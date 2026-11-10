@@ -455,7 +455,7 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool, in
     let mut cache = HashMap::new();
     let mut lines: Vec<TextLine> = Vec::new();
     let mut carry = Carry::new();
-    carry.paragraphs = std::rc::Rc::new(super::structure::paragraph_of_mcids(doc, &p.dict));
+    carry.paragraphs = std::rc::Rc::new(super::structure::paragraph_of_mcids(doc, &p.dict, p.obj));
     // The streams are one stream in pieces (§7.8.2), split between any two tokens: parse them
     // joined, so an operator whose operands end one piece still has them.
     let pieces = joined(&content_streams(doc, &p.dict)?);
@@ -483,7 +483,7 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool, in
         // em from the row it sits on, and a space right after such a mark the same way. (Other
         // spaces keep the usual tolerance: a space beside a superscript is on the body's row.)
         let only_marks = !s.text.is_empty() && s.text.chars().all(crate::bidi::is_mark);
-        let space_after_mark = marks.is_some() && s.text.chars().all(char::is_whitespace);
+        let space_after_mark = marks.is_some() && !s.text.is_empty() && s.text.chars().all(char::is_whitespace);
         let drift = if cluster || only_marks || space_after_mark { 0.6 } else { 0.3 };
         // A line belongs to one stream piece. Within it, PDF producers often put every word
         // in its own BT/ET: geometry and text state, not object boundaries, define a line.
@@ -613,7 +613,7 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool, in
         if only_marks {
             marks = Some(match marks {
                 Some(m) if joins => MarkFirst { len: m.len.saturating_add(s.text.len()), ..m },
-                _ => MarkFirst { len: s.text.len(), at: start, size: s.size, before: last_letter },
+                _ => MarkFirst { len: s.text.len(), at: start, size: s.size, before: if joins { last_letter } else { None } },
             });
         } else if !(joins && space_after_mark) {
             marks = None;
@@ -713,14 +713,22 @@ fn rtl_runs_in_drawing_order(shown: Vec<Shown>) -> Vec<Shown> {
         });
         (alike && lo.is_finite() && hi.is_finite()).then_some((first, lo, hi))
     };
+    // Each run's extent, worked out once: a chain step compares two runs by index, and the anchor
+    // stays put across runs of marks or spaces, so recomputing it made long rows quadratic.
+    let extents: Vec<Option<(&Shown, f64, f64)>> = runs.iter().map(extent).collect();
+    let extent_of = |i: usize| extents.get(i).copied().flatten();
     // A run of marks alone, which Word draws half an em off the row (see `text_lines_in`).
-    let only_marks = |run: &std::ops::Range<usize>| {
-        shown.get(run.clone()).is_some_and(|members| members.iter().all(|s| !s.text.is_empty() && s.text.chars().all(crate::bidi::is_mark)))
-    };
+    let marks_alone: Vec<bool> = runs
+        .iter()
+        .map(|run| {
+            shown.get(run.clone()).is_some_and(|members| members.iter().all(|s| !s.text.is_empty() && s.text.chars().all(crate::bidi::is_mark)))
+        })
+        .collect();
+    let only_marks = |i: usize| marks_alone.get(i).copied().unwrap_or(false);
     // Marks drawn over the left end of run `a` (its first glyph in drawing order), or just left
     // of it over the start of the run that comes next.
-    let sits_over = |a: &std::ops::Range<usize>, b: &std::ops::Range<usize>| {
-        let (Some((fa, sa, ea)), Some((fb, sb, _))) = (extent(a), extent(b)) else { return false };
+    let sits_over = |a: usize, b: usize| {
+        let (Some((fa, sa, ea)), Some((fb, sb, _))) = (extent_of(a), extent_of(b)) else { return false };
         let (da, _, _, xa) = fa.span();
         let (db, _, _, xb) = fb.span();
         let size = fa.size.max(1.0);
@@ -733,10 +741,15 @@ fn rtl_runs_in_drawing_order(shown: Vec<Shown>) -> Vec<Shown> {
             && sb < ea.min(sa + size)
     };
     // A run of spaces alone, which Word may draw off the row right after a run of marks.
-    let only_spaces =
-        |run: &std::ops::Range<usize>| shown.get(run.clone()).is_some_and(|members| members.iter().all(|s| s.text.chars().all(char::is_whitespace)));
-    let leftward = |a: &std::ops::Range<usize>, b: &std::ops::Range<usize>, after_marks: bool| {
-        let (Some((fa, sa, _)), Some((fb, sb, eb))) = (extent(a), extent(b)) else { return false };
+    let spaces_alone: Vec<bool> = runs
+        .iter()
+        .map(|run| {
+            shown.get(run.clone()).is_some_and(|members| members.iter().all(|s| !s.text.is_empty() && s.text.chars().all(char::is_whitespace)))
+        })
+        .collect();
+    let only_spaces = |i: usize| spaces_alone.get(i).copied().unwrap_or(false);
+    let leftward = |a: usize, b: usize, after_marks: bool| {
+        let (Some((fa, sa, _)), Some((fb, sb, eb))) = (extent_of(a), extent_of(b)) else { return false };
         let (da, _, _, xa) = fa.span();
         let (db, _, _, xb) = fb.span();
         let size = fa.size.max(1.0);
@@ -757,15 +770,15 @@ fn rtl_runs_in_drawing_order(shown: Vec<Shown>) -> Vec<Shown> {
         // The chain's last run of letters: a run of marks alone sits over it (or over the run
         // after it) rather than left of it.
         let mut anchor = i;
-        while let (Some(a), Some(b)) = (runs.get(anchor), runs.get(j)) {
-            let over = only_marks(b) && sits_over(a, b);
+        while anchor < runs.len() && j < runs.len() {
+            let over = only_marks(j) && sits_over(anchor, j);
             // A run of spaces Word drew off the row right after a run of marks.
-            let after_marks = runs.get(j.saturating_sub(1)).is_some_and(only_marks);
-            if !over && !leftward(a, b, after_marks) {
+            let after_marks = j > 0 && only_marks(j - 1);
+            if !over && !leftward(anchor, j, after_marks) {
                 break;
             }
             // The next run continues from the last run of letters, not from marks or spaces.
-            if !over && !only_spaces(b) {
+            if !over && !only_spaces(j) {
                 anchor = j;
             }
             j = j.saturating_add(1);
@@ -812,7 +825,8 @@ fn compatible_word(line: &TextLine, shown: &Shown) -> bool {
         && line.paint == shown.paint
         && same(&line.origin.tm[..4], &shown.tm.0[..4])
         && same(&line.origin.ctm, &shown.state.ctm.0)
-        && (shown.text.chars().all(char::is_whitespace) || within(&[a.char_spacing, a.word_spacing], &[b.char_spacing, b.word_spacing], em.max(1e-6)))
+        && ((!shown.text.is_empty() && shown.text.chars().all(char::is_whitespace))
+            || within(&[a.char_spacing, a.word_spacing], &[b.char_spacing, b.word_spacing], em.max(1e-6)))
         && same(&[a.scale, a.rise], &[b.scale, b.rise])
         && a.fill.len() == b.fill.len()
         && a.fill.iter().zip(&b.fill).all(|(a, b)| a.op == b.op && a.operands == b.operands)

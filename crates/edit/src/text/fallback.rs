@@ -329,7 +329,7 @@ pub(crate) fn no_glyph_for(face: &CraftFont, ch: char) -> EditError {
         && let Some(thai) = pdfcraft_fonts::document_thai_font()
     {
         return EditError::Invalid(format!(
-            "the paragraph's font has no glyph for {ch} (U+{:04X}); choose PdfCraft's {} in the font list, or a font              that has it (Load font… or Installed fonts…)",
+            "the paragraph's font has no glyph for {ch} (U+{:04X}); choose PdfCraft's {} in the font list, or a font that has it (Load font… or Installed fonts…)",
             u32::from(ch),
             thai.family
         ));

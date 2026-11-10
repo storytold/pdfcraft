@@ -8302,6 +8302,25 @@ fn a_mark_drawn_before_the_letter_it_sits_on_stays_on_that_letter() {
     }
 }
 
+/// Marks are moved onto the letter after them only where the writer placed them there (Word): a
+/// zero-advance mark written straight after its letter, with no step, ends where the next letter
+/// starts but stays on its own letter (TCPDF, ReportLab). And a `TJ` gap before a mark is a word
+/// space when the letter after the mark doesn't step back over it (writers that draw a cluster's
+/// mark first and write no space glyphs): it was dropped, joining two words.
+#[test]
+fn marks_move_onto_the_next_letter_only_where_placed_there() {
+    let straight = "BT /F1 12 Tf 72 700 Td (ADB) Tj ET";
+    let spaced = "BT /F1 12 Tf 72 700 Td [(B) -400 (DA)] TJ ET";
+    for (content, expected) in [(straight, "مسُ"), (spaced, "سُ م")] {
+        let doc = arabic_marks_page(content);
+        for doc in [&doc, &reopen(&doc)] {
+            let lines = text::text_lines(doc, 0).unwrap();
+            assert_eq!(lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>(), [expected], "{content}");
+            assert_eq!(text::text_blocks(doc, 0).unwrap()[0].editor_text, expected, "{content}");
+        }
+    }
+}
+
 /// Word writes a right-to-left line that it splits into runs (a word in another language, a
 /// justified space) run by run in typing order, so each run starts left of the one before. They
 /// are one line: read apart, a paragraph fell into pieces, cut inside words.
@@ -8415,6 +8434,72 @@ fn paragraphs_tagged_apart_in_the_structure_stay_apart() {
     // Untagged, the same page keeps the spacing rules' reading (one paragraph here).
     let untagged = text::text_blocks(&tagged(false), 0).unwrap();
     assert!(untagged.len() < 3, "{:?}", untagged.iter().map(|b| &b.editor_text).collect::<Vec<_>>());
+}
+
+/// Structure elements that don't say they hold the page's marked content (another page's, as when
+/// two merged pages share a `/StructParents` key) are not trusted to split its paragraphs: the
+/// page reads as it does untagged.
+#[test]
+fn structure_elements_of_another_page_do_not_split_paragraphs() {
+    let cmap = "/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapType 2 def \
+         1 begincodespacerange <00> <FF> endcodespacerange 2 beginbfchar <41> <0633> <42> <0645> \
+         endbfchar endcmap CMapName currentdict /CMap defineresource pop end end";
+    let widths: Vec<_> = (32..=68).map(|c| if c == 32 { "250" } else { "500" }).collect();
+    let content = "/Span <</MCID 0>> BDC BT /F1 12 Tf 1 0 0 1 308 681 Tm (AB) Tj ET EMC \
+                   /Span <</MCID 1>> BDC BT /F1 12 Tf 1 0 0 1 308 667 Tm (AB) Tj ET EMC";
+    let read = |elements: [&str; 2]| {
+        let doc = build(&[
+            "<< /Type /Catalog /Pages 2 0 R /StructTreeRoot 7 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R 11 0 R] /Count 2 >>",
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Contents 4 0 R /StructParents 0 /Resources << /Font << /F1 5 0 R >> >> >>",
+            &stream("", content),
+            &format!(
+                "<< /Type /Font /Subtype /Type1 /BaseFont /FakeArabic /FirstChar 32 /LastChar 68 /Widths [{}] /ToUnicode 6 0 R >>",
+                widths.join(" ")
+            ),
+            &stream("", cmap),
+            "<< /Type /StructTreeRoot /K [9 0 R 10 0 R] /ParentTree 8 0 R >>",
+            "<< /Nums [0 [9 0 R 10 0 R]] >>",
+            elements[0],
+            elements[1],
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /StructParents 0 >>",
+        ]);
+        text::text_blocks(&doc, 0).unwrap().len()
+    };
+    // This page's elements: two paragraphs.
+    assert_eq!(read(["<< /Type /StructElem /S /P /P 7 0 R /Pg 3 0 R /K 0 >>", "<< /Type /StructElem /S /P /P 7 0 R /Pg 3 0 R /K 1 >>"]), 2);
+    // The other page's (its ids 5 and 6): untrusted, the rows are one paragraph as untagged.
+    assert_eq!(read(["<< /Type /StructElem /S /P /P 7 0 R /Pg 11 0 R /K 5 >>", "<< /Type /StructElem /S /P /P 7 0 R /Pg 11 0 R /K 6 >>"]), 1);
+}
+
+/// A structure parent tree whose nodes list the same kid over and over (a hostile or broken file:
+/// eight levels of sixteen references each, billions of paths) is read in bounded time: the page's
+/// text reads as it would untagged.
+#[test]
+fn a_parent_tree_that_repeats_its_kids_is_read_in_bounded_time() {
+    let content = "/Span <</MCID 0>> BDC BT /F1 12 Tf 72 700 Td (Heading) Tj ET EMC /Span <</MCID 1>> BDC BT /F1 12 Tf 72 686 Td (Body) Tj ET EMC";
+    // Objects 8.. are the number tree's levels: each lists the next level's node sixteen times,
+    // without /Limits, and the last has /Nums without the page's key.
+    let mut objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /StructTreeRoot 7 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Contents 4 0 R /StructParents 0 /Resources << /Font << /F1 5 0 R >> >> >>".into(),
+        stream("", content),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),
+        "<< >>".into(),
+        "<< /Type /StructTreeRoot /ParentTree 8 0 R >>".into(),
+    ];
+    for level in 0..8 {
+        let next = 9 + level;
+        objs.push(format!("<< /Kids [{}] >>", vec![format!("{next} 0 R"); 16].join(" ")));
+    }
+    objs.push("<< /Nums [5 []] >>".into());
+    let refs: Vec<&str> = objs.iter().map(String::as_str).collect();
+    let doc = build(&refs);
+    let start = std::time::Instant::now();
+    let blocks = text::text_blocks(&doc, 0).unwrap();
+    assert!(start.elapsed() < std::time::Duration::from_secs(5), "{:?}", start.elapsed());
+    assert_eq!(blocks.iter().map(|b| b.text.as_str()).collect::<String>().replace(['\n', ' '], ""), "HeadingBody");
 }
 
 /// Word sets a word in another language (한국어, हिन्दी) as a run of its own, in another subset of
