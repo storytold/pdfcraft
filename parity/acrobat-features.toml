@@ -1598,8 +1598,8 @@ milestone = "M3"
 status = "shipped"
 commands = ["edit.snapshot"]
 tools = ["page_render"]
-evidence = ["crates/ui-egui/tests/it/viewer.rs::marquee_zoom_and_snapshot", "crates/ui-egui/tests/it/viewer.rs::a_snapshot_keeps_its_resolution_when_zoomed_out", "crates/ui-egui/src/canvas/zoom_snap.rs::a_snapshot_is_drawn_at_the_finer_of_the_zoom_and_the_minimum", "crates/ui-egui/src/canvas/zoom_snap.rs::a_snapshot_stays_within_what_the_renderer_draws_at_once", "crates/ui-egui/tests/it/viewer.rs::a_snapshot_of_a_large_page_reaches_its_far_corner"]
-notes = "copies the area to the clipboard as an image, at 300 ppi or the current zoom if that is finer (#5716), or as fine as the renderer draws in one tile (4096 pixels a side), drawn while the app waits. Missing: a choice of resolution, and a selection that stays active to copy later"
+evidence = ["crates/ui-egui/tests/it/viewer.rs::marquee_zoom_and_snapshot", "crates/ui-egui/tests/it/viewer.rs::a_snapshot_keeps_its_resolution_when_zoomed_out", "crates/ui-egui/src/canvas/zoom_snap.rs::a_snapshot_is_drawn_at_the_finer_of_the_zoom_and_the_minimum", "crates/ui-egui/src/canvas/zoom_snap.rs::a_snapshot_stays_within_what_the_renderer_draws_at_once", "crates/ui-egui/tests/it/viewer.rs::a_snapshot_of_a_large_page_reaches_its_far_corner", "crates/ui-egui/tests/it/viewer.rs::a_snapshot_area_prints_alone_or_saves_as_an_image"]
+notes = "copies the area to the clipboard as an image, at 300 ppi or the current zoom if that is finer (#5716), or as fine as the renderer draws in one tile (4096 pixels a side), drawn while the app waits; the area then stays outlined with Print area… and Save as image… (PNG) under it until another tool is chosen (print.selected-area). Missing: a choice of resolution, and a selection that stays active to copy later"
 
 [[feature]]
 id = "view.copy-image"
@@ -8229,6 +8229,18 @@ evidence = ["crates/print/src/tests.rs::page_selection", "crates/print/src/tests
 notes = "all, current, ranges with labels and open ends; (n) names the nth page whatever its label (ISO 32000-2 §12.4.2: labels and page indices need not coincide), alone or as a range end; labels are looked up first, so a page labelled exactly \"(n)\" keeps that name. The same parser serves Combine files ranges. Organize Pages range selection still takes positions only, without labels or (n)."
 
 [[feature]]
+id = "print.selected-area"
+title = "Print a selected area"
+area = "L"
+tier = "P2"
+milestone = "M10"
+status = "shipped"
+commands = ["edit.snapshot", "print.dialog"]
+tools = ["doc_print"]
+evidence = ["crates/print/src/tests.rs::a_selected_area_prints_alone_fitted_or_at_actual_size", "crates/ui-egui/tests/it/viewer.rs::a_snapshot_area_prints_alone_or_saves_as_an_image", "crates/automation/tests/it/automation.rs::doc_print_a_selected_area"]
+notes = "Requested in #2051. The area Take a Snapshot copies stays outlined with a small menu under it, Print area… and Save as image…; Print then offers Selected area (page N, size), printed alone as a page of that size with Fit, Actual size, Shrink or a custom scale, clipped to the area. Multiple, Booklet, Poster and Label are for pages: the dialog offers only Size while the area is chosen and the print crate refuses the others. Print as image, the paper and the printer's options apply as usual. doc_print takes area [x0, y0, x1, y1] in points from the top-left of the displayed page, with one page in pages. Missing: an area spanning two pages, drawing the area from inside the Print dialog, and adjusting it after it is drawn."
+
+[[feature]]
 id = "print.odd-even-reverse"
 title = "Odd/even pages and reverse order"
 area = "L"
@@ -8333,8 +8345,8 @@ milestone = "M10"
 status = "shipped"
 commands = ["print.dialog"]
 tools = ["doc_print"]
-evidence = ["crates/print/src/tests.rs::imposed_pdf_has_the_sheets_and_honours_comments_and_forms", "crates/print/src/tests/appearances.rs::annotation_appearances_do_not_replace_page_xobjects", "crates/print/src/tests/appearances.rs::printable_link_appearance_survives_vector_print"]
-notes = "Print and Hidden flags honoured; existing Link appearances print as document content, but missing Link appearances are not synthesized. Appearance resource names preserve existing page XObjects and distinct annotations, including inherited resources"
+evidence = ["crates/print/src/tests.rs::imposed_pdf_has_the_sheets_and_honours_comments_and_forms", "crates/print/src/tests/appearances.rs::annotation_appearances_do_not_replace_page_xobjects", "crates/print/src/tests/appearances.rs::printable_link_appearance_survives_vector_print", "crates/print/src/tests/appearances.rs::annotation_placement_preserves_small_transform_coefficients"]
+notes = "Print and Hidden flags honoured; existing Link appearances print as document content, but missing Link appearances are not synthesized. Appearance resource names preserve existing page XObjects and distinct annotations, including inherited resources. Print flag honoured; appearance resource names preserve existing page XObjects and distinct annotations, including inherited resources. Placement retains small transform coefficients for large appearance bounding boxes and matrices. Missing or unusable appearance streams remain outside this path."
 
 [[feature]]
 id = "print.print-with-comment-summary"

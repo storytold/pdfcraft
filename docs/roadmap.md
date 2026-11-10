@@ -4,6 +4,7 @@
 > **Last reviewed:** 2026-10-29 | **Last updated:** 2026-10-29 | **Change:** minor (M6, PR #4166/#4088: preserve automatic-field Print suppression, explicit script printing and document-error provenance on upstream 0.15; retain the integrated craft-libs revision; estimates unchanged)
 >
 >
+> **Last reviewed:** 2026-10-27 | **Last updated:** 2026-10-27 | **Change:** minor (M10: vector-print appearance transforms retain small coefficients; estimates unchanged)
 > **Last reviewed:** 2026-11-09 | **Last updated:** 2026-11-09 | **Change:** patch (M10 #5130: preserve manual duplex defaults; validate DocumentDuplex review fix and CI formatting; estimates unchanged)
 >
 > **Last reviewed:** 2026-11-07 | **Last updated:** 2026-11-07 | **Change:** patch (M7 #2964 / #3185: grouped source text and Thai font/style preservation, with reported deep or unsafe groups and a per-glyph check of the Thai map repair; estimates unchanged)
@@ -311,6 +312,9 @@ M2 (renderer), M7 (content editing), M10 (OCR and Office), M11 (Preflight and st
 **2026-10-31 · patch:** M6/PR #4166 integrated main f137a289 (0.16.1), preserving both roadmap histories. Automatic Keystroke, Validate, Calculate and Format scripts still suppress Print alongside ShowPanel/SaveAs; explicit button and console Print requests, field effects and document-error provenance are retained. The three engine regressions and headless automation regression remain in their current modules. Manifests, lockfile and CI match incoming main. Windows x64 / Rust 1.95 validation: 761 engine/automation tests passed, zero failed and four existing ignored; formatting, scoped all-target Clippy with -D warnings, layers/assets/parity and the engine/automation WebAssembly check passed. A fresh CLI build and the 13-step synthetic form exercise passed; the inspected render shows Qty=4 and Total=8, and explicit button/console Print requests are retained. Main's 100 headless parity notices, five renderer WebAssembly warnings and three optional egui patch notices remain. Estimates unchanged.
 
 **2026-10-29 · minor:** M6/PR #4166 refreshed against upstream 0.15. Automatic field scripts still suppress Print with a console diagnostic alongside ShowPanel/SaveAs filtering, and explicit button/console scripts retain their requests and document-error provenance. The three engine regressions, headless regression and parity evidence remain in the current modules. Dependency manifests retain main's integrated craft-libs revision, including #366. Estimates unchanged.
+**2026-10-27 · minor:** M10: vector printing retains small appearance placement coefficients.
+Synthetic rendering and save/reopen regressions cover the change.
+Estimates unchanged.
 **2026-10-31 · minor:** M3/M4 #5330: direct quick-toolbar Crop pages action reuses command permissions and the existing crop tool. Estimates unchanged.
 
 **2026-10-26 · patch:** M2/PR #4172: reconcile current main and preserve upstream Japanese serif/weight selection alongside the installed CJK viewer and preview fallback. Estimates unchanged.
