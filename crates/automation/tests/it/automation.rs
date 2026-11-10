@@ -5520,21 +5520,22 @@ fn creating_and_reducing_through_tools() {
 #[test]
 fn creating_from_text_refuses_what_the_font_cannot_draw() {
     let dir = workdir("create-undrawable");
-    std::fs::write(dir.join("kr.txt"), "ABC 제안서 시험").unwrap();
+    // Ethiopic: no bundled face draws it (Korean, which this test used before, now has one).
+    std::fs::write(dir.join("kr.txt"), "ABC ሰላም ዓለም").unwrap();
     let mut a = auto(&dir);
     let refused = |r: Result<Vec<Content>, ToolError>| match r {
-        Err(ToolError::InvalidArgs(m) | ToolError::Failed(m)) => assert!(m.contains("U+C81C"), "{m}"),
+        Err(ToolError::InvalidArgs(m) | ToolError::Failed(m)) => assert!(m.contains("U+1230"), "{m}"),
         other => panic!("expected a refusal, got {other:?}"),
     };
-    assert!(matches!(a.call("doc_create", &json!({ "from": "text", "text": "ABC 제안서 시험" })), Err(ToolError::InvalidArgs(_))));
-    refused(a.call("doc_create", &json!({ "from": "text", "text": "ABC 제안서 시험" })));
+    assert!(matches!(a.call("doc_create", &json!({ "from": "text", "text": "ABC ሰላም ዓለም" })), Err(ToolError::InvalidArgs(_))));
+    refused(a.call("doc_create", &json!({ "from": "text", "text": "ABC ሰላም ዓለም" })));
     refused(a.call("doc_create", &json!({ "from": "text", "path": "kr.txt" })));
     // WinAnsi characters, line breaks and tabs are still fine.
     let d = ok(&mut a, "doc_create", json!({ "from": "text", "text": "Price: 5 € at café\r\n\tnext\u{c}page two" }))["doc"].as_u64().unwrap();
     assert_eq!(page_text(&mut a, d).len(), 2);
     // #959: page_add_text refuses it too.
     let doc = ok(&mut a, "doc_create", json!({ "from": "blank" }))["doc"].as_u64().unwrap();
-    refused(a.call("page_add_text", &json!({ "doc": doc, "page": 1, "text": "ABC 제안서 시험", "at": [20, 20] })));
+    refused(a.call("page_add_text", &json!({ "doc": doc, "page": 1, "text": "ABC ሰላም ዓለም", "at": [20, 20] })));
 }
 
 #[test]
@@ -11725,6 +11726,43 @@ fn thai_text_through_tools_saves_reopens_extracts_and_renders() {
     assert!(rendered.iter().any(|c| matches!(c, Content::Png { data, width, height } if !data.is_empty() && *width > 0 && *height > 0)));
     ok(&mut a, "content_update", json!({"doc": reopened, "page": 1, "index": 1, "text": "แก้ไข น้ำ"}));
     assert!(page_text(&mut a, reopened)[0].contains("แก้ไข น้ำ"));
+}
+
+/// Add text in Russian, Greek, Chinese, Japanese, Korean and Hindi was refused ("only Western
+/// European characters can be added as text for now") though PdfCraft bundles a face for each:
+/// Inter for Cyrillic and Greek, the craft-fonts CJK, Korean and Devanagari faces. Each is now
+/// drawn with its face, saved, reopened, found as typed and retyped. A build without a face still
+/// refuses its script, saying which font it needs.
+#[test]
+fn text_in_scripts_with_a_bundled_face_is_added_saved_and_found() {
+    let dir = workdir("other-scripts");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({"path": "a.pdf"}))["doc"].as_u64().unwrap();
+    let samples = [
+        ("Годовой отчёт 2026", "Новый текст", true),
+        ("Ελληνικά: η έκθεση", "Νέο κείμενο", true),
+        ("季度报告显示稳定增长。", "新的文本", pdfcraft_fonts::ShapedScript::Chinese.font().is_some()),
+        ("四半期報告は安定した成長を示す。", "新しいテキスト", pdfcraft_fonts::ShapedScript::Japanese.font().is_some()),
+        ("분기 보고서 2026", "새 텍스트", pdfcraft_fonts::ShapedScript::Korean.font().is_some()),
+        ("त्रैमासिक रिपोर्ट", "नया पाठ", pdfcraft_fonts::ShapedScript::Devanagari.font().is_some()),
+    ];
+    let mut added = 0;
+    for (text, retyped, face) in samples {
+        let args = json!({"doc": doc, "page": 1, "text": text, "at": [10, 20 + 30 * added], "size": 12});
+        if !face {
+            assert!(a.call("page_add_text", &args).unwrap_err().to_string().contains("font"), "{text}");
+            continue;
+        }
+        ok(&mut a, "page_add_text", args);
+        added += 1;
+        assert!(page_text(&mut a, doc)[0].contains(text), "{text}: {:?}", page_text(&mut a, doc));
+        ok(&mut a, "doc_save", json!({"doc": doc, "path": "scripts.pdf"}));
+        let reopened = ok(&mut a, "doc_open", json!({"path": "scripts.pdf"}))["doc"].as_u64().unwrap();
+        assert!(page_text(&mut a, reopened)[0].contains(text), "{text} after reopening");
+        ok(&mut a, "content_update", json!({"doc": reopened, "page": 1, "index": added, "text": retyped}));
+        assert!(page_text(&mut a, reopened)[0].contains(retyped), "{retyped}: {:?}", page_text(&mut a, reopened));
+        ok(&mut a, "doc_close", json!({"doc": reopened, "discard_changes": true}));
+    }
 }
 
 /// Thai typed into Fill & Sign text, a text box, a form field, a footer and a watermark (#2354) is

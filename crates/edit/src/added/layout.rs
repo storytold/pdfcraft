@@ -51,7 +51,7 @@ pub(super) fn wrapped(t: &AddedText) -> Vec<(String, bool, usize)> {
         // Arabic or Hebrew: laid out with the bidirectional algorithm and shaped.
         let rtl_script = para.chars().any(|c| is_arabic(c) || is_hebrew(c));
         let thai = para.chars().any(is_thai);
-        let controls = para.chars().any(pdfcraft_fonts::embedding::default_ignorable);
+        let controls = para.chars().any(pdfcraft_fonts::embedding::default_ignorable) || para.chars().any(|c| other_script(c, para).is_some());
         if thai
             && !rtl_script
             && !controls
@@ -202,6 +202,37 @@ pub(super) fn is_hebrew(c: char) -> bool {
     matches!(u32::from(c), 0x0591..=0x05F4 | 0xFB1D..=0xFB4F)
 }
 
+/// A character drawn with a bundled face of another script than Arabic, Hebrew and Thai:
+/// Devanagari (the craft-fonts `Deva` face), Cyrillic, Greek and Latin letters outside
+/// WinAnsiEncoding (the bundled Inter), Han and kana (the Japanese face, or the Simplified Chinese
+/// one for Chinese text, [`pdfcraft_fonts::han_script`]) and Hangul (the `Kore` face). `text` is the
+/// item's whole text. Characters WinAnsiEncoding has stay in the item's own font.
+pub(super) fn other_script(c: char, text: &str) -> Option<ShapedScript> {
+    if pdfcraft_fonts::win_ansi_encodable(c) {
+        return None;
+    }
+    Some(match u32::from(c) {
+        0x0900..=0x097F | 0xA8E0..=0xA8FF => ShapedScript::Devanagari,
+        0x1100..=0x11FF | 0x3130..=0x318F | 0xA960..=0xA97F | 0xAC00..=0xD7AF => ShapedScript::Korean,
+        0x3040..=0x30FF | 0x31F0..=0x31FF | 0xFF66..=0xFF9F => ShapedScript::Japanese,
+        0x3000..=0x303F | 0x3400..=0x4DBF | 0x4E00..=0x9FFF | 0xF900..=0xFAFF | 0xFF00..=0xFF65 => pdfcraft_fonts::han_script(text),
+        0x0100..=0x024F | 0x0370..=0x03FF | 0x0400..=0x052F | 0x1E00..=0x1FFF => ShapedScript::Latin,
+        _ => return None,
+    })
+}
+
+/// The refusal for text in `kind` that its face can't draw, or that has no face in this build.
+pub(super) fn script_error(kind: ShapedScript, e: GlyphError, text: &str) -> EditError {
+    let name = kind.name();
+    EditError::Invalid(match e {
+        GlyphError::NoFont => format!(
+            "{name} text needs PdfCraft's {name} font, which this build doesn't include (to build it in, set CRAFT_FONTS_DIR to a craft-fonts checkout that has one)"
+        ),
+        GlyphError::Missing => format!("the {name} font can't show \"{text}\""),
+        GlyphError::TooComplex => format!("the {name} font's glyphs for \"{text}\" are too complex"),
+    })
+}
+
 /// The first character of `t` that would be drawn as `?`: outside WinAnsiEncoding and not drawn
 /// with the craft-fonts Arabic (#125) or Hebrew (#128) face, or Arabic or Hebrew that the face can't
 /// draw (or that has no face to draw it). Page-content tools refuse such text; the Add-text editor
@@ -214,10 +245,13 @@ pub fn first_undrawable(t: &AddedText) -> Option<char> {
         let rest = AddedText { text: t.text.chars().filter(|c| !is_thai(*c)).collect(), ..t.clone() };
         return first_undrawable(&rest);
     }
-    // Arabic or Hebrew that nothing can draw: there's no face, or the face lacks it.
-    if let Some(c) =
-        t.text.chars().find(|c| (shaped_arabic(*c) && !pdfcraft_fonts::arabic_has(*c)) || (is_hebrew(*c) && !pdfcraft_fonts::hebrew_has(*c)))
-    {
+    // Arabic, Hebrew or another shaped script that nothing can draw: there's no face, or the
+    // face lacks it.
+    if let Some(c) = t.text.chars().find(|c| {
+        (shaped_arabic(*c) && !pdfcraft_fonts::arabic_has(*c))
+            || (is_hebrew(*c) && !pdfcraft_fonts::hebrew_has(*c))
+            || other_script(*c, &t.text).is_some_and(|kind| !pdfcraft_fonts::script_has(kind, *c))
+    }) {
         return Some(c);
     }
     if !shaped_by_a_face(t) {
@@ -235,10 +269,12 @@ pub fn first_undrawable(t: &AddedText) -> Option<char> {
     })
 }
 
-/// Whether `t` needs the shaped writer: Arabic/Hebrew with a face, or invisible controls whose
-/// logical text is retained while their ink is omitted.
-fn shaped_by_a_face(t: &AddedText) -> bool {
-    (pdfcraft_fonts::document_arabic_font().is_some() && t.text.chars().any(is_arabic))
+/// Whether `t` needs the shaped writer: Arabic/Hebrew with a face, another shaped script
+/// ([`other_script`]), or invisible controls whose logical text is retained while their ink is
+/// omitted.
+pub(super) fn shaped_by_a_face(t: &AddedText) -> bool {
+    t.text.chars().any(|c| other_script(c, &t.text).is_some())
+        || (pdfcraft_fonts::document_arabic_font().is_some() && t.text.chars().any(is_arabic))
         || (pdfcraft_fonts::document_hebrew_font(false).is_some() && t.text.chars().any(is_hebrew))
         || (t.text.chars().any(pdfcraft_fonts::embedding::default_ignorable) && pdfcraft_fonts::appearance_text::can_shape(&t.text))
 }
@@ -324,7 +360,7 @@ pub(super) fn shaped_layout_bidi(t: &AddedText, line: &str, info: &ParagraphBidi
             } else if is_arabic(c) || (run_rtl && !c.is_alphanumeric() && pdfcraft_fonts::arabic_has(c)) {
                 Some(ShapedScript::Arabic)
             } else {
-                None
+                other_script(c, &t.text)
             };
             match segments.last_mut() {
                 Some((kind, s)) if *kind == script => s.push(c),
@@ -342,6 +378,7 @@ pub(super) fn shaped_layout_bidi(t: &AddedText, line: &str, info: &ParagraphBidi
                     ShapedScript::ArabicBold => pdfcraft_fonts::shape_arabic_bold(&s, run_rtl).map_err(|e| arabic_error(e, &s))?,
                     ShapedScript::Hebrew => shape_hebrew(&s, run_rtl).map_err(|e| hebrew_error(e, &s))?,
                     ShapedScript::Thai => shape_thai(&s).map_err(|e| thai_error(e, &s))?,
+                    other => pdfcraft_fonts::shape(&s, run_rtl, other).map_err(|e| script_error(other, e, &s))?,
                 };
                 Piece::Shaped(shaped)
             } else if run_rtl {

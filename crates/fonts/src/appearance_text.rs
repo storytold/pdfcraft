@@ -40,6 +40,7 @@ fn has(kind: ShapedScript, c: char) -> bool {
         ShapedScript::Arabic | ShapedScript::ArabicBold => crate::arabic_has(c),
         ShapedScript::Hebrew => crate::hebrew_has(c),
         ShapedScript::Thai => crate::thai_has(c),
+        other => crate::script_has(other, c),
     }
 }
 
@@ -281,6 +282,7 @@ fn layout_pass(
                     Some(ShapedScript::ArabicBold) => crate::shape_arabic_bold(&s, run_rtl)?,
                     Some(ShapedScript::Hebrew) => crate::shape_hebrew(&s, run_rtl)?,
                     Some(ShapedScript::Thai) => crate::shape_thai(&s)?,
+                    Some(other) => crate::shape(&s, run_rtl, other)?,
                     None if run_rtl => {
                         push_latin(&mut pieces, s.chars().rev().map(mirrored).collect(), look, styles.sources);
                         continue;
