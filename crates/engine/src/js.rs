@@ -81,20 +81,26 @@ impl JsOutput {
     }
 
     /// Adds what a field's own script produced: its alerts, console lines, errors and requests,
-    /// except a request to show a side panel or open Save As, which is noted on the console
-    /// and dropped.
+    /// except a request to print, show a side panel, open Save As, or open or save an attached
+    /// file, which is noted on the console and dropped.
     fn absorb(&mut self, o: &Outcome) {
         self.alert(o.alerts.iter().cloned());
         self.say(o.console.iter().cloned());
         // A field's own scripts (keystroke, format, validate, calculate) run unasked: only a
-        // button's may show or hide a side panel, or open Save As.
+        // button's or the console's may print, show or hide a side panel, open Save As, or open
+        // or save an attached file (#4088).
         // The warnings go through `say` like any other console line, so they count against the
         // line and byte caps instead of growing the console past them.
         let mut notes = Vec::new();
         for r in &o.requests {
             match r {
+                Request::Print => notes
+                    .push("Print requested by an automatic field script was ignored; use a button or the JavaScript console to print".to_string()),
                 Request::ShowPanel(_) => notes.push("A field script asked to show a side panel; only a button may show a side panel".to_string()),
                 Request::SaveAs => notes.push("A field script asked to save the document as a new file; only a button may open Save As".to_string()),
+                Request::OpenAttachment { name, .. } => {
+                    notes.push(format!("A field script asked to open the attached file {name}; only a button may open an attached file"))
+                }
                 r => self.requests.push(r.clone()),
             }
         }
@@ -268,12 +274,15 @@ impl JsRunner {
     /// highlights form fields (`app.runtimeHighlight`).
     pub fn new(cos: &pdfcraft_cos::Document, file_name: &str, highlight: bool) -> JsRunner {
         let xfa = pdfcraft_xfa::xfa_shape(cos).is_some();
+        let pages = pdfcraft_model::pages(cos);
         let doc = pdfcraft_js::DocInfo {
             file_name: file_name.to_string(),
-            num_pages: pdfcraft_model::pages(cos).len(),
+            num_pages: pages.len(),
             page: 0,
             info: info(cos),
             highlight,
+            page_boxes: pdfcraft_organize::page_boxes(cos).unwrap_or_default(),
+            page_rotations: pages.iter().map(|page| page.rotation(cos)).collect(),
             xfa,
         };
         // Once XFA owns the form, the PDF container's scripts belong to its fallback view.
@@ -510,10 +519,12 @@ impl Session {
         }
         let doc = self.get(id).ok_or(EditError::NoDocument)?;
         let cos = doc.editor.as_ref().map(|e| e.cos.clone()).ok_or_else(|| EditError::ReadOnly(doc.read_only_reason.clone().unwrap_or_default()))?;
-        // A button PdfCraft generated from an XFA template runs its XFA click script.
+        // A button PdfCraft generated from an XFA template runs its XFA click script (the app runs
+        // click scripts for buttons only, so other fields' click events don't run here either).
         if let Some(t) = target
             && let Some(tpl) = doc.xfa_template.clone()
             && let Some(field) = doc.form.iter().find(|f| f.name == t)
+            && field.kind == crate::FormFieldKind::PushButton
             && let Some(som) = crate::xfa::clickable_som(&cos, &tpl, field)
         {
             // The click returns only the output of its own edit; output from opening or from earlier edits stays.
