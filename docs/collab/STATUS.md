@@ -12,19 +12,19 @@
   pass's start it was `274b7a042` ("Merge pull request #6800 from
   storytold/merge/fonts-budget-6239"), so the branch is now **48 behind**
   `274b7a042`. `git merge-tree --write-tree origin/main HEAD` exits 0 at this
-  pass's head `642dabb5b` (the next bullet); no rebase was done in this pass, so
+  pass's head `158ab7fa4` (the next bullet); no rebase was done in this pass, so
   the base stays `ba28458ad`.
-- Local head before this STATUS commit: `642dabb5b` (feat(collab): replace the
-  whole outline in one operation) on `d2a1bcf64` (docs(collab): record the
-  whole-document link operations) on `b86c4963a` (feat(collab): share
-  whole-document link operations); **105 commits** not in
+- Local head before this STATUS commit: `158ab7fa4` (fix(web): take
+  craft-web-host from storytold, not the fork) on `1590412aa` (docs(collab):
+  record the whole-outline replacement) on `642dabb5b` (feat(collab): replace
+  the whole outline in one operation); **107 commits** not in
   `origin/main` (`git rev-list --count origin/main..HEAD`), **48 behind** the
   local `origin/main` `274b7a042` (`git rev-list --count HEAD..origin/main`;
-  the remote's tip is not fetched here), and **25 ahead** of the PR head
+  the remote's tip is not fetched here), and **27 ahead** of the PR head
   `b27fa89c8`; this STATUS record is the second commit of the pass, so after it
-  the counts are 106/48/26. The branch was not rebased, so the base stays
+  the counts are 108/48/28. The branch was not rebased, so the base stays
   `ba28458ad`; `git merge-tree --write-tree origin/main HEAD` exits 0 at
-  `642dabb5b`.
+  `158ab7fa4`.
   The numbers the earlier briefs named — 85 commits, 9 behind, 5 ahead for
   `199076765`, then 86/11/6 at `0c57e2271`, 94/48/14 at `b3732c152`, 95/48/15
   at `c26867e9c` — were right when they were measured; `origin/main` kept
@@ -43,18 +43,22 @@
   restore (`21aaf357a`), the page labels (`c26867e9c`) and their record
   (`04ac8f2ea`), and the link operations (`2b61ff80f`) and their record, the
   whole-document link operations (`b86c4963a`) and their record (`d2a1bcf64`),
-  and the whole-outline replacement (`642dabb5b`) and this record. `UNSTABLE` is
+  the whole-outline replacement (`642dabb5b`) and its record (`1590412aa`), and
+  the CI git-source fix (`158ab7fa4`) and this record. `UNSTABLE` is
   the CI rollup, not a
   conflict: `git merge-tree --write-tree origin/main HEAD` exits 0. Nothing was
   pushed from these sessions: only the owner's force-push moves the PR, and
   mergeability follows it. The PR body still describes an older push; it is not
   re-edited in this pass (nothing is pushed).
 - State: implemented behind the `collab` feature (off by default). The gates in
-  §4 are green at the local head `642dabb5b` for the crates this pass touched
-  (engine, collab-outline, collab-pdf, collab-client-pdf, collab-ws,
-  `pdfcraft-ui-egui --features collab` and the app); the whole-suite gates named
-  earlier were run at their own heads (`5bad54c40`, `157f4d239`, `22d29d070`,
-  `0c57e2271`, `2b61ff80f`, `642dabb5b`, §4) and were not re-run here.
+  §4 are green at the local head `158ab7fa4` for the crates this pass touched
+  (the web shell's manifest and the collab crates), and the CI job "Git
+  dependencies come from storytold" — the failed job of run `42720349704` at
+  `b27fa89c8` — now passes locally: every git source in `Cargo.lock` is under
+  `github.com/storytold/` and `cargo metadata --locked` exits 0 (§4, "The CI
+  git-source gate"). The earlier gates were run at their own heads
+  (`5bad54c40`, `157f4d239`, `22d29d070`, `0c57e2271`, `2b61ff80f`,
+  `642dabb5b`, §4) and were not re-run here.
 - What is done locally, all recorded in §4 and none pushed: the web host bridge
   (`81a92f32f`), the forced journal commit (`8fc898bae`), the idle/time
   threshold (`2a3b6e43e`), crash recovery against the real process
@@ -420,6 +424,64 @@ The app window "Collaboration" shows role, version/epoch, participants, errors,
 commit result, and a commit button for owner/editor.
 
 ## 4. Tests and verification
+
+### The CI git-source gate — one git source, storytold (2026-11-10, local; not pushed)
+
+`fix(web): take craft-web-host from storytold, not the fork` (`158ab7fa4`).
+CI run `42720349704` (pull request, head `b27fa89c8`) failed in
+`git-sources` ("Git dependencies come from storytold", `ci.yml`): that step
+accepts no git source outside `github.com/storytold/`, and the branch's
+`Cargo.lock` carried one entry with
+`source = "git+https://github.com/copoka/craft-libs?rev=7666e2b1…"`, which
+`origin/main` does not have. The pin came from `apps/pdfcraft-web`, the only
+manifest of the branch that named the fork: the collaboration host messages
+(`session`, `session-state`, `presence`, `commit`, `committed`) are not in
+`storytold/main` yet. At the PR head the manifest and the lock both named the
+fork, so the lock was self-consistent and the source check is the sub-check
+that rejects it (the job's log was not available while the run was still in
+progress; the check is a single step). (Observed on 2026-11-10: that job
+`failure`, the shared `gate` job still `in_progress`; this pass fixes only the
+job named in the brief.)
+
+- **The same commit, taken from storytold.** `storytold/craft-libs#716`
+  ("feat(web-host): collaboration session messages in the host contract",
+  `main` ← `copoka:feat/collab-session-messages`, open) has the head
+  `7666e2b1…`, and `git ls-remote https://github.com/storytold/craft-libs`
+  lists it as `refs/pull/716/head`, so the commit is reachable in the upstream
+  repository even though no branch there contains it. The manifest now pins
+  `https://github.com/storytold/craft-libs` at that rev; `cargo` fetched it by
+  SHA from storytold (the log of the lock rebuild says `Updating git repository
+  https://github.com/storytold/craft-libs` and `Adding craft-web-host … storytold`).
+  No code changes: the rev is the same, so the crate compiled before and after
+  is identical.
+- **The lock moves in one line.** The rebuilt `Cargo.lock` differs from the
+  previous one in the `source` of `craft-web-host` alone (`copoka` →
+  `storytold`); no other package moved, and no other pin was touched. The branch
+  still has `craft-web-api` at `fd5e2fe…` and the workspace libraries at
+  `787a7a0f…`/`7ee35a9f…`/`1b34eba4…`, all storytold.
+- **What it does not fix.** The pin is still a commit outside `storytold/main`
+  (PR #716 is open). When it merges, the rev can move to the merge commit and
+  the comment in `apps/pdfcraft-web/Cargo.toml` goes away. Nothing else in the
+  gate is affected: the shared `gate` job (fmt, clippy, tests, wasm, assets)
+  keeps running from `craft-common-actions@main`.
+
+Gates at `158ab7fa4` (host `agents`, rustc 1.99.1, `-j 4`; all run by
+`../scripts/remote-build.sh`):
+
+| Gate | Command | Result |
+|---|---|---|
+| CI job `git-sources`, lock step | `cargo metadata --locked --format-version 1` | EXIT=0 |
+| CI job `git-sources`, source step | the `ci.yml` python check over `Cargo.lock` and `.cargo/config.toml` | pass — no git source outside `github.com/storytold/` (`storytold/craft-libs`, `storytold/egui`, `storytold/winit`, `storytold/winprint.rs`); no `source` replacement, `patch` or `paths` |
+| Formatting | `cargo fmt --all -- --check` | EXIT=0 |
+| Clippy, the collab crates | `cargo clippy -p pdfcraft-collab-server -p pdfcraft-collab-ws -p pdfcraft-collab-pdf -p pdfcraft-collab-outline -p pdfcraft-collab-client-pdf --all-targets -- -D warnings` | EXIT=0 (one pre-existing warning in the vendored `hayro-interpret`) |
+| Web shell, the crate whose dependency changed | `cargo check -p pdfcraft-web --target wasm32-unknown-unknown --features collab` | EXIT=0 — 22 warnings, main's native-only helpers unused on wasm, none from the bridge |
+| Web shell, feature off | `cargo check -p pdfcraft-web --target wasm32-unknown-unknown` | EXIT=0 |
+| Tests | `cargo test -p pdfcraft-collab-server -p pdfcraft-collab-ws -p pdfcraft-collab-pdf -p pdfcraft-collab-outline -p pdfcraft-collab-client-pdf` | EXIT=0 — client-pdf 48, outline 9, pdf 71, server 33, ws 16 unit + 36 e2e; **213 passed, 0 failed, 0 ignored** |
+| Not a gate here | `cargo clippy -p pdfcraft-web --target wasm32-unknown-unknown --features collab --all-targets -- -D warnings` | EXIT=101 — five `-D warnings` on main's native-only code in `pdfcraft-render` under wasm (unused imports, methods and fields), pre-existing and unrelated to this change; the repository's wasm gate is `cargo check`, as the tables above use |
+
+Nothing was pushed: PR #6622 keeps the fork's head `b27fa89c8`, so its next run
+still sees the old lock until the owner force-pushes. The job was red on the
+PR head, not on this tree; the branch's head is now green for that job.
 
 ### The whole outline replaced — §5 p.3 / §6.6 (2026-11-10, local; not pushed)
 
@@ -2352,9 +2414,11 @@ What changed:
   owns the commit (no bytes), `pdfcraft:committed` back. The document a session
   joins is the token's `fileId` claim (what the server checks against
   `hello.doc`), falling back to the host's session id.
-- `craft-web-host` is pinned to `copoka/craft-libs` `7666e2b1` (the branch with
-  the collaboration messages) for that crate only — ADR-0016 §3; `craft-web-api`
-  stays on `storytold/craft-libs` `fd5e2fe`. Feature `collab` in
+- `craft-web-host` is pinned to `7666e2b1` (the commit with the collaboration
+  messages) for that crate only — ADR-0016 §3; since the CI gate fix it is
+  fetched from `storytold/craft-libs` (PR #716's head), not the fork (§4, "The
+  CI git-source gate"), and `craft-web-api` stays on `storytold/craft-libs`
+  `fd5e2fe`. Feature `collab` in
   `pdfcraft-web` is off by default: `trunk build --release --features collab`.
 - §5 loses the "no web client" item and the rest is renumbered: old 3–13 are
   now 2–12. Every cross-reference moved with it — the publication-queue note in
@@ -3311,10 +3375,13 @@ front of both (commit `81a92f32f`, §4):
   opens after `poll_collab` in the same frame.
 - `craft-web-host` (the crate that owns the message contract and both
   transports) does not carry the collaboration messages in `storytold/main` yet,
-  so `apps/pdfcraft-web` pins `copoka/craft-libs` `7666e2b1` for that crate only
-  (ADR-0016 §3), the same pin the other Craft apps use. `Cargo.lock` records it;
-  after the craft-libs PR merges, the URL goes back and the merge commit is
-  pinned.
+  so `apps/pdfcraft-web` pins the PR's head commit `7666e2b1` for that crate
+  only (ADR-0016 §3). It is fetched from `storytold/craft-libs`, where that
+  commit is `refs/pull/716/head` — the same commit the other Craft apps take
+  from the fork — because the CI job "Git dependencies come from storytold"
+  rejects a git source outside `github.com/storytold/` (§4, "The CI git-source
+  gate"). `Cargo.lock` records the storytold URL; after the craft-libs PR
+  merges, the rev moves to the merge commit.
 - The web feature is off by default:
   `cd apps/pdfcraft-web && trunk build --release --features collab`.
 
@@ -3448,6 +3515,13 @@ selections are done (§4, `b4e9179d8`); what remains of them is listed in §5 p.
 
 ### 6.6 Cleanup and submission
 
+- **The CI `git-sources` job passes on this tree** (`158ab7fa4`, 2026-11-10,
+  not pushed): `craft-web-host` is fetched from `storytold/craft-libs` at
+  PR #716's head instead of the fork, so `Cargo.lock` has no git source outside
+  `github.com/storytold/` and `cargo metadata --locked` exits 0. The lock moved
+  in one line and no code changed. Gates: §4, "The CI git-source gate". The PR
+  head still carries the old lock until the owner force-pushes; the shared
+  `gate` job of that run was still in progress when observed.
 - **The outline and named destinations are done locally in §4**
   (`d1229deb9`, 2026-11-10, not pushed): `outline.item.add`/`update`/`delete`/
   `restore`/`move` and `dest.add`/`update`/`delete`, addressed by the item's
