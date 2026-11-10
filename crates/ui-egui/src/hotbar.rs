@@ -23,6 +23,7 @@ pub(crate) struct Hotbar {
     search: String,
     #[serde(skip)]
     picker_open: bool,
+    /// Where the Hotbar tools window stays while the Toolbar size slider is being adjusted.
     #[serde(skip)]
     picker_drag_pos: Option<egui::Pos2>,
     /// The Toolbar size slider is being adjusted with the keyboard (until it loses focus).
@@ -56,6 +57,10 @@ impl Hotbar {
     pub(crate) fn close_picker(&mut self) {
         self.picker_open = false;
         self.picker_shown = None;
+        // Closed on a pass that doesn't draw the hotbar, `show` can't end a size adjustment: the
+        // next opening would start at the held position.
+        self.picker_drag_pos = None;
+        self.keyboard_sizing = false;
     }
 }
 
@@ -793,7 +798,7 @@ pub(crate) fn show(app: &mut PdfCraftApp, area: Rect, page_left: Option<f32>, ui
     } else {
         bar_rect.top().clamp(screen.top(), (screen.bottom() - 480.0).max(screen.top()))
     };
-    // Resizing the bar can move or flip its picker; hold the slider in place until the pointer is
+    // Resizing the bar can move or flip its picker; hold the picker in place until the pointer is
     // released, or, for the keyboard, until the slider loses focus.
     let picker_pos =
         bar.picker_drag_pos.unwrap_or_else(|| egui::pos2(picker_x.clamp(screen.left(), (screen.right() - outer_width).max(screen.left())), picker_y));
@@ -1068,6 +1073,24 @@ mod tests {
             assert!(h.state().hotbar.picker_drag_pos.is_none(), "{what}: losing focus must unpin the picker");
             assert_ne!(h.get_by_role(egui::accesskit::Role::Slider).rect(), slider, "{what}: picker should take its new place after focus leaves");
         }
+    }
+
+    /// A picker closed while the hotbar isn't drawn (Read mode, full screen, Organize) ends a size
+    /// adjustment too, so it doesn't open again at the position it was held at.
+    #[test]
+    fn closing_the_picker_ends_a_size_adjustment() {
+        let mut h = hotbar_harness!("top", false, false);
+        h.get_by_role(egui::accesskit::Role::Slider).focus();
+        h.run_steps(2);
+        for _ in 0..20 {
+            h.key_press(egui::Key::ArrowRight);
+            h.run_steps(1);
+        }
+        assert!(h.state().hotbar.picker_drag_pos.is_some() && h.state().hotbar.keyboard_sizing, "pinned while the keys resize the bar");
+        // What `close_hidden_picker` does on a pass that hides the hotbar: `show` doesn't run.
+        h.state_mut().hotbar.close_picker();
+        assert!(h.state().hotbar.picker_drag_pos.is_none(), "closing ends the held position");
+        assert!(!h.state().hotbar.keyboard_sizing, "closing ends the keyboard adjustment");
     }
 
     #[test]
