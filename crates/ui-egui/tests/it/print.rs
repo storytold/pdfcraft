@@ -908,6 +908,10 @@ fn a_dead_options_read_wakes_an_idle_dialog() {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
     let mut h = harness();
+    // A real default printer starts paper and duplex workers that can wake this dialog
+    // between the panic flag and the options sender being dropped. Only the options worker
+    // should be able to satisfy the wake assertion below.
+    h.state_mut().printer_source = Some(Arc::new(Vec::new));
     let gate = Arc::new(Mutex::new(()));
     let hold = gate.lock().unwrap();
     let wait = gate.clone();
@@ -928,7 +932,7 @@ fn a_dead_options_read_wakes_an_idle_dialog() {
     // The preview's page rasters render on the pool and ask for frames until they arrive; on a
     // loaded machine that outlasts `run`'s step budget, so the dialog is idle only after them.
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-    while h.state().render_pending() && std::time::Instant::now() < deadline {
+    while (h.state().render_pending() || h.state().print_draft.printers_loading) && std::time::Instant::now() < deadline {
         h.run_steps(1);
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
