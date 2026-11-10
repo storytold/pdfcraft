@@ -427,6 +427,40 @@ impl Document {
         self.editor.as_ref().map(|e| crate::bookmarks::document_rows(&e.cos)).unwrap_or_default()
     }
 
+    /// The bookmark at `path` with everything under it, or the whole outline for `[]`, as a tree
+    /// an import writes back. `None` when the structure can't be read for editing.
+    pub fn outline_tree(&self, path: &[usize]) -> Option<Result<pdfcraft_organize::OutlineTree, pdfcraft_organize::OutlineError>> {
+        let editor = self.editor.as_ref()?;
+        Some(pdfcraft_organize::outline_tree(&editor.cos, path))
+    }
+
+    /// The bookmarks "New bookmarks from structure" would make: one entry per tagged heading, in
+    /// document order. Empty when the document can't be read for editing. A collaboration client
+    /// builds the same tree in its replica (RFC §3.1.7).
+    pub fn structure_bookmarks(&self) -> Vec<pdfcraft_organize::OutlineEntry> {
+        self.editor
+            .as_ref()
+            .map(|editor| {
+                a11y::headings(&editor.cos)
+                    .into_iter()
+                    .map(|heading| pdfcraft_organize::OutlineEntry {
+                        level: heading.level,
+                        title: heading.title,
+                        page: heading.page,
+                        element: heading.obj,
+                        top: None,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// The bookmarks the lines in `levels`' text styles would make, in document order. Empty when
+    /// the document can't be read for editing.
+    pub fn text_style_bookmarks(&self, levels: &[crate::text_style_bookmarks::TextStyle]) -> Vec<pdfcraft_organize::OutlineEntry> {
+        self.editor.as_ref().map(|editor| crate::text_style_bookmarks::headings(&editor.cos, levels)).unwrap_or_default()
+    }
+
     /// The styles the document's text is set in, the largest first, for bookmarks from text
     /// styles (#1693).
     /// Empty when the document doesn't allow copying: the samples are its text.

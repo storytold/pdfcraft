@@ -391,6 +391,132 @@ impl PdfAdapter {
         Ok(json!({ "key": key, "path": path, "keys": restored }))
     }
 
+    /// `outline.replace`: the whole outline becomes `items`, in one structural
+    /// operation. The target is the outline itself (`key: null`), and `epoch` is
+    /// the compare-and-set: a document whose pages moved since the client built
+    /// the tree is `stale` and retryable before anything is read. The accepted
+    /// operation carries the tree it wrote and the tree it replaced (`before`),
+    /// so its undo is one more replace over `before` and its redo repeats the
+    /// operation. Everything is checked before the first write: the wire bounds
+    /// (nodes, depth, JSON bytes, titles, views, colours), every page against
+    /// this document, and every destination a node names by name.
+    pub(crate) fn replace_outline(&mut self, target: &Target, payload: &mut Value) -> Result<Value, AdapterError> {
+        if !matches!(target, Target::OutlineItem { key: None }) {
+            return Err(invalid("an outline replacement is addressed to the whole outline, not to an item"));
+        }
+        if let Some(epoch) = payload.get("epoch").and_then(Value::as_u64)
+            && epoch != self.epoch
+        {
+            return Err(AdapterError::new(ErrorCode::Stale, "the pages changed since; re-address the outline", true));
+        }
+        let items = payload.get("items").ok_or_else(|| invalid("the operation names no outline"))?;
+        let nodes = self.outline_replacement(items)?;
+        // The accepted operation carries the tree, so it has to fit the frame on
+        // the way back out, not only on the way in.
+        if copy_bytes(&nodes) > MAX_OUTLINE_COPY_BYTES {
+            return Err(limit("the outline is too large to carry in one operation"));
+        }
+        let before_nodes = self.whole_outline()?;
+        if nodes.is_empty() && before_nodes.is_empty() {
+            return Err(invalid("the outline is already empty"));
+        }
+        let items = tree_to_value(&nodes);
+        let before = tree_to_value(&before_nodes);
+        let count = node_count(&nodes);
+        payload["action"] = json!("outline.replace");
+        payload["items"] = items.clone();
+        payload["before"] = before.clone();
+        payload["epoch"] = json!(self.epoch);
+        payload["count"] = json!(count);
+        self.write_whole_outline(&nodes)?;
+        self.epoch = self.epoch.saturating_add(1);
+        Ok(json!({ "items": items, "count": count }))
+    }
+
+    /// The document's outline as a copy, for a replacement's `before` image: the
+    /// accepted operation carries it whole, so an outline over one operation's
+    /// budget is refused before anything changes rather than replaced without an
+    /// undo.
+    fn whole_outline(&self) -> Result<Vec<OutlineNode>, AdapterError> {
+        let tree = self
+            .session()
+            .outline_tree(self.id, &[])
+            .ok_or_else(|| invalid("the document's outline cannot be read"))?
+            .map_err(|error| invalid(error.to_string()))?;
+        if tree.truncated {
+            return Err(limit(format!("the outline nests deeper than the {MAX_OUTLINE_DEPTH} levels the room carries")));
+        }
+        let nodes = node_count(&tree.nodes);
+        if nodes > MAX_OUTLINE_COPY_NODES {
+            return Err(limit(format!("the outline has {nodes} bookmarks; one operation carries at most {MAX_OUTLINE_COPY_NODES}")));
+        }
+        if copy_bytes(&tree.nodes) > MAX_OUTLINE_COPY_BYTES {
+            return Err(limit("the outline is too large to keep whole in one operation"));
+        }
+        Ok(tree.nodes)
+    }
+
+    /// The items of an `outline.replace`, checked against this document before
+    /// the first write. A node may name its destination in the copy wire's own
+    /// `page`/`view` fields or as the full `dest` form of an outline operation
+    /// (a name included): a name this document does not define, one that opens no
+    /// page, a page past the last and a view that is not Table 149 are all
+    /// refused here.
+    fn outline_replacement(&self, value: &Value) -> Result<Vec<OutlineNode>, AdapterError> {
+        let list = value.as_array().ok_or_else(|| invalid("the outline is not a list"))?;
+        let normalized = Value::Array(list.iter().map(|item| self.outline_replacement_node(item)).collect::<Result<Vec<_>, _>>()?);
+        let nodes = tree_from_value(&normalized).map_err(map_outline)?;
+        let pages = self.document().map_or(0, |document| document.info.pages.len());
+        check_outline_pages(&nodes, pages)?;
+        Ok(nodes)
+    }
+
+    fn outline_replacement_node(&self, item: &Value) -> Result<Value, AdapterError> {
+        let Value::Object(mut object) = item.clone() else {
+            // Not a node at all: `tree_from_value` refuses it with the shape it
+            // expected, before anything is written.
+            return Ok(item.clone());
+        };
+        if let Some(value) = object.get("dest").filter(|value| !value.is_null()) {
+            let dest = self.read_dest(value)?;
+            let (page, view) = match dest {
+                BookmarkDest::Page { page, left, top } => (Some(page), Some((b"XYZ".to_vec(), vec![left, top, None]))),
+                BookmarkDest::View { page, kind, values } => (Some(page), Some((kind, values))),
+                BookmarkDest::Named { name } => {
+                    let destination = self
+                        .document()
+                        .and_then(|document| document.named_destinations().into_iter().find(|destination| destination.name == name))
+                        .ok_or_else(|| invalid(format!("this document has no named destination {name:?}")))?;
+                    let page = destination.page.ok_or_else(|| {
+                        AdapterError::new(ErrorCode::Unsupported, "the named destination opens no page, so the room cannot keep it", false)
+                    })?;
+                    (Some(page), destination.view)
+                }
+                BookmarkDest::Nowhere => (None, None),
+            };
+            object.insert("page".into(), page.map_or(Value::Null, |page| json!(page)));
+            object.insert("view".into(), view.map_or(Value::Null, |(kind, values)| outline_view(&kind, &values)));
+        }
+        if let Some(Value::Array(children)) = object.get("children").cloned() {
+            let normalized = children.iter().map(|child| self.outline_replacement_node(child)).collect::<Result<Vec<_>, _>>()?;
+            object.insert("children".into(), Value::Array(normalized));
+        }
+        Ok(Value::Object(object))
+    }
+
+    /// Write the whole outline as one edit: the engine's import with `replace`
+    /// when there is a tree to write, and a batch of top-level deletions when the
+    /// operation empties the outline (the engine's import refuses an empty tree,
+    /// and "there was no outline" is exactly "nothing is left").
+    fn write_whole_outline(&mut self, nodes: &[OutlineNode]) -> Result<(), AdapterError> {
+        if !nodes.is_empty() {
+            return self.apply_edit(Edit::ImportBookmarks { parent: Vec::new(), index: 0, bookmarks: nodes.to_vec(), replace: true });
+        }
+        let top = self.outline_items()?.into_iter().filter(|item| item.path.len() == 1).count();
+        let edits = (0..top).map(|_| Edit::DeleteBookmark { path: vec![0] }).collect();
+        self.apply_edit(Edit::Batch { label: "Replace bookmarks".into(), edits })
+    }
+
     /// `outline.item.move`: the item (with everything under it) as child `index`
     /// of another parent, and where it came from. A move into itself or into its
     /// own subtree is refused before anything changes, as is one that would nest
@@ -504,6 +630,39 @@ impl PdfAdapter {
         }
         Ok(())
     }
+}
+
+fn invalid(message: impl Into<String>) -> AdapterError {
+    AdapterError::new(ErrorCode::Invalid, message.into(), false)
+}
+
+fn limit(message: impl Into<String>) -> AdapterError {
+    AdapterError::new(ErrorCode::Limit, message.into(), false)
+}
+
+/// Every node's page must be one this document has: a copy may keep a bookmark
+/// whose page the *target* lacks, but a room's own outline is written against the
+/// document it shares, and a page past the last is a client's mistake, not a
+/// bookmark that goes nowhere.
+fn check_outline_pages(nodes: &[OutlineNode], pages: usize) -> Result<(), AdapterError> {
+    for node in nodes {
+        if let Some(page) = node.page
+            && page >= pages
+        {
+            return Err(invalid(format!("page {} does not exist: the document has {pages}", page.saturating_add(1))));
+        }
+        check_outline_pages(&node.children, pages)?;
+    }
+    Ok(())
+}
+
+/// A view as the copy wire writes it (`tree_to_value`'s shape), for a node whose
+/// destination arrived in the full `dest` form.
+fn outline_view(kind: &[u8], values: &[Option<f64>]) -> Value {
+    json!({
+        "kind": String::from_utf8_lossy(kind).into_owned(),
+        "values": values.iter().map(|value| value.map_or(Value::Null, |value| json!(value))).collect::<Vec<_>>(),
+    })
 }
 
 /// The page a destination names.

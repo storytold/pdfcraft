@@ -18,7 +18,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 use pdfcraft_collab_proto::{MAX_DEST_NAME, MAX_OUTLINE_COPY_NODES, MAX_OUTLINE_DEPTH, MAX_OUTLINE_ITEMS, MAX_OUTLINE_TITLE, MAX_PAGE_INDEX};
-use pdfcraft_organize::{BookmarkDest, OutlineNode, view_arity};
+use pdfcraft_organize::{BookmarkDest, OutlineEntry, OutlineNode, view_arity};
 use serde_json::{Value, json};
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -325,6 +325,53 @@ fn view_from_value(value: &Value) -> Result<(Vec<u8>, Vec<Option<f64>>)> {
         return Err(OutlineWireError::Invalid("a rectangle destination needs all four of its values".into()));
     }
     Ok((kind.as_bytes().to_vec(), numbers))
+}
+
+/// The tree the "New bookmarks from structure" and "from text styles"
+/// generators build in a replica, because a room cannot run the engine's own
+/// generator: one parent item titled `parent_title` (the engine calls it
+/// "Untitled" too) holding `entries` nested by their level, everything
+/// expanded, each heading going to the top of its page as `/XYZ` with the zoom
+/// kept. The shape is the engine's [`pdfcraft_organize::add_bookmark_tree`], so
+/// a room and a lone document write the same tree; the structure link (`/SE`)
+/// is not part of the wire, and the caller decides where the tree goes (a room
+/// replaces the whole outline with it).
+pub fn tree_from_entries(parent_title: &str, entries: &[OutlineEntry]) -> Vec<OutlineNode> {
+    // The open nodes, outermost first, with the level they were opened at.
+    let mut open: Vec<(u8, OutlineNode)> = Vec::new();
+    let mut roots: Vec<OutlineNode> = Vec::new();
+    for entry in entries {
+        // A level that is not deeper than the last open one closes it: the
+        // entry belongs beside it, not under it (the engine's own nesting).
+        while open.last().is_some_and(|(level, _)| *level >= entry.level) {
+            close(&mut open, &mut roots);
+        }
+        let view = Some((b"XYZ".to_vec(), vec![None, entry.top, None]));
+        let node = OutlineNode {
+            title: entry.title.clone(),
+            page: Some(entry.page),
+            view,
+            color: None,
+            italic: false,
+            bold: false,
+            open: true,
+            children: Vec::new(),
+        };
+        open.push((entry.level, node));
+    }
+    while !open.is_empty() {
+        close(&mut open, &mut roots);
+    }
+    vec![OutlineNode { title: parent_title.to_owned(), page: None, view: None, color: None, italic: false, bold: false, open: true, children: roots }]
+}
+
+fn close(open: &mut Vec<(u8, OutlineNode)>, roots: &mut Vec<OutlineNode>) {
+    if let Some((_, node)) = open.pop() {
+        match open.last_mut() {
+            Some((_, parent)) => parent.children.push(node),
+            None => roots.push(node),
+        }
+    }
 }
 
 /// How many nodes a subtree holds, for the room's own accounting.

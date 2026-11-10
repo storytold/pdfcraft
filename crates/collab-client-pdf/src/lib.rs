@@ -20,11 +20,14 @@ use pdfcraft_collab_annot::{
     PopupUpdate, ReviewStateWire, StyleUpdate, WireError, rect_from_value,
 };
 use pdfcraft_collab_link::{PagedLinks, bodies_from_value, bodies_to_value, pages_from_value, pages_to_value};
-use pdfcraft_collab_outline::{ItemLook, dest_from_value, dest_to_value, look_from_value, look_to_value, tree_from_value, tree_to_value};
+use pdfcraft_collab_outline::{
+    ItemLook, dest_from_value, dest_to_value, look_from_value, look_to_value, tree_from_entries, tree_from_value, tree_to_value,
+};
 use pdfcraft_collab_proto::{Applied, ConflictClass, DocKey, Op, OpId, OpKind, OutlineKey, PageRef, Target};
 use pdfcraft_engine::{
     BookmarkDest, DocId, Document, Edit, FieldConflicts, FieldValue, FormFieldKind, LinkAction, LinkContent, NoteIcon, Session, Shape,
 };
+use pdfcraft_organize::OutlineEntry;
 use serde_json::{Value, json};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -383,6 +386,12 @@ pub fn outline_restore_payload(subtree: &Value, index: usize) -> Value {
 /// (`None` = the top level). The target is the item's key.
 pub fn outline_move_payload(parent: Option<OutlineKey>, index: usize) -> Value {
     json!({"action": "outline.item.move", "parent": parent, "index": index})
+}
+
+/// The whole outline replaced by `items` (the copy wire's tree), checked against
+/// `epoch` by the room. The target is the outline itself, not an item.
+pub fn outline_replace_payload(items: &Value, epoch: u64) -> Value {
+    json!({"action": "outline.replace", "items": items, "epoch": epoch})
 }
 
 /// A named destination set to a page and a point (`dest.add` or `dest.update`:
@@ -781,6 +790,20 @@ pub fn edit_for(document: &Document, op: &Op) -> Result<Edit, ProjectionError> {
         }
         ("outline.item.move", ConflictClass::Structural) => {
             Ok(Edit::MoveBookmark { from: path_in(op, "from")?, to_parent: path_in(op, "to_parent")?, index: index_in(op)? })
+        }
+        // The whole outline the accepted operation settled on, written as the
+        // engine's own replacement. An empty tree is the engine's "nothing is
+        // left": the import refuses an empty list, so it is a batch of top-level
+        // deletions, which is still one edit and one undo step.
+        ("outline.replace", ConflictClass::Structural) => {
+            let items = op.payload.get("items").ok_or(ProjectionError::Missing("items"))?;
+            let bookmarks = tree_from_value(items).map_err(|error| ProjectionError::Invalid(error.to_string()))?;
+            if !bookmarks.is_empty() {
+                return Ok(Edit::ImportBookmarks { parent: Vec::new(), index: 0, bookmarks, replace: true });
+            }
+            let top = document.bookmarks().into_iter().filter(|row| row.path.len() == 1).count();
+            let edits = (0..top).map(|_| Edit::DeleteBookmark { path: vec![0] }).collect();
+            Ok(Edit::Batch { label: "Replace bookmarks".into(), edits })
         }
         ("dest.add" | "dest.update", ConflictClass::Structural) => {
             let name = named_dest_name(op)?;
@@ -1367,11 +1390,16 @@ pub fn ops_for_edit(
                 outline_move_payload(parent, *index),
             )])
         }
-        // A subtree written back whole, as the undo of a delete does. A `replace`
-        // of the whole outline is not shared: it would overwrite everyone's list.
+        // A subtree written back whole, as the undo of a delete does.
         Edit::ImportBookmarks { parent, index, bookmarks, replace } => {
             if *replace {
-                return Err(ProjectionError::Unsupported("replacing the whole outline".into()));
+                // A replacement is one operation over the whole outline: the
+                // parent is the outline, and the epoch is the compare-and-set.
+                if !parent.is_empty() {
+                    return Err(ProjectionError::Invalid("a replaced outline has no parent".into()));
+                }
+                let payload = outline_replace_payload(&tree_to_value(bookmarks), epoch);
+                return Ok(vec![structural_op(doc, next_id(client_id, counter)?, base_version, epoch, Target::OutlineItem { key: None }, payload)]);
             }
             let key = if parent.is_empty() { None } else { Some(outline_key_at(document, parent)?) };
             Ok(vec![structural_op(
@@ -1382,6 +1410,41 @@ pub fn ops_for_edit(
                 Target::OutlineItem { key },
                 outline_restore_payload(&tree_to_value(bookmarks), *index),
             )])
+        }
+        // The generators build their tree in this replica and replace the whole
+        // outline with it in one operation: a room cannot run the engine's own
+        // generator (it reads structure and text styles, not a wire shape), so
+        // the client sends the result. The engine inserts the new parent first
+        // and keeps the list, which is the same complete tree.
+        Edit::BookmarksFromStructure => {
+            let entries = document.structure_bookmarks();
+            if entries.is_empty() {
+                return Err(ProjectionError::Invalid("this document has no tagged headings to make bookmarks from".into()));
+            }
+            let payload = outline_replace_payload(&generated_outline(document, "Untitled", &entries)?, epoch);
+            Ok(vec![structural_op(doc, next_id(client_id, counter)?, base_version, epoch, Target::OutlineItem { key: None }, payload)])
+        }
+        Edit::BookmarksFromTextStyles { levels } => {
+            if levels.is_empty() {
+                return Err(ProjectionError::Invalid("choose a text style for at least one bookmark level".into()));
+            }
+            // A style given again, or one within the size tolerance of an earlier
+            // level's, would leave its level empty: refused here exactly as the
+            // engine's own generator refuses it.
+            for (i, a) in levels.iter().enumerate() {
+                if let Some(j) = levels.iter().skip(i.saturating_add(1)).position(|b| a.matches(b)) {
+                    let (first, second) = (i.saturating_add(1), i.saturating_add(j).saturating_add(2));
+                    return Err(ProjectionError::Invalid(format!(
+                        "bookmark levels {first} and {second} have the same text style: choose a different one for each level"
+                    )));
+                }
+            }
+            let entries = document.text_style_bookmarks(levels);
+            if entries.is_empty() {
+                return Err(ProjectionError::Invalid("no text is set in the chosen styles".into()));
+            }
+            let payload = outline_replace_payload(&generated_outline(document, "Untitled", &entries)?, epoch);
+            Ok(vec![structural_op(doc, next_id(client_id, counter)?, base_version, epoch, Target::OutlineItem { key: None }, payload)])
         }
         Edit::SetNamedDestination { name, dest } => {
             // Add or update: the room refuses an add of a name that exists and an
@@ -1572,6 +1635,20 @@ pub fn ops_for_edit(
 /// The object reference of the outline item at `path`, in this replica's own
 /// list. A path the list does not have cannot be addressed: the operation is not
 /// built at all, rather than sent and refused.
+/// The whole outline a generator sends: its new parent first (where the engine
+/// inserts it) and this replica's top-level items after it, so one replacement
+/// leaves the list a lone document would have kept. An outline the listing
+/// cannot read whole has no faithful replacement: refused, not truncated.
+fn generated_outline(document: &Document, parent_title: &str, entries: &[OutlineEntry]) -> Result<Value, ProjectionError> {
+    let tree = document.outline_tree(&[]).ok_or(ProjectionError::NoDocument)?.map_err(|error| ProjectionError::Invalid(error.to_string()))?;
+    if tree.truncated {
+        return Err(ProjectionError::Invalid("the outline nests too deep to be replaced whole in a room".into()));
+    }
+    let mut nodes = tree_from_entries(parent_title, entries);
+    nodes.extend(tree.nodes);
+    Ok(tree_to_value(&nodes))
+}
+
 fn outline_key_at(document: &Document, path: &[usize]) -> Result<OutlineKey, ProjectionError> {
     document
         .bookmarks()
@@ -2073,6 +2150,7 @@ pub fn inverse_for(document: &Document, op: &Op, op_id: OpId) -> Result<Option<O
         | "outline.item.delete"
         | "outline.item.restore"
         | "outline.item.move"
+        | "outline.replace"
         | "dest.add"
         | "dest.update"
         | "dest.delete" => return Ok(None),
@@ -2431,6 +2509,13 @@ fn outline_inverse(applied: &Applied, op_id: &OpId, doc: &DocKey) -> Option<Op> 
             let index = before.get("index")?.as_u64().and_then(|index| usize::try_from(index).ok())?;
             structural_op(doc.clone(), op_id.clone(), base, epoch, target, outline_move_payload(parent, index))
         }
+        // The undo of a replacement is one more replacement over the tree the
+        // accepted operation says it replaced; the epoch is the one it left.
+        "outline.replace" => {
+            let before = op.payload.get("before")?;
+            let payload = outline_replace_payload(before, epoch);
+            structural_op(doc.clone(), op_id.clone(), base, epoch, Target::OutlineItem { key: None }, payload)
+        }
         "dest.add" => {
             let Target::NamedDest { name } = &op.target else { return None };
             structural_op(doc.clone(), op_id.clone(), base, epoch, Target::NamedDest { name: name.clone() }, named_dest_delete_payload())
@@ -2616,9 +2701,28 @@ mod tests {
         assert_eq!(add[0].payload["action"], "dest.add");
         let removed = ops_for_edit(document, &Edit::DeleteNamedDestination { name: "intro".into() }, doc()?, "ada", 3, 0, &mut counter)?;
         assert_eq!(removed[0].payload["action"], "dest.delete");
-        // Replacing the whole outline is not shared.
-        let replace = Edit::ImportBookmarks { parent: vec![], index: 0, bookmarks: Vec::new(), replace: true };
-        assert!(matches!(ops_for_edit(document, &replace, doc()?, "ada", 3, 0, &mut counter), Err(ProjectionError::Unsupported(_))));
+        // Replacing the whole outline is one operation addressed to the outline
+        // itself, with the epoch the room checks before it writes.
+        let fresh = pdfcraft_engine::OutlineNode {
+            title: "Fresh".into(),
+            page: Some(0),
+            view: None,
+            color: None,
+            italic: false,
+            bold: false,
+            open: true,
+            children: Vec::new(),
+        };
+        let replace = Edit::ImportBookmarks { parent: vec![], index: 0, bookmarks: vec![fresh], replace: true };
+        let ops = ops_for_edit(document, &replace, doc()?, "ada", 3, 0, &mut counter)?;
+        assert_eq!(ops.len(), 1, "one operation");
+        assert_eq!(ops[0].payload["action"], "outline.replace");
+        assert_eq!(ops[0].target, Target::OutlineItem { key: None }, "the address is the outline, not an item");
+        assert_eq!(ops[0].payload["items"][0]["title"], "Fresh");
+        assert_eq!(ops[0].payload["epoch"], 0);
+        // A `replace` with a parent is not a whole-outline replacement.
+        let nested = Edit::ImportBookmarks { parent: vec![0], index: 0, bookmarks: Vec::new(), replace: true };
+        assert!(ops_for_edit(document, &nested, doc()?, "ada", 3, 0, &mut counter).is_err());
         Ok(())
     }
 
@@ -2687,6 +2791,194 @@ mod tests {
         // A named destination may not be a name of a name in the room.
         let nested = Op { payload: serde_json::json!({"action": "dest.add", "dest": {"kind": "named", "name": "other"}}), ..destination };
         assert!(edit_for(document, &nested).is_err());
+        // A whole-outline replacement becomes the engine's own replacement.
+        let replaced = Op {
+            payload: serde_json::json!({
+                "action": "outline.replace",
+                "items": [{"title": "Part", "page": 1, "children": [{"title": "One", "page": 1}]}],
+                "before": [{"title": "Old", "page": 0}],
+            }),
+            target: Target::OutlineItem { key: None },
+            ..add.clone()
+        };
+        match edit_for(document, &replaced)? {
+            Edit::ImportBookmarks { parent, bookmarks, replace, .. } => {
+                assert!(replace);
+                assert!(parent.is_empty(), "the whole outline, not a parent");
+                assert_eq!(bookmarks.len(), 1);
+                assert_eq!(bookmarks[0].children.len(), 1);
+            }
+            other => return Err(format!("expected a replacement, got {other:?}").into()),
+        }
+        Ok(())
+    }
+
+    /// A replacement is undone by one more replacement over the tree the accepted
+    /// operation says it replaced, and an empty tree is applied on every replica
+    /// as the deletions that leave nothing — still one edit.
+    #[test]
+    fn a_replacement_undoes_into_one_more_replacement() -> Result<(), Box<dyn std::error::Error>> {
+        let (mut session, id) = open()?;
+        session.apply(id, Edit::AddBookmark { parent: vec![], index: 0, title: "Old".into(), page: 0, left: None, top: None })?;
+        let titles = |session: &Session| -> Vec<String> {
+            session
+                .get(id)
+                .map(|document| document.bookmarks().into_iter().map(|row| format!("{}→{}", row.title, row.page.map_or(0, |p| p + 1))).collect())
+                .unwrap_or_default()
+        };
+        assert_eq!(titles(&session), ["Old→1"]);
+        let op = Op {
+            op_id: OpId::new("replace-whole")?,
+            doc: doc()?,
+            base_version: 1,
+            epoch: 1,
+            kind: pdfcraft_collab_proto::OpKind::Structural,
+            class: pdfcraft_collab_proto::ConflictClass::Structural,
+            target: Target::OutlineItem { key: None },
+            payload: serde_json::json!({
+                "action": "outline.replace",
+                "items": [{"title": "New", "page": 1}],
+                "before": [{"title": "Old", "page": 0}],
+                "count": 1,
+            }),
+            preview: None,
+        };
+        {
+            let document = session.get(id).ok_or("open")?;
+            assert!(matches!(edit_for(document, &op)?, Edit::ImportBookmarks { replace: true, .. }));
+        }
+        apply(&mut session, id, &op)?;
+        assert_eq!(titles(&session), ["New→2"]);
+        let applied =
+            Applied { op_id: op.op_id.clone(), actor_id: ActorId::new("ada")?, version: 2, epoch: 2, op: op.clone(), result: serde_json::json!({}) };
+        let undo = inverse_after(&applied).ok_or("a replacement is undoable")?;
+        assert_eq!(undo.payload["action"], "outline.replace");
+        assert_eq!(undo.payload["items"], op.payload["before"], "the undo replaces the tree the operation replaced");
+        assert_eq!(undo.target, Target::OutlineItem { key: None });
+        assert_eq!(undo.epoch, 2, "addressed in the epoch the operation left");
+        apply(&mut session, id, &undo)?;
+        assert_eq!(titles(&session), ["Old→1"]);
+
+        // Clearing the outline: `items: []` is the batch of top-level deletions,
+        // and its own undo is a replacement over the tree it cleared.
+        let clear = Op { payload: serde_json::json!({"action": "outline.replace", "items": [], "before": [{"title": "Old", "page": 0}]}), ..op };
+        {
+            let document = session.get(id).ok_or("open")?;
+            match edit_for(document, &clear)? {
+                Edit::Batch { edits, .. } => {
+                    assert_eq!(edits.len(), 1, "one top-level item, one deletion");
+                    assert!(matches!(edits[0], Edit::DeleteBookmark { ref path } if path == &[0]));
+                }
+                other => return Err(format!("expected a batch of deletions, got {other:?}").into()),
+            }
+        }
+        apply(&mut session, id, &clear)?;
+        assert!(titles(&session).is_empty(), "nothing is left");
+        let cleared =
+            Applied { op_id: clear.op_id.clone(), actor_id: ActorId::new("ada")?, version: 3, epoch: 3, op: clear, result: serde_json::json!({}) };
+        let restore = inverse_after(&cleared).ok_or("a clear is undoable")?;
+        assert_eq!(restore.payload["items"], serde_json::json!([{"title": "Old", "page": 0}]));
+        apply(&mut session, id, &restore)?;
+        assert_eq!(titles(&session), ["Old→1"]);
+        Ok(())
+    }
+
+    /// Two pages tagged with an H1 on the first and an H2 on the second, like the
+    /// engine's own generator fixture.
+    fn tagged_headings_fixture() -> Vec<u8> {
+        let objs = [
+            "<< /Type /Catalog /Pages 2 0 R /StructTreeRoot 7 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 200 200] /Resources << /Font << /F1 6 0 R >> >> >>",
+            "<< /Type /Page /Parent 2 0 R /Contents 5 0 R >>",
+            "<< /Type /Page /Parent 2 0 R >>",
+            "<< /Length 52 >>\nstream\n/H1 << /MCID 0 >> BDC BT /F1 12 Tf (Intro) Tj ET EMC\nendstream",
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+            "<< /Type /StructTreeRoot /K [8 0 R 9 0 R] >>",
+            "<< /S /H1 /Pg 3 0 R /K 0 >>",
+            "<< /S /H2 /Pg 4 0 R /ActualText (Details) >>",
+        ];
+        let mut out = b"%PDF-1.7\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, o) in objs.iter().enumerate() {
+            offsets.push(out.len());
+            out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+        }
+        let xref = out.len();
+        out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+        for o in offsets {
+            out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+        }
+        out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+        out
+    }
+
+    /// The two generators build their tree in this replica and send one
+    /// `outline.replace`: the new parent first (as the engine inserts it), the
+    /// list this document already has after it.
+    #[test]
+    fn generator_edits_become_one_outline_replacement() -> Result<(), Box<dyn std::error::Error>> {
+        let mut session = Session::new();
+        let id = session.open("tagged.pdf", None, Arc::new(tagged_headings_fixture()), None)?;
+        session.apply(id, Edit::AddBookmark { parent: vec![], index: 0, title: "Existing".into(), page: 0, left: None, top: None })?;
+        let mut counter = 0;
+        {
+            let document = session.get(id).ok_or("open")?;
+            let ops = ops_for_edit(document, &Edit::BookmarksFromStructure, doc()?, "ada", 3, 0, &mut counter)?;
+            assert_eq!(ops.len(), 1, "one operation");
+            assert_eq!(ops[0].payload["action"], "outline.replace");
+            assert_eq!(ops[0].target, Target::OutlineItem { key: None });
+            let items = ops[0].payload["items"].as_array().ok_or("items")?;
+            assert_eq!(items.len(), 2, "the generated parent, then the list it joins");
+            assert_eq!(items[0]["title"], "Untitled");
+            assert_eq!(items[0]["children"][0]["title"], "Intro");
+            assert_eq!(items[0]["children"][0]["children"][0]["title"], "Details", "the headings nest by level");
+            assert_eq!(items[1]["title"], "Existing", "the document's own list is kept after the new parent");
+            assert_eq!(items[0]["page"], serde_json::Value::Null, "the generated parent goes nowhere");
+            assert_eq!(items[0]["open"], true);
+            // The tree is one the room accepts: it parses back whole.
+            let parsed =
+                pdfcraft_collab_outline::tree_from_value(&ops[0].payload["items"]).map_err(|error| ProjectionError::Invalid(error.to_string()))?;
+            assert_eq!(parsed.len(), 2);
+        }
+        // An untagged document has nothing to generate, and the client says so
+        // before sending anything.
+        let (untagged, id) = open()?;
+        let document = untagged.get(id).ok_or("open")?;
+        assert!(matches!(
+            ops_for_edit(document, &Edit::BookmarksFromStructure, doc()?, "ada", 0, 0, &mut counter),
+            Err(ProjectionError::Invalid(message)) if message.contains("no tagged headings")
+        ));
+        Ok(())
+    }
+
+    /// "New bookmarks from text styles" sends one replacement too, and refuses a
+    /// level list the engine would refuse: no levels, two equal styles, no text.
+    #[test]
+    fn text_style_generators_become_one_outline_replacement() -> Result<(), Box<dyn std::error::Error>> {
+        let (session, id) = open()?;
+        let document = session.get(id).ok_or("open")?;
+        let mut counter = 0;
+        let level = pdfcraft_engine::text_style_bookmarks::TextStyle { font: "Helvetica".into(), size: 24.0, bold: false, italic: false };
+        let ops = ops_for_edit(document, &Edit::BookmarksFromTextStyles { levels: vec![level.clone()] }, doc()?, "ada", 3, 0, &mut counter)?;
+        assert_eq!(ops.len(), 1);
+        assert_eq!(ops[0].payload["action"], "outline.replace");
+        let items = ops[0].payload["items"].as_array().ok_or("items")?;
+        assert_eq!(items[0]["title"], "Untitled");
+        assert_eq!(items[0]["children"].as_array().map(Vec::len), Some(2), "a heading on each page");
+        assert_eq!(items[0]["children"][0]["title"], "Page 1");
+        assert!(matches!(
+            ops_for_edit(document, &Edit::BookmarksFromTextStyles { levels: Vec::new() }, doc()?, "ada", 3, 0, &mut counter),
+            Err(ProjectionError::Invalid(message)) if message.contains("choose a text style")
+        ));
+        assert!(matches!(
+            ops_for_edit(document, &Edit::BookmarksFromTextStyles { levels: vec![level.clone(), level] }, doc()?, "ada", 3, 0, &mut counter),
+            Err(ProjectionError::Invalid(message)) if message.contains("same text style")
+        ));
+        let elsewhere = pdfcraft_engine::text_style_bookmarks::TextStyle { font: "Courier".into(), size: 9.0, bold: true, italic: false };
+        assert!(matches!(
+            ops_for_edit(document, &Edit::BookmarksFromTextStyles { levels: vec![elsewhere] }, doc()?, "ada", 3, 0, &mut counter),
+            Err(ProjectionError::Invalid(message)) if message.contains("no text is set")
+        ));
         Ok(())
     }
 

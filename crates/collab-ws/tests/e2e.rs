@@ -2876,3 +2876,72 @@ fn whole_document_links_are_operations_over_a_socket() -> Result<(), Box<dyn std
     }
     Ok(())
 }
+
+/// The whole outline is replaced in one operation over a socket: both editors
+/// and the viewer converge on the tree, the undo (one more replacement over the
+/// tree the operation replaced) and the redo apply, a viewer is refused before
+/// the adapter runs, and a stale epoch moves neither the version nor a replica.
+#[test]
+fn the_whole_outline_is_replaced_over_a_socket() -> Result<(), Box<dyn std::error::Error>> {
+    let handle = start()?;
+    let mut room = Room::join(handle.local_addr())?;
+    let _part = room.add("op-part", None, "Part", 0)?;
+    room.assert_outline(&["Part→1"]);
+
+    let items = serde_json::json!([
+        {"title": "Start", "dest": {"kind": "page", "page": 1}},
+        {"title": "Part", "page": 0, "open": true, "children": [
+            {"title": "One", "page": 0},
+            {"title": "Two", "page": 1},
+        ]},
+    ]);
+    let replace = room.outline_op(
+        "op-replace",
+        Target::OutlineItem { key: None },
+        pdfcraft_collab_client_pdf::outline_replace_payload(&items, room.ada.epoch),
+    )?;
+    let epoch = room.ada.epoch;
+    let applied = room.write(replace)?;
+    assert_eq!(applied.epoch, epoch + 1, "one operation, one epoch step");
+    assert_eq!(applied.result["count"], 4);
+    assert_eq!(applied.op.payload["before"].as_array().map(Vec::len), Some(1), "the undo image is the whole tree it replaced");
+    assert_eq!(applied.op.payload["before"][0]["title"], "Part");
+    room.assert_outline(&["Start→2", "Part→1", "One→1", "Two→2"]);
+
+    // The undo is one more replacement over the tree the operation replaced.
+    let mut undo = pdfcraft_collab_client_pdf::inverse_after(&applied).ok_or("a replacement is undoable")?;
+    assert_eq!(undo.payload["action"], "outline.replace");
+    undo.base_version = room.ada.version;
+    undo.epoch = room.ada.epoch;
+    let undone = room.write(undo)?;
+    room.assert_outline(&["Part→1"]);
+
+    // The redo repeats the first operation: the tree the undo replaced.
+    let mut redo = pdfcraft_collab_client_pdf::inverse_after(&undone).ok_or("the undo is undoable")?;
+    redo.base_version = room.ada.version;
+    redo.epoch = room.ada.epoch;
+    room.write(redo)?;
+    room.assert_outline(&["Start→2", "Part→1", "One→1", "Two→2"]);
+
+    // A stale epoch is refused before anything is read, and nothing moves.
+    let version = room.ada.version;
+    let stale =
+        room.outline_op("op-replace-stale", Target::OutlineItem { key: None }, pdfcraft_collab_client_pdf::outline_replace_payload(&items, 0))?;
+    room.ada.send(stale)?;
+    assert!(matches!(room.ada.settle()?, ServerMessage::Rejected(rejected) if rejected.code == ErrorCode::Stale));
+    assert_eq!(room.ada.version, version, "a stale epoch moves nothing");
+    room.assert_outline(&["Start→2", "Part→1", "One→1", "Two→2"]);
+
+    // A viewer is refused before the adapter runs.
+    let attempt = structural_op(
+        room.doc.clone(),
+        OpId::new("op-viewer-replace")?,
+        room.cy.version,
+        room.cy.epoch,
+        Target::OutlineItem { key: None },
+        pdfcraft_collab_client_pdf::outline_replace_payload(&items, room.cy.epoch),
+    );
+    assert_eq!(room.viewer_writes(attempt)?, ErrorCode::Forbidden);
+    room.assert_outline(&["Start→2", "Part→1", "One→1", "Two→2"]);
+    Ok(())
+}

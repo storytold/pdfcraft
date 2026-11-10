@@ -4,10 +4,10 @@
 
 use super::{
     OutlineWireError, check_name, check_title, copy_bytes, dest_from_value, dest_to_value, look_from_value, look_to_value, node_count, subtree_depth,
-    tree_from_value, tree_to_value,
+    tree_from_entries, tree_from_value, tree_to_value,
 };
 use pdfcraft_collab_proto::{MAX_DEST_NAME, MAX_OUTLINE_COPY_NODES, MAX_OUTLINE_DEPTH, MAX_OUTLINE_TITLE};
-use pdfcraft_organize::{BookmarkDest, OutlineNode};
+use pdfcraft_organize::{BookmarkDest, OutlineEntry, OutlineNode};
 use serde_json::json;
 
 fn page_dest(page: usize, left: Option<f64>, top: Option<f64>) -> BookmarkDest {
@@ -122,6 +122,37 @@ fn a_copy_that_breaks_a_bound_is_refused() {
     assert!(tree_from_value(&json!([{"title": "x", "color": [2.0, 0.0, 0.0]}])).is_err(), "a colour past 1");
     assert!(tree_from_value(&json!([{"title": "x", "children": {}}])).is_err(), "children that are not a list");
     assert!(tree_from_value(&json!([{"title": "x", "view": {"kind": "Fit", "values": [1]}}])).is_err(), "a Fit takes no values");
+}
+
+/// The generators build their tree in the replica: one expanded parent holding
+/// the entries nested by level, each heading at the top of its page, and the
+/// whole thing round-trips through the wire exactly as the engine writes it.
+#[test]
+fn entries_nest_by_level_under_one_parent() {
+    let entry = |level: u8, title: &str, page: usize, top: Option<f64>| OutlineEntry { level, title: title.into(), page, element: None, top };
+    let entries = [
+        entry(1, "First", 0, Some(700.0)),
+        entry(2, "Under first", 0, None),
+        entry(3, "Deeper", 1, Some(500.0)),
+        entry(2, "Second under first", 1, None),
+        entry(1, "Second", 2, None),
+    ];
+    let tree = tree_from_entries("Untitled", &entries);
+    assert_eq!(tree.len(), 1, "one parent item");
+    let parent = &tree[0];
+    assert_eq!((parent.title.as_str(), parent.page, parent.open), ("Untitled", None, true));
+    assert_eq!(parent.children.iter().map(|n| n.title.as_str()).collect::<Vec<_>>(), ["First", "Second"]);
+    assert_eq!(parent.children[0].children.iter().map(|n| n.title.as_str()).collect::<Vec<_>>(), ["Under first", "Second under first"]);
+    assert_eq!(parent.children[0].children[0].children[0].title, "Deeper");
+    assert_eq!(parent.children[0].view, Some((b"XYZ".to_vec(), vec![None, Some(700.0), None])), "the heading's top, zoom kept");
+    assert_eq!(parent.children[1].page, Some(2));
+    // The wire carries it whole, so every replica writes the same tree.
+    let parsed = tree_from_value(&tree_to_value(&tree)).expect("the generated tree parses");
+    assert_eq!(parsed, tree);
+    assert_eq!(node_count(&parsed), 6);
+    assert_eq!(subtree_depth(&parsed), 4);
+    // No entries is still a parent: the generators refuse earlier.
+    assert_eq!(tree_from_entries("Untitled", &[])[0].children.len(), 0);
 }
 
 #[test]

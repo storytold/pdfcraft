@@ -31,6 +31,7 @@
 //! | `outline.item.delete` | structural | outline item (its object key) |
 //! | `outline.item.restore` | structural | outline item (the parent of the copy) |
 //! | `outline.item.move` | structural | outline item (its object key) |
+//! | `outline.replace` | structural | the outline itself (`outline_item.key` = `null`) |
 //! | `dest.add` | structural | named destination (its name) |
 //! | `dest.update` | structural | named destination (its name) |
 //! | `dest.delete` | structural | named destination (its name) |
@@ -1335,6 +1336,7 @@ impl Adapter for PdfAdapter {
             ("outline.item.delete", ConflictClass::Structural) => self.delete_outline_item(&effective.target, &mut effective.payload)?,
             ("outline.item.restore", ConflictClass::Structural) => self.restore_outline_item(&effective.target, &mut effective.payload)?,
             ("outline.item.move", ConflictClass::Structural) => self.move_outline_item(&effective.target, &mut effective.payload)?,
+            ("outline.replace", ConflictClass::Structural) => self.replace_outline(&effective.target, &mut effective.payload)?,
             ("dest.add", ConflictClass::Structural) => self.add_named_destination(&effective.target, &mut effective.payload)?,
             ("dest.update", ConflictClass::Structural) => self.update_named_destination(&effective.target, &mut effective.payload)?,
             ("dest.delete", ConflictClass::Structural) => self.delete_named_destination(&effective.target, &mut effective.payload)?,
@@ -4254,6 +4256,220 @@ mod tests {
         assert_eq!(outline(room.adapter()), before);
         assert!(named(room.adapter(), "mine").is_none());
         Ok(())
+    }
+
+    /// The whole outline is replaced in one structural operation: the payload is
+    /// the complete tree (a bookmark's look and view included, a name resolved),
+    /// the accepted operation carries the tree it wrote and the tree it
+    /// replaced, and one more replacement over `before` undoes it. Page
+    /// operations afterwards keep every bookmark on its page and every key
+    /// addressable, and an empty tree clears the outline.
+    #[test]
+    fn the_whole_outline_is_replaced_as_one_operation() -> Result<(), Box<dyn std::error::Error>> {
+        let (mut room, editor) = room_with_outline()?;
+        let before = outline(room.adapter());
+        assert_eq!(before, ["Start→3", "Chapters→1", "One→1", "Two→2"], "the fixture's outline");
+        let items = json!([
+            {"title": "Start", "dest": {"kind": "named", "name": "intro"}},
+            {"title": "Part", "dest": {"kind": "page", "page": 1}, "color": [1, 0, 0], "bold": true, "open": true,
+             "children": [
+                {"title": "One", "dest": {"kind": "page", "page": 0}},
+                {"title": "Two", "page": 1, "view": {"kind": "FitH", "values": [500.0]}},
+             ]},
+        ]);
+        let replace = op(
+            "outline-replace-1",
+            ConflictClass::Structural,
+            Target::OutlineItem { key: None },
+            0,
+            0,
+            json!({"action": "outline.replace", "items": items, "epoch": 0}),
+        )?;
+        let applied = room.apply(&editor, &replace, 0)?;
+        assert_eq!((applied.version, applied.epoch), (1, 1), "one structural operation is one epoch step");
+        assert_eq!(applied.op.payload["count"], 4);
+        assert_eq!(applied.op.payload["items"].as_array().map(Vec::len), Some(2), "the accepted tree is the one written");
+        assert_eq!(applied.op.payload["before"].as_array().map(Vec::len), Some(2), "and the whole tree it replaced");
+        assert_eq!(applied.op.payload["before"][1]["title"], "Chapters");
+        assert_eq!(applied.op.payload["before"][1]["children"].as_array().map(Vec::len), Some(2), "the undo image is the whole tree");
+        assert_eq!(outline(room.adapter()), ["Start→3", "Part→2", "One→1", "Two→2"]);
+        let part = node(room.adapter(), &[1]);
+        assert_eq!(part.color, Some([1.0, 0.0, 0.0]), "the look travels in the same operation");
+        assert!(part.bold && part.open);
+        let two = node(room.adapter(), &[1, 1]);
+        assert_eq!(two.view, Some((b"FitH".to_vec(), vec![Some(500.0)])), "the view arrived as named");
+        assert_eq!(named(room.adapter(), "intro").and_then(|destination| destination.page), Some(2), "the name itself is untouched");
+
+        // The undo is one more replacement over the tree the operation replaced.
+        let undo = op(
+            "outline-replace-undo",
+            ConflictClass::Structural,
+            Target::OutlineItem { key: None },
+            room.version(),
+            room.epoch(),
+            json!({"action": "outline.replace", "items": applied.op.payload["before"].clone(), "epoch": room.epoch()}),
+        )?;
+        let undone = room.apply(&editor, &undo, 0)?;
+        assert_eq!(outline(room.adapter()), before, "the tree the operation replaced is back");
+        assert_eq!(undone.op.payload["before"].as_array().map(Vec::len), Some(2), "the undo image is the tree it replaced");
+        // The redo repeats the first operation: the tree the undo replaced.
+        let redo = op(
+            "outline-replace-redo",
+            ConflictClass::Structural,
+            Target::OutlineItem { key: None },
+            room.version(),
+            room.epoch(),
+            json!({"action": "outline.replace", "items": undone.op.payload["before"].clone(), "epoch": room.epoch()}),
+        )?;
+        room.apply(&editor, &redo, 0)?;
+        assert_eq!(outline(room.adapter()), ["Start→3", "Part→2", "One→1", "Two→2"]);
+
+        // A page operation after a replacement keeps each bookmark on its page and
+        // the key a client took before it still addresses its item.
+        let part_key = key_of(room.adapter(), "Part");
+        let blank = op(
+            "blank-after-replace",
+            ConflictClass::Structural,
+            Target::Page(PageRef { index: 0, epoch: room.epoch() }),
+            room.version(),
+            room.epoch(),
+            json!({"action": "page.insert_blank", "width": 200.0, "height": 300.0}),
+        )?;
+        room.apply(&editor, &blank, 0)?;
+        assert_eq!(outline(room.adapter()), ["Start→4", "Part→3", "One→2", "Two→3"], "the pages moved, the targets did not");
+        let rename = op(
+            "rename-after-replace",
+            ConflictClass::Structural,
+            Target::OutlineItem { key: Some(part_key) },
+            room.version(),
+            room.epoch(),
+            json!({"action": "outline.item.update", "title": "Partie"}),
+        )?;
+        room.apply(&editor, &rename, 0)?;
+        assert!(outline(room.adapter()).contains(&"Partie→3".to_owned()), "the key outlived the page operation");
+
+        // An empty tree clears the outline, and its undo puts the whole tree back.
+        let clear = op(
+            "outline-clear",
+            ConflictClass::Structural,
+            Target::OutlineItem { key: None },
+            room.version(),
+            room.epoch(),
+            json!({"action": "outline.replace", "items": [], "epoch": room.epoch()}),
+        )?;
+        let cleared = room.apply(&editor, &clear, 0)?;
+        assert!(outline(room.adapter()).is_empty(), "nothing is left");
+        let restore = op(
+            "outline-clear-undo",
+            ConflictClass::Structural,
+            Target::OutlineItem { key: None },
+            room.version(),
+            room.epoch(),
+            json!({"action": "outline.replace", "items": cleared.op.payload["before"].clone(), "epoch": room.epoch()}),
+        )?;
+        room.apply(&editor, &restore, 0)?;
+        assert_eq!(outline(room.adapter()), ["Start→4", "Partie→3", "One→2", "Two→3"], "the cleared tree is back");
+        Ok(())
+    }
+
+    /// A replacement that breaks a bound or names something this document lacks
+    /// changes nothing: the version, the epoch and the document stay as they
+    /// were, and so does the journal (nothing is recorded).
+    #[test]
+    fn a_bad_outline_replace_changes_nothing() -> Result<(), Box<dyn std::error::Error>> {
+        let (mut room, editor) = room_with_outline()?;
+        let (version, epoch) = (room.version(), room.epoch());
+        let before = outline(room.adapter());
+        let chapters = key_of(room.adapter(), "Chapters");
+        let long_title = "t".repeat(pdfcraft_collab_proto::MAX_OUTLINE_TITLE + 1);
+        let mut deep = json!({"title": "bottom", "page": 0});
+        for level in 0..pdfcraft_collab_proto::MAX_OUTLINE_DEPTH {
+            deep = json!({"title": format!("level {level}"), "page": 0, "children": [deep]});
+        }
+        let wide: Vec<Value> =
+            (0..=pdfcraft_collab_proto::MAX_OUTLINE_COPY_NODES).map(|i| json!({"title": format!("item {i}"), "page": 0})).collect();
+        // Within the node bound, over the JSON budget.
+        let heavy: Vec<Value> =
+            (0..pdfcraft_collab_proto::MAX_OUTLINE_COPY_NODES).map(|i| json!({"title": format!("{i}-{}", "h".repeat(400)), "page": 0})).collect();
+        let cases: Vec<(Target, Value, ErrorCode)> = vec![
+            (Target::OutlineItem { key: Some(chapters) }, json!({"action": "outline.replace", "items": []}), ErrorCode::Invalid),
+            (Target::OutlineItem { key: None }, json!({"action": "outline.replace"}), ErrorCode::Invalid),
+            (Target::OutlineItem { key: None }, json!({"action": "outline.replace", "items": {}}), ErrorCode::Invalid),
+            (Target::OutlineItem { key: None }, json!({"action": "outline.replace", "items": [{"title": "   "}]}), ErrorCode::Invalid),
+            (Target::OutlineItem { key: None }, json!({"action": "outline.replace", "items": [{"title": long_title}]}), ErrorCode::Limit),
+            (Target::OutlineItem { key: None }, json!({"action": "outline.replace", "items": [{"title": "Lost", "page": 99}]}), ErrorCode::Invalid),
+            (
+                Target::OutlineItem { key: None },
+                json!({"action": "outline.replace", "items": [{"title": "Lost", "dest": {"kind": "named", "name": "nope"}}]}),
+                ErrorCode::Invalid,
+            ),
+            (
+                Target::OutlineItem { key: None },
+                json!({"action": "outline.replace", "items": [{"title": "Lost", "page": 0, "view": {"kind": "Far", "values": []}}]}),
+                ErrorCode::Invalid,
+            ),
+            (
+                Target::OutlineItem { key: None },
+                json!({"action": "outline.replace", "items": [{"title": "Lost", "page": 0, "view": {"kind": "FitR", "values": [0, 0, 1]}}]}),
+                ErrorCode::Invalid,
+            ),
+            (Target::OutlineItem { key: None }, json!({"action": "outline.replace", "items": [deep]}), ErrorCode::Limit),
+            (Target::OutlineItem { key: None }, json!({"action": "outline.replace", "items": wide}), ErrorCode::Limit),
+            (Target::OutlineItem { key: None }, json!({"action": "outline.replace", "items": heavy}), ErrorCode::Limit),
+            (Target::OutlineItem { key: None }, json!({"action": "outline.replace", "items": [], "epoch": 7}), ErrorCode::Stale),
+        ];
+        for (index, (target, payload, code)) in cases.into_iter().enumerate() {
+            let attempt = op(&format!("bad-replace-{index}"), ConflictClass::Structural, target, version, epoch, payload)?;
+            let rejected = room.apply(&editor, &attempt, 0).err().ok_or("a bad replacement must be refused")?;
+            assert_eq!(rejected.code, code, "{}", rejected.message);
+            assert_eq!((room.version(), room.epoch()), (version, epoch), "{}", rejected.message);
+            assert_eq!(outline(room.adapter()), before, "{}", rejected.message);
+        }
+        // A document whose own outline is over the copy budget cannot be replaced:
+        // its `before` image would not fit one operation, so the undo could not exist.
+        let (mut room, editor) = room_with_a_large_outline()?;
+        let (version, epoch) = (room.version(), room.epoch());
+        let attempt = op(
+            "replace-large",
+            ConflictClass::Structural,
+            Target::OutlineItem { key: None },
+            version,
+            epoch,
+            json!({"action": "outline.replace", "items": [{"title": "One", "page": 0}]}),
+        )?;
+        let rejected = room.apply(&editor, &attempt, 0).err().ok_or("an outline over the budget is refused")?;
+        assert_eq!(rejected.code, ErrorCode::Limit, "{}", rejected.message);
+        assert_eq!((room.version(), room.epoch()), (version, epoch));
+        Ok(())
+    }
+
+    /// A document whose outline is over what one operation can carry: every item
+    /// has a long title, so the tree is past the JSON budget while still inside
+    /// the node bound.
+    fn room_with_a_large_outline() -> Result<(Room<PdfAdapter>, ActorId), Box<dyn std::error::Error>> {
+        use pdfcraft_engine::Session;
+        let mut session = Session::new();
+        let id = session.open_new("large-outline.pdf", fixture(2).into())?;
+        let title = "h".repeat(400);
+        let nodes: Vec<pdfcraft_engine::OutlineNode> = (0..pdfcraft_collab_proto::MAX_OUTLINE_COPY_NODES)
+            .map(|i| pdfcraft_engine::OutlineNode {
+                title: format!("{i}-{title}"),
+                page: Some(0),
+                view: None,
+                color: None,
+                italic: false,
+                bold: false,
+                open: true,
+                children: Vec::new(),
+            })
+            .collect();
+        session.apply(id, pdfcraft_engine::Edit::ImportBookmarks { parent: Vec::new(), index: 0, bookmarks: nodes, replace: false })?;
+        let bytes = session.save_bytes(id)?.as_ref().clone();
+        let adapter = PdfAdapter::open("large-outline.pdf", bytes.into())?;
+        let mut room = Room::new(SessionId::new("session-large")?, DocKey::new("file-1")?, adapter, RoomConfig::default());
+        let editor = ActorId::new("editor")?;
+        room.hello(editor.clone(), Role::Editor, &hello()?, 0)?;
+        Ok((room, editor))
     }
 
     // ---- Page labels (RFC §3.1.8) ----------------------------------------
