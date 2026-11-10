@@ -699,7 +699,11 @@ pub(crate) enum MacSource {
     /// The glyph ids drawn, from a program that keeps its original ids; `override_strict` when
     /// the strict text is the last-resort WinAnsi reading; `below`, the first glyph id not read,
     /// for a Type 0 font that names some glyphs (`MAC_RELAXED_LIMIT`).
-    Program { override_strict: bool, below: u32 },
+    Program {
+        override_strict: bool,
+        below: u32,
+        fill_spaces: bool,
+    },
     /// `/gNN` glyph names.
     Names,
     /// The CIDs of a CID-keyed CFF program, glyph ids in the order ([`cid_cff_in_mac_order`]),
@@ -1154,8 +1158,17 @@ impl Rule for MacGlyphOrder {
         }
         let reads =
             !renumbered_block(&drawn) && plausible(&drawn) && accents_match_bases(program, &drawn);
+        // A Type 0 font whose `/ToUnicode` map answers for some glyphs gives its spaces too where
+        // it means to: a space it leaves out, read in the order, would only give the page a
+        // recovered layer of the same words, laid out on its own. A map that answers for no glyph
+        // (an empty one) leaves the spaces to the order like the letters.
+        let map_answers = font.has_to_unicode
+            && font
+                .id_text
+                .is_some_and(|text| drawn.iter().any(|&gid| text(gid).is_some()));
         reads.then_some(MacSource::Program {
             override_strict: simple && !codes_read_as_winansi(font),
+            fill_spaces: !map_answers,
             below: if relaxed {
                 MAC_RELAXED_LIMIT
             } else {
@@ -1186,16 +1199,12 @@ impl Rule for MacGlyphOrder {
             MacSource::Program {
                 override_strict,
                 below,
+                fill_spaces,
             } => {
                 let c = Some(glyph.gid.to_u32())
                     .filter(|id| *id < *below && mac_order_reads(*id))
-                    .and_then(mac_glyph_char)?;
-                // A font that names some of its glyphs (`below` is the relaxed limit) gains no
-                // text from a space the map leaves out: such a fill would only give the page a
-                // recovered layer of the same words, laid out on its own.
-                if *below == MAC_RELAXED_LIMIT && c.is_whitespace() {
-                    return None;
-                }
+                    .and_then(mac_glyph_char)
+                    .filter(|c| *fill_spaces || !c.is_whitespace())?;
                 let mode = if *override_strict {
                     RecoveryMode::Override {
                         reason: WINANSI_GUESS,
