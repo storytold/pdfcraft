@@ -3405,8 +3405,8 @@ tier = "P1"
 milestone = "M4"
 status = "shipped"
 commands = ["file.properties"]
-tools = []
-evidence = ["crates/ui-egui/tests/it/bookmarks.rs::expanding_and_collapsing_all_bookmarks", "crates/ui-egui/tests/it/bookmarks.rs::a_closed_top_level_bookmark_opens_closed", "crates/organize/src/tests.rs::bookmarks_add_rename_move_delete", "crates/organize/src/tests.rs::opening_a_bookmark_without_children_changes_nothing"]
+tools = ["bookmark_set_style"]
+evidence = ["crates/ui-egui/tests/it/bookmarks.rs::expanding_and_collapsing_all_bookmarks", "crates/ui-egui/tests/it/bookmarks.rs::a_closed_top_level_bookmark_opens_closed", "crates/organize/src/tests.rs::bookmarks_add_rename_move_delete", "crates/organize/src/tests.rs::opening_a_bookmark_without_children_changes_nothing", "crates/automation/tests/it/automation.rs::bookmarks_through_tools"]
 notes = "Bookmarks panel options: expand all, expand top-level, collapse all. Each bookmark, top level included, opens as its /Count says (positive open; negative or missing closed, ISO 32000-2 Table 151); the triangle toggles it for the session and a search shows matches inside closed ones. Adding or moving a bookmark into another opens that one. The bookmark's context menu has Expanded in the document, which writes the state to /Count (one undoable step; in a shared session an outline.item.update), and is disabled for a bookmark with no children, which has no state to write; the triangle stays the reader's own view of the file's state"
 
 [[feature]]

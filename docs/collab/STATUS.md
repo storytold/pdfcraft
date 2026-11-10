@@ -14,16 +14,18 @@
   `274b7a042`. `git merge-tree --write-tree origin/main HEAD` exits 0 at this
   pass's head `2797c2eca` (the next bullet); no rebase was done in this pass, so
   the base stays `ba28458ad`.
-- Local head before this STATUS commit: `f262cb8d5` (feat: share a bookmark's
-  look and edit named destinations) on `aa4f23dc4` (docs(collab): record the
-  link operations); **99 commits** not in `origin/main`
-  (`git rev-list --count origin/main..HEAD`), **48 behind** the local
-  `origin/main` `274b7a042` (`git rev-list --count HEAD..origin/main`; the
-  remote's tip is not fetched here), and **19 ahead** of the PR head
-  `b27fa89c8`; this STATUS record is the second commit of the pass, so after it
-  the counts are 100/48/20. The branch was not rebased, so the base stays
+- Local head before this STATUS commit: `628f6176e` (feat(automation): write a
+  bookmark's open state with `bookmark_set_style`) on `f4cd86faf` (docs(collab):
+  record the bookmark look and the named-destination interface) on `f262cb8d5`
+  (feat(collab): share a bookmark's look and edit named destinations) on
+  `aa4f23dc4` (docs(collab): record the link operations); **101 commits** not in
+  `origin/main` (`git rev-list --count origin/main..HEAD`), **48 behind** the
+  local `origin/main` `274b7a042` (`git rev-list --count HEAD..origin/main`;
+  the remote's tip is not fetched here), and **21 ahead** of the PR head
+  `b27fa89c8`; this STATUS record is the fourth commit of the pass, so after it
+  the counts are 102/48/22. The branch was not rebased, so the base stays
   `ba28458ad`; `git merge-tree --write-tree origin/main HEAD` exits 0 at
-  `f262cb8d5`.
+  `628f6176e`.
   The numbers the earlier briefs named — 85 commits, 9 behind, 5 ahead for
   `199076765`, then 86/11/6 at `0c57e2271`, 94/48/14 at `b3732c152`, 95/48/15
   at `c26867e9c` — were right when they were measured; `origin/main` kept
@@ -71,9 +73,9 @@ several `/NM`, per-line quads, the caret (`5bad54c40`, §4) — the conflict-res
   comment's parts, a move, a resize and a reshape as addressable operations
   (`22d29d070`, §4), and its pop-up window as one too (`0c57e2271`, §4), and
   the outline with its named destinations as eight structural operations
-  (`d1229deb9`, §4), a bookmark's look in `outline.item.update`/`add` and the
-  named-destination interface and tools (`f262cb8d5`, §4), the page labels as
-  two structural operations
+  (`d1229deb9`, §4), a bookmark's look in `outline.item.update`/`add`, the
+  named-destination interface and the `bookmark_set_style` open state
+  (`f262cb8d5`, `628f6176e`, §4), the page labels as two structural operations
   (`c26867e9c`, §4), and links as two structural operations over a page's whole
   link list (`2b61ff80f`, §4). The whole
   branch is rebased onto `origin/main` `ba28458ad` with an empty `merge-tree`
@@ -416,7 +418,7 @@ commit result, and a commit button for owner/editor.
 
 ### A bookmark's look and the named-destination interface — §5 p.3 / §6.6 (2026-11-10, local; not pushed)
 
-`f262cb8d5` on `aa4f23dc4`. This closes what the outline pass left open: the
+`f262cb8d5` and `628f6176e` on `aa4f23dc4`. This closes what the outline pass left open: the
 panel's colour, bold/italic and open-state edits, and the named destinations the
 app had no editor for (`d1229deb9`'s §4 section, last paragraph). Both are
 protocol and interface, not new operations: the look travels in the
@@ -473,10 +475,14 @@ protocol and interface, not new operations: the look travels in the
 - **Headless parity**: `crates/automation/src/named_dests.rs` adds
   `destinations` (name → page and view), `destination_set` (add or move a name,
   the type's own number of values checked before the write) and
-  `destination_delete`, following `bookmark_io.rs`'s shape. `parity/`'s
-  `view.destinations-panel` moves from `planned` to `shipped` with them, and
-  `organize.bookmark-expand-collapse`'s note no longer says the open state is
-  never written back.
+  `destination_delete`, following `bookmark_io.rs`'s shape;
+  `bookmark_set_style` (`628f6176e`) gained `open`, so the state the panel now
+  writes is reachable without the interface too — one `Edit::UpdateBookmark`,
+  refused for a bookmark with no children rather than reporting a write the
+  engine does not make. `parity/`'s `view.destinations-panel` moves from
+  `planned` to `shipped`, `organize.bookmark-expand-collapse` lists
+  `bookmark_set_style` as its tool, and its note no longer says the open state
+  is never written back.
 
 Tests:
 
@@ -487,19 +493,19 @@ Tests:
 | `collab-pdf` | `a_bookmark_look_is_updated_with_the_whole_node_as_its_undo_image` (colour + bold + italic, the accepted fields, `before` as the whole node; colour cleared and the parent closed, the `before` of both; an add that carries a look), `a_bad_outline_operation_changes_nothing` +10 cases (a colour of two or four, 1.5 and a string, `bold: 1`, `italic: "yes"`, `open` on "Two", `open` and a bad colour on an add) |
 | `collab-client-pdf` | `bookmark_look_edits_become_one_update_and_its_undo` (`SetBookmarkColor`, `SetBookmarkStyle` and an open-state `UpdateBookmark` each become one `outline.item.update` naming only what changed; `edit_for` applies `color: null` as the default black and leaves an unnamed slant alone; the inverse names the look `before` held, in the version and epoch the update left) |
 | `collab-ws` e2e (socket) | `a_bookmarks_look_converges_and_undoes_over_a_socket` (two editors and a viewer; colour/weight/slant converge on all three, the undo from the accepted operation puts the look back, the redo returns it, `open: false` closes the parent everywhere with `before.open` true, a viewer `forbidden` with no change, a vanished key `invalid` with no version move) |
-| `automation` | `named_destinations_through_tools` (listed empty, XYZ and Fit added, an existing name moved without a second entry, seven refusals — blank and 129-byte names, a page past the last, an unknown view, two values for XYZ, a `FitR` with a hole, a value for `Fit` — with nothing written, a delete, a name that is gone refused, and the name still there after a save and reopen) |
+| `automation` | `named_destinations_through_tools` (listed empty, XYZ and Fit added, an existing name moved without a second entry, seven refusals — blank and 129-byte names, a page past the last, an unknown view, two values for XYZ, a `FitR` with a hole, a value for `Fit` — with nothing written, a delete, a name that is gone refused, and the name still there after a save and reopen); `bookmarks_through_tools` (`bookmark_set_style open: false` on a parent, one undo reopens it, a leaf refused) and `bookmark_list_reports_colour_and_style` (a leaf's `open` refused beside the colour and style refusals) |
 
-Gates at `f262cb8d5` (host `agents`, rustc 1.99.1, `-j 8`):
+Gates at `628f6176e` (host `agents`, rustc 1.99.1, `-j 8`):
 
 | Gate | Command | Result |
 |---|---|---|
 | Formatting | `cargo fmt --all -- --check` | pass |
-| Clippy, the crates this pass touched | `cargo clippy -p pdfcraft-engine -p pdfcraft-organize -p pdfcraft-collab-{outline,pdf,client-pdf,ws} -p pdfcraft-automation --all-targets -- -D warnings` | pass |
+| Clippy, the crates this pass touched | `cargo clippy -p pdfcraft-engine -p pdfcraft-organize -p pdfcraft-collab-{outline,pdf,client-pdf,ws} -p pdfcraft-automation --all-targets -- -D warnings` | pass (the automation crate again after `628f6176e`) |
 | Clippy, UI with the feature | `cargo clippy -p pdfcraft-ui-egui --features collab --all-targets -- -D warnings` | pass |
 | Tests, the outline and its look | `cargo test -p pdfcraft-collab-outline -p pdfcraft-collab-pdf -p pdfcraft-collab-client-pdf` | pass — outline 8, pdf 65, client-pdf 45; 0 failed, 0 ignored |
 | Tests, the socket | `cargo test -p pdfcraft-collab-ws` | pass — ws 16 unit + 34 e2e; 0 failed |
 | Tests, the engines the edits live in | `cargo test -p pdfcraft-organize -p pdfcraft-engine` | pass — organize 232 + 1 + 1 integration, engine 636 + 9 + 46; 2 ignored (pre-existing) |
-| Tests, automation | `cargo test -p pdfcraft-automation` | 433 of 434 pass, `named_destinations_through_tools` included; **the one failure, `local_gotor_link_open_applies_destinations_and_honors_root`, is pre-existing at `aa4f23dc4`** — it was reproduced with this pass's changes stashed, and it is the links' own GoToR listing, not this slice |
+| Tests, automation | `cargo test -p pdfcraft-automation` | 433 of 434 pass, `named_destinations_through_tools`, `bookmarks_through_tools` and `bookmark_list_reports_colour_and_style` included; **the one failure, `local_gotor_link_open_applies_destinations_and_honors_root`, is pre-existing at `aa4f23dc4`** — it was reproduced with this pass's changes stashed, and it is the links' own GoToR listing, not this slice |
 | App wiring | `cargo check -p pdfcraft-ui-egui --features collab --all-targets` | pass |
 | Layers | `cargo xtask layers` | OK — 52 crates, no violations |
 | Parity | `cargo xtask parity` | exit 0 (its notes list shipped features without a tool, as before) |
@@ -509,11 +515,9 @@ What this does **not** cover: replacing the whole outline
 generators stay `unsupported` in a room; a named destination cannot be renamed
 in one step (the dialog adds the new name and deletes the old one, two steps in
 the history); a destination that is a name of a name, and one that goes nowhere,
-still cannot be written through `dest.*`; `parity/` does not yet claim an
-automation tool for the open state itself (`bookmark_set_style` takes a colour
-and the two styles); and the Bookmarks triangle remains the reader's view
-toggle rather than a document edit. Nothing was pushed: the two commits are
-local and PR #6622 keeps the fork's head `b27fa89c8`.
+still cannot be written through `dest.*`; and the Bookmarks triangle remains
+the reader's view toggle rather than a document edit. Nothing was pushed: the
+four commits are local and PR #6622 keeps the fork's head `b27fa89c8`.
 
 ### Links — §5 p.3, the last item of TASK §3's list (2026-11-10, local; not pushed)
 
@@ -3271,9 +3275,10 @@ selections are done (§4, `b4e9179d8`); what remains of them is listed in §5 p.
   Bold/Italic and Expanded-in-the-document edits go through that one operation,
   and Bookmarks ▸ Named destinations… plus `destinations`/
   `destination_set`/`destination_delete` in `crates/automation` edit the
-  document's names. Tests: `collab-outline` (2), `organize` (2), `collab-pdf`
-  (1 new, 10 refuse cases added), `collab-client-pdf` (1), `collab-ws` e2e (1)
-  and `automation` (1). What is still outside a room: replacing the whole
+  document's names, and `bookmark_set_style` writes the open state headlessly.
+  Tests: `collab-outline` (2), `organize` (2), `collab-pdf` (1 new, 10 refuse
+  cases added), `collab-client-pdf` (1), `collab-ws` e2e (1) and `automation`
+  (3: the named destinations and the open state). What is still outside a room: replacing the whole
   outline (`ImportBookmarks` with `replace`) and the from-structure/
   from-text-styles generators. (Links, the rest of TASK §3's list, are done in
   the bullet below.)
