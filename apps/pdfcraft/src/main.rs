@@ -207,6 +207,13 @@ fn use_app_drawn_controls(titlebar_override: bool, is_linux: bool, wayland_displ
     titlebar_override || (is_linux && wayland_display.is_some_and(|v| !v.is_empty()))
 }
 
+/// Whether the desktop named by `XDG_CURRENT_DESKTOP` is Cinnamon or its Muffin window manager.
+/// Muffin tiles windows (#3467) only with the server-side frame, so PdfCraft leaves the frame to it.
+fn x11_muffin_session(desktop: Option<&str>) -> bool {
+    desktop
+        .is_some_and(|value| value.split(':').any(|name| matches!(name.trim().to_ascii_lowercase().as_str(), "cinnamon" | "x-cinnamon" | "muffin")))
+}
+
 fn main() -> eframe::Result {
     // Windows: the update helper is a copy of this program started with `--finish-update`.
     #[cfg(windows)]
@@ -250,7 +257,12 @@ fn main() -> eframe::Result {
     let titlebar_override =
         cfg!(all(unix, not(target_os = "macos"))) && std::env::var("PDFCRAFT_TITLEBAR").ok().as_deref().map(str::trim) == Some("app");
     let wayland_display = std::env::var("WAYLAND_DISPLAY").ok();
-    let window_controls = if use_app_drawn_controls(titlebar_override, cfg!(target_os = "linux"), wayland_display.as_deref()) {
+    let desktop = std::env::var("XDG_CURRENT_DESKTOP").ok();
+    let x11 = cfg!(target_os = "linux") && wayland_display.as_deref().unwrap_or("").is_empty();
+    let server_side_frame = x11 && !titlebar_override && x11_muffin_session(desktop.as_deref());
+    let window_controls = if server_side_frame {
+        None
+    } else if use_app_drawn_controls(titlebar_override, cfg!(target_os = "linux"), wayland_display.as_deref()) {
         decorations::app_drawn()
     } else {
         None
@@ -348,6 +360,10 @@ fn retry_with_gl(choice: RendererChoice, app_started: bool) -> bool {
     choice == RendererChoice::Auto && !app_started
 }
 
+/// The smallest client size. Its height leaves room for a server-side frame inside a quarter-screen
+/// tile on a 1920x1080 desktop (#3467); the 520px `MIN_WINDOW_SIZE` used by the layout tests does not.
+const FRAMED_MIN_INNER_SIZE: [f32; 2] = [480.0, 480.0];
+
 /// The window and renderer settings for one run.
 fn native_options(integrated: bool, app_frame: bool, renderer: eframe::Renderer) -> eframe::NativeOptions {
     // A quarter-screen tile on 1920x1080 is 960x540 including the frame. With
@@ -360,7 +376,7 @@ fn native_options(integrated: bool, app_frame: bool, renderer: eframe::Renderer)
     let mut viewport = egui::ViewportBuilder::default()
         .with_title("PdfCraft")
         .with_inner_size([1440.0, 920.0])
-        .with_min_inner_size([480.0, 480.0])
+        .with_min_inner_size(FRAMED_MIN_INNER_SIZE)
         .with_drag_and_drop(true)
         // Wayland app id: matches packaging/linux/ai.storyteller.pdfcraft.desktop.
         .with_app_id(APP_ID);
@@ -942,119 +958,41 @@ mod tests;
 
 #[cfg(test)]
 mod x11_decorations_tests {
-    // Issue #3467: on X11 (for example Muffin) the window manager draws the frame and
-    // tracks edge and corner drags for half and quarter tiling. Enabling app-drawn
-    // decorations unconditionally on Linux removes that server-side frame, so `main`
-    // may only do so when the session is gated to a frameless Wayland desktop.
-    #[test]
-    fn x11_linux_keeps_server_side_decorations_for_tiling() {
-        let source = include_str!("main.rs");
-        // Everything before the top-level test modules is product code.
-        let product = source.split("\n#[cfg(test)]\nmod tests;").next().unwrap_or(source);
-        let mut assignment = String::new();
-        for line in product.lines() {
-            if assignment.is_empty() && !line.contains("let window_controls") {
-                continue;
-            }
-            assignment.push_str(line);
-            assignment.push('\n');
-            if line.contains(';') {
-                break;
-            }
-        }
-        assert!(!assignment.is_empty(), "main no longer chooses the window controls");
-        let lower = assignment.to_ascii_lowercase();
-        let gated = ["linux", "wayland", "x11"].iter().any(|token| lower.contains(token));
-        assert!(
-            !assignment.contains("decorations::app_drawn()") || gated,
-            "X11 Linux must keep server-side decorations for tiling; app-drawn decorations must be gated, not enabled unconditionally on Linux: {}",
-            assignment.trim()
-        );
-    }
-
-    #[test]
-    fn titlebar_override_is_honored_before_the_wayland_gate() {
-        let source = include_str!("main.rs");
-        // Everything before the top-level test modules is product code.
-        let product = source.split("\n#[cfg(test)]\nmod tests;").next().unwrap_or(source);
-        let override_pos = product.find("PDFCRAFT_TITLEBAR");
-        let wayland_pos = product.find("WAYLAND_DISPLAY");
-        let decorations_pos = product.find("decorations::");
-        assert!(product.contains("decorations::app_drawn()"), "main no longer calls decorations::app_drawn()");
-        // The explicit PDFCRAFT_TITLEBAR=app override lives inside app_drawn(), so main
-        // must consult it before the Wayland gate; otherwise X11/FreeBSD never reach it
-        // and keep system decorations even when app-drawn was asked for. A decorations
-        // helper consulted before the gate counts the same way, as does dropping the
-        // gate in main and letting app_drawn() decide (its default stays system on X11).
-        let honored_before_gate = match (override_pos, wayland_pos) {
-            (Some(override_pos), Some(wayland_pos)) => override_pos < wayland_pos,
-            (Some(_), None) => true,
-            (None, Some(wayland_pos)) => decorations_pos.is_some_and(|pos| pos < wayland_pos),
-            (None, None) => true,
-        };
-        assert!(
-            honored_before_gate,
-            "PDFCRAFT_TITLEBAR=app must be checked before the Wayland gate in main, so the override is honored on X11/FreeBSD while system decorations stay the default (override at {override_pos:?}, Wayland gate at {wayland_pos:?})"
-        );
-        if wayland_pos.is_some() {
-            let mut assignment = String::new();
-            for line in product.lines() {
-                if assignment.is_empty() && !line.contains("let window_controls") {
-                    continue;
-                }
-                assignment.push_str(line);
-                assignment.push('\n');
-                if line.contains(';') {
-                    break;
-                }
-            }
-            if !assignment.is_empty() {
-                assert!(
-                    assignment.contains("None"),
-                    "system decorations must stay the X11 default when the override is absent: {}",
-                    assignment.trim()
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn framed_minimum_fits_a_quarter_screen_tile() {
-        let source = include_str!("main.rs");
-        // Everything before the top-level test modules is product code.
-        let product = source.split("\n#[cfg(test)]\nmod tests;").next().unwrap_or(source);
-        let pos = product.find("with_min_inner_size");
-        assert!(pos.is_some(), "native_options no longer sets a minimum inner size");
-        let pos = pos.unwrap_or(0);
-        let snippet = &product[pos..];
-        let end = snippet.find(')').unwrap_or(snippet.len());
-        let args = &snippet[..end];
-        let nums: Vec<f32> = args.split(|c: char| !(c.is_ascii_digit() || c == '.')).filter_map(|t| t.parse().ok()).collect();
-        assert_eq!(nums.len(), 2, "minimum inner size should be two literals: {args}");
-        let (min_w, min_h) = (nums[0], nums[1]);
-        // 1920x1080 quarter tile is 960x540 including the frame. A server-side
-        // frame (titlebar plus borders) is under 60px tall and 20px wide, so
-        // the framed window must fit with that allowance inside the tile.
-        assert!(min_w + 20.0 <= 960.0, "minimum width {min_w} plus frame must fit a 960px quarter tile");
-        assert!(min_h + 60.0 <= 540.0, "minimum height {min_h} plus frame must fit a 540px quarter tile");
-        assert!(
-            min_h < pdfcraft_ui_egui::MIN_WINDOW_SIZE[1],
-            "minimum height {min_h} must be below the 520px minimum that left no room for the frame"
-        );
-        assert!(min_h >= 400.0, "minimum height {min_h} must stay usable for the layout");
-    }
+    use super::{FRAMED_MIN_INNER_SIZE, use_app_drawn_controls, x11_muffin_session};
 
     #[test]
     fn app_drawn_controls_only_on_wayland_or_with_override() {
         // X11 Linux without the override keeps server-side decorations.
-        assert!(!super::use_app_drawn_controls(false, true, None));
-        assert!(!super::use_app_drawn_controls(false, true, Some("")));
+        assert!(!use_app_drawn_controls(false, true, None));
+        assert!(!use_app_drawn_controls(false, true, Some("")));
         // A native Wayland session on Linux gets app-drawn controls.
-        assert!(super::use_app_drawn_controls(false, true, Some("wayland-1")));
+        assert!(use_app_drawn_controls(false, true, Some("wayland-1")));
         // The explicit override wins on X11 and on non-Linux Unix (FreeBSD).
-        assert!(super::use_app_drawn_controls(true, true, None));
-        assert!(super::use_app_drawn_controls(true, false, None));
+        assert!(use_app_drawn_controls(true, true, None));
+        assert!(use_app_drawn_controls(true, false, None));
         // Without the override, non-Linux never gets them, even with WAYLAND_DISPLAY set.
-        assert!(!super::use_app_drawn_controls(false, false, Some("wayland-1")));
+        assert!(!use_app_drawn_controls(false, false, Some("wayland-1")));
+    }
+
+    #[test]
+    fn muffin_sessions_are_read_from_the_desktop_variable() {
+        // The value is what `XDG_CURRENT_DESKTOP` holds; the caller reads it from the environment.
+        assert!(x11_muffin_session(Some("X-Cinnamon")));
+        assert!(x11_muffin_session(Some("Cinnamon")));
+        assert!(x11_muffin_session(Some("ubuntu:X-Cinnamon")));
+        assert!(x11_muffin_session(Some("muffin")));
+        assert!(!x11_muffin_session(Some("XFCE")));
+        assert!(!x11_muffin_session(Some("")));
+        assert!(!x11_muffin_session(None));
+    }
+
+    #[test]
+    fn framed_minimum_fits_a_quarter_screen_tile() {
+        // A 1920x1080 quarter tile is 960x540 including the frame; a server-side frame is under
+        // 60px tall and 20px wide.
+        let [min_w, min_h] = FRAMED_MIN_INNER_SIZE;
+        assert!(min_w + 20.0 <= 960.0, "minimum width {min_w} plus frame must fit a 960px quarter tile");
+        assert!(min_h + 60.0 <= 540.0, "minimum height {min_h} plus frame must fit a 540px quarter tile");
+        assert!(min_h >= 400.0, "minimum height {min_h} must stay usable for the layout");
     }
 }
