@@ -570,3 +570,44 @@ fn a_tree_with_more_kids_or_entries_than_are_read_is_listed_but_not_rewritten() 
         assert!(refused.contains("cannot be edited without losing some"), "{case}: {refused}");
     }
 }
+
+#[test]
+fn pairs_sharing_one_long_key_are_read_up_to_the_key_bytes() {
+    // Every pair names one indirect string (4) an eighth of the key bytes long: an entry copies
+    // its key, so nine of them are past what is read however few entries that is.
+    let mut doc = shared_tree("<< /Names 5 0 R >>", vec!["null".into(), "null".into()]);
+    let key = ObjRef::new(4, 0);
+    doc.set(key, Object::String(PdfString::literal(vec![b'k'; crate::dests::TREE_KEY_BYTES / 8])));
+    let pair = [Object::Ref(key), Object::Array(vec![Object::Ref(page(&doc, 0)), Object::name("Fit")])];
+    doc.set(ObjRef::new(5, 0), Object::Array(pair.iter().cycle().take(2 * 9).cloned().collect()));
+    assert_eq!(list(&doc).iter().map(|(_, p)| *p).collect::<Vec<_>>(), [Some(0)], "what was read is listed");
+    let refused = add_named_destination(&mut doc, "new", 0, None, None).unwrap_err().to_string();
+    assert!(refused.contains("bytes of names") && refused.contains("cannot be edited without losing some"), "{refused}");
+}
+
+#[test]
+fn triggers_and_actions_behind_references_to_references_are_rewritten_where_they_are() {
+    // A widget's `/AA` (5) and the page's (7) are references to the one triggers dictionary 6,
+    // and its `/A` (8) a reference to the action 9: each is changed where it is, once, and the
+    // references stay as they were.
+    let b: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /Names << /Dests << /Names [(ch) [3 0 R /Fit]] >> >> >>".into(), // 1
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >>".into(),                      // 2
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R] /AA 7 0 R >>".into(),                              // 3
+        "<< /Type /Annot /Subtype /Widget /Rect [0 0 10 10] /AA 5 0 R /A 8 0 R >>".into(),               // 4
+        "6 0 R".into(),                                                                                  // 5
+        "<< /U << /S /GoTo /D (ch) >> >>".into(),                                                        // 6
+        "6 0 R".into(),                                                                                  // 7
+        "9 0 R".into(),                                                                                  // 8
+        "<< /S /GoTo /D (ch) >>".into(),                                                                 // 9
+    ];
+    let mut doc = open(build(&b, "/Root 1 0 R"));
+    rename_named_destination(&mut doc, "ch", "new").unwrap();
+    let obj = |n: u32| (*doc.get(ObjRef::new(n, 0))).clone();
+    let trigger = obj(6).as_dict().and_then(|d| d.get(b"U")).and_then(Object::as_dict).and_then(|u| u.get(b"D")).cloned();
+    assert_eq!(trigger, Some(string("new")));
+    assert_eq!(obj(9).as_dict().and_then(|d| d.get(b"D")).cloned(), Some(string("new")));
+    for (alias, to) in [(5, 6), (7, 6), (8, 9)] {
+        assert_eq!(obj(alias), Object::Ref(ObjRef::new(to, 0)), "object {alias}");
+    }
+}

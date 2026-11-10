@@ -16,6 +16,7 @@
 //! in other files and URLs cannot be reached, and go nowhere after either.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString};
 
@@ -32,6 +33,10 @@ pub(crate) const TREE_ENTRIES: usize = 1 << 20;
 
 /// Most name-tree kids queued, in all.
 pub(crate) const TREE_KIDS: usize = 1 << 20;
+
+/// Most key bytes read, in all. An entry keeps its own copy of its key, and many entries can
+/// name one indirect string, so the entries read do not bound the bytes copied.
+pub(crate) const TREE_KEY_BYTES: usize = 64 << 20;
 
 /// References followed from one reference to the object it stands for, as `Document::resolve`
 /// follows them.
@@ -81,7 +86,8 @@ fn names_dict(doc: &Document) -> Option<Dict> {
 /// array is read once too, however many nodes share it: read for each, nodes sharing one would
 /// add its entries, or queue its kids, once per node. Nodes and arrays are told apart by the
 /// object they stand for (see [`first_read`]), so references to references reach each only
-/// once. Past [`TREE_ENTRIES`] entries or [`TREE_KIDS`] kids the tree is not read whole.
+/// once. Past [`TREE_ENTRIES`] entries, [`TREE_KEY_BYTES`] key bytes or [`TREE_KIDS`] kids the
+/// tree is not read whole. A direct node or array is read where it is, not copied.
 fn tree_entries(doc: &Document) -> TreeEntries {
     let mut out = TreeEntries { entries: Vec::new(), complete: true };
     let Some(tree) = names_dict(doc).and_then(|n| n.get(b"Dests").cloned()) else { return out };
@@ -91,6 +97,7 @@ fn tree_entries(doc: &Document) -> TreeEntries {
     let mut kids_read: HashSet<ObjRef> = HashSet::new();
     let mut read = 0usize;
     let mut queued = 0usize;
+    let mut key_bytes = 0usize;
     while let Some((raw, depth)) = stack.pop() {
         if depth > TREE_DEPTH || read >= TREE_NODES {
             out.complete = false;
@@ -101,10 +108,14 @@ fn tree_entries(doc: &Document) -> TreeEntries {
             continue;
         }
         read += 1;
-        let node = doc.resolve(&raw);
+        let node = match raw {
+            Object::Ref(_) => doc.resolve(&raw),
+            direct => Arc::new(direct),
+        };
         let Some(d) = node.as_dict() else { continue };
-        if let Some(pairs) = d.get(b"Names").filter(|n| first_read(doc, &mut names_read, n)).map(|n| doc.resolve(n))
-            && let Some(pairs) = pairs.as_array()
+        let mut held = None;
+        if let Some(pairs) = d.get(b"Names").filter(|n| first_read(doc, &mut names_read, n))
+            && let Some(pairs) = array_in(doc, pairs, &mut held)
         {
             #[cfg(test)]
             crate::work(pairs.len());
@@ -116,16 +127,22 @@ fn tree_entries(doc: &Document) -> TreeEntries {
                 if let [k, v] = pair {
                     let key = doc.resolve(k);
                     let bytes = match &*key {
-                        Object::String(s) => s.bytes.clone(),
-                        Object::Name(n) => n.clone(),
+                        Object::String(s) => &s.bytes,
+                        Object::Name(n) => n,
                         _ => continue,
                     };
-                    out.entries.push(Entry { key: (*key).clone(), bytes, value: v.clone() });
+                    key_bytes = key_bytes.saturating_add(bytes.len());
+                    if key_bytes > TREE_KEY_BYTES {
+                        out.complete = false;
+                        break;
+                    }
+                    out.entries.push(Entry { key: (*key).clone(), bytes: bytes.clone(), value: v.clone() });
                 }
             }
         }
-        if let Some(kids) = d.get(b"Kids").filter(|k| first_read(doc, &mut kids_read, k)).map(|k| doc.resolve(k))
-            && let Some(kids) = kids.as_array()
+        let mut held = None;
+        if let Some(kids) = d.get(b"Kids").filter(|k| first_read(doc, &mut kids_read, k))
+            && let Some(kids) = array_in(doc, kids, &mut held)
         {
             #[cfg(test)]
             crate::work(kids.len());
@@ -139,6 +156,15 @@ fn tree_entries(doc: &Document) -> TreeEntries {
         }
     }
     out
+}
+
+/// The array `o` is, or the one it stands for (kept in `held`): a direct array is not copied.
+fn array_in<'a>(doc: &Document, o: &'a Object, held: &'a mut Option<Arc<Object>>) -> Option<&'a [Object]> {
+    match o {
+        Object::Array(a) => Some(a),
+        Object::Ref(_) => held.insert(doc.resolve(o)).as_array().map(Vec::as_slice),
+        _ => None,
+    }
 }
 
 /// Whether `o` is read now: a direct object always, a reference only the first time the object
@@ -242,7 +268,7 @@ fn editable_entries(doc: &Document) -> Result<TreeEntries, OrganizeError> {
     let entries = tree_entries(doc);
     if !entries.complete {
         return Err(OrganizeError::Invalid(format!(
-            "the document's named destinations are nested more than {TREE_DEPTH} levels deep, spread over more than {TREE_NODES} parts or more than {TREE_KIDS} kids, or more than {TREE_ENTRIES} entries long, so they cannot be edited without losing some"
+            "the document's named destinations are nested more than {TREE_DEPTH} levels deep, spread over more than {TREE_NODES} parts or more than {TREE_KIDS} kids, or more than {TREE_ENTRIES} entries or {TREE_KEY_BYTES} bytes of names long, so they cannot be edited without losing some"
         )));
     }
     Ok(entries)
@@ -605,33 +631,35 @@ impl Rewriter<'_> {
         write_changes(doc, h, changes)
     }
 
-    /// An `/AA` dictionary's actions: an indirect dictionary is changed in place; an inline one
-    /// that changed is handed back.
+    /// An `/AA` dictionary's actions: an indirect dictionary is changed in place (where a
+    /// reference to a reference leads, see [`held_by`]); an inline one that changed is handed back.
     fn triggers(&mut self, doc: &mut Document, aa: &Object) -> Result<Option<Object>, OrganizeError> {
-        if let Object::Ref(r) = aa
-            && !self.seen.insert((*r, Role::Triggers))
-        {
-            return Ok(None);
-        }
-        let Some(triggers) = doc.resolve(aa).as_dict().cloned() else { return Ok(None) };
+        let at = held_by(doc, aa);
+        let triggers = match (at, aa) {
+            (Some(r), _) if self.seen.insert((r, Role::Triggers)) => doc.get(r).as_dict().cloned(),
+            (None, Object::Dict(d)) => Some(d.clone()),
+            _ => None,
+        };
+        let Some(triggers) = triggers else { return Ok(None) };
         let mut changes = Vec::new();
         for (k, v) in triggers.iter() {
             if let Some(new) = self.action(doc, v, 0)? {
                 changes.push((k.clone(), new));
             }
         }
-        inline_or_in_place(doc, aa, triggers, changes)
+        inline_or_in_place(doc, at, triggers, changes)
     }
 
-    /// An action, and those it chains to: an indirect one is changed in place; an inline one
-    /// that changed is handed back.
+    /// An action, and those it chains to: an indirect one is changed in place (where a reference
+    /// to a reference leads); an inline one that changed is handed back.
     fn action(&mut self, doc: &mut Document, action: &Object, depth: usize) -> Result<Option<Object>, OrganizeError> {
         if depth > NEXT_DEPTH {
             return Ok(None);
         }
-        let d = match action {
-            Object::Ref(r) if self.seen.insert((*r, Role::Action)) => doc.get(*r).as_dict().cloned(),
-            Object::Dict(d) => Some(d.clone()),
+        let at = held_by(doc, action);
+        let d = match (at, action) {
+            (Some(r), _) if self.seen.insert((r, Role::Action)) => doc.get(r).as_dict().cloned(),
+            (None, Object::Dict(d)) => Some(d.clone()),
             _ => None,
         };
         let Some(d) = d else { return Ok(None) };
@@ -663,18 +691,24 @@ impl Rewriter<'_> {
             }
             None => {}
         }
-        inline_or_in_place(doc, action, d, changes)
+        inline_or_in_place(doc, at, d, changes)
     }
 }
 
-/// `changes` made to `held`, the dictionary `slot` holds: written in place when `slot` is a
-/// reference, else handed back as the changed inline dictionary (`None` when nothing changed).
-fn inline_or_in_place(doc: &mut Document, slot: &Object, mut held: Dict, changes: Vec<(Vec<u8>, Object)>) -> Result<Option<Object>, OrganizeError> {
+/// `changes` made to `held`, the dictionary read from the object `at` (`None` for an inline
+/// one): written there in place, or handed back as the changed inline dictionary (`None` when
+/// nothing changed).
+fn inline_or_in_place(
+    doc: &mut Document,
+    at: Option<ObjRef>,
+    mut held: Dict,
+    changes: Vec<(Vec<u8>, Object)>,
+) -> Result<Option<Object>, OrganizeError> {
     if changes.is_empty() {
         return Ok(None);
     }
-    if let Object::Ref(r) = slot {
-        write_changes(doc, *r, changes)?;
+    if let Some(r) = at {
+        write_changes(doc, r, changes)?;
         return Ok(None);
     }
     for (k, v) in changes {
