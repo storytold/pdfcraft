@@ -14,6 +14,15 @@ use crate::{PdfCraftApp, QuickTool};
 /// [x0, y0, x1, y1]); a plain click has an empty rectangle.
 pub type Marquee = (usize, Rect, [f32; 4]);
 
+/// What was chosen in the menu under a copied area.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AreaChoice {
+    /// Print only this area (Acrobat's "print selected area").
+    Print,
+    /// Save the copied picture as a PNG file.
+    Save,
+}
+
 /// Drag a rectangle on page `page` (Marquee Zoom, Snapshot, Vector Snapshot), with a press nobody holds (`free`).
 pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, xf: &PageXform, ptr: &PagePointer, page: usize, free: bool, view: &mut DocView) {
     let (pointer, origin) = (ptr.pos, ptr.origin);
@@ -26,6 +35,30 @@ pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, xf: &PageXform, p
         && let Some(o) = origin.filter(|o| xf.rect.contains(*o))
     {
         view.marquee = Some((page, o));
+        view.area_pick = None;
+    }
+    // The area just copied stays outlined, with what can be done with it underneath.
+    if let Some((p, area)) = view.area_pick
+        && p == page
+        && view.marquee.is_none()
+    {
+        let r = xf.view_rect(area);
+        ui.painter().rect_stroke(r, CornerRadius::ZERO, Stroke::new(1.5, Color32::from_rgb(0x14, 0x73, 0xE6)), egui::StrokeKind::Middle);
+        egui::Area::new(egui::Id::unique("snapshot-area-menu"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(r.left_bottom() + egui::vec2(0.0, 6.0))
+            .show(ui.ctx(), |ui| {
+                egui::Frame::popup(ui.style()).show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        if ui.button(tl!("Print area…")).clicked() {
+                            view.area_choice = Some(AreaChoice::Print);
+                        }
+                        if ui.button(tl!("Save as image…")).clicked() {
+                            view.area_choice = Some(AreaChoice::Save);
+                        }
+                    });
+                });
+            });
     }
     if let Some((p, start)) = view.marquee
         && p == page
@@ -79,6 +112,7 @@ impl PdfCraftApp {
                 }
                 match self.snapshot(index, page, view_rect) {
                     Ok((w, h)) => {
+                        self.views[index].area_pick = Some((page, view_rect));
                         self.notify_fmt("The selected area has been copied ({w} × {h} pixels)", &[("w", &w.to_string()), ("h", &h.to_string())])
                     }
                     Err(e) => self.notify_fmt("Couldn't take the snapshot: {e}", &[("e", &e.to_string())]),
@@ -133,22 +167,82 @@ impl PdfCraftApp {
         Ok(())
     }
 
+    /// Print ▸ Selected area: the Print dialog for only `view_rect` (page view points, y down) of
+    /// `page`, sized like a page of its own (Fit to paper or Actual size).
+    pub(crate) fn open_print_area(&mut self, page: usize, view_rect: [f32; 4]) {
+        let Some((_, id)) = self.active_ids() else { return };
+        let Some(height) = self.session.get(id).and_then(|d| d.info.pages.get(page)).map(|p| f64::from(p.height)) else { return };
+        self.open_print();
+        if self.dialog == Some(crate::Dialog::Print) {
+            let [x0, y0, x1, y1] = view_rect.map(f64::from);
+            let d = &mut self.print_draft;
+            // The print crate takes the area in display space, y up.
+            d.area = Some((page, [x0.min(x1), height - y0.max(y1), x0.max(x1), height - y0.min(y1)]));
+            d.which = crate::print_ui::Which::Area;
+            d.handling = crate::print_ui::Handling::Size;
+            d.sheet = 0;
+        }
+    }
+
+    /// Save the area `view_rect` of `page` that view `index` copied as a PNG file (asked where;
+    /// `save_override` in tests). The last snapshot is used when it was taken of that area;
+    /// otherwise (another tab snapshotted since) the area is rendered again.
+    pub(crate) fn save_snapshot_image(&mut self, index: usize, page: usize, view_rect: [f32; 4]) {
+        let this_area = self.views.get(index).is_some_and(|v| self.last_snapshot_of == Some((v.id, page, view_rect)));
+        let png = match self.last_snapshot.as_ref() {
+            Some((w, h, pixels)) if this_area => pdfcraft_engine::export::encode_png(*w, *h, pixels),
+            _ => self.render_area(index, page, view_rect).and_then(|(w, h, pixels)| pdfcraft_engine::export::encode_png(w, h, &pixels)),
+        };
+        let png = match png {
+            Ok(png) => png,
+            Err(e) => {
+                self.notify_fmt("Couldn't save the image: {e}", &[("e", &e)]);
+                return;
+            }
+        };
+        let stem = self
+            .active_ids()
+            .and_then(|(_, id)| self.session.get(id))
+            .map_or_else(String::new, |d| d.name.trim_end_matches(".pdf").trim_end_matches(".PDF").to_string());
+        let name = format!("{stem} area.png");
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let write = move |app: &mut Self, path: std::path::PathBuf| match crate::editing::write_atomically(&path.to_string_lossy(), &png) {
+                Ok(()) => app.notify_fmt("Exported to {path}", &[("path", &path.display().to_string())]),
+                Err(e) => app.notify_fmt("Couldn't write {name}: {e}", &[("name", &path.display().to_string()), ("e", &e.to_string())]),
+            };
+            match self.save_override.clone() {
+                Some(p) => write(self, p.into()),
+                None => {
+                    let dialog =
+                        rfd::AsyncFileDialog::new().set_title(tl!("Save as image").to_string()).add_filter("PNG", &["png"]).set_file_name(name);
+                    self.ask_one(crate::pickers::Ask::Save(dialog), None, write);
+                }
+            }
+        }
+        #[cfg(target_arch = "wasm32")]
+        if let Err(e) = crate::editing::download(&name, &png) {
+            self.notify_error(e);
+        }
+    }
+
     /// Render `view_rect` (page view points) of `page` and copy it to the clipboard (and keep it
     /// in `last_snapshot`), at the current zoom or [`SNAPSHOT_MIN_SCALE`] if that is finer.
     pub fn snapshot(&mut self, index: usize, page: usize, view_rect: [f32; 4]) -> Result<(u32, u32), String> {
-        let (w, h, rgba) = self.snapshot_pixels(index, page, view_rect)?;
+        let (w, h, rgba) = self.render_area(index, page, view_rect)?;
         #[cfg(not(target_arch = "wasm32"))]
         if self.system_clipboard {
             let img = arboard::ImageData { width: w as usize, height: h as usize, bytes: std::borrow::Cow::Borrowed(&rgba) };
             crate::os_clipboard::with(|c| c.set_image(img)).map_err(|e| e.to_string())?;
         }
         self.last_snapshot = Some((w, h, rgba));
+        self.last_snapshot_of = Some((self.views[index].id, page, view_rect));
         Ok((w, h))
     }
 
-    /// `view_rect` (page view points) of `page` drawn at the current zoom: width, height and
-    /// premultiplied RGBA.
-    fn snapshot_pixels(&self, index: usize, page: usize, view_rect: [f32; 4]) -> Result<(u32, u32, pdfcraft_render::Pixels), String> {
+    /// Render `view_rect` (page view points) of `page` in view `index` at its current zoom:
+    /// (width, height, premultiplied RGBA).
+    fn render_area(&self, index: usize, page: usize, view_rect: [f32; 4]) -> Result<(u32, u32, pdfcraft_render::Pixels), String> {
         let view = self.views.get(index).ok_or("no document")?;
         let doc = self.session.get(view.id).ok_or("no document")?;
         let ppp = self.ctx.as_ref().map_or(2.0, |c| c.pixels_per_point());
@@ -196,7 +290,7 @@ impl PdfCraftApp {
     /// read SVG.
     #[cfg(windows)]
     fn put_vector_on_clipboard(&self, index: usize, page: usize, view_rect: [f32; 4], svg: &str) -> Result<(), String> {
-        let (w, h, rgba) = self.snapshot_pixels(index, page, view_rect)?;
+        let (w, h, rgba) = self.render_area(index, page, view_rect)?;
         // The drawing's resolution, so a reader sizes the pictures as the area: pixels per point
         // times 72 points per inch, per 0.0254 m.
         let per_metre = (f64::from(w) / f64::from(view_rect[2] - view_rect[0]).max(1.0) * 72.0 / 0.0254).round().clamp(1.0, 1e9) as u32;
