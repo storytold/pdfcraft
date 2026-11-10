@@ -133,6 +133,7 @@ impl PdfCraftApp {
             printer_source: None,
             options_source: None,
             spooler: None,
+            two_sided_source: None,
             print_tasks: print_ui::PrintTasks::default(),
             palette_open: false,
             palette_query: String::new(),

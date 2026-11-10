@@ -62,8 +62,17 @@ fn paper_named(name: Option<&str>) -> Result<(usize, (f64, f64))> {
 /// (`PAPERS[paper]`, as `media` after the driver's `options`) rather than the queue's default
 /// paper, which a job naming none got (A4 under Letter sheets on the queue in #3752), and tells
 /// CUPS which way the laid-out `sheets` run, as the Print dialog does (#2713): an orientation the
-/// caller chose in `options` stands.
-fn spool_job(a: &Args, printer: &str, title: String, duplex: Option<spool::Duplex>, paper: usize, sheets: &[print::Sheet]) -> Result<spool::Job> {
+/// caller chose in `options` stands. It asks the driver for grayscale only when the pages aren't
+/// grey pictures already ([`print::driver_needs_grayscale`]).
+fn spool_job(
+    a: &Args,
+    printer: &str,
+    title: String,
+    duplex: Option<spool::Duplex>,
+    paper: usize,
+    raster: Option<print::Raster>,
+    sheets: &[print::Sheet],
+) -> Result<spool::Job> {
     let options = match a.get("options") {
         None => Vec::new(),
         Some(Value::Object(m)) => m
@@ -81,7 +90,7 @@ fn spool_job(a: &Args, printer: &str, title: String, duplex: Option<spool::Duple
         collate: a.opt_bool("collate")?.unwrap_or(true),
         duplex,
         scaling: spool::Scaling::Exact,
-        grayscale: a.opt_bool("grayscale")?.unwrap_or(false),
+        grayscale: print::driver_needs_grayscale(a.opt_bool("grayscale")?.unwrap_or(false), raster),
         title,
         options: {
             let mut options: Vec<(String, String)> = options.into_iter().chain(print::media_option(paper)).collect();
@@ -218,6 +227,7 @@ impl Automation {
                     s => return Err(bad(format!("unknown booklet_subset {s:?}"))),
                 },
                 binding: if a.opt_str("binding")? == Some("right") { Binding::Right } else { Binding::Left },
+                creep: a.opt_num("creep")?.unwrap_or(0.0),
             },
             "poster" => Layout::Poster {
                 scale: a.opt_num("scale")?.unwrap_or(200.0),
@@ -266,7 +276,7 @@ impl Automation {
                 out["path"] = json!(path.to_string_lossy());
             }
             (None, Some(printer)) => {
-                let job = spool_job(a, printer, self.doc(a)?.name.clone(), duplex, paper_index, &laid_out)?;
+                let job = spool_job(a, printer, self.doc(a)?.name.clone(), duplex, paper_index, settings.raster, &laid_out)?;
                 out["job"] = json!(spool::submit(&bytes, &job).map_err(|e| failed(e.to_string()))?);
             }
             _ => return Err(bad("pass either path (save the print-ready PDF) or printer (a name from printers, or \"default\")")),
@@ -282,7 +292,7 @@ mod tests {
     /// #2707: a booklet sets two-sided itself whatever `duplex` asks; a bad name is still an error.
     #[test]
     fn a_booklet_decides_two_sided_itself() {
-        let booklet = |subset| Layout::Booklet { subset, binding: Binding::Left };
+        let booklet = |subset| Layout::Booklet { subset, binding: Binding::Left, creep: 0.0 };
         for asked in ["printer", "off", "long-edge", "short-edge"] {
             assert_eq!(job_duplex(asked, &booklet(BookletSubset::BothSides)).ok(), Some(Some(spool::Duplex::ShortEdge)), "{asked}");
             assert_eq!(job_duplex(asked, &booklet(BookletSubset::FrontOnly)).ok(), Some(Some(spool::Duplex::Off)), "{asked}");
@@ -312,7 +322,7 @@ mod tests {
     #[test]
     fn printing_landscape_sheets_to_a_printer_asks_cups_to_turn_them() {
         let sheets = |sizes: &[(f64, f64)]| sizes.iter().map(|&size| print::Sheet { size, ..Default::default() }).collect::<Vec<_>>();
-        let job = |args: Value, s: &[print::Sheet]| spool_job(&Args(&args), "Office", "a.pdf".into(), None, 0, s).unwrap().options;
+        let job = |args: Value, s: &[print::Sheet]| spool_job(&Args(&args), "Office", "a.pdf".into(), None, 0, None, s).unwrap().options;
         let media = ("media".to_string(), "Letter".to_string());
         let landscape = sheets(&[(792.0, 612.0), (792.0, 612.0)]);
         let turned = if cfg!(windows) { vec![media.clone()] } else { vec![media.clone(), ("orientation-requested".to_string(), "4".to_string())] };
@@ -329,7 +339,7 @@ mod tests {
     fn printing_to_a_printer_feeds_the_laid_out_paper() {
         let job = |args: Value, paper_name: Option<&str>| {
             let (index, _) = paper_named(paper_name).unwrap();
-            spool_job(&Args(&args), "Office", "a.pdf".into(), None, index, &[]).unwrap()
+            spool_job(&Args(&args), "Office", "a.pdf".into(), None, index, None, &[]).unwrap()
         };
         let media = |m: &str| ("media".to_string(), m.to_string());
         // US Letter when no paper is asked for, after the driver's own options.
@@ -345,7 +355,21 @@ mod tests {
         assert_eq!(job(json!({}), Some("letter")).options, [media("Letter")]);
         assert_eq!(job(json!({}), Some("ARCH D")).options, [media("na_arch-d_24x36in")]);
         assert!(matches!(paper_named(Some("Quarto")), Err(ToolError::InvalidArgs(m)) if m.contains("US Letter")));
-        assert_eq!(spool_job(&Args(&json!({})), "default", String::new(), None, 0, &[]).ok().map(|j| j.printer), Some(None));
-        assert!(spool_job(&Args(&json!({ "options": { "InputSlot": 3 } })), "Office", String::new(), None, 0, &[]).is_err());
+        assert_eq!(spool_job(&Args(&json!({})), "default", String::new(), None, 0, None, &[]).ok().map(|j| j.printer), Some(None));
+        assert!(spool_job(&Args(&json!({ "options": { "InputSlot": 3 } })), "Office", String::new(), None, 0, None, &[]).is_err());
+    }
+
+    /// #5806: grayscale with Print as image sends grey pictures, so the driver isn't asked for
+    /// grayscale, which Microsoft Print to PDF keeps no setting for and the job was refused.
+    #[test]
+    fn grey_pictures_dont_ask_the_driver_for_grayscale() {
+        let grey = print::Raster { dpi: 300.0, grayscale: true };
+        let colour = print::Raster { dpi: 300.0, grayscale: false };
+        let job =
+            |args: Value, raster: Option<print::Raster>| spool_job(&Args(&args), "Office", String::new(), None, 0, raster, &[]).unwrap().grayscale;
+        assert!(job(json!({ "grayscale": true }), None), "vector pages: the driver makes them grey");
+        assert!(!job(json!({ "grayscale": true }), Some(grey)), "grey pictures: nothing for the driver to do");
+        assert!(job(json!({ "grayscale": true }), Some(colour)), "colour pictures still need the driver");
+        assert!(!job(json!({}), None));
     }
 }

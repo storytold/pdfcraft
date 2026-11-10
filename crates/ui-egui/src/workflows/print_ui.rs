@@ -13,9 +13,12 @@ use crate::{PdfCraftApp, widgets};
 
 mod body;
 mod draft;
+mod setups;
 
 pub(crate) use body::body;
 pub use draft::{CUSTOM_SCALE, Handling, IMAGE_DPI, PrintDraft, Which};
+pub use setups::PrinterSetup;
+pub(crate) use setups::{from_json as setups_from_json, to_json as setups_to_json};
 
 /// The preview pane, and the paper inside it (12 pt inset on each side).
 const PREVIEW_W: f32 = 320.0;
@@ -25,10 +28,15 @@ pub(crate) const PREVIEW_BOX: (f32, f32) = (PREVIEW_W - 2.0 * PREVIEW_INSET, PRE
 /// Label printing reads the printed area of at most this many pages (each is a quick render on
 /// the UI thread); further pages print whole.
 pub(crate) const LABEL_CROP_PAGES: usize = 50;
+/// Two-sided reads running at once. A driver Windows can't reach holds its read for about 48 s,
+/// so picking printer after printer could otherwise start a thread for each; past this, the
+/// printer picked is asked once a read finishes.
+#[cfg(not(target_arch = "wasm32"))]
+const TWO_SIDED_READS: usize = 4;
 
 /// Lists the printers off the UI thread (the desktop app sets [`PdfCraftApp::printer_source`]):
-/// on Windows each driver's capabilities are read for its two-sided support, and CUPS' driverless discovery can wait on
-/// the network. Without a source the dialog reads them as it opens, so tests stay deterministic.
+/// CUPS' driverless discovery can wait on the network. Without a source the dialog reads them as
+/// it opens, so tests stay deterministic.
 pub type PrinterSource = std::sync::Arc<dyn Fn() -> Vec<spool::Printer> + Send + Sync>;
 
 /// Where a printer's driver options come from: the spooler's (`spool::printer_options_in`, in the
@@ -39,9 +47,21 @@ pub type OptionsSource = std::sync::Arc<dyn Fn(&str) -> Vec<spool::PrinterOption
 /// print-ready PDF and the job and answers as the spooler would. Called off the GUI thread.
 pub type Spooler = std::sync::Arc<dyn Fn(&[u8], &spool::Job) -> Result<String, String> + Send + Sync>;
 
-/// The system spooler's printers, as the desktop app's [`PrinterSource`].
+/// The system spooler's printers, as the desktop app's [`PrinterSource`]: its queues only, with
+/// no driver asked anything, so the list never waits on a printer (#2192).
 pub fn system_printers() -> PrinterSource {
-    std::sync::Arc::new(spool::printers)
+    std::sync::Arc::new(spool::printer_queues)
+}
+
+/// Reads whether one printer's driver takes two-sided settings, off the UI thread, for the
+/// printer picked (the desktop app sets [`PdfCraftApp::two_sided_source`]). The printer list
+/// leaves it unknown: reading a driver Windows can't reach takes it about 48 s, so the list
+/// doesn't wait for every printer's (#2192).
+pub type TwoSidedSource = std::sync::Arc<dyn Fn(&str) -> Option<bool> + Send + Sync>;
+
+/// The system spooler's answer, as the desktop app's [`TwoSidedSource`].
+pub fn system_two_sided() -> TwoSidedSource {
+    std::sync::Arc::new(spool::two_sided)
 }
 
 /// The Print dialog's work in the background: the printer list being read, and the jobs being
@@ -50,6 +70,9 @@ pub fn system_printers() -> PrinterSource {
 pub(crate) struct PrintTasks {
     #[cfg(not(target_arch = "wasm32"))]
     printers: Option<std::sync::mpsc::Receiver<Vec<spool::Printer>>>,
+    /// Two-sided support being read, by printer.
+    #[cfg(not(target_arch = "wasm32"))]
+    two_sided: Vec<(String, std::sync::mpsc::Receiver<Option<bool>>)>,
     #[cfg(not(target_arch = "wasm32"))]
     jobs: Vec<PrintJob>,
     /// The progress card is showing a print job (it is shared with other long jobs).
@@ -79,7 +102,7 @@ fn listed_printers() -> Vec<spool::Printer> {
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
-        spool::printers()
+        spool::printer_queues()
     }
 }
 
@@ -111,9 +134,10 @@ enum JobNews {
     Done(Result<String, String>),
 }
 
-/// The printer the dialog preselects: the system default, else the first.
-fn default_printer(printers: &[spool::Printer]) -> Option<String> {
-    printers.iter().find(|p| p.default).or(printers.first()).map(|p| p.name.clone())
+/// The printer the dialog preselects: the one printed to last while it is listed (#2001), else
+/// the system default, else the first.
+fn default_printer(d: &PrintDraft, printers: &[spool::Printer]) -> Option<String> {
+    d.last_printer(printers).or_else(|| printers.iter().find(|p| p.default)).or(printers.first()).map(|p| p.name.clone())
 }
 
 /// Whether `printer` can still be chosen from `printers`: Save as PDF (`None`) always can.
@@ -149,7 +173,6 @@ impl PdfCraftApp {
             }
             _ => (listed_printers(), false),
         };
-        let default = default_printer(&printers);
         let current = self.views[i].current;
         let selected: Vec<usize> = self.views[i].selected.iter().copied().collect();
         let mut keep = std::mem::take(&mut self.print_draft);
@@ -157,9 +180,13 @@ impl PdfCraftApp {
         if keep.handling == Handling::Label {
             keep.set_handling(Handling::Size);
         }
+        let default = default_printer(&keep, &printers);
         // The printer picked last time, Save as PDF included, while it is still listed (#3537).
         let picked = keep.printer_picked && offered(keep.printer.as_deref(), &printers);
         let printer = if picked { keep.printer.clone() } else { default };
+        // A printer other than last time's brings back what it was last printed with (#2001);
+        // the same one keeps this session's choices.
+        let changed = printer != keep.printer;
         // Picked pages are what Print is for (Acrobat's "Selected pages"); without any, the whole
         // document.
         let which = if selected.is_empty() { Which::All } else { Which::Selected };
@@ -202,6 +229,9 @@ impl PdfCraftApp {
             which,
             ..keep
         };
+        if changed {
+            self.print_draft.apply_setup();
+        }
         self.dialog = Some(crate::Dialog::Print);
     }
 
@@ -343,12 +373,17 @@ impl PdfCraftApp {
                     // A picked printer that is no longer listed falls back to the default too.
                     if !d.printer_picked || !offered(d.printer.as_deref(), &printers) {
                         d.printer_picked = false;
-                        d.printer = default_printer(&printers);
+                        let printer = default_printer(d, &printers);
+                        if printer != d.printer {
+                            d.printer = printer;
+                            d.apply_setup();
+                        }
                     }
                     d.printers = printers;
                     d.printers_loading = false;
                 }
             }
+            self.poll_two_sided();
             let mut finished = Vec::new();
             self.print_tasks.jobs.retain_mut(|job| {
                 loop {
@@ -407,6 +442,48 @@ impl PdfCraftApp {
         }
     }
 
+    /// Pick up two-sided answers that arrived, and ask for the picked printer's when the list
+    /// doesn't say, nobody has asked yet and fewer than [`TWO_SIDED_READS`] reads are running.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn poll_two_sided(&mut self) {
+        let d = &mut self.print_draft;
+        self.print_tasks.two_sided.retain(|(printer, rx)| match rx.try_recv() {
+            Ok(two_sided) => {
+                d.two_sided.insert(printer.clone(), two_sided);
+                false
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => true,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                d.two_sided.insert(printer.clone(), None);
+                false
+            }
+        });
+        if self.dialog != Some(crate::Dialog::Print) {
+            return;
+        }
+        let Some(source) = self.two_sided_source.clone() else { return };
+        let Some(printer) = d.printers.iter().find(|p| d.printer.as_ref() == Some(&p.name)) else { return };
+        if printer.two_sided.is_some()
+            || d.two_sided.contains_key(&printer.name)
+            || self.print_tasks.two_sided.iter().any(|(n, _)| *n == printer.name)
+            || self.print_tasks.two_sided.len() >= TWO_SIDED_READS
+        {
+            return;
+        }
+        let name = printer.name.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let ctx = self.ctx.clone();
+        let asked = name.clone();
+        std::thread::spawn(move || {
+            // The receiver may be gone (the app quit): nothing to report to then.
+            let _ = tx.send(source(&asked));
+            if let Some(ctx) = ctx {
+                ctx.request_repaint();
+            }
+        });
+        self.print_tasks.two_sided.push((name, rx));
+    }
+
     fn report_print_job(&mut self, printer: &str, result: Result<String, String>) {
         match result {
             Ok(msg) if msg.is_empty() => self.notify(crate::i18n::fmt(tl!("Sent to {printer}"), &[("printer", printer)])),
@@ -441,7 +518,8 @@ impl PdfCraftApp {
                 return false;
             }
         };
-        match self.print_draft.printer.clone() {
+        let to_printer = self.print_draft.printer.is_some();
+        let sent = match self.print_draft.printer.clone() {
             #[cfg(target_arch = "wasm32")]
             Some(printer) if printer == crate::web_print::BROWSER_PRINTER => {
                 let sizes: Vec<(f64, f64)> = doc.info.pages.iter().map(|p| (f64::from(p.width), f64::from(p.height))).collect();
@@ -464,7 +542,12 @@ impl PdfCraftApp {
                 self.send_to_printer(printer, bytes, job)
             }
             None => self.save_print_pdf(&name, bytes),
+        };
+        // What this printer printed with is what it starts with next time (#2001).
+        if sent && to_printer {
+            self.print_draft.remember_setup();
         }
+        sent
     }
 
     /// Spool a job off the UI thread: on Windows every sheet is rendered at the printer's
@@ -707,6 +790,18 @@ mod tests {
             draft.current_page = current;
             assert!(draft.settings(count, &labels).is_err());
         }
+    }
+
+    /// #5806: with Print as image, grayscale makes the pictures grey, so the job doesn't ask the
+    /// driver for it as well; a driver that keeps no grayscale setting then still prints.
+    #[test]
+    fn grey_pictures_dont_ask_the_driver_for_grayscale() {
+        let vector = PrintDraft { grayscale: true, ..PrintDraft::default() };
+        assert!(vector.job("a.pdf").grayscale, "vector pages: the driver makes them grey");
+        let pictures = PrintDraft { grayscale: true, as_image: true, ..PrintDraft::default() };
+        assert!(!pictures.job("a.pdf").grayscale, "grey pictures: nothing for the driver to do");
+        assert!(pictures.settings(1, &[]).unwrap().raster.is_some_and(|r| r.grayscale), "grey pictures: the pages are rendered grey");
+        assert!(!PrintDraft::default().job("a.pdf").grayscale);
     }
 
     #[test]
