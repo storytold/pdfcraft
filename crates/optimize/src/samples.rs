@@ -43,7 +43,9 @@ pub enum NotDecoded {
     Ambiguous,
     #[error("it is larger than 80 million pixels")]
     TooLarge,
-    #[error("it is a JPEG 2000 image too large to read here (more than 40 million pixels, or more tiles than a real image has)")]
+    #[error(
+        "it is a JPEG 2000 image too large to read here (more than 40 million pixels, or 20 million in colour, or more tiles than a real image has)"
+    )]
     JpxTooLarge,
     #[error("it has an alpha channel (transparency stored in the JPEG 2000 data), which a JPEG cannot keep")]
     Alpha,
@@ -130,6 +132,10 @@ fn is_ccitt(s: &Stream) -> bool {
 /// The most pixels a JPEG 2000 image is read at: half of what other images may have, because its
 /// decoder holds every sample as a float (about ten bytes a sample at its peak).
 const JPX_MAX_PIXELS: u64 = MAX_PIXELS / 2;
+/// And the most samples (pixels times components), so a colour image is held to the same memory
+/// as a grey one and a half: about 600 MB at the decoder's peak. Running out of memory is not a
+/// panic that can be caught, so the limit has to come first.
+const JPX_MAX_SAMPLES: u64 = 60_000_000;
 
 /// The samples of a JPEG 2000 image: 8-bit grey or RGB without an alpha channel or a palette,
 /// whose size is the dictionary's. Written back as a JPEG, since the pages' scans are JPEG 2000
@@ -163,7 +169,7 @@ fn jpx_samples(doc: &Document, s: &Stream, budget: &mut ImageBudget) -> Result<S
     let side = |key: &[u8]| d.get(key).map(|v| doc.resolve(v)).and_then(|v| v.as_int()).and_then(|v| u32::try_from(v).ok()).filter(|v| *v > 0);
     let (Some(width), Some(height)) = (side(b"Width"), side(b"Height")) else { return Err(NotDecoded::Corrupt) };
     let pixels = u64::from(width) * u64::from(height);
-    if pixels > JPX_MAX_PIXELS {
+    if pixels > JPX_MAX_PIXELS || pixels.saturating_mul(n as u64) > JPX_MAX_SAMPLES {
         return Err(NotDecoded::JpxTooLarge);
     }
     let named = d.get(b"ColorSpace").map(|cs| components(doc, cs));
@@ -573,6 +579,11 @@ mod tests {
         // More than 40 million pixels is refused from the dictionary, before the decoder is asked.
         let huge = [one[0].clone(), ("Width", Object::Int(8944)), ("Height", Object::Int(8944))];
         assert_eq!(decode_samples(&doc(), &image(&huge, jpx_codestream(3)), &mut budget()), Err(NotDecoded::JpxTooLarge));
+        // 25 million pixels are 75 million samples in colour, past the 60 million the decoder is
+        // given; in grey they are within both limits (and here not the data's size).
+        let large = [one[0].clone(), ("Width", Object::Int(5000)), ("Height", Object::Int(5000))];
+        assert_eq!(decode_samples(&doc(), &image(&large, jpx_codestream(3)), &mut budget()), Err(NotDecoded::JpxTooLarge));
+        assert_eq!(decode_samples(&doc(), &image(&large, jpx_codestream(1)), &mut budget()), Err(NotDecoded::Corrupt));
     }
 
     /// A JP2 file: the signature and file type boxes, a header box of `header` boxes, and the
