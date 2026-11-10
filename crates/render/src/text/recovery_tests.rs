@@ -1372,11 +1372,18 @@ fn cids_the_widths_dont_confirm_recover_nothing() {
 /// the glyph of an `h`, as wide as an `n`), the recovered layer overrides it, saying why.
 #[test]
 fn type3_codes_that_are_standard_string_ids_override_the_ascii_reading() {
-    let text = "The Residence address and ZIP code are indicated";
-    let page = type3_page(text, |c| u8::try_from(sid(c)).unwrap(), "c");
+    // `“` and `”` are standard strings 105 and 119: past ASCII, read in such a font because its
+    // ASCII reading (`i` and `w` there) is known to be wrong.
+    let text = "The \u{201C}Residence\u{201D} address and ZIP code are indicated";
+    let code = |c: char| match c {
+        '\u{201C}' => 105,
+        '\u{201D}' => 119,
+        c => u8::try_from(sid(c)).unwrap(),
+    };
+    let page = type3_page(text, code, "c");
     let (strict, recovered, plain) = layers(&parse(page));
     assert_eq!(strict, plain);
-    assert!(strict.plain_text().starts_with("5IF"), "{:?}", strict.plain_text());
+    assert!(strict.plain_text().starts_with("5IF i3FTJEFODFw"), "{:?}", strict.plain_text());
     let r = recovered.expect("recovered");
     assert_eq!(r.text.plain_text(), text);
     let over = r.recovery.iter().flatten().find(|x| matches!(x.mode, RecoveryMode::Override { .. })).expect("an override");

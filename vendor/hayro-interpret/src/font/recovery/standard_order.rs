@@ -58,6 +58,12 @@ const ASCII_GUESS: &str = "the strict text reads the codes as ASCII, but they ar
 /// nothing.
 const MAX_SID: u32 = 95;
 
+/// The last string id read in a Type 3 font whose ASCII reading the rule overrides: the other
+/// glyphs of Adobe's standard encoding (quotes, dashes, the bullet, ligatures, accents; TN #5176
+/// Appendix A). There the strict text is known to be wrong (a `“` drawn at code 105 reads as an
+/// `i`), so the standard strings' reading replaces it where it would otherwise be kept.
+const MAX_OVERRIDE_SID: u32 = 149;
+
 /// The character standard string id `sid` gives, up to [`MAX_SID`].
 fn standard_string_char(sid: u32) -> Option<char> {
     (sid <= MAX_SID)
@@ -107,7 +113,16 @@ impl Rule for StandardStringOrder {
             return None;
         }
         let basic = |id: u32| (1..=95).contains(&id);
-        if !plausible_reading(ids.iter().map(|&id| (standard_string_char(id), basic(id)))) {
+        // A Type 3 font's glyphs past ASCII (quotes, dashes) may be read where it is overridden,
+        // so they count as read here; a CID-keyed font's never are.
+        let read = |id: u32| {
+            if type3 && id <= MAX_OVERRIDE_SID {
+                orders::standard_string_char(id)
+            } else {
+                standard_string_char(id)
+            }
+        };
+        if !plausible_reading(ids.iter().map(|&id| (read(id), basic(id)))) {
             return None;
         }
         if !widths_agree(&read_widths(&ids, standard_string_char, width)).proves() {
@@ -139,7 +154,11 @@ impl Rule for StandardStringOrder {
         glyph: &GlyphFacts<'_>,
     ) -> Option<(BfString, RecoveryMode)> {
         let id = glyph.id.filter(|id| guard.ids.binary_search(id).is_ok())?;
-        let c = standard_string_char(id)?;
+        let c = if guard.override_strict && (MAX_SID + 1..=MAX_OVERRIDE_SID).contains(&id) {
+            orders::standard_string_char(id)?
+        } else {
+            standard_string_char(id)?
+        };
         let mode = if guard.override_strict {
             RecoveryMode::Override {
                 reason: ASCII_GUESS,
