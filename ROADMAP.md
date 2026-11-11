@@ -1,6 +1,6 @@
 # PdfCraft roadmap
 
-> **Last reviewed:** 2026-11-09 · **Last updated:** 2026-11-09 · **Change:** minor (measured numbers refreshed at v0.20.0, cut from `main` `9ee213ef`: checklist and code size, with issues and releases as of 2026-11-09; earlier header notes moved into the revision history and the progress log sorted; estimated readiness and hours not re-judged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
+> **Last reviewed:** 2026-11-11 · **Last updated:** 2026-11-11 · **Change:** minor (measured numbers refreshed at v0.21.0, cut from `main` `3650f01f`: checklist and code size, with issues and releases as of 2026-11-11; earlier header notes moved into the revision history and the progress log sorted; estimated readiness and hours not re-judged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 
 **Stage: alpha** · next: beta, ~25% (ready for real work 50% → 75%) and ~400–700 h away
 
@@ -29,7 +29,7 @@ and add a line to the [progress log](#progress-log); when a gap closes, remove i
 
 | | Value | Kind |
 |---|---|---|
-| **Feature breadth** | **≈ 72%** tier-weighted (62.8% unweighted: 464 shipped + 119 partial of 834; P0 94.6%) | measured at v0.20.0 (2026-11-09): recounted with `cargo xtask parity`'s rules |
+| **Feature breadth** | **≈ 73%** tier-weighted (64.1% unweighted: 473 shipped + 124 partial of 835; P0 94.6%) | measured at v0.21.0 (2026-11-11): recounted with `cargo xtask parity`'s rules |
 | Feature breadth, mainstream practitioner | ≈ 70% tier-weighted (63.3% unweighted; P0 95.3%) | measured 2026-10-26, not recomputed ([split](docs/target-app-parity.md#mainstream-practitioner-vs-full-acrobat-pro)) |
 | **Ready for real work**, full Acrobat Pro | **≈ 50%** (45–53%) | estimated, weighted sum over [dimensions](#by-dimension) |
 | **Ready for real work**, mainstream practitioner | **≈ 55%** (50–60%) | estimated ([split](docs/target-app-parity.md#mainstream-practitioner-vs-full-acrobat-pro)) |
@@ -41,13 +41,13 @@ The ready-for-real-work numbers and hours were last judged on 2026-10-10 (locali
 2026-10-13); only the measured rows were refreshed on 2026-11-09. A full re-measure is due.
 
 **Why alpha:** all six of Acrobat Pro's everyday workflows can be completed end to end on macOS
-(the [alpha gate](docs/roadmap.md#alpha-gate)), and users praise them (20.1k stars and 7.4k forks on
-2026-11-09; ≈ 217k downloads of 0.4–0.5 alone; switching reports such as #179). Two are only partial:
-editing (CJK and right-to-left only in part) and convert and share (no in-app Office→PDF; Word export
+(the [alpha gate](docs/roadmap.md#alpha-gate)), and users praise them (20.4k stars and 7.5k forks on
+2026-11-11; ≈ 217k downloads of 0.4–0.5 alone; switching reports such as #179). Two are only partial:
+editing (CJK and right-to-left only in part) and convert and share (Office→PDF only through an installed LibreOffice; Word export
 loses layout, #773; password-protected files open in Acrobat since #836, #774). Those, unmeasured
-quality against Acrobat, the borrowed `hayro` renderer and 1,774 open issues (74 marked
-`priority: critical`, on 2026-11-09; 245 on 2026-10-10) keep it far from beta. The latest release is
-v0.20.0 (2026-11-09).
+quality against Acrobat, the borrowed `hayro` renderer and 1,680 open issues (74 marked
+`priority: critical`, on 2026-11-11; 245 on 2026-10-10) keep it far from beta. The latest release is
+v0.21.0 (2026-11-11).
 
 ### Readiness by audience
 
@@ -63,7 +63,7 @@ Hours are calibrated as in [Effort and calibration](docs/target-app-parity.md#ef
 
 | Dimension | Ready | Weight | Remaining (h) | Doc |
 |---|---|---|---|---|
-| Features (14 areas) | ≈ 49% depth (2026-10-10) · ≈ 72% tier-weighted breadth (2026-11-09) | 40% | 610–1,100 | [target-app-parity.md](docs/target-app-parity.md#by-feature-area) |
+| Features (14 areas) | ≈ 49% depth (2026-10-10) · ≈ 73% tier-weighted breadth (2026-11-11) | 40% | 610–1,100 | [target-app-parity.md](docs/target-app-parity.md#by-feature-area) |
 | UI/UX fidelity | ≈ 55% | 10% | 30–60 | [ui-parity.md](docs/ui-parity.md) |
 | File formats and conversion | ≈ 40% | 12% | 120–220 (within features) | [file-format-parity.md](docs/file-format-parity.md) |
 | PDF specification and standards | ≈ 60% | 8% | 150–260 (within features) | [pdf-spec-parity.md](docs/pdf-spec-parity.md) |
@@ -78,20 +78,20 @@ Hours are calibrated as in [Effort and calibration](docs/target-app-parity.md#ef
 
 ## Features
 
-| Area | Breadth (measured at v0.20.0, 2026-11-09) | Ready (estimated 2026-10-10) | Remaining (h) |
+| Area | Breadth (measured at v0.21.0, 2026-11-11) | Ready (estimated 2026-10-10) | Remaining (h) |
 |---|---|---|---|
 | A Core model and fidelity | 78.8% | 70% | 25–45 |
 | B View and navigation | 66.7% | 55% | 110–190 |
-| C Content editing | 61.1% | 30% | 100–180 |
-| D Organize pages | 71.9% | 70% | 12–25 |
-| E Comments and review | 82.4% | 70% | 12–25 |
-| F Forms and JavaScript | 81.0% | 65% | 40–75 |
-| G Protect, redact, sanitize | 60.5% | 55% | 15–30 |
+| C Content editing | 61.9% | 30% | 100–180 |
+| D Organize pages | 73.8% | 70% | 12–25 |
+| E Comments and review | 85.1% | 70% | 12–25 |
+| F Forms and JavaScript | 81.6% | 65% | 40–75 |
+| G Protect, redact, sanitize | 62.8% | 55% | 15–30 |
 | H Digital signatures | 62.2% | 45% | 40–70 |
 | I Scan and OCR | 44.2% | 15% | 40–75 |
-| J Create and export | 41.4% | 25% | 55–100 |
-| K Optimize and standards | 41.4% | 20% | 65–115 |
-| L Print | 46.2% | 35% | 30–55 |
+| J Create and export | 42.9% | 25% | 55–100 |
+| K Optimize and standards | 44.8% | 20% | 65–115 |
+| L Print | 53.8% | 35% | 30–55 |
 | M Accessibility | 72.1% | 30% | 40–70 |
 | N Automation, preferences, misc | 34.2% | 35% | 25–45 |
 
@@ -142,6 +142,7 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 Newest first: the date, what moved, and the new overall estimate.
 
+- **2026-11-11 (status docs):** Measured numbers refreshed at v0.21.0 (`main` at `3650f01f`): 835 counted features, 473 shipped and 124 partial, 64.1% unweighted and ≈ 73% tier-weighted (62.8% and ≈ 72% at v0.20.0), P0 94.6%. GitHub on the same day: 1,680 open and 1,456 closed issues (74 `priority: critical`), 20.4k stars, latest release v0.21.0. README, docs/target-app-parity.md, docs/gaps.md and docs/roadmap.md brought in line, including the checklist's 14 status changes in v0.21.0 (comment pop-ups and connector lines, printer marks, colour conversion and printing a selected area shipped; Create PDF from Office, find and replace in edit mode, document actions, the portfolio file list and page setup partial). Estimated readiness and hours not re-judged.
 - **2026-11-10 (M4, #4594):** Reconcile current main and keep the original draft-safety entry in this progress log instead of duplicating it in the shared roadmap header. Preserve inactive password cleanup and the Properties guard; behavior and estimates unchanged.
 - **2026-11-09 (status docs):** Measured numbers refreshed as `cargo xtask parity` counts them, at v0.20.0 (`main` at `9ee213ef`): 834 counted features, 464 shipped and 119 partial, 62.8% unweighted and ≈ 72% tier-weighted (57.0% and ≈ 67% on 2026-10-10), P0 94.6%. GitHub on the same day: 1,774 open and 1,202 closed issues (74 `priority: critical`), 20.1k stars, latest release v0.20.0. README, docs/target-app-parity.md, docs/gaps.md and docs/roadmap.md brought in line; docs/roadmap.md has one row per milestone again. Estimated readiness and hours not re-judged; the monthly full re-measure is due.
 - **2026-11-09 (M10, #5130):** Windows Printer default sends native two-sided bindings only when automatic duplex support is confirmed, preserving manual driver defaults (#5130/#5772); physical output remains unqualified. Both Windows submission paths preserve DLL guards and current spooler fixes. Review follow-up validates both duplex scopes through craft-print 9fe50c94 and corrects CI formatting. Estimates unchanged.
@@ -700,6 +701,7 @@ Newest first: the date, what moved, and the new overall estimate.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-11 | minor | Measured numbers refreshed at v0.21.0, `main` at 3650f01f (breadth ≈ 73% tier-weighted, 64.1% unweighted; areas C, D, E, F, G, J, K and L; 1,680 open issues; 20.4k stars; v0.21.0). Estimated readiness and hours not re-judged. |
 | 2026-11-09 | minor | Measured numbers refreshed at v0.20.0, `main` at 9ee213ef (breadth ≈ 72% tier-weighted, 62.8% unweighted; areas; 1,774 open issues; 20.1k stars; v0.20.0); the stacked header notes moved into this table, the progress log sorted newest first and its strays folded in. Estimated readiness and hours not re-judged. |
 | 2026-11-09 | patch | M10 #5130: Windows Printer default sends native two-sided bindings only when automatic duplex support is confirmed, preserving manual driver defaults (#5130/#5772); physical output remains unqualified. Estimates unchanged. |
 | 2026-11-08 | patch | M10 #6514/#636: retain main's public GDI Git revision (64e7afd4) to preserve downstream Rust type identity, update the internal PDF loader independently, and refresh the application dependency/lockfile. New-graph CI pending; estimates unchanged. |
