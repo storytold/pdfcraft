@@ -173,6 +173,11 @@ pub(crate) struct Output {
     /// ([`pdfcraft_content::Parsed::ambiguous_images`]): what this scope placed after it may not
     /// be what the page shows, so a redaction must not trust it.
     pub ambiguous: bool,
+    /// The content holds bytes the parser can't read ([`pdfcraft_content::Parsed::skipped`]), in
+    /// this scope or a nested form: the walk reads past them, so text they hide (a stray `)` in a
+    /// `TJ` array, say), which other readers may still draw, is neither found nor removed, and a
+    /// rewrite would drop the bytes but keep the strings. A redaction must not trust it.
+    pub unparsed: bool,
     pub tag_changes: Vec<(ObjRef, ObjRef, HashSet<i64>, HashSet<i64>)>,
     pub error: Option<CosError>,
 }
@@ -440,6 +445,7 @@ fn process_from(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<u8>], 
     let joined = Pieces::join(streams);
     let mut parsed = joined.parse();
     walk.out.ambiguous = parsed.ambiguous_images > 0;
+    walk.out.unparsed = parsed.skipped > 0;
     // A rewritten piece loses its comments, so keep where they began and ended: a comment that
     // ran on into the next piece still hides that piece's first line.
     let comment_edges = joined.comment_edges(&parsed);
@@ -465,6 +471,7 @@ fn process_from(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<u8>], 
         }
         if !walk.path.is_empty() {
             done.ops.append(&mut walk.path);
+            done.ops.append(&mut walk.pending);
         }
         processed.push((done.ops, done.changed));
     }
@@ -537,6 +544,10 @@ struct Walk {
     /// leave as it is ([`Interp::construct_path`]).
     moved: Option<[f64; 4]>,
     closed: bool,
+    /// Line-state operators (`w`, `M`, `j`, `J`, `d`, `gs`) met while a path is open: they apply to
+    /// the stroke that ends it, so the path stays whole for the hit test, and they are written
+    /// after it, kept even when the path goes.
+    pending: Vec<Op>,
     /// Painting operators written again under a clip that cuts the regions out: unchanged as
     /// operators, but what they paint is no longer all there.
     clipped: HashSet<usize>,
@@ -560,6 +571,7 @@ impl Walk {
             clip: false,
             moved: None,
             closed: false,
+            pending: Vec::new(),
             clipped: HashSet::new(),
             out: Output::default(),
         }
@@ -576,9 +588,15 @@ impl Walk {
             self.paint_path(scope, op, piece);
             return;
         }
+        if !self.path.is_empty() && matches!(o, b"w" | b"M" | b"j" | b"J" | b"d" | b"gs") {
+            self.graphics_state(doc, scope, &op);
+            self.pending.push(op);
+            return;
+        }
         if !self.path.is_empty() {
             // A path not ended by a painting operator: pass it through.
             piece.ops.append(&mut self.path);
+            piece.ops.append(&mut self.pending);
             self.path_box = None;
             self.clip = false;
             self.moved = None;
@@ -613,7 +631,12 @@ impl Walk {
                 Some(op)
             }
             b"cs" | b"CS" => {
-                if op.name(0) != Some(b"Pattern") {
+                // A Pattern space is told by the name `/Pattern` alone: one named through the
+                // resources' `/ColorSpace` clears the pattern, which the app's renderer keeps and
+                // Poppler doesn't (`cs` resets the colour, ISO 32000-2 §8.6.8). Looking the name up
+                // at each `cs` wants a cache for the page: a `/ColorSpace` too large for the
+                // document to keep is parsed again at each read.
+                if op.last_name() != Some(b"Pattern") {
                     if o == b"cs" {
                         self.gs.fill_pattern = None;
                     } else {
@@ -685,12 +708,14 @@ impl Walk {
         let closes = matches!(o, b"s" | b"b" | b"b*");
         let moved = self.moved.take();
         let closed = std::mem::replace(&mut self.closed, false);
-        let bbox = if closes && !closed { union(self.path_box.take(), moved) } else { self.path_box.take() };
+        let path_box = if closes && !closed { union(self.path_box.take(), moved) } else { self.path_box.take() };
         let clips = std::mem::replace(&mut self.clip, false);
+        let pending = std::mem::take(&mut self.pending);
         let strokes = matches!(o, b"S" | b"s" | b"B" | b"B*" | b"b" | b"b*");
         // A stroke paints around its path: a line with no height under a region, or a thick one
-        // beside it, paints there. So does a fill of a path with no height or width.
-        let paints = bbox.map(|b| if strokes { self.stroke_box(b, &body, closes) } else { fill_box(b) });
+        // beside it, paints there. So does a fill of a path with no height or width. A `W`/`W*`
+        // makes the path as constructed the clip: what the paint reaches is the painting's alone.
+        let paints = path_box.map(|b| if strokes { self.stroke_box(b, &body, closes) } else { fill_box(b) });
         let hit = scope.mode == Mode::Apply && o != b"n" && paints.is_some_and(|b| scope.hits(b));
         if !hit {
             // The paint survives, so the pattern it draws with is still in use. `n` paints
@@ -698,16 +723,20 @@ impl Walk {
             let fills = matches!(o, b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*");
             uses_patterns(&mut self.out, &self.gs, fills, strokes);
             piece.ops.extend(body);
+            piece.ops.extend(pending);
             piece.ops.push(op);
             return;
         }
-        let b = bbox.unwrap_or_default();
         piece.changed = true;
         scope.report.paths_removed += 1;
-        if scope.covered(b) && clips {
-            // Keep the clipping, drop the painting.
-            piece.ops.extend(body);
-            piece.ops.push(Op::new("n", vec![]));
+        piece.ops.extend(pending);
+        if clips && path_box.is_some_and(|b| scope.covered(b)) {
+            // Everything this clip lets through is under a mark, so an empty clip hides the same
+            // content. The original outline is confidential and must not stay in the stream.
+            for o in ["re", "W", "n"] {
+                let operands = if o == "re" { vec![num(0.0); 4] } else { vec![] };
+                piece.ops.push(Op::new(o, operands));
+            }
         }
         // Partial vector redaction must not retain underlying drawing commands
         // behind clipping (F-008). Refuse partial clip retention and remove the path.
@@ -768,10 +797,10 @@ impl Walk {
                 if let Some(limit) = stroke(b"ML") {
                     self.gs.miter_limit = limit;
                 }
-                if let Some((font, vertical, size)) = op.name(0).and_then(|n| extgstate_font(doc, scope, &self.ext_gstates, n, &self.fallback)) {
+                if let Some((font, vertical, size)) = op.last_name().and_then(|n| extgstate_font(doc, scope, &self.ext_gstates, n, &self.fallback)) {
                     (self.gs.font, self.gs.vertical, self.gs.size) = (font, vertical, size);
                     // As for `Tf`: a Type 3 font without /Resources paints through this scope's.
-                    self.gs.type3_inherits = op.name(0).is_some_and(|n| extgstate_type3_inherits(doc, &self.ext_gstates, n));
+                    self.gs.type3_inherits = op.last_name().is_some_and(|n| extgstate_type3_inherits(doc, &self.ext_gstates, n));
                 }
             }
         }
@@ -976,7 +1005,8 @@ fn clean_replacements(
             if !op.is("BDC") || !affected.contains(&op.span.start) {
                 continue;
             }
-            let property = match op.operands.get(1) {
+            // The property list is the last operand, as the renderer reads it.
+            let property = match op.back(0) {
                 Some(Object::Name(name)) => properties.get(name).map(|p| doc.resolve(p)),
                 Some(p) => Some(doc.resolve(p)),
                 None => None,
@@ -986,7 +1016,7 @@ fn clean_replacements(
                 for key in [&b"ActualText"[..], b"Alt", b"E", b"T"] {
                     stripped |= dict.remove(key).is_some();
                 }
-                if stripped && let Some(property) = op.operands.get_mut(1) {
+                if stripped && let Some(property) = op.operands.last_mut() {
                     *property = Object::Dict(dict);
                     *changed = true;
                     report.replacement_text += 1;
@@ -1183,7 +1213,32 @@ fn xobject(
             }
         }
         Some(b"Form") => {
-            let m = s.dict.get(b"Matrix").and_then(|m| Matrix::from_operands(doc.resolve(m).as_array()?)).unwrap_or_default();
+            // Read as the proof reads it, entries by reference included: read as the identity, a
+            // form moved onto a mark would be tested against the wrong place and never walked.
+            let m = match crate::verify::matrix_of(doc, &s.dict) {
+                Ok(m) => m,
+                // Not six numbers given directly or through one reference. Removing hidden layers alone never asks where content lands, so
+                // the form is walked as it stands.
+                Err(()) if scope.everywhere() && scope.hidden_text.is_none() => Matrix::IDENTITY,
+                // Otherwise where the form draws, and so whether it reaches a mark or leaves the
+                // page, can't be told. Apply refuses the page, and the scans count it, as for a
+                // form past the page's budget below.
+                Err(()) => {
+                    if scope.mode == Mode::Apply {
+                        out.error = Some(CosError::Syntax {
+                            offset: 0,
+                            detail:
+                                "a form XObject's /Matrix isn't six numbers given directly or through one reference, so where it draws can't be told"
+                                    .into(),
+                        });
+                    } else if scope.everywhere() {
+                        scope.layer_blocks += 1;
+                    } else {
+                        out.residue += 1;
+                    }
+                    return None;
+                }
+            };
             let fctm = m.then(&gs.ctm);
             let bbox = s.dict.get(b"BBox").and_then(|b| {
                 let v: Vec<f64> = doc.resolve(b).as_array()?.iter().filter_map(Object::as_f64).collect();
@@ -1262,6 +1317,7 @@ fn xobject(
             out.residue += inner.residue;
             out.vertical |= inner.vertical;
             out.ambiguous |= inner.ambiguous;
+            out.unparsed |= inner.unparsed;
             out.doomed.extend_from_slice(&inner.doomed);
             out.retired_properties.extend(inner.retired_properties);
             // A Type 3 glyph without resources shown inside the form may paint with the page's
