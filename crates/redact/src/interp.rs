@@ -647,8 +647,12 @@ impl Walk {
         let o = op.op.as_slice();
         let pts: Vec<(f64, f64)> = match o {
             b"re" => op.nums::<4>().map(|[x, y, w, h]| vec![(x, y), (x + w, y), (x, y + h), (x + w, y + h)]).unwrap_or_default(),
-            b"h" | b"W" | b"W*" => Vec::new(),
-            _ => op.operands.iter().filter_map(Object::as_f64).collect::<Vec<_>>().as_chunks::<2>().0.iter().map(|p| (p[0], p[1])).collect(),
+            // Each takes its points from the end, as the renderer reads them: a surplus before
+            // them is ignored, not read as a point.
+            b"m" | b"l" => op.nums::<2>().map(|[x, y]| vec![(x, y)]).unwrap_or_default(),
+            b"c" => op.nums::<6>().map(|[x1, y1, x2, y2, x3, y3]| vec![(x1, y1), (x2, y2), (x3, y3)]).unwrap_or_default(),
+            b"v" | b"y" => op.nums::<4>().map(|[x1, y1, x2, y2]| vec![(x1, y1), (x2, y2)]).unwrap_or_default(),
+            _ => Vec::new(),
         };
         let grown = pts.into_iter().map(|(x, y)| self.gs.ctm.apply(x, y)).fold(None, |b, (u, v)| union(b, Some([u, v, u, v])));
         match o {

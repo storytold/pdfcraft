@@ -661,7 +661,13 @@ fn the_proof_finds_a_stroke_by_its_width() {
         let mut doc = marked_content(content, Spec { resources: wide, extra: vec![form.clone()], ..Spec::default() });
         doc.require_full_save();
         let proof = snap.prove(&doc, None, &ProofOptions::default());
-        assert_eq!(proof.entries[0].status == Status::Failed, failed, "{}: {}", String::from_utf8_lossy(content), proof.to_text());
+        assert_eq!(
+            proof.entries[0].status,
+            if failed { Status::Failed } else { Status::VerifiedNoTextInRegion },
+            "{}: {}",
+            String::from_utf8_lossy(content),
+            proof.to_text()
+        );
     }
 }
 
@@ -690,6 +696,8 @@ fn the_proof_finds_a_mitered_corner() {
         (format!("/GSM gs {corner}"), false),
         (format!("1 j /GSJ gs {corner}"), true),
         ("0 0 1 RG 20 w 40 135 m 60 225 l 20 225 l h S".into(), true),
+        ("0 0 1 RG 20 w 40 135 1 1 re 60 225 l 20 225 l h S".into(), true),
+        ("1 j 0 0 1 RG 20 w 40 135 m 40 135 1 1 re 60 225 l 20 225 l h S".into(), false),
         ("0 0 1 RG 20 w 40 135 m 60 225 l 20 225 l s".into(), true),
         ("0 0 1 RG 20 w 40 135 m 60 225 l 20 225 l 40 135 l S".into(), false),
         ("0 0 1 RG 20 w 20 225 m 25 202.5 35 157.5 40 135 c 60 225 l S".into(), true),
@@ -707,7 +715,43 @@ fn the_proof_finds_a_mitered_corner() {
         let mut doc = marked_content(content.as_bytes(), Spec { resources: res, extra: vec![form.clone()], ..Spec::default() });
         doc.require_full_save();
         let proof = snap.prove(&doc, None, &ProofOptions::default());
-        assert_eq!(proof.entries[0].status == Status::Failed, failed, "{content}: {}", proof.to_text());
+        assert_eq!(proof.entries[0].status, if failed { Status::Failed } else { Status::VerifiedNoTextInRegion }, "{content}: {}", proof.to_text());
+    }
+}
+
+/// The proof takes a path operator's points from its last operands, as the renderer reads them: a
+/// stroke that reaches the region only by the points read from the end fails it, by `m` (a move of
+/// four numbers made no subpath, and its point is where the line starts), `l`, `c`, `v` and `y`,
+/// a fill by `re` of five numbers, and a segment after such an `re`; one that reaches it only by a
+/// surplus before them leaves it clean. An even-odd clip drawn with a surplus operand cuts the
+/// region out of a fill under it.
+#[test]
+fn the_proof_takes_a_path_operators_points_from_the_end() {
+    let blank = marked_content(b"BT /F1 10 Tf 10 200 Td (Public) Tj ET", Spec::default());
+    let snap = Snapshot::capture(&blank, None).unwrap();
+    for (content, failed) in [
+        (&b"0 0 1 RG 40 100 200 200 m 40 100 l S"[..], true),
+        (b"0 0 1 RG 0 0 40 100 m 200 200 l S", true),
+        (b"0 0 1 RG 200 200 m 300 40 100 l S", true),
+        (b"0 0 1 RG 200 200 m 300 300 300 300 300 40 100 c S", true),
+        (b"0 0 1 RG 200 200 m 300 300 300 40 100 v S", true),
+        (b"0 0 1 RG 200 200 m 300 300 300 40 100 y S", true),
+        (b"0 0 1 rg 5 20 90 20 10 re f", true),
+        (b"0 0 1 RG 5 200 200 10 10 re 40 100 l S", true),
+        (b"0 0 1 RG 40 100 200 200 m 300 300 l S", false),
+        (b"0 0 1 RG 200 200 m 40 100 300 300 l S", false),
+        (b"0 0 m 300 0 l 300 300 l 0 300 l h 5 90 m 9 75 90 l 75 115 l 5 115 l h W* n 0 0 1 rg 0 0 300 300 re f", false),
+    ] {
+        let mut doc = marked_content(content, Spec::default());
+        doc.require_full_save();
+        let proof = snap.prove(&doc, None, &ProofOptions::default());
+        assert_eq!(
+            proof.entries[0].status,
+            if failed { Status::Failed } else { Status::VerifiedNoTextInRegion },
+            "{}: {}",
+            String::from_utf8_lossy(content),
+            proof.to_text()
+        );
     }
 }
 
@@ -741,6 +785,9 @@ fn the_proof_takes_a_move_for_paint_only_once_something_draws_from_it() {
         (b"0 0 1 RG 40 100 m 200 200.5.5 m 240 240 l S", true),
         (b"0 0 1 RG 40 100 m 200 3e2 m 240 240 l S", true),
         (b"0 0 1 RG 30 w 40 125 l S", false),
+        (b"0 0 1 RG 30 w 40 125 40 125 40 125 c S", false),
+        (b"0 0 1 RG 30 w 40 125 40 125 v S", false),
+        (b"0 0 1 RG 30 w 40 125 40 125 y S", false),
         (b"0 0 1 RG 30 w 40 125 m 40 125 l n 200 200 m 240 200 l S", false),
         (b"0 0 1 RG 1 J 30 w 40 125 m h S", true),
         (b"0 0 1 RG 1 J 30 w 40 125 m s", true),
@@ -754,7 +801,13 @@ fn the_proof_takes_a_move_for_paint_only_once_something_draws_from_it() {
         let mut doc = marked_content(content, Spec::default());
         doc.require_full_save();
         let proof = snap.prove(&doc, None, &ProofOptions::default());
-        assert_eq!(proof.entries[0].status == Status::Failed, failed, "{}: {}", String::from_utf8_lossy(content), proof.to_text());
+        assert_eq!(
+            proof.entries[0].status,
+            if failed { Status::Failed } else { Status::VerifiedNoTextInRegion },
+            "{}: {}",
+            String::from_utf8_lossy(content),
+            proof.to_text()
+        );
     }
 }
 

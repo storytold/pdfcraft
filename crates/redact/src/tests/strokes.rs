@@ -136,6 +136,8 @@ fn a_mitered_corner_reaching_under_a_mark_is_removed() {
         (format!("1 j /GSJ gs {corner}"), 1),
         (format!("q 1 j Q {corner}"), 1),
         ("20 w 120 175 m 140 265 l 100 265 l h S".into(), 1),
+        ("20 w 120 175 1 1 re 140 265 l 100 265 l h S".into(), 1),
+        ("1 j 20 w 120 175 m 120 175 1 1 re 140 265 l 100 265 l h S".into(), 0),
         ("20 w 120 175 m 140 265 l 100 265 l s".into(), 1),
         ("20 w 120 175 m 140 265 l 100 265 l b".into(), 1),
         ("20 w 120 175 m 140 265 l 100 265 l b*".into(), 1),
@@ -187,6 +189,25 @@ fn a_fill_flat_to_the_renderer_is_taken_for_flat() {
         let mut doc = one_page(content, "", vec![]);
         mark(&mut doc, 0, &[at], "");
         assert_eq!(apply(&mut doc, None).unwrap().paths_removed, gone, "{}", String::from_utf8_lossy(content));
+    }
+}
+
+/// A path operator's points are its last operands, as the renderer reads them: a surplus before
+/// them is no point. A stroke whose path reaches the mark only by the points read from the end
+/// goes, by `m`, `l`, `c`, `v` and `y`, where reading the numbers in pairs from the start missed
+/// the mark; and one that reaches it only by a surplus before them stays.
+#[test]
+fn a_path_operator_takes_its_points_from_the_end() {
+    for (content, gone) in [
+        (&b"0 0 0 200 200 m 0 0 l S"[..], 1),
+        (b"200 200 m 300 120 120 l S", 1),
+        (b"200 200 m 300 300 300 300 300 120 120 c S", 1),
+        (b"200 200 m 300 300 300 120 120 v S", 1),
+        (b"200 200 m 300 300 300 120 120 y S", 1),
+        (b"120 120 200 200 m 300 300 l S", 0),
+        (b"200 200 m 120 120 300 300 l S", 0),
+    ] {
+        assert_eq!(removed(content, ""), gone, "{}", String::from_utf8_lossy(content));
     }
 }
 
