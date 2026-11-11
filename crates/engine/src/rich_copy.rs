@@ -341,6 +341,30 @@ mod tests {
         assert!(spans.iter().any(|s| s.text.contains("second") && !s.style.bold), "{spans:?}");
     }
 
+    /// ISO 32000-2 §8.6.8 and §8.6.6.4: `/Sep cs 1 scn` is a full tint of a black ink, black on
+    /// the page, and §8.6.6.3: `/Idx cs 0 scn` is the first entry of an Indexed table, red here.
+    /// Their operands are read in the space `cs` selected, not by their count (a gray 1.0, white).
+    #[test]
+    fn copy_reads_a_separation_or_indexed_text_colour_in_its_colour_space() {
+        let content = b"BT /F2 24 Tf 20 250 Td /Sep cs 1 scn (Black ink) Tj ET             BT /F2 24 Tf 20 200 Td /Idx cs 0 scn (Red index) Tj ET             BT /F2 24 Tf 20 150 Td 0 0 1 rg (Blue rgb) Tj ET";
+        let bytes = pdfcraft_testkit::Pdf::new()
+            .obj("<< /Type /Catalog /Pages 2 0 R >>")
+            .obj("<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 300] >>")
+            .obj(
+                "<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Font << /F2 5 0 R >> /ColorSpace <<                  /Sep [/Separation /Black /DeviceGray << /FunctionType 2 /Domain [0 1] /C0 [1] /C1 [0] /N 1 >>]                  /Idx [/Indexed /DeviceRGB 1 <FF000000FF00>] >> >> >>",
+            )
+            .stream("", content)
+            .obj("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
+            .build();
+        let mut s = Session::new();
+        let id = s.open("spaces.pdf", None, Arc::new(bytes), None).unwrap();
+        let html = copy_all(&s, id).html;
+        assert!(html.contains("font-size:24pt\">Black ink</span>"), "black, the default, needs no colour: {html}");
+        assert!(html.contains("font-size:24pt;color:#FF0000\">Red index</span>"), "{html}");
+        assert!(html.contains("font-size:24pt;color:#0000FF\">Blue rgb</span>"), "{html}");
+        assert!(!html.contains("#FFFFFF"), "{html}");
+    }
+
     #[test]
     fn a_capped_copy_is_marked_truncated() {
         let (plain, bold) = (ClipStyle::default(), ClipStyle { bold: true, ..ClipStyle::default() });

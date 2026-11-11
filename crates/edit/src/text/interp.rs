@@ -1,6 +1,7 @@
 use super::fallback::is_type3_fallback;
 use super::rewrite::vertical_advance;
 use super::{Dict, Document, EditError, HashMap, Matrix, Metrics, Object, Op, Rc};
+use crate::colour::{Space, space_of};
 
 /// Text and graphics state captured for rewriting.
 #[derive(Clone, Debug, PartialEq)]
@@ -353,6 +354,12 @@ pub(super) struct Ts {
     pub(super) clip: Option<Clip>,
     /// The operators that set the current fill colour (`g`, `rg`, `k`, or `cs` + `sc`/`scn`).
     pub(super) fill: Vec<Op>,
+    /// The colour space the last `cs` selected, resolved through the resources in force where it
+    /// ran (ISO 32000-2 §8.6.8: `sc`/`scn` operands are read in the current colour space, and a
+    /// form drawn later keeps it even when its own resources name another space so). `None` after
+    /// `g`/`rg`/`k`, which name their space themselves, and when `cs` names no space the
+    /// resources hold: the operands' count then stands for the space, as before.
+    pub(super) fill_space: Option<Rc<Space>>,
     pub(super) font: Option<(Vec<u8>, Rc<Metrics>)>,
     /// The Japanese or Hebrew fallback face the font subsets, when the font is one (see [`is_type3_fallback`]).
     pub(super) face: Option<String>,
@@ -638,6 +645,7 @@ impl Carry {
             ctm: Matrix::IDENTITY,
             clip: None,
             fill: Vec::new(),
+            fill_space: None,
             font: None,
             face: None,
             size: 0.0,
@@ -658,6 +666,50 @@ impl Carry {
         };
         Carry { ts, stack: Vec::new(), marked: Vec::new(), layers: Vec::new(), text_left: MAX_PAGE_TEXT, gap_space: false }
     }
+}
+
+/// The colour space a `cs` operand selects (ISO 32000-2 §8.6.8): a family name, or a name in
+/// `spaces`, the `/ColorSpace` resources in force. `None` when it is neither, so the operands of
+/// the `sc`/`scn` after it are read by their count, as a reader that can't find the space would.
+fn selected_space(doc: &Document, operand: &Object, spaces: &Dict, cache: &mut HashMap<Vec<u8>, Option<Rc<Space>>>) -> Option<Rc<Space>> {
+    let name = operand.as_name()?;
+    if let Some(space) = cache.get(name) {
+        return space.clone();
+    }
+    let family = matches!(name, b"DeviceGray" | b"DeviceRGB" | b"DeviceCMYK" | b"CalGray" | b"CalRGB" | b"Pattern" | b"G" | b"RGB" | b"CMYK");
+    // A resource that is no colour space family (a misspelt family, a name naming another name)
+    // reads as if missing rather than as DeviceGray.
+    let known = |o: &Object| {
+        let o = doc.resolve(o);
+        let family = match &*o {
+            Object::Name(n) => Some(n.clone()),
+            Object::Array(a) => a.first().and_then(|f| doc.resolve(f).as_name().map(<[u8]>::to_vec)),
+            _ => None,
+        };
+        family.is_some_and(|f| {
+            matches!(
+                f.as_slice(),
+                b"DeviceGray"
+                    | b"DeviceRGB"
+                    | b"DeviceCMYK"
+                    | b"CalGray"
+                    | b"CalRGB"
+                    | b"Lab"
+                    | b"ICCBased"
+                    | b"Indexed"
+                    | b"I"
+                    | b"Separation"
+                    | b"DeviceN"
+                    | b"Pattern"
+                    | b"G"
+                    | b"RGB"
+                    | b"CMYK"
+            )
+        })
+    };
+    let space = (family || spaces.get(name).is_some_and(known)).then(|| Rc::new(space_of(doc, operand, spaces, 0)));
+    cache.insert(name.to_vec(), space.clone());
+    space
 }
 
 /// A font resource's metrics, fallback face and vertical advance (see [`Ts`]), read once per page.
@@ -975,6 +1027,10 @@ pub(super) fn interpret(
     let (mut held_fonts, mut held_states, none) = (None, None, Dict::new());
     let fonts_res = super::resource_dict(doc, resources, b"Font", &mut held_fonts).unwrap_or(&none);
     let states = super::resource_dict(doc, resources, b"ExtGState", &mut held_states).unwrap_or(&none);
+    let mut held_spaces = None;
+    let spaces_res = super::resource_dict(doc, resources, b"ColorSpace", &mut held_spaces).unwrap_or(&none);
+    // Each space a `cs` names is resolved once per stream: a page sets the same one again and again.
+    let mut spaces: HashMap<Vec<u8>, Option<Rc<Space>>> = HashMap::new();
     let mut out: Vec<Shown> = Vec::new();
     let mut ts = carry.ts.clone();
     let mut at_bt = (0usize, ts.clone());
@@ -1088,7 +1144,11 @@ pub(super) fn interpret(
                 bt += 1;
                 at_bt = (i, ts.clone());
             }
-            b"g" | b"rg" | b"k" | b"cs" => ts.fill = vec![op.clone()],
+            b"g" | b"rg" | b"k" => (ts.fill, ts.fill_space) = (vec![op.clone()], None),
+            b"cs" => {
+                ts.fill = vec![op.clone()];
+                ts.fill_space = op.operands.first().and_then(|o| selected_space(doc, o, spaces_res, &mut spaces));
+            }
             b"sc" | b"scn" => {
                 ts.fill.retain(|o| o.is("cs"));
                 ts.fill.push(op.clone());
