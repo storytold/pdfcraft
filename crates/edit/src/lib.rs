@@ -61,9 +61,18 @@ mod linebreak;
 pub mod paragraph_align;
 pub mod text;
 pub use text::{
-    BlockKey, BlockStyle, LineEdit, MAX_FORM_DEPTH, MAX_FORM_VISITS, RangeStyle, ReadingBlocks, TextBlock, TextLine, TextSession, block_overlapping,
-    clear_block, glyph_text_lines, reading_blocks, reading_blocks_checked, replace_block, replace_line, rewrite_block, text_blocks, text_lines,
+    BlockKey, BlockStyle, LineEdit, MAX_FORM_DEPTH, MAX_FORM_VISITS, RangeStyle, ReadingBlocks, RunSources, TextBlock, TextLine, TextSession,
+    block_overlapping, clear_block, glyph_text_lines, reading_blocks, reading_blocks_checked, replace_block, replace_line, rewrite_block,
+    text_blocks, text_lines,
 };
+pub mod printer_marks;
+pub use printer_marks::{PrinterMarks, add_printer_marks};
+mod colour;
+pub mod convert_colours;
+pub mod hairlines;
+mod page_streams;
+pub use convert_colours::{ColourTarget, ConvertColours, Converted as ColoursConverted, ImageRecolour, convert_colours};
+pub use hairlines::{Fixed as HairlinesFixed, Hairlines, fix_hairlines};
 pub mod added;
 pub use added::{
     Added, AddedImage, AddedText, Align, Content, Family, Ink, MarkerScan, add_content, delete_content, first_undrawable, isolate_content,
@@ -85,6 +94,8 @@ use place::{ISOLATION_MAX_DEPTH, OLD_WRAP_CLOSE, WRAP_CLOSE, WRAP_OPEN, is_wrap_
 use place::{Reach, check, check_on_top, contents, draw_on_top, lift_on_top, page_list, place_tagged, revealed_under_paint};
 pub use place::{add_type3_fonts, stamp, stamp_with_fonts, undrawable_message};
 
+#[cfg(test)]
+mod find_replace_rows_tests;
 #[cfg(test)]
 mod marked_isolation_tests;
 #[cfg(test)]

@@ -3,7 +3,7 @@ use super::grouping::{across, is_centred, row_rect};
 use super::{
     BlockStyle, CraftFont, Dict, Document, EditError, HashMap, LineEdit, MAX_TYPE3_GLYPHS, Matrix, Metrics, Object, Op, PdfString, Pieces,
     RangeStyle, TextBlock, TextLine, Type3Glyph, builtin_thai_choice, coincident_ops, content_streams, fallback_face, japanese_glyph_from,
-    needs_type3, no_fallback_font, no_glyph_for, page_dict, reveal_ops, rewritten_contents, source_encodes, source_family, source_program,
+    needs_type3, no_fallback_font, no_glyph_for, page_dict, reveal_ops, rewritten_contents, row_break, source_encodes, source_family, source_program,
     source_show, source_space, source_width, splice, type3_faces, type3_glyph, write_type3_glyphs,
 };
 
@@ -116,8 +116,11 @@ struct LegacyFace {
     space: f64,
 }
 
-/// What one edit may decode, and so keep, of the font programs of its THSarabunPSK subsets
-/// (each at most 16 MiB): a page may name many of them.
+/// What one edit may decode of its THSarabunPSK subsets' font data: their programs (each at most
+/// 16 MiB), which it keeps, and the streams of the metrics read to measure them and to adapt their
+/// programs' cmaps: their CMaps and glyph maps, and a subset's program again, for which of its
+/// glyphs have outlines. A page may name many of them. The metrics read to find the subsets among
+/// the page's fonts aren't charged to it.
 const MAX_THAI_PROGRAMS: usize = 64 << 20;
 
 struct PreparedCharacters {
@@ -181,8 +184,8 @@ impl CharacterPreparation<'_> {
                         "the bundled Thai font ({thai_choice}) is not in this build, which has no craft-fonts Thai face; load a complete Thai font or choose one the page lists"
                     ))
                 })?;
-                if !pdfcraft_fonts::embedding::covers(face.bytes, span) {
-                    let missing = span.chars().find(|c| !pdfcraft_fonts::embedding::covers(face.bytes, c.encode_utf8(&mut [0; 4])));
+                if !covers_rows(face.bytes, span) {
+                    let missing = span.chars().find(|&c| !row_break(c) && !pdfcraft_fonts::embedding::covers(face.bytes, c.encode_utf8(&mut [0; 4])));
                     return Err(EditError::Invalid(match missing {
                         Some(c) => format!("{} has no glyph for {c} (U+{:04X}); choose a font that covers the text", face.family, u32::from(c)),
                         None => format!("{} cannot show every character in this selection; choose a font that covers the text", face.family),
@@ -251,12 +254,13 @@ impl CharacterPreparation<'_> {
             };
             let start = range.start;
             for (offset, ch) in draft.get(range).unwrap_or_default().char_indices() {
-                if ch == '\n' {
-                    chars.push((ch, index, source.font.clone()));
-                    continue;
-                }
-                if ch == '\r' {
-                    let crlf = start.checked_add(offset).and_then(|at| draft.get(at.saturating_add(1)..)).is_some_and(|rest| rest.starts_with('\n'));
+                // A row break moves to the next row instead of asking a font for a glyph. The CR
+                // of a CRLF stays a `\r` the rows skip, so the pair is one break; every other break
+                // is written as `\n`. Either way it keeps its place among the draft's characters,
+                // which rows are counted in.
+                if row_break(ch) {
+                    let crlf = ch == '\r'
+                        && start.checked_add(offset).and_then(|at| draft.get(at.saturating_add(1)..)).is_some_and(|rest| rest.starts_with('\n'));
                     chars.push((if crlf { '\r' } else { '\n' }, index, source.font.clone()));
                     continue;
                 }
@@ -353,6 +357,17 @@ struct StyledLines<'a> {
 }
 
 type StyledChar = (char, usize, String);
+
+/// End of a contiguous run sharing both its style and font resource.
+fn styled_run_end(items: &[StyledChar], start: usize) -> usize {
+    let Some(first) = items.get(start) else { return start };
+    let mut end = start + 1;
+    while items.get(end).is_some_and(|next| next.1 == first.1 && next.2 == first.2) {
+        end += 1;
+    }
+    end
+}
+
 type StyledRows = Vec<Vec<StyledChar>>;
 type RowRanges = Vec<std::ops::Range<usize>>;
 enum ShapedFont {
@@ -369,6 +384,7 @@ type ShapedRunCache = HashMap<(usize, usize), ShapedText>;
 struct ShapedRows {
     runs: ShapedRunCache,
     advances: HashMap<(usize, usize), f64>,
+    char_advances: HashMap<(usize, usize), Vec<f64>>,
 }
 
 fn prepare_shaped_rows(
@@ -381,15 +397,15 @@ fn prepare_shaped_rows(
 ) -> Result<ShapedRows, EditError> {
     let mut runs = HashMap::new();
     let mut advances = HashMap::new();
+    let mut char_advances = HashMap::new();
     for (row_index, row) in rows.iter().enumerate().filter(|(index, _)| !kept.get(*index).copied().unwrap_or(false)) {
         let mut at = 0;
         while let Some(item) = row.get(at) {
-            let mut end = at + 1;
-            while row.get(end).is_some_and(|next| next.1 == item.1 && next.2 == item.2) {
-                end += 1;
-            }
+            let end = styled_run_end(row, at);
             let segment = row.get(at..end).unwrap_or_default();
-            advances.insert((row_index, at), segment.iter().map(&advance).sum::<f64>());
+            let widths: Vec<f64> = segment.iter().map(&advance).collect();
+            advances.insert((row_index, at), widths.iter().copied().sum());
+            char_advances.insert((row_index, at), widths);
             let text: String = segment.iter().map(|character| character.0).collect();
             if let Some(shaped) = shape_source(doc, fonts, thai, &item.2, &text)? {
                 runs.insert((row_index, at), shaped);
@@ -397,7 +413,7 @@ fn prepare_shaped_rows(
             at = end;
         }
     }
-    Ok(ShapedRows { runs, advances })
+    Ok(ShapedRows { runs, advances, char_advances })
 }
 
 type ShapedResources = HashMap<(usize, usize), Vec<(String, Vec<u8>)>>;
@@ -791,9 +807,8 @@ fn wrap_styled_rows(
 
 fn apply_range_styles<'a>(
     first: &TextLine,
-    block: &TextBlock,
     lines: &[TextLine],
-    draft: &str,
+    sources: Vec<(std::ops::Range<usize>, usize)>,
     ranges: &[&'a RangeStyle],
     style: &BlockStyle,
 ) -> StyledLines<'a> {
@@ -801,7 +816,7 @@ fn apply_range_styles<'a>(
     let mut styled_spans = Vec::new();
     let mut underlines = HashMap::new();
     let mut overrides = HashMap::new();
-    for (span, source) in block.edited_spans(draft) {
+    for (span, source) in sources {
         let mut edges = vec![span.start, span.end];
         for range in ranges {
             for edge in [range.range.start, range.range.end] {
@@ -887,6 +902,9 @@ fn legacy_thai_font(
     }
     let family = pdfcraft_fonts::embedding::face_key(&source.base_font);
     let mut candidates = vec![source.font.clone()];
+    // Every name on the page is read here for its face name alone, aliases of one font and other
+    // faces' fonts too, with no total, as before: charged to the edit's allowance, each alias would
+    // pay again and other faces would spend what the face's subsets need.
     candidates.extend(fonts.iter().filter_map(|(name, font)| {
         let font = doc.dict(font)?;
         (pdfcraft_fonts::embedding::face_key(&Metrics::from_dict(doc, &font).base_font) == family).then(|| String::from_utf8_lossy(name).into_owned())
@@ -901,9 +919,15 @@ fn legacy_thai_font(
         let face = match object.and_then(|o| cache.values().find(|face| face.object == Some(o))) {
             Some(alias) => LegacyFace { glyphs: alias.glyphs.clone(), metrics: alias.metrics.clone(), object, ..*alias },
             None => {
-                let metrics = Metrics::from_dict(doc, &font);
-                let space = source_space(doc, fonts, &metrics);
-                let glyphs = pdfcraft_fonts::pdf::LegacyThaiFont::from_pdf(doc, &font, space, budget).ok().flatten().map(std::rc::Rc::new);
+                // Read within the edit's allowance; past it the subset goes unread, and the edit is
+                // refused below.
+                let metrics = Metrics::from_dict_within(doc, &font, budget);
+                let (space, glyphs) = if metrics.past_allowance {
+                    (0.0, None)
+                } else {
+                    let space = source_space(doc, fonts, &metrics);
+                    (space, pdfcraft_fonts::pdf::LegacyThaiFont::from_pdf(doc, &font, space, budget).ok().flatten().map(std::rc::Rc::new))
+                };
                 let style = FontStyle::of(doc, &font, &metrics);
                 LegacyFace { glyphs, metrics, style, object, space }
             }
@@ -911,9 +935,11 @@ fn legacy_thai_font(
         cache.insert(name, face);
     }
     // A subset left unread would count as unusable, silently changing which subset draws the text.
-    if budget.remaining() == 0 {
+    // A read refused for want of the allowance is what refuses the edit: reads that spent it to the
+    // byte refused nothing.
+    if budget.refused() > 0 {
         return Err(EditError::Invalid(format!(
-            "the page's {} subsets need more than {} MiB of font programs for one edit; choose a replacement font for this text",
+            "the page's {} subsets need more than {} MiB of font data for one edit; choose a replacement font for this text",
             source.base_font.rsplit('+').next().unwrap_or(&source.base_font),
             MAX_THAI_PROGRAMS >> 20
         )));
@@ -923,7 +949,7 @@ fn legacy_thai_font(
     if !has_thai_source_face(cache, &family) {
         return Ok(None);
     }
-    let rows = || span.split(['\n', '\r']).filter(|row| !row.is_empty());
+    let rows = || span.split(row_break).filter(|row| !row.is_empty());
     for row in rows() {
         if let Err(error) = shape_existing_thai(cache, &source.font, row) {
             // Not in the face's existing codes. A complete program of the face that shapes every
@@ -1097,7 +1123,7 @@ fn matching_thai_outline(doc: &Document, fonts: &Dict, source: &TextLine, span: 
     }
     if !span.chars().any(|c| matches!(u32::from(c), 0x0e00..=0x0e7f))
         || !pdfcraft_fonts::embedding::matching_faces(&source.base_font).iter().any(|f| std::ptr::eq(*f, face))
-        || !pdfcraft_fonts::embedding::covers(face.bytes, span)
+        || !covers_rows(face.bytes, span)
     {
         return false;
     }
@@ -1112,16 +1138,22 @@ fn matching_thai_outline(doc: &Document, fonts: &Dict, source: &TextLine, span: 
             && pdfcraft_fonts::pdf::embedded_sfnt(doc, &font).is_some_and(|bytes| {
                 pdfcraft_fonts::embedding::validate(&bytes).is_ok()
                     && pdfcraft_fonts::source_shaping::has_thai_layout(&bytes)
-                    && pdfcraft_fonts::embedding::covers(&bytes, span)
-                    && span.split(['\n', '\r']).all(|row| pdfcraft_fonts::source_shaping::shape(&bytes, row).is_ok())
+                    && covers_rows(&bytes, span)
+                    && span.split(row_break).all(|row| pdfcraft_fonts::source_shaping::shape(&bytes, row).is_ok())
             })
     })
+}
+
+/// Whether a complete program draws every row of `span`. [`row_break`] characters move to the next
+/// row and are never drawn, so they need no glyph (#6272); `embedding::covers` exempts only CR and LF.
+fn covers_rows(bytes: &[u8], span: &str) -> bool {
+    span.split(row_break).all(|row| pdfcraft_fonts::embedding::covers(bytes, row))
 }
 
 /// Use the same Thai script selection and mark/cluster positioning as Add Text, including
 /// rows beginning with Latin or digits (guessing from their first character would select Latin).
 fn shape_thai_row(text: &str) -> Result<pdfcraft_fonts::source_shaping::ShapedRun, EditError> {
-    if text.len() > 262_144 || text.contains(['\n', '\r']) {
+    if text.len() > 262_144 || text.contains(row_break) {
         return Err(EditError::Invalid("shape one bounded text row at a time".into()));
     }
     let clusters =
@@ -1290,6 +1322,70 @@ fn untouched_rows(block: &TextBlock, draft: &str, rows: &[std::ops::Range<usize>
         .collect()
 }
 
+fn segment_underline_runs(
+    widths: &[f64],
+    segment_width: f64,
+    x: f64,
+    default_style: usize,
+    row_styles: Option<&[Option<usize>]>,
+    pos: usize,
+) -> Vec<(usize, f64, f64)> {
+    let width_sum = widths.iter().copied().sum::<f64>();
+    let width_scale = if width_sum > 1e-6 { segment_width / width_sum } else { 0.0 };
+    let mut cursor = x;
+    let mut runs: Vec<(usize, f64, f64)> = Vec::new();
+    for (offset, width) in widths.iter().enumerate() {
+        let style_index = row_styles.and_then(|styles| styles.get(pos.saturating_add(offset))).and_then(|style| *style).unwrap_or(default_style);
+        let next = cursor + *width * width_scale;
+        match runs.last_mut() {
+            Some((prev, _, to)) if *prev == style_index => *to = next,
+            _ => runs.push((style_index, cursor, next)),
+        }
+        cursor = next;
+    }
+    runs
+}
+
+/// Keep spaces in a subset without a space glyph attached to an adjacent glyph-bearing segment on
+/// the same row so `source_show` wraps them in one `/ActualText` span (#4229).
+///
+/// The returned slot is the space's style index from before that reassignment, where the
+/// grouping key changed. Underlines stay with that style; the row itself keeps the neighbour's
+/// key so the space is not a group of its own.
+fn assign_subset_space_fonts(row: &mut [(char, usize, String)], metrics: &std::collections::BTreeMap<String, Metrics>) -> Vec<Option<usize>> {
+    let mut right_any = vec![None; row.len()];
+    let mut next_any: Option<(usize, String)> = None;
+    for (i, item) in row.iter().enumerate().rev() {
+        if item.0 != ' ' {
+            next_any = Some((item.1, item.2.clone()));
+        } else if let Some(slot) = right_any.get_mut(i) {
+            *slot = next_any.clone();
+        }
+    }
+    let mut prev_any: Option<(usize, String)> = None;
+    let mut underline_style = vec![None; row.len()];
+    for (i, item) in row.iter_mut().enumerate() {
+        if item.0 != ' ' {
+            prev_any = Some((item.1, item.2.clone()));
+            continue;
+        }
+        if metrics.get(&item.2).is_none_or(|m| m.encode(" ").is_some()) {
+            continue;
+        }
+        if let Some((style, font)) = prev_any.as_ref().or_else(|| right_any.get(i).and_then(Option::as_ref)) {
+            let original = item.1;
+            item.1 = *style;
+            item.2 = font.clone();
+            if let Some(slot) = underline_style.get_mut(i)
+                && item.1 != original
+            {
+                *slot = Some(original);
+            }
+        }
+    }
+    underline_style
+}
+
 /// Operator index of the paragraph's first text object, and of the next line's text object
 /// when one follows.
 fn paragraph_span(block: &TextBlock, lines: &[TextLine]) -> Option<(usize, Option<usize>)> {
@@ -1449,7 +1545,8 @@ fn push_row_break_marker(block_ops: &mut Vec<Op>, row_soft: &[bool], row_gap: &[
 /// [`splice`] with the rewritten rows spliced in at `at`, and (when `marker` names one) a `/P`
 /// marker opened at its start and closed at its `next` line or, when nothing follows, after the
 /// paragraph's own last `ET` (appended past the stream's last operator when that close is at or
-/// beyond `ops.len()`, since `splice`'s callback never visits that index).
+/// beyond `ops.len()`, since `splice`'s callback never visits that index). A dropped operator
+/// `i` leaves `left_behind(i, keep)` in its place: its line move, spacing and advance.
 fn splice_with_marker(
     pieces: &Pieces,
     ops: &[Op],
@@ -1457,6 +1554,7 @@ fn splice_with_marker(
     at: usize,
     mut block_ops: Vec<Op>,
     drop: &std::collections::HashSet<usize>,
+    mut left_behind: impl FnMut(usize, bool) -> Vec<Op>,
 ) -> Vec<Vec<u8>> {
     let data = splice(pieces, ops, |i| {
         let mut insert = Vec::new();
@@ -1474,7 +1572,9 @@ fn splice_with_marker(
         if i == at {
             insert.append(&mut block_ops);
         }
-        (insert, !drop.contains(&i))
+        let keep = !drop.contains(&i);
+        insert.extend(left_behind(i, keep));
+        (insert, keep)
     });
     if !marker.is_some_and(|(_, next, close)| next.is_none() && close >= ops.len()) {
         return data;
@@ -1488,6 +1588,25 @@ fn splice_with_marker(
         last.extend_from_slice(&pdfcraft_content::serialize_ops(&[Op::new("EMC", vec![])]));
     }
     data
+}
+
+/// The source run each part of the draft is styled from: the ones given, which must cover the draft
+/// in order, on character boundaries, from the block's runs, or else the edit's own.
+fn draft_sources(block: &TextBlock, draft: &str, style: &BlockStyle) -> Result<Vec<(std::ops::Range<usize>, usize)>, EditError> {
+    if style.sources.is_empty() {
+        return Ok(block.edited_spans(draft));
+    }
+    let mut at = 0;
+    for (range, source) in &style.sources {
+        if range.start != at || range.start >= range.end || draft.get(range.clone()).is_none() || !block.lines.contains(source) {
+            return Err(EditError::Invalid("the text's style sources must cover it in order with the paragraph's own runs".into()));
+        }
+        at = range.end;
+    }
+    if at != draft.len() {
+        return Err(EditError::Invalid("the text's style sources must cover it in order with the paragraph's own runs".into()));
+    }
+    Ok(style.sources.clone())
 }
 
 /// Rewrite visual rows while keeping the source style on each surviving character. Resource
@@ -1508,7 +1627,8 @@ pub(crate) fn rewrite_styled_block(
     }
     let ranges = validated_ranges(draft, style)?;
     let source_count = lines.len();
-    let styled = apply_range_styles(first, block, lines, draft, &ranges, style);
+    let sources = draft_sources(block, draft, style)?;
+    let styled = apply_range_styles(first, lines, sources, &ranges, style);
     let lines = styled.lines.as_slice();
     let styled_spans = styled.spans;
     let underlines = styled.underlines;
@@ -1577,10 +1697,7 @@ pub(crate) fn rewrite_styled_block(
         let mut width = 0.0;
         let mut at = 0;
         while let Some(item) = items.get(at) {
-            let mut end = at + 1;
-            while items.get(end).is_some_and(|v| v.1 == item.1 && v.2 == item.2) {
-                end += 1;
-            }
+            let end = styled_run_end(items, at);
             let segment = items.get(at..end).unwrap_or_default();
             let string: String = segment.iter().map(|v| v.0).collect();
             if let Some(shaped) = shape_source(doc, &fonts, &thai, &item.2, &string)? {
@@ -1605,14 +1722,15 @@ pub(crate) fn rewrite_styled_block(
         }
         Ok(width)
     };
-    let (rows, row_ranges, row_lines, row_soft, row_gap) = wrap_styled_rows(&chars, width, measure)?;
+    let (mut rows, row_ranges, row_lines, row_soft, row_gap) = wrap_styled_rows(&chars, width, measure)?;
+    let space_styles: Vec<_> = rows.iter_mut().map(|row| assign_subset_space_fonts(row, &metrics)).collect();
     let streams = content_streams(doc, &p.dict)?;
     let pieces = crate::text::joined(&streams);
     let ops = pieces.parse().ops;
     // A row the edit doesn't reach keeps its source operators, so its kerning, TJ word gaps and
     // glyph widths stay exactly as they were instead of being rebuilt from the text state. A row
     // aligned on its own is reached; the rows around it are not.
-    let plain = BlockStyle { ranges: Vec::new(), aligns: Vec::new(), ..style.clone() } == BlockStyle::default();
+    let plain = BlockStyle { ranges: Vec::new(), sources: Vec::new(), aligns: Vec::new(), ..style.clone() } == BlockStyle::default();
     let mut kept = if plain {
         untouched_rows(block, draft, &row_ranges)
             .into_iter()
@@ -1636,7 +1754,7 @@ pub(crate) fn rewrite_styled_block(
     validate_contextual_rows(&rows, &kept)?;
     let measured: Vec<_> = rows.iter().map(|row| measure(row)).collect::<Result<_, _>>()?;
     let shaped = prepare_shaped_rows(doc, &fonts, &thai, &rows, &kept, advance)?;
-    let ShapedRows { runs: shaped_runs, advances: segment_advances } = shaped;
+    let ShapedRows { runs: shaped_runs, advances: segment_advances, char_advances } = shaped;
     let glyph_resources = embed_shaped_resources(doc, &mut fonts, &shaped_runs)?;
     let n = pdfcraft_content::num;
     let mut block_ops = vec![Op::new("q", vec![])];
@@ -1713,10 +1831,7 @@ pub(crate) fn rewrite_styled_block(
         while pos < row.len() {
             let Some(item) = row.get(pos) else { break };
             let source = lines.get(item.1).unwrap_or(first);
-            let mut end = pos + 1;
-            while row.get(end).is_some_and(|other| other.1 == item.1 && other.2 == item.2) {
-                end += 1;
-            }
+            let end = styled_run_end(row, pos);
             let segment = row.get(pos..end).unwrap_or_default();
             let string: String = segment.iter().map(|c| c.0).collect();
             let m = metrics.get(&item.2).ok_or_else(|| EditError::Invalid("the paragraph font is missing".into()))?;
@@ -1772,11 +1887,20 @@ pub(crate) fn rewrite_styled_block(
                 )?);
                 block_ops.push(Op::new("ET", vec![]));
             }
-            if underlines.get(&item.1).copied().or(style.underline) == Some(true) {
-                let [r, g, b] = overrides.get(&item.1).and_then(|r| r.color).or(style.color).unwrap_or(source.color);
-                let underline_size = size_of(source, item.1) * source.origin.k;
-                let (x0, y0) = back.apply(x - o.ctm[4], baseline - o.ctm[5] - underline_size * 0.12);
-                let (x1, y1) = back.apply(x + segment_width - o.ctm[4], baseline - o.ctm[5] - underline_size * 0.12);
+            // A space reassigned onto a neighbour keeps that neighbour's grouping key, and its
+            // own style for the underline. Stroke each run of one underline style separately.
+            let widths = char_advances.get(&(row_index, pos)).map(Vec::as_slice).unwrap_or(&[]);
+            for (style_index, from, to) in
+                segment_underline_runs(widths, segment_width, x, item.1, space_styles.get(row_index).map(Vec::as_slice), pos)
+            {
+                let source = lines.get(style_index).unwrap_or(first);
+                if underlines.get(&style_index).copied().or(style.underline) != Some(true) || to <= from {
+                    continue;
+                }
+                let [r, g, b] = overrides.get(&style_index).and_then(|r| r.color).or(style.color).unwrap_or(source.color);
+                let underline_size = size_of(source, style_index) * source.origin.k;
+                let (x0, y0) = back.apply(from - o.ctm[4], baseline - o.ctm[5] - underline_size * 0.12);
+                let (x1, y1) = back.apply(to - o.ctm[4], baseline - o.ctm[5] - underline_size * 0.12);
                 block_ops.push(Op::new("RG", vec![n(r), n(g), n(b)]));
                 block_ops.push(Op::new("w", vec![n(underline_size * 0.06 / o.ctm[2].hypot(o.ctm[3]).max(1e-6))]));
                 block_ops.push(Op::new("m", vec![n(x0), n(y0)]));
@@ -1795,14 +1919,21 @@ pub(crate) fn rewrite_styled_block(
     block_ops.extend(after.ops());
     if split {
         block_ops.insert(0, Op::new("ET", vec![]));
-        block_ops.push(Op::new("BT", vec![]));
-        block_ops.push(Op::new("Tm", o.tlm.iter().map(|v| n(*v)).collect()));
+        block_ops.extend(crate::text::reopen_text_object(o.tlm, o.tm, after.font.as_ref().map(|(_, size)| *size), after.scale));
     }
     // A kept source row sits outside `block_ops`. Bound the whole paragraph when a marker is
     // safe. The close is not part of `block_ops`: that vector can end inside a text object
     // when the rewrite splits one, and a kept row's operators come later in the stream.
     let marker = if marked { None } else { paragraph_marker(block, lines, &ops) };
-    let data = splice_with_marker(&pieces, &ops, marker, at, block_ops, &drop);
+    // A dropped `'` or `"` leaves its line move and spacing, and a dropped show its advance.
+    let mut advances = crate::text::dropped_advances(doc, &ops, &res, &drop);
+    let split_at = split.then_some(start);
+    let left_behind = |i: usize, keep: bool| {
+        let mut out = crate::text::dropped_side_effects(&ops, i, keep, split_at);
+        out.extend(advances.remove(&i));
+        out
+    };
+    let data = splice_with_marker(&pieces, &ops, marker, at, block_ops, &drop, left_behind);
     let contents = rewritten_contents(doc, &streams, data)?;
     res.set(b"Font".to_vec(), Object::Dict(fonts));
     doc.update_dict(p.obj, |d| {
@@ -1811,4 +1942,20 @@ pub(crate) fn rewrite_styled_block(
     })?;
     crate::draw_on_top(doc, &p, o.ctm, &on_top)?;
     Ok(LineEdit { substituted })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::styled_run_end;
+
+    #[test]
+    fn styled_runs_stop_at_style_or_font_changes() {
+        let items = vec![('a', 0, "F1".into()), (' ', 0, "F1".into()), ('b', 1, "F1".into()), ('c', 1, "F2".into())];
+        assert_eq!(styled_run_end(&items, 0), 2);
+        assert_eq!(styled_run_end(&items, 1), 2);
+        assert_eq!(styled_run_end(&items, 2), 3);
+        assert_eq!(styled_run_end(&items, 3), 4);
+        assert_eq!(styled_run_end(&items, 4), 4);
+        assert_eq!(styled_run_end(&[], 0), 0);
+    }
 }

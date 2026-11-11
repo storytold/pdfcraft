@@ -325,6 +325,21 @@ fn an_indirect_annots_array_is_judged_by_the_annotations_it_gains() {
     assert_eq!((s.status, s.modification), (Status::Invalid, Modification::Disallowed(vec![kind::OTHER])));
 }
 
+/// A signature widget taken off the page's inline /Annots array is covered by no permission (the
+/// indirect-array case is the test above), and stays a change whatever level the signature has.
+#[test]
+fn removing_a_widget_from_an_inline_annots_array_is_not_a_comment_change() {
+    let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
+    let trust = TrustStore { certs: vec![id.certificate.clone()] };
+    let page = pdfcraft_cos::ObjRef { num: 3, generation: 0 };
+    let signed = pdfcraft_sign::sign(&open(&fixture()), &id, &opts()).unwrap();
+    let inline = open(&signed).get(page).as_dict().and_then(|d| d.get(b"Annots").cloned()).unwrap();
+    assert!(matches!(inline, Object::Array(ref a) if !a.is_empty()), "the page keeps its widgets inline");
+    let stripped = edit_after(&signed, |doc| doc.update_dict(page, |p| p.set(b"Annots".to_vec(), Object::Array(vec![]))).unwrap());
+    let s = signatures(&open(&stripped), &stripped, &trust).into_iter().find(|s| s.signed).unwrap();
+    assert_eq!((s.status, s.modification), (Status::Invalid, Modification::Disallowed(vec![kind::OTHER])));
+}
+
 /// Issue #1328: a signature field whose /V is null, directly or through a reference, is unsigned:
 /// it is listed as unsigned and can be signed by name.
 #[test]
@@ -536,6 +551,79 @@ fn a_document_timestamp_keeps_a_no_changes_certification_valid() {
     let s = signatures(&open(&stamped), &stamped, &trust).into_iter().find(|s| s.certify == Some(1)).unwrap();
     assert_eq!(s.status, Status::Valid, "{:?}", s.details);
     assert!(matches!(&s.modification, Modification::Allowed(k) if k.contains(&kind::SIGNATURE)), "{:?}", s.modification);
+}
+
+/// Signature field "Approval" whose value, object 4, asks for DocMDP P 1 in its `/Reference`;
+/// object 5 is another signature dictionary. `perms` goes into the catalog. The signature itself
+/// is a dummy: which signature certifies is decided before its bytes are checked.
+fn certification_of(perms: &str) -> pdfcraft_sign::SignatureInfo {
+    let catalog = format!("<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [3 0 R] >> {perms} >>");
+    let bytes = write_pdf(&[
+        catalog.as_bytes(),
+        b"<< /Type /Pages /Kids [] /Count 0 >>",
+        b"<< /FT /Sig /T (Approval) /V 4 0 R >>",
+        b"<< /Type /Sig /Filter /Adobe.PPKLite /SubFilter /adbe.pkcs7.detached /Reference [<< /Type /SigRef /TransformMethod /DocMDP /TransformParams << /Type /TransformParams /P 1 /V /1.2 >> >>] >>",
+        b"<< /Type /Sig /Filter /Adobe.PPKLite /SubFilter /adbe.pkcs7.detached >>",
+    ]);
+    signatures(&open(&bytes), &bytes, &TrustStore { certs: Vec::new() }).into_iter().find(|s| s.field == "Approval").unwrap()
+}
+
+/// Only the signature the catalog's `/Perms /DocMDP` names certifies the document: a DocMDP
+/// reference in any other signature dictionary leaves it an approval signature, with a note.
+#[test]
+fn only_the_signature_the_catalog_names_certifies() {
+    let note = "This signature carries certification permissions, but the document does not name it as its certification, so it is checked as an approval signature.";
+    let noted = |s: &pdfcraft_sign::SignatureInfo| s.details.iter().filter(|d| d.message == note).count();
+    let named = certification_of("/Perms << /DocMDP 4 0 R >>");
+    assert_eq!((named.certify, noted(&named)), (Some(1), 0), "{:?}", named.details);
+    for perms in ["", "/Perms << /DocMDP 5 0 R >>", "/Perms << /UR3 4 0 R >>"] {
+        let s = certification_of(perms);
+        assert_eq!((s.certify, noted(&s)), (None, 1), "{perms:?}: {:?}", s.details);
+    }
+}
+
+/// [`certified_p1`] with a fraction after its last `/ByteRange` number, signed again over the
+/// edited bytes. The ranges still cover whole bytes, so the signature verifies, but no signature
+/// in the signed revision has a byte range that ends exactly where that revision ends.
+fn certified_p1_with_a_fractional_range() -> (TrustStore, Vec<u8>) {
+    let (id, trust, mut signed) = certified_p1();
+    let prefix = b"/ByteRange [";
+    let at = signed.windows(prefix.len()).position(|w| w == prefix).unwrap() + prefix.len();
+    let end = at + signed[at..].iter().position(|b| *b == b']').unwrap();
+    let text = std::str::from_utf8(&signed[at..end]).unwrap().to_owned();
+    let range: Vec<usize> = text.split_ascii_whitespace().map(|n| n.parse().unwrap()).collect();
+    let mut fractional = format!("{}.5", text.trim_end()).into_bytes();
+    assert!(fractional.len() <= end - at, "no room for the fraction in {text:?}");
+    fractional.resize(end - at, b' ');
+    signed[at..end].copy_from_slice(&fractional);
+    let (start, stop) = (range[1], range[2]);
+    signed[start + 1..stop - 1].fill(b'0');
+    let alg = id.key.preferred_digest();
+    let digest = alg.digest(&[&signed[..start], &signed[stop..]]);
+    let cms = pdfcraft_sign::cms::sign_detached(&id.key, &id.certificate, &id.chain, alg, &digest).unwrap();
+    let hex: Vec<u8> = cms.iter().flat_map(|b| format!("{b:02X}").into_bytes()).collect();
+    signed[start + 1..start + 1 + hex.len()].copy_from_slice(&hex);
+    (trust, signed)
+}
+
+/// When the signed revision holds no signature whose byte range ends it, nothing signed says
+/// which permissions apply: later changes are not permitted, whatever the latest catalog says.
+#[test]
+fn changes_after_an_unmatched_signed_revision_are_not_permitted() {
+    let (trust, signed) = certified_p1_with_a_fractional_range();
+    let check = |bytes: &[u8]| signatures(&open(bytes), bytes, &trust).into_iter().find(|s| s.signed).unwrap();
+    let s = check(&signed);
+    assert_eq!((s.status, &s.modification), (Status::Valid, &Modification::None), "{:?}", s.details);
+    let edited = edit_after(&signed, |doc| {
+        let root = doc.root().unwrap();
+        doc.update_dict(root, |c| {
+            c.remove(b"Perms");
+        })
+        .unwrap();
+        add_comment(doc);
+    });
+    let s = check(&edited);
+    assert_eq!((s.status, s.modification), (Status::Invalid, Modification::Disallowed(vec![kind::UNREADABLE])));
 }
 
 #[test]
@@ -3279,6 +3367,38 @@ fn signing_a_field_with_a_null_value_after_another_signature_keeps_the_first_val
         "{:?}",
         all.iter().map(|s| (&s.status, &s.modification)).collect::<Vec<_>>()
     );
+}
+
+/// Fields that name one signature value are listed each, under their own name, with the verdict
+/// the value earned once.
+#[test]
+fn fields_sharing_a_signature_value_are_listed_with_one_verdict() {
+    let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
+    let trust = TrustStore { certs: vec![id.certificate.clone()] };
+    let signed = pdfcraft_sign::sign(&open(&fixture()), &id, &SignOptions { field: Some("Approval".into()), ..opts() }).unwrap();
+    let v = open(&signed).get(pdfcraft_cos::ObjRef { num: 6, generation: 0 }).as_dict().and_then(|d| d.get(b"V").cloned()).unwrap();
+    let shared = edit_after(&signed, |doc| {
+        let mut w = pdfcraft_cos::Dict::new();
+        w.set(b"Type".to_vec(), Object::name("Annot"));
+        w.set(b"Subtype".to_vec(), Object::name("Widget"));
+        w.set(b"FT".to_vec(), Object::name("Sig"));
+        w.set(b"T".to_vec(), PdfString::text("Twin"));
+        w.set(b"V".to_vec(), v.clone());
+        w.set(b"Rect".to_vec(), Object::Array(vec![Object::Int(0); 4]));
+        let w = doc.add(Object::Dict(w));
+        let root = doc.root().unwrap();
+        let af = doc.get(root).as_dict().and_then(|c| c.get(b"AcroForm").cloned()).unwrap();
+        let af = doc.resolve(&af).as_dict().cloned().unwrap();
+        let mut fields = af.get(b"Fields").map(|f| doc.resolve(f)).and_then(|f| f.as_array().cloned()).unwrap();
+        fields.push(Object::Ref(w));
+        let mut af = af;
+        af.set(b"Fields".to_vec(), Object::Array(fields));
+        doc.update_dict(root, |c| c.set(b"AcroForm".to_vec(), Object::Dict(af))).unwrap();
+    });
+    let list = signatures(&open(&shared), &shared, &trust);
+    let (a, b) = (list.iter().find(|s| s.field == "Approval").unwrap(), list.iter().find(|s| s.field == "Twin").unwrap());
+    assert!(a.signed && b.signed);
+    assert_eq!((a.status, &a.modification, &a.signer, a.signed_len), (b.status, &b.modification, &b.signer, b.signed_len));
 }
 
 #[test]

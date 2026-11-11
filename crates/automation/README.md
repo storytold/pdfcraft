@@ -61,7 +61,8 @@ do not keep an old PDF byte buffer alive.
 
 This bounds retained text-cache data, not total process memory: active extraction batches,
 renderers, document buffers and the requested output have separate lifetimes. Search still reads
-growing batches (8 to 128 pages), with one lookahead match to determine continuation.
+growing batches (8 to 128 pages), with one lookahead match to determine continuation, unless
+`stop_at_limit` is set (below), which starts at one page and looks no further than its limit.
 
 `text_find` keeps matches from readable pages when another reached page fails extraction. It
 returns `warnings` with 1-based `page`, `error` and `error_truncated`, plus `warning_count` and
@@ -74,6 +75,16 @@ matches. `next: {start_page, skip}` exists only when another match would exceed 
 that reaches the end with warnings therefore has `complete: false` **without** `next`. Callers
 should follow `next` when present and separately inspect warnings. A capped search can return
 both. The existing `query`, `count`, `matches` and rectangle semantics are unchanged.
+
+That lookahead means a search with exactly `limit` matches reads on to the end of the document to
+learn that no further match exists. `stop_at_limit: true` skips it: the search ends at the
+`limit`th match. It reads one page first, then batches of 2, 4, … up to 128 pages, so nothing past
+the batch holding that match is read or can add warnings (a match on the first page reads only that
+page). The answer carries
+`stopped_at_limit`. When that is `true`, `complete` is `false` and `next` is only the position just
+past the last match, not a promise of another one; following it may return no matches and
+`complete: true`. When it is `false`, the search ran out of pages first and `complete` means what
+it always does.
 
 `text_extract`, comment placement and redaction keep strict all-requested-pages-must-succeed
 semantics; they never silently act on partial text.
@@ -196,8 +207,9 @@ mutually exclusive with `hide_text_block`.
 
 When the renderer reports a warning for the page, `page_render` and `render_preview` return a
 JSON part after the PNG, `{ "page": 1, "warnings": [...] }`, with the sentences
-`pdfcraft-cli render` prints: "content past the page's safety budget was skipped" and "a colour
-that could not be computed was painted in a fallback colour". A page without warnings returns
+`pdfcraft-cli render` prints, such as "content past the page's safety budget, or a picture whose
+JBIG2 mask is past a decoder limit, was skipped" and "a colour that could not be computed was
+painted in a fallback colour". A page without warnings returns
 the PNG alone.
 
 
@@ -288,7 +300,14 @@ Example: `form_set_props doc=1 field=agree export_value=Accepted widget=1`.
 reference) to a PNG, without the viewer. `model` picks the page's Nth 3D model (default 1);
 `width` and `height` are 1 to 4096 (default 512); `direction` is the view direction from the eye
 (default `[-1, 1, -1]`, with Z up unless the view looks along Z); `perspective` defaults to true.
-The model is framed to fill the image and shaded by a headlight on white. U3D models are refused
+The model is framed to fill the image and shaded by a headlight on white. `orbit`, instead of
+`direction`, frames it as a viewer's orbit control would: `{view, up, front, turn, zoom,
+zoom_at, pan}`, all optional. `view` is `iso` (default), `front`, `right`, `top` or `back`
+about the `up` axis (default `+z`) and the `front` axis (perpendicular to `up`); `turn` is
+`[yaw, pitch]` in degrees, pitch down; `zoom` is a positive factor, the result held within 0.05 to 50, at `zoom_at` `[right, up]`
+in picture heights from the centre, where the point under it stays still; `pan` `[right, up]`
+moves the target, in model radii, so the model moves the other way. Every view frames the model
+at the same size, whatever its direction. U3D models are refused
 with an error, and the annotation's own views, lighting and render modes are not applied yet.
 
 ## Viewer navigation history
@@ -313,6 +332,14 @@ navigation-history tool; use the opt-in UI control channel to navigate the displ
 (`#RRGGBB`, default black) for `text` and `date`. The colour is saved in the
 FreeText appearance and survives reopening. Other mark/signature types reject
 `color`; their appearance controls are separate.
+
+## AcroForm script interactions
+
+`js_run` accepts optional `answers` (strings or null, at most 32), consumed in popup, response and alert order. Missing responses cancel menus/input; explicit viewer requests remain data in automation. See [the runtime contract](../../docs/acroform-script-workflows.md).
+
+For distinct PDF fields sharing a name, form_fields exposes a document-local integer field_id. Pass it with field to js_run to bind event.target to that exact field (including ordered answers); omit it for existing first-match behavior. Mismatched names/IDs, missing names and non-integer/out-of-range IDs are refused before execution.
+
+`form_set_image` accepts the optional document-local `field_id` from `form_fields` alongside the matching `field` name, selecting an exact duplicate-name image button. Omit it for the legacy first-name match. IDs are unsigned 48-bit integers and must be rediscovered after structural edits or reopening.
 
 ## Reviewing OCR headlessly
 
