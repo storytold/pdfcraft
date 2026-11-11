@@ -141,6 +141,12 @@ fn an_image_of_a_named_colour_space_with_an_earlier_ei_is_ambiguous() {
     assert_eq!(p.ambiguous_images, 0);
 }
 
+/// [`parse_within`] with an allowance of its own: what a caller that reads the count gets, its
+/// inline images decoded where that tells where a reader stops.
+fn told(data: &[u8]) -> Parsed {
+    parse_within(data, &mut ImageDecoding::default())
+}
+
 /// ASCII85 of `bytes`, without the end-of-data marker: `z` for a group of zeros.
 fn a85(bytes: &[u8]) -> String {
     let mut out = String::new();
@@ -201,7 +207,7 @@ fn where_a_decoding_reader_stops_behind_a_second_filter_is_told_by_decoding() {
         let text = a85(decoded);
         assert_eq!(text.matches("EI").count(), placed, "the `EI`s placed in the text, and no other: {text}");
         let src = format!("BI /W {params} /F [/A85 {filters}] ID {text}~> EI Q");
-        parse(src.as_bytes()).ambiguous_images
+        told(src.as_bytes()).ambiguous_images
     };
     let flate = stored_zlib(&[1, EI[0], EI[1], EI[2], EI[3]]);
     let rl = [&[6, 9, 9, 9][..], &EI, &[128]].concat();
@@ -897,9 +903,9 @@ fn inflating_a_streams_inline_images_stops_at_its_allowance() {
     let small = stored_zlib(&[1, EI[0], EI[1], EI[2], EI[3]]);
     let image = |params: &str, decoded: &[u8]| format!("BI /W {params} /CS /G /BPC 8 /F [/A85 /Fl] ID {}~> EI ", a85(decoded));
     let second = image("5 /H 1", &small);
-    assert_eq!(parse(format!("{second}Q").as_bytes()).ambiguous_images, 0, "the second image alone");
+    assert_eq!(told(format!("{second}Q").as_bytes()).ambiguous_images, 0, "the second image alone");
     let both = format!("{}{second}Q", image("8192 /H 8192", &large));
-    assert_eq!(parse(both.as_bytes()).ambiguous_images, 2, "after an image that spends the allowance");
+    assert_eq!(told(both.as_bytes()).ambiguous_images, 2, "after an image that spends the allowance");
 }
 
 /// What decoding a stream's inline images may give counts their decoded text too, not only what
@@ -915,10 +921,41 @@ fn decoding_a_streams_inline_images_counts_their_text_too() {
     let data = [&[6, 9, 9, 9][..], &EI, &[128, 0, 0, 0]].concat();
     let image = |zs: usize| format!("BI /W 7 /H 1 /CS /G /BPC 8 /F [/A85 /RL] ID {}{}~> EI Q", a85(&data), "z".repeat(zs));
     let exactly = ((64 << 20) - data.len()) / 4;
-    assert_eq!(parse(image(4).as_bytes()).ambiguous_images, 0, "well within the allowance");
-    assert_eq!(parse(image(exactly).as_bytes()).ambiguous_images, 0, "exactly the allowance");
-    assert_eq!(parse(image(exactly + 1).as_bytes()).ambiguous_images, 1, "past it");
+    assert_eq!(told(image(4).as_bytes()).ambiguous_images, 0, "well within the allowance");
+    assert_eq!(told(image(exactly).as_bytes()).ambiguous_images, 0, "exactly the allowance");
+    assert_eq!(told(image(exactly + 1).as_bytes()).ambiguous_images, 1, "past it");
     // 60 MiB of the first image's text leave the second too little for its 8 MiB.
     let two = format!("{} {}", image((60 << 20) / 4), image((8 << 20) / 4));
-    assert_eq!(parse(two.as_bytes()).ambiguous_images, 1, "the second image, past what the first left");
+    assert_eq!(told(two.as_bytes()).ambiguous_images, 1, "the second image, past what the first left");
+    // A decode that fails is charged what it decoded: 60 MiB of text before a character outside
+    // ASCII85, which counts, leave the second too little too.
+    let failed = image((60 << 20) / 4).replace("~> EI Q", "{~> EI Q");
+    assert_eq!(told(format!("{failed} {}", image((8 << 20) / 4)).as_bytes()).ambiguous_images, 2, "after a decode that failed");
+    // Behind ASCII85 and DCT, which isn't told, the text isn't decoded, and the second is.
+    let dct = image((60 << 20) / 4).replace("/F [/A85 /RL]", "/F [/A85 /DCT]");
+    assert_eq!(told(format!("{dct} {}", image((8 << 20) / 4)).as_bytes()).ambiguous_images, 1, "after an image behind DCT");
+}
+
+/// Parses given one allowance share it ([`parse_within`]), as redaction's walk of a page does for
+/// a form drawn again: after one whose image inflates all of it, another image's stop isn't told,
+/// and its earlier `EI` counts, which in a parse with an allowance of its own it doesn't. [`parse`]
+/// and [`ops`] decode nothing, and count it.
+#[test]
+fn parses_sharing_an_allowance_share_it() {
+    const EI: [u8; 4] = [0x71, 0x79, 0x7d, 0xec];
+    // The `EI` after the large image's Flate data, on a group of its own.
+    let mut large = pdfcraft_filters::encode_flate(&vec![0u8; 64 << 20]);
+    large.resize(large.len().next_multiple_of(4), 1);
+    large.extend(EI);
+    let first = format!("BI /W 8192 /H 8192 /CS /G /BPC 8 /F [/A85 /Fl] ID {}~> EI Q", a85(&large));
+    let second = format!("BI /W 5 /H 1 /CS /G /BPC 8 /F [/A85 /Fl] ID {}~> EI Q", a85(&stored_zlib(&[1, EI[0], EI[1], EI[2], EI[3]])));
+    assert_eq!(told(second.as_bytes()).ambiguous_images, 0, "alone, with an allowance of its own");
+    assert_eq!(parse(second.as_bytes()).ambiguous_images, 1, "alone, parsed without decoding");
+    let mut read = ops(second.as_bytes());
+    read.by_ref().for_each(drop);
+    assert_eq!(read.ambiguous_images(), 1, "alone, read one operator at a time, likewise");
+    let mut decoding = ImageDecoding::default();
+    parse_within(first.as_bytes(), &mut decoding);
+    assert_eq!(parse_within(second.as_bytes(), &mut decoding).ambiguous_images, 1, "after the first, sharing its allowance");
+    assert_eq!(Pieces::join(&[second.as_bytes()]).parse_within(&mut decoding).ambiguous_images, 1, "in pieces, likewise");
 }

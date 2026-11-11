@@ -196,6 +196,10 @@ pub(crate) struct Scope<'a> {
     /// shared forms drawn from other shared forms would otherwise multiply the work with every
     /// level.
     budget: DecodeBudget,
+    /// What decoding inline images, to tell where a reader that decodes them ends them, may still
+    /// give in this walk: a form drawn again is parsed again, and decodes them again within what is
+    /// left, not within an allowance of its own.
+    inline_images: pdfcraft_content::ImageDecoding,
 }
 
 impl<'a> Scope<'a> {
@@ -225,6 +229,7 @@ impl<'a> Scope<'a> {
             used_names: Vec::new(),
             depth: 0,
             budget,
+            inline_images: pdfcraft_content::ImageDecoding::default(),
         }
     }
 
@@ -405,7 +410,7 @@ fn process_from(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<u8>], 
     // (ISO 32000-2 §7.8.2): an operator's operands can end one piece and the operator start the
     // next. Parse them joined, then give each operator back to the piece its keyword is in.
     let joined = Pieces::join(streams);
-    let mut parsed = joined.parse();
+    let mut parsed = joined.parse_within(&mut scope.inline_images);
     walk.out.ambiguous = parsed.ambiguous_images > 0;
     // A rewritten piece loses its comments, so keep where they began and ended: a comment that
     // ran on into the next piece still hides that piece's first line.

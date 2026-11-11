@@ -57,3 +57,48 @@ fn a_page_whose_inline_image_other_readers_end_earlier_is_refused() {
     mark(&mut doc, 0, &[[0.0, 200.0, 300.0, 300.0]], "");
     assert_eq!(apply(&mut doc, None), Err(RedactError::Unreadable(1)));
 }
+
+/// ASCII85 of `bytes`, a multiple of four long, without the end-of-data marker.
+fn a85(bytes: &[u8]) -> String {
+    let mut out = String::new();
+    for group in bytes.chunks(4) {
+        let mut v = group.iter().fold(0u32, |v, &b| v << 8 | u32::from(b));
+        if v == 0 {
+            out.push('z');
+            continue;
+        }
+        let mut digits = [0u8; 5];
+        for d in digits.iter_mut().rev() {
+            *d = b'!' + (v % 85) as u8;
+            v /= 85;
+        }
+        out.extend(digits.iter().map(|&d| d as char));
+    }
+    out
+}
+
+/// What decoding inline images may give, to tell where a reader that decodes them ends them, is
+/// shared by a page's walk: a form drawn again is parsed again, and decodes them again within what
+/// is left, not within an allowance of its own. A form holds an image behind ASCII85 and Flate
+/// whose `EI` group lies in its samples, a stored block, before 40 MiB of zeros: drawn once, its
+/// stop is told and the page is redacted; drawn twice, what the first draw left isn't enough to
+/// tell it again, and the page is refused.
+#[test]
+fn a_form_drawn_again_decodes_its_inline_images_within_what_is_left() {
+    const EI: [u8; 4] = [0x71, 0x79, 0x7d, 0xec];
+    let zeros = pdfcraft_filters::encode_flate(&vec![0u8; 40 << 20]);
+    let mut data = vec![0x78, 0x01, 0x00, 5, 0, 0xfa, 0xff, 1, EI[0], EI[1], EI[2], EI[3]];
+    data.extend_from_slice(zeros.get(2..zeros.len() - 4).unwrap());
+    data.resize(data.len().next_multiple_of(4), 0);
+    let samples = 5 + (40 << 20);
+    let image = format!("q BI /W {samples} /H 1 /CS /G /BPC 8 /F [/A85 /Fl] ID {}~> EI Q", a85(&data));
+    let form = stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300]", image.as_bytes());
+    let drawn = |draws: usize| {
+        let content = format!("BT /F1 10 Tf 10 100 Td (SECRET) Tj ET {}", "q /Fm Do Q ".repeat(draws));
+        let mut doc = one_page(content.as_bytes(), "/XObject << /Fm 7 0 R >>", vec![form.clone()]);
+        mark(&mut doc, 0, &[[5.0, 95.0, 45.0, 110.0]], "");
+        apply(&mut doc, None).map(|r| r.glyphs)
+    };
+    assert_eq!(drawn(1), Ok(6), "drawn once");
+    assert_eq!(drawn(2), Err(RedactError::Unreadable(1)), "drawn twice");
+}

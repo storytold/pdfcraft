@@ -88,22 +88,56 @@ fn is_delim(b: u8) -> bool {
 /// Longest unreadable number token retried from its next byte. Real numbers are far shorter.
 const MAX_RETRIED_TOKEN: usize = 64;
 
-/// Parse a (decoded) content stream.
+/// Parse a (decoded) content stream. Its inline images aren't decoded: one behind ASCIIHex or
+/// ASCII85 and a second filter whose text holds an `EI` before the renderer's counts in
+/// [`Parsed::ambiguous_images`], where [`parse_within`] can tell more.
 pub fn parse(data: &[u8]) -> Parsed {
-    parse_pieces(data, &[])
+    parse_pieces(data, &[], &mut ImageDecoding::none())
 }
 
-/// The operators of a (decoded) content stream, read one at a time, as [`parse`] reads them. A
-/// caller that stops early or keeps only a summary never holds every operator of the stream.
+/// [`parse`], its inline images behind ASCIIHex or ASCII85 and a second filter decoded within
+/// `decoding` to tell where a reader that decodes them stops, for a caller that reads
+/// [`Parsed::ambiguous_images`]. A caller shares one between the parses of one operation: content
+/// parsed again, as a form drawn again is, then decodes its images again within what is left, not
+/// within an allowance of its own.
+pub fn parse_within(data: &[u8], decoding: &mut ImageDecoding) -> Parsed {
+    parse_pieces(data, &[], decoding)
+}
+
+/// What decoding inline images may still give, to tell where a reader that decodes them stops
+/// ([`MAX_IMAGE_DECODING`] to begin with): their ASCIIHex or ASCII85 text and what inflating that
+/// gives. Past it, where such a reader stops isn't told.
+pub struct ImageDecoding {
+    left: usize,
+}
+
+impl Default for ImageDecoding {
+    fn default() -> Self {
+        ImageDecoding { left: MAX_IMAGE_DECODING }
+    }
+}
+
+impl ImageDecoding {
+    /// Nothing to decode with, for the parses that don't read the count.
+    fn none() -> Self {
+        ImageDecoding { left: 0 }
+    }
+}
+
+/// The operators of a (decoded) content stream, read one at a time, as [`parse`] reads them,
+/// decoding no inline image. A caller that stops early or keeps only a summary never holds every
+/// operator of the stream.
 pub fn ops(data: &[u8]) -> Ops<'_> {
     Ops::new(data, &[])
 }
 
 /// Parse `data`, recording which of the piece boundaries `ends` (as in [`Pieces`]) a comment
-/// crosses.
-fn parse_pieces(data: &[u8], ends: &[usize]) -> Parsed {
+/// crosses, its inline images decoded within `decoding`.
+fn parse_pieces(data: &[u8], ends: &[usize], decoding: &mut ImageDecoding) -> Parsed {
     let mut reader = Ops::new(data, ends);
+    reader.image_ends.decoding = std::mem::take(decoding);
     let ops = reader.by_ref().collect();
+    *decoding = std::mem::take(&mut reader.image_ends.decoding);
     Parsed { ops, skipped: reader.skipped, ambiguous_images: reader.ambiguous_images, comment_edges: reader.comment_edges }
 }
 
@@ -134,7 +168,7 @@ impl<'a> Ops<'a> {
             ends,
             boundary: 0,
             comment_edges: vec![(false, false); ends.len()],
-            image_ends: ImageEnds::default(),
+            image_ends: ImageEnds { decoding: ImageDecoding::none(), ..ImageEnds::default() },
         }
     }
 
@@ -402,19 +436,19 @@ impl NextOf {
 }
 
 /// The searches a stream's inline images share: for `EI`, and for the ASCIIHex and ASCII85
-/// end-of-data markers; and what decoding their data has given ([`MAX_IMAGE_DECODING`]).
+/// end-of-data markers; and what decoding their data may still give.
 #[derive(Default)]
 pub(crate) struct ImageEnds {
     ei: NextOf,
     hex_end: NextOf,
     a85_end: NextOf,
-    decoded: usize,
+    decoding: ImageDecoding,
 }
 
-/// What decoding the data of a stream's inline images may give in all, their ASCIIHex or ASCII85
-/// text and what inflating that gives, to tell where a reader that decodes them stops
-/// ([`chain_stop`]). Past it, where it stops isn't told.
-const MAX_IMAGE_DECODING: usize = 64 << 20;
+/// What decoding the data of inline images may give in all, their ASCIIHex or ASCII85 text and what
+/// inflating that gives, to tell where a reader that decodes them stops ([`chain_stop`]): for a
+/// stream, or for all those parsed with one [`ImageDecoding`]. Past it, where it stops isn't told.
+pub const MAX_IMAGE_DECODING: usize = 64 << 20;
 
 /// An inline image's outer filter, as it decides where a decoding reader stops reading the data.
 #[derive(Clone, Copy, PartialEq)]
@@ -579,8 +613,8 @@ fn decoder_stop(data: &[u8], begin: usize, ei: usize, bytes: usize, outer: Outer
 /// Where a reader decoding an inline image's data through ASCIIHex or ASCII85 (`outer`, its
 /// marker before `ei`) and one filter more stops reading it: after the text that gives the least
 /// the inner filter takes in to have the samples the image's layout needs, or to reach its own
-/// end. Told for Flate (zlib) and RunLength, the text decoded and inflated within
-/// [`MAX_IMAGE_DECODING`] for the stream.
+/// end. Told for Flate (zlib) and RunLength, the text decoded and inflated within what the
+/// parse's [`ImageDecoding`] has left, which a decode that fails is charged for too.
 /// `None` for a filter alone or another one (DCT among them: a JPEG decoder may stop before its
 /// end-of-image marker, at rows it doesn't need or a marker it refuses, where reading the
 /// markers doesn't tell), for an image with decode parameters or without a layout
@@ -599,17 +633,28 @@ fn chain_stop(data: &[u8], begin: usize, ei: usize, dict: &Dict, outer: Outer, s
     }
     let Some(Object::Array(filters)) = dict.get(b"Filter").or_else(|| dict.get(b"F")) else { return None };
     let [_, inner] = filters.as_slice() else { return None };
-    let samples = layout_bytes(dict)?;
-    let decoded = outer_decoded(data.get(begin..ei)?, outer, MAX_IMAGE_DECODING.saturating_sub(scan.decoded))?;
-    scan.decoded = scan.decoded.saturating_add(decoded.len());
-    let taken = match inner.as_name()? {
-        b"FlateDecode" | b"Fl" => {
-            let (taken, made) = pdfcraft_filters::flate_input_for(&decoded, samples, MAX_IMAGE_DECODING.saturating_sub(scan.decoded));
-            scan.decoded = scan.decoded.saturating_add(made);
-            taken?
-        }
-        b"RunLengthDecode" | b"RL" => run_length_input(&decoded, samples),
+    // Whether the inner filter is Flate or RunLength, before anything is decoded for it.
+    let flate = match inner.as_name()? {
+        b"FlateDecode" | b"Fl" => true,
+        b"RunLengthDecode" | b"RL" => false,
         _ => return None,
+    };
+    let samples = layout_bytes(dict)?;
+    let left = &mut scan.decoding.left;
+    let decoded = match outer_decoded(data.get(begin..ei)?, outer, *left) {
+        Ok(decoded) => decoded,
+        Err(spent) => {
+            *left = left.saturating_sub(spent);
+            return None;
+        }
+    };
+    *left = left.saturating_sub(decoded.len());
+    let taken = if flate {
+        let (taken, made) = pdfcraft_filters::flate_input_for(&decoded, samples, *left);
+        *left = left.saturating_sub(made);
+        taken?
+    } else {
+        run_length_input(&decoded, samples)
     };
     outer_text_for(data.get(begin..ei)?, outer, taken).and_then(|at| begin.checked_add(at))
 }
@@ -687,23 +732,24 @@ fn group(outer: Outer, digits: &[u32; 5], count: usize, last: bool) -> Option<(u
     Some((if count == 5 { 4 } else { count - 1 }, bytes))
 }
 
-/// The bytes ASCIIHex or ASCII85 `text` gives up to its end-of-data marker. `None` where it holds
-/// a group no reader agrees on, or no marker, or gives more than `max` bytes (ASCII85 gives four a
-/// character for `z`).
-fn outer_decoded(text: &[u8], outer: Outer, max: usize) -> Option<Vec<u8>> {
+/// The bytes ASCIIHex or ASCII85 `text` gives up to its end-of-data marker; or, where it holds a
+/// group no reader agrees on, or no marker, or gives more than `max` bytes (ASCII85 gives four a
+/// character for `z`), how many it gave before that.
+fn outer_decoded(text: &[u8], outer: Outer, max: usize) -> Result<Vec<u8>, usize> {
     let mut out = Vec::new();
     for step in outer_groups(text, outer) {
-        let (step, _, bytes) = step?;
+        let Some((step, _, bytes)) = step else { return Err(out.len()) };
         let (Group::Bytes(n) | Group::End(n)) = step;
         if out.len().saturating_add(n) > max {
-            return None;
+            return Err(out.len());
         }
-        out.extend_from_slice(bytes.get(..n)?);
+        let Some(group) = bytes.get(..n) else { return Err(out.len()) };
+        out.extend_from_slice(group);
         if let Group::End(_) = step {
-            return Some(out);
+            return Ok(out);
         }
     }
-    None
+    Err(out.len())
 }
 
 /// Where in ASCIIHex or ASCII85 `text` a reader that has taken in `taken` bytes of what it gives
@@ -995,9 +1041,14 @@ impl Pieces {
         self.ends.is_empty()
     }
 
-    /// Parse the pieces as one stream.
+    /// Parse the pieces as one stream, as [`parse`] does.
     pub fn parse(&self) -> Parsed {
-        parse_pieces(&self.data, &self.ends)
+        parse_pieces(&self.data, &self.ends, &mut ImageDecoding::none())
+    }
+
+    /// [`Pieces::parse`], its inline images decoded within `decoding` ([`parse_within`]).
+    pub fn parse_within(&self, decoding: &mut ImageDecoding) -> Parsed {
+        parse_pieces(&self.data, &self.ends, decoding)
     }
 
     /// Per piece, from `parsed` (this piece set's [`Pieces::parse`]): whether a comment runs

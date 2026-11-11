@@ -26,10 +26,13 @@ ends the image at the first `EI` after that, whatever surrounds it; an image it 
 ends at the first `EI` after `ID`. Where it stops is worked out exactly with no filter or one
 ASCIIHex or ASCII85 filter and a layout this parser knows (a device colour space, an Indexed array
 written in the image, or an image mask). Behind ASCIIHex or ASCII85 and then only Flate (zlib)
-or RunLength, with such a layout and no decode parameters, it is worked out by decoding: the text is
-decoded and the inner filter read until it has the samples or reaches its own end (decoding and
-inflating at most 64 MiB for a stream), and an `EI` before the renderer's counts only past that stop.
-Otherwise the image counts unless no `EI` comes before the renderer's and, behind ASCIIHex or
+or RunLength, with such a layout and no decode parameters, it is worked out by decoding, for a
+caller that reads the count and gives an allowance to decode within (`parse_within`: at most 64 MiB,
+shared by the streams parsed with it, as redaction's walk of a page shares one, a form drawn again
+being parsed and its images decoded again within what is left, and autotagging takes one a page): the text is decoded and the inner filter read
+until it has the samples or reaches its own end, and an `EI` before the renderer's counts only
+past that stop. `parse` and `ops` decode nothing, and count such an image whose text holds an `EI`
+before the renderer's. Otherwise the image counts unless no `EI` comes before the renderer's and, behind ASCIIHex or
 ASCII85, the end-of-data marker does. Without a filter, that misses a
 reader that reads past the renderer's `EI` by a layout this parser doesn't know: a colour space
 named as a resource (or a device name the page's resources redefine), which it can't look up,
