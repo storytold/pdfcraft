@@ -311,3 +311,20 @@ fn two_objects_of_one_dictionary_are_counted_apart() {
     let group = Some((2, vec![(3, 1), (4, 1), (5, 1)]));
     assert_eq!(surveyed(&doc).surveyed_fonts(), vec![(vec![(3, 1), (4, 1)], group.clone()), (vec![(5, 1)], group)]);
 }
+
+/// A group keeps its name and each member's own counts, with every glyph a member shows (a CID
+/// its `/CIDToGIDMap` leaves out too), for rules that weigh the group against its members.
+#[test]
+fn a_group_keeps_its_name_and_each_members_counts() {
+    let mut mapped = Font::truetype("BBBBBB+Kai", 50);
+    mapped.cid_to_gid = Some(vec![0, 20, 21]);
+    let doc = Doc {
+        fonts: vec![Font::truetype("AAAAAA+Kai", 50), mapped],
+        pages: vec![vec![Show::Text(0, vec![10, 10, 11]), Show::Text(1, vec![1, 2, 7])]],
+    };
+    assert_eq!(
+        surveyed(&doc).surveyed_groups(),
+        vec![(b"Kai".to_vec(), vec![(vec![(10, 2), (11, 1)], 3), (vec![(20, 1), (21, 1)], 3)])],
+        "CID 7, left out of the map, counts among the glyphs shown"
+    );
+}

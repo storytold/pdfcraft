@@ -70,6 +70,9 @@ pub(crate) enum Evidence {
 pub(crate) struct FontUsage {
     /// (number, times shown), in number order.
     pub(crate) numbers: Vec<(u32, u64)>,
+    /// How many glyphs the font shows, including codes no glyph number is read for (a CID a
+    /// `/CIDToGIDMap` stream leaves out).
+    pub(crate) shown: u64,
     /// The font's group: every font of the document with its `/BaseFont` (without the subset
     /// tag), glyph count and kind of program, when there are two or more.
     pub(crate) group: Option<Arc<UsageGroup>>,
@@ -84,6 +87,11 @@ pub(crate) struct FontUsage {
 pub(crate) struct UsageGroup {
     /// How many fonts the group has.
     pub(crate) members: usize,
+    /// The members' `/BaseFont` without the subset tag, as written.
+    pub(crate) name: Vec<u8>,
+    /// Each member's own (number, times shown) and glyphs shown, as its [`FontUsage`] has them,
+    /// in the order the survey met them: for rules that weigh the group against its members.
+    pub(crate) member_usage: Vec<(Vec<(u32, u64)>, u64)>,
     /// The members' (number, times shown) added together, in number order.
     pub(crate) numbers: Vec<(u32, u64)>,
     /// A rule's decision for the group as a whole, worked out once for all its members.
@@ -91,9 +99,15 @@ pub(crate) struct UsageGroup {
 }
 
 impl UsageGroup {
-    pub(crate) fn new(members: usize, numbers: Vec<(u32, u64)>) -> Self {
+    pub(crate) fn new(
+        name: Vec<u8>,
+        member_usage: Vec<(Vec<(u32, u64)>, u64)>,
+        numbers: Vec<(u32, u64)>,
+    ) -> Self {
         Self {
-            members,
+            members: member_usage.len(),
+            name,
+            member_usage,
             numbers,
             decision: OnceLock::new(),
         }
@@ -177,6 +191,28 @@ impl RecoveryDocument {
             })
             .collect();
         out.sort();
+        out
+    }
+
+    /// Test hook: the survey's groups, in a stable order: each one's name and its members'
+    /// own (number, times shown) and glyphs shown.
+    #[cfg(feature = "test-counters")]
+    #[allow(clippy::type_complexity, reason = "a test's view of the evidence")]
+    pub fn surveyed_groups(&self) -> Vec<(Vec<u8>, Vec<(Vec<(u32, u64)>, u64)>)> {
+        let Some(Evidence::Counted(fonts)) = self.evidence.get() else {
+            return Vec::new();
+        };
+        let mut out: Vec<_> = fonts
+            .values()
+            .filter_map(|u| u.group.as_ref())
+            .map(|g| {
+                let mut members = g.member_usage.clone();
+                members.sort();
+                (g.name.clone(), members)
+            })
+            .collect();
+        out.sort();
+        out.dedup();
         out
     }
 

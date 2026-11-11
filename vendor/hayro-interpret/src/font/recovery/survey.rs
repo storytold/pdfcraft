@@ -411,7 +411,7 @@ impl Survey<'_> {
     /// The evidence: each counted font's numbers, and the pooled numbers of each group of two
     /// or more fonts with the same [`PoolingKey`] (fonts that showed nothing are in no group).
     fn evidence(&self) -> Evidence {
-        let mut numbered: Vec<(u128, &PoolingKey, Vec<(u32, u64)>)> = Vec::new();
+        let mut numbered: Vec<(u128, &PoolingKey, Vec<(u32, u64)>, u64)> = Vec::new();
         for surveyed in &self.fonts {
             if surveyed.counts.is_empty() {
                 continue;
@@ -424,12 +424,17 @@ impl Survey<'_> {
                     *slot = slot.saturating_add(*n);
                 }
             }
-            numbered.push((surveyed.key, &surveyed.pooling, sorted(numbers)));
+            let shown = surveyed
+                .counts
+                .values()
+                .fold(0_u64, |t, n| t.saturating_add(*n));
+            numbered.push((surveyed.key, &surveyed.pooling, sorted(numbers), shown));
         }
-        let mut groups: HashMap<&PoolingKey, (usize, HashMap<u32, u64>)> = HashMap::new();
-        for (_, pooling, numbers) in &numbered {
+        let mut groups: HashMap<&PoolingKey, (Vec<(Vec<(u32, u64)>, u64)>, HashMap<u32, u64>)> =
+            HashMap::new();
+        for (_, pooling, numbers, shown) in &numbered {
             let group = groups.entry(*pooling).or_default();
-            group.0 = group.0.saturating_add(1);
+            group.0.push((numbers.clone(), *shown));
             for &(number, n) in numbers {
                 let slot = group.1.entry(number).or_insert(0);
                 *slot = slot.saturating_add(n);
@@ -437,16 +442,18 @@ impl Survey<'_> {
         }
         let groups: HashMap<&PoolingKey, Arc<UsageGroup>> = groups
             .into_iter()
-            .filter(|(_, (members, _))| *members >= 2)
+            .filter(|(_, (members, _))| members.len() >= 2)
             .map(|(key, (members, numbers))| {
-                (key, Arc::new(UsageGroup::new(members, sorted(numbers))))
+                let group = UsageGroup::new(key.name.clone(), members, sorted(numbers));
+                (key, Arc::new(group))
             })
             .collect();
         let fonts = numbered
             .iter()
-            .map(|(key, pooling, numbers)| {
+            .map(|(key, pooling, numbers, shown)| {
                 let usage = FontUsage {
                     numbers: numbers.clone(),
+                    shown: *shown,
                     group: groups.get(pooling).cloned(),
                 };
                 (*key, Arc::new(usage))
