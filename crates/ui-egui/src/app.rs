@@ -155,6 +155,7 @@ impl PdfCraftApp {
             show_secured_notice: true,
             text_links: true,
             always_default_view: false,
+            keep_bookmark_zoom: false,
             #[cfg(not(target_arch = "wasm32"))]
             watch: Default::default(),
             #[cfg(not(target_arch = "wasm32"))]

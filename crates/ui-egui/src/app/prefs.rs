@@ -111,6 +111,7 @@ impl PdfCraftApp {
             "default_layout": canvas::display_token(self.view_defaults.layout, self.view_defaults.continuous),
             "default_zoom": self.view_defaults.zoom_name(),
             "always_default_view": self.always_default_view,
+            "keep_bookmark_zoom": self.keep_bookmark_zoom,
             "highlight_fields": self.view_defaults.highlight_fields,
             "units": self.units,
             "language": self.language,
@@ -392,6 +393,9 @@ impl PdfCraftApp {
         }
         if let Some(on) = v["always_default_view"].as_bool() {
             self.always_default_view = on;
+        }
+        if let Some(on) = v["keep_bookmark_zoom"].as_bool() {
+            self.keep_bookmark_zoom = on;
         }
         self.restore_print_prefs(v);
         if let Some(on) = v["highlight_fields"].as_bool() {
