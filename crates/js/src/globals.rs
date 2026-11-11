@@ -1,6 +1,6 @@
 use super::document::{
-    field_object, get_field, get_nth_field_name, get_template, noop, num_fields, page_num_get, page_num_set, print, reset_form,
-    spawn_page_from_template, submit_form, template_object,
+    get_field, get_nth_field_name, get_template, noop, num_fields, page_num_get, page_num_set, print, reset_form, spawn_page_from_template,
+    submit_form, template_object,
 };
 use super::format::{printd, printf, printx, scand};
 use super::host::{arg, error, function, host, s, strings, text, text_line};
