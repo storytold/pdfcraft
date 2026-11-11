@@ -397,3 +397,41 @@ fn a_widget_rect_saved_back_as_integers_is_a_form_fill() {
     let moved = save(Some(20.5));
     assert_eq!(verdict(&moved, signed.open(), Some(2)), Modification::Disallowed(vec![super::kind::PAGE_CONTENT]));
 }
+
+/// The cross-reference entries this reader sets aside (here in-use entries at offset 0) are
+/// compared with the signed revision's in linear time: each of the document's was searched for
+/// among all of the signed revision's, so 200,000 of them took minutes. An entry set aside only
+/// after signing is still not a permitted change.
+#[test]
+fn set_aside_xref_entries_are_compared_in_linear_time() {
+    const SET_ASIDE: usize = 200_000;
+    let mut bytes = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for body in ["<< /Type /Catalog /Pages 2 0 R >>".to_owned(), "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_owned(), page("")] {
+        offsets.push(bytes.len());
+        bytes.extend_from_slice(format!("{} 0 obj\n{body}\nendobj\n", offsets.len()).as_bytes());
+    }
+    let at = bytes.len();
+    bytes.extend_from_slice(b"xref\n0 4\n0000000000 65535 f \n");
+    for o in &offsets {
+        bytes.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    bytes.extend_from_slice(format!("10 {SET_ASIDE}\n").as_bytes());
+    bytes.extend_from_slice("0000000000 00000 n \n".repeat(SET_ASIDE).as_bytes());
+    let size = 10 + SET_ASIDE;
+    bytes.extend_from_slice(format!("trailer\n<< /Size {size} /Root 1 0 R >>\nstartxref\n{at}\n%%EOF\n").as_bytes());
+    let signed = File { bytes, size: size as u32, xref: Some(at) };
+    // A later section that sets aside one more entry, for object 5, and changes nothing else.
+    let mut now = signed.clone();
+    let later = now.bytes.len();
+    now.bytes.extend_from_slice(
+        format!("xref\n5 1\n0000000000 00000 n \ntrailer\n<< /Size {size} /Root 1 0 R /Prev {at} >>\nstartxref\n{later}\n%%EOF\n").as_bytes(),
+    );
+    let (doc, old) = (now.open(), signed.open());
+    assert_eq!((old.xref_oddities().len(), doc.xref_oddities().len()), (SET_ASIDE, SET_ASIDE + 1));
+    let started = std::time::Instant::now();
+    let judged = verdict(&doc, old, Some(2));
+    let took = started.elapsed();
+    assert_eq!(judged, Modification::Disallowed(vec![super::kind::OTHER]), "the entry set aside after signing");
+    assert!(took < std::time::Duration::from_secs(10), "took {took:?}");
+}

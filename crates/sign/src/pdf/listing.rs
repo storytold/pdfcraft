@@ -391,17 +391,18 @@ fn take(left: &mut usize) -> bool {
     some
 }
 
-/// Which page holds each annotation.
-fn annot_pages(doc: &Document) -> HashMap<ObjRef, usize> {
-    let mut map = HashMap::new();
+/// Which page holds each annotation, and the index of each page, from one walk of the page tree.
+fn annot_pages(doc: &Document) -> (HashMap<ObjRef, usize>, HashMap<ObjRef, usize>) {
+    let (mut annots, mut pages) = (HashMap::new(), HashMap::new());
     for (i, p) in pdfcraft_annot::page_refs(doc).unwrap_or_default().into_iter().enumerate() {
+        pages.insert(p, i);
         if let Some(a) = doc.get(p).as_dict().and_then(|d| d.get(b"Annots").map(|a| doc.resolve(a))).and_then(|a| a.as_array().cloned()) {
             for r in a.iter().filter_map(Object::as_ref) {
-                map.insert(r, i);
+                annots.insert(r, i);
             }
         }
     }
-    map
+    (annots, pages)
 }
 
 /// Whether a signature widget is shown on its page: it isn't Hidden (`/F` bit 2) or NoView (bit 6),
@@ -430,7 +431,9 @@ pub fn list(doc: &Document, bytes: &[u8], trust: &TrustStore) -> Vec<SignatureIn
 /// [`list`], reusing digests and standalone-timestamp discovery from `cache`. Field/widget
 /// structure and validation against `bytes` and `trust` are read again on every call.
 pub fn list_cached(doc: &Document, bytes: &[u8], trust: &TrustStore, cache: &DigestCache) -> Vec<SignatureInfo> {
-    let pages = annot_pages(doc);
+    // A widget no page lists is placed by its `/P`, looked up among the pages of the same walk:
+    // walking the page tree again for each such field made the listing quadratic.
+    let (pages, page_numbers) = annot_pages(doc);
     let mut out = Vec::new();
     let mut field_values: HashSet<ObjRef> = HashSet::new();
     let (fields, whole) = walk_sig_fields(doc);
@@ -439,7 +442,8 @@ pub fn list_cached(doc: &Document, bytes: &[u8], trust: &TrustStore, cache: &Dig
             field_values.insert(v_ref);
         }
         let widget = f.widgets.first();
-        let page = widget.and_then(|(r, w)| r.and_then(|r| pages.get(&r).copied()).or_else(|| w.reference(b"P").and_then(|p| page_index(doc, p))));
+        let page = widget
+            .and_then(|(r, w)| r.and_then(|r| pages.get(&r).copied()).or_else(|| w.reference(b"P").and_then(|p| page_numbers.get(&p).copied())));
         let rect = widget
             .and_then(|(_, w)| nums(doc, w, b"Rect"))
             .filter(|r| r.len() == 4)
@@ -561,10 +565,6 @@ fn unread_fields() -> SignatureInfo {
             "This form has too many fields, or a field name too long, for PdfCraft to read them all. Any signature among the rest is not listed, so the document is treated as signed.",
         )],
     }
-}
-
-fn page_index(doc: &Document, p: ObjRef) -> Option<usize> {
-    pdfcraft_annot::page_refs(doc).ok()?.iter().position(|r| *r == p)
 }
 
 /// A widget's `/MK /R` as a quarter turn (0, 90, 180 or 270); missing, malformed or not a
