@@ -83,14 +83,18 @@
   uses natively, so `cargo clippy --workspace --all-targets -- -D warnings`
   fails with `unused import`. At `b7545a7a9` both steps are green (§4), which is
   the control. The parallel session pushed it at 10:28:56Z, so PR #6622 carries
-  that head.
-- Head before this STATUS commit: `95e2c9c97` (merge `origin/main`
-  `3a117c3c0`) on `b7545a7a9` (merge `4efcfa6ea`) on `7f25d493b`; **123 commits**
-  not in `origin/main` (`git rev-list --count origin/main..HEAD`) and **0
-  behind** it after a `git fetch origin main` that did not move the tip past
-  `3a117c3c0`; `git diff --shortstat origin/main HEAD` is **108 files changed,
-  43371 insertions(+), 202 deletions(-)**. The docs commit that carries this
-  record makes the count 124. The numbers the
+  that head. **Both defects are fixed in `69b2a6dad`** (§4, "The two red steps
+  of `95e2c9c97` fixed"), which is the local head now; the fork and the PR still
+  carry `95e2c9c97` and the push is the owner's step.
+- Head before this STATUS commit: `69b2a6dad` (the `session.rs` import fix, §4)
+  on `f7ff56373` (the docs record of the fifth and sixth merges) on
+  `95e2c9c97` (merge `origin/main` `3a117c3c0`) on `b7545a7a9` (merge
+  `4efcfa6ea`) on `7f25d493b`; **125 commits** not in `origin/main`
+  (`git rev-list --count origin/main..HEAD`) and **0 behind** it —
+  `origin/main` is still `3a117c3c0`, so no fetch moved it;
+  `git diff --shortstat origin/main HEAD` is **108 files changed, 43521
+  insertions(+), 209 deletions(-)**. The docs commit that carries this record
+  makes the count 126. The numbers the
   earlier briefs named — 85 commits, 9 behind,
   5 ahead for `199076765`, then 86/11/6 at `0c57e2271`, 94/48/14 at
   `b3732c152`, 95/48/15 at `c26867e9c`, 110/48/30 at `f48ec4754`, 113/0 at
@@ -98,38 +102,34 @@
   and 118/0 at `27438a646` — were right when they were measured; `origin/main`
   kept moving and each slice appended commits. Commits named below and in §4 by
   their pre-rebase hashes are mapped in the rebase sections of §4.
-- Delivery, as the API reports it after the parallel session's push: PR #6622's
-  `headRefOid` is **`95e2c9c97`**, the fork `copoka/pdfcraft`'s branch tip
-  (`git ls-remote fork refs/heads/feature/realtime-collaboration` returns the
-  same hash) and the local branch's head (`git status --porcelain` prints
-  nothing), so the fork, the PR and the clone carry one head. `gh pr view 6622`
-  reads `mergeable: MERGEABLE`, `mergeStateStatus: UNSTABLE`, `baseRefOid`
+- Delivery, as measured now: PR #6622's `headRefOid` is still **`95e2c9c97`**
+  and so is the fork `copoka/pdfcraft`'s branch tip (`git ls-remote fork
+  refs/heads/feature/realtime-collaboration` returns that hash), unchanged
+  since the parallel PR-sweep session pushed it at 10:28:56Z. The local branch
+  is at `69b2a6dad` (+ this docs commit) with a clean tree, so **the fork, the
+  PR and the clone no longer carry one head**: they will again when the owner
+  pushes the fix and the docs commits on top of it. `gh pr view 6622` reads
+  `mergeable: MERGEABLE`, `mergeStateStatus: UNSTABLE`, `baseRefOid`
   `3a117c3c0`, not a draft, `reviewDecision` empty, `updatedAt`
-  2026-11-11T10:28:56Z. The brief's `CONFLICTING`/`DIRTY` was true for the
-  previous head `7f25d493b` (07:26:52Z): this pass read it there at 10:33Z,
-  together with the same single check (CodeRabbit, `skipped`) the earlier
-  record named. On `95e2c9c97` `/commits/95e2c9c97/check-runs` returns
-  `total_count: 1` (CodeRabbit, `skipped`) and the Actions API reports no
-  workflow run for that sha, so **no CI has run on the head** and the gate
+  2026-11-11T10:28:56Z, with one check (CodeRabbit, `skipped`) and no Actions
+  workflow run for that sha, so **no CI has run on the PR head** and the gate
   evidence is the local sweep in §4, not a CI result. Nothing was pushed by
-  this pass: `7f25d493b..95e2c9c97` went to the fork from the parallel
-  PR-sweep session at 10:28:56Z, and this agent's role denies `git push*`. This
-  record is the docs commit made after the measurement above (one file, docs
-  only); the fork and the PR stay at `95e2c9c97` until the owner pushes again,
-  as with every docs pass before. The PR body (from `pdfcraft/PR-DRAFT.md`,
-  `## What` on) was brought to these facts this pass but not written to GitHub:
-  it would describe a head whose two red steps are not yet fixed.
+  this pass: this agent's role denies `git push*`, as in every pass before.
+  `pdfcraft/PR-DRAFT.md`'s delivery note and `## Tests` section were brought to
+  these facts in the same pass, still as a draft — the PR body describes the
+  pushed head until the owner publishes the new one.
 - State: implemented behind the `collab` feature (off by default). **`CI=1
-  cargo xtask ci` exits 0 on `b7545a7a9`** — all 10 steps, 156 test targets,
-  **10202 passed, 0 failed, 18 ignored** (§4, "The merges of `origin/main`
-  `4efcfa6ea` and `3a117c3c0`"). On the delivered head `95e2c9c97` the sweep stops at the first
-  step: `fmt` fails on the blank line the sixth merge left, `clippy` fails on
-  the unused `BookmarkRow` import, and the other eight steps, run one by one on
-  the same tree, pass — **10225 passed, 0 failed, 22 ignored**, `layers` 52
-  crates, `wasm32` 44, `assets` 258, `deny` and `parity` ok (§4). The 23 extra
-  tests and the 4 extra ignored ones are `3a117c3c0`'s LibreOffice work; on
-  `b7545a7a9` the totals are 175 above `b21b57b55`'s 10027/156/18, which is
-  main's thirteen commits' own tests. The sweep
+  cargo xtask ci` exits 0 on `69b2a6dad`** — all 10 steps, 155 targets as the
+  log lists them (109 `Running` + 46 `Doc-tests`), **10225 passed, 0 failed,
+  22 ignored** (§4, "The two red steps of `95e2c9c97` fixed"). That is the head
+  the fix made; the same command on the delivered `95e2c9c97` still stops at the
+  first step — `fmt` on the blank line the sixth merge left, `clippy` on the
+  unused `BookmarkRow` import — and the other eight steps pass there one by one
+  (§4), which is why the two steps and not the other eight were the task. On
+  `b7545a7a9`, the control, all ten are green with 10202 passed / 0 / 18. The
+  23 tests and the 4 extra ignored ones over that control are `3a117c3c0`'s
+  LibreOffice work; on `b7545a7a9` the totals are 175 above `b21b57b55`'s
+  10027/156/18, which is main's thirteen commits' own tests. The sweep
   needs `CRAFT_I18N_DIR` (a craft-i18n worktree at `575cfdef`, the revision
   `craft-i18n.rev` pins) and `CRAFT_FONTS_DIR` (`b076417b`): without the
   catalogs the comments test panics at `set_option("language", "de")` — an
@@ -169,19 +169,22 @@ several `/NM`, per-line quads, the caret (`5bad54c40`, §4) — the conflict-res
   to `95e2c9c97`, including the earlier rebase onto
   `origin/main` `ba28458ad` (§4, first table) and the merges of `debb826f2`,
   `92b965dba`, `ad3e6d4b8`, `d2916decb`, `4efcfa6ea` and `3a117c3c0`. Nothing
-  in the feature waits for a push any more; the docs commits on top of the
-  merges went out with the branch (`ed8d11115` in an earlier pass,
-  `95e2c9c97` this pass — see "Delivery"). The one presence item still outside
+  in the feature waits for a push any more, but the fix of the two red steps
+  does: the docs commits on top of the earlier merges went out with the branch
+  (`ed8d11115` in an earlier pass, `95e2c9c97` before this one), while
+  `69b2a6dad` and this record are local until the owner pushes them — see
+  "Delivery". The one presence item still outside
   this repository is the host page's `pdfcraft:presence` payload:
   `craft-web-host` must gain optional `page`/`selection` on its `Participant`
   (§5 p.4, §4).
 - Known gaps before production are listed in §5, the plan in §6. This pass
-  adds no feature work: it merges the upstream tip `4efcfa6ea` into the branch
-  (`b7545a7a9`, §4) and re-measures the whole sweep on it; the parallel
-  PR-sweep session merged the next tip (`3a117c3c0`, `95e2c9c97`) and pushed it
-  while that sweep was running, and this pass measured the eight remaining
-  steps there too. It corrects the delivery facts in this header and in
-  `pdfcraft/PR-DRAFT.md` and names the two red steps of the pushed head. It
+  adds no feature work: it fixes the two steps the sixth merge left red.
+  `69b2a6dad` drops the blank line and the unused `BookmarkRow` from the
+  `use crate::{…}` block in `crates/engine/src/session.rs`, with rustfmt's
+  rewrap of the list, and the whole sweep re-run on that head exits 0 — all ten
+  steps, 10225 passed (§4). It also brings the delivery facts in this header and
+  in `pdfcraft/PR-DRAFT.md` to what is true now: the fix is local, the fork and
+  the PR still carry `95e2c9c97`. It
   leaves the encrypted-PDF policy
   (§3, RFC §12), the `https`-without-a-reverse-proxy note, the in-process
   `conflict` flag and the journal tail as they were. A kill between the base
@@ -529,6 +532,66 @@ The app window "Collaboration" shows role, version/epoch, participants, errors,
 commit result, and a commit button for owner/editor.
 
 ## 4. Tests and verification
+
+### The two red steps of `95e2c9c97` fixed in `69b2a6dad`, and the sweep on it (2026-11-11, local; not pushed)
+
+The brief asked for exactly this: remove the blank line after `use crate::{` at
+`crates/engine/src/session.rs` and the unused `BookmarkRow` in the same import,
+run `CI=1 cargo xtask ci` on the `agents` host until it exits 0, commit on top of
+`f7ff56373`, update this file, and push nothing. Done in that order.
+
+- **The defect.** Both were in the hand-written import block of the sixth merge
+  (`95e2c9c97`, §4 above): a blank line at the head of the list, which stopped
+  `cargo fmt --all -- --check`, and `BookmarkRow`, which main's tree no longer
+  uses natively, which stopped `cargo clippy --workspace --all-targets -- -D
+  warnings` with `unused import: BookmarkRow --> crates/engine/src/session.rs:14:19`.
+  `BookmarkRow` occurs exactly once in the file — that import — so the name was
+  dead there and nowhere else; `crates/engine/src/bookmarks.rs` and
+  `crates/engine/src/lib.rs` keep the type and are untouched.
+- **The fix, `69b2a6dad`** (`fix(engine): repair the session.rs import block the
+  3a117c3c0 merge left`), one file, +6/−7: the blank line goes and `BookmarkRow`
+  leaves the list. Removing the name shortens the first line, so rustfmt wants
+  the list rewrapped; the resolved list is rustfmt's own output, taken from
+  `cargo fmt` on the host rather than written by hand, and `cargo fmt --all --
+  --check` then exits 0. No other line, file or behaviour changes — the commit's
+  diff is that hunk alone.
+- **The sweep on `69b2a6dad`,** first run, no retries, on host `agents` (rustc
+  1.99.1 `58cf8f9c3`, `CARGO_BUILD_JOBS=12`,
+  `CRAFT_I18N_DIR=/home/markin/build/i18n-575` — craft-i18n `575cfdef`, the
+  revision `craft-i18n.rev` pins — and
+  `CRAFT_FONTS_DIR=/home/markin/craft-fonts` at `b076417b`, both verified on the
+  host before the run): the host printed `head=69b2a6dad tree=0` before it, and
+  **`CI_EXIT=0`, `CI: all 10 steps passed`**.
+
+  | Step | Result |
+  |---|---|
+  | `fmt` | passed — `cargo fmt --all -- --check` |
+  | `clippy` | passed — `cargo clippy --workspace --all-targets -- -D warnings` |
+  | `cli-no-default-features` | passed — `cargo check -p pdfcraft-cli --no-default-features` |
+  | `test` | passed — **10225 passed, 0 failed, 22 ignored** |
+  | `i18n-report` | passed — 5071 English strings, 0 catalog rows skipped |
+  | `layers` | passed — 52 crates, no layering violation |
+  | `wasm` | passed — wasm32, 44 crates ok |
+  | `license-check` | passed — `assets: ok (258 repository assets, 7 bundled by dependencies, 22 fetched at build time)` |
+  | `deny` | passed — `advisories ok, bans ok, licenses ok, sources ok` |
+  | `parity` | passed — 858 features (835 counted, 23 na), 56.8% shipped / 64.1% weighted; P0 90.5% shipped / 94.6% weighted |
+
+  The totals are the same as the eight-steps-one-by-one measurement on
+  `95e2c9c97` (10225 / 0 / 22), as they must be: the fix touches an import, not
+  a test. The target count is the log's own: 109 `Running` blocks and 46
+  `Doc-tests` blocks, 155 together — the earlier record's "156 targets" was its
+  own split of the same suite (108 + 48) and is not contradicted here, only
+  counted differently. `cargo-nextest` is still not installed on the host, so
+  `test` is `cargo test`. `cargo metadata --locked` exits 0 and the host's tree
+  was clean.
+- **Nothing was pushed.** The fork and PR #6622 stay at `95e2c9c97` (§ header,
+  "Delivery"); `git ls-remote fork` was checked after the commit and still
+  returns `95e2c9c97`. The push of `69b2a6dad` and the docs commits on top of it
+  is the owner's step.
+- **What this does not change.** The red result recorded in the section below
+  for `95e2c9c97` stands as the measurement of *that* head; the two failing
+  steps there are the same two this commit fixes. The eight other steps were not
+  re-run on `95e2c9c97` here.
 
 ### The merges of `origin/main` `4efcfa6ea` and `3a117c3c0`, and the sweeps on `b7545a7a9` and `95e2c9c97` (2026-11-11, local; the second head was pushed by a parallel session)
 
@@ -4065,17 +4128,18 @@ selections are done (§4, `b4e9179d8`); what remains of them is listed in §5 p.
 
 ### 6.6 Cleanup and submission
 
-- **Current delivery state (2026-11-11).** Head `ed8d11115` — the docs record
-  this bullet revises — is the fork's branch tip, the PR's `headRefOid` and the
-  local HEAD as measured (tree clean, `git ls-remote fork` = `git rev-parse
-  HEAD` = `ed8d11115`, so zero commits were unpublished). `mergeable:
-  MERGEABLE`, `mergeStateStatus: UNSTABLE`, `reviewDecision` empty; the only
-  check is CodeRabbit `skipped` at 03:34:25Z, and the five workflow runs on the
-  head are all `action_required` with zero jobs, so nothing has run there. The
-  branch is 120 commits over merge-base `d2916decb` (108 files, +43354/−209)
-  and 1 behind `origin/main` (`41d959d94`, #2961) — recorded, not re-merged,
-  and the gates were not re-run. This revision is one docs file, local until
-  the owner pushes it, as in every docs pass; the "not pushed" notes in the
+- **Current delivery state (2026-11-11).** The local head is `69b2a6dad` — the
+  `session.rs` import fix (§4) — plus the docs commit that carries this record;
+  the tree is clean. The fork's branch tip and PR #6622's `headRefOid` are still
+  `95e2c9c97`, as `git ls-remote fork` and `gh pr view 6622` both read after the
+  commit, so **two commits wait for the owner's push** and the PR describes a
+  head that fails `fmt` and `clippy` until then. `mergeable: MERGEABLE`,
+  `mergeStateStatus: UNSTABLE`, `baseRefOid` `3a117c3c0`, not a draft,
+  `reviewDecision` empty, one check (CodeRabbit, `skipped`), no workflow run for
+  that sha. The branch is **125 commits** not in `origin/main` (0 behind it,
+  `origin/main` still `3a117c3c0`) and `git diff --shortstat origin/main HEAD`
+  is 108 files, +43521/−209 before this docs commit. **`CI=1 cargo xtask ci`
+  exits 0 on `69b2a6dad`**, all ten steps (§4). The "not pushed" notes in the
   older bullets below describe their own pass — they are history, not the
   current state.
 - **The `deny` step's advisory is closed** (`f31f00449`, 2026-11-10, not
