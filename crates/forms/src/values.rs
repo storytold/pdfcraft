@@ -224,7 +224,7 @@ pub fn recalculate_with(doc: &mut Document, scripts: &mut dyn Scripts) -> Result
             // field to the event, so that value is the result unless the script also assigned
             // `event.value`, even the value it already had.
             let own = r.changes.iter().find(|c| c.name == f.name).and_then(|c| c.value.as_ref()).map(|v| v.first().cloned().unwrap_or_default());
-            scripting::apply_changes(doc, &r.changes, &f.name)?;
+            scripting::apply_changes(doc, &r.changes, &f.name, scripts)?;
             if !r.changes.is_empty() {
                 all = fields(doc);
             }
@@ -262,7 +262,8 @@ pub fn recalculate_with(doc: &mut Document, scripts: &mut dyn Scripts) -> Result
                     _ => {}
                 }
             })?;
-            redraw(doc, &f, std::slice::from_ref(&v), scripts)?;
+            let fresh = all.iter().find(|field| field.obj == obj).cloned().unwrap_or_else(|| f.clone());
+            redraw(doc, &fresh, std::slice::from_ref(&v), scripts)?;
             if let Some(target) = all.iter_mut().find(|x| x.obj == obj) {
                 target.value = vec![v];
             }
@@ -305,17 +306,19 @@ pub(crate) fn write_value(doc: &mut Document, f: &Field, value: &FieldValue, scr
             // Keystroke (on commit) and Validate, as Acrobat runs them before accepting a value.
             let t = &f.actions.keystroke(&f.name, t).map_err(FormError::Format)?;
             af::validate(&f.actions.validate, t).map_err(FormError::Invalid)?;
-            let t = &scripting::accept(doc, f, t, scripts)?;
+            let (t, refresh_field) = scripting::accept(doc, f, t, scripts)?;
             let shadow = t.is_empty() && crate::author::ancestor_sets(doc, f.obj, b"V");
             doc.update_dict(f.obj, |d| {
                 if t.is_empty() && !shadow {
                     d.remove(b"V");
                 } else {
-                    d.set(b"V".to_vec(), PdfString::text(t));
+                    d.set(b"V".to_vec(), PdfString::text(&t));
                 }
                 d.remove(b"RV");
             })?;
-            redraw(doc, f, std::slice::from_ref(t), scripts)
+            let current =
+                if refresh_field { fields(doc).into_iter().find(|current| current.obj == f.obj).unwrap_or_else(|| f.clone()) } else { f.clone() };
+            redraw(doc, &current, std::slice::from_ref(&t), scripts)
         }
         (FieldKind::CheckBox | FieldKind::Radio, FieldValue::Widget(i)) => {
             // A button can be read-only on its own (its own `/Ff`), though the field isn't.
@@ -471,6 +474,11 @@ pub(crate) fn write_value(doc: &mut Document, f: &Field, value: &FieldValue, scr
         (FieldKind::Signature, _) => invalid(format!("{:?} is a signature field; sign it with Fill & Sign or a digital ID", f.name)),
         (kind, v) => invalid(format!("{:?} is a {kind:?} field and can't take {v:?}", f.name)),
     }
+}
+
+/// Redraw a calculated value without running input validation or calculation again.
+pub(crate) fn redraw_calculated_value(doc: &mut Document, f: &Field, values: &[String], scripts: &mut dyn Scripts) -> Result<(), FormError> {
+    redraw(doc, f, values, scripts)
 }
 
 /// A list box's first visible row (`/TI`) before and after scrolling so the `picked` positions of

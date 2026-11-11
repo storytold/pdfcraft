@@ -74,6 +74,7 @@ impl Automation {
             "text_extract" => self.text_extract(&a)?,
             "text_word_count" => self.text_word_count(&a)?,
             "text_find" => self.text_find(&a)?,
+            "text_replace" => self.text_replace(&a)?,
             "page_rotate" => {
                 let degrees = a.int("degrees")?;
                 if degrees % 90 != 0 {
@@ -730,6 +731,7 @@ impl Automation {
             "doc_hidden_info" => self.doc_hidden_info(&a)?,
             "printers" => self.printers()?,
             "printer_options" => self.printer_options(&a)?,
+            "printer_papers" => self.printer_papers(&a)?,
             "link_list" => self.link_list(&a)?,
             "link_open" => self.link_open(&a)?,
             "link_add" => self.link_add(&a)?,
