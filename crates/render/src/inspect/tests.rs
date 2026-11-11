@@ -1956,3 +1956,39 @@ fn inspection_keeps_no_private_page_data() {
     };
     assert_eq!(report(with), report(without), "what inspection reports does not change");
 }
+
+/// A field with several widgets reports an action on any of them, not only the first, and so does
+/// the document's JavaScript flag.
+#[test]
+fn a_field_reports_an_action_on_a_later_widget() {
+    let pdf = "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] >> >> endobj\n\
+             2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+             3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >> endobj\n\
+             4 0 obj << /FT /Tx /T (f) /Kids [5 0 R 6 0 R] >> endobj\n\
+             5 0 obj << /Subtype /Widget /Rect [0 0 1 1] >> endobj\n\
+             6 0 obj << /Subtype /Widget /Rect [0 0 1 1] /A << /S /JavaScript /JS (app.alert(1)) >> >> endobj\n\
+             trailer << /Root 1 0 R >>\n%%EOF";
+    let doc = Document::load_mem(pdf.as_bytes()).expect("loads");
+    let page = PageInfo { width: 200.0, height: 200.0, crop: [0.0, 0.0, 200.0, 200.0], rotation: 0, label: String::new() };
+    let mut info = DocInfo { pages: vec![page], ..Default::default() };
+    Inspector::new(&doc).fill(&mut info);
+    assert!(info.fields.iter().any(|f| f.name == "f" && f.has_actions), "{:?}", info.fields);
+    assert!(info.has_javascript);
+}
+
+/// A shared descendant first reached at the depth limit (its action-bearing child cut) is read
+/// again from a shallower path, so the action is still found.
+#[test]
+fn an_action_below_a_shared_field_first_met_deep_is_found_from_a_shallower_path() {
+    // 1 is the root, 2..=32 a chain of 31 fields, 33 the shared field, 34 holds the action,
+    // 35 a short path to 33.
+    let mut bodies = vec!["<< /Kids [2 0 R 35 0 R] >>".to_string()];
+    for i in 2..=32 {
+        bodies.push(format!("<< /Kids [{} 0 R] >>", i + 1));
+    }
+    bodies.push("<< /Kids [34 0 R] >>".into());
+    bodies.push("<< /A << /S /JavaScript /JS (x) >> >>".into());
+    bodies.push("<< /Kids [33 0 R] >>".into());
+    let doc = Document::load_mem(&pdf_of(&bodies)).expect("loads");
+    assert!(Inspector::new(&doc).has_action(&Object::Reference((1, 0)), 0));
+}

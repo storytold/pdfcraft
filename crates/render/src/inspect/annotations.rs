@@ -358,23 +358,26 @@ impl<'a> Inspector<'a> {
     /// Whether `o` or one of its descendants under `/Kids` carries an action (`/A` or `/AA`). It
     /// walks the same tree `field` does, bounded the same way: a field left out of the listing for
     /// want of text allowance can still have its action on a widget several levels down.
-    fn has_action(&self, o: &Object, depth: u32) -> bool {
-        self.has_action_seen(o, depth, &mut HashSet::new())
+    pub(super) fn has_action(&self, o: &Object, depth: u32) -> bool {
+        self.has_action_seen(o, depth, &mut HashMap::new())
     }
 
-    /// The walk behind [`Self::has_action`]. Each indirect descendant is read once: a field tree
-    /// whose `/Kids` repeat the same objects would otherwise be walked exponentially.
-    fn has_action_seen(&self, o: &Object, depth: u32, seen: &mut HashSet<ObjectId>) -> bool {
+    /// The walk behind [`Self::has_action`]. Each indirect descendant is read again only from a
+    /// shallower depth than before (the depth limit may have cut its subtree): a field tree whose
+    /// `/Kids` repeat the same objects would otherwise be walked exponentially, and this reads each
+    /// object at most once per depth.
+    fn has_action_seen(&self, o: &Object, depth: u32, seen: &mut HashMap<ObjectId, u32>) -> bool {
         if depth > 32 {
             return false;
         }
-        if let Object::Reference(id) = o
-            && !seen.insert(*id)
-        {
-            return false;
+        if let Object::Reference(id) = o {
+            if seen.get(id).is_some_and(|&first| first <= depth) {
+                return false;
+            }
+            seen.insert(*id, depth);
         }
         let Some(d) = self.dict(o) else { return false };
-        if self.carries_action(&d) {
+        if self.carries_action(d) {
             return true;
         }
         let kids = match d.get(b"Kids").map(|k| self.resolve(k)) {
@@ -389,7 +392,7 @@ impl<'a> Inspector<'a> {
     /// `/A` is an action when it carries `/S`; an `/AA` is one when an event maps to such an action.
     fn carries_action(&self, d: &Dictionary) -> bool {
         let action = |o: &Object| matches!(self.resolve(o), Object::Dictionary(a) if a.get(b"S").is_ok());
-        [&b"A"[..], &b"AA"[..]].iter().any(|k| match d.get(*k) {
+        [&b"A"[..], &b"AA"[..]].iter().any(|k| match d.get(k) {
             Ok(o) => match self.resolve(o) {
                 Object::Dictionary(x) => x.get(b"S").is_ok() || x.iter().any(|(_, v)| action(v)),
                 Object::Array(a) => a.iter().any(action),
@@ -471,24 +474,24 @@ impl<'a> Inspector<'a> {
                 let mut shown = Vec::new();
                 let mut dropped = false;
                 for x in a {
-                    match self.resolve(x) {
-                        Object::String(bytes, _) => match self.field_spend(bytes, text_string) {
-                            Some(text) => shown.push(text),
-                            None => dropped = true,
-                        },
+                    let text = match self.resolve(x) {
+                        Object::String(bytes, _) => self.field_spend(bytes, text_string),
                         // A name entry (`/V [/Opt1 (b)]`) is a selection too, as the forms reader
                         // takes it; leaving it out reported a partial selection as complete.
-                        Object::Name(n) => match self.field_spend(n, |n| String::from_utf8_lossy(n).into_owned()) {
-                            Some(text) => shown.push(text),
-                            None => dropped = true,
-                        },
-                        _ => {}
+                        Object::Name(n) => self.field_spend(n, |n| String::from_utf8_lossy(n).into_owned()),
+                        _ => continue,
+                    };
+                    // The ", " between selections is charged to the allowance like the text.
+                    match text {
+                        Some(text) if shown.is_empty() || self.field_charge(2) => shown.push(text),
+                        _ => dropped = true,
                     }
                 }
                 // A selected value the allowance could not hold shows as an omission rather than
-                // as part of a complete selection.
+                // as part of a complete selection (its few bytes are charged, fit or not).
                 let mut value = shown.join(", ");
                 if dropped {
+                    self.field_charge(5);
                     if !value.is_empty() {
                         value.push_str(", ");
                     }
@@ -502,7 +505,9 @@ impl<'a> Inspector<'a> {
         // The widget is either this dict (merged field/widget) or its first kid.
         let widget = if d.get(b"Rect").is_ok() { Some(d) } else { kids.first().and_then(|k| self.dict(k)) };
         let page = widget.and_then(|w| w.get(b"P").ok()).and_then(|p| self.page_of(p)).or_else(|| self.find_widget_page(o, kids));
-        let has_actions = self.carries_action(d) || widget.is_some_and(|w| self.carries_action(w));
+        let has_actions = self.carries_action(d)
+            || widget.is_some_and(|w| self.carries_action(w))
+            || kids.iter().any(|k| self.dict(k).is_some_and(|w| self.carries_action(w)));
         let rect = widget.and_then(|w| w.get(b"Rect").ok()).map(|r| rect4(self.resolve(r)));
         out.push(Field { name: full, kind, value, page, tooltip: self.field_text(d, b"TU"), has_actions, rect });
     }
