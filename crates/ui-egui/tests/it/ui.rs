@@ -1328,6 +1328,48 @@ fn choosing_a_workspace_ends_the_hosts_mode() {
     assert_eq!(app.mode, Mode::AllTools, "the user's default, not the host's Sign");
 }
 
+/// `?mode=sign` opens Fill & Sign beside the document, as the mode bar's E-Sign does; a panel
+/// already chosen (`--tool`, `--left`) stays.
+#[test]
+fn a_host_mode_opens_its_workspace_panel() {
+    use pdfcraft_ui_egui::{LeftPanel, Mode};
+    for (value, panel) in [
+        ("sign", LeftPanel::Tool("fill_sign")),
+        ("edit", LeftPanel::Tool("edit")),
+        ("convert", LeftPanel::Tool("export")),
+        ("read", LeftPanel::AllTools),
+    ] {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_in_mode(value).unwrap();
+        app.open_bytes("doc.pdf", None, FIXTURE.to_vec()).unwrap();
+        assert_eq!(app.left, panel, "{value}");
+    }
+    let mut app = PdfCraftApp::new();
+    app.set_option("tool", "export").unwrap();
+    app.open_in_mode("sign").unwrap();
+    app.open_bytes("doc.pdf", None, FIXTURE.to_vec()).unwrap();
+    assert_eq!((app.mode, app.left), (Mode::Sign, LeftPanel::Tool("export")));
+}
+
+/// A tool panel's "Back to all tools" is the user's choice too: it ends the host's `?mode=`.
+#[test]
+fn back_to_all_tools_ends_the_hosts_mode() {
+    use pdfcraft_ui_egui::{LeftPanel, Mode};
+    let mut h = harness(|app| {
+        app.default_mode = Mode::AllTools;
+        app.open_in_mode("sign").unwrap();
+        app.open_bytes("first.pdf", None, FIXTURE.to_vec()).unwrap();
+    });
+    h.run_steps(3);
+    assert_eq!((h.state().mode, h.state().left), (Mode::Sign, LeftPanel::Tool("fill_sign")));
+    h.get_by_label("Back to all tools").click();
+    h.run_steps(3);
+    assert_eq!((h.state().mode, h.state().left), (Mode::AllTools, LeftPanel::AllTools));
+    h.state_mut().open_bytes("second.pdf", None, FIXTURE.to_vec()).unwrap();
+    assert_eq!(h.state().mode, Mode::AllTools, "the user's default, not the host's Sign");
+}
+
 /// `?mode=read` opens with the panes closed, as Read mode does when the user enters it: a right
 /// panel restored from preferences comes back when Read mode is left.
 #[test]

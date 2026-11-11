@@ -138,6 +138,13 @@ impl PdfCraftApp {
         }
     }
 
+    /// A tool panel's "Back to all tools": the user's own choice of workspace, so it goes through
+    /// [`Self::switch_mode`] and ends a host's `?mode=` as the mode bar does.
+    pub(crate) fn back_to_all_tools(&mut self) {
+        self.left = LeftPanel::AllTools;
+        self.switch_mode(Mode::AllTools, false);
+    }
+
     /// Switches workspace because the user chose to (mode bar, Read mode command). Entering Read
     /// mode closes the right panel, as Acrobat's Read mode hides its panes, and leaving it reopens
     /// that panel. The rail stays in Read mode, and its buttons open panels there too (#932).

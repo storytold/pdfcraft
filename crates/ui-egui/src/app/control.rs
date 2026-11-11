@@ -22,10 +22,19 @@ impl PdfCraftApp {
         }
         // Read mode starts with the panes closed, as the user's own switch to it does: a right
         // panel restored from preferences waits until Read mode is left.
-        if Mode::parse(&name) == Some(Mode::Read) && self.mode != Mode::Read {
+        let mode = Mode::parse(&name);
+        if mode == Some(Mode::Read) && self.mode != Mode::Read {
             self.right_before_read = self.right.take();
         }
-        self.set_option("mode", &name)
+        self.set_option("mode", &name)?;
+        // The workspace's own tool panel, as the mode bar opens it (Sign → Fill & Sign), unless a
+        // panel was already chosen (`--tool`, `--left`): only the untouched All tools list moves.
+        if let Some(mode) = mode
+            && self.left == LeftPanel::AllTools
+        {
+            self.left = crate::panels::organize_panel::workspace_panel(mode);
+        }
+        Ok(())
     }
 
     /// Apply a named view option (`--page 3`, `--panel bookmarks`, `--theme dark`, …).
