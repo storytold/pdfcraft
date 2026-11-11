@@ -4038,6 +4038,8 @@ fn hidden_ocmd_policy_matches_the_default_configuration() {
         (Some("AllOn"), false, Some("not_off"), false),
         (None, false, Some("malformed_not"), true),
         (None, false, Some("malformed_without_ocgs"), true),
+        // `/VE` names the hidden group through an alias object (10 0 R is a reference to 8 0 R).
+        (None, false, Some("alias"), true),
     ];
     for (policy, malformed_policy, visibility, should_remove) in cases {
         let mut doc = one_page(
@@ -4075,9 +4077,11 @@ fn hidden_ocmd_policy_matches_the_default_configuration() {
             Some("malformed_without_ocgs") => {
                 membership.set(b"VE".to_vec(), Object::Array(vec![Object::name("UnknownOperator"), Object::Ref(ObjRef::new(8, 0))]))
             }
+            Some("alias") => membership.set(b"VE".to_vec(), Object::Array(vec![Object::name("Or"), Object::Ref(ObjRef::new(10, 0))])),
             _ => {}
         }
         doc.set(ObjRef::new(9, 0), Object::Dict(membership));
+        doc.set(ObjRef::new(10, 0), Object::Ref(ObjRef::new(8, 0)));
         let root = doc.root().unwrap();
         doc.update_dict(root, |d| {
             d.set(

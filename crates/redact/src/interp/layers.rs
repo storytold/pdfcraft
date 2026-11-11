@@ -144,6 +144,11 @@ impl<'a> Scope<'a> {
         }
         *budget -= 1;
         let reference = expression.as_ref();
+        // A reference to a reference is no listed group: the renderer rejects the alias, so it
+        // is not taken as visible because the object it names isn't hidden.
+        if reference.is_some_and(|r| matches!(*doc.get(r), Object::Ref(_))) {
+            return None;
+        }
         if let Some(r) = reference
             && !path.insert(r)
         {
@@ -193,6 +198,9 @@ impl<'a> Scope<'a> {
         *budget -= 1;
         if let Some(r) = expression.as_ref() {
             if self.hidden_layers.contains(&r) {
+                return true;
+            }
+            if matches!(*doc.get(r), Object::Ref(_)) {
                 return true;
             }
             if !path.insert(r) {
