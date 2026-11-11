@@ -535,7 +535,17 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             pdfcraft_organize::insert_blank_page(doc, *at, *width, *height)?;
         }
         Edit::SetInfo { key, value } => pdfcraft_organize::set_info(doc, key, value)?,
-        Edit::DuplicatePages { pages, at } => pdfcraft_organize::duplicate_pages(doc, pages, *at)?,
+        Edit::DuplicatePages { pages, at } => {
+            // A copy of a page cannot be tied back to the marks an earlier redaction of this edit
+            // applied: text put back under a mark would sit on the copy, unchecked. Fail closed.
+            if !cx.redaction_marks.is_empty() {
+                return Err(EditError::Invalid(
+                    "a batch that applies redactions can't also copy pages: the copies can't be checked against the marks; the document was not changed"
+                        .into(),
+                ));
+            }
+            pdfcraft_organize::duplicate_pages(doc, pages, *at)?
+        }
         Edit::ReplacePages { pages, name, bytes, src_pages } => {
             let src = crate::sources::open_source_into(name, bytes, doc)?;
             pdfcraft_organize::replace_pages(doc, pages, &src, src_pages)?;
