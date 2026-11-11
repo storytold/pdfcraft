@@ -158,27 +158,38 @@ impl Geo<'_> {
         self.hidden_images(res, depth);
         let mut gs = Gs { ctm, holes, pen };
         let mut stack: Vec<Gs> = Vec::new();
-        // The current path in device space: its subpaths, and the clip operator it carries; and
-        // the operators that make it, whose joins a stroke paints at.
+        // The current path in device space: its subpaths, and the clip operator it carries; the
+        // box of what it paints, and the last move's point, which that takes once something draws
+        // from it (`draw`); and the operators that make it, whose joins a stroke paints at.
         let mut sub: Vec<Vec<(f64, f64)>> = Vec::new();
         let mut clip: Option<bool> = None;
+        let mut drawn: Option<[f64; 4]> = None;
+        let mut moved: Option<(f64, f64)> = None;
         let mut path: Vec<Op> = Vec::new();
         for op in parse(data).ops {
             let o = op.op.as_slice();
             if matches!(o, b"m" | b"l" | b"c" | b"v" | b"y" | b"h" | b"re" | b"W" | b"W*") {
+                draw(&op, &gs.ctm, !sub.is_empty(), &mut drawn, &mut moved);
                 extend_path(&op, &gs.ctm, &mut sub, &mut clip);
                 path.push(op);
                 continue;
             }
             if matches!(o, b"S" | b"s" | b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*" | b"n") {
-                self.paint_path(o, &mut gs, &sub, &path, clip);
+                // `s`, `b` and `b*` close the last subpath: a move left waiting is then a point
+                // closed, which a round cap paints.
+                if matches!(o, b"s" | b"b" | b"b*") {
+                    drawn = union(drawn, moved.map(|(u, v)| [u, v, u, v]));
+                }
+                self.paint_path(o, &mut gs, &sub, &path, clip, drawn);
                 sub.clear();
                 clip = None;
+                (drawn, moved) = (None, None);
                 path.clear();
                 continue;
             }
             sub.clear();
             clip = None;
+            (drawn, moved) = (None, None);
             path.clear();
             match o {
                 b"q" => {
@@ -265,16 +276,9 @@ impl Geo<'_> {
         }
     }
 
-    /// A path-painting operator `o` ends the current path: report what it paints over a region,
-    /// and let an even-odd clip add its holes to `gs`.
-    fn paint_path(&mut self, o: &[u8], gs: &mut Gs, sub: &[Vec<(f64, f64)>], ops: &[Op], clip: Option<bool>) {
-        let pts: Vec<(f64, f64)> = sub.iter().flatten().copied().collect();
-        let bbox = pts.iter().fold(None, |b: Option<[f64; 4]>, &(u, v)| {
-            Some(match b {
-                None => [u, v, u, v],
-                Some(b) => [b[0].min(u), b[1].min(v), b[2].max(u), b[3].max(v)],
-            })
-        });
+    /// A path-painting operator `o` ends the current path, whose painted points lie in `bbox`:
+    /// report what it paints over a region, and let an even-odd clip add its holes to `gs`.
+    fn paint_path(&mut self, o: &[u8], gs: &mut Gs, sub: &[Vec<(f64, f64)>], ops: &[Op], clip: Option<bool>, bbox: Option<[f64; 4]>) {
         // A stroke paints around its path: half the width on each side, `√2` times that at a
         // projecting cap's corner or further at its sharpest mitered corner (`miter_reach`),
         // through the CTM, and at least `MIN_STROKE_REACH`. A fill of a
@@ -466,6 +470,42 @@ fn extend_path(op: &pdfcraft_content::Op, ctm: &Matrix, sub: &mut Vec<Vec<(f64, 
         b"W" => *clip = Some(false),
         b"W*" => *clip = Some(true),
         _ => {}
+    }
+}
+
+/// Grow `drawn`, the device-space box of what the current path paints, by one construction
+/// operator (`current`: the path has a subpath for a segment to extend, as [`extend_path`] has it).
+/// A move's point (`moved`) counts once a segment or `h` follows it, or the painting operator
+/// closes it: a subpath that is only a move paints nothing, and nor does a move the next one
+/// overrides (ISO 32000-2 §8.5.3.2, and as the renderer draws). One whose operands don't read is
+/// skipped, leaving the move before it. After `re` the renderer strokes a segment from the point
+/// before it, so a move waits across one.
+fn draw(op: &Op, ctm: &Matrix, current: bool, drawn: &mut Option<[f64; 4]>, moved: &mut Option<(f64, f64)>) {
+    let o = op.op.as_slice();
+    let nums: Vec<f64> = op.operands.iter().filter_map(Object::as_f64).collect();
+    let at = |x: f64, y: f64| ctm.apply(x, y);
+    let mut pts: Vec<(f64, f64)> = match (o, &nums[..]) {
+        (b"m", &[x, y]) => {
+            *moved = Some(at(x, y));
+            return;
+        }
+        (b"l" | b"c" | b"v" | b"y", _) if current => nums.as_chunks::<2>().0.iter().map(|p| at(p[0], p[1])).collect(),
+        (b"re", &[x, y, w, h]) => vec![at(x, y), at(x + w, y), at(x + w, y + h), at(x, y + h)],
+        _ => Vec::new(),
+    };
+    if matches!(o, b"l" | b"c" | b"v" | b"y" | b"h") {
+        pts.extend(moved.take());
+    }
+    for (u, v) in pts {
+        *drawn = union(*drawn, Some([u, v, u, v]));
+    }
+}
+
+/// The box covering `a` and `b`, either of which may be none.
+fn union(a: Option<[f64; 4]>, b: Option<[f64; 4]>) -> Option<[f64; 4]> {
+    match (a, b) {
+        (Some(a), Some(b)) => Some([a[0].min(b[0]), a[1].min(b[1]), a[2].max(b[2]), a[3].max(b[3])]),
+        (a, b) => a.or(b),
     }
 }
 

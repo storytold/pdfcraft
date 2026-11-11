@@ -189,3 +189,32 @@ fn a_fill_flat_to_the_renderer_is_taken_for_flat() {
         assert_eq!(apply(&mut doc, None).unwrap().paths_removed, gone, "{}", String::from_utf8_lossy(content));
     }
 }
+
+/// A move paints nothing until something draws from it (ISO 32000-2 §8.5.3.2, and as the renderer
+/// draws): a stroke or fill whose box reaches the mark only by a move's point stays, where the move
+/// is all its subpath, another overrides it, it ends the path, or a rectangle follows it. A move
+/// closed into a point paints one (a round cap's dot), as does a segment of no length; and after
+/// `re` the renderer strokes a segment from the move before it. A move whose operands don't read
+/// is skipped, leaving the one before it; and a path painted leaves its move to none after it.
+#[test]
+fn a_move_paints_nothing_until_something_draws_from_it() {
+    for (content, gone) in [
+        (&b"30 w 160 120 m S"[..], 0),
+        (b"30 w 160 120 m S 240 240 l S", 0),
+        (b"30 w 160 120 m 200 200 m 240 200 l S", 0),
+        (b"30 w 200 200 m 240 200 l 160 120 m S", 0),
+        (b"30 w 160 120 m 200 200 10 10 re S", 0),
+        (b"120 120 m 200 200 m 240 200 l 240 240 l f", 0),
+        (b"120 120 m f", 0),
+        (b"1 J 30 w 160 120 m h S", 1),
+        (b"1 J 30 w 160 120 m s", 1),
+        (b"1 J 30 w 160 120 m b", 1),
+        (b"1 J 30 w 160 120 m b*", 1),
+        (b"1 J 30 w 160 120 m 160 120 l S", 1),
+        (b"30 w 160 120 m 200 200 10 10 re 240 240 l S", 1),
+        (b"30 w 160 120 m /x 0 m 240 240 l S", 1),
+        (b"120 120 m 200 200 l 240 200 l f", 1),
+    ] {
+        assert_eq!(removed(content, ""), gone, "{}", String::from_utf8_lossy(content));
+    }
+}

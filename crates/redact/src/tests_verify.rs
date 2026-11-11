@@ -711,6 +711,41 @@ fn the_proof_finds_a_mitered_corner() {
     }
 }
 
+/// The proof takes a move for paint only once something draws from it: a stroke or fill that
+/// reaches the region only by a move's point leaves it clean, where the move is all its subpath,
+/// another overrides it, it ends the path, or a rectangle follows it; and so does a segment with
+/// no move before it, from which the renderer draws nothing, and a path after one painted there.
+/// A move closed into a point, a segment of no length, a segment after `re` (which the renderer
+/// strokes from the move before it), and a move after one whose operands don't read, reach it.
+#[test]
+fn the_proof_takes_a_move_for_paint_only_once_something_draws_from_it() {
+    let blank = marked_content(b"BT /F1 10 Tf 10 200 Td (Public) Tj ET", Spec::default());
+    let snap = Snapshot::capture(&blank, None).unwrap();
+    for (content, failed) in [
+        (&b"0 0 1 RG 30 w 40 125 m S"[..], false),
+        (b"0 0 1 RG 30 w 40 125 m 200 200 m 240 200 l S", false),
+        (b"0 0 1 RG 30 w 200 200 m 240 200 l 40 125 m S", false),
+        (b"0 0 1 RG 30 w 40 125 m 200 200 10 10 re S", false),
+        (b"0 0 1 rg 40 100 m 200 200 m 240 200 l 240 240 l f", false),
+        (b"0 0 1 rg 40 100 m f", false),
+        (b"0 0 1 RG 30 w 40 125 l S", false),
+        (b"0 0 1 RG 30 w 40 125 m 40 125 l n 200 200 m 240 200 l S", false),
+        (b"0 0 1 RG 1 J 30 w 40 125 m h S", true),
+        (b"0 0 1 RG 1 J 30 w 40 125 m s", true),
+        (b"0 0 1 RG 0 0 1 rg 1 J 30 w 40 125 m b", true),
+        (b"0 0 1 RG 0 0 1 rg 1 J 30 w 40 125 m b*", true),
+        (b"0 0 1 RG 1 J 30 w 40 125 m 40 125 l S", true),
+        (b"0 0 1 RG 30 w 40 125 m 200 200 10 10 re 240 240 l S", true),
+        (b"0 0 1 RG 30 w 40 125 m /x 0 m 240 240 l S", true),
+        (b"0 0 1 rg 40 100 m 200 200 l 240 200 l f", true),
+    ] {
+        let mut doc = marked_content(content, Spec::default());
+        doc.require_full_save();
+        let proof = snap.prove(&doc, None, &ProofOptions::default());
+        assert_eq!(proof.entries[0].status == Status::Failed, failed, "{}: {}", String::from_utf8_lossy(content), proof.to_text());
+    }
+}
+
 /// The proof reads a width given by reference through it: an ExtGState given by reference, the
 /// whole `/ExtGState` by reference, and `/LW` itself; and a form's own ExtGState sets the width
 /// inside it.

@@ -128,6 +128,14 @@ fn fill_box(path: [f64; 4]) -> [f64; 4] {
     [path[0] - across, path[1] - up, path[2] + across, path[3] + up]
 }
 
+/// The box covering `a` and `b`, either of which may be none.
+fn union(a: Option<[f64; 4]>, b: Option<[f64; 4]>) -> Option<[f64; 4]> {
+    match (a, b) {
+        (Some(a), Some(b)) => Some([a[0].min(b[0]), a[1].min(b[1]), a[2].max(b[2]), a[3].max(b[3])]),
+        (a, b) => a.or(b),
+    }
+}
+
 /// What processing a scope produced.
 #[derive(Default)]
 pub(crate) struct Output {
@@ -524,6 +532,9 @@ struct Walk {
     path: Vec<Op>,
     path_box: Option<[f64; 4]>,
     clip: bool,
+    /// The box of the last move's points, which the path's box takes once something draws from them
+    /// ([`Interp::construct_path`]).
+    moved: Option<[f64; 4]>,
     /// Painting operators written again under a clip that cuts the regions out: unchanged as
     /// operators, but what they paint is no longer all there.
     clipped: HashSet<usize>,
@@ -545,6 +556,7 @@ impl Walk {
             path: Vec::new(),
             path_box: None,
             clip: false,
+            moved: None,
             clipped: HashSet::new(),
             out: Output::default(),
         }
@@ -566,6 +578,7 @@ impl Walk {
             piece.ops.append(&mut self.path);
             self.path_box = None;
             self.clip = false;
+            self.moved = None;
         }
         let kept = match o {
             b"q" | b"Q" | b"cm" | b"Tf" | b"gs" | b"w" | b"j" | b"M" => {
@@ -618,7 +631,12 @@ impl Walk {
         piece.ops.extend(kept);
     }
 
-    /// Path construction: collects the operator and grows the path's bounding box.
+    /// Path construction: collects the operator and grows the path's bounding box. A move's points
+    /// count once a segment or `h` follows it, or the painting operator closes it: a subpath that
+    /// is only a move paints nothing, and nor does a move the next one overrides (ISO 32000-2
+    /// §8.5.3.2, and as the renderer draws). One whose operands don't read is skipped, leaving the
+    /// move before it. After `re` the renderer strokes a segment from the point before it, so a
+    /// move waits across one.
     fn construct_path(&mut self, op: Op) {
         let o = op.op.as_slice();
         let pts: Vec<(f64, f64)> = match o {
@@ -626,12 +644,16 @@ impl Walk {
             b"h" | b"W" | b"W*" => Vec::new(),
             _ => op.operands.iter().filter_map(Object::as_f64).collect::<Vec<_>>().as_chunks::<2>().0.iter().map(|p| (p[0], p[1])).collect(),
         };
-        for (x, y) in pts {
-            let (u, v) = self.gs.ctm.apply(x, y);
-            self.path_box = Some(match self.path_box {
-                None => [u, v, u, v],
-                Some(b) => [b[0].min(u), b[1].min(v), b[2].max(u), b[3].max(v)],
-            });
+        let grown = pts.into_iter().map(|(x, y)| self.gs.ctm.apply(x, y)).fold(None, |b, (u, v)| union(b, Some([u, v, u, v])));
+        if o == b"m" {
+            if grown.is_some() {
+                self.moved = grown;
+            }
+        } else {
+            if matches!(o, b"l" | b"c" | b"v" | b"y" | b"h") {
+                self.path_box = union(self.path_box, self.moved.take());
+            }
+            self.path_box = union(self.path_box, grown);
         }
         self.clip |= matches!(o, b"W" | b"W*");
         self.path.push(op);
@@ -640,13 +662,16 @@ impl Walk {
     /// A painting operator ends the path; one under a region is removed (or kept as a clip).
     fn paint_path(&mut self, scope: &mut Scope<'_>, op: Op, piece: &mut Piece) {
         let body = std::mem::take(&mut self.path);
-        let bbox = self.path_box.take();
-        let clips = std::mem::replace(&mut self.clip, false);
         let o = op.op.as_slice();
+        // `s`, `b` and `b*` close the last subpath: a move left waiting is then a point closed, which
+        // a round cap paints.
+        let closes = matches!(o, b"s" | b"b" | b"b*");
+        let moved = self.moved.take();
+        let bbox = if closes { union(self.path_box.take(), moved) } else { self.path_box.take() };
+        let clips = std::mem::replace(&mut self.clip, false);
         let strokes = matches!(o, b"S" | b"s" | b"B" | b"B*" | b"b" | b"b*");
         // A stroke paints around its path: a line with no height under a region, or a thick one
         // beside it, paints there. So does a fill of a path with no height or width.
-        let closes = matches!(o, b"s" | b"b" | b"b*");
         let paints = bbox.map(|b| if strokes { self.stroke_box(b, &body, closes) } else { fill_box(b) });
         let hit = scope.mode == Mode::Apply && o != b"n" && paints.is_some_and(|b| scope.hits(b));
         if !hit {
