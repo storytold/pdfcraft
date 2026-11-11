@@ -245,7 +245,11 @@ fn the_form_a_kept_type3_glyph_draws_is_walked_within_the_allowance_of_a_page() 
         mark(&mut doc, 0, &[[9.0, 95.0, 14.9, 110.0]], "");
         let out = apply(&mut doc, None);
         if refused {
-            assert!(matches!(out, Err(RedactError::Cos(pdfcraft_cos::CosError::Filter(_)))), "forms of {size} bytes each: {out:?}");
+            // The font's forms are cleaned for the document, not for one page.
+            assert!(
+                matches!(&out, Err(RedactError::Refused(reason)) if reason.starts_with("content and forms go past what one page may read")),
+                "forms of {size} bytes each: {out:?}"
+            );
         } else {
             assert_eq!(out.unwrap().glyphs, 1, "forms of {size} bytes each");
         }
@@ -740,7 +744,10 @@ fn a_page_s_appearances_share_one_decoded_byte_allowance() {
     ]);
     mark(&mut doc, 0, &[[9.0, 95.0, 14.9, 110.0]], "");
     let refused = apply(&mut doc, None);
-    assert!(refused.is_err(), "two appearances past the page's decoded-byte allowance together were read in full: {refused:?}");
+    assert!(
+        matches!(&refused, Err(RedactError::PageRefused { page: 1, reason }) if reason.starts_with("content and forms go past what one page may read")),
+        "two appearances past the page's decoded-byte allowance together were read in full: {refused:?}"
+    );
 }
 
 /// The appearances are read within what the page's content left of the page's allowance, not

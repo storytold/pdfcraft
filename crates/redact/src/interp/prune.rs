@@ -313,13 +313,14 @@ pub(crate) fn unlink_doomed(doc: &mut Document, doomed: &[ObjRef], retired_prope
             continue;
         }
         let mut contents = Vec::with_capacity(users.len());
+        // Which page each content is, where the page tree lists it.
         let mut numbers = Vec::with_capacity(users.len());
         for user in &users {
             let page = doc.get(*user).as_dict().cloned().unwrap_or_default();
-            let at = index.get(user).copied().unwrap_or(0);
+            let at = index.get(user).copied();
             // A page whose content cannot be read may still draw the name: fail closed.
-            contents.push(page_streams(doc, &page, at)?.1);
-            numbers.push(at + 1);
+            contents.push(page_streams(doc, &page, at.unwrap_or(0))?.1);
+            numbers.push(at.map(|at| at + 1));
         }
         let mut pruned = false;
         // What each page draws through this dictionary, worked out once for all the names.
@@ -332,7 +333,15 @@ pub(crate) fn unlink_doomed(doc: &mut Document, doomed: &[ObjRef], retired_prope
                     xo.remove(&n);
                     pruned = true;
                 }
-                None => return Err(RedactError::Residue(1)),
+                // A page sharing these resources draws through them forms that can't all be read.
+                None => {
+                    let reason = "a form it draws through resources shared with what was removed can't all be read".to_string();
+                    let page = drawn.iter().zip(&numbers).find(|((_, unknown), _)| *unknown).and_then(|(_, page)| *page);
+                    return Err(match page {
+                        Some(page) => RedactError::PageRefused { page, reason },
+                        None => RedactError::Refused(reason),
+                    });
+                }
             }
         }
         if pruned {
@@ -353,13 +362,13 @@ pub(crate) fn unlink_doomed(doc: &mut Document, doomed: &[ObjRef], retired_prope
 /// Retire only properties removed from a rewritten scope, preserving names still used by any
 /// content sharing this holder. Different pages' streams must never be concatenated together.
 /// `pages` are the (1-based) pages whose content `contents` are, in order, named when theirs
-/// refuses; a form's content has none.
+/// refuses; a form's content has none, nor a page the page tree doesn't list.
 fn prune_retired_properties(
     doc: &Document,
     res: &mut Dict,
     names: &[Vec<u8>],
     contents: &[Vec<Vec<u8>>],
-    pages: &[usize],
+    pages: &[Option<usize>],
 ) -> Result<bool, RedactError> {
     if names.is_empty() {
         return Ok(false);
@@ -367,8 +376,8 @@ fn prune_retired_properties(
     let mut used = HashSet::new();
     for (i, content) in contents.iter().enumerate() {
         // Each is one page's content or one form's, with the allowance of a page.
-        let ops = resource_ops(doc, &mut DecodeBudget::page(), res, content).map_err(|e| match pages.get(i) {
-            Some(&page) => e.on_page(page),
+        let ops = resource_ops(doc, &mut DecodeBudget::page(), res, content).map_err(|e| match pages.get(i).copied().flatten() {
+            Some(page) => e.on_page(page),
             None => e,
         })?;
         for op in ops {
@@ -519,7 +528,8 @@ pub(crate) fn resource_ops(doc: &Document, budget: &mut DecodeBudget, res: &Dict
             && s.dict.name(b"Subtype") == Some(b"Form")
             && s.dict.get(b"Resources").is_none_or(|r| doc.resolve(r).as_dict().is_none())
         {
-            let data = budget.decode(&doc.with_direct_parms(s))?;
+            let data =
+                budget.decode(&doc.with_direct_parms(s)).map_err(|e| if budget.exhausted() { RedactError::past_allowance(e) } else { e.into() })?;
             let mut read = pdfcraft_content::ops(&data);
             ops.extend(read.by_ref().take((MAX_OPS + 1).saturating_sub(ops.len())));
             // `seen` gains at most one form for each `Do` in `ops`, so this bounds it too.

@@ -581,7 +581,9 @@ pub(crate) fn prune_type3_from_resources(
             // only in its turn, so they are never all held at once.
             for r in resourceless_appearances(doc, page) {
                 let Object::Stream(s) = &*doc.get(r) else { continue };
-                let data = budget.decode(&doc.with_direct_parms(s))?;
+                let data = budget
+                    .decode(&doc.with_direct_parms(s))
+                    .map_err(|e| if budget.exhausted() { RedactError::past_allowance(e) } else { e.into() })?;
                 let more = crate::interp::resource_ops(doc, budget, res, std::slice::from_ref(&data))?;
                 if ops.len().saturating_add(more.len()) > 2_000_000 {
                     return Err(RedactError::Refused(

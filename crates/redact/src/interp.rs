@@ -1155,7 +1155,7 @@ fn xobject(
                 // verification counts the form as content that may remain.
                 Err(e) if scope.budget.exhausted() => {
                     if scope.mode == Mode::Apply {
-                        out.error = Some(e.into());
+                        out.error = Some(RedactError::past_allowance(e));
                     } else if scope.everywhere() {
                         scope.layer_blocks += 1;
                     } else {

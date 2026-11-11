@@ -57,3 +57,44 @@ fn the_type3_cleanup_names_the_page_it_refuses() {
     let res = "/Font << /F1 5 0 R /T3 10 0 R >> /ExtGState << /GS1 << /SMask << /S /Luminosity /G 9 0 R >> >> >>";
     refuses_page_two(second_page_hidden(b"/GS1 gs", res, vec![group, font]), "a soft mask or form without resources of its own has bytes");
 }
+
+/// A page whose forms go past what one page may read is refused, named, by Apply Redactions and by
+/// Remove Hidden Information: here it draws a form more often than the page may enter forms.
+#[test]
+fn a_page_past_what_it_may_read_is_named() {
+    let many = [b"BT /F1 10 Tf 20 260 Td (SECRET) Tj ET ".as_slice(), &b"/Fm Do ".repeat(pdfcraft_cos::MAX_PAGE_FORMS + 1)].concat();
+    let page = || one_page(&many, "/XObject << /Fm 7 0 R >>", vec![stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300]", b"0 0 m")]);
+    let past = |error: &RedactError| {
+        matches!(error, RedactError::PageRefused { page: 1, reason }
+            if reason == &format!("content and forms go past what one page may read (the page draws more than {} form XObjects)", pdfcraft_cos::MAX_PAGE_FORMS))
+    };
+    let mut doc = page();
+    mark(&mut doc, 0, &[[0.0, 250.0, 300.0, 280.0]], "");
+    let applied = apply(&mut doc, None).map(|_| ());
+    assert!(applied.as_ref().is_err_and(past), "{applied:?}");
+    let removed = remove_hidden(&mut page(), &[Hidden::HiddenText]).map(|_| ());
+    assert!(removed.as_ref().is_err_and(past), "{removed:?}");
+}
+
+/// Pages sharing a resource dictionary with an image a mark removed: the second draws, through
+/// the shared resources, a form that doesn't decode, so whether it still draws the image can't be
+/// told. The refusal names the second page, and doesn't say anything was found under the mark.
+#[test]
+fn a_page_sharing_resources_whose_forms_can_t_be_read_is_named() {
+    let mut doc = pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R 9 0 R] /Count 2 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources 11 0 R >>".to_vec(),
+        stream("", b"q 50 0 0 50 20 230 cm /Im1 Do Q"),
+        b"null".to_vec(),
+        b"null".to_vec(),
+        stream("/Type /XObject /Subtype /Image /Width 16 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", b"REDIMGONECOVERED"),
+        stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Filter /UnsupportedForTheTest", b"opaque"),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 10 0 R /Resources 11 0 R >>".to_vec(),
+        stream("", b"/FmBad Do"),
+        b"<< /XObject << /Im1 7 0 R /FmBad 8 0 R >> >>".to_vec(),
+    ]);
+    mark(&mut doc, 0, &[[0.0, 200.0, 300.0, 300.0]], "");
+    let applied = apply(&mut doc, None).map(|_| ());
+    assert!(matches!(&applied, Err(RedactError::PageRefused { page: 2, reason }) if reason.contains("can't all be read")), "{applied:?}");
+}

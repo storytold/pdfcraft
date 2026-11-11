@@ -134,6 +134,16 @@ pub enum RedactError {
 }
 
 impl RedactError {
+    /// The refusal of content and forms that go past what one page may read, from what the page's
+    /// `DecodeBudget` said.
+    pub(crate) fn past_allowance(error: pdfcraft_cos::CosError) -> Self {
+        let detail = match error {
+            pdfcraft_cos::CosError::Filter(detail) => detail,
+            other => other.to_string(),
+        };
+        RedactError::Refused(format!("content and forms go past what one page may read ({detail})"))
+    }
+
     /// This error as met while cleaning page `page` (1-based): a refusal names the page.
     pub(crate) fn on_page(self, page: usize) -> Self {
         match self {
