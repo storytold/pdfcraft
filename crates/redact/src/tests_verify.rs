@@ -979,6 +979,18 @@ fn the_proof_skips_an_operator_of_the_wrong_type() {
     }
 }
 
+/// A lone `-` is the number 0 to the proof as to the renderer: after `70 Tc - Tc` the B stands
+/// beside the A, outside the region, not 70 points on, inside it.
+#[test]
+fn the_proof_reads_a_lone_minus_as_zero() {
+    let blank = marked_content(b"BT /F1 10 Tf 10 200 Td (Public) Tj ET", Spec::default());
+    let snap = Snapshot::capture(&blank, None).unwrap();
+    let mut doc = marked_content(b"BT /F1 10 Tf -60 100 Td 70 Tc - Tc (AB) Tj ET", Spec::default());
+    doc.require_full_save();
+    let proof = snap.prove(&doc, None, &ProofOptions::default());
+    assert_ne!(proof.entries[0].status, Status::Failed, "{}", proof.to_text());
+}
+
 /// The proof reads a path's points from the end too: a square under the region, its points after
 /// a surplus number, still paints there.
 #[test]

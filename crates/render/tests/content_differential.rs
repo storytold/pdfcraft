@@ -279,7 +279,37 @@ fn both_parsers_read_a_doubled_minus_as_one_number() {
     assert_eq!(pdfcraft_content::parse(data).skipped, 0, "--280 is read as one number, not recovered from -280");
 }
 
+/// A lone sign is a number to the renderer: up to two signs with no digit after them are 0 when
+/// one is a minus, as PDF.js reads a lone `-` (its bugs 1753983 and 1953099, the second before a
+/// show-text string).
+/// The content crate skipped such a token, so `3 Tr - Tr` kept mode 3 where the renderer fills,
+/// and `0 - (a) "` lost the operand the renderer shows `a` with. A `+` or `++` alone is no number:
+/// the renderer reads it as an operator, which drops the operands before it, and the content crate
+/// drops them too.
+#[test]
+fn both_parsers_read_a_lone_sign_as_the_renderer_does() {
+    agree("lone minus", b"3 Tr - Tr 0 - (a) \" 70 Tc -(x) Tj", &["Tr", "Tr", "\"", "Tc", "Tj"]);
+    assert_eq!(content(b"3 Tr - Tr")[1].operands, ["0"]);
+    assert_eq!(content(b"0 - (a) \"")[0].operands, ["0", "0", format!("({})", hex(b"a")).as_str()]);
+    agree("two signs", b"-- w +- w -+ w --- w - /N gs -x", &["w", "w", "w", "w", "gs", "x"]);
+    agree("lone plus", b"5 + Tc 5 ++ Tc 5 +x Tc 5 w", &["Tc", "Tc", "Tc", "w"]);
+    assert!(content(b"5 + Tc").iter().all(|t| t.operands.is_empty()), "the operands before a lone plus are dropped");
+    agree("signs of a number", b"-5 w +5 w --5 w +-5 w -.5 w +.5 w - 5 w", &["w", "w", "w", "w", "w", "w", "w"]);
+}
+
 // ── known divergences, pinned on both sides ─────────────────────────────────────────────────
+
+/// No issue filed. A sign run after a digit is the end of that number to hayro (`5--` is 5, its
+/// trailing-minus arm); the content crate reads no number there, skipping the digit and the signs,
+/// and keeps the state the operator would set (`Tc` with none). Malformed; pinned so a change to
+/// the lone-sign reading, which starts only at a token's start, can't read these signs as 0.
+#[test]
+fn a_sign_run_after_a_digit_is_part_of_its_number_to_hayro_and_no_number_to_the_content_crate() {
+    for data in [&b"5-- Tc"[..], b"5--- Tc"] {
+        assert_eq!(content(data), [tok("Tc", &[])], "{}", String::from_utf8_lossy(data));
+        assert_eq!(hayro(data), [tok("Tc", &["5"])], "{}", String::from_utf8_lossy(data));
+    }
+}
 
 /// No issue filed; #2877 (open) changes number reading in cos and render. ISO 32000-2 §7.3.3
 /// (p.24) says a writer "shall not use … exponential format", so neither reading is the

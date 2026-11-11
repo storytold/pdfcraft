@@ -198,13 +198,22 @@ fn a_font_name_without_a_size_switches_no_font() {
 
 /// The Type 3 cleanup counts no glyph for a `"` the renderer skips: the only glyph drawn is under
 /// the mark, so the font has none left and leaves the page. Counted as drawing, its program stayed.
+/// A `"` whose spacings are numbers draws, a lone `-` being one (0), and the font stays.
 #[test]
-fn a_type3_glyph_a_skipped_quote_operator_shows_is_not_kept() {
+fn a_type3_glyph_only_a_skipped_quote_operator_shows_is_not_kept() {
+    for (quote, kept) in [("/x 70 (a) \"", false), ("0 - (a) \"", true), ("0 0 (a) \"", true)] {
+        assert_eq!(type3_kept(quote), kept, "{quote}");
+    }
+}
+
+/// Whether the Type 3 font `/T3` stays on a page that shows its glyph `a` under a mark and with
+/// `show` elsewhere.
+fn type3_kept(show: &str) -> bool {
     let mut doc = pdf(vec![
         b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
         b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
         b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Font << /F1 5 0 R /T3 7 0 R >> >> >>".to_vec(),
-        stream("", b"BT /T3 10 Tf 20 260 Td (a) Tj ET BT /T3 10 Tf 20 20 Td /x 70 (a) \" ET"),
+        stream("", format!("BT /T3 10 Tf 20 260 Td (a) Tj ET BT /T3 10 Tf 20 20 Td {show} ET").as_bytes()),
         FONT.replace("95 0 R", "6 0 R").into_bytes(),
         widths(),
         b"<< /Type /Font /Subtype /Type3 /FontBBox [0 0 10 10] /FontMatrix [0.1 0 0 0.1 0 0] /CharProcs << /a 8 0 R >> \
@@ -217,5 +226,19 @@ fn a_type3_glyph_a_skipped_quote_operator_shows_is_not_kept() {
     let page = pdfcraft_model::pages(&doc).swap_remove(0);
     let res = page.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
     let fonts = res.get(b"Font").map(|f| doc.resolve(f)).and_then(|f| f.as_dict().cloned()).unwrap_or_default();
-    assert!(!fonts.contains(b"T3"), "the font whose only drawn glyph went leaves the page: {fonts:?}");
+    fonts.contains(b"T3")
+}
+
+/// A lone `-` is the number 0 to the renderer, as to the content parser: `- Tc` sets the spacing
+/// to 0 and `- Tr` the mode to fill, not left as they were, and a `"` with it among its spacings
+/// draws. With the sign dropped, the B was taken for 70 points on, the visible text for hidden and
+/// removed, and the quoted text for not drawn.
+#[test]
+fn a_lone_minus_is_zero() {
+    use crate::sanitize::{Hidden, remove_hidden};
+    assert_eq!(glyphs(b"BT /F1 10 Tf 70 Tc - Tc 20 20 Td (AB) Tj ET", [26.0, 15.0, 29.0, 35.0]), 1);
+    assert_eq!(glyphs(b"BT /F1 10 Tf 20 100 Td 50 TL 0 - (AB) \" ET", [15.0, 45.0, 40.0, 65.0]), 2);
+    let mut doc = one_page(b"BT /F1 10 Tf 3 Tr - Tr 20 260 Td (VISIBLE) Tj ET", "", vec![]);
+    let _ = remove_hidden(&mut doc, &[Hidden::HiddenText]);
+    assert!(content(&doc, 0).contains("VISIBLE"), "{}", content(&doc, 0));
 }
