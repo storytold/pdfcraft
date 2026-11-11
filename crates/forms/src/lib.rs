@@ -140,6 +140,9 @@ pub struct Widget {
     pub caption: Option<String>,
     /// Text widget JavaScript to run on a mouse-up click.
     pub mouse_up_script: Option<String>,
+    /// The widget has a mouse-down action (`/AA /D`): a press runs it (the LaTeX `animate`
+    /// package's controls act on mouse down), so a push button with only that still takes a press.
+    pub mouse_down: bool,
     /// List boxes: where the options are drawn, so a click can pick the one under the pointer.
     pub list: Option<appearance::ListRows>,
     /// Drawn round: a radio button, or a check box laid out for a round XFA check button

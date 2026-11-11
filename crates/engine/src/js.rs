@@ -2025,6 +2025,7 @@ mod widget_budget_review_tests {
             rotation: 0,
             caption: None,
             mouse_up_script: None,
+            mouse_down: false,
             list: None,
             round: false,
         };

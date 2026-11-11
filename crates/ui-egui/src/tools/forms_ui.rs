@@ -432,11 +432,13 @@ pub(crate) fn tab_under<'a>(tabs: &[(&'a str, SignTab)], p: egui::Pos2) -> Optio
     tabs.iter().rev().find(|(_, tab)| tab.rect.contains(p)).map(|(name, _)| *name)
 }
 
-/// Whether `w`, a widget of `f`, takes a press: fillable, a push button with an action, or an
+/// Whether `w`, a widget of `f`, takes a press: fillable, a push button with an action (a click
+/// or mouse-down one), or an
 /// empty signature field (signed by clicking it, Use a certificate). A radio button of a group can
 /// be read-only on its own.
 fn usable(f: &FormField, w: &FormWidget, allowed: bool) -> bool {
-    let pressable = f.kind == FormFieldKind::PushButton && !f.read_only() && f.button.is_some();
+    // A button acting only on mouse down (`/AA /D`) takes the press too, which runs it (#4751).
+    let pressable = f.kind == FormFieldKind::PushButton && !f.read_only() && (f.button.is_some() || w.mouse_down);
     allowed && !w.read_only && (fillable(f) || pressable || f.kind == FormFieldKind::Signature)
 }
 
@@ -551,6 +553,8 @@ pub(crate) fn page_input(
         _ if f.read_only() || w.read_only => view.forms.notice = Some(FormNotice::ReadOnly(f.name.clone())),
         FormFieldKind::PushButton => match &f.button {
             Some(a) => view.forms.button = Some((f.name.clone(), pdfcraft_engine::js::field_object_id(f.obj), a.clone())),
+            // Its press already ran its mouse-down action.
+            None if w.mouse_down => {}
             None => view.forms.notice = Some(FormNotice::NoAction(f.name.clone())),
         },
         FormFieldKind::Text if let Some(script) = &w.mouse_up_script => {
