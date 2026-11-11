@@ -133,11 +133,23 @@ fn action_of(doc: &Document, d: &Dict, pages: &HashMap<ObjRef, usize>, uri_budge
         Some(s) => {
             // Cut on a character boundary: cutting inside a sequence makes the lossy conversion
             // add a replacement character, which would put the result past `MAX_ACTION_NAME`.
-            // Only a cut inside a sequence needs backing up: at the whole length there is no
-            // byte past the end to look at.
+            // Only a cut inside a valid sequence needs backing up: at the whole length there is no
+            // byte past the end to look at, and a run of stray continuation bytes (no lead byte)
+            // is invalid text that the lossy conversion replaces, not one sequence to drop.
             let mut end = MAX_ACTION_NAME.min(s.len());
-            while end > 0 && end < s.len() && (s[end] & 0xC0) == 0x80 {
-                end -= 1;
+            if end < s.len()
+                && (s[end] & 0xC0) == 0x80
+                && let Some(lead) = s[..end].iter().rposition(|b| b & 0xC0 != 0x80)
+            {
+                let width = match s[lead] {
+                    0xC2..=0xDF => 2,
+                    0xE0..=0xEF => 3,
+                    0xF0..=0xF4 => 4,
+                    _ => 0,
+                };
+                if width > end - lead {
+                    end = lead;
+                }
             }
             // Lossy conversion widens each invalid byte to a three-byte replacement character, so
             // the converted name is cut on a character boundary as well.

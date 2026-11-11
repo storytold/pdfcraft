@@ -1832,6 +1832,24 @@ fn link_listing_describes_short_and_wide_action_names() {
     assert!(matches!(&all[2].action, links::LinkAction::Other(n) if n.len() <= 64), "{:?}", all[2].action);
 }
 
+/// A name of stray continuation bytes past the cap is invalid text, replaced by the lossy
+/// conversion rather than backed up to nothing; a valid sequence cut by the cap is still dropped.
+#[test]
+fn link_listing_keeps_invalid_bytes_of_a_cut_action_name() {
+    let strays = "#80".repeat(65);
+    let split = format!("{}é", "N".repeat(63));
+    let doc = doc_of(&[
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R] >>".into(),
+        format!("<< /Subtype /Link /Rect [0 0 1 1] /A << /S /{strays} >> >>"),
+        format!("<< /Subtype /Link /Rect [0 0 1 1] /A << /S /{} >> >>", split.bytes().map(|b| format!("#{b:02X}")).collect::<String>()),
+    ]);
+    let all = links::list(&doc);
+    assert!(matches!(&all[0].action, links::LinkAction::Other(n) if !n.is_empty() && n.len() <= 64), "{:?}", all[0].action);
+    assert!(matches!(&all[1].action, links::LinkAction::Other(n) if n == &"N".repeat(63)), "{:?}", all[1].action);
+}
+
 #[test]
 fn web_address_cap_counts_the_text_kept_after_conversion() {
     // 200 links sharing a 64 KiB address of invalid UTF-8: 12.5 MiB of bytes, each byte kept as a
