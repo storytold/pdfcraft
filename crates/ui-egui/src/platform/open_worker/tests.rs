@@ -763,6 +763,7 @@ fn launch_layout_waits_for_cli_opens_and_preserves_restored_tabs() {
                         recovered: None,
                         then: None,
                         display_override: Some((PageLayout::TwoUp, false)),
+                        ready: None,
                     });
                     replies.push((
                         sender,
@@ -820,6 +821,7 @@ fn launch_layout_failed_or_cancelled_opens_do_not_target_existing_documents() {
             recovered: None,
             then: None,
             display_override: Some((PageLayout::TwoUp, false)),
+            ready: None,
         });
         app.set_launch_layout("single").unwrap();
         assert!(app.set_launch_layout("invalid").is_err());
@@ -903,4 +905,95 @@ fn a_new_file_from_the_os_brings_the_window_forward_before_it_is_prepared() {
     assert_eq!(doc.path.as_deref(), Some(path.to_string_lossy().as_ref()), "the new file is the selected tab");
     assert_eq!(doc.info.pages.len(), 2);
     let _ = std::fs::remove_file(path);
+}
+
+/// A file waiting for room in the open queue, named again with a tool (Open and run), keeps
+/// that tool; a later repeat without one doesn't drop it.
+#[test]
+fn a_repeated_waiting_open_keeps_the_tool_it_brings() {
+    let file = tool_open_file("deferred-tool", "pdf", &fixture(1));
+    let path = file.0.to_string_lossy().into_owned();
+    let mut app = PdfCraftApp::new();
+    app.deferred_opens.push_back(crate::DeferredOpen { path: path.clone(), after_open: None, then: None, display_override: None });
+    assert_eq!(app.open_path_then(&path, Some("export.text")), crate::OpenOutcome::Pending);
+    assert_eq!(app.deferred_opens.len(), 1);
+    assert_eq!(app.deferred_opens.front().and_then(|d| d.then), Some("export.text"));
+    assert_eq!(app.open_path(&path), crate::OpenOutcome::Pending);
+    assert_eq!(app.deferred_opens.front().and_then(|d| d.then), Some("export.text"));
+}
+
+/// A password retry submits with priority and succeeds even when the open worker queue is full
+/// of ordinary background documents, placing the retry at the head of the worker queue.
+#[test]
+#[allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
+fn password_retry_submits_with_priority_when_worker_queue_is_full() {
+    let (gate, started, release, finished) = open_worker::prepare_gate();
+    let worker = open_worker::OpenWorker::new(Some(gate)).expect("worker");
+    let pdf = Arc::new(fixture(1));
+    let open_context = pdfcraft_engine::Session::new().open_context();
+
+    // Fill the worker queue to its limit while the gate holds the worker on the first job.
+    let _first =
+        worker.submit(1, open_context.clone(), "first.pdf".into(), None, None, open_worker::Input::Bytes(pdf.clone())).expect("submit first");
+    started.recv_timeout(Duration::from_secs(5)).expect("first job reached gate");
+
+    for token in 2..=(open_worker::MAX_QUEUED_OPENS as u64 + 1) {
+        worker
+            .submit(token, open_context.clone(), format!("doc-{token}.pdf"), None, None, open_worker::Input::Bytes(pdf.clone()))
+            .expect("queue up to limit");
+    }
+
+    // At capacity, an ordinary submit fails with the capacity error.
+    let overflow = worker.submit(999, open_context.clone(), "overflow.pdf".into(), None, None, open_worker::Input::Bytes(pdf.clone()));
+    assert_eq!(overflow.err(), Some("too many documents are waiting to open".into()));
+
+    // A priority submit (such as a password prompt retry) succeeds and enters the queue.
+    let priority_token = 1000;
+    let priority_recv = worker.submit_priority(
+        priority_token,
+        open_context.clone(),
+        "password-retry.pdf".into(),
+        None,
+        Some(zeroize::Zeroizing::new("secret".into())),
+        open_worker::Input::Bytes(pdf.clone()),
+    );
+    assert!(priority_recv.is_ok(), "priority submit must bypass the queued opens limit");
+
+    // Release the first job; the priority job must be processed next because it was pushed to the front.
+    release.send(()).expect("release first");
+    finished.recv_timeout(Duration::from_secs(5)).expect("first finished");
+
+    started.recv_timeout(Duration::from_secs(5)).expect("priority job reached gate next");
+    release.send(()).expect("release priority");
+    finished.recv_timeout(Duration::from_secs(5)).expect("priority finished");
+
+    let priority_result = priority_recv.unwrap().recv_timeout(Duration::from_secs(5)).expect("priority result");
+    assert_eq!(priority_result.token, priority_token);
+}
+
+/// A password prompt keeps a place in the worker's bounded queue for its retry: files named after
+/// the protected one fill the rest and wait in order, and the retry is queued, not refused as
+/// "too many documents are waiting to open" while the worker has yet to take the others.
+#[test]
+#[allow(clippy::expect_used)]
+fn a_password_prompt_keeps_a_place_in_the_open_queue_for_its_retry() {
+    let mut harness = tool_open_harness();
+    let held = HeldToolOpen::install(&mut harness);
+    let locked = tool_open_file("queue-locked", "pdf", &encrypted_tool_fixture());
+    harness.state_mut().open_path(&locked.0.to_string_lossy());
+    held.wait_started();
+    let others: Vec<ToolOpenFile> =
+        (0..open_worker::MAX_QUEUED_OPENS + 4).map(|i| tool_open_file(&format!("queue-{i}"), "pdf", &fixture(1))).collect();
+    for file in &others {
+        harness.state_mut().open_path(&file.0.to_string_lossy());
+    }
+    held.complete(&mut harness);
+    let app = harness.state();
+    assert!(app.password_prompt.is_some(), "the protected file asks for its password");
+    assert!(app.pending_opens.len() < open_worker::MAX_QUEUED_OPENS, "one place stays free: {} waiting", app.pending_opens.len());
+    assert!(!app.deferred_opens.is_empty(), "the rest wait their turn");
+    harness.state_mut().submit_password(Some("tool-password".into()));
+    let app = harness.state();
+    assert!(app.password_prompt.is_none(), "the retry is queued: {:?}", app.password_prompt.as_ref().and_then(|p| p.error.clone()));
+    assert!(app.password_retry.is_some());
 }
