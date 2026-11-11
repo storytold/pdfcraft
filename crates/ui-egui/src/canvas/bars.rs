@@ -414,6 +414,10 @@ fn render_warning_text(warning: pdfcraft_render::RenderWarning) -> &'static str 
     match warning {
         RenderWarning::ContentTruncated => tl!("Part of this page isn't shown: its content goes past the most PdfCraft draws for one page."),
         RenderWarning::ColourFallback => tl!("A colour on this page couldn't be computed and is shown in a fallback colour."),
+        RenderWarning::MalformedIndexedImage => tl!("An image on this page has a damaged colour table and may be shown wrongly or not at all."),
+        RenderWarning::Type3WidthsMissing => {
+            tl!("A font on this page doesn't say how wide its characters are, so its text may be spaced differently than intended.")
+        }
     }
 }
 
