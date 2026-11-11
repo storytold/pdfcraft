@@ -16,6 +16,7 @@ use pdfcraft_render::DocInfo;
 
 use crate::canvas::{DocView, PageToolContext, PageXform, SignTab};
 use crate::page_cursor::Layer;
+use crate::page_keys::PageKeys;
 use crate::page_pointer::PagePointer;
 use crate::page_router::{Hit, Owner, PagePress};
 
@@ -88,8 +89,8 @@ pub struct FormView {
     pub unbaked: HashSet<(String, usize)>,
     /// A message for the app to show (e.g. "buttons run JavaScript").
     pub notice: Option<FormNotice>,
-    /// A push button was clicked: (its field name, what it does).
-    pub button: Option<(String, pdfcraft_engine::form_scripts::ButtonAction)>,
+    /// A push button was clicked: (its field name, exact PDF identity, what it does).
+    pub button: Option<(String, u64, pdfcraft_engine::form_scripts::ButtonAction)>,
     /// The focused check box or radio button was clicked. It toggles once no other edit is
     /// queued: the text the click committed goes first, and the toggle is dropped if that text
     /// is refused and its field reopens.
@@ -100,11 +101,18 @@ pub struct FormView {
     /// The field and widget that had focus when it was last looked at: when the focus moves, the
     /// one it left runs its XFA exit scripts and the one it reached its enter scripts
     /// (`PdfCraftApp::run_focus_scripts`).
-    pub(crate) focused: Option<(String, usize)>,
+    pub(crate) focused: Option<(String, Option<ObjRef>, usize)>,
     /// The list box row clicked last, without Shift: (its field name, the row). A Shift-click picks
     /// the rows from it to the one clicked; the field's value can't say which row came last when
     /// rows share an export value, and `/I` lists them in ascending order.
     pub(crate) list_anchor: Option<(String, usize)>,
+    /// The field and widget under the pointer when it was last looked at: when it changes, the
+    /// one left runs its Mouse Exit JavaScript and the one reached its Mouse Enter (#269).
+    pub(crate) hovered: Option<WidgetRef>,
+    /// Pointer triggers waiting to run their widget's JavaScript, in order (field name, widget,
+    /// trigger): `PdfCraftApp::run_field_triggers` runs them after the frame's edit, so a check
+    /// box's Mouse Up sees the value its click just stored (#247).
+    pub(crate) triggers: Vec<(WidgetRef, pdfcraft_engine::FieldTrigger)>,
 }
 
 /// A form message for the app to show, with document data kept separate so the visible
@@ -348,7 +356,7 @@ fn list_pick_edit(form: &[FormField], f: &FormField, picked: Vec<usize>) -> Edit
 
 /// Editor state for opening widget `widget` of `f`: it starts from the field's value, asks
 /// for keyboard focus, and gives a drop-down a fresh list that places itself from that value.
-fn open_focus(f: &FormField, widget: usize) -> Focus {
+pub(crate) fn open_focus(f: &FormField, widget: usize) -> Focus {
     Focus {
         name: f.name.clone(),
         obj: Some(f.obj),
@@ -457,6 +465,38 @@ pub(crate) fn hit(xf: &PageXform, info: &DocInfo, page: usize, form: &[FormField
     Some(Hit::new(Owner::Field { field, widget }, Layer::Field, icon))
 }
 
+/// A widget a pointer trigger is for: its field's name and object (so a field sharing another's
+/// name runs its own script), and the widget's index in the field.
+pub(crate) type WidgetRef = (String, u64, usize);
+
+/// `f`'s widget `widget` as a trigger names it.
+fn widget_ref(f: &FormField, widget: usize) -> WidgetRef {
+    (f.name.clone(), pdfcraft_engine::js::field_object_id(f.obj), widget)
+}
+
+/// The field and widget under the pointer on a page, when a press there would take it.
+pub(crate) fn hovered(form: &[FormField], hover: Option<&Hit>) -> Option<WidgetRef> {
+    match hover.map(|h| h.owner) {
+        Some(Owner::Field { field, widget }) => form.get(field).map(|f| widget_ref(f, widget)),
+        _ => None,
+    }
+}
+
+/// Queue Mouse Exit for the widget the pointer left and Mouse Enter for the one it reached, when
+/// they differ from the last frame's (`now`: the widget under the pointer on any page).
+pub(crate) fn hover_moved(view: &mut DocView, now: Option<WidgetRef>) {
+    if view.forms.hovered == now {
+        return;
+    }
+    let left = std::mem::replace(&mut view.forms.hovered, now.clone());
+    if let Some(w) = left {
+        view.forms.triggers.push((w, pdfcraft_engine::FieldTrigger::MouseExit));
+    }
+    if let Some(w) = now {
+        view.forms.triggers.push((w, pdfcraft_engine::FieldTrigger::MouseEnter));
+    }
+}
+
 /// The tooltip (`/TU`) of the field under the pointer, as Acrobat shows it on hover (#3854): only
 /// where the field is what a press would take (`hover`, the top hit there). ISO 32000-2 Table 226
 /// makes it the name the user interface identifies the field by.
@@ -483,6 +523,10 @@ pub(crate) fn page_input(
     let PagePress::Mine(Owner::Field { field, widget: wi }) = press else { return false };
     let Some((f, w)) = form.get(field).and_then(|f| f.widgets.get(wi).map(|w| (f, w))) else { return false };
     let usable = usable(f, w, allowed);
+    // The press runs the widget's Mouse Down JavaScript, as in Acrobat (#269).
+    if usable && ptr.pressed().is_some() {
+        view.forms.triggers.push((widget_ref(f, wi), pdfcraft_engine::FieldTrigger::MouseDown));
+    }
     // A text field opens on the press rather than the click, so a drag that starts on it
     // selects its text (#2213).
     if f.kind == FormFieldKind::Text
@@ -506,9 +550,18 @@ pub(crate) fn page_input(
     match f.kind {
         _ if f.read_only() || w.read_only => view.forms.notice = Some(FormNotice::ReadOnly(f.name.clone())),
         FormFieldKind::PushButton => match &f.button {
-            Some(a) => view.forms.button = Some((f.name.clone(), a.clone())),
+            Some(a) => view.forms.button = Some((f.name.clone(), pdfcraft_engine::js::field_object_id(f.obj), a.clone())),
             None => view.forms.notice = Some(FormNotice::NoAction(f.name.clone())),
         },
+        FormFieldKind::Text if let Some(script) = &w.mouse_up_script => {
+            // Close the editor so the script can replace its value without a stale draft.
+            commit(view, form);
+            view.forms.button = Some((
+                f.name.clone(),
+                pdfcraft_engine::js::field_object_id(f.obj),
+                pdfcraft_engine::form_scripts::ButtonAction::Script(script.clone()),
+            ));
+        }
         FormFieldKind::Signature => view.sign.field = Some(f.name.clone()),
         FormFieldKind::CheckBox | FormFieldKind::Radio => {
             // The box takes the focus, as in Acrobat, so Tab goes on from it (#2223). The overlay
@@ -533,6 +586,10 @@ pub(crate) fn page_input(
             if view.forms.focus.as_ref().is_none_or(|x| !x.is_on(f, wi)) {
                 commit(view, form);
                 view.forms.focus = Some(open_focus(f, wi));
+            }
+            // A combo box's click runs its Mouse Up JavaScript (#269).
+            if f.kind == FormFieldKind::Combo {
+                view.forms.triggers.push((widget_ref(f, wi), pdfcraft_engine::FieldTrigger::MouseUp));
             }
         }
         FormFieldKind::List => {
@@ -579,6 +636,8 @@ pub(crate) fn page_input(
                     view.pending_edit = Some(list_pick_edit(form, f, picked));
                 }
             }
+            // A list box's click runs its Mouse Up JavaScript after the pick is stored (#269).
+            view.forms.triggers.push((widget_ref(f, wi), pdfcraft_engine::FieldTrigger::MouseUp));
         }
     }
     true
@@ -587,6 +646,9 @@ pub(crate) fn page_input(
 /// The edit the focused field's draft makes, if it differs from the field's value.
 pub(crate) fn draft_edit(focus: &Focus, form: &[FormField]) -> Option<Edit> {
     let f = focused_field(focus, form)?;
+    if f.read_only() || f.widgets.get(focus.widget).is_some_and(|widget| widget.read_only) {
+        return None;
+    }
     let value = match f.kind {
         FormFieldKind::Text if f.value.first().map(String::as_str).unwrap_or("") != focus.text => FieldValue::Text(focus.text.clone()),
         // Typed into an editable combo box: a shown text picks its option, anything else is the
@@ -1112,11 +1174,60 @@ fn step_radio(view: &mut DocView, f: &FormField, widget: usize, forward: bool) -
     edit
 }
 
+/// A focused radio button's arrow keys: → or ↓ steps to the next button in its group (`true`), ← or
+/// ↑ to the one before.
+fn arrow_step(ctx: &egui::Context, keys: PageKeys) -> Option<bool> {
+    let pressed = |a, b| keys.pressed(ctx, a) || keys.pressed(ctx, b);
+    if pressed(egui::Key::ArrowRight, egui::Key::ArrowDown) {
+        Some(true)
+    } else if pressed(egui::Key::ArrowLeft, egui::Key::ArrowUp) {
+        Some(false)
+    } else {
+        None
+    }
+}
+
+/// Apply keyboard navigation for a focused list without consuming page navigation keys elsewhere.
+fn list_overlay_keys(
+    ctx: &egui::Context,
+    keys: PageKeys,
+    form: &[FormField],
+    f: &FormField,
+    clicked_outside: bool,
+) -> (Option<Edit>, bool, Option<bool>) {
+    let mut edit = None;
+    let mut close = false;
+    let mut next = None;
+    // Taken, so the arrows move the selection without also scrolling the page.
+    let (up, down) = (keys.take(ctx, egui::Key::ArrowUp), keys.take(ctx, egui::Key::ArrowDown));
+    let (esc, tab) = (keys.pressed(ctx, egui::Key::Escape), keys.pressed(ctx, egui::Key::Tab));
+    let shift = ctx.input(|i| i.modifiers.shift);
+    if esc {
+        close = true;
+    } else if tab {
+        next = Some(!shift);
+    } else if (up || down) && !f.options.is_empty() {
+        let current_idx = f.picked_in_order().last().copied().unwrap_or(0);
+        let next_idx = if up { current_idx.saturating_sub(1) } else { current_idx.saturating_add(1).min(f.options.len().saturating_sub(1)) };
+        if next_idx != current_idx && next_idx < f.options.len() {
+            // By position, so the arrows step through options that share an export value,
+            // in the focused twin's own order.
+            edit = Some(list_pick_edit(form, f, vec![next_idx]));
+        }
+    }
+    if clicked_outside {
+        close = true;
+    }
+    (edit, close, next)
+}
+
 /// The in-place editor or option list for the focused field. Returns an edit to apply.
 /// `text_box`, for a text field that doesn't scroll, is how its widget lays text out: the editor
 /// then takes no more than fits.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn overlay(
     ctx: &egui::Context,
+    keys: PageKeys,
     view: &mut DocView,
     info: &DocInfo,
     form: &[FormField],
@@ -1155,8 +1266,9 @@ pub(crate) fn overlay(
     let mut edit = None;
     let mut close = false;
     let mut next: Option<bool> = None; // Tab / Shift+Tab
+    let read_only = f.read_only() || w.read_only;
     match f.kind {
-        FormFieldKind::Text => {
+        FormFieldKind::Text if !read_only => {
             let multiline = f.has(field_flags::MULTILINE);
             // Shown at once, like the paragraph editor: a fade-in shows the field's value through it.
             // Over the page, so only where the document shows: a field scrolled under the mode bar
@@ -1213,9 +1325,9 @@ pub(crate) fn overlay(
                     let caret_placed = settle_text_editor(ui, fx, &r, primary_down, laid_out.clone(), text_box.zip(before), frame);
                     turned_caret_and_paint(ui, &r, rect, frame, laid_out.as_ref(), caret_placed, font);
                     let lost = crate::edit_text_ui::lost_focus_once(&r, &mut fx.had_focus);
-                    let (enter, esc, tab, shift) = ui.input(|i| {
-                        (i.key_pressed(egui::Key::Enter), i.key_pressed(egui::Key::Escape), i.key_pressed(egui::Key::Tab), i.modifiers.shift)
-                    });
+                    let (enter, esc, tab) =
+                        (keys.pressed(ctx, egui::Key::Enter), keys.pressed(ctx, egui::Key::Escape), keys.pressed(ctx, egui::Key::Tab));
+                    let shift = ui.input(|i| i.modifiers.shift);
                     if esc {
                         close = true;
                     } else if tab {
@@ -1244,7 +1356,7 @@ pub(crate) fn overlay(
                 return view.pending_edit.take();
             }
         }
-        FormFieldKind::Combo => {
+        FormFieldKind::Combo if !read_only => {
             // An editable combo box has a text box over the field as well as its list (ISO
             // 32000-2 Table 233, Edit); the keys are the text box's then, and the list takes
             // the pointer.
@@ -1256,7 +1368,7 @@ pub(crate) fn overlay(
                 );
             }
             let mut st = view.forms.focus.as_ref().map(|x| x.list).unwrap_or_default();
-            let list = DropDownList { view: view.view_key(), field: f, widget: w, rect, zoom, keys: !editable_combo(f) };
+            let list = DropDownList { view: view.view_key(), field: f, widget: w, rect, zoom, keys: !editable_combo(f), page_keys: keys };
             let (chosen, resp) = choice_list(ctx, list, &mut st);
             if let Some(fx) = view.forms.focus.as_mut() {
                 fx.list = st;
@@ -1266,8 +1378,8 @@ pub(crate) fn overlay(
                 close = true;
             }
             let clicked_away = !resp.response.contains_pointer() && clicked_outside();
-            let (tab, shift) = ctx.input(|i| (i.key_pressed(egui::Key::Tab), i.modifiers.shift));
-            if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            let (tab, shift) = (keys.pressed(ctx, egui::Key::Tab), ctx.input(|i| i.modifiers.shift));
+            if keys.pressed(ctx, egui::Key::Escape) {
                 close = true;
             } else if tab {
                 next = Some(!shift);
@@ -1276,36 +1388,11 @@ pub(crate) fn overlay(
                 close = true;
             }
         }
-        FormFieldKind::List => {
-            let (up, down, esc, tab, shift) = ctx.input_mut(|i| {
-                (
-                    // Consumed, so the arrows move the selection without also scrolling the page.
-                    i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp),
-                    i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown),
-                    i.key_pressed(egui::Key::Escape),
-                    i.key_pressed(egui::Key::Tab),
-                    i.modifiers.shift,
-                )
-            });
-            if esc {
-                close = true;
-            } else if tab {
-                next = Some(!shift);
-            } else if (up || down) && !f.options.is_empty() {
-                let current_idx = f.picked_in_order().last().copied().unwrap_or(0);
-                let next_idx = if up { current_idx.saturating_sub(1) } else { current_idx.saturating_add(1).min(f.options.len().saturating_sub(1)) };
-                if next_idx != current_idx && next_idx < f.options.len() {
-                    // By position, so the arrows step through options that share an export value,
-                    // in the focused twin's own order.
-                    edit = Some(list_pick_edit(form, f, vec![next_idx]));
-                }
-            }
-            if clicked_outside() {
-                close = true;
-            }
+        FormFieldKind::List if !read_only => {
+            (edit, close, next) = list_overlay_keys(ctx, keys, form, f, clicked_outside());
         }
-        FormFieldKind::CheckBox | FormFieldKind::Radio => {
-            // Nothing is drawn over the box, but a widget there holds egui's keyboard focus, so
+        kind if read_only || matches!(kind, FormFieldKind::CheckBox | FormFieldKind::Radio) => {
+            // Nothing is drawn over the field, but a widget there holds egui's keyboard focus, so
             // Space, Tab and the arrows come here instead of turning or scrolling the page.
             let id = egui::Id::unique(("form-field", view.pane.key, &f.name, focus.widget));
             let mut has_focus = false;
@@ -1323,28 +1410,24 @@ pub(crate) fn overlay(
                 has_focus = r.has_focus();
             });
             view.forms.keys = Some((id, f.kind == FormFieldKind::Radio));
-            let (esc, tab, shift) = ctx.input(|i| (i.key_pressed(egui::Key::Escape), i.key_pressed(egui::Key::Tab), i.modifiers.shift));
-            let space = has_focus && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Space));
+            let (esc, tab) = (keys.pressed(ctx, egui::Key::Escape), keys.pressed(ctx, egui::Key::Tab));
+            let shift = ctx.input(|i| i.modifiers.shift);
+            let space = has_focus && keys.take(ctx, egui::Key::Space);
             let arrow = has_focus && f.kind == FormFieldKind::Radio;
-            let step = ctx.input(|i| {
-                if !arrow {
-                    None
-                } else if i.key_pressed(egui::Key::ArrowRight) || i.key_pressed(egui::Key::ArrowDown) {
-                    Some(true)
-                } else if i.key_pressed(egui::Key::ArrowLeft) || i.key_pressed(egui::Key::ArrowUp) {
-                    Some(false)
-                } else {
-                    None
-                }
-            });
+            let step = if arrow { arrow_step(ctx, keys) } else { None };
             if esc || clicked_outside() {
                 close = true;
             } else if tab {
                 next = Some(!shift);
+            } else if read_only {
+                close = !has_focus && !focus.request_focus;
             } else if toggle && view.pending_edit.is_some() {
                 view.forms.toggle = true;
             } else if toggle {
                 edit = toggle_edit(f, focus.widget);
+                // The click's Mouse Up JavaScript runs once the toggle is stored, so it reads the
+                // new value (#247).
+                view.forms.triggers.push((widget_ref(f, focus.widget), pdfcraft_engine::FieldTrigger::MouseUp));
             } else if space {
                 // Space toggles a check box and selects a radio button, as in browsers: it never
                 // turns the selected button off.
@@ -1376,6 +1459,8 @@ struct DropDownList<'a> {
     /// Whether the list takes the arrow keys and Enter: not for an editable combo box, whose
     /// text box has them.
     keys: bool,
+    /// The pages' keys, which the list's are: none while a dialog or a menu is over the pages.
+    page_keys: PageKeys,
 }
 
 /// Items a drop-down's list shows before it scrolls.
@@ -1388,7 +1473,7 @@ const LIST_ROWS: usize = 9;
 /// and the list's response. With `keys` off (an editable combo box, whose text box has the keys)
 /// only the pointer moves through and picks from it.
 fn choice_list(ctx: &egui::Context, list: DropDownList<'_>, st: &mut ChoiceList) -> (Option<usize>, egui::InnerResponse<()>) {
-    let DropDownList { view, field: f, widget: w, rect, zoom, keys } = list;
+    let DropDownList { view, field: f, widget: w, rect, zoom, keys, page_keys } = list;
     let n = f.options.len();
     let shown = n.min(LIST_ROWS);
     let max_first = n.saturating_sub(shown);
@@ -1405,7 +1490,7 @@ fn choice_list(ctx: &egui::Context, list: DropDownList<'_>, st: &mut ChoiceList)
         st.placed = true;
     }
     // Consumed, so the keys move through the list rather than the page.
-    let key = |k| keys && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, k));
+    let key = |k| keys && page_keys.take(ctx, k);
     let moved = if n == 0 {
         None
     } else if key(egui::Key::ArrowUp) {

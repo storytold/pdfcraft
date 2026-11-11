@@ -25,6 +25,7 @@ impl Interp<'_> {
             && let Some(d) = self.deadline
             && std::time::Instant::now() > d
         {
+            self.out_of_time = true;
             return Err(RAN_TOO_LONG.into());
         }
         #[cfg(target_arch = "wasm32")]
