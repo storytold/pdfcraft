@@ -82,6 +82,8 @@ const IMAGE_SHA_KEY: &[u8] = b"PCXfaSHA256";
 const MAX_PAGES_SEARCHED: usize = 10_000;
 /// Most pictures remembered from earlier passes.
 const MAX_REMEMBERED_IMAGES: usize = 1000;
+/// Most XObject entries read while looking for those images, reusable or not.
+const MAX_IMAGES_EXAMINED: usize = 100_000;
 
 struct Emitter<'a> {
     doc: &'a mut Document,
@@ -1092,6 +1094,17 @@ fn has_host(after: &str) -> bool {
     !host.is_empty()
 }
 
+/// The last reference of the chain `o` starts (at most 16 links), `None` when `o` is not a reference.
+fn end_of_chain(doc: &Document, o: &Object) -> Option<ObjRef> {
+    let Object::Ref(mut last) = *o else { return None };
+    for _ in 0..16 {
+        // Only a reference is followed further; whatever else it names is not copied.
+        let Object::Ref(next) = *doc.get(last) else { break };
+        last = next;
+    }
+    Some(last)
+}
+
 /// Replace the document's pages with the laid-out form and add its fields to the AcroForm. The
 /// XFA packets and everything else in the catalog stay.
 /// The image XObjects earlier passes wrote for pictures, by the SHA-256 each records: those on
@@ -1099,12 +1112,46 @@ fn has_host(after: &str) -> bool {
 fn earlier_images(doc: &Document, pages: ObjRef) -> HashMap<[u8; 32], ObjRef> {
     let mut out = HashMap::new();
     let kids = doc.get(pages).as_dict().and_then(|d| d.get(b"Kids").map(|k| doc.resolve(k))).and_then(|k| k.as_array().cloned()).unwrap_or_default();
+    // A page, resource or XObject dictionary listed again is read once, and every entry read
+    // counts, whether or not it is a reusable image.
+    let mut seen = std::collections::HashSet::new();
+    let mut examined = 0usize;
     for page in kids.iter().filter_map(Object::as_ref).take(MAX_PAGES_SEARCHED) {
+        if !seen.insert(page) {
+            continue;
+        }
         let page = doc.get(page);
-        let Some(resources) = page.as_dict().and_then(|p| p.get(b"Resources")).map(|r| doc.resolve(r)) else { continue };
-        let Some(xobjects) = resources.as_dict().and_then(|r| r.get(b"XObject")).map(|x| doc.resolve(x)) else { continue };
-        for r in xobjects.as_dict().into_iter().flat_map(|x| x.iter()).filter_map(|(_, v)| v.as_ref()) {
-            if out.len() >= MAX_REMEMBERED_IMAGES {
+        let Some(res_entry) = page.as_dict().and_then(|p| p.get(b"Resources")) else { continue };
+        // A dictionary reached through a different alias is the same dictionary: the end of the
+        // reference chain is what is recorded. A direct one is borrowed, not copied.
+        if end_of_chain(doc, res_entry).is_some_and(|r| !seen.insert(r)) {
+            continue;
+        }
+        let resolved;
+        let resources: &Dict = match res_entry {
+            Object::Dict(d) => d,
+            other => {
+                resolved = doc.resolve(other);
+                let Some(d) = resolved.as_dict() else { continue };
+                d
+            }
+        };
+        let Some(xo_entry) = resources.get(b"XObject") else { continue };
+        if end_of_chain(doc, xo_entry).is_some_and(|r| !seen.insert(r)) {
+            continue;
+        }
+        let xo_resolved;
+        let xobjects: &Dict = match xo_entry {
+            Object::Dict(d) => d,
+            other => {
+                xo_resolved = doc.resolve(other);
+                let Some(d) = xo_resolved.as_dict() else { continue };
+                d
+            }
+        };
+        for r in xobjects.iter().filter_map(|(_, v)| v.as_ref()) {
+            examined += 1;
+            if out.len() >= MAX_REMEMBERED_IMAGES || examined > MAX_IMAGES_EXAMINED {
                 return out;
             }
             if let Object::Stream(s) = &*doc.get(r)
