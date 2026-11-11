@@ -57,6 +57,7 @@ fn field(name: &str, page: usize, rect: [f64; 4]) -> FormField {
         quadding: 0,
         tooltip: None,
         widgets: vec![FormWidget {
+            mouse_up_script: None,
             obj: pdfcraft_cos::ObjRef::new(4, 0),
             page: Some(page),
             rect,

@@ -347,7 +347,7 @@ pub fn tools() -> Vec<ToolDef> {
                 json!({ "doc": doc(), "pages": pages("to extract"), "out": save_out.clone(), "open": open.clone(), "separate": { "type": "boolean" }, "out_dir": { "type": "string" }, "delete": { "type": "boolean" } }),
                 &["doc", "pages"],
             )),
-        t("doc_combine", "Combine files", "Combine files, in order, into one PDF (bookmarks are kept under one entry per file). Images (PNG, JPEG, TIFF, GIF, BMP, JPEG 2000) and .txt files are made into PDFs first. pages optionally chooses each file's pages, in step with paths: a range such as \"1-3, 6\" or null for all pages. passwords, also in step with paths, opens encrypted files (the open password, or the permissions password where a file's security doesn't allow copying pages; null for none). The result is not encrypted. Passwords are never echoed back. groups, also in step with paths, splits a file around others: entries with the same number (they must name the same path) are one file, copied once, so it keeps one bookmark at its first page, its links and its form fields; null for a file of its own. A group uses its first entry's password. When two files' forms name the same field, field_conflicts says what happens: \"rename\" (the default) keeps the fields separate by renaming the later one (Text1 becomes Text1-1) and the result lists renamed_fields as [[old, new], …] — scripts that refer to the old name are not rewritten; \"merge\" makes them one field, as before.")
+        t("doc_combine", "Combine files", "Combine files, in order, into one PDF (bookmarks are kept under one entry per file). Images (PNG, JPEG, TIFF, GIF, BMP, JPEG 2000), .txt files and Office documents (Word, Excel, PowerPoint, OpenDocument, RTF; through an installed LibreOffice) are made into PDFs first. pages optionally chooses each file's pages, in step with paths: a range such as \"1-3, 6\" or null for all pages. passwords, also in step with paths, opens encrypted files (the open password, or the permissions password where a file's security doesn't allow copying pages; null for none). The result is not encrypted. Passwords are never echoed back. groups, also in step with paths, splits a file around others: entries with the same number (they must name the same path) are one file, copied once, so it keeps one bookmark at its first page, its links and its form fields; null for a file of its own. A group uses its first entry's password. When two files' forms name the same field, field_conflicts says what happens: \"rename\" (the default) keeps the fields separate by renaming the later one (Text1 becomes Text1-1) and the result lists renamed_fields as [[old, new], …] — scripts that refer to the old name are not rewritten; \"merge\" makes them one field, as before.")
             .cmd("page.combine")
             .with(schema(
                 json!({
@@ -361,7 +361,7 @@ pub fn tools() -> Vec<ToolDef> {
                 }),
                 &["paths"],
             )),
-        t("doc_create_multiple", "Create PDF from multiple files", "Convert several files (PDFs, PNG/JPEG/JPEG 2000/TIFF/GIF/BMP images, .txt files) to PDF in one run. mode \"combine\" (default) joins them, in order, into one PDF with a bookmark per file; pages optionally chooses each file's pages, in step with paths (a range such as \"1-3, 6\" or null). mode \"separate\" writes one PDF per file into out_dir (files that are already PDFs are skipped; existing files are never overwritten) and reports each file's result.")
+        t("doc_create_multiple", "Create PDF from multiple files", "Convert several files (PDFs, PNG/JPEG/JPEG 2000/TIFF/GIF/BMP images, .txt files, Office documents through an installed LibreOffice) to PDF in one run. mode \"combine\" (default) joins them, in order, into one PDF with a bookmark per file; pages optionally chooses each file's pages, in step with paths (a range such as \"1-3, 6\" or null). mode \"separate\" writes one PDF per file into out_dir (files that are already PDFs are skipped; existing files are never overwritten) and reports each file's result.")
             .cmd("create.multiple")
             .with(schema(
                 json!({
@@ -543,7 +543,7 @@ pub fn tools() -> Vec<ToolDef> {
         t(
             "form_focus",
             "Move the focus into or out of a field",
-            "A field gains (event enter) or loses (event exit) focus, as when someone clicks or tabs into or out of it, and the dynamic XFA form's enter or exit scripts for it run (other forms have none, and nothing happens). widget picks the radio button or copy of the field (1-based, default 1; see form_fields). What the scripts change is one undoable edit, and none when they change nothing. Changing a field's value (form_fill) runs its exit scripts already, so the next exit of that field doesn't run them again. Returns changed, and the scripts' alerts, console output, requests and errors.",
+            "A field gains (event enter) or loses (event exit) focus, as when someone clicks or tabs into or out of it, and the dynamic XFA form's enter or exit scripts for it run; on another form, the widget's own On Focus or On Blur JavaScript runs, if it has one (see also js_event). widget picks the radio button or copy of the field (1-based, default 1; see form_fields). What the scripts change is one undoable edit, and none when they change nothing. Changing a field's value (form_fill) runs its exit scripts already, so the next exit of that field doesn't run them again. Returns changed, and the scripts' alerts, console output, requests and errors.",
         )
         .with(schema(
             json!({
@@ -631,7 +631,7 @@ pub fn tools() -> Vec<ToolDef> {
                 &["doc", "page", "path", "rect"],
             )),
         t("form_set_image", "Set an image field's picture", "Show an image file (PNG, JPEG, TIFF, GIF or BMP) in an image field or button, scaled to fit and centred (what clicking an image field does). On an XFA form the picture is kept in its data too (base64, as Designer saves it) and the form shows it from there. Undoable.")
-            .with(schema(json!({ "doc": doc(), "field": { "type": "string" }, "path": { "type": "string" } }), &["doc", "field", "path"])),
+            .with(schema(json!({ "doc": doc(), "field": { "type": "string" }, "field_id": {"type":"integer","minimum":0,"maximum":281474976710655u64,"description":"Optional exact document-local identity from form_fields; requires matching field name."}, "path": { "type": "string" } }), &["doc", "field", "path"])),
         t(
             "form_set_props",
             "Field properties",
@@ -757,7 +757,7 @@ pub fn tools() -> Vec<ToolDef> {
         t(
             "printer_papers",
             "List printer paper sizes",
-            "The media sizes (names and dimensions in points) and default paper supported by a printer driver. Pass printer: a name from printers, or \"default\".",
+            "The media sizes (names and dimensions in points) and default paper supported by a printer driver (CUPS: its PPD's, by the driver's names, the default being its *DefaultPageSize; a job on one, or on a standard size of one, is fed it under the PPD's own keyword). Pass printer: a name from printers, or \"default\".",
         )
         .ro()
         .with(schema(json!({ "printer": { "type": "string" } }), &["printer"])),
@@ -1415,12 +1415,27 @@ pub fn tools() -> Vec<ToolDef> {
         t("form_merge_data", "Merge data files into spreadsheet", "Collect the field values of form data files (FDF, XFDF) or filled-in PDF forms into one CSV file at path: a column per field name, a row per file. Returns the row and column counts.")
             .cmd("form.merge_data")
             .with(schema(json!({ "paths": { "type": "array", "items": { "type": "string" }, "minItems": 1 }, "path": { "type": "string" } }), &["paths", "path"])),
-        t("js_run", "Run JavaScript", "Run Acrobat JavaScript in the document, as the JavaScript console does (or as push button `field`'s Mouse Up script when field is given; on a laid-out XFA form, `field` runs that button's XFA click script instead, JavaScript or FormCalc, which can add and remove rows and show or hide subforms). The form object model is available: this/getField, event, app, util, console, display, color, and the document-level scripts (except the PDF container scripts when XFA layout is active; they remain available through js_document_scripts). Field changes and resetForm are applied as one undoable step; returns the alerts (each with its message, title, icon and buttons, in order; every question is still answered OK), console output and requests (print, page, url, submit, attachment) of the script and of the field scripts its changes ran, the script's error, the errors of document-level scripts that failed (the rest still ran), and in warnings the errors of applying the changes, such as values of an XFA form that could not be written to its data.")
+        t("js_run", "Run JavaScript", "Run Acrobat JavaScript in the document, as the JavaScript console does (or as push button `field`'s Mouse Up script when field is given; on a laid-out XFA form, `field` runs that button's XFA click script instead, JavaScript or FormCalc, which can add and remove rows and show or hide subforms). The form object model is available: this/getField, event, app, util, console, display, color, and the document-level scripts (except the PDF container scripts when XFA layout is active; they remain available through js_document_scripts). Field changes and resetForm are applied as one undoable step; returns the script's and subsequent field scripts' alerts (each with its message, title, icon and buttons, in order; AcroForm replies consume ordered answers; missing replies cancel input or use the alert button set's safe default), console output, requests (print, page, url, submit, attachment), error, and the errors of document-level scripts that failed (the rest still ran), plus warnings from applying the changes.")
             .cmd("tools.js_console")
             .with(schema(
-                json!({ "doc": doc(), "script": { "type": "string" }, "field": { "type": "string", "description": "Run as this button's Mouse Up event." } }),
+                json!({ "doc": doc(), "script": { "type": "string" }, "field": { "type": "string", "description": "Run as this button's Mouse Up event." }, "field_id": {"type":"integer","minimum":0,"maximum":281474976710655u64,"description":"Optional exact field identity from form_fields; requires matching field name and is scoped to this document."}, "answers": {"type":"array","maxItems":32,"items":{"type":["string","null"],"maxLength":4096},"description":"Ordered popup, response and alert answers; strings are limited to 4096 UTF-8 bytes at runtime; null cancels a popup or response, and selects an alert default (OK, Cancel or No, by button set)."} }),
                 &["doc", "script"],
             )),
+        t(
+            "js_event",
+            "Run a field's pointer or focus script",
+            "Run the JavaScript action widget `widget` of AcroForm field `field` has for `event`, as when the pointer enters (mouse_enter), leaves (mouse_exit), presses (mouse_down) or releases (mouse_up) it, or it gains (on_focus) or loses (on_blur) the focus, in the document's script realm (variables document scripts and earlier scripts left are kept), with event.name Mouse Enter, Mouse Exit, Mouse Down, Mouse Up, Focus or Blur. Nothing runs when the widget has no JavaScript for that event, JavaScript is off, or the form is a laid-out XFA form (use form_focus and js_run there). What it changes is one undoable edit. Pointer-over and focus scripts run unasked in a viewer, so their requests to print, open Save As or show a panel are dropped (noted on the console); mouse_down and mouse_up keep them. Returns changed, and the script's alerts, console output, requests and errors.",
+        )
+        .with(schema(
+            json!({
+                "doc": doc(),
+                "field": { "type": "string", "description": "Field name (from form_fields)." },
+                "event": { "type": "string", "enum": ["mouse_enter", "mouse_exit", "mouse_down", "mouse_up", "on_focus", "on_blur"] },
+                "field_id": {"type":"integer","minimum":0,"maximum":281474976710655u64,"description":"Optional exact field identity from form_fields: of fields sharing the name, the one to run."},
+                "widget": { "type": "integer", "minimum": 1, "description": "Widget of the field (1-based, default 1): a radio button of the group, or a copy of the field." },
+            }),
+            &["doc", "field", "event"],
+        )),
         t("js_document_scripts", "Document JavaScripts", "List the document-level JavaScripts (name and source), which define functions field scripts use.")
             .ro()
             .cmd("tools.document_js")
