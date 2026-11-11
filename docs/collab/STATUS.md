@@ -3163,6 +3163,96 @@ edit, `commit` out and `committed` back) needs the cabinet's page and the
 test (daemon + `xvfb-run pdfcraft --features collab`) was not repeated either:
 the worker path is unchanged and its unit tests cover the driver it now uses.
 
+### The browser bridge in the cabinet: D4 closed (2026-11-11)
+
+§6.3 built the bridge; no run had ever used it. The cabinet's browser acceptance
+found that the PDF page never dialled the room (D4 in `docs/CRAFT-ACCEPTANCE.md`
+of the cabinet repository). Four defects, all fixed here, and the browser run
+that proves the chain end to end.
+
+1. **The page was built without the feature** (`5cb08cb3d`). `apps/pdfcraft-web`
+   carries the five messages only under `collab`, and trunk built the page
+   without it: the deployed wasm at the pin `4f3e21245` had no collaboration
+   code at all (`collaboration session`, `Connecting…`, `Committed version`
+   absent; the bare `session-state` string it does hold comes from
+   `craft-web-host`, which joins the app id and the kind at run time). Saying
+   `--features collab` on the trunk command line cannot be the answer: trunk
+   applies it to every rust asset, and the OCR worker has no such feature, so
+   the build fails. `index.html` now sets `data-cargo-features="collab"` on the
+   app's own asset. The crate feature stays off by default: `cargo build` and
+   `cargo test` are single-user, and so is a page that never receives
+   `pdfcraft:session`.
+2. **The browser transport read a queue nothing filled** (`f80fea041`). The
+   socket's callbacks pushed into `WebTransport::queue`, while `read` drained
+   `Inner::incoming`, which nothing ever wrote. The socket opened, the hello went
+   out, the room answered `welcome`, and the driver waited forever: the status
+   stayed `Connecting…` with no error. One queue now.
+3. **The open event after the greeting sent a second hello** (`55859443c`). The
+   page's socket is open before the first step, so the hello is written at once;
+   the `Opened` the callback queued was read afterwards and taken for a new
+   connection. The room answered `this connection is already joined`, which the
+   app showed under a joined status. A live, already-greeted socket ignores the
+   trace of its own open. The new test
+   `an_open_reported_after_the_greeting_is_not_a_second_hello` fails without the
+   guard (two hellos).
+4. **An annotation made in the page panicked the app.** `new_annotation_name`
+   (crates/collab-client-pdf) read the clock with `std::time::SystemTime::now`,
+   which panics on wasm32 ("time not implemented on this platform"). The first
+   highlight or sticky note took the whole page down. It uses `web_time` now, as
+   the rest of the wasm-reachable code does. (The change was swept into the
+   concurrent merge `46d2e203a`, which brought main's v0.21.0 release in; it is
+   recorded here because it belongs to this run.)
+5. **The room's commit publication spoke a different contract than the cabinet**
+   (`19cf676b1`). The room sent `expectedVersion` as a JSON number, and `0` for
+   the first commit. The cabinet's callback contract (INTEGRATION.md §5.2, the
+   one DeckCraft's room speaks) names the **etag** of the copy the cabinet holds,
+   a string, absent for the first commit: the number was refused by the
+   cabinet's decoder (`400`), so every commit that reached the callback was lost.
+   The room now sends the etag it adopted from the cabinet's answer, and sends
+   nothing until one exists.
+
+Gates: `cargo test -p pdfcraft-collab-daemon` — 34 unit + 5 integration tests,
+including the new `an_open_reported_after_the_greeting_is_not_a_second_hello`
+(fails without the guard) and the publication tests rewritten around opaque
+etags; `cargo test -p pdfcraft-collab-client-pdf` 48; `cargo check --target
+wasm32-unknown-unknown -p pdfcraft-web` and `-p pdfcraft-collab-session` pass.
+The web bundle is built and checked by the cabinet's
+`scripts/craft-build-pdfcraft-web.sh`, which refuses a wasm without the bridge
+markers.
+
+The browser run (cabinet `https://mail.lzmkm.ru`, disk file 43
+`acceptance.pdf`, owner/editor/viewer accounts, headless Chrome):
+
+| What | Observed |
+|---|---|
+| Static bundle | `0.21.0-collab.46d2e203abbd`, wasm `sha256:4457c37d…77e36`, `200` from `/office-assets/pdfcraft/…` |
+| Socket | `wss://mail.lzmkm.ru/office-sync/pdfcraft/ws`, `hello` → `welcome` (`owner`/`editor`/`viewer`) |
+| Bridge messages | `pdfcraft:ready`, `session-state`, `presence`, `dirty`, `commit` |
+| Status | `Connected as craft-e2e-owner@lzmkm.ru · owner` (and the editor's and viewer's own) |
+| Presence | both panes `Участников: 1` (the other one); the app's Collaboration window lists `craft-e2e-editor@lzmkm.ru · editor · page 1` on the owner's side and the owner on the editor's |
+| An edit | a highlight drawn on the owner's page: 1 `op` out, 1 `applied` in on the editor |
+| Commit | the Collaboration window's "Commit to the cabinet" → `pdfcraft:commit` → the cabinet's D3 route → the room's callback → a stored version; the file's content grew from 591 to 2949 bytes and the stored document contains the `/Highlight` annotation and the owner's name |
+| Viewer | joins as `viewer`; the highlight tool produces no `op` (only presence frames leave) |
+
+What this does **not** establish, and what to look at next:
+
+- The host → app leg `committed` was not observed: the version is stored, but
+  the app's status stayed `Commit requested from the cabinet` and no
+  `craft-version` marker appeared. The cabinet posts
+  `{version, etag}` after the D3 commit; `craft-web-host` parses a whole number
+  and a string, which that is. This is the first thing to instrument.
+- The room's control plane answers `409` to a new ticket when the room's
+  `CABINET` marker and the cabinet's file etag disagree (observed after a
+  commit loop clicked the button more than once). The recovery used here was to
+  move the room's state directory aside and let the room reseed from the file;
+  the daemon should probably treat "the cabinet's etag changed after our own
+  commit" as its own publication, not as an external change.
+- The sticky note's editor has its own Publish button in the page (a canvas
+  target); the acceptance marks text with the highlighter instead. A note made
+  through the tool was not part of this run.
+- The room binary on the cabinet is now `19cf676b1` (built from this branch,
+  v0.21.0); the room's docker image field in `CRAFT_APPS` is inert since M92.
+
 ### Rebase onto `origin/main` `8d5d39ef` and the gate run at the rebased head (2026-11-09)
 
 The branch was 40 commits ahead of `43f24aa1` (the `origin/main` it had been
