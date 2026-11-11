@@ -1557,7 +1557,7 @@ fn cmap_tokens_need_no_space_between_them() {
     let mut got: Vec<_> = map.iter().map(|(c, u)| (*c, u.as_str())).collect();
     got.sort_unstable();
     assert_eq!(got, [(3, " "), (0x10, "é"), (0x24, "A"), (0x25, "B"), (0x26, "C"), (0x30, "H"), (0x31, "i")]);
-    let (spaces, cids) = parse_cmap(b"1 begincodespacerange<00><FF>endcodespacerange 1 begincidrange<20><7E>1 endcidrange");
+    let (spaces, cids, _) = parse_cmap(b"1 begincodespacerange<00><FF>endcodespacerange 1 begincidrange<20><7E>1 endcidrange");
     assert_eq!(spaces, [(1, vec![0], vec![0xff])]);
     assert_eq!(cids, [(0x20, 0x7e, 1)]);
 }
@@ -1826,10 +1826,10 @@ fn low_codes_resolve_to_the_covering_range() {
 #[test]
 fn codespaces_are_deduplicated_and_at_most_four_bytes() {
     let cmap = "3 begincodespacerange <00> <7F> <00> <7F> <0000000000> <FFFFFFFFFF> endcodespacerange";
-    let (spaces, _) = parse_cmap(cmap.as_bytes());
+    let (spaces, ..) = parse_cmap(cmap.as_bytes());
     assert_eq!(spaces, vec![(1, vec![0x00], vec![0x7F])]);
     let many: String = (0..2000).map(|_| "<0000> <FFFF>\n").collect();
-    let (spaces, _) = parse_cmap(format!("2000 begincodespacerange\n{many}endcodespacerange").as_bytes());
+    let (spaces, ..) = parse_cmap(format!("2000 begincodespacerange\n{many}endcodespacerange").as_bytes());
     assert_eq!(spaces.len(), 1);
 }
 
@@ -2155,4 +2155,13 @@ fn a_full_cid_map_rebuilds_a_composite_subsets_cmap_behind_two_filters() {
     source.set(b"DescendantFonts".to_vec(), Object::Array(descendants));
     let editor = embedded_sfnt(&doc, &source).expect("the map behind two filters is read");
     assert_eq!(skrifa::FontRef::new(&editor).unwrap().charmap().map('Ω'), Some(expected));
+}
+
+/// A codespace range of five bytes, or one whose ends differ in length, can't be kept and is said
+/// to be dropped; a repeated range is not a loss.
+#[test]
+fn a_dropped_codespace_range_is_reported() {
+    assert!(parse_cmap(b"1 begincodespacerange <0000000000> <FFFFFFFFFF> endcodespacerange").2);
+    assert!(parse_cmap(b"1 begincodespacerange <00> <FFFF> endcodespacerange").2);
+    assert!(!parse_cmap(b"2 begincodespacerange <0000> <FFFF> <0000> <FFFF> endcodespacerange").2);
 }
