@@ -276,6 +276,7 @@ pub(crate) fn run_in_context(
         reset_limit_exceeded: false,
         kept: 0,
         dropped: 0,
+        layers_changed: BTreeSet::new(),
     }));
     let mut out = Outcome { rc: true, value: event.value.clone(), change: event.change.clone(), ..Default::default() };
     let mut doc_errors: Vec<(usize, String)> = setup.skipped.iter().map(|(i, why)| (*i, doc_error(*i, why))).collect();
@@ -335,6 +336,8 @@ pub(crate) fn run_in_context(
         out.alerts = std::mem::take(&mut h.alerts);
         out.console = std::mem::take(&mut h.console);
         out.requests = std::mem::take(&mut h.requests);
+        let layers = std::mem::take(&mut h.layers_changed);
+        out.layers = layers.into_iter().filter_map(|i| h.doc.layers.get(i).map(|l| (i, l.on))).collect();
         if h.dropped > 0 {
             out.console.push(format!("the script's messages, console lines and requests passed their limits; {} more were left out", h.dropped));
         }

@@ -484,7 +484,7 @@ fn document_info_get(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<
 
 /// Install the host API once; live document properties continue reading each job's snapshot.
 pub(crate) fn install(ctx: &mut Context) -> JsResult<()> {
-    let globals: [(&str, usize, NativeFunction); 12] = [
+    let globals: [(&str, usize, NativeFunction); 13] = [
         ("getField", 1, NativeFunction::from_fn_ptr(get_field)),
         ("getNthFieldName", 1, NativeFunction::from_fn_ptr(get_nth_field_name)),
         ("resetForm", 1, NativeFunction::from_fn_ptr(reset_form)),
@@ -497,6 +497,7 @@ pub(crate) fn install(ctx: &mut Context) -> JsResult<()> {
         ("syncAnnotScan", 0, NativeFunction::from_fn_ptr(noop)),
         ("dirty", 0, NativeFunction::from_fn_ptr(noop)),
         ("exportDataObject", 4, NativeFunction::from_fn_ptr(export_data_object)),
+        ("getOCGs", 1, NativeFunction::from_fn_ptr(crate::ocg::get_ocgs)),
     ];
     for (name, len, f) in globals {
         ctx.register_global_callable(JsString::from(name), len, f)?;
