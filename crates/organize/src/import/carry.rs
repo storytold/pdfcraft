@@ -60,6 +60,7 @@ fn write_attachments(dst: &mut Document, entries: &mut [(Vec<u8>, Object)], uniq
             }
             if text != base {
                 *k = pdfcraft_cos::PdfString::text(&text).bytes;
+            }
         }
     }
     entries.sort_by(|a, b| a.0.cmp(&b.0));
