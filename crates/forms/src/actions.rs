@@ -401,7 +401,6 @@ mod tests {
         assert_eq!(chained(&doc, &Object::Ref(first)), MAX_CHAIN);
     }
 
-
     #[test]
     fn reset_and_hide_actions_resolve_hierarchical_widget_and_indirect_field_targets() {
         let mut doc = Document::new_empty();
