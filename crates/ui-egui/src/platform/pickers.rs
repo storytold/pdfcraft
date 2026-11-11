@@ -377,6 +377,7 @@ mod tests {
             recovered: None,
             then: None,
             display_override: None,
+            ready: None,
         });
         let got = Arc::new(Mutex::new(Vec::new()));
         app.pickers.showing.store(true, Ordering::SeqCst);
@@ -468,7 +469,7 @@ mod tests {
         app.pick_override = Some(vec![out.to_string_lossy().into_owned()]);
         // Save As is still open on another tab when the optimizer finishes.
         app.pickers.showing.store(true, Ordering::SeqCst);
-        app.save_optimized(doc, crate::optimize_ui::OptimizeKind::Reduce, Ok((reduced.clone(), String::new())));
+        app.save_optimized(doc, crate::optimize_ui::OptimizeKind::Reduce, Ok((reduced.clone(), String::new())), None);
         app.pickers.deliver(None, vec![], Box::new(|_, _| {}));
         app.process_picked();
         app.process_picked();
@@ -478,6 +479,144 @@ mod tests {
         let id = again.open("notes (reduced).pdf", None, Arc::new(written), None).unwrap();
         let text = pdfcraft_engine::export::Exporter::new(again.get(id).unwrap()).text(0).unwrap();
         assert!(text.contains("Minutes of the harbour board"), "the saved copy reopens with its text: {text:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// An app with a document that compresses, and a folder for its copy.
+    fn reducing(tag: &str) -> (PdfCraftApp, PathBuf) {
+        let dir = std::env::temp_dir().join(format!("pdfcraft-ui-pickers-{}-{tag}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("notes.pdf", None, text_pdf("Minutes of the harbour board")).unwrap();
+        (app, dir)
+    }
+
+    /// Reduce File Size asks first, so a heavy file can finish by itself.
+    #[test]
+    fn reduce_file_size_asks_where_to_save_before_it_compresses() {
+        let (mut app, dir) = reducing("first");
+        let out = dir.join("notes (reduced).pdf");
+        app.pick_override = Some(vec![out.to_string_lossy().into_owned()]);
+        app.reduce_file_size();
+        assert!(app.optimize_run.is_none() && app.progress_notice.is_none(), "nothing runs until the answer is in");
+        assert!(app.pickers.pending(), "the question is out");
+        app.process_picked();
+        let run = app.optimize_run.as_ref().expect("the answer starts it");
+        assert_eq!(run.destination.as_deref(), out.to_str());
+        // Nothing more is asked at the end: the copy is simply there.
+        app.pick_override = Some(vec![dir.join("not asked.pdf").to_string_lossy().into_owned()]);
+        let start = std::time::Instant::now();
+        while app.optimize_run.is_some() && start.elapsed() < std::time::Duration::from_secs(30) {
+            app.poll_optimize();
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(!app.pickers.pending(), "it doesn't ask again");
+        let written = std::fs::read(&out).unwrap_or_default();
+        let mut again = pdfcraft_engine::Session::new();
+        let id = again.open("notes (reduced).pdf", None, Arc::new(written), None).unwrap();
+        let text = pdfcraft_engine::export::Exporter::new(again.get(id).unwrap()).text(0).unwrap();
+        assert!(text.contains("Minutes of the harbour board"), "the copy reopens with its text: {text:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn cancelling_reduce_file_size_compresses_nothing() {
+        let (mut app, dir) = reducing("cancel");
+        app.pick_override = Some(vec![]);
+        app.reduce_file_size();
+        app.process_picked();
+        assert!(app.optimize_run.is_none() && app.progress_notice.is_none());
+        assert!(!app.pickers.pending());
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0, "nothing was written");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The answer is for the document it was asked about.
+    #[test]
+    fn switching_documents_while_reduce_file_size_asks_compresses_nothing() {
+        let (mut app, dir) = reducing("switch");
+        let out = dir.join("notes (reduced).pdf");
+        app.pick_override = Some(vec![out.to_string_lossy().into_owned()]);
+        app.run_inline = true;
+        app.reduce_file_size();
+        app.open_bytes("other.pdf", None, text_pdf("Another document")).unwrap();
+        app.process_picked();
+        assert!(app.optimize_run.is_none() && !out.exists(), "nothing runs, and nothing is written");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Minutes of work aren't lost because the place chosen first has gone bad.
+    #[test]
+    fn a_reduced_copy_that_cant_be_written_where_chosen_asks_again() {
+        let (mut app, dir) = reducing("again");
+        let (gone, good) = (dir.join("gone").join("notes (reduced).pdf"), dir.join("notes (reduced).pdf"));
+        app.pick_override = Some(vec![gone.to_string_lossy().into_owned()]);
+        app.run_inline = true;
+        app.reduce_file_size();
+        app.pick_override = Some(vec![good.to_string_lossy().into_owned()]);
+        app.process_picked();
+        let told = app.toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
+        assert!(told.contains("Couldn't write"), "{told}");
+        assert!(app.pickers.pending(), "it asks again");
+        app.process_picked();
+        assert!(good.exists(), "the copy is saved at the second place");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// However many places turn out bad, the copy waits for one that works.
+    #[test]
+    fn a_reduced_copy_asks_until_it_can_be_written() {
+        let (mut app, dir) = reducing("until");
+        let bad = |n: &str| dir.join(n).join("notes (reduced).pdf").to_string_lossy().into_owned();
+        let good = dir.join("notes (reduced).pdf");
+        app.pick_override = Some(vec![bad("gone")]);
+        app.run_inline = true;
+        app.reduce_file_size();
+        app.pick_override = Some(vec![bad("gone too")]);
+        app.process_picked();
+        assert!(app.pickers.pending(), "it asks after the first");
+        app.pick_override = Some(vec![good.to_string_lossy().into_owned()]);
+        app.process_picked();
+        assert!(app.pickers.pending(), "and after the second");
+        app.process_picked();
+        assert!(good.exists(), "the copy is saved at the third place");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A file that's chosen and then has nothing to replace it stays as it was.
+    #[test]
+    fn a_reduced_copy_that_isnt_smaller_leaves_the_chosen_file_alone() {
+        let (mut app, dir) = reducing("small");
+        let out = dir.join("existing.pdf");
+        std::fs::write(&out, b"what was there").unwrap();
+        app.open_bytes("notes.txt", None, "lorem ipsum ".repeat(500).into_bytes()).unwrap();
+        app.pick_override = Some(vec![out.to_string_lossy().into_owned()]);
+        app.run_inline = true;
+        app.reduce_file_size();
+        app.process_picked();
+        assert_eq!(std::fs::read(&out).unwrap(), b"what was there");
+        let told = app.toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
+        assert!(told.contains("No copy was saved"), "{told}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// While a run is going, nothing is asked that couldn't be used.
+    #[test]
+    fn reduce_file_size_doesnt_ask_while_a_run_is_going() {
+        let (mut app, dir) = reducing("busy");
+        let (_, doc) = app.active_ids().unwrap();
+        app.optimize_run = Some(crate::optimize_ui::OptimizeRun {
+            doc,
+            kind: crate::optimize_ui::OptimizeKind::Reduce,
+            destination: None,
+            progress: Arc::default(),
+        });
+        app.pick_override = Some(vec![dir.join("no.pdf").to_string_lossy().into_owned()]);
+        app.reduce_file_size();
+        assert!(!app.pickers.pending(), "no question");
+        assert_eq!(app.toast.as_ref().map(|t| t.0.as_str()), Some("Optimization is already running"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

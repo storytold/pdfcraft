@@ -1,4 +1,4 @@
-use super::{Align2, Color32, CornerRadius, DocView, Range, Rect, Stroke, Tokens, icons, theme, vec2, widgets};
+use super::{Align2, Color32, CornerRadius, DocView, Range, Rect, Stroke, Tokens, ViewAction, icons, theme, vec2, widgets};
 
 /// The find bar (⌘F): query, matches across the document, current match.
 #[derive(Default)]
@@ -26,6 +26,11 @@ pub struct Find {
     pub whole_words: bool,
     /// Shown in the Search panel (Advanced Search) instead of the find bar.
     pub in_panel: bool,
+    /// Find and replace (in Edit text mode): the Replace row shows, with what replaces a match.
+    pub replacing: bool,
+    pub replacement: String,
+    /// Focus the Replace field on the next frame.
+    pub focus_replace: bool,
 }
 
 /// What a text layer arriving after a search began may do with the automatic choice.
@@ -78,6 +83,19 @@ impl DocView {
     pub fn open_find(&mut self) {
         let f = self.find.get_or_insert_with(Find::default);
         f.focus = true;
+    }
+
+    /// Open the find bar with its Replace row (Edit text mode shows it): the Find field takes the
+    /// keyboard while it is empty, else the Replace field.
+    pub fn open_replace(&mut self) {
+        let f = self.find.get_or_insert_with(Find::default);
+        f.in_panel = false;
+        f.replacing = true;
+        if f.query.trim().is_empty() {
+            f.focus = true;
+        } else {
+            f.focus_replace = true;
+        }
     }
 
     /// Re-run the search on all pages whose text is known (after the query changed).
@@ -180,16 +198,48 @@ impl DocView {
         self.flash_match(p);
     }
 
+    /// The centre of the current match as a fraction of its displayed page `[x, y]` (0..1 from
+    /// the top-left corner, after the view rotation, as `goto_point` takes it).
+    fn match_centre(&self) -> Option<[f32; 2]> {
+        let f = self.find.as_ref()?;
+        let (p, r) = f.matches.get(f.current?)?;
+        let glyphs = self.texts.get(p)?.glyphs.get(r.clone())?;
+        let [x0, y0, x1, y1] = glyphs.iter().map(|g| g.rect).reduce(|a, b| [a[0].min(b[0]), a[1].min(b[1]), a[2].max(b[2]), a[3].max(b[3])])?;
+        let &(w, h) = self.page_sizes.get(*p).filter(|(w, h)| *w > 0.0 && *h > 0.0)?;
+        let (u, v) = ((((x0 + x1) / 2.0) / w).clamp(0.0, 1.0), (((y0 + y1) / 2.0) / h).clamp(0.0, 1.0));
+        // Turned clockwise by the view rotation, as `PageInfo::dest_fraction` does.
+        Some(match self.rotation % 360 {
+            90 => [1.0 - v, u],
+            180 => [1.0 - u, 1.0 - v],
+            270 => [v, 1.0 - u],
+            _ => [u, v],
+        })
+    }
+
     fn flash_match(&mut self, page: usize) {
         let frac = self
             .find
             .as_ref()
             .and_then(|f| f.current.and_then(|c| f.matches.get(c)))
             .and_then(|(p, r)| self.texts.get(p).and_then(|t| t.glyphs.get(r.start)).map(|g| g.rect[1]))
-            .zip(self.page_heights.get(page).copied())
+            .zip(self.page_sizes.get(page).map(|&(_, h)| h))
             .map(|(y, h)| ((y - 60.0) / h).clamp(0.0, 1.0))
             .unwrap_or(0.0);
         self.goto = Some((page, frac));
+        self.find_hold = None;
+        // Then put the match's centre at the window's centre, as Acrobat does (#3530) and as a
+        // /FitR destination's rectangle is: a page wider or taller than the window no longer
+        // leaves it off to one side or near an edge.
+        // Finite only: a hostile page's glyphs can span -inf..inf, and NaN survives `clamp`.
+        if let Some([fx, fy]) = self.match_centre().filter(|c| c.iter().all(|v| v.is_finite())) {
+            self.goto_point = Some((page, Some(fx), Some(fy), vec2(self.viewport_w, self.viewport_h) / 2.0));
+            // The point alone, both axes in one frame. A pending zoom anchor would hold the old
+            // place for that frame and put `goto` off to the next, where its page-top offset
+            // undid the centring; a zoom after the step anchors on the match instead.
+            self.goto = None;
+            self.zoom_anchor = None;
+            self.find_hold = Some((page, fx, fy));
+        }
         self.current = page;
         self.reset_coarse_state();
     }
@@ -204,8 +254,23 @@ impl DocView {
     }
 }
 
-/// Acrobat-style floating find bar at the top-right of the document area.
-pub(super) fn find_bar(view: &mut DocView, pages: usize, area: Rect, ui: &mut egui::Ui, t: &Tokens) {
+/// The id of a pane's find field: one per view, so two find bars open at once do not share an id
+/// (and so the focus).
+fn find_input_id(key: u64) -> egui::Id {
+    egui::Id::unique(("find-input", key))
+}
+
+impl DocView {
+    /// The id of this view's find field, for what needs to give it the focus or take it away.
+    pub fn find_input_id(&self) -> egui::Id {
+        find_input_id(self.pane.key)
+    }
+}
+
+/// Acrobat-style floating find bar at the top-right of the document area. In Edit text mode
+/// (`editing`) it offers a Replace row: Replace changes the highlighted match, Replace all every
+/// match, each inside its own paragraph.
+pub(super) fn find_bar(view: &mut DocView, pages: usize, area: Rect, editing: bool, ui: &mut egui::Ui, t: &Tokens) {
     let Some(find) = view.find.as_mut() else { return };
     // The Search panel shows this search.
     if find.in_panel {
@@ -213,8 +278,9 @@ pub(super) fn find_bar(view: &mut DocView, pages: usize, area: Rect, ui: &mut eg
     }
     let mut close = false;
     let mut step: Option<bool> = None;
+    let mut replace: Option<bool> = None;
     let searched = view.texts.len() + view.text_failed.len();
-    egui::Area::new(egui::Id::unique("find-bar"))
+    egui::Area::new(egui::Id::unique(("find-bar", view.pane.key)))
         .order(egui::Order::Middle)
         .pivot(Align2::RIGHT_TOP)
         .fixed_pos(area.right_top() + vec2(-18.0, 12.0))
@@ -229,7 +295,7 @@ pub(super) fn find_bar(view: &mut DocView, pages: usize, area: Rect, ui: &mut eg
                     ui.horizontal(|ui| {
                         ui.add(icons::image("search", 16.0, t.text_muted));
                         let edit = egui::TextEdit::singleline(&mut find.query)
-                            .id(egui::Id::unique("find-input"))
+                            .id(find_input_id(view.pane.key))
                             .hint_text(tl!("Find text"))
                             .desired_width(220.0)
                             .frame(egui::Frame::NONE);
@@ -273,6 +339,13 @@ pub(super) fn find_bar(view: &mut DocView, pages: usize, area: Rect, ui: &mut eg
                         if icons::button(ui, "chevron-down", 26.0, false, &tip).clicked() {
                             step = Some(true);
                         }
+                        if editing {
+                            let tip = crate::commands::command_tip(ui.ctx(), tl!("Replace ({key})"), "edit.replace");
+                            if icons::button(ui, "replace", 26.0, find.replacing, &tip).clicked() {
+                                find.replacing = !find.replacing;
+                                find.focus_replace = find.replacing;
+                            }
+                        }
                         let opts = icons::button(ui, "settings-2", 26.0, find.case_sensitive || find.whole_words, tl!("Find options"));
                         egui::Popup::menu(&opts).show(|ui| {
                             let a = ui.add(widgets::checkbox(&mut find.whole_words, tl!("Whole words only"))).changed();
@@ -286,11 +359,48 @@ pub(super) fn find_bar(view: &mut DocView, pages: usize, area: Rect, ui: &mut eg
                             close = true;
                         }
                     });
+                    if editing && find.replacing {
+                        ui.horizontal(|ui| {
+                            ui.add(icons::image("replace", 16.0, t.text_muted));
+                            let edit = egui::TextEdit::singleline(&mut find.replacement)
+                                .id(egui::Id::unique("replace-input"))
+                                .hint_text(tl!("Replace with"))
+                                .desired_width(220.0)
+                                .frame(egui::Frame::NONE);
+                            let r = ui.add(edit).accessible_name(tl!("Replace with"));
+                            if find.focus_replace {
+                                r.request_focus();
+                                find.focus_replace = false;
+                            }
+                            let searched = !find.case_query.trim().is_empty();
+                            // Enter in the field replaces the highlighted match, as the button does.
+                            if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) && find.current.is_some() {
+                                replace = Some(false);
+                                r.request_focus();
+                            }
+                            if r.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                                close = true;
+                            }
+                            ui.add_enabled_ui(find.current.is_some(), |ui| {
+                                if crate::widgets::pill_button(ui, tl!("Replace"), false).clicked() {
+                                    replace = Some(false);
+                                }
+                            });
+                            ui.add_enabled_ui(searched, |ui| {
+                                if crate::widgets::pill_button(ui, tl!("Replace all"), true).clicked() {
+                                    replace = Some(true);
+                                }
+                            });
+                        });
+                    }
                 });
         });
     if close {
         view.find = None;
         return;
+    }
+    if let Some(all) = replace {
+        view.pending_action = Some(ViewAction::Replace { all });
     }
     if find.query != find.case_query {
         view.rerun_find();
