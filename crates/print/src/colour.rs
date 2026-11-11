@@ -41,14 +41,21 @@ impl PrinterProfile {
         Ok(PrinterProfile { profile: Arc::new(profile), name })
     }
 
-    /// The profile in the file at `path`, at most [`MAX_PROFILE_BYTES`] long.
+    /// The profile in the file at `path`, at most [`MAX_PROFILE_BYTES`] long. Anything but a
+    /// regular file (links followed) is refused before it is opened: opening a FIFO or a device
+    /// can wait forever.
     pub fn read(path: &Path) -> Result<PrinterProfile, String> {
-        let len = std::fs::metadata(path).map_err(|e| format!("{}: {e}", path.display()))?.len();
-        if len > MAX_PROFILE_BYTES {
-            return Err(format!("{}: larger than an ICC profile can be here ({} MB)", path.display(), MAX_PROFILE_BYTES >> 20));
+        let at = |e: String| format!("{}: {e}", path.display());
+        let meta = std::fs::metadata(path).map_err(|e| at(e.to_string()))?;
+        if !meta.is_file() {
+            return Err(at("not a regular file".into()));
         }
-        let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
-        PrinterProfile::from_bytes(&bytes).map_err(|e| format!("{}: {e}", path.display()))
+        if meta.len() > MAX_PROFILE_BYTES {
+            return Err(at(too_large()));
+        }
+        let file = std::fs::File::open(path).map_err(|e| at(e.to_string()))?;
+        let bytes = read_limited(file, MAX_PROFILE_BYTES).map_err(at)?;
+        PrinterProfile::from_bytes(&bytes).map_err(at)
     }
 
     /// The profile's description (its `desc` tag), possibly empty.
@@ -65,6 +72,22 @@ impl PrinterProfile {
     pub fn is_gray(&self) -> bool {
         self.profile.color_space == ColorSpace::Gray
     }
+}
+
+/// At most `limit` bytes of `source`: a file that grew after it was measured is refused, not read
+/// whole.
+fn read_limited(source: impl std::io::Read, limit: u64) -> Result<Vec<u8>, String> {
+    use std::io::Read as _;
+    let mut bytes = Vec::new();
+    source.take(limit.saturating_add(1)).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
+    if bytes.len() as u64 > limit {
+        return Err(too_large());
+    }
+    Ok(bytes)
+}
+
+fn too_large() -> String {
+    format!("larger than an ICC profile can be here ({} MB)", MAX_PROFILE_BYTES >> 20)
 }
 
 /// App-managed colour: the profile the pages are converted into, how, and whether black point
@@ -161,7 +184,8 @@ pub fn installed_profiles() -> Vec<InstalledProfile> {
     installed_profiles_in(&profile_folders())
 }
 
-/// The `.icc` and `.icm` files in `dir`, descending `depth` more levels, up to [`MAX_LISTED`].
+/// The `.icc` and `.icm` regular files in `dir` (links followed), descending `depth` more levels,
+/// up to [`MAX_LISTED`]. A FIFO or device with such a name is skipped: reading it can block.
 fn collect(dir: &Path, depth: u32, files: &mut Vec<PathBuf>) {
     let Ok(entries) = std::fs::read_dir(dir) else { return };
     for entry in entries.flatten() {
@@ -174,7 +198,9 @@ fn collect(dir: &Path, depth: u32, files: &mut Vec<PathBuf>) {
             if depth > 0 {
                 collect(&path, depth - 1, files);
             }
-        } else if path.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("icc") || e.eq_ignore_ascii_case("icm")) {
+        } else if path.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("icc") || e.eq_ignore_ascii_case("icm"))
+            && std::fs::metadata(&path).is_ok_and(|m| m.is_file())
+        {
             files.push(path);
         }
     }
@@ -196,6 +222,43 @@ pub fn find_installed<'a>(profiles: &'a [InstalledProfile], name: &str) -> Optio
 mod tests {
     use super::*;
     use craft_cms::Curve;
+
+    /// A source longer than the limit is refused after reading one byte past it, not read whole.
+    #[test]
+    fn a_profile_read_stops_one_byte_past_the_limit() {
+        let source = [7u8; 100];
+        assert_eq!(read_limited(&source[..], 100).map(|b| b.len()), Ok(100));
+        let mut rest = &source[..];
+        assert!(read_limited(&mut rest, 10).is_err());
+        assert_eq!(rest.len(), 89, "read the limit and one byte more");
+    }
+
+    /// A FIFO named like a profile is neither listed nor opened: opening it for reading would wait
+    /// for a writer that never comes.
+    #[cfg(unix)]
+    #[test]
+    fn a_fifo_named_like_a_profile_is_skipped() {
+        let dir = std::env::temp_dir().join(format!("pdfcraft-print-fifo-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let fifo = dir.join("printer.icc");
+        let _ = std::fs::remove_file(&fifo);
+        let made = std::process::Command::new("mkfifo").arg(&fifo).status().is_ok_and(|s| s.success());
+        if !made {
+            eprintln!("mkfifo is unavailable; skipped");
+            return;
+        }
+        // On a thread, so that a read which blocks fails the test instead of hanging it.
+        let (tx, rx) = std::sync::mpsc::channel();
+        let (folders, path) = (vec![dir.clone()], fifo.clone());
+        std::thread::spawn(move || {
+            let _ = tx.send((installed_profiles_in(&folders).len(), PrinterProfile::read(&path).err()));
+        });
+        let outcome = rx.recv_timeout(std::time::Duration::from_secs(10));
+        let _ = std::fs::remove_dir_all(&dir);
+        let (listed, refused) = outcome.expect("reading the FIFO blocked");
+        assert_eq!(listed, 0, "the listing skipped the FIFO");
+        assert!(refused.is_some_and(|e| e.contains("not a regular file")), "the FIFO was refused before it was opened");
+    }
 
     /// A grey printer profile whose darkest black is a light charcoal (8% luminance, L* 34):
     /// what a matte paper or a worn toner gives. Synthetic, from the built-in sGray.

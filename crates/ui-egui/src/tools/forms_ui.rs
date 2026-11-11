@@ -89,8 +89,8 @@ pub struct FormView {
     pub unbaked: HashSet<(String, usize)>,
     /// A message for the app to show (e.g. "buttons run JavaScript").
     pub notice: Option<FormNotice>,
-    /// A push button was clicked: (its field name, what it does).
-    pub button: Option<(String, pdfcraft_engine::form_scripts::ButtonAction)>,
+    /// A push button was clicked: (its field name, exact PDF identity, what it does).
+    pub button: Option<(String, u64, pdfcraft_engine::form_scripts::ButtonAction)>,
     /// The focused check box or radio button was clicked. It toggles once no other edit is
     /// queued: the text the click committed goes first, and the toggle is dropped if that text
     /// is refused and its field reopens.
@@ -349,7 +349,7 @@ fn list_pick_edit(form: &[FormField], f: &FormField, picked: Vec<usize>) -> Edit
 
 /// Editor state for opening widget `widget` of `f`: it starts from the field's value, asks
 /// for keyboard focus, and gives a drop-down a fresh list that places itself from that value.
-fn open_focus(f: &FormField, widget: usize) -> Focus {
+pub(crate) fn open_focus(f: &FormField, widget: usize) -> Focus {
     Focus {
         name: f.name.clone(),
         obj: Some(f.obj),
@@ -507,9 +507,18 @@ pub(crate) fn page_input(
     match f.kind {
         _ if f.read_only() || w.read_only => view.forms.notice = Some(FormNotice::ReadOnly(f.name.clone())),
         FormFieldKind::PushButton => match &f.button {
-            Some(a) => view.forms.button = Some((f.name.clone(), a.clone())),
+            Some(a) => view.forms.button = Some((f.name.clone(), pdfcraft_engine::js::field_object_id(f.obj), a.clone())),
             None => view.forms.notice = Some(FormNotice::NoAction(f.name.clone())),
         },
+        FormFieldKind::Text if let Some(script) = &w.mouse_up_script => {
+            // Close the editor so the script can replace its value without a stale draft.
+            commit(view, form);
+            view.forms.button = Some((
+                f.name.clone(),
+                pdfcraft_engine::js::field_object_id(f.obj),
+                pdfcraft_engine::form_scripts::ButtonAction::Script(script.clone()),
+            ));
+        }
         FormFieldKind::Signature => view.sign.field = Some(f.name.clone()),
         FormFieldKind::CheckBox | FormFieldKind::Radio => {
             // The box takes the focus, as in Acrobat, so Tab goes on from it (#2223). The overlay
@@ -588,6 +597,9 @@ pub(crate) fn page_input(
 /// The edit the focused field's draft makes, if it differs from the field's value.
 pub(crate) fn draft_edit(focus: &Focus, form: &[FormField]) -> Option<Edit> {
     let f = focused_field(focus, form)?;
+    if f.read_only() || f.widgets.get(focus.widget).is_some_and(|widget| widget.read_only) {
+        return None;
+    }
     let value = match f.kind {
         FormFieldKind::Text if f.value.first().map(String::as_str).unwrap_or("") != focus.text => FieldValue::Text(focus.text.clone()),
         // Typed into an editable combo box: a shown text picks its option, anything else is the
@@ -1126,6 +1138,40 @@ fn arrow_step(ctx: &egui::Context, keys: PageKeys) -> Option<bool> {
     }
 }
 
+/// Apply keyboard navigation for a focused list without consuming page navigation keys elsewhere.
+fn list_overlay_keys(
+    ctx: &egui::Context,
+    keys: PageKeys,
+    form: &[FormField],
+    f: &FormField,
+    clicked_outside: bool,
+) -> (Option<Edit>, bool, Option<bool>) {
+    let mut edit = None;
+    let mut close = false;
+    let mut next = None;
+    // Taken, so the arrows move the selection without also scrolling the page.
+    let (up, down) = (keys.take(ctx, egui::Key::ArrowUp), keys.take(ctx, egui::Key::ArrowDown));
+    let (esc, tab) = (keys.pressed(ctx, egui::Key::Escape), keys.pressed(ctx, egui::Key::Tab));
+    let shift = ctx.input(|i| i.modifiers.shift);
+    if esc {
+        close = true;
+    } else if tab {
+        next = Some(!shift);
+    } else if (up || down) && !f.options.is_empty() {
+        let current_idx = f.picked_in_order().last().copied().unwrap_or(0);
+        let next_idx = if up { current_idx.saturating_sub(1) } else { current_idx.saturating_add(1).min(f.options.len().saturating_sub(1)) };
+        if next_idx != current_idx && next_idx < f.options.len() {
+            // By position, so the arrows step through options that share an export value,
+            // in the focused twin's own order.
+            edit = Some(list_pick_edit(form, f, vec![next_idx]));
+        }
+    }
+    if clicked_outside {
+        close = true;
+    }
+    (edit, close, next)
+}
+
 /// The in-place editor or option list for the focused field. Returns an edit to apply.
 /// `text_box`, for a text field that doesn't scroll, is how its widget lays text out: the editor
 /// then takes no more than fits.
@@ -1171,8 +1217,9 @@ pub(crate) fn overlay(
     let mut edit = None;
     let mut close = false;
     let mut next: Option<bool> = None; // Tab / Shift+Tab
+    let read_only = f.read_only() || w.read_only;
     match f.kind {
-        FormFieldKind::Text => {
+        FormFieldKind::Text if !read_only => {
             let multiline = f.has(field_flags::MULTILINE);
             // Shown at once, like the paragraph editor: a fade-in shows the field's value through it.
             // Over the page, so only where the document shows: a field scrolled under the mode bar
@@ -1260,7 +1307,7 @@ pub(crate) fn overlay(
                 return view.pending_edit.take();
             }
         }
-        FormFieldKind::Combo => {
+        FormFieldKind::Combo if !read_only => {
             // An editable combo box has a text box over the field as well as its list (ISO
             // 32000-2 Table 233, Edit); the keys are the text box's then, and the list takes
             // the pointer.
@@ -1292,30 +1339,11 @@ pub(crate) fn overlay(
                 close = true;
             }
         }
-        FormFieldKind::List => {
-            // Taken, so the arrows move the selection without also scrolling the page.
-            let (up, down) = (keys.take(ctx, egui::Key::ArrowUp), keys.take(ctx, egui::Key::ArrowDown));
-            let (esc, tab) = (keys.pressed(ctx, egui::Key::Escape), keys.pressed(ctx, egui::Key::Tab));
-            let shift = ctx.input(|i| i.modifiers.shift);
-            if esc {
-                close = true;
-            } else if tab {
-                next = Some(!shift);
-            } else if (up || down) && !f.options.is_empty() {
-                let current_idx = f.picked_in_order().last().copied().unwrap_or(0);
-                let next_idx = if up { current_idx.saturating_sub(1) } else { current_idx.saturating_add(1).min(f.options.len().saturating_sub(1)) };
-                if next_idx != current_idx && next_idx < f.options.len() {
-                    // By position, so the arrows step through options that share an export value,
-                    // in the focused twin's own order.
-                    edit = Some(list_pick_edit(form, f, vec![next_idx]));
-                }
-            }
-            if clicked_outside() {
-                close = true;
-            }
+        FormFieldKind::List if !read_only => {
+            (edit, close, next) = list_overlay_keys(ctx, keys, form, f, clicked_outside());
         }
-        FormFieldKind::CheckBox | FormFieldKind::Radio => {
-            // Nothing is drawn over the box, but a widget there holds egui's keyboard focus, so
+        kind if read_only || matches!(kind, FormFieldKind::CheckBox | FormFieldKind::Radio) => {
+            // Nothing is drawn over the field, but a widget there holds egui's keyboard focus, so
             // Space, Tab and the arrows come here instead of turning or scrolling the page.
             let id = egui::Id::unique(("form-field", view.pane.key, &f.name, focus.widget));
             let mut has_focus = false;
@@ -1342,6 +1370,8 @@ pub(crate) fn overlay(
                 close = true;
             } else if tab {
                 next = Some(!shift);
+            } else if read_only {
+                close = !has_focus && !focus.request_focus;
             } else if toggle && view.pending_edit.is_some() {
                 view.forms.toggle = true;
             } else if toggle {
