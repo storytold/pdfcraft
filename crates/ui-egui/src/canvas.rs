@@ -1449,7 +1449,7 @@ struct PageFrame<'a> {
     pressed_page: Option<usize>,
     calc_hover: Option<crate::calc_order_ui::Focus>,
     /// The form field widget under the pointer on any page, for its Mouse Enter and Exit scripts.
-    field_hover: Option<(String, usize)>,
+    field_hover: Option<crate::forms_ui::WidgetRef>,
     /// A page took this frame's right-click.
     right_clicked: bool,
 }

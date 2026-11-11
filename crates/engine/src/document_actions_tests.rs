@@ -331,3 +331,27 @@ fn set_action_installs_on_the_field_the_object_stands_for() {
     let formats: Vec<(u32, bool)> = pdfcraft_forms::fields(&cos).iter().map(|f| (f.obj.num, f.actions.scripts.format.is_some())).collect();
     assert_eq!(formats, [(4, false), (6, true)]);
 }
+
+/// Of two fields sharing a name, the one the pointer is on runs its own widget script.
+#[test]
+fn a_trigger_on_a_field_sharing_a_name_runs_that_fields_script() {
+    use pdfcraft_forms::Trigger;
+    let enter = |text: &str| format!("/AA << /E << /S /JavaScript /JS (getField\\('log'\\).value += '{text}';) >> >>");
+    let objs = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 6 0 R 7 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 5 0 R >> >> >> >>"
+            .to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 6 0 R 7 0 R] >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (log) /V () /Rect [20 250 180 270] /P 3 0 R /F 4 >>".into(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),
+        format!("<< /Type /Annot /Subtype /Widget /FT /Tx /T (dup) /V () /Rect [20 200 180 220] /P 3 0 R /F 4 {} >>", enter("first;")),
+        format!("<< /Type /Annot /Subtype /Widget /FT /Tx /T (dup) /V () /Rect [20 150 180 170] /P 3 0 R /F 4 {} >>", enter("second;")),
+    ];
+    let mut s = Session::new();
+    let id = s.open("dup.pdf", None, Arc::new(pdf_of(&objs)), None).unwrap();
+    let second = crate::js::field_object_id(pdfcraft_cos::ObjRef::new(7, 0));
+    assert!(s.field_trigger_target(id, "dup", Some(second), 0, Trigger::MouseEnter).unwrap());
+    assert_eq!(log(&s, id), "second;");
+    assert!(s.field_trigger(id, "dup", 0, Trigger::MouseEnter).unwrap(), "by name alone, the first");
+    assert_eq!(log(&s, id), "second;first;");
+}

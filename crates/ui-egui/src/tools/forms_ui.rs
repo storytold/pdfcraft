@@ -108,11 +108,11 @@ pub struct FormView {
     pub(crate) list_anchor: Option<(String, usize)>,
     /// The field and widget under the pointer when it was last looked at: when it changes, the
     /// one left runs its Mouse Exit JavaScript and the one reached its Mouse Enter (#269).
-    pub(crate) hovered: Option<(String, usize)>,
+    pub(crate) hovered: Option<WidgetRef>,
     /// Pointer triggers waiting to run their widget's JavaScript, in order (field name, widget,
     /// trigger): `PdfCraftApp::run_field_triggers` runs them after the frame's edit, so a check
     /// box's Mouse Up sees the value its click just stored (#247).
-    pub(crate) triggers: Vec<(String, usize, pdfcraft_engine::FieldTrigger)>,
+    pub(crate) triggers: Vec<(WidgetRef, pdfcraft_engine::FieldTrigger)>,
 }
 
 /// A form message for the app to show, with document data kept separate so the visible
@@ -465,26 +465,35 @@ pub(crate) fn hit(xf: &PageXform, info: &DocInfo, page: usize, form: &[FormField
     Some(Hit::new(Owner::Field { field, widget }, Layer::Field, icon))
 }
 
+/// A widget a pointer trigger is for: its field's name and object (so a field sharing another's
+/// name runs its own script), and the widget's index in the field.
+pub(crate) type WidgetRef = (String, u64, usize);
+
+/// `f`'s widget `widget` as a trigger names it.
+fn widget_ref(f: &FormField, widget: usize) -> WidgetRef {
+    (f.name.clone(), pdfcraft_engine::js::field_object_id(f.obj), widget)
+}
+
 /// The field and widget under the pointer on a page, when a press there would take it.
-pub(crate) fn hovered(form: &[FormField], hover: Option<&Hit>) -> Option<(String, usize)> {
+pub(crate) fn hovered(form: &[FormField], hover: Option<&Hit>) -> Option<WidgetRef> {
     match hover.map(|h| h.owner) {
-        Some(Owner::Field { field, widget }) => form.get(field).map(|f| (f.name.clone(), widget)),
+        Some(Owner::Field { field, widget }) => form.get(field).map(|f| widget_ref(f, widget)),
         _ => None,
     }
 }
 
 /// Queue Mouse Exit for the widget the pointer left and Mouse Enter for the one it reached, when
 /// they differ from the last frame's (`now`: the widget under the pointer on any page).
-pub(crate) fn hover_moved(view: &mut DocView, now: Option<(String, usize)>) {
+pub(crate) fn hover_moved(view: &mut DocView, now: Option<WidgetRef>) {
     if view.forms.hovered == now {
         return;
     }
     let left = std::mem::replace(&mut view.forms.hovered, now.clone());
-    if let Some((name, widget)) = left {
-        view.forms.triggers.push((name, widget, pdfcraft_engine::FieldTrigger::MouseExit));
+    if let Some(w) = left {
+        view.forms.triggers.push((w, pdfcraft_engine::FieldTrigger::MouseExit));
     }
-    if let Some((name, widget)) = now {
-        view.forms.triggers.push((name, widget, pdfcraft_engine::FieldTrigger::MouseEnter));
+    if let Some(w) = now {
+        view.forms.triggers.push((w, pdfcraft_engine::FieldTrigger::MouseEnter));
     }
 }
 
@@ -516,7 +525,7 @@ pub(crate) fn page_input(
     let usable = usable(f, w, allowed);
     // The press runs the widget's Mouse Down JavaScript, as in Acrobat (#269).
     if usable && ptr.pressed().is_some() {
-        view.forms.triggers.push((f.name.clone(), wi, pdfcraft_engine::FieldTrigger::MouseDown));
+        view.forms.triggers.push((widget_ref(f, wi), pdfcraft_engine::FieldTrigger::MouseDown));
     }
     // A text field opens on the press rather than the click, so a drag that starts on it
     // selects its text (#2213).
@@ -580,7 +589,7 @@ pub(crate) fn page_input(
             }
             // A combo box's click runs its Mouse Up JavaScript (#269).
             if f.kind == FormFieldKind::Combo {
-                view.forms.triggers.push((f.name.clone(), wi, pdfcraft_engine::FieldTrigger::MouseUp));
+                view.forms.triggers.push((widget_ref(f, wi), pdfcraft_engine::FieldTrigger::MouseUp));
             }
         }
         FormFieldKind::List => {
@@ -628,7 +637,7 @@ pub(crate) fn page_input(
                 }
             }
             // A list box's click runs its Mouse Up JavaScript after the pick is stored (#269).
-            view.forms.triggers.push((f.name.clone(), wi, pdfcraft_engine::FieldTrigger::MouseUp));
+            view.forms.triggers.push((widget_ref(f, wi), pdfcraft_engine::FieldTrigger::MouseUp));
         }
     }
     true
@@ -1418,7 +1427,7 @@ pub(crate) fn overlay(
                 edit = toggle_edit(f, focus.widget);
                 // The click's Mouse Up JavaScript runs once the toggle is stored, so it reads the
                 // new value (#247).
-                view.forms.triggers.push((f.name.clone(), focus.widget, pdfcraft_engine::FieldTrigger::MouseUp));
+                view.forms.triggers.push((widget_ref(f, focus.widget), pdfcraft_engine::FieldTrigger::MouseUp));
             } else if space {
                 // Space toggles a check box and selects a radio button, as in browsers: it never
                 // turns the selected button off.

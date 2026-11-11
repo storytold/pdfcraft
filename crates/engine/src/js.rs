@@ -942,6 +942,19 @@ impl Session {
     /// Nothing runs on an XFA form (its own events run instead), with JavaScript off, or for a
     /// widget with no JavaScript for the trigger.
     pub fn field_trigger(&mut self, id: DocId, name: &str, widget: usize, trigger: pdfcraft_forms::Trigger) -> Result<bool, EditError> {
+        self.field_trigger_target(id, name, None, widget, trigger)
+    }
+
+    /// [`Session::field_trigger`] for the field object `target` ([`field_object_id`]) when given:
+    /// of fields sharing `name`, the one the pointer is on runs its own script.
+    pub fn field_trigger_target(
+        &mut self,
+        id: DocId,
+        name: &str,
+        target: Option<u64>,
+        widget: usize,
+        trigger: pdfcraft_forms::Trigger,
+    ) -> Result<bool, EditError> {
         use pdfcraft_forms::Trigger;
         if self.js_off {
             return Ok(false);
@@ -951,7 +964,11 @@ impl Session {
             return Ok(false);
         }
         let Some(cos) = doc.editor.as_ref().map(|e| &e.cos) else { return Ok(false) };
-        let field = doc.form.iter().find(|f| f.name == name).ok_or_else(|| EditError::Invalid(format!("there is no field named {name:?}")))?;
+        let field = doc
+            .form
+            .iter()
+            .find(|f| f.name == name && target.is_none_or(|t| field_object_id(f.obj) == t))
+            .ok_or_else(|| EditError::Invalid(format!("there is no field named {name:?}")))?;
         let Some(w) = field.widgets.get(widget) else { return Ok(false) };
         let scripts = pdfcraft_forms::widget_scripts(cos, w.obj, trigger);
         if scripts.is_empty() {
