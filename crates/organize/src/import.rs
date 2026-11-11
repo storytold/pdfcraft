@@ -661,9 +661,11 @@ pub fn page_as_form(dst: &mut Document, src: &Document, page: usize) -> Result<(
     // Content: the page's streams, decoded and joined. Of a stream damaged partway, the copy draws
     // what decoded before the damage.
     let content = match own.get(b"Contents") {
-        Some(c) => crate::prune::content_bytes(src, c, &mut pdfcraft_cos::DecodeBudget::page())
-            .map_err(|e| OrganizeError::Invalid(format!("page {} content: {e}", page + 1)))?
-            .0,
+        Some(c) => {
+            crate::prune::content_bytes(src, c, &mut pdfcraft_cos::DecodeBudget::page())
+                .map_err(|e| OrganizeError::Invalid(format!("page {} content: {e}", page + 1)))?
+                .0
+        }
         None => Vec::new(),
     };
     let mut copier = Copier::new(src, HashMap::new(), HashMap::new());

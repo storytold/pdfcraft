@@ -58,8 +58,6 @@ struct Pruner<'a> {
     forms_seen: HashSet<(ObjRef, Owner)>,
     /// The current page's decode allowance, its content and the forms it draws together.
     budget: DecodeBudget,
-}
-
     /// Owners of resources that content not read whole drew against, whose every form was read
     /// as drawn ([`Pruner::unread`]): once is enough.
     partly_read: HashSet<Owner>,
