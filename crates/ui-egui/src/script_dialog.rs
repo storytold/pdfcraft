@@ -87,6 +87,8 @@ impl PdfCraftApp {
     /// Receive worker prompts/results and invalidate stale or timed-out interactions before applying their edits.
     pub(crate) fn poll_script_dialog(&mut self, ctx: &egui::Context) {
         let Some(mut pending) = self.script_pending.take() else { return };
+        // An XFA click reads no view state, so scrolling or zooming while it runs leaves it be.
+        let xfa = pending.run.is_xfa();
         let current = (self.active_ids().is_some_and(|(_, id)| id == pending.run.id)
             || self.compare.as_ref().is_some_and(|c| {
                 c.side_by_side
@@ -94,12 +96,20 @@ impl PdfCraftApp {
                     && self.active_ids().is_some_and(|(_, active)| active == c.old || active == c.new)
             }))
             && self.session.script_pending_current(&pending.run)
-            && self.views.iter().find(|v| v.id == pending.run.id).is_some_and(|v| v.zoom == pending.zoom && v.current == pending.page);
+            && (xfa || self.views.iter().find(|v| v.id == pending.run.id).is_some_and(|v| v.zoom == pending.zoom && v.current == pending.page));
         if !current {
             self.session.discard_javascript(&pending.run);
+            // The user clicked an XFA button and saw nothing happen: say why.
+            if xfa {
+                self.notify("The document changed while the form's script ran; what it did was not kept");
+            }
             return;
         }
-        if (pending.prompt.is_none() && pending.started.elapsed() > Duration::from_secs(10))
+        // An XFA click is bounded by its own limits (the engine's start, the click's and the
+        // calculations' budgets, laying the form out again), which can add up past 10 s: this
+        // is only a backstop.
+        let limit = Duration::from_secs(if xfa { 60 } else { 10 });
+        if (pending.prompt.is_none() && pending.started.elapsed() > limit)
             || (pending.prompt.is_some() && pending.started.elapsed() > Duration::from_secs(300))
         {
             self.session.timeout_javascript(pending.run);

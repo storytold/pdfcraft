@@ -110,6 +110,10 @@ pub(crate) struct XHost {
     /// Bytes of edges and corners copied when a script reached sides a border doesn't list,
     /// against [`super::props::MAX_COPIED`].
     pub(super) copied: usize,
+    /// The answers to the script's message boxes ([`super::XfaEvent::answers`]).
+    pub(crate) answers: Vec<Option<String>>,
+    /// Message boxes shown so far ([`super::XfaOutcome::messages`]).
+    pub(crate) messages: usize,
 }
 
 impl XHost {
@@ -153,7 +157,33 @@ impl XHost {
             prop_writes: super::props::PropWrites::new(),
             dropped_prop_writes: 0,
             copied: 0,
+            answers: Vec::new(),
+            messages: 0,
         }
+    }
+
+    /// Show message box `m` and return the button picked: the next of the event's answers
+    /// (headless runs); past them, the user's answer when the viewer can ask (an app's button
+    /// click: the script waits on its thread, as an AcroForm script's `app.alert` does), or
+    /// else the buttons' safe default. `Err`: an answer `m`'s buttons can't give, or the
+    /// event's prompts are spent.
+    pub(crate) fn message_box(&mut self, m: Message) -> Result<u8, String> {
+        let at = self.messages;
+        self.messages = self.messages.saturating_add(1);
+        let invalid = |answer: Option<&str>| {
+            let given: String = answer.unwrap_or("null").chars().take(32).collect();
+            format!("the answer to the script's message box {} ({given}) is not one of its buttons ({})", at.saturating_add(1), m.buttons.name())
+        };
+        let reply = match self.answers.get(at) {
+            Some(answer) => m.buttons.reply(answer.as_deref()).ok_or_else(|| invalid(answer.as_deref()))?,
+            None if crate::interaction::has_host() => {
+                let answer = crate::interaction::ask(crate::interaction::Prompt::Alert(m.clone())).map_err(|e| e.to_string())?;
+                m.buttons.reply(answer.as_deref()).ok_or_else(|| invalid(answer.as_deref()))?
+            }
+            None => m.buttons.safe_default(),
+        };
+        self.push(XfaEffect::MessageBox(m));
+        Ok(reply)
     }
 
     /// Room for `bytes` more bytes of kept text: charged when there is, a drop counted when not.

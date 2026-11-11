@@ -262,6 +262,41 @@ impl MessageButtons {
             MessageButtons::YesNoCancel => "yes_no_cancel",
         }
     }
+
+    /// What a script receives when nobody picks a button (closing the dialog, no answer given):
+    /// OK (1) when that is the only button, No (3) for Yes/No, otherwise Cancel (2).
+    pub fn safe_default(self) -> u8 {
+        match self {
+            MessageButtons::Ok => 1,
+            MessageButtons::YesNo => 3,
+            MessageButtons::OkCancel | MessageButtons::YesNoCancel => 2,
+        }
+    }
+
+    /// The number a script receives for `answer`, the button picked as the references number
+    /// them (1 OK, 2 Cancel, 3 No, 4 Yes): no answer is [`MessageButtons::safe_default`], and OK
+    /// where these buttons have none is Cancel. `None`: an answer these buttons can't give.
+    pub fn reply(self, answer: Option<&str>) -> Option<u8> {
+        let Some(answer) = answer else { return Some(self.safe_default()) };
+        let n = match answer {
+            "1" => 1,
+            "2" => 2,
+            "3" => 3,
+            "4" => 4,
+            _ => return None,
+        };
+        let accepted: &[u8] = match self {
+            MessageButtons::Ok => &[1],
+            MessageButtons::OkCancel => &[1, 2],
+            MessageButtons::YesNo => &[3, 4],
+            MessageButtons::YesNoCancel => &[2, 3, 4],
+        };
+        match n {
+            1 if !accepted.contains(&1) => Some(2),
+            n if accepted.contains(&n) => Some(n),
+            _ => None,
+        }
+    }
 }
 
 /// `code` as one of the numbers 0 to 3 the references define, when it is exactly one.

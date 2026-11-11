@@ -227,11 +227,11 @@ impl PdfCraftApp {
         if !self.commit_form_typing() {
             return;
         }
+        // On a worker, so its questions can be asked: an XFA button's click too (#4291).
         #[cfg(not(target_arch = "wasm32"))]
-        if self.session.get(id).is_some_and(|d| d.info.xfa.is_none()) {
-            self.start_ui_script(id, script, Some(field), identity);
-            return;
-        }
+        self.start_ui_script(id, script, Some(field), identity);
+        // The web build has no worker: the script runs here, and nobody can be asked.
+        #[cfg(target_arch = "wasm32")]
         match self.session.run_javascript_target(id, script, Some(field), identity) {
             Ok(o) => {
                 if let Some(i) = self.views.iter().position(|v| v.id == id)

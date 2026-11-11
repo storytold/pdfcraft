@@ -8064,11 +8064,27 @@ fn on_changes_notes_only_the_exits_that_ran() {
     let names = vec!["probe".to_string()];
     let mut exited = Vec::new();
     let mut out = crate::js::JsOutput::default();
-    let mut stopped = crate::xfa::XfaRun { page_count: 1, out: &mut out, datasets: None, ran_away: true, highlight: false, time_scale: 1 };
+    let mut stopped = crate::xfa::XfaRun {
+        page_count: 1,
+        out: &mut out,
+        datasets: None,
+        ran_away: true,
+        highlight: false,
+        time_scale: 1,
+        answers: Default::default(),
+    };
     crate::xfa::on_changes(&mut cos, &tpl, &names, &mut stopped, &mut exited).unwrap();
     assert!(exited.is_empty(), "no exit ran: {exited:?}");
     let mut out = crate::js::JsOutput::default();
-    let mut running = crate::xfa::XfaRun { page_count: 1, out: &mut out, datasets: None, ran_away: false, highlight: false, time_scale: 1 };
+    let mut running = crate::xfa::XfaRun {
+        page_count: 1,
+        out: &mut out,
+        datasets: None,
+        ran_away: false,
+        highlight: false,
+        time_scale: 1,
+        answers: Default::default(),
+    };
     crate::xfa::on_changes(&mut cos, &tpl, &names, &mut running, &mut exited).unwrap();
     assert_eq!(exited.len(), 1, "the exit ran: {exited:?}");
 }
@@ -9860,6 +9876,237 @@ fn xfa_message_boxes_keep_their_title_icon_and_buttons() {
     let o = s.run_javascript(id, "", Some("legacy")).unwrap();
     assert_eq!(o.error, None);
     assert_eq!(o.alerts, vec![titled("Too many", "Limits", MessageIcon::Warning, MessageButtons::OkCancel)]);
+}
+
+/// A form whose buttons branch on their message boxes' answers (#4291): `hello` (JavaScript)
+/// shows a message, then asks two questions; `legacy` (FormCalc) asks one.
+fn asking_form() -> (Session, DocId) {
+    let tpl = pdfcraft_xfa::fixtures::scripted_template()
+        .replace(
+            r#"xfa.host.messageBox("Hello " + qty.rawValue);"#,
+            r#"xfa.host.messageBox("Starting"); var a = xfa.host.messageBox("Clear?", "T", 2, 2); var b = app.alert("Really?", 2, 1); qty.rawValue = (a == 4 ? 10 : 20) + (b == 1 ? 1 : 2);"#,
+        )
+        .replace(r#"$host.messageBox("FormCalc")"#, r#"if ($host.messageBox("Sure?", "", 2, 2) == 4) then qty = 50 else qty = 1 endif"#);
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("asking.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&tpl)), None).expect("opens");
+    (s, id)
+}
+
+fn qty(s: &Session, id: DocId) -> Vec<String> {
+    s.get(id).unwrap().form.iter().find(|f| f.name == "qty").unwrap().value.clone()
+}
+
+fn answers(a: &[&str]) -> Vec<Option<String>> {
+    a.iter().map(|a| Some(a.to_string())).collect()
+}
+
+/// An XFA button's message boxes return the answers given, in order, headless (`js_run`'s
+/// answers), in JavaScript and FormCalc alike: a form can branch on No and Cancel (#4291).
+/// Without answers each question gets its buttons' safe default (No; Cancel), not OK.
+#[test]
+fn xfa_message_boxes_return_the_answers_given() {
+    let (mut s, id) = asking_form();
+    assert_eq!(qty(&s, id), ["2"]);
+    let o = s.run_javascript_answers(id, "", Some("hello"), &answers(&["1", "4", "1"])).unwrap();
+    assert_eq!((o.error.as_deref(), o.alerts.len()), (None, 3), "{o:?}");
+    assert_eq!(qty(&s, id), ["11"]);
+    let o = s.run_javascript_answers(id, "", Some("hello"), &answers(&["1", "3", "2"])).unwrap();
+    assert_eq!(o.error, None);
+    assert_eq!(qty(&s, id), ["22"]);
+    s.run_javascript(id, "", Some("hello")).unwrap();
+    assert_eq!(qty(&s, id), ["22"], "no answers: No and Cancel");
+    s.run_javascript_answers(id, "", Some("legacy"), &answers(&["4"])).unwrap();
+    assert_eq!(qty(&s, id), ["50"]);
+    s.run_javascript(id, "", Some("legacy")).unwrap();
+    assert_eq!(qty(&s, id), ["1"]);
+    // An answer the buttons can't give fails the script and says which.
+    let o = s.run_javascript_answers(id, "", Some("hello"), &answers(&["1", "2"])).unwrap();
+    assert!(o.error.as_deref().is_some_and(|e| e.contains("message box 2 (2)")), "{o:?}");
+}
+
+/// Wait for the next event of an XFA click started as the app starts it.
+#[cfg(not(target_arch = "wasm32"))]
+fn next_event(p: &crate::js::PendingScript) -> crate::js::InteractiveEvent {
+    p.receiver.recv_timeout(std::time::Duration::from_secs(20)).expect("the click goes on")
+}
+
+/// Answer the click's questions in turn with `answers` (each prompt checked against `asked`),
+/// then keep the click. Returns the outcome.
+#[cfg(not(target_arch = "wasm32"))]
+fn answer_click(s: &mut Session, p: crate::js::PendingScript, asked: &[&str], answers: &[Option<&str>]) -> Result<js::Outcome, EditError> {
+    use crate::js::{InteractiveEvent, Prompt};
+    for (want, answer) in asked.iter().zip(answers) {
+        match next_event(&p) {
+            InteractiveEvent::Prompt(Prompt::Alert(m), reply) => {
+                assert_eq!(m.text, *want);
+                reply.send(answer.map(String::from)).expect("the script waits");
+            }
+            InteractiveEvent::Prompt(other, _) => panic!("{other:?}"),
+            InteractiveEvent::Complete(_) => panic!("finished before asking {want}"),
+        }
+    }
+    let InteractiveEvent::Complete(out) = next_event(&p) else { panic!("asked more than {asked:?}") };
+    s.finish_javascript(p, out)
+}
+
+/// An XFA button clicked in the app runs on a worker and asks its message boxes' questions,
+/// each script waiting for its answer, in JavaScript and FormCalc alike (#4291), as an AcroForm
+/// script's `app.alert` does: nothing changes while it asks, and the click is kept as one undo
+/// step once answered.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn an_xfa_click_started_in_the_app_asks_and_waits_for_each_answer() {
+    use crate::js::{InteractiveEvent, Prompt};
+    let (mut s, id) = asking_form();
+    let p = s.start_javascript_target(id, "", Some("hello"), None).unwrap();
+    let InteractiveEvent::Prompt(Prompt::Alert(m), reply) = next_event(&p) else { panic!("asks") };
+    assert_eq!((m.text.as_str(), m.buttons), ("Starting", js::MessageButtons::Ok));
+    // The script waits; the document is as it was.
+    assert_eq!(qty(&s, id), ["2"]);
+    assert!(s.get(id).unwrap().can_undo().is_none());
+    reply.send(Some("1".into())).unwrap();
+    let o = answer_click(&mut s, p, &["Clear?", "Really?"], &[Some("4"), None]).unwrap();
+    assert_eq!((o.error, o.alerts.len()), (None, 3));
+    assert_eq!(qty(&s, id), ["12"], "Yes, then closed (Cancel)");
+    assert!(s.get(id).unwrap().can_undo().is_some());
+    let p = s.start_javascript_target(id, "", Some("legacy"), None).unwrap();
+    answer_click(&mut s, p, &["Sure?"], &[Some("3")]).unwrap();
+    assert_eq!(qty(&s, id), ["1"]);
+}
+
+/// A document changed while its XFA click waits for an answer doesn't take the click.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn an_xfa_click_is_dropped_when_the_document_changes_while_it_asks() {
+    use crate::js::{InteractiveEvent, Prompt};
+    let (mut s, id) = asking_form();
+    let p = s.start_javascript_target(id, "", Some("legacy"), None).unwrap();
+    let InteractiveEvent::Prompt(Prompt::Alert(_), reply) = next_event(&p) else { panic!("asks") };
+    s.apply(id, Edit::SetFieldValue { name: "qty".into(), value: FieldValue::Text("7".into()) }).unwrap();
+    reply.send(Some("4".into())).unwrap();
+    let InteractiveEvent::Complete(out) = next_event(&p) else { panic!("finishes") };
+    assert!(!s.script_pending_current(&p));
+    assert!(s.finish_javascript(p, out).is_err());
+    assert_eq!(qty(&s, id), ["7"]);
+}
+
+/// A click's prompts are limited as an AcroForm script's are: past 32 the script fails, and
+/// keeps what it did before, as a failing script does.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn an_xfa_click_asks_at_most_32_questions() {
+    use crate::js::{InteractiveEvent, Prompt};
+    let tpl = pdfcraft_xfa::fixtures::scripted_template().replace(
+        r#"xfa.host.messageBox("Hello " + qty.rawValue);"#,
+        r#"for (var i = 0; i &lt; 1000; i++) { if (xfa.host.messageBox("Again?", "", 2, 2) == 4) qty.rawValue = i + 1; }"#,
+    );
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("many.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&tpl)), None).expect("opens");
+    let p = s.start_javascript_target(id, "", Some("hello"), None).unwrap();
+    let mut asked = 0;
+    let out = loop {
+        match next_event(&p) {
+            InteractiveEvent::Prompt(Prompt::Alert(_), reply) => {
+                asked += 1;
+                reply.send(Some("4".into())).unwrap();
+            }
+            InteractiveEvent::Prompt(other, _) => panic!("{other:?}"),
+            InteractiveEvent::Complete(out) => break out,
+        }
+    };
+    assert_eq!(asked, 32);
+    let o = s.finish_javascript(p, out).unwrap();
+    assert!(o.error.as_deref().is_some_and(|e| e.contains("too many interactive prompts")), "{o:?}");
+    assert_eq!(qty(&s, id), ["32"]);
+}
+
+/// The 32-question limit holds for the whole click, not for each script session: a script that
+/// turns field highlighting on or off starts a new session for the next, and the calculations
+/// after it still can't ask more (they get the buttons' safe default).
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn an_xfa_clicks_question_limit_holds_across_its_script_sessions() {
+    use crate::js::{InteractiveEvent, Prompt};
+    let asks = "app.runtimeHighlight = !app.runtimeHighlight; for (var i = 0; i &lt; 20; i++) xfa.host.messageBox(\"Again?\", \"\", 0, 1);";
+    let tpl = pdfcraft_xfa::fixtures::scripted_template()
+        .replace(r#"xfa.host.messageBox("Hello " + qty.rawValue);"#, asks)
+        .replace(
+            "<calculate><script contentType=\"application/x-javascript\">qty.rawValue * price.rawValue</script></calculate>",
+            &format!("<calculate><script contentType=\"application/x-javascript\">{asks} qty.rawValue * price.rawValue</script></calculate>"),
+        )
+        .replace(
+            r#"var t = 0; var rows = xfa.resolveNodes("table.row[*]"); for (var i = 0; i &lt; rows.length; i++) { t += (rows.item(i).amount.rawValue || 0); } t"#,
+            &format!("{asks} 0"),
+        );
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("hostile.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&tpl)), None).expect("opens");
+    let p = s.start_javascript_target(id, "", Some("hello"), None).unwrap();
+    let mut asked = 0;
+    loop {
+        match next_event(&p) {
+            InteractiveEvent::Prompt(Prompt::Alert(_), reply) => {
+                asked += 1;
+                reply.send(Some("1".into())).unwrap();
+            }
+            InteractiveEvent::Prompt(other, _) => panic!("{other:?}"),
+            InteractiveEvent::Complete(_) => break,
+        }
+    }
+    assert_eq!(asked, 32, "the click and two calculations would ask 60 times");
+}
+
+/// A click whose script ran away turns the form's scripts off even when the click itself is
+/// dropped (here the document changed while it ran), as a kept one does.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_dropped_xfa_click_that_ran_away_still_turns_the_scripts_off() {
+    use crate::js::InteractiveEvent;
+    let tpl = pdfcraft_xfa::fixtures::scripted_template().replace(
+        r#"xfa.host.messageBox("Hello " + qty.rawValue);"#,
+        "function f() { for (var j = 0; j &lt; 99999; j++) {} } for (var k = 0; k &lt; 5000; k++) f();",
+    );
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("runaway.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&tpl)), None).expect("opens");
+    let p = s.start_javascript_target(id, "", Some("hello"), None).unwrap();
+    s.apply(id, Edit::SetFieldValue { name: "price".into(), value: FieldValue::Text("6".into()) }).unwrap();
+    let InteractiveEvent::Complete(out) = next_event(&p) else { panic!("finishes") };
+    assert!(s.finish_javascript(p, out).is_err(), "the document changed");
+    assert!(!s.get(id).unwrap().xfa_scripts_off());
+    s.apply(id, Edit::SetFieldValue { name: "price".into(), value: FieldValue::Text("7".into()) }).unwrap();
+    assert!(s.get(id).unwrap().xfa_scripts_off(), "the next edit turns them off");
+    assert!(s.take_js_output(id).errors.iter().any(|e| e.contains("scripts are off")));
+}
+
+/// The time a calculation waits for the user isn't the event's: the calculations after it still
+/// run, though the wait is longer than their whole budget.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn waiting_for_an_answer_does_not_spend_the_events_time() {
+    use crate::js::{InteractiveEvent, Prompt};
+    let tpl = pdfcraft_xfa::fixtures::scripted_template()
+        .replace(r#"xfa.host.messageBox("Hello " + qty.rawValue);"#, "qty.rawValue = 5;")
+        .replace(
+            "<calculate><script contentType=\"application/x-javascript\">qty.rawValue * price.rawValue</script></calculate>",
+            "<calculate><script contentType=\"application/x-javascript\">if (qty.rawValue == 5) xfa.host.messageBox(\"Recalculate?\", \"\", 2, 2); qty.rawValue * price.rawValue</script></calculate>",
+        )
+        .replace(
+            r#"var t = 0; var rows = xfa.resolveNodes("table.row[*]"); for (var i = 0; i &lt; rows.length; i++) { t += (rows.item(i).amount.rawValue || 0); } t"#,
+            "qty.rawValue + 100",
+        );
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("slow.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&tpl)), None).expect("opens");
+    let grand = |s: &Session| s.get(id).unwrap().form.iter().find(|f| f.name == "grand").unwrap().value.clone();
+    assert_eq!(grand(&s), ["102"]);
+    let p = s.start_javascript_target(id, "", Some("hello"), None).unwrap();
+    let InteractiveEvent::Prompt(Prompt::Alert(m), reply) = next_event(&p) else { panic!("asks") };
+    assert_eq!(m.text, "Recalculate?");
+    // Longer than the calculations' 3 s budget.
+    std::thread::sleep(std::time::Duration::from_millis(3_500));
+    reply.send(Some("4".into())).unwrap();
+    let InteractiveEvent::Complete(out) = next_event(&p) else { panic!("finishes") };
+    let o = s.finish_javascript(p, out).unwrap();
+    assert_eq!(o.error, None, "{o:?}");
+    assert_eq!(grand(&s), ["105"], "the calculation after the question ran");
 }
 
 #[test]

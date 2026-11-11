@@ -493,9 +493,32 @@ fn app_alert_falls_back_on_bad_icon_and_button_numbers() {
         assert_eq!(m, Message::plain("Hi"), "{bad}");
     }
     assert_eq!(alerted("'Hi', '2', '3'"), Message { icon: MessageIcon::Question, buttons: MessageButtons::YesNoCancel, ..Message::plain("Hi") });
-    // Every call still answers OK (1) until answers are asked for (#4291).
-    let o = go("event.value = String(app.alert('Delete?', 2, 2));", &Event::field("Mouse Up", "agree", ""));
-    assert_eq!(o.value, "1");
+    // Outside a document's session (and on the web build) nobody can be asked: each call gets
+    // its buttons' safe default, as a closed dialog does (#4291).
+    for (buttons, want) in [(0, "1"), (1, "2"), (2, "3"), (3, "2")] {
+        let o = go(&format!("event.value = String(app.alert('Delete?', 2, {buttons}));"), &Event::field("Mouse Up", "agree", ""));
+        assert_eq!(o.value, want, "{buttons}");
+    }
+}
+
+/// The number a script receives for each answer: the references' button numbers, checked
+/// against the buttons shown, with no answer the safe default (#4291).
+#[test]
+fn message_replies_follow_the_buttons() {
+    use MessageButtons as B;
+    let cases = [
+        (B::Ok, [Some(1), Some(1), None, None, None]),
+        (B::OkCancel, [Some(2), Some(1), Some(2), None, None]),
+        (B::YesNo, [Some(3), Some(2), None, Some(3), Some(4)]),
+        (B::YesNoCancel, [Some(2), Some(2), Some(2), Some(3), Some(4)]),
+    ];
+    for (buttons, want) in cases {
+        let got = [None, Some("1"), Some("2"), Some("3"), Some("4")].map(|a| buttons.reply(a));
+        assert_eq!(got, want, "{buttons:?}");
+        for bad in ["0", "5", " 4", "04", "yes", ""] {
+            assert_eq!(buttons.reply(Some(bad)), None, "{buttons:?} {bad}");
+        }
+    }
 }
 
 /// A title is cut to a message's length like the text, and both are charged to the run's byte
@@ -1211,9 +1234,35 @@ mod xfa_model {
         assert_eq!(boxed("xfa.host.messageBox('Hi', null, 2.5, 'x')"), Message::plain("Hi"));
         let m = boxed("xfa.host.messageBox('Hi', new Array(100000).join('t'))");
         assert!(m.title.as_deref().is_some_and(|t| t.chars().count() <= 4_097));
-        // Answers are always OK for now (#4291).
-        let o = go("this.rawValue = xfa.host.messageBox('Delete?', 'T', 2, 2)", "form1[0].page1[0].qty[0]", "click");
-        assert!(o.effects.iter().any(|e| matches!(e, XfaEffect::SetValue { value, .. } if value == "1")), "{:?}", o.effects);
+    }
+
+    /// Run the JavaScript `script` as the go button's click, with `answers` to its message boxes.
+    fn answered(script: &str, answers: &[Option<&str>]) -> XfaOutcome {
+        let ev = XfaEvent {
+            activity: "click".into(),
+            target: "form1[0].page1[0].go[0]".into(),
+            answers: answers.iter().map(|a| a.map(String::from)).collect(),
+            ..Default::default()
+        };
+        run_xfa(script, &ev, &XfaDoc::default(), &form(), Limits::default())
+    }
+
+    /// `xfa.host.messageBox` and `app.alert` in an XFA script return the button picked, from the
+    /// event's answers in order (#4291), so a script can branch on No and Cancel; past the
+    /// answers, where nobody can be asked, each gets its buttons' safe default.
+    #[test]
+    fn message_box_returns_the_answer_given() {
+        let script = "var r = [xfa.host.messageBox('Clear?', 'T', 2, 2), app.alert('Sure?', 2, 3), xfa.host.messageBox('Saved')]; r.join(',')";
+        let o = answered(script, &[Some("4"), Some("2"), None]);
+        assert_eq!((o.result.as_deref(), o.error.as_deref(), o.messages), (Some("4,2,1"), None, 3), "{o:?}");
+        let o = answered(script, &[Some("3"), Some("4")]);
+        assert_eq!(o.result.as_deref(), Some("3,4,1"), "{o:?}");
+        // No answers: the safe defaults (No; Cancel; OK).
+        let o = answered(script, &[]);
+        assert_eq!(o.result.as_deref(), Some("3,2,1"), "{o:?}");
+        // An answer the buttons can't give fails the script, naming it.
+        let o = answered("xfa.host.messageBox('Clear?', 'T', 2, 2)", &[Some("2")]);
+        assert!(o.error.as_deref().is_some_and(|e| e.contains("message box 1 (2)") && e.contains("yes_no")), "{o:?}");
     }
 
     /// `app.alert` in an XFA form's script reads its own order (`cMsg, nIcon, nType, cTitle`)
@@ -2030,6 +2079,35 @@ $host.gotoURL("https://example.org")"#,
         assert!(matches!(o.effects.as_slice(), [XfaEffect::MessageBox(m)] if m.title.as_deref().is_some_and(|t| t.chars().count() <= 4_097)));
     }
 
+    /// FormCalc's `$host.messageBox` returns the button picked, from the event's answers in
+    /// order, as the JavaScript one does (#4291).
+    #[test]
+    fn formcalc_message_box_returns_the_answer_given() {
+        let run = |answers: &[Option<&str>]| {
+            let ev = XfaEvent {
+                activity: "click".into(),
+                target: "form1[0].page1[0].go[0]".into(),
+                answers: answers.iter().map(|a| a.map(String::from)).collect(),
+                ..Default::default()
+            };
+            run_formcalc(
+                "Concat($host.messageBox(\"Clear?\", \"T\", 2, 3), \",\", $host.messageBox(\"Sure?\", \"\", 2, 1))",
+                &ev,
+                &XfaDoc::default(),
+                &form(),
+                Limits::default(),
+            )
+        };
+        let o = run(&[Some("3"), Some("1")]);
+        assert_eq!(o.result.as_deref(), Some("3,1"), "{o:?}");
+        let o = run(&[Some("4")]);
+        assert_eq!(o.result.as_deref(), Some("4,2"), "{o:?}");
+        let o = run(&[None, None]);
+        assert_eq!(o.result.as_deref(), Some("2,2"), "{o:?}");
+        let o = run(&[Some("9")]);
+        assert!(o.error.as_deref().is_some_and(|e| e.contains("message box 1 (9)")), "{o:?}");
+    }
+
     fn run_hostile_formcalc(script: &str) -> XfaOutcome {
         let ev = XfaEvent { activity: "calculate".into(), target: "form1[0].page1[0].total[0]".into(), ..Default::default() };
         let doc = XfaDoc::default();
@@ -2096,6 +2174,44 @@ mod session {
         b.root = std::sync::Arc::clone(&root);
         let o = s.run(b);
         assert_eq!(o.result.as_deref(), Some("4:hidden"), "{o:?}");
+    }
+
+    /// A session that can ask passes each message box's question on and gives the script the
+    /// answer, in JavaScript and FormCalc alike (#4291). The user's time isn't the script's: one
+    /// answered after its time limit has passed still finishes, and says how long it waited.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_session_that_can_ask_waits_for_the_answer_with_its_clock_stopped() {
+        use crate::interaction::{InteractiveEvent, Prompt};
+        let (tx, rx) = std::sync::mpsc::channel();
+        let answerer = std::thread::spawn(move || {
+            let mut asked = Vec::new();
+            for answer in ["4", "3", "2"] {
+                let Ok(InteractiveEvent::Prompt(Prompt::Alert(m), reply)) = rx.recv() else { break };
+                asked.push(m.text);
+                // Longer than the scripts' time limit below.
+                std::thread::sleep(std::time::Duration::from_millis(400));
+                let _ = reply.send(Some(answer.to_string()));
+            }
+            asked
+        });
+        let mut s = XfaSession::new(XfaDoc::default()).with_prompts(tx, Default::default());
+        let mut js = script("xfa.host.messageBox('Clear?', 'T', 2, 2) + ',' + app.alert('Sure?', 2, 2)", false, "form1[0].page1[0].go[0]", "click");
+        js.timeout = std::time::Duration::from_millis(300);
+        let o = s.run(js);
+        assert_eq!((o.result.as_deref(), o.error.as_deref(), o.abandoned), (Some("4,3"), None, false), "{o:?}");
+        assert!(o.waited >= std::time::Duration::from_millis(800), "{:?}", o.waited);
+        // FormCalc keeps its own deadline, read as it works: it works on after the answer.
+        let mut fc = script(
+            "var r = $host.messageBox(\"Save?\", \"\", 2, 3)\nvar i = 0\nwhile (i < 20000) do i = i + 1 endwhile\nr",
+            true,
+            "form1[0].page1[0].go[0]",
+            "click",
+        );
+        fc.timeout = std::time::Duration::from_millis(300);
+        assert_eq!(s.run(fc).result.as_deref(), Some("2"));
+        drop(s);
+        assert_eq!(answerer.join().unwrap_or_default(), ["Clear?", "Sure?", "Save?"]);
     }
 
     /// JavaScript and FormCalc scripts run in turn in one session, each on the form the caller

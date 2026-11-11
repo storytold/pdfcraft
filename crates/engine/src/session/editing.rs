@@ -46,7 +46,7 @@ fn deletes_pages(edit: &Edit) -> bool {
 }
 
 /// Keep edits to the working copy until both the operation and its script callbacks succeed.
-fn run_checked_edit(next: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> Result<(), EditError> {
+pub(crate) fn run_checked_edit(next: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> Result<(), EditError> {
     let result = guard(|| run_edit(next, edit, cx))
         .unwrap_or_else(|m| Err(EditError::Invalid(format!("{} failed unexpectedly ({m}); the document was not changed", edit.label()))));
     let refusal = cx.js.as_mut().and_then(|runner| runner.refused.take());
@@ -122,6 +122,20 @@ fn sync_script_history(doc: &Document, previous: &pdfcraft_cos::Document, restor
     }
 }
 
+/// An edit between [`Session::begin_edit`] and [`Session::finish_edit`]: the copy of the
+/// document it runs on (`next`) and its context. Send, so an XFA button click can run on a
+/// worker while the app goes on drawing and asks the click's questions.
+pub(crate) struct BegunEdit {
+    pub(crate) edit: Edit,
+    pub(crate) next: pdfcraft_cos::Document,
+    pub(crate) cx: EditCtx,
+    scope: Scope,
+    is_xfa: bool,
+    signed: bool,
+    /// The document's generation it was made from: a changed document doesn't take it.
+    generation: u64,
+}
+
 impl Session {
     /// Apply an edit. On success the previous state is undoable and the view data is refreshed.
     pub fn apply(&mut self, id: DocId, edit: Edit) -> Result<(), EditError> {
@@ -138,12 +152,27 @@ impl Session {
 
     /// [`Session::apply`], giving back what an [`Edit::PrepareText`] did (`None` for other edits).
     fn apply_reporting(&mut self, id: DocId, edit: Edit) -> Result<Option<pdfcraft_edit::text::forms::Preparation>, EditError> {
+        let Some(mut begun) = self.begin_edit(id, edit)? else { return Ok(None) };
+        // `next` is a copy: if the edit fails or crashes, the document is unchanged.
+        let checked = run_checked_edit(&mut begun.next, &begun.edit, &mut begun.cx);
+        self.finish_edit(id, begun, checked)
+    }
+
+    /// The first part of [`Session::apply`]: check that `edit` may be made, and make the copy of
+    /// the document it runs on, with its context. `None`: there is nothing to do.
+    pub(crate) fn begin_edit(&mut self, id: DocId, edit: Edit) -> Result<Option<BegunEdit>, EditError> {
         let now = self.now();
         let today = self.today();
         let js_off = self.js_off;
         let highlight = self.field_highlight;
         let xfa_time_scale = self.xfa_time_scale.unwrap_or(1);
+        let xfa_answers = self.xfa_answers.take().unwrap_or_default();
         let doc = self.doc_mut(id)?;
+        // A script of an XFA click run on a worker ran away: the form's scripts go off, whether
+        // or not the click was kept.
+        if doc.xfa_ran_away.swap(false, std::sync::atomic::Ordering::Relaxed) {
+            take_xfa_output(doc, js::JsOutput::default(), true);
+        }
         // An edit must never read globals from a completed-but-unapplied button invocation.
         // Fork its realm before any edit-triggered calculation, even if the edit later fails.
         #[cfg(not(target_arch = "wasm32"))]
@@ -153,12 +182,13 @@ impl Session {
         doc.edit_notices.clear();
         let name = doc.name.clone();
         let is_xfa = doc.info.xfa.is_some();
-        let mut scope = scope_of(&edit);
+        let scope = scope_of(&edit);
         let mut cx = EditCtx::new(now, doc.generation ^ (id.0 << 48));
         if !js_off {
             cx.xfa = doc.xfa_template.clone();
         }
         cx.xfa_time_scale = xfa_time_scale;
+        cx.xfa_answers = xfa_answers;
         cx.pages = doc.info.pages.len();
         cx.highlight = highlight;
         cx.today = today;
@@ -175,7 +205,7 @@ impl Session {
         if matches!(&edit, Edit::FlattenFillSign) && !pdfcraft_annot::has_visible_fill_sign(&editor.cos) {
             return Ok(None);
         }
-        let mut next = editor.cos.clone();
+        let next = editor.cos.clone();
         if !js_off && uses_scripts(&edit) {
             let mut runner = js::JsRunner::new(&next, &name, highlight);
             runner.runtime = doc.js_runtime.clone();
@@ -185,8 +215,27 @@ impl Session {
         }
         cx.renamed_fields.clear();
         cx.redaction_overlays.clear();
-        // `next` is a copy: if the edit fails or crashes, the document is unchanged.
-        run_checked_edit(&mut next, &edit, &mut cx)?;
+        Ok(Some(BegunEdit { edit, next, cx, scope, is_xfa, signed, generation: doc.generation }))
+    }
+
+    /// The last part of [`Session::apply`]: keep the edit [`Session::begin_edit`] prepared once
+    /// it ran (`checked`), as one undo step, unless it failed or the document changed meanwhile
+    /// (an XFA button click runs on a worker: [`Session::start_javascript_target`]).
+    pub(crate) fn finish_edit(
+        &mut self,
+        id: DocId,
+        begun: BegunEdit,
+        checked: Result<(), EditError>,
+    ) -> Result<Option<pdfcraft_edit::text::forms::Preparation>, EditError> {
+        let BegunEdit { edit, mut next, mut cx, mut scope, is_xfa, signed, generation } = begun;
+        let doc = self.doc_mut(id)?;
+        if doc.generation != generation {
+            discard_edit_callbacks(&cx);
+            return Err(EditError::Invalid("the document changed while the form's script ran; what it did was not kept".into()));
+        }
+        let reason = doc.read_only_reason.clone().unwrap_or_default();
+        let editor = doc.editor.as_mut().ok_or(EditError::ReadOnly(reason))?;
+        checked?;
         // A field's enter or exit scripts that changed nothing leave no edit behind (no undo step,
         // nothing unsaved); what they showed or asked for still goes out. Only an event on its own:
         // a batch keeps the other edits it holds.
@@ -264,6 +313,7 @@ impl Session {
                     ran_away: false,
                     highlight,
                     time_scale: cx.xfa_time_scale,
+                    answers: Default::default(),
                 };
                 // Every changed field's scripts, then the calculations once (after a reset,
                 // only those).

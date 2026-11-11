@@ -139,10 +139,88 @@ fn xfa_buttons_run_their_scripts_in_the_app() {
     };
     assert!(!names(&h).iter().any(|n| n == "amount_2"));
     click_field(&mut h, "addRow");
-    assert!(names(&h).iter().any(|n| n == "amount_2"), "{:?}; script console: {:?}", names(&h), h.state().js_console.log);
-    // The message box shows as a notice.
+    until(&mut h, "the row is added", |h| names(h).iter().any(|n| n == "amount_2"));
+    // The message box shows in a dialog, as an AcroForm script's app.alert does, and OK closes it.
     click_field(&mut h, "hello");
-    assert!(h.query_by_label_contains("Hello 2").is_some(), "script console: {:?}", h.state().js_console.log);
+    until(&mut h, "the message is shown", |h| h.query_by_label("Hello 2").is_some());
+    h.get_by_label("OK").click();
+    until(&mut h, "OK closes it", |h| h.query_by_label("Hello 2").is_none());
+}
+
+/// Run frames until `done`, for a script running on its worker (the app goes on drawing).
+fn until(h: &mut Harness<'static, PdfCraftApp>, what: &str, done: impl Fn(&Harness<'static, PdfCraftApp>) -> bool) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(12);
+    while std::time::Instant::now() < deadline {
+        h.run_steps(1);
+        if done(h) {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    panic!("{what}: timed out; script console: {:?}", h.state().js_console.log);
+}
+
+/// An XFA button that asks Yes or No shows the question in a dialog while its script waits, and
+/// branches on the button the user picks (#4291): nothing changes while it asks, and Escape
+/// answers No.
+#[test]
+fn an_xfa_buttons_question_is_asked_and_its_answer_used() {
+    let tpl = pdfcraft_xfa::fixtures::scripted_template().replace(
+        r#"xfa.host.messageBox("Hello " + qty.rawValue);"#,
+        r#"qty.rawValue = xfa.host.messageBox("Clear the order?", "Order form", 2, 2) == 4 ? 0 : 7;"#,
+    );
+    let mut h = open(pdfcraft_xfa::fixtures::shell(&tpl));
+    crate::support::settle(&mut h);
+    let qty = |h: &Harness<'static, PdfCraftApp>| {
+        let s = h.state();
+        let doc = s.session.get(s.views[0].id).unwrap();
+        doc.form.iter().find(|f| f.name == "qty").and_then(|f| f.value.first().cloned()).unwrap_or_default()
+    };
+    assert_eq!(qty(&h), "2");
+    for (answer, before, want) in [("Yes", "2", "0"), ("No", "0", "7")] {
+        click_field(&mut h, "hello");
+        until(&mut h, "the question is shown", |h| h.query_by_label("Clear the order?").is_some());
+        assert!(h.query_by_label("Order form").is_some());
+        assert_eq!(qty(&h), before, "nothing changes while it asks");
+        h.get_by_label(answer).click();
+        until(&mut h, answer, |h| qty(h) == want);
+        assert!(h.query_by_label("Clear the order?").is_none(), "{answer} closes it");
+    }
+    let id = h.state().views[0].id;
+    h.state_mut()
+        .session
+        .apply(id, pdfcraft_engine::Edit::SetFieldValue { name: "qty".into(), value: pdfcraft_engine::FieldValue::Text("5".into()) })
+        .unwrap();
+    h.run_steps(2);
+    click_field(&mut h, "hello");
+    until(&mut h, "the question is shown again", |h| h.query_by_label("Clear the order?").is_some());
+    h.key_press(egui::Key::Escape);
+    until(&mut h, "Escape answers No", |h| qty(h) == "7");
+    assert!(h.query_by_label("Clear the order?").is_none());
+}
+
+/// An XFA click reads no view state: zooming or moving to another page while it asks doesn't
+/// drop it, as it drops an AcroForm script that read them.
+#[test]
+fn an_xfa_click_is_kept_when_the_view_changes_while_it_asks() {
+    let tpl = pdfcraft_xfa::fixtures::scripted_template().replace(
+        r#"xfa.host.messageBox("Hello " + qty.rawValue);"#,
+        r#"qty.rawValue = xfa.host.messageBox("Clear the order?", "Order form", 2, 2) == 4 ? 0 : 7;"#,
+    );
+    let mut h = open(pdfcraft_xfa::fixtures::shell(&tpl));
+    crate::support::settle(&mut h);
+    let qty = |h: &Harness<'static, PdfCraftApp>| {
+        let s = h.state();
+        let doc = s.session.get(s.views[0].id).unwrap();
+        doc.form.iter().find(|f| f.name == "qty").and_then(|f| f.value.first().cloned()).unwrap_or_default()
+    };
+    click_field(&mut h, "hello");
+    until(&mut h, "the question is shown", |h| h.query_by_label("Clear the order?").is_some());
+    let zoom = h.state().views[0].zoom;
+    h.state_mut().views[0].zoom = zoom * 1.5;
+    h.run_steps(2);
+    h.get_by_label("Yes").click();
+    until(&mut h, "the answer is used", |h| qty(h) == "0");
 }
 
 /// Every way the focus moves (a click, Tab, Shift+Tab, Escape) runs the field it left's exit
@@ -277,9 +355,10 @@ fn scripts_turned_off_by_a_click_bring_a_closed_notice_bar_back() {
     h.get_by_label("Dismiss").click();
     h.run_steps(2);
     assert!(h.state().views[0].notice_dismissed);
-    // The button's script runs away: a toast says the scripts are off and the bar is back.
+    // The button's script runs away (on its worker): a toast says the scripts are off and the
+    // bar is back.
     click_field(&mut h, "hello");
-    assert!(h.state().session.get(id).unwrap().xfa_scripts_off(), "script console: {:?}", h.state().js_console.log);
+    until(&mut h, "the scripts are off", |h| h.state().session.get(id).unwrap().xfa_scripts_off());
     assert!(says_scripts_are_off(&h.state().toast), "{:?}", h.state().toast);
     assert!(!h.state().views[0].notice_dismissed);
     h.state_mut().toast = None;

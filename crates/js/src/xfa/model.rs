@@ -64,6 +64,12 @@ pub struct XfaEvent {
     pub target: String,
     pub new_text: String,
     pub prev_text: String,
+    /// Answers to the script's message boxes, in order: each `xfa.host.messageBox`,
+    /// `$host.messageBox` or `app.alert` takes the next (`None`: closed without picking a
+    /// button), checked against its buttons by [`crate::MessageButtons::reply`]. Past the end,
+    /// a message asks the user when the viewer can ask ([`crate::xfa_session::XfaSession::with_prompts`]),
+    /// and otherwise gets its buttons' safe default.
+    pub answers: Vec<Option<String>>,
 }
 
 /// About the document.
@@ -141,6 +147,12 @@ pub struct XfaOutcome {
     /// The script ran past its time limit and was left running on its own thread (the engine
     /// can't interrupt it): the caller should run no more of this form's scripts.
     pub abandoned: bool,
+    /// How many message boxes the script showed: the answers it took from
+    /// [`XfaEvent::answers`], so the next script of the event starts after them.
+    pub messages: usize,
+    /// How long the script waited for the user to answer its message boxes: not counted
+    /// against its time limit, nor the event's.
+    pub waited: std::time::Duration,
 }
 
 /// Most nodes a snapshot may hold.
