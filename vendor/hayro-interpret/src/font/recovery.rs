@@ -301,6 +301,20 @@ pub(crate) struct FontFacts<'a> {
         reason = "read by the standard-order rules that build on this layer"
     )]
     pub(crate) id_text: Option<&'a dyn Fn(u32) -> Option<BfString>>,
+    /// Type 0 fonts: whether the encoding CMap is `Identity-H` or `Identity-V`, whatever the
+    /// `/CIDToGIDMap` (ISO 32000-2 §9.7.5.2: two-byte codes that are CIDs).
+    #[allow(
+        dead_code,
+        reason = "read by the rules that read a Type 0 font's glyph ids in a standard order"
+    )]
+    pub(crate) identity_encoding: bool,
+    /// How many glyphs the embedded program has: a TrueType or OpenType program's `maxp`
+    /// count, a CFF program's number of charstrings. `None` without an embedded program.
+    #[allow(
+        dead_code,
+        reason = "read by the rules that read a Type 0 font's glyph ids in a standard order"
+    )]
+    pub(crate) program_glyphs: Option<u32>,
 }
 
 impl FontFacts<'_> {
@@ -319,6 +333,8 @@ impl FontFacts<'_> {
             ids: None,
             id_width: None,
             id_text: None,
+            identity_encoding: false,
+            program_glyphs: None,
         }
     }
 }

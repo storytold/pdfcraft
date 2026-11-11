@@ -536,13 +536,36 @@ impl Type0Font {
     /// PdfCraft patch (104): whether codes are CIDs and CIDs glyph ids: an `Identity-H` or
     /// `Identity-V` encoding CMap and an identity `/CIDToGIDMap`.
     fn identity_codes(&self) -> bool {
-        matches!(self.cid_to_gid_map, CidToGIdMap::Identity)
-            && self
-                .encoding
-                .metadata()
-                .name
-                .as_deref()
-                .is_some_and(|n| matches!(n, b"Identity-H" | b"Identity-V"))
+        matches!(self.cid_to_gid_map, CidToGIdMap::Identity) && self.identity_encoding()
+    }
+
+    /// PdfCraft patch (104): whether the encoding CMap is `Identity-H` or `Identity-V` (codes
+    /// are CIDs), whatever the `/CIDToGIDMap`.
+    pub(crate) fn identity_encoding(&self) -> bool {
+        self.encoding
+            .metadata()
+            .name
+            .as_deref()
+            .is_some_and(|n| matches!(n, b"Identity-H" | b"Identity-V"))
+    }
+
+    /// PdfCraft patch (104): how many glyphs the embedded program has (`maxp` of a TrueType or
+    /// OpenType program, the charstrings of a CFF one); `None` for a substitute.
+    pub(crate) fn program_glyphs(&self) -> Option<u32> {
+        if self.fallback {
+            return None;
+        }
+        match &self.font_type {
+            FontType::OpenType(t) => {
+                use skrifa::raw::TableProvider;
+                t.font_ref()
+                    .maxp()
+                    .ok()
+                    .map(|m| u32::from(m.num_glyphs()))
+            }
+            FontType::Cff(c) => Some(c.num_glyphs()),
+            FontType::Type1(_) => None,
+        }
     }
 
     /// PdfCraft patch (104): the recovery rules' reading of code `code`, drawn as glyph `gid`
@@ -610,6 +633,8 @@ impl Type0Font {
                 id_width: (cid_cff.is_some() || identity)
                     .then_some(&id_width as &dyn Fn(u32) -> Option<f32>),
                 id_text: identity.then_some(&id_text as &dyn Fn(u32) -> Option<BfString>),
+                identity_encoding: self.identity_encoding(),
+                program_glyphs: self.program_glyphs(),
             }
         };
         let glyph = || GlyphFacts {
