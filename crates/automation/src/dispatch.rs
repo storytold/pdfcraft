@@ -878,7 +878,8 @@ impl Automation {
         let edited = before.get(line as usize - 1);
         let found = after
             .iter()
-            .find(|l| {
+            .enumerate()
+            .find(|(_, l)| {
                 edited.is_some_and(|e| e.rect[0] == l.rect[0] && e.rect[1] == l.rect[1]) && l.text.split_whitespace().collect::<String>() == wanted
             })
             .or_else(|| {
@@ -886,11 +887,12 @@ impl Automation {
                 first_changed
                     .into_iter()
                     .chain([line as usize - 1])
-                    .filter_map(|i| after.get(i))
-                    .find(|l| l.text.split_whitespace().collect::<String>() == wanted)
+                    .filter_map(|i| after.get(i).map(|l| (i, l)))
+                    .find(|(_, l)| l.text.split_whitespace().collect::<String>() == wanted)
             });
-        if let Some(l) = found {
-            out["line"] = json!({ "font": l.base_font });
+        if let Some((i, l)) = found {
+            // `index`: the edited line's 1-based number on the page as it is now.
+            out["line"] = json!({ "font": l.base_font, "index": i + 1 });
             if doc.allows_copying() {
                 out["line"]["text"] = json!(l.text);
             }

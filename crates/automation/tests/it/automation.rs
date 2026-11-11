@@ -3522,6 +3522,7 @@ fn a_line_split_across_content_streams_is_listed_and_edited() {
     assert_eq!(texts, ["Target", "Afterwards"], "{lines}");
     let r = ok(&mut a, "text_edit", json!({ "doc": doc, "page": 1, "line": 2, "text": "Later" }));
     assert_eq!(r["line"]["text"], "Later");
+    assert_eq!(r["line"]["index"], 2);
     assert_eq!(page_text(&mut a, doc)[0].split_whitespace().collect::<Vec<_>>(), ["Target", "Later"]);
 }
 
