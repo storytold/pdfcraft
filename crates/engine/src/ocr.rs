@@ -692,27 +692,40 @@ pub fn engine_unavailable_reason(engine: EngineChoice) -> Option<String> {
 /// Readiness of an engine/language combination without blocking the UI thread. The
 /// background probe refreshes installed languages as well as executable availability.
 pub fn language_unavailable_reason(engine: EngineChoice, language: &str) -> Option<String> {
+    language_unavailable_reason_with(engine, language, models_installed_cached(), || {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let configured = configured_tesseract(&OcrSettings::default());
+            match tesseract_engine_now(configured.as_deref()) {
+                Probe::Known(Some(recognizer)) => missing_language_data(recognizer.as_ref(), language),
+                Probe::Known(None) => Some(tesseract_unavailable()),
+                Probe::Pending => Some(tesseract_checking()),
+            }
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            Some(tesseract_unavailable())
+        }
+    })
+}
+
+/// Apply language readiness to explicit model/probe state, without consulting host caches.
+/// Only ask Tesseract when the selected language and engine need it.
+fn language_unavailable_reason_with(engine: EngineChoice, language: &str, ocrs: bool, tesseract: impl FnOnce() -> Option<String>) -> Option<String> {
     if let Err(why) = validate_language(language) {
         return Some(why);
     }
     if requires_tesseract(language) && engine == EngineChoice::Ocrs {
         return Some(built_in_language_error());
     }
-    if !requires_tesseract(language) && engine != EngineChoice::Tesseract {
-        return engine_unavailable_reason(engine);
-    }
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        let configured = configured_tesseract(&OcrSettings::default());
-        match tesseract_engine_now(configured.as_deref()) {
-            Probe::Known(Some(recognizer)) => missing_language_data(recognizer.as_ref(), language),
-            Probe::Known(None) => Some(tesseract_unavailable()),
-            Probe::Pending => Some(tesseract_checking()),
+    match engine {
+        EngineChoice::Ocrs => (!ocrs).then(models_missing),
+        EngineChoice::Auto if !requires_tesseract(language) => {
+            // English can use the built-in model alone. Without it, a usable Tesseract
+            // program is not enough: its English language data must also be installed.
+            if ocrs { None } else { tesseract().map(|why| format!("{}; {why}", models_missing())) }
         }
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-        Some(tesseract_unavailable())
+        EngineChoice::Auto | EngineChoice::Tesseract => tesseract(),
     }
 }
 
@@ -1513,23 +1526,99 @@ mod tests {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
+    struct InstalledPacks(Vec<&'static str>);
+
+    #[cfg(not(target_arch = "wasm32"))]
+    impl Recognizer for InstalledPacks {
+        fn id(&self) -> &'static str {
+            "tesseract"
+        }
+        fn available(&self) -> bool {
+            true
+        }
+        fn languages(&self) -> Vec<(String, String)> {
+            self.0.iter().map(|code| (code.to_string(), code.to_string())).collect()
+        }
+        fn recognize(&self, _: &pdfcraft_ocr::OcrImage, _: &pdfcraft_ocr::RecognizeOptions) -> Result<Vec<pdfcraft_ocr::Line>, OcrError> {
+            Ok(Vec::new())
+        }
+    }
+
+    /// Every engine/language choice is checked against complete, partial and absent data,
+    /// independently of the models and Tesseract installation on the test machine.
+    #[cfg(not(target_arch = "wasm32"))]
     #[test]
-    fn russian_selection_uses_tesseract_alone_and_requires_each_pack() {
-        struct InstalledPacks(Vec<&'static str>);
-        impl Recognizer for InstalledPacks {
-            fn id(&self) -> &'static str {
-                "tesseract"
-            }
-            fn available(&self) -> bool {
-                true
-            }
-            fn languages(&self) -> Vec<(String, String)> {
-                self.0.iter().map(|code| (code.to_string(), code.to_string())).collect()
-            }
-            fn recognize(&self, _: &pdfcraft_ocr::OcrImage, _: &pdfcraft_ocr::RecognizeOptions) -> Result<Vec<pdfcraft_ocr::Line>, OcrError> {
-                Ok(Vec::new())
+    fn language_readiness_checks_each_engine_language_and_pack_set() {
+        for (packs, tesseract_ready) in [
+            (vec![], [false, false, false]),
+            (vec!["osd"], [false, false, false]),
+            (vec!["eng"], [true, false, false]),
+            (vec!["rus"], [false, true, false]),
+            (vec!["eng", "rus"], [true, true, true]),
+        ] {
+            let installed = InstalledPacks(packs);
+            for ocrs in [false, true] {
+                for (engine, ready) in [
+                    (EngineChoice::Ocrs, [ocrs, false, false]),
+                    (EngineChoice::Tesseract, tesseract_ready),
+                    (EngineChoice::Auto, [ocrs || tesseract_ready[0], tesseract_ready[1], tesseract_ready[2]]),
+                ] {
+                    for (language, expected) in ["en", "ru", "en+ru"].into_iter().zip(ready) {
+                        let why = language_unavailable_reason_with(engine, language, ocrs, || missing_language_data(&installed, language));
+                        assert_eq!(why.is_none(), expected, "{engine:?}/{language}, ocrs={ocrs}, packs={:?}: {why:?}", installed.0);
+                    }
+                }
             }
         }
+        let why = language_unavailable_reason_with(EngineChoice::Auto, "en", false, || missing_language_data(&InstalledPacks(vec!["rus"]), "en"))
+            .expect("English Auto needs eng when the built-in models are missing");
+        assert!(why.contains("eng") && why.contains("traineddata"), "{why}");
+    }
+
+    /// Missing and pending probes must disable every choice that depends on Tesseract;
+    /// available built-in models only rescue English Auto.
+    #[test]
+    fn language_readiness_preserves_probe_failures() {
+        for probe_error in ["program unavailable", "still checking"] {
+            for ocrs in [false, true] {
+                for engine in [EngineChoice::Ocrs, EngineChoice::Tesseract, EngineChoice::Auto] {
+                    for language in ["en", "ru", "en+ru"] {
+                        let why = language_unavailable_reason_with(engine, language, ocrs, || Some(probe_error.into()));
+                        let expected = match (engine, language) {
+                            (EngineChoice::Ocrs, "en") => (!ocrs).then(models_missing),
+                            (EngineChoice::Ocrs, _) => Some(built_in_language_error()),
+                            (EngineChoice::Auto, "en") if ocrs => None,
+                            (EngineChoice::Auto, "en") => Some(format!("{}; {probe_error}", models_missing())),
+                            _ => Some(probe_error.into()),
+                        };
+                        assert_eq!(why, expected, "{engine:?}/{language}, ocrs={ocrs}, probe={probe_error}");
+                    }
+                }
+            }
+        }
+    }
+
+    /// Invalid languages and built-in-only answers do not consult the Tesseract probe.
+    #[test]
+    fn language_readiness_only_probes_tesseract_when_needed() {
+        let unexpected_probe = || panic!("this choice does not need Tesseract");
+        for ocrs in [false, true] {
+            for engine in [EngineChoice::Ocrs, EngineChoice::Tesseract, EngineChoice::Auto] {
+                for language in ["", "de", "ru+en"] {
+                    let why = language_unavailable_reason_with(engine, language, ocrs, unexpected_probe).unwrap();
+                    assert!(why.contains("unsupported OCR language"), "{why}");
+                }
+            }
+            for language in ["en", "ru", "en+ru"] {
+                let _ = language_unavailable_reason_with(EngineChoice::Ocrs, language, ocrs, unexpected_probe);
+            }
+        }
+        assert_eq!(language_unavailable_reason_with(EngineChoice::Auto, "en", true, unexpected_probe), None);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn russian_selection_uses_tesseract_alone_and_requires_each_pack() {
         for language in ["ru", "en+ru"] {
             let selected = tesseract_recognizers(language, Some(Arc::new(InstalledPacks(vec!["rus", "eng"])))).unwrap();
             assert_eq!(selected.primary.id(), "tesseract");
