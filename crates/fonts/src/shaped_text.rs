@@ -1,15 +1,21 @@
 //! Shaped text written into a PDF: each distinct shaped cluster (a letter with its marks, and the
 //! text it stands for) becomes one glyph of a Type 3 font drawn from the craft-fonts face's
 //! outlines, with a `/ToUnicode` map so copy and search get each character once. No font file is
-//! embedded. Add text writes Arabic, Hebrew and Thai with it; text boxes, Fill & Sign text, form
-//! fields, headers, footers and watermarks write Thai with it, beside the standard font that
-//! draws the rest ([`thai_pieces`]).
+//! embedded.
+//!
+//! [`line_pieces`] lays a line out for drawing: the Unicode bidirectional algorithm, then Arabic,
+//! Hebrew and Thai shaped in their faces beside the standard font that draws the rest. Add text,
+//! text boxes (comments, callouts) and Fill & Sign text all draw through it, so the same text
+//! comes out the same in each. Form fields, headers, footers and watermarks still shape Thai only
+//! ([`thai_pieces`]).
 
 use std::collections::{HashMap, HashSet};
 
 use pdfcraft_cos::{Dict, Document, Object, PdfString, Stream};
 
-use crate::{GlyphError, GlyphOutline, ShapedCluster, ShapedScript, literal, shape_thai, shaped_glyph};
+use unicode_bidi::{Level, ParagraphBidiInfo};
+
+use crate::{GlyphError, GlyphOutline, ShapedCluster, ShapedScript, literal, shape_arabic, shape_hebrew, shape_thai, shaped_glyph};
 
 /// Most glyphs in one Type 3 font: its codes are single bytes, 1–240. Text gets one such font per
 /// 240 distinct clusters it needs.
@@ -20,10 +26,76 @@ pub fn is_thai(c: char) -> bool {
     matches!(u32::from(c), 0x0E00..=0x0E7F)
 }
 
-/// Thai vowel signs and tone marks drawn on the consonant before them, and Sara Am, which the
-/// face splits over it: a line never breaks before one, so a mark stays on its letter.
+/// Arabic letters, marks, digits and punctuation (and the presentation forms): shaped with the
+/// craft-fonts Arabic face.
+pub fn is_arabic(c: char) -> bool {
+    matches!(u32::from(c), 0x0600..=0x06FF | 0x0750..=0x077F | 0x0870..=0x08FF | 0xFB50..=0xFDFF | 0xFE70..=0xFEFC)
+}
+
+/// Hebrew letters, points, cantillation marks and punctuation (and the presentation forms): drawn
+/// with the craft-fonts Hebrew face.
+pub fn is_hebrew(c: char) -> bool {
+    matches!(u32::from(c), 0x0591..=0x05F4 | 0xFB1D..=0xFB4F)
+}
+
+/// Direction marks, embeddings, overrides and isolates: they steer the order and are not drawn.
+pub fn is_bidi_control(c: char) -> bool {
+    matches!(c, '\u{061C}' | '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
+}
+
+/// Whether `text` has a character [`line_pieces`] shapes in a script face (Arabic, Hebrew or Thai).
+pub fn has_shaped_script(text: &str) -> bool {
+    text.chars().any(|c| is_thai(c) || is_arabic(c) || is_hebrew(c))
+}
+
+/// Whether the paragraph `para` reads right to left: it has Arabic or Hebrew, and its first
+/// strong character is right to left (UAX #9 rules P2 and P3).
+pub fn rtl_base(para: &str) -> bool {
+    para.chars().any(|c| is_arabic(c) || is_hebrew(c)) && unicode_bidi::get_base_direction(para) == unicode_bidi::Direction::Rtl
+}
+
+/// Marks drawn on the letter before them, which a line never breaks before: Thai vowel signs and
+/// tone marks (and Sara Am, which the face splits over the consonant), Arabic vowel and Koranic
+/// marks, and Hebrew points and cantillation marks.
 pub fn joins_previous(c: char) -> bool {
-    matches!(u32::from(c), 0x0E31 | 0x0E33..=0x0E3A | 0x0E47..=0x0E4E)
+    matches!(
+        u32::from(c),
+        0x0E31 | 0x0E33..=0x0E3A | 0x0E47..=0x0E4E
+            | 0x0610..=0x061A | 0x064B..=0x065F | 0x0670 | 0x06D6..=0x06DC | 0x06DF..=0x06E4 | 0x06E7 | 0x06E8 | 0x06EA..=0x06ED
+            | 0x0591..=0x05BD | 0x05BF | 0x05C1 | 0x05C2 | 0x05C4 | 0x05C5 | 0x05C7
+    )
+}
+
+/// Why text in `script` can't be drawn, for a message an agent or user can act on.
+pub fn script_message(script: ShapedScript, e: GlyphError, text: &str) -> String {
+    let (name, tag, article) = match script {
+        ShapedScript::Arabic => ("Arabic", "Arab", "an"),
+        ShapedScript::Hebrew => ("Hebrew", "Hebr", "a"),
+        ShapedScript::Thai => return thai_message(e, text),
+    };
+    match e {
+        GlyphError::NoFont => format!(
+            "{name} text needs PdfCraft's {name} font, which this build doesn't include (to build it in, set CRAFT_FONTS_DIR to a craft-fonts \
+             checkout that has {article} {tag} face)"
+        ),
+        GlyphError::Missing => format!("the {name} font can't show \"{text}\""),
+        GlyphError::TooComplex => format!("the {name} font's glyphs for \"{text}\" are too complex"),
+    }
+}
+
+/// Text a script face couldn't shape: which script, why, and the run it was.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ShapeError {
+    pub script: ShapedScript,
+    pub error: GlyphError,
+    pub text: String,
+}
+
+impl ShapeError {
+    /// [`script_message`] for this failure.
+    pub fn message(&self) -> String {
+        script_message(self.script, self.error, &self.text)
+    }
 }
 
 /// Why Thai text can't be drawn, for a message an agent or user can act on.
@@ -43,6 +115,118 @@ pub enum Piece {
     /// Shown in the text's own standard font.
     Latin(String),
     Shaped(Vec<ShapedCluster>),
+}
+
+fn mirrored(c: char) -> char {
+    match c {
+        '(' => ')',
+        ')' => '(',
+        '[' => ']',
+        ']' => '[',
+        '{' => '}',
+        '}' => '{',
+        '<' => '>',
+        '>' => '<',
+        '«' => '»',
+        '»' => '«',
+        other => other,
+    }
+}
+
+/// `line` in drawing order (the Unicode bidirectional algorithm, UAX #9), in a paragraph that
+/// reads right to left when `rtl` ([`rtl_base`]): its Arabic, Hebrew and Thai shaped in their
+/// faces, the rest left to the standard font. A right-to-left run comes out reversed, its brackets
+/// mirrored; direction marks steer the order and are dropped.
+///
+/// The one layout for text PdfCraft writes: Add text, text boxes and Fill & Sign text call it, so
+/// they agree on what is shaped, in which face, and in what order.
+pub fn line_pieces(line: &str, rtl: bool) -> Result<Vec<Piece>, ShapeError> {
+    // unicode-bidi indexes the first level of a line, so an empty one would panic.
+    if line.is_empty() {
+        return Ok(Vec::new());
+    }
+    let base = if rtl { Level::rtl() } else { Level::ltr() };
+    let info = ParagraphBidiInfo::new(line, Some(base));
+    let (levels, runs) = info.visual_runs(0..line.len());
+    let mut pieces = Vec::new();
+    for run in runs {
+        let run_rtl = levels.get(run.start).is_some_and(Level::is_rtl);
+        // Runs lie on character boundaries; a missing slice is skipped, never a panic.
+        let Some(text) = line.get(run) else { continue };
+        // Arabic and Hebrew letters take their face; so do spaces and punctuation between them
+        // (Hebrew's when they follow Hebrew), which the shaper then mirrors. Latin text (and what
+        // the faces lack) keeps the standard font.
+        let mut segments: Vec<(Option<ShapedScript>, String)> = Vec::new();
+        for c in text.chars().filter(|c| !is_bidi_control(*c)) {
+            let after_hebrew = segments.last().is_some_and(|(kind, _)| *kind == Some(ShapedScript::Hebrew));
+            let script = if is_thai(c) {
+                Some(ShapedScript::Thai)
+            } else if is_hebrew(c) || (run_rtl && after_hebrew && !c.is_alphanumeric() && crate::hebrew_has(c)) {
+                Some(ShapedScript::Hebrew)
+            } else if is_arabic(c) || (run_rtl && !c.is_alphanumeric() && crate::arabic_has(c)) {
+                Some(ShapedScript::Arabic)
+            } else {
+                None
+            };
+            match segments.last_mut() {
+                Some((kind, s)) if *kind == script => s.push(c),
+                _ => segments.push((script, c.to_string())),
+            }
+        }
+        if run_rtl {
+            segments.reverse();
+        }
+        for (script, s) in segments {
+            pieces.push(if let Some(script) = script {
+                let shaped = match script {
+                    ShapedScript::Arabic => shape_arabic(&s, run_rtl),
+                    ShapedScript::Hebrew => shape_hebrew(&s, run_rtl),
+                    ShapedScript::Thai => shape_thai(&s),
+                };
+                Piece::Shaped(shaped.map_err(|error| ShapeError { script, error, text: s })?)
+            } else if run_rtl {
+                Piece::Latin(s.chars().rev().map(mirrored).collect())
+            } else {
+                Piece::Latin(s)
+            });
+        }
+    }
+    Ok(pieces)
+}
+
+/// The width of `text` at `size` as [`line_pieces`] lays it out in a paragraph of direction
+/// `rtl`: shaped text by its clusters' advances, the rest measured by `latin`. Text a face can't
+/// shape is measured by `latin` as a whole (drawing then shows why).
+pub fn line_width(text: &str, rtl: bool, size: f64, latin: impl Fn(&str, f64) -> f64) -> f64 {
+    if !rtl && !has_shaped_script(text) {
+        return latin(text, size);
+    }
+    match line_pieces(text, rtl) {
+        Ok(pieces) => pieces_width(&pieces, size, 0.0, latin),
+        Err(_) => latin(text, size),
+    }
+}
+
+/// `text` wrapped `width` wide at `size` for a box that draws its lines with [`line_pieces`]: each
+/// line with whether its paragraph reads right to left ([`rtl_base`]; every line of a paragraph
+/// takes its paragraph's direction). Words are measured as they will be drawn ([`line_width`]),
+/// and a mark stays on its letter.
+pub fn wrap(text: &str, size: f64, width: f64, latin: impl Fn(&str, f64) -> f64) -> Vec<(String, bool)> {
+    let mut out = Vec::new();
+    // A CRLF pair is one break, a lone CR or LF is one break each (as `wrap_with` reads them).
+    for para in text.replace("\r\n", "\n").split(['\n', '\r']) {
+        let rtl = rtl_base(para);
+        out.extend(crate::wrap_with(para, size, width, |s, size| line_width(s, rtl, size, &latin)).into_iter().map(|line| (line, rtl)));
+    }
+    out
+}
+
+/// The marked-content operator that opens a line painted in drawing order and gives its typing
+/// order (`/ActualText`, ISO 32000-2 §14.9.4), so copy and search read `line` as it was typed,
+/// marks, ligatures, digits and mixed-script punctuation included. The caller closes it with `EMC`.
+pub fn actual_text_span(line: &str) -> String {
+    let logical: String = line.encode_utf16().map(|u| format!("{u:04X}")).collect();
+    format!("/Span <</ActualText <FEFF{logical}>>> BDC\n")
 }
 
 /// `line` split into its Thai runs, shaped with the Thai face, and the text between them, left to
@@ -243,12 +427,37 @@ impl ShapedFonts {
 /// appearance. Thai the face can't draw, and every line when a glyph can't be read, is left to the
 /// standard font, whose encoder writes `?` for it; [`first_undrawable`] reports that.
 pub fn appearance_lines(lines: &[String], fonts: &mut Dict) -> (Vec<Vec<Piece>>, ShapedFonts) {
-    let plain = |l: &String| vec![Piece::Latin(l.clone())];
-    let pieces: Vec<Vec<Piece>> =
-        lines.iter().map(|l| if l.chars().any(is_thai) { thai_pieces(l).unwrap_or_else(|_| plain(l)) } else { plain(l) }).collect();
-    match ShapedFonts::new(clusters(pieces.iter().map(Vec::as_slice)), shaped_glyph, &Dict::new(), fonts, "PCTh", &mut |o| o).map_err(|(e, _)| e) {
+    let pieces = lines.iter().map(|l| if l.chars().any(is_thai) { thai_pieces(l).unwrap_or_else(|_| plain(l)) } else { plain(l) }).collect();
+    appearance_fonts(pieces, lines.iter().map(String::as_str), fonts)
+}
+
+/// [`appearance_lines`] for a box that draws with [`line_pieces`]: `lines` as [`wrap`] gives them,
+/// each with its paragraph's direction, their Arabic, Hebrew and Thai shaped and in drawing order.
+/// A line a face can't shape (this build has none, or it lacks a character), and every line when a
+/// glyph can't be read, is left to the standard font, whose encoder writes `?` for what it can't
+/// draw; [`first_undrawable_shaped`] reports that.
+pub fn shaped_appearance_lines(lines: &[(String, bool)], fonts: &mut Dict) -> (Vec<Vec<Piece>>, ShapedFonts) {
+    let pieces = lines
+        .iter()
+        .map(|(l, rtl)| if *rtl || has_shaped_script(l) { line_pieces(l, *rtl).unwrap_or_else(|_| plain(l)) } else { plain(l) })
+        .collect();
+    appearance_fonts(pieces, lines.iter().map(|(l, _)| l.as_str()), fonts)
+}
+
+/// A line left whole to the standard font.
+fn plain(line: &str) -> Vec<Piece> {
+    vec![Piece::Latin(line.to_string())]
+}
+
+/// The Type 3 fonts for `pieces`' shaped clusters, built into `fonts` as direct objects; when a
+/// glyph can't be read, `lines` are all left to the standard font instead. The fonts are named
+/// `PCTh…` for Thai alone, as they were before other scripts were drawn, and `PCAr…` otherwise,
+/// as Add text names them.
+fn appearance_fonts<'a>(pieces: Vec<Vec<Piece>>, lines: impl Iterator<Item = &'a str>, fonts: &mut Dict) -> (Vec<Vec<Piece>>, ShapedFonts) {
+    let prefix = if clusters(pieces.iter().map(Vec::as_slice)).all(|c| c.script == ShapedScript::Thai) { "PCTh" } else { "PCAr" };
+    match ShapedFonts::new(clusters(pieces.iter().map(Vec::as_slice)), shaped_glyph, &Dict::new(), fonts, prefix, &mut |o| o).map_err(|(e, _)| e) {
         Ok(shaped) => (pieces, shaped),
-        Err(_) => (lines.iter().map(plain).collect(), ShapedFonts::default()),
+        Err(_) => (lines.map(plain).collect(), ShapedFonts::default()),
     }
 }
 
@@ -258,9 +467,23 @@ pub fn thai_reach(line: &str) -> Option<[f64; 2]> {
     if !line.chars().any(is_thai) {
         return None;
     }
-    let pieces = thai_pieces(line).ok()?;
+    pieces_reach(&thai_pieces(line).ok()?)
+}
+
+/// [`thai_reach`] for a line drawn with [`line_pieces`]: how far its Arabic, Hebrew and Thai
+/// glyphs reach below and above its baseline, in em units; `None` without any, or when a face
+/// can't draw them.
+pub fn line_reach(line: &str) -> Option<[f64; 2]> {
+    if !has_shaped_script(line) {
+        return None;
+    }
+    pieces_reach(&line_pieces(line, rtl_base(line)).ok()?)
+}
+
+/// How far the shaped glyphs of `pieces` reach below and above the baseline, in em units.
+fn pieces_reach(pieces: &[Piece]) -> Option<[f64; 2]> {
     let mut reach: Option<[f64; 2]> = None;
-    for c in clusters([pieces.as_slice()]) {
+    for c in clusters([pieces]) {
         for (id, [_, dy]) in &c.glyphs {
             let g = shaped_glyph(c.script, *id).ok()?;
             if !g.contours.is_empty() {
@@ -283,6 +506,26 @@ pub fn first_undrawable(s: &str) -> Option<char> {
 pub fn first_undrawable_in_line(line: &str) -> Option<char> {
     let thai_fails = line.chars().any(is_thai) && thai_pieces(line).is_err();
     line.chars().find(|c| if is_thai(*c) { thai_fails } else { !crate::win_ansi_encodable(*c) })
+}
+
+/// [`first_undrawable`] for text drawn with [`line_pieces`] ([`shaped_appearance_lines`]): the
+/// first character that would come out as `?`. On a line the faces shape, that is one left to the
+/// standard font that it can't draw; on a line a face can't shape (this build has none, or it lacks
+/// a character), every character outside WinAnsiEncoding. Line breaks don't count, nor do the
+/// direction marks of a shaped line, which are never drawn.
+pub fn first_undrawable_shaped(s: &str) -> Option<char> {
+    s.split(['\n', '\r']).find_map(|line| {
+        if !has_shaped_script(line) {
+            return crate::first_non_win_ansi(line);
+        }
+        match line_pieces(line, rtl_base(line)) {
+            Ok(pieces) => pieces.iter().find_map(|p| match p {
+                Piece::Latin(s) => crate::first_non_win_ansi(s),
+                Piece::Shaped(_) => None,
+            }),
+            Err(_) => crate::first_non_win_ansi(line),
+        }
+    })
 }
 
 /// Why the Thai in `text` can't be drawn ([`thai_message`]): this build has no Thai face, or the
@@ -511,5 +754,113 @@ mod tests {
         let text: String = clusters([pieces.as_slice()]).map(|c| c.text.as_str()).collect();
         assert_eq!(text, "ชื่อบุญฤทธิ์");
         assert!(thai_width("น้ำ", 10.0, |_, _| 0.0) > 0.0);
+    }
+
+    /// The text of every shaped cluster of `pieces`, in drawing order.
+    fn shaped_texts(pieces: &[Piece]) -> Vec<String> {
+        clusters([pieces]).map(|c| c.text.clone()).collect()
+    }
+
+    #[test]
+    fn lines_without_a_shaped_script_are_left_to_the_standard_font() {
+        assert_eq!(line_pieces("", false), Ok(Vec::new()));
+        assert_eq!(line_pieces("", true), Ok(Vec::new()));
+        assert_eq!(line_pieces("Hello (1)", false), Ok(vec![Piece::Latin("Hello (1)".into())]));
+        // Direction marks steer the order and are never drawn.
+        assert_eq!(line_pieces("a\u{200E}b", false), Ok(vec![Piece::Latin("ab".into())]));
+        assert!(!has_shaped_script("Hello ☃") && has_shaped_script("a ب") && has_shaped_script("a ש") && has_shaped_script("a ก"));
+        assert!(rtl_base("بت test") && rtl_base("שלום") && !rtl_base("test بت") && !rtl_base("test") && !rtl_base(""));
+        assert_eq!(line_width("Hello", false, 10.0, |s, size| s.chars().count() as f64 * size), 50.0);
+        assert_eq!(first_undrawable_shaped("Café\r\nок"), Some('о'));
+        assert_eq!(first_undrawable_shaped("Café\n— 5€"), None);
+        assert_eq!(line_reach("Hg"), None);
+        assert_eq!(actual_text_span("aب"), "/Span <</ActualText <FEFF00610628>>> BDC\n");
+        // A line never starts with a mark: Arabic fatha and shadda, Hebrew qamats, Thai mai tho.
+        assert!(['\u{064E}', '\u{0651}', '\u{05B8}', '\u{0E49}'].into_iter().all(joins_previous));
+        assert!(!['ب', 'ש', 'ก', 'a', ' '].into_iter().any(joins_previous));
+    }
+
+    #[test]
+    fn wrapped_lines_take_their_paragraphs_direction() {
+        let chars = |s: &str, size: f64| s.chars().count() as f64 * size;
+        assert_eq!(wrap("one two\r\nthree", 1.0, 5.0, chars), [("one".to_string(), false), ("two".into(), false), ("three".into(), false)]);
+        assert_eq!(wrap("", 1.0, 5.0, chars), [(String::new(), false)]);
+        // Each paragraph on its own: the Latin one after an Arabic one still reads left to right,
+        // and a Latin word that wraps inside the Arabic paragraph keeps that paragraph's direction.
+        let laid = wrap("سلام\nabc", 1.0, 100.0, chars);
+        assert_eq!(laid.iter().map(|(_, rtl)| *rtl).collect::<Vec<_>>(), [true, false]);
+        let laid = wrap("سلام abcdefghij", 1.0, 10.5, chars);
+        assert_eq!(laid.last(), Some(&("abcdefghij".to_string(), true)), "{laid:?}");
+    }
+
+    #[test]
+    fn a_script_without_its_face_says_so_and_its_line_keeps_the_standard_font() {
+        for (script, has_face, text) in [
+            (ShapedScript::Arabic, crate::document_arabic_font().is_some(), "سلام"),
+            (ShapedScript::Hebrew, crate::document_hebrew_font(false).is_some(), "שלום"),
+        ] {
+            let message = script_message(script, GlyphError::NoFont, text);
+            assert!(
+                message.contains("CRAFT_FONTS_DIR") && message.contains(if script == ShapedScript::Arabic { "an Arab face" } else { "a Hebr face" })
+            );
+            if has_face {
+                continue;
+            }
+            let line = format!("ok {text}");
+            let err = line_pieces(&line, false).unwrap_err();
+            assert_eq!((err.script, err.error, err.message()), (script, GlyphError::NoFont, message));
+            // Measured and drawn by the standard font, which writes `?`: reported, never silent.
+            assert_eq!(line_width(&line, false, 10.0, |s, size| s.chars().count() as f64 * size), 70.0);
+            assert_eq!(first_undrawable_shaped(&line), text.chars().next());
+            let mut fonts = Dict::new();
+            let (pieces, _) = shaped_appearance_lines(&[(line.clone(), false)], &mut fonts);
+            assert_eq!((pieces, fonts.iter().count()), (vec![vec![Piece::Latin(line)]], 0));
+        }
+    }
+
+    /// The layout Add text, text boxes and Fill & Sign text share: right-to-left runs come out in
+    /// drawing order and shaped, Latin and digits keep their own order and the standard font.
+    #[test]
+    fn arabic_and_hebrew_lines_are_laid_out_in_drawing_order() {
+        if crate::document_arabic_font().is_some() {
+            // A right-to-left paragraph: the last letter typed is the first one drawn.
+            let pieces = line_pieces("سلام", true).unwrap();
+            assert!(matches!(&pieces[..], [Piece::Shaped(_)]), "{pieces:?}");
+            let texts = shaped_texts(&pieces);
+            assert_eq!((texts.first().map(String::as_str), texts.last().map(String::as_str)), (Some("م"), Some("س")), "{texts:?}");
+            // #6879: Latin, then Arabic, in a paragraph that starts left to right. The Latin stays
+            // first and in the standard font; the Arabic follows it, shaped, its words swapped.
+            let pieces = line_pieces("test بت التناسب", false).unwrap();
+            assert!(matches!(&pieces[..], [Piece::Latin(l), Piece::Shaped(_)] if l == "test "), "{pieces:?}");
+            let texts = shaped_texts(&pieces);
+            assert_eq!(texts.concat().chars().filter(|c| *c != ' ').count(), 9, "every letter is drawn once: {texts:?}");
+            assert_eq!(texts.last().map(String::as_str), Some("ب"), "the first word typed is drawn last: {texts:?}");
+            // Digits inside right-to-left text read left to right; brackets around them are mirrored.
+            let pieces = line_pieces("سلام (12)", true).unwrap();
+            let drawn: String = pieces
+                .iter()
+                .map(|p| match p {
+                    Piece::Latin(s) => s.clone(),
+                    Piece::Shaped(c) => c.iter().map(|c| c.text.as_str()).collect(),
+                })
+                .collect();
+            assert!(drawn.contains("12") && !drawn.contains("21"), "{drawn}");
+            assert_eq!(first_undrawable_shaped("test بت التناسب\nسلام (12)"), None);
+            assert_eq!(first_undrawable_shaped("سلام ☃"), Some('☃'));
+            // Shaped advances, not the standard font's guess at `?`.
+            assert!(line_width("سلام", true, 10.0, |_, _| 0.0) > 0.0);
+            let [bottom, top] = line_reach("سلام").unwrap();
+            assert!(bottom < 0.0 && top > 0.0, "{bottom} {top}");
+            let mut fonts = Dict::new();
+            let (pieces, shaped) = shaped_appearance_lines(&[("test بت".into(), false), ("plain".into(), false)], &mut fonts);
+            assert!(matches!(&pieces[..], [first, second] if first.len() == 2 && second == &[Piece::Latin("plain".into())]), "{pieces:?}");
+            let cluster = clusters([pieces[0].as_slice()]).next().unwrap();
+            assert!(shaped.code(cluster).is_some_and(|(name, _)| name.starts_with("PCAr")) && fonts.iter().count() == 1);
+        }
+        if crate::document_hebrew_font(false).is_some() {
+            let texts = shaped_texts(&line_pieces("שלום", true).unwrap());
+            assert_eq!((texts.first().map(String::as_str), texts.last().map(String::as_str)), (Some("ם"), Some("ש")), "{texts:?}");
+            assert_eq!(first_undrawable_shaped("שלום abc"), None);
+        }
     }
 }

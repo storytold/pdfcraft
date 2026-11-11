@@ -365,7 +365,7 @@ fn fitted_box(doc: &Document, r: ObjRef, text: &str) -> Option<[f64; 4]> {
         let longest = text.lines().map(|l| measure(l, size)).fold(0.0, f64::max);
         (longest + 2.0 * pad + 4.0).clamp(40.0, 300.0)
     };
-    let height = appearance::text_lines_height(&pdfcraft_fonts::wrap_with(text, size, (w - 2.0 * pad).max(1.0), measure), size);
+    let height = appearance::text_lines_height(&appearance::wrap_in(face, text, size, (w - 2.0 * pad).max(1.0)), size);
     Some([x0, top - height - 2.0 * pad - 2.0, x0 + w, top])
 }
 

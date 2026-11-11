@@ -18,7 +18,10 @@ Comments (annotations), ISO 32000-2 §12.5. Layer L3, depends on `pdfcraft-cos`,
   text is shaped and drawn from the craft-fonts Thai face with Add text's writer
   (`pdfcraft_fonts::shaped_text`: Type 3 glyphs with a ToUnicode map), the box sized to the ink
   of its stacked marks and descenders; a build without a Thai face refuses it
-  (`AnnotError::Undrawable`) instead of drawing `?`. Other text it can't
+  (`AnnotError::Undrawable`) instead of drawing `?`. Arabic and Hebrew there go through the
+  layout Add text uses (`shaped_text::line_pieces`: the bidirectional algorithm, then shaping in
+  the craft-fonts Arab and Hebr faces), each line carrying its typing order as `/ActualText`; a
+  build without the face draws them as `?` and marks the comment, as before. Other text it can't
   draw (in a text box, callout, Fill & Sign text, line caption, measurement label or dynamic
   stamp's by-line; `appearance::undrawable_text`) is kept as typed and drawn as `?`, and the comment is marked with
   the first such character (`pdfcraft_fonts::UNDRAWN_MARK`) so the engine reports the edit and

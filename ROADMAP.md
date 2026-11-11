@@ -266,6 +266,9 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 ## Progress log
 
 - **2026-11-16 (M5, #3741):** Ctrl+M opens Comments on Windows/Linux and repeated activation keeps it open. macOS leaves Command+M unbound for Minimize. Dispatch, menus, palette, shortcut help and control/headless metadata resolve the platform-specific registry binding. Mapping and real-input regressions are retained through the rebase; estimates unchanged.
+
+- **2026-11-11 (M7, #6879):** Text boxes, callouts and Fill & Sign text draw Arabic and Hebrew through the layout Add text uses, now one function in `pdfcraft_fonts::shaped_text` (bidirectional order, shaping in the craft-fonts faces, per-line ActualText), instead of `?`. Form fields, headers, footers and watermarks still shape Thai only; right-to-left typing in the editors (misc.rtl-ui) is unchanged. Estimates unchanged.
+
 - **2026-11-03 (M3, #3669):** A drag across a table selects its rows, as Preview does, instead of reading order's detour down each column; a cell padded with spaces reads with the next cell of its row. Synthetic render and UI drag regressions; estimates unchanged.
 
 - **2026-11-09 (M10, #5130):** Windows Printer default sends native two-sided bindings only when automatic duplex support is confirmed, preserving manual driver defaults (#5130/#5772); physical output remains unqualified. Both Windows submission paths preserve DLL guards and current spooler fixes. Review follow-up validates both duplex scopes through craft-print 9fe50c94 and corrects CI formatting. Estimates unchanged.
