@@ -10077,6 +10077,45 @@ fn a_dropped_xfa_click_that_ran_away_still_turns_the_scripts_off() {
     assert!(s.take_js_output(id).errors.iter().any(|e| e.contains("scripts are off")));
 }
 
+/// Another click kept while a dropped one ran away leaves its signal for the next edit.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_click_kept_beside_one_that_ran_away_leaves_the_scripts_to_turn_off() {
+    use crate::js::InteractiveEvent;
+    let tpl = pdfcraft_xfa::fixtures::scripted_template().replace(
+        r#"xfa.host.messageBox("Hello " + qty.rawValue);"#,
+        "function f() { for (var j = 0; j &lt; 99999; j++) {} } for (var k = 0; k &lt; 5000; k++) f();",
+    );
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("runaway.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&tpl)), None).expect("opens");
+    let runaway = s.start_javascript_target(id, "", Some("hello"), None).unwrap();
+    let kept = s.start_javascript_target(id, "", Some("addRow"), None).unwrap();
+    let InteractiveEvent::Complete(ran) = next_event(&runaway) else { panic!("finishes") };
+    let InteractiveEvent::Complete(out) = next_event(&kept) else { panic!("finishes") };
+    assert_eq!(s.finish_javascript(kept, out).unwrap().error, None);
+    assert!(s.finish_javascript(runaway, ran).is_err(), "the document changed");
+    s.apply(id, Edit::SetFieldValue { name: "price".into(), value: FieldValue::Text("7".into()) }).unwrap();
+    assert!(s.get(id).unwrap().xfa_scripts_off(), "the next edit turns them off");
+}
+
+/// The viewer is asked with a FormCalc message clipped, as the message box kept is.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_formcalc_question_is_asked_clipped() {
+    use crate::js::{InteractiveEvent, Prompt};
+    let tpl = pdfcraft_xfa::fixtures::scripted_template()
+        .replace(r#"$host.messageBox("FormCalc")"#, r#"var t = "x" while (Len(t) &lt; 100000) do t = Concat(t, t) endwhile $host.messageBox(t, t)"#);
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("long.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&tpl)), None).expect("opens");
+    let p = s.start_javascript_target(id, "", Some("legacy"), None).unwrap();
+    let InteractiveEvent::Prompt(Prompt::Alert(m), reply) = next_event(&p) else { panic!("asks") };
+    assert!(m.text.chars().count() <= 4_097, "{}", m.text.len());
+    assert!(m.title.as_deref().is_some_and(|t| t.chars().count() <= 4_097));
+    reply.send(None).unwrap();
+    let InteractiveEvent::Complete(out) = next_event(&p) else { panic!("finishes") };
+    assert_eq!(s.finish_javascript(p, out).unwrap().error, None);
+}
+
 /// The time a calculation waits for the user isn't the event's: the calculations after it still
 /// run, though the wait is longer than their whole budget.
 #[cfg(not(target_arch = "wasm32"))]

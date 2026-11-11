@@ -1791,9 +1791,11 @@ impl Session {
             }
             let ran = click.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take();
             let Some((begun, checked)) = ran else { return Ok(Outcome { rc: true, ..Default::default() }) };
+            let ran_away = begun.cx.xfa_ran_away;
             let ((), out) = self.with_own_js_output(p.id, |s| s.finish_edit(p.id, begun, checked).map(|_| ()))?;
-            // Kept, the click turned the scripts off itself (if they ran away): not again.
-            if let Some(d) = self.get(p.id) {
+            // Kept, a click that ran away turned the scripts off itself: not again. A flag another
+            // click set (one this commit makes stale) stays for the next edit.
+            if ran_away && let Some(d) = self.get(p.id) {
                 d.xfa_ran_away.store(false, std::sync::atomic::Ordering::Relaxed);
             }
             return Ok(xfa_click_outcome(out));

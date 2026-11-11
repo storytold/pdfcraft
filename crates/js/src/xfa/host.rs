@@ -168,6 +168,8 @@ impl XHost {
     /// else the buttons' safe default. `Err`: an answer `m`'s buttons can't give, or the
     /// event's prompts are spent.
     pub(crate) fn message_box(&mut self, m: Message) -> Result<u8, String> {
+        // Clipped before the viewer is asked, as the effect is: the dialog shows no more than is kept.
+        let m = Message { text: clip(m.text), title: m.title.map(clip), ..m };
         let at = self.messages;
         self.messages = self.messages.saturating_add(1);
         let invalid = |answer: Option<&str>| {
