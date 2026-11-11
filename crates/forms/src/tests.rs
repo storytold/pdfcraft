@@ -221,6 +221,24 @@ fn button_caption_preserves_other_widgets_and_shared_dictionaries() {
             assert!(!apd.contains(b"R") && !apd.contains(b"D"), "stale hover/pressed text must not survive");
             assert!(ap(&doc, &f.widgets[1]).contains("(Clear Form) Tj"));
         }
+        let mut doc = original.clone();
+        set_props(&mut doc, "clear_button", &FieldProps { caption_all: Some("Continue".into()), ..Default::default() }).unwrap();
+        let doc = Document::open(Arc::new(pdfcraft_cos::write_full(&doc, &SaveOptions::default()).unwrap())).unwrap();
+        let f = field(&fields(&doc), "clear_button").clone();
+        assert_eq!(f.widgets.iter().map(|w| w.caption.as_deref()).collect::<Vec<_>>(), [Some("Continue"), Some("Continue")]);
+        assert!(f.widgets.iter().all(|w| ap(&doc, w).contains("(Continue) Tj")));
+
+        let mut doc = original.clone();
+        apply_script_changes(
+            &mut doc,
+            &[FieldChange { name: "clear_button".into(), caption: Some("Proceed".into()), ..Default::default() }],
+            &mut NoScripts,
+        )
+        .unwrap();
+        let doc = Document::open(Arc::new(pdfcraft_cos::write_full(&doc, &SaveOptions::default()).unwrap())).unwrap();
+        let f = field(&fields(&doc), "clear_button").clone();
+        assert_eq!(f.widgets.iter().map(|w| w.caption.as_deref()).collect::<Vec<_>>(), [Some("Proceed"), Some("Proceed")]);
+        assert!(f.widgets.iter().all(|w| ap(&doc, w).contains("(Proceed) Tj")));
     }
 }
 
@@ -240,6 +258,26 @@ fn button_caption_rejects_wrong_type_and_index_before_mutation() {
     assert_eq!(field(&fields(&doc), "go").widgets[0].caption.as_deref(), Some(""));
     assert!(undrawn_fields(&doc).is_empty());
     assert!(!ap(&doc, &field(&fields(&doc), "go").widgets[0]).contains(" Tj"));
+}
+
+#[test]
+fn field_wide_button_caption_rejects_a_field_without_widgets() {
+    let objs = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [] >>".into(),
+        "<< /Fields [5 0 R] >>".into(),
+        "<< /FT /Btn /T (empty) /Ff 65536 /Kids [] >>".into(),
+    ];
+    let mut doc = document(&objs);
+    let all_fields = fields(&doc);
+    let button = field(&all_fields, "empty");
+    assert_eq!(button.kind, FieldKind::PushButton);
+    assert!(button.widgets.is_empty());
+    let before = pdfcraft_cos::write_full(&doc, &SaveOptions::default()).unwrap();
+    let result = set_props(&mut doc, "empty", &FieldProps { caption_all: Some("Caption".into()), ..Default::default() });
+    assert!(result.is_err());
+    assert_eq!(pdfcraft_cos::write_full(&doc, &SaveOptions::default()).unwrap(), before);
 }
 
 /// Read the drawn strings together with the appearance's actual font after saving and reopening.
@@ -3615,10 +3653,11 @@ fn recalc_chain_where_script_changes_checkbox() {
                     changes: vec![FieldChange {
                         name: "agree".into(),
                         value: Some(vec!["Yes".into()]),
+                        formatted: false,
                         read_only: None,
                         required: None,
                         display: None,
-                        rect: None,
+                        ..Default::default()
                     }],
                     message: None,
                 }
@@ -3700,6 +3739,65 @@ fn an_export_value_wins_over_an_earlier_options_display_text() {
         assert_eq!(dict.get(b"V").cloned(), Some(Object::String(PdfString::text("fr"))));
         assert_eq!(dict.get(b"I").cloned(), Some(Object::Array(vec![Object::Int(1)])));
     }
+}
+
+#[test]
+fn validation_script_colour_is_used_when_the_field_redraws() {
+    struct TestScripts;
+    impl Scripts for TestScripts {
+        fn run(&mut self, _event: FieldEvent, _script: &str, _target: &Field, value: &str, _fields: &[Field]) -> ScriptResult {
+            ScriptResult {
+                rc: true,
+                value: value.into(),
+                value_set: false,
+                changes: vec![FieldChange {
+                    name: "name".into(),
+                    text_color: Some(vec!["RGB".into(), "1".into(), "0".into(), "0".into()]),
+                    ..Default::default()
+                }],
+                message: None,
+            }
+        }
+    }
+
+    let mut doc = fixture();
+    set_field_script(&mut doc, "name", "validate", Some("set_red")).unwrap();
+    set_value_with(&mut doc, "name", &FieldValue::Text("Grace".into()), &mut TestScripts).unwrap();
+
+    let all = fields(&doc);
+    let f = field(&all, "name");
+    assert!(f.da.contains("1 0 0 rg"));
+    assert!(ap(&doc, &f.widgets[0]).contains("1 0 0 rg"), "redraw uses the Validate script's updated appearance");
+}
+
+#[test]
+fn calculation_script_colour_is_used_when_the_field_redraws() {
+    struct TestScripts;
+    impl Scripts for TestScripts {
+        fn run(&mut self, _event: FieldEvent, _script: &str, _target: &Field, _value: &str, _fields: &[Field]) -> ScriptResult {
+            ScriptResult {
+                rc: true,
+                value: "Grace".into(),
+                value_set: true,
+                changes: vec![FieldChange {
+                    name: "name".into(),
+                    text_color: Some(vec!["RGB".into(), "1".into(), "0".into(), "0".into()]),
+                    ..Default::default()
+                }],
+                message: None,
+            }
+        }
+    }
+
+    let mut doc = fixture();
+    set_field_script(&mut doc, "name", "calculate", Some("set_red")).unwrap();
+    recalculate_with(&mut doc, &mut TestScripts).unwrap();
+
+    let all = fields(&doc);
+    let f = field(&all, "name");
+    assert_eq!(f.value, ["Grace"]);
+    assert!(f.da.contains("1 0 0 rg"));
+    assert!(ap(&doc, &f.widgets[0]).contains("1 0 0 rg"), "redraw uses the Calculate script's updated appearance");
 }
 
 #[test]
