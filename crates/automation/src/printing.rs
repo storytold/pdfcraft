@@ -372,7 +372,9 @@ impl Automation {
             (None, Some(printer)) => {
                 let actual_printer = resolved_printer.as_deref().unwrap_or(printer);
                 let mut job = spool_job(a, actual_printer, self.doc(a)?.name.clone(), duplex, media.as_deref(), settings.raster, &laid_out)?;
-                let bytes = pdfcraft_engine::spooler::spooler_copy(bytes, &mut job);
+                // TODO: flatten transparency when the printer's driver is a GDI (v3) one, once
+                // spool can tell (#6155, #5838, #5940); XPS (v4) drivers print it as it is.
+                let bytes = pdfcraft_engine::spooler::spooler_copy(bytes, &mut job, false);
                 out["job"] = json!(spool::submit(&bytes, &job).map_err(|e| failed(e.to_string()))?);
             }
             _ => return Err(bad("pass either path (save the print-ready PDF) or printer (a name from printers, or \"default\")")),
