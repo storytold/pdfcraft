@@ -178,6 +178,12 @@ enum ManagerMatch<'a> {
     Manager(usize, &'a str),
 }
 
+enum ManagerLookup<'a> {
+    Found(ManagerMatch<'a>),
+    Blocked,
+    Unmatched,
+}
+
 /// A final `_name` SOM step can name a real child or its sibling instance manager. Keep their
 /// precedence local to each parent so an earlier manager wins over a later parent's child.
 fn manager_child<'a>(h: &XHost, parent: usize, step: &str, name: &'a str, index: usize) -> Option<ManagerMatch<'a>> {
@@ -191,64 +197,83 @@ fn manager_child<'a>(h: &XHost, parent: usize, step: &str, name: &'a str, index:
 
 /// Search parents in document order for a descendant `_name` step, including managers that
 /// are peers of the managed rows rather than modelled form nodes.
-fn descendant_manager<'a>(h: &XHost, parent: usize, step: &str, name: &'a str, index: usize, depth: usize) -> Option<ManagerMatch<'a>> {
+fn descendant_manager<'a>(h: &XHost, parent: usize, step: &str, name: &'a str, index: usize, depth: usize) -> ManagerLookup<'a> {
     if depth > MAX_DEPTH {
-        return None;
+        return ManagerLookup::Unmatched;
     }
     // Match the parent's child in its document position, after earlier child subtrees.
     // A real child suppresses that parent's manager, even if the row occurs first.
     let candidate = manager_child(h, parent, step, name, index);
-    for &child in h.nodes.get(parent)?.children.iter() {
+    let real_child = child_named(h, parent, step).is_some();
+    let Some(parent_node) = h.nodes.get(parent) else { return ManagerLookup::Unmatched };
+    for &child in parent_node.children.iter() {
         let Some(node) = h.nodes.get(child).filter(|node| !node.gone) else { continue };
-        let at_child = match &candidate {
-            Some(ManagerMatch::Node(found)) => *found == child,
-            Some(ManagerMatch::Manager(..)) => &*node.name == name,
-            None => false,
-        };
-        if at_child {
-            return candidate;
+        // The index selects among siblings at the first matching descendant. If it is absent,
+        // later branches cannot supply an instance of this same first match.
+        if &*node.name == step || (!real_child && &*node.name == name) {
+            return candidate.map_or(ManagerLookup::Blocked, ManagerLookup::Found);
         }
-        if let Some(found) = descendant_manager(h, child, step, name, index, depth + 1) {
-            return Some(found);
+        match descendant_manager(h, child, step, name, index, depth + 1) {
+            ManagerLookup::Unmatched => {}
+            found => return found,
         }
     }
-    None
+    ManagerLookup::Unmatched
 }
 
 /// The target named by a final `_name` SOM step. A bare `_name` searches the same enclosing
 /// scopes as a bare subform name; a qualified step searches each resolved parent in order.
-fn manager_at<'a>(h: &XHost, from: usize, expr: &'a str) -> Option<ManagerMatch<'a>> {
+fn manager_at<'a>(h: &XHost, from: usize, expr: &'a str) -> ManagerLookup<'a> {
     let expr = expr.trim();
     let (prefix, last) = expr.rsplit_once('.').unwrap_or(("", expr));
     let (step, index) = match last.split_once('[') {
         Some((step, selector)) => {
-            let selector = selector.strip_suffix(']')?;
-            (step, if selector == "*" { 0 } else { selector.parse::<usize>().ok()? })
+            let Some(selector) = selector.strip_suffix(']') else { return ManagerLookup::Unmatched };
+            let index = if selector == "*" {
+                0
+            } else if let Ok(index) = selector.parse::<usize>() {
+                index
+            } else {
+                return ManagerLookup::Unmatched;
+            };
+            (step, index)
         }
         None => (last, 0),
     };
-    let name = step.strip_prefix('_').filter(|name| !name.is_empty())?;
+    let Some(name) = step.strip_prefix('_').filter(|name| !name.is_empty()) else { return ManagerLookup::Unmatched };
     if prefix.is_empty() {
         // An unqualified name checks children, then siblings, then each enclosing scope.
-        // Check each scope's real child and manager together before moving outward.
+        // Check each scope's real child and manager together. An absent index at a named
+        // scope is a failed lookup, not a reason to continue into an outer scope.
         let mut at = Some(from);
         let mut depth = 0;
         while let Some(scope) = at
             && depth < MAX_DEPTH
         {
             if let Some(found) = manager_child(h, scope, step, name, index) {
-                return Some(found);
+                return ManagerLookup::Found(found);
             }
-            at = h.nodes.get(scope)?.parent;
+            if child_named(h, scope, step).is_some() || child_named(h, scope, name).is_some() {
+                return ManagerLookup::Blocked;
+            }
+            at = h.nodes.get(scope).and_then(|node| node.parent);
             depth += 1;
         }
-        return None;
+        return ManagerLookup::Unmatched;
     }
     let descendant = prefix.ends_with('.');
     let parents = resolve_som(h, from, if descendant { prefix.strip_suffix('.').unwrap_or(prefix) } else { prefix });
-    parents
-        .into_iter()
-        .find_map(|parent| if descendant { descendant_manager(h, parent, step, name, index, 0) } else { manager_child(h, parent, step, name, index) })
+    for parent in parents {
+        if descendant {
+            match descendant_manager(h, parent, step, name, index, 0) {
+                ManagerLookup::Unmatched => {}
+                found => return found,
+            }
+        } else if let Some(found) = manager_child(h, parent, step, name, index) {
+            return ManagerLookup::Found(found);
+        }
+    }
+    ManagerLookup::Unmatched
 }
 
 /// The live descendants of node `from` named `name` (`from..name` in a SOM path), in document
@@ -486,9 +511,10 @@ pub(super) fn resolver(ctx: &mut Context, from: usize, many: bool) -> JsResult<J
         if !many {
             let target = manager_at(&host(ctx)?.borrow(), from, &expr);
             match target {
-                Some(ManagerMatch::Node(node)) => return node_object(ctx, node),
-                Some(ManagerMatch::Manager(parent, name)) => return instance_manager(ctx, parent, name),
-                None => {}
+                ManagerLookup::Found(ManagerMatch::Node(node)) => return node_object(ctx, node),
+                ManagerLookup::Found(ManagerMatch::Manager(parent, name)) => return instance_manager(ctx, parent, name),
+                ManagerLookup::Blocked => return Ok(JsValue::null()),
+                ManagerLookup::Unmatched => {}
             }
         }
         if many {

@@ -1169,6 +1169,58 @@ mod xfa_model {
         assert_eq!(o.result.as_deref(), Some("outer"));
     }
 
+    #[test]
+    fn missing_manager_index_does_not_select_an_outer_field() {
+        let mut model = form();
+        model.children[0].children.push(field("_row", "form1[0].page1[0]._row[0]", "outer first", false));
+        model.children[0].children.push(field("_row", "form1[0].page1[0]._row[1]", "outer second", false));
+        let event = XfaEvent { activity: "click".into(), target: "form1[0].page1[0].table[0].row[0].amount[0]".into(), ..Default::default() };
+        let o = run_xfa(
+            "this.resolveNode('_row[0]').count + '/' + (this.resolveNode('_row[1]') === null)",
+            &event,
+            &XfaDoc::default(),
+            &model,
+            Limits::default(),
+        );
+        assert_eq!(o.error, None, "{o:?}");
+        assert_eq!(o.result.as_deref(), Some("2/true"));
+
+        let event = XfaEvent { activity: "click".into(), target: "form1[0].page1[0].go[0]".into(), ..Default::default() };
+        let o = run_xfa("this.resolveNode('_row[1]').rawValue", &event, &XfaDoc::default(), &model, Limits::default());
+        assert_eq!(o.error, None, "{o:?}");
+        assert_eq!(o.result.as_deref(), Some("outer second"));
+    }
+
+    #[test]
+    fn missing_real_node_index_does_not_select_an_outer_field() {
+        let mut model = form();
+        let details = model.children[0].children.iter_mut().find(|node| node.name == "details").unwrap();
+        details.children.push(field("_row", "form1[0].page1[0].details[0]._row[0]", "near", false));
+        model.children[0].children.push(field("_row", "form1[0].page1[0]._row[0]", "outer first", false));
+        model.children[0].children.push(field("_row", "form1[0].page1[0]._row[1]", "outer second", false));
+        let event = XfaEvent { activity: "click".into(), target: "form1[0].page1[0].details[0].note[0]".into(), ..Default::default() };
+        let o = run_xfa(
+            "this.resolveNode('_row[0]').rawValue + '/' + (this.resolveNode('_row[1]') === null)",
+            &event,
+            &XfaDoc::default(),
+            &model,
+            Limits::default(),
+        );
+        assert_eq!(o.error, None, "{o:?}");
+        assert_eq!(o.result.as_deref(), Some("near/true"));
+    }
+
+    #[test]
+    fn missing_descendant_manager_index_stops_before_later_field() {
+        let mut model = form();
+        model.children.push(field("_row", "form1[0]._row[0]", "later first", false));
+        model.children.push(field("_row", "form1[0]._row[1]", "later second", false));
+        let event = XfaEvent { activity: "click".into(), target: "form1[0].page1[0].go[0]".into(), ..Default::default() };
+        let o = run_xfa("this.resolveNode('$form.._row[1]') === null", &event, &XfaDoc::default(), &model, Limits::default());
+        assert_eq!(o.error, None, "{o:?}");
+        assert_eq!(o.result.as_deref(), Some("true"));
+    }
+
     /// `xfa.host`, `xfa.layout`, `xfa.event` and `app` calls become effects, and messages keep
     /// their details.
     #[test]
