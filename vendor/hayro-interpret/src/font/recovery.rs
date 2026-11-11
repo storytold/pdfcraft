@@ -703,6 +703,11 @@ impl RecoveryCache {
         let _ = self.document.set((document, key));
     }
 
+    /// The font's key in its document ([`document::font_key`]), when it was read with one.
+    pub(crate) fn document_key(&self) -> Option<u128> {
+        self.document.get().map(|(_, key)| *key)
+    }
+
     /// The recovered reading of one glyph of a font of `kind`: `facts` builds the font's facts
     /// (of that kind; called for the guards the first time, and again only when some rule takes
     /// the font), `glyph` the glyph's (built only when some rule takes the font). A font of a

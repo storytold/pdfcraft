@@ -243,6 +243,15 @@ impl OutlineGlyph {
     pub fn font_cache_key(&self) -> u128 {
         self.font.cache_key()
     }
+
+    /// PdfCraft patch (104): a key for the font whose recovery decisions this glyph's are. Read
+    /// with a [`RecoveryDocument`], each font object is a font of its own, even beside another
+    /// object with the same dictionary (whose [`Self::font_cache_key`] is the same); without one,
+    /// the font's cache key.
+    pub fn recovery_font_key(&self) -> u128 {
+        let key = self.font.cache_key();
+        self.font.recovery_info().cache.document_key().unwrap_or(key)
+    }
 }
 
 /// A type3 glyph.
@@ -293,6 +302,13 @@ impl Type3Glyph<'_> {
     /// does for outline fonts (the recovered layer's budgets count fonts by it).
     pub fn font_cache_key(&self) -> u128 {
         self.font.cache_key()
+    }
+
+    /// PdfCraft patch (104): a key for the font whose recovery decisions this glyph's are, as
+    /// `OutlineGlyph::recovery_font_key` gives it.
+    pub fn recovery_font_key(&self) -> u128 {
+        let key = self.font.cache_key();
+        self.font.recovery_info().cache.document_key().unwrap_or(key)
     }
 }
 

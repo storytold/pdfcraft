@@ -663,10 +663,11 @@ impl TextDevice {
         glyph: &Glyph<'_>,
     ) -> (Option<hayro::hayro_interpret::hayro_cmap::BfString>, Option<Recovery>, hayro::hayro_interpret::font::RecoveredFontStyle) {
         // Outline and Type 3 fonts count alike: each runs the rules' font-level guards, at its
-        // first glyph, which is always a change of font.
+        // first glyph, which is always a change of font. Fonts are told apart as the rules
+        // decide them: font objects with the same dictionary are fonts of their own.
         let font = match glyph {
-            Glyph::Outline(g) => g.font_cache_key(),
-            Glyph::Type3(g) => g.font_cache_key(),
+            Glyph::Outline(g) => g.recovery_font_key(),
+            Glyph::Type3(g) => g.recovery_font_key(),
         };
         let new_font = self.last_recovery_font != Some(font);
         let over_budget = self.filled.len().saturating_add(self.overrides.len()) >= recovered_glyphs()

@@ -632,3 +632,57 @@ fn a_font_whose_outlines_are_too_large_is_not_read() {
     assert_eq!(recovered, None);
     assert_eq!(cost.outlines_classified, 15, "the sixteenth outline is past the budget: {cost:?}");
 }
+
+/// Review on #6977: read with the document's recovery state, font objects with byte-identical
+/// dictionaries are fonts of their own (each decided by the rules), and the page's budgets count
+/// them so: shown one after another, each one's guards are timed and counted, not taken as the
+/// font before.
+#[test]
+fn font_objects_with_the_same_dictionary_each_count_toward_the_rules_time() {
+    use hayro::hayro_interpret::font::RecoveryDocument;
+    let glyphs = [(0xE8, 'č'), (0xF5, 'ő'), (0xFB, 'ű')];
+    let outlines: Vec<(u16, &[Contour])> = glyphs.iter().enumerate().map(|(i, (_, c))| (u16::try_from(i + 1).unwrap(), drawing(*c))).collect();
+    let cmap: Vec<(char, u16)> = glyphs.iter().enumerate().map(|(i, (code, _))| (win_ansi(*code), u16::try_from(i + 1).unwrap())).collect();
+    let program = with_outlines(4, &outlines, Cmap::Unicode(&cmap), None);
+    let fonts = 6;
+    let resources: String = (0..fonts).map(|i| format!("/F{i} {} 0 R ", 7 + i)).collect();
+    let content: String = (0..fonts).map(|i| format!("/F{i} 6 Tf 20 {} Td <E8F5FB> Tj ", if i == 0 { 250 } else { -20 })).collect();
+    let widths = vec!["600"; 256].join(" ");
+    let mut pdf = pdfcraft_testkit::Pdf::new()
+        .obj("<< /Type /Catalog /Pages 2 0 R >>")
+        .obj("<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 300] >>")
+        .obj(format!("<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Font << {resources}>> >> >>"))
+        .stream("", format!("BT {content}ET"))
+        .obj("<< /Type /FontDescriptor /FontName /ABCDEF+TimesNewRomanCE /Flags 32 /FontBBox [0 -200 1000 900] /ItalicAngle 0 /Ascent 800 /Descent -200 /CapHeight 700 /StemV 80 /FontFile2 6 0 R >>")
+        .stream("", program);
+    for _ in 0..fonts {
+        pdf = pdf.obj(format!(
+            "<< /Type /Font /Subtype /TrueType /BaseFont /ABCDEF+TimesNewRomanCE /FirstChar 0 /LastChar 255 /Widths [{widths}] /Encoding /WinAnsiEncoding /FontDescriptor 5 0 R >>"
+        ));
+    }
+    let pdf = parse(pdf.build());
+    let read = || {
+        let settings =
+            InterpreterSettings { recovery_document: Some(std::sync::Arc::new(RecoveryDocument::default())), ..InterpreterSettings::default() };
+        let before = recovery_counters();
+        let (strict, recovered) = extract_page_recovering(&pdf, 0, &settings).unwrap();
+        (strict, recovered, recovery_counters().since(&before))
+    };
+    let (strict, recovered, cost) = read();
+    assert_eq!(recovered.map(|r| r.text.plain_text().matches("čőű").count()), Some(fonts));
+    assert_eq!(cost.guard_decisions, fonts, "each font object is decided: {cost:?}");
+
+    struct Reset;
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            RULES_MILLIS.with(|m| m.set(None));
+        }
+    }
+    let millis = u64::try_from(RECOVERY_RULES_BUDGET.as_millis() * 2 / 5).unwrap_or(u64::MAX);
+    RULES_MILLIS.with(|m| m.set(Some(millis)));
+    let _reset = Reset;
+    let (slow, recovered, cost) = read();
+    assert_eq!(slow, strict);
+    assert!(recovered.is_none(), "past the rules' budget the page has no recovered layer");
+    assert_eq!(cost.guard_decisions, 3, "no font object past the budget is decided: {cost:?}");
+}
