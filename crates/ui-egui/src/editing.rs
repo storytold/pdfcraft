@@ -217,6 +217,18 @@ fn re_resolve_restacked_selection(view: &mut crate::DocView, doc: &pdfcraft_engi
 }
 
 impl PdfCraftApp {
+    /// The comments the pop-ups hold unsaved text or a drag for, to see afterwards whether
+    /// their places still name them (pages may move, come or go).
+    fn popups_before_edit(&self, i: usize, id: pdfcraft_engine::DocId) -> Vec<pdfcraft_render::Annotation> {
+        match (self.views.get(i), self.session.get(id)) {
+            (Some(v), Some(d)) => {
+                let keys = v.comments.popup_keys();
+                d.info.annotations.iter().filter(|a| keys.contains(&(a.page, a.index))).cloned().collect()
+            }
+            _ => Vec::new(),
+        }
+    }
+
     /// Apply an edit to the active document. Returns `true` on success; failures are shown.
     pub fn apply_edit(&mut self, edit: Edit) -> bool {
         let Some((i, id)) = self.active_ids() else { return false };
@@ -257,15 +269,7 @@ impl PdfCraftApp {
         // A restack changes indexes by reordering the page's content: note the single tool's
         // selection first, and follow it to its new index below.
         let restacked = self.views.get(i).zip(self.session.get(id)).and_then(|(view, doc)| restack_selection(view, doc, &edit));
-        // The comments the pop-ups hold unsaved text or a drag for, to see afterwards whether
-        // their places still name them (pages may move, come or go).
-        let popups_before: Vec<pdfcraft_render::Annotation> = match (self.views.get(i), self.session.get(id)) {
-            (Some(v), Some(d)) => {
-                let keys = v.comments.popup_keys();
-                d.info.annotations.iter().filter(|a| keys.contains(&(a.page, a.index))).cloned().collect()
-            }
-            _ => Vec::new(),
-        };
+        let popups_before = self.popups_before_edit(i, id);
         match self.session.apply(id, edit.clone()) {
             Ok(()) => {
                 let Some(doc) = self.session.get(id) else { return true };

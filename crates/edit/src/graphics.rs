@@ -53,8 +53,6 @@ impl PageGraphic {
     }
 }
 
-
-
 fn intersection(a: [f64; 4], b: [f64; 4]) -> Option<[f64; 4]> {
     let r = [a[0].max(b[0]), a[1].max(b[1]), a[2].min(b[2]), a[3].min(b[3])];
     (r.iter().all(|v| v.is_finite()) && r[2] > r[0] && r[3] > r[1]).then_some(r)

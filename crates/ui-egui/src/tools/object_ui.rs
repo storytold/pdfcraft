@@ -913,10 +913,7 @@ mod tests {
     #[test]
     fn one_object_deletes_with_its_own_edit_and_none_with_nothing() {
         assert!(matches!(Edit::delete_objects(2, vec![t(ObjectKind::Image, 4)]), Some(Edit::EditPageImage { page: 2, index: 4, .. })));
-        assert!(matches!(
-            Edit::delete_objects(0, vec![t(ObjectKind::Graphic, 1)]),
-            Some(Edit::DeletePageGraphic { page: 0, index: 1 })
-        ));
+        assert!(matches!(Edit::delete_objects(0, vec![t(ObjectKind::Graphic, 1)]), Some(Edit::DeletePageGraphic { page: 0, index: 1 })));
         assert!(Edit::delete_objects(0, Vec::new()).is_none());
     }
 

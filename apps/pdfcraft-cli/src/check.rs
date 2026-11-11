@@ -134,8 +134,8 @@ fn object_layer_round_trip(doc: &mut pdfcraft_cos::Document) {
             let _ = restack_objects(doc, page, &targets, Restack::Front);
             let _ = restack_objects(doc, page, &targets, Restack::Back);
         }
-        for index in 0..graphics.len().min(4) {
-            let [x0, y0, x1, y1] = graphics[index].rect;
+        for (index, graphic) in graphics.iter().take(4).enumerate() {
+            let [x0, y0, x1, y1] = graphic.rect;
             let _ = resize_graphic(doc, page, index, [x0, y0, x0 + (x1 - x0) * 0.5, y0 + (y1 - y0) * 0.5]);
             let _ = delete_graphic(doc, page, index);
         }
