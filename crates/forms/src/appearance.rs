@@ -17,6 +17,16 @@
 //! metrics), Helvetica's when Helvetica stands in, and one em per full-width character in
 //! composite fonts.
 //!
+//! Arabic, Hebrew and Thai that the `/DA` font can't hold (it isn't a simple font that encodes
+//! them) are drawn in a text field or combo box as Add text and text boxes draw them
+//! (`pdfcraft_fonts::shaped_text::line_pieces`): shaped in the craft-fonts faces as Type 3 glyphs
+//! beside the field's font, which draws the rest, right-to-left runs in drawing order with the
+//! line's typing order beside it (`/ActualText`), so copy and search read what was typed. The
+//! same pieces are measured, wrapped, sized and drawn. `/Q` is followed as it is, as in a text
+//! box: right-to-left text is not moved to the right edge on its own. A build without a script's
+//! face refuses the value, saying what to do ([`script_refusal`]), as it always refused Thai. Comb
+//! fields and list boxes are not shaped: they draw such text as `?` and report it.
+//!
 //! `/MK /R` (0, 90, 180, 270, counterclockwise) lays the content out in the upright box and sets
 //! the appearance `/Matrix` so that box lands on the widget rectangle. Any other value is 0, and
 //! rotation 0 leaves `/Matrix` off.
@@ -137,10 +147,13 @@ impl TextBox {
             return true;
         }
         let shown: String = if self.password { "*".repeat(text.chars().count()) } else { text.to_string() };
-        // The font the appearance would choose for this text.
-        let can_show = |enc: &FontText| if self.multiline { shown.split(['\n', '\r']).all(|l| enc.can_encode(l)) } else { enc.can_encode(&shown) };
-        let font = self.font.as_ref().filter(|enc| can_show(enc)).unwrap_or(&FontText::WinAnsi);
-        let width_of = |t: &str, size: f64| font.width(t, size);
+        // The font the appearance would choose for this text, and whether the script faces draw
+        // its Arabic, Hebrew and Thai beside it.
+        let shaped = shapes(&shown, self.font.as_ref(), self.multiline);
+        let latin = if shaped { latin_part(&shown) } else { shown.clone() };
+        let font = self.font.as_ref().filter(|enc| holds(enc, &latin, self.multiline)).unwrap_or(&FontText::WinAnsi);
+        let line_width = |line: &str, rtl: bool, size: f64| text_line_width(font, shaped, line, rtl, size);
+        let width_of = |t: &str, size: f64| line_width(t, shaped && shaped_text::rtl_base(t), size);
         // The smallest an automatic size goes ([`auto_text_size_by`]).
         let size = self.size.unwrap_or(4.0);
         if self.multiline {
@@ -149,9 +162,10 @@ impl TextBox {
             // padding below the last line is not needed: `inner_h` plus 2 pt.
             // Long words break by character, so a line is wider than the box only when it is a
             // single character wider than the box, which the appearance still cuts at the sides.
-            let lines = wrap_with(&shown, size, self.inner_w, width_of);
+            let lines = wrapped(font, shaped, &shown, size, self.inner_w);
             let above = lines.len().saturating_sub(1) as f64;
-            above * size * 1.15 + 1.057 * size <= self.inner_h + 2.0 + 0.01 && lines.iter().all(|l| width_of(l, size) <= self.inner_w + 0.01)
+            above * size * 1.15 + 1.057 * size <= self.inner_h + 2.0 + 0.01
+                && lines.iter().all(|(l, rtl)| line_width(l, *rtl, size) <= self.inner_w + 0.01)
         } else {
             // A line break in a single-line value is drawn as a space.
             let line: String = shown.chars().map(|c| if matches!(c, '\n' | '\r') { ' ' } else { c }).collect();
@@ -748,6 +762,83 @@ pub fn value_overflow(doc: &Document, f: &Field, w: &Widget) -> Option<Overflow>
     field_appearance_fit(doc, f, w, &f.value, true).2
 }
 
+/// Whether the encoding holds `text`: each line of a `multiline` value, or all of it.
+fn holds(enc: &FontText, text: &str, multiline: bool) -> bool {
+    if multiline { text.split(['\n', '\r']).all(|line| enc.can_encode(line)) } else { enc.can_encode(text) }
+}
+
+/// Whether a text field or combo box whose `/DA` font is `font` draws the Arabic, Hebrew and Thai
+/// of `text` from the script faces (`shaped_text::line_pieces`), beside the font that draws the
+/// rest: it has such text, the font isn't a simple font that holds all of it (which then draws it
+/// as it always did), and the faces can shape it. The appearance and [`TextBox::fits`] both ask.
+fn shapes(text: &str, font: Option<&FontText>, multiline: bool) -> bool {
+    shaped_text::has_shaped_script(text)
+        && !font.is_some_and(|enc| matches!(enc, FontText::Simple(_)) && holds(enc, text, multiline))
+        && shaped_text::shape_refusal(text).is_none()
+}
+
+/// What of `text` is left to the field's own font when the script faces draw the rest
+/// ([`shapes`]), line by line: the font is chosen for this, not for the letters it never draws.
+fn latin_part(text: &str) -> String {
+    let line = |l: &str| -> String {
+        shaped_text::appearance_pieces(l, shaped_text::rtl_base(l))
+            .into_iter()
+            .filter_map(|p| match p {
+                Piece::Latin(s) => Some(s),
+                Piece::Shaped(_) => None,
+            })
+            .collect()
+    };
+    text.split(['\n', '\r']).map(line).collect::<Vec<_>>().join("\n")
+}
+
+/// The width of `line` at `size` as the appearance draws it, in a paragraph that reads right to
+/// left when `rtl`: in `enc`, and with `shaped` ([`shapes`]) its Arabic, Hebrew and Thai by their
+/// faces' shaped advances.
+fn text_line_width(enc: &FontText, shaped: bool, line: &str, rtl: bool, size: f64) -> f64 {
+    if shaped { shaped_text::line_width(line, rtl, size, |s, size| enc.width(s, size)) } else { enc.width(line, size) }
+}
+
+/// A multi-line value wrapped `width` wide as [`text_line_width`] measures it: each line with whether
+/// its paragraph reads right to left (never, unless `shaped`).
+fn wrapped(enc: &FontText, shaped: bool, text: &str, size: f64, width: f64) -> Vec<(String, bool)> {
+    if shaped {
+        shaped_text::wrap(text, size, width, |s, size| enc.width(s, size))
+    } else {
+        wrap_with(text, size, width, |s, size| enc.width(s, size)).into_iter().map(|line| (line, false)).collect()
+    }
+}
+
+/// `text` as a line is drawn: a line break in a single-line value is a space, as in viewers
+/// (multiline text is split).
+fn one_line(text: &str) -> String {
+    text.chars().map(|c| if matches!(c, '\n' | '\r') { ' ' } else { c }).collect()
+}
+
+/// A single-line value as it is laid out, and whether it reads right to left: `shaped`
+/// ([`shapes`]), the one line it is drawn as ([`one_line`]), right to left when its first strong
+/// letter is; otherwise the value itself, measured as it always was.
+fn single_line(text: &str, shaped: bool) -> (String, bool) {
+    if shaped {
+        let line = one_line(text);
+        let rtl = shaped_text::rtl_base(&line);
+        (line, rtl)
+    } else {
+        (text.to_string(), false)
+    }
+}
+
+/// [`auto_text_size`] for a multi-line value in a `width` × `height` box, its lines wrapped as
+/// they are drawn ([`wrapped`]).
+fn multiline_auto_size(enc: &FontText, shaped: bool, text: &str, width: f64, height: f64) -> f64 {
+    if shaped {
+        // Only the wrapped height bounds a multi-line size; the width of one line is not asked.
+        auto_text_size_by(width, height, true, |_| 0.0, |size| wrapped(enc, shaped, text, size, width).len() as f64 * size * 1.15)
+    } else {
+        auto_text_size(text, width, height, true, |t, size| enc.width(t, size))
+    }
+}
+
 /// Whether `text` draws in widget `wd` of `f` with no `?`: in the field's `/DR` font when that
 /// holds it, as [`field_appearance_fit`] picks, or else in the Helvetica (WinAnsi) stand-in.
 fn draws(doc: &Document, f: &Field, wd: &Dict, text: &str) -> bool {
@@ -756,11 +847,17 @@ fn draws(doc: &Document, f: &Field, wd: &Dict, text: &str) -> bool {
     enc.first_unencodable(text).is_none()
 }
 
-/// Why text field `f` can't take `text`: it has Thai that a widget's font can't hold and this
-/// build can't draw (it has no Thai face, or the face lacks a character), which would come out
-/// as `?`. `None` for text it can draw, and for a password field, which shows `*`.
-pub(crate) fn thai_refusal(doc: &Document, f: &Field, text: &str) -> Option<String> {
-    if f.has(flags::PASSWORD) || !text.chars().any(shaped_text::is_thai) {
+/// Why text field `f` can't take `text`: it has Arabic, Hebrew or Thai that a widget's font can't
+/// hold and this build can't draw (it has no face for the script, or the face lacks a character),
+/// which would come out as `?`. `None` for text it can draw, and for a password field, which
+/// shows `*`.
+///
+/// Refused, as Add text, headers, footers and watermarks refuse it, and as a field always refused
+/// such Thai: the build can never draw the value, and the message says how to get one that can.
+/// (A text box draws `?` and marks its comment instead; a character no face or font has, such as
+/// CJK in a Helvetica field, is still kept, drawn as `?` and reported.)
+pub(crate) fn script_refusal(doc: &Document, f: &Field, text: &str) -> Option<String> {
+    if f.has(flags::PASSWORD) || !shaped_text::has_shaped_script(text) {
         return None;
     }
     let held = |w: &Widget| {
@@ -768,7 +865,7 @@ pub(crate) fn thai_refusal(doc: &Document, f: &Field, text: &str) -> Option<Stri
         let da = parse_da(wd.get(b"DA").and_then(|o| doc.resolve(o).as_string().map(|s| s.to_text())).as_deref().unwrap_or(&f.da));
         dr_font(doc, &da.font).is_some_and(|(_, enc)| matches!(enc, FontText::Simple(_)) && text.split(['\n', '\r']).all(|l| enc.can_encode(l)))
     };
-    if f.widgets.iter().all(held) { None } else { shaped_text::thai_refusal(text) }
+    if f.widgets.iter().all(held) { None } else { shaped_text::shape_refusal(text) }
 }
 
 /// [`field_appearance_drawn`], and whether the text drawn is cut off by the box.
@@ -802,46 +899,39 @@ fn field_appearance_fit(doc: &Document, f: &Field, w: &Widget, values: &[String]
         values.first().cloned().unwrap_or_default()
     };
     let text = if f.has(flags::PASSWORD) { "*".repeat(text.chars().count()) } else { text };
+    let multiline = f.kind == FieldKind::Text && f.has(flags::MULTILINE);
     let can_show = |enc: &FontText, text: &str| {
-        if f.kind == FieldKind::List {
-            f.options.iter().all(|(_, display)| enc.can_encode(display))
-        } else if f.kind == FieldKind::Text && f.has(flags::MULTILINE) {
-            text.split(['\n', '\r']).all(|line| enc.can_encode(line))
-        } else {
-            enc.can_encode(text)
-        }
+        if f.kind == FieldKind::List { f.options.iter().all(|(_, display)| enc.can_encode(display)) } else { holds(enc, text, multiline) }
     };
     let dr = dr_font(doc, &da.font);
-    // Thai the form's font can't hold (it isn't a simple font encoding it) is drawn from the Thai
-    // face, as Add text draws it: Type 3 glyphs beside the form's font, which draws the rest. One
-    // line of a text field or combo box at a time; the `/DA` is kept.
-    let thai = matches!(f.kind, FieldKind::Text | FieldKind::Combo)
-        && !f.is_comb()
-        && text.chars().any(shaped_text::is_thai)
-        && !dr.as_ref().is_some_and(|(_, enc)| matches!(enc, FontText::Simple(_)) && can_show(enc, &text))
-        && shaped_text::thai_refusal(&text).is_none();
-    let latin_text: String = if thai { text.chars().filter(|c| !shaped_text::is_thai(*c)).collect() } else { text.clone() };
+    // Arabic, Hebrew and Thai the form's font can't hold (it isn't a simple font encoding them) are
+    // drawn from the script faces, as Add text and text boxes draw them: Type 3 glyphs beside the
+    // form's font, which draws the rest, right-to-left runs in drawing order. One line of a text
+    // field or combo box at a time; the `/DA` is kept.
+    let shaped = matches!(f.kind, FieldKind::Text | FieldKind::Combo) && !f.is_comb() && shapes(&text, dr.as_ref().map(|(_, enc)| enc), multiline);
+    let latin_text: String = if shaped { latin_part(&text) } else { text.clone() };
     let (font_name, font_obj, enc) = match dr.filter(|(_, enc)| can_show(enc, &latin_text)) {
         Some((o, enc)) => (da.font.clone(), o, enc),
         None => ("Helv".to_string(), helvetica(), FontText::WinAnsi),
     };
-    let width_of =
-        |text: &str, size: f64| if thai { shaped_text::thai_width(text, size, |s, size| enc.width(s, size)) } else { enc.width(text, size) };
-    // How far a line's ink reaches below and above its baseline (em), where Thai stacks or
-    // descenders reach past the form font's (Helvetica's) -0.207 and 0.718; `None` otherwise.
-    let thai_ink = |line: &str| thai.then(|| shaped_text::thai_reach(line)).flatten().map(|[lo, hi]| [lo.min(-0.207), hi.max(0.718)]);
+    // Measured with the pieces that are drawn: a line in its paragraph's direction.
+    let line_width = |line: &str, rtl: bool, size: f64| text_line_width(&enc, shaped, line, rtl, size);
+    let width_of = |text: &str, size: f64| line_width(text, shaped && shaped_text::rtl_base(text), size);
+    // How far a line's ink reaches below and above its baseline (em), where shaped text (Thai
+    // stacks, Arabic and Hebrew marks and descenders) reaches past the form font's (Helvetica's)
+    // -0.207 and 0.718; `None` otherwise.
+    let shaped_ink = |line: &str| shaped.then(|| shaped_text::line_reach(line)).flatten().map(|[lo, hi]| [lo.min(-0.207), hi.max(0.718)]);
     let (mut c, bw) = frame(doc, &wd, width, height);
     let pad = 2.0 + bw;
     let inner_w = (width - 2.0 * pad).max(1.0);
+    // `/Q` as it is, whichever way the text reads (as a text box follows its own).
     let q = wd.get(b"Q").and_then(|o| doc.resolve(o).as_int()).unwrap_or(f.quadding);
-    // The lines to draw (where, and what), drawn once all are known: their Thai shares fonts.
-    let mut shown: Vec<(f64, f64, String)> = Vec::new();
-    let mut show = |x: f64, y: f64, text: &str| {
-        // A line break in a single-line value is a space, as in viewers (multiline text is split).
-        shown.push((x, y, text.chars().map(|c| if matches!(c, '\n' | '\r') { ' ' } else { c }).collect()));
-    };
-    let x_for = |text: &str, size: f64| -> f64 {
-        let tw = width_of(text, size);
+    // The lines to draw (where, what, and whether the paragraph reads right to left), drawn once
+    // all are known: their shaped text shares fonts.
+    let mut shown: Vec<ShownLine> = Vec::new();
+    let mut show = |x: f64, y: f64, text: &str, rtl: bool| shown.push(ShownLine { x, y, text: one_line(text), rtl });
+    let x_for = |text: &str, rtl: bool, size: f64| -> f64 {
+        let tw = line_width(text, rtl, size);
         match q {
             1 => pad + (inner_w - tw) / 2.0,
             2 => width - pad - tw,
@@ -869,7 +959,7 @@ fn field_appearance_fit(doc: &Document, f: &Field, w: &Widget, values: &[String]
                 if picked.binary_search(&i).is_ok() {
                     c.push_str(&format!("0.6 0.75 0.86 rg\n{} {} {} {} re f\n", n(bw), n(y - line), n(width - 2.0 * bw), n(line)));
                 }
-                show(pad, y - line + size * 0.25, display);
+                show(pad, y - line + size * 0.25, display, false);
                 y -= line;
             }
         }
@@ -877,31 +967,32 @@ fn field_appearance_fit(doc: &Document, f: &Field, w: &Widget, values: &[String]
             let comb = f.is_comb();
             if f.kind == FieldKind::Text && f.has(flags::MULTILINE) {
                 if size == 0.0 {
-                    size = auto_text_size(&text, inner_w, height - 2.0 * pad, true, width_of);
+                    size = multiline_auto_size(&enc, shaped, &text, inner_w, height - 2.0 * pad);
                 }
-                let lines = wrap_with(&text, size, inner_w, width_of);
-                // The first line hangs from the top by its ascent: higher for stacked Thai marks.
-                let mut y = height - pad - size * lines.first().and_then(|l| thai_ink(l)).map_or(0.85, |[_, hi]| hi.max(0.85));
+                let lines = wrapped(&enc, shaped, &text, size, inner_w);
+                // The first line hangs from the top by its ascent: higher for stacked marks.
+                let mut y = height - pad - size * lines.first().and_then(|(l, _)| shaped_ink(l)).map_or(0.85, |[_, hi]| hi.max(0.85));
                 // The lines whose descent stays inside the border; the rest are cut off.
                 let mut room = 0;
-                for line in &lines {
+                for (line, rtl) in &lines {
                     if y < -size {
                         break;
                     }
-                    let descent = thai_ink(line).map_or(0.207, |[lo, _]| -lo);
+                    let descent = shaped_ink(line).map_or(0.207, |[lo, _]| -lo);
                     if y - descent * size >= bw - 0.01 {
                         room += 1;
                     }
-                    show(x_for(line, size), y, line);
+                    show(x_for(line, *rtl, size), y, line, *rtl);
                     y -= size * 1.15;
                 }
                 if room < lines.len() {
                     overflow = Some(Overflow::Tall { lines: lines.len(), room, size });
-                } else if let Some(tw) = lines.iter().map(|l| width_of(l, size)).filter(|tw| *tw > inner_w + 0.01).reduce(f64::max) {
+                } else if let Some(tw) = lines.iter().map(|(l, rtl)| line_width(l, *rtl, size)).filter(|tw| *tw > inner_w + 0.01).reduce(f64::max) {
                     // A character wider than the box is a line of its own, still cut at the sides.
                     overflow = Some(Overflow::Wide { width: tw, room: inner_w, size });
                 }
             } else {
+                let (text, rtl) = single_line(&text, shaped);
                 if size == 0.0 {
                     size = if comb {
                         comb_auto_text_size(height - 2.0 * pad)
@@ -910,8 +1001,8 @@ fn field_appearance_fit(doc: &Document, f: &Field, w: &Widget, values: &[String]
                     };
                 }
                 // Centre Helvetica's ascent (0.718) and descent (0.207) vertically, or the reach of
-                // Thai stacks and descenders, which an automatic size also keeps inside the padding.
-                let reach = thai_ink(&text);
+                // shaped marks and descenders, which an automatic size also keeps inside the padding.
+                let reach = shaped_ink(&text);
                 if let Some([lo, hi]) = reach
                     && da.size == 0.0
                 {
@@ -932,19 +1023,19 @@ fn field_appearance_fit(doc: &Document, f: &Field, w: &Widget, values: &[String]
                     c.push_str(&comb_dividers(doc, &wd, width, height, cells));
                     for (i, ch) in text.chars().take(cells).enumerate() {
                         let s = ch.to_string();
-                        show(cell * i as f64 + (cell - width_of(&s, size)) / 2.0, y, &s);
+                        show(cell * i as f64 + (cell - width_of(&s, size)) / 2.0, y, &s, false);
                     }
                 } else {
                     let tw = width_of(&text.replace(['\n', '\r'], " "), size);
                     if overflow.is_none() && tw > inner_w + 0.01 {
                         overflow = Some(Overflow::Wide { width: tw, room: inner_w, size });
                     }
-                    show(x_for(&text, size), y, &text);
+                    show(x_for(&text, rtl, size), y, &text, rtl);
                 }
             }
         }
     }
-    let (body, fonts, unencodable) = draw_lines(&shown, size, &font_name, font_obj, &enc, thai);
+    let (body, fonts, unencodable) = draw_lines(&shown, size, &font_name, font_obj, &enc, shaped);
     // Acrobat regenerates only what is inside /Tx BMC when it redraws a field (e.g. on focus
     // changes), discarding what came before it (issues #1613, #633). The background and border
     // therefore go inside the marked-content block too, so a redraw keeps them with the text.
@@ -973,23 +1064,42 @@ fn field_appearance_fit(doc: &Document, f: &Field, w: &Widget, values: &[String]
     (Stream::flate(d, &content), unencodable, overflow)
 }
 
-/// The text operators for the `shown` lines (where each starts, and what it says) at `size`, in
-/// the field's font `font_name` (`font`, written with `enc`) and, with `thai`, their Thai from the
-/// Thai face; the font resources they use, and the first character drawn as `?` because the
-/// font can't hold it, for the caller to report.
-fn draw_lines(shown: &[(f64, f64, String)], size: f64, font_name: &str, font: Object, enc: &FontText, thai: bool) -> (Vec<u8>, Dict, Option<char>) {
+/// A line an appearance draws: where it starts, what it says, and whether its paragraph reads
+/// right to left.
+struct ShownLine {
+    x: f64,
+    y: f64,
+    text: String,
+    rtl: bool,
+}
+
+/// The text operators for the `shown` lines at `size`, in the field's font `font_name` (`font`,
+/// written with `enc`) and, with `shaped`, their Arabic, Hebrew and Thai from the script faces in
+/// drawing order, a reordered line with its typing order beside it (`/ActualText`); the font
+/// resources they use, and the first character drawn as `?` because the font can't hold it, for
+/// the caller to report.
+fn draw_lines(shown: &[ShownLine], size: f64, font_name: &str, font: Object, enc: &FontText, shaped: bool) -> (Vec<u8>, Dict, Option<char>) {
     let mut fonts = Dict::new();
     fonts.set(font_name.as_bytes().to_vec(), font);
-    let lines: Vec<String> = shown.iter().map(|(_, _, text)| text.clone()).collect();
-    let (pieces, shaped) = if thai {
-        shaped_text::appearance_lines(&lines, &mut fonts)
+    let (pieces, faces) = if shaped {
+        let laid: Vec<(String, bool)> = shown.iter().map(|l| (l.text.clone(), l.rtl)).collect();
+        shaped_text::shaped_appearance_lines(&laid, &mut fonts)
     } else {
-        (lines.into_iter().map(|l| vec![Piece::Latin(l)]).collect(), ShapedFonts::default())
+        (shown.iter().map(|l| vec![Piece::Latin(l.text.clone())]).collect(), ShapedFonts::default())
     };
     let mut body = Vec::new();
     let mut current = None;
-    for ((x, y, _), pieces) in shown.iter().zip(&pieces) {
-        shaped.show_line(&mut body, pieces, *x, *y, size, font_name, |s| enc.encode(s), |s| enc.width(s, size), &mut current);
+    for (line, pieces) in shown.iter().zip(&pieces) {
+        // Right-to-left text shaped in its face is painted in drawing order: its typing order
+        // goes with it, so copy and search read the line as the value has it.
+        let reordered = shaped_text::reordered(pieces);
+        if reordered {
+            body.extend(shaped_text::actual_text_span(&line.text).bytes());
+        }
+        faces.show_line(&mut body, pieces, line.x, line.y, size, font_name, |s| enc.encode(s), |s| enc.width(s, size), &mut current);
+        if reordered {
+            body.extend_from_slice(b"EMC\n");
+        }
     }
     let unencodable = pieces.iter().flatten().find_map(|p| match p {
         Piece::Latin(s) => enc.first_unencodable(s),

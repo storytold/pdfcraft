@@ -45,10 +45,15 @@ let cells: Vec<table::Cell> = grid.cells_for(names)?;      // "Table1_1", "Table
   (cells parted in the border colour), multiline wrapping, password masking, quadding, `/MK`
   background and border, list-box selection.
   The `/DA` font is used when `/DR` has it as a simple font or a composite font with a predefined
-  Unicode CMap; otherwise Helvetica (WinAnsi). Thai in a text field or combo box that the font
-  can't hold is drawn from the craft-fonts Thai face with Add text's writer
-  (`pdfcraft_fonts::shaped_text`), beside the field's font, keeping `/DA`; a build without a Thai
-  face refuses it. Any other value or button caption the font can't hold
+  Unicode CMap; otherwise Helvetica (WinAnsi). Arabic, Hebrew and Thai in a text field or combo
+  box that the font can't hold go through the layout Add text and text boxes use
+  (`pdfcraft_fonts::shaped_text::line_pieces`: the bidirectional algorithm, then shaping in the
+  craft-fonts faces), drawn beside the field's font, keeping `/DA`; a right-to-left line carries
+  its typing order as `/ActualText`, and wrapping, automatic size, `/Q`, overflow and
+  `TextBox::fits` measure the shaped pieces that are drawn. `/Q` is followed as written (as a text
+  box follows its own): right-to-left text is not moved to the right edge. A build without the
+  script's face refuses the value; comb fields and list boxes are not shaped. Any other value or
+  button caption the font can't hold
   (Chinese in a Helvetica field, a character beyond U+FFFF in a UCS-2 CMap) is kept, as Acrobat
   keeps it: `/V` is stored as typed, the appearance draws `?` for those characters, the widget is
   marked with the first one (`pdfcraft_fonts::UNDRAWN_MARK`, cleared once all of it can be drawn)

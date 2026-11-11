@@ -5,9 +5,13 @@
 //!
 //! [`line_pieces`] lays a line out for drawing: the Unicode bidirectional algorithm, then Arabic,
 //! Hebrew and Thai shaped in their faces beside the standard font that draws the rest. Add text,
-//! text boxes (comments, callouts) and Fill & Sign text all draw through it, so the same text
-//! comes out the same in each. Form fields, headers, footers and watermarks still shape Thai only
-//! ([`thai_pieces`]).
+//! text boxes (comments, callouts), Fill & Sign text, form fields, headers, footers and watermarks
+//! all draw through it, so the same text comes out the same in each. Captions, labels and stamps
+//! are Helvetica only, and measure their Thai alone ([`thai_width`]).
+//!
+//! Without a script's face, a text box draws `?` and marks its comment
+//! ([`first_undrawable_shaped`]); Add text, form fields, headers, footers and watermarks refuse the
+//! text, saying what to do ([`shape_refusal`]).
 
 use std::collections::{HashMap, HashSet};
 
@@ -138,8 +142,9 @@ fn mirrored(c: char) -> char {
 /// faces, the rest left to the standard font. A right-to-left run comes out reversed, its brackets
 /// mirrored; direction marks steer the order and are dropped.
 ///
-/// The one layout for text PdfCraft writes: Add text, text boxes and Fill & Sign text call it, so
-/// they agree on what is shaped, in which face, and in what order.
+/// The one layout for text PdfCraft writes: Add text, text boxes, Fill & Sign text, form fields,
+/// headers, footers and watermarks call it, so they agree on what is shaped, in which face, and
+/// in what order.
 pub fn line_pieces(line: &str, rtl: bool) -> Result<Vec<Piece>, ShapeError> {
     // unicode-bidi indexes the first level of a line, so an empty one would panic.
     if line.is_empty() {
@@ -261,8 +266,9 @@ pub fn actual_text_span(line: &str) -> String {
 
 /// `line` split into its Thai runs, shaped with the Thai face, and the text between them, left to
 /// the standard font. Thai runs left to right, so the pieces are in typing order.
-/// [`GlyphError::NoFont`] when there's Thai and this build has no Thai face.
-pub fn thai_pieces(line: &str) -> Result<Vec<Piece>, GlyphError> {
+/// [`GlyphError::NoFont`] when there's Thai and this build has no Thai face. What
+/// [`appearance_pieces`] falls back to, and how Helvetica-only text measures ([`thai_width`]).
+fn thai_pieces(line: &str) -> Result<Vec<Piece>, GlyphError> {
     let mut runs: Vec<(bool, String)> = Vec::new();
     for c in line.chars() {
         match runs.last_mut() {
@@ -274,7 +280,9 @@ pub fn thai_pieces(line: &str) -> Result<Vec<Piece>, GlyphError> {
 }
 
 /// The width of `text` at `size`: its Thai shaped, the rest measured by `latin`. Text the Thai
-/// face can't shape is measured by `latin` as a whole (drawing then reports why).
+/// face can't shape is measured by `latin` as a whole (drawing then reports why). For text that
+/// is drawn in Helvetica alone (captions, labels, stamps); what [`line_pieces`] draws is measured
+/// by [`line_width`].
 pub fn thai_width(text: &str, size: f64, latin: impl Fn(&str, f64) -> f64) -> f64 {
     if !text.chars().any(is_thai) {
         return latin(text, size);
@@ -451,20 +459,13 @@ impl ShapedFonts {
     }
 }
 
-/// `lines` as a generated appearance not yet in a document draws them: each line's pieces, its
-/// Thai shaped, and the Type 3 fonts for that Thai built into `fonts` (the form's font resources)
-/// as direct objects, whose streams [`store_streams`] moves into the document with the
-/// appearance. Thai the face can't draw, and every line when a glyph can't be read, is left to the
-/// standard font, whose encoder writes `?` for it; [`first_undrawable`] reports that.
-pub fn appearance_lines(lines: &[String], fonts: &mut Dict) -> (Vec<Vec<Piece>>, ShapedFonts) {
-    let pieces = lines.iter().map(|l| if l.chars().any(is_thai) { thai_pieces(l).unwrap_or_else(|_| plain(l)) } else { plain(l) }).collect();
-    appearance_fonts(pieces, lines.iter().map(String::as_str), fonts)
-}
-
-/// [`appearance_lines`] for a box that draws with [`line_pieces`]: `lines` as [`wrap`] gives them,
-/// each with its paragraph's direction, their Arabic, Hebrew and Thai shaped and in drawing order
-/// ([`appearance_pieces`], which says what becomes of a line a face can't shape). Every line is
-/// left to the standard font when a glyph can't be read.
+/// `lines` as a generated appearance not yet in a document draws them with [`line_pieces`]: as
+/// [`wrap`] gives them, each with its paragraph's direction, their Arabic, Hebrew and Thai shaped
+/// and in drawing order ([`appearance_pieces`], which says what becomes of a line a face can't
+/// shape). The Type 3 fonts for the shaped text are built into `fonts` (the form's font resources)
+/// as direct objects, whose streams [`store_streams`] moves into the document with the appearance.
+/// Every line is left to the standard font, whose encoder writes `?` for what it can't draw, when
+/// a glyph can't be read.
 pub fn shaped_appearance_lines(lines: &[(String, bool)], fonts: &mut Dict) -> (Vec<Vec<Piece>>, ShapedFonts) {
     let pieces = lines.iter().map(|(l, rtl)| appearance_pieces(l, *rtl)).collect();
     appearance_fonts(pieces, lines.iter().map(|(l, _)| l.as_str()), fonts)
@@ -477,30 +478,25 @@ pub fn reordered(pieces: &[Piece]) -> bool {
     clusters([pieces]).any(|c| c.script != ShapedScript::Thai)
 }
 
-/// The Type 3 fonts for `pieces`' shaped clusters, built into `fonts` as direct objects; when a
-/// glyph can't be read, `lines` are all left to the standard font instead. The fonts are named
-/// `PCTh…` for Thai alone, as they were before other scripts were drawn, and `PCAr…` otherwise,
-/// as Add text names them.
+/// The resource-name prefix of the Type 3 fonts that draw `clusters`: `PCTh` for Thai alone, as
+/// those fonts were named before other scripts were drawn, and `PCAr` otherwise, as Add text
+/// names them.
+pub fn font_prefix<'a>(clusters: impl IntoIterator<Item = &'a ShapedCluster>) -> &'static str {
+    if clusters.into_iter().all(|c| c.script == ShapedScript::Thai) { "PCTh" } else { "PCAr" }
+}
+
+/// The Type 3 fonts for `pieces`' shaped clusters, built into `fonts` as direct objects (named by
+/// [`font_prefix`]); when a glyph can't be read, `lines` are all left to the standard font instead.
 fn appearance_fonts<'a>(pieces: Vec<Vec<Piece>>, lines: impl Iterator<Item = &'a str>, fonts: &mut Dict) -> (Vec<Vec<Piece>>, ShapedFonts) {
-    let prefix = if clusters(pieces.iter().map(Vec::as_slice)).all(|c| c.script == ShapedScript::Thai) { "PCTh" } else { "PCAr" };
+    let prefix = font_prefix(clusters(pieces.iter().map(Vec::as_slice)));
     match ShapedFonts::new(clusters(pieces.iter().map(Vec::as_slice)), shaped_glyph, &Dict::new(), fonts, prefix, &mut |o| o).map_err(|(e, _)| e) {
         Ok(shaped) => (pieces, shaped),
         Err(_) => (lines.map(plain).collect(), ShapedFonts::default()),
     }
 }
 
-/// How far the Thai glyphs of `line` reach below and above its baseline, in em units; `None`
-/// without Thai, or with Thai the face can't draw.
-pub fn thai_reach(line: &str) -> Option<[f64; 2]> {
-    if !line.chars().any(is_thai) {
-        return None;
-    }
-    pieces_reach(&thai_pieces(line).ok()?)
-}
-
-/// [`thai_reach`] for a line drawn with [`line_pieces`]: how far its Arabic, Hebrew and Thai
-/// glyphs reach below and above its baseline, in em units; `None` without any, or when no face
-/// draws them.
+/// How far the Arabic, Hebrew and Thai glyphs of `line`, drawn with [`line_pieces`], reach below
+/// and above its baseline, in em units; `None` without any, or when no face draws them.
 pub fn line_reach(line: &str) -> Option<[f64; 2]> {
     if !has_shaped_script(line) {
         return None;
@@ -523,15 +519,10 @@ fn pieces_reach(pieces: &[Piece]) -> Option<[f64; 2]> {
     reach
 }
 
-/// The first character of `s` a generated appearance would draw as `?`: one the standard fonts
-/// (WinAnsiEncoding) can't draw and that isn't Thai, or Thai on a line the Thai face can't draw
-/// (this build has none, or it lacks a character). Line breaks don't count.
-pub fn first_undrawable(s: &str) -> Option<char> {
-    s.split(['\n', '\r']).find_map(first_undrawable_in_line)
-}
-
-/// [`first_undrawable`] for one line drawn as it is: a line break in it counts.
-pub fn first_undrawable_in_line(line: &str) -> Option<char> {
+/// The first character of `line` left as it is to the standard font that would come out as `?`:
+/// one outside WinAnsiEncoding that isn't Thai, or Thai when the Thai face can't draw the line's
+/// (this build has none, or it lacks a character). A line break in it counts.
+fn first_undrawable_in_line(line: &str) -> Option<char> {
     let thai_fails = line.chars().any(is_thai) && thai_pieces(line).is_err();
     line.chars().find(|c| if is_thai(*c) { thai_fails } else { !crate::win_ansi_encodable(*c) })
 }
@@ -545,30 +536,44 @@ pub fn pieces_undrawable(pieces: &[Piece]) -> Option<char> {
     })
 }
 
-/// [`first_undrawable`] for text an appearance draws with [`appearance_pieces`]
-/// ([`shaped_appearance_lines`]): a character that would come out as `?`, from the first line that
-/// has one. On a line the faces shape, that is one left to the standard font that it can't draw;
-/// on a line a face can't shape, every character outside WinAnsiEncoding but the Thai its face
-/// still draws. Line breaks don't count, nor do the direction marks of a shaped line, which are
-/// never drawn.
+/// The first character of `s`, drawn with [`appearance_pieces`] ([`shaped_appearance_lines`]),
+/// that would come out as `?`, from the first line that has one ([`line_undrawable`]). Line breaks
+/// don't count.
 pub fn first_undrawable_shaped(s: &str) -> Option<char> {
-    s.split(['\n', '\r']).find_map(|line| {
-        if !has_shaped_script(line) {
-            return crate::first_non_win_ansi(line);
-        }
-        // Shaped, the pieces are in drawing order; left to the standard font, in typing order.
-        match line_pieces(line, rtl_base(line)) {
-            Ok(pieces) => pieces_undrawable(&pieces),
-            Err(_) => first_undrawable_in_line(line),
-        }
-    })
+    s.split(['\n', '\r']).find_map(line_undrawable)
+}
+
+/// [`first_undrawable_shaped`] for one line drawn as it is, so a line break in it counts. On a
+/// line the faces shape, that is a character left to the standard font that it can't draw; on a
+/// line a face can't shape, every character outside WinAnsiEncoding but the Thai its face still
+/// draws. The direction marks of a shaped line don't count: they are never drawn.
+pub fn line_undrawable(line: &str) -> Option<char> {
+    if !has_shaped_script(line) {
+        return crate::first_non_win_ansi(line);
+    }
+    // Shaped, the pieces are in drawing order; left to the standard font, in typing order.
+    match line_pieces(line, rtl_base(line)) {
+        // A break is drawn by nothing, whichever font its run would give it to.
+        Ok(pieces) => pieces_undrawable(&pieces).or_else(|| line.chars().find(|c| matches!(c, '\n' | '\r'))),
+        Err(_) => first_undrawable_in_line(line),
+    }
 }
 
 /// Why the Thai in `text` can't be drawn ([`thai_message`]): this build has no Thai face, or the
-/// face lacks a character. For tools that refuse such text rather than write `?`; `None` when all
-/// of its Thai draws, or it has none.
+/// face lacks a character. For a text box, which refuses such Thai rather than write `?` (its
+/// Arabic and Hebrew it draws as `?` and reports); `None` when all of its Thai draws, or it has
+/// none.
 pub fn thai_refusal(text: &str) -> Option<String> {
     text.split(['\n', '\r']).filter(|l| l.chars().any(is_thai)).find_map(|l| thai_pieces(l).err().map(|e| thai_message(e, l)))
+}
+
+/// Why `text` can't be drawn with [`line_pieces`] ([`ShapeError::message`]): a line has Arabic,
+/// Hebrew or Thai, and this build has no face for it or the face lacks a character. For what
+/// refuses such text rather than write `?` (form fields, headers, footers, watermarks; Add text
+/// refuses the same way); `None` when every line shapes, or none has such a script. Each line is
+/// a paragraph of its own ([`rtl_base`]).
+pub fn shape_refusal(text: &str) -> Option<String> {
+    text.split(['\n', '\r']).filter(|l| has_shaped_script(l)).find_map(|l| line_pieces(l, rtl_base(l)).err().map(|e| e.message()))
 }
 
 /// [`type3_font`] written into `doc`, with its glyphs, descriptor and ToUnicode as objects of their
@@ -770,20 +775,21 @@ mod tests {
     fn thai_runs_are_shaped_and_the_rest_left_to_the_standard_font() {
         assert_eq!(thai_pieces("Hello").unwrap(), [Piece::Latin("Hello".into())]);
         assert!(joins_previous('\u{0E49}') && joins_previous('\u{0E33}') && !joins_previous('ก') && !joins_previous('a'));
-        assert_eq!((first_undrawable("Café\nпривет"), thai_refusal("Café"), thai_reach("Hg")), (Some('п'), None, None));
+        assert_eq!((first_undrawable_shaped("Café\nпривет"), thai_refusal("Café"), shape_refusal("Café")), (Some('п'), None, None));
         if crate::document_thai_font().is_none() {
             assert_eq!(thai_pieces("น้ำ 1"), Err(GlyphError::NoFont));
             assert!(thai_message(GlyphError::NoFont, "").contains("this build has none"));
             assert_eq!(thai_width("น้ำ", 10.0, |s, size| s.chars().count() as f64 * size), 30.0, "measured by the standard font");
-            assert_eq!(first_undrawable("ok\nชื่อ น้ำ"), Some('ช'));
+            assert_eq!(first_undrawable_shaped("ok\nชื่อ น้ำ"), Some('ช'));
             assert!(thai_refusal("ok\nน้ำ").is_some_and(|m| m.contains("CRAFT_FONTS_DIR")));
+            assert_eq!(shape_refusal("ok\nน้ำ"), thai_refusal("ok\nน้ำ"), "one message for Thai, whoever refuses it");
             return;
         }
-        assert_eq!((first_undrawable("ชื่อ: น้ำ\nOK"), thai_refusal("ชื่อ: น้ำ")), (None, None));
-        assert_eq!(first_undrawable("น้ำ ☃"), Some('☃'));
+        assert_eq!((first_undrawable_shaped("ชื่อ: น้ำ\nOK"), thai_refusal("ชื่อ: น้ำ"), shape_refusal("ชื่อ: น้ำ\nOK")), (None, None, None));
+        assert_eq!(first_undrawable_shaped("น้ำ ☃"), Some('☃'));
         // Stacked marks reach above the em box's 0.9, a descender below its 0.3.
-        let [_, top] = thai_reach("น้ำ").unwrap();
-        let [bottom, _] = thai_reach("ฎู").unwrap();
+        let [_, top] = line_reach("น้ำ").unwrap();
+        let [bottom, _] = line_reach("ฎู").unwrap();
         assert!(top > 0.95 && bottom < -0.35, "{top} {bottom}");
         let pieces = thai_pieces("ชื่อ: บุญฤทธิ์ 12").unwrap();
         assert!(matches!(&pieces[..], [Piece::Shaped(_), Piece::Latin(a), Piece::Shaped(_), Piece::Latin(b)] if a == ": " && b == " 12"));
@@ -848,6 +854,8 @@ mod tests {
             // Measured and drawn by the standard font, which writes `?`: reported, never silent.
             assert_eq!(line_width(&line, false, 10.0, |s, size| s.chars().count() as f64 * size), 70.0);
             assert_eq!(first_undrawable_shaped(&line), text.chars().next());
+            // What refuses instead says which script and what to do, whichever line has it.
+            assert_eq!(shape_refusal(&format!("fine\r\n{line}")), Some(script_message(script, GlyphError::NoFont, text)));
             let mut fonts = Dict::new();
             let (pieces, _) = shaped_appearance_lines(&[(line.clone(), false)], &mut fonts);
             assert_eq!((pieces, fonts.iter().count()), (vec![vec![Piece::Latin(line)]], 0));
@@ -882,6 +890,9 @@ mod tests {
                 .collect();
             assert!(drawn.contains("12") && !drawn.contains("21"), "{drawn}");
             assert_eq!(first_undrawable_shaped("test بت التناسب\nسلام (12)"), None);
+            assert_eq!(shape_refusal("test بت التناسب\nسلام (12)"), None);
+            // One line, drawn as it is: a break inside it is a character nothing draws.
+            assert_eq!((line_undrawable("سلام (12)"), line_undrawable("سلام\rabc")), (None, Some('\r')));
             assert_eq!(first_undrawable_shaped("سلام ☃"), Some('☃'));
             // Shaped advances, not the standard font's guess at `?`.
             assert!(line_width("سلام", true, 10.0, |_, _| 0.0) > 0.0);

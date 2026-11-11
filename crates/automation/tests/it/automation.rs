@@ -11669,6 +11669,52 @@ fn arabic_and_hebrew_in_text_boxes_and_fill_sign_text_are_drawn_and_found() {
     }
 }
 
+/// Arabic and Hebrew typed into a form field, a footer or a watermark come out as Add text and
+/// text boxes draw them, where the field drew `?` and the page marks refused the text: no warning,
+/// found by search in typing order after save and reopen, and page text as typed once flattened.
+/// A build without the face refuses all three, as it refuses Thai there, saying what to do.
+#[test]
+fn arabic_and_hebrew_in_fields_and_page_marks_are_drawn_and_found() {
+    let cases = [
+        ("Arabic", "test بت التناسب", "التناسب", pdfcraft_fonts::document_arabic_font().is_some()),
+        ("Hebrew", "שלום עולם test", "עולם", pdfcraft_fonts::document_hebrew_font(false).is_some()),
+    ];
+    for (i, (script, typed, word, has_face)) in cases.into_iter().enumerate() {
+        let dir = workdir(&format!("rtl-fields-and-marks-{i}"));
+        let mut a = auto(&dir);
+        let doc = ok(&mut a, "doc_open", json!({"path": "a.pdf"}))["doc"].as_u64().unwrap();
+        let field = ok(&mut a, "form_add_field", json!({"doc": doc, "page": 1, "type": "text", "rect": [20, 120, 220, 142]}))["field"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let calls = [
+            ("form_fill", json!({"doc": doc, "values": {field.as_str(): typed}})),
+            ("doc_header_footer", json!({"doc": doc, "pages": [1], "footer_center": format!("{typed} <<1>>")})),
+            ("doc_watermark", json!({"doc": doc, "pages": [1], "text": typed})),
+        ];
+        if !has_face {
+            for (tool, args) in calls {
+                let err = a.call(tool, &args).unwrap_err().to_string();
+                assert!(err.contains(script) && err.contains("CRAFT_FONTS_DIR"), "{tool}: {err}");
+            }
+            continue;
+        }
+        for (tool, args) in calls {
+            let r = ok(&mut a, tool, args);
+            assert!(r.get("warnings").is_none(), "{tool}: {r}");
+        }
+        ok(&mut a, "doc_save", json!({"doc": doc, "path": "rtl-marks.pdf"}));
+        let reopened = ok(&mut a, "doc_open", json!({"path": "rtl-marks.pdf"}))["doc"].as_u64().unwrap();
+        let found = ok(&mut a, "text_find", json!({"doc": reopened, "query": word}));
+        assert_eq!(found["count"], 3, "{script}: {found}");
+        let rendered = a.call("page_render", &json!({"doc": reopened, "page": 1, "dpi": 72})).unwrap();
+        assert!(rendered.iter().any(|c| matches!(c, Content::Png { data, .. } if !data.is_empty())));
+        // Flattened, every one of them is page text, as typed.
+        ok(&mut a, "doc_flatten", json!({"doc": reopened}));
+        assert_eq!(page_text(&mut a, reopened)[0].matches(typed).count(), 3, "{script}: {:?}", page_text(&mut a, reopened));
+    }
+}
+
 #[test]
 fn hebrew_text_through_tools_saves_reopens_extracts_and_renders() {
     let dir = workdir("hebrew-content");
