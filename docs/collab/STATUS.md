@@ -87,56 +87,71 @@
   of `95e2c9c97` fixed"), which was the head until `46d2e203a` re-based the line
   on v0.21.0; the fork and the PR carried `95e2c9c97` only until `28fd4e1b3` was
   pushed at 17:41Z.
-- Delivered head: **`6ac4e1130`** ("docs(collab): the browser bridge in the
-  cabinet, D4 closed"). Measured 2026-11-11T20:08Z, before the commit that
-  carries this record, PR head, fork tip and this clone's HEAD were one commit:
-  `git ls-remote fork refs/heads/feature/realtime-collaboration`, `gh pr view
-  6622`'s `headRefOid` and `git rev-parse HEAD` all read `6ac4e1130`,
-  `git rev-list --left-right --count
-  fork/feature/realtime-collaboration...HEAD` was `0 0`, and the tree was
-  clean. This record adds one docs commit (`docs/collab/STATUS.md` alone) on top
-  of it and that commit is local — the agent's `git push*` denial still stands,
-  while the delivery to the PR is done. Under `6ac4e1130`: the code head
-  `0d3ea2708` (the cabinet's `expectedVersion` as its etag, §4), the first docs
-  commit `4d9a42819`, then `28fd4e1b3` (the lock
-  records `web-time` for the collab client) on `46d2e203a` (merge `origin/main`
-  `3650f01f2`, v0.21.0) on `95e2c9c97` … `69b2a6dad` on the rebased branch.
-  **Both commits above the code head are docs-only** (`docs/collab/STATUS.md`
-  alone, +148/−52 and +90), so the gate measured on `0d3ea2708` is the gate of
-  `6ac4e1130` (§4). Counts: **134 commits** not in `origin/main` at
-  `6ac4e1130` (`git rev-list --count origin/main..HEAD`; 135 with this record)
-  and **12 behind** it — `main` moved to `1e91e8a93` after the merge, and
-  `3650f01f2` stays an ancestor of HEAD; `git diff --shortstat origin/main
-  HEAD` is **130 files changed, 43978 insertions(+), 1062 deletions(-)** at
-  `6ac4e1130` (the deletions are main's twelve commits, not the branch's). The
-  counts the earlier briefs named — 132/0 at `0d3ea2708`, 125/0 at `69b2a6dad`
-  with 108 files/+43521, 122/0 at `b7545a7a9`, 119/0 at `d2916decb`, and the
-  pre-merge series in the paragraph above — were right when measured, against
-  the `origin/main` of their time; `46d2e203a` re-based the line on v0.21.0 and
-  the three commits on top add the contract fix. Commits named below in §4 by
-  their pre-merge hashes are mapped there.
-- Delivery, as measured 2026-11-11T20:08Z: PR #6622's `headRefOid` is
-  **`6ac4e1130`**, and so is the fork `copoka/pdfcraft`'s branch tip (`git
+- Delivered head: **`eb60bc5ff`** ("docs(collab): the delivered head is
+  `6ac4e1130` — the owner pushed it, the runs await approval"). Measured
+  2026-11-11T23:37Z, before the commit that carries this record: PR #6622's
+  `headRefOid`, the fork `copoka/pdfcraft`'s branch tip (`git ls-remote fork
+  refs/heads/feature/realtime-collaboration`) and this clone's HEAD all read
+  `eb60bc5ff`; `git rev-list --left-right --count
+  fork/feature/realtime-collaboration...HEAD` reads `0 0`, and the tree is
+  clean.
+  This record adds one docs commit (`docs/collab/STATUS.md` alone) on top of it
+  and that commit is local — the agent's `git push*` denial still stands, while
+  the delivery to the PR is done, by the owner or the PR-sweep pass.
+  **`6ac4e1130` is no longer the fork head**: it is the previous delivered head,
+  one commit below `eb60bc5ff`, and the earlier version of this record that
+  named it the delivered head and itself local was right at 20:08Z and is
+  superseded by the push of 21:10Z ("Delivery", below).
+  Under `eb60bc5ff`: the code head
+  `0d3ea2708` (the cabinet's `expectedVersion` as its etag, §4), then three
+  docs-only commits — `4d9a42819`, `6ac4e1130` and `eb60bc5ff` — on
+  `28fd4e1b3` (the lock records `web-time` for the collab client) on
+  `46d2e203a` (merge `origin/main` `3650f01f2`, v0.21.0) on `95e2c9c97` …
+  `69b2a6dad` on the rebased branch.
+  **All three commits above the code head are docs-only** (`docs/collab/STATUS.md`
+  alone), so the gate measured on `0d3ea2708` is the gate of `eb60bc5ff`
+  (§4). Counts, measured 2026-11-11T23:37Z after `git fetch origin main`:
+  **135 commits** not in `origin/main` (`git rev-list --count
+  origin/main..HEAD`; 136 with this record) and **22 behind** it — `main` has
+  moved to `80e26e674`, and `3650f01f2` stays an ancestor of HEAD;
+  `git diff --shortstat origin/main HEAD` is **158 files changed, 44152
+  insertions(+), 2330 deletions(-)** (the deletions and the extra files are
+  main's 22 commits, not the branch's). The counts the earlier briefs named —
+  134/12 at `6ac4e1130`, 132/0 at `0d3ea2708`, 125/0 at `69b2a6dad` with 108
+  files/+43521, 122/0 at `b7545a7a9`, 119/0 at `d2916decb`, and the pre-merge
+  series in the paragraph above — were right when measured, against the
+  `origin/main` of their time; `46d2e203a` re-based the line on v0.21.0 and the
+  commits on top add the contract fix and its records. Commits named below in
+  §4 by their pre-merge hashes are mapped there.
+- Delivery, as measured 2026-11-11T23:37Z: PR #6622's `headRefOid` is
+  **`eb60bc5ff`**, and so is the fork `copoka/pdfcraft`'s branch tip (`git
   ls-remote fork refs/heads/feature/realtime-collaboration`) and this clone's
-  HEAD at that moment, with a clean tree. This record is one docs commit on top
-  of `6ac4e1130` and is local; the delivered head stays `6ac4e1130`. The push
-  that put it there **was made by the owner or `pr-agent`, not by this agent**:
-  the PR's `updatedAt` is
-  2026-11-11T19:14:37Z and the five workflow runs for the sha were created at
-  19:14:33Z, while this agent's permission still denies `git push*` (unchanged
-  since the first pass). The record below in this file that says the push did
-  not happen was true at 18:20Z, when the fork still read `28fd4e1b3`; it is
-  history now — `0d3ea2708` and `4d9a42819` are delivered with `6ac4e1130`.
-  `gh pr view 6622` reads `mergeable: MERGEABLE`, `mergeStateStatus:
-  UNSTABLE`, `baseRefOid` `3650f01f2` (v0.21.0), not a draft, `reviewDecision`
-  empty, one check (CodeRabbit, `skipped`). **Five runs exist on `6ac4e1130`**
-  — CI `43085349704`, SonarCloud `43085349832`, Nix `43085349544`, FreeBSD
-  `43085349527`, Windows ARM64 `43085349547`, all created 19:14:33Z — and every
-  one of them is `completed` with conclusion **`action_required`**: a fork PR's
-  workflows wait for a maintainer's approval, so **none of them has executed
-  and there is still no CI result on the PR head**. The gate evidence remains
+  HEAD, with a clean tree. This record is one docs commit on top of
+  `eb60bc5ff` and is local; the delivered head stays `eb60bc5ff` until the
+  owner or `pr-agent` pushes the branch again. `gh pr view 6622` reads
+  `mergeable: MERGEABLE`, `mergeStateStatus: UNSTABLE`, `baseRefOid`
+  `3650f01f2` (v0.21.0), not a draft, `reviewDecision` empty, `updatedAt`
+  2026-11-11T21:10:56Z, and one check (CodeRabbit, `skipped`); the JSON's
+  `commits` array lists 100 entries, which is the API's page cap, not a count.
+  **Five runs exist on `eb60bc5ff`**, all created 21:10:52–53Z — CI
+  `43100841697`, SonarCloud `43100841668`, Nix `43100841572`, FreeBSD
+  `43100841526`, Windows ARM64 `43100841785` — and every one of them is
+  `completed` with conclusion **`action_required`**: a fork PR's workflows wait
+  for a maintainer's approval, so **none of them has executed** (no job
+  started, no step, no log) **and there is still no CI result on the PR head**.
+  The five runs the earlier record listed — CI `43085349704`, SonarCloud
+  `43085349832`, Nix `43085349544`, FreeBSD `43085349527`, Windows ARM64
+  `43085349547`, created 19:14:33Z on `6ac4e1130` — belong to the previous
+  head and are superseded, not failed. The push that moved the fork from
+  `6ac4e1130` to `eb60bc5ff` **was made by the owner or the PR-sweep pass, not
+  by this agent**: the PR's `updatedAt` and the run times both read 21:10Z,
+  while this agent's permission still denies `git push*` (unchanged since the
+  first pass). Nothing in this file was pushed by the agent. The record further
+  down that says the push did not happen was true at 18:20Z, when the fork
+  still read `28fd4e1b3`; it is history now — `0d3ea2708` and the three docs
+  commits are delivered with `eb60bc5ff`. The gate evidence remains
   the host sweep on `0d3ea2708` in §4 ("The cabinet's `expectedVersion` is its
-  etag"), which stands for `6ac4e1130` because both commits above the code
+  etag"), which stands for `eb60bc5ff` because all three commits above the code
   head are docs-only.
   `pdfcraft/PR-DRAFT.md` still describes `95e2c9c97`/`69b2a6dad`; it is a draft
   that needs the same facts before the owner publishes a new head.
@@ -199,8 +214,9 @@ several `/NM`, per-line quads, the caret (`5bad54c40`, §4) — the conflict-res
   in the feature waits for a push any more: the docs commits on top of the
   earlier merges went out with the branch (`ed8d11115` in an earlier pass,
   `95e2c9c97` before this one), `28fd4e1b3` with the v0.21.0 merge, and
-  `0d3ea2708` plus the two docs commits in the push of 19:14Z (owner or
-  `pr-agent`), so PR #6622 carries `6ac4e1130` — see "Delivery". The one
+  `0d3ea2708` plus the three docs commits, the last two in the pushes of 19:14Z
+  and 21:10Z (owner or `pr-agent`), so PR #6622 carries `eb60bc5ff` — see
+  "Delivery". The one
   presence item still outside
   this repository is the host page's `pdfcraft:presence` payload:
   `craft-web-host` must gain optional `page`/`selection` on its `Participant`
@@ -579,9 +595,14 @@ head) and push. The gate is green and the commit is `0d3ea2708`; **the push was
 not the agent's**: this agent's permission denies `git push*` (the same guard as
 every pass before), so the owner or `pr-agent` pushed one branch (`git push fork
 feature/realtime-collaboration`) at 19:14Z, and the fork tip, PR #6622's
-`headRefOid` and this clone's HEAD were `6ac4e1130` — this record is another
-docs commit on top of it, local until the owner or `pr-agent` pushes the branch
-(header, "Delivery"). An intermediate reading at 18:20Z still saw
+`headRefOid` and this clone's HEAD were `6ac4e1130`; a later push by the owner
+or the PR-sweep pass at 21:10Z made the same three read `eb60bc5ff`, which is
+the delivered head (header, "Delivery") — the code and the gate are unchanged
+by either push, since every commit above `0d3ea2708` is docs-only. What the
+21:10Z push delivered is that record of `6ac4e1130` — `eb60bc5ff` itself; the
+commit this pass adds is another docs commit on top, local until the owner or
+`pr-agent` pushes the branch again. An
+intermediate reading at 18:20Z still saw
 `28fd4e1b3`, which is why an earlier version of this paragraph said the push had
 not happened; that reading is superseded.
 
@@ -4350,24 +4371,31 @@ selections are done (§4, `b4e9179d8`); what remains of them is listed in §5 p.
 
 ### 6.6 Cleanup and submission
 
-- **Delivery state (2026-11-11T20:08Z).** The delivered head is `6ac4e1130` —
-  the D4 record on top of `0d3ea2708` (the etag fix, §4) on `28fd4e1b3` — and
-  at that moment it was at once the local HEAD, the fork's branch tip and
-  PR #6622's `headRefOid`; `git rev-list --left-right --count fork/…...HEAD`
-  was `0 0` and the tree was clean. This record is one docs commit on top of it
-  and is local; the delivered head stays `6ac4e1130`. The owner or `pr-agent`
-  made that push at 19:14Z; this agent's `git push*` denial was not lifted, so
-  nothing in this file was pushed by the agent. `mergeable: MERGEABLE`,
-  `mergeStateStatus: UNSTABLE`,
+- **Delivery state (2026-11-11T23:37Z).** The delivered head is `eb60bc5ff` —
+  the delivery record of `6ac4e1130`, which is the D4 record on top of
+  `0d3ea2708` (the etag fix, §4) on `28fd4e1b3` — and at that moment it was at
+  once the local HEAD, the fork's branch tip and PR #6622's `headRefOid`;
+  `git rev-list --left-right --count fork/…...HEAD` was `0 0` and the tree was
+  clean. **`6ac4e1130` is no longer the fork head**: it is the previous
+  delivered head, one commit below `eb60bc5ff`. This record is one docs commit
+  on top of `eb60bc5ff` and is local; the delivered head stays `eb60bc5ff`
+  until the owner or `pr-agent` pushes the branch again. The owner or the
+  PR-sweep pass made those pushes, at 19:14Z and 21:10Z; this agent's `git
+  push*` denial was not lifted, so nothing in this file was pushed by the
+  agent. `mergeable: MERGEABLE`, `mergeStateStatus: UNSTABLE`,
   `baseRefOid` `3650f01f2`, not a draft, `reviewDecision` empty, one check
-  (CodeRabbit, `skipped`), and five workflow runs on the sha (CI, SonarCloud,
-  Nix, FreeBSD, Windows ARM64) all `action_required`, i.e. none executed. The
-  branch is **134 commits** not in `origin/main` at `6ac4e1130` (135 with this
-  record) and **12 behind** it (`main` moved to `1e91e8a93`), and
-  `git diff --shortstat origin/main HEAD` is 130 files, +43978/−1062.
+  (CodeRabbit, `skipped`), and five workflow runs on `eb60bc5ff` (CI
+  `43100841697`, SonarCloud `43100841668`, Nix `43100841572`, FreeBSD
+  `43100841526`, Windows ARM64 `43100841785`, created 21:10:52–53Z) all
+  `action_required`, i.e. none executed. The five runs on `6ac4e1130`
+  (`43085349704`, `43085349832`, `43085349544`, `43085349527`, `43085349547`,
+  19:14:33Z) are superseded with it. The
+  branch is **135 commits** not in `origin/main` at `eb60bc5ff` (136 with this
+  record) and **22 behind** it (`main` moved to `80e26e674`), and
+  `git diff --shortstat origin/main HEAD` is 158 files, +44152/−2330.
   **`CI=1 cargo xtask ci` exits 0 on the code head
-  `0d3ea2708`**, all ten steps (§4); the two docs commits above it change no
-  code, so that gate covers `6ac4e1130`. The "not pushed" notes in the older
+  `0d3ea2708`**, all ten steps (§4); the three docs commits above it change no
+  code, so that gate covers `eb60bc5ff`. The "not pushed" notes in the older
   bullets below describe their own pass — they are history, not the current
   state.
 - **The `deny` step's advisory is closed** (`f31f00449`, 2026-11-10, not
