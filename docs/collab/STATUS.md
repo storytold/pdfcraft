@@ -1,7 +1,7 @@
 # PdfCraft collaboration — status and handoff
 
 - Branch: `feature/realtime-collaboration` (upstream `storytold/pdfcraft`).
-- Merge: **`origin/main` is merged into the branch** three times, all true merges
+- Merge: **`origin/main` is merged into the branch** four times, all true merges
   — no rebase and no force. `c15cc0f57` (2026-11-10) merged `debb826f2` ("M10:
   preserve annotation placement precision (#4995) (#5002)") when the branch had
   been rebased onto `ba28458ad` (§4 records that rebase and its four conflict
@@ -13,7 +13,7 @@
   print output (#5019)") with **no conflicted file** (40 files, +3831/−224):
   main never touched `crates/annot/src/tests.rs` after `debb826f2`, so the
   branch's version — which already keeps both sides — merged as it was.
-- The third merge is this pass's: `b21b57b55` (2026-11-11) merges `ad3e6d4b8`
+- The third merge was: `b21b57b55` (2026-11-11) merges `ad3e6d4b8`
   ("fix(optimize): bound each unused-resource decode by the remaining shared
   budget (#6046)"), the tip at the moment of the fetch and 21 commits above
   `92b965dba`. 75 files, +3670/−192: a new `vendor/edit-session` crate, the
@@ -27,60 +27,83 @@
   `crates/cos/src/object.rs:458`; its push run `42918717889` failed in `gate`),
   and nothing could be taken from it as-is. The resolution keeps the newer,
   counted definition — the remaining-budget semantics its doc comment and its
-  new test name — and drops the older duplicate; that hunk is a fix to main's
-  own tree and is to be removed once upstream fixes the duplicate. Nothing else
+  new test name — and drops the older duplicate; that hunk was a fix to main's
+  own tree and was to be removed once upstream fixed the duplicate, which
+  `d2916decb` (the next paragraph) did. Nothing else
   in the merge needed an edit; `Cargo.lock` auto-merged and
   `cargo metadata --locked` exits 0. After the merge the branch is **117 commits
-  ahead and 0 behind** `ad3e6d4b8`, and 118 after this record.
-- Head before this STATUS commit: `b21b57b55` (Merge `origin/main` `ad3e6d4b8`)
-  on `80e99a2ed` (docs(collab): the merge of `origin/main` and the full CI
-  sweep green) on `afd28a2f9` (the previous merge) on `4f3e21245` (docs) on
+  ahead and 0 behind** `ad3e6d4b8`, and 118 after that record.
+- The fourth merge is this pass's: `84da974d9` (2026-11-11) merges `d2916decb`
+  ("packaging: use `[[` for bash tests (SonarCloud S7688) (#6932)"), the tip at
+  the fetch and 3 commits above `ad3e6d4b8`. Those three are `9345b5caa`
+  (#6933) and `25f3f5429` (#6934) — both "remove the duplicate
+  `decoded_strict_within` that broke main after #6046" — and the packaging
+  commit, so **main fixed its own duplicate** and the hand-written fix the
+  previous merge had to carry is no longer needed. Against its first parent the
+  merge is two files, +5/−4: `packaging/freebsd/package.sh` (main's change) and
+  `crates/cos/src/object.rs`. That file conflicted once more, because the
+  branch's resolution and main's fix differ in shape: the branch's
+  `decoded_strict_within` delegates to `decoded_strict_within_counted`, main's
+  keeps the `decode` closure. The merge keeps the branch's delegation — one
+  decode path, the counted one — and the difference is recorded rather than
+  hidden: `git diff origin/main HEAD -- crates/cos/src/object.rs` is 4 lines (a
+  doc comment and the body), the branch's only delta from `main` outside the
+  feature, and it can be removed by taking main's text verbatim if a reviewer
+  wants the smallest diff. After the merge: **119 ahead / 0 behind**
+  `d2916decb`, and 120 after this record. `Cargo.lock` did not move and
+  `cargo metadata --locked` exits 0.
+- Head before this STATUS commit: `84da974d9` (Merge `origin/main` `d2916decb`)
+  on `27438a646` (docs(collab): the merge of `origin/main` `ad3e6d4b8`, the gate
+  numbers and the delivery facts) on `b21b57b55` (that merge) on `80e99a2ed`
+  (docs) on `afd28a2f9` (the merge of `92b965dba`) on `4f3e21245` (docs) on
   `a47329154` (docs(collab): the JWT crypto backend and the deny advisory);
-  **117 commits** not in `origin/main` (`git rev-list --count origin/main..HEAD`),
-  0 behind `ad3e6d4b8`, and this STATUS record is the next commit, so after it
-  the count is 118. The numbers the earlier briefs named — 85 commits, 9 behind,
+  **119 commits** not in `origin/main` (`git rev-list --count origin/main..HEAD`),
+  0 behind `d2916decb`, and this STATUS record is the next commit, so after it
+  the count is 120. The numbers the earlier briefs named — 85 commits, 9 behind,
   5 ahead for `199076765`, then 86/11/6 at `0c57e2271`, 94/48/14 at
   `b3732c152`, 95/48/15 at `c26867e9c`, 110/48/30 at `f48ec4754`, 113/0 at
-  `c1171d941`, 114/0 at `4f3e21245` and 116/0 at `80e99a2ed` — were right when
-  they were measured; `origin/main` kept moving and each slice appended
-  commits. Commits named below and in §4 by their pre-rebase hashes are mapped
-  in the rebase sections of §4.
-- Delivery: PR #6622's `headRefOid` is **`80e99a2ed`** — the push to the fork
-  `copoka/pdfcraft` did happen (`git ls-remote fork
-  refs/heads/feature/realtime-collaboration` = `80e99a2ed…`; the PR's
-  `updatedAt` read 2026-11-10 21:43:17Z before this pass rewrote the body, and
-  the head did not move). The earlier header said the push had not happened and
-  the head was `4f3e21245`; that is replaced by this line. Against the live
-  `main`, GitHub reports `mergeable: false` / `mergeable_state: "dirty"` — a
-  real conflict with the tip, not a missing base: with the PR's own base
-  `92b965dba` `git merge-tree --write-tree HEAD 92b965dba` exits 0 and that base
-  is an ancestor of the head. The merge in this record resolves that conflict
-  locally as `b21b57b55`; **it is not pushed** — this role denies `git push*`
-  (`.opencode/agents/pdfcraft-envoy.md`). The owner's one command is
-  `git -C pdfcraft/upstream push fork HEAD:refs/heads/feature/realtime-collaboration`
-  (a fast-forward from `80e99a2ed`, no force). Nothing was pushed to
-  `storytold/*` and `main` was not touched. On `80e99a2ed` the five workflows
-  exist but hold at `action_required` (CI, Nix, SonarCloud, FreeBSD, Windows
-  ARM64) and CodeRabbit is `skipped`, so no gate has run on that head; approval
-  is the maintainer's. The PR body was rewritten this pass (the text is
-  `pdfcraft/PR-DRAFT.md` from `## What` on) to describe this head and the gates
-  below.
+  `c1171d941`, 114/0 at `4f3e21245`, 116/0 at `80e99a2ed`, 117/0 at `b21b57b55`
+  and 118/0 at `27438a646` — were right when they were measured; `origin/main`
+  kept moving and each slice appended commits. Commits named below and in §4 by
+  their pre-rebase hashes are mapped in the rebase sections of §4.
+- Delivery: PR #6622's `headRefOid` is **`84da974d9`**, and `git ls-remote fork
+  refs/heads/feature/realtime-collaboration` returns the same hash — the fork
+  and the PR carry this head, so the merge of `origin/main` is published, not
+  pending. `gh pr view 6622` reads `mergeable: MERGEABLE`,
+  `mergeStateStatus: UNSTABLE`, base `main`, not a draft, `reviewDecision`
+  empty, and one check — CodeRabbit `skipping` (`updatedAt` 2026-11-11
+  01:24:35Z). The `commits` field says 100 because GitHub pages it; the branch
+  is 119 commits over `origin/main`. The earlier header — head `80e99a2ed`,
+  `mergeable: false` / `"dirty"` — was true against `main`'s tip of that
+  moment (`ad3e6d4b8`, whose duplicate definition did not compile) and is
+  replaced by this line. **No workflow has run on `84da974d9`**: the five
+  workflow runs that appeared on `80e99a2ed` at `action_required` are not on
+  this head and the only check is CodeRabbit skipping, so the gate evidence is
+  the local sweep in §4, not a CI run, and approving the workflows stays the
+  maintainer's. The PR body was rewritten this pass (the text is
+  `pdfcraft/PR-DRAFT.md` from `## What` on) to describe this head and the
+  gates below. The docs commit that carries this record is **local**:
+  publishing it (a fast-forward to the branch) is the owner's, and until then
+  the fork and the PR stay at `84da974d9`.
 - State: implemented behind the `collab` feature (off by default). **`CI=1
-  cargo xtask ci` exits 0 on `b21b57b55`** — all 10 steps, 156 test targets,
+  cargo xtask ci` exits 0 on `84da974d9`** — all 10 steps, 156 test targets,
   **10027 passed, 0 failed, 18 ignored** (§4, "The merge of `origin/main`
-  `ad3e6d4b8`"). The sweep needs `CRAFT_I18N_DIR` (a craft-i18n worktree at
-  `575cfdef`, the revision `craft-i18n.rev` pins) and `CRAFT_FONTS_DIR`
-  (`b076417b`): without the catalogs the comments test panics at
-  `set_option("language", "de")` — an earlier pass ran exactly that and got
-  EXIT=1 — which is the documented cause, not a regression. The two `test`
-  targets that stopped an older sweep stay closed (§4). The reasons CI run
-  `42720349704` (head `b27fa89c8`) failed stay closed: the git source (§4, "The
-  CI git-source gate") and the `deny` advisory RUSTSEC-2026-0387 (§4, "The JWT
-  crypto backend") — `cargo deny --log-level error check` exits 0 and
-  `crypto-bigint` 0.5.5 is out of the graph. The workspace `clippy` dead-code
-  fix (`f48ec4754`) is in too. The earlier gates were run at their own heads
-  (`5bad54c40`, `157f4d239`, `22d29d070`, `0c57e2271`, `2b61ff80f`, `642dabb5b`,
-  `158ab7fa4`, §4) and were not re-run here.
+  `d2916decb`"). The totals equal those of `b21b57b55`, which is what main's
+  three commits predict: #6933/#6934 delete the duplicate definition and
+  `d2916decb` edits a packaging script, and none of them adds a test. The sweep
+  needs `CRAFT_I18N_DIR` (a craft-i18n worktree at `575cfdef`, the revision
+  `craft-i18n.rev` pins) and `CRAFT_FONTS_DIR` (`b076417b`): without the
+  catalogs the comments test panics at `set_option("language", "de")` — an
+  earlier pass ran exactly that and got EXIT=1 — which is the documented cause,
+  not a regression. The two `test` targets that stopped an older sweep stay
+  closed (§4). The reasons CI run `42720349704` (head `b27fa89c8`) failed stay
+  closed: the git source (§4, "The CI git-source gate") and the `deny` advisory
+  RUSTSEC-2026-0387 (§4, "The JWT crypto backend") — `cargo deny --log-level
+  error check` exits 0 and `crypto-bigint` 0.5.5 is out of the graph. The
+  workspace `clippy` dead-code fix (`f48ec4754`) is in too. The earlier gates
+  were run at their own heads (`5bad54c40`, `157f4d239`, `22d29d070`,
+  `0c57e2271`, `2b61ff80f`, `642dabb5b`, `158ab7fa4`, §4) and were not re-run
+  here.
 - What is built, all recorded in §4 and pushed to the fork in earlier passes: the web host bridge
   (`81a92f32f`), the forced journal commit (`8fc898bae`), the idle/time
   threshold (`2a3b6e43e`), crash recovery against the real process
@@ -104,19 +127,22 @@ several `/NM`, per-line quads, the caret (`5bad54c40`, §4) — the conflict-res
   two structural operations over a page's whole link list (`2b61ff80f`, §4),
   and the whole-document link actions as `links.add_many`/`links.remove_many`
   over several pages at once (`b86c4963a`, §4). The fork carries all of it up
-  to `80e99a2ed`, including the earlier rebase onto `origin/main` `ba28458ad`
-  (§4, first table) and the merges of `debb826f2` and `92b965dba`. The merge of
-  `ad3e6d4b8` and the records written on top of it wait for the owner's push
-  (see "Delivery"). The one presence item still outside this repository is the
+  to `84da974d9`, including the earlier rebase onto
+  `origin/main` `ba28458ad` (§4, first table) and the merges of `debb826f2`,
+  `92b965dba`, `ad3e6d4b8` and `d2916decb`. Nothing in the feature waits for a
+  push any more; the docs commits written on top of the merge are the owner's to
+  publish (see "Delivery"). The one presence item still outside this repository is the
   host page's `pdfcraft:presence` payload: `craft-web-host` must gain optional
   `page`/`selection` on its `Participant` (§5 p.4, §4).
 - Known gaps before production are listed in §5, the plan in §6. This pass
-  adds no feature work: it merges the upstream tip, records the delivery facts
-  and the gate numbers, and leaves the encrypted-PDF policy (§3, RFC §12), the
-  `https`-without-a-reverse-proxy note, the in-process `conflict` flag and the
-  journal tail as they were. A kill between the base write and the `CURRENT`
-  rename is covered at the `Store` level only (§5 p.1, §6.1); the real-process
-  SIGKILL test covers the journal→base window.
+  adds no feature work: it merges the upstream tip (the second merge in
+  two passes: `ad3e6d4b8` and then `d2916decb`), re-measures the whole sweep on
+  the merged head, and corrects the delivery facts in this header, in
+  `pdfcraft/PR-DRAFT.md` and in the PR body. It leaves the encrypted-PDF policy
+  (§3, RFC §12), the `https`-without-a-reverse-proxy note, the in-process
+  `conflict` flag and the journal tail as they were. A kill between the base
+  write and the `CURRENT` rename is covered at the `Store` level only (§5 p.1,
+  §6.1); the real-process SIGKILL test covers the journal→base window.
 - Audience: the next session (human or agent). Everything here was verified in
   the session that wrote it; anything not verified is marked as such.
 - Design: `docs/collab/RFC.md` (protocol, ADRs, trade-offs); operation of the
@@ -460,7 +486,79 @@ commit result, and a commit button for owner/editor.
 
 ## 4. Tests and verification
 
-### The merge of `origin/main` `ad3e6d4b8`, and the delivery facts (2026-11-11, local; not pushed)
+### The merge of `origin/main` `d2916decb` and the sweep on the head PR #6622 carries (2026-11-11, local; head published)
+
+The brief asked to re-measure the gates on `84da974d9`, put the facts into this
+header, into `pdfcraft/PR-DRAFT.md` and into the PR body, and leave the code
+alone. Nothing was pushed in this pass: `84da974d9` is already the PR's head,
+and the records written now are the owner's to publish.
+
+- **What `main` did in those three commits.** `9345b5caa` (#6933) and
+  `25f3f5429` (#6934) both remove the second `decoded_strict_within` that
+  `ad3e6d4b8` (#6046) had introduced — the duplicate the previous merge had to
+  resolve by hand — and `d2916decb` (#6932) rewrites `packaging/freebsd/package.sh`
+  to `[[`. So `main`'s tree compiles by itself again, and nothing in the merge
+  has to repair it.
+- **The merge, `84da974d9`.** A true merge (`--no-ff`, no rebase, no force):
+  two files against its first parent, +5/−4, `packaging/freebsd/package.sh`
+  (main's) and `crates/cos/src/object.rs`. The one conflict is in the latter,
+  because the branch's resolution and main's fix differ in shape — the branch's
+  `decoded_strict_within` delegates to `decoded_strict_within_counted` and its
+  doc comment says so, while main's keeps the `decode` closure. The merge keeps
+  the branch's delegation: one decode path, the counted one, and no line of
+  main's behaviour is lost. `git diff origin/main HEAD -- crates/cos/src/object.rs`
+  is 4 lines (a doc comment and the body) — the branch's only difference from
+  `main` outside the feature. It is no longer a fix to main's tree; taking
+  main's text verbatim would remove it, if a reviewer prefers the smaller diff.
+  After the merge: **119 ahead / 0 behind** `d2916decb` (120 after this record).
+  `Cargo.lock` did not move and `cargo metadata --locked` exits 0.
+- **The sweep, `CI=1 cargo xtask ci`,** on host `agents` (rustc 1.99.1
+  `58cf8f9c3`, `CARGO_BUILD_JOBS=12`, `CRAFT_I18N_DIR=/home/markin/build/i18n-575`
+  — craft-i18n `575cfdef`, the revision `craft-i18n.rev` pins — and
+  `CRAFT_FONTS_DIR=/home/markin/craft-fonts` at `b076417b`, the ref `ci.yml`
+  passes), on `84da974d9`: **EXIT=0, `CI: all 10 steps passed`**, first run, no
+  retries. `test`: **156 targets, 10027 passed, 0 failed, 18 ignored**. The
+  totals are identical to the `b21b57b55` sweep, which is what main's three
+  commits predict: they delete code and edit a script, and add no test.
+- **Per step:**
+
+  | Step | Result |
+  |---|---|
+  | `fmt` | passed — `cargo fmt --all -- --check` |
+  | `clippy` | passed — `cargo clippy --workspace --all-targets -- -D warnings` |
+  | `cli-no-default-features` | passed — `cargo check -p pdfcraft-cli --no-default-features` |
+  | `test` | passed — 156 targets, 10027 passed, 0 failed, 18 ignored |
+  | `i18n-report` | passed — 5069 English strings, 0 catalog rows skipped |
+  | `layers` | passed — 52 crates, no layering violation |
+  | `wasm` | passed — wasm32, 44 crates ok |
+  | `license-check` | passed — `assets: ok (258 repository assets, 7 bundled by dependencies, 22 fetched at build time)` |
+  | `deny` | passed — `advisories ok, bans ok, licenses ok, sources ok` |
+  | `parity` | passed — 858 features (835 counted, 23 na), 56.8% shipped / 64.1% weighted; P0 90.5% shipped / 94.6% weighted |
+
+  `cargo-nextest` is still not installed on the host, so `test` is `cargo test`,
+  as in earlier passes.
+- **The three fast steps were incremental, and one was proved from scratch.**
+  `fmt`, `clippy` and `cli-no-default-features` came back from warm fingerprints
+  (the host's `target/` had already built this content), so the log shows no
+  compile line for them. To make the merged `crates/cos/src/object.rs` prove
+  itself rather than trust the cache, the file was touched on the host and
+  `cargo clippy -p pdfcraft-cos --all-targets -- -D warnings` re-ran from
+  scratch: 8.47 s, exit 0, and `git status --porcelain` stayed empty (the touch
+  changes no content).
+- **What this does not cover.** As in the earlier sweeps: the host has no
+  `qpdf`/`poppler`, so oracle-backed tests skip there exactly as they do without
+  those tools; Windows-only checks stay CI's; the web bridge is compiled for
+  wasm32 but never run in a browser. And no GitHub workflow ran on
+  `84da974d9` — the only check on the PR is CodeRabbit `skipping` — so
+  `MERGEABLE`/`UNSTABLE` is GitHub's calculation of the merge, not a gate run.
+- **Delivery, as the API reports it.** `headRefOid` `84da974d9` = the fork's
+  branch tip (`git ls-remote fork`); it is the parent of the docs commit that
+  carries this record, so the local branch is that one docs commit above the PR
+  head. `mergeable` `MERGEABLE`, `mergeStateStatus` `UNSTABLE`; base `main`; not
+  a draft; `reviewDecision` empty; `commits` 100 because GitHub pages the list,
+  against 119 in `git rev-list --count origin/main..HEAD` at that head.
+
+### (Previous pass, superseded above.) The merge of `origin/main` `ad3e6d4b8`, and the delivery facts
 
 The brief asked to merge the remote `main` tip into the branch, run the gate on
 the new head and bring the header to the facts of the delivery. Two of those
@@ -3813,6 +3911,13 @@ selections are done (§4, `b4e9179d8`); what remains of them is listed in §5 p.
 
 ### 6.6 Cleanup and submission
 
+- **Current delivery state (2026-11-11).** Head `84da974d9` is the fork's
+  branch tip and the PR's `headRefOid`; the local branch is one docs commit
+  above it (the record carrying this bullet);
+  `mergeable: MERGEABLE`, `mergeStateStatus: UNSTABLE`, and no workflow has run
+  on it (§4, "The merge of `origin/main` `d2916decb`"). The "not pushed" notes
+  in the older bullets below describe their own pass — they are history, not the
+  current state.
 - **The `deny` step's advisory is closed** (`f31f00449`, 2026-11-10, not
   pushed): `crypto-bigint` 0.5.5 (RUSTSEC-2026-0387) is out of the graph —
   `jsonwebtoken` selects `aws_lc_rs` instead of `rust_crypto` in
@@ -4046,6 +4151,12 @@ selections are done (§4, `b4e9179d8`); what remains of them is listed in §5 p.
 
 ## 7. Gotchas for the next session
 
+- The branch's only difference from `origin/main` outside the feature is 4 lines
+  in `crates/cos/src/object.rs`: the branch's `decoded_strict_within` delegates
+  to `decoded_strict_within_counted`, main's keeps the `decode` closure. Both
+  are correct; the merge of `d2916decb` kept the delegation on purpose (§4). If
+  a reviewer wants the smallest diff, take main's text verbatim instead of
+  re-resolving that merge.
 - `cargo test -p pdfcraft-ui-egui` needs the full egui/accesskit build and takes
   ~15 minutes on this machine; the UI suite itself is ~12 minutes.
 - Building the app with `collab` takes ~20 minutes; `cargo check` is enough for
