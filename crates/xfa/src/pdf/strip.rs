@@ -1,4 +1,6 @@
-use super::{CLICK_KEY, DATE_KEY, Dict, Document, GROUPS, IMAGE_FIELD_KEY, LAYOUT_KEY, NO_TAB_KEY, NODE_KEY, ObjRef, Object, RELEVANT_KEY, SOM_KEY, XfaError};
+use super::{
+    CLICK_KEY, DATE_KEY, Dict, Document, GROUPS, IMAGE_FIELD_KEY, LAYOUT_KEY, NO_TAB_KEY, NODE_KEY, ObjRef, Object, RELEVANT_KEY, SOM_KEY, XfaError,
+};
 
 /// What laying a form out says when it took the usage rights off (see [`drop_usage_rights`]).
 pub(crate) const USAGE_RIGHTS_REMOVED: &str =

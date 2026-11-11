@@ -100,7 +100,7 @@ fn a_read_only_fields_tooltip_shows_on_hover() {
 }
 
 #[test]
-fn read_only_widgets_are_skipped_by_tab_navigation() {
+fn read_only_widgets_are_tab_stops_but_empty_and_off_page_ones_are_not() {
     let bytes = pdf_from_objects(&[
         "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 5 0 R 7 0 R 8 0 R 9 0 R] >> >>",
         "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 120] >>",
@@ -123,12 +123,19 @@ fn read_only_widgets_are_skipped_by_tab_navigation() {
             .into_iter()
             .filter_map(|(fi, wi)| doc.form.get(fi).map(|field| (field.name.as_str(), wi)))
             .collect::<Vec<_>>();
-        assert_eq!(order, vec![("first", 0), ("locked", 1), ("last", 0)], "read-only, empty and off-page widgets are excluded");
+        assert_eq!(
+            order,
+            vec![("first", 0), ("locked", 0), ("locked", 1), ("last", 0)],
+            "a read-only widget is a stop; empty and off-page ones are not"
+        );
     }
     click_field(&mut h, "first", 0);
     h.key_press(egui::Key::Tab);
     h.run_steps(3);
-    assert_eq!(focused(&h), Some(("locked".into(), 1)), "the writable widget in the same field remains in tab order");
+    assert_eq!(focused(&h), Some(("locked".into(), 0)), "the read-only widget takes the focus");
+    h.key_press(egui::Key::Tab);
+    h.run_steps(3);
+    assert_eq!(focused(&h), Some(("locked".into(), 1)), "the writable widget in the same field follows");
     h.key_press(egui::Key::Tab);
     h.run_steps(3);
     assert_eq!(focused(&h), Some(("last".into(), 0)));
@@ -2205,9 +2212,10 @@ fn clicking_a_radio_button_that_shares_its_on_state() {
     assert_eq!(on_widgets(&h, "plain"), [false, false, true]);
 }
 
-/// A radio button read-only on its own (its widget's `/Ff`, ISO 32000-2 Table 227) is still
-/// focused by the arrows and Space, but neither tries to turn it on: the form would refuse the
-/// edit and show a failure for a button the user can't change. A click says it is read-only.
+/// A radio button read-only on its own (its widget's `/Ff`, ISO 32000-2 Table 227) is a Tab stop
+/// (the arrows pass it by), but neither Space nor a click tries to turn it on: the form would
+/// refuse the edit and show a failure for a button the user can't change. A click says it is
+/// read-only.
 #[test]
 fn a_read_only_radio_button_is_focused_but_not_selected() {
     let kid = |x: u32, state: &str, extra: &str| {
@@ -2241,9 +2249,9 @@ fn a_read_only_radio_button_is_focused_but_not_selected() {
     assert_eq!(value(&h, "size"), ["S"]);
     let toast = |h: &Harness<'static, PdfCraftApp>| h.state().toast.as_ref().map(|(m, _)| m.clone());
     assert_eq!(toast(&h), None);
-    h.key_press(egui::Key::ArrowRight);
+    h.key_press(egui::Key::Tab);
     h.run_steps(3);
-    assert_eq!(focused(&h), Some(("size".into(), 1)), "the arrow still moves onto the read-only button");
+    assert_eq!(focused(&h), Some(("size".into(), 1)), "Tab still moves onto the read-only button");
     assert_eq!((value(&h, "size"), toast(&h)), (vec!["S".to_string()], None), "and leaves the selection alone");
     h.key_press(egui::Key::Space);
     h.run_steps(3);
