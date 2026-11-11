@@ -703,7 +703,8 @@ impl Walk {
             None => {
                 let font_dict = self.fonts_res.get(name).and_then(|f| doc.resolve(f).as_dict().cloned());
                 let m = font_dict.as_ref().map_or_else(|| self.fallback.clone(), |d| Rc::new(Metrics::from_dict(doc, d)));
-                let f = (m, font_dict.as_ref().is_some_and(|d| is_vertical(doc, d)), font_dict.as_ref().is_some_and(|d| type3_without_resources(doc, d)));
+                let f =
+                    (m, font_dict.as_ref().is_some_and(|d| is_vertical(doc, d)), font_dict.as_ref().is_some_and(|d| type3_without_resources(doc, d)));
                 scope.fonts.insert(name.to_vec(), f.clone());
                 f
             }
