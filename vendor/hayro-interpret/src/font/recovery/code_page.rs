@@ -29,6 +29,7 @@ use super::{symbol_font, untagged};
 use crate::font::generated::glyph_names;
 use crate::font::standard_font::StandardFont;
 use hayro_cmap::BfString;
+use kurbo::{BezPath, PathEl};
 
 /// Windows-1252, codes 0x80 to 0xFF (0: no character).
 const CP1252: [u16; 128] = [
@@ -171,6 +172,25 @@ fn reads_as_winansi(code: u8, c: char) -> bool {
         Some(w) => c == w || (code == 0xA0 && c == ' ') || (code == 0xAD && c == '-'),
         None => c == '\u{2022}',
     }
+}
+
+/// Most outline points the rule draws for one font, all its codes together. Real accented letters
+/// take tens to a few hundred points each; a font past this is not read, so a page of such fonts
+/// can't keep the rule busy. With the classifier's 4,096 points a glyph, it bounds one font's
+/// work.
+const MAX_FONT_POINTS: usize = 1 << 16;
+
+/// The points of `path` (on the curve and off it), as the classifier counts them.
+fn points(path: &BezPath) -> usize {
+    path.elements()
+        .iter()
+        .map(|e| match e {
+            PathEl::MoveTo(_) | PathEl::LineTo(_) => 1,
+            PathEl::QuadTo(..) => 2,
+            PathEl::CurveTo(..) => 3,
+            PathEl::ClosePath => 0,
+        })
+        .fold(0_usize, usize::saturating_add)
 }
 
 /// Why the rule replaces the strict text.
@@ -352,7 +372,16 @@ impl Rule for CodePageByOutline {
         if symbol_font(font.base_font) {
             return None;
         }
-        let outline = font.code_outline?;
+        let draw = font.code_outline?;
+        // The outline `code` draws; `None` once the font has drawn more than `MAX_FONT_POINTS`,
+        // which ends the guard with no reading.
+        let left = std::cell::Cell::new(MAX_FONT_POINTS);
+        let outline = |code: u8| -> Option<Option<BezPath>> {
+            let path = draw(code);
+            let used = path.as_ref().map_or(0, points);
+            left.set(left.get().checked_sub(used)?);
+            Some(path)
+        };
         let encoding = font.encoding_text?;
         if font.has_to_unicode {
             let to_unicode = font.to_unicode_text?;
@@ -387,7 +416,7 @@ impl Rule for CodePageByOutline {
             if !CodePage::ALL.into_iter().any(differs) {
                 continue;
             }
-            let Some(path) = outline(code) else {
+            let Some(path) = outline(code)? else {
                 continue;
             };
             count(Counter::OutlineClassified);
@@ -418,7 +447,7 @@ impl Rule for CodePageByOutline {
             if !strict_char(font, code).is_none_or(|c| c == '\u{2022}') {
                 continue;
             }
-            let Some(path) = outline(code) else {
+            let Some(path) = outline(code)? else {
                 continue;
             };
             count(Counter::OutlineClassified);

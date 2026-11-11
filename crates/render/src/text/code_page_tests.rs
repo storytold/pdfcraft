@@ -539,3 +539,96 @@ fn a_slashed_o_reaching_below_the_baseline_is_not_an_ogonek() {
     assert_eq!(strict, "Øøk");
     assert_eq!(recovered, None);
 }
+
+/// Review on #6977: a page of many fonts can't keep the rules busy past the render pool's
+/// watchdog, which would fail the page's strict text with its recovered layer. Once the rules
+/// have spent `RECOVERY_RULES_BUDGET` on the page's fonts, the page stops recovering at its next
+/// font: no more guards are decided, there is no recovered layer, and the strict text is the
+/// plain extraction's.
+#[test]
+fn a_page_whose_fonts_spend_the_rules_time_keeps_its_strict_text() {
+    let glyphs = [(0xE8, 'č'), (0xF5, 'ő'), (0xFB, 'ű')];
+    let outlines: Vec<(u16, &[Contour])> = glyphs.iter().enumerate().map(|(i, (_, c))| (u16::try_from(i + 1).unwrap(), drawing(*c))).collect();
+    let cmap: Vec<(char, u16)> = glyphs.iter().enumerate().map(|(i, (code, _))| (win_ansi(*code), u16::try_from(i + 1).unwrap())).collect();
+    let program = with_outlines(4, &outlines, Cmap::Unicode(&cmap), None);
+    // Six fonts, each with its own descriptor and program, each showing the three letters.
+    let fonts = 6;
+    let resources: String = (0..fonts).map(|i| format!("/F{i} {} 0 R ", 5 + 3 * i)).collect();
+    let content: String = (0..fonts).map(|i| format!("/F{i} 6 Tf 20 {} Td <E8F5FB> Tj ", if i == 0 { 250 } else { -20 })).collect();
+    let widths = vec!["600"; 256].join(" ");
+    let mut pdf = pdfcraft_testkit::Pdf::new()
+        .obj("<< /Type /Catalog /Pages 2 0 R >>")
+        .obj("<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 300] >>")
+        .obj(format!("<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Font << {resources}>> >> >>"))
+        .stream("", format!("BT {content}ET"));
+    for i in 0..fonts {
+        let (descriptor, file) = (6 + 3 * i, 7 + 3 * i);
+        pdf = pdf
+            .obj(format!(
+                "<< /Type /Font /Subtype /TrueType /BaseFont /ABCDEF+TimesNewRomanCE{i} /FirstChar 0 /LastChar 255 /Widths [{widths}] /Encoding /WinAnsiEncoding /FontDescriptor {descriptor} 0 R >>"
+            ))
+            .obj(format!(
+                "<< /Type /FontDescriptor /FontName /ABCDEF+TimesNewRomanCE{i} /Flags 32 /FontBBox [0 -200 1000 900] /ItalicAngle 0 /Ascent 800 /Descent -200 /CapHeight 700 /StemV 80 /FontFile2 {file} 0 R >>"
+            ))
+            .stream("", program.clone());
+    }
+    let pdf = parse(pdf.build());
+    let (strict, recovered, plain, cost) = layers(&pdf);
+    assert_eq!(strict, plain);
+    assert_eq!(recovered.map(|r| r.text.plain_text().matches("čőű").count()), Some(fonts), "in time, every font is read");
+    assert_eq!(cost.guard_decisions, fonts, "{cost:?}");
+
+    // Each font's rules now take 40% of the budget: the third font finds it spent.
+    struct Reset;
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            RULES_MILLIS.with(|m| m.set(None));
+        }
+    }
+    let millis = u64::try_from(RECOVERY_RULES_BUDGET.as_millis() * 2 / 5).unwrap_or(u64::MAX);
+    RULES_MILLIS.with(|m| m.set(Some(millis)));
+    let _reset = Reset;
+    let (slow, recovered, plain, cost) = layers(&pdf);
+    assert_eq!(slow, plain);
+    assert_eq!(slow, strict, "the strict text is the same");
+    assert!(recovered.is_none(), "past the rules' budget the page has no recovered layer");
+    assert_eq!(cost.guard_decisions, 3, "no font past the budget is decided: {cost:?}");
+    assert!(RECOVERY_RULES_BUDGET.saturating_mul(4) <= crate::raster::STUCK_AFTER);
+}
+
+/// Review on #6977: one font's outlines are bounded too. A font whose codes from 0x80 on draw
+/// more than 65,536 points in all (sixteen glyphs of 4,300 points, too large for the classifier
+/// to look at, so they vote for nothing) stops being drawn there and is not read, though the
+/// letters it shows would be.
+#[test]
+fn a_font_whose_outlines_are_too_large_is_not_read() {
+    let shown = [(0xE8, 'č'), (0xF5, 'ő'), (0xFB, 'ű')];
+    // A body and 1,432 small triangles above it: 4,300 points.
+    let contours: Vec<Vec<(i16, i16)>> = std::iter::once(BODY.to_vec())
+        .chain((0..1432).map(|k: i16| {
+            let (x, y) = ((k % 100) * 10, 500 + (k / 100) * 10);
+            vec![(x, y), (x + 3, y), (x, y + 3)]
+        }))
+        .collect();
+    let heavy: Vec<&[(i16, i16)]> = contours.iter().map(Vec::as_slice).collect();
+    let read_with = |heavy_codes: std::ops::RangeInclusive<u8>| {
+        let mut outlines: Vec<(u16, pdfcraft_testkit::Outline<'_>)> =
+            shown.iter().enumerate().map(|(i, (_, c))| (u16::try_from(i + 1).unwrap(), drawing(*c))).collect();
+        outlines.push((4, heavy.as_slice()));
+        let mut cmap: Vec<(char, u16)> = shown.iter().enumerate().map(|(i, (code, _))| (win_ansi(*code), u16::try_from(i + 1).unwrap())).collect();
+        // Capital letters with an accent in Windows-1252 at 0xC0 on (`À`, `Á`, ...).
+        cmap.extend(heavy_codes.map(|code| (char::from(code), 4)));
+        let program = with_outlines(5, &outlines, Cmap::Unicode(&cmap), None);
+        let font = Font::new("ABCDEF+TimesNewRomanCE", &shown);
+        let (strict, recovered, plain, cost) = layers(&parse(page_with_program(&font, Program::TrueType(program), "/Encoding /WinAnsiEncoding", 32)));
+        assert_eq!(strict, plain);
+        (recovered.map(|r| r.text.plain_text()), cost)
+    };
+    // Fifteen such glyphs (64,500 points) still leave the letters their votes.
+    let (recovered, cost) = read_with(0xC0..=0xCE);
+    assert_eq!(recovered.as_deref(), Some("čőű"));
+    assert_eq!(cost.outlines_classified, 18, "{cost:?}");
+    let (recovered, cost) = read_with(0xC0..=0xCF);
+    assert_eq!(recovered, None);
+    assert_eq!(cost.outlines_classified, 15, "the sixteenth outline is past the budget: {cost:?}");
+}

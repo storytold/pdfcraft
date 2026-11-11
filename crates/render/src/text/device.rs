@@ -67,6 +67,10 @@ pub(super) struct TextDevice {
     /// The font of the last glyph asked, already in `recovery_fonts`: a run of glyphs of one
     /// font is counted without hashing each glyph's font again.
     last_recovery_font: Option<u128>,
+    /// When the page's text extraction started ([`RECOVERY_DEADLINE`]).
+    started: Started,
+    /// The time the rules spent on the page's fonts so far ([`RECOVERY_RULES_BUDGET`]).
+    rules_time: RulesTime,
     /// What is left of the page's dedupe work ([`MAX_REDRAW_WORK`]).
     pub(super) work_left: usize,
 }
@@ -122,6 +126,14 @@ pub(super) const RECOVERY_DEADLINE: std::time::Duration = std::time::Duration::f
 /// with the strict layer alone, before the watchdog gives up on it.
 pub(super) const RECOVERY_LAYOUT_END: std::time::Duration = std::time::Duration::from_secs(crate::raster::STUCK_AFTER.as_secs() * 3 / 4);
 
+/// How long the recovery rules' work for a page's fonts (each font's guards, decided at its first
+/// glyph on the page while the page is interpreted) may take: a quarter of the render pool's
+/// watchdog. Past it, or past [`RECOVERY_DEADLINE`], the page stops recovering at its next font
+/// and keeps its strict text alone, so recovery can't push a page whose strict text is quick past
+/// the watchdog (which would fail its strict text too, `RequestFailureKey`). One font's guards
+/// are bounded on their own (the outline rule draws at most `MAX_FONT_POINTS` a font).
+pub(super) const RECOVERY_RULES_BUDGET: std::time::Duration = std::time::Duration::from_secs(crate::raster::STUCK_AFTER.as_secs() / 4);
+
 /// When a page's text extraction started, to hold the recovered layout to [`RECOVERY_DEADLINE`]
 /// and [`RECOVERY_LAYOUT_END`] (wasm has no clock and no watchdog).
 #[derive(Clone, Copy)]
@@ -156,6 +168,46 @@ impl Started {
     }
 }
 
+/// The time the recovery rules spent on a page's fonts, held to [`RECOVERY_RULES_BUDGET`]
+/// (nothing on wasm, which has no clock and no watchdog).
+#[derive(Clone, Copy, Default)]
+struct RulesTime(#[cfg(not(target_arch = "wasm32"))] std::time::Duration);
+
+/// A clock reading for [`RulesTime::add_since`] (nothing on wasm).
+#[derive(Clone, Copy)]
+struct RulesClock(#[cfg(not(target_arch = "wasm32"))] std::time::Instant);
+
+impl RulesTime {
+    fn start() -> RulesClock {
+        #[cfg(not(target_arch = "wasm32"))]
+        return RulesClock(std::time::Instant::now());
+        #[cfg(target_arch = "wasm32")]
+        return RulesClock();
+    }
+
+    /// Adds the time since `clock` (in tests, a fixed cost a font instead: `RULES_MILLIS`).
+    fn add_since(&mut self, clock: RulesClock) {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            #[cfg(test)]
+            let spent = RULES_MILLIS.with(std::cell::Cell::get).map_or_else(|| clock.0.elapsed(), std::time::Duration::from_millis);
+            #[cfg(not(test))]
+            let spent = clock.0.elapsed();
+            self.0 = self.0.saturating_add(spent);
+        }
+        #[cfg(target_arch = "wasm32")]
+        let _ = clock;
+    }
+
+    /// Whether the page's [`RECOVERY_RULES_BUDGET`] is spent (never on wasm).
+    fn spent(self) -> bool {
+        #[cfg(not(target_arch = "wasm32"))]
+        return self.0 >= RECOVERY_RULES_BUDGET;
+        #[cfg(target_arch = "wasm32")]
+        return false;
+    }
+}
+
 #[cfg(test)]
 thread_local! {
     /// Replacement text bytes given to redraws on this thread.
@@ -165,6 +217,9 @@ thread_local! {
     /// How long the strict part of the pages read on this thread takes, in milliseconds, in
     /// place of the clock.
     pub(super) static STRICT_MILLIS: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
+    /// How long the recovery rules take for each font of the pages read on this thread, in
+    /// milliseconds, in place of the clock ([`RECOVERY_RULES_BUDGET`]).
+    pub(super) static RULES_MILLIS: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
     /// A smaller dedupe work budget for the pages read on this thread.
     pub(super) static PAGE_WORK: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
     /// A smaller recovered-glyph budget for the pages read on this thread.
@@ -354,6 +409,8 @@ impl TextDevice {
             recovery_failed: false,
             recovery_fonts: std::collections::HashSet::new(),
             last_recovery_font: None,
+            started: Started::now(),
+            rules_time: RulesTime::default(),
             work_left: page_work(),
         }
     }
@@ -599,25 +656,28 @@ impl TextDevice {
     /// The strict text of `glyph`, what the recovery rules read for it, and its font's style
     /// (worked out once per font, the name shared by its glyphs) when they read something. A
     /// panic in the rules or a page past their budgets ([`MAX_RECOVERY_FONTS`],
-    /// [`MAX_RECOVERED_GLYPHS`]) stops recovering for the page and marks it failed.
+    /// [`MAX_RECOVERED_GLYPHS`], and at a font's first glyph [`RECOVERY_RULES_BUDGET`] and
+    /// [`RECOVERY_DEADLINE`]) stops recovering for the page and marks it failed.
     fn recover_glyph(
         &mut self,
         glyph: &Glyph<'_>,
     ) -> (Option<hayro::hayro_interpret::hayro_cmap::BfString>, Option<Recovery>, hayro::hayro_interpret::font::RecoveredFontStyle) {
-        let over_budget = self.filled.len().saturating_add(self.overrides.len()) >= recovered_glyphs() || {
-            // Outline and Type 3 fonts count alike: each runs the rules' font-level guards.
-            let font = match glyph {
-                Glyph::Outline(g) => g.font_cache_key(),
-                Glyph::Type3(g) => g.font_cache_key(),
-            };
-            if self.last_recovery_font == Some(font) {
-                false
-            } else {
-                self.last_recovery_font = Some(font);
-                self.recovery_fonts.insert(font) && self.recovery_fonts.len() > MAX_RECOVERY_FONTS
-            }
+        // Outline and Type 3 fonts count alike: each runs the rules' font-level guards, at its
+        // first glyph, which is always a change of font.
+        let font = match glyph {
+            Glyph::Outline(g) => g.font_cache_key(),
+            Glyph::Type3(g) => g.font_cache_key(),
         };
+        let new_font = self.last_recovery_font != Some(font);
+        let over_budget = self.filled.len().saturating_add(self.overrides.len()) >= recovered_glyphs()
+            || (new_font && {
+                self.last_recovery_font = Some(font);
+                (self.recovery_fonts.insert(font) && self.recovery_fonts.len() > MAX_RECOVERY_FONTS)
+                    || self.rules_time.spent()
+                    || self.started.past_recovery_deadline()
+            });
         if !over_budget {
+            let clock = new_font.then(RulesTime::start);
             let read = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 #[cfg(test)]
                 {
@@ -629,6 +689,9 @@ impl TextDevice {
                 let style = recovery.as_ref().and_then(|_| glyph.recovery_style()).unwrap_or_default();
                 (strict, recovery, style)
             }));
+            if let Some(clock) = clock {
+                self.rules_time.add_since(clock);
+            }
             if let Ok(read) = read {
                 return read;
             }
@@ -951,6 +1014,7 @@ fn extract_page_with(
     let c = p.intersected_crop_box();
     let mut ctx = Context::new(initial, Rect::new(0.0, 0.0, f64::from(w), f64::from(h)), &cache, p.xref(), settings);
     let mut dev = TextDevice::new();
+    dev.started = started;
     dev.page = initial.transform_rect_bbox(Rect::new(c.x0, c.y0, c.x1, c.y1));
     dev.filter = filter;
     dev.recover = recover;
