@@ -8,7 +8,7 @@
 
 use std::collections::HashSet;
 
-use pdfcraft_cos::{Document, Object, PdfString};
+use pdfcraft_cos::{Document, ObjRef, Object, PdfString};
 
 use crate::{Field, FieldKind, FieldValue, FormError, fields, flags};
 
