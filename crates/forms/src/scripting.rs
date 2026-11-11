@@ -37,11 +37,26 @@ impl FieldEvent {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct FieldChange {
     pub name: String,
+    /// Optional exact object target for malformed forms with duplicate field names.
+    pub object: Option<ObjRef>,
     pub value: Option<Vec<String>>,
+    /// This value came from a Calculate script; redraw it through the field's Format script.
+    pub formatted: bool,
     pub read_only: Option<bool>,
     pub required: Option<bool>,
     /// `display.visible` 0, `hidden` 1, `noPrint` 2, `noView` 3.
     pub display: Option<i32>,
+    /// Normal push-button caption, applied to every widget of the field.
+    pub caption: Option<String>,
+    pub text_color: Option<Vec<String>>,
+    pub fill_color: Option<Vec<String>>,
+    pub rect: Option<[f64; 4]>,
+    pub stroke_color: Option<Vec<String>>,
+    pub text_size: Option<f64>,
+    pub line_width: Option<f64>,
+    pub border_style: Option<String>,
+    pub user_name: Option<String>,
+    pub icon: Option<Option<u64>>,
 }
 
 /// What a script did.
@@ -51,6 +66,8 @@ pub struct ScriptResult {
     pub rc: bool,
     /// `event.value` afterwards.
     pub value: String,
+    /// Whether the script assigned `event.value`, even the value it already had.
+    pub value_set: bool,
     pub changes: Vec<FieldChange>,
     /// Why it rejected the value (its alert), for the error shown.
     pub message: Option<String>,
@@ -58,71 +75,162 @@ pub struct ScriptResult {
 
 /// Runs field scripts (JavaScript).
 pub trait Scripts {
+    /// Whether the host stopped this edit's callbacks.
+    fn stopped(&self) -> bool {
+        false
+    }
+
     /// Run `script` for `event` on `target`, whose value is `value`; `fields` is the whole form.
-    fn run(&mut self, event: FieldEvent, script: &str, target: &Field, value: &str, fields: &[Field]) -> ScriptResult;
+    fn run(&mut self, event: FieldEvent, script: &str, target: &Field, value: &str, fields: &[Field], doc: &Document) -> ScriptResult;
+
+    /// [`Self::run`] again for an appearance, with dates written in English names (`util.printd`)
+    /// because no font of the field can draw the date language's (#5303); what it logs was
+    /// already logged by the first run. `None` when it can't: no English dates here, or the
+    /// script failed. What it returns is what the script made, even when that is the value.
+    fn rerun_with_english_dates(
+        &mut self,
+        _event: FieldEvent,
+        _script: &str,
+        _target: &Field,
+        _value: &str,
+        _fields: &[Field],
+        _doc: &Document,
+    ) -> Option<ScriptResult> {
+        None
+    }
 }
 
 /// No script engine (or JavaScript turned off): scripts change nothing.
 pub struct NoScripts;
 
 impl Scripts for NoScripts {
-    fn run(&mut self, _: FieldEvent, _: &str, _: &Field, value: &str, _: &[Field]) -> ScriptResult {
-        ScriptResult { rc: true, value: value.to_string(), changes: Vec::new(), message: None }
+    /// Provide the no-JavaScript fallback: accept the current field value without additional script mutations.
+    fn run(&mut self, _: FieldEvent, _: &str, _: &Field, value: &str, _: &[Field], _: &Document) -> ScriptResult {
+        ScriptResult { rc: true, value: value.to_string(), value_set: false, changes: Vec::new(), message: None }
     }
 }
 
 /// Run the Keystroke (commit) and Validate scripts for a new text value. Returns the value to
 /// store, or why it is rejected.
-pub(crate) fn accept(doc: &mut Document, f: &Field, value: &str, scripts: &mut dyn Scripts) -> Result<String, FormError> {
+pub(crate) fn accept(doc: &mut Document, f: &Field, value: &str, scripts: &mut dyn Scripts) -> Result<(String, bool), FormError> {
     let mut v = value.to_string();
+    let mut refresh_field = false;
     for (event, script, default) in [
         (FieldEvent::Keystroke, &f.actions.scripts.keystroke, "The value entered does not match the format of the field"),
         (FieldEvent::Validate, &f.actions.scripts.validate, "The value entered is not valid for the field"),
     ] {
         let Some(js) = script else { continue };
         let all = fields(doc);
-        let r = scripts.run(event, js, f, &v, &all);
-        apply_changes(doc, &r.changes, &f.name)?;
+        let r = scripts.run(event, js, f, &v, &all, doc);
+        refresh_field |= r.changes.iter().any(|change| change.name == f.name && change.object.is_none_or(|id| id == f.obj));
+        apply_changes(doc, &r.changes, &f.name, Some(f.obj), scripts)?;
         if !r.rc {
             return Err(FormError::Invalid(r.message.unwrap_or_else(|| format!("{default} [ {} ]", f.name))));
         }
         v = r.value;
     }
-    Ok(v)
+    Ok((v, refresh_field))
 }
 
 /// The text a custom Format script shows for `value`, if the field has one.
 pub(crate) fn formatted(doc: &Document, f: &Field, value: &str, scripts: &mut dyn Scripts) -> Option<String> {
     let js = f.actions.scripts.format.as_ref()?;
-    let r = scripts.run(FieldEvent::Format, js, f, value, &fields(doc));
+    let r = scripts.run(FieldEvent::Format, js, f, value, &fields(doc), doc);
     Some(r.value)
 }
 
+/// Immediate and aliased MK references of one widget; cycles and depth are bounded.
+fn widget_mk_refs(doc: &Document, widget: ObjRef) -> Vec<ObjRef> {
+    let mut value = doc.get(widget).as_dict().and_then(|d| d.get(b"MK")).cloned();
+    let mut seen = Vec::new();
+    for _ in 0..64 {
+        let Some(Object::Ref(reference)) = value else { break };
+        if seen.contains(&reference) {
+            break;
+        }
+        seen.push(reference);
+        value = Some(doc.get(reference).as_ref().clone());
+    }
+    seen
+}
+
+/// Keep target widgets' shared indirect MK in place, while outside widgets retain old colors.
+fn protect_other_mk_owners(doc: &mut Document, field: &Field, owners: &std::collections::HashMap<ObjRef, Vec<ObjRef>>) -> Result<(), FormError> {
+    let own: HashSet<_> = field.widgets.iter().map(|w| w.obj).collect();
+    let refs: HashSet<_> = field.widgets.iter().filter_map(|w| doc.get(w.obj).as_dict().and_then(|d| d.reference(b"MK"))).collect();
+    for reference in refs {
+        for widget in owners.get(&reference).into_iter().flatten().filter(|w| !own.contains(w)) {
+            if !widget_mk_refs(doc, *widget).contains(&reference) {
+                continue;
+            }
+            let mk =
+                doc.get(*widget).as_dict().and_then(|d| d.get(b"MK")).map(|m| doc.resolve(m)).and_then(|v| v.as_dict().cloned()).unwrap_or_default();
+            doc.update_dict(*widget, |d| d.set(b"MK".to_vec(), Object::Dict(mk)))?;
+        }
+    }
+    Ok(())
+}
+
+/// [`formatted`] with dates in English names, for widgets whose fonts can't draw the date
+/// language's; `None` when the field has no Format script or the English run didn't happen.
+pub(crate) fn formatted_in_english(doc: &Document, f: &Field, value: &str, scripts: &mut dyn Scripts) -> Option<String> {
+    let js = f.actions.scripts.format.as_ref()?;
+    scripts.rerun_with_english_dates(FieldEvent::Format, js, f, value, &fields(doc), doc).map(|r| r.value)
+}
+
 /// Apply script changes to other fields (values written without re-running their scripts;
-/// read-only, required and visibility as flags). `except` is the event's own field, whose value
-/// the event sets.
-pub(crate) fn apply_changes(doc: &mut Document, changes: &[FieldChange], except: &str) -> Result<(), FormError> {
+/// read-only, required and visibility as flags; button captions). `except` is the event's own
+/// field, whose value the event sets.
+pub(crate) fn apply_changes(
+    doc: &mut Document,
+    changes: &[FieldChange],
+    except: &str,
+    except_object: Option<ObjRef>,
+    scripts: &mut dyn Scripts,
+) -> Result<(), FormError> {
     if changes.is_empty() {
         return Ok(());
     }
-    let all = fields(doc);
+    // Validate every colour before applying any part of the script's changes.
     for c in changes {
-        let Some(f) = all.iter().find(|f| f.name == c.name) else { continue };
+        for color in [&c.text_color, &c.fill_color, &c.stroke_color].into_iter().flatten() {
+            js_color(color)?;
+        }
+    }
+    let all = fields(doc);
+    let mut mk_owners: std::collections::HashMap<ObjRef, Vec<ObjRef>> = std::collections::HashMap::new();
+    if changes.iter().any(|c| c.fill_color.is_some() || c.stroke_color.is_some()) {
+        for field in &all {
+            for widget in &field.widgets {
+                for reference in widget_mk_refs(doc, widget.obj) {
+                    mk_owners.entry(reference).or_default().push(widget.obj);
+                }
+            }
+        }
+    }
+
+    for c in changes {
+        let Some(f) = all.iter().find(|f| f.name == c.name && c.object.is_none_or(|obj| f.obj == obj)) else { continue };
         if let Some(v) = &c.value
-            && c.name != except
+            && !except_object.map_or(c.name == except, |obj| f.obj == obj)
             && *v != f.value
         {
             let value = match f.kind {
-                FieldKind::Text => FieldValue::Text(v.first().cloned().unwrap_or_default()),
-                FieldKind::CheckBox => FieldValue::Check(!v.is_empty()),
-                FieldKind::Radio => FieldValue::Radio(v.first().cloned()),
-                FieldKind::Combo | FieldKind::List => FieldValue::Choice(v.clone()),
-                _ => continue,
+                FieldKind::Text => Some(FieldValue::Text(v.first().cloned().unwrap_or_default())),
+                FieldKind::CheckBox => Some(f.check_box_value(v.first().map(String::as_str))),
+                FieldKind::Radio => Some(FieldValue::Radio(v.first().cloned())),
+                FieldKind::Combo | FieldKind::List => Some(FieldValue::Choice(v.clone())),
+                _ => None,
             };
-            let mut tmp = f.clone();
-            tmp.flags &= !flags::NO_TOGGLE_TO_OFF;
-            tmp.actions = Default::default();
-            crate::write_value(doc, &tmp, &value, &mut NoScripts)?;
+            if let Some(value) = value {
+                let mut tmp = f.clone();
+                tmp.flags &= !flags::NO_TOGGLE_TO_OFF;
+                tmp.actions = Default::default();
+                crate::write_value(doc, &tmp, &value, &mut NoScripts)?;
+                if c.formatted {
+                    crate::redraw_calculated_value(doc, f, v, scripts)?;
+                }
+            }
         }
         let mut ff = f.flags;
         for (on, bit) in [(c.read_only, flags::READ_ONLY), (c.required, flags::REQUIRED)] {
@@ -151,15 +259,129 @@ pub(crate) fn apply_changes(doc: &mut Document, changes: &[FieldChange], except:
                 }
             }
         }
+        if c.fill_color.is_some() || c.stroke_color.is_some() {
+            protect_other_mk_owners(doc, f, &mk_owners)?;
+        }
+        let appearance = crate::LookPatch {
+            text: c.text_color.as_deref().map(js_color).transpose()?.flatten(),
+            fill: c.fill_color.as_deref().map(js_color).transpose()?,
+            border: c.stroke_color.as_deref().map(js_color).transpose()?,
+            width: c.line_width,
+            style: c
+                .border_style
+                .as_deref()
+                .map(|style| match style {
+                    "solid" => Ok(crate::BorderStyle::Solid),
+                    "dashed" => Ok(crate::BorderStyle::Dashed),
+                    "beveled" => Ok(crate::BorderStyle::Beveled),
+                    "inset" => Ok(crate::BorderStyle::Inset),
+                    "underline" => Ok(crate::BorderStyle::Underline),
+                    _ => Err(FormError::Invalid("unsupported borderStyle".into())),
+                })
+                .transpose()?,
+            ..Default::default()
+        };
+        if appearance != crate::LookPatch::default() || c.text_size.is_some() || c.user_name.is_some() {
+            crate::author::set_props_object(
+                doc,
+                &c.name,
+                f.obj,
+                &crate::FieldProps {
+                    appearance: (appearance != crate::LookPatch::default()).then_some(appearance),
+                    font_size: c.text_size,
+                    tooltip: c.user_name.clone(),
+                    ..Default::default()
+                },
+            )?;
+        }
+        if let Some(rect) = c.rect {
+            if !rect.iter().all(|v| v.is_finite() && v.abs() <= 1e7) || rect[2] < rect[0] || rect[3] < rect[1] {
+                return Err(FormError::Invalid("invalid script rectangle".into()));
+            }
+            let widget = f.widgets.first().ok_or_else(|| FormError::Invalid("field has no widget rectangle".into()))?;
+            doc.update_dict(widget.obj, |d| d.set(b"Rect".to_vec(), Object::Array(rect.into_iter().map(Object::Real).collect())))?;
+            crate::author::redraw_field_object(doc, &c.name, f.obj)?;
+        }
+        if let Some(icon) = c.icon {
+            if f.kind != FieldKind::PushButton {
+                return Err(FormError::Invalid("icons require a push button".into()));
+            }
+            if icon.is_some_and(|id| id >> 48 != 0) {
+                return Err(FormError::Invalid("invalid button icon handle".into()));
+            }
+            let reference = icon.map(|id| pdfcraft_cos::ObjRef::new((id >> 16) as u32, id as u16));
+            if let Some(reference) = reference {
+                let obj = doc.get(reference);
+                let valid = match &*obj {
+                    Object::Stream(stream) => stream.dict.name(b"Subtype") == Some(b"Form".as_slice()),
+                    _ => false,
+                };
+                if !valid {
+                    return Err(FormError::Invalid("button icon is not a form in this document".into()));
+                }
+            }
+            for widget in &f.widgets {
+                let mut mk = doc
+                    .get(widget.obj)
+                    .as_dict()
+                    .and_then(|d| d.get(b"MK").map(|m| doc.resolve(m)))
+                    .and_then(|m| m.as_dict().cloned())
+                    .unwrap_or_default();
+                match reference {
+                    Some(r) => mk.set(b"I".to_vec(), Object::Ref(r)),
+                    None => {
+                        mk.remove(b"I");
+                    }
+                }
+                doc.update_dict(widget.obj, |d| d.set(b"MK".to_vec(), Object::Dict(mk)))?;
+            }
+            crate::author::redraw_field_object(doc, &c.name, f.obj)?;
+        }
+        if let Some(caption) = &c.caption {
+            if f.kind != FieldKind::PushButton {
+                return Err(FormError::Invalid(format!("{} is not a push button", f.name)));
+            }
+            crate::author::set_props_object(doc, &f.name, f.obj, &crate::FieldProps { caption_all: Some(caption.clone()), ..Default::default() })?;
+        }
     }
     Ok(())
+}
+
+/// An Acrobat colour array as the RGB the look model stores, `None` for transparent (`["T"]`).
+/// Gray and CMYK convert as Acrobat's `color.convert` does. Anything else (an unknown colour
+/// space, the wrong number of components, or a component that is not a finite number between
+/// 0 and 1) is refused, and with it the script's changes.
+fn js_color(values: &[String]) -> Result<Option<[f64; 3]>, FormError> {
+    let invalid = || FormError::Invalid("JavaScript field colours must be T, G, RGB or CMYK arrays with finite components between 0 and 1".into());
+    let (space, parts) = values.split_first().ok_or_else(invalid)?;
+    let mut numbers = [0.0; 4];
+    if parts.len() > numbers.len() {
+        return Err(invalid());
+    }
+    for (slot, part) in numbers.iter_mut().zip(parts) {
+        *slot = part.trim().parse::<f64>().ok().filter(|v| v.is_finite() && (0.0..=1.0).contains(v)).ok_or_else(invalid)?;
+    }
+    match (space.as_str(), parts.len()) {
+        ("T", 0) => Ok(None),
+        ("G", 1) => Ok(Some([numbers[0]; 3])),
+        ("RGB", 3) => Ok(Some([numbers[0], numbers[1], numbers[2]])),
+        ("CMYK", 4) => {
+            let [c, m, y, k] = numbers;
+            Ok(Some([1.0 - (c + k).min(1.0), 1.0 - (m + k).min(1.0), 1.0 - (y + k).min(1.0)]))
+        }
+        _ => Err(invalid()),
+    }
 }
 
 /// Apply what a button or console script changed (values, read-only, required, visibility),
 /// then recalculate.
 pub fn apply_script_changes(doc: &mut Document, changes: &[FieldChange], scripts: &mut dyn Scripts) -> Result<(), FormError> {
-    apply_changes(doc, changes, "")?;
-    crate::recalculate_with(doc, scripts)?;
+    apply_changes(doc, changes, "", None, scripts)?;
+    // Acrobat's automatic calculation is driven by value changes. A keypad caption,
+    // position or visibility update must not execute every calculated field again.
+    if changes.iter().any(|change| change.value.is_some()) {
+        crate::recalculate_with(doc, scripts)?;
+    }
     Ok(())
 }
 
@@ -169,6 +391,9 @@ pub fn document_scripts(doc: &Document) -> Vec<String> {
     document_scripts_named(doc).into_iter().map(|(_, js)| js).collect()
 }
 
+/// Most `/Kids` entries the document JavaScript name tree walk reads in all.
+const MAX_QUEUED_KIDS: usize = 1 << 20;
+
 /// [`document_scripts`] with their names.
 pub fn document_scripts_named(doc: &Document) -> Vec<(String, String)> {
     let Some(root) = doc.root() else { return Vec::new() };
@@ -177,41 +402,70 @@ pub fn document_scripts_named(doc: &Document) -> Vec<(String, String)> {
     let Some(tree) = names.as_dict().and_then(|n| n.get(b"JavaScript")).cloned() else { return Vec::new() };
     let mut out: Vec<(String, String)> = Vec::new();
     let mut scripts = crate::script_budget();
-    // Kids stay unresolved on the stack, and each node is read once: a node listed many times,
-    // or among its own kids, must not multiply the work.
+    // Kids are indirect references (ISO 32000-2 §7.9.6), queued unresolved, each the first time
+    // it is listed: a node listed many times, or among its own kids, must not multiply the work,
+    // and the stack holds only references (a direct object there would be copied whole, once
+    // for every node listing it). Only the root may be direct. Nodes are told apart by object
+    // number, as `Document::get` finds them, so `5 0 R` and `5 1 R` are one node.
+    let mut seen: HashSet<u32> = tree.as_ref().map(|r| r.num).into_iter().collect();
+    // The `/Names` arrays read, by object number: nodes sharing one would otherwise each list
+    // all its scripts again.
+    let mut names_read: HashSet<u32> = HashSet::new();
     let mut stack = vec![tree];
-    let mut seen: HashSet<ObjRef> = HashSet::new();
     let mut visited = 0;
+    // Every `/Kids` entry read, over the whole walk. Nodes sharing one long `/Kids` array would
+    // otherwise read all of it once per node.
+    let mut queued = 0usize;
     while let Some(raw) = stack.pop() {
-        if let Object::Ref(r) = raw
-            && !seen.insert(r)
-        {
-            continue;
-        }
         visited += 1;
         if visited > 10_000 {
             break;
         }
         let node = doc.resolve(&raw);
         let Some(d) = node.as_dict() else { continue };
-        if let Some(kids) = d.get(b"Kids").map(|k| doc.resolve(k)).and_then(|k| k.as_array().cloned()) {
-            stack.extend(kids);
+        if let Some(kids) = d.get(b"Kids") {
+            in_array(doc, kids, |kids| {
+                // Past the limit nothing more is read, but the nodes already queued still are.
+                // Pushed in reverse, so the kids are read in the order listed.
+                let room = MAX_QUEUED_KIDS.saturating_sub(queued);
+                queued = queued.saturating_add(kids.len().min(room));
+                let new: Vec<ObjRef> = kids.iter().take(room).filter_map(Object::as_ref).filter(|r| seen.insert(r.num)).collect();
+                stack.extend(new.into_iter().rev().map(Object::Ref));
+            });
         }
-        if let Some(pairs) = d.get(b"Names").map(|n| doc.resolve(n)).and_then(|n| n.as_array().cloned()) {
-            for pair in pairs.chunks(2) {
-                let [k, v] = pair else { continue };
-                let key = match &*doc.resolve(k) {
-                    Object::String(s) => s.to_text(),
-                    _ => continue,
-                };
-                if let Some(js) = crate::script(doc, v, &mut scripts) {
-                    out.push((key, js));
+        if let Some(pairs) = d.get(b"Names")
+            && pairs.as_ref().is_none_or(|r| names_read.insert(r.num))
+        {
+            in_array(doc, pairs, |pairs| {
+                for pair in pairs.chunks(2) {
+                    let [k, v] = pair else { continue };
+                    let key = match &*doc.resolve(k) {
+                        Object::String(s) => s.to_text(),
+                        _ => continue,
+                    };
+                    if let Some(js) = crate::script(doc, v, &mut scripts) {
+                        out.push((key, js));
+                    }
                 }
-            }
+            });
         }
     }
     out.sort();
     out
+}
+
+/// Call `f` on the array `o` is, or refers to, read in place: resolving a direct array would
+/// copy it.
+fn in_array(doc: &Document, o: &Object, f: impl FnOnce(&[Object])) {
+    match o {
+        Object::Ref(r) => {
+            if let Some(a) = doc.get(*r).as_array() {
+                f(a);
+            }
+        }
+        Object::Array(a) => f(a),
+        _ => {}
+    }
 }
 
 /// Add (or replace) a document-level JavaScript named `name`.
