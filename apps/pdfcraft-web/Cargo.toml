@@ -13,8 +13,9 @@ workspace = true
 default = []
 # Real-time collaboration over the host bridge: `pdfcraft:session`, `session-state`,
 # `presence`, `commit`, `committed` (INTEGRATION.md §6). Off by default, like the
-# feature in `pdfcraft-ui-egui`; the cabinet's pinned build passes
-# `trunk build --release --features collab`.
+# feature in `pdfcraft-ui-egui`: a `cargo build`/`cargo test` is single-user. The
+# page build turns it on for its own asset (`index.html`, `data-cargo-features`),
+# which is what the cabinet's pinned bundle is: `trunk build --release`.
 collab = ["pdfcraft-ui-egui/collab"]
 
 [dependencies]
