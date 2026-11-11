@@ -1526,6 +1526,11 @@ pub fn erase_ink(doc: &mut Document, page: usize, index: usize, path: &[[f64; 2]
             }
         }
         if let Some(last) = s.last() {
+            // The final point is a sample too.
+            samples = samples.saturating_add(1);
+            if samples > MAX_ERASE_SAMPLES {
+                return Err(AnnotError::Invalid("the drawing is too large to erase at this eraser size".into()));
+            }
             pts.push(*last);
         }
         let mut run: Vec<[f64; 2]> = Vec::new();

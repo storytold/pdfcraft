@@ -4846,6 +4846,24 @@ fn the_eraser_densifies_within_a_total() {
     }
 }
 
+/// Each stroke's final point is a sample too: 500,000 strokes of two points at 8 samples a segment
+/// are 4,000,000 densified samples and as many final points again, past the total.
+#[test]
+fn the_eraser_counts_each_strokes_final_point() {
+    let refs = " 5 0 R".repeat(500_000);
+    let mut doc = doc_of(&[
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>".into(),
+        format!("<< /Type /Annot /Subtype /Ink /Rect [0 0 100 100] /InkList [{refs}] >>"),
+        "[0 0 8 0]".into(),
+    ]);
+    match erase_ink(&mut doc, 0, 0, &[[1.0, 1.0]], 2.0, &meta("")) {
+        Err(AnnotError::Invalid(m)) => assert!(m.contains("too large to erase"), "{m}"),
+        other => panic!("refused: {other:?}"),
+    }
+}
+
 /// A 3D annotation is PDF 1.6 and a PRC model 1.7 (ISO 32000-2 §13.6): an older document's
 /// catalog says so, and a newer one is left as it is.
 #[test]
