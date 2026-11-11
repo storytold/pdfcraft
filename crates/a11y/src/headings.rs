@@ -2,6 +2,7 @@
 //! Bookmarks from Structure turns into bookmarks.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use pdfcraft_content::Matrix;
 use pdfcraft_cos::{Dict, Document, ObjRef, Object};
@@ -75,13 +76,15 @@ impl Walker<'_> {
         depth <= MAX_DEPTH && self.visits <= MAX_VISITS && self.out.len() < MAX_HEADINGS && !matches!(k, Object::Ref(r) if !self.seen.insert(*r))
     }
 
-    fn element_of(&self, k: &Object) -> Option<(Option<ObjRef>, Dict)> {
-        let d = match k {
-            Object::Ref(r) => self.doc.get(*r).as_dict().cloned()?,
-            Object::Dict(d) => d.clone(),
+    /// The structure element `k` names, borrowed or shared: a deep copy of each level would copy
+    /// everything beneath it once per level of nesting.
+    fn element_of<'k>(&self, k: &'k Object) -> Option<(Option<ObjRef>, Held<'k>)> {
+        let held = match k {
+            Object::Ref(r) => Held::Shared(self.doc.get(*r)),
+            Object::Dict(d) => Held::Direct(d),
             _ => return None,
         };
-        d.contains(b"S").then(|| (k.as_ref(), d))
+        held.dict()?.contains(b"S").then(|| (k.as_ref(), held))
     }
 
     fn walk(&mut self, k: &Object, pg: Option<ObjRef>, sections: u8, depth: usize) {
@@ -92,7 +95,8 @@ impl Walker<'_> {
             a.iter().for_each(|x| self.walk(x, pg, sections, depth + 1));
             return;
         }
-        let Some((obj, d)) = self.element_of(k) else { return };
+        let Some((obj, held)) = self.element_of(k) else { return };
+        let Some(d) = held.dict() else { return };
         let pg = d.get(b"Pg").and_then(Object::as_ref).or(pg);
         let ty = d.name(b"S").map(|s| standard(self.doc, &self.role_map, s)).unwrap_or_default();
         let level = match ty.as_slice() {
@@ -101,7 +105,7 @@ impl Walker<'_> {
             _ => None,
         };
         if let Some(level) = level {
-            self.heading(obj, &d, pg, level, depth);
+            self.heading(obj, d, pg, level, depth);
             return;
         }
         let sections = if matches!(ty.as_slice(), b"Sect" | b"Part" | b"Art") { sections.saturating_add(1) } else { sections };
@@ -124,7 +128,8 @@ impl Walker<'_> {
                 }
             }
             _ => {
-                if let Some((_, d)) = self.element_of(k)
+                if let Some((_, held)) = self.element_of(k)
+                    && let Some(d) = held.dict()
                     && let Some(kids) = d.get(b"K")
                 {
                     self.marks(kids, d.get(b"Pg").and_then(Object::as_ref).or(pg), depth + 1, out);
@@ -192,8 +197,25 @@ impl Walker<'_> {
     }
 }
 
-fn sub(doc: &Document, d: &Dict, key: &[u8]) -> Dict {
-    d.get(key).map(|x| doc.resolve(x)).and_then(|x| x.as_dict().cloned()).unwrap_or_default()
+/// A structure element's dictionary: shared with the document, or borrowed from its parent.
+enum Held<'a> {
+    Shared(Arc<Object>),
+    Direct(&'a Dict),
+}
+
+impl Held<'_> {
+    fn dict(&self) -> Option<&Dict> {
+        match self {
+            Held::Shared(o) => o.as_dict(),
+            Held::Direct(d) => Some(d),
+        }
+    }
+}
+
+/// The resolved value of `key`, shared with the document (copying a resource dictionary per page
+/// copies every font and property list beneath it).
+fn sub(doc: &Document, d: Option<&Dict>, key: &[u8]) -> Arc<Object> {
+    d.and_then(|d| d.get(key)).map(|x| doc.resolve(x)).unwrap_or_else(|| Arc::new(Object::Null))
 }
 
 /// The text each marked-content id shows on a page (text drawn directly in the page content).
@@ -204,8 +226,9 @@ fn sub(doc: &Document, d: &Dict, key: &[u8]) -> Dict {
 /// Text-positioning operators alone don't break words: producers that place every glyph with its
 /// own `Td` (Chromium) would otherwise read as "C h a p t e r".
 pub(crate) fn mcid_texts(doc: &Document, page: &Dict) -> HashMap<i64, String> {
-    let res = sub(doc, page, b"Resources");
-    let (fonts, props) = (sub(doc, &res, b"Font"), sub(doc, &res, b"Properties"));
+    let res = sub(doc, Some(page), b"Resources");
+    let (fonts, props) = (sub(doc, res.as_dict(), b"Font"), sub(doc, res.as_dict(), b"Properties"));
+    let (fonts, props) = (fonts.as_dict(), props.as_dict());
     let mut metrics: HashMap<Vec<u8>, Metrics> = HashMap::new();
     // The id each open marked-content sequence is in: its own, else the enclosing one's.
     let mut stack: Vec<Option<i64>> = Vec::new();
@@ -227,9 +250,10 @@ pub(crate) fn mcid_texts(doc: &Document, page: &Dict) -> HashMap<i64, String> {
             b"BDC" => stack.push(
                 match op.operands.get(1) {
                     Some(Object::Dict(d)) => d.get(b"MCID").and_then(Object::as_int),
-                    Some(Object::Name(n)) => {
-                        props.get(n).map(|x| doc.resolve(x)).and_then(|x| x.as_dict().and_then(|d| d.get(b"MCID").and_then(Object::as_int)))
-                    }
+                    Some(Object::Name(n)) => props
+                        .and_then(|p| p.get(n))
+                        .map(|x| doc.resolve(x))
+                        .and_then(|x| x.as_dict().and_then(|d| d.get(b"MCID").and_then(Object::as_int))),
                     _ => None,
                 }
                 .or(id),
@@ -255,9 +279,10 @@ pub(crate) fn mcid_texts(doc: &Document, page: &Dict) -> HashMap<i64, String> {
                 gs.font = op.name(0).map(<[u8]>::to_vec);
                 if let Some(name) = op.name(0)
                     && !metrics.contains_key(name)
-                    && let Some(f) = fonts.get(name).map(|f| doc.resolve(f)).and_then(|f| f.as_dict().cloned())
+                    && let Some(f) = fonts.and_then(|f| f.get(name)).map(|f| doc.resolve(f))
+                    && let Some(f) = f.as_dict()
                 {
-                    metrics.insert(name.to_vec(), Metrics::from_dict(doc, &f));
+                    metrics.insert(name.to_vec(), Metrics::from_dict(doc, f));
                 }
             }
             b"Tc" => gs.char_spacing = op.num(0).unwrap_or(0.0),
