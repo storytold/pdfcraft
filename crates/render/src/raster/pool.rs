@@ -676,6 +676,17 @@ pub(super) fn worker(
                 // Acquisition may have waited or parsed privately after shared
                 // fallback. Retire before any render work if the watchdog gave
                 // this request to a replacement while initialization ran.
+                // Copy with formatting's document survey (once per pool) is timed as parsing is: not
+                // at all, having caps of its own; the page's time starts after it.
+                if req.kind == RequestKind::RecoveredText
+                    && let Some(pdf) = pdf
+                    && !shared.recovery.prepared()
+                {
+                    if !set_busy_stage(&shared, id, BusyStage::Parsing) {
+                        return;
+                    }
+                    shared.recovery.prepare(pdf, &worker_settings(&config, &request_cancelled, &shared.recovery));
+                }
                 let stage = if *shared_generation { BusyStage::SharedRender } else { BusyStage::Private };
                 if !set_busy_stage(&shared, id, stage) {
                     return;

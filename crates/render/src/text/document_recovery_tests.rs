@@ -151,3 +151,148 @@ fn a_recovery_scope_is_shared_by_renderers_of_the_same_bytes_only() {
     let cost = recovery_counters().since(&before);
     assert_eq!((cost.guard_decisions, cost.decisions_reused), (1, 0), "{cost:?}");
 }
+
+use super::cjk_fixture::{Doc, Font, Show};
+
+/// A document's survey, run as Copy with formatting runs it before reading page 0.
+fn surveyed(doc: &Doc) -> Arc<RecoveryDocument> {
+    let pdf = parse(doc.build());
+    let document = Arc::new(RecoveryDocument::new());
+    extract_page_recovering(&pdf, 0, &settings(Some(document.clone()))).unwrap();
+    assert!(document.prepared());
+    document
+}
+
+/// The survey counts every code a page or a form it draws shows (a form drawn twice counts
+/// twice), in a Type 0 font through `Identity-H` with an embedded program and no `/ToUnicode`
+/// stream; by the glyph id the `/CIDToGIDMap` gives a TrueType program, by CID in a CFF one.
+#[test]
+fn the_survey_counts_each_glyph_shown_across_the_document() {
+    let mut mapped = Font::truetype("ABCDEF+Mapped", 40);
+    mapped.cid_to_gid = Some((0..40).map(|cid| 39 - cid).collect());
+    let mut named = Font::truetype("ABCDEF+Named", 40);
+    named.to_unicode = true;
+    let doc = Doc {
+        fonts: vec![Font::truetype("ABCDEF+Plain", 40), mapped, Font::cff("ABCDEF+Cff", vec![5, 6, 7]), named],
+        pages: vec![
+            vec![Show::Text(0, vec![3, 3, 4]), Show::Text(1, vec![1]), Show::Text(3, vec![9])],
+            vec![Show::Form(vec![Show::Text(0, vec![3]), Show::Text(2, vec![5, 7])], 2)],
+        ],
+    };
+    let before = recovery_counters();
+    let document = surveyed(&doc);
+    let cost = recovery_counters().since(&before);
+    assert_eq!(
+        document.surveyed_fonts(),
+        vec![(vec![(3, 4), (4, 1)], None), (vec![(5, 2), (7, 2)], None), (vec![(38, 1)], None)],
+        "the font with a /ToUnicode stream is not counted"
+    );
+    assert_eq!((cost.survey_pages, cost.survey_glyphs), (2, 10), "{cost:?}");
+
+    // Read again (another page, the same document), nothing is surveyed twice.
+    let pdf = parse(doc.build());
+    let before = recovery_counters();
+    extract_page_recovering(&pdf, 1, &settings(Some(document.clone()))).unwrap();
+    assert_eq!(recovery_counters().since(&before).survey_pages, 0);
+}
+
+/// Fonts with the same `/BaseFont` after the subset tag, the same glyph count and the same kind
+/// of program form a group whose counts are added; a font differing in any of them is alone,
+/// and so is a font that showed nothing.
+#[test]
+fn the_survey_groups_subsets_of_one_font() {
+    let doc = Doc {
+        fonts: vec![
+            Font::truetype("AAAAAA+Kai", 50),
+            Font::truetype("BBBBBB+Kai", 50),
+            Font::truetype("CCCCCC+Kai", 51),
+            Font::truetype("DDDDDD+Hei", 50),
+            Font::cff("EEEEEE+Kai", (1..50).collect()),
+            Font::truetype("FFFFFF+Kai", 50),
+        ],
+        pages: vec![vec![
+            Show::Text(0, vec![10, 11]),
+            Show::Text(1, vec![11, 12]),
+            Show::Text(2, vec![13]),
+            Show::Text(3, vec![14]),
+            Show::Text(4, vec![15]),
+        ]],
+    };
+    let document = surveyed(&doc);
+    let group = Some((2, vec![(10, 1), (11, 2), (12, 1)]));
+    assert_eq!(
+        document.surveyed_fonts(),
+        vec![
+            (vec![(10, 1), (11, 1)], group.clone()),
+            (vec![(11, 1), (12, 1)], group),
+            (vec![(13, 1)], None),
+            (vec![(14, 1)], None),
+            (vec![(15, 1)], None),
+        ]
+    );
+}
+
+/// The survey reads the first 400 pages: a font shown on page 401 only has no evidence, one
+/// shown on page 400 has.
+#[test]
+fn the_survey_reads_the_first_400_pages() {
+    let mut pages = vec![Vec::new(); 401];
+    pages[399] = vec![Show::Text(0, vec![7])];
+    pages[400] = vec![Show::Text(1, vec![8])];
+    let doc = Doc { fonts: vec![Font::truetype("ABCDEF+Early", 20), Font::truetype("ABCDEF+Late", 20)], pages };
+    let before = recovery_counters();
+    let document = surveyed(&doc);
+    assert_eq!(recovery_counters().since(&before).survey_pages, 400);
+    assert_eq!(document.surveyed_fonts(), vec![(vec![(7, 1)], None)]);
+}
+
+/// Past a cap the survey gives up and the document has no evidence at all, every time it is
+/// read: counts, not time, decide.
+#[test]
+fn a_survey_past_its_cap_leaves_the_document_without_evidence() {
+    use hayro::hayro_interpret::font::test_hooks::set_survey_glyph_cap;
+    let doc = Doc { fonts: vec![Font::truetype("ABCDEF+Kai", 20)], pages: vec![vec![Show::Text(0, vec![1, 2, 3, 4])]] };
+    set_survey_glyph_cap(Some(4));
+    let within = surveyed(&doc);
+    set_survey_glyph_cap(Some(3));
+    let past = surveyed(&doc);
+    set_survey_glyph_cap(None);
+    assert!(!within.survey_over_cap());
+    assert_eq!(within.surveyed_fonts().len(), 1);
+    assert!(past.survey_over_cap());
+    assert!(past.surveyed_fonts().is_empty());
+}
+
+/// A cancelled read keeps nothing: the next read surveys the document.
+#[test]
+fn a_cancelled_survey_keeps_nothing() {
+    let pdf = parse(Doc { fonts: vec![Font::truetype("ABCDEF+Kai", 20)], pages: vec![vec![Show::Text(0, vec![1])]] }.build());
+    let document = Arc::new(RecoveryDocument::new());
+    let cancelled = InterpreterSettings { cancelled: Some(Arc::new(std::sync::atomic::AtomicBool::new(true))), ..settings(Some(document.clone())) };
+    document.prepare(&pdf, &cancelled);
+    assert!(!document.prepared());
+    document.prepare(&pdf, &settings(Some(document.clone())));
+    assert_eq!(document.surveyed_fonts(), vec![(vec![(1, 1)], None)]);
+}
+
+/// A document without a font the survey counts (here a font with a `/ToUnicode` map, one
+/// through another CMap, one of an Adobe collection and one without a program) costs no read
+/// of its content.
+#[test]
+fn a_document_without_such_fonts_is_not_read() {
+    let mut named = Font::truetype("ABCDEF+Named", 20);
+    named.to_unicode = true;
+    let mut cmap = Font::truetype("ABCDEF+Cmap", 20);
+    cmap.encoding = "UniCNS-UCS2-H";
+    let mut adobe = Font::truetype("ABCDEF+Adobe", 20);
+    adobe.ordering = "CNS1";
+    adobe.encoding = "Identity-H";
+    let mut bare = Font::truetype("Bare", 20);
+    bare.program = super::cjk_fixture::Program::None;
+    let doc = Doc { fonts: vec![named, cmap, adobe, bare], pages: vec![vec![Show::Text(0, vec![1]), Show::Text(1, vec![1])]] };
+    let before = recovery_counters();
+    let document = surveyed(&doc);
+    let cost = recovery_counters().since(&before);
+    assert_eq!(cost.survey_pages, 0, "{cost:?}");
+    assert!(document.surveyed_fonts().is_empty());
+}

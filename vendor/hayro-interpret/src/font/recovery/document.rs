@@ -6,13 +6,21 @@
 //! ([`crate::InterpreterSettings::recovery_document`]), keeps each font's decisions for the whole
 //! document instead: a font is decided once, whichever page asks first and on whichever thread.
 //!
-//! The guards are a function of the font alone (its dictionary and program), so a decision kept
-//! here reads every page the same as a decision made on that page would; the key is the font
-//! dictionary's [`crate::CacheKey`], as the interpreter's own font cache uses.
+//! It also holds the document's evidence for rules that read more than one font's own facts:
+//! how often each glyph of a font is shown across the document, and the fonts that are subsets
+//! of one font ([`FontUsage`], from the survey, `super::survey`). [`RecoveryDocument::prepare`]
+//! surveys the document once, before a page's fonts are decided, so every decision sees the
+//! whole document's evidence whichever page asks first.
+//!
+//! The guards are a function of the font and that evidence, so a decision kept here reads every
+//! page the same as a decision made on that page would; the key is the font dictionary's
+//! [`crate::CacheKey`], as the interpreter's own font cache uses.
 
 use super::{Counter, Guards, count};
+use crate::InterpreterSettings;
+use hayro_syntax::Pdf;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 /// Most fonts whose decisions one document keeps: a document with more decides each further
 /// font on every page that shows it, as without a [`RecoveryDocument`], reading the same.
@@ -25,6 +33,69 @@ const MAX_DOCUMENT_FONTS: usize = 1 << 14;
 #[derive(Default)]
 pub struct RecoveryDocument {
     decisions: Mutex<HashMap<u128, Arc<Guards>>>,
+    /// The survey's evidence, once [`Self::prepare`] has read the document.
+    evidence: OnceLock<Evidence>,
+    /// Held while one thread surveys, so the others wait for its evidence instead of
+    /// surveying too.
+    surveying: Mutex<()>,
+}
+
+/// What the survey found in a document.
+#[derive(Debug)]
+pub(crate) enum Evidence {
+    /// The fonts it counted, by their dictionaries' cache keys.
+    Counted(HashMap<u128, Arc<FontUsage>>),
+    /// The survey passed one of its caps: no font has evidence in this document.
+    OverCap,
+}
+
+/// How often a font's glyphs are shown across the document, by the number a rule reads for
+/// each (the glyph id of a TrueType or OpenType program, the CID of a CID-keyed CFF one).
+#[derive(Debug)]
+#[allow(
+    dead_code,
+    reason = "read by the rules whose evidence is the document's text, and by tests"
+)]
+pub(crate) struct FontUsage {
+    /// (number, times shown), in number order.
+    pub(crate) numbers: Vec<(u32, u64)>,
+    /// The font's group: every font of the document with its `/BaseFont` (without the subset
+    /// tag), glyph count and kind of program, when there are two or more.
+    pub(crate) group: Option<Arc<UsageGroup>>,
+}
+
+/// Fonts of one document that are subsets of one font (`survey::PoolingKey`), their usage
+/// added together.
+#[allow(
+    dead_code,
+    reason = "read by the rules whose evidence is the document's text, and by tests"
+)]
+pub(crate) struct UsageGroup {
+    /// How many fonts the group has.
+    pub(crate) members: usize,
+    /// The members' (number, times shown) added together, in number order.
+    pub(crate) numbers: Vec<(u32, u64)>,
+    /// A rule's decision for the group as a whole, worked out once for all its members.
+    pub(crate) decision: OnceLock<Arc<dyn std::any::Any + Send + Sync>>,
+}
+
+impl UsageGroup {
+    pub(crate) fn new(members: usize, numbers: Vec<(u32, u64)>) -> Self {
+        Self {
+            members,
+            numbers,
+            decision: OnceLock::new(),
+        }
+    }
+}
+
+impl std::fmt::Debug for UsageGroup {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("UsageGroup")
+            .field("members", &self.members)
+            .field("numbers", &self.numbers.len())
+            .finish()
+    }
 }
 
 impl std::fmt::Debug for RecoveryDocument {
@@ -38,8 +109,7 @@ impl std::fmt::Debug for RecoveryDocument {
 /// `m` locked; a lock poisoned by a panic elsewhere still holds whole decisions (each is
 /// inserted complete), so it is taken over.
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
-    m.lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
+    m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 impl RecoveryDocument {
@@ -48,10 +118,67 @@ impl RecoveryDocument {
         Self::default()
     }
 
+    /// Survey `pdf` for the rules that read the whole document's evidence, unless that is
+    /// done: once per document, before any of its fonts is decided (`extract_page_recovering`
+    /// calls it first). Bounded by counts, not time (see `recovery::survey`); a render pool runs
+    /// it outside a page's time limit. A read cancelled through `settings.cancelled` keeps
+    /// nothing, and the next call surveys again.
+    pub fn prepare(&self, pdf: &Pdf, settings: &InterpreterSettings) {
+        if self.evidence.get().is_some() {
+            return;
+        }
+        let _surveying = lock(&self.surveying);
+        if self.evidence.get().is_some() {
+            return;
+        }
+        if let Some(evidence) = super::survey::survey(pdf, settings) {
+            let _ = self.evidence.set(evidence);
+        }
+    }
+
+    /// Whether [`Self::prepare`] has surveyed the document.
+    pub fn prepared(&self) -> bool {
+        self.evidence.get().is_some()
+    }
+
+    /// The survey's evidence for the font keyed `key`: none before [`Self::prepare`], for a
+    /// font it didn't count, or in a document past the survey's caps.
+    pub(crate) fn usage(&self, key: u128) -> Option<Arc<FontUsage>> {
+        match self.evidence.get()? {
+            Evidence::Counted(fonts) => fonts.get(&key).cloned(),
+            Evidence::OverCap => None,
+        }
+    }
+
+    /// Test hook: what the survey counted, font by font in a stable order: each font's
+    /// (number, times shown) and, for a font in a group, the group's size and pooled counts.
+    #[cfg(feature = "test-counters")]
+    #[allow(clippy::type_complexity, reason = "a test's view of the evidence")]
+    pub fn surveyed_fonts(&self) -> Vec<(Vec<(u32, u64)>, Option<(usize, Vec<(u32, u64)>)>)> {
+        let Some(Evidence::Counted(fonts)) = self.evidence.get() else {
+            return Vec::new();
+        };
+        let mut out: Vec<_> = fonts
+            .values()
+            .map(|u| {
+                let group = u.group.as_ref().map(|g| (g.members, g.numbers.clone()));
+                (u.numbers.clone(), group)
+            })
+            .collect();
+        out.sort();
+        out
+    }
+
+    /// Whether the survey passed one of its caps: no font has evidence in this document.
+    pub fn survey_over_cap(&self) -> bool {
+        matches!(self.evidence.get(), Some(Evidence::OverCap))
+    }
+
     /// The decisions for the font keyed `key`: the document's, or `decide`'s, kept for the
-    /// document while it has room ([`MAX_DOCUMENT_FONTS`]). Deciding runs without the lock, so
-    /// two threads may decide one font at once; the decisions are the same, and the first kept
-    /// is the one every later page reads.
+    /// document while it has room ([`MAX_DOCUMENT_FONTS`]) and once it is surveyed (a decision
+    /// made before the evidence is ready is the page's alone). Deciding runs without the lock,
+    /// so two threads may decide one font at once; the decisions are the same, and the first
+    /// kept is the one every later page reads.
     pub(crate) fn guards(&self, key: u128, decide: impl FnOnce() -> Guards) -> Arc<Guards> {
         if let Some(kept) = lock(&self.decisions).get(&key) {
             count(Counter::DecisionReused);
@@ -62,7 +189,7 @@ impl RecoveryDocument {
         if let Some(kept) = decisions.get(&key) {
             return kept.clone();
         }
-        if decisions.len() < MAX_DOCUMENT_FONTS {
+        if decisions.len() < MAX_DOCUMENT_FONTS && self.prepared() {
             decisions.insert(key, decided.clone());
         }
         decided

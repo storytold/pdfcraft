@@ -23,6 +23,7 @@
 mod candidate;
 mod document;
 mod orders;
+mod survey;
 #[allow(
     dead_code,
     reason = "the width evidence is read by the standard-order rules that build on this layer"
@@ -90,6 +91,10 @@ pub(crate) enum Counter {
     /// A font's guards taken from its document's decisions ([`RecoveryDocument`]) instead of
     /// decided again.
     DecisionReused,
+    /// A page whose content the document survey read ([`RecoveryDocument::prepare`]).
+    SurveyPage,
+    /// A glyph the document survey counted.
+    SurveyGlyph,
 }
 
 /// Counts `counter` on this thread (only with the `test-counters` feature).
@@ -106,6 +111,8 @@ pub(crate) fn count(counter: Counter) {
             Counter::ProgramWalk => &mut n.program_walks,
             Counter::Type3KeyHash => &mut n.type3_key_hashes,
             Counter::DecisionReused => &mut n.decisions_reused,
+            Counter::SurveyPage => &mut n.survey_pages,
+            Counter::SurveyGlyph => &mut n.survey_glyphs,
         };
         *field = field.saturating_add(1);
         c.set(n);
@@ -134,6 +141,10 @@ pub struct RecoveryCounters {
     /// Fonts whose guards came from their document's decisions ([`RecoveryDocument`]), not
     /// decided again.
     pub decisions_reused: usize,
+    /// Pages the document survey read.
+    pub survey_pages: usize,
+    /// Glyphs the document survey counted.
+    pub survey_glyphs: usize,
 }
 
 #[cfg(feature = "test-counters")]
@@ -152,6 +163,8 @@ impl RecoveryCounters {
             program_walks: self.program_walks.saturating_sub(before.program_walks),
             type3_key_hashes: self.type3_key_hashes.saturating_sub(before.type3_key_hashes),
             decisions_reused: self.decisions_reused.saturating_sub(before.decisions_reused),
+            survey_pages: self.survey_pages.saturating_sub(before.survey_pages),
+            survey_glyphs: self.survey_glyphs.saturating_sub(before.survey_glyphs),
         }
     }
 }
@@ -167,6 +180,8 @@ thread_local! {
             program_walks: 0,
             type3_key_hashes: 0,
             decisions_reused: 0,
+            survey_pages: 0,
+            survey_glyphs: 0,
         })
     };
 }
@@ -195,6 +210,12 @@ pub mod test_hooks {
     /// The character the CFF standard string `sid` names.
     pub fn standard_string_char(sid: u32) -> Option<char> {
         super::orders::standard_string_char(sid)
+    }
+
+    /// Caps the glyphs the document surveys run on this thread may count (`None`: the usual
+    /// cap), so a test can pass it with a small document.
+    pub fn set_survey_glyph_cap(cap: Option<u64>) {
+        super::survey::GLYPH_CAP.with(|c| c.set(cap));
     }
 
     /// The candidate policy's choice among `candidates`.
@@ -327,6 +348,15 @@ pub(crate) struct FontFacts<'a> {
         reason = "read by the rules that read a Type 0 font's glyph ids in a standard order"
     )]
     pub(crate) program_glyphs: Option<u32>,
+    /// How often the font's glyphs are shown across its document, and its group of subsets of
+    /// one font ([`RecoveryDocument`]'s survey): for the guards of rules whose evidence is the
+    /// document's text. `None` without a surveyed document, or for a font the survey doesn't
+    /// count.
+    #[allow(
+        dead_code,
+        reason = "read by the rules whose evidence is the document's text"
+    )]
+    pub(crate) usage: Option<Arc<document::FontUsage>>,
 }
 
 impl FontFacts<'_> {
@@ -347,6 +377,7 @@ impl FontFacts<'_> {
             id_text: None,
             identity_encoding: false,
             program_glyphs: None,
+            usage: None,
         }
     }
 }
@@ -572,7 +603,11 @@ impl RecoveryCache {
             facts()
         };
         let guards = self.guards.get_or_init(|| match self.document.get() {
-            Some((document, key)) => document.guards(*key, || Guards::decide(&facts())),
+            Some((document, key)) => document.guards(*key, || {
+                let mut font = facts();
+                font.usage = document.usage(*key);
+                Guards::decide(&font)
+            }),
             None => Arc::new(Guards::decide(&facts())),
         });
         if guards.none() {

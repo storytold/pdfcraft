@@ -539,6 +539,8 @@ use layout::{is_rtl, union};
 use order::{Run, Scratch, Seg, collide, restarts_run};
 
 #[cfg(test)]
+mod cjk_fixture;
+#[cfg(test)]
 mod document_recovery_tests;
 #[cfg(test)]
 mod recovery_tests;
