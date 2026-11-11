@@ -27,8 +27,8 @@ ends at the first `EI` after `ID`. Where it stops is worked out exactly with no 
 ASCIIHex or ASCII85 filter and a layout this parser knows (a device colour space, an Indexed array
 written in the image, or an image mask). Behind ASCIIHex or ASCII85 and then only Flate (zlib)
 or RunLength, with such a layout and no decode parameters, it is worked out by decoding: the text is
-decoded and the inner filter read until it has the samples or reaches its own end (inflating at
-most 64 MiB for a stream), and an `EI` before the renderer's counts only past that stop.
+decoded and the inner filter read until it has the samples or reaches its own end (decoding and
+inflating at most 64 MiB for a stream), and an `EI` before the renderer's counts only past that stop.
 Otherwise the image counts unless no `EI` comes before the renderer's and, behind ASCIIHex or
 ASCII85, the end-of-data marker does. Without a filter, that misses a
 reader that reads past the renderer's `EI` by a layout this parser doesn't know: a colour space

@@ -901,3 +901,24 @@ fn inflating_a_streams_inline_images_stops_at_its_allowance() {
     let both = format!("{}{second}Q", image("8192 /H 8192", &large));
     assert_eq!(parse(both.as_bytes()).ambiguous_images, 2, "after an image that spends the allowance");
 }
+
+/// What decoding a stream's inline images may give counts their decoded text too, not only what
+/// inflating gives: an image whose ASCII85 text decodes past 64 MiB (`z` gives four zero bytes a
+/// character, here after its RunLength data's end) isn't decoded to tell where a reader stops, and
+/// its earlier `EI` counts; one whose text decodes to exactly 64 MiB is decoded, and doesn't count.
+/// The allowance is the stream's, spent by each image in turn.
+#[test]
+fn decoding_a_streams_inline_images_counts_their_text_too() {
+    const EI: [u8; 4] = [0x71, 0x79, 0x7d, 0xec];
+    // A literal run of seven samples holding `EI!!!`, the end-of-data byte, and three bytes after
+    // it: 12 bytes, then `zs` groups of zeros.
+    let data = [&[6, 9, 9, 9][..], &EI, &[128, 0, 0, 0]].concat();
+    let image = |zs: usize| format!("BI /W 7 /H 1 /CS /G /BPC 8 /F [/A85 /RL] ID {}{}~> EI Q", a85(&data), "z".repeat(zs));
+    let exactly = ((64 << 20) - data.len()) / 4;
+    assert_eq!(parse(image(4).as_bytes()).ambiguous_images, 0, "well within the allowance");
+    assert_eq!(parse(image(exactly).as_bytes()).ambiguous_images, 0, "exactly the allowance");
+    assert_eq!(parse(image(exactly + 1).as_bytes()).ambiguous_images, 1, "past it");
+    // 60 MiB of the first image's text leave the second too little for its 8 MiB.
+    let two = format!("{} {}", image((60 << 20) / 4), image((8 << 20) / 4));
+    assert_eq!(parse(two.as_bytes()).ambiguous_images, 1, "the second image, past what the first left");
+}

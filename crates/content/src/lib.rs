@@ -402,18 +402,19 @@ impl NextOf {
 }
 
 /// The searches a stream's inline images share: for `EI`, and for the ASCIIHex and ASCII85
-/// end-of-data markers; and what inflating their data has given ([`MAX_INFLATED`]).
+/// end-of-data markers; and what decoding their data has given ([`MAX_IMAGE_DECODING`]).
 #[derive(Default)]
 pub(crate) struct ImageEnds {
     ei: NextOf,
     hex_end: NextOf,
     a85_end: NextOf,
-    inflated: usize,
+    decoded: usize,
 }
 
-/// What inflating the data of a stream's inline images may give in all, to tell where a reader
-/// that decodes them stops ([`chain_stop`]). Past it, where it stops isn't told.
-const MAX_INFLATED: usize = 64 << 20;
+/// What decoding the data of a stream's inline images may give in all, their ASCIIHex or ASCII85
+/// text and what inflating that gives, to tell where a reader that decodes them stops
+/// ([`chain_stop`]). Past it, where it stops isn't told.
+const MAX_IMAGE_DECODING: usize = 64 << 20;
 
 /// An inline image's outer filter, as it decides where a decoding reader stops reading the data.
 #[derive(Clone, Copy, PartialEq)]
@@ -578,7 +579,8 @@ fn decoder_stop(data: &[u8], begin: usize, ei: usize, bytes: usize, outer: Outer
 /// Where a reader decoding an inline image's data through ASCIIHex or ASCII85 (`outer`, its
 /// marker before `ei`) and one filter more stops reading it: after the text that gives the least
 /// the inner filter takes in to have the samples the image's layout needs, or to reach its own
-/// end. Told for Flate (zlib, inflated within [`MAX_INFLATED`] for the stream) and RunLength.
+/// end. Told for Flate (zlib) and RunLength, the text decoded and inflated within
+/// [`MAX_IMAGE_DECODING`] for the stream.
 /// `None` for a filter alone or another one (DCT among them: a JPEG decoder may stop before its
 /// end-of-image marker, at rows it doesn't need or a marker it refuses, where reading the
 /// markers doesn't tell), for an image with decode parameters or without a layout
@@ -598,11 +600,12 @@ fn chain_stop(data: &[u8], begin: usize, ei: usize, dict: &Dict, outer: Outer, s
     let Some(Object::Array(filters)) = dict.get(b"Filter").or_else(|| dict.get(b"F")) else { return None };
     let [_, inner] = filters.as_slice() else { return None };
     let samples = layout_bytes(dict)?;
-    let decoded = outer_decoded(data.get(begin..ei)?, outer)?;
+    let decoded = outer_decoded(data.get(begin..ei)?, outer, MAX_IMAGE_DECODING.saturating_sub(scan.decoded))?;
+    scan.decoded = scan.decoded.saturating_add(decoded.len());
     let taken = match inner.as_name()? {
         b"FlateDecode" | b"Fl" => {
-            let (taken, made) = pdfcraft_filters::flate_input_for(&decoded, samples, MAX_INFLATED.saturating_sub(scan.inflated));
-            scan.inflated = scan.inflated.saturating_add(made);
+            let (taken, made) = pdfcraft_filters::flate_input_for(&decoded, samples, MAX_IMAGE_DECODING.saturating_sub(scan.decoded));
+            scan.decoded = scan.decoded.saturating_add(made);
             taken?
         }
         b"RunLengthDecode" | b"RL" => run_length_input(&decoded, samples),
@@ -685,17 +688,19 @@ fn group(outer: Outer, digits: &[u32; 5], count: usize, last: bool) -> Option<(u
 }
 
 /// The bytes ASCIIHex or ASCII85 `text` gives up to its end-of-data marker. `None` where it holds
-/// a group no reader agrees on, or no marker.
-fn outer_decoded(text: &[u8], outer: Outer) -> Option<Vec<u8>> {
+/// a group no reader agrees on, or no marker, or gives more than `max` bytes (ASCII85 gives four a
+/// character for `z`).
+fn outer_decoded(text: &[u8], outer: Outer, max: usize) -> Option<Vec<u8>> {
     let mut out = Vec::new();
     for step in outer_groups(text, outer) {
         let (step, _, bytes) = step?;
-        match step {
-            Group::Bytes(n) => out.extend_from_slice(bytes.get(..n)?),
-            Group::End(n) => {
-                out.extend_from_slice(bytes.get(..n)?);
-                return Some(out);
-            }
+        let (Group::Bytes(n) | Group::End(n)) = step;
+        if out.len().saturating_add(n) > max {
+            return None;
+        }
+        out.extend_from_slice(bytes.get(..n)?);
+        if let Group::End(_) = step {
+            return Some(out);
         }
     }
     None
