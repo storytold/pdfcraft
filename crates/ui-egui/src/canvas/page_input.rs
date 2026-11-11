@@ -986,6 +986,9 @@ pub(super) fn page_overlays(ui: &mut egui::Ui, view: &mut DocView, frame: &mut P
         && let Some(l) = info.links.iter().find(|l| l.page == i && l.index == index)
     {
         frame.out.clicked_link = Some(l.target.clone());
+        if matches!(l.target, LinkTarget::JavaScript(_)) {
+            frame.out.javascript_link = Some((l.page, l.index));
+        }
     }
     // A web or email address written as plain text (#4207): the same click as a link annotation,
     // and the same check and confirmation on opening.
