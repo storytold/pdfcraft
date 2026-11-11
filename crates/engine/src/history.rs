@@ -113,8 +113,24 @@ pub(crate) fn scope_of(edit: &Edit) -> Scope {
     }
 }
 
-/// One undo/redo step: its label, the document state, its passwords, and what it changed.
-pub(crate) type Snapshot = (Label, pdfcraft_cos::Document, Keys, Scope);
+/// The original unlaid-out shell of a dynamic XFA form opened with Reader usage rights
+/// (`/Perms /UR3` or `/UR`, #4309). While edits only change XFA form data or script state,
+/// saving appends a datasets/form revision to [`Self::bytes`] instead of writing PdfCraft's
+/// layout revision, keeping the usage rights and any signature on the shell valid.
+#[derive(Clone)]
+pub(crate) struct UrShell {
+    /// The original shell bytes (updated on each usage-rights-preserving save).
+    pub(crate) bytes: Arc<Vec<u8>>,
+    /// Page count of the unlaid-out shell (`check_save` checks the saved shell against this).
+    pub(crate) pages: usize,
+    /// Whether opening scripts changed the form on open, so saving even with no user edits
+    /// writes those changes into [`Self::bytes`].
+    pub(crate) open_modified: bool,
+}
+
+/// One undo/redo step: its label, the document state, its passwords, what it changed, and
+/// whether only XFA data/script state had changed up to that step.
+pub(crate) type Snapshot = (Label, pdfcraft_cos::Document, Keys, Scope, bool);
 
 /// Editing state of a document (absent when the document cannot be edited yet, e.g. encrypted).
 #[derive(Clone)]
@@ -129,6 +145,10 @@ pub(crate) struct Editor {
     /// extract, create) or one restored from recovery. It stays unsaved until a save, whatever
     /// undo brings back, or closing it would lose the whole document without asking.
     pub(crate) unsaved_file: bool,
+    /// Unlaid-out shell kept for usage-rights-preserving saves (#4309).
+    pub(crate) ur_shell: Option<UrShell>,
+    /// Whether every edit since open/last save only changed XFA data or `<form>` script state.
+    pub(crate) ur_data_only: bool,
     pub(crate) undo: Vec<Snapshot>,
     pub(crate) redo: Vec<Snapshot>,
     pub(crate) keys: Keys,

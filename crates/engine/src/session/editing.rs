@@ -187,14 +187,16 @@ impl Session {
             }
         }
         // XFA forms keep their values in the datasets packet too, for Adobe's viewers.
+        let mut sync_warnings = Vec::new();
         let mut xfa_notes = Vec::new();
         if is_xfa && matches!(scope_of(&edit), Scope::Form | Scope::Full | Scope::Content) {
             let (tpl, datasets) = (cx.xfa.as_deref(), &mut cx.xfa_datasets);
-            xfa_notes = guard(|| xfa_sync_datasets(&mut next, tpl, datasets))
+            sync_warnings = guard(|| xfa_sync_datasets(&mut next, tpl, datasets))
                 .unwrap_or_else(|m| Err(format!("writing the XFA data failed unexpectedly ({m})")))
                 .map_err(EditError::Write)?;
+            xfa_notes.clone_from(&sync_warnings);
             // Rebuilding from stale data would discard accepted widget values.
-            if xfa_notes.is_empty() {
+            if sync_warnings.is_empty() {
                 let reflow = guard(|| xfa::relayout_changed_text(&mut next, tpl, &doc.form))
                     .unwrap_or_else(|m| Err(format!("laying out the XFA text failed unexpectedly ({m})")))
                     .map_err(EditError::Write)?;
@@ -225,10 +227,14 @@ impl Session {
         if cx.redaction_identification != pdfcraft_redact::Identification::default() {
             notices.push(EditNotice::RedactionIdentification(cx.redaction_identification));
         }
+        let next_ur_data_only = editor.ur_shell.is_some()
+            && editor.ur_data_only
+            && crate::keeps_xfa_usage_rights(&edit, &editor.cos, &next, &sync_warnings, &cx.xfa_out.errors);
         let previous = std::mem::replace(&mut editor.cos, next);
         let keys = keys_after(&edit).unwrap_or_else(|| editor.keys.clone());
         let previous_keys = std::mem::replace(&mut editor.keys, keys);
-        editor.undo.push((label, previous, previous_keys, scope));
+        let previous_ur_data_only = std::mem::replace(&mut editor.ur_data_only, next_ur_data_only);
+        editor.undo.push((label, previous, previous_keys, scope, previous_ur_data_only));
         if editor.undo.len() > MAX_UNDO {
             editor.undo.remove(0);
         }
@@ -239,15 +245,17 @@ impl Session {
         if let Err(e) = refreshed {
             // Roll back: the edit produced something we cannot display.
             if let Some(ed) = doc.editor.as_mut()
-                && let Some((_, prev, keys, _)) = ed.undo.pop()
+                && let Some((_, prev, keys, _, ur_data_only)) = ed.undo.pop()
             {
                 ed.cos = prev;
                 ed.keys = keys;
+                ed.ur_data_only = ur_data_only;
             }
             Self::adopt_keys(doc);
             if !matches!(guard(|| Self::refresh(doc)), Ok(Ok(()))) {
                 Self::show_released(doc);
             }
+            crate::sync_usage_rights_warning(doc);
             return Err(e);
         }
         doc.dirty = true;
@@ -266,6 +274,7 @@ impl Session {
         note_warnings(&mut doc.xfa_warnings, &xfa_notes);
         let notes = doc.xfa_warnings.clone();
         note_warnings(&mut doc.info.warnings, &notes);
+        crate::sync_usage_rights_warning(doc);
         if let Some(js) = cx.js {
             doc.js_output.append(js.output);
         }
@@ -277,28 +286,32 @@ impl Session {
     pub fn undo(&mut self, id: DocId) -> Result<Label, EditError> {
         let doc = self.doc_mut(id)?;
         let editor = doc.editor.as_mut().ok_or(EditError::NothingToUndo)?;
-        let (label, prev, keys, scope) = editor.undo.pop().ok_or(EditError::NothingToUndo)?;
+        let (label, prev, keys, scope, ur_data_only) = editor.undo.pop().ok_or(EditError::NothingToUndo)?;
         let current = std::mem::replace(&mut editor.cos, prev);
         let current_keys = std::mem::replace(&mut editor.keys, keys);
-        editor.redo.push((label.clone(), current, current_keys, scope));
+        let current_ur_data_only = std::mem::replace(&mut editor.ur_data_only, ur_data_only);
+        editor.redo.push((label.clone(), current, current_keys, scope, current_ur_data_only));
         Self::adopt_keys(doc);
         let refreshed = guard(|| Self::refresh_scoped(doc, scope)).unwrap_or_else(|m| Err(EditError::Reopen(m)));
         if let Err(e) = refreshed {
             if let Some(ed) = doc.editor.as_mut()
-                && let Some((label, current, current_keys, scope)) = ed.redo.pop()
+                && let Some((label, current, current_keys, scope, current_ur_data_only)) = ed.redo.pop()
             {
                 let prev = std::mem::replace(&mut ed.cos, current);
                 let keys = std::mem::replace(&mut ed.keys, current_keys);
-                ed.undo.push((label, prev, keys, scope));
+                let ur_data_only = std::mem::replace(&mut ed.ur_data_only, current_ur_data_only);
+                ed.undo.push((label, prev, keys, scope, ur_data_only));
             }
             Self::adopt_keys(doc);
             if !matches!(guard(|| Self::refresh(doc)), Ok(Ok(()))) {
                 Self::show_released(doc);
             }
+            crate::sync_usage_rights_warning(doc);
             return Err(e);
         }
         doc.edit_notices.clear();
         Self::sync_dirty(doc);
+        crate::sync_usage_rights_warning(doc);
         // The change whose exit ran is undone (or redone without its scripts): skip no exit.
         doc.xfa_exited.clear();
         doc.generation += 1;
@@ -309,28 +322,32 @@ impl Session {
     pub fn redo(&mut self, id: DocId) -> Result<Label, EditError> {
         let doc = self.doc_mut(id)?;
         let editor = doc.editor.as_mut().ok_or(EditError::NothingToRedo)?;
-        let (label, next, keys, scope) = editor.redo.pop().ok_or(EditError::NothingToRedo)?;
+        let (label, next, keys, scope, ur_data_only) = editor.redo.pop().ok_or(EditError::NothingToRedo)?;
         let current = std::mem::replace(&mut editor.cos, next);
         let current_keys = std::mem::replace(&mut editor.keys, keys);
-        editor.undo.push((label.clone(), current, current_keys, scope));
+        let current_ur_data_only = std::mem::replace(&mut editor.ur_data_only, ur_data_only);
+        editor.undo.push((label.clone(), current, current_keys, scope, current_ur_data_only));
         Self::adopt_keys(doc);
         let refreshed = guard(|| Self::refresh_scoped(doc, scope)).unwrap_or_else(|m| Err(EditError::Reopen(m)));
         if let Err(e) = refreshed {
             if let Some(ed) = doc.editor.as_mut()
-                && let Some((label, current, current_keys, scope)) = ed.undo.pop()
+                && let Some((label, current, current_keys, scope, current_ur_data_only)) = ed.undo.pop()
             {
                 let next = std::mem::replace(&mut ed.cos, current);
                 let keys = std::mem::replace(&mut ed.keys, current_keys);
-                ed.redo.push((label, next, keys, scope));
+                let ur_data_only = std::mem::replace(&mut ed.ur_data_only, current_ur_data_only);
+                ed.redo.push((label, next, keys, scope, ur_data_only));
             }
             Self::adopt_keys(doc);
             if !matches!(guard(|| Self::refresh(doc)), Ok(Ok(()))) {
                 Self::show_released(doc);
             }
+            crate::sync_usage_rights_warning(doc);
             return Err(e);
         }
         doc.edit_notices.clear();
         Self::sync_dirty(doc);
+        crate::sync_usage_rights_warning(doc);
         // The change whose exit ran is undone (or redone without its scripts): skip no exit.
         doc.xfa_exited.clear();
         doc.generation += 1;

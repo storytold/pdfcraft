@@ -7935,8 +7935,8 @@ fn round_xfa_check_buttons_open_drawn_round() {
     }
 }
 
-/// A dynamic XFA form with usage rights is saved without them once laid out, as the layout voids
-/// them, with a note saying so.
+/// A dynamic XFA form with usage rights keeps them when only its data is filled in, and falls
+/// back to saving the laid-out form without them (with a note) on any other edit or full rewrite.
 #[test]
 fn a_dynamic_xfa_form_is_saved_without_the_usage_rights_its_layout_voided() {
     let xdp = pdfcraft_xfa::fixtures::template(3);
@@ -7945,13 +7945,32 @@ fn a_dynamic_xfa_form_is_saved_without_the_usage_rights_its_layout_voided() {
     let id = s.open("form.pdf", None, original.clone(), None).expect("opens");
     let doc = s.get(id).unwrap();
     let warnings = &doc.xfa.as_ref().expect("laid out from the template").warnings;
-    assert!(warnings.iter().any(|w| w.contains("usage rights")), "the user is told: {warnings:?}");
+    assert!(!warnings.iter().any(|w| w.contains("usage rights")), "kept while only filling: {warnings:?}");
     assert!(!doc.dirty, "laying out is still not an edit");
+
+    // Filling in a field alone saves against the original shell and keeps `/Perms /UR3`.
     s.apply(id, Edit::SetFieldValue { name: "familyName".into(), value: FieldValue::Text("Singh".into()) }).unwrap();
+    let filled = s.save_bytes(id).unwrap();
+    s.check_save(id, &filled).unwrap();
+    assert!(filled.starts_with(&original[..]), "appended to the original shell");
+    let filled_cos = pdfcraft_cos::Document::open(filled.clone()).unwrap();
+    assert!(pdfcraft_xfa::has_usage_rights(&filled_cos), "usage rights kept on data-only save");
+    assert!(pdfcraft_xfa::is_dynamic(&filled_cos), "saved without PdfCraft's layout revision");
+
+    // A full rewrite cannot append to the shell, so it writes the laid-out form without `/Perms`.
+    let full = s.save_full_bytes(id).unwrap();
+    let full_cos = pdfcraft_cos::Document::open(full.clone()).unwrap();
+    assert!(!full_cos.get(full_cos.root().unwrap()).as_dict().unwrap().contains(b"Perms"));
+
+    // Any non-data edit (rotating a page, adding a comment, changing `/Info`) voids the shell,
+    // shows the removal warning, and saves the laid-out form without `/Perms`; undoing restores
+    // the usage-rights save.
+    s.apply(id, Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
+    let warnings = &s.get(id).unwrap().xfa.as_ref().unwrap().warnings;
+    assert!(warnings.iter().any(|w| w.contains("usage rights")), "the user is told once voided: {warnings:?}");
     let incremental = s.save_bytes(id).unwrap();
     assert!(incremental.starts_with(&original[..]), "still an incremental save");
-    // Saved either way, the file no longer carries them, and keeps what was filled in.
-    for saved in [incremental, s.save_full_bytes(id).unwrap()] {
+    for saved in [incremental, full] {
         let cos = pdfcraft_cos::Document::open(saved.clone()).unwrap();
         let catalog = cos.get(cos.root().unwrap()).as_dict().cloned().unwrap();
         assert!(!catalog.contains(b"Perms"), "{catalog:?}");
@@ -7961,6 +7980,249 @@ fn a_dynamic_xfa_form_is_saved_without_the_usage_rights_its_layout_voided() {
         let warnings = &d2.xfa.as_ref().expect("the layout is remembered").warnings;
         assert!(!warnings.iter().any(|w| w.contains("usage rights")), "nothing left to say: {warnings:?}");
     }
+
+    s.undo(id).unwrap();
+    assert!(!s.get(id).unwrap().xfa.as_ref().unwrap().warnings.iter().any(|w| w.contains("usage rights")));
+    let restored = s.save_bytes(id).unwrap();
+    assert!(pdfcraft_xfa::has_usage_rights(&pdfcraft_cos::Document::open(restored).unwrap()));
+}
+
+/// Signed packet-array and scripted usage-rights XFA forms keep their signed bytes, `/UR3` byte
+/// range, signature validity (`Modification::Allowed`), added rows and script presence on save.
+#[test]
+fn dynamic_xfa_fill_only_save_keeps_usage_rights_and_signature_valid() {
+    use pdfcraft_cos::{Dict, Object, PdfString, Stream};
+    let (signer, anchor) = test_identity();
+
+    // Build a packet-array dynamic XFA shell signed with both `/Perms /UR3` and a signature field.
+    let mut base = pdfcraft_cos::Document::open(Arc::new(fixture(1))).unwrap();
+    let preamble = base.add(Object::Stream(Stream::flate(Dict::new(), b"<xdp:xdp xmlns:xdp=\"http://ns.adobe.com/xdp/\">")));
+    let tpl_xml = r#"<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/"><subform name="form" layout="tb"><pageSet><pageArea name="p"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet><field name="familyName" w="3in" h="0.3in"><ui><textEdit/></ui></field><field name="secret" w="3in" h="0.3in"><ui><passwordEdit/></ui></field></subform></template>"#;
+    let template = base.add(Object::Stream(Stream::flate(Dict::new(), tpl_xml.as_bytes())));
+    let ds_xml =
+        r#"<xfa:datasets xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"><xfa:data><form><familyName/></form></xfa:data></xfa:datasets>"#;
+    let datasets = base.add(Object::Stream(Stream::flate(Dict::new(), ds_xml.as_bytes())));
+    let postamble = base.add(Object::Stream(Stream::flate(Dict::new(), b"</xdp:xdp>")));
+    let page0 = pdfcraft_annot::page_refs(&base).unwrap()[0];
+    let mut sig_field = Dict::new();
+    sig_field.set(b"Type".to_vec(), Object::name("Annot"));
+    sig_field.set(b"Subtype".to_vec(), Object::name("Widget"));
+    sig_field.set(b"FT".to_vec(), Object::name("Sig"));
+    sig_field.set(b"T".to_vec(), PdfString::literal(b"ur_sig".to_vec()));
+    sig_field.set(b"Rect".to_vec(), Object::Array(vec![Object::Int(0), Object::Int(0), Object::Int(0), Object::Int(0)]));
+    sig_field.set(b"P".to_vec(), Object::Ref(page0));
+    let sig_field_ref = base.add(Object::Dict(sig_field));
+    base.update_dict(page0, |p| p.set(b"Annots".to_vec(), Object::Array(vec![Object::Ref(sig_field_ref)]))).unwrap();
+    let mut acro = Dict::new();
+    acro.set(b"SigFlags".to_vec(), Object::Int(3));
+    acro.set(b"Fields".to_vec(), Object::Array(vec![Object::Ref(sig_field_ref)]));
+    acro.set(
+        b"XFA".to_vec(),
+        Object::Array(vec![
+            Object::String(PdfString::text("preamble")),
+            Object::Ref(preamble),
+            Object::String(PdfString::text("template")),
+            Object::Ref(template),
+            Object::String(PdfString::text("datasets")),
+            Object::Ref(datasets),
+            Object::String(PdfString::text("postamble")),
+            Object::Ref(postamble),
+        ]),
+    );
+    let acro_ref = base.add(Object::Dict(acro));
+    let root = base.root().unwrap();
+    base.update_dict(root, |c| {
+        c.set(b"NeedsRendering".to_vec(), Object::Bool(true));
+        c.set(b"AcroForm".to_vec(), Object::Ref(acro_ref));
+    })
+    .unwrap();
+    let signed_bytes = sign_prepared_with(&mut base, &signer, "D:20260101000000Z", |v| {
+        let mut ur_ref = Dict::new();
+        ur_ref.set(b"Type".to_vec(), Object::name("SigRef"));
+        ur_ref.set(b"TransformMethod".to_vec(), Object::name("UR3"));
+        let mut params = Dict::new();
+        params.set(b"Type".to_vec(), Object::name("TransformParams"));
+        params.set(b"V".to_vec(), Object::name("2.2"));
+        params.set(b"Form".to_vec(), Object::Array(vec![Object::name("FillIn"), Object::name("Add"), Object::name("Delete")]));
+        ur_ref.set(b"TransformParams".to_vec(), Object::Dict(params));
+        v.set(b"Reference".to_vec(), Object::Array(vec![Object::Dict(ur_ref)]));
+    });
+    // Point `/Perms /UR3` at the same signature dictionary in a pre-signed shell, or re-sign with `/UR3` set.
+    let mut base2 = pdfcraft_cos::Document::open(Arc::new(signed_bytes)).unwrap();
+    let root2 = base2.root().unwrap();
+    let sig_ref = base2.get(sig_field_ref).as_dict().unwrap().get(b"V").unwrap().as_ref().unwrap();
+    // Clear `/V` momentarily so `sign_prepared_with` signs a fresh `/UR3` + field signature in one revision.
+    base2
+        .update_dict(sig_field_ref, |d| {
+            d.remove(b"V");
+        })
+        .unwrap();
+    let _ = sig_ref;
+    let original = Arc::new({
+        let reserve = 8192 + signer.certificate.raw.len() + signer.chain.iter().map(|c| c.raw.len()).sum::<usize>();
+        let mut v = Dict::new();
+        v.set(b"Type".to_vec(), Object::name("Sig"));
+        v.set(b"Filter".to_vec(), Object::name("Adobe.PPKLite"));
+        v.set(b"SubFilter".to_vec(), Object::name("ETSI.CAdES.detached"));
+        v.set(b"ByteRange".to_vec(), Object::Array([0].iter().chain(LAYERED_BR_MARK.iter()).map(|n| Object::Int(*n)).collect()));
+        v.set(b"Contents".to_vec(), Object::String(PdfString { bytes: vec![0; reserve], hex: true }));
+        v.set(b"M".to_vec(), PdfString::literal(b"D:20261101000000Z".to_vec()));
+        let sig = base2.add(Object::Dict(v));
+        base2.update_dict(sig_field_ref, |d| d.set(b"V".to_vec(), Object::Ref(sig))).unwrap();
+        let mut perms = Dict::new();
+        perms.set(b"UR3".to_vec(), Object::Ref(sig));
+        base2.update_dict(root2, |c| c.set(b"Perms".to_vec(), Object::Dict(perms))).unwrap();
+        let mut out = pdfcraft_cos::write_full(&base2, &pdfcraft_cos::SaveOptions { object_streams: false, ..Default::default() }).unwrap();
+        let mark = format!("0 {} {} {}", LAYERED_BR_MARK[0], LAYERED_BR_MARK[1], LAYERED_BR_MARK[2]);
+        let br = out.windows(mark.len()).position(|w| w == mark.as_bytes()).unwrap();
+        let start = out[..br].windows(3).rposition(|w| w == b"obj").unwrap();
+        let end = br + out[br..].windows(6).position(|w| w == b"endobj").unwrap();
+        let mut zeros = vec![b'<'];
+        zeros.extend(std::iter::repeat_n(b'0', reserve * 2));
+        zeros.push(b'>');
+        let c = out[start..end].windows(zeros.len()).position(|w| w == zeros.as_slice()).unwrap();
+        let (cstart, cend) = (start + c, start + c + zeros.len());
+        let mut br_text = format!("0 {cstart} {cend} {}", out.len() - cend).into_bytes();
+        br_text.resize(mark.len(), b' ');
+        out[br..br + mark.len()].copy_from_slice(&br_text);
+        let alg = signer.key.preferred_digest();
+        let digest = alg.digest(&[&out[..cstart], &out[cend..]]);
+        let cms = sign::cms::sign_detached(&signer.key, &signer.certificate, &signer.chain, alg, &digest).unwrap();
+        let hex: Vec<u8> = cms.iter().flat_map(|b| format!("{b:02X}").into_bytes()).collect();
+        out[cstart + 1..cstart + 1 + hex.len()].copy_from_slice(&hex);
+        out
+    });
+
+    // Find the datasets object number in the signed shell.
+    let orig_cos = pdfcraft_cos::Document::open(original.clone()).unwrap();
+    let orig_acro = orig_cos.resolve(orig_cos.get(orig_cos.root().unwrap()).as_dict().unwrap().get(b"AcroForm").unwrap());
+    let orig_xfa = orig_cos.resolve(orig_acro.as_dict().unwrap().get(b"XFA").unwrap());
+    let ds_num = orig_xfa.as_array().unwrap()[5].as_ref().unwrap().num;
+
+    let mut s = Session::new().with_clock(|| 1_700_000_000).with_xfa_time_scale(20);
+    s.set_trusted_certificates(vec![anchor.clone()]);
+    let id = s.open("ur-array.pdf", None, original.clone(), None).unwrap();
+    s.apply(id, Edit::SetFieldValue { name: "familyName".into(), value: FieldValue::Text("Kaur".into()) }).unwrap();
+    s.apply(id, Edit::SetFieldValue { name: "secret".into(), value: FieldValue::Text("hunter2".into()) }).unwrap();
+
+    let saved = s.save_bytes(id).unwrap();
+    s.check_save(id, &saved).unwrap();
+    assert!(saved.starts_with(&original[..]), "starts with the signed shell bytes unchanged");
+    let appended = String::from_utf8_lossy(&saved[original.len()..]);
+    let obj_headers: Vec<&str> = appended.lines().filter(|l| l.ends_with(" obj")).collect();
+    assert_eq!(obj_headers, vec![format!("{ds_num} 0 obj")], "appended revision changes only the datasets stream: {appended}");
+
+    // Cryptographic signature and `/UR3` byte range remain valid with `Modification::Allowed`.
+    let saved_cos = pdfcraft_cos::Document::open(saved.clone()).unwrap();
+    assert!(pdfcraft_xfa::has_usage_rights(&saved_cos));
+    let trust = pdfcraft_sign::TrustStore { certs: vec![anchor] };
+    let sigs = pdfcraft_sign::pdf::list(&saved_cos, &saved, &trust);
+    assert_eq!(sigs.len(), 1);
+    assert_eq!(sigs[0].status, pdfcraft_sign::Status::Valid, "{:?}", sigs[0]);
+    assert_eq!(sigs[0].signed_len, original.len(), "byte range covers exact original shell");
+    assert_eq!(sigs[0].modification, pdfcraft_sign::Modification::Allowed(vec![pdfcraft_sign::kind::FORM_FILL]), "{:?}", sigs[0]);
+
+    // Password values (#3944) are kept in memory across `mark_saved` and never written to the shell.
+    let saved_packets = pdfcraft_xfa::read_packets(&saved_cos).unwrap().unwrap();
+    assert!(!saved_packets.xdp.contains("hunter2"), "password scrubbed from saved shell");
+    s.mark_saved(id, saved.clone(), Some("ur-array.pdf".into())).unwrap();
+    assert!(!s.get(id).unwrap().dirty);
+    assert_eq!(s.get(id).unwrap().info.pages.len(), 1, "laid-out form remains displayed after mark_saved");
+    assert_eq!(s.get(id).unwrap().form.iter().find(|f| f.name == "secret").unwrap().value, vec!["hunter2".to_string()]);
+
+    // Scripted dynamic XFA form: added/removed rows, change-driven subform presence, multi-save and revert.
+    let scripted = Arc::new(pdfcraft_xfa::fixtures::usage_rights_shell(&pdfcraft_xfa::fixtures::scripted_template(), "", true));
+    let sid = s.open("scripted.pdf", None, scripted.clone(), None).unwrap();
+    s.apply(sid, Edit::XfaEvent { som: "form[0].page1[0].addRow[0]".into(), activity: "click".into() }).unwrap();
+    s.apply(sid, Edit::SetFieldValue { name: "item_2".into(), value: FieldValue::Text("Bolts".into()) }).unwrap();
+    s.apply(sid, Edit::SetFieldValue { name: "amount_2".into(), value: FieldValue::Text("15".into()) }).unwrap();
+    s.apply(sid, Edit::SetFieldValue { name: "more".into(), value: FieldValue::Check(true) }).unwrap();
+    s.apply(sid, Edit::SetFieldValue { name: "note".into(), value: FieldValue::Text("Rush order".into()) }).unwrap();
+
+    let s_saved = s.save_bytes(sid).unwrap();
+    s.check_save(sid, &s_saved).unwrap();
+    assert!(s_saved.starts_with(&scripted[..]));
+    let s_cos = pdfcraft_cos::Document::open(s_saved.clone()).unwrap();
+    assert!(pdfcraft_xfa::has_usage_rights(&s_cos));
+    s.mark_saved(sid, s_saved.clone(), None).unwrap();
+
+    // Make a non-data edit after saving, then Revert: returns to the saved shell's laid-out state with rights intact.
+    s.apply(sid, Edit::SetInfo { key: "Title".into(), value: "Changed".into() }).unwrap();
+    assert!(s.get(sid).unwrap().xfa.as_ref().unwrap().warnings.iter().any(|w| w.contains("usage rights")));
+    s.revert(sid).unwrap();
+    assert!(!s.get(sid).unwrap().dirty);
+    assert!(!s.get(sid).unwrap().xfa.as_ref().unwrap().warnings.iter().any(|w| w.contains("usage rights")));
+    assert_eq!(s.save_bytes(sid).unwrap(), s_saved);
+
+    // Reopening the saved shell lays out the added row, calculated sum, and revealed `details` subform.
+    let reopened = s.open("scripted-saved.pdf", None, s_saved, None).unwrap();
+    let rdoc = s.get(reopened).unwrap();
+    assert_eq!(rdoc.form.iter().find(|f| f.name == "item_2").unwrap().value, vec!["Bolts".to_string()]);
+    assert_eq!(rdoc.form.iter().find(|f| f.name == "grand").unwrap().value, vec!["15".to_string()]);
+    assert_eq!(rdoc.form.iter().find(|f| f.name == "note").unwrap().value, vec!["Rush order".to_string()]);
+}
+
+#[test]
+fn dynamic_xfa_usage_rights_edge_cases_reconstructed_undo_past_save_and_imports() {
+    let mut s = Session::new().with_clock(|| 1_700_000_000).with_xfa_time_scale(20);
+
+    // 1. Damaged/reconstructed usage-rights shell (`xref` corrupted): cannot append incrementally,
+    //    so `USAGE_RIGHTS_REMOVED` is reported on open and saving writes the repaired full PDF.
+    let mut damaged = pdfcraft_xfa::fixtures::usage_rights_shell(&pdfcraft_xfa::fixtures::template(1), "", false);
+    if let Some(pos) = damaged.windows(4).rposition(|w| w == b"xref") {
+        damaged[pos..pos + 4].copy_from_slice(b"XXXX");
+    }
+    let did = s.open("damaged-ur.pdf", None, Arc::new(damaged), None).unwrap();
+    assert!(
+        s.get(did).unwrap().xfa.as_ref().unwrap().warnings.iter().any(|w| w.contains("usage rights")),
+        "damaged shell warns on open because it cannot be saved incrementally"
+    );
+    let repaired_save = s.save_bytes(did).unwrap();
+    let repaired_cos = pdfcraft_cos::Document::open(repaired_save).unwrap();
+    assert!(!pdfcraft_xfa::has_usage_rights(&repaired_cos));
+    assert!(pdfcraft_xfa::existing_layout(&repaired_cos).is_some());
+
+    // 2. Save 1 (reveal `details` + fill `note`) -> Undo past Save 1 -> Save 2 keeps usage rights
+    //    and restores `details` to hidden and `note` to empty on reopen.
+    let scripted = Arc::new(pdfcraft_xfa::fixtures::usage_rights_shell(&pdfcraft_xfa::fixtures::scripted_template(), "", true));
+    let uid = s.open("undo-past-save.pdf", None, scripted.clone(), None).unwrap();
+    s.apply(uid, Edit::SetFieldValue { name: "more".into(), value: FieldValue::Check(true) }).unwrap();
+    s.apply(uid, Edit::SetFieldValue { name: "note".into(), value: FieldValue::Text("First save".into()) }).unwrap();
+    let save1 = s.save_bytes(uid).unwrap();
+    s.check_save(uid, &save1).unwrap();
+    s.mark_saved(uid, save1, None).unwrap();
+    s.undo(uid).unwrap();
+    s.undo(uid).unwrap();
+    assert!(s.get(uid).unwrap().dirty, "undoing past mark_saved leaves the document dirty");
+    let save2 = s.save_bytes(uid).unwrap();
+    s.check_save(uid, &save2).unwrap();
+    assert!(save2.starts_with(&scripted[..]));
+    let save2_cos = pdfcraft_cos::Document::open(save2.clone()).unwrap();
+    assert!(pdfcraft_xfa::has_usage_rights(&save2_cos));
+    let reopened = s.open("undo-past-save-reopened.pdf", None, save2, None).unwrap();
+    assert!(s.get(reopened).unwrap().form.iter().all(|f| f.name != "note"), "details subform is hidden again after undo-past-save");
+
+    // 3. `ImportData` with XFA XML data keeps usage rights, whereas XFDF carrying a comment warns
+    //    `USAGE_RIGHTS_REMOVED` (and Undo removes the warning and restores usage-rights saving).
+    let base = Arc::new(pdfcraft_xfa::fixtures::usage_rights_shell(&pdfcraft_xfa::fixtures::template(1), "", false));
+    let iid = s.open("import-ur.pdf", None, base.clone(), None).unwrap();
+    s.apply(iid, Edit::ImportData { name: "data.xml".into(), bytes: Arc::new(b"<form><head><familyName>Patel</familyName></head></form>".to_vec()) })
+        .unwrap();
+    assert!(!s.get(iid).unwrap().xfa.as_ref().unwrap().warnings.iter().any(|w| w.contains("usage rights")));
+    let imported_save = s.save_bytes(iid).unwrap();
+    assert!(pdfcraft_xfa::has_usage_rights(&pdfcraft_cos::Document::open(imported_save).unwrap()));
+
+    let xfdf_with_comment = br#"<?xml version="1.0" encoding="UTF-8"?>
+<xfdf xmlns="http://ns.adobe.com/xfdf/">
+  <annots>
+    <text page="0" rect="72,700,96,724" title="Reviewer"><contents>Check this</contents></text>
+  </annots>
+</xfdf>"#;
+    s.apply(iid, Edit::ImportData { name: "notes.xfdf".into(), bytes: Arc::new(xfdf_with_comment.to_vec()) }).unwrap();
+    assert!(s.get(iid).unwrap().xfa.as_ref().unwrap().warnings.iter().any(|w| w.contains("usage rights")));
+    s.undo(iid).unwrap();
+    assert!(!s.get(iid).unwrap().xfa.as_ref().unwrap().warnings.iter().any(|w| w.contains("usage rights")));
+    assert!(pdfcraft_xfa::has_usage_rights(&pdfcraft_cos::Document::open(s.save_bytes(iid).unwrap()).unwrap()));
 }
 
 /// A dynamic XFA form is laid out from its template on opening (an appended revision, not an

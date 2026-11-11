@@ -5,11 +5,11 @@ use std::sync::{Arc, OnceLock};
 use pdfcraft_cos::{SaveOptions, write_incremental};
 use pdfcraft_render::{DocInfo, OpenError, RenderConfig, RenderPool, inspect};
 
-use crate::history::{Editor, Keys, TextBlocksCache};
+use crate::history::{Editor, Keys, TextBlocksCache, UrShell};
 use crate::{
     AppearanceCache, DocId, Document, Session, StatusCaptions, TrustStore, XFA_SCRIPTS_OFF, XfaLayout, display_bytes, display_config, guard,
-    info_fields, js, note_warnings, print_preview_layers, recovered_render_password, render_threads, same_pages, signatures_of, xfa, xfa_layout,
-    xfa_values_from_datasets,
+    info_fields, js, note_warnings, print_preview_layers, recovered_render_password, render_threads, same_pages, signatures_of,
+    sync_usage_rights_warning, xfa, xfa_layout, xfa_values_from_datasets,
 };
 
 /// Immutable session state needed while a document is prepared away from its owning thread.
@@ -37,6 +37,8 @@ struct DocumentOpenData<'a> {
     render_password: Option<String>,
     password: Option<&'a str>,
     xfa: Option<XfaLayout>,
+    ur_shell: Option<UrShell>,
+    ur_data_only: bool,
 }
 
 impl OpenContext {
@@ -151,14 +153,20 @@ impl Session {
             }
             Ok((new_bytes, new_info, new_cos))
         };
+        let mut ur_shell = None;
         let (bytes, info, cos, xfa) = match (info.xfa, cos) {
             (Some(pdfcraft_render::Xfa::Dynamic), Ok(Ok(cos))) if pdfcraft_xfa::existing_layout(&cos).is_none() => {
+                let candidate = (pdfcraft_xfa::can_preserve_usage_rights(&cos) && !cos.reconstructed() && !cos.revisions().is_empty())
+                    .then(|| UrShell { bytes: bytes.clone(), pages: info.pages.len(), open_modified: false });
                 let mut work = cos.clone();
                 let laid_out = guard(|| xfa_layout(&mut work))
                     .unwrap_or_else(|m| Err(format!("laying it out failed unexpectedly ({m})")))
                     .and_then(|report| rebase(&work).map(|(b, i, c)| (b, i, c, report)));
                 match laid_out {
-                    Ok((b, i, c, report)) => (b, i, Ok(Ok(c)), Some(report)),
+                    Ok((b, i, c, report)) => {
+                        ur_shell = candidate;
+                        (b, i, Ok(Ok(c)), Some(report))
+                    }
                     Err(e) => {
                         let mut info = info;
                         info.warnings.push(format!("This dynamic XFA form could not be laid out: {e}"));
@@ -235,6 +243,9 @@ impl Session {
                     match ran {
                         Ok(changes) if work.is_modified() => match rebase(&work) {
                             Ok((b, mut i, c)) => {
+                                if let Some(shell) = ur_shell.as_mut() {
+                                    shell.open_modified = true;
+                                }
                                 // The file as saved differs from what opening shows: say so.
                                 if !changes.is_empty() {
                                     i.warnings.push(format!(
@@ -282,10 +293,16 @@ impl Session {
             }
             cos => (bytes, info, cos),
         };
+        let ur_data_only = match (&ur_shell, &cos) {
+            (Some(_), Ok(Ok(c))) => pdfcraft_xfa::overrides_roundtrip(c),
+            _ => false,
+        };
         // XFA notes survive the document being re-read after edits.
         let xfa_warnings: Vec<String> = if info.xfa.is_some() { info.warnings.clone() } else { Vec::new() };
-        let mut document =
-            Self::build_document(context, DocumentOpenData { name, path, bytes, info, structure: cos, render_password, password, xfa });
+        let mut document = Self::build_document(
+            context,
+            DocumentOpenData { name, path, bytes, info, structure: cos, render_password, password, xfa, ur_shell, ur_data_only },
+        );
         // A script that ran away on open turns the form's scripts off for this document.
         document.xfa_template = if ran_away { None } else { xfa_template };
         document.js_output.append(script_output);
@@ -294,12 +311,13 @@ impl Session {
             document.js_output.errors.push(XFA_SCRIPTS_OFF.into());
         }
         note_warnings(&mut document.xfa_warnings, &xfa_warnings);
+        sync_usage_rights_warning(&mut document);
         Ok(PreparedDocument { document })
     }
 
     /// The last step of opening: build the document record and register it.
     fn build_document(context: &OpenContext, data: DocumentOpenData<'_>) -> Document {
-        let DocumentOpenData { name, path, bytes, mut info, structure: cos, render_password, password, xfa } = data;
+        let DocumentOpenData { name, path, bytes, mut info, structure: cos, render_password, password, xfa, ur_shell, ur_data_only } = data;
         let mut config = RenderConfig { password: render_password.as_deref().map(Arc::from), ..Default::default() };
         let (mut editor, read_only_reason) = match cos {
             Ok(Ok(cos)) => {
@@ -311,6 +329,8 @@ impl Session {
                         saved,
                         saved_keys: keys.clone(),
                         unsaved_file: false,
+                        ur_shell,
+                        ur_data_only,
                         undo: Vec::new(),
                         redo: Vec::new(),
                         keys,

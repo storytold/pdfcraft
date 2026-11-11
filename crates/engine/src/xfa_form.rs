@@ -1,7 +1,7 @@
 //! A document's XFA form: laying it out, keeping its datasets and fields in step, and taking it out.
 
 use crate::edit::EditCtx;
-use crate::{Document, EditError, FieldValue, XfaLayout, guard, xfa};
+use crate::{Document, Edit, EditError, FieldValue, XfaLayout, guard, xfa};
 
 /// Lay a dynamic XFA form out (pages and fields) and give its widgets appearances.
 pub(crate) fn xfa_layout(doc: &mut pdfcraft_cos::Document) -> Result<XfaLayout, String> {
@@ -188,6 +188,75 @@ pub(crate) fn sync_xfa_state(doc: &mut Document) {
             // Only what the strip said stays (the XFA's own warnings no longer apply).
             doc.xfa_warnings.retain(|w| w.starts_with(XFA_REMOVED_PREFIX));
         }
+    }
+    sync_usage_rights_warning(doc);
+}
+
+/// Keep [`pdfcraft_xfa::USAGE_RIGHTS_REMOVED`] in step with whether saving still preserves the
+/// original usage-rights shell (#4309): withheld while `ur_shell` is kept (`ur_data_only`), shown
+/// as soon as an edit leaves data-only mode (while the document is still a laid-out XFA form),
+/// and removed again if that edit is undone or reverted.
+pub(crate) fn sync_usage_rights_warning(doc: &mut Document) {
+    let msg = pdfcraft_xfa::USAGE_RIGHTS_REMOVED;
+    let Some(ed) = doc.editor.as_ref() else { return };
+    let Some(shell_kept) = ed.ur_shell.as_ref().map(|_| ed.ur_data_only) else { return };
+    if shell_kept || doc.xfa.is_none() {
+        if let Some(xfa) = doc.xfa.as_mut() {
+            xfa.warnings.retain(|w| w != msg);
+        }
+        doc.xfa_warnings.retain(|w| w != msg);
+        doc.info.warnings.retain(|w| w != msg);
+    } else {
+        if let Some(xfa) = doc.xfa.as_mut()
+            && !xfa.warnings.iter().any(|w| w == msg)
+        {
+            xfa.warnings.insert(0, msg.to_owned());
+        }
+        let single = [msg.to_owned()];
+        note_warnings(&mut doc.xfa_warnings, &single);
+        note_warnings(&mut doc.info.warnings, &single);
+    }
+}
+
+/// Whether `edit` (taking `prev` to `next` with `sync_warnings` from [`xfa_sync_datasets`] and
+/// `xfa_errors` from `run_edit`/scripts) changes only XFA form data or `<form>`-packet script
+/// state, so saving into the original shell preserves everything the user changed (#4309).
+pub(crate) fn keeps_xfa_usage_rights(
+    edit: &Edit,
+    prev: &pdfcraft_cos::Document,
+    next: &pdfcraft_cos::Document,
+    sync_warnings: &[String],
+    xfa_errors: &[String],
+) -> bool {
+    pdfcraft_xfa::existing_layout(next).is_some()
+        && sync_warnings.is_empty()
+        && pdfcraft_xfa::overrides_roundtrip(next)
+        && edit_is_xfa_data_only(edit, prev, next, xfa_errors)
+}
+
+fn edit_is_xfa_data_only(edit: &Edit, prev: &pdfcraft_cos::Document, next: &pdfcraft_cos::Document, xfa_errors: &[String]) -> bool {
+    match edit {
+        Edit::SetFieldValue { .. } | Edit::ResetForm { .. } | Edit::XfaEvent { .. } => true,
+        Edit::SetFieldImage { name, .. } => {
+            xfa_errors.is_empty()
+                && pdfcraft_forms::fields(prev).iter().any(|f| f.name == *name && f.button == Some(pdfcraft_forms::af::ButtonAction::ImportIcon))
+        }
+        Edit::ImportData { bytes, .. } => {
+            !bytes[..bytes.len().min(1024)].windows(5).any(|w| w == b"%PDF-")
+                && (matches!(decode_data_file(bytes), Some(Ok(t)) if is_xfa_data_file(&t) && xfa_errors.is_empty())
+                    || pdfcraft_xfdf::export_xfdf(prev, true, false, "") == pdfcraft_xfdf::export_xfdf(next, true, false, ""))
+        }
+        Edit::ApplyScriptChanges { changes } => changes.iter().all(|c| {
+            c.read_only.is_none()
+                && c.required.is_none()
+                && c.display.is_none()
+                && c.text_color.is_none()
+                && c.fill_color.is_none()
+                && c.caption.is_none()
+                && c.rect.is_none()
+        }),
+        Edit::Batch { edits, .. } => edits.iter().all(|e| edit_is_xfa_data_only(e, prev, next, xfa_errors)),
+        _ => false,
     }
 }
 

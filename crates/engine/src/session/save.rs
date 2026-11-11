@@ -15,6 +15,25 @@ impl Session {
         let doc = self.get(id).ok_or(EditError::NoDocument)?;
         let Some(editor) = doc.editor.as_ref() else { return Ok(doc.bytes.clone()) };
         let on_saved = Arc::ptr_eq(editor.cos.bytes(), &editor.saved);
+        if let Some(shell) = editor.ur_shell.as_ref().filter(|_| editor.ur_data_only) {
+            if !editor.cos.is_modified() && on_saved && !shell.open_modified {
+                return Ok(shell.bytes.clone());
+            }
+            let cos = writable(&editor.cos)?;
+            return guard(|| -> Result<Arc<Vec<u8>>, EditError> {
+                let mut shell_doc = pdfcraft_cos::Document::open_with_password(shell.bytes.clone(), editor.keys.reopen.as_deref())
+                    .map_err(|e| EditError::Write(e.to_string()))?;
+                let changed = pdfcraft_xfa::sync_form_into_shell(&mut shell_doc, &cos).map_err(|e| EditError::Write(e.to_string()))?;
+                if !changed {
+                    return Ok(shell.bytes.clone());
+                }
+                // Keep the appended revision strictly to the datasets/form streams (#4309): no
+                // `/Info /ModDate` object may be added under the usage-rights or author signature.
+                let opts = SaveOptions { mod_date: None, drop_unlinked: true, ..SaveOptions::default() };
+                write_incremental(&shell_doc, &opts).map(Arc::new).map_err(|e| EditError::Write(e.to_string()))
+            })
+            .map_err(EditError::Write)?;
+        }
         if !editor.cos.is_modified() && on_saved && (!editor.cos.reconstructed() || doc.is_signed()) {
             return Ok(editor.saved.clone());
         }
@@ -57,8 +76,13 @@ impl Session {
     pub fn check_save(&self, id: DocId, bytes: &Arc<Vec<u8>>) -> Result<(), EditError> {
         let doc = self.get(id).ok_or(EditError::NoDocument)?;
         let Some(editor) = doc.editor.as_ref() else { return Ok(()) };
-        pdfcraft_cos::Document::open_with_password(bytes.clone(), editor.keys.reopen.as_deref()).map_err(|e| EditError::Reopen(e.to_string()))?;
-        pdfcraft_render::check_pages(bytes.clone(), doc.password.as_deref(), doc.info.pages.len()).map_err(|e| EditError::Reopen(e.to_string()))
+        let reopened =
+            pdfcraft_cos::Document::open_with_password(bytes.clone(), editor.keys.reopen.as_deref()).map_err(|e| EditError::Reopen(e.to_string()))?;
+        let expected_pages = match &editor.ur_shell {
+            Some(shell) if pdfcraft_xfa::has_usage_rights(&reopened) && pdfcraft_xfa::existing_layout(&reopened).is_none() => shell.pages,
+            _ => doc.info.pages.len(),
+        };
+        pdfcraft_render::check_pages(bytes.clone(), doc.password.as_deref(), expected_pages).map_err(|e| EditError::Reopen(e.to_string()))
     }
 
     /// Record a successful save of `bytes` (to `path`, if any): rebase editing on the saved file
@@ -71,16 +95,54 @@ impl Session {
             let keys = editor.keys.clone();
             // The saved file carries no Password-field values (#3943, #3944); the open document keeps them.
             let typed = pdfcraft_forms::password_values(&editor.cos);
-            editor.cos =
+            let reopened =
                 pdfcraft_cos::Document::open_with_password(bytes.clone(), keys.reopen.as_deref()).map_err(|e| EditError::Reopen(e.to_string()))?;
-            pdfcraft_forms::restore_password_values(&mut editor.cos, &typed).map_err(|e| EditError::Reopen(e.to_string()))?;
-            if !typed.is_empty() && doc.info.xfa.is_some() {
-                let mut datasets = None;
-                let _ = xfa_sync_datasets(&mut editor.cos, doc.xfa_template.as_deref(), &mut datasets);
+            let kept_ur_shell =
+                editor.ur_shell.is_some() && pdfcraft_xfa::has_usage_rights(&reopened) && pdfcraft_xfa::existing_layout(&reopened).is_none();
+            if kept_ur_shell {
+                let laid_out_saved = if editor.cos.is_modified() {
+                    let clean = writable(&editor.cos)?;
+                    Arc::new(write_incremental(&clean, &SaveOptions::default()).map_err(|e| EditError::Write(e.to_string()))?)
+                } else {
+                    editor.cos.bytes().clone()
+                };
+                let mut next_cos = pdfcraft_cos::Document::open_with_password(laid_out_saved.clone(), keys.reopen.as_deref())
+                    .map_err(|e| EditError::Reopen(e.to_string()))?;
+                for line in editor.cos.repair_log() {
+                    if !next_cos.repair_log().contains(line) {
+                        next_cos.note_repair(line.clone());
+                    }
+                }
+                editor.cos = next_cos;
+                pdfcraft_forms::restore_password_values(&mut editor.cos, &typed).map_err(|e| EditError::Reopen(e.to_string()))?;
+                if !typed.is_empty() && doc.info.xfa.is_some() {
+                    let mut datasets = None;
+                    let _ = xfa_sync_datasets(&mut editor.cos, doc.xfa_template.as_deref(), &mut datasets);
+                }
+                if let Some(shell) = editor.ur_shell.as_mut() {
+                    shell.bytes = bytes;
+                    shell.open_modified = false;
+                }
+                editor.ur_data_only = true;
+                editor.saved = laid_out_saved;
+                editor.saved_keys = keys;
+                editor.unsaved_file = false;
+            } else {
+                let dropped_ur = editor.ur_shell.take().is_some();
+                editor.ur_data_only = false;
+                editor.cos = reopened;
+                pdfcraft_forms::restore_password_values(&mut editor.cos, &typed).map_err(|e| EditError::Reopen(e.to_string()))?;
+                if !typed.is_empty() && doc.info.xfa.is_some() {
+                    let mut datasets = None;
+                    let _ = xfa_sync_datasets(&mut editor.cos, doc.xfa_template.as_deref(), &mut datasets);
+                }
+                editor.saved = bytes;
+                editor.saved_keys = keys;
+                editor.unsaved_file = false;
+                if dropped_ur && pdfcraft_xfa::existing_layout(&editor.cos).is_some() {
+                    crate::note_warnings(&mut doc.xfa_warnings, &[pdfcraft_xfa::USAGE_RIGHTS_REMOVED.to_owned()]);
+                }
             }
-            editor.saved = bytes;
-            editor.saved_keys = keys;
-            editor.unsaved_file = false;
         }
         if let Some(p) = path {
             doc.name = std::path::Path::new(&p).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| p.clone());
@@ -116,7 +178,7 @@ impl Session {
         reopen_as_owner(&editor.cos, &mut editor.keys);
         // Other states with the same restricted access are unlocked too; states opened with
         // other passwords (protection changed and saved since) stay as they are.
-        for (_, cos, keys, _) in editor.undo.iter_mut().chain(editor.redo.iter_mut()) {
+        for (_, cos, keys, _, _) in editor.undo.iter_mut().chain(editor.redo.iter_mut()) {
             if cos.permissions().is_some_and(|p| !p.owner) && cos.unlock(password).is_ok() {
                 reopen_as_owner(cos, keys);
             }
@@ -139,6 +201,7 @@ impl Session {
             .into_iter()
             .find_map(|k| pdfcraft_cos::Document::open_with_password(base.clone(), k.reopen.as_deref()).ok().map(|c| (c, k)))
             .ok_or_else(|| EditError::Reopen("the saved file can't be opened".into()))?;
+        editor.ur_data_only = editor.ur_shell.is_some() && pdfcraft_xfa::overrides_roundtrip(&cos);
         editor.cos = cos;
         editor.keys = keys;
         editor.undo.clear();
@@ -195,17 +258,36 @@ impl Session {
         for d in &mut self.docs {
             if d.dirty && d.generation != d.snapshot_generation {
                 // The working bytes hold typed Password-field values (#3926, #3944): a recovery file
-                // is written from a copy without them, and none is written if that copy fails.
-                let bytes =
-                    match d.editor.as_ref().filter(|e| pdfcraft_forms::has_password_values(&e.cos) || pdfcraft_xfa::has_password_values(&e.cos)) {
-                        Some(e) => match writable(&e.cos)
+                // is written from a copy without them, and none is written if that copy fails. A
+                // dynamic XFA form whose usage rights are still intact snapshots its shell (#4309).
+                let bytes = match d.editor.as_ref() {
+                    Some(e) if e.ur_shell.is_some() && e.ur_data_only => {
+                        let Some(shell) = e.ur_shell.as_ref() else { continue };
+                        let Ok(clean) = writable(&e.cos) else { continue };
+                        let Ok(mut shell_doc) = pdfcraft_cos::Document::open_with_password(shell.bytes.clone(), e.keys.reopen.as_deref()) else {
+                            continue;
+                        };
+                        match pdfcraft_xfa::sync_form_into_shell(&mut shell_doc, &clean) {
+                            Ok(true) => {
+                                match write_incremental(&shell_doc, &SaveOptions { mod_date: None, drop_unlinked: true, ..Default::default() }) {
+                                    Ok(b) => Arc::new(b),
+                                    Err(_) => continue,
+                                }
+                            }
+                            Ok(false) => shell.bytes.clone(),
+                            Err(_) => continue,
+                        }
+                    }
+                    Some(e) if pdfcraft_forms::has_password_values(&e.cos) || pdfcraft_xfa::has_password_values(&e.cos) => {
+                        match writable(&e.cos)
                             .and_then(|c| write_incremental(&c, &SaveOptions::default()).map_err(|e| EditError::Write(e.to_string())))
                         {
                             Ok(b) => Arc::new(b),
                             Err(_) => continue,
-                        },
-                        None => d.bytes.clone(),
-                    };
+                        }
+                    }
+                    _ => d.bytes.clone(),
+                };
                 d.snapshot_generation = d.generation;
                 out.push(RecoverySnapshot {
                     doc: d.id,
