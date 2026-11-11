@@ -307,10 +307,7 @@ impl Type0Font {
                     let mut chars = s.chars();
                     let character = chars.next()?;
                     let selector = chars.next().filter(|c| is_variation_selector(*c))?;
-                    chars
-                        .next()
-                        .is_none()
-                        .then_some((character, Some(selector)))
+                    chars.next().is_none().then_some((character, Some(selector)))
                 }
             })?;
 
@@ -321,8 +318,7 @@ impl Type0Font {
                 // glyph for the character, as when a form isn't supported (Unicode FAQ on
                 // variation sequences).
                 if let Some(selector) = selector
-                    && let Some(MapVariant::Variant(glyph)) =
-                        charmap.map_variant(character, selector)
+                    && let Some(MapVariant::Variant(glyph)) = charmap.map_variant(character, selector)
                 {
                     return Some(glyph);
                 }
@@ -330,9 +326,7 @@ impl Type0Font {
                 // Adobe-Japan1's U+2002). Draw its ordinary space instead of .notdef;
                 // the PDF's widths and Unicode mapping still determine advance and text.
                 charmap.map(character).or_else(|| match character {
-                    '\u{00a0}' | '\u{2000}'..='\u{200a}' | '\u{202f}' | '\u{205f}' | '\u{3000}' => {
-                        charmap.map(' ')
-                    }
+                    '\u{00a0}' | '\u{2000}'..='\u{200a}' | '\u{202f}' | '\u{205f}' | '\u{3000}' => charmap.map(' '),
                     _ => None,
                 })
             }
@@ -345,8 +339,7 @@ impl Type0Font {
                 // (#5888). Windows exporters map the hyphen glyph of a font they don't embed to
                 // U+00AD, which ISO 32000-2 Annex D.2 calls typographically the same as the
                 // hyphen; without this the CID, taken as a glyph index, drew an unrelated glyph.
-                by_name(character)
-                    .or_else(|| (character == '\u{00ad}').then(|| by_name('-')).flatten())
+                by_name(character).or_else(|| (character == '\u{00ad}').then(|| by_name('-')).flatten())
             }
             FontType::Type1(_) => {
                 // We could in theory map to a glyph via AFL and then look up
@@ -949,8 +942,9 @@ mod tests {
 
     #[test]
     fn w2_run_past_the_largest_cid_keeps_the_rest_of_the_table() {
-        let arr = Array::from_bytes(b"[4294967295 [1000 500] 10 [900 450 860] 20 30 800 400 870]")
-            .unwrap();
+        let arr =
+            Array::from_bytes(b"[4294967295 [1000 500] 10 [900 450 860] 20 30 800 400 870]")
+                .unwrap();
         let map = read_widths2(&arr).unwrap();
 
         assert_eq!(map.get(&4_294_967_295), None);
@@ -986,10 +980,7 @@ mod width_tests {
     fn a_width_group_can_start_with_a_reference() {
         let widths = |array: &str| {
             let pdf = with_array(array);
-            let array = pdf
-                .xref()
-                .get::<Array<'_>>(ObjectIdentifier::new(5, 0))
-                .unwrap();
+            let array = pdf.xref().get::<Array<'_>>(ObjectIdentifier::new(5, 0)).unwrap();
             let mut read: Vec<_> = read_widths(&array).unwrap().into_iter().collect();
             read.sort_by_key(|(cid, _)| *cid);
             read
@@ -1001,18 +992,11 @@ mod width_tests {
         assert_eq!(widths("[20 22 700]"), by_range);
         assert_eq!(widths("[4 0 R 22 700]"), by_range);
         assert_eq!(widths("[4 0 R 6 0 R 700]"), by_range);
-        assert_eq!(
-            widths("[1 [100] 4 0 R [500 600]]"),
-            vec![(1, 100.0), (20, 500.0), (21, 600.0)],
-            "after a group"
-        );
+        assert_eq!(widths("[1 [100] 4 0 R [500 600]]"), vec![(1, 100.0), (20, 500.0), (21, 600.0)], "after a group");
 
         let vertical = |array: &str| {
             let pdf = with_array(array);
-            let array = pdf
-                .xref()
-                .get::<Array<'_>>(ObjectIdentifier::new(5, 0))
-                .unwrap();
+            let array = pdf.xref().get::<Array<'_>>(ObjectIdentifier::new(5, 0)).unwrap();
             let mut read: Vec<_> = read_widths2(&array).unwrap().into_iter().collect();
             read.sort_by_key(|(cid, _)| *cid);
             read
@@ -1020,11 +1004,7 @@ mod width_tests {
         let by_list = vec![(20, [-1000.0, 500.0, 880.0])];
         assert_eq!(vertical("[20 [-1000 500 880]]"), by_list);
         assert_eq!(vertical("[4 0 R [-1000 500 880]]"), by_list);
-        let by_range = vec![
-            (20, [-900.0, 400.0, 800.0]),
-            (21, [-900.0, 400.0, 800.0]),
-            (22, [-900.0, 400.0, 800.0]),
-        ];
+        let by_range = vec![(20, [-900.0, 400.0, 800.0]), (21, [-900.0, 400.0, 800.0]), (22, [-900.0, 400.0, 800.0])];
         assert_eq!(vertical("[20 22 -900 400 800]"), by_range);
         assert_eq!(vertical("[4 0 R 22 -900 400 800]"), by_range);
 
@@ -1037,20 +1017,10 @@ mod width_tests {
         assert_eq!(vertical("[20 12 0 R]"), vec![(20, [-1000.0, 500.0, 880.0])]);
 
         // A reference that only leads back to itself holds no number, so those glyphs keep `/DW`.
-        for array in [
-            "[7 0 R [500 600]]",
-            "[8 0 R [500 600]]",
-            "[20 7 0 R 700]",
-            "[7 0 R 8 0 R 700]",
-            "[20 [7 0 R 600]]",
-        ] {
+        for array in ["[7 0 R [500 600]]", "[8 0 R [500 600]]", "[20 7 0 R 700]", "[7 0 R 8 0 R 700]", "[20 [7 0 R 600]]"] {
             assert!(widths(array).is_empty(), "{array}");
         }
-        for array in [
-            "[7 0 R [-1000 500 880]]",
-            "[8 0 R 22 -900 400 800]",
-            "[20 [7 0 R 500 880]]",
-        ] {
+        for array in ["[7 0 R [-1000 500 880]]", "[8 0 R 22 -900 400 800]", "[20 [7 0 R 500 880]]"] {
             assert!(vertical(array).is_empty(), "{array}");
         }
     }

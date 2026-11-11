@@ -3,8 +3,8 @@ use crate::font::generated::{glyph_names, mac_os_roman, mac_roman, standard, win
 use crate::font::recovery::{FontFacts, FontKind, FontRecovery, GlyphFacts, Recovery};
 use crate::font::standard_font::StandardKind;
 use crate::font::{
-    Encoding, FallbackFontQuery, FontFlags, glyph_name_to_text, glyph_name_to_unicode,
-    read_to_unicode, strip_subset_prefix, unicode_from_name,
+    Encoding, FallbackFontQuery, FontFlags, glyph_name_to_text, glyph_name_to_unicode, read_to_unicode,
+    strip_subset_prefix, unicode_from_name,
 };
 use crate::util::OptionLog;
 use crate::{CMapResolverFn, CacheKey, FontResolverFn};
