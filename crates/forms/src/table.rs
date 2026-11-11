@@ -203,6 +203,9 @@ pub fn free_base<'a>(existing: impl IntoIterator<Item = &'a str>) -> String {
 /// What may stand on either side of an `N` that is the row number.
 const SEPARATORS: [char; 4] = ['_', '-', '/', ':'];
 
+/// Most characters of a cell-name pattern that count.
+const MAX_PATTERN_CHARS: usize = 256;
+
 /// The name `pattern` gives the cell in `row` and `column` (`column` counted from 1); `seq` is the
 /// cell's number counting along the rows.
 ///
@@ -215,9 +218,12 @@ const SEPARATORS: [char; 4] = ['_', '-', '/', ':'];
 ///   (`price_N`, `line-n-total`) is the row number, so the N in `Name` or `NET_N` stays;
 /// - with no row or cell number still, the row number goes at the end.
 ///
-/// Braces and brackets match ignoring case. Anything else is kept as written, a period included,
+/// At most [`MAX_PATTERN_CHARS`] of the pattern count. Braces and brackets match ignoring case. Anything else is kept as written, a period included,
 /// though no field name may contain one: [`FieldTable::cells_for`] refuses those.
 pub fn cell_name(pattern: &str, row: usize, column: usize, seq: usize) -> String {
+    // An unmatched brace is looked past to the end of the pattern: within a bounded pattern,
+    // so many of them can't multiply into the length squared.
+    let pattern = pattern.char_indices().nth(MAX_PATTERN_CHARS).map_or(pattern, |(i, _)| &pattern[..i]);
     let row_number = row.to_string();
     let mut out = String::with_capacity(pattern.len() + 8);
     // Whether the name has a row or cell number yet.

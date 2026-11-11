@@ -445,6 +445,18 @@ fn validation_and_calculation() {
     assert_eq!(calculate(&Calculate::Notation("a +".into()), &vals), None);
 }
 
+/// A format of many joined fields would copy the rest of the digit run once per field: a date
+/// format has a handful, and one past that is no date format.
+#[test]
+fn date_formats_of_many_fields_are_refused() {
+    let digits = "1".repeat(100_000);
+    let fmt = "d".repeat(100_000);
+    let started = std::time::Instant::now();
+    assert_eq!(parse_date(&digits, &fmt), None);
+    assert!(started.elapsed() < std::time::Duration::from_secs(2), "{:?}", started.elapsed());
+    assert!(parse_date("2026-10-18 14:05:09", "yyyy-mm-dd HH:MM:ss").is_some(), "real formats still parse");
+}
+
 /// Async for-of headers have the same regex-literal contexts as ordinary for-of headers.
 #[test]
 fn for_await_regex_literals_do_not_become_format_calls() {

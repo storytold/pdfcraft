@@ -6770,6 +6770,103 @@ fn locked_button_export_edits_leave_the_document_unchanged() {
     }
 }
 
+/// Thousands of unlabelled blanks are named Text1, Text2, … in one pass: the names taken are a
+/// set, and each label remembers the next number to try.
+#[test]
+fn detection_names_many_unlabelled_fields_in_linear_time() {
+    use crate::detect::*;
+    let n = 5_000;
+    let shapes = Shapes { boxes: Vec::new(), rules: (0..n).map(|i| [50.0, 20.0 + i as f64 * 24.0, 200.0, 20.0 + i as f64 * 24.0]).collect() };
+    let taken: Vec<String> = (1..=n).map(|i| format!("Text{i}")).collect();
+    let started = std::time::Instant::now();
+    let found = detect(&[], &shapes, &[], &taken);
+    assert_eq!(found.len(), n, "{}", found.len());
+    let mut names: Vec<&str> = found.iter().map(|c| c.name.as_str()).collect();
+    names.sort_unstable();
+    names.dedup();
+    assert_eq!(names.len(), n, "every name is its own");
+    assert!(names.iter().all(|x| x.strip_prefix("Text").and_then(|k| k.parse::<usize>().ok()).is_some_and(|k| k > n)), "past the taken ones");
+    assert!(started.elapsed() < std::time::Duration::from_secs(5), "{:?}", started.elapsed());
+}
+
+/// A cell-name pattern of unmatched braces is looked past once each: the pattern counts up to a
+/// fixed length, so a long one can't make naming the table's cells take minutes.
+#[test]
+fn cell_name_patterns_of_unmatched_braces_are_bounded() {
+    let pattern = "{".repeat(200_000);
+    let started = std::time::Instant::now();
+    let name = crate::table::cell_name(&pattern, 3, 1, 1);
+    assert!(name.starts_with("{{{") && name.ends_with('3'), "{}", name.len());
+    assert!(started.elapsed() < std::time::Duration::from_secs(5), "{:?}", started.elapsed());
+}
+
+/// A name-tree node listed under many generation numbers is one object (`get` reads by number):
+/// it is read once, not once per alias.
+#[test]
+fn a_script_tree_node_aliased_by_generation_is_read_once() {
+    let dict = |entries: Vec<(&[u8], Object)>| -> Object { Object::Dict(entries.into_iter().map(|(k, v)| (k.to_vec(), v)).collect()) };
+    let mut doc = Document::new_empty();
+    let action =
+        doc.add(dict(vec![(b"S", Object::Name(b"JavaScript".to_vec())), (b"JS", Object::String(pdfcraft_cos::PdfString::literal("var a;")))]));
+    let leaf = doc.add(dict(vec![(b"Names", Object::Array(vec![Object::String(pdfcraft_cos::PdfString::literal("a")), Object::Ref(action)]))]));
+    let aliases: Vec<Object> = (0..5_000u16).map(|g| Object::Ref(pdfcraft_cos::ObjRef::new(leaf.num, g))).collect();
+    let catalog = doc.add(dict(vec![
+        (b"Type", Object::Name(b"Catalog".to_vec())),
+        (b"Names", dict(vec![(b"JavaScript", dict(vec![(b"Kids", Object::Array(aliases))]))])),
+    ]));
+    doc.trailer_mut().set(b"Root".to_vec(), Object::Ref(catalog));
+    assert_eq!(document_scripts_named(&doc), [("a".to_string(), "var a;".to_string())]);
+}
+
+/// A `/Kids` array full of repeats of one node does not crowd out the distinct node after them:
+/// the repeats are dropped before the walk's room is taken, so the script is still found.
+#[test]
+fn repeated_name_tree_kids_do_not_crowd_out_a_script() {
+    use pdfcraft_cos::{Dict, Object};
+    let mut doc = one_page();
+    crate::scripting::set_document_script(&mut doc, "Deep", Some("app.alert(1);")).unwrap();
+    let root = doc.root().unwrap();
+    // The tree the writer made, as its names array alone.
+    let cat = doc.get(root).as_dict().cloned().unwrap();
+    let names = cat.get(b"Names").map(|n| doc.resolve(n)).and_then(|n| n.as_dict().cloned()).unwrap();
+    let tree = names.get(b"JavaScript").map(|t| doc.resolve(t)).and_then(|t| t.as_dict().cloned()).unwrap();
+    let pairs = tree.get(b"Names").cloned().unwrap();
+    let mut leaf_d = Dict::new();
+    leaf_d.set(b"Names".to_vec(), pairs);
+    let leaf = doc.add(Object::Dict(leaf_d));
+    let node = doc.add(Object::Dict(Dict::new()));
+    let kids: Vec<Object> = std::iter::repeat_n(Object::Ref(node), 9_999).chain([Object::Ref(leaf)]).collect();
+    doc.update_dict(node, |d| d.set(b"Kids".to_vec(), Object::Array(kids))).unwrap();
+    let mut names = names;
+    names.set(b"JavaScript".to_vec(), Object::Ref(node));
+    doc.update_dict(root, |c| c.set(b"Names".to_vec(), Object::Dict(names))).unwrap();
+    assert_eq!(crate::scripting::document_scripts_named(&doc), vec![("Deep".to_string(), "app.alert(1);".to_string())]);
+}
+
+/// The same for repeats of a node not read yet: they take one slot, not one each.
+#[test]
+fn repeated_unread_name_tree_kids_do_not_crowd_out_a_script() {
+    use pdfcraft_cos::{Dict, Object};
+    let mut doc = one_page();
+    crate::scripting::set_document_script(&mut doc, "Deep", Some("app.alert(1);")).unwrap();
+    let root = doc.root().unwrap();
+    let cat = doc.get(root).as_dict().cloned().unwrap();
+    let names = cat.get(b"Names").map(|n| doc.resolve(n)).and_then(|n| n.as_dict().cloned()).unwrap();
+    let tree = names.get(b"JavaScript").map(|t| doc.resolve(t)).and_then(|t| t.as_dict().cloned()).unwrap();
+    let mut leaf_d = Dict::new();
+    leaf_d.set(b"Names".to_vec(), tree.get(b"Names").cloned().unwrap());
+    let leaf = doc.add(Object::Dict(leaf_d));
+    let empty = doc.add(Object::Dict(Dict::new()));
+    let mut top = Dict::new();
+    let kids: Vec<Object> = std::iter::repeat_n(Object::Ref(empty), 9_999).chain([Object::Ref(leaf)]).collect();
+    top.set(b"Kids".to_vec(), Object::Array(kids));
+    let top = doc.add(Object::Dict(top));
+    let mut names = names;
+    names.set(b"JavaScript".to_vec(), Object::Ref(top));
+    doc.update_dict(root, |c| c.set(b"Names".to_vec(), Object::Dict(names))).unwrap();
+    assert_eq!(crate::scripting::document_scripts_named(&doc), vec![("Deep".to_string(), "app.alert(1);".to_string())]);
+}
+
 #[test]
 /// Cosmetic field updates skip calculations, while a value write still triggers the chain.
 fn script_cosmetic_mutations_do_not_run_the_calculation_chain() {
