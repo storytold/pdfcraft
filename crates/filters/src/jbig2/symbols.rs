@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::ops::Range;
 
-use super::{at_pixels, code_generic, generic_region, page_information, region_information, segment};
+use super::{at_pixels, code_generic, generic_region, page_information, region_information, segment, segment_of};
 use crate::mq::{Context, MqEncoder};
 
 /// The longest side of a mark stored as a symbol. A larger one is left to the generic region.
@@ -27,7 +27,9 @@ const MAX_SYMBOLS: usize = 1 << 16;
 const MAX_SYMBOL_PIXELS: usize = 1 << 24;
 
 /// The most symbols one plan codes. The decoder PdfCraft renders JBIG2 with (`hayro-jbig2`)
-/// refuses 32,768 symbols or more, and others may too, so a plan with more isn't made.
+/// refuses a dictionary whose new and exported symbols pass 65,535 together, and a plan exports
+/// every symbol it codes, so it refuses 32,768 or more; others may too, so a plan with more isn't
+/// made.
 const MAX_CODED_SYMBOLS: usize = (1 << 15) - 1;
 
 /// The most symbol instances one text region places. The decoder PdfCraft renders JBIG2 with
@@ -35,14 +37,14 @@ const MAX_CODED_SYMBOLS: usize = (1 << 15) - 1;
 /// placed by several regions, each over a band of rows, all referring to the one dictionary.
 const MAX_REGION_INSTANCES: usize = 10_000;
 
-// Segment numbers stay at most 256, so a referred-to one takes a byte (7.2.5): the page, the
-// dictionary, a text region for each MAX_REGION_INSTANCES of at most MAX_RUNS marks, and the
-// generic region.
-const _: () = assert!(MAX_RUNS.div_ceil(MAX_REGION_INSTANCES) + 3 <= 256);
+/// The most symbols a group's shared dictionary holds ([`encode_shared`]): half of what a page may
+/// place, so each page keeps room for its own.
+const MAX_SHARED_SYMBOLS: usize = MAX_CODED_SYMBOLS / 2;
 
-/// The most rows symbol coded. With rows at most 2^20 samples wide, every coordinate and
-/// difference coded then fits the 32-bit integers Annex A codes.
-const MAX_ROWS: u32 = 1 << 24;
+// Segment numbers stay at most 256, so a referred-to one takes a byte (7.2.5): the shared
+// dictionary, the page, its own dictionary, a text region for each MAX_REGION_INSTANCES of at most
+// MAX_RUNS marks, and the generic region.
+const _: () = assert!(MAX_RUNS.div_ceil(MAX_REGION_INSTANCES) + 4 <= 256);
 
 /// The integer coders' ranges (Table A.1): how many 1 bits pick the range, how many bits give the
 /// offset into it, and its first value. The last range has no 0 after its prefix.
@@ -99,20 +101,111 @@ struct Instance {
     height: u32,
 }
 
+/// A group of images coded by [`encode_shared`]: the globals' data, and each image's stream.
+type SharedCoding = (Vec<u8>, Vec<Option<Vec<u8>>>);
+
+/// The symbols of a group's shared dictionary, as one image's [`plan`] places them: the ID each of
+/// the image's symbols has there, if it is there, and how many symbols that dictionary exports.
+struct Shared {
+    ids: Vec<Option<u32>>,
+    count: u32,
+}
+
 /// `rows` rows of `columns` 1-bit PDF samples (black 0), symbol coded: the smaller of two plans,
 /// every mark of at most [`MAX_SYMBOL_SIDE`] a side as a symbol, or only those with a copy.
 /// `None` when neither plan has from two to [`MAX_CODED_SYMBOLS`] symbols, or the image is too
 /// large or too busy to look at.
 pub(super) fn encode(samples: &[u8], columns: u32, rows: u32) -> Option<Vec<u8>> {
-    let page = page(samples, columns, rows)?;
-    [1, 2].into_iter().filter_map(|copies| plan(&page, columns, rows, copies, None)).min_by_key(Vec::len)
+    let page = page(samples, columns)?;
+    [1, 2].into_iter().filter_map(|copies| plan(&page, columns, rows, copies, None, None)).min_by_key(Vec::len)
+}
+
+/// Images, each as [`encode`] takes one, symbol coded sharing one dictionary: the globals' data, a
+/// symbol dictionary segment associated with no page (number 0) holding the distinct marks found
+/// in more than one image, and each image's stream placing them from there, the smaller of
+/// [`encode`]'s two plans for its other marks. The group's marks are held within the limits one
+/// image's are ([`MAX_SYMBOLS`], [`MAX_SYMBOL_PIXELS`]): past them, later marks aren't shared. Past
+/// [`MAX_SHARED_SYMBOLS`] shared marks, those in the most images are kept.
+///
+/// An image too large or too busy to look at, or that places none of the shared marks, gets `None`;
+/// `None` overall when fewer than two marks are shared.
+pub(super) fn encode_shared(images: &[(&[u8], u32, u32)]) -> Option<SharedCoding> {
+    // The group's distinct marks, each with how many images hold it (as its uses), looked at an
+    // image at a time.
+    let mut table: Vec<Symbol> = Vec::new();
+    let mut by_hash: HashMap<u64, Vec<u32>> = HashMap::new();
+    let mut held = 0usize;
+    for (samples, columns, _) in images {
+        let Some(page) = page(samples, *columns) else { continue };
+        // An image's symbols are distinct, so each counts an image once.
+        for symbol in page.symbols {
+            match find(&table, &by_hash, &symbol) {
+                Some(t) => {
+                    if let Some(s) = table.get_mut(t as usize) {
+                        s.uses = s.uses.saturating_add(1);
+                    }
+                }
+                None => {
+                    let Some(more) = held.checked_add(symbol.pixels.len()).filter(|h| *h <= MAX_SYMBOL_PIXELS && table.len() < MAX_SYMBOLS) else {
+                        continue;
+                    };
+                    held = more;
+                    let t = u32::try_from(table.len()).ok()?;
+                    by_hash.entry(fingerprint(&symbol)).or_default().push(t);
+                    table.push(Symbol { uses: 1, ..symbol });
+                }
+            }
+        }
+    }
+    let uses = |t: &u32| table.get(*t as usize).map_or(0, |s| s.uses);
+    let mut shared: Vec<u32> = (0..u32::try_from(table.len()).ok()?).filter(|t| uses(t) >= 2).collect();
+    if shared.len() < 2 {
+        return None;
+    }
+    shared.sort_by_key(|t| std::cmp::Reverse(uses(t)));
+    shared.truncate(MAX_SHARED_SYMBOLS);
+    // The dictionary's order, as `plan` keeps it.
+    shared.sort_by_key(|t| table.get(*t as usize).map(|s| (s.height, s.width)));
+    let mut global = vec![None; table.len()];
+    for (k, t) in shared.iter().enumerate() {
+        if let Some(slot) = global.get_mut(*t as usize) {
+            *slot = u32::try_from(k).ok();
+        }
+    }
+    let symbols: Vec<&Symbol> = shared.iter().filter_map(|t| table.get(*t as usize)).collect();
+    let mut globals = Vec::new();
+    segment_of(&mut globals, 0, 0, 0, &[], true, &symbol_dictionary(&symbols)?);
+    let count = u32::try_from(symbols.len()).ok()?;
+    let streams = images
+        .iter()
+        .map(|(samples, columns, rows)| {
+            let page = page(samples, *columns)?;
+            let ids = page.symbols.iter().map(|s| find(&table, &by_hash, s).and_then(|t| global.get(t as usize).copied().flatten())).collect();
+            let shared = Shared { ids, count };
+            [1, 2].into_iter().filter_map(|copies| plan(&page, *columns, *rows, copies, None, Some(&shared))).min_by_key(Vec::len)
+        })
+        .collect();
+    Some((globals, streams))
+}
+
+/// What sorts a symbol's bitmap ([`symbols`] and [`encode_shared`] look exact copies up by it).
+fn fingerprint(s: &Symbol) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    (s.width, s.height, &s.pixels).hash(&mut hasher);
+    hasher.finish()
+}
+
+/// The index in `table` of the symbol with `s`'s bitmap, looked up by its [`fingerprint`].
+fn find(table: &[Symbol], by_hash: &HashMap<u64, Vec<u32>>, s: &Symbol) -> Option<u32> {
+    by_hash
+        .get(&fingerprint(s))?
+        .iter()
+        .copied()
+        .find(|t| table.get(*t as usize).is_some_and(|t| (t.width, t.height) == (s.width, s.height) && t.pixels == s.pixels))
 }
 
 /// The image's marks and symbols; `None` past the limits above.
-fn page(samples: &[u8], columns: u32, rows: u32) -> Option<Page> {
-    if rows > MAX_ROWS {
-        return None;
-    }
+fn page(samples: &[u8], columns: u32) -> Option<Page> {
     let width = usize::try_from(columns).ok()?;
     let stride = width.div_ceil(8);
     if stride == 0 {
@@ -272,23 +365,18 @@ fn symbols(page: &mut Page) -> Option<()> {
             page.large.push(m);
             continue;
         }
-        let pixels = pixels(mark, &page.runs, &page.order);
-        let mut hasher = DefaultHasher::new();
-        (width, height, &pixels).hash(&mut hasher);
-        let same = by_hash.entry(hasher.finish()).or_default();
+        let symbol = Symbol { width, height, pixels: pixels(mark, &page.runs, &page.order), uses: 0 };
         let symbols = &mut page.symbols;
-        let known =
-            same.iter().copied().find(|s| symbols.get(*s as usize).is_some_and(|s| (s.width, s.height) == (width, height) && s.pixels == pixels));
-        let id = match known {
+        let id = match find(symbols, &by_hash, &symbol) {
             Some(id) => id,
             None => {
-                kept = kept.checked_add(pixels.len())?;
+                kept = kept.checked_add(symbol.pixels.len())?;
                 if kept > MAX_SYMBOL_PIXELS || symbols.len() == MAX_SYMBOLS {
                     return None;
                 }
                 let id = u32::try_from(symbols.len()).ok()?;
-                symbols.push(Symbol { width, height, pixels, uses: 0 });
-                same.push(id);
+                by_hash.entry(fingerprint(&symbol)).or_default().push(id);
+                symbols.push(symbol);
                 id
             }
         };
@@ -305,18 +393,28 @@ fn symbols(page: &mut Page) -> Option<()> {
 /// the other marks in a generic region. `None` with fewer than two such symbols (their IDs would
 /// take no bits at all, SBSYMCODELEN 0, a corner of the standard left alone here) or more than
 /// [`MAX_CODED_SYMBOLS`].
-fn plan(page: &Page, columns: u32, rows: u32, copies: u32, log_strips: Option<u32>) -> Option<Vec<u8>> {
+///
+/// With `shared`, the symbols a group's dictionary holds are placed from there, whatever their uses
+/// here, and the page's own dictionary holds only the others (none, when it has none), as
+/// [`encode_shared`] writes them; `None` too for a page that places none of the shared ones.
+fn plan(page: &Page, columns: u32, rows: u32, copies: u32, log_strips: Option<u32>, shared: Option<&Shared>) -> Option<Vec<u8>> {
     let symbol = |s: u32| page.symbols.get(s as usize);
+    let global = |s: u32| shared.and_then(|g| g.ids.get(s as usize).copied().flatten());
+    let globals = shared.map_or(0, |g| g.count);
     // The dictionary's order (6.5.5): height classes from the shortest, each narrowest first.
-    let mut kept: Vec<u32> = (0..page.symbols.len() as u32).filter(|s| symbol(*s).is_some_and(|s| s.uses >= copies)).collect();
-    if kept.len() < 2 || kept.len() > MAX_CODED_SYMBOLS {
+    let mut kept: Vec<u32> =
+        (0..page.symbols.len() as u32).filter(|s| global(*s).is_none() && symbol(*s).is_some_and(|s| s.uses >= copies)).collect();
+    let count = usize::try_from(globals).ok()?.checked_add(kept.len())?;
+    if !(2..=MAX_CODED_SYMBOLS).contains(&count) {
         return None;
     }
     kept.sort_by_key(|s| symbol(*s).map(|s| (s.height, s.width)));
-    let mut id = vec![None; page.symbols.len()];
+    // The shared symbols' IDs come first, as their dictionary is referred to first (Table 31's
+    // SBSYMS).
+    let mut id: Vec<Option<u32>> = (0..page.symbols.len() as u32).map(global).collect();
     for (k, s) in kept.iter().enumerate() {
         if let Some(slot) = id.get_mut(*s as usize) {
-            *slot = u32::try_from(k).ok();
+            *slot = u32::try_from(k).ok().and_then(|k| k.checked_add(globals));
         }
     }
     let mut instances = Vec::new();
@@ -329,9 +427,12 @@ fn plan(page: &Page, columns: u32, rows: u32, copies: u32, log_strips: Option<u3
             _ => left.push(*m),
         }
     }
+    if shared.is_some() && !instances.iter().any(|i| i.id < globals) {
+        return None;
+    }
     let kept: Vec<&Symbol> = kept.iter().filter_map(|s| symbol(*s)).collect();
-    let dictionary = symbol_dictionary(&kept)?;
-    let count = u32::try_from(kept.len()).ok()?;
+    let dictionary = if kept.is_empty() { None } else { Some(symbol_dictionary(&kept)?) };
+    let count = u32::try_from(count).ok()?;
     // Bands of at most MAX_REGION_INSTANCES, from the top.
     instances.sort_by_key(|i| (i.t, i.s));
     let mut regions = Vec::new();
@@ -344,12 +445,21 @@ fn plan(page: &Page, columns: u32, rows: u32, copies: u32, log_strips: Option<u3
         });
     }
     let mut out = Vec::new();
-    segment(&mut out, 0, 48, &[], false, &page_information(columns, rows));
-    segment(&mut out, 1, 0, &[], true, &dictionary);
-    let mut number = 2;
+    // The shared dictionary is segment 0, in the globals, and a segment refers only to lower
+    // numbers (7.2.5): the page's own follow it.
+    let mut number = u32::from(shared.is_some());
+    segment(&mut out, number, 48, &[], false, &page_information(columns, rows));
+    number += 1;
+    let mut dictionaries: Vec<u8> = shared.map(|_| 0).into_iter().collect();
+    if let Some(dictionary) = &dictionary {
+        segment(&mut out, number, 0, &[], true, dictionary);
+        dictionaries.push(u8::try_from(number).ok()?);
+        number += 1;
+    }
     for (k, text) in regions.iter().enumerate() {
-        // The dictionary stays retained for the next region, until the last (7.2.4).
-        segment(&mut out, number, 7, &[(1, k + 1 < regions.len())], false, text);
+        // The dictionaries stay retained for the next region, until the last (7.2.4).
+        let refers_to: Vec<(u8, bool)> = dictionaries.iter().map(|n| (*n, k + 1 < regions.len())).collect();
+        segment(&mut out, number, 7, &refers_to, false, text);
         number += 1;
     }
     if !left.is_empty() {
@@ -543,8 +653,9 @@ fn encode_id(mq: &mut MqEncoder, contexts: &mut [Context], length: u32, id: u32)
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::jbig2::tests::{decode, samples, unpack};
-    use crate::jbig2::{encode_jbig2, encode_jbig2_generic};
+    use crate::FilterError;
+    use crate::jbig2::tests::{decode, decode_with, samples, unpack};
+    use crate::jbig2::{encode_jbig2, encode_jbig2_generic, encode_jbig2_shared};
 
     type Bitmap = Vec<Vec<u8>>;
 
@@ -665,11 +776,11 @@ mod tests {
     fn every_plan_round_trips(picture: &Bitmap) -> usize {
         let (columns, rows) = (picture[0].len() as u32, picture.len() as u32);
         let data = samples(picture);
-        let page = page(&data, columns, rows).unwrap();
+        let page = page(&data, columns).unwrap();
         let mut plans = 0;
         for copies in [1, 2] {
             for log_strips in 0..4 {
-                if let Some(coded) = plan(&page, columns, rows, copies, Some(log_strips)) {
+                if let Some(coded) = plan(&page, columns, rows, copies, Some(log_strips), None) {
                     assert_eq!(decode(&coded), unpack(&data, columns, rows), "{copies} copies, strips of {}", 1 << log_strips);
                     plans += 1;
                 }
@@ -735,10 +846,10 @@ mod tests {
                 row[stride - 1] &= 0xFF << (8 * stride - columns);
             }
             let (c, r) = (columns as u32, 120);
-            let page = page(&data, c, r).unwrap();
+            let page = page(&data, c).unwrap();
             assert!(page.marks.iter().all(|m| m.x1 as usize <= columns), "{columns} columns");
             for copies in [1, 2] {
-                if let Some(coded) = plan(&page, c, r, copies, None) {
+                if let Some(coded) = plan(&page, c, r, copies, None, None) {
                     assert_eq!(decode(&coded), unpack(&data, c, r), "{columns} columns");
                 }
             }
@@ -771,7 +882,7 @@ mod tests {
             row[290] = 1;
         }
         let data = samples(&picture);
-        let page = page(&data, 300, 300).unwrap();
+        let page = page(&data, 300).unwrap();
         let boxes: Vec<(u32, u32, u32, u32)> = page.marks.iter().map(|m| (m.x0, m.y0, m.x1 - m.x0, m.y1 - m.y0)).collect();
         assert_eq!(
             boxes,
@@ -792,18 +903,14 @@ mod tests {
         assert_eq!(every_plan_round_trips(&picture), 8);
     }
 
-    /// Past 2^20 black runs or 2^24 rows the image is left to generic coding; at either cap it is
-    /// still looked at.
+    /// Past 2^20 black runs the image is left to generic coding; at the cap it is still looked at.
     #[test]
-    fn busy_or_tall_images_are_left_to_generic_coding() {
+    fn busy_images_are_left_to_generic_coding() {
         // 0x55: four black pixels a byte, each its own run, under the same ones on the next row.
         let columns = 1 << 20;
         let row = vec![0x55u8; columns / 8];
-        assert!(page(&row.repeat(2), columns as u32, 2).is_some(), "2^20 runs");
-        assert!(page(&row.repeat(3), columns as u32, 3).is_none(), "1.5 × 2^20 runs");
-        let tall = vec![0xFFu8; MAX_ROWS as usize + 1];
-        assert!(page(&tall, 1, MAX_ROWS + 1).is_none());
-        assert!(page(&tall, 1, MAX_ROWS).is_some());
+        assert!(page(&row.repeat(2), columns as u32).is_some(), "2^20 runs");
+        assert!(page(&row.repeat(3), columns as u32).is_none(), "1.5 × 2^20 runs");
     }
 
     /// A plan codes at most 32,767 symbols, which an independent decoder reads back; with more,
@@ -828,18 +935,18 @@ mod tests {
             (samples(&picture), columns as u32, rows as u32)
         };
         let (data, columns, rows) = codes(MAX_CODED_SYMBOLS, 0);
-        let at_cap = page(&data, columns, rows).unwrap();
-        assert_eq!(decode(&plan(&at_cap, columns, rows, 1, None).unwrap()), unpack(&data, columns, rows));
+        let at_cap = page(&data, columns).unwrap();
+        assert_eq!(decode(&plan(&at_cap, columns, rows, 1, None, None).unwrap()), unpack(&data, columns, rows));
         // One more distinct mark, each once: neither plan is made.
         let (data, columns, rows) = codes(MAX_CODED_SYMBOLS + 1, 0);
-        let past = page(&data, columns, rows).unwrap();
-        assert!(plan(&past, columns, rows, 1, None).is_none() && plan(&past, columns, rows, 2, None).is_none());
+        let past = page(&data, columns).unwrap();
+        assert!(plan(&past, columns, rows, 1, None, None).is_none() && plan(&past, columns, rows, 2, None, None).is_none());
         assert_eq!(encode_jbig2(&data, columns, rows).unwrap(), encode_jbig2_generic(&data, columns, rows).unwrap());
         // With two of them repeated, the second plan codes those two.
         let (data, columns, rows) = codes(MAX_CODED_SYMBOLS + 1, 200);
-        let past = page(&data, columns, rows).unwrap();
-        assert!(plan(&past, columns, rows, 1, None).is_none());
-        assert_eq!(decode(&plan(&past, columns, rows, 2, None).unwrap()), unpack(&data, columns, rows));
+        let past = page(&data, columns).unwrap();
+        assert!(plan(&past, columns, rows, 1, None, None).is_none());
+        assert_eq!(decode(&plan(&past, columns, rows, 2, None, None).unwrap()), unpack(&data, columns, rows));
         // Above a page of text whose letters repeat, that second plan is the one `encode_jbig2`
         // keeps: the first, of every mark, would code too many symbols.
         let mut picture: Bitmap = vec![vec![0u8; 256 * 18]; 512];
@@ -857,10 +964,10 @@ mod tests {
         let coded = encode_jbig2(&data, columns, rows).unwrap();
         assert_eq!(segment_types(&coded)[1], 0, "symbol coded");
         assert_eq!(decode(&coded), unpack(&data, columns, rows));
-        let (data, columns, rows) = codes(MAX_SYMBOLS, 0);
-        assert_eq!(page(&data, columns, rows).map(|p| p.symbols.len()), Some(MAX_SYMBOLS));
-        let (data, columns, rows) = codes(MAX_SYMBOLS + 1, 0);
-        assert!(page(&data, columns, rows).is_none());
+        let (data, columns, _) = codes(MAX_SYMBOLS, 0);
+        assert_eq!(page(&data, columns).map(|p| p.symbols.len()), Some(MAX_SYMBOLS));
+        let (data, columns, _) = codes(MAX_SYMBOLS + 1, 0);
+        assert!(page(&data, columns).is_none());
         // `n` black squares of 256 × 256, each with a white pixel in a different place: 2^16
         // pixels a symbol, so 256 of them are exactly the cap.
         let squares = |n: usize| {
@@ -876,11 +983,11 @@ mod tests {
             (samples(&picture), columns as u32, rows as u32)
         };
         let (data, columns, rows) = squares(256);
-        let at_cap = page(&data, columns, rows).unwrap();
+        let at_cap = page(&data, columns).unwrap();
         assert_eq!(at_cap.symbols.len(), 256);
-        assert_eq!(decode(&plan(&at_cap, columns, rows, 1, None).unwrap()), unpack(&data, columns, rows));
-        let (data, columns, rows) = squares(257);
-        assert!(page(&data, columns, rows).is_none());
+        assert_eq!(decode(&plan(&at_cap, columns, rows, 1, None, None).unwrap()), unpack(&data, columns, rows));
+        let (data, columns, _) = squares(257);
+        assert!(page(&data, columns).is_none());
     }
 
     /// More than 10,000 marks are placed by several text regions, each of at most 10,000 (more
@@ -993,7 +1100,199 @@ mod tests {
         }
     }
 
+    /// Each segment's page association (7.2.6): the byte after the numbers it refers to.
+    fn associations(data: &[u8]) -> Vec<u8> {
+        let (mut pages, mut at) = (Vec::new(), 0);
+        while at < data.len() {
+            let refers = usize::from(data[at + 5] >> 5);
+            pages.push(data[at + 6 + refers]);
+            let length_at = at + 6 + refers + 1;
+            at = length_at + 4 + u32::from_be_bytes(data[length_at..length_at + 4].try_into().unwrap()) as usize;
+        }
+        pages
+    }
+
+    /// `pictures`, `columns` × `rows` each, coded sharing a dictionary; each image's stream, which
+    /// has to be there, decodes with the globals to its picture.
+    fn shared_round_trip(pictures: &[Bitmap]) -> (Vec<u8>, Vec<Vec<u8>>) {
+        let (columns, rows) = (pictures[0][0].len() as u32, pictures[0].len() as u32);
+        let data: Vec<Vec<u8>> = pictures.iter().map(|p| samples(p)).collect();
+        let images: Vec<(&[u8], u32, u32)> = data.iter().map(|d| (&d[..], columns, rows)).collect();
+        let shared = encode_jbig2_shared(&images).unwrap().unwrap();
+        let (globals, coded) = (shared.globals, shared.images);
+        let coded: Vec<Vec<u8>> = coded.into_iter().map(Option::unwrap).collect();
+        for (d, c) in data.iter().zip(&coded) {
+            assert_eq!(decode_with(c, Some(&globals)), unpack(d, columns, rows));
+        }
+        (globals, coded)
+    }
+
+    /// `font` with a stem 20 pixels tall down each glyph's left side: a font sharing no glyph with
+    /// any [`glyphs`] gives, whose glyphs are at most 18 pixels tall.
+    fn stemmed(font: &[Bitmap]) -> Vec<Bitmap> {
+        font.iter()
+            .map(|g| {
+                (0..g.len().max(20)).map(|y| std::iter::once(1).chain(g.get(y).cloned().unwrap_or_else(|| vec![0; g[0].len()])).collect()).collect()
+            })
+            .collect()
+    }
+
+    /// Mark `k` of a set of distinct ones: a stroke 33 pixels long with a pixel above every other
+    /// column for each 1 bit of `k`, below 2^17.
+    fn comb(k: usize) -> Bitmap {
+        let mut g = vec![vec![0u8; 33]; 2];
+        g[1].fill(1);
+        for bit in 0..17 {
+            g[0][2 * bit] = u8::from(k >> bit & 1 == 1);
+        }
+        g
+    }
+
+    /// The combs `ks`, 120 a row, the rows four pixels apart.
+    fn combs(ks: impl ExactSizeIterator<Item = usize>) -> Bitmap {
+        let mut page = vec![vec![0u8; 120 * 36]; ks.len().div_ceil(120) * 4];
+        for (i, k) in ks.enumerate() {
+            draw(&mut page, &comb(k), (i % 120 * 36) as i64, (i / 120 * 4) as i64);
+        }
+        page
+    }
+
+    /// The symbols a symbol dictionary segment exports (SDNUMEXSYMS, 7.4.2.1.4), in a stream
+    /// that is that segment alone: after its header, flags and adaptive pixels.
+    fn exported(globals: &[u8]) -> usize {
+        u32::from_be_bytes(globals[21..25].try_into().unwrap()) as usize
+    }
+
+    /// Pages in one font share its letters: one symbol dictionary, segment 0, associated with no
+    /// page and retained (7.2.4, 7.2.6), which each page's text region refers to first, its own
+    /// segments numbered after it (7.2.5). Together they take less than they take alone.
+    #[test]
+    fn pages_in_one_font_share_one_dictionary() {
+        let font = glyphs(40, 7);
+        let pictures: Vec<Bitmap> = (0..4).map(|seed| text(1200, 300, &font, 20 + seed)).collect();
+        let (globals, coded) = shared_round_trip(&pictures);
+        assert_eq!(segments(&globals), [(0, 0, true, vec![])]);
+        assert_eq!(associations(&globals), [0]);
+        let (mut shared, mut alone) = (globals.len(), 0);
+        for (picture, c) in pictures.iter().zip(&coded) {
+            let segments = segments(c);
+            assert_eq!(segments.first().map(|s| s.0), Some(1), "the page's own segments follow");
+            assert!(segments.iter().filter(|s| s.1 == 7).all(|s| s.3.first() == Some(&(0, false))), "{segments:?}");
+            assert!(associations(c).iter().all(|page| *page == 1));
+            shared += c.len();
+            alone += encode_jbig2(&samples(picture), 1200, 300).unwrap().len();
+        }
+        assert!(shared < alone, "shared {shared} bytes, alone {alone}");
+    }
+
+    /// Two pages alike place every mark from the shared dictionary and have none of their own; a
+    /// page with letters of its own as well keeps them in its own dictionary, referred to after the
+    /// shared one (its symbols' IDs follow), and the page with nothing shared has no stream.
+    #[test]
+    fn what_a_page_has_alone_stays_its_own() {
+        let (font, other) = (glyphs(30, 7), stemmed(&glyphs(20, 99)));
+        let same = text(900, 240, &font, 3);
+        let mut more = text(900, 240, &font, 4);
+        more.extend(text(900, 120, &other, 5));
+        let (globals, coded) = shared_round_trip(&[same.clone(), same.clone()]);
+        assert!(!globals.is_empty());
+        assert!(coded.iter().all(|c| segment_types(c) == [48, 7]), "{:?}", coded.iter().map(|c| segment_types(c)).collect::<Vec<_>>());
+        let with_more = |p: &Bitmap| p.iter().cloned().chain(std::iter::repeat_n(vec![0u8; 900], 120)).collect::<Bitmap>();
+        let (_, coded) = shared_round_trip(&[with_more(&same), more]);
+        assert_eq!(segment_types(&coded[1])[..3], [48, 0, 7]);
+        assert_eq!(segments(&coded[1])[2].3, [(0, false), (2, false)]);
+        let alone = text(900, 360, &other, 6);
+        let data: Vec<Vec<u8>> = [&same, &same, &alone].iter().map(|p| samples(p)).collect();
+        let images: Vec<(&[u8], u32, u32)> = vec![(&data[0], 900, 240), (&data[1], 900, 240), (&data[2], 900, 360)];
+        let (_, coded) = encode_shared(&images).unwrap();
+        assert!(coded[0].is_some() && coded[1].is_some() && coded[2].is_none());
+    }
+
+    /// Images that share fewer than two marks share nothing; two are enough.
+    #[test]
+    fn images_with_nothing_in_common_share_nothing() {
+        let font = glyphs(30, 7);
+        let (a, b) = (samples(&text(600, 200, &font, 1)), samples(&text(600, 200, &stemmed(&font), 1)));
+        assert!(encode_shared(&[(&a, 600, 200), (&b, 600, 200)]).is_none());
+        assert!(encode_shared(&[(&a, 600, 200)]).is_none(), "one image");
+        assert!(encode_shared(&[]).is_none());
+        // The two commonest letters of the first page, below the last line of the second.
+        let mut two = text(600, 200, &stemmed(&font), 1);
+        draw(&mut two, &font[0], 10, 180);
+        draw(&mut two, &font[1], 100, 180);
+        let two = samples(&two);
+        let (globals, coded) = encode_shared(&[(&a, 600, 200), (&two, 600, 200)]).unwrap();
+        assert_eq!(exported(&globals), 2);
+        assert_eq!(decode_with(coded[1].as_ref().unwrap(), Some(&globals)), unpack(&two, 600, 200));
+    }
+
+    /// The images of a group are checked as `encode_jbig2_generic` checks one, and an image it
+    /// would refuse refuses the group.
+    #[test]
+    fn a_group_with_an_image_the_encoder_refuses_is_refused() {
+        let page = samples(&text(600, 200, &glyphs(30, 7), 1));
+        assert!(matches!(encode_jbig2_shared(&[(&page, 600, 200), (&page[..10], 600, 200)]), Err(FilterError::Corrupt { .. })));
+        assert!(matches!(encode_jbig2_shared(&[(&page, 600, 200), (&page, 0, 200)]), Err(FilterError::Unsupported(_))));
+        assert!(encode_jbig2_shared(&[(&page, 600, 200), (&page, 600, 200)]).unwrap().is_some());
+    }
+
+    /// A group holds its distinct marks within what one image's are held to: past 65,536 a mark
+    /// first seen later isn't held, so isn't shared, while those held count every image they're
+    /// in. Ten marks of the first image are in two images after it, with 464 first seen there.
+    #[test]
+    fn past_the_marks_a_group_holds_later_ones_arent_shared() {
+        let (a, b) = (samples(&combs(0..40_000)), samples(&combs(40_000..65_536)));
+        let late = combs((0..10).chain(65_536..66_000).collect::<Vec<_>>().into_iter());
+        let (rows, late) = (late.len() as u32, samples(&late));
+        let (columns, a_rows, b_rows) = (120 * 36, 40_000u32.div_ceil(120) * 4, 25_536u32.div_ceil(120) * 4);
+        let images = [(&a[..], columns, a_rows), (&b[..], columns, b_rows), (&late[..], columns, rows), (&late[..], columns, rows)];
+        let (globals, coded) = encode_shared(&images).unwrap();
+        assert_eq!(exported(&globals), 10);
+        for c in &coded[2..] {
+            assert_eq!(decode_with(c.as_ref().unwrap(), Some(&globals)), unpack(&late, columns, rows));
+        }
+    }
+
+    /// Past what one dictionary shares, it keeps the marks the most images hold: 20,000 shared,
+    /// the first 10,000 in all three images and the rest in two. The third image then places all
+    /// its marks from it, and the other two code the rest themselves (in a dictionary of their own
+    /// or a generic region, whichever is smaller).
+    #[test]
+    fn past_the_shared_limit_the_most_widely_held_marks_are_shared() {
+        let (both, first) = (combs(0..20_000), combs(0..10_000));
+        let rows = both.len();
+        let first: Bitmap = first.iter().cloned().chain(std::iter::repeat_n(vec![0u8; 120 * 36], rows - first.len())).collect();
+        let (globals, coded) = shared_round_trip(&[both.clone(), both, first]);
+        assert_eq!(exported(&globals), MAX_SHARED_SYMBOLS);
+        assert_eq!(segment_types(&coded[2]), [48, 7]);
+        assert!(segment_types(&coded[0]).iter().any(|t| *t == 0 || *t == 39), "{:?}", segment_types(&coded[0]));
+    }
+
     proptest::proptest! {
+        /// Glyphs scattered over pages of one font: whatever is shared, every page with a stream
+        /// decodes with the globals to its picture.
+        #[test]
+        fn shared_groups_round_trip(
+            columns in 1usize..200,
+            rows in 1usize..100,
+            shapes in 2usize..8,
+            n in 0usize..60,
+            pages in 2usize..5,
+            seed in proptest::num::u64::ANY,
+        ) {
+            let font = glyphs(shapes, seed);
+            let data: Vec<Vec<u8>> = (0..pages).map(|p| samples(&scatter(columns, rows, &font, seed ^ p as u64, n))).collect();
+            let (c, r) = (columns as u32, rows as u32);
+            let images: Vec<(&[u8], u32, u32)> = data.iter().map(|d| (&d[..], c, r)).collect();
+            if let Some((globals, coded)) = encode_shared(&images) {
+                for (d, coded) in data.iter().zip(coded) {
+                    if let Some(coded) = coded {
+                        proptest::prop_assert_eq!(decode_with(&coded, Some(&globals)), unpack(d, c, r));
+                    }
+                }
+            }
+        }
+
         /// Glyphs anywhere, over the edges and each other, with stray pixels: every plan decodes to
         /// the picture, and `encode_jbig2` is never larger than the generic coding.
         #[test]
@@ -1024,6 +1323,7 @@ mod tests {
         fn any_input_returns(data in proptest::collection::vec(0u8..=255, 0..600), columns in 0u32..5000, rows in 0u32..80) {
             let _ = encode_jbig2(&data, columns, rows);
             let _ = encode(&data, columns, rows);
+            let _ = encode_shared(&[(&data, columns, rows), (&data, columns, rows.saturating_sub(1))]);
         }
     }
 }
