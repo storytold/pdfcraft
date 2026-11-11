@@ -4,7 +4,8 @@ use crate::FilterError;
 use crate::ccitt::Rows;
 
 /// The largest JBIG2 page [`decode_jbig2_within`] decodes, in pixels. The decoder decodes a page whole,
-/// and takes pages of up to about this many (20,000 × 10,000 decodes).
+/// and takes pages of up to this many (20,000 × 10,000 decodes). It is also the most
+/// [`encode_jbig2_generic`](crate::encode_jbig2_generic) encodes, so what it stores reads back.
 pub const MAX_JBIG2_PIXELS: u64 = 1 << 28;
 
 /// A `JBIG2Decode` stream's `data`, with what its `/JBIG2Globals` stream decodes to, decoded as the
@@ -109,6 +110,125 @@ mod tests {
         data
     }
 
+    /// The JBIG2 file header's ID string (ISO 14492 D.4.1).
+    const FILE_HEADER_ID: [u8; 8] = [0x97, 0x4A, 0x42, 0x32, 0x0D, 0x0A, 0x1A, 0x0A];
+
+    /// `embedded`, segments as [`encode_jbig2_generic`] writes them (11-byte headers: no references,
+    /// a one-byte page association), behind a file header with `flags` and the page count `pages`,
+    /// in the organization `flags` declares (D.4.2, bit 0): 1 sequential, each segment's header
+    /// before its data (D.1); 0 random access, every header first, the last an end of file segment
+    /// numbered 2, which tells where they end, then every segment's data in the same order (D.2).
+    fn with_file_header(embedded: &[u8], flags: u8, pages: Option<u32>) -> Vec<u8> {
+        let mut data = FILE_HEADER_ID.to_vec();
+        data.push(flags);
+        data.extend(pages.map(u32::to_be_bytes).into_iter().flatten());
+        if flags & 0x01 != 0 {
+            data.extend_from_slice(embedded);
+            return data;
+        }
+        let (mut headers, mut bodies, mut rest) = (Vec::new(), Vec::new(), embedded);
+        while !rest.is_empty() {
+            let (header, after) = rest.split_at(11);
+            assert_eq!(header[5], 0, "no references");
+            let (body, after) = after.split_at(u32::from_be_bytes(header[7..11].try_into().unwrap()) as usize);
+            headers.extend_from_slice(header);
+            bodies.extend_from_slice(body);
+            rest = after;
+        }
+        headers.extend_from_slice(&[0, 0, 0, 2, 51, 0, 1, 0, 0, 0, 0]);
+        data.extend(headers);
+        data.extend(bodies);
+        data
+    }
+
+    /// A stream that starts with a JBIG2 file header (ISO 14492 D.4), which some producers write
+    /// into `JBIG2Decode` data although ISO 32000-1 7.4.7 has the embedded organization there,
+    /// decodes past it as Acrobat and PDFBox draw it (hayro-jbig2 patch 17), in either organization
+    /// the header declares, with the page count and without it. "Bit 0: File organisation type. If
+    /// this bit is 0, the file uses the random-access organisation. If this bit is 1, the file uses
+    /// the sequential organisation." (D.4.2) A header with its reserved flag bits set is an error,
+    /// not a panic.
+    #[test]
+    fn a_stream_with_a_jbig2_file_header_decodes_past_it() {
+        let (w, h) = (203u32, 41u32);
+        let bits = noise(w, h);
+        let max = bits.len();
+        let embedded = encode_jbig2_generic(&bits, w, h).unwrap();
+        let decode = |flags: u8, pages: Option<u32>| decode_jbig2(&with_file_header(&embedded, flags, pages), None, w, h, max);
+        // Sequential organization (bit 0 is 1), one page.
+        assert_eq!(decode(0x01, Some(1)).unwrap(), bits, "sequential, page count given");
+        // Sequential, number of pages unknown (bit 1 is 1): no count follows (D.4.3).
+        assert_eq!(decode(0x03, None).unwrap(), bits, "sequential, page count unknown");
+        // Random-access organization (bit 0 is 0): the segment headers, then their data.
+        assert_ne!(with_file_header(&embedded, 0x00, Some(1))[13..], embedded[..], "laid out otherwise");
+        assert_eq!(decode(0x00, Some(1)).unwrap(), bits, "random access, page count given");
+        assert_eq!(decode(0x02, None).unwrap(), bits, "random access, page count unknown");
+        assert!(decode(0x11, Some(1)).is_err(), "reserved bits");
+    }
+
+    /// A file header cut short, or the segments after it, is an error and not a panic: the ID string
+    /// alone or in part, a header whose flags promise a page count with fewer than its four bytes,
+    /// a header with no segments after it, and segments cut anywhere in either organization. No
+    /// prefix of a whole stream decodes to its samples.
+    #[test]
+    fn a_truncated_jbig2_file_header_is_an_error() {
+        let (w, h) = (24u32, 8u32);
+        let bits = noise(w, h);
+        let max = bits.len();
+        let embedded = encode_jbig2_generic(&bits, w, h).unwrap();
+        let decode = |data: &[u8]| decode_jbig2(data, None, w, h, max);
+        assert!(decode(&FILE_HEADER_ID[..5]).is_err(), "part of the ID string");
+        assert!(decode(&FILE_HEADER_ID).is_err(), "the ID string, no flags");
+        for count in 0..4 {
+            let mut data = FILE_HEADER_ID.to_vec();
+            data.push(0x01);
+            data.extend_from_slice(&1u32.to_be_bytes()[..count]);
+            assert!(decode(&data).is_err(), "{count} bytes of the page count");
+        }
+        for (flags, pages) in [(0x01, Some(1)), (0x03, None), (0x00, Some(1)), (0x02, None)] {
+            let whole = with_file_header(&embedded, flags, pages);
+            let header = 9 + if pages.is_some() { 4 } else { 0 };
+            assert!(decode(&whole[..header]).is_err(), "flags {flags:#04x}: the header alone");
+            assert!(decode(&whole[..whole.len() - 1]).is_err(), "flags {flags:#04x}: the last byte cut");
+            for end in 0..whole.len() {
+                assert_ne!(decode(&whole[..end]).ok(), Some(bits.clone()), "flags {flags:#04x}: {end} bytes");
+            }
+            assert_eq!(decode(&whole).unwrap(), bits, "flags {flags:#04x}: whole");
+        }
+    }
+
+    /// The segments after a file header count toward hayro-jbig2's cap on the segments of a stream
+    /// together with its `/JBIG2Globals`, in either organization (patches 8 and 17): globals of
+    /// extension segments, which decode to nothing, fill the cap to the image's segments, and one
+    /// more is refused.
+    #[test]
+    fn segments_after_a_jbig2_file_header_count_with_the_globals() {
+        /// hayro-jbig2's `MAX_SEGMENTS`, the most segments of a stream with its globals.
+        const MAX_SEGMENTS: u32 = 1 << 20;
+        let (w, h) = (24u32, 8u32);
+        let bits = noise(w, h);
+        let max = bits.len();
+        let embedded = encode_jbig2_generic(&bits, w, h).unwrap();
+        // Numbered past the image's segments (0 to 2), of no page, with no data.
+        let globals = |count: u32| -> Vec<u8> {
+            (16..16 + count)
+                .flat_map(|number| {
+                    let mut segment = number.to_be_bytes().to_vec();
+                    segment.extend_from_slice(&[62, 0, 0, 0, 0, 0, 0]);
+                    segment
+                })
+                .collect()
+        };
+        // The image's page information and region, and in random access its end of file segment.
+        for (flags, organization, image) in [(0x01, "sequential", 2), (0x00, "random access", 3)] {
+            let data = with_file_header(&embedded, flags, Some(1));
+            let (at_cap, past_cap) = (globals(MAX_SEGMENTS - image), globals(MAX_SEGMENTS - image + 1));
+            assert_eq!(decode_jbig2(&data, Some(&at_cap), w, h, max).unwrap(), bits, "{organization}: at the cap");
+            let refused = decode_jbig2(&data, Some(&past_cap), w, h, max).unwrap_err();
+            assert!(refused.to_string().contains("too many segments"), "{organization}: {refused}");
+        }
+    }
+
     /// Either coding decodes to its samples, black as 0, the bits that pad each row 0: a generic
     /// region of noise, and symbols for letters repeated across the page. With no rows asked for,
     /// nothing is decoded.
@@ -141,6 +261,143 @@ mod tests {
         let symbols = encode_jbig2(&marks, w, h).unwrap();
         assert!(symbols.len() < encode_jbig2_generic(&marks, w, h).unwrap().len(), "symbol coded");
         assert_eq!(decode_jbig2(&symbols, None, w, h, usize::MAX).unwrap(), marks);
+    }
+
+    /// A region's location is unsigned (ISO/IEC 14492 5.4.4), so one past `i32::MAX` is off the
+    /// page. The decoder took it for a signed one: a region at 0xFFFFFFFC came back onto the page
+    /// four pixels left of it, and a refinement anywhere past `i32::MAX` was refused, and the page
+    /// with it. Each stream is a page of 16 × 12 covered by a generic region, then a region of 8 × 6
+    /// of one kind past `i32::MAX`, coded by the standard's procedures, and decodes to that page
+    /// alone; moved onto the page, the region draws. Vendored hayro-jbig2 patch 14.
+    #[test]
+    fn a_region_located_past_i32_max_is_off_the_page() {
+        const PAGE: &str = "0000000030000100000013000000100000000c00000000000000004200000000000126000100000035000000100000000c0000000000000000040003fffdff02fefefed906aa2cb6ee4ccb4bc975d02669ca7a9c14c20c638f5a5e1bffac";
+        let cases = [
+            // At 0xFFFFFFFC, 1.
+            ("generic", "00000002260001000000220000000800000006fffffffc00000001000003fffdff02fefefe17c876ae6f77ffac"),
+            // At 1, 0xFFFFFFFE, with its symbol dictionary.
+            (
+                "text",
+                "000000020000010000001e000003fffdff02fefefe00000001000000014fdda14149cec477ed5fffac00000003062002010000001b000000080000000600000001fffffffe00001000000001a943ffac",
+            ),
+            // At 0xFFFFFFFC, 1, with its pattern dictionary.
+            (
+                "halftone",
+                "000000021000010000000a000101000000011fffac00000003162002010000002e0000000800000006fffffffc0000000100000000000800000006000000000000000001000000d09301774485ffac",
+            ),
+            // At 0xFFFFFFFC, 1, reading the page there (7.4.7.4): 0s.
+            ("refinement of the page", "000000022a00010000001e0000000800000006fffffffc000000010400ffffffff0bd98f188428ffac"),
+            // Of an intermediate region at the same place (7.4.7.5), 1, 0xFFFFFFFE.
+            (
+                "refinement of a region",
+                "0000000224000100000023000000080000000600000001fffffffe000003fffdff02fefefe3d81322da16b7fffac000000032a2002010000001e000000080000000600000001fffffffe0000ffffffffe29946b82229ffac",
+            ),
+            // Of an intermediate refinement of an intermediate region, all at 0xFFFFFFFC, 1.
+            (
+                "refinement of a refinement",
+                "00000002240001000000230000000800000006fffffffc00000001000003fffdff02fefefecdfd921ec8c47fffac00000003282002010000001e0000000800000006fffffffc000000010000ffffffff903cdb447a47ffac000000042a2003010000001e0000000800000006fffffffc000000010000ffffffffdcd6078cab86ffac",
+            ),
+        ];
+        let hex = |text: &str| (0..text.len() / 2).map(|i| u8::from_str_radix(&text[i * 2..i * 2 + 2], 16).unwrap()).collect::<Vec<u8>>();
+        let decode = |segments: &str| decode_jbig2(&[hex(PAGE), hex(segments)].concat(), None, 16, 12, usize::MAX).unwrap();
+        let page = decode("");
+        assert!(page.iter().any(|&byte| byte != 0xFF), "the page has ink");
+        for (kind, segments) in cases {
+            assert_eq!(decode(segments), page, "{kind}");
+            // Moved onto the page, to 4, 1 or 1, 2, the same regions draw: they decode, and are
+            // left out for where they are.
+            let (off, on) = [("fffffffc00000001", "0000000400000001"), ("00000001fffffffe", "0000000100000002")]
+                .into_iter()
+                .find(|(off, _)| segments.contains(off))
+                .unwrap();
+            assert_ne!(decode(&segments.replace(off, on)), page, "{kind} on the page");
+        }
+
+        // A refinement at 2, 0 of an intermediate region at 0x80000000, 0. A refinement of a
+        // region refines it where it is, "GRREFERENCEDX 0, GRREFERENCEDY 0" (Table 35), and the two
+        // should be at one place (7.4.7.5). Where they aren't, it decodes as it does where they are.
+        const ELSEWHERE: &str = "000000022400010000002300000008000000068000000000000000000003fffdff02fefefe1bca3149568cdfffac000000032a2002010000001e000000080000000600000002000000000000ffffffff784a909cc761ffac";
+        let refined = decode(ELSEWHERE);
+        assert_eq!(refined, decode(&ELSEWHERE.replace("8000000000000000", "0000000200000000")), "the region at 2, 0 too");
+        assert_ne!(refined, page, "drawn");
+    }
+
+    /// A refinement of the page refines "the current contents of the page buffer, restricted to the
+    /// area of the page buffer specified by this segment's region segment information field"
+    /// (ISO/IEC 14492 7.4.7.4), at an offset of 0 (Table 35), and reads 0 outside that area
+    /// (6.3.5.2). The decoder read the page around the area too, and refused a refinement wider or
+    /// taller than the page. A refinement of another region refines that region, not the page. And
+    /// a reference 32 or more left of a refinement (GRREFERENCEDX below −31, as a symbol refined
+    /// with an RDX below −31 has, Table 18) is read from where each row starts in it: each row's
+    /// first context read 0 for the reference column it starts at, and from 33 left for the one
+    /// before it too. Each stream is coded by the standard's procedures and decodes to its
+    /// picture, `#` for black. Vendored hayro-jbig2 patch 16.
+    #[test]
+    fn a_refinement_refines_the_page_in_its_area_and_any_reference_where_it_is() {
+        let cases: [(&str, &str, &[&str]); 5] = [
+            (
+                "a 48 × 6 page a generic region has inked, refined at 33: ink on both sides of the area, template 0",
+                "000000003000010000001300000030000000060000000000000000420000000000012600010000004100000030000000060000000000000000040003fffdff02fefefe331433558a5c5056cf412003ec9a38164df39bd4463b9331502c4fb1c267ab77b665aa5962ffac000000022a0001000000210000000c0000000600000021000000000400ffffffff9a6c35bbeee221f687ffac",
+                &[
+                    ".#..##.######..#.#..#####.##..#........##.##..##",
+                    ".#..####.####.#...###.##.##.#.#.....#.#.####.###",
+                    "##.#......#..#....#..#.###.#..#.#####.###.######",
+                    "......#....###.#.##..#.##........#.#.#...#####..",
+                    "#.##..###.#.#.##.....#...#.#..#.##.#..#...#...#.",
+                    ".###...#..#..#..##..#.#..#####.#.##.......###.##",
+                ],
+            ),
+            (
+                "a 24 × 8 inked page refined at 5, 1, template 1",
+                "000000003000010000001300000018000000080000000000000000420000000000012600010000003500000018000000080000000000000000040003fffdff02fefefeb1e133cb8bcbb8510e81d219bb880dfb40a311dc5c298819efffac000000022a00010000001b0000000a0000000500000005000000010401e55c0078dcd30fffac",
+                &[
+                    "#.##.##...##....##.##..#",
+                    "#.##.##...#.####..##..#.",
+                    "##..##.##...#...###..#.#",
+                    ".....#.#.##.#...###....#",
+                    "..#.#...#.#...#.#...##.#",
+                    "....######...#.####....#",
+                    "..######..##.#.#..##.#..",
+                    "...#..##.####.#..##...#.",
+                ],
+            ),
+            (
+                "a 16 × 5 inked page refined by a region 4 wider than it, template 0",
+                "000000003000010000001300000010000000050000000000000000420000000000012600010000002600000010000000050000000000000000040003fffdff02fefefe22e5e253a429cbf2c701ffac000000022a000100000023000000140000000500000000000000000400ffffffff3afa516532bbe3d481926fffac",
+                &[".#.#.#.#..#.#.#.", "##.####..###...#", "..####.#..####.#", ".###.#.....#..#.", "#.###..#########"],
+            ),
+            (
+                "an intermediate region at 4, 1 on an inked 20 × 8 page, refined there (OR): the region, not the page, template 0",
+                "000000003000010000001300000014000000080000000000000000420000000000012600010000003000000014000000080000000000000000040003fffdff02fefefeb91e434e1726ca89ed06c2bffb0fe5fa7fccc80fffac00000002240001000000230000000a000000050000000400000001000003fffdff02fefefece7a9826ba81bfffac000000032a2002010000001e0000000a0000000500000004000000010000ffffffffd046ee6f6190ffac",
+                &[
+                    "#.#.#....#.#...#....",
+                    "##..#.#.#.##.....##.",
+                    "##.#.#.#.#.###.##...",
+                    "###.##.####..###.#.#",
+                    "...#.###..###.#.#..#",
+                    "#...#######.#...####",
+                    "..##.##...#..##..#.#",
+                    "#...##...#.##....#..",
+                ],
+            ),
+            (
+                "a symbol refined in a symbol dictionary from a 40 × 6 one, RDX −33: 33 left, template 1",
+                "0000000030000100000013000000070000000600000000000000004200000000000100000100000036000003fffdff02fefefe00000001000000014f913296209e2187f37bddb8589c8beb7d70109de7124ebe47d04914ef7e655c3c4cffac00000002002001010000001f100203fffdff02fefefe00000001000000014fe451a27bddf49f7ef7e7ffac00000003062002010000001b0000000700000006000000000000000004001000000001a943ffac",
+                &[".####.#", ".##..##", "......#", "...#..#", "#.#.###", "....##."],
+            ),
+        ];
+        let hex = |text: &str| (0..text.len() / 2).map(|i| u8::from_str_radix(&text[i * 2..i * 2 + 2], 16).unwrap()).collect::<Vec<u8>>();
+        for (form, stream, picture) in cases {
+            let (w, h) = (picture[0].len(), picture.len());
+            // As the filter gives it: black as 0, each row padded to a byte with 0s.
+            let mut rows = vec![0u8; w.div_ceil(8) * h];
+            for (y, row) in picture.iter().enumerate() {
+                for (x, _) in row.bytes().enumerate().filter(|(_, c)| *c == b'.') {
+                    rows[y * w.div_ceil(8) + x / 8] |= 0x80 >> (x % 8);
+                }
+            }
+            assert_eq!(decode_jbig2(&hex(stream), None, w as u32, h as u32, usize::MAX).unwrap(), rows, "{form}");
+        }
     }
 
     /// What a page costs is the same however much a run has left. Given exactly that it decodes,
@@ -182,6 +439,57 @@ mod tests {
         assert_eq!(u64::MAX - work, 4 * 14);
     }
 
+    /// A refinement whose reference is offset right of it (GRREFERENCEDX above 0, as a refined text
+    /// instance has from a wider bitmap, ISO/IEC 14492 Table 12, and a refined symbol from an RDX
+    /// above 0, Table 18) reads the reference from its first column. Left of the reference the
+    /// decoder emptied what it had read of it, and at its first column didn't read it again, so its
+    /// first 32 columns read as 0: such a refinement decoded to other pixels than were coded, or
+    /// failed. Each stream is a refinement coded by the standard's procedures on a page of its own
+    /// size, and decodes to its picture, `#` for black. Vendored hayro-jbig2 patch 15.
+    #[test]
+    fn a_refinement_reads_a_reference_right_of_it_from_its_first_column() {
+        let cases: [(&str, &str, &[&str]); 4] = [
+            (
+                "a text instance of an 8 × 6 symbol refined 6 wider: 3 right, template 0",
+                "00000000300001000000130000000e000000060000000000000000420000000000010000010000001d000003fffdff02fefefe00000001000000014fdd3dba48bdddde35ffac00000002062001010000002c0000000e000000060000000000000000040012ffffffff00000001a96b4a6b78b7fc094fadde1b3e881fffac",
+                &[".#.#.#....#...", "##.###....##.#", ".###...###..#.", "#.......#...#.", "#.####.#...#..", "#.##...###.#.."],
+            ),
+            (
+                "refined 2 wider and 2 taller, RDX and RDY 1: 2 right, 2 down, template 1",
+                "00000000300001000000130000000a000000080000000000000000420000000000010000010000001d000003fffdff02fefefe00000001000000014fdd9c52d3ea827a43ffac0000000206200101000000280000000a00000008000000000000000004801200000001a96c00cdac6dd5f6f848ce872411cfffac",
+                &["####.##...", "####..####", "####..##..", "...##...#.", "#......#..", "..#.....#.", "##....####", ".#........"],
+            ),
+            (
+                "a symbol refined in a symbol dictionary, RDX 5, RDY −1, template 0 with its AT pixels moved",
+                "00000000300001000000130000000c000000060000000000000000420000000000010000010000001e000003fffdff02fefefe00000001000000014fdda13efc4029efc95fffac000000020020010100000027000203fffdff02fefefefeff010100000001000000014fc98c352dd84a906f120ffb49793fffac00000003062002010000001b0000000c00000006000000000000000004001000000001a943ffac",
+                &["#.#.##.#.###", "..#.#.....##", "##..#...#...", "..##....##..", "##.#.##.####", ".#..#####..#"],
+            ),
+            (
+                "a text instance of a 40 × 5 symbol refined 2 wider, RDX 1: 2 right, across a word, template 0",
+                "00000000300001000000130000002a0000000500000000000000004200000000000100000100000031000003fffdff02fefefe00000001000000015240f590d953ae3f4069dede672090d4d61b377906d3f41aafa4f77107ffac00000002062001010000003c0000002a000000050000000000000000040012ffffffff00000001a96c0b9386d4b140486bdc3673dbd031490e468c7f7813d19068ab04a79cbfffac",
+                &[
+                    "##.#.#..##.##.#####.#....#.#.#..#..######.",
+                    ".#.#..###....#..##.#..#.####.#..#.###...##",
+                    ".#.#......#....#####....#...###...#####...",
+                    "#...##.##.......#...###.###...##..##.###.#",
+                    "..#..###..###..#...#.......##.#........##.",
+                ],
+            ),
+        ];
+        let hex = |text: &str| (0..text.len() / 2).map(|i| u8::from_str_radix(&text[i * 2..i * 2 + 2], 16).unwrap()).collect::<Vec<u8>>();
+        for (form, stream, picture) in cases {
+            let (w, h) = (picture[0].len(), picture.len());
+            // As the filter gives it: black as 0, each row padded to a byte with 0s.
+            let mut rows = vec![0u8; w.div_ceil(8) * h];
+            for (y, row) in picture.iter().enumerate() {
+                for (x, _) in row.bytes().enumerate().filter(|(_, c)| *c == b'.') {
+                    rows[y * w.div_ceil(8) + x / 8] |= 0x80 >> (x % 8);
+                }
+            }
+            assert_eq!(decode_jbig2(&hex(stream), None, w as u32, h as u32, usize::MAX).unwrap(), rows, "{form}");
+        }
+    }
+
     /// The page has to be the image's size, and is bounded before it is decoded, being decoded
     /// whole: within `max` as rows of one bit, and within [`MAX_JBIG2_PIXELS`]. Globals are given
     /// to the decoder: ones it skips decode, ones that aren't JBIG2 are an error, as is damaged
@@ -211,6 +519,89 @@ mod tests {
         assert!(matches!(decode_jbig2(&data, Some(b"not JBIG2"), w, h, usize::MAX), Err(FilterError::Corrupt { .. })));
         for end in 0..data.len() {
             let _ = decode_jbig2(&data[..end], None, w, h, usize::MAX);
+        }
+    }
+
+    /// Pixels past a bitmap's edge are 0 (ISO/IEC 14492 6.3.5.2). A page whose default pixel is 1,
+    /// and an intermediate text or halftone region whose default pixel is 1, kept 1s past their
+    /// width in their last word of each row, and a refinement, which reads its reference a word at
+    /// a time, read them as pixels: of rows not a multiple of 32 wide, it decoded to other pixels
+    /// than were coded. Each stream is a refinement coded by the standard's procedures from a
+    /// reference read as 0 past its edge, and decodes to the picture given, `#` for black.
+    /// Vendored hayro-jbig2 patch 13.
+    #[test]
+    fn a_refinement_reads_nothing_past_its_references_width() {
+        // A page of 7 × 6, then of 33 × 6, whose default pixel is 1, refined whole.
+        const PAGE_7: &str = "000000003000010000001300000007000000060000000000000000460000000000012a00010000001e000000070000000600000000000000000400ffffffffe42d7e889ebcffac";
+        const PAGE_33: &str = "000000003000010000001300000021000000060000000000000000460000000000012a000100000034000000210000000600000000000000000400ffffffff314a8d598037eb3f915ab3d526ccae915ad6a6a7b814111b124ae60fffac";
+        // An intermediate text region of 31 × 6 whose default pixel is 1, then one of 7 × 6 on a
+        // page of 40, each refined into the page.
+        const TEXT_31: &str = "00000000300001000000130000001f0000000600000000000000004200000000000100000100000030000003fffdff02fefefe00000001000000014f96dceb76c7f1ff585971969cd9f88e538261a6f713be68d77e8e1fffac00000002042001010000001b0000001f00000006000000000000000000029000000001a943ffac000000032a2002010000002f0000001f0000000600000000000000000400ffffffff9ac311688adbc8f570a2f96aef93d332e3b1f4b27b704bffac";
+        const TEXT_7: &str = "000000003000010000001300000028000000060000000000000000420000000000010000010000001d000003fffdff02fefefe00000001000000014fe1f79f4a95c5b77fffac00000002042001010000001b0000000700000006000000000000000000029000000001a943ffac000000032a2002010000001e000000070000000600000000000000000400ffffffffa71dae12bd7fffac";
+        // An intermediate halftone region of 33 × 6 whose default pixel is 1, refined into the page.
+        const HALFTONE_33: &str = "000000003000010000001300000021000000060000000000000000420000000000011000010000000a000101000000011fffac00000002142001010000004100000021000000060000000000000000009000000021000000060000000000000000010000004ea6618f551d48ff24c2c5c98124d449f2adea6fca76e4297fffac000000032a20020100000032000000210000000600000000000000000400ffffffffe87db809393a3251e565e7a749e6470ab37f7aef186ceaf5167bffac";
+        let cases: [(&str, &str, [&str; 6]); 5] = [
+            ("page 7", PAGE_7, ["###.#.#", ".......", "#.####.", "######.", "#.#...#", ".#...##"]),
+            (
+                "page 33",
+                PAGE_33,
+                [
+                    ".#..##........###..####....#.##.#",
+                    ".#.###.###.##.##..#..#...#.....##",
+                    ".....##..#....#.##.######.###..#.",
+                    "##...#..##.###..###.##..#.#.#.#.#",
+                    ".##.#........##.#.#.....###......",
+                    "...#.#####.#..#.###......###..###",
+                ],
+            ),
+            (
+                "text 31",
+                TEXT_31,
+                [
+                    "....##....###......#.##.#.#....",
+                    ".#.....##.......##..###.#...#..",
+                    ".#.#.#.####...#####.####...#.#.",
+                    "......#...#...#.##...##...#..#.",
+                    ".#..##.###.#.###..####...#...#.",
+                    "#...#...#..#.#....#.##.#.....#.",
+                ],
+            ),
+            (
+                "text 7 on a page of 40",
+                TEXT_7,
+                [
+                    "......#.................................",
+                    ".....##.................................",
+                    "##...##.................................",
+                    "..#.....................................",
+                    "##......................................",
+                    "..#.....................................",
+                ],
+            ),
+            (
+                "halftone 33",
+                HALFTONE_33,
+                [
+                    "##...#.###.#.###.....#.####..####",
+                    "##.##.#...#.##.##.##.#...#.#.###.",
+                    "###..#.#....##.###...#..##.##..##",
+                    "##..#...###...##..#.####.###.#...",
+                    "####.###.###.#..#..#.#.####...###",
+                    "#.#..#........#....#.#.##.##..#.#",
+                ],
+            ),
+        ];
+        let hex = |text: &str| (0..text.len() / 2).map(|i| u8::from_str_radix(&text[i * 2..i * 2 + 2], 16).unwrap()).collect::<Vec<u8>>();
+        for (form, stream, picture) in cases {
+            let w = picture[0].len();
+            // As the filter gives it: black as 0, each row padded to a byte with 0s.
+            let mut rows = vec![0u8; w.div_ceil(8) * picture.len()];
+            for (y, row) in picture.iter().enumerate() {
+                for (x, _) in row.bytes().enumerate().filter(|(_, c)| *c == b'.') {
+                    rows[y * w.div_ceil(8) + x / 8] |= 0x80 >> (x % 8);
+                }
+            }
+            assert_eq!(decode_jbig2(&hex(stream), None, w as u32, 6, usize::MAX).unwrap(), rows, "{form}");
         }
     }
 }
