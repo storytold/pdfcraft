@@ -32,6 +32,10 @@ pub(crate) struct Hotbar {
     /// The pass the Hotbar tools window was last drawn on.
     #[serde(skip)]
     picker_shown: Option<u64>,
+    /// While the grip is dragged, where the pointer pressed it, relative to the bar's top-left
+    /// corner. The bar is placed from the pointer, so movement past an edge isn't lost.
+    #[serde(skip)]
+    grab: Option<egui::Vec2>,
 }
 
 impl Hotbar {
@@ -80,6 +84,7 @@ impl Default for Hotbar {
             picker_drag_pos: None,
             keyboard_sizing: false,
             picker_shown: None,
+            grab: None,
         }
     }
 }
@@ -712,17 +717,19 @@ pub(crate) fn show(app: &mut PdfCraftApp, area: Rect, page_left: Option<f32>, ui
                     let drag_label = tl!("Drag hotbar");
                     let grip = grip.on_hover_text(drag_label).on_hover_cursor(egui::CursorIcon::Grab);
                     grip.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, drag_label));
-                    if grip.dragged() && bar.dock.is_none() {
-                        let delta = grip.drag_delta();
-                        if !bar.placed {
-                            let cur_x = (pos.x - bounds.min.x).max(0.0);
-                            let cur_y = (pos.y - bounds.min.y).max(0.0);
-                            bar.position[0] = (cur_x / travel.x.max(1.0)).clamp(0.0, 1.0);
-                            bar.position[1] = (cur_y / travel.y.max(1.0)).clamp(0.0, 1.0);
-                        }
-                        bar.position[0] = (bar.position[0] + delta.x / travel.x.max(1.0)).clamp(0.0, 1.0);
-                        bar.position[1] = (bar.position[1] + delta.y / travel.y.max(1.0)).clamp(0.0, 1.0);
+                    // Place the bar from the pointer, keeping the spot that was grabbed under it.
+                    // Adding up each pass's movement would lose what the clamp cut off past an
+                    // edge, and the grip would no longer be under the pointer on the way back.
+                    let pointer = grip.interact_pointer_pos().filter(|_| grip.dragged() && bar.dock.is_none());
+                    if let Some(pointer) = pointer {
+                        let press = ctx.input(|i| i.pointer.press_origin()).unwrap_or(pointer);
+                        let grab = *bar.grab.get_or_insert(press - pos);
+                        let target = pointer - grab - bounds.min;
+                        bar.position[0] = (target.x / travel.x.max(1.0)).clamp(0.0, 1.0);
+                        bar.position[1] = (target.y / travel.y.max(1.0)).clamp(0.0, 1.0);
                         bar.placed = true;
+                    } else {
+                        bar.grab = None;
                     }
                     if bar.vertical {
                         let fixed_overhead = grip_size.y + cell + 24.0;
@@ -1091,6 +1098,42 @@ mod tests {
         h.state_mut().hotbar.close_picker();
         assert!(h.state().hotbar.picker_drag_pos.is_none(), "closing ends the held position");
         assert!(!h.state().hotbar.keyboard_sizing, "closing ends the keyboard adjustment");
+    }
+
+    /// Dragging the floating hotbar past the edge of its area and back brings it back to where it
+    /// started: the grip stays under the pointer instead of losing the movement beyond the edge.
+    #[test]
+    fn hotbar_drag_past_the_edge_and_back_follows_the_pointer() {
+        let mut h = hotbar_harness!("float", true, false);
+        h.state_mut().hotbar.close_picker();
+        h.run_steps(3);
+        let start_position = h.state().hotbar.position;
+        let grip = h.get_by_label("Drag hotbar").rect();
+        let from = grip.center();
+        h.hover_at(from);
+        h.run_steps(1);
+        h.drag_at(from);
+        h.run_steps(1);
+        // Well past the left and top edges, then back to where the drag began.
+        let far = from - vec2(800.0, 800.0);
+        for step in 1..=8 {
+            h.hover_at(from + (far - from) * (step as f32 / 8.0));
+            h.run_steps(2);
+        }
+        assert_eq!(h.state().hotbar.position, [0.0, 0.0], "the bar stops at the edge");
+        for step in 1..=8 {
+            h.hover_at(far + (from - far) * (step as f32 / 8.0));
+            h.run_steps(2);
+        }
+        h.drop_at(from);
+        h.run_steps(3);
+        let position = h.state().hotbar.position;
+        assert!(
+            (position[0] - start_position[0]).abs() < 1e-3 && (position[1] - start_position[1]).abs() < 1e-3,
+            "back at the start: {position:?}, expected {start_position:?}"
+        );
+        let grip_after = h.get_by_label("Drag hotbar").rect();
+        assert!(grip_after.contains(from), "the grip is under the pointer again: {grip_after:?} should contain {from:?}");
     }
 
     #[test]
