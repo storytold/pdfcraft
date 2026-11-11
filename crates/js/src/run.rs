@@ -1,7 +1,7 @@
 use super::globals::{event_object, install};
-use super::host::{Host, Shared, text};
+use super::host::{Host, Shared, host, text};
 use super::model::{DocInfo, Event, FieldState, Limits, Outcome};
-use super::{Arc, Attribute, BTreeSet, Context, HostHooks, JsNativeError, JsResult, JsString, Realm, RefCell, Source, js_string};
+use super::{Arc, BTreeSet, Context, HostHooks, JsNativeError, JsResult, JsString, JsValue, NativeFunction, Realm, RefCell, Source, js_string};
 
 /// Longest script, in bytes.
 pub(crate) const MAX_SCRIPT_BYTES: usize = 256 * 1024;
@@ -19,86 +19,48 @@ pub(crate) const MAX_ARRAY_LENGTH: u64 = 1 << 20;
 /// Maximum calculated field scripts evaluated by `calculateNow()` during one JavaScript run.
 pub(crate) const MAX_CALCULATE_STEPS: usize = 4096;
 
-/// Deepest nesting of `(`, `[` and `{`.
-const MAX_BRACKET_DEPTH: usize = 64;
+// The retained document realm also bounds the chains boa's parser descends without brackets
+// (`preflight`); bracket, prefix and conditional limits are the nesting guard's.
+use crate::nesting::{MAX_BRACKET_DEPTH, MAX_CONDITIONALS, MAX_PREFIX_RUN};
 
-/// Longest run of prefix operators (`!`, `~`, `+`, `-`).
-const MAX_PREFIX_RUN: usize = 64;
+/// Longest active arrow-function chain across the currently open bracket levels.
+const MAX_ARROW_FUNCTIONS: usize = 256;
 
-/// Most `?` (conditional expressions nest without brackets).
-const MAX_CONDITIONALS: usize = 4096;
+/// Assignment and exponentiation associate right-to-left without increasing bracket depth.
+/// Bound active chains, rather than the total operators in independent statements.
+const MAX_RIGHT_ASSOCIATIVE_OPERATORS: usize = 4096;
 
 /// The script thread's stack.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) const SCRIPT_STACK: usize = 1 << 30;
 
-/// Why `source` is refused, if it is: too long, or nested deeper than any form needs. Strings
-/// and comments are skipped; brackets in regular expressions and templates count, which only
-/// errs on the safe side.
+/// Persistent document-worker stack, bounded separately from transient legacy runners.
+/// Parser/compiler boundary and hostile-input regressions run through the real worker.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) const DOCUMENT_WORKER_STACK: usize = 64 << 20;
+
+mod preflight;
+
+/// Why `source` is refused, if it is: too long, or nested deeper than any form needs, which
+/// would overflow the stack in boa's parser ([`crate::nesting`]), or with an arrow-function or
+/// right-associative chain longer than the document worker takes ([`preflight`]).
 pub(crate) fn refuse(source: &str) -> Option<String> {
     if source.len() > MAX_SCRIPT_BYTES {
         return Some(format!("the script is too long ({} KiB; the limit is {} KiB)", source.len() / 1024, MAX_SCRIPT_BYTES / 1024));
     }
-    let too_deep = || Some("the script is nested too deeply to run safely".to_string());
-    let b = source.as_bytes();
-    let (mut depth, mut prefix, mut conditionals) = (0usize, 0usize, 0usize);
-    let mut i = 0;
-    while let Some(&c) = b.get(i) {
-        i += 1;
-        match c {
-            b'\'' | b'"' => {
-                // To the closing quote (or the end of the line, where an unclosed string ends).
-                while let Some(&d) = b.get(i) {
-                    i += 1;
-                    if d == b'\\' {
-                        i += 1;
-                    } else if d == c || d == b'\n' {
-                        break;
-                    }
-                }
-                prefix = 0;
-            }
-            b'/' if b.get(i) == Some(&b'/') => {
-                while b.get(i).is_some_and(|d| *d != b'\n') {
-                    i += 1;
-                }
-            }
-            b'/' if b.get(i) == Some(&b'*') => {
-                i += 1;
-                while i < b.len() && !b[i..].starts_with(b"*/") {
-                    i += 1;
-                }
-                i += 2;
-            }
-            b'(' | b'[' | b'{' => {
-                depth += 1;
-                if depth > MAX_BRACKET_DEPTH {
-                    return too_deep();
-                }
-                prefix = 0;
-            }
-            b')' | b']' | b'}' => {
-                depth = depth.saturating_sub(1);
-                prefix = 0;
-            }
-            b'!' | b'~' | b'+' | b'-' => {
-                prefix += 1;
-                if prefix > MAX_PREFIX_RUN {
-                    return too_deep();
-                }
-            }
-            b'?' => {
-                conditionals += 1;
-                if conditionals > MAX_CONDITIONALS {
-                    return too_deep();
-                }
-                prefix = 0;
-            }
-            c if c.is_ascii_whitespace() => {}
-            _ => prefix = 0,
-        }
+    if crate::nesting::too_deep(source) {
+        return Some("the script is nested too deeply to run safely".to_string());
     }
-    None
+    // A leading `#!` line is a comment (the nesting guard reads it so); blank it for the chain
+    // scan, keeping its length.
+    match source.strip_prefix("#!") {
+        Some(rest) => {
+            let end = rest.find(['\n', '\r', '\u{2028}', '\u{2029}']).map_or(source.len(), |i| i + 2);
+            let blanked: String = source[..end].chars().map(|_| ' ').chain(source[end..].chars()).collect();
+            preflight::refuse(&blanked)
+        }
+        None => preflight::refuse(source),
+    }
 }
 
 /// Run `script` for `event`, after the document-level scripts (`doc_scripts`, which define the
@@ -111,259 +73,58 @@ pub fn run(script: &str, event: &Event, doc: &DocInfo, fields: &[FieldState], do
 /// context; the first field write copies the snapshot, so neither the caller nor another
 /// script can observe uncommitted writes. Read-only calculations avoid copying the whole form.
 pub fn run_shared(script: &str, event: &Event, doc: &DocInfo, fields: Arc<Vec<FieldState>>, doc_scripts: &[String], limits: Limits) -> Outcome {
-    run_shared_calculations(script, event, doc, fields, doc_scripts, &Arc::new(Vec::new()), limits)
+    run_shared_calculations(script, event, doc, fields, doc_scripts, &[], limits)
 }
 
 /// Like [`run_shared`], with the document's ordered calculated fields available to
-/// `calculateNow()` while this context is running.
+/// `calculateNow()` while this context is running. Each tuple contains the target
+/// position in `fields` and its source; the engine resolves positions by PDF object identity.
 pub fn run_shared_calculations(
     script: &str,
     event: &Event,
     doc: &DocInfo,
     fields: Arc<Vec<FieldState>>,
     doc_scripts: &[String],
-    calculations: &[(String, String)],
+    calculations: &[(usize, String)],
     limits: Limits,
 ) -> Outcome {
-    run_shared_calculations_shared(script, event, doc, fields, doc_scripts, &Arc::new(calculations.to_vec()), limits)
-}
-
-/// Like [`run_shared_calculations`], sharing its ordered calculation scripts with the context.
-pub fn run_shared_calculations_shared(
-    script: &str,
-    event: &Event,
-    doc: &DocInfo,
-    fields: Arc<Vec<FieldState>>,
-    doc_scripts: &[String],
-    calculations: &Arc<Vec<(String, String)>>,
-    limits: Limits,
-) -> Outcome {
-    if let Some(why) = refuse(script) {
-        return failed(event, why);
-    }
-    let (kept, skipped) = sort_doc_scripts(doc_scripts);
-    let (kept, skipped) = (&kept, &skipped);
     #[cfg(not(target_arch = "wasm32"))]
     {
-        // The script's thread writes dates as this one asked (`with_english_printd`).
         let english = crate::format::printd_english();
+        let failed =
+            |why: String| Outcome { rc: true, value: event.value.clone(), change: event.change.clone(), error: Some(why), ..Default::default() };
         std::thread::scope(|scope| {
             let spawned = std::thread::Builder::new().name("pdfcraft-js".into()).stack_size(SCRIPT_STACK).spawn_scoped(scope, || {
-                crate::format::with_english_printd(english, || {
-                    run_here(script, event, doc, fields, ScriptSetup { doc_scripts: kept, skipped, calculations }, limits, &|| {})
-                })
+                crate::format::with_english_printd(english, || run_shared_here(script, event, doc, fields, doc_scripts, calculations, limits))
             });
             match spawned {
-                Ok(thread) => thread.join().unwrap_or_else(|_| failed(event, "the script stopped with an internal error".into())),
-                Err(e) => failed(event, format!("the script engine could not start: {e}")),
+                Ok(thread) => thread.join().unwrap_or_else(|_| failed("the script stopped with an internal error".into())),
+                Err(e) => failed(format!("the script engine could not start: {e}")),
             }
         })
     }
     #[cfg(target_arch = "wasm32")]
-    run_here(script, event, doc, fields, ScriptSetup { doc_scripts: kept, skipped, calculations }, limits, &|| {})
+    run_shared_here(script, event, doc, fields, doc_scripts, calculations, limits)
 }
 
-/// Like [`run_shared`], held to `timeout` of wall-clock time from when the engine is ready (its
-/// start-up is held apart to [`crate::xfa::ENGINE_START_LIMIT`], as an XFA script's is). boa
-/// can't interrupt a script, and its loop limit counts each call's loops apart, so a script that
-/// calls a function with a long loop again and again could run for hours: past the limit its
-/// thread is left behind to finish on its own, and the outcome is [`Outcome::abandoned`], with
-/// nothing changed. On wasm there are no threads: the script runs here, bounded by the loop and
-/// recursion limits alone.
-///
-/// At most eight of these threads ([`MAX_SCRIPT_THREADS`]) live at once, the ones left behind included:
-/// each abandoned script keeps a core busy until it ends on its own, so a hostile file opened
-/// again and again would otherwise leave one more behind each time. When none is free, the
-/// script is not started and the outcome is abandoned, saying why.
-pub fn run_shared_within(
+/// Run a snapshot in a fresh context on the calling thread, skipping document scripts that fail source preflight.
+pub(crate) fn run_shared_here(
     script: &str,
     event: &Event,
     doc: &DocInfo,
     fields: Arc<Vec<FieldState>>,
     doc_scripts: &[String],
+    calculations: &[(usize, String)],
     limits: Limits,
-    timeout: std::time::Duration,
 ) -> Outcome {
-    run_shared_calculations_within(script, event, doc, fields, (doc_scripts, &Arc::new(Vec::new())), limits, timeout)
-}
-
-/// Like [`run_shared_within`], with the document's ordered calculated fields available to
-/// `calculateNow()` while this context is running (as [`run_shared_calculations_shared`]).
-pub fn run_shared_calculations_within(
-    script: &str,
-    event: &Event,
-    doc: &DocInfo,
-    fields: Arc<Vec<FieldState>>,
-    (doc_scripts, calculations): (&[String], &Calculations),
-    limits: Limits,
-    timeout: std::time::Duration,
-) -> Outcome {
-    #[cfg(target_arch = "wasm32")]
-    {
-        let _ = timeout;
-        run_shared_calculations_shared(script, event, doc, fields, doc_scripts, calculations, limits)
-    }
-    #[cfg(not(target_arch = "wasm32"))]
-    run_on_thread_from(&SCRIPT_THREADS, script, event, doc, fields, (doc_scripts, calculations), (limits, timeout))
-}
-
-/// How many threads [`run_shared_within`] keeps alive at once in a process, scripts that ran past
-/// their limit and still run included.
-#[cfg(not(target_arch = "wasm32"))]
-pub(crate) const MAX_SCRIPT_THREADS: usize = 8;
-
-#[cfg(not(target_arch = "wasm32"))]
-static SCRIPT_THREADS: ThreadSlots = ThreadSlots::new(MAX_SCRIPT_THREADS);
-
-/// A count of script threads alive, held below `max`.
-#[cfg(not(target_arch = "wasm32"))]
-pub(crate) struct ThreadSlots {
-    taken: std::sync::atomic::AtomicUsize,
-    max: usize,
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-impl ThreadSlots {
-    pub(crate) const fn new(max: usize) -> ThreadSlots {
-        ThreadSlots { taken: std::sync::atomic::AtomicUsize::new(0), max }
-    }
-
-    /// A place for one more thread, if one is free. Taking it and giving it back are each one
-    /// atomic step, so whether the script ends before or after its caller stops waiting, the
-    /// place is given back exactly once: when the [`ThreadSlot`] is dropped.
-    fn take(&'static self) -> Option<ThreadSlot> {
-        use std::sync::atomic::Ordering;
-        let mut n = self.taken.load(Ordering::Acquire);
-        loop {
-            if n >= self.max {
-                return None;
-            }
-            match self.taken.compare_exchange_weak(n, n.saturating_add(1), Ordering::AcqRel, Ordering::Acquire) {
-                Ok(_) => return Some(ThreadSlot(self)),
-                Err(now) => n = now,
-            }
-        }
-    }
-
-    /// How many places are taken.
-    #[cfg(test)]
-    pub(crate) fn taken(&self) -> usize {
-        self.taken.load(std::sync::atomic::Ordering::Acquire)
-    }
-}
-
-/// One taken place of [`ThreadSlots`], given back when dropped: by the script's thread as it
-/// ends (or unwinds), or here when the thread could not start.
-#[cfg(not(target_arch = "wasm32"))]
-struct ThreadSlot(&'static ThreadSlots);
-
-#[cfg(not(target_arch = "wasm32"))]
-impl Drop for ThreadSlot {
-    fn drop(&mut self) {
-        // Only a taken place is dropped, so the count is at least one.
-        self.0.taken.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
-    }
-}
-
-/// [`run_shared_within`] on a thread from `slots`.
-#[cfg(not(target_arch = "wasm32"))]
-pub(crate) fn run_on_thread_from(
-    slots: &'static ThreadSlots,
-    script: &str,
-    event: &Event,
-    doc: &DocInfo,
-    fields: Arc<Vec<FieldState>>,
-    (doc_scripts, calculations): (&[String], &Calculations),
-    (limits, timeout): (Limits, std::time::Duration),
-) -> Outcome {
-    use std::sync::mpsc::RecvTimeoutError;
-    use std::time::Instant;
-    enum Step {
-        Started,
-        Done(Box<Outcome>),
-    }
+    let failed = |why: String| Outcome { rc: true, value: event.value.clone(), change: event.change.clone(), error: Some(why), ..Default::default() };
     if let Some(why) = refuse(script) {
-        return failed(event, why);
+        return failed(why);
     }
-    let Some(slot) = slots.take() else {
-        let why = format!("{} scripts are already running, including ones abandoned for running too long; this one was not started", slots.max);
-        return Outcome { abandoned: true, ..failed(event, why) };
-    };
-    let (kept, skipped) = sort_doc_scripts(doc_scripts);
-    let kept: Vec<(usize, String)> = kept.into_iter().map(|(i, d)| (i, d.to_owned())).collect();
-    let (script_owned, event_owned, doc_owned) = (script.to_owned(), event.clone(), doc.clone());
-    let calculations = Arc::clone(calculations);
-    // The script's thread writes dates as this one asked (`with_english_printd`).
-    let english = crate::format::printd_english();
-    let (tx, rx) = std::sync::mpsc::channel();
-    // A thread that can't start drops the closure, and the slot with it.
-    let spawned = std::thread::Builder::new().name("pdfcraft-js".into()).stack_size(SCRIPT_STACK).spawn(move || {
-        // Given back on every way out: dropped below before the outcome is sent, or with the
-        // stack when the script unwinds.
-        let slot = slot;
-        // The first script in a process sets the engine up: not on the script's time.
-        crate::xfa::warm_up();
-        // The receiver is gone when the caller stopped waiting: nothing to report then.
-        let started = tx.clone();
-        let kept: Vec<(usize, &str)> = kept.iter().map(|(i, d)| (*i, d.as_str())).collect();
-        let o = crate::format::with_english_printd(english, || {
-            let setup = ScriptSetup { doc_scripts: &kept, skipped: &skipped, calculations: &calculations };
-            run_here(&script_owned, &event_owned, &doc_owned, fields, setup, limits, &move || {
-                let _ = started.send(Step::Started);
-            })
-        });
-        // Before the outcome is sent, so a caller holding its outcome finds the place free.
-        drop(slot);
-        let _ = tx.send(Step::Done(Box::new(o)));
-    });
-    if let Err(e) = spawned {
-        return failed(event, format!("the script engine could not start: {e}"));
-    }
-    let start_limit = crate::xfa::ENGINE_START_LIMIT;
-    let (mut running, mut limit) = (false, start_limit);
-    let mut deadline = Instant::now().checked_add(limit);
-    loop {
-        let left = deadline.map_or(limit, |d| d.saturating_duration_since(Instant::now()));
-        match rx.recv_timeout(left) {
-            Ok(Step::Done(o)) => return *o,
-            Ok(Step::Started) => {
-                if !running {
-                    (running, limit) = (true, timeout);
-                    deadline = Instant::now().checked_add(limit);
-                }
-            }
-            Err(RecvTimeoutError::Timeout) => {
-                let why = if running {
-                    format!("the script ran longer than {:.1} s and was abandoned", timeout.as_secs_f64())
-                } else {
-                    format!("the script engine took longer than {:.0} s to start", start_limit.as_secs_f64())
-                };
-                return Outcome { abandoned: true, ..failed(event, why) };
-            }
-            Err(RecvTimeoutError::Disconnected) => return failed(event, "the script stopped with an internal error".into()),
-        }
-    }
-}
-
-/// The form's calculated fields in calculation order, each with its calculation script, for
-/// `calculateNow()`.
-type Calculations = Arc<Vec<(String, String)>>;
-
-/// A document script refused before running ([`refuse`]): its place among all of them, and why.
-type Skipped = (usize, String);
-
-/// The outcome of a script that could not run, or stopped, for `why`: the event as it was.
-fn failed(event: &Event, why: String) -> Outcome {
-    Outcome { rc: true, value: event.value.clone(), change: event.change.clone(), error: Some(why), ..Default::default() }
-}
-
-/// The document scripts that may run, with their places among all of them, and the ones
-/// refused before running ([`refuse`]) with the reason. One too long or too deeply nested to run
-/// safely is skipped and reported, as one that throws is; the others and the script still run
-/// (#3940).
-fn sort_doc_scripts(doc_scripts: &[String]) -> (Vec<(usize, &str)>, Vec<Skipped>) {
+    // A document script too long or too deeply nested to run safely is skipped and reported,
+    // as one that throws is; the others and the script still run (#3940).
     let mut skipped = Vec::new();
-    let kept = doc_scripts
+    let kept: Vec<(usize, &str)> = doc_scripts
         .iter()
         .enumerate()
         .filter_map(|(i, d)| match refuse(d) {
@@ -374,13 +135,28 @@ fn sort_doc_scripts(doc_scripts: &[String]) -> (Vec<(usize, &str)>, Vec<Skipped>
             None => Some((i, d.as_str())),
         })
         .collect();
-    (kept, skipped)
+    run_here(
+        script,
+        event,
+        doc,
+        fields,
+        ScriptSetup {
+            doc_scripts: &kept,
+            skipped: &skipped,
+            calculations,
+            initialize: true,
+            reset_calls: 0,
+            calculation_evaluations: 0,
+            calculation_limit_exceeded: false,
+        },
+        limits,
+    )
 }
 
 /// Host hooks that refuse to compile code from strings (`eval`, `Function` and its generator
 /// and async kin). Such code is built at run time, so it never passed [`refuse`], and boa's
 /// recursive parser would overflow the stack on a deeply nested one.
-struct NoCodeFromStrings;
+pub(crate) struct NoCodeFromStrings;
 
 impl HostHooks for NoCodeFromStrings {
     fn ensure_can_compile_strings(&self, _: Realm, _: &[JsString], _: &JsString, _: bool, _: &mut Context) -> JsResult<()> {
@@ -416,56 +192,105 @@ fn doc_error(index: usize, error: &dyn std::fmt::Display) -> String {
 
 /// `doc_scripts` are the document scripts to run with their places among all of them;
 /// `skipped` the ones refused before running, with the reason.
-struct ScriptSetup<'a> {
-    doc_scripts: &'a [(usize, &'a str)],
-    skipped: &'a [Skipped],
-    calculations: &'a Arc<Vec<(String, String)>>,
+pub(crate) struct ScriptSetup<'a> {
+    pub(crate) doc_scripts: &'a [(usize, &'a str)],
+    pub(crate) skipped: &'a [(usize, String)],
+    pub(crate) calculations: &'a [(usize, String)],
+    pub(crate) initialize: bool,
+    pub(crate) reset_calls: usize,
+    pub(crate) calculation_evaluations: usize,
+    pub(crate) calculation_limit_exceeded: bool,
 }
 
-/// `started` is called once the engine is ready: a time limit on the script runs from then.
-fn run_here(
+/// Create a restricted temporary Boa context and convert initialization failures into script outcomes.
+fn run_here(script: &str, event: &Event, doc: &DocInfo, fields: Arc<Vec<FieldState>>, setup: ScriptSetup<'_>, limits: Limits) -> Outcome {
+    match Context::builder().host_hooks(std::rc::Rc::new(NoCodeFromStrings)).build() {
+        Ok(mut ctx) => run_in_context(&mut ctx, script, event, doc, fields, setup, limits),
+        Err(e) => Outcome { rc: true, error: Some(format!("the script engine could not start: {e}")), ..Default::default() },
+    }
+}
+
+/// Replace per-event host state, optionally initialize document scripts, and collect results within runtime limits.
+/// Drop the host's field snapshot once a job is over, keeping the rest of the retained host.
+pub(crate) fn release_fields(ctx: &Context) {
+    if let Ok(h) = host(ctx) {
+        h.borrow_mut().fields = Arc::new(Vec::new());
+    }
+}
+
+pub(crate) fn run_in_context(
+    ctx: &mut Context,
     script: &str,
     event: &Event,
     doc: &DocInfo,
     fields: Arc<Vec<FieldState>>,
     setup: ScriptSetup<'_>,
     limits: Limits,
-    started: &dyn Fn(),
 ) -> Outcome {
-    let mut ctx = match Context::builder().host_hooks(std::rc::Rc::new(NoCodeFromStrings)).build() {
-        Ok(ctx) => ctx,
-        Err(e) => {
-            let error = Some(format!("the script engine could not start: {e}"));
-            return Outcome { rc: true, value: event.value.clone(), change: event.change.clone(), error, ..Default::default() };
-        }
-    };
     ctx.runtime_limits_mut().set_loop_iteration_limit(limits.loop_iterations);
     ctx.runtime_limits_mut().set_recursion_limit(limits.recursion);
-    started();
+    let (icons, mut objects, cached_keys) = ctx
+        .remove_data::<Shared>()
+        .map(|h| {
+            let h = h.into_inner();
+            let mut icons = h.icons;
+            if h.doc.icon_epoch == doc.icon_epoch {
+                icons.retain(|(_, id)| h.doc.icon_versions.get(id) == doc.icon_versions.get(id));
+            } else {
+                icons.clear();
+            }
+            // The field identities are those of the previous job when every current key is one
+            // of its keys and there are as many (the previous snapshot itself is not retained).
+            let same_fields = h.field_keys.len() == fields.len()
+                && fields.iter().all(|f| h.field_keys.contains(&crate::host::field_cache_key(&f.name, f.object_id, f.instance_id)));
+            (icons, h.objects, same_fields.then_some(h.field_keys))
+        })
+        .unwrap_or_default();
+    let field_keys =
+        cached_keys.unwrap_or_else(|| fields.iter().map(|f| crate::host::field_cache_key(&f.name, f.object_id, f.instance_id)).collect());
+    objects.retain(|key, _| field_keys.contains(key));
     ctx.insert_data(RefCell::new(Host {
         event_name: event.name.clone(),
         fields,
+        icons,
+        objects,
+        field_keys,
         changed: BTreeSet::new(),
         formatted: BTreeSet::new(),
         alerts: Vec::new(),
         console: Vec::new(),
         requests: Vec::new(),
         doc: doc.clone(),
-        calculations: Arc::clone(setup.calculations),
+        calculations: setup.calculations.to_vec(),
         calculate_depth: 0,
-        calculate_steps: 0,
+        calculation_evaluations: setup.calculation_evaluations,
+        calculation_limit_exceeded: setup.calculation_limit_exceeded,
+        calculation_work: 0,
+        current_event: JsValue::undefined(),
+        reset_calls: setup.reset_calls,
+        reset_limit_exceeded: false,
         kept: 0,
         dropped: 0,
     }));
     let mut out = Outcome { rc: true, value: event.value.clone(), change: event.change.clone(), ..Default::default() };
     let mut doc_errors: Vec<(usize, String)> = setup.skipped.iter().map(|(i, why)| (*i, doc_error(*i, why))).collect();
     let result = (|| -> JsResult<()> {
-        install(&mut ctx)?;
-        let (ev, value_store) = event_object(&mut ctx, event)?;
-        ctx.register_global_property(js_string!("event"), ev.clone(), Attribute::all())?;
-        // One document script that throws (calling a method PdfCraft lacks, say) must not keep
-        // every field script in the form from running: what it defined before the error, and
-        // the other scripts, stay available (#3940).
+        if setup.initialize {
+            install(ctx)?;
+        }
+        let (ev, value_store) = event_object(ctx, event)?;
+        host(ctx)?.borrow_mut().current_event = ev.clone().into();
+        if setup.initialize {
+            let get = crate::host::function(ctx, NativeFunction::from_fn_ptr(get_event));
+            let set = crate::host::function(ctx, NativeFunction::from_fn_ptr(set_event));
+            ctx.global_object().define_property_or_throw(
+                js_string!("event"),
+                boa_engine::property::PropertyDescriptor::builder().get(get).set(set).enumerable(true).configurable(false),
+                ctx,
+            )?;
+        }
+        // An initializer that throws or reaches a VM limit must not block later scripts.
+        // Definitions it made before the error stay available to field scripts (#3940).
         for &(i, d) in setup.doc_scripts {
             if let Err(e) = ctx.eval(Source::from_bytes(d)) {
                 doc_errors.push((i, doc_error(i, &e)));
@@ -473,32 +298,114 @@ fn run_here(
         }
         let r = ctx.eval(Source::from_bytes(script))?;
         if !r.is_undefined() {
-            out.result = Some(text(&r, &mut ctx)?);
+            out.result = Some(text(&r, ctx)?);
         }
-        let rc = ev.get(js_string!("rc"), &mut ctx)?;
+        let rc = ev.get(js_string!("rc"), ctx)?;
         out.rc = rc.to_boolean();
-        let v = ev.get(js_string!("value"), &mut ctx)?;
-        out.value = text(&v, &mut ctx)?;
-        out.value_set = value_store.get(js_string!("set"), &mut ctx)?.to_boolean();
-        let c = ev.get(js_string!("change"), &mut ctx)?;
-        out.change = text(&c, &mut ctx)?;
+        let v = ev.get(js_string!("value"), ctx)?;
+        out.value = text(&v, ctx)?;
+        out.value_set = value_store.get(js_string!("set"), ctx)?.to_boolean();
+        let c = ev.get(js_string!("change"), ctx)?;
+        out.change = text(&c, ctx)?;
         Ok(())
     })();
     if let Err(e) = result {
+        out.execution_refused = matches!(e.as_engine(), Some(boa_engine::error::EngineError::RuntimeLimit(_)));
         out.error = Some(e.to_string());
     }
     doc_errors.sort_by_key(|(i, _)| *i);
     out.doc_errors = doc_errors.into_iter().map(|(_, e)| e).collect();
     if let Some(h) = ctx.remove_data::<Shared>() {
-        let h = h.into_inner();
-        out.changed = h.changed.iter().map(|i| h.fields[*i].clone()).collect();
+        let mut h = h.into_inner();
+        out.reset_limit_exceeded = h.reset_limit_exceeded;
+        out.calculation_limit_exceeded = h.calculation_limit_exceeded;
+        if h.calculation_limit_exceeded && out.error.is_none() {
+            out.error = Some("script calculation work limit exceeded".into());
+        }
+        out.changed = h.changed.iter().filter_map(|i| h.fields.get(*i).cloned()).collect();
         out.formatted = h.formatted.iter().filter_map(|&i| h.fields.get(i).map(|f| f.name.clone())).collect();
-        out.alerts = h.alerts;
-        out.console = h.console;
-        out.requests = h.requests;
+        out.alerts = std::mem::take(&mut h.alerts);
+        out.console = std::mem::take(&mut h.console);
+        out.requests = std::mem::take(&mut h.requests);
         if h.dropped > 0 {
             out.console.push(format!("the script's messages, console lines and requests passed their limits; {} more were left out", h.dropped));
         }
+        ctx.insert_data(RefCell::new(h));
     }
     out
+}
+
+#[cfg(test)]
+mod chain_budget_tests {
+    use super::refuse;
+    /// Shift assignments remain right-associative while comparison tokens consume no chain budget.
+    #[test]
+    fn comparisons_and_shift_assignments_are_distinguished() {
+        for token in ["==", "===", "!=", "!==", "<=", ">="] {
+            assert_eq!(refuse(&format!("var a=1;{}true;", format!("if(a{token}1){{;}}").repeat(5000))), None);
+        }
+        for token in ["=", ">>=", ">>>=", "<<=", "**=", "&&=", "||=", "??="] {
+            assert!(refuse(&format!("var a;{}1", format!("a{token}").repeat(5000))).is_some(), "{token}");
+        }
+    }
+    /// Newline boundaries admit flat libraries but never erase a continued expression.
+    #[test]
+    fn newline_continuations_keep_their_chain_budget() {
+        for part in ["a=>\n", "a=\n", "a=function(){}.\nx=", "a=1\n**", "a=1\nin x=", "a=1\ninstanceof x="] {
+            assert!(refuse(&format!("{}1", part.repeat(6000))).is_some(), "{part}");
+        }
+        for newline in ["\n", "\r\n", "/*\n*/", "// comment\n"] {
+            let flat = (0..300).map(|i| format!("const f{i}=()=>1{newline}")).collect::<String>();
+            assert_eq!(refuse(&flat), None, "{newline:?}");
+        }
+    }
+    /// Inner statement separators must not reset a surrounding expression's active chain.
+    #[test]
+    fn inner_separators_do_not_erase_enclosing_chains() {
+        assert!(refuse(&format!("{}1", "a=function(){;}.x=".repeat(3000))).is_some());
+        assert!(refuse(&format!("{}({}1)", "a=>".repeat(200), "b=>".repeat(100))).is_some());
+        assert_eq!(refuse(&format!("var s='{}'; /* {} */ true;", "=>=".repeat(5000), "a=".repeat(5000))), None);
+    }
+}
+
+#[cfg(test)]
+mod literal_chain_tests {
+    use super::refuse;
+    /// Literal semicolons cannot erase a surrounding assignment chain; interpolations remain code.
+    #[test]
+    fn literal_separators_cannot_bypass_chain_guards() {
+        for part in ["a=`;`.x=", "a=/;/.x=", "a=/[;,]/.x="] {
+            assert!(refuse(&format!("{}1", part.repeat(6000))).is_some(), "{part}");
+        }
+        assert!(refuse(&format!("`${{{}1}}`", "a=".repeat(6000))).is_some());
+        assert_eq!(refuse(&format!("var x=`{}${{1+1}}`; true;", "=>;=".repeat(6000))), None);
+    }
+}
+
+#[cfg(test)]
+mod review4_lexical_tests {
+    use super::refuse;
+    /// Function/control blocks may separate statements; array/object/expression contexts may not.
+    #[test]
+    fn block_statements_and_control_regex_literals_are_not_expression_chains() {
+        for head in ["function f(){", "const f=()=>{", "if(true){"] {
+            assert_eq!(refuse(&format!("{head}{} }}", "x=1\n".repeat(6000))), None);
+        }
+        for head in ["if(true)", "while(false)", "for(;false;)", "with({})", "if(false);else", "do"] {
+            assert_eq!(refuse(&format!("{head} /{}/.test('x');", "a=".repeat(6000))), None, "{head}");
+        }
+        for fragment in ["a=({x:1}).x=\n", "a=()=>{x=1\n}.x=\n", "a=(x\n/2).x=\n"] {
+            assert!(refuse(&format!("{}1", fragment.repeat(6000))).is_some(), "{fragment}");
+        }
+    }
+}
+
+/// Read the host-owned event binding without redefining a retained global property.
+fn get_event(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    Ok(host(ctx)?.borrow().current_event.clone())
+}
+/// Keep script event assignments and nested calculation restoration compatible with frozen globals.
+fn set_event(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    host(ctx)?.borrow_mut().current_event = args.first().cloned().unwrap_or_default();
+    Ok(JsValue::undefined())
 }

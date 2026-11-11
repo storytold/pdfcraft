@@ -12,17 +12,20 @@
 //! - Field objects: `name`, `type`, `value`, `valueAsString`, `defaultValue`, `readonly`,
 //!   `required`, `display`, `hidden`, `numItems`, `getItemAt`, `currentValueIndices`,
 //!   `isBoxChecked`, `checkThisBox`, `exportValues`, `charLimit`, `textColor`, `fillColor`,
-//!   `setFocus`.
+//!   `setFocus`, `rect`, appearance properties, and normal button caption/icon methods.
 //! - `app` (`alert`, `beep`, `response`, `launchURL`, `execMenuItem`, `viewerType`, `viewerVersion`,
 //!   `platform`, `setTimeOut`), `util` (`printf`, `printd`, `printx`, `scand`), `console` (`println`,
 //!   `show`, `clear`), `display` and `color`.
 //!
+//! The native engine uses [`session::ScriptSession`] to preserve document globals across events.
+//! Stateless runners remain available for callers that need isolation per invocation.
+//!
 //! The engine is a sandbox: no file, network, clipboard or timer access exists, and loops and
-//! recursion are bounded; [`run_shared_within`] also holds a script to a wall-clock limit
-//! (scripts that run unasked, such as document scripts as a document opens). Memory is not
-//! bounded apart from boa's own limits (a string of at most 2^32 units). Side effects (alerts,
-//! field changes, resets, printing, navigation) are returned in an [`Outcome`] for the caller
-//! to apply.
+//! recursion are bounded; on native targets a [`session::ScriptSession`] also holds each job to a
+//! wall-clock limit.
+//! Memory is not bounded apart from boa's own limits (a string of at most 2^32 units). Side
+//! effects (alerts, field changes, resets, printing, navigation) are returned in an [`Outcome`]
+//! for the caller to apply.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -42,6 +45,7 @@ mod format;
 mod globals;
 mod host;
 mod model;
+mod nesting;
 mod run;
 
 #[cfg(test)]
@@ -59,7 +63,7 @@ pub use model::{
 use run::SCRIPT_STACK;
 use run::refuse;
 pub(crate) use run::{CheckedCodeFromStrings, MAX_SCRIPT_BYTES};
-pub use run::{run, run_shared, run_shared_calculations, run_shared_calculations_shared, run_shared_calculations_within, run_shared_within};
+pub use run::{run, run_shared, run_shared_calculations};
 
 pub mod formcalc;
 pub mod xfa;
@@ -67,3 +71,14 @@ pub mod xfa_session;
 
 #[cfg(test)]
 mod tests;
+
+mod geometry;
+pub use geometry::{rotate_rect, unrotate_rect};
+
+mod icons;
+
+pub mod interaction;
+pub mod session;
+
+/// Maximum reset calls admitted by one document invocation, before argument conversion or field scans.
+pub const MAX_RESET_CALLS: usize = 64;
