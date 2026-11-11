@@ -234,6 +234,22 @@ pub mod test_hooks {
         Some((over, fonts.into_iter().map(|f| (f.object, f.base, f.codes)).collect()))
     }
 
+    /// The fonts of `pdf`'s pages, classified as the document survey reads them without
+    /// building them, and as the built font gives the same: (object number, the survey's
+    /// kind, glyph count and number for every code, the built font's), `None` for a font not
+    /// counted. Equal pairs show the survey's reading matches the fonts the pages draw.
+    #[allow(clippy::type_complexity, reason = "a test's view of the survey")]
+    pub fn survey_classifications(
+        pdf: &hayro_syntax::Pdf,
+        settings: &crate::InterpreterSettings,
+    ) -> Vec<(Option<i32>, Option<(String, Option<u32>, Vec<Option<u32>>)>, Option<(String, Option<u32>, Vec<Option<u32>>)>)> {
+        let show = |c: super::survey::Classified| c.map(|(kind, glyphs, numbers)| (format!("{kind:?}"), glyphs, numbers));
+        super::survey::classifications(pdf, settings)
+            .into_iter()
+            .map(|(object, light, built)| (object, show(light), show(built)))
+            .collect()
+    }
+
     /// Caps the glyphs the document surveys run on this thread may count (`None`: the usual
     /// cap), so a test can pass it with a small document.
     pub fn set_survey_glyph_cap(cap: Option<u64>) {

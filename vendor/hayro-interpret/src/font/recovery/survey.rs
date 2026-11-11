@@ -9,8 +9,11 @@
 //! with an `Identity-H` or `Identity-V` encoding (two-byte codes that are CIDs, ISO 32000-2
 //! §9.7.6.2), no `/ToUnicode` stream, no Adobe character collection, and an embedded TrueType,
 //! OpenType or CID-keyed CFF program. Nothing is drawn and no glyph is loaded; annotations are
-//! not read. Each code is counted as the number a rule reads for it (`Type0Font::recovery_number`):
-//! the glyph id of a TrueType or OpenType program, the CID of a CFF one.
+//! not read. A font is not built either: the survey reads of it only what it counts by
+//! ([`SurveyFont`]), once per font object, the first time a page selects it. Each code is
+//! counted as the number a rule reads for it ([`SurveyFont::number`], as
+//! `Type0Font::recovery_number` gives it): the glyph id of a TrueType or OpenType program, the
+//! CID of a CFF one.
 //!
 //! The survey is bounded by counts, never by time, so a document always gives the same evidence:
 //! past [`MAX_SURVEY_OPERATORS`], [`MAX_SURVEY_GLYPHS`], [`MAX_SURVEY_FONTS`],
@@ -21,7 +24,7 @@
 use super::document::{Evidence, FontUsage, UsageGroup};
 use super::{Counter, FontKind, count};
 use crate::InterpreterSettings;
-use crate::font::cid::Type0Font;
+use crate::font::cid::SurveyFont;
 use hayro_cmap::CidFamily;
 use hayro_syntax::Pdf;
 use hayro_syntax::content::TypedIter;
@@ -40,7 +43,7 @@ use std::sync::atomic::Ordering;
 /// The kinds of font the survey counts: Type 0 fonts with an `Identity-H` or `Identity-V`
 /// encoding over an embedded TrueType, OpenType or CID-keyed CFF program, without a `/ToUnicode`
 /// stream or an Adobe character collection. A rule that needs the usage of fonts of another
-/// kind extends this (and [`candidate`]), not the mechanism.
+/// kind extends this (and [`candidate`] and [`SurveyFont`]), not the mechanism.
 pub(crate) const SURVEYED_KINDS: [FontKind; 2] = [FontKind::CidTrueType, FontKind::CidCff];
 
 /// Pages the survey reads, from the first: the rules that read its evidence were measured on
@@ -119,7 +122,7 @@ struct Surveyed {
         allow(dead_code, reason = "read by test reports")
     )]
     id: Option<ObjectIdentifier>,
-    font: Type0Font,
+    font: SurveyFont,
     pooling: PoolingKey,
     /// Code shown → how often.
     counts: HashMap<u16, u64>,
@@ -255,23 +258,16 @@ impl Survey<'_> {
         let Some(file) = candidate(dict) else {
             return Ok(None);
         };
-        let Some(font) = Type0Font::new(
-            dict,
-            &self.settings.font_resolver,
-            &self.settings.cmap_resolver,
-        ) else {
+        let Some(font) = SurveyFont::read(dict) else {
             return Ok(None);
         };
-        let counted = font.identity_encoding()
-            && !font.adobe_collection()
-            && self.kinds.contains(&font.recovery_font_kind());
-        if !counted {
+        if !self.kinds.contains(&font.kind) {
             return Ok(None);
         }
         if self.fonts.len() >= MAX_SURVEY_FONTS {
             return Err(Stop::OverCap);
         }
-        let glyphs = font.program_glyphs();
+        let glyphs = font.glyphs;
         self.fonts.push(Surveyed {
             key,
             id: dict.obj_id(),
@@ -422,10 +418,9 @@ impl Survey<'_> {
             if surveyed.counts.is_empty() {
                 continue;
             }
-            let t = &surveyed.font;
             let mut numbers: HashMap<u32, u64> = HashMap::new();
             for (code, n) in &surveyed.counts {
-                if let Some((_, number)) = t.recovery_number(u32::from(*code)) {
+                if let Some(number) = surveyed.font.number(*code) {
                     let slot = numbers.entry(number).or_insert(0);
                     *slot = slot.saturating_add(*n);
                 }
@@ -596,7 +591,7 @@ pub(crate) fn report(pdf: &Pdf, settings: &InterpreterSettings) -> Option<(bool,
             let mut codes: Vec<(u16, u64, Option<u32>)> = f
                 .counts
                 .iter()
-                .map(|(&c, &n)| (c, n, f.font.recovery_number(u32::from(c)).map(|(_, g)| g)))
+                .map(|(&c, &n)| (c, n, f.font.number(c)))
                 .collect();
             codes.sort_unstable();
             let usage = match &evidence {
@@ -612,4 +607,56 @@ pub(crate) fn report(pdf: &Pdf, settings: &InterpreterSettings) -> Option<(bool,
         })
         .collect();
     Some((over, fonts))
+}
+
+/// How the survey classifies one font: the kind, the program's glyph count and the number read
+/// for every code (`None`: not counted).
+#[cfg(feature = "test-counters")]
+pub(crate) type Classified = Option<(FontKind, Option<u32>, Vec<Option<u32>>)>;
+
+/// Test hook: every Type 0 font the first [`SURVEY_PAGES`] pages name in their own resources
+/// (each object once), classified as the survey does ([`SurveyFont`]) and by building the font
+/// ([`crate::font::cid::Type0Font`]) and asking it the same, as the survey did before it read
+/// fonts without building them: (object number, the survey's, the built font's).
+#[cfg(feature = "test-counters")]
+pub(crate) fn classifications(
+    pdf: &Pdf,
+    settings: &InterpreterSettings,
+) -> Vec<(Option<i32>, Classified, Classified)> {
+    use crate::font::cid::Type0Font;
+    let codes = || 0..=u16::MAX;
+    let mut seen = HashSet::new();
+    let mut out = Vec::new();
+    for page in pdf.pages().iter().take(SURVEY_PAGES) {
+        let fonts = &page.resources().fonts;
+        for name in fonts.keys() {
+            let Some(dict) = fonts.get::<Dict<'_>>(name.as_ref()) else {
+                continue;
+            };
+            if dict.get::<Name<'_>>(SUBTYPE).as_deref() != Some(TYPE0)
+                || !seen.insert(super::document::font_key(&dict))
+            {
+                continue;
+            }
+            let light = candidate(&dict).and_then(|_| SurveyFont::read(&dict)).map(|f| {
+                let numbers = codes().map(|c| f.number(c)).collect();
+                (f.kind, f.glyphs, numbers)
+            });
+            let built = candidate(&dict)
+                .and_then(|_| Type0Font::new(&dict, &settings.font_resolver, &settings.cmap_resolver))
+                .filter(|f| {
+                    f.identity_encoding()
+                        && !f.adobe_collection()
+                        && SURVEYED_KINDS.contains(&f.recovery_font_kind())
+                })
+                .map(|f| {
+                    let numbers = codes()
+                        .map(|c| f.recovery_number(u32::from(c)).map(|(_, n)| n))
+                        .collect();
+                    (f.recovery_font_kind(), f.program_glyphs(), numbers)
+                });
+            out.push((dict.obj_id().map(|id| id.obj_number), light, built));
+        }
+    }
+    out
 }
