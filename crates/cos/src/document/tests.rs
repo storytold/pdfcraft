@@ -2364,3 +2364,31 @@ fn find_agrees_with_a_plain_window_search() {
         assert_eq!(find(&hay, needle, from, to), naive(&hay, needle, from, to), "{hay:?} {needle:?} {from} {to}");
     }
 }
+
+/// A key written with spaces is joined (as in some Info dictionaries), and the object it was read
+/// from is listed as repaired, once however often it is read. A sound object (a stream with an
+/// indirect `/Length`) adds nothing.
+#[test]
+fn a_spaced_key_is_listed_once_as_a_repair_of_its_object() {
+    let file = build(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [] /Count 0 >>",
+            "<< /Title (Report) /Universal PDF(Acme) >>",
+            "<< /Length 5 0 R >>\nstream\nabcd\nendstream",
+            "4",
+        ],
+        "/Root 1 0 R /Info 3 0 R",
+    );
+    let doc = Document::open(Arc::new(file)).unwrap();
+    assert!(doc.repaired_objects().is_empty(), "nothing has read object 3 yet");
+    for _ in 0..3 {
+        let info = doc.get(ObjRef::new(3, 0));
+        assert!(info.as_dict().is_some_and(|d| d.get(b"Universal PDF").is_some()), "{info:?}");
+    }
+    assert!(doc.try_get(4).is_ok());
+    let lines = doc.repaired_objects();
+    assert_eq!(lines, ["object 3 0 was repaired: a dictionary key written with spaces was read as one key"], "{lines:?}");
+    assert_eq!(doc.clone().repaired_objects(), lines, "clones share the list");
+    assert!(doc.unreadable_objects().is_empty());
+}

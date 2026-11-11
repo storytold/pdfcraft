@@ -2,8 +2,8 @@ use std::collections::HashSet;
 
 use super::reader::find;
 use super::state::{
-    LENGTHS, LoadGuard, ObjStm, ObjectReader, ReadState, ScanLengths, Slot, SourceIdentity, loaded_bytes, loading, note_overlay_read, objstm_member,
-    overlay_reads,
+    LENGTHS, LoadGuard, Noted, ObjStm, ObjectNotes, ObjectReader, ReadState, ScanLengths, Slot, SourceIdentity, loaded_bytes, loading,
+    note_overlay_read, objstm_member, overlay_reads,
 };
 use super::xref::{Revision, XrefEntry, XrefIndex};
 use super::{
@@ -106,18 +106,34 @@ impl Document {
     /// line says there were more. Opening again, authenticating or rebuilding the index starts
     /// the list afresh, as it does the object cache.
     pub fn unreadable_objects(&self) -> Vec<String> {
-        let Ok(unreadable) = self.unreadable.lock() else { return Vec::new() };
-        unreadable.lines(|num| self.overlay.contains_key(&num))
+        let Ok(notes) = self.object_notes.lock() else { return Vec::new() };
+        notes.unreadable.lines(|num| self.overlay.contains_key(&num), "could not be read")
+    }
+
+    /// Objects of the file that were read only by repairing their syntax, lowest number first, as
+    /// lines such as "object 9 0 was repaired: a dictionary key written with spaces was read as one
+    /// key". Unlike [`Self::unreadable_objects`] nothing was lost, but the object is not what the
+    /// file wrote. Bounded, listed and reset as [`Self::unreadable_objects`] is; each object is
+    /// listed once however often it is read.
+    pub fn repaired_objects(&self) -> Vec<String> {
+        let Ok(notes) = self.object_notes.lock() else { return Vec::new() };
+        notes.repaired.lines(|num| self.overlay.contains_key(&num), "was repaired")
     }
 
     /// Record `num` as unreadable. `reason` is built only for an object not yet listed, so a file
     /// whose broken object is asked for again and again pays for it once.
     fn note_unreadable(&self, num: u32, reason: impl FnOnce() -> String) {
-        // A poisoned lock only means the object goes unlisted; the read itself still fails.
-        let Ok(mut unreadable) = self.unreadable.lock() else { return };
+        self.note_object(num, |notes| &mut notes.unreadable, reason);
+    }
+
+    /// Record `num` in the list `pick` chooses, once.
+    fn note_object(&self, num: u32, pick: impl FnOnce(&mut ObjectNotes) -> &mut Noted, reason: impl FnOnce() -> String) {
+        // A poisoned lock only means the object goes unlisted; the read itself is unaffected.
+        let Ok(mut notes) = self.object_notes.lock() else { return };
+        let list = pick(&mut notes);
         let hidden = |n: u32| self.overlay.contains_key(&n);
-        if unreadable.wants(num, hidden) {
-            unreadable.note(num, self.generation(num), &reason(), hidden);
+        if list.wants(num, hidden) {
+            list.note(num, self.generation(num), &reason(), hidden);
         }
     }
 
@@ -569,7 +585,11 @@ impl Document {
             LoadGuard::enter(num).ok_or_else(|| CosError::Syntax { offset: 0, detail: format!("reference cycle while loading object {num}") })?;
         let _scope = crate::security::FollowScope::enter();
         let edits_read = overlay_reads();
+        let outer = crate::parser::swap_spaced_keys(0);
         let loaded = self.load(num, 0).map(Arc::new);
+        if crate::parser::swap_spaced_keys(outer) > 0 && loaded.is_ok() {
+            self.note_object(num, |notes| &mut notes.repaired, || "a dictionary key written with spaces was read as one key".into());
+        }
         if let Err(e) = &loaded
             && !matches!(e, CosError::Poisoned)
         {
