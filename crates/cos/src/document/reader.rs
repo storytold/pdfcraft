@@ -1,5 +1,6 @@
 #[cfg(test)]
 use super::state::SECTION_READS;
+use super::state::Unreadable;
 use super::xref::{
     MAX_COMPACT_XREF_BYTES, MAX_COMPACT_XREF_ROWS, Revision, XrefEntry, XrefIndex, XrefRange, XrefRevisionSection, XrefSection, XrefSectionData,
 };
@@ -319,10 +320,25 @@ impl Document {
         Ok(Some((section, stream.dict.clone(), true)))
     }
 
+    /// Read the cross-reference chain from `startxref` into one map of entries, newer sections
+    /// winning, with the trailer, the revisions oldest first and the set-aside entries. A chain
+    /// that lists more than [`MAX_XREF_OBJECTS`] rows in all is refused with
+    /// [`CosError::Syntax`], and the caller rebuilds the file from object headers (#5082).
     #[allow(clippy::type_complexity)]
     pub(super) fn read_xref_chain_materialized(
         &self,
         log: &mut Vec<String>,
+    ) -> Result<(BTreeMap<u32, XrefEntry>, Dict, Vec<Revision>, Vec<(u64, u32)>, Vec<String>), CosError> {
+        self.read_xref_chain_materialized_with_limit(log, MAX_XREF_OBJECTS)
+    }
+
+    /// [`Self::read_xref_chain_materialized`] refusing a chain past `row_limit` rows in all
+    /// instead of [`MAX_XREF_OBJECTS`], so tests can reach the limit with a few rows.
+    #[allow(clippy::type_complexity)]
+    pub(super) fn read_xref_chain_materialized_with_limit(
+        &self,
+        log: &mut Vec<String>,
+        row_limit: usize,
     ) -> Result<(BTreeMap<u32, XrefEntry>, Dict, Vec<Revision>, Vec<(u64, u32)>, Vec<String>), CosError> {
         let data = &self.data;
         let tail_start = data.len().saturating_sub(4096);
@@ -346,6 +362,9 @@ impl Document {
         let mut generation_repairs = Vec::new();
         let mut recorded = HashSet::new();
         let mut diagnose = true;
+        // Every row the sections (and their hybrid streams) list, counted by `read_section` as it
+        // reads them, before any are merged or deduplicated.
+        let mut merged_rows = 0usize;
         let mut next = Some(first);
         while let Some(off) = next.take() {
             if !visited.insert(off) || visited.len() > 10_000 {
@@ -356,13 +375,15 @@ impl Document {
             let mut sect = BTreeMap::new();
             // Object numbers whose entry in this section was set aside ([`Self::xref_oddities`]).
             let mut odd = Vec::new();
-            let ((sect_trailer, is_stream), header_relative) = match self.read_section(off as usize, &mut sect, &mut odd, log) {
+            let rows_before = merged_rows;
+            let ((sect_trailer, is_stream), header_relative) = match self.read_section(off as usize, &mut sect, &mut odd, &mut merged_rows, log) {
                 Ok(v) => (v, false),
                 Err(e) if self.header_offset > 0 => {
                     log.push(format!("xref at {off} unreadable ({e}); retrying relative to the header"));
                     sect.clear();
                     odd.clear();
-                    (self.read_section(off as usize + self.header_offset, &mut sect, &mut odd, log)?, true)
+                    merged_rows = rows_before;
+                    (self.read_section(off as usize + self.header_offset, &mut sect, &mut odd, &mut merged_rows, log)?, true)
                 }
                 Err(e) => {
                     // An unreadable older section loses every object only it locates (the page
@@ -397,7 +418,7 @@ impl Document {
                 }
             } else if let Some(x) = hybrid {
                 let mut stm = BTreeMap::new();
-                let read = match self.read_section(x as usize, &mut stm, &mut odd, log) {
+                let read = match self.read_section(x as usize, &mut stm, &mut odd, &mut merged_rows, log) {
                     Ok(_) => {
                         for (&num, &entry) in &stm {
                             if !diagnose {
@@ -428,6 +449,22 @@ impl Document {
                     hybrids.insert(x, read);
                 }
             }
+            // Each section's rows are capped, so the chain is too: at most `row_limit` rows
+            // (MAX_XREF_OBJECTS outside tests) read in all, or the file is rebuilt from object
+            // headers, as when one section's stream decodes past that. This counts every row
+            // read, before deduplication, not the map's size: a chain that relists the same
+            // objects, or a stream whose `/Index` repeats a range (`[0 4 0 4]`), costs as much to
+            // merge (#5082). Rows set aside are among the rows read, and a row is set aside at
+            // most twice (in its section and against a hybrid stream), so they stay bounded too. A
+            // section's rows (its hybrid stream's included) never outnumber the rows the compact
+            // reader counts for it, and that reader stops at about a quarter of MAX_XREF_OBJECTS:
+            // no chain within its limit is refused.
+            if merged_rows > row_limit {
+                return Err(CosError::Syntax {
+                    offset: usize::try_from(off).unwrap_or(usize::MAX),
+                    detail: format!("cross-reference chain lists more than {row_limit} entries"),
+                });
+            }
             oddities.extend(odd.into_iter().map(|num| (off, num)));
             for (num, e) in sect {
                 entries.entry(num).or_insert(e);
@@ -446,12 +483,14 @@ impl Document {
     }
 
     /// Read one section at `off`, adding entries not already known (newer sections win). `odd`
-    /// collects the object numbers whose entry here is set aside ([`Self::xref_oddities`]).
+    /// collects the object numbers whose entry here is set aside ([`Self::xref_oddities`]), and
+    /// `counted` grows by every row read, repeated and set-aside rows included (#5082).
     fn read_section(
         &self,
         off: usize,
         entries: &mut BTreeMap<u32, XrefEntry>,
         odd: &mut Vec<u32>,
+        counted: &mut usize,
         log: &mut Vec<String>,
     ) -> Result<(Dict, bool), CosError> {
         #[cfg(test)]
@@ -478,6 +517,7 @@ impl Document {
                 }
                 let start = shifted;
                 for i in 0..count {
+                    *counted = counted.saturating_add(1);
                     lx.skip_ws();
                     let o = lx.token();
                     lx.skip_ws();
@@ -548,6 +588,7 @@ impl Document {
             }
             for i in 0..*count {
                 let Some(r) = rows.next() else { break };
+                *counted = counted.saturating_add(1);
                 let t = field(r, 0, w[0], 1);
                 let a = field(r, w[0], w[1], 0);
                 let b = field(r, w[0] + w[1], w[2], 0);
@@ -634,10 +675,20 @@ impl Document {
         // Offsets of objects that may be cross-reference streams: their dictionaries are the
         // trailers of files that have no `trailer` keyword (§7.5.8).
         let mut xref_streams = Vec::new();
-        for (num, offset, generation, body) in object_headers(&data) {
+        let headers = object_headers(&data);
+        // Where `/XRef` occurs in the file, found in one pass.
+        let mut xref_marks = Vec::new();
+        let mut mark_from = 0;
+        while let Some(p) = find(&data, b"/XRef", mark_from, data.len()) {
+            xref_marks.push(p);
+            mark_from = p + 1;
+        }
+        for &(num, offset, generation, body) in &headers {
             entries.insert(num, XrefEntry::InFile { offset, generation });
             objstms.push(num);
-            if find(&data, b"/XRef", body, body.saturating_add(1024)).is_some()
+            // `/XRef` within the 1024 bytes after the header (the first one that is there).
+            let first = xref_marks.partition_point(|&p| p < body);
+            if xref_marks.get(first).is_some_and(|&p| p + 5 <= body.saturating_add(1024).min(data.len()))
                 && let Ok(at) = usize::try_from(offset)
             {
                 xref_streams.push(at);
@@ -648,6 +699,7 @@ impl Document {
         }
         self.entries = Arc::new(XrefIndex::Materialized(Arc::new(entries.clone()), Arc::default()));
         self.cache.lock().map_err(|_| CosError::Poisoned)?.clear();
+        *self.unreadable.lock().map_err(|_| CosError::Poisoned)? = Unreadable::default();
         // Objects inside object streams.
         for num in objstms {
             if let Ok(o) = self.try_get(num)
@@ -664,6 +716,8 @@ impl Document {
         }
         let object_count = entries.len();
         self.entries = Arc::new(XrefIndex::Materialized(Arc::new(entries), Arc::default()));
+        // Failures from the scan stand: the members added change no scanned entry, and a
+        // `/Length` found only now cannot make a stream unreadable.
         self.cache.lock().map_err(|_| CosError::Poisoned)?.clear();
         // Trailer: the last `trailer` dictionary or cross-reference stream dictionary with a
         // usable /Root (last in the file, whichever kind), else the catalog itself. One whose
@@ -823,7 +877,33 @@ pub(crate) fn find(hay: &[u8], needle: &[u8], from: usize, to: usize) -> Option<
     if from >= to || needle.is_empty() || to - from < needle.len() {
         return None;
     }
-    hay[from..to].windows(needle.len()).position(|w| w == needle).map(|p| p + from)
+    let hay = &hay[from..to];
+    // Look for the needle's rarest byte first, a plain byte scan, and compare the rest only there.
+    const COMMON: &[u8] = b" etaoinsrhldcumfpgwybvkxjqz";
+    let (k, rare) =
+        needle.iter().copied().enumerate().max_by_key(|&(_, b)| COMMON.iter().position(|&c| c == b).unwrap_or(COMMON.len())).unwrap_or((0, 0));
+    let mut i = k;
+    while let Some(p) = hay.get(i..).and_then(|rest| position_of(rest, rare)) {
+        let start = i + p - k;
+        if hay.get(start..start + needle.len()) == Some(needle) {
+            return Some(start + from);
+        }
+        i += p + 1;
+    }
+    None
+}
+
+/// The first position of `byte` in `hay`. Whole 32-byte blocks are tested without branching, which
+/// the compiler turns into vector compares; only a block that holds the byte is searched.
+fn position_of(hay: &[u8], byte: u8) -> Option<usize> {
+    const BLOCK: usize = 32;
+    let (blocks, rest) = hay.as_chunks::<BLOCK>();
+    for (i, block) in blocks.iter().enumerate() {
+        if block.iter().fold(false, |any, &b| any | (b == byte)) {
+            return block.iter().position(|&b| b == byte).map(|p| i * BLOCK + p);
+        }
+    }
+    rest.iter().position(|&b| b == byte).map(|p| blocks.len() * BLOCK + p)
 }
 
 pub(super) fn rfind(hay: &[u8], needle: &[u8], from: usize) -> Option<usize> {
