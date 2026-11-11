@@ -966,6 +966,9 @@ pub(super) fn page_overlays(ui: &mut egui::Ui, view: &mut DocView, frame: &mut P
     } else {
         crate::forms_ui::paint_page(painter, &xf, i, info, form, view, input.hover.as_ref());
         crate::forms_ui::tooltip(resp, form, input.hover.as_ref());
+        if let Some(hovered) = crate::forms_ui::hovered(form, input.hover.as_ref()) {
+            frame.field_hover = Some(hovered);
+        }
     }
 
     // Form-field highlight (Acrobat's "Highlight existing fields"); required fields get a

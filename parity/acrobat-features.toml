@@ -5348,11 +5348,11 @@ title = "Document actions (will close, will save, did save, will print, did prin
 area = "F"
 tier = "P1"
 milestone = "M6"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "partial"
+commands = ["file.save", "print.dialog"]
+tools = ["doc_open", "doc_save", "doc_print"]
+evidence = ["crates/engine/src/document_actions_tests.rs::the_open_action_runs_once_on_opening_in_the_document_realm", "crates/engine/src/document_actions_tests.rs::an_open_action_chain_runs_in_order_and_a_cycle_runs_each_action_once", "crates/engine/src/document_actions_tests.rs::an_open_action_may_not_open_a_url_or_print", "crates/engine/src/document_actions_tests.rs::the_open_action_does_not_run_with_javascript_off", "crates/engine/src/document_actions_tests.rs::revert_runs_the_open_action_again_in_a_fresh_realm", "crates/engine/src/document_actions_tests.rs::will_save_changes_what_is_saved_and_a_failing_one_does_not_stop_the_save", "crates/engine/src/document_actions_tests.rs::will_print_runs_in_the_document_realm", "crates/automation/tests/it/document_actions.rs::open_will_save_will_print_and_field_events_share_the_document_realm"]
+notes = "The catalog /OpenAction's JavaScript (with its /Next chain, bounded and cycle-safe) runs once on opening after the document scripts, and again on Revert in a fresh realm; /AA /WS runs before a save (the app's Save and Save As, doc_save) and /AA /WP before printing (the app's Print, doc_print), in the document's realm, so what they change is saved or printed. A failing action is reported and never stops the save or print. These scripts run unasked, so they may only ask for highlighting, zoom, focus or a page. Missing: Will Close (/WC), Did Save (/DS), Did Print (/DP) and page open/close actions (#269, ported from #344)."
 
 [[feature]]
 id = "form.js-host"
@@ -5362,9 +5362,9 @@ tier = "P0"
 milestone = "M6"
 status = "partial"
 commands = ["tools.js_console"]
-tools = ["js_run", "js_advance"]
-evidence = ["crates/automation/tests/it/timesheet_compat.rs::timesheet_keypad_geometry_icons_calculation_and_persistence", "crates/automation/tests/it/timesheet_compat.rs::popup_and_manual_response_resume_the_same_script_and_validate_choices", "crates/js/src/session.rs::document_realm_keeps_keypad_state_and_isolates_documents", "crates/js/src/tests.rs::calculate_scripts_read_fields_and_set_the_value", "crates/engine/src/tests.rs::form_javascript_validates_calculates_and_formats", "crates/automation/tests/it/automation.rs::javascript_through_tools", "crates/js/src/tests.rs::an_xfa_form_sees_the_xfa_plugin_installed", "crates/js/src/tests.rs::a_plain_form_sees_the_xfa_version_but_not_installed", "crates/engine/src/tests.rs::scripts_in_an_xfa_form_see_the_xfa_plugin_installed", "crates/js/src/tests.rs::scand_allows_separators_between_fields_but_nothing_before_or_after_them", "crates/js/src/tests.rs::app_alert_keeps_its_title_icon_and_buttons", "crates/js/src/tests.rs::app_alert_reads_the_object_form", "crates/js/src/tests.rs::app_alert_falls_back_on_bad_icon_and_button_numbers", "crates/js/src/tests.rs::app_alert_titles_are_clipped_and_charged", "crates/ui-egui/tests/it/javascript.rs::every_message_a_script_shows_takes_the_toast_in_turn", "crates/ui-egui/tests/it/forms.rs::a_form_button_opens_its_attached_instructions_in_a_new_tab", "crates/js/src/tests.rs::widget_rect_reads_and_writes_a_four_number_array", "crates/engine/src/tests.rs::javascript_field_rect_moves_first_widget_and_undoes", "crates/js/src/session.rs::timers_fire_in_the_document_realm_until_cleared", "crates/engine/src/live_scripts_tests.rs::a_timer_giving_a_button_another_icon_draws_that_icon_in_its_place", "crates/engine/src/live_scripts_tests.rs::get_ocgs_turns_a_layer_in_the_view"]
-notes = "Document-scoped native Boa realms shared by button, console and field events; synchronous calculateNow in CO order; normal captions/icons; rect and appearance/tooltip writeback; effective page boxes; native explicit-button popup/response/alert continuation and viewer requests, including opening or saving attachments from form buttons. Headless js_run has deterministic ordered answers. Partial: web prompt UI, timers, annotation/layer APIs, non-normal button faces, widget-indexed Field access and remaining document action triggers are not implemented. See docs/acroform-script-workflows.md for lifecycle, limits and validation scope. app.setInterval/setTimeOut/clearInterval/clearTimeOut (at most 64 timers, 10 ms minimum) fire in the document realm on the viewer clock (js_advance headless); timer alerts and requests go to the console. this.getOCGs() with ocg.name/state/initState turns layers as the Layers panel does."
+tools = ["js_run", "js_event", "js_advance"]
+evidence = ["crates/js/src/tests.rs::to_source_writes_plain_state_as_a_literal", "crates/js/src/tests.rs::to_source_refuses_cycles_functions_and_oversized_state", "crates/js/src/tests.rs::set_items_and_set_action_change_the_field", "crates/engine/src/document_actions_tests.rs::set_items_and_set_action_are_written_to_the_document", "crates/engine/src/document_actions_tests.rs::pointer_and_focus_triggers_run_the_widget_scripts", "crates/engine/src/document_actions_tests.rs::only_a_click_trigger_may_print", "crates/engine/src/document_actions_tests.rs::a_check_box_mouse_up_reads_the_value_its_click_stored", "crates/ui-egui/tests/it/field_triggers.rs::the_pointer_entering_and_leaving_a_widget_runs_its_scripts", "crates/ui-egui/tests/it/field_triggers.rs::a_check_box_mouse_up_script_sees_the_value_its_click_stored", "crates/automation/tests/it/timesheet_compat.rs::timesheet_keypad_geometry_icons_calculation_and_persistence", "crates/automation/tests/it/timesheet_compat.rs::popup_and_manual_response_resume_the_same_script_and_validate_choices", "crates/js/src/session.rs::document_realm_keeps_keypad_state_and_isolates_documents", "crates/js/src/tests.rs::calculate_scripts_read_fields_and_set_the_value", "crates/engine/src/tests.rs::form_javascript_validates_calculates_and_formats", "crates/automation/tests/it/automation.rs::javascript_through_tools", "crates/js/src/tests.rs::an_xfa_form_sees_the_xfa_plugin_installed", "crates/js/src/tests.rs::a_plain_form_sees_the_xfa_version_but_not_installed", "crates/engine/src/tests.rs::scripts_in_an_xfa_form_see_the_xfa_plugin_installed", "crates/js/src/tests.rs::scand_allows_separators_between_fields_but_nothing_before_or_after_them", "crates/js/src/tests.rs::app_alert_keeps_its_title_icon_and_buttons", "crates/js/src/tests.rs::app_alert_reads_the_object_form", "crates/js/src/tests.rs::app_alert_falls_back_on_bad_icon_and_button_numbers", "crates/js/src/tests.rs::app_alert_titles_are_clipped_and_charged", "crates/ui-egui/tests/it/javascript.rs::every_message_a_script_shows_takes_the_toast_in_turn", "crates/ui-egui/tests/it/forms.rs::a_form_button_opens_its_attached_instructions_in_a_new_tab", "crates/js/src/tests.rs::widget_rect_reads_and_writes_a_four_number_array", "crates/engine/src/tests.rs::javascript_field_rect_moves_first_widget_and_undoes", "crates/js/src/session.rs::timers_fire_in_the_document_realm_until_cleared", "crates/engine/src/live_scripts_tests.rs::a_timer_giving_a_button_another_icon_draws_that_icon_in_its_place", "crates/engine/src/live_scripts_tests.rs::get_ocgs_turns_a_layer_in_the_view"]
+notes = "Document-scoped native Boa realms shared by button, console and field events; synchronous calculateNow in CO order; normal captions/icons; rect and appearance/tooltip writeback; effective page boxes; native explicit-button popup/response/alert continuation and viewer requests, including opening or saving attachments from form buttons. Headless js_run has deterministic ordered answers. A widget's Mouse Enter, Mouse Exit, Mouse Down, Focus and Blur JavaScript run in the app and through js_event (and form_focus for focus), and a check box's or radio button's Mouse Up runs after its click stored the new value (#247); field.setItems, field.setAction and a bounded Object.prototype.toSource (plain data only) are written back to the document (#269, ported from #344). Partial: web prompt UI, non-normal button faces, widget-indexed Field access, and Will Close / Did Save / Did Print are not implemented; annotation scripting covers only view-only display and appearance changes. See docs/acroform-script-workflows.md for lifecycle, limits and validation scope. app.setInterval/setTimeOut/clearInterval/clearTimeOut (at most 64 timers, 10 ms minimum) fire in the document realm on the viewer clock (js_advance headless); timer alerts and requests go to the console. this.getOCGs() with ocg.name/state/initState turns layers as the Layers panel does."
 
 [[feature]]
 id = "form.js-console"
@@ -7140,11 +7140,25 @@ title = "Create PDF from Office documents (LibreOffice sidecar)"
 area = "J"
 tier = "P2"
 milestone = "M10"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "partial"
+commands = ["file.open"]
+tools = ["doc_create_multiple", "doc_combine"]
+evidence = [
+    "crates/create/src/office.rs::office_files_are_recognised_by_extension_and_signature",
+    "crates/create/src/office.rs::other_files_are_not_office_documents",
+    "crates/create/src/office.rs::a_converter_that_hangs_is_stopped",
+    "crates/create/src/office.rs::a_converter_that_makes_no_pdf_is_reported",
+    "crates/create/src/office.rs::libreoffice_converts_a_document_when_installed",
+    "crates/create/src/office.rs::the_profile_turns_off_macros_and_never_updates_links",
+    "crates/create/src/office.rs::a_timeout_stops_the_processes_the_converter_started",
+    "crates/automation/tests/it/office.rs::office_documents_convert_separately_with_their_text",
+    "crates/automation/tests/it/office.rs::office_documents_combine_in_order_with_a_bookmark_each",
+    "crates/engine/src/tests.rs::office_documents_convert_through_libreoffice_or_explain_why_not",
+    "crates/engine/src/tests.rs::inline_conversions_refuse_office_documents_without_running_libreoffice",
+    "crates/ui-egui/src/platform/open_worker/tests.rs::file_open_converts_an_office_document_on_the_worker",
+    "crates/ui-egui/src/platform/open_worker/tests.rs::the_open_picker_defaults_to_pdf_and_offers_images_office_text_and_all_files",
+]
+notes = "File ▸ Open (desktop) opens Word, Excel, PowerPoint, OpenDocument and RTF files (Office documents filter; PDF stays the default) as new, unsaved PDFs, converted on the open worker by an installed LibreOffice run headless in a private temporary folder with a fresh profile (macros disabled, untrusted links blocked, Writer and Calc linked content never updated) and stopped after 120 s. Found through PDFCRAFT_SOFFICE, the PATH, or the usual install folders; without it the user is told LibreOffice is needed. The automation tools that convert files (doc_create_multiple, doc_combine, batch convert) take Office documents too. Not yet: Insert pages, Combine files and Create ▸ Multiple files in the app refuse Office documents (they convert on the frame thread) and point to File ▸ Open; no Create ▸ From Office command or conversion settings; Visio and Publisher; the web build; layout fidelity is LibreOffice's, not measured against Acrobat; Impress has no link-update setting and the process's network access isn't sandboxed (synthetic linked sections, pictures and cell references made no connection with LibreOffice 26.8.1); the real-conversion tests skip where LibreOffice isn't installed, CI included."
 
 [[feature]]
 id = "create.create-multiple"
