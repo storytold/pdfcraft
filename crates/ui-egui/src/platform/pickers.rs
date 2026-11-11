@@ -134,7 +134,7 @@ impl Pickers {
         #[cfg(target_os = "macos")]
         {
             let showing = self.pending();
-            self.panel_menu.sync(showing);
+            self.panel_menu.sync(showing, &crate::menus::translate);
         }
     }
 

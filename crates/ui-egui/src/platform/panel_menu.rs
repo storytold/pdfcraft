@@ -5,7 +5,7 @@
 //! ignored ⌘V. While a panel is showing, this small menu bar replaces the usual one. It goes away
 //! with the panel because the app's own text handling gets these keys from egui. Its application
 //! menu has Hide, Hide Others and Show All; Quit, which asks about unsaved changes, comes back with
-//! the usual menu bar.
+//! the usual menu bar. Its labels go through the app's translations, like the usual menu bar's.
 
 use muda::{Menu, PredefinedMenuItem, Submenu};
 use objc2::MainThreadMarker;
@@ -35,8 +35,8 @@ impl std::fmt::Debug for PanelMenu {
 impl PanelMenu {
     /// Show the panel's menu bar when `panel_open`, else put the usual one back. A menu bar the
     /// app installed since ours (craft-menu rebuilds it when Open Recent or the language changes)
-    /// stays: it becomes the one to put back, or is left alone.
-    pub fn sync(&mut self, panel_open: bool) {
+    /// stays: it becomes the one to put back, or is left alone. `text` translates the labels.
+    pub fn sync(&mut self, panel_open: bool, text: &dyn Fn(&'static str) -> String) {
         self.wanted = panel_open;
         let Some(mtm) = MainThreadMarker::new() else { return };
         let app = NSApplication::sharedApplication(mtm);
@@ -45,8 +45,13 @@ impl PanelMenu {
         match (panel_open, self.shown.take()) {
             (true, Some(shown)) if ours(&shown) => self.shown = Some(shown),
             (true, _) => {
-                if let Some(menu) = edit_menu() {
+                // Never crash for a menu: a panel without its menu bar is still a panel.
+                let built = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let menu = edit_menu(text)?;
                     menu.init_for_nsapp();
+                    Some(menu)
+                }));
+                if let Ok(Some(menu)) = built {
                     self.shown = Some(Shown { _menu: menu, ours: app.mainMenu(), before: current });
                 }
             }
@@ -71,16 +76,22 @@ fn same(a: &Option<Retained<NSMenu>>, b: &Option<Retained<NSMenu>>) -> bool {
 }
 
 /// AppKit treats a menu bar's first menu as the application menu, so Edit comes second.
-fn edit_menu() -> Option<Menu> {
+fn edit_menu(text: &dyn Fn(&'static str) -> String) -> Option<Menu> {
     let menu = Menu::new();
     let app = Submenu::new("PdfCraft", true);
-    app.append_items(&[&PredefinedMenuItem::hide(None), &PredefinedMenuItem::hide_others(None), &PredefinedMenuItem::show_all(None)]).ok()?;
-    let edit = Submenu::new("Edit", true);
+    let hide = text("Hide {app}").replace("{app}", "PdfCraft");
+    app.append_items(&[
+        &PredefinedMenuItem::hide(Some(&hide)),
+        &PredefinedMenuItem::hide_others(Some(&text("Hide Others"))),
+        &PredefinedMenuItem::show_all(Some(&text("Show All"))),
+    ])
+    .ok()?;
+    let edit = Submenu::new(text("Edit"), true);
     edit.append_items(&[
-        &PredefinedMenuItem::cut(None),
-        &PredefinedMenuItem::copy(None),
-        &PredefinedMenuItem::paste(None),
-        &PredefinedMenuItem::select_all(None),
+        &PredefinedMenuItem::cut(Some(&text("Cut"))),
+        &PredefinedMenuItem::copy(Some(&text("Copy"))),
+        &PredefinedMenuItem::paste(Some(&text("Paste"))),
+        &PredefinedMenuItem::select_all(Some(&text("Select all"))),
     ])
     .ok()?;
     menu.append_items(&[&app, &edit]).ok()?;

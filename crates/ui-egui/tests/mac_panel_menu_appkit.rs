@@ -52,26 +52,36 @@ fn main() {
     let usual = NSMenu::new(mtm);
     app.setMainMenu(Some(&usual));
     let mut menu = panel_menu::PanelMenu::default();
+    let english = |s: &'static str| s.to_owned();
 
-    menu.sync(true);
+    menu.sync(true, &english);
     assert!(menu.wanted());
     assert_panel_shortcuts(&app, &usual);
-    menu.sync(false);
+    menu.sync(false, &english);
+
+    // The labels go through the app's translations.
+    menu.sync(true, &|s: &'static str| format!("«{s}»"));
+    let bar = app.mainMenu().expect("the panel's menu bar");
+    let edit = bar.itemAtIndex(1).and_then(|item| item.submenu()).expect("the Edit menu");
+    assert_eq!(edit.title().to_string(), "«Edit»");
+    let paste = (0..edit.numberOfItems()).filter_map(|i| edit.itemAtIndex(i)).find(|item| item.action() == Some(objc2::sel!(paste:)));
+    assert_eq!(paste.map(|item| item.title().to_string()).as_deref(), Some("«Paste»"));
+    menu.sync(false, &english);
     assert!(is_menu_bar(&app, &usual), "the usual menu bar is back");
 
     // craft-menu rebuilds its menu bar while the panel's is up: closing the panel leaves it there.
-    menu.sync(true);
+    menu.sync(true, &english);
     let rebuilt = NSMenu::new(mtm);
     app.setMainMenu(Some(&rebuilt));
-    menu.sync(false);
+    menu.sync(false, &english);
     assert!(is_menu_bar(&app, &rebuilt), "a menu bar installed meanwhile stays");
 
     // Rebuilt while the panel is still open: the panel's comes back, and the rebuilt one after it.
-    menu.sync(true);
+    menu.sync(true, &english);
     app.setMainMenu(Some(&usual));
-    menu.sync(true);
+    menu.sync(true, &english);
     assert_panel_shortcuts(&app, &usual);
-    menu.sync(false);
+    menu.sync(false, &english);
     assert!(is_menu_bar(&app, &usual), "the menu bar installed meanwhile is the one put back");
     println!("mac_panel_menu_appkit: ok");
 }
