@@ -496,7 +496,6 @@ fn an_output_intent_profile_header_is_read_within_a_size_cap() {
 }
 
 #[test]
-<<<<<<< HEAD
 fn typeless_annotations_indexed_cmyk_and_indirect_filter_elements_are_handled() {
     // Annotations in /Annots that omit optional /Type /Annot and /P (while keeping required /Subtype
     // and /Rect), whether indirect or direct dictionaries, are still verified and fixed by convert.
@@ -2243,7 +2242,9 @@ fn a_form_cut_short_on_one_page_is_read_again_on_the_next() {
     let objs: Vec<&str> = objs.iter().map(String::as_str).collect();
     let said: Vec<String> = verify(&build(&objs, ""), Level::A2b).into_iter().filter(|i| i.clause == "6.2.10").map(|i| i.message).collect();
     assert_eq!(said, ["Page 2 has transparency but no device-independent blending colour space or PDF/A output intent"]);
-=======
+}
+
+#[test]
 fn xmp_packet_drops_xml_illegal_characters_from_info() {
     let doc = build(
         &[
@@ -2258,5 +2259,4 @@ fn xmp_packet_drops_xml_illegal_characters_from_info() {
         packet.chars().filter(|c| matches!(c, '\u{0}'..='\u{8}' | '\u{b}' | '\u{c}' | '\u{e}'..='\u{1f}' | '\u{fffe}' | '\u{ffff}')).collect();
     assert!(bad.is_empty(), "XMP packet holds XML-illegal control chars {bad:?}");
     assert_eq!(xmp::value(&packet, "dc:title").as_deref(), Some("AB"));
->>>>>>> 5ca467641 (Drop XML-illegal control characters from PDF/A XMP packet)
 }
