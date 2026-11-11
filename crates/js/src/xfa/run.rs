@@ -192,6 +192,8 @@ pub(crate) fn run_here(
         reset_calls: 0,
         reset_limit_exceeded: false,
         kept: 0,
+        // Each XFA script run starts with no field text charged, as an AcroForm run does.
+        retained: 0,
         dropped: 0,
         xfa: true,
     }));
