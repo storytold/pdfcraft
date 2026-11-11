@@ -3,11 +3,12 @@
 
 use std::collections::HashSet;
 
-use pdfcraft_content::{Matrix, contains, overlaps, parse};
+use pdfcraft_content::{Matrix, Op, contains, overlaps, parse};
 use pdfcraft_cos::{Dict, Document, ObjRef, Object, Stream};
 
 use super::extract::{appearance_matrix, bbox_of, matrix_of, page_content, res_dict};
 use super::util::{Ctx, image_codec};
+use crate::stroke::{INITIAL_MITER_LIMIT, flat, join_miters, miter_reach};
 use crate::verify::limits::{MAX_CLIP_SUBPATHS, MAX_DEPTH, MAX_GS_STACK, MAX_HOLES, MAX_PIXELS};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -26,10 +27,20 @@ pub(super) struct Gs {
     pub(super) ctm: Matrix,
     /// Device-space boxes cut out of the clip (even-odd clips with a hole).
     pub(super) holes: Vec<[f64; 4]>,
-    /// The line width in user space (`w`, an ExtGState's `/LW`), which a stroke paints around
-    /// its path.
-    pub(super) line_width: f64,
+    pub(super) pen: Pen,
 }
+
+/// What a stroke paints around its path: the line width in user space (`w`, an ExtGState's `/LW`),
+/// and whether its joins are mitered (`j`, `/LJ`) and up to which limit (`M`, `/ML`).
+#[derive(Clone, Copy)]
+pub(super) struct Pen {
+    pub(super) width: f64,
+    pub(super) miters: bool,
+    pub(super) miter_limit: f64,
+}
+
+/// The pen a page starts with (ISO 32000-2 Table 51): a width of 1, mitered joins, a limit of 10.
+const INITIAL_PEN: Pen = Pen { width: 1.0, miters: true, miter_limit: INITIAL_MITER_LIMIT };
 
 /// The least a stroke reaches from its path in device space: the thinnest line still paints a
 /// device pixel, half a point at 72 dots an inch.
@@ -55,7 +66,7 @@ pub(super) fn check_geometry(doc: &Document, page: &Dict, regions: &[[f64; 4]], 
     let Ok(data) = page_content(doc, page, ctx, true) else { return unverifiable("the page content can't be read in full") };
     let mut geo = Geo { doc, ctx, regions, found: Vec::new(), reported: HashSet::new(), searched: HashSet::new() };
     let res = page.get(b"Resources").and_then(|r| doc.resolve(r).as_dict().cloned()).unwrap_or_default();
-    geo.run(&data, &res, Matrix::IDENTITY, Vec::new(), 1.0, 0);
+    geo.run(&data, &res, Matrix::IDENTITY, Vec::new(), INITIAL_PEN, 0);
     geo.appearances(page, &res);
     geo.found
 }
@@ -117,7 +128,7 @@ impl Geo<'_> {
                         continue;
                     };
                     let own = st.dict.get(b"Resources").and_then(|x| doc.resolve(x).as_dict().cloned());
-                    self.run(&data, own.as_ref().unwrap_or(res), ctm, Vec::new(), 1.0, 1);
+                    self.run(&data, own.as_ref().unwrap_or(res), ctm, Vec::new(), INITIAL_PEN, 1);
                 }
             }
         }
@@ -135,7 +146,7 @@ impl Geo<'_> {
         !gs.holes.iter().any(|h| contains(*h, reach, 0.01))
     }
 
-    fn run(&mut self, data: &[u8], res: &Dict, ctm: Matrix, holes: Vec<[f64; 4]>, line_width: f64, depth: usize) {
+    fn run(&mut self, data: &[u8], res: &Dict, ctm: Matrix, holes: Vec<[f64; 4]>, pen: Pen, depth: usize) {
         if depth > MAX_DEPTH {
             for i in 0..self.regions.len() {
                 self.report(i, Finding::Unverifiable("forms are nested too deep to check"));
@@ -145,25 +156,30 @@ impl Geo<'_> {
         let xobjects = res_dict(self.doc, res, b"XObject");
         let states = res_dict(self.doc, res, b"ExtGState");
         self.hidden_images(res, depth);
-        let mut gs = Gs { ctm, holes, line_width };
+        let mut gs = Gs { ctm, holes, pen };
         let mut stack: Vec<Gs> = Vec::new();
-        // The current path in device space: its subpaths, and the clip operator it carries.
+        // The current path in device space: its subpaths, and the clip operator it carries; and
+        // the operators that make it, whose joins a stroke paints at.
         let mut sub: Vec<Vec<(f64, f64)>> = Vec::new();
         let mut clip: Option<bool> = None;
+        let mut path: Vec<Op> = Vec::new();
         for op in parse(data).ops {
             let o = op.op.as_slice();
             if matches!(o, b"m" | b"l" | b"c" | b"v" | b"y" | b"h" | b"re" | b"W" | b"W*") {
                 extend_path(&op, &gs.ctm, &mut sub, &mut clip);
+                path.push(op);
                 continue;
             }
             if matches!(o, b"S" | b"s" | b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*" | b"n") {
-                self.paint_path(o, &mut gs, &sub, clip);
+                self.paint_path(o, &mut gs, &sub, &path, clip);
                 sub.clear();
                 clip = None;
+                path.clear();
                 continue;
             }
             sub.clear();
             clip = None;
+            path.clear();
             match o {
                 b"q" => {
                     // The saved state carries the holes with it, so an unbounded stack of them
@@ -186,14 +202,31 @@ impl Geo<'_> {
                 // Read as the renderer reads them, the last operand; a negative width at its size.
                 b"w" => {
                     if let Some([width]) = op.nums::<1>() {
-                        gs.line_width = width.abs();
+                        gs.pen.width = width.abs();
+                    }
+                }
+                b"j" => {
+                    if let Some([join]) = op.nums::<1>() {
+                        gs.pen.miters = join_miters(join);
+                    }
+                }
+                b"M" => {
+                    if let Some([limit]) = op.nums::<1>() {
+                        gs.pen.miter_limit = limit;
                     }
                 }
                 b"gs" => {
                     let state = op.last_name().and_then(|n| states.get(n)).map(|s| self.doc.resolve(s));
-                    let width = state.as_deref().and_then(Object::as_dict).and_then(|d| d.get(b"LW")).map(|w| self.doc.resolve(w));
-                    if let Some(width) = width.as_deref().and_then(Object::as_f64) {
-                        gs.line_width = width.abs();
+                    let state = state.as_deref().and_then(Object::as_dict);
+                    let number = |key: &[u8]| state.and_then(|d| d.get(key)).and_then(|v| self.doc.resolve(v).as_f64());
+                    if let Some(width) = number(b"LW") {
+                        gs.pen.width = width.abs();
+                    }
+                    if let Some(join) = number(b"LJ") {
+                        gs.pen.miters = join_miters(join);
+                    }
+                    if let Some(limit) = number(b"ML") {
+                        gs.pen.miter_limit = limit;
                     }
                 }
                 b"sh" => {
@@ -234,7 +267,7 @@ impl Geo<'_> {
 
     /// A path-painting operator `o` ends the current path: report what it paints over a region,
     /// and let an even-odd clip add its holes to `gs`.
-    fn paint_path(&mut self, o: &[u8], gs: &mut Gs, sub: &[Vec<(f64, f64)>], clip: Option<bool>) {
+    fn paint_path(&mut self, o: &[u8], gs: &mut Gs, sub: &[Vec<(f64, f64)>], ops: &[Op], clip: Option<bool>) {
         let pts: Vec<(f64, f64)> = sub.iter().flatten().copied().collect();
         let bbox = pts.iter().fold(None, |b: Option<[f64; 4]>, &(u, v)| {
             Some(match b {
@@ -243,18 +276,21 @@ impl Geo<'_> {
             })
         });
         // A stroke paints around its path: half the width on each side, `√2` times that at a
-        // projecting cap's corner, through the CTM, and at least `MIN_STROKE_REACH`. A fill of a
-        // path with no width or height still paints the pixels it touches (ISO 32000-2 §10.7.4):
+        // projecting cap's corner or further at its sharpest mitered corner (`miter_reach`),
+        // through the CTM, and at least `MIN_STROKE_REACH`. A fill of a
+        // path with no width or height (or none to the renderer, `flat`) still paints the pixels it
+        // touches (ISO 32000-2 §10.7.4):
         // `MIN_STROKE_REACH` across there.
         let strokes = matches!(o, b"S" | b"s" | b"B" | b"B*" | b"b" | b"b*");
         let paints = bbox.map(|b| {
             if !strokes {
-                let across = if b[2] > b[0] { 0.0 } else { MIN_STROKE_REACH };
-                let up = if b[3] > b[1] { 0.0 } else { MIN_STROKE_REACH };
+                let across = if flat(b[0], b[2]) { MIN_STROKE_REACH } else { 0.0 };
+                let up = if flat(b[1], b[3]) { MIN_STROKE_REACH } else { 0.0 };
                 return [b[0] - across, b[1] - up, b[2] + across, b[3] + up];
             }
             let [a, bb, c, d, _, _] = gs.ctm.0;
-            let half = gs.line_width / 2.0 * std::f64::consts::SQRT_2;
+            let miter = if gs.pen.miters { miter_reach(ops, matches!(o, b"s" | b"b" | b"b*"), gs.pen.miter_limit) } else { 1.0 };
+            let half = gs.pen.width / 2.0 * miter.max(std::f64::consts::SQRT_2);
             let (across, up) = ((half * a.hypot(c)).max(MIN_STROKE_REACH), (half * bb.hypot(d)).max(MIN_STROKE_REACH));
             [b[0] - across, b[1] - up, b[2] + across, b[3] + up]
         });
@@ -320,7 +356,7 @@ impl Geo<'_> {
             return;
         };
         let own = s.dict.get(b"Resources").and_then(|r| self.doc.resolve(r).as_dict().cloned());
-        self.run(&data, own.as_ref().unwrap_or(parent), fctm, gs.holes.clone(), gs.line_width, depth + 1);
+        self.run(&data, own.as_ref().unwrap_or(parent), fctm, gs.holes.clone(), gs.pen, depth + 1);
     }
 
     /// Images drawn from tiling patterns, soft-mask groups and Type3 glyph procedures can't be

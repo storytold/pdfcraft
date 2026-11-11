@@ -23,6 +23,7 @@ use std::rc::Rc;
 use pdfcraft_content::{Matrix, Op, Pieces, contains, num, overlaps, serialize_ops, string};
 use pdfcraft_cos::{CosError, DecodeBudget, Dict, Document, ImageBudget, MAX_PAGE_FORMS, ObjRef, Object, Stream};
 
+use crate::stroke::{INITIAL_MITER_LIMIT, flat, join_miters, miter_reach};
 use crate::{RedactError, Report, image, page_streams, tags};
 use pdfcraft_fonts::pdf::Metrics;
 
@@ -107,6 +108,10 @@ struct Gs {
     /// The line width, in user space (`w`, an ExtGState's `/LW`): a stroke paints half of it on
     /// each side of its path.
     line_width: f64,
+    /// Whether the stroke's joins are mitered (`j`, an ExtGState's `/LJ`), and the miter limit
+    /// (`M`, `/ML`): a mitered corner reaches past half the width, up to the limit.
+    miters: bool,
+    miter_limit: f64,
 }
 
 /// The least a stroke reaches from its path, in device space: the thinnest line (`0 w`) still
@@ -114,12 +119,12 @@ struct Gs {
 const MIN_STROKE_REACH: f64 = 0.5;
 
 /// The device-space box a fill of a path with box `path` paints: its own, but [`MIN_STROKE_REACH`]
-/// across where it has no width or height, as the renderer paints the pixels such a path touches
-/// (ISO 32000-2 §10.7.4). A box of any extent is as it is, so a fill that only touches a region
+/// across where it has no width or height (or none to the renderer, [`flat`]), as the renderer
+/// paints the pixels such a path touches (ISO 32000-2 §10.7.4). A box of any extent is as it is, so a fill that only touches a region
 /// isn't taken for under it.
 fn fill_box(path: [f64; 4]) -> [f64; 4] {
-    let across = if path[2] > path[0] { 0.0 } else { MIN_STROKE_REACH };
-    let up = if path[3] > path[1] { 0.0 } else { MIN_STROKE_REACH };
+    let across = if flat(path[0], path[2]) { MIN_STROKE_REACH } else { 0.0 };
+    let up = if flat(path[1], path[3]) { MIN_STROKE_REACH } else { 0.0 };
     [path[0] - across, path[1] - up, path[2] + across, path[3] + up]
 }
 
@@ -410,6 +415,8 @@ pub(crate) fn process(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<
         stroke_pattern: None,
         type3_inherits: false,
         line_width: 1.0,
+        miters: true,
+        miter_limit: INITIAL_MITER_LIMIT,
     };
     process_from(doc, scope, streams, resources, gs)
 }
@@ -561,7 +568,7 @@ impl Walk {
             self.clip = false;
         }
         let kept = match o {
-            b"q" | b"Q" | b"cm" | b"Tf" | b"gs" | b"w" => {
+            b"q" | b"Q" | b"cm" | b"Tf" | b"gs" | b"w" | b"j" | b"M" => {
                 self.graphics_state(doc, scope, &op);
                 Some(op)
             }
@@ -639,7 +646,8 @@ impl Walk {
         let strokes = matches!(o, b"S" | b"s" | b"B" | b"B*" | b"b" | b"b*");
         // A stroke paints around its path: a line with no height under a region, or a thick one
         // beside it, paints there. So does a fill of a path with no height or width.
-        let paints = bbox.map(|b| if strokes { self.stroke_box(b) } else { fill_box(b) });
+        let closes = matches!(o, b"s" | b"b" | b"b*");
+        let paints = bbox.map(|b| if strokes { self.stroke_box(b, &body, closes) } else { fill_box(b) });
         let hit = scope.mode == Mode::Apply && o != b"n" && paints.is_some_and(|b| scope.hits(b));
         if !hit {
             // The paint survives, so the pattern it draws with is still in use. `n` paints
@@ -662,13 +670,15 @@ impl Walk {
         // behind clipping (F-008). Refuse partial clip retention and remove the path.
     }
 
-    /// The device-space box a stroke of the path in `path` paints: half the line width on each
-    /// side, `√2` times that at a projecting cap's corner, through the CTM (a disc of radius `r`
-    /// reaches `r·√(a²+c²)` across and `r·√(b²+d²)` up), and at least [`MIN_STROKE_REACH`]. A
-    /// miter join can reach further, to the miter limit, and isn't counted.
-    fn stroke_box(&self, path: [f64; 4]) -> [f64; 4] {
+    /// The device-space box a stroke of the path `ops`, in box `path`, paints: half the line width
+    /// on each side, `√2` times that at a projecting cap's corner, or further at its sharpest
+    /// mitered corner ([`miter_reach`]; `closes`: the painting operator closes the path), through
+    /// the CTM (a disc of radius `r` reaches `r·√(a²+c²)` across and `r·√(b²+d²)` up), and at least
+    /// [`MIN_STROKE_REACH`].
+    fn stroke_box(&self, path: [f64; 4], ops: &[Op], closes: bool) -> [f64; 4] {
         let [a, b, c, d, _, _] = self.gs.ctm.0;
-        let half = self.gs.line_width / 2.0 * std::f64::consts::SQRT_2;
+        let miter = if self.gs.miters { miter_reach(ops, closes, self.gs.miter_limit) } else { 1.0 };
+        let half = self.gs.line_width / 2.0 * miter.max(std::f64::consts::SQRT_2);
         let (across, up) = ((half * a.hypot(c)).max(MIN_STROKE_REACH), (half * b.hypot(d)).max(MIN_STROKE_REACH));
         [path[0] - across, path[1] - up, path[2] + across, path[3] + up]
     }
@@ -694,9 +704,26 @@ impl Walk {
                     self.gs.line_width = width.abs();
                 }
             }
+            b"j" => {
+                if let Some([join]) = op.nums::<1>() {
+                    self.gs.miters = join_miters(join);
+                }
+            }
+            b"M" => {
+                if let Some([limit]) = op.nums::<1>() {
+                    self.gs.miter_limit = limit;
+                }
+            }
             _ => {
-                if let Some(width) = op.last_name().and_then(|n| extgstate_line_width(doc, &self.ext_gstates, n)) {
-                    self.gs.line_width = width;
+                let stroke = |key: &[u8]| op.last_name().and_then(|n| extgstate_number(doc, &self.ext_gstates, n, key));
+                if let Some(width) = stroke(b"LW") {
+                    self.gs.line_width = width.abs();
+                }
+                if let Some(join) = stroke(b"LJ") {
+                    self.gs.miters = join_miters(join);
+                }
+                if let Some(limit) = stroke(b"ML") {
+                    self.gs.miter_limit = limit;
                 }
                 if let Some((font, vertical, size)) = op.name(0).and_then(|n| extgstate_font(doc, scope, &self.ext_gstates, n, &self.fallback)) {
                     (self.gs.font, self.gs.vertical, self.gs.size) = (font, vertical, size);
@@ -1275,10 +1302,10 @@ fn xobject(
     }
 }
 
-/// The line width the ExtGState `name` sets (`/LW`), if it sets one: taken at its size, as `w`.
-fn extgstate_line_width(doc: &Document, ext_gstates: &Dict, name: &[u8]) -> Option<f64> {
+/// The number the ExtGState `name` sets for `key` (`/LW`, `/LJ`, `/ML`), if it sets one.
+fn extgstate_number(doc: &Document, ext_gstates: &Dict, name: &[u8], key: &[u8]) -> Option<f64> {
     let state = doc.resolve(ext_gstates.get(name)?);
-    Some(state.as_dict()?.get(b"LW").map(|w| doc.resolve(w))?.as_f64()?.abs())
+    doc.resolve(state.as_dict()?.get(key)?).as_f64()
 }
 
 /// Whether the ExtGState `name` sets a Type 3 font that has no `/Resources` of its own.

@@ -62,12 +62,13 @@ clear_marks(&mut doc, None)?;                        // remove marks without app
   and changes nothing: such an image can't be cleared, and removing it whole would take what no mark
   covers with it.
 - **vectors**: a path under a mark, wholly or in part, is removed whole; shadings are clipped so
-  nothing paints inside the areas. A stroke is under a mark where its paint is: its path widened by
-  half its line width on each side (`√2` times that whatever the cap, as far as a projecting cap's
-  corner reaches, and half a point at least), so a horizontal line, and a thick one beside a mark,
-  count; and a fill of a path with no height or width, which still paints a line a pixel wide, taken
-  half a point on each side of it. A miter join can reach further, up to five line widths at the
-  default miter limit, and isn't counted;
+  nothing paints inside the areas. A stroke counts as under a mark where the box of its paint
+  overlaps it: its path widened by half its line width on each side (`√2` times that whatever the
+  cap, as far as a projecting cap's corner reaches, and half a point at least), so a horizontal
+  line, and a thick one beside a mark, count; and a fill of a path with no height or width, which
+  still paints a line a pixel wide, taken half a point on each side of it. A mitered corner reaches
+  further, `1/sin(φ/2)` times half the width at a corner of angle φ, up to the miter limit (past it
+  the corner is bevelled): a stroke's sharpest mitered corner widens its whole path by that much;
 - **form XObjects**: rewritten recursively into new objects (pages sharing the original keep it);
 - **annotations** whose rectangle overlaps (with their pop-ups and their replies, `/IRT`), and **form fields** with a
   widget under a mark;

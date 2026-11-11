@@ -637,6 +637,8 @@ fn the_proof_finds_a_stroke_by_its_width() {
         (b"0 0 1 rg 10 100 50 0 re f", true),
         (b"0 0 1 rg 10 100 m 60 100 l f", true),
         (b"0 0 1 rg 30 96 0 15 re f*", true),
+        (b"0 0 1 rg q 1 0 0 1 0 -7.75 cm 10 120 m 60 120.00000000000001 l f Q", true),
+        (b"0 0 1 rg q 1 0 0 1 -49.7 0 cm 120 96 m 120.00000000000001 110 l f Q", true),
         (b"0 0 1 RG 30 w 10 125 m 60 125 l S", true),
         (b"0 0 1 RG /GS1 gs 10 125 m 60 125 l S", true),
         (b"0 0 1 RG (x) 30 w 10 125 m 60 125 l S", true),
@@ -660,6 +662,52 @@ fn the_proof_finds_a_stroke_by_its_width() {
         doc.require_full_save();
         let proof = snap.prove(&doc, None, &ProofOptions::default());
         assert_eq!(proof.entries[0].status == Status::Failed, failed, "{}: {}", String::from_utf8_lossy(content), proof.to_text());
+    }
+}
+
+/// The proof finds a mitered corner whose miter reaches the region, where half the width at a
+/// projecting cap's corner doesn't: the walk's corner, 23 points above the region. Joined round or
+/// bevelled, by `j`, `M` or an ExtGState, it paints nowhere there; closed by `h`, `s`, `b` or
+/// `b*` the subpath joins at its start; a curve joins at its tangent, which a control point the renderer
+/// takes for its end doesn't give; a closing line it takes for none joins across; a form takes the
+/// join it is drawn with. A corner a ten-millionth past a limit of 4.3, which the renderer keeps
+/// as 4.30000019, is mitered; past 4.29 it is not.
+#[test]
+fn the_proof_finds_a_mitered_corner() {
+    let blank = marked_content(b"BT /F1 10 Tf 10 200 Td (Public) Tj ET", Spec::default());
+    let snap = Snapshot::capture(&blank, None).unwrap();
+    let corner = "0 0 1 RG 20 w 20 225 m 40 135 l 60 225 l S";
+    let res = "/ExtGState << /GSR << /LJ 1 >> /GSM << /ML 4 >> /GSJ << /LJ 0 >> /GS43 << /ML 4.3 >> >> /XObject << /FmC 7 0 R >>";
+    let form = stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300]", corner.as_bytes());
+    for (content, failed) in [
+        (corner.to_string(), true),
+        (format!("1 j {corner}"), false),
+        (format!("2 j {corner}"), false),
+        (format!("7 j {corner}"), true),
+        (format!("4 M {corner}"), false),
+        (format!("5 M {corner}"), true),
+        (format!("/GSR gs {corner}"), false),
+        (format!("/GSM gs {corner}"), false),
+        (format!("1 j /GSJ gs {corner}"), true),
+        ("0 0 1 RG 20 w 40 135 m 60 225 l 20 225 l h S".into(), true),
+        ("0 0 1 RG 20 w 40 135 m 60 225 l 20 225 l s".into(), true),
+        ("0 0 1 RG 20 w 40 135 m 60 225 l 20 225 l 40 135 l S".into(), false),
+        ("0 0 1 RG 20 w 20 225 m 25 202.5 35 157.5 40 135 c 60 225 l S".into(), true),
+        ("0 0 1 RG 20 w 20 225 m 20 180 30 135 40 135 c 60 225 l S".into(), false),
+        ("0 0 1 RG 20 w 20 225 m 40 135 l 40.0000001 135 60 225 60 225 c S".into(), true),
+        ("0 0 1 RG q 1 0 0 1 -80 0 cm 20 w 120 135 m 140 225 l 100 225 l 120.00000000000001 135 l s Q".into(), true),
+        ("0 0 1 RG 20 w 40 135 m 60 225 l 20 225 l b".into(), true),
+        ("0 0 1 RG 20 w 40 135 m 60 225 l 20 225 l b*".into(), true),
+        ("4.3 M 0 0 1 RG 20 w 18.4797360354395 225 m 40 135 l 61.5202639645605 225 l S".into(), true),
+        ("/GS43 gs 0 0 1 RG 20 w 18.4797360354395 225 m 40 135 l 61.5202639645605 225 l S".into(), true),
+        ("4.29 M 0 0 1 RG 20 w 18.4797360354395 225 m 40 135 l 61.5202639645605 225 l S".into(), false),
+        ("/FmC Do".into(), true),
+        ("1 j /FmC Do".into(), false),
+    ] {
+        let mut doc = marked_content(content.as_bytes(), Spec { resources: res, extra: vec![form.clone()], ..Spec::default() });
+        doc.require_full_save();
+        let proof = snap.prove(&doc, None, &ProofOptions::default());
+        assert_eq!(proof.entries[0].status == Status::Failed, failed, "{content}: {}", proof.to_text());
     }
 }
 
