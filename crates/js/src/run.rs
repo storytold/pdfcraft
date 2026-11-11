@@ -19,14 +19,9 @@ pub(crate) const MAX_ARRAY_LENGTH: u64 = 1 << 20;
 /// Maximum calculated field scripts evaluated by `calculateNow()` during one JavaScript run.
 pub(crate) const MAX_CALCULATE_STEPS: usize = 4096;
 
-/// Deepest nesting of `(`, `[` and `{`.
-const MAX_BRACKET_DEPTH: usize = 64;
-
-/// Longest run of prefix operators (`!`, `~`, `+`, `-`).
-const MAX_PREFIX_RUN: usize = 64;
-
-/// Most `?` (conditional expressions nest without brackets).
-const MAX_CONDITIONALS: usize = 4096;
+// The retained document realm also bounds the chains boa's parser descends without brackets
+// (`preflight`); bracket, prefix and conditional limits are the nesting guard's.
+use crate::nesting::{MAX_BRACKET_DEPTH, MAX_CONDITIONALS, MAX_PREFIX_RUN};
 
 /// Longest active arrow-function chain across the currently open bracket levels.
 const MAX_ARROW_FUNCTIONS: usize = 256;
@@ -46,8 +41,16 @@ pub(crate) const DOCUMENT_WORKER_STACK: usize = 64 << 20;
 
 mod preflight;
 
-/// Refuse unsafe source nesting before Boa parses it; independent statements do not share a chain budget.
+/// Why `source` is refused, if it is: too long, or nested deeper than any form needs, which
+/// would overflow the stack in boa's parser ([`crate::nesting`]), or with an arrow-function or
+/// right-associative chain longer than the document worker takes ([`preflight`]).
 pub(crate) fn refuse(source: &str) -> Option<String> {
+    if source.len() > MAX_SCRIPT_BYTES {
+        return Some(format!("the script is too long ({} KiB; the limit is {} KiB)", source.len() / 1024, MAX_SCRIPT_BYTES / 1024));
+    }
+    if crate::nesting::too_deep(source) {
+        return Some("the script is nested too deeply to run safely".to_string());
+    }
     preflight::refuse(source)
 }
 

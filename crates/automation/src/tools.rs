@@ -757,7 +757,7 @@ pub fn tools() -> Vec<ToolDef> {
         t(
             "printer_papers",
             "List printer paper sizes",
-            "The media sizes (names and dimensions in points) and default paper supported by a printer driver. Pass printer: a name from printers, or \"default\".",
+            "The media sizes (names and dimensions in points) and default paper supported by a printer driver (CUPS: its PPD's, by the driver's names, the default being its *DefaultPageSize; a job on one, or on a standard size of one, is fed it under the PPD's own keyword). Pass printer: a name from printers, or \"default\".",
         )
         .ro()
         .with(schema(json!({ "printer": { "type": "string" } }), &["printer"])),
