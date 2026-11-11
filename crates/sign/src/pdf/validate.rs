@@ -397,11 +397,13 @@ impl Iterator for DssEvidence<'_> {
         // Repeats are skipped before the caps count anything, so repeating one stream cannot use
         // them up; the scan of the array itself is bounded by the parser's cap on array length.
         for item in self.items.by_ref() {
+            // Resolved first: a reference to a generation the slot doesn't hold reads as null and
+            // must not make a later, valid reference to the same object number a repeat.
+            let o = self.doc.resolve(&item);
+            let Object::Stream(s) = o.as_ref() else { continue };
             if item.as_ref().is_some_and(|r| !self.seen.insert(r.num)) {
                 continue;
             }
-            let o = self.doc.resolve(&item);
-            let Object::Stream(s) = o.as_ref() else { continue };
             if self.taken >= MAX_DSS_ENTRIES {
                 self.cut = true;
                 return None;
