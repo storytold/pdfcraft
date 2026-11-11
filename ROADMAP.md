@@ -1,3 +1,8 @@
+- 2026-11-04 (M6, PR #5699 group/cache/MK/button review): Expand calculation groups/duplicates with streaming bounded lookup; retain one canonical Field object per exposed identity and prune stale roots. Protect outside shared-MK owners and carry exact button IDs through native clicks and js_run, with regression and persistence coverage.
+- 2026-11-04 (M6, PR #5699 early reset/duplicate identities): Enforce the shared 64-call reset budget before argument conversion/scanning, with sticky atomic rejection and Open/event budget sharing. Preserve PDF object identity in Calculate order, live targets and value writeback; regress duplicate names, reversed order, native completion and persistence.
+- 2026-11-04 (M6, PR #5699 independent review): Preserve unknown defaults through the JS reset shadow; bound menu/response text before copies. Cover native/console reset persistence, inherited defaults, decode-budget exhaustion and exact Unicode dialog boundaries.
+- 2026-11-04 (M6, PR #5699 memory/widget bounds): Count reset widgets and bound escaped UTF-8 text conversion before copies; add negative and Unicode boundary regressions.
+- 2026-11-04 (M6, PR #5699 reset estimate): Charge expanded-name scans and field-name copy/comparison bytes; add three negative regressions and byte-exact refusal checks.
 # PdfCraft roadmap
 
 > **Last reviewed:** 2026-10-31 | **Last updated:** 2026-10-31 | **Change:** patch (M6, PR #4166/#4088: integrate main f137a289 at 0.16.1; retain automatic-field Print suppression, explicit button/console printing and document-error provenance; 761 scoped tests and verification gates passed; 13-step CLI exercise and render inspection passed; existing warnings retained; estimates unchanged)
@@ -6,15 +11,18 @@
 > **Last reviewed:** 2026-11-08 | **Last updated:** 2026-11-08 | **Change:** patch (M10 #6514: refresh craft-print to 7ee35a9f, PDF loader to 51934db3 and public GDI kept at 64e7afd4 after #605 merged; preserve crash fix and stream-test repairs; new-graph CI pending; estimates unchanged)
 
 > **Last reviewed:** 2026-11-07 | **Last updated:** 2026-11-07 | **Change:** patch (M10: file-backed Windows PDF loading without whole-job buffering or per-chunk async waits; approved dependency chain retains #5006; physical output still unqualified; estimates unchanged)
-
 > **Last reviewed:** 2026-11-05 | **Last updated:** 2026-11-05 | **Change:** patch (M7 #2964: directly edit Thai source text inside supported Form XObjects; estimates unchanged)
-
 > **Last reviewed:** 2026-11-03 | **Last updated:** 2026-11-03 | **Change:** patch (M5 #5850 review: indirect typewriter intent and composer edits preserve outer whitespace; movement regression commits by outside click; estimates unchanged)
-
 > **Last reviewed:** 2026-11-03 | **Last updated:** 2026-11-03 | **Change:** patch (M5 #5850: Enter adds Fill & Sign line breaks; outside clicks commit, Escape cancels, and saved multiline appearances retain their text and height; estimates unchanged)
 > **Last reviewed:** 2026-10-31 | **Last updated:** 2026-10-31 | **Change:** minor (M3/M4, #5330: Crop pages is directly available in the document quick toolbar; estimates unchanged)
-
-
+> **2026-11-04 (M6, PR #5699 reset budget):** Reject reset amplification before request copies, preview and PDF mutation; cap reset/selector counts and aggregate estimated work. Add native completion, boundary, flood and large-form regressions; preserve ordered under-budget resets.
+> **2026-11-04 (M6, PR #5699 dependent reset):** Reuse form reset on an isolated comparison document so unnamed built-in calculated text/combo fields are included; retain normal post-write calculation. Extend persisted-default and typed-response regressions.
+> **2026-11-04 (M6, PR #5699 reset ordering):** Reset live field values synchronously, commit resets before final script deltas using a reset baseline, and cover Doc Open reinitialization, save/reopen, Undo/Redo and replay-sensitive UI counters.
+> **2026-11-04 (M6, PR #5699 review):** Bound worker capacity and synchronous deadlines, isolate expired/pending realms before edits, keep script prompts above other dialogs, and cover block ASI, control-position regex literals, event routing and complete undo state. Validation is reported in the PR; parity remains partial.
+> **2026-11-03 (M6, PR #5699 follow-up):** Accept independent top-level statements separated by automatic semicolon insertion while retaining continuation-chain limits; assert cyclic calculation results and preserve upstream multiline Fill & Sign coverage.
+> **2026-11-02 (M6, PR #5699 second review):** Count active expression chains instead of whole-source tokens; align native button events and automation schemas, block document input under script prompts, and validate prompt dismissal and idle repaint scheduling.
+> **2026-11-02 (M6, PR #5699 review):** Cache per-edit script geometry/calculation plans, expose live document metadata, and bound persistent worker stacks to 64 MiB; add operation-count, lifecycle and isolated hostile-input/address-space regressions.
+> **2026-11-02 (M6, #5211/#269):** Integrate persistent native AcroForm realms, synchronous calculation, page boxes, appearance/geometry/icon writeback and native button prompt continuation. Synthetic workflow and cancellation tests added; validation details accompany the PR. Remaining JavaScript parity stays partial.
 > **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M7, PR #2155 further review: inherited drawing/text state, affine image gestures, paste/selection ownership, no-op scripts and menu permissions; estimates unchanged)
 
 > **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M7, PR #2155 latest comments: explicit image-paste events, mixed-size field refresh, and documented mixed-script normalization with Undo; estimates unchanged)
@@ -989,3 +997,5 @@ PR #2133 retains document-local Pages sidebar focus for Ctrl/Cmd+A and Escape af
 PR #1952 retains per-widget checkbox/radio export-value editing in the split form-authoring and Prepare modules. Caption editing remains supported. Tests cover preserved appearances and selection, invalid/locked refusals, data-format round trips, and Apply/Cancel/Undo. Current-head hosted validation is pending; feature estimates are unchanged.
 
 - **2026-10-31 (#1577):** Reconciled the page-shadow preference with split viewer, organizer, settings and control modules, preserving upstream page-gap shadow suppression. CI validation pending.
+
+- 2026-11-04: AcroForm review follow-up covers field-instance retirement across history, rejected-writeback realm invalidation, mixed widget icons, shared calculation budgets and multi-select/checkbox consistency, frozen-global events, exact image imports, comparison-half scripts, focus reveal and explicit busy/timeout feedback. Synthetic regressions and elapsed UI deadlines accompany the fixes.
