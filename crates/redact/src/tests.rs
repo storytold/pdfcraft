@@ -4595,6 +4595,26 @@ fn hidden_fixture() -> Document {
     doc
 }
 
+/// A field whose `/Kids` is an indirect array loses its children's actions too: the walk edits
+/// the array the file holds, not a copy, so a full save cannot carry the script forward.
+#[test]
+fn actions_are_removed_from_an_indirect_kids_array() {
+    use crate::sanitize::{Hidden, remove_hidden};
+    let mut doc = pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] >>".to_vec(),
+        b"<< /Fields [5 0 R] >>".to_vec(),
+        b"<< /T (parent) /Kids 6 0 R >>".to_vec(),
+        b"[<< /T (inner) /FT /Sig /Rect [0 0 10 10] /A << /S /JavaScript /JS (app.alert(1)) >> >>]".to_vec(),
+    ]);
+    remove_hidden(&mut doc, &[Hidden::LinksActionsScripts]).unwrap();
+    let kids = (*doc.get(pdfcraft_cos::ObjRef::new(6, 0))).clone();
+    let items = kids.as_array().expect("the indirect array").clone();
+    let inner = doc.resolve(&items[0]).as_dict().expect("the child field").clone();
+    assert!(!inner.contains(b"A"), "the action survived: {inner:?}");
+}
+
 #[test]
 fn hidden_information_is_counted_and_removed() {
     use crate::sanitize::{Hidden, remove_hidden, sanitize, scan};
@@ -6613,6 +6633,91 @@ fn a_redacted_form_xobject_drops_the_source_text_of_added_content() {
     apply(&mut doc, None).unwrap();
     let bytes = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
     assert!(!bytes.windows(4).any(|w| w == b"1234"), "redacted text left in the saved file");
+}
+
+/// A Screen annotation's `/A` and a push button field's own `/A` (its widget has none) are actions
+/// too: the scan counts them and removing actions takes them out, so the script leaves the file.
+#[test]
+fn screen_and_field_primary_actions_are_removed() {
+    use crate::sanitize::{Hidden, remove_hidden, scan};
+    let mut doc = pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [7 0 R] >> >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Annots [6 0 R 8 0 R] >>".to_vec(),
+        stream("", b""),
+        b"<< /S /JavaScript /JS (SCRIPT_PAYLOAD) >>".to_vec(),
+        b"<< /Type /Annot /Subtype /Screen /Rect [0 0 10 10] /A 5 0 R >>".to_vec(),
+        b"<< /FT /Btn /Ff 65536 /T (b) /A 5 0 R /Kids [8 0 R] >>".to_vec(),
+        b"<< /Type /Annot /Subtype /Widget /Rect [20 20 40 40] /Parent 7 0 R >>".to_vec(),
+    ]);
+    let counts: HashMap<Hidden, usize> = scan(&doc).into_iter().collect();
+    assert_eq!(counts[&Hidden::LinksActionsScripts], 2, "the Screen's and the field's actions");
+    remove_hidden(&mut doc, &[Hidden::LinksActionsScripts]).unwrap();
+    for r in [6, 7] {
+        assert!(!doc.get(ObjRef::new(r, 0)).as_dict().unwrap().contains(b"A"), "object {r} keeps its action");
+    }
+    let saved = write_full(&doc, &SaveOptions::default()).unwrap();
+    assert!(!saved.windows(14).any(|w| w == b"SCRIPT_PAYLOAD"), "the script is still in the file");
+}
+
+/// A field written in place in `/Fields` has no object to update: its `/A` is cleared where it
+/// sits, so the script leaves the file, and it counts like an indirect field.
+#[test]
+fn removing_actions_clears_a_direct_field_action() {
+    use crate::sanitize::{Hidden, remove_hidden, scan};
+    let mut doc = pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [<< /FT /Tx /T (a) /A 5 0 R >>] >> >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R >>".to_vec(),
+        stream("", b""),
+        b"<< /S /JavaScript /JS (SCRIPT_PAYLOAD) >>".to_vec(),
+    ]);
+    let counts: HashMap<Hidden, usize> = scan(&doc).into_iter().collect();
+    assert_eq!(counts[&Hidden::LinksActionsScripts], 1, "the direct field's action");
+    remove_hidden(&mut doc, &[Hidden::LinksActionsScripts]).unwrap();
+    let cat = doc.get(ObjRef::new(1, 0)).as_dict().unwrap().clone();
+    let fields = doc.resolve(cat.get(b"AcroForm").unwrap()).as_dict().unwrap().get(b"Fields").unwrap().clone();
+    let field = doc.resolve(doc.resolve(&fields).as_array().unwrap().first().unwrap()).as_dict().unwrap().clone();
+    assert!(!field.contains(b"A"), "the direct field keeps its action: {field:?}");
+    let saved = write_full(&doc, &SaveOptions::default()).unwrap();
+    assert!(!saved.windows(14).any(|w| w == b"SCRIPT_PAYLOAD"), "the script is still in the file");
+}
+
+/// A direct annotation dictionary in `/Annots` holds its own action: removal clears it there, not
+/// only from annotations that are indirect objects.
+#[test]
+fn removing_actions_clears_a_direct_annotation_action() {
+    use crate::sanitize::{Hidden, remove_hidden, scan};
+    let objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Annots [<< /Type /Annot /Subtype /Screen /Rect [10 10 50 50] /A << /S /JavaScript /JS (app.alert\\(1\\)) >> >>] >>"
+            .to_vec(),
+        stream("", b"BT ET"),
+    ];
+    let mut doc = pdf(objs);
+    let counts: HashMap<Hidden, usize> = scan(&doc).into_iter().collect();
+    assert!(counts[&Hidden::LinksActionsScripts] > 0, "{counts:?}");
+    remove_hidden(&mut doc, &[Hidden::LinksActionsScripts]).unwrap();
+    let bytes = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
+    assert!(!bytes.windows(10).any(|w| w == b"JavaScript"), "the direct annotation's action survived the save");
+}
+
+/// A widget field no page lists, with `/Subtype`, still counts for the actions scan when it holds
+/// an action, as removal clears it.
+#[test]
+fn an_unlisted_widget_field_action_is_counted() {
+    use crate::sanitize::{Hidden, scan};
+    let objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R] >> >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R >>".to_vec(),
+        stream("", b"BT ET"),
+        b"<< /Type /Annot /Subtype /Widget /FT /Btn /T (b) /Rect [0 0 10 10] /A << /S /JavaScript /JS (x) >> >>".to_vec(),
+    ];
+    let doc = pdf(objs);
+    let counts: HashMap<Hidden, usize> = scan(&doc).into_iter().collect();
+    assert!(counts[&Hidden::LinksActionsScripts] > 0, "{counts:?}");
 }
 
 /// Private data takes an image's prepress data too: its OPI link to the original file and its

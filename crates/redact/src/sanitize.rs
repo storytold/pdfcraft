@@ -462,6 +462,98 @@ fn collect_owned(o: &Object, role: Held, key: &[u8], depth: usize, found: &mut d
 
 /// A comment as the comments list sees it, less file attachments (removed with Attachments) and
 /// redaction marks.
+/// The form-field dictionaries under `/AcroForm /Fields` (through `/Kids`), each once. A field's
+/// own `/A` acts when its widgets are used, so action removal must reach it as well as the
+/// widgets the pages list.
+fn field_dicts(doc: &Document) -> Vec<(Option<ObjRef>, Dict)> {
+    let Some((_, cat)) = catalog(doc) else { return Vec::new() };
+    let entries = |o: Option<&Object>| -> Vec<(Option<ObjRef>, Dict)> {
+        o.map(|f| doc.resolve(f))
+            .and_then(|f| f.as_array().cloned())
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|e| Some((e.as_ref(), doc.resolve(&e).as_dict().cloned()?)))
+            .collect()
+    };
+    let mut todo = entries(sub(doc, &cat, b"AcroForm").as_ref().and_then(|af| af.get(b"Fields")));
+    let mut seen = std::collections::HashSet::new();
+    let mut fields = Vec::new();
+    while let Some((r, d)) = todo.pop() {
+        if r.is_some_and(|r| !seen.insert(r)) {
+            continue;
+        }
+        todo.extend(entries(d.get(b"Kids")));
+        fields.push((r, d));
+    }
+    fields
+}
+
+/// Removes `/A` from every field dictionary, direct ones included: the spec lets a field be
+/// written in place in `/Fields` or `/Kids`, and such a field has no object to update, so the
+/// array that holds it is rewritten instead. Bounded like the rest of the walk for a malformed
+/// nest.
+fn strip_field_actions(doc: &mut Document, cat: &mut Dict) -> Result<(), RedactError> {
+    let acro_ref = cat.get(b"AcroForm").and_then(Object::as_ref);
+    let Some(mut acro) = cat.get(b"AcroForm").and_then(|o| doc.resolve(o).as_dict().cloned()) else { return Ok(()) };
+    if let Some(fields_obj) = acro.get(b"Fields").cloned() {
+        let fields_ref = fields_obj.as_ref();
+        let mut fields = (*doc.resolve(&fields_obj)).clone();
+        strip_field_array(doc, &mut fields, 0, &mut std::collections::HashSet::new())?;
+        match fields_ref {
+            Some(r) => doc.set(r, fields),
+            None => acro.set(b"Fields".to_vec(), fields),
+        }
+    }
+    match acro_ref {
+        Some(r) => doc.set(r, Object::Dict(acro)),
+        None => {
+            cat.set(b"AcroForm".to_vec(), Object::Dict(acro));
+        }
+    }
+    Ok(())
+}
+
+fn strip_field_array(doc: &mut Document, array: &mut Object, depth: usize, seen: &mut std::collections::HashSet<ObjRef>) -> Result<(), RedactError> {
+    // Past the limit a deeper `/A` would stay in the file while the removal reported success.
+    if depth > MAX_DIRECT_DEPTH {
+        return Err(RedactError::FieldDepth);
+    }
+    let Object::Array(items) = array else { return Ok(()) };
+    for item in items.iter_mut() {
+        // A child listed under two `/Kids` arrays is stripped once: revisiting its subtree for
+        // every occurrence is exponential in a small, crafted field graph.
+        if let Some(r) = item.as_ref()
+            && !seen.insert(r)
+        {
+            continue;
+        }
+        let Some(mut field) = doc.resolve(item).as_dict().cloned() else { continue };
+        field.remove(b"A");
+        if let Some(kids) = field.get(b"Kids").cloned() {
+            // A child list may be an indirect array: it is edited in place, or the actions in it
+            // would stay in the file while the walk reported them removed.
+            let kids_ref = kids.as_ref();
+            let mut list = (*doc.resolve(&kids)).clone();
+            strip_field_array(doc, &mut list, depth + 1, seen)?;
+            match kids_ref {
+                Some(r) => doc.set(r, list),
+                None => field.set(b"Kids".to_vec(), list),
+            }
+        }
+        match item.as_ref() {
+            Some(r) => doc.set(r, Object::Dict(field)),
+            None => *item = Object::Dict(field),
+        }
+    }
+    Ok(())
+}
+
+/// Whether an annotation or field dictionary holds a primary action (`/A`) that only action
+/// removal takes out: links go whole, and one with `/AA` is counted through it.
+fn primary_action_only(d: &Dict) -> bool {
+    d.contains(b"A") && !d.contains(b"AA") && d.name(b"Subtype") != Some(b"Link")
+}
+
 fn is_comment(subtype: &[u8]) -> bool {
     !matches!(subtype, b"FileAttachment" | b"Redact") && pdfcraft_annot::is_comment_subtype(&String::from_utf8_lossy(subtype))
 }
@@ -800,10 +892,16 @@ pub fn scan_only(doc: &Document, which: &[Hidden]) -> Vec<(Hidden, usize)> {
                 }
                 Hidden::Bookmarks => sub(doc, &cat, b"Outlines").map_or(0, |o| outline_len(doc, o.get(b"First"), 0)),
                 Hidden::LinksActionsScripts => {
+                    let listed = listed_annotations(doc);
                     count_sub(b"Link")
                         + usize::from(cat.get(b"OpenAction").is_some_and(|a| doc.resolve(a).as_dict().is_some()))
                         + owned(Hidden::LinksActionsScripts)
-                        + annots().iter().filter(|a| !a.contains(b"AA") && a.name(b"Subtype") == Some(b"Widget") && a.contains(b"A")).count()
+                        + annots().iter().filter(|a| primary_action_only(a)).count()
+                        // fields no page lists (a listed widget is counted with the annotations above)
+                        + field_dicts(doc)
+                            .into_iter()
+                            .filter(|(r, d)| r.is_none_or(|r| !listed.contains(&r)) && primary_action_only(d))
+                            .count()
                         + sub(doc, names(), b"JavaScript").map_or(0, |t| name_tree_len(doc, &t))
                         + outline_action_count(doc, &cat)
                 }
@@ -896,9 +994,18 @@ fn drop_page_annotations(doc: &mut Document, which: &[Hidden], fields: bool) -> 
         let mut kept = Vec::new();
         for a in list {
             let Some(r) = a.as_ref() else {
-                if !doc.resolve(&a).as_dict().is_some_and(drop_annot) {
-                    kept.push(a);
+                let mut a = a;
+                if doc.resolve(&a).as_dict().is_some_and(drop_annot) {
+                    continue;
                 }
+                // a direct annotation holds its own actions: removed from the entry kept in the array
+                if which.contains(&Hidden::LinksActionsScripts)
+                    && let Object::Dict(d) = &mut a
+                {
+                    d.remove(b"AA");
+                    d.remove(b"A");
+                }
+                kept.push(a);
                 continue;
             };
             let d = doc.get(r).as_dict().cloned().unwrap_or_default();
@@ -906,7 +1013,8 @@ fn drop_page_annotations(doc: &mut Document, which: &[Hidden], fields: bool) -> 
             if removed.contains(&r) || (d.name(b"Subtype") == Some(b"Popup") && parent_gone) {
                 continue;
             }
-            if which.contains(&Hidden::LinksActionsScripts) && (d.contains(b"AA") || (d.name(b"Subtype") == Some(b"Widget") && d.contains(b"A"))) {
+            // Any annotation's `/A` is an action (a Screen's as much as a widget's).
+            if which.contains(&Hidden::LinksActionsScripts) && (d.contains(b"AA") || d.contains(b"A")) {
                 doc.update_dict(r, |d| {
                     d.remove(b"AA");
                     d.remove(b"A");
@@ -996,6 +1104,7 @@ pub(crate) fn remove_counted(
                 if cat.get(b"OpenAction").is_some_and(|a| doc.resolve(a).as_dict().is_some()) {
                     cat.remove(b"OpenAction");
                 }
+                strip_field_actions(doc, &mut cat)?;
                 if let Some(n) = names.as_mut() {
                     n.remove(b"JavaScript");
                 }
