@@ -982,14 +982,14 @@ fn malformed_signature_graphics_are_refused_not_drawn() {
 
 /// A deterministic TSA: signs an RFC 3161 response locally with a test digital ID at a fixed
 /// time. No sockets; the whole stamping path runs in-process.
-struct TestTsa {
-    id: pkcs12::DigitalId,
-    time: Time,
+pub(crate) struct TestTsa {
+    pub(crate) id: pkcs12::DigitalId,
+    pub(crate) time: Time,
 }
 
 /// A timestamp authority's digital ID: a self-signed certificate valid from October 2026 for
 /// ten years, whose critical extended key usage is time stamping alone, as RFC 3161 requires.
-fn tsa_id() -> DigitalId {
+pub(crate) fn tsa_id() -> DigitalId {
     tsa_id_with(&["1.3.6.1.5.5.7.3.8"])
 }
 

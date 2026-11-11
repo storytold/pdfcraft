@@ -563,7 +563,13 @@ fn dss_parts(doc: &Document, old: &Document) -> HashSet<u32> {
     for (r, role) in dss_walk(doc) {
         let now = doc.get(r);
         let shaped = match (role, &*now) {
-            (DssRole::Dss, Object::Dict(d)) => d.iter().all(|(k, _)| matches!(k.as_slice(), b"Type" | b"Certs" | b"CRLs" | b"OCSPs" | b"VRI")),
+            // `/Filter`, a name, is what PdfCraft's own store carries beside the standard keys;
+            // it names the handler and reaches no object.
+            (DssRole::Dss, Object::Dict(d)) => d.iter().all(|(k, v)| match k.as_slice() {
+                b"Type" | b"Certs" | b"CRLs" | b"OCSPs" | b"VRI" => true,
+                b"Filter" => matches!(v, Object::Name(_)),
+                _ => false,
+            }),
             (DssRole::DataArray, Object::Array(a)) => a.iter().all(|e| matches!(e, Object::Ref(_)) && is_stream(e)),
             (DssRole::VriMap, Object::Dict(d)) => d.iter().all(|(_, v)| matches!(&*doc.resolve(v), Object::Dict(_))),
             (DssRole::VriEntry, Object::Dict(d)) => {
