@@ -790,3 +790,9 @@ fn kept_wire_colours_are_charged_before_they_are_made() {
 fn face_colours_that_are_read_past_are_not_charged() {
     assert_eq!(spent(&styled_face_section(&[], 7, 0x30)), spent(&styled_face_section(&[], 0, 0x30)));
 }
+
+#[test]
+fn wires_without_colours_make_no_colour_lists() {
+    assert!(split_like(&[Vec::new(), Vec::new()], Vec::new()).is_empty());
+    assert_eq!(split_like(&[vec![[0.0; 3]]], vec![[1; 4]]), [vec![[1; 4]]]);
+}

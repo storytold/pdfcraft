@@ -50,9 +50,10 @@ pub struct WireTessellation {
     pub colours: Vec<Vec<[u8; 4]>>,
 }
 
-/// `flat` cut into runs as long as each of `wires`; empty when the lengths disagree.
+/// `flat` cut into runs as long as each of `wires`; empty when there are no colours or the lengths
+/// disagree.
 fn split_like(wires: &[Vec<[f64; 3]>], flat: Vec<[u8; 4]>) -> Vec<Vec<[u8; 4]>> {
-    if flat.len() != wires.iter().map(Vec::len).sum::<usize>() {
+    if flat.is_empty() || flat.len() != wires.iter().map(Vec::len).sum::<usize>() {
         return Vec::new();
     }
     let mut rest = flat.into_iter();
