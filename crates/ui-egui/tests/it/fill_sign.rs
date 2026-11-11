@@ -697,7 +697,7 @@ fn fill_text_colour_survives_preview_commit_settings_and_save() {
 }
 
 #[test]
-fn checkmark_colour_is_picked_in_the_quick_bar_and_saved() {
+fn checkmark_colour_is_picked_in_the_quick_bar_recolours_the_selected_mark_and_is_saved() {
     let mut h = harness();
     h.state_mut().execute("sign.fill.check");
     h.run_steps(2);
@@ -731,21 +731,33 @@ fn checkmark_colour_is_picked_in_the_quick_bar_and_saved() {
         v.into_iter().map(|(_, index, color)| (index, color)).collect::<Vec<_>>()
     };
     let colours = |h: &Harness<'static, PdfCraftApp>| marks(h).into_iter().map(|m| m.1).collect::<Vec<_>>();
-    let (black, blue) = (Some([0.0f32; 3]), Some([0.0f32, 0.47, 0.84]));
+    let (black, blue, red) = (Some([0.0f32; 3]), Some([0.0f32, 0.47, 0.84]), Some([0.89f32, 0.13, 0.13]));
     assert_eq!(colours(&h), [black, blue], "the first stays black, the next is blue");
+
+    // With a mark selected, the colour also recolours it, in one undo step.
+    let first = marks(&h)[0].0;
+    h.state_mut().views[0].comments.selected = Some((0, first));
+    h.run_steps(2);
+    pick(&mut h, "Red");
+    assert_eq!(colours(&h), [red, blue]);
+    h.state_mut().execute("edit.undo");
+    h.run_steps(2);
+    assert_eq!(colours(&h), [black, blue], "undo puts the old colour back");
+    h.state_mut().execute("edit.redo");
+    h.run_steps(2);
 
     // The colour is saved with the mark.
     let bytes = h.state().session.save_bytes(h.state().views[0].id).unwrap();
-    assert_eq!(colours(&harness_bytes(&bytes)), [black, blue], "kept on save and reopen");
+    assert_eq!(colours(&harness_bytes(&bytes)), [red, blue], "kept on save and reopen");
 
     let mut restored = PdfCraftApp::new();
     restored.restore(&h.state().persist());
-    assert_eq!(restored.fill_mark_color, [0.0, 0.47, 0.84], "kept across launches");
+    assert_eq!(restored.fill_mark_color, [0.89, 0.13, 0.13], "kept across launches");
     for bad in
         [r#"{"fill_mark_color":[2,0,0]}"#, r#"{"fill_mark_color":[0,0]}"#, r#"{"fill_mark_color":"blue"}"#, r#"{"fill_mark_color":[0,null,0]}"#]
     {
         restored.restore(bad);
-        assert_eq!(restored.fill_mark_color, [0.0, 0.47, 0.84], "invalid settings keep the colour: {bad}");
+        assert_eq!(restored.fill_mark_color, [0.89, 0.13, 0.13], "invalid settings keep the colour: {bad}");
     }
 }
 

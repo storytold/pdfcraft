@@ -5507,8 +5507,8 @@ milestone = "M5"
 status = "shipped"
 commands = ["sign.fill.check", "sign.fill.cross", "sign.fill.dot", "sign.fill.line"]
 tools = ["fill_sign_add"]
-evidence = ["crates/ui-egui/tests/it/fill_sign.rs::text_marks_and_date", "crates/annot/src/tests.rs::fill_and_sign_items_are_drawn", "crates/ui-egui/tests/it/fill_sign.rs::checkmark_colour_is_picked_in_the_quick_bar_and_saved", "crates/automation/tests/it/automation.rs::fill_sign_marks_take_a_colour_that_is_saved"]
-notes = "PdfCraft-drawn stamps. With a mark tool active the quick bar's Colour sets the colour of new marks (default black, kept across launches) (#2313); fill_sign_add takes `color` for marks. Marks keep a colour of their own, apart from typed text's. Missing: recolouring a placed mark"
+evidence = ["crates/ui-egui/tests/it/fill_sign.rs::text_marks_and_date", "crates/annot/src/tests.rs::fill_and_sign_items_are_drawn", "crates/ui-egui/tests/it/fill_sign.rs::checkmark_colour_is_picked_in_the_quick_bar_recolours_the_selected_mark_and_is_saved", "crates/automation/tests/it/automation.rs::fill_sign_marks_take_a_colour_that_is_saved"]
+notes = "PdfCraft-drawn stamps. With a mark tool active the quick bar's Colour sets the colour of new marks (default black, kept across launches) and recolours the selected one (#2313); fill_sign_add takes `color` for marks. Marks keep a colour of their own, apart from typed text's"
 
 [[feature]]
 id = "form.fill-sign-date"
