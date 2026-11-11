@@ -143,6 +143,11 @@ pub(crate) struct Output {
     /// ([`pdfcraft_content::Parsed::ambiguous_images`]): what this scope placed after it may not
     /// be what the page shows, so a redaction must not trust it.
     pub ambiguous: bool,
+    /// The content holds bytes the parser can't read ([`pdfcraft_content::Parsed::skipped`]), in
+    /// this scope or a nested form: the walk reads past them, so text they hide (a stray `)` in a
+    /// `TJ` array, say), which other readers may still draw, is neither found nor removed, and a
+    /// rewrite would drop the bytes but keep the strings. A redaction must not trust it.
+    pub unparsed: bool,
     pub tag_changes: Vec<(ObjRef, ObjRef, HashSet<i64>, HashSet<i64>)>,
     pub error: Option<CosError>,
 }
@@ -407,6 +412,7 @@ fn process_from(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<u8>], 
     let joined = Pieces::join(streams);
     let mut parsed = joined.parse();
     walk.out.ambiguous = parsed.ambiguous_images > 0;
+    walk.out.unparsed = parsed.skipped > 0;
     // A rewritten piece loses its comments, so keep where they began and ended: a comment that
     // ran on into the next piece still hides that piece's first line.
     let comment_edges = joined.comment_edges(&parsed);
@@ -1185,6 +1191,7 @@ fn xobject(
             out.residue += inner.residue;
             out.vertical |= inner.vertical;
             out.ambiguous |= inner.ambiguous;
+            out.unparsed |= inner.unparsed;
             out.doomed.extend_from_slice(&inner.doomed);
             out.retired_properties.extend(inner.retired_properties);
             // A Type 3 glyph without resources shown inside the form may paint with the page's

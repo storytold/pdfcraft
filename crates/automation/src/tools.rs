@@ -726,7 +726,7 @@ pub fn tools() -> Vec<ToolDef> {
         t(
             "doc_hidden_info",
             "Find hidden information",
-            "What Remove Hidden Information would remove, by category (metadata, attachments, comments, form-fields, hidden-text, hidden-layers, bookmarks, links-actions-scripts, private-data) with counts.",
+            "What Remove Hidden Information would remove, by category (metadata, attachments, comments, form-fields, hidden-text, hidden-layers, bookmarks, links-actions-scripts, private-data) with counts. A page that can't be read in full (its content streams don't decode, or they or a form they draw hold bytes the parser can't read or an inline image whose end is a guess) counts as one item of hidden-text and of hidden-layers: removing either category then fails on that page. With form-fields removed too, a field's appearance becomes page content and is read the same way, though it isn't counted here.",
         )
         .ro()
         .with(schema(json!({ "doc": doc() }), &["doc"])),

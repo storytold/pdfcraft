@@ -3297,31 +3297,42 @@ fn image_and_a_tail(catalog: &str, image: &str, image_dict: &str, tail: &[u8]) -
     ])
 }
 
-/// The refusal of the check of what content still draws through its resources (`resource_ops`).
-fn unread_content_refusal<T: std::fmt::Debug>(result: &Result<T, RedactError>) -> bool {
-    matches!(result, Err(RedactError::Cos(pdfcraft_cos::CosError::Syntax { detail, .. }))
-        if detail == "redaction could not fully read the content that uses these resources")
-}
-
-/// What the page draws can't be told when a content stream the redaction leaves as it was holds
-/// bytes the parser can't read: the redaction of an image is refused, as it was already on a page
-/// with fonts or properties to clean up.
+/// What the page draws can't be told when content the redaction leaves as it was holds bytes the
+/// parser can't read: the redaction of an image is refused. In a content stream of the page, the
+/// walk reads past them and refuses the page itself (`Unreadable`). In a form without resources of
+/// its own that lies away from the mark, which the walk doesn't enter, the check of what the page
+/// still draws through its resources refuses it.
 #[test]
 fn unreadable_bytes_in_a_stream_left_as_it_was_refuse_the_redaction_of_an_image() {
     for (tail, refused) in [(&b"q Q )"[..], true), (b"q Q", false)] {
         let mut doc = image_and_a_tail("", "Im1", "", tail);
         mark(&mut doc, 0, &[[0.0, 200.0, 300.0, 300.0]], "");
-        let result = apply(&mut doc, None);
-        if refused {
-            assert!(unread_content_refusal(&result), "{result:?}");
-        } else {
-            assert_eq!(result.map(|r| r.images_removed).ok(), Some(1));
-        }
+        let result = apply(&mut doc, None).map(|r| r.images_removed);
+        assert_eq!(result, if refused { Err(RedactError::Unreadable(1)) } else { Ok(1) });
     }
+    let mut doc = image_and_a_tail("", "Im1", "", b"/Fm Do");
+    let bbox = Object::Array(vec![0.into(), 0.into(), 300.into(), 100.into()]);
+    let form = Dict::from_iter([(b"Type".to_vec(), Object::name("XObject")), (b"Subtype".to_vec(), Object::name("Form")), (b"BBox".to_vec(), bbox)]);
+    let form = doc.add(Object::Stream(Stream::from_raw(form, b"q Q )".to_vec())));
+    doc.update_dict(ObjRef::new(3, 0), |d| {
+        if let Some(Object::Dict(res)) = d.get_mut(b"Resources")
+            && let Some(Object::Dict(xo)) = res.get_mut(b"XObject")
+        {
+            xo.set(b"Fm".to_vec(), Object::Ref(form));
+        }
+    })
+    .unwrap();
+    mark(&mut doc, 0, &[[0.0, 200.0, 300.0, 300.0]], "");
+    let result = apply(&mut doc, None);
+    assert!(
+        matches!(&result, Err(RedactError::Cos(pdfcraft_cos::CosError::Syntax { detail, .. })) if detail == "redaction could not fully inspect inherited form resources"),
+        "{result:?}"
+    );
 }
 
-/// Remove Hidden Information makes the same check: removing an off layer's image is refused on a
-/// page whose drawing can't be told.
+/// Remove Hidden Information refuses the same page: removing an off layer's image is refused on a
+/// page whose drawing can't be told. Its walk reads every content stream, and refuses the page
+/// itself.
 #[test]
 fn unreadable_bytes_in_a_stream_left_as_it_was_refuse_removing_a_hidden_image() {
     use crate::sanitize::{Hidden, remove_hidden};
@@ -3329,7 +3340,7 @@ fn unreadable_bytes_in_a_stream_left_as_it_was_refuse_removing_a_hidden_image() 
         let mut doc = image_and_a_tail("/OCProperties << /OCGs [7 0 R] /D << /OFF [7 0 R] >> >>", "ImOC", "/OC 7 0 R", tail);
         let result = remove_hidden(&mut doc, &[Hidden::HiddenLayers]);
         if refused {
-            assert!(unread_content_refusal(&result), "{result:?}");
+            assert_eq!(result, Err(RedactError::Unreadable(1)));
         } else {
             assert!(result.unwrap().iter().any(|(h, n)| *h == Hidden::HiddenLayers && *n > 0));
         }
@@ -6242,6 +6253,7 @@ mod operands_from_the_end;
 mod property_retirement;
 mod surviving_references;
 mod text_state;
+mod unparsed;
 
 /// `[(FIRSTARR)] [(LASTARR)] TJ` is malformed (a surplus array operand), but the operator still
 /// draws only the one immediately before it (LASTARR, 7 glyphs, 35 pt wide from x = 10) -- not
