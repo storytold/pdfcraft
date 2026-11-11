@@ -479,15 +479,17 @@ fn hidden_layers(doc: &Document) -> Vec<ObjRef> {
         o.and_then(|g| doc.resolve(g).as_array().map(|a| a.iter().filter_map(Object::as_ref).collect())).unwrap_or_default()
     };
     let all = refs(oc.get(b"OCGs"));
-    let (on, off) = (refs(d.get(b"ON")), refs(d.get(b"OFF")));
+    // Membership through sets: both lists come from the file, so a scan of one for each entry of
+    // the other would cost their product.
+    let known: std::collections::HashSet<ObjRef> = all.iter().copied().collect();
     let mut hidden: Vec<ObjRef> = if d.name(b"BaseState") == Some(b"OFF") {
+        let on: std::collections::HashSet<ObjRef> = refs(d.get(b"ON")).into_iter().collect();
         all.iter().copied().filter(|g| !on.contains(g)).collect()
     } else {
-        off.into_iter().filter(|g| all.contains(g)).collect()
+        refs(d.get(b"OFF")).into_iter().filter(|g| known.contains(g)).collect()
     };
     // Each rule, layer list and layer is read once, however often the rules name them: many rules
     // can share one long list.
-    let known: std::collections::HashSet<ObjRef> = all.iter().copied().collect();
     let mut looked: std::collections::HashSet<ObjRef> = hidden.iter().copied().collect();
     let mut read = std::collections::HashSet::new();
     let rules = d.get(b"AS").and_then(|a| doc.resolve(a).as_array().cloned()).unwrap_or_default();
