@@ -1,6 +1,6 @@
 use super::dispatch::Content;
 use super::error::{Result, ToolError, failed};
-use super::json::{Args, one_based};
+use super::json::{Args, one_based, summary};
 use super::{Arc, Automation, DocId, HashMap, PageRenderer, PageText, RenderConfig, RenderRequest, RequestKind, Value, commands, json, tools};
 
 /// Default and maximum resolution for `page_render`.
@@ -19,6 +19,10 @@ type PageTexts = Vec<(usize, std::result::Result<Arc<PageText>, String>)>;
 pub(crate) const FIND_MAX_WARNINGS: usize = 100;
 
 pub(crate) const FIND_MAX_WARNING_BYTES: usize = 1024;
+
+/// HTML that one `text_extract` with `format: "html"` returns across all its pages; a page past
+/// it gets none. `html_truncated` covers this and any page whose own copy hit its caps.
+const MAX_EXTRACT_HTML_BYTES: usize = 32 << 20;
 
 impl Automation {
     // ---- pages and text ----------------------------------------------------------------------
@@ -201,6 +205,16 @@ impl Automation {
     }
 
     pub(crate) fn text_extract(&mut self, a: &Args) -> Result<Value> {
+        self.text_extract_within(a, MAX_EXTRACT_HTML_BYTES)
+    }
+
+    /// [`Self::text_extract`] with at most `html_budget` bytes of HTML across all pages.
+    pub(crate) fn text_extract_within(&mut self, a: &Args, html_budget: usize) -> Result<Value> {
+        let html = match a.opt_str("format")?.unwrap_or("text") {
+            "text" => false,
+            "html" => true,
+            other => return Err(ToolError::InvalidArgs(format!("format must be \"text\" or \"html\", not {other:?}"))),
+        };
         let doc = self.doc_to_copy(a)?;
         let id = doc.id;
         let pages = match a.opt_ints("pages")? {
@@ -214,14 +228,54 @@ impl Automation {
             Some(r) => t.column_text(&t.glyphs_in(r)),
             None => t.plain_text(),
         };
-        let out: Vec<Value> = pages.iter().zip(texts).map(|(p, t)| json!({ "page": p + 1, "text": text(&t) })).collect();
-        Ok(json!({ "pages": out }))
+        let doc = self.doc(a)?;
+        let mut out = Vec::with_capacity(pages.len());
+        // `spent`: the budget ran out, so later pages get no HTML. `cut`: some page's HTML is
+        // missing part of its text, by the budget or by the copy's own caps.
+        let (mut html_left, mut spent, mut cut) = (html_budget, false, false);
+        for (&p, t) in pages.iter().zip(texts) {
+            let mut page = json!({ "page": p + 1, "text": text(&t) });
+            // Content cut at the renderer's limits (#623): the text is incomplete, and said so.
+            if t.truncated {
+                page["truncated"] = json!(true);
+            }
+            if html {
+                // Copy with formatting: the same glyphs as an HTML fragment, within one budget for
+                // the whole call; a page past it gets none and the call says so.
+                let mut copy = pdfcraft_engine::RichCopy::default();
+                if !spent {
+                    let glyphs: Vec<usize> = match rect {
+                        Some(r) => t.glyphs_in(r),
+                        None => (0..t.glyphs.len()).collect(),
+                    };
+                    copy = doc.rich_copy(p, &t, &glyphs).map_err(failed)?;
+                    match html_left.checked_sub(copy.html.len()) {
+                        Some(left) => html_left = left,
+                        None => {
+                            spent = true;
+                            copy = pdfcraft_engine::RichCopy::default();
+                        }
+                    }
+                }
+                cut |= spent || copy.truncated;
+                page["html"] = json!(copy.html);
+                page["styles_incomplete"] = json!(copy.styles_incomplete || spent);
+            }
+            out.push(page);
+        }
+        let mut result = json!({ "pages": out });
+        if html {
+            result["html_truncated"] = json!(cut);
+        }
+        Ok(result)
     }
 
     /// Matches in document order, extracting page text in growing batches and stopping as soon as
     /// `limit` is reached, so a bounded search doesn't extract (and cache) the whole document
     /// (#971). One match past the limit supplies `next`. Reached extraction failures are reported
     /// as bounded warnings; `complete` requires both no continuation and no failed pages.
+    /// `stop_at_limit` drops that lookahead: the search ends at the `limit`th match, so a lone match
+    /// never sends it to the end of the document, and `next` is only where to resume (#5328).
     pub(crate) fn text_find(&mut self, a: &Args) -> Result<Value> {
         self.text_find_with(a, &mut extract_parallel)
     }
@@ -241,11 +295,15 @@ impl Automation {
             Some(p) => return Err(ToolError::InvalidArgs(format!("start_page {p} is out of range: the document has {n} pages"))),
         };
         let skip = usize::try_from(a.opt_int("skip")?.unwrap_or(0).max(0)).unwrap_or(usize::MAX);
+        let stop_at_limit = a.opt_bool("stop_at_limit")?.unwrap_or(false);
         let mut matches = Vec::new();
         let mut next = None;
+        let mut stopped = false;
         let mut warnings = Vec::new();
         let mut warning_count = 0usize;
-        let (mut first, mut batch) = (start, FIND_FIRST_BATCH);
+        // A search that stops at its limit starts with one page, so a match on it reads nothing
+        // more; the batches still double for a match further in.
+        let (mut first, mut batch) = (start, if stop_at_limit { 1 } else { FIND_FIRST_BATCH });
         'search: while first < n {
             let end = first.saturating_add(batch).min(n);
             let pages: Vec<usize> = (first..end).collect();
@@ -267,13 +325,19 @@ impl Automation {
                 let skip_here = if p == start { skip } else { 0 };
                 // One extra match proves that the caller needs a continuation. Include skipped
                 // matches on the starting page when bounding the temporary per-page result.
-                let needed = limit.saturating_sub(matches.len()).saturating_add(skip_here).saturating_add(1);
+                let needed = limit.saturating_sub(matches.len()).saturating_add(skip_here).saturating_add(usize::from(!stop_at_limit));
                 for (k, r) in text.find_opts_limited(query, false, false, needed).into_iter().enumerate().skip(skip_here) {
                     if matches.len() == limit {
                         next = Some(json!({ "start_page": p + 1, "skip": k }));
                         break 'search;
                     }
                     matches.push(json!({ "page": p + 1, "text": text.text_of(r.clone()), "rects": text.line_rects(r) }));
+                    if stop_at_limit && matches.len() == limit {
+                        // Resume just past this match; whether another exists isn't looked at.
+                        next = Some(json!({ "start_page": p + 1, "skip": k.saturating_add(1) }));
+                        stopped = true;
+                        break 'search;
+                    }
                 }
             }
             first = end;
@@ -281,8 +345,110 @@ impl Automation {
         }
         let mut out = json!({ "query": query, "count": matches.len(), "complete": next.is_none() && warning_count == 0, "matches": matches,
             "warnings_truncated": warning_count > warnings.len(), "warning_count": warning_count, "warnings": warnings });
-        if let (Some(next), Some(o)) = (next, out.as_object_mut()) {
-            o.insert("next".into(), next);
+        if let Some(o) = out.as_object_mut() {
+            if let Some(next) = next {
+                o.insert("next".into(), next);
+            }
+            if stop_at_limit {
+                o.insert("stopped_at_limit".into(), stopped.into());
+            }
+        }
+        Ok(out)
+    }
+
+    /// Find and replace (Edit text ▸ Replace): every match (or the first) rewritten inside its
+    /// own paragraph through the same engine plan as the window's Replace all, one undo step.
+    /// The page text is searched too (as `text_find` does), so matches no paragraph holds are
+    /// counted as not editable and the counts add up to what `text_find` reports.
+    pub(crate) fn text_replace(&mut self, a: &Args) -> Result<Value> {
+        self.text_replace_with(a, &mut extract_parallel)
+    }
+
+    pub(crate) fn text_replace_with(
+        &mut self,
+        a: &Args,
+        extract: &mut impl FnMut(&Arc<Vec<u8>>, Option<Arc<str>>, &[usize]) -> PageTexts,
+    ) -> Result<Value> {
+        let doc = self.doc(a)?;
+        let (id, n) = (doc.id, doc.info.pages.len());
+        let pages = match a.opt_ints("pages")? {
+            Some(_) => self.pages(a, "pages")?,
+            None => (0..n).collect(),
+        };
+        let query = pdfcraft_engine::find_replace::Replace {
+            find: a.str("find")?.to_owned(),
+            with: a.str("replace")?.to_owned(),
+            case_sensitive: a.opt_bool("case_sensitive")?.unwrap_or(false),
+            whole_words: a.opt_bool("whole_words")?.unwrap_or(false),
+        };
+        let all = a.opt_bool("all")?.unwrap_or(true);
+        let mut pages = pages;
+        pages.sort_unstable();
+        pages.dedup();
+        // Pages whose text the find bar couldn't read, reported with the plan, not dropped.
+        let mut unreadable: Vec<(usize, String)> = Vec::new();
+        let (which, found) = if all {
+            let mut found = std::collections::BTreeMap::new();
+            for (p, text) in self.page_text_results(id, &pages, &mut *extract)? {
+                match text {
+                    Ok(text) => {
+                        found.insert(p, text.find_opts(&query.find, query.case_sensitive, query.whole_words).len());
+                    }
+                    Err(e) => unreadable.push((p, e)),
+                }
+            }
+            unreadable.sort();
+            (Some(pdfcraft_engine::find_replace::Which::All), Some(found))
+        } else {
+            // The first match the find bar shows, and that one only: pages are read in order until
+            // one holds a match, and a page that can't be read stops the search there.
+            let mut texts = Vec::new();
+            let (mut start, mut batch) = (0, FIND_FIRST_BATCH.max(1));
+            'search: while start < pages.len() {
+                let end = pages.len().min(start.saturating_add(batch));
+                let mut results: std::collections::HashMap<usize, _> =
+                    self.page_text_results(id, &pages[start..end], &mut *extract)?.into_iter().collect();
+                for p in &pages[start..end] {
+                    match results.remove(p) {
+                        Some(Ok(text)) if text.find_opts_limited(&query.find, query.case_sensitive, query.whole_words, 1).is_empty() => {}
+                        Some(Ok(text)) => {
+                            texts.push((*p, text));
+                            break 'search;
+                        }
+                        Some(Err(e)) => {
+                            unreadable.push((*p, e));
+                            break 'search;
+                        }
+                        None => {}
+                    }
+                }
+                start = end;
+                batch = batch.saturating_mul(2).min(FIND_MAX_BATCH);
+            }
+            (pdfcraft_engine::find_replace::Which::first_in(texts.iter().map(|(p, t)| (*p, t.as_ref())), &query), None)
+        };
+        let mut plan = match which {
+            Some(which) => self.doc(a)?.plan_replace(&pages, &query, which, found.as_ref()).map_err(failed)?,
+            None => {
+                // Nothing to replace: still the permission and query checks of a plan.
+                self.doc(a)?.plan_replace(&[], &query, pdfcraft_engine::find_replace::Which::All, None).map_err(failed)?
+            }
+        };
+        for (p, e) in &unreadable {
+            plan.unreadable_page(*p, e);
+        }
+        let mut out = match plan.edit.clone() {
+            Some(edit) => self.apply(a, edit)?,
+            None => summary(self.doc(a)?),
+        };
+        let skipped: serde_json::Map<String, Value> = plan.skipped.iter().map(|(why, k)| (why.key().to_owned(), json!(k))).collect();
+        out["replaced"] = json!(plan.replaced);
+        out["changed"] = json!(plan.edit.is_some());
+        out["pages"] = json!(plan.pages.iter().map(|p| p + 1).collect::<Vec<_>>());
+        out["skipped"] = json!(plan.skipped_total());
+        out["skipped_by"] = Value::Object(skipped);
+        if !plan.refusals.is_empty() {
+            out["refusals"] = json!(plan.refusals);
         }
         Ok(out)
     }
@@ -343,8 +509,12 @@ pub(crate) fn rendered_content(out: &pdfcraft_render::RenderedPage, page: usize)
 fn render_warning_text(warning: pdfcraft_render::RenderWarning) -> &'static str {
     use pdfcraft_render::RenderWarning;
     match warning {
-        RenderWarning::ContentTruncated => "content past the page's safety budget was skipped",
+        RenderWarning::ContentTruncated => {
+            "content past the page's safety budget, or a picture whose JBIG2 mask is past a decoder limit, was skipped"
+        }
         RenderWarning::ColourFallback => "a colour that could not be computed was painted in a fallback colour",
+        RenderWarning::MalformedIndexedImage => "an image with a malformed Indexed colour table may be drawn wrongly or not at all",
+        RenderWarning::Type3WidthsMissing => "a Type 3 font has no /Widths; its glyphs were spaced by the widths their glyph procedures give",
     }
 }
 
