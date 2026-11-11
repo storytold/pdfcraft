@@ -123,9 +123,9 @@ pub fn two_sided(printer: &str) -> Option<bool> {
     craft_print::two_sided(printer)
 }
 
-/// The driver's job options for a printer (CUPS: its PPD, with the queue's current defaults);
-/// empty when it has none or on other platforms. Reads files and runs `lpoptions`, so call it
-/// when the user asks, not every frame.
+/// The driver's job options for a printer (CUPS: its PPD, with the queue's current defaults).
+/// This compatibility view discards retrieval diagnostics; use [`load_printer_options`]
+/// when presenting results. Reads files and runs `lpoptions`, so call it on demand, not every frame.
 pub fn printer_options(printer: &str) -> Vec<PrinterOption> {
     printer_options_in(printer, "en")
 }
@@ -134,14 +134,39 @@ pub fn printer_options(printer: &str) -> Vec<PrinterOption> {
 /// `pt-br` or `zh-hans`) where its PPD has them (`*bg.Translation`, `*bg.InputSlot Tray2/…`);
 /// the driver's default names otherwise.
 pub fn printer_options_in(printer: &str, lang: &str) -> Vec<PrinterOption> {
+    load_printer_options_in(printer, lang).options
+}
+
+/// Driver settings and a diagnostic when some or all settings could not be retrieved.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PrinterOptions {
+    /// Successfully read options, retaining PPD defaults if the queue cannot answer.
+    pub options: Vec<PrinterOption>,
+    /// An actionable retrieval failure; absent for a genuinely empty successful read.
+    pub diagnostic: Option<String>,
+}
+
+/// Read driver settings without discarding retrieval failures, using English labels.
+pub fn load_printer_options(printer: &str) -> PrinterOptions {
+    load_printer_options_in(printer, "en")
+}
+
+/// Read localized driver settings and retain failures for UI and headless callers.
+pub fn load_printer_options_in(printer: &str, lang: &str) -> PrinterOptions {
     #[cfg(all(unix, not(target_arch = "wasm32")))]
     {
-        printer_options_via_within(printer, std::path::Path::new("/etc/cups/ppd"), std::process::Command::new("lpoptions"), LPOPTIONS_LIMIT, lang)
+        load_printer_options_via_within(
+            printer,
+            std::path::Path::new("/etc/cups/ppd"),
+            std::process::Command::new("lpoptions"),
+            LPOPTIONS_LIMIT,
+            lang,
+        )
     }
     #[cfg(not(all(unix, not(target_arch = "wasm32"))))]
     {
         let _ = lang;
-        craft_print::printer_options(printer)
+        PrinterOptions { options: craft_print::printer_options(printer), diagnostic: None }
     }
 }
 
@@ -156,7 +181,7 @@ const OUTPUT_CAP: u64 = 4 << 20;
 
 /// Run `command` and collect its standard output, giving it `limit`: a command still running
 /// then is killed and reaped, and the error is `TimedOut`. Standard input and error are not
-/// connected. The exit status is not checked, as `Command::output` leaves it to the caller.
+/// connected. An unsuccessful exit is reported with its status, not parsed as valid output.
 /// Only CUPS runs a command today; the tests cover every desktop platform.
 #[cfg(any(test, all(unix, not(target_arch = "wasm32"))))]
 pub(crate) fn output_within(command: &mut std::process::Command, limit: std::time::Duration) -> std::io::Result<Vec<u8>> {
@@ -192,7 +217,10 @@ pub(crate) fn output_within(command: &mut std::process::Command, limit: std::tim
     let deadline = std::time::Instant::now() + limit;
     loop {
         match child.try_wait() {
-            Ok(Some(_)) => {
+            Ok(Some(status)) => {
+                if !status.success() {
+                    return Err(std::io::Error::other(format!("the command failed with {status}")));
+                }
                 // A moment's grace, so output written just before an exit at the deadline counts.
                 let left = deadline.saturating_duration_since(std::time::Instant::now()).max(std::time::Duration::from_millis(100));
                 return match rx.recv_timeout(left) {
@@ -247,18 +275,98 @@ fn read_ppd(ppd_dir: &std::path::Path, queue: &str) -> Option<Vec<u8>> {
 /// neither a system queue nor a physical printer. CUPS instances share their queue's PPD but
 /// have their own defaults, queried with the complete `queue/instance` destination. `limit` is
 /// how long the command may take before the PPD's defaults stand on their own.
-#[cfg(all(unix, not(target_arch = "wasm32")))]
+#[cfg(all(test, unix, not(target_arch = "wasm32")))]
 pub(crate) fn printer_options_via_within(
+    printer: &str,
+    ppd_dir: &std::path::Path,
+    lpoptions: std::process::Command,
+    limit: std::time::Duration,
+    lang: &str,
+) -> Vec<PrinterOption> {
+    load_printer_options_via_within(printer, ppd_dir, lpoptions, limit, lang).options
+}
+
+/// Recognize option declarations, including options deliberately filtered from Properties.
+/// This detects missing discovery data, not whether the whole PPD is valid or blocks are complete.
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+fn has_ppd_option_declaration(ppd: &str) -> bool {
+    ppd.lines().any(|line| {
+        let Some(rest) = line.strip_prefix("*OpenUI").filter(|rest| rest.starts_with(char::is_whitespace)) else { return false };
+        let Some((head, kind)) = rest.trim().rsplit_once(':') else { return false };
+        let head = head.trim().trim_start_matches('*');
+        let key = head.split_once('/').map_or(head, |(key, _)| key).trim();
+        !kind.trim().is_empty()
+            && !key.is_empty()
+            && key.len() <= 64
+            && key.bytes().all(|b| b.is_ascii_graphic() && !matches!(b, b'/' | b':' | b'=' | b'"'))
+    })
+}
+
+/// A bounded cause for user/agent diagnostics: never forward a path, username or raw error.
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+pub(crate) fn diagnostic_io_reason(error: &std::io::Error) -> &'static str {
+    use std::io::ErrorKind;
+    match error.kind() {
+        ErrorKind::NotFound => "required file or helper not found",
+        ErrorKind::PermissionDenied => "permission denied",
+        ErrorKind::NotADirectory => "a required directory is unavailable",
+        ErrorKind::FileTooLarge => "read limit exceeded",
+        ErrorKind::TimedOut => "operation timed out",
+        ErrorKind::InvalidData => "invalid data",
+        _ => "I/O operation failed",
+    }
+}
+
+/// Read options without hiding file or helper failures; retain any usable PPD defaults.
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+pub(crate) fn load_printer_options_via_within(
     printer: &str,
     ppd_dir: &std::path::Path,
     mut lpoptions: std::process::Command,
     limit: std::time::Duration,
     lang: &str,
-) -> Vec<PrinterOption> {
-    let Some(queue) = queue_of(printer) else { return Vec::new() };
-    let ppd = read_ppd(ppd_dir, queue);
-    let mut options = ppd.as_deref().map(|b| parse_ppd(&ppd_text(b))).unwrap_or_default();
-    let lpoptions_out = output_within(lpoptions.args(["-p", printer, "-l"]), limit).ok();
+) -> PrinterOptions {
+    let Some(queue) = queue_of(printer) else {
+        return PrinterOptions {
+            options: Vec::new(),
+            diagnostic: Some("Invalid printer destination; select a valid queue or queue/instance.".into()),
+        };
+    };
+    const PPD_CAP: u64 = 16 << 20;
+    let path = ppd_dir.join(format!("{queue}.ppd"));
+    let mut diagnostics = Vec::new();
+    let ppd = std::fs::File::open(&path)
+        .and_then(|f| {
+            use std::io::Read as _;
+            let mut bytes = Vec::new();
+            f.take(PPD_CAP + 1).read_to_end(&mut bytes)?;
+            if bytes.len() as u64 > PPD_CAP {
+                return Err(std::io::Error::new(std::io::ErrorKind::FileTooLarge, "PPD exceeds the 16 MiB read limit"));
+            }
+            Ok(bytes)
+        })
+        .map_err(|e| {
+            diagnostics.push(format!(
+                "Could not read the printer's PPD settings: {}. Check the queue's PPD file and permissions (maximum 16 MiB).",
+                diagnostic_io_reason(&e)
+            ))
+        })
+        .ok();
+    let mut options = ppd.as_deref().map(|b| {
+        let text = ppd_text(b);
+        let options = parse_ppd(&text);
+        if options.is_empty() && !has_ppd_option_declaration(&text) {
+            diagnostics.push("No recognizable *OpenUI option declarations were found in the printer's PPD. Check the queue's PPD file; any listed settings come from lpoptions instead.".into());
+        }
+        options
+    }).unwrap_or_default();
+    let lpoptions_out = match output_within(lpoptions.args(["-p", printer, "-l"]), limit) {
+        Ok(out) => Some(out),
+        Err(e) => {
+            diagnostics.push(format!("Could not read queue defaults with lpoptions: {}. Check that CUPS and lpoptions are available; any listed settings use the PPD defaults.", diagnostic_io_reason(&e)));
+            None
+        }
+    };
     let current = lpoptions_out.as_deref().map(|out| parse_lpoptions(&String::from_utf8_lossy(out))).unwrap_or_default();
     if options.is_empty() {
         // The PPD is missing or unreadable (#4699). The same `lpoptions -l` listing carries every
@@ -276,7 +384,7 @@ pub(crate) fn printer_options_via_within(
     // macOS the paper tray also starts on Auto Select, which is what a job naming no tray asks
     // for, so the printer isn't held on an empty default tray (#3752, storytold/craft-libs#232).
     apply_queue_defaults(&mut options, &current);
-    options
+    PrinterOptions { options, diagnostic: (!diagnostics.is_empty()).then(|| diagnostics.join("\n")) }
 }
 
 /// Caps that match [`craft_print::parse_ppd`]: a malformed spooler answer is not allowed to

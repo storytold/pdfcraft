@@ -93,6 +93,8 @@ pub struct PrintDraft {
     pub current_page: usize,
     /// The printer driver's own options and the printer they were read for (Properties…, CUPS).
     pub driver_options: Option<(String, Vec<spool::PrinterOption>)>,
+    /// Why reading the settings failed or returned only partial information.
+    pub driver_options_diagnostic: Option<String>,
     /// Driver options set away from the printer's defaults, for `driver_options`' printer.
     pub driver_choices: std::collections::BTreeMap<String, String>,
     pub show_driver_options: bool,
@@ -169,6 +171,7 @@ impl Default for PrintDraft {
             sheet: 0,
             current_page: 0,
             driver_options: None,
+            driver_options_diagnostic: None,
             driver_choices: Default::default(),
             show_driver_options: false,
             driver_error: None,
@@ -191,6 +194,18 @@ pub fn default_papers() -> Vec<(String, (f64, f64))> {
 }
 
 impl PrintDraft {
+    /// Drop state owned by the old queue when the selected printer changes.
+    pub(super) fn reset_driver_options(&mut self) {
+        self.show_driver_options = false;
+        self.driver_options = None;
+        self.driver_options_diagnostic = None;
+        self.driver_choices.clear();
+        self.driver_error = None;
+        // The worker can finish, but its reply no longer belongs to this selection.
+        self.driver_options_loading = None;
+        self.read_options_for = None;
+    }
+
     /// Find the index of a paper in `self.papers` matching `size`, allowing for orientation.
     pub fn matching_paper(&self, size: (f64, f64)) -> Option<usize> {
         print::matching_paper(size).or_else(|| {

@@ -37,7 +37,19 @@ spool::submit(&pdf, &spool::Job { printer: None, copies: 2, ..Default::default()
 - **Properties… on CUPS** reads the queue's PPD and its current defaults (`lpoptions -l`) off
   the GUI thread, and gives `lpoptions` ten seconds: a CUPS that has stopped answering leaves
   the PPD's own defaults in force instead of holding the dialog (#1818; `spool::output_within`
-  kills and reaps the command at the deadline).
+  kills and reaps the command at the deadline). `load_printer_options[_in]` returns both
+  usable options and an optional diagnostic: missing/unreadable PPDs and failed, missing or
+  timed-out helpers are not reported as a printer with no settings. The dialog and headless
+  `printer_options` tool show the diagnostic; available PPD options remain usable when only
+  the defaults lookup fails (#4711). When the PPD yields no options, the `lpoptions -l`
+  listing supplies a fallback (#4699), with any PPD diagnostic retained alongside it.
+  Tests use synthetic PPDs and helper processes, not a
+  physical printer; this does not qualify real-device output. A readable file without a
+  recognizable `*OpenUI` declaration reports a discovery diagnostic. Valid declarations for
+  options already handled by the dialog (or installable hardware) may yield an empty list
+  without a diagnostic. This is not a full PPD validator.
+  Retrieval diagnostics name the operation and a bounded failure category, without local
+  filesystem paths, queue identifiers or raw operating-system error text.
 - **Remembered choices** (#2001): the dialog keeps two-sided (including leaving it to the
   printer), grayscale, collate, page sizing (with its custom percent), Comments & forms and a
   booklet's binding side across restarts, in the settings file under `print` with the names

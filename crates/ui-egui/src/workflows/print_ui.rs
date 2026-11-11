@@ -39,9 +39,9 @@ const TWO_SIDED_READS: usize = 4;
 /// it opens, so tests stay deterministic.
 pub type PrinterSource = std::sync::Arc<dyn Fn() -> Vec<spool::Printer> + Send + Sync>;
 
-/// Where a printer's driver options come from: the spooler's (`spool::printer_options_in`, in the
+/// Where a printer's driver options come from: the spooler's (`spool::load_printer_options_in`, in the
 /// UI language) unless a test stands in. Called off the GUI thread.
-pub type OptionsSource = std::sync::Arc<dyn Fn(&str) -> Vec<spool::PrinterOption> + Send + Sync>;
+pub type OptionsSource = std::sync::Arc<dyn Fn(&str) -> spool::PrinterOptions + Send + Sync>;
 
 /// Where a printer's configured default paper comes from: the spooler's DEVMODE / driver settings
 /// unless a test stands in.
@@ -93,7 +93,7 @@ pub(crate) struct PrintTasks {
     showing_progress: bool,
     /// The driver options being read, per printer (`read_options_in_background`).
     #[cfg(not(target_arch = "wasm32"))]
-    options: Vec<(String, std::sync::mpsc::Receiver<Vec<spool::PrinterOption>>)>,
+    options: Vec<(String, std::sync::mpsc::Receiver<spool::PrinterOptions>)>,
     /// The papers and default paper being read in the background, per printer (`read_papers_in_background`).
     #[cfg(not(target_arch = "wasm32"))]
     papers: Vec<PendingPaperInfo>,
@@ -207,6 +207,9 @@ impl PdfCraftApp {
         // A printer other than last time's brings back what it was last printed with (#2001);
         // the same one keeps this session's choices.
         let changed = printer != keep.printer;
+        if changed {
+            keep.reset_driver_options();
+        }
         // Picked pages are what Print is for (Acrobat's "Selected pages"); without any, the whole
         // document.
         let which = if selected.is_empty() { Which::All } else { Which::Selected };
@@ -333,7 +336,7 @@ impl PdfCraftApp {
         let source: OptionsSource = self.options_source.clone().unwrap_or_else(|| {
             // The driver's own names in the UI language, as it is when Properties… is clicked.
             let lang = crate::i18n::current().code();
-            std::sync::Arc::new(move |p: &str| spool::printer_options_in(p, lang))
+            std::sync::Arc::new(move |p: &str| spool::load_printer_options_in(p, lang))
         });
         let (tx, rx) = std::sync::mpsc::channel();
         let wake = WakeOnExit(self.ctx.clone());
@@ -346,19 +349,26 @@ impl PdfCraftApp {
         });
         match spawned {
             Ok(_) => self.print_tasks.options.push((printer, rx)),
-            // No thread to read them on: the printer offers nothing this time.
-            Err(_) => self.receive_options(printer, Vec::new()),
+            // Report a worker creation failure rather than claiming the printer has no options.
+            Err(error) => self.receive_options(
+                printer,
+                spool::PrinterOptions {
+                    options: Vec::new(),
+                    diagnostic: Some(format!("Could not start reading the printer settings: {error}. Close and reopen Properties to retry.")),
+                },
+            ),
         }
     }
 
     /// The options read for `printer` arrived, or the read died. A read that a later click
     /// superseded (another printer's is awaited) is dropped.
     #[cfg(not(target_arch = "wasm32"))]
-    fn receive_options(&mut self, printer: String, options: Vec<spool::PrinterOption>) {
+    fn receive_options(&mut self, printer: String, result: spool::PrinterOptions) {
         let d = &mut self.print_draft;
         if d.driver_options_loading.as_deref() == Some(printer.as_str()) {
             d.driver_options_loading = None;
-            d.driver_options = Some((printer, options));
+            d.driver_options = Some((printer, result.options));
+            d.driver_options_diagnostic = result.diagnostic;
         }
     }
 
@@ -468,9 +478,12 @@ impl PdfCraftApp {
                     false
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => true,
-                // A read that died offers nothing; the panel says so rather than wait.
+                // A dead worker is a failure, not a successfully empty settings list.
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                    arrived.push((printer.clone(), Vec::new()));
+                    arrived.push((printer.clone(), spool::PrinterOptions {
+                        options: Vec::new(),
+                        diagnostic: Some("Could not read the printer settings: the background read stopped unexpectedly. Close and reopen Properties to retry.".into()),
+                    }));
                     false
                 }
             });
@@ -493,6 +506,7 @@ impl PdfCraftApp {
                         let printer = default_printer(d, &printers);
                         let changed = printer != d.printer;
                         if changed {
+                            d.reset_driver_options();
                             d.printer = printer;
                             d.apply_setup();
                         }

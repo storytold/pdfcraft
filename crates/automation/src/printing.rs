@@ -150,6 +150,23 @@ fn spool_job(
     })
 }
 
+/// Keep a genuinely empty settings list distinct from a failed or partial read for agents.
+fn printer_options_response(printer: &str, result: spool::PrinterOptions) -> Value {
+    let list: Vec<Value> = result
+        .options
+        .into_iter()
+        .map(|o| {
+            let choices: Vec<Value> = o.choices.iter().map(|(value, label)| json!({ "value": value, "label": label })).collect();
+            json!({ "key": o.key, "label": o.label, "group": o.group, "default": o.default, "choices": choices })
+        })
+        .collect();
+    let mut response = json!({ "printer": printer, "count": list.len(), "options": list });
+    if let Some(diagnostic) = result.diagnostic {
+        response["diagnostic"] = json!(diagnostic);
+    }
+    response
+}
+
 impl Automation {
     /// Print production ▸ Convert colours: every colour on the pages in gray, rgb or cmyk.
     pub(crate) fn convert_colours(&mut self, a: &Args) -> Result<Value> {
@@ -206,16 +223,10 @@ impl Automation {
         Ok(json!({ "count": list.len(), "printers": list }))
     }
 
+    /// `printer_options`: preserve usable options and expose retrieval diagnostics separately.
     pub(crate) fn printer_options(&self, a: &Args) -> Result<Value> {
         let printer = a.str("printer")?;
-        let list: Vec<Value> = spool::printer_options(printer)
-            .into_iter()
-            .map(|o| {
-                let choices: Vec<Value> = o.choices.iter().map(|(value, label)| json!({ "value": value, "label": label })).collect();
-                json!({ "key": o.key, "label": o.label, "group": o.group, "default": o.default, "choices": choices })
-            })
-            .collect();
-        Ok(json!({ "printer": printer, "count": list.len(), "options": list }))
+        Ok(printer_options_response(printer, spool::load_printer_options(printer)))
     }
 
     /// `printer_papers`: the paper sizes (names and dimensions in points) and default paper
@@ -551,6 +562,33 @@ mod tests {
         assert!(!job(json!({ "grayscale": true }), Some(grey)), "grey pictures: nothing for the driver to do");
         assert!(job(json!({ "grayscale": true }), Some(colour)), "colour pictures still need the driver");
         assert!(!job(json!({}), None));
+    }
+    /// #4711: failed, empty and partially successful reads retain distinct tool outcomes.
+    #[test]
+    fn printer_options_reports_diagnostics_without_discarding_options() {
+        let empty = printer_options_response("Office", spool::PrinterOptions::default());
+        assert_eq!(empty, json!({"printer": "Office", "count": 0, "options": []}));
+        let failed =
+            printer_options_response("Office", spool::PrinterOptions { options: Vec::new(), diagnostic: Some("lpoptions timed out".into()) });
+        assert_eq!(failed["options"], json!([]));
+        assert_eq!(failed["diagnostic"], "lpoptions timed out");
+        let partial = printer_options_response(
+            "Office",
+            spool::PrinterOptions {
+                options: vec![spool::PrinterOption {
+                    key: "InputSlot".into(),
+                    label: "Paper tray".into(),
+                    group: String::new(),
+                    choices: vec![("Auto".into(), "Automatic".into())],
+                    default: "Auto".into(),
+                }],
+                diagnostic: Some("Could not read queue defaults".into()),
+            },
+        );
+        assert_eq!(partial["count"], 1);
+        assert_eq!(partial["options"][0]["key"], "InputSlot");
+        assert_eq!(partial["options"][0]["choices"], json!([{"value": "Auto", "label": "Automatic"}]));
+        assert_eq!(partial["diagnostic"], "Could not read queue defaults");
     }
 
     #[test]
