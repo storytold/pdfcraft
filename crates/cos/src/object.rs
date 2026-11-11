@@ -447,7 +447,8 @@ impl Stream {
     }
 
     /// [`Stream::decoded_strict`] for a caller with less than [`MAX_DECODED`] left to spend:
-    /// decoding past `max` bytes (in any filter stage) is an error.
+    /// decoding past `max` bytes (in any filter stage) is an error, so a damaged stream never
+    /// passes for a shorter one.
     pub fn decoded_strict_within(&self, max: usize) -> Result<Vec<u8>, CosError> {
         self.decoded_strict_within_counted(max).map(|(v, _)| v).map_err(|(e, _)| CosError::Filter(e.to_string()))
     }
