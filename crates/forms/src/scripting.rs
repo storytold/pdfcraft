@@ -10,7 +10,7 @@ use std::collections::HashSet;
 
 use pdfcraft_cos::{Document, ObjRef, Object, PdfString};
 
-use crate::{Field, FieldKind, FieldValue, FormError, fields, flags};
+use crate::{Field, FieldKind, FieldValue, FormError, LazyPool, fields, flags};
 
 /// The field events forms run scripts for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -92,7 +92,7 @@ impl Scripts for NoScripts {
 
 /// Run the Keystroke (commit) and Validate scripts for a new text value. Returns the value to
 /// store, or why it is rejected.
-pub(crate) fn accept(doc: &mut Document, f: &Field, value: &str, scripts: &mut dyn Scripts) -> Result<String, FormError> {
+pub(crate) fn accept(doc: &mut Document, f: &Field, value: &str, scripts: &mut dyn Scripts, pool: &mut LazyPool) -> Result<String, FormError> {
     let mut v = value.to_string();
     for (event, script, default) in [
         (FieldEvent::Keystroke, &f.actions.scripts.keystroke, "The value entered does not match the format of the field"),
@@ -101,7 +101,7 @@ pub(crate) fn accept(doc: &mut Document, f: &Field, value: &str, scripts: &mut d
         let Some(js) = script else { continue };
         let all = fields(doc);
         let r = scripts.run(event, js, f, &v, &all);
-        apply_changes(doc, &r.changes, &f.name)?;
+        apply_changes(doc, &r.changes, &f.name, pool)?;
         if !r.rc {
             return Err(FormError::Invalid(r.message.unwrap_or_else(|| format!("{default} [ {} ]", f.name))));
         }
@@ -126,8 +126,9 @@ pub(crate) fn formatted_in_english(doc: &Document, f: &Field, value: &str, scrip
 
 /// Apply script changes to other fields (values written without re-running their scripts;
 /// read-only, required and visibility as flags). `except` is the event's own field, whose value
-/// the event sets.
-pub(crate) fn apply_changes(doc: &mut Document, changes: &[FieldChange], except: &str) -> Result<(), FormError> {
+/// the event sets. Values are drawn storing glyph procedures through `pool`, the calling entry
+/// point's.
+pub(crate) fn apply_changes(doc: &mut Document, changes: &[FieldChange], except: &str, pool: &mut LazyPool) -> Result<(), FormError> {
     if changes.is_empty() {
         return Ok(());
     }
@@ -148,7 +149,7 @@ pub(crate) fn apply_changes(doc: &mut Document, changes: &[FieldChange], except:
             let mut tmp = f.clone();
             tmp.flags &= !flags::NO_TOGGLE_TO_OFF;
             tmp.actions = Default::default();
-            crate::write_value(doc, &tmp, &value, &mut NoScripts)?;
+            crate::write_value(doc, &tmp, &value, &mut NoScripts, pool)?;
         }
         let mut ff = f.flags;
         for (on, bit) in [(c.read_only, flags::READ_ONLY), (c.required, flags::REQUIRED)] {
@@ -187,8 +188,9 @@ pub(crate) fn apply_changes(doc: &mut Document, changes: &[FieldChange], except:
 /// Apply what a button or console script changed (values, read-only, required, visibility),
 /// then recalculate.
 pub fn apply_script_changes(doc: &mut Document, changes: &[FieldChange], scripts: &mut dyn Scripts) -> Result<(), FormError> {
-    apply_changes(doc, changes, "")?;
-    crate::recalculate_with(doc, scripts)?;
+    let mut pool = LazyPool::new();
+    apply_changes(doc, changes, "", &mut pool)?;
+    crate::recalculate_in(doc, scripts, &mut pool)?;
     Ok(())
 }
 
