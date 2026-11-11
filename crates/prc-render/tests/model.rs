@@ -157,10 +157,12 @@ fn a_synthetic_prc_renders_its_nearer_triangle_over_the_farther() {
     assert_eq!(pixel(&image, 20, 34), [57, 58, 60, 255], "the farther triangle, lit edge on");
 }
 
+/// The seed (-1, -1, 0), (1, -1, 0), then the midpoint (0, -1, 0) raised by 2 to (0, 1, 0).
+const COMPRESSED_TRIANGLE: [i64; 9] = [-2, -2, 0, 4, 0, 0, 0, 4, 0];
+
 #[test]
 fn a_compressed_tessellation_is_rebuilt_and_rendered() {
-    // The seed (-1, -1, 0), (1, -1, 0), then the midpoint (0, -1, 0) raised by 2 to (0, 1, 0).
-    let prc = PrcFile::parse(&prc_file(&compressed_section([-2, -2, 0, 4, 0, 0, 0, 4, 0]))).unwrap();
+    let prc = PrcFile::parse(&prc_file(&compressed_section(COMPRESSED_TRIANGLE))).unwrap();
     let meshes = assemble(&prc).unwrap();
     assert_eq!(meshes.len(), 1);
     assert_eq!(meshes[0].mesh.triangles.len(), 1);
@@ -168,6 +170,15 @@ fn a_compressed_tessellation_is_rebuilt_and_rendered() {
     let image = render(&meshes, &camera, &RenderOptions { width: 40, height: 40, ..RenderOptions::default() }).unwrap();
     assert_eq!(pixel(&image, 1, 1), [255, 255, 255, 255], "background corner");
     assert_ne!(pixel(&image, 20, 24), [255, 255, 255, 255], "the triangle");
+}
+
+/// `model_render`'s end-to-end test embeds this builder's compressed triangle as hexadecimal;
+/// this keeps that fixture the builder's output.
+#[test]
+fn the_automation_fixture_is_the_compressed_triangle() {
+    let hex: String = prc_file(&compressed_section(COMPRESSED_TRIANGLE)).iter().map(|b| format!("{b:02x}")).collect();
+    let fixture = include_str!("../../automation/tests/it/model_render.rs");
+    assert!(fixture.contains(&format!("const COMPRESSED_TRIANGLE_PRC_HEX: &str = \"{hex}\";")), "{hex}");
 }
 
 #[test]

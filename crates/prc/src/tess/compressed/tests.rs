@@ -169,8 +169,8 @@ fn a_degenerate_frame_takes_y_from_its_own_x() {
 /// A strip of thin, non-planar triangles compressed by an encoder written out from the WD:
 /// each point is expressed in the frame of the working mesh, rounded to the tolerance and
 /// reinjected [WD 7.8.9, 7.8.9.2], with `PrcPt::Length` and `Unitize` transcribed from the
-/// pseudocode [WD 12.3]. The decoder must land on that working mesh bit for bit, which keeps
-/// every vertex within the rounding bound of its source.
+/// pseudocode [WD 12.3] as read. The decoder must land exactly on that working mesh, which
+/// keeps every vertex within the rounding bound of its source.
 #[test]
 fn a_strip_decodes_onto_the_encoders_working_mesh() {
     fn length(v: V) -> f64 {

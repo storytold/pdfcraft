@@ -337,9 +337,6 @@ impl Ctx<'_, '_> {
         if !recalc {
             return Ok(Tessellation::Compressed { triangles: t });
         }
-        // Every triangle the walk may make, with its style, and every face range are charged
-        // before they are made.
-        self.r.take_elements(t.saturating_mul(triangle_elements(false, 0, !styles.is_empty())).saturating_add(faces))?;
         let arrays = compressed::Arrays {
             tolerance,
             origin,
@@ -349,10 +346,14 @@ impl Ctx<'_, '_> {
             is_reference: &is_reference,
             references: &references,
         };
-        Ok(match compressed::rebuild(&arrays) {
-            Ok(m) => Tessellation::Mesh(by_face(m, &face_of, faces, &styles)),
-            Err(_) => Tessellation::Compressed { triangles: t },
-        })
+        let Ok(m) = compressed::rebuild(&arrays) else {
+            return Ok(Tessellation::Compressed { triangles: t });
+        };
+        // The rebuilt triangles, with their styles, and every face range are charged once the
+        // arrays fit and before the ranges are made, so arrays that do not fit spend nothing.
+        let kept = m.triangles.len().saturating_mul(triangle_elements(false, 0, !styles.is_empty()));
+        self.r.take_elements(kept.saturating_add(faces))?;
+        Ok(Tessellation::Mesh(by_face(m, &face_of, faces, &styles)))
     }
 
     /// A compressed tessellation's normals, from `must_recalculate_normals` on, read past;

@@ -674,8 +674,9 @@ fn a_compressed_mesh_that_does_not_fit_is_left_compressed() {
     assert!(matches!(t[..], [Tessellation::Compressed { triangles: 1, .. }]), "{t:?}");
 }
 
-/// A face index near `u32::MAX` claims four billion faces: it is charged before any face range
-/// is made, so the decode stops at the element allowance instead of allocating them.
+/// A face index near `u32::MAX` claims four billion faces: once the triangles rebuild, they are
+/// charged before any face range is made, so the decode stops at the element allowance instead
+/// of allocating them.
 #[test]
 fn a_huge_face_index_is_charged_not_allocated() {
     let mut b = W::default();
@@ -692,6 +693,85 @@ fn a_huge_face_index_is_charged_not_allocated() {
     packed(&mut b, &c);
     let r = decode(&section(1, &b), &Schema::default(), 8137);
     assert!(matches!(r, Err(PrcError::TooManyElements { .. })), "{r:?}");
+}
+
+/// The same huge face index on arrays the walk cannot fit charges nothing for triangles or
+/// faces: the tessellation stays compressed and the file reads on.
+#[test]
+fn arrays_that_do_not_fit_spend_no_triangles_or_faces() {
+    let mut b = W::default();
+    let c = Packed {
+        tolerance: 0.5,
+        points: &[0; 12],
+        status: &[0, 0, 0],
+        face_of: &[u32::MAX - 1],
+        face_bits: 33,
+        is_ref: &[false; 3],
+        refs: &[],
+        line_attributes: &[],
+    };
+    packed(&mut b, &c);
+    let t = decode(&section(1, &b), &Schema::default(), 8137).unwrap();
+    assert!(matches!(t[..], [Tessellation::Compressed { triangles: 1, .. }]), "{t:?}");
+}
+
+/// The two-face panel of [`a_recalculated_compressed_mesh_is_rebuilt_by_face`], its second
+/// reference `last_ref`.
+fn panel(last_ref: u32) -> W {
+    let mut b = W::default();
+    packed(
+        &mut b,
+        &Packed {
+            tolerance: 0.5,
+            points: &[0, 0, 0, 4, 0, 0, -2, 4, 0, 1, 3, 0],
+            status: &[3, 3, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            face_of: &[1, 0, 1, 0],
+            face_bits: 8,
+            is_ref: &[false, false, false, false, true, true],
+            refs: &[0, last_ref],
+            line_attributes: &[3, 0],
+        },
+    );
+    section(1, &b)
+}
+
+/// A rebuilt mesh is charged its triangles, each with its style, and one element per face; the
+/// same arrays left compressed (a reference to a vertex not yet made) are charged neither.
+#[test]
+fn a_rebuilt_compressed_mesh_is_charged_its_triangles_and_faces() {
+    let fits = panel(1);
+    let t = decode(&fits, &Schema::default(), 8137).unwrap();
+    assert_eq!(mesh(&t[0]).triangles.len(), 4);
+    let left = panel(9);
+    let t = decode(&left, &Schema::default(), 8137).unwrap();
+    assert!(matches!(t[..], [Tessellation::Compressed { triangles: 4, .. }]), "{t:?}");
+    assert_eq!(spent(&fits) - spent(&left), 4 * triangle_elements(false, 0, true) + 2);
+    assert_eq!(triangle_elements(false, 0, true), 3);
+}
+
+fn rebuilt(triangles: usize) -> compressed::Rebuilt {
+    compressed::Rebuilt { positions: vec![[0.0; 3]; 3], triangles: (0..triangles).map(|i| [0, 1, u32::try_from(i).unwrap()]).collect() }
+}
+
+/// Triangles are grouped by face in walk order within each, faces no triangle names (between
+/// and after) get empty ranges, and each style moves with its triangle.
+#[test]
+fn rebuilt_triangles_are_grouped_by_face_with_their_styles() {
+    let face_of = [2, 0, 2, 1, 0];
+    let m = by_face(rebuilt(5), &face_of, 5, &[]);
+    let apex: Vec<u32> = m.triangles.iter().map(|t| t[2]).collect();
+    assert_eq!(apex, [1, 4, 3, 0, 2]);
+    assert_eq!(m.faces, [0..2, 2..3, 3..5, 5..5, 5..5]);
+    assert!(m.triangle_styles.is_empty());
+    assert!(m.normals_recalculated);
+
+    let style = |style| TriangleStyle { style, behaviour: u16::try_from(style).unwrap() };
+    let styles: Vec<TriangleStyle> = face_of.iter().map(|&f| style(f + 1)).collect();
+    let m = by_face(rebuilt(5), &[2, 0, 2, 3, 0], 4, &styles);
+    let apex: Vec<u32> = m.triangles.iter().map(|t| t[2]).collect();
+    assert_eq!(apex, [1, 4, 0, 2, 3]);
+    assert_eq!(m.faces, [0..2, 2..2, 2..4, 4..5]);
+    assert_eq!(m.triangle_styles, [style(1), style(1), style(3), style(3), style(2)]);
 }
 
 #[test]

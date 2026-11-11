@@ -2,7 +2,8 @@
 //! [WD 7.8.9, 7.8.9.2, 7.8.9.7].
 //!
 //! The WD names the arrays but not the traversal that wrote them; the rules below are the ones
-//! producers' files fit, with every slot, reference and point consumed exactly.
+//! the arrays fit when every slot, reference and point is consumed exactly. They are inferred
+//! from compressed tessellations and are not WD text.
 //!
 //! Traversal. A component starts with a seed triangle of three slots; every later triangle
 //! takes one slot, its apex. A slot flagged in `point_is_reference` takes the next
@@ -22,9 +23,9 @@
 //!   `((O + d.x X) - d.y Y) - d.z Z`.
 //!
 //! Arithmetic. The encoder frames each apex on the points it already approximated [WD 7.8.9],
-//! so the decoder repeats its floating point bit for bit: a last-bit difference compounds from
-//! apex to apex. `unitize` is therefore the WD's `PrcPt::Unitize` [WD 12.3], whose length is
-//! not exact, and the operations keep the order above.
+//! so the decoder repeats the encoder's floating point: a last-bit difference compounds from
+//! apex to apex. `unitize` therefore matches the WD's `PrcPt::Unitize` pseudocode [WD 12.3] as
+//! read, whose length is not exact, and the operations keep the order above.
 //!
 //! Fold. A triangle folded against its parent swaps bits 1 and 0 for its own continuation.
 //! Without stored normals to orient it, a new apex lying in its parent's plane on the parent's
@@ -147,6 +148,11 @@ fn apex(lo: V, hi: V, w: V, d: V) -> V {
 }
 
 /// Traversal state; `log` records every edge-count increment so a component can be rewound.
+///
+/// `edges`, `log` and `stack` are not charged to the element allowance: each triangle adds at
+/// most three edges, three log entries and one stack entry, and the triangle count is bounded
+/// by the face index array the caller has already charged. The allowance bounds them only to
+/// within that constant factor.
 #[derive(Default)]
 struct Walk {
     pos: Vec<V>,
