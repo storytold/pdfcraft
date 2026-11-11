@@ -6008,3 +6008,26 @@ fn full_screen_backspace_deletes_a_selected_comment_before_it_steps_back() {
     h.run_steps(4);
     assert_eq!(h.state().views[0].current, 0, "the next steps back");
 }
+
+/// The arrows move one selection, the newer: with a comment and then a Prepare field selected, the
+/// field moves and the comment stays. The comment moved, and the field didn't.
+#[test]
+fn an_arrow_moves_the_newer_selection_only() {
+    let mut h = selected_square();
+    let comment = comments(&h)[0].rect;
+    assert!(h.state_mut().execute("form.add.text"));
+    h.run_steps(2);
+    drag_pt(&mut h, (160.0, 180.0), (280.0, 150.0));
+    h.run_steps(2);
+    let field = |h: &Harness<'static, PdfCraftApp>| {
+        let s = h.state();
+        s.session.get(s.views[0].id).unwrap().form.last().and_then(|f| f.widgets.first().map(|w| w.rect))
+    };
+    let before = field(&h);
+    assert!(before.is_some() && h.state().views[0].prepare.selected.is_some(), "the field is selected");
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "and the comment still is");
+    h.key_press(egui::Key::ArrowRight);
+    h.run_steps(4);
+    assert_ne!(field(&h), before, "the field, selected last, moves");
+    assert_eq!(comments(&h)[0].rect, comment, "the comment stays");
+}

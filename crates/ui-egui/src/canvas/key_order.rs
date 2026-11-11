@@ -40,7 +40,7 @@ pub(crate) struct KeyCx<'a> {
 
 /// The pages' keys for `view`, the active one. `tool` is the quick tool, which Escape can drop.
 pub(super) fn run(view: &mut DocView, cx: &KeyCx<'_>, tool: &mut QuickTool) {
-    let KeyCx { ctx, keys, doc, preparing, speed, .. } = *cx;
+    let KeyCx { ctx, keys, speed, .. } = *cx;
     // The page grid has its own Escape and Delete, and shows no selection of the pages' to act on:
     // only the view's keys, which move its current page.
     if view.organize {
@@ -51,17 +51,30 @@ pub(super) fn run(view: &mut DocView, cx: &KeyCx<'_>, tool: &mut QuickTool) {
     view.key_ages.note(now);
     escape(view, cx, tool);
     delete(view, cx);
-    if *tool == QuickTool::EditText && doc.allows_modification() {
-        crate::object_ui::nudge_keys(ctx, keys, view, doc);
-    } else if doc.allows_annotation() {
-        crate::comments::nudge_keys(ctx, keys, view, &doc.info);
-    }
-    // A selected field moves with the arrows too (Prepare a form, #2608), before the view turns
-    // the page with them.
-    if preparing && doc.allows_modification() {
-        crate::prepare::nudge_keys(ctx, keys, view, doc);
-    }
+    arrows(view, cx);
     super::navigation::view_plain_keys(view, ctx, keys, speed);
+}
+
+/// The arrows move the newest selection (each nudge takes the presses it uses, so an older
+/// selection gets none); the view turns the page or scrolls with what is left, after the pass. A
+/// text field, a focused button and an open form field keep them (each nudge asks).
+fn arrows(view: &mut DocView, cx: &KeyCx<'_>) {
+    let KeyCx { ctx, keys, doc, tool, preparing, .. } = *cx;
+    // Edit text moves its objects and pictures; the comments don't move under it.
+    let edit_text = tool == QuickTool::EditText && doc.allows_modification();
+    let mut objects_asked = false;
+    for kind in view.key_ages.newest_first() {
+        match kind {
+            Held::Objects | Held::Picture if edit_text && !objects_asked => {
+                objects_asked = true;
+                crate::object_ui::nudge_keys(ctx, keys, view, doc);
+            }
+            Held::Comment if !edit_text && doc.allows_annotation() => crate::comments::nudge_keys(ctx, keys, view, &doc.info),
+            // Prepare a form, #2608.
+            Held::Field if preparing && doc.allows_modification() => crate::prepare::nudge_keys(ctx, keys, view, doc),
+            _ => {}
+        }
+    }
 }
 
 /// Escape: one step back per press. The first in this order that holds something takes it:
