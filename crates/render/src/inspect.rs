@@ -36,14 +36,18 @@ pub use core::{check_pages, inspect, pretty_date};
 #[cfg(test)]
 use core::{inspect_structure, spend};
 pub use model::{
-    Annot3d, Annotation, Attachment, AttachmentSource, DestView, Dimension3d, Field, FieldKind, FontInfo, Format3d, Layer, LayerOp, Link, LinkTarget,
-    OutlineItem, PageInfo, PageTransition, Projection3d, RemoteDestination, TransitionStyle, View3d, Xfa, link_replies, thread_tops,
+    Annot3d, Annotation, Attachment, AttachmentSource, DestView, Dimension3d, Field, FieldKind, FontInfo, Format3d, Layer, LayerItem, LayerOp,
+    LayerRow, Link, LinkTarget, MAX_GROUP_DEPTH, OutlineItem, PageInfo, PageTransition, Popup, Portfolio, PortfolioView, Projection3d,
+    RemoteDestination, ReviewStates, TransitionStyle, View3d, Xfa, fill_group_text, group_primaries, link_replies, thread_tops,
 };
+pub use navigation::named_destination;
 #[cfg(test)]
 use navigation::{OUTLINE_DEPTH, OUTLINE_WINDOW};
+#[cfg(test)]
+use resources::LABEL_DECODES;
 pub use resources::attachment_data;
 #[cfg(test)]
-use resources::{xfa_config_dynamic_render, xfa_packet_text};
+use resources::{MAX_LAYER_LABEL_CHARS, MAX_LAYER_ORDER_ROWS, xfa_config_dynamic_render, xfa_packet_text};
 
 #[derive(Clone, Debug, Default)]
 pub struct DocInfo {
@@ -72,12 +76,21 @@ pub struct DocInfo {
     pub links: Vec<Link>,
     /// 3D models (3D annotations) in page and `/Annots` order, at most 1024.
     pub annots_3d: Vec<Annot3d>,
+    /// The catalog's `/URI /Base` (ISO 32000-2 Table 211), the base for relative URI actions, when
+    /// it is a string of at most [`crate::MAX_URI_BASE_BYTES`].
+    pub uri_base: Option<String>,
     pub layers: Vec<Layer>,
     /// Radio-button layer groups (`/OCProperties /D /RBGroups`): turning one layer of a group on
     /// turns the others off.
     pub layer_groups: Vec<Vec<(u32, u16)>>,
+    /// The Layers panel's rows: the default configuration's `/Order` (ISO 32000-2 Table 99), a
+    /// tree of layers (indices into `layers`) and labels. A layer it doesn't list isn't presented,
+    /// though it still draws in its state; no `/Order` presents none.
+    pub layer_order: Vec<LayerRow>,
     pub fonts: Vec<FontInfo>,
     pub attachments: Vec<Attachment>,
+    /// The document is a PDF portfolio (`/Collection`): its documents are `attachments`.
+    pub portfolio: Option<Portfolio>,
     /// Pages with a presentation transition (`/Trans`) or display time (`/Dur`), in page order.
     pub transitions: Vec<PageTransition>,
     /// Where the document opens (`/OpenAction`): the (0-based page, view) of its destination,
@@ -87,5 +100,7 @@ pub struct DocInfo {
     pub warnings: Vec<String>,
 }
 
+#[cfg(test)]
+mod portfolio_tests;
 #[cfg(test)]
 mod tests;

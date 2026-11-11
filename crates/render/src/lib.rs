@@ -9,6 +9,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 mod inspect;
+mod link_area;
 mod pixels;
 mod raster;
 mod reading;
@@ -18,10 +19,12 @@ pub mod text;
 pub mod transition;
 
 pub use inspect::{
-    Annot3d, Annotation, Attachment, AttachmentSource, DestView, Dimension3d, DocInfo, Field, FieldKind, FontInfo, Format3d, Layer, LayerOp, Link,
-    LinkTarget, OutlineItem, PageInfo, PageTransition, Projection3d, RemoteDestination, TransitionStyle, View3d, Xfa, attachment_data, check_pages,
-    inspect, link_replies, pretty_date, thread_tops,
+    Annot3d, Annotation, Attachment, AttachmentSource, DestView, Dimension3d, DocInfo, Field, FieldKind, FontInfo, Format3d, Layer, LayerItem,
+    LayerOp, LayerRow, Link, LinkTarget, MAX_GROUP_DEPTH, OutlineItem, PageInfo, PageTransition, Popup, Portfolio, PortfolioView, Projection3d,
+    RemoteDestination, ReviewStates, TransitionStyle, View3d, Xfa, attachment_data, check_pages, fill_group_text, group_primaries, inspect,
+    link_replies, named_destination, pretty_date, thread_tops,
 };
+pub use link_area::{MAX_LINK_QUADS, MAX_URI_BASE_BYTES, link_quads, quad_contains, resolve_uri};
 pub use pixels::Pixels;
 pub use raster::{
     MAX_PIXELS, MAX_SIDE, PRINT_TAG, PageRenderer, RenderConfig, RenderPool, RenderRequest, RenderStats, RenderWarning, RenderedPage, RequestKind,
