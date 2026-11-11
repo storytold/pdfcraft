@@ -2934,6 +2934,9 @@ fn follow_actions(app: &mut PdfCraftApp, index: usize, targets: impl IntoIterato
 /// button's do.
 fn follow_link_action(app: &mut PdfCraftApp, index: usize, target: LinkTarget, remote_open: &mut Option<RemoteOpen>) {
     use pdfcraft_engine::form_scripts::ButtonAction as B;
+    // A link is no widget. `run_button` reads the widget's identity only for an icon import or
+    // a script, which links never run.
+    const NO_WIDGET: u64 = 0;
     let Some(id) = app.views.get(index).map(|v| v.id) else { return };
     match target {
         LinkTarget::Page(p, dest) => {
@@ -2952,7 +2955,7 @@ fn follow_link_action(app: &mut PdfCraftApp, index: usize, target: LinkTarget, r
         LinkTarget::Named(name) => match name.as_str() {
             // §12.6.4.12, Table 215: the named actions every processor supports. Past either end
             // of the document, NextPage and PrevPage stay put.
-            "NextPage" | "PrevPage" | "FirstPage" | "LastPage" => run_button(app, index, "", B::Named(name)),
+            "NextPage" | "PrevPage" | "FirstPage" | "LastPage" => run_button(app, index, "", NO_WIDGET, B::Named(name)),
             // Nonstandard names (the Table 215 NOTE allows them) that documents widely use:
             // back to the previous view, as View ▸ Previous view does (nothing without one), and
             // the Print dialog, never printing without it.
@@ -2975,8 +2978,8 @@ fn follow_link_action(app: &mut PdfCraftApp, index: usize, target: LinkTarget, r
             // action."
             other => log::info!("link: named action {other:?} not recognised; no action taken"),
         },
-        LinkTarget::Hide { fields, hide } => run_button(app, index, "", B::ShowHide { fields, hide }),
-        LinkTarget::ResetForm { fields, exclude } => run_button(app, index, "", B::Reset { fields, exclude }),
+        LinkTarget::Hide { fields, hide } => run_button(app, index, "", NO_WIDGET, B::ShowHide { fields, hide }),
+        LinkTarget::ResetForm { fields, exclude } => run_button(app, index, "", NO_WIDGET, B::Reset { fields, exclude }),
         LinkTarget::Other(s) => app.notify_fmt("This PDF uses the unsupported {s} action.", &[("s", &s)]),
     }
 }
