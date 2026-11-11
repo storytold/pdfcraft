@@ -16,6 +16,9 @@ pdfcraft-content = { workspace = true }
 pdfcraft-model = { workspace = true }
 thiserror = { workspace = true }
 
+[target.'cfg(windows)'.dependencies]
+winprint = { version = "0.2.1", git = "https://github.com/storytold/winprint.rs", rev = "5f80b9baf6b58937c401656634e42d33f00ddf49", default-features = false }
+
 [dev-dependencies]
 pdfcraft-render = { workspace = true }
 # Reads the renamed programs back with a parser that isn't ours.
