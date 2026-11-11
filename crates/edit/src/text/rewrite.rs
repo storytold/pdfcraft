@@ -371,6 +371,7 @@ struct Advance<'a> {
 }
 
 impl Advance<'_> {
+    /// Measures the advance in user space, combining source and fallback glyph widths for mixed runs.
     fn of(&self, s: &str) -> f64 {
         // A variation selector draws nothing and adds no spacing: it takes no room.
         let extra = s.chars().filter(|ch| !is_variation_selector(*ch)).count() as f64 * self.char_spacing;
@@ -696,6 +697,7 @@ impl LineWriter<'_> {
         Ok((dx, dx + w, -(index as f64) * self.lead - self.size * 0.12))
     }
 
+    /// Emits text-showing operators for each source or fallback run and tracks the selected font across pieces.
     fn show_piece(&self, piece: &str, line: &str, tw: f64, cursor: &mut LineCursor, ops: &mut Vec<Op>) -> Result<(), EditError> {
         let n = pdfcraft_content::num;
         for (source, run) in source_fallback_runs(piece, self.partial_chars) {
