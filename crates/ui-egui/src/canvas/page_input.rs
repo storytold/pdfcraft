@@ -1065,7 +1065,9 @@ fn paint_field_highlights(painter: &egui::Painter, xf: &PageXform, info: &DocInf
     if !enabled {
         return;
     }
-    for field in form.iter() {
+    // A push button holds no value, so it is left as drawn (the frames and controls of a LaTeX
+    // `animate` animation are push buttons).
+    for field in form.iter().filter(|f| f.kind != pdfcraft_engine::FormFieldKind::PushButton) {
         let required = field.has(pdfcraft_engine::field_flags::REQUIRED);
         for widget in field.widgets.iter().filter(|widget| widget.page == Some(page) && !widget.hidden && !widget.read_only) {
             let rect = widget.rect;
