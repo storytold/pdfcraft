@@ -949,6 +949,36 @@ fn the_proof_reads_the_text_states_operands_from_the_end() {
     }
 }
 
+/// An operator whose operands aren't of the types it takes is skipped by the renderer, and so by
+/// the proof: the text state stays as it was. In each case the text starts outside the region and
+/// only the state set before the skipped operator brings a glyph into it; `Tf` with a string
+/// for its font, or a name without a size, keeps the font and size before it; a `'` or `"` that
+/// doesn't type moves no line, and a `Tj` of a number moves no pen, so the text after it stays in the
+/// region.
+#[test]
+fn the_proof_skips_an_operator_of_the_wrong_type() {
+    let blank = marked_content(b"BT /F1 10 Tf 10 200 Td (Public) Tj ET", Spec::default());
+    let snap = Snapshot::capture(&blank, None).unwrap();
+    for content in [
+        &b"BT /F1 10 Tf -60 100 Td 70 Tc /x Tc (AB) Tj ET"[..],
+        b"BT /F1 10 Tf -60 100 Td 70 Tw /x Tw (A B) Tj ET",
+        b"BT /F1 10 Tf -60 100 Td 1500 Tz /x Tz (AB) Tj ET",
+        b"BT /F1 10 Tf 10 200 Td 100 TL /x TL T* (A) Tj ET",
+        b"BT /F1 10 Tf 10 200 Td -100 Ts /x Ts (A) Tj ET",
+        b"BT /F1 10 Tf (x) 1 Tf -60 100 Td (AAAAAAAAAAAAAAAAAAAAAAAAAAAA) Tj ET",
+        b"BT /F1 10 Tf 10 100 Td 50 TL 5 ' (SECRETVALUE) Tj ET",
+        b"BT /F1 10 Tf 10 100 Td 50 TL 0 /x (zz) \" (SECRETVALUE) Tj ET",
+        b"BT /F1 10 Tf 10 100 Td -50000 Tj (SECRETVALUE) Tj ET",
+        b"BT /F1 10 Tf /F1 /x Tf -60 100 Td (AAAAAAAAAAAAAAAAAAAAAAAAAAAA) Tj ET",
+        b"BT /F1 10 Tf 10 100 Td 50 TL /x 70 (zz) \" (SECRETVALUE) Tj ET",
+    ] {
+        let mut doc = marked_content(content, Spec::default());
+        doc.require_full_save();
+        let proof = snap.prove(&doc, None, &ProofOptions::default());
+        assert_eq!(proof.entries[0].status, Status::Failed, "{}: {}", String::from_utf8_lossy(content), proof.to_text());
+    }
+}
+
 /// The proof reads a path's points from the end too: a square under the region, its points after
 /// a surplus number, still paints there.
 #[test]

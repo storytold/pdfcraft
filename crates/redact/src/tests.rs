@@ -6153,6 +6153,7 @@ mod operands_from_the_end;
 mod property_retirement;
 mod surviving_references;
 mod text_state;
+mod wrong_type_operands;
 
 /// `[(FIRSTARR)] [(LASTARR)] TJ` is malformed (a surplus array operand), but the operator still
 /// draws only the one immediately before it (LASTARR, 7 glyphs, 35 pt wide from x = 10) -- not

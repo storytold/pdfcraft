@@ -337,8 +337,10 @@ fn scan_content_stream(
 /// operators, which record the glyphs they draw.
 fn apply_text_op(ctx: &mut ScanContext<'_>, res: &Dict, op: &pdfcraft_content::Op, current_font: &mut Option<FontKey>) {
     match op.op.as_slice() {
+        // Only with a size to go with the name, as the renderer reads `Tf`: without one it is
+        // skipped, and the font stays.
         b"Tf" => {
-            if let Some(name) = op.name_back(1) {
+            if let (Some(name), Some(_)) = (op.name_back(1), op.num_back(0)) {
                 *current_font = resolve_font_in_res(ctx.doc, res, name).map(|(k, _)| k);
             }
         }
@@ -350,7 +352,9 @@ fn apply_text_op(ctx: &mut ScanContext<'_>, res: &Dict, op: &pdfcraft_content::O
             }
         }
         b"Tj" | b"'" | b"\"" => {
-            if let Some(s) = op.operands.last().and_then(Object::as_string) {
+            // A `"` whose spacings aren't numbers is skipped by the renderer, and draws nothing.
+            let types = op.op.as_slice() != b"\"" || (op.num_back(1).is_some() && op.num_back(2).is_some());
+            if types && let Some(s) = op.operands.last().and_then(Object::as_string) {
                 mark_shown(ctx, *current_font, &s.bytes);
             }
         }

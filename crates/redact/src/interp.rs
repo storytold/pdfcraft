@@ -575,8 +575,9 @@ impl Walk {
                 // resources' `/ColorSpace` clears the pattern, which the app's renderer keeps and
                 // Poppler doesn't (`cs` resets the colour, ISO 32000-2 §8.6.8). Looking the name up
                 // at each `cs` wants a cache for the page: a `/ColorSpace` too large for the
-                // document to keep is parsed again at each read.
-                if op.last_name() != Some(b"Pattern") {
+                // document to keep is parsed again at each read. One whose operand isn't a name is
+                // skipped by the renderer, and the colour stays.
+                if op.last_name().is_some_and(|n| n != b"Pattern") {
                     if o == b"cs" {
                         self.gs.fill_pattern = None;
                     } else {
@@ -585,12 +586,19 @@ impl Walk {
                 }
                 Some(op)
             }
-            b"g" | b"rg" | b"k" => {
-                self.gs.fill_pattern = None;
-                Some(op)
-            }
-            b"G" | b"RG" | b"K" => {
-                self.gs.stroke_pattern = None;
+            // A plain colour clears the pattern, when its components read: one whose operands
+            // don't is skipped by the renderer, and the pattern stays the colour.
+            b"g" | b"rg" | b"k" | b"G" | b"RG" | b"K" => {
+                let reads = match o {
+                    b"g" | b"G" => op.nums::<1>().is_some(),
+                    b"rg" | b"RG" => op.nums::<3>().is_some(),
+                    _ => op.nums::<4>().is_some(),
+                };
+                if reads && o.first().is_some_and(u8::is_ascii_lowercase) {
+                    self.gs.fill_pattern = None;
+                } else if reads {
+                    self.gs.stroke_pattern = None;
+                }
                 Some(op)
             }
             _ => Some(op),
@@ -676,9 +684,10 @@ impl Walk {
 
     fn select_font(&mut self, doc: &Document, scope: &mut Scope<'_>, op: &Op) {
         // `/F1 12 Tf` takes its last two operands, as the renderer does: a surplus before them
-        // is ignored, not read in their place.
-        self.gs.size = op.nums::<1>().map_or(self.gs.size, |[size]| size);
-        let Some(name) = op.operands.len().checked_sub(2).and_then(|i| op.name(i)) else { return };
+        // is ignored, not read in their place. Unless both read, a font name and a size, the
+        // renderer skips it, and the font and size stay as they were.
+        let Some(([size], name)) = op.nums::<1>().zip(op.operands.len().checked_sub(2).and_then(|i| op.name(i))) else { return };
+        self.gs.size = size;
         let font_dict = self.fonts_res.get(name).and_then(|f| doc.resolve(f).as_dict().cloned());
         self.gs.vertical = font_dict.as_ref().is_some_and(|d| is_vertical(doc, d));
         self.gs.type3_inherits = font_dict.as_ref().is_some_and(|d| type3_without_resources(doc, d));
@@ -697,18 +706,21 @@ impl Walk {
         let gs = &mut self.gs;
         // The operand immediately before the operator, as the renderer reads it: surplus operands
         // before it must not move where glyphs are placed (`1 50 Ts` raises text by 50, not 1).
+        // One that isn't a number makes the renderer skip the operator, so the state stays as it
+        // was (`70 Tc /x Tc` keeps 70).
         let last = op.nums::<1>().map(|[v]| v);
         match op.op.as_slice() {
             b"BT" => {
                 self.tm = Matrix::IDENTITY;
                 self.tlm = Matrix::IDENTITY;
             }
-            b"Tc" => gs.char_spacing = last.unwrap_or(0.0),
-            b"Tw" => gs.word_spacing = last.unwrap_or(0.0),
-            b"Tz" => gs.scale = last.unwrap_or(100.0) / 100.0,
-            b"TL" => gs.leading = last.unwrap_or(0.0),
-            b"Ts" => gs.rise = last.unwrap_or(0.0),
-            b"Tr" => gs.render_mode = last.unwrap_or(0.0) as i64,
+            b"Tc" => gs.char_spacing = last.unwrap_or(gs.char_spacing),
+            b"Tw" => gs.word_spacing = last.unwrap_or(gs.word_spacing),
+            b"Tz" => gs.scale = last.map_or(gs.scale, |v| v / 100.0),
+            b"TL" => gs.leading = last.unwrap_or(gs.leading),
+            b"Ts" => gs.rise = last.unwrap_or(gs.rise),
+            // A mode the renderer doesn't know it fills with, as mode 0.
+            b"Tr" => gs.render_mode = last.map_or(gs.render_mode, |v| Some(v as i64).filter(|m| (0..=7).contains(m)).unwrap_or(0)),
             b"Td" | b"TD" => {
                 if let Some([x, y]) = op.nums::<2>() {
                     if op.is("TD") {
@@ -733,6 +745,18 @@ impl Walk {
 
     /// `Tj`, `TJ`, `'` and `"`: glyphs under a region are cut out (or counted, when verifying).
     fn show_text(&mut self, scope: &mut Scope<'_>, op: Op, piece: &mut Piece) -> Option<Op> {
+        let o = op.op.as_slice();
+        // An operator whose operands aren't of its types is skipped by the renderer: it draws
+        // nothing and moves nothing, so it is left as it is. Rewritten, it would draw.
+        let string = op.back(0).and_then(Object::as_string).is_some();
+        let types = match o {
+            b"TJ" => op.back(0).and_then(Object::as_array).is_some(),
+            b"\"" => string && op.num_back(1).is_some() && op.num_back(2).is_some(),
+            _ => string,
+        };
+        if !types {
+            return Some(op);
+        }
         // Text paints with the fill pattern, and with the stroke pattern in the stroking render
         // modes. Mode 3 paints nothing and mode 7 only clips.
         let mode = self.gs.render_mode;
@@ -743,12 +767,10 @@ impl Walk {
             self.out.patterns_painted.extend(self.patterns.iter().cloned());
             self.out.keeps_all_patterns = true;
         }
-        let o = op.op.as_slice();
         if o == b"\"" {
             // `aw ac string "`: the two numbers before the string, whatever surplus precedes them.
-            let at = |back: usize| op.operands.len().checked_sub(back).and_then(|i| op.num(i));
-            self.gs.word_spacing = at(3).unwrap_or(self.gs.word_spacing);
-            self.gs.char_spacing = at(2).unwrap_or(self.gs.char_spacing);
+            self.gs.word_spacing = op.num_back(2).unwrap_or(self.gs.word_spacing);
+            self.gs.char_spacing = op.num_back(1).unwrap_or(self.gs.char_spacing);
         }
         if matches!(o, b"'" | b"\"") {
             self.tlm = Matrix::translate(0.0, -self.gs.leading).then(&self.tlm);
