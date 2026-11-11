@@ -60,22 +60,41 @@ struct Fragment {
 fn group_at(ops: &[Op], i: usize, reads: &std::cell::Cell<usize>) -> Option<(usize, Matrix, Vec<u8>)> {
     #[cfg(test)]
     GROUP_READS.with(|c| c.set(c.get().saturating_add(1)));
-    if !ops.get(i)?.is("q") {
+    let mut looked = 0usize;
+    let found = group_scan(ops, i, &mut looked);
+    // Every operator looked at is charged to the page's search allowance, whether or not the
+    // group turns out to be one.
+    reads.set(reads.get().saturating_add(looked));
+    #[cfg(test)]
+    OP_READS.with(|c| c.set(c.get().saturating_add(looked)));
+    found
+}
+
+/// [`group_at`]'s search, counting in `looked` each operator it examines.
+fn group_scan(ops: &[Op], i: usize, looked: &mut usize) -> Option<(usize, Matrix, Vec<u8>)> {
+    let q = ops.get(i)?;
+    *looked += 1;
+    if !q.is("q") {
         return None;
     }
     let mut j = i + 1;
     let mut m = Matrix([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
     while let Some(op) = ops.get(j).filter(|o| o.is("cm")) {
+        *looked += 1;
         m = Matrix::from_operands(&op.operands)?.then(&m);
         j += 1;
     }
-    // Every operator looked at is charged to the page's search allowance.
-    reads.set(reads.get().saturating_add(j - i + 1));
-    #[cfg(test)]
-    OP_READS.with(|c| c.set(c.get().saturating_add(j - i)));
-    let draw = ops.get(j).filter(|o| o.is("Do"))?;
+    let draw = ops.get(j)?;
+    *looked += 1;
+    if !draw.is("Do") {
+        return None;
+    }
     let name = draw.name(0)?.to_vec();
-    ops.get(j + 1).filter(|o| o.is("Q"))?;
+    let end = ops.get(j + 1)?;
+    *looked += 1;
+    if !end.is("Q") {
+        return None;
+    }
     (j > i + 1).then_some((j + 2, m, name))
 }
 
