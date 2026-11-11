@@ -118,7 +118,7 @@ fn print_card<R>(
         .fill(card_fill)
         .stroke(Stroke::new(1.0, t.border))
         .corner_radius(egui::CornerRadius::same(8))
-        .inner_margin(egui::Margin::symmetric(12, 4))
+        .inner_margin(egui::Margin { left: 14, right: 14, top: 10, bottom: 12 })
         .show(ui, |ui| {
             ui.set_width(width);
             ui.set_max_width(width);
@@ -132,10 +132,35 @@ fn print_card<R>(
                 }
                 ui.label(egui::RichText::new(crate::i18n::upper_label(title)).font(theme::semibold(12.0)).color(t.text));
             });
-            ui.add_space(2.0);
+            ui.add_space(4.0);
             content(ui)
         })
         .inner
+}
+
+/// A compact tab for handling mode selection inside a card (e.g. Size, Poster, Multiple, Booklet, Label).
+fn handling_tab(ui: &mut egui::Ui, t: &Tokens, label: &str, active: bool) -> egui::Response {
+    let font = if active { theme::semibold(12.5) } else { theme::medium(12.5) };
+    let galley = crate::bidi::layout_ui(ui, label.to_owned(), font, if active { t.text } else { t.text_muted });
+    let w = galley.size().x;
+    let (rect, resp) = ui.allocate_exact_size(vec2(w + 14.0, 24.0), egui::Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), active, label));
+    let press = theme::Press::track(ui, &resp);
+    let well = rect.shrink2(vec2(1.0, 2.0));
+    if active {
+        if press.down > 0.01 {
+            ui.painter().rect_filled(well, egui::CornerRadius::same(4), t.pressed.gamma_multiply(press.down));
+        }
+    } else {
+        press.wash(ui, well, 4, false);
+    }
+    let body = rect.translate(press.offset());
+    ui.painter().galley(body.center() - galley.size() / 2.0, galley, if active { t.text } else { t.text_muted });
+    if active {
+        let r = Rect::from_min_max(rect.left_bottom() + vec2(4.0, -2.0), rect.right_bottom() - vec2(4.0, 0.0));
+        ui.painter().rect_filled(r, egui::CornerRadius { nw: 1, ne: 1, sw: 0, se: 0 }, t.accent);
+    }
+    theme::hand(resp)
 }
 
 /// A segmented pill control for mutually exclusive choices in the Print dialog cards.
@@ -536,7 +561,7 @@ pub(crate) fn body(
                 });
 
                 // Card 3: Page Sizing & Handling
-                print_card(ui, t, tl!("Page Sizing & Handling"), Some("sliders-horizontal"), 452.0, Some(124.0), |ui| {
+                print_card(ui, t, tl!("Page Sizing & Handling"), Some("sliders-horizontal"), 452.0, Some(136.0), |ui| {
                     ui.horizontal_wrapped(|ui| {
                         for (h, label) in [
                             (Handling::Size, tl!("Size")),
@@ -546,12 +571,12 @@ pub(crate) fn body(
                             (Handling::Label, tl!("Label")),
                         ] {
                             let offered = d.which != Which::Area || h == Handling::Size;
-                            if ui.add_enabled_ui(offered, |ui| widgets::mode_tab(ui, label, d.handling == h)).inner.clicked() {
+                            if ui.add_enabled_ui(offered, |ui| handling_tab(ui, t, label, d.handling == h)).inner.clicked() {
                                 d.set_handling(h);
                             }
                         }
                     });
-                    ui.add_space(2.0);
+                    ui.add_space(3.0);
                     ui.scope(|ui| {
                         ui.set_min_height(44.0);
                         match d.handling {
@@ -694,7 +719,7 @@ pub(crate) fn body(
                         }
                     }
                     });
-                    ui.add_space(2.0);
+                    ui.add_space(4.0);
                     ui.horizontal(|ui| {
                         ui.label(tl!("Orientation:"));
                         segmented_pills(
@@ -724,33 +749,24 @@ pub(crate) fn body(
                                 (Content::DocumentAndStamps, tl!("Document and stamps")),
                                 (Content::FormFieldsOnly, tl!("Form fields only")),
                             ],
-                            220.0,
+                            180.0,
                         );
-                        let adv_label = crate::i18n::upper_label("Advanced");
-                        let is_open = d.show_advanced || d.as_image;
-                        if ui.button(adv_label).clicked() {
-                            d.show_advanced = !is_open;
-                        }
-                    });
-                    if d.show_advanced || d.as_image {
-                        ui.add_space(2.0);
-                        ui.horizontal(|ui| {
-                            ui.add(widgets::checkbox(&mut d.as_image, tl!("Print as image")));
-                            ui.add_enabled_ui(d.as_image, |ui| {
-                                ui.label(tl!("Resolution:"));
-                                let mut dpi = d.dpi.round() as u32;
-                                combo(ui, "print-dpi", tl!("Resolution:"), &mut dpi, &[(150, "150 dpi"), (300, "300 dpi"), (600, "600 dpi")], 100.0);
-                                d.dpi = f64::from(dpi);
-                            });
+                        ui.add_space(4.0);
+                        ui.add(widgets::checkbox(&mut d.as_image, tl!("Print as image")));
+                        ui.add_enabled_ui(d.as_image, |ui| {
+                            let mut dpi = d.dpi.round() as u32;
+                            combo(ui, "print-dpi", tl!("Resolution:"), &mut dpi, &[(150, "150 dpi"), (300, "300 dpi"), (600, "600 dpi")], 85.0);
+                            d.dpi = f64::from(dpi);
                         });
-                        ui.label(
-                            egui::RichText::new(tl!(
-                                "Use it when a printer skips text, shading or transparency. The print is no longer searchable text; with Print in grayscale, the pictures are grey."
-                            ))
-                            .small()
-                            .color(t.text_muted),
-                        );
-                    }
+                    });
+                    ui.add_space(4.0);
+                    ui.label(
+                        egui::RichText::new(tl!(
+                            "Use it when a printer skips text, shading or transparency. The print is no longer searchable text; with Print in grayscale, the pictures are grey."
+                        ))
+                        .small()
+                        .color(t.text_muted),
+                    );
                 });
             });
 
