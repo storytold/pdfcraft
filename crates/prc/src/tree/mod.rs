@@ -221,6 +221,20 @@ struct Tree {
 #[derive(Debug, Clone, PartialEq)]
 struct ModelFile {
     roots: Vec<(UniqueId, u32)>,
+    units_in_mm: f64,
+    units_from_cad_file: bool,
+}
+
+/// The unit a PRC model's coordinates are in, from its model file [WD 7.3.3].
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
+pub struct ModelUnits {
+    /// Millimetres per model unit: 1 for millimetres, 25.4 for inches.
+    pub mm_per_unit: f64,
+    /// The file says the unit is the CAD system's own. When `false` it is the exporter's
+    /// default and may not be the model's real scale, so a measurement should say the unit
+    /// is assumed.
+    pub from_cad_file: bool,
 }
 
 impl PrcFile {
@@ -268,6 +282,22 @@ impl PrcFile {
     #[must_use]
     pub fn stores_tree(&self) -> bool {
         self.model_file.iter().any(|&b| b != 0)
+    }
+
+    /// The unit the model's coordinates are in. `None` when the file stores no tree
+    /// ([`Self::stores_tree`]) or the stored unit is not a positive finite number.
+    ///
+    /// # Errors
+    /// [`PrcError::Malformed`] or a read error when the model file is stored but does not read.
+    pub fn units(&self) -> Result<Option<ModelUnits>, PrcError> {
+        if !self.stores_tree() {
+            return Ok(None);
+        }
+        let mut r = BitReader::with_budget(&self.model_file, Budget::FULL);
+        let schema = Schema::read(&mut r)?;
+        let model = Ctx::new(r, &schema, self.header.authoring_version).model_file()?;
+        let mm = model.units_in_mm;
+        Ok((mm.is_finite() && mm > 0.0).then_some(ModelUnits { mm_per_unit: mm, from_cad_file: model.units_from_cad_file }))
     }
 
     fn walk(&self, rule: StyleAlpha, scope: EntityOverrides) -> Result<(Vec<Placement>, Vec<ModelNode>), PrcError> {
