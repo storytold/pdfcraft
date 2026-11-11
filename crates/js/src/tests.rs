@@ -93,7 +93,7 @@ fn calculate_scripts_read_fields_and_set_the_value() {
 fn an_array_of_values_stops_at_the_byte_budget() {
     let fill = "var s = 'x'; while (s.length < 65536) s += s; var a = []; for (var i = 0; i < N; i++) a.push(s); getField('qty').value = a;";
     let o = go(&fill.replace('N', "600"), &Event::field("Calculate", "total", ""));
-    assert!(o.error.as_deref().is_some_and(|e| e.contains("bytes of text")), "{:?}", o.error);
+    assert!(o.error.as_deref().is_some_and(|e| e.contains("byte limit exceeded")), "{:?}", o.error);
     let o = go(&fill.replace('N', "400"), &Event::field("Calculate", "total", ""));
     assert_eq!(o.error, None);
 }
