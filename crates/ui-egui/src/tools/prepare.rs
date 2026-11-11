@@ -369,16 +369,11 @@ pub(crate) fn page_input(
     press: PagePress,
     view: &mut DocView,
 ) -> Outcome {
-    let PageToolContext { ui, resp, xf, ptr, page, info, keys, .. } = cx;
+    let PageToolContext { ui, resp, xf, ptr, page, info, .. } = cx;
     let mut out = Outcome { consumed: false, properties: false, placed: false, table: None };
     let pointer = ptr.pos;
     let prep = &mut view.prepare;
 
-    if prep.marquee_before.is_some() && keys.take(ui.ctx(), egui::Key::Escape) {
-        cancel_marquee(prep);
-        out.consumed = true;
-        return out;
-    }
     if prep.ignore_release {
         if !ptr.primary_down {
             prep.ignore_release = false;
@@ -807,6 +802,16 @@ pub(crate) fn select_all(view: &mut DocView, form: &[FormField]) {
     view.prepare.also = selected.collect();
 }
 
+/// Escape abandons the area selection being drawn, if any: the fields selected before it are
+/// selected again. Whether there was one.
+pub(crate) fn escape_marquee(prep: &mut PrepareView) -> bool {
+    let drawing = prep.marquee_before.is_some();
+    if drawing {
+        cancel_marquee(prep);
+    }
+    drawing
+}
+
 fn cancel_marquee(prep: &mut PrepareView) {
     prep.grab = None;
     prep.ignore_release = true;
@@ -817,25 +822,14 @@ fn cancel_marquee(prep: &mut PrepareView) {
     }
 }
 
-/// Delete removes the selected fields and Escape deselects them, while no text field has focus and
-/// nothing is over the pages.
+/// Delete removes the selected fields, while no text field has focus and nothing is over the pages.
+/// (Escape is the key pass's, `canvas::key_order`.)
 pub(crate) fn keys(ctx: &egui::Context, keys: PageKeys, view: &mut DocView) {
-    if ctx.egui_wants_keyboard_input() {
+    if ctx.egui_wants_keyboard_input() || view.prepare.selected.is_none() {
         return;
     }
-    if view.prepare.marquee_before.is_some() && keys.take(ctx, egui::Key::Escape) {
-        cancel_marquee(&mut view.prepare);
-        return;
-    }
-    if view.prepare.selected.is_none() {
-        return;
-    }
-    let del = keys.pressed(ctx, egui::Key::Delete) || keys.pressed(ctx, egui::Key::Backspace);
-    if del {
+    if keys.pressed(ctx, egui::Key::Delete) || keys.pressed(ctx, egui::Key::Backspace) {
         view.pending_edit = delete_selected(view);
-    } else if keys.pressed(ctx, egui::Key::Escape) {
-        view.prepare.selected = None;
-        view.prepare.also.clear();
     }
 }
 

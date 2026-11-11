@@ -485,10 +485,9 @@ fn apply_crop_mode(view: &mut DocView, image: &pdfcraft_engine::PageImage) {
 /// The keys of the picture selected on `page`, a page being drawn, so the page grid and the Pages
 /// panel have had theirs; nothing while the page is off the screen, as pages near it are drawn too.
 /// Delete or Backspace removes it, wherever on the pages the pointer is, unless it is being cropped or
-/// a button is down: the press held would then name another picture. In crop mode
-/// Enter applies the crop and Escape leaves it, though not while a button is down (`held`): Escape
-/// then cancels the press the pages hold, if any (`canvas::cancel_on_escape`), and crop mode stays.
-/// Nothing while a text field has the keyboard.
+/// a button is down: the press held would then name another picture. In crop mode Enter applies
+/// the crop (Escape leaving it is the key pass's, `canvas::key_order`). Nothing while a text field
+/// has the keyboard.
 pub(crate) fn picture_keys(ctx: &egui::Context, keys: PageKeys, view: &mut DocView, page: usize, images: &[pdfcraft_engine::PageImage], held: bool) {
     if ctx.egui_wants_keyboard_input() || view.page_screen_rect(page).is_none() {
         return;
@@ -498,15 +497,10 @@ pub(crate) fn picture_keys(ctx: &egui::Context, keys: PageKeys, view: &mut DocVi
     let key = |k: egui::Key| keys.pressed(ctx, k);
     let image = images.get(index);
     if s.crop.is_some() {
-        if key(egui::Key::Enter) {
-            if let Some(image) = image {
-                apply_crop_mode(view, image);
-            }
-        } else if !held
-            && key(egui::Key::Escape)
-            && let Some(s) = view.image_selection.as_mut()
+        if key(egui::Key::Enter)
+            && let Some(image) = image
         {
-            s.crop = None;
+            apply_crop_mode(view, image);
         }
     } else if !held && !s.dragging() && !s.turning && (key(egui::Key::Delete) || key(egui::Key::Backspace)) && image.is_some() {
         // The key is the picture's: added content's own Delete runs later this frame.

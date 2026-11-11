@@ -102,6 +102,18 @@ impl ObjectSelection {
         }
     }
 
+    /// Escape lets go of the objects selected together, or about to be: whether there were any.
+    pub(crate) fn deselect(&mut self) -> bool {
+        let any = self.page.is_some();
+        self.clear();
+        any
+    }
+
+    /// The objects selected together and their page, for the key pass's order.
+    pub(crate) fn selected_targets(&self) -> Option<(usize, Vec<ObjectTarget>)> {
+        self.page.map(|page| (page, self.selected.iter().map(|o| o.target).collect()))
+    }
+
     fn clear(&mut self) {
         self.page = None;
         self.selected.clear();
@@ -119,7 +131,7 @@ impl ObjectSelection {
 
     /// `edit_waiting`: an edit made this pass hasn't reached the document yet (an arrow's nudge, in
     /// the key pass): the selection it expects stays expected.
-    pub fn prepare(&mut self, doc: &Document, enabled: bool, edit_waiting: bool, ctx: &egui::Context, keys: PageKeys) {
+    pub fn prepare(&mut self, doc: &Document, enabled: bool, edit_waiting: bool) {
         self.hold_editor = false;
         if !enabled {
             self.clear();
@@ -158,10 +170,8 @@ impl ObjectSelection {
             // A refused edit keeps the generation and the original selection.
             self.pending = None;
         }
-        if self.page.is_some() && keys.take(ctx, egui::Key::Escape) {
-            self.clear();
-        }
-        // After the Escape check: the Esc that closed the editor must not clear what it selected.
+        // The Escape that closed the editor asked for this, and the key pass, which lets Escape go
+        // to an open editor first, has already run.
         if let Some((page, block)) = self.select_paragraph.take()
             && let Ok(objects) = self.inventory(doc, page)
             && let Some(object) = objects.into_iter().find(|o| o.target == ObjectTarget { kind: ObjectKind::Text, index: block })

@@ -646,3 +646,17 @@ fn a_picture_for_a_native_edit_paste_with_a_context_menu_open_lands_on_the_page(
     assert_ne!(can_undo(&h, 0), before, "the picture was dropped");
     assert_eq!(can_undo(&h, 0).as_deref(), Some("Add image"), "the picture landed on the page");
 }
+
+/// Escape with Edit text objects selected and Find open lets go of the objects and leaves Find open
+/// for the next one. One Escape did both.
+#[test]
+fn escape_lets_go_of_the_objects_before_it_closes_find() {
+    let mut h = harness();
+    keys(&mut h, Modifiers::COMMAND, Key::A);
+    h.get_by_label("4 objects selected");
+    h.state_mut().views[0].open_find();
+    h.run_steps(3);
+    keys(&mut h, Modifiers::NONE, Key::Escape);
+    assert!(h.query_all_by_label_contains("objects selected").next().is_none(), "Escape lets go of the objects");
+    assert!(h.state().views[0].find.is_some(), "and leaves Find open");
+}

@@ -11698,3 +11698,35 @@ fn a_modified_click_away_from_a_cropped_picture_applies_its_crop() {
         assert!(keep.iter().zip(visible).all(|(a, b)| (a - b).abs() < 0.5), "{mods:?}: the crop is applied: {visible:?}");
     }
 }
+
+/// Escape in a picture's crop mode with Find open leaves crop mode, keeps the picture selected and
+/// leaves Find open for the next one. One Escape did both.
+#[test]
+fn escape_leaves_crop_mode_before_it_closes_find() {
+    let mut png = Vec::new();
+    image::RgbImage::from_pixel(60, 40, image::Rgb([100, 150, 200])).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(800.0, 600.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("picture.png", None, png.clone()).expect("opens");
+        app
+    });
+    h.run_steps(4);
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(2);
+    h.state_mut().views[0].image_selection = Some(pdfcraft_ui_egui::ImageSelection {
+        page: 0,
+        index: 0,
+        drag: None,
+        crop: Some(pdfcraft_ui_egui::CropMode::new([10.0, 10.0, 50.0, 30.0])),
+        turning: false,
+        settled: None,
+    });
+    h.state_mut().views[0].open_find();
+    h.run_steps(3);
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+    let v = &h.state().views[0];
+    assert!(v.image_selection.as_ref().is_some_and(|s| s.crop.is_none()), "Escape leaves crop mode, the picture still selected");
+    assert!(v.find.is_some(), "and leaves Find open");
+}

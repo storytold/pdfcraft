@@ -29,10 +29,6 @@ pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, 
     };
     let caret_text = if cx.tool == QuickTool::Comment(CommentTool::Caret) { view.page_text(cx.page) } else { None };
     let cv = &mut view.comments;
-    if cv.gesture.is_some() && cx.keys.take(ui.ctx(), egui::Key::Escape) {
-        cv.gesture = None;
-        return true;
-    }
     // Copied comments on the pointer: a click places the bundle, centred where it is clicked,
     // on this page; a right-click lets it go. Nothing else on the page takes the click.
     if let Some(Gesture::Place { xfdf, bounds, .. }) = cv.gesture.clone() {
@@ -744,24 +740,13 @@ impl Gestures<'_> {
     }
 }
 
-/// Delete / Escape handling for comments (only while no text field has focus, and nothing is over
-/// the pages).
-pub(crate) fn keys(ctx: &egui::Context, keys: PageKeys, view: &mut DocView, info: &DocInfo, tool: &mut QuickTool, allowed: bool) {
+/// Delete handling for comments (only while no text field has focus, and nothing is over the
+/// pages). Escape is the key pass's (`canvas::key_order`).
+pub(crate) fn keys(ctx: &egui::Context, keys: PageKeys, view: &mut DocView, info: &DocInfo, allowed: bool) {
     if ctx.egui_wants_keyboard_input() {
         return;
     }
     let cv = &mut view.comments;
-    if keys.pressed(ctx, egui::Key::Escape) {
-        // One step back per press: cancel the gesture, then deselect, then drop the tool (a
-        // comment tool, or a Fill & Sign one: its Text tool would otherwise open a box at every
-        // click with no way out by the keyboard).
-        let had_selection = cv.selected.is_some();
-        cv.clear_selection();
-        let cancelled = cv.gesture.take().is_some() || had_selection;
-        if !cancelled && matches!(tool, QuickTool::Comment(_) | QuickTool::Fill(_)) {
-            *tool = QuickTool::Select;
-        }
-    }
     if allowed && cv.selected.is_some() && (keys.pressed(ctx, egui::Key::Delete) || keys.pressed(ctx, egui::Key::Backspace)) {
         view.pending_edit = delete_selected(cv, info);
     }

@@ -1,5 +1,5 @@
 use super::zoom::GRID_ZOOM_STEP;
-use super::{DestView, DocInfo, DocView, Fit, PT, PageLayout, SIDE, ViewAction, pos2, vec2};
+use super::{DestView, DocInfo, DocView, Fit, PT, PageLayout, SIDE, pos2, vec2};
 
 impl DocView {
     /// Where a bookmark made now should go: the page and the `/XYZ` position `[left, top]` in user
@@ -404,8 +404,8 @@ fn view_key_scope(view: &DocView, ctx: &egui::Context) -> Option<(bool, bool)> {
     Some((arrows, field_open))
 }
 
-/// The view's plain keys, the last holder in the key pass: Escape, Home and End, full screen's keys,
-/// the arrows and Page Up / Page Down. Not while a text field has the keyboard.
+/// The view's plain keys, the last holder in the key pass: Home and End, full screen's keys, the
+/// arrows and Page Up / Page Down. Not while a text field has the keyboard.
 pub(crate) fn view_plain_keys(view: &mut DocView, ctx: &egui::Context, keys: crate::page_keys::PageKeys, speed: crate::scroll_speed::ScrollSpeed) {
     if let Some((arrows, field_open)) = view_key_scope(view, ctx) {
         view_keys(view, ctx, keys, speed, arrows, field_open);
@@ -449,9 +449,8 @@ fn view_chords(view: &mut DocView, ctx: &egui::Context, chords: bool) {
     }
 }
 
-/// The view's plain keys: Escape, Home and End, full screen's keys, the arrows and Page Up / Page
-/// Down. Not while something is over the pages or a form field is open (`field_open`), which keeps
-/// them.
+/// The view's plain keys: Home and End, full screen's keys, the arrows and Page Up / Page Down. Not
+/// while something is over the pages or a form field is open (`field_open`), which keeps them.
 fn view_keys(
     view: &mut DocView,
     ctx: &egui::Context,
@@ -462,18 +461,7 @@ fn view_keys(
 ) {
     use egui::Key;
     let key = |k| (arrows || !matches!(k, Key::ArrowLeft | Key::ArrowRight | Key::ArrowUp | Key::ArrowDown)) && keys.pressed(ctx, k);
-    // An open menu takes Escape first and closes; the selection stays for the next one (#3535).
-    // So does an open field, whose list closes.
-    if key(Key::Escape) && !egui::Popup::is_any_open(ctx) && !field_open {
-        if view.camera.is_some() || view.camera_done.is_some() {
-            view.pending_action = Some(ViewAction::CancelCamera);
-        } else if view.selection.is_some() || view.all_text {
-            view.selection = None;
-            view.all_text = false;
-        } else {
-            view.find = None;
-        }
-    }
+    // (Escape is the key pass's: the camera, the text selection and Find are in its order.)
     // The open field's keys leave the page under it where it is.
     if field_open {
         return;

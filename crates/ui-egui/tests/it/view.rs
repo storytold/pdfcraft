@@ -3435,3 +3435,18 @@ fn a_page_whose_content_was_cut_is_named_in_a_notice() {
     };
     assert_eq!(state["active"]["cut_pages"], serde_json::json!([1]), "{state}");
 }
+
+/// In Organize, Escape is the page grid's: it lets go of the selected pages, even with something
+/// the pages' own keys would let go of first (a comment selected before Organize was opened).
+#[test]
+fn escape_in_organize_lets_go_of_the_selected_pages() {
+    let mut h = harness(&[]);
+    h.state_mut().views[0].organize = true;
+    h.run_steps(3);
+    h.state_mut().views[0].comments.selected = Some((0, 0));
+    h.state_mut().views[0].selected.extend([0, 1]);
+    h.run_steps(3);
+    h.key_press(Key::Escape);
+    h.run_steps(3);
+    assert!(h.state().views[0].selected.is_empty(), "Escape lets go of the selected pages");
+}

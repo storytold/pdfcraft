@@ -2102,3 +2102,22 @@ fn delete_and_escape_under_a_dialog_leave_the_selected_field() {
         assert_eq!(h.state().dialog.is_none(), key == egui::Key::Escape, "{key:?}: only Escape closes it");
     }
 }
+
+/// Escape with a field selected and Find open lets go of the field and leaves Find open for the
+/// next one. One Escape did both.
+#[test]
+fn escape_lets_go_of_the_selected_field_before_it_closes_find() {
+    let mut h = harness();
+    assert!(h.state_mut().execute("form.add.text"));
+    h.run_steps(2);
+    let (a, b) = (at(&h, 40.0, 300.0), at(&h, 200.0, 322.0));
+    drag(&mut h, a, b);
+    h.run_steps(2);
+    assert!(h.state().views[0].prepare.selected.is_some());
+    h.state_mut().views[0].open_find();
+    h.run_steps(3);
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+    assert!(h.state().views[0].prepare.selected.is_none(), "Escape lets go of the field");
+    assert!(h.state().views[0].find.is_some(), "and leaves Find open");
+}

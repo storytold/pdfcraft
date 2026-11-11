@@ -1770,3 +1770,36 @@ fn escape_closing_a_dialog_over_added_text_being_typed_keeps_the_typing() {
     let added = added(&h).iter().any(|a| matches!(&a.content, pdfcraft_engine::AddedContent::Text(t) if t.text.contains("Reviewed")));
     assert!(open || added, "the typing stays");
 }
+
+/// Escape with added text selected and Find open lets go of the added text and leaves Find open
+/// for the next one. One Escape did both.
+#[test]
+fn escape_lets_go_of_added_text_before_it_closes_find() {
+    let mut h = selected_added_text();
+    h.state_mut().views[0].open_find();
+    h.run_steps(3);
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+    assert_eq!(h.state().views[0].content.selected, None, "Escape lets go of the added text");
+    assert!(h.state().views[0].find.is_some(), "and leaves Find open");
+}
+
+/// An editor open on the page has Escape before anything else: with added text being typed and
+/// Find open, the Escape is the editor's, and Find stays open. Find closed as well.
+#[test]
+fn escape_in_added_text_being_typed_is_the_editors_alone() {
+    let mut h = harness();
+    h.state_mut().views[0].open_find();
+    h.run_steps(3);
+    assert!(h.state_mut().execute("edit.text"));
+    h.run_steps(2);
+    let p = at(&h, 40.0, 300.0);
+    click(&mut h, p);
+    h.event(egui::Event::Text("Reviewed".into()));
+    h.run_steps(2);
+    assert!(h.state().views[0].content.draft.is_some(), "the editor is open");
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+    assert!(h.state().views[0].content.draft.is_none(), "Escape closes the editor");
+    assert!(h.state().views[0].find.is_some(), "and nothing else");
+}

@@ -767,6 +767,12 @@ pub struct DocView {
     /// Escape cancelled the press the pages hold: the page ignores it until the button is up, so
     /// its release neither clicks nor ends a drag.
     pub(crate) press_cancelled: bool,
+    /// The pages held a press on the last pass, not cancelled: the key pass leaves Escape to
+    /// `cancel_on_escape` while its button stays down.
+    held_press: bool,
+    /// When each kind of selection on the pages was made, for the key pass: the newest takes a key
+    /// first.
+    key_ages: key_order::SelectionAges,
     /// A non-edit action requested by the organize toolbar, handled by the app.
     pub pending_action: Option<ViewAction>,
     /// The grid gap the next inserted files go to (set by a "+" between pages); otherwise they
@@ -1180,6 +1186,8 @@ impl DocView {
             router: Default::default(),
             menu_for: None,
             press_cancelled: false,
+            held_press: false,
+            key_ages: Default::default(),
         }
     }
 
@@ -1887,6 +1895,7 @@ fn draw_pages(
     // or a press they hold. The page modules read it rather than egui's raw pointer state.
     let ptr = PagePointer::read(ui, &resp, modal);
     cancel_on_escape(ui.ctx(), view, &ptr);
+    view.held_press = !view.press_cancelled && ptr.origin.is_some() && ptr.primary_down;
     view.router.settle(ptr.any_down, !ptr.edges.is_empty());
     // A new press is no longer the last one's, wherever it lands (the page it is on gives it
     // its owner; in the gap between pages it is no page's).
@@ -3238,8 +3247,8 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let keys = app.page_keys;
     // The pages' keys, for the active view only: Compare and split view draw two.
     if app.active == Some(index) {
-        let cx = key_order::KeyCx { ctx: ui.ctx(), keys, doc, tool: app.quick_tool, preparing, speed: app.scroll_speed };
-        key_order::run(&mut app.views[index], &cx);
+        let cx = key_order::KeyCx { ctx: ui.ctx(), keys, doc, tool: app.quick_tool, preparing, editing_content, speed: app.scroll_speed };
+        key_order::run(&mut app.views[index], &cx, &mut app.quick_tool);
     }
     // Keyboard scrolling applies to this frame's page view only, never later.
     let key_scroll = std::mem::take(&mut app.views[index].key_scroll);
@@ -3358,7 +3367,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     } else {
         view.prepare.selected = None;
     }
-    view.objects.prepare(doc, tool == QuickTool::EditText && can_modify, view.pending_edit.is_some(), ui.ctx(), keys);
+    view.objects.prepare(doc, tool == QuickTool::EditText && can_modify, view.pending_edit.is_some());
     view.text_background.prepare(ui.ctx(), doc, view.line_editor.as_ref(), view.content.draft.as_ref(), scale);
     let added = if editing_content { doc.added().to_vec() } else { Vec::new() };
     let doc_links = if tool == QuickTool::Link { doc.links().to_vec() } else { Vec::new() };
@@ -3513,7 +3522,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     // One crop, then back to selecting (as Acrobat does).
     let cropped = view.pending_edit.as_ref().is_some_and(|e| matches!(e, pdfcraft_engine::Edit::SetPageBox { .. }));
     let mut tool = app.quick_tool;
-    comments::keys(ui.ctx(), keys, view, info, &mut tool, allowed);
+    comments::keys(ui.ctx(), keys, view, info, allowed);
     if preparing {
         crate::prepare::keys(ui.ctx(), keys, view);
     }

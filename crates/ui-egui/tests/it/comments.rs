@@ -5848,3 +5848,98 @@ fn properties_dialog_makes_the_text_box_font_size_default() {
         assert_eq!(font_size_of_last(&fresh).font_size, Some(size), "{quick}: the default font size persisted");
     }
 }
+
+/// One Escape does one thing: with Find open and a comment selected, the first lets go of the
+/// comment and the second closes Find. One Escape did both.
+#[test]
+fn one_escape_lets_go_of_the_comment_and_the_next_closes_find() {
+    let mut h = selected_square();
+    h.state_mut().views[0].open_find();
+    h.run_steps(3);
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+    assert_eq!(h.state().views[0].comments.selected, None, "the first Escape lets go of the comment");
+    assert!(h.state().views[0].find.is_some(), "and leaves Find open");
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+    assert!(h.state().views[0].find.is_none(), "the second closes Find");
+}
+
+/// Between two kinds of selection, Escape lets go of the newer first: text selected after the
+/// comment goes first, and a comment selected after the text does. One Escape let go of both.
+#[test]
+fn escape_lets_go_of_the_newer_selection_first() {
+    // The comment, then the text.
+    let mut h = selected_square();
+    h.state_mut().views[0].select_all();
+    h.run_steps(2);
+    assert!(h.state().views[0].selected_text().is_some());
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+    assert!(h.state().views[0].selected_text().is_none(), "the text, selected last, goes first");
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "the comment stays");
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+    assert_eq!(h.state().views[0].comments.selected, None, "then the comment");
+    // The text, then the comment.
+    let mut h = selected_square();
+    h.state_mut().views[0].comments.selected = None;
+    h.run_steps(2);
+    h.state_mut().views[0].select_all();
+    h.run_steps(2);
+    h.state_mut().views[0].comments.selected = Some((0, 0));
+    h.run_steps(2);
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+    assert_eq!(h.state().views[0].comments.selected, None, "the comment, selected last, goes first");
+    assert!(h.state().views[0].selected_text().is_some(), "the text stays");
+}
+
+/// Everything at once, one Escape each: the text, the comment, the comment tool, then Find.
+#[test]
+fn each_escape_undoes_one_thing_with_everything_held_at_once() {
+    let mut h = selected_square();
+    h.state_mut().set_option("quick", "square").unwrap();
+    h.state_mut().views[0].open_find();
+    h.run_steps(2);
+    h.state_mut().views[0].select_all();
+    h.run_steps(2);
+    let held = |h: &Harness<'static, PdfCraftApp>| {
+        let v = &h.state().views[0];
+        (v.selected_text().is_some(), v.comments.selected.is_some(), h.state().quick_tool != QuickTool::Select, v.find.is_some())
+    };
+    assert_eq!(held(&h), (true, true, true, true));
+    for after in [(false, true, true, true), (false, false, true, true), (false, false, false, true), (false, false, false, false)] {
+        h.key_press(egui::Key::Escape);
+        h.run_steps(3);
+        assert_eq!(held(&h), after, "(text, comment, tool, Find)");
+    }
+}
+
+/// With a comment tool and Find open, Escape goes back to Select and leaves Find open; the next
+/// closes it. One Escape did both.
+#[test]
+fn escape_drops_a_comment_tool_before_it_closes_find() {
+    let mut h = harness(|app| app.set_option("quick", "square").unwrap());
+    h.state_mut().views[0].open_find();
+    h.run_steps(3);
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+    assert_eq!(h.state().quick_tool, QuickTool::Select);
+    assert!(h.state().views[0].find.is_some(), "Find stays for the next Escape");
+}
+
+/// A comment being drawn takes Escape: it is abandoned, and Find stays open. Both went.
+#[test]
+fn escape_abandons_a_drawing_and_leaves_find_open() {
+    let mut h = harness(|app| app.set_option("quick", "polyline").unwrap());
+    h.state_mut().views[0].open_find();
+    h.run_steps(3);
+    click_pt(&mut h, (40.0, 40.0));
+    click_pt(&mut h, (120.0, 60.0));
+    assert!(h.state().views[0].comments.gesture.is_some(), "a line is being drawn");
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+    assert!(h.state().views[0].comments.gesture.is_none(), "Escape abandons it");
+    assert!(h.state().views[0].find.is_some(), "and nothing else");
+}

@@ -633,8 +633,8 @@ pub(crate) fn release_image_selection(view: &mut DocView, added: &[Added]) {
     }
 }
 
-/// Delete removes the selected item; Escape clears the selection. Not while something is over the
-/// pages.
+/// Delete removes the selected item. Not while something is over the pages. (Escape is the key
+/// pass's, `canvas::key_order`.)
 pub(crate) fn keys(ctx: &egui::Context, keys: PageKeys, view: &mut DocView, image_controller_active: bool) {
     if image_controller_active && view.image_selection.is_some()
         || matches!(view.pending_edit.as_ref(), Some(Edit::EditPageImage { .. }))
@@ -645,15 +645,12 @@ pub(crate) fn keys(ctx: &egui::Context, keys: PageKeys, view: &mut DocView, imag
         return;
     }
     let del = keys.pressed(ctx, egui::Key::Delete) || keys.pressed(ctx, egui::Key::Backspace);
-    let esc = keys.pressed(ctx, egui::Key::Escape);
     // Not while a button is down: the press held would then name another item.
     if del
         && !view.content.held
         && let Some((page, index)) = view.content.selected.take()
     {
         view.pending_edit = Some(Edit::DeleteContent { page, index });
-    } else if esc {
-        view.content.selected = None;
     }
 }
 
