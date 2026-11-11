@@ -156,7 +156,15 @@ fn uninspectable_forms_with_candidate_properties_fail_closed() {
             add_second_page(&mut doc, b"/Fm Do", Object::Ref(shared));
             assert_eq!(under(&mut doc, 0, &[[5.0, 195.0, 60.0, 212.0]]), 6);
             let error = redact_first(&mut doc).unwrap_err();
-            assert!(matches!(error, RedactError::Cos(_)), "own Resources={own}, malformed={malformed}: {error:?}");
+            // A form that doesn't decode says so; one the parser can't read is a refusal, of the
+            // second page when it draws the form through the page's resources, and of the document
+            // when the form is read for its own.
+            let expected = match (own, malformed) {
+                (_, false) => matches!(error, RedactError::Cos(pdfcraft_cos::CosError::Filter(_))),
+                (false, true) => matches!(&error, RedactError::PageRefused { page: 2, reason } if reason.contains("without resources of its own")),
+                (true, true) => matches!(&error, RedactError::Refused(reason) if reason.contains("draws with its resources")),
+            };
+            assert!(expected, "own Resources={own}, malformed={malformed}: {error:?}");
         }
     }
 }

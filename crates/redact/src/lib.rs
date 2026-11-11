@@ -115,12 +115,32 @@ pub enum RedactError {
         "finding and storing again what shares JBIG2 symbol data with something being removed would read more of this file than one run allows, so it can't be shown that the data leaves with it; this was refused"
     )]
     SharedJbig2Budget,
+    /// What cleaning a page needs to read whole, or to find, isn't there to read: content with
+    /// bytes the parser can't read or past what is followed, forms nesting past what is followed, a
+    /// form whose placement can't be told, a Type 3 font without the entries its cleanup reads.
+    /// What it holds can't be shown gone.
+    #[error("page {page} can't be redacted safely: {reason}; nothing was changed")]
+    PageRefused { page: usize, reason: String },
+    /// [`RedactError::PageRefused`] where no one page is the cause: a Type 3 font, or forms and
+    /// resources shared across the document.
+    #[error("the document can't be redacted safely: {0}; nothing was changed")]
+    Refused(String),
     #[error(transparent)]
     Edit(#[from] pdfcraft_edit::EditError),
     #[error(transparent)]
     Form(#[from] pdfcraft_forms::FormError),
     #[error(transparent)]
     Cos(#[from] pdfcraft_cos::CosError),
+}
+
+impl RedactError {
+    /// This error as met while cleaning page `page` (1-based): a refusal names the page.
+    pub(crate) fn on_page(self, page: usize) -> Self {
+        match self {
+            RedactError::Refused(reason) => RedactError::PageRefused { page, reason },
+            other => other,
+        }
+    }
 }
 
 /// [`RedactError::SharedJbig2Globals`]'s text, which says what keeps the data.
@@ -551,7 +571,7 @@ fn apply_within(doc: &mut Document, pages: Option<&[usize]>, images: pdfcraft_co
     for &(pi, page_marks) in &groups {
         let page = pdfcraft_model::pages(doc).swap_remove(pi);
         let rects: Vec<[f64; 4]> = page_marks.iter().flat_map(|m| m.rects.iter().copied()).collect();
-        redact_page_content(doc, &mut applying, pi, &page, &rects)?;
+        redact_page_content(doc, &mut applying, pi, &page, &rects).map_err(|e| e.on_page(pi + 1))?;
         remove_page_annotations(doc, &mut applying, &page, &rects, page_marks)?;
     }
     if applying.images.refused() > 0 {
@@ -784,7 +804,7 @@ fn redact_page_content(
     // document). The error does not claim the text was under the mark. Full vertical-text
     // removal is a future enhancement.
     if let Some(error) = out.error {
-        return Err(error.into());
+        return Err(error);
     }
     if out.vertical {
         return Err(RedactError::VerticalText(pi + 1));

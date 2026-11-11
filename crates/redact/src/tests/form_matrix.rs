@@ -65,11 +65,46 @@ fn a_form_whose_matrix_is_not_six_numbers_is_refused() {
         mark(&mut doc, 0, &[MARK], "");
         let result = apply(&mut doc, None);
         assert!(
-            matches!(&result, Err(RedactError::Cos(pdfcraft_cos::CosError::Syntax { detail, .. })) if detail.contains("/Matrix")),
+            matches!(&result, Err(RedactError::PageRefused { page: 1, reason }) if reason.contains("/Matrix")),
             "{matrix} with 8 0 obj {}: {result:?}",
             String::from_utf8_lossy(extra)
         );
     }
+}
+
+/// The refusal names the page whose form can't be placed, and says nothing was changed: here the
+/// second, which shares the first's resources and draws the form the first doesn't, for Apply
+/// Redactions and for Remove Hidden Information.
+#[test]
+fn a_refusal_names_the_page_whose_form_can_t_be_placed() {
+    use crate::sanitize::{Hidden, remove_hidden};
+    let two_pages = || {
+        pdf(vec![
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [3 0 R 9 0 R] /Count 2 >>".to_vec(),
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources 10 0 R >>".to_vec(),
+            stream("", b"BT /F1 10 Tf 20 260 Td (PLAIN) Tj ET"),
+            FONT.replace("95 0 R", "6 0 R").into_bytes(),
+            widths(),
+            stream(
+                "/Type /XObject /Subtype /Form /BBox [0 0 300 100] /Matrix [1 0 0 1 0 (up)] /Resources << /Font << /F1 5 0 R >> >>",
+                b"BT /F1 10 Tf 20 60 Td (SECRET) Tj ET",
+            ),
+            b"null".to_vec(),
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 11 0 R /Resources 10 0 R >>".to_vec(),
+            b"<< /Font << /F1 5 0 R >> /XObject << /Fm 7 0 R >> >>".to_vec(),
+            stream("", b"/Fm Do"),
+        ])
+    };
+    let said = "page 2 can't be redacted safely: a form XObject's /Matrix isn't six numbers given directly or through one reference, so where it draws can't be told; nothing was changed";
+    let mut doc = two_pages();
+    mark(&mut doc, 1, &[MARK], "");
+    let applied = apply(&mut doc, None);
+    assert!(matches!(&applied, Err(RedactError::PageRefused { page: 2, .. })), "{applied:?}");
+    assert_eq!(applied.map(|_| ()).unwrap_err().to_string(), said);
+    let removed = remove_hidden(&mut two_pages(), &[Hidden::HiddenText]);
+    assert!(matches!(&removed, Err(RedactError::PageRefused { page: 2, .. })), "{removed:?}");
+    assert_eq!(removed.map(|_| ()).unwrap_err().to_string(), said);
 }
 
 /// A reference to a reference, for the matrix or one of its entries: Poppler doesn't follow it (it
@@ -88,7 +123,7 @@ fn a_form_whose_matrix_goes_through_a_reference_to_a_reference_is_refused() {
             mark(&mut doc, 0, &[mark_at], "");
             let result = apply(&mut doc, None);
             assert!(
-                matches!(&result, Err(RedactError::Cos(pdfcraft_cos::CosError::Syntax { detail, .. })) if detail.contains("/Matrix")),
+                matches!(&result, Err(RedactError::PageRefused { page: 1, reason }) if reason.contains("/Matrix")),
                 "{matrix}, 8 0 obj 9 0 R, 9 0 obj {}, mark at {mark_at:?}: {result:?}",
                 String::from_utf8_lossy(target)
             );
@@ -106,7 +141,7 @@ fn a_form_whose_matrix_is_not_six_numbers_counts_in_the_scans() {
     let counts: std::collections::HashMap<Hidden, usize> = scan(&doc).into_iter().collect();
     assert_eq!(counts[&Hidden::HiddenText], 1);
     let removed = remove_hidden(&mut doc, &[Hidden::HiddenText]);
-    assert!(matches!(&removed, Err(RedactError::Cos(pdfcraft_cos::CosError::Syntax { detail, .. })) if detail.contains("/Matrix")), "{removed:?}");
+    assert!(matches!(&removed, Err(RedactError::PageRefused { page: 1, reason }) if reason.contains("/Matrix")), "{removed:?}");
 }
 
 /// Removing hidden layers alone never asks where content lands, so such a form is walked as it

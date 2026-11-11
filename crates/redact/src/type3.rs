@@ -3,7 +3,7 @@
 use std::collections::{HashMap, HashSet};
 
 use pdfcraft_content::Pieces;
-use pdfcraft_cos::{CosError, Dict, Document, ObjRef, Object};
+use pdfcraft_cos::{Dict, Document, ObjRef, Object};
 
 use crate::{RedactError, page_streams};
 
@@ -24,9 +24,9 @@ pub(crate) enum FontKey {
 
 /// Build the mapping from character code (0..=255) to glyph name in a Type 3 font.
 /// Fails closed if the encoding cannot be safely resolved or parsed.
-pub(crate) fn type3_code_to_glyph(doc: &Document, font_dict: &Dict) -> Result<[Option<Vec<u8>>; 256], CosError> {
+pub(crate) fn type3_code_to_glyph(doc: &Document, font_dict: &Dict) -> Result<[Option<Vec<u8>>; 256], RedactError> {
     let Some(enc_obj) = font_dict.get(b"Encoding") else {
-        return Err(CosError::Syntax { offset: 0, detail: "redaction could not establish safe Type 3 font cleanup: missing Encoding".into() });
+        return Err(RedactError::Refused("a Type 3 font has no /Encoding".into()));
     };
     let resolved_enc = doc.resolve(enc_obj);
 
@@ -61,10 +61,7 @@ pub(crate) fn type3_code_to_glyph(doc: &Document, font_dict: &Dict) -> Result<[O
             base_name = Some(name.clone());
         }
         _ => {
-            return Err(CosError::Syntax {
-                offset: 0,
-                detail: "redaction could not establish safe Type 3 font cleanup: invalid Encoding object".into(),
-            });
+            return Err(RedactError::Refused("a Type 3 font's /Encoding is neither a name nor a dictionary".into()));
         }
     }
 
@@ -74,13 +71,10 @@ pub(crate) fn type3_code_to_glyph(doc: &Document, font_dict: &Dict) -> Result<[O
         Some(b"MacRomanEncoding") => Some(&crate::type3_tables::MAC_ROMAN),
         Some(b"MacExpertEncoding") => Some(&crate::type3_tables::MAC_EXPERT),
         Some(other) => {
-            return Err(CosError::Syntax {
-                offset: 0,
-                detail: format!(
-                    "redaction could not establish safe Type 3 font cleanup: unsupported BaseEncoding: {}",
-                    String::from_utf8_lossy(other)
-                ),
-            });
+            return Err(RedactError::Refused(format!(
+                "a Type 3 font's base encoding /{} isn't one whose glyph names are known",
+                String::from_utf8_lossy(other)
+            )));
         }
         None => None,
     };
@@ -130,13 +124,13 @@ struct UsedInGlyphs {
     properties: HashSet<Vec<u8>>,
 }
 
-fn collect_used_resources_in_stream(data: &[u8], used: &mut UsedInGlyphs) -> Result<(), CosError> {
+fn collect_used_resources_in_stream(data: &[u8], used: &mut UsedInGlyphs) -> Result<(), RedactError> {
     // One operator at a time, so a glyph program of millions of them is never held whole. A byte
     // that can't be read anywhere in it still refuses, once the loop has read it all.
     let mut read = pdfcraft_content::ops(data);
     read.by_ref().for_each(|op| record_used(&op, used));
     if read.skipped() > 0 {
-        return Err(CosError::Syntax { offset: 0, detail: "redaction could not fully inspect glyph stream syntax".into() });
+        return Err(RedactError::Refused("a Type 3 font's glyph has bytes that can't be read".into()));
     }
     Ok(())
 }
@@ -190,7 +184,7 @@ fn record_used(op: &pdfcraft_content::Op, used: &mut UsedInGlyphs) {
 /// surviving glyph draws may name, unused, an image only a removed glyph drew; that entry would
 /// keep the image in the file. Pruning only unused entries is safe for a shared Form: no drawer
 /// of it can use a name its content doesn't. Fails closed when a Form can't be read.
-fn prune_font_forms(doc: &mut Document, font_res: &Dict) -> Result<(), CosError> {
+fn prune_font_forms(doc: &mut Document, font_res: &Dict) -> Result<(), RedactError> {
     let mut pending: Vec<(ObjRef, usize)> = res_dict(doc, font_res, b"XObject").iter().filter_map(|(_, v)| v.as_ref()).map(|r| (r, 0)).collect();
     let mut seen = HashSet::new();
     while let Some((form_ref, depth)) = pending.pop() {
@@ -198,7 +192,7 @@ fn prune_font_forms(doc: &mut Document, font_res: &Dict) -> Result<(), CosError>
             continue;
         }
         if depth > MAX_DEPTH || seen.len() > MAX_HOLDERS {
-            return Err(CosError::Syntax { offset: 0, detail: "redaction could not establish safe Type 3 font cleanup: forms nest too deep".into() });
+            return Err(RedactError::Refused("the forms a Type 3 font's resources draw nest deeper, or are more, than can be followed".into()));
         }
         let Object::Stream(form) = &*doc.get(form_ref) else { continue };
         if form.dict.name(b"Subtype") != Some(b"Form") {
@@ -213,10 +207,7 @@ fn prune_font_forms(doc: &mut Document, font_res: &Dict) -> Result<(), CosError>
             Some(r) => match r.as_dict() {
                 Some(d) => d.clone(),
                 None => {
-                    return Err(CosError::Syntax {
-                        offset: 0,
-                        detail: "redaction could not establish safe Type 3 font cleanup: a form's /Resources is not a dictionary".into(),
-                    });
+                    return Err(RedactError::Refused("a form a Type 3 font's resources draw has /Resources that isn't a dictionary".into()));
                 }
             },
         };
@@ -288,9 +279,11 @@ fn scan_content_stream(
     res: &Dict,
     initial_font: Option<FontKey>,
     depth: usize,
-) -> Result<(), CosError> {
+) -> Result<(), RedactError> {
     if depth > MAX_DEPTH {
-        return Err(CosError::Syntax { offset: 0, detail: "redaction exceeded max depth inspecting Type 3 font content".into() });
+        return Err(RedactError::Refused(
+            "content that may show a Type 3 font nests forms, patterns or soft masks deeper than can be followed".into(),
+        ));
     }
     let joined = Pieces::join(content);
     // One operator at a time, so content of millions of them is never held whole. The scan only
@@ -328,7 +321,7 @@ fn scan_content_stream(
         }
     }
     if read.skipped() > 0 {
-        return Err(CosError::Syntax { offset: 0, detail: "redaction could not fully inspect content stream syntax".into() });
+        return Err(RedactError::Refused("content that may show a Type 3 font has bytes that can't be read".into()));
     }
     Ok(())
 }
@@ -386,7 +379,7 @@ fn scan_xobject(
     name: &[u8],
     current_font: Option<FontKey>,
     depth: usize,
-) -> Result<(), CosError> {
+) -> Result<(), RedactError> {
     let xo = res_dict(ctx.doc, res, b"XObject");
     let Some(r) = xo.get(name).and_then(Object::as_ref) else { return Ok(()) };
     if !matches!(&*ctx.doc.get(r), Object::Stream(s) if s.dict.name(b"Subtype") == Some(b"Form")) {
@@ -398,7 +391,7 @@ fn scan_xobject(
 /// Scan the tiling pattern `name` that an `scn` or `SCN` operator selects. Its cell is content of
 /// its own and can show glyphs of a font the page lists too. A shading pattern is not a stream and
 /// draws no text.
-fn scan_pattern(ctx: &mut ScanContext<'_>, res: &Dict, holder_ref: ObjRef, name: &[u8], depth: usize) -> Result<(), CosError> {
+fn scan_pattern(ctx: &mut ScanContext<'_>, res: &Dict, holder_ref: ObjRef, name: &[u8], depth: usize) -> Result<(), RedactError> {
     let patterns = res_dict(ctx.doc, res, b"Pattern");
     let Some(r) = patterns.get(name).and_then(Object::as_ref) else { return Ok(()) };
     scan_stream_object(ctx, res, holder_ref, r, None, depth)
@@ -406,7 +399,7 @@ fn scan_pattern(ctx: &mut ScanContext<'_>, res: &Dict, holder_ref: ObjRef, name:
 
 /// Scan the transparency group of the soft mask that the ExtGState `name` sets: what it shows
 /// shapes the page, so its glyphs are in use.
-fn scan_soft_mask(ctx: &mut ScanContext<'_>, res: &Dict, holder_ref: ObjRef, name: &[u8], depth: usize) -> Result<(), CosError> {
+fn scan_soft_mask(ctx: &mut ScanContext<'_>, res: &Dict, holder_ref: ObjRef, name: &[u8], depth: usize) -> Result<(), RedactError> {
     let states = res_dict(ctx.doc, res, b"ExtGState");
     let Some(state) = states.get(name).and_then(|s| ctx.doc.resolve(s).as_dict().cloned()) else { return Ok(()) };
     let Some(mask) = state.get(b"SMask").and_then(|m| ctx.doc.resolve(m).as_dict().cloned()) else { return Ok(()) };
@@ -417,7 +410,7 @@ fn scan_soft_mask(ctx: &mut ScanContext<'_>, res: &Dict, holder_ref: ObjRef, nam
 /// Scan the appearance streams of a page's annotations. A comment, stamp or field can show glyphs
 /// of a Type 3 font that the page lists too. An appearance without resources of its own draws
 /// through the page's.
-fn scan_appearances(ctx: &mut ScanContext<'_>, page: &Dict, page_ref: ObjRef, page_res: &Dict) -> Result<(), CosError> {
+fn scan_appearances(ctx: &mut ScanContext<'_>, page: &Dict, page_ref: ObjRef, page_res: &Dict) -> Result<(), RedactError> {
     for annot in crate::annots_of(ctx.doc, page) {
         for r in appearance_streams(ctx.doc, &annot) {
             scan_stream_object(ctx, page_res, page_ref, r, None, 0)?;
@@ -469,7 +462,7 @@ fn resourceless_appearances(doc: &Document, page: &Dict) -> Vec<ObjRef> {
 /// already. Tiling patterns are not read here: a tiling pattern must have resources of its own,
 /// so its cell draws through them, and Apply Redactions refuses one without them
 /// (`pattern_guard`).
-fn add_soft_mask_ops(doc: &Document, res: &Dict, ops: &mut Vec<pdfcraft_content::Op>, known: usize) -> Result<(), CosError> {
+fn add_soft_mask_ops(doc: &Document, res: &Dict, ops: &mut Vec<pdfcraft_content::Op>, known: usize) -> Result<(), RedactError> {
     let xobjects = res_dict(doc, res, b"XObject");
     let states = res_dict(doc, res, b"ExtGState");
     let mut seen = HashSet::new();
@@ -500,7 +493,9 @@ fn add_soft_mask_ops(doc: &Document, res: &Dict, ops: &mut Vec<pdfcraft_content:
         }
         let parsed = pdfcraft_content::parse(&doc.with_direct_parms(s).decoded()?);
         if parsed.skipped > 0 || ops.len().saturating_add(parsed.ops.len()) > 2_000_000 {
-            return Err(CosError::Syntax { offset: 0, detail: "redaction could not fully inspect soft mask content".into() });
+            return Err(RedactError::Refused(
+                "a soft mask or form without resources of its own has bytes that can't be read, or takes what draws with those resources past 2,000,000 operators".into(),
+            ));
         }
         ops.extend(parsed.ops);
     }
@@ -517,7 +512,7 @@ fn scan_stream_object(
     r: ObjRef,
     current_font: Option<FontKey>,
     depth: usize,
-) -> Result<(), CosError> {
+) -> Result<(), RedactError> {
     let obj = ctx.doc.get(r);
     let Object::Stream(s) = &*obj else { return Ok(()) };
     let own_res = s.dict.get(b"Resources").and_then(|ro| ctx.doc.resolve(ro).as_dict().cloned());
@@ -558,7 +553,7 @@ pub(crate) fn prune_type3_from_resources(
     res: &mut Dict,
     content: &[Vec<u8>],
     page: Option<&Dict>,
-) -> Result<(), CosError> {
+) -> Result<(), RedactError> {
     let mut fonts = res_dict(doc, res, b"Font");
     if fonts.is_empty() {
         return Ok(());
@@ -589,7 +584,9 @@ pub(crate) fn prune_type3_from_resources(
                 let data = budget.decode(&doc.with_direct_parms(s))?;
                 let more = crate::interp::resource_ops(doc, budget, res, std::slice::from_ref(&data))?;
                 if ops.len().saturating_add(more.len()) > 2_000_000 {
-                    return Err(CosError::Syntax { offset: 0, detail: "redaction could not fully inspect annotation appearances".into() });
+                    return Err(RedactError::Refused(
+                        "the page's annotation appearances take what draws with its resources past 2,000,000 operators".into(),
+                    ));
                 }
                 ops.extend(more);
             }
@@ -717,8 +714,9 @@ pub(crate) fn unlink_type3(doc: &mut Document) -> Result<(), RedactError> {
             })
             .unwrap_or_default();
 
-        scan_content_stream(&mut ctx, &content, p.obj, &page_res, None, 0)?;
-        scan_appearances(&mut ctx, &p.dict, p.obj, &page_res)?;
+        scan_content_stream(&mut ctx, &content, p.obj, &page_res, None, 0)
+            .and_then(|()| scan_appearances(&mut ctx, &p.dict, p.obj, &page_res))
+            .map_err(|e| e.on_page(pi + 1))?;
     }
 
     // Also scan any surviving form that wasn't reached by page streams directly.
@@ -741,7 +739,7 @@ pub(crate) fn unlink_type3(doc: &mut Document) -> Result<(), RedactError> {
 
 /// Every reachable Form XObject with resources of its own, with those resources, found by
 /// walking the resources of the holders and of the forms they draw.
-fn reachable_form_holders(doc: &Document, holders: &[(ObjRef, Vec<ObjRef>)]) -> Result<Vec<(ObjRef, Dict)>, CosError> {
+fn reachable_form_holders(doc: &Document, holders: &[(ObjRef, Vec<ObjRef>)]) -> Result<Vec<(ObjRef, Dict)>, RedactError> {
     let mut form_holders: Vec<(ObjRef, Dict)> = Vec::new();
     let mut pending_res: Vec<Dict> = holders
         .iter()
@@ -755,7 +753,7 @@ fn reachable_form_holders(doc: &Document, holders: &[(ObjRef, Vec<ObjRef>)]) -> 
                 continue;
             }
             if seen_forms.len() > MAX_HOLDERS {
-                return Err(CosError::Syntax { offset: 0, detail: "redaction exceeded max depth inspecting form resources".into() });
+                return Err(RedactError::Refused("the forms the document's resources draw are more than can be followed".into()));
             }
             let object = doc.get(reference);
             let Object::Stream(form) = &*object else { continue };
@@ -774,12 +772,9 @@ fn reachable_form_holders(doc: &Document, holders: &[(ObjRef, Vec<ObjRef>)]) -> 
 /// Record every Type 3 font named by a resource dictionary's `/Font` and `/ExtGState` entries.
 /// A Type 3 font held directly in a resource dictionary can neither be named reliably nor have its
 /// glyph programs rewritten, so redaction fails closed rather than leaving its glyphs unchecked.
-fn collect_type3_fonts(doc: &Document, res: &Dict, t3_fonts: &mut HashMap<FontKey, Dict>) -> Result<(), CosError> {
-    let direct = || CosError::Syntax {
-        offset: 0,
-        detail: "redaction could not establish safe Type 3 font cleanup: a Type 3 font is not an indirect object".into(),
-    };
-    let mut consider = |font_obj: &Object| -> Result<(), CosError> {
+fn collect_type3_fonts(doc: &Document, res: &Dict, t3_fonts: &mut HashMap<FontKey, Dict>) -> Result<(), RedactError> {
+    let direct = || RedactError::Refused("a Type 3 font is written inside a resource dictionary, not as an object of its own".into());
+    let mut consider = |font_obj: &Object| -> Result<(), RedactError> {
         if let Some(dict) = doc.resolve(font_obj).as_dict().cloned()
             && dict.name(b"Subtype") == Some(b"Type3")
         {
@@ -810,12 +805,10 @@ fn clean_type3_font(
     surviving: &HashSet<Vec<u8>>,
 ) -> Result<(), RedactError> {
     let Some(char_procs_val) = font_dict.get(b"CharProcs") else {
-        return Err(CosError::Syntax { offset: 0, detail: "redaction could not establish safe Type 3 font cleanup: missing CharProcs".into() }.into());
+        return Err(RedactError::Refused("a Type 3 font has no /CharProcs".into()));
     };
-    let mut char_procs = doc.resolve(char_procs_val).as_dict().cloned().ok_or_else(|| CosError::Syntax {
-        offset: 0,
-        detail: "redaction could not establish safe Type 3 font cleanup: CharProcs is not a dict".into(),
-    })?;
+    let mut char_procs =
+        doc.resolve(char_procs_val).as_dict().cloned().ok_or_else(|| RedactError::Refused("a Type 3 font's /CharProcs isn't a dictionary".into()))?;
 
     let mut procs_changed = false;
     let glyph_names: Vec<Vec<u8>> = char_procs.iter().map(|(n, _)| n.to_vec()).collect();
@@ -853,11 +846,7 @@ fn clean_type3_font(
     for (_, proc_val) in char_procs.iter() {
         let resolved = doc.resolve(proc_val);
         let Object::Stream(s) = &*resolved else {
-            return Err(CosError::Syntax {
-                offset: 0,
-                detail: "redaction could not establish safe Type 3 font cleanup: CharProc is not a stream".into(),
-            }
-            .into());
+            return Err(RedactError::Refused("a Type 3 font's glyph isn't a stream".into()));
         };
         let data = doc.with_direct_parms(s).decoded()?;
         collect_used_resources_in_stream(&data, &mut used_in_glyphs)?;

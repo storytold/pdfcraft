@@ -1,6 +1,6 @@
 use super::{
-    CosError, DecodeBudget, Dict, Document, HashMap, HashSet, MAX_DEPTH, Matrix, Metrics, ObjRef, Object, Op, Pieces, Rc, RedactError, Scope,
-    is_vertical, num, overlaps, page_streams, res_dict,
+    DecodeBudget, Dict, Document, HashMap, HashSet, MAX_DEPTH, Matrix, Metrics, ObjRef, Object, Op, Pieces, Rc, RedactError, Scope, is_vertical, num,
+    overlaps, page_streams, res_dict,
 };
 
 /// Drop every `replaced` name of the XObject resources `xo` that the rewritten `content` no
@@ -13,7 +13,7 @@ use super::{
 /// fonts' cleanup, an allowance of its own when no Type 3 font is listed), the walk passes
 /// 2,000,000 operators, or the parser can't read all of such a form or of `content`.
 /// Corrupt data in such a form is read, tolerantly, up to the damage, which may be nothing.
-pub(crate) fn prune(doc: &Document, budget: &mut DecodeBudget, xo: &mut Dict, replaced: &[Vec<u8>], content: &[Vec<u8>]) -> Result<(), CosError> {
+pub(crate) fn prune(doc: &Document, budget: &mut DecodeBudget, xo: &mut Dict, replaced: &[Vec<u8>], content: &[Vec<u8>]) -> Result<(), RedactError> {
     if replaced.is_empty() {
         return Ok(());
     }
@@ -313,10 +313,13 @@ pub(crate) fn unlink_doomed(doc: &mut Document, doomed: &[ObjRef], retired_prope
             continue;
         }
         let mut contents = Vec::with_capacity(users.len());
+        let mut numbers = Vec::with_capacity(users.len());
         for user in &users {
             let page = doc.get(*user).as_dict().cloned().unwrap_or_default();
+            let at = index.get(user).copied().unwrap_or(0);
             // A page whose content cannot be read may still draw the name: fail closed.
-            contents.push(page_streams(doc, &page, index.get(user).copied().unwrap_or(0))?.1);
+            contents.push(page_streams(doc, &page, at)?.1);
+            numbers.push(at + 1);
         }
         let mut pruned = false;
         // What each page draws through this dictionary, worked out once for all the names.
@@ -335,7 +338,7 @@ pub(crate) fn unlink_doomed(doc: &mut Document, doomed: &[ObjRef], retired_prope
         if pruned {
             res.set(b"XObject".to_vec(), Object::Dict(xo));
         }
-        pruned |= prune_retired_properties(doc, &mut res, &property_names, &contents)?;
+        pruned |= prune_retired_properties(doc, &mut res, &property_names, &contents, &numbers)?;
         if pruned {
             doc.update_dict(node, |d| d.set(b"Resources".to_vec(), Object::Dict(res)))?;
         }
@@ -349,14 +352,26 @@ pub(crate) fn unlink_doomed(doc: &mut Document, doomed: &[ObjRef], retired_prope
 
 /// Retire only properties removed from a rewritten scope, preserving names still used by any
 /// content sharing this holder. Different pages' streams must never be concatenated together.
-fn prune_retired_properties(doc: &Document, res: &mut Dict, names: &[Vec<u8>], contents: &[Vec<Vec<u8>>]) -> Result<bool, CosError> {
+/// `pages` are the (1-based) pages whose content `contents` are, in order, named when theirs
+/// refuses; a form's content has none.
+fn prune_retired_properties(
+    doc: &Document,
+    res: &mut Dict,
+    names: &[Vec<u8>],
+    contents: &[Vec<Vec<u8>>],
+    pages: &[usize],
+) -> Result<bool, RedactError> {
     if names.is_empty() {
         return Ok(false);
     }
     let mut used = HashSet::new();
-    for content in contents {
+    for (i, content) in contents.iter().enumerate() {
         // Each is one page's content or one form's, with the allowance of a page.
-        for op in resource_ops(doc, &mut DecodeBudget::page(), res, content)? {
+        let ops = resource_ops(doc, &mut DecodeBudget::page(), res, content).map_err(|e| match pages.get(i) {
+            Some(&page) => e.on_page(page),
+            None => e,
+        })?;
+        for op in ops {
             if matches!(op.op.as_slice(), b"BDC" | b"DP")
                 && let Some(name) = op.last_name()
             {
@@ -384,7 +399,7 @@ fn prune_retired_properties(doc: &Document, res: &mut Dict, names: &[Vec<u8>], c
 /// Unlink retired properties and `doomed` XObjects from the resources of the forms reachable from
 /// the page-tree `holders`, each unless the form's own content (or a form inheriting its
 /// resources) still uses the name. Fails closed when that cannot be determined.
-fn unlink_from_forms(doc: &mut Document, holders: &[ObjRef], doomed: &HashSet<ObjRef>, retired: &[Object]) -> Result<(), CosError> {
+fn unlink_from_forms(doc: &mut Document, holders: &[ObjRef], doomed: &HashSet<ObjRef>, retired: &[Object]) -> Result<(), RedactError> {
     if retired.is_empty() && doomed.is_empty() {
         return Ok(());
     }
@@ -400,7 +415,7 @@ fn unlink_from_forms(doc: &mut Document, holders: &[ObjRef], doomed: &HashSet<Ob
                 continue;
             }
             if seen.len() > 1_000_000 {
-                return Err(CosError::Syntax { offset: 0, detail: "redaction could not fully inspect shared form resources".into() });
+                return Err(RedactError::Refused("the forms the document's resources draw are more than can be followed".into()));
             }
             let object = doc.get(reference);
             let Object::Stream(form) = &*object else { continue };
@@ -422,7 +437,7 @@ fn unlink_from_forms(doc: &mut Document, holders: &[ObjRef], doomed: &HashSet<Ob
             if pruned {
                 res.set(b"XObject".to_vec(), Object::Dict(xo));
             }
-            pruned |= prune_retired_properties(doc, &mut res, &names, &[vec![data]])?;
+            pruned |= prune_retired_properties(doc, &mut res, &names, &[vec![data]], &[])?;
             if pruned {
                 doc.update_dict(reference, |d| d.set(b"Resources".to_vec(), Object::Dict(res.clone())))?;
             }
@@ -432,7 +447,7 @@ fn unlink_from_forms(doc: &mut Document, holders: &[ObjRef], doomed: &HashSet<Ob
     Ok(())
 }
 
-fn prune_doomed_xobjects(doc: &Document, content: &[Vec<u8>], xo: &mut Dict, doomed_names: &[Vec<u8>]) -> Result<bool, CosError> {
+fn prune_doomed_xobjects(doc: &Document, content: &[Vec<u8>], xo: &mut Dict, doomed_names: &[Vec<u8>]) -> Result<bool, RedactError> {
     let mut pruned = false;
     if doomed_names.is_empty() {
         return Ok(false);
@@ -442,7 +457,9 @@ fn prune_doomed_xobjects(doc: &Document, content: &[Vec<u8>], xo: &mut Dict, doo
         match any_draws(&drawn, name) {
             Some(true) => {}
             Some(false) => pruned |= xo.remove(name).is_some(),
-            None => return Err(CosError::Syntax { offset: 0, detail: "redaction could not fully inspect shared form resources".into() }),
+            None => {
+                return Err(RedactError::Refused("a form that may still draw what was removed draws forms that can't all be read".into()));
+            }
         }
     }
     Ok(pruned)
@@ -479,14 +496,16 @@ pub(super) fn clip_out(rects: &[[f64; 4]], ctm: &Matrix, around: [f64; 4]) -> Op
 /// when that can't all be read: the parser can't read all of `content` or of such a form, the walk
 /// passes 2,000,000 operators, or such a form doesn't decode or runs past `budget`. Operators are
 /// read one at a time, so the walk stops at one past the limit rather than holding them all.
-pub(crate) fn resource_ops(doc: &Document, budget: &mut DecodeBudget, res: &Dict, content: &[Vec<u8>]) -> Result<Vec<Op>, CosError> {
+pub(crate) fn resource_ops(doc: &Document, budget: &mut DecodeBudget, res: &Dict, content: &[Vec<u8>]) -> Result<Vec<Op>, RedactError> {
     const MAX_OPS: usize = 2_000_000;
     let joined = Pieces::join(content);
     let mut read = pdfcraft_content::ops(joined.data());
     let mut ops: Vec<Op> = read.by_ref().take(MAX_OPS + 1).collect();
     // Under the limit the reader ran to the end, so `skipped` counts all of it.
     if read.skipped() > 0 || ops.len() > MAX_OPS {
-        return Err(CosError::Syntax { offset: 0, detail: "redaction could not fully read the content that uses these resources".into() });
+        return Err(RedactError::Refused(
+            "content that draws with its resources has bytes that can't be read, or more than 2,000,000 operators".into(),
+        ));
     }
     let xobjects = res_dict(doc, res, b"XObject");
     let mut seen = HashSet::new();
@@ -505,7 +524,9 @@ pub(crate) fn resource_ops(doc: &Document, budget: &mut DecodeBudget, res: &Dict
             ops.extend(read.by_ref().take((MAX_OPS + 1).saturating_sub(ops.len())));
             // `seen` gains at most one form for each `Do` in `ops`, so this bounds it too.
             if ops.len() > MAX_OPS || read.skipped() > 0 {
-                return Err(CosError::Syntax { offset: 0, detail: "redaction could not fully inspect inherited form resources".into() });
+                return Err(RedactError::Refused(
+                    "a form without resources of its own has bytes that can't be read, or takes what draws with those resources past 2,000,000 operators".into(),
+                ));
             }
         }
         cursor += 1;
@@ -513,7 +534,7 @@ pub(crate) fn resource_ops(doc: &Document, budget: &mut DecodeBudget, res: &Dict
     Ok(ops)
 }
 
-pub(crate) fn prune_properties(doc: &Document, budget: &mut DecodeBudget, res: &mut Dict, content: &[Vec<u8>]) -> Result<Vec<Object>, CosError> {
+pub(crate) fn prune_properties(doc: &Document, budget: &mut DecodeBudget, res: &mut Dict, content: &[Vec<u8>]) -> Result<Vec<Object>, RedactError> {
     let mut properties = res_dict(doc, res, b"Properties");
     if properties.is_empty() {
         return Ok(Vec::new());
@@ -536,7 +557,7 @@ pub(crate) fn prune_properties(doc: &Document, budget: &mut DecodeBudget, res: &
     Ok(retired)
 }
 
-pub(super) fn prune_form_resources(doc: &Document, budget: &mut DecodeBudget, res: &mut Dict, content: &[Vec<u8>]) -> Result<(), CosError> {
+pub(super) fn prune_form_resources(doc: &Document, budget: &mut DecodeBudget, res: &mut Dict, content: &[Vec<u8>]) -> Result<(), RedactError> {
     let ops = resource_ops(doc, budget, res, content)?;
     let mut xo = res_dict(doc, res, b"XObject");
     let names: Vec<Vec<u8>> = xo.iter().map(|(n, _)| n.to_vec()).collect();

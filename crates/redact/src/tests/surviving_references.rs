@@ -474,9 +474,14 @@ fn an_image_a_type3_glyph_with_parameters_by_reference_draws_is_kept() {
     assert!(full_save_holds(&doc, b"PUBLIC_IMG_B"), "glyph B still draws its image");
 }
 
-/// Whether `out` is the redaction refused with a syntax error whose detail holds `detail`.
-fn refused_for(out: &Result<Report, RedactError>, detail: &str) -> bool {
-    matches!(out, Err(RedactError::Cos(pdfcraft_cos::CosError::Syntax { detail: d, .. })) if d.contains(detail))
+/// Whether `out` is the redaction refused, of `page` (1-based) or, with `None`, of the document, for
+/// a reason that holds `reason`.
+fn refused_for(out: &Result<Report, RedactError>, page: Option<usize>, reason: &str) -> bool {
+    match out {
+        Err(RedactError::PageRefused { page: p, reason: r }) => page == Some(*p) && r.contains(reason),
+        Err(RedactError::Refused(r)) => page.is_none() && r.contains(reason),
+        _ => false,
+    }
 }
 
 /// The font's cleanup scans every page and form for the glyphs they show. A string left open in a
@@ -498,7 +503,7 @@ fn unreadable_bytes_in_a_form_the_type3_cleanup_scans_refuse_the_redaction() {
     ]);
     mark(&mut doc, 0, &[[9.0, 95.0, 16.0, 110.0]], "");
     let out = apply(&mut doc, None);
-    assert!(refused_for(&out, "content stream syntax"), "{out:?}");
+    assert!(refused_for(&out, Some(1), "content that may show a Type 3 font has bytes that can't be read"), "{out:?}");
 }
 
 /// The font's cleanup reads the program of each glyph it keeps, for the resources it uses. A
@@ -520,7 +525,32 @@ fn unreadable_bytes_in_a_kept_type3_glyph_program_refuse_the_redaction() {
     ]);
     mark(&mut doc, 0, &[[9.0, 95.0, 16.0, 110.0]], "");
     let out = apply(&mut doc, None);
-    assert!(refused_for(&out, "glyph stream syntax"), "{out:?}");
+    assert!(refused_for(&out, None, "a Type 3 font's glyph has bytes that can't be read"), "{out:?}");
+    assert_eq!(
+        out.map(|_| ()).unwrap_err().to_string(),
+        "the document can't be redacted safely: a Type 3 font's glyph has bytes that can't be read; nothing was changed"
+    );
+}
+
+/// The font's cleanup scans every page, marked or not: where a page's content can't be read, the
+/// refusal names that page, here the second, which no mark is on.
+#[test]
+fn unreadable_bytes_on_another_page_the_type3_cleanup_scans_refuse_that_page() {
+    let mut doc = pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R 9 0 R] /Count 2 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources 5 0 R >>".to_vec(),
+        stream("", b"BT /T3 10 Tf 10 100 Td (A) Tj ET"),
+        b"<< /Font << /T3 6 0 R >> >>".to_vec(),
+        TYPE3.as_bytes().to_vec(),
+        stream("", b"% SECRET_TYPE3_GLYPH_A"),
+        stream("", b"% PUBLIC_TYPE3_GLYPH_B"),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 10 0 R /Resources 5 0 R >>".to_vec(),
+        stream("", b"BT /T3 10 Tf 10 20 Td ( (B) Tj ET"),
+    ]);
+    mark(&mut doc, 0, &[[9.0, 95.0, 16.0, 110.0]], "");
+    let out = apply(&mut doc, None);
+    assert!(refused_for(&out, Some(2), "content that may show a Type 3 font has bytes that can't be read"), "{out:?}");
 }
 
 /// A Form the surviving glyph draws holds `/Resources` as an array that references the removed

@@ -149,7 +149,7 @@ pub(crate) struct Output {
     /// rewrite would drop the bytes but keep the strings. A redaction must not trust it.
     pub unparsed: bool,
     pub tag_changes: Vec<(ObjRef, ObjRef, HashSet<i64>, HashSet<i64>)>,
-    pub error: Option<CosError>,
+    pub error: Option<RedactError>,
 }
 
 pub(crate) struct Scope<'a> {
@@ -1099,12 +1099,10 @@ fn xobject(
                 // form past the page's budget below.
                 Err(()) => {
                     if scope.mode == Mode::Apply {
-                        out.error = Some(CosError::Syntax {
-                            offset: 0,
-                            detail:
-                                "a form XObject's /Matrix isn't six numbers given directly or through one reference, so where it draws can't be told"
-                                    .into(),
-                        });
+                        out.error = Some(RedactError::Refused(
+                            "a form XObject's /Matrix isn't six numbers given directly or through one reference, so where it draws can't be told"
+                                .into(),
+                        ));
                     } else if scope.everywhere() {
                         scope.layer_blocks += 1;
                     } else {
@@ -1157,7 +1155,7 @@ fn xobject(
                 // verification counts the form as content that may remain.
                 Err(e) if scope.budget.exhausted() => {
                     if scope.mode == Mode::Apply {
-                        out.error = Some(e);
+                        out.error = Some(e.into());
                     } else if scope.everywhere() {
                         scope.layer_blocks += 1;
                     } else {
