@@ -117,7 +117,9 @@ impl ObjectSelection {
         self.select_paragraph = Some((page, block));
     }
 
-    pub fn prepare(&mut self, doc: &Document, enabled: bool, ctx: &egui::Context, keys: PageKeys) {
+    /// `edit_waiting`: an edit made this pass hasn't reached the document yet (an arrow's nudge, in
+    /// the key pass): the selection it expects stays expected.
+    pub fn prepare(&mut self, doc: &Document, enabled: bool, edit_waiting: bool, ctx: &egui::Context, keys: PageKeys) {
         self.hold_editor = false;
         if !enabled {
             self.clear();
@@ -152,7 +154,7 @@ impl ObjectSelection {
                 self.clear();
             }
             self.generation = Some(generation);
-        } else {
+        } else if !edit_waiting {
             // A refused edit keeps the generation and the original selection.
             self.pending = None;
         }

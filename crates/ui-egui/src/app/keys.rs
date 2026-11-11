@@ -55,23 +55,8 @@ impl PdfCraftApp {
                 self.select_all_keys(i, ctx);
             }
             self.tool_keys(i, ctx);
-            let keys = self.page_keys;
-            if self.quick_tool == QuickTool::EditText
-                && let Some(doc) = self.session.get(self.views[i].id).filter(|d| d.allows_modification())
-            {
-                object_ui::nudge_keys(ctx, keys, &mut self.views[i], doc);
-                object_ui::delete_keys(ctx, keys, &mut self.views[i]);
-            } else if let Some(doc) = self.session.get(self.views[i].id).filter(|d| d.allows_annotation()) {
-                comments::nudge_keys(ctx, keys, &mut self.views[i], &doc.info);
-            }
-            // A selected field moves with the arrows too (Prepare a form, #2608), before the view
-            // turns the page with them.
-            if self.is_preparing()
-                && let Some(doc) = self.session.get(self.views[i].id).filter(|d| d.allows_modification())
-            {
-                prepare::nudge_keys(ctx, keys, &mut self.views[i], doc);
-            }
-            canvas::shortcuts(&mut self.views[i], ctx, keys, chords && page_chords, self.scroll_speed);
+            // The pages' plain keys are the key pass's, in `document_area` (`canvas::key_order`).
+            canvas::shortcuts(&mut self.views[i], ctx, chords && page_chords);
             self.clipboard_keys(i, ctx);
             self.image_pick_keys(i, ctx);
         }
