@@ -408,6 +408,8 @@ fn changes(
                 text_color: a.text_color.as_deref().filter(|_| a.text_color != b.text_color).map(<[_]>::to_vec),
                 fill_color: a.fill_color.as_deref().filter(|_| a.fill_color != b.fill_color).map(<[_]>::to_vec),
                 caption: (a.caption != b.caption || (a.caption_written && b.caption_mixed)).then(|| a.caption.clone()).flatten(),
+                options: (a.options != b.options).then(|| a.options.clone()),
+                actions: a.actions.clone(),
             };
             (c.value.is_some()
                 || c.read_only.is_some()
@@ -422,7 +424,9 @@ fn changes(
                 || c.line_width.is_some()
                 || c.border_style.is_some()
                 || c.user_name.is_some()
-                || c.icon.is_some())
+                || c.icon.is_some()
+                || c.options.is_some()
+                || !c.actions.is_empty())
             .then_some(c)
         })
         .collect()
