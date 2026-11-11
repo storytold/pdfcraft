@@ -54,6 +54,11 @@ Each source page becomes a Form XObject (its content wrapped in q/Q, plus the pr
 annotations); sheets place them with a clip. The result is a fresh, unencrypted,
 garbage-collected file (callers check the print permission).
 Annotation appearances receive unused XObject names, preserving existing page resources even when they use the same naming prefix.
+Vector printing also carries each annotation's optional-content membership onto its own appearance invocation.
+Hidden groups, membership policies, visibility expressions and existing layer overrides therefore remain effective in the generated PDF, including when appearances are shared.
+Malformed top-level membership or required resource containers produce a print error instead of an unguarded appearance.
+Nested policy data is preserved without a new evaluator; readers remain responsible for optional-content semantics.
+The separate on-screen and Print as image annotation-visibility gap is tracked in #3572 / #3624.
 Appearance placement keeps the full PDF number precision, including small coefficients needed by large appearance bounding boxes or matrices.
 Existing printable NoRotate appearances keep their orientation and upper-left rectangle anchor when the source page is rotated.
 Text annotations use this upright placement even with the NoRotate flag clear (ISO 32000-1 section 12.5.6.4).
