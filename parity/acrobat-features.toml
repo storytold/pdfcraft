@@ -8411,6 +8411,7 @@ evidence = [
     "crates/print/src/tests.rs::printer_papers_and_default_paper_api",
     "crates/print/src/tests.rs::ppd_papers_come_from_the_ppd",
     "crates/print/src/tests.rs::a_job_on_a_ppd_paper_names_the_ppd_keyword",
+    "crates/print/src/tests.rs::a_job_on_a_standard_size_names_the_ppd_keyword_of_that_size",
     "crates/print/src/tests.rs::printer_papers_are_read_from_the_queue_ppd",
     "crates/print/src/tests.rs::overlapping_paper_discovery_two_sided_and_queue_queries",
     "crates/ui-egui/tests/it/print.rs::a_custom_paper_prints_at_its_size_and_its_printer_keeps_it",
@@ -8420,7 +8421,7 @@ evidence = [
     "crates/ui-egui/tests/it/print_custom_paper_names.rs::a_custom_paper_cannot_take_a_standard_name",
     "crates/automation/tests/it/automation.rs::doc_print_takes_a_paper_size_of_its_own",
 ]
-notes = "In the Print dialog: Custom… beside Paper adds a named size in the preferences' unit (1 to 200 inches a side), kept with the settings and removable. A printer printed to on a custom paper starts on it next time (#2001). The Page Setup button opens the driver's page setup to choose paper size and orientation. printer_papers enumerates driver-reported papers and default paper headlessly. On CUPS they are the queue's PPD papers by the driver's names and its *DefaultPageSize, and a job on one is fed it under the PPD's keyword. doc_print takes sizes such as 8.5x14in or 210x297mm or driver papers. Missing: margins."
+notes = "In the Print dialog: Custom… beside Paper adds a named size in the preferences' unit (1 to 200 inches a side), kept with the settings and removable. A printer printed to on a custom paper starts on it next time (#2001). The Page Setup button opens the driver's page setup to choose paper size and orientation. printer_papers enumerates driver-reported papers and default paper headlessly. On CUPS they are the queue's PPD papers by the driver's names and its *DefaultPageSize, and a job on one, or on a standard size of one (such as the 4 x 6 in label), is fed it under the PPD's keyword. doc_print takes sizes such as 8.5x14in or 210x297mm or driver papers. Missing: margins."
 
 [[feature]]
 id = "print.print-ready-pdf"

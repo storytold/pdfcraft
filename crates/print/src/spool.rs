@@ -646,12 +646,59 @@ pub(crate) fn ppd_paper_of_size(papers: &[PpdPaper], (w, h): (f64, f64)) -> Opti
     papers.iter().find(|p| same(p, (w, h))).or_else(|| papers.iter().find(|p| same(p, (h, w))))
 }
 
+/// How far a side of a PPD paper may be from a standard name's nominal size and still be that
+/// paper: Adobe's 5 points, which CUPS also uses to find the PPD size for a media name. A driver
+/// may measure a stock in millimetres (a "4 × 6 in" label of 102 × 152 mm is 1.1 pt off), and
+/// neighbouring label sizes differ by more.
+#[cfg(any(test, all(unix, not(target_arch = "wasm32"))))]
+const NOMINAL_SIZE_EPSILON: f64 = 5.0;
+
+/// The paper of `papers` nearest a nominal size, within [`NOMINAL_SIZE_EPSILON`] a side, fed
+/// either way round; on a tie the one fed that way round, then the first.
+#[cfg(any(test, all(unix, not(target_arch = "wasm32"))))]
+pub(crate) fn ppd_paper_near_size(papers: &[PpdPaper], (w, h): (f64, f64)) -> Option<&PpdPaper> {
+    let off = |p: &PpdPaper, (w, h): (f64, f64)| {
+        let (dw, dh) = ((p.size.0 - w).abs(), (p.size.1 - h).abs());
+        (dw <= NOMINAL_SIZE_EPSILON && dh <= NOMINAL_SIZE_EPSILON).then_some(dw + dh)
+    };
+    let fed_as_is = papers.iter().filter_map(|p| Some((off(p, (w, h))?, 0, p)));
+    let turned = papers.iter().filter_map(|p| Some((off(p, (h, w))?, 1, p)));
+    fed_as_is.chain(turned).min_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1))).map(|(_, _, p)| p)
+}
+
+/// The size in points that a standard media name stands for: one of [`crate::cups_media`]'s
+/// names, a PPD-style `w<width>h<height>` in points, or a PWG 5101.1 self-describing name
+/// (`na_index-4x6_4x6in`, `iso_a6_105x148mm`). `None` for any other name.
+#[cfg(any(test, all(unix, not(target_arch = "wasm32"))))]
+pub(crate) fn nominal_media_size(media: &str) -> Option<(f64, f64)> {
+    let sides = |s: &str, x: char, scale: f64| {
+        let (w, h) = s.split_once(x)?;
+        let (w, h) = (w.parse::<f64>().ok()? * scale, h.parse::<f64>().ok()? * scale);
+        (w.is_finite() && h.is_finite() && w > 0.0 && h > 0.0).then_some((w, h))
+    };
+    if let Some(index) = (0..crate::PAPERS.len()).find(|&i| crate::cups_media(i).is_some_and(|m| m.eq_ignore_ascii_case(media))) {
+        return crate::PAPERS.get(index).map(|(_, size)| *size);
+    }
+    if let Some(size) = media.strip_prefix('w').and_then(|s| sides(s, 'h', 1.0)) {
+        return Some(size);
+    }
+    let (class_name, dims) = media.rsplit_once('_')?;
+    if !class_name.contains('_') {
+        return None;
+    }
+    if let Some(dims) = dims.strip_suffix("in") {
+        return sides(dims, 'x', 72.0);
+    }
+    sides(dims.strip_suffix("mm")?, 'x', 72.0 / 25.4)
+}
+
 /// CUPS: the job with its `media` named by the printer's own PPD keyword when it names one of
-/// the PPD's papers by its label (as [`printer_papers`] lists them) or as `Custom.<w>x<h>` points
-/// of one of their sizes ([`crate::custom_media`]). Fed under the PPD's keyword, the paper is the
-/// driver's own: a driver may take no custom sizes, and a label printer's stock is set up under
-/// its keyword. A keyword the PPD has, any other value, a job without `media` and one for the
-/// default destination go as they are.
+/// the PPD's papers by its label (as [`printer_papers`] lists them), as `Custom.<w>x<h>` points
+/// of one of their sizes ([`crate::custom_media`]), or by a standard name of one of their sizes
+/// ([`nominal_media_size`], such as the `w288h432` of PdfCraft's 4 × 6 in label). Fed under the
+/// PPD's keyword, the paper is the driver's own: a driver may take no custom sizes, and a label
+/// printer's stock is set up under its keyword. A keyword the PPD has, any other value, a job
+/// without `media` and one for the default destination go as they are.
 #[cfg(any(test, all(unix, not(target_arch = "wasm32"))))]
 pub(crate) fn with_ppd_media(job: &Job, papers: impl FnOnce(&str) -> Vec<PpdPaper>) -> Job {
     let mut job = job.clone();
@@ -663,7 +710,11 @@ pub(crate) fn with_ppd_media(job: &Job, papers: impl FnOnce(&str) -> Vec<PpdPape
     }
     let custom =
         media.1.strip_prefix("Custom.").and_then(|s| s.split_once('x')).and_then(|(w, h)| Some((w.parse::<f64>().ok()?, h.parse::<f64>().ok()?)));
-    let paper = papers.iter().find(|p| p.label == media.1).or_else(|| custom.and_then(|size| ppd_paper_of_size(&papers, size)));
+    let paper = papers
+        .iter()
+        .find(|p| p.label == media.1)
+        .or_else(|| custom.and_then(|size| ppd_paper_of_size(&papers, size)))
+        .or_else(|| nominal_media_size(&media.1).and_then(|size| ppd_paper_near_size(&papers, size)));
     if let Some(paper) = paper {
         media.1 = paper.key.clone();
     }

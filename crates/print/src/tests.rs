@@ -872,12 +872,55 @@ fn a_job_on_a_ppd_paper_names_the_ppd_keyword() {
     assert_eq!(media(Some("Label"), &[("media", "Custom.162x90")]), ["media=Custom.162x90"], "a size the PPD lacks");
     assert_eq!(media(Some("Label"), &[("media", "Envelope #10")]), ["media=Env10"], "by label");
     assert_eq!(media(Some("Label"), &[("media", "Wide")]), ["media=Wide"], "a keyword it has");
-    assert_eq!(media(Some("Label"), &[("media", "na_letter_8.5x11in")]), ["media=na_letter_8.5x11in"], "a PWG name, which CUPS maps");
+    assert_eq!(media(Some("Label"), &[("media", "na_letter_8.5x11in")]), ["media=Letter"], "a PWG name of a PPD size");
+    assert_eq!(media(Some("Label"), &[("media", "iso_a4_210x297mm")]), ["media=iso_a4_210x297mm"], "a PWG name the PPD lacks");
     assert_eq!(media(Some("Label"), &[("InputSlot", "Tray2")]), ["InputSlot=Tray2"], "no media");
     assert_eq!(media(None, &[("media", "Custom.288x432")]), ["media=Custom.288x432"], "the default destination");
     assert_eq!(media(Some("Office"), &[("media", "Custom.288x432")]), ["media=Custom.288x432"], "a queue without the PPD");
     // The last `media` is the one CUPS uses, so that is the one named.
     assert_eq!(media(Some("Label"), &[("media", "Letter"), ("MEDIA", "Custom.288x432")]), ["media=Letter", "MEDIA=w288h432"]);
+}
+
+/// A driver that measures its label stock in millimetres, under keywords of its own.
+const METRIC_LABEL_PPD: &str = "*PPD-Adobe: \"4.3\"\n\
+*PageSize 102x152/4\" x 6\": \"\"\n\
+*PageSize 57x32/57 x 32 mm: \"\"\n\
+*PageSize 58x32/58 x 32 mm: \"\"\n\
+*PaperDimension 102x152: \"289.13 430.87\"\n\
+*PaperDimension 57x32: \"161.57 90.71\"\n\
+*PaperDimension 58x32: \"164.41 90.71\"\n";
+
+#[test]
+fn a_job_on_a_standard_size_names_the_ppd_keyword_of_that_size() {
+    let media = |value: &str| {
+        let job = Job { printer: Some("Label".into()), options: vec![("media".into(), value.into())], ..Job::default() };
+        let job = spool::with_ppd_media(&job, |_| spool::parse_ppd_papers(METRIC_LABEL_PPD));
+        job.options.into_iter().map(|(_, v)| v).collect::<Vec<_>>()
+    };
+    let label = cups_media(LABEL_PAPER).unwrap_or_default();
+    assert_eq!(media(label), ["102x152"], "PdfCraft's 4 × 6 in label on the driver's 102 × 152 mm stock");
+    assert_eq!(media("na_index-4x6_4x6in"), ["102x152"], "a PWG name in inches");
+    assert_eq!(media("oe_4x6-label_4x6in"), ["102x152"]);
+    assert_eq!(media("w432h288"), ["102x152"], "turned");
+    assert_eq!(media("w162h90"), ["57x32"], "the nearest of two sizes in reach");
+    assert_eq!(media("om_small-label_57x32mm"), ["57x32"], "a PWG name in millimetres");
+    assert_eq!(media("w288h440"), ["w288h440"], "more than 5 pt off");
+    assert_eq!(media("Custom.288x432"), ["Custom.288x432"], "custom points match within half a point or not at all");
+    for name in ["w288", "wxh432", "w-288h432", "na_x_4x6", "na_x_axbin", "x_4x6in", "winfhinf"] {
+        assert_eq!(media(name), [name], "{name} names no size");
+    }
+}
+
+#[test]
+fn nominal_media_sizes() {
+    assert_eq!(spool::nominal_media_size("Letter"), Some((612.0, 792.0)));
+    assert_eq!(spool::nominal_media_size("a4"), Some((595.28, 841.89)), "cups_media's names, in any case");
+    assert_eq!(spool::nominal_media_size("w288h432"), Some((288.0, 432.0)));
+    assert_eq!(spool::nominal_media_size("na_index-4x6_4x6in"), Some((288.0, 432.0)));
+    let a6 = spool::nominal_media_size("iso_a6_105x148mm").unwrap_or_default();
+    assert!((a6.0 - 297.64).abs() < 0.01 && (a6.1 - 419.53).abs() < 0.01, "{a6:?}");
+    assert_eq!(spool::nominal_media_size("Roll80mm"), None);
+    assert_eq!(spool::nominal_media_size("w0h432"), None);
 }
 
 #[cfg(all(unix, not(target_arch = "wasm32")))]
