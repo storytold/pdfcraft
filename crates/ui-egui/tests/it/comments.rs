@@ -6031,3 +6031,26 @@ fn an_arrow_moves_the_newer_selection_only() {
     assert_ne!(field(&h), before, "the field, selected last, moves");
     assert_eq!(comments(&h)[0].rect, comment, "the comment stays");
 }
+
+/// With the comment's right-click menu open on the page, Delete is the menu's, as with the menu
+/// bar: the comment stays. Escape then closes the menu alone, and the comment stays selected.
+#[test]
+fn delete_with_the_comments_own_menu_open_leaves_it() {
+    let mut h = selected_square();
+    let p = at(&h, 90.0, 70.0);
+    h.hover_at(p);
+    h.run_steps(1);
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Secondary, pressed, modifiers: egui::Modifiers::NONE });
+        h.run_steps(1);
+    }
+    h.run_steps(2);
+    assert!(egui::Popup::is_any_open(&h.ctx), "the comment's menu is open");
+    h.key_press(egui::Key::Delete);
+    h.run_steps(3);
+    assert_eq!(comments(&h).len(), 1, "Delete leaves the comment");
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+    assert!(!egui::Popup::is_any_open(&h.ctx), "Escape closes the menu");
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "and the comment stays selected");
+}
