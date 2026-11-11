@@ -27,9 +27,19 @@ use pdfcraft_fonts::Std14;
 
 use crate::CreateError;
 
-/// Extensions of the Office Open XML files [`from_office`] converts. The package's content, not
-/// the extension, decides how it is read.
-pub const OFFICE_EXTENSIONS: [&str; 10] = ["docx", "docm", "dotx", "pptx", "pptm", "ppsx", "potx", "xlsx", "xlsm", "xltx"];
+/// Extensions of the Office Open XML files [`from_office`] converts, a subset of
+/// [`crate::OFFICE_EXTENSIONS`]. The package's content, not the extension, decides how it is read.
+pub const OOXML_EXTENSIONS: [&str; 10] = ["docx", "docm", "dotx", "pptx", "pptm", "ppsx", "potx", "xlsx", "xlsm", "xltx"];
+
+/// Whether `bytes` named `name` is a file for [`from_office`]: an [`OOXML_EXTENSIONS`] name, and a
+/// ZIP package or an OLE compound file (how a password-protected one is stored, which
+/// [`from_office`] refuses with that reason). Legacy binary Office files (`.doc`, `.xls`, `.ppt`),
+/// OpenDocument and RTF need LibreOffice.
+pub fn is_ooxml(name: &str, bytes: &[u8]) -> bool {
+    const OLE: &[u8] = &[0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1];
+    name.rsplit_once('.').is_some_and(|(_, ext)| OOXML_EXTENSIONS.iter().any(|e| ext.eq_ignore_ascii_case(e)))
+        && (bytes.starts_with(b"PK\x03\x04") || bytes.starts_with(OLE))
+}
 
 /// Which application's document a package holds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -1,6 +1,6 @@
 # File format parity
 
-> **Last reviewed:** 2026-10-12 · **Last updated:** 2026-10-24 · **Change:** minor (Word, Excel, PowerPoint import natively, basic fidelity) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
+> **Last reviewed:** 2026-10-12 · **Last updated:** 2026-11-11 · **Change:** minor (Word, Excel, PowerPoint, OpenDocument and RTF open through an installed LibreOffice, and Word, Excel and PowerPoint natively without it; `.p7b`/`.p7c` bundles read for trust import) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 
 Every format Acrobat Pro reads or writes, and PdfCraft's support for it. Acrobat's list comes from
 its bundle's `Info.plist` `CFBundleDocumentTypes` (what it opens) and its public documentation
@@ -68,9 +68,9 @@ features total).
 | Plain text | yes | yes | good | `create.from-text` |
 | Clipboard (image or text) | yes | yes | good | `create.from-clipboard` |
 | Screenshot | yes | no | none | `create.from-screenshot` planned |
-| Word, Excel, PowerPoint (and Visio, Publisher on Windows) | yes | partial: `.docx`, `.docm`, `.dotx`, `.pptx`, `.pptm`, `.ppsx`, `.potx`, `.xlsx`, `.xlsm`, `.xltx`, natively (no Visio, Publisher, legacy binary or OpenDocument) | basic (standard-14 fonts; Word and PowerPoint charts and SmartArt are boxes, Excel charts are left out) | `create.from-office` partial; [office-import.md](office-import.md) |
+| Word, Excel, PowerPoint (and Visio, Publisher on Windows) | yes | yes on the desktop through an installed LibreOffice (File ▸ Open, automation); without it, on the web, and in Insert pages, Combine files and Create from multiple files, `.docx`, `.docm`, `.dotx`, `.pptx`, `.pptm`, `.ppsx`, `.potx`, `.xlsx`, `.xlsm`, `.xltx` natively; not Visio or Publisher | good where LibreOffice is (its layout, not measured against Acrobat); basic natively (standard-14 fonts; Word and PowerPoint charts and SmartArt are boxes, Excel charts are left out) | `create.from-office` partial; [office-import.md](office-import.md) |
 | HTML file, web page URL | yes | no | none | `create.from-html`, `create.from-web-page` planned |
-| RTF | yes | no | none | |
+| RTF | yes | yes, through LibreOffice (as Office documents) | good where LibreOffice is | `create.from-office` partial |
 | PostScript / EPS (Distiller) | yes | no | none | `create.distiller` planned (P3) |
 | Markdown | no | no | none | `create.from-markdown` planned (P2; not an Acrobat feature) |
 | Scanner | yes | no | none | `ocr.scanner-acquire` planned |
@@ -80,7 +80,7 @@ features total).
 
 | Target | Acrobat | PdfCraft | Fidelity | Tests and evidence |
 |---|---|---|---|---|
-| Word (`.docx`) | yes, layout-preserving | flowing paragraphs and borderless inferred tables; positioned text/artwork only for pages with rotated text or text overlapping an image/watermark, with per-page sizes | **basic** (#773 synthetic invoice regression covered; exact fonts, vector rules and general layout fidelity remain incomplete) | `create.export-docx` partial |
+| Word (`.docx`) | yes, layout-preserving | flowing paragraphs and inferred tables (bordered only along the grid lines the page draws); positioned text/artwork only for pages with rotated text or text overlapping an image/watermark, with per-page sizes | **basic** (#773 synthetic invoice regression covered; exact fonts, vector rules and general layout fidelity remain incomplete) | `create.export-docx` partial |
 | Word 97–2003 (`.doc`) | yes | no | none | |
 | Excel (`.xlsx`), XML Spreadsheet 2003 | yes | no | none | `create.export-xlsx` planned |
 | PowerPoint (`.pptx`) | yes | slides per page: title from largest text, body text, images, tables (no slide overflow reflow / normAutofit; first page sets presentation dimensions) | basic | `create.export-pptx` partial |
@@ -110,7 +110,8 @@ features total).
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-10-24 | minor | Create PDF from Word, Excel and PowerPoint: native import of Office Open XML, basic fidelity (`create.from-office` partial), replacing the planned LibreOffice sidecar. |
+| 2026-11-11 | minor | Word, Excel and PowerPoint (Office Open XML) also convert natively: where LibreOffice isn't installed, on the web, and in Insert pages, Combine files and Create from multiple files, which can't wait for LibreOffice ([office-import.md](office-import.md)). |
+| 2026-10-22 | minor | Office documents (Word, Excel, PowerPoint, OpenDocument, RTF) open from File ▸ Open as new PDFs, converted by an installed LibreOffice; `create.from-office` partial. |
 | 2026-10-19 | patch | Certificates row: `.p7b`/`.p7c` bundles (DER or PEM `PKCS7`/`CMS`) are read for trust import. |
 | 2026-10-12 | minor | XDP split into data (read and write for XFA forms, already shipped under `form.xfa-data`) and opening `.xdp` as a document (none). Create PDF reads BigTIFF; malformed GIF headers are no longer detected as images. |
 | 2026-10-11 | minor | #773: inferred tables have no invented borders; rotated or overlapping invoice pages use floating shapes and page sections. Full Office layout fidelity remains partial. |

@@ -9,7 +9,7 @@ use crate::RecoveryStore;
 use pdfcraft_engine::{OpenContext, PreparedDocument, SourceKind};
 use pdfcraft_render::OpenError;
 
-const MAX_QUEUED_OPENS: usize = 16;
+pub(crate) const MAX_QUEUED_OPENS: usize = 16;
 
 pub(crate) enum Input {
     Path(PathBuf),
@@ -20,8 +20,9 @@ pub(crate) enum Input {
 
 pub(crate) enum ResultKind {
     Conversion(Arc<Vec<u8>>),
-    /// A Word, PowerPoint or Excel file converted to PDF in the worker, and what was approximated.
-    Office(Arc<Vec<u8>>, pdfcraft_engine::OfficeReport),
+    /// An Office document converted here, off the frame thread (by LibreOffice, or natively with
+    /// the report of what was approximated), or why it couldn't be.
+    Converted(Result<(Arc<Vec<u8>>, Option<pdfcraft_engine::OfficeReport>), String>),
     Prepared {
         bytes: Arc<Vec<u8>>,
         result: Box<Result<PreparedDocument, OpenError>>,
@@ -42,7 +43,7 @@ struct Job {
     context: OpenContext,
     name: String,
     path: Option<String>,
-    password: Option<String>,
+    password: Option<zeroize::Zeroizing<String>>,
     input: Input,
     reply: Sender<ResultMessage>,
     #[cfg(test)]
@@ -85,32 +86,70 @@ impl OpenWorker {
         context: OpenContext,
         name: String,
         path: Option<String>,
-        password: Option<String>,
+        password: Option<zeroize::Zeroizing<String>>,
         input: Input,
     ) -> Result<Receiver<ResultMessage>, String> {
+        let (job, receiver) = self.build_job(token, context, name, path, password, input);
+        self.enqueue(job, false)?;
+        Ok(receiver)
+    }
+
+    pub fn submit_priority(
+        &self,
+        token: u64,
+        context: OpenContext,
+        name: String,
+        path: Option<String>,
+        password: Option<zeroize::Zeroizing<String>>,
+        input: Input,
+    ) -> Result<Receiver<ResultMessage>, String> {
+        let (job, receiver) = self.build_job(token, context, name, path, password, input);
+        self.enqueue(job, true)?;
+        Ok(receiver)
+    }
+
+    fn build_job(
+        &self,
+        token: u64,
+        context: OpenContext,
+        name: String,
+        path: Option<String>,
+        password: Option<zeroize::Zeroizing<String>>,
+        input: Input,
+    ) -> (Job, Receiver<ResultMessage>) {
         let (reply, receiver) = mpsc::channel();
-        let job = Job {
-            token,
-            context,
-            name,
-            path,
-            password,
-            input,
-            reply,
-            #[cfg(test)]
-            gate: self.gate.clone(),
-        };
+        (
+            Job {
+                token,
+                context,
+                name,
+                path,
+                password,
+                input,
+                reply,
+                #[cfg(test)]
+                gate: self.gate.clone(),
+            },
+            receiver,
+        )
+    }
+
+    fn enqueue(&self, job: Job, priority: bool) -> Result<(), String> {
         let (lock, ready) = &*self.queue;
         let mut queue = lock.lock().unwrap_or_else(PoisonError::into_inner);
         if queue.shutdown {
             return Err("the document-open worker has stopped".into());
         }
-        if queue.jobs.len() >= MAX_QUEUED_OPENS {
+        if !priority && queue.jobs.len() >= MAX_QUEUED_OPENS {
             return Err("too many documents are waiting to open".into());
         }
-        queue.jobs.push_back(job);
+        if priority {
+            queue.jobs.push_front(job);
+        } else {
+            queue.jobs.push_back(job);
+        }
         ready.notify_one();
-        Ok(receiver)
+        Ok(())
     }
 }
 
@@ -182,16 +221,12 @@ fn prepare(job: Job) -> ResultKind {
     };
     match pdfcraft_engine::source_kind(&job.name, &bytes) {
         Some(SourceKind::Image | SourceKind::Text) => return ResultKind::Conversion(bytes),
-        // Office documents can take a while to lay out: convert them here, off the UI thread.
-        Some(SourceKind::Office) => {
-            return match job.context.convert_office(&job.name, &bytes) {
-                Ok((pdf, report)) => ResultKind::Office(pdf, report),
-                Err(error) => ResultKind::Failed(error.to_string()),
-            };
-        }
-        _ => {}
+        // LibreOffice takes seconds, and a long document takes a while to lay out natively too: it
+        // is converted here, and the frame thread only opens the result.
+        Some(SourceKind::Office) => return ResultKind::Converted(job.context.convert_office(&job.name, &bytes).map_err(|e| e.to_string())),
+        Some(SourceKind::Pdf) | None => {}
     }
-    let result = job.context.prepare_open(job.name, job.path, bytes.clone(), job.password.as_deref());
+    let result = job.context.prepare_open(job.name, job.path, bytes.clone(), job.password.as_deref().map(String::as_str));
     ResultKind::Prepared { bytes, result: Box::new(result) }
 }
 

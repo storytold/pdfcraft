@@ -391,6 +391,8 @@ fn docx_opens_inserts_and_combines_as_pdf_pages() {
     let id = source.open_new("report.pdf", pdf.clone()).unwrap();
     let docx = source.get(id).unwrap().export_office(OfficeFormat::Docx);
     let mut app = PdfCraftApp::new();
+    // The native converter on every machine, LibreOffice or not.
+    app.session = std::mem::take(&mut app.session).without_libreoffice();
     app.set_option("language", "en").unwrap();
     app.open_bytes("Report.DOCX", Some("/tmp/Report.DOCX".into()), docx.clone()).unwrap();
     let id = app.views[0].id;
@@ -541,6 +543,7 @@ fn an_office_file_opened_with_a_launch_layout_uses_it() {
     std::fs::write(&path, docx).unwrap();
     let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_| {
         let mut app = PdfCraftApp::new();
+        app.session = std::mem::take(&mut app.session).without_libreoffice();
         app.set_option("language", "en").unwrap();
         app.set_option("default-layout", "continuous").unwrap();
         app

@@ -44,7 +44,7 @@ impl PdfCraftApp {
                     continue;
                 }
             };
-            let (kind, pdf, report) = match self.session.convert_to_pdf_reported(&name, &Arc::new(bytes)) {
+            let (kind, pdf, report) = match self.session.convert_to_pdf_inline_reported(&name, &Arc::new(bytes)) {
                 Ok(converted) => converted,
                 Err(error) => {
                     refused.push(format!("{name} ({error})"));
@@ -128,7 +128,7 @@ impl PdfCraftApp {
         let sources = std::iter::from_fn(|| {
             loop {
                 match files.next()? {
-                    Ok((name, bytes)) => match session.convert_to_pdf_reported(&name, &Arc::new(bytes)) {
+                    Ok((name, bytes)) => match session.convert_to_pdf_inline_reported(&name, &Arc::new(bytes)) {
                         Ok((_, pdf, report)) => {
                             converted += 1;
                             approximated.extend(report.and_then(|report| crate::office_note(&name, &report)));

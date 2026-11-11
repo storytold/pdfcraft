@@ -1,20 +1,32 @@
 # Word, PowerPoint and Excel to PDF
 
-> **Status:** M10 candidate, native import of Office Open XML · **Revision history:** 2026-10-14 first version; 2026-10-16 #2871 workflow completion and reporting; 2026-10-22 Turkish and Central European letters drawn, UI notices translated and shown only when something was approximated; 2026-10-25 review fixes (Word 2010 text boxes, nested boxes, master placeholders, merged table cells, stored column widths) and the known gaps listed; 2026-10-27 wording: what can be left out, which workflows convert off the UI thread; 2026-10-31 body page fields, ISO date cells, Office names refused as PDF destinations.
+> **Status:** M10 candidate, native import of Office Open XML · **Revision history:** 2026-10-14 first version; 2026-10-16 #2871 workflow completion and reporting; 2026-10-22 Turkish and Central European letters drawn, UI notices translated and shown only when something was approximated; 2026-10-25 review fixes (Word 2010 text boxes, nested boxes, master placeholders, merged table cells, stored column widths) and the known gaps listed; 2026-10-27 wording: what can be left out, which workflows convert off the UI thread; 2026-10-31 body page fields, ISO date cells, Office names refused as PDF destinations; 2026-11-11 the native converter becomes the fallback to LibreOffice, which main added for File ▸ Open.
 
-PdfCraft opens Word (`.docx`, `.docm`, `.dotx`), PowerPoint (`.pptx`, `.pptm`, `.ppsx`, `.potx`) and
-Excel (`.xlsx`, `.xlsm`, `.xltx`) files as new, unsaved PDFs. The conversion is native Rust in
-`pdfcraft-create` (`from_office`): no office suite, converter process or network is involved, and
-it works in the browser build too. The source file is only read.
+PdfCraft opens Office documents as new, unsaved PDFs in two ways. Where LibreOffice is installed,
+the desktop app and automation convert through it (`pdfcraft-create`'s `office.rs`; see the
+[create README](../crates/create/README.md)): it reads every Office format and lays documents out
+as LibreOffice does. Where it isn't, and wherever waiting seconds for it isn't allowed, Word
+(`.docx`, `.docm`, `.dotx`), PowerPoint (`.pptx`, `.pptm`, `.ppsx`, `.potx`) and Excel (`.xlsx`,
+`.xlsm`, `.xltx`) files are converted natively instead, by the Rust converter this page describes
+(`pdfcraft-create`'s `from_office`): no office suite, converter process or network is involved,
+and it works in the browser build too. If LibreOffice fails on one of these files, the native
+converter is tried before giving up. The source file is only read either way.
+
+The engine picks the converter (`Session::convert_to_pdf_reported`): LibreOffice when it is
+installed and the caller may wait for it, the native converter otherwise. Insert pages, Combine
+files and Create from multiple files convert on the frame thread, so they always use the native
+converter (`Session::convert_to_pdf_inline_reported`), and refuse the legacy binary formats,
+OpenDocument and RTF, which only LibreOffice reads, pointing to File ▸ Open.
+`Session::without_libreoffice` makes a session use the native converter on every machine (tests).
 
 ## Where it is reached
 
-- **File ▸ Open** (and Create ▸ PDF from File) has a *Word, PowerPoint and Excel* filter. The open
-  worker converts in the background and the result opens in a new tab; Save As chooses where it
-  goes. If something was approximated, a notice says what.
-- **Create PDF from multiple files**, **Combine** and **batch convert** accept Office files the
-  same way they accept images and text (`Session::convert_to_pdf`). Create PDF from multiple
-  files and Combine say what each conversion approximated (`Session::convert_to_pdf_reported`).
+- **File ▸ Open** (and Create ▸ PDF from File) has an *Office documents* filter. The open worker
+  converts in the background and the result opens in a new tab; Save As chooses where it goes. If
+  the native converter approximated something, a notice says what.
+- **Create PDF from multiple files**, **Combine** and **Insert pages** accept Word, PowerPoint and
+  Excel files the same way they accept images and text, converted natively, and say what each
+  conversion approximated. **Batch convert** goes through `Session::convert_to_pdf`.
 - **Automation:** `doc_create` with `{"from": "office", "path": "report.docx"}` returns the new
   document like `doc_open`, plus an `office` object (`kind`, `pages`, `escaped`, `notes`).
   `--root` confines the path as for every other tool.
@@ -105,11 +117,13 @@ states the standard-font substitution. Nothing in the source is changed.
     wider; General numbers aren't shortened to fit; outside borders of merged ranges and their
     wrap width come from the first cell only; rows without a stated height aren't grown for
     large fonts.
-  - Desktop app: Create PDF from multiple files converts each file on the UI thread (as it does
-    images and text), so a large Office file pauses the window while it converts; File ▸ Open
-    converts off the UI thread.
-- **Not supported:** password-protected files and the legacy binary formats (`.doc`, `.ppt`,
-  `.xls`) — they are refused with a message saying so — and OpenDocument files.
+  - Desktop app: Insert pages, Combine and Create PDF from multiple files convert each file on the
+    UI thread (as they do images and text), so a large Office file pauses the window while it
+    converts; File ▸ Open converts off the UI thread.
+- **Not supported natively:** password-protected files and the legacy binary formats (`.doc`,
+  `.ppt`, `.xls`) — they are refused with a message saying so — and OpenDocument and RTF files.
+  LibreOffice, where installed, opens the legacy and OpenDocument formats and RTF from File ▸ Open
+  and in automation.
 
 ## Safety
 
@@ -120,12 +134,17 @@ inflates past a part's declared size, counting what a failed part inflated. A sh
 chains, nesting, table spans, counts and every number read from the file are bounded, so a
 hostile file is refused or approximated, never a crash. Conversion runs under the engine's panic
 guard, and in File ▸ Open it runs off the UI thread. Macros (`vbaProject.bin`) are never read.
+LibreOffice's own safeguards (a private folder, a fresh profile with macros off, a time limit) are
+described in the [create README](../crates/create/README.md).
 
 ## Verification
 
-`crates/create/src/office/tests.rs` builds Word, PowerPoint and Excel packages from synthetic text
+`crates/create/src/ooxml/tests.rs` builds Word, PowerPoint and Excel packages from synthetic text
 and pixels in the test itself (no committed fixture) and checks the reopened PDF: page sizes,
 fonts, text, list labels, table cells, images, header page numbers, inherited placeholder styles,
 theme colours, autofit, number formats, merged cells, hidden content, and hostile input.
 `crates/automation/tests/it/automation.rs::creating_pdfs_from_word_and_powerpoint_natively` exports a
-PDF to `.docx` and `.pptx` with PdfCraft's own exporter and imports them back through `doc_create`.
+PDF to `.docx` and `.pptx` with PdfCraft's own exporter and imports them back through `doc_create`,
+with LibreOffice turned off (`Automation::without_libreoffice`) so the native converter runs on every
+machine. `crates/engine/src/tests.rs::office_documents_go_to_libreoffice_or_the_native_converter`
+checks which converter each case gets.

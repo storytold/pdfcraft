@@ -102,7 +102,9 @@ fn files_picker(purpose: FilePurpose) -> rfd::AsyncFileDialog {
     if !matches!(purpose, FilePurpose::CreateMultiple | FilePurpose::CreateMultipleSeparate | FilePurpose::InsertPages | FilePurpose::Combine) {
         return dialog.add_filter_any_case("PDF", &["pdf"]);
     }
-    let all: Vec<&str> = std::iter::once("pdf").chain(pdfcraft_engine::CONVERTIBLE).collect();
+    // Word, PowerPoint and Excel files convert natively here; other Office formats need
+    // LibreOffice, which only File ▸ Open runs (off the frame thread).
+    let all: Vec<&str> = std::iter::once("pdf").chain(pdfcraft_engine::CONVERTIBLE).chain(pdfcraft_engine::OOXML_EXTENSIONS).collect();
     dialog.add_filter_any_case(tl!("PDF, images, text and Office documents"), &all).add_filter_any_case("PDF", &["pdf"])
 }
 
@@ -149,6 +151,8 @@ pub struct FileRequest {
     purpose: FilePurpose,
     target: Option<PickTarget>,
     files: Vec<(String, Vec<u8>)>,
+    /// Dropped on the Combine files tab rather than picked: what Combine can't take is left out.
+    dropped: bool,
 }
 
 /// Files picked asynchronously (web), waiting to be used.
@@ -310,6 +314,11 @@ fn read_named(path: &std::path::Path) -> Result<(String, Vec<u8>), (String, Stri
     }
 }
 
+/// The name of a file dropped on the window ("dropped.pdf" when it has none).
+pub(crate) fn dropped_name(f: &egui::DroppedFileHandle) -> String {
+    f.path().file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "dropped.pdf".into())
+}
+
 impl PdfCraftApp {
     /// Ask for files to add to the Combine files list (its Add files… button).
     pub fn combine_dialog(&mut self) {
@@ -451,37 +460,53 @@ impl PdfCraftApp {
         }
     }
 
-    /// A file dropped on the Combine files tab: added to its list.
+    /// Files dropped on the Combine files tab join its list in the order dropped (see
+    /// [`Self::add_dropped_to_combine`]); a folder adds the files in it and its subfolders.
     #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn drop_into_combine(&mut self, f: egui::DroppedFileHandle, _ctx: &egui::Context) {
-        // A folder: the PDFs in it and in the folders inside it.
-        if f.path().is_absolute() && f.path().is_dir() {
-            self.add_folder_to_combine(f.path(), true);
-            return;
+    pub(crate) fn drop_into_combine(&mut self, dropped: Vec<egui::DroppedFileHandle>, _ctx: &egui::Context) {
+        let mut files = Vec::new();
+        for f in dropped {
+            let path = f.path();
+            if path.is_absolute() && path.is_dir() {
+                // After the files dropped before it.
+                self.add_dropped_to_combine(std::mem::take(&mut files));
+                self.add_folder_to_combine(path, true);
+                continue;
+            }
+            let name = dropped_name(&f);
+            // A file on disk is read from there, with when it was last modified; a drop that
+            // carries only bytes (no path) as it is.
+            let (read, modified) = if path.is_absolute() {
+                (std::fs::read(path).map_err(|e| e.to_string()), std::fs::metadata(path).and_then(|m| m.modified()).ok())
+            } else {
+                (f.bytes(), None)
+            };
+            match read {
+                Ok(bytes) => files.push(crate::combine_ui::Incoming { modified, ..crate::combine_ui::Incoming::new(name, bytes) }),
+                Err(e) => self.notify_fmt("Couldn't read {name}: {e}", &[("name", &name), ("e", &e)]),
+            }
         }
-        if f.path().is_absolute() {
-            self.use_paths(FilePurpose::Combine, &[f.path().to_path_buf()]);
-            return;
-        }
-        let name = f.path().file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "dropped.pdf".into());
-        match f.bytes() {
-            Ok(bytes) => self.use_files(FilePurpose::Combine, vec![(name, bytes)]),
-            Err(e) => self.notify_fmt("Couldn't read {name}: {e}", &[("name", &name), ("e", &e.to_string())]),
-        }
+        self.add_dropped_to_combine(files);
     }
 
     /// Browsers read dropped files asynchronously; they join the Combine files list next frame.
     #[cfg(target_arch = "wasm32")]
-    pub(crate) fn drop_into_combine(&mut self, f: egui::DroppedFileHandle, ctx: &egui::Context) {
+    pub(crate) fn drop_into_combine(&mut self, dropped: Vec<egui::DroppedFileHandle>, ctx: &egui::Context) {
         let requests = self.requests.clone();
-        let request = self.file_request(FilePurpose::Combine, Vec::new());
+        let request = FileRequest { dropped: true, ..self.file_request(FilePurpose::Combine, Vec::new()) };
         let ctx = ctx.clone();
         wasm_bindgen_futures::spawn_local(async move {
-            let name = f.path().file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "dropped.pdf".into());
-            if let Ok(bytes) = f.bytes_async().await
+            // One after another, so they join the list in the order dropped.
+            let mut files = Vec::new();
+            for f in dropped {
+                if let Ok(bytes) = f.bytes_async().await {
+                    files.push((dropped_name(&f), bytes));
+                }
+            }
+            if !files.is_empty()
                 && let Ok(mut q) = requests.lock()
             {
-                q.push(FileRequest { files: vec![(name, bytes)], ..request });
+                q.push(FileRequest { files, ..request });
                 ctx.request_repaint();
             }
         });
@@ -492,7 +517,7 @@ impl PdfCraftApp {
     /// `requests` once the files are read; it is used on a later frame.
     pub fn file_request(&self, purpose: FilePurpose, files: Vec<(String, Vec<u8>)>) -> FileRequest {
         let target = if purpose.edits_active_document() { self.pick_target(self.active_ids().map(|(_, id)| id)) } else { None };
-        FileRequest { purpose, target, files }
+        FileRequest { purpose, target, files, dropped: false }
     }
 
     /// `doc` as it is now, for a pick that will edit it.
@@ -516,12 +541,19 @@ impl PdfCraftApp {
     /// Handle files picked asynchronously.
     pub(crate) fn process_file_requests(&mut self) {
         let pending: Vec<_> = self.requests.lock().map(|mut q| std::mem::take(&mut *q)).unwrap_or_default();
-        for FileRequest { purpose, target, files } in pending {
+        for FileRequest { purpose, target, files, dropped } in pending {
             if !self.still_pick_target(target) {
                 continue;
             }
             // Last-resort guard (AGENTS.md §4), as for desktop picks and commands.
-            if let Err(m) = pdfcraft_engine::guard(|| self.use_files(purpose, files)) {
+            let used = pdfcraft_engine::guard(|| {
+                if dropped {
+                    self.add_dropped_to_combine(files.into_iter().map(|(name, bytes)| crate::combine_ui::Incoming::new(name, bytes)).collect());
+                } else {
+                    self.use_files(purpose, files);
+                }
+            });
+            if let Err(m) = used {
                 self.notify_fmt("That didn't work: an internal error stopped it ({m}).", &[("m", m.as_str())]);
             }
         }
@@ -589,9 +621,9 @@ impl PdfCraftApp {
 
     /// Open the Replace Pages dialog for `bytes`, replacing the selection (or the current page).
     pub fn start_replace(&mut self, name: String, bytes: Vec<u8>) {
-        let Some(i) = self.active else { return };
+        let Some((i, id)) = self.active_ids() else { return };
         let bytes = Arc::new(bytes);
-        let src_pages = match self.session.page_count_of(&name, &bytes) {
+        let src_pages = match self.session.replace_source(id, &name, &bytes) {
             Ok(n) => n,
             Err(e) => {
                 self.notify_fmt("Couldn't use {name}: {e}", &[("name", &name), ("e", &e.to_string())]);
@@ -636,15 +668,14 @@ impl PdfCraftApp {
                     continue;
                 }
             };
-            let converted = (|| {
-                let (pdf, notice) = if pdfcraft_engine::source_kind(&name, &bytes) == Some(pdfcraft_engine::SourceKind::Office) {
-                    let (pdf, report) = self.session.create_from_office(&name, &bytes)?;
-                    (pdf, crate::office_note(&name, &report))
-                } else {
-                    (self.session.convert_to_pdf(&name, &Arc::new(bytes))?.1, None)
-                };
-                Ok::<_, pdfcraft_engine::EditError>((self.session.page_count_of(&name, &pdf)?, pdf, notice))
-            })();
+            let converted = if pdfcraft_engine::source_kind(&name, &bytes) == Some(pdfcraft_engine::SourceKind::Office) {
+                self.session.convert_to_pdf_inline_reported(&name, &Arc::new(bytes)).and_then(|(_, pdf, report)| {
+                    let notice = report.as_ref().and_then(|report| crate::office_note(&name, report));
+                    Ok((self.session.page_count_of(&name, &pdf)?, pdf, notice))
+                })
+            } else {
+                self.session.insert_source_inline(id, &name, &Arc::new(bytes)).map(|(pages, pdf)| (pages, pdf, None))
+            };
             match converted {
                 Ok((pages, bytes, notice)) => {
                     if self.apply_edit(Edit::InsertPagesFrom {

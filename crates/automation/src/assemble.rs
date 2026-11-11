@@ -38,8 +38,9 @@ impl Automation {
                     }
                     (None, None) => return Err(ToolError::InvalidArgs("text needs `text` or `path`".into())),
                 };
-                // The page font is Helvetica/WinAnsi: text it would turn into `?` is refused (with
-                // its line) by `pdfcraft_create::from_text`, as for every other caller.
+                // The page font is Helvetica/WinAnsi, or the bundled Inter face for Latin, Greek and
+                // Cyrillic letters WinAnsi lacks: text neither can draw is refused (with its line)
+                // by `pdfcraft_create::from_text`, as for every other caller.
                 let bytes = self.session.create_from_text(&title, &text).map_err(|e| match e {
                     pdfcraft_engine::EditError::Create(pdfcraft_engine::CreateError::Invalid(m)) => ToolError::InvalidArgs(m),
                     e => failed(e),
@@ -51,14 +52,17 @@ impl Automation {
                 let file = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
                 if !file.rsplit_once('.').is_some_and(|(_, ext)| pdfcraft_engine::OFFICE_EXTENSIONS.iter().any(|e| e.eq_ignore_ascii_case(ext))) {
                     return Err(ToolError::InvalidArgs(format!(
-                        "{file}: office needs a Word, PowerPoint or Excel file ({})",
+                        "{file}: office needs a Word, Excel, PowerPoint, OpenDocument or RTF file ({})",
                         pdfcraft_engine::OFFICE_EXTENSIONS.join(", ")
                     )));
                 }
-                let data = read_input(&path)?;
-                let (bytes, report) = self.session.create_from_office(&file, &data).map_err(failed)?;
+                let data = Arc::new(read_input(&path)?);
+                if pdfcraft_engine::source_kind(&file, &data) != Some(pdfcraft_engine::SourceKind::Office) {
+                    return Err(ToolError::InvalidArgs(format!("{file}: not an Office document (its contents don't match its name)")));
+                }
+                let (_, bytes, report) = self.session.convert_to_pdf_reported(&file, &data).map_err(failed)?;
                 let stem = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
-                office = Some(office_report(&report));
+                office = report.as_ref().map(office_report);
                 (format!("{stem}.pdf"), bytes)
             }
             other => return Err(ToolError::InvalidArgs(format!("unknown source {other:?}"))),
@@ -183,11 +187,12 @@ impl Automation {
         let bytes = read_input(&path)?;
         let pages = a.opt_ints("pages")?.map(|p| one_based(&p)).transpose()?;
         let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let bytes = Arc::new(bytes);
         let (bytes, report) = if pdfcraft_engine::source_kind(&name, &bytes) == Some(pdfcraft_engine::SourceKind::Office) {
-            let (pdf, report) = self.session.create_from_office(&name, &bytes).map_err(failed)?;
-            (pdf, Some(report))
+            let (_, pdf, report) = self.session.convert_to_pdf_reported(&name, &bytes).map_err(failed)?;
+            (pdf, report)
         } else {
-            (self.session.as_pdf(&name, &Arc::new(bytes)).map_err(failed)?, None)
+            (self.session.as_pdf(&name, &bytes).map_err(failed)?, None)
         };
         let mut result =
             self.apply(a, Edit::InsertPagesFrom { name, bytes, pages, at, field_conflicts: pdfcraft_organize::FieldConflicts::Rename })?;
@@ -285,6 +290,8 @@ impl Automation {
         Ok(json!({ "files": out }))
     }
 
+    /// `page_extract`: the chosen pages as one new PDF, or with `separate` one file per page in
+    /// `out_dir`; with `delete` the pages are then removed from the original.
     pub(crate) fn page_extract(&mut self, a: &Args) -> Result<Value> {
         let doc = self.doc(a)?;
         let (id, name) = (doc.id, format!("{} (extract)", doc.name));
@@ -292,16 +299,8 @@ impl Automation {
         let pages = self.pages(a, "pages")?;
         let mut out = if a.opt_bool("separate")?.unwrap_or(false) {
             // Each page as its own file.
-            let dir = self.resolve(a.str("out_dir").map_err(|_| ToolError::InvalidArgs("separate files need out_dir".into()))?, true)?;
-            std::fs::create_dir_all(&dir).map_err(|e| failed(format!("{}: {e}", dir.display())))?;
-            let mut files = Vec::new();
-            for &p in &pages {
-                let bytes = self.session.extract(id, &[p]).map_err(failed)?;
-                let path = child(&dir, &format!("{stem}-page{}.pdf", p + 1));
-                write_atomic(&path, &bytes)?;
-                files.push(path.to_string_lossy().into_owned());
-            }
-            json!({ "files": files })
+            let out_dir = a.str("out_dir").map_err(|_| ToolError::InvalidArgs("separate files need out_dir".into()))?;
+            json!({ "files": self.extract_separate(id, &pages, out_dir, &stem)? })
         } else {
             let bytes = self.session.extract(id, &pages).map_err(failed)?;
             self.deliver(a, &name, bytes)?
@@ -311,6 +310,45 @@ impl Automation {
             out["original"] = deleted;
         }
         Ok(out)
+    }
+
+    /// Each of `pages` as its own `<stem>-page<n>.pdf` in `out_dir`, extracted and written one at a
+    /// time, so only one page's PDF is held at once. The first page is extracted before `out_dir` is
+    /// resolved and made, so a refusal (the permissions refuse every page alike, #5081) leaves nothing
+    /// behind; if a later page fails, the files this call created, and the directory if it made it,
+    /// are removed.
+    fn extract_separate(&self, id: pdfcraft_engine::DocId, pages: &[usize], out_dir: &str, stem: &str) -> Result<Vec<String>> {
+        let Some(&first) = pages.first() else { return Ok(Vec::new()) };
+        let mut first_bytes = Some(self.session.extract(id, &[first]).map_err(failed)?);
+        let dir = self.resolve(out_dir, true)?;
+        let made_dir = !dir.exists();
+        std::fs::create_dir_all(&dir).map_err(|e| failed(format!("{}: {e}", dir.display())))?;
+        let (mut files, mut created) = (Vec::new(), Vec::new());
+        let outcome = pages.iter().try_for_each(|&p| -> Result<()> {
+            let bytes = match first_bytes.take() {
+                Some(bytes) => bytes,
+                None => self.session.extract(id, &[p]).map_err(failed)?,
+            };
+            let path = child(&dir, &format!("{stem}-page{}.pdf", p.saturating_add(1)));
+            let existed = path.exists();
+            write_atomic(&path, &bytes)?;
+            if !existed {
+                created.push(path.clone());
+            }
+            files.push(path.to_string_lossy().into_owned());
+            Ok(())
+        });
+        if let Err(e) = outcome {
+            // Best effort: whatever can't be removed stays, and the error reported is the extraction's.
+            for path in &created {
+                let _ = std::fs::remove_file(path);
+            }
+            if made_dir {
+                let _ = std::fs::remove_dir(&dir);
+            }
+            return Err(e);
+        }
+        Ok(files)
     }
 
     pub(crate) fn doc_combine(&mut self, a: &Args) -> Result<Value> {
@@ -375,10 +413,12 @@ impl Automation {
                     // Images and text files are made into PDFs first (#569), as in the Combine files tab.
                     let file_name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
                     if pdfcraft_engine::source_kind(&file_name, &bytes) == Some(pdfcraft_engine::SourceKind::Office) {
-                        let (pdf, report) = self.session.create_from_office(&file_name, &bytes).map_err(failed)?;
-                        let mut conversion = office_report(&report);
-                        conversion["path"] = json!(p);
-                        conversions.push(conversion);
+                        let (_, pdf, report) = self.session.convert_to_pdf_reported(&file_name, &bytes).map_err(failed)?;
+                        if let Some(report) = report {
+                            let mut conversion = office_report(&report);
+                            conversion["path"] = json!(p);
+                            conversions.push(conversion);
+                        }
                         pdf
                     } else {
                         self.session.as_pdf(&file_name, &bytes).map_err(failed)?

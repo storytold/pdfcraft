@@ -19,26 +19,55 @@ Layer L4. Create a PDF (Acrobat's Create a PDF tool), execution plan M10.2:
   for one point per pixel, or `ImageResolution::Embedded` for the same behavior as
   `from_images`. The largest page side is still capped at 14,400 points;
 - `from_text(text, …)`: plain text set in Helvetica, wrapped and paginated. Text Helvetica
-  can't draw is refused, naming the line and the character, never set as `?`.
+  can't draw is set in the bundled Inter face instead (Latin, Greek and Cyrillic letters), with
+  the same page, margins, wrapping and form feeds; text Inter can't draw either is refused,
+  naming the line and the character, never set as `?`.
 - `from_text_escaped(text, …)`: the same for reports PdfCraft generates from documents
-  (comment summaries, compare reports): such characters are written as `[U+XXXX]` and the first
-  line says so (`ESCAPED_NOTE`).
+  (comment summaries, compare reports): text Inter draws is set in it; otherwise the characters
+  Helvetica can't draw are written as `[U+XXXX]` and the first line says so (`ESCAPED_NOTE`).
 - `from_office(name, bytes)`: a Word (`.docx`), PowerPoint (`.pptx`) or Excel (`.xlsx`) file, read
-  natively from its Office Open XML package (`office/`): Word flows onto its sections' pages with
+  natively from its Office Open XML package (`ooxml/`): Word flows onto its sections' pages with
   styles, lists, tables, images, headers and footers; PowerPoint gives one page per visible slide
   with master and layout inheritance; Excel prints each visible sheet's used range with its number
   formats. Text is set in the standard-14 faces chosen from each run's font family, with Turkish,
   Central European, Baltic and Romanian letters drawn through a second encoding of the same face
-  (`office/latin.rs`); characters they can't draw are written as `[U+XXXX]`. Returns the document and an `OfficeReport` counting
+  (`ooxml/latin.rs`); characters they can't draw are written as `[U+XXXX]`. Returns the document and an `OfficeReport` counting
   what was approximated (Word and PowerPoint charts and vector images become outlined boxes; Excel
   charts and sheet pictures are left out). See
   [Word, PowerPoint and Excel to PDF](../../docs/office-import.md).
 
-`source_kind` recognises Office packages (and encrypted ones, which `from_office` refuses with a
-reason) by name and signature as `SourceKind::Office`.
-
 Every function returns a `pdfcraft_cos::Document`; the caller writes it. `from_office` also returns its
 `OfficeReport`, which the caller shows: it is the only record of what the conversion approximated.
+`is_ooxml(name, bytes)` says whether a file is one for `from_office` (an `OOXML_EXTENSIONS` name and
+a ZIP package, or an OLE compound file, as an encrypted package is stored, which `from_office`
+refuses with that reason).
+
+Office documents also convert through LibreOffice (`office.rs`), which reads every Office format,
+including the older binary ones (`.doc`, `.xls`, `.ppt`), OpenDocument and RTF. The engine prefers it when it is installed and falls back to `from_office`
+for Office Open XML files where it isn't (the web build, a machine without LibreOffice), and on the
+frame thread, where waiting seconds for LibreOffice isn't allowed (Insert pages, Combine, Create
+from multiple files). `is_office(name, bytes)` recognises them (an `OFFICE_EXTENSIONS`
+name and an OLE, ZIP or RTF signature; `source_kind` reports `SourceKind::Office`), and
+`office_to_pdf(name, bytes)` returns PDF bytes made by an installed LibreOffice, run headless as
+a separate process: a private temporary folder (owner-only on Unix; the document is always
+`document.<ext>` there, never its own name), a fresh profile with macros disabled, untrusted
+links blocked and Writer and Calc set never to update linked content (sections, files, external
+data) on load, no console window on Windows, and a stop after `TIMEOUT` (120 s) or as soon as the
+output grows past 512 MB (the whole process tree is stopped, not only `soffice`). LibreOffice is
+found through `PDFCRAFT_SOFFICE`, the `PATH`, then the usual install folders (`libreoffice()`).
+A snap-installed LibreOffice is not among those folders: its private `/tmp` cannot see the work
+folder. Where `/snap/bin` is on the `PATH` it can still be found there, so point
+`PDFCRAFT_SOFFICE` at a non-snap install if conversions fail. It takes seconds, so callers keep it
+off the frame thread. On the web it returns an error.
+
+Impress has no setting for linked content, and the profile settings are LibreOffice's own:
+PdfCraft doesn't sandbox the process's network access. Converting test documents whose linked
+sections, pictures and external cell references point at a local listener made no connection,
+with or without the Writer and Calc settings (LibreOffice 26.8.1, Windows, 2026-10-26), so the settings are a
+second line of defence rather than a measured fix.
+
+`IMAGE_EXTENSIONS`, `TEXT_EXTENSIONS` and `OFFICE_EXTENSIONS` are what the app's file pickers
+offer, so detection and pickers agree.
 
 Image export and Save Image As apply each lossless image's Decode pair before converting its color components.
 JBIG2 images and masks are decoded through `pdfcraft_cos::ImageBudget` (`pdfcraft_filters::decode_jbig2_within`), behind
