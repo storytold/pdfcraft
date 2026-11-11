@@ -1094,6 +1094,17 @@ fn has_host(after: &str) -> bool {
     !host.is_empty()
 }
 
+/// The last reference of the chain `o` starts (at most 16 links), `None` when `o` is not a reference.
+fn end_of_chain(doc: &Document, o: &Object) -> Option<ObjRef> {
+    let Object::Ref(mut last) = *o else { return None };
+    for _ in 0..16 {
+        // Only a reference is followed further; whatever else it names is not copied.
+        let Object::Ref(next) = *doc.get(last) else { break };
+        last = next;
+    }
+    Some(last)
+}
+
 /// Replace the document's pages with the laid-out form and add its fields to the AcroForm. The
 /// XFA packets and everything else in the catalog stay.
 /// The image XObjects earlier passes wrote for pictures, by the SHA-256 each records: those on
@@ -1111,16 +1122,34 @@ fn earlier_images(doc: &Document, pages: ObjRef) -> HashMap<[u8; 32], ObjRef> {
         }
         let page = doc.get(page);
         let Some(res_entry) = page.as_dict().and_then(|p| p.get(b"Resources")) else { continue };
-        if res_entry.as_ref().is_some_and(|r| !seen.insert(r)) {
+        // A dictionary reached through a different alias is the same dictionary: the end of the
+        // reference chain is what is recorded. A direct one is borrowed, not copied.
+        if end_of_chain(doc, res_entry).is_some_and(|r| !seen.insert(r)) {
             continue;
         }
-        let resources = doc.resolve(res_entry);
-        let Some(xo_entry) = resources.as_dict().and_then(|r| r.get(b"XObject")) else { continue };
-        if xo_entry.as_ref().is_some_and(|r| !seen.insert(r)) {
+        let resolved;
+        let resources: &Dict = match res_entry {
+            Object::Dict(d) => d,
+            other => {
+                resolved = doc.resolve(other);
+                let Some(d) = resolved.as_dict() else { continue };
+                d
+            }
+        };
+        let Some(xo_entry) = resources.get(b"XObject") else { continue };
+        if end_of_chain(doc, xo_entry).is_some_and(|r| !seen.insert(r)) {
             continue;
         }
-        let xobjects = doc.resolve(xo_entry);
-        for r in xobjects.as_dict().into_iter().flat_map(|x| x.iter()).filter_map(|(_, v)| v.as_ref()) {
+        let xo_resolved;
+        let xobjects: &Dict = match xo_entry {
+            Object::Dict(d) => d,
+            other => {
+                xo_resolved = doc.resolve(other);
+                let Some(d) = xo_resolved.as_dict() else { continue };
+                d
+            }
+        };
+        for r in xobjects.iter().filter_map(|(_, v)| v.as_ref()) {
             examined += 1;
             if out.len() >= MAX_REMEMBERED_IMAGES || examined > MAX_IMAGES_EXAMINED {
                 return out;
