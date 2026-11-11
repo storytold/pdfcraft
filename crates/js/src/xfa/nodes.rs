@@ -229,6 +229,7 @@ fn manager_at<'a>(h: &XHost, from: usize, expr: &'a str) -> ManagerLookup<'a> {
     let (step, index) = match last.split_once('[') {
         Some((step, selector)) => {
             let Some(selector) = selector.strip_suffix(']') else { return ManagerLookup::Unmatched };
+            let selector = selector.trim();
             let index = if selector == "*" {
                 0
             } else if let Ok(index) = selector.parse::<usize>() {
@@ -240,6 +241,7 @@ fn manager_at<'a>(h: &XHost, from: usize, expr: &'a str) -> ManagerLookup<'a> {
         }
         None => (last, 0),
     };
+    let step = step.trim();
     let Some(name) = step.strip_prefix('_').filter(|name| !name.is_empty()) else { return ManagerLookup::Unmatched };
     if prefix.is_empty() {
         // An unqualified name checks children, then siblings, then each enclosing scope.

@@ -1128,6 +1128,28 @@ mod xfa_model {
     }
 
     #[test]
+    fn resolve_node_trims_manager_selector() {
+        let o = go(
+            "this.resolveNode('table._row[ 0 ]').count + '/' + this.resolveNode('table._row[ * ]').count + '/' + (this.resolveNode('table._row[ 1 ]') === null)",
+            "form1[0].page1[0].go[0]",
+            "click",
+        );
+        assert_eq!(o.error, None, "{o:?}");
+        assert_eq!(o.result.as_deref(), Some("2/2/true"));
+    }
+
+    #[test]
+    fn resolve_node_trims_manager_step() {
+        let o = go(
+            "this.resolveNode('table. _row [ 0 ]').count + '/' + this.resolveNode(' _row [ 0 ]').count + '/' + this.resolveNode('$form.. _row [ 0 ]').count",
+            "form1[0].page1[0].table[0].row[0].amount[0]",
+            "click",
+        );
+        assert_eq!(o.error, None, "{o:?}");
+        assert_eq!(o.result.as_deref(), Some("2/2/2"));
+    }
+
+    #[test]
     fn resolve_node_preserves_document_order_across_manager_and_real_node() {
         let mut model = form();
         model.children[0].children.push(XfaNode {
