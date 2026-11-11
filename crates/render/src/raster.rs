@@ -551,11 +551,47 @@ pub struct PageRenderer {
     stats: RenderStats,
 }
 
+/// What Copy with formatting's recovery layer keeps for one version of a document, shared by
+/// the [`PageRenderer`]s reading those bytes ([`PageRenderer::recovery_scope`]): each font's
+/// rule decisions, made once for the document whichever page asks first.
+#[derive(Clone, Debug)]
+pub struct RecoveryScope {
+    /// The bytes it belongs to: a renderer of other bytes (another version) never takes it.
+    bytes: std::sync::Weak<Vec<u8>>,
+    document: Arc<hayro::hayro_interpret::font::RecoveryDocument>,
+}
+
+impl RecoveryScope {
+    /// A fresh scope for `bytes`, nothing decided yet: for renderers of those bytes to share
+    /// ([`PageRenderer::with_recovery_scope`]).
+    pub fn for_bytes(bytes: &Arc<Vec<u8>>) -> Self {
+        Self { bytes: Arc::downgrade(bytes), document: Arc::default() }
+    }
+}
+
 impl PageRenderer {
     pub fn new(bytes: Arc<Vec<u8>>, config: RenderConfig) -> Self {
         let pdf = parse(&bytes, config.password.as_deref());
-        let settings = config.settings();
+        let scope = RecoveryScope::for_bytes(&bytes);
+        let settings = InterpreterSettings { recovery_document: Some(scope.document), ..config.settings() };
         Self { bytes, config, pdf, settings, stats: RenderStats { parser_builds: 1, ..RenderStats::default() } }
+    }
+
+    /// This renderer's recovery state ([`RecoveryScope`]), for another renderer of the same bytes
+    /// to share ([`Self::with_recovery_scope`]).
+    pub fn recovery_scope(&self) -> RecoveryScope {
+        let document = self.settings.recovery_document.clone().unwrap_or_default();
+        RecoveryScope { bytes: Arc::downgrade(&self.bytes), document }
+    }
+
+    /// This renderer, sharing `scope`'s recovery state when `scope` belongs to the same bytes
+    /// (the same `Arc`); a scope of other bytes is ignored, and the renderer keeps its own.
+    #[must_use]
+    pub fn with_recovery_scope(mut self, scope: &RecoveryScope) -> Self {
+        if std::ptr::eq(scope.bytes.as_ptr(), Arc::as_ptr(&self.bytes)) {
+            self.settings.recovery_document = Some(scope.document.clone());
+        }
+        self
     }
 
     pub fn page_count(&self) -> usize {

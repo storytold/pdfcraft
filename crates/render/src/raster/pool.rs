@@ -68,6 +68,9 @@ pub(super) struct Shared {
     /// request cannot trap every worker in turn while other scales, tiles, or generations remain usable.
     pub(super) stuck: Mutex<std::collections::HashSet<RequestFailureKey>>,
     stats: AtomicRenderStats,
+    /// Copy with formatting's recovery state for the pool's document (one pool per document
+    /// version): every worker's pages share each font's rule decisions.
+    pub(super) recovery: Arc<hayro::hayro_interpret::font::RecoveryDocument>,
     /// Per worker id: set to stop that worker's render at its next content operator once nobody
     /// can receive its answer (the pool was dropped, or the watchdog gave up on the render).
     /// Lock `busy` first when holding both.
@@ -318,6 +321,13 @@ impl RenderPool {
         Self::with_mode(bytes, 0, config, true)
     }
 
+    /// Test hook: the pool's recovery state (`RecoveryDocument`'s `Debug`, which counts the
+    /// fonts it decided).
+    #[cfg(test)]
+    pub(crate) fn recovery_state(&self) -> String {
+        format!("{:?}", self.shared.recovery)
+    }
+
     /// `true` when rendering happens on the caller's thread (no worker threads available).
     pub fn is_inline(&self) -> bool {
         self.inline.is_some()
@@ -515,8 +525,12 @@ impl Drop for RenderPool {
 
 /// A worker's interpreter settings: the document's, stopping once the request is cancelled.
 #[cfg(not(target_arch = "wasm32"))]
-pub(super) fn worker_settings(config: &RenderConfig, stop: &Arc<std::sync::atomic::AtomicBool>) -> InterpreterSettings {
-    InterpreterSettings { cancelled: Some(stop.clone()), ..config.settings() }
+pub(super) fn worker_settings(
+    config: &RenderConfig,
+    stop: &Arc<std::sync::atomic::AtomicBool>,
+    recovery: &Arc<hayro::hayro_interpret::font::RecoveryDocument>,
+) -> InterpreterSettings {
+    InterpreterSettings { cancelled: Some(stop.clone()), recovery_document: Some(recovery.clone()), ..config.settings() }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -713,7 +727,7 @@ pub(super) fn worker(
                     gate.entered.wait();
                     gate.release.wait();
                 }
-                let settings = warning_settings(&worker_settings(&config, &request_cancelled), warnings.clone());
+                let settings = warning_settings(&worker_settings(&config, &request_cancelled, &shared.recovery), warnings.clone());
                 lock(&warnings).clear();
                 let r = catch_unwind(AssertUnwindSafe(|| {
                     #[cfg(test)]

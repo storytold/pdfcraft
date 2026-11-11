@@ -631,11 +631,14 @@ fn read_parallel<T: Send>(
         return pages.iter().map(|p| (*p, extract(&mut r, *p))).collect();
     }
     let next = std::sync::atomic::AtomicUsize::new(0);
+    // The workers share Copy with formatting's recovery state: each font's rule decisions are
+    // made once for the document, not once per worker.
+    let scope = &pdfcraft_render::RecoveryScope::for_bytes(bytes);
     let mut out: Vec<(usize, std::result::Result<T, String>)> = std::thread::scope(|s| {
         let handles: Vec<_> = (0..workers)
             .map(|_| {
                 s.spawn(|| {
-                    let mut r = PageRenderer::new(bytes.clone(), config.clone());
+                    let mut r = PageRenderer::new(bytes.clone(), config.clone()).with_recovery_scope(scope);
                     let mut done = Vec::new();
                     loop {
                         let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);

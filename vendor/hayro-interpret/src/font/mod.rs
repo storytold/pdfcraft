@@ -70,7 +70,9 @@ use hayro_cmap::{BfString, CMap, CMapName, CharacterCollection};
 pub use outline::OutlineFontData;
 #[cfg(feature = "test-counters")]
 pub use recovery::{RecoveryCounters, recovery_counters, recovery_rule_calls, test_hooks};
-pub use recovery::{RecoveredFontStyle, Recovery, RecoveryMode, RecoveryRule, recovery_policy};
+pub use recovery::{
+    RecoveredFontStyle, Recovery, RecoveryDocument, RecoveryMode, RecoveryRule, recovery_policy,
+};
 pub use standard_font::StandardFont;
 
 /// A glyph that can be drawn.
@@ -340,6 +342,22 @@ impl<'a> Font<'a> {
         let cache_key = dict.cache_key();
 
         Some(Self(cache_key, f_type))
+    }
+
+    /// PdfCraft patch (104): keep the recovery rules' decisions for this font in `document`,
+    /// for every page read with it, under the font's cache key. A standard substitute (no
+    /// dictionary, key 0) decides on its own.
+    pub(crate) fn attach_recovery_document(&self, document: &Arc<RecoveryDocument>) {
+        if self.0 == 0 {
+            return;
+        }
+        let info = match &self.1 {
+            FontType::Type1(t) => t.recovery_info(),
+            FontType::TrueType(t) => t.recovery_info(),
+            FontType::Type0(t) => t.recovery_info(),
+            FontType::Type3(t) => t.recovery_info(),
+        };
+        info.cache.attach(document.clone(), self.0);
     }
 
     /// PdfCraft patch (90): whether this is a Type 3 font without `/Widths` (or

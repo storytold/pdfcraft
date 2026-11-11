@@ -21,6 +21,7 @@
 //! in [`RecoveryRule::ORDER`]: the first that reads a glyph wins.
 
 mod candidate;
+mod document;
 mod orders;
 #[allow(
     dead_code,
@@ -40,6 +41,8 @@ use skrifa::raw::TableProvider;
 use skrifa::raw::types::Version16Dot16;
 use skrifa::{FontRef, GlyphId};
 use std::sync::{Arc, OnceLock};
+
+pub use document::RecoveryDocument;
 
 /// A way to recover a glyph's text, named by the mechanism it reads.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -84,6 +87,9 @@ pub(crate) enum Counter {
     ProgramWalk,
     /// A Type 3 font's dictionary hashed for its cache key.
     Type3KeyHash,
+    /// A font's guards taken from its document's decisions ([`RecoveryDocument`]) instead of
+    /// decided again.
+    DecisionReused,
 }
 
 /// Counts `counter` on this thread (only with the `test-counters` feature).
@@ -99,6 +105,7 @@ pub(crate) fn count(counter: Counter) {
             Counter::GlyphFactsBuilt => &mut n.glyph_facts_built,
             Counter::ProgramWalk => &mut n.program_walks,
             Counter::Type3KeyHash => &mut n.type3_key_hashes,
+            Counter::DecisionReused => &mut n.decisions_reused,
         };
         *field = field.saturating_add(1);
         c.set(n);
@@ -124,6 +131,9 @@ pub struct RecoveryCounters {
     pub program_walks: usize,
     /// Type 3 font dictionaries hashed for a cache key.
     pub type3_key_hashes: usize,
+    /// Fonts whose guards came from their document's decisions ([`RecoveryDocument`]), not
+    /// decided again.
+    pub decisions_reused: usize,
 }
 
 #[cfg(feature = "test-counters")]
@@ -141,6 +151,7 @@ impl RecoveryCounters {
                 .saturating_sub(before.glyph_facts_built),
             program_walks: self.program_walks.saturating_sub(before.program_walks),
             type3_key_hashes: self.type3_key_hashes.saturating_sub(before.type3_key_hashes),
+            decisions_reused: self.decisions_reused.saturating_sub(before.decisions_reused),
         }
     }
 }
@@ -155,6 +166,7 @@ thread_local! {
             glyph_facts_built: 0,
             program_walks: 0,
             type3_key_hashes: 0,
+            decisions_reused: 0,
         })
     };
 }
@@ -409,9 +421,14 @@ impl Guards {
     }
 }
 
-/// The font-level decisions of one font, made the first time a glyph of it asks.
+/// The font-level decisions of one font, made the first time a glyph of it asks, or taken from
+/// its document's ([`RecoveryDocument`]) when the font was read with one.
 #[derive(Debug, Default)]
-pub(crate) struct RecoveryCache(OnceLock<Guards>);
+pub(crate) struct RecoveryCache {
+    guards: OnceLock<Arc<Guards>>,
+    /// The document the font was read from, and the font's key there.
+    document: OnceLock<(Arc<RecoveryDocument>, u128)>,
+}
 
 /// A font's style for text the recovery rules read ([`crate::font::Glyph::recovery_style`]),
 /// worked out once per font and shared by its glyphs.
@@ -530,6 +547,12 @@ impl std::fmt::Debug for Guards {
 }
 
 impl RecoveryCache {
+    /// Keep the font's decisions in `document`, under `key` (its dictionary's cache key): set
+    /// once, before any glyph of the font asks.
+    pub(crate) fn attach(&self, document: Arc<RecoveryDocument>, key: u128) {
+        let _ = self.document.set((document, key));
+    }
+
     /// The recovered reading of one glyph of a font of `kind`: `facts` builds the font's facts
     /// (of that kind; called for the guards the first time, and again only when some rule takes
     /// the font), `glyph` the glyph's (built only when some rule takes the font). A font of a
@@ -548,7 +571,10 @@ impl RecoveryCache {
             count(Counter::FactsBuilt);
             facts()
         };
-        let guards = self.0.get_or_init(|| Guards::decide(&facts()));
+        let guards = self.guards.get_or_init(|| match self.document.get() {
+            Some((document, key)) => document.guards(*key, || Guards::decide(&facts())),
+            None => Arc::new(Guards::decide(&facts())),
+        });
         if guards.none() {
             return None;
         }

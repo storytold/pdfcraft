@@ -650,11 +650,19 @@ impl<'a> Context<'a> {
             font_cache
                 .entry(cache_key)
                 .or_insert_with(|| {
-                    Font::new(
+                    let font = Font::new(
                         font_dict,
                         &self.settings.font_resolver,
                         &self.settings.cmap_resolver,
-                    )
+                    );
+                    // PdfCraft patch (104): the recovery rules decide the font once per
+                    // document, not once per page.
+                    if let (Some(font), Some(document)) =
+                        (&font, &self.settings.recovery_document)
+                    {
+                        font.attach_recovery_document(document);
+                    }
+                    font
                 })
                 .clone()
         };
