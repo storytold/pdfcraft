@@ -283,7 +283,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     c("comment.underline", "Underline text", None, None, Annotate, "underline"),
     c("comment.strikeout", "Strikethrough text", None, None, Annotate, "strikethrough"),
     c("comment.squiggly", "Squiggly underline text", None, None, Annotate, "spline"),
-    c("comment.freehand_highlight", "Freehand-Highlight", None, None, Annotate, "highlighter"),
+    c("comment.freehand_highlight", "Freehand-Highlight", None, None, Annotate, "freehand-highlighter"),
     c("comment.ink", "Draw freehand", None, None, Annotate, "pencil"),
     c("comment.line", "Draw a line", None, None, Annotate, "minus"),
     c("comment.arrow", "Draw an arrow", None, None, Annotate, "move-right"),

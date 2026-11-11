@@ -4,7 +4,7 @@
 
 Every asset PdfCraft includes, bundles or uses to build its published material, with its author, source and licence. The policy is in [AGENTS.md](AGENTS.md) §1. The machine-readable list, with the SHA-256 of every asset, is [ATTRIBUTION.toml](ATTRIBUTION.toml). Licence texts are kept beside the assets and summarised in [NOTICE](NOTICE).
 
-## In this repository (258)
+## In this repository (259)
 
 | Asset | Title | Author | Licence | Source | Used for |
 |---|---|---|---|---|---|
@@ -96,6 +96,7 @@ Every asset PdfCraft includes, bundles or uses to build its published material, 
 | `assets/icons/hash.svg` | Lucide icon "hash" | Lucide Contributors (portions Cole Bemis, Feather) | ISC AND MIT | https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/hash.svg) | UI icon, embedded via crates/ui-egui/src/icon_data.rs |
 | `assets/icons/heading.svg` | Lucide icon "heading" | Lucide Contributors (portions Cole Bemis, Feather) | ISC AND MIT | https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/heading.svg) | UI icon, embedded via crates/ui-egui/src/icon_data.rs |
 | `assets/icons/highlighter.svg` | Lucide icon "highlighter" | Lucide Contributors (portions Cole Bemis, Feather) | ISC AND MIT | https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/highlighter.svg) | UI icon, embedded via crates/ui-egui/src/icon_data.rs |
+| `assets/icons/freehand-highlighter.svg` | Freehand highlighter | PdfCraft contributors | CC0-1.0 | this repository | UI icon, embedded via crates/ui-egui/src/icon_data.rs |
 | `assets/icons/house.svg` | Lucide icon "house" | Lucide Contributors (portions Cole Bemis, Feather) | ISC AND MIT | https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/house.svg) | UI icon, embedded via crates/ui-egui/src/icon_data.rs |
 | `assets/icons/image-plus.svg` | Lucide icon "image-plus" | Lucide Contributors (portions Cole Bemis, Feather) | ISC AND MIT | https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/image-plus.svg) | UI icon, embedded via crates/ui-egui/src/icon_data.rs |
 | `assets/icons/image.svg` | Lucide icon "image" | Lucide Contributors (portions Cole Bemis, Feather) | ISC AND MIT | https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/image.svg) | UI icon, embedded via crates/ui-egui/src/icon_data.rs |

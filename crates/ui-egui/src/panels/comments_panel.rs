@@ -50,7 +50,7 @@ pub fn kind_label(a: &Annotation) -> &str {
     }
 }
 
-pub fn subtype_icon(s: &str) -> &'static str {
+pub fn subtype_icon(s: &str, intent: Option<&str>) -> &'static str {
     match s {
         "Text" => "message-square-text",
         "Highlight" => "highlighter",
@@ -58,7 +58,14 @@ pub fn subtype_icon(s: &str) -> &'static str {
         "StrikeOut" => "strikethrough",
         "Squiggly" => "spline",
         "FreeText" => "type",
-        "Ink" => "pencil",
+        // A freehand highlight is ink with the FreehandHighlight intent; the plain ink tool keeps the pencil.
+        "Ink" => {
+            if intent == Some("FreehandHighlight") {
+                "freehand-highlighter"
+            } else {
+                "pencil"
+            }
+        }
         "Square" => "square",
         "Circle" => "circle",
         "Line" => "move-right",
@@ -438,7 +445,7 @@ fn card(ui: &mut egui::Ui, view: &mut DocView, context: CardContext<'_>) -> Opti
             let mut buttons_left = f32::INFINITY;
             let mut above = egui::Rect::NOTHING;
             let head = ui.horizontal(|ui| {
-                above = avatar(ui, t, Some(subtype_icon(&a.subtype)), None, color);
+                above = avatar(ui, t, Some(subtype_icon(&a.subtype, a.intent.as_deref())), None, color);
                 // The catalogue and author names stay logical: egui lays out RTL text itself.
                 let author = a.author.as_deref().map_or_else(|| tl!("Unknown author"), |name| name);
                 ui.label(egui::RichText::new(author).font(theme::semibold(12.5)).color(t.text));
