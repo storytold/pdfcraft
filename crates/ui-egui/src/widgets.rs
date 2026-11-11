@@ -90,6 +90,14 @@ pub fn block(text: &mut dyn egui::TextBuffer) -> egui::TextEdit<'_> {
     egui::TextEdit::multiline(text).margin(egui::Margin::symmetric(10, 6))
 }
 
+/// A [`block`] for JavaScript: in the code font, with Tab indenting, and the script coloured by
+/// [`script_layout`]. Every box that edits a script is one of these.
+pub fn script(text: &mut dyn egui::TextBuffer) -> egui::TextEdit<'_> {
+    // The box borrows its layouter for as long as it lives. `script_layout` is a plain function,
+    // with no data, so boxing it allocates nothing and leaking that box costs nothing.
+    block(text).code_editor().layouter(Box::leak(Box::new(script_layout)))
+}
+
 /// Scripts longer than this are laid out uncoloured. egui's highlighter rescans the rest of a
 /// script for each line that opens a string and doesn't close it, so on a script crafted that way
 /// its time grows with the square of the length: seconds for 64 KiB, half a minute for 256 KiB, and
@@ -97,9 +105,8 @@ pub fn block(text: &mut dyn egui::TextBuffer) -> egui::TextEdit<'_> {
 /// ordinary code of 256 KiB takes milliseconds.
 const MAX_COLOURED_SCRIPT: usize = 16 * 1024;
 
-/// Lays out a script box's JavaScript coloured by egui's highlighter: the
-/// [`egui::TextEdit::layouter`] of a [`block`] that is a `code_editor`.
-pub(crate) fn script_layout(ui: &egui::Ui, text: &dyn egui::TextBuffer, wrap_width: f32) -> std::sync::Arc<egui::Galley> {
+/// Lays out a [`script`] box's JavaScript coloured by egui's highlighter.
+fn script_layout(ui: &egui::Ui, text: &dyn egui::TextBuffer, wrap_width: f32) -> std::sync::Arc<egui::Galley> {
     let t = Tokens::get(ui.ctx());
     let style = ui.style();
     let source = text.as_str();
