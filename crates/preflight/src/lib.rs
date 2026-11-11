@@ -1249,11 +1249,7 @@ pub struct Report {
 fn is_action(d: &Dict) -> bool {
     match d.name(b"Type") {
         Some(t) => t == b"Action",
-        // An untyped dictionary with both `/P` and `/K` is a structure element, whatever its `/S`
-        // names: a custom role can be called `JavaScript` without being one. Replacing such an
-        // element would leave its parent's `/K` pointing at nothing.
-        None if d.get(b"P").is_some() && d.get(b"K").is_some() => false,
-        None => d.name(b"S").is_some_and(|s| FORBIDDEN_ACTIONS.contains(&s)),
+        None => !(d.get(b"P").is_some() && d.get(b"K").is_some()),
     }
 }
 
@@ -1389,6 +1385,11 @@ fn remove_from_pages(doc: &mut Document, gone: &std::collections::HashSet<ObjRef
             doc.update_dict(p.obj, |pd| pd.set(b"Annots".to_vec(), Object::Array(kept)))?;
         }
     }
+    for r in gone {
+        doc.set(*r, Object::Null);
+    }
+    Ok(())
+}
 
 /// Collects every indirect annotation reference listed in any page's `/Annots` array.
 fn page_annot_refs(doc: &Document) -> std::collections::HashSet<ObjRef> {
