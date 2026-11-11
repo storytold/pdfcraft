@@ -199,6 +199,13 @@ fn run_here(script: &str, event: &Event, doc: &DocInfo, fields: Arc<Vec<FieldSta
 }
 
 /// Replace per-event host state, optionally initialize document scripts, and collect results within runtime limits.
+/// Drop the host's field snapshot once a job is over, keeping the rest of the retained host.
+pub(crate) fn release_fields(ctx: &Context) {
+    if let Ok(h) = host(ctx) {
+        h.borrow_mut().fields = Arc::new(Vec::new());
+    }
+}
+
 pub(crate) fn run_in_context(
     ctx: &mut Context,
     script: &str,
@@ -220,12 +227,10 @@ pub(crate) fn run_in_context(
             } else {
                 icons.clear();
             }
-            let same_fields = h.fields.len() == fields.len()
-                && h.fields.iter().zip(fields.iter()).all(|(previous, current)| {
-                    previous.object_id == current.object_id
-                        && previous.instance_id == current.instance_id
-                        && (current.object_id.is_some() || previous.name == current.name)
-                });
+            // The field identities are those of the previous job when every current key is one
+            // of its keys and there are as many (the previous snapshot itself is not retained).
+            let same_fields = h.field_keys.len() == fields.len()
+                && fields.iter().all(|f| h.field_keys.contains(&crate::host::field_cache_key(&f.name, f.object_id, f.instance_id)));
             (icons, h.objects, same_fields.then_some(h.field_keys))
         })
         .unwrap_or_default();

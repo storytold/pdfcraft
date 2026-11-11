@@ -453,14 +453,43 @@ pub struct JsRunner {
     // Cache at most 4,096 field identities in the current edit. Entries only survive value-only
     // callbacks. Appearance and structural edits clear them before the next snapshot.
     snapshot_fields: std::collections::HashMap<pdfcraft_cos::ObjRef, pdfcraft_js::FieldState>,
+    // The last callback's snapshot. A calculation chain changes one or two values per callback,
+    // so the next callback patches those entries instead of rebuilding every field.
+    last_snapshot: Option<std::sync::Arc<Vec<pdfcraft_js::FieldState>>>,
 }
 
 impl JsRunner {
     pub(crate) fn invalidate_field_snapshots(&mut self) {
         self.snapshot_fields.clear();
+        self.last_snapshot = None;
     }
 
     fn callback_fields(&mut self, doc: &pdfcraft_cos::Document, fields: &[Field]) -> std::sync::Arc<Vec<pdfcraft_js::FieldState>> {
+        if let Some(snapshot) = self.last_snapshot.as_mut()
+            && snapshot.len() == fields.len()
+            && snapshot.iter().zip(fields).all(|(state, field)| state.object_id == Some(field_object_id(field.obj)))
+        {
+            let stale = |state: &pdfcraft_js::FieldState, field: &Field| {
+                state.name != field.name
+                    || state.value != field.value
+                    || state.readonly != field.read_only()
+                    || state.required != field.has(pdfcraft_forms::flags::REQUIRED)
+            };
+            if snapshot.iter().zip(fields).any(|(state, field)| stale(state, field)) {
+                for (state, field) in std::sync::Arc::make_mut(snapshot).iter_mut().zip(fields) {
+                    if stale(state, field) {
+                        state.name.clone_from(&field.name);
+                        state.value.clone_from(&field.value);
+                        state.readonly = field.read_only();
+                        state.required = field.has(pdfcraft_forms::flags::REQUIRED);
+                    }
+                }
+            }
+            if let Ok(mut runtime) = self.runtime.lock() {
+                runtime.stamp_fields(snapshot);
+            }
+            return std::sync::Arc::clone(snapshot);
+        }
         let states = fields
             .iter()
             .map(|field| {
@@ -480,7 +509,12 @@ impl JsRunner {
                 state
             })
             .collect();
-        std::sync::Arc::new(states)
+        let mut states = std::sync::Arc::new(states);
+        if let Ok(mut runtime) = self.runtime.lock() {
+            runtime.stamp_fields(&mut states);
+        }
+        self.last_snapshot = Some(std::sync::Arc::clone(&states));
+        states
     }
 
     /// Forget the per-edit calculation plan after a calculation source is changed.
@@ -544,6 +578,7 @@ impl JsRunner {
             runtime: Default::default(),
             calculations: None,
             snapshot_fields: Default::default(),
+            last_snapshot: None,
         }
     }
 
@@ -1669,6 +1704,41 @@ mod snapshot_review_tests {
         let moved = runner.callback_fields(cos, &fields[..1]);
         assert_ne!(moved[0].rect, updated[0].rect);
         assert_eq!(runner.snapshot_fields.len(), 1);
+    }
+
+    /// A callback reuses the previous callback's snapshot, patching only values that changed,
+    /// and a snapshot a caller still holds is never changed under it.
+    #[test]
+    fn callback_snapshots_are_patched_in_place_and_copied_only_when_shared() {
+        let mut session = Session::new();
+        let bytes = session.create_blank(200.0, 300.0, 1).unwrap();
+        let id = session.open("patch.pdf", None, bytes, None).unwrap();
+        for (name, rect) in [("first", [20.0, 20.0, 100.0, 40.0]), ("second", [20.0, 60.0, 100.0, 80.0])] {
+            session.apply(id, Edit::AddField { page: 0, rect, kind: crate::NewField::Text { multiline: false }, name: Some(name.into()) }).unwrap();
+        }
+        let cos = &session.get(id).unwrap().editor.as_ref().unwrap().cos;
+        let mut fields = pdfcraft_forms::fields(cos);
+        let mut runner = JsRunner::new(cos, "patch.pdf", false);
+        let first = runner.callback_fields(cos, &fields);
+        let first_ptr = std::sync::Arc::as_ptr(&first);
+        drop(first);
+        // Nothing changed: the same snapshot comes back.
+        let same = runner.callback_fields(cos, &fields);
+        assert_eq!(std::sync::Arc::as_ptr(&same), first_ptr);
+        drop(same);
+        // A value changed and no one else holds the snapshot: it is patched in place.
+        fields[1].value = vec!["7".into()];
+        let patched = runner.callback_fields(cos, &fields);
+        assert_eq!(std::sync::Arc::as_ptr(&patched), first_ptr);
+        assert_eq!(patched[1].value, ["7"]);
+        // A held snapshot keeps its values; the next callback gets a copy.
+        fields[0].value = vec!["held".into()];
+        let copied = runner.callback_fields(cos, &fields);
+        assert_eq!(patched[0].value, Vec::<String>::new());
+        assert_eq!(copied[0].value, ["held"]);
+        assert_eq!(copied[1].value, ["7"]);
+        // Instance tokens are stamped before dispatch, so the worker does not copy it again.
+        assert!(copied.iter().all(|f| f.instance_id != 0));
     }
 
     /// Operation counts, rather than wall time, pin the absence of per-field tree/plan walks.

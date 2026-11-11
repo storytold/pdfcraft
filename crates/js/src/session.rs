@@ -43,13 +43,28 @@ impl FieldInstances {
     }
     /// Stamp the immutable job snapshot with current instance tokens before worker dispatch.
     fn stamp(&mut self, job: &mut Job) {
-        self.sync(job.fields.iter().filter_map(|f| f.object_id));
-        for field in Arc::make_mut(&mut job.fields) {
-            field.instance_id = field.object_id.and_then(|id| self.current.get(&id).copied()).unwrap_or(0);
+        self.stamp_fields(&mut job.fields);
+    }
+    /// Stamp a snapshot in place, copying it only when a token actually changes: a caller that
+    /// keeps its snapshot between callbacks (the engine does) then shares it with the worker.
+    fn stamp_fields(&mut self, fields: &mut Arc<Vec<FieldState>>) {
+        self.sync(fields.iter().filter_map(|f| f.object_id));
+        let token =
+            |current: &std::collections::HashMap<u64, u64>, field: &FieldState| field.object_id.and_then(|id| current.get(&id).copied()).unwrap_or(0);
+        if fields.iter().all(|field| field.instance_id == token(&self.current, field)) {
+            return;
+        }
+        for field in Arc::make_mut(fields) {
+            field.instance_id = token(&self.current, field);
         }
     }
 }
 impl ScriptSession {
+    /// Stamp the caller's retained snapshot with the current instance tokens before it builds a
+    /// job, so the worker's own stamping finds nothing to change and does not copy it.
+    pub fn stamp_fields(&mut self, fields: &mut Arc<Vec<FieldState>>) {
+        self.instances.stamp_fields(fields);
+    }
     /// Notify the retained runtime of live PDF fields after an edit or history step.
     pub fn sync_field_ids(&mut self, ids: impl IntoIterator<Item = u64>) {
         self.instances.sync(ids);
@@ -104,6 +119,15 @@ impl Realm {
     }
     /// Validate sources, initialize once when needed, and execute this job in the retained document realm.
     fn run(&mut self, job: Job) -> Outcome {
+        let out = self.run_job(job);
+        // The realm keeps its globals and field objects, not the job's field snapshot: the engine
+        // keeps that snapshot and patches it in place for the next callback.
+        if let Some(ctx) = self.context.as_ref() {
+            crate::run::release_fields(ctx);
+        }
+        out
+    }
+    fn run_job(&mut self, job: Job) -> Outcome {
         let failed = |why: String| Outcome { rc: true, execution_refused: true, realm_untouched: true, error: Some(why), ..Default::default() };
         if let Some(why) = crate::refuse(&job.script) {
             return failed(why);
