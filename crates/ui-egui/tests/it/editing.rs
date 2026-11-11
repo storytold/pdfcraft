@@ -1723,18 +1723,20 @@ fn undo_and_redo_restore_the_combine_list() {
     assert!(h.state().session.get(h.state().views[0].id).unwrap().can_undo().is_none());
 }
 
+/// A protected file that still allows page extraction (only printing is withheld) is listed
+/// for Combine with a warning that the result won't keep its security, not as a problem.
 #[test]
 fn protected_files_that_can_be_combined_are_flagged() {
     let mut h = harness(1, |app| {
         app.set_option("combine-view", "list").unwrap();
         app.use_files(
             pdfcraft_ui_egui::FilePurpose::Combine,
-            vec![("one.pdf".into(), fixture(1)), ("no-copy.pdf".into(), protected("", "owner", -1 ^ 16))],
+            vec![("one.pdf".into(), fixture(1)), ("no-print.pdf".into(), protected("", "owner", -1 ^ 4))],
         );
     });
     h.run_steps(3);
     let app = h.state();
-    assert!(app.combine_draft[1].problem.is_none(), "copying text is withheld, assembling pages isn't");
+    assert!(app.combine_draft[1].problem.is_none(), "printing is withheld, extracting pages isn't");
     h.get_by_label("Protected: the combined file won't keep its security settings");
     assert!(!h.get_by_label("Combine").accesskit_node().is_disabled(), "a warning, not a blocker");
 }
@@ -1837,10 +1839,10 @@ fn images_and_text_files_join_the_combine_list_as_pdfs() {
 #[test]
 fn files_that_cannot_be_read_are_listed_and_left_out_once_the_user_agrees() {
     let mut h = combine_of(&[("one.pdf", 2)]);
-    let bad = vec![("broken.jpg".to_string(), b"\xff\xd8\xff\xe0 not a JPEG".to_vec()), ("report.docx".to_string(), b"PK\x03\x04".to_vec())];
+    let bad = vec![("broken.jpg".to_string(), b"\xff\xd8\xff\xe0 not a JPEG".to_vec()), ("archive.zip".to_string(), b"PK\x03\x04".to_vec())];
     h.state_mut().use_files(pdfcraft_ui_egui::FilePurpose::Combine, bad);
     h.run_steps(3);
-    assert_eq!(combine_names(&h), ["one.pdf", "broken.jpg", "report.docx"]);
+    assert_eq!(combine_names(&h), ["one.pdf", "broken.jpg", "archive.zip"]);
     for f in &h.state().combine_draft[1..] {
         let why = f.problem.as_deref().expect("why it can't be combined");
         assert!(why.starts_with("Can't be read: ") && !why.contains(&f.name), "{why}");
@@ -1857,7 +1859,7 @@ fn files_that_cannot_be_read_are_listed_and_left_out_once_the_user_agrees() {
     h.run_steps(3);
     h.get_by_label("Leave out files that can't be read?");
     h.get_by_label("• broken.jpg");
-    h.get_by_label("• report.docx");
+    h.get_by_label("• archive.zip");
     h.get_by_label("Cancel").click();
     h.run_steps(3);
     assert!(h.query_by_label("Leave out files that can't be read?").is_none());
@@ -2134,7 +2136,7 @@ fn plus_between_pages_inserts_picked_files_there_in_order() {
     assert_eq!(texts_of(h.state(), 0), ["a note", "Page 1", "a note", "Page 2", "Page 3", "a note"]);
     // A file that can't be converted changes nothing.
     let before = texts_of(h.state(), 0);
-    h.state_mut().use_files(pdfcraft_ui_egui::FilePurpose::InsertPages, vec![("report.docx".into(), b"PK\x03\x04".to_vec())]);
+    h.state_mut().use_files(pdfcraft_ui_egui::FilePurpose::InsertPages, vec![("archive.zip".into(), b"PK\x03\x04".to_vec())]);
     h.run_steps(2);
     assert_eq!(texts_of(h.state(), 0), before);
 }
@@ -5485,6 +5487,30 @@ fn paragraph_edges_and_frames_are_caught_without_aiming_for_the_hairline() {
     let id = h.state().views[0].id;
     assert_eq!(h.state().session.get(id).unwrap().text_blocks(0)[0].text, "Page one", "the click applies the typing, as any click off the text does");
     assert!(h.query_all_by_label_contains("object selected").next().is_none(), "and doesn't take the box");
+}
+
+/// Leaving All tools ▸ Edit a PDF for another tool applies the paragraph still open, as leaving
+/// the Edit tab does, rather than dropping what was typed (review on #4605).
+#[test]
+fn another_tool_from_edit_a_pdf_applies_the_open_paragraph() {
+    use pdfcraft_ui_egui::{Mode, QuickTool};
+    let mut h = harness(1, |_| {});
+    h.state_mut().set_option("tool", "edit").unwrap();
+    h.run_steps(2);
+    assert_ne!(h.state().mode, Mode::Edit, "Edit a PDF from All tools, not the Edit tab");
+    assert_eq!(h.state().quick_tool, QuickTool::EditText);
+    let id = h.state().views[0].id;
+    let b = h.state().session.get(id).unwrap().text_blocks(0)[0].clone();
+    let r = h.state().views[0].page_screen_rect(0).expect("on screen");
+    let k = r.width() / 200.0;
+    click_at(&mut h, egui::pos2(r.left() + ((b.rect[0] + b.rect[2]) / 2.0) as f32 * k, r.top() + (300.0 - (b.rect[1] + b.rect[3]) / 2.0) as f32 * k));
+    assert_eq!(h.state().views[0].line_editor.as_ref().map(|e| e.text.as_str()), Some("Page 1"), "the paragraph is open for typing");
+    h.state_mut().views[0].line_editor.as_mut().unwrap().text = "Page one".into();
+    h.state_mut().set_option("tool", "organize").unwrap();
+    h.run_steps(3);
+    assert!(h.state().views[0].line_editor.is_none());
+    assert_eq!(h.state().quick_tool, QuickTool::Select);
+    assert_eq!(h.state().session.get(id).unwrap().text_blocks(0)[0].text, "Page one", "the typed text was applied");
 }
 
 #[test]
@@ -11466,6 +11492,172 @@ fn affine_review_cropped_rotation_preview_matches_saved_corners() {
             "preview jumped after commit/save: clip={clip:?} rotation={rotation}: {preview:?} != {committed:?}"
         );
     }
+}
+
+/// The Escape that closes a dialog opened from a menu while a paragraph is being typed is the
+/// dialog's: the typing stays, in the open paragraph or applied to the page. It was thrown away.
+#[test]
+fn escape_closing_a_dialog_over_a_paragraph_being_typed_keeps_the_typing() {
+    let mut h = open_source_font_fixture();
+    h.run_steps(4);
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(2);
+    let page = h.state().views[0].page_screen_rect(0).expect("on screen");
+    let serif = egui::pos2(page.left() + 25.0 / 300.0 * page.width(), page.top() + (300.0 - 228.0) / 300.0 * page.height());
+    h.hover_at(serif);
+    h.run_steps(1);
+    h.drag_at(serif);
+    h.run_steps(1);
+    h.drop_at(serif);
+    h.run_steps(3);
+    assert!(h.state().views[0].line_editor.is_some(), "the paragraph is open");
+    h.event(egui::Event::Text("typed ".into()));
+    h.run_steps(2);
+    crate::support::open_shortcuts_from_the_help_menu(&mut h);
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+    assert!(h.state().dialog.is_none(), "Escape closes the dialog");
+    let s = h.state();
+    let open = s.views[0].line_editor.as_ref().is_some_and(|e| e.text.contains("typed"));
+    let applied = s.session.get(s.views[0].id).unwrap().text_blocks(0).iter().any(|b| b.text.contains("typed"));
+    assert!(open || applied, "the typing stays");
+}
+
+/// Edit ▸ Select all from the in-window menu bar selects every page in Organize. The bar reads
+/// as open on the pass after its click, and its ⌘A waits for the bar to let go of the keys, which
+/// the chords leave to it: nothing was selected.
+#[test]
+fn edit_select_all_from_the_menu_bar_selects_every_page() {
+    let mut h = organize(3);
+    h.run_steps(2);
+    support::open_menu(&mut h, "Edit");
+    support::menu_row(&h, "Select all").click();
+    h.run_steps(4);
+    assert_eq!(h.state().views[0].target_pages(), [0, 1, 2], "Edit ▸ Select all selected every page");
+}
+
+/// Edit ▸ Cut from the in-window menu bar cuts the selected page in Organize: its Cut waits for
+/// the bar, which reads as open on the pass after its click, to let go of the keys.
+#[test]
+fn edit_cut_from_the_menu_bar_cuts_the_page() {
+    let mut h = organize(3);
+    h.run_steps(2);
+    h.get_by_label("Page 2").click();
+    h.run_steps(2);
+    support::open_menu(&mut h, "Edit");
+    support::menu_row(&h, "Cut").click();
+    h.run_steps(4);
+    assert!(h.state().page_clipboard.is_some(), "Edit ▸ Cut put the page on the clipboard");
+    assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().info.pages.len(), 2, "Edit ▸ Cut took the page out");
+}
+
+/// A native menu's Edit ▸ Paste with a page's context menu open closes the menu, which the click
+/// never reached, and the platform's answer pastes the page, also when it comes late (on Wayland
+/// egui-winit reads the clipboard asynchronously, within 3 seconds).
+#[test]
+fn a_late_paste_for_a_native_edit_paste_with_a_context_menu_open_pastes_the_page() {
+    let mut h = organize(3);
+    h.run_steps(2);
+    h.get_by_label("Page 2").click();
+    h.run_steps(2);
+    h.event(egui::Event::Copy);
+    h.run_steps(3);
+    assert!(h.state().page_clipboard.is_some(), "the page is copied");
+    let pages = |h: &Harness<'static, PdfCraftApp>| h.state().session.get(h.state().views[0].id).unwrap().info.pages.len();
+    h.get_by_label("Page 2").click_button(egui::PointerButton::Secondary);
+    h.run_steps(2);
+    assert!(egui::Popup::is_any_open(&h.ctx), "the page's context menu is open");
+    let ctx = h.ctx.clone();
+    h.state_mut().run_menu_command(&ctx, &craft_menu::CommandRef::new("edit.paste"));
+    h.step();
+    assert!(support::asked_for_the_clipboard(&h), "Edit ▸ Paste asked the platform for the clipboard");
+    h.run_steps(3);
+    assert!(!egui::Popup::is_any_open(&h.ctx), "Edit ▸ Paste closed the context menu");
+    h.event(egui::Event::Paste("clipboard text".into()));
+    h.run_steps(3);
+    assert_eq!(pages(&h), 4, "the late paste pasted the page");
+}
+
+/// Two native Edit ▸ Pastes with a page's context menu open each ask for the clipboard, and each
+/// answer pastes the page (on Wayland they come one by one).
+#[test]
+fn two_native_edit_pastes_with_a_context_menu_open_paste_twice() {
+    let mut h = organize(3);
+    h.run_steps(2);
+    h.get_by_label("Page 2").click();
+    h.run_steps(2);
+    h.event(egui::Event::Copy);
+    h.run_steps(3);
+    assert!(h.state().page_clipboard.is_some(), "the page is copied");
+    let pages = |h: &Harness<'static, PdfCraftApp>| h.state().session.get(h.state().views[0].id).unwrap().info.pages.len();
+    h.get_by_label("Page 2").click_button(egui::PointerButton::Secondary);
+    h.run_steps(2);
+    assert!(egui::Popup::is_any_open(&h.ctx), "the page's context menu is open");
+    let ctx = h.ctx.clone();
+    for _ in 0..2 {
+        h.state_mut().run_menu_command(&ctx, &craft_menu::CommandRef::new("edit.paste"));
+        h.step();
+        assert!(support::asked_for_the_clipboard(&h), "Edit ▸ Paste asked the platform for the clipboard");
+    }
+    for pasted in [4, 5] {
+        h.event(egui::Event::Paste("clipboard text".into()));
+        h.run_steps(3);
+        assert_eq!(pages(&h), pasted, "each answer pastes the page");
+    }
+}
+
+/// A paste behind a page's context menu stays there, also one that answers an Edit ▸ Paste asked
+/// for before the user opened the menu (egui-winit answers it as it answers ⌘V): it pastes no page.
+#[test]
+fn a_paste_behind_a_context_menu_opened_after_edit_paste_pastes_nothing() {
+    let mut h = organize(3);
+    h.run_steps(2);
+    h.get_by_label("Page 2").click();
+    h.run_steps(2);
+    h.event(egui::Event::Copy);
+    h.run_steps(3);
+    assert!(h.state().page_clipboard.is_some(), "the page is copied");
+    let pages = |h: &Harness<'static, PdfCraftApp>| h.state().session.get(h.state().views[0].id).unwrap().info.pages.len();
+    let ctx = h.ctx.clone();
+    h.state_mut().run_menu_command(&ctx, &craft_menu::CommandRef::new("edit.paste"));
+    h.run_steps(2);
+    h.get_by_label("Page 2").click_button(egui::PointerButton::Secondary);
+    h.run_steps(2);
+    assert!(egui::Popup::is_any_open(&h.ctx), "the page's context menu is open");
+    h.event(egui::Event::Paste("clipboard text".into()));
+    h.run_steps(3);
+    assert_eq!(pages(&h), 3, "the paste behind the context menu pasted the page");
+}
+
+/// Edit ▸ Paste from the in-window menu bar pastes the copied page in Organize. The bar reads as
+/// open on the pass after its click, so Edit ▸ Paste asks the platform for the clipboard once it
+/// has let go of the keys, and the answer (kittest gives none, so the test does) comes to the
+/// pages. An answer to a request sent with the click would come while the bar still held the keys.
+#[test]
+fn edit_paste_from_the_menu_bar_pastes_the_copied_page() {
+    let mut h = organize(3);
+    h.run_steps(2);
+    h.get_by_label("Page 2").click();
+    h.run_steps(2);
+    h.event(egui::Event::Copy);
+    h.run_steps(3);
+    assert!(h.state().page_clipboard.is_some(), "the page is copied");
+    let pages = |h: &Harness<'static, PdfCraftApp>| h.state().session.get(h.state().views[0].id).unwrap().info.pages.len();
+    assert_eq!(pages(&h), 3);
+    support::open_menu(&mut h, "Edit");
+    support::menu_row(&h, "Paste").click();
+    h.step();
+    assert!(craft_menu::bar::is_open(&h.ctx), "the bar reads as open on the pass after the click");
+    assert!(!support::asked_for_the_clipboard(&h), "Edit ▸ Paste asked while the bar held the keys");
+    let mut asked = false;
+    for _ in 0..4 {
+        h.step();
+        asked |= support::asked_for_the_clipboard(&h);
+    }
+    assert!(asked, "Edit ▸ Paste asked the platform for the clipboard");
+    h.event(egui::Event::Paste("clipboard text".into()));
+    h.run_steps(4);
+    assert_eq!(pages(&h), 4, "Edit ▸ Paste pasted the page");
 }
 
 #[test]

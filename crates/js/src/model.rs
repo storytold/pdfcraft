@@ -37,11 +37,17 @@ pub const DISPLAY_NO_VIEW: i32 = 3;
 #[derive(Clone, Debug, PartialEq)]
 pub struct FieldState {
     pub name: String,
+    /// Stable PDF object identity, absent for synthetic name-only callers.
+    pub object_id: Option<u64>,
+    /// Runtime instance token; retired field references cannot alias reused PDF numbers.
+    pub instance_id: u64,
     pub kind: FieldType,
     /// Text: the text. Check box / radio: the selected export value (empty when off). Choice:
     /// the selected export values.
     pub value: Vec<String>,
     pub default: Vec<String>,
+    /// False when a PDF default stream was not decoded; reset must preserve the live value.
+    pub default_known: bool,
     pub readonly: bool,
     pub required: bool,
     pub display: i32,
@@ -50,19 +56,42 @@ pub struct FieldState {
     pub options: Vec<(String, String)>,
     pub char_limit: Option<usize>,
     /// `textColor` / `fillColor` as Acrobat colour arrays (`["RGB", r, g, b]` etc.), when set.
-    pub text_color: Option<Vec<String>>,
-    pub fill_color: Option<Vec<String>>,
-    /// Rectangle of the first widget, in PDF user space.
+    pub text_color: Option<std::sync::Arc<[String]>>,
+    pub fill_color: Option<std::sync::Arc<[String]>>,
+    /// Normal push-button caption, when this is a button.
+    pub caption: Option<String>,
+    /// A setter ran, even if its text equals widget 0: other widgets may differ.
+    pub caption_written: bool,
     pub rect: Option<[f64; 4]>,
+    pub page_rotation: i64,
+    pub page_crop: [f64; 4],
+    pub stroke_color: Option<std::sync::Arc<[String]>>,
+    pub text_size: f64,
+    pub line_width: f64,
+    pub border_style: String,
+    pub user_name: String,
+    pub icon: Option<u64>,
+    pub caption_mixed: bool,
+    pub icon_mixed: bool,
+    pub icon_written: bool,
+    /// JavaScript actions a script installed with `setAction` during this run, by trigger
+    /// (`MouseUp`, `MouseDown`, `MouseEnter`, `MouseExit`, `OnFocus`, `OnBlur`, `Keystroke`,
+    /// `Validate`, `Calculate`, `Format`), the last one for each trigger. Empty in a snapshot:
+    /// the host reads the document's own actions from the PDF.
+    pub actions: Vec<(String, String)>,
 }
 
 impl FieldState {
+    /// Construct a field snapshot with explicit defaults for optional appearance and interaction state.
     pub fn new(name: impl Into<String>, kind: FieldType, value: Vec<String>) -> FieldState {
         FieldState {
             name: name.into(),
+            object_id: None,
+            instance_id: 0,
             kind,
             value,
             default: Vec::new(),
+            default_known: true,
             readonly: false,
             required: false,
             display: DISPLAY_VISIBLE,
@@ -70,7 +99,21 @@ impl FieldState {
             char_limit: None,
             text_color: None,
             fill_color: None,
+            caption: None,
+            caption_written: false,
             rect: None,
+            page_rotation: 0,
+            page_crop: [0.0; 4],
+            stroke_color: None,
+            text_size: 0.0,
+            line_width: 1.0,
+            border_style: "solid".into(),
+            user_name: String::new(),
+            icon: None,
+            caption_mixed: false,
+            icon_mixed: false,
+            icon_written: false,
+            actions: Vec::new(),
         }
     }
 
@@ -88,6 +131,8 @@ pub struct Event {
     pub kind: String,
     /// The field the event is for.
     pub target: Option<String>,
+    /// Identity for an unambiguous event.target, even with duplicate field names.
+    pub target_id: Option<u64>,
     pub value: String,
     pub change: String,
     pub will_commit: bool,
@@ -96,28 +141,52 @@ pub struct Event {
 impl Event {
     /// A field event (`event.type` = "Field").
     pub fn field(name: &str, target: &str, value: &str) -> Event {
-        Event { name: name.into(), kind: "Field".into(), target: Some(target.into()), value: value.into(), change: String::new(), will_commit: true }
+        Event {
+            name: name.into(),
+            kind: "Field".into(),
+            target: Some(target.into()),
+            target_id: None,
+            value: value.into(),
+            change: String::new(),
+            will_commit: true,
+        }
     }
 
     /// A document event (`event.type` = "Doc"), e.g. Open or WillSave.
     pub fn doc(name: &str) -> Event {
-        Event { name: name.into(), kind: "Doc".into(), target: None, value: String::new(), change: String::new(), will_commit: false }
+        Event {
+            name: name.into(),
+            kind: "Doc".into(),
+            target: None,
+            target_id: None,
+            value: String::new(),
+            change: String::new(),
+            will_commit: false,
+        }
     }
 }
 
 /// About the document, for `this.numPages`, `this.info` and the like.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct DocInfo {
+    /// Changes when history can replace an icon object under the same PDF reference.
+    pub icon_epoch: u64,
+    /// Revisions of referenced icons that can change independently across history.
+    pub icon_versions: std::sync::Arc<std::collections::BTreeMap<u64, u64>>,
     pub file_name: String,
     pub num_pages: usize,
     /// The current page, 0-based.
     pub page: usize,
     /// Document information (`this.info.title` etc.): lower-case key, value.
     pub info: Vec<(String, String)>,
-    /// Whether the viewer highlights form fields (`app.runtimeHighlight`).
-    pub highlight: bool,
+    /// Effective page boxes in PDF user space, ordered media, crop, bleed, trim, art.
+    pub page_boxes: Vec<[[f64; 4]; 5]>,
+    /// Clockwise page rotations, normalized to 0, 90, 180 or 270 degrees.
+    pub page_rotations: Vec<i64>,
     /// The document has an XFA form, so scripts see `xfa_installed`.
     pub xfa: bool,
+    pub zoom: f64,
+    pub runtime_highlight: bool,
 }
 
 /// The icon a script's message shows: `app.alert`'s `nIcon` and `xfa.host.messageBox`'s
@@ -238,11 +307,22 @@ pub enum Request {
     Submit(String),
     /// `field.setFocus()`.
     Focus(String),
+    /// Focus a specific AcroForm field when several fields share its name.
+    FocusField {
+        name: String,
+        object_id: u64,
+    },
     Beep,
+    Zoom(f64),
+    Highlight(bool),
     /// `app.execMenuItem("SaveAs")` (XFA forms' Save buttons).
     SaveAs,
-    /// `app.runtimeHighlight = on`: highlight the form's fields, or stop.
-    Highlight(bool),
+    /// `this.exportDataObject(cName, …, nLaunch)`: the attached file `name`, to open (`nLaunch`
+    /// 1 or 2) or to save (0).
+    OpenAttachment {
+        name: String,
+        open: bool,
+    },
     /// `app.execMenuItem("ShowHide…")`: show the side panel, or hide it when it is showing.
     ShowPanel(Panel),
 }
@@ -278,6 +358,14 @@ impl Panel {
 /// What running a script did.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Outcome {
+    /// The runtime could not execute the callback safely.
+    pub execution_refused: bool,
+    /// Execution was refused before invoking any code in the retained realm.
+    pub realm_untouched: bool,
+    /// Sticky admission failure: callers must not commit a partial run, even if JS caught the error.
+    pub reset_limit_exceeded: bool,
+    /// Calculation exhaustion rejects script writeback even if the script catches the error.
+    pub calculation_limit_exceeded: bool,
     /// `event.rc`: `false` rejects the keystroke or value.
     pub rc: bool,
     /// `event.value` after the script.
@@ -287,6 +375,8 @@ pub struct Outcome {
     pub change: String,
     /// Fields whose value or properties the script changed, as they are now.
     pub changed: Vec<FieldState>,
+    /// Fields updated by Calculate scripts; their Format script must redraw the appearance.
+    pub formatted: std::collections::BTreeSet<String>,
     /// The messages the script showed, in order.
     pub alerts: Vec<Message>,
     pub console: Vec<String>,
