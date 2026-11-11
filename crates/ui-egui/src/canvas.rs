@@ -572,6 +572,10 @@ pub struct DocView {
     /// Pages whose whole-page raster this frame asks for, on screen or prefetched. An arriving
     /// raster over the allowance evicts the other cached pages first.
     frame_demanded: HashSet<usize>,
+    /// Bytes of the largest whole-page raster on screen that this frame asks for. Arriving
+    /// rasters are admitted against the allowance that queued them, before the page on screen
+    /// has its new raster.
+    frame_page_demand: usize,
     /// Thumbnails that are out of date (still shown until their replacement arrives).
     stale_thumbs: HashSet<usize>,
     /// Tiles that are out of date (still shown until their replacement arrives).
@@ -1067,6 +1071,7 @@ impl DocView {
             frame_geometry_changed: false,
             frame_visible: HashSet::new(),
             frame_demanded: HashSet::new(),
+            frame_page_demand: 0,
             stale_thumbs: HashSet::new(),
             stale_tiles: HashSet::new(),
             current_scale_tag: 0,
