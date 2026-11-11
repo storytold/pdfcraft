@@ -423,8 +423,10 @@ fn black_and_white_images_become_ccitt_group_4() {
 /// Which 1-bit images qualify for Group 4: those of one colour component, an ICC profile of one
 /// component and a DeviceN of one colourant among them, but not one of three components or two
 /// colourants (more than a bit a pixel); image masks of one bit, as `/BitsPerComponent 1` says or
-/// by default, but not one that says 8; and images of up to 80 million pixels, not one row more.
-/// The byte totals count exactly the images stored again.
+/// by default, but not one that says 8; and images past 80 million pixels too, where an image of
+/// eight bits would be left alone (`one_bit_images_are_decoded_up_to_their_own_limit` checks the
+/// bytes of rows a one-bit image may hold without decoding so much). The byte totals count exactly
+/// the images stored again.
 #[test]
 fn group_4_takes_images_of_one_bit_a_pixel_up_to_the_pixel_limit() {
     let mut doc = Document::new_empty();
@@ -457,7 +459,7 @@ fn group_4_takes_images_of_one_bit_a_pixel_up_to_the_pixel_limit() {
     let mask = |bits: i64| [("ImageMask", Object::Bool(true)), ("BitsPerComponent", bits.into())];
     let mask_1 = mono_image(&mut doc, w, h, &text, None, &mask(1));
     let mask_8 = mono_image(&mut doc, w, h, &bilevel(8 * w, h, false), None, &mask(8));
-    // 10,000 × 8,000 is the limit itself.
+    // 10,000 × 8,000 is the limit of an image of eight bits; one of one bit goes past it.
     let grey = one_bit(Object::name("DeviceGray"));
     let at_limit = mono_image(&mut doc, 10_000, 8_000, &bilevel(10_000, 8_000, false), None, &grey);
     let past_limit = mono_image(&mut doc, 10_000, 8_001, &bilevel(10_000, 8_001, false), None, &grey);
@@ -474,8 +476,8 @@ fn group_4_takes_images_of_one_bit_a_pixel_up_to_the_pixel_limit() {
         })
         .collect();
     page(&mut doc, &names.iter().map(String::as_str).zip(all).collect::<Vec<_>>(), &content);
-    let converted = [icc_1, spot, mask_1, at_limit];
-    let left = [icc_3, two_spots, mask_8, past_limit];
+    let converted = [icc_1, spot, mask_1, at_limit, past_limit];
+    let left = [icc_3, two_spots, mask_8];
     let before = |doc: &Document, refs: &[ObjRef]| refs.iter().map(|r| stream(doc, *r).raw).collect::<Vec<_>>();
     let (old, untouched) = (before(&doc, &converted), before(&doc, &left));
     let r = optimize(&mut doc, &Settings::default()).unwrap();
@@ -4925,15 +4927,22 @@ fn indexed_thin_rules_survive_averaging_for_both_palette_orders_and_decodes() {
     }
 }
 
-/// An image past what the JBIG2 decoder takes on a side stays as it is: JBIG2 can state the size,
-/// but PdfCraft's decoder refuses such a stream, so stored as JBIG2 it drew nothing here. At 65,535
-/// on a side, the same bars do become JBIG2, so the fixture does reach that choice, and the coding
-/// stored (symbols, here) reads back through that decoder.
+/// An image past what the JBIG2 decoder takes on a side, or past 2^28 pixels in all, stays as it
+/// is: JBIG2 can state the size, but PdfCraft's decoder refuses such a stream, so stored as JBIG2 it
+/// drew nothing here. At 65,535 on a side, and at 2^28 in all (past 80 million, which the
+/// monochrome step takes of a one-bit image), the same bars do become JBIG2, so the fixture does
+/// reach that choice, and the coding stored reads back through that decoder. Averaged, an image past
+/// 2^28 becomes small enough and is stored as JBIG2 too.
 #[test]
 fn an_image_too_large_for_the_jbig2_decoder_stays_as_it_is() {
-    for (w, h, stored) in
-        [(65_535u32, 16u32, &b"JBIG2Decode"[..]), (16, 65_535, b"JBIG2Decode"), (65_536, 16, b"FlateDecode"), (16, 65_536, b"FlateDecode")]
-    {
+    for (w, h, stored) in [
+        (65_535u32, 16u32, &b"JBIG2Decode"[..]),
+        (16, 65_535, b"JBIG2Decode"),
+        (65_536, 16, b"FlateDecode"),
+        (16, 65_536, b"FlateDecode"),
+        (16_384, 16_384, b"JBIG2Decode"),
+        (16_384, 16_385, b"FlateDecode"),
+    ] {
         let mut doc = Document::new_empty();
         let image = mono_image(&mut doc, w, h, &bars(w, h), None, &[("BitsPerComponent", 1.into()), ("ColorSpace", Object::name("DeviceGray"))]);
         page(&mut doc, &[("Im", image)], &format!("q {w} 0 0 {h} 0 0 cm /Im Do Q"));
@@ -4958,6 +4967,15 @@ fn an_image_too_large_for_the_jbig2_decoder_stays_as_it_is() {
             assert!(decoded_image(&doc, &s).unwrap() == bits, "{w} × {h} reads back");
         }
     }
+    let (w, h) = (16_384u32, 16_385u32);
+    let mut doc = Document::new_empty();
+    let image = mono_image(&mut doc, w, h, &bars(w, h), None, &[("BitsPerComponent", 1.into()), ("ColorSpace", Object::name("DeviceGray"))]);
+    let (pw, ph) = (f64::from(w) * 72.0 / 600.0, f64::from(h) * 72.0 / 600.0);
+    page(&mut doc, &[("Im", image)], &format!("q {pw} 0 0 {ph} 0 0 cm /Im Do Q"));
+    let settings = Settings { mono: MonoSettings { compression: MonoCompression::Jbig2, ..MonoSettings::REDUCE }, ..Settings::default() };
+    let r = optimize(&mut doc, &settings).unwrap();
+    assert_eq!(r.images_resampled, 1, "{r:?}");
+    assert_eq!(stream(&doc, image).dict.name(b"Filter"), Some(&b"JBIG2Decode"[..]), "averaged, it is stored as JBIG2");
 }
 
 /// The colour and grey steps leave an image over 80 million pixels as it is, whatever their settings
@@ -5405,6 +5423,59 @@ fn a_picture_with_a_stencil_mask_is_downsampled_under_its_mask() {
 /// the page looks the same to the pixel. A mask two pictures share is stored once, and a stencil
 /// the page also draws by name is stored as that image. An eight-bit soft mask of only black and
 /// white stays as it is, to be resampled with its picture. With `mono: Retain` nothing changes.
+/// One-bit images past 80 million pixels are stored again, as images of eight bits that large are
+/// not: their rows hold a byte for each 8 samples. A picture's stencil mask and one-bit soft mask
+/// too.
+#[test]
+fn one_bit_images_past_80_million_pixels_are_stored_as_group_4() {
+    let mut doc = Document::new_empty();
+    let (w, h) = (9_000, 8_900);
+    let text = bilevel(w, h, false);
+    let one_bit = mono_image(&mut doc, w, h, &text, None, &[("BitsPerComponent", 1.into()), ("ColorSpace", Object::name("DeviceGray"))]);
+    let stencil = mono_image(&mut doc, w, h, &text, None, &[("ImageMask", Object::Bool(true))]);
+    let soft = mono_image(&mut doc, w, h, &text, None, &[("BitsPerComponent", 1.into()), ("ColorSpace", Object::name("DeviceGray"))]);
+    let masked = |doc: &mut Document, key: &str, mask: ObjRef| {
+        let picture = image(doc, 200, 80, 3, false, None);
+        let mut s = stream(doc, picture);
+        s.dict.set(key.as_bytes().to_vec(), Object::Ref(mask));
+        doc.set(picture, Object::Stream(s));
+        picture
+    };
+    let (picture, shaded) = (masked(&mut doc, "Mask", stencil), masked(&mut doc, "SMask", soft));
+    page(
+        &mut doc,
+        &[("I", one_bit), ("P", picture), ("S", shaded)],
+        "q 300 0 0 300 20 400 cm /I Do Q q 300 0 0 120 20 100 cm /P Do Q q 300 0 0 120 20 250 cm /S Do Q",
+    );
+    let keep = ImageSettings { downsample: false, compression: Compression::Retain, ..ImageSettings::REDUCE };
+    let mono = MonoSettings { downsample: false, ..MonoSettings::REDUCE };
+    let before = [one_bit, stencil, soft].map(|r| stream(&doc, r));
+    let r = optimize(&mut doc, &Settings { color: keep, gray: keep, mono, ..Settings::default() }).unwrap();
+    assert_eq!(r.images_recompressed, 3, "{r:?}");
+    for (r, old) in [one_bit, stencil, soft].into_iter().zip(&before) {
+        let new = stream(&doc, r);
+        assert_eq!(new.dict.name(b"Filter"), Some(&b"CCITTFaxDecode"[..]), "{r:?}");
+        assert!(new.raw.len() < old.raw.len(), "{r:?}: {} against {}", new.raw.len(), old.raw.len());
+        assert_eq!(decoded_image(&doc, &new).unwrap(), text, "{r:?} keeps its bits");
+    }
+}
+
+/// With the default settings (Reduce File Size), a one-bit image past 80 million pixels drawn at
+/// 600 ppi is averaged to 300 ppi, as a smaller one is: vertical stripes four samples wide.
+#[test]
+fn a_one_bit_image_past_80_million_pixels_is_averaged_with_the_default_settings() {
+    let (w, h) = (9_000u32, 8_900u32);
+    let mut doc = Document::new_empty();
+    let stripes = vec![0x0F; (w as usize).div_ceil(8) * h as usize];
+    let one_bit = mono_image(&mut doc, w, h, &stripes, None, &[("BitsPerComponent", 1.into()), ("ColorSpace", Object::name("DeviceGray"))]);
+    let (pw, ph) = (f64::from(w) * 72.0 / 600.0, f64::from(h) * 72.0 / 600.0);
+    page(&mut doc, &[("I", one_bit)], &format!("q {pw} 0 0 {ph} 0 0 cm /I Do Q"));
+    let r = optimize(&mut doc, &Settings::default()).unwrap();
+    assert_eq!(r.images_resampled, 1, "{r:?}");
+    let s = stream(&doc, one_bit);
+    assert_eq!((s.dict.int(b"Width"), s.dict.int(b"Height")), (Some(4_500), Some(4_450)));
+}
+
 #[test]
 fn a_pictures_one_bit_masks_are_stored_again() {
     let mut doc = Document::new_empty();
