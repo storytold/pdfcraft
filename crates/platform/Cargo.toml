@@ -9,6 +9,7 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+log = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # `write_atomically`: a volume that refuses F_FULLFSYNC gets a plain fsync.

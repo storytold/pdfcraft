@@ -82,6 +82,8 @@ pub struct FieldProps {
     /// Normal push-button label (`/MK /CA`) of one widget (0-based index).
     /// An empty string clears the label; other widgets and icon layouts are preserved.
     pub caption: Option<(usize, String)>,
+    /// Normal push-button label for every widget in the field.
+    pub caption_all: Option<String>,
     pub read_only: Option<bool>,
     pub required: Option<bool>,
     pub multiline: Option<bool>,
