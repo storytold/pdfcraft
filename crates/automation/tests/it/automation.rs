@@ -1226,7 +1226,7 @@ fn combine_takes_images_and_text_files() {
     std::fs::write(dir.join("scan.png"), png).unwrap();
     std::fs::write(dir.join("notes.txt"), "Some notes").unwrap();
     std::fs::write(dir.join("broken.png"), b"\x89PNG\r\n\x1a\nbroken").unwrap();
-    std::fs::write(dir.join("report.docx"), b"PK\x03\x04").unwrap();
+    std::fs::write(dir.join("archive.zip"), b"PK\x03\x04").unwrap();
     let mut a = auto(&dir);
     let combined = ok(&mut a, "doc_combine", json!({ "paths": ["a.pdf", "scan.png", "notes.txt"], "pages": [null, null, "1"], "open": true }));
     let doc = combined["document"]["doc"].as_u64().unwrap();
@@ -1236,7 +1236,7 @@ fn combine_takes_images_and_text_files() {
     let titles: Vec<&str> = marks.as_array().unwrap().iter().map(|b| b["title"].as_str().unwrap()).collect();
     assert_eq!(titles, ["a", "scan", "notes"]);
     // A file that can't be made into a PDF stops the combine, and says which.
-    for bad in ["broken.png", "report.docx"] {
+    for bad in ["broken.png", "archive.zip"] {
         let refused = a.call("doc_combine", &json!({ "paths": ["a.pdf", bad] }));
         assert!(matches!(&refused, Err(ToolError::Failed(e)) if e.contains(bad)), "{bad}: {refused:?}");
     }
@@ -3040,6 +3040,8 @@ fn replace_text_lists_its_replacement() {
     }
 }
 
+/// Protect through the tools, then reopen: the open password is required, the restrictions
+/// (including page extraction) hold for the user, and the permissions password lifts them.
 #[test]
 fn protecting_through_tools() {
     let dir = workdir("protect");
@@ -3057,12 +3059,14 @@ fn protecting_through_tools() {
         (r["security"]["printing"].as_str(), r["security"]["annotate"].as_bool(), r["security"]["copy"].as_bool()),
         (Some("low"), Some(true), Some(false))
     );
+    assert_eq!(r["security"]["extract_pages"], false);
     assert!(!r.to_string().contains("boss"), "passwords are never echoed");
     ok(&mut a, "doc_save", json!({ "doc": doc, "path": "locked.pdf" }));
     // Another session: the open password is required, and the restrictions hold.
     let mut b = auto(&dir);
     assert!(matches!(b.call("doc_open", &json!({ "path": "locked.pdf" })), Err(ToolError::Failed(_))));
     let re = ok(&mut b, "doc_open", json!({ "path": "locked.pdf", "password": "open" }))["doc"].as_u64().unwrap();
+    assert_eq!(ok(&mut b, "doc_info", json!({ "doc": re }))["security"]["extract_pages"], false);
     assert!(matches!(b.call("page_delete", &json!({ "doc": re, "pages": [1] })), Err(ToolError::Failed(_))));
     assert!(matches!(b.call("doc_unprotect", &json!({ "doc": re })), Err(ToolError::Failed(_))));
     ok(&mut b, "comment_add", json!({ "doc": re, "page": 1, "type": "note", "at": [10, 10], "contents": "allowed" }));
@@ -3086,11 +3090,51 @@ fn protecting_through_tools() {
     assert_eq!(ok(&mut b, "text_find", json!({ "doc": re, "query": "Page" }))["count"], 3);
     // With the permissions password everything is possible, including removing security.
     let owner = ok(&mut b, "doc_open", json!({ "path": "locked.pdf", "password": "boss" }))["doc"].as_u64().unwrap();
+    assert_eq!(ok(&mut b, "doc_info", json!({ "doc": owner }))["security"]["extract_pages"], true);
     assert!(ok(&mut b, "text_extract", json!({ "doc": owner }))["pages"][0]["text"].as_str().is_some_and(|t| t.contains("Page")));
     assert_eq!(ok(&mut b, "doc_unprotect", json!({ "doc": owner }))["security"]["protected"], false);
     ok(&mut b, "doc_save", json!({ "doc": owner, "path": "open.pdf" }));
     let mut c = auto(&dir);
     ok(&mut c, "doc_open", json!({ "path": "open.pdf" }));
+}
+
+/// A refused `doc_split` or separate-file `page_extract` leaves no output directory behind
+/// (#5081), whether the protection allows no page changes ("Any except extracting pages") or
+/// page changes without copying; with copying allowed as well, the user may extract.
+#[test]
+fn refused_extraction_writes_no_split_or_page_output() {
+    let dir = workdir("refused-extraction-output");
+    // (changes, copy, assemble, extract_pages) as the user sees them.
+    let cases = [("any-except-extract", false, false, false), ("pages", false, true, false), ("pages", true, true, true)];
+    for (i, (changes, copy, assemble, extract)) in cases.into_iter().enumerate() {
+        let mut a = auto(&dir);
+        let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+        let protect = json!({ "doc": doc, "open_password": "open", "permissions_password": "boss", "changes": changes, "copy": copy });
+        ok(&mut a, "doc_protect", protect);
+        let path = format!("restricted-{i}.pdf");
+        ok(&mut a, "doc_save", json!({ "doc": doc, "path": path }));
+
+        let mut b = auto(&dir);
+        let restricted = ok(&mut b, "doc_open", json!({ "path": path, "password": "open" }))["doc"].as_u64().unwrap();
+        let security = ok(&mut b, "doc_info", json!({ "doc": restricted }))["security"].clone();
+        assert_eq!((security["assemble"].as_bool(), security["extract_pages"].as_bool()), (Some(assemble), Some(extract)), "{changes}, copy {copy}");
+        let (split_dir, extract_dir) = (format!("split-{i}"), format!("extract-{i}"));
+        let split = b.call("doc_split", &json!({ "doc": restricted, "every": 1, "out_dir": split_dir }));
+        let pages = b.call("page_extract", &json!({ "doc": restricted, "pages": [1, 2], "separate": true, "out_dir": extract_dir }));
+        if extract {
+            assert!(split.is_ok() && dir.join(&split_dir).exists(), "{changes}, copy {copy}");
+            let files = match pages.as_deref() {
+                Ok([Content::Json(v), ..]) => v["files"].as_array().map(Vec::len),
+                other => panic!("{changes}, copy {copy}: page_extract: {other:?}"),
+            };
+            assert_eq!(files, Some(2), "{changes}, copy {copy}");
+        } else {
+            assert!(matches!(split, Err(ToolError::Failed(_))), "{changes}, copy {copy}");
+            assert!(!dir.join(&split_dir).exists(), "refused split creates no output directory");
+            assert!(matches!(pages, Err(ToolError::Failed(_))), "{changes}, copy {copy}");
+            assert!(!dir.join(&extract_dir).exists(), "refused extraction creates no output directory");
+        }
+    }
 }
 
 /// A document that allows changes but not copying: the tools that return a page's text refuse,
@@ -5408,7 +5452,7 @@ fn creating_from_multiple_files_through_tools() {
     }
     std::fs::write(dir.join("scan.png"), png).unwrap();
     std::fs::write(dir.join("notes.txt"), "hello").unwrap();
-    std::fs::write(dir.join("report.docx"), b"PK\x03\x04").unwrap();
+    std::fs::write(dir.join("archive.zip"), b"PK\x03\x04").unwrap();
     let mut a = auto(&dir);
 
     // Combine: every file converted, in the order given, with a bookmark per file.
@@ -5428,8 +5472,8 @@ fn creating_from_multiple_files_through_tools() {
     assert_eq!(titles, ["notes", "a", "scan"]);
     assert!(dir.join("all.pdf").is_file());
     // A file that can't be converted fails the whole combine, naming it.
-    let err = a.call("doc_create_multiple", &json!({ "paths": ["a.pdf", "report.docx"] })).unwrap_err();
-    assert!(matches!(&err, ToolError::Failed(m) if m.contains("report.docx") && m.contains("can't be converted")), "{err}");
+    let err = a.call("doc_create_multiple", &json!({ "paths": ["a.pdf", "archive.zip"] })).unwrap_err();
+    assert!(matches!(&err, ToolError::Failed(m) if m.contains("archive.zip") && m.contains("can't be converted")), "{err}");
     assert!(matches!(a.call("doc_create_multiple", &json!({ "paths": [] })), Err(ToolError::InvalidArgs(_))));
     assert!(matches!(a.call("doc_create_multiple", &json!({ "paths": ["a.pdf"], "mode": "zip" })), Err(ToolError::InvalidArgs(_))));
     assert!(matches!(a.call("doc_create_multiple", &json!({ "paths": ["a.pdf"], "mode": "separate" })), Err(ToolError::InvalidArgs(_))));
@@ -5438,7 +5482,7 @@ fn creating_from_multiple_files_through_tools() {
     // existing file is never overwritten.
     std::fs::create_dir_all(dir.join("out")).unwrap();
     std::fs::write(dir.join("out/notes.pdf"), b"mine").unwrap();
-    let args = json!({ "paths": ["notes.txt", "report.docx", "a.pdf", "scan.png", "missing.txt"], "mode": "separate", "out_dir": "out" });
+    let args = json!({ "paths": ["notes.txt", "archive.zip", "a.pdf", "scan.png", "missing.txt"], "mode": "separate", "out_dir": "out" });
     let made = ok(&mut a, "doc_create_multiple", args);
     let files = made["files"].as_array().unwrap();
     assert!(files[0]["output"].as_str().unwrap().ends_with("notes (2).pdf"), "{files:?}");

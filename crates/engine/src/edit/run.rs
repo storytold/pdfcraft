@@ -1,6 +1,6 @@
 use super::{
     AddedContent, Arc, Edit, EditError, FieldValue, ImageEdit, NewAnnotation, Shape, a11y, copy_image, decode_data_file, embed_image, fit_picture,
-    image_content_type, is_xfa_data_file, js, mark_source, measure, model_poster, open_source, strip_xfa, unrestricted, xfa, xfa_after_data_change,
+    image_content_type, is_xfa_data_file, js, mark_source, measure, model_poster, strip_xfa, unrestricted, xfa, xfa_after_data_change,
 };
 use crate::SourceProblem;
 use crate::sources::{comment_source, import_pdf_comments};
@@ -531,13 +531,13 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         Edit::SetInfo { key, value } => pdfcraft_organize::set_info(doc, key, value)?,
         Edit::DuplicatePages { pages, at } => pdfcraft_organize::duplicate_pages(doc, pages, *at)?,
         Edit::ReplacePages { pages, name, bytes, src_pages } => {
-            let src = open_source(name, bytes)?;
+            let src = crate::sources::open_source_into(name, bytes, doc)?;
             pdfcraft_organize::replace_pages(doc, pages, &src, src_pages)?;
         }
         Edit::SetPageBox { pages, which, spec } => pdfcraft_organize::set_page_box(doc, pages, *which, *spec)?,
         Edit::SetTransition { pages, spec } => pdfcraft_organize::set_transition(doc, pages, spec)?,
         Edit::InsertPagesFrom { name, bytes, pages, at, field_conflicts } => {
-            let src = open_source(name, bytes)?;
+            let src = crate::sources::open_source_into(name, bytes, doc)?;
             let pages = match pages {
                 Some(p) => p.clone(),
                 None => (0..pdfcraft_organize::page_count(&src)?).collect(),

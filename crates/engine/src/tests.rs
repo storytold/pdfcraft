@@ -1575,8 +1575,13 @@ fn a_page_with_a_form_field_shown_twice_keeps_one_field() {
 #[test]
 fn files_that_cannot_be_converted_are_refused_clearly() {
     let s = Session::new();
-    let err = s.convert_to_pdf("report.docx", &Arc::new(b"PK\x03\x04".to_vec())).unwrap_err();
-    assert_eq!(err, EditError::Source("report.docx: this file type can't be converted; use a PDF, an image or a .txt file".into()));
+    let err = s.convert_to_pdf("archive.zip", &Arc::new(b"PK\x03\x04".to_vec())).unwrap_err();
+    assert_eq!(
+        err,
+        EditError::Source(
+            "archive.zip: this file type can't be converted; use a PDF, an image, a .txt file or a Word, Excel or PowerPoint file".into()
+        )
+    );
     assert!(matches!(s.convert_to_pdf("empty", &Arc::new(Vec::new())), Err(EditError::Source(_))));
     // Damaged inputs of a known type fail with an error, not a panic.
     assert!(s.convert_to_pdf("bad.png", &Arc::new(b"\x89PNG\r\n\x1a\nnope".to_vec())).is_err());
@@ -1597,8 +1602,8 @@ fn files_for_combine_are_made_into_pdfs_and_pdfs_pass_through() {
     assert!(Arc::ptr_eq(&s.as_pdf("old.PDF", &headless).unwrap(), &headless));
     assert!(s.as_pdf("scan.jpg", &Arc::new(jpeg_bytes())).unwrap().starts_with(b"%PDF-"));
     assert!(s.as_pdf("notes.txt", &Arc::new(b"hello".to_vec())).unwrap().starts_with(b"%PDF-"));
-    let err = s.as_pdf("report.docx", &Arc::new(b"PK\x03\x04".to_vec())).unwrap_err();
-    assert!(matches!(err, EditError::Source(m) if m.starts_with("report.docx: this file type can't be converted")));
+    let err = s.as_pdf("archive.zip", &Arc::new(b"PK\x03\x04".to_vec())).unwrap_err();
+    assert!(matches!(err, EditError::Source(m) if m.starts_with("archive.zip: this file type can't be converted")));
 }
 
 fn protected(user: &str, owner: &str, permissions: i32) -> Arc<Vec<u8>> {
@@ -1613,6 +1618,206 @@ fn protected(user: &str, owner: &str, permissions: i32) -> Arc<Vec<u8>> {
     })
     .unwrap();
     Arc::new(pdfcraft_cos::write_full(&doc, &Default::default()).unwrap())
+}
+
+/// Two pages protected with `algorithm` under the permissions password "boss" (no open
+/// password), restricting changes to `changes`.
+fn protected_with_changes(algorithm: pdfcraft_cos::Algorithm, changes: Changes) -> Arc<Vec<u8>> {
+    protected_pages(2, algorithm, changes, 8)
+}
+
+/// [`protected_with_changes`] with `pages` pages; `seed` gives the file key and salts, so two
+/// files with the same arguments but `pages` share their protection exactly.
+fn protected_pages(pages: usize, algorithm: pdfcraft_cos::Algorithm, changes: Changes, seed: u8) -> Arc<Vec<u8>> {
+    let mut doc = pdfcraft_cos::Document::open(Arc::new(fixture(pages))).unwrap();
+    let protection = Protection { permissions_password: Some("boss".into()), changes, algorithm, ..Protection::default() };
+    doc.set_encryption(&pdfcraft_cos::NewEncryption {
+        algorithm,
+        user_password: "",
+        owner_password: "boss",
+        permissions: protection.permission_bits(),
+        encrypt_metadata: true,
+        seed: [seed; 32],
+    })
+    .unwrap();
+    Arc::new(pdfcraft_cos::write_full(&doc, &Default::default()).unwrap())
+}
+
+/// "Any except extracting pages" (#5081) withholds page extraction on every handler revision. At
+/// revision 3 and later the preset (bit 4 without bit 11) allows no page changes either; at
+/// revision 2, where bit 4 covers assembly, extraction, splitting and being a page source are
+/// still refused because copying is withheld.
+#[test]
+fn extraction_permissions_refuse_any_except_extract_on_every_revision() {
+    use pdfcraft_cos::Algorithm::{Aes128, Aes256, Rc4_40, Rc4_128};
+
+    for algorithm in [Rc4_128, Aes128, Aes256] {
+        let bytes = protected_with_changes(algorithm, Changes::AnyExceptExtract);
+        let doc = pdfcraft_cos::Document::open_with_password(bytes.clone(), None).unwrap();
+        let permissions = doc.permissions().unwrap();
+        assert!(!permissions.extract_pages(), "{algorithm:?}, /P={:#x}", permissions.bits);
+        assert!(!permissions.assemble(), "{algorithm:?}: bit 4 without bit 11 allows no page changes");
+    }
+    let r2 = protected_with_changes(Rc4_40, Changes::AnyExceptExtract);
+    let mut session = Session::new();
+    let r2_id = session.open("r2.pdf", None, r2.clone(), None).unwrap();
+    let permissions = session.get(r2_id).unwrap().permissions().unwrap();
+    assert!(permissions.assemble() && !permissions.extract_pages(), "revision 2, /P={:#x}", permissions.bits);
+    assert_eq!(session.extract(r2_id, &[0]), Err(EditError::NotPermitted("extracting pages")));
+    assert_eq!(session.split(r2_id, &pdfcraft_organize::SplitBy::PageCount(1)), Err(EditError::NotPermitted("splitting the document")));
+    assert_eq!(crate::combine_source_check(&r2, None), Err(crate::SourceProblem::NotPermitted));
+}
+
+/// "Any except extracting pages" (#5081): Extract, Split and Combine refuse the file without the
+/// permissions password and leave it unchanged; Combine takes it with that password.
+#[test]
+fn extraction_permissions_cover_revision_three_to_six_and_leave_no_partial_output() {
+    let bytes = protected_with_changes(pdfcraft_cos::Algorithm::Aes256, Changes::AnyExceptExtract);
+    assert_eq!(crate::combine_source_check(&bytes, None), Err(crate::SourceProblem::NotPermitted));
+    assert_eq!(crate::combine_source_check(&bytes, Some("boss")), Ok(()));
+    let mut restricted = Session::new();
+    let id = restricted.open("restricted.pdf", None, bytes.clone(), None).unwrap();
+    let before = restricted.get(id).unwrap().bytes.clone();
+    assert_eq!(restricted.extract(id, &[0]), Err(EditError::NotPermitted("extracting pages")));
+    assert_eq!(restricted.split(id, &pdfcraft_organize::SplitBy::PageCount(1)), Err(EditError::NotPermitted("splitting the document")));
+    assert_eq!(restricted.split_by_size(id, 1), Err(EditError::NotPermitted("splitting the document")));
+    let doc = restricted.get(id).unwrap();
+    assert_eq!(doc.info.pages.len(), 2);
+    assert!(!doc.dirty);
+    assert_eq!(doc.bytes, before, "a refused extraction leaves the source untouched");
+
+    let sources = vec![("restricted.pdf".into(), bytes.clone(), None)];
+    assert!(matches!(restricted.combine_unlocked(&sources, &[None]), Err(EditError::Source(_))));
+    let combined = restricted.combine_unlocked(&sources, &[Some("boss")]).unwrap();
+    assert_eq!(pdfcraft_organize::page_count(&pdfcraft_cos::Document::open(combined).unwrap()).unwrap(), 2);
+}
+
+/// A file under "Any except extracting pages" (#5081) is refused as an Insert Pages or Replace
+/// Pages source for an unprotected document, which is left as it was, with nothing to undo.
+#[test]
+fn extraction_permissions_refuse_a_restricted_page_source() {
+    let bytes = protected_with_changes(pdfcraft_cos::Algorithm::Aes256, Changes::AnyExceptExtract);
+    let plain = Arc::new(fixture(1));
+    let mut destination = Session::new();
+    let dest = destination.open("destination.pdf", None, plain.clone(), None).unwrap();
+    let insert = Edit::InsertPagesFrom {
+        name: "restricted.pdf".into(),
+        bytes: bytes.clone(),
+        pages: None,
+        at: 1,
+        field_conflicts: pdfcraft_organize::FieldConflicts::Rename,
+    };
+    assert!(matches!(destination.apply(dest, insert), Err(EditError::Source(_))));
+    assert_eq!(destination.get(dest).unwrap().bytes, plain, "a refused insert leaves the destination untouched");
+    assert_eq!(destination.get(dest).unwrap().info.pages.len(), 1);
+    assert_eq!(destination.get(dest).unwrap().can_undo(), None);
+    assert!(matches!(
+        destination.apply(dest, Edit::ReplacePages { pages: vec![0], name: "restricted.pdf".into(), bytes: bytes.clone(), src_pages: vec![0] }),
+        Err(EditError::Source(_))
+    ));
+    assert_eq!(destination.get(dest).unwrap().bytes, plain, "a refused replace leaves the destination untouched");
+}
+
+/// Opened with the permissions password, a file under "Any except extracting pages" (#5081) can
+/// be extracted from and split.
+#[test]
+fn extraction_permissions_yield_to_the_owner_password() {
+    let bytes = protected_with_changes(pdfcraft_cos::Algorithm::Aes256, Changes::AnyExceptExtract);
+    let mut owner = Session::new();
+    let owner_id = owner.open("restricted.pdf", None, bytes, Some("boss")).unwrap();
+    assert!(owner.get(owner_id).unwrap().permissions().unwrap().extract_pages());
+    assert!(owner.extract(owner_id, &[0]).is_ok());
+    assert_eq!(owner.split(owner_id, &pdfcraft_organize::SplitBy::PageCount(1)).unwrap().len(), 2);
+    assert_eq!(owner.split_by_size(owner_id, 1).unwrap().len(), 2);
+}
+
+/// A document that allows page changes but not copying, so not page extraction (#5081), takes
+/// pages back from a file under exactly its own protection (a cut and paste, or another file
+/// made with the same key and `/Encrypt` values), through Insert Pages' file check as well, and
+/// through Replace Pages and its check, and keeps the restriction; the same file is refused as a
+/// source for an unprotected or a differently protected document.
+#[test]
+fn pages_under_the_same_protection_are_inserted_without_page_extraction() {
+    use pdfcraft_cos::Algorithm::Aes256;
+
+    let bytes = protected_pages(2, Aes256, Changes::Pages, 8);
+    let mut same = Session::new();
+    let same_id = same.open("same.pdf", None, bytes.clone(), None).unwrap();
+    let permissions = same.get(same_id).unwrap().permissions().unwrap();
+    assert!(permissions.assemble() && !permissions.extract_pages(), "/P={:#x}", permissions.bits);
+    let insert = |name: &str, bytes: &Arc<Vec<u8>>, at| Edit::InsertPagesFrom {
+        name: name.into(),
+        bytes: bytes.clone(),
+        pages: None,
+        at,
+        field_conflicts: pdfcraft_organize::FieldConflicts::Rename,
+    };
+    // Its own bytes, as Paste inserts them after a cut or copy.
+    same.apply(same_id, insert("same.pdf", &bytes, 2)).unwrap();
+    assert_eq!(same.get(same_id).unwrap().info.pages.len(), 4);
+    assert!(same.get(same_id).unwrap().dirty);
+
+    // A separate file made with the same key and /Encrypt values, and other pages.
+    let other = protected_pages(3, Aes256, Changes::Pages, 8);
+    let (a, b) = (pdfcraft_cos::Document::open(bytes.clone()).unwrap(), pdfcraft_cos::Document::open(other.clone()).unwrap());
+    let (a, b) = (a.security().unwrap(), b.security().unwrap());
+    assert!(a.file_key() == b.file_key() && a.dict() == b.dict(), "the two files share their protection");
+    assert!(matches!(same.page_count_of("other.pdf", &other), Err(EditError::Source(_))), "a plain page source must allow extraction");
+    assert_eq!(same.insert_source(same_id, "other.pdf", &other).map(|(n, _)| n), Ok(3));
+    same.apply(same_id, insert("other.pdf", &other, 4)).unwrap();
+    // Replace Pages takes them on the same terms.
+    let replace = |bytes: &Arc<Vec<u8>>| Edit::ReplacePages { pages: vec![0], name: "other.pdf".into(), bytes: bytes.clone(), src_pages: vec![2] };
+    assert_eq!(same.replace_source(same_id, "other.pdf", &other), Ok(3));
+    same.apply(same_id, replace(&other)).unwrap();
+    assert_eq!(same.get(same_id).unwrap().info.pages.len(), 7);
+    let saved = same.save_bytes(same_id).unwrap();
+    let reopened = pdfcraft_cos::Document::open_with_password(saved, None).unwrap();
+    assert_eq!(pdfcraft_organize::page_count(&reopened).unwrap(), 7);
+    assert!(!reopened.permissions().unwrap().extract_pages(), "same-protection assembly keeps the extraction restriction");
+
+    // Neither an unprotected document nor one under other protection takes them.
+    for destination in [Arc::new(fixture(1)), protected_pages(1, Aes256, Changes::Pages, 9)] {
+        let mut session = Session::new();
+        let dest = session.open("destination.pdf", None, destination, None).unwrap();
+        let before = session.get(dest).unwrap().bytes.clone();
+        assert!(matches!(session.insert_source(dest, "same.pdf", &bytes), Err(EditError::Source(_))));
+        assert!(matches!(session.apply(dest, insert("same.pdf", &bytes, 1)), Err(EditError::Source(_))));
+        assert!(matches!(session.replace_source(dest, "same.pdf", &bytes), Err(EditError::Source(_))));
+        assert!(matches!(session.apply(dest, replace(&bytes)), Err(EditError::Source(_))));
+        assert_eq!(session.get(dest).unwrap().bytes, before, "a refused insert or replace leaves the destination untouched");
+        assert_eq!(session.get(dest).unwrap().info.pages.len(), 1);
+    }
+}
+
+/// Taking pages out also needs copying (bit 5, #5081): a document that withholds only copying
+/// refuses Extract, Split and being a page source, on a revision-2 handler too, whose reserved
+/// bit 11 is always set. The owner password still lifts it.
+#[test]
+fn page_extraction_needs_the_copy_permission_on_every_revision() {
+    for algorithm in [pdfcraft_cos::Algorithm::Rc4_40, pdfcraft_cos::Algorithm::Aes256] {
+        let mut doc = pdfcraft_cos::Document::open(Arc::new(fixture(2))).unwrap();
+        doc.set_encryption(&pdfcraft_cos::NewEncryption {
+            algorithm,
+            user_password: "",
+            owner_password: "boss",
+            permissions: -1 ^ 0b1_0000, // everything but copying
+            encrypt_metadata: true,
+            seed: [9; 32],
+        })
+        .unwrap();
+        let bytes = Arc::new(pdfcraft_cos::write_full(&doc, &Default::default()).unwrap());
+        let mut s = Session::new();
+        let id = s.open("no-copy.pdf", None, bytes.clone(), None).unwrap();
+        let permissions = s.get(id).unwrap().permissions().unwrap();
+        assert!(permissions.assemble() && !permissions.extract_pages(), "{algorithm:?}");
+        assert!(s.get(id).unwrap().allows_assembly() && !s.get(id).unwrap().allows_page_extraction(), "{algorithm:?}");
+        assert_eq!(s.extract(id, &[0]), Err(EditError::NotPermitted("extracting pages")), "{algorithm:?}");
+        assert_eq!(s.split(id, &pdfcraft_organize::SplitBy::PageCount(1)), Err(EditError::NotPermitted("splitting the document")));
+        assert_eq!(crate::combine_source_check(&bytes, None), Err(crate::SourceProblem::NotPermitted), "{algorithm:?}");
+        assert_eq!(crate::combine_source_check(&bytes, Some("boss")), Ok(()), "{algorithm:?}");
+        let owner = s.open("no-copy.pdf", None, bytes, Some("boss")).unwrap();
+        assert!(s.extract(owner, &[0]).is_ok(), "{algorithm:?}");
+    }
 }
 
 #[test]
@@ -15158,4 +15363,49 @@ fn calculate_now_simple_calculation_reads_formatted_values_and_groups_as_the_nat
     assert!(out.error.is_none(), "{out:?}");
     assert!(out.console.iter().any(|line| line == "3244.75"), "calculateNow agrees with the native path: {out:?}");
     assert_eq!(total(&s), ["3244.75"]);
+}
+
+/// A Word document converts through LibreOffice when it is installed; without it, the error
+/// says what is missing rather than calling the file a broken PDF.
+#[test]
+fn office_documents_convert_through_libreoffice_or_explain_why_not() {
+    let mut s = Session::new();
+    let text = s.create_from_text("t", "Quarterly report").unwrap();
+    let id = s.open("t.pdf", None, text, None).unwrap();
+    let docx = Arc::new(s.get(id).unwrap().export_office(compare::OfficeFormat::Docx));
+    assert_eq!(source_kind("Report.docx", &docx), Some(SourceKind::Office));
+    match s.convert_to_pdf("Report.docx", &docx) {
+        Ok((kind, pdf)) => {
+            assert_eq!(kind, SourceKind::Office);
+            let converted = s.open_new("Report.pdf", pdf).unwrap();
+            assert!(page_texts(&s, converted).concat().contains("Quarterly report"));
+        }
+        // Only "not installed" is an acceptable failure: a conversion that fails, times out or
+        // makes no PDF must fail this test.
+        Err(e) => assert!(e.to_string().contains("LibreOffice, which isn't installed"), "{e}"),
+    }
+    // Combine treats it as a file to convert, not as a PDF to pass through.
+    assert!(
+        s.as_pdf("Report.docx", &docx).map_or_else(|e| e.to_string().contains("LibreOffice, which isn't installed"), |pdf| pdf.starts_with(b"%PDF-"))
+    );
+}
+
+/// The frame thread never waits for LibreOffice: Insert, Combine and Create Multiple refuse an
+/// Office document and point to File ▸ Open, while images and text still convert there.
+#[test]
+fn inline_conversions_refuse_office_documents_without_running_libreoffice() {
+    let s = Session::new();
+    let docx = Arc::new(b"PK\x03\x04\x14\x00".to_vec());
+    for err in
+        [s.convert_to_pdf_inline("Report.docx", &docx).map(|_| ()).unwrap_err(), s.as_pdf_inline("Report.docx", &docx).map(|_| ()).unwrap_err()]
+    {
+        assert_eq!(
+            err,
+            EditError::Source(
+                "Report.docx: Word, Excel and PowerPoint files can't be added here yet; open it with File ▸ Open, which converts it to a PDF".into()
+            )
+        );
+    }
+    assert_eq!(s.convert_to_pdf_inline("notes.txt", &Arc::new(b"hello".to_vec())).unwrap().0, SourceKind::Text);
+    assert!(s.as_pdf_inline("scan.jpg", &Arc::new(jpeg_bytes())).unwrap().starts_with(b"%PDF-"));
 }
