@@ -478,6 +478,7 @@ fn removed_text_kept_for_the_metadata_check_is_bounded_per_document() {
         removed_appearances: HashSet::new(),
         appearance_scan_limit: false,
         pruned_patterns: Vec::new(),
+        pattern_spaces: interp::PatternSpaces::default(),
     };
     let rects = [[5.0, 99.0, 200.0, 102.0]];
     let kept = |a: &Applying| a.removed_text.iter().map(String::len).sum::<usize>();

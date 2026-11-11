@@ -202,8 +202,10 @@ pub(crate) struct Scope<'a> {
     /// shared forms drawn from other shared forms would otherwise multiply the work with every
     /// level.
     budget: DecodeBudget,
-    /// What `cs` and `CS` have read of the page's colour spaces.
-    pattern_spaces: PatternSpaces,
+    /// What `cs` and `CS` have read of the run's colour spaces, lent by the run whose pruning
+    /// reads the patterns this walk tells ([`Scope::with_pattern_spaces`]). `None` for a walk whose
+    /// patterns nothing prunes: it reads none, and takes only `/Pattern` itself for a Pattern space.
+    pattern_spaces: Option<&'a mut PatternSpaces>,
 }
 
 #[cfg(test)]
@@ -212,14 +214,15 @@ thread_local! {
     pub(crate) static SPACE_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// How much of colour space names [`PatternSpaces`] keeps for a page, in bytes, over all the
+/// How much of colour space names [`PatternSpaces`] keeps for a run, in bytes, over all the
 /// `/ColorSpace` dictionaries given by reference it reads: each name's length and [`ENTRY_BYTES`].
 /// The names of one that would go past it are not kept, and a name in it keeps the pattern: a
 /// pattern kept that nothing shows is the side this errs on.
 pub(crate) const MAX_SPACE_BYTES: usize = 1 << 20;
 
-/// What a kept name costs [`MAX_SPACE_BYTES`] besides its bytes: its place in the index.
-pub(crate) const ENTRY_BYTES: usize = 64;
+/// What a kept name costs [`MAX_SPACE_BYTES`] besides its bytes: its place in the index, and the
+/// allocation holding it.
+pub(crate) const ENTRY_BYTES: usize = 128;
 
 /// What a `/ColorSpace` entry gives, as far as `cs` and `CS` need to know.
 #[derive(Clone, Copy)]
@@ -248,12 +251,15 @@ impl Space {
     }
 }
 
-/// What `cs` and `CS` have read of a page's colour spaces, kept for the page. A form drawn
-/// thousands of times, or nested deep, starts a scope each time, and reading an object again can
-/// parse it again, all of it: the document keeps no object larger than its cache. What is kept is
-/// what each name gives, not the objects read, within [`MAX_SPACE_BYTES`].
+/// What `cs` and `CS` have read of a run's colour spaces, kept for the run: what an object given
+/// by reference gives depends on it alone, not on the page, and reading an object again can parse
+/// it again, all of it (the document keeps no object larger than its cache), at every page, form
+/// and walk that names it. What is kept is what each name gives, not the objects read, within
+/// [`MAX_SPACE_BYTES`]. The run's cleanups between pages rewrite no `/ColorSpace` a page names; the
+/// Type 3 cleanup can take an entry out of a font's own, and an answer kept from before then keeps
+/// the pattern at worst.
 #[derive(Default)]
-struct PatternSpaces {
+pub(crate) struct PatternSpaces {
     /// The `/ColorSpace` dictionaries given by reference, read once: what each name gives, or
     /// `None` for one whose names would go past the allowance.
     held: HashMap<ObjRef, Option<HashMap<Vec<u8>, Space>>>,
@@ -364,8 +370,15 @@ impl<'a> Scope<'a> {
             used_names: Vec::new(),
             depth: 0,
             budget,
-            pattern_spaces: PatternSpaces::default(),
+            pattern_spaces: None,
         }
+    }
+
+    /// This scope with `spaces`, what `cs` and `CS` have read of the run's colour spaces so far,
+    /// for a walk whose patterns the run prunes.
+    pub fn with_pattern_spaces(mut self, spaces: &'a mut PatternSpaces) -> Self {
+        self.pattern_spaces = Some(spaces);
+        self
     }
 
     /// What is left of the page's allowance once the content is walked, for the cleanups after it
@@ -721,7 +734,10 @@ impl Walk {
                 let selected = if o == b"cs" { &mut self.gs.fill_pattern } else { &mut self.gs.stroke_pattern };
                 if selected.is_some()
                     && let Some(name) = op.last_name()
-                    && !scope.pattern_spaces.named(doc, resources.get(b"ColorSpace"), name)
+                    && !match scope.pattern_spaces.as_deref_mut() {
+                        Some(spaces) => spaces.named(doc, resources.get(b"ColorSpace"), name),
+                        None => name == b"Pattern",
+                    }
                 {
                     *selected = None;
                 }

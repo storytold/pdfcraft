@@ -165,3 +165,55 @@ fn the_lookup_keeps_a_bounded_amount_of_names() {
     assert_eq!(removed(&content("q /Fm Do Q "), res, extra.clone()), 0, "after the form's names");
     assert_eq!(removed(&content(""), res, extra), 1, "without the form");
 }
+
+/// `pages` pages, each marked over the first box, sharing one content stream (object 4) and one
+/// `/Resources` (object 5), whose `/ColorSpace` (object 7) names `/CSP` as `/Pattern`.
+fn pages_sharing_spaces(pages: usize) -> Document {
+    let kids: String = (0..pages).map(|i| format!("{} 0 R ", 9 + i)).collect();
+    let mut objs = vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        format!("<< /Type /Pages /Kids [{kids}] /Count {pages} >>").into_bytes(),
+        b"null".to_vec(),
+        stream("", two_boxes("/CSP").as_bytes()),
+        b"<< /Pattern << /P0 6 0 R >> /ColorSpace 7 0 R >>".to_vec(),
+        cell(),
+        b"<< /CSP /Pattern >>".to_vec(),
+        b"null".to_vec(),
+    ];
+    objs.extend((0..pages).map(|_| b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources 5 0 R >>".to_vec()));
+    let mut doc = pdf(objs);
+    for page in 0..pages {
+        mark(&mut doc, page, &[[15.0, 135.0, 130.0, 175.0]], "");
+    }
+    doc
+}
+
+/// What `cs` reads by reference is read once for the run, not again for each page that names it:
+/// 20 pages sharing a `/ColorSpace` given by reference read it as often as one page does, once.
+#[test]
+fn a_colour_space_dictionary_is_read_once_for_the_run() {
+    let reads = |pages: usize| {
+        let mut doc = pages_sharing_spaces(pages);
+        SPACE_READS.with(|c| c.set(0));
+        let report = apply(&mut doc, None).unwrap();
+        assert_eq!(report.patterns_removed, 0, "{pages} pages keep the pattern the second box still paints");
+        SPACE_READS.with(std::cell::Cell::get)
+    };
+    assert_eq!(reads(1), 1, "one page");
+    assert_eq!(reads(20), 1, "20 pages");
+}
+
+/// Only Apply prunes patterns, so only its walk of a page looks a colour space up: the proof's
+/// snapshot and Apply's check of what it wrote read none, and nor do Sanitize's scan and removal.
+#[test]
+fn a_walk_whose_patterns_nothing_prunes_reads_no_colour_space() {
+    let reads = |f: &dyn Fn(&mut Document)| {
+        let mut doc = pages_sharing_spaces(1);
+        SPACE_READS.with(|c| c.set(0));
+        f(&mut doc);
+        SPACE_READS.with(std::cell::Cell::get)
+    };
+    assert_eq!(reads(&|doc| drop(crate::sanitize::scan(doc))), 0, "Sanitize's scan");
+    assert_eq!(reads(&|doc| drop(crate::sanitize::remove_hidden(doc, &[crate::sanitize::Hidden::HiddenText]))), 0, "Remove Hidden Information");
+    assert_eq!(reads(&|doc| drop(apply(doc, None).unwrap())), 1, "Apply, its walk alone");
+}
