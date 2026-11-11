@@ -2392,3 +2392,58 @@ fn a_spaced_key_is_listed_once_as_a_repair_of_its_object() {
     assert_eq!(doc.clone().repaired_objects(), lines, "clones share the list");
     assert!(doc.unreadable_objects().is_empty());
 }
+
+/// A scan of a fresh document lists the repaired object as a read does, and once.
+#[test]
+fn a_scan_lists_a_spaced_key_repair_once() {
+    let file = build(
+        &["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [] /Count 0 >>", "<< /Title (Report) /Universal PDF(Acme) >>"],
+        "/Root 1 0 R /Info 3 0 R",
+    );
+    let doc = Document::open(Arc::new(file)).unwrap();
+    assert_eq!(doc.scan_objects_checked().filter(|(_, o)| o.is_ok()).count(), 3);
+    assert_eq!(doc.scan_objects_checked().count(), 3);
+    assert_eq!(doc.repaired_objects(), ["object 3 0 was repaired: a dictionary key written with spaces was read as one key"]);
+}
+
+/// A member of an object stream with a spaced key is listed under its own number, not the
+/// stream's.
+#[test]
+fn a_spaced_key_in_an_object_stream_member_is_listed_under_the_member() {
+    let members = b"3 0 << /Title (Report) /Universal PDF(Acme) >>";
+    let mut out = b"%PDF-1.5\n".to_vec();
+    let mut offs = [0usize; 6];
+    let mut obj = |out: &mut Vec<u8>, n: usize, body: &[u8]| {
+        offs[n] = out.len();
+        out.extend_from_slice(format!("{n} 0 obj\n").as_bytes());
+        out.extend_from_slice(body);
+        out.extend_from_slice(b"\nendobj\n");
+    };
+    obj(&mut out, 1, b"<< /Type /Catalog /Pages 2 0 R >>");
+    obj(&mut out, 2, b"<< /Type /Pages /Kids [] /Count 0 >>");
+    let mut stm = format!("<< /Type /ObjStm /N 1 /First 4 /Length {} >>\nstream\n", members.len()).into_bytes();
+    stm.extend_from_slice(members);
+    stm.extend_from_slice(b"\nendstream");
+    obj(&mut out, 4, &stm);
+    let xref_at = out.len();
+    let mut rows = vec![0u8, 0, 0, 0, 0, 255];
+    for (n, off) in offs.iter().enumerate().take(6).skip(1) {
+        let row = match n {
+            3 => [2, 0, 0, 0, 4, 0],
+            5 => [1, (xref_at >> 24) as u8, (xref_at >> 16) as u8, (xref_at >> 8) as u8, xref_at as u8, 0],
+            _ => [1, (off >> 24) as u8, (off >> 16) as u8, (off >> 8) as u8, *off as u8, 0],
+        };
+        rows.extend_from_slice(&row);
+    }
+    let mut xs = format!("<< /Type /XRef /Size 6 /W [1 4 1] /Root 1 0 R /Info 3 0 R /Length {} >>\nstream\n", rows.len()).into_bytes();
+    xs.extend_from_slice(&rows);
+    xs.extend_from_slice(b"\nendstream");
+    out.extend_from_slice(b"5 0 obj\n");
+    out.extend_from_slice(&xs);
+    out.extend_from_slice(b"\nendobj\n");
+    out.extend_from_slice(format!("startxref\n{xref_at}\n%%EOF\n").as_bytes());
+    let doc = Document::open(Arc::new(out)).unwrap();
+    let info = doc.get(ObjRef::new(3, 0));
+    assert!(info.as_dict().is_some_and(|d| d.get(b"Universal PDF").is_some()), "{info:?}");
+    assert_eq!(doc.repaired_objects(), ["object 3 0 was repaired: a dictionary key written with spaces was read as one key"]);
+}

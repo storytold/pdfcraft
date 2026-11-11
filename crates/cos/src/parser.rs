@@ -335,7 +335,7 @@ impl<'a> Lexer<'a> {
             key.push(b' ');
             key.extend(word);
         }
-        SPACED_KEYS.with(|c| c.set(c.get().saturating_add(1)));
+        let _ = SPACED_KEYS.try_with(|c| c.set(c.get().saturating_add(1)));
     }
 
     /// The most bare words [`Self::spaced_key_words`] joins to one key.
@@ -429,7 +429,7 @@ thread_local! {
 /// a reader swaps in 0 before parsing an object and the old count back after, so the count it gets
 /// is that object's alone, objects parsed meanwhile included only through their own swaps.
 pub(crate) fn swap_spaced_keys(count: u64) -> u64 {
-    SPACED_KEYS.with(|c| c.replace(count))
+    SPACED_KEYS.try_with(|c| c.replace(count)).unwrap_or(0)
 }
 
 #[cfg(test)]

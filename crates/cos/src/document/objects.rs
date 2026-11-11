@@ -585,6 +585,8 @@ impl Document {
             LoadGuard::enter(num).ok_or_else(|| CosError::Syntax { offset: 0, detail: format!("reference cycle while loading object {num}") })?;
         let _scope = crate::security::FollowScope::enter();
         let edits_read = overlay_reads();
+        // Counts every attempt `load` makes, so an object found only at a second offset is listed
+        // if an abandoned copy had a spaced key: a rare false report, never a missed one.
         let outer = crate::parser::swap_spaced_keys(0);
         let loaded = self.load(num, 0).map(Arc::new);
         if crate::parser::swap_spaced_keys(outer) > 0 && loaded.is_ok() {
