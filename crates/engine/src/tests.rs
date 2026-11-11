@@ -13787,7 +13787,8 @@ fn xfa_reset_requests_are_bounded() {
     let script = format!(r#"for (var i = 0; i != 5000; i++) {{ xfa.host.resetData("{}"); }}"#, names.join(", "));
     let tpl = pdfcraft_xfa::fixtures::scripted_template().replace(r#"xfa.host.messageBox("Hello " + qty.rawValue);"#, &script);
     let bytes = Arc::new(pdfcraft_xfa::fixtures::shell(&tpl));
-    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    // Raised time limits: a busy machine does not skip the batch this checks is applied.
+    let mut s = Session::new().with_clock(|| 1_700_000_000).with_xfa_time_scale(100);
     let id = s.open("resets.pdf", None, bytes, None).expect("opens");
     let value = |s: &Session, n: &str| s.get(id).unwrap().form.iter().find(|f| f.name == n).unwrap().value.clone();
     s.apply(id, Edit::SetFieldValue { name: "qty".into(), value: FieldValue::Text("4".into()) }).unwrap();

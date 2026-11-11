@@ -261,10 +261,13 @@ struct ResetRun {
     /// may pass hundreds of thousands).
     seen: HashSet<String>,
     whole: bool,
+    /// The `resetData` calls this run holds.
+    calls: usize,
 }
 
 impl ResetRun {
     fn add(&mut self, names: &[String]) {
+        self.calls += 1;
         if self.whole {
             return;
         }
@@ -971,7 +974,16 @@ impl<'a, 'b> Runner<'a, 'b> {
                     }
                     let next_is_reset = effects.get(at.saturating_add(1)).is_some_and(|e| matches!(e, XfaEffect::ResetData(_)));
                     if !next_is_reset && let Some(run) = pending_reset.take() {
-                        self.reset(run.names())?;
+                        // The deadline may have passed while the names were gathered: the batch is
+                        // then skipped, and its accepted calls counted as timed out (calls skipped
+                        // before are not counted again).
+                        if self.clock.spent() {
+                            self.resets_skipped += run.calls;
+                            self.resets_timed_out += run.calls;
+                            self.reset_skip_budget_ms = Some(self.clock.budget_ms);
+                        } else {
+                            self.reset(run.names())?;
+                        }
                     }
                 }
                 XfaEffect::Print => self.run.out.requests.push(Request::Print),
