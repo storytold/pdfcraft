@@ -566,35 +566,57 @@ pub fn duplicate_pages(doc: &mut Document, indices: &[usize], at: Option<usize>)
 }
 
 /// Replace Pages: the content of `targets` (in order) is replaced by that of `src_pages` of
-/// `src`. As in Acrobat, only what the page shows changes (contents, resources and page boxes);
-/// the original pages' links, comments, form widgets and the bookmarks pointing at them stay.
+/// `src`. As in Acrobat, on the `min(targets.len(), src_pages.len())` pages replaced in place,
+/// only what the page shows changes (contents, resources and page boxes); the original pages'
+/// links, comments, form widgets and the bookmarks pointing at them stay. When `src_pages` is
+/// shorter than `targets`, the excess target pages are deleted; when `src_pages` is longer, the
+/// extra replacement pages are inserted right after the last replaced target page.
 pub fn replace_pages(doc: &mut Document, targets: &[usize], src: &Document, src_pages: &[usize]) -> Result<(), OrganizeError> {
     let n = page_count(doc)?;
     check(targets, n)?;
-    if targets.len() != src_pages.len() || targets.is_empty() {
-        return Err(OrganizeError::Invalid(format!("{} pages can't replace {}", src_pages.len(), targets.len())));
+    let src_n = page_count(src)?;
+    check(src_pages, src_n)?;
+    if targets.is_empty() || src_pages.is_empty() {
+        return Err(OrganizeError::Invalid("replacing pages needs at least one target page and one replacement page".into()));
     }
+    let mut seen = std::collections::HashSet::with_capacity(targets.len());
+    if !targets.iter().all(|t| seen.insert(*t)) {
+        return Err(OrganizeError::Invalid("each target page can be replaced at most once".into()));
+    }
+    let paired = targets.len().min(src_pages.len());
+    let paired_targets = targets.get(..paired).unwrap_or_default();
     let imported = import_pages(doc, src, src_pages, n)?;
     let all = walk(doc)?;
-    const SHOWN: [&[u8]; 8] = [b"Contents", b"Resources", b"MediaBox", b"CropBox", b"BleedBox", b"TrimBox", b"ArtBox", b"Rotate"];
-    for (t, new) in targets.iter().zip(&imported) {
+    const SHOWN: [&[u8]; 10] =
+        [b"Contents", b"Resources", b"MediaBox", b"CropBox", b"BleedBox", b"TrimBox", b"ArtBox", b"Rotate", b"UserUnit", b"Group"];
+    for (t, new) in paired_targets.iter().zip(&imported) {
         // The imported page with its inherited attributes resolved.
         let (_, inherited) = all.iter().find(|(r, _)| r == new).cloned().unwrap_or((*new, Dict::new()));
         let src_dict = doc.get(*new).as_dict().cloned().unwrap_or_default();
-        let target = all[*t].0;
+        let Some(&(target, _)) = all.get(*t) else { continue };
         doc.update_dict(target, |d| {
             for k in SHOWN {
                 match src_dict.get(k).or_else(|| inherited.get(k)) {
                     Some(v) => d.set(k.to_vec(), v.clone()),
-                    None => {
+                    None if k != b"MediaBox" => {
                         d.remove(k);
                     }
+                    None => {}
                 }
             }
         })?;
     }
-    // Drop the temporary copies (always the last pages now).
-    delete_pages(doc, &(n..n + imported.len()).collect::<Vec<_>>())
+    // Drop excess target pages (when replacing with fewer pages) and the temporary copies of paired pages.
+    let mut to_delete = targets.get(paired..).unwrap_or_default().to_vec();
+    to_delete.extend(n..n + paired);
+    delete_pages(doc, &to_delete)?;
+    let extra_count = src_pages.len().saturating_sub(paired);
+    let insert_at = paired_targets.iter().max().map_or(n, |last| last + 1);
+    if extra_count > 0 && insert_at < n {
+        let extra_indices: Vec<usize> = (n..n + extra_count).collect();
+        move_pages(doc, &extra_indices, insert_at)?;
+    }
+    Ok(())
 }
 
 /// Insert a blank page of `width × height` points at position `at` (0 = before the first page).

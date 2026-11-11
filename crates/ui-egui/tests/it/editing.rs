@@ -3250,6 +3250,52 @@ fn replace_split_selection_keeps_the_unchecked_page() {
     adjacent.run_steps(3);
     assert_eq!(texts_of(adjacent.state(), 0), ["Original 1", "Replacement 1", "Replacement 2"]);
     assert_eq!(sizes(adjacent.state()), [(200, 300), (400, 500), (400, 500)]);
+
+    // Replacing 3 pages with a 1-page file is enabled, deletes the 2 excess pages, and selects the surviving page.
+    let mut fewer_app = PdfCraftApp::new();
+    fewer_app.set_option("language", "en").unwrap();
+    fewer_app.open_bytes("original.pdf", None, sized(3, 200, 300, "Original")).unwrap();
+    fewer_app.views[0].select_pages(&[0, 1, 2]);
+    fewer_app.start_replace("single.pdf".into(), sized(1, 400, 500, "Single"));
+    let mut fewer = egui_kittest::Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| fewer_app);
+    fewer.run_steps(2);
+    egui_kittest::kittest::Queryable::get_by_label(&fewer, "OK").click();
+    fewer.run_steps(3);
+    assert_eq!(texts_of(fewer.state(), 0), ["Single 1"]);
+    assert_eq!(fewer.state().views[0].selected.iter().copied().collect::<Vec<_>>(), [0]);
+
+    // Replacing 1 page with a 3-page replacement range inserts the extra 2 pages right after it and selects all 3.
+    let mut more = open(&[1], false);
+    {
+        let draft = more.state_mut().replace_draft.as_mut().unwrap();
+        draft.src_from = 2;
+        draft.src_to = 4;
+        draft.src_range_edited = true;
+    }
+    more.run_steps(1);
+    egui_kittest::kittest::Queryable::get_by_label(&more, "OK").click();
+    more.run_steps(3);
+    assert_eq!(texts_of(more.state(), 0), ["Original 1", "Replacement 2", "Replacement 3", "Replacement 4", "Original 3"]);
+    assert_eq!(more.state().views[0].selected.iter().copied().collect::<Vec<_>>(), [1, 2, 3]);
+    more.state_mut().undo();
+    more.run_steps(2);
+    assert_eq!(texts_of(more.state(), 0), ["Original 1", "Original 2", "Original 3"]);
+
+    // Inverted range state (from > to) clamps safely on dialog render and submission without arithmetic underflow.
+    let mut inverted = open(&[0, 1], false);
+    {
+        let draft = inverted.state_mut().replace_draft.as_mut().unwrap();
+        draft.from = 3;
+        draft.to = 1;
+        draft.range_edited = true;
+        draft.src_from = 4;
+        draft.src_to = 2;
+        draft.src_range_edited = true;
+    }
+    inverted.run_steps(2);
+    egui_kittest::kittest::Queryable::get_by_label(&inverted, "OK").click();
+    inverted.run_steps(3);
+    assert_eq!(texts_of(inverted.state(), 0), ["Original 1", "Original 2", "Replacement 4"]);
 }
 
 #[test]

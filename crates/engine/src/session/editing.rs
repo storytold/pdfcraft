@@ -12,6 +12,7 @@ use crate::{EditNotice, MarkKind, print_preview_layers};
 fn deletes_pages(edit: &Edit) -> bool {
     match edit {
         Edit::DeletePages { .. } => true,
+        Edit::ReplacePages { pages, src_pages, .. } => src_pages.len() < pages.len(),
         Edit::Batch { edits, .. } => edits.iter().any(deletes_pages),
         _ => false,
     }
