@@ -37,6 +37,7 @@ fn rgb_triple(v: &serde_json::Value) -> Option<[f64; 3]> {
 }
 
 impl PdfCraftApp {
+    /// Sets the user's interface theme preference (Light, Dark, or System).
     pub fn set_theme_preference(&mut self, preference: ThemePreference) {
         self.theme_preference = preference;
         if let Some(ctx) = self.ctx.clone() {
@@ -191,6 +192,9 @@ impl PdfCraftApp {
         // a custom paper is stored by the name it was given.
         let d = &self.print_draft;
         v["print_paper"] = serde_json::json!((d.paper < d.paper_count()).then(|| d.paper_name()));
+        let size = self.print_draft.paper_size();
+        v["print_paper_size"] = serde_json::json!([size.0, size.1]);
+        v["print_paper_overridden"] = serde_json::json!(self.print_draft.paper_overridden);
         // Also set outside json! above, which is at serde_json's macro recursion limit.
         v["print"] = print;
         // Each printer's paper, sizing and two-sided choice, the one printed to last first (#2001).
@@ -312,8 +316,31 @@ impl PdfCraftApp {
             self.print_draft.custom_papers = print_paper::read_custom(&v["print_custom_papers"]);
         }
         // After the custom papers, so a custom paper chosen last time is found by its name.
-        if let Some(paper) = v.get("print_paper").and_then(serde_json::Value::as_str).and_then(|name| self.print_draft.paper_index(name)) {
-            self.print_draft.paper = paper;
+        if let Some(name) = v.get("print_paper").and_then(serde_json::Value::as_str) {
+            let saved_size = v.get("print_paper_size").and_then(|s| {
+                let w = s.get(0)?.as_f64()?;
+                let h = s.get(1)?.as_f64()?;
+                if w >= 72.0 && h >= 72.0 && w.is_finite() && h.is_finite() { Some((w, h)) } else { None }
+            });
+            let matched_pos = self
+                .print_draft
+                .papers
+                .iter()
+                .position(|(n, s)| n == name && saved_size.is_none_or(|sz| (s.0 - sz.0).abs() <= 1.0 && (s.1 - sz.1).abs() <= 1.0))
+                .or_else(|| {
+                    pdfcraft_engine::print::PAPERS.iter().position(|(canonical, s)| {
+                        *canonical == name && saved_size.is_none_or(|sz| (s.0 - sz.0).abs() <= 1.0 && (s.1 - sz.1).abs() <= 1.0)
+                    })
+                })
+                .or_else(|| self.print_draft.paper_index(name));
+            if let Some(paper) = matched_pos {
+                self.print_draft.paper = paper;
+                self.print_draft.paper_overridden = v.get("print_paper_overridden").and_then(serde_json::Value::as_bool).unwrap_or(false);
+            } else if let Some(size) = saved_size {
+                self.print_draft.papers.push((name.to_string(), size));
+                self.print_draft.paper = self.print_draft.papers.len() - 1;
+                self.print_draft.paper_overridden = v.get("print_paper_overridden").and_then(serde_json::Value::as_bool).unwrap_or(false);
+            }
         }
         if let Some(setups) = crate::print_ui::setups_from_json(&v["print_printers"]) {
             self.print_draft.setups = setups;
@@ -366,6 +393,7 @@ impl PdfCraftApp {
         if let Some(on) = v["always_default_view"].as_bool() {
             self.always_default_view = on;
         }
+        self.restore_print_prefs(v);
         if let Some(on) = v["highlight_fields"].as_bool() {
             self.view_defaults.highlight_fields = on;
         }
@@ -375,7 +403,6 @@ impl PdfCraftApp {
         if let Some(closed) = v["right_panel_closed"].as_bool() {
             self.right_panel_closed = closed;
         }
-        self.restore_print_prefs(v);
         // Scan & OCR choices (language, engine, strategy, output mode, preprocessing and skip
         // flags); unknown or malformed values keep the defaults.
         self.ocr_draft.apply_pref(&v["ocr"]);
