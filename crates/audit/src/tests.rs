@@ -827,6 +827,30 @@ fn form_entries_past_the_page_allowance_fail_the_audit() {
     assert!(matches!(crate::cover::filled_rects(&doc, &page), Err(crate::AuditError::TooManyForms)));
 }
 
+/// One fill of rectangles side by side hides the word they span, though each alone covers a quarter
+/// of it.
+#[test]
+fn rectangles_of_one_fill_side_by_side_cover_a_word_together() {
+    let content = "BT /F1 24 Tf 100 700 Td (SECRET DATA 123) Tj ET\n0 g\n95 688 50 32 re 145 688 50 32 re 195 688 50 32 re 245 688 50 32 re f\n";
+    let findings = audit_redactions(&open(one_page(content.as_bytes(), ""))).expect("audit must run");
+    assert_eq!(findings.len(), 1, "{findings:?}");
+    assert_eq!(findings[0].covered_text, "SECRET DATA 123");
+}
+
+/// A page of far more rectangles in one path than the audit compares is refused before they are all
+/// kept, not after.
+#[test]
+fn a_path_of_a_million_rectangles_is_refused_before_it_is_kept() {
+    let mut content = b"0 g\n".to_vec();
+    for _ in 0..70_000 {
+        content.extend_from_slice(b"1 1 2 2 re\n");
+    }
+    content.extend_from_slice(b"f\n");
+    let doc = open(one_page(&content, ""));
+    let page = pdfcraft_model::pages(&doc).remove(0).dict;
+    assert!(matches!(crate::cover::filled_rects(&doc, &page), Err(crate::AuditError::TooManyComparisons)));
+}
+
 /// The renderer takes an operator's operands from the end and ignores surplus ones before them:
 /// `0 1 g` paints white, `1 0 g` black. The audit reads the same operand, so surplus operands do
 /// not turn a black cover white, or a white one black.

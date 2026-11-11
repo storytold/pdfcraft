@@ -55,6 +55,42 @@ struct Gs {
 const MAX_EXACT_SUBPATHS: usize = 32;
 /// Bound on the grid cells times subpaths [`painted`] examines per page.
 const MAX_PATH_WORK: usize = 100_000_000;
+/// Most rectangular subpaths one path holds, and most filled rectangles one page's walk keeps: past
+/// either the page has more covers than the audit compares, so the audit says so before the
+/// buffers grow (a page of two million `re` operators and one fill would otherwise keep them all).
+const MAX_PATH_RECTS: usize = 1 << 16;
+const MAX_PAGE_RECTS: usize = 1 << 20;
+
+/// Most rectangles one fill paints that [`join_touching`] looks for neighbours among.
+const MAX_JOINED: usize = 64;
+
+/// `rects` with those that touch along a whole edge (same extent on the other axis) joined into
+/// one: a fill of four rectangles side by side over a word hides it as one, and each alone covers
+/// too little of it to be a cover. Left as they are past [`MAX_JOINED`], where every rectangle is
+/// still reported separately.
+fn join_touching(mut rects: Vec<[f64; 4]>) -> Vec<[f64; 4]> {
+    if rects.len() < 2 || rects.len() > MAX_JOINED {
+        return rects;
+    }
+    let mut again = true;
+    while again {
+        again = false;
+        'pairs: for i in 0..rects.len() {
+            for j in i + 1..rects.len() {
+                let (a, b) = (rects[i], rects[j]);
+                let beside = a[1] == b[1] && a[3] == b[3] && a[0] <= b[2] && b[0] <= a[2];
+                let above = a[0] == b[0] && a[2] == b[2] && a[1] <= b[3] && b[1] <= a[3];
+                if beside || above {
+                    rects[i] = [a[0].min(b[0]), a[1].min(b[1]), a[2].max(b[2]), a[3].max(b[3])];
+                    rects.swap_remove(j);
+                    again = true;
+                    break 'pairs;
+                }
+            }
+        }
+    }
+    rects
+}
 
 /// The path under construction, as far as the audit cares about it: every closed rectangular
 /// subpath it holds, so a fill paints all of them (ISO 32000-2 §8.5.3.3), not just the last.
@@ -322,6 +358,9 @@ impl<'a> Walker<'a> {
                         }
                     });
                     if let Some(r) = rect {
+                        if path.rects.len() >= MAX_PATH_RECTS {
+                            return Err(AuditError::TooManyComparisons);
+                        }
                         path.rects.push(r);
                     }
                 }
@@ -356,6 +395,10 @@ impl<'a> Walker<'a> {
                         // rectangle as painted, as past `MAX_EXACT_SUBPATHS`.
                         let painted =
                             if skewed { rects.into_iter().map(|(r, _)| r).collect() } else { painted(rects, even_odd, &mut self.path_work)? };
+                        let painted = join_touching(painted);
+                        if self.out.len().saturating_add(painted.len()) > MAX_PAGE_RECTS {
+                            return Err(AuditError::TooManyComparisons);
+                        }
                         for r in painted {
                             self.out.push(FilledRect { rect: r, rgb: gs.fill, pos });
                         }
