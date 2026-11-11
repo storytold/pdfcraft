@@ -82,7 +82,8 @@ fn the_console_and_document_javascripts_colour_their_scripts() {
     h.run_steps(2);
     let name = painted_colour(&h, script, "total").expect("the console shows the script");
     for token in ["var", "\"total\"", "// sum"] {
-        assert_ne!(painted_colour(&h, script, token), Some(name), "{token} is coloured in the console");
+        let colour = painted_colour(&h, script, token).unwrap_or_else(|| panic!("the console paints {token} on its own"));
+        assert_ne!(colour, name, "{token} is coloured in the console");
     }
     h.get_by_label("Close").click();
     h.run_steps(2);
@@ -91,7 +92,8 @@ fn the_console_and_document_javascripts_colour_their_scripts() {
     h.run_steps(2);
     let name = painted_colour(&h, script, "total").expect("Document JavaScripts shows the script");
     for token in ["var", "\"total\"", "// sum"] {
-        assert_ne!(painted_colour(&h, script, token), Some(name), "{token} is coloured in Document JavaScripts");
+        let colour = painted_colour(&h, script, token).unwrap_or_else(|| panic!("Document JavaScripts paints {token} on its own"));
+        assert_ne!(colour, name, "{token} is coloured in Document JavaScripts");
     }
 }
 

@@ -453,7 +453,8 @@ fn the_custom_calculation_script_is_coloured() {
     open_calculate(&mut h, "city");
     let name = painted_colour(&h, js, "total").expect("the box shows the script");
     for token in ["var", "\"name\"", "// sum"] {
-        assert_ne!(painted_colour(&h, js, token), Some(name), "{token} is coloured");
+        let colour = painted_colour(&h, js, token).unwrap_or_else(|| panic!("the box paints {token} on its own"));
+        assert_ne!(colour, name, "{token} is coloured");
     }
 }
 
@@ -1402,7 +1403,8 @@ fn an_action_script_is_coloured() {
     h.run_steps(2);
     let name = painted_colour(&h, js, "total").expect("the box shows the script");
     for token in ["var", "\"name\"", "// sum"] {
-        assert_ne!(painted_colour(&h, js, token), Some(name), "{token} is coloured");
+        let colour = painted_colour(&h, js, token).unwrap_or_else(|| panic!("the box paints {token} on its own"));
+        assert_ne!(colour, name, "{token} is coloured");
     }
 }
 
