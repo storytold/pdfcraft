@@ -35,7 +35,7 @@ fn fixture() -> Vec<u8> {
     };
     let page = |annots: &str| format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 400] /Annots [{annots}] >>");
     // Objects 1–7: catalog, pages, the four pages; 8–10 the fields; 11 on the page-1 links;
-    // then the links of pages 2, 3 and 4.
+    // then the links of pages 2, 3 and 4, and the outline.
     let page1_links = [
         (NEXT, "<< /S /Named /N /NextPage >>"),
         (LAST, "<< /S /Named /N /LastPage >>"),
@@ -53,7 +53,7 @@ fn fixture() -> Vec<u8> {
     let refs = |from: usize, n: usize| (from..from + n).map(|k| format!("{k} 0 R")).collect::<Vec<_>>().join(" ");
     let after = first_link + page1_links.len();
     let mut objs = vec![
-        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [8 0 R 9 0 R 10 0 R] /DA (/Helv 10 Tf 0 g) >> >>".to_string(),
+        format!("<< /Type /Catalog /Pages 2 0 R /Outlines {} 0 R /AcroForm << /Fields [8 0 R 9 0 R 10 0 R] /DA (/Helv 10 Tf 0 g) >> >>", after + 3),
         "<< /Type /Pages /Kids [3 0 R 4 0 R 5 0 R 6 0 R] /Count 4 >>".to_string(),
         page(&format!("8 0 R 9 0 R 10 0 R {}", refs(first_link, page1_links.len()))),
         page(&refs(after, 1)),
@@ -68,6 +68,10 @@ fn fixture() -> Vec<u8> {
     objs.push(link(ROW, "<< /S /Named /N /PrevPage >>"));
     objs.push(link(ROW, "<< /S /Named /N /FirstPage >>"));
     objs.push(link(ROW, "<< /S /Named /N /NextPage >>"));
+    // The outline: one bookmark, "Onward", running NextPage.
+    let outlines = after + 3;
+    objs.push(format!("<< /Type /Outlines /First {0} 0 R /Last {0} 0 R /Count 1 >>", outlines + 1));
+    objs.push(format!("<< /Title (Onward) /Parent {outlines} 0 R /A << /S /Named /N /NextPage >> >>"));
     let mut out = b"%PDF-1.7\n".to_vec();
     let mut offs = Vec::new();
     for (i, o) in objs.iter().enumerate() {
@@ -286,4 +290,73 @@ fn a_link_in_the_old_half_of_a_comparison_edits_its_document_at_once() {
     assert_eq!(f1(&h, old_id), "one", "the old document's field was reset");
     assert_eq!(f1(&h, new_id), "typed 1", "the new document is untouched");
     assert!(h.state().views[old].pending_edit.is_none(), "nothing is left waiting on the old tab");
+}
+
+/// A Print link in a pane that isn't the active tab (the old file of a side-by-side comparison)
+/// doesn't open the dialog: the dialog prints the active tab, the other document.
+#[test]
+fn a_print_link_in_the_old_half_of_a_comparison_prints_nothing() {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("old.pdf", None, fixture()).unwrap();
+        app.open_bytes("new.pdf", None, fixture()).unwrap();
+        app.set_option("zoom", "100").unwrap();
+        app
+    });
+    h.run_steps(4);
+    assert!(h.state_mut().execute("doc.compare"));
+    h.run_steps(2);
+    h.get_by_label("Compare").click();
+    h.run_steps(4);
+    let c = h.state().compare.as_ref().expect("comparing");
+    assert!(c.side_by_side);
+    let old = h.state().views.iter().position(|v| v.id == c.old).unwrap();
+    assert_ne!(h.state().active, Some(old), "the new file is the active tab");
+    let r = h.state().views[old].page_screen_rect(0).expect("the old page is on screen");
+    let k = r.width() / 300.0;
+    let p = r.min + egui::vec2(150.0 * k, (400.0 - PRINT) * k);
+    h.hover_at(p);
+    h.run_steps(1);
+    h.drag_at(p);
+    h.run_steps(1);
+    h.drop_at(p);
+    h.run_steps(4);
+    assert_eq!(h.state().dialog, None, "no print dialog for the other document");
+}
+
+/// A bookmark runs its named action on a click, and a double-click (which renames) runs it once,
+/// not twice.
+#[test]
+fn a_bookmark_runs_its_named_action_once_per_click_or_double_click() {
+    // At 60 frames a second, so two clicks a frame apart make a double-click.
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(1.0 / 60.0).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("actions.pdf", None, fixture()).unwrap();
+        app.set_option("left", "closed").unwrap();
+        app.set_option("panel", "bookmarks").unwrap();
+        app.set_option("zoom", "100").unwrap();
+        app
+    });
+    h.run_steps(8);
+    let row = |h: &Harness<'static, PdfCraftApp>| {
+        h.get_all_by_label("Onward").map(|n| n.rect()).max_by(|a, b| a.top().total_cmp(&b.top())).expect("the bookmark is listed").center()
+    };
+    let p = row(&h);
+    h.hover_at(p);
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() });
+    h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() });
+    h.run_steps(4);
+    assert_eq!(current(&h), 1, "a click runs NextPage");
+    // Past egui's double-click interval, so the next pair is a double-click of its own.
+    h.run_steps(60);
+    for _ in 0..2 {
+        h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() });
+        h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() });
+        h.run_steps(1);
+    }
+    h.run_steps(4);
+    assert_eq!(current(&h), 2, "a double-click runs NextPage once");
 }

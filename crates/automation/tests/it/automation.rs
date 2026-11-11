@@ -2317,6 +2317,75 @@ fn links_resolve_relative_addresses_and_report_their_quad_points() {
     assert_eq!(info["links"][0]["target"]["uri"], "https://example.com/base/page.html", "{info}");
 }
 
+/// `doc_info` spells a named action `menu`, as `form_fields` spells a button's, and reports the
+/// hide and reset-form actions a link chains (ISO 32000-2 §12.6.4.10, 12.6.4.12, 12.7.6.3).
+#[test]
+fn doc_info_reports_named_hide_and_reset_form_link_actions() {
+    let dir = workdir("link-named-actions");
+    let objs: Vec<&str> = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>",
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>",
+        "<< /Type /Annot /Subtype /Link /Rect [72 700 300 716] /Border [0 0 0] /A << /S /Named /N /NextPage /Next [<< /S /Hide /T (a) >> << /S /ResetForm /Fields [(b)] /Flags 1 >>] >> >>",
+    ];
+    let mut pdf = b"%PDF-1.7
+"
+    .to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(pdf.len());
+        pdf.extend_from_slice(
+            format!(
+                "{} 0 obj
+{o}
+endobj
+",
+                i + 1
+            )
+            .as_bytes(),
+        );
+    }
+    let xref = pdf.len();
+    pdf.extend_from_slice(
+        format!(
+            "xref
+0 {}
+0000000000 65535 f 
+",
+            objs.len() + 1
+        )
+        .as_bytes(),
+    );
+    for o in offsets {
+        pdf.extend_from_slice(
+            format!(
+                "{o:010} 00000 n 
+"
+            )
+            .as_bytes(),
+        );
+    }
+    pdf.extend_from_slice(
+        format!(
+            "trailer
+<< /Size {} /Root 1 0 R >>
+startxref
+{xref}
+%%EOF
+",
+            objs.len() + 1
+        )
+        .as_bytes(),
+    );
+    std::fs::write(dir.join("named.pdf"), pdf).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "named.pdf" }))["doc"].as_u64().unwrap();
+    let info = ok(&mut a, "doc_info", json!({ "doc": doc }));
+    let link = &info["links"][0];
+    assert_eq!(link["target"], json!({ "menu": "NextPage" }), "{info}");
+    assert_eq!(link["next"], json!([{ "hide": ["a"] }, { "reset_form": ["b"], "exclude": true }]), "{info}");
+}
+
 /// Once inspection's text budget is spent, a relative address stays raw, and the viewer opens it
 /// as written: `link_list` reports that address, not a second resolution against `/URI /Base`.
 #[test]

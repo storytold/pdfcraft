@@ -2947,8 +2947,14 @@ fn follow_link_action(app: &mut PdfCraftApp, index: usize, target: LinkTarget, r
                     view.view_history(false);
                 }
             }
+            // The dialog prints the active tab, so a link in a pane that isn't active (the old
+            // file in side-by-side compare) prints nothing rather than the other document.
             "Print" => {
-                app.execute("print.dialog");
+                if app.active == Some(index) {
+                    app.execute("print.dialog");
+                } else {
+                    log::info!("link: Print in a tab that isn't active; no action taken");
+                }
             }
             // "If the PDF processor encounters a named action that is inappropriate for a
             // viewing platform, or if the viewer does not recognise the name, it shall take no

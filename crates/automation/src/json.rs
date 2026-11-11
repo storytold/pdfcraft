@@ -425,7 +425,8 @@ fn link_target(i: &pdfcraft_render::DocInfo, target: &pdfcraft_render::LinkTarge
             "new_window": new_window,
         }),
         pdfcraft_render::LinkTarget::Other(o) => json!({ "other": o }),
-        pdfcraft_render::LinkTarget::Named(n) => json!({ "named": n }),
+        // `menu`, as `form_fields` spells a button's named action (`link_list`'s `named` is a flag).
+        pdfcraft_render::LinkTarget::Named(n) => json!({ "menu": n }),
         pdfcraft_render::LinkTarget::Hide { fields, hide } => json!({ if *hide { "hide" } else { "show" }: fields }),
         pdfcraft_render::LinkTarget::ResetForm { fields, exclude } => json!({ "reset_form": fields, "exclude": exclude }),
     }
