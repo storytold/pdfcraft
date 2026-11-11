@@ -1046,7 +1046,13 @@ impl Session {
     }
 
     /// Convert the worker snapshot delta and reset requests into permission-checked atomic document edits.
-    pub(crate) fn apply_script_outcome(&mut self, id: DocId, states: &[pdfcraft_js::FieldState], mut o: Outcome, opening: bool) -> Result<Outcome, EditError> {
+    pub(crate) fn apply_script_outcome(
+        &mut self,
+        id: DocId,
+        states: &[pdfcraft_js::FieldState],
+        mut o: Outcome,
+        opening: bool,
+    ) -> Result<Outcome, EditError> {
         if o.execution_refused {
             o.changed.clear();
             o.requests.clear();

@@ -98,7 +98,12 @@ pub(crate) fn js_layers(doc: &Document) -> Vec<pdfcraft_js::Layer> {
 /// A field as scripts see it: as the document has it, but shown as page actions and timers
 /// left it (its `display` and push button icon), so a button stepping an animation steps from
 /// the frame on screen.
-pub(crate) fn live_state(doc: &Document, cos: &pdfcraft_cos::Document, f: &pdfcraft_forms::Field, info: &pdfcraft_js::DocInfo) -> pdfcraft_js::FieldState {
+pub(crate) fn live_state(
+    doc: &Document,
+    cos: &pdfcraft_cos::Document,
+    f: &pdfcraft_forms::Field,
+    info: &pdfcraft_js::DocInfo,
+) -> pdfcraft_js::FieldState {
     let mut s = field_state(cos, f, info);
     if let Some(d) = doc.live.shown.get(&f.name) {
         s.display = *d;
@@ -145,11 +150,7 @@ pub(crate) fn with_live_view(doc: &Document, config: pdfcraft_render::RenderConf
         })
         .flatten()
         .collect();
-    pdfcraft_render::RenderConfig {
-        annotations: std::sync::Arc::new(annotations),
-        appearances: std::sync::Arc::new(appearances),
-        ..config
-    }
+    pdfcraft_render::RenderConfig { annotations: std::sync::Arc::new(annotations), appearances: std::sync::Arc::new(appearances), ..config }
 }
 
 /// Draw the viewer with how fields show now.
@@ -175,9 +176,12 @@ pub(crate) fn set_layers(doc: &mut Document, layers: &[(usize, bool)]) -> bool {
     changed
 }
 
+/// Push buttons given another icon, by name: the icon's form object (`None`: no icon).
+type IconChanges = Vec<(String, Option<u64>)>;
+
 /// The `display` and icon changes in `o`, against the fields as they were (`states`), taken out
 /// of it: shown in the view instead of written into the document.
-fn take_view_changes(states: &[pdfcraft_js::FieldState], o: &mut Outcome) -> (Vec<(String, i32)>, Vec<(String, Option<u64>)>) {
+fn take_view_changes(states: &[pdfcraft_js::FieldState], o: &mut Outcome) -> (Vec<(String, i32)>, IconChanges) {
     let mut shown = Vec::new();
     let mut icons = Vec::new();
     for a in &mut o.changed {

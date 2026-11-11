@@ -205,7 +205,8 @@ fn get_ocgs_turns_a_layer_in_the_view() {
     let out = pdf(&[
         "<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [5 0 R] /D << /Order [5 0 R] >> >> >>".into(),
         "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>".into(),
-        "<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Properties << /L1 5 0 R >> >> /AA << /O << /S /JavaScript /JS 6 0 R >> >> >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Properties << /L1 5 0 R >> >> /AA << /O << /S /JavaScript /JS 6 0 R >> >> >>"
+            .into(),
         "<< /Length 41 >>\nstream\n/OC /L1 BDC 1 0 0 rg 0 0 200 300 re f EMC\nendstream".into(),
         "<< /Type /OCG /Name (Red) >>".into(),
         format!("<< /Length {} >>\nstream\n{open}\nendstream", open.len()),
