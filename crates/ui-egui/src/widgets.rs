@@ -85,6 +85,23 @@ pub fn line(text: &mut dyn egui::TextBuffer) -> egui::TextEdit<'_> {
     egui::TextEdit::singleline(text).margin(FIELD_MARGIN).min_size(vec2(0.0, FIELD_MIN_HEIGHT))
 }
 
+/// Give the field `r` the keyboard with all of `text` selected, so typing replaces it.
+///
+/// A field that already has the keyboard keeps its selection: it may hold an IME composition,
+/// whose next update replaces the selected range, and egui ends a composition only from inside
+/// the field. A field focused from elsewhere has none (egui ends it when the focus moves).
+pub fn focus_selecting_all(ui: &egui::Ui, r: &egui::Response, text: &str) {
+    let composing = ui.memory(|m| m.owns_ime_events(r.id));
+    r.request_focus();
+    if composing {
+        return;
+    }
+    if let Some(mut state) = egui::TextEdit::load_state(ui.ctx(), r.id) {
+        state.cursor.set_char_range(Some(egui::text::CCursorRange::select_all_str(text)));
+        state.store(ui.ctx(), r.id);
+    }
+}
+
 /// A multiline field with the same horizontal inset as [`line()`].
 pub fn block(text: &mut dyn egui::TextBuffer) -> egui::TextEdit<'_> {
     egui::TextEdit::multiline(text).margin(egui::Margin::symmetric(10, 6))
