@@ -1,4 +1,4 @@
-use super::*;
+use super::{Dict, Document, Field, FieldKind, FormError, ObjRef, Object, Stream, Widget, appearance, fields, invalid, rgb};
 
 /// The Appearance tab: borders, colours and text.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -315,6 +315,25 @@ pub fn redraw_field(doc: &mut Document, name: &str) -> Result<(), FormError> {
 /// `FormError::NoSuchField` when no field is named `name`.
 pub(super) fn redraw_widgets(doc: &mut Document, name: &str, only: Option<usize>) -> Result<(), FormError> {
     let f = fields(doc).into_iter().find(|f| f.name == name).ok_or_else(|| FormError::NoSuchField(name.into()))?;
+    redraw_widgets_of(doc, &f, only)
+}
+
+/// [`redraw_field`] for each field [`fields`] lists that `keep` accepts. The form's fields are
+/// read once: drawing a field changes only its own widgets' appearances, so the list stays true
+/// for the rest. Looking each one up by name instead reads the whole form again for every field,
+/// which grows with the square of the field count (a laid out XFA form with a thousand rows holds
+/// thousands of fields). A failure names the field it stopped at.
+pub fn redraw_fields(doc: &mut Document, mut keep: impl FnMut(&Document, &Field) -> bool) -> Result<(), FormError> {
+    for f in fields(doc) {
+        if keep(doc, &f) {
+            redraw_widgets_of(doc, &f, None).map_err(|e| FormError::Invalid(format!("{}: {e}", f.name)))?;
+        }
+    }
+    Ok(())
+}
+
+/// [`redraw_widgets`] for the field `f`, as `fields(doc)` read it.
+fn redraw_widgets_of(doc: &mut Document, f: &Field, only: Option<usize>) -> Result<(), FormError> {
     let mut undrawn = false;
     for (index, w) in f.widgets.iter().enumerate() {
         if only.is_some_and(|only| only != index) {
@@ -323,8 +342,10 @@ pub(super) fn redraw_widgets(doc: &mut Document, name: &str, only: Option<usize>
         let mut missing = None;
         let ap = match f.kind {
             FieldKind::Text | FieldKind::Combo | FieldKind::List => {
-                let (s, m) = appearance::field_appearance_drawn(doc, &f, w, &f.value, true);
+                let (mut s, m) = appearance::field_appearance_drawn(doc, f, w, &f.value, true);
                 missing = m;
+                // Thai glyphs are streams of their own.
+                pdfcraft_fonts::shaped_text::store_streams(doc, &mut s.dict);
                 let r = doc.add(Object::Stream(s));
                 let mut d = Dict::new();
                 d.set(b"N".to_vec(), Object::Ref(r));

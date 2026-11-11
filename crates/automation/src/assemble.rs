@@ -1,7 +1,7 @@
 use super::error::{Result, ToolError, failed};
 use super::json::{Args, one_based, summary};
 use super::paths::{child, read_input, read_input_bytes, unused, write_atomic};
-use super::*;
+use super::{Arc, Automation, CombineSource, Edit, Path, PathBuf, Value, json};
 
 impl Automation {
     pub(crate) fn doc_create(&mut self, a: &Args) -> Result<Value> {
@@ -36,8 +36,9 @@ impl Automation {
                     }
                     (None, None) => return Err(ToolError::InvalidArgs("text needs `text` or `path`".into())),
                 };
-                // The page font is Helvetica/WinAnsi: text it would turn into `?` is refused (with
-                // its line) by `pdfcraft_create::from_text`, as for every other caller.
+                // The page font is Helvetica/WinAnsi, or the bundled Inter face for Latin, Greek and
+                // Cyrillic letters WinAnsi lacks: text neither can draw is refused (with its line)
+                // by `pdfcraft_create::from_text`, as for every other caller.
                 let bytes = self.session.create_from_text(&title, &text).map_err(|e| match e {
                     pdfcraft_engine::EditError::Create(pdfcraft_engine::CreateError::Invalid(m)) => ToolError::InvalidArgs(m),
                     e => failed(e),

@@ -10,9 +10,11 @@ use pdfcraft_engine::form_scripts::{CalcOp, Calculate, DATE_PRESETS, Format, TIM
 use pdfcraft_engine::{BorderStyle, Document, Edit, FieldFont, FieldLook, FieldProps, FormField, FormFieldKind, NewField};
 use pdfcraft_render::DocInfo;
 
-use crate::canvas::{DocView, PageXform};
+use crate::canvas::{DocView, PageToolContext, PageXform};
 use crate::comments;
-use crate::page_pointer::PagePointer;
+use crate::page_cursor::Layer;
+use crate::page_keys::PageKeys;
+use crate::page_router::{Hit, Owner, PagePress};
 use crate::theme;
 use crate::widgets;
 
@@ -139,13 +141,16 @@ enum Grab {
     Draw(Pos2),
     /// Selecting fields inside a dragged rectangle.
     Select(Pos2),
-    Move,
+    /// Moving the selected field; with Shift held, the axis the move keeps to once [`lock_axis`] chose it.
+    Move(Option<Axis>),
     /// Resizing by a corner: (moves left edge, moves top edge) in screen terms.
     Corner(bool, bool),
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct PrepareView {
+    /// Show each fillable widget's position in the same order used by Tab and Shift+Tab.
+    pub show_tab_numbers: bool,
     /// The selected field and which of its widgets (the anchor of Align and Match Size).
     pub selected: Option<(String, usize)>,
     /// More fields selected with Shift- or ⌘-click.
@@ -228,17 +233,86 @@ fn handles(r: Rect) -> [(Pos2, bool, bool); 4] {
     [(r.left_top(), true, true), (r.right_top(), false, true), (r.left_bottom(), true, false), (r.right_bottom(), false, false)]
 }
 
-/// The rect while a move or resize is in progress. With `shift` held a corner keeps the field's
-/// proportions, as it does for comments and stamps.
+/// The direction a Shift-constrained move keeps to.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Axis {
+    Horizontal,
+    Vertical,
+}
+
+impl Axis {
+    /// The axis `delta` has gone further along; horizontal on a tie.
+    fn of(delta: egui::Vec2) -> Self {
+        if delta.x.abs() >= delta.y.abs() { Axis::Horizontal } else { Axis::Vertical }
+    }
+}
+
+/// How far, in screen pixels, a Shift-move goes before its axis is chosen, so the first pixel of
+/// hand jitter does not pick it.
+const AXIS_LOCK: f32 = 4.0;
+
+/// The axis a move keeps to with `shift` held: chosen once the drag has gone [`AXIS_LOCK`] pixels,
+/// from the direction it has gone furthest, and then kept while Shift stays down, so a drag that
+/// turns and crosses the diagonal does not flip it and make the field jump. Releasing Shift frees
+/// the move, and pressing it again chooses afresh.
+fn lock_axis(axis: Option<Axis>, delta: egui::Vec2, shift: bool) -> Option<Axis> {
+    if !shift {
+        return None;
+    }
+    axis.or_else(|| (delta.length() >= AXIS_LOCK).then(|| Axis::of(delta)))
+}
+
+/// The rect while a move or resize is in progress. With `shift` held a move keeps to one axis,
+/// horizontal or vertical, as Acrobat's Prepare Form does ("To constrain the vertical or horizontal
+/// movement as you drag, press and hold Shift"): the one [`lock_axis`] chose, or until it has
+/// chosen, the one the drag has gone furthest along. A corner keeps the field's proportions, as it
+/// does for comments and stamps.
 fn dragged(r: Rect, grab: Grab, delta: egui::Vec2, shift: bool) -> Rect {
     match grab {
-        Grab::Move => r.translate(delta),
+        Grab::Move(axis) if shift => r.translate(match axis.unwrap_or_else(|| Axis::of(delta)) {
+            Axis::Horizontal => vec2(delta.x, 0.0),
+            Axis::Vertical => vec2(0.0, delta.y),
+        }),
+        Grab::Move(_) => r.translate(delta),
         Grab::Corner(left, top) => {
             let handle = (if left { -1 } else { 1 }, if top { -1 } else { 1 });
             comments::resized(r, handle, delta, comments::corner_ratio(r, None, shift))
         }
         Grab::Draw(_) | Grab::Select(_) => r,
     }
+}
+
+fn tab_badge_rect(widget: Rect, page: Rect, size: egui::Vec2) -> Option<Rect> {
+    if !page.is_positive() || !size.is_finite() || size.x < 0.0 || size.y < 0.0 || size.x > page.width() || size.y > page.height() {
+        return None;
+    }
+    let max_x = page.right() - size.x;
+    let max_y = page.bottom() - size.y;
+    let min = egui::pos2((widget.left() + 3.0).clamp(page.left(), max_x), (widget.top() + 3.0).clamp(page.top(), max_y));
+    Some(Rect::from_min_size(min, size))
+}
+
+fn place_tab_badge(widget: Rect, page: Rect, size: egui::Vec2, placed: &[Rect]) -> Option<Rect> {
+    let preferred = tab_badge_rect(widget, page, size)?;
+    if placed.iter().all(|badge| !badge.intersects(preferred)) {
+        return Some(preferred);
+    }
+
+    let gap = 2.0;
+    let step = size + vec2(gap, gap);
+    let columns = (((page.width() - size.x) / step.x).floor().max(0.0) as usize).saturating_add(1);
+    let rows = (((page.height() - size.y) / step.y).floor().max(0.0) as usize).saturating_add(1);
+    let attempts = columns.saturating_mul(rows).min(placed.len().saturating_add(1));
+    for slot in 0..attempts {
+        let col = slot % columns;
+        let row = slot / columns;
+        let min = page.min + vec2(col as f32 * step.x, row as f32 * step.y);
+        let candidate = Rect::from_min_size(min, size);
+        if placed.iter().all(|badge| !badge.intersects(candidate)) {
+            return Some(candidate);
+        }
+    }
+    None
 }
 
 pub(crate) struct Outcome {
@@ -252,25 +326,55 @@ pub(crate) struct Outcome {
     pub table: Option<(usize, [f64; 4])>,
 }
 
-/// Pointer input on one page while preparing a form.
+/// What Prepare Form's Select tool has under `p` on `page`: the selected field's corner handles,
+/// then a field. A field being moved is placed on the page over the comments; nothing with a field
+/// tool, which draws anywhere.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn page_input(
-    ui: &egui::Ui,
-    resp: &egui::Response,
+pub(crate) fn hit(
     xf: &PageXform,
-    ptr: &PagePointer,
-    page: usize,
     info: &DocInfo,
+    page: usize,
     form: &[FormField],
     tool: Option<FieldTool>,
     allowed: bool,
+    prep: &PrepareView,
+    p: Pos2,
+) -> Option<Hit> {
+    if tool.is_some() || !allowed || !xf.rect.contains(p) {
+        return None;
+    }
+    let selected_rect = prep
+        .selected
+        .as_ref()
+        .and_then(|(n, wi)| form.iter().find(|f| &f.name == n)?.widgets.get(*wi).filter(|w| w.page == Some(page)))
+        .map(|w| screen_rect(xf, info, page, w.rect));
+    if let Some((_, left, top)) = selected_rect.and_then(|r| handles(r).into_iter().find(|(c, ..)| c.distance(p) <= 6.0)) {
+        let icon = if left == top { egui::CursorIcon::ResizeNwSe } else { egui::CursorIcon::ResizeNeSw };
+        return Some(Hit::new(Owner::PrepareCorner { left, top }, Layer::Handle, icon));
+    }
+    let (field, widget) = form.iter().enumerate().find_map(|(fi, f)| {
+        f.widgets.iter().enumerate().find(|(_, w)| w.page == Some(page) && screen_rect(xf, info, page, w.rect).contains(p)).map(|(wi, _)| (fi, wi))
+    })?;
+    Some(Hit::new(Owner::PrepareField { field, widget }, Layer::Placed, egui::CursorIcon::Move))
+}
+
+/// Pointer input on one page while preparing a form: `press` says whether the press is a field's
+/// or a corner's ([`hit`]), nobody's (a field tool draws, the Select tool draws a selection
+/// rectangle), or another page's.
+pub(crate) fn page_input(
+    cx: PageToolContext<'_>,
+    form: &[FormField],
+    tool: Option<FieldTool>,
+    allowed: bool,
+    press: PagePress,
     view: &mut DocView,
 ) -> Outcome {
+    let PageToolContext { ui, resp, xf, ptr, page, info, keys, .. } = cx;
     let mut out = Outcome { consumed: false, properties: false, placed: false, table: None };
     let pointer = ptr.pos;
     let prep = &mut view.prepare;
 
-    if prep.marquee_before.is_some() && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+    if prep.marquee_before.is_some() && keys.take(ui.ctx(), egui::Key::Escape) {
         cancel_marquee(prep);
         out.consumed = true;
         return out;
@@ -284,10 +388,14 @@ pub(crate) fn page_input(
     }
 
     // A grab in progress on this page.
-    if let Some((gp, grab, start)) = prep.grab
+    if let Some((gp, mut grab, start)) = prep.grab
         && gp == page
     {
         out.consumed = true;
+        if let (Grab::Move(axis), Some(p)) = (grab, pointer) {
+            grab = Grab::Move(lock_axis(axis, p - start, ui.input(|i| i.modifiers.shift)));
+            prep.grab = Some((gp, grab, start));
+        }
         if resp.drag_stopped() || !ptr.primary_down {
             prep.grab = None;
             let end = pointer.unwrap_or(start);
@@ -330,7 +438,7 @@ pub(crate) fn page_input(
                     view.pending_edit = Some(Edit::AddField { page, rect, kind: tool.new_field(join), name: None });
                     out.placed = true;
                 }
-                Grab::Move | Grab::Corner(..) => {
+                Grab::Move(_) | Grab::Corner(..) => {
                     let Some((name, wi)) = prep.selected.clone() else { return out };
                     let Some(w) = form.iter().find(|f| f.name == name).and_then(|f| f.widgets.get(wi)) else { return out };
                     let delta = end - start;
@@ -347,83 +455,31 @@ pub(crate) fn page_input(
         return out;
     }
 
-    let Some(p) = pointer.filter(|p| xf.rect.contains(*p)) else { return out };
-    if !allowed {
-        return out;
-    }
-    if let Some(tool) = tool {
-        ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
-        if resp.drag_started() || resp.clicked() {
-            let origin = ptr.origin.filter(|o| xf.rect.contains(*o)).unwrap_or(p);
-            prep.grab = Some((page, Grab::Draw(origin), origin));
-            out.consumed = true;
-            if resp.clicked() {
-                // A click without a drag: finish at once.
-                prep.grab = None;
-                if tool == FieldTool::TextTable {
-                    out.table = Some((page, table_rect(xf, Rect::from_min_size(p, egui::Vec2::ZERO))));
-                    out.placed = true;
-                    return out;
-                }
-                let at = to_user(xf, info, page, p);
-                let (w, h) = tool.default_size();
-                let join = prep.selected.as_ref().and_then(|(n, _)| form.iter().find(|f| &f.name == n));
-                prep.select_added = Some(form.len());
-                view.pending_edit = Some(Edit::AddField { page, rect: [at[0], at[1] - h, at[0] + w, at[1]], kind: tool.new_field(join), name: None });
-                out.placed = true;
-            }
-        }
-        return out;
-    }
-
-    // Right-click a field: select it (the context menu acts on it).
-    if resp.secondary_clicked()
-        && let Some((f, wi)) = form.iter().find_map(|f| {
-            f.widgets.iter().enumerate().find(|(_, w)| w.page == Some(page) && screen_rect(xf, info, page, w.rect).contains(p)).map(|(i, _)| (f, i))
-        })
+    // The Select tool: what the press is on ([`hit`]), a corner handle or a field; a press nobody
+    // holds draws a selection rectangle, or a field with a field tool. A press held by something
+    // drawn over the fields (a comment) is not Prepare's, though its drag is once that something
+    // lets it go (a highlight's, `PageRouter::drag_began`).
+    let free = press == PagePress::Free;
+    let held = matches!(press, PagePress::Mine(Owner::PrepareField { .. } | Owner::PrepareCorner { .. }));
+    let hit = match press {
+        PagePress::Mine(Owner::PrepareField { field, widget }) => form.get(field).map(|f| (f, widget)),
+        _ => None,
+    };
+    // A drag starts from where its press began on this page: egui may see it only once the pointer
+    // is past the page's edge.
+    if allowed
+        && ptr.drag_started
+        && (held || free)
+        && let Some(origin) = ptr.origin.filter(|o| xf.rect.contains(*o))
     {
-        let key = (f.name.clone(), wi);
-        if let Some(i) = prep.also.iter().position(|k| *k == key) {
-            // Part of the selection: it becomes the anchor the others line up with.
-            prep.also.remove(i);
-            if let Some(old) = prep.selected.replace(key) {
-                prep.also.push(old);
-            }
-        } else if prep.selected.as_ref() != Some(&key) {
-            prep.selected = Some(key);
-            prep.also.clear();
-        }
-    }
-    // The Select tool: corner handles of the selection, then fields.
-    let selected_rect = prep
-        .selected
-        .as_ref()
-        .and_then(|(n, wi)| form.iter().find(|f| &f.name == n)?.widgets.get(*wi).filter(|w| w.page == Some(page)))
-        .map(|w| screen_rect(xf, info, page, w.rect));
-    let corner = selected_rect.and_then(|r| handles(r).into_iter().find(|(c, ..)| c.distance(p) <= 6.0));
-    let hit = form.iter().find_map(|f| {
-        f.widgets.iter().enumerate().find(|(_, w)| w.page == Some(page) && screen_rect(xf, info, page, w.rect).contains(p)).map(|(i, _)| (f, i))
-    });
-    if let Some((_, left, top)) = corner {
-        ui.ctx().set_cursor_icon(if left == top { egui::CursorIcon::ResizeNwSe } else { egui::CursorIcon::ResizeNeSw });
-    } else if hit.is_some() {
-        ui.ctx().set_cursor_icon(egui::CursorIcon::Move);
-    }
-    if resp.drag_started() {
-        let origin = ptr.origin.unwrap_or(p);
-        if let Some((_, left, top)) = selected_rect.and_then(|r| handles(r).into_iter().find(|(c, ..)| c.distance(origin) <= 6.0)) {
+        out.consumed = true;
+        if tool.is_some() {
+            prep.grab = Some((page, Grab::Draw(origin), origin));
+        } else if let PagePress::Mine(Owner::PrepareCorner { left, top }) = press {
             prep.grab = Some((page, Grab::Corner(left, top), origin));
-            out.consumed = true;
-        } else if let Some((f, wi)) = form.iter().find_map(|f| {
-            f.widgets
-                .iter()
-                .enumerate()
-                .find(|(_, w)| w.page == Some(page) && screen_rect(xf, info, page, w.rect).contains(origin))
-                .map(|(i, _)| (f, i))
-        }) {
+        } else if let Some((f, wi)) = hit {
             prep.selected = Some((f.name.clone(), wi));
-            prep.grab = Some((page, Grab::Move, origin));
-            out.consumed = true;
+            prep.grab = Some((page, Grab::Move(None), origin));
         } else {
             prep.marquee_before = Some(prep.selected.iter().chain(prep.also.iter()).cloned().collect());
             if !ui.input(|i| i.modifiers.shift || i.modifiers.command) {
@@ -431,7 +487,29 @@ pub(crate) fn page_input(
                 prep.also.clear();
             }
             prep.grab = Some((page, Grab::Select(origin), origin));
+        }
+        return out;
+    }
+    let Some(p) = pointer.filter(|p| xf.rect.contains(*p)) else { return out };
+    if !allowed {
+        return out;
+    }
+    if let Some(tool) = tool {
+        view.cursor.claim(Layer::ToolArea, egui::CursorIcon::Crosshair);
+        // A click without a drag places the field at once.
+        if free && resp.clicked() {
             out.consumed = true;
+            if tool == FieldTool::TextTable {
+                out.table = Some((page, table_rect(xf, Rect::from_min_size(p, egui::Vec2::ZERO))));
+                out.placed = true;
+                return out;
+            }
+            let at = to_user(xf, info, page, p);
+            let (w, h) = tool.default_size();
+            let join = prep.selected.as_ref().and_then(|(n, _)| form.iter().find(|f| &f.name == n));
+            prep.select_added = Some(form.len());
+            view.pending_edit = Some(Edit::AddField { page, rect: [at[0], at[1] - h, at[0] + w, at[1]], kind: tool.new_field(join), name: None });
+            out.placed = true;
         }
         return out;
     }
@@ -440,7 +518,7 @@ pub(crate) fn page_input(
         out.properties = true;
         return out;
     }
-    if resp.clicked() {
+    if resp.clicked() && (held || free) {
         let extend = ui.input(|i| i.modifiers.shift || i.modifiers.command);
         match hit {
             // Shift/⌘-click adds or removes a field from the selection.
@@ -448,15 +526,37 @@ pub(crate) fn page_input(
                 prep.select((f.name.clone(), wi), extend);
                 out.consumed = true;
             }
-            None if corner.is_none() => {
+            None if !held => {
                 prep.selected = None;
                 prep.also.clear();
             }
             None => out.consumed = true,
         }
     }
-    out.consumed |= hit.is_some() && resp.is_pointer_button_down_on();
+    out.consumed |= held;
     out
+}
+
+/// A right-click on widget `widget` of field `field` (the top hit there, [`hit`]): the field is
+/// selected, so the menu acts on it. Part of a selection of several, it becomes the anchor the
+/// others line up with. Not while a field is dragged or a rectangle drawn: the release acts on
+/// the selection the drag began with.
+pub(crate) fn context(form: &[FormField], field: usize, widget: usize, view: &mut DocView) {
+    let Some(f) = form.get(field) else { return };
+    let key = (f.name.clone(), widget);
+    let prep = &mut view.prepare;
+    if prep.grab.is_some() || prep.ignore_release {
+        return;
+    }
+    if let Some(i) = prep.also.iter().position(|k| *k == key) {
+        prep.also.remove(i);
+        if let Some(old) = prep.selected.replace(key) {
+            prep.also.push(old);
+        }
+    } else if prep.selected.as_ref() != Some(&key) {
+        prep.selected = Some(key);
+        prep.also.clear();
+    }
 }
 
 /// Align, Center, Distribute and Set Fields to Same Size (Prepare a form, several fields
@@ -556,33 +656,27 @@ pub fn arrange(form: &[FormField], anchor: &(String, usize), others: &[(String, 
 
 /// Fields with their light-blue fill and name tags, the selection with its handles, and the
 /// rectangle being drawn or dragged to the pages' `pointer`.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn paint_page(
-    ui: &egui::Ui,
-    painter: &egui::Painter,
-    xf: &PageXform,
-    page: usize,
-    info: &DocInfo,
-    form: &[FormField],
-    view: &DocView,
-    pointer: Option<Pos2>,
-) {
+pub(crate) fn paint_page(cx: PageToolContext<'_>, form: &[FormField], tab_order: &[(usize, usize)], view: &DocView) {
+    let PageToolContext { ui, xf, page, info, ptr, .. } = cx;
+    let painter = ui.painter();
+    let pointer = ptr.pos;
     let prep = &view.prepare;
     let grab = prep.grab.filter(|(gp, ..)| *gp == page);
     let zoom = xf.zoom().clamp(0.5, 3.0);
     for f in form {
         for (wi, w) in f.widgets.iter().enumerate().filter(|(_, w)| w.page == Some(page)) {
             let mut r = screen_rect(xf, info, page, w.rect);
-            let selected = prep.selected.as_ref().is_some_and(|(n, i)| n == &f.name && *i == wi);
+            let primary = prep.selected.as_ref().is_some_and(|(n, i)| n == &f.name && *i == wi);
             let also = prep.also.iter().any(|(n, i)| n == &f.name && *i == wi);
-            if selected && let (Some((_, g, start)), Some(p)) = (grab, pointer) {
+            let selected = primary || also;
+            if primary && let (Some((_, g, start)), Some(p)) = (grab, pointer) {
                 r = dragged(r, g, p - start, ui.input(|i| i.modifiers.shift));
             }
             painter.rect_filled(r, CornerRadius::ZERO, FIELD_FILL);
             painter.rect_stroke(
                 r,
                 CornerRadius::ZERO,
-                Stroke::new(if also { 2.0 } else { 1.0 }, if selected || also { SELECT_BLUE } else { Color32::from_gray(90) }),
+                Stroke::new(1.0, if selected { SELECT_BLUE } else { Color32::from_gray(90) }),
                 egui::StrokeKind::Inside,
             );
             // The name tag: white text on black, clipped to the field.
@@ -598,10 +692,35 @@ pub(crate) fn paint_page(
             p2.galley(tag.min + vec2(3.0, 1.0), galley, Color32::WHITE);
             if selected {
                 painter.rect_stroke(r.expand(1.0), CornerRadius::ZERO, Stroke::new(2.0, SELECT_BLUE), egui::StrokeKind::Outside);
+            }
+            if primary {
                 for (c, ..) in handles(r) {
                     painter.circle(c, 3.5, Color32::WHITE, Stroke::new(1.5, SELECT_BLUE));
                 }
             }
+        }
+    }
+    if prep.show_tab_numbers {
+        let mut placed = Vec::new();
+        for (number, (fi, wi)) in tab_order.iter().copied().enumerate() {
+            let Some(field) = form.get(fi) else { continue };
+            let Some(widget) = field.widgets.get(wi) else { continue };
+            if widget.page != Some(page) {
+                continue;
+            }
+            let mut r = screen_rect(xf, info, page, widget.rect);
+            let selected = prep.selected.as_ref().is_some_and(|(name, index)| name == &field.name && *index == wi);
+            if selected && let (Some((_, grab, start)), Some(pointer)) = (grab, pointer) {
+                r = dragged(r, grab, pointer - start, ui.input(|i| i.modifiers.shift));
+            }
+            let label = number.saturating_add(1).to_string();
+            let font = theme::semibold((10.0 * zoom).clamp(8.0, 14.0));
+            let galley = painter.layout_no_wrap(label, font, Color32::WHITE);
+            let Some(badge) = place_tab_badge(r, xf.rect, galley.size() + vec2(8.0, 5.0), &placed) else { continue };
+            placed.push(badge);
+            let clipped = painter.with_clip_rect(painter.clip_rect().intersect(xf.rect));
+            clipped.rect_filled(badge, CornerRadius::same(3), SELECT_BLUE);
+            clipped.galley(badge.min + vec2(4.0, 2.0), galley, Color32::WHITE);
         }
     }
     if let (Some((_, Grab::Draw(from) | Grab::Select(from), _)), Some(p)) = (grab, pointer) {
@@ -612,50 +731,55 @@ pub(crate) fn paint_page(
 }
 
 /// Delete the selected field and every field selected with it (#95), as one undoable step, and
-/// clear the selection.
+/// clear the selection. Each selection is one widget, so selecting one radio button of a group,
+/// or one copy of a duplicated field, deletes only that one, as in Acrobat (#4609); a field's
+/// last widget takes the field with it.
 pub(crate) fn delete_selected(view: &mut DocView) -> Option<Edit> {
-    let (first, _) = view.prepare.selected.take()?;
-    let mut names = vec![first];
-    for (name, _) in std::mem::take(&mut view.prepare.also) {
-        if !names.contains(&name) {
-            names.push(name);
+    let first = view.prepare.selected.take()?;
+    let mut picked = vec![first];
+    for w in std::mem::take(&mut view.prepare.also) {
+        if !picked.contains(&w) {
+            picked.push(w);
         }
     }
-    if names.len() == 1 {
-        return names.pop().map(|name| Edit::DeleteField { name });
+    // A field's later widgets first, so the indices of the ones still to go don't shift.
+    picked.sort_by_key(|w| std::cmp::Reverse(w.1));
+    if picked.len() == 1 {
+        return picked.pop().map(|(name, widget)| Edit::DeleteWidget { name, widget });
     }
-    let label = format!("Delete {} fields", names.len());
-    Some(Edit::Batch { label, edits: names.into_iter().map(|name| Edit::DeleteField { name }).collect() })
+    let label = format!("Delete {} fields", picked.len());
+    Some(Edit::Batch { label, edits: picked.into_iter().map(|(name, widget)| Edit::DeleteWidget { name, widget }).collect() })
 }
 
 /// The arrow keys move the selected field a point, Shift and an arrow ten points, as in Acrobat,
 /// as the object nudge does (`object_ui::nudge_keys`) and as dragging it does (#2608). The keys
 /// are consumed before the view turns the page with them; one press is one undo step.
-pub(crate) fn nudge_keys(ctx: &egui::Context, view: &mut DocView, doc: &Document) {
-    // `consume_key` lets an extra Alt through, and Alt+↑/↓ belongs to Calculation order's move.
-    if ctx.egui_wants_keyboard_input() || view.prepare.grab.is_some() || ctx.input(|i| i.modifiers.alt) {
+pub(crate) fn nudge_keys(ctx: &egui::Context, keys: PageKeys, view: &mut DocView, doc: &Document) {
+    if ctx.egui_wants_keyboard_input() || view.prepare.grab.is_some() {
         return;
     }
     let Some((name, wi)) = view.prepare.selected.clone() else { return };
     let Some(w) = doc.form.iter().find(|f| f.name == name).and_then(|f| f.widgets.get(wi)) else { return };
     let Some(page) = w.page else { return };
     let Some(xf) = view.page_xform(page) else { return };
-    use egui::{Key, Modifiers};
+    use egui::Key;
     let mut step = egui::Vec2::ZERO;
-    ctx.input_mut(|i| {
-        for (key, direction) in [
-            (Key::ArrowLeft, egui::vec2(-1.0, 0.0)),
-            (Key::ArrowRight, egui::vec2(1.0, 0.0)),
-            (Key::ArrowUp, egui::vec2(0.0, -1.0)),
-            (Key::ArrowDown, egui::vec2(0.0, 1.0)),
-        ] {
-            // Shift first: a plain key pattern also matches a Shift press.
-            if i.consume_key(Modifiers::SHIFT, key) {
-                step += direction * 10.0;
-            } else if i.consume_key(Modifiers::NONE, key) {
-                step += direction;
-            }
+    // Only an arrow pressed alone or with Shift, judged by each press's own modifiers (the
+    // frame's can differ when a key is let go in the same frame). Alt+← / Alt+→ go back and
+    // forward through the view history (#3632) and Alt+↑ / ↓ is Calculation order's move.
+    keys.take_presses(ctx, |key, modifiers| {
+        if modifiers.alt || modifiers.ctrl || modifiers.command || modifiers.mac_cmd {
+            return false;
         }
+        let direction = match key {
+            Key::ArrowLeft => egui::vec2(-1.0, 0.0),
+            Key::ArrowRight => egui::vec2(1.0, 0.0),
+            Key::ArrowUp => egui::vec2(0.0, -1.0),
+            Key::ArrowDown => egui::vec2(0.0, 1.0),
+            _ => return false,
+        };
+        step += direction * if modifiers.shift { 10.0 } else { 1.0 };
+        true
     });
     if step == egui::Vec2::ZERO {
         return;
@@ -693,21 +817,23 @@ fn cancel_marquee(prep: &mut PrepareView) {
     }
 }
 
-pub(crate) fn keys(ctx: &egui::Context, view: &mut DocView) {
+/// Delete removes the selected fields and Escape deselects them, while no text field has focus and
+/// nothing is over the pages.
+pub(crate) fn keys(ctx: &egui::Context, keys: PageKeys, view: &mut DocView) {
     if ctx.egui_wants_keyboard_input() {
         return;
     }
-    if view.prepare.marquee_before.is_some() && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+    if view.prepare.marquee_before.is_some() && keys.take(ctx, egui::Key::Escape) {
         cancel_marquee(&mut view.prepare);
         return;
     }
     if view.prepare.selected.is_none() {
         return;
     }
-    let (del, esc) = ctx.input(|i| (i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace), i.key_pressed(egui::Key::Escape)));
+    let del = keys.pressed(ctx, egui::Key::Delete) || keys.pressed(ctx, egui::Key::Backspace);
     if del {
         view.pending_edit = delete_selected(view);
-    } else if esc {
+    } else if keys.pressed(ctx, egui::Key::Escape) {
         view.prepare.selected = None;
         view.prepare.also.clear();
     }
@@ -754,6 +880,70 @@ mod tests {
             assert_eq!(if left { out.max.x } else { out.min.x }, if left { r.max.x } else { r.min.x });
             assert_eq!(if top { out.max.y } else { out.min.y }, if top { r.max.y } else { r.min.y });
         }
-        assert_eq!(dragged(r, Grab::Move, vec2(5.0, 6.0), true), r.translate(vec2(5.0, 6.0)));
+        assert_eq!(dragged(r, Grab::Move(None), vec2(5.0, 6.0), false), r.translate(vec2(5.0, 6.0)));
+    }
+
+    /// Shift keeps a move to one axis: whichever the drag has gone further along, so the field
+    /// follows the pointer's main direction and never drifts on the other.
+    #[test]
+    fn shift_keeps_a_move_horizontal_or_vertical() {
+        let r = Rect::from_min_max(pos2(100.0, 100.0), pos2(196.0, 132.0));
+        assert_eq!(dragged(r, Grab::Move(None), vec2(40.0, 6.0), true), r.translate(vec2(40.0, 0.0)), "mostly right");
+        assert_eq!(dragged(r, Grab::Move(None), vec2(-40.0, 6.0), true), r.translate(vec2(-40.0, 0.0)), "mostly left");
+        assert_eq!(dragged(r, Grab::Move(None), vec2(5.0, -30.0), true), r.translate(vec2(0.0, -30.0)), "mostly up");
+        assert_eq!(dragged(r, Grab::Move(None), vec2(-5.0, 30.0), true), r.translate(vec2(0.0, 30.0)), "mostly down");
+        // Releasing Shift moves freely again.
+        assert_eq!(dragged(r, Grab::Move(None), vec2(40.0, 6.0), false), r.translate(vec2(40.0, 6.0)));
+        // A chosen axis holds even where the drag has gone further along the other one.
+        assert_eq!(dragged(r, Grab::Move(Some(Axis::Horizontal)), vec2(40.0, 60.0), true), r.translate(vec2(40.0, 0.0)));
+        assert_eq!(dragged(r, Grab::Move(Some(Axis::Vertical)), vec2(60.0, 40.0), true), r.translate(vec2(0.0, 40.0)));
+        assert_eq!(dragged(r, Grab::Move(Some(Axis::Vertical)), vec2(60.0, 40.0), false), r.translate(vec2(60.0, 40.0)));
+    }
+
+    /// The axis is chosen once the drag has gone a few pixels with Shift held, kept while Shift
+    /// stays down whichever way the drag then turns, and freed when Shift is let go.
+    #[test]
+    fn a_shift_move_locks_its_axis_until_shift_is_let_go() {
+        assert_eq!(lock_axis(None, vec2(2.0, 1.0), true), None, "not yet past the jitter");
+        let axis = lock_axis(None, vec2(40.0, 0.0), true);
+        assert_eq!(axis, Some(Axis::Horizontal));
+        assert_eq!(lock_axis(axis, vec2(40.0, 42.0), true), axis, "crossing the diagonal keeps it");
+        assert_eq!(lock_axis(axis, vec2(0.0, 300.0), true), axis);
+        assert_eq!(lock_axis(axis, vec2(40.0, 42.0), false), None, "Shift let go frees it");
+        assert_eq!(lock_axis(None, vec2(40.0, 42.0), true), Some(Axis::Vertical), "and pressing it again chooses afresh");
+        assert_eq!(lock_axis(None, vec2(f32::NAN, 0.0), true), None, "a non-finite delta chooses nothing");
+    }
+
+    #[test]
+    fn tab_badge_rect_tracks_dragged_rect_and_clamps_to_page_edges() {
+        let page = Rect::from_min_size(pos2(10.0, 20.0), vec2(100.0, 80.0));
+        let widget = Rect::from_min_size(pos2(30.0, 40.0), vec2(20.0, 15.0));
+        let size = vec2(24.0, 14.0);
+        let original = tab_badge_rect(widget, page, size).unwrap();
+        let moved = dragged(widget, Grab::Move(None), vec2(12.0, 8.0), false);
+        assert_eq!(tab_badge_rect(moved, page, size).unwrap().min, original.min + vec2(12.0, 8.0));
+
+        let near_edge = Rect::from_min_size(pos2(100.0, 95.0), vec2(8.0, 8.0));
+        let badge = tab_badge_rect(near_edge, page, size).unwrap();
+        assert!(page.contains_rect(badge));
+    }
+
+    #[test]
+    fn tab_badge_is_omitted_when_it_cannot_fit_on_the_page() {
+        let page = Rect::from_min_size(pos2(10.0, 20.0), vec2(20.0, 12.0));
+        let widget = Rect::from_min_size(pos2(10.0, 20.0), vec2(4.0, 4.0));
+        assert_eq!(tab_badge_rect(widget, page, vec2(24.0, 14.0)), None);
+    }
+
+    #[test]
+    fn tab_badges_near_the_right_edge_do_not_overlap() {
+        let page = Rect::from_min_size(pos2(10.0, 20.0), vec2(100.0, 80.0));
+        let size = vec2(24.0, 14.0);
+        let first_widget = Rect::from_min_size(pos2(104.0, 45.0), vec2(8.0, 8.0));
+        let second_widget = Rect::from_min_size(pos2(106.0, 45.0), vec2(8.0, 8.0));
+        let first = place_tab_badge(first_widget, page, size, &[]).unwrap();
+        let second = place_tab_badge(second_widget, page, size, &[first]).unwrap();
+        assert!(!first.intersects(second), "{first:?} overlaps {second:?}");
+        assert!(page.contains_rect(first) && page.contains_rect(second));
     }
 }

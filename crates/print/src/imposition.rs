@@ -1,9 +1,9 @@
 use super::error::PrintError;
 use super::settings::{Content, Settings};
 use super::sheets::{Sheet, layout};
-use super::*;
+use super::{DecodeBudget, Dict, Document, Matrix, ObjRef, Object, SaveOptions, Stream, write_full};
 
-// Model-derived transforms and clipping bounds need their full PDF decimal precision.
+// Transforms and clipping bounds need their full PDF decimal precision.
 fn geometry_number(value: f64) -> String {
     let mut bytes = Vec::new();
     pdfcraft_cos::serialize(&Object::Real(value), &mut bytes);
@@ -16,8 +16,9 @@ fn n(v: f64) -> String {
     if s == "-0" { "0".into() } else { s.into() }
 }
 
-/// The page's content streams decoded against `budget` and joined; streams that don't decode
-/// are left out. `None` when the budget ran out, so part of the content is missing.
+/// The page's content streams decoded against `budget` and joined with a space as the renderer
+/// joins them; streams that don't decode are left out. `None` when the budget ran out, so part of
+/// the content is missing.
 pub(crate) fn decoded_contents(doc: &Document, page: &Dict, budget: &mut DecodeBudget) -> Option<Vec<u8>> {
     let Some(contents) = page.get(b"Contents") else { return Some(Vec::new()) };
     let mut out = Vec::new();
@@ -25,7 +26,7 @@ pub(crate) fn decoded_contents(doc: &Document, page: &Dict, budget: &mut DecodeB
         match data {
             Ok(data) => {
                 out.extend_from_slice(&data);
-                out.push(b'\n');
+                out.push(b' ');
             }
             Err(_) if budget.remaining() == 0 => return None,
             Err(_) => {}
@@ -99,7 +100,9 @@ pub(crate) fn prints(doc: &Document, d: &Dict, content: Content) -> bool {
     let subtype = subtype_obj.as_deref().and_then(Object::as_name).unwrap_or(b"");
     match subtype {
         b"Widget" => true,
-        b"Link" | b"Popup" => false,
+        // Existing Link appearances are part of the document, not markup or fields.
+        b"Link" => content != Content::FormFieldsOnly,
+        b"Popup" => false,
         b"Stamp" => content != Content::Document && content != Content::FormFieldsOnly,
         // ISO 32000-2 Table 167: an Invisible annotation of a type that isn't standard (Table
         // 171) is not printed even with its Print flag set.
@@ -108,15 +111,30 @@ pub(crate) fn prints(doc: &Document, d: &Dict, content: Content) -> bool {
     }
 }
 
-/// The normal appearance stream to draw for an annotation (honouring `/AS`).
+/// Read an annotation value through at most 64 indirect references.
+/// Standalone indirect objects can themselves hold references (ISO 32000-2 §7.3.10).
+/// Cycles and longer chains are unusable, like other invalid annotation values.
+fn annotation_value(doc: &Document, value: &Object) -> Option<std::sync::Arc<Object>> {
+    let mut value = std::sync::Arc::new(value.clone());
+    let mut seen = std::collections::HashSet::new();
+    while let Object::Ref(reference) = &*value {
+        if seen.len() == 64 || !seen.insert(*reference) {
+            return None;
+        }
+        value = doc.get(*reference);
+    }
+    Some(value)
+}
+
+/// The normal appearance stream to draw, resolving the annotation's `/AS` state name.
 pub(crate) fn appearance(doc: &Document, d: &Dict) -> Option<ObjRef> {
     let ap = doc.resolve(d.get(b"AP")?);
     let normal = ap.as_dict()?.get(b"N")?.clone();
     match &*doc.resolve(&normal) {
         Object::Stream(_) => normal.as_ref(),
         Object::Dict(states) => {
-            let state = d.name(b"AS")?;
-            states.get(state)?.as_ref()
+            let state = annotation_value(doc, d.get(b"AS")?)?;
+            states.get(state.as_name()?)?.as_ref()
         }
         _ => None,
     }
@@ -145,6 +163,70 @@ pub(crate) fn appearance_matrix(doc: &Document, form: &Dict, rect: [f64; 4]) -> 
     Some(a)
 }
 
+/// Resolve optional-content resources without turning a loading failure or reference cycle
+/// into an absent entry. Keep the terminal object's identity for catalog OCG state.
+fn optional_object(doc: &Document, value: &Object) -> Result<(Option<ObjRef>, std::sync::Arc<Object>), PrintError> {
+    let mut object = std::sync::Arc::new(value.clone());
+    let mut reference = None;
+    let mut seen = std::collections::HashSet::new();
+    while let Object::Ref(r) = &*object {
+        if seen.len() >= 64 || !seen.insert(*r) {
+            return Err(PrintError::Invalid("an optional-content resource has a cyclic reference or more than 64 references".into()));
+        }
+        reference = Some(*r);
+        object = doc.try_get(r.num)?;
+    }
+    Ok((reference, object))
+}
+
+/// Preserve the complete membership rather than evaluating visibility here. The reader owns
+/// policy/VE evaluation; the annotation and its appearance can have independent memberships.
+fn annotation_membership(doc: &mut Document, annotation: &Dict) -> Result<Option<ObjRef>, PrintError> {
+    let Some(value) = annotation.get(b"OC") else { return Ok(None) };
+    let (reference, object) = optional_object(doc, value)?;
+    let dict = match &*object {
+        Object::Null => return Ok(None), // Null and undefined references are absent PDF dictionary entries.
+        Object::Dict(dict) => dict,
+        _ => return Err(PrintError::Invalid("an annotation's optional-content entry is not an OCG or OCMD dictionary".into())),
+    };
+    let kind = dict.get(b"Type").map(|value| optional_object(doc, value)).transpose()?;
+    match kind.as_ref().and_then(|(_, object)| object.as_name()) {
+        Some(b"OCG") => reference.map(Some).ok_or_else(|| PrintError::Invalid("an annotation's optional-content group must be indirect".into())),
+        Some(b"OCMD") => {
+            // Named Properties are indirect for interoperable OCG identity and for the renderer's
+            // resource path. An OCMD has no group identity; promoting its intact dict is harmless.
+            Ok(Some(reference.unwrap_or_else(|| doc.add(Object::Dict(dict.clone())))))
+        }
+        _ => Err(PrintError::Invalid("an annotation's optional-content dictionary must have Type OCG or OCMD".into())),
+    }
+}
+
+/// Clone existing marked-content properties, including unrelated entries. Never replace an
+/// unreadable map with an empty one: doing so can expose the page's own optional content.
+fn optional_properties(doc: &Document, resources: &Dict) -> Result<Dict, PrintError> {
+    let Some(value) = resources.get(b"Properties") else { return Ok(Dict::new()) };
+    let (_, object) = optional_object(doc, value)?;
+    match &*object {
+        Object::Null => Ok(Dict::new()),
+        Object::Dict(dict) => Ok(dict.clone()),
+        _ => Err(PrintError::Invalid("cannot preserve annotation layers: page Properties is not a dictionary".into())),
+    }
+}
+
+/// ISO 32000-1 section 12.5.3: counterrotate the fitted appearance about Rect's upper-left
+/// corner in default user space. Crop, UserUnit and sheet transforms remain outside it.
+fn no_rotate_placement(placement: Matrix, rect: [f64; 4], rotation: i64) -> Option<Matrix> {
+    let [x, _, _, y] = rect;
+    let counterrotation = match rotation {
+        90 => Matrix([0.0, 1.0, -1.0, 0.0, x + y, y - x]),
+        180 => Matrix([-1.0, 0.0, 0.0, -1.0, 2.0 * x, 2.0 * y]),
+        270 => Matrix([0.0, -1.0, 1.0, 0.0, x - y, y + x]),
+        _ => Matrix::default(),
+    };
+    let placement = placement.then(&counterrotation);
+    placement.0.iter().all(|value| value.is_finite()).then_some(placement)
+}
+
 /// A Form XObject holding page `index` as it prints (user space; BBox = crop box).
 /// `pages` are the document's pages, listed once by the caller: listing them for each page
 /// printed would make printing quadratic in the page count.
@@ -157,7 +239,8 @@ pub(crate) fn page_form(
 ) -> Result<ObjRef, PrintError> {
     let page = pages.get(index).ok_or_else(|| PrintError::Invalid(format!("there is no page {}", index.saturating_add(1))))?;
     let crop = page.crop(doc);
-    let mut res = page.dict.get(b"Resources").and_then(|r| doc.resolve(r).as_dict().cloned()).unwrap_or_default();
+    let resources = page.dict.get(b"Resources").map(|value| optional_object(doc, value)).transpose();
+    let mut res = resources.as_ref().ok().and_then(|value| value.as_ref()).and_then(|(_, object)| object.as_dict()).cloned().unwrap_or_default();
     let mut body = if content == Content::FormFieldsOnly {
         Vec::new()
     } else {
@@ -173,21 +256,60 @@ pub(crate) fn page_form(
     }
     let annots = page.dict.get(b"Annots").and_then(|a| doc.resolve(a).as_array().cloned()).unwrap_or_default();
     let mut xobjects = res.get(b"XObject").and_then(|x| doc.resolve(x).as_dict().cloned()).unwrap_or_default();
+    let mut properties = None;
+    let mut property_index = 0usize;
     let mut k = 0usize;
     for a in annots {
         let Some(d) = doc.resolve(&a).as_dict().cloned() else { continue };
         if !prints(doc, &d, content) {
             continue;
         }
-        let rect: Vec<f64> =
-            d.get(b"Rect").and_then(|r| doc.resolve(r).as_array().map(|a| a.iter().filter_map(Object::as_f64).collect())).unwrap_or_default();
-        if rect.len() != 4 {
-            continue;
-        }
-        let rect = [rect[0].min(rect[2]), rect[1].min(rect[3]), rect[0].max(rect[2]), rect[1].max(rect[3])];
+        // A rectangle has four numbers, and each can be an indirect object (ISO 32000-2 §7.3.10).
+        let rect = d.get(b"Rect").and_then(|r| {
+            let rect = annotation_value(doc, r)?;
+            let [x0, y0, x1, y1] = rect.as_array()?.as_slice() else { return None };
+            let number = |v: &Object| annotation_value(doc, v)?.as_f64().filter(|v| v.is_finite());
+            Some([number(x0)?, number(y0)?, number(x1)?, number(y1)?])
+        });
+        let Some([x0, y0, x1, y1]) = rect else { continue };
+        let rect = [x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1)];
         let Some(ap) = appearance(doc, &d) else { continue };
         let form = doc.get(ap).as_dict().cloned().unwrap_or_default();
         let Some(m) = appearance_matrix(doc, &form, rect) else { continue };
+        let flags = d.get(b"F").and_then(|f| doc.resolve(f).as_int()).unwrap_or(0);
+        // Text annotations have implicit NoRotate even when the flag is clear (ISO 32000-1 section 12.5.6.4).
+        let no_rotate = flags & 16 != 0 || d.get(b"Subtype").is_some_and(|subtype| doc.resolve(subtype).as_name() == Some(b"Text"));
+        let m = if no_rotate {
+            no_rotate_placement(m, rect, page.rotation(doc))
+                .ok_or_else(|| PrintError::Invalid(format!("page {} has a non-finite NoRotate annotation placement", index.saturating_add(1))))?
+        } else {
+            m
+        };
+        let membership = annotation_membership(doc, &d)?;
+        let property = if let Some(membership) = membership {
+            if properties.is_none() {
+                match &resources {
+                    Err(error) => return Err(PrintError::Invalid(format!("cannot preserve annotation layers: {error}"))),
+                    Ok(Some((_, object))) if !matches!(&**object, Object::Null | Object::Dict(_)) => {
+                        return Err(PrintError::Invalid("cannot preserve annotation layers: page Resources is not a dictionary".into()));
+                    }
+                    _ => {}
+                }
+                properties = Some(optional_properties(doc, &res)?);
+            }
+            let properties = properties.get_or_insert_with(Dict::new);
+            let name = loop {
+                let name = format!("PCPrOC{property_index}");
+                property_index = property_index.checked_add(1).ok_or_else(|| PrintError::Invalid("too many annotation layer resources".into()))?;
+                if !properties.contains(name.as_bytes()) {
+                    break name;
+                }
+            };
+            properties.set(name.as_bytes().to_vec(), Object::Ref(membership));
+            Some(name)
+        } else {
+            None
+        };
         let ap = if !form.contains(b"Subtype")
             && let Object::Stream(stream) = &*doc.get(ap)
         {
@@ -215,17 +337,46 @@ pub(crate) fn page_form(
             }
         };
         let [a0, b0, c0, d0, e0, f0] = m.0;
-        body.extend(format!("q {} {} {} {} {} {} cm /{name} Do Q\n", n(a0), n(b0), n(c0), n(d0), n(e0), n(f0)).bytes());
+        if let Some(name) = &property {
+            body.extend(format!("/OC /{name} BDC\n").bytes());
+        }
+        body.extend(
+            format!(
+                "q {} {} {} {} {} {} cm /{name} Do Q\n",
+                geometry_number(a0),
+                geometry_number(b0),
+                geometry_number(c0),
+                geometry_number(d0),
+                geometry_number(e0),
+                geometry_number(f0)
+            )
+            .bytes(),
+        );
+        if property.is_some() {
+            body.extend_from_slice(b"EMC\n");
+        }
         xobjects.set(name.into_bytes(), Object::Ref(ap));
     }
-    if !xobjects.is_empty() {
-        res.set(b"XObject".to_vec(), Object::Dict(xobjects));
-    }
+    // With no appearance added the form keeps the page's own Resources, shared by reference,
+    // rather than a deep copy per printed page. An appearance in a layer (#5005) adds its
+    // membership to the copy's Properties, so a page with one is never shared.
+    let resources = match page.dict.get(b"Resources") {
+        Some(r) if k == 0 && properties.is_none() && doc.resolve(r).as_dict().is_some() => r.clone(),
+        _ => {
+            if !xobjects.is_empty() {
+                res.set(b"XObject".to_vec(), Object::Dict(xobjects));
+            }
+            if let Some(properties) = properties {
+                res.set(b"Properties".to_vec(), Object::Dict(properties));
+            }
+            Object::Dict(res)
+        }
+    };
     let mut d = Dict::new();
     d.set(b"Type".to_vec(), Object::name("XObject"));
     d.set(b"Subtype".to_vec(), Object::name("Form"));
     d.set(b"BBox".to_vec(), Object::Array(crop.iter().map(|v| Object::Real(*v)).collect()));
-    d.set(b"Resources".to_vec(), Object::Dict(res));
+    d.set(b"Resources".to_vec(), resources);
     if let Some(g) = page.dict.get(b"Group") {
         d.set(b"Group".to_vec(), g.clone());
     }

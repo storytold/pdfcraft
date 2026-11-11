@@ -1,11 +1,42 @@
-use super::*;
+#[cfg(test)]
+use super::check_refresh_panic;
+use super::{
+    Arc, DocId, Document, Edit, EditCtx, EditError, Label, MAX_UNDO, ObjectKind, OnceLock, RenderPool, SaveOptions, Scope, Session,
+    XFA_REMOVED_PREFIX, XFA_SCRIPTS_OFF, carry_verdict_marks, check_permission, comment_list, display_bytes, display_config, guard, info_fields,
+    inspect, js, keys_after, note_warnings, render_threads, run_edit, scan_colours, scope_of, shown_under_redactions, signatures_of, sync_xfa_state,
+    undrawn_notices, uses_scripts, write_incremental, xfa, xfa_sync_datasets,
+};
+use crate::{EditNotice, MarkKind, print_preview_layers};
+
+/// Whether the edit, or any edit inside a batch, deletes pages.
+fn deletes_pages(edit: &Edit) -> bool {
+    match edit {
+        Edit::DeletePages { .. } => true,
+        Edit::Batch { edits, .. } => edits.iter().any(deletes_pages),
+        _ => false,
+    }
+}
 
 impl Session {
     /// Apply an edit. On success the previous state is undoable and the view data is refreshed.
     pub fn apply(&mut self, id: DocId, edit: Edit) -> Result<(), EditError> {
+        self.apply_reporting(id, edit).map(|_| ())
+    }
+
+    /// Edit a PDF ▸ Edit text: make the grouped text on `page` (0-based) editable, as one undoable
+    /// [`Edit::PrepareText`], and say what it prepared, which fonts' maps it repaired and which
+    /// groups it left as they were (and why). The counts are this edit's own, not a preview's.
+    pub fn prepare_text(&mut self, id: DocId, page: usize) -> Result<pdfcraft_edit::text::forms::Preparation, EditError> {
+        self.apply_reporting(id, Edit::PrepareText { page })?
+            .ok_or_else(|| EditError::Invalid("preparing grouped text gave no result; the document was not changed".into()))
+    }
+
+    /// [`Session::apply`], giving back what an [`Edit::PrepareText`] did (`None` for other edits).
+    fn apply_reporting(&mut self, id: DocId, edit: Edit) -> Result<Option<pdfcraft_edit::text::forms::Preparation>, EditError> {
         let now = self.now();
         let today = self.today();
         let js_off = self.js_off;
+        let highlight = self.field_highlight;
         let xfa_time_scale = self.xfa_time_scale.unwrap_or(1);
         let doc = self.doc_mut(id)?;
         doc.edit_notices.clear();
@@ -18,6 +49,7 @@ impl Session {
         }
         cx.xfa_time_scale = xfa_time_scale;
         cx.pages = doc.info.pages.len();
+        cx.highlight = highlight;
         cx.today = today;
         let reason = doc.read_only_reason.clone().unwrap_or_default();
         let signed = doc.is_signed();
@@ -29,6 +61,7 @@ impl Session {
         // in the paper's colour and draw the new text in the ink's.
         let edit = match edit {
             Edit::EditTextBlock { page, block, text, mut style } => {
+                let plain = style == pdfcraft_edit::BlockStyle::default();
                 // Only invisible text is sampled; the blocks are usually cached from opening it.
                 if style.cover.is_none()
                     && let Some(info) = doc.info.pages.get(page)
@@ -37,6 +70,12 @@ impl Session {
                 {
                     style.cover = Some(paper);
                     style.color = style.color.or(Some(ink));
+                    // A text edit alone leaves the words it doesn't change as the scan shows them.
+                    style.changed_words_only = plain;
+                    // Nothing to redraw: leave undo history and the dirty flag alone.
+                    if plain && b.same_words(&text) {
+                        return Ok(None);
+                    }
                 }
                 Edit::EditTextBlock { page, block, text, style }
             }
@@ -44,17 +83,24 @@ impl Session {
         };
         // Nothing to bake: leave undo history and the dirty flag alone.
         if matches!(&edit, Edit::FlattenFillSign) && !pdfcraft_annot::has_visible_fill_sign(&editor.cos) {
-            return Ok(());
+            return Ok(None);
         }
         let mut next = editor.cos.clone();
         if !js_off && uses_scripts(&edit) {
-            cx.js = Some(js::JsRunner::new(&next, &name));
+            cx.js = Some(js::JsRunner::new(&next, &name, highlight));
         }
         cx.renamed_fields.clear();
         cx.redaction_overlays.clear();
         // `next` is a copy: if the edit fails or crashes, the document is unchanged.
         guard(|| run_edit(&mut next, &edit, &mut cx))
             .unwrap_or_else(|m| Err(EditError::Invalid(format!("{} failed unexpectedly ({m}); the document was not changed", edit.label()))))?;
+        // A field's enter or exit scripts that changed nothing leave no edit behind (no undo step,
+        // nothing unsaved); what they showed or asked for still goes out. Only an event on its own:
+        // a batch keeps the other edits it holds.
+        if cx.xfa_unchanged && matches!(edit, Edit::XfaEvent { .. }) {
+            take_xfa_output(doc, cx.xfa_out, cx.xfa_ran_away);
+            return Ok(None);
+        }
         // Redaction removed what its own interpreter places under the marks. The marks were drawn
         // over the page as the renderer shows it, so the renderer has the last word.
         if let Edit::ApplyRedactions { pages } = &edit {
@@ -93,7 +139,8 @@ impl Session {
         };
         // An XFA form's scripts answer the change: exit and validate scripts of the field, then
         // every calculation (and a reset recalculates). They read the data, so it is brought up
-        // to date first.
+        // to date first. The fields whose exit scripts ran are noted once the edit is kept.
+        let mut exited: Vec<String> = Vec::new();
         if let Some(tpl) = cx.xfa.clone() {
             if is_xfa && matches!(scope_of(&edit), Scope::Form | Scope::Full | Scope::Content) {
                 let datasets = &mut cx.xfa_datasets;
@@ -102,6 +149,8 @@ impl Session {
                     .map_err(EditError::Write)?;
                 cx.xfa_out.errors.extend(notes);
             }
+            /// The fields edit `e` (and the edits it batches) gives new values, and whether it
+            /// resets the form.
             fn collect(e: &Edit, changed: &mut Vec<String>, reset: &mut bool) {
                 match e {
                     Edit::SetFieldValue { name, .. } => changed.push(name.clone()),
@@ -114,19 +163,24 @@ impl Session {
             let mut reset = false;
             collect(&edit, &mut changed, &mut reset);
             if !changed.is_empty() || reset {
+                let highlight = cx.highlight();
                 let mut run = xfa::XfaRun {
                     page_count: cx.pages,
                     out: &mut cx.xfa_out,
                     datasets: cx.xfa_datasets,
                     ran_away: false,
+                    highlight,
                     time_scale: cx.xfa_time_scale,
                 };
                 // Every changed field's scripts, then the calculations once (after a reset,
                 // only those).
-                let ran = guard(|| xfa::on_changes(&mut next, &tpl, &changed, &mut run))
+                let ran = guard(|| xfa::on_changes(&mut next, &tpl, &changed, &mut run, &mut exited))
                     .unwrap_or_else(|m| Err(format!("the form's scripts failed unexpectedly ({m})")));
                 cx.xfa_datasets = run.datasets;
                 cx.xfa_ran_away |= run.ran_away;
+                // The next edit of a batch reads the highlight this one's scripts set.
+                let on = run.highlight;
+                cx.set_highlight(on);
                 if let Err(e) = ran {
                     cx.xfa_out.errors.push(e);
                 }
@@ -155,17 +209,22 @@ impl Session {
         // Signed documents are only ever saved incrementally: an edit that needs a full rewrite
         // (applying redactions, changing security, sanitizing) would invalidate the signatures.
         // So does any edit to a file rebuilt from object headers: it has no chain to append to.
+        // Deleted pages remain in earlier incremental revisions (#3407), so rewrite
+        // unsigned files in full. Signed files must retain their signed bytes.
+        if !signed && deletes_pages(&edit) {
+            next.require_full_save();
+        }
         let rewrites = |c: &pdfcraft_cos::Document| c.full_save_required() || c.encryption_changed();
         if signed && ((rewrites(&next) && !rewrites(&editor.cos)) || (next.is_modified() && next.revisions().is_empty())) {
             return Err(EditError::SignedRewrite(edit.label().to_string()));
         }
-        // What this edit drew with `?` (a value or comment text its font can't draw, stored as
-        // typed): reported, never silent (AGENTS.md §4).
-        let notices = if matches!(scope_of(&edit), Scope::Form | Scope::Comments | Scope::Full) {
-            guard(|| undrawn_notices(&editor.cos, &next)).unwrap_or_default()
-        } else {
-            Vec::new()
-        };
+        let mut notices = edit_notices(&edit, &editor.cos, &next);
+        // Places applied redactions left that still hold the removed text, and what became of
+        // the PDF/A or PDF/UA identification in the XMP they removed: said, not silent.
+        notices.extend(cx.redaction_elsewhere.filter(|e| e.total() > 0 || e.unsearched).map(EditNotice::RedactionElsewhere));
+        if cx.redaction_identification != pdfcraft_redact::Identification::default() {
+            notices.push(EditNotice::RedactionIdentification(cx.redaction_identification));
+        }
         let previous = std::mem::replace(&mut editor.cos, next);
         let keys = keys_after(&edit).unwrap_or_else(|| editor.keys.clone());
         let previous_keys = std::mem::replace(&mut editor.keys, keys);
@@ -194,6 +253,10 @@ impl Session {
         doc.dirty = true;
         doc.generation += 1;
         doc.edit_notices = notices;
+        // Only this edit's exits are skipped on the next focus loss: one an earlier change ran is
+        // no reason to skip a later one.
+        doc.xfa_exited.clear();
+        doc.xfa_exited.extend(exited);
         if !cx.xfa_removed.is_empty() {
             let removed: Vec<String> = cx.xfa_removed.iter().map(|n| format!("{XFA_REMOVED_PREFIX}{n}")).collect();
             doc.xfa_warnings.retain(|w| w.starts_with(XFA_REMOVED_PREFIX));
@@ -206,15 +269,11 @@ impl Session {
         if let Some(js) = cx.js {
             doc.js_output.append(js.output);
         }
-        doc.js_output.append(cx.xfa_out);
-        if cx.xfa_ran_away {
-            doc.xfa_template = None;
-            doc.xfa_scripts_off = true;
-            doc.js_output.errors.push(XFA_SCRIPTS_OFF.into());
-        }
-        Ok(())
+        take_xfa_output(doc, cx.xfa_out, cx.xfa_ran_away);
+        Ok(cx.prepared)
     }
 
+    /// Undo the last edit of document `id`, keeping it for [`Session::redo`]. Returns its label.
     pub fn undo(&mut self, id: DocId) -> Result<Label, EditError> {
         let doc = self.doc_mut(id)?;
         let editor = doc.editor.as_mut().ok_or(EditError::NothingToUndo)?;
@@ -240,10 +299,13 @@ impl Session {
         }
         doc.edit_notices.clear();
         Self::sync_dirty(doc);
+        // The change whose exit ran is undone (or redone without its scripts): skip no exit.
+        doc.xfa_exited.clear();
         doc.generation += 1;
         Ok(label)
     }
 
+    /// Redo the last edit of document `id` that [`Session::undo`] took back. Returns its label.
     pub fn redo(&mut self, id: DocId) -> Result<Label, EditError> {
         let doc = self.doc_mut(id)?;
         let editor = doc.editor.as_mut().ok_or(EditError::NothingToRedo)?;
@@ -269,6 +331,8 @@ impl Session {
         }
         doc.edit_notices.clear();
         Self::sync_dirty(doc);
+        // The change whose exit ran is undone (or redone without its scripts): skip no exit.
+        doc.xfa_exited.clear();
         doc.generation += 1;
         Ok(label)
     }
@@ -326,7 +390,14 @@ impl Session {
             #[cfg(test)]
             check_refresh_panic();
             if !doc.signatures.is_empty() {
-                let signatures = signatures_of(&editor.cos, &bytes, &doc.trust, &doc.sig_cache);
+                let mut signatures = signatures_of(&editor.cos, &bytes, &doc.trust, &doc.sig_cache);
+                // The display copy is kept for a metadata edit, and so are its marks, unless the
+                // edit changed a verdict (a certification can forbid it): the page then draws the
+                // new one.
+                if !carry_verdict_marks(&doc.signatures, &mut signatures) {
+                    doc.display = display_bytes(Some(editor), &bytes, &mut signatures, &doc.captions);
+                    doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), display_config(&doc.config));
+                }
                 doc.signatures = Arc::new(signatures);
             }
             doc.bytes = bytes;
@@ -370,10 +441,10 @@ impl Session {
         }
         doc.info.file_size = bytes.len();
         doc.form = form;
-        let signatures = if doc.signatures.is_empty() { Vec::new() } else { signatures_of(&editor.cos, &bytes, &doc.trust, &doc.sig_cache) };
-        doc.display = display_bytes(Some(editor), &bytes);
+        let mut signatures = if doc.signatures.is_empty() { Vec::new() } else { signatures_of(&editor.cos, &bytes, &doc.trust, &doc.sig_cache) };
+        doc.display = display_bytes(Some(editor), &bytes, &mut signatures, &doc.captions);
         doc.signatures = Arc::new(signatures);
-        doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), doc.config.clone());
+        doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), display_config(&doc.config));
         doc.bytes = bytes;
         Ok(())
     }
@@ -397,10 +468,18 @@ impl Session {
                     | Edit::DeleteContent { .. }
                     | Edit::ReplaceImage { .. }
                     | Edit::PasteContent { .. }
-            ) || matches!(e, Edit::MoveObjects { objects, .. } if objects.iter().any(|o| o.kind == ObjectKind::Added))
+                    | Edit::EditPageImage { .. }
+            ) || matches!(e, Edit::MoveObjects { objects, .. } | Edit::DeleteObjects { objects, .. } if objects.iter().any(|o| o.kind == ObjectKind::Added))
         });
         let touches_marks = edit.is_none_or(|e| {
-            matches!(e, Edit::AddHeaderFooter { .. } | Edit::AddWatermark { .. } | Edit::AddBackground { .. } | Edit::RemoveMarks { .. })
+            matches!(
+                e,
+                Edit::AddHeaderFooter { .. }
+                    | Edit::AddWatermark { .. }
+                    | Edit::AddBackground { .. }
+                    | Edit::AddPrinterMarks { .. }
+                    | Edit::RemoveMarks { .. }
+            )
         });
         (touches_added, touches_marks)
     }
@@ -427,10 +506,10 @@ impl Session {
             doc.marker_scan = OnceLock::new();
         }
         doc.info.file_size = bytes.len();
-        let signatures = if doc.signatures.is_empty() { Vec::new() } else { signatures_of(&editor.cos, &bytes, &doc.trust, &doc.sig_cache) };
-        doc.display = display_bytes(Some(editor), &bytes);
+        let mut signatures = if doc.signatures.is_empty() { Vec::new() } else { signatures_of(&editor.cos, &bytes, &doc.trust, &doc.sig_cache) };
+        doc.display = display_bytes(Some(editor), &bytes, &mut signatures, &doc.captions);
         doc.signatures = Arc::new(signatures);
-        doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), doc.config.clone());
+        doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), display_config(&doc.config));
         doc.bytes = bytes;
         doc.fonts_stale = true;
         Ok(())
@@ -450,6 +529,13 @@ impl Session {
         doc.renderer = RenderPool::new_inline(Arc::new(Vec::new()), doc.config.clone());
         doc.display = original.clone();
         doc.bytes = original;
+        // The page shows the original's own artwork again, so nothing counts as drawn, even if
+        // the refresh that follows fails.
+        if doc.signatures.iter().any(|s| s.verdict_shown) {
+            for sig in Arc::make_mut(&mut doc.signatures) {
+                sig.verdict_shown = false;
+            }
+        }
         #[cfg(test)]
         check_refresh_panic();
     }
@@ -457,7 +543,7 @@ impl Session {
     /// After a refresh failed: draw the display bytes it left (the original, once released),
     /// so the page still shows a document.
     pub(super) fn show_released(doc: &mut Document) {
-        doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), doc.config.clone());
+        doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), display_config(&doc.config));
     }
 
     /// Rebuild working bytes, inspection and renderer from the current edit state.
@@ -471,6 +557,8 @@ impl Session {
     }
 
     fn refresh_with_indexes(doc: &mut Document, invalidate_markers: bool, invalidate_links: bool) -> Result<(), EditError> {
+        #[cfg(test)]
+        crate::record_full_refresh();
         // A full refresh may follow structural or annotation changes: cached appearances
         // may be stale, so they are rebuilt below.
         if let Some(editor) = doc.editor.as_mut() {
@@ -501,6 +589,7 @@ impl Session {
             }
         }
         doc.info = info;
+        doc.config.print_layers = print_preview_layers(Some(&editor.cos), &doc.info.layers);
         doc.fonts_stale = false;
         let mut form = pdfcraft_forms::fields(&editor.cos);
         xfa::mark_script_buttons(&editor.cos, &mut form);
@@ -511,11 +600,40 @@ impl Session {
         if invalidate_links {
             doc.links = OnceLock::new();
         }
-        let signatures = signatures_of(&editor.cos, &bytes, &doc.trust, &doc.sig_cache);
-        doc.display = display_bytes(Some(editor), &bytes);
+        let mut signatures = signatures_of(&editor.cos, &bytes, &doc.trust, &doc.sig_cache);
+        doc.display = display_bytes(Some(editor), &bytes, &mut signatures, &doc.captions);
         doc.signatures = Arc::new(signatures);
-        doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), doc.config.clone());
+        doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), display_config(&doc.config));
         doc.bytes = bytes;
         Ok(())
     }
+}
+
+/// Hand on what an edit's XFA scripts showed or asked for (`out`), and when one of them ran away,
+/// turn the form's scripts off and say so.
+fn take_xfa_output(doc: &mut Document, out: js::JsOutput, ran_away: bool) {
+    doc.js_output.append(out);
+    if ran_away {
+        doc.xfa_template = None;
+        doc.xfa_scripts_off = true;
+        doc.js_output.errors.push(XFA_SCRIPTS_OFF.into());
+    }
+}
+
+/// What `edit`, taking `prev` to `next`, wants said: never silent (AGENTS.md §4).
+fn edit_notices(edit: &Edit, prev: &pdfcraft_cos::Document, next: &pdfcraft_cos::Document) -> Vec<EditNotice> {
+    // What it drew with `?` (a value or comment text its font can't draw, stored as typed).
+    let mut notices: Vec<EditNotice> = if matches!(scope_of(edit), Scope::Form | Scope::Comments | Scope::Full) {
+        guard(|| undrawn_notices(prev, next)).unwrap_or_default().into_iter().map(EditNotice::Undrawn).collect()
+    } else {
+        Vec::new()
+    };
+    // Pages whose own white backdrop Remove background couldn't turn back on.
+    if matches!(edit, Edit::RemoveMarks { kind: MarkKind::Background }) {
+        let pages = guard(|| pdfcraft_edit::backdrops_left_off(next)).unwrap_or_default();
+        if !pages.is_empty() {
+            notices.push(EditNotice::BackdropsLeftOff { pages });
+        }
+    }
+    notices
 }

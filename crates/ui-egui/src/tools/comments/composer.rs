@@ -1,10 +1,14 @@
 use super::geometry::{drawn_text_box_rect, page_rotation, text_box_rect};
 use super::paint::{edited_in_view, new_comment};
 use super::state::{ComposerKind, PageCx};
-use super::*;
+use super::{
+    Color32, CommentPrefs, CommentTool, CornerRadius, DocInfo, DocView, Edit, LineEnding, NoteIcon, PagePointer, QuickTool, Shape, Tokens, pos2,
+    theme,
+};
+use crate::page_keys::PageKeys;
 
 /// The floating composer card (new note, new text box, edit). Returns the edit to apply.
-pub(crate) fn composer(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, prefs: &CommentPrefs) -> Option<Edit> {
+pub(crate) fn composer(ctx: &egui::Context, keys: PageKeys, view: &mut DocView, info: &DocInfo, prefs: &CommentPrefs) -> Option<Edit> {
     let c = view.comments.composer.as_ref()?;
     let page = c.page;
     let Some(xf) = view.page_xform(page) else {
@@ -24,6 +28,7 @@ pub(crate) fn composer(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, 
         allowed: true,
         hidden: false,
         redact_mark: ([0.89, 0.13, 0.13], 1.0),
+        keys,
     };
     let anchor = cx.to_screen(c.at);
     let viewport = view.viewport_rect();
@@ -52,7 +57,7 @@ pub(crate) fn composer(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, 
         anchor = anchor.clamp(viewport.min, viewport.max);
     }
     let pos = pos2(anchor.x + 12.0, anchor.y);
-    let area = egui::Area::new(egui::Id::unique(("comment-composer", view.id.0))).order(egui::Order::Foreground).constrain_to(viewport);
+    let area = egui::Area::new(egui::Id::unique(("comment-composer", view.pane.key))).order(egui::Order::Foreground).constrain_to(viewport);
     area.fixed_pos(pos).show(ctx, |ui| {
         egui::Frame::popup(ui.style()).inner_margin(egui::Margin::same(12)).corner_radius(CornerRadius::same(8)).show(ui, |ui| {
             ui.set_width(260.0);
@@ -76,7 +81,7 @@ pub(crate) fn composer(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, 
                 c.focus = false;
             }
             let enter = submit_key(ui, &edit, false);
-            if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            if keys.pressed(ui.ctx(), egui::Key::Escape) {
                 cancel = true;
             }
             ui.add_space(8.0);
@@ -108,9 +113,14 @@ pub(crate) fn composer(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, 
         return None;
     }
     let c = view.comments.composer.take()?;
-    let text = c.text.trim_end().to_string();
+    let typewriter_edit = matches!(c.kind, ComposerKind::Edit(index) if info.annotations.iter().any(|a|
+        a.page == page && a.index == index && a.subtype == "FreeText" && a.intent.as_deref() == Some("FreeTextTypeWriter")
+    ));
+    let text = if typewriter_edit { c.text } else { c.text.trim_end().to_string() };
     match c.kind {
-        ComposerKind::Edit(index) => Some(Edit::SetAnnotationContents { page, index, text }),
+        ComposerKind::Edit(index) => {
+            info.annotations.iter().any(|a| a.page == page && a.index == index).then_some(Edit::SetAnnotationContents { page, index, text })
+        }
         ComposerKind::Note => {
             view.comments.tool_done = true;
             Some(new_comment(&cx, CommentTool::Note, Shape::Note { at: c.at, icon: NoteIcon::Comment }, text))
@@ -119,25 +129,20 @@ pub(crate) fn composer(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, 
             view.comments.tool_done = true;
             let rotation = page_rotation(info, page);
             let border = prefs.style(CommentTool::TextBox).width;
+            let font_size = prefs.font_size(CommentTool::TextBox).unwrap_or(12.0);
             let rect = match (size, info.pages.get(page)) {
-                (Some(size), Some(p)) => drawn_text_box_rect(p, c.at, size, &text, 12.0, border),
-                _ => text_box_rect(c.at, &text, 12.0, rotation),
+                (Some(size), Some(p)) => drawn_text_box_rect(p, c.at, size, &text, font_size, border),
+                _ => text_box_rect(c.at, &text, font_size, rotation),
             };
-            Some(new_comment(&cx, CommentTool::TextBox, Shape::TextBox { rect, font_size: 12.0 }, text))
+            Some(new_comment(&cx, CommentTool::TextBox, Shape::TextBox { rect, font_size }, text))
         }
         ComposerKind::Callout { point } => {
             view.comments.tool_done = true;
             // A callout's leader and box stay in user-space axes (its appearance isn't turned).
-            let rect = text_box_rect(c.at, &text, 10.0, 0);
-            let side = if point[0] < rect[0] {
-                rect[0]
-            } else if point[0] > rect[2] {
-                rect[2]
-            } else {
-                (rect[0] + rect[2]) / 2.0
-            };
-            let knee = [(point[0] + side) / 2.0, (rect[1] + rect[3]) / 2.0];
-            Some(new_comment(&cx, CommentTool::Callout, Shape::Callout { rect, knee, point, font_size: 10.0, ending: LineEnding::OpenArrow }, text))
+            let font_size = prefs.font_size(CommentTool::Callout).unwrap_or(10.0);
+            let rect = text_box_rect(c.at, &text, font_size, 0);
+            let knee = pdfcraft_engine::callout_knee(rect, point);
+            Some(new_comment(&cx, CommentTool::Callout, Shape::Callout { rect, knee, point, font_size, ending: LineEnding::OpenArrow }, text))
         }
         ComposerKind::Replace => {
             view.comments.tool_done = true;
@@ -148,7 +153,10 @@ pub(crate) fn composer(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, 
                 text,
                 author: prefs.author.clone(),
                 strike: prefs.style(CommentTool::ReplaceText),
-                caret: prefs.style(CommentTool::Caret),
+                // One proposal, one look: the caret, the group's primary, takes the Replace text
+                // tool's style as the strikeout does, so a default saved from either part (Make
+                // Current Properties Default) applies to the next proposal as a whole.
+                caret: prefs.style(CommentTool::ReplaceText),
             })
         }
         ComposerKind::Caret { size } => {

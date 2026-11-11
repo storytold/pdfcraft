@@ -1,5 +1,5 @@
 use super::zoom::GRID_ZOOM_STEP;
-use super::*;
+use super::{DestView, DocInfo, DocView, Fit, PT, PageLayout, SIDE, ViewAction, pos2, vec2};
 
 impl DocView {
     /// Where a bookmark made now should go: the page and the `/XYZ` position `[left, top]` in user
@@ -9,6 +9,11 @@ impl DocView {
     /// zoom are kept). `None` before the first frame has laid pages out, when the bookmark just
     /// goes to the current page.
     pub(crate) fn bookmark_position(&self, info: &DocInfo) -> Option<(usize, [Option<f32>; 2])> {
+        // The page grid moves the viewport without refreshing where the pages are on screen, so
+        // there is no position to read: the bookmark goes to the current page.
+        if self.organize {
+            return None;
+        }
         if let Some(sel) = self.selection
             && let Some(text) = self.texts.get(&sel.page)
             && let Some(p) = info.pages.get(sel.page)
@@ -32,11 +37,17 @@ impl DocView {
         // of pages of different heights, whose shorter page can start below it), else the
         // nearest one below.
         let top = self.viewport_screen.top();
-        let showing = || self.screen_xforms.iter().filter(|(_, xf)| xf.rect.bottom() > top);
-        let (page, xf) = showing()
-            .filter(|(_, xf)| xf.rect.top() <= top)
-            .min_by_key(|(p, _)| *p)
-            .or_else(|| showing().min_by(|a, b| a.1.rect.top().total_cmp(&b.1.rect.top()).then(a.0.cmp(&b.0))))?;
+        // A page showing less than a pixel is rounding, not what the reader is looking at: a jump
+        // to the next page leaves the previous one's bottom edge within a pixel of the top. Such a
+        // sliver still counts when nothing else shows (the last page at the very end).
+        let pick = |slack: f32| {
+            let showing = || self.screen_xforms.iter().filter(move |(_, xf)| xf.rect.bottom() > top + slack);
+            showing()
+                .filter(|(_, xf)| xf.rect.top() <= top)
+                .min_by_key(|(p, _)| *p)
+                .or_else(|| showing().min_by(|a, b| a.1.rect.top().total_cmp(&b.1.rect.top()).then(a.0.cmp(&b.0))))
+        };
+        let (page, xf) = pick(sliver(self.screen_ppp)).or_else(|| pick(0.0))?;
         let p = info.pages.get(*page)?;
         // Above the page (in the gap before it) is the page's own top. The window's vertical is
         // the view's y, or its x when the view is turned a quarter.
@@ -91,10 +102,22 @@ impl DocView {
             }
             self.forward.clear();
         }
-        // Partial wheel motion belongs to the old place.
+        // Partial wheel motion belongs to the old place, and so does a find step's match.
         self.reset_coarse_state();
+        self.find_hold = None;
+        self.goto_point = None;
         self.goto = Some((page, 0.0));
         self.current = page;
+    }
+
+    /// The end of the document (End): the last page, scrolled to its bottom as far as the view
+    /// goes, as browsers and word processors do (#6434). [`go_to_page`](Self::go_to_page) shows a
+    /// page's top.
+    pub fn go_to_end(&mut self) {
+        self.go_to_page(usize::MAX);
+        // A fraction past a page's top scrolls as far as the content allows (`goto`, clamped when
+        // applied), so the whole page down to its bottom edge.
+        self.goto = Some((self.current, 1.0));
     }
 
     /// Reveal a user-space rectangle without changing zoom, centred where the scroll bounds allow.
@@ -219,7 +242,8 @@ impl DocView {
 
     /// Retain the current page when `typed` exactly matches its displayed label, even if
     /// another page has that label. Otherwise resolve a trimmed label (case-insensitive),
-    /// then a physical page number. `false` when it names no page.
+    /// then a position in parentheses ("(3)", as print ranges take it), then a physical page
+    /// number. `false` when it names no page.
     pub fn go_to_typed(&mut self, typed: &str, labels: &[String]) -> bool {
         // Compare the displayed value before trimming: a label may itself contain spaces.
         // Repeated labels occur in restarted sections and prefix-only ranges.
@@ -230,7 +254,7 @@ impl DocView {
         let page = labels
             .iter()
             .position(|l| !l.is_empty() && l.eq_ignore_ascii_case(t))
-            .or_else(|| t.parse::<usize>().ok().filter(|n| *n >= 1).map(|n| n - 1));
+            .or_else(|| pdfcraft_engine::print::position(t).or_else(|| t.parse::<usize>().ok()).filter(|n| *n >= 1).map(|n| n - 1));
         match page {
             Some(p) if p < self.page_count => {
                 self.go_to_page(p);
@@ -254,6 +278,8 @@ impl DocView {
         self.goto = Some((page, 0.0));
         self.current = page;
         self.reset_coarse_state();
+        // A find step's match belongs to the place left, as for any other jump.
+        self.find_hold = None;
         true
     }
 
@@ -268,7 +294,11 @@ impl DocView {
         let Some(forward) = self.wheel.feed(unit, dy, phase, now, can_turn) else { return false };
         let before = self.current;
         self.step_page(forward);
-        self.current != before
+        if self.current == before {
+            self.wheel.unturn();
+            return false;
+        }
+        true
     }
 
     /// One wheel event in a non-continuous view whose page is taller than the window, where the
@@ -288,6 +318,7 @@ impl DocView {
         let before = self.current;
         self.step_page(forward);
         if self.current == before {
+            self.wheel.unturn();
             return false;
         }
         if !forward {
@@ -299,38 +330,22 @@ impl DocView {
     }
 }
 
-pub fn shortcuts(view: &mut DocView, ctx: &egui::Context, speed: crate::scroll_speed::ScrollSpeed) {
+/// ⇧⌘+ / ⇧⌘−: rotate the view clockwise / counterclockwise.
+fn rotation_shortcuts(view: &mut DocView, pressed: &impl Fn(egui::KeyboardShortcut) -> bool) {
     use egui::{Key, KeyboardShortcut, Modifiers};
-    if ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, Key::F))) {
-        view.open_find();
-    }
-    let cmd = |k| KeyboardShortcut::new(Modifiers::COMMAND, k);
-    let pressed = |s: KeyboardShortcut| ctx.input_mut(|i| i.consume_shortcut(&s));
-    // ⌘G / ⇧⌘G step through the matches from the find field too, as in Acrobat and Preview
-    // (#2669): ahead of the text-input check, but only while there is a search to step.
-    if view.find.is_some() {
-        if pressed(KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::SHIFT, Key::G)) {
-            view.find_step(false);
-        } else if pressed(cmd(Key::G)) {
-            view.find_step(true);
-        }
-    }
-    // A focused check box or radio button holds egui's keyboard focus only for Space, and a
-    // radio button for the arrows that move within its group: the other page keys still work.
-    let form_box = view.forms.keys.filter(|(id, _)| ctx.memory(|m| m.focused()) == Some(*id));
-    if ctx.egui_wants_keyboard_input() && form_box.is_none() {
-        return;
-    }
-    let arrows = !form_box.is_some_and(|(_, radio)| radio);
-    // Rotation first: egui matches ⌘+ loosely with respect to Shift.
-    if pressed(KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::SHIFT, Key::Plus))
-        || pressed(KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::SHIFT, Key::Equals))
-    {
+    let shift_cmd = |k| KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::SHIFT, k);
+    if pressed(shift_cmd(Key::Plus)) || pressed(shift_cmd(Key::Equals)) {
         view.rotate_view(true);
     }
-    if pressed(KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::SHIFT, Key::Minus)) {
+    if pressed(shift_cmd(Key::Minus)) {
         view.rotate_view(false);
     }
+}
+
+/// ⌘+ / ⌘− / ⌘0 / ⌘1 / ⌘2: zoom the page, or size the pages in the page grid.
+fn zoom_shortcuts(view: &mut DocView, pressed: &impl Fn(egui::KeyboardShortcut) -> bool) {
+    use egui::{Key, KeyboardShortcut, Modifiers};
+    let cmd = |k| KeyboardShortcut::new(Modifiers::COMMAND, k);
     // In the page grid ⌘+ / ⌘− / ⌘0 size its pages instead (looking is always allowed).
     let (zoom_in, zoom_out, zoom_reset) = (pressed(cmd(Key::Plus)) || pressed(cmd(Key::Equals)), pressed(cmd(Key::Minus)), pressed(cmd(Key::Num0)));
     if view.organize {
@@ -362,15 +377,87 @@ pub fn shortcuts(view: &mut DocView, ctx: &egui::Context, speed: crate::scroll_s
         view.fit = Fit::Width;
         view.goto = Some((view.current, 0.0));
     }
-    if pressed(cmd(Key::OpenBracket)) {
+}
+
+/// The view's keys: its chords, then its plain keys. `chords`: no menu of the menu bar has the
+/// keyboard and nothing covers the pages, so chords may run (they wait for a menu, as the
+/// registered commands' do). An open form field keeps the paging and scrolling keys for itself.
+pub(crate) fn shortcuts(
+    view: &mut DocView,
+    ctx: &egui::Context,
+    keys: crate::page_keys::PageKeys,
+    chords: bool,
+    speed: crate::scroll_speed::ScrollSpeed,
+) {
+    if let Some((arrows, field_open)) = view_chords(view, ctx, chords) {
+        view_keys(view, ctx, keys, speed, arrows, field_open);
+    }
+}
+
+/// The view's chords: Find and its steps, rotation, zoom and the view history, unless a menu of the
+/// menu bar has the keyboard or something covers the pages (`chords`). `None` while a text field
+/// has the keyboard, and then it has the plain keys too; else whether the arrows are the view's (a
+/// focused radio button keeps them), and whether an open form field (a drop-down's or a list box's
+/// items) keeps the plain keys.
+fn view_chords(view: &mut DocView, ctx: &egui::Context, chords: bool) -> Option<(bool, bool)> {
+    use egui::{Key, KeyboardShortcut, Modifiers};
+    let pressed = |s: KeyboardShortcut| chords && ctx.input_mut(|i| i.consume_shortcut(&s));
+    if pressed(KeyboardShortcut::new(Modifiers::COMMAND, Key::F)) {
+        view.open_find();
+    }
+    let cmd = |k| KeyboardShortcut::new(Modifiers::COMMAND, k);
+    // ⌘G / ⇧⌘G step through the matches from the find field too, as in Acrobat and Preview
+    // (#2669): ahead of the text-input check, but only while there is a search to step.
+    if view.find.is_some() {
+        if pressed(KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::SHIFT, Key::G)) {
+            view.find_step(false);
+        } else if pressed(cmd(Key::G)) {
+            view.find_step(true);
+        }
+    }
+    // A focused check box or radio button holds egui's keyboard focus only for Space, and a
+    // radio button for the arrows that move within its group: the other page keys still work.
+    let form_box = view.forms.keys.filter(|(id, _)| ctx.memory(|m| m.focused()) == Some(*id));
+    if ctx.egui_wants_keyboard_input() && form_box.is_none() {
+        return None;
+    }
+    let arrows = !form_box.is_some_and(|(_, radio)| radio);
+    // Rotation first: egui matches ⌘+ loosely with respect to Shift.
+    rotation_shortcuts(view, &pressed);
+    zoom_shortcuts(view, &pressed);
+    // Alt+← / Alt+→ (⌥ on macOS) too, as in Acrobat and browsers, back to where a link was
+    // followed from (#3632). Consumed here, before ← / → turn the page. egui matches the pattern
+    // logically, so an extra Shift is ignored and Shift+Alt+← goes back as well (harmless).
+    let alt = |k| KeyboardShortcut::new(Modifiers::ALT, k);
+    if pressed(cmd(Key::OpenBracket)) || pressed(alt(Key::ArrowLeft)) {
         view.view_history(false);
     }
-    if pressed(cmd(Key::CloseBracket)) {
+    if pressed(cmd(Key::CloseBracket)) || pressed(alt(Key::ArrowRight)) {
         view.view_history(true);
     }
-    let key = |k| (arrows || !matches!(k, Key::ArrowLeft | Key::ArrowRight | Key::ArrowUp | Key::ArrowDown)) && ctx.input(|i| i.key_pressed(k));
+    // An open form field (a drop-down's or a list box's items) takes the arrows, Page Up / Page
+    // Down, Home, End and Escape. A focused check box or radio button uses none of them, so the
+    // page keys still work there.
+    let field_open = view.forms.focus.is_some() && form_box.is_none();
+    Some((arrows, field_open))
+}
+
+/// The view's plain keys: Escape, Home and End, full screen's keys, the arrows and Page Up / Page
+/// Down. Not while something is over the pages or a form field is open (`field_open`), which keeps
+/// them.
+fn view_keys(
+    view: &mut DocView,
+    ctx: &egui::Context,
+    keys: crate::page_keys::PageKeys,
+    speed: crate::scroll_speed::ScrollSpeed,
+    arrows: bool,
+    field_open: bool,
+) {
+    use egui::Key;
+    let key = |k| (arrows || !matches!(k, Key::ArrowLeft | Key::ArrowRight | Key::ArrowUp | Key::ArrowDown)) && keys.pressed(ctx, k);
     // An open menu takes Escape first and closes; the selection stays for the next one (#3535).
-    if key(Key::Escape) && !egui::Popup::is_any_open(ctx) {
+    // So does an open field, whose list closes.
+    if key(Key::Escape) && !egui::Popup::is_any_open(ctx) && !field_open {
         if view.camera.is_some() || view.camera_done.is_some() {
             view.pending_action = Some(ViewAction::CancelCamera);
         } else if view.selection.is_some() || view.all_text {
@@ -380,31 +467,79 @@ pub fn shortcuts(view: &mut DocView, ctx: &egui::Context, speed: crate::scroll_s
             view.find = None;
         }
     }
-    if key(Key::Home) {
+    // The open field's keys leave the page under it where it is.
+    if field_open {
+        return;
+    }
+    // Home and End, and the keys listed with them for Go to first / last page: Shift+Ctrl
+    // (Shift+⌘ on macOS) with ↑ / ↓ or Page Up / Page Down (#6434; *Adobe Acrobat Help*, 2019,
+    // "Keys for navigating a PDF", p. 83). These take the key from the page turning and
+    // scrolling below.
+    let (mut to_start, mut to_end) = (false, false);
+    keys.take_presses(ctx, |k, m| {
+        let shift_cmd = m.matches_logically(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT);
+        match k {
+            Key::ArrowUp | Key::PageUp if shift_cmd => to_start = true,
+            Key::ArrowDown | Key::PageDown if shift_cmd => to_end = true,
+            _ => return false,
+        }
+        true
+    });
+    if key(Key::Home) || to_start {
         view.go_to_page(0);
     }
-    if key(Key::End) {
-        view.go_to_page(usize::MAX);
+    if key(Key::End) || to_end {
+        view.go_to_end();
     }
-    // Full screen: Space and Enter go forward a page and Backspace back, as in Acrobat (the
-    // arrows and Page Up / Page Down already turn pages where nothing scrolls, below).
+    if to_end || to_start {
+        return;
+    }
+    let (command, shift) = ctx.input(|i| (i.modifiers.command, i.modifiers.shift));
+    // Full screen: Space and Enter go forward a page, and Shift+Enter and Backspace back
+    // (*Adobe Acrobat Help*, 2019, "Read a document in Full Screen mode", p. 66: "To go to the
+    // previous page, press Shift+Enter"). The arrows and Page Up / Page Down already turn pages
+    // where nothing scrolls, below.
     if view.presentation.is_some() {
-        if key(Key::Space) || key(Key::Enter) {
+        if key(Key::Space) || (key(Key::Enter) && !shift) {
             view.step_page(true);
         }
-        if key(Key::Backspace) {
+        if key(Key::Backspace) || (key(Key::Enter) && shift) {
             view.step_page(false);
         }
     }
     // As in Acrobat: → / ← go to the next / previous page in every layout (#185), and so do
-    // ⌘Page Down / ⌘Page Up, or plain Page Down / Page Up in single-page view.
-    let command = ctx.input(|i| i.modifiers.command);
+    // ⌘Page Down / ⌘Page Up, or plain Page Down / Page Up in single-page view. On a page wider
+    // than the window (a plan zoomed in) → / ← scroll sideways a line first, and turn the page
+    // once there is nothing left to scroll that way, as ↓ / ↑ do in single-page view; ⌘→ / ⌘←
+    // turn it at once.
     let scrolls = view.continuous;
-    if key(Key::ArrowRight) || (key(Key::PageDown) && (command || !scrolls)) {
+    let line = KEY_SCROLL_LINE * speed.factor();
+    // Only an up-to-date view counts: no jump pending.
+    let sideways = |view: &DocView, right: bool| {
+        !command && view.goto.is_none() && view.side_edges.is_some_and(|(left_edge, right_edge)| !if right { right_edge } else { left_edge })
+    };
+    // Turned at an edge, the next page starts at its left and the previous one at its right, as
+    // reading on across: on two wide pages → doesn't turn twice without showing the next one's left.
+    let at_edge = |view: &mut DocView, right: bool| {
+        if !command && view.goto.is_some() {
+            view.goto_side = Some(!right);
+        }
+    };
+    if key(Key::ArrowRight) && sideways(view, true) {
+        view.key_side += line;
+    } else if key(Key::ArrowRight) || (key(Key::PageDown) && (command || !scrolls)) {
         view.step_page(true);
+        if key(Key::ArrowRight) {
+            at_edge(view, true);
+        }
     }
-    if key(Key::ArrowLeft) || (key(Key::PageUp) && (command || !scrolls)) {
+    if key(Key::ArrowLeft) && sideways(view, false) {
+        view.key_side -= line;
+    } else if key(Key::ArrowLeft) || (key(Key::PageUp) && (command || !scrolls)) {
         view.step_page(false);
+        if key(Key::ArrowLeft) {
+            at_edge(view, false);
+        }
     }
     // ↓ / ↑ scroll a line, and Page Down / Page Up a screen where the pages scroll. In
     // single-page view, ↓ / ↑ turn the page once there is nothing left to scroll that way, as
@@ -412,7 +547,6 @@ pub fn shortcuts(view: &mut DocView, ctx: &egui::Context, speed: crate::scroll_s
     // The Scroll speed preference sets how far ↓ / ↑ go as well as the wheel (#985); Page Down /
     // Page Up keep a screen.
     if !command {
-        let line = KEY_SCROLL_LINE * speed.factor();
         let screen = (view.viewport_h - KEY_SCROLL_LINE).max(KEY_SCROLL_LINE);
         let steps = [(Key::ArrowDown, line), (Key::ArrowUp, -line), (Key::PageDown, screen), (Key::PageUp, -screen)];
         for (k, by) in steps {
@@ -443,3 +577,23 @@ pub fn shortcuts(view: &mut DocView, ctx: &egui::Context, speed: crate::scroll_s
 /// How far ↓ / ↑ scroll at Normal speed (Scroll speed halves or doubles it). Page Down / Page Up
 /// keep this much of the previous screen in view.
 const KEY_SCROLL_LINE: f32 = 40.0;
+/// How much of a page must show at the window's top edge to count as the page there, in points: one
+/// physical pixel, since page rectangles snap to whole pixels and less is rounding.
+fn sliver(pixels_per_point: f32) -> f32 {
+    if pixels_per_point.is_finite() && pixels_per_point > 0.0 { 1.0 / pixels_per_point } else { 1.0 }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sliver;
+
+    #[test]
+    fn a_sliver_is_one_physical_pixel() {
+        assert_eq!(sliver(1.0), 1.0);
+        assert_eq!(sliver(2.0), 0.5);
+        assert_eq!(sliver(0.5), 2.0);
+        for bad in [0.0, -1.0, f32::NAN, f32::INFINITY] {
+            assert_eq!(sliver(bad), 1.0, "{bad}");
+        }
+    }
+}

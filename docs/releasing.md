@@ -118,7 +118,9 @@ neither the MSI nor the portable zip needs the Visual C++ redistributable.
 - Before packaging, it reads both executables' PE headers: the machine type must match `-Arch`, and
   `pdfcraft.exe` must be a GUI-subsystem program (no console window, #57) while `pdfcraft-cli.exe`
   stays a console program.
-- `pdfcraft.wxs` (WiX v5) installs per machine into Program Files with a Start Menu shortcut, a
+- `pdfcraft.wxs` (WiX v5) is a dual-scope package (per-user by default into
+  `%LOCALAPPDATA%\Programs\ArtCraft\PdfCraft`, per-machine into `Program Files\ArtCraft\PdfCraft` (`Program Files (x86)` for the 32-bit build),
+  see `packaging/windows/INSTALLATION.md`) with a Start Menu shortcut, a
   desktop shortcut (on by default) and an App Paths entry. Both shortcuts are plain links to
   `pdfcraft.exe`, not advertised MSI shortcuts (#107, #143). The MSI version is the numeric `X.Y.Z`
   (MSI has no pre-release field), and same-version upgrades are allowed so release candidates replace
@@ -126,9 +128,16 @@ neither the MSI nor the portable zip needs the Visual C++ redistributable.
   this.
 - `installer-ui.wxs` supplies native welcome, maintenance, progress, files-in-use and outcome
   dialogs. Full UI confirms success with Finish; failures and cancellations have distinct messages.
-  The welcome dialog has a "Create a desktop shortcut" checkbox and an "Edit with PdfCraft"
-  right-click menu checkbox, both ticked by default. `/qn` and `/qb` stay unattended and create
-  both unless `INSTALLDESKTOPSHORTCUT=0` or `INSTALLPDFCONTEXTMENU=0` is passed;
+  The welcome dialog has an "Install to" row (a `PathEdit`, and Browse… into `BrowseFolder`, a
+  native folder browser: drive list, folder list, Up, New folder, typed path; #1139), a "Create a
+  desktop shortcut" checkbox and an "Add Edit and Combine files to the right-click menu of PDF
+  files" checkbox, both ticked by default. Install sets the folder (`SetTargetPath`) before the
+  dialog closes. `INSTALLFOLDER` is secure, so the choice reaches the elevated install, and
+  `INSTALLFOLDER=<path>` works on the command line. The row starts on the folder
+  `install-policy.wxi` chose for the scope picked on the first page (the recorded folder on an
+  update), and an update installs into the recorded folder unless the command line gives one
+  (`INSTALLATION.md`). `/qn` and `/qb` stay unattended and create both unless
+  `INSTALLDESKTOPSHORTCUT=0` or `INSTALLPDFCONTEXTMENU=0` is passed;
   `INSTALLIMAGECONTEXTMENU=0` (no checkbox) leaves out the image menu. An update (the launcher runs
   `msiexec /passive` with no properties) keeps the desktop shortcut only if `PdfCraft.lnk` is still
   on the all-users desktop, so deleting it once keeps it away (#1058), and keeps each menu only if
@@ -142,7 +151,10 @@ neither the MSI nor the portable zip needs the Visual C++ redistributable.
   limit for a `Document` verb) start one `pdfcraft.exe "<file>"` each, and the single-instance
   hand-off opens them as tabs. On Windows 11 it is under "Show more options"; a first-level entry
   needs an `IExplorerCommand` handler and package identity (a sparse MSIX package), which the MSI
-  doesn't have.
+  doesn't have. "Combine files in PdfCraft" (#585) is a second verb in the same component,
+  `PdfCraft.Combine`, running `pdfcraft --combine "<file>"` once per selected file; the
+  single-instance hand-off sends them with `"combine": true`, and the running app adds them to
+  its Combine files tab (`OsEvent::Combine`). Both verbs come and go with `INSTALLPDFCONTEXTMENU`.
 - The image right-click entry (#190) is the same kind of verb, `PdfCraft.CreatePdf`, for ten image
   types, in its own component (`PdfcraftImageContextMenu`) since it became optional. Its rows moved
   out of `PdfcraftApp`; that's safe because `MajorUpgrade` removes the old version before installing

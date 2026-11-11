@@ -1,5 +1,5 @@
 use super::create::normalize;
-use super::*;
+use super::{Dict, ObjRef, appearance};
 
 pub type Rgb = [f64; 3];
 
@@ -123,6 +123,28 @@ impl FillMark {
         let (w, h) = if self == FillMark::Line { (36.0, 4.0) } else { (12.0, 12.0) };
         let (w, h) = if matches!(rotation.rem_euclid(360), 90 | 270) { (h, w) } else { (w, h) };
         [at[0] - w / 2.0, at[1] - h / 2.0, at[0] + w / 2.0, at[1] + h / 2.0]
+    }
+
+    /// The mark whose `/Name` this is.
+    pub fn from_name(n: &[u8]) -> Option<Self> {
+        [FillMark::Check, FillMark::Cross, FillMark::Dot, FillMark::Line].into_iter().find(|m| m.name().as_bytes() == n)
+    }
+
+    /// The pen strokes the mark is drawn with in `rect` (user space): what its appearance strokes,
+    /// and what a copy of it shows while it is being placed. The dot is a filled circle (radius
+    /// 0.3 × the shorter side, centred) and has none.
+    pub fn strokes(self, rect: [f64; 4]) -> Vec<Vec<[f64; 2]>> {
+        let [x0, y0, x1, y1] = rect;
+        let (w, h) = (x1 - x0, y1 - y0);
+        match self {
+            FillMark::Check => vec![vec![[x0 + w * 0.15, y0 + h * 0.5], [x0 + w * 0.4, y0 + h * 0.2], [x0 + w * 0.88, y0 + h * 0.85]]],
+            FillMark::Cross => vec![
+                vec![[x0 + w * 0.18, y0 + h * 0.18], [x1 - w * 0.18, y1 - h * 0.18]],
+                vec![[x0 + w * 0.18, y1 - h * 0.18], [x1 - w * 0.18, y0 + h * 0.18]],
+            ],
+            FillMark::Dot => Vec::new(),
+            FillMark::Line => vec![vec![[x0, y0 + h / 2.0], [x1, y0 + h / 2.0]]],
+        }
     }
 }
 
@@ -355,6 +377,10 @@ pub enum Shape {
         start: LineEnding,
         end: LineEnding,
     },
+    /// Translucent freehand highlighting, stored as ink with a distinct intent.
+    FreehandHighlight {
+        strokes: Vec<Vec<[f64; 2]>>,
+    },
     /// Freehand strokes (Draw tool).
     Ink {
         strokes: Vec<Vec<[f64; 2]>>,
@@ -391,13 +417,17 @@ pub enum Shape {
         contours: Vec<Vec<[f64; 2]>>,
     },
     /// A custom stamp: a picture already in the document (an image XObject, or a form XObject
-    /// whose `/Matrix` maps it to `size` points) filling `rect`, named `name`.
+    /// whose `/Matrix` maps it to `size` points) filling `rect`, named `name`. With `line`, a
+    /// line of text under the picture (#1741): a dynamic stamp's name, date and time, filled in
+    /// when it was placed; the picture then fills the rectangle above it
+    /// ([`CUSTOM_LINE_BAND`](crate::CUSTOM_LINE_BAND)).
     CustomStamp {
         rect: [f64; 4],
         name: String,
         picture: ObjRef,
         image: bool,
         size: (f64, f64),
+        line: Option<String>,
     },
     /// A redaction mark (§12.5.6.23) over quadrilaterals (text) or one rectangle as a quad
     /// (areas, pages). `overlay` is the text shown on the box once applied, drawn with `look`.
@@ -474,6 +504,7 @@ pub fn rect_quad(r: [f64; 4]) -> [f64; 8] {
 }
 
 impl Shape {
+    /// Return the PDF `/Subtype` name for this annotation shape.
     pub fn subtype(&self) -> &'static str {
         match self {
             Shape::Note { .. } => "Text",
@@ -481,7 +512,7 @@ impl Shape {
             Shape::Rectangle { .. } => "Square",
             Shape::Oval { .. } => "Circle",
             Shape::Line { .. } => "Line",
-            Shape::Ink { .. } | Shape::Signature { .. } => "Ink",
+            Shape::Ink { .. } | Shape::FreehandHighlight { .. } | Shape::Signature { .. } => "Ink",
             Shape::TextBox { .. } | Shape::Typewriter { .. } | Shape::Callout { .. } => "FreeText",
             Shape::Mark { .. } | Shape::Stamp { .. } | Shape::CustomStamp { .. } | Shape::TypedSignature { .. } => "Stamp",
             Shape::Redact { .. } => "Redact",
@@ -561,11 +592,143 @@ pub struct Style {
     pub width: f64,
     /// Interior fill for rectangles and ovals (`/IC`), background for text boxes.
     pub fill: Option<Rgb>,
+    /// A text box's, typewriter text's or callout's border colour where it differs from the
+    /// text's (`None`: the text colour), the stroking colour in its `/DA`.
+    pub border_color: Option<Rgb>,
+    /// A text box's or typewriter text's border shape (a callout's is always a rectangle).
+    pub border_shape: BorderShape,
+    /// The fill's own opacity, 0–1 (`/ca`), where it differs from `opacity` (which is then the
+    /// line's or border's); `None`: as `opacity`.
+    pub fill_opacity: Option<f64>,
+    /// A text box's text's own opacity, 0–1 (`/PCTextOpacity`); `None`: as the fill's.
+    pub text_opacity: Option<f64>,
+}
+
+/// The style properties changed by one annotation edit. `None` leaves a property unchanged.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct StyleChange {
+    pub color: Option<Rgb>,
+    pub opacity: Option<f64>,
+    pub width: Option<f64>,
+    pub endings: Option<Vec<LineEnding>>,
+}
+
+impl StyleChange {
+    pub fn new(color: Option<Rgb>, opacity: Option<f64>, width: Option<f64>, endings: Option<Vec<LineEnding>>) -> Self {
+        Self { color, opacity, width, endings }
+    }
+}
+
+/// Inputs for replacing selected text with a grouped strikeout and caret annotation.
+pub struct TextReplacement<'a> {
+    pub page: usize,
+    pub quads: &'a [[f64; 8]],
+    pub replacement: &'a str,
+    pub author: &'a str,
+    pub strike: &'a Style,
+    pub caret: &'a Style,
+    pub strike_meta: &'a Meta,
+    pub caret_meta: &'a Meta,
 }
 
 impl Default for Style {
     fn default() -> Self {
-        Self { color: [1.0, 0.82, 0.0], opacity: 1.0, width: 1.0, fill: None }
+        Self {
+            color: [1.0, 0.82, 0.0],
+            opacity: 1.0,
+            width: 1.0,
+            fill: None,
+            fill_opacity: None,
+            text_opacity: None,
+            border_color: None,
+            border_shape: BorderShape::Rectangle,
+        }
+    }
+}
+
+/// The shape of a text box's or typewriter text's border (PdfCraft's `/PCBorderShape`, absent for
+/// a rectangle). An oval or a circle goes around the text box, which keeps its place: `/Rect`
+/// grows to hold it, centred on the text box, and `/RD` says where the text box is inside
+/// (§12.5.6.6), as for a callout. Other apps that redraw the comment draw a rectangle.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum BorderShape {
+    #[default]
+    Rectangle,
+    Oval,
+    Circle,
+}
+
+impl BorderShape {
+    pub const ALL: [BorderShape; 3] = [BorderShape::Rectangle, BorderShape::Oval, BorderShape::Circle];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            BorderShape::Rectangle => "Rectangle",
+            BorderShape::Oval => "Oval",
+            BorderShape::Circle => "Circle",
+        }
+    }
+
+    /// `rectangle`, `oval` or `circle`, in any case.
+    pub fn parse(s: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|b| b.name().eq_ignore_ascii_case(s))
+    }
+
+    /// The border shape of FreeText `d`: always a rectangle for a callout.
+    pub fn of(d: &Dict) -> Self {
+        if d.contains(b"CL") {
+            return BorderShape::Rectangle;
+        }
+        match d.name(b"PCBorderShape") {
+            Some(b"Oval") => BorderShape::Oval,
+            Some(b"Circle") => BorderShape::Circle,
+            _ => BorderShape::Rectangle,
+        }
+    }
+
+    /// The rectangle this shape, with a border `width` wide, takes around text box `tb`, centred on
+    /// it: an oval through the text box's corners (`√2` its size), a point clear of the border; a
+    /// circle around the text's lines (`text`: the widest line's width and the lines' height, when
+    /// known), a point clear of the border and touching the text box's longer sides at least
+    /// (its corners, padding only, may lie outside), else through the box's corners; the text box
+    /// itself for a rectangle.
+    pub fn around(self, tb: [f64; 4], width: f64, text: Option<[f64; 2]>) -> [f64; 4] {
+        let tb = normalize(tb);
+        let (cx, cy, hx, hy) = ((tb[0] + tb[2]) / 2.0, (tb[1] + tb[3]) / 2.0, (tb[2] - tb[0]) / 2.0, (tb[3] - tb[1]) / 2.0);
+        let gap = width.max(0.0) + 1.0;
+        let (ax, ay) = match self {
+            BorderShape::Rectangle => return tb,
+            BorderShape::Oval => (hx * std::f64::consts::SQRT_2 + gap, hy * std::f64::consts::SQRT_2 + gap),
+            BorderShape::Circle => {
+                let r = match text {
+                    Some([w, h]) => ((w / 2.0).hypot(h / 2.0) + gap).max(hx).max(hy),
+                    None => hx.hypot(hy) + gap,
+                };
+                (r, r)
+            }
+        };
+        [cx - ax, cy - ay, cx + ax, cy + ay]
+    }
+
+    /// The text box inside `outer` for this shape when none is recorded: the inverse of
+    /// [`Self::around`] for an oval, a box through a circle's corners for a circle, keeping the
+    /// proportions of `was` (the one it had).
+    pub(crate) fn inside(self, outer: [f64; 4], width: f64, was: [f64; 4]) -> [f64; 4] {
+        let o = normalize(outer);
+        let (cx, cy, hx, hy) = ((o[0] + o[2]) / 2.0, (o[1] + o[3]) / 2.0, (o[2] - o[0]) / 2.0, (o[3] - o[1]) / 2.0);
+        let gap = width.max(0.0) + 1.0;
+        let (ix, iy) = match self {
+            BorderShape::Rectangle => return o,
+            BorderShape::Oval => ((hx - gap) / std::f64::consts::SQRT_2, (hy - gap) / std::f64::consts::SQRT_2),
+            BorderShape::Circle => {
+                let w = normalize(was);
+                let (wx, wy) = ((w[2] - w[0]) / 2.0, (w[3] - w[1]) / 2.0);
+                let k = (hx.min(hy) - gap) / wx.hypot(wy).max(1e-6);
+                (wx * k, wy * k)
+            }
+        };
+        let (ix, iy) = (ix.max(0.5), iy.max(0.5));
+        [cx - ix, cy - iy, cx + ix, cy + iy]
     }
 }
 
@@ -583,6 +746,7 @@ impl Style {
             }
             Shape::Callout { .. } => ([0.0, 0.0, 0.0], 1.0),
             Shape::Caret { .. } | Shape::Attachment { .. } => ([0.0, 0.47, 0.84], 1.0),
+            Shape::FreehandHighlight { .. } => return Self { color: [1.0, 0.94, 0.0], opacity: 0.35, width: 14.0, ..Self::default() },
             Shape::Ink { .. } => ([0.0, 0.4, 0.87], 2.0),
             Shape::TextBox { .. } | Shape::Typewriter { .. } => ([0.0, 0.0, 0.0], 0.0),
             Shape::Mark { .. } => ([0.0, 0.0, 0.0], 1.5),
@@ -591,9 +755,9 @@ impl Style {
             Shape::CustomStamp { .. } => ([0.0, 0.0, 0.0], 0.0),
             Shape::TypedSignature { .. } => ([0.0, 0.0, 0.0], 0.0),
             // Red outline while marked; a black box once applied.
-            Shape::Redact { .. } => return Self { color: [0.89, 0.13, 0.13], opacity: 1.0, width: 1.0, fill: Some([0.0, 0.0, 0.0]) },
+            Shape::Redact { .. } => return Self { color: [0.89, 0.13, 0.13], fill: Some([0.0, 0.0, 0.0]), ..Self::default() },
         };
-        Self { color, opacity: 1.0, width, fill: None }
+        Self { color, width, ..Self::default() }
     }
 }
 

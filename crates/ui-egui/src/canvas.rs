@@ -9,16 +9,18 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use egui::{Align2, Color32, CornerRadius, Pos2, Rect, Sense, Stroke, TextureHandle, TextureOptions, Vec2, pos2, vec2};
+use pdfcraft_engine::text_links::TextLink;
 use pdfcraft_engine::{DocId, Edit};
 use pdfcraft_render::{DestView, DocInfo, LayerOp, LinkTarget, PRINT_TAG, PageText, RenderPool, RenderRequest, RequestKind, Tile, device_pixels};
 
+use crate::page_cursor::Layer;
 use crate::page_pointer::PagePointer;
 use crate::theme::{self, Tokens};
 use crate::{PdfCraftApp, QuickTool, RightPanel, comments, icons, widgets};
 
 mod area;
-pub(super) mod autoscroll;
-mod bars;
+pub(crate) mod autoscroll;
+pub(crate) mod bars;
 mod cache;
 pub(super) mod crop;
 mod find;
@@ -26,21 +28,25 @@ pub(super) mod fling;
 pub(super) mod image_pick;
 mod navigation;
 mod organize;
+pub(super) mod page_cursor;
+mod page_input;
+pub(super) mod page_keys;
 pub(super) mod page_pointer;
+pub(super) mod page_router;
+mod presenter;
 pub mod scroll_speed;
 mod selection;
 pub(super) mod signature_drag;
 pub(super) mod wheel_boost;
 pub(super) mod wheel_pager;
+pub(super) mod wheel_reset;
 mod xform;
 mod zoom;
 pub(super) mod zoom_snap;
 
+pub(crate) use area::SignTab;
 pub(crate) use area::signature_badges;
-use area::{
-    SUPPRESS_SECS, SUPPRESS_TAIL_SECS, annotation_hover_text, drawing_edge_pointer, glide_interrupted, page_scroll, presentation_click, run_button,
-    set_layers, zoom_anchor,
-};
+use area::{drawing_edge_pointer, glide_interrupted, page_scroll, presentation_click, run_button, set_layers, zoom_anchor};
 #[cfg(test)]
 use bars::in_size_hint_zone;
 use bars::{Notice, notices, page_size_hint, quick_bar};
@@ -54,13 +60,15 @@ use cache::{
 use cache::{OLD_TILES, PageTex, STALE_TAG, TEXT_TAG, TILE_BYTES, scale_tag, tag_scale, texture_bytes, tile_side};
 pub use find::Find;
 use find::find_bar;
-pub use navigation::shortcuts;
+pub(crate) use navigation::shortcuts;
 pub(crate) use organize::drop_gap;
 #[cfg(test)]
 pub(crate) use organize::grid_page_rect;
 use organize::organize_grid;
 #[cfg(test)]
 use organize::sharp_enough;
+pub(crate) use page_input::PageToolContext;
+use page_input::{PageInput, cancel_on_escape, page_overlays, page_tool_input, text_layer};
 use selection::{Selection, Span, click_unit, selection_actions};
 pub use xform::PageXform;
 use xform::snap_to_pixels;
@@ -80,6 +88,151 @@ pub enum Fit {
     Page,
     Height,
     None,
+}
+
+use crate::edit_text_ui::ImageHandle;
+
+/// Extension trait on `egui::Painter` to draw polygons.
+pub trait PainterExt {
+    fn polygon(&self, points: Vec<Pos2>, fill: Color32, stroke: Stroke) -> egui::layers::ShapeIdx;
+}
+
+impl PainterExt for egui::Painter {
+    fn polygon(&self, points: Vec<Pos2>, fill: Color32, stroke: Stroke) -> egui::layers::ShapeIdx {
+        self.add(egui::Shape::convex_polygon(points, fill, stroke))
+    }
+}
+
+/// User-space editing frame: explicit PDF/editor crops apply, but the page edge does not
+/// truncate a selected image's handles. Body hit testing still respects page visibility.
+pub fn image_selectable_bounds(im: &pdfcraft_engine::PageImage) -> [f64; 4] {
+    im.frame_rect().unwrap_or(im.rect)
+}
+
+/// Screen-space editing frame, including selected handles outside the page.
+pub fn image_screen_rect(im: &pdfcraft_engine::PageImage, xf: &PageXform, info: &DocInfo, page: usize) -> Rect {
+    xf.user_rect_f64(info, page, image_selectable_bounds(im))
+}
+
+/// An Oriented Bounding Box (OBB) representing a rotated rectangle in screen space,
+/// with 8 resize handles and rotated local axes.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ImageObb {
+    pub s00: Pos2,
+    pub s10: Pos2,
+    pub s11: Pos2,
+    pub s01: Pos2,
+    pub s_bc: Pos2,
+    pub s_rc: Pos2,
+    pub s_tc: Pos2,
+    pub s_lc: Pos2,
+    pub s_rot: Pos2,
+    pub screen_center: Pos2,
+    pub u_axis: (f64, f64),
+    pub v_axis: (f64, f64),
+    pub is_rotated: bool,
+}
+
+impl ImageObb {
+    pub(crate) fn handle_cursor(&self, handle: ImageHandle) -> egui::CursorIcon {
+        let direction = self.handle_pos(handle) - self.screen_center;
+        match handle {
+            ImageHandle::TopLeft | ImageHandle::TopRight | ImageHandle::BottomLeft | ImageHandle::BottomRight => {
+                if direction.x * direction.y > 0.0 {
+                    egui::CursorIcon::ResizeNwSe
+                } else {
+                    egui::CursorIcon::ResizeNeSw
+                }
+            }
+            _ if direction.x.abs() > direction.y.abs() => egui::CursorIcon::ResizeHorizontal,
+            _ => egui::CursorIcon::ResizeVertical,
+        }
+    }
+
+    pub(crate) fn contains(&self, visible: Rect, p: Pos2) -> bool {
+        (visible.is_positive() && visible.contains(p)) || crate::edit_text_ui::quad_contains(self.corners(), p)
+    }
+
+    pub fn from_matrix(matrix: [f64; 6], xf: &PageXform, info: &DocInfo, page: usize) -> Self {
+        let m = crate::edit_text_ui::Matrix(matrix);
+        let p00 = m.apply(0.0, 0.0);
+        let p10 = m.apply(1.0, 0.0);
+        let p11 = m.apply(1.0, 1.0);
+        let p01 = m.apply(0.0, 1.0);
+
+        let s00 = crate::edit_text_ui::user_to_screen(xf, info, page, p00.0, p00.1);
+        let s10 = crate::edit_text_ui::user_to_screen(xf, info, page, p10.0, p10.1);
+        let s11 = crate::edit_text_ui::user_to_screen(xf, info, page, p11.0, p11.1);
+        let s01 = crate::edit_text_ui::user_to_screen(xf, info, page, p01.0, p01.1);
+
+        let s_bc = Pos2::new((s00.x + s10.x) * 0.5, (s00.y + s10.y) * 0.5);
+        let s_rc = Pos2::new((s10.x + s11.x) * 0.5, (s10.y + s11.y) * 0.5);
+        let s_tc = Pos2::new((s01.x + s11.x) * 0.5, (s01.y + s11.y) * 0.5);
+        let s_lc = Pos2::new((s00.x + s01.x) * 0.5, (s00.y + s01.y) * 0.5);
+
+        let screen_center = Pos2::new((s00.x + s10.x + s11.x + s01.x) * 0.25, (s00.y + s10.y + s11.y + s01.y) * 0.25);
+        let out_dir = s_tc - screen_center;
+        let out_len = out_dir.length().max(1e-4);
+        let out_norm = out_dir / out_len;
+        let s_rot = s_tc + out_norm * 24.0;
+
+        let [a, b, c, d, ..] = matrix;
+        let w_u = (a * a + b * b).sqrt().max(1e-6);
+        let h_v = (c * c + d * d).sqrt().max(1e-6);
+        let u_axis = (a / w_u, b / w_u);
+        let v_axis = (c / h_v, d / h_v);
+        // The fast rectangle path interprets labels in screen space. Use matrix
+        // resizing whenever the image's user-space axes are turned or reflected
+        // on screen, including page /Rotate and View > Rotate View.
+        let u = s10 - s00;
+        let v = s01 - s00;
+        let is_rotated = u.y.abs() > 1e-4 || v.x.abs() > 1e-4 || u.x < 0.0 || v.y > 0.0;
+
+        Self { s00, s10, s11, s01, s_bc, s_rc, s_tc, s_lc, s_rot, screen_center, u_axis, v_axis, is_rotated }
+    }
+
+    pub fn from_image(im: &pdfcraft_engine::PageImage, xf: &PageXform, info: &DocInfo, page: usize) -> Self {
+        let [a, b, c, d, ..] = im.matrix;
+        let is_rot = b.abs() > 1e-4 || c.abs() > 1e-4 || a < 0.0 || d < 0.0;
+        let bounds = image_selectable_bounds(im);
+        let matrix = if !is_rot && bounds[2] > bounds[0] && bounds[3] > bounds[1] {
+            [bounds[2] - bounds[0], 0.0, 0.0, bounds[3] - bounds[1], bounds[0], bounds[1]]
+        } else {
+            im.matrix
+        };
+        Self::from_matrix(matrix, xf, info, page)
+    }
+
+    pub fn handles(&self) -> [(ImageHandle, Pos2); 8] {
+        [
+            ImageHandle::TopLeft,
+            ImageHandle::TopCenter,
+            ImageHandle::TopRight,
+            ImageHandle::RightCenter,
+            ImageHandle::BottomRight,
+            ImageHandle::BottomCenter,
+            ImageHandle::BottomLeft,
+            ImageHandle::LeftCenter,
+        ]
+        .map(|h| (h, self.handle_pos(h)))
+    }
+
+    pub fn handle_pos(&self, handle: ImageHandle) -> Pos2 {
+        match handle {
+            ImageHandle::TopLeft => self.s01,
+            ImageHandle::TopCenter => self.s_tc,
+            ImageHandle::TopRight => self.s11,
+            ImageHandle::RightCenter => self.s_rc,
+            ImageHandle::BottomRight => self.s10,
+            ImageHandle::BottomCenter => self.s_bc,
+            ImageHandle::BottomLeft => self.s00,
+            ImageHandle::LeftCenter => self.s_lc,
+        }
+    }
+
+    pub fn corners(&self) -> [Pos2; 4] {
+        [self.s00, self.s10, self.s11, self.s01]
+    }
 }
 
 /// The page display as it was before full screen, put back on leaving it
@@ -245,6 +398,63 @@ pub struct Snapshot {
     pub from: String,
 }
 
+/// Whether what the pages show of the signatures differs between `before` and `after`: a verdict,
+/// or whether a signature's appearance draws it.
+pub(crate) fn signature_states_changed(before: &[pdfcraft_engine::SignatureInfo], after: &[pdfcraft_engine::SignatureInfo]) -> bool {
+    before.len() != after.len()
+        || before.iter().zip(after).any(|(b, a)| b.field != a.field || b.status != a.status || b.verdict_shown != a.verdict_shown)
+}
+
+/// The mark's side as a share of the widget's shorter side.
+const MARK_SIDE_SHARE: f32 = 0.25;
+
+/// The largest side of the mark, in screen points, so zooming in stops enlarging it.
+const MARK_SIDE_MAX: f32 = 48.0;
+
+/// The smallest legible side of the mark, in screen points: a widget whose shorter side is under
+/// `MARK_SIDE_MIN / MARK_SIDE_SHARE` (32 points) keeps only its outline. A field over that at 100%
+/// can fall under it when the page is zoomed out to fit.
+const MARK_SIDE_MIN: f32 = 8.0;
+
+/// The gap between the mark and the widget's edges, as a share of the mark's side.
+const MARK_INSET_SHARE: f32 = 0.2;
+
+/// The icon's size as a share of the mark's side; the icon is centred in it.
+const MARK_ICON_SHARE: f32 = 0.64;
+
+/// The screen position of a widget's bottom-right corner on the page (`rect`, user space): where
+/// its validation mark goes, wherever the page's /Rotate and the view turn it.
+fn mark_anchor(xf: &PageXform, info: &DocInfo, page: usize, rect: [f64; 4]) -> Pos2 {
+    let [_, bottom, right, _] = rect.map(|v| v as f32);
+    xf.user_rect(info, page, [right, bottom, right, bottom]).min
+}
+
+/// Where the validation mark sits in the part of a signature widget's screen rectangle that is on
+/// the page (`page`, on screen too), or `None` when that part is too small for a legible one. It
+/// goes in the corner nearest `anchor`, the screen position of the widget's bottom-right corner on
+/// the page, so it turns with the page and the view: off the middle, where a signer's artwork
+/// usually is, and clear of the state a named-layer appearance captions across its top.
+fn verdict_mark_rect(widget: Rect, page: Rect, anchor: Pos2) -> Option<Rect> {
+    // A NaN or infinite corner has no place on screen.
+    if !widget.is_finite() {
+        return None;
+    }
+    // A widget past the crop box's edge shows its mark on the page, not beside it.
+    let widget = widget.intersect(page);
+    let side = (widget.width().min(widget.height()) * MARK_SIDE_SHARE).min(MARK_SIDE_MAX);
+    // Also refuses the negative side of an inverted rectangle.
+    if !(MARK_SIDE_MIN..).contains(&side) {
+        return None;
+    }
+    let inset = side * MARK_INSET_SHARE;
+    // A NaN anchor compares false either way and takes the bottom-right corner.
+    let left = anchor.x - widget.min.x < widget.max.x - anchor.x;
+    let top = anchor.y - widget.min.y < widget.max.y - anchor.y;
+    let x = if left { widget.min.x + inset } else { widget.max.x - inset - side };
+    let y = if top { widget.min.y + inset } else { widget.max.y - inset - side };
+    Some(Rect::from_min_size(pos2(x, y), vec2(side, side)))
+}
+
 /// The name shown for a document tab, the window title and the Combine picker.
 /// A snapshot reads like its source document, plus the snapshot suffix that tells
 /// the tabs apart. Without a title the file name (which already carries the suffix)
@@ -270,7 +480,13 @@ pub(crate) fn snapshot_tab_name(title: &str, file_name: &str, snapshot: &Snapsho
 }
 
 pub struct DocView {
+    /// Where the tab shows (split view's panes) and the key that tells two
+    /// views of one document apart (`crate::panes`).
+    pub(crate) pane: crate::panes::ViewPane,
     pub id: DocId,
+    /// The document and attached file this tab was opened from, when a form or the Attachments
+    /// panel opened it: asking for that attachment again comes back to this tab.
+    pub from_attachment: Option<(DocId, String)>,
     pub zoom: f32,
     pub fit: Fit,
     pub layout: PageLayout,
@@ -303,6 +519,10 @@ pub struct DocView {
     pub forward: Vec<usize>,
     /// Pending navigation: page and fraction down the page to align with the viewport top.
     pub goto: Option<(usize, f32)>,
+    /// With `goto`: → / ← turned the page at an edge, so a page or spread wider than the window
+    /// starts at the edge the reader comes from (`false`: its left, after →; `true`: its right,
+    /// after ←) instead of keeping the column.
+    pub(crate) goto_side: Option<bool>,
     /// Pending position within that page from a destination ([`Self::go_to_dest`]): the point
     /// (fractions of the displayed page; `None` leaves that axis to `goto`) to put `rel` points
     /// from the viewport's top-left corner.
@@ -310,6 +530,12 @@ pub struct DocView {
     /// Pending keyboard scrolling, in points down (negative: up): ↓ / ↑, and Page Down /
     /// Page Up where the pages scroll.
     pub key_scroll: f32,
+    /// Pending keyboard scrolling sideways, in points right (negative: left): → / ← on a page
+    /// wider than the window.
+    pub key_side: f32,
+    /// As last drawn: whether the view was at its left and at its right edge (both when the
+    /// pages fit across), so → / ← turn the page there and scroll sideways elsewhere.
+    side_edges: Option<(bool, bool)>,
     /// Single-page view, as last drawn: the page shown and whether the view was at its top and
     /// at its bottom, so ↑ / ↓ turn the page there instead of doing nothing (#273).
     single_edges: Option<(usize, bool, bool)>,
@@ -317,12 +543,21 @@ pub struct DocView {
     pub flash: Option<(usize, [f32; 4], f64)>,
     /// Compare files: differences shaded on this document's pages (page, user-space box, colour).
     pub compare_marks: Vec<(usize, [f32; 4], Color32)>,
+    /// The interface the document hid in this tab, and what is hidden now (ISO 32000-2 Table 147
+    /// `HideToolbar`, `HideMenubar`, `HideWindowUI`). Never saved.
+    pub interface: crate::viewer_prefs::TabInterface,
     /// Full screen (Acrobat's Full Screen Mode): the display saved on entering it, while the view
     /// shows one page or spread at a time, fitted to the screen. `None` outside full screen.
     presentation: Option<SavedDisplay>,
+    /// Full screen's transitions, display times and pointer (see [`presenter`]).
+    pub(crate) presenter: presenter::Presenter,
     pages: HashMap<usize, PageTex>,
     /// Pages the renderer could not draw, with the reason (never re-requested).
     errors: HashMap<usize, String>,
+    /// Pages whose content was cut at the renderer's limits (#623): drawn and searched in part.
+    cut_pages: std::collections::BTreeSet<usize>,
+    /// Cut pages whose notice the reader dismissed: a page cut later shows it again.
+    cut_notice_dismissed: std::collections::BTreeSet<usize>,
     /// When each still-missing page was first shown, to flag unusually slow renders.
     waiting_since: HashMap<usize, f64>,
     thumbs: HashMap<usize, PageTex>,
@@ -334,6 +569,9 @@ pub struct DocView {
     /// Pages on screen this frame. Their rasters and tiles are always admitted: the viewport
     /// bounds them, and the byte and count limits apply to prefetch only.
     frame_visible: HashSet<usize>,
+    /// Pages whose whole-page raster this frame asks for, on screen or prefetched. An arriving
+    /// raster over the allowance evicts the other cached pages first.
+    frame_demanded: HashSet<usize>,
     /// Thumbnails that are out of date (still shown until their replacement arrives).
     stale_thumbs: HashSet<usize>,
     /// Tiles that are out of date (still shown until their replacement arrives).
@@ -349,6 +587,8 @@ pub struct DocView {
     tiles: HashMap<(usize, u64, u32, u32), TextureHandle>,
     /// Text layers, extracted in the background on demand (selection, find, copy).
     pub(crate) texts: HashMap<usize, Arc<PageText>>,
+    /// Addresses written as plain text on a page (#4207), with the text layer they were found in.
+    text_links: HashMap<usize, (Arc<PageText>, Arc<[TextLink]>)>,
     pub(crate) text_failed: HashSet<usize>,
     pub find: Option<Find>,
     selection: Option<Selection>,
@@ -375,15 +615,22 @@ pub struct DocView {
     viewport_w: f32,
     viewport_h: f32,
     page_count: usize,
-    /// Page heights in points (view space), for mapping text positions to scroll offsets.
-    page_heights: Vec<f32>,
+    /// Page sizes (width, height) in points (view space), for mapping text positions to scroll offsets.
+    page_sizes: Vec<(f32, f32)>,
     /// Screen rects of the pages drawn last frame (hit-testing, tests, automation).
     screen_rects: Vec<(usize, Rect)>,
     screen_xforms: Vec<(usize, PageXform)>,
+    /// Pixels per point last frame, for telling a rounding sliver of a page from a visible one.
+    screen_ppp: f32,
     /// The scroll viewport on screen last frame.
     viewport_screen: Rect,
     /// Pending zoom anchor: page, fractional position (also in gutters), and viewport offset.
     zoom_anchor: Option<(usize, f32, f32, Vec2)>,
+    /// The match a find step just went to: its page and its centre as fractions of the displayed
+    /// page. A zoom before the step has been laid out, or the rest of an eased ⌘-wheel zoom
+    /// still arriving, keeps it at the window's centre instead of the point under the pointer
+    /// (#3530). Let go in the first frame without a zoom gesture once the step is laid out.
+    find_hold: Option<(usize, f32, f32)>,
     /// The page view has been shown, so its scroll offset in egui's memory is this document's.
     shown: bool,
     /// Pages that Edit already tried to turn into editable text (once each, so Undo sticks).
@@ -391,14 +638,16 @@ pub struct DocView {
     /// Pages Edit looked at and found not to be a scan, with the document's edit generation then:
     /// they are looked at again only after the document changes (an image added, say).
     pub(crate) auto_ocr_skipped: std::collections::HashMap<usize, u64>,
+    /// Scans Edit found while no engine could read them, with the document's edit generation
+    /// then: they wait for one (the web build downloads the models when first needed), and are
+    /// read once the models are in (see `PdfCraftApp::ocr_models_loaded`) or the document changes.
+    pub(crate) auto_ocr_awaiting_models: std::collections::HashMap<usize, u64>,
     /// Turns wheel input into page turns in single-page view.
     wheel: crate::wheel_pager::WheelPager,
-    /// Until this time, apply precise (touchpad) wheel input 1:1 and suppress egui's eased copy.
-    /// A precision touchpad sends pixel-precise `MouseWheel` events; on Windows they arrive with
-    /// no `TouchPhase::Start`, so egui eases deltas of 8 px or more and the page lags the finger
-    /// (#759). The window outlasts a single frame so egui's internal easing tail is suppressed as
-    /// it decays, instead of adding on top of the 1:1 motion.
-    precise_scroll_until: f64,
+    /// The document owns the full coarse-wheel distance, including its acceleration.
+    wheel_motion: crate::wheel_boost::Motion,
+    /// Raw input and retained motion advance once per frame, including discarded UI passes.
+    wheel_frame: Option<u64>,
     /// Per-axis line-wheel state; horizontal input cannot extend a vertical burst.
     wheel_boost_x: crate::wheel_boost::WheelBoost,
     wheel_boost_y: crate::wheel_boost::WheelBoost,
@@ -415,6 +664,10 @@ pub struct DocView {
     /// Edit text: the lines per page (with the document generation they were read at), and the
     /// line being edited.
     pub(crate) edit_lines: HashMap<usize, (u64, Vec<pdfcraft_engine::TextBlock>)>,
+    /// Edit text: a click on grouped artwork with text queued [`Edit::PrepareText`] for its page:
+    /// the page and the point clicked (user space), whose paragraph opens once the page is
+    /// prepared, so one click on grouped text starts editing it.
+    pub(crate) grouped_text_click: Option<(usize, [f64; 2])>,
     pub line_editor: Option<crate::edit_text_ui::LineEditor>,
     /// The paragraph editor whose edit was just queued. It opens again with its typing if the
     /// edit fails, as a refused form field does.
@@ -431,6 +684,10 @@ pub struct DocView {
     pub image_selection: Option<crate::edit_text_ui::ImageSelection>,
     /// Select tool: the picture clicked, to copy in its original format.
     pub picked_image: Option<crate::image_pick::PickedImage>,
+    /// A click (page, user-space point, document generation) whose picture is still being looked for.
+    pub(crate) pending_pick: Option<(usize, [f64; 2], u64)>,
+    /// The pictures of the page last asked about.
+    pub(crate) pictures: crate::image_pick::PagePictures,
     /// A paragraph box being dragged (moved, or resized from its right edge) in Edit text.
     pub block_drag: Option<crate::edit_text_ui::BlockDrag>,
     /// Commenting state: selected comment, gestures, composer.
@@ -449,6 +706,24 @@ pub struct DocView {
     /// Redact tool: the box being drawn, and a mark to add (page, quads) for the app to style.
     pub redact_drag: crate::redact_ui::AreaDrag,
     pub pending_redaction: Option<(usize, Vec<[f64; 8]>)>,
+    /// How many Apply redactions steps are in effect in this view. While it is above 0, Save
+    /// proposes the name with `_Redacted` ([`pdfcraft_engine::redacted_file_name`]), and while it is
+    /// above `redactions_downloaded`, Save asks where.
+    /// Undo of an Apply redactions step takes one off and Redo adds it back. Reload and a desktop
+    /// save set it to 0, and Revert sets it to `redactions_downloaded`; after a desktop save the document has the name it was saved
+    /// under. A web download keeps it, so later downloads carry the `_Redacted` name.
+    pub redactions_applied: usize,
+    /// How many Apply redactions steps saved into the document's file are undone in this view.
+    /// While it is above 0, Save asks where, so the restored content is not written over the
+    /// redacted file. Redo takes one off. Revert, Reload and a desktop save set it to 0.
+    pub redactions_undone_after_save: usize,
+    /// Set when Apply redactions runs while saved Apply redactions steps are undone: Redo can no
+    /// longer bring those steps back, so Save asks where until a desktop save or Revert clears it.
+    pub saved_redactions_cut_off: bool,
+    /// `redactions_applied` at the last web download, which Revert restores. While
+    /// `redactions_applied` is below it, a delivered step is undone and Save asks where. A desktop
+    /// save leaves it at 0.
+    pub redactions_downloaded: usize,
     /// A crop rectangle being dragged (Crop tool).
     pub crop_drag: crate::crop::CropDrag,
     /// Enhance ▸ Camera image: the quadrilateral being placed.
@@ -462,14 +737,35 @@ pub struct DocView {
     pub org_drag: Option<Vec<usize>>,
     /// Pages panel: the pages being dragged to a new place.
     pub panel_drag: Option<Vec<usize>>,
+    /// Transient keyboard owner for this document's Pages sidebar.
+    pub(crate) pages_focus_id: Option<egui::Id>,
     /// Marquee Zoom / Snapshot: the rectangle being dragged (page, start), and a finished one.
     pub marquee: Option<(usize, Pos2)>,
     pub marquee_done: Option<crate::zoom_snap::Marquee>,
+    /// Snapshot: the area just copied (page, view-space rect), kept with a small menu under it
+    /// (Print area…, Save as image…), and what was chosen there.
+    pub area_pick: Option<(usize, [f32; 4])>,
+    pub area_choice: Option<crate::zoom_snap::AreaChoice>,
     /// Fill & Sign text being typed.
     pub fill_text: Option<crate::fill_sign::TypeBox>,
     /// A queued Fill & Sign signature: select it after its edit succeeds, then leave placement.
     pub(crate) fill_signature_page: Option<usize>,
+    /// The "Signature added … Lock now" notice was dismissed; placing another signature shows it
+    /// again (#2149).
+    pub(crate) lock_offer_dismissed: bool,
     pub(crate) signature_drag: crate::signature_drag::SignatureDrag,
+    /// What the page modules claim for the cursor this frame; `document_area` sets it once.
+    pub(crate) cursor: crate::page_cursor::PageCursor,
+    /// Who the press the pages hold belongs to. Only the page view reads it: it tells each page
+    /// module what the press is to its page (`PagePress`).
+    pub(in crate::canvas) router: crate::page_router::PageRouter,
+    /// What the last right-click on a page went to, and on which page (`None` off the pages, and for
+    /// Add text, which takes every right-click): the page's menu shows its entries when it has a menu
+    /// and is the one selected, or else the page's own.
+    pub(in crate::canvas) menu_for: Option<(usize, crate::page_router::Owner)>,
+    /// Escape cancelled the press the pages hold: the page ignores it until the button is up, so
+    /// its release neither clicks nor ends a drag.
+    pub(crate) press_cancelled: bool,
     /// A non-edit action requested by the organize toolbar, handled by the app.
     pub pending_action: Option<ViewAction>,
     /// The grid gap the next inserted files go to (set by a "+" between pages); otherwise they
@@ -514,6 +810,13 @@ pub struct DocView {
     /// in-flight ones cannot be cancelled mid-operator. Older tiles and the backdrop stay
     /// stretched meanwhile; fresh tiles go out once the pan settles.
     pub(crate) last_scroll: Vec2,
+    /// The way the view last moved vertically: 1 down, -1 up, 0 before any move and after the
+    /// content's size changes (a zoom or a layout change). A jump to a page or a search result
+    /// counts as a move. It stays set while the view is still, so the pages prefetched ahead stay
+    /// in the render queue until they arrive.
+    scroll_dir: i8,
+    /// The content's size when `scroll_dir` was last updated.
+    scroll_content: Vec2,
     /// Side-by-side compare: scroll to here this frame, following the other half.
     pub(crate) sync_scroll: Option<Vec2>,
     /// The page widget's id, by which the Hand tool finds its drag before the pages are laid out.
@@ -556,6 +859,117 @@ pub enum ViewAction {
     CameraLevel,
     /// After Enhance page: leave the tool for this command (Crop pages, Organize pages).
     CameraNext(&'static str),
+    /// The find bar's Replace (the highlighted match) or Replace all.
+    Replace {
+        all: bool,
+    },
+    /// Lock now, on the notice shown after a signature is placed (#2149).
+    LockSignatures,
+}
+
+/// Default page right-click menu actions.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum PageMenuAction {
+    RotateCCW,
+    RotateCW,
+    Print,
+    SelectTool,
+    HandTool,
+    MarqueeZoom,
+    Copy,
+    Paste(usize, [f64; 2]),
+    /// Paste the copied comments, centred at this point of the page.
+    PasteComments(usize, [f64; 2]),
+    AddComment(usize, [f64; 2]),
+    AddBookmark,
+    TakeSnapshot,
+    EditPdf,
+    AddText,
+    AddImage,
+    DeletePage(usize),
+    ExportPdf,
+    Find,
+    DocProperties,
+    FlattenComments,
+}
+
+pub(crate) struct PageMenuPerms {
+    pub can_modify: bool,
+    pub can_assemble: bool,
+    pub can_annotate: bool,
+    pub can_print: bool,
+    pub can_copy: bool,
+    pub can_copy_items: bool,
+    pub can_paste: bool,
+    /// Copied comments wait to be pasted, and comments may be added.
+    pub can_paste_comments: bool,
+    pub has_annotations: bool,
+}
+
+pub(crate) fn default_page_context_menu(ui: &mut egui::Ui, page: usize, at: [f64; 2], perms: PageMenuPerms, action: &mut Option<PageMenuAction>) {
+    use PageMenuAction as A;
+    // Takes `choice` when `entry` was clicked, and closes the menu.
+    let mut pick = |entry: egui::Response, ui: &mut egui::Ui, choice: PageMenuAction| {
+        if entry.clicked() {
+            *action = Some(choice);
+            ui.close();
+        }
+    };
+    let icon = |ui: &mut egui::Ui, name: &str, tip: &str| crate::icons::button(ui, name, 24.0, false, tip);
+    // Top horizontal icon bar: Rotate CCW, Print, Select tool, Hand tool, Marquee Zoom
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 4.0;
+        pick(icon(ui, "rotate-ccw", tl!("Rotate view counterclockwise")), ui, A::RotateCCW);
+        ui.add_enabled_ui(perms.can_print, |ui| pick(icon(ui, "printer", tl!("Print")), ui, A::Print));
+        pick(icon(ui, "mouse-pointer-2", tl!("Select Tool")), ui, A::SelectTool);
+        pick(icon(ui, "hand", tl!("Hand Tool")), ui, A::HandTool);
+        pick(icon(ui, "zoom-in", tl!("Marquee Zoom")), ui, A::MarqueeZoom);
+    });
+
+    ui.separator();
+
+    pick(
+        ui.add_enabled(
+            perms.can_copy_items,
+            egui::Button::new(tl!("Copy")).shortcut_text(crate::commands::shortcut_label(ui.ctx(), crate::commands::COPY)),
+        ),
+        ui,
+        A::Copy,
+    );
+    pick(
+        ui.add_enabled(
+            perms.can_paste,
+            egui::Button::new(tl!("Paste")).shortcut_text(crate::commands::shortcut_label(ui.ctx(), pdfcraft_engine::commands::Shortcut::cmd("V"))),
+        ),
+        ui,
+        A::Paste(page, at),
+    );
+    if perms.can_paste_comments {
+        pick(ui.button(tl!("Paste comments")), ui, A::PasteComments(page, at));
+    }
+
+    ui.separator();
+
+    pick(ui.add_enabled(perms.can_annotate, egui::Button::new(tl!("Add comment"))), ui, A::AddComment(page, at));
+    if perms.has_annotations {
+        pick(ui.add_enabled(perms.can_modify, egui::Button::new(tl!("Flatten comments"))), ui, A::FlattenComments);
+    }
+    pick(ui.add_enabled(perms.can_assemble, egui::Button::new(tl!("Add bookmark"))), ui, A::AddBookmark);
+    pick(ui.add_enabled(perms.can_copy, egui::Button::new(tl!("Take a snapshot"))), ui, A::TakeSnapshot);
+
+    ui.separator();
+
+    pick(ui.add_enabled(perms.can_modify, egui::Button::new(egui::RichText::new(tl!("Edit this PDF")).strong())), ui, A::EditPdf);
+    pick(ui.add_enabled(perms.can_modify, egui::Button::new(tl!("Add text"))), ui, A::AddText);
+    pick(ui.add_enabled(perms.can_modify, egui::Button::new(tl!("Add image"))), ui, A::AddImage);
+    pick(ui.add_enabled(perms.can_assemble, egui::Button::new(tl!("Delete page"))), ui, A::DeletePage(page));
+    pick(ui.add_enabled(perms.can_copy, egui::Button::new(tl!("Export this PDF"))), ui, A::ExportPdf);
+
+    ui.separator();
+
+    pick(ui.button(tl!("Find text or tools")), ui, A::Find);
+    pick(ui.button(tl!("Rotate view clockwise")), ui, A::RotateCW);
+    pick(ui.button(tl!("Document properties…")), ui, A::DocProperties);
 }
 
 impl DocView {
@@ -580,12 +994,23 @@ impl DocView {
         self.sign.drag = None;
         self.redact_drag = None;
         self.crop_drag = None;
-        self.block_drag = None;
+        if let Some(q) = &mut self.camera {
+            q.grab = None;
+        }
         self.org_drag = None;
         self.panel_drag = None;
         self.selection_drag = false;
+        self.router.cancel();
         self.auto_scroll.cancel();
         self.prepare.cancel_pointer_gesture();
+        self.cancel_edit_text_gestures();
+    }
+
+    /// Abandon Edit text's pointer gestures (a paragraph moved or rewrapped, a picture moved,
+    /// resized, turned or cropped, added content moved, the objects' area selection or move), as
+    /// [`Self::cancel_pointer_gestures`] does: what they were previewing is not applied.
+    pub(crate) fn cancel_edit_text_gestures(&mut self) {
+        self.block_drag = None;
         self.content.cancel_pointer_gesture();
         self.objects.cancel_pointer_gesture();
         if let Some(image) = &mut self.image_selection {
@@ -597,7 +1022,9 @@ impl DocView {
     /// any layout or zoom the PDF itself asks for.
     pub fn new(id: DocId, info: &DocInfo, defaults: ViewDefaults) -> Self {
         Self {
+            pane: Default::default(),
             id,
+            from_attachment: None,
             zoom: defaults.zoom,
             fit: defaults.fit,
             layout: defaults.layout,
@@ -618,20 +1045,28 @@ impl DocView {
             back: Vec::new(),
             forward: Vec::new(),
             goto: None,
+            goto_side: None,
             goto_point: None,
             key_scroll: 0.0,
+            key_side: 0.0,
+            side_edges: None,
             single_edges: None,
             flash: None,
             compare_marks: Vec::new(),
+            interface: Default::default(),
             presentation: None,
+            presenter: Default::default(),
             pages: HashMap::new(),
             errors: HashMap::new(),
+            cut_pages: Default::default(),
+            cut_notice_dismissed: Default::default(),
             waiting_since: HashMap::new(),
             thumbs: HashMap::new(),
             thumb_demand: HashMap::new(),
             frame_queue: Vec::new(),
             frame_geometry_changed: false,
             frame_visible: HashSet::new(),
+            frame_demanded: HashSet::new(),
             stale_thumbs: HashSet::new(),
             stale_tiles: HashSet::new(),
             current_scale_tag: 0,
@@ -639,6 +1074,7 @@ impl DocView {
             grayscale: false,
             tiles: HashMap::new(),
             texts: HashMap::new(),
+            text_links: HashMap::new(),
             text_failed: HashSet::new(),
             find: None,
             selection: None,
@@ -654,16 +1090,20 @@ impl DocView {
             viewport_w: 800.0,
             viewport_h: 600.0,
             page_count: info.pages.len(),
-            page_heights: info.pages.iter().map(|p| p.height).collect(),
+            page_sizes: info.pages.iter().map(|p| (p.width, p.height)).collect(),
             screen_rects: Vec::new(),
             screen_xforms: Vec::new(),
+            screen_ppp: 1.0,
             viewport_screen: Rect::NOTHING,
             zoom_anchor: None,
+            find_hold: None,
             shown: false,
             auto_ocr_tried: Default::default(),
             auto_ocr_skipped: Default::default(),
+            auto_ocr_awaiting_models: Default::default(),
             wheel: Default::default(),
-            precise_scroll_until: 0.0,
+            wheel_motion: Default::default(),
+            wheel_frame: None,
             wheel_boost_x: Default::default(),
             wheel_boost_y: Default::default(),
             fling: Default::default(),
@@ -673,6 +1113,7 @@ impl DocView {
             organize_range: Default::default(),
             pending_edit: None,
             edit_lines: HashMap::new(),
+            grouped_text_click: None,
             line_editor: None,
             applied_editor: None,
             pending_text_open: None,
@@ -682,6 +1123,8 @@ impl DocView {
             objects: Default::default(),
             image_selection: None,
             picked_image: None,
+            pending_pick: None,
+            pictures: Default::default(),
             block_drag: None,
             pending_action: None,
             insert_at: None,
@@ -698,11 +1141,13 @@ impl DocView {
             last_scale: 0.0,
             sharp_hold_until: 0.0,
             last_scroll: Vec2::ZERO,
+            scroll_dir: 0,
+            scroll_content: Vec2::ZERO,
             sync_scroll: None,
             page_widget: None,
             pan_hold_until: 0.0,
             slow_pages: HashSet::new(),
-            comments: Default::default(),
+            comments: crate::comments::CommentView::from_info(info),
             measure: Default::default(),
             forms: Default::default(),
             prepare: Default::default(),
@@ -711,17 +1156,29 @@ impl DocView {
             links: Default::default(),
             redact_drag: None,
             pending_redaction: None,
+            redactions_applied: 0,
+            redactions_undone_after_save: 0,
+            saved_redactions_cut_off: false,
+            redactions_downloaded: 0,
             crop_drag: None,
             camera: None,
             camera_done: None,
             sign: Default::default(),
             org_drag: None,
             panel_drag: None,
+            pages_focus_id: None,
             marquee: None,
             marquee_done: None,
+            area_pick: None,
+            area_choice: None,
             fill_text: None,
             fill_signature_page: None,
+            lock_offer_dismissed: false,
             signature_drag: Default::default(),
+            cursor: Default::default(),
+            router: Default::default(),
+            menu_for: None,
+            press_cancelled: false,
         }
     }
 
@@ -731,7 +1188,7 @@ impl DocView {
         self.invalidate_content();
         self.frame_geometry_changed = true;
         self.page_count = info.pages.len();
-        self.page_heights = info.pages.iter().map(|p| p.height).collect();
+        self.page_sizes = info.pages.iter().map(|p| (p.width, p.height)).collect();
         let last = self.page_count.saturating_sub(1);
         self.current = self.current.min(last);
         self.selected.retain(|p| *p <= last);
@@ -742,13 +1199,19 @@ impl DocView {
         if self.select_anchor.is_some_and(|a| a > last) {
             self.select_anchor = None;
         }
+        // A Snapshot area names a page by its index and a rectangle on it: after pages were
+        // deleted or moved it would outline, print and save a different page.
+        self.area_pick = None;
+        self.area_choice = None;
         self.goto = None;
         self.goto_point = None;
         self.zoom_anchor = None;
+        self.find_hold = None;
         self.flash = None;
         // Thumbnail drags hold page indexes from before the change.
         self.panel_drag = None;
         self.org_drag = None;
+        self.comments.document_changed(info);
         self.reset_coarse_state();
     }
 
@@ -770,15 +1233,20 @@ impl DocView {
         fresh.organize = self.organize;
         fresh.grid_zoom = self.grid_zoom;
         fresh.thumbnail_zoom = self.thumbnail_zoom;
-        // Same document id, so the scroll offset egui keeps for it is still this document's.
+        // Same view key (`pane`), so the scroll offset egui keeps for it is still this view's.
         fresh.shown = self.shown;
         fresh.highlight_fields = self.highlight_fields;
         fresh.notice_dismissed = self.notice_dismissed;
+        fresh.cut_notice_dismissed = std::mem::take(&mut self.cut_notice_dismissed);
         fresh.snapshot = self.snapshot.clone();
         fresh.close_requested = self.close_requested;
         fresh.cover = self.cover;
+        // What the document asked to hide, and what is hidden now (F8), belong to the tab.
+        fresh.interface = self.interface;
         // Still presenting, with the display to go back to on leaving.
         fresh.presentation = self.presentation.take();
+        // A new document: none of the old one's transition, page or timer carries over.
+        fresh.presenter = Default::default();
         fresh.back = std::mem::take(&mut self.back);
         fresh.forward = std::mem::take(&mut self.forward);
         fresh.find = self.find.take();
@@ -787,11 +1255,51 @@ impl DocView {
         fresh.viewport_w = self.viewport_w;
         fresh.viewport_h = self.viewport_h;
         fresh.viewport_screen = self.viewport_screen;
+        fresh.pane = self.pane.clone();
         *self = fresh;
         // Marks the kept images out of date and clamps the page to the new page count.
         self.document_changed(info);
         self.page_input = self.current_page_label(info.pages.get(self.current).map(|page| page.label.as_str()));
         self.page_input_reselect = true;
+    }
+
+    /// Another view of this document changed it (split view: an edit, Undo,
+    /// a reload): start afresh as a reload does, keeping the reader's place, so nothing here
+    /// points into the old version.
+    pub(crate) fn follow_document(&mut self, info: &DocInfo) {
+        let continuous = self.continuous;
+        self.document_replaced(info);
+        self.continuous = continuous;
+    }
+
+    /// A second view of this document (split view), showing what this one shows.
+    pub(crate) fn twin(&self, info: &DocInfo) -> Self {
+        let mut v = Self::new(self.id, info, ViewDefaults::default());
+        v.zoom = self.zoom;
+        v.fit = self.fit;
+        v.layout = self.layout;
+        v.continuous = self.continuous;
+        v.show_page_gaps = self.show_page_gaps;
+        v.rotation = self.rotation;
+        v.cover = self.cover;
+        v.current = self.current;
+        v.page_input = self.page_input.clone();
+        v.highlight_fields = self.highlight_fields;
+        v.notice_dismissed = self.notice_dismissed;
+        v.scripts_off_noted = self.scripts_off_noted;
+        v.goto = Some((self.current, 0.0));
+        v
+    }
+
+    /// The key that tells this view apart from another view of the same document (split view):
+    /// unique for the app's life. Ids of what is drawn over the page are keyed by it.
+    pub fn view_key(&self) -> u64 {
+        self.pane.key
+    }
+
+    /// Where this tab shows: the main pane or split view's second pane.
+    pub fn place(&self) -> crate::panes::Place {
+        self.pane.place
     }
 
     /// Select pages in the organize grid (tests, automation). Empty clears the selection.
@@ -805,109 +1313,929 @@ impl DocView {
         self.wheel.clear_motion();
         self.wheel_boost_x.reset();
         self.wheel_boost_y.reset();
+        self.wheel_motion.reset();
     }
 }
 
-/// Draws the document tab at `index`: its notice bars, then its pages (or the Organize grid) in a
-/// scroll area with this frame's zoom, scrolling, tool input, overlays and render requests.
-pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
-    let t = Tokens::get(ui.ctx());
-    // Keyboard scrolling applies to this frame's page view only, never later.
-    let key_scroll = std::mem::take(&mut app.views[index].key_scroll);
-    if key_scroll != 0.0 {
-        app.views[index].end_find_following();
+/// The renders a frame wants (page, scale, tag, tile), and the pages visible.
+type PageRenders = (Vec<(usize, f32, u64, Option<Tile>)>, Vec<usize>);
+
+/// What the page-scroll closure reads: this frame's zoom, scrolling, tool and document state.
+#[derive(Clone, Copy)]
+struct PageEnv<'a> {
+    added: &'a Vec<pdfcraft_engine::Added>,
+    allowed: bool,
+    author: &'a String,
+    auto_delta: Vec2,
+    avail: Rect,
+    coarse_scroll: Vec2,
+    by_line: &'a String,
+    calc_order: bool,
+    can_copy: bool,
+    /// Copied comments wait to be pasted.
+    can_paste_comments: bool,
+    /// Copied comments hang on the pointer (`Gesture::Place`): the click is theirs.
+    placing: bool,
+    can_crop: bool,
+    can_fill: bool,
+    can_modify: bool,
+    comments_hidden: bool,
+    content_h: f32,
+    content_w: f32,
+    /// The custom stamp's line, filled in now (#1741).
+    custom_line: &'a Option<String>,
+    custom_stamp: &'a Option<crate::stamps_ui::CustomStamp>,
+    date_text: &'a Result<String, String>,
+    doc: &'a pdfcraft_engine::Document,
+    doc_links: &'a Vec<pdfcraft_engine::LinkItem>,
+    edge_delta: Vec2,
+    editing_content: bool,
+    form: &'a Arc<Vec<pdfcraft_engine::FormField>>,
+    generation: u64,
+    glide: Vec2,
+    hand: bool,
+    info: &'a DocInfo,
+    /// The Animation effects preference as it applies now (full screen's transitions follow it).
+    animates: bool,
+    initials: &'a Option<crate::fill_sign::SavedSig>,
+    key_scroll: f32,
+    key_side: f32,
+    /// This frame's keys as the pages see them.
+    keys: crate::page_keys::PageKeys,
+    middle_gesture: bool,
+    modal: bool,
+    navigation_enabled: bool,
+    paper: Color32,
+    show_page_edge_shadows: bool,
+    ppp: f32,
+    precise_scroll: Vec2,
+    prefs: &'a comments::CommentPrefs,
+    preparing: bool,
+    prepare_tab_order: Option<&'a [(usize, usize)]>,
+    rects: &'a Vec<Rect>,
+    redact_mark: ([f64; 3], f64),
+    scale: f32,
+    selection_wheel: bool,
+    selects_text: bool,
+    signature: &'a Option<crate::fill_sign::SavedSig>,
+    single_paging: bool,
+    t: &'a Tokens,
+    table_preview: &'a Option<crate::field_table_ui::Preview>,
+    tag: u64,
+    text_style: &'a pdfcraft_engine::AddedText,
+    /// Preferences: addresses written as plain page text open like links (#4207).
+    text_links: bool,
+    tool: QuickTool,
+    units: crate::units::Unit,
+    unobstructed: bool,
+    visible_pages: &'a Vec<usize>,
+    y_shift: f32,
+    fill_text_size: f64,
+    fill_text_color: [f64; 3],
+    fill_text_border: crate::fill_sign::TextBorder,
+    today: (i64, u32, u32),
+    can_paste_image: bool,
+}
+
+/// What the page-scroll closure produces for the rest of the frame.
+#[derive(Default)]
+struct PageOut {
+    canvas_action: Option<comments::CanvasAction>,
+    clicked_link: Option<LinkTarget>,
+    comment_notice: Option<&'static str>,
+    copy_comments: bool,
+    copy_selected: bool,
+    field_menu: Option<FieldMenu>,
+    field_placed: bool,
+    field_props: bool,
+    hover_text: Option<(Pos2, String)>,
+    image_action: Option<crate::edit_text_ui::ImageAction>,
+    open_boxes: bool,
+    open_initials: bool,
+    open_signature: bool,
+    open_table: Option<(usize, [f64; 4])>,
+    page_action: Option<PageMenuAction>,
+    paste_comments_at: Option<(usize, [f64; 2])>,
+    primary_down: bool,
+    /// The pointer is over a link, comment, field or what is placed on the page: a click there is
+    /// for it, and turns no page in full screen.
+    on_object: bool,
+    refused: Option<String>,
+    /// The current page or spread where it is drawn, every page of it: one off screen (the second
+    /// page of a zoomed spread) has no screen transform, but still decides where the row ends.
+    row_on_screen: Option<Rect>,
+    stamp_placed: bool,
+}
+
+/// The page-scroll closure's body: lays out and draws the visible pages, their tools and overlays, and
+/// returns the renders wanted and the pages visible.
+/// The state of one pass over the visible pages: what is read, and what the pages add up to.
+struct PageFrame<'a> {
+    env: PageEnv<'a>,
+    resp: &'a egui::Response,
+    ptr: &'a PagePointer,
+    origin: Pos2,
+    visible: Rect,
+    pressed: bool,
+    pointer: Option<Pos2>,
+    signature_preview: &'a mut Option<(crate::fill_sign::SavedSig, egui::TextureHandle)>,
+    out: PageOut,
+    wanted: Vec<(usize, f32, u64, Option<Tile>)>,
+    visible_now: Vec<usize>,
+    current: usize,
+    best_overlap: f32,
+    current_overlap: f32,
+    current_height: f32,
+    pressed_page: Option<usize>,
+    calc_hover: Option<crate::calc_order_ui::Focus>,
+    /// A page took this frame's right-click.
+    right_clicked: bool,
+}
+
+impl PageFrame<'_> {
+    /// Where this frame's right-click is, for the first page it is `on`: pages that touch (the gaps
+    /// hidden) can share a row of pixels, and a right-click there is one page's, as a press is.
+    fn right_click_on(&mut self, on: impl FnOnce(Pos2) -> bool) -> Option<Pos2> {
+        let p = self.pointer.filter(|p| !self.right_clicked && self.resp.secondary_clicked() && on(*p))?;
+        self.right_clicked = true;
+        Some(p)
     }
-    // The Search panel closed: its search moves to the find bar.
-    let search_open = app.right == Some(crate::RightPanel::Search);
-    if let Some(f) = app.views[index].find.as_mut()
-        && f.in_panel
-        && !search_open
-    {
-        f.in_panel = false;
-    }
-    // The snapshot notice bar's Close was clicked: close here, where no document borrow is
-    // held. The tab is looked up by id: indices may have shifted since the click, and the
-    // flag rides its own view, so a stale flag can never close the wrong tab.
-    let pending = app.views.get(index).filter(|v| v.close_requested).map(|v| v.id).and_then(|id| app.views.iter().position(|v| v.id == id));
-    if let Some(i) = pending {
-        app.views[i].close_requested = false;
-        if app.has_unsaved_work(i) {
-            app.close_request = Some(crate::CloseRequest::Tab(app.views[i].id));
+}
+
+/// Visible heights (points) closer than this are equal: one page size can meet the viewport a
+/// fraction of a point differently once the scroll offset is applied.
+const PAGE_TIE: f32 = 0.5;
+
+/// Draws page `i` of the visible pages: its raster, the tools' input and overlays.
+/// One visible page: its index, its rectangle on screen and the transform to and from the page.
+#[derive(Clone, Copy)]
+struct PageSlot {
+    i: usize,
+    r: Rect,
+    xf: PageXform,
+}
+
+/// Paints the page's paper, shadow and raster (or why it can't be shown), and asks for the renders
+/// it wants.
+#[allow(clippy::too_many_arguments)]
+fn paint_image_suppressed(
+    xf: &PageXform,
+    painter: &egui::Painter,
+    tex: egui::TextureId,
+    u0: f32,
+    v0: f32,
+    u1: f32,
+    v1: f32,
+    suppress: Option<[f32; 4]>,
+    is_full_page_tex: bool,
+) {
+    let Some([su0, sv0, su1, sv1]) = suppress else {
+        if is_full_page_tex {
+            xf.paint_page_texture_rect(painter, tex, u0, v0, u1, v1);
         } else {
-            app.close_tab(i);
+            xf.paint_image(painter, tex, u0, v0, u1, v1);
+        }
+        return;
+    };
+    let iu0 = u0.max(su0);
+    let iu1 = u1.min(su1);
+    let iv0 = v0.max(sv0);
+    let iv1 = v1.min(sv1);
+    if iu0 >= iu1 || iv0 >= iv1 {
+        if is_full_page_tex {
+            xf.paint_page_texture_rect(painter, tex, u0, v0, u1, v1);
+        } else {
+            xf.paint_image(painter, tex, u0, v0, u1, v1);
         }
         return;
     }
-    let Some(doc) = app.session.get(app.views[index].id) else { return };
-    let info = &doc.info;
-    let paper = app.session.reading_colors(app.views[index].id).and_then(|c| c.params).map_or(Color32::WHITE, |p| {
-        let [r, g, b] = p.background;
-        Color32::from_rgb(r, g, b)
-    });
-    if info.pages.is_empty() {
-        app.views[index].auto_scroll.cancel();
-        ui.centered_and_justified(|ui| ui.label(tl!("This document has no pages.")));
-        return;
+    let map_uv = |pu: f32, pv: f32| -> (f32, f32) {
+        if is_full_page_tex {
+            (pu, pv)
+        } else {
+            let du = (u1 - u0).max(1e-6);
+            let dv = (v1 - v0).max(1e-6);
+            ((pu - u0) / du, (pv - v0) / dv)
+        }
+    };
+    let draw_strip = |pu0: f32, pv0: f32, pu1: f32, pv1: f32| {
+        if pu1 <= pu0 || pv1 <= pv0 {
+            return;
+        }
+        let (tu0, tv0) = map_uv(pu0, pv0);
+        let (tu1, tv1) = map_uv(pu1, pv1);
+        xf.paint_image_region(painter, tex, pu0, pv0, pu1, pv1, tu0, tv0, tu1, tv1);
+    };
+
+    if iv0 > v0 {
+        draw_strip(u0, v0, u1, iv0);
     }
-    // The print dialog queues its own rasters later in the frame. Closing it drops them.
-    if app.dialog != Some(crate::Dialog::Print) {
-        app.views[index].print_pages.clear();
+    if v1 > iv1 {
+        draw_strip(u0, iv1, u1, v1);
     }
-    // The Prepare a form panel is open (or a field tool is picked): fields are edited, not filled.
-    let preparing = app.is_preparing();
-    // Prepare a form ▸ Calculation order: the order's steps and links on the page.
-    let calc_order = preparing && app.left_open && app.left == crate::LeftPanel::CalculationOrder;
-    // Edit a PDF: added text and images can be selected, moved and edited.
-    let editing_content =
-        (app.left_open && app.left == crate::LeftPanel::Tool("edit")) || matches!(app.quick_tool, QuickTool::AddText | QuickTool::EditText);
-    let text_style = app.text_style.clone();
-    let show_secured_notice = app.show_secured_notice;
-    let view = &mut app.views[index];
-    // Opened without the owner password and something is restricted. The notice says so unless
-    // the user turned it off (#4035): the restrictions themselves, and Document Properties ▸
-    // Security, stay as they are.
-    let secured = show_secured_notice && doc.security_summary().is_some_and(|s| !(s.owner || (s.permissions.modify() && s.permissions.assemble())));
-    let repaired = !doc.repair_log().is_empty();
-    match notices(view, doc, secured, repaired, crate::sign_ui::banner(&doc.signatures), ui, &t) {
-        #[cfg(not(target_arch = "wasm32"))]
-        Some(Notice::Reload) => app.watch.reload_request = Some(view.id),
-        #[cfg(target_arch = "wasm32")]
-        Some(Notice::Reload) => {}
-        Some(Notice::Repairs) => app.dialog = Some(crate::Dialog::Properties(crate::PropsTab::Advanced)),
-        Some(Notice::Security) => app.dialog = Some(crate::Dialog::Properties(crate::PropsTab::Security)),
-        Some(Notice::Unlock) => app.unlock_prompt = Some(crate::UnlockPrompt::new(doc, None)),
-        // Flags the view: the tab closes at the top of the next frame, where no document
-        // borrow is held.
-        Some(Notice::Close) => {
-            if let Some(view) = app.views.get_mut(index) {
-                view.close_requested = true;
+    if iu0 > u0 {
+        draw_strip(u0, iv0, iu0, iv1);
+    }
+    if u1 > iu1 {
+        draw_strip(iu1, iv0, u1, iv1);
+    }
+}
+
+fn paint_page_surface(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_>, slot: &PageSlot) {
+    let PageEnv { paper, ppp, scale, t, tag, .. } = frame.env;
+    let PageSlot { i, r, xf } = *slot;
+    let visible = frame.visible;
+    let info = frame.env.info;
+    let painter = ui.painter();
+    // Shadows would darken the preceding page when pages touch.
+    if view.show_page_gaps && frame.env.show_page_edge_shadows {
+        painter.add(egui::epaint::Shadow { offset: [0, 3], blur: 14, spread: 0, color: t.page_shadow }.as_shape(r, CornerRadius::ZERO));
+    }
+    painter.rect_filled(r, CornerRadius::ZERO, paper);
+    if let Some(err) = view.errors.get(&i) {
+        painter.rect_filled(r, CornerRadius::ZERO, Color32::from_rgb(0xFB, 0xF4, 0xF4));
+        icons::paint(
+            ui,
+            Rect::from_center_size(r.center() - vec2(0.0, 26.0), vec2(28.0, 28.0)),
+            "triangle-alert",
+            26.0,
+            Color32::from_rgb(0xC8, 0x3A, 0x3A),
+        );
+        let message = crate::i18n::fmt(tl!("This page couldn't be displayed.\n{e}"), &[("e", err)]);
+        let msg = ui.fonts_mut(|f| f.layout(message, theme::regular(12.5), Color32::from_rgb(0x6A, 0x2A, 0x2A), (r.width() - 40.0).max(80.0)));
+        painter.galley(pos2(r.center().x - msg.size().x / 2.0, r.center().y), msg, Color32::BLACK);
+    } else {
+        let (pw_pt, ph_pt) = (info.pages[i].width.max(1.0), info.pages[i].height.max(1.0));
+        // A GPU may take smaller textures than these (OpenGL drivers report as little as
+        // 2048 pixels, and uploading a bigger one aborts), so both stay within its limit.
+        let max_side = ui.ctx().input(|inp| inp.max_texture_side) as f32;
+        let tiled = pw_pt.max(ph_pt) * scale > TILE_THRESHOLD.min(max_side);
+        // Whole-page raster: sharp when small, a low-res backdrop when tiled.
+        let (want_scale, want_tag) = if tiled {
+            let bs = BASE_SIDE.min(max_side) / pw_pt.max(ph_pt);
+            (bs, scale_tag(bs))
+        } else {
+            (scale, tag)
+        };
+        // Under tiles, a whole-page raster sharper than the backdrop (from before the page
+        // grew past the tiling size) is a better backdrop: keep demanding it as it is.
+        match view.pages.get(&i).filter(|p| tiled && p.tag != STALE_TAG && tag_scale(p.tag) >= want_scale) {
+            Some(p) => frame.wanted.push((i, tag_scale(p.tag), p.tag, None)),
+            None => frame.wanted.push((i, want_scale, want_tag, None)),
+        }
+        let doc = frame.env.doc;
+        let active_drag_suppress = if let Some(sel) = view.image_selection.clone()
+            && sel.page == i
+            && sel.drag.is_some()
+        {
+            let images = cached_edit_images(view, doc, i);
+            if let Some(img) = images.get(sel.index) {
+                let obb = ImageObb::from_image(img, &xf, info, i);
+                let uvs = obb.corners().map(|c| xf.screen_to_norm(c));
+                let u0 = uvs.iter().map(|(u, _)| *u).fold(1.0f32, f32::min).clamp(0.0, 1.0);
+                let u1 = uvs.iter().map(|(u, _)| *u).fold(0.0f32, f32::max).clamp(0.0, 1.0);
+                let v0 = uvs.iter().map(|(_, v)| *v).fold(1.0f32, f32::min).clamp(0.0, 1.0);
+                let v1 = uvs.iter().map(|(_, v)| *v).fold(0.0f32, f32::max).clamp(0.0, 1.0);
+                if u1 > u0 && v1 > v0 { Some([u0, v0, u1, v1]) } else { None }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        match view.pages.get(&i) {
+            Some(p) => {
+                if !tiled && p.tag == want_tag {
+                    paint_image_suppressed(&xf.texel_aligned(p.tex.size(), ppp), painter, p.tex.id(), 0.0, 0.0, 1.0, 1.0, active_drag_suppress, true);
+                } else {
+                    // A backdrop, or a raster at an older scale until the new one arrives.
+                    paint_image_suppressed(&xf, painter, p.tex.id(), 0.0, 0.0, 1.0, 1.0, active_drag_suppress, true);
+                }
+            }
+            None => {
+                let now = ui.input(|inp| inp.time);
+                let since = *view.waiting_since.entry(i).or_insert(now);
+                let msg = if now - since > 6.0 { "Still rendering — this page is unusually complex…" } else { "Rendering…" };
+                painter.text(r.center(), Align2::CENTER_CENTER, tl!(msg), theme::regular(12.0), t.text_faint);
             }
         }
-        Some(Notice::Signatures) => app.right = Some(RightPanel::Signatures),
-        Some(Notice::FieldHighlights(on)) => app.view_defaults.highlight_fields = on,
-        Some(Notice::Console) => app.dialog = Some(crate::Dialog::JsConsole),
-        // Back on in Preferences ▸ General.
-        Some(Notice::HideSecured) => app.show_secured_notice = false,
-        None => {}
+        if tiled && r.intersects(visible) {
+            paint_page_tiles(ui, view, frame, slot, (pw_pt, ph_pt, max_side), active_drag_suppress);
+        }
     }
-    // No dialog, close prompt or palette over the page: only then does page input count.
-    let modal = app.modal_open();
-    let unobstructed = !modal && !app.palette_open;
-    let organize_zoom = app.organize_zoom;
-    let view = &mut app.views[index];
-    if view.organize {
-        // One remembered grid size for every document, kept in the settings.
-        view.set_grid_zoom(organize_zoom);
-        organize_grid(view, info, doc.allows_assembly(), doc.dirty, unobstructed, ui, &t);
-        app.organize_zoom = view.grid_zoom();
+}
+
+/// Paints the tiles of a page too big to draw whole: the tiles of earlier zooms first, stretched,
+/// then the visible tiles of this one, nearest the viewport centre first, asking for those missing.
+fn paint_page_tiles(
+    ui: &egui::Ui,
+    view: &mut DocView,
+    frame: &mut PageFrame<'_>,
+    slot: &PageSlot,
+    (pw_pt, ph_pt, max_side): (f32, f32, f32),
+    active_drag_suppress: Option<[f32; 4]>,
+) {
+    let PageEnv { ppp, scale, tag, .. } = frame.env;
+    let PageSlot { i, r, xf } = *slot;
+    let visible = frame.visible;
+    let painter = ui.painter();
+    // Device-pixel geometry of the scaled page, and the visible part of it
+    // (found by mapping the visible screen corners back into the page). Sides round
+    // up as whole-page rasters do, so the last partial row and column get tiles.
+    let (dw, dh) = (device_pixels(pw_pt, scale), device_pixels(ph_pt, scale));
+    // Adaptive tile side for this zoom and page, within the GPU texture limit:
+    // a zoomed viewport or a giant sheet is covered by a few large tiles
+    // instead of many small ones, and each tile costs one full page interpret.
+    // Never zero (u32 division below).
+    let ts = tile_side(scale, dw.max(dh)).min(max_side as u32).max(64);
+    let vis = r.intersect(visible);
+    let corners = [vis.left_top(), vis.right_top(), vis.right_bottom(), vis.left_bottom()].map(|c| xf.screen_to_norm(c));
+    let (u0, u1) = corners.iter().fold((1.0f32, 0.0f32), |(a, b), c| (a.min(c.0), b.max(c.0)));
+    let (v0, v1) = corners.iter().fold((1.0f32, 0.0f32), |(a, b), c| (a.min(c.1), b.max(c.1)));
+    let (vx0, vy0) = ((u0.max(0.0) * dw as f32) as u32, (v0.max(0.0) * dh as f32) as u32);
+    let (vx1, vy1) = (((u1.min(1.0) * dw as f32).ceil() as u32).min(dw), ((v1.min(1.0) * dh as f32).ceil() as u32).min(dh));
+    // Tiles of earlier zooms first, stretched, the nearest scale last (on top):
+    // until the current tiles arrive, a zoom shows them rather than the backdrop.
+    let mut older: Vec<(f32, u32, u32, &TextureHandle)> =
+        view.tiles.iter().filter(|((p, t, _, _), _)| *p == i && *t != tag).map(|((_, t, ox, oy), tex)| (tag_scale(*t), *ox, *oy, tex)).collect();
+    older.sort_by(|a, b| (b.0 / scale).ln().abs().total_cmp(&(a.0 / scale).ln().abs()));
+    for (s, ox, oy, tex) in older {
+        let (ow, oh) = (device_pixels(pw_pt, s) as f32, device_pixels(ph_pt, s) as f32);
+        let [w, h] = tex.size();
+        let (x, y) = (ox as f32, oy as f32);
+        paint_image_suppressed(&xf, painter, tex.id(), x / ow, y / oh, (x + w as f32) / ow, (y + h as f32) / oh, active_drag_suppress, false);
+    }
+    // Visible tiles, nearest the viewport centre first: each tile costs a full
+    // page interpret, so the workers sharpen what is looked at before the edges.
+    let (vcx, vcy) = ((vx0 + vx1) as f32 / 2.0, (vy0 + vy1) as f32 / 2.0);
+    let mut coords: Vec<(u32, u32)> = Vec::new();
+    for ty in vy0 / ts..=(vy1.saturating_sub(1)) / ts {
+        for tx in vx0 / ts..=(vx1.saturating_sub(1)) / ts {
+            coords.push((tx, ty));
+        }
+    }
+    coords.sort_by(|a, b| {
+        let da = ((a.0 * ts + ts / 2) as f32 - vcx).abs() + ((a.1 * ts + ts / 2) as f32 - vcy).abs();
+        let db = ((b.0 * ts + ts / 2) as f32 - vcx).abs() + ((b.1 * ts + ts / 2) as f32 - vcy).abs();
+        da.total_cmp(&db)
+    });
+    for (tx, ty) in coords {
+        let (x, y) = (tx * ts, ty * ts);
+        let (w, h) = (ts.min(dw.saturating_sub(x)), ts.min(dh.saturating_sub(y)));
+        if w == 0 || h == 0 {
+            continue;
+        }
+        frame.wanted.push((i, scale, tag, Some(Tile { x, y, w, h })));
+        if let Some(tex) = view.tiles.get(&(i, tag, x, y)) {
+            let (fw, fh) = (dw as f32, dh as f32);
+            paint_image_suppressed(
+                &xf.texel_aligned([dw as usize, dh as usize], ppp),
+                painter,
+                tex.id(),
+                x as f32 / fw,
+                y as f32 / fh,
+                (x + w) as f32 / fw,
+                (y + h) as f32 / fh,
+                active_drag_suppress,
+                false,
+            );
+        }
+    }
+}
+
+/// Images parsed once per page and document edit generation, shared by painting and menus.
+fn cached_edit_images<'a>(view: &'a mut DocView, doc: &pdfcraft_engine::Document, page: usize) -> &'a [pdfcraft_engine::PageImage] {
+    let generation = doc.edit_generation();
+    let entry = view.edit_images.entry(page).or_insert_with(|| (generation, doc.page_images(page)));
+    if entry.0 != generation {
+        *entry = (generation, doc.page_images(page));
+    }
+    &entry.1
+}
+
+fn draw_page(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_>, i: usize) {
+    let PageEnv { allowed, comments_hidden, doc, editing_content, info, keys, ppp, prefs, rects, redact_mark, scale, t, tool, .. } = frame.env;
+    let PageFrame { ptr, origin, visible, pressed, pointer, .. } = *frame;
+    let r = snap_to_pixels(rects[i].translate(origin.to_vec2()), ppp);
+    if !r.intersects(visible.expand(400.0)) {
         return;
     }
+    if pressed && frame.pressed_page.is_none() && pointer.is_some_and(|p| r.contains(p)) {
+        frame.pressed_page = Some(i);
+    }
+    if r.intersects(visible) {
+        frame.visible_now.push(i);
+        view.screen_rects.push((i, r));
+        view.screen_xforms.push((i, PageXform { rect: r, rot: view.rotation, pw: info.pages[i].width.max(1.0), ph: info.pages[i].height.max(1.0) }));
+    }
+    let overlap = r.intersect(visible).height();
+    if i == view.current {
+        frame.current_overlap = overlap;
+        frame.current_height = r.height();
+    }
+    // Pages shown equally (two rows wholly on screen) differ only by rounding: the
+    // topmost one counts.
+    if overlap > frame.best_overlap + PAGE_TIE {
+        frame.best_overlap = overlap;
+        frame.current = i;
+    }
+    let xf = PageXform { rect: r, rot: view.rotation, pw: info.pages[i].width.max(1.0), ph: info.pages[i].height.max(1.0) };
+    paint_page_surface(ui, view, frame, &PageSlot { i, r, xf });
+    let painter = ui.painter();
+    view.text_background.paint(painter, &xf, i, view.line_editor.as_ref(), view.content.draft.as_ref());
+    if editing_content {
+        view.move_background.paint(painter, &xf, i, info, &view.content, pointer);
+    }
+    if view.show_page_gaps {
+        painter.rect_stroke(r, CornerRadius::ZERO, Stroke::new(0.5, t.border.gamma_multiply(0.8)), egui::StrokeKind::Outside);
+    }
 
-    let avail = ui.available_rect_before_wrap();
-    view.viewport_w = avail.width();
-    view.viewport_h = avail.height();
-    let old_zoom = view.zoom;
-    view.fit_zoom(info);
+    let slot = PageSlot { i, r, xf };
+    // Addresses written as plain text are found once per text layer, before the tools hit-test them.
+    if frame.env.text_links {
+        view.refresh_text_links(i);
+    }
+    let pcx = comments::PageCx { page: i, xf: &xf, ptr, info, tool, prefs, allowed, hidden: comments_hidden, redact_mark, keys };
+    // A cancelled press takes nothing until the button is up, though the page's menu still opens
+    // where a right-click is. A page full screen doesn't show yet takes nothing at all. (A press
+    // there gives nothing on the page an owner, so its release, once the page is in, takes nothing
+    // either.)
+    let veiled = page_input::veiled(view);
+    let input = if view.press_cancelled || veiled {
+        if !veiled && let Some(p) = frame.right_click_on(|p| xf.rect.contains(p)) {
+            comments::anchor(&pcx, p, view);
+        }
+        PageInput {
+            press: crate::page_router::PagePress::Elsewhere,
+            text_drag: false,
+            consumed: true,
+            area_tool: false,
+            hover: None,
+            released_over: false,
+            sign_tabs: Vec::new(),
+        }
+    } else {
+        page_tool_input(ui, view, frame, &slot)
+    };
+    let painter = ui.painter();
+    let preview_target = (matches!(tool, QuickTool::Select | QuickTool::Fill(_)) && !comments_hidden).then_some(view.comments.selected).flatten();
+    view.signature_drag.prepare(ui.ctx(), doc, preview_target, scale);
+    view.signature_drag.paint(painter, &pcx, &view.comments, view.pending_edit.as_ref());
+    // Any other comment being moved: drawn where it goes, over the page that still shows it
+    // where it was.
+    let stale = view.signature_drag.moving_page().is_some_and(|p| view.page_out_of_date(p));
+    view.signature_drag.prepare_move(ui.ctx(), doc, &view.comments, view.pending_edit.as_ref(), stale, scale);
+    view.signature_drag.paint_move(painter, &pcx, &view.comments, view.pending_edit.as_ref());
+
+    // Any press on the page ends Select All of the document: text read or not, any tool,
+    // on a link too.
+    // A press that lands on something drawn over the page (a menu, a dialog) is not one.
+    if view.all_text && frame.pressed_page == Some(i) {
+        view.all_text = false;
+    }
+    text_layer(ui, view, frame, &slot, &input);
+    page_overlays(ui, view, frame, &slot, &input);
+}
+
+#[allow(clippy::cognitive_complexity)]
+fn draw_pages(
+    ui: &mut egui::Ui,
+    viewport: Rect,
+    view: &mut DocView,
+    env: &PageEnv<'_>,
+    out: &mut PageOut,
+    signature_preview: &mut Option<(crate::fill_sign::SavedSig, egui::TextureHandle)>,
+) -> PageRenders {
+    let PageEnv {
+        allowed,
+        auto_delta,
+        avail,
+        coarse_scroll,
+        calc_order,
+        can_copy,
+        can_paste_comments,
+        can_modify,
+        content_h,
+        content_w,
+        doc,
+        edge_delta,
+        form,
+        generation,
+        glide,
+        hand,
+        info,
+        key_scroll,
+        key_side,
+        middle_gesture,
+        modal,
+        navigation_enabled,
+        precise_scroll,
+        prefs,
+        preparing,
+        selection_wheel,
+        single_paging,
+        tool,
+        unobstructed,
+        visible_pages,
+        y_shift,
+        ..
+    } = *env;
+    let animates = env.animates;
+    // egui's drag responses accept every pointer button. Keep a wheel gesture from also
+    // selecting text, drawing a mark, or panning with the Hand tool.
+    if middle_gesture {
+        let opacity = ui.opacity();
+        ui.disable();
+        // Only interactions pause; the document must keep its original colours.
+        ui.set_opacity(opacity);
+    }
+    // These deltas already contain their motion policy. Positive y moves the content down;
+    // applying another ScrollArea animation would ease the wheel twice.
+    // ScrollArea ignores wheel input during a widget drag. Defer the wheel contribution
+    // until after the text widgets when a selection owns that drag.
+    let wheel_delta = if selection_wheel { Vec2::ZERO } else { precise_scroll + coarse_scroll };
+    let delta = auto_delta + edge_delta - vec2(key_side, key_scroll) + wheel_delta + glide;
+    if delta != Vec2::ZERO && delta.is_finite() {
+        ui.scroll_with_delta_animation(delta, egui::style::ScrollAnimation::none());
+    }
+    // A resized handle can sit in the window beside a page that does not fill it. The
+    // response has to cover that visible area or the next press never starts: the pointer
+    // is reported only inside this rectangle once the previous drag has been released.
+    // Page positions stay on `content_w`/`content_h`; the extra area is not a new page.
+    let response_size = vec2(content_w.max(viewport.width()), content_h.max(viewport.height()));
+    let (resp_rect, resp) = ui.allocate_exact_size(response_size, Sense::click_and_drag());
+    view.page_widget = Some(resp.id);
+    // A drag lasts only while egui reports it, so the mark can't outlive one.
+    if !resp.dragged_by(egui::PointerButton::Primary) {
+        view.selection_drag = false;
+    }
+    // The Hand tool pans by this widget's drag, before the pages are laid out (above).
+    if hand {
+        if resp.dragged() {
+            view.cursor.claim(Layer::Drag, egui::CursorIcon::Grabbing);
+        } else if resp.hovered() {
+            view.cursor.claim(Layer::ToolArea, egui::CursorIcon::Grab);
+        }
+    }
+    let origin = resp_rect.min - vec2(0.0, y_shift);
+    let visible = viewport.translate(resp_rect.min.to_vec2());
+    view.screen_rects.clear();
+    view.screen_ppp = ui.ctx().pixels_per_point();
+    view.screen_xforms.clear();
+    // The pointer as the pages see it: nothing over them (a dialog from the frame it opens),
+    // or a press they hold. The page modules read it rather than egui's raw pointer state.
+    let ptr = PagePointer::read(ui, &resp, modal);
+    cancel_on_escape(ui.ctx(), view, &ptr);
+    view.router.settle(ptr.any_down, !ptr.edges.is_empty());
+    // A new press is no longer the last one's, wherever it lands (the page it is on gives it
+    // its owner; in the gap between pages it is no page's).
+    if ptr.pressed().is_some() {
+        view.router.begin();
+        // The page widget is not focusable. Explicitly return keyboard ownership from Pages
+        // when the user presses the document, without stealing focus through a modal.
+        if let Some(id) = view.pages_focus_id {
+            ui.memory_mut(|m| m.surrender_focus(id));
+        }
+    }
+    let pointer = ptr.pos;
+    // A press on a page makes it the current one (as in Acrobat), so a page command with
+    // no selection (Rotate, Delete) acts on the page the reader pointed at, not on a page
+    // gone to earlier that still shows whole beside it.
+    let pressed = unobstructed && ptr.pressed().is_some();
+    if resp.secondary_clicked() {
+        // Set again below when the right-click lands on a link.
+        view.links.context = None;
+        // Set again below by the page right-clicked: a right-click off the pages (between them,
+        // beside one) anchors no page's menu, which then acts on the current page. It deselects the
+        // comment, and Edit text's picture, too (below), as one on a page's empty part does. A
+        // selected Prepare field stays selected, and the menu is the page's there too.
+        view.comments.context_at = None;
+        view.menu_for = None;
+    }
+    let mut frame = PageFrame {
+        env: *env,
+        resp: &resp,
+        ptr: &ptr,
+        origin,
+        visible,
+        pressed,
+        pointer,
+        signature_preview,
+        out: std::mem::take(out),
+        wanted: Vec::new(),
+        visible_now: Vec::new(),
+        current: view.current,
+        best_overlap: -1.0,
+        current_overlap: -1.0,
+        current_height: f32::INFINITY,
+        pressed_page: None,
+        calc_hover: None,
+        right_clicked: false,
+    };
+    for &i in visible_pages {
+        draw_page(ui, view, &mut frame, i);
+    }
+    let PageFrame {
+        wanted,
+        visible_now,
+        mut current,
+        best_overlap,
+        current_overlap,
+        current_height,
+        pressed_page,
+        calc_hover,
+        out: page_out,
+        right_clicked,
+        ..
+    } = frame;
+    // A right-click no page took deselects the comment, so the page's menu opens, not the comment's,
+    // and with Edit text the picture (one on a page went to that page, `page_input`).
+    if resp.secondary_clicked() && !right_clicked {
+        view.comments.selected = None;
+        if tool == QuickTool::EditText {
+            view.image_selection = None;
+        }
+    }
+    let PageOut {
+        mut canvas_action,
+        clicked_link,
+        copy_selected,
+        mut field_menu,
+        field_placed,
+        field_props,
+        hover_text: _,
+        mut image_action,
+        open_boxes,
+        open_initials,
+        open_signature,
+        open_table,
+        page_action: _,
+        primary_down: _,
+        on_object: _,
+        refused,
+        row_on_screen: _,
+        stamp_placed,
+        ..
+    } = page_out;
+    let mut page_action: Option<PageMenuAction> = None;
+    let painter = ui.painter();
+    if calc_order {
+        view.calc_order.set_hover_page(calc_hover);
+        let selected = view.prepare.selected.as_ref().map(|(name, _)| name.as_str());
+        crate::calc_order_ui::paint_trace(ui, painter, visible, &view.calc_order, generation, selected);
+    }
+    // Full screen plays transitions over the page just drawn, and keeps time (#379).
+    let mut hide_pointer = false;
+    if view.presentation.is_some() {
+        let now = ui.input(|i| i.time);
+        hide_pointer = presenter::frame(view, info, painter, ui.ctx(), now, animates, pointer);
+    }
+    // Read before the claims are spent below, and before the pointer hides, which claims the top layer.
+    let on_object = view.cursor.over_object(tool);
+    // A still pointer hides over a link too, and its tip with it: the top layer, which every tool reaches.
+    if hide_pointer {
+        view.cursor.claim(Layer::Drag, egui::CursorIcon::None);
+    }
+    // The pages' one cursor, from the claim on the highest layer the tool reaches, and the tip.
+    let hover_text = pointer.filter(|_| unobstructed && !hide_pointer).zip(view.cursor.resolve(ui.ctx(), tool));
+    // ScrollArea ignores the wheel while any widget is dragged, so a text-selection drag
+    // scrolls the page itself (#721). After the page loop, so it keeps scrolling once the
+    // pointer leaves the selection's page for the gap or the next page; over the whole
+    // document area. The viewer owns both precise and coarse wheel motion, so selection uses
+    // the same distance as ordinary document scrolling.
+    if selection_wheel {
+        let delta = precise_scroll + coarse_scroll;
+        if delta != Vec2::ZERO && delta.is_finite() {
+            ui.scroll_with_delta_animation(delta, egui::style::ScrollAnimation::none());
+        }
+    }
+    // Held at the top or bottom edge, or dragged past it, a text selection scrolls the view
+    // so it can reach text off screen (#1670); the selection follows the pointer on its page.
+    if view.selection_drag
+        && navigation_enabled
+        && unobstructed
+        && !single_paging
+        && let Some(p) = ptr.pos
+    {
+        let dy = crate::autoscroll::edge_delta(p.y, avail, ui.input(|i| i.stable_dt));
+        if dy != 0.0 {
+            view.end_find_following();
+            ui.scroll_with_delta_animation(vec2(0.0, dy), egui::style::ScrollAnimation::none());
+            // Keep scrolling while the pointer rests there and sends no events.
+            ui.ctx().request_repaint();
+        }
+    }
+    // The page navigated to stays current while no page shows more of itself, so the next
+    // page step starts from it rather than from a page further down the screen (#188).
+    // It also stays current while it is wholly on screen: a short page (a cheque) gone to
+    // from the Pages panel shows less of itself than the tall page below it, and must not
+    // hand the highlight to that page.
+    if current_overlap >= best_overlap - PAGE_TIE || current_overlap >= current_height - PAGE_TIE {
+        current = view.current;
+    }
+    if let Some(p) = pressed_page {
+        current = p;
+    }
+    if view.continuous {
+        view.current = current;
+    }
+    // The menu of what the right-click went to (`menu_for`), or else the page's.
+    use crate::page_router::{Owner, PicturePart};
+    let menu_for = view.menu_for.map(|(_, owner)| owner);
+    // A right-click while a press is held leaves the selections alone, so the menu is its owner's only
+    // when that owner is the one selected.
+    let on_selected_field = match menu_for {
+        Some(Owner::PrepareField { field, widget }) => {
+            form.get(field).is_some_and(|f| view.prepare.selected.as_ref().is_some_and(|(name, w)| *name == f.name && *w == widget))
+        }
+        Some(Owner::PrepareCorner { .. }) => true,
+        _ => false,
+    };
+    // The row as it is now: in continuous view the current page may have changed above.
+    let row_on_screen =
+        shown_row(view, env.rects).iter().filter_map(|&i| env.rects.get(i)).map(|r| r.translate(origin.to_vec2())).reduce(Rect::union);
+    let presenting = view.presentation.is_some();
+    page_context_menu(&resp, presenting, |ui| {
+        // Crop mode has no menu: a right-click on the picture being cropped, its box or its grips is
+        // the crop's (#5835).
+        if matches!(menu_for, Some(Owner::Picture { part: PicturePart::Crop(_), .. })) {
+            egui::Popup::close_all(ui.ctx());
+            ui.close();
+            return;
+        }
+        // Preparing a form: the selected field's menu, on a field.
+        if preparing
+            && on_selected_field
+            && let Some((name, wi)) = view.prepare.selected.clone()
+        {
+            // Several fields: Align, Center, Distribute, Set Fields to Same Size.
+            if !view.prepare.also.is_empty() {
+                use crate::prepare::Arrange as A;
+                let others = view.prepare.also.clone();
+                let anchor = (name.clone(), wi);
+                let mut pick = |ui: &mut egui::Ui, op: A, label: &str| {
+                    if ui.add_enabled(can_modify, egui::Button::new(tl!(label))).clicked() {
+                        view.pending_edit = crate::prepare::arrange(form, &anchor, &others, op);
+                        ui.close();
+                    }
+                };
+                ui.menu_button(tl!("Align"), |ui| {
+                    pick(ui, A::AlignLeft, "Left");
+                    pick(ui, A::AlignRight, "Right");
+                    pick(ui, A::AlignTop, "Top");
+                    pick(ui, A::AlignBottom, "Bottom");
+                    pick(ui, A::AlignCenterV, "Center vertically");
+                    pick(ui, A::AlignCenterH, "Center horizontally");
+                });
+                ui.menu_button(tl!("Distribute"), |ui| {
+                    pick(ui, A::DistributeH, "Horizontally");
+                    pick(ui, A::DistributeV, "Vertically");
+                });
+                ui.menu_button(tl!("Set Fields to Same Size"), |ui| {
+                    pick(ui, A::SameHeight, "Height");
+                    pick(ui, A::SameWidth, "Width");
+                    pick(ui, A::SameSize, "Both");
+                });
+                ui.separator();
+            }
+            if ui.button(tl!("Properties…")).clicked() {
+                field_menu = Some(FieldMenu::Properties);
+                ui.close();
+            }
+            if ui.add_enabled(can_modify, egui::Button::new(tl!("Duplicate…"))).clicked() {
+                field_menu = Some(FieldMenu::Duplicate(name.clone()));
+                ui.close();
+            }
+            ui.separator();
+            let delete = if view.prepare.also.is_empty() { "Delete" } else { "Delete selected fields" };
+            if ui.add_enabled(can_modify, egui::Button::new(tl!(delete))).clicked() {
+                view.pending_edit = crate::prepare::delete_selected(view);
+                ui.close();
+            }
+            return;
+        }
+        if matches!(menu_for, Some(Owner::Link { .. }))
+            && let Some((page, index)) = view.links.context
+        {
+            if ui.button(tl!("Properties…")).clicked() {
+                view.links.open_existing = Some((page, index));
+                ui.close();
+            }
+            if ui.add_enabled(can_modify, egui::Button::new(tl!("Delete"))).clicked() {
+                view.pending_edit = Some(Edit::DeleteLink { page, index });
+                view.links.selected = None;
+                view.links.context = None;
+                ui.close();
+            }
+            ui.separator();
+            if ui.add_enabled(can_modify, egui::Button::new(tl!("Remove all links"))).clicked() {
+                view.pending_edit = Some(Edit::RemoveLinks { pages: None });
+                view.links.selected = None;
+                view.links.context = None;
+                ui.close();
+            }
+            return;
+        }
+        let can_paste_image = env.can_paste_image;
+        if tool == QuickTool::EditText
+            && let Some((page, Owner::Picture { index, .. })) = view.menu_for
+            && let Some(sel) = view.image_selection.clone().filter(|s| (s.page, s.index) == (page, index))
+        {
+            let images = cached_edit_images(view, doc, sel.page).to_vec();
+            // Paste lands where the menu opened, on the picture's page: the right-click that opened
+            // it went to that page (`page_input`), and another page's point means nothing there.
+            let at = view.comments.context_at.filter(|(page, _)| *page == sel.page).map(|(_, at)| at);
+            let rotation = (view.rotation % 360 + info.pages.get(sel.page).map_or(0, |p| p.rotation % 360)) % 360;
+            crate::edit_text_ui::image_context_menu(ui, view, &images, sel.page, sel.index, can_paste_image, &mut image_action, at, rotation);
+            return;
+        }
+        // The comment the right-click went to, when it is the one selected, or connected lines being
+        // drawn (Complete, Undo last point): the comment menu.
+        let on_selected_comment =
+            matches!(view.menu_for, Some((page, Owner::Comment { index, .. })) if view.comments.selected == Some((page, index)));
+        let drawing_points = matches!(&view.comments.gesture, Some(comments::Gesture::Draw { tool, .. }) if tool.clicks_points());
+        if on_selected_comment || drawing_points {
+            canvas_action = comments::context_menu(
+                ui,
+                view,
+                info,
+                &|page, index| doc.annotation_deletable(page, index),
+                prefs,
+                comments::MenuRights { allowed, can_paste: can_paste_comments, can_modify },
+            );
+            return;
+        }
+        // Over a picture (and no comment): Copy Image, as in Acrobat's page menu.
+        let mut copy_image = None;
+        if let Some((page, at)) = view.comments.context_at {
+            // On a page still being read, these items appear when the answer comes.
+            let hit = view.pictures.get(ui.ctx(), doc, page).and_then(|pictures| pdfcraft_engine::picture_at(pictures, at)).map(|(index, _)| *index);
+            if let Some(image) = hit {
+                if ui.button(tl!("Copy Image")).clicked() {
+                    copy_image = Some(comments::CanvasAction::CopyImage(page, image));
+                    ui.close();
+                }
+                if ui.button(tl!("Copy Image in Original Format")).clicked() {
+                    copy_image = Some(comments::CanvasAction::CopyImageFile(page, image));
+                    ui.close();
+                }
+                ui.separator();
+            }
+        }
+        let has_copy_image = copy_image.is_some();
+        if copy_image.is_some() {
+            canvas_action = copy_image;
+        }
+        let (page, at) = view.comments.context_at.unwrap_or((view.current, [0.0, 0.0]));
+        let can_copy_items = can_copy && (view.image_selection.is_some() || view.selected_text().is_some() || has_copy_image);
+        let can_paste = can_paste_image && can_modify;
+        let perms = PageMenuPerms {
+            can_modify,
+            can_assemble: doc.allows_assembly(),
+            can_annotate: allowed,
+            can_print: doc.allows_printing(),
+            can_copy,
+            can_copy_items,
+            can_paste,
+            can_paste_comments: allowed && can_paste_comments,
+            has_annotations: !info.annotations.is_empty(),
+        };
+        default_page_context_menu(ui, page, at, perms, &mut page_action);
+    });
+    // Copy comments / Paste comments from the page's menu or a Comments panel card.
+    let copy_comments = std::mem::take(&mut view.comments.copy_request);
+    let paste_comments_at = view.comments.paste_request.take();
+    let comment_notice = view.comments.notice.take();
+    *out = PageOut {
+        canvas_action,
+        clicked_link,
+        comment_notice,
+        copy_comments,
+        copy_selected,
+        field_menu,
+        field_placed,
+        field_props,
+        hover_text,
+        image_action,
+        open_boxes,
+        open_initials,
+        open_signature,
+        open_table,
+        page_action,
+        paste_comments_at,
+        primary_down: ptr.primary_down,
+        on_object,
+        refused,
+        row_on_screen,
+        stamp_placed,
+    };
+    (wanted, visible_now)
+}
+
+/// A zoom the fit mode changed keeps the page at the top of the view in place, or, just after a
+/// find step, the match in the middle of the view (`avail` is the view's size).
+fn anchor_zoom_change(view: &mut DocView, avail: Vec2, old_zoom: f32) {
+    let avail_width = avail.x;
     if view.shown && view.zoom_anchor.is_none() && view.goto.is_none() && view.goto_point.is_none() && (view.zoom - old_zoom).abs() > 1e-4 {
         let prev_viewport = view.viewport_screen;
         let top_y = prev_viewport.min.y;
@@ -921,1386 +2249,229 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
             })
             .or_else(|| view.screen_rects.iter().find(|(_, r)| r.min.y >= top_y).map(|(p, r)| (*p, 0.0f32, (r.min.y - top_y).max(0.0))))
             .or_else(|| view.screen_rects.last().map(|(p, r)| (*p, 1.0f32, (r.max.y - top_y).max(0.0))));
-        if let Some((page, fy, rel_y)) = anchor {
-            view.zoom_anchor = Some((page, 0.5, fy, vec2(avail.width() / 2.0, rel_y)));
+        if let Some((page, fx, fy)) = view.find_hold {
+            // A fit zoom that changes just after a find step keeps the match in the middle too.
+            view.zoom_anchor = Some((page, fx, fy, avail / 2.0));
+        } else if let Some((page, fy, rel_y)) = anchor {
+            view.zoom_anchor = Some((page, 0.5, fy, vec2(avail_width / 2.0, rel_y)));
         } else {
-            view.zoom_anchor = Some((view.current, 0.5, 0.0, vec2(avail.width() / 2.0, MARGIN)));
+            view.zoom_anchor = Some((view.current, 0.5, 0.0, vec2(avail_width / 2.0, MARGIN)));
         }
     }
+}
 
-    // Pinch / ctrl+scroll zoom, anchored on the current page.
-    let zoom_delta = crate::motion::zoom_delta(ui.ctx());
-    // Exclude the previous frame's scrollbar tracks from gesture activation.
-    let navigation_rect = if view.viewport_screen.is_positive() { avail.intersect(view.viewport_screen) } else { avail };
-    let navigation_enabled = app.dialog.is_none() && app.close_request.is_none() && !app.palette_open && ui.is_enabled() && ui.input(|i| i.focused);
-    // Full screen: a click on the document goes forward a page and a shift-click back, as in
-    // Acrobat, unless the click did something else (a link, a word selected). Decided below,
-    // once the pages have had the click.
-    let present_click =
-        view.presentation.is_some() && navigation_enabled && presentation_click(ui, navigation_rect) && app.quick_tool == QuickTool::Select;
-    // Shift as held now, or as the click's own event carried it (a synthetic click).
-    let present_back = present_click
-        && ui.input(|i| {
-            i.modifiers.shift
-                || i.events.iter().any(|e| {
-                    matches!(e, egui::Event::PointerButton { button: egui::PointerButton::Primary, pressed: false, modifiers, .. } if modifiers.shift)
-                })
-        });
-    if zoom_delta.is_finite() && zoom_delta > 0.0 && zoom_delta != 1.0 && navigation_enabled && ui.rect_contains_pointer(navigation_rect) {
-        let z = view.zoom * zoom_delta;
-        match zoom_anchor(ui) {
-            Some(p) => view.zoom_at(z, p),
-            None => view.set_zoom(z),
-        }
-    }
-    view.viewport_screen = avail;
-    let auto_delta = if unobstructed {
-        view.auto_scroll.update(ui, avail, false)
-    } else {
-        view.auto_scroll.cancel();
-        Vec2::ZERO
-    };
+/// What the pager needs to know about the page row on screen.
+#[derive(Clone, Copy)]
+struct PagingCx<'a> {
+    row: &'a [usize],
+    rects: &'a [Rect],
+    avail: Rect,
+    middle_gesture: bool,
+    unobstructed: bool,
+}
 
-    // Drawing a comment: the pointer in a band along any edge (or just past it) scrolls the view
-    // that way, so a point beyond what is shown can be reached without letting go of the tool.
-    let edge_delta = if unobstructed && matches!(view.comments.gesture, Some(comments::Gesture::Draw { .. })) {
-        let (pointer, dt) = drawing_edge_pointer(ui);
-        crate::autoscroll::edge_scroll(pointer, avail, dt)
-    } else {
-        Vec2::ZERO
-    };
-    if edge_delta != Vec2::ZERO {
-        ui.ctx().request_repaint();
-    }
-
-    let content_w = view.content_width(info, avail.width());
-    let rects = view.layout(info, content_w, ui.ctx().pixels_per_point());
-    // When not scrolling continuously, only one row is shown at a time: the current page, or the
-    // current two-page spread (with the cover rule). These indices drive paging, which pages are
-    // drawn, and the content height (#752). Empty for a document with no pages.
-    let shown_row = |view: &DocView| -> Vec<usize> {
-        if rects.is_empty() {
-            return Vec::new();
-        }
-        let last = rects.len() - 1;
-        let cur = view.current.min(last);
-        match view.layout {
-            PageLayout::Single => vec![cur],
-            PageLayout::TwoUp if view.cover && cur == 0 => vec![0],
-            PageLayout::TwoUp => {
-                let first = if view.cover { cur - (cur + 1) % 2 } else { cur - cur % 2 };
-                if first < last { vec![first, first + 1] } else { vec![first] }
-            }
-        }
-    };
-    let row = shown_row(view);
-    let middle_gesture = view.auto_scroll.blocks_input();
-    // Not scrolling: when the whole page or spread fits, the wheel would do nothing, so it turns
-    // pages instead; zoomed in far enough to pan, it pans, and at the edge it turns the page on
-    // (#1924, `single_page_wheel_edge`). Touch drags are untouched: with
-    // nothing to pan, touch users turn pages with the rail buttons, the page box and the arrow
-    // keys. Runs before `visible_pages` so the frame that turns the page draws it.
-    let mut single_paging = false;
-    let mut edge_turned = false;
+/// Not scrolling: when the whole page or spread fits, the wheel turns pages instead. Returns whether
+/// paging owns the wheel, and whether it turned the page at an edge.
+fn single_page_paging(ui: &egui::Ui, view: &mut DocView, cx: &PagingCx<'_>) -> (bool, bool) {
+    let (mut single_paging, mut edge_turned) = (false, false);
+    let PagingCx { row, rects, avail, middle_gesture, unobstructed } = *cx;
     if !view.continuous {
         // The row's bounding box on screen (one page, or a two-page spread).
         let row_rect = row.iter().filter_map(|&i| rects.get(i)).copied().reduce(Rect::union);
-        // Within a point, so layout rounding can't stop a fitting page from turning.
-        let fits = row_rect.is_some_and(|r| r.height() + 2.0 * MARGIN <= avail.height() + 1.0);
+        let fits = row_rect.is_some_and(|r| fits_height(r, avail.height(), ui.ctx().pixels_per_point()));
         let can_turn = !middle_gesture && unobstructed && ui.rect_contains_pointer(avail);
         single_paging = can_turn && fits;
         // Every wheel event goes to the pager, so it follows each trackpad touch to its end
         // even while the page can't turn.
-        ui.input(|i| {
-            for e in &i.events {
-                if let egui::Event::MouseWheel { unit, delta, phase, modifiers, .. } = e {
-                    // Zooming (⌘ or Ctrl) and sideways scrolling (Shift) never turn pages.
-                    let dy = if modifiers.command || modifiers.ctrl || modifiers.shift { 0.0 } else { delta.y };
-                    if fits {
-                        view.single_page_wheel(*unit, dy, *phase, i.time, can_turn);
-                    } else {
-                        edge_turned |= view.single_page_wheel_edge(*unit, dy, *phase, i.time, can_turn);
-                    }
+        let now = ui.input(|i| i.time);
+        for e in &crate::motion::gesture_wheel_events(ui.ctx()) {
+            if let egui::Event::MouseWheel { unit, delta, phase, modifiers, .. } = e {
+                // Zooming (⌘ or Ctrl) and sideways scrolling (Shift) never turn pages.
+                let dy = if modifiers.command || modifiers.ctrl || modifiers.shift { 0.0 } else { delta.y };
+                if fits {
+                    view.single_page_wheel(*unit, dy, *phase, now, can_turn);
+                } else {
+                    edge_turned |= view.single_page_wheel_edge(*unit, dy, *phase, now, can_turn);
                 }
             }
-        });
+        }
         if single_paging {
             // Paging owns vertical wheel motion here. A diagonal gesture keeps its sideways
             // part, as `ScrollArea` itself handles each axis.
             ui.input_mut(|i| i.smooth_scroll_delta.y = 0.0);
         }
     }
-    // Point input bypasses egui smoothing for 1:1 motion. Line input keeps egui's configured,
-    // smoothed base and adds only the accelerated surplus. While point suppression is active,
-    // reconstruct line and page input here so current coarse events survive without exposing an
-    // older eased tail.
+    (single_paging, edge_turned)
+}
+
+/// This frame's wheel motion over the page view, after paging and motion integration.
+struct Wheel {
+    precise_scroll: Vec2,
+    line_base: Vec2,
+    coarse_scroll: Vec2,
+    has_page: bool,
+    /// The pager owns the vertical axis (single-page view, or the rest of a gesture that turned the page).
+    paging_owns_vertical: bool,
+}
+
+/// Cancels older motion before the pager reads new input, without discarding that input.
+fn reset_interrupted_wheel(ui: &egui::Ui, view: &mut DocView, other_motion: bool) {
+    let frame = ui.ctx().cumulative_frame_nr();
+    let resumed = view.wheel_frame.is_some_and(|last| last != frame && last.checked_add(1) != Some(frame));
+    if resumed || glide_interrupted(ui) || other_motion {
+        view.reset_coarse_state();
+    }
+}
+
+/// Integrates the whole coarse-wheel distance once, independently of egui's wheel easing.
+/// Precise input remains direct, and interrupts clear retained motion before accepting new input.
+fn read_wheel(ui: &mut egui::Ui, view: &mut DocView, avail: Rect, single_paging: bool, edge_turned: bool, enabled: bool, animate: bool) -> Wheel {
     let now = ui.input(|i| i.time);
-    let input = if ui.rect_contains_pointer(avail) {
+    let hovered = ui.rect_contains_pointer(avail);
+    let frame = ui.ctx().cumulative_frame_nr();
+    let repeated = view.wheel_frame == Some(frame);
+    view.wheel_frame = Some(frame);
+    // ScrollArea must not add egui's independently eased copy to the viewer's own motion.
+    // Keep draining that copy on later frames and discarded passes too.
+    if hovered {
+        ui.input_mut(|i| i.smooth_scroll_delta = Vec2::ZERO);
+    }
+    let paging_owns_vertical = single_paging || (!view.continuous && view.wheel.gesture_turned());
+    if repeated || !hovered || !enabled {
+        if !hovered || !enabled {
+            view.reset_coarse_state();
+        }
+        return Wheel { precise_scroll: Vec2::ZERO, line_base: Vec2::ZERO, coarse_scroll: Vec2::ZERO, has_page: false, paging_owns_vertical };
+    }
+    // A touch gesture zooms to its end once it began with ⌘ or Ctrl, the keys let go or not.
+    let events = crate::motion::gesture_wheel_events(ui.ctx());
+    let consumed = events.iter().any(|event| {
+        matches!(event, egui::Event::MouseWheel { delta, modifiers, .. } if *delta != Vec2::ZERO && delta.is_finite() && !modifiers.command && !modifiers.ctrl)
+    });
+    if consumed {
+        wheel_reset::consumed(ui.ctx());
+    }
+    let input = {
         // Match the line distance used by egui's other scroll areas.
         let live = ui.ctx().options(|o| o.input_options.line_scroll_speed);
         let line_points = if live.is_finite() && live > 0.0 { live } else { crate::scroll_speed::EGUI_LINE_POINTS };
-        ui.input(|i| crate::wheel_boost::accumulate(&i.events, line_points, single_paging))
-    } else {
-        crate::wheel_boost::FrameInput::default()
+        crate::wheel_boost::accumulate(&events, line_points, single_paging)
     };
     let mut precise_scroll = input.precise;
     let mut line_base = input.line;
-    let mut boost_extra = crate::wheel_boost::boost_extra(input, &mut view.wheel_boost_x, &mut view.wheel_boost_y, now);
-    let has_page = input.page != Vec2::ZERO;
-    if now.is_finite() && precise_scroll != Vec2::ZERO && !has_page {
-        view.precise_scroll_until = now + SUPPRESS_SECS;
+    if precise_scroll.x != 0.0 {
+        view.wheel_boost_x.reset();
     }
+    if precise_scroll.y != 0.0 {
+        view.wheel_boost_y.reset();
+    }
+    let mut coarse_input = line_base + crate::wheel_boost::boost_extra(input, &mut view.wheel_boost_x, &mut view.wheel_boost_y, now);
+    let has_page = input.page != Vec2::ZERO;
     if edge_turned {
-        // The turn leaves egui's eased copy of the notch to decay for a few frames; it must not
-        // scroll the page just shown away from its top (or bottom).
-        view.precise_scroll_until = now + 0.25;
+        view.fling.stop();
+    }
+    let page_scale = ui.input(|i| i.viewport_rect().height());
+    if page_scale.is_finite() && page_scale > 0.0 {
+        coarse_input += input.page * page_scale;
     }
     // Paging owns the vertical axis in single-page view; leave it to the pager.
     // The rest of a gesture that turned the page is swallowed too, or it would pan the new page
     // away from the edge it was shown at.
-    let paging_owns_vertical = single_paging || (!view.continuous && view.wheel.gesture_turned());
     if paging_owns_vertical {
         precise_scroll.y = 0.0;
         line_base.y = 0.0;
-        boost_extra.y = 0.0;
+        coarse_input.y = 0.0;
+        view.wheel_motion.cancel_axes(vec2(0.0, 1.0));
     }
-    // egui smooths a Point event that moved at least 8 points, keeping part of it for later
-    // passes. Suppression must outlive that whole action: once it expired after a fixed 0.25 s,
-    // the last few eased points leaked through the ScrollArea after a precise 1:1 scroll (held
-    // point input measured 33 points for a 30-point event). Keep hiding the eased copy until
-    // egui says the action is over, then forget the suppression.
-    let scrolling = ui.input(|i| i.is_scrolling());
-    if now < view.precise_scroll_until || (view.precise_scroll_until != 0.0 && scrolling) {
-        if scrolling {
-            // Keep hiding egui's unprocessed copy until it has drained. The short rolling grace
-            // avoids a delayed duplicate without prolonging suppression after the tail is gone.
-            view.precise_scroll_until = view.precise_scroll_until.max(now + SUPPRESS_TAIL_SECS);
-        }
-        ui.input_mut(|i| i.smooth_scroll_delta = Vec2::ZERO);
-        // The point path suppresses every eased wheel delta. Restore the line base through the
-        // same un-eased path as its surplus; paging-owned axes were cleared above.
-        boost_extra = crate::wheel_boost::cap_frame(boost_extra + line_base);
-        if has_page {
-            // Page units normally stay on egui's viewport-sized path. During suppression only,
-            // reproduce the current event directly so an older hidden tail stays hidden.
-            let page_scale = ui.input(|i| i.viewport_rect().height());
-            let mut page_delta =
-                if page_scale.is_finite() && page_scale > 0.0 { crate::wheel_boost::cap_frame(input.page * page_scale) } else { Vec2::ZERO };
-            if paging_owns_vertical {
-                page_delta.y = 0.0;
-            }
-            boost_extra = crate::wheel_boost::cap_frame(boost_extra + page_delta);
-        }
-    } else {
-        precise_scroll = Vec2::ZERO;
-        // Selection handling below uses zero to distinguish an inactive window. Clearing a past
-        // deadline also keeps a later line/page action from being mistaken for the old tail.
-        view.precise_scroll_until = 0.0;
-    }
-    if has_page && paging_owns_vertical {
-        // Page input belongs to egui on the free axis; the pager still owns vertical motion.
-        ui.input_mut(|i| i.smooth_scroll_delta.y = 0.0);
-    }
-    // Touchpad momentum (#531): a swipe over the page lifted at speed glides on and slows to a
-    // stop, through the same un-eased path. Never while the pager owns the wheel, a gesture or
-    // dialog has the input, or animations are off; any click, key, zoom or other scrolling ends it.
-    // Asked of the preference, not of egui's animation time, which test harnesses zero.
-    let animates = app.animation_effects.animates(app.motion.reduced);
-    let may_glide = !paging_owns_vertical && !middle_gesture && navigation_enabled && unobstructed && animates;
-    let over_page = ui.rect_contains_pointer(avail);
-    ui.input(|i| view.fling.read(&i.events, now, may_glide && over_page));
-    let interrupted = glide_interrupted(ui);
-    if !may_glide || interrupted || key_scroll != 0.0 || auto_delta != Vec2::ZERO || zoom_delta != 1.0 {
-        view.fling.stop();
-    }
-    let glide = view.fling.step(now);
-    if view.fling.gliding() {
+    view.wheel_motion.cancel_axes(precise_scroll);
+    let coarse_scroll = view.wheel_motion.step(coarse_input, now, ui.input(|i| i.stable_dt), animate);
+    if view.wheel_motion.has_pending() {
         ui.ctx().request_repaint();
     }
-    // Any reader-owned motion ends automatic search following, even when it stays on the same
-    // page: the wheel, keyboard, middle-button auto-scroll, a drawing's edge scroll, or the
-    // momentum left by a touchpad swipe. The automatic flash uses `goto`, not these deltas, so
-    // its programmatic scroll is never mistaken for a reader action.
-    let wheel_scrolled = precise_scroll != Vec2::ZERO || line_base != Vec2::ZERO || boost_extra != Vec2::ZERO || has_page;
-    if wheel_scrolled || auto_delta != Vec2::ZERO || edge_delta != Vec2::ZERO || glide != Vec2::ZERO {
-        view.end_find_following();
-    }
-    // The wheel may have turned the page above: draw the row it turned to. Measured from the old
-    // row, the jump to the new page scrolled both out of view, a blank frame on every turn forward.
-    let row = shown_row(view);
-    let visible_pages: Vec<usize> = if view.continuous { (0..rects.len()).collect() } else { row.clone() };
-    let (y_shift, content_h) = if view.continuous {
-        (0.0, rects.iter().map(|r| r.bottom()).reduce(f32::max).map(|bottom| bottom + MARGIN).unwrap_or(0.0))
-    } else {
-        // Only the current row scrolls into view; the content is its bounding box plus margins.
-        match row.iter().filter_map(|&i| rects.get(i)).copied().reduce(Rect::union) {
-            Some(r) => (r.top() - MARGIN, r.height() + 2.0 * MARGIN),
-            None => (0.0, 0.0),
-        }
-    };
+    Wheel { precise_scroll, line_base, coarse_scroll, has_page, paging_owns_vertical }
+}
 
-    let mut scroll = egui::ScrollArea::both().auto_shrink([false, false]).scroll_source(egui::scroll_area::ScrollSource {
-        drag: if middle_gesture {
-            egui::scroll_area::DragScroll::Never
-        } else if app.quick_tool == QuickTool::Hand {
-            egui::scroll_area::DragScroll::Always
-        } else {
-            egui::scroll_area::DragScroll::OnTouch
-        },
-        ..Default::default()
+/// Rows of pages that continuous view prefetches past the window in the direction it last
+/// moved.
+const PREFETCH_ROWS: usize = 2;
+
+/// The pages continuous view prefetches past the window: the next [`PREFETCH_ROWS`] rows the way
+/// it last moved, nearest first, and none before it moves. The web build renders on the UI
+/// thread, so it prefetches none.
+fn scroll_prefetch(view: &DocView, visible_now: &[usize]) -> Vec<usize> {
+    if !view.continuous || cfg!(target_arch = "wasm32") {
+        return Vec::new();
+    }
+    let n = PREFETCH_ROWS * if view.layout == PageLayout::Single { 1 } else { 2 };
+    // At high zoom the other page of a two-page row can be off to the side and not on screen, so
+    // the rows are counted from the edges of the rows shown, and that page is prefetched too.
+    match (view.scroll_dir, visible_now.iter().min(), visible_now.iter().max()) {
+        (1, _, Some(&last)) => (last.saturating_add(1)..=row_bounds(view, last).1.saturating_add(n)).collect(),
+        (-1, Some(&first), _) => (row_bounds(view, first).0.saturating_sub(n)..first).rev().collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// The first and last page of the row that page `i` is in, paired as [`shown_row`] pairs them.
+fn row_bounds(view: &DocView, i: usize) -> (usize, usize) {
+    match view.layout {
+        PageLayout::Single => (i, i),
+        PageLayout::TwoUp if view.cover && i == 0 => (0, 0),
+        PageLayout::TwoUp => {
+            let first = view.spread_first(i);
+            (first, first.saturating_add(1))
+        }
+    }
+}
+
+/// The whole-page raster a prefetch asks for: the page at this scale, or the backdrop of a page
+/// that is tiled at this scale. A cached raster sharper than the backdrop stays demanded as it
+/// is, as `paint_page_surface` demands it under tiles.
+fn prefetch_demand(view: &DocView, p: &pdfcraft_render::PageInfo, i: usize, scale: f32, tag: u64, max_side: f32) -> (usize, f32, u64, Option<Tile>) {
+    let side = p.width.max(p.height).max(1.0);
+    if side * scale <= TILE_THRESHOLD.min(max_side) {
+        return (i, scale, tag, None);
+    }
+    let bs = BASE_SIDE.min(max_side) / side;
+    match view.pages.get(&i).filter(|c| c.tag != STALE_TAG && tag_scale(c.tag) >= bs) {
+        Some(c) => (i, tag_scale(c.tag), c.tag, None),
+        None => (i, bs, scale_tag(bs), None),
+    }
+}
+
+/// Whether `page` lies behind the way continuous view last moved: above the current page while
+/// scrolling down, below it while scrolling up. `false` outside continuous view.
+fn behind_scroll(continuous: bool, scroll_dir: i8, current: usize, page: usize) -> bool {
+    continuous && ((scroll_dir > 0 && page < current) || (scroll_dir < 0 && page > current))
+}
+
+/// Orders a frame's demand: pages on screen first, then off-screen pages ahead of the way the
+/// view last moved, then those behind it, each nearest the current page first.
+fn order_demand(view: &DocView, wanted: &mut [(usize, f32, u64, Option<Tile>)], visible_now: &[usize]) {
+    let cur = view.current;
+    wanted.sort_by_key(|w| {
+        let shown = visible_now.contains(&w.0);
+        (!shown, !shown && behind_scroll(view.continuous, view.scroll_dir, cur, w.0), w.0.abs_diff(cur), w.3.is_some())
     });
-    // Each document keeps its own scroll position when switching tabs (#189).
-    scroll = scroll.id_salt(("page-view", view.id));
-    // Every scroll here asks for no animation. An animated area would still queue a zero-length
-    // offset target for the next frame, which overwrites the jump a page turn just set.
-    scroll = scroll.animated(false);
-    // A newly opened document starts at the top. eframe saves egui's memory with the settings
-    // and document ids start again at 1 every launch, so the offset stored under this id can be
-    // where an earlier session left another document.
-    if !std::mem::replace(&mut view.shown, true) {
-        scroll = scroll.scroll_offset(Vec2::ZERO);
-    }
-    // The Hand tool pans here, before the pages are laid out, so the page moves with the pointer
-    // in the frame the pointer moves (#924). Scrolling by the drag from inside the area moved the
-    // page only after that frame was drawn, a frame behind. The frame egui tells the drag from a
-    // click, the page catches up with all the pointer has moved since the press. A jump asked for
-    // below still wins.
-    if app.quick_tool == QuickTool::Hand
-        && !middle_gesture
-        && let Some(id) = view.page_widget.filter(|id| ui.ctx().is_being_dragged(*id))
-    {
-        let moved = if ui.ctx().drag_started_id() == Some(id) {
-            ui.input(|i| i.pointer.total_drag_delta()).unwrap_or(Vec2::ZERO)
-        } else {
-            ui.input(|i| i.pointer.delta())
-        };
-        if moved != Vec2::ZERO {
-            view.end_find_following();
-        }
-        // Within the content, as egui keeps it: past an end the page would show there for a
-        // frame and spring back. `max` is never NaN or below zero, so the clamp can't panic.
-        let max = vec2((content_w - avail.width()).max(0.0), (content_h - avail.height()).max(0.0));
-        scroll = scroll.scroll_offset((view.last_scroll - moved).clamp(Vec2::ZERO, max));
-    }
-    if let Some(v) = view.sync_scroll.take() {
-        scroll = scroll.scroll_offset(v);
-    }
-    if let Some((page, fx, fy, rel)) = view.zoom_anchor.take() {
-        let r = rects[page.min(rects.len() - 1)];
-        let point = pos2(r.left() + fx * r.width(), r.top() - y_shift + fy * r.height());
-        scroll = scroll.scroll_offset(anchored_scroll(point, rel, vec2(content_w, content_h), avail.size()));
-    } else if let Some((page, frac)) = view.goto.take() {
-        let page = page.min(rects.len() - 1);
-        let r = rects[page];
-        // Clamped here: egui clamps only after drawing, so a page that fits was drawn MARGIN - page_gap()
-        // too high for a frame and then hopped into place. (`avail` is the viewport, as the
-        // scroll bars float.)
-        let max_y = (content_h - avail.height()).max(0.0);
-        scroll = scroll.vertical_scroll_offset((r.top() - y_shift - view.page_gap() + frac * r.height()).max(0.0).min(max_y));
-        // Horizontally too, as Acrobat does (#2665): beside a much wider page the others sit off
-        // to one side. A page already shown whole, or one filling the window's width, keeps the
-        // scroll, so paging through a zoomed-in document stays on the same column. Otherwise a
-        // page that fits is centred, and a wider one scrolled just far enough to fill the window.
-        // The page counts with its side gutters, which keep its edge clear of the floating
-        // quick-action bar as the layout does.
-        let (x, w) = (view.last_scroll.x, avail.width());
-        let (left, right) = (r.left() - SIDE, r.right() + SIDE);
-        let target = if right - left <= w { if left >= x && right <= x + w { x } else { r.center().x - w / 2.0 } } else { x.clamp(left, right - w) };
-        if (target - x).abs() > 0.5 {
-            scroll = scroll.horizontal_scroll_offset(target.clamp(0.0, (content_w - w).max(0.0)));
-        }
-    }
-    let ppp = ui.ctx().pixels_per_point();
-    let scale = view.render_scale(ppp);
-    let tag = scale_tag(scale);
-    // Hold sharp re-renders while the zoom is still moving: a new scale every frame would
-    // cancel the in-flight full-page interpret and restart it, so on a heavy page (a CAD
-    // plot with ~1000 images renders for seconds) the sharp raster never arrives and the
-    // view looks stuck on a soft image. The stale raster stays stretched meanwhile; the
-    // sharp request goes out once the zoom settles.
-    let now_scale = ui.input(|i| i.time);
-    if (scale - view.last_scale).abs() > f32::EPSILON {
-        view.last_scale = scale;
-        view.sharp_hold_until = now_scale + 0.35;
-        ui.ctx().request_repaint_after(std::time::Duration::from_millis(380));
-    }
-    let sharp_held = now_scale < view.sharp_hold_until;
-    view.current_scale_tag = tag;
-    let hand = app.quick_tool == QuickTool::Hand;
-    let tool = app.quick_tool;
-    // Text selection runs for the Select tool and for the markup tools (highlight…).
-    let selects_text = match tool {
-        QuickTool::Comment(t) => t.markup().is_some() || t == comments::CommentTool::ReplaceText,
-        QuickTool::Select => !preparing,
-        QuickTool::Redact | QuickTool::ColumnSelect => true,
-        QuickTool::Hand
-        | QuickTool::Measure(_)
-        | QuickTool::Crop
-        | QuickTool::EnhanceCamera
-        | QuickTool::Fill(_)
-        | QuickTool::Field(_)
-        | QuickTool::AddText
-        | QuickTool::EditText
-        | QuickTool::Stamp(_)
-        | QuickTool::CustomStamp(_)
-        | QuickTool::Link
-        | QuickTool::SignArea { .. }
-        | QuickTool::MarqueeZoom
-        | QuickTool::Snapshot => false,
-    };
-    let prefs = &app.comment_prefs;
-    let redact_mark = (app.redact_prefs.hover_fill, app.redact_prefs.opacity);
-    let units = app.units;
-    let allowed = doc.allows_annotation();
-    let can_copy = doc.allows_copying();
-    let mut copy_selected = false;
-    let comments_hidden = doc.comments_hidden();
-    let form = doc.form.clone();
-    let generation = doc.edit_generation();
-    let can_fill = doc.allows_form_filling();
-    let can_crop = doc.allows_assembly();
-    let mut open_boxes = false;
-    let signature = app.signature.clone();
-    let initials = app.initials.clone();
-    let mut open_initials = false;
-    let author = app.comment_prefs.author.clone();
-    let today = app.session.today();
-    // In Preferences ▸ Date format, or why it can't be stamped into the PDF.
-    let date_text = crate::date_text_for_pdf(&app.session);
-    let mut refused: Option<String> = None;
-    let by_line = app.session.stamp_by_line(&author);
-    let mut stamp_placed = false;
-    let mut image_action: Option<crate::edit_text_ui::ImageAction> = None;
-    let custom_stamp = match app.quick_tool {
-        QuickTool::CustomStamp(i) => app.custom_stamps.get(i).cloned(),
-        _ => None,
-    };
-    let mut open_signature = false;
-    let mut hover_text: Option<(Pos2, String)> = None;
-    let mut badge_hover: Option<(Pos2, String)> = None;
-    let mut clicked_link: Option<LinkTarget> = None;
-    let mut remote_open: Option<(pdfcraft_engine::DocId, String, pdfcraft_render::RemoteDestination)> = None;
-    let mut canvas_action: Option<comments::CanvasAction> = None;
-    let mut field_menu: Option<FieldMenu> = None;
-    let mut open_props: Option<(usize, usize)> = None;
-    let mut field_props = false;
-    let mut field_placed = false;
-    let mut open_table: Option<(usize, [f64; 4])> = None;
-    // The table being set up in its window, shown on its own document's page.
-    let table_preview = app.field_table_draft.as_mut().filter(|d| d.doc == view.id).and_then(|d| Some(d.preview(info.pages.get(d.page)?, &form)));
-    let can_modify = doc.allows_modification();
-    if preparing {
-        crate::prepare::after_refresh(view, &form);
-    } else {
-        view.prepare.selected = None;
-    }
-    view.objects.prepare(doc, tool == QuickTool::EditText && can_modify, ui.ctx());
-    view.text_background.prepare(ui.ctx(), doc, view.line_editor.as_ref(), view.content.draft.as_ref(), scale);
-    let added = if editing_content { doc.added().to_vec() } else { Vec::new() };
-    let doc_links = if tool == QuickTool::Link { doc.links().to_vec() } else { Vec::new() };
-    if editing_content {
-        crate::content_ui::after_refresh(view, &added);
-    } else {
-        view.content.selected = None;
-    }
-    view.move_background.prepare(ui.ctx(), doc, &view.content, scale);
+}
 
-    // A destination's position (bookmarks, links) refines `goto`: its point at the window's
-    // top-left, or the centre of a /FitR rectangle at the window's centre.
-    if let Some((page, fx, fy, rel)) = view.goto_point.take() {
-        let r = rects[page.min(rects.len() - 1)];
-        // Within the content, so an unreachable point never shows a frame scrolled past the end.
-        let (max_x, max_y) = ((content_w - avail.width()).max(0.0), (content_h - avail.height()).max(0.0));
-        if let Some(fx) = fx {
-            scroll = scroll.horizontal_scroll_offset((r.left() + fx * r.width() - rel.x).clamp(0.0, max_x));
-        }
-        if let Some(fy) = fy {
-            scroll = scroll.vertical_scroll_offset((r.top() - y_shift + fy * r.height() - rel.y).clamp(0.0, max_y));
-        }
-    }
-    let selection_wheel = view.selection_drag && navigation_enabled && unobstructed && !single_paging && ui.rect_contains_pointer(avail);
-    let out = page_scroll(ui, scroll, egui::Id::unique(("page-view-scope", view.id)), |ui, viewport| {
-        // egui's drag responses accept every pointer button. Keep a wheel gesture from also
-        // selecting text, drawing a mark, or panning with the Hand tool.
-        if middle_gesture {
-            let opacity = ui.opacity();
-            ui.disable();
-            // Only interactions pause; the document must keep its original colours.
-            ui.set_opacity(opacity);
-        }
-        // Middle-button auto-scroll, the keyboard, precise touchpad input (#759) and its glide
-        // (#531), accelerated wheel surplus (#1072), and a drawing's edge scroll; positive y
-        // moves the content down. All scroll without easing, unlike egui's wheel default.
-        // ScrollArea ignores wheel input during a widget drag. Defer the wheel contribution
-        // until after the text widgets when a selection owns that drag.
-        let wheel_delta = if selection_wheel { Vec2::ZERO } else { precise_scroll + boost_extra };
-        let delta = auto_delta + edge_delta - vec2(0.0, key_scroll) + wheel_delta + glide;
-        if delta != Vec2::ZERO && delta.is_finite() {
-            ui.scroll_with_delta_animation(delta, egui::style::ScrollAnimation::none());
-        }
-        let (resp_rect, resp) = ui.allocate_exact_size(vec2(content_w, content_h), Sense::click_and_drag());
-        view.page_widget = Some(resp.id);
-        // A drag lasts only while egui reports it, so the mark can't outlive one.
-        if !resp.dragged_by(egui::PointerButton::Primary) {
-            view.selection_drag = false;
-        }
-        // The Hand tool pans by this widget's drag, before the pages are laid out (above).
-        if hand {
-            if resp.dragged() {
-                ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
-            } else if resp.hovered() {
-                ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
-            }
-        }
-        let origin = resp_rect.min - vec2(0.0, y_shift);
-        let painter = ui.painter();
-        let visible = viewport.translate(resp_rect.min.to_vec2());
-        let mut wanted = Vec::new();
-        let mut visible_now = Vec::new();
-        view.screen_rects.clear();
-        view.screen_xforms.clear();
-        // Visible heights (points) closer than this are equal: one page size can meet the
-        // viewport a fraction of a point differently once the scroll offset is applied.
-        const TIE: f32 = 0.5;
-        let mut current = view.current;
-        let mut best_overlap = -1.0f32;
-        let mut current_overlap = -1.0f32;
-        let mut current_height = f32::INFINITY;
-        // The pointer as the pages see it: nothing over them (a dialog from the frame it opens),
-        // or a press they hold. The page modules read it rather than egui's raw pointer state.
-        let ptr = PagePointer::read(ui, &resp, modal);
-        let pointer = ptr.pos;
-        // A press on a page makes it the current one (as in Acrobat), so a page command with
-        // no selection (Rotate, Delete) acts on the page the reader pointed at, not on a page
-        // gone to earlier that still shows whole beside it.
-        let pressed = unobstructed && ptr.pressed().is_some();
-        let mut pressed_page = None;
-        if resp.secondary_clicked() {
-            // Set again below when the right-click lands on a link.
-            view.links.context = None;
-        }
-        let mut calc_hover = None;
-        for &i in &visible_pages {
-            badge_hover = None;
-            let r = snap_to_pixels(rects[i].translate(origin.to_vec2()), ppp);
-            if !r.intersects(visible.expand(400.0)) {
-                continue;
-            }
-            if pressed && pressed_page.is_none() && pointer.is_some_and(|p| r.contains(p)) {
-                pressed_page = Some(i);
-            }
-            if r.intersects(visible) {
-                visible_now.push(i);
-                view.screen_rects.push((i, r));
-                view.screen_xforms
-                    .push((i, PageXform { rect: r, rot: view.rotation, pw: info.pages[i].width.max(1.0), ph: info.pages[i].height.max(1.0) }));
-            }
-            let overlap = r.intersect(visible).height();
-            if i == view.current {
-                current_overlap = overlap;
-                current_height = r.height();
-            }
-            // Pages shown equally (two rows wholly on screen) differ only by rounding: the
-            // topmost one counts.
-            if overlap > best_overlap + TIE {
-                best_overlap = overlap;
-                current = i;
-            }
-            let xf = PageXform { rect: r, rot: view.rotation, pw: info.pages[i].width.max(1.0), ph: info.pages[i].height.max(1.0) };
-            // Shadows would darken the preceding page when pages touch.
-            if view.show_page_gaps {
-                painter.add(egui::epaint::Shadow { offset: [0, 3], blur: 14, spread: 0, color: t.page_shadow }.as_shape(r, CornerRadius::ZERO));
-            }
-            painter.rect_filled(r, CornerRadius::ZERO, paper);
-            if let Some(err) = view.errors.get(&i) {
-                painter.rect_filled(r, CornerRadius::ZERO, Color32::from_rgb(0xFB, 0xF4, 0xF4));
-                icons::paint(
-                    ui,
-                    Rect::from_center_size(r.center() - vec2(0.0, 26.0), vec2(28.0, 28.0)),
-                    "triangle-alert",
-                    26.0,
-                    Color32::from_rgb(0xC8, 0x3A, 0x3A),
-                );
-                let message = crate::i18n::fmt(tl!("This page couldn't be displayed.\n{e}"), &[("e", err)]);
-                let msg =
-                    ui.fonts_mut(|f| f.layout(message, theme::regular(12.5), Color32::from_rgb(0x6A, 0x2A, 0x2A), (r.width() - 40.0).max(80.0)));
-                painter.galley(pos2(r.center().x - msg.size().x / 2.0, r.center().y), msg, Color32::BLACK);
-            } else {
-                let (pw_pt, ph_pt) = (info.pages[i].width.max(1.0), info.pages[i].height.max(1.0));
-                // A GPU may take smaller textures than these (OpenGL drivers report as little as
-                // 2048 pixels, and uploading a bigger one aborts), so both stay within its limit.
-                let max_side = ui.ctx().input(|inp| inp.max_texture_side) as f32;
-                let tiled = pw_pt.max(ph_pt) * scale > TILE_THRESHOLD.min(max_side);
-                // Whole-page raster: sharp when small, a low-res backdrop when tiled.
-                let (want_scale, want_tag) = if tiled {
-                    let bs = BASE_SIDE.min(max_side) / pw_pt.max(ph_pt);
-                    (bs, scale_tag(bs))
-                } else {
-                    (scale, tag)
-                };
-                // Under tiles, a whole-page raster sharper than the backdrop (from before the page
-                // grew past the tiling size) is a better backdrop: keep demanding it as it is.
-                match view.pages.get(&i).filter(|p| tiled && p.tag != STALE_TAG && tag_scale(p.tag) >= want_scale) {
-                    Some(p) => wanted.push((i, tag_scale(p.tag), p.tag, None)),
-                    None => wanted.push((i, want_scale, want_tag, None)),
-                }
-                match view.pages.get(&i) {
-                    Some(p) => {
-                        if !tiled && p.tag == want_tag {
-                            xf.texel_aligned(p.tex.size(), ppp).paint_image(painter, p.tex.id(), 0.0, 0.0, 1.0, 1.0);
-                        } else {
-                            // A backdrop, or a raster at an older scale until the new one arrives.
-                            xf.paint_image(painter, p.tex.id(), 0.0, 0.0, 1.0, 1.0);
-                        }
-                    }
-                    None => {
-                        let now = ui.input(|inp| inp.time);
-                        let since = *view.waiting_since.entry(i).or_insert(now);
-                        let msg = if now - since > 6.0 { "Still rendering — this page is unusually complex…" } else { "Rendering…" };
-                        painter.text(r.center(), Align2::CENTER_CENTER, tl!(msg), theme::regular(12.0), t.text_faint);
-                    }
-                }
-                if tiled && r.intersects(visible) {
-                    // Device-pixel geometry of the scaled page, and the visible part of it
-                    // (found by mapping the visible screen corners back into the page). Sides round
-                    // up as whole-page rasters do, so the last partial row and column get tiles.
-                    let (dw, dh) = (device_pixels(pw_pt, scale), device_pixels(ph_pt, scale));
-                    // Adaptive tile side for this zoom and page, within the GPU texture limit:
-                    // a zoomed viewport or a giant sheet is covered by a few large tiles
-                    // instead of many small ones, and each tile costs one full page interpret.
-                    // Never zero (u32 division below).
-                    let ts = tile_side(scale, dw.max(dh)).min(max_side as u32).max(64);
-                    let vis = r.intersect(visible);
-                    let corners = [vis.left_top(), vis.right_top(), vis.right_bottom(), vis.left_bottom()].map(|c| xf.screen_to_norm(c));
-                    let (u0, u1) = corners.iter().fold((1.0f32, 0.0f32), |(a, b), c| (a.min(c.0), b.max(c.0)));
-                    let (v0, v1) = corners.iter().fold((1.0f32, 0.0f32), |(a, b), c| (a.min(c.1), b.max(c.1)));
-                    let (vx0, vy0) = ((u0.max(0.0) * dw as f32) as u32, (v0.max(0.0) * dh as f32) as u32);
-                    let (vx1, vy1) = (((u1.min(1.0) * dw as f32).ceil() as u32).min(dw), ((v1.min(1.0) * dh as f32).ceil() as u32).min(dh));
-                    // Tiles of earlier zooms first, stretched, the nearest scale last (on top):
-                    // until the current tiles arrive, a zoom shows them rather than the backdrop.
-                    let mut older: Vec<(f32, u32, u32, &TextureHandle)> = view
-                        .tiles
-                        .iter()
-                        .filter(|((p, t, _, _), _)| *p == i && *t != tag)
-                        .map(|((_, t, ox, oy), tex)| (tag_scale(*t), *ox, *oy, tex))
-                        .collect();
-                    older.sort_by(|a, b| (b.0 / scale).ln().abs().total_cmp(&(a.0 / scale).ln().abs()));
-                    for (s, ox, oy, tex) in older {
-                        let (ow, oh) = (device_pixels(pw_pt, s) as f32, device_pixels(ph_pt, s) as f32);
-                        let [w, h] = tex.size();
-                        let (x, y) = (ox as f32, oy as f32);
-                        xf.paint_image(painter, tex.id(), x / ow, y / oh, (x + w as f32) / ow, (y + h as f32) / oh);
-                    }
-                    // Visible tiles, nearest the viewport centre first: each tile costs a full
-                    // page interpret, so the workers sharpen what is looked at before the edges.
-                    let (vcx, vcy) = ((vx0 + vx1) as f32 / 2.0, (vy0 + vy1) as f32 / 2.0);
-                    let mut coords: Vec<(u32, u32)> = Vec::new();
-                    for ty in vy0 / ts..=(vy1.saturating_sub(1)) / ts {
-                        for tx in vx0 / ts..=(vx1.saturating_sub(1)) / ts {
-                            coords.push((tx, ty));
-                        }
-                    }
-                    coords.sort_by(|a, b| {
-                        let da = ((a.0 * ts + ts / 2) as f32 - vcx).abs() + ((a.1 * ts + ts / 2) as f32 - vcy).abs();
-                        let db = ((b.0 * ts + ts / 2) as f32 - vcx).abs() + ((b.1 * ts + ts / 2) as f32 - vcy).abs();
-                        da.total_cmp(&db)
-                    });
-                    for (tx, ty) in coords {
-                        let (x, y) = (tx * ts, ty * ts);
-                        let (w, h) = (ts.min(dw.saturating_sub(x)), ts.min(dh.saturating_sub(y)));
-                        if w == 0 || h == 0 {
-                            continue;
-                        }
-                        wanted.push((i, scale, tag, Some(Tile { x, y, w, h })));
-                        if let Some(tex) = view.tiles.get(&(i, tag, x, y)) {
-                            let (fw, fh) = (dw as f32, dh as f32);
-                            xf.texel_aligned([dw as usize, dh as usize], ppp).paint_image(
-                                painter,
-                                tex.id(),
-                                x as f32 / fw,
-                                y as f32 / fh,
-                                (x + w) as f32 / fw,
-                                (y + h) as f32 / fh,
-                            );
-                        }
-                    }
-                }
-            }
-            view.text_background.paint(painter, &xf, i, view.line_editor.as_ref(), view.content.draft.as_ref());
-            if editing_content {
-                view.move_background.paint(painter, &xf, i, info, &view.content, pointer);
-            }
-            if view.show_page_gaps {
-                painter.rect_stroke(r, CornerRadius::ZERO, Stroke::new(0.5, t.border.gamma_multiply(0.8)), egui::StrokeKind::Outside);
-            }
+/// What decides which renders a frame asks for.
+#[derive(Clone, Copy)]
+struct RenderPlan<'a> {
+    visible_pages: &'a [usize],
+    tag: u64,
+    scale: f32,
+    sharp_held: bool,
+    pan_held: bool,
+    hand: bool,
+}
 
-            // Comments: tools, selection, moving and resizing come before text selection.
-            let pcx = comments::PageCx { page: i, xf: &xf, ptr: &ptr, info, tool, prefs, allowed, hidden: comments_hidden, redact_mark };
-            if let QuickTool::Measure(measure_tool) = tool {
-                crate::measure_ui::page_input(ui, &resp, doc, view, &pcx, measure_tool, units);
-            }
-
-            // Form fields take clicks first with the Select tool (as Acrobat fills fields in
-            // every viewing mode); then comments; then text selection.
-            if let QuickTool::Stamp(kind) = tool
-                && allowed
-                && let Some(p) = ptr.within(xf.rect)
-            {
-                ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
-                if resp.clicked() {
-                    // Centred on the click, upright as the page is shown.
-                    let (vx, vy) = xf.screen_to_view(p);
-                    let (w, h) = kind.size();
-                    let corners = [(vx as f64 - w / 2.0, vy as f64 - h / 2.0), (vx as f64 + w / 2.0, vy as f64 + h / 2.0)];
-                    let u: Vec<[f32; 2]> = corners.iter().map(|(x, y)| info.pages[i].view_to_user(*x as f32, *y as f32)).collect();
-                    let rect = [u[0][0].min(u[1][0]) as f64, u[0][1].min(u[1][1]) as f64, u[0][0].max(u[1][0]) as f64, u[0][1].max(u[1][1]) as f64];
-                    let by = (kind.group() == pdfcraft_engine::StampGroup::Dynamic).then(|| by_line.clone());
-                    let shape = pdfcraft_engine::Shape::Stamp { rect, stamp: kind, by };
-                    view.pending_edit = Some(pdfcraft_engine::Edit::AddAnnotation(pdfcraft_engine::NewAnnotation {
-                        page: i,
-                        style: pdfcraft_engine::Style::default_for(&shape),
-                        shape,
-                        contents: String::new(),
-                        author: author.clone(),
-                    }));
-                    stamp_placed = true;
-                }
-            }
-            if let Some(cs) = custom_stamp.as_ref()
-                && allowed
-                && let Some(p) = ptr.within(xf.rect)
-            {
-                ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
-                if resp.clicked() {
-                    // Centred on the click at its natural size (the engine sizes it).
-                    let (vx, vy) = xf.screen_to_view(p);
-                    let u = info.pages[i].view_to_user(vx, vy);
-                    let (x, y) = (u[0] as f64, u[1] as f64);
-                    view.pending_edit = Some(pdfcraft_engine::Edit::AddCustomStamp {
-                        page: i,
-                        rect: [x, y, x, y],
-                        name: cs.name.clone(),
-                        file: pdfcraft_engine::MarkFile { name: cs.file.clone(), bytes: cs.data.clone(), page: cs.page },
-                        author: author.clone(),
-                    });
-                    stamp_placed = true;
-                }
-            }
-            // Over a mark already placed, the Fill & Sign tool picks it up (comments, below).
-            if let QuickTool::Fill(ft) = tool
-                && allowed
-                && !comments::fill_grabs(&pcx, view)
-            {
-                match crate::fill_sign::page_input(
-                    ui,
-                    &resp,
-                    &xf,
-                    &ptr,
-                    i,
-                    info,
-                    ft,
-                    app.fill_text_size,
-                    view,
-                    signature.as_ref(),
-                    initials.as_ref(),
-                    &mut app.signature_preview,
-                    &author,
-                    &date_text,
-                ) {
-                    Some(crate::fill_sign::FillAction::Edit(e)) => view.pending_edit = Some(*e),
-                    Some(crate::fill_sign::FillAction::Signature(e)) => {
-                        view.pending_edit = Some(*e);
-                        view.fill_signature_page = Some(i);
-                    }
-                    Some(crate::fill_sign::FillAction::CreateSignature) => open_signature = true,
-                    Some(crate::fill_sign::FillAction::CreateInitials) => open_initials = true,
-                    Some(crate::fill_sign::FillAction::Refused(why)) => refused = Some(why),
-                    None => {}
-                }
-            }
-            if matches!(tool, QuickTool::SignArea { .. }) {
-                crate::sign_ui::page_input(ui, &resp, &xf, &ptr, i, info, view);
-            }
-            if matches!(tool, QuickTool::MarqueeZoom | QuickTool::Snapshot) {
-                crate::zoom_snap::page_input(ui, &resp, &xf, &ptr, i, view);
-            }
-            if tool == QuickTool::EnhanceCamera {
-                crate::camera_ui::page_input(ui, &resp, &xf, &ptr, i, view, can_modify);
-            }
-            if tool == QuickTool::Crop && crate::crop::page_input(ui, &resp, &xf, &ptr, i, info, view, can_crop) {
-                view.current = i;
-                open_boxes = true;
-            }
-            // `over_field`: a form field is under the pointer and has set its cursor.
-            let (on_field, over_field) = if preparing {
-                let field_tool = match tool {
-                    QuickTool::Field(f) => Some(f),
-                    _ => None,
-                };
-                // While a table is being set up, nothing else is drawn or moved.
-                let allowed = can_modify && table_preview.is_none() && open_table.is_none();
-                let o = crate::prepare::page_input(ui, &resp, &xf, &ptr, i, info, &form, field_tool, allowed, view);
-                field_props |= o.properties;
-                field_placed |= o.placed;
-                open_table = open_table.or(o.table);
-                (o.consumed || field_tool.is_some(), false)
-            } else {
-                use crate::forms_ui::FieldPointer;
-                let field = if tool == QuickTool::Select
-                    && !(editing_content && can_modify && crate::content_ui::select_grabs(&xf, &ptr, i, info, &added, view))
-                    && !comments::select_grabs(&pcx, view)
-                {
-                    crate::forms_ui::page_input(ui, &resp, &xf, &ptr, i, info, &form, can_fill, view)
-                } else {
-                    FieldPointer::Away
-                };
-                (field == FieldPointer::Owned, field == FieldPointer::Over)
-            };
-            // Redact draws boxes off text; so does Highlight (an area highlight, as in Acrobat).
-            let area_tool = tool == QuickTool::Redact && can_modify || tool == QuickTool::Comment(comments::CommentTool::Highlight) && allowed;
-            let boxing = area_tool && {
-                let text = view.page_text(i);
-                let over_text = |p: Pos2| {
-                    let (vx, vy) = xf.screen_to_view(p);
-                    text.as_ref().is_some_and(|t| t.glyphs.iter().any(|g| vx >= g.rect[0] && vx <= g.rect[2] && vy >= g.rect[1] && vy <= g.rect[3]))
-                };
-                crate::redact_ui::page_input(ui, &resp, &xf, &ptr, i, info, over_text, view)
-            };
-            let image_owns_pointer = tool == QuickTool::EditText && crate::edit_text_ui::image_owns_pointer(ui, &xf, &ptr, i, info, view);
-            let on_objects =
-                !image_owns_pointer && tool == QuickTool::EditText && can_modify && crate::object_ui::page_input(ui, &resp, &xf, &ptr, i, doc, view);
-            let lines = if matches!(tool, QuickTool::AddText | QuickTool::EditText) && can_modify {
-                let generation = doc.edit_generation();
-                match view.edit_lines.get(&i) {
-                    Some((g, l)) if *g == generation => l.clone(),
-                    _ => {
-                        let l = doc.text_blocks(i);
-                        view.edit_lines.insert(i, (generation, l.clone()));
-                        l
-                    }
-                }
-            } else {
-                Vec::new()
-            };
-            let over_source = tool == QuickTool::AddText
-                && pointer.is_some_and(|p| {
-                    !crate::content_ui::hits_added(&xf, info, i, &added, p)
-                        && lines.iter().any(|line| xf.user_rect(info, i, line.rect.map(|v| v as f32)).expand(2.0).contains(p))
-                });
-            let source_blocked = over_source && view.content.hold_blocked();
-            if over_source && resp.clicked() && !source_blocked {
-                if let Some(edit) = view.content.finish_draft(&added) {
-                    view.pending_edit = Some(edit);
-                }
-                view.content.selected = None;
-            }
-            let on_content = !on_objects && editing_content && can_modify && {
-                source_blocked
-                    || crate::content_ui::page_input(
-                        ui,
-                        &resp,
-                        &xf,
-                        &ptr,
-                        i,
-                        info,
-                        &added,
-                        tool == QuickTool::AddText && !over_source,
-                        matches!(tool, QuickTool::AddText | QuickTool::EditText),
-                        &text_style,
-                        view,
-                    )
-                    || tool == QuickTool::AddText && !over_source
-            };
-            // Added content owns its gesture; its source text must not queue a second edit.
-            // Edit text & images boxes every paragraph and image whenever the tool is on. Only the
-            // input waits while selected objects or added content own the pointer, or while page
-            // input is blocked (another tab, a dialog, the window unfocused): the boxes stay drawn
-            // instead of vanishing until the pointer comes back.
-            let others_own_pointer = on_objects || on_content;
-            let on_edit_text = (tool == QuickTool::EditText || over_source) && can_modify && {
-                let generation = doc.edit_generation();
-                let images = match view.edit_images.get(&i) {
-                    Some((g, l)) if *g == generation => l.clone(),
-                    _ => {
-                        let l = doc.page_images(i);
-                        view.edit_images.insert(i, (generation, l.clone()));
-                        l
-                    }
-                };
-                // Editable text takes precedence over background/overlapping artwork. Both
-                // inventories are painted every frame, even when text owns the pointer.
-                let text_used =
-                    crate::edit_text_ui::page_input(ui, &resp, &xf, &ptr, i, doc, &lines, view, !others_own_pointer && !image_owns_pointer);
-                let image_used = crate::edit_text_ui::image_input(
-                    ui,
-                    &resp,
-                    &xf,
-                    &ptr,
-                    i,
-                    info,
-                    &images,
-                    view,
-                    &mut image_action,
-                    !others_own_pointer && (image_owns_pointer || !text_used),
-                );
-                !others_own_pointer && (text_used || image_used)
-            };
-            let on_link = tool == QuickTool::Link && can_modify && crate::link_ui::page_input(ui, &resp, &xf, &ptr, i, info, &doc_links, view);
-            if tool == QuickTool::Select
-                && resp.secondary_clicked()
-                && can_modify
-                && let Some(p) = pointer.filter(|p| xf.rect.contains(*p))
-                && let Some(l) = doc.links().iter().find(|l| l.page == i && crate::link_ui::screen_rect(&xf, info, i, l.rect).expand(2.0).contains(p))
-            {
-                view.links.context = Some((i, l.index));
-            }
-            let consumed = on_objects || on_edit_text || on_link || on_content || boxing || on_field || comments::page_input(ui, &resp, &pcx, view);
-
-            let preview_target =
-                (matches!(tool, QuickTool::Select | QuickTool::Fill(_)) && !comments_hidden).then_some(view.comments.selected).flatten();
-            view.signature_drag.prepare(ui.ctx(), doc, preview_target, scale);
-            view.signature_drag.paint(painter, &pcx, &view.comments, view.pending_edit.as_ref());
-
-            // Any press on the page ends Select All of the document: text read or not, any tool,
-            // on a link too.
-            // A press that lands on something drawn over the page (a menu, a dialog) is not one.
-            if view.all_text && pressed_page == Some(i) {
-                view.all_text = false;
-            }
-            // Text layer: find matches, selection, I-beam and drag-to-select.
-            let to_screen = |g: [f32; 4]| xf.view_rect(g);
-            if let Some(text) = view.texts.get(&i).cloned() {
-                if let Some(f) = &view.find {
-                    for (k, (mp, range)) in f.matches.iter().enumerate() {
-                        if *mp != i {
-                            continue;
-                        }
-                        let current = f.current == Some(k);
-                        for lr in text.line_rects(range.clone()) {
-                            let fill = if current {
-                                Color32::from_rgba_unmultiplied(255, 140, 0, 110)
-                            } else {
-                                Color32::from_rgba_unmultiplied(255, 214, 0, 90)
-                            };
-                            painter.rect_filled(to_screen(lr).expand(1.0), CornerRadius::same(2), fill);
-                        }
-                    }
-                }
-                if view.all_text {
-                    for lr in text.line_rects(0..text.glyphs.len()) {
-                        painter.rect_filled(to_screen(lr), CornerRadius::same(1), Color32::from_rgba_unmultiplied(0x3A, 0x7B, 0xF0, 70));
-                    }
-                }
-                if let Some(sel) = view.selection.filter(|s| s.page == i) {
-                    for lr in sel.rects(&text) {
-                        painter.rect_filled(to_screen(lr), CornerRadius::same(1), Color32::from_rgba_unmultiplied(0x3A, 0x7B, 0xF0, 70));
-                    }
-                    // The rectangle being drawn, as Acrobat shows it while column-selecting.
-                    if let Span::Column { rect } = sel.span
-                        && resp.dragged()
-                    {
-                        let outline = Stroke::new(1.0, Color32::from_rgb(0x3A, 0x7B, 0xF0));
-                        painter.rect_stroke(to_screen(rect), CornerRadius::ZERO, outline, egui::StrokeKind::Middle);
-                    }
-                }
-                if selects_text
-                    && !consumed
-                    && let Some(p) = pointer.filter(|p| r.contains(*p))
-                {
-                    let (vx, vy) = xf.screen_to_view(p);
-                    let over_text = text.glyphs.iter().any(|g| vx >= g.rect[0] && vx <= g.rect[2] && vy >= g.rect[1] && vy <= g.rect[3]);
-                    let over_link = info.links.iter().any(|l| l.page == i && xf.user_rect(info, i, l.rect).contains(p));
-                    // Column select (#740): the Column select tool, or Alt (Option on macOS) held
-                    // while a drag starts, as in Acrobat.
-                    let column = tool == QuickTool::ColumnSelect || ui.input(|inp| inp.modifiers.alt);
-                    // A link or a form field under the pointer keeps its own cursor: a check box
-                    // drawn with a glyph, or set on printed text, shows the hand, not the I-beam.
-                    // So do the mode bar and side panels over a page scrolled under them (#2755),
-                    // unless a selection is being dragged there.
-                    let cursor_free = !over_link && !over_field && (resp.contains_pointer() || resp.dragged());
-                    if column && cursor_free {
-                        ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
-                    } else if over_text && cursor_free {
-                        ui.ctx().set_cursor_icon(egui::CursorIcon::Text);
-                    }
-                    // The pages' press, kept when its release came in the same frame (#2100): it
-                    // still starts multi-click selection.
-                    let press_here = ptr.origin.is_some_and(|o| r.contains(o));
-                    let pressed = ptr.pressed().is_some();
-                    if pressed && press_here && !over_link {
-                        let now = ui.input(|inp| inp.time);
-                        // The same limits egui uses to count clicks on release.
-                        let (max_delay, max_dist) = ui.ctx().options(|o| (o.input_options.max_double_click_delay, o.input_options.max_click_dist));
-                        let is_consecutive =
-                            now - view.last_press_time <= max_delay && view.last_press_pos.is_some_and(|pos| pos.distance(p) <= max_dist);
-                        view.clicks = if is_consecutive { view.clicks.saturating_add(1) } else { 1 };
-                        view.last_press_time = now;
-                        view.last_press_pos = Some(p);
-
-                        // Multi-click highlights immediately on pointer press instead of release (#1024).
-                        let clicks = if view.clicks > 2 && tool != QuickTool::Select { 1 } else { view.clicks };
-                        if clicks >= 2 && over_text {
-                            let span = text.nearest(vx, vy).and_then(|a| click_unit(&text, clicks, a));
-                            if let Some((first, last)) = span {
-                                view.selection = Some(Selection::run(i, first, last));
-                            }
-                        }
-                    }
-                    if resp.drag_started() && press_here && !over_link {
-                        // A drag replaces the selection without passing through none, so a
-                        // re-drag over text whose bar Copy closed would keep the bar hidden.
-                        view.actions_dismissed = None;
-                        view.selection_drag = true;
-                        let origin = ptr.origin.unwrap_or(p);
-                        let (ox, oy) = xf.screen_to_view(origin);
-                        if view.clicks < 2 {
-                            view.selection = if column {
-                                Some(Selection { page: i, span: Span::Column { rect: [ox, oy, vx, vy] } })
-                            } else {
-                                text.nearest(ox, oy).map(|a| Selection::run(i, a, a))
-                            };
-                        }
-                    }
-                    let clicks = if view.clicks > 2 && tool != QuickTool::Select { 1 } else { view.clicks };
-                    if resp.dragged()
-                        && let Some(sel) = view.selection.as_mut().filter(|s| s.page == i)
-                    {
-                        match &mut sel.span {
-                            // After a multi-click the drag extends by its unit (#1685), as in
-                            // Acrobat and browsers: whole words or lines, always keeping the one
-                            // clicked, which holds the anchor whichever way the drag went.
-                            Span::Run { anchor, head } if clicks >= 2 => {
-                                if let Some(h) = text.nearest(vx, vy)
-                                    && let Some((first, last)) = click_unit(&text, clicks, *anchor)
-                                {
-                                    let (to_first, to_last) = click_unit(&text, clicks, h).unwrap_or((h, h));
-                                    (*anchor, *head) = if to_first < first { (last, to_first) } else { (first, to_last.max(last)) };
-                                }
-                            }
-                            Span::Run { head, .. } => {
-                                if let Some(h) = text.nearest(vx, vy) {
-                                    *head = h;
-                                }
-                            }
-                            Span::Column { rect } => {
-                                rect[2] = vx;
-                                rect[3] = vy;
-                            }
-                        }
-                    }
-                    // A rectangle around no text selects nothing.
-                    if resp.drag_stopped()
-                        && view.selection.is_some_and(|s| s.page == i && matches!(s.span, Span::Column { .. }) && s.text(&text).is_empty())
-                    {
-                        view.selection = None;
-                    }
-                    // Quick clicks widen the selection: two a word, three the line, four the page.
-                    // Release-based fallback for platforms or synthetic events that report double_clicked.
-                    let release_clicks = if resp.triple_clicked() {
-                        view.clicks.max(2).saturating_add(1)
-                    } else if resp.double_clicked() {
-                        view.clicks.max(2)
-                    } else {
-                        0
-                    };
-                    if release_clicks > 0 {
-                        view.clicks = release_clicks;
-                    }
-                    let clicks = if view.clicks > 2 && tool != QuickTool::Select { 1 } else { view.clicks };
-                    // Only on the frame egui reports the multi-click: `view.clicks` outlives it, and
-                    // acting on every frame re-selected the word as soon as a selection was cleared
-                    // (a highlight made by the double-click left its word selected).
-                    if release_clicks > 0 && clicks >= 2 && over_text {
-                        if view.selection.is_none() {
-                            let span = text.nearest(vx, vy).and_then(|a| click_unit(&text, clicks, a));
-                            if let Some((first, last)) = span {
-                                view.selection = Some(Selection::run(i, first, last));
-                            }
-                        }
-                    } else if resp.clicked() && view.clicks < 2 && !over_link {
-                        // ⇧-click extends a selection on this page to the click, keeping its
-                        // anchor (#527). Otherwise (no shift, no selection on this page, or a
-                        // column selection, which has no anchor glyph; a selection cannot yet
-                        // span pages) a click clears the selection.
-                        let shift = ui.input(|inp| inp.modifiers.shift);
-                        match (view.selection.as_mut().filter(|s| shift && s.page == i).map(|s| &mut s.span), text.nearest(vx, vy)) {
-                            (Some(Span::Run { head, .. }), Some(h)) => *head = h,
-                            _ => view.selection = None,
-                        }
-                    }
-                }
-            }
-
-            if tool == QuickTool::Select && !consumed {
-                crate::image_pick::page_input(&resp, &xf, i, info, doc, pointer, view);
-            }
-            crate::image_pick::drop_stale(doc, view);
-            crate::image_pick::paint(painter, &xf, i, info, view);
-            comments::page_after_text(&resp, &pcx, view);
-            if tool == QuickTool::Redact && can_modify {
-                crate::redact_ui::after_text(&resp, i, info, view);
-            }
-            if area_tool {
-                crate::redact_ui::paint(painter, i, view, pointer);
-            }
-            comments::paint_page(ui, painter, &pcx, view);
-            if editing_content {
-                crate::content_ui::paint_page(painter, &xf, i, info, &added, view, pointer);
-            }
-            if tool == QuickTool::EditText {
-                crate::object_ui::paint(painter, &xf, i, info, &view.objects);
-            }
-            if tool == QuickTool::EnhanceCamera {
-                crate::camera_ui::paint(painter, &xf, i, view);
-            }
-            if tool == QuickTool::Link {
-                crate::link_ui::paint(painter, &xf, i, info, &doc_links, view, pointer);
-            }
-            if preparing {
-                crate::prepare::paint_page(ui, painter, &xf, i, info, &form, view, pointer);
-                if let Some(preview) = &table_preview {
-                    crate::field_table_ui::paint_preview(painter, &xf, i, preview);
-                }
-                if calc_order {
-                    let selected = view.prepare.selected.as_ref().map(|(name, _)| name.as_str());
-                    if let Some(name) =
-                        crate::calc_order_ui::paint_page(painter, &xf, i, info, &form, &view.calc_order, generation, selected, pointer)
-                    {
-                        calc_hover = Some(name);
-                    }
-                }
-            } else {
-                crate::forms_ui::paint_page(painter, &xf, i, info, &form, view, pointer);
-            }
-
-            // Form-field highlight (Acrobat's "Highlight existing fields"); required fields get a
-            // red border. Radio buttons and round XFA check boxes are round, and so is theirs (as
-            // in Acrobat). Only what can be filled is marked: a read-only widget (its field's, or a
-            // radio button's own) is left as it is drawn.
-            if view.highlight_fields {
-                for f in form.iter() {
-                    let required = f.has(pdfcraft_engine::field_flags::REQUIRED);
-                    for w in f.widgets.iter().filter(|w| w.page == Some(i) && !w.hidden && !w.read_only) {
-                        let r = w.rect;
-                        let sr = xf.user_rect(info, i, [r[0] as f32, r[1] as f32, r[2] as f32, r[3] as f32]);
-                        let tint = Color32::from_rgba_unmultiplied(0x6E, 0x8E, 0xF5, 48);
-                        let (width, color) =
-                            if required { (2.0, Color32::from_rgb(0xE3, 0x22, 0x22)) } else { (1.0, Color32::from_rgb(0x6E, 0x8E, 0xF5)) };
-                        if w.round {
-                            let radius = sr.width().min(sr.height()) / 2.0;
-                            painter.circle_filled(sr.center(), radius, tint);
-                            painter.circle_stroke(sr.center(), radius - width / 2.0, Stroke::new(width, color));
-                        } else {
-                            painter.rect_filled(sr, CornerRadius::same(1), tint);
-                            painter.rect_stroke(sr, CornerRadius::same(1), Stroke::new(width, color), egui::StrokeKind::Inside);
-                        }
-                    }
-                }
-            }
-            // Fill & Sign keeps its placement cursor clear of link/comment hover feedback. Tips
-            // draw above the palette, so none shows while it is open, even beside it.
-            if !matches!(tool, QuickTool::Fill(_))
-                && unobstructed
-                && let Some(p) = pointer
-            {
-                for l in info.links.iter().filter(|l| l.page == i) {
-                    let sr = xf.user_rect(info, i, l.rect);
-                    if sr.contains(p) {
-                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-                        let label = match &l.target {
-                            LinkTarget::Page(n, _) => {
-                                crate::i18n::fmt(tl!("Go to page {p}"), &[("p", info.pages.get(*n).map(|p| p.label.as_str()).unwrap_or("?"))])
-                            }
-                            LinkTarget::Uri(u) => u.clone(),
-                            LinkTarget::SetLayers { .. } => tl!("Set layer visibility").to_string(),
-                            LinkTarget::RemoteGoTo { file, .. } => file.clone(),
-                            LinkTarget::Other(s) => crate::i18n::fmt(tl!("{s} action"), &[("s", s)]),
-                        };
-                        hover_text = Some((p, label));
-                        if resp.clicked() && tool == QuickTool::Select && !consumed {
-                            clicked_link = Some(l.target.clone());
-                        }
-                    }
-                }
-                // Annotation hover shows the comment, as Acrobat's popups do; not while drawing
-                // freehand, where it would cover the next stroke (#429).
-                let freehand = matches!(tool, QuickTool::Comment(comments::CommentTool::Ink | comments::CommentTool::Eraser));
-                let gesturing = view.comments.gesture.is_some() || freehand;
-                // Inspection sorts annotations spatially, but the renderer paints in /Annots
-                // order. Keep the shared list intact and choose the last eligible raw index.
-                if hover_text.is_none()
-                    && !gesturing
-                    && let Some((_, text)) = info
-                        .annotations
-                        .iter()
-                        .filter(|a| a.page == i)
-                        .filter(|a| {
-                            !(prefs.hide_empty_highlight_hover && a.subtype == "Highlight" && a.contents.as_deref().is_none_or(str::is_empty))
-                        })
-                        .filter(|a| pcx.screen_rects(a).any(|r| r.contains(p)))
-                        .filter_map(|a| annotation_hover_text(a).map(|text| (a.index, text)))
-                        .max_by_key(|(index, _)| *index)
-                {
-                    hover_text = Some((p, text));
-                }
-            }
-            for (mp, mr, mc) in &view.compare_marks {
-                if *mp == i {
-                    let sr = xf.user_rect(info, i, *mr).expand(1.5);
-                    painter.rect_filled(sr, CornerRadius::same(2), mc.gamma_multiply(0.28));
-                }
-            }
-            if let Some((fp, fr, t0)) = view.flash
-                && fp == i
-            {
-                let now = ui.input(|inp| inp.time);
-                let t0 = if t0 == 0.0 { now } else { t0 };
-                view.flash = Some((fp, fr, t0));
-                let age = (now - t0) as f32;
-                if age < 1.6 {
-                    let a = ((1.6 - age) / 1.6 * 255.0) as u8;
-                    let sr = xf.user_rect(info, i, fr).expand(4.0);
-                    painter.rect_stroke(
-                        sr,
-                        CornerRadius::same(3),
-                        Stroke::new(2.5, Color32::from_rgba_unmultiplied(0x1B, 0x63, 0xE0, a)),
-                        egui::StrokeKind::Outside,
-                    );
-                    ui.ctx().request_repaint();
-                } else {
-                    view.flash = None;
-                }
-            }
-            // Validation is viewer chrome over the signer's original artwork, which
-            // may still say "Signature Not Verified". These badges never enter document
-            // streams, image/text exports, vector printing or Print as Image.
-            for badge in signature_badges(&doc.signatures, i) {
-                let [x0, y0, x1, y1] = badge.rect;
-                let sr = xf.user_rect(info, i, [x0 as f32, y0 as f32, x1 as f32, y1 as f32]);
-                let (icon, color) = crate::sign_ui::signature_status_style(badge.status);
-                painter.rect_stroke(sr, CornerRadius::same(2), Stroke::new(1.5, color), egui::StrokeKind::Outside);
-                // A widget too small for the mark keeps its outline: the verdict still shows.
-                if sr.width() < 4.0 || sr.height() < 4.0 {
-                    continue;
-                }
-                // Big enough to read at a glance, small enough to leave the signer's own
-                // text visible around it.
-                let side = (sr.width().min(sr.height()) * 0.8).clamp(24.0, 192.0);
-                let mark = Rect::from_center_size(sr.center(), vec2(side, side));
-                icons::paint(ui, mark, icon, side * 0.64, color);
-                if let Some(p) = pointer.filter(|p| mark.expand(2.0).contains(*p)) {
-                    badge_hover = Some((p, badge.summary.to_string()));
-                }
-            }
-            // Overlapping widgets paint in order, so the topmost badge owns the hover; an
-            // earlier link or annotation hover still wins over any badge.
-            if hover_text.is_none() {
-                hover_text = badge_hover.take();
-            }
-        }
-        if calc_order {
-            view.calc_order.set_hover_page(calc_hover);
-            let selected = view.prepare.selected.as_ref().map(|(name, _)| name.as_str());
-            crate::calc_order_ui::paint_trace(ui, painter, visible, &view.calc_order, generation, selected);
-        }
-        // ScrollArea ignores the wheel while any widget is dragged, so a text-selection drag
-        // scrolls the page itself (#721). After the page loop, so it keeps scrolling once the
-        // pointer leaves the selection's page for the gap or the next page; over the whole
-        // document area, like #759. Combine direct and smoothed motion in one request so mixed
-        // Point and Line events retain their full contribution.
-        if selection_wheel {
-            let smooth =
-                if view.precise_scroll_until == 0.0 { ui.input_mut(|input| std::mem::take(&mut input.smooth_scroll_delta)) } else { Vec2::ZERO };
-            let delta = precise_scroll + boost_extra + smooth;
-            if delta != Vec2::ZERO && delta.is_finite() {
-                ui.scroll_with_delta_animation(delta, egui::style::ScrollAnimation::none());
-            }
-        }
-        // Held at the top or bottom edge, or dragged past it, a text selection scrolls the view
-        // so it can reach text off screen (#1670); the selection follows the pointer on its page.
-        if view.selection_drag
-            && navigation_enabled
-            && unobstructed
-            && !single_paging
-            && let Some(p) = ptr.pos
-        {
-            let dy = crate::autoscroll::edge_delta(p.y, avail, ui.input(|i| i.stable_dt));
-            if dy != 0.0 {
-                view.end_find_following();
-                ui.scroll_with_delta_animation(vec2(0.0, dy), egui::style::ScrollAnimation::none());
-                // Keep scrolling while the pointer rests there and sends no events.
-                ui.ctx().request_repaint();
-            }
-        }
-        // The page navigated to stays current while no page shows more of itself, so the next
-        // page step starts from it rather than from a page further down the screen (#188).
-        // It also stays current while it is wholly on screen: a short page (a cheque) gone to
-        // from the Pages panel shows less of itself than the tall page below it, and must not
-        // hand the highlight to that page.
-        if current_overlap >= best_overlap - TIE || current_overlap >= current_height - TIE {
-            current = view.current;
-        }
-        if let Some(p) = pressed_page {
-            current = p;
-        }
-        if view.continuous {
-            view.current = current;
-        }
-        resp.context_menu(|ui| {
-            // Preparing a form: the selected field's menu.
-            if preparing && let Some((name, wi)) = view.prepare.selected.clone() {
-                // Several fields: Align, Center, Distribute, Set Fields to Same Size.
-                if !view.prepare.also.is_empty() {
-                    use crate::prepare::Arrange as A;
-                    let others = view.prepare.also.clone();
-                    let anchor = (name.clone(), wi);
-                    let mut pick = |ui: &mut egui::Ui, op: A, label: &str| {
-                        if ui.add_enabled(can_modify, egui::Button::new(tl!(label))).clicked() {
-                            view.pending_edit = crate::prepare::arrange(&form, &anchor, &others, op);
-                            ui.close();
-                        }
-                    };
-                    ui.menu_button(tl!("Align"), |ui| {
-                        pick(ui, A::AlignLeft, "Left");
-                        pick(ui, A::AlignRight, "Right");
-                        pick(ui, A::AlignTop, "Top");
-                        pick(ui, A::AlignBottom, "Bottom");
-                        pick(ui, A::AlignCenterV, "Center vertically");
-                        pick(ui, A::AlignCenterH, "Center horizontally");
-                    });
-                    ui.menu_button(tl!("Distribute"), |ui| {
-                        pick(ui, A::DistributeH, "Horizontally");
-                        pick(ui, A::DistributeV, "Vertically");
-                    });
-                    ui.menu_button(tl!("Set Fields to Same Size"), |ui| {
-                        pick(ui, A::SameHeight, "Height");
-                        pick(ui, A::SameWidth, "Width");
-                        pick(ui, A::SameSize, "Both");
-                    });
-                    ui.separator();
-                }
-                if ui.button(tl!("Properties…")).clicked() {
-                    field_menu = Some(FieldMenu::Properties);
-                    ui.close();
-                }
-                if ui.add_enabled(can_modify, egui::Button::new(tl!("Duplicate…"))).clicked() {
-                    field_menu = Some(FieldMenu::Duplicate(name.clone()));
-                    ui.close();
-                }
-                ui.separator();
-                let delete = if view.prepare.also.is_empty() { "Delete" } else { "Delete selected fields" };
-                if ui.add_enabled(can_modify, egui::Button::new(tl!(delete))).clicked() {
-                    view.pending_edit = crate::prepare::delete_selected(view);
-                    ui.close();
-                }
-                return;
-            }
-            if let Some((page, index)) = view.links.context {
-                if ui.button(tl!("Properties…")).clicked() {
-                    view.links.open_existing = Some((page, index));
-                    ui.close();
-                }
-                if ui.add_enabled(can_modify, egui::Button::new(tl!("Delete"))).clicked() {
-                    view.pending_edit = Some(Edit::DeleteLink { page, index });
-                    view.links.selected = None;
-                    view.links.context = None;
-                    ui.close();
-                }
-                ui.separator();
-                if ui.add_enabled(can_modify, egui::Button::new(tl!("Remove all links"))).clicked() {
-                    view.pending_edit = Some(Edit::RemoveLinks { pages: None });
-                    view.links.selected = None;
-                    view.links.context = None;
-                    ui.close();
-                }
-                return;
-            }
-            if view.comments.selected.is_none() {
-                let selected = view.selected_text().is_some_and(|t| !t.is_empty());
-                let key = crate::commands::shortcut_label(ui.ctx(), crate::commands::COPY);
-                if ui.add_enabled(can_copy && selected, egui::Button::new(tl!("Copy")).shortcut_text(key)).clicked() {
-                    copy_selected = true;
-                    ui.close();
-                }
-                ui.separator();
-            }
-            // Over a picture (and no comment): Copy Image, as in Acrobat's page menu.
-            let mut copy_image = None;
-            if view.comments.selected.is_none()
-                && let Some((page, at)) = view.comments.context_at
-            {
-                // The page's content is parsed once per right-click, not on every frame the menu is open.
-                let key = egui::Id::unique("copy-image-under-menu");
-                let cached = ui.data(|d| d.get_temp::<(usize, [f64; 2], Option<usize>)>(key)).filter(|c| c.0 == page && c.1 == at);
-                let hit = match cached {
-                    Some(c) => c.2,
-                    None => {
-                        let hit = doc.page_image_at(page, at);
-                        ui.data_mut(|d| d.insert_temp(key, (page, at, hit)));
-                        hit
-                    }
-                };
-                if let Some(image) = hit {
-                    if ui.button(tl!("Copy Image")).clicked() {
-                        copy_image = Some(comments::CanvasAction::CopyImage(page, image));
-                        ui.close();
-                    }
-                    if ui.button(tl!("Copy Image in Original Format")).clicked() {
-                        copy_image = Some(comments::CanvasAction::CopyImageFile(page, image));
-                        ui.close();
-                    }
-                    ui.separator();
-                }
-            }
-            canvas_action = comments::context_menu(ui, view, info, prefs, allowed, can_modify).or(copy_image);
-        });
-        (wanted, visible_now)
-    });
-    view.single_edges = visible_pages.first().copied().filter(|_| !view.continuous).map(|page| {
-        // At the top once the page's top edge shows where going to a page puts it (a gap
-        // below the window's top). Within a point, as for wheel paging, so layout rounding
-        // can't hide an edge.
-        let max_y = (out.content_size.y - out.inner_rect.height()).max(0.0);
-        (page, out.state.clamped_offset().y <= MARGIN - view.page_gap() + 1.0, out.state.clamped_offset().y >= max_y - 1.0)
-    });
-
-    view.viewport_screen = out.inner_rect;
-    view.auto_scroll.paint(ui, avail);
-    if unobstructed && matches!(tool, QuickTool::Select | QuickTool::ColumnSelect) {
-        copy_selected |= selection_actions(ui, avail, view, info, prefs, allowed && !comments_hidden, can_copy);
-    }
-
-    // Collect all main-page demand, including cached surfaces, for byte admission later.
-    // Pan-settle debounce for tiled pages: each tile costs a full page interpret, so holding
-    // fresh tiles back while the scroll offset is still moving keeps a drag on the stretched
-    // backdrop/older tiles instead of queueing a storm of interprets (one per frame) that
-    // the workers cannot cancel mid-operator. Fresh tiles go out once the pan settles;
-    // pages with nothing on screen yet still queue.
-    let scroll_offset = out.state.clamped_offset();
-    // The document ScrollArea's own scroll surfaces move the offset without the wheel deltas
-    // above: its two scroll-bar tracks/handles and, for touch or the Hand tool, its drag
-    // background. The output gives us the area id, and egui's pinned ScrollArea registers those
-    // widgets under `id.with(0)` (horizontal), `id.with(1)` (vertical) and `id.with("area")`.
-    // Ask for their exact responses instead of treating any held drag as scrolling: a text
-    // selection, a panel splitter or another widget's drag must not excuse the programmatic jump
-    // a search flash makes, while a track click (which moves the offset with no pointer motion)
-    // must still count as the reader scrolling.
-    let scroll_surface = |id: egui::Id| ui.ctx().read_response(id).is_some_and(|r| r.is_pointer_button_down_on() || r.dragged() || r.clicked());
-    let pointer_scrolling = scroll_surface(out.id.with(0usize)) || scroll_surface(out.id.with(1usize)) || scroll_surface(out.id.with("area"));
-    if pointer_scrolling && (scroll_offset - view.last_scroll).length() > 2.0 {
-        view.end_find_following();
-    }
-    let now_settle = ui.input(|i| i.time);
-    if (scroll_offset - view.last_scroll).length() > 2.0 {
-        view.pan_hold_until = now_settle + 0.25;
-        ui.ctx().request_repaint_after(std::time::Duration::from_millis(280));
-    }
-    if glide != Vec2::ZERO {
-        view.fling.moved((scroll_offset - view.last_scroll).length() > 0.01);
-    }
-    view.last_scroll = scroll_offset;
-    let pan_held = now_settle < view.pan_hold_until;
-    let (mut wanted, visible_now) = out.inner;
+/// Queues the renders for the pages and tiles `renders` wants (nearest the view first), prefetches the
+/// rows either side (in continuous view, the rows ahead in the scroll direction), frees tiles of far
+/// pages and old zooms, and asks for the text layers.
+fn plan_renders(ui: &egui::Ui, view: &mut DocView, info: &DocInfo, renders: PageRenders, plan: &RenderPlan<'_>) {
+    let (mut wanted, visible_now) = renders;
+    let RenderPlan { visible_pages, tag, scale, sharp_held, pan_held, hand } = *plan;
     // Single-page and two-page views draw only the current row, so the next one was first asked
     // for on the turn and showed blank paper until it rendered. Prefetch the rows either side,
     // as continuous scrolling does for the pages just off screen.
@@ -2312,17 +2483,20 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         for i in (last.saturating_add(1)..=last.saturating_add(n)).chain(first.saturating_sub(n)..first) {
             let Some(p) = info.pages.get(i).filter(|_| !view.errors.contains_key(&i)) else { continue };
             // As drawn: the whole page at this scale, or the backdrop of a tiled page.
-            let side = p.width.max(p.height).max(1.0);
-            wanted.push(if side * scale > TILE_THRESHOLD.min(max_side) {
-                let bs = BASE_SIDE.min(max_side) / side;
-                (i, bs, scale_tag(bs), None)
-            } else {
-                (i, scale, tag, None)
-            });
+            wanted.push(prefetch_demand(view, p, i, scale, tag, max_side));
         }
     }
+    // Continuous view also asks for the rows ahead of the way it last moved.
+    let max_side = ui.ctx().input(|inp| inp.max_texture_side) as f32;
+    for i in scroll_prefetch(view, &visible_now) {
+        if view.errors.contains_key(&i) || wanted.iter().any(|w| w.0 == i) {
+            continue;
+        }
+        let Some(p) = info.pages.get(i) else { continue };
+        wanted.push(prefetch_demand(view, p, i, scale, tag, max_side));
+    }
     let cur = view.current;
-    wanted.sort_by_key(|w| (!visible_now.contains(&w.0), w.0.abs_diff(cur), w.3.is_some()));
+    order_demand(view, &mut wanted, &visible_now);
     // Tiles of far-away pages are useless: free them. Tiles of an earlier zoom stay for a page
     // that is on screen, whether or not the page is tiled at this zoom (#2196): a zoom out below
     // the tiling threshold used to drop the tiles of the zoom just left, so coming back to it
@@ -2419,7 +2593,226 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     }));
     view.frame_queue = queue;
     view.frame_visible = visible_now.iter().copied().collect();
+}
 
+/// Acts on the notice bar button that was clicked.
+fn apply_notice(app: &mut PdfCraftApp, index: usize, notice: Option<Notice>) {
+    match notice {
+        #[cfg(not(target_arch = "wasm32"))]
+        Some(Notice::Reload) => app.watch.reload_request = app.views.get(index).map(|view| view.id),
+        #[cfg(target_arch = "wasm32")]
+        Some(Notice::Reload) => {}
+        Some(Notice::Repairs) => app.dialog = Some(crate::Dialog::Properties(crate::PropsTab::Advanced)),
+        Some(Notice::Security) => app.dialog = Some(crate::Dialog::Properties(crate::PropsTab::Security)),
+        Some(Notice::Unlock) => {
+            if let Some(doc) = app.views.get(index).and_then(|view| app.session.get(view.id)) {
+                app.unlock_prompt = Some(crate::UnlockPrompt::new(doc, None));
+            }
+        }
+        // Flags the view: the tab closes at the top of the next frame, where no document
+        // borrow is held.
+        Some(Notice::Close) => {
+            if let Some(view) = app.views.get_mut(index) {
+                view.close_requested = true;
+            }
+        }
+        Some(Notice::Signatures) => app.right = Some(RightPanel::Signatures),
+        Some(Notice::FieldHighlights(on)) => app.view_defaults.highlight_fields = on,
+        Some(Notice::Console) => app.dialog = Some(crate::Dialog::JsConsole),
+        // Back on in Preferences ▸ General.
+        Some(Notice::HideSecured) => app.show_secured_notice = false,
+        // Handled by the app with the other view actions (`ViewAction`).
+        Some(Notice::LockSignatures) => {
+            if let Some(view) = app.views.get_mut(index) {
+                view.pending_action = Some(ViewAction::LockSignatures);
+            }
+        }
+        None => {}
+    }
+}
+
+/// The snapshot notice bar's Close was clicked: close here, where no document borrow is held. The
+/// tab is looked up by its view key (indices may have shifted since the click, and split view can
+/// show one document in two tabs), and the flag rides its own view, so a stale flag can never
+/// close the wrong tab. Whether a tab was closed (or asked about).
+fn close_requested_tab(app: &mut PdfCraftApp, index: usize) -> bool {
+    let pending = app.views.get(index).filter(|v| v.close_requested).map(|v| v.view_key()).and_then(|key| app.tab_with_key(key));
+    let Some(i) = pending else { return false };
+    app.views[i].close_requested = false;
+    app.request_close_tab(i);
+    true
+}
+
+/// Where the pages are laid out, for placing the scroll area.
+#[derive(Clone, Copy)]
+struct ScrollGeometry<'a> {
+    rects: &'a [Rect],
+    y_shift: f32,
+    content_w: f32,
+    content_h: f32,
+    avail: Rect,
+    middle_gesture: bool,
+    hand: bool,
+}
+
+/// The page view's scroll area, with the offset this frame's jumps, drags and zoom anchor ask for.
+fn page_scroll_area(ui: &egui::Ui, view: &mut DocView, geometry: &ScrollGeometry<'_>) -> egui::ScrollArea {
+    let ScrollGeometry { rects, y_shift, content_w, content_h, avail, middle_gesture, hand } = *geometry;
+    let mut scroll = egui::ScrollArea::both().auto_shrink([false, false]).scroll_source(egui::scroll_area::ScrollSource {
+        drag: if middle_gesture {
+            egui::scroll_area::DragScroll::Never
+        } else if hand {
+            egui::scroll_area::DragScroll::Always
+        } else {
+            egui::scroll_area::DragScroll::OnTouch
+        },
+        ..Default::default()
+    });
+    // Each tab keeps its own scroll position when switching tabs (#189), and so does each view of
+    // one document in split view.
+    scroll = scroll.id_salt(("page-view", view.view_key()));
+    // Every scroll here asks for no animation. An animated area would still queue a zero-length
+    // offset target for the next frame, which overwrites the jump a page turn just set.
+    scroll = scroll.animated(false);
+    // A document that hides the window's interface (`HideWindowUI`) hides the scroll bars too;
+    // the wheel, keys and Hand tool still scroll.
+    if view.interface.hidden.window_ui {
+        scroll = scroll.scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden);
+    }
+    // A newly opened document starts at the top. eframe saves egui's memory with the settings
+    // and document ids start again at 1 every launch, so the offset stored under this id can be
+    // where an earlier session left another document.
+    if !std::mem::replace(&mut view.shown, true) {
+        scroll = scroll.scroll_offset(Vec2::ZERO);
+    }
+    // The Hand tool pans here, before the pages are laid out, so the page moves with the pointer
+    // in the frame the pointer moves (#924). Scrolling by the drag from inside the area moved the
+    // page only after that frame was drawn, a frame behind. The frame egui tells the drag from a
+    // click, the page catches up with all the pointer has moved since the press. A jump asked for
+    // below still wins.
+    if hand
+        && !middle_gesture
+        && let Some(id) = view.page_widget.filter(|id| ui.ctx().is_being_dragged(*id))
+    {
+        let moved = if ui.ctx().drag_started_id() == Some(id) {
+            ui.input(|i| i.pointer.total_drag_delta()).unwrap_or(Vec2::ZERO)
+        } else {
+            ui.input(|i| i.pointer.delta())
+        };
+        if moved != Vec2::ZERO {
+            view.end_find_following();
+        }
+        // Within the content, as egui keeps it: past an end the page would show there for a
+        // frame and spring back. `max` is never NaN or below zero, so the clamp can't panic.
+        let max = vec2((content_w - avail.width()).max(0.0), (content_h - avail.height()).max(0.0));
+        scroll = scroll.scroll_offset((view.last_scroll - moved).clamp(Vec2::ZERO, max));
+    }
+    if let Some(v) = view.sync_scroll.take() {
+        scroll = scroll.scroll_offset(v);
+    }
+    if let Some((page, fx, fy, rel)) = view.zoom_anchor.take() {
+        let r = rects[page.min(rects.len() - 1)];
+        let point = pos2(r.left() + fx * r.width(), r.top() - y_shift + fy * r.height());
+        scroll = scroll.scroll_offset(anchored_scroll(point, rel, vec2(content_w, content_h), avail.size()));
+    } else if let Some((page, frac)) = view.goto.take() {
+        let side = view.goto_side.take();
+        let page = page.min(rects.len() - 1);
+        let r = rects[page];
+        // Clamped here: egui clamps only after drawing, so a page that fits was drawn MARGIN - page_gap()
+        // too high for a frame and then hopped into place. (`avail` is the viewport, as the
+        // scroll bars float.)
+        let max_y = (content_h - avail.height()).max(0.0);
+        scroll = scroll.vertical_scroll_offset((r.top() - y_shift - view.page_gap() + frac * r.height()).max(0.0).min(max_y));
+        // Horizontally too, as Acrobat does (#2665): beside a much wider page the others sit off
+        // to one side. A page already shown whole, or one filling the window's width, keeps the
+        // scroll, so paging through a zoomed-in document stays on the same column. Otherwise a
+        // page that fits is centred, and a wider one scrolled just far enough to fill the window.
+        // The page counts with its side gutters, which keep its edge clear of the floating
+        // quick-action bar as the layout does.
+        let (x, w) = (view.last_scroll.x, avail.width());
+        let (left, right) = (r.left() - SIDE, r.right() + SIDE);
+        // Turned by → / ← at an edge (`goto_side`): a page or spread wider than the window starts at
+        // the edge the reader comes from.
+        let row = shown_row(view, rects).iter().filter_map(|&i| rects.get(i)).copied().reduce(Rect::union).unwrap_or(r);
+        let (row_left, row_right) = (row.left() - SIDE, row.right() + SIDE);
+        let target = match side {
+            Some(from_right) if row_right - row_left > w => {
+                if from_right {
+                    row_right - w
+                } else {
+                    row_left
+                }
+            }
+            _ if right - left <= w => {
+                if left >= x && right <= x + w {
+                    x
+                } else {
+                    r.center().x - w / 2.0
+                }
+            }
+            _ => x.clamp(left, right - w),
+        };
+        if (target - x).abs() > 0.5 {
+            scroll = scroll.horizontal_scroll_offset(target.clamp(0.0, (content_w - w).max(0.0)));
+        }
+    }
+    scroll
+}
+
+/// Notes how far and which way the page view scrolled this frame: reader-owned scrolling ends
+/// search following, a pan holds back fresh tile renders until it settles, a glide keeps going or
+/// stops, and the vertical direction is kept for continuous view's prefetch. Whether a pan is
+/// still settling.
+fn track_scroll<T>(ui: &egui::Ui, view: &mut DocView, out: &egui::containers::scroll_area::ScrollAreaOutput<T>, glide: Vec2) -> bool {
+    let scroll_offset = out.state.clamped_offset();
+    // The document ScrollArea's own scroll surfaces move the offset without the wheel deltas
+    // above: its two scroll-bar tracks/handles and, for touch or the Hand tool, its drag
+    // background. The output gives us the area id, and egui's pinned ScrollArea registers those
+    // widgets under `id.with(0)` (horizontal), `id.with(1)` (vertical) and `id.with("area")`.
+    // Ask for their exact responses instead of treating any held drag as scrolling: a text
+    // selection, a panel splitter or another widget's drag must not excuse the programmatic jump
+    // a search flash makes, while a track click (which moves the offset with no pointer motion)
+    // must still count as the reader scrolling.
+    let scroll_surface = |id: egui::Id| ui.ctx().read_response(id).is_some_and(|r| r.is_pointer_button_down_on() || r.dragged() || r.clicked());
+    let pointer_scrolling = scroll_surface(out.id.with(0usize)) || scroll_surface(out.id.with(1usize)) || scroll_surface(out.id.with("area"));
+    if pointer_scrolling && (scroll_offset - view.last_scroll).length() > 2.0 {
+        view.end_find_following();
+    }
+    let now_settle = ui.input(|i| i.time);
+    if (scroll_offset - view.last_scroll).length() > 2.0 {
+        view.pan_hold_until = now_settle + 0.25;
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(280));
+    }
+    if glide != Vec2::ZERO {
+        view.fling.moved((scroll_offset - view.last_scroll).length() > 0.01);
+    }
+    view.scroll_dir = scroll_direction(view.scroll_dir, scroll_offset.y - view.last_scroll.y, out.content_size != view.scroll_content);
+    view.scroll_content = out.content_size;
+    view.last_scroll = scroll_offset;
+    now_settle < view.pan_hold_until
+}
+
+/// The way the view moves after a frame whose offset changed by `dy` points: down (1) or up (-1)
+/// for a move of more than half a point, `dir` otherwise, and 0 when the content's size changed
+/// (a zoom or a layout change).
+fn scroll_direction(dir: i8, dy: f32, resized: bool) -> i8 {
+    if resized {
+        0
+    } else if dy > 0.5 {
+        1
+    } else if dy < -0.5 {
+        -1
+    } else {
+        dir
+    }
+}
+
+/// The hover tip, find bar, size hint and the in-place editors drawn over the pages. Whether the
+/// text editor was finished.
+fn frame_overlays(ui: &mut egui::Ui, view: &mut DocView, env: &PageEnv<'_>, primary_down: bool, hover_text: Option<(Pos2, String)>) -> bool {
+    let PageEnv {
+        added, allowed, author, avail, can_modify, comments_hidden, doc, form, info, keys, prefs, t, today, tool, units, unobstructed, ..
+    } = *env;
     if let Some((pos, text)) = hover_text {
         // Click-through, as a tooltip is: the pages lose the pointer under anything that isn't.
         let tip = egui::Area::new(egui::Id::unique("canvas-hover")).order(egui::Order::Tooltip).interactable(false);
@@ -2430,28 +2823,683 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
             });
         });
     }
-    find_bar(view, info.pages.len(), avail, ui, &t);
-    page_size_hint(view, info, units, avail, unobstructed, ui, &t);
+    find_bar(view, info.pages.len(), avail, tool == QuickTool::EditText && can_modify, ui, t);
+    page_size_hint(view, info, units, avail, unobstructed, ui, t);
     if tool == QuickTool::EnhanceCamera {
-        crate::camera_ui::bar(ui.ctx(), view, avail, &t, can_modify);
+        crate::camera_ui::bar(ui.ctx(), view, avail, t, can_modify);
     }
-    if let Some(e) = comments::composer(ui.ctx(), view, info, prefs) {
+    if let Some(e) = comments::composer(ui.ctx(), keys, view, info, prefs) {
         view.pending_edit = Some(e);
     }
-    if let Some(e) = crate::edit_text_ui::overlay(ui.ctx(), view, info) {
+    if let Some(e) = comments::popups(ui.ctx(), view, info, prefs, comments_hidden, allowed) {
+        // A click on the composer's Post also takes the focus from a pop-up's box, saving what
+        // was typed there: both edits land in this frame, so both are kept, in one batch.
+        view.pending_edit = Some(match view.pending_edit.take() {
+            Some(first) => Edit::Batch { label: "Edit comment".into(), edits: vec![first, e] },
+            None => e,
+        });
+    }
+    if let Some(e) = crate::edit_text_ui::overlay(ui.ctx(), keys, view, info) {
         view.pending_edit = Some(e);
     }
-    let text_box = crate::forms_ui::text_box(doc, view, &form);
-    if let Some(e) = crate::forms_ui::overlay(ui.ctx(), view, info, &form, text_box.as_ref(), today) {
+    let text_box = crate::forms_ui::text_box(doc, view, form);
+    if let Some(e) = crate::forms_ui::overlay(ui.ctx(), keys, view, info, form, primary_down, text_box.as_ref(), today) {
         view.pending_edit = Some(e);
     }
-    if let Some(e) = crate::fill_sign::type_box(ui.ctx(), view, info, &author) {
+    if let Some(e) = crate::fill_sign::type_box(ui.ctx(), keys, view, info, author) {
         view.pending_edit = Some(e);
     }
-    let (typed, text_done) = crate::content_ui::editor(ui.ctx(), view, info, &added);
+    let (typed, text_done) = crate::content_ui::editor(ui.ctx(), keys, view, info, added);
     if typed.is_some() {
         view.pending_edit = typed;
     }
+    text_done
+}
+
+/// Full screen: the click turns the page unless it did something else first. It waits out the
+/// double-click time: turning on the first click's release sent a double-click's second click,
+/// meant to select a word, to the next page (review on #2070). A selection cancels it, and so do a
+/// click on a link, field or comment (`clicked_object`) and leaving full screen: the pointer stays
+/// active "so that you can click links and open notes" (*Adobe Acrobat Help*, 2019, p. 65), and
+/// fields to fill. A double-click elsewhere still turns once.
+/// `click` is `Some(back)` on the frame of a click, `back` when it was a shift-click.
+fn schedule_presentation_turn(ui: &egui::Ui, view: &mut DocView, click: Option<bool>, clicked_object: bool) {
+    let now = ui.input(|i| i.time);
+    if let Some(back) = click
+        && !clicked_object
+        && view.selection.is_none()
+        && view.clicks < 2
+    {
+        let delay = ui.ctx().options(|o| o.input_options.max_double_click_delay);
+        view.present_turn = Some((now + delay, !back));
+    }
+    if let Some((due, forward)) = view.present_turn {
+        if clicked_object || view.selection.is_some() || view.presentation.is_none() {
+            view.present_turn = None;
+        } else if now >= due {
+            view.present_turn = None;
+            view.step_page(forward);
+        } else {
+            ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64((due - now).max(0.0)));
+        }
+    }
+}
+
+/// Follows the link, or the bookmark's action, that was clicked. A link to another file comes
+/// back, to be opened once the document is no longer borrowed.
+pub(crate) fn follow_link(
+    app: &mut PdfCraftApp,
+    index: usize,
+    target: Option<LinkTarget>,
+) -> Option<(pdfcraft_engine::DocId, String, pdfcraft_render::RemoteDestination)> {
+    let view_id = app.views[index].id;
+    match target? {
+        LinkTarget::Page(p, dest) => {
+            let view = &mut app.views[index];
+            if let Some(doc) = app.session.get(view.id) {
+                view.go_to_dest(p, dest, &doc.info);
+            }
+        }
+        LinkTarget::Uri(u) => app.request_document_url(&u, crate::LinkOrigin::Link),
+        LinkTarget::SetLayers { changes, preserve_rb } => set_layers(app, index, &changes, preserve_rb),
+        LinkTarget::RemoteGoTo { file, destination, .. } => return Some((view_id, file, destination)),
+        LinkTarget::Other(s) => app.notify_fmt("This PDF uses the unsupported {s} action.", &[("s", &s)]),
+    }
+    None
+}
+
+/// A finished marquee zoom, a signature rectangle drawn, or an empty signature field clicked.
+/// Returns the tool to go on with.
+fn finish_sign_requests(app: &mut PdfCraftApp, index: usize, mut tool: QuickTool) -> QuickTool {
+    if let Some(done) = app.views[index].marquee_done.take() {
+        app.finish_marquee(index, done);
+    }
+    // The copied area and its menu belong to Snapshot: another tool puts them away. The tool is
+    // the app's, not the tab's, so every tab's area goes, not only the one on screen.
+    if tool != QuickTool::Snapshot {
+        for v in &mut app.views {
+            v.area_pick = None;
+        }
+    }
+    if let Some(choice) = app.views[index].area_choice.take()
+        && let Some((page, area)) = app.views[index].area_pick
+    {
+        match choice {
+            crate::zoom_snap::AreaChoice::Print => app.open_print_area(page, area),
+            crate::zoom_snap::AreaChoice::Save => app.save_snapshot_image(index, page, area),
+        }
+    }
+    // A signature rectangle was drawn, or an empty signature field clicked.
+    let drawn = app.views[index].sign.drawn.take();
+    if let (Some((page, rect)), QuickTool::SignArea { certify }) = (drawn, tool) {
+        tool = QuickTool::Select;
+        app.quick_tool = tool;
+        app.start_signing(page, Some(rect), None, certify.then_some(2));
+    }
+    if let Some(field) = app.views[index].sign.field.take() {
+        let signed = app.session.get(app.views[index].id).is_some_and(|d| d.signatures.iter().any(|s| s.field == field && s.signed));
+        if signed {
+            app.right = Some(RightPanel::Signatures);
+            if !app.sig_expanded.contains(&field) {
+                app.sig_expanded.push(field);
+            }
+        } else {
+            let page = app.views[index].current;
+            app.start_signing(page, None, Some(field), None);
+        }
+    }
+    tool
+}
+
+/// When not scrolling continuously, only one row is shown at a time: the current page, or the
+/// current two-page spread (with the cover rule). These indices drive paging, which pages are
+/// drawn, and the content height (#752). Empty for a document with no pages.
+fn shown_row(view: &DocView, rects: &[Rect]) -> Vec<usize> {
+    if rects.is_empty() {
+        return Vec::new();
+    }
+    let last = rects.len() - 1;
+    let cur = view.current.min(last);
+    match view.layout {
+        PageLayout::Single => vec![cur],
+        PageLayout::TwoUp if view.cover && cur == 0 => vec![0],
+        PageLayout::TwoUp => {
+            let first = if view.cover { cur - (cur + 1) % 2 } else { cur - cur % 2 };
+            if first < last { vec![first, first + 1] } else { vec![first] }
+        }
+    }
+}
+
+/// The pages' context menu, except in full screen, where a right-click turns back a page instead
+/// ([`presentation_click_state`]).
+fn page_context_menu(resp: &egui::Response, presenting: bool, add: impl FnOnce(&mut egui::Ui)) {
+    if !presenting {
+        resp.context_menu(add);
+    }
+}
+
+/// Full screen: a click on the document goes forward a page and a shift-click back, as in
+/// Acrobat, unless the click did something else (a link, a word selected). Decided once the pages
+/// have had the click. `Some(back)` on the frame of a click, `back` when it was a shift-click.
+fn presentation_click_state(ui: &egui::Ui, view: &DocView, navigation_rect: Rect, enabled: bool) -> Option<bool> {
+    let presenting = view.presentation.is_some() && enabled;
+    // A right-click goes back a page, as a left click goes forward (*Adobe Acrobat Help*, 2019,
+    // "Full Screen preferences", p. 69).
+    if presenting && ui.rect_contains_pointer(navigation_rect) && ui.input(|i| i.pointer.secondary_clicked()) {
+        return Some(true);
+    }
+    let clicked = presenting && presentation_click(ui, navigation_rect);
+    // Shift as held now, or as the click's own event carried it (a synthetic click).
+    clicked.then(|| {
+        ui.input(|i| {
+            i.modifiers.shift
+                || i.events.iter().any(|e| {
+                    matches!(e, egui::Event::PointerButton { button: egui::PointerButton::Primary, pressed: false, modifiers, .. } if modifiers.shift)
+                })
+        })
+    })
+}
+
+/// Pinch / ctrl+scroll zoom, anchored on the pointer or the current page.
+fn pinch_zoom(ui: &egui::Ui, view: &mut DocView, zoom_delta: f32, navigation_rect: Rect, enabled: bool) {
+    if zoom_delta.is_finite() && zoom_delta > 0.0 && zoom_delta != 1.0 && enabled && ui.rect_contains_pointer(navigation_rect) {
+        let z = view.zoom * zoom_delta;
+        match zoom_anchor(ui) {
+            Some(p) => view.zoom_at(z, p),
+            None => view.set_zoom(z),
+        }
+    } else if view.goto_point.is_none() && zoom_delta == 1.0 {
+        // The find step has been laid out and no zoom is easing on: zoom at the pointer again.
+        // egui spreads a ⌘/Ctrl-wheel notch over about a quarter of a second; while the pointer
+        // is off the page view that zoom waits, and the hold must outlast it, or the rest of it
+        // anchors on the pointer once it is back and the match drifts off the middle.
+        view.find_hold = None;
+    }
+}
+
+/// The middle-button auto-scroll's delta, and the edge scroll a drawing in progress asks for: the
+/// pointer in a band along any edge (or just past it) scrolls the view that way, so a point
+/// beyond what is shown can be reached without letting go of the tool.
+fn auto_scroll_deltas(ui: &egui::Ui, view: &mut DocView, avail: Rect, unobstructed: bool, invert: bool) -> (Vec2, Vec2) {
+    let auto_delta = if unobstructed {
+        view.auto_scroll.update(ui, avail, false, invert)
+    } else {
+        view.auto_scroll.cancel();
+        Vec2::ZERO
+    };
+
+    // Drawing a comment: the pointer in a band along any edge (or just past it) scrolls the view
+    // that way, so a point beyond what is shown can be reached without letting go of the tool.
+    let edge_delta = if unobstructed && matches!(view.comments.gesture, Some(comments::Gesture::Draw { .. })) {
+        let (pointer, dt) = drawing_edge_pointer(ui);
+        crate::autoscroll::edge_scroll(pointer, avail, dt)
+    } else {
+        Vec2::ZERO
+    };
+    if edge_delta != Vec2::ZERO {
+        ui.ctx().request_repaint();
+    }
+    (auto_delta, edge_delta)
+}
+
+/// What decides whether touchpad momentum goes on.
+#[derive(Clone, Copy)]
+struct GlideCx {
+    now: f64,
+    may_glide: bool,
+    key_scroll: f32,
+    key_side: f32,
+    auto_delta: Vec2,
+    zoom_delta: f32,
+    edge_delta: Vec2,
+    wheel_scrolled: bool,
+}
+
+/// Touchpad momentum (#531): a swipe over the page lifted at speed glides on and slows to a stop,
+/// through the same un-eased path. Never while the pager owns the wheel, a gesture or dialog has
+/// the input, or animations are off; any click, key, zoom or other scrolling ends it. Any
+/// reader-owned motion ends automatic search following, even when it stays on the same page; the
+/// automatic flash uses `goto`, not these deltas, so its programmatic scroll is never mistaken for
+/// a reader action. Returns this frame's glide.
+fn step_glide(ui: &egui::Ui, view: &mut DocView, avail: Rect, cx: &GlideCx) -> Vec2 {
+    let GlideCx { now, may_glide, key_scroll, key_side, auto_delta, zoom_delta, edge_delta, wheel_scrolled } = *cx;
+    let over_page = ui.rect_contains_pointer(avail);
+    view.fling.read(&crate::motion::gesture_wheel_events(ui.ctx()), now, may_glide && over_page);
+    let interrupted = glide_interrupted(ui);
+    if !may_glide || interrupted || key_scroll != 0.0 || key_side != 0.0 || auto_delta != Vec2::ZERO || zoom_delta != 1.0 {
+        view.fling.stop();
+    }
+    let glide = view.fling.step(now);
+    if view.fling.gliding() {
+        ui.ctx().request_repaint();
+    }
+    if wheel_scrolled || auto_delta != Vec2::ZERO || edge_delta != Vec2::ZERO || glide != Vec2::ZERO {
+        view.end_find_following();
+    }
+    glide
+}
+
+/// The tool the page sees this frame, and whether copied comments hang on the pointer. Those
+/// take the next click whatever tool is on: the page sees the Select tool until the bundle is
+/// placed or let go, and no form field, added content or field being prepared takes the click
+/// either.
+fn page_tool(view: &DocView, chosen: QuickTool) -> (QuickTool, bool) {
+    let placing = matches!(view.comments.gesture, Some(comments::Gesture::Place { .. }));
+    (if placing { QuickTool::Select } else { chosen }, placing)
+}
+
+/// Text selection runs for the Select tool and for the markup tools (highlight…).
+fn tool_selects_text(tool: QuickTool, preparing: bool) -> bool {
+    match tool {
+        QuickTool::Comment(t) => t.markup().is_some() || t == comments::CommentTool::ReplaceText,
+        QuickTool::Select => !preparing,
+        QuickTool::Redact | QuickTool::ColumnSelect => true,
+        QuickTool::Hand
+        | QuickTool::Measure(_)
+        | QuickTool::Crop
+        | QuickTool::EnhanceCamera
+        | QuickTool::Fill(_)
+        | QuickTool::Field(_)
+        | QuickTool::AddText
+        | QuickTool::EditText
+        | QuickTool::Stamp(_)
+        | QuickTool::CustomStamp(_)
+        | QuickTool::Link
+        | QuickTool::SignArea { .. }
+        | QuickTool::MarqueeZoom
+        | QuickTool::Snapshot => false,
+    }
+}
+
+/// Holds sharp re-renders while the zoom is still moving: a new scale every frame would cancel the
+/// in-flight full-page interpret and restart it, so on a heavy page (a CAD plot with ~1000 images
+/// renders for seconds) the sharp raster never arrives and the view looks stuck on a soft image.
+/// The stale raster stays stretched meanwhile; the sharp request goes out once the zoom settles.
+fn hold_sharp_renders(ui: &egui::Ui, view: &mut DocView, scale: f32) -> bool {
+    let now_scale = ui.input(|i| i.time);
+    if (scale - view.last_scale).abs() > f32::EPSILON {
+        view.last_scale = scale;
+        view.sharp_hold_until = now_scale + 0.35;
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(380));
+    }
+    now_scale < view.sharp_hold_until
+}
+
+/// A destination's position (bookmarks, links) refines `goto`: its point at the window's top-left,
+/// or the centre of a /FitR rectangle at the window's centre.
+fn refine_goto_point(mut scroll: egui::ScrollArea, view: &mut DocView, geometry: &ScrollGeometry<'_>) -> egui::ScrollArea {
+    let ScrollGeometry { rects, y_shift, content_w, content_h, avail, .. } = *geometry;
+    if let Some((page, fx, fy, rel)) = view.goto_point.take() {
+        let r = rects[page.min(rects.len() - 1)];
+        // Within the content, so an unreachable point never shows a frame scrolled past the end.
+        let (max_x, max_y) = ((content_w - avail.width()).max(0.0), (content_h - avail.height()).max(0.0));
+        if let Some(fx) = fx {
+            scroll = scroll.horizontal_scroll_offset((r.left() + fx * r.width() - rel.x).clamp(0.0, max_x));
+        }
+        if let Some(fy) = fy {
+            scroll = scroll.vertical_scroll_offset((r.top() - y_shift + fy * r.height() - rel.y).clamp(0.0, max_y));
+        }
+    }
+    scroll
+}
+
+/// Where the `shown` pages sit in the scroll content, as how far the content starts into the
+/// layout and how tall it is. Scrolling continuously every page scrolls; otherwise only the
+/// current row does, the content being its bounding box plus margins. Pages that fit a view
+/// `view_height` tall sit in its middle, the spare height shared above and below (#5708): the
+/// content fills the view, so there is nothing to scroll, and starts on a whole physical pixel
+/// as the layout's pages do, or their edges would blur and the seams between them open.
+fn vertical_placement(continuous: bool, rects: &[Rect], shown: &[usize], view_height: f32, pixels_per_point: f32) -> (f32, f32) {
+    let Some(r) = shown.iter().filter_map(|&i| rects.get(i)).copied().reduce(Rect::union) else { return (0.0, 0.0) };
+    if fits_height(r, view_height, pixels_per_point) {
+        return (((r.center().y - view_height / 2.0) * pixels_per_point).round() / pixels_per_point, view_height);
+    }
+    if continuous { (0.0, r.bottom() + MARGIN) } else { (r.top() - MARGIN, r.height() + 2.0 * MARGIN) }
+}
+
+/// Whether the pages in `r` show whole in a view `view_height` tall, without their margins.
+/// Within half a physical pixel, which is all that snapping the pages to pixels can add: a
+/// fitting page is centred and has nothing to scroll, so any more would be cut off unseen.
+fn fits_height(r: Rect, view_height: f32, pixels_per_point: f32) -> bool {
+    let slack = if pixels_per_point.is_finite() && pixels_per_point > 0.0 { 0.5 / pixels_per_point } else { 0.0 };
+    r.height() <= view_height + slack
+}
+
+/// Draws the document tab at `index`: its notice bars, then its pages (or the Organize grid) in a
+/// scroll area with this frame's zoom, scrolling, tool input, overlays (form fields, comments,
+/// signature badges and sign tabs) and render requests.
+pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
+    let t = Tokens::get(ui.ctx());
+    let can_paste_key = egui::Id::unique("can-paste-image");
+    let can_paste_image = if ui.input(|i| i.pointer.secondary_pressed()) {
+        let can = app.can_paste_image();
+        ui.data_mut(|d| d.insert_temp(can_paste_key, can));
+        can
+    } else {
+        ui.data(|d| d.get_temp(can_paste_key)).unwrap_or(false)
+    };
+    // Keyboard scrolling applies to this frame's page view only, never later.
+    let key_scroll = std::mem::take(&mut app.views[index].key_scroll);
+    let key_side = std::mem::take(&mut app.views[index].key_side);
+    if key_scroll != 0.0 || key_side != 0.0 {
+        app.views[index].end_find_following();
+    }
+    // The Search panel closed: its search moves to the find bar.
+    let search_open = app.right == Some(crate::RightPanel::Search);
+    if let Some(f) = app.views[index].find.as_mut()
+        && f.in_panel
+        && !search_open
+    {
+        f.in_panel = false;
+    }
+    if close_requested_tab(app, index) {
+        return;
+    }
+    let Some(doc) = app.session.get(app.views[index].id) else { return };
+    let info = &doc.info;
+    let paper = app.session.reading_colors(app.views[index].id).and_then(|c| c.params).map_or(Color32::WHITE, |p| {
+        let [r, g, b] = p.background;
+        Color32::from_rgb(r, g, b)
+    });
+    if info.pages.is_empty() {
+        app.views[index].auto_scroll.cancel();
+        ui.centered_and_justified(|ui| ui.label(tl!("This document has no pages.")));
+        return;
+    }
+    // The print dialog queues its own rasters later in the frame. Closing it drops them.
+    if app.dialog != Some(crate::Dialog::Print) {
+        app.views[index].print_pages.clear();
+    }
+    // The Prepare a form panel is open (or a field tool is picked): fields are edited, not filled.
+    let preparing = app.is_preparing();
+    // Prepare a form ▸ Calculation order: the order's steps and links on the page.
+    let calc_order = preparing && app.left_open && app.left == crate::LeftPanel::CalculationOrder;
+    // Edit a PDF: added text and images can be selected, moved and edited.
+    let editing_content =
+        (app.left_open && app.left == crate::LeftPanel::Tool("edit")) || matches!(app.quick_tool, QuickTool::AddText | QuickTool::EditText);
+    let text_style = app.text_style.clone();
+    let show_secured_notice = app.show_secured_notice;
+    // Offer to lock a just-placed signature (#2149) on the same terms the save-time question
+    // asks: one is still there, saving doesn't lock it anyway, and the document isn't signed.
+    let lock_offer = !app.flatten_fill_sign_on_save
+        && app.placed_signatures.contains(&app.views[index].id)
+        && doc.info.annotations.iter().any(|a| a.fill_sign)
+        && !doc.is_signed();
+    let view = &mut app.views[index];
+    // Opened without the owner password and something is restricted. The notice says so unless
+    // the user turned it off (#4035): the restrictions themselves, and Document Properties ▸
+    // Security, stay as they are.
+    let secured = show_secured_notice && doc.security_summary().is_some_and(|s| !(s.owner || (s.permissions.modify() && s.permissions.assemble())));
+    let repaired = !doc.repair_log().is_empty();
+    let notice = notices(view, doc, secured, repaired, lock_offer, crate::sign_ui::banner(&doc.signatures), ui, &t);
+    apply_notice(app, index, notice);
+    let Some(doc) = app.session.get(app.views[index].id) else { return };
+    let info = &doc.info;
+    // No dialog, close prompt or palette over the page: only then does page input count.
+    let modal = app.modal_open();
+    let unobstructed = !modal && !app.palette_open;
+    // A menu click can open a dialog after the frame's first look.
+    app.page_keys = app.page_keys.also(app.covers_pages());
+    let keys = app.page_keys;
+    let organize_zoom = app.organize_zoom;
+    let invert_middle = app.invert_middle_drag;
+    let view = &mut app.views[index];
+    if view.organize {
+        // One remembered grid size for every document, kept in the settings.
+        view.set_grid_zoom(organize_zoom);
+        organize_grid(view, doc, unobstructed, keys, app.show_page_edge_shadows, invert_middle, ui, &t);
+        app.organize_zoom = view.grid_zoom();
+        return;
+    }
+
+    let avail = ui.available_rect_before_wrap();
+    view.viewport_w = avail.width();
+    view.viewport_h = avail.height();
+    let old_zoom = view.zoom;
+    view.fit_zoom(info);
+    anchor_zoom_change(view, avail.size(), old_zoom);
+
+    // Pinch / ctrl+scroll zoom, anchored on the current page.
+    let zoom_delta = crate::motion::zoom_delta(ui.ctx());
+    // Exclude the previous frame's scrollbar tracks from gesture activation.
+    let navigation_rect = if view.viewport_screen.is_positive() { avail.intersect(view.viewport_screen) } else { avail };
+    // Wheel zoom works in a visible window without focus, as wheel scrolling does; the other gestures need focus.
+    let zoom_enabled = unobstructed && ui.is_enabled();
+    let navigation_enabled = zoom_enabled && ui.input(|i| i.focused);
+    let present = presentation_click_state(ui, view, navigation_rect, navigation_enabled && app.quick_tool == QuickTool::Select);
+    pinch_zoom(ui, view, zoom_delta, navigation_rect, zoom_enabled);
+    view.viewport_screen = avail;
+    let (auto_delta, edge_delta) = auto_scroll_deltas(ui, view, avail, unobstructed, invert_middle);
+
+    let content_w = view.content_width(info, avail.width());
+    let rects = view.layout(info, content_w, ui.ctx().pixels_per_point());
+    // When not scrolling continuously, only one row is shown at a time: the current page, or the
+    // current two-page spread (with the cover rule). These indices drive paging, which pages are
+    // drawn, and the content height (#752). Empty for a document with no pages.
+    let row = shown_row(view, &rects);
+    let middle_gesture = view.auto_scroll.blocks_input();
+    reset_interrupted_wheel(ui, view, zoom_delta != 1.0 || key_scroll != 0.0 || auto_delta != Vec2::ZERO || edge_delta != Vec2::ZERO);
+    // Not scrolling: when the whole page or spread fits, the wheel would do nothing, so it turns
+    // pages instead; zoomed in far enough to pan, it pans, and at the edge it turns the page on
+    // (#1924, `single_page_wheel_edge`). Touch drags are untouched: with
+    // nothing to pan, touch users turn pages with the rail buttons, the page box and the arrow
+    // keys. Runs before `visible_pages` so the frame that turns the page draws it.
+    let (single_paging, edge_turned) = single_page_paging(ui, view, &PagingCx { row: &row, rects: &rects, avail, middle_gesture, unobstructed });
+    let now = ui.input(|i| i.time);
+    let animates = app.animation_effects.animates(app.motion.reduced);
+    let wheel_enabled = navigation_enabled && unobstructed && !middle_gesture;
+    let Wheel { precise_scroll, line_base, coarse_scroll, has_page, paging_owns_vertical } =
+        read_wheel(ui, view, avail, single_paging, edge_turned, wheel_enabled, animates);
+    let may_glide = !paging_owns_vertical && !middle_gesture && navigation_enabled && unobstructed && animates;
+    let wheel_scrolled = precise_scroll != Vec2::ZERO || line_base != Vec2::ZERO || coarse_scroll != Vec2::ZERO || has_page;
+    let motion = GlideCx { now, may_glide, key_scroll, key_side, auto_delta, zoom_delta, edge_delta, wheel_scrolled };
+    let glide = step_glide(ui, view, avail, &motion);
+    // The wheel may have turned the page above: draw the row it turned to. Measured from the old
+    // row, the jump to the new page scrolled both out of view, a blank frame on every turn forward.
+    let row = shown_row(view, &rects);
+    let visible_pages: Vec<usize> = if view.continuous { (0..rects.len()).collect() } else { row.clone() };
+    let (y_shift, content_h) = vertical_placement(view.continuous, &rects, &visible_pages, avail.height(), ui.ctx().pixels_per_point());
+
+    let mut scroll = page_scroll_area(
+        ui,
+        view,
+        &ScrollGeometry { rects: &rects, y_shift, content_w, content_h, avail, middle_gesture, hand: app.quick_tool == QuickTool::Hand },
+    );
+    let ppp = ui.ctx().pixels_per_point();
+    let scale = view.render_scale(ppp);
+    let tag = scale_tag(scale);
+    // Hold sharp re-renders while the zoom is still moving: a new scale every frame would
+    // cancel the in-flight full-page interpret and restart it, so on a heavy page (a CAD
+    // plot with ~1000 images renders for seconds) the sharp raster never arrives and the
+    // view looks stuck on a soft image. The stale raster stays stretched meanwhile; the
+    // sharp request goes out once the zoom settles.
+    let sharp_held = hold_sharp_renders(ui, view, scale);
+    view.current_scale_tag = tag;
+    let hand = app.quick_tool == QuickTool::Hand;
+    let (tool, placing) = page_tool(view, app.quick_tool);
+    // Text selection runs for the Select tool and for the markup tools (highlight…).
+    let selects_text = tool_selects_text(tool, preparing);
+    let prefs = &app.comment_prefs;
+    let redact_mark = (app.redact_prefs.hover_fill, app.redact_prefs.opacity);
+    let units = app.units;
+    let allowed = doc.allows_annotation();
+    let can_copy = doc.allows_copying();
+    let can_paste_comments = app.comment_clipboard.is_some();
+    let comments_hidden = doc.comments_hidden();
+    let form = doc.form.clone();
+    let generation = doc.edit_generation();
+    let can_fill = doc.allows_form_filling();
+    let can_crop = doc.allows_assembly();
+    let signature = app.signature.clone();
+    let initials = app.initials.clone();
+    let author = app.comment_prefs.author.clone();
+    let today = app.session.today();
+    // In Preferences ▸ Date format, or why it can't be stamped into the PDF.
+    let date_text = crate::date_text_for_pdf(&app.session);
+    let by_line = app.session.stamp_by_line(&author);
+    let custom_stamp = match tool {
+        QuickTool::CustomStamp(i) => app.custom_stamps.get(i).cloned(),
+        _ => None,
+    };
+    let custom_line = custom_stamp.as_ref().and_then(|cs| cs.line.as_deref()).map(|t| app.session.stamp_line(t, &author));
+    let mut open_props: Option<(usize, usize)> = None;
+    let mut recolour: Option<pdfcraft_engine::Rgb> = None;
+    // The table being set up in its window, shown on its own document's page.
+    let table_preview = app.field_table_draft.as_mut().filter(|d| d.doc == view.id).and_then(|d| Some(d.preview(info.pages.get(d.page)?, &form)));
+    let can_modify = doc.allows_modification();
+    if preparing {
+        crate::prepare::after_refresh(view, &form);
+    } else {
+        view.prepare.selected = None;
+    }
+    view.objects.prepare(doc, tool == QuickTool::EditText && can_modify, ui.ctx(), keys);
+    view.text_background.prepare(ui.ctx(), doc, view.line_editor.as_ref(), view.content.draft.as_ref(), scale);
+    let added = if editing_content { doc.added().to_vec() } else { Vec::new() };
+    let doc_links = if tool == QuickTool::Link { doc.links().to_vec() } else { Vec::new() };
+    if editing_content {
+        crate::content_ui::after_refresh(view, &added);
+    } else {
+        view.content.selected = None;
+    }
+    view.move_background.prepare(ui.ctx(), doc, &view.content, scale);
+
+    scroll = refine_goto_point(scroll, view, &ScrollGeometry { rects: &rects, y_shift, content_w, content_h, avail, middle_gesture, hand });
+    let selection_wheel = view.selection_drag && navigation_enabled && unobstructed && !single_paging && ui.rect_contains_pointer(avail);
+    let prepare_tab_order = (preparing && view.prepare.show_tab_numbers).then(|| crate::forms_ui::tab_order(&form, info));
+    let env = PageEnv {
+        added: &added,
+        allowed,
+        animates,
+        author: &author,
+        auto_delta,
+        avail,
+        coarse_scroll,
+        by_line: &by_line,
+        calc_order,
+        can_copy,
+        can_paste_comments,
+        placing,
+        can_crop,
+        can_fill,
+        can_modify,
+        comments_hidden,
+        content_h,
+        content_w,
+        custom_line: &custom_line,
+        custom_stamp: &custom_stamp,
+        date_text: &date_text,
+        doc,
+        doc_links: &doc_links,
+        edge_delta,
+        editing_content,
+        form: &form,
+        generation,
+        glide,
+        hand,
+        info,
+        initials: &initials,
+        key_scroll,
+        key_side,
+        keys,
+        middle_gesture,
+        modal,
+        navigation_enabled,
+        paper,
+        show_page_edge_shadows: app.show_page_edge_shadows,
+        ppp,
+        precise_scroll,
+        prefs,
+        preparing,
+        prepare_tab_order: prepare_tab_order.as_deref(),
+        rects: &rects,
+        redact_mark,
+        scale,
+        selection_wheel,
+        selects_text,
+        signature: &signature,
+        single_paging,
+        t: &t,
+        table_preview: &table_preview,
+        tag,
+        text_style: &text_style,
+        text_links: app.text_links,
+        tool,
+        units,
+        unobstructed,
+        visible_pages: &visible_pages,
+        y_shift,
+        fill_text_size: app.fill_text_size,
+        fill_text_color: app.fill_text_color,
+        fill_text_border: crate::fill_sign::TextBorder {
+            width: app.fill_text_border,
+            color: app.fill_text_border_color,
+            shape: app.fill_text_border_shape,
+        },
+        today,
+        can_paste_image,
+    };
+    let mut page_out = PageOut::default();
+    // Keyed by the view, not the document: with one document in both panes of split view, shared
+    // ids gave the main pane's clicks on the page to the second pane's widgets.
+    let out = page_scroll(ui, scroll, egui::Id::unique(("page-view-scope", view.view_key())), app.show_page_edge_shadows, |ui, viewport| {
+        draw_pages(ui, viewport, view, &env, &mut page_out, &mut app.signature_preview)
+    });
+    let PageOut {
+        canvas_action,
+        clicked_link,
+        comment_notice,
+        copy_comments,
+        mut copy_selected,
+        field_menu,
+        field_placed,
+        mut field_props,
+        hover_text,
+        mut image_action,
+        open_boxes,
+        open_initials,
+        open_signature,
+        open_table,
+        page_action,
+        paste_comments_at,
+        primary_down,
+        on_object,
+        mut refused,
+        row_on_screen,
+        stamp_placed,
+    } = page_out;
+    view.single_edges = visible_pages.first().copied().filter(|_| !view.continuous).map(|page| {
+        // At the top once the page's top edge shows where going to a page puts it (a gap
+        // below the window's top). Within a point, as for wheel paging, so layout rounding
+        // can't hide an edge.
+        let max_y = (out.content_size.y - out.inner_rect.height()).max(0.0);
+        (page, out.state.clamped_offset().y <= MARGIN - view.page_gap() + 1.0, out.state.clamped_offset().y >= max_y - 1.0)
+    });
+    // Within a point, as above: at an edge of the scrolled content, or of the current page or
+    // spread shown whole that way (in continuous view the content is as wide as the widest page,
+    // and a narrower current page shows whole inside it).
+    let max_x = (out.content_size.x - out.inner_rect.width()).max(0.0);
+    let inner = out.inner_rect;
+    view.side_edges = Some((
+        out.state.clamped_offset().x <= 1.0 || row_on_screen.is_some_and(|r| r.left() >= inner.left() - 1.0),
+        out.state.clamped_offset().x >= max_x - 1.0 || row_on_screen.is_some_and(|r| r.right() <= inner.right() + 1.0),
+    ));
+
+    view.viewport_screen = out.inner_rect;
+    view.auto_scroll.paint(ui, avail);
+    if unobstructed && matches!(tool, QuickTool::Select | QuickTool::ColumnSelect) {
+        copy_selected |= selection_actions(ui, avail, view, info, prefs, allowed && !comments_hidden, can_copy);
+    }
+
+    // Collect all main-page demand, including cached surfaces, for byte admission later.
+    // Pan-settle debounce for tiled pages: each tile costs a full page interpret, so holding
+    // fresh tiles back while the scroll offset is still moving keeps a drag on the stretched
+    // backdrop/older tiles instead of queueing a storm of interprets (one per frame) that
+    // the workers cannot cancel mid-operator. Fresh tiles go out once the pan settles;
+    // pages with nothing on screen yet still queue.
+    let pan_held = track_scroll(ui, view, &out, glide);
+    plan_renders(ui, view, info, out.inner, &RenderPlan { visible_pages: &visible_pages, tag, scale, sharp_held, pan_held, hand });
+
+    let text_done = frame_overlays(ui, view, &env, primary_down, hover_text);
     if let Some(why) = view.objects.notice.take() {
         refused = Some(why);
     }
@@ -2459,15 +3507,19 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     // One crop, then back to selecting (as Acrobat does).
     let cropped = view.pending_edit.as_ref().is_some_and(|e| matches!(e, pdfcraft_engine::Edit::SetPageBox { .. }));
     let mut tool = app.quick_tool;
-    comments::keys(ui.ctx(), view, &mut tool, allowed);
+    comments::keys(ui.ctx(), keys, view, info, &mut tool, allowed);
     if preparing {
-        crate::prepare::keys(ui.ctx(), view);
+        crate::prepare::keys(ui.ctx(), keys, view);
+    }
+    if tool != QuickTool::EditText {
+        view.image_selection = None;
+        crate::content_ui::release_image_selection(view, &added);
     }
     if editing_content {
-        crate::content_ui::keys(ui.ctx(), view);
+        crate::content_ui::keys(ui.ctx(), keys, view, tool == QuickTool::EditText);
     }
     if tool == QuickTool::Link {
-        crate::link_ui::keys(ui.ctx(), view);
+        crate::link_ui::keys(ui.ctx(), keys, view);
     } else {
         view.links.selected = None;
     }
@@ -2494,69 +3546,103 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
             app.comments_panel_closed = false;
         }
         Some(comments::CanvasAction::Properties(p, i)) => open_props = Some((p, i)),
+        Some(comments::CanvasAction::Colour(c)) => recolour = Some(c),
         Some(comments::CanvasAction::CopyImage(p, i)) => image_action = Some(crate::edit_text_ui::ImageAction::Copy(p, i)),
         Some(comments::CanvasAction::CopyImageFile(p, i)) => image_action = Some(crate::edit_text_ui::ImageAction::CopyFile(p, i)),
         None => {}
     }
-    // Full screen: the click turns the page unless it did something else first. It waits out the
-    // double-click time: turning on the first click's release sent a double-click's second click,
-    // meant to select a word, to the next page (review on #2070). A selection cancels it, and so
-    // do a link followed meanwhile and leaving full screen; a double-click elsewhere still turns
-    // once.
-    let now = ui.input(|i| i.time);
-    if present_click && clicked_link.is_none() && view.selection.is_none() && view.clicks < 2 {
-        let delay = ui.ctx().options(|o| o.input_options.max_double_click_delay);
-        view.present_turn = Some((now + delay, !present_back));
-    }
-    if let Some((due, forward)) = view.present_turn {
-        if clicked_link.is_some() || view.selection.is_some() || view.presentation.is_none() {
-            view.present_turn = None;
-        } else if now >= due {
-            view.present_turn = None;
-            view.step_page(forward);
-        } else {
-            ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64((due - now).max(0.0)));
-        }
-    }
-    match clicked_link {
-        Some(LinkTarget::Page(p, dest)) => view.go_to_dest(p, dest, info),
-        Some(LinkTarget::Uri(u)) => app.request_document_url(&u, crate::LinkOrigin::Link),
-        Some(LinkTarget::SetLayers { changes, preserve_rb }) => set_layers(app, index, &changes, preserve_rb),
-        Some(LinkTarget::RemoteGoTo { file, destination, .. }) => remote_open = Some((view.id, file, destination)),
-        Some(LinkTarget::Other(s)) => app.notify_fmt("This PDF uses the unsupported {s} action.", &[("s", &s)]),
-        None => {}
-    }
+    schedule_presentation_turn(ui, view, present, clicked_link.is_some() || on_object && present.is_some());
+    let remote_open = follow_link(app, index, clicked_link);
     if tool == QuickTool::Crop && cropped {
         tool = QuickTool::Select;
     }
-    if let Some(done) = app.views[index].marquee_done.take() {
-        app.finish_marquee(index, done);
-    }
-    // A signature rectangle was drawn, or an empty signature field clicked.
-    let drawn = app.views[index].sign.drawn.take();
-    if let (Some((page, rect)), QuickTool::SignArea { certify }) = (drawn, tool) {
-        tool = QuickTool::Select;
-        app.quick_tool = tool;
-        app.start_signing(page, Some(rect), None, certify.then_some(2));
-    }
-    if let Some(field) = app.views[index].sign.field.take() {
-        let signed = app.session.get(app.views[index].id).is_some_and(|d| d.signatures.iter().any(|s| s.field == field && s.signed));
-        if signed {
-            app.right = Some(RightPanel::Signatures);
-            if !app.sig_expanded.contains(&field) {
-                app.sig_expanded.push(field);
-            }
-        } else {
-            let page = app.views[index].current;
-            app.start_signing(page, None, Some(field), None);
-        }
-    }
+    let tool = finish_sign_requests(app, index, tool);
     app.quick_tool = tool;
+    let requests = FrameRequests {
+        open_props,
+        field_props,
+        field_menu,
+        image_action,
+        page_action,
+        refused,
+        open_signature,
+        open_initials,
+        open_boxes,
+        open_table,
+        form_notice,
+        copy_selected,
+        copy_comments,
+        paste_comments_at,
+        comment_notice,
+        recolour,
+        remote_open,
+        form,
+        generation,
+        avail,
+    };
+    apply_frame_requests(app, index, ui, requests);
+}
+
+/// What the frame's input asked the app to do, once the document is no longer borrowed.
+struct FrameRequests {
+    open_props: Option<(usize, usize)>,
+    field_props: Option<(String, usize)>,
+    field_menu: Option<FieldMenu>,
+    image_action: Option<crate::edit_text_ui::ImageAction>,
+    page_action: Option<PageMenuAction>,
+    refused: Option<String>,
+    open_signature: bool,
+    open_initials: bool,
+    open_boxes: bool,
+    open_table: Option<(usize, [f64; 4])>,
+    form_notice: Option<crate::forms_ui::FormNotice>,
+    copy_selected: bool,
+    /// Copy comments / Paste comments from the page's menu or a Comments panel card, and what
+    /// the comment tools have to say.
+    copy_comments: bool,
+    paste_comments_at: Option<(usize, [f64; 2])>,
+    comment_notice: Option<&'static str>,
+    /// A colour picked for every selected comment (Colour in the page's menu).
+    recolour: Option<pdfcraft_engine::Rgb>,
+    remote_open: Option<(pdfcraft_engine::DocId, String, pdfcraft_render::RemoteDestination)>,
+    form: Arc<Vec<pdfcraft_engine::FormField>>,
+    generation: u64,
+    avail: Rect,
+}
+
+/// Opens the dialogs and runs the app commands the frame asked for.
+#[allow(clippy::cognitive_complexity)]
+fn apply_frame_requests(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui, requests: FrameRequests) {
+    let FrameRequests {
+        open_props,
+        field_props,
+        field_menu,
+        image_action,
+        page_action,
+        refused,
+        open_signature,
+        open_initials,
+        open_boxes,
+        open_table,
+        form_notice,
+        copy_selected,
+        copy_comments,
+        paste_comments_at,
+        comment_notice,
+        recolour,
+        remote_open,
+        form,
+        generation,
+        avail,
+    } = requests;
     if let Some((page, at)) = app.views[index].comments.attach_at.take() {
         app.attach_file_comment(page, at);
     }
     if let Some((p, i)) = open_props {
         app.open_comment_props(p, i);
+    }
+    if let Some(c) = recolour {
+        app.colour_selected_comments(c);
     }
     if let Some((p, i)) = app.views[index].comments.default_request.take() {
         app.make_comment_default(p, i);
@@ -2603,12 +3689,112 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         }
         Some(crate::edit_text_ui::ImageAction::CopyFile(page, index)) => app.copy_page_image_file(page, index),
         Some(crate::edit_text_ui::ImageAction::Cut(page, image)) => {
-            app.views[index].image_selection = None;
             app.cut_page_image(page, image);
+        }
+        Some(crate::edit_text_ui::ImageAction::Paste(page, at)) => {
+            if let Some(pt) = at {
+                app.paste_image_at(page, pt);
+            } else {
+                app.paste_image(page, None);
+            }
+        }
+        Some(crate::edit_text_ui::ImageAction::DrawFreehand) => {
+            app.quick_tool = crate::QuickTool::Comment(crate::comments::CommentTool::Ink);
         }
         Some(crate::edit_text_ui::ImageAction::Redact(page, index)) => app.redact_page_image(page, index),
         Some(crate::edit_text_ui::ImageAction::Link(page, index)) => app.link_page_image(page, index),
         Some(crate::edit_text_ui::ImageAction::Recognize(page)) => app.recognize_text_on_page(page),
+        Some(crate::edit_text_ui::ImageAction::AddComment(page, i)) => {
+            if let Some(d) = app.session.get(app.views[index].id) {
+                let images = d.page_images(page);
+                if let Some(img) = images.get(i) {
+                    let r = img.visible_rect.unwrap_or(img.rect);
+                    let center = [(r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0];
+                    app.views[index].comments.context_at = Some((page, center));
+                    app.views[index].comments.composer = Some(crate::comments::Composer {
+                        page,
+                        at: center,
+                        kind: crate::comments::ComposerKind::Note,
+                        text: String::new(),
+                        focus: true,
+                    });
+                }
+            }
+        }
+        None => {}
+    }
+    match page_action {
+        Some(PageMenuAction::Copy) => {
+            if let Some(sel) = app.views[index].image_selection.clone() {
+                app.copy_page_image(sel.page, sel.index);
+            } else if app.views[index].selected_text().is_some() {
+                app.execute("edit.copy");
+            } else if let Some((page, at)) = app.views[index].comments.context_at
+                && let Some(doc) = app.session.get(app.views[index].id)
+                && let Some(image) = doc.page_image_at(page, at)
+            {
+                app.copy_page_image(page, image);
+            }
+        }
+        Some(PageMenuAction::Paste(page, at)) => {
+            app.paste_image_at(page, at);
+        }
+        Some(PageMenuAction::PasteComments(page, at)) => {
+            app.paste_comments(index, None, Some((page, at)));
+        }
+        Some(PageMenuAction::RotateCCW) => {
+            app.views[index].rotate_view(false);
+        }
+        Some(PageMenuAction::RotateCW) => {
+            app.views[index].rotate_view(true);
+        }
+        Some(PageMenuAction::Print) => {
+            app.open_print();
+        }
+        Some(PageMenuAction::SelectTool) => {
+            app.quick_tool = QuickTool::Select;
+        }
+        Some(PageMenuAction::HandTool) => {
+            app.quick_tool = QuickTool::Hand;
+        }
+        Some(PageMenuAction::MarqueeZoom) => {
+            app.quick_tool = QuickTool::MarqueeZoom;
+        }
+        Some(PageMenuAction::AddComment(page, at)) => {
+            app.views[index].comments.composer =
+                Some(crate::comments::Composer { page, at, kind: crate::comments::ComposerKind::Note, text: String::new(), focus: true });
+        }
+        Some(PageMenuAction::FlattenComments) => {
+            app.views[index].comments.select(None);
+            app.views[index].pending_edit = Some(pdfcraft_engine::Edit::Flatten { comments: true, fields: false });
+        }
+        Some(PageMenuAction::AddBookmark) => {
+            app.bookmark_action(crate::panels::BmAction::New);
+        }
+        Some(PageMenuAction::TakeSnapshot) => {
+            app.quick_tool = QuickTool::Snapshot;
+        }
+        Some(PageMenuAction::EditPdf) => {
+            app.quick_tool = QuickTool::EditText;
+        }
+        Some(PageMenuAction::AddText) => {
+            app.quick_tool = QuickTool::AddText;
+        }
+        Some(PageMenuAction::AddImage) => {
+            app.add_image_dialog();
+        }
+        Some(PageMenuAction::DeletePage(page)) => {
+            app.views[index].pending_edit = Some(pdfcraft_engine::Edit::DeletePages { pages: vec![page] });
+        }
+        Some(PageMenuAction::ExportPdf) => {
+            app.select_tool("export");
+        }
+        Some(PageMenuAction::Find) => {
+            app.views[index].open_find();
+        }
+        Some(PageMenuAction::DocProperties) => {
+            app.dialog = Some(crate::Dialog::Properties(crate::PropsTab::Description));
+        }
         None => {}
     }
     if let Some(why) = refused {
@@ -2644,10 +3830,22 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     if copy_selected {
         app.execute("edit.copy");
     }
+    if copy_comments {
+        app.execute("comment.copy");
+    }
+    if let Some(at) = paste_comments_at {
+        app.paste_comments(index, None, Some(at));
+    }
+    if let Some(notice) = comment_notice {
+        app.notify_tr(notice);
+    }
     // Read mode hides the tools (#2646), and full screen is the page and nothing else (#1459);
     // the quick tools come back with the window.
-    if app.mode != crate::Mode::Read && !app.full_screen {
-        quick_bar(app, avail, ui);
+    // A document that hides the toolbars (`HideToolbar`) hides this one too.
+    if !app.hotbar_hidden() && !app.views.get(index).is_some_and(|v| v.interface.hidden.toolbar) {
+        // The page nearest the left edge, whose margin the bar sits in.
+        let page_left = app.views[index].screen_rects.iter().map(|(_, r)| r.left()).reduce(f32::min);
+        quick_bar(app, avail, page_left, ui);
     }
     if let Some((source, file, destination)) = remote_open {
         app.open_remote_link(source, file, destination);
@@ -2660,5 +3858,7 @@ enum FieldMenu {
     Duplicate(String),
 }
 
+#[cfg(test)]
+mod sign_tab_tests;
 #[cfg(test)]
 mod tests;
