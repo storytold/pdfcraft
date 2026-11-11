@@ -51,7 +51,11 @@ fn acro_password_fields(doc: &Document) -> Option<Vec<(String, String)>> {
             for item in items {
                 let Some(r) = item.as_ref() else { continue };
                 let reach: Reach = (parent_name.to_string(), inherited_ft.map(<[u8]>::to_vec), inherited_ff, inherited_dv.map(str::to_string));
-                if self.seen.insert(r, reach).is_some() {
+                // The reach a field was classified with stays: a later visit that skips it classified
+                // nothing, so it must not stand in for the cut-off one.
+                if let std::collections::hash_map::Entry::Vacant(slot) = self.seen.entry(r) {
+                    slot.insert(reach);
+                } else {
                     continue;
                 }
                 let obj = self.doc.get(r);
