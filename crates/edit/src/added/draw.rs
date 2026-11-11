@@ -78,8 +78,7 @@ pub(super) fn draw_laid_shaped(
     for (i, (line, rtl, _, pieces, w)) in laid.iter().enumerate() {
         // Shaped glyphs are painted in visual order. Keep the original line's typing order
         // explicitly, including marks, ligatures, digits and mixed-script punctuation.
-        let logical: String = line.encode_utf16().map(|u| format!("{u:04X}")).collect();
-        out.extend(format!("/Span <</ActualText <FEFF{logical}>>> BDC\n").bytes());
+        out.extend(shaped_text::actual_text_span(line).bytes());
         let spaces = line.matches(' ').count();
         let (x, tw) = placed(t, r, &paragraphs, i, *w, spaces, *rtl);
         let y = r[3] - (i as f64 * 1.2 + 0.95) * t.size;
