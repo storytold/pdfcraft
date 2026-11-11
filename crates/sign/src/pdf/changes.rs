@@ -7,6 +7,11 @@ use std::cell::{Cell, OnceCell};
 /// the lists are not compared, and the change is refused.
 const MAX_ANNOT_ENTRIES: usize = 1 << 22;
 
+/// Where each revision of the document ends ([`Document::revision_ends`]), found on first use and
+/// then shared by one classification: finding them scans the file, and every widget that brings
+/// a signature value is checked against them.
+type RevisionEnds = OnceCell<Vec<usize>>;
+
 /// What later revisions changed, classified as Acrobat reports it, under DocMDP `p` (or none:
 /// an approval signature permits form fill, comments and further signatures).
 pub(super) fn classify_changes(doc: &Document, old: Option<Document>, p: Option<u8>) -> Modification {
@@ -91,6 +96,7 @@ pub(super) fn classify_changes(doc: &Document, old: Option<Document>, p: Option<
     // Every reference the signed revision makes, read only when a slot's generations narrowed.
     let signed_references = OnceCell::new();
     let dss = dss_parts(doc, &old);
+    let ends = RevisionEnds::new();
     // Stored at the same place in both (and not edited since): the same bytes, unchanged.
     let same_place = |num: u32| -> bool {
         use pdfcraft_cos::XrefEntry;
@@ -137,6 +143,7 @@ pub(super) fn classify_changes(doc: &Document, old: Option<Document>, p: Option<
         signed_resources: &signed_resources,
         old_info,
         dss: &dss,
+        ends: &ends,
     };
     for num in doc.object_numbers() {
         if same_place(num) {
@@ -299,6 +306,7 @@ struct ChangedObjectClassifier<'a> {
     old_info: Option<u32>,
     old_form: Option<u32>,
     dss: &'a HashSet<u32>,
+    ends: &'a RevisionEnds,
 }
 
 impl ChangedObjectClassifier<'_> {
@@ -370,7 +378,7 @@ impl ChangedObjectClassifier<'_> {
         } else if added.is_empty() {
             None
         } else {
-            Some(added_annots(self.doc, self.old, &added))
+            Some(added_annots(self.doc, self.old, self.ends, &added))
         }
     }
 
@@ -384,15 +392,15 @@ impl ChangedObjectClassifier<'_> {
             Some(kind::PAGES)
         } else if let Some(previous) = previous.filter(|_| self.old.root().is_some_and(|root| root.num == r.num)) {
             // The signed catalog, whatever /Type its new version carries.
-            Some(catalog_kind(self.doc, self.old, dict, previous))
+            Some(catalog_kind(self.doc, self.old, self.ends, dict, previous))
         } else if let Some(previous) = previous.filter(|_| self.old_form == Some(r.num)) {
             // The signed form dictionary, held in an object of its own, whatever keys it carries now.
-            Some(acroform_kind(self.doc, self.old, dict, Some(previous)))
+            Some(acroform_kind(self.doc, self.old, self.ends, dict, Some(previous)))
         } else if previous.is_some() && Some(r.num) == self.old_info {
             // Only the signed revision's own /Info dictionary is a metadata change.
             Some(kind::METADATA)
         } else {
-            Some(change_kind(self.doc, self.old, r.num, dict, previous))
+            Some(change_kind(self.doc, self.old, self.ends, r.num, dict, previous))
         }
     }
 
@@ -572,9 +580,9 @@ fn dss_parts(doc: &Document, old: &Document) -> HashSet<u32> {
 /// fields it has; it adds no widget (ISO 32000-2 Table 257 permits creating annotations only at
 /// P=3). An empty signature widget, or a form widget, is a new annotation that may draw anything
 /// over the signed page (#6755, #6756).
-fn added_annots(doc: &Document, old: &Document, added: &[ObjRef]) -> &'static str {
+fn added_annots(doc: &Document, old: &Document, ends: &RevisionEnds, added: &[ObjRef]) -> &'static str {
     let signs =
-        |r: &ObjRef| doc.get(*r).as_dict().is_some_and(|d| d.name(b"Subtype") == Some(b"Widget") && gains_signature(doc, old, r.num, d, None));
+        |r: &ObjRef| doc.get(*r).as_dict().is_some_and(|d| d.name(b"Subtype") == Some(b"Widget") && gains_signature(doc, old, ends, r.num, d, None));
     if !added.is_empty() && added.iter().all(signs) { kind::SIGNATURE } else { kind::COMMENTS }
 }
 
@@ -616,12 +624,12 @@ fn is_signature_field(doc: &Document, d: &Dict) -> bool {
 /// same revision as `d` as it is now, and the field held no signature when signed. Rewriting an
 /// empty signature field's appearance, pointing a new widget at a signature already in the file,
 /// or adding a widget after the signature whose value it takes, signs nothing (#6755).
-fn gains_signature(doc: &Document, old: &Document, num: u32, d: &Dict, before: Option<&Dict>) -> bool {
+fn gains_signature(doc: &Document, old: &Document, ends: &RevisionEnds, num: u32, d: &Dict, before: Option<&Dict>) -> bool {
     if !is_signature_field(doc, d) {
         return false;
     }
     let Some((holder, value)) = inherited(doc, d, b"V") else { return false };
-    let Some(signed) = doc.resolve(&value).as_dict().and_then(|v| signed_revision(doc, old, v)) else { return false };
+    let Some(signed) = doc.resolve(&value).as_dict().and_then(|v| signed_revision(doc, old, ends, v)) else { return false };
     // Signing writes the widget that shows a signature in the revision that signature signs. One
     // added or changed in a later revision only points at an earlier signature.
     if !stored_at(doc, num).iter().any(|at| signed.contains(at)) {
@@ -645,7 +653,7 @@ fn gains_signature(doc: &Document, old: &Document, num: u32, d: &Dict, before: O
 /// document timestamp included) writes, with or without `/Type`, and what the signature list then
 /// checks, so a forged one is shown as invalid there. Any other dictionary in `/V` signs nothing:
 /// `<< /Foo /Bar >>` under an opaque appearance is a new annotation, not a signature.
-fn signed_revision(doc: &Document, old: &Document, v: &Dict) -> Option<std::ops::Range<usize>> {
+fn signed_revision(doc: &Document, old: &Document, ends: &RevisionEnds, v: &Dict) -> Option<std::ops::Range<usize>> {
     let whole = |x: &f64| x.fract() == 0.0 && (0.0..9.0e15).contains(x);
     let range = super::listing::nums(doc, v, b"ByteRange").and_then(|r| <[f64; 4]>::try_from(r).ok());
     let [start, first_end, second_start, second_len] = range.filter(|r| r.iter().all(whole))?;
@@ -656,7 +664,7 @@ fn signed_revision(doc: &Document, old: &Document, v: &Dict) -> Option<std::ops:
     if !contents || start != 0.0 || first_end > second_start || end <= old.bytes().len() {
         return None;
     }
-    let ends = doc.revision_ends();
+    let ends = ends.get_or_init(|| doc.revision_ends());
     let at = ends.iter().position(|e| (end..=end.saturating_add(2)).contains(e))?;
     let from = at.checked_sub(1).and_then(|i| ends.get(i)).copied().unwrap_or(0);
     Some(from..ends.get(at).copied()?)
@@ -748,7 +756,7 @@ fn acroform(doc: &Document) -> Option<Dict> {
 /// An AcroForm change that only adds signature fields that bring new signatures (and sets
 /// `/SigFlags`) is signing. Any other field added is a new annotation, not a form fill (#6756).
 /// Without `before`, the signed revision's AcroForm (wherever it was) is the reference.
-fn acroform_kind(doc: &Document, old: &Document, now: &Dict, before: Option<&Dict>) -> &'static str {
+fn acroform_kind(doc: &Document, old: &Document, ends: &RevisionEnds, now: &Dict, before: Option<&Dict>) -> &'static str {
     let fallback = acroform(old).unwrap_or_default();
     let before = before.unwrap_or(&fallback);
     // A field taken out of the form: no DocMDP permission covers dropping a signed field.
@@ -756,7 +764,7 @@ fn acroform_kind(doc: &Document, old: &Document, now: &Dict, before: Option<&Dic
         return kind::OTHER;
     }
     let old_fields = refs(old, before.get(b"Fields"));
-    let signs = |r: &ObjRef| doc.get(*r).as_dict().is_some_and(|d| gains_signature(doc, old, r.num, d, None));
+    let signs = |r: &ObjRef| doc.get(*r).as_dict().is_some_and(|d| gains_signature(doc, old, ends, r.num, d, None));
     if !refs(doc, now.get(b"Fields")).iter().filter(|r| !old_fields.contains(r)).all(signs) {
         return kind::COMMENTS;
     }
@@ -918,7 +926,7 @@ fn extensions_kept(doc: &Document, old: &Document, d: &Dict, b: &Dict) -> bool {
 }
 
 /// A change to the signed catalog `b`, now `d`.
-fn catalog_kind(doc: &Document, old: &Document, d: &Dict, b: &Dict) -> &'static str {
+fn catalog_kind(doc: &Document, old: &Document, ends: &RevisionEnds, d: &Dict, b: &Dict) -> &'static str {
     let keys: &[&[u8]] = &[b"AcroForm", b"DSS", b"Perms", b"Metadata", b"NeedsRendering", b"Extensions"];
     if !same_entries(d, b, keys) {
         kind::STRUCTURE
@@ -930,7 +938,7 @@ fn catalog_kind(doc: &Document, old: &Document, d: &Dict, b: &Dict) -> &'static 
     } else if !same_entry(d.get(b"AcroForm"), b.get(b"AcroForm")) {
         // Compare the forms themselves, inline or not.
         let now = acroform(doc).unwrap_or_default();
-        acroform_kind(doc, old, &now, None)
+        acroform_kind(doc, old, ends, &now, None)
     } else if !same_entry(b.get(b"Perms"), d.get(b"Perms")) {
         kind::SIGNATURE
     } else {
@@ -976,7 +984,7 @@ fn lost_entries(doc: &Document, old: &Document, was: Option<&Object>, now: Optio
 /// What changing the dictionary `before` (as signed; `None` for a new object) into `d` amounts
 /// to, judged by the role the object had when signed: signing, form fill, comments, page content
 /// or another change.
-fn change_kind(doc: &Document, old: &Document, num: u32, d: &Dict, before: Option<&Dict>) -> &'static str {
+fn change_kind(doc: &Document, old: &Document, ends: &RevisionEnds, num: u32, d: &Dict, before: Option<&Dict>) -> &'static str {
     let ty = d.name(b"Type");
     // A later revision cannot make an existing object a signature by relabelling it: a signature
     // change is only a brand-new object, or one that was already a signature object when signed.
@@ -1008,14 +1016,14 @@ fn change_kind(doc: &Document, old: &Document, num: u32, d: &Dict, before: Optio
     match ty {
         // Only a new signature value or policy: rewriting a signed one is not a signature (#1788).
         Some(b"Sig" | b"DocTimeStamp" | b"SigRef" | b"TransformParams") if before.is_none() => return kind::SIGNATURE,
-        Some(b"Catalog") => return before.map_or(kind::FORM_FILL, |b| catalog_kind(doc, old, d, b)),
+        Some(b"Catalog") => return before.map_or(kind::FORM_FILL, |b| catalog_kind(doc, old, ends, d, b)),
         Some(b"Page") => {
             return match before {
                 Some(b) if !same_but_annots(d, b) => kind::PAGE_CONTENT,
                 Some(b) => {
                     let was = refs(old, b.get(b"Annots"));
                     let added: Vec<ObjRef> = refs(doc, d.get(b"Annots")).into_iter().filter(|r| !was.contains(r)).collect();
-                    added_annots(doc, old, &added)
+                    added_annots(doc, old, ends, &added)
                 }
                 None => kind::COMMENTS,
             };
@@ -1038,12 +1046,12 @@ fn change_kind(doc: &Document, old: &Document, num: u32, d: &Dict, before: Optio
         Some(b"Widget") => {
             return match before {
                 // A new widget: signing only when it brings a new signature, as on a page.
-                None if gains_signature(doc, old, num, d, None) => kind::SIGNATURE,
+                None if gains_signature(doc, old, ends, num, d, None) => kind::SIGNATURE,
                 None => kind::COMMENTS,
                 // A signature field's widget, when signed and still: signing only when its field
                 // gains a signature. A restyled empty one signs nothing (#6755).
                 Some(b) if is_signature_field(old, b) => {
-                    if is_signature_field(doc, d) && gains_signature(doc, old, num, d, Some(b)) {
+                    if is_signature_field(doc, d) && gains_signature(doc, old, ends, num, d, Some(b)) {
                         kind::SIGNATURE
                     } else {
                         kind::COMMENTS
@@ -1060,7 +1068,7 @@ fn change_kind(doc: &Document, old: &Document, num: u32, d: &Dict, before: Optio
         return kind::SIGNATURE;
     }
     if role.contains(b"Fields") {
-        return acroform_kind(doc, old, d, before);
+        return acroform_kind(doc, old, ends, d, before);
     }
     if role.contains(b"FT") || (role.contains(b"T") && role.contains(b"Kids")) || role.contains(b"DR") {
         return kind::FORM_FILL;
@@ -1080,7 +1088,7 @@ mod tests {
     /// A signed page's change, judged by [`ChangedObjectClassifier::page_change_kind`] with no
     /// other signed roles in play; `None` when nothing the page shows changed.
     fn page_change_kind(doc: &Document, old: &Document, d: &Dict, before: Option<&Dict>) -> Option<&'static str> {
-        let (none, budget, resources) = (HashSet::new(), Cell::new(MAX_ANNOT_ENTRIES), HashMap::new());
+        let (none, budget, resources, ends) = (HashSet::new(), Cell::new(MAX_ANNOT_ENTRIES), HashMap::new(), RevisionEnds::new());
         let classifier = ChangedObjectClassifier {
             doc,
             old,
@@ -1097,6 +1105,7 @@ mod tests {
             old_info: None,
             old_form: None,
             dss: &none,
+            ends: &ends,
         };
         classifier.page_change_kind(d, before)
     }
@@ -1145,12 +1154,15 @@ mod tests {
             vec![],
         );
         assert_eq!(page_change_kind(&doc, &doc, &reordered, Some(&before)), unchanged);
-        assert_eq!(change_kind(&doc, &doc, 0, &reordered, Some(&before)), change_kind(&doc, &doc, 0, &before, Some(&before)));
+        assert_eq!(
+            change_kind(&doc, &doc, &OnceCell::new(), 0, &reordered, Some(&before)),
+            change_kind(&doc, &doc, &OnceCell::new(), 0, &before, Some(&before))
+        );
 
         // A changed value inside the nested dictionary still is a page content change.
         let changed = page(vec![("F2", font(&order, "Helvetica")), ("F1", font(&order, "Courier"))], vec![]);
         assert_eq!(page_change_kind(&doc, &doc, &changed, Some(&before)), Some(kind::PAGE_CONTENT));
-        assert_eq!(change_kind(&doc, &doc, 0, &changed, Some(&before)), kind::PAGE_CONTENT);
+        assert_eq!(change_kind(&doc, &doc, &OnceCell::new(), 0, &changed, Some(&before)), kind::PAGE_CONTENT);
     }
 
     /// The page as signed and the same page with its inline resources reordered are each no
@@ -1211,7 +1223,7 @@ mod tests {
         let swapped = page(vec![("F1", font(&["Type", "Encoding", "BaseFont"], "Times-Roman"))], vec![]);
         for (now, then) in [(&swapped, &signed), (&signed, &swapped)] {
             assert_eq!(page_change_kind(&doc, &doc, now, Some(then)), Some(kind::PAGE_CONTENT));
-            assert_eq!(change_kind(&doc, &doc, 0, now, Some(then)), kind::PAGE_CONTENT);
+            assert_eq!(change_kind(&doc, &doc, &OnceCell::new(), 0, now, Some(then)), kind::PAGE_CONTENT);
         }
     }
 

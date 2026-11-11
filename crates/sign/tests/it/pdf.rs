@@ -260,6 +260,25 @@ fn signing_an_existing_field_and_counter_signing() {
     ));
 }
 
+/// Several later signatures, each with its widget in the revision its value signs: one
+/// classification judges every one of them against the same revision ends, and each is signing.
+#[test]
+fn several_later_signatures_each_sign_their_own_revision() {
+    let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
+    let mut bytes = pdfcraft_sign::sign(&open(&fixture()), &id, &SignOptions { field: Some("Approval".into()), ..opts() }).unwrap();
+    for _ in 0..4 {
+        bytes = pdfcraft_sign::sign(&open(&bytes), &id, &opts()).unwrap();
+    }
+    let sigs = signatures(&open(&bytes), &bytes, &TrustStore::default());
+    let first = sigs.iter().find(|s| s.field == "Approval").unwrap();
+    assert_eq!(first.modification, Modification::Allowed(vec![kind::SIGNATURE]), "{:?}", first.details);
+    for n in 1..=3 {
+        let s = sigs.iter().find(|s| s.field == format!("Signature{n}")).unwrap();
+        assert_eq!(s.modification, Modification::Allowed(vec![kind::SIGNATURE]), "Signature{n}: {:?}", s.details);
+    }
+    assert_eq!(sigs.iter().find(|s| s.field == "Signature4").unwrap().modification, Modification::None);
+}
+
 /// A page whose /Annots is an object of its own: signing and commenting update that array in
 /// place, not the page. A second signature is a signature change for the first, as with an
 /// inline /Annots, and a comment is still a comment (refused under a form-fill certification).
