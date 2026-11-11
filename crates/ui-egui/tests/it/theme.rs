@@ -242,11 +242,11 @@ fn preferences_theme_cards_and_use_system_setting_stay_in_sync() {
     assert_theme(&h, ThemePreference::System, ThemeKind::Dark);
     assert_eq!(mode_shown(&h), "Use system setting");
 
-    // The OS is dark: the Dark card's radio row picks Dark, and the combo box says so.
+    // The OS is dark: the Dark card picks Dark, and the combo box says so.
     // The cards sit below the fold of the Preferences scroll area at this window size.
-    h.get_by_label("Dark gray").scroll_to_me();
+    h.get_by_label("Dark theme").scroll_to_me();
     h.run_steps(3);
-    h.get_by_label("Dark gray").click();
+    h.get_by_label("Dark theme").click();
     h.run_steps(3);
     assert_theme(&h, ThemePreference::Dark, ThemeKind::Dark);
     assert_eq!(mode_shown(&h), "Dark");
