@@ -1,6 +1,6 @@
 use super::{
-    CosError, DecodeBudget, Dict, Document, HashMap, HashSet, MAX_DEPTH, Matrix, Metrics, ObjRef, Object, Op, Pieces, Rc, RedactError, Scope,
-    is_vertical, num, overlaps, page_streams, res_dict,
+    CosError, DecodeBudget, Dict, Document, HashMap, HashSet, Kinds, MAX_DEPTH, Matrix, Metrics, ObjRef, Object, Op, Pieces, Rc, RedactError, Scope,
+    Stream, is_vertical, kind, num, overlaps, page_streams, res_dict,
 };
 
 /// Drop every `replaced` name of the XObject resources `xo` that the rewritten `content` no
@@ -28,61 +28,224 @@ pub(crate) fn prune(doc: &Document, budget: &mut DecodeBudget, xo: &mut Dict, re
     Ok(())
 }
 
-/// The XObject names of the resource dictionary `xo` that `content` draws: directly, or through
-/// a form that has no /Resources of its own (such a form draws through its caller's). Each such
-/// form is read once, however many names are asked about, with its `/DecodeParms` given by
-/// reference. The flag says whether some of what `content` draws could not be read (a form that
-/// will not decode, or nesting past the limit), so a name missing from the set may still be drawn.
-/// Operators are read one at a time, since only the `Do`s matter: no stream's are held whole, and
-/// each form is decoded only in its turn.
-fn names_content_draws(doc: &Document, content: &[Vec<u8>], xo: &Dict) -> (HashSet<Vec<u8>>, bool) {
+/// How many names one operation looks up in the scopes of forms whose own `/XObject` gives a
+/// stream, or reads in those `/XObject`s ([`names_content_draws`]): each such form's are looked up
+/// again in each of its scopes, and its `/XObject` read again for each dictionary checked.
+const MAX_SCOPE_LOOKUPS: usize = 1 << 20;
+
+/// The XObject names of the resource dictionary `xo` that any of `contents` draws: directly, or
+/// through a form it draws. A form without /Resources of its own draws through its caller's names;
+/// one with resources of its own draws a name its own `/XObject` gives as a stream from there, and
+/// any other through its caller's, as the renderer looks names up ([`super::form_resources`]). Each
+/// form is decoded once, with its `/DecodeParms` given by reference, and each form's own `/XObject`
+/// read once, shared by the forms that give the same dictionary. The names a form draws are looked
+/// up in each scope it is drawn in (the forms on the way to it whose own `/XObject` gives a stream),
+/// however many names are asked about, and each distinct name is kept once. Look-ups in such a
+/// form's scope, and the entries of each own `/XObject` read, are charged to `lookups`, what is
+/// left of the operation's [`MAX_SCOPE_LOOKUPS`]; the rest are bounded by what the forms and
+/// `contents` draw, as before. The flag says whether
+/// some of what is drawn could not be read (a form that will not decode, nesting past the limit,
+/// more than 65,536 scopes, or no look-ups left), so a name missing from the set may still be
+/// drawn. Operators are read one at a time, since only the `Do`s matter: no stream's are held
+/// whole.
+fn names_content_draws(doc: &Document, contents: &[Vec<Vec<u8>>], xo: &Dict, lookups: &mut usize, kinds: &mut Kinds) -> (HashSet<Vec<u8>>, bool) {
+    // The scopes names are looked up in: each the XObject names a form's own resources give as
+    // streams, under its caller's scope. Scope 0 is that of `contents`, which look them up in `xo`
+    // alone.
+    // A form whose own resources give none looks every name up as its caller does, in its scope.
+    const MAX_SCOPES: usize = 1 << 16;
+    let mut names = Names { xo, ids: HashMap::new(), in_xo: Vec::new() };
+    // The names each form draws, decoded once: `None` where it doesn't decode.
+    let mut names_of: HashMap<ObjRef, Option<Rc<Vec<usize>>>> = HashMap::new();
+    // Each form's own XObject names given as streams, `None` without resources of its own.
+    let mut own_of: HashMap<ObjRef, Option<(OwnGiven, Rc<OwnNames>)>> = HashMap::new();
+    let mut own_read: HashMap<OwnGiven, Rc<OwnNames>> = HashMap::new();
+    let mut scopes: Vec<(Option<usize>, Rc<OwnNames>)> = vec![(None, Rc::default())];
+    let mut children: HashMap<(usize, OwnGiven), usize> = HashMap::new();
     let mut drawn = HashSet::new();
+    let mut handled = HashSet::new();
     let mut seen = HashSet::new();
-    let joined = Pieces::join(content);
-    // What is still to read, each with its depth: `content` itself (`None`), then the forms it draws.
-    let mut pending: Vec<(Option<ObjRef>, usize)> = vec![(None, 0)];
     // A form that will not decode makes the answer uncertain, but it does not stop the forms
     // already queued from being read: a name drawn only inside one of those need not be unknown.
     let mut unknown = false;
-    while let Some((form, depth)) = pending.pop() {
-        let data = match form {
-            None => std::borrow::Cow::Borrowed(joined.data()),
-            Some(r) => {
-                let obj = doc.get(r);
-                let Object::Stream(s) = &*obj else { continue };
-                match doc.with_direct_parms(s).decoded() {
-                    Ok(data) => std::borrow::Cow::Owned(data),
-                    Err(_) => {
-                        unknown = true;
-                        continue;
+    'read: for content in contents {
+        let joined = Pieces::join(content);
+        // What is still to read, each with its scope and depth: `content` itself (`None`), then the
+        // forms it draws.
+        let mut pending: Vec<(Option<ObjRef>, usize, usize)> = vec![(None, 0, 0)];
+        while let Some((form, scope, depth)) = pending.pop() {
+            let drawn_here = match form {
+                None => Rc::new(names.drawn_by(joined.data())),
+                Some(r) => {
+                    let drawn_here = names_of.entry(r).or_insert_with(|| {
+                        let obj = doc.get(r);
+                        let Object::Stream(s) = &*obj else { return Some(Rc::new(Vec::new())) };
+                        #[cfg(test)]
+                        SHARED_FORM_READS.with(|c| c.set(c.get() + 1));
+                        doc.with_direct_parms(s).decoded().ok().map(|data| Rc::new(names.drawn_by(&data)))
+                    });
+                    match drawn_here {
+                        Some(drawn_here) => drawn_here.clone(),
+                        None => {
+                            unknown = true;
+                            continue;
+                        }
                     }
                 }
-            }
-        };
-        for op in pdfcraft_content::ops(&data).filter(|op| op.is("Do")) {
-            let Some(n) = op.last_name() else { continue };
-            if !drawn.insert(n.to_vec()) {
-                continue;
-            }
-            let Some(r) = xo.get(n).and_then(Object::as_ref) else { continue };
-            let obj = doc.get(r);
-            let Object::Stream(s) = &*obj else { continue };
-            // A /Resources that isn't a dictionary (null, or a missing object) is no resources of
-            // its own, as for `resource_ops` and the interpreter.
-            if s.dict.name(b"Subtype") != Some(b"Form")
-                || s.dict.get(b"Resources").is_some_and(|r| doc.resolve(r).as_dict().is_some())
-                || !seen.insert(r)
-            {
-                continue;
-            }
-            if depth < MAX_DEPTH {
-                pending.push((Some(r), depth + 1));
-            } else {
-                unknown = true;
+            };
+            for &n in drawn_here.iter() {
+                if scope != 0 {
+                    let Some(left) = lookups.checked_sub(1) else {
+                        unknown = true;
+                        break 'read;
+                    };
+                    *lookups = left;
+                }
+                if !handled.insert((scope, n)) {
+                    continue;
+                }
+                // The innermost form on the way that gives the name, or else `xo`.
+                let mut at = Some(scope);
+                let mut given = None;
+                while let Some((parent, own)) = at.and_then(|i| scopes.get(i)) {
+                    if let Some(&value) = own.get(&n) {
+                        given = Some(value);
+                        break;
+                    }
+                    at = *parent;
+                }
+                let value = match given {
+                    Some(value) => value,
+                    None => {
+                        drawn.insert(n);
+                        names.in_xo.get(n).copied().flatten()
+                    }
+                };
+                let Some(r) = value else { continue };
+                if !kind(doc, &Object::Ref(r), kinds).form {
+                    continue;
+                }
+                let own = match own_of.get(&r) {
+                    Some(own) => own.clone(),
+                    None => {
+                        let obj = doc.get(r);
+                        let Object::Stream(s) = &*obj else { continue };
+                        let Some(own) = own_streams(doc, s, r, &mut names, &mut own_read, lookups, kinds) else {
+                            unknown = true;
+                            break 'read;
+                        };
+                        own_of.insert(r, own.clone());
+                        own
+                    }
+                };
+                let child = match own {
+                    Some((given, own)) if !own.is_empty() => match children.get(&(scope, given)) {
+                        Some(&child) => child,
+                        None if scopes.len() >= MAX_SCOPES => {
+                            unknown = true;
+                            continue;
+                        }
+                        None => {
+                            #[cfg(test)]
+                            SHARED_SCOPES.with(|c| c.set(c.get() + 1));
+                            scopes.push((Some(scope), own));
+                            children.insert((scope, given), scopes.len() - 1);
+                            scopes.len() - 1
+                        }
+                    },
+                    _ => scope,
+                };
+                if !seen.insert((child, r)) {
+                    continue;
+                }
+                if depth < MAX_DEPTH {
+                    pending.push((Some(r), child, depth + 1));
+                } else {
+                    unknown = true;
+                }
             }
         }
     }
-    (drawn, unknown)
+    (names.ids.into_iter().filter(|(_, n)| drawn.contains(n)).map(|(name, _)| name).collect(), unknown)
+}
+
+/// The names [`names_content_draws`] meets, each kept once and known by its number, with the
+/// reference `xo` gives it, if any.
+struct Names<'a> {
+    xo: &'a Dict,
+    ids: HashMap<Vec<u8>, usize>,
+    in_xo: Vec<Option<ObjRef>>,
+}
+
+impl Names<'_> {
+    fn id(&mut self, name: &[u8]) -> usize {
+        if let Some(&n) = self.ids.get(name) {
+            return n;
+        }
+        let n = self.in_xo.len();
+        self.in_xo.push(self.xo.get(name).and_then(Object::as_ref));
+        self.ids.insert(name.to_vec(), n);
+        n
+    }
+
+    /// The names `data`'s `Do` operators draw, each once.
+    fn drawn_by(&mut self, data: &[u8]) -> Vec<usize> {
+        let mut seen = HashSet::new();
+        pdfcraft_content::ops(data).filter(|op| op.is("Do")).filter_map(|op| op.last_name().map(|n| self.id(n))).filter(|n| seen.insert(*n)).collect()
+    }
+}
+
+/// A form's own XObject names that are streams, by name, with the reference each is given by (none
+/// for a stream given directly).
+type OwnNames = HashMap<usize, Option<ObjRef>>;
+
+/// The dictionary a form's own XObject names are read from, by the first reference on the way to
+/// it: its `/XObject` entry, else its `/Resources`, else the form itself.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum OwnGiven {
+    XObject(ObjRef),
+    Resources(ObjRef),
+    Form(ObjRef),
+}
+
+/// The XObject names `form` (object `r`)'s own resources give as streams, read once for each
+/// dictionary they come from (`read`), each entry read charged to `lookups`; inside, `None` when it
+/// has no resources of its own: a /Resources that isn't a dictionary (null, or a missing object)
+/// is none, as for `resource_ops` and the interpreter. `None` when `lookups` can't pay for them.
+fn own_streams(
+    doc: &Document,
+    form: &Stream,
+    r: ObjRef,
+    names: &mut Names,
+    read: &mut HashMap<OwnGiven, Rc<OwnNames>>,
+    lookups: &mut usize,
+    kinds: &mut Kinds,
+) -> Option<Option<(OwnGiven, Rc<OwnNames>)>> {
+    let Some(entry) = form.dict.get(b"Resources") else { return Some(None) };
+    let resources = doc.resolve(entry);
+    let Some(resources) = resources.as_dict() else { return Some(None) };
+    let given = match (resources.get(b"XObject"), entry) {
+        (Some(Object::Ref(x)), _) => OwnGiven::XObject(*x),
+        (_, Object::Ref(res)) => OwnGiven::Resources(*res),
+        _ => OwnGiven::Form(r),
+    };
+    if let Some(own) = read.get(&given) {
+        return Some(Some((given, own.clone())));
+    }
+    *lookups = lookups.checked_sub(resources.get(b"XObject").map_or(0, |x| super::dict_len(doc, x)))?;
+    let own: OwnNames =
+        res_dict(doc, resources, b"XObject").iter().filter(|(_, v)| kind(doc, v, kinds).stream).map(|(k, v)| (names.id(k), v.as_ref())).collect();
+    let own = Rc::new(own);
+    read.insert(given, own.clone());
+    Some(Some((given, own)))
+}
+
+#[cfg(test)]
+thread_local! {
+    /// How many forms [`names_content_draws`] has decoded.
+    pub(crate) static SHARED_FORM_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// How many scopes [`names_content_draws`] has opened, beyond each call's first.
+    pub(crate) static SHARED_SCOPES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// Whether any of `drawn` (from [`names_content_draws`]) draws `name`: `None` when none is known to and
@@ -285,7 +448,8 @@ fn drawn_through(doc: &Document, res: &Dict) -> (Vec<ObjRef>, Vec<Dict>) {
 /// originals stay reachable, and so stay in a full-rewrite save, when:
 /// - the page inherited its /Resources from a /Pages node, which still lists them;
 /// - several pages share one resource dictionary, and another page still refers to it;
-/// - a form without /Resources drew them through the page's dictionary.
+/// - a form drew them through the page's dictionary: one without /Resources, or one whose own lack
+///   the name.
 ///
 /// An entry goes unless a page that draws through that dictionary still draws the name (the same
 /// image shown on another page, or again outside a mark). A dictionary that loses an entry is
@@ -301,6 +465,9 @@ pub(crate) fn unlink_doomed(doc: &mut Document, doomed: &[ObjRef], retired_prope
     let (holders, _) = resource_holders(doc);
     let index: HashMap<ObjRef, usize> = pdfcraft_model::pages(doc).iter().enumerate().map(|(i, p)| (p.obj, i)).collect();
     let holder_nodes: Vec<ObjRef> = holders.iter().map(|(node, _)| *node).collect();
+    let mut lookups = MAX_SCOPE_LOOKUPS;
+    // What the objects forms give in their resources are, read once for the operation.
+    let mut kinds = Kinds::new();
     for (node, users) in holders {
         let Some(mut res) = doc.get(node).as_dict().and_then(|d| d.get(b"Resources")).and_then(|r| doc.resolve(r).as_dict().cloned()) else {
             continue;
@@ -319,9 +486,8 @@ pub(crate) fn unlink_doomed(doc: &mut Document, doomed: &[ObjRef], retired_prope
             contents.push(page_streams(doc, &page, index.get(user).copied().unwrap_or(0))?.1);
         }
         let mut pruned = false;
-        // What each page draws through this dictionary, worked out once for all the names.
-        let drawn: Vec<_> =
-            if names.is_empty() { Vec::new() } else { contents.iter().map(|content| names_content_draws(doc, content, &xo)).collect() };
+        // What the pages draw through this dictionary, worked out once for all of them and all the names.
+        let drawn: Vec<_> = if names.is_empty() { Vec::new() } else { vec![names_content_draws(doc, &contents, &xo, &mut lookups, &mut kinds)] };
         for n in names {
             match any_draws(&drawn, &n) {
                 Some(true) => {}
@@ -343,7 +509,7 @@ pub(crate) fn unlink_doomed(doc: &mut Document, doomed: &[ObjRef], retired_prope
     // A surviving form can own the same old resource dictionary as a rewritten page. Its
     // unused descriptions and doomed XObjects remain reachable too, even after every page
     // holder is cleaned.
-    unlink_from_forms(doc, &holder_nodes, &doomed, retired_properties)?;
+    unlink_from_forms(doc, &holder_nodes, &doomed, retired_properties, &mut lookups, &mut kinds)?;
     Ok(())
 }
 
@@ -383,8 +549,16 @@ fn prune_retired_properties(doc: &Document, res: &mut Dict, names: &[Vec<u8>], c
 
 /// Unlink retired properties and `doomed` XObjects from the resources of the forms reachable from
 /// the page-tree `holders`, each unless the form's own content (or a form inheriting its
-/// resources) still uses the name. Fails closed when that cannot be determined.
-fn unlink_from_forms(doc: &mut Document, holders: &[ObjRef], doomed: &HashSet<ObjRef>, retired: &[Object]) -> Result<(), CosError> {
+/// resources) still uses the name. Fails closed when that cannot be determined. Look-ups in the
+/// scopes of forms these forms draw are charged to `lookups` ([`names_content_draws`]).
+fn unlink_from_forms(
+    doc: &mut Document,
+    holders: &[ObjRef],
+    doomed: &HashSet<ObjRef>,
+    retired: &[Object],
+    lookups: &mut usize,
+    kinds: &mut Kinds,
+) -> Result<(), CosError> {
     if retired.is_empty() && doomed.is_empty() {
         return Ok(());
     }
@@ -417,12 +591,12 @@ fn unlink_from_forms(doc: &mut Document, holders: &[ObjRef], doomed: &HashSet<Ob
                 pending.push(res);
                 continue;
             }
-            let data = doc.with_direct_parms(form).decoded()?;
-            let mut pruned = prune_doomed_xobjects(doc, std::slice::from_ref(&data), &mut xo, &doomed_names)?;
+            let content = [vec![doc.with_direct_parms(form).decoded()?]];
+            let mut pruned = prune_doomed_xobjects(doc, &content, &mut xo, &doomed_names, lookups, kinds)?;
             if pruned {
                 res.set(b"XObject".to_vec(), Object::Dict(xo));
             }
-            pruned |= prune_retired_properties(doc, &mut res, &names, &[vec![data]])?;
+            pruned |= prune_retired_properties(doc, &mut res, &names, &content)?;
             if pruned {
                 doc.update_dict(reference, |d| d.set(b"Resources".to_vec(), Object::Dict(res.clone())))?;
             }
@@ -432,12 +606,19 @@ fn unlink_from_forms(doc: &mut Document, holders: &[ObjRef], doomed: &HashSet<Ob
     Ok(())
 }
 
-fn prune_doomed_xobjects(doc: &Document, content: &[Vec<u8>], xo: &mut Dict, doomed_names: &[Vec<u8>]) -> Result<bool, CosError> {
+fn prune_doomed_xobjects(
+    doc: &Document,
+    content: &[Vec<Vec<u8>>],
+    xo: &mut Dict,
+    doomed_names: &[Vec<u8>],
+    lookups: &mut usize,
+    kinds: &mut Kinds,
+) -> Result<bool, CosError> {
     let mut pruned = false;
     if doomed_names.is_empty() {
         return Ok(false);
     }
-    let drawn = [names_content_draws(doc, content, xo)];
+    let drawn = [names_content_draws(doc, content, xo, lookups, kinds)];
     for name in doomed_names {
         match any_draws(&drawn, name) {
             Some(true) => {}

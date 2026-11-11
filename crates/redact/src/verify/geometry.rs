@@ -38,6 +38,11 @@ pub(super) struct Geo<'a> {
     reported: HashSet<(usize, Finding)>,
     /// Pattern, soft-mask and Type3 resources already searched for images.
     pub(super) searched: HashSet<ObjRef>,
+    /// The resource names the forms on the way to this point are read with
+    /// ([`crate::interp::MAX_HELD_BYTES`]).
+    held: usize,
+    /// What the objects forms give in their resources are ([`crate::interp::kind`]).
+    kinds: crate::interp::Kinds,
 }
 
 /// What still paints inside `regions` on a page of the output (the overlay boxes excepted):
@@ -46,9 +51,10 @@ pub(super) fn check_geometry(doc: &Document, page: &Dict, regions: &[[f64; 4]], 
     let unverifiable = |why: &'static str| (0..regions.len()).map(|i| (i, Finding::Unverifiable(why))).collect();
     // The redaction boxes are painted on purpose.
     let Ok(data) = page_content(doc, page, ctx, true) else { return unverifiable("the page content can't be read in full") };
-    let mut geo = Geo { doc, ctx, regions, found: Vec::new(), reported: HashSet::new(), searched: HashSet::new() };
+    let mut geo =
+        Geo { doc, ctx, regions, found: Vec::new(), reported: HashSet::new(), searched: HashSet::new(), held: 0, kinds: crate::interp::Kinds::new() };
     let res = page.get(b"Resources").and_then(|r| doc.resolve(r).as_dict().cloned()).unwrap_or_default();
-    geo.run(&data, &res, Matrix::IDENTITY, Vec::new(), 0);
+    geo.run(&data, &res, Some(&res), Matrix::IDENTITY, Vec::new(), 0);
     geo.appearances(page, &res);
     geo.found
 }
@@ -110,7 +116,8 @@ impl Geo<'_> {
                         continue;
                     };
                     let own = st.dict.get(b"Resources").and_then(|x| doc.resolve(x).as_dict().cloned());
-                    self.run(&data, own.as_ref().unwrap_or(res), ctm, Vec::new(), 1);
+                    let res = own.as_ref().unwrap_or(res);
+                    self.run(&data, res, Some(res), ctm, Vec::new(), 1);
                 }
             }
         }
@@ -128,7 +135,11 @@ impl Geo<'_> {
         !gs.holes.iter().any(|h| contains(*h, reach, 0.01))
     }
 
-    fn run(&mut self, data: &[u8], res: &Dict, ctm: Matrix, holes: Vec<[f64; 4]>, depth: usize) {
+    /// Check content read with the names `res`, searching the patterns, soft masks and Type 3 fonts
+    /// `searched` gives for images: the resources this content gives itself, if any. Its caller's
+    /// were searched where they were given, and a copy of them in `res` would search them again on
+    /// every draw.
+    fn run(&mut self, data: &[u8], res: &Dict, searched: Option<&Dict>, ctm: Matrix, holes: Vec<[f64; 4]>, depth: usize) {
         if depth > MAX_DEPTH {
             for i in 0..self.regions.len() {
                 self.report(i, Finding::Unverifiable("forms are nested too deep to check"));
@@ -136,7 +147,9 @@ impl Geo<'_> {
             return;
         }
         let xobjects = res_dict(self.doc, res, b"XObject");
-        self.hidden_images(res, depth);
+        if let Some(searched) = searched {
+            self.hidden_images(searched, depth);
+        }
         let mut gs = Gs { ctm, holes };
         let mut stack: Vec<Gs> = Vec::new();
         // The current path in device space: its subpaths, and the clip operator it carries.
@@ -282,8 +295,21 @@ impl Geo<'_> {
             self.unverifiable("a form under the region can't be decoded in full");
             return;
         };
+        // A name its own resources lack is looked up in its caller's, as the renderer does.
         let own = s.dict.get(b"Resources").and_then(|r| self.doc.resolve(r).as_dict().cloned());
-        self.run(&data, own.as_ref().unwrap_or(parent), fctm, gs.holes.clone(), depth + 1);
+        let held = match &own {
+            Some(own) => crate::interp::held_bytes(self.doc, own).saturating_add(crate::interp::held_bytes(self.doc, parent)),
+            None => crate::interp::held_bytes(self.doc, parent),
+        };
+        if self.held.saturating_add(held) > crate::interp::MAX_HELD_BYTES {
+            self.unverifiable("the forms under the region hold too many resources to check");
+            return;
+        }
+        let names = own.as_ref().map(|own| crate::interp::form_resources(self.doc, own, parent, &mut self.kinds));
+        let res = names.as_ref().unwrap_or(parent);
+        self.held += held;
+        self.run(&data, res, own.as_ref(), fctm, gs.holes.clone(), depth + 1);
+        self.held = self.held.saturating_sub(held);
     }
 
     /// Images drawn from tiling patterns, soft-mask groups and Type3 glyph procedures can't be
@@ -292,6 +318,8 @@ impl Geo<'_> {
         let doc = self.doc;
         let mut streams: Vec<(Option<ObjRef>, Stream)> = Vec::new();
         let take = |o: &Object, streams: &mut Vec<(Option<ObjRef>, Stream)>| {
+            #[cfg(test)]
+            HIDDEN_LOOKS.with(|c| c.set(c.get() + 1));
             if let Object::Stream(s) = &*doc.resolve(o) {
                 streams.push((o.as_ref(), s.clone()));
             }
@@ -338,33 +366,46 @@ impl Geo<'_> {
         }
         let data = self.ctx.decode(self.doc, s)?;
         let own = s.dict.get(b"Resources").and_then(|r| self.doc.resolve(r).as_dict().cloned());
-        let res = own.as_ref().unwrap_or(parent);
-        let xobjects = res_dict(self.doc, res, b"XObject");
-        for op in parse(&data).ops {
-            match op.op.as_slice() {
-                b"BI" => return Ok(true),
-                b"Do" => {
-                    let Some(entry) = op.last_name().and_then(|n| xobjects.get(n)) else { continue };
-                    let Object::Stream(x) = &*self.doc.resolve(entry) else { continue };
-                    match x.dict.name(b"Subtype") {
-                        Some(b"Image") => return Ok(true),
-                        Some(b"Form") => {
-                            if let Some(r) = entry.as_ref()
-                                && !self.searched.insert(r)
-                            {
-                                continue;
-                            }
-                            if self.has_image(x, res, depth + 1)? {
-                                return Ok(true);
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-                _ => {}
-            }
+        let held = match &own {
+            Some(own) => crate::interp::held_bytes(self.doc, own).saturating_add(crate::interp::held_bytes(self.doc, parent)),
+            None => crate::interp::held_bytes(self.doc, parent),
+        };
+        if self.held.saturating_add(held) > crate::interp::MAX_HELD_BYTES {
+            return Err(());
         }
-        Ok(false)
+        let names = own.map(|own| crate::interp::form_resources(self.doc, &own, parent, &mut self.kinds));
+        let res = names.as_ref().unwrap_or(parent);
+        self.held += held;
+        let found = (|| {
+            let xobjects = res_dict(self.doc, res, b"XObject");
+            for op in parse(&data).ops {
+                match op.op.as_slice() {
+                    b"BI" => return Ok(true),
+                    b"Do" => {
+                        let Some(entry) = op.last_name().and_then(|n| xobjects.get(n)) else { continue };
+                        let Object::Stream(x) = &*self.doc.resolve(entry) else { continue };
+                        match x.dict.name(b"Subtype") {
+                            Some(b"Image") => return Ok(true),
+                            Some(b"Form") => {
+                                if let Some(r) = entry.as_ref()
+                                    && !self.searched.insert(r)
+                                {
+                                    continue;
+                                }
+                                if self.has_image(x, res, depth + 1)? {
+                                    return Ok(true);
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Ok(false)
+        })();
+        self.held = self.held.saturating_sub(held);
+        found
     }
 }
 
@@ -504,4 +545,10 @@ pub(super) fn image_cleared(doc: &Document, ctx: &Ctx, s: &Stream, ctm: &Matrix,
         }
     }
     Ok(true)
+}
+
+#[cfg(test)]
+thread_local! {
+    /// How many pattern cells, soft-mask groups and glyph procedures the image search has looked at.
+    pub(crate) static HIDDEN_LOOKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }

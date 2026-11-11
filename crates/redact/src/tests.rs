@@ -6277,6 +6277,7 @@ fn unused_descriptions_in_shared_or_inherited_resources_are_retired() {
 mod descriptions;
 mod elsewhere;
 mod form_matrix;
+mod form_names;
 mod hidden_scope;
 mod identification;
 mod inline_images;

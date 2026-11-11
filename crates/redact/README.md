@@ -127,7 +127,20 @@ A verification pass re-reads each redacted page and fails the operation if any g
 image is still under an area. It checks every content stream the page had, whatever its
 dictionary calls it; only the overlay streams this `apply` added (`Report::overlays`) are skipped.
 Text is placed with the font and size set by `Tf` or by an ExtGState's `/Font` through `gs`, and a
-form XObject starts from the text state of the content that draws it. Content that can't be
+form XObject starts from the text state of the content that draws it. A form with resources of its own
+looks a name they lack up in the resources of the content that draws it, as the renderer does, for its
+XObjects, fonts, graphics states and patterns, the names redaction looks up; not for its
+marked-content properties, nor its colour spaces and shadings, which redaction doesn't look up by
+name (`cs` keeps a pattern for `/Pattern` alone). Each form is read with a copy of those names, its own added (a form without
+resources of its own, with a copy of its caller's), so the forms nested along
+one path may hold at most 16 MiB of resources between them, with resources of their own or
+without, each entry counted as its name's length and 56 bytes, with what a value gives directly:
+past that, Apply refuses the page and the proof says it can't check it, rather than hold the
+chain's depth times their size. The walk, the verification pass and the check of what pages
+sharing a resource dictionary still draw read it so; the cleanup of a rewritten page's own resources (the XObjects it
+replaced, its fonts and properties, and a rewritten form's own XObjects) and the Type 3 font cleanup don't, and can drop something such
+a form still draws beside a mark, or a property such a form's marked content names, which then shows
+what its layer hid. Content that can't be
 decoded makes the operation fail rather than leave it unredacted, and so does an inline image the
 renderer's tokenizer reads no image for (`RedactError::Unreadable`): where the page's operators
 resume after it would be a guess. So do bytes the content parser can't read, in the page's content
@@ -172,9 +185,13 @@ A redacted page that inherits `/Resources` from the page tree gets them pinned (
 a direct inherited dictionary is made one shared object first) before it is rewritten. The parent's
 `/Resources` is then retired unless another page still inherits it, so it cannot keep a removed
 XObject reachable. Surviving form XObjects lose the resource entries for removed XObjects that
-neither their own content nor a form without resources of its own drawn through them still draws,
-for the same reason, and a redacted page keeps a name under that rule too. Pages that aren't
-redacted are left untouched.
+neither their own content nor a form drawn through them (one without resources of its own, or one
+whose own `/XObject` doesn't give the name as a stream) still draws, for the same reason, and a
+redacted page keeps a name under that rule too. Where that can't be told, the operation fails
+rather than guess: such a form won't decode, forms nest past the depth followed, or forms whose own
+`/XObject` gives streams put the names drawn in more scopes than are followed (65,536 for one
+resource dictionary, and 1,048,576 look-ups in such scopes, or entries read in those forms'
+`/XObject`s, for the whole operation). Pages that aren't redacted are left untouched.
 
 ## Remove hidden information / Sanitize
 
