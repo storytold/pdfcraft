@@ -6785,6 +6785,19 @@ fn calculate_now_updates_live_fields_in_one_undo_step() {
 }
 
 #[test]
+fn calculate_now_in_a_document_script_helper_gets_the_calculation_list() {
+    let helpers = "function times\\(a, b\\) { return a * b; } function recalc\\(\\) { calculateNow\\(\\); }";
+    let mut session = Session::new().with_clock(|| 1_700_000_000);
+    let id = session.open("calculate-helper.pdf", None, Arc::new(scripted_form_with(helpers)), None).unwrap();
+    let out = session
+        .run_javascript(id, "getField('price').value = 3; getField('qty').value = 2; recalc(); console.println(getField('total').value);", None)
+        .unwrap();
+
+    assert!(out.error.is_none(), "{out:?}");
+    assert!(out.console.iter().any(|line| line == "6"), "the document helper recalculated total: {out:?}");
+}
+
+#[test]
 /// Respect explicit calculation order, restore the outer event and stop recursive calculation requests.
 fn calculate_now_uses_calculation_order_and_bounds_recursion() {
     let mut s = Session::new().with_clock(|| 1_700_000_000);
@@ -14767,7 +14780,7 @@ fn exact_image_import_targets_only_the_selected_duplicate_button() {
     assert_eq!(has_icons(&s, reopened), [false, true]);
 }
 
-/// Native automatic calculations and explicit calculateNow agree on all selected export values.
+/// Native automatic calculations and explicit calculateNow agree on the first selected value.
 #[test]
 fn multiselect_calculation_matches_explicit_script_and_saved_result() {
     let (mut s, id) = session_with(1);
@@ -14789,14 +14802,14 @@ fn multiselect_calculation_matches_explicit_script_and_saved_result() {
     )
     .unwrap();
     s.apply(id, Edit::SetFieldValue { name: "choices".into(), value: pdfcraft_forms::FieldValue::Choice(vec!["2".into(), "5".into()]) }).unwrap();
-    assert_eq!(s.get(id).unwrap().form.iter().find(|f| f.name == "sum").unwrap().value, ["7"]);
+    assert_eq!(s.get(id).unwrap().form.iter().find(|f| f.name == "sum").unwrap().value, ["2"]);
     let out = s.run_javascript(id, "calculateNow();getField('sum').value", None).unwrap();
     assert_eq!(out.error, None);
-    assert_eq!(out.result.as_deref(), Some("7"));
-    assert_eq!(s.get(id).unwrap().form.iter().find(|f| f.name == "sum").unwrap().value, ["7"]);
+    assert_eq!(out.result.as_deref(), Some("2"));
+    assert_eq!(s.get(id).unwrap().form.iter().find(|f| f.name == "sum").unwrap().value, ["2"]);
     let bytes = s.save_bytes(id).unwrap();
     let reopened = s.open("again.pdf", None, bytes, None).unwrap();
-    assert_eq!(s.get(reopened).unwrap().form.iter().find(|f| f.name == "sum").unwrap().value, ["7"]);
+    assert_eq!(s.get(reopened).unwrap().form.iter().find(|f| f.name == "sum").unwrap().value, ["2"]);
 }
 
 /// Real mixed widgets converge even when buttonSetIcon repeats widget zero's existing icon.

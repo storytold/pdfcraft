@@ -348,6 +348,11 @@ fn calculate_now(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsVa
 }
 
 /// Acrobat's built-in calculation helper, used by the scripts written by its Calculate tab.
+/// `AFSimple_Calculate(op, names)`, with the semantics of the native Simple calculation
+/// (`pdfcraft_forms::af::calculate`), so a total read right after `calculateNow()` is the one the
+/// commit path writes: a name also stands for every field under it (`b` sums `b.c` and `b.d`),
+/// each field counts its first value, and values are read as `AFMakeNumber` reads typed text
+/// (currency, `%`, group separators, a comma decimal separator), anything else counting as 0.
 fn af_simple_calculate(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     let op = text(&arg(args, 0), ctx)?;
     let names = strings(&arg(args, 1), ctx)?;
@@ -368,7 +373,7 @@ fn af_simple_calculate(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsRe
     let mut values = names
         .iter()
         .flat_map(|name| fields.iter().filter(move |f| f.name == *name || f.name.strip_prefix(name).is_some_and(|rest| rest.starts_with('.'))))
-        .flat_map(|field| field.value.iter())
+        .filter_map(|field| field.value.first())
         .map(|v| make_number(v).unwrap_or(0.0))
         .peekable();
     let result = match op.as_str() {

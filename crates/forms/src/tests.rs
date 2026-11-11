@@ -7299,3 +7299,21 @@ fn a_four_entry_mk_colour_with_a_null_is_cmyk_with_zero() {
     let rgb = off(&mut doc, "rgb");
     assert!(rgb.contains("0 0 1 rg") && rgb.contains("1 0 0 RG"), "three numbers stay RGB: {rgb}");
 }
+
+/// A Simple calculation counts the first value of a multiple-selection list, as `main` always
+/// has, so the native total and `AFSimple_Calculate` in a script agree.
+#[test]
+fn simple_calculation_counts_the_first_value_of_a_multiple_selection_list() {
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [5 0 R 6 0 R] >>".into(),
+        "<< /Fields [5 0 R 6 0 R] /CO [6 0 R] /DA (/Helv 0 Tf 0 g) >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Ch /Ff 2097152 /T (picks) /Opt [(4) (6)] /V [(4) (6)] /Rect [50 700 250 760] /P 3 0 R >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (total) /Rect [50 640 250 660] /P 3 0 R /AA << /C << /S /JavaScript /JS (AFSimple_Calculate\\(\"SUM\", new Array\\(\"picks\"\\)\\);) >> >> >>".into(),
+    ];
+    let mut doc = document(&objs);
+    assert_eq!(field(&fields(&doc), "picks").value, ["4", "6"]);
+    recalculate(&mut doc).unwrap();
+    assert_eq!(field(&fields(&doc), "total").value, ["4"]);
+}

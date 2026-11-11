@@ -2499,6 +2499,8 @@ fn af_simple_calculate_expands_groups_and_duplicate_names() {
         FieldState::new("row.1", FieldType::Text, vec!["3".into()]),
         FieldState::new("row.1", FieldType::Text, vec!["5".into()]),
         FieldState::new("rowExtra", FieldType::Text, vec!["100".into()]),
+        // A multiple-selection list counts its first value, as the native Simple calculation does.
+        FieldState::new("picks", FieldType::ListBox, vec!["4".into(), "6".into()]),
     ];
     for (op, names, expected) in [
         ("SUM", "['row']", 10.0),
@@ -2508,6 +2510,8 @@ fn af_simple_calculate_expands_groups_and_duplicate_names() {
         ("AVG", "['row']", 10.0 / 3.0),
         ("MIN", "['row']", 2.0),
         ("MAX", "['row']", 5.0),
+        ("SUM", "['picks']", 4.0),
+        ("MAX", "['picks']", 4.0),
         ("SUM", "['missing']", 0.0),
         ("PRD", "['missing']", 0.0),
         ("AVG", "['missing']", 0.0),
