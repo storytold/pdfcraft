@@ -10,7 +10,7 @@
 
 use std::collections::BTreeMap;
 
-use pdfcraft_content::{Matrix, Op, Pieces};
+use pdfcraft_content::{Matrix, Op};
 use pdfcraft_cos::{Document, Object};
 
 use crate::EditError;
@@ -53,9 +53,7 @@ impl PageGraphic {
     }
 }
 
-fn joined(streams: &[(Object, Vec<u8>)]) -> Pieces {
-    Pieces::join(&streams.iter().map(|(_, data)| data.as_slice()).collect::<Vec<_>>())
-}
+
 
 fn intersection(a: [f64; 4], b: [f64; 4]) -> Option<[f64; 4]> {
     let r = [a[0].max(b[0]), a[1].max(b[1]), a[2].min(b[2]), a[3].min(b[3])];
@@ -262,7 +260,7 @@ pub fn page_graphics(doc: &Document, page: usize) -> Result<Vec<PageGraphic>, Ed
     let p = page_of(doc, page)?;
     let crop = p.crop(doc);
     let streams = content_streams(doc, &p.dict)?;
-    let pieces = joined(&streams);
+    let pieces = crate::text::joined(&streams);
     let ops = pieces.parse().ops;
     if ops.len() > MAX_OPERATIONS {
         return Err(EditError::Invalid("this page has too many content operations for object selection".into()));
@@ -511,7 +509,7 @@ pub fn delete_graphic(doc: &mut Document, page: usize, index: usize) -> Result<(
     let graphic = graphics.get(index).ok_or_else(|| EditError::Invalid(format!("page {} has no graphic {}", page + 1, index + 1)))?.clone();
     let p = page_of(doc, page)?;
     let all = content_streams(doc, &p.dict)?;
-    let pieces = joined(&all);
+    let pieces = crate::text::joined(&all);
     let ops = pieces.parse().ops;
     if graphic.end > ops.len() || graphic.start >= graphic.end {
         return Err(EditError::Invalid("the graphic operation could not be located".into()));
@@ -529,7 +527,7 @@ pub fn delete_graphic(doc: &mut Document, page: usize, index: usize) -> Result<(
         let keep = ops.get(i).is_none_or(|op| !removes(op.op.as_slice()));
         (Vec::new(), keep)
     });
-    let contents = crate::text::rewritten_contents(doc, &all, data);
+    let contents = crate::text::rewritten_contents(doc, &all, data)?;
     doc.update_dict(p.obj, |d| d.set(b"Contents".to_vec(), contents))?;
     Ok(())
 }
@@ -692,7 +690,7 @@ fn transform_runs(
     }
     let p = page_of(doc, page)?;
     let all = content_streams(doc, &p.dict)?;
-    let pieces = joined(&all);
+    let pieces = crate::text::joined(&all);
     let ops = pieces.parse().ops;
     // A whole graphics scope is transformed as one piece, `q cm <scope> Q`, the way an image's
     // own scope is: its clip paths and any nested state scale and move with the artwork instead
@@ -769,7 +767,7 @@ fn transform_runs(
         }
         (out, true)
     });
-    let contents = crate::text::rewritten_contents(doc, &all, data);
+    let contents = crate::text::rewritten_contents(doc, &all, data)?;
     doc.update_dict(p.obj, |d| d.set(b"Contents".to_vec(), contents))?;
     Ok(())
 }

@@ -19,16 +19,17 @@ mod reader;
 mod state;
 mod xref;
 
+pub use objects::DECODE_PARMS_KEYS;
 pub(crate) use objects::Held;
 #[cfg(test)]
 pub(crate) use reader::find;
 #[cfg(test)]
 use reader::rfind;
-pub(crate) use state::ObjectReader;
 use state::{ObjStm, Slot, Unreadable};
+pub(crate) use state::{ObjectReader, held_bytes};
 pub use state::{ReadState, SourceIdentity};
 #[cfg(test)]
-use state::{SECTION_READS, held_bytes, objstm_member};
+use state::{SECTION_READS, objstm_member};
 use xref::XrefIndex;
 pub use xref::{Revision, XrefEntry};
 
@@ -48,6 +49,8 @@ pub struct Document {
     /// `fill_xref_gaps`.
     located: Arc<BTreeMap<u32, (u64, u16)>>,
     repair_log: Arc<Vec<String>>,
+    /// See [`Self::rebuilt_unlinked_update`].
+    unlinked_update: bool,
     /// What loading each file object gave, a failure as well: a damaged object is otherwise
     /// loaded again on every read, and a member of an object stream that can't be decoded
     /// decodes the stream again (`Document::load`).

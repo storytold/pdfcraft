@@ -118,8 +118,9 @@ pub(crate) fn context_menu(
                     }
                 });
             });
-            let thread: Vec<&pdfcraft_render::Annotation> = info.annotations.iter().filter(|r| r.replies_to(a)).collect();
-            let marked = crate::comments_panel::is_marked(&thread);
+            // The checkmark of the reviewer using this copy: checkmarks are each reviewer's own
+            // (ISO 32000-2 Table 174: "The annotation has been marked by the user").
+            let marked = pdfcraft_render::ReviewStates::new(&info.annotations).marked_by(a, &prefs.author);
             if ui.add_enabled(allowed, egui::Button::new(tl!(if marked { "Remove checkmark" } else { "Mark with checkmark" }))).clicked() {
                 action = Some(CanvasAction::Edit(Box::new(Edit::MarkAnnotation { page, index, marked: !marked, author: prefs.author.clone() })));
                 ui.close();
@@ -143,10 +144,11 @@ pub(crate) fn context_menu(
             }
             ui.separator();
             // The engine's own check, for each selected comment: a locked comment, or one with a
-            // locked reply, stays.
-            let deletes = deletable(page, index) && view.comments.also.iter().all(|&(p, i)| deletable(p, i));
+            // locked reply, stays. On a group subordinate, Delete takes just it, as Acrobat's does.
+            let (dpage, dindex) = view.comments.target().unwrap_or((page, index));
+            let deletes = deletable(dpage, dindex) && view.comments.also.iter().all(|&(p, i)| deletable(p, i));
             if ui.add_enabled(allowed && deletes, egui::Button::new(tl!(if several > 0 { "Delete comments" } else { "Delete" }))).clicked() {
-                action = delete_selected(&mut view.comments).map(|e| CanvasAction::Edit(Box::new(e)));
+                action = delete_selected(&mut view.comments, info).map(|e| CanvasAction::Edit(Box::new(e)));
                 ui.close();
             }
             if ui.add_enabled(allowed, egui::Button::new(tl!("Properties…"))).clicked() {
@@ -176,7 +178,7 @@ pub(crate) fn context_menu(
     if !info.annotations.is_empty() {
         ui.separator();
         if ui.add_enabled(can_modify, egui::Button::new(tl!("Flatten comments"))).clicked() {
-            view.comments.selected = None;
+            view.comments.select(None);
             action = Some(CanvasAction::Edit(Box::new(Edit::Flatten { comments: true, fields: false })));
             ui.close();
         }
@@ -460,6 +462,8 @@ pub fn status_badge(state: &str) -> Option<(&'static str, &'static str, Color32)
         "Rejected" => Some(("thumbs-down", "Rejected", Color32::from_rgb(0xD3, 0x2F, 0x2F))),
         "Cancelled" => Some(("circle-x", "Cancelled", Color32::from_rgb(0x8E, 0x8E, 0x8E))),
         "Completed" => Some(("check", "Completed", Color32::from_rgb(0x2D, 0x9D, 0x5B))),
+        // A status set back to None stays shown: None is a state (ISO 32000-2 Table 174).
+        "None" => Some(("minus", "None", Color32::from_rgb(0x8E, 0x8E, 0x8E))),
         _ => None,
     }
 }

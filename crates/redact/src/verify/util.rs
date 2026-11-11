@@ -33,11 +33,12 @@ impl Ctx {
     /// attempt is charged to the cumulative allowance, failures included: a decode that fails
     /// past the one-stream cap pays the cap, and one that fails mid-way pays what it decoded
     /// before the error — the work of finding out is not work a repeated reference gets for free.
-    pub(super) fn decode(&self, s: &Stream) -> Result<Vec<u8>, ()> {
+    /// `/DecodeParms` given by reference are read in `doc`, as redaction itself reads them.
+    pub(super) fn decode(&self, doc: &Document, s: &Stream) -> Result<Vec<u8>, ()> {
         let left = MAX_TOTAL_DECODED.saturating_sub(self.decoded.get());
         let cap = usize::try_from(left).unwrap_or(usize::MAX).min(MAX_STREAM);
         let mut budget = DecodeBudget::new(cap, usize::MAX);
-        let result = budget.decode_strict(s);
+        let result = budget.decode_strict(doc, s);
         // The attempt's own accounting covers a success (what it decoded), a stream cut short
         // by corruption (what it decoded first) and one refused past the cap (the cap): charge
         // it through, whichever way the attempt went.

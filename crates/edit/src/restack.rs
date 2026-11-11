@@ -299,7 +299,7 @@ fn text_name(keyword: &[u8]) -> Option<&'static str> {
 /// A page's content, ready to be rebuilt around a moved level.
 struct Sheet {
     page: pdfcraft_model::Page,
-    streams: Vec<(Object, Vec<u8>)>,
+    streams: Vec<crate::text::ContentStream>,
     pieces: Pieces,
     ops: Vec<Op>,
     entries: Vec<Object>,
@@ -323,7 +323,7 @@ impl Sheet {
         if streams.len() > MAX_OPERATIONS {
             return Err(EditError::Invalid("this page has too many content streams to restack an object".into()));
         }
-        let pieces = Pieces::join(&streams.iter().map(|(_, bytes)| bytes.as_slice()).collect::<Vec<_>>());
+        let pieces = crate::text::joined(&streams);
         let ops = pieces.parse().ops;
         if ops.len() > MAX_OPERATIONS {
             return Err(EditError::Invalid("this page has too many operators to restack an object".into()));
@@ -340,9 +340,9 @@ impl Sheet {
         }
         let mut starts = Vec::with_capacity(streams.len());
         let mut at = 0usize;
-        for (_, bytes) in &streams {
+        for stream in &streams {
             starts.push(at);
-            at = at.saturating_add(bytes.len()).saturating_add(1);
+            at = at.saturating_add(stream.data.len()).saturating_add(1);
         }
         let mut tagged = Vec::with_capacity(entries.len());
         let mut base = Vec::with_capacity(entries.len());
@@ -376,7 +376,7 @@ impl Sheet {
 
     fn entry_range(&self, e: usize) -> Range<usize> {
         let start = self.starts.get(e).copied().unwrap_or(0);
-        start..start.saturating_add(self.streams.get(e).map_or(0, |(_, b)| b.len()))
+        start..start.saturating_add(self.streams.get(e).map_or(0, |s| s.data.len()))
     }
 
     /// Every scope active at the position before operator `pos`, outermost first.
