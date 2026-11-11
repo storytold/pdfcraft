@@ -5363,7 +5363,8 @@ fn stencil(doc: &mut Document, w: u32, h: u32) -> ObjRef {
 }
 
 /// A picture with a stencil mask is made smaller like any other: the mask has a resolution of its
-/// own, so it stays exactly as it was and the hole it cuts stays where it was.
+/// own, so it keeps its size and its bits (stored again as Group 4, as a picture's mask is) and the
+/// hole it cuts stays where it was.
 #[test]
 fn a_picture_with_a_stencil_mask_is_downsampled_under_its_mask() {
     let mut doc = Document::new_empty();
@@ -5381,7 +5382,9 @@ fn a_picture_with_a_stencil_mask_is_downsampled_under_its_mask() {
     let after = stream(&doc, img);
     assert_eq!(after.dict.int(b"Width"), Some(300), "150 ppi");
     assert_eq!(after.dict.reference(b"Mask"), Some(mask), "the mask stays on it");
-    assert_eq!(stream(&doc, mask), mask_before, "and doesn't change");
+    let mask_after = stream(&doc, mask);
+    assert_eq!((mask_after.dict.int(b"Width"), mask_after.dict.int(b"Height")), (Some(1200), Some(1200)), "the mask isn't resampled");
+    assert_eq!(decoded_image(&doc, &mask_after).unwrap(), decoded_image(&doc, &mask_before).unwrap(), "and keeps its bits");
     let rendered = render(&doc);
     assert_eq!(rendered.len(), before.len());
     let changed = before.iter().zip(&rendered).filter(|(a, b)| a.abs_diff(**b) > 96).count();
@@ -5394,6 +5397,103 @@ fn a_picture_with_a_stencil_mask_is_downsampled_under_its_mask() {
             assert_eq!(rendered[i..i + 4], before[i..i + 4], "hole pixel ({x}, {y})");
         }
     }
+}
+
+/// A picture's masks of one bit a sample, which the page doesn't draw by name, are stored again as
+/// the monochrome settings ask, losslessly: a stencil `/Mask` (with a decode array that inverts it)
+/// and a one-bit `/SMask` become Group 4, keep their size and bits, and stay the pictures' masks;
+/// the page looks the same to the pixel. A mask two pictures share is stored once, and a stencil
+/// the page also draws by name is stored as that image. An eight-bit soft mask of only black and
+/// white stays as it is, to be resampled with its picture. With `mono: Retain` nothing changes.
+#[test]
+fn a_pictures_one_bit_masks_are_stored_again() {
+    let mut doc = Document::new_empty();
+    let (w, h) = (1200, 480);
+    let text = bilevel(w, h, false);
+    let decode = Object::Array(vec![1.into(), 0.into()]);
+    let stencil_mask = mono_image(&mut doc, w, h, &text, None, &[("ImageMask", Object::Bool(true)), ("Decode", decode.clone())]);
+    let one_bit = mono_image(&mut doc, w, h, &text, None, &[("BitsPerComponent", 1.into()), ("ColorSpace", Object::name("DeviceGray"))]);
+    let wide: Vec<u8> = text.iter().flat_map(|b| (0..8).rev().map(move |i| if b >> i & 1 == 1 { 255 } else { 0 })).collect();
+    let eight_bit = mono_image(&mut doc, w, h, &wide, None, &[("BitsPerComponent", 8.into()), ("ColorSpace", Object::name("DeviceGray"))]);
+    let drawn = mono_image(&mut doc, w, h, &text, None, &[("ImageMask", Object::Bool(true))]);
+    let masked = |doc: &mut Document, key: &str, mask: ObjRef| {
+        let picture = image(doc, 200, 80, 3, false, None);
+        let mut s = stream(doc, picture);
+        s.dict.set(key.as_bytes().to_vec(), Object::Ref(mask));
+        doc.set(picture, Object::Stream(s));
+        picture
+    };
+    let a = masked(&mut doc, "Mask", stencil_mask);
+    let b = masked(&mut doc, "Mask", stencil_mask);
+    let c = masked(&mut doc, "SMask", one_bit);
+    let d = masked(&mut doc, "SMask", eight_bit);
+    let e = masked(&mut doc, "Mask", drawn);
+    page(
+        &mut doc,
+        &[("A", a), ("B", b), ("C", c), ("D", d), ("E", e), ("M", drawn)],
+        "q 300 0 0 120 20 660 cm /A Do Q q 300 0 0 120 320 660 cm /B Do Q q 300 0 0 120 20 520 cm /C Do Q \
+         q 300 0 0 120 320 520 cm /D Do Q q 300 0 0 120 20 380 cm /E Do Q q 0 0.4 0.8 rg 300 0 0 120 320 380 cm /M Do Q",
+    );
+    // Pictures in colour and grey are left as they are, so only the masks can change.
+    let keep = ImageSettings { downsample: false, compression: Compression::Retain, ..ImageSettings::REDUCE };
+    let settings = Settings { color: keep, gray: keep, ..Settings::default() };
+    let before = render(&doc);
+    let masks = [stencil_mask, one_bit, eight_bit, drawn].map(|r| stream(&doc, r));
+
+    let mut kept = doc.clone();
+    let r = optimize(&mut kept, &Settings { mono: RETAIN, ..settings.clone() }).unwrap();
+    assert_eq!(r.images_recompressed, 0, "Retain keeps every mask as it is");
+    assert_eq!([stencil_mask, one_bit, eight_bit, drawn].map(|r| stream(&kept, r)), masks);
+
+    let r = optimize(&mut doc, &settings).unwrap();
+    assert_eq!(r.images_recompressed, 3, "the shared stencil once, the soft mask, the stencil drawn by name once: {r:?}");
+    for (mask, old) in [(stencil_mask, &masks[0]), (one_bit, &masks[1]), (drawn, &masks[3])] {
+        let new = stream(&doc, mask);
+        assert_eq!(new.dict.name(b"Filter"), Some(&b"CCITTFaxDecode"[..]), "{mask:?}");
+        assert_eq!((new.dict.int(b"Width"), new.dict.int(b"Height")), (Some(w as i64), Some(h as i64)));
+        assert_eq!(decoded_image(&doc, &new).unwrap(), decoded_image(&doc, old).unwrap(), "{mask:?} keeps its bits");
+    }
+    assert_eq!(stream(&doc, stencil_mask).dict.get(b"Decode"), Some(&decode), "the decode array stays");
+    assert_eq!(stream(&doc, eight_bit), masks[2], "an eight-bit soft mask stays");
+    for (picture, key, mask) in
+        [(a, "Mask", stencil_mask), (b, "Mask", stencil_mask), (c, "SMask", one_bit), (d, "SMask", eight_bit), (e, "Mask", drawn)]
+    {
+        assert_eq!(stream(&doc, picture).dict.reference(key.as_bytes()), Some(mask), "{picture:?} keeps its mask");
+    }
+    assert!(render(&doc) == before, "the page looks the same");
+}
+
+/// Stored as JBIG2, a picture's mask is coded on its own: it shares no symbol dictionary with the
+/// images the page draws by name, which do share one.
+#[test]
+fn a_pictures_mask_stored_as_jbig2_shares_no_dictionary() {
+    let mut doc = Document::new_empty();
+    let (w, h) = (1200, 480);
+    let text = bilevel(w, h, false);
+    let mask = mono_image(&mut doc, w, h, &text, None, &[("ImageMask", Object::Bool(true))]);
+    let picture = image(&mut doc, 200, 80, 3, false, None);
+    let mut s = stream(&doc, picture);
+    s.dict.set(b"Mask".to_vec(), Object::Ref(mask));
+    doc.set(picture, Object::Stream(s));
+    let named: Vec<ObjRef> = (0..3)
+        .map(|_| mono_image(&mut doc, w, h, &text, None, &[("BitsPerComponent", 1.into()), ("ColorSpace", Object::name("DeviceGray"))]))
+        .collect();
+    page(
+        &mut doc,
+        &[("P", picture), ("G0", named[0]), ("G1", named[1]), ("G2", named[2])],
+        "q 300 0 0 120 20 660 cm /P Do Q q 300 0 0 120 320 660 cm /G0 Do Q q 300 0 0 120 20 520 cm /G1 Do Q q 300 0 0 120 320 520 cm /G2 Do Q",
+    );
+    let keep = ImageSettings { downsample: false, compression: Compression::Retain, ..ImageSettings::REDUCE };
+    let jbig2 = MonoSettings { compression: MonoCompression::Jbig2, ..MonoSettings::REDUCE };
+    let before = render(&doc);
+    let old = stream(&doc, mask);
+    optimize(&mut doc, &Settings { color: keep, gray: keep, mono: jbig2, ..Settings::default() }).unwrap();
+    let new = stream(&doc, mask);
+    assert_eq!(new.dict.name(b"Filter"), Some(&b"JBIG2Decode"[..]));
+    assert!(!new.dict.contains(b"DecodeParms"), "no /JBIG2Globals");
+    assert_eq!(decoded_image(&doc, &new).unwrap(), decoded_image(&doc, &old).unwrap());
+    assert!(named.iter().any(|r| stream(&doc, *r).dict.get(b"DecodeParms").is_some()), "the images drawn by name share one");
+    assert!(render(&doc) == before, "the page looks the same");
 }
 
 /// A colour-key mask names sample values: resampling or JPEG would make holes where there were none
