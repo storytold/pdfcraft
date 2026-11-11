@@ -631,7 +631,7 @@ pub fn tools() -> Vec<ToolDef> {
                 &["doc", "page", "path", "rect"],
             )),
         t("form_set_image", "Set an image field's picture", "Show an image file (PNG, JPEG, TIFF, GIF or BMP) in an image field or button, scaled to fit and centred (what clicking an image field does). On an XFA form the picture is kept in its data too (base64, as Designer saves it) and the form shows it from there. Undoable.")
-            .with(schema(json!({ "doc": doc(), "field": { "type": "string" }, "path": { "type": "string" } }), &["doc", "field", "path"])),
+            .with(schema(json!({ "doc": doc(), "field": { "type": "string" }, "field_id": {"type":"integer","minimum":0,"maximum":281474976710655u64,"description":"Optional exact document-local identity from form_fields; requires matching field name."}, "path": { "type": "string" } }), &["doc", "field", "path"])),
         t(
             "form_set_props",
             "Field properties",
@@ -757,7 +757,7 @@ pub fn tools() -> Vec<ToolDef> {
         t(
             "printer_papers",
             "List printer paper sizes",
-            "The media sizes (names and dimensions in points) and default paper supported by a printer driver. Pass printer: a name from printers, or \"default\".",
+            "The media sizes (names and dimensions in points) and default paper supported by a printer driver (CUPS: its PPD's, by the driver's names, the default being its *DefaultPageSize; a job on one, or on a standard size of one, is fed it under the PPD's own keyword). Pass printer: a name from printers, or \"default\".",
         )
         .ro()
         .with(schema(json!({ "printer": { "type": "string" } }), &["printer"])),
@@ -1415,10 +1415,10 @@ pub fn tools() -> Vec<ToolDef> {
         t("form_merge_data", "Merge data files into spreadsheet", "Collect the field values of form data files (FDF, XFDF) or filled-in PDF forms into one CSV file at path: a column per field name, a row per file. Returns the row and column counts.")
             .cmd("form.merge_data")
             .with(schema(json!({ "paths": { "type": "array", "items": { "type": "string" }, "minItems": 1 }, "path": { "type": "string" } }), &["paths", "path"])),
-        t("js_run", "Run JavaScript", "Run Acrobat JavaScript in the document, as the JavaScript console does (or as push button `field`'s Mouse Up script when field is given; on a laid-out XFA form, `field` runs that button's XFA click script instead, JavaScript or FormCalc, which can add and remove rows and show or hide subforms). The form object model is available: this/getField, event, app, util, console, display, color, and the document-level scripts (except the PDF container scripts when XFA layout is active; they remain available through js_document_scripts). Field changes and resetForm are applied as one undoable step; returns the alerts (each with its message, title, icon and buttons, in order; every question is still answered OK), console output and requests (print, page, url, submit, attachment) of the script and of the field scripts its changes ran, the script's error, the errors of document-level scripts that failed (the rest still ran), and in warnings the errors of applying the changes, such as values of an XFA form that could not be written to its data.")
+        t("js_run", "Run JavaScript", "Run Acrobat JavaScript in the document, as the JavaScript console does (or as push button `field`'s Mouse Up script when field is given; on a laid-out XFA form, `field` runs that button's XFA click script instead, JavaScript or FormCalc, which can add and remove rows and show or hide subforms). The form object model is available: this/getField, event, app, util, console, display, color, and the document-level scripts (except the PDF container scripts when XFA layout is active; they remain available through js_document_scripts). Field changes and resetForm are applied as one undoable step; returns the script's and subsequent field scripts' alerts (each with its message, title, icon and buttons, in order; AcroForm replies consume ordered answers; missing replies cancel input or use the alert button set's safe default), console output, requests (print, page, url, submit, attachment), error, and the errors of document-level scripts that failed (the rest still ran), plus warnings from applying the changes.")
             .cmd("tools.js_console")
             .with(schema(
-                json!({ "doc": doc(), "script": { "type": "string" }, "field": { "type": "string", "description": "Run as this button's Mouse Up event." } }),
+                json!({ "doc": doc(), "script": { "type": "string" }, "field": { "type": "string", "description": "Run as this button's Mouse Up event." }, "field_id": {"type":"integer","minimum":0,"maximum":281474976710655u64,"description":"Optional exact field identity from form_fields; requires matching field name and is scoped to this document."}, "answers": {"type":"array","maxItems":32,"items":{"type":["string","null"],"maxLength":4096},"description":"Ordered popup, response and alert answers; strings are limited to 4096 UTF-8 bytes at runtime; null cancels a popup or response, and selects an alert default (OK, Cancel or No, by button set)."} }),
                 &["doc", "script"],
             )),
         t("js_document_scripts", "Document JavaScripts", "List the document-level JavaScripts (name and source), which define functions field scripts use.")

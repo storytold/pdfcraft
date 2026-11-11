@@ -3040,6 +3040,8 @@ fn replace_text_lists_its_replacement() {
     }
 }
 
+/// Protect through the tools, then reopen: the open password is required, the restrictions
+/// (including page extraction) hold for the user, and the permissions password lifts them.
 #[test]
 fn protecting_through_tools() {
     let dir = workdir("protect");
@@ -3057,12 +3059,14 @@ fn protecting_through_tools() {
         (r["security"]["printing"].as_str(), r["security"]["annotate"].as_bool(), r["security"]["copy"].as_bool()),
         (Some("low"), Some(true), Some(false))
     );
+    assert_eq!(r["security"]["extract_pages"], false);
     assert!(!r.to_string().contains("boss"), "passwords are never echoed");
     ok(&mut a, "doc_save", json!({ "doc": doc, "path": "locked.pdf" }));
     // Another session: the open password is required, and the restrictions hold.
     let mut b = auto(&dir);
     assert!(matches!(b.call("doc_open", &json!({ "path": "locked.pdf" })), Err(ToolError::Failed(_))));
     let re = ok(&mut b, "doc_open", json!({ "path": "locked.pdf", "password": "open" }))["doc"].as_u64().unwrap();
+    assert_eq!(ok(&mut b, "doc_info", json!({ "doc": re }))["security"]["extract_pages"], false);
     assert!(matches!(b.call("page_delete", &json!({ "doc": re, "pages": [1] })), Err(ToolError::Failed(_))));
     assert!(matches!(b.call("doc_unprotect", &json!({ "doc": re })), Err(ToolError::Failed(_))));
     ok(&mut b, "comment_add", json!({ "doc": re, "page": 1, "type": "note", "at": [10, 10], "contents": "allowed" }));
@@ -3086,11 +3090,51 @@ fn protecting_through_tools() {
     assert_eq!(ok(&mut b, "text_find", json!({ "doc": re, "query": "Page" }))["count"], 3);
     // With the permissions password everything is possible, including removing security.
     let owner = ok(&mut b, "doc_open", json!({ "path": "locked.pdf", "password": "boss" }))["doc"].as_u64().unwrap();
+    assert_eq!(ok(&mut b, "doc_info", json!({ "doc": owner }))["security"]["extract_pages"], true);
     assert!(ok(&mut b, "text_extract", json!({ "doc": owner }))["pages"][0]["text"].as_str().is_some_and(|t| t.contains("Page")));
     assert_eq!(ok(&mut b, "doc_unprotect", json!({ "doc": owner }))["security"]["protected"], false);
     ok(&mut b, "doc_save", json!({ "doc": owner, "path": "open.pdf" }));
     let mut c = auto(&dir);
     ok(&mut c, "doc_open", json!({ "path": "open.pdf" }));
+}
+
+/// A refused `doc_split` or separate-file `page_extract` leaves no output directory behind
+/// (#5081), whether the protection allows no page changes ("Any except extracting pages") or
+/// page changes without copying; with copying allowed as well, the user may extract.
+#[test]
+fn refused_extraction_writes_no_split_or_page_output() {
+    let dir = workdir("refused-extraction-output");
+    // (changes, copy, assemble, extract_pages) as the user sees them.
+    let cases = [("any-except-extract", false, false, false), ("pages", false, true, false), ("pages", true, true, true)];
+    for (i, (changes, copy, assemble, extract)) in cases.into_iter().enumerate() {
+        let mut a = auto(&dir);
+        let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+        let protect = json!({ "doc": doc, "open_password": "open", "permissions_password": "boss", "changes": changes, "copy": copy });
+        ok(&mut a, "doc_protect", protect);
+        let path = format!("restricted-{i}.pdf");
+        ok(&mut a, "doc_save", json!({ "doc": doc, "path": path }));
+
+        let mut b = auto(&dir);
+        let restricted = ok(&mut b, "doc_open", json!({ "path": path, "password": "open" }))["doc"].as_u64().unwrap();
+        let security = ok(&mut b, "doc_info", json!({ "doc": restricted }))["security"].clone();
+        assert_eq!((security["assemble"].as_bool(), security["extract_pages"].as_bool()), (Some(assemble), Some(extract)), "{changes}, copy {copy}");
+        let (split_dir, extract_dir) = (format!("split-{i}"), format!("extract-{i}"));
+        let split = b.call("doc_split", &json!({ "doc": restricted, "every": 1, "out_dir": split_dir }));
+        let pages = b.call("page_extract", &json!({ "doc": restricted, "pages": [1, 2], "separate": true, "out_dir": extract_dir }));
+        if extract {
+            assert!(split.is_ok() && dir.join(&split_dir).exists(), "{changes}, copy {copy}");
+            let files = match pages.as_deref() {
+                Ok([Content::Json(v), ..]) => v["files"].as_array().map(Vec::len),
+                other => panic!("{changes}, copy {copy}: page_extract: {other:?}"),
+            };
+            assert_eq!(files, Some(2), "{changes}, copy {copy}");
+        } else {
+            assert!(matches!(split, Err(ToolError::Failed(_))), "{changes}, copy {copy}");
+            assert!(!dir.join(&split_dir).exists(), "refused split creates no output directory");
+            assert!(matches!(pages, Err(ToolError::Failed(_))), "{changes}, copy {copy}");
+            assert!(!dir.join(&extract_dir).exists(), "refused extraction creates no output directory");
+        }
+    }
 }
 
 /// A document that allows changes but not copying: the tools that return a page's text refuse,
@@ -9482,6 +9526,13 @@ fn javascript_through_tools() {
     assert_eq!(r["requests"][0]["page"], 2);
     let r = ok(&mut a, "js_run", json!({ "doc": doc, "script": "JSON.stringify(this.getPageBox())" }));
     assert_eq!(r["result"], "[0,300,200,0]");
+    ok(&mut a, "page_set_box", json!({ "doc":doc, "pages":[1], "box":"crop", "margins":[10,20,30,40] }));
+    let cropped = ok(&mut a, "js_run", json!({ "doc":doc, "script":"JSON.stringify(getPageBox('Crop',0))" }));
+    assert_eq!(cropped["result"], "[0,240,160,0]");
+    ok(&mut a, "page_set_box", json!({ "doc":doc, "pages":[2], "box":"media", "margins":[0,0,40,50] }));
+    let other_boxes = ok(&mut a, "js_run", json!({ "doc":doc, "script":"JSON.stringify([getPageBox('Media',0),getPageBox('Crop',1)])" }));
+    assert_eq!(other_boxes["result"], "[[-10,280,190,-20],[0,250,160,0]]");
+    ok(&mut a, "page_set_box", json!({ "doc":doc, "pages":[1], "box":"crop" }));
     let f = ok(&mut a, "form_fields", json!({ "doc": doc }));
     let total = f["fields"].as_array().unwrap().iter().find(|x| x["name"] == "Total").unwrap().clone();
     assert_eq!(total["value"], "3750");
@@ -9512,6 +9563,8 @@ fn javascript_through_tools() {
         json!({ "doc": doc, "field": "CaptionButton", "script": "getField('CaptionButton').buttonSetCaption('Continue'); getField('CaptionButton').buttonGetCaption();" }),
     );
     assert_eq!(r["result"], "Continue");
+    let routed = ok(&mut a, "js_run", json!({ "doc":doc, "field":"CaptionButton", "script":"event.name+'|'+event.targetName" }));
+    assert_eq!(routed["result"], "Mouse Up|CaptionButton");
     assert_eq!(
         ok(&mut a, "form_fields", json!({ "doc": doc }))["fields"].as_array().unwrap().iter().find(|f| f["name"] == "CaptionButton").unwrap()["caption"],
         "Continue"
@@ -9607,6 +9660,14 @@ fn detecting_form_fields_preserves_content_piece_comments() {
         } else {
             json!([])
         };
+        let check_inventory = |a: &mut Automation, doc| {
+            let mut fields = ok(a, "form_fields", json!({"doc": doc}))["fields"].clone();
+            for field in fields.as_array_mut().unwrap() {
+                assert!(field["field_id"].as_u64().is_some());
+                field.as_object_mut().unwrap().remove("field_id");
+            }
+            assert_eq!(fields, inventory);
+        };
         let check_text = |a: &mut Automation, doc| {
             let text = page_text(a, doc).join(" ");
             assert_eq!(text.split_whitespace().collect::<Vec<_>>(), ["FIRST", "LAST"]);
@@ -9627,12 +9688,12 @@ fn detecting_form_fields_preserves_content_piece_comments() {
         assert_eq!(ok(&mut a, "form_detect_fields", json!({"doc": doc, "add": false}))["fields"], candidates);
         assert_eq!(ok(&mut a, "form_fields", json!({"doc": doc}))["fields"], json!([]));
         assert_eq!(ok(&mut a, "form_detect_fields", json!({"doc": doc}))["fields"], candidates);
-        assert_eq!(ok(&mut a, "form_fields", json!({"doc": doc}))["fields"], inventory);
+        check_inventory(&mut a, doc);
         assert_eq!(ok(&mut a, "form_detect_fields", json!({"doc": doc}))["fields"], json!([]));
         ok(&mut a, "doc_save", json!({"doc": doc, "path": "saved.pdf"}));
         let mut reopened = auto(&dir);
         let again = ok(&mut reopened, "doc_open", json!({"path": "saved.pdf"}))["doc"].as_u64().unwrap();
-        assert_eq!(ok(&mut reopened, "form_fields", json!({"doc": again}))["fields"], inventory);
+        check_inventory(&mut reopened, again);
         check_text(&mut reopened, again);
         check_render(&mut reopened, again);
         std::fs::remove_dir_all(dir).unwrap();
