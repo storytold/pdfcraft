@@ -27,6 +27,17 @@ pub(crate) fn alert_json(m: &pdfcraft_engine::js::Message) -> Value {
     json!({ "message": m.text, "title": m.title, "icon": m.icon.name(), "buttons": m.buttons.name() })
 }
 
+/// What scripts that ran unasked (a document's Will Save or Will Print actions) showed, said
+/// or asked for, as tools report it.
+pub(crate) fn js_output_json(out: &pdfcraft_engine::js::JsOutput) -> Value {
+    json!({
+        "alerts": out.alerts.iter().map(alert_json).collect::<Vec<_>>(),
+        "console": out.console,
+        "requests": out.requests.iter().map(request_json).collect::<Vec<_>>(),
+        "errors": out.errors,
+    })
+}
+
 impl Automation {
     /// `js_run`: run `script` in the document, or as button `field`'s script, and report its
     /// messages, console lines, requests, error, the failing document scripts' errors and result.
@@ -120,6 +131,31 @@ impl Automation {
         Ok(
             json!({ "changed": changed, "alerts": out.alerts.iter().map(alert_json).collect::<Vec<_>>(), "console": out.console, "requests": reqs, "errors": out.errors }),
         )
+    }
+
+    /// `js_event`: run the JavaScript widget `widget` (1-based) of field `field` has for `event`
+    /// (a trigger id: mouse_enter, mouse_exit, mouse_down, mouse_up, on_focus, on_blur); returns
+    /// whether the form changed and what the script showed or asked for.
+    pub(crate) fn js_event(&mut self, a: &Args) -> Result<Value> {
+        let event = a.str("event")?;
+        let trigger = pdfcraft_engine::FieldTrigger::from_id(event).ok_or_else(|| {
+            ToolError::InvalidArgs(format!("event must be mouse_enter, mouse_exit, mouse_down, mouse_up, on_focus or on_blur, not {event:?}"))
+        })?;
+        let name = a.str("field")?;
+        let doc = self.doc(a)?;
+        let field = doc.form.iter().find(|f| f.name == name).ok_or_else(|| failed(format!("there is no field named {name:?} (see form_fields)")))?;
+        let widgets = field.widgets.len();
+        let widget = a.opt_int("widget")?.unwrap_or(1);
+        let widget = usize::try_from(widget).ok().and_then(|w| w.checked_sub(1)).filter(|w| *w < widgets).ok_or_else(|| match widgets {
+            0 => ToolError::InvalidArgs(format!("{name:?} has no widget")),
+            n => ToolError::InvalidArgs(format!("widget must be 1 to {n} for {name:?}")),
+        })?;
+        let id = doc.id;
+        let changed = self.session.field_trigger(id, name, widget, trigger).map_err(failed)?;
+        let out = self.session.take_js_output(id);
+        let mut result = js_output_json(&out);
+        result["changed"] = json!(changed);
+        Ok(result)
     }
 
     /// `form_merge_data`: merge the form data files at `paths` into one CSV at `path`, a row per

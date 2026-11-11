@@ -361,8 +361,17 @@ impl Automation {
         let settings = print::Settings { pages, paper, orientation, layout, content, raster, crops: Vec::new(), area };
         let laid_out = print::layout(&sizes, &settings).map_err(|e| bad(e.to_string()))?;
         let sheets = laid_out.len();
+        // The document's Will Print actions run first: what they change is printed (#269).
+        let scripts = if self.doc(a)?.allows_printing() {
+            self.session.run_document_actions(id, pdfcraft_engine::js::DocumentScriptEvent::WillPrint)
+        } else {
+            Default::default()
+        };
         let bytes = self.session.print_pdf(id, &settings).map_err(failed)?;
         let mut out = json!({ "sheets": sheets, "pages": settings.pages.len(), "bytes": bytes.len() });
+        if !scripts.is_empty() {
+            out["will_print"] = crate::a11y::form_tools::js_output_json(&scripts);
+        }
         match (a.opt_str("path")?, printer) {
             (Some(p), None) => {
                 let path = self.resolve(p, true)?;

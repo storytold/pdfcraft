@@ -128,6 +128,24 @@ fn read(doc: &Document, o: &Object, pages: &[pdfcraft_cos::ObjRef], scripts: &mu
     })
 }
 
+/// The JavaScript widget annotation `widget` runs for `trigger` (ISO 32000-2 Table 197: `/A`
+/// or `/AA /U` for Mouse Up, the other `/AA` entries for the rest), when that action is a
+/// JavaScript action. Reads only the widget's own dictionary, so a pointer moving over a large
+/// form costs nothing per field. Chained `/Next` actions are not run here.
+pub fn widget_script(doc: &Document, widget: pdfcraft_cos::ObjRef, trigger: Trigger) -> Option<String> {
+    let w = doc.get(widget);
+    let wd = w.as_dict()?;
+    let action = match trigger.key() {
+        None => wd.get(b"A").cloned().or_else(|| wd.get(b"AA").map(|a| doc.resolve(a)).and_then(|a| a.as_dict()?.get(b"U").cloned())),
+        Some(k) => wd.get(b"AA").map(|a| doc.resolve(a)).and_then(|a| a.as_dict()?.get(k).cloned()),
+    }?;
+    let resolved = doc.resolve(&action);
+    if resolved.as_dict()?.name(b"S")? != b"JavaScript" {
+        return None;
+    }
+    crate::script(doc, &action, &mut crate::script_budget())
+}
+
 /// The actions of field `name` (its first widget), by trigger, in the tab's order.
 pub fn field_actions(doc: &Document, name: &str) -> Result<Vec<(Trigger, FieldAction)>, FormError> {
     let all = fields(doc);

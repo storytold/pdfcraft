@@ -538,6 +538,71 @@ pub fn document_scripts_named(doc: &Document) -> Vec<(String, String)> {
     out
 }
 
+/// A document-level action trigger whose JavaScript the viewer runs (ISO 32000-2 §12.6.3,
+/// Table 199): the catalog's `/OpenAction`, or its `/AA` entries.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DocumentTrigger {
+    /// The catalog `/OpenAction`, once the document has opened.
+    Open,
+    /// `/AA /WS`, before the document is saved.
+    WillSave,
+    /// `/AA /WP`, before the document is printed.
+    WillPrint,
+}
+
+/// Most actions read for one document trigger, along its `/Next` chain. A chain can be cyclic
+/// or arbitrarily long; the rest are ignored.
+const MAX_CHAINED_ACTIONS: usize = 256;
+
+/// The JavaScript of the catalog actions for `trigger`, in the order a viewer runs them: the
+/// action, then its `/Next` actions depth first (§12.6.2). Actions of other types (a `/GoTo`
+/// open action, say) are skipped; their `/Next` chains are still followed. Bounded: each object
+/// is read once and at most [`MAX_CHAINED_ACTIONS`] actions are visited.
+pub fn document_action_scripts(doc: &Document, trigger: DocumentTrigger) -> Vec<String> {
+    let Some(root) = doc.root() else { return Vec::new() };
+    let cat = doc.get(root);
+    let Some(cat) = cat.as_dict() else { return Vec::new() };
+    let first = match trigger {
+        DocumentTrigger::Open => cat.get(b"OpenAction").cloned(),
+        DocumentTrigger::WillSave | DocumentTrigger::WillPrint => {
+            let key: &[u8] = if trigger == DocumentTrigger::WillSave { b"WS" } else { b"WP" };
+            cat.get(b"AA").map(|a| doc.resolve(a)).and_then(|a| a.as_dict().and_then(|d| d.get(key)).cloned())
+        }
+    };
+    let mut budget = crate::script_budget();
+    let mut seen: HashSet<u32> = HashSet::new();
+    let mut pending: Vec<Object> = first.into_iter().collect();
+    let mut visited = 0usize;
+    let mut out = Vec::new();
+    while let Some(raw) = pending.pop() {
+        visited += 1;
+        if visited > MAX_CHAINED_ACTIONS {
+            break;
+        }
+        if let Some(r) = raw.as_ref()
+            && !seen.insert(r.num)
+        {
+            continue;
+        }
+        let action = doc.resolve(&raw);
+        if let Some(list) = action.as_array() {
+            // Pushed in reverse so they run in the order listed.
+            pending.extend(list.iter().take(MAX_CHAINED_ACTIONS).rev().cloned());
+            continue;
+        }
+        let Some(d) = action.as_dict() else { continue };
+        if d.name(b"S") == Some(b"JavaScript".as_slice())
+            && let Some(js) = crate::script(doc, &raw, &mut budget)
+        {
+            out.push(js);
+        }
+        if let Some(next) = d.get(b"Next") {
+            pending.push(next.clone());
+        }
+    }
+    out
+}
+
 /// Call `f` on the array `o` is, or refers to, read in place: resolving a direct array would
 /// copy it.
 fn in_array(doc: &Document, o: &Object, f: impl FnOnce(&[Object])) {
