@@ -68,6 +68,15 @@ pub struct RenderConfig {
     pub layers: Arc<Vec<(i32, i32, bool)>>,
     /// View ▸ Hide all comments: markup annotations aren't drawn (fields and links still are).
     pub hide_comments: bool,
+    /// Annotations shown or hidden for viewing in place of their Hidden and NoView flags (object
+    /// number, generation, shown): fields a document's page actions and timers showed or hid
+    /// (an animation's frames). Display only; the document never changes.
+    pub annotations: Arc<Vec<(i32, i32, bool)>>,
+    /// Annotations drawn with a form XObject as their normal appearance (object number and
+    /// generation of the annotation, then of the form): push buttons a document's page actions
+    /// and timers gave another icon (`buttonSetIcon`, an animation's frames). Display only; the
+    /// document never changes.
+    pub appearances: Arc<Vec<(i32, i32, i32, i32)>>,
     /// Refuse a whole-page raster that would be reduced by the renderer's hard size caps.
     /// Tiled requests remain available for pages that exceed those caps. Both modes refuse
     /// a raster whose rounded integer dimensions exceed the final pixel-allocation budget.
@@ -118,6 +127,8 @@ impl RenderConfig {
             ocg_overrides: self.layers.clone(),
             view_auto_state: !self.for_print,
             hide_comments: self.hide_comments,
+            annotation_overrides: self.annotations.clone(),
+            appearance_overrides: self.appearances.clone(),
             font_resolver: Arc::new(move |query| {
                 japanese_fallback(query).or_else(|| system_fonts.then(|| system_fallback(query)).flatten()).or_else(|| standard(query))
             }),
