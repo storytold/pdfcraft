@@ -381,7 +381,6 @@ fn no_tool_escapes_the_root() {
                         Ok(Err(_)) => refused += 1,
                         Err(_) => leaked.push(format!("{mode}: {} panicked on {prop}={escape:?}", def.name)),
                     }
- 24566cdf2 (sign: review fixes for the token path)
                 }
             }
         }
