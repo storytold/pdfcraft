@@ -84,42 +84,45 @@
   fails with `unused import`. At `b7545a7a9` both steps are green (§4), which is
   the control. The parallel session pushed it at 10:28:56Z, so PR #6622 carries
   that head. **Both defects are fixed in `69b2a6dad`** (§4, "The two red steps
-  of `95e2c9c97` fixed"), which is the local head now; the fork and the PR still
-  carry `95e2c9c97` and the push is the owner's step.
-- Head before this STATUS commit: `69b2a6dad` (the `session.rs` import fix, §4)
-  on `f7ff56373` (the docs record of the fifth and sixth merges) on
-  `95e2c9c97` (merge `origin/main` `3a117c3c0`) on `b7545a7a9` (merge
-  `4efcfa6ea`) on `7f25d493b`; **125 commits** not in `origin/main`
-  (`git rev-list --count origin/main..HEAD`) and **0 behind** it —
-  `origin/main` is still `3a117c3c0`, so no fetch moved it;
-  `git diff --shortstat origin/main HEAD` is **108 files changed, 43521
-  insertions(+), 209 deletions(-)**. The docs commit that carries this record
-  makes the count 126. The numbers the
-  earlier briefs named — 85 commits, 9 behind,
-  5 ahead for `199076765`, then 86/11/6 at `0c57e2271`, 94/48/14 at
-  `b3732c152`, 95/48/15 at `c26867e9c`, 110/48/30 at `f48ec4754`, 113/0 at
-  `c1171d941`, 114/0 at `4f3e21245`, 116/0 at `80e99a2ed`, 117/0 at `b21b57b55`
-  and 118/0 at `27438a646` — were right when they were measured; `origin/main`
-  kept moving and each slice appended commits. Commits named below and in §4 by
-  their pre-rebase hashes are mapped in the rebase sections of §4.
-- Delivery, as measured now: PR #6622's `headRefOid` is still **`95e2c9c97`**
-  and so is the fork `copoka/pdfcraft`'s branch tip (`git ls-remote fork
-  refs/heads/feature/realtime-collaboration` returns that hash), unchanged
-  since the parallel PR-sweep session pushed it at 10:28:56Z. The local branch
-  is at `69b2a6dad` (+ this docs commit) with a clean tree, so **the fork, the
-  PR and the clone no longer carry one head**: they will again when the owner
-  pushes the fix and the docs commits on top of it. `gh pr view 6622` reads
-  `mergeable: MERGEABLE`, `mergeStateStatus: UNSTABLE`, `baseRefOid`
-  `3a117c3c0`, not a draft, `reviewDecision` empty, `updatedAt`
-  2026-11-11T10:28:56Z, with one check (CodeRabbit, `skipped`) and no Actions
-  workflow run for that sha, so **no CI has run on the PR head** and the gate
-  evidence is the local sweep in §4, not a CI result. Nothing was pushed by
-  this pass: this agent's role denies `git push*`, as in every pass before.
-  `pdfcraft/PR-DRAFT.md`'s delivery note and `## Tests` section were brought to
-  these facts in the same pass, still as a draft — the PR body describes the
-  pushed head until the owner publishes the new one.
+  of `95e2c9c97` fixed"), which was the head until `46d2e203a` re-based the line
+  on v0.21.0; the fork and the PR carried `95e2c9c97` only until `28fd4e1b3` was
+  pushed at 17:41Z.
+- Head before this STATUS commit: `0d3ea2708` (the cabinet's `expectedVersion`
+  as its etag, §4) on `28fd4e1b3` (the lock records `web-time` for the collab
+  client) on `46d2e203a` (merge `origin/main` `3650f01f2`, v0.21.0) on
+  `95e2c9c97` … `69b2a6dad` on the rebased branch; **132 commits** not in
+  `origin/main` (`git rev-list --count origin/main..HEAD`) and **0 behind** it;
+  `git diff --shortstat origin/main HEAD` is **109 files changed, 43660
+  insertions(+), 210 deletions(-)** for `0d3ea2708` (43756 with this record's
+  commit). The docs commit that carries this record
+  makes the count 133. The counts the earlier briefs named — 125/0 at
+  `69b2a6dad` with 108 files/+43521, 122/0 at `b7545a7a9`, 119/0 at
+  `d2916decb`, and the pre-merge series in the paragraph above — were right
+  when measured; `46d2e203a` re-based the line on v0.21.0 and the three commits
+  on top add the contract fix. Commits named below in §4 by their pre-merge
+  hashes are mapped there.
+- Delivery, as measured now (2026-11-11T18:20Z): PR #6622's `headRefOid` is
+  **`28fd4e1b3`** and so is the fork `copoka/pdfcraft`'s branch tip (`git
+  ls-remote fork refs/heads/feature/realtime-collaboration`), i.e. the head
+  `pr-agent` delivered at 17:41Z. The clone is at `0d3ea2708` (+ this docs
+  commit) with a clean tree. **The push did not happen and could not have:**
+  this agent's permission denies `git push*` (unchanged since the first pass),
+  so the fork, the PR and the clone differ by the contract fix and this record
+  until the owner or `pr-agent` runs `git push fork
+  feature/realtime-collaboration`. `gh pr view 6622` reads `mergeable:
+  MERGEABLE`, `mergeStateStatus: UNSTABLE`, `baseRefOid` `3650f01f2` (v0.21.0),
+  not a draft, `reviewDecision` empty, `updatedAt` 2026-11-11T17:40:54Z, one
+  check (CodeRabbit, `skipped`) and no Actions run for `28fd4e1b3`, so **no CI
+  has run on the PR head** and the gate evidence is the host sweep in §4.
+  `pdfcraft/PR-DRAFT.md` still describes `95e2c9c97`/`69b2a6dad`; it is a draft
+  that needs the same facts before the owner publishes a new head.
 - State: implemented behind the `collab` feature (off by default). **`CI=1
-  cargo xtask ci` exits 0 on `69b2a6dad`** — all 10 steps, 155 targets as the
+  cargo xtask ci` exits 0 on `0d3ea2708`** — all 10 steps, 157 targets (111
+  `Running` + 46 `Doc-tests`), **10309 passed, 0 failed, 22 ignored** (§4, "The
+  cabinet's `expectedVersion` is its etag"). The gate on the previous head
+  (`69b2a6dad`, before `46d2e203a` merged v0.21.0) was 10225/0/22; the 84 extra
+  tests are the merged release's and the commits on top. On `69b2a6dad` the
+  same command was green with 155 targets as the
   log lists them (109 `Running` + 46 `Doc-tests`), **10225 passed, 0 failed,
   22 ignored** (§4, "The two red steps of `95e2c9c97` fixed"). That is the head
   the fix made; the same command on the delivered `95e2c9c97` still stops at the
@@ -171,20 +174,20 @@ several `/NM`, per-line quads, the caret (`5bad54c40`, §4) — the conflict-res
   `92b965dba`, `ad3e6d4b8`, `d2916decb`, `4efcfa6ea` and `3a117c3c0`. Nothing
   in the feature waits for a push any more, but the fix of the two red steps
   does: the docs commits on top of the earlier merges went out with the branch
-  (`ed8d11115` in an earlier pass, `95e2c9c97` before this one), while
-  `69b2a6dad` and this record are local until the owner pushes them — see
-  "Delivery". The one presence item still outside
+  (`ed8d11115` in an earlier pass, `95e2c9c97` before this one) and `28fd4e1b3`
+  with the v0.21.0 merge, while `0d3ea2708` and this record are local until the
+  owner or `pr-agent` pushes them — see "Delivery". The one presence item still outside
   this repository is the host page's `pdfcraft:presence` payload:
   `craft-web-host` must gain optional `page`/`selection` on its `Participant`
   (§5 p.4, §4).
-- Known gaps before production are listed in §5, the plan in §6. This pass
-  adds no feature work: it fixes the two steps the sixth merge left red.
+- Known gaps before production are listed in §5, the plan in §6. The pass
+  before this one added no feature work: it fixed the two steps the sixth merge
+  left red.
   `69b2a6dad` drops the blank line and the unused `BookmarkRow` from the
   `use crate::{…}` block in `crates/engine/src/session.rs`, with rustfmt's
   rewrap of the list, and the whole sweep re-run on that head exits 0 — all ten
-  steps, 10225 passed (§4). It also brings the delivery facts in this header and
-  in `pdfcraft/PR-DRAFT.md` to what is true now: the fix is local, the fork and
-  the PR still carry `95e2c9c97`. It
+  steps, 10225 passed (§4). This pass is the cabinet contract change and its
+  record (§4); it
   leaves the encrypted-PDF policy
   (§3, RFC §12), the `https`-without-a-reverse-proxy note, the in-process
   `conflict` flag and the journal tail as they were. A kill between the base
@@ -309,10 +312,15 @@ build enables the feature with `trunk build --release --features collab`.
     failure is queued.** `CabinetAdapter` writes the base through `PdfAdapter`,
     then POSTs
     `{fileId, bytes, sha256, version, expectedVersion, idempotencyKey}` to
-    `--callback-url`. Only a `2xx` advances the `CABINET` marker; its body
-    `{version, etag}` (the shared contract) is the copy the room adopts and the
-    next `expectedVersion`, and an empty body falls back to
-    `expectedVersion + 1`. A `409` refuses the commit (the room is flagged
+    `--callback-url`, where `expectedVersion` is the **etag** of the cabinet's
+    copy — a string, absent on the first commit of a session
+    (INTEGRATION.md §5.2, the body DeckCraft's room sends). Only a `2xx`
+    advances the `CABINET` marker; its body `{version, etag}` (the shared
+    contract) is the copy the room adopts: the `etag` is the next
+    `expectedVersion`, the `version` the cabinet's numbering of it. An empty
+    body falls back to `sha256:<digest>` of the published bytes and to one more
+    than a numeric `expectedVersion` (this cabinet's etag is its version tag),
+    else to the room's version. A `409` refuses the commit (the room is flagged
     `conflict` in `/health`/`/metrics`, edits keep being accepted) and stops the
     queue. A network error, `429` or `5xx` is retryable: the room keeps
     `publishing`, and the transport's queue re-runs the same publication after
@@ -492,7 +500,9 @@ cargo run -p pdfcraft-collab-daemon --release -- \
   `conflict` flag is gone (`/health`, `/metrics`), the marker adopts
   `{expectedVersion, etag}`, and the next commit publishes with it.
 - Commit callback: `POST --callback-url` with
-  `{fileId, bytes(base64), sha256, version, expectedVersion, idempotencyKey}`
+  `{fileId, bytes(base64), sha256, version, expectedVersion, idempotencyKey}`,
+  where `expectedVersion` is the **etag** of the cabinet's copy (a string,
+  INTEGRATION.md §5.2) and is absent on the first commit of a session
   and `Authorization: Bearer $PDFCRAFT_COLLAB_CALLBACK_TOKEN` when the env var
   is set, plus the same value in the `Idempotency-Key` header; `2xx` accepted,
   `409` conflict (and the queue stops), a network error / `429` / `5xx` is
@@ -532,6 +542,84 @@ The app window "Collaboration" shows role, version/epoch, participants, errors,
 commit result, and a commit button for owner/editor.
 
 ## 4. Tests and verification
+
+### The cabinet's `expectedVersion` is its etag, not a number (`0d3ea2708`)
+
+The brief: the working tree carried a contract change from a parallel
+verification pass — the room published `expectedVersion` as a **string etag** of
+the cabinet's copy (INTEGRATION.md §5.2, the body DeckCraft's room sends) instead
+of a number, with nothing at all on the first commit — plus the three tests that
+compare it. Bring it to a green gate, commit on top of `28fd4e1b3` (PR #6622's
+head) and push. The gate is green and the commit is `0d3ea2708`; **the push did
+not happen**: this agent's permission denies `git push*` (the same guard as every
+pass before), so the fork and the PR still carry `28fd4e1b3` until the owner or
+`pr-agent` pushes one branch (`git push fork
+feature/realtime-collaboration`). This docs commit sits on top of `0d3ea2708`.
+
+- **The defect.** The room sent `expectedVersion` as a JSON number and `0` for
+  the first commit. The cabinet's commit contract names the etag of the copy it
+  holds, a string, and omits it for the first commit: a number is refused by the
+  cabinet's decoder (`400`), and a `0` would read as an expectation of a copy
+  nobody has. `Publisher::publish` now takes `expected: Option<&str>` and builds
+  the body as a map, inserting `expectedVersion` only when the etag is present
+  and non-empty; `CabinetAdapter::expected_etag` reads `CABINET.etag` only when
+  the marker also has `expected` (a copy the cabinet named by an accepted commit
+  or a resolve — a room seeded from bytes has the seed's own etag, which the
+  cabinet never issued). A `2xx` body still advances the marker: its `etag` is
+  the next `expectedVersion`, its `version` the cabinet's numbering; a body
+  without the object falls back to `sha256:<digest>` of the published bytes and
+  to one more than a numeric etag (this cabinet's etag is its version tag), else
+  to the room's version.
+- **The tests follow the contract.** The fake cabinets in
+  `tests/conflict_resolve.rs`, `tests/publication_retry.rs` and
+  `tests/restore_publication.rs` compare opaque etags (`sha256:<version:064x>`
+  in two of them; the dev-mode one also accepts the source file's etag, which is
+  the copy a `--documents` room keeps), the first delivery of a session asserts
+  that `expectedVersion` is **absent**, and the resolve test asserts that the
+  etag the operator named is what the next publications carry.
+- **A restored publication is the session's first commit.** A room killed
+  between the base write and the POST has no etag the cabinet ever named, so it
+  cannot name one: the restored POST is the first commit, the cabinet stores it
+  as its next version and the room adopts the etag it answers. The old test
+  expected a `409` on that POST (`expectedVersion: 0` against a cabinet at 5) and
+  then a resolve; with no expectation that refusal is unreachable, so the test
+  became `a_restored_publication_is_the_first_commit_and_the_marker_advances`
+  (cabinet at 5 → stores 6, `publications_restored_total 1`, no conflict) and the
+  `wait_for_health`/`resolve` helpers it used were dropped — clippy's
+  `dead_code` at `-D warnings` refused them (EXIT 101 before the removal).
+- **Two defects of the working-tree change fixed here.** `check_mirror`'s doc
+  comment had ended up above `expected_etag` (which gained its own), so
+  `check_mirror` was undocumented; and the replaced test left the two helpers
+  without a caller. Both are in `0d3ea2708`; no behaviour changed beyond the
+  contract itself. `cargo fmt --all -- --check` and `cargo clippy -p
+  pdfcraft-collab-daemon --all-targets -- -D warnings` exit 0 on the final tree
+  (the clippy warning about `egui_*` patches and `hayro-interpret`'s unused
+  `Deref` is the host's dependency tree, not this crate).
+- **The crate's tests** on the host: `cargo test -p pdfcraft-collab-daemon`
+  — 34 unit, `conflict_resolve` 1, `crash_recovery` 1, `publication_retry` 1,
+  `restore_publication` 2, **0 failed, 0 ignored, EXIT 0**.
+- **The whole sweep** (`CRAFT_I18N_DIR=/home/markin/build/i18n-575`
+  (`575cfdef`, the `craft-i18n.rev` pin), `CRAFT_FONTS_DIR=/home/markin/craft-fonts`
+  (`b076417b`), `CARGO_BUILD_JOBS=12`, rustc 1.99.1): `CI=1 cargo xtask ci` →
+  **EXIT 0, `CI: all 10 steps passed`** — 157 targets as the log lists them (111
+  `Running` + 46 `Doc-tests`), **10309 passed, 0 failed, 22 ignored**; `fmt`,
+  `clippy`, `cli-no-default-features`, `i18n-report`, `layers`, `wasm`,
+  `license-check`, `deny` and `parity` pass. The totals are 84 above the
+  `69b2a6dad` sweep's 10225 — the commits merged since (`46d2e203a`'s v0.21.0 and
+  the three on top) brought their own tests.
+- **Docs say the same as the wire.** RFC §8 and `server.md` §3 now describe
+  `expectedVersion` as the etag string and the absent first commit, and the
+  `CABINET` marker's `expected` as the cabinet's numbering (not the next
+  `expectedVersion`, which is the etag). `pdfcraft/INTEGRATION.md`'s callback
+  line says so too. Decision 14 in §2 carries the new wording.
+- **What this does not change.** The resolve endpoint's own body
+  (`{"expectedVersion": N, "etag": "sha256:…"}`) still names the cabinet's
+  **version** and its etag: it is the operator saying which copy the cabinet
+  holds, and the room turns that into the string the next publication sends.
+  The dev-mode mirror path keeps the source file's etag as the marker (decision
+  16), so a `--documents` room's publications name the source file's hash; the
+  dev-mode fixtures accept it for that reason.
+
 
 ### The two red steps of `95e2c9c97` fixed in `69b2a6dad`, and the sweep on it (2026-11-11, local; not pushed)
 
@@ -1782,7 +1870,7 @@ Tests:
 |---|---|
 | `collab-server` | `a_restored_base_is_published_without_a_commit_and_blocks_newer_ones` (resume at 3 with the cabinet at 1: `republish` returns one attempt, `commit_now`/`republish` are `busy`, `finish_retry` makes the room clean and leaves nothing to publish); `a_restored_base_the_cabinet_refuses_flags_the_room_and_stops` (409 → conflict, not `publishing`, still dirty); `a_restored_base_that_failed_retryably_keeps_the_room_publishing`; `an_adapter_with_nothing_unpublished_republishes_nothing` |
 | `collab-ws` | unit `a_restored_publication_is_queued_at_once_and_counted` (queued, not run under the lock; one attempt on the next tick; `publications_restored` 1, `publication_retries` 0; a success is not queued again) and `a_restored_base_is_followed_by_the_journal_tail` (a room resumed at base 1 with an acknowledged operation after it and nobody connected: the base is published first, then the tail as its own commit, and the room ends clean at version 2) |
-| daemon | `tests/restore_publication.rs` `a_restart_publishes_the_base_the_previous_process_left`: the real daemon with `--control` (no `--documents`), a cabinet that is down for the first commit, `SIGKILL`; the second process publishes `version 1, expectedVersion 0` with the derived key **with no client connected**, `publications_restored_total 1`, `publication_retries_total 0`, one delivery (not repeated after 1.5 s), and the next commit sends `version 2, expectedVersion 1`. `a_restored_publication_the_cabinet_refuses_stops_and_a_resolve_publishes_it`: the restored publication gets `409` (cabinet at 5), the room is flagged, nothing is retried for 1.5 s, then `resolve(5)` returns 200 and the base is published once with the same sha/key and `expectedVersion 5`, `publications_after_resolve_total 1`, and the next commit expects 6 |
+| daemon | `tests/restore_publication.rs` `a_restart_publishes_the_base_the_previous_process_left`: the real daemon with `--control` (no `--documents`), a cabinet that is down for the first commit, `SIGKILL`; the second process publishes `version 1` with no `expectedVersion` (the session's first commit) and the derived key **with no client connected**, `publications_restored_total 1`, `publication_retries_total 0`, one delivery (not repeated after 1.5 s), and the next commit names `sha256:<…1>` (`version 2`). `a_restored_publication_is_the_first_commit_and_the_marker_advances`: the restored POST carries no `expectedVersion`, the cabinet stores it as its next version (6, from 5), the room adopts the etag it answered, the metrics count it and no room is flagged |
 | daemon | `tests/conflict_resolve.rs` now asserts the new loop: a `409` is not queued (no delivery and no retry for 1.5 s), the resolve publishes the refused base once with the same derived key, and the next commits expect the cabinet's answer (8, then 9) |
 
 Gates on the host `agents` (rustc 1.99.1, `-j 8`):
@@ -2219,9 +2307,9 @@ Tests:
 |---|---|
 | `collab-server` | `an_operator_resolution_adopts_the_cabinets_marker_and_clears_the_conflict` (conflict → resolve → flag gone, marker adopted, still dirty; a repeat is refused and changes nothing), `a_resolution_must_name_a_version_the_cabinet_moved_to` (5/4/0 refused as `invalid` against a known 5; 6 accepted), `a_resolution_waits_for_a_publication_in_flight` (a conflicted room committed again → resolve is `busy`, nothing moves, the publication's own answer decides) |
 | `collab-ws` | `a_resolution_needs_a_room_and_a_conflict` (`Missing`/`NotInConflict`, no counter increment) |
-| daemon rooms | `an_operator_resolution_lets_the_next_commits_publish_again`: a cabinet holding version 7 refuses two commits (both `expectedVersion 0`, queue stopped); resolve →7; the next commit sends `version 2, expectedVersion 7` with the derived key, the cabinet answers `{version: 8}`, and the commit after that sends `expectedVersion 8` |
+| daemon rooms | `an_operator_resolution_lets_the_next_commits_publish_again`: a cabinet holding version 7 refuses two commits (both with no `expectedVersion`, queue stopped); resolve →7 (`etag = sha256:<7>`); the next commit sends `version 2` with that etag and the derived key, the cabinet answers `{version: 8}`, and the commit after that sends `sha256:<8>` |
 | daemon control | `an_operator_resolves_a_conflict_and_a_second_call_is_refused`: conflict through a real callback `409`; 401/403 (another file, viewer)/400 (bad etag, version 0)/404; then a 200 with `version 1` (unmoved), `cabinetVersion 4`, `conflict:false`; metrics show no conflict and `conflicts_resolved 1`; a second resolve is `409 not_conflict` and is not counted |
-| daemon e2e (`tests/conflict_resolve.rs`) | `a_conflict_is_resolved_once_and_the_next_commits_publish_again`: the real daemon in dev mode against a fake cabinet holding version 7 — the commit is refused, `/health` and `/metrics` flag the room, a second commit is refused with the same expectation, no token is `401`, resolve is accepted, `/health`/`/metrics` clear and count 1, a second resolve is `409`, the next commit reaches the cabinet with `expectedVersion 7` and the derived idempotency key, the cabinet stores one version (8), the commit after that expects 8 |
+| daemon e2e (`tests/conflict_resolve.rs`) | `a_conflict_is_resolved_once_and_the_resolve_publishes_the_base`: the real daemon in dev mode against a fake cabinet holding version 7 — the commit is refused (no `expectedVersion`), `/health` and `/metrics` flag the room, a second commit is refused with the same absent expectation, no token is `401`, resolve is accepted, `/health`/`/metrics` clear and count 1, a second resolve is `409`, the next commit reaches the cabinet with the etag the resolve named and the derived idempotency key, the cabinet stores one version (8), and the commit after that names the copy again (in dev mode the source file's etag) |
 
 Gates at `62d48d30a` (host `agents`, rustc 1.99.1, `-j 8`):
 
@@ -2425,7 +2513,7 @@ Tests:
 |---|---|
 | `collab-server` | `a_retryable_publication_failure_is_queued_and_keeps_the_room_busy` (failure → queued → `busy` commit → retry succeeds → room free), `a_failure_no_retry_would_fix_is_not_queued`, and the `409` test now asserts the queue stays empty and the room is released |
 | `collab-ws` | unit `the_publication_backoff_doubles_and_caps`; e2e `a_retryable_publication_failure_is_retried_in_the_background` (a publication that fails once; the queue retries it, `metrics().publication_retries` is 1, the room is clean and not `publishing` when the test ends) |
-| daemon | `tests/publication_retry.rs` `a_lost_callback_answer_is_retried_with_the_same_key_and_one_version`: the real daemon in dev mode with `--callback-url`; the fake cabinet **takes** the first delivery and closes without an answer (the classic lost response), sees the retry as a duplicate of the same key and answers `2xx`. Asserts two deliveries, same `version`/`expectedVersion`/`sha256`/`idempotencyKey` in both, one stored version, `pdfcraft_collab_publication_retries_total 1`, no `conflict`, and that the next commit sends `version 2, expectedVersion 1` — the marker advanced without a second version. |
+| daemon | `tests/publication_retry.rs` `a_lost_callback_answer_is_retried_with_the_same_key_and_one_version`: the real daemon in dev mode with `--callback-url`; the fake cabinet **takes** the first delivery and closes without an answer (the classic lost response), sees the retry as a duplicate of the same key and answers `2xx`. Asserts two deliveries, same `version`/`sha256`/`idempotencyKey` in both and no `expectedVersion` (the session's first commit), one stored version, `pdfcraft_collab_publication_retries_total 1`, no `conflict`, and that the next commit sends `version 2` with an opaque `sha256:…` etag — the marker advanced without a second version. |
 | daemon (rooms) | `a_transport_failure_is_retryable_and_a_refused_body_is_not` (503/network → `Retryable`, 400 → `Failed`), and `a_commit_posts_the_file_and_the_versions` now checks `idempotencyKey` |
 
 The existing `a_failed_forced_publication_is_not_retried_in_a_loop` still holds
@@ -3850,6 +3938,14 @@ Ordered by the risk they pose to production.
 ## 6. Next session: plan
 
 Work in this order unless the owner says otherwise.
+
+**Deliver first.** `0d3ea2708` (the cabinet's `expectedVersion` as its etag,
+§4) and this docs commit are gated on the host but not pushed: this agent's
+permission denies `git push*`. `git push fork feature/realtime-collaboration`
+from the clone delivers both; then `gh pr view 6622` (head, `mergeStateStatus`)
+and `pdfcraft/PR-DRAFT.md` — still describing `95e2c9c97`/`69b2a6dad` — need the
+same facts before the owner publishes. Everything below is still open feature
+work; nothing in it is a prerequisite of that push.
 
 ### 6.1 Durable journal — done in this branch
 
