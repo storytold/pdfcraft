@@ -154,10 +154,11 @@ fn a_recovery_scope_is_shared_by_renderers_of_the_same_bytes_only() {
 
 use super::cjk_fixture::{Doc, Font, Show};
 
-/// A document's survey, run as Copy with formatting runs it before reading page 0.
+/// A document's survey, run as Copy with formatting runs it before reading page 0, for a rule
+/// that needs the usage of every kind of font the survey counts (no rule of this layer does).
 fn surveyed(doc: &Doc) -> Arc<RecoveryDocument> {
     let pdf = parse(doc.build());
-    let document = Arc::new(RecoveryDocument::new());
+    let document = Arc::new(RecoveryDocument::needing_usage_for_tests());
     extract_page_recovering(&pdf, 0, &settings(Some(document.clone()))).unwrap();
     assert!(document.prepared());
     document
@@ -267,7 +268,7 @@ fn a_survey_past_its_cap_leaves_the_document_without_evidence() {
 #[test]
 fn a_cancelled_survey_keeps_nothing() {
     let pdf = parse(Doc { fonts: vec![Font::truetype("ABCDEF+Kai", 20)], pages: vec![vec![Show::Text(0, vec![1])]] }.build());
-    let document = Arc::new(RecoveryDocument::new());
+    let document = Arc::new(RecoveryDocument::needing_usage_for_tests());
     let cancelled = InterpreterSettings { cancelled: Some(Arc::new(std::sync::atomic::AtomicBool::new(true))), ..settings(Some(document.clone())) };
     document.prepare(&pdf, &cancelled);
     assert!(!document.prepared());
@@ -327,4 +328,30 @@ fn a_group_keeps_its_name_and_each_members_counts() {
         vec![(b"Kai".to_vec(), vec![(vec![(10, 2), (11, 1)], 3), (vec![(20, 1), (21, 1)], 3)])],
         "CID 7, left out of the map, counts among the glyphs shown"
     );
+}
+
+/// A document is surveyed only for a rule that reads its usage evidence
+/// (`Rule::NEEDS_DOCUMENT_USAGE`). No rule of this layer does, so a document full of fonts the
+/// survey would count is prepared without reading anything, and its fonts have no evidence; the
+/// same document read for such a rule is surveyed.
+#[test]
+fn a_document_is_surveyed_only_for_a_rule_that_needs_its_usage() {
+    let doc = Doc {
+        fonts: vec![Font::truetype("ABCDEF+Kai", 20), Font::cff("ABCDEF+Ming", vec![1, 2])],
+        pages: vec![vec![Show::Text(0, vec![1, 2]), Show::Text(1, vec![1])]],
+    };
+    let pdf = parse(doc.build());
+    let document = Arc::new(RecoveryDocument::new());
+    let before = recovery_counters();
+    extract_page_recovering(&pdf, 0, &settings(Some(document.clone()))).unwrap();
+    let cost = recovery_counters().since(&before);
+    assert!(document.prepared());
+    assert_eq!((cost.survey_runs, cost.survey_pages, cost.survey_glyphs), (0, 0, 0), "{cost:?}");
+    assert!(document.surveyed_fonts().is_empty());
+
+    let before = recovery_counters();
+    let needing = surveyed(&doc);
+    let cost = recovery_counters().since(&before);
+    assert_eq!((cost.survey_runs, cost.survey_pages, cost.survey_glyphs), (1, 1, 3), "{cost:?}");
+    assert_eq!(needing.surveyed_fonts().len(), 2);
 }

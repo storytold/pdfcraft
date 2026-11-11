@@ -92,6 +92,9 @@ pub(crate) enum Counter {
     /// A font's guards taken from its document's decisions ([`RecoveryDocument`]) instead of
     /// decided again.
     DecisionReused,
+    /// A document survey begun: a rule needs the document's usage evidence
+    /// ([`Rule::NEEDS_DOCUMENT_USAGE`]), and [`RecoveryDocument::prepare`] looks for fonts to count.
+    SurveyRun,
     /// A page whose content the document survey read ([`RecoveryDocument::prepare`]).
     SurveyPage,
     /// A glyph the document survey counted.
@@ -112,6 +115,7 @@ pub(crate) fn count(counter: Counter) {
             Counter::ProgramWalk => &mut n.program_walks,
             Counter::Type3KeyHash => &mut n.type3_key_hashes,
             Counter::DecisionReused => &mut n.decisions_reused,
+            Counter::SurveyRun => &mut n.survey_runs,
             Counter::SurveyPage => &mut n.survey_pages,
             Counter::SurveyGlyph => &mut n.survey_glyphs,
         };
@@ -142,6 +146,9 @@ pub struct RecoveryCounters {
     /// Fonts whose guards came from their document's decisions ([`RecoveryDocument`]), not
     /// decided again.
     pub decisions_reused: usize,
+    /// Document surveys begun (each looks through the pages' fonts, and reads their content
+    /// when one may be counted).
+    pub survey_runs: usize,
     /// Pages the document survey read.
     pub survey_pages: usize,
     /// Glyphs the document survey counted.
@@ -164,6 +171,7 @@ impl RecoveryCounters {
             program_walks: self.program_walks.saturating_sub(before.program_walks),
             type3_key_hashes: self.type3_key_hashes.saturating_sub(before.type3_key_hashes),
             decisions_reused: self.decisions_reused.saturating_sub(before.decisions_reused),
+            survey_runs: self.survey_runs.saturating_sub(before.survey_runs),
             survey_pages: self.survey_pages.saturating_sub(before.survey_pages),
             survey_glyphs: self.survey_glyphs.saturating_sub(before.survey_glyphs),
         }
@@ -181,6 +189,7 @@ thread_local! {
             program_walks: 0,
             type3_key_hashes: 0,
             decisions_reused: 0,
+            survey_runs: 0,
             survey_pages: 0,
             survey_glyphs: 0,
         })
@@ -426,6 +435,21 @@ pub(crate) trait Rule {
     /// guard isn't decided and its facts aren't built, so a font no rule reads costs one
     /// check per glyph and nothing else.
     const KINDS: &'static [FontKind];
+    /// Whether the rule's guard reads the whole document's usage evidence
+    /// ([`FontFacts::usage`]): how often each glyph of the font is shown across the document,
+    /// and the font's group of subsets of one font. A rule that decides from one font's own
+    /// facts leaves it `false`; one that weighs a reading against the document's text (for
+    /// instance a standard glyph order for Japanese, Korean or Chinese text, judged by how
+    /// common the characters it reads are) sets it.
+    ///
+    /// [`RecoveryDocument::prepare`] surveys a document only when a rule that sets it can take
+    /// a kind of font the survey counts ([`Self::KINDS`]); with no such rule, no document is
+    /// surveyed and no font has evidence. The survey counts Type 0 fonts with an `Identity-H`
+    /// or `Identity-V` encoding over an embedded TrueType, OpenType or CID-keyed CFF program,
+    /// without a `/ToUnicode` stream or an Adobe character collection
+    /// ([`FontKind::CidTrueType`] and [`FontKind::CidCff`]). A rule that needs usage of other
+    /// kinds of font would extend what the survey counts, not add a second survey.
+    const NEEDS_DOCUMENT_USAGE: bool = false;
     /// What the font-level decision keeps.
     type Guard;
     /// Whether the font qualifies, decided once per font.
@@ -449,6 +473,12 @@ impl Guards {
     /// Whether some rule can take a font of `kind` ([`Rule::KINDS`]).
     fn read(kind: FontKind) -> bool {
         NumberedLatin1Names::KINDS.contains(&kind) || MacGlyphOrder::KINDS.contains(&kind)
+    }
+
+    /// Whether some rule that reads the document's usage evidence
+    /// ([`Rule::NEEDS_DOCUMENT_USAGE`]) can take a font of `kind`.
+    pub(crate) fn need_usage(kind: FontKind) -> bool {
+        needs_usage::<NumberedLatin1Names>(kind) || needs_usage::<MacGlyphOrder>(kind)
     }
 
     fn decide(font: &FontFacts<'_>) -> Self {
@@ -638,6 +668,11 @@ impl RecoveryCache {
             }
         })
     }
+}
+
+/// Whether rule `R` reads the document's usage evidence for a font of `kind`.
+fn needs_usage<R: Rule>(kind: FontKind) -> bool {
+    R::NEEDS_DOCUMENT_USAGE && R::KINDS.contains(&kind)
 }
 
 /// Rule `R`'s guard for `font`, asked only of a font of a kind it can take ([`Rule::KINDS`]).
