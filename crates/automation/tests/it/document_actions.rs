@@ -90,3 +90,36 @@ fn open_will_save_will_print_and_field_events_share_the_document_realm() {
     let reopened = tool(&mut a, "doc_open", json!({ "path": "saved.pdf" }))["doc"].as_u64().unwrap();
     assert_eq!(log(&mut a, reopened), "open1 Mouse Enter2 Blur save3");
 }
+
+/// Of two fields sharing a name, `field_id` (from form_fields) picks the one js_event runs; by
+/// name alone it is the first.
+#[test]
+fn js_event_runs_the_field_its_field_id_names() {
+    let enter = |text: &str| format!("/AA << /E << /S /JavaScript /JS (getField\\('log'\\).value += '{text}';) >> >>");
+    let pdf = pdf_of(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 6 0 R 7 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 5 0 R >> >> >> >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 6 0 R 7 0 R] >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (log) /V () /Rect [20 250 180 270] /P 3 0 R /F 4 >>".into(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),
+        format!("<< /Type /Annot /Subtype /Widget /FT /Tx /T (dup) /V () /Rect [20 200 180 220] /P 3 0 R /F 4 {} >>", enter("first;")),
+        format!("<< /Type /Annot /Subtype /Widget /FT /Tx /T (dup) /V () /Rect [20 150 180 170] /P 3 0 R /F 4 {} >>", enter("second;")),
+    ]);
+    let dir = std::env::temp_dir().join(format!("pdfcraft-js-event-dup-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("dup.pdf"), pdf).unwrap();
+    let mut a = Automation::new().with_root(&dir).unwrap();
+    let doc = tool(&mut a, "doc_open", json!({ "path": "dup.pdf" }))["doc"].as_u64().unwrap();
+    let fields = tool(&mut a, "form_fields", json!({ "doc": doc }));
+    let ids: Vec<u64> = fields["fields"].as_array().unwrap().iter().filter(|f| f["name"] == "dup").map(|f| f["field_id"].as_u64().unwrap()).collect();
+    assert_eq!(ids.len(), 2, "{fields}");
+    tool(&mut a, "js_event", json!({ "doc": doc, "field": "dup", "field_id": ids[1], "event": "mouse_enter" }));
+    assert_eq!(log(&mut a, doc), "second;");
+    tool(&mut a, "js_event", json!({ "doc": doc, "field": "dup", "event": "mouse_enter" }));
+    assert_eq!(log(&mut a, doc), "second;first;");
+    assert!(
+        a.call("js_event", &json!({ "doc": doc, "field": "log", "field_id": ids[1], "event": "mouse_enter" })).is_err(),
+        "the id is another field's"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

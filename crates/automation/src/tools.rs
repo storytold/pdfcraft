@@ -1431,6 +1431,7 @@ pub fn tools() -> Vec<ToolDef> {
                 "doc": doc(),
                 "field": { "type": "string", "description": "Field name (from form_fields)." },
                 "event": { "type": "string", "enum": ["mouse_enter", "mouse_exit", "mouse_down", "mouse_up", "on_focus", "on_blur"] },
+                "field_id": {"type":"integer","minimum":0,"maximum":281474976710655u64,"description":"Optional exact field identity from form_fields: of fields sharing the name, the one to run."},
                 "widget": { "type": "integer", "minimum": 1, "description": "Widget of the field (1-based, default 1): a radio button of the group, or a copy of the field." },
             }),
             &["doc", "field", "event"],

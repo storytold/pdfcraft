@@ -899,6 +899,12 @@ impl Session {
     /// change runs it) isn't run a second time. Returns whether the document changed; what the
     /// scripts showed or asked for is in [`Session::take_js_output`].
     pub fn field_focus(&mut self, id: DocId, name: &str, widget: usize, focus: FieldFocus) -> Result<bool, EditError> {
+        self.field_focus_target(id, name, None, widget, focus)
+    }
+
+    /// [`Session::field_focus`] for the field object `target` ([`field_object_id`]) when given:
+    /// of fields sharing `name`, the one that gained or lost focus runs its own script.
+    pub fn field_focus_target(&mut self, id: DocId, name: &str, target: Option<u64>, widget: usize, focus: FieldFocus) -> Result<bool, EditError> {
         if self.js_off {
             return Ok(false);
         }
@@ -909,10 +915,17 @@ impl Session {
                 FieldFocus::Enter => pdfcraft_forms::Trigger::OnFocus,
                 FieldFocus::Exit => pdfcraft_forms::Trigger::OnBlur,
             };
-            return self.field_trigger(id, name, widget, trigger);
+            return self.field_trigger_target(id, name, target, widget, trigger);
         };
         let Some(cos) = doc.editor.as_ref().map(|e| &e.cos) else { return Ok(false) };
-        let Some(som) = doc.form.iter().find(|f| f.name == name).and_then(|f| crate::xfa::widget_som(cos, f, widget)) else { return Ok(false) };
+        let Some(som) = doc
+            .form
+            .iter()
+            .find(|f| f.name == name && target.is_none_or(|t| field_object_id(f.obj) == t))
+            .and_then(|f| crate::xfa::widget_som(cos, f, widget))
+        else {
+            return Ok(false);
+        };
         let activity = match focus {
             FieldFocus::Enter => "enter",
             FieldFocus::Exit => "exit",

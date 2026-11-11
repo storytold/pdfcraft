@@ -355,3 +355,25 @@ fn a_trigger_on_a_field_sharing_a_name_runs_that_fields_script() {
     assert!(s.field_trigger(id, "dup", 0, Trigger::MouseEnter).unwrap(), "by name alone, the first");
     assert_eq!(log(&s, id), "second;first;");
 }
+
+/// Focus too: of two fields sharing a name, the one that gained focus runs its On Focus script.
+#[test]
+fn focus_on_a_field_sharing_a_name_runs_that_fields_script() {
+    use crate::js::FieldFocus;
+    let focus = |text: &str| format!("/AA << /Fo << /S /JavaScript /JS (getField\\('log'\\).value += '{text}';) >> >>");
+    let objs = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 6 0 R 7 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 5 0 R >> >> >> >>"
+            .to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 6 0 R 7 0 R] >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (log) /V () /Rect [20 250 180 270] /P 3 0 R /F 4 >>".into(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),
+        format!("<< /Type /Annot /Subtype /Widget /FT /Tx /T (dup) /V () /Rect [20 200 180 220] /P 3 0 R /F 4 {} >>", focus("first;")),
+        format!("<< /Type /Annot /Subtype /Widget /FT /Tx /T (dup) /V () /Rect [20 150 180 170] /P 3 0 R /F 4 {} >>", focus("second;")),
+    ];
+    let mut s = Session::new();
+    let id = s.open("dup.pdf", None, Arc::new(pdf_of(&objs)), None).unwrap();
+    let second = crate::js::field_object_id(pdfcraft_cos::ObjRef::new(7, 0));
+    assert!(s.field_focus_target(id, "dup", Some(second), 0, FieldFocus::Enter).unwrap());
+    assert_eq!(log(&s, id), "second;");
+}

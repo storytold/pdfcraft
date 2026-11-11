@@ -830,7 +830,8 @@ impl PdfCraftApp {
     /// ([`crate::forms_ui::refresh_draft`]), so leaving the field doesn't write the old value back.
     fn run_focus_scripts(&mut self, i: usize) {
         let Some(view) = self.views.get_mut(i) else { return };
-        let now = view.forms.focus.as_ref().map(|f| (f.name.clone(), f.widget));
+        // The field's object too: moving between fields sharing a name is a move (#344 review).
+        let now = view.forms.focus.as_ref().map(|f| (f.name.clone(), f.obj, f.widget));
         if view.forms.focused == now {
             return;
         }
@@ -838,13 +839,13 @@ impl PdfCraftApp {
         let id = view.id;
         let edited = view.forms.focus.clone();
         use pdfcraft_engine::js::FieldFocus;
-        for ((name, widget), focus) in [left.map(|l| (l, FieldFocus::Exit)), now.map(|n| (n, FieldFocus::Enter))].into_iter().flatten() {
+        for ((name, obj, widget), focus) in [left.map(|l| (l, FieldFocus::Exit)), now.map(|n| (n, FieldFocus::Enter))].into_iter().flatten() {
             // The edited field's value before this script, to tell its untouched draft from typing:
             // the exit of the field left may have changed it already, and the draft with it.
             let before: Option<(String, Vec<String>)> = edited.as_ref().and_then(|e| {
                 crate::forms_ui::focused_field(e, &self.session.get(id)?.form).map(|f| (crate::forms_ui::draft_text(f), f.value.clone()))
             });
-            match self.session.field_focus(id, &name, widget, focus) {
+            match self.session.field_focus_target(id, &name, obj.map(pdfcraft_engine::js::field_object_id), widget, focus) {
                 Ok(changed) => {
                     if changed
                         && let Some(info) = self.session.get(id).map(|d| d.info.clone())

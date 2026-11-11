@@ -21,6 +21,18 @@ fn request_json(r: &pdfcraft_engine::js::Request) -> Value {
     }
 }
 
+/// The optional `field_id` argument: a field's identity from form_fields, selecting one of
+/// fields sharing a name.
+fn field_id(a: &Args) -> Result<Option<u64>> {
+    a.0.get("field_id")
+        .map(|v| {
+            v.as_u64()
+                .filter(|id| *id < 1 << 48)
+                .ok_or_else(|| ToolError::InvalidArgs("field_id must be an integer between 0 and 281474976710655".into()))
+        })
+        .transpose()
+}
+
 /// A message a script showed, as `js_run` reports it: its text, title (null when it gave none),
 /// icon and buttons.
 pub(crate) fn alert_json(m: &pdfcraft_engine::js::Message) -> Value {
@@ -55,14 +67,7 @@ impl Automation {
                 .collect::<Result<Vec<_>>>()?,
             _ => return Err(ToolError::InvalidArgs("answers must be an array of at most 32 strings or null".into())),
         };
-        let identity =
-            a.0.get("field_id")
-                .map(|v| {
-                    v.as_u64()
-                        .filter(|id| *id < 1 << 48)
-                        .ok_or_else(|| ToolError::InvalidArgs("field_id must be an integer between 0 and 281474976710655".into()))
-                })
-                .transpose()?;
+        let identity = field_id(a)?;
         let (script, field) = (a.str("script")?, a.opt_str("field")?);
         let (mut o, edit) =
             self.session.with_own_js_output(id, |s| s.run_javascript_answers_target(id, script, field, identity, &answers)).map_err(failed)?;
@@ -142,8 +147,15 @@ impl Automation {
             ToolError::InvalidArgs(format!("event must be mouse_enter, mouse_exit, mouse_down, mouse_up, on_focus or on_blur, not {event:?}"))
         })?;
         let name = a.str("field")?;
+        let identity = field_id(a)?;
         let doc = self.doc(a)?;
-        let field = doc.form.iter().find(|f| f.name == name).ok_or_else(|| failed(format!("there is no field named {name:?} (see form_fields)")))?;
+        let field =
+            doc.form.iter().find(|f| f.name == name && identity.is_none_or(|i| pdfcraft_engine::js::field_object_id(f.obj) == i)).ok_or_else(
+                || match identity {
+                    Some(i) => failed(format!("there is no field named {name:?} with field_id {i} (see form_fields)")),
+                    None => failed(format!("there is no field named {name:?} (see form_fields)")),
+                },
+            )?;
         let widgets = field.widgets.len();
         let widget = a.opt_int("widget")?.unwrap_or(1);
         let widget = usize::try_from(widget).ok().and_then(|w| w.checked_sub(1)).filter(|w| *w < widgets).ok_or_else(|| match widgets {

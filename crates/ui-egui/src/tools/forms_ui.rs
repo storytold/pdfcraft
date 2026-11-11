@@ -101,7 +101,7 @@ pub struct FormView {
     /// The field and widget that had focus when it was last looked at: when the focus moves, the
     /// one it left runs its XFA exit scripts and the one it reached its enter scripts
     /// (`PdfCraftApp::run_focus_scripts`).
-    pub(crate) focused: Option<(String, usize)>,
+    pub(crate) focused: Option<(String, Option<ObjRef>, usize)>,
     /// The list box row clicked last, without Shift: (its field name, the row). A Shift-click picks
     /// the rows from it to the one clicked; the field's value can't say which row came last when
     /// rows share an export value, and `/I` lists them in ascending order.
