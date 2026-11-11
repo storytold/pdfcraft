@@ -127,6 +127,105 @@ fn an_image_of_a_named_colour_space_with_an_earlier_ei_is_ambiguous() {
 
 /// Where a decoding reader stops, in each way it can be told, against images it ends where the
 /// renderer does (0) and ones it ends elsewhere (1).
+/// ASCII85 of `bytes`, without the end-of-data marker: `z` for a group of zeros.
+fn a85(bytes: &[u8]) -> String {
+    let mut out = String::new();
+    for chunk in bytes.chunks(4) {
+        let mut group = [0u8; 4];
+        group[..chunk.len()].copy_from_slice(chunk);
+        let mut value = u32::from_be_bytes(group);
+        if chunk.len() == 4 && value == 0 {
+            out.push('z');
+            continue;
+        }
+        let mut digits = [0u8; 5];
+        for digit in digits.iter_mut().rev() {
+            *digit = (value % 85) as u8 + b'!';
+            value /= 85;
+        }
+        out.push_str(std::str::from_utf8(&digits[..chunk.len() + 1]).unwrap());
+    }
+    out
+}
+
+/// `payload` as zlib data in one stored deflate block.
+fn stored_zlib(payload: &[u8]) -> Vec<u8> {
+    let n = u16::try_from(payload.len()).unwrap();
+    let mut out = vec![0x78, 0x01, 0x01];
+    out.extend(n.to_le_bytes());
+    out.extend((!n).to_le_bytes());
+    out.extend(payload);
+    let (mut a, mut b) = (1u32, 0u32);
+    for &x in payload {
+        a = (a + u32::from(x)) % 65521;
+        b = (b + a) % 65521;
+    }
+    out.extend((b << 16 | a).to_be_bytes());
+    out
+}
+
+/// Behind ASCII85 and Flate or RunLength, a reader decoding both reads the text until the inner filter
+/// has the samples the image needs, or reaches its own end, a group at a time, and ends the image
+/// at the first `EI` after that. An `EI` in the text before then is not where it ends; one after
+/// it, before the renderer's, is. Here the four bytes `71 79 7d ec`, the group `EI!!!`, are placed
+/// in what the inner filter takes in (no count), or after it (counts):
+/// - **Flate:** in a stored block's five samples, or after the stream's end, or in the header of
+///   the block after the samples, which a reader with its samples doesn't read.
+/// - **RunLength:** in a literal run of seven samples, or after its end-of-data byte; its samples
+///   may be in before that byte, or the byte before them.
+///
+/// An `E` that ends the last group the reader takes in is no `EI` it sees. Decode parameters that
+/// say nothing (`null`, an empty dictionary, an array of those) are none. Damaged Flate, deflate
+/// without a zlib header (a reader may refuse it outright), DCT (a JPEG decoder may stop before
+/// its end, which its markers don't tell), other inner filters, decode parameters and a colour
+/// space named as a resource leave the stop untold, and an `EI` before the renderer's counts as
+/// before.
+#[test]
+fn where_a_decoding_reader_stops_behind_a_second_filter_is_told_by_decoding() {
+    const EI: [u8; 4] = [0x71, 0x79, 0x7d, 0xec];
+    let at = |params: &str, filters: &str, decoded: &[u8], placed: usize| {
+        let text = a85(decoded);
+        assert_eq!(text.matches("EI").count(), placed, "the `EI`s placed in the text, and no other: {text}");
+        let src = format!("BI /W {params} /F [/A85 {filters}] ID {text}~> EI Q");
+        parse(src.as_bytes()).ambiguous_images
+    };
+    let flate = stored_zlib(&[1, EI[0], EI[1], EI[2], EI[3]]);
+    let rl = [&[6, 9, 9, 9][..], &EI, &[128]].concat();
+    let jpeg = [&[0xff, 0xd8, 0xff, 0xda, 0x00, 0x02, 0x01, 0x02][..], &EI, &[0xff, 0xd9]].concat();
+    // Five samples in a stored block that isn't the last, then the next block's header, read as
+    // `EI!!!`: a reader with its samples stops before it, so it is where that reader ends the image.
+    let next_block = [&[0x78, 0x01, 0x00, 5, 0, 0xfa, 0xff, 1, 2, 3, 4, 5][..], &EI, &[0x82]].concat();
+    // Each: the image's parameters, its inner filter, the data before ASCII85, how many `EI`s its
+    // text holds, and whether the image counts.
+    let cases: [(&str, &str, Vec<u8>, usize, usize); 17] = [
+        ("5 /H 1 /CS /G /BPC 8", "/Fl", flate.clone(), 1, 0),
+        ("5 /H 1 /CS /G /BPC 8", "/Fl", [&flate[..], &EI].concat(), 2, 1),
+        ("5 /H 1 /CS /G /BPC 8", "/Fl", next_block, 1, 1),
+        ("5 /H 1 /CS /G /BPC 8", "/Fl", [&[0x78, 0x01, 0x01, 5, 0, 0, 0, 1][..], &EI, &[0; 4]].concat(), 1, 1),
+        // The same stored block without its zlib header.
+        ("5 /H 1 /CS /G /BPC 8", "/Fl", [&[0x01, 5, 0, 0xfa, 0xff, 1, 2, 3][..], &EI, &[0; 4]].concat(), 1, 1),
+        ("5 /H 1 /CS /G /BPC 8 /DP [null << /Predictor 1 >>]", "/Fl", flate.clone(), 1, 1),
+        ("5 /H 1 /CS /G /BPC 8 /DP [null null]", "/Fl", flate.clone(), 1, 0),
+        ("5 /H 1 /CS /G /BPC 8 /DP [null << >>]", "/Fl", flate.clone(), 1, 0),
+        ("5 /H 1 /CS /G /BPC 8 /DecodeParms << >>", "/Fl", flate.clone(), 1, 0),
+        ("5 /H 1 /CS /Cs1 /BPC 8", "/Fl", flate.clone(), 1, 1),
+        ("7 /H 1 /CS /G /BPC 8", "/RL", rl.clone(), 1, 0),
+        ("7 /H 1 /CS /G /BPC 8", "/RL", [&rl[..], &[0, 0, 0], &EI].concat(), 2, 1),
+        // The samples are all in, the first `EI` among them, before a second run holding another,
+        // and its end-of-data byte.
+        ("7 /H 1 /CS /G /BPC 8", "/RL", [&rl[..8], &[6, 9, 9, 9], &EI, &[128]].concat(), 2, 1),
+        // The end-of-data byte before the samples are all in.
+        ("7 /H 1 /CS /G /BPC 8", "/RL", [&[0, 9, 128, 6][..], &EI, &[1, 1, 1]].concat(), 1, 1),
+        // The `E` of `!!!!E` ends the last group the reader takes in; `I!!!!` follows.
+        ("7 /H 1 /CS /G /BPC 8", "/RL", vec![6, 9, 9, 9, 0, 0, 0, 0x24, 0x7c, 0x74, 0xbb, 0xa8], 1, 0),
+        ("1 /H 1 /CS /G /BPC 8", "/DCT", jpeg.clone(), 1, 1),
+        ("1 /H 1 /CS /G /BPC 8", "/LZW", jpeg, 1, 1),
+    ];
+    for (params, filters, decoded, placed, expected) in cases {
+        assert_eq!(at(params, filters, &decoded, placed), expected, "/W {params} /F [/A85 {filters}]: {:02x?}", decoded);
+    }
+}
+
 #[test]
 fn where_a_decoding_reader_stops_is_told_from_the_filter_and_the_layout() {
     let at = |params: &str, data: &[u8]| {
@@ -153,8 +252,10 @@ fn where_a_decoding_reader_stops_is_told_from_the_filter_and_the_layout() {
         ("4 /H 1 /CS /G /BPC 8 /F /A85", b"!z~> EI Q", 1),
         // One filter in an array is that filter alone.
         ("4 /H 1 /CS /G /BPC 8 /F [/A85]", b"!!EI!~> EI Q", 0),
-        // Behind another filter, where the reader stops can't be told: an `EI` before the
-        // renderer's, or a marker after it, counts.
+        // Behind another filter, an `EI` before the renderer's counts where a reader decoding both
+        // may stop before it (`where_a_decoding_reader_stops_behind_a_second_filter_is_told_by_decoding`),
+        // and a marker after it counts. Here the four bytes are no zlib data, which a reader may
+        // refuse at once: where it stops isn't told.
         ("4 /H 1 /CS /G /BPC 8 /F [/A85 /Fl]", b"!!EI!~> EI Q", 1),
         ("4 /H 1 /CS /G /BPC 8 /F [/A85 /Fl]", b"!!!!!~> EI Q", 0),
         ("4 /H 1 /CS /G /BPC 8 /F [/A85 /Fl]", b"!!!!! EI Q", 1),
@@ -760,4 +861,23 @@ fn invert_accepts_small_scale_and_rejects_singular() {
     assert!(Matrix([f64::NAN, 0., 0., 1., 0., 0.]).invert().is_none());
     // A subnormal scale passes the relative check but its inverse overflows (CodeRabbit on #5703).
     assert!(Matrix([1e-310, 0., 0., 1., 0., 0.]).invert().is_none());
+}
+
+/// What inflating a stream's inline images may give is 64 MiB in all. Past it, where a reader
+/// stops behind ASCII85 and Flate isn't told, and an `EI` before the renderer's counts: a first
+/// image whose samples take all of it leaves the second image's `EI`, which a reader would pass
+/// over, counted. Alone, the second image doesn't count.
+#[test]
+fn inflating_a_streams_inline_images_stops_at_its_allowance() {
+    const EI: [u8; 4] = [0x71, 0x79, 0x7d, 0xec];
+    // The `EI` after the large image's Flate data, on a group of its own.
+    let mut large = pdfcraft_filters::encode_flate(&vec![0u8; 64 << 20]);
+    large.resize(large.len().next_multiple_of(4), 1);
+    large.extend(EI);
+    let small = stored_zlib(&[1, EI[0], EI[1], EI[2], EI[3]]);
+    let image = |params: &str, decoded: &[u8]| format!("BI /W {params} /CS /G /BPC 8 /F [/A85 /Fl] ID {}~> EI ", a85(decoded));
+    let second = image("5 /H 1", &small);
+    assert_eq!(parse(format!("{second}Q").as_bytes()).ambiguous_images, 0, "the second image alone");
+    let both = format!("{}{second}Q", image("8192 /H 8192", &large));
+    assert_eq!(parse(both.as_bytes()).ambiguous_images, 2, "after an image that spends the allowance");
 }

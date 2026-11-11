@@ -48,6 +48,7 @@ mod runlength;
 use std::borrow::Cow;
 
 pub use ccitt::{CcittParams, MAX_CCITT_COLUMNS, MAX_G4_COLUMNS, decode_ccitt_within, encode_g4};
+pub use flate::input_for as flate_input_for;
 pub use jbig2::{MAX_JBIG2_COLUMNS, MAX_JBIG2_PIXELS, SharedJbig2, decode_jbig2_within, encode_jbig2, encode_jbig2_generic, encode_jbig2_shared};
 
 /// A PDF stream filter, identified by its `/Filter` name.

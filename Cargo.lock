@@ -4368,6 +4368,7 @@ version = "0.18.1"
 dependencies = [
  "hayro-syntax",
  "pdfcraft-cos",
+ "pdfcraft-filters",
 ]
 
 [[package]]

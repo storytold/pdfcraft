@@ -397,13 +397,18 @@ impl NextOf {
 }
 
 /// The searches a stream's inline images share: for `EI`, and for the ASCIIHex and ASCII85
-/// end-of-data markers.
+/// end-of-data markers; and what inflating their data has given ([`MAX_INFLATED`]).
 #[derive(Default)]
 pub(crate) struct ImageEnds {
     ei: NextOf,
     hex_end: NextOf,
     a85_end: NextOf,
+    inflated: usize,
 }
+
+/// What inflating the data of a stream's inline images may give in all, to tell where a reader
+/// that decodes them stops ([`chain_stop`]). Past it, where it stops isn't told.
+const MAX_INFLATED: usize = 64 << 20;
 
 /// An inline image's outer filter, as it decides where a decoding reader stops reading the data.
 #[derive(Clone, Copy, PartialEq)]
@@ -476,16 +481,18 @@ fn spellings_disagree(dict: &Dict) -> bool {
 /// renderer's, at `ei`. Such a reader reads the data through its filters until it has the samples
 /// the image needs, or until the filter's end-of-data marker, and ends the image at the first `EI`
 /// after that, whatever the bytes around it; an image it can't decode it ends at the first `EI`
-/// after `ID`. Where it stops is worked out without decompressing: exactly with no filter and the
-/// layout of a device colour space ([`layout_bytes`]), or with one ASCIIHex or ASCII85 filter and
-/// such a layout, by counting its characters up to `ei` (a reader that needs more ends elsewhere).
-/// Otherwise the image counts unless no `EI` comes before the renderer's and, behind ASCIIHex or
-/// ASCII85, the marker does. A colour space named as a resource has a layout only the page's
-/// resources tell, which this parser can't look up: a reader that can reads by it, possibly past
-/// the renderer's `EI`, and that is missed here, as is a colour space given as an array other
-/// than Indexed, and a device name the page's resources redefine. Behind another filter (Flate, DCT and the rest) the end can't be told
-/// without decoding, and the renderer's stands; behind one no reader decodes, the first `EI` after
-/// `ID` is the end. An image that gives a key in both spellings, differently, counts.
+/// after `ID`. Where it stops is worked out exactly with no filter and the layout of a device
+/// colour space ([`layout_bytes`]), or with one ASCIIHex or ASCII85 filter and such a layout, by
+/// counting its characters up to `ei` (a reader that needs more ends elsewhere). Otherwise the
+/// image counts unless no `EI` comes before the renderer's and, behind ASCIIHex or ASCII85, the
+/// marker does; behind them and Flate or RunLength, an `EI` before the renderer's counts only where
+/// the reader may stop before it, told by decoding ([`chain_stop`]). A colour space named as a
+/// resource has a layout only the page's resources tell, which this parser can't look up: a reader
+/// that can reads by it, possibly past the renderer's `EI`, and that is missed here, as is a colour
+/// space given as an array other than Indexed, and a device name the page's resources redefine.
+/// Behind another filter first (Flate, DCT and the rest) the end isn't told, and the renderer's
+/// stands; behind one no reader decodes, the first `EI` after `ID` is the end. An image that gives
+/// a key in both spellings, differently, counts.
 fn ends_elsewhere(data: &[u8], begin: usize, ei: usize, dict: &Dict, scan: &mut ImageEnds) -> bool {
     // Readers may take either spelling (the renderer's decoder takes `/F`, `outer_filter`
     // `/Filter`), so where one ends the image can't be told.
@@ -499,13 +506,23 @@ fn ends_elsewhere(data: &[u8], begin: usize, ei: usize, dict: &Dict, scan: &mut 
         (Outer::None, Some(bytes)) => begin.checked_add(bytes).filter(|stop| *stop <= ei),
         (Outer::Hex | Outer::A85, Some(bytes)) if sole => decoder_stop(data, begin, ei, bytes, outer),
         _ => {
-            let earlier = scan.ei.at(data, b"EI", begin).is_some_and(|at| at < ei);
             let marker_first = match outer {
                 Outer::Hex => scan.hex_end.at(data, b">", begin).is_some_and(|at| at < ei),
                 Outer::A85 => scan.a85_end.at(data, b"~", begin).is_some_and(|at| at < ei),
                 _ => true,
             };
-            return earlier || !marker_first;
+            if !marker_first {
+                return true;
+            }
+            if !scan.ei.at(data, b"EI", begin).is_some_and(|at| at < ei) {
+                return false;
+            }
+            // An `EI` before the renderer's counts where a decoding reader may stop before it: it
+            // reads whole groups, so one whose `E` ends the last group it reads it doesn't see.
+            return match chain_stop(data, begin, ei, dict, outer, sole, scan) {
+                Some(stop) => scan.ei.at(data, b"EI", stop) != Some(ei),
+                None => true,
+            };
         }
     };
     stop.is_none_or(|stop| scan.ei.at(data, b"EI", stop) != Some(ei))
@@ -546,6 +563,170 @@ fn decoder_stop(data: &[u8], begin: usize, ei: usize, bytes: usize, outer: Outer
     #[cfg(test)]
     tests::EOD_SEARCHED.with(|c| c.set(c.get() + at.saturating_sub(begin)));
     stop
+}
+
+/// Where a reader decoding an inline image's data through ASCIIHex or ASCII85 (`outer`, its
+/// marker before `ei`) and one filter more stops reading it: after the text that gives the least
+/// the inner filter takes in to have the samples the image's layout needs, or to reach its own
+/// end. Told for Flate (zlib, inflated within [`MAX_INFLATED`] for the stream) and RunLength.
+/// `None` for a filter alone or another one (DCT among them: a JPEG decoder may stop before its
+/// end-of-image marker, at rows it doesn't need or a marker it refuses, where reading the
+/// markers doesn't tell), for an image with decode parameters or without a layout
+/// [`layout_bytes`] tells, and where the data doesn't decode.
+fn chain_stop(data: &[u8], begin: usize, ei: usize, dict: &Dict, outer: Outer, sole: bool, scan: &mut ImageEnds) -> Option<usize> {
+    if sole || !matches!(outer, Outer::Hex | Outer::A85) {
+        return None;
+    }
+    // Parameters that say nothing are none: null, an empty dictionary, or an array of those.
+    let none = |o: &Object| matches!(o, Object::Null) || o.as_dict().is_some_and(|d| d.iter().next().is_none());
+    match dict.get(b"DecodeParms").or_else(|| dict.get(b"DP")) {
+        None => {}
+        Some(Object::Array(each)) if each.iter().all(none) => {}
+        Some(params) if none(params) => {}
+        Some(_) => return None,
+    }
+    let Some(Object::Array(filters)) = dict.get(b"Filter").or_else(|| dict.get(b"F")) else { return None };
+    let [_, inner] = filters.as_slice() else { return None };
+    let samples = layout_bytes(dict)?;
+    let decoded = outer_decoded(data.get(begin..ei)?, outer)?;
+    let taken = match inner.as_name()? {
+        b"FlateDecode" | b"Fl" => {
+            let (taken, made) = pdfcraft_filters::flate_input_for(&decoded, samples, MAX_INFLATED.saturating_sub(scan.inflated));
+            scan.inflated = scan.inflated.saturating_add(made);
+            taken?
+        }
+        b"RunLengthDecode" | b"RL" => run_length_input(&decoded, samples),
+        _ => return None,
+    };
+    outer_text_for(data.get(begin..ei)?, outer, taken).and_then(|at| begin.checked_add(at))
+}
+
+/// One step of ASCIIHex or ASCII85 text: the bytes a group (ASCII85's five characters or `z`,
+/// ASCIIHex's two digits) gives, the end-of-data marker with what the group before it gives, or
+/// none. `None` for text no reader agrees on: a character outside the filter's alphabet, ASCII85's
+/// `z` inside a group or a group past 2^32 - 1, a last group of one character.
+enum Group {
+    Bytes(usize),
+    End(usize),
+}
+
+/// The groups of ASCIIHex or ASCII85 `text`, each with the position after it.
+fn outer_groups(text: &[u8], outer: Outer) -> impl Iterator<Item = Option<(Group, usize, [u8; 4])>> + '_ {
+    let mut at = 0usize;
+    let mut done = false;
+    std::iter::from_fn(move || {
+        if done {
+            return None;
+        }
+        let mut digits = [0u32; 5];
+        let mut count = 0usize;
+        let width = if outer == Outer::Hex { 2 } else { 5 };
+        loop {
+            let Some(&b) = text.get(at) else {
+                done = true;
+                return (count > 0).then_some(None);
+            };
+            at += 1;
+            #[cfg(test)]
+            tests::EOD_SEARCHED.with(|c| c.set(c.get() + 1));
+            let digit = match (outer, b) {
+                (_, b) if is_ws(b) => continue,
+                (Outer::Hex, b'>') | (Outer::A85, b'~') => {
+                    done = true;
+                    return Some(group(outer, &digits, count, true).map(|(n, bytes)| (Group::End(n), at, bytes)));
+                }
+                (Outer::A85, b'z') if count == 0 => return Some(Some((Group::Bytes(4), at, [0; 4]))),
+                (Outer::Hex, b) => (b as char).to_digit(16),
+                (Outer::A85, b'!'..=b'u') => Some(u32::from(b - b'!')),
+                _ => None,
+            };
+            let Some(digit) = digit else {
+                done = true;
+                return Some(None);
+            };
+            if let Some(slot) = digits.get_mut(count) {
+                *slot = digit;
+            }
+            count += 1;
+            if count == width {
+                return Some(group(outer, &digits, count, false).map(|(n, bytes)| (Group::Bytes(n), at, bytes)));
+            }
+        }
+    })
+}
+
+/// The bytes `count` digits of a group give, and how many: a whole group, or the last one before
+/// the marker (`last`), padded as the filter pads it.
+fn group(outer: Outer, digits: &[u32; 5], count: usize, last: bool) -> Option<(usize, [u8; 4])> {
+    if outer == Outer::Hex {
+        let [high, low, ..] = *digits;
+        let byte = u8::try_from(high << 4 | if count == 2 { low } else { 0 }).ok()?;
+        return Some((usize::from(count > 0), [byte, 0, 0, 0]));
+    }
+    if last && count == 0 {
+        return Some((0, [0; 4]));
+    }
+    if count == 1 {
+        return None;
+    }
+    let value = (0..5).try_fold(0u64, |v, i| Some(v * 85 + u64::from(if i < count { *digits.get(i)? } else { 84 })))?;
+    let bytes = u32::try_from(value).ok()?.to_be_bytes();
+    Some((if count == 5 { 4 } else { count - 1 }, bytes))
+}
+
+/// The bytes ASCIIHex or ASCII85 `text` gives up to its end-of-data marker. `None` where it holds
+/// a group no reader agrees on, or no marker.
+fn outer_decoded(text: &[u8], outer: Outer) -> Option<Vec<u8>> {
+    let mut out = Vec::new();
+    for step in outer_groups(text, outer) {
+        let (step, _, bytes) = step?;
+        match step {
+            Group::Bytes(n) => out.extend_from_slice(bytes.get(..n)?),
+            Group::End(n) => {
+                out.extend_from_slice(bytes.get(..n)?);
+                return Some(out);
+            }
+        }
+    }
+    None
+}
+
+/// Where in ASCIIHex or ASCII85 `text` a reader that has taken in `taken` bytes of what it gives
+/// stops: after the group that gives the last of them, read whole.
+fn outer_text_for(text: &[u8], outer: Outer, taken: usize) -> Option<usize> {
+    if taken == 0 {
+        return Some(0);
+    }
+    let mut given = 0usize;
+    for step in outer_groups(text, outer) {
+        let (Group::Bytes(n) | Group::End(n), at, _) = step?;
+        given = given.saturating_add(n);
+        if given >= taken {
+            return Some(at);
+        }
+    }
+    None
+}
+
+/// How many bytes of RunLength data a reader takes in to have `samples` bytes, or to its
+/// end-of-data byte (ISO 32000-2 §7.4.5); all of it where it ends before either.
+fn run_length_input(data: &[u8], samples: usize) -> usize {
+    let (mut at, mut made) = (0usize, 0usize);
+    while made < samples {
+        let Some(&length) = data.get(at) else { return data.len() };
+        match length {
+            128 => return at + 1,
+            0..=127 => {
+                at = at.saturating_add(usize::from(length) + 2);
+                made = made.saturating_add(usize::from(length) + 1);
+            }
+            _ => {
+                at = at.saturating_add(2);
+                made = made.saturating_add(257 - usize::from(length));
+            }
+        }
+    }
+    at.min(data.len())
 }
 
 /// Where the renderer's tokenizer ends the inline image whose `BI` starts at `bi`: the start and
