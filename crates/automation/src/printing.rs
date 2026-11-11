@@ -111,7 +111,8 @@ fn resolve_paper(name: Option<&str>, printer: Option<&str>) -> Result<((f64, f64
 /// naming none got (A4 under Letter sheets on the queue in #3752), and tells CUPS which way the
 /// laid-out `sheets` run, as the Print dialog does (#2713): an orientation the caller chose in
 /// `options` stands. It asks the driver for grayscale only when the pages aren't grey pictures
-/// already ([`print::driver_needs_grayscale`]).
+/// already ([`print::driver_needs_grayscale`]). Any caller-supplied `media` option (case-insensitive)
+/// is replaced by the laid-out paper's media.
 fn spool_job(
     a: &Args,
     printer: &str,
