@@ -252,6 +252,31 @@ fn the_form_a_kept_type3_glyph_draws_is_walked_within_the_allowance_of_a_page() 
     }
 }
 
+/// A Type 3 font with no glyph left goes from the own `/Font` of a form that lists it too, not
+/// only from the page's: the form, drawn outside the mark, keeps its resources but not the font.
+#[test]
+fn a_glyphless_type3_font_goes_from_a_forms_own_font_too() {
+    let mut doc = pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources 5 0 R >>".to_vec(),
+        stream("", b"BT /T3 10 Tf 10 100 Td (A) Tj ET /Fm Do"),
+        b"<< /Font << /T3 6 0 R >> /XObject << /Fm 9 0 R >> >>".to_vec(),
+        b"<< /Type /Font /Subtype /Type3 /FontBBox [0 -200 1000 800] /FontMatrix [0.001 0 0 0.001 0 0] /FirstChar 65 /LastChar 65 /Widths [500] /Encoding << /Differences [65 /A] >> /CharProcs << /A 7 0 R >> >>".to_vec(),
+        stream("", b"500 0 d0 0 0 500 500 re f"),
+        stream("/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", b"o"),
+        stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << /Font << /T3 6 0 R >> /XObject << /Im 8 0 R >> >>", b"200 200 10 10 re f"),
+    ]);
+    mark(&mut doc, 0, &[[9.0, 95.0, 16.0, 110.0]], "");
+    assert_eq!(apply(&mut doc, None).unwrap().glyphs, 1);
+    let form = doc.get(pdfcraft_cos::ObjRef::new(9, 0));
+    let Object::Stream(s) = &*form else { panic!("the form stays: {form:?}") };
+    let res = s.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
+    assert!(res.contains(b"XObject"), "the form keeps its other resources: {res:?}");
+    let fonts = res.get(b"Font").map(|f| doc.resolve(f)).and_then(|f| f.as_dict().cloned()).unwrap_or_default();
+    assert!(!fonts.contains(b"T3"), "the glyphless font leaves the form's own /Font: {fonts:?}");
+}
+
 /// When all glyphs of a Type 3 font are redacted, the entire font is removed from Resources (F-011).
 #[test]
 fn all_redacted_type3_glyphs_cause_font_removal_from_resources() {

@@ -1,5 +1,6 @@
 //! Unlink unused Type 3 font glyph programs and prune exclusive graphical resources (F-011).
 
+use std::cell::OnceCell;
 use std::collections::{HashMap, HashSet};
 
 use pdfcraft_content::Pieces;
@@ -100,23 +101,55 @@ pub(crate) fn type3_code_to_glyph(doc: &Document, font_dict: &Dict) -> Result<[O
     Ok(map)
 }
 
-fn resolve_font_in_res(doc: &Document, res: &Dict, font_name: &[u8]) -> Option<(FontKey, Dict)> {
-    let fonts = res_dict(doc, res, b"Font");
-    let font_obj = fonts.get(font_name)?;
-    // A direct Type 3 font is refused during discovery, so none reaches the scan.
-    let font_ref = font_obj.as_ref()?;
-    let dict = doc.resolve(font_obj).as_dict()?.clone();
-    (dict.name(b"Subtype") == Some(b"Type3")).then_some((FontKey::Ref(font_ref), dict))
+/// The resource dictionaries of one stream that the scan looks names up in, each copied from its
+/// `/Resources` once, when an operator first names one: copied for every such operator, a
+/// dictionary of many entries cost the scan its size again for each.
+struct Lookup<'a> {
+    doc: &'a Document,
+    res: &'a Dict,
+    fonts: OnceCell<Dict>,
+    states: OnceCell<Dict>,
+    xobjects: OnceCell<Dict>,
+    patterns: OnceCell<Dict>,
 }
 
-fn resolve_extgstate_font(doc: &Document, res: &Dict, gs_name: &[u8]) -> Option<(FontKey, Dict)> {
-    let extg = res_dict(doc, res, b"ExtGState");
-    let state = doc.resolve(extg.get(gs_name)?).as_dict().cloned()?;
-    let font_entry = state.get(b"Font").and_then(|f| doc.resolve(f).as_array().cloned())?;
-    let font_obj = font_entry.first()?;
+impl<'a> Lookup<'a> {
+    fn new(doc: &'a Document, res: &'a Dict) -> Self {
+        Lookup { doc, res, fonts: OnceCell::new(), states: OnceCell::new(), xobjects: OnceCell::new(), patterns: OnceCell::new() }
+    }
+
+    fn fonts(&self) -> &Dict {
+        self.fonts.get_or_init(|| res_dict(self.doc, self.res, b"Font"))
+    }
+
+    fn states(&self) -> &Dict {
+        self.states.get_or_init(|| res_dict(self.doc, self.res, b"ExtGState"))
+    }
+
+    fn xobjects(&self) -> &Dict {
+        self.xobjects.get_or_init(|| res_dict(self.doc, self.res, b"XObject"))
+    }
+
+    fn patterns(&self) -> &Dict {
+        self.patterns.get_or_init(|| res_dict(self.doc, self.res, b"Pattern"))
+    }
+}
+
+/// The Type 3 font `font_obj` is, by reference. A direct Type 3 font is refused during discovery,
+/// so none reaches the scan.
+fn type3_key(doc: &Document, font_obj: &Object) -> Option<FontKey> {
     let font_ref = font_obj.as_ref()?;
-    let dict = doc.resolve(font_obj).as_dict()?.clone();
-    (dict.name(b"Subtype") == Some(b"Type3")).then_some((FontKey::Ref(font_ref), dict))
+    (doc.resolve(font_obj).as_dict()?.name(b"Subtype") == Some(b"Type3")).then_some(FontKey::Ref(font_ref))
+}
+
+fn resolve_font_in_res(doc: &Document, res: &Lookup<'_>, font_name: &[u8]) -> Option<FontKey> {
+    type3_key(doc, res.fonts().get(font_name)?)
+}
+
+fn resolve_extgstate_font(doc: &Document, res: &Lookup<'_>, gs_name: &[u8]) -> Option<FontKey> {
+    let state = doc.resolve(res.states().get(gs_name)?);
+    let entry = doc.resolve(state.as_dict()?.get(b"Font")?);
+    type3_key(doc, entry.as_array()?.first()?)
 }
 
 #[derive(Default)]
@@ -298,6 +331,7 @@ fn scan_content_stream(
 
     let mut stack: Vec<Option<FontKey>> = Vec::new();
     let mut current_font = initial_font;
+    let res = &Lookup::new(ctx.doc, res);
 
     for op in read.by_ref() {
         match op.op.as_slice() {
@@ -334,16 +368,16 @@ fn scan_content_stream(
 
 /// Apply an operator that changes or uses the current font: `Tf`, `gs`, and the text-showing
 /// operators, which record the glyphs they draw.
-fn apply_text_op(ctx: &mut ScanContext<'_>, res: &Dict, op: &pdfcraft_content::Op, current_font: &mut Option<FontKey>) {
+fn apply_text_op(ctx: &mut ScanContext<'_>, res: &Lookup<'_>, op: &pdfcraft_content::Op, current_font: &mut Option<FontKey>) {
     match op.op.as_slice() {
         b"Tf" => {
             if let Some(name) = op.name_back(1) {
-                *current_font = resolve_font_in_res(ctx.doc, res, name).map(|(k, _)| k);
+                *current_font = resolve_font_in_res(ctx.doc, res, name);
             }
         }
         b"gs" => {
             if let Some(name) = op.last_name()
-                && let Some((k, _)) = resolve_extgstate_font(ctx.doc, res, name)
+                && let Some(k) = resolve_extgstate_font(ctx.doc, res, name)
             {
                 *current_font = Some(k);
             }
@@ -380,37 +414,34 @@ fn mark_shown(ctx: &mut ScanContext<'_>, font: Option<FontKey>, bytes: &[u8]) {
 /// Scan the Form XObject `name` drawn by a `Do` operator, once per (form, font, drawing holder).
 fn scan_xobject(
     ctx: &mut ScanContext<'_>,
-    res: &Dict,
+    res: &Lookup<'_>,
     holder_ref: ObjRef,
     name: &[u8],
     current_font: Option<FontKey>,
     depth: usize,
 ) -> Result<(), CosError> {
-    let xo = res_dict(ctx.doc, res, b"XObject");
-    let Some(r) = xo.get(name).and_then(Object::as_ref) else { return Ok(()) };
+    let Some(r) = res.xobjects().get(name).and_then(Object::as_ref) else { return Ok(()) };
     if !matches!(&*ctx.doc.get(r), Object::Stream(s) if s.dict.name(b"Subtype") == Some(b"Form")) {
         return Ok(());
     }
-    scan_stream_object(ctx, res, holder_ref, r, current_font, depth)
+    scan_stream_object(ctx, res.res, holder_ref, r, current_font, depth)
 }
 
 /// Scan the tiling pattern `name` that an `scn` or `SCN` operator selects. Its cell is content of
 /// its own and can show glyphs of a font the page lists too. A shading pattern is not a stream and
 /// draws no text.
-fn scan_pattern(ctx: &mut ScanContext<'_>, res: &Dict, holder_ref: ObjRef, name: &[u8], depth: usize) -> Result<(), CosError> {
-    let patterns = res_dict(ctx.doc, res, b"Pattern");
-    let Some(r) = patterns.get(name).and_then(Object::as_ref) else { return Ok(()) };
-    scan_stream_object(ctx, res, holder_ref, r, None, depth)
+fn scan_pattern(ctx: &mut ScanContext<'_>, res: &Lookup<'_>, holder_ref: ObjRef, name: &[u8], depth: usize) -> Result<(), CosError> {
+    let Some(r) = res.patterns().get(name).and_then(Object::as_ref) else { return Ok(()) };
+    scan_stream_object(ctx, res.res, holder_ref, r, None, depth)
 }
 
 /// Scan the transparency group of the soft mask that the ExtGState `name` sets: what it shows
 /// shapes the page, so its glyphs are in use.
-fn scan_soft_mask(ctx: &mut ScanContext<'_>, res: &Dict, holder_ref: ObjRef, name: &[u8], depth: usize) -> Result<(), CosError> {
-    let states = res_dict(ctx.doc, res, b"ExtGState");
-    let Some(state) = states.get(name).and_then(|s| ctx.doc.resolve(s).as_dict().cloned()) else { return Ok(()) };
-    let Some(mask) = state.get(b"SMask").and_then(|m| ctx.doc.resolve(m).as_dict().cloned()) else { return Ok(()) };
-    let Some(group) = mask.get(b"G").and_then(Object::as_ref) else { return Ok(()) };
-    scan_stream_object(ctx, res, holder_ref, group, None, depth)
+fn scan_soft_mask(ctx: &mut ScanContext<'_>, res: &Lookup<'_>, holder_ref: ObjRef, name: &[u8], depth: usize) -> Result<(), CosError> {
+    let Some(state) = res.states().get(name).map(|s| ctx.doc.resolve(s)) else { return Ok(()) };
+    let Some(mask) = state.as_dict().and_then(|s| s.get(b"SMask")).map(|m| ctx.doc.resolve(m)) else { return Ok(()) };
+    let Some(group) = mask.as_dict().and_then(|m| m.get(b"G")).and_then(Object::as_ref) else { return Ok(()) };
+    scan_stream_object(ctx, res.res, holder_ref, group, None, depth)
 }
 
 /// Scan the appearance streams of a page's annotations. A comment, stamp or field can show glyphs
@@ -519,11 +550,18 @@ fn scan_stream_object(
 ) -> Result<(), CosError> {
     let obj = ctx.doc.get(r);
     let Object::Stream(s) = &*obj else { return Ok(()) };
-    let own_res = s.dict.get(b"Resources").and_then(|ro| ctx.doc.resolve(ro).as_dict().cloned());
-    let through = if own_res.is_some() { r } else { holder_ref };
+    // Whether it has resources of its own is told without copying them, and they are copied only
+    // for a stream not read yet in this context: a form drawn a thousand times copied them a
+    // thousand times before it was found already read.
+    let own = s.dict.get(b"Resources").filter(|ro| match ro {
+        Object::Dict(_) => true,
+        _ => ctx.doc.resolve(ro).as_dict().is_some(),
+    });
+    let through = if own.is_some() { r } else { holder_ref };
     if !ctx.seen_forms.insert((r, current_font, through)) {
         return Ok(());
     }
+    let own_res = own.and_then(|ro| ctx.doc.resolve(ro).as_dict().cloned());
     let data = ctx.doc.with_direct_parms(s).decoded()?;
     match own_res {
         Some(own) => scan_content_stream(ctx, std::slice::from_ref(&data), r, &own, current_font, depth + 1),
@@ -581,6 +619,7 @@ pub(crate) fn prune_type3_from_resources(
     }
 
     let mut drawn_font_names = HashSet::new();
+    let mut selected: HashSet<&[u8]> = HashSet::new();
     for op in &ops {
         if op.is("Tf") {
             if let Some(name) = op.name_back(1) {
@@ -589,17 +628,16 @@ pub(crate) fn prune_type3_from_resources(
         } else if op.is("gs")
             && let Some(name) = op.last_name()
         {
-            let extg = res_dict(doc, res, b"ExtGState");
-            if let Some(font_obj) = extg.get(name).and_then(|state_obj| gs_font_object(doc, state_obj)) {
-                drawn_font_names.extend(
-                    fonts
-                        .iter()
-                        .filter(|(_, fn_obj)| fn_obj.as_ref().is_some() && fn_obj.as_ref() == font_obj.as_ref())
-                        .map(|(fn_name, _)| fn_name.to_vec()),
-                );
-            }
+            selected.insert(name);
         }
     }
+    // A graphics state sets a font by reference, and every name in `/Font` for that object draws.
+    // Each state selected is read once, however often it is: read for each `gs`, the whole
+    // `/ExtGState` was copied every time.
+    let states = res_dict(doc, res, b"ExtGState");
+    let state_fonts: HashSet<ObjRef> =
+        selected.into_iter().filter_map(|name| states.get(name)).filter_map(|state| gs_font_object(doc, state)?.as_ref()).collect();
+    drawn_font_names.extend(fonts.iter().filter(|(_, f)| f.as_ref().is_some_and(|r| state_fonts.contains(&r))).map(|(name, _)| name.to_vec()));
 
     let before = fonts.len();
     fonts.retain(|name, font_obj| {
@@ -707,9 +745,17 @@ pub(crate) fn unlink_type3(doc: &mut Document) -> Result<(), RedactError> {
     }
 
     // For each Type 3 font: unlink unused glyphs from CharProcs and prune exclusive resources.
+    // The fonts with no glyph left go from every holder's /Font together, in one pass each: one
+    // at a time, each copied every holder's /Font again.
+    let mut gone = HashSet::new();
     for (font_key, font_dict) in &type3_fonts {
         let surviving = used_glyphs.get(font_key).cloned().unwrap_or_default();
-        clean_type3_font(doc, &holders, &form_holders, font_key, font_dict, &surviving)?;
+        if clean_type3_font(doc, font_key, font_dict, &surviving)? {
+            gone.insert(*font_key);
+        }
+    }
+    if !gone.is_empty() {
+        remove_fonts_from_holders(doc, &holders, &form_holders, &gone)?;
     }
 
     Ok(())
@@ -777,14 +823,7 @@ fn collect_type3_fonts(doc: &Document, res: &Dict, t3_fonts: &mut HashMap<FontKe
 
 /// Unlink the glyph programs of one Type 3 font that no longer draw, then either remove the font
 /// (when no glyph survives) or prune the resources only its surviving glyphs used.
-fn clean_type3_font(
-    doc: &mut Document,
-    holders: &[(ObjRef, Vec<ObjRef>)],
-    form_holders: &[(ObjRef, Dict)],
-    font_key: &FontKey,
-    font_dict: &Dict,
-    surviving: &HashSet<Vec<u8>>,
-) -> Result<(), RedactError> {
+fn clean_type3_font(doc: &mut Document, font_key: &FontKey, font_dict: &Dict, surviving: &HashSet<Vec<u8>>) -> Result<bool, RedactError> {
     let Some(char_procs_val) = font_dict.get(b"CharProcs") else {
         return Err(CosError::Syntax { offset: 0, detail: "redaction could not establish safe Type 3 font cleanup: missing CharProcs".into() }.into());
     };
@@ -799,13 +838,13 @@ fn clean_type3_font(
 
     let FontKey::Ref(fr) = font_key;
     if char_procs.is_empty() {
-        // The font has no surviving glyphs: clear its own glyph programs and resources, then
-        // remove font from /Font across all holders.
+        // The font has no surviving glyphs: clear its own glyph programs and resources. The
+        // caller removes it from /Font across all holders.
         doc.update_dict(*fr, |d| {
             d.remove(b"CharProcs");
             d.remove(b"Resources");
         })?;
-        return remove_font_from_holders(doc, holders, form_holders, font_key);
+        return Ok(true);
     }
 
     // A CharProcs object can be shared with another Type 3 font, so never rewrite it in place:
@@ -817,7 +856,7 @@ fn clean_type3_font(
     }
 
     // Clean exclusive resources from the Type 3 font's /Resources.
-    let Some(f_res_val) = font_dict.get(b"Resources") else { return Ok(()) };
+    let Some(f_res_val) = font_dict.get(b"Resources") else { return Ok(false) };
     let mut f_res = doc.resolve(f_res_val).as_dict().cloned().unwrap_or_default();
 
     let mut used_in_glyphs = UsedInGlyphs::default();
@@ -846,19 +885,19 @@ fn clean_type3_font(
         })?;
     }
     prune_font_forms(doc, &f_res)?;
-    Ok(())
+    Ok(false)
 }
 
-fn remove_font_from_holders(
+fn remove_fonts_from_holders(
     doc: &mut Document,
     holders: &[(ObjRef, Vec<ObjRef>)],
     form_holders: &[(ObjRef, Dict)],
-    target_key: &FontKey,
+    gone: &HashSet<FontKey>,
 ) -> Result<(), RedactError> {
     let clean_res = |doc: &Document, res: &mut Dict| -> bool {
         let mut fonts = res_dict(doc, res, b"Font");
         let before = fonts.len();
-        fonts.retain(|_, val| val.as_ref().map(FontKey::Ref) != Some(*target_key));
+        fonts.retain(|_, val| !val.as_ref().is_some_and(|r| gone.contains(&FontKey::Ref(r))));
         let changed = fonts.len() != before;
         if changed {
             if fonts.is_empty() {

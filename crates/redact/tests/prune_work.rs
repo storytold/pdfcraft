@@ -165,6 +165,96 @@ fn a_type3_fonts_undrawn_glyphs_go_in_one_pass() {
     assert!(about_as_long(many, one), "{MANY} glyphs {many:?}, one {one:?}");
 }
 
+/// For the tests whose regression copied a resource dictionary for each operator that named one of
+/// its entries: as many entries as operators, the copies cost the square of this, seconds already.
+const SQUARED: usize = 4_000;
+
+/// A Type 3 font of one glyph shape (object 5, its glyph object 6), and content drawing it beside
+/// the mark, so that the Type 3 cleanup reads the page.
+const TYPE3: &str = "<< /Type /Font /Subtype /Type3 /FontBBox [0 0 10 10] /FontMatrix [0.1 0 0 0.1 0 0] /CharProcs << /a 6 0 R >> \
+                     /Encoding << /Differences [97 /a] >> /FirstChar 97 /LastChar 97 /Widths [10] >>";
+const DRAWS_TYPE3: &str = "BT /T3 10 Tf 20 20 Td (a) Tj ET";
+
+/// A page with the Type 3 font, `resources`, and `ops` before the text that draws it; `extra`
+/// objects from object 7 on.
+fn type3_page(fonts: &str, resources: &str, ops: &str, extra: Vec<Vec<u8>>) -> Document {
+    let objs = [vec![TYPE3.as_bytes().to_vec(), stream_obj("", b"10 0 d0 0 0 10 10 re f")], extra].concat();
+    page(&format!("/T3 5 0 R {fonts}"), resources, format!("{ops} {DRAWS_TYPE3}").as_bytes(), objs)
+}
+
+/// The graphics states the content selects are read once each, however many there are and however
+/// often each is selected: by the Type 3 cleanup's scan of the glyphs drawn, and by its pruning of
+/// the fonts no longer drawn. Each read the whole `/ExtGState` again for every `gs`.
+#[test]
+fn graphics_states_are_read_once_however_often_the_content_selects_them() {
+    let _serial = one_at_a_time();
+    let doc = |n: usize| {
+        let ops: String = (0..n).map(|i| format!("/S{i} gs ")).collect();
+        type3_page("", &format!("/ExtGState << {}>>", entries("S", n, "<< /LW 1 >>")), &ops, vec![])
+    };
+    let (one, many) = (redaction(doc, 1), redaction(doc, SQUARED));
+    assert!(about_as_long(many, one), "{SQUARED} states {many:?}, one {one:?}");
+}
+
+/// The fonts the content selects are read once each by the Type 3 cleanup's scan: it read the whole
+/// `/Font` again for every `Tf`.
+#[test]
+fn fonts_are_read_once_however_often_the_content_selects_them() {
+    let _serial = one_at_a_time();
+    let doc = |n: usize| {
+        let ops: String = (0..n).map(|i| format!("BT /F{i} 10 Tf ET ")).collect();
+        type3_page(&entries("F", n, "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"), "", &ops, vec![])
+    };
+    let (one, many) = (redaction(doc, 1), redaction(doc, SQUARED));
+    assert!(about_as_long(many, one), "{SQUARED} fonts {many:?}, one {one:?}");
+}
+
+/// The XObjects and patterns the content draws and selects are read once each by the Type 3
+/// cleanup's scan: it read the whole `/XObject` again for every `Do`, and `/Pattern` for every `scn`.
+#[test]
+fn xobjects_and_patterns_are_read_once_however_often_the_content_names_them() {
+    let _serial = one_at_a_time();
+    let doc = |n: usize| {
+        let ops: String = (0..n).map(|i| format!("/X{i} Do /Pattern cs /P{i} scn ")).collect();
+        let resources = format!("/XObject << {}>> /Pattern << {}>>", entries("X", n, "7 0 R"), entries("P", n, "8 0 R"));
+        type3_page("", &resources, &ops, vec![stream_obj(IMAGE, b"o"), stream_obj(PATTERN, b"0 0 5 5 re f")])
+    };
+    let (one, many) = (redaction(doc, 1), redaction(doc, SQUARED));
+    assert!(about_as_long(many, one), "{SQUARED} XObjects and patterns {many:?}, one {one:?}");
+}
+
+/// A form the content draws again and again is read once by the Type 3 cleanup's scan, and so are
+/// its own resources: they were copied for every `Do`, before the form was found already read.
+#[test]
+fn a_forms_own_resources_are_read_once_however_often_it_is_drawn() {
+    let _serial = one_at_a_time();
+    let doc = |n: usize| {
+        let ops: String = (0..n).map(|_| "/Fm Do ".to_string()).collect();
+        let form = stream_obj(
+            &format!("/Type /XObject /Subtype /Form /BBox [0 0 10 10] /Resources << /XObject << {}>> >>", entries("X", n, "8 0 R")),
+            b"0 0 5 5 re f",
+        );
+        type3_page("", "/XObject << /Fm 7 0 R >>", &ops, vec![form, stream_obj(IMAGE, b"o")])
+    };
+    let (one, many) = (redaction(doc, 1), redaction(doc, SQUARED));
+    assert!(about_as_long(many, one), "{SQUARED} draws {many:?}, one {one:?}");
+}
+
+/// Type 3 fonts that have no glyph left go from the page's `/Font` together, in one pass: one at
+/// a time, each copied the whole `/Font` again.
+#[test]
+fn type3_fonts_with_no_glyph_left_go_together() {
+    let _serial = one_at_a_time();
+    let doc = |n: usize| {
+        let ops: String = (0..n).map(|i| format!("BT /G{i} 10 Tf ET ")).collect();
+        let fonts: String = (0..n).map(|i| format!("/G{i} {} 0 R ", 7 + i)).collect();
+        let glyphless = (0..n).map(|_| TYPE3.as_bytes().to_vec()).collect();
+        type3_page(&fonts, "", &ops, glyphless)
+    };
+    let (one, many) = (redaction(doc, 1), redaction(doc, SQUARED));
+    assert!(about_as_long(many, one), "{SQUARED} fonts {many:?}, one {one:?}");
+}
+
 /// Images a page lists and draws nowhere go when hidden information is removed, in one pass.
 #[test]
 fn undrawn_images_go_in_one_pass() {

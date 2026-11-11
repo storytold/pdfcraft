@@ -162,7 +162,7 @@ pub(crate) fn unlink_undrawn(doc: &mut Document) -> Result<usize, RedactError> {
             let Some(drawn) = names_drawn(doc, &res, &users, &index) else { break };
             let before = xo.len();
             xo.retain(|name, _| drawn.contains(name) || !listed.contains(name));
-            let gone = before - xo.len();
+            let gone = before.saturating_sub(xo.len());
             if gone == 0 {
                 break;
             }
@@ -611,7 +611,7 @@ pub(crate) fn prune_patterns(doc: &Document, res: &mut Dict, seen: &[Vec<u8>], p
         }
         false
     });
-    let dropped = before - pat.len();
+    let dropped = before.saturating_sub(pat.len());
     if dropped > 0 {
         if pat.is_empty() {
             res.remove(b"Pattern");
