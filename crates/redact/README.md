@@ -146,8 +146,8 @@ from `/ColorSpace` dictionaries given by reference are counted as their length a
 up to 1 MiB at once: reading one that doesn't fit lets go first of the names the page being
 walked hasn't named, and once a page of the rest, and no dictionary is read more than twice in a
 run. A dictionary whose names alone pass 1 MiB, one that still doesn't fit beside what the page
-keeps, or one named again after its two reads has its names taken for Pattern spaces, so a
-pattern nothing paints any more can stay, and if its cell may hold text or images,
+keeps, or one named again after its two reads keeps the pattern for any name looked up in it, so
+a pattern nothing paints any more can stay, and if its cell may hold text or images,
 Apply refuses as below. If a cell remains reachable after rewriting the selected pages and may
 contain text, images, replacement descriptions, or unreadable content, Apply refuses with a
 `RedactError::Pattern` and restores the document and pending marks. This includes patterns owned

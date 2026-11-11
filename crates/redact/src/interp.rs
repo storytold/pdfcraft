@@ -281,7 +281,7 @@ pub(crate) struct PatternSpaces {
     /// Whether the page being walked has let go of names it named itself, which it does once.
     let_go: bool,
     /// What a dictionary whose names aren't kept gives any name: no Pattern space (`false`) where
-    /// it isn't a dictionary, so it has none; the pattern kept (`true`) where its names alone go
+    /// it isn't a dictionary, or has no entries, so it has none; the pattern kept (`true`) where its names alone go
     /// past the allowance, or it was read [`MAX_READS`] times.
     settled: HashMap<ObjRef, bool>,
     /// How often each dictionary was read, and what its names cost.
@@ -361,9 +361,10 @@ impl PatternSpaces {
         if reads > 0 && !self.room(known) {
             return None;
         }
-        // A stream's dictionary is read as the dictionary, as the renderer reads it.
+        // A stream's dictionary is read as the dictionary, as the renderer reads it. One with no
+        // entries, like anything else, has no names.
         let read = read_space(doc, o);
-        let Some(d) = read.as_dict() else {
+        let Some(d) = read.as_dict().filter(|d| d.iter().next().is_some()) else {
             self.settled.insert(r, false);
             return Some(None);
         };

@@ -249,9 +249,9 @@ fn a_walk_whose_patterns_nothing_prunes_reads_no_colour_space() {
     assert_eq!(reads(&|doc| drop(apply(doc, None).unwrap())), 1, "Apply, its walk alone");
 }
 
-/// Letting the kept names go keeps what kept none: a `/ColorSpace` that isn't a dictionary, read
-/// once, is not read again when it is named after two others of 60% of the allowance each have
-/// made the lookup let go of the first's names.
+/// Letting the kept names go keeps what kept none: a `/ColorSpace` that isn't a dictionary, or is
+/// one with no entries, read once, is not read again when it is named after two others of 60% of
+/// the allowance each have made the lookup let go of the first's names.
 #[test]
 fn what_kept_no_names_is_not_read_again_after_the_kept_ones_go() {
     let names = (MAX_SPACE_BYTES * 6 / 10) / (8 + ENTRY_BYTES);
@@ -259,14 +259,14 @@ fn what_kept_no_names_is_not_read_again_after_the_kept_ones_go() {
         let names: String = (0..names).map(|i| format!("/{prefix}{i:07} /DeviceGray ")).collect();
         format!("<< {names}>>").into_bytes()
     };
-    // Forms 8, 9 and 10 name `/CSX` in /ColorSpace objects 11 (an array), 12 and 13.
+    // Forms 8, 9, 10 and 14 name `/CSX` in /ColorSpace objects 11 (an array), 12, 13 and 15 (`<< >>`).
     let form =
         |space: u32| stream(&format!("/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << /ColorSpace {space} 0 R >>"), b"/CSX cs");
-    let extra = vec![form(11), form(12), form(13), b"[/DeviceGray]".to_vec(), spaces('A'), spaces('B')];
-    let res = "/Pattern << /P0 7 0 R >> /XObject << /F1 8 0 R /F2 9 0 R /F3 10 0 R >>";
+    let extra = vec![form(11), form(12), form(13), b"[/DeviceGray]".to_vec(), spaces('A'), spaces('B'), form(15), b"<< >>".to_vec()];
+    let res = "/Pattern << /P0 7 0 R >> /XObject << /F1 8 0 R /F2 9 0 R /F3 10 0 R /F4 14 0 R >>";
     SPACE_READS.with(|c| c.set(0));
-    removed("/Pattern cs /P0 scn /F1 Do /F2 Do /F3 Do /F1 Do", res, extra);
-    assert_eq!(SPACE_READS.with(std::cell::Cell::get), 3, "the array, then each dictionary, once");
+    removed("/Pattern cs /P0 scn /F1 Do /F4 Do /F2 Do /F3 Do /F1 Do /F4 Do", res, extra);
+    assert_eq!(SPACE_READS.with(std::cell::Cell::get), 4, "the array, the empty dictionary, then each other, once");
 }
 
 /// A `/ColorSpace` of 60% of the allowance: `/CSX` and `/CSG`, grey, and one long name.

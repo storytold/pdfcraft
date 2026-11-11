@@ -842,8 +842,8 @@ fn redact_page_content(
     let mut budget = pdfcraft_cos::DecodeBudget::page();
     let (list, data) = page_streams_within(doc, &page.dict, pi, &mut budget)?;
     let resources = page.dict.get(b"Resources").and_then(|r| doc.resolve(r).as_dict().cloned()).unwrap_or_default();
-    // What the walk leaves of the page's allowance, the cleanups below spend.
     pattern_spaces.next_page();
+    // What the walk leaves of the page's allowance, the cleanups below spend.
     let (out, mut budget) = {
         let mut scope = Scope::new(rects, Mode::Apply, report, budget, images).with_removed_room(*removed_room).with_pattern_spaces(pattern_spaces);
         let out = process(doc, &mut scope, &data, &resources, pdfcraft_content::Matrix::IDENTITY);
