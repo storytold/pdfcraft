@@ -478,6 +478,10 @@ pub(crate) fn name_tree_entries(src: &Document, node: &Object, depth: u8, seen: 
     name_tree_entries_within(src, node, depth, seen, out, &mut key_bytes, &mut std::collections::HashSet::new(), (None, Vec::new()));
 }
 
+/// Most distinct name-tree nodes one tree read looks at, though they hold no names: a tree of empty
+/// nodes would otherwise grow the visited sets with every node it names.
+const MAX_NAME_TREE_NODES: usize = 200_000;
+
 /// Where a name-tree node sits: the indirect object it is (or is under), then its path of `/Kids` indices from there.
 type NodeId = (Option<ObjRef>, Vec<usize>);
 
@@ -492,7 +496,14 @@ fn name_tree_entries_within(
     emitted: &mut std::collections::HashSet<NodeId>,
     place: NodeId,
 ) {
-    if depth > 32 || node.as_ref().is_some_and(|r| !first_at(seen, r, depth)) {
+    // Once the output limits are reached (by this node or a sibling's subtree), or this many distinct
+    // nodes have been read whatever they held, no node is read any more.
+    if depth > 32
+        || out.len() >= MAX_NAME_TREE_ENTRIES
+        || *key_bytes > MAX_NAME_TREE_KEY_BYTES
+        || emitted.len() >= MAX_NAME_TREE_NODES
+        || node.as_ref().is_some_and(|r| !first_at(seen, r, depth))
+    {
         return;
     }
     #[cfg(test)]
