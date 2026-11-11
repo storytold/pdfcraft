@@ -225,8 +225,10 @@ pub(super) fn strip_hidden_layers(doc: &Document, scope: &mut Scope<'_>, ops: Ve
         match op.op.as_slice() {
             b"BDC" | b"BMC" => {
                 let this = op.is("BDC")
-                    && op.name(0) == Some(b"OC")
-                    && match op.operands.get(1) {
+                    // The tag and the property list are the last two operands, as the renderer
+                    // reads them: `(x) /OC /MC0 BDC` is a layer's block too.
+                    && op.name_back(1) == Some(b"OC")
+                    && match op.back(0) {
                         Some(Object::Name(n)) => props.get(n).is_some_and(|o| scope.layer_hidden(doc, o)),
                         Some(o) => scope.layer_hidden(doc, o),
                         None => false,

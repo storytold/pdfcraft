@@ -189,13 +189,25 @@ impl Visibility<'_> {
                     return self.evaluate(expression, depth + 1);
                 }
                 let Some(groups) = dict.get(b"OCGs") else { return Some(true) };
-                let (mut any, mut all) = (false, true);
+                let (mut any, mut all, mut has_group) = (false, true, false);
                 read(self.doc, groups, |values| {
                     let values = values.as_array().map(Vec::as_slice).unwrap_or(std::slice::from_ref(groups));
                     for group in values {
+                        if read(self.doc, group, |value| matches!(value, Object::Null)) {
+                            // Null members still cost work: untrusted arrays can be huge.
+                            if !self.charge() {
+                                return None;
+                            }
+                            continue;
+                        }
+                        has_group = true;
                         let on = self.evaluate(group, depth + 1)?;
                         any |= on;
                         all &= on;
+                    }
+                    // Empty or null-only membership has no effect (ISO 32000-2, Table 99).
+                    if !has_group {
+                        return Some(true);
                     }
                     match dict.name(b"P") {
                         None | Some(b"AnyOn") => Some(any),

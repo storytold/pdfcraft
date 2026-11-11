@@ -264,3 +264,64 @@ fn artwork_reader_keeps_evaluation_limits_and_caches_local() {
     assert_eq!(good.shapes.len(), 1);
     assert!(!reader.reading_shapes(0).unwrap().truncated);
 }
+
+#[test]
+fn ocmd_empty_and_null_membership_does_not_hide_artwork() {
+    for (policy, hidden, shown, mixed) in [
+        ("", false, true, true),
+        ("/P /AnyOn", false, true, true),
+        ("/P /AllOn", false, true, false),
+        ("/P /AnyOff", true, false, true),
+        ("/P /AllOff", true, false, false),
+    ] {
+        for (membership, visible) in [
+            ("", true),
+            ("/OCGs []", true),
+            ("/OCGs null", true),
+            ("/OCGs [null]", true),
+            ("/OCGs [null 5 0 R]", true),
+            ("/OCGs 5 0 R", true),
+            ("/OCGs 8 0 R", true),
+            ("/OCGs 9 0 R", true),
+            ("/OCGs [6 0 R]", hidden),
+            ("/OCGs [null 6 0 R 5 0 R]", hidden),
+            ("/OCGs [7 0 R]", shown),
+            ("/OCGs [null 7 0 R 5 0 R]", shown),
+            ("/OCGs [6 0 R null 7 0 R]", mixed),
+            ("/OCGs [] /VE [/Not 7 0 R]", false),
+        ] {
+            let content = format!("/OC << /Type /OCMD {membership} {policy} >> BDC 1 0 0 rg 0 0 612 792 re f EMC");
+            let doc = build(&[
+                "<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [6 0 R 7 0 R] /D << /OFF [6 0 R] >> >> >>".into(),
+                "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R >>".into(),
+                stream("", &content),
+                "null".into(),
+                "<< /Type /OCG >>".into(),
+                "<< /Type /OCG >>".into(),
+                "[]".into(),
+                "[null 5 0 R]".into(),
+            ]);
+            let reader = crate::ArtworkReader::new(&doc);
+            let shapes = reader.reading_shapes(0).unwrap();
+            let appearance = reader.reading_shape_ops(&parse(content.as_bytes()).ops, &Dict::new());
+            for read in [shapes, appearance] {
+                assert!(!read.truncated, "{membership} {policy}");
+                assert_eq!(read.shapes.len(), usize::from(visible), "{membership} {policy}");
+            }
+            assert_eq!(reader.page_background(0).unwrap(), visible.then_some([1.0, 0.0, 0.0]), "{membership} {policy}");
+        }
+    }
+}
+
+#[test]
+fn ocmd_null_membership_still_consumes_the_evaluation_budget() {
+    let members = "null ".repeat(100_000);
+    let content = format!("/OC << /Type /OCMD /OCGs [{members}] >> BDC 0 0 10 10 re S EMC");
+    let doc = page(&content, "", &[]);
+    let reader = crate::ArtworkReader::new(&doc);
+    for read in [reader.reading_shapes(0).unwrap(), reader.reading_shape_ops(&parse(content.as_bytes()).ops, &Dict::new())] {
+        assert!(read.truncated, "null entries must not bypass the extraction's work limit");
+        assert!(read.shapes.is_empty());
+    }
+}

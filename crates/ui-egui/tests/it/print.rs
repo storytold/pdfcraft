@@ -1602,6 +1602,14 @@ fn adding_custom_paper_overrides_pending_driver_default() {
         assert!(std::time::Instant::now() < deadline, "paper discovery started");
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
+    // The read starts as the dialog opens; its paper row may take a few more frames to draw (on
+    // hosted macOS it hadn't when the read started).
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while h.query_by_label("Custom…").is_none() {
+        assert!(std::time::Instant::now() < deadline, "the paper row is drawn");
+        h.run_steps(1);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
     h.get_by_label("Custom…").click();
     h.run_steps(2);
     let units = h.state().print_draft.units.per_point();
