@@ -79,9 +79,9 @@ lopdf = "0.45"
 flate2 = { version = "1.1", default-features = false, features = ["zlib-rs"] }
 weezl = "0.2"
 # CCITT Group 4 encoding (pdfcraft-filters); already in the tree through tiff.
-fax = "0.2.7"
+fax = "0.3.0"
 # Independent CCITT and JBIG2 codecs, already in the tree through hayro.
-hayro-ccitt = "0.3"
+hayro-ccitt = "0.5"
 hayro-jbig2 = "0.3"
 
 # foundation
@@ -105,7 +105,7 @@ egui = "0.37"
 egui_extras = { version = "0.37", default-features = false, features = ["svg"] }
 eframe = { version = "0.37", default-features = false }
 egui_kittest = "0.37"
-rfd = "0.17"
+rfd = "0.18"
 # Monotonic time for logic-only work on native and web (`App::logic` runs without a UI pass).
 web-time = "1.1"
 
