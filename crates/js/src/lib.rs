@@ -8,8 +8,8 @@
 //! - `event`: `value`, `change`, `willCommit`, `rc`, `name`, `type`, `target`, `targetName`.
 //! - the document (`this`, also the global object): `getField`, `numFields`,
 //!   `getNthFieldName`, `numPages`, `pageNum`, `documentFileName`, `info`, `resetForm`,
-//!   `calculateNow`, `print`, `submitForm`, `mailDoc`, `templates`, `getTemplate`,
-//!   `spawnPageFromTemplate`.
+//!   `calculateNow`, `getPageBox`, `print`, `submitForm`, `mailDoc`, `exportDataObject`, `templates`,
+//!   `getTemplate`, `spawnPageFromTemplate`.
 //! - Template objects: `name`, `hidden` (setting it shows or hides the template's page), `spawn`.
 //! - Field objects: `name`, `type`, `value`, `valueAsString`, `defaultValue`, `readonly`,
 //!   `required`, `display`, `hidden`, `numItems`, `getItemAt`, `currentValueIndices`,
@@ -58,7 +58,7 @@ pub use model::{
 use run::SCRIPT_STACK;
 use run::refuse;
 pub(crate) use run::{CheckedCodeFromStrings, MAX_SCRIPT_BYTES};
-pub use run::{run, run_shared};
+pub use run::{run, run_shared, run_shared_calculations, run_shared_calculations_shared};
 
 pub mod formcalc;
 pub mod xfa;

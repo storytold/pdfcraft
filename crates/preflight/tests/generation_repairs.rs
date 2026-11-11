@@ -4,7 +4,9 @@ use pdfcraft_preflight::{Level, convert};
 use std::sync::Arc;
 
 fn image_file(damaged: bool) -> Arc<Vec<u8>> {
-    let mut bytes = b"%PDF-1.7\n".to_vec();
+    // A PDF/A-2 header (6.1.2), so that Save as PDF/A has no header to rewrite and only the
+    // repaired references decide whether the next save is full.
+    let mut bytes = b"%PDF-1.7\n%\xE2\xE3\xCF\xD3\n".to_vec();
     let bodies = [
         "<< /Type /Catalog /Pages 2 0 R /HeaderImage 5 1 R /RowImage 5 0 R /StaleImage 5 2 R >>",
         "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",

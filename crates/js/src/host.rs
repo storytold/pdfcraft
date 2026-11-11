@@ -6,12 +6,17 @@ use super::{
 };
 
 pub(crate) struct Host {
+    pub(crate) event_name: String,
     pub(crate) fields: Arc<Vec<FieldState>>,
     pub(crate) changed: BTreeSet<usize>,
+    pub(crate) formatted: BTreeSet<usize>,
     pub(crate) alerts: Vec<Message>,
     pub(crate) console: Vec<String>,
     pub(crate) requests: Vec<Request>,
     pub(crate) doc: DocInfo,
+    pub(crate) calculations: Arc<Vec<(String, String)>>,
+    pub(crate) calculate_depth: usize,
+    pub(crate) calculate_steps: usize,
     /// Bytes of text kept in alerts, console lines and requests, against [`xfa::MAX_PAYLOAD`].
     pub(crate) kept: usize,
     /// Alerts, console lines and requests the limits left out.
@@ -53,10 +58,10 @@ impl Host {
 
     /// Record `r`, its names and URLs cut to a message's length, up to [`xfa::MAX_EFFECTS`]
     /// requests and the run's byte budget.
-    pub(crate) fn request(&mut self, r: Request) {
+    pub(crate) fn request(&mut self, r: Request) -> bool {
         if self.requests.len() >= xfa::MAX_EFFECTS {
             self.dropped = self.dropped.saturating_add(1);
-            return;
+            return false;
         }
         let r = match r {
             Request::Reset(names) => Request::Reset(names.into_iter().map(xfa::clip).collect()),
@@ -70,12 +75,14 @@ impl Host {
         let bytes = match &r {
             Request::Reset(names) => names.iter().fold(0usize, |n, s| n.saturating_add(s.len()).saturating_add(std::mem::size_of::<String>())),
             Request::LaunchUrl(u) | Request::Submit(u) | Request::Focus(u) => u.len(),
-            Request::SpawnTemplate { name, .. } | Request::SetTemplateHidden { name, .. } => name.len(),
+            Request::SpawnTemplate { name, .. } | Request::SetTemplateHidden { name, .. } | Request::OpenAttachment { name, .. } => name.len(),
             _ => 0,
         };
-        if self.room(bytes) {
+        let kept = self.room(bytes);
+        if kept {
             self.requests.push(r);
         }
+        kept
     }
 }
 

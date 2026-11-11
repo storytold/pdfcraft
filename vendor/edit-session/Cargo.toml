@@ -1,0 +1,18 @@
+[package]
+name = "edit-session"
+version = "0.1.0-alpha.2"
+edition = "2024"
+rust-version = "1.88"
+description = "Toolkit-independent preview, validation and commit lifecycle"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/PerchAnton/edit-session"
+readme = "README.md"
+publish = false
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
