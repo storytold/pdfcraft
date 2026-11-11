@@ -116,13 +116,14 @@ pub enum RedactError {
     )]
     SharedJbig2Budget,
     /// What cleaning a page needs to read whole, or to find, isn't there to read: content with
-    /// bytes the parser can't read or past what is followed, forms nesting past what is followed, a
-    /// form whose placement can't be told, a Type 3 font without the entries its cleanup reads.
-    /// What it holds can't be shown gone.
+    /// bytes the parser can't read, or past what one page may read or is followed, forms nesting
+    /// past what is followed, a form whose placement can't be told. What it holds can't be shown
+    /// gone.
     #[error("page {page} can't be redacted safely: {reason}; nothing was changed")]
     PageRefused { page: usize, reason: String },
-    /// [`RedactError::PageRefused`] where no one page is the cause: a Type 3 font, or forms and
-    /// resources shared across the document.
+    /// [`RedactError::PageRefused`] where no one page is the cause: a Type 3 font's own entries,
+    /// glyphs or forms, forms and resources shared across the document, or a page the page tree
+    /// doesn't list.
     #[error("the document can't be redacted safely: {0}; nothing was changed")]
     Refused(String),
     #[error(transparent)]

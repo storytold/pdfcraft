@@ -528,8 +528,12 @@ pub(crate) fn resource_ops(doc: &Document, budget: &mut DecodeBudget, res: &Dict
             && s.dict.name(b"Subtype") == Some(b"Form")
             && s.dict.get(b"Resources").is_none_or(|r| doc.resolve(r).as_dict().is_none())
         {
-            let data =
-                budget.decode(&doc.with_direct_parms(s)).map_err(|e| if budget.exhausted() { RedactError::past_allowance(e) } else { e.into() })?;
+            // Past what the page may read where the budget refused it; a form that doesn't decode
+            // says why.
+            let refused = budget.refused();
+            let data = budget
+                .decode(&doc.with_direct_parms(s))
+                .map_err(|e| if budget.refused() > refused { RedactError::past_allowance(e) } else { e.into() })?;
             let mut read = pdfcraft_content::ops(&data);
             ops.extend(read.by_ref().take((MAX_OPS + 1).saturating_sub(ops.len())));
             // `seen` gains at most one form for each `Do` in `ops`, so this bounds it too.

@@ -135,12 +135,14 @@ or in a form under an area (a stray `)` or `}` in a `TJ` array, say): the interp
 them, so text they hide, which other readers may draw, would be neither found nor removed. Remove
 hidden information refuses a page for both too, in whatever content it walks. A Redact annotation with neither a usable `/QuadPoints` array nor a usable
 `/Rect` makes it fail with `RedactError::UnreadableMark` before anything changes, instead of
-skipping that mark. The count covers the marks on the pages being applied. Where a cleanup can't
-read what it must to show something gone (content or forms with bytes the parser can't read, or
-past what is followed, a form whose `/Matrix` can't be read, a Type 3 font without the entries its
-cleanup reads), the operation fails with `RedactError::PageRefused`, naming the page whose content
-or forms are the cause, marked or not, or with `RedactError::Refused` where no one page is (a Type 3
-font, or forms shared across the document).
+skipping that mark. The count covers the marks on the pages being applied. Where the walk or a
+cleanup can't read what it must to show something gone (content or forms with bytes the parser
+can't read, or past what one page may read or is followed, a form whose `/Matrix` isn't six
+numbers, a Type 3 font without the entries its cleanup reads), the operation fails with
+`RedactError::PageRefused`, naming the page whose content or forms are the cause, marked or not, or
+with `RedactError::Refused` where no one page is (a Type 3 font, or forms shared across the
+document). `remove_hidden` may have changed the document by then, as for its other refusals: a
+caller passes a copy it can drop.
 
 Tiling-pattern cells are separate streams. Applying a mark removes a pattern resource when no
 surviving paint uses it. If a cell remains reachable after rewriting the selected pages and may

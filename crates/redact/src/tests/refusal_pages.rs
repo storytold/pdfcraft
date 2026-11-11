@@ -1,5 +1,6 @@
-//! Remove Hidden Information's refusals name the page whose content or forms are their cause
-//! (`RedactError::PageRefused`), from each cleanup that reads a rewritten page.
+//! Redaction refusals name the page whose content or forms are their cause
+//! (`RedactError::PageRefused`), in Apply Redactions and Remove Hidden Information, and errors
+//! that aren't refusals keep their own text.
 
 use super::*;
 use crate::sanitize::{Hidden, remove_hidden};
@@ -21,7 +22,7 @@ fn second_page_hidden(content: &[u8], res: &str, extra: Vec<Vec<u8>>) -> Documen
     pdf(objs)
 }
 
-/// Whether removing hidden text from `doc` is refused, naming page 2, for a reason that holds
+/// Asserts that removing hidden text from `doc` is refused, naming page 2, for a reason that holds
 /// `reason`.
 fn refuses_page_two(mut doc: Document, reason: &str) {
     let removed = remove_hidden(&mut doc, &[Hidden::HiddenText]);
@@ -97,4 +98,50 @@ fn a_page_sharing_resources_whose_forms_can_t_be_read_is_named() {
     mark(&mut doc, 0, &[[0.0, 200.0, 300.0, 300.0]], "");
     let applied = apply(&mut doc, None).map(|_| ());
     assert!(matches!(&applied, Err(RedactError::PageRefused { page: 2, reason }) if reason.contains("can't all be read")), "{applied:?}");
+}
+
+/// A page whose forms spend exactly what it may enter, nothing refused, and a form that doesn't
+/// decode: that form says why, and the page isn't said to go past what it may read. In the walk, as
+/// the page's last entry, where with room left the walk would remove it, it still refuses the
+/// page, as before, now with its own text; in the cleanup of the page's properties, outside the
+/// mark, which the walk doesn't enter, for Apply Redactions; and in the Type 3 cleanup's read of an
+/// annotation appearance, for Apply Redactions and Remove Hidden Information.
+#[test]
+fn a_form_that_doesn_t_decode_at_the_page_s_last_entry_says_why() {
+    const MAX: usize = pdfcraft_cos::MAX_PAGE_FORMS;
+    const SECRET: &[u8] = b"BT /F1 10 Tf 20 260 Td (SECRET) Tj ET ";
+    const BAD: &str = "/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Filter /UnsupportedForTheTest";
+    let says_why = |result: Result<(), RedactError>| {
+        assert!(matches!(&result, Err(RedactError::Cos(pdfcraft_cos::CosError::Filter(why))) if why.contains("UnsupportedForTheTest")), "{result:?}");
+    };
+    let form = || stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300]", b"0 0 m");
+    let marked = |mut doc: Document| {
+        mark(&mut doc, 0, &[[0.0, 250.0, 300.0, 280.0]], "");
+        apply(&mut doc, None).map(|_| ())
+    };
+    // The walk: the form that doesn't decode is the page's last entry.
+    let content = [SECRET, &b"/Fm Do ".repeat(MAX - 1), b"/Fc Do"].concat();
+    says_why(marked(one_page(&content, "/XObject << /Fm 7 0 R /Fc 8 0 R >>", vec![form(), stream(BAD, b"opaque")])));
+    // The properties' cleanup, after the walk entered every form the page may.
+    let content = [SECRET, &b"/Fm Do ".repeat(MAX), b"/Fbad Do"].concat();
+    let resources = "/XObject << /Fm 7 0 R /Fbad 8 0 R >> /Properties << /P0 << >> >>";
+    says_why(marked(one_page(&content, resources, vec![form(), stream(&BAD.replace("300 300", "10 10"), b"opaque")])));
+    // The Type 3 cleanup's appearances.
+    let with_type3 = |content: Vec<u8>| {
+        pdf(vec![
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Font << /F1 5 0 R /T3 9 0 R >> /XObject << /Fm 7 0 R >> >> /Annots [10 0 R] >>".to_vec(),
+            stream("", &content),
+            FONT.replace("95 0 R", "6 0 R").into_bytes(),
+            widths(),
+            form(),
+            stream(BAD, b"opaque"),
+            b"<< /Type /Font /Subtype /Type3 /FontBBox [0 0 1000 1000] /FontMatrix [0.001 0 0 0.001 0 0] /FirstChar 65 /LastChar 65 /Widths [500] /Encoding << /Differences [65 /A] >> /CharProcs << >> >>".to_vec(),
+            b"<< /Type /Annot /Subtype /Square /Rect [0 0 10 10] /AP << /N 8 0 R >> >>".to_vec(),
+        ])
+    };
+    says_why(marked(with_type3([SECRET, &b"/Fm Do ".repeat(MAX)].concat())));
+    let hidden = [b"BT /F1 10 Tf 3 Tr 20 60 Td (HIDDEN) Tj ET ".as_slice(), &b"/Fm Do ".repeat(MAX)].concat();
+    says_why(remove_hidden(&mut with_type3(hidden), &[Hidden::HiddenText]).map(|_| ()));
 }

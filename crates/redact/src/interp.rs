@@ -1144,7 +1144,9 @@ fn xobject(
             // Strict, like page content: a Form read only in part counts as undecodable. With its
             // `/DecodeParms` given by reference too, as the cleanups after the walk read it: read
             // without them, it looks empty and is left as it was, drawing whatever lies under a mark.
-            let data = if scope.budget.enter_form() {
+            let refused = scope.budget.refused();
+            let entered = scope.budget.enter_form();
+            let data = if entered {
                 scope.budget.decode_strict(doc, s)
             } else {
                 Err(CosError::Filter(format!("the page draws more than {MAX_PAGE_FORMS} form XObjects")))
@@ -1155,7 +1157,11 @@ fn xobject(
                 // verification counts the form as content that may remain.
                 Err(e) if scope.budget.exhausted() => {
                     if scope.mode == Mode::Apply {
-                        out.error = Some(RedactError::past_allowance(e));
+                        // The budget spent says nothing of this form: it went past what the page
+                        // may read only where it was refused for that; one that doesn't decode
+                        // says why.
+                        let past = !entered || scope.budget.refused() > refused;
+                        out.error = Some(if past { RedactError::past_allowance(e) } else { e.into() });
                     } else if scope.everywhere() {
                         scope.layer_blocks += 1;
                     } else {
