@@ -46,6 +46,10 @@ impl Draft {
     }
 
     fn edit(&self, tag: &TagInfo) -> Option<Edit> {
+        // Text the listing left out shows as empty here: saving over it would erase text never seen.
+        if tag.truncated {
+            return None;
+        }
         let mut edits = Vec::new();
         let mut add = |property, prior: Option<&str>, next: &str| {
             let value = (!next.is_empty()).then(|| next.to_owned());
@@ -198,13 +202,18 @@ pub(crate) fn panel(
     {
         page = Some(p);
     }
-    ui.add_enabled_ui(can_edit, |ui| {
+    ui.add_enabled_ui(can_edit && !tag.truncated, |ui| {
         field(ui, tl!("Tag type"), &mut state.draft.kind, false);
         field(ui, tl!("Title"), &mut state.draft.title, false);
         field(ui, tl!("Actual text"), &mut state.draft.actual_text, true);
         field(ui, tl!("Alternate text"), &mut state.draft.alt, true);
         field(ui, tl!("Language"), &mut state.draft.language, false);
     });
+    if tag.truncated {
+        ui.label(
+            egui::RichText::new(tl!("Some of this tag's text is too long to show here, so its properties can't be edited.")).color(t.text_muted),
+        );
+    }
     let edit = state.draft.edit(tag);
     let mut save = false;
     let siblings: Vec<&TagInfo> = tag.parent.map(|parent| tags.iter().filter(|other| other.parent == Some(parent)).collect()).unwrap_or_default();
@@ -289,5 +298,35 @@ fn field(ui: &mut Ui, label: &str, value: &mut String, multiline: bool) {
         ui.add(widgets::block(value).desired_rows(2).desired_width(f32::INFINITY)).labelled_by(l.id);
     } else {
         ui.add(egui::TextEdit::singleline(value).desired_width(f32::INFINITY)).labelled_by(l.id);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tag(truncated: bool) -> TagInfo {
+        TagInfo {
+            object: ObjRef::new(5, 0),
+            parent: None,
+            depth: 0,
+            kind: "Figure".into(),
+            title: None,
+            actual_text: None,
+            alt: None,
+            language: None,
+            summary: None,
+            scope: None,
+            page: None,
+            truncated,
+        }
+    }
+
+    #[test]
+    fn a_tag_with_text_left_out_cannot_be_saved_over() {
+        let mut shown = Draft::from_tag(&tag(false));
+        shown.alt = "new".into();
+        assert!(shown.edit(&tag(false)).is_some());
+        assert!(shown.edit(&tag(true)).is_none(), "the unseen text would be overwritten");
     }
 }

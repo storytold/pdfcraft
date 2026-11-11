@@ -316,9 +316,6 @@ pub(crate) const MAX_LISTED_TEXT: usize = 32 << 20;
 /// What is left of [`MAX_LISTED_TEXT`], and whether anything was left out for it.
 pub(crate) struct TextBudget {
     left: usize,
-    /// Set once text is dropped for the allowance: a listing that omits text this way says so,
-    /// rather than reading as one whose text is genuinely absent.
-    exhausted: bool,
     /// Whether the last [`Self::text`] or [`Self::string`] dropped its text for the allowance
     /// rather than finding none: what lets `tags` say an `alt` is not shown, not absent.
     refused: bool,
@@ -326,20 +323,14 @@ pub(crate) struct TextBudget {
 
 impl TextBudget {
     pub(crate) fn new() -> Self {
-        TextBudget { left: MAX_LISTED_TEXT, exhausted: false, refused: false }
+        TextBudget { left: MAX_LISTED_TEXT, refused: false }
     }
 
     /// Spend `n` bytes: `false`, spending what is left, when they don't fit.
     pub(crate) fn charge(&mut self, n: usize) -> bool {
         let fits = n <= self.left;
         self.left = self.left.saturating_sub(n);
-        self.exhausted |= !fits;
         fits
-    }
-
-    /// Whether this listing has dropped text for the allowance.
-    pub(crate) fn exhausted(&self) -> bool {
-        self.exhausted
     }
 
     /// Whether the last read dropped its text for the allowance (rather than there being none).
@@ -359,7 +350,6 @@ impl TextBudget {
     /// [`Self::text`] for a string already in hand.
     pub(crate) fn string(&mut self, s: &PdfString) -> Option<String> {
         if s.bytes.len() > self.left {
-            self.exhausted = true;
             self.refused = true;
             return None;
         }
