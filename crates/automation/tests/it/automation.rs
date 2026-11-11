@@ -11741,6 +11741,49 @@ fn text_extract_as_html_recovers_glyph_ids_in_the_mac_order() {
     assert!(found["matches"].as_array().unwrap().is_empty(), "{found}");
 }
 
+/// Traditional Chinese in an Identity-H subset without /ToUnicode whose glyph ids are Unicode code
+/// points shifted by a constant: each of eight pages shows a few characters, too few to read
+/// alone, and html reads them all from the document's evidence, on whichever worker reads each
+/// page; text and Find stay strict.
+#[test]
+fn text_extract_as_html_recovers_traditional_chinese_from_the_whole_document() {
+    use pdfcraft_testkit::truetype::{Cmap, subset};
+    let dir = workdir("rich-copy-cjk-order");
+    let text: Vec<char> = "中華民國政府應依法辦理本計畫之各項工作並於期限內完成相關事項本公司依證券交易法".chars().collect();
+    let gid = |c: char| u16::try_from(u32::from(c) - 12_376).unwrap();
+    let gids: Vec<u16> = text.iter().map(|&c| gid(c)).collect();
+    let parts: Vec<&[char]> = text.chunks(5).collect();
+    assert_eq!(parts.len(), 8);
+    let mut pdf = pdfcraft_testkit::Pdf::new()
+        .obj("<< /Type /Catalog /Pages 2 0 R >>")
+        .obj(format!(
+            "<< /Type /Pages /Kids [{}] /Count 8 /MediaBox [0 0 600 300] >>",
+            (0..8).map(|i| format!("{} 0 R", 7 + 2 * i)).collect::<Vec<_>>().join(" ")
+        ))
+        .obj("<< /Type /Font /Subtype /Type0 /BaseFont /ABCDEF+MingLiU /Encoding /Identity-H /DescendantFonts [4 0 R] >>")
+        .obj("<< /Type /Font /Subtype /CIDFontType2 /BaseFont /ABCDEF+MingLiU /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> /CIDToGIDMap /Identity /DW 1000 /FontDescriptor 5 0 R >>")
+        .obj("<< /Type /FontDescriptor /FontName /ABCDEF+MingLiU /Flags 4 /FontBBox [0 -200 1000 900] /ItalicAngle 0 /Ascent 800 /Descent -200 /CapHeight 700 /StemV 80 /FontFile2 6 0 R >>")
+        .stream("", subset(30_000, &gids, Cmap::None, None));
+    for part in &parts {
+        let shown: String = part.iter().map(|&c| format!("{:04X}", gid(c))).collect();
+        let contents = pdf.next_obj() + 1;
+        pdf = pdf
+            .obj(format!("<< /Type /Page /Parent 2 0 R /Contents {contents} 0 R /Resources << /Font << /F1 3 0 R >> >> >>"))
+            .stream("", format!("BT /F1 20 Tf 20 250 Td <{shown}> Tj ET"));
+    }
+    std::fs::write(dir.join("cjk.pdf"), pdf.build()).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "cjk.pdf" }))["doc"].as_u64().unwrap();
+    let pages = ok(&mut a, "text_extract", json!({ "doc": doc, "format": "html" }))["pages"].clone();
+    for (page, part) in pages.as_array().unwrap().iter().zip(&parts) {
+        assert_eq!(page["text"], "", "no strict text");
+        let part: String = part.iter().collect();
+        assert!(page["html"].as_str().unwrap().contains(&part), "{part}: {}", page["html"]);
+    }
+    let found = ok(&mut a, "text_find", json!({ "doc": doc, "query": "政府" }));
+    assert!(found["matches"].as_array().unwrap().is_empty(), "{found}");
+}
+
 #[test]
 fn mixed_visual_region_edit_preview_save_reopen_and_undo_through_tools() {
     use pdfcraft_cos::{Dict, Document, Object, Stream, write_incremental};

@@ -624,6 +624,16 @@ impl Type0Font {
         Some((kind, number))
     }
 
+    /// PdfCraft patch (104): a CID-keyed CFF program's charset CIDs (what `FontFacts::ids` gives),
+    /// for the document survey's reports; nothing for other programs.
+    #[cfg(feature = "test-counters")]
+    pub(crate) fn recovery_charset(&self) -> Vec<u32> {
+        self.recovery_program()
+            .1
+            .map(|c| c.charset_cids())
+            .unwrap_or_default()
+    }
+
     /// PdfCraft patch (104): the kind of font the recovery rules see.
     pub(crate) fn recovery_font_kind(&self) -> FontKind {
         let (program, cid_cff) = self.recovery_program();

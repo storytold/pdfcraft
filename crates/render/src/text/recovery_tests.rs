@@ -1308,9 +1308,10 @@ fn recovering_costs(pdf: &Pdf) -> (PageText, Option<RecoveredText>, PageText, ha
     (strict, recovered, extract_page(pdf, 0, &settings).unwrap(), cost)
 }
 
-/// A font of a kind no rule reads (Type 3, a CID-keyed CFF program) costs the recovered layer
-/// one check per glyph and nothing else: its guards are never decided, its facts never built.
-/// A font a rule can read (a Type 1 font, the standard Helvetica too) is decided once.
+/// A font of a kind no rule reads (Type 3) costs the recovered layer one check per glyph and
+/// nothing else: its guards are never decided, its facts never built. A font a rule can read (a
+/// Type 1 font, the standard Helvetica too, a CID-keyed CFF program) is decided once, and one no
+/// rule takes costs nothing more.
 #[test]
 fn a_font_kind_no_rule_reads_costs_one_check_per_glyph() {
     let (strict, recovered, plain, cost) = recovering_costs(&parse(type3_fonts_then_names(3)));
@@ -1326,8 +1327,9 @@ fn a_font_kind_no_rule_reads_costs_one_check_per_glyph() {
     assert_eq!(strict, plain);
     assert!(recovered.is_none());
     assert_eq!(cost.rule_calls, 2 + text.len());
-    // Helvetica's `Hi` only.
-    assert_eq!((cost.guard_decisions, cost.facts_built, cost.glyph_facts_built, cost.program_walks), (1, 1, 0, 0), "{cost:?}");
+    // Helvetica's `Hi`, and the CID-keyed CFF font (whose rule, without a document's evidence,
+    // takes nothing).
+    assert_eq!((cost.guard_decisions, cost.facts_built, cost.glyph_facts_built, cost.program_walks), (2, 2, 0, 0), "{cost:?}");
 }
 
 /// A Type 3 font's cache key is worked out once per font, however many of its glyphs a page

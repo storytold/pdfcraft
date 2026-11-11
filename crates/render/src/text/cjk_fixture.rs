@@ -23,6 +23,8 @@ pub(super) struct Font {
     pub(super) program: Program,
     /// A `/ToUnicode` stream mapping every code to `X`.
     pub(super) to_unicode: bool,
+    /// A `/ToUnicode` name (`Identity-H`) in place of a stream.
+    pub(super) to_unicode_name: Option<&'static str>,
     /// A `/CIDToGIDMap` stream: CID `i` draws glyph `map[i]`.
     pub(super) cid_to_gid: Option<Vec<u16>>,
     /// The descendant's `/CIDSystemInfo` ordering (`Identity` unless set).
@@ -41,6 +43,7 @@ impl Font {
             base: base.into(),
             program: Program::TrueType(glyphs),
             to_unicode: false,
+            to_unicode_name: None,
             cid_to_gid: None,
             ordering: "Identity",
             encoding: "Identity-H",
@@ -80,7 +83,11 @@ impl Doc {
         for (i, font) in self.fonts.iter().enumerate() {
             let at = objects.len() + 1;
             let (type0, cidfont, descriptor, program, extra) = (at, at + 1, at + 2, at + 3, at + 4);
-            let tu = if font.to_unicode { format!(" /ToUnicode {extra} 0 R") } else { String::new() };
+            let tu = match (font.to_unicode, font.to_unicode_name) {
+                (true, _) => format!(" /ToUnicode {extra} 0 R"),
+                (false, Some(name)) => format!(" /ToUnicode /{name}"),
+                (false, None) => String::new(),
+            };
             let type0_dict = format!(
                 "<< /Type /Font /Subtype /Type0 /BaseFont /{} /Encoding /{} /DescendantFonts [{cidfont} 0 R]{tu} >>",
                 font.base, font.encoding
@@ -119,7 +126,7 @@ impl Doc {
             ));
             let program_stream = match &font.program {
                 Program::TrueType(glyphs) => {
-                    let drawn = self.codes_of(i).into_iter().map(|c| font.glyph_of(c)).collect::<Vec<_>>();
+                    let drawn = self.codes_of(i).into_iter().map(|c| font.glyph_of(c)).filter(|g| g < glyphs).collect::<Vec<_>>();
                     ("".into(), pdfcraft_testkit::truetype::subset(*glyphs, &drawn, pdfcraft_testkit::truetype::Cmap::None, None))
                 }
                 Program::Cff(cids) => ("/Subtype /CIDFontType0C".into(), pdfcraft_testkit::cff::cid_keyed(cids)),

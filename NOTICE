@@ -32,6 +32,20 @@ list (author, source, license) is in ATTRIBUTION.md.
 - hayro (rendering, via crates.io) — Apache-2.0 OR MIT. Its `embed-fonts` feature bundles the Foxit
   standard-14 Type 1 fonts under BSD-3-Clause ("Copyright 2014 PDFium Authors"), and hayro-cmap bundles
   Adobe CMap resources under BSD-3-Clause.
+- Common Traditional Chinese characters (vendor/hayro-interpret/src/font/recovery/common_traditional.rs),
+  750 characters ranked by how often Taiwan's laws and regulations use them, which Copy with
+  formatting scores Traditional Chinese glyph orders by. Derived by the PdfCraft contributors from
+  the data below and distributed under CC BY 4.0 (licenses/CC-BY-4.0.txt), as section 4.2 of the
+  Open Government Data License permits:
+
+    法務部 2026 中文法規_法律資料檔下載、中文法規_命令資料檔下載（資料更新日期 2026/10/30）
+    此開放資料依政府資料開放授權條款 (Open Government Data License) 進行公眾釋出，使用者於遵守本條款各項規定之前提下，得利用之。
+    政府資料開放授權條款：https://data.gov.tw/license
+
+    Ministry of Justice (Taiwan), 2026, Chinese laws and regulations data files (updated
+    2026-10-30). Released under the Open Government Data License, version 1.0
+    (https://data.gov.tw/license). The PdfCraft contributors derived a character-frequency list
+    from it, distributed under CC BY 4.0 as section 4.2 of that licence permits.
 - lopdf (bootstrap document inspection, via crates.io) — MIT.
 - egui default fonts (epaint_default_fonts, via eframe) — Ubuntu Light (Ubuntu Font Licence 1.0),
   Hack (MIT / Bitstream Vera licence), Noto Emoji (SIL OFL 1.1), emoji-icon-font (MIT).

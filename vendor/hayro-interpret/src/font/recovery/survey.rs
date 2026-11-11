@@ -551,6 +551,15 @@ pub(crate) struct Reported {
     /// The font's evidence, as a rule's guard gets it.
     #[allow(dead_code, reason = "read by the rules' own reports")]
     pub(crate) usage: Option<Arc<FontUsage>>,
+    /// The kind of font the rules see.
+    #[allow(dead_code, reason = "read by the rules' own reports")]
+    pub(crate) kind: FontKind,
+    /// A CID-keyed CFF program's charset CIDs, sorted.
+    #[allow(dead_code, reason = "read by the rules' own reports")]
+    pub(crate) charset: Option<Vec<u32>>,
+    /// The embedded program's glyph count.
+    #[allow(dead_code, reason = "read by the rules' own reports")]
+    pub(crate) program_glyphs: Option<u32>,
 }
 
 /// Test and verification hook: the survey of `pdf`, font by font (`None` when cancelled; the
@@ -587,11 +596,21 @@ pub(crate) fn report(pdf: &Pdf, settings: &InterpreterSettings) -> Option<(bool,
                 Evidence::Counted(map) => map.get(&f.key).cloned(),
                 Evidence::OverCap => None,
             };
+            let kind = f.font.recovery_font_kind();
+            let charset = (kind == FontKind::CidCff).then(|| {
+                let mut cids = f.font.recovery_charset();
+                cids.sort_unstable();
+                cids.dedup();
+                cids
+            });
             Reported {
                 object: f.id.map(|id| id.obj_number),
                 base: f.pooling.name.clone(),
                 codes,
                 usage,
+                kind,
+                charset,
+                program_glyphs: f.pooling.glyphs,
             }
         })
         .collect();

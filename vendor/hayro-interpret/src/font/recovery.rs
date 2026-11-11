@@ -21,6 +21,8 @@
 //! in [`RecoveryRule::ORDER`]: the first that reads a glyph wins.
 
 mod candidate;
+mod cjk_order;
+mod common_traditional;
 mod document;
 mod orders;
 mod survey;
@@ -30,6 +32,7 @@ mod survey;
 )]
 mod widths;
 
+use cjk_order::StandardCjkGlyphOrder;
 use crate::font::FontFlags;
 use crate::font::{glyph_name_numbers, is_numbered_glyph_name};
 use hayro_cmap::BfString;
@@ -57,17 +60,26 @@ pub enum RecoveryRule {
     /// table, format 1), from a TrueType program that keeps its original glyph ids, or from
     /// glyph names that only number the glyph id (`/g55`): see [`MacGlyphOrder`].
     MacGlyphOrder,
+    /// Glyph ids of a Type 0 font through `Identity-H` or `Identity-V` that follow a public
+    /// order of Traditional Chinese characters (Big5, Unicode, Big5 by Unicode, Adobe-CNS1) and
+    /// an offset, found from the document's text: see `StandardCjkGlyphOrder`.
+    StandardCjkGlyphOrder,
 }
 
 impl RecoveryRule {
     /// Every rule, in the order they are tried.
-    pub const ORDER: [Self; 2] = [Self::NumberedLatin1Names, Self::MacGlyphOrder];
+    pub const ORDER: [Self; 3] = [
+        Self::NumberedLatin1Names,
+        Self::MacGlyphOrder,
+        Self::StandardCjkGlyphOrder,
+    ];
 
     /// A stable name for logs and tests.
     pub fn name(self) -> &'static str {
         match self {
             Self::NumberedLatin1Names => "numbered-latin1-names",
             Self::MacGlyphOrder => "mac-glyph-order",
+            Self::StandardCjkGlyphOrder => "standard-cjk-glyph-order",
         }
     }
 }
@@ -231,6 +243,77 @@ pub mod test_hooks {
         super::survey::GLYPH_CAP.with(|c| c.set(cap));
     }
 
+    /// The character the standard CJK order `order` (`big5`, `uni`, `uni_big5`, `cns1`) has at
+    /// `position`, before the rule's output scope.
+    pub fn cjk_order_char(order: &str, position: u32) -> Option<char> {
+        super::cjk_order::hooks::order_char(order, position)
+    }
+
+    /// Whether the standard CJK order rule's guards pass for a search with these scores (the
+    /// best reading's, its rival's), close ratio and number of different glyphs.
+    pub fn cjk_guards(best: f64, rival: f64, close: f64, glyphs: usize) -> bool {
+        super::cjk_order::hooks::guards(best, rival, close, glyphs)
+    }
+
+    /// Whether `c` is one of the 750 common characters the standard CJK order rule scores by.
+    pub fn cjk_common(c: char) -> bool {
+        super::cjk_order::hooks::common(c)
+    }
+
+    /// Whether the standard CJK order rule outputs `c` read in `order`.
+    pub fn cjk_outputs(order: &str, c: char) -> bool {
+        super::cjk_order::hooks::outputs(order, c)
+    }
+
+    /// The standard CJK order rule's search of `numbers` (glyph number, times shown; sorted): the
+    /// best order and offset, its score, the rival's score,
+    /// the close ratio, the glyphs and whether the guards pass.
+    #[allow(clippy::type_complexity, reason = "a test's view of the search")]
+    pub fn cjk_search(
+        numbers: &[(u32, u64)],
+    ) -> Option<(&'static str, i64, f64, f64, f64, usize, bool)> {
+        super::cjk_order::hooks::searched(numbers)
+    }
+
+    /// The reading the standard CJK order rule gives a group named `name` of subsets whose
+    /// counts are `members` (each sorted by number).
+    pub fn cjk_group_reading(
+        name: &str,
+        members: &[Vec<(u32, u64)>],
+    ) -> Option<(&'static str, i64)> {
+        super::cjk_order::hooks::group_reading_of(name, members)
+    }
+
+    /// Whether the standard CJK order rule's two ways of counting the glyphs each offset reads as
+    /// output (run by run, and by a Fourier transform) agree for `numbers`.
+    pub fn cjk_output_counts_agree(numbers: &[(u32, u64)]) -> bool {
+        super::cjk_order::hooks::output_counts_agree(numbers)
+    }
+
+    /// Whether `name` (a `/BaseFont` without its subset tag) is a producer's placeholder to the
+    /// standard CJK order rule.
+    pub fn cjk_placeholder_name(name: &str) -> bool {
+        super::cjk_order::hooks::placeholder(name)
+    }
+
+    /// The character the standard CJK order rule outputs for glyph `number` read in `order` at
+    /// `offset`.
+    pub fn cjk_output(order: &str, offset: i64, number: u32) -> Option<char> {
+        super::cjk_order::hooks::output_char(order, offset, number)
+    }
+
+    /// Verification hook: the standard CJK order rule's view of every font the survey of `pdf`
+    /// counts, as text lines (tab-separated: object number, `/BaseFont` without its subset tag, codes,
+    /// glyphs shown, the single font's search, the group's, the decision and its readings
+    /// `code:char`), or `None` when the survey was cancelled. The first line says whether the
+    /// survey passed a cap.
+    pub fn cjk_report(
+        pdf: &hayro_syntax::Pdf,
+        settings: &crate::InterpreterSettings,
+    ) -> Option<Vec<String>> {
+        super::cjk_order::hooks::report(pdf, settings)
+    }
+
     /// The candidate policy's choice among `candidates`.
     pub fn choose(candidates: &[char]) -> Option<char> {
         super::candidate::choose(candidates.iter().copied())
@@ -349,10 +432,6 @@ pub(crate) struct FontFacts<'a> {
     pub(crate) id_text: Option<&'a dyn Fn(u32) -> Option<BfString>>,
     /// Type 0 fonts: whether the encoding CMap is `Identity-H` or `Identity-V`, whatever the
     /// `/CIDToGIDMap` (ISO 32000-2 §9.7.5.2: two-byte codes that are CIDs).
-    #[allow(
-        dead_code,
-        reason = "read by the rules that read a Type 0 font's glyph ids in a standard order"
-    )]
     pub(crate) identity_encoding: bool,
     /// How many glyphs the embedded program has: a TrueType or OpenType program's `maxp`
     /// count, a CFF program's number of charstrings. `None` without an embedded program.
@@ -365,10 +444,6 @@ pub(crate) struct FontFacts<'a> {
     /// one font ([`RecoveryDocument`]'s survey): for the guards of rules whose evidence is the
     /// document's text. `None` without a surveyed document, or for a font the survey doesn't
     /// count.
-    #[allow(
-        dead_code,
-        reason = "read by the rules whose evidence is the document's text"
-    )]
     pub(crate) usage: Option<Arc<document::FontUsage>>,
 }
 
@@ -443,12 +518,15 @@ pub(crate) trait Rule {
 pub(crate) struct Guards {
     numbered: Option<<NumberedLatin1Names as Rule>::Guard>,
     mac: Option<<MacGlyphOrder as Rule>::Guard>,
+    cjk: Option<<StandardCjkGlyphOrder as Rule>::Guard>,
 }
 
 impl Guards {
     /// Whether some rule can take a font of `kind` ([`Rule::KINDS`]).
     fn read(kind: FontKind) -> bool {
-        NumberedLatin1Names::KINDS.contains(&kind) || MacGlyphOrder::KINDS.contains(&kind)
+        NumberedLatin1Names::KINDS.contains(&kind)
+            || MacGlyphOrder::KINDS.contains(&kind)
+            || StandardCjkGlyphOrder::KINDS.contains(&kind)
     }
 
     fn decide(font: &FontFacts<'_>) -> Self {
@@ -456,12 +534,13 @@ impl Guards {
         Self {
             numbered: guard::<NumberedLatin1Names>(font),
             mac: guard::<MacGlyphOrder>(font),
+            cjk: guard::<StandardCjkGlyphOrder>(font),
         }
     }
 
     /// Whether no rule takes the font: nothing is ever recovered from it.
     fn none(&self) -> bool {
-        self.numbered.is_none() && self.mac.is_none()
+        self.numbered.is_none() && self.mac.is_none() && self.cjk.is_none()
     }
 }
 
@@ -586,6 +665,7 @@ impl std::fmt::Debug for Guards {
         f.debug_struct("Guards")
             .field("numbered", &self.numbered.is_some())
             .field("mac", &self.mac.is_some())
+            .field("cjk", &self.cjk)
             .finish()
     }
 }
@@ -635,6 +715,9 @@ impl RecoveryCache {
             }
             RecoveryRule::MacGlyphOrder => {
                 apply::<MacGlyphOrder>(guards.mac.as_ref(), &font, glyph)
+            }
+            RecoveryRule::StandardCjkGlyphOrder => {
+                apply::<StandardCjkGlyphOrder>(guards.cjk.as_ref(), &font, glyph)
             }
         })
     }
