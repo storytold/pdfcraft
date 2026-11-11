@@ -212,10 +212,14 @@ thread_local! {
     pub(crate) static SPACE_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// How many colour space names [`PatternSpaces`] keeps for a page, over all the `/ColorSpace`
-/// dictionaries given by reference it reads. One that would go past it is left unread, and a name
-/// in it keeps the pattern: a pattern kept that nothing shows is the side this errs on.
-pub(crate) const MAX_SPACE_NAMES: usize = 100_000;
+/// How much of colour space names [`PatternSpaces`] keeps for a page, in bytes, over all the
+/// `/ColorSpace` dictionaries given by reference it reads: each name's length and [`ENTRY_BYTES`].
+/// The names of one that would go past it are not kept, and a name in it keeps the pattern: a
+/// pattern kept that nothing shows is the side this errs on.
+pub(crate) const MAX_SPACE_BYTES: usize = 1 << 20;
+
+/// What a kept name costs [`MAX_SPACE_BYTES`] besides its bytes: its place in the index.
+pub(crate) const ENTRY_BYTES: usize = 64;
 
 /// What a `/ColorSpace` entry gives, as far as `cs` and `CS` need to know.
 #[derive(Clone, Copy)]
@@ -247,14 +251,14 @@ impl Space {
 /// What `cs` and `CS` have read of a page's colour spaces, kept for the page. A form drawn
 /// thousands of times, or nested deep, starts a scope each time, and reading an object again can
 /// parse it again, all of it: the document keeps no object larger than its cache. What is kept is
-/// what each name gives, not the objects read, and at most [`MAX_SPACE_NAMES`] names.
+/// what each name gives, not the objects read, within [`MAX_SPACE_BYTES`].
 #[derive(Default)]
 struct PatternSpaces {
     /// The `/ColorSpace` dictionaries given by reference, read once: what each name gives, or
-    /// `None` for one past the allowance.
+    /// `None` for one whose names would go past the allowance.
     held: HashMap<ObjRef, Option<HashMap<Vec<u8>, Space>>>,
-    /// The names `held` keeps.
-    names: usize,
+    /// What the names `held` keeps cost, against [`MAX_SPACE_BYTES`].
+    bytes: usize,
     /// Whether an entry given by reference is a Pattern space.
     known: HashMap<ObjRef, bool>,
     /// Whether an array's first element given by reference is the name `/Pattern`.
@@ -279,12 +283,18 @@ impl PatternSpaces {
         let space = match spaces {
             Some(o @ Object::Ref(r)) => {
                 if !self.held.contains_key(r) {
-                    let index = match &*read_space(doc, o) {
-                        Object::Dict(d) if d.len() > MAX_SPACE_NAMES.saturating_sub(self.names) => None,
-                        Object::Dict(d) => Some(d.iter().map(|(k, v)| (k.to_vec(), Space::of(v))).collect::<HashMap<_, _>>()),
-                        _ => Some(HashMap::new()),
+                    // A stream's dictionary is read as the dictionary, as the renderer reads it.
+                    let read = read_space(doc, o);
+                    let index = match read.as_dict() {
+                        Some(d) => {
+                            let cost = d.iter().fold(0, |sum: usize, (k, _)| sum.saturating_add(k.len()).saturating_add(ENTRY_BYTES));
+                            (cost <= MAX_SPACE_BYTES.saturating_sub(self.bytes)).then(|| {
+                                self.bytes += cost;
+                                d.iter().map(|(k, v)| (k.to_vec(), Space::of(v))).collect::<HashMap<_, _>>()
+                            })
+                        }
+                        None => Some(HashMap::new()),
                     };
-                    self.names += index.as_ref().map_or(0, HashMap::len);
                     self.held.insert(*r, index);
                 }
                 match self.held.get(r) {

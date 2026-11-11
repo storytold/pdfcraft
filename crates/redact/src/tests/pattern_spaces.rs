@@ -6,7 +6,7 @@
 //! one it doesn't leaves the page.
 
 use super::*;
-use crate::interp::{MAX_SPACE_NAMES, SPACE_READS};
+use crate::interp::{ENTRY_BYTES, MAX_SPACE_BYTES, SPACE_READS};
 
 /// A tiling pattern whose cell draws a rectangle and nothing else (object 7), which can stay.
 fn cell() -> Vec<u8> {
@@ -32,8 +32,9 @@ fn removed(content: &str, res: &str, extra: Vec<Vec<u8>>) -> usize {
 /// level, keeps the pattern the box beside the mark is filled with, as does `/Pattern` itself even
 /// where the resources name something else so; and a `cs` whose operand isn't a name, which the
 /// renderer skips. A grey space, a device space's name (read before the resources), a name the
-/// resources don't have (a `/ColorSpace` that isn't a dictionary has none), a name naming a name,
-/// and `null` reset it, and the pattern leaves the page. `CS` likewise for the stroke.
+/// resources don't have (a `/ColorSpace` that isn't a dictionary has none; a stream's is its
+/// dictionary's), a name naming a name, and `null` reset it, and the pattern leaves the page. `CS`
+/// likewise for the stroke.
 #[test]
 fn a_named_pattern_space_keeps_the_pattern() {
     let pattern = "/Pattern << /P0 7 0 R >>";
@@ -63,6 +64,9 @@ fn a_named_pattern_space_keeps_the_pattern() {
     let res = format!("{pattern} /ColorSpace << /CSP /Pattern /CSG /DeviceGray >>");
     assert_eq!(removed(&stroked("/CSP"), &res, vec![]), 0, "CS of a named Pattern space");
     assert_eq!(removed(&stroked("/CSG"), &res, vec![]), 1, "CS of a grey space");
+    // A `/ColorSpace` that is a stream is read by its dictionary, as the renderer reads it.
+    let res = format!("{pattern} /ColorSpace 8 0 R");
+    assert_eq!(removed(&two_boxes("/CSP"), &res, vec![stream("/CSP /Pattern", b"")]), 0, "a stream's dictionary");
 }
 
 /// A form without resources of its own paints with the page's patterns and reads its colour space
@@ -137,19 +141,19 @@ fn a_colour_space_dictionary_is_read_once_for_the_page() {
 }
 
 /// What the lookup keeps for a page is what each name of the `/ColorSpace` dictionaries it reads
-/// gives, at most `MAX_SPACE_NAMES` names over the page. A dictionary that would go past it is left
-/// unread, and a name in it keeps the pattern: `/CSG`, grey, in a dictionary of `MAX_SPACE_NAMES`
-/// names resets it, in one name more keeps it, and so it does in one of 60,000 names read after a
-/// form with resources of its own read another 60,000. Without the form, it resets it.
+/// gives, within `MAX_SPACE_BYTES` over the page: each name's length and `ENTRY_BYTES`. The names of
+/// a dictionary that would go past it are not kept, and a name in it keeps the pattern. `/CSG`,
+/// grey, beside one long name resets it in a dictionary whose names cost `MAX_SPACE_BYTES`, and
+/// keeps it in one byte more; and it keeps it in a dictionary of 60% of the allowance read after a
+/// form with resources of its own read another 60%. Without the form, it resets it.
 #[test]
-fn the_lookup_keeps_a_bounded_number_of_names() {
-    let spaces = |n: usize| {
-        let names: String = (1..n).map(|i| format!("/C{i} /DeviceGray ")).collect();
-        format!("<< {names}/CSG /DeviceGray >>").into_bytes()
-    };
+fn the_lookup_keeps_a_bounded_amount_of_names() {
+    // `/CSG` and a name of `len` bytes, costing `len + 3 + 2 * ENTRY_BYTES` together.
+    let spaces = |len: usize| format!("<< /CSG /DeviceGray /{} /DeviceGray >>", "N".repeat(len)).into_bytes();
+    let fits = MAX_SPACE_BYTES - 3 - 2 * ENTRY_BYTES;
     let res = "/Pattern << /P0 7 0 R >> /ColorSpace 8 0 R";
-    assert_eq!(removed(&two_boxes("/CSG"), res, vec![spaces(MAX_SPACE_NAMES)]), 1, "within the allowance");
-    assert_eq!(removed(&two_boxes("/CSG"), res, vec![spaces(MAX_SPACE_NAMES + 1)]), 0, "past it");
+    assert_eq!(removed(&two_boxes("/CSG"), res, vec![spaces(fits)]), 1, "within the allowance");
+    assert_eq!(removed(&two_boxes("/CSG"), res, vec![spaces(fits + 1)]), 0, "past it");
 
     // The form (object 8), drawn before the page selects `/P0` (a `Do` keeps the pattern
     // selected), selects one of its own and reads its own `/ColorSpace` (object 9); the page's is
@@ -157,7 +161,7 @@ fn the_lookup_keeps_a_bounded_number_of_names() {
     let form = stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << /ColorSpace 9 0 R >>", b"/PF scn /CSF cs");
     let res = "/Pattern << /P0 7 0 R >> /XObject << /Fm 8 0 R >> /ColorSpace 10 0 R";
     let content = |form: &str| format!("{form}/Pattern cs /P0 scn 20 140 100 30 re f /CSG cs 20 40 100 30 re f");
-    let extra = vec![form, spaces(60_000), spaces(60_000)];
-    assert_eq!(removed(&content("q /Fm Do Q "), res, extra.clone()), 0, "after the form's 60,000 names");
+    let extra = vec![form, spaces(MAX_SPACE_BYTES * 6 / 10), spaces(MAX_SPACE_BYTES * 6 / 10)];
+    assert_eq!(removed(&content("q /Fm Do Q "), res, extra.clone()), 0, "after the form's names");
     assert_eq!(removed(&content(""), res, extra), 1, "without the form");
 }

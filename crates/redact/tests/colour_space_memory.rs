@@ -92,14 +92,20 @@ fn peak_growth<T>(f: impl FnOnce() -> T) -> Option<(T, u64)> {
     Some((out, peak_kib()?.saturating_sub(before) >> 10))
 }
 
-/// A page that selects a pattern, fills a box under the mark with it, and draws 8 forms, each with
-/// a `/ColorSpace` of its own that `/CSX cs` looks a name up in: four arrays of a million numbers
-/// and four dictionaries of a million names, each a different object in an object stream of its
-/// own. Kept for the page as they were read, they grew Apply's peak by over 1 GiB; read one at a
-/// time and let go, by under half that.
+/// A page that selects a pattern, fills a box under the mark with it, and draws forms, each with a
+/// `/ColorSpace` of its own that `/CSX cs` looks a name up in, each a different object in an object
+/// stream of its own:
+/// - four large ones: two arrays of a million numbers and two dictionaries of a million names.
+///   Kept for the page as they were read, they grew Apply's peak by over half a GiB.
+/// - 2,000 with one name each, of 256 KiB. Kept as names, uncounted by their length, they grew it
+///   by about as much again.
+///
+/// Read one at a time and let go, and names kept within the allowance, it grows by under 512 MiB.
 #[test]
 fn the_colour_spaces_a_page_reads_are_not_kept() {
-    const FORMS: u32 = 8;
+    const LARGE: u32 = 4;
+    const NAMED: u32 = 2000;
+    const FORMS: u32 = LARGE + NAMED;
     let mut file = File::new();
     file.obj(1, b"<< /Type /Catalog /Pages 2 0 R >>");
     file.obj(2, b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>");
@@ -118,6 +124,7 @@ fn the_colour_spaces_a_page_reads_are_not_kept() {
     let array = format!("[{}]", "0 ".repeat(1 << 20));
     let names: String = (0..1 << 20).map(|i| format!("/C{i} 0 ")).collect();
     let dict = format!("<< {names}>>");
+    let named = format!("<< /{} /DeviceGray >>", "N".repeat(256 << 10));
     for i in 0..FORMS {
         let (form, space) = (10 + i, 10 + FORMS + i);
         file.stream(
@@ -125,7 +132,11 @@ fn the_colour_spaces_a_page_reads_are_not_kept() {
             &format!("/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << /ColorSpace {space} 0 R >>"),
             b"/CSX cs 0 0 1 1 re f",
         );
-        let body = if i % 2 == 0 { array.as_bytes() } else { dict.as_bytes() };
+        let body = match i {
+            i if i >= LARGE => named.as_bytes(),
+            i if i % 2 == 0 => array.as_bytes(),
+            _ => dict.as_bytes(),
+        };
         file.in_object_stream(10 + 2 * FORMS + i, space, body);
     }
     let mut doc = Document::open(Arc::new(file.finish())).unwrap();

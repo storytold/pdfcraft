@@ -138,7 +138,10 @@ hidden information refuses a page for both too, in whatever content it walks. A 
 skipping that mark. The count covers the marks on the pages being applied.
 
 Tiling-pattern cells are separate streams. Applying a mark removes a pattern resource when no
-surviving paint uses it. If a cell remains reachable after rewriting the selected pages and may
+surviving paint uses it. A `cs` or `CS` naming a colour space the resources give as a Pattern
+space keeps the pattern selected before it, as the app's renderer draws it; past 1 MiB of colour
+space names read for a page, a name is taken for one, so a pattern nothing paints any more can
+stay. If a cell remains reachable after rewriting the selected pages and may
 contain text, images, replacement descriptions, or unreadable content, Apply refuses with a
 `RedactError::Pattern` and restores the document and pending marks. This includes patterns owned
 by Forms and patterns inherited by Forms. Vector-only retained cells remain supported. The
