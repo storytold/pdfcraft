@@ -735,8 +735,9 @@ fn panel(last_ref: u32) -> W {
     section(1, &b)
 }
 
-/// A rebuilt mesh is charged its triangles, each with its style, and one element per face; the
-/// same arrays left compressed (a reference to a vertex not yet made) are charged neither.
+/// A rebuilt mesh is charged its triangles, each with its style, and each face range at its
+/// size; the same arrays left compressed (a reference to a vertex not yet made) are charged
+/// neither.
 #[test]
 fn a_rebuilt_compressed_mesh_is_charged_its_triangles_and_faces() {
     let fits = panel(1);
@@ -745,8 +746,10 @@ fn a_rebuilt_compressed_mesh_is_charged_its_triangles_and_faces() {
     let left = panel(9);
     let t = decode(&left, &Schema::default(), 8137).unwrap();
     assert!(matches!(t[..], [Tessellation::Compressed { triangles: 4, .. }]), "{t:?}");
-    assert_eq!(spent(&fits) - spent(&left), 4 * triangle_elements(false, 0, true) + 2);
+    assert_eq!(spent(&fits) - spent(&left), 4 * triangle_elements(false, 0, true) + 2 * RANGE_ELEMENTS);
     assert_eq!(triangle_elements(false, 0, true), 3);
+    #[cfg(target_pointer_width = "64")]
+    assert_eq!(RANGE_ELEMENTS, 2);
 }
 
 fn rebuilt(triangles: usize) -> compressed::Rebuilt {

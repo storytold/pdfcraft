@@ -333,7 +333,7 @@ impl Ctx<'_, '_> {
             return Err(malformed(format!("{} point references for {flagged} flagged points", references.len())));
         }
         let recalc = self.compressed_normals(t, faces)?;
-        let styles = self.compressed_attributes(&face_of, faces)?;
+        let attributes = self.compressed_attributes(faces)?;
         if !recalc {
             return Ok(Tessellation::Compressed { triangles: t });
         }
@@ -349,10 +349,12 @@ impl Ctx<'_, '_> {
         let Ok(m) = compressed::rebuild(&arrays) else {
             return Ok(Tessellation::Compressed { triangles: t });
         };
-        // The rebuilt triangles, with their styles, and every face range are charged once the
-        // arrays fit and before the ranges are made, so arrays that do not fit spend nothing.
-        let kept = m.triangles.len().saturating_mul(triangle_elements(false, 0, !styles.is_empty()));
-        self.r.take_elements(kept.saturating_add(faces))?;
+        // The rebuilt triangles, their styles and every face range are charged once the arrays
+        // fit and before any of them is made, so arrays that do not fit spend nothing.
+        let styled = attributes.styled(faces);
+        let kept = m.triangles.len().saturating_mul(triangle_elements(false, 0, styled));
+        self.r.take_elements(kept.saturating_add(faces.saturating_mul(RANGE_ELEMENTS)))?;
+        let styles = if styled { attributes.styles(&face_of, faces) } else { Vec::new() };
         Ok(Tessellation::Mesh(by_face(m, &face_of, faces, &styles)))
     }
 
@@ -378,8 +380,8 @@ impl Ctx<'_, '_> {
     }
 
     /// A compressed tessellation's colours, line attributes, texture and behaviours, through
-    /// its added schema fields; returns each triangle's style (see [`compressed_styles`]).
-    fn compressed_attributes(&mut self, face_of: &[u32], faces: usize) -> Result<Vec<TriangleStyle>, PrcError> {
+    /// its added schema fields; returns what its faces' styles are made from.
+    fn compressed_attributes(&mut self, faces: usize) -> Result<FaceAttributes, PrcError> {
         let r = &mut self.r;
         if r.bit()? {
             arrays::bool_array(r, faces)?; // is_point_color_on_face
@@ -396,7 +398,7 @@ impl Ctx<'_, '_> {
         }
         let behaviours = if self.r.bit()? { arrays::character_array(&mut self.r, 8, None, false)? } else { Vec::new() };
         self.schema.skip_added_fields(TESS_3D_COMPRESSED, &mut self.r)?;
-        Ok(compressed_styles(face_of, &multi, &line_attributes, &behaviours, faces))
+        Ok(FaceAttributes { multi, line_attributes, behaviours })
     }
 
     /// `CompressedTextureParameter` [WD 7.8.9.8-7.8.9.9; pdf-issues #729, #749], read past.
@@ -418,23 +420,39 @@ impl Ctx<'_, '_> {
     }
 }
 
-/// Per triangle, the style a compressed tessellation's faces give it [WD 7.8.9.5]: with no face
-/// flagged `is_multiple_line_attribute_on_face`, `line_attributes` holds one style index + 1
-/// per face (0 keeps the owner's graphics) and `behaviours` one behaviour byte per face. The
-/// one-per-triangle layout of a flagged face is not established, so such a tessellation keeps
-/// its owner's graphics, as does one whose attributes are all 0: empty then.
-fn compressed_styles(face_of: &[u32], multi: &[bool], line_attributes: &[i32], behaviours: &[i32], faces: usize) -> Vec<TriangleStyle> {
-    if multi.iter().any(|&b| b) || line_attributes.len() != faces || line_attributes.iter().all(|&a| a == 0) {
-        return Vec::new();
+/// Budget elements one face range (`Range<usize>`) takes.
+const RANGE_ELEMENTS: usize = std::mem::size_of::<std::ops::Range<usize>>().div_ceil(8);
+
+/// What a compressed tessellation's faces are styled from [WD 7.8.9.5]: with no face flagged
+/// `is_multiple_line_attribute_on_face` (`multi`), `line_attributes` holds one style index + 1
+/// per face (0 keeps the owner's graphics) and `behaviours` one behaviour byte per face.
+struct FaceAttributes {
+    multi: Vec<bool>,
+    line_attributes: Vec<i32>,
+    behaviours: Vec<i32>,
+}
+
+impl FaceAttributes {
+    /// Whether the faces give their triangles styles. The one-per-triangle layout of a flagged
+    /// face is not established, so such a tessellation keeps its owner's graphics, as does one
+    /// whose attributes are all 0.
+    fn styled(&self, faces: usize) -> bool {
+        !self.multi.iter().any(|&b| b) && self.line_attributes.len() == faces && self.line_attributes.iter().any(|&a| a != 0)
     }
-    let behaviour = |f: usize| if behaviours.len() == faces { behaviours.get(f).and_then(|&b| u16::try_from(b).ok()).unwrap_or(0) } else { 0 };
-    face_of
-        .iter()
-        .map(|&f| {
-            let f = f as usize;
-            TriangleStyle { style: line_attributes.get(f).and_then(|&a| u32::try_from(a).ok()).unwrap_or(0), behaviour: behaviour(f) }
-        })
-        .collect()
+
+    /// Per triangle, the style its face gives it; call only when [`Self::styled`].
+    fn styles(&self, face_of: &[u32], faces: usize) -> Vec<TriangleStyle> {
+        let behaviour = |f: usize| {
+            if self.behaviours.len() == faces { self.behaviours.get(f).and_then(|&b| u16::try_from(b).ok()).unwrap_or(0) } else { 0 }
+        };
+        face_of
+            .iter()
+            .map(|&f| {
+                let f = f as usize;
+                TriangleStyle { style: self.line_attributes.get(f).and_then(|&a| u32::try_from(a).ok()).unwrap_or(0), behaviour: behaviour(f) }
+            })
+            .collect()
+    }
 }
 
 /// A rebuilt compressed mesh with its triangles grouped by face, in walk order within each,
