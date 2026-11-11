@@ -300,6 +300,11 @@ fn sign_inner(
                 // Inline (or new) AcroForms stay in the catalog.
                 None => doc.update_dict(root, |c| c.set(b"AcroForm".to_vec(), Object::Dict(af)))?,
             }
+            // A field the listing can't reach (the name budget ran out before it) would be signed
+            // and then not found: refuse before writing anything.
+            if !sig_fields_bounded(&doc).0.iter().any(|f| f.name == fname) {
+                return Err(SignError::Pdf("the form's field names leave no room for the new field to be listed".into()));
+            }
             (wr, rect, turn)
         }
     };

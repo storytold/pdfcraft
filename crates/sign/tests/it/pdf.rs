@@ -3031,3 +3031,23 @@ fn a_cut_field_walk_leaves_the_signed_permission_unknown() {
     assert_eq!(s.status, Status::Unknown, "{:?} {:?}", s.modification, s.details);
     assert!(s.details.iter().any(|d| d.message.contains("unknown")), "{:?}", s.details);
 }
+
+/// A new field the listing could not reach (the existing names used up the name budget before it)
+/// is refused rather than signed and then missing from the list.
+#[test]
+fn a_new_field_past_the_name_budget_is_refused() {
+    let big = "x".repeat(33 << 20);
+    let base = write_pdf(&[
+        b"<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [7 0 R] >> >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] >>",
+        b"<< /Length 0 >>\nstream\n\nendstream",
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        b"<< /Length 0 >>\nstream\n\nendstream",
+        format!("<< /T ({big}) /FT /Tx >>").as_bytes(),
+    ]);
+    let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
+    let opts = SignOptions { new_field_name: Some("S".into()), ..opts() };
+    let said = pdfcraft_sign::sign(&open(&base), &id, &opts).unwrap_err().to_string();
+    assert!(said.contains("no room"), "{said}");
+}
