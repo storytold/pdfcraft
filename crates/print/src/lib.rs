@@ -39,13 +39,14 @@ use imposition::{PAGES_LISTED, appearance, appearance_matrix, decoded_contents, 
 pub use imposition::{impose, keep_printed, sheet_pages};
 pub use settings::{
     Binding, BookletSubset, Content, Crop, LABEL_PAPER, Layout, MAX_GRID, Orientation, PAPERS, PageOrder, Raster, Settings, SizeMode, booklet_duplex,
-    cups_media, driver_needs_grayscale, media_option,
+    booklet_job_duplex, cups_media, custom_media, driver_needs_grayscale, media_option, paper_media, paper_media_option,
 };
 #[cfg(test)]
 use sheets::text_direction;
 pub use sheets::{
     LABEL_MARGIN, MARGIN, MAX_CREEP, Placement, Sheet, add_cups_orientation, cups_orientation, layout, matching_paper, text_reads_up, texts_read_up,
 };
+pub use spool::{open_printer_preferences, printer_default_paper, printer_paper_info, printer_papers, show_printer_properties};
 
 /// The names of the Print dialog's choices, shared by the `doc_print` tool and the settings
 /// file, so a saved preference reads like a tool argument and there is one vocabulary to keep.

@@ -107,6 +107,16 @@ impl PdfCraftApp {
     /// later as a pending open, under the returned token.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn schedule_open(&mut self, request: OpenRequest) -> Result<u64, String> {
+        self.schedule_open_with_priority(request, false)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn schedule_open_priority(&mut self, request: OpenRequest) -> Result<u64, String> {
+        self.schedule_open_with_priority(request, true)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn schedule_open_with_priority(&mut self, request: OpenRequest, priority: bool) -> Result<u64, String> {
         if self.open_worker.is_none() {
             self.open_worker = Some(
                 open_worker::OpenWorker::new(
@@ -124,7 +134,11 @@ impl PdfCraftApp {
         // A new document opens with the remembered Highlight fields, which its scripts read; the
         // session keeps the document in front's.
         let context = self.session.open_context().with_highlight(self.view_defaults.highlight_fields);
-        let receiver = worker.submit(token, context, request.name.clone(), request.path.clone(), request.password, request.input)?;
+        let receiver = if priority {
+            worker.submit_priority(token, context, request.name.clone(), request.path.clone(), request.password, request.input)?
+        } else {
+            worker.submit(token, context, request.name.clone(), request.path.clone(), request.password, request.input)?
+        };
         self.next_open_token = token;
         self.pending_opens.push(PendingOpen {
             token,
@@ -156,7 +170,7 @@ impl PdfCraftApp {
         let mut queue = std::mem::take(&mut self.deferred_opens);
         while self.deferred_opens.is_empty() && self.pending_opens.len() < self.open_slots() {
             let Some(next) = queue.pop_front() else { break };
-            self.open_path_request(&next.path, next.then, next.display_override);
+            self.open_file_request(&next.path, next.after_open, next.then, next.display_override);
         }
         // A file put back (the queue filled again) stays ahead of the ones behind it.
         self.deferred_opens.append(&mut queue);
@@ -660,7 +674,7 @@ impl PdfCraftApp {
         };
         #[cfg(not(target_arch = "wasm32"))]
         if self.ctx.is_some() && !self.run_inline {
-            let result = self.schedule_open(OpenRequest {
+            let result = self.schedule_open_priority(OpenRequest {
                 name: p.name.clone(),
                 path: p.path.clone(),
                 stamp: p.stamp,
@@ -802,6 +816,24 @@ impl PdfCraftApp {
 
     #[cfg(not(target_arch = "wasm32"))]
     fn open_path_request(&mut self, path: &str, then: Option<&'static str>, display_override: Option<(canvas::PageLayout, bool)>) -> OpenOutcome {
+        // `manual.pdf#nameddest=Intro`, as a help system starts a PDF reader (#3425): the file,
+        // shown at that destination once open. A path that names a file is never split.
+        match pdfcraft_engine::open_parameters::split(path, |p| std::path::Path::new(p).is_file()) {
+            Some((file, destination)) => self.open_file_request(&file, Some(destination), then, display_override),
+            None => self.open_file_request(path, None, then, display_override),
+        }
+    }
+
+    /// Open the file `path`, shown at `after_open` once open. A file that waits for room in the
+    /// worker's queue keeps its destination with it, as its path is the file alone (#3425).
+    #[cfg(not(target_arch = "wasm32"))]
+    fn open_file_request(
+        &mut self,
+        path: &str,
+        after_open: Option<pdfcraft_render::RemoteDestination>,
+        then: Option<&'static str>,
+        display_override: Option<(canvas::PageLayout, bool)>,
+    ) -> OpenOutcome {
         // One file, one tab (#2166): a file that is open already comes to the front instead,
         // and the tool it was opened for runs on it. One still being opened is left to that.
         if let Some(i) = self.tab_showing(path) {
@@ -813,6 +845,9 @@ impl PdfCraftApp {
                 view.set_display(layout, continuous);
                 self.launch_display_target = Some(view.id);
             }
+            if let Some(destination) = after_open {
+                self.apply_destination_at(i, destination);
+            }
             if let Some(command) = then {
                 self.execute(command);
             }
@@ -822,13 +857,21 @@ impl PdfCraftApp {
             if display_override.is_some() {
                 pending.display_override = display_override;
             }
+            // Asked for another place before it finished opening: it opens at the latest one.
+            if after_open.is_some() {
+                pending.after_open = after_open;
+            }
             return OpenOutcome::Pending;
         }
         // The same file named again while its password is being asked for joins that prompt
-        // instead of queuing a second one; a display override or a tool it brings is kept.
+        // instead of queuing a second one; a display override, a place to open at or a tool it
+        // brings is kept.
         if let Some(prompt) = self.password_prompt.as_mut().filter(|p| p.path.as_deref().is_some_and(|p| same_file(p, path))) {
             if display_override.is_some() {
                 prompt.display_override = display_override;
+            }
+            if after_open.is_some() {
+                prompt.after_open = after_open;
             }
             if then.is_some() {
                 prompt.then = then;
@@ -838,6 +881,9 @@ impl PdfCraftApp {
         if let Some(deferred) = self.deferred_opens.iter_mut().find(|d| same_file(&d.path, path)) {
             if display_override.is_some() {
                 deferred.display_override = display_override;
+            }
+            if after_open.is_some() {
+                deferred.after_open = after_open;
             }
             if then.is_some() {
                 deferred.then = then;
@@ -865,9 +911,10 @@ impl PdfCraftApp {
                     if let Some(prompt) = self.password_prompt.as_mut().filter(|p| {
                         p.path.as_deref() == Some(path) && previous_prompt.as_ref().is_none_or(|bytes| !std::sync::Arc::ptr_eq(bytes, &p.bytes))
                     }) {
-                        // Encrypted: the tool runs once the password is in.
+                        // Encrypted: the destination, the layout and the tool wait for the password.
                         prompt.then = then;
                         prompt.display_override = display_override;
+                        prompt.after_open = after_open;
                     } else if self.views.len() > before {
                         if let Some((layout, continuous)) = display_override
                             && let Some(view) = self.views.last_mut()
@@ -877,6 +924,9 @@ impl PdfCraftApp {
                         }
                         if let Some(doc) = self.views.last().map(|view| view.id) {
                             self.watch.known_as(doc, stamp);
+                        }
+                        if let Some(destination) = after_open {
+                            self.apply_remote_destination(destination);
                         }
                         if let Some(command) = then {
                             self.execute(command);
@@ -898,7 +948,7 @@ impl PdfCraftApp {
             // The worker queue is bounded. A long file list (a launch behind a password prompt,
             // or many files at once) waits here, in order, and is submitted as opens finish.
             if self.pending_opens.len() >= self.open_slots() || !self.deferred_opens.is_empty() {
-                self.deferred_opens.push_back(DeferredOpen { path: path.to_string(), then, display_override });
+                self.deferred_opens.push_back(DeferredOpen { path: path.to_string(), after_open, then, display_override });
                 return OpenOutcome::Pending;
             }
             match self.schedule_open(OpenRequest {
@@ -908,7 +958,7 @@ impl PdfCraftApp {
                 input: open_worker::Input::Path(std::path::PathBuf::from(path)),
                 password: None,
                 activate: true,
-                after_open: None,
+                after_open,
                 recovered: None,
                 then,
             }) {
