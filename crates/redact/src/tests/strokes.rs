@@ -192,20 +192,33 @@ fn a_fill_flat_to_the_renderer_is_taken_for_flat() {
 
 /// A move paints nothing until something draws from it (ISO 32000-2 §8.5.3.2, and as the renderer
 /// draws): a stroke or fill whose box reaches the mark only by a move's point stays, where the move
-/// is all its subpath, another overrides it, it ends the path, or a rectangle follows it. A move
-/// closed into a point paints one (a round cap's dot), as does a segment of no length; and after
-/// `re` the renderer strokes a segment from the move before it. A move whose operands don't read
-/// is skipped, leaving the one before it; and a path painted leaves its move to none after it.
+/// is all its subpath, it ends the path, or a rectangle follows it, closed again or not (`re` leaves
+/// the path closed). A move closed into a point paints one (a round cap's dot), as does a segment of
+/// no length; and after `re` the renderer strokes a segment from the move before it. A move another
+/// overrides is kept: the renderer skips one whose last two operands aren't numbers to it (a
+/// string, a name), or that follows a token the content parser reads as a number and it takes for
+/// an operator (`280.5.5`, `3e2`), leaving the one before it. A path painted leaves its moves to
+/// none after it.
 #[test]
 fn a_move_paints_nothing_until_something_draws_from_it() {
     for (content, gone) in [
         (&b"30 w 160 120 m S"[..], 0),
         (b"30 w 160 120 m S 240 240 l S", 0),
-        (b"30 w 160 120 m 200 200 m 240 200 l S", 0),
         (b"30 w 200 200 m 240 200 l 160 120 m S", 0),
         (b"30 w 160 120 m 200 200 10 10 re S", 0),
-        (b"120 120 m 200 200 m 240 200 l 240 240 l f", 0),
+        (b"1 J 30 w 160 120 m 200 200 10 10 re h S", 0),
+        (b"1 J 30 w 160 120 m 200 200 10 10 re s", 0),
+        (b"1 J 30 w 160 120 m 200 200 10 10 re b", 0),
+        (b"1 J 30 w 160 120 m 200 200 10 10 re b*", 0),
+        (b"200 200 m 240 200 l 240 240 l 120 120 m f", 0),
         (b"120 120 m f", 0),
+        (b"1 J 30 w 160 120 m 200 200 10 10 re h 240 240 l S", 1),
+        (b"1 J 30 w 200 200 10 10 re 160 120 m h S", 1),
+        (b"1 J 30 w 160 120 m /x 0 0 0 re h S", 1),
+        (b"30 w 160 120 m 200 200 m 240 200 l S", 1),
+        (b"120 120 m 100 (x) 280 m 280 280 l S", 1),
+        (b"120 120 m 100 280.5.5 m 280 280 l S", 1),
+        (b"120 120 m 100 3e2 m 280 280 l S", 1),
         (b"1 J 30 w 160 120 m h S", 1),
         (b"1 J 30 w 160 120 m s", 1),
         (b"1 J 30 w 160 120 m b", 1),

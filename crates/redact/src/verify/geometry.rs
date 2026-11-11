@@ -158,38 +158,36 @@ impl Geo<'_> {
         self.hidden_images(res, depth);
         let mut gs = Gs { ctm, holes, pen };
         let mut stack: Vec<Gs> = Vec::new();
-        // The current path in device space: its subpaths, and the clip operator it carries; the
-        // box of what it paints, and the last move's point, which that takes once something draws
-        // from it (`draw`); and the operators that make it, whose joins a stroke paints at.
+        // The current path in device space: its subpaths, and the clip operator it carries; what
+        // it paints (`Drawn`); and the operators that make it, whose joins a stroke paints at.
         let mut sub: Vec<Vec<(f64, f64)>> = Vec::new();
         let mut clip: Option<bool> = None;
-        let mut drawn: Option<[f64; 4]> = None;
-        let mut moved: Option<(f64, f64)> = None;
+        let mut drawn = Drawn::default();
         let mut path: Vec<Op> = Vec::new();
         for op in parse(data).ops {
             let o = op.op.as_slice();
             if matches!(o, b"m" | b"l" | b"c" | b"v" | b"y" | b"h" | b"re" | b"W" | b"W*") {
-                draw(&op, &gs.ctm, !sub.is_empty(), &mut drawn, &mut moved);
+                draw(&op, &gs.ctm, !sub.is_empty(), &mut drawn);
                 extend_path(&op, &gs.ctm, &mut sub, &mut clip);
                 path.push(op);
                 continue;
             }
             if matches!(o, b"S" | b"s" | b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*" | b"n") {
                 // `s`, `b` and `b*` close the last subpath: a move left waiting is then a point
-                // closed, which a round cap paints.
-                if matches!(o, b"s" | b"b" | b"b*") {
-                    drawn = union(drawn, moved.map(|(u, v)| [u, v, u, v]));
+                // closed, which a round cap paints, unless the path ends closed already.
+                if matches!(o, b"s" | b"b" | b"b*") && !drawn.closed {
+                    drawn.at = union(drawn.at, drawn.moved);
                 }
-                self.paint_path(o, &mut gs, &sub, &path, clip, drawn);
+                self.paint_path(o, &mut gs, &sub, &path, clip, drawn.at);
                 sub.clear();
                 clip = None;
-                (drawn, moved) = (None, None);
+                drawn = Drawn::default();
                 path.clear();
                 continue;
             }
             sub.clear();
             clip = None;
-            (drawn, moved) = (None, None);
+            drawn = Drawn::default();
             path.clear();
             match o {
                 b"q" => {
@@ -473,31 +471,53 @@ fn extend_path(op: &pdfcraft_content::Op, ctm: &Matrix, sub: &mut Vec<Vec<(f64, 
     }
 }
 
-/// Grow `drawn`, the device-space box of what the current path paints, by one construction
-/// operator (`current`: the path has a subpath for a segment to extend, as [`extend_path`] has it).
-/// A move's point (`moved`) counts once a segment or `h` follows it, or the painting operator
-/// closes it: a subpath that is only a move paints nothing, and nor does a move the next one
-/// overrides (ISO 32000-2 §8.5.3.2, and as the renderer draws). One whose operands don't read is
-/// skipped, leaving the move before it. After `re` the renderer strokes a segment from the point
-/// before it, so a move waits across one.
-fn draw(op: &Op, ctm: &Matrix, current: bool, drawn: &mut Option<[f64; 4]>, moved: &mut Option<(f64, f64)>) {
+/// What the current path paints, as [`draw`] grows it.
+#[derive(Default)]
+struct Drawn {
+    /// The device-space box of its painted points.
+    at: Option<[f64; 4]>,
+    /// The box of the moves' points since something last drew from one.
+    moved: Option<[f64; 4]>,
+    /// Whether the path ends closed, which `h` and a closing paint then leave as it is.
+    closed: bool,
+}
+
+/// Grow `drawn` by one construction operator (`current`: the path has a subpath for a segment to
+/// extend, as [`extend_path`] has it). A move's point counts once a segment or `h` follows it, or
+/// the painting operator closes it: a subpath that is only a move paints nothing (ISO 32000-2
+/// §8.5.3.2, and as the renderer draws). A move another overrides paints nothing either, but each
+/// is kept until something draws: the renderer skips a move whose last two operands aren't numbers
+/// to it, leaving the one before it, and doesn't read every number the content parser does
+/// (`3e2`). After `re` the renderer strokes a segment from the point before it, so a move waits
+/// across one; and as `re` and `h` leave the path closed, an `h` or closing paint after them
+/// closes nothing.
+fn draw(op: &Op, ctm: &Matrix, current: bool, drawn: &mut Drawn) {
     let o = op.op.as_slice();
     let nums: Vec<f64> = op.operands.iter().filter_map(Object::as_f64).collect();
     let at = |x: f64, y: f64| ctm.apply(x, y);
-    let mut pts: Vec<(f64, f64)> = match (o, &nums[..]) {
-        (b"m", &[x, y]) => {
-            *moved = Some(at(x, y));
-            return;
-        }
+    let pts: Vec<(f64, f64)> = match (o, &nums[..]) {
+        (b"m", &[x, y]) => vec![at(x, y)],
         (b"l" | b"c" | b"v" | b"y", _) if current => nums.as_chunks::<2>().0.iter().map(|p| at(p[0], p[1])).collect(),
         (b"re", &[x, y, w, h]) => vec![at(x, y), at(x + w, y), at(x + w, y + h), at(x, y + h)],
         _ => Vec::new(),
     };
-    if matches!(o, b"l" | b"c" | b"v" | b"y" | b"h") {
-        pts.extend(moved.take());
-    }
-    for (u, v) in pts {
-        *drawn = union(*drawn, Some([u, v, u, v]));
+    let grown = pts.into_iter().fold(None, |b, (u, v)| union(b, Some([u, v, u, v])));
+    match o {
+        b"m" => {
+            drawn.moved = union(drawn.moved, grown);
+            drawn.closed = false;
+        }
+        b"l" | b"c" | b"v" | b"y" => drawn.at = union(union(drawn.at, drawn.moved.take()), grown),
+        b"h" => {
+            if !drawn.closed {
+                drawn.at = union(drawn.at, drawn.moved.take());
+            }
+            drawn.closed = true;
+        }
+        _ => {
+            drawn.closed |= o == b"re" && grown.is_some();
+            drawn.at = union(drawn.at, grown);
+        }
     }
 }
 

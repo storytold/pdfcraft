@@ -30,7 +30,9 @@ pub(crate) fn miter_reach(ops: &[Op], closes: bool, limit: f64) -> f64 {
     let mut joins = Joins { limit, reach: 1.0, start: (0.0, 0.0), at: (0.0, 0.0), first: Vec::new(), last: Vec::new(), opening: true };
     for op in ops {
         // Each operator's points are its last operands, as the renderer takes them; one whose
-        // operands aren't numbers is skipped.
+        // operands aren't numbers is skipped. Where the content parser reads a number the renderer
+        // doesn't (`1.75e2`), the renderer drops the operands before it and skips the operator
+        // after it, which this still reads: the two lexers disagree there, as everywhere on a page.
         match op.op.as_slice() {
             b"m" => {
                 if let Some([x, y]) = op.nums::<2>() {

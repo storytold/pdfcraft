@@ -532,9 +532,11 @@ struct Walk {
     path: Vec<Op>,
     path_box: Option<[f64; 4]>,
     clip: bool,
-    /// The box of the last move's points, which the path's box takes once something draws from them
-    /// ([`Interp::construct_path`]).
+    /// The box of the moves' points since something last drew from one, which the path's box takes
+    /// once something does; and whether the path ends closed, which `h` and a closing paint then
+    /// leave as it is ([`Interp::construct_path`]).
     moved: Option<[f64; 4]>,
+    closed: bool,
     /// Painting operators written again under a clip that cuts the regions out: unchanged as
     /// operators, but what they paint is no longer all there.
     clipped: HashSet<usize>,
@@ -557,6 +559,7 @@ impl Walk {
             path_box: None,
             clip: false,
             moved: None,
+            closed: false,
             clipped: HashSet::new(),
             out: Output::default(),
         }
@@ -579,6 +582,7 @@ impl Walk {
             self.path_box = None;
             self.clip = false;
             self.moved = None;
+            self.closed = false;
         }
         let kept = match o {
             b"q" | b"Q" | b"cm" | b"Tf" | b"gs" | b"w" | b"j" | b"M" => {
@@ -633,10 +637,12 @@ impl Walk {
 
     /// Path construction: collects the operator and grows the path's bounding box. A move's points
     /// count once a segment or `h` follows it, or the painting operator closes it: a subpath that
-    /// is only a move paints nothing, and nor does a move the next one overrides (ISO 32000-2
-    /// §8.5.3.2, and as the renderer draws). One whose operands don't read is skipped, leaving the
-    /// move before it. After `re` the renderer strokes a segment from the point before it, so a
-    /// move waits across one.
+    /// is only a move paints nothing (ISO 32000-2 §8.5.3.2, and as the renderer draws). A move
+    /// another overrides paints nothing either, but each is kept until something draws: the
+    /// renderer skips a move whose last two operands aren't numbers to it, leaving the one before
+    /// it, and doesn't read every number the content parser does (`3e2`). After `re` the renderer
+    /// strokes a segment from the point before it, so a move waits across one; and as `re` and
+    /// `h` leave the path closed, an `h` or closing paint after them closes nothing.
     fn construct_path(&mut self, op: Op) {
         let o = op.op.as_slice();
         let pts: Vec<(f64, f64)> = match o {
@@ -645,15 +651,22 @@ impl Walk {
             _ => op.operands.iter().filter_map(Object::as_f64).collect::<Vec<_>>().as_chunks::<2>().0.iter().map(|p| (p[0], p[1])).collect(),
         };
         let grown = pts.into_iter().map(|(x, y)| self.gs.ctm.apply(x, y)).fold(None, |b, (u, v)| union(b, Some([u, v, u, v])));
-        if o == b"m" {
-            if grown.is_some() {
-                self.moved = grown;
+        match o {
+            b"m" => {
+                self.moved = union(self.moved, grown);
+                self.closed = false;
             }
-        } else {
-            if matches!(o, b"l" | b"c" | b"v" | b"y" | b"h") {
-                self.path_box = union(self.path_box, self.moved.take());
+            b"l" | b"c" | b"v" | b"y" => self.path_box = union(union(self.path_box, self.moved.take()), grown),
+            b"h" => {
+                if !self.closed {
+                    self.path_box = union(self.path_box, self.moved.take());
+                }
+                self.closed = true;
             }
-            self.path_box = union(self.path_box, grown);
+            _ => {
+                self.closed |= o == b"re" && grown.is_some();
+                self.path_box = union(self.path_box, grown);
+            }
         }
         self.clip |= matches!(o, b"W" | b"W*");
         self.path.push(op);
@@ -664,10 +677,11 @@ impl Walk {
         let body = std::mem::take(&mut self.path);
         let o = op.op.as_slice();
         // `s`, `b` and `b*` close the last subpath: a move left waiting is then a point closed, which
-        // a round cap paints.
+        // a round cap paints, unless the path ends closed already.
         let closes = matches!(o, b"s" | b"b" | b"b*");
         let moved = self.moved.take();
-        let bbox = if closes { union(self.path_box.take(), moved) } else { self.path_box.take() };
+        let closed = std::mem::replace(&mut self.closed, false);
+        let bbox = if closes && !closed { union(self.path_box.take(), moved) } else { self.path_box.take() };
         let clips = std::mem::replace(&mut self.clip, false);
         let strokes = matches!(o, b"S" | b"s" | b"B" | b"B*" | b"b" | b"b*");
         // A stroke paints around its path: a line with no height under a region, or a thick one
