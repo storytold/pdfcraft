@@ -790,7 +790,7 @@ pub fn tools() -> Vec<ToolDef> {
                 "cut_marks": { "type": "boolean" },
                 "orientation": { "type": "string", "enum": ["auto", "portrait", "landscape"] },
                 "comments_forms": { "type": "string", "enum": ["document", "document-and-markups", "document-and-stamps", "form-fields-only"] },
-                "paper": { "type": "string", "description": "A paper name (US Letter, A4…) or a size of its own such as 8.5x14in, 210x297mm, 10x15cm or 612x792pt (1 to 200 inches a side). The paper the document is laid out on determines the `media` option sent to the printer; any `media` in `options` is replaced." },
+                "paper": { "type": "string", "description": "A paper name (US Letter, A4…) or a size of its own such as 8.5x14in, 210x297mm, 10x15cm or 612x792pt (1 to 200 inches a side). The paper the document is laid out on determines the `media` option sent to the printer; any caller-supplied `media` option in `options` is replaced by this paper." },
                 "path": { "type": "string" },
                 "printer": { "type": "string" },
                 "copies": { "type": "integer", "minimum": 1, "maximum": 999 },
