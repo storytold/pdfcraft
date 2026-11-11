@@ -692,6 +692,7 @@ impl Walk {
     }
 
     fn graphics_state(&mut self, doc: &Document, scope: &mut Scope<'_>, op: &Op) {
+        let last = op.nums::<1>().map(|[v]| v);
         match op.op.as_slice() {
             b"q" => self.stack.push((self.gs.clone(), self.tm, self.tlm)),
             b"Q" => {
@@ -705,10 +706,11 @@ impl Walk {
                 }
             }
             b"Tf" => self.select_font(doc, scope, op),
-            b"w" => self.gs.line_width = op.num(0).unwrap_or(self.gs.line_width),
-            b"M" => self.gs.miter_limit = op.num(0).unwrap_or(self.gs.miter_limit),
-            b"j" => self.gs.line_join = op.num(0).map_or(self.gs.line_join, |j| j as i64),
-            b"J" => self.gs.line_cap = op.num(0).map_or(self.gs.line_cap, |j| j as i64),
+            // The operand before the operator, as the renderer reads it: `1 12 w` is a width of 12.
+            b"w" => self.gs.line_width = last.unwrap_or(self.gs.line_width),
+            b"M" => self.gs.miter_limit = last.unwrap_or(self.gs.miter_limit),
+            b"j" => self.gs.line_join = last.map_or(self.gs.line_join, |j| j as i64),
+            b"J" => self.gs.line_cap = last.map_or(self.gs.line_cap, |j| j as i64),
             _ => {
                 if let Some((font, vertical, size)) = op.name(0).and_then(|n| extgstate_font(doc, scope, &self.ext_gstates, n, &self.fallback)) {
                     (self.gs.font, self.gs.vertical, self.gs.size) = (font, vertical, size);

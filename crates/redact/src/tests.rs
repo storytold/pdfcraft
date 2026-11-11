@@ -6612,6 +6612,17 @@ fn a_width_set_between_the_path_and_its_stroke_does_not_hide_it_from_the_test() 
     assert!(c.contains("5 5 m"), "the line elsewhere stays: {c}");
 }
 
+/// The renderer takes a line-state operator's operand from the end: `1 12 w` strokes 12 points wide,
+/// so the stroke is tested at that width.
+#[test]
+fn a_surplus_operand_before_the_line_width_does_not_hide_the_stroke() {
+    let mut doc = one_page(b"1 12 w 10 60 m 100 60 l S", "", vec![]);
+    mark(&mut doc, 0, &[[40.0, 45.0, 60.0, 55.0]], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!(r.paths_removed, 1, "{r:?}");
+    assert!(!content(&doc, 0).contains("100 60 l"));
+}
+
 /// An invisible OCR-style text layer drawn in a Type3 font (what the OCR output writes for
 /// characters beyond WinAnsi) is redacted like any other text: its glyphs are hit-tested by
 /// their real advances, removed, and the verifier passes.
