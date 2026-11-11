@@ -212,6 +212,8 @@ pub(crate) struct Scope<'a> {
 thread_local! {
     /// How many objects given by reference `cs` and `CS` have read in the run's colour spaces.
     pub(crate) static SPACE_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// How many objects [`PatternSpaces::chain_end`] has read.
+    pub(crate) static CHAIN_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// How much of colour space names [`PatternSpaces`] keeps at once, in bytes, over the
@@ -291,6 +293,8 @@ pub(crate) struct PatternSpaces {
     known: HashMap<ObjRef, bool>,
     /// Whether an array's first element given by reference is the name `/Pattern`.
     families: HashMap<ObjRef, bool>,
+    /// Where each `/ColorSpace` reference's chain ends ([`PatternSpaces::chain_end`]).
+    ends: HashMap<ObjRef, Option<ObjRef>>,
 }
 
 /// A `/ColorSpace` dictionary whose names [`PatternSpaces`] keeps.
@@ -330,14 +334,41 @@ impl PatternSpaces {
             _ => {}
         }
         let space = match spaces {
-            Some(o @ Object::Ref(r)) => match self.space_in(doc, *r, o, name) {
-                Some(space) => space,
-                None => return true,
+            // Objects that only refer to the dictionary stand for it, and share what is kept or
+            // known of it: each would read all of it otherwise.
+            Some(Object::Ref(r)) => match self.chain_end(doc, *r) {
+                Some(end) => match self.space_in(doc, end, &Object::Ref(end), name) {
+                    Some(space) => space,
+                    None => return true,
+                },
+                None => None,
             },
             Some(Object::Dict(d)) => d.get(name).map(Space::of),
             _ => None,
         };
         space.is_some_and(|space| self.is_pattern(doc, space))
+    }
+
+    /// The object `r`'s chain of objects that hold only a reference ends at, followed as far as
+    /// [`Document::resolve`] follows one: `None` past that, where it gives no dictionary.
+    fn chain_end(&mut self, doc: &Document, r: ObjRef) -> Option<ObjRef> {
+        if let Some(&end) = self.ends.get(&r) {
+            return end;
+        }
+        let mut at = r;
+        let mut end = None;
+        // The object `r` names, then each of the 32 more `resolve` follows.
+        for _ in 0..=MAX_REFERENCE_HOPS {
+            #[cfg(test)]
+            CHAIN_READS.with(|c| c.set(c.get() + 1));
+            let Object::Ref(next) = &*doc.get(at) else {
+                end = Some(at);
+                break;
+            };
+            at = *next;
+        }
+        self.ends.insert(r, end);
+        end
     }
 
     /// What `name` gives in the `/ColorSpace` dictionary `o`, given by reference as `r`: `None`
@@ -440,6 +471,9 @@ impl PatternSpaces {
 }
 
 /// The object `o` refers to, read for [`PatternSpaces`].
+/// How many references [`Document::resolve`] follows past the first object.
+const MAX_REFERENCE_HOPS: usize = 32;
+
 fn read_space(doc: &Document, o: &Object) -> Arc<Object> {
     #[cfg(test)]
     SPACE_READS.with(|c| c.set(c.get() + 1));

@@ -7,7 +7,7 @@
 //! renderer still paints with is kept; one it doesn't leaves the page.
 
 use super::*;
-use crate::interp::{ENTRY_BYTES, MAX_SPACE_BYTES, PatternSpaces, SPACE_READS};
+use crate::interp::{CHAIN_READS, ENTRY_BYTES, MAX_SPACE_BYTES, PatternSpaces, SPACE_READS};
 
 /// A tiling pattern whose cell draws a rectangle and nothing else (object 7), which can stay.
 fn cell() -> Vec<u8> {
@@ -378,4 +378,53 @@ fn the_lookup_counts_what_it_keeps() {
             check(&spaces, &format!("page {page}, name {i}"));
         }
     }
+}
+
+/// A `/ColorSpace` given through objects that hold only a reference to it is read as often as one
+/// given directly: what is kept or known of it is kept for the object the references end at. 200
+/// forms, each giving the page's 5,000 spaces through an object of its own, read them as often as
+/// one form does.
+#[test]
+fn a_colour_space_dictionary_given_through_other_objects_is_read_once() {
+    let spaces: String = (0..5000).map(|i| format!("/C{i} /DeviceGray ")).collect();
+    let spaces = format!("<< {spaces}/CSP /Pattern >>").into_bytes();
+    let through = |forms: usize| {
+        let mut extra = vec![spaces.clone()];
+        extra.extend((0..forms).map(|_| b"8 0 R".to_vec()));
+        extra.extend((0..forms).map(|i| {
+            stream(&format!("/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << /ColorSpace {} 0 R >>", 9 + i), b"/CSP cs 0 0 1 1 re f")
+        }));
+        let names: String = (0..forms).map(|i| format!("/F{i} {} 0 R ", 9 + forms + i)).collect();
+        let draws: String = (0..forms).map(|i| format!("/F{i} Do ")).collect();
+        SPACE_READS.with(|c| c.set(0));
+        assert_eq!(removed(&format!("/Pattern cs /P0 scn {draws}"), &format!("/Pattern << /P0 7 0 R >> /XObject << {names}>>"), extra), 0);
+        SPACE_READS.with(std::cell::Cell::get)
+    };
+    let one = through(1);
+    assert!(one >= 1, "the dictionary is read");
+    assert_eq!(through(200), one, "200 forms, each through an object of its own");
+    // Where each chain ends is looked for once: 20,000 `cs` through one follow it as often as one.
+    let chain = |content: &str| {
+        CHAIN_READS.with(|c| c.set(0));
+        assert_eq!(removed(content, "/Pattern << /P0 7 0 R >> /ColorSpace 8 0 R", vec![b"9 0 R".to_vec(), spaces.clone()]), 0);
+        CHAIN_READS.with(std::cell::Cell::get)
+    };
+    let once = chain(&two_boxes("/CSP"));
+    assert!(once >= 2, "{once}");
+    assert_eq!(chain(&format!("/Pattern cs /P0 scn 20 140 100 30 re f {}20 40 100 30 re f", "/CSP cs ".repeat(20_000))), once, "20,000 cs");
+}
+
+/// The references are followed as far as the document reads one object as another: 32 objects
+/// that only refer on lead to the `/ColorSpace`, whose `/CSP` keeps the pattern; past them, the
+/// chain gives no names, and `/CSP cs` resets it, as it did before the chain's end was looked for.
+#[test]
+fn a_colour_space_is_followed_as_far_as_references_are() {
+    let chained = |links: usize| {
+        let mut extra: Vec<Vec<u8>> = (0..links).map(|k| format!("{} 0 R", 9 + k).into_bytes()).collect();
+        extra.push(b"<< /CSP /Pattern >>".to_vec());
+        removed(&two_boxes("/CSP"), "/Pattern << /P0 7 0 R >> /ColorSpace 8 0 R", extra)
+    };
+    assert_eq!(chained(1), 0, "one object between");
+    assert_eq!(chained(32), 0, "32 objects between");
+    assert_eq!(chained(33), 1, "33 objects between");
 }
