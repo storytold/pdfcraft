@@ -347,7 +347,7 @@ impl Document {
     /// stream of `s`'s data, shared, and a dictionary of its `/Filter` and the parameters made
     /// direct, all its filters read. A stream named again and again, as a page's `/Contents` may
     /// list one, isn't copied whole each time.
-    pub(crate) fn decoding_view<'s>(&self, s: &'s Stream) -> Cow<'s, Stream> {
+    pub fn decoding_view<'s>(&self, s: &'s Stream) -> Cow<'s, Stream> {
         let Some(made) = self.direct_parms(s) else { return Cow::Borrowed(s) };
         let mut dict = Dict::new();
         if let Some(f) = s.dict.get(b"Filter") {

@@ -24,7 +24,8 @@ let obj  = doc.get(ObjRef::new(12, 0));             // load (and cache): Arc<Obj
 let real = doc.resolve(&obj);                        // follow a bounded reference chain
 let d    = doc.dict(&obj);                           // Option<Dict>, resolving first
 let data = stream.decoded()?;                        // filters applied on demand
-let data = doc.with_direct_parms(&stream).decoded()?; // /DecodeParms given by reference too
+let data = doc.decoding_view(&stream).decoded()?;    // /DecodeParms given by reference too
+let copy = doc.with_direct_parms(&stream);           // the whole stream, its parameters made direct
 let px   = doc.decoded_image(&stream)?;              // an image's samples, a CCITT fax image's too
 let fax  = doc.fax_params(&stream);                  // a CCITT fax image's /DecodeParms, Table 11 defaults
 

@@ -220,7 +220,7 @@ fn prune_font_forms(doc: &mut Document, font_res: &Dict) -> Result<(), CosError>
                 }
             },
         };
-        let data = doc.with_direct_parms(form).decoded()?;
+        let data = doc.decoding_view(form).decoded()?;
         let mut used = UsedInGlyphs::default();
         // Each Form's walk has the allowance of a page, as `prune_retired_properties` gives each
         // content it reads.
@@ -498,7 +498,7 @@ fn add_soft_mask_ops(doc: &Document, res: &Dict, ops: &mut Vec<pdfcraft_content:
         if s.dict.get(b"Resources").is_some_and(|ro| doc.resolve(ro).as_dict().is_some()) {
             continue;
         }
-        let parsed = pdfcraft_content::parse(&doc.with_direct_parms(s).decoded()?);
+        let parsed = pdfcraft_content::parse(&doc.decoding_view(s).decoded()?);
         if parsed.skipped > 0 || ops.len().saturating_add(parsed.ops.len()) > 2_000_000 {
             return Err(CosError::Syntax { offset: 0, detail: "redaction could not fully inspect soft mask content".into() });
         }
@@ -525,7 +525,7 @@ fn scan_stream_object(
     if !ctx.seen_forms.insert((r, current_font, through)) {
         return Ok(());
     }
-    let data = ctx.doc.with_direct_parms(s).decoded()?;
+    let data = ctx.doc.decoding_view(s).decoded()?;
     match own_res {
         Some(own) => scan_content_stream(ctx, std::slice::from_ref(&data), r, &own, current_font, depth + 1),
         None => scan_content_stream(ctx, std::slice::from_ref(&data), holder_ref, res, current_font, depth + 1),
@@ -586,7 +586,7 @@ pub(crate) fn prune_type3_from_resources(
             // only in its turn, so they are never all held at once.
             for r in resourceless_appearances(doc, page) {
                 let Object::Stream(s) = &*doc.get(r) else { continue };
-                let data = budget.decode(&doc.with_direct_parms(s))?;
+                let data = budget.decode(&doc.decoding_view(s))?;
                 let more = crate::interp::resource_ops(doc, budget, res, std::slice::from_ref(&data))?;
                 if ops.len().saturating_add(more.len()) > 2_000_000 {
                     return Err(CosError::Syntax { offset: 0, detail: "redaction could not fully inspect annotation appearances".into() });
@@ -725,7 +725,7 @@ pub(crate) fn unlink_type3(doc: &mut Document) -> Result<(), RedactError> {
     for (form_ref, form_res) in &form_holders {
         if !ctx.seen_forms.iter().any(|(form, _, _)| form == form_ref) {
             let Object::Stream(s) = &*ctx.doc.get(*form_ref) else { continue };
-            let data = ctx.doc.with_direct_parms(s).decoded()?;
+            let data = ctx.doc.decoding_view(s).decoded()?;
             scan_content_stream(&mut ctx, std::slice::from_ref(&data), *form_ref, form_res, None, 0)?;
         }
     }
@@ -859,7 +859,7 @@ fn clean_type3_font(
             }
             .into());
         };
-        let data = doc.with_direct_parms(s).decoded()?;
+        let data = doc.decoding_view(s).decoded()?;
         collect_used_resources_in_stream(&data, &mut used_in_glyphs)?;
     }
 
