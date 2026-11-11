@@ -95,6 +95,11 @@ const MAX_RETRIED_TOKEN: usize = 64;
 const RESCAN_PER_BYTE: usize = 8;
 const MIN_RESCAN: usize = 1 << 20;
 
+/// How far a flat array is probed for once the parser has given up on arrays, and the bytes such
+/// probes may read in all (the same allowance as [`RESCAN_PER_BYTE`]). A probe takes only strings,
+/// numbers, names and dictionaries, so a `[` nested in damage fails at once.
+const PROBE_WINDOW: usize = 1 << 16;
+
 /// Operands kept for the next operator. No operator takes more than a few dozen; the oldest of a
 /// longer run are dropped (and counted in [`Parsed::skipped`]), so a stream of operands with no
 /// operator does not hold all of them at once.
@@ -119,6 +124,30 @@ fn parse_pieces(data: &[u8], ends: &[usize]) -> Parsed {
     Parsed { ops, skipped: reader.skipped, ambiguous_images: reader.ambiguous_images, comment_edges: reader.comment_edges }
 }
 
+/// A flat array at `at` (no nested array), read within [`PROBE_WINDOW`] bytes and charged to
+/// `probed` while it is under `limit`; its end offset too. `None` when it does not close there.
+fn probe_flat_array(data: &[u8], at: usize, probed: &mut usize, limit: usize) -> Option<(Object, usize)> {
+    if *probed >= limit {
+        return None;
+    }
+    let mut lx = Lexer::new(data.get(..(at + PROBE_WINDOW).min(data.len()))?, at + 1);
+    let mut items = Vec::new();
+    let end = loop {
+        lx.skip_ws();
+        match lx.data.get(lx.pos).copied() {
+            Some(b']') => break Some(lx.pos + 1),
+            Some(b'[') | None => break None,
+            Some(_) => match lx.object() {
+                Ok(o) if items.len() < MAX_OPERANDS * 64 => items.push(o),
+                _ => break None,
+            },
+        }
+    };
+    *probed = probed.saturating_add(lx.pos.saturating_sub(at).max(1));
+    // An empty array stays skipped, as before: it would only precede the operands that follow.
+    (!items.is_empty()).then_some((Object::Array(items), end?))
+}
+
 /// The iterator [`ops`] returns.
 pub struct Ops<'a> {
     data: &'a [u8],
@@ -139,6 +168,8 @@ pub struct Ops<'a> {
     /// openers would otherwise be read to the end of the stream again at each one: later openers
     /// are skipped as themselves, so the operands and operators after them are still read.
     arrays_given_up: bool,
+    /// Bytes the flat-array probes have read, against the rescan allowance.
+    probed: usize,
 }
 
 impl<'a> Ops<'a> {
@@ -156,6 +187,7 @@ impl<'a> Ops<'a> {
             comment_edges: vec![(false, false); ends.len()],
             rescanned: 0,
             arrays_given_up: false,
+            probed: 0,
         }
     }
 
@@ -188,6 +220,7 @@ impl Iterator for Ops<'_> {
             comment_edges: edges,
             rescanned,
             arrays_given_up,
+            probed,
         } = self;
         let (data, ends): (&[u8], &[usize]) = (data, ends);
         let rescan_limit = data.len().saturating_mul(RESCAN_PER_BYTE).max(MIN_RESCAN);
@@ -214,10 +247,20 @@ impl Iterator for Ops<'_> {
             let operand_start = matches!(b, b'/' | b'(' | b'<' | b'[' | b'+' | b'-' | b'.') || b.is_ascii_digit();
             if operand_start {
                 if b == b'[' && *arrays_given_up {
-                    // An array the parser has given up on: its opener is the damage, and scanning
-                    // it again would read the rest of the stream for every one.
-                    lx.pos = at + 1;
-                    *skipped += 1;
+                    // An array the parser has given up on: scanning it in full would read the rest
+                    // of the stream for every one. A later delimited array is still read: a flat
+                    // one (what `TJ` and `d` take) is probed for within a window and a global
+                    // allowance, so damage and an exhausted allowance never turn it into a `TJ`
+                    // with no array.
+                    if let Some((array, end)) = probe_flat_array(data, at, probed, rescan_limit) {
+                        start.get_or_insert(at);
+                        operands.push(array);
+                        operand_bytes.push(end - at);
+                        lx.pos = end;
+                    } else {
+                        lx.pos = at + 1;
+                        *skipped += 1;
+                    }
                     continue;
                 }
                 match lx.object() {

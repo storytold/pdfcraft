@@ -654,3 +654,18 @@ fn dropped_operands_count_their_bytes() {
     let p = parse(b"q Q 123 /Name (str)");
     assert_eq!(p.skipped, b"123".len() + b"/Name".len() + b"(str)".len());
 }
+
+/// Once repeated damaged arrays have spent the rescan allowance, a later valid `TJ` array is still
+/// read as an array, and the probes that find it stay within the allowance.
+#[test]
+fn a_valid_array_after_an_exhausted_allowance_is_parsed() {
+    let mut src = "[ ".repeat(50_000);
+    src.push_str("] [(A) -50 (B)] TJ");
+    let mut ops = Ops::new(src.as_bytes(), &[]);
+    ops.rescanned = src.len() * RESCAN_PER_BYTE + MIN_RESCAN + 1;
+    ops.arrays_given_up = true;
+    let found: Vec<Op> = ops.by_ref().collect();
+    assert!(ops.probed <= 4 * src.len(), "{} bytes probed for a {}-byte stream", ops.probed, src.len());
+    let tj = found.iter().find(|o| o.is("TJ")).expect("the operator after the valid array");
+    assert!(matches!(tj.operands.first(), Some(Object::Array(a)) if a.len() == 3), "{:?}", tj.operands);
+}
