@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use super::document::is_placeholder_title;
+use super::document::{is_placeholder_title, write_display_copy};
 use super::edit::{EditCtx, check_permission, run_edit};
 use super::*;
 use pdfcraft_render::{Layer, LayerOp, OpenError, ReadingColors};
@@ -106,6 +106,7 @@ fn custom_image_stamp_keeps_displayed_orientation_on_rotated_pages() {
                     name: "Original quadrants".into(),
                     file: MarkFile { name: "quadrants.png".into(), bytes: bytes.clone(), page: 0 },
                     author: "Test".into(),
+                    line: None,
                 },
             )
             .unwrap();
@@ -441,6 +442,7 @@ fn explicit_image_stamps_keep_displayed_orientation_on_rotated_pages() {
                     name: "Original quadrants".into(),
                     file: MarkFile { name: "quadrants.png".into(), bytes: bytes.clone(), page: 0 },
                     author: "Test".into(),
+                    line: None,
                 },
             )
             .unwrap();
@@ -493,6 +495,7 @@ fn pdf_page_stamps_keep_displayed_orientation_on_rotated_pages() {
                     name: "Half red".into(),
                     file: MarkFile { name: "half.pdf".into(), bytes: bytes.clone(), page: 0 },
                     author: "Test".into(),
+                    line: None,
                 },
             )
             .unwrap();
@@ -522,6 +525,7 @@ fn pdf_page_stamps_fit_inside_an_explicit_box() {
         name: "Diagram".into(),
         file: MarkFile { name: "diagram.pdf".into(), bytes: bytes.clone(), page: 0 },
         author: "Test".into(),
+        line: None,
     };
     session.apply(id, stamp([56.0, 400.0, 539.0, 700.0])).unwrap();
     assert_eq!(session.get(id).unwrap().info.annotations[0].rect, [56.0, 429.25, 539.0, 670.75]);
@@ -623,12 +627,12 @@ fn a_3d_model_needs_the_comments_permission_and_changes_the_comments() {
         activation: Activation3d::default(),
         name: String::new(),
     };
-    let p = pdfcraft_cos::Permissions { bits: 0, owner: false };
+    let p = pdfcraft_cos::Permissions { bits: 0, owner: false, revision: 3 };
     assert_eq!(check_permission(&edit, &p), Err(EditError::NotPermitted("comments")));
     assert_eq!(crate::history::scope_of(&edit), crate::history::Scope::Comments);
 }
 
-fn page_texts(s: &Session, id: DocId) -> Vec<String> {
+pub(crate) fn page_texts(s: &Session, id: DocId) -> Vec<String> {
     let doc = s.get(id).unwrap();
     let config = pdfcraft_render::RenderConfig { password: doc.password.as_deref().map(Arc::from), ..Default::default() };
     let mut r = pdfcraft_render::PageRenderer::new(doc.bytes.clone(), config);
@@ -1420,6 +1424,35 @@ fn utf16_and_code_page_text_files_convert_to_their_text() {
     assert_eq!(page_texts(&s, id), ["Crème brûlée"]);
 }
 
+/// Create ▸ PDF from a text file in Cyrillic was refused, and a comment summary quoting Cyrillic
+/// wrote each letter as `[U+XXXX]`. Both are set in the bundled Inter face now and read back as
+/// typed.
+#[test]
+fn cyrillic_text_files_and_comment_summaries_read_back_as_typed() {
+    let mut s = Session::new();
+    let text = "Договор № 12\nЖълтата дюля беше щастлива, че пухът, който цъфна, замръзна като гьон.";
+    let (_, pdf) = s.convert_to_pdf("бележки.txt", &Arc::new(text.as_bytes().to_vec())).unwrap();
+    let id = s.open_new("бележки.pdf", pdf).unwrap();
+    assert_eq!(page_texts(&s, id), [text]);
+    // A sticky note in Russian, summarized.
+    let note = "Проверьте сумму в разделе 3";
+    let hex: String = note.encode_utf16().map(|u| format!("{u:04X}")).collect();
+    let pdf = format!(
+        "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [4 0 R] >> endobj
+4 0 obj << /Type /Annot /Subtype /Text /Rect [20 140 40 160] /T (Reviewer) /Contents <FEFF{hex}> >> endobj
+trailer << /Root 1 0 R >>
+%%EOF"
+    );
+    let id = s.open("note.pdf", None, Arc::new(pdf.into_bytes()), None).expect("opens");
+    let summary = s.summarize_comments(id, SummarySort::Page).unwrap();
+    let id = s.open_new("summary.pdf", summary).unwrap();
+    let shown = page_texts(&s, id).join("\n");
+    assert!(shown.contains(note) && !shown.contains("[U+"), "{shown}");
+}
+
 #[test]
 fn a_file_split_around_another_combines_in_order_with_one_bookmark() {
     let mut s = Session::new();
@@ -1647,9 +1680,26 @@ fn copy_restricted_documents_refuse_extraction_unless_opened_by_the_owner() {
     assert_eq!(s.compare_report(oid, id).map(|_| ()), refused());
     assert!(s.compare(oid, oid).is_ok());
     assert_eq!(s.mark_differences(id, oid).map(|_| ()), refused());
+    // The comment summary copies comment text out like the exports do.
+    assert_eq!(s.summarize_comments(id, SummarySort::Page).map(|_| ()), refused());
     // Unencrypted documents allow everything.
     let (s, plain) = session_with(1);
     assert!(s.get(plain).unwrap().check_copying().is_ok() && extracting.iter().all(|c| enabled(&s, plain, c)));
+}
+
+/// The renderer can open an encrypted file the editing parser rejects. Its permission bits are
+/// then unknown, which is not the same as none: copying and printing stay refused.
+#[test]
+fn an_encrypted_document_without_an_editor_allows_neither_copying_nor_printing() {
+    let mut s = Session::new();
+    let id = s.open("r.pdf", None, protected("", "owner", -1 ^ 0b1_0000), None).unwrap();
+    s.doc_mut(id).unwrap().editor = None;
+    let d = s.get(id).unwrap();
+    assert!(d.info.encrypted && d.permissions().is_none());
+    assert!(!d.allows_copying() && !d.allows_printing());
+    let (mut s, plain) = session_with(1);
+    s.doc_mut(plain).unwrap().editor = None;
+    assert!(s.get(plain).unwrap().allows_copying(), "an unencrypted document is not restricted");
 }
 
 /// Table 22, bit 3 (#2669): a document that forbids printing disables Print up front instead
@@ -1777,6 +1827,45 @@ fn low_resolution_printing_prints_only_the_chosen_content() {
             }
         }
     }
+}
+
+/// A comment and a field the file leaves without an appearance print as the page shows them:
+/// a text box (`/FreeText` with only `/Contents` and `/DA`) and a check box set on with
+/// `/NeedAppearances`. The vector print drew only appearance streams, so both were on screen and
+/// in Print as Image but not on paper (pdf.js `bug1865341`, `freetext_print_no_appearance`).
+/// ISO 32000-2 §12.5.3: an annotation with the Print flag is printed.
+#[test]
+fn comments_and_fields_without_an_appearance_print_as_shown() {
+    let content = "";
+    let pdf = format!(
+        "%PDF-1.7
+         1 0 obj << /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [6 0 R] /NeedAppearances true /DA (/Helv 0 Tf 0 g) >> >> endobj
+         2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+         3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /Annots [5 0 R 6 0 R] >> endobj
+         4 0 obj << /Length {} >> stream
+{content}
+endstream endobj
+         5 0 obj << /Type /Annot /Subtype /FreeText /F 4 /P 3 0 R /Rect [10 120 190 190] /DA (/Helv 40 Tf 0 g) /Contents (WWWW) >> endobj
+         6 0 obj << /Type /Annot /Subtype /Widget /FT /Btn /T (Box) /V /Yes /AS /Yes /F 4 /P 3 0 R /Rect [10 10 110 110] /MK << /CA (8) >> >> endobj
+         trailer << /Root 1 0 R >>
+%%EOF",
+        content.len(),
+    );
+    let mut s = Session::new();
+    let id = s.open("bare.pdf", None, Arc::new(pdf.into_bytes()), None).unwrap();
+    let settings =
+        print::Settings { pages: vec![0], paper: (200.0, 200.0), layout: print::Layout::Size(print::SizeMode::Actual), ..Default::default() };
+    let (w, h, rgba) = printed_pixels(s.print_pdf(id, &settings).unwrap());
+    assert_eq!((w, h), (200, 200));
+    // Dark pixels in the text box (top half) and in the check box (bottom half).
+    let dark = |y0: usize, y1: usize| {
+        (y0..y1)
+            .flat_map(|y| (0..w as usize).map(move |x| (x, y)))
+            .filter(|&(x, y)| rgba.get((y * w as usize + x) * 4).is_some_and(|&r| r < 128))
+            .count()
+    };
+    assert!(dark(10, 80) > 50, "the text box prints");
+    assert!(dark(90, 190) > 50, "the check box prints");
 }
 
 #[test]
@@ -2279,6 +2368,29 @@ fn highlight_multiplies_over_text() {
     assert!(bg[0] > 240 && bg[1] > 240 && bg[2] < 30, "{bg:?}");
 }
 
+/// Converting the appearances of comments and form fields needs the permission to comment;
+/// converting the page alone needs only the permission to modify.
+#[test]
+fn converting_colours_of_comments_needs_the_comment_permission() {
+    let mut cos = pdfcraft_cos::Document::open(Arc::new(fixture(1))).unwrap();
+    let params = pdfcraft_cos::NewEncryption {
+        algorithm: pdfcraft_cos::Algorithm::Aes256,
+        user_password: "",
+        owner_password: "own",
+        permissions: !(1 << 5),
+        encrypt_metadata: true,
+        seed: [7; 32],
+    };
+    cos.set_encryption(&params).unwrap();
+    let bytes = pdfcraft_cos::write_full(&cos, &pdfcraft_cos::SaveOptions::default()).unwrap();
+    let mut s = Session::new();
+    let id = s.open("locked.pdf", None, Arc::new(bytes), None).unwrap();
+    let with = ConvertColours { annotations: true, ..ConvertColours::default() };
+    assert_eq!(s.apply(id, Edit::ConvertColours { pages: vec![0], settings: with }), Err(EditError::NotPermitted("comments")));
+    let without = s.apply(id, Edit::ConvertColours { pages: vec![0], settings: ConvertColours::default() });
+    assert!(!matches!(without, Err(EditError::NotPermitted(_))), "{without:?}");
+}
+
 #[test]
 fn comment_permission_is_enforced() {
     let mut cos = pdfcraft_cos::Document::open(Arc::new(fixture(1))).unwrap();
@@ -2699,6 +2811,126 @@ fn a_signed_file_carries_no_password_field_value() {
     assert!(!appears_in_pdf(&signed, "*******"), "nor the typed length");
 }
 
+/// A form with `/NeedAppearances true` whose filled fields have stored appearances that draw no
+/// text: `name` an empty placeholder, `town` one too with a value Helvetica can't hold (`ň`),
+/// `city` such a value with its own appearance that draws it (#5939), `street` no appearance at
+/// all, `river` a value Helvetica can't hold (`ř`) with an appearance that paints only a
+/// background form XObject, and `lake` such a value drawn by a form XObject its appearance
+/// paints.
+fn need_appearances_form() -> Vec<u8> {
+    let stream =
+        |content: &str| format!("<< /Type /XObject /Subtype /Form /BBox [0 0 160 20] /Length {} >>\nstream\n{content}\nendstream", content.len());
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 5 0 R 6 0 R 11 0 R 12 0 R 15 0 R] /NeedAppearances true /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 7 0 R >> >> >> >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R 6 0 R 11 0 R 12 0 R 15 0 R] >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (name) /V (Ada Lovelace) /Rect [20 250 180 270] /P 3 0 R /AP << /N 8 0 R >> >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (town) /V <FEFF0050006C007A00650148> /Rect [20 200 180 220] /P 3 0 R /AP << /N 9 0 R >> >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (city) /V <FEFF00420072006E006F00200159> /Rect [20 150 180 170] /P 3 0 R /AP << /N 10 0 R >> >>".into(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),
+        stream("/Tx BMC EMC"),
+        stream("/Tx BMC EMC"),
+        stream("/Tx BMC BT /Helv 10 Tf 2 5 Td (Brno r) Tj ET EMC"),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (street) /V (Main Street) /Rect [20 100 180 120] /P 3 0 R >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (river) /V <FEFF004F0159006500630068> /Rect [20 50 180 70] /P 3 0 R /AP << /N 13 0 R >> >>".into(),
+        "<< /Type /XObject /Subtype /Form /BBox [0 0 160 20] /Resources << /XObject << /Bg 14 0 R >> >> /Length 10 >>\nstream\nq /Bg Do Q\nendstream".into(),
+        stream("0.9 g 0 0 160 20 re f"),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (lake) /V <FEFF004F0159006500630068> /Rect [20 20 180 40] /P 3 0 R /AP << /N 16 0 R >> >>".into(),
+        "<< /Type /XObject /Subtype /Form /BBox [0 0 160 20] /Resources << /XObject << /Fm 17 0 R >> >> /Length 10 >>\nstream\nq /Fm Do Q\nendstream".into(),
+        stream("BT /Helv 10 Tf 2 5 Td (Orech) Tj ET"),
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    out
+}
+
+/// The decoded normal appearance of the widget `num` in `doc`.
+fn normal_appearance(doc: &pdfcraft_cos::Document, num: u32) -> String {
+    let widget = doc.get(pdfcraft_cos::ObjRef::new(num, 0));
+    let ap = doc.resolve(widget.as_dict().unwrap().get(b"AP").unwrap());
+    let n = doc.resolve(ap.as_dict().unwrap().get(b"N").unwrap());
+    let pdfcraft_cos::Object::Stream(s) = &*n else { panic!("{n:?}") };
+    String::from_utf8_lossy(&s.decoded().unwrap()).into_owned()
+}
+
+/// #5939 review: the first signature removes `/NeedAppearances`, so the fields are drawn from
+/// their values first; without that, `name` and `town` would show their empty placeholders. A
+/// field whose own appearance draws its value keeps it rather than get a `?` for `ř`.
+#[test]
+fn the_first_signature_draws_the_fields_need_appearances_left_to_the_viewer() {
+    let p12 = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12")).unwrap();
+    let digital_id = sign::pkcs12::open(&p12, "test").unwrap();
+    // After the test certificate's start date (2026-10-02).
+    let mut s = Session::new().with_clock(|| 1_800_000_000);
+    let id = s.open("form.pdf", None, Arc::new(need_appearances_form()), None).unwrap();
+    let signed = s.sign(id, &digital_id, SignOptions { rect: None, ..SignOptions::default() }).unwrap();
+    let doc = pdfcraft_cos::Document::open(signed.clone()).unwrap();
+    assert!(!pdfcraft_forms::need_appearances(&doc));
+    assert!(normal_appearance(&doc, 4).contains("(Ada Lovelace) Tj"), "{}", normal_appearance(&doc, 4));
+    assert!(normal_appearance(&doc, 5).contains("(Plze?) Tj"), "{}", normal_appearance(&doc, 5));
+    assert!(normal_appearance(&doc, 6).contains("(Brno r) Tj"), "{}", normal_appearance(&doc, 6));
+    assert!(normal_appearance(&doc, 11).contains("(Main Street) Tj"), "{}", normal_appearance(&doc, 11));
+    // Its own appearance only paints a background, so `river` gets the drawing, `?` and all.
+    assert!(normal_appearance(&doc, 12).contains("(O?ech) Tj"), "{}", normal_appearance(&doc, 12));
+    let city = |d: &pdfcraft_cos::Document| d.get(pdfcraft_cos::ObjRef::new(6, 0)).as_dict().unwrap().get(b"AP").cloned();
+    let original = pdfcraft_cos::Document::open(Arc::new(need_appearances_form())).unwrap();
+    assert_eq!(city(&doc), city(&original), "city keeps its own appearance");
+    let lake = |d: &pdfcraft_cos::Document| d.get(pdfcraft_cos::ObjRef::new(15, 0)).as_dict().unwrap().get(b"AP").cloned();
+    assert_eq!(lake(&doc), lake(&original), "lake keeps the appearance its form XObject draws");
+    s.mark_signed(id, signed, None).unwrap();
+    s.set_trusted_certificates(vec![digital_id.certificate.clone()]);
+    let sig = &s.get(id).unwrap().signatures[0];
+    assert_eq!((sig.signed, sig.status, sig.modification.clone()), (true, SignatureStatus::Valid, sign::Modification::None));
+}
+
+/// A later signature draws nothing and leaves the flag: either would be a change to what the
+/// first signature covers.
+#[test]
+fn a_later_signature_leaves_need_appearances_forms_alone() {
+    let p12 = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12")).unwrap();
+    let digital_id = sign::pkcs12::open(&p12, "test").unwrap();
+    let mut s = Session::new().with_clock(|| 1_800_000_000);
+    let id = s.open("form.pdf", None, Arc::new(need_appearances_form()), None).unwrap();
+    let first = s.sign(id, &digital_id, SignOptions { rect: None, ..SignOptions::default() }).unwrap();
+    // The flag set again after the first signature, and `name` back to its empty placeholder.
+    let mut cos = pdfcraft_cos::Document::open(first).unwrap();
+    let root = cos.root().unwrap();
+    cos.update_dict(root, |c| {
+        if let Some(pdfcraft_cos::Object::Dict(af)) = c.get_mut(b"AcroForm") {
+            af.set(b"NeedAppearances".to_vec(), pdfcraft_cos::Object::Bool(true));
+        }
+    })
+    .unwrap();
+    let placeholder = cos.add(pdfcraft_cos::Object::Stream(pdfcraft_cos::Stream::from_raw(Default::default(), b"/Tx BMC EMC".to_vec())));
+    cos.update_dict(pdfcraft_cos::ObjRef::new(4, 0), |w| {
+        let mut ap = pdfcraft_cos::Dict::new();
+        ap.set(b"N".to_vec(), pdfcraft_cos::Object::Ref(placeholder));
+        w.set(b"AP".to_vec(), pdfcraft_cos::Object::Dict(ap));
+    })
+    .unwrap();
+    let flagged =
+        Arc::new(pdfcraft_cos::write_incremental(&cos, &pdfcraft_cos::SaveOptions { object_streams: false, ..Default::default() }).unwrap());
+    let id = s.open("flagged.pdf", None, flagged.clone(), None).unwrap();
+    let second = s.sign(id, &digital_id, SignOptions { rect: None, ..SignOptions::default() }).unwrap();
+    let (before, after) = (pdfcraft_cos::Document::open(flagged).unwrap(), pdfcraft_cos::Document::open(second.clone()).unwrap());
+    assert!(pdfcraft_forms::need_appearances(&after));
+    let widget = |d: &pdfcraft_cos::Document| d.get(pdfcraft_cos::ObjRef::new(4, 0));
+    assert_eq!(widget(&after), widget(&before));
+    assert_eq!(normal_appearance(&after, 4), "/Tx BMC EMC");
+    s.mark_signed(id, second, None).unwrap();
+    assert_eq!(s.get(id).unwrap().signatures.iter().filter(|x| x.signed).count(), 2);
+}
+
 /// #3944: a value typed into an XFA `<passwordEdit/>` field stays in the open document (both the
 /// widget and the live XFA datasets, even across multiple edits and across Save + `mark_saved`),
 /// but is written to no file — neither on the widget nor in the XFA datasets stream.
@@ -3000,6 +3232,66 @@ fn setting_the_calculation_order_recalculates_and_undoes() {
     assert!(matches!(s.apply(id, Edit::SetCalculationOrder { names: vec!["qty".into()] }), Err(EditError::Form(_))));
 }
 
+/// A Calculate script that sets its own field through the field object, not `event.value`,
+/// gives the field that value, text included; when it sets `event.value` as well, that wins.
+#[test]
+fn a_calculate_script_setting_its_own_field_object_keeps_the_value() {
+    let (mut s, id) = session_with(1);
+    for (i, name) in ["origin", "copy", "both"].into_iter().enumerate() {
+        let y = 250.0 - 40.0 * i as f64;
+        let kind = NewField::Text { multiline: false };
+        s.apply(id, Edit::AddField { page: 0, rect: [20.0, y, 180.0, y + 22.0], kind, name: Some(name.into()) }).unwrap();
+    }
+    let script = |name: &str, js: &str| Edit::SetFieldScript { name: name.into(), event: "calculate".into(), script: Some(js.into()) };
+    s.apply(id, script("copy", "var o = this.getField(\"origin\");\nthis.getField(\"copy\").value = o.value;")).unwrap();
+    s.apply(id, script("both", "this.getField(\"both\").value = \"field\";\nevent.value = this.getField(\"origin\").value + \"!\";")).unwrap();
+    s.apply(id, Edit::SetFieldValue { name: "origin".into(), value: FieldValue::Text("abc".into()) }).unwrap();
+    let value = |s: &Session, n: &str| s.get(id).unwrap().form.iter().find(|f| f.name == n).and_then(|f| f.value.first().cloned());
+    assert_eq!(value(&s, "copy").as_deref(), Some("abc"));
+    assert_eq!(value(&s, "both").as_deref(), Some("abc!"), "event.value decides when the script sets both");
+    s.apply(id, Edit::SetFieldValue { name: "origin".into(), value: FieldValue::Text("12".into()) }).unwrap();
+    assert_eq!(value(&s, "copy").as_deref(), Some("12"));
+}
+
+/// A Calculate script that assigns `event.value` the value its field already holds keeps it, even
+/// after writing another value through its field object; and a combo box a script moves to
+/// another option selects that option in `/I` too.
+#[test]
+fn a_calculate_script_assigning_event_value_wins_and_a_combo_keeps_its_selection() {
+    let (mut s, id) = session_with(1);
+    s.apply(
+        id,
+        Edit::AddField { page: 0, rect: [20.0, 250.0, 180.0, 272.0], kind: NewField::Text { multiline: false }, name: Some("origin".into()) },
+    )
+    .unwrap();
+    s.apply(id, Edit::AddField { page: 0, rect: [20.0, 210.0, 180.0, 232.0], kind: NewField::Text { multiline: false }, name: Some("kept".into()) })
+        .unwrap();
+    let kind = NewField::Combo { options: vec!["Small".into(), "Large".into()], editable: false };
+    s.apply(id, Edit::AddField { page: 0, rect: [20.0, 170.0, 180.0, 192.0], kind, name: Some("size".into()) }).unwrap();
+    s.apply(id, Edit::SetFieldValue { name: "size".into(), value: FieldValue::Choice(vec!["Small".into()]) }).unwrap();
+    let script = |name: &str, js: &str| Edit::SetFieldScript { name: name.into(), event: "calculate".into(), script: Some(js.into()) };
+    s.apply(
+        id,
+        script(
+            "kept",
+            "var v = event.value;
+this.getField(\"kept\").value = \"field\";
+event.value = v;",
+        ),
+    )
+    .unwrap();
+    s.apply(id, script("size", "event.value = this.getField(\"origin\").value > 5 ? \"Large\" : \"Small\";")).unwrap();
+    s.apply(id, Edit::SetFieldValue { name: "origin".into(), value: FieldValue::Text("9".into()) }).unwrap();
+    assert!(s.take_js_output(id).errors.is_empty(), "both scripts ran to the end");
+    let doc = s.get(id).unwrap();
+    let value = |n: &str| doc.form.iter().find(|f| f.name == n).and_then(|f| f.value.first().cloned());
+    assert_eq!(value("kept").as_deref(), None, "event.value, set to the field's own value, decides");
+    assert_eq!(value("size").as_deref(), Some("Large"));
+    let size = doc.form.iter().find(|f| f.name == "size").map(|f| f.obj).unwrap();
+    let selected = doc.editor.as_ref().unwrap().cos.get(size).as_dict().and_then(|d| d.get(b"I")).cloned();
+    assert_eq!(selected, Some(pdfcraft_cos::Object::Array(vec![pdfcraft_cos::Object::Int(1)])));
+}
+
 /// One 612×300 page with the content stream `body`. Object 4 is Helvetica; `resources` is what
 /// the page's /Resources holds.
 fn one_line_page(resources: &str, body: &str) -> Vec<u8> {
@@ -3015,19 +3307,7 @@ fn one_line_page_with(resources: &str, stream_entries: &str, body: &str) -> Vec<
         "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".to_string(),
         format!("<< /Length {} {stream_entries} >>\nstream\n{body}\nendstream", body.len()),
     ];
-    let mut out = b"%PDF-1.7\n".to_vec();
-    let mut offsets = Vec::new();
-    for (i, o) in objs.iter().enumerate() {
-        offsets.push(out.len());
-        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
-    }
-    let xref = out.len();
-    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
-    for o in offsets {
-        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
-    }
-    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
-    out
+    pdf_of(&objs)
 }
 
 /// Put a redaction mark over `needle` where page 1 shows it, as Find text and redact does.
@@ -3094,6 +3374,55 @@ fn text_after_an_inline_image_is_redacted_where_the_page_shows_it() {
     );
 }
 
+/// #2539 review: Apply redactions tells the caller where the removed text is still held that
+/// it leaves as it is (here a bookmark title), and the next edit, or an undo, forgets it.
+#[test]
+fn applied_redactions_report_a_bookmark_that_still_holds_the_removed_text() {
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let page = one_line_page("/Font << /F1 4 0 R >>", "BT /F1 10 Tf 20 150 Td (Codename BLUEFIN report) Tj ET");
+    let id = s.open("bookmark.pdf", None, Arc::new(page), None).unwrap();
+    s.apply(id, Edit::AddBookmark { parent: vec![], index: 0, title: "Bluefin plans".into(), page: 0, left: None, top: None }).unwrap();
+    s.apply(id, Edit::AddBookmark { parent: vec![], index: 1, title: "Annual figures".into(), page: 0, left: None, top: None }).unwrap();
+    mark_shown_text(&mut s, id, "BLUEFIN");
+    assert_eq!(s.get(id).unwrap().redaction_elsewhere(), None, "only applying redactions reports it");
+    s.apply(id, Edit::ApplyRedactions { pages: None }).unwrap();
+    let found = s.get(id).unwrap().redaction_elsewhere().expect("applying reports what it left");
+    assert_eq!(found, crate::RedactionElsewhere { bookmarks: 1, ..Default::default() });
+    // One of the edit notices, so tools and the interface say it with the others.
+    let said: Vec<String> = s.get(id).unwrap().edit_notices.iter().map(ToString::to_string).collect();
+    assert_eq!(said, ["the redacted text also appears in 1 bookmark title, which redaction doesn't change (Remove hidden information removes them)"]);
+    assert_eq!(outline_titles(&s.get(id).unwrap().info.outline), ["Bluefin plans→1", "Annual figures→1"], "the bookmark is reported, not changed");
+    s.undo(id).unwrap();
+    assert_eq!(s.get(id).unwrap().redaction_elsewhere(), None, "an undo forgets it");
+}
+
+/// #2539 review: applying redactions that remove the document's XMP packet, which named the
+/// redacted word and said the file conforms to PDF/A-2b, writes the identification back and
+/// says so; tools list it with the other edit notices, and an undo forgets it.
+#[test]
+fn applied_redactions_report_the_pdfa_identification_written_back() {
+    let xmp = r#"<?xpacket begin="" id="W5M0MpCehiHzreSzNTczkc9d"?><x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:pdfaid="http://www.aiim.org/pdfa/ns/id/" pdfaid:part="2" pdfaid:conformance="B"/><rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>Bluefin report</dc:title></rdf:Description></rdf:RDF></x:xmpmeta><?xpacket end="w"?>"#;
+    let body = "BT /F1 10 Tf 20 150 Td (Codename BLUEFIN report) Tj ET";
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R /Metadata 6 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 300] >>".to_string(),
+        "<< /Type /Page /Parent 2 0 R /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>".to_string(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".to_string(),
+        format!("<< /Length {} >>\nstream\n{body}\nendstream", body.len()),
+        format!("<< /Type /Metadata /Subtype /XML /Length {} >>\nstream\n{xmp}\nendstream", xmp.len()),
+    ];
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("pdfa.pdf", None, Arc::new(pdf_of(&objs)), None).unwrap();
+    mark_shown_text(&mut s, id, "BLUEFIN");
+    s.apply(id, Edit::ApplyRedactions { pages: None }).unwrap();
+    let kept = crate::RedactionIdentification { pdfa: crate::RedactionClaim::Kept, pdfua: crate::RedactionClaim::None };
+    assert_eq!(s.get(id).unwrap().redaction_identification(), Some(kept));
+    let said: Vec<String> = s.get(id).unwrap().edit_notices.iter().map(ToString::to_string).collect();
+    assert_eq!(said, ["the document's XMP metadata held the redacted text and was removed; its PDF/A identification was written back on its own"]);
+    s.undo(id).unwrap();
+    assert_eq!(s.get(id).unwrap().redaction_identification(), None, "an undo forgets it");
+}
+
 /// A word whose font and size an ExtGState /Font entry (`gs`) sets is placed where the renderer
 /// draws it, so a mark drawn over it as displayed takes it out of the file.
 #[test]
@@ -3114,6 +3443,26 @@ fn a_word_in_a_font_set_by_an_extgstate_is_redacted() {
         !reopened.scan_objects().any(|(_, o)| matches!(&*o, pdfcraft_cos::Object::Stream(st) if st.decoded().is_ok_and(|d| held(&d)))),
         "a saved stream holds the redacted word"
     );
+}
+
+/// A word drawn as outlines reads through its /ActualText. A mark over part of it applies (the
+/// outlines are clipped), and the name that would still read the whole word is gone from the page
+/// and from the saved file.
+#[test]
+fn a_word_drawn_as_outlines_is_redacted_with_its_name() {
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let page = one_line_page("", "/Span <</ActualText (SECRET42)>> BDC 20 150 m 140 150 l 140 170 l 20 170 l h f EMC");
+    let id = s.open("outlines.pdf", None, Arc::new(page), None).unwrap();
+    assert_eq!(page_texts(&s, id), ["SECRET42"]);
+    let shape =
+        Shape::Redact { quads: vec![pdfcraft_annot::rect_quad([10.0, 140.0, 90.0, 180.0])], overlay: String::new(), look: Default::default() };
+    let mark =
+        Edit::AddAnnotation(NewAnnotation { page: 0, style: Style::default_for(&shape), shape, contents: String::new(), author: "Ada".into() });
+    s.apply(id, mark).unwrap();
+    s.apply(id, Edit::ApplyRedactions { pages: None }).unwrap();
+    assert_eq!(page_texts(&s, id), [""]);
+    let saved = s.save_bytes(id).unwrap();
+    assert!(!saved.windows(b"SECRET42".len()).any(|w| w == b"SECRET42"), "the name is not left in the file");
 }
 
 #[test]
@@ -3301,6 +3650,185 @@ fn printing_keeps_hidden_layers_hidden() {
     assert!(red > 100, "shown again, Layer A prints again: {red} red");
 }
 
+/// A PDF of `objs`, numbered from 1, the first being the catalog.
+fn pdf_of_objects(objs: &[Vec<u8>]) -> Vec<u8> {
+    let mut pdf = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(pdf.len());
+        pdf.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+        pdf.extend_from_slice(o);
+        pdf.extend_from_slice(b"\nendobj\n");
+    }
+    let xref = pdf.len();
+    pdf.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        pdf.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    pdf.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    pdf
+}
+
+/// ISO 32000-2 §8.11.4.4: the default configuration's auto state for the Print event sets the
+/// layers it names when the document prints. Red is on screen but `/PrintState /OFF`, green is off
+/// on screen but `/PrintState /ON`: on paper, vector or as an image, green prints and red doesn't.
+/// Two blue squares are on screen and `/PrintState /OFF` too, but no Print recommendation reaches
+/// them (one is named only in the View entry, the other in a Print entry without the Print
+/// category), so they print as shown.
+#[test]
+fn printing_applies_the_print_auto_state() {
+    let content = b"/OC /A BDC 1 0 0 rg 10 10 80 80 re f EMC /OC /B BDC 0 1 0 rg 110 10 80 80 re f EMC \
+                    /OC /C BDC 0 0 1 rg 210 10 40 40 re f EMC /OC /D BDC 0 0 1 rg 210 55 40 40 re f EMC";
+    let screen_only = b"/Usage << /View << /ViewState /ON >> /Print << /PrintState /OFF >> >> >>";
+    let objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [5 0 R 6 0 R 7 0 R 8 0 R] /D << /OFF [6 0 R] \
+          /AS [<< /Event /Print /OCGs [5 0 R 6 0 R] /Category [/Print] >> << /Event /View /OCGs [5 0 R 6 0 R 7 0 R] /Category [/View] >> \
+          << /Event /Print /OCGs [8 0 R] /Category [/Language] >>] >> >> >>"
+            .to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 100] /Contents 4 0 R \
+          /Resources << /Properties << /A 5 0 R /B 6 0 R /C 7 0 R /D 8 0 R >> >> >>"
+            .to_vec(),
+        [format!("<< /Length {} >>\nstream\n", content.len()).as_bytes(), content, b"\nendstream"].concat(),
+        [b"<< /Type /OCG /Name (View only) ".as_slice(), screen_only].concat(),
+        b"<< /Type /OCG /Name (Print only) /Usage << /View << /ViewState /OFF >> /Print << /PrintState /ON >> >> >>".to_vec(),
+        [b"<< /Type /OCG /Name (View entry) ".as_slice(), screen_only].concat(),
+        [b"<< /Type /OCG /Name (Other category) ".as_slice(), screen_only].concat(),
+    ];
+    let pdf = pdf_of_objects(&objs);
+
+    let colours = |page: &pdfcraft_render::RenderedPage| {
+        let px = page.rgba.as_chunks::<4>().0;
+        let red = px.iter().filter(|p| p[0] > 200 && p[1] < 60 && p[2] < 60).count();
+        let green = px.iter().filter(|p| p[1] > 200 && p[0] < 60 && p[2] < 60).count();
+        let blue = px.iter().filter(|p| p[2] > 200 && p[0] < 60 && p[1] < 60).count();
+        (red, green, blue)
+    };
+    let mut s = Session::new();
+    let id = s.open("auto-state.pdf", None, Arc::new(pdf), None).unwrap();
+    let (red, green, shown_blue) = colours(&render_page(&s, id));
+    assert!(red > 100 && green == 0, "on screen, red shows and green doesn't: {red} red, {green} green");
+    // The print dialog's preview shows the page as it prints, the view as it shows; so after a
+    // Layers panel change too.
+    let preview = |s: &Session, tag: u64| {
+        let doc = s.get(id).unwrap();
+        let mut renderer = pdfcraft_render::PageRenderer::new(doc.display.clone(), display_config(&doc.config));
+        colours(&renderer.render(pdfcraft_render::RenderRequest { page: 0, scale: 2.0, tag, ..Default::default() }))
+    };
+    let view_entry = s.get(id).unwrap().info.layers.iter().position(|l| l.name == "View entry").unwrap();
+    let mut printed_blue = Vec::new();
+    for _ in 0..2 {
+        let (red, green, blue) = preview(&s, pdfcraft_render::PRINT_TAG);
+        assert!(red == 0 && green > 100, "the preview shows the print: {red} red, {green} green");
+        printed_blue.push(blue);
+        let (red, green, _) = preview(&s, 0);
+        assert!(red > 100 && green == 0, "the view is unchanged: {red} red, {green} green");
+        // Hidden after the first round, shown again after the second.
+        assert!(s.set_layer_visible(id, view_entry, printed_blue.len() == 2));
+    }
+    // Hidden in the panel, View entry (no Print recommendation) leaves the preview too.
+    assert!(printed_blue[1] * 4 < printed_blue[0] * 3, "the preview follows the panel: {printed_blue:?} blue");
+    for raster in [None, Some(print::Raster { dpi: 72.0, grayscale: false })] {
+        let bytes = Arc::new(s.print_pdf(id, &print::Settings { pages: vec![0], raster, ..Default::default() }).unwrap());
+        let mut out = Session::new();
+        let printed = out.open("print.pdf", None, bytes.clone(), None).unwrap();
+        let (red, green, blue) = colours(&render_page(&out, printed));
+        assert_eq!(red, 0, "the view-only layer doesn't print (as image: {})", raster.is_some());
+        assert!(green > 100, "the print-only layer prints (as image: {}): {green} green", raster.is_some());
+        // Both blue squares print: the one shown on screen alone is half of them.
+        assert!(
+            blue * 4 > shown_blue * 3,
+            "the layers no Print recommendation reaches print as shown (as image: {}): {blue} of {shown_blue} blue",
+            raster.is_some()
+        );
+        // The vector copy's states are final: nothing a reader applies when drawing is left to
+        // turn them back (the auto state, or a layer's `/Usage /View /ViewState`).
+        let layers = &out.get(printed).unwrap().info.layers;
+        if raster.is_none() {
+            let cos = pdfcraft_cos::Document::open(bytes).unwrap();
+            assert_eq!(layers.len(), 4);
+            for layer in layers {
+                let group = cos.get(pdfcraft_cos::ObjRef::new(layer.id.0, layer.id.1));
+                assert!(group.as_dict().is_some_and(|g| !g.contains(b"Usage")), "{} keeps its /Usage", layer.name);
+            }
+            let root = cos.trailer().get(b"Root").map(|r| cos.resolve(r)).unwrap();
+            let properties = root.as_dict().and_then(|r| r.get(b"OCProperties")).map(|p| cos.resolve(p)).unwrap();
+            let config = properties.as_dict().and_then(|p| p.get(b"D")).map(|d| cos.resolve(d)).unwrap();
+            assert!(config.as_dict().is_some_and(|d| !d.contains(b"AS")), "the print copy keeps /AS");
+        }
+    }
+}
+
+/// The print auto state of `layers` (object numbers from 5) in a document whose default
+/// configuration has `auto` as its `/AS` and `groups` as the layers' dictionaries.
+fn print_states_of(auto: &str, groups: &[&str]) -> Vec<bool> {
+    let ocgs: String = (0..groups.len()).map(|i| format!("{} 0 R ", i + 5)).collect();
+    let mut objs: Vec<Vec<u8>> = vec![
+        format!("<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [{ocgs}] /D << /AS {auto} >> >> >>").into_bytes(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Contents 4 0 R >>".to_vec(),
+        b"<< /Length 0 >>\nstream\n\nendstream".to_vec(),
+    ];
+    objs.extend(groups.iter().map(|g| g.as_bytes().to_vec()));
+    let cos = pdfcraft_cos::Document::open(Arc::new(pdf_of_objects(&objs))).unwrap();
+    let layers: Vec<Layer> = (0..groups.len()).map(|i| Layer { id: (i as u32 + 5, 0), name: format!("{i}"), visible: true, initial: true }).collect();
+    crate::print_layer_states(&cos, &layers).expect("there are Print entries").iter().map(|l| l.visible).collect()
+}
+
+/// ISO 32000-2 §8.11.4.4: a group prints only if every category of every Print entry naming it
+/// recommends ON. A Print category (`/PrintState /ON`) and a View category of another Print entry
+/// (`/ViewState /OFF`) disagree, so the group stays off; with both ON it prints. A `/Category`
+/// written as a single name (Table 101 asks for an array) is read as one.
+#[test]
+fn a_layer_prints_only_if_every_recommendation_is_on() {
+    let auto = "[<< /Event /Print /OCGs [5 0 R 6 0 R] /Category [/Print] >> << /Event /Print /OCGs [5 0 R 6 0 R] /Category [/View] >> \
+                << /Event /Print /OCGs [7 0 R] /Category /Print >>]";
+    let states = print_states_of(
+        auto,
+        &[
+            "<< /Type /OCG /Name (Disagree) /Usage << /View << /ViewState /OFF >> /Print << /PrintState /ON >> >> >>",
+            "<< /Type /OCG /Name (Agree) /Usage << /View << /ViewState /ON >> /Print << /PrintState /ON >> >> >>",
+            "<< /Type /OCG /Name (Single name) /Usage << /Print << /PrintState /OFF >> >> >>",
+        ],
+    );
+    assert_eq!(states, [false, true, false]);
+}
+
+/// At most 1,024 `/AS` entries are read: an entry past them that would turn the layer off is not
+/// reached, while the same entry within them is.
+#[test]
+fn the_print_auto_state_reads_a_bounded_number_of_entries() {
+    let layer = "<< /Type /OCG /Name (Layer) /Usage << /Print << /PrintState /OFF >> >> >>";
+    let other = "<< /Type /OCG /Name (Other) >>";
+    let auto = |before: usize| {
+        let filler = "<< /Event /Print /OCGs [6 0 R] /Category [/Print] >> ".repeat(before);
+        format!("[{filler} << /Event /Print /OCGs [5 0 R] /Category [/Print] >>]")
+    };
+    assert_eq!(print_states_of(&auto(1023), &[layer, other]), [false, true], "the 1,024th entry is read");
+    assert_eq!(print_states_of(&auto(1024), &[layer, other]), [true, true], "the 1,025th entry is not");
+}
+
+/// Reading the print auto state is bounded over all `/AS` entries together: 1,024 Print entries
+/// sharing one `/Category` array of 70,000 names, `/Print` last, read 65,536 names in all, find no
+/// Print category and recommend nothing, instead of reading the array 1,024 times.
+#[test]
+fn the_print_auto_state_reads_a_bounded_number_of_categories() {
+    let names = format!("[{} /Print]", "/View ".repeat(70_000));
+    let entries = "<< /Event /Print /OCGs [5 0 R] /Category 6 0 R >> ".repeat(1024);
+    let objs: Vec<Vec<u8>> = vec![
+        format!("<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [5 0 R] /D << /AS [{entries}] >> >> >>").into_bytes(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Contents 4 0 R >>".to_vec(),
+        b"<< /Length 0 >>\nstream\n\nendstream".to_vec(),
+        b"<< /Type /OCG /Name (Layer) /Usage << /Print << /PrintState /OFF >> >> >>".to_vec(),
+        names.into_bytes(),
+    ];
+    let cos = pdfcraft_cos::Document::open(Arc::new(pdf_of_objects(&objs))).unwrap();
+    let layer = Layer { id: (5, 0), name: "Layer".into(), visible: true, initial: true };
+    let printed = crate::print_layer_states(&cos, std::slice::from_ref(&layer)).expect("there are Print entries");
+    assert!(printed.iter().all(|l| l.visible), "past the bound nothing is read, so the layer prints as shown");
+}
+
 #[test]
 fn printing_lays_out_sheets_that_render() {
     let (s, id) = session_with(5);
@@ -3324,6 +3852,45 @@ fn printing_lays_out_sheets_that_render() {
     let mut s4 = Session::new();
     let id4 = s4.open("locked.pdf", None, saved, Some("pw")).unwrap();
     assert_eq!(s4.print_pdf(id4, &print::Settings { pages: vec![0], ..Default::default() }), Err(EditError::NotPermitted("printing")));
+}
+
+/// A dynamic XFA form's screen-only and print-only objects (`relevant`): on screen, the
+/// screen-only field and draw show and the print-only ones don't; printed, the screen-only field
+/// is left off and the print-only one is on paper. (Draws follow the layers' state on screen
+/// when printed until printing applies the layers' print usage; other viewers read it from the
+/// file.)
+#[test]
+fn xfa_screen_only_and_print_only_objects_show_and_print_where_the_form_says() {
+    let field = |name: &str, attrs: &str| {
+        format!(
+            r#"<field name="{name}" w="3in" h="0.3in" {attrs}><ui><textEdit/></ui><font typeface="Arial" size="10pt"/><value><text>{name} value</text></value></field>"#
+        )
+    };
+    let draw = |name: &str, attrs: &str| {
+        format!(r#"<draw name="{name}" w="3in" h="0.3in" {attrs}><font typeface="Arial" size="10pt"/><value><text>{name} text</text></value></draw>"#)
+    };
+    let xdp = format!(
+        r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/"><template xmlns="http://www.xfa.org/schema/xfa-template/3.3/"><subform name="form" layout="tb">
+ <pageSet><pageArea name="page"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ {}{}{}{}
+</subform></template></xdp:xdp>"##,
+        field("screenField", r#"relevant="-print""#),
+        field("paperField", r#"presence="invisible" relevant="+print""#),
+        draw("screenDraw", r#"relevant="-print""#),
+        draw("paperDraw", r#"presence="invisible" relevant="+print""#),
+    );
+    let mut s = Session::new();
+    let id = s.open("form.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&xdp)), None).expect("opens");
+    let screen = page_texts(&s, id).join("\n");
+    assert!(screen.contains("screenField value") && screen.contains("screenDraw text"), "on screen: {screen}");
+    assert!(!screen.contains("paperField value") && !screen.contains("paperDraw text"), "on screen: {screen}");
+    let sheet = s.print_pdf(id, &print::Settings { pages: vec![0], ..Default::default() }).unwrap();
+    let mut out = Session::new();
+    let printed = out.open("print.pdf", None, Arc::new(sheet), None).unwrap();
+    let paper = page_texts(&out, printed).join("\n");
+    assert!(!paper.contains("screenField value"), "printed: {paper}");
+    assert!(paper.contains("paperField value"), "printed: {paper}");
 }
 
 /// A one-page document whose red square is in a layer; `off` switches the layer off by default.
@@ -3764,7 +4331,9 @@ fn an_optimize_job_reports_its_stages_and_can_be_cancelled() {
         })
         .unwrap();
     assert!(bytes.starts_with(b"%PDF-"));
-    assert_eq!(stages.first(), Some(&OptimizeStage::Discarding));
+    assert_eq!(stages.first(), Some(&OptimizeStage::Reading { done: 0, total: 2 }), "it says what it does first");
+    assert!(!stages.contains(&OptimizeStage::Discarding), "nothing was chosen to discard: {stages:?}");
+    assert!(stages.iter().any(|st| matches!(st, OptimizeStage::Images { .. })), "{stages:?}");
     assert_eq!(&stages[stages.len() - 3..], [OptimizeStage::CleaningUp, OptimizeStage::Merging, OptimizeStage::Writing]);
     let fractions: Vec<f32> = stages.iter().map(|st| st.fraction()).collect();
     assert!(fractions.windows(2).all(|w| w[0] <= w[1]), "the bar never goes back: {fractions:?}");
@@ -3774,6 +4343,20 @@ fn an_optimize_job_reports_its_stages_and_can_be_cancelled() {
         OptimizeStage::Images { done: 5, total: 5 }.fraction(),
         "no images: no division by zero"
     );
+
+    // What the bar shows before anything is reported says nothing of user data either.
+    assert_eq!(OptimizeStage::default(), OptimizeStage::Reading { done: 0, total: 0 });
+    assert_eq!(OptimizeStage::default().fraction(), 0.0);
+    assert!(OptimizeStage::Reading { done: 2, total: 4 }.fraction() > 0.0, "reading pages moves the bar");
+
+    // Discarding says so when something is. This document has no metadata, which only stops it after
+    // the stage is reported.
+    let mut with_discard = Vec::new();
+    let _ = s.optimize_job(id, &settings, &[crate::Hidden::Metadata]).unwrap().run(|st| {
+        with_discard.push(st);
+        true
+    });
+    assert_eq!(with_discard.first(), Some(&OptimizeStage::Discarding));
 
     // Cancelled at the merge: nothing is written, the open document is untouched.
     let before = s.get(id).unwrap().bytes.clone();
@@ -4182,6 +4765,7 @@ fn pasted_added_content_keeps_its_style_and_picture() {
         italic: true,
         size: 12.0,
         color: [0.8, 0.1, 0.2],
+        ink: None,
         align: TextAlign::Center,
         aligns: Vec::new(),
         char_spacing: 0.0,
@@ -4452,6 +5036,25 @@ fn split_by_size_and_bookmarks_and_page_filters() {
     assert_eq!(filter_pages(info, &all, PageParity::Odd, PageOrientation::Portrait), [0, 2, 4]);
 }
 
+/// A zoomed link follows its target page, not its number: deleting a page before the target keeps
+/// the link on that page at its zoom. Deleting the target page drops the link's destination, as
+/// for any link to a deleted page, and undo brings it back with its zoom.
+#[test]
+fn a_zoomed_link_follows_its_page_and_loses_it_when_the_page_is_deleted() {
+    let (mut s, id) = session_with(3);
+    let zoom = LinkZoom::Percent(200.0);
+    let rect = [10.0, 10.0, 60.0, 30.0];
+    s.apply(id, Edit::AddLink { page: 0, rect, action: LinkAction::Page { page: 2, zoom }, style: LinkStyle::default() }).unwrap();
+    let action = |s: &Session| s.get(id).unwrap().links()[0].action.clone();
+    s.apply(id, Edit::DeletePages { pages: vec![1] }).unwrap();
+    assert_eq!(action(&s), LinkAction::Page { page: 1, zoom }, "the link follows its page");
+    s.apply(id, Edit::DeletePages { pages: vec![1] }).unwrap();
+    // The destination is removed, not left pointing at a page that is gone.
+    assert_eq!(action(&s), LinkAction::Other("no action".into()), "no destination left");
+    s.undo(id).unwrap();
+    assert_eq!(action(&s), LinkAction::Page { page: 1, zoom }, "undo restores the destination and its zoom");
+}
+
 #[test]
 fn links_from_urls_and_link_edits() {
     // One page whose text contains a web address.
@@ -4493,8 +5096,12 @@ fn links_from_urls_and_link_edits() {
     assert_eq!(s.get(id).unwrap().links().len(), 1);
     // Link Properties and delete.
     let l = s.get(id).unwrap().links()[0].clone();
-    s.apply(id, Edit::SetLink { page: 0, index: l.index, rect: None, action: Some(LinkAction::Page(0)), style: None }).unwrap();
-    assert_eq!(s.get(id).unwrap().links()[0].action, LinkAction::Page(0));
+    s.apply(
+        id,
+        Edit::SetLink { page: 0, index: l.index, rect: None, action: Some(LinkAction::Page { page: 0, zoom: LinkZoom::FitPage }), style: None },
+    )
+    .unwrap();
+    assert_eq!(s.get(id).unwrap().links()[0].action, LinkAction::Page { page: 0, zoom: LinkZoom::FitPage });
     s.apply(id, Edit::DeleteLink { page: 0, index: l.index }).unwrap();
     assert!(s.get(id).unwrap().links().is_empty());
     assert!(s.apply(id, Edit::RemoveLinks { pages: None }).is_err(), "nothing left to remove");
@@ -4658,6 +5265,85 @@ fn comment_summary_includes_replies_to_replies() {
     assert!(text.contains("FIRST_REPLY"), "{text}");
     assert!(text.contains("NESTED_REPLY"), "replies to replies are summarized: {text}");
     assert!(text.contains("        NESTED_REPLY"), "the nested reply is indented under its parent: {text}");
+}
+
+/// ISO 32000-2 §12.5.6.2: a group subordinate (`/RT /Group`) is part of its primary's comment,
+/// not a reply: the summary leaves it out and writes the replies to it as the comment's.
+#[test]
+fn comment_summary_leaves_group_members_out_and_keeps_their_replies() {
+    let (mut s, id) = session_with(1);
+    s.apply(id, rect_comment(0, [40.0, 40.0, 90.0, 90.0])).unwrap();
+    s.apply(id, Edit::ReplyToAnnotation { page: 0, index: 0, text: "MEMBER_TEXT".into(), author: "Bob".into() }).unwrap();
+    s.apply(id, Edit::ReplyToAnnotation { page: 0, index: 1, text: "REPLY_TO_MEMBER".into(), author: "Carol".into() }).unwrap();
+    let mut all = s.get(id).unwrap().info.annotations.clone();
+    all.iter_mut().find(|a| a.contents.as_deref() == Some("MEMBER_TEXT")).unwrap().grouped = true;
+    let text = comment_summary("doc.pdf", &all, SummarySort::Page);
+    assert!(!text.contains("MEMBER_TEXT") && !text.contains("Bob"), "{text}");
+    assert!(text.lines().any(|l| l == "    REPLY_TO_MEMBER"), "the reply is the comment's, one level in: {text}");
+}
+
+/// The summary follows `/IRT` down from a comment at most 64 steps, group subordinates included:
+/// a reply under a longer chain of subordinates is left out, one under a short chain is written,
+/// and a subordinate listed at its own primary's position (a loop, from a malformed listing)
+/// ends the walk.
+#[test]
+fn comment_summary_follows_a_group_chain_a_bounded_number_of_steps() {
+    let (mut s, id) = session_with(1);
+    s.apply(id, rect_comment(0, [40.0, 40.0, 90.0, 90.0])).unwrap();
+    let top = s.get(id).unwrap().info.annotations.iter().find(|a| a.is_comment()).unwrap().clone();
+    let at = |a: &pdfcraft_render::Annotation| (a.page, a.index);
+    let under = |index: usize, parent: (usize, usize), grouped: bool, text: &str| pdfcraft_render::Annotation {
+        index,
+        parent: Some(parent),
+        grouped,
+        contents: Some(text.into()),
+        ..top.clone()
+    };
+    for (members, written) in [(10, true), (100, false)] {
+        let mut all = vec![top.clone()];
+        let mut up = at(&top);
+        for k in 0..members {
+            let m = under(1000 + k, up, true, "MEMBER");
+            up = at(&m);
+            all.push(m);
+        }
+        all.push(under(5000, up, false, "DEEP_REPLY"));
+        let text = comment_summary("doc.pdf", &all, SummarySort::Page);
+        assert_eq!(text.contains("DEEP_REPLY"), written, "{members}: {text}");
+        assert!(!text.contains("MEMBER"), "{members}: {text}");
+    }
+    let looped = vec![top.clone(), under(top.index, at(&top), true, "LOOP")];
+    let text = comment_summary("doc.pdf", &looped, SummarySort::Page);
+    assert!(!text.contains("LOOP"), "{text}");
+}
+
+/// Deleting a group's primary removes the subordinate's `/IRT` in the same edit, as Acrobat does:
+/// the subordinate lists as a comment of its own and keeps `/RT /Group`. One undo puts the group
+/// back, `/IRT` included.
+#[test]
+fn deleting_a_group_primary_releases_its_member_in_one_undo_step() {
+    let bytes = pdf_with_annots(&[
+        b"<< /Type /Annot /Subtype /Square /Rect [10 10 50 50] /NM (primary) /Contents (PRIMARY_TEXT) >>",
+        b"<< /Type /Annot /Subtype /Circle /Rect [60 60 90 90] /NM (member) /IRT 4 0 R /RT /Group >>",
+    ]);
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("group.pdf", None, Arc::new(bytes), None).unwrap();
+    let names = |s: &Session| -> Vec<(Option<String>, bool, bool)> {
+        s.get(id).unwrap().info.annotations.iter().map(|a| (a.name.clone(), a.is_comment(), a.is_group_member())).collect()
+    };
+    // Listed by top edge: the Circle is the higher one.
+    let grouped = vec![(Some("member".into()), false, true), (Some("primary".into()), true, false)];
+    assert_eq!(names(&s), grouped);
+    s.apply(id, Edit::DeleteAnnotation { page: 0, index: 0 }).unwrap();
+    assert_eq!(names(&s), [(Some("member".into()), true, false)], "a comment of its own");
+    let member = |s: &Session| {
+        let cos = &s.get(id).unwrap().editor.as_ref().unwrap().cos;
+        cos.get(pdfcraft_cos::ObjRef::new(5, 0)).as_dict().cloned().unwrap()
+    };
+    assert!(member(&s).get(b"IRT").is_none() && member(&s).name(b"RT") == Some(b"Group".as_slice()), "{:?}", member(&s));
+    s.undo(id).unwrap();
+    assert_eq!(names(&s), grouped, "one undo puts the group back");
+    assert!(member(&s).reference(b"IRT").is_some());
 }
 
 #[test]
@@ -4854,6 +5540,17 @@ fn bytes_has(haystack: &[u8], needle: &[u8]) -> bool {
 /// ranges and embed a detached CMS over them. The signed bytes keep the
 /// prepared appearance, so they validate exactly like a product signer's file.
 fn sign_prepared(doc: &mut pdfcraft_cos::Document, id: &sign::pkcs12::DigitalId, date: &str) -> Vec<u8> {
+    sign_prepared_with(doc, id, date, |_| {})
+}
+
+/// [`sign_prepared`], with `value` adding to the signature dictionary first (a certification's
+/// `/Reference`, say).
+fn sign_prepared_with(
+    doc: &mut pdfcraft_cos::Document,
+    id: &sign::pkcs12::DigitalId,
+    date: &str,
+    value: impl FnOnce(&mut pdfcraft_cos::Dict),
+) -> Vec<u8> {
     use pdfcraft_cos::{Dict, Object, PdfString};
     let reserve = 8192 + id.certificate.raw.len() + id.chain.iter().map(|c| c.raw.len()).sum::<usize>();
     let mut v = Dict::new();
@@ -4863,6 +5560,8 @@ fn sign_prepared(doc: &mut pdfcraft_cos::Document, id: &sign::pkcs12::DigitalId,
     v.set(b"ByteRange".to_vec(), Object::Array([0].iter().chain(LAYERED_BR_MARK.iter()).map(|n| Object::Int(*n)).collect()));
     v.set(b"Contents".to_vec(), Object::String(PdfString { bytes: vec![0; reserve], hex: true }));
     v.set(b"M".to_vec(), PdfString::literal(date.as_bytes().to_vec()));
+    value(&mut v);
+    let certifies = v.get(b"Reference").is_some();
     let sig = doc.add(Object::Dict(v));
     // The field by name, never by number: a full save (encryption, repairs) is
     // free to renumber objects, and a hardcoded reference would stamp the value
@@ -4872,6 +5571,12 @@ fn sign_prepared(doc: &mut pdfcraft_cos::Document, id: &sign::pkcs12::DigitalId,
     let fields = doc.resolve(&af).as_dict().expect("AcroForm dict").get(b"Fields").cloned().expect("Fields");
     let field = doc.resolve(&fields).as_array().expect("Fields array").iter().filter_map(|o| o.as_ref()).next().expect("signature field");
     doc.update_dict(field, |d| d.set(b"V".to_vec(), Object::Ref(sig))).unwrap();
+    if certifies {
+        // A certification is the signature the catalog's /Perms /DocMDP names (ISO 32000-2, 12.8.2.2).
+        let mut perms = Dict::new();
+        perms.set(b"DocMDP".to_vec(), Object::Ref(sig));
+        doc.update_dict(root, |c| c.set(b"Perms".to_vec(), Object::Dict(perms))).unwrap();
+    }
     let save = pdfcraft_cos::SaveOptions { object_streams: false, ..pdfcraft_cos::SaveOptions::default() };
     let mut out = pdfcraft_cos::write_incremental(doc, &save).unwrap();
     let mark = format!("0 {} {} {}", LAYERED_BR_MARK[0], LAYERED_BR_MARK[1], LAYERED_BR_MARK[2]);
@@ -5103,6 +5808,442 @@ fn real_layered_signatures_round_trip_behind_a_user_password() {
     assert_eq!(t.get(tid).unwrap().signatures[0].status, SignatureStatus::Valid);
 }
 
+/// A one-page file whose unsigned signature field carries a named-layer appearance, in the
+/// geometry of a real one scaled by 4 (every word and drawing synthetic): /N draws /FRM, which
+/// draws n0–n4; n1 a yellow question mark and n4 "Signature Not Verified". Object numbers:
+/// 1 catalog, 2 pages, 3 page (400×300), 4 field, 5 AcroForm, 6 /N, 7 /FRM, 8–12 n0–n4,
+/// 13 Helvetica, 14 page content. `sign_prepared` adds the value.
+fn named_layer_signable_fixture() -> Vec<u8> {
+    named_layer_signable_fixture_with("[0 0 100 100]")
+}
+
+/// [`named_layer_signable_fixture`] with `n1_bbox` as its n1 layer's `/BBox`.
+fn named_layer_signable_fixture_with(n1_bbox: &str) -> Vec<u8> {
+    fn form(bbox: &str, resources: &str, ops: &str) -> String {
+        format!("<< /Type /XObject /Subtype /Form /BBox {bbox} /Resources {resources} /Length {} >>\nstream\n{ops}\nendstream", ops.len())
+    }
+    let helv = "<< /Font << /F1 13 0 R >> >>";
+    let glyph = "1.08 0 0 1.08 46 6 cm";
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 5 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 300] /Contents 14 0 R /Resources << /Font << /F1 13 0 R >> >> /Annots [4 0 R] >>"
+            .to_string(),
+        "<< /FT /Sig /T (Signature1) /Type /Annot /Subtype /Widget /F 132 /Rect [100 100 300 220] /P 3 0 R /AP << /N 6 0 R >> >>".to_string(),
+        "<< /Fields [4 0 R] /SigFlags 3 >>".to_string(),
+        form("[0 0 200 120]", "<< /XObject << /FRM 7 0 R >> >>", "q 1 0 0 1 0 0 cm /FRM Do Q"),
+        form(
+            "[0 0 200 120]",
+            "<< /XObject << /n0 8 0 R /n1 9 0 R /n2 10 0 R /n3 11 0 R /n4 12 0 R >> >>",
+            &format!("q /n0 Do Q q {glyph} /n1 Do Q q /n2 Do Q q {glyph} /n3 Do Q q /n4 Do Q"),
+        ),
+        form("[0 0 100 100]", "<< >>", "% DSBlank"),
+        form(
+            n1_bbox,
+            "<< >>",
+            "q 1 0.84 0.2 rg 0.55 0.4 0 RG 3 w 30 72 m 30 88 42 98 56 98 c 72 98 84 88 84 74 c 66 50 l 58 28 l 44 28 l 44 48 l h B 44 6 14 14 re B Q",
+        ),
+        form("[0 0 200 120]", helv, "BT /F1 13.6 Tf 1 0 0 1 8 62.4 Tm (Digitally signed by) Tj 1 0 0 1 8 48.8 Tm (Test Signer) Tj ET"),
+        form("[0 0 100 100]", "<< >>", "% DSBlank"),
+        form("[0 84 200 120]", helv, "BT /F1 18.8 Tf 1 0 0 1 8 93.2 Tm (Signature Not Verified) Tj ET"),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".to_string(),
+        "<< /Length 44 >>\nstream\nBT /F1 14 Tf 20 270 Td (Contract text) Tj ET\nendstream".to_string(),
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offs = Vec::new();
+    for (k, o) in objs.iter().enumerate() {
+        offs.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", k + 1).as_bytes());
+    }
+    let start = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in &offs {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{start}\n%%EOF", objs.len() + 1).as_bytes());
+    out
+}
+
+/// The status colours as the regenerated icons draw them.
+const VALID_GREEN: [u8; 3] = [0x2D, 0x9D, 0x78];
+const UNKNOWN_AMBER: [u8; 3] = [0xE6, 0x86, 0x19];
+const INVALID_RED: [u8; 3] = [0xD7, 0x37, 0x3F];
+
+/// How many pixels of `rgba` are within 40 of `rgb` on every channel. A regenerated icon's
+/// stroke covers thousands at 1 px/pt; the fixture holds none of these colours otherwise.
+fn pixels_near(rgba: &[u8], rgb: [u8; 3]) -> usize {
+    rgba.as_chunks::<4>().0.iter().filter(|p| p.iter().zip(rgb).all(|(a, b)| a.abs_diff(b) <= 40)).count()
+}
+
+/// The displayed page at 1 px/pt.
+fn displayed_pixels(s: &Session, id: DocId) -> Vec<u8> {
+    let doc = s.get(id).unwrap();
+    let mut renderer = pdfcraft_render::PageRenderer::new(doc.display.clone(), doc.config.clone());
+    let r = renderer.render(pdfcraft_render::RenderRequest { page: 0, scale: 1.0, ..Default::default() });
+    assert!(r.error.is_none(), "{:?}", r.error);
+    r.rgba.to_vec()
+}
+
+fn exported_text(s: &Session, id: DocId) -> String {
+    export::Exporter::new(s.get(id).unwrap()).text_of(&[0]).unwrap()
+}
+
+/// The test identity and the certificate that makes it trusted.
+fn test_identity() -> (sign::pkcs12::DigitalId, sign::x509::Certificate) {
+    let p12 = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12")).unwrap();
+    let id = sign::pkcs12::open(&p12, "test").unwrap();
+    let anchor = id.chain.first().cloned().unwrap_or_else(|| id.certificate.clone());
+    (id, anchor)
+}
+
+/// A named-layer signature through `Session`: the unknown state drawn on opening, the valid one
+/// once trusted, the signed bytes saved unchanged and still valid on reopening.
+fn check_named_layer_states(signed: Arc<Vec<u8>>, password: Option<&str>, anchor: &sign::x509::Certificate) {
+    let mut s = Session::new().with_clock(|| 1_800_000_000);
+    let id = s.open("named.pdf", None, signed.clone(), password).unwrap();
+    let sig = &s.get(id).unwrap().signatures[0];
+    assert_eq!(sig.status, SignatureStatus::Unknown, "untrusted at first");
+    assert!(sig.verdict_shown, "the appearance shows the unknown state");
+    let text = exported_text(&s, id);
+    assert!(text.contains("Validity unknown") && !text.contains("Not Verified"), "{text:?}");
+    let amber = pixels_near(&displayed_pixels(&s, id), UNKNOWN_AMBER);
+    assert!(amber > 500, "{amber} amber pixels");
+    s.set_trusted_certificates(vec![anchor.clone()]);
+    let doc = s.get(id).unwrap();
+    assert_eq!(doc.signatures[0].status, SignatureStatus::Valid);
+    assert!(doc.signatures[0].verdict_shown);
+    assert!(!doc.dirty, "trust is not an edit");
+    let exported = exported_text(&s, id);
+    assert!(exported.contains("Signature valid"), "{exported}");
+    let page = displayed_pixels(&s, id);
+    assert!(pixels_near(&page, VALID_GREEN) > 500 && pixels_near(&page, UNKNOWN_AMBER) < 50, "the page redraws for the new state");
+    // Saving writes the working file, which never held the drawn state.
+    let saved = s.save_bytes(id).unwrap();
+    assert!(saved == signed, "an unchanged save is the signed file exactly");
+    let mut t = Session::new().with_clock(|| 1_800_000_000);
+    t.set_trusted_certificates(vec![anchor.clone()]);
+    let tid = t.open("named-saved.pdf", None, saved, password).unwrap();
+    let sig = &t.get(tid).unwrap().signatures[0];
+    assert!(sig.status == SignatureStatus::Valid && sig.verdict_shown);
+    let exported = exported_text(&t, tid);
+    assert!(exported.contains("Signature valid"), "{exported}");
+}
+
+#[test]
+fn named_layer_signatures_show_their_state_through_trust_save_and_reopen() {
+    let (id, anchor) = test_identity();
+    let mut doc = pdfcraft_cos::Document::open(Arc::new(named_layer_signable_fixture())).unwrap();
+    let signed = Arc::new(sign_prepared(&mut doc, &id, "D:20261002120000+01'00'"));
+    check_named_layer_states(signed, None, &anchor);
+}
+
+#[test]
+fn named_layer_signatures_round_trip_behind_a_user_password() {
+    let (id, anchor) = test_identity();
+    let mut doc = pdfcraft_cos::Document::open(Arc::new(named_layer_signable_fixture())).unwrap();
+    doc.set_encryption(&pdfcraft_cos::NewEncryption {
+        algorithm: pdfcraft_cos::Algorithm::Aes128,
+        user_password: "user",
+        owner_password: "owner",
+        permissions: -1,
+        encrypt_metadata: true,
+        seed: [7; 32],
+    })
+    .unwrap();
+    let encrypted = Arc::new(pdfcraft_cos::write_full(&doc, &pdfcraft_cos::SaveOptions::default()).unwrap());
+    let mut doc = pdfcraft_cos::Document::open_with_password(encrypted, Some("user")).unwrap();
+    let signed = Arc::new(sign_prepared(&mut doc, &id, "D:20261002120000+01'00'"));
+    check_named_layer_states(signed, Some("user"), &anchor);
+}
+
+#[test]
+fn a_tampered_named_layer_signature_shows_the_invalid_state() {
+    let (id, _) = test_identity();
+    let mut doc = pdfcraft_cos::Document::open(Arc::new(named_layer_signable_fixture())).unwrap();
+    let mut signed = sign_prepared(&mut doc, &id, "D:20261002120000+01'00'");
+    let at = signed.windows(15).position(|w| w == b"(Contract text)").unwrap();
+    signed[at + 10] = b'X';
+    let mut s = Session::new().with_clock(|| 1_800_000_000);
+    let id = s.open("tampered.pdf", None, Arc::new(signed), None).unwrap();
+    let sig = &s.get(id).unwrap().signatures[0];
+    assert!(sig.status == SignatureStatus::Invalid && sig.verdict_shown);
+    let exported = exported_text(&s, id);
+    assert!(exported.contains("Signature invalid"), "{exported}");
+    let red = pixels_near(&displayed_pixels(&s, id), INVALID_RED);
+    assert!(red > 500, "{red} red pixels");
+}
+
+/// A trusted named-layer signature.
+fn trusted_named_layer_session() -> (Session, DocId) {
+    let (id, anchor) = test_identity();
+    let mut doc = pdfcraft_cos::Document::open(Arc::new(named_layer_signable_fixture())).unwrap();
+    let signed = Arc::new(sign_prepared(&mut doc, &id, "D:20261002120000+01'00'"));
+    let mut s = Session::new().with_clock(|| 1_800_000_000);
+    let vid = s.open("named.pdf", None, signed, None).unwrap();
+    s.set_trusted_certificates(vec![anchor]);
+    assert_eq!(s.get(vid).unwrap().signatures[0].status, SignatureStatus::Valid);
+    (s, vid)
+}
+
+#[test]
+fn named_layer_states_reach_exports_and_both_print_modes() {
+    // What is drawn on the page is what leaves it.
+    let (s, id) = trusted_named_layer_session();
+    let doc = s.get(id).unwrap();
+    let source = doc.export_source();
+    let mut file = export::Exporter::from_source(export::ExportSource { bytes: doc.bytes.clone(), ..source.clone() });
+    let mut shown = export::Exporter::from_source(source);
+    assert_ne!(shown.png(0, 72.0).unwrap(), file.png(0, 72.0).unwrap(), "image export follows the display copy");
+    let text = shown.text_of(&[0]).unwrap();
+    assert!(text.contains("Signature valid") && !text.contains("Not Verified"), "{text:?}");
+    let mut settings = print::Settings { pages: vec![0], paper: (400.0, 300.0), ..Default::default() };
+    let (_, _, vector) = printed_pixels(s.print_pdf(id, &settings).unwrap());
+    settings.raster = Some(print::Raster { dpi: 72.0, grayscale: false });
+    let (_, _, raster) = printed_pixels(s.print_pdf(id, &settings).unwrap());
+    for (mode, pixels) in [("vector", &vector), ("raster", &raster)] {
+        assert!(pixels_near(pixels, VALID_GREEN) > 500, "{mode} print draws the valid state");
+        assert!(pixels_near(pixels, [255, 214, 51]) < 50, "{mode} print drops the stored question mark");
+    }
+}
+
+#[test]
+fn named_layers_show_beside_comments_that_need_appearances() {
+    // A comment without an appearance makes the display copy for its own sake; the signature's
+    // state is drawn into that same copy.
+    use pdfcraft_cos::{ObjRef, Object};
+    let (signer, anchor) = test_identity();
+    let mut cos = pdfcraft_cos::Document::open(Arc::new(named_layer_signable_fixture())).unwrap();
+    let square = cos.add(pdfcraft_cos::Lexer::new(b"<< /Type /Annot /Subtype /Square /Rect [10 10 60 60] /C [1 0 0] >>", 0).object().unwrap());
+    cos.update_dict(ObjRef::new(3, 0), |page| page.set(b"Annots".to_vec(), Object::Array(vec![Object::Ref(ObjRef::new(4, 0)), Object::Ref(square)])))
+        .unwrap();
+    let signed = Arc::new(sign_prepared(&mut cos, &signer, "D:20261002120000+01'00'"));
+    let mut s = Session::new().with_clock(|| 1_800_000_000);
+    let id = s.open("commented.pdf", None, signed, None).unwrap();
+    s.set_trusted_certificates(vec![anchor]);
+    let shown = pdfcraft_cos::Document::open(s.get(id).unwrap().display.clone()).unwrap();
+    assert!(shown.get(square).as_dict().is_some_and(|d| d.contains(b"AP")), "the comment's appearance is in the same copy");
+    assert!(s.get(id).unwrap().signatures[0].verdict_shown);
+    let green = pixels_near(&displayed_pixels(&s, id), VALID_GREEN);
+    assert!(green > 500, "{green} green pixels");
+}
+
+#[test]
+fn named_layers_show_beside_fields_the_viewer_draws() {
+    // A text field without an appearance makes the display copy for its own sake; the
+    // signature's state is drawn into that same copy.
+    use pdfcraft_cos::{Lexer, ObjRef, Object};
+    let (signer, anchor) = test_identity();
+    let mut cos = pdfcraft_cos::Document::open(Arc::new(named_layer_signable_fixture())).unwrap();
+    let field = cos.add(
+        Lexer::new(
+            b"<< /Type /Annot /Subtype /Widget /FT /Tx /T (name) /V (Test Signer) /DA (/F1 12 Tf 0 g) /Rect [20 20 380 40] /F 4 /P 3 0 R >>",
+            0,
+        )
+        .object()
+        .unwrap(),
+    );
+    let both = Object::Array(vec![Object::Ref(ObjRef::new(4, 0)), Object::Ref(field)]);
+    cos.update_dict(ObjRef::new(3, 0), |page| page.set(b"Annots".to_vec(), both.clone())).unwrap();
+    let resources = Lexer::new(b"<< /Font << /F1 13 0 R >> >>", 0).object().unwrap();
+    cos.update_dict(ObjRef::new(5, 0), |form| {
+        form.set(b"Fields".to_vec(), both);
+        form.set(b"DR".to_vec(), resources);
+    })
+    .unwrap();
+    let signed = Arc::new(sign_prepared(&mut cos, &signer, "D:20261002120000+01'00'"));
+    let mut s = Session::new().with_clock(|| 1_800_000_000);
+    let id = s.open("filled.pdf", None, signed, None).unwrap();
+    s.set_trusted_certificates(vec![anchor]);
+    let shown = pdfcraft_cos::Document::open(s.get(id).unwrap().display.clone()).unwrap();
+    assert!(shown.get(field).as_dict().is_some_and(|d| d.contains(b"AP")), "the field's appearance is in the same copy");
+    assert!(s.get(id).unwrap().signatures[0].verdict_shown);
+    let green = pixels_near(&displayed_pixels(&s, id), VALID_GREEN);
+    assert!(green > 500, "{green} green pixels");
+}
+
+#[test]
+fn a_metadata_edit_keeps_the_regenerated_state() {
+    let (mut s, id) = trusted_named_layer_session();
+    s.apply(id, Edit::SetInfo { key: "Title".into(), value: "Contract".into() }).unwrap();
+    let doc = s.get(id).unwrap();
+    assert!(doc.signatures[0].verdict_shown, "the page still draws the state");
+    let exported = exported_text(&s, id);
+    assert!(exported.contains("Signature valid"), "{exported}");
+}
+
+#[test]
+fn a_metadata_edit_that_changes_a_verdict_redraws_it() {
+    // A certification that allows no changes: setting the title invalidates the signature, and
+    // the page has to say so rather than keep the valid state it drew.
+    let (signer, anchor) = test_identity();
+    let mut cos = pdfcraft_cos::Document::open(Arc::new(named_layer_signable_fixture())).unwrap();
+    let signed = sign_prepared_with(&mut cos, &signer, "D:20261002120000+01'00'", |v| {
+        let reference =
+            pdfcraft_cos::Lexer::new(b"[<< /Type /SigRef /TransformMethod /DocMDP /TransformParams << /Type /TransformParams /P 1 /V /1.2 >> >>]", 0)
+                .object()
+                .unwrap();
+        v.set(b"Reference".to_vec(), reference);
+    });
+    let mut s = Session::new().with_clock(|| 1_800_000_000);
+    let id = s.open("certified.pdf", None, Arc::new(signed), None).unwrap();
+    s.set_trusted_certificates(vec![anchor]);
+    assert_eq!(s.get(id).unwrap().signatures[0].status, SignatureStatus::Valid);
+    s.apply(id, Edit::SetInfo { key: "Title".into(), value: "Changed".into() }).unwrap();
+    let doc = s.get(id).unwrap();
+    assert_eq!(doc.signatures[0].status, SignatureStatus::Invalid);
+    assert!(doc.signatures[0].verdict_shown);
+    let exported = exported_text(&s, id);
+    assert!(exported.contains("Signature invalid"), "{exported}");
+    let red = pixels_near(&displayed_pixels(&s, id), INVALID_RED);
+    assert!(red > 500, "{red} red pixels");
+}
+
+#[test]
+fn verdict_marks_carry_over_only_while_every_verdict_is_unchanged() {
+    let (s, id) = trusted_named_layer_session();
+    let previous = s.get(id).unwrap().signatures.to_vec();
+    assert!(previous[0].verdict_shown);
+    let mut same = previous.clone();
+    same[0].verdict_shown = false;
+    assert!(carry_verdict_marks(&previous, &mut same) && same[0].verdict_shown);
+    let mut changed = previous.clone();
+    (changed[0].verdict_shown, changed[0].status) = (false, SignatureStatus::Invalid);
+    assert!(!carry_verdict_marks(&previous, &mut changed) && !changed[0].verdict_shown);
+    let mut later = previous.clone();
+    (later[0].verdict_shown, later[0].revision) = (false, previous[0].revision + 1);
+    assert!(!carry_verdict_marks(&previous, &mut later) && !later[0].verdict_shown);
+}
+
+#[test]
+fn releasing_the_working_file_drops_the_marks() {
+    // The page shows the original's own artwork until the refresh finishes.
+    let (mut s, id) = trusted_named_layer_session();
+    let doc = s.docs.iter_mut().find(|d| d.id == id).unwrap();
+    assert!(doc.signatures[0].verdict_shown);
+    Session::release_working(doc);
+    assert!(!doc.signatures[0].verdict_shown);
+}
+
+#[test]
+fn background_open_uses_the_current_trust_at_commit() {
+    let (signer, anchor) = test_identity();
+    let mut cos = pdfcraft_cos::Document::open(Arc::new(named_layer_signable_fixture())).unwrap();
+    let signed = Arc::new(sign_prepared(&mut cos, &signer, "D:20261002120000+01'00'"));
+    let mut s = Session::new().with_clock(|| 1_800_000_000);
+    let prepared = s.open_context().prepare_open("background.pdf", None, signed, None).unwrap();
+    s.set_trusted_certificates(vec![anchor]);
+    let id = s.commit_open(prepared);
+    let sig = &s.get(id).unwrap().signatures[0];
+    assert!(sig.status == SignatureStatus::Valid && sig.verdict_shown);
+    let exported = exported_text(&s, id);
+    assert!(exported.contains("Signature valid"), "{exported}");
+}
+
+#[test]
+fn background_open_uses_the_current_trust_and_language_at_commit() {
+    // Both changed while the document was prepared: the state and its words are both the new ones.
+    let (signer, anchor) = test_identity();
+    let mut cos = pdfcraft_cos::Document::open(Arc::new(named_layer_signable_fixture())).unwrap();
+    let signed = Arc::new(sign_prepared(&mut cos, &signer, "D:20261002120000+01'00'"));
+    let mut s = Session::new().with_clock(|| 1_800_000_000);
+    let prepared = s.open_context().prepare_open("background.pdf", None, signed, None).unwrap();
+    s.set_trusted_certificates(vec![anchor]);
+    s.set_signature_captions(StatusCaptions {
+        valid: "Signatur gültig".into(),
+        unknown: "Gültigkeit unbekannt".into(),
+        invalid: "Signatur ungültig".into(),
+    });
+    let id = s.commit_open(prepared);
+    assert_eq!(s.get(id).unwrap().signatures[0].status, SignatureStatus::Valid);
+    let exported = exported_text(&s, id);
+    assert!(exported.contains("Signatur gültig"), "{exported}");
+}
+
+#[test]
+fn printing_draws_signature_states_only_where_the_screen_does() {
+    let (mut s, id) = trusted_named_layer_session();
+    let settings = print::Settings { pages: vec![0], paper: (400.0, 300.0), ..Default::default() };
+    // The screen falls back to the file's artwork when its display copy cannot be written, and
+    // takes the marks with it; print follows.
+    let doc = s.docs.iter_mut().find(|d| d.id == id).unwrap();
+    let mut cleared = doc.signatures.to_vec();
+    cleared[0].verdict_shown = false;
+    doc.signatures = Arc::new(cleared);
+    let (_, _, printed) = printed_pixels(s.print_pdf(id, &settings).unwrap());
+    let green = pixels_near(&printed, VALID_GREEN);
+    assert!(green < 50, "{green} green pixels");
+}
+
+#[test]
+fn a_failed_display_write_drops_the_marks() {
+    let (mut s, id) = trusted_named_layer_session();
+    let doc = s.docs.iter_mut().find(|d| d.id == id).unwrap();
+    let mut signatures = doc.signatures.to_vec();
+    assert!(signatures[0].verdict_shown);
+    // A stream-limited document is read-only: the writer refuses it.
+    let unwritable = pdfcraft_cos::Document::open_with_stream_limit(doc.bytes.clone(), None, 1).unwrap();
+    let editor = doc.editor.as_mut().unwrap();
+    let shown = write_display_copy(editor, &doc.bytes, &unwritable, &mut signatures);
+    assert!(Arc::ptr_eq(&shown, &doc.bytes), "the page falls back to the file's own artwork");
+    assert!(!signatures[0].verdict_shown, "so nothing counts as drawn");
+    // Logged once, however many refreshes lose the copy again.
+    write_display_copy(editor, &doc.bytes, &unwritable, &mut signatures);
+    let logged = editor.cos.repair_log().iter().filter(|l| l.contains("the display copy could not be written")).count();
+    assert_eq!(logged, 1);
+}
+
+#[test]
+fn background_open_uses_the_current_caption_language_at_commit() {
+    let (mut s, id) = trusted_named_layer_session();
+    let bytes = s.get(id).unwrap().bytes.clone();
+    let prepared = s.open_context().prepare_open("background.pdf", None, bytes, None).unwrap();
+    s.set_signature_captions(StatusCaptions {
+        valid: "Signatur gültig".into(),
+        unknown: "Gültigkeit unbekannt".into(),
+        invalid: "Signatur ungültig".into(),
+    });
+    let later = s.commit_open(prepared);
+    let exported = exported_text(&s, later);
+    assert!(exported.contains("Signatur gültig"), "{exported}");
+    assert!(s.get(later).unwrap().signatures[0].verdict_shown);
+    assert!(!s.get(later).unwrap().dirty);
+}
+
+#[test]
+fn caption_language_follows_the_session_captions() {
+    let (mut s, id) = trusted_named_layer_session();
+    let generation = s.get(id).unwrap().generation;
+    let german = StatusCaptions { valid: "Signatur gültig".into(), unknown: "Gültigkeit unbekannt".into(), invalid: "Signatur ungültig".into() };
+    s.set_signature_captions(german);
+    let doc = s.get(id).unwrap();
+    assert!(!doc.dirty && doc.generation == generation, "captions are not an edit");
+    assert!(doc.signatures[0].verdict_shown);
+    let exported = exported_text(&s, id);
+    assert!(exported.contains("Signatur gültig"), "{exported}");
+    // Documents opened later draw with them too.
+    let (signer, _) = test_identity();
+    let mut cos = pdfcraft_cos::Document::open(Arc::new(named_layer_signable_fixture())).unwrap();
+    let later = s.open("later.pdf", None, Arc::new(sign_prepared(&mut cos, &signer, "D:20261002120000+01'00'")), None).unwrap();
+    let exported = exported_text(&s, later);
+    assert!(exported.contains("Signatur gültig"), "{exported}");
+}
+
+#[test]
+fn non_win_ansi_captions_embed_inter_in_the_display_copy_only() {
+    // Words WinAnsi cannot encode are drawn in Inter, embedded into the display copy only.
+    let (mut s, id) = trusted_named_layer_session();
+    let russian = StatusCaptions {
+        valid: "Подпись действительна".into(),
+        unknown: "Действительность неизвестна".into(),
+        invalid: "Подпись недействительна".into(),
+    };
+    s.set_signature_captions(russian);
+    let exported = exported_text(&s, id);
+    assert!(exported.contains("Подпись действительна"), "{exported}");
+    let doc = s.get(id).unwrap();
+    assert!(bytes_has(&doc.display, b"/BaseFont /Inter") && !bytes_has(&doc.bytes, b"/BaseFont /Inter"), "Inter goes into the display copy only");
+}
+
 #[test]
 #[ignore = "timing probe"]
 fn probe_edit_latency_on_a_large_signed_document() {
@@ -5210,6 +6351,35 @@ fn backgrounds_and_watermarks_from_files() {
     // A bad file is refused clearly.
     let junk = MarkFile { name: "x.png".into(), bytes: Arc::new(b"not an image".to_vec()), page: 0 };
     assert!(s.apply(id, Edit::AddBackground { pages: vec![0], settings: Background::default(), replace: true, file: Some(junk) }).is_err());
+}
+
+/// The web build reads a page at a time (prepared on the page, recognised in a worker, the
+/// lines sent back as JSON); with the real ocrs engine that finds the same words as reading in
+/// one go (needs the models: `cargo xtask models`; skipped without them).
+#[test]
+fn reading_a_page_at_a_time_finds_the_same_words() {
+    let settings = ocr::OcrSettings::default();
+    let Ok(engines) = ocr::recognizers(&settings) else {
+        eprintln!("skipped: OCR models not installed");
+        return;
+    };
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let text = s.create_from_text("t", "Invoice 42: pay by Friday").unwrap();
+    let typed = s.open("text.pdf", None, text, None).unwrap();
+    let png = export::Exporter::new(s.get(typed).unwrap()).png(0, 150.0).unwrap();
+    let scan = s.create_from_images(&[("scan.png".into(), png.clone()), ("scan2.png".into(), png)]).unwrap();
+    let id = s.open("scan.pdf", None, scan, None).unwrap();
+    let at_once = s.ocr_job(id, &[], settings.clone()).unwrap().run(&engines, |_, _| true);
+    let mut steps = s.ocr_job(id, &[], settings).unwrap().steps();
+    let mut one_by_one = Vec::new();
+    while let Some(next) = steps.next_page() {
+        let shot = next.unwrap();
+        let lines = engines.primary.recognize(shot.image().unwrap(), &pdfcraft_ocr::RecognizeOptions::default()).unwrap();
+        let sent = ocr::lines_from_json(&pdfcraft_ocr::lines_to_json(&lines), engines.primary.id()).map_err(|e| e.to_string());
+        one_by_one.push(shot.place(sent.map(|lines| ocr::StrategyOutcome { lines, ..Default::default() })));
+    }
+    assert_eq!(one_by_one, at_once);
+    assert!(at_once.len() == 2 && at_once.iter().all(|p| p.skipped.is_none() && !p.words.is_empty()), "{at_once:?}");
 }
 
 /// Scan & OCR ▸ Recognize text on a page that is only a picture of text (needs the models:
@@ -5455,11 +6625,365 @@ fn form_javascript_validates_calculates_and_formats() {
     assert!(s.get(id).unwrap().form.iter().find(|f| f.name == "total").unwrap().read_only());
     assert_eq!(s.get(id).unwrap().can_undo(), Some("Run JavaScript"));
 
+    s.apply(id, Edit::InsertBlankPage { at: 1, width: 200.0, height: 300.0 }).unwrap();
+    s.apply(id, Edit::DuplicateField { name: "go".into(), pages: vec![1] }).unwrap();
+    let props = Box::new(FieldProps { caption: Some((0, "Continue".into())), ..Default::default() });
+    s.apply(id, Edit::SetFieldProps { name: "go".into(), props }).unwrap();
+    s.apply(id, Edit::SetFieldProps { name: "go".into(), props: Box::new(FieldProps { caption: Some((1, "Old".into())), ..Default::default() }) })
+        .unwrap();
+    let caption =
+        s.run_javascript(id, "getField('go').buttonSetCaption('Continue'); event.value = getField('go').buttonGetCaption();", Some("go")).unwrap();
+    assert_eq!(caption.error, None);
+    assert_eq!(caption.result.as_deref(), Some("Continue"));
+    assert_eq!(
+        s.get(id).unwrap().form.iter().find(|f| f.name == "go").map(|f| f.widgets.iter().map(|w| w.caption.as_deref()).collect::<Vec<_>>()),
+        Some(vec![Some("Continue"), Some("Continue")]),
+        "setting a caption already shown by the first widget updates every widget",
+    );
+    assert_eq!(s.get(id).unwrap().can_undo(), Some("Run JavaScript"));
+    s.undo(id).unwrap();
+    assert_eq!(
+        s.get(id).unwrap().form.iter().find(|f| f.name == "go").and_then(|f| f.widgets.first()).and_then(|w| w.caption.as_deref()),
+        Some("Continue"),
+        "undo keeps the first widget's original caption",
+    );
+    assert_eq!(
+        s.get(id).unwrap().form.iter().find(|f| f.name == "go").and_then(|f| f.widgets.get(1)).and_then(|w| w.caption.as_deref()),
+        Some("Old"),
+        "undo restores the second widget's original caption",
+    );
+    s.redo(id).unwrap();
+    assert_eq!(
+        s.get(id).unwrap().form.iter().find(|f| f.name == "go").and_then(|f| f.widgets.first()).and_then(|w| w.caption.as_deref()),
+        Some("Continue")
+    );
+    assert_eq!(
+        s.get(id).unwrap().form.iter().find(|f| f.name == "go").and_then(|f| f.widgets.get(1)).and_then(|w| w.caption.as_deref()),
+        Some("Continue")
+    );
+
     // JavaScript off: scripts don't run.
     s.set_javascript(false);
     s.apply(id, Edit::SetFieldValue { name: "qty".into(), value: FieldValue::Text("500".into()) }).unwrap();
     assert_eq!(value(&s, "total"), ["12"]);
     assert!(s.run_javascript(id, "1", None).is_err());
+}
+
+#[test]
+fn javascript_field_colours_persist_and_undo_without_changing_other_appearance_properties() {
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("order.pdf", None, Arc::new(scripted_form()), None).unwrap();
+    s.apply(
+        id,
+        Edit::SetFieldProps {
+            name: "price".into(),
+            props: Box::new(FieldProps {
+                appearance: Some(pdfcraft_forms::LookPatch {
+                    border: Some(Some([0.1, 0.2, 0.3])),
+                    font: Some(pdfcraft_forms::FieldFont::Courier),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+        },
+    )
+    .unwrap();
+    let before = s.get(id).unwrap().form.iter().find(|f| f.name == "price").unwrap().value.clone();
+    let out = s.run_javascript(id, "var f = getField('price'); f.fillColor = color.red; f.textColor = color.blue;", None).unwrap();
+    assert_eq!(out.error, None);
+    assert_eq!(s.get(id).unwrap().can_undo(), Some("Run JavaScript"));
+
+    let inspect = |bytes: Arc<Vec<u8>>| {
+        let doc = pdfcraft_cos::Document::open(bytes).unwrap();
+        let f = pdfcraft_forms::fields(&doc).into_iter().find(|f| f.name == "price").unwrap();
+        let look = pdfcraft_forms::look(&doc, &f);
+        assert_eq!(look.fill, Some([1.0, 0.0, 0.0]));
+        assert_eq!(look.text, [0.0, 0.0, 1.0]);
+        assert_eq!(look.border, Some([0.1, 0.2, 0.3]));
+        assert_eq!(look.font, pdfcraft_forms::FieldFont::Courier);
+        assert_eq!(f.value, before);
+    };
+    inspect(s.save_bytes(id).unwrap());
+    s.undo(id).unwrap();
+    let undone = pdfcraft_cos::Document::open(s.save_bytes(id).unwrap()).unwrap();
+    let f = pdfcraft_forms::fields(&undone).into_iter().find(|f| f.name == "price").unwrap();
+    assert_eq!(pdfcraft_forms::look(&undone, &f).fill, None);
+    s.redo(id).unwrap();
+    inspect(s.save_bytes(id).unwrap());
+
+    let reopened = s.open("saved.pdf", None, s.save_bytes(id).unwrap(), None).unwrap();
+    let reopened_doc = pdfcraft_cos::Document::open(s.save_bytes(reopened).unwrap()).unwrap();
+    let f = pdfcraft_forms::fields(&reopened_doc).into_iter().find(|f| f.name == "price").unwrap();
+    assert_eq!(pdfcraft_forms::look(&reopened_doc, &f).fill, Some([1.0, 0.0, 0.0]));
+    assert_eq!(pdfcraft_forms::look(&reopened_doc, &f).text, [0.0, 0.0, 1.0]);
+}
+
+#[test]
+fn javascript_invalid_field_colour_array_is_refused_without_partial_changes() {
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("order.pdf", None, Arc::new(scripted_form()), None).unwrap();
+    let before = s.save_bytes(id).unwrap();
+    let err = s.run_javascript(id, "var f = getField('price'); f.value = '9'; f.fillColor = ['RGB', 2, 0, 0];", None).unwrap_err();
+    assert!(err.to_string().contains("finite values between 0 and 1"), "{err}");
+    assert_eq!(s.save_bytes(id).unwrap(), before, "a refused script changes nothing");
+}
+
+#[test]
+fn javascript_field_colours_respect_document_fill_permissions() {
+    let mut plain = pdfcraft_cos::Document::open(Arc::new(scripted_form())).unwrap();
+    plain
+        .set_encryption(&pdfcraft_cos::NewEncryption {
+            algorithm: pdfcraft_cos::Algorithm::Aes256,
+            user_password: "",
+            owner_password: "owner",
+            permissions: 0,
+            encrypt_metadata: true,
+            seed: [7; 32],
+        })
+        .unwrap();
+    let bytes = Arc::new(pdfcraft_cos::write_full(&plain, &Default::default()).unwrap());
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("locked.pdf", None, bytes, None).unwrap();
+    assert!(!s.get(id).unwrap().allows_form_filling());
+    assert_eq!(
+        s.run_javascript(id, "getField('price').fillColor = color.red;", None).unwrap_err(),
+        EditError::NotPermitted("filling in form fields")
+    );
+    assert!(!s.get(id).unwrap().dirty);
+}
+
+#[test]
+fn calculate_now_updates_live_fields_in_one_undo_step() {
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("calculate-now.pdf", None, Arc::new(scripted_form()), None).unwrap();
+    let out = s
+        .run_javascript(
+            id,
+            "getField('price').value = 3; getField('qty').value = 2; calculateNow(); var seen = getField('total').value; console.println(seen);",
+            Some("go"),
+        )
+        .unwrap();
+    assert!(out.console.iter().any(|line| line == "6"), "next statement sees calculation result: {out:?}");
+    let total = s.get(id).unwrap().form.iter().find(|f| f.name == "total").unwrap().value.clone();
+    assert_eq!(total, ["6"]);
+    assert_eq!(s.get(id).unwrap().can_undo(), Some("Run JavaScript"));
+    s.undo(id).unwrap();
+    assert!(s.get(id).unwrap().form.iter().find(|f| f.name == "total").unwrap().value.is_empty());
+    s.redo(id).unwrap();
+    assert_eq!(s.get(id).unwrap().form.iter().find(|f| f.name == "total").unwrap().value, ["6"]);
+    let bytes = s.save_bytes(id).unwrap();
+    let reopened = s.open("reopened.pdf", None, bytes, None).unwrap();
+    assert_eq!(s.get(reopened).unwrap().form.iter().find(|f| f.name == "total").unwrap().value, ["6"]);
+}
+
+#[test]
+fn calculate_now_applies_format_script_to_updated_appearance() {
+    let mut session = Session::new().with_clock(|| 1_700_000_000);
+    let id = session.open("calculate-format.pdf", None, Arc::new(scripted_form()), None).unwrap();
+    session.run_javascript(id, "getField('price').value = 3; getField('qty').value = 2; calculateNow();", None).unwrap();
+
+    assert_eq!(session.get(id).unwrap().form.iter().find(|field| field.name == "total").unwrap().value, ["6"]);
+    assert!(page_texts(&session, id)[0].contains("USD 6.00"), "the appearance uses the Format script");
+}
+
+#[test]
+fn calculation_scripts_are_built_only_for_scripts_that_call_calculate_now() {
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("calculate-list.pdf", None, Arc::new(scripted_form()), None).unwrap();
+    crate::js::CALCULATION_SCRIPT_BUILDS.with(|calls| calls.set(0));
+
+    s.run_javascript(id, "1 + 1", None).unwrap();
+    assert_eq!(crate::js::CALCULATION_SCRIPT_BUILDS.with(std::cell::Cell::get), 0);
+
+    s.run_javascript(id, "calculateNow();", None).unwrap();
+    assert_eq!(crate::js::CALCULATION_SCRIPT_BUILDS.with(std::cell::Cell::get), 1);
+
+    use pdfcraft_forms::{FieldEvent, Scripts};
+    let cos = pdfcraft_cos::Document::open(Arc::new(scripted_form())).unwrap();
+    let fields = pdfcraft_forms::fields(&cos);
+    let target = fields.iter().find(|f| f.name == "go").unwrap();
+    let mut runner = crate::js::JsRunner::new(&cos, "calculate-list.pdf", false);
+    crate::js::CALCULATION_SCRIPT_BUILDS.with(|calls| calls.set(0));
+
+    runner.run(FieldEvent::Calculate, "1 + 1", target, "", &fields);
+    assert_eq!(crate::js::CALCULATION_SCRIPT_BUILDS.with(std::cell::Cell::get), 0);
+
+    runner.run(FieldEvent::Calculate, "calculateNow();", target, "", &fields);
+    assert_eq!(crate::js::CALCULATION_SCRIPT_BUILDS.with(std::cell::Cell::get), 1);
+    runner.run(FieldEvent::Calculate, "calculateNow();", target, "", &fields);
+    assert_eq!(crate::js::CALCULATION_SCRIPT_BUILDS.with(std::cell::Cell::get), 1);
+}
+
+#[test]
+fn calculate_now_in_a_document_script_helper_gets_the_calculation_list() {
+    let helpers = "function times\\(a, b\\) { return a * b; } function recalc\\(\\) { calculateNow\\(\\); }";
+    let mut session = Session::new().with_clock(|| 1_700_000_000);
+    let id = session.open("calculate-helper.pdf", None, Arc::new(scripted_form_with(helpers)), None).unwrap();
+    let out = session
+        .run_javascript(id, "getField('price').value = 3; getField('qty').value = 2; recalc(); console.println(getField('total').value);", None)
+        .unwrap();
+
+    assert!(out.error.is_none(), "{out:?}");
+    assert!(out.console.iter().any(|line| line == "6"), "the document helper recalculated total: {out:?}");
+}
+
+#[test]
+fn calculate_now_uses_calculation_order_and_bounds_recursion() {
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("calculate-chain.pdf", None, Arc::new(scripted_form()), None).unwrap();
+    for (name, script) in
+        [("qty", "event.value = Number(getField('price').value) + 1;"), ("total", "event.value = Number(getField('qty').value) * 2;")]
+    {
+        s.apply(id, Edit::SetFieldScript { name: name.into(), event: "calculate".into(), script: Some(script.into()) }).unwrap();
+    }
+    s.apply(id, Edit::SetCalculationOrder { names: vec!["qty".into(), "total".into()] }).unwrap();
+    let out = s.run_javascript(id, "getField('price').value = 3; calculateNow(); console.println(getField('total').value);", None).unwrap();
+    assert!(out.error.is_none(), "{out:?}");
+    assert!(out.console.iter().any(|line| line == "8"), "{out:?}");
+
+    for (name, script) in
+        [("qty", "event.value = Number(getField('total').value) + 1;"), ("total", "event.value = Number(getField('qty').value) + 1;")]
+    {
+        s.apply(id, Edit::SetFieldScript { name: name.into(), event: "calculate".into(), script: Some(script.into()) }).unwrap();
+    }
+    let cyclic = s.run_javascript(id, "calculateNow();", None).unwrap();
+    assert!(cyclic.error.is_none(), "a cyclic calculation runs once in order: {cyclic:?}");
+
+    s.apply(id, Edit::SetFieldScript { name: "total".into(), event: "calculate".into(), script: Some("calculateNow(); event.value = 12;".into()) })
+        .unwrap();
+    let out = s.run_javascript(id, "calculateNow();", None).unwrap();
+    assert!(out.console.iter().any(|line| line.contains("calculateNow recursion limit exceeded")), "{out:?}");
+    s.set_javascript(false);
+    assert!(s.run_javascript(id, "calculateNow();", None).is_err());
+    s.set_javascript(true);
+    assert!(s.run_javascript(id, "1 + 1", None).unwrap().error.is_none());
+}
+
+#[test]
+fn calculation_order_cache_tracks_script_edits_in_a_batch() {
+    let mut session = Session::new().with_clock(|| 1_700_000_000);
+    let id = session.open("calculate-batch.pdf", None, Arc::new(scripted_form()), None).unwrap();
+    session
+        .apply(
+            id,
+            Edit::Batch {
+                label: "Set calculations".into(),
+                edits: vec![
+                    Edit::SetFieldScript {
+                        name: "qty".into(),
+                        event: "calculate".into(),
+                        script: Some("event.value = Number(getField('price').value) + 1;".into()),
+                    },
+                    Edit::SetFieldScript {
+                        name: "total".into(),
+                        event: "calculate".into(),
+                        script: Some("event.value = Number(getField('qty').value) * 2;".into()),
+                    },
+                    Edit::SetCalculationOrder { names: vec!["qty".into(), "total".into()] },
+                    Edit::SetFieldValue { name: "price".into(), value: FieldValue::Text("3".into()) },
+                ],
+            },
+        )
+        .unwrap();
+    let total = session.get(id).unwrap().form.iter().find(|field| field.name == "total").unwrap().value.clone();
+    assert_eq!(total, ["8"]);
+}
+
+#[test]
+fn calculation_order_cache_tracks_field_property_edits_in_a_batch() {
+    use form_scripts::{CalcOp, Calculate};
+
+    let mut session = Session::new().with_clock(|| 1_700_000_000);
+    let id = session.open("calculate-props-batch.pdf", None, Arc::new(scripted_form()), None).unwrap();
+    session
+        .apply(
+            id,
+            Edit::Batch {
+                label: "Change calculation".into(),
+                edits: vec![
+                    Edit::SetFieldScript {
+                        name: "qty".into(),
+                        event: "format".into(),
+                        script: Some("calculateNow(); console.println(getField('total').value);".into()),
+                    },
+                    Edit::SetFieldValue { name: "qty".into(), value: FieldValue::Text("3".into()) },
+                    Edit::SetFieldProps {
+                        name: "total".into(),
+                        props: Box::new(FieldProps {
+                            calculate: Some(Calculate::Simple { op: CalcOp::Sum, fields: vec!["qty".into()] }),
+                            ..FieldProps::default()
+                        }),
+                    },
+                    Edit::SetFieldValue { name: "qty".into(), value: FieldValue::Text("4".into()) },
+                ],
+            },
+        )
+        .unwrap();
+
+    let total = session.get(id).unwrap().form.iter().find(|field| field.name == "total").unwrap().value.clone();
+    assert_eq!(total, ["4"]);
+    let output = session.take_js_output(id);
+    assert!(output.console.iter().any(|line| line == "4"), "calculateNow observed the refreshed Sum: {output:?}");
+}
+
+#[test]
+fn calculation_order_cache_refreshes_after_inserting_pages() {
+    use pdfcraft_forms::{FieldEvent, Scripts};
+
+    let mut doc = pdfcraft_cos::Document::open(Arc::new(scripted_form())).unwrap();
+    pdfcraft_forms::set_value(&mut doc, "qty", &FieldValue::Text("3".into())).unwrap();
+    let fields = pdfcraft_forms::fields(&doc);
+    let qty = fields.iter().find(|field| field.name == "qty").unwrap();
+    let mut js = crate::js::JsRunner::new(&doc, "destination.pdf", false);
+    js.run(FieldEvent::Format, "calculateNow();", qty, "", &fields);
+
+    let source = pdfcraft_testkit::Pdf::new()
+        .obj("<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] /CO [4 0 R] >> >>")
+        .obj("<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>")
+        .obj("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 300] /Annots [4 0 R] >>")
+        .obj("<< /Type /Annot /Subtype /Widget /FT /Tx /T (importedTotal) /Rect [20 200 180 220] /V (0) /AA << /C << /S /JavaScript /JS (event.value = 9; console.println('inserted field calculated');) >> >> >>")
+        .build();
+    let mut cx = EditCtx::new(None, 0);
+    cx.js = Some(js);
+    run_edit(
+        &mut doc,
+        &Edit::InsertPagesFrom {
+            name: "source.pdf".into(),
+            bytes: Arc::new(source),
+            pages: None,
+            at: 1,
+            field_conflicts: pdfcraft_organize::FieldConflicts::Rename,
+        },
+        &mut cx,
+    )
+    .unwrap();
+
+    let fields = pdfcraft_forms::fields(&doc);
+    let qty = fields.iter().find(|field| field.name == "qty").unwrap();
+    let js = cx.js.as_mut().unwrap();
+    let result = js.run(FieldEvent::Format, "calculateNow();", qty, "", &fields);
+    assert!(
+        result.changes.iter().any(|change| {
+            change.name == "importedTotal" && change.value.as_ref().is_some_and(|value| value.len() == 1 && value.first().is_some_and(|v| v == "9"))
+        }),
+        "imported calculation result: {:?}",
+        result.changes
+    );
+    assert!(js.output.console.iter().any(|line| line == "inserted field calculated"), "{:#?}", js.output);
+}
+
+#[test]
+fn javascript_field_rect_moves_first_widget_and_undoes() {
+    let mut s = Session::new();
+    let id = s.open("rect.pdf", None, Arc::new(scripted_form()), None).unwrap();
+    let initial = s.get(id).unwrap().form.iter().find(|f| f.name == "price").unwrap().widgets[0].rect;
+    s.run_javascript(id, "getField('price').rect = [30, 40, 130, 60];", Some("go")).unwrap();
+    assert_eq!(s.get(id).unwrap().form.iter().find(|f| f.name == "price").unwrap().widgets[0].rect, [30.0, 40.0, 130.0, 60.0]);
+    assert_eq!(s.get(id).unwrap().can_undo(), Some("Run JavaScript"));
+    s.undo(id).unwrap();
+    assert_eq!(s.get(id).unwrap().form.iter().find(|f| f.name == "price").unwrap().widgets[0].rect, initial);
+    s.redo(id).unwrap();
+    assert_eq!(s.get(id).unwrap().form.iter().find(|f| f.name == "price").unwrap().widgets[0].rect, [30.0, 40.0, 130.0, 60.0]);
 }
 
 /// XFA forms check `xfa_installed` and `xfa_version` in a document script that runs before
@@ -5561,11 +7085,114 @@ fn inactive_xfa_and_ordinary_pdfs_keep_document_helpers_and_alerts() {
         let mut cos = pdfcraft_cos::Document::open(Arc::new(bytes)).unwrap();
         pdfcraft_forms::set_document_script(&mut cos, "helper", Some("function twice(n) { return n * 2; } app.alert('PDF message');")).unwrap();
         // The raw dynamic shell has not been laid out: XFA's presence alone is not enough.
-        let runner = js::JsRunner::new(&cos, "control.pdf");
+        let runner = js::JsRunner::new(&cos, "control.pdf", false);
         let out = pdfcraft_js::run("twice(3)", &pdfcraft_js::Event::doc("Console"), &runner.doc, &[], &runner.doc_scripts, Default::default());
         assert!(out.error.is_none(), "{out:?}");
         assert_eq!(out.result.as_deref(), Some("6"));
         assert_eq!(out.alerts, [js::Message::plain("PDF message")]);
+    }
+}
+
+#[test]
+fn js_get_page_box_reads_effective_boxes_without_editing_the_document() {
+    let (mut s, id) = session_with(1);
+    let before = s.get(id).expect("opened document").can_undo().map(str::to_owned);
+    let out = s
+        .run_javascript(id, "JSON.stringify([this.getPageBox(), this.getPageBox('Media', 0), this.getPageBox('Trim', 0)])", None)
+        .expect("script runs");
+    assert_eq!(out.error, None, "{out:?}");
+    assert_eq!(out.result.as_deref(), Some("[[0,300,200,0],[0,300,200,0],[0,300,200,0]]"));
+    assert_eq!(s.get(id).expect("document remains open").can_undo(), before.as_deref());
+
+    s.apply(id, Edit::RotatePages { pages: vec![0], degrees: 90 }).expect("rotate page");
+    let before = s.get(id).expect("rotated document").can_undo().map(str::to_owned);
+    let out = s.run_javascript(id, "JSON.stringify(this.getPageBox('Crop', 0))", None).expect("script runs");
+    assert_eq!(out.error, None, "{out:?}");
+    assert_eq!(out.result.as_deref(), Some("[0,200,300,0]"));
+    assert_eq!(s.get(id).expect("document remains open").can_undo(), before.as_deref());
+}
+
+#[test]
+fn automatic_field_scripts_cannot_print() {
+    use pdfcraft_forms::{FieldEvent, Scripts};
+    let cos = pdfcraft_cos::Document::open(Arc::new(scripted_form())).unwrap();
+    let fields = pdfcraft_forms::fields(&cos);
+    let target = fields.iter().find(|f| f.name == "qty").unwrap();
+    for event in [FieldEvent::Keystroke, FieldEvent::Validate, FieldEvent::Calculate, FieldEvent::Format] {
+        let mut runner = js::JsRunner::new(&cos, "order.pdf", false);
+        let result = runner.run(
+            event,
+            "console.println('before'); this.print(); app.execMenuItem('SaveAs'); app.execMenuItem('ShowHideFileAttachment'); \
+             this.pageNum = 0; this.print(); app.alert('ok'); event.value = '4';",
+            target,
+            "2",
+            &fields,
+        );
+        assert!(result.rc, "{event:?}: {result:?}");
+        assert_eq!(result.value, "4");
+        assert_eq!(runner.output.requests, [js::Request::GoToPage(0)], "{event:?}: {:?}", runner.output);
+        assert_eq!(runner.output.alerts, [js::Message::plain("ok")]);
+        assert!(runner.output.console.contains(&"before".to_string()));
+        assert!(runner.output.console.iter().any(|line| line.contains("Print") && line.contains("ignored")), "{:?}", runner.output);
+        assert_eq!(runner.output.console.iter().filter(|line| line.contains("only a button may")).count(), 2, "{:?}", runner.output);
+        assert!(runner.output.errors.is_empty());
+
+        runner.output = js::JsOutput::default();
+        runner.run(event, "this.print(); throw new Error('broken script');", target, "2", &fields);
+        assert!(runner.output.requests.is_empty(), "{event:?}: {:?}", runner.output);
+        assert!(runner.output.errors.iter().any(|e| e.contains("broken script")));
+    }
+}
+
+#[test]
+fn automatic_print_suppression_preserves_document_errors() {
+    use pdfcraft_forms::{FieldEvent, Scripts};
+    let mut cos = pdfcraft_cos::Document::open(Arc::new(scripted_form())).unwrap();
+    pdfcraft_forms::set_document_script(&mut cos, "failure", Some("throw new Error('document failure');")).unwrap();
+    let fields = pdfcraft_forms::fields(&cos);
+    let target = fields.iter().find(|f| f.name == "qty").unwrap();
+    let mut runner = js::JsRunner::new(&cos, "order.pdf", false);
+    for event in [FieldEvent::Keystroke, FieldEvent::Validate, FieldEvent::Calculate, FieldEvent::Format] {
+        runner.run(event, "this.print(); throw new Error('field failure');", target, "2", &fields);
+    }
+    let out = runner.output;
+    assert!(out.requests.is_empty(), "{out:?}");
+    assert_eq!(out.console.iter().filter(|line| line.contains("Print") && line.contains("ignored")).count(), 4, "{out:?}");
+    assert_eq!(out.doc_errors.len(), 1, "the document script's error is reported once: {out:?}");
+    assert!(out.doc_errors[0].contains("document failure"), "{out:?}");
+    assert_eq!(out.errors.iter().filter(|e| e.contains("document failure")).count(), 1, "{out:?}");
+    assert_eq!(out.errors.iter().filter(|e| e.contains("field failure")).count(), 4, "each field script's error is retained: {out:?}");
+}
+
+#[test]
+fn form_calculations_cannot_print_but_buttons_and_console_can() {
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("order.pdf", None, Arc::new(scripted_form()), None).unwrap();
+    s.apply(
+        id,
+        Edit::SetFieldScript {
+            name: "total".into(),
+            event: "calculate".into(),
+            script: Some("this.print(); event.value = times(getField('price').value, getField('qty').value);".into()),
+        },
+    )
+    .unwrap();
+    s.take_js_output(id);
+    s.apply(id, Edit::SetFieldValue { name: "qty".into(), value: FieldValue::Text("4".into()) }).unwrap();
+    let out = s.take_js_output(id);
+    assert!(out.requests.is_empty(), "{out:?}");
+    assert!(out.console.iter().any(|line| line.contains("Print") && line.contains("ignored")), "{out:?}");
+    assert!(out.errors.is_empty(), "{out:?}");
+    assert!(page_texts(&s, id)[0].contains("USD 10.00"));
+
+    for (target, qty, formatted) in [(Some("go"), 6, "USD 15.00"), (None, 8, "USD 20.00")] {
+        let out = s.run_javascript(id, &format!("getField('qty').value = {qty}; this.print();"), target).unwrap();
+        assert_eq!(out.requests, [js::Request::Print]);
+        let automatic = s.take_js_output(id);
+        assert!(automatic.requests.is_empty(), "{automatic:?}");
+        assert!(automatic.console.iter().any(|line| line.contains("Print") && line.contains("ignored")), "{automatic:?}");
+        assert!(automatic.errors.is_empty(), "{automatic:?}");
+        assert!(page_texts(&s, id)[0].contains(formatted));
     }
 }
 
@@ -5841,6 +7468,10 @@ fn comparing_two_versions_of_a_document() {
     let got: Vec<(compare::Kind, &str, &str)> = c.changes.iter().map(|x| (x.kind, x.old.text.as_str(), x.new.text.as_str())).collect();
     assert_eq!(got, [(compare::Kind::Replaced, "Monday.", "Tuesday."), (compare::Kind::Replaced, "days.", "days of invoice.")], "{got:?}");
     assert!(s.compare(old, old).unwrap().identical());
+    // limited to pages of the new file: both changes are on the first
+    assert_eq!(s.compare_pages(old, new, &[]).unwrap().changes.len(), 2);
+    assert_eq!(s.compare_pages(old, new, &[0]).unwrap().changes.len(), 2);
+    assert!(s.compare_pages(old, new, &[1]).unwrap().identical());
 
     let report = s.compare_report(old, new).unwrap();
     let rid = s.open("report.pdf", None, report, None).unwrap();
@@ -5910,6 +7541,35 @@ fn actions_fail_when_hidden_information_could_not_be_removed() {
     let sanitize = built.iter().find(|a| a.name == "Sanitize Documents").unwrap();
     let e = actions::run_on(sanitize, "signed.pdf", signed, |_, _| {}).map(|r| r.log).unwrap_err();
     assert!(e.starts_with("Sanitize document:"), "{e}");
+}
+
+/// A PDF whose catalog names its language (`/Lang`) exports to Word and HTML in that language, so
+/// Word checks the spelling in it, not in English; one that names none exports as before.
+#[test]
+fn office_exports_take_the_documents_language() {
+    let pdf = |catalog: &str| {
+        pdfcraft_testkit::Pdf::new()
+            .obj(catalog)
+            .obj("<< /Type /Pages /Kids [3 0 R] /Count 1 >>")
+            .obj("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >> >>")
+            .stream("", b"BT /F1 12 Tf 20 200 Td (Hello) Tj ET")
+            .build()
+    };
+    let mut s = Session::new();
+    let bg = s.open("lang.pdf", None, Arc::new(pdf("<< /Type /Catalog /Pages 2 0 R /Lang (bg-BG) >>")), None).unwrap();
+    let plain = s.open("plain.pdf", None, Arc::new(pdf("<< /Type /Catalog /Pages 2 0 R >>")), None).unwrap();
+    let d = s.get(bg).unwrap();
+    let docx = d.export_office(compare::OfficeFormat::Docx);
+    assert!(docx == pdfcraft_export::docx_with_language(&d.export_pages(), "lang", Some("bg-BG")), "Word names bg-BG");
+    assert!(docx != pdfcraft_export::docx(&d.export_pages(), "lang"), "Word names a language");
+    for format in [compare::OfficeFormat::Html, compare::OfficeFormat::HtmlSimple] {
+        let html = String::from_utf8(d.export_office(format)).unwrap();
+        assert!(html.contains("<html lang=\"bg-BG\">"), "{html}");
+    }
+    let d = s.get(plain).unwrap();
+    assert!(d.export_office(compare::OfficeFormat::Docx) == pdfcraft_export::docx(&d.export_pages(), "plain"), "no language, as before");
+    assert!(String::from_utf8(d.export_office(compare::OfficeFormat::Html)).unwrap().contains("<html>\n"));
+    assert!(String::from_utf8(d.export_office(compare::OfficeFormat::HtmlSimple)).unwrap().contains("<html>\n"));
 }
 
 #[test]
@@ -6024,6 +7684,8 @@ fn guard_turns_a_panic_into_an_error() {
     assert_eq!(guard(|| -> u8 { panic!("page {n} is bad") }), Err("page 3 is bad".to_string()));
 }
 
+/// Measurement edits are single undoable steps that leave the file unchanged when they fail, and
+/// respect the document's annotation permissions.
 #[test]
 fn measurement_edits_are_transactional_and_honour_annotation_permissions() {
     let mut session = Session::default();
@@ -6048,7 +7710,7 @@ fn measurement_edits_are_transactional_and_honour_annotation_permissions() {
     assert!(session.get(id).unwrap().measurements().unwrap().measurements.is_empty());
     session.redo(id).unwrap();
     assert_eq!(session.get(id).unwrap().bytes, before);
-    let p = pdfcraft_cos::Permissions { bits: 0, owner: false };
+    let p = pdfcraft_cos::Permissions { bits: 0, owner: false, revision: 3 };
     assert_eq!(check_permission(&Edit::AddMeasurement(m), &p), Err(EditError::NotPermitted("comments")));
     assert_eq!(
         check_permission(
@@ -6057,6 +7719,172 @@ fn measurement_edits_are_transactional_and_honour_annotation_permissions() {
         ),
         Err(EditError::NotPermitted("comments"))
     );
+}
+
+/// The synthetic focus form ([`pdfcraft_xfa::fixtures::focus_template`]).
+fn focus_form() -> Arc<Vec<u8>> {
+    Arc::new(pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::focus_template()))
+}
+
+/// The value of field `name` in document `id`.
+fn field_text(s: &Session, id: DocId, name: &str) -> String {
+    s.get(id).and_then(|d| d.form.iter().find(|f| f.name == name).and_then(|f| f.value.first().cloned())).unwrap_or_default()
+}
+
+/// A field's exit scripts run every time it loses focus, changed or not, and its enter scripts
+/// every time it gains it; each run that changes the form is one undo step.
+#[test]
+fn xfa_enter_and_exit_scripts_run_on_every_focus_change() {
+    use crate::js::FieldFocus::{Enter, Exit};
+    let mut s = Session::new();
+    let id = s.open("form.pdf", None, focus_form(), None).expect("opens");
+    for _ in 0..3 {
+        assert!(s.field_focus(id, "probe", 0, Enter).unwrap(), "the enter script counted");
+        assert!(s.field_focus(id, "probe", 0, Exit).unwrap(), "the exit script counted");
+    }
+    assert_eq!((field_text(&s, id, "exits"), field_text(&s, id, "enters")), ("3".into(), "3".into()));
+    assert!(s.get(id).unwrap().dirty);
+    s.undo(id).unwrap();
+    assert_eq!(field_text(&s, id, "exits"), "2", "each run is its own undo step");
+}
+
+/// A value typed into a field runs its exit with the change; losing focus then doesn't run it
+/// again. The next visit runs it as usual.
+#[test]
+fn an_exit_the_fields_change_ran_does_not_run_twice() {
+    use crate::js::FieldFocus::{Enter, Exit};
+    let mut s = Session::new();
+    let id = s.open("form.pdf", None, focus_form(), None).expect("opens");
+    s.field_focus(id, "probe", 0, Enter).unwrap();
+    s.apply(id, Edit::SetFieldValue { name: "probe".into(), value: FieldValue::Text("x".into()) }).unwrap();
+    assert_eq!(field_text(&s, id, "exits"), "1", "the change ran the exit");
+    assert!(!s.field_focus(id, "probe", 0, Exit).unwrap(), "not again on losing focus");
+    assert_eq!(field_text(&s, id, "exits"), "1");
+    s.field_focus(id, "probe", 0, Enter).unwrap();
+    s.field_focus(id, "probe", 0, Exit).unwrap();
+    assert_eq!(field_text(&s, id, "exits"), "2", "the next visit's exit runs");
+}
+
+/// The skip lasts only until the next edit, undo or redo: a change that is undone, or followed by
+/// another edit, doesn't make a later focus loss skip the field's exit.
+#[test]
+fn an_exit_skip_does_not_outlive_its_change() {
+    use crate::js::FieldFocus::{Enter, Exit};
+    let mut s = Session::new();
+    let id = s.open("form.pdf", None, focus_form(), None).expect("opens");
+    s.field_focus(id, "probe", 0, Enter).unwrap();
+    s.apply(id, Edit::SetFieldValue { name: "probe".into(), value: FieldValue::Text("x".into()) }).unwrap();
+    s.undo(id).unwrap();
+    let before = field_text(&s, id, "exits");
+    s.field_focus(id, "probe", 0, Exit).unwrap();
+    assert_eq!(field_text(&s, id, "exits"), (before.parse::<u32>().unwrap() + 1).to_string(), "after an undo, the exit runs");
+    // A change, then an edit of another field: the change's skip is gone.
+    s.field_focus(id, "probe", 0, Enter).unwrap();
+    s.apply(id, Edit::SetFieldValue { name: "probe".into(), value: FieldValue::Text("y".into()) }).unwrap();
+    s.apply(id, Edit::SetFieldValue { name: "quiet".into(), value: FieldValue::Text("z".into()) }).unwrap();
+    let before = field_text(&s, id, "exits");
+    s.field_focus(id, "probe", 0, Exit).unwrap();
+    assert_eq!(field_text(&s, id, "exits"), (before.parse::<u32>().unwrap() + 1).to_string(), "after another edit, the exit runs");
+}
+
+/// A form-script event can't be batched with other edits: its scripts and those the batch's value
+/// edits run would interleave (the field's exit running twice). The batch is refused whole, and
+/// the document is left as it was.
+#[test]
+fn a_form_script_event_in_a_batch_is_refused() {
+    let mut s = Session::new();
+    let id = s.open("form.pdf", None, focus_form(), None).expect("opens");
+    let som_of = |s: &Session, name: &str| {
+        let doc = s.get(id).unwrap();
+        let f = doc.form.iter().find(|f| f.name == name).unwrap();
+        crate::xfa::widget_som(&doc.editor.as_ref().unwrap().cos, f, 0).unwrap()
+    };
+    let batch = |name: &str, som: String| Edit::Batch {
+        label: "Fill and leave".into(),
+        edits: vec![Edit::SetFieldValue { name: name.into(), value: FieldValue::Text("z".into()) }, Edit::XfaEvent { som, activity: "exit".into() }],
+    };
+    // An exit that counts: it would run once for the event and once for the change.
+    let probe = som_of(&s, "probe");
+    assert!(matches!(s.apply(id, batch("probe", probe)), Err(EditError::Invalid(_))));
+    assert_eq!((field_text(&s, id, "probe"), field_text(&s, id, "exits")), (String::new(), "0".into()));
+    // An exit that changes nothing: the batch's value isn't kept either, nor dropped silently.
+    let quiet = som_of(&s, "quiet");
+    assert!(s.apply(id, batch("quiet", quiet)).is_err());
+    assert_eq!(field_text(&s, id, "quiet"), "");
+    assert!(!s.get(id).unwrap().dirty, "nothing was applied");
+}
+
+/// A field's exit is noted as run (for the focus loss to skip) only when an exit script ran:
+/// with every script skipped, as when the event's budget is spent or a script ran away, nothing
+/// is noted and the next focus loss runs the exit.
+#[test]
+fn on_changes_notes_only_the_exits_that_ran() {
+    let mut s = Session::new();
+    let id = s.open("form.pdf", None, focus_form(), None).expect("opens");
+    let doc = s.get(id).unwrap();
+    let mut cos = doc.editor.as_ref().unwrap().cos.clone();
+    let tpl = doc.xfa_template.clone().unwrap();
+    let names = vec!["probe".to_string()];
+    let mut exited = Vec::new();
+    let mut out = crate::js::JsOutput::default();
+    let mut stopped = crate::xfa::XfaRun { page_count: 1, out: &mut out, datasets: None, ran_away: true, highlight: false, time_scale: 1 };
+    crate::xfa::on_changes(&mut cos, &tpl, &names, &mut stopped, &mut exited).unwrap();
+    assert!(exited.is_empty(), "no exit ran: {exited:?}");
+    let mut out = crate::js::JsOutput::default();
+    let mut running = crate::xfa::XfaRun { page_count: 1, out: &mut out, datasets: None, ran_away: false, highlight: false, time_scale: 1 };
+    crate::xfa::on_changes(&mut cos, &tpl, &names, &mut running, &mut exited).unwrap();
+    assert_eq!(exited.len(), 1, "the exit ran: {exited:?}");
+}
+
+/// Scripts that change nothing leave no edit: the document stays saved, with nothing to undo,
+/// and what they showed still reaches the viewer. A field without such scripts runs nothing.
+#[test]
+fn focus_scripts_that_change_nothing_leave_the_document_clean() {
+    use crate::js::FieldFocus::{Enter, Exit};
+    let mut s = Session::new();
+    let id = s.open("form.pdf", None, focus_form(), None).expect("opens");
+    s.field_focus(id, "quiet", 0, Enter).unwrap();
+    assert!(!s.field_focus(id, "quiet", 0, Exit).unwrap(), "nothing changed");
+    let doc = s.get(id).unwrap();
+    assert!(!doc.dirty && doc.can_undo().is_none(), "no edit kept");
+    let out = s.take_js_output(id);
+    assert_eq!(out.alerts.iter().map(|m| m.text.as_str()).collect::<Vec<_>>(), ["left quiet"]);
+    // A field without focus scripts, and a field that doesn't exist.
+    assert!(!s.field_focus(id, "exits", 0, Exit).unwrap());
+    assert!(!s.field_focus(id, "nowhere", 0, Enter).unwrap());
+    assert!(!s.get(id).unwrap().dirty);
+}
+
+/// A widget the field doesn't have gains or loses no focus: no script runs, rather than the
+/// field's own.
+#[test]
+fn a_widget_the_field_doesnt_have_runs_no_focus_scripts() {
+    use crate::js::FieldFocus::{Enter, Exit};
+    let mut s = Session::new();
+    let id = s.open("form.pdf", None, focus_form(), None).expect("opens");
+    assert!(!s.field_focus(id, "probe", 3, Enter).unwrap(), "probe has one widget");
+    assert!(!s.field_focus(id, "probe", usize::MAX, Exit).unwrap());
+    assert_eq!((field_text(&s, id, "enters"), field_text(&s, id, "exits")), ("0".into(), "0".into()));
+    assert!(!s.get(id).unwrap().dirty);
+}
+
+/// Each radio button of a group is a field of its own: reaching the second button runs its
+/// enter script, reaching the first (which has none) runs nothing. Choosing the button changes
+/// the group's value, which runs the group's scripts, not the button's: leaving the button
+/// still runs its exit.
+#[test]
+fn a_radio_buttons_own_focus_scripts_run() {
+    use crate::js::FieldFocus::{Enter, Exit};
+    let mut s = Session::new();
+    let id = s.open("form.pdf", None, focus_form(), None).expect("opens");
+    let group = s.get(id).unwrap().form.iter().find(|f| f.widgets.len() == 2).map(|f| f.name.clone()).expect("the radio group");
+    assert!(!s.field_focus(id, &group, 0, Enter).unwrap(), "the first button has no enter script");
+    assert!(s.field_focus(id, &group, 1, Enter).unwrap(), "the second button's ran");
+    assert!(!s.field_focus(id, &group, 2, Enter).unwrap(), "there is no third button");
+    assert_eq!(field_text(&s, id, "picks"), "1");
+    s.apply(id, Edit::SetFieldValue { name: group.clone(), value: FieldValue::Radio(Some("L".into())) }).unwrap();
+    assert!(s.field_focus(id, &group, 1, Exit).unwrap(), "the button's exit runs on leaving it");
+    assert_eq!(field_text(&s, id, "drops"), "1");
 }
 
 /// A laid-out XFA field that doesn't scroll (`hScrollPolicy="off"`) opens as a text field with
@@ -6107,6 +7935,8 @@ fn round_xfa_check_buttons_open_drawn_round() {
     }
 }
 
+/// A dynamic XFA form with usage rights is saved without them once laid out, as the layout voids
+/// them, with a note saying so.
 #[test]
 fn a_dynamic_xfa_form_is_saved_without_the_usage_rights_its_layout_voided() {
     let xdp = pdfcraft_xfa::fixtures::template(3);
@@ -6133,6 +7963,8 @@ fn a_dynamic_xfa_form_is_saved_without_the_usage_rights_its_layout_voided() {
     }
 }
 
+/// A dynamic XFA form is laid out from its template on opening (an appended revision, not an
+/// edit), takes values from the datasets, and saves its filled values incrementally.
 #[test]
 fn dynamic_xfa_forms_are_laid_out_on_open_filled_and_saved_incrementally() {
     let original = Arc::new(pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::template(3)));
@@ -6172,6 +8004,40 @@ fn dynamic_xfa_forms_are_laid_out_on_open_filled_and_saved_incrementally() {
     assert_eq!(d2.form.iter().find(|f| f.name == "answer").unwrap().value, vec!["N".to_string()]);
 }
 
+/// A signature box's XFA preSign script runs as one undoable step, showing its notice and
+/// changing the form; its postSign script runs too; a box without them runs nothing and changes
+/// nothing.
+#[test]
+fn xfa_signing_scripts_run_before_and_after_signing() {
+    use crate::js::SignEvent;
+    let bytes = Arc::new(pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::signing_events_template()));
+    let mut s = Session::new();
+    let id = s.open("signing.pdf", None, bytes, None).expect("opens");
+    let field =
+        |s: &Session, n: &str| s.get(id).unwrap().form.iter().find(|f| f.name == n || f.name.ends_with(&format!(".{n}[0]"))).cloned().unwrap();
+    let sign = field(&s, "sign").name;
+    let plain = field(&s, "plain").name;
+    assert!(s.run_sign_event(id, &sign, SignEvent::Before).unwrap(), "it has a preSign script");
+    assert_eq!(field(&s, "when").value, ["signed"]);
+    assert!(field(&s, "when").read_only(), "and it locks the field");
+    assert_eq!(s.take_js_output(id).alerts, [crate::js::Message::plain("Signing notice")]);
+    assert!(s.run_sign_event(id, &sign, SignEvent::After).unwrap());
+    assert_eq!(field(&s, "after").value, ["done"]);
+    // Each one is an undo step of its own.
+    s.undo(id).unwrap();
+    assert!(field(&s, "after").value.is_empty());
+    assert_eq!(field(&s, "when").value, ["signed"]);
+    // No signing scripts: nothing runs, nothing to undo.
+    let label = s.get(id).unwrap().undo_label().cloned();
+    assert!(!s.run_sign_event(id, &plain, SignEvent::Before).unwrap());
+    assert!(!s.run_sign_event(id, "no such field", SignEvent::Before).unwrap());
+    assert_eq!(s.get(id).unwrap().undo_label().cloned(), label);
+    // Nor with JavaScript off.
+    s.set_javascript(false);
+    assert!(!s.run_sign_event(id, &sign, SignEvent::Before).unwrap());
+}
+
+/// A signature box the file already holds a signature for is drawn with that signature's picture.
 #[test]
 fn a_signed_xfa_signature_box_shows_the_picture_the_file_holds() {
     let mut s = Session::new().with_clock(|| 1_700_000_000);
@@ -6281,6 +8147,160 @@ fn static_xfa_forms_take_their_values_from_the_datasets_and_write_them_back() {
     assert_eq!(d2.form.iter().find(|f| f.name == "form1[0].page1[0].name[0]").unwrap().value, vec!["Grace".to_string()]);
     assert!(!d2.dirty);
     assert!(!d2.info.warnings.iter().any(|w| w.contains("taken from this form's XFA data")), "nothing was rewritten");
+}
+
+/// A static XFA exclusion group laid out as a radio group with `/Opt [(1) (2)]` and on states
+/// named by position (`/0`, `/1`; ISO 32000-2 Table 230): the data's item `1` is the first
+/// button, not the second one's state `/1`, and a click stores the clicked button's item.
+/// Public benefit forms are built this way; their "English" came back as "French".
+#[test]
+fn a_static_xfa_radio_group_with_numeric_items_keeps_the_picked_button() {
+    let lang = "form1[0].page1[0].lang[0]";
+    let data_of = |bytes: Arc<Vec<u8>>| {
+        let cos = pdfcraft_cos::Document::open(bytes).unwrap();
+        let data = pdfcraft_xfa::parse_datasets(&pdfcraft_xfa::read_packets(&cos).unwrap().unwrap().xdp).unwrap();
+        data.text_at(&pdfcraft_xfa::som_to_path(lang)).map(str::to_owned)
+    };
+    let states = |s: &Session, id: DocId| {
+        let f = s.get(id).unwrap().form.iter().find(|f| f.name == lang).unwrap().clone();
+        (f.value.clone(), f.widgets.iter().map(|w| w.state.clone().unwrap_or_default()).collect::<Vec<_>>())
+    };
+    let form = |data: &str| Arc::new(pdfcraft_xfa::fixtures::static_radio_shell(&format!("<form1><page1>{data}</page1></form1>")));
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    // Data filled elsewhere: item 1 (English) turns the first button on, item 2 the second.
+    let id = s.open("one.pdf", None, form("<lang>1</lang>"), None).unwrap();
+    assert_eq!(states(&s, id), (vec!["0".to_string()], vec!["0".to_string(), "Off".to_string()]));
+    let id = s.open("two.pdf", None, form("<lang>2</lang>"), None).unwrap();
+    assert_eq!(states(&s, id), (vec!["1".to_string()], vec!["Off".to_string(), "1".to_string()]));
+    // A click on a button (its on state, as the page sends it) stores that button's item.
+    let id = s.open("blank.pdf", None, form("<lang/>"), None).unwrap();
+    for (state, item) in [("0", "1"), ("1", "2")] {
+        s.apply(id, Edit::SetFieldValue { name: lang.into(), value: FieldValue::Radio(Some(state.into())) }).unwrap();
+        let saved = s.save_bytes(id).unwrap();
+        assert_eq!(data_of(saved.clone()).as_deref(), Some(item), "clicked {state}");
+        // Reopened, the same button is on and nothing is rewritten.
+        let again = s.open("again.pdf", None, saved, None).unwrap();
+        assert_eq!(states(&s, again).0, vec![state.to_string()], "clicked {state}");
+        assert!(!s.get(again).unwrap().info.warnings.iter().any(|w| w.contains("taken from this form's XFA data")), "clicked {state}");
+    }
+}
+
+/// The XFA data layer keeps its own copy of the forms crate's name spelling (it can't depend on
+/// forms), and a radio group's value only finds its button while the two agree: UTF-8 as
+/// itself, `#` and bytes that aren't UTF-8 as `#XX`.
+#[test]
+fn xfa_and_forms_spell_names_alike() {
+    for bytes in [&b"Yes"[..], b"", b"a b", b"A#1", "はい".as_bytes(), b"\x82\xcd\x82\xa2", b"\xff#\x00", b"\x7f\x20~"] {
+        assert_eq!(pdfcraft_xfa::data::name_text(bytes), pdfcraft_forms::name_text(bytes), "{bytes:?}");
+        assert_eq!(pdfcraft_forms::name_bytes(&pdfcraft_xfa::data::name_text(bytes)), bytes, "{bytes:?}");
+    }
+}
+
+/// Taking the XFA out of a radio group whose buttons carry `/PCOn` as well as `/Opt` (the item
+/// saving writes ahead of the `/Opt` entry) notes no lost data when the data holds that item:
+/// one equal to the on state, and one equal to neither the state nor the `/Opt` entry.
+#[test]
+fn stripping_xfa_takes_a_radio_items_pcon_as_the_fields_value() {
+    let lang = "form1[0].page1[0].lang[0]";
+    let lost = |s: &Session, id: DocId| {
+        s.get(id).unwrap().info.warnings.iter().filter(|w| w.contains("held a value other than the form's XFA data")).cloned().collect::<Vec<_>>()
+    };
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    // `/PCOn` equals the state: the data's `0` is the first button, whose `/Opt` entry is `1`.
+    let form = pdfcraft_xfa::fixtures::static_radio_shell_with_pcon("<form1><page1><lang>0</lang></page1></form1>", ["0", "1"]);
+    let id = s.open("pcon-state.pdf", None, Arc::new(form), None).unwrap();
+    assert_eq!(s.get(id).unwrap().form.iter().find(|f| f.name == lang).unwrap().value, ["0"]);
+    s.apply(id, Edit::XfaToStatic).unwrap();
+    assert_eq!(lost(&s, id), Vec::<String>::new());
+    // `/PCOn` is neither: a click writes `en` to the data for the first button.
+    let form = pdfcraft_xfa::fixtures::static_radio_shell_with_pcon("<form1><page1><lang/></page1></form1>", ["en", "fr"]);
+    let id = s.open("pcon-item.pdf", None, Arc::new(form), None).unwrap();
+    s.apply(id, Edit::SetFieldValue { name: lang.into(), value: FieldValue::Radio(Some("0".into())) }).unwrap();
+    s.apply(id, Edit::XfaToStatic).unwrap();
+    assert_eq!(lost(&s, id), Vec::<String>::new());
+    // The data names a button by its `/Opt` entry (`2`, as data from elsewhere does), while
+    // saving would write that button's `/PCOn` (`fr`). Opening turned that button on, so the
+    // field shows what the data selects and nothing is lost, although the spellings differ.
+    let form = pdfcraft_xfa::fixtures::static_radio_shell_with_pcon("<form1><page1><lang>2</lang></page1></form1>", ["en", "fr"]);
+    let id = s.open("opt-item.pdf", None, Arc::new(form), None).unwrap();
+    assert_eq!(s.get(id).unwrap().form.iter().find(|f| f.name == lang).unwrap().value, ["1"]);
+    s.apply(id, Edit::XfaToStatic).unwrap();
+    assert_eq!(lost(&s, id), Vec::<String>::new());
+}
+
+/// Opening reads a radio group's data as saving writes it: with `/PCOn` items `4` `1` next to
+/// `/Opt [(1) (2)]` and states `/0` `/1`, a click on the second button saves its item `1`, and
+/// reopening turns the second button on again, not the first one whose `/Opt` entry is `1`; the
+/// first button saves `4` and comes back too. Taking the XFA out then notes no lost data.
+#[test]
+fn a_radio_item_that_is_another_buttons_export_reopens_on_its_own_button() {
+    let lang = "form1[0].page1[0].lang[0]";
+    let data_of = |bytes: Arc<Vec<u8>>| {
+        let cos = pdfcraft_cos::Document::open(bytes).unwrap();
+        let data = pdfcraft_xfa::parse_datasets(&pdfcraft_xfa::read_packets(&cos).unwrap().unwrap().xdp).unwrap();
+        data.text_at(&pdfcraft_xfa::som_to_path(lang)).map(str::to_owned)
+    };
+    let value = |s: &Session, id: DocId| s.get(id).unwrap().form.iter().find(|f| f.name == lang).unwrap().value.clone();
+    let form = Arc::new(pdfcraft_xfa::fixtures::static_radio_shell_with_pcon("<form1><page1><lang/></page1></form1>", ["4", "1"]));
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    for (state, item) in [("1", "1"), ("0", "4")] {
+        let id = s.open("blank.pdf", None, form.clone(), None).unwrap();
+        s.apply(id, Edit::SetFieldValue { name: lang.into(), value: FieldValue::Radio(Some(state.into())) }).unwrap();
+        let saved = s.save_bytes(id).unwrap();
+        assert_eq!(data_of(saved.clone()).as_deref(), Some(item), "clicked {state}");
+        let again = s.open("again.pdf", None, saved, None).unwrap();
+        assert_eq!(value(&s, again), [state], "clicked {state}");
+        s.apply(again, Edit::XfaToStatic).unwrap();
+        assert!(!s.get(again).unwrap().info.warnings.iter().any(|w| w.contains("held a value other than the form's XFA data")), "clicked {state}");
+    }
+    // Data from elsewhere that no button saves is still read as an export value, then a state.
+    let id = s
+        .open(
+            "two.pdf",
+            None,
+            Arc::new(pdfcraft_xfa::fixtures::static_radio_shell_with_pcon("<form1><page1><lang>2</lang></page1></form1>", ["4", "1"])),
+            None,
+        )
+        .unwrap();
+    assert_eq!(value(&s, id), ["1"]);
+    let id = s
+        .open(
+            "zero.pdf",
+            None,
+            Arc::new(pdfcraft_xfa::fixtures::static_radio_shell_with_pcon("<form1><page1><lang>0</lang></page1></form1>", ["4", "1"])),
+            None,
+        )
+        .unwrap();
+    assert_eq!(value(&s, id), ["0"]);
+}
+
+/// A radio group whose buttons carry `/PCOn` items `1` `2` next to `/Opt [(1) (2)]` and on
+/// states named by position (`/0`, `/1`): a click on either button saves that button's own item
+/// to the datasets, reopening turns the same button on with nothing rewritten, and taking the XFA
+/// out notes no lost data. The state `/1` used to match the first button's item `1`, so the
+/// second button saved `1` and came back as the first.
+#[test]
+fn a_radio_group_with_pcon_items_saves_and_reopens_the_clicked_button() {
+    let lang = "form1[0].page1[0].lang[0]";
+    let data_of = |bytes: Arc<Vec<u8>>| {
+        let cos = pdfcraft_cos::Document::open(bytes).unwrap();
+        let data = pdfcraft_xfa::parse_datasets(&pdfcraft_xfa::read_packets(&cos).unwrap().unwrap().xdp).unwrap();
+        data.text_at(&pdfcraft_xfa::som_to_path(lang)).map(str::to_owned)
+    };
+    let value = |s: &Session, id: DocId| s.get(id).unwrap().form.iter().find(|f| f.name == lang).unwrap().value.clone();
+    let form = Arc::new(pdfcraft_xfa::fixtures::static_radio_shell_with_pcon("<form1><page1><lang/></page1></form1>", ["1", "2"]));
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    for (state, item) in [("0", "1"), ("1", "2")] {
+        let id = s.open("blank.pdf", None, form.clone(), None).unwrap();
+        s.apply(id, Edit::SetFieldValue { name: lang.into(), value: FieldValue::Radio(Some(state.into())) }).unwrap();
+        let saved = s.save_bytes(id).unwrap();
+        assert_eq!(data_of(saved.clone()).as_deref(), Some(item), "clicked {state}");
+        let again = s.open("again.pdf", None, saved, None).unwrap();
+        assert_eq!(value(&s, again), [state], "clicked {state}");
+        assert!(!s.get(again).unwrap().info.warnings.iter().any(|w| w.contains("taken from this form's XFA data")), "clicked {state}");
+        s.apply(again, Edit::XfaToStatic).unwrap();
+        assert!(!s.get(again).unwrap().info.warnings.iter().any(|w| w.contains("held a value other than the form's XFA data")), "clicked {state}");
+    }
 }
 
 /// A static XFA form whose values are only in its datasets takes every one on opening, as
@@ -6628,12 +8648,12 @@ fn xfa_data_import_adds_and_removes_rows_of_a_dynamic_form() {
     assert_eq!(names(&s).iter().filter(|n| n.starts_with("amount")).count(), 3, "{:?}", names(&s));
     assert_eq!(value(&s, "total"), vec!["15".to_string()], "qty 3 × price 5, calculated after the import: {:?}", s.take_js_output(id));
     assert_eq!(value(&s, "grand"), vec!["42.5".to_string()]);
-    // More rows than the layout shows: the document says so.
-    let rows: String = (0..60).map(|i| format!("<row><item>r{i}</item><amount>1</amount></row>")).collect();
+    // More rows than the layout shows (1 000 for one repeating subform): the document says so.
+    let rows: String = (0..1010).map(|i| format!("<row><item>r{i}</item><amount>1</amount></row>")).collect();
     let file = format!("<form><page1><qty>1</qty><table>{rows}</table></page1></form>");
     s.apply(id, Edit::ImportData { name: "many.xml".into(), bytes: Arc::new(file.into_bytes()) }).unwrap();
     let out = s.take_js_output(id);
-    assert!(out.errors.iter().chain(out.console.iter()).any(|l| l.contains("60 rows")), "{out:?}");
+    assert!(out.errors.iter().chain(out.console.iter()).any(|l| l.contains("1010 rows") && l.contains("first 1000")), "{out:?}");
     // A file with one row takes the others away.
     let file = "<form><page1><qty>1</qty><table><row><item>only</item><amount>7</amount></row></table></page1></form>";
     s.apply(id, Edit::ImportData { name: "one.xml".into(), bytes: Arc::new(file.as_bytes().to_vec()) }).unwrap();
@@ -6703,6 +8723,119 @@ fn the_xfa_open_budget_stops_the_calculations_it_has_no_time_for() {
     assert!(s.take_js_output(id).errors.iter().any(|e| e.starts_with("The form's scripts were stopped: the scripts took more than 0 seconds")));
     assert!(totals(&s).iter().all(Vec::is_empty), "no total was calculated: {:?}", totals(&s));
     assert_eq!(pdfcraft_js::xfa_session::engines_started(), engines, "no script ran, so no engine started");
+}
+
+/// Opening lays the form out once after its initialize scripts, not after each one that
+/// hides a subform (XFA 3.3 pp. 388, 390: initialize fires once data binding is complete;
+/// the layout process has not run yet). Laying it out after every script spent the opening's
+/// time on the first few, and a form whose initialize scripts hide its optional pages was
+/// saved half initialized: the next opening hid more of it, and reset the data typed into
+/// what it hid.
+#[test]
+fn xfa_initialize_scripts_that_hide_subforms_lay_the_form_out_once() {
+    // Shaped like a form with optional extra pages: a check box, then more sections than one
+    // event may lay the form out again for, each hiding itself while the box is clear.
+    let sections = 60;
+    let mut body = String::from(
+        r#"<field name="wanted" w="0.3in" h="0.3in"><ui><checkButton/></ui><items><integer>1</integer><integer>0</integer></items><value><integer>0</integer></value></field>"#,
+    );
+    for n in 0..sections {
+        body.push_str(&format!(
+            r#"<subform name="extra{n}" layout="tb"><event activity="initialize"><script contentType="application/x-javascript">if (wanted.rawValue == 0) this.presence = "hidden";</script></event><field name="note" w="3in" h="0.3in"><ui><textEdit/></ui></field></subform>"#
+        ));
+    }
+    let tpl = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="front"><occur max="-1"/><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ {body}
+</subform>
+</template>
+</xdp:xdp>
+"#
+    );
+    let bytes = Arc::new(pdfcraft_xfa::fixtures::shell(&tpl));
+    let mut s = Session::new().with_clock(|| 1_700_000_000).with_xfa_time_scale(100);
+    let id = s.open("extras.pdf", None, bytes, None).expect("opens");
+    let out = s.take_js_output(id);
+    assert!(out.errors.is_empty(), "{:?}", out.errors);
+    let names = |s: &Session, id| s.get(id).unwrap().form.iter().map(|f| f.name.clone()).collect::<Vec<_>>();
+    let opened = names(&s, id);
+    assert!(opened.iter().all(|n| !n.contains("note")), "every extra section is hidden on opening: {opened:?}");
+    assert!(opened.iter().any(|n| n.contains("wanted")), "{opened:?}");
+    // User input survives repeated saves and openings, with stable field and page counts
+    // (strengthened by wireless89 in the review of #4791).
+    let wanted = opened.iter().find(|n| n.contains("wanted")).unwrap().clone();
+    s.apply(id, Edit::SetFieldValue { name: wanted.clone(), value: FieldValue::Check(true) }).unwrap();
+    let pages = s.get(id).unwrap().info.pages.len();
+    let mut saved = s.save_bytes(id).unwrap();
+    for cycle in 0..3 {
+        let again = s.open("again.pdf", None, saved, None).expect("reopens");
+        let out = s.take_js_output(again);
+        assert!(out.errors.is_empty(), "cycle {cycle}: {out:?}");
+        assert_eq!(names(&s, again), opened, "cycle {cycle}: stable fields");
+        let doc = s.get(again).unwrap();
+        assert_eq!(doc.info.pages.len(), pages, "cycle {cycle}: stable pages");
+        assert_eq!(doc.form.iter().find(|f| f.name == wanted).unwrap().value, ["1"], "cycle {cycle}: input survives");
+        saved = s.save_bytes(again).unwrap();
+    }
+}
+
+/// A script that resets several subforms one after another (`xfa.host.resetData` once for
+/// each, as forms with optional pages do) resets every one of them, and nothing else; resets
+/// in a row are applied together.
+#[test]
+fn xfa_resets_in_a_row_reset_every_named_subform_and_nothing_else() {
+    let sections = 5;
+    let mut body = String::from(
+        r#"<field name="wanted" w="0.3in" h="0.3in"><ui><checkButton/></ui><items><integer>1</integer><integer>0</integer></items><value><integer>0</integer></value>"#,
+    );
+    let resets: String = (0..sections).map(|n| format!("xfa.host.resetData('form.extra{n}');")).collect();
+    body.push_str(&format!(
+        r#"<event activity="initialize"><script contentType="application/x-javascript">{resets} keep.rawValue = "kept";</script></event></field>"#
+    ));
+    body.push_str(r#"<field name="keep" w="3in" h="0.3in"><ui><textEdit/></ui></field>"#);
+    // A field no script touches: the resets must leave what was typed in it.
+    body.push_str(r#"<field name="other" w="3in" h="0.3in"><ui><textEdit/></ui><value><text>default</text></value></field>"#);
+    for n in 0..sections {
+        body.push_str(&format!(
+            r#"<subform name="extra{n}" layout="tb"><field name="note" w="3in" h="0.3in"><ui><textEdit/></ui><value><text>default</text></value></field></subform>"#
+        ));
+    }
+    let notes: String = (0..sections).map(|n| format!("<extra{n}><note>typed {n}</note></extra{n}>")).collect();
+    let tpl = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="front"><occur max="-1"/><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ {body}
+</subform>
+</template>
+<xfa:datasets xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"><xfa:data><form><keep>typed</keep><other>typed other</other>{notes}</form></xfa:data></xfa:datasets>
+</xdp:xdp>
+"#
+    );
+    let mut s = Session::new().with_clock(|| 1_700_000_000).with_xfa_time_scale(100);
+    // Without the resets the sections show what was typed.
+    let untouched = Arc::new(pdfcraft_xfa::fixtures::shell(&tpl.replace(&resets, "")));
+    let plain = s.open("plain.pdf", None, untouched, None).expect("opens");
+    let typed: Vec<_> = s.get(plain).unwrap().form.iter().filter(|f| f.name.contains("note")).map(|f| f.value.clone()).collect();
+    assert_eq!(typed, (0..sections).map(|n| vec![format!("typed {n}")]).collect::<Vec<_>>());
+    let bytes = Arc::new(pdfcraft_xfa::fixtures::shell(&tpl));
+    let id = s.open("resets.pdf", None, bytes, None).expect("opens");
+    let out = s.take_js_output(id);
+    assert!(out.errors.is_empty(), "{:?}", out.errors);
+    let form = &s.get(id).unwrap().form;
+    let notes: Vec<_> = form.iter().filter(|f| f.name.contains("note")).map(|f| f.value.clone()).collect();
+    assert_eq!(notes.len(), sections, "{form:?}");
+    assert!(notes.iter().all(|v| v == &vec!["default".to_string()]), "every section is reset: {notes:?}");
+    let keep = form.iter().find(|f| f.name.contains("keep")).map(|f| f.value.clone());
+    assert_eq!(keep, Some(vec!["kept".to_string()]), "the script's later write stands");
+    let other = form.iter().find(|f| f.name.contains("other")).map(|f| f.value.clone());
+    assert_eq!(other, Some(vec!["typed other".to_string()]), "a field outside the named subforms keeps its value");
 }
 
 /// The scripts of one event share the form as the engine holds it: a failed script's
@@ -6860,6 +8993,20 @@ fn an_xfa_script_that_fails_partway_keeps_what_it_changed_before_the_error() {
     s.apply(id, Edit::SetFieldValue { name: "leave".into(), value: FieldValue::Check(true) }).expect("can be checked now");
 }
 
+/// A laid-out XFA form tabs the way its template's traversal says: the probe form, which
+/// another viewer tabs `start A2 A3 A4 A1 B1 B3 B2 B4 C3 D1 D4 D6 finish C1 C2`.
+#[test]
+fn xfa_forms_tab_in_their_templates_traversal_order() {
+    let bytes = Arc::new(pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::traversal_template()));
+    let mut s = Session::new();
+    let id = s.open("tab.pdf", None, bytes, None).unwrap();
+    let doc = s.get(id).unwrap();
+    let mut tabs: Vec<(usize, &str)> = doc.form.iter().flat_map(|f| f.widgets.iter().map(move |w| (w.tab, f.name.as_str()))).collect();
+    tabs.sort_unstable();
+    let names: Vec<&str> = tabs.iter().map(|t| t.1).filter(|n| !["log", "D5"].contains(n)).collect();
+    assert_eq!(names, ["start", "A2", "A3", "A4", "A1", "B1", "B3", "B2", "B4", "C3", "D1", "D4", "D6", "finish", "C1", "C2"]);
+}
+
 /// A scripted form end to end: initialize and calculate on open, recalculation after a change,
 /// a failing validation's message, buttons that add and remove rows and show messages, a check
 /// box that shows a subform (undoable), FormCalc, and a save and reopen that keep it all.
@@ -6873,6 +9020,57 @@ fn repeated_xfa_print_buttons_run_their_click_script() {
         let out = s.run_javascript(id, "throw new Error('AcroForm fallback ran')", Some(name)).unwrap();
         assert_eq!(out.error, None, "{name}: {out:?}");
         assert_eq!(out.requests, vec![pdfcraft_js::Request::Print], "{name}: {out:?}");
+    }
+}
+
+/// A button on the page master runs its click script as the copy on the page that was clicked:
+/// the field it writes next to it changes on that page only.
+#[test]
+fn a_page_master_button_writes_the_field_on_its_own_page() {
+    let template = pdfcraft_xfa::fixtures::repeated_print_button_template().replace(
+        "</pageArea>",
+        r#"<field name="stamp" x="200pt" y="24pt" w="100pt" h="25pt"><ui><textEdit/></ui></field>
+  <field name="mark" x="320pt" y="24pt" w="80pt" h="25pt"><ui><button/></ui>
+   <event activity="click"><script contentType="application/x-javascript">stamp.rawValue = "clicked";</script></event>
+  </field>
+ </pageArea>"#,
+    );
+    let bytes = Arc::new(pdfcraft_xfa::fixtures::shell(&template));
+    let mut s = Session::new();
+    let id = s.open("stamp.pdf", None, bytes, None).unwrap();
+    assert_eq!(s.get(id).unwrap().info.pages.len(), 3);
+    let out = s.run_javascript(id, "throw new Error('AcroForm fallback ran')", Some("mark_2")).unwrap();
+    assert_eq!(out.error, None, "{out:?}");
+    let value = |s: &Session, n: &str| s.get(id).unwrap().form.iter().find(|f| f.name == n).unwrap().value.clone();
+    assert_eq!(value(&s, "stamp_2"), vec!["clicked".to_string()], "the page clicked");
+    for other in ["stamp", "stamp_3"] {
+        assert_ne!(value(&s, other), vec!["clicked".to_string()], "{other} is on another page");
+    }
+}
+
+/// An initialize script that hides the last page's subform takes a page away; the page-master
+/// button of that page, listed to initialize before it went, doesn't run with `this` at the
+/// form instead and hide all of it.
+#[test]
+fn a_page_master_script_of_a_page_gone_does_not_hide_the_form() {
+    let template = pdfcraft_xfa::fixtures::repeated_print_button_template()
+        .replace(
+            r#"<caption><value><text>Print form</text></value></caption>"#,
+            r#"<caption><value><text>Print form</text></value></caption>
+   <event activity="initialize"><script contentType="application/x-javascript">this.presence = "hidden";</script></event>"#,
+        )
+        .replace(
+            r#"<subform name="page3" layout="tb"><breakBefore targetType="pageArea"/>"#,
+            r#"<subform name="page3" layout="tb"><breakBefore targetType="pageArea"/>
+ <event activity="initialize"><script contentType="application/x-javascript">this.presence = "hidden";</script></event>"#,
+        );
+    let bytes = Arc::new(pdfcraft_xfa::fixtures::shell(&template));
+    let mut s = Session::new();
+    let id = s.open("gone.pdf", None, bytes, None).unwrap();
+    let doc = s.get(id).unwrap();
+    assert_eq!(doc.info.pages.len(), 2, "page 3 is hidden");
+    for note in ["note1", "note2"] {
+        assert!(doc.form.iter().any(|f| f.name == note), "{note} is still shown");
     }
 }
 
@@ -6942,6 +9140,29 @@ fn xfa_scripts_initialize_calculate_validate_toggle_and_add_rows() {
     assert_eq!(d2.form.iter().find(|f| f.name == "grand").unwrap().value, vec!["10".to_string()]);
     assert_eq!(d2.form.iter().find(|f| f.name == "qty").unwrap().value, vec!["500".to_string()]);
     assert!(!d2.dirty);
+}
+
+/// An XFA button's click returns only what the click produced. The alerts and errors of the
+/// scripts that ran on open stay in the document's output.
+#[test]
+fn an_xfa_click_returns_only_its_own_script_output() {
+    let template = pdfcraft_xfa::fixtures::scripted_template()
+        .replace("if (qty.rawValue === null) qty.rawValue = 2;", "qty.rawValue = 2; xfa.host.messageBox('opened'); throw new Error('open failed');");
+    let mut s = Session::new();
+    let id = s.open("xfa.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&template)), None).unwrap();
+    let o = s.run_javascript(id, "", Some("hello")).unwrap();
+    assert_eq!(o.alerts.iter().map(|a| a.text.as_str()).collect::<Vec<_>>(), ["Hello 2"]);
+    assert!(o.error.is_none(), "{o:?}");
+    let out = s.take_js_output(id);
+    assert_eq!(out.alerts.iter().map(|a| a.text.as_str()).collect::<Vec<_>>(), ["opened"]);
+    assert!(out.errors.iter().any(|e| e.contains("open failed")), "{out:?}");
+    // A click whose script fails returns that error, and the next click does not repeat it.
+    let broken =
+        pdfcraft_xfa::fixtures::scripted_template().replace(r#"xfa.host.messageBox("Hello " + qty.rawValue);"#, "throw new Error('click failed');");
+    let id = s.open("broken.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&broken)), None).unwrap();
+    s.take_js_output(id);
+    assert!(s.run_javascript(id, "", Some("hello")).unwrap().error.is_some_and(|e| e.contains("click failed")));
+    assert!(s.run_javascript(id, "", Some("legacy")).unwrap().error.is_none());
 }
 
 /// A repeating table inside an area of a positioned page (as in real Designer forms): every
@@ -7322,12 +9543,13 @@ fn datasets_streams(bytes: &Arc<Vec<u8>>) -> usize {
 /// and noted.
 #[test]
 fn hostile_xfa_open_scripts_are_merged_capped_kept_from_printing_and_noted() {
-    // On open: a calculate setting its own value 50 000 times, an initialize script showing a
-    // thousand messages and asking to print, open a link and save.
+    // On open: a calculate setting its own value 20 000 times (50 000 sat right at the 1 s
+    // unasked-script timeout and abandoned whenever the test machine was loaded), an
+    // initialize script showing a thousand messages and asking to print, open a link and save.
     let tpl = pdfcraft_xfa::fixtures::scripted_template()
         .replace(
             r#"<calculate><script contentType="application/x-javascript">qty.rawValue * price.rawValue</script></calculate>"#,
-            r#"<calculate><script contentType="application/x-javascript">for (var i = 0; i &lt; 50000; i++) this.rawValue = i;</script></calculate>"#,
+            r#"<calculate><script contentType="application/x-javascript">for (var i = 0; i &lt; 20000; i++) this.rawValue = i;</script></calculate>"#,
         )
         .replace(
             r#"if (qty.rawValue === null) qty.rawValue = 2;"#,
@@ -7337,9 +9559,11 @@ fn hostile_xfa_open_scripts_are_merged_capped_kept_from_printing_and_noted() {
     let mut s = Session::new().with_clock(|| 1_700_000_000);
     let started = std::time::Instant::now();
     let id = s.open("hostile.pdf", None, bytes, None).expect("opens");
-    assert!(started.elapsed() < std::time::Duration::from_secs(5), "{:?}", started.elapsed());
+    // 30 s and not 5 s: the run is wall-clock timed and a loaded test machine (all suites in
+    // parallel) can take several seconds for the 20 000 iterations; a real hang still fails.
+    assert!(started.elapsed() < std::time::Duration::from_secs(30), "{:?}", started.elapsed());
     let doc = s.get(id).unwrap();
-    assert_eq!(doc.form.iter().find(|f| f.name == "total").unwrap().value, vec!["49999".to_string()]);
+    assert_eq!(doc.form.iter().find(|f| f.name == "total").unwrap().value, vec!["19999".to_string()]);
     // One datasets stream for the scripts' revision, not one per value set.
     assert!(datasets_streams(&doc.bytes) <= 3, "{} datasets streams", datasets_streams(&doc.bytes));
     // What opening changed is noted with the form's other XFA notes.
@@ -7514,6 +9738,44 @@ fn a_line_without_an_appearance_is_drawn_at_its_leader_length() {
     assert_eq!(px(100, 200), vec![255, 255, 255, 255], "nothing along /L");
 }
 
+/// A text box without `/AP`, `/BS` or `/Border` is drawn with the `/Border` default, a 1-pt
+/// border in its text colour (ISO 32000-2 Table 166), and a redaction mark without `/AP` or
+/// `/QuadPoints` is outlined around `/Rect` (Table 195), here in its array `/OC` colour.
+#[test]
+fn text_boxes_and_redaction_marks_without_appearances_show_their_outlines() {
+    let objs: Vec<&[u8]> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>",
+        b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R] >>",
+        b"<< /Type /Annot /Subtype /FreeText /Rect [20 200 180 260] /Contents (Box) /DA (1 0 0 rg /Helv 10 Tf) >>",
+        b"<< /Type /Annot /Subtype /Redact /Rect [20 20 180 120] /IC [0 0 0] /OC [0 0 1] >>",
+    ];
+    let mut bytes = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(bytes.len());
+        bytes.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+        bytes.extend_from_slice(o);
+        bytes.extend_from_slice(b"\nendobj\n");
+    }
+    let xref = bytes.len();
+    bytes.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        bytes.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    bytes.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("outlines.pdf", None, Arc::new(bytes), None).expect("opens");
+    let p = shown(&s, id, 0);
+    let px = |x: u32, y: u32| p.rgba[((y * p.width + x) * 4) as usize..][..3].to_vec();
+    // y down: the text box spans rows 40..100, the redaction mark rows 180..280; both left edges
+    // are column 20.
+    assert_eq!(px(20, 70), [255, 0, 0], "the text box's left border, in its /DA colour");
+    assert_eq!(px(100, 99), [255, 0, 0], "the text box's bottom border");
+    assert_eq!(px(20, 230), [0, 0, 255], "the redaction mark's outline, in its /OC colour");
+    assert_eq!(px(100, 230), [255, 255, 255], "no fill before the redaction is applied");
+}
+
 /// A stamp's `/Rect` and the colour family expected inside it.
 type StampRect = ([f64; 4], char);
 
@@ -7644,6 +9906,37 @@ fn free_text_without_appearance() -> Arc<Vec<u8>> {
     }
     bytes.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
     Arc::new(bytes)
+}
+
+/// The CLI renders what the app shows with no trusted certificates: a named-layer signature in
+/// the state it has then (validity unknown), not the "not verified" its file stores. The source
+/// is not changed.
+#[test]
+fn cli_display_draws_signature_states_as_the_app_does_without_trust() {
+    let (id, _) = test_identity();
+    let mut doc = pdfcraft_cos::Document::open(Arc::new(named_layer_signable_fixture())).unwrap();
+    let signed = Arc::new(sign_prepared(&mut doc, &id, "D:20261002120000+01'00'"));
+    let display = display_bytes_for(signed.clone(), None);
+    assert!(!Arc::ptr_eq(&display, &signed), "the state is drawn into a copy");
+    let mut renderer = pdfcraft_render::PageRenderer::new(display, pdfcraft_render::RenderConfig::default());
+    let page = renderer.render(pdfcraft_render::RenderRequest { page: 0, scale: 1.0, ..Default::default() });
+    assert!(pixels_near(&page.rgba, UNKNOWN_AMBER) > 500, "the unknown state is drawn");
+    assert!(pixels_near(&page.rgba, [255, 214, 51]) < 50, "the stored question mark is not");
+}
+
+/// A layer recognised but too small to draw an icon in (a side so small the icon's scale rounds to
+/// zero) changes nothing, so the CLI renders the source, as the app does.
+#[test]
+fn cli_display_makes_no_copy_when_no_state_could_be_drawn() {
+    let (id, _) = test_identity();
+    let n1 = format!("[0 0 0.{}6 100]", "0".repeat(322));
+    let mut doc = pdfcraft_cos::Document::open(Arc::new(named_layer_signable_fixture_with(&n1))).unwrap();
+    let signed = Arc::new(sign_prepared(&mut doc, &id, "D:20261002120000+01'00'"));
+    let cos = pdfcraft_cos::Document::open(signed.clone()).unwrap();
+    let trust = pdfcraft_sign::TrustStore::default();
+    let signatures = crate::doc_state::signatures_of(&cos, &signed, &trust, &pdfcraft_sign::DigestCache::default());
+    assert!(pdfcraft_sign::has_status_layers(&cos, &signatures), "the layers are recognised");
+    assert!(Arc::ptr_eq(&display_bytes_for(signed.clone(), None), &signed), "nothing was drawn, so there is no copy");
 }
 
 /// #2371: a comment without an appearance stream is displayed by the app, so the CLI's page image
@@ -8105,6 +10398,7 @@ fn content_edit_keeps_pages_annotations_fields_and_links() {
         italic: false,
         size: 12.0,
         color: [0.0, 0.0, 0.0],
+        ink: None,
         align: TextAlign::Left,
         aligns: Vec::new(),
         char_spacing: 0.0,
@@ -8146,6 +10440,7 @@ fn content_refresh_lists_match_the_storages_an_edit_touches() {
                 italic: false,
                 size: 12.0,
                 color: [0.0, 0.0, 0.0],
+                ink: None,
                 align: TextAlign::Left,
                 aligns: Vec::new(),
                 char_spacing: 0.0,
@@ -8168,6 +10463,46 @@ fn content_refresh_lists_match_the_storages_an_edit_touches() {
         assert_eq!(Session::content_refresh_lists(Some(edit)), (false, true), "{}", edit.label());
     }
     assert_eq!(Session::content_refresh_lists(None), (true, true), "undo/redo re-read both");
+}
+
+/// Recognized text is an invisible text layer on its page, so applying it refreshes like any
+/// other content edit, not by re-inspecting the whole document (#6310): on a 567-page file with
+/// 60,102 font resources one word took 2.4 s, the full refresh nearly all of it. The page tree,
+/// comments, fields, links and marks stay as they were; the words are on their page, the font
+/// list picks up the OCR font on `refresh_fonts`, undo and redo take the words out and back
+/// without a full refresh either, and a save keeps them.
+#[test]
+fn ocr_words_refresh_only_the_page_content_they_add() {
+    use crate::ocr::{OcrPage, PlacedWord};
+    let (mut s, id) = session_with(3);
+    let words_on = |s: &Session, page: usize| s.get(id).unwrap().text_lines(page).iter().map(|l| l.text.trim().to_string()).collect::<Vec<_>>();
+    let before = s.get(id).unwrap();
+    let view = format!("{:?}", (&before.info.pages, &before.info.annotations, &before.info.fields, &before.links, before.marks()));
+    let others = (words_on(&s, 0), words_on(&s, 2));
+    assert!(!words_on(&s, 1).iter().any(|w| w.contains("HELLO")));
+    take_full_refreshes();
+    let word =
+        PlacedWord { text: "HELLO".into(), origin: [40.0, 40.0], across: [60.0, 0.0], up: [0.0, 20.0], confidence: None, source: "ocrs".into() };
+    assert_eq!(s.apply_ocr(id, &[OcrPage { page: 1, words: vec![word], already_on_page: 0, skipped: None, notes: Vec::new() }]).unwrap(), 1);
+    assert_eq!(take_full_refreshes(), 0, "applying OCR words doesn't re-inspect the document");
+    let after = s.get(id).unwrap();
+    assert_eq!(format!("{:?}", (&after.info.pages, &after.info.annotations, &after.info.fields, &after.links, after.marks())), view);
+    assert!(words_on(&s, 1).iter().any(|w| w == "HELLO"), "{:?}", words_on(&s, 1));
+    assert_eq!((words_on(&s, 0), words_on(&s, 2)), others, "the other pages are untouched");
+    s.refresh_fonts(id);
+    let d = s.get(id).unwrap();
+    let full = pdfcraft_render::inspect(d.bytes.clone(), None).unwrap();
+    assert_eq!(format!("{:?}", d.info.fonts), format!("{:?}", full.fonts), "the font list is what a full inspection reads");
+    assert_eq!(d.info.file_size, full.file_size);
+    s.undo(id).unwrap();
+    assert!(!words_on(&s, 1).iter().any(|w| w.contains("HELLO")), "undo takes the words out");
+    s.redo(id).unwrap();
+    assert!(words_on(&s, 1).iter().any(|w| w == "HELLO"), "redo puts them back");
+    assert_eq!(take_full_refreshes(), 0, "undo and redo refresh the content alone too");
+    let saved = s.save_bytes(id).unwrap();
+    let mut reopened = Session::new();
+    let rid = reopened.open("saved.pdf", None, saved, None).unwrap();
+    assert!(reopened.get(rid).unwrap().text_lines(1).iter().any(|l| l.text.trim() == "HELLO"), "the save keeps the words");
 }
 
 /// A content edit can add a font (Add text in Times); the narrow refresh leaves the font list
@@ -8504,6 +10839,141 @@ fn a_signed_document_rebuilt_from_object_headers_refuses_edits() {
     assert!(!s.get(id).unwrap().dirty);
 }
 
+/// A one-page document whose only signature field is signed and named with `len` bytes. The
+/// signature field walk reads names of up to 4096 bytes and passes longer ones over.
+fn signed_field_named(len: usize) -> Vec<u8> {
+    pdf_of(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] >> >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 300] /Annots [4 0 R] >>".into(),
+        format!("<< /Type /Annot /Subtype /Widget /FT /Sig /T ({}) /V 5 0 R /Rect [20 20 180 60] /P 3 0 R >>", "a".repeat(len)),
+        "<< /Type /Sig /Filter /Adobe.PPKLite /SubFilter /adbe.pkcs7.detached /ByteRange [0 1 2 1] /Contents <00> >>".into(),
+    ])
+}
+
+/// A PDF of `objs`, numbered from 1, with a cross-reference table.
+fn pdf_of(objs: &[String]) -> Vec<u8> {
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    out
+}
+
+fn open_signed_field_named(len: usize) -> (Session, DocId) {
+    let mut s = Session::new();
+    let id = s.open("form.pdf", None, Arc::new(signed_field_named(len)), None).expect("opens");
+    (s, id)
+}
+
+/// The cap's boundary as the engine meets it: a 4096-byte name is read, and its signature blocks a
+/// full rewrite.
+#[test]
+fn a_signature_named_at_the_cap_is_listed_and_blocks_a_full_rewrite() {
+    let (s, id) = open_signed_field_named(4096);
+    let doc = s.get(id).unwrap();
+    let listed: Vec<_> = doc.signatures.iter().map(|r| (r.field.len(), r.signed)).collect();
+    assert_eq!(listed, [(4096, true)], "the field is read, and no row stands for unread ones");
+    assert_eq!(s.save_full_bytes(id).unwrap_err(), EditError::Signed);
+}
+
+/// One byte past the cap the field goes unread: the list says so, and a full rewrite is still
+/// refused.
+#[test]
+fn a_signature_named_one_byte_past_the_cap_still_blocks_a_full_rewrite() {
+    let (s, id) = open_signed_field_named(4097);
+    let doc = s.get(id).unwrap();
+    let unread = doc.signatures.iter().find(|r| r.field == "UnreadFields");
+    let said = unread.map(|r| (r.signed, r.status, r.details.first().is_some_and(|d| d.message.starts_with("This form has too many fields"))));
+    assert_eq!(said, Some((true, SignatureStatus::Unknown, true)), "{:?}", doc.signatures);
+    assert_eq!(s.save_full_bytes(id).unwrap_err(), EditError::Signed);
+}
+
+/// A signed field behind a kid with no /T: one merged with its widget under a named field that
+/// isn't a signature field (the walk can't list it, so its row is the unread one), and one under a
+/// node with no /T (listed by its full name). Either way the document is signed, and neither a full
+/// save nor Optimize may rewrite it.
+#[test]
+fn signed_fields_behind_kids_without_a_name_block_a_full_rewrite() {
+    let page = |annot: u32| format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 300] /Annots [{annot} 0 R] >>");
+    let head = |annot: u32| {
+        vec![
+            "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] >> >>".to_string(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+            page(annot),
+        ]
+    };
+    let sig = "<< /Type /Sig /SubFilter /ETSI.CAdES.detached /ByteRange [0 1 2 1] /Contents <00> >>".to_string();
+    let mut merged = head(5);
+    merged.extend([
+        "<< /T (parent) /Kids [5 0 R] >>".to_string(),
+        "<< /Type /Annot /Subtype /Widget /FT /Sig /V 6 0 R /Parent 4 0 R /Rect [20 20 180 60] /P 3 0 R >>".into(),
+        sig.clone(),
+    ]);
+    let mut nested = head(6);
+    nested.extend([
+        "<< /T (p) /Kids [5 0 R] >>".to_string(),
+        "<< /Kids [6 0 R] /Parent 4 0 R >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Sig /T (s) /V 7 0 R /Parent 5 0 R /Rect [20 20 180 60] /P 3 0 R >>".into(),
+        sig,
+    ]);
+    for (shape, objs, row) in [("merged", merged, "UnreadFields"), ("nested", nested, "p.s")] {
+        let mut s = Session::new();
+        let id = s.open("form.pdf", None, Arc::new(pdf_of(&objs)), None).expect("opens");
+        let doc = s.get(id).unwrap();
+        assert!(doc.is_signed() && doc.signatures.iter().any(|r| r.field == row), "{shape}: {:?}", doc.signatures);
+        assert_eq!(s.save_full_bytes(id).unwrap_err(), EditError::Signed, "{shape}");
+        assert!(matches!(s.optimize_job(id, &optimize::Settings::default(), &[]), Err(EditError::Signed)), "{shape}");
+    }
+}
+
+/// The walk stops short of a signed field, so a signature may go unlisted; the document still
+/// counts as signed, and each guard against rewriting a signed document holds.
+#[test]
+fn a_signature_the_field_walk_passes_over_still_counts_as_signed() {
+    let (s, id) = open_signed_field_named(64 << 10);
+    let doc = s.get(id).unwrap();
+    assert!(doc.is_signed(), "{:?}", doc.signatures);
+}
+
+#[test]
+fn a_full_rewrite_is_refused_when_the_field_walk_passes_a_signature_over() {
+    let (s, id) = open_signed_field_named(64 << 10);
+    assert_eq!(s.save_full_bytes(id).unwrap_err(), EditError::Signed);
+}
+
+#[test]
+fn optimizing_is_refused_when_the_field_walk_passes_a_signature_over() {
+    let (s, id) = open_signed_field_named(64 << 10);
+    assert!(matches!(s.optimize_job(id, &optimize::Settings::default(), &[]), Err(EditError::Signed)));
+}
+
+#[test]
+fn a_rewriting_edit_is_refused_when_the_field_walk_passes_a_signature_over() {
+    let (mut s, id) = open_signed_field_named(64 << 10);
+    assert!(matches!(s.apply(id, Edit::Sanitize), Err(EditError::SignedRewrite(_))));
+}
+
+#[test]
+fn an_action_appends_to_a_file_whose_field_walk_passes_a_signature_over() {
+    let bytes = Arc::new(signed_field_named(64 << 10));
+    let steps = vec![actions::Step::from_id("set_title", "Checked").unwrap()];
+    let title = actions::Action { name: "Title".into(), description: String::new(), steps, builtin: false };
+    let r = actions::run_on(&title, "form.pdf", bytes.clone(), |_, _| {}).unwrap();
+    assert!(r.bytes.starts_with(&bytes[..]), "the action rewrote the file instead of appending to it");
+    let mut s = Session::new();
+    let id = s.open("out.pdf", None, r.bytes, None).unwrap();
+    assert_eq!(s.get(id).unwrap().info.title.as_deref(), Some("Checked"), "the title is in what was appended");
+}
+
 /// #1324: marking a figure decorative rewrites that figure only. The header, added text and an
 /// unknown entry on the original stream stay attached to the page. This lives in the engine tests
 /// because edit and a11y are the same layer and cannot depend on each other.
@@ -8745,6 +11215,41 @@ fn cropping_an_existing_image_clips_it_and_moves_with_it() {
     assert!(s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Crop([10.0, 10.0, 10.0, 50.0]) }).is_err());
 }
 
+/// Convert colours re-encodes pictures too (RGB → gray, the JPEG staying JPEG) and is one undo
+/// step; a document with nothing to convert refuses rather than leaving an empty step.
+#[test]
+fn converting_colours_recolours_pictures() {
+    let mut s = Session::new();
+    let mut px = image::RgbImage::new(8, 8);
+    for p in px.pixels_mut() {
+        *p = image::Rgb([200, 40, 40]);
+    }
+    let mut jpg = std::io::Cursor::new(Vec::new());
+    image::DynamicImage::ImageRgb8(px).write_to(&mut jpg, image::ImageFormat::Jpeg).unwrap();
+    let pic = s.create_from_images(&[("p.jpg".into(), jpg.into_inner())]).unwrap();
+    let id = s.open("p.pdf", None, pic, None).unwrap();
+    // The picture's colour space and filter, read from the document's current bytes.
+    let picture = |s: &Session| -> (String, String) {
+        let doc = pdfcraft_cos::Document::open(s.get(id).unwrap().bytes.clone()).unwrap();
+        doc.scan_objects()
+            .find_map(|(_, o)| match &*o {
+                pdfcraft_cos::Object::Stream(st) if st.dict.name(b"Subtype") == Some(b"Image") => Some((
+                    String::from_utf8_lossy(st.dict.name(b"ColorSpace").unwrap_or_default()).into_owned(),
+                    String::from_utf8_lossy(st.dict.name(b"Filter").unwrap_or_default()).into_owned(),
+                )),
+                _ => None,
+            })
+            .expect("the picture")
+    };
+    assert_eq!(picture(&s).0, "DeviceRGB");
+    s.apply(id, Edit::ConvertColours { pages: vec![0], settings: ConvertColours::default() }).unwrap();
+    assert_eq!(s.get(id).unwrap().can_undo(), Some("Convert colours"));
+    assert_eq!(picture(&s), ("DeviceGray".to_string(), "DCTDecode".to_string()));
+    assert!(matches!(s.apply(id, Edit::ConvertColours { pages: vec![0], settings: ConvertColours::default() }), Err(EditError::Edit(_))));
+    s.undo(id).unwrap();
+    assert_eq!(picture(&s).0, "DeviceRGB");
+}
+
 /// A 60 x 20 JPEG at 144 x 72 dpi, tagged with EXIF Orientation 6 (shown turned 90 degrees clockwise).
 fn phone_jpeg() -> Vec<u8> {
     use image::codecs::jpeg::{JpegEncoder, PixelDensity, PixelDensityUnit};
@@ -8770,7 +11275,8 @@ fn a_phone_photo_used_as_a_custom_stamp_is_embedded_upright() {
     // A click places the stamp at its natural size: 30 x 20 pt as stored, 20 x 30 pt upright.
     // Named "Signature" so `signature_image` finds its picture.
     let file = MarkFile { name: "photo.jpg".into(), bytes: Arc::new(phone_jpeg()), page: 0 };
-    let stamp = Edit::AddCustomStamp { page: 0, rect: [100.0, 100.0, 100.0, 100.0], name: "Signature".into(), file, author: "Ada".into() };
+    let stamp =
+        Edit::AddCustomStamp { page: 0, rect: [100.0, 100.0, 100.0, 100.0], name: "Signature".into(), file, author: "Ada".into(), line: None };
     session.apply(id, stamp).unwrap();
     let cos = &session.get(id).unwrap().editor.as_ref().unwrap().cos;
     let picture = pdfcraft_annot::signature_image(cos, 0, 0).unwrap().unwrap();
@@ -9200,6 +11706,8 @@ fn dynamic_calculation_reads_and_side_effects_reach_later_fields() {
     assert!(s.take_js_output(id).errors.is_empty());
 }
 
+/// Within one edit, a field's `display` reads as the file had it before the edit, even after a
+/// script set it with the value cached; the next edit's runner reads what the script wrote.
 #[test]
 fn scripted_display_changes_survive_warm_cache_and_new_edit() {
     use pdfcraft_forms::{FieldEvent, Scripts};
@@ -9209,7 +11717,7 @@ fn scripted_display_changes_survive_warm_cache_and_new_edit() {
         let target = fields.iter().find(|f| f.name == "ranks").unwrap();
         let other = fields.iter().find(|f| f.name == "trained").unwrap();
         let old_display = crate::js::field_state(&cos, other).display;
-        let mut runner = crate::js::JsRunner::new(&cos, "synthetic.pdf");
+        let mut runner = crate::js::JsRunner::new(&cos, "synthetic.pdf", false);
         // Populate the display cache before a script writes the same field.
         let warm = runner.run(FieldEvent::Calculate, "event.value = getField('trained').display;", target, "", &fields);
         assert_eq!(warm.value, old_display.to_string());
@@ -9229,7 +11737,7 @@ fn scripted_display_changes_survive_warm_cache_and_new_edit() {
         let same_edit = runner.run(FieldEvent::Calculate, "event.value = getField('trained').display;", target, "", &fields);
         assert_eq!(same_edit.value, old_display.to_string());
         // The next edit must rebuild its cache from the newly written annotation flags.
-        let mut next = crate::js::JsRunner::new(&cos, "synthetic.pdf");
+        let mut next = crate::js::JsRunner::new(&cos, "synthetic.pdf", false);
         let read = next.run(FieldEvent::Calculate, "event.value = getField('trained').display;", target, "", &pdfcraft_forms::fields(&cos));
         assert_eq!(read.value, display.to_string());
         assert!(read.changes.is_empty());
@@ -9264,6 +11772,8 @@ fn exporting_to_word_keeps_the_page_background() {
     assert!(docx.windows(b"word/settings.xml".len()).any(|w| w == b"word/settings.xml"), "Word is told to show the page colour");
 }
 
+/// A table of contents' entries with dotted leaders export to an office document as paragraphs, in
+/// reading order, not as a table.
 #[test]
 fn exporting_office_keeps_dotted_leader_entries_as_paragraphs() {
     let mut content = String::new();
@@ -9285,8 +11795,210 @@ fn exporting_office_keeps_dotted_leader_entries_as_paragraphs() {
     assert!(positions.windows(2).all(|pair| pair[0] < pair[1]), "reading order: {html}");
 }
 
+/// `run_javascript` runs an XFA click script only for a push button, as the app does: a text
+/// field with a click event of its own, named as the target, asks to open no attached file.
+#[test]
+fn run_javascript_runs_xfa_click_scripts_only_for_buttons() {
+    let xdp = r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="front"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <field name="guide" w="2in" h="0.3in"><ui><button/></ui><caption><value><text>Instructions</text></value></caption>
+  <event activity="click"><script contentType="application/x-javascript">event.target.exportDataObject({cName: "Guide.pdf", nLaunch: 2});</script></event></field>
+ <field name="note" w="2in" h="0.3in"><ui><textEdit/></ui>
+  <event activity="click"><script contentType="application/x-javascript">event.target.exportDataObject({cName: "Guide.pdf", nLaunch: 2});</script></event></field>
+</subform>
+</template>
+</xdp:xdp>
+"##;
+    let mut s = Session::new();
+    let id = s.open("guide.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(xdp)), None).expect("opens");
+    s.take_js_output(id);
+    let o = s.run_javascript(id, "", Some("guide")).unwrap();
+    assert_eq!(o.requests, [pdfcraft_js::Request::OpenAttachment { name: "Guide.pdf".into(), open: true }], "the button's click: {o:?}");
+    let o = s.run_javascript(id, "", Some("note")).unwrap();
+    assert!(o.requests.is_empty(), "a text field's click script doesn't run here: {o:?}");
+}
+
+/// In an XFA form a button's click script may open an attached file; the same request from a
+/// text field's exit script is noted in the console and not made.
+#[test]
+fn an_xfa_button_may_open_an_attached_file_and_other_events_may_not() {
+    let xdp = r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="front"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <field name="guide" w="2in" h="0.3in"><ui><button/></ui><caption><value><text>Instructions</text></value></caption>
+  <event activity="click"><script contentType="application/x-javascript">event.target.exportDataObject({cName: "Guide.pdf", nLaunch: 2});</script></event></field>
+ <field name="note" w="2in" h="0.3in"><ui><textEdit/></ui>
+  <event activity="exit"><script contentType="application/x-javascript">event.target.exportDataObject({cName: "Guide.pdf", nLaunch: 2});</script></event></field>
+</subform>
+</template>
+</xdp:xdp>
+"##;
+    let mut s = Session::new();
+    let id = s.open("guide.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(xdp)), None).expect("opens");
+    s.take_js_output(id);
+    s.apply(id, Edit::XfaEvent { som: "form[0].guide[0]".into(), activity: "click".into() }).unwrap();
+    let out = s.take_js_output(id);
+    assert_eq!(out.requests, [pdfcraft_js::Request::OpenAttachment { name: "Guide.pdf".into(), open: true }], "{out:?}");
+    s.apply(id, Edit::SetFieldValue { name: "note".into(), value: FieldValue::Text("x".into()) }).unwrap();
+    let out = s.take_js_output(id);
+    assert!(out.requests.is_empty(), "only a click opens a file: {out:?}");
+    assert!(out.console.iter().any(|c| c.contains("open an attached file")), "{:?}", out.console);
+}
+
+/// A field whose layout:ready script only reads the page count keeps the value its script gives
+/// it: only a field the script gives the page call's result is numbered by the layout.
+#[test]
+fn a_field_that_only_reads_the_page_count_keeps_its_scripts_value() {
+    let xdp = r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="front"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <field name="reads" w="2in" h="0.3in"><ui><textEdit/></ui><event activity="ready" ref="$layout"><script contentType="application/x-javascript">var n = xfa.layout.pageCount(); this.rawValue = "pages: " + n;</script></event></field>
+</subform>
+</template>
+</xdp:xdp>
+"##;
+    let mut s = Session::new();
+    let id = s.open("reads.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(xdp)), None).expect("opens");
+    let value = s.get(id).unwrap().form.iter().find(|f| f.name == "reads").map(|f| f.value.clone()).unwrap_or_default();
+    assert_eq!(value, vec!["pages: 1".to_string()]);
+}
+
+/// layout:ready scripts run once on opening: the root's turns field highlighting on (only when it
+/// is off), a field's sets a value and a later script reads the new highlight, while page
+/// numbering is left to the layout and form:ready is another event.
+#[test]
+fn a_forms_layout_ready_scripts_run_once_it_is_laid_out() {
+    let bytes = Arc::new(pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::layout_ready_template()));
+    let mut s = Session::new();
+    let id = s.open("ready.pdf", None, bytes.clone(), None).expect("opens");
+    let value = |s: &Session, n: &str| s.get(id).unwrap().form.iter().find(|f| f.name == n).map(|f| f.value.clone()).unwrap_or_default();
+    let out = s.take_js_output(id);
+    assert_eq!(out.requests, vec![js::Request::Highlight(true)], "the form turns field highlighting on: {out:?}");
+    assert_eq!(value(&s, "stamp"), vec!["laid out".to_string()]);
+    assert_eq!(value(&s, "seen"), vec!["true".to_string()], "a later script reads the highlight the root's turned on");
+    assert!(value(&s, "pageNo").iter().all(|v| v.is_empty()), "page numbers are the layout's: {:?}", value(&s, "pageNo"));
+    assert!(value(&s, "note").iter().all(|v| v.is_empty()), "form:ready is another event");
+    // With highlighting already on, the form has nothing to ask for.
+    s.set_field_highlight(true);
+    let id = s.open("ready.pdf", None, bytes, None).expect("opens");
+    assert!(s.take_js_output(id).requests.is_empty());
+}
+
+/// An edit's two script runtimes share one field highlight: a change an XFA script makes reaches
+/// the field scripts' runner, and one the field scripts make is what the next XFA script reads.
+#[test]
+fn an_edits_xfa_and_field_scripts_share_the_field_highlight() {
+    let cos = pdfcraft_cos::Document::open(Arc::new(fixture(1))).unwrap();
+    let mut cx = EditCtx::new(None, 0);
+    cx.js = Some(js::JsRunner::new(&cos, "synthetic.pdf", false));
+    cx.set_highlight(true);
+    assert!(cx.js.as_ref().is_some_and(|js| js.doc.highlight), "an XFA script's change reaches the field scripts");
+    if let Some(js) = cx.js.as_mut() {
+        js.doc.highlight = false;
+    }
+    assert!(!cx.highlight(), "the next XFA script reads the field scripts' change");
+}
+
+/// In a batch of value edits, a later field's change script reads the field highlight an earlier
+/// one's set: `on`'s change turns it on, and `look`'s, in the same batch, records what it reads.
+/// (A form-script event itself can't be batched.)
+#[test]
+fn a_later_xfa_edit_in_a_batch_reads_the_highlight_an_earlier_one_set() {
+    let script = |js: &str| format!(r#"<event activity="change"><script contentType="application/x-javascript">{js}</script></event>"#);
+    let xdp = format!(
+        r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="front"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <field name="on" w="1in" h="0.3in"><ui><textEdit/></ui>{on}</field>
+ <field name="look" w="1in" h="0.3in"><ui><textEdit/></ui>{look}</field>
+ <field name="seen" w="2in" h="0.3in"><ui><textEdit/></ui></field>
+</subform>
+</template>
+</xdp:xdp>
+"##,
+        on = script("app.runtimeHighlight = true;"),
+        look = script("xfa.form.form.seen.rawValue = String(app.runtimeHighlight);"),
+    );
+    let mut s = Session::new();
+    let id = s.open("batch.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&xdp)), None).expect("opens");
+    let type_in = |name: &str| Edit::SetFieldValue { name: name.into(), value: FieldValue::Text("x".into()) };
+    s.apply(id, Edit::Batch { edits: vec![type_in("on"), type_in("look")], label: "Type".into() }).expect("types");
+    let seen = s.get(id).unwrap().form.iter().find(|f| f.name == "seen").map(|f| f.value.clone()).unwrap_or_default();
+    assert_eq!(seen, vec!["true".to_string()]);
+}
+
+/// Field scripts of one edit read the field highlight an earlier one set: `on`'s calculation turns
+/// it on, and `seen`'s, which runs after it, records what it reads.
+#[test]
+fn a_later_field_script_reads_the_highlight_an_earlier_one_set() {
+    // Fields `input` (no script), then those named in `calculated` with their calculate scripts,
+    // calculated in that order.
+    let form = |calculated: &[(&str, &str)]| {
+        let text = |name: &str, y: usize, aa: &str| {
+            format!("<< /Type /Annot /Subtype /Widget /FT /Tx /T ({name}) /Rect [20 {y} 180 {}] /P 3 0 R /F 4 {aa} >>", y + 20)
+        };
+        let n = calculated.len();
+        let refs = |from: usize| (from..from + n).map(|i| format!("{i} 0 R")).collect::<Vec<_>>().join(" ");
+        let mut objs = vec![
+            format!(
+                "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R {}] /CO [{}] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv {} 0 R >> >> >> >>",
+                refs(5),
+                refs(5),
+                5 + n
+            ),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>".to_string(),
+            format!("<< /Type /Page /Parent 2 0 R /Annots [4 0 R {}] >>", refs(5)),
+            text("input", 250, ""),
+        ];
+        for (i, (name, js)) in calculated.iter().enumerate() {
+            objs.push(text(name, 220 - 30 * i, &format!("/AA << /C << /S /JavaScript /JS ({js}) >> >>")));
+        }
+        objs.push("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".to_string());
+        let mut out = b"%PDF-1.7\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, o) in objs.iter().enumerate() {
+            offsets.push(out.len());
+            out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+        }
+        let xref = out.len();
+        out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+        for o in offsets {
+            out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+        }
+        out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+        Arc::new(out)
+    };
+    let seen = ("seen", "event.value = String\\(app.runtimeHighlight\\);");
+    let value = |s: &Session, id: DocId, n: &str| s.get(id).unwrap().form.iter().find(|f| f.name == n).unwrap().value.clone();
+    // `on`'s calculation turns it on, and `seen`'s, which runs after it, records what it reads.
+    let mut s = Session::new();
+    let id = s.open("seen.pdf", None, form(&[("on", "app.runtimeHighlight = true; event.value = 'set';"), seen]), None).unwrap();
+    s.apply(id, Edit::SetFieldValue { name: "input".into(), value: FieldValue::Text("1".into()) }).unwrap();
+    assert_eq!(value(&s, id, "on"), ["set"]);
+    assert_eq!(value(&s, id, "seen"), ["true"], "the later calculation reads the new setting");
+    assert!(s.take_js_output(id).requests.contains(&js::Request::Highlight(true)));
+    // A button's script that turns it off and changes a field: the calculations it sets off read
+    // the new setting too.
+    let mut s = Session::new();
+    s.set_field_highlight(true);
+    let id = s.open("seen.pdf", None, form(&[seen]), None).unwrap();
+    let o = s.run_javascript(id, "app.runtimeHighlight = false; getField('input').value = '2';", Some("input")).unwrap();
+    assert_eq!(o.requests, [js::Request::Highlight(false)]);
+    assert_eq!(value(&s, id, "seen"), ["false"], "the button's own change reaches the calculations");
+}
+
 /// A date typed in another of an XFA date field's edit patterns is kept in its first: yymmdd and
-/// yyyymd are rewritten as yyyymmdd, a date none of them reads is refused, and the data holds the date.
+/// yyyymd are rewritten as yyyymmdd, and the data holds the date. Text none of them reads is kept
+/// as typed, in the field and the data, as another viewer keeps it.
 #[test]
 fn a_date_typed_by_another_of_an_xfa_fields_edit_patterns_is_kept_in_its_first() {
     let mut s = Session::new();
@@ -9298,18 +12010,21 @@ fn a_date_typed_by_another_of_an_xfa_fields_edit_patterns_is_kept_in_its_first()
     assert_eq!(value(&s), ["20261018"]);
     s.apply(id, Edit::SetFieldValue { name: "leave".into(), value: FieldValue::Text("2026118".into()) }).expect("so is yyyymd");
     assert_eq!(value(&s), ["20261108"]);
-    let refused = s.apply(id, Edit::SetFieldValue { name: "leave".into(), value: FieldValue::Text("2618".into()) });
-    assert!(refused.is_err_and(|e| e.to_string().contains("yyyymmdd")), "none of its patterns reads it");
-    assert_eq!(value(&s), ["20261108"]);
     // The data holds the date.
-    let cos = pdfcraft_cos::Document::open(s.save_bytes(id).unwrap()).unwrap();
-    let data = pdfcraft_xfa::parse_datasets(&pdfcraft_xfa::read_packets(&cos).unwrap().unwrap().xdp).expect("a datasets packet");
-    assert_eq!(data.text_at(&pdfcraft_xfa::som_to_path("form[0].leave[0]")), Some("2026-11-08"));
+    let data_of = |s: &Session| {
+        let cos = pdfcraft_cos::Document::open(s.save_bytes(id).unwrap()).unwrap();
+        let data = pdfcraft_xfa::parse_datasets(&pdfcraft_xfa::read_packets(&cos).unwrap().unwrap().xdp).expect("a datasets packet");
+        data.text_at(&pdfcraft_xfa::som_to_path("form[0].leave[0]")).map(str::to_string)
+    };
+    assert_eq!(data_of(&s).as_deref(), Some("2026-11-08"));
+    s.apply(id, Edit::SetFieldValue { name: "leave".into(), value: FieldValue::Text("2618".into()) }).expect("kept as typed");
+    assert_eq!(value(&s), ["2618"]);
+    assert_eq!(data_of(&s).as_deref(), Some("2618"));
 }
 
-/// A date the field's own scripts refuse is not tried again in another of an XFA date field's
-/// patterns: only a date its format refuses is, which happens before any script runs, so the
-/// scripts run once. This validate script counts its runs in `name` and accepts on its second.
+/// A date typed in another of an XFA date field's patterns is rewritten before any of the field's
+/// scripts run, so they run once, and a date they refuse stays refused. This validate script counts
+/// its runs in `name` and accepts on its second.
 #[test]
 fn a_date_its_validate_script_refuses_is_not_tried_again() {
     let mut s = Session::new();
@@ -9319,10 +12034,163 @@ fn a_date_its_validate_script_refuses_is_not_tried_again() {
     let script = Some("var n = Number(getField('name').value || 0) + 1; getField('name').value = String(n); event.rc = n >= 2;".to_string());
     s.apply(id, Edit::SetFieldScript { name: "leave".into(), event: "validate".into(), script }).unwrap();
     let value = |s: &Session, n: &str| s.get(id).unwrap().form.iter().find(|f| f.name == n).unwrap().value.clone();
-    // Its format reads 18OCT26, and so does its DDMMMYY pattern.
+    // Its DDMMMYY pattern reads 18OCT26, which its format would read more loosely too.
     let refused = s.apply(id, Edit::SetFieldValue { name: "leave".into(), value: FieldValue::Text("18OCT26".into()) });
     assert!(refused.is_err(), "the validate script refused it, once");
     assert!(value(&s, "name").is_empty(), "nothing the refused run changed is kept: {:?}", value(&s, "name"));
+}
+
+/// Floating fields (XFA 3.3 p. 1222): text that embeds a hidden field shows the value its
+/// initialize script gives it, the value a button's script gives it later and the value a
+/// calculation gives one, as it does the sheet number and count; the fields sit in an unnamed
+/// subform, as forms place them (#6160).
+#[test]
+fn text_shows_the_values_scripts_give_its_floating_fields() {
+    let xdp = r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="front"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <subform w="7in" h="9in">
+  <field name="Viewer" id="floatViewer" presence="hidden" access="readOnly" w="1in" h="0.3in"><ui><textEdit/></ui>
+   <event activity="initialize"><script contentType="application/x-javascript">this.rawValue = "Opened";</script></event><bind match="none"/></field>
+  <field name="Sheet" id="floatSheet" presence="hidden" w="1in" h="0.3in"><ui><textEdit/></ui>
+   <event activity="ready" ref="$layout"><script contentType="application/x-javascript">this.rawValue = xfa.layout.sheet(this)+1</script></event><bind match="none"/></field>
+  <field name="Sheets" id="floatSheets" presence="hidden" w="1in" h="0.3in"><ui><textEdit/></ui>
+   <event activity="ready" ref="$layout"><script contentType="application/x-javascript">this.rawValue = xfa.layout.sheetCount()</script></event><bind match="none"/></field>
+  <field name="Shout" id="floatShout" presence="hidden" w="1in" h="0.3in"><ui><textEdit/></ui>
+   <calculate><script contentType="application/x-javascript">Viewer.rawValue + "!"</script></calculate><bind match="none"/></field>
+  <field name="set" y="1in" w="2in" h="0.3in"><ui><button/></ui>
+   <event activity="click"><script contentType="application/x-javascript">Viewer.rawValue = "Clicked";</script></event></field>
+  <draw name="line" y="2in" w="6in" h="1in"><value><exData contentType="text/html"><body xmlns="http://www.w3.org/1999/xhtml" xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"><p>Viewer: <span xfa:embedType="uri" xfa:embedMode="raw" xfa:embed="#floatViewer"/><br/>Sheet <span xfa:embed="#floatSheet"/> of <span xfa:embed="#floatSheets"/><br/>Calculated: <span xfa:embed="#floatShout"/></p></body></exData></value></draw>
+ </subform>
+</subform>
+</template>
+</xdp:xdp>
+"##;
+    let mut s = Session::new();
+    let id = s.open("float.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(xdp)), None).expect("opens");
+    let text = page_texts(&s, id).join(
+        "
+",
+    );
+    assert!(text.contains("Viewer: Opened"), "{text}");
+    assert!(text.contains("Sheet 1 of 1"), "{text}");
+    assert!(text.contains("Calculated: Opened!"), "{text}");
+    let o = s.run_javascript(id, "", Some("set")).expect("clicks");
+    assert_eq!(o.error, None, "{o:?}");
+    let text = page_texts(&s, id).join(
+        "
+",
+    );
+    assert!(text.contains("Viewer: Clicked"), "{text}");
+    assert!(text.contains("Calculated: Clicked!"), "{text}");
+}
+
+/// Text that embeds a field follows its data whoever writes it (XFA 3.3 pp. 221–222): a
+/// script writing another field bound to the same data, a script writing a page area's field,
+/// a typed value in a plain one-line field, a pick in a drop-down list, and a reset (of a
+/// drop-down list, and of a page area's field that has no widget).
+#[test]
+fn floating_fields_follow_their_data_whoever_writes_it() {
+    let xdp = r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="front"><contentArea x="0.5in" y="1in" w="7.5in" h="9in"/><medium short="8.5in" long="11in"/>
+  <field name="Stamp" id="floatStamp" presence="hidden" w="1in" h="0.3in"><ui><textEdit/></ui></field>
+  <draw x="0.5in" y="0.2in" w="5in" h="0.4in"><value><exData contentType="text/html"><body xmlns="http://www.w3.org/1999/xhtml" xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"><p>Stamp: <span xfa:embed="#floatStamp"/></p></body></exData></value></draw>
+ </pageArea></pageSet>
+ <subform w="7in" h="8in">
+  <field name="Note" id="floatNote" presence="hidden" w="1in" h="0.3in"><ui><textEdit/></ui></field>
+  <area name="box" y="0.5in"><field name="Note" w="2in" h="0.3in"><ui><textEdit/></ui></field></area>
+  <field name="Edit" id="floatEdit" y="1in" w="2in" h="0.3in"><ui><textEdit/></ui><value><text>start</text></value></field>
+  <field name="Pick" id="floatPick" y="4.5in" w="2in" h="0.3in"><ui><choiceList/></ui><items><text>A</text><text>B</text></items><value><text>A</text></value></field>
+  <field name="pickB" y="5in" w="2in" h="0.3in"><ui><button/></ui>
+   <event activity="click"><script contentType="application/x-javascript">Pick.rawValue = "B";</script></event></field>
+  <field name="clearPick" y="5.5in" w="2in" h="0.3in"><ui><button/></ui>
+   <event activity="click"><script contentType="application/x-javascript">xfa.host.resetData("Pick");</script></event></field>
+  <field name="share" y="1.5in" w="2in" h="0.3in"><ui><button/></ui>
+   <event activity="click"><script contentType="application/x-javascript">box.Note.rawValue = "Shared";</script></event></field>
+  <field name="stamp" y="2in" w="2in" h="0.3in"><ui><button/></ui>
+   <event activity="click"><script contentType="application/x-javascript">front.Stamp.rawValue = "Paid";</script></event></field>
+  <field name="clear" y="2.5in" w="2in" h="0.3in"><ui><button/></ui>
+   <event activity="click"><script contentType="application/x-javascript">xfa.host.resetData();</script></event></field>
+  <draw y="3in" w="6in" h="1in"><value><exData contentType="text/html"><body xmlns="http://www.w3.org/1999/xhtml" xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"><p>Note: <span xfa:embed="#floatNote"/><br/>Edit: <span xfa:embed="#floatEdit"/><br/>Pick: <span xfa:embed="#floatPick"/></p></body></exData></value></draw>
+ </subform>
+</subform>
+</template>
+</xdp:xdp>
+"##;
+    let mut s = Session::new();
+    let id = s.open("follow.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(xdp)), None).expect("opens");
+    let text = |s: &Session| {
+        page_texts(s, id).join(
+            "
+",
+        )
+    };
+    let click = |s: &mut Session, button: &str| {
+        let o = s.run_javascript(id, "", Some(button)).expect("clicks");
+        assert_eq!(o.error, None, "{button}: {o:?}");
+    };
+    assert!(text(&s).contains("Edit: start"), "{}", text(&s));
+    click(&mut s, "share");
+    assert!(text(&s).contains("Note: Shared"), "the field bound to the same data: {}", text(&s));
+    click(&mut s, "stamp");
+    assert!(text(&s).contains("Stamp: Paid"), "a page area's field: {}", text(&s));
+    let edit = s.get(id).unwrap().form.iter().find(|f| f.name.ends_with("Edit")).map(|f| f.name.clone()).expect("the Edit field");
+    s.apply(id, Edit::SetFieldValue { name: edit, value: FieldValue::Text("typed".into()) }).unwrap();
+    assert!(text(&s).contains("Edit: typed"), "a typed value in a one-line field: {}", text(&s));
+    click(&mut s, "pickB");
+    assert!(text(&s).contains("Pick: B"), "{}", text(&s));
+    click(&mut s, "clearPick");
+    assert!(text(&s).contains("Pick: A"), "a reset drop-down list: {}", text(&s));
+    let pick = s.get(id).unwrap().form.iter().find(|f| f.name.ends_with("Pick")).map(|f| f.name.clone()).expect("the Pick field");
+    s.apply(id, Edit::SetFieldValue { name: pick, value: FieldValue::Choice(vec!["B".into()]) }).unwrap();
+    assert!(text(&s).contains("Pick: B"), "a picked value: {}", text(&s));
+    click(&mut s, "pickB");
+    click(&mut s, "clear");
+    let after = text(&s);
+    assert!(after.contains("Edit: start") && !after.contains("Shared"), "reset: {after}");
+    assert!(after.contains("Pick: A"), "a reset drop-down list: {after}");
+    assert!(after.contains("Stamp:") && !after.contains("Paid"), "a reset page-area field with no widget: {after}");
+}
+
+/// A reset gives a hidden floating field its default in every row of a repeating subform, not
+/// only the first, and each row's text shows it.
+#[test]
+fn a_reset_clears_a_floating_field_in_every_row() {
+    let xdp = r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="front"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <subform name="row" layout="tb"><occur min="1" max="-1"/>
+  <field name="amount" id="floatAmount" presence="hidden" w="1in" h="0.3in"><ui><textEdit/></ui><value><text>none</text></value></field>
+  <draw w="5in" h="0.4in"><value><exData contentType="text/html"><body xmlns="http://www.w3.org/1999/xhtml" xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"><p>Amount: <span xfa:embed="#floatAmount"/></p></body></exData></value></draw>
+ </subform>
+ <field name="clear" w="2in" h="0.3in"><ui><button/></ui>
+  <event activity="click"><script contentType="application/x-javascript">xfa.host.resetData();</script></event></field>
+</subform>
+</template>
+<xfa:datasets xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"><xfa:data><form><row><amount>10</amount></row><row><amount>20</amount></row></form></xfa:data></xfa:datasets>
+</xdp:xdp>
+"##;
+    let mut s = Session::new();
+    let id = s.open("rows.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(xdp)), None).expect("opens");
+    let text = page_texts(&s, id).join(
+        "
+",
+    );
+    assert!(text.contains("Amount: 10") && text.contains("Amount: 20"), "{text}");
+    let o = s.run_javascript(id, "", Some("clear")).expect("clicks");
+    assert_eq!(o.error, None, "{o:?}");
+    let text = page_texts(&s, id).join(
+        "
+",
+    );
+    assert_eq!(text.matches("Amount: none").count(), 2, "both rows reset: {text}");
 }
 
 /// An XFA button's click script may show the attachments panel; a text field's exit script
@@ -10185,6 +13053,42 @@ fn need_appearances_buttons_are_displayed_from_their_captions() {
     }
 }
 
+/// Copy and paste: the copies of a comment and its reply land on the asked-for page of another
+/// document under names of their own (nothing replaced; a second paste gives a second set),
+/// undo takes a paste away as one step, and a clipboard without comments is refused.
+#[test]
+fn pasting_copied_comments_adds_copies_that_undo_as_one_step() {
+    let (mut s, id) = session_with(2);
+    s.apply(id, rect_comment(1, [80.0, 80.0, 120.0, 120.0])).unwrap();
+    s.apply(id, Edit::ReplyToAnnotation { page: 1, index: 0, text: "Done".into(), author: "Ada".into() }).unwrap();
+    let xfdf = s.export_comments(id, &[(1, 0)]).unwrap();
+    assert!(xfdf.contains("<square") && xfdf.contains("inreplyto="), "{xfdf}");
+    let other = s.open("other.pdf", None, Arc::new(fixture(2)), None).expect("opens");
+    s.apply(other, Edit::PasteComments { xfdf: xfdf.clone(), page: 0, offset: None }).unwrap();
+    let a = s.get(other).unwrap().info.annotations.clone();
+    assert_eq!(a.len(), 2, "{a:?}");
+    assert!(a.iter().all(|x| x.page == 0), "on the asked-for page: {a:?}");
+    let parent = a.iter().find(|x| x.in_reply_to.is_none()).unwrap();
+    let reply = a.iter().find(|x| x.in_reply_to.is_some()).unwrap();
+    assert_eq!(reply.in_reply_to, parent.name, "the reply follows its copied parent");
+    assert_ne!(parent.name, s.get(id).unwrap().info.annotations[0].name, "a name of its own");
+    assert_eq!(parent.contents.as_deref(), Some("Look here"));
+    assert_eq!(s.get(other).unwrap().can_undo(), Some("Paste comments"));
+    s.apply(other, Edit::PasteComments { xfdf: xfdf.clone(), page: 1, offset: Some([30.0, -10.0]) }).unwrap();
+    let a = s.get(other).unwrap().info.annotations.clone();
+    assert_eq!(a.len(), 4, "a second set");
+    let placed = a.iter().find(|x| x.page == 1 && x.in_reply_to.is_none()).unwrap();
+    assert!((placed.rect[0] - 110.0).abs() < 0.5 && (placed.rect[1] - 70.0).abs() < 0.5, "moved by the offset: {:?}", placed.rect);
+    assert_eq!(comment_count(&xfdf), 1);
+    assert_eq!(comments_bounds(&xfdf).map(|b| b.map(|v| v.round())), Some([80.0, 80.0, 120.0, 120.0]));
+    s.undo(other).unwrap();
+    assert_eq!(s.get(other).unwrap().info.annotations.len(), 2);
+    assert!(s.apply(other, Edit::PasteComments { xfdf: "hello".into(), page: 0, offset: None }).is_err(), "no comments in it");
+    assert!(s.apply(other, Edit::PasteComments { xfdf, page: 9, offset: None }).is_err(), "no such page");
+    assert_eq!(s.get(other).unwrap().info.annotations.len(), 2, "a refused paste changes nothing");
+    assert_eq!(s.get(id).unwrap().info.annotations.len(), 2, "the source is untouched");
+}
+
 #[test]
 fn repeated_backdrop_artwork_survives_background_undo_redo_and_both_save_modes() {
     let white = "1 g";
@@ -10238,6 +13142,250 @@ fn repeated_backdrop_artwork_survives_background_undo_redo_and_both_save_modes()
     black(&s, rewritten);
     s.apply(rewritten, Edit::RemoveMarks { kind: MarkKind::Background }).unwrap();
     black(&s, rewritten);
+}
+
+/// A page still exists after its only master widget is hidden: its master nodes stay in the
+/// script model, so a later script can address them again (test from wireless89's review of
+/// #5368).
+#[test]
+fn xfa_page_master_instance_survives_hiding_its_last_widget() {
+    let template = pdfcraft_xfa::fixtures::repeated_print_button_template()
+        .replace(r#"xfa.host.print(1, "0", (xfa.host.numPages -1).toString(), 0, 0, 0, 0, 0);"#, r#"this.presence = "hidden";"#)
+        .replace(
+            "</subform></template>",
+            r#"<field name="restore" w="100pt" h="25pt"><ui><button/></ui>
+<event activity="click"><script contentType="application/x-javascript">xfa.resolveNode("master[2].PrintButton1").presence = "visible";</script></event></field></subform></template>"#,
+        );
+    let (tpl, _) = pdfcraft_xfa::parse(&template).unwrap();
+    let mut s = Session::new().with_clock(|| 1_700_000_000).with_xfa_time_scale(100);
+    let id = s.open("hidden-master.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&template)), None).unwrap();
+    let out = s.run_javascript(id, "", Some("PrintButton1_3")).unwrap();
+    assert_eq!(out.error, None, "{out:?}");
+    let cos = &s.get(id).unwrap().editor.as_ref().unwrap().cos;
+    assert_eq!(pdfcraft_organize::page_count(cos).unwrap(), 3, "the body still fills three pages");
+    assert!(!s.get(id).unwrap().form.iter().any(|f| f.name == "PrintButton1_3"));
+    let uses = pdfcraft_xfa::page_area_uses(cos, &tpl);
+    let restored = s.run_javascript(id, "", Some("restore")).unwrap();
+    assert_eq!((uses.get("master").copied(), restored.error), (Some(3), None), "the third page master remains addressable by scripts");
+}
+
+/// Page-local values and a globally bound control survive relayout, disappearing and
+/// reappearing pages, incremental saves and vector printing (test from wireless89's review of #5368).
+#[test]
+fn xfa_master_values_survive_page_changes_save_reopen_and_print() {
+    fn name(s: &Session, id: DocId, som: &str) -> String {
+        let d = s.get(id).unwrap();
+        pdfcraft_xfa::fields_by_som(&d.editor.as_ref().unwrap().cos).get(som).unwrap_or_else(|| panic!("missing {som}")).clone()
+    }
+    fn set(s: &mut Session, id: DocId, som: &str, text: &str) {
+        let n = name(s, id, som);
+        s.apply(id, Edit::SetFieldValue { name: n, value: FieldValue::Text(text.into()) }).unwrap();
+    }
+    fn check(s: &Session, id: DocId, expected: &[&str]) {
+        let d = s.get(id).unwrap();
+        // Inspect the actual PDF tree: refreshing the cached view after XFA relayout is
+        // a separate issue (#4604), not part of this master-value regression.
+        assert_eq!(pdfcraft_organize::page_count(&d.editor.as_ref().unwrap().cos).unwrap(), expected.len());
+        let by_som = pdfcraft_xfa::fields_by_som(&d.editor.as_ref().unwrap().cos);
+        assert_eq!(by_som.keys().filter(|som| som.ends_with(".stamp[0]")).count(), expected.len());
+        for (page, value) in expected.iter().enumerate() {
+            for (field, expected) in [("stamp", *value), ("shared", "GLOBAL_VALUE")] {
+                let n = name(s, id, &format!("master[{page}].{field}[0]"));
+                assert_eq!(d.form.iter().find(|f| f.name == n).unwrap().value, [expected], "page {page}: {field}");
+            }
+        }
+    }
+    let template = master_round_trip_review_template();
+    let mut s = Session::new().with_clock(|| 1_700_000_000).with_xfa_time_scale(100);
+    let mut id = s.open("masters.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&template)), None).unwrap();
+    assert_eq!(s.get(id).unwrap().info.pages.len(), 3);
+    for (page, value) in ["MASTER_A", "MASTER_B", "MASTER_C"].iter().enumerate() {
+        set(&mut s, id, &format!("master[{page}].stamp[0]"), value);
+    }
+    check(&s, id, &["MASTER_A", "MASTER_B", "MASTER_C"]);
+    let mark = name(&s, id, "master[1].mark[0]");
+    let out = s.run_javascript(id, "throw new Error('AcroForm fallback ran')", Some(&mark)).unwrap();
+    assert_eq!(out.error, None, "{out:?}");
+    check(&s, id, &["MASTER_A", "MASTER_B_CLICK", "MASTER_C"]);
+    let more = name(&s, id, "form[0].page1[0].more[0]");
+    s.apply(id, Edit::SetFieldValue { name: more.clone(), value: FieldValue::Check(false) }).unwrap();
+    assert!(s.take_js_output(id).errors.is_empty());
+    check(&s, id, &["MASTER_A", "MASTER_B_CLICK"]);
+    s.undo(id).unwrap();
+    check(&s, id, &["MASTER_A", "MASTER_B_CLICK", "MASTER_C"]);
+    s.redo(id).unwrap();
+    check(&s, id, &["MASTER_A", "MASTER_B_CLICK"]);
+    s.apply(id, Edit::SetFieldValue { name: more, value: FieldValue::Check(true) }).unwrap();
+    check(&s, id, &["MASTER_A", "MASTER_B_CLICK", "MASTER_C"]);
+    for cycle in 0..3 {
+        let saved = s.save_bytes(id).unwrap();
+        let cos = pdfcraft_cos::Document::open(saved.clone()).unwrap();
+        let data = pdfcraft_xfa::data_of(&cos).unwrap();
+        for (page, value) in ["MASTER_A", "MASTER_B_CLICK", "MASTER_C"].iter().enumerate() {
+            assert_eq!(data.text_at(&pdfcraft_xfa::som_to_path(&format!("master[{page}].stamp[0]"))), Some(*value), "cycle {cycle}: page {page}");
+        }
+        assert_eq!(data.text_at(&pdfcraft_xfa::som_to_path("master[0].shared[0]")), Some("GLOBAL_VALUE"));
+        id = s.open("again.pdf", None, saved, None).unwrap();
+        assert!(s.take_js_output(id).errors.is_empty());
+        check(&s, id, &["MASTER_A", "MASTER_B_CLICK", "MASTER_C"]);
+    }
+    let printed = s.print_pdf(id, &print::Settings { pages: vec![0, 1, 2], ..Default::default() }).unwrap();
+    let pid = s.open("printed.pdf", None, Arc::new(printed), None).unwrap();
+    let texts = page_texts(&s, pid);
+    assert_eq!(texts.len(), 3);
+    for (page, value) in ["MASTER_A", "MASTER_B_CLICK", "MASTER_C"].iter().enumerate() {
+        assert!(texts[page].contains(value) && texts[page].contains("GLOBAL_VALUE"), "page {page}: {:?}", texts[page]);
+        for other in ["MASTER_A", "MASTER_B_CLICK", "MASTER_C"].iter().filter(|other| *other != value) {
+            assert!(!texts[page].contains(other), "page {page} contains another page's value: {other}");
+        }
+    }
+}
+fn master_round_trip_review_template() -> String {
+    let template = pdfcraft_xfa::fixtures::repeated_print_button_template()
+        .replace(r#"name="PrintButton1" x="36pt""#, r#"name="PrintButton1" x="480pt""#)
+        .replace("</pageArea>", r#"
+  <field name="stamp" x="36pt" y="24pt" w="160pt" h="25pt"><ui><textEdit/></ui></field>
+  <field name="shared" x="200pt" y="24pt" w="150pt" h="25pt"><ui><textEdit/></ui><bind match="global"/></field>
+  <field name="mark" x="360pt" y="24pt" w="80pt" h="25pt"><ui><button/></ui>
+   <event activity="click"><script contentType="application/x-javascript">stamp.rawValue = "MASTER_B_CLICK";</script></event>
+  </field>
+ </pageArea>"#)
+        .replace(r#"<subform name="page1" layout="tb">"#, r#"<subform name="page1" layout="tb">
+ <field name="more" w="20pt" h="20pt"><ui><checkButton/></ui><items><integer>1</integer><integer>0</integer></items><value><integer>1</integer></value>
+  <event activity="change"><script contentType="application/x-javascript">xfa.resolveNode("form.page3").presence = this.rawValue == 1 ? "visible" : "hidden";</script></event>
+ </field>"#);
+    format!(
+        r#"<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">{template}
+<xfa:datasets xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"><xfa:data><master><shared>GLOBAL_VALUE</shared></master></xfa:data></xfa:datasets></xdp:xdp>"#
+    )
+}
+
+/// Hiding the first, middle, last or every page-master widget keeps every master
+/// instance addressable, live and after save and reopen (wireless89, #5368).
+#[test]
+fn xfa_hidden_master_instances_remain_addressable_across_reopen_matrix() {
+    let mut failures = Vec::new();
+    for targets in [vec![0usize], vec![1], vec![2], vec![0, 1, 2]] {
+        let hide =
+            targets.iter().map(|page| format!("xfa.resolveNode('master[{page}].PrintButton1').presence = 'hidden';")).collect::<Vec<_>>().join(" ");
+        let restore =
+            targets.iter().map(|page| format!("xfa.resolveNode('master[{page}].PrintButton1').presence = 'visible';")).collect::<Vec<_>>().join(" ");
+        let template = pdfcraft_xfa::fixtures::repeated_print_button_template().replace(
+            r#"xfa.host.print(1, "0", (xfa.host.numPages -1).toString(), 0, 0, 0, 0, 0);"#, &hide,
+        ).replace("</subform></template>", &format!(r#"<field name="restore" w="100pt" h="25pt"><ui><button/></ui><event activity="click"><script contentType="application/x-javascript">{restore}</script></event></field></subform></template>"#));
+        let (tpl, _) = pdfcraft_xfa::parse(&template).unwrap();
+        let mut s = Session::new().with_clock(|| 1_700_000_000).with_xfa_time_scale(100);
+        let id = s.open("hidden.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&template)), None).unwrap();
+        assert_eq!(s.run_javascript(id, "", Some("PrintButton1")).unwrap().error, None);
+        s.undo(id).unwrap();
+        assert_eq!(
+            pdfcraft_xfa::fields_by_som(&s.get(id).unwrap().editor.as_ref().unwrap().cos).keys().filter(|name| name.contains("PrintButton1")).count(),
+            3
+        );
+        s.redo(id).unwrap();
+        let saved = s.save_bytes(id).unwrap();
+        for (stage, current) in [("live", id), ("reopened", s.open("saved.pdf", None, saved, None).unwrap())] {
+            let cos = &s.get(current).unwrap().editor.as_ref().unwrap().cos;
+            assert_eq!(pdfcraft_organize::page_count(cos).unwrap(), 3);
+            let count = pdfcraft_xfa::page_area_uses(cos, &tpl).get("master").copied();
+            let error = s.run_javascript(current, "", Some("restore")).unwrap().error;
+            let restored = targets.iter().all(|page| {
+                pdfcraft_xfa::fields_by_som(&s.get(current).unwrap().editor.as_ref().unwrap().cos)
+                    .contains_key(&format!("master[{page}].PrintButton1[0]"))
+            });
+            eprintln!("targets={targets:?} stage={stage} count={count:?} error={error:?} restored={restored}");
+            if count != Some(3) || error.is_some() || !restored {
+                failures.push(format!("{targets:?}/{stage}: count={count:?}, error={error:?}, restored={restored}"));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// A custom stamp's line template (#1741) fills in the author, date and time as the dynamic
+/// stamps write them, and the "By" line itself is unchanged.
+#[test]
+fn stamp_lines_fill_in_the_name_date_and_time() {
+    let s = Session::new().with_clock(|| 1_700_000_000);
+    assert_eq!(s.stamp_line("Received {date} {time} by {name}", " Ada "), "Received Nov 14, 2023 10:13 pm by Ada");
+    // Review on #2345 (gabglus): placeholders inside the author's name are kept as written.
+    assert_eq!(s.stamp_line("By {name} — {date} {time}", "Ada {date} {time}"), "By Ada {date} {time} — Nov 14, 2023 10:13 pm");
+    assert_eq!(s.stamp_line("{name}{name}", "{name}"), "{name}{name}");
+    assert_eq!(s.stamp_by_line("Ada"), "By Ada at 10:13 pm, Nov 14, 2023");
+    assert_eq!(s.stamp_by_line(""), "at 10:13 pm, Nov 14, 2023");
+    assert_eq!(s.stamp_line(&"{date}".repeat(100), "Ada").chars().count(), MAX_STAMP_LINE);
+}
+
+/// A custom stamp's line keeps Western European letters (#1741): the appearance holds them as
+/// WinAnsi bytes. A lossy UTF-8 round trip once turned them into replacement characters.
+#[test]
+fn a_custom_stamp_line_keeps_accented_letters() {
+    let image = image::RgbaImage::from_pixel(80, 40, image::Rgba([20, 120, 220, 255]));
+    let mut png = std::io::Cursor::new(Vec::new());
+    image.write_to(&mut png, image::ImageFormat::Png).unwrap();
+    let (mut session, id) = session_with(1);
+    let edit = Edit::AddCustomStamp {
+        page: 0,
+        rect: [100.0, 100.0, 100.0, 100.0],
+        name: "Logo".into(),
+        file: MarkFile { name: "logo.png".into(), bytes: Arc::new(png.into_inner()), page: 0 },
+        author: "Zoë".into(),
+        line: Some(session.stamp_line("Reçu à Zürich par {name}", "Zoë")),
+    };
+    session.apply(id, edit).unwrap();
+    let saved = session.save_bytes(id).unwrap();
+    let doc = pdfcraft_cos::Document::open(saved).unwrap();
+    const WANT: &[u8] = b"(Re\xe7u \xe0 Z\xfcrich par Zo\xeb)";
+    let found = doc.scan_objects().any(|(_, o)| match o.as_ref() {
+        pdfcraft_cos::Object::Stream(st) => st.decoded().is_ok_and(|b| b.windows(WANT.len()).any(|w| w == WANT)),
+        _ => false,
+    });
+    assert!(found, "the line's letters are WinAnsi bytes in the appearance");
+}
+
+/// A custom stamp with a line keeps its picture's shape over the line on a turned page: it is
+/// laid out in the displayed box, then turned into `/Rect`. Laid out in user space, a quarter
+/// turn squashed the picture into a narrow strip and stretched the band.
+#[test]
+fn a_lined_custom_stamp_keeps_its_layout_on_turned_pages() {
+    let colours = [[240, 20, 20, 255], [20, 180, 20, 255], [20, 20, 240, 255], [230, 180, 20, 255]];
+    let image = image::RgbaImage::from_fn(80, 40, |x, y| image::Rgba(colours[usize::from(y >= 20) * 2 + usize::from(x >= 40)]));
+    let mut png = std::io::Cursor::new(Vec::new());
+    image.write_to(&mut png, image::ImageFormat::Png).unwrap();
+    let bytes = Arc::new(png.into_inner());
+    // A short line: the stamp is the picture's 80 pt wide, 40 / 0.78 pt tall with its band.
+    let (w, h) = pdfcraft_annot::custom_stamp_size((80.0, 40.0), Some("OK"));
+    assert_eq!(w, 80.0);
+    let top = 100.0 - h / 2.0;
+    for degrees in [0, 90, 180, 270] {
+        let (mut session, id) = session_with(1);
+        session.apply(id, Edit::RotatePages { pages: vec![0], degrees }).unwrap();
+        let at = session.get(id).unwrap().info.pages[0].view_to_user(100.0, 100.0).map(f64::from);
+        let edit = Edit::AddCustomStamp {
+            page: 0,
+            rect: [at[0], at[1], at[0], at[1]],
+            name: "Quadrants".into(),
+            file: MarkFile { name: "quadrants.png".into(), bytes: bytes.clone(), page: 0 },
+            author: "Test".into(),
+            line: Some("OK".into()),
+        };
+        session.apply(id, edit).unwrap();
+        let doc = session.get(id).unwrap();
+        let mut renderer = pdfcraft_render::PageRenderer::new(doc.bytes.clone(), doc.config.clone());
+        let rendered = renderer.render(pdfcraft_render::RenderRequest { page: 0, scale: 1.0, ..Default::default() });
+        assert!(rendered.error.is_none(), "{:?}", rendered.error);
+        let pixel = |x: f64, y: f64| {
+            let offset = ((y as u32 * rendered.width + x as u32) * 4) as usize;
+            rendered.rgba[offset..offset + 4].to_vec()
+        };
+        // The picture fills the top 80 x 40 pt of the displayed box, its quadrants in place.
+        let points = [(70.0, top + 5.0), (130.0, top + 5.0), (70.0, top + 35.0), (130.0, top + 35.0)];
+        for ((x, y), colour) in points.into_iter().zip(colours) {
+            assert_eq!(pixel(x, y), colour, "page rotation {degrees}; displayed point ({x}, {y})");
+        }
+        // The band under it holds no picture.
+        assert_eq!(pixel(64.0, top + h - 3.0), [255, 255, 255, 255], "page rotation {degrees}: the band");
+    }
 }
 
 fn contains(haystack: &[u8], needle: &[u8]) -> bool {
@@ -10329,6 +13477,179 @@ fn image_transform_engine_refuses_singular_matrices_without_mutation() {
         assert!(s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Transform(matrix) }).is_err());
         assert_eq!(s.get(id).unwrap().bytes, before);
     }
+}
+
+/// A reset in an opening script reaches a field of a row an earlier opening script added, before
+/// the form is laid out again with the row's widgets: its data goes back to its default and stays
+/// so when the form is saved.
+#[test]
+fn an_opening_reset_reaches_a_row_added_while_opening() {
+    let tpl = pdfcraft_xfa::fixtures::scripted_template().replace(
+        "if (qty.rawValue === null) qty.rawValue = 2;",
+        r#"if (qty.rawValue === null) qty.rawValue = 2; table._row.addInstance(1);"#,
+    )
+    .replace(
+        r#"<field name="grand" w="2in" h="0.3in" access="readOnly">"#,
+        r#"<field name="grand" w="2in" h="0.3in" access="readOnly"><event activity="initialize"><script contentType="application/x-javascript">xfa.resolveNode("form.page1.table.row[1].item").rawValue = "X"; xfa.host.resetData("form.page1.table.row[1].item");</script></event>"#,
+    );
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("rows.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&tpl)), None).unwrap();
+    let out = s.take_js_output(id);
+    assert!(out.errors.is_empty(), "{:?}", out.errors);
+    let cos = pdfcraft_cos::Document::open(s.save_bytes(id).unwrap()).unwrap();
+    let data = pdfcraft_xfa::data_of(&cos).unwrap();
+    assert_eq!(data.count(&pdfcraft_xfa::som_to_path("form[0].page1[0].table[0]"), "row"), 2, "the row was added");
+    assert_eq!(data.text_at(&pdfcraft_xfa::som_to_path("form[0].page1[0].table[0].row[1].item[0]")).unwrap_or(""), "", "reset in the data");
+}
+
+/// A reset in an opening script reaches an exclusion group of a row an earlier opening script
+/// added, before the row has widgets: the group's data goes back to the on value of its default
+/// button, and stays so when the form is saved.
+#[test]
+fn an_opening_reset_reaches_an_exclusion_group_of_a_row_added_while_opening() {
+    let group = r#"<exclGroup name="pick" w="1in" h="0.3in"><field name="a" w="0.5in" h="0.3in"><ui><checkButton/></ui><items><text>A</text></items><value><text>A</text></value></field><field name="b" w="0.5in" h="0.3in"><ui><checkButton/></ui><items><text>B</text></items></field></exclGroup>"#;
+    let tpl = pdfcraft_xfa::fixtures::scripted_template()
+        .replace(
+            "if (qty.rawValue === null) qty.rawValue = 2;",
+            r#"if (qty.rawValue === null) qty.rawValue = 2; table._row.addInstance(1);"#,
+        )
+        .replace(r#"<field name="amount" h="0.3in"><ui><numericEdit/></ui></field>"#, &format!(r#"<field name="amount" h="0.3in"><ui><numericEdit/></ui></field>{group}"#))
+        .replace(
+            r#"<field name="grand" w="2in" h="0.3in" access="readOnly">"#,
+            r#"<field name="grand" w="2in" h="0.3in" access="readOnly"><event activity="initialize"><script contentType="application/x-javascript">xfa.resolveNode("form.page1.table.row[1].pick").rawValue = "B"; xfa.host.resetData("form.page1.table.row[1].pick");</script></event>"#,
+        );
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("rows.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&tpl)), None).unwrap();
+    let out = s.take_js_output(id);
+    assert!(out.errors.is_empty(), "{:?}", out.errors);
+    let cos = pdfcraft_cos::Document::open(s.save_bytes(id).unwrap()).unwrap();
+    let data = pdfcraft_xfa::data_of(&cos).unwrap();
+    assert_eq!(data.count(&pdfcraft_xfa::som_to_path("form[0].page1[0].table[0]"), "row"), 2, "the row was added");
+    assert_eq!(data.text_at(&pdfcraft_xfa::som_to_path("form[0].page1[0].table[0].row[1].pick[0]")).unwrap_or(""), "A", "group reset in the data");
+}
+
+/// A reset in an opening script clears a multi-select list of a hidden subform (no widget)
+/// whose picks the data holds as `value` elements: its empty default leaves no pick in the
+/// saved data, and the rest of the data stays as it was.
+#[test]
+fn an_opening_reset_clears_structured_picks_of_a_field_without_a_widget() {
+    let tpl = pdfcraft_xfa::fixtures::scripted_template()
+        .replace(
+            r#"<field name="note" w="4in" h="0.3in">"#,
+            r#"<field name="tags" w="2in" h="1in"><ui><choiceList open="multiSelect"/></ui><items><text>a</text><text>b</text><text>c</text></items></field><field name="note" w="4in" h="0.3in">"#,
+        )
+        .replace(
+            "if (qty.rawValue === null) qty.rawValue = 2;",
+            r#"if (qty.rawValue === null) qty.rawValue = 2; xfa.host.resetData("form.page1.details.tags");"#,
+        )
+        .replace(
+            "</xdp:xdp>",
+            r#"<xfa:datasets xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"><xfa:data><form><page1><qty>3</qty><details><tags><value>a</value><value>c</value></tags><note>kept</note></details></page1></form></xfa:data></xfa:datasets>
+</xdp:xdp>"#,
+        );
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("tags.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&tpl)), None).unwrap();
+    let out = s.take_js_output(id);
+    assert!(out.errors.is_empty(), "{:?}", out.errors);
+    let cos = pdfcraft_cos::Document::open(s.save_bytes(id).unwrap()).unwrap();
+    let data = pdfcraft_xfa::data_of(&cos).unwrap();
+    assert_eq!(data.value_at(&pdfcraft_xfa::som_to_path("form[0].page1[0].details[0].tags[0]")).unwrap_or_default(), "", "picks reset in the data");
+    assert_eq!(data.text_at(&pdfcraft_xfa::som_to_path("form[0].page1[0].details[0].note[0]")), Some("kept"));
+    assert_eq!(data.text_at(&pdfcraft_xfa::som_to_path("form[0].page1[0].qty[0]")), Some("3"));
+}
+
+/// A later opening script resets a section shown by an earlier one, including its datasets
+/// value: the shown field and the saved form hold the template default, not the pre-reset
+/// value, through three save/reopen cycles. Test by wireless89 (review of #4791, 2026-10-27).
+#[test]
+fn xfa_opening_reset_reaches_a_section_shown_by_an_earlier_script() {
+    let tpl = r#"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="front"><occur max="-1"/><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <field name="show" w="1in" h="0.3in"><ui><textEdit/></ui>
+  <event activity="initialize"><script contentType="application/x-javascript">extra.presence = "visible";</script></event>
+ </field>
+ <field name="reset" w="1in" h="0.3in"><ui><textEdit/></ui>
+  <event activity="initialize"><script contentType="application/x-javascript">xfa.host.resetData("form.extra");</script></event>
+ </field>
+ <subform name="extra" layout="tb" presence="hidden">
+  <field name="note" w="3in" h="0.3in"><ui><textEdit/></ui><value><text>default</text></value></field>
+ </subform>
+ <field name="keep" w="1in" h="0.3in"><ui><textEdit/></ui></field>
+</subform>
+</template>
+<xfa:datasets xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"><xfa:data><form><extra><note>previous input</note></extra><keep>unrelated input</keep></form></xfa:data></xfa:datasets>
+</xdp:xdp>"#;
+    let mut s = Session::new().with_clock(|| 1_700_000_000).with_xfa_time_scale(100);
+    let mut bytes = Arc::new(pdfcraft_xfa::fixtures::shell(tpl));
+    for opening in 0..3 {
+        let id = s.open("reset.pdf", None, bytes, None).unwrap();
+        let out = s.take_js_output(id);
+        assert!(out.errors.is_empty(), "opening {opening}: {out:?}");
+        let doc = s.get(id).unwrap();
+        let note = doc.form.iter().find(|f| f.name == "note").expect("shown section has a widget");
+        let shown = note.value.clone();
+        assert_eq!(doc.form.iter().find(|f| f.name == "keep").unwrap().value, ["unrelated input"]);
+        assert_eq!(doc.info.pages.len(), 1);
+        bytes = s.save_bytes(id).unwrap();
+        let cos = pdfcraft_cos::Document::open(bytes.clone()).unwrap();
+        let data = pdfcraft_xfa::data_of(&cos).unwrap();
+        let saved = data.text_at(&pdfcraft_xfa::som_to_path("form[0].extra[0].note[0]"));
+        assert_eq!((shown, saved), (vec!["default".to_string()], Some("default")), "opening {opening}: displayed and saved values reset");
+    }
+}
+
+/// A reset of a choice list in a section an earlier opening script showed (so it has no widget
+/// yet when the reset runs) puts the template default back in the shown widget, the open
+/// document's datasets and the saved datasets alike, through three openings: a multi-select
+/// with structured `<value>` picks and an empty or set default, and a single choice whose
+/// default is a display label saved as its export value. Test by wireless89 (review of #4791,
+/// 2026-10-30).
+#[test]
+fn xfa_deferred_choice_resets_preserve_the_reset_value_through_reopen() {
+    let cases = [
+        ("multi_empty", r#"<choiceList open="multiSelect"/>"#, "", "<value>A</value><value>B</value>", ""),
+        ("multi_default", r#"<choiceList open="multiSelect"/>"#, "A", "<value>B</value>", "A"),
+        ("choice_export", "<choiceList/>", "Alpha", "B", "A"),
+    ];
+    let mut failures = Vec::new();
+    for (case, ui, default, initial, expected) in cases {
+        let xml = format!(
+            r#"<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/"><subform name="form" layout="tb">
+<pageSet><pageArea name="front"><contentArea w="540pt" h="700pt"/><medium short="612pt" long="792pt"/></pageArea></pageSet>
+<field name="show" w="30pt" h="20pt"><ui><textEdit/></ui><event activity="initialize"><script contentType="application/x-javascript">extra.presence = "visible";</script></event></field>
+<field name="reset" w="30pt" h="20pt"><ui><textEdit/></ui><event activity="initialize"><script contentType="application/x-javascript">xfa.host.resetData("form.extra");</script></event></field>
+<subform name="extra" presence="hidden" layout="tb"><field name="choice" w="120pt" h="40pt"><ui>{ui}</ui>
+<items><text>Alpha</text><text>Beta</text></items><items save="1" presence="hidden"><text>A</text><text>B</text></items><value><text>{default}</text></value></field></subform>
+<field name="keep" w="100pt" h="20pt"><ui><textEdit/></ui></field>
+</subform></template><xfa:datasets xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"><xfa:data><form><extra><choice>{initial}</choice></extra><keep>KEEP</keep></form></xfa:data></xfa:datasets></xdp:xdp>"#
+        );
+        let mut s = Session::new().with_clock(|| 1_700_000_000).with_xfa_time_scale(100);
+        let mut bytes = Arc::new(pdfcraft_xfa::fixtures::shell(&xml));
+        for cycle in 0..3 {
+            let id = s.open("choices.pdf", None, bytes, None).unwrap();
+            assert!(s.take_js_output(id).errors.is_empty(), "{case}, cycle {cycle}: reset script must execute");
+            let doc = s.get(id).unwrap();
+            let shown = doc.form.iter().find(|f| f.name == "choice").expect("shown choice has a widget").value.clone();
+            assert_eq!(doc.form.iter().find(|f| f.name == "keep").unwrap().value, ["KEEP"]);
+            let opened_data = pdfcraft_xfa::data_of(&doc.editor.as_ref().unwrap().cos).unwrap();
+            let path = pdfcraft_xfa::som_to_path("form[0].extra[0].choice[0]");
+            let opened = opened_data.value_at(&path).unwrap_or_default();
+            bytes = s.save_bytes(id).unwrap();
+            let cos = pdfcraft_cos::Document::open(bytes.clone()).unwrap();
+            let data = pdfcraft_xfa::data_of(&cos).unwrap();
+            let stored = data.value_at(&path).unwrap_or_default();
+            assert_eq!(data.text_at(&pdfcraft_xfa::som_to_path("form[0].keep[0]")), Some("KEEP"));
+            let expected_shown: Vec<String> = if expected.is_empty() { Vec::new() } else { vec![expected.into()] };
+            if shown != expected_shown || opened != expected || stored != expected {
+                failures.push(format!("{case}, cycle {cycle}: shown={shown:?}, opened={opened:?}, stored={stored:?}, expected={expected:?}"));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
 /// Optimize has JBIG2 images share a symbol dictionary only where redaction can store each again
@@ -10428,8 +13749,33 @@ fn redacting_an_optimized_jbig2_page_stores_the_rest_of_its_group_again() {
     assert_eq!(globals(&doc, images[2]), None, "the DeviceN page is coded alone");
     pdfcraft_redact::apply(&mut doc, None).unwrap();
     let saved = Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap();
-    let named = saved.scan_objects().filter(|(_, o)| matches!(&**o, Object::Stream(s) if saved.jbig2_globals_ref(s).is_some())).count();
+    // Optimize writes the parameters direct, so a stream that names the dictionary holds the key.
+    let names = |s: &Stream| {
+        let mut bytes = Vec::new();
+        pdfcraft_cos::serialize(&Object::Dict(s.dict.clone()), &mut bytes);
+        bytes.windows(12).any(|w| w == b"JBIG2Globals")
+    };
+    let named = saved.scan_objects().filter(|(_, o)| matches!(&**o, Object::Stream(s) if names(s))).count();
     assert_eq!(named, 0, "no image names the dictionary, which left with them");
+}
+
+#[test]
+fn resizing_an_added_image_back_inside_the_page_keeps_its_identity() {
+    let mut png = Vec::new();
+    {
+        let mut enc = png::Encoder::new(&mut png, 2, 2);
+        enc.set_color(png::ColorType::Rgb);
+        enc.write_header().unwrap().write_image_data(&[255u8; 12]).unwrap();
+    }
+    let (mut s, id) = session_with(1);
+    s.apply(id, Edit::AddImage { page: 0, rect: Some([-30.0, -20.0, 70.0, 80.0]), name: "edge.png".into(), bytes: Arc::new(png) }).unwrap();
+    let original = s.get(id).unwrap().added()[0].obj;
+    let target = [10.0, 10.0, 60.0, 60.0];
+    s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Move(target) }).unwrap();
+    let added = s.get(id).unwrap().added();
+    assert_eq!(added.len(), 1);
+    assert_eq!(added[0].obj, original);
+    assert_eq!(added[0].content.rect(), target);
 }
 
 #[test]
@@ -10479,4 +13825,209 @@ fn imported_bookmarks_undo_in_one_step() {
     let err = s.apply(id, Edit::ImportBookmarks { parent: vec![4], index: 0, bookmarks, replace: false }).unwrap_err();
     assert!(err.to_string().contains("no bookmark"), "{err}");
     assert!(s.get(id).unwrap().info.outline.is_empty());
+}
+
+/// A comment imported or pasted without the appearance its file carried (unreadable there) is
+/// said in the repair log, which the interface shows and the tools return.
+#[test]
+fn a_comment_imported_without_its_appearance_is_said_in_the_repair_log() {
+    let xfdf = r#"<?xml version="1.0"?><xfdf xmlns="http://ns.adobe.com/xfdf/"><annots><stamp page="0" name="st" rect="10,10,110,60" icon="Draft"><appearance>@@@not base 64@@@</appearance></stamp></annots></xfdf>"#;
+    let said = |s: &Session, id: DocId| {
+        s.get(id)
+            .unwrap()
+            .repair_log()
+            .iter()
+            .filter(|l| l.contains("imported 1 comment without the appearance") && l.contains("st: the appearance is not base 64"))
+            .count()
+    };
+    let (mut s, id) = session_with(1);
+    s.apply(id, Edit::ImportData { name: "notes.xfdf".into(), bytes: Arc::new(xfdf.as_bytes().to_vec()) }).unwrap();
+    assert_eq!(said(&s, id), 1, "{:?}", s.get(id).unwrap().repair_log());
+    let (mut s, id) = session_with(1);
+    s.apply(id, Edit::PasteComments { xfdf: xfdf.into(), page: 0, offset: None }).unwrap();
+    assert_eq!(said(&s, id), 1, "{:?}", s.get(id).unwrap().repair_log());
+}
+
+/// Six comments without their appearances: one line naming five and counting the sixth, a name
+/// holding a line break stays on that line, and a long name is cut short.
+#[test]
+fn many_comments_imported_without_their_appearances_are_summed_up_in_one_line() {
+    let long = "L".repeat(1000);
+    let names = ["a&#10;imported 9 comments", "b", "c", "d", long.as_str(), "f"];
+    let stamps: String = names
+        .iter()
+        .map(|nm| format!(r#"<stamp page="0" name="{nm}" rect="10,10,110,60" icon="Draft"><appearance>@@@</appearance></stamp>"#))
+        .collect();
+    let xfdf = format!(r#"<?xml version="1.0"?><xfdf xmlns="http://ns.adobe.com/xfdf/"><annots>{stamps}</annots></xfdf>"#);
+    let (mut s, id) = session_with(1);
+    let before = s.get(id).unwrap().repair_log().len();
+    s.apply(id, Edit::PasteComments { xfdf, page: 0, offset: None }).unwrap();
+    let log = s.get(id).unwrap().repair_log();
+    let added = log.get(before..).unwrap_or_default();
+    assert_eq!(added.len(), 1, "{added:?}");
+    let line = &added[0];
+    assert!(line.starts_with("imported 6 comments without the appearance"), "{line}");
+    assert!(line.ends_with("; and 1 more"), "{line}");
+    assert!(!line.contains('\n') && line.contains(r"a\nimported 9 comments: "), "{line}");
+    assert!(line.contains(&format!("{}…", "L".repeat(200))) && !line.contains(&"L".repeat(201)), "{line}");
+    assert_eq!(line.matches(": the appearance").count(), 4, "five named, the long one cut before its reason: {line}");
+}
+
+/// PDF/A-2 6.1.2 through the ordinary save: Save as PDF/A on a file without a binary comment, or
+/// with a 2.0 header, saves a file whose header verifies.
+#[test]
+fn save_as_pdfa_saves_a_compliant_file_header() {
+    let plain = fixture(1);
+    assert!(plain.starts_with(b"%PDF-1.7\n1 0 obj"), "the fixture has no binary comment");
+    let mut newer = plain.clone();
+    newer.splice(5..8, *b"2.0");
+    for bytes in [plain, newer] {
+        let mut s = Session::new();
+        let id = s.open("x.pdf", None, Arc::new(bytes), None).unwrap();
+        s.apply(id, Edit::ConvertPdfA { level: pdfcraft_preflight::Level::A2b }).unwrap();
+        let saved = s.save_bytes(id).unwrap();
+        assert!(saved.starts_with(b"%PDF-1.7\n%\xE2\xE3\xCF\xD3\n"), "{:?}", String::from_utf8_lossy(&saved[..20]));
+        let reopened = pdfcraft_cos::Document::open(saved).unwrap();
+        assert!(pdfcraft_preflight::verify(&reopened, pdfcraft_preflight::Level::A2b).iter().all(|i| i.clause != "6.1.2"));
+    }
+}
+
+/// ISO 32000-2 §7.6.6, Table 25: a document whose only encryption is for its embedded files,
+/// authorised when one is opened (`/AuthEvent /EFOpen`), opens without a password, lists its
+/// attachment, and saves with the attachment still encrypted.
+#[test]
+fn a_document_encrypting_only_its_embedded_files_opens_and_saves_without_a_password() {
+    // The password values of an AES-256 protection, as a save writes them.
+    let protected = protected("pw", "owner", -1);
+    let source = pdfcraft_cos::Document::open_with_password(protected, Some("pw")).unwrap();
+    let encrypt = source.resolve(source.trailer().get(b"Encrypt").unwrap());
+    let values: String = ["O", "U", "OE", "UE", "Perms"]
+        .iter()
+        .map(|k| {
+            let value = source.resolve(encrypt.as_dict().unwrap().get(k.as_bytes()).unwrap());
+            format!(" /{k} <{}>", value.as_string().unwrap().bytes.iter().map(|b| format!("{b:02X}")).collect::<String>())
+        })
+        .collect();
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R /Names << /EmbeddedFiles << /Names [(note.txt) 4 0 R] >> >> >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >>".to_string(),
+        "<< /Type /Filespec /F (note.txt) /EF << /F 5 0 R >> >>".to_string(),
+        "<< /Type /EmbeddedFile /Length 32 >>\nstream\n0123456789abcdef0123456789abcdef\nendstream".to_string(),
+        format!(
+            "<< /Filter /Standard /V 5 /R 6{values} /P -4 /CF << /StdCF << /AuthEvent /EFOpen /CFM /AESV3 /Length 32 >> >> /StmF /Identity /StrF /Identity /EFF /StdCF >>"
+        ),
+    ];
+    let mut pdf = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(pdf.len());
+        pdf.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = pdf.len();
+    pdf.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        pdf.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    pdf.extend_from_slice(
+        format!("trailer\n<< /Size {} /Root 1 0 R /Encrypt 6 0 R /ID [<00> <00>] >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes(),
+    );
+    let mut s = Session::new();
+    let id = s.open("efopen.pdf", None, Arc::new(pdf), None).expect("opens without a password");
+    let doc = s.get(id).unwrap();
+    assert_eq!(doc.info.pages.len(), 1);
+    assert_eq!(doc.info.attachments.len(), 1);
+    let saved = s.save_bytes(id).unwrap();
+    let reopened = pdfcraft_cos::Document::open(saved).unwrap();
+    assert!(reopened.embedded_files_locked(), "the attachment stays encrypted");
+}
+
+#[test]
+fn javascript_non_rgb_field_colours_convert_and_keep_the_scripts_other_changes() {
+    let fill_after = |colour: &str| {
+        let mut s = Session::new().with_clock(|| 1_700_000_000);
+        let id = s.open("order.pdf", None, Arc::new(scripted_form()), None).unwrap();
+        s.run_javascript(id, "getField('price').fillColor = color.red;", None).unwrap();
+        let out = s.run_javascript(id, &format!("var f = getField('price'); f.value = '9'; f.fillColor = {colour}; f.textColor = {colour};"), None);
+        assert!(out.is_ok(), "{colour}: {out:?}");
+        let f = s.get(id).unwrap().form.iter().find(|f| f.name == "price").unwrap().clone();
+        assert_eq!(f.value, ["9"], "{colour}: the value write is kept");
+        let doc = pdfcraft_cos::Document::open(s.save_bytes(id).unwrap()).unwrap();
+        let f = pdfcraft_forms::fields(&doc).into_iter().find(|f| f.name == "price").unwrap();
+        let look = pdfcraft_forms::look(&doc, &f);
+        (look.fill, look.text)
+    };
+    assert_eq!(fill_after("color.white"), (Some([1.0, 1.0, 1.0]), [1.0, 1.0, 1.0]));
+    assert_eq!(fill_after("color.gray"), (Some([0.5, 0.5, 0.5]), [0.5, 0.5, 0.5]));
+    assert_eq!(fill_after("color.cyan"), (Some([0.0, 1.0, 1.0]), [0.0, 1.0, 1.0]));
+    assert_eq!(fill_after("['CMYK', 0, 0, 0, 1]"), (Some([0.0, 0.0, 0.0]), [0.0, 0.0, 0.0]));
+    // Transparent clears the fill; text can't be transparent, so its colour stays.
+    let (fill, text) = fill_after("color.transparent");
+    assert_eq!(fill, None);
+    assert_eq!(text, [0.0, 0.0, 0.0]);
+
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("order.pdf", None, Arc::new(scripted_form()), None).unwrap();
+    let before = s.save_bytes(id).unwrap();
+    for bad in ["['CMYK', 1]", "['G']", "['T', 0]", "['Lab', 0, 0, 0]", "['G', 'x']"] {
+        let err = s.run_javascript(id, &format!("var f = getField('price'); f.value = '9'; f.fillColor = {bad};"), None).unwrap_err();
+        assert!(err.to_string().contains("T, G, RGB or CMYK"), "{bad}: {err}");
+        assert_eq!(s.save_bytes(id).unwrap(), before, "{bad}: a malformed colour still refuses the script");
+    }
+}
+
+#[test]
+fn a_later_field_script_in_the_same_edit_reads_a_colour_an_earlier_one_wrote() {
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("order.pdf", None, Arc::new(scripted_form()), None).unwrap();
+    for (name, script) in
+        [("qty", "getField('price').fillColor = color.green; event.value = 1;"), ("total", "event.value = getField('price').fillColor.join(',');")]
+    {
+        s.apply(id, Edit::SetFieldScript { name: name.into(), event: "calculate".into(), script: Some(script.into()) }).unwrap();
+    }
+    s.apply(id, Edit::SetFieldScript { name: "total".into(), event: "format".into(), script: None }).unwrap();
+    s.apply(id, Edit::SetCalculationOrder { names: vec!["qty".into(), "total".into()] }).unwrap();
+    s.apply(id, Edit::SetFieldValue { name: "price".into(), value: FieldValue::Text("3".into()) }).unwrap();
+    let total = s.get(id).unwrap().form.iter().find(|f| f.name == "total").unwrap().value.clone();
+    assert_eq!(total, ["RGB,0,1,0"]);
+}
+
+#[test]
+fn a_document_script_helper_can_set_field_colours() {
+    let helpers = "function mark\\(name\\) { getField\\(name\\).fillColor = color.red; }";
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("helpers.pdf", None, Arc::new(scripted_form_with(helpers)), None).unwrap();
+    s.run_javascript(id, "mark('price');", None).unwrap();
+    let doc = pdfcraft_cos::Document::open(s.save_bytes(id).unwrap()).unwrap();
+    let f = pdfcraft_forms::fields(&doc).into_iter().find(|f| f.name == "price").unwrap();
+    assert_eq!(pdfcraft_forms::look(&doc, &f).fill, Some([1.0, 0.0, 0.0]));
+}
+
+#[test]
+fn calculate_now_simple_calculation_reads_formatted_values_and_groups_as_the_native_path_does() {
+    // amount (4), group b (5) with kids b.c (6) and b.d (7), total (8) = SUM(amount, b).
+    let widget = |rest: &str, y: u32| format!("<< /Type /Annot /Subtype /Widget /Rect [20 {y} 180 {}] /P 3 0 R /F 4 {rest} >>", y + 20);
+    let pdf = pdfcraft_testkit::Pdf::new()
+        .obj("<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 5 0 R 8 0 R] /CO [8 0 R] /DA (/Helv 0 Tf 0 g) >> >>")
+        .obj("<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>")
+        .obj("<< /Type /Page /Parent 2 0 R /Annots [4 0 R 6 0 R 7 0 R 8 0 R] >>")
+        .obj(widget("/FT /Tx /T (amount) /V (1,234.50)", 250))
+        .obj("<< /FT /Tx /T (b) /Kids [6 0 R 7 0 R] >>")
+        .obj(widget("/Parent 5 0 R /T (c) /V ($10)", 220))
+        .obj(widget("/Parent 5 0 R /T (d) /V (1.234,5)", 190))
+        .obj(widget(
+            "/FT /Tx /T (total) /AA << /C << /S /JavaScript /JS (AFSimple_Calculate\\(\"SUM\", new Array\\(\"amount\", \"b\"\\)\\);) >> >>",
+            160,
+        ))
+        .build();
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("simple.pdf", None, Arc::new(pdf), None).unwrap();
+    let total = |s: &Session| s.get(id).unwrap().form.iter().find(|f| f.name == "total").unwrap().value.clone();
+    // The commit path (native Simple calculation) on an edit elsewhere.
+    s.apply(id, Edit::SetFieldValue { name: "b.c".into(), value: FieldValue::Text("$10".into()) }).unwrap();
+    assert_eq!(total(&s), ["2479"], "native Simple calculation");
+    let out = s.run_javascript(id, "getField('amount').value = '2,000.25'; calculateNow(); console.println(getField('total').value);", None).unwrap();
+    assert!(out.error.is_none(), "{out:?}");
+    assert!(out.console.iter().any(|line| line == "3244.75"), "calculateNow agrees with the native path: {out:?}");
+    assert_eq!(total(&s), ["3244.75"]);
 }

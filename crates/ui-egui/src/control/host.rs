@@ -67,8 +67,15 @@ impl Host for crate::PdfCraftApp {
             })
             .collect();
         #[cfg(not(target_arch = "wasm32"))]
-        let pending_opens: Vec<Value> =
-            self.pending_opens.iter().map(|pending| json!({ "token": pending.token, "name": pending.name, "path": pending.path })).collect();
+        let pending_opens: Vec<Value> = self
+            .pending_opens
+            .iter()
+            .map(|pending| json!({ "token": pending.token, "name": pending.name, "path": pending.path }))
+            .chain(self.deferred_opens.iter().map(|deferred| {
+                let name = std::path::Path::new(&deferred.path).file_name().map(|n| n.to_string_lossy().into_owned());
+                json!({ "token": null, "name": name, "path": deferred.path })
+            }))
+            .collect();
         #[cfg(target_arch = "wasm32")]
         let pending_opens: Vec<Value> = Vec::new();
         json!({
@@ -96,9 +103,13 @@ impl Host for crate::PdfCraftApp {
                 // Pages drawn only in part or approximately: the renderer's warning names, as
                 // `ContentTruncated` and `ColourFallback`.
                 "page_warnings": v.page_warnings().iter().map(|(p, w)| json!({ "page": p + 1, "warnings": w.iter().map(|w| format!("{w:?}")).collect::<Vec<_>>() })).collect::<Vec<_>>(),
+                // Pages cut at the renderer's limits (#623), 1-based.
+                "cut_pages": v.cut_pages().iter().map(|p| p + 1).collect::<Vec<_>>(),
                 // Where pages are on screen (points), to aim ui.click / ui.drag at page content.
                 "pages_on_screen": v.visible_page_rects().iter().map(|(p, r)| json!({ "page": p + 1, "rect": [r.min.x, r.min.y, r.max.x, r.max.y] })).collect::<Vec<_>>(),
                 "selected_comment": v.comments.selected.map(|(p, i)| json!({ "page": p + 1, "index": i + 1 })),
+                // Every selected comment (⌘-click adds), the one with the handles first.
+                "selected_comments": v.comments.selection().iter().map(|(p, i)| json!({ "page": p + 1, "index": i + 1 })).collect::<Vec<_>>(),
                 "comment_composer_open": v.comments.composer.is_some(),
             })),
             // The Combine files tab: how its files show, and each grid thumbnail's state.
@@ -138,10 +149,13 @@ impl Host for crate::PdfCraftApp {
             "default_mode": self.default_mode,
             "hotbar": self.hotbar,
             "comment_tool_pinned": self.comment_prefs.pinned,
+            // Home's pinned folders, in order, and whether each is folded down to its heading.
+            "pinned_folders": self.pinned.folders.iter().map(|f| json!({ "folder": f, "collapsed": self.pinned.collapsed.contains(f) })).collect::<Vec<_>>(),
             "left_panel": if self.left_open { json!(format!("{:?}", self.left)) } else { Value::Null },
             "tools_side": if self.side_panels.tools_on_right() { "right" } else { "left" },
             "rail_side": if self.side_panels.rail_on_right() { "right" } else { "left" },
             "right_panel": self.right.map(|r| format!("{r:?}")),
+            "hidden_interface": self.hidden_interface().to_json(),
             "dialog": self.dialog.map(|d| format!("{d:?}")),
             "palette_open": self.palette_open,
             "theme": format!("{:?}", self.theme),
