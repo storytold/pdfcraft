@@ -653,7 +653,7 @@ mod tests {
         assert_eq!(first.changed.iter().map(|f| f.value.clone()).collect::<Vec<_>>(), [vec!["frame 1".to_string()]]);
         let once = s.run(fire(2), &[]);
         assert_eq!(once.timers.len(), 1, "a time-out runs once");
-        assert_eq!(s.run(fire(2), &[]).realm_untouched, true, "and is gone after");
+        assert!(s.run(fire(2), &[]).realm_untouched, "and is gone after");
         s.run(fire(1), &[]);
         assert_eq!(s.run(job("n;"), &[]).result.as_deref(), Some("102"));
         let cleared = s.run(job("app.clearInterval(t); app.clearInterval({}); n;"), &[]);
