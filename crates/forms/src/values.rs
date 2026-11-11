@@ -324,9 +324,9 @@ fn write_value_impl(doc: &mut Document, f: &Field, value: &FieldValue, scripts: 
             {
                 return invalid(format!("{:?} takes at most {max} characters", f.name));
             }
-            // Thai this build can't draw is refused (before any script runs), rather than stored
-            // and drawn as `?`.
-            if let Some(why) = appearance::thai_refusal(doc, f, t) {
+            // Arabic, Hebrew or Thai this build can't draw is refused (before any script runs),
+            // rather than stored and drawn as `?`.
+            if let Some(why) = appearance::script_refusal(doc, f, t) {
                 return invalid(format!("{:?} can't take this text: {why}", f.name));
             }
             // Keystroke (on commit) and Validate, as Acrobat runs them before accepting a value.
@@ -683,7 +683,7 @@ fn redraw(doc: &mut Document, f: &Field, values: &[String], scripts: &mut dyn Sc
             None => appearance::field_appearance_drawn(doc, f, w, values, true),
         };
         undrawn |= missing.is_some();
-        // Thai glyphs are streams of their own.
+        // Shaped glyphs (Arabic, Hebrew, Thai) are streams of their own.
         pdfcraft_fonts::shaped_text::store_streams(doc, &mut stream.dict);
         let existing_ap = in_place
             .then(|| {

@@ -1,10 +1,16 @@
-use pdfcraft_fonts::shaped_text::{Piece, ShapedFonts, clusters, first_undrawable_in_line, is_thai, thai_message, thai_pieces};
+use pdfcraft_fonts::shaped_text::{self, ShapedFonts};
 
 use super::{Dict, Document, EditError, Object, Rgb, added};
 
-/// The Thai of a header, footer or text watermark, drawn from the Thai face as Add text draws it:
-/// Type 3 fonts added to the document once and to each page the mark goes on, beside the page
-/// font that draws the rest.
+/// The text of a header, footer or text watermark, laid out as Add text and text boxes lay theirs
+/// out (`shaped_text::line_pieces`): Arabic, Hebrew and Thai shaped in the craft-fonts faces and
+/// drawn as Type 3 fonts, added to the document once and to each page the mark goes on, beside
+/// the page font that draws the rest. Right-to-left runs are painted in drawing order, and such a
+/// line carries its typing order (`/ActualText`), so copy and search read what was typed.
+///
+/// Each line is a paragraph of its own, reading right to left when its first strong letter does.
+/// Where it goes is the mark's choice alone (a header's left, centre or right box; a watermark's
+/// centre): direction never moves it, as a text box keeps its `/Q`.
 #[derive(Default)]
 pub(crate) struct MarkText {
     shaped: ShapedFonts,
@@ -13,17 +19,18 @@ pub(crate) struct MarkText {
 }
 
 impl MarkText {
-    /// The fonts for the Thai in `lines` (every line the mark draws, on any page), named so that
-    /// none of `pages` (of `all`) has the name already. Thai this build can't draw (it has no Thai
-    /// face, or the face lacks a character) is refused, saying what to do.
+    /// The fonts for the shaped text in `lines` (every line the mark draws, on any page), named so
+    /// that none of `pages` (of `all`) has the name already. Arabic, Hebrew or Thai this build
+    /// can't draw (it has no face for the script, or the face lacks a character) is refused, saying
+    /// what to do, as Add text refuses it: a mark is never written with `?` in it.
     pub(crate) fn new<'a>(
         doc: &mut Document,
         all: &[pdfcraft_model::Page],
         pages: &[usize],
         lines: impl IntoIterator<Item = &'a str>,
     ) -> Result<Self, EditError> {
-        let thai = |line: &str| thai_pieces(line).map_err(|e| EditError::Invalid(thai_message(e, line)));
-        let pieces = lines.into_iter().filter(|l| l.chars().any(is_thai)).map(thai).collect::<Result<Vec<_>, _>>()?;
+        let shape = |line: &str| shaped_text::line_pieces(line, shaped_text::rtl_base(line)).map_err(|e| EditError::Invalid(e.message()));
+        let pieces = lines.into_iter().filter(|l| shaped_text::has_shaped_script(l)).map(shape).collect::<Result<Vec<_>, _>>()?;
         if pieces.is_empty() {
             return Ok(Self::default());
         }
@@ -33,17 +40,23 @@ impl MarkText {
                 taken.set(name.clone(), font.clone());
             }
         }
+        let clusters = || shaped_text::clusters(pieces.iter().map(Vec::as_slice));
         let mut fonts = Dict::new();
-        let shaped =
-            ShapedFonts::new(clusters(pieces.iter().map(Vec::as_slice)), pdfcraft_fonts::shaped_glyph, &taken, &mut fonts, "PCTh", &mut |o| {
-                Object::Ref(doc.add(o))
-            })
-            .map_err(|(e, c)| EditError::Invalid(thai_message(e, &c.text)))?;
+        let shaped = ShapedFonts::new(clusters(), pdfcraft_fonts::shaped_glyph, &taken, &mut fonts, shaped_text::font_prefix(clusters()), &mut |o| {
+            Object::Ref(doc.add(o))
+        })
+        .map_err(|(e, c)| EditError::Invalid(shaped_text::script_message(c.script, e, &c.text)))?;
         Ok(Self { shaped, fonts })
     }
 
-    /// Show `line` inside `BT … ET` from `x` on baseline `y` at `size`: its Thai from the fonts,
-    /// the rest in the page font `latin` (selected when `current` is `None`), `width` wide.
+    /// The width of `line` at `size` as [`Self::show`] draws it: shaped text by its advances, the
+    /// rest as `latin` measures the page font.
+    pub(crate) fn width(line: &str, size: f64, latin: impl Fn(&str, f64) -> f64) -> f64 {
+        shaped_text::line_width(line, shaped_text::rtl_base(line), size, latin)
+    }
+
+    /// Show `line` inside `BT … ET` from `x` on baseline `y` at `size`: its shaped text from the
+    /// fonts, the rest in the page font `latin` (selected when `current` is `None`), `width` wide.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn show(
         &self,
@@ -56,10 +69,16 @@ impl MarkText {
         width: impl Fn(&str) -> f64,
         current: &mut Option<usize>,
     ) {
-        let plain = || vec![Piece::Latin(line.into())];
-        // `new` shaped every line drawn, so this shapes.
-        let pieces = if self.fonts.is_empty() || !line.chars().any(is_thai) { plain() } else { thai_pieces(line).unwrap_or_else(|_| plain()) };
+        // `new` shaped every line drawn, so this shapes; the pieces are those `width` measured.
+        let pieces = shaped_text::appearance_pieces(line, shaped_text::rtl_base(line));
+        let reordered = shaped_text::reordered(&pieces);
+        if reordered {
+            out.extend(shaped_text::actual_text_span(line).bytes());
+        }
         self.shaped.show_line(out, &pieces, x, y, size, latin, pdfcraft_fonts::win_ansi, width, current);
+        if reordered {
+            out.extend_from_slice(b"EMC\n");
+        }
     }
 
     /// Add the fonts to `page`'s own resources.
@@ -136,12 +155,13 @@ impl Default for HeaderFooter {
 
 impl HeaderFooter {
     /// The first character [`add_header_footer`] would refuse, because neither the standard
-    /// fonts nor (for Thai) the Thai face can draw it (#125). Tokens only add ASCII (Bates
-    /// prefixes and suffixes are part of the template), so checking the templates, split as
-    /// `expand`'s output is, covers every page (and a `\r` that would be drawn is refused too).
+    /// fonts nor (for Arabic, Hebrew and Thai) the script faces can draw it (#125). Tokens only
+    /// add ASCII (Bates prefixes and suffixes are part of the template), so checking the
+    /// templates, split as `expand`'s output is, covers every page (and a `\r` that would be
+    /// drawn is refused too).
     /// The dialog asks this too, so its preview never offers text that applying refuses (#2013).
     pub fn first_undrawable(&self) -> Option<char> {
-        self.text.iter().flat_map(|t| t.lines()).find_map(first_undrawable_in_line)
+        self.text.iter().flat_map(|t| t.lines()).find_map(shaped_text::line_undrawable)
     }
 
     /// The room the header and the footer take at the top and the bottom of a page, in points:
@@ -214,12 +234,12 @@ pub struct Watermark {
 
 impl Watermark {
     /// The first character of a text watermark [`add_watermark`] would refuse, because neither
-    /// the standard fonts nor (for Thai) the Thai face can draw it (#125). A picture watermark
-    /// draws no text.
+    /// the standard fonts nor (for Arabic, Hebrew and Thai) the script faces can draw it (#125).
+    /// A picture watermark draws no text.
     pub fn first_undrawable(&self) -> Option<char> {
         match self.source {
             Some(_) => None,
-            None => self.text.trim().lines().find_map(first_undrawable_in_line),
+            None => self.text.trim().lines().find_map(shaped_text::line_undrawable),
         }
     }
 }

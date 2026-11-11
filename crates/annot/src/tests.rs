@@ -5484,7 +5484,7 @@ fn thai_in_fill_sign_text_and_text_boxes_is_drawn_from_the_thai_face() {
         assert_eq!(text(&list(&doc, 0)[t], b"Contents"), "hello");
         return;
     }
-    let reach = pdfcraft_fonts::shaped_text::thai_reach;
+    let reach = pdfcraft_fonts::shaped_text::line_reach;
     let (lo, hi) = (reach("ฎู").unwrap()[0], reach("น้ำ").unwrap()[1]);
     for (shape, size) in shapes.into_iter().zip([24.0, 30.0]) {
         let t = add_annotation(&mut doc, &item(shape), &meta("t")).unwrap();
