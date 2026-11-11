@@ -131,11 +131,13 @@ struct UsedInGlyphs {
 }
 
 fn collect_used_resources_in_stream(data: &[u8], used: &mut UsedInGlyphs) -> Result<(), CosError> {
-    let parsed = pdfcraft_content::parse(data);
-    if parsed.skipped > 0 {
+    // One operator at a time, so a glyph program of millions of them is never held whole. A byte
+    // that can't be read anywhere in it still refuses, once the loop has read it all.
+    let mut read = pdfcraft_content::ops(data);
+    read.by_ref().for_each(|op| record_used(&op, used));
+    if read.skipped() > 0 {
         return Err(CosError::Syntax { offset: 0, detail: "redaction could not fully inspect glyph stream syntax".into() });
     }
-    parsed.ops.iter().for_each(|op| record_used(op, used));
     Ok(())
 }
 
@@ -218,9 +220,13 @@ fn prune_font_forms(doc: &mut Document, font_res: &Dict) -> Result<(), CosError>
                 }
             },
         };
-        let data = form.decoded()?;
+        let data = doc.with_direct_parms(form).decoded()?;
         let mut used = UsedInGlyphs::default();
-        crate::interp::resource_ops(doc, &res, std::slice::from_ref(&data))?.iter().for_each(|op| record_used(op, &mut used));
+        // Each Form's walk has the allowance of a page, as `prune_retired_properties` gives each
+        // content it reads.
+        crate::interp::resource_ops(doc, &mut pdfcraft_cos::DecodeBudget::page(), &res, std::slice::from_ref(&data))?
+            .iter()
+            .for_each(|op| record_used(op, &mut used));
         // `rg`, `g` and `k` draw through these entries when the Form keeps them as its defaults,
         // and nothing cites them with `cs`/`CS`: pruning them would change the Form's colours.
         used.colorspaces.extend([b"DefaultRGB".to_vec(), b"DefaultGray".to_vec(), b"DefaultCMYK".to_vec()]);
@@ -287,15 +293,14 @@ fn scan_content_stream(
         return Err(CosError::Syntax { offset: 0, detail: "redaction exceeded max depth inspecting Type 3 font content".into() });
     }
     let joined = Pieces::join(content);
-    let parsed = joined.parse();
-    if parsed.skipped > 0 {
-        return Err(CosError::Syntax { offset: 0, detail: "redaction could not fully inspect content stream syntax".into() });
-    }
+    // One operator at a time, so content of millions of them is never held whole. The scan only
+    // reads, and a byte that can't be read anywhere still refuses, once the loop has read it all.
+    let mut read = pdfcraft_content::ops(joined.data());
 
     let mut stack: Vec<Option<FontKey>> = Vec::new();
     let mut current_font = initial_font;
 
-    for op in parsed.ops {
+    for op in read.by_ref() {
         match op.op.as_slice() {
             b"q" => stack.push(current_font),
             b"Q" => {
@@ -321,6 +326,9 @@ fn scan_content_stream(
             }
             _ => apply_text_op(ctx, res, &op, &mut current_font),
         }
+    }
+    if read.skipped() > 0 {
+        return Err(CosError::Syntax { offset: 0, detail: "redaction could not fully inspect content stream syntax".into() });
     }
     Ok(())
 }
@@ -490,7 +498,7 @@ fn add_soft_mask_ops(doc: &Document, res: &Dict, ops: &mut Vec<pdfcraft_content:
         if s.dict.get(b"Resources").is_some_and(|ro| doc.resolve(ro).as_dict().is_some()) {
             continue;
         }
-        let parsed = pdfcraft_content::parse(&s.decoded()?);
+        let parsed = pdfcraft_content::parse(&doc.with_direct_parms(s).decoded()?);
         if parsed.skipped > 0 || ops.len().saturating_add(parsed.ops.len()) > 2_000_000 {
             return Err(CosError::Syntax { offset: 0, detail: "redaction could not fully inspect soft mask content".into() });
         }
@@ -517,7 +525,7 @@ fn scan_stream_object(
     if !ctx.seen_forms.insert((r, current_font, through)) {
         return Ok(());
     }
-    let data = s.decoded()?;
+    let data = ctx.doc.with_direct_parms(s).decoded()?;
     match own_res {
         Some(own) => scan_content_stream(ctx, std::slice::from_ref(&data), r, &own, current_font, depth + 1),
         None => scan_content_stream(ctx, std::slice::from_ref(&data), holder_ref, res, current_font, depth + 1),
@@ -533,8 +541,15 @@ fn gs_font_object(doc: &Document, state_obj: &Object) -> Option<Object> {
 
 /// Prune Type 3 fonts from a rewritten page or form's `/Resources` dictionary if the rewritten
 /// content no longer draws any text using that font name. `page` is the page's dictionary when
-/// `res` are a page's resources.
-pub(crate) fn prune_type3_from_resources(doc: &Document, res: &mut Dict, content: &[Vec<u8>], page: Option<&Dict>) -> Result<(), CosError> {
+/// `res` are a page's resources. What it reads is charged to `budget`, what is left of the page's
+/// allowance.
+pub(crate) fn prune_type3_from_resources(
+    doc: &Document,
+    budget: &mut pdfcraft_cos::DecodeBudget,
+    res: &mut Dict,
+    content: &[Vec<u8>],
+    page: Option<&Dict>,
+) -> Result<(), CosError> {
     let mut fonts = res_dict(doc, res, b"Font");
     if fonts.is_empty() {
         return Ok(());
@@ -542,20 +557,20 @@ pub(crate) fn prune_type3_from_resources(doc: &Document, res: &mut Dict, content
 
     // The operators of forms that draw through these resources count too: dropping a font a child
     // form still shows would leave its text without one.
-    let mut ops = crate::interp::resource_ops(doc, res, content)?;
+    let mut ops = crate::interp::resource_ops(doc, budget, res, content)?;
     // So do those of a page's annotation appearances, and of soft mask groups, without resources of
     // their own. They are read only when there is a Type 3 font to keep, so other files are not
     // refused over them.
     if fonts.iter().any(|(_, f)| doc.resolve(f).as_dict().is_some_and(|d| d.name(b"Subtype") == Some(b"Type3"))) {
         if let Some(page) = page {
             // One total for all of them, as for the content: each appearance under the cap could
-            // still add up to far more than it. Their decoded bytes share one page's allowance
-            // too, and each is decoded only in its turn, so they are never all held at once.
-            let mut budget = pdfcraft_cos::DecodeBudget::page();
+            // still add up to far more than it. Their decoded bytes, and their forms', are charged to
+            // the page's allowance, which the content and its forms spend too, and each is decoded
+            // only in its turn, so they are never all held at once.
             for r in resourceless_appearances(doc, page) {
                 let Object::Stream(s) = &*doc.get(r) else { continue };
-                let data = budget.decode(s)?;
-                let more = crate::interp::resource_ops(doc, res, std::slice::from_ref(&data))?;
+                let data = budget.decode(&doc.with_direct_parms(s))?;
+                let more = crate::interp::resource_ops(doc, budget, res, std::slice::from_ref(&data))?;
                 if ops.len().saturating_add(more.len()) > 2_000_000 {
                     return Err(CosError::Syntax { offset: 0, detail: "redaction could not fully inspect annotation appearances".into() });
                 }
@@ -696,7 +711,7 @@ pub(crate) fn unlink_type3(doc: &mut Document) -> Result<(), RedactError> {
     for (form_ref, form_res) in &form_holders {
         if !ctx.seen_forms.iter().any(|(form, _, _)| form == form_ref) {
             let Object::Stream(s) = &*ctx.doc.get(*form_ref) else { continue };
-            let data = s.decoded()?;
+            let data = ctx.doc.with_direct_parms(s).decoded()?;
             scan_content_stream(&mut ctx, std::slice::from_ref(&data), *form_ref, form_res, None, 0)?;
         }
     }
@@ -830,7 +845,7 @@ fn clean_type3_font(
             }
             .into());
         };
-        let data = s.decoded()?;
+        let data = doc.with_direct_parms(s).decoded()?;
         collect_used_resources_in_stream(&data, &mut used_in_glyphs)?;
     }
 

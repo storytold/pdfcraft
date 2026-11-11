@@ -68,6 +68,14 @@ this works only when that build input actually contains the full face. This chan
 add a font binary or change the release font pin. Fonts shared by releases belong in
 `storytold/craft-fonts` under the repository's asset rules.
 
+With **Keep source fonts**, an upright single-style paragraph can combine its source font
+with a fallback even when the replacement has no explicit line break (#2750). Characters
+the source can draw keep that font and its advances; only missing characters enter the
+generated Type 3 fonts, in batches. Wrapping and alignment measure both faces, including
+character spacing and horizontal scaling. Explicit family/weight changes and the existing
+turned, right-to-left and visual-order paths retain their selection rules. The styled-path
+fallback grouping below remains independent of this single-style path.
+
 **Keep source fonts** retains the existing Thai family, weight and point size. For legacy
 THSarabunPSK subsets, PdfCraft reconstructs an editor-only Unicode cmap from the PDF's
 Unicode and CID-to-glyph maps. HarfRust uses the retained Thai positional glyphs, and the
@@ -113,7 +121,7 @@ stay in it; Japanese serif/sans and weight choices remain separate. More than 24
 use additional fonts; a styled paragraph needing more than 15,360 distinct fallback glyphs is
 refused with an error. Unsupported glyphs are refused before fallback objects are written.
 This does not expand glyph coverage, shape mixed contextual runs or remove old unused fonts
-when editing again. The separate single-style fallback path is unchanged.
+when editing again. The single-style Keep source fonts path above has its own fallback grouping.
 
 Rewrapped Chinese and Japanese text, which has no spaces between words, may break between any
 two characters. A row never begins with closing punctuation, a closing bracket or quote, a small
