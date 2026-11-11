@@ -93,7 +93,10 @@ impl Cache {
 /// and gets nothing, as the decode did. A failure counts [`FAILED_DECODE_BYTES`] towards the
 /// budget, so failures can't grow the map without bound either. A failure that may come from
 /// what the page had left (its JBIG2 allowance, `ContentTruncated`) isn't kept: another page,
-/// or the same page drawn again, starts with a fresh allowance.
+/// or the same page drawn again, starts with a fresh allowance. One that left out a JBIG2 mask
+/// for a limit its stream reaches by itself is kept, with the image it takes along (patch 73,
+/// [`note_stream_limited`]): decoding them again would only refuse them again, and an image of
+/// any size under such a mask was decoded again at every draw.
 #[derive(Clone)]
 pub(crate) struct DecodedImageCache {
     inner: Arc<Mutex<DecodedImageCacheInner>>,
@@ -141,6 +144,26 @@ pub(crate) struct DecodedImageKey {
 /// PdfCraft patch (91): what the budget charges for a failed decode, about what its key and
 /// entry take in the map.
 const FAILED_DECODE_BYTES: usize = 128;
+
+/// PdfCraft patch (91): with the warnings of a failure kept, that it left out a JBIG2 mask for a
+/// limit its stream reaches by itself ([`note_stream_limited`]); no warning's flag.
+const STREAM_LIMITED: u8 = 128;
+
+std::thread_local! {
+    static LEFT_OUT_BY_STREAM_LIMIT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// PdfCraft patch (73): note, wherever a decode reports `ContentTruncated` for an image or a kept
+/// failure replays it, whether that left out a JBIG2 mask for a limit its stream reaches by itself
+/// (`hayro_syntax::jbig2_limited_by_stream`): its failure, and the failure of the image it takes
+/// along, is then the stream's to keep, since decoding it again refuses it again.
+pub(crate) fn note_stream_limited(limited: bool) {
+    LEFT_OUT_BY_STREAM_LIMIT.with(|left_out| left_out.set(limited));
+}
+
+fn stream_limited() -> bool {
+    LEFT_OUT_BY_STREAM_LIMIT.with(std::cell::Cell::get)
+}
 
 /// PdfCraft patch (91): what a [`DecodedImageCache`] keeps for a key.
 enum DecodedEntry {
@@ -244,6 +267,7 @@ impl DecodedImageCache {
         match hit {
             Some(Ok(hit)) => return Some(hit),
             Some(Err(bits)) => {
+                note_stream_limited(bits & STREAM_LIMITED != 0);
                 warnings_in(bits).for_each(|warning| sink(warning));
                 return None;
             }
@@ -278,12 +302,12 @@ impl DecodedImageCache {
             Some(DecodedEntry::Failed(_)) if val.is_none() => return None,
             _ => {}
         }
+        let truncated = reported & warning_bit(InterpreterWarning::ContentTruncated) != 0;
         let size = match &val {
             Some(v) => size_of(v),
-            // A failure the page's JBIG2 allowance may have caused isn't the image's to keep.
-            None if reported & warning_bit(InterpreterWarning::ContentTruncated) != 0
-                || hayro_syntax::page_jbig2_work_spent() =>
-            {
+            // A failure the page's JBIG2 allowance may have caused isn't the image's to keep, nor
+            // one a JBIG2 decode's work did, which may be the page's too.
+            None if hayro_syntax::page_jbig2_work_spent() || (truncated && !stream_limited()) => {
                 return None;
             }
             None => FAILED_DECODE_BYTES,
@@ -297,6 +321,8 @@ impl DecodedImageCache {
         }
         let entry = match &val {
             Some(val) => DecodedEntry::Decoded(Box::new(val.clone())),
+            // Here only when a limit of its stream refused the mask that left it out (above).
+            None if truncated => DecodedEntry::Failed(reported | STREAM_LIMITED),
             None => DecodedEntry::Failed(reported),
         };
         // An entry replaced (a failure another thread kept) isn't given back: the budget
