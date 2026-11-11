@@ -109,16 +109,95 @@ fn convert_fixes_all_but_fonts() {
     let left: Vec<&str> = r.remaining.iter().map(|i| i.message.as_str()).collect();
     assert_eq!(left, ["The font Helvetica isn't embedded"], "{:#?}", r.remaining);
     let d = declared(&doc);
-    assert_eq!(d.pdfa, Some((2, "B".into())));
+    // The font still isn't embedded, so the file isn't identified as PDF/A (#6845).
+    assert_eq!(d.pdfa, None);
+    assert!(!r.fixed.iter().any(|f| f.starts_with("Identified")), "{:?}", r.fixed);
     assert_eq!(d.output_intents, ["sRGB IEC61966-2.1"]);
-    // The metadata carries the document information.
+    // The other fixes survive a save; the font and the missing metadata remain.
+    let bytes = pdfcraft_cos::write_full(&doc, &Default::default()).unwrap();
+    let back = Document::open(std::sync::Arc::new(bytes)).unwrap();
+    let left = messages(&verify(&back, Level::A2b)).into_iter().map(str::to_owned).collect::<Vec<_>>();
+    assert_eq!(left, ["The document has no XMP metadata", "The font Helvetica isn't embedded"]);
+}
+
+/// One page drawing with three Times faces, which `fonts` describes from object 5 on.
+fn times_page(fonts: &[&str], catalog_extra: &str) -> Document {
+    let catalog = format!("<< /Type /Catalog /Pages 2 0 R {catalog_extra} >>");
+    let content = "BT /F1 12 Tf 10 10 Td (a) Tj /F2 12 Tf (b) Tj /F3 12 Tf (c) Tj ET";
+    let stream = format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len());
+    let mut objs = vec![
+        catalog.as_str(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+        "<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Font << /F1 5 0 R /F2 6 0 R /F3 7 0 R >> >> >>",
+        stream.as_str(),
+    ];
+    objs.extend_from_slice(fonts);
+    build(&objs, "/Info << /Title (Report) /CreationDate (D:20240105093000Z) >>")
+}
+
+const UNEMBEDDED_TIMES: [&str; 3] = [
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Times-Roman >>",
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Times-Bold >>",
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Times-Italic >>",
+];
+
+/// Issue #6845: a conversion that leaves fonts unembedded doesn't identify the file as PDF/A, so
+/// saving it writes no `pdfaid` claim the file doesn't meet.
+#[test]
+fn convert_writes_no_pdfa_claim_while_fonts_are_not_embedded() {
+    let mut doc = times_page(&UNEMBEDDED_TIMES, "");
+    let r = convert(&mut doc, Level::A2b).unwrap();
+    assert_eq!(r.remaining.len(), 3, "{:#?}", r.remaining);
+    assert!(r.remaining.iter().all(|i| i.clause == "6.2.11.4" && !i.fixable), "{:#?}", r.remaining);
+    assert_eq!(declared(&doc).pdfa, None);
+    assert!(!r.fixed.iter().any(|f| f.starts_with("Identified")), "{:?}", r.fixed);
+    let bytes = pdfcraft_cos::write_full(&doc, &Default::default()).unwrap();
+    assert!(!bytes.windows(7).any(|w| w == b"pdfaid:"), "the saved file declares PDF/A");
+    let back = Document::open(std::sync::Arc::new(bytes)).unwrap();
+    assert_eq!(declared(&back).pdfa, None);
+    assert!(verify(&back, Level::A2b).iter().any(|i| i.clause == "6.6.2.1"));
+}
+
+/// Issue #6845: when problems remain, the catalog keeps the metadata it had (here without a
+/// claim), and a second conversion doesn't leave one either.
+#[test]
+fn convert_keeps_the_earlier_metadata_when_problems_remain() {
+    let packet = "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\"/></x:xmpmeta>";
+    let metadata_obj = format!("<< /Type /Metadata /Subtype /XML /Length {} >>\nstream\n{packet}\nendstream", packet.len());
+    let mut fonts = UNEMBEDDED_TIMES.to_vec();
+    fonts.push(&metadata_obj);
+    let mut doc = times_page(&fonts, "/Metadata 8 0 R");
+    for _ in 0..2 {
+        convert(&mut doc, Level::A2b).unwrap();
+        let root = doc.root().unwrap();
+        assert_eq!(doc.get(root).as_dict().and_then(|c| c.get(b"Metadata")).cloned(), Some(Object::Ref(ObjRef::new(8, 0))));
+        assert_eq!(declared(&doc).pdfa, None);
+    }
+}
+
+/// Issue #6845, the control: with its fonts embedded the same page converts and is identified as
+/// PDF/A, its metadata carrying the document information, through a save.
+#[test]
+fn convert_identifies_a_file_whose_fonts_are_embedded() {
+    let fonts = [
+        "<< /Type /Font /Subtype /TrueType /BaseFont /Serif /FontDescriptor 8 0 R >>",
+        "<< /Type /Font /Subtype /TrueType /BaseFont /Serif /FontDescriptor 8 0 R >>",
+        "<< /Type /Font /Subtype /TrueType /BaseFont /Serif /FontDescriptor 8 0 R >>",
+        "<< /Type /FontDescriptor /FontName /Serif /FontFile2 9 0 R >>",
+        "<< /Length1 3 /Length 3 >>\nstream\nttf\nendstream",
+    ];
+    let mut doc = times_page(&fonts, "");
+    let r = convert(&mut doc, Level::A2b).unwrap();
+    assert!(r.remaining.is_empty(), "{:#?}", r.remaining);
+    assert!(r.fixed.iter().any(|f| f == "Identified the file as PDF/A-2b in its XMP metadata"), "{:?}", r.fixed);
+    assert_eq!(declared(&doc).pdfa, Some((2, "B".into())));
     let x = metadata(&doc).unwrap();
     assert_eq!(xmp::value(&x, "dc:title").as_deref(), Some("Report"));
     assert_eq!(xmp::value(&x, "xmp:CreateDate").as_deref(), Some("2024-01-05T09:30:00Z"));
-    // It survives a save.
     let bytes = pdfcraft_cos::write_full(&doc, &Default::default()).unwrap();
     let back = Document::open(std::sync::Arc::new(bytes)).unwrap();
-    assert_eq!(verify(&back, Level::A2b).len(), 1);
+    assert_eq!(declared(&back).pdfa, Some((2, "B".into())));
+    assert!(verify(&back, Level::A2b).is_empty());
 }
 
 #[test]

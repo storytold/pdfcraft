@@ -1429,6 +1429,9 @@ pub fn convert(doc: &mut Document, level: Level) -> Result<Report, pdfcraft_cos:
         cat.set(b"OutputIntents".to_vec(), Object::Array(list));
         fixed.push("Added an sRGB output intent".into());
     }
+    // The catalog's metadata as it was, put back if problems remain: the claim is written only
+    // for a file that then passes the checks (#6845).
+    let earlier_metadata = cat.get(b"Metadata").cloned();
     let x = xmp::packet(doc, level);
     let mut md = Dict::new();
     md.set(b"Type".to_vec(), Object::name("Metadata"));
@@ -1516,7 +1519,21 @@ pub fn convert(doc: &mut Document, level: Level) -> Result<Report, pdfcraft_cos:
             fixed.push(format!("{n}: {what}"));
         }
     }
+    // Checked with the identification in place, so the problems listed are the ones still to fix.
     let remaining = verify(doc, level);
+    if !remaining.is_empty() {
+        // Archives trust the identification, so a file that doesn't conform must not carry one
+        // this run wrote (#6845): the catalog keeps the metadata it had before.
+        doc.update_dict(root, |c| match earlier_metadata {
+            Some(earlier) => c.set(b"Metadata".to_vec(), earlier),
+            None => {
+                c.remove(b"Metadata");
+            }
+        })?;
+        doc.free(m);
+        let claim = format!("Identified the file as {} in its XMP metadata", level.label());
+        fixed.retain(|f| *f != claim);
+    }
     Ok(Report { fixed, remaining })
 }
 
