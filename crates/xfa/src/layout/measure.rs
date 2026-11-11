@@ -1,0 +1,498 @@
+use super::common::clamp_opt;
+use super::field::auto_check_reserve;
+use super::{
+    Access, Area, Ctx, ExclGroup, Face, Field, Font, Layout, Layouter, MAX_DEPTH, MAX_MEASURES, Measured, Node, Para, Placement, Rect, SomIndices,
+    Subform, Ui, Value, data_path, text,
+};
+
+/// Where [`Layouter::pack_instances`] puts one object: the (child index, instance) steps to it, and
+/// its place in the packed container's box.
+pub(super) type Packed = (Vec<(usize, usize)>, Rect);
+
+impl Layouter<'_> {
+    /// The width and height instance `index` of `node` under `ctx` takes in `avail_w`: its own
+    /// size, else what its content needs (containers are measured once per width, depth and
+    /// instance, and measuring stops at its caps). Instances differ when the data gives each its
+    /// own rows (XFA 3.3, "Tables", p. 327; Chapter 9, p. 336), so with data each is measured
+    /// under its own SOM path.
+    pub(super) fn size_at(&self, node: &Node, avail_w: f64, ctx: &Ctx, depth: usize, index: usize) -> (f64, f64) {
+        let c = node.common();
+        let spent = self.measures.get().saturating_add(1);
+        self.measures.set(spent);
+        if depth > MAX_DEPTH || spent > MAX_MEASURES {
+            return (c.w.unwrap_or(avail_w), c.h.unwrap_or(0.0));
+        }
+        let own = ctx.with_som(c, index);
+        // Only containers recurse; their addresses are stable for the whole layout (the
+        // template is borrowed, the root and page areas are held by the layouter). Without data
+        // every instance is alike, so one measurement serves them all.
+        let som = || if self.data.is_some() { own.som.clone() } else { String::new() };
+        let key = match node {
+            Node::Subform(s) => Some((&**s as *const Subform as usize, avail_w.to_bits(), depth, som())),
+            Node::Area(a) => Some((&**a as *const Area as usize, avail_w.to_bits(), depth, som())),
+            _ => None,
+        };
+        if let Some(key) = &key
+            && let Ok(cache) = self.measured.try_borrow()
+            && let Some(m) = cache.get(key)
+            && m.font == ctx.font
+            && m.para == ctx.para
+        {
+            return m.size;
+        }
+        // A field's caption is measured in the paragraph around the field, as it is drawn.
+        let size = self.measure(node, avail_w, &own, &ctx.para, depth);
+        if let Some(key) = key
+            && let Ok(mut cache) = self.measured.try_borrow_mut()
+        {
+            cache.insert(key, Measured { font: ctx.font.clone(), para: ctx.para.clone(), size });
+        }
+        size
+    }
+
+    /// The size (width, height) of `node` within `avail_w`, uncached ([`Self::size_at`] caches it).
+    /// Without a width, a container, a text draw or a button is as wide as its content (at most
+    /// `avail_w`) and anything else takes `avail_w`; without a height, it is as tall as its content.
+    /// `ctx` holds the SOM path of the instance measured: its repeating children count their
+    /// instances under it, and a growing text field finds its value at it. `outer_para` is the
+    /// paragraph around the node, which a field's caption takes.
+    fn measure(&self, node: &Node, avail_w: f64, ctx: &Ctx, outer_para: &Para, depth: usize) -> (f64, f64) {
+        let c = node.common();
+        let som = ctx.som.clone();
+        // A container without a width is as wide as its content (a radio group beside its
+        // question, say), and so is a text label or a button (as wide as its caption), within
+        // what is available, and so is a check box (its box and caption); any other field without
+        // one takes what is available.
+        let w = match c.w {
+            Some(w) => w,
+            None => match node {
+                Node::Subform(_) | Node::ExclGroup(_) | Node::Area(_) => {
+                    let inner = (avail_w - c.margin.horizontal()).max(1.0);
+                    (self.content_width(node, inner, ctx, depth) + c.margin.horizontal()).min(avail_w)
+                }
+                Node::Draw(d) => self.natural_width(&d.value, &ctx.font, &ctx.para).map_or(avail_w, |t| (t + c.margin.horizontal()).min(avail_w)),
+                Node::Field(f) if f.ui == Ui::Button => f
+                    .caption
+                    .as_ref()
+                    .and_then(|cap| self.natural_width(&cap.value, &ctx.font.apply(&cap.font), &outer_para.apply(&cap.para)))
+                    .map_or(avail_w, |t| (t + c.margin.horizontal() + f.ui_margin.horizontal()).min(avail_w)),
+                Node::Field(f) if f.ui == Ui::CheckButton => (self.check_width(f, ctx) + c.margin.horizontal()).min(avail_w),
+                Node::Field(_) => avail_w,
+            },
+        };
+        let w = clamp_opt(w, c.min_w, c.max_w);
+        let h = match c.h {
+            Some(h) => h,
+            None => self.content_height(node, (w - c.margin.horizontal()).max(1.0), ctx, &som, outer_para, depth) + c.margin.vertical(),
+        };
+        // A subform without a height is as tall as what it holds, flowed or positioned. XFA 3.3
+        // p. 847 makes `minH` its minimum; Adobe Acrobat doesn't stretch one to it (IRCC's
+        // IMM 5257: section 10 at `minH="58.274mm"`), and this follows Acrobat. A row, in a table
+        // or not, keeps its `minH`: [`Self::cells`] has already raised its height to it.
+        let min_h = match node {
+            Node::Subform(_) if c.h.is_none() => None,
+            _ => c.min_h,
+        };
+        (w, clamp_opt(h, min_h, c.max_h))
+    }
+
+    /// The height `k` takes with all its instances under the container at `som`, one under
+    /// another, the first at SOM index `sib` among its siblings: each instance takes its own.
+    fn instances_height(&self, k: &Node, inner_w: f64, ctx: &Ctx, depth: usize, som: &str, sib: usize) -> f64 {
+        (0..self.instances(k, som)).map(|i| self.size_at(k, inner_w, ctx, depth, sib.saturating_add(i)).1).sum()
+    }
+
+    /// The height of `node`'s content within `inner_w` (inside its margins), whatever height it
+    /// gives itself. `ctx` is the node's own context ([`Ctx::with_som`]), `som` its SOM path and
+    /// `outer_para` the paragraph around it, which a field's caption takes.
+    fn content_height(&self, node: &Node, inner_w: f64, ctx: &Ctx, som: &str, outer_para: &Para, depth: usize) -> f64 {
+        match node {
+            Node::Draw(d) => self.value_height(&d.value, inner_w, ctx),
+            Node::Field(f) => self.field_height(f, inner_w, ctx, outer_para),
+            Node::ExclGroup(g) => self.group_height(g, inner_w, ctx, depth),
+            Node::Area(a) => self.positioned_height(&a.children, inner_w, ctx, depth),
+            Node::Subform(s) => match s.layout {
+                Layout::Positioned => self.positioned_height(&s.children, inner_w, ctx, depth),
+                // Each instance of a repeating child takes its own height.
+                Layout::Tb => {
+                    let sibs = SomIndices::of(&s.children);
+                    s.children
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, k)| k.common().presence.occupies())
+                        .map(|(i, k)| self.instances_height(k, inner_w, ctx, depth + 1, som, sibs.at(i)))
+                        .sum()
+                }
+                Layout::LrTb | Layout::RlTb => self.pack_instances(&s.children, inner_w, ctx, depth, som).1,
+                Layout::Table => {
+                    let cols = self.columns(s, inner_w);
+                    let sibs = SomIndices::of(&s.children);
+                    s.children
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, k)| k.common().presence.occupies())
+                        .map(|(i, k)| match k {
+                            // Each instance of a repeating row takes its own height, as drawn.
+                            Node::Subform(r) if r.layout == Layout::Row => (0..self.instances(k, som))
+                                .map(|n| self.row_height(r, &cols, inner_w, ctx, depth + 1, sibs.at(i).saturating_add(n)))
+                                .sum(),
+                            _ => self.size_at(k, inner_w, ctx, depth + 1, sibs.at(i)).1,
+                        })
+                        .sum()
+                }
+                // `ctx` is already this row instance's own.
+                Layout::Row => self.cells(s, &self.columns(s, inner_w), inner_w, ctx, depth + 1).1,
+            },
+        }
+    }
+
+    /// The natural width of a container's content within `avail_w`.
+    fn content_width(&self, node: &Node, avail_w: f64, ctx: &Ctx, depth: usize) -> f64 {
+        let group: Vec<Node>;
+        let (children, layout): (&[Node], Layout) = match node {
+            Node::Subform(s) => {
+                if s.layout == Layout::Table && !s.column_widths.is_empty() {
+                    return s.column_widths.iter().sum::<f64>().min(avail_w);
+                }
+                (&s.children, s.layout)
+            }
+            Node::ExclGroup(g) => {
+                // Fields are leaves: measuring these copies caches nothing.
+                group = g.fields.iter().map(|f| Node::Field(Box::new(f.clone()))).collect();
+                (&group, g.layout)
+            }
+            Node::Area(a) => (&a.children, Layout::Positioned),
+            _ => return avail_w,
+        };
+        // Each child under the SOM index it is drawn at.
+        let sibs = SomIndices::of(children);
+        let visible = children.iter().enumerate().filter(|(_, k)| k.common().presence.occupies());
+        match layout {
+            Layout::LrTb | Layout::RlTb | Layout::Row => {
+                let sum: f64 = visible.map(|(i, k)| self.size_at(k, avail_w, ctx, depth + 1, sibs.at(i)).0).sum();
+                if sum <= avail_w + 0.05 { sum } else { avail_w }
+            }
+            Layout::Positioned => visible
+                .map(|(i, k)| {
+                    let (w, h) = self.size_at(k, avail_w, ctx, depth + 1, sibs.at(i));
+                    k.standing_box(w, h).right()
+                })
+                .fold(0.0, f64::max)
+                .min(avail_w),
+            Layout::Tb | Layout::Table => {
+                visible.map(|(i, k)| self.size_at(k, avail_w, ctx, depth + 1, sibs.at(i)).0).fold(0.0, f64::max).min(avail_w)
+            }
+        }
+    }
+
+    /// How wide check box `f` is without a width of its own (XFA 3.3 Ch.8, growable fields): its
+    /// box and widget margins, plus its caption beside it (its reserve, else its text), or the
+    /// wider of the two when the caption is above or below.
+    fn check_width(&self, f: &Field, ctx: &Ctx) -> f64 {
+        let check = f.check_size.unwrap_or(10.0) + f.ui_margin.horizontal();
+        let Some(cap) = f.caption.as_ref().filter(|c| c.presence.occupies() && c.placement != Placement::Inline) else {
+            return check;
+        };
+        // The 2pt matches `caption_reserve`'s room for a caption without a reserve.
+        let text = || self.natural_width(&cap.value, &ctx.font.apply(&cap.font), &ctx.para.apply(&cap.para)).map_or(0.0, |t| t + 2.0);
+        match cap.placement {
+            Placement::Top | Placement::Bottom => check.max(text()),
+            _ => check + cap.reserve.unwrap_or_else(text),
+        }
+    }
+
+    /// How wide text `v` is unwrapped, in `font` and `para`, with a hair to spare so that laying
+    /// it out at that width keeps it on its lines; `None` for what isn't text, or text that draws
+    /// nothing.
+    fn natural_width(&self, v: &Value, font: &Font, para: &Para) -> Option<f64> {
+        let rich = match v {
+            Value::Text(t) => text::plain(t),
+            Value::Rich(r) => r.clone(),
+            _ => return None,
+        };
+        // No text (a bordered spacer or rule): nothing to size to, so it keeps what it has room for.
+        let w = text::natural_width(&rich, para, &Face::of(font), &|id, max| self.embed(id, max));
+        (w > 0.0).then_some(w + 0.01)
+    }
+
+    /// How tall value `v` is laid out `w` wide: text wrapped in the context's font and paragraph,
+    /// an image at its aspect ratio, and nothing for lines, rectangles and empty values.
+    fn value_height(&self, v: &Value, w: f64, ctx: &Ctx) -> f64 {
+        match v {
+            Value::Text(t) => text::measure_height(&text::plain(t), w, &ctx.para, &Face::of(&ctx.font), &|id, max| self.embed(id, max)),
+            Value::Rich(r) => text::measure_height(r, w, &ctx.para, &Face::of(&ctx.font), &|id, max| self.embed(id, max)),
+            Value::Image { data, .. } => crate::image::size(data).map_or(w, |(iw, ih)| if iw > 0 { w * ih as f64 / iw as f64 } else { w }),
+            Value::Line { .. } | Value::Rectangle(_) | Value::Empty => 0.0,
+        }
+    }
+
+    /// Where field `f`'s caption goes and how much room it takes from the field's box, or `None`
+    /// when it has no caption that takes room (a button's is drawn inside its box). `ctx` is the
+    /// field's own and `outer_para` the paragraph around the field: the caption is measured in
+    /// the field's font (XFA 3.3, "Formatting Text That Appears as Fixed or Variable Content",
+    /// p. 43) and the outer paragraph, each with the caption's own properties on top, as it is
+    /// drawn.
+    pub(super) fn caption_reserve(&self, f: &Field, inner_w: f64, ctx: &Ctx, outer_para: &Para) -> Option<(Placement, f64)> {
+        let cap = f.caption.as_ref()?;
+        if !cap.presence.occupies() || f.ui == Ui::Button {
+            return None;
+        }
+        if cap.value.is_empty() && cap.reserve.is_none() {
+            return None;
+        }
+        // A check box has no text for an inline caption to run with: it is not shown.
+        if f.ui == Ui::CheckButton && cap.placement == Placement::Inline {
+            return None;
+        }
+        let placement = if cap.placement == Placement::Inline { Placement::Left } else { cap.placement };
+        let font = ctx.font.apply(&cap.font);
+        let para = outer_para.apply(&cap.para);
+        let reserve = cap.reserve.unwrap_or_else(|| match placement {
+            Placement::Top | Placement::Bottom => {
+                let rich = match &cap.value {
+                    Value::Rich(r) => r.clone(),
+                    other => text::plain(&other.plain().unwrap_or_default()),
+                };
+                text::measure_height(&rich, inner_w, &para, &Face::of(&font), &|id, max| self.embed(id, max))
+            }
+            _ => (Face::of(&font).width(&cap.value.plain().unwrap_or_default()) + 2.0).min(inner_w * 0.6),
+        });
+        Some((placement, reserve))
+    }
+
+    /// The height of field `f`'s content within `inner_w` (inside its margins): its widget (a check
+    /// box, a button's caption, or one line of text or three when multi-line, more for a text field
+    /// that grows) plus a caption above or below it, or the taller of the two for one beside it.
+    /// `ctx` is the field's own and `outer_para` the paragraph around it, which its caption takes.
+    fn field_height(&self, f: &Field, inner_w: f64, ctx: &Ctx, outer_para: &Para) -> f64 {
+        let font = ctx.font.apply(&f.common.font);
+        // An empty multi-line field is three lines tall, unless it gives a minimum height (`minH`,
+        // XFA 3.3 p. 731): then that is where it starts, as a growable table cell does, and one
+        // line below it; its text, when there is more, still grows it.
+        let lines = if f.multiline && f.common.min_h.is_none() { 3.0 } else { 1.0 };
+        let ui = match f.ui {
+            Ui::CheckButton => f.check_size.unwrap_or(10.0).max(text::line_height(font.size)),
+            // A button shows its caption: as tall as the caption's text in its own font.
+            Ui::Button if f.caption.as_ref().is_some_and(|c| !c.value.is_empty()) => {
+                let cap = f.caption.as_ref().map_or(0.0, |c| {
+                    let rich = match &c.value {
+                        Value::Rich(r) => r.clone(),
+                        other => text::plain(&other.plain().unwrap_or_default()),
+                    };
+                    let w = (inner_w - f.ui_margin.horizontal()).max(1.0);
+                    text::measure_height(&rich, w, &outer_para.apply(&c.para), &Face::of(&ctx.font.apply(&c.font)), &|id, max| self.embed(id, max))
+                });
+                cap + f.ui_margin.vertical()
+            }
+            _ => (text::line_height(font.size) * lines).max(self.grown_text_height(f, inner_w, ctx, outer_para)) + 4.0 + f.ui_margin.vertical(),
+        };
+        match self.caption_reserve(f, inner_w, ctx, outer_para) {
+            Some((Placement::Top | Placement::Bottom, r)) => ui + r,
+            Some((placement, r)) => {
+                // A check box's caption without a reserve is drawn in all the box leaves; any
+                // other caption beside the widget is as wide as its reserve (XFA 3.3 p. 645), the
+                // width `draw_field` gives it.
+                let w = match auto_check_reserve(f, placement, inner_w, None) {
+                    Some(auto) => auto,
+                    None => r.min(inner_w),
+                };
+                let cap = f.caption.as_ref().map(|c| {
+                    let rich = match &c.value {
+                        Value::Rich(r) => r.clone(),
+                        other => text::plain(&other.plain().unwrap_or_default()),
+                    };
+                    text::measure_height(&rich, w.max(1.0), &outer_para.apply(&c.para), &Face::of(&ctx.font.apply(&c.font)), &|id, max| {
+                        self.embed(id, max)
+                    })
+                });
+                ui.max(cap.unwrap_or(0.0))
+            }
+            None => ui,
+        }
+    }
+
+    /// The face a field's text is laid out in: at its horizontal scale when the layout draws
+    /// the text itself (a non-interactive field), as designed when the forms layer draws it in
+    /// a widget, whose appearances have no horizontal scaling.
+    pub(super) fn field_text_face(f: &Field, font: &Font) -> Face {
+        let face = Face::of(font);
+        if f.access == Access::NonInteractive { face } else { face.unscaled() }
+    }
+
+    /// The height the text of a multi-line text field takes (its value in the data, else the
+    /// template's), for a field without a fixed height, which grows to hold its text. `ctx`
+    /// is the field's own (its SOM ends in the field) and `outer_para` the paragraph around it.
+    /// Zero for anything else. A nameless field takes no part in data binding (XFA 3.3 p. 194),
+    /// and its `ctx` ends in its parent: its text is the template's.
+    fn grown_text_height(&self, f: &Field, inner_w: f64, ctx: &Ctx, outer_para: &Para) -> f64 {
+        if !f.grows_with_text() {
+            return 0.0;
+        }
+        let bound = f.common.name.as_ref().and(self.data);
+        let value = bound.and_then(|d| d.value_at(&data_path(self.tpl, &ctx.som))).filter(|t| !t.trim().is_empty()).or_else(|| f.value.plain());
+        let Some(value) = value.filter(|t| !t.trim().is_empty()) else { return 0.0 };
+        // Beside a caption the text has what the caption leaves; a widget's text has 2pt of
+        // padding on each side, a non-interactive field's (drawn as text) none, so it wraps
+        // where it is drawn.
+        let beside = match self.caption_reserve(f, inner_w, ctx, outer_para) {
+            Some((Placement::Top | Placement::Bottom, _)) | None => 0.0,
+            Some((_, r)) => r,
+        };
+        let padding = if f.access == Access::NonInteractive { 0.0 } else { 4.0 };
+        let w = (inner_w - beside - f.ui_margin.horizontal() - padding).max(1.0);
+        let font = ctx.font.apply(&f.common.font);
+        text::measure_height(&text::plain(value.trim_end()), w, &ctx.para, &Self::field_text_face(f, &font), &|_, _| String::new())
+    }
+
+    /// The height of an exclusion group's fields at `inner_w`, by the group's layout: stacked
+    /// top to bottom, at their own positions, or packed in rows.
+    fn group_height(&self, g: &ExclGroup, inner_w: f64, ctx: &Ctx, depth: usize) -> f64 {
+        let nodes: Vec<Node> = g.fields.iter().map(|f| Node::Field(Box::new(f.clone()))).collect();
+        match g.layout {
+            Layout::Tb => {
+                let sibs = SomIndices::of(&nodes);
+                nodes
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, k)| k.common().presence.occupies())
+                    .map(|(i, k)| self.size_at(k, inner_w, ctx, depth + 1, sibs.at(i)).1)
+                    .sum()
+            }
+            Layout::Positioned => self.positioned_height(&nodes, inner_w, ctx, depth),
+            _ => self.packed_height(&nodes, inner_w, ctx, depth),
+        }
+    }
+
+    fn positioned_height(&self, children: &[Node], inner_w: f64, ctx: &Ctx, depth: usize) -> f64 {
+        let sibs = SomIndices::of(children);
+        children
+            .iter()
+            .enumerate()
+            .filter(|(_, k)| k.common().presence.occupies())
+            .map(|(i, k)| {
+                let c = k.common();
+                let (w, h) = self.size_at(k, (inner_w - c.x.unwrap_or(0.0)).max(1.0), ctx, depth + 1, sibs.at(i));
+                k.standing_box(w, h).bottom()
+            })
+            .fold(0.0, f64::max)
+    }
+
+    /// Left-to-right packing: rows of children, wrapped at the available width, as (steps, place).
+    /// The steps are (child index, instance) from the packed container down to the object: one
+    /// step for a child, more for a member of a `subformSet`, which is transparent to layout (XFA
+    /// 3.3 p. 357), so its members go on among the container's other children. A repeating
+    /// subform is packed once per instance it has under the container at `som`.
+    pub(super) fn pack_instances(&self, children: &[Node], inner_w: f64, ctx: &Ctx, depth: usize, som: &str) -> (Vec<Packed>, f64) {
+        let mut out = Vec::new();
+        let mut line = (0.0, 0.0, 0.0);
+        self.pack_into(children, inner_w, ctx, depth, som, &[], &mut line, &mut out);
+        (out, line.1 + line.2)
+    }
+
+    /// [`Self::pack_instances`] from `line` (x, y, the line's height so far), the steps to
+    /// `children` being `path`.
+    #[allow(clippy::too_many_arguments)]
+    fn pack_into(
+        &self,
+        children: &[Node],
+        inner_w: f64,
+        ctx: &Ctx,
+        depth: usize,
+        som: &str,
+        path: &[(usize, usize)],
+        line: &mut (f64, f64, f64),
+        out: &mut Vec<Packed>,
+    ) {
+        if depth > MAX_DEPTH {
+            return;
+        }
+        let sibs = SomIndices::of(children);
+        for (i, k) in children.iter().enumerate() {
+            if !k.common().presence.occupies() {
+                continue;
+            }
+            if let Node::Subform(s) = k
+                && s.set
+            {
+                for instance in 0..self.instances(k, som) {
+                    let set_ctx = ctx.with_som(&s.common, sibs.at(i).saturating_add(instance));
+                    let at: Vec<(usize, usize)> = path.iter().copied().chain([(i, instance)]).collect();
+                    self.pack_into(&s.children, inner_w, &set_ctx, depth + 1, &set_ctx.som, &at, line, out);
+                }
+                continue;
+            }
+            for instance in 0..self.instances(k, som) {
+                let (w, h) = self.size_at(k, inner_w, ctx, depth + 1, sibs.at(i).saturating_add(instance));
+                let (x, y, line_h) = line;
+                if *x > 0.0 && *x + w > inner_w + 0.05 {
+                    *y += *line_h;
+                    *x = 0.0;
+                    *line_h = 0.0;
+                }
+                out.push((path.iter().copied().chain([(i, instance)]).collect(), Rect::new(*x, *y, w, h)));
+                *x += w;
+                *line_h = line_h.max(h);
+            }
+        }
+    }
+
+    /// [`Self::pack_instances`] for children that don't repeat (the fields of a group).
+    pub(super) fn pack(&self, children: &[Node], inner_w: f64, ctx: &Ctx, depth: usize) -> (Vec<(usize, Rect)>, f64) {
+        let (placed, h) = self.pack_instances(children, inner_w, ctx, depth, "");
+        (placed.into_iter().filter_map(|(at, r)| at.first().map(|&(i, _)| (i, r))).collect(), h)
+    }
+
+    fn packed_height(&self, children: &[Node], inner_w: f64, ctx: &Ctx, depth: usize) -> f64 {
+        self.pack(children, inner_w, ctx, depth).1
+    }
+
+    /// Cell rectangles of a row (relative to the row's inner box) and the row height. Each cell
+    /// is measured under its own SOM index among its same-named siblings (`qty[1]`, not
+    /// `qty[0]`), the index [`Self::draw_row`] draws it at, so a cell that grows with its value
+    /// takes its own value's height.
+    pub(super) fn cells(&self, row: &Subform, cols: &[f64], inner_w: f64, ctx: &Ctx, depth: usize) -> (Vec<(usize, Rect)>, f64) {
+        let ctx = ctx.child(&row.common);
+        let mut out = Vec::new();
+        let mut col = 0usize;
+        let mut x = 0.0;
+        let mut h: f64 = 0.0;
+        let sibs = SomIndices::of(&row.children);
+        for (i, k) in row.children.iter().enumerate() {
+            if !k.common().presence.occupies() {
+                continue;
+            }
+            let span = k.common().col_span.max(1);
+            let w = if col < cols.len() { cols.iter().skip(col).take(span).sum::<f64>() } else { k.common().w.unwrap_or((inner_w - x).max(1.0)) };
+            let (_, ch) = self.size_at(k, w, &ctx, depth + 1, sibs.at(i));
+            // A flowed subform in a cell is as tall as its content even when it gives a height:
+            // other viewers (Adobe Acrobat, PDF-XChange Editor) lay a section of a table row out
+            // that way, though a height makes a container fixed (XFA 3.3 p. 276).
+            let ch = match k {
+                Node::Subform(s) if s.common.h.is_some() && matches!(s.layout, Layout::Tb | Layout::LrTb | Layout::RlTb | Layout::Table) => {
+                    let own = ctx.with_som(&s.common, sibs.at(i));
+                    // At the width it is drawn at: the column's, not the cell's own.
+                    let inner = (w - s.common.margin.horizontal()).max(1.0);
+                    let content = self.content_height(k, inner, &own, &own.som, &ctx.para, depth + 1);
+                    clamp_opt(content + s.common.margin.vertical(), None, s.common.max_h)
+                }
+                _ => ch,
+            };
+            out.push((i, Rect::new(x, 0.0, w, ch)));
+            h = h.max(ch);
+            x += w;
+            col += span;
+        }
+        let h = match row.common.h {
+            Some(rh) => rh,
+            None => h + row.common.margin.vertical(),
+        };
+        (out, clamp_opt(h, row.common.min_h, row.common.max_h))
+    }
+
+    /// The height of instance `sib` of `row` in the table at `ctx`, measured as [`Self::draw_row`]
+    /// draws it: under the instance's own SOM path, so a cell that grows with its text takes
+    /// that instance's value (XFA 3.3, "Tables", p. 327; "Growable Containers", p. 275).
+    pub(super) fn row_height(&self, row: &Subform, cols: &[f64], inner_w: f64, ctx: &Ctx, depth: usize, sib: usize) -> f64 {
+        self.cells(row, cols, inner_w, &ctx.with_som(&row.common, sib), depth).1
+    }
+}
