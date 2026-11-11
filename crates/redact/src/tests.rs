@@ -6708,6 +6708,28 @@ fn an_inline_widget_takes_its_field_even_with_no_referenced_widget() {
     assert!(!bytes.windows(12).any(|w| w == b"FIELD-SECRET"), "the field value survived the save");
 }
 
+#[test]
+fn an_inline_widget_of_the_field_on_another_page_goes_with_it() {
+    // Two pages: the widget under the mark, and a sibling widget in place on the second page with the
+    // same `/Parent`. Deleting the field must not leave the sibling naming it.
+    let objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [7 0 R] >> >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R 5 0 R] /Count 2 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Annots [<< /Type /Annot /Subtype /Widget /Rect [20 20 60 30] /Parent 7 0 R >>] >>"
+            .to_vec(),
+        stream("", b"BT ET"),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Annots [<< /Type /Annot /Subtype /Widget /Rect [200 200 260 230] /Parent 7 0 R >>] >>"
+            .to_vec(),
+        b"<< >>".to_vec(),
+        b"<< /FT /Tx /T (name) /V (SIBLING-SECRET) >>".to_vec(),
+    ];
+    let mut doc = pdf(objs);
+    mark(&mut doc, 0, &[[10.0, 10.0, 70.0, 40.0]], "");
+    apply(&mut doc, None).unwrap();
+    let bytes = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
+    assert!(!bytes.windows(14).any(|w| w == b"SIBLING-SECRET"), "the field value survived through the sibling widget");
+}
+
 /// Private data takes an image's prepress data too: its OPI link to the original file and its
 /// alternate images, which can be the unedited original.
 #[test]

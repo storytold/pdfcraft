@@ -608,6 +608,17 @@ fn apply_within(doc: &mut Document, pages: Option<&[usize]>, images: pdfcraft_co
                         if is_reply {
                             report.annotations += 1;
                         }
+                        // Its appearance can be shared with an annotation that stays elsewhere.
+                        if !appearance_scan_limit {
+                            match appearance_refs(doc, d) {
+                                Some(references) => removed_appearances.extend(references),
+                                None => appearance_scan_limit = true,
+                            }
+                            if removed_appearances.len() > 16_384 {
+                                appearance_scan_limit = true;
+                                removed_appearances.clear();
+                            }
+                        }
                         // It has no reference to remove elsewhere; the pop-up it names has.
                         if let Some(p) = named_popup(doc, d) {
                             removed_everywhere.insert(p);
@@ -661,6 +672,30 @@ fn apply_within(doc: &mut Document, pages: Option<&[usize]>, images: pdfcraft_co
         if pdfcraft_forms::fields(doc).iter().any(|f| f.obj == *field) {
             pdfcraft_forms::delete_field_object(doc, *field)?;
             report.fields += 1;
+        }
+    }
+    // A widget written in place on another page names its deleted field through `/Parent`, which
+    // would keep the field and its value in the file: it goes with the field.
+    if !doomed_fields.is_empty() {
+        for p in pdfcraft_model::pages(doc) {
+            let annots = annots_of(doc, &p.dict);
+            let kept: Vec<Object> = annots
+                .iter()
+                .filter(|a| {
+                    a.as_ref().is_some() || !matches!(&**a, Object::Dict(d) if d.reference(b"Parent").is_some_and(|f| doomed_fields.contains(&f)))
+                })
+                .cloned()
+                .collect();
+            if kept.len() != annots.len() {
+                report.annotations += annots.len() - kept.len();
+                doc.update_dict(p.obj, |d| {
+                    if kept.is_empty() {
+                        d.remove(b"Annots");
+                    } else {
+                        d.set(b"Annots".to_vec(), Object::Array(kept));
+                    }
+                })?;
+            }
         }
     }
 
