@@ -783,6 +783,37 @@ fn a_type3_font_only_a_soft_mask_without_resources_selects_stays_on_the_page() {
     assert!(saved_first_page_lists_font(&doc, b"T4"), "the page no longer lists the font the soft mask selects");
 }
 
+/// The same soft mask, its ExtGState selected after a surplus operand (`(x) /GS1 gs`), which the
+/// renderer ignores: read from the front, the cleanups never read the group, and dropped the font
+/// it selects and its glyph.
+#[test]
+fn a_type3_font_only_a_soft_mask_selected_after_a_surplus_operand_selects_stays_on_the_page() {
+    let mut doc = pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources 5 0 R >>".to_vec(),
+        stream("", b"BT /T3 10 Tf 10 100 Td (AC) Tj ET (x) /GS1 gs 150 150 100 100 re f"),
+        b"<< /Font << /T3 6 0 R /T4 7 0 R >> /ExtGState << /GS1 << /Type /ExtGState /SMask << /Type /Mask /S /Luminosity /G 8 0 R >> >> >> >>"
+            .to_vec(),
+        type3_abc(9),
+        type3_abc(12),
+        stream(
+            "/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Group << /S /Transparency /CS /DeviceGray >>",
+            b"1 g BT /T4 40 Tf 160 180 Td (B) Tj ET",
+        ),
+        stream("", b"% REDACTED_GLYPH_A"),
+        stream("", b"% UNUSED_GLYPH_B"),
+        stream("", b"% PAGE_GLYPH_C"),
+        stream("", b"% UNUSED_T4_GLYPH_A"),
+        stream("", b"% MASK_GLYPH_B"),
+        stream("", b"% UNUSED_T4_GLYPH_C"),
+    ]);
+    mark(&mut doc, 0, &[[9.0, 95.0, 14.9, 110.0]], "");
+    assert_eq!(apply(&mut doc, None).unwrap().glyphs, 1);
+    assert!(full_save_holds(&doc, b"MASK_GLYPH_B"), "the glyph the soft mask shows was unlinked");
+    assert!(saved_first_page_lists_font(&doc, b"T4"), "the page no longer lists the font the soft mask selects");
+}
+
 /// The same group, its content behind a predictor whose `/DecodeParms` are given by reference:
 /// the page's cleanup reads it through them, and keeps the font it selects.
 #[test]
