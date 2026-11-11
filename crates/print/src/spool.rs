@@ -89,6 +89,26 @@ pub fn printer_queues() -> Vec<Printer> {
     craft_print::printer_queues()
 }
 
+/// Whether `printer`'s driver renders XPS itself (Windows: v4 drivers, and v3 drivers with an XPS
+/// rendering filter); `Some(false)` for a GDI driver, `None` when it can't be read, on a Windows
+/// installation without the print DLLs, and on other systems. See [`gdi_driver`].
+pub fn xps_driver(printer: &str) -> Option<bool> {
+    if missing_print_dll().is_some() {
+        return None;
+    }
+    #[cfg(windows)]
+    let _provider = print_ticket_provider();
+    craft_print::xps_driver(printer)
+}
+
+/// Whether `printer`'s driver is a GDI (v3) one, which the XPS print API reaches through Windows'
+/// XPS-to-GDI conversion: a page with transparency prints there with halos, as black boxes or not
+/// at all (#5838, #5940, #6155), so the copy for it has its transparent sheets flattened first
+/// (`pdfcraft_engine::spooler::spooler_copy`). False when that can't be told.
+pub fn gdi_driver(printer: &str) -> bool {
+    xps_driver(printer) == Some(false)
+}
+
 /// Whether `printer`'s driver takes two-sided settings, read for that one printer; it can wait
 /// on the device, so call it off the UI thread. Unknown on a Windows installation without the
 /// print DLLs: reading it goes through them.
