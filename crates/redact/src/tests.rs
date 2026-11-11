@@ -1057,6 +1057,20 @@ fn partially_covered_vector_paths_do_not_leak_drawing_commands() {
     assert!(c.contains("300 300 m\n350 350 l\nS"), "unaffected vector path must be kept: {c}");
 }
 
+#[test]
+fn a_covered_clip_and_paint_path_leaves_an_empty_clip_not_its_outline() {
+    // The outline of a fully covered path that clips and paints is confidential geometry: only
+    // an empty clip may stay, and what follows is hidden as the covered clip would have hidden it.
+    let src = b"q 100 100 m 150 180 l 200 100 l h W f 300 300 50 50 re f Q";
+    let mut doc = one_page(src, "", vec![]);
+    mark(&mut doc, 0, &[[90.0, 90.0, 210.0, 190.0]], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!(r.paths_removed, 1);
+    let c = content(&doc, 0);
+    assert!(!c.contains("150 180 l") && !c.contains("100 100 m"), "outline must not stay: {c}");
+    assert!(c.contains("0 0 0 0 re\nW\nn"), "an empty clip stays: {c}");
+}
+
 /// A chain of nested forms deeper than the pass can walk was removed from the page, taking
 /// whatever else it drew with it even when nothing in it was marked. The limit now reaches as
 /// deep as the renderer and Edit text read (50), so anything a reader can see can be walked;
