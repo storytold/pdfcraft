@@ -50,6 +50,8 @@ pub(crate) struct Type0Font {
     /// PdfCraft patch: whether the CIDs belong to an Adobe character collection (Japan1, GB1,
     /// CNS1, Korea1), whose glyph numbering no substitute other than a CID-keyed CFF font shares.
     adobe_collection: bool,
+    /// PdfCraft patch: the embedded font's glyphs back to characters, built on first use.
+    glyph_to_char: OnceLock<HashMap<GlyphId, char>>,
     /// PdfCraft patch: `/ToUnicode /Identity-H` (a name, not a CMap stream), which CAD exporters
     /// such as WSCAD write for fonts whose two-byte codes are UTF-16 code units. Acrobat shows
     /// such text as the code's Unicode value; the identity CMap the name resolves to maps codes
@@ -202,6 +204,7 @@ impl Type0Font {
             to_unicode_is_cid_indexed,
             ucs2,
             adobe_collection,
+            glyph_to_char: OnceLock::new(),
             identity_to_unicode,
             mac_glyph_order,
         })
@@ -559,7 +562,36 @@ impl Type0Font {
             return Some(s);
         }
 
-        None
+        self.unicode_from_embedded_glyph(code)
+    }
+
+    /// PdfCraft patch: the text of a code when `/ToUnicode` is missing
+    /// or does not cover the code. As other readers do, take the
+    /// glyph the code draws (CID, then `/CIDToGIDMap`) and look it up in the embedded font's
+    /// `cmap`, which maps Unicode to glyphs. Private Use Area code points are skipped.
+    fn unicode_from_embedded_glyph(&self, code: u32) -> Option<BfString> {
+        if self.fallback {
+            return None;
+        }
+        let FontType::OpenType(t) = &self.font_type else {
+            return None;
+        };
+        let gid = self.map_code(code);
+        if gid == GlyphId::NOTDEF {
+            return None;
+        }
+        let map = self.glyph_to_char.get_or_init(|| {
+            let mut map: HashMap<GlyphId, char> = HashMap::new();
+            for (cp, glyph) in t.font_ref().charmap().mappings() {
+                // A symbol (3,0) `cmap` gives its glyphs Private Use Area code points, which are no text.
+                if let Some(c) = char::from_u32(cp).filter(|c| !matches!(c, '\u{E000}'..='\u{F8FF}')) {
+                    // Several code points can share a glyph (space and no-break space): keep the lowest.
+                    map.entry(glyph).and_modify(|old| *old = (*old).min(c)).or_insert(c);
+                }
+            }
+            map
+        });
+        map.get(&gid).copied().map(BfString::Char)
     }
 }
 
