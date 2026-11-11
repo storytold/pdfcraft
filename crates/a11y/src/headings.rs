@@ -37,8 +37,15 @@ struct Walker<'a> {
     visits: usize,
     /// Per page: the text each MCID shows (read once per page).
     texts: HashMap<usize, HashMap<i64, String>>,
+    /// What is left of [`MAX_TITLE_SOURCE_BYTES`].
+    title_left: usize,
     out: Vec<Heading>,
 }
+
+/// Bytes of `/ActualText`, `/Alt` and `/T` strings the headings of one document decode in all.
+/// Titles are cut to [`MAX_TITLE`] characters, but many headings can name one large string, and
+/// each would otherwise be decoded in full first.
+const MAX_TITLE_SOURCE_BYTES: usize = 32 << 20;
 
 /// The headings, in document order. Headings without text or a page are left out.
 pub fn headings(doc: &Document) -> Vec<Heading> {
@@ -52,6 +59,7 @@ pub fn headings(doc: &Document) -> Vec<Heading> {
         seen: HashSet::new(),
         visits: 0,
         texts: HashMap::new(),
+        title_left: MAX_TITLE_SOURCE_BYTES,
         out: Vec::new(),
     };
     if let Some(k) = root.get(b"K") {
@@ -131,15 +139,32 @@ impl Walker<'_> {
             self.marks(kids, pg, depth + 1, &mut marks);
         }
         let Some(page) = pg.or_else(|| marks.iter().find_map(|m| m.0)).and_then(|p| self.page_index.get(&p).copied()) else { return };
-        let doc = self.doc;
-        let attr = |key: &[u8]| d.get(key).map(|o| doc.resolve(o)).and_then(|o| o.as_string().map(|s| s.to_text())).filter(|t| !t.trim().is_empty());
-        let title = match attr(b"ActualText") {
+        let title = match self.attr(d, b"ActualText") {
             Some(t) => Some(t),
-            None => self.marked_text(&marks, page).or_else(|| attr(b"Alt")).or_else(|| attr(b"T")),
+            None => match self.marked_text(&marks, page) {
+                Some(t) => Some(t),
+                None => self.attr(d, b"Alt").or_else(|| self.attr(d, b"T")),
+            },
         };
         let Some(title) = title else { return };
         let title: String = title.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(MAX_TITLE).collect();
         self.out.push(Heading { obj, level, title, page });
+    }
+
+    /// The non-blank text of the string `key` holds, charged against the title allowance by the
+    /// longer of its raw and decoded size (a string that does not fit is not decoded).
+    fn attr(&mut self, d: &Dict, key: &[u8]) -> Option<String> {
+        let o = self.doc.resolve(d.get(key)?);
+        let s = o.as_string()?;
+        // A text string decodes to at most three bytes per raw byte, so one whose worst case does
+        // not fit the remaining allowance is never decoded: the raw check alone let a string at
+        // the raw limit decode to three times it before the allowance was reduced.
+        if s.bytes.len().saturating_mul(3) > self.title_left {
+            return None;
+        }
+        let text = s.to_text();
+        self.title_left = self.title_left.saturating_sub(text.len().max(s.bytes.len()));
+        Some(text).filter(|t| !t.trim().is_empty())
     }
 
     /// The text the marked content shows (`page`: where marks without a page of their own are).
