@@ -56,6 +56,9 @@ pub struct FormNode {
     /// The object's attributes and property elements as the template gives them, for scripts to
     /// read: shared with the template and every other instance of the object, never copied.
     pub props: Arc<Props>,
+    /// The template's tree [`Self::props`] was made from, before the scripts' changes (the same
+    /// tree when there are none): changes are applied to it again, never over earlier ones.
+    pub template_props: Arc<Props>,
 }
 
 /// A script the template runs for an event of one node instance.
@@ -287,6 +290,9 @@ fn read_overrides(doc: &Document, memo: Option<&crate::memo::Memo>) -> Overrides
     if let Some(object) = d.get(b"Props").map(|m| doc.resolve(m))
         && let Some(m) = object.as_dict()
     {
+        // Only an object holding its changes itself is taken from the memo or kept in it: one
+        // that names other objects can read differently while it stays the same.
+        let memo = memo.filter(|_| holds_prop_changes(&object));
         if let Some(kept) = memo.and_then(|memo| memo.kept(&object)) {
             out.props = kept.props;
             out.prop_count = kept.count;
@@ -351,6 +357,11 @@ pub fn set_overrides(doc: &mut Document, ov: &Overrides) -> Result<(), XfaError>
         .map(|o| doc.resolve(o))
         .and_then(|o| o.as_dict().and_then(|d| d.get(b"Props")).and_then(Object::as_ref))
         .filter(|r| doc.xref_entry(r.num).is_none() && doc.is_edited(r.num) && holds_prop_changes(&doc.get(*r)));
+    // The object this document added for the changes, when none are left: nothing refers to
+    // it any more, and an incremental save would still write it.
+    if let Some(r) = props_ref.filter(|_| ov.props.is_empty()) {
+        doc.free(r);
+    }
     if ov.is_empty() {
         acro.remove(OVERRIDES_KEY);
     } else {
@@ -478,6 +489,7 @@ impl Walker<'_> {
         // The field as scripts changed its properties (its validation, pictures, its tree):
         // read again only for changes the live form takes from it; for others its tree is
         // enough.
+        let template_props = Arc::clone(&f.common.props);
         let changed;
         let mut props = None;
         let f = match self.ov.props.get(&som) {
@@ -517,6 +529,7 @@ impl Walker<'_> {
             children: Vec::new(),
             display_picture: f.display_picture.clone(),
             props: props.unwrap_or_else(|| Arc::clone(&f.common.props)),
+            template_props,
         }
     }
 
@@ -606,6 +619,7 @@ impl Walker<'_> {
                             children,
                             display_picture: None,
                             props: self.props_at(named, &som, n),
+                            template_props: Arc::clone(&n.common().props),
                         });
                     }
                 }
@@ -624,6 +638,7 @@ impl Walker<'_> {
                         index: sib,
                         children,
                         props,
+                        template_props: Arc::clone(&n.common().props),
                         ..Default::default()
                     });
                 }
@@ -636,6 +651,7 @@ impl Walker<'_> {
                         kind: Some(NodeKind::Draw),
                         value: d.value.plain().unwrap_or_default(),
                         props: self.props_at(d.common.name.is_some(), &som, n),
+                        template_props: Arc::clone(&n.common().props),
                         presence: self.presence(d.common.name.as_deref(), &som, d.common.presence),
                         access: "open".into(),
                         occur_min: 1,
@@ -670,6 +686,7 @@ impl Walker<'_> {
                         index: sib,
                         children,
                         props: self.props_at(true, &som, n),
+                        template_props: Arc::clone(&n.common().props),
                         ..Default::default()
                     });
                 }
@@ -1421,12 +1438,14 @@ pub fn refresh_props(live: &mut FormNode, ov: &Overrides, som: &str) -> bool {
     }
     let Some(sets) = ov.props.get(som) else { return false };
     let Some(n) = find(live, som, 0) else { return false };
-    // The changes are whole values, so applying them again over the node's tree gives what
-    // applying them to the template's does; the node needs no template look-up (which a name
-    // holding a `.` defeats) and the tree no rebuild.
-    let props = crate::restyle::apply_props(&n.props, sets).0;
-    if n.kind == Some(NodeKind::Field) {
-        // A field's display picture, as the template reader reads it (`format.picture`).
+    // The changes applied to the template's tree, as building the form again applies them:
+    // over the node's tree, an edge or corner an earlier change made would stay the copy it was
+    // then, not the copy of the side as it is drawn now. The node keeps the template's tree, so
+    // it needs no template look-up (which a name holding a `.` defeats).
+    let props = crate::restyle::apply_props(&n.template_props, sets).0;
+    if n.kind == Some(NodeKind::Field) && !props.cut {
+        // A field's display picture, as the template reader reads it (`format.picture`); a tree
+        // cut short keeps the template's, as the reader does.
         n.display_picture = display_picture_of(&props);
     }
     n.props = Arc::new(props);

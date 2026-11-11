@@ -33,20 +33,39 @@ pub(crate) struct KeptProps {
     pub(crate) dropped: usize,
 }
 
-/// Most trees [`applied`] keeps; past them it starts again. A form keeps at most
-/// [`crate::restyle::MAX_PROP_OVERRIDES`] changes, so this holds every changed object of a form.
+/// Most trees [`applied`] keeps in one generation, and most bytes they hold (see
+/// [`tree_bytes`]): past either, the generation becomes the old one and the one before it goes.
+/// A form keeps at most [`crate::restyle::MAX_PROP_OVERRIDES`] changes, so one generation holds
+/// a tree for every changed object of a form; one build of the live form asks for at most that
+/// many, so what it needs is in the newest generation or the one before it. Two generations
+/// bound what is kept when a script changes the same object to new values event after event.
 const MAX_APPLIED: usize = 20_000;
+const MAX_APPLIED_BYTES: usize = 16 << 20;
 
 /// One tree [`applied`] made: the tree it was made from (to tell a tree that is gone from one
 /// now at its address), the changes, and the result.
 type AppliedEntry = (Weak<Props>, BTreeMap<String, String>, Arc<Props>);
+
+/// Trees [`applied`] made, by the address of the tree they were made from and a hash of the
+/// changes, so a look-up compares only the entries with that tree and those changes (and the
+/// rare collision), however many trees one template object has.
+type AppliedMap = HashMap<(usize, u64), Vec<AppliedEntry>>;
+
+/// The two generations of [`applied`]'s trees, and how many trees and bytes the newest holds.
+#[derive(Default)]
+struct Applied {
+    new: AppliedMap,
+    old: AppliedMap,
+    trees: usize,
+    bytes: usize,
+}
 
 /// See the module documentation.
 #[derive(Default)]
 pub struct Memo {
     /// The object the property changes were last read from, and what was read.
     kept: Mutex<Option<(Arc<Object>, KeptProps)>>,
-    applied: Mutex<HashMap<usize, Vec<AppliedEntry>>>,
+    applied: Mutex<Applied>,
 }
 
 impl Clone for Memo {
@@ -94,26 +113,99 @@ pub(crate) fn take_applied_made() -> usize {
     APPLIED_MADE.with(|c| c.replace(0))
 }
 
+/// Bytes a property tree holds, roughly: each element and attribute, and their text.
+fn tree_bytes(props: &Props) -> usize {
+    fn prop(p: &crate::model::Prop, depth: usize) -> usize {
+        let own = std::mem::size_of::<crate::model::Prop>()
+            .saturating_add(p.tag.len())
+            .saturating_add(p.attrs.iter().fold(0usize, |n, (k, v)| n.saturating_add(k.len()).saturating_add(v.len()).saturating_add(48)))
+            .saturating_add(p.text.as_deref().map_or(0, str::len));
+        if depth > crate::parse::MAX_PROP_DEPTH.saturating_add(4) {
+            return own;
+        }
+        p.children.iter().fold(own, |n, c| n.saturating_add(prop(c, depth + 1)))
+    }
+    props
+        .attrs
+        .iter()
+        .fold(std::mem::size_of::<Props>(), |n, (k, v)| n.saturating_add(k.len()).saturating_add(v.len()).saturating_add(48))
+        .saturating_add(props.elements.iter().fold(0usize, |n, p| n.saturating_add(prop(p, 0))))
+}
+
+/// A hash of `sets`, for [`applied`]'s key.
+fn sets_hash(sets: &BTreeMap<String, String>) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    sets.hash(&mut h);
+    h.finish()
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Entries [`applied`] compared looking for a tree, on this thread.
+    static APPLIED_COMPARED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many entries [`applied`] has compared on this thread, since the last call.
+#[cfg(test)]
+pub(crate) fn take_applied_compared() -> usize {
+    APPLIED_COMPARED.with(|c| c.replace(0))
+}
+
+/// How many trees and bytes the memo holds, both generations together.
+#[cfg(test)]
+pub(crate) fn applied_held(memo: &Memo) -> (usize, usize) {
+    let a = memo.applied.lock().unwrap_or_else(PoisonError::into_inner);
+    let trees = |m: &AppliedMap| m.values().map(Vec::len).sum::<usize>();
+    let bytes = |m: &AppliedMap| m.values().flatten().map(|(_, s, t)| tree_bytes(t).saturating_add(set_bytes(s))).sum::<usize>();
+    (trees(&a.new) + trees(&a.old), bytes(&a.new) + bytes(&a.old))
+}
+
+/// Bytes of the changes `sets`.
+fn set_bytes(sets: &BTreeMap<String, String>) -> usize {
+    sets.iter().fold(0usize, |n, (k, v)| n.saturating_add(k.len()).saturating_add(v.len()).saturating_add(48))
+}
+
 /// `base` with the changes `sets` applied ([`crate::restyle::apply_props`]), the same `Arc` each
 /// time the template's memo is asked for the same tree and changes. Kept by the tree's
-/// address, checked against the tree itself so a freed tree's address can't match.
+/// address, checked against the tree itself so a freed tree's address can't match; at most
+/// two generations of trees are kept (see [`MAX_APPLIED`]).
 pub(crate) fn applied(memo: &Memo, base: &Arc<Props>, sets: &BTreeMap<String, String>) -> Arc<Props> {
-    let key = Arc::as_ptr(base) as usize;
+    let key = (Arc::as_ptr(base) as usize, sets_hash(sets));
     let same_base = |w: &Weak<Props>| w.upgrade().is_some_and(|b| Arc::ptr_eq(&b, base));
-    {
-        let map = memo.applied.lock().unwrap_or_else(PoisonError::into_inner);
-        if let Some(out) = map.get(&key).and_then(|list| list.iter().find(|(w, s, _)| same_base(w) && s == sets)).map(|(_, _, out)| Arc::clone(out)) {
-            return out;
+    let find = |map: &AppliedMap| {
+        map.get(&key).and_then(|list| {
+            list.iter()
+                .find(|(w, s, _)| {
+                    #[cfg(test)]
+                    APPLIED_COMPARED.with(|c| c.set(c.get().saturating_add(1)));
+                    same_base(w) && s == sets
+                })
+                .map(|(_, _, out)| Arc::clone(out))
+        })
+    };
+    let mut a = memo.applied.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some(out) = find(&a.new) {
+        return out;
+    }
+    // Made in the generation before: kept in the newest one from now on.
+    let out = match find(&a.old) {
+        Some(out) => out,
+        None => {
+            #[cfg(test)]
+            APPLIED_MADE.with(|c| c.set(c.get().saturating_add(1)));
+            Arc::new(crate::restyle::apply_props(base, sets).0)
         }
+    };
+    let cost = tree_bytes(&out).saturating_add(set_bytes(sets));
+    if a.trees >= MAX_APPLIED || a.bytes.saturating_add(cost) > MAX_APPLIED_BYTES {
+        a.old = std::mem::take(&mut a.new);
+        a.trees = 0;
+        a.bytes = 0;
     }
-    #[cfg(test)]
-    APPLIED_MADE.with(|c| c.set(c.get().saturating_add(1)));
-    let out = Arc::new(crate::restyle::apply_props(base, sets).0);
-    let mut map = memo.applied.lock().unwrap_or_else(PoisonError::into_inner);
-    if map.len() >= MAX_APPLIED {
-        map.clear();
-    }
-    let list = map.entry(key).or_default();
+    a.trees = a.trees.saturating_add(1);
+    a.bytes = a.bytes.saturating_add(cost);
+    let list = a.new.entry(key).or_default();
     list.retain(|(w, _, _)| same_base(w));
     list.push((Arc::downgrade(base), sets.clone(), Arc::clone(&out)));
     out
@@ -245,5 +337,71 @@ mod tests {
             assert_eq!(take_applied_made(), 0, "{n} kept changes");
             assert_eq!(first.root, again.root);
         }
+    }
+
+    /// One object given new changes event after event (a script that sets a tooltip from what
+    /// was typed) keeps at most two generations of trees, not one for every value it was
+    /// ever given.
+    #[test]
+    fn an_object_changed_again_and_again_keeps_the_memo_bounded() {
+        let memo = Memo::default();
+        let base = Arc::new(Props::default());
+        let long = "x".repeat(16 << 10);
+        for i in 0..3_000 {
+            let sets = BTreeMap::from([("assist#0/toolTip#0".to_string(), format!("{long}{i}"))]);
+            let _ = applied(&memo, &base, &sets);
+        }
+        let (_, bytes) = applied_held(&memo);
+        assert!(bytes <= 2 * MAX_APPLIED_BYTES, "{bytes} bytes held");
+    }
+
+    /// Many instances of one object, each with its own changes (rows a script numbers): a
+    /// look-up compares the entries with its own changes, not every instance's. Counted.
+    #[test]
+    fn instances_with_their_own_changes_are_found_without_comparing_the_others() {
+        let memo = Memo::default();
+        let base = Arc::new(Props::default());
+        let all: Vec<_> = (0..2_000).map(|i| BTreeMap::from([("assist#0/toolTip#0".to_string(), format!("Row {i}"))])).collect();
+        let _ = take_applied_compared();
+        let first: Vec<_> = all.iter().map(|s| applied(&memo, &base, s)).collect();
+        let again: Vec<_> = all.iter().map(|s| applied(&memo, &base, s)).collect();
+        assert!(first.iter().zip(&again).all(|(a, b)| Arc::ptr_eq(a, b)));
+        let compared = take_applied_compared();
+        assert!(compared <= 2 * all.len(), "{compared} entries compared");
+    }
+
+    /// The object of property changes this document added is freed when no change is left, so
+    /// an incremental save doesn't write the changes nothing refers to any more.
+    #[test]
+    fn no_changes_left_frees_the_object_that_held_them() {
+        let (mut doc, _, _) = form_with_kept_changes(2);
+        let mut ov = crate::script::Overrides::default();
+        ov.presence.insert("form[0].f1[0]".into(), "hidden".into());
+        crate::script::set_overrides(&mut doc, &ov).unwrap();
+        let written = pdfcraft_cos::write_incremental(&doc, &pdfcraft_cos::SaveOptions::default()).unwrap();
+        assert!(!written.windows(5).any(|w| w == b"Tip 0"), "the changes are written though nothing refers to them");
+    }
+
+    /// Changes whose object names its entries by reference are read through the references each
+    /// time: an entry's object changed while the object of changes stays the same is read anew.
+    #[test]
+    fn changes_named_by_reference_are_read_again() {
+        use pdfcraft_cos::{Dict, Object, PdfString};
+        let (mut doc, tpl, _) = form_with_kept_changes(1);
+        let sets = |tip: &str| Object::Dict(Dict::from_iter([(b"assist#0/toolTip#0".to_vec(), Object::String(PdfString::text(tip)))]));
+        let entry = doc.add(sets("First"));
+        let root = doc.root().unwrap();
+        let mut acro = doc.get(root).as_dict().and_then(|c| c.get(b"AcroForm")).map(|a| doc.resolve(a)).and_then(|a| a.as_dict().cloned()).unwrap();
+        let mut kept = acro.get(crate::script::OVERRIDES_KEY).map(|o| doc.resolve(o)).and_then(|o| o.as_dict().cloned()).unwrap();
+        let props = doc.add(Object::Dict(Dict::from_iter([(b"form[0].f0[0]".to_vec(), Object::Ref(entry))])));
+        kept.set(b"Props".to_vec(), Object::Ref(props));
+        acro.set(crate::script::OVERRIDES_KEY.to_vec(), Object::Dict(kept));
+        doc.update_dict(root, |c| c.set(b"AcroForm".to_vec(), Object::Dict(acro))).unwrap();
+        let tip = |doc: &pdfcraft_cos::Document| {
+            crate::script::overrides_of(doc, &tpl).props().get("form[0].f0[0]").and_then(|m| m.get("assist#0/toolTip#0")).cloned()
+        };
+        assert_eq!(tip(&doc).as_deref(), Some("First"));
+        doc.set(entry, sets("Second"));
+        assert_eq!(tip(&doc).as_deref(), Some("Second"));
     }
 }

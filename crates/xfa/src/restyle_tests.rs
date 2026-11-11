@@ -397,6 +397,44 @@ fn one_edge() -> Template {
     crate::parse(&tpl).unwrap().0
 }
 
+/// A change refreshed in place on the live form gives what building it again gives: the bottom
+/// (not listed) made red first leaves edge 1 a black copy on the way; the listed edge made green
+/// next makes the sides it stands for green, edge 1 too, as the layout draws them.
+#[test]
+fn a_change_refreshed_in_place_gives_what_a_fresh_build_gives() {
+    let t = one_edge();
+    let mut ov = overrides("form[0].one[0]", &[("border#0/edge#2/color#0", Some("value"), "255,0,0")]);
+    let mut live = crate::form_tree(&t, None, &ov);
+    ov.set_prop("form[0].one[0]", "border#0/edge#0/color#0", Some("value"), "0,128,0").unwrap();
+    assert!(crate::refresh_props(&mut live.root, &ov, "form[0].one[0]"));
+    let fresh = crate::form_tree(&t, None, &ov);
+    let one = |f: &crate::LiveForm| f.root.children.iter().find(|n| n.name == "one").unwrap().props.clone();
+    assert_eq!(one(&live), one(&fresh));
+}
+
+/// A field whose property tree the reader cut short keeps the display picture the template
+/// gives when a change is refreshed in place, as a fresh build keeps it.
+#[test]
+fn a_cut_tree_keeps_the_templates_display_picture_when_refreshed() {
+    // More edges than the reader keeps elements, before the format: the cut falls on it.
+    let edges = "<edge/>".repeat(300);
+    let tpl = TEMPLATE.replace(
+        r#"<draw name="label""#,
+        &format!(
+            r#"<field name="cut" w="2in" h="0.3in"><border>{edges}</border><format><picture>num{{z9}}</picture></format></field><draw name="label""#
+        ),
+    );
+    let t = crate::parse(&tpl).unwrap().0;
+    let cut = |f: &crate::LiveForm| f.root.children.iter().find(|n| n.name == "cut").unwrap().clone();
+    let mut live = crate::form_tree(&t, None, &Overrides::default());
+    assert!(cut(&live).props.cut, "the reader cuts the tree short");
+    let ov = overrides("form[0].cut[0]", &[("border#0/fill#0/color#0", Some("value"), "255,0,0")]);
+    assert!(crate::refresh_props(&mut live.root, &ov, "form[0].cut[0]"));
+    let fresh = crate::form_tree(&t, None, &ov);
+    assert_eq!(cut(&live).display_picture, cut(&fresh).display_picture);
+    assert!(cut(&fresh).display_picture.is_some());
+}
+
 /// Writes across sides: the one listed edge made red, then the bottom (edge 2, not listed)
 /// given 2pt. The bottom, and edge 1 made on the way to it, start as the edge drawn on their
 /// side as it is by then (red), as the scripting host reads them, so the only thing that
