@@ -26,9 +26,6 @@ pub struct OpenContext {
 /// A fully prepared document that has not yet been registered in a session.
 pub struct PreparedDocument {
     document: Document,
-    /// The document-level scripts ran as it was prepared, in the realm it keeps: registering it
-    /// does not run them again.
-    document_scripts_ran: bool,
 }
 
 struct DocumentOpenData<'a> {
@@ -104,36 +101,9 @@ impl Session {
             Self::draw_captions(&mut document, self.captions.clone());
         }
         self.docs.push(document);
-        // Prepared with JavaScript off, and turned on since: the document scripts run now.
-        if !prepared.document_scripts_ran && !self.js_off && self.get(id).is_some_and(|d| d.info.xfa.is_none() && !d.document_scripts().is_empty()) {
-            match self.run_opening_javascript(id) {
-                Ok(mut out) => {
-                    out.requests.retain(|r| {
-                        matches!(
-                            r,
-                            js::Request::Highlight(_)
-                                | js::Request::Zoom(_)
-                                | js::Request::Focus(_)
-                                | js::Request::FocusField { .. }
-                                | js::Request::GoToPage(_)
-                        )
-                    });
-                    if let Some(doc) = self.docs.iter_mut().find(|d| d.id == id) {
-                        doc.js_output.requests.extend(out.requests);
-                        doc.js_output.alerts.extend(out.alerts);
-                        doc.js_output.console.extend(out.console);
-                        doc.js_output.errors.extend(out.error);
-                        doc.js_output.doc_errors.extend(out.doc_errors.iter().cloned());
-                        doc.js_output.errors.extend(out.doc_errors);
-                    }
-                }
-                Err(e) => {
-                    if let Some(doc) = self.docs.iter_mut().find(|d| d.id == id) {
-                        doc.js_output.errors.push(e.to_string());
-                    }
-                }
-            }
-        }
+        // Document-level scripts that ran as the document was prepared ran in the realm it keeps,
+        // which doesn't run them again: what runs now is the rest of opening (its open actions).
+        self.run_open_scripts(id);
         id
     }
 
@@ -329,11 +299,10 @@ impl Session {
             document.js_output.errors.push(XFA_SCRIPTS_OFF.into());
         }
         note_warnings(&mut document.xfa_warnings, &xfa_warnings);
-        let document_scripts_ran = document_realm.is_some();
         if let Some(realm) = document_realm {
             document.js_runtime = realm;
         }
-        Ok(PreparedDocument { document, document_scripts_ran })
+        Ok(PreparedDocument { document })
     }
 
     /// The last step of opening: build the document record and register it.
