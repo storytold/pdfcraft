@@ -455,6 +455,13 @@ enum DssRole {
     VriEntry,
 }
 
+/// The objects that hold the store's structure in `doc`: its dictionary, arrays, `/VRI` and its
+/// entries, but not the data they list. One of them is validation data only as [`dss_parts`]
+/// recognises it, never because the store reaches it.
+pub(super) fn dss_structure(doc: &Document) -> HashSet<u32> {
+    dss_walk(doc).into_iter().filter(|(_, role)| *role != DssRole::Data).map(|(r, _)| r.num).collect()
+}
+
 /// The indirect objects the catalog's `/DSS` reaches by the keys the standard defines, and the
 /// role each plays there. Any other key is not followed: `/DSS << /X 5 0 R >>` does not make
 /// object 5 part of the store.

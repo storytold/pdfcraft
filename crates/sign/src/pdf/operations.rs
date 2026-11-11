@@ -339,6 +339,9 @@ impl Recogniser<'_> {
             } else {
                 continue;
             };
+            // Read again from the budget the observation spent: a file whose lists used it up
+            // there is not explained here either, and the work stays within one budget
+            // (`shared_annotation_arrays_are_judged_in_bounded_time`).
             let (Some(was), Some(now)) = (annot_refs(old, was, &snapshot.annot_budget), annot_refs(doc, now, &snapshot.annot_budget)) else {
                 continue;
             };
@@ -468,8 +471,10 @@ impl Recogniser<'_> {
 
     /// New objects reached from what a claimed object changed (or from all of a new one) are
     /// claimed by the same operations, unless they play a role of their own; a comment's
-    /// pop-up, another comment, is the comment's.
+    /// pop-up, another comment, is the comment's. A part of the store's structure that does not
+    /// have the shape of its role is not validation data however it is reached.
     fn propagate(&mut self) {
+        let structure = super::changes::dss_structure(self.doc);
         let mut work: Vec<u32> = self.claims.keys().copied().collect();
         work.sort_unstable();
         while let Some(num) = work.pop() {
@@ -487,7 +492,7 @@ impl Recogniser<'_> {
                 };
                 self.steps = left;
                 let Some(t) = self.changed.get(&r.num).copied() else { continue };
-                if t.before.is_some() || self.claims.contains_key(&r.num) {
+                if t.before.is_some() || self.claims.contains_key(&r.num) || (structure.contains(&r.num) && !self.seen.dss.contains(&r.num)) {
                     continue;
                 }
                 let own = match t.now.as_dict() {
@@ -510,9 +515,8 @@ impl Recogniser<'_> {
         }
         let mut unexplained = Vec::new();
         for c in &self.seen.changes {
-            if c.before.is_some()
-                && let Some(label) = c.label.filter(|l| NEVER.contains(l))
-            {
+            // A new object can carry one too: a signed page drew from its number (#1787).
+            if let Some(label) = c.label.filter(|l| NEVER.contains(l)) {
                 note(&mut disallowed, label);
                 continue;
             }
@@ -571,9 +575,10 @@ fn unreferenced(doc: &Document, old: &Document, nums: &[u32]) -> bool {
     }
 }
 
-/// An annotation that is not a widget: a comment, a link, a pop-up.
+/// An annotation that is neither a widget nor a link: a comment or its pop-up. A link goes
+/// somewhere when clicked, which no level permits changing ([`kind::LINKS`]).
 fn is_comment(d: &Dict) -> bool {
-    d.name(b"Subtype").is_some_and(|s| s != b"Widget") && (d.name(b"Type") == Some(b"Annot") || d.contains(b"Rect"))
+    d.name(b"Subtype").is_some_and(|s| s != b"Widget" && s != b"Link") && (d.name(b"Type") == Some(b"Annot") || d.contains(b"Rect"))
 }
 
 /// Whether a new dictionary plays a role of its own, so it is claimed only by an operation on it:
@@ -589,7 +594,9 @@ fn has_role(d: &Dict) -> bool {
 
 /// What a new dictionary no operation claims looks like: `None` when it plays no role of its own.
 fn describe(d: &Dict) -> Option<&'static str> {
-    if d.contains(b"Subtype") && (d.name(b"Type") == Some(b"Annot") || d.contains(b"Rect")) {
+    if d.name(b"Subtype") == Some(b"Link") {
+        Some(kind::LINKS)
+    } else if d.contains(b"Subtype") && (d.name(b"Type") == Some(b"Annot") || d.contains(b"Rect")) {
         Some(kind::COMMENTS)
     } else if matches!(d.name(b"Type"), Some(b"Sig" | b"DocTimeStamp" | b"SigRef" | b"TransformParams")) || d.name(b"FT") == Some(b"Sig") {
         Some(kind::SIGNATURE)

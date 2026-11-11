@@ -345,6 +345,45 @@ const ATTACKS: &[Case] = &[
         rows: &[("Signature1", NotValid)],
     },
     Case {
+        name: "an approval signature, then a link added",
+        file: || {
+            edit_after(&sign(&form(), None, None), |doc| {
+                let mut d = Dict::new();
+                d.set(b"Type".to_vec(), Object::name("Annot"));
+                d.set(b"Subtype".to_vec(), Object::name("Link"));
+                d.set(b"Rect".to_vec(), Object::Array([20, 240, 200, 270].map(Object::Int).to_vec()));
+                let uri = Dict::from_iter([
+                    (b"S".to_vec(), Object::name("URI")),
+                    (b"URI".to_vec(), Object::String(PdfString::text("https://example.com/"))),
+                ]);
+                d.set(b"A".to_vec(), Object::Dict(uri));
+                let link = doc.add(Object::Dict(d));
+                doc.update_dict(r(PAGE), |p| {
+                    if let Some(Object::Array(a)) = p.get_mut(b"Annots") {
+                        a.push(Object::Ref(link));
+                    }
+                })
+                .unwrap();
+            })
+        },
+        rows: &[("Signature1", NotValid)],
+    },
+    Case {
+        name: "a P=1 certification, then a store whose dictionary carries a key no store has",
+        file: || {
+            edit_after(&sign(&form(), Some(1), None), |doc| {
+                let mut dss = Dict::new();
+                dss.set(b"Type".to_vec(), Object::name("DSS"));
+                dss.set(b"Certs".to_vec(), Object::Array(Vec::new()));
+                dss.set(b"Extra".to_vec(), PdfString::text("not a store key"));
+                let dss = doc.add(Object::Dict(dss));
+                let root = doc.root().unwrap();
+                doc.update_dict(root, |c| c.set(b"DSS".to_vec(), Object::Ref(dss))).unwrap();
+            })
+        },
+        rows: &[("Signature1", NotValid)],
+    },
+    Case {
         name: "a P=1 certification, then a form fill",
         file: || edit_after(&sign(&form(), Some(1), None), |doc| fill_name(doc, "Bob")),
         rows: &[("Signature1", NotValid)],
