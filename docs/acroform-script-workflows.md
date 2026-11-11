@@ -115,9 +115,19 @@ supply an anchored renderer through the UI menu callback when it adds link actio
 the shared parser lands upstream, this integration can use it directly.
 
 `ScriptSession::run_host_task` gives future timer and page actions (#4751) access to the
-retained realm on its own worker. `DocumentScriptEvent` and `run_document_script_event`
-provide explicit entry points for catalog OpenAction, WillSave and WillPrint (#344).
-The callers for those document actions are part of #344.
+retained realm on its own worker.
+
+Document actions and widget triggers (ported from #344 by @DWAA1660) run through the same
+realm. On opening, the document scripts run, then the catalog `/OpenAction`'s JavaScript
+and its `/Next` chain (event `Doc/Open`); Revert runs them again in a fresh realm.
+`Session::run_document_actions` runs `/AA /WS` before a save and `/AA /WP` before printing:
+the app's Save and Print and the `doc_save` and `doc_print` tools call it first. A failing
+action is reported and never stops the save or print. `Session::field_trigger` runs a
+widget's Mouse Enter, Mouse Exit, Mouse Down, Mouse Up, Focus or Blur JavaScript; the app
+queues them from the pointer and the focus, and `js_event` runs them headlessly. A check
+box's or radio button's Mouse Up runs after its click has stored the new value (#247).
+Scripts that run unasked (open, Will Save, Will Print, pointer over, focus) may only ask for
+highlighting, zoom, focus or a page.
 
 The lexical preflight recognizes unambiguous top-level and block-body ASI boundaries before identifiers, including declarations and assignments separated by line breaks or comments. It preserves counters after operators and member access, and across binary keyword operators. It distinguishes control-statement parentheses for regexp literals; inside expression parentheses, array/object literals and template interpolations it remains conservative; this is not a complete ECMAScript parser or ASI implementation.
 
