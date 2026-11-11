@@ -143,6 +143,11 @@ pub(crate) struct Output {
     /// ([`pdfcraft_content::Parsed::ambiguous_images`]): what this scope placed after it may not
     /// be what the page shows, so a redaction must not trust it.
     pub ambiguous: bool,
+    /// The content holds bytes the parser can't read ([`pdfcraft_content::Parsed::skipped`]), in
+    /// this scope or a nested form: the walk reads past them, so text they hide (a stray `)` in a
+    /// `TJ` array, say), which other readers may still draw, is neither found nor removed, and a
+    /// rewrite would drop the bytes but keep the strings. A redaction must not trust it.
+    pub unparsed: bool,
     pub tag_changes: Vec<(ObjRef, ObjRef, HashSet<i64>, HashSet<i64>)>,
     pub error: Option<CosError>,
 }
@@ -407,6 +412,7 @@ fn process_from(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<u8>], 
     let joined = Pieces::join(streams);
     let mut parsed = joined.parse();
     walk.out.ambiguous = parsed.ambiguous_images > 0;
+    walk.out.unparsed = parsed.skipped > 0;
     // A rewritten piece loses its comments, so keep where they began and ended: a comment that
     // ran on into the next piece still hides that piece's first line.
     let comment_edges = joined.comment_edges(&parsed);
@@ -571,7 +577,12 @@ impl Walk {
                 Some(op)
             }
             b"cs" | b"CS" => {
-                if op.name(0) != Some(b"Pattern") {
+                // A Pattern space is told by the name `/Pattern` alone: one named through the
+                // resources' `/ColorSpace` clears the pattern, which the app's renderer keeps and
+                // Poppler doesn't (`cs` resets the colour, ISO 32000-2 §8.6.8). Looking the name up
+                // at each `cs` wants a cache for the page: a `/ColorSpace` too large for the
+                // document to keep is parsed again at each read.
+                if op.last_name() != Some(b"Pattern") {
                     if o == b"cs" {
                         self.gs.fill_pattern = None;
                     } else {
@@ -598,8 +609,12 @@ impl Walk {
         let o = op.op.as_slice();
         let pts: Vec<(f64, f64)> = match o {
             b"re" => op.nums::<4>().map(|[x, y, w, h]| vec![(x, y), (x + w, y), (x, y + h), (x + w, y + h)]).unwrap_or_default(),
-            b"h" | b"W" | b"W*" => Vec::new(),
-            _ => op.operands.iter().filter_map(Object::as_f64).collect::<Vec<_>>().as_chunks::<2>().0.iter().map(|p| (p[0], p[1])).collect(),
+            // Each takes its points from the end, as the renderer reads them: a surplus before
+            // them is ignored, not read as a point.
+            b"m" | b"l" => op.nums::<2>().map(|[x, y]| vec![(x, y)]).unwrap_or_default(),
+            b"c" => op.nums::<6>().map(|[x1, y1, x2, y2, x3, y3]| vec![(x1, y1), (x2, y2), (x3, y3)]).unwrap_or_default(),
+            b"v" | b"y" => op.nums::<4>().map(|[x1, y1, x2, y2]| vec![(x1, y1), (x2, y2)]).unwrap_or_default(),
+            _ => Vec::new(),
         };
         for (x, y) in pts {
             let (u, v) = self.gs.ctm.apply(x, y);
@@ -633,9 +648,12 @@ impl Walk {
         piece.changed = true;
         scope.report.paths_removed += 1;
         if scope.covered(b) && clips {
-            // Keep the clipping, drop the painting.
-            piece.ops.extend(body);
-            piece.ops.push(Op::new("n", vec![]));
+            // Everything this clip lets through is under a mark, so an empty clip hides the same
+            // content. The original outline is confidential and must not stay in the stream.
+            for o in ["re", "W", "n"] {
+                let operands = if o == "re" { vec![num(0.0); 4] } else { vec![] };
+                piece.ops.push(Op::new(o, operands));
+            }
         }
         // Partial vector redaction must not retain underlying drawing commands
         // behind clipping (F-008). Refuse partial clip retention and remove the path.
@@ -656,10 +674,10 @@ impl Walk {
             }
             b"Tf" => self.select_font(doc, scope, op),
             _ => {
-                if let Some((font, vertical, size)) = op.name(0).and_then(|n| extgstate_font(doc, scope, &self.ext_gstates, n, &self.fallback)) {
+                if let Some((font, vertical, size)) = op.last_name().and_then(|n| extgstate_font(doc, scope, &self.ext_gstates, n, &self.fallback)) {
                     (self.gs.font, self.gs.vertical, self.gs.size) = (font, vertical, size);
                     // As for `Tf`: a Type 3 font without /Resources paints through this scope's.
-                    self.gs.type3_inherits = op.name(0).is_some_and(|n| extgstate_type3_inherits(doc, &self.ext_gstates, n));
+                    self.gs.type3_inherits = op.last_name().is_some_and(|n| extgstate_type3_inherits(doc, &self.ext_gstates, n));
                 }
             }
         }
@@ -864,7 +882,8 @@ fn clean_replacements(
             if !op.is("BDC") || !affected.contains(&op.span.start) {
                 continue;
             }
-            let property = match op.operands.get(1) {
+            // The property list is the last operand, as the renderer reads it.
+            let property = match op.back(0) {
                 Some(Object::Name(name)) => properties.get(name).map(|p| doc.resolve(p)),
                 Some(p) => Some(doc.resolve(p)),
                 None => None,
@@ -874,7 +893,7 @@ fn clean_replacements(
                 for key in [&b"ActualText"[..], b"Alt", b"E", b"T"] {
                     stripped |= dict.remove(key).is_some();
                 }
-                if stripped && let Some(property) = op.operands.get_mut(1) {
+                if stripped && let Some(property) = op.operands.last_mut() {
                     *property = Object::Dict(dict);
                     *changed = true;
                     report.replacement_text += 1;
@@ -1071,7 +1090,32 @@ fn xobject(
             }
         }
         Some(b"Form") => {
-            let m = s.dict.get(b"Matrix").and_then(|m| Matrix::from_operands(doc.resolve(m).as_array()?)).unwrap_or_default();
+            // Read as the proof reads it, entries by reference included: read as the identity, a
+            // form moved onto a mark would be tested against the wrong place and never walked.
+            let m = match crate::verify::matrix_of(doc, &s.dict) {
+                Ok(m) => m,
+                // Not six numbers given directly or through one reference. Removing hidden layers alone never asks where content lands, so
+                // the form is walked as it stands.
+                Err(()) if scope.everywhere() && scope.hidden_text.is_none() => Matrix::IDENTITY,
+                // Otherwise where the form draws, and so whether it reaches a mark or leaves the
+                // page, can't be told. Apply refuses the page, and the scans count it, as for a
+                // form past the page's budget below.
+                Err(()) => {
+                    if scope.mode == Mode::Apply {
+                        out.error = Some(CosError::Syntax {
+                            offset: 0,
+                            detail:
+                                "a form XObject's /Matrix isn't six numbers given directly or through one reference, so where it draws can't be told"
+                                    .into(),
+                        });
+                    } else if scope.everywhere() {
+                        scope.layer_blocks += 1;
+                    } else {
+                        out.residue += 1;
+                    }
+                    return None;
+                }
+            };
             let fctm = m.then(&gs.ctm);
             let bbox = s.dict.get(b"BBox").and_then(|b| {
                 let v: Vec<f64> = doc.resolve(b).as_array()?.iter().filter_map(Object::as_f64).collect();
@@ -1150,6 +1194,7 @@ fn xobject(
             out.residue += inner.residue;
             out.vertical |= inner.vertical;
             out.ambiguous |= inner.ambiguous;
+            out.unparsed |= inner.unparsed;
             out.doomed.extend_from_slice(&inner.doomed);
             out.retired_properties.extend(inner.retired_properties);
             // A Type 3 glyph without resources shown inside the form may paint with the page's
