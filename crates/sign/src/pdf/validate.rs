@@ -399,10 +399,15 @@ impl Iterator for DssEvidence<'_> {
         for item in self.items.by_ref() {
             // Resolved first: a reference to a generation the slot doesn't hold reads as null and
             // must not make a later, valid reference to the same object number a repeat.
+            // A repeat is skipped before anything is resolved: a long chain of repeats costs no
+            // lookups. The number is recorded only once the reference gave a stream.
+            if item.as_ref().is_some_and(|r| self.seen.contains(&r.num)) {
+                continue;
+            }
             let o = self.doc.resolve(&item);
             let Object::Stream(s) = o.as_ref() else { continue };
-            if item.as_ref().is_some_and(|r| !self.seen.insert(r.num)) {
-                continue;
+            if let Some(r) = item.as_ref() {
+                self.seen.insert(r.num);
             }
             if self.taken >= MAX_DSS_ENTRIES {
                 self.cut = true;
