@@ -1,4 +1,4 @@
-//! Memory regression for the colour space lookup of `cs` and `CS`: what it keeps for a page is what
+//! Memory regression for the colour space lookup of `cs` and `CS`: what it keeps for a run is what
 //! names give, not the `/ColorSpace` objects it reads, however many different ones a page's forms
 //! name. A test binary of its own, so that the one test is all the process runs while its peak is
 //! measured.

@@ -210,13 +210,14 @@ pub(crate) struct Scope<'a> {
 
 #[cfg(test)]
 thread_local! {
-    /// How many objects given by reference `cs` and `CS` have read in the page's colour spaces.
+    /// How many objects given by reference `cs` and `CS` have read in the run's colour spaces.
     pub(crate) static SPACE_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// How much of colour space names [`PatternSpaces`] keeps for a run, in bytes, over all the
-/// `/ColorSpace` dictionaries given by reference it reads: each name's length and [`ENTRY_BYTES`].
-/// The names of one that would go past it are not kept, and a name in it keeps the pattern: a
+/// How much of colour space names [`PatternSpaces`] keeps at once, in bytes, over the
+/// `/ColorSpace` dictionaries given by reference it has read: each name's length and
+/// [`ENTRY_BYTES`]. Reading one whose names don't fit what is left lets the kept ones go. The
+/// names of one that alone would go past it are not kept, and a name in it keeps the pattern: a
 /// pattern kept that nothing shows is the side this errs on.
 pub(crate) const MAX_SPACE_BYTES: usize = 1 << 20;
 
@@ -255,9 +256,10 @@ impl Space {
 /// by reference gives depends on it alone, not on the page, and reading an object again can parse
 /// it again, all of it (the document keeps no object larger than its cache), at every page, form
 /// and walk that names it. What is kept is what each name gives, not the objects read, within
-/// [`MAX_SPACE_BYTES`]. The run's cleanups between pages rewrite no `/ColorSpace` a page names; the
-/// Type 3 cleanup can take an entry out of a font's own, and an answer kept from before then keeps
-/// the pattern at worst.
+/// [`MAX_SPACE_BYTES`]. Between the pages of a run, Apply writes in place the page dictionaries
+/// (`/Contents`, `/Resources`, `/Annots`) and the structure elements it cleans, and adds new
+/// objects; a kept answer goes stale only where a `/ColorSpace` or an entry is one of those
+/// objects too, which no well-formed file has.
 #[derive(Default)]
 pub(crate) struct PatternSpaces {
     /// The `/ColorSpace` dictionaries given by reference, read once: what each name gives, or
@@ -294,7 +296,13 @@ impl PatternSpaces {
                     let index = match read.as_dict() {
                         Some(d) => {
                             let cost = d.iter().fold(0, |sum: usize, (k, _)| sum.saturating_add(k.len()).saturating_add(ENTRY_BYTES));
-                            (cost <= MAX_SPACE_BYTES.saturating_sub(self.bytes)).then(|| {
+                            (cost <= MAX_SPACE_BYTES).then(|| {
+                                // The run has read more names than it keeps: the ones kept go, to be
+                                // read again where they are named again. What kept no names stays.
+                                if cost > MAX_SPACE_BYTES.saturating_sub(self.bytes) {
+                                    self.held.retain(|_, kept| kept.as_ref().is_none_or(HashMap::is_empty));
+                                    self.bytes = 0;
+                                }
                                 self.bytes += cost;
                                 d.iter().map(|(k, v)| (k.to_vec(), Space::of(v))).collect::<HashMap<_, _>>()
                             })

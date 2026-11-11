@@ -141,8 +141,9 @@ Tiling-pattern cells are separate streams. Applying a mark removes a pattern res
 surviving paint uses it. A `cs` or `CS` naming a colour space the resources give as a Pattern
 space keeps the pattern selected before it, as the app's renderer draws it. The names a run keeps
 from `/ColorSpace` dictionaries given by reference are counted as their length and 128 bytes each,
-up to 1 MiB; past that a name is taken for a Pattern space, so a pattern nothing paints any more
-can stay. If a cell remains reachable after rewriting the selected pages and may
+up to 1 MiB at once. A dictionary whose names alone pass that has its names taken for Pattern
+spaces, so a pattern nothing paints any more can stay, and if its cell may hold text or images,
+Apply refuses as below. If a cell remains reachable after rewriting the selected pages and may
 contain text, images, replacement descriptions, or unreadable content, Apply refuses with a
 `RedactError::Pattern` and restores the document and pending marks. This includes patterns owned
 by Forms and patterns inherited by Forms. Vector-only retained cells remain supported. The

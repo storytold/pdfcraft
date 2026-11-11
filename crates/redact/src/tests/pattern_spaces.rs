@@ -140,12 +140,13 @@ fn a_colour_space_dictionary_is_read_once_for_the_page() {
     assert_eq!(nested(40), nested(1), "forms 40 deep");
 }
 
-/// What the lookup keeps for a page is what each name of the `/ColorSpace` dictionaries it reads
-/// gives, within `MAX_SPACE_BYTES` over the page: each name's length and `ENTRY_BYTES`. The names of
-/// a dictionary that would go past it are not kept, and a name in it keeps the pattern. `/CSG`,
-/// grey, beside one long name resets it in a dictionary whose names cost `MAX_SPACE_BYTES`, and
-/// keeps it in one byte more; and it keeps it in a dictionary of 60% of the allowance read after a
-/// form with resources of its own read another 60%. Without the form, it resets it.
+/// What the lookup keeps is what each name of the `/ColorSpace` dictionaries it reads gives, within
+/// `MAX_SPACE_BYTES` at once: each name's length and `ENTRY_BYTES`. A dictionary whose names alone
+/// would go past it keeps no names, and a name in it keeps the pattern: `/CSG`, grey, beside one
+/// long name resets it in a dictionary whose names cost `MAX_SPACE_BYTES`, and keeps it in one
+/// byte more. One that fits only once the names kept are let go is read so: `/CSG` resets the
+/// pattern in a dictionary of 60% of the allowance read after a form with resources of its own
+/// read another 60%.
 #[test]
 fn the_lookup_keeps_a_bounded_amount_of_names() {
     // `/CSG` and a name of `len` bytes, costing `len + 3 + 2 * ENTRY_BYTES` together.
@@ -160,10 +161,38 @@ fn the_lookup_keeps_a_bounded_amount_of_names() {
     // object 10.
     let form = stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << /ColorSpace 9 0 R >>", b"/PF scn /CSF cs");
     let res = "/Pattern << /P0 7 0 R >> /XObject << /Fm 8 0 R >> /ColorSpace 10 0 R";
-    let content = |form: &str| format!("{form}/Pattern cs /P0 scn 20 140 100 30 re f /CSG cs 20 40 100 30 re f");
+    let content = "q /Fm Do Q /Pattern cs /P0 scn 20 140 100 30 re f /CSG cs 20 40 100 30 re f";
     let extra = vec![form, spaces(MAX_SPACE_BYTES * 6 / 10), spaces(MAX_SPACE_BYTES * 6 / 10)];
-    assert_eq!(removed(&content("q /Fm Do Q "), res, extra.clone()), 0, "after the form's names");
-    assert_eq!(removed(&content(""), res, extra), 1, "without the form");
+    assert_eq!(removed(content, res, extra), 1, "after the form's names");
+}
+
+/// A run that reads more names than the lookup keeps at once lets the kept ones go and goes on: three
+/// pages, each with a `/ColorSpace` of its own given by reference, of 40% of the allowance each,
+/// each reset the pattern at `/CSG cs`, and the pattern leaves each page.
+#[test]
+fn a_run_reading_more_names_than_it_keeps_lets_the_kept_ones_go() {
+    let names = (MAX_SPACE_BYTES * 4 / 10) / (8 + ENTRY_BYTES);
+    let spaces: String = (0..names).map(|i| format!("/C{i:07} /DeviceGray ")).collect();
+    let pages = 3;
+    let kids: String = (0..pages).map(|i| format!("{} 0 R ", 8 + 2 * i)).collect();
+    let mut objs = vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        format!("<< /Type /Pages /Kids [{kids}] /Count {pages} >>").into_bytes(),
+        b"null".to_vec(),
+        stream("", two_boxes("/CSG").as_bytes()),
+        cell(),
+        b"null".to_vec(),
+        b"null".to_vec(),
+    ];
+    for i in 0..pages {
+        objs.push(format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Pattern << /P0 5 0 R >> /ColorSpace {} 0 R >> >>", 9 + 2 * i).into_bytes());
+        objs.push(format!("<< {spaces}/CSG /DeviceGray >>").into_bytes());
+    }
+    let mut doc = pdf(objs);
+    for page in 0..pages {
+        mark(&mut doc, page, &[[15.0, 135.0, 130.0, 175.0]], "");
+    }
+    assert_eq!(apply(&mut doc, None).unwrap().patterns_removed, pages, "each page's pattern goes");
 }
 
 /// `pages` pages, each marked over the first box, sharing one content stream (object 4) and one
@@ -216,4 +245,24 @@ fn a_walk_whose_patterns_nothing_prunes_reads_no_colour_space() {
     assert_eq!(reads(&|doc| drop(crate::sanitize::scan(doc))), 0, "Sanitize's scan");
     assert_eq!(reads(&|doc| drop(crate::sanitize::remove_hidden(doc, &[crate::sanitize::Hidden::HiddenText]))), 0, "Remove Hidden Information");
     assert_eq!(reads(&|doc| drop(apply(doc, None).unwrap())), 1, "Apply, its walk alone");
+}
+
+/// Letting the kept names go keeps what kept none: a `/ColorSpace` that isn't a dictionary, read
+/// once, is not read again when it is named after two others of 60% of the allowance each have
+/// made the lookup let go of the first's names.
+#[test]
+fn what_kept_no_names_is_not_read_again_after_the_kept_ones_go() {
+    let names = (MAX_SPACE_BYTES * 6 / 10) / (8 + ENTRY_BYTES);
+    let spaces = |prefix: char| {
+        let names: String = (0..names).map(|i| format!("/{prefix}{i:07} /DeviceGray ")).collect();
+        format!("<< {names}>>").into_bytes()
+    };
+    // Forms 8, 9 and 10 name `/CSX` in /ColorSpace objects 11 (an array), 12 and 13.
+    let form =
+        |space: u32| stream(&format!("/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << /ColorSpace {space} 0 R >>"), b"/CSX cs");
+    let extra = vec![form(11), form(12), form(13), b"[/DeviceGray]".to_vec(), spaces('A'), spaces('B')];
+    let res = "/Pattern << /P0 7 0 R >> /XObject << /F1 8 0 R /F2 9 0 R /F3 10 0 R >>";
+    SPACE_READS.with(|c| c.set(0));
+    removed("/Pattern cs /P0 scn /F1 Do /F2 Do /F3 Do /F1 Do", res, extra);
+    assert_eq!(SPACE_READS.with(std::cell::Cell::get), 3, "the array, then each dictionary, once");
 }
