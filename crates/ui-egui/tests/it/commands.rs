@@ -745,14 +745,16 @@ fn undo_and_redo_buttons_in_the_mode_bar() {
     assert!(off(&h, undo) && off(&h, redo));
 }
 
-/// With Undo and Redo in the mode bar, the narrowest window (820 pt) still keeps the search
-/// field clear of the mode tabs, in English and in German's longer words: the field takes the
-/// room the tabs leave.
+/// With Undo and Redo in the mode bar, a narrow window (820 pt) still keeps the command search
+/// clear of the modes on its left and of Undo on its right, in English and in German's longer
+/// words: the modes stay tabs where they fit and fold into one menu where they don't (#1913).
 #[test]
 fn the_search_field_leaves_the_mode_tabs_clear_in_the_narrowest_window() {
-    for (lang, sign, search, undo) in
-        [("en", "E-Sign", "Find tools and commands", "Undo ("), ("de", "E-Signatur", "Werkzeuge und Befehle suchen", "Rückgängig (")]
-    {
+    use egui::accesskit::Role;
+    for (lang, modes, search, undo) in [
+        ("en", ["E-Sign", "Convert", "Edit", "All tools", "Read"], "Find tools and commands", "Undo ("),
+        ("de", ["E-Signatur", "Konvertieren", "Bearbeiten", "Alle Werkzeuge", "Lesen"], "Werkzeuge und Befehle suchen", "Rückgängig ("),
+    ] {
         let mut h = Harness::builder().with_size(egui::vec2(820.0, 520.0)).build_eframe(|_cc| {
             let mut app = PdfCraftApp::new();
             app.set_option("language", lang).unwrap();
@@ -760,10 +762,14 @@ fn the_search_field_leaves_the_mode_tabs_clear_in_the_narrowest_window() {
             app
         });
         h.run_steps(4);
-        let tab = h.get_by_label(sign).rect();
+        // The rightmost mode control: the E-Sign tab, or the one menu the modes folded into.
+        let (mode, tab) = modes
+            .iter()
+            .find_map(|m| h.query_by_role_and_label(Role::Button, m).map(|n| (*m, n.rect())))
+            .unwrap_or_else(|| panic!("{lang}: no mode tab or mode menu"));
         let field = h.get_by_label(search).rect();
         let undo = h.get_by_label_contains(undo).rect();
-        assert!(field.left() >= tab.right(), "{lang}: the search field {field:?} runs over {sign} {tab:?}");
+        assert!(field.left() >= tab.right(), "{lang}: the search field {field:?} runs over {mode} {tab:?}");
         assert!(field.right() <= undo.left(), "{lang}: the search field {field:?} runs under Undo {undo:?}");
     }
 }
