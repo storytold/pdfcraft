@@ -141,8 +141,11 @@ Tiling-pattern cells are separate streams. Applying a mark removes a pattern res
 surviving paint uses it. A `cs` or `CS` naming a colour space the resources give as a Pattern
 space keeps the pattern selected before it, as the app's renderer draws it. The names a run keeps
 from `/ColorSpace` dictionaries given by reference are counted as their length and 128 bytes each,
-up to 1 MiB at once. A dictionary whose names alone pass that has its names taken for Pattern
-spaces, so a pattern nothing paints any more can stay, and if its cell may hold text or images,
+up to 1 MiB at once: reading one that doesn't fit lets go first of the names the page being
+walked hasn't named, and once a page of the rest, and no dictionary is read more than twice in a
+run. A dictionary whose names alone pass 1 MiB, one that still doesn't fit beside what the page
+keeps, or one named again after its two reads has its names taken for Pattern spaces, so a
+pattern nothing paints any more can stay, and if its cell may hold text or images,
 Apply refuses as below. If a cell remains reachable after rewriting the selected pages and may
 contain text, images, replacement descriptions, or unreadable content, Apply refuses with a
 `RedactError::Pattern` and restores the document and pending marks. This includes patterns owned

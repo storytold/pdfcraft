@@ -6,7 +6,7 @@
 //! one it doesn't leaves the page.
 
 use super::*;
-use crate::interp::{ENTRY_BYTES, MAX_SPACE_BYTES, SPACE_READS};
+use crate::interp::{ENTRY_BYTES, MAX_SPACE_BYTES, PatternSpaces, SPACE_READS};
 
 /// A tiling pattern whose cell draws a rectangle and nothing else (object 7), which can stay.
 fn cell() -> Vec<u8> {
@@ -265,4 +265,115 @@ fn what_kept_no_names_is_not_read_again_after_the_kept_ones_go() {
     SPACE_READS.with(|c| c.set(0));
     removed("/Pattern cs /P0 scn /F1 Do /F2 Do /F3 Do /F1 Do", res, extra);
     assert_eq!(SPACE_READS.with(std::cell::Cell::get), 3, "the array, then each dictionary, once");
+}
+
+/// A `/ColorSpace` of 60% of the allowance: `/CSX` and `/CSG`, grey, and one long name.
+fn sixty_percent() -> Vec<u8> {
+    format!("<< /CSX /DeviceGray /CSG /DeviceGray /{} /DeviceGray >>", "N".repeat(MAX_SPACE_BYTES * 6 / 10)).into_bytes()
+}
+
+/// Two dictionaries that don't fit together, named in turn on one page, are read no more for
+/// 1,000 drawings than for one: once each. The second lets go of the first, which the page then
+/// can't keep beside it, and a name in it keeps the pattern for the rest of the page.
+#[test]
+fn dictionaries_named_in_turn_are_read_no_more_for_more_drawings() {
+    let reads = |pairs: usize| {
+        let form = |spaces: u32| {
+            stream(&format!("/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << /ColorSpace {spaces} 0 R >>"), b"/PF scn /CSX cs")
+        };
+        let content = format!("/Pattern cs /P0 scn 20 140 100 30 re f {}/CSG cs 20 40 100 30 re f", "q /F1 Do Q q /F2 Do Q ".repeat(pairs));
+        let res = "/Pattern << /P0 7 0 R >> /XObject << /F1 8 0 R /F2 9 0 R >>";
+        let mut doc = one_page(content.as_bytes(), res, vec![cell(), form(10), form(11), sixty_percent(), sixty_percent()]);
+        mark(&mut doc, 0, &[[15.0, 135.0, 130.0, 175.0]], "");
+        SPACE_READS.with(|c| c.set(0));
+        apply(&mut doc, None).unwrap();
+        SPACE_READS.with(std::cell::Cell::get)
+    };
+    assert_eq!(reads(1), 2, "one drawing of each");
+    assert_eq!(reads(1_000), 2, "1,000 drawings of each");
+}
+
+/// Ten pages whose `/ColorSpace`, of 60% of the allowance, is in turn one dictionary and another:
+/// each is read twice, once and again after the other let it go. Named a third time, the first
+/// isn't read, and its `/CSG` keeps the pattern on that page, as on the pages after that name it;
+/// the second, kept since, still resets it.
+#[test]
+fn a_dictionary_is_read_at_most_twice_in_a_run() {
+    let pages = 10;
+    let kids: String = (0..pages).map(|i| format!("{} 0 R ", 8 + i)).collect();
+    let mut objs = vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        format!("<< /Type /Pages /Kids [{kids}] /Count {pages} >>").into_bytes(),
+        sixty_percent(),
+        stream("", two_boxes("/CSG").as_bytes()),
+        cell(),
+        sixty_percent(),
+        b"null".to_vec(),
+    ];
+    for i in 0..pages {
+        let spaces = if i % 2 == 0 { 3 } else { 6 };
+        objs.push(format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Pattern << /P0 5 0 R >> /ColorSpace {spaces} 0 R >> >>").into_bytes());
+    }
+    let mut doc = pdf(objs);
+    for page in 0..pages {
+        mark(&mut doc, page, &[[15.0, 135.0, 130.0, 175.0]], "");
+    }
+    SPACE_READS.with(|c| c.set(0));
+    let removed = apply(&mut doc, None).unwrap().patterns_removed;
+    assert_eq!(SPACE_READS.with(std::cell::Cell::get), 4, "each dictionary twice");
+    assert_eq!(removed, 7, "all but the three pages naming the first a third time and after");
+}
+
+/// The names a page names are the last to go: five pages, each drawing a form whose own
+/// `/ColorSpace` (object 7) they share, then naming a `/ColorSpace` of their own of 40% of the
+/// allowance. The pages' own let go of each other's, never of the shared one, read once.
+#[test]
+fn the_names_a_page_names_are_the_last_to_go() {
+    let names = (MAX_SPACE_BYTES * 4 / 10) / (8 + ENTRY_BYTES);
+    let spaces: String = (0..names).map(|i| format!("/C{i:07} /DeviceGray ")).collect();
+    let pages = 5;
+    let kids: String = (0..pages).map(|i| format!("{} 0 R ", 8 + 2 * i)).collect();
+    let mut objs = vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        format!("<< /Type /Pages /Kids [{kids}] /Count {pages} >>").into_bytes(),
+        b"null".to_vec(),
+        stream("", format!("q /Fm Do Q {}", two_boxes("/CSG")).as_bytes()),
+        cell(),
+        stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << /ColorSpace 7 0 R >>", b"/PF scn /CSS cs"),
+        b"<< /CSS /DeviceGray >>".to_vec(),
+    ];
+    for i in 0..pages {
+        objs.push(format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Pattern << /P0 5 0 R >> /XObject << /Fm 6 0 R >> /ColorSpace {} 0 R >> >>", 9 + 2 * i).into_bytes());
+        objs.push(format!("<< {spaces}/CSG /DeviceGray >>").into_bytes());
+    }
+    let mut doc = pdf(objs);
+    for page in 0..pages {
+        mark(&mut doc, page, &[[15.0, 135.0, 130.0, 175.0]], "");
+    }
+    SPACE_READS.with(|c| c.set(0));
+    assert_eq!(apply(&mut doc, None).unwrap().patterns_removed, pages, "each page's pattern goes");
+    assert_eq!(SPACE_READS.with(std::cell::Cell::get), 1 + pages, "the shared dictionary once, each page's own once");
+}
+
+/// What the lookup counts its kept names as is what they cost, within the allowance, however they
+/// come and go: one dictionary kept on a page and named again on the next counts for that page, so
+/// another of 60% lets all go, not only what the page hasn't named; and on a third page the first,
+/// let go and named again, comes back in place of the other.
+#[test]
+fn the_lookup_counts_what_it_keeps() {
+    let doc = one_page(b"", "", vec![sixty_percent(), sixty_percent()]);
+    let (first, second) = (Object::Ref(ObjRef::new(7, 0)), Object::Ref(ObjRef::new(8, 0)));
+    let mut spaces = PatternSpaces::default();
+    let check = |spaces: &PatternSpaces, step: &str| {
+        let (counted, kept) = spaces.counted();
+        assert_eq!(counted, kept, "{step}");
+        assert!(counted <= MAX_SPACE_BYTES, "{step}: {counted}");
+    };
+    for (page, names) in [(1, &[&first][..]), (2, &[&first, &second]), (3, &[&first])] {
+        spaces.next_page();
+        for (i, spaces_ref) in names.iter().enumerate() {
+            assert!(!spaces.named(&doc, Some(spaces_ref), b"CSG"), "page {page}, name {i}: grey");
+            check(&spaces, &format!("page {page}, name {i}"));
+        }
+    }
 }

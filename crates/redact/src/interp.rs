@@ -216,10 +216,15 @@ thread_local! {
 
 /// How much of colour space names [`PatternSpaces`] keeps at once, in bytes, over the
 /// `/ColorSpace` dictionaries given by reference it has read: each name's length and
-/// [`ENTRY_BYTES`]. Reading one whose names don't fit what is left lets the kept ones go. The
-/// names of one that alone would go past it are not kept, and a name in it keeps the pattern: a
-/// pattern kept that nothing shows is the side this errs on.
+/// [`ENTRY_BYTES`]. Reading one whose names don't fit what is left lets go of the kept names the
+/// page being walked hasn't named, and, once a page, of those it has. The names of one that
+/// still doesn't fit are not kept, and a name in it keeps the pattern: a pattern kept that nothing
+/// shows is the side this errs on.
 pub(crate) const MAX_SPACE_BYTES: usize = 1 << 20;
+
+/// How often a run reads a `/ColorSpace` dictionary given by reference: once, and once more after
+/// its names were let go. Named after that, it isn't read again, and a name in it keeps the pattern.
+pub(crate) const MAX_READS: u8 = 2;
 
 /// What a kept name costs [`MAX_SPACE_BYTES`] besides its bytes: its place in the index, and the
 /// allocation holding it.
@@ -256,24 +261,54 @@ impl Space {
 /// by reference gives depends on it alone, not on the page, and reading an object again can parse
 /// it again, all of it (the document keeps no object larger than its cache), at every page, form
 /// and walk that names it. What is kept is what each name gives, not the objects read, within
-/// [`MAX_SPACE_BYTES`]. Between the pages of a run, Apply writes in place the page dictionaries
+/// [`MAX_SPACE_BYTES`], and no dictionary is read more than [`MAX_READS`] times, however its names
+/// come and go. Apply tells it where each page's walk starts ([`PatternSpaces::next_page`]): the
+/// names a page names are the last to go. Between the pages of a run, Apply writes in place the page dictionaries
 /// (`/Contents`, `/Resources`, `/Annots`) and the structure elements it cleans, and adds new
 /// objects; a kept answer goes stale only where a `/ColorSpace` or an entry is one of those
 /// objects too, which no well-formed file has.
 #[derive(Default)]
 pub(crate) struct PatternSpaces {
-    /// The `/ColorSpace` dictionaries given by reference, read once: what each name gives, or
-    /// `None` for one whose names would go past the allowance.
-    held: HashMap<ObjRef, Option<HashMap<Vec<u8>, Space>>>,
-    /// What the names `held` keeps cost, against [`MAX_SPACE_BYTES`].
+    /// The `/ColorSpace` dictionaries given by reference whose names are kept.
+    kept: HashMap<ObjRef, Kept>,
+    /// What the names `kept` keeps cost, against [`MAX_SPACE_BYTES`].
     bytes: usize,
+    /// What the names of those the page being walked has named cost, of `bytes`.
+    page_bytes: usize,
+    /// The page being walked, counted by [`PatternSpaces::next_page`].
+    page: u32,
+    /// Whether the page being walked has let go of names it named itself, which it does once.
+    let_go: bool,
+    /// What a dictionary whose names aren't kept gives any name: no Pattern space (`false`) where
+    /// it isn't a dictionary, so it has none; the pattern kept (`true`) where its names alone go
+    /// past the allowance, or it was read [`MAX_READS`] times.
+    settled: HashMap<ObjRef, bool>,
+    /// How often each dictionary was read, and what its names cost.
+    reads: HashMap<ObjRef, (u8, usize)>,
     /// Whether an entry given by reference is a Pattern space.
     known: HashMap<ObjRef, bool>,
     /// Whether an array's first element given by reference is the name `/Pattern`.
     families: HashMap<ObjRef, bool>,
 }
 
+/// A `/ColorSpace` dictionary whose names [`PatternSpaces`] keeps.
+struct Kept {
+    /// What each name gives.
+    names: HashMap<Vec<u8>, Space>,
+    /// What they cost.
+    cost: usize,
+    /// The page that last named it.
+    page: u32,
+}
+
 impl PatternSpaces {
+    /// Starts the walk of the next page.
+    pub(crate) fn next_page(&mut self) {
+        self.page = self.page.wrapping_add(1);
+        self.page_bytes = 0;
+        self.let_go = false;
+    }
+
     /// Whether `cs` or `CS` with `name` selects a Pattern space, as the renderer reads the name:
     /// `/Pattern` itself, never a device space's name (both read before the resources), and
     /// otherwise the entry `spaces`, a scope's `/ColorSpace`, has for it, if that is `/Pattern` or
@@ -282,44 +317,97 @@ impl PatternSpaces {
     /// where the renderer looks its names up too. (One with resources of its own looks a name it
     /// lacks up in its caller's, as the renderer does, but the patterns this pass prunes are the
     /// page's, and what such a form paints with is not told to the page.)
-    fn named(&mut self, doc: &Document, spaces: Option<&Object>, name: &[u8]) -> bool {
+    pub(crate) fn named(&mut self, doc: &Document, spaces: Option<&Object>, name: &[u8]) -> bool {
         match name {
             b"Pattern" => return true,
             b"DeviceRGB" | b"RGB" | b"DeviceGray" | b"G" | b"DeviceCMYK" | b"CMYK" | b"CalCMYK" => return false,
             _ => {}
         }
         let space = match spaces {
-            Some(o @ Object::Ref(r)) => {
-                if !self.held.contains_key(r) {
-                    // A stream's dictionary is read as the dictionary, as the renderer reads it.
-                    let read = read_space(doc, o);
-                    let index = match read.as_dict() {
-                        Some(d) => {
-                            let cost = d.iter().fold(0, |sum: usize, (k, _)| sum.saturating_add(k.len()).saturating_add(ENTRY_BYTES));
-                            (cost <= MAX_SPACE_BYTES).then(|| {
-                                // The run has read more names than it keeps: the ones kept go, to be
-                                // read again where they are named again. What kept no names stays.
-                                if cost > MAX_SPACE_BYTES.saturating_sub(self.bytes) {
-                                    self.held.retain(|_, kept| kept.as_ref().is_none_or(HashMap::is_empty));
-                                    self.bytes = 0;
-                                }
-                                self.bytes += cost;
-                                d.iter().map(|(k, v)| (k.to_vec(), Space::of(v))).collect::<HashMap<_, _>>()
-                            })
-                        }
-                        None => Some(HashMap::new()),
-                    };
-                    self.held.insert(*r, index);
-                }
-                match self.held.get(r) {
-                    Some(Some(index)) => index.get(name).copied(),
-                    _ => return true,
-                }
-            }
+            Some(o @ Object::Ref(r)) => match self.space_in(doc, *r, o, name) {
+                Some(space) => space,
+                None => return true,
+            },
             Some(Object::Dict(d)) => d.get(name).map(Space::of),
             _ => None,
         };
         space.is_some_and(|space| self.is_pattern(doc, space))
+    }
+
+    /// What `name` gives in the `/ColorSpace` dictionary `o`, given by reference as `r`: `None`
+    /// where that isn't told, and the pattern is kept.
+    fn space_in(&mut self, doc: &Document, r: ObjRef, o: &Object, name: &[u8]) -> Option<Option<Space>> {
+        if let Some(kept) = self.kept.get_mut(&r) {
+            if kept.page != self.page {
+                kept.page = self.page;
+                self.page_bytes = self.page_bytes.saturating_add(kept.cost);
+            }
+            return Some(kept.names.get(name).copied());
+        }
+        if let Some(&pattern) = self.settled.get(&r) {
+            return (!pattern).then_some(None);
+        }
+        let (reads, known) = self.reads.get(&r).copied().unwrap_or((0, 0));
+        if reads >= MAX_READS {
+            self.settled.insert(r, true);
+            return None;
+        }
+        // Read before and let go since: what its names cost is known, so it isn't read only to
+        // find they don't fit. Then they don't until the next page, as the page has let go of all
+        // it can.
+        if reads > 0 && !self.room(known) {
+            return None;
+        }
+        // A stream's dictionary is read as the dictionary, as the renderer reads it.
+        let read = read_space(doc, o);
+        let Some(d) = read.as_dict() else {
+            self.settled.insert(r, false);
+            return Some(None);
+        };
+        let cost = d.iter().fold(0, |sum: usize, (k, _)| sum.saturating_add(k.len()).saturating_add(ENTRY_BYTES));
+        self.reads.insert(r, (reads + 1, cost));
+        if cost > MAX_SPACE_BYTES {
+            self.settled.insert(r, true);
+            return None;
+        }
+        if !self.room(cost) {
+            return None;
+        }
+        self.bytes += cost;
+        self.page_bytes += cost;
+        let names: HashMap<_, _> = d.iter().map(|(k, v)| (k.to_vec(), Space::of(v))).collect();
+        let space = names.get(name).copied();
+        self.kept.insert(r, Kept { names, cost, page: self.page });
+        Some(space)
+    }
+
+    /// Whether names costing `cost`, at most [`MAX_SPACE_BYTES`], can be kept: within what is left,
+    /// or once the names this page hasn't named are let go, or, once a page, all of them. Each
+    /// page lets go of others' names once at most, as after that all it keeps are its own.
+    fn room(&mut self, cost: usize) -> bool {
+        if cost <= MAX_SPACE_BYTES.saturating_sub(self.bytes) {
+            return true;
+        }
+        if self.page_bytes < self.bytes && cost <= MAX_SPACE_BYTES.saturating_sub(self.page_bytes) {
+            let page = self.page;
+            self.kept.retain(|_, kept| kept.page == page);
+            self.bytes = self.page_bytes;
+            return true;
+        }
+        if self.let_go {
+            return false;
+        }
+        self.let_go = true;
+        self.kept.clear();
+        self.bytes = 0;
+        self.page_bytes = 0;
+        true
+    }
+
+    /// What the kept names cost as counted, and as the kept dictionaries add up.
+    #[cfg(test)]
+    pub(crate) fn counted(&self) -> (usize, usize) {
+        (self.bytes, self.kept.values().map(|kept| kept.cost).sum())
     }
 
     /// Whether `space` is `/Pattern` or `[/Pattern base]`, reading what it gives by reference.
