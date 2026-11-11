@@ -1071,7 +1071,32 @@ fn xobject(
             }
         }
         Some(b"Form") => {
-            let m = s.dict.get(b"Matrix").and_then(|m| Matrix::from_operands(doc.resolve(m).as_array()?)).unwrap_or_default();
+            // Read as the proof reads it, entries by reference included: read as the identity, a
+            // form moved onto a mark would be tested against the wrong place and never walked.
+            let m = match crate::verify::matrix_of(doc, &s.dict) {
+                Ok(m) => m,
+                // Not six numbers given directly or through one reference. Removing hidden layers alone never asks where content lands, so
+                // the form is walked as it stands.
+                Err(()) if scope.everywhere() && scope.hidden_text.is_none() => Matrix::IDENTITY,
+                // Otherwise where the form draws, and so whether it reaches a mark or leaves the
+                // page, can't be told. Apply refuses the page, and the scans count it, as for a
+                // form past the page's budget below.
+                Err(()) => {
+                    if scope.mode == Mode::Apply {
+                        out.error = Some(CosError::Syntax {
+                            offset: 0,
+                            detail:
+                                "a form XObject's /Matrix isn't six numbers given directly or through one reference, so where it draws can't be told"
+                                    .into(),
+                        });
+                    } else if scope.everywhere() {
+                        scope.layer_blocks += 1;
+                    } else {
+                        out.residue += 1;
+                    }
+                    return None;
+                }
+            };
             let fctm = m.then(&gs.ctm);
             let bbox = s.dict.get(b"BBox").and_then(|b| {
                 let v: Vec<f64> = doc.resolve(b).as_array()?.iter().filter_map(Object::as_f64).collect();
