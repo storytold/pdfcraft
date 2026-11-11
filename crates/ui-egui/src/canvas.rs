@@ -865,6 +865,8 @@ pub enum ViewAction {
     },
     /// Lock now, on the notice shown after a signature is placed (#2149).
     LockSignatures,
+    /// Ask before deleting a page via its right-click menu.
+    ConfirmDeletePages,
 }
 
 /// Default page right-click menu actions.
@@ -3789,7 +3791,7 @@ fn apply_frame_requests(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui, 
             app.add_image_dialog();
         }
         Some(PageMenuAction::DeletePage(page)) => {
-            app.views[index].pending_edit = Some(pdfcraft_engine::Edit::DeletePages { pages: vec![page] });
+            app.request_delete_pages(index, vec![page]);
         }
         Some(PageMenuAction::ExportPdf) => {
             app.select_tool("export");

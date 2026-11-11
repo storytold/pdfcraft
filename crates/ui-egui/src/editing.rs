@@ -578,6 +578,12 @@ impl PdfCraftApp {
                     self.lock_signatures_now(id);
                 }
             }
+            /// The canvas right-click menu asked before deleting a page: open the confirmation
+            /// dialog, which queues the edit when confirmed.
+            Some(crate::canvas::ViewAction::ConfirmDeletePages) => {
+                let pages = self.views.get(i).map(|v| v.target_pages()).unwrap_or_default();
+                self.request_delete_pages(i, pages);
+            }
             Some(crate::canvas::ViewAction::CameraNext(command)) => {
                 self.leave_camera(i);
                 self.execute(command);
@@ -727,6 +733,45 @@ impl PdfCraftApp {
                 self.notify_fmt("{label} failed: {e}", &[("label", &label), ("e", &e.to_string())]);
             }
         }
+    }
+
+    /// Ask before deleting `pages` (0-based) of the document in view `index` via a page's
+    /// right-click menu: the confirmation dialog queues the edit when confirmed. A deletion
+    /// that would leave the document without a page is refused silently.
+    pub fn request_delete_pages(&mut self, index: usize, pages: Vec<usize>) {
+        let Some(id) = self.views.get(index).map(|v| v.id) else { return };
+        let Some(doc) = self.session.get(id) else { return };
+        let mut pages = pages;
+        pages.sort_unstable();
+        pages.dedup();
+        if pages.is_empty() || pages.len() >= doc.info.pages.len() {
+            return;
+        }
+        self.delete_pages_draft = Some(crate::DeletePagesDraft { doc: id, generation: doc.edit_generation(), pages });
+        self.dialog = Some(crate::Dialog::DeletePages);
+    }
+
+    /// The confirmation's Delete: queue the deletion the draft holds. A document changed since
+    /// the dialog opened (another edit ran behind it) deletes nothing, so the pages those
+    /// indices named are not the pages deleted.
+    pub fn confirm_delete_pages(&mut self) {
+        let Some(d) = self.delete_pages_draft.take() else { return };
+        let still_there =
+            self.active_ids().is_some_and(|(_, id)| id == d.doc) && self.session.get(d.doc).is_some_and(|doc| doc.edit_generation() == d.generation);
+        if !still_there {
+            self.notify_tr("The document changed while the dialog was open, so nothing was changed. Delete the pages again.");
+            return;
+        }
+        // The view keeps the page it showed, or the one after the deleted run, as the
+        // right-click delete did before it asked: pages deleted before it shift it up, and a page
+        // deleted itself is replaced by what followed the deleted run (or the last page).
+        if let (Some(i), Some(n)) = (self.active_ids().map(|(i, _)| i), self.session.get(d.doc).map(|doc| doc.info.pages.len()))
+            && let Some(v) = self.views.get_mut(i)
+        {
+            let before = d.pages.iter().filter(|p| **p < v.current).count();
+            v.current = v.current.saturating_sub(before).min(n.saturating_sub(d.pages.len() + 1));
+        }
+        self.apply_edit(Edit::DeletePages { pages: d.pages });
     }
 
     /// Organize ▸ Copy / Cut: remember the selected pages (the document as it is now); Cut also

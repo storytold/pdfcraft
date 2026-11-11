@@ -169,9 +169,9 @@ use state::CopyPage;
 #[cfg(not(target_arch = "wasm32"))]
 use state::OpenRequest;
 pub use state::{
-    CommentClip, CustomDraft, Dialog, DuplicateDraft, LeftPanel, LinkOrigin, Mode, NumberDraft, OpenOutcome, PageClip, PagePropsDraft,
-    PasswordPrompt, PendingLink, PendingRemoteLink, PropsTab, QuickTool, RECENT_FILES_DEFAULT, RECENT_FILES_MAX, RecentFile, RightPanel,
-    UnlockPrompt,
+    CommentClip, CustomDraft, DeletePagesDraft, Dialog, DuplicateDraft, LeftPanel, LinkOrigin, Mode, NumberDraft, OpenOutcome, PageClip,
+    PagePropsDraft, PasswordPrompt, PendingLink, PendingRemoteLink, PropsTab, QuickTool, RECENT_FILES_DEFAULT, RECENT_FILES_MAX, RecentFile,
+    RightPanel, UnlockPrompt,
 };
 use state::{DocumentCopyJob, GridFile};
 pub use tools::bulk_fields;
@@ -741,6 +741,8 @@ pub struct PdfCraftApp {
     pub duplicate_draft: Option<DuplicateDraft>,
     /// Page Properties: which pages, and the tab order chosen for them.
     pub page_props_draft: Option<PagePropsDraft>,
+    /// Delete pages: the document and pages the confirmation dialog would delete.
+    pub delete_pages_draft: Option<DeletePagesDraft>,
     /// Text field table: the table being set up, and the page it goes on.
     pub field_table_draft: Option<field_table_ui::FieldTableDraft>,
     /// Prepare a form ▸ Preview: fill the form instead of editing its fields.
