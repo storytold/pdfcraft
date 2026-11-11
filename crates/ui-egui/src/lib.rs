@@ -212,6 +212,7 @@ use workflows::optimize_ui;
 use workflows::print_paper;
 use workflows::print_ui;
 use workflows::scan_clean_ui;
+pub(crate) use workflows::smart_orient;
 use workflows::web_print;
 
 /// Files dropped on a document's page grid or its Pages panel.
@@ -621,6 +622,10 @@ pub struct PdfCraftApp {
     pub ocr_draft: ocr_ui::OcrDraft,
     pub ocr_run: Option<ocr_ui::OcrRun>,
     pub ocr_batch: Option<std::sync::Arc<std::sync::Mutex<ocr_ui::BatchProgress>>>,
+    /// Scan & OCR ▸ Smart Page Orient dialog state.
+    pub smart_orient_draft: smart_orient::SmartOrientDraft,
+    /// Background orientation assessment for Smart Page Orient.
+    pub(crate) smart_orient_scan: Option<smart_orient::SmartOrientScan>,
     /// The web build's files being read in Web Workers (progress in `ocr_batch`).
     #[cfg(target_arch = "wasm32")]
     ocr_web_batch: Option<ocr_web::Batch>,

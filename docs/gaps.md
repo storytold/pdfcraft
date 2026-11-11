@@ -176,13 +176,15 @@ update the numbers.
 
 ### 7. OCR reads only unaccented Latin
 
-- **Missing:** every other script and accented Latin; editable-text output; deskew, rotation,
-  despeckle and background clean-up as options of Recognize text (Enhance scanned file removes
-  the background and edge shadows on grey and RGB scans and despeckles those and 1-bit ones; it
+- **Missing:** every other script and accented Latin; editable-text output; deskew and
+  despeckle/background clean-up as options of Recognize text (Smart Page Orient ships as its own
+  Scan & OCR command for lossless `/Rotate` uprighting; Enhance scanned file removes the
+  background and edge shadows on grey and RGB scans and despeckles those and 1-bit ones; it
   reports CMYK, indexed, JPEG 2000, JBIG2 and CCITT scans and scans drawn inside Form XObjects
   and leaves them as they are); MRC compression;
   pluggable engines; OCR in the
-  browser; scanner input.
+  browser; scanner input. Embedding the same uprighting inside Recognize text is still open
+  (see PR #3662).
 - **Evidence:** `ocr.ocr-languages` partial ("the models read only the Latin alphabet without
   accents"); 19 of 26 OCR features planned; [#744](https://github.com/storytold/pdfcraft/issues/744)
   (Dutch). Acrobat ships on-device recognition for dozens of languages.

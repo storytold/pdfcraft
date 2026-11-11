@@ -75,6 +75,54 @@ impl Automation {
             "text_word_count" => self.text_word_count(&a)?,
             "text_find" => self.text_find(&a)?,
             "text_replace" => self.text_replace(&a)?,
+            "page_smart_orient" => {
+                let pages = match a.get("pages") {
+                    Some(_) => self.pages(&a, "pages")?,
+                    None => {
+                        let n = self.doc(&a)?.info.pages.len();
+                        (0..n).collect()
+                    }
+                };
+                let preview = a.opt_bool("preview")?.unwrap_or(false);
+                let apply_low = a.opt_bool("apply_low_confidence")?.unwrap_or(false);
+                let id = self.doc(&a)?.id;
+                let suggestions = self.session.assess_orientation(id, &pages, &|| false, &|_, _| {}).map_err(failed)?;
+                let pages_json: Vec<_> = suggestions
+                    .iter()
+                    .map(|s| {
+                        json!({
+                            "page": s.page + 1,
+                            "degrees": s.degrees_cw,
+                            "confidence": (s.confidence * 1000.0).round() / 1000.0,
+                            "low_confidence": s.low_confidence,
+                            "source": match s.source {
+                                pdfcraft_engine::orient_pages::OrientSource::Ocr => "ocr",
+                                pdfcraft_engine::orient_pages::OrientSource::Pixels => "pixels",
+                            },
+                            "note": s.note,
+                        })
+                    })
+                    .collect();
+                let mut out = summary(self.doc(&a)?);
+                out["pages"] = json!(pages_json);
+                if preview {
+                    out["rotated"] = json!(0);
+                } else {
+                    let apply: Vec<_> = suggestions
+                        .iter()
+                        .cloned()
+                        .map(|mut s| {
+                            if s.degrees_cw != 0 && s.low_confidence && !apply_low {
+                                s.degrees_cw = 0;
+                            }
+                            s
+                        })
+                        .collect();
+                    let report = self.session.apply_orientation(id, &apply).map_err(failed)?;
+                    out["rotated"] = json!(report.rotated);
+                }
+                out
+            }
             "page_rotate" => {
                 let degrees = a.int("degrees")?;
                 if degrees % 90 != 0 {

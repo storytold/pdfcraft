@@ -177,6 +177,8 @@ pub enum Dialog {
     AccessibilityOptions,
     /// Scan & OCR ▸ Recognize text.
     RecognizeText,
+    /// Scan & OCR ▸ Smart Page Orient (preview + apply).
+    SmartPageOrient,
     /// Scan & OCR ▸ Enhance scanned file.
     EnhanceScan,
     /// The JavaScript console (⌘J).

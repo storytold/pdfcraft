@@ -552,6 +552,11 @@ impl PdfCraftApp {
             "export.image" => self.dialog = Some(Dialog::Export(crate::export_ui::ExportKind::Image)),
             "export.text" => self.dialog = Some(Dialog::Export(crate::export_ui::ExportKind::Text)),
             "ocr.recognize" => self.dialog = Some(Dialog::RecognizeText),
+            "ocr.smart_orient" => {
+                self.smart_orient_draft.clear();
+                self.smart_orient_scan = None;
+                self.dialog = Some(Dialog::SmartPageOrient);
+            }
             "ocr.enhance" => self.dialog = Some(Dialog::EnhanceScan),
             "ocr.recognize_batch" => self.ocr_files_dialog(),
             "ocr.correct" => self.ocr_verify.open = true,

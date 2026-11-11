@@ -6812,11 +6812,17 @@ title = "Detect and fix page rotation"
 area = "I"
 tier = "P1"
 milestone = "M10"
-status = "partial"
-commands = ["ocr.recognize"]
-tools = ["ocr_recognize"]
-evidence = ["crates/ocr/src/preprocess.rs::quarter_turns_are_detected_corrected_and_mapped_back", "crates/ocr/src/preprocess.rs::realistic_letter_pages_are_left_upright"]
-notes = "Opt-in preprocessing: 0/90/180/270 detected from projection-profile banding (conservative: under 32 px, blank, or without a clear margin it is a no-op); word boxes map back to the scanned raster through the exact inverse. Correction is proven at the preprocessing layer and the flag flows through the job (needs the models), but correction of a genuinely rotated page through the workflow is not yet covered by a cited end-to-end test."
+status = "shipped"
+commands = ["ocr.smart_orient"]
+tools = ["page_smart_orient"]
+evidence = [
+  "crates/engine/src/orient_pages.rs::assess_blank_pages_suggest_no_turn",
+  "crates/engine/src/orient_pages.rs::apply_quarter_turn_is_undoable",
+  "crates/ocr/src/orient.rs::finds_the_turn_that_levels_the_lines",
+  "crates/ocr/src/orient.rs::upright_text_reads_as_words",
+  "crates/automation/tests/it/automation.rs::page_smart_orient_preview_and_apply",
+]
+notes = "Scan & OCR ▸ Smart Page Orient: per-page upright quarter turn (0/90/180/270) via OCR word-plausibility when models are installed, else a pixel projection-profile heuristic. Applies lossless /Rotate only; pages already upright or with too little text are left alone; low-confidence suggestions are flagged for review in the dialog and skipped by page_smart_orient unless apply_low_confidence. Preview lists angles and confidence. Undo restores the prior rotations. Recognize Text still has opt-in preprocess auto_rotate for the OCR raster only. Missing: embedding the same document correction inside Recognize Text (see open PR #3662); small-angle deskew."
 
 [[feature]]
 id = "ocr.deskew"

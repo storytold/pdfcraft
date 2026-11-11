@@ -380,6 +380,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     c("ocr.enhance", "Enhance scanned file…", None, None, Modification, "sparkles"),
     c("ocr.recognize_batch", "Recognize text in multiple files…", None, None, Nothing, "files"),
     c("ocr.correct", "Correct recognized text…", None, None, Document, "text-select"),
+    c("ocr.smart_orient", "Smart Page Orient…", None, None, Modification, "rotate-cw"),
     c("a11y.check", "Check for accessibility…", None, None, Document, "accessibility"),
     c("a11y.find_untagged", "Find untagged content", None, None, Document, "search"),
     c("a11y.autotag", "Automatically tag PDF", None, None, Document, "tag"),

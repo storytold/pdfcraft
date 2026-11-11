@@ -23,6 +23,7 @@
 pub mod confidence;
 pub mod merge;
 mod ocrs;
+pub mod orient;
 pub mod preprocess;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod tesseract;

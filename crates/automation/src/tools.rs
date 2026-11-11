@@ -287,6 +287,21 @@ pub fn tools() -> Vec<ToolDef> {
                 }),
                 &["doc", "find", "replace"],
             )),
+        t(
+            "page_smart_orient",
+            "Smart Page Orient",
+            "Scan & OCR ▸ Smart Page Orient: detect each page's upright quarter turn (0/90/180/270) with OCR when models are installed (else a pixel heuristic), and apply lossless /Rotate. Low-confidence suggestions are skipped unless apply_low_confidence is true. preview true returns suggestions without editing. pages lists 1-based page numbers (default: all). Undoable when applied.",
+        )
+            .cmd("ocr.smart_orient")
+            .with(schema(
+                json!({
+                    "doc": doc(),
+                    "pages": pages("to assess (default: all)"),
+                    "preview": { "type": "boolean", "description": "If true, only return suggestions (default false)." },
+                    "apply_low_confidence": { "type": "boolean", "description": "Apply low-confidence turns too (default false)." },
+                }),
+                &["doc"],
+            )),
         t("page_rotate", "Rotate pages", "Rotate pages by a multiple of 90 degrees (positive is clockwise): the listed pages (default all), filtered like Acrobat's Rotate Pages by subset (all, even, odd page numbers) and orientation (all, landscape, portrait). Undoable.")
             .cmd("page.rotate")
             .with(schema(

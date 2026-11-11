@@ -461,6 +461,23 @@ fn autotag_preview_proposes_text_without_changing_the_pdf() {
 }
 
 #[test]
+fn page_smart_orient_preview_and_apply() {
+    let dir = workdir("page-smart-orient");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_create", json!({ "from": "blank", "width": 200, "height": 200, "pages": 1 }))["doc"].as_u64().unwrap();
+    let preview = ok(&mut a, "page_smart_orient", json!({ "doc": doc, "preview": true }));
+    assert_eq!(preview["rotated"], 0);
+    assert!(preview["pages"].as_array().is_some_and(|p| !p.is_empty()));
+    assert_eq!(preview["pages"][0]["degrees"], 0);
+    ok(&mut a, "page_rotate", json!({ "doc": doc, "pages": [1], "degrees": 180 }));
+    let report = ok(&mut a, "page_smart_orient", json!({ "doc": doc, "preview": true }));
+    assert_eq!(report["rotated"], 0, "preview never edits");
+    let applied = ok(&mut a, "page_smart_orient", json!({ "doc": doc }));
+    assert!(applied["pages"].as_array().is_some());
+    assert!(applied["rotated"].as_u64().is_some());
+}
+
+#[test]
 fn render_pixels_agrees_with_page_render_and_skips_the_png() {
     let dir = workdir("render-pixels");
     let mut a = auto(&dir);

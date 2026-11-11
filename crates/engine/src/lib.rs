@@ -43,6 +43,7 @@ pub mod ocr;
 mod open;
 pub mod open_parameters;
 pub mod optimizer;
+pub mod orient_pages;
 mod page_filter;
 mod pictures;
 pub mod print_raster;

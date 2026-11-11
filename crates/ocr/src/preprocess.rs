@@ -220,6 +220,13 @@ fn grayscale(image: &OcrImage) -> Vec<u8> {
 /// How the page must be turned (quarter turns, clockwise) to read upright.
 type QuarterTurns = u32;
 
+/// Pixel-only suggestion for how many quarter turns clockwise would make the page upright.
+/// Used by Smart Page Orient when OCR models are unavailable, and by preprocess when
+/// [`PreprocessOptions::auto_rotate`] is on. Returns 0 when the call is unclear.
+pub fn suggest_quarter_turns_cw(image: &OcrImage) -> u32 {
+    detect_orientation(image)
+}
+
 /// Detect the correction for pages scanned sideways or upside down. Method (documented,
 /// panic-free, no OCR): ink is everything darker than the midpoint between the darkest and
 /// lightest pixel; for each candidate correction (0/90/180/270 clockwise) the ink's row

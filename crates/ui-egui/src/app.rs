@@ -230,6 +230,8 @@ impl PdfCraftApp {
             ocr_draft: ocr_ui::OcrDraft::default(),
             ocr_run: None,
             ocr_batch: None,
+            smart_orient_draft: Default::default(),
+            smart_orient_scan: None,
             #[cfg(target_arch = "wasm32")]
             ocr_web_batch: None,
             #[cfg(target_arch = "wasm32")]
