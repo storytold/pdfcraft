@@ -122,6 +122,11 @@ fn object(w: &pdfcraft_forms::Widget) -> Option<(i32, i32)> {
 /// The viewer's render configuration: the document's, with installed fonts, and the fields as
 /// page actions and timers show them. Exports and printing use `doc.config`, without them.
 pub(crate) fn screen_config(doc: &Document) -> pdfcraft_render::RenderConfig {
+    with_live_view(doc, crate::display_config(&doc.config))
+}
+
+/// `config` with the fields as page actions and timers show them.
+pub(crate) fn with_live_view(doc: &Document, config: pdfcraft_render::RenderConfig) -> pdfcraft_render::RenderConfig {
     let live = &doc.live;
     let annotations: Vec<(i32, i32, bool)> = doc
         .form
@@ -143,7 +148,7 @@ pub(crate) fn screen_config(doc: &Document) -> pdfcraft_render::RenderConfig {
     pdfcraft_render::RenderConfig {
         annotations: std::sync::Arc::new(annotations),
         appearances: std::sync::Arc::new(appearances),
-        ..crate::display_config(&doc.config)
+        ..config
     }
 }
 

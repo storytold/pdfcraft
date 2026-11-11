@@ -187,7 +187,8 @@ impl JsOutput {
         }
     }
 
-    pub(crate) fn append(&mut self, other: JsOutput) {
+    /// Adds what other scripts produced, telling a document script's error once.
+    pub fn append(&mut self, other: JsOutput) {
         self.alert(other.alerts);
         self.say(other.console);
         self.requests.extend(other.requests);
