@@ -7,6 +7,10 @@ use super::{Arc, BTreeMap, CosError, Dict, Document, HashSet, ObjRef, Object};
 /// tree, say, doesn't have a whole document read to open it.
 const MAX_ENCRYPT_MEMBERS: usize = 64;
 
+/// Why [`Document::unlock`] refuses the password of the embedded files while
+/// [`Document::embedded_file_edited_as_stored`]: saving is refused too, so undoing is the way on.
+const EMBEDDED_FILE_EDITED: &str = "an embedded file was added or changed while the embedded files were locked, and the document can't be saved so: undo that, then give the password";
+
 impl Document {
     /// A new document with an empty page tree (for split / extract / combine). It has no
     /// original bytes, so saving always writes a full file.
@@ -270,11 +274,11 @@ impl Document {
     /// A document opened without the password its embedded files need takes either password
     /// later: with the file key its embedded files decrypt, so what was read as stored is read
     /// again. Refused while an edited stream holds data read as stored, which the key would
-    /// encrypt a second time.
+    /// encrypt a second time; a save is refused then too, so undoing the edit is the way on.
     fn unlock_embedded_files(&mut self, password: &str) -> Result<(), CosError> {
         let Some(current) = self.security.as_deref() else { return Ok(()) };
-        if self.overlay_entries().any(|(_, _, o)| matches!(o.as_deref(), Some(Object::Stream(s)) if self.reads_as_stored(s))) {
-            return Err(CosError::Security("an embedded file was edited before the password was given: save or undo that edit first".into()));
+        if self.embedded_file_edited_as_stored() {
+            return Err(CosError::Security(EMBEDDED_FILE_EDITED.into()));
         }
         let handler = pdfcraft_crypt::SecurityHandler::open(current.dict().clone(), &self.first_id(), Some(password)).map_err(|e| match e {
             pdfcraft_crypt::CryptError::WrongPassword => CosError::WrongPassword,
@@ -285,6 +289,14 @@ impl Document {
         self.cache = Arc::default();
         self.objstms = Arc::default();
         Ok(())
+    }
+
+    /// Whether an edit holds embedded-file data read as stored, still encrypted, in a document
+    /// opened without the password its embedded files need. Until it is undone the password can't
+    /// be given ([`Document::unlock`]) and the document can't be saved.
+    pub(crate) fn embedded_file_edited_as_stored(&self) -> bool {
+        self.embedded_files_locked()
+            && self.overlay_entries().any(|(_, _, o)| matches!(o.as_deref(), Some(Object::Stream(s)) if self.reads_as_stored(s)))
     }
 
     /// Whether the document opened without the password its embedded files need (`/AuthEvent

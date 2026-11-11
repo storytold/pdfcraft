@@ -178,7 +178,7 @@ fn keyless_check(doc: &Document) -> Result<(), CosError> {
     if doc.encryption_changed() || doc.trailer().get(b"Encrypt").is_none() {
         return refuse("the document's security can't change");
     }
-    if doc.overlay_entries().any(|(_, _, o)| matches!(o.as_deref(), Some(Object::Stream(s)) if doc.reads_as_stored(s))) {
+    if doc.embedded_file_edited_as_stored() {
         return refuse("an edited or added embedded file can't be encrypted");
     }
     Ok(())

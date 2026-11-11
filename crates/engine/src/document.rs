@@ -675,6 +675,13 @@ impl Document {
         Some(SecuritySummary { method: method.into(), owner: h.auth() == pdfcraft_cos::Auth::Owner && !pending, permissions, pending })
     }
 
+    /// Whether the document opened without the password its attachments need (`/AuthEvent
+    /// /EFOpen`, ISO 32000-2 §7.6.6): the attachments that password encrypts don't read until
+    /// [`crate::Session::unlock`] is given it.
+    pub fn attachments_locked(&self) -> bool {
+        self.editor.as_ref().is_some_and(|e| e.cos.embedded_files_locked())
+    }
+
     /// Comment properties of the comment at `(page, index)` (Comment Properties dialog).
     pub fn comment_props(&self, page: usize, index: usize) -> Option<pdfcraft_annot::Props> {
         self.editor.as_ref().and_then(|e| pdfcraft_annot::props(&e.cos, page, index))

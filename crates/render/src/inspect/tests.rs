@@ -3001,3 +3001,81 @@ fn efopen_filters_named_by_the_file_open_and_older_handlers_do_not() {
     let legacy = Arc::new(efopen_pdf_with("EFOpen", false, "/V 2 /R 3 /Length 128"));
     assert!(matches!(check_pages(legacy, None, 1), Err(OpenError::NeedsPassword)));
 }
+
+/// What the attachment encrypted in [`efopen_pdf_with_clear`] holds.
+const ENCRYPTED_ATTACHMENT: &[u8] = b"the attached file's own words";
+/// What the attachment stored in the clear in [`efopen_pdf_with_clear`] holds.
+const CLEAR_ATTACHMENT: &[u8] = b"stored in the clear";
+/// The user password of [`efopen_pdf_with_clear`]'s attachments.
+const ATTACHMENT_PASSWORD: &str = "attach pw";
+
+/// A page in the clear and two attachments under an AES-256 (V5, R6) handler whose only encrypting
+/// filter, `/StdCF`, is `/AuthEvent /EFOpen`: `note.txt` encrypted with it, `clear.txt` with no
+/// crypt filter applying (ISO 32000-2 §7.6.6, §7.4.10). `named`: `note.txt` names `/StdCF` in a
+/// `/Crypt` filter of its own and `clear.txt` has no filter, with no `/EFF`; otherwise `/EFF
+/// /StdCF` encrypts every embedded file but `clear.txt`, which names `/Identity`.
+fn efopen_pdf_with_clear(named: bool) -> Vec<u8> {
+    let empty = pdfcraft_testkit::Pdf::new().obj("<< /Type /Catalog /Pages 2 0 R >>").obj("<< /Type /Pages /Kids [] /Count 0 >>").build();
+    let mut protected = pdfcraft_cos::Document::open(Arc::new(empty)).unwrap();
+    protected
+        .set_encryption(&pdfcraft_cos::NewEncryption {
+            algorithm: pdfcraft_cos::Algorithm::Aes256,
+            user_password: ATTACHMENT_PASSWORD,
+            owner_password: "owner pw",
+            permissions: -4,
+            encrypt_metadata: true,
+            seed: [5; 32],
+        })
+        .unwrap();
+    let handler = protected.output_handler().unwrap();
+    // AES-256 encrypts strings and streams alike, with the file key and a random first block
+    // (ISO 32000-2 §7.6.3.2), so the string cipher gives what `/StdCF` (AESV3) decrypts.
+    let cipher = handler.encrypt_string(7, 0, ENCRYPTED_ATTACHMENT);
+    let d = handler.dict();
+    let hex = |b: &[u8]| b.iter().map(|b| format!("{b:02X}")).collect::<String>();
+    let (eff, encrypted, clear) = if named {
+        ("", " /Filter [/Crypt] /DecodeParms [<< /Name /StdCF >>]", "")
+    } else {
+        (" /EFF /StdCF", "", " /Filter /Crypt /DecodeParms << /Name /Identity >>")
+    };
+    pdfcraft_testkit::Pdf::new()
+        .obj("<< /Type /Catalog /Pages 2 0 R /Names << /EmbeddedFiles << /Names [(clear.txt) 4 0 R (note.txt) 5 0 R] >> >> >>")
+        .obj("<< /Type /Pages /Kids [3 0 R] /Count 1 >>")
+        .obj("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >>")
+        .obj("<< /Type /Filespec /F (clear.txt) /EF << /F 6 0 R >> >>")
+        .obj("<< /Type /Filespec /F (note.txt) /EF << /F 7 0 R >> >>")
+        .stream(&format!("/Type /EmbeddedFile{clear}"), CLEAR_ATTACHMENT)
+        .stream(&format!("/Type /EmbeddedFile{encrypted}"), cipher)
+        .obj(format!(
+            "<< /Filter /Standard /V 5 /R 6 /O <{}> /U <{}> /OE <{}> /UE <{}> /Perms <{}> /P {} /CF << /StdCF << /AuthEvent /EFOpen /CFM /AESV3 /Length 32 >> >> /StmF /Identity /StrF /Identity{eff} >>",
+            hex(&d.o),
+            hex(&d.u),
+            hex(&d.oe),
+            hex(&d.ue),
+            hex(&d.perms),
+            d.p
+        ))
+        .trailer_entry("/Encrypt 8 0 R /ID [<00> <00>]")
+        .build()
+}
+
+/// ISO 32000-2 §7.6.6, Table 25: `/EFOpen` asks for the password when an embedded file is opened,
+/// and only for the files its filter encrypts. Without the password an attachment no crypt filter
+/// applies to reads, and the encrypted one is refused with [`ATTACHMENT_NEEDS_PASSWORD`]; with the
+/// user or owner password both read, and a wrong password reads neither.
+#[test]
+fn an_attachment_stored_in_the_clear_reads_without_the_password() {
+    for named in [false, true] {
+        let bytes = Arc::new(efopen_pdf_with_clear(named));
+        let info = inspect(bytes.clone(), None).expect("opens without a password");
+        let listed = |name: &str| info.attachments.iter().find(|a| a.name == name).unwrap_or_else(|| panic!("{name} is listed")).clone();
+        let (clear, note) = (listed("clear.txt"), listed("note.txt"));
+        assert_eq!(attachment_data(&bytes, None, &clear).as_deref(), Ok(CLEAR_ATTACHMENT), "named: {named}");
+        assert_eq!(attachment_data(&bytes, None, &note), Err(ATTACHMENT_NEEDS_PASSWORD.to_string()), "named: {named}");
+        for password in [ATTACHMENT_PASSWORD, "owner pw"] {
+            assert_eq!(attachment_data(&bytes, Some(password), &note).as_deref(), Ok(ENCRYPTED_ATTACHMENT), "named: {named}");
+            assert_eq!(attachment_data(&bytes, Some(password), &clear).as_deref(), Ok(CLEAR_ATTACHMENT), "named: {named}");
+        }
+        assert!(attachment_data(&bytes, Some("wrong"), &note).is_err(), "named: {named}");
+    }
+}

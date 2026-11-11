@@ -516,6 +516,11 @@ impl PdfCraftApp {
         #[cfg(not(target_arch = "wasm32"))]
         let source = d.path.clone();
         match (data, open) {
+            // Encrypted for the password of the document's attachments, which it opened without
+            // (ISO 32000-2 §7.6.6, /AuthEvent /EFOpen): ask for it, then carry on.
+            (Err(e), _) if e == pdfcraft_render::ATTACHMENT_NEEDS_PASSWORD && d.attachments_locked() => {
+                self.unlock_prompt = Some(UnlockPrompt::for_attachment(d, index, open));
+            }
             (Err(e), _) => self.notify_fmt("Couldn't read {name}: {e}", &[("name", &att.name), ("e", &e.to_string())]),
             (Ok(bytes), true) if looks_like_pdf(&bytes) => {
                 // The tab name later names files written from the tab (Split, Extract pages).
@@ -775,9 +780,11 @@ impl PdfCraftApp {
         let unlocked = self.session.unlock(p.doc, &pw);
         zeroize::Zeroize::zeroize(&mut pw);
         match unlocked {
-            // Carry on with what asked for the password, if its document is still the one shown.
-            Ok(()) => match p.then {
-                Some(command) if self.active_ids().is_some_and(|(_, id)| id == p.doc) => {
+            // Carry on with what asked for the password: the attachment is saved or opened with
+            // it, and a command runs if its document is still the one shown.
+            Ok(()) => match (p.attachment, p.then) {
+                (Some((index, open)), _) => self.attachment_action(p.doc, index, open),
+                (None, Some(command)) if self.active_ids().is_some_and(|(_, id)| id == p.doc) => {
                     self.execute(command);
                 }
                 _ => self.notify_tr("Restrictions lifted"),

@@ -220,5 +220,10 @@ fn the_password_given_later_unlocks_the_embedded_files() {
     let mut doc = Document::open(Arc::new(fixture(Algorithm::Aes256, "EFOpen"))).unwrap();
     let edited = stream(&doc, EMBEDDED);
     doc.set(EMBEDDED, Object::Stream(edited));
-    assert!(matches!(doc.unlock(PASSWORD), Err(CosError::Security(_))));
+    let Err(CosError::Security(refused)) = doc.unlock(PASSWORD) else { panic!("unlocked over an edit read as stored") };
+    // From the review of the EFOpen change: the refusal sends the reader to undo the edit, not
+    // to save it, since that save is refused as well.
+    assert!(write_incremental(&doc, &SaveOptions::default()).is_err(), "the edit can't be saved either");
+    assert!(refused.contains("undo") && !refused.contains("save or"), "{refused}");
+    assert!(doc.embedded_files_locked());
 }

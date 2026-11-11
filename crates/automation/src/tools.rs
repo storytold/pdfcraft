@@ -1164,6 +1164,9 @@ pub fn tools() -> Vec<ToolDef> {
             }),
             &["doc"],
         )),
+        t("doc_unlock", "Enter a document's password", "Give an open document a password it was opened without, as the app asks for one. The permissions password lifts the document's security restrictions. A document whose attachments alone are encrypted (/AuthEvent /EFOpen) opens without a password; its user or permissions password then unlocks those attachments, which until then don't read. Not an edit: nothing is marked unsaved and there is no undo step. A wrong password is an error; the password is never echoed back. Unlocking is refused while an edit holds an attachment's still-encrypted data (undo it first). Returns the security as doc_info reports it.")
+            .ro()
+            .with(schema(json!({ "doc": doc(), "password": { "type": "string", "description": "The user or permissions password." } }), &["doc", "password"])),
         t("doc_unprotect", "Remove security", "Remove password security (the document must have been opened with its permissions password, or have none). Applied by the next doc_save. Undoable.")
             .cmd("protect.remove")
             .destructive()

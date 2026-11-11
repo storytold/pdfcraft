@@ -359,12 +359,21 @@ pub(super) fn password(app: &mut PdfCraftApp, ctx: &egui::Context) {
     }
 }
 
-/// Permissions password prompt: lifts the restrictions of an open document (#995).
+/// Permissions password prompt: lifts the restrictions of an open document (#995). The same box
+/// asks for the password of a document's attachments when an encrypted one is saved or opened
+/// (Acrobat's "Encrypt Only File Attachments": a password is required to open file attachments).
 pub(super) fn unlock(app: &mut PdfCraftApp, ctx: &egui::Context) {
     let Some(prompt) = app.unlock_prompt.as_mut() else { return };
-    let message =
-        crate::i18n::fmt(tl!("“{name}” has security restrictions. Enter its permissions password to lift them."), &[("name", &prompt.name)]);
-    match password_modal(ctx, "unlock", tl!("Permissions password"), message, &mut prompt.input, prompt.error.as_deref(), tl!("Unlock")) {
+    let (title, message, ok) = if prompt.for_attachments() {
+        let message =
+            crate::i18n::fmt(tl!("The file attachments of “{name}” are protected. Enter the password to open them."), &[("name", &prompt.name)]);
+        (tl!("Password required"), message, tl!("OK"))
+    } else {
+        let message =
+            crate::i18n::fmt(tl!("“{name}” has security restrictions. Enter its permissions password to lift them."), &[("name", &prompt.name)]);
+        (tl!("Permissions password"), message, tl!("Unlock"))
+    };
+    match password_modal(ctx, "unlock", title, message, &mut prompt.input, prompt.error.as_deref(), ok) {
         Some(PasswordAnswer::Submit) => {
             let pw = std::mem::take(&mut prompt.input);
             app.submit_unlock(Some(pw));

@@ -149,9 +149,19 @@ impl LazyStructure {
         if !source.repair_log().is_empty() && !source.rebuilt_unlinked_update() {
             return Err("the structure requires compatibility repair".into());
         }
+        Self::over(source)
+    }
+
+    /// The structure of `source`, a document already open, read as it reads it.
+    pub(crate) fn over(source: Document) -> std::result::Result<Self, String> {
         let trailer = convert_dict(source.trailer(), 0).map_err(|e| e.to_string())?;
         let objects = source.object_numbers().into_iter().map(|n| (n, OnceLock::new())).collect();
         Ok(Self { source, trailer, objects, failed: AtomicBool::new(false) })
+    }
+
+    /// The document this structure reads.
+    pub(crate) fn source(&self) -> &Document {
+        &self.source
     }
 
     pub(crate) fn failed(&self) -> bool {

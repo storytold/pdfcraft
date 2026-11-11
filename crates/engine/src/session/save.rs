@@ -100,6 +100,8 @@ impl Session {
 
     /// Enter the permissions (owner) password of a document opened with its user password,
     /// lifting its restrictions for this session (Acrobat asks for it before changing security).
+    /// For a document opened without the password its attachments need (`/AuthEvent /EFOpen`,
+    /// ISO 32000-2 §7.6.6), either password unlocks them, and the document is then read with it.
     /// Not an edit: nothing is marked unsaved and there is no undo step. Undo and redo states
     /// are unlocked as well, and saving keeps the rights. Unencrypted documents and documents
     /// opened by the owner need nothing.
@@ -109,25 +111,32 @@ impl Session {
         if editor.cos.permissions().is_none_or(|p| p.owner) {
             return Ok(());
         }
+        let attachments_locked = editor.cos.embedded_files_locked();
         editor.cos.unlock(password).map_err(|e| match e {
             pdfcraft_cos::CosError::WrongPassword => EditError::WrongPassword,
             other => EditError::Protection(other.to_string()),
         })?;
         // Saving a state that keeps the security it was opened with reopens it with the same
-        // passwords, so it reopens as owner.
-        let reopen_as_owner = |cos: &pdfcraft_cos::Document, keys: &mut Keys| {
+        // passwords, so it reopens as owner. A state whose attachments the password unlocked is
+        // read with it from now on (the file, its attachments, and the file a save reopens).
+        let adopt = |cos: &pdfcraft_cos::Document, keys: &mut Keys, unlocked_attachments: bool| {
             if !cos.encryption_changed() {
                 keys.reopen = Some(password.to_owned());
+                if unlocked_attachments {
+                    keys.render = Some(password.to_owned());
+                }
             }
         };
-        reopen_as_owner(&editor.cos, &mut editor.keys);
+        adopt(&editor.cos, &mut editor.keys, attachments_locked);
         // Other states with the same restricted access are unlocked too; states opened with
         // other passwords (protection changed and saved since) stay as they are.
         for (_, cos, keys, _) in editor.undo.iter_mut().chain(editor.redo.iter_mut()) {
+            let locked = cos.embedded_files_locked();
             if cos.permissions().is_some_and(|p| !p.owner) && cos.unlock(password).is_ok() {
-                reopen_as_owner(cos, keys);
+                adopt(cos, keys, locked);
             }
         }
+        Self::adopt_keys(doc);
         Ok(())
     }
 
