@@ -115,7 +115,7 @@ pub fn input_for(data: &[u8], output: usize, max: usize) -> (Option<usize>, usiz
     }
 }
 
-/// [`input_for`] of raw deflate. The input is fed whole while it can't give the bytes still wanted
+/// [`input_for`] of raw deflate. The input is fed as many bytes at a time as can't give the bytes still wanted
 /// (a byte of deflate gives at most 258 bytes for each of its bits, and the bits held from bytes
 /// already fed a few matches more), then a byte at a time, so what is taken in when the output is
 /// reached is the least that reaches it.

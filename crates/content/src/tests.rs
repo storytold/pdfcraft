@@ -78,11 +78,23 @@ fn a_decoding_reader_ends_at_an_ei_whatever_surrounds_it() {
 /// An image that names its filters twice, `/Filter` and `/F` saying different things: a reader
 /// that takes `/F` ends the image after the ASCIIHex marker and draws the form, which the renderer
 /// reads as data; one that takes `/Filter` reads Flate. Where it ends can't be told, and no more
-/// when a key of its layout is given twice, differently. Spelt alike, the image is as with one
-/// spelling.
+/// when the filters' parameters or a key of its layout are given twice, differently, in both
+/// spellings or in one (Ghostscript keeps the first of a key given twice). Given alike, the image
+/// is as with one.
 #[test]
 fn an_image_whose_spellings_disagree_is_ambiguous() {
-    for (filters, ambiguous) in [("/Filter /Fl /F /AHx", 1), ("/F /Fl /Filter /AHx", 1), ("/Filter /Fl /F /Fl", 0)] {
+    for (filters, ambiguous) in [
+        ("/Filter /Fl /F /AHx", 1),
+        ("/F /Fl /Filter /AHx", 1),
+        ("/Filter /Fl /F /Fl", 0),
+        // Read by its last value or with one spelling, each of these is Flate's, whose end stands.
+        ("/F /AHx /F /Fl", 1),
+        ("/Filter /AHx /Filter /Fl", 1),
+        ("/F /Fl /DecodeParms null /DecodeParms << /Predictor 2 >>", 1),
+        ("/F /Fl /DecodeParms null /DP << /Predictor 2 >>", 1),
+        ("/F /Fl /DP null /DP << /Predictor 2 >>", 1),
+        ("/F /Fl /DP null /DecodeParms null /DP null", 0),
+    ] {
         let src = format!("q BI /W 2 /H 1 /CS /G /BPC 8 {filters} ID 00FF> EI Q /Fm Do q /GSEI gs Q");
         assert_eq!(parse(src.as_bytes()).ambiguous_images, ambiguous, "{filters}");
     }
@@ -94,6 +106,10 @@ fn an_image_whose_spellings_disagree_is_ambiguous() {
         ("/W 2 /H 1 /BitsPerComponent 4", 1),
         ("/W 2 /H 1 /ImageMask false /IM 1", 1),
         ("/Width 2 /W 2 /H 1", 0),
+        ("/W 6 /W 2 /H 1", 1),
+        ("/W 2 /H 1 /H 1 /W 2", 0),
+        // `/Interpolate` doesn't decide where the image ends.
+        ("/W 2 /H 1 /I true /I false", 0),
     ] {
         let src = format!("q BI {layout} /CS /G /BPC 8 ID ab EI Q");
         assert_eq!(parse(src.as_bytes()).ambiguous_images, ambiguous, "{layout}");
@@ -125,8 +141,6 @@ fn an_image_of_a_named_colour_space_with_an_earlier_ei_is_ambiguous() {
     assert_eq!(p.ambiguous_images, 0);
 }
 
-/// Where a decoding reader stops, in each way it can be told, against images it ends where the
-/// renderer does (0) and ones it ends elsewhere (1).
 /// ASCII85 of `bytes`, without the end-of-data marker: `z` for a group of zeros.
 fn a85(bytes: &[u8]) -> String {
     let mut out = String::new();
@@ -197,7 +211,7 @@ fn where_a_decoding_reader_stops_behind_a_second_filter_is_told_by_decoding() {
     let next_block = [&[0x78, 0x01, 0x00, 5, 0, 0xfa, 0xff, 1, 2, 3, 4, 5][..], &EI, &[0x82]].concat();
     // Each: the image's parameters, its inner filter, the data before ASCII85, how many `EI`s its
     // text holds, and whether the image counts.
-    let cases: [(&str, &str, Vec<u8>, usize, usize); 17] = [
+    let cases: [(&str, &str, Vec<u8>, usize, usize); 19] = [
         ("5 /H 1 /CS /G /BPC 8", "/Fl", flate.clone(), 1, 0),
         ("5 /H 1 /CS /G /BPC 8", "/Fl", [&flate[..], &EI].concat(), 2, 1),
         ("5 /H 1 /CS /G /BPC 8", "/Fl", next_block, 1, 1),
@@ -208,6 +222,10 @@ fn where_a_decoding_reader_stops_behind_a_second_filter_is_told_by_decoding() {
         ("5 /H 1 /CS /G /BPC 8 /DP [null null]", "/Fl", flate.clone(), 1, 0),
         ("5 /H 1 /CS /G /BPC 8 /DP [null << >>]", "/Fl", flate.clone(), 1, 0),
         ("5 /H 1 /CS /G /BPC 8 /DecodeParms << >>", "/Fl", flate.clone(), 1, 0),
+        // Parameters that say nothing in one spelling, or given first, and a predictor in the
+        // other: a reader may take the predictor, which it can't set up.
+        ("5 /H 1 /CS /G /BPC 8 /DecodeParms null /DP [null << /Predictor 99 >>]", "/Fl", flate.clone(), 1, 1),
+        ("5 /H 1 /CS /G /BPC 8 /DP [null << /Predictor 99 >>] /DP [null null]", "/Fl", flate.clone(), 1, 1),
         ("5 /H 1 /CS /Cs1 /BPC 8", "/Fl", flate.clone(), 1, 1),
         ("7 /H 1 /CS /G /BPC 8", "/RL", rl.clone(), 1, 0),
         ("7 /H 1 /CS /G /BPC 8", "/RL", [&rl[..], &[0, 0, 0], &EI].concat(), 2, 1),
@@ -226,6 +244,8 @@ fn where_a_decoding_reader_stops_behind_a_second_filter_is_told_by_decoding() {
     }
 }
 
+/// Where a decoding reader stops, in each way it can be told, against images it ends where the
+/// renderer does (0) and ones it ends elsewhere (1).
 #[test]
 fn where_a_decoding_reader_stops_is_told_from_the_filter_and_the_layout() {
     let at = |params: &str, data: &[u8]| {

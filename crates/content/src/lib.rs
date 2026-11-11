@@ -307,11 +307,14 @@ struct Inline {
 /// page draws after the image, and redaction must see the same ones, so the end is taken from
 /// the renderer's tokenizer (hayro-syntax) rather than worked out here by another rule. Only
 /// when that tokenizer reads no image does this parser fall back to its own rules, and the
-/// image is marked ambiguous.
+/// image is marked ambiguous. It is marked so too when another reader may end it elsewhere
+/// ([`ends_elsewhere`]), or when a key its end goes by is given twice, differently ([`END_KEYS`]).
 fn inline_image(data: &[u8], bi: usize, pos: usize, scan: &mut ImageEnds) -> Inline {
     let mut lx = Lexer::new(data, pos);
     let mut dict = Dict::new();
     let mut readable = true;
+    // A key the image's end goes by, given twice with different values (`END_KEYS`).
+    let mut repeated = false;
     let mut stop = pos;
     loop {
         lx.skip_ws();
@@ -332,6 +335,7 @@ fn inline_image(data: &[u8], bi: usize, pos: usize, scan: &mut ImageEnds) -> Inl
             stop = at;
             break;
         };
+        repeated |= END_KEYS.iter().any(|(long, short)| k == *long || k == *short) && dict.get(&k).is_some_and(|old| *old != v);
         dict.set(k, v);
     }
     if let Some((start, end_data, end)) = renderer_image_end(data, bi) {
@@ -347,8 +351,9 @@ fn inline_image(data: &[u8], bi: usize, pos: usize, scan: &mut ImageEnds) -> Inl
         // The renderer draws an image whose parameters this parser can't read: it is not
         // represented here, so a redaction can't inspect or remove it and must not trust the page.
         // Nor when a reader that decodes the data may end the image at another `EI`: it reads as
-        // operators what the renderer reads as data, or the other way round.
-        let ambiguous = !readable || ends_elsewhere(data, (lx.pos + 1).min(data.len()), end.saturating_sub(2), &dict, scan);
+        // operators what the renderer reads as data, or the other way round. Nor when a key its end
+        // goes by is given twice, differently: readers keep either value.
+        let ambiguous = !readable || repeated || ends_elsewhere(data, (lx.pos + 1).min(data.len()), end.saturating_sub(2), &dict, scan);
         return Inline { image: readable.then(|| (dict, samples.to_vec())), end, ambiguous };
     }
     if !readable {
@@ -462,30 +467,35 @@ fn outer_filter(dict: &Dict) -> (Outer, bool) {
     (kind, sole)
 }
 
-/// Whether an inline image gives a key in both its spellings, saying different things: its filters,
-/// or a key of its layout. Readers may take either.
+/// The keys of an inline image that this parser reads where it ends by, in both their spellings:
+/// its filters and their parameters, and its layout. Of a key in both spellings readers may take
+/// either, and of one given twice either value (Ghostscript keeps the first, the renderer and
+/// Poppler the last). A `/Decode` a reader refuses ends the image elsewhere too, and isn't read.
+const END_KEYS: [(&[u8], &[u8]); 7] = [
+    (b"Filter", b"F"),
+    (b"DecodeParms", b"DP"),
+    (b"Width", b"W"),
+    (b"Height", b"H"),
+    (b"ColorSpace", b"CS"),
+    (b"BitsPerComponent", b"BPC"),
+    (b"ImageMask", b"IM"),
+];
+
+/// Whether an inline image gives a key of [`END_KEYS`] in both its spellings, saying different
+/// things. Readers may take either.
 fn spellings_disagree(dict: &Dict) -> bool {
-    [
-        (b"Filter".as_slice(), b"F".as_slice()),
-        (b"Width", b"W"),
-        (b"Height", b"H"),
-        (b"ColorSpace", b"CS"),
-        (b"BitsPerComponent", b"BPC"),
-        (b"ImageMask", b"IM"),
-    ]
-    .into_iter()
-    .any(|(long, short)| matches!((dict.get(long), dict.get(short)), (Some(long), Some(short)) if long != short))
+    END_KEYS.into_iter().any(|(long, short)| matches!((dict.get(long), dict.get(short)), (Some(long), Some(short)) if long != short))
 }
 
 /// Whether a reader that decodes an inline image (Poppler does) may end it at another `EI` than the
 /// renderer's, at `ei`. Such a reader reads the data through its filters until it has the samples
 /// the image needs, or until the filter's end-of-data marker, and ends the image at the first `EI`
 /// after that, whatever the bytes around it; an image it can't decode it ends at the first `EI`
-/// after `ID`. Where it stops is worked out exactly with no filter and the layout of a device
-/// colour space ([`layout_bytes`]), or with one ASCIIHex or ASCII85 filter and such a layout, by
+/// after `ID`. Where it stops is worked out exactly with no filter and a layout this parser knows
+/// ([`layout_bytes`]), or with one ASCIIHex or ASCII85 filter and such a layout, by
 /// counting its characters up to `ei` (a reader that needs more ends elsewhere). Otherwise the
 /// image counts unless no `EI` comes before the renderer's and, behind ASCIIHex or ASCII85, the
-/// marker does; behind them and Flate or RunLength, an `EI` before the renderer's counts only where
+/// marker does; behind them and then only Flate or RunLength, an `EI` before the renderer's counts only where
 /// the reader may stop before it, told by decoding ([`chain_stop`]). A colour space named as a
 /// resource has a layout only the page's resources tell, which this parser can't look up: a reader
 /// that can reads by it, possibly past the renderer's `EI`, and that is missed here, as is a colour
