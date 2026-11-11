@@ -6947,6 +6947,26 @@ fn radio_buttons_without_as_sharing_the_value_show_one_on() {
     assert_eq!(on_widgets(&doc, "r").0, [false, true, false]);
 }
 
+/// Two buttons share the on state `Yes`; the first is on by its `/AS` and the second is read-only
+/// and off. `/V` is `Yes` for both, but only the first is selected: picking another option switches
+/// the first off, which is allowed, and the read-only one never changes.
+#[test]
+fn a_read_only_button_sharing_the_on_state_of_the_selected_one_does_not_block() {
+    let mut doc = radio_without_as(49152, "/Ff 1 /AS /Off");
+    doc.update_dict(pdfcraft_cos::ObjRef::new(6, 0), |d| d.set(b"AS".to_vec(), Object::name("Yes"))).unwrap();
+    set_value(&mut doc, "r", &FieldValue::Radio(Some("No".into()))).expect("the writable selected button may be switched off");
+    assert_eq!(on_widgets(&doc, "r").0, [false, false, true]);
+}
+
+/// Selecting another button through `FieldValue::Widget` can't switch a read-only selected one off.
+#[test]
+fn a_read_only_selected_radio_button_is_not_left_by_picking_a_widget() {
+    let mut doc = radio_group_form();
+    doc.update_dict(pdfcraft_cos::ObjRef::new(6, 0), |d| d.set(b"Ff".to_vec(), Object::Int(1))).unwrap();
+    assert!(matches!(set_value(&mut doc, "size", &FieldValue::Widget(2)), Err(FormError::ReadOnly(_))));
+    assert_eq!(field(&fields(&doc), "size").value, ["S"]);
+}
+
 /// Table 227, ReadOnly: a processor "shall not allow a user to change the value". A button whose own
 /// dictionary sets it can't be turned on by number.
 #[test]

@@ -356,6 +356,9 @@ fn write_value_impl(doc: &mut Document, f: &Field, value: &FieldValue, scripts: 
             let Some(state) = f.widgets.get(*i).and_then(|w| w.on_state.clone()) else {
                 return invalid(format!("{:?} has no button {} with an on state", f.name, i.saturating_add(1)));
             };
+            if f.kind == FieldKind::Radio && radio_change_blocked(f, Some(&state), Some(*i)) {
+                return Err(FormError::ReadOnly(f.name.clone()));
+            }
             set_states(doc, f, Some(&state), Some(*i))
         }
         (FieldKind::CheckBox, v) => {
@@ -406,13 +409,7 @@ fn write_value_impl(doc: &mut Document, f: &Field, value: &FieldValue, scripts: 
             if choice.is_none() && f.has(flags::NO_TOGGLE_TO_OFF) && !f.value.is_empty() {
                 return invalid(format!("{:?} must keep one option selected", f.name));
             }
-            // A button of the group can be read-only on its own: it can't be picked, and a
-            // selected one can't be switched off by picking another.
-            let selects = |w: &Widget| w.on_state.is_some() && w.on_state.as_deref() == choice.as_deref();
-            // (the group's /V names its selection too, when a button's /AS says nothing)
-            let selected =
-                |w: &Widget| (w.state.is_some() && w.state == w.on_state) || w.on_state.as_deref().is_some_and(|on| f.value.iter().any(|v| v == on));
-            if f.widgets.iter().any(|w| w.read_only && (selects(w) || selected(w))) {
+            if radio_change_blocked(f, choice.as_deref(), None) {
                 return Err(FormError::ReadOnly(f.name.clone()));
             }
             set_states(doc, f, choice.as_deref(), None)
@@ -550,17 +547,49 @@ pub(crate) fn scroll_widgets(doc: &mut Document, f: &Field, picked: &[usize], co
     Ok(())
 }
 
+/// The one widget of an exclusive radio group that turns on when `on` is chosen (`pick` when it has
+/// that state, else the one already on, else the first); `None` when `on` is `None` or the group
+/// turns every widget with that state on together.
+fn chosen_widget(f: &Field, on: Option<&str>, pick: Option<usize>) -> Option<usize> {
+    let exclusive = f.kind == FieldKind::Radio && !f.has(flags::RADIOS_IN_UNISON);
+    on.filter(|_| exclusive).and_then(|c| {
+        let has = |i: &usize| f.widgets.get(*i).is_some_and(|w| w.on_state.as_deref() == Some(c));
+        let n = f.widgets.len();
+        pick.filter(has).or_else(|| (0..n).filter(has).find(|&i| f.widget_on(i))).or_else(|| (0..n).find(has))
+    })
+}
+
+/// Whether setting a radio group to `on` (through widget `pick`, when the caller chose a widget)
+/// would turn a read-only button on or off: such a button can't be picked, and a selected one can't
+/// be switched off by picking another. Judged per widget, by the state `set_states` would give it,
+/// so buttons sharing an on-state name are told apart by their `/AS`; the group's `/V` stands for
+/// the selection only when no button's `/AS` says which is on.
+fn radio_change_blocked(f: &Field, on: Option<&str>, pick: Option<usize>) -> bool {
+    let chosen = chosen_widget(f, on, pick);
+    let before = |i: usize, w: &Widget| {
+        let Some(s) = w.on_state.as_deref() else { return false };
+        if f.widget_on(i) {
+            return true;
+        }
+        // No button sharing this on state is on by its `/AS` and the group's `/V` names it: the
+        // first of them holds the selection, whatever its own `/AS` says (an `Off` among them).
+        let sharing = |x: &Widget| x.on_state.as_deref() == Some(s);
+        f.value.first().map(String::as_str) == Some(s)
+            && !f.widgets.iter().any(|x| sharing(x) && x.state.as_deref() == Some(s))
+            && f.widgets.iter().position(sharing) == Some(i)
+    };
+    f.widgets.iter().enumerate().any(|(i, w)| {
+        let after = on.is_some() && w.on_state.as_deref() == on && chosen.is_none_or(|k| k == i);
+        w.read_only && before(i, w) != after
+    })
+}
+
 /// Check boxes and radio buttons: `/V` on the field, `/AS` on each widget. The widgets whose on
 /// state is `on` turn on together in a check box (ISO 32000-2 §12.7.5.2.3, EXAMPLE 2) and in a
 /// radio group with RadiosInUnison. Without it, at most one radio button is on (Table 229,
 /// §12.7.5.2.3): widget `pick` when it has that state, else the one already on, else the first.
 fn set_states(doc: &mut Document, f: &Field, on: Option<&str>, pick: Option<usize>) -> Result<(), FormError> {
-    let exclusive = f.kind == FieldKind::Radio && !f.has(flags::RADIOS_IN_UNISON);
-    let chosen = on.filter(|_| exclusive).and_then(|c| {
-        let has = |i: &usize| f.widgets.get(*i).is_some_and(|w| w.on_state.as_deref() == Some(c));
-        let n = f.widgets.len();
-        pick.filter(has).or_else(|| (0..n).filter(has).find(|&i| f.widget_on(i))).or_else(|| (0..n).find(has))
-    });
+    let chosen = chosen_widget(f, on, pick);
     // `/V` names the on state, the same for every widget that has it: which of them is on is
     // their `/AS` alone (§12.7.5.2.4).
     let v = on.unwrap_or("Off");
