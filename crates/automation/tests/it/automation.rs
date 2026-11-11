@@ -8395,7 +8395,6 @@ fn a_dynamic_xfa_forms_signature_box_is_signed_under_its_som_path() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-
 /// Digital IDs are created and opened, documents signed with them and their signatures validated,
 /// all through the tools.
 #[test]
@@ -8433,6 +8432,7 @@ fn named_layer_verdicts_are_reported_and_rendered_through_tools() {
     assert!(red > 100, "the invalid state is drawn: {red} red pixels");
     ok(&mut a, "doc_save", json!({"doc": doc, "path": "saved.pdf", "full": false}));
     assert_eq!(std::fs::read(dir.join("saved.pdf")).unwrap(), original, "the drawn state never enters saves");
+}
 
 /// The PKCS #11 token path end to end, against the SoftHSM bench the `pdfcraft-sign` tests
 /// use: `PDFCRAFT_PKCS11_MODULE` names the module, whose token holds the "Test Signer RSA"
@@ -8469,7 +8469,6 @@ fn signing_with_a_pkcs11_token_through_tools() {
     let r = ok(&mut a, "sign_document", json!({ "doc": doc, "id": reference, "password": "1234", "out": "token-signed.pdf" }));
     assert_eq!(r["signature"]["signer"], "Test Signer RSA");
     assert!(dir.join("token-signed.pdf").exists());
- (fix(sign): address CodeRabbit review on the PKCS #11 PR)
 }
 
 #[test]
