@@ -19,86 +19,17 @@ pub(crate) const MAX_ARRAY_LENGTH: u64 = 1 << 20;
 /// Maximum calculated field scripts evaluated by `calculateNow()` during one JavaScript run.
 pub(crate) const MAX_CALCULATE_STEPS: usize = 4096;
 
-/// Deepest nesting of `(`, `[` and `{`.
-const MAX_BRACKET_DEPTH: usize = 64;
-
-/// Longest run of prefix operators (`!`, `~`, `+`, `-`).
-const MAX_PREFIX_RUN: usize = 64;
-
-/// Most `?` (conditional expressions nest without brackets).
-const MAX_CONDITIONALS: usize = 4096;
-
 /// The script thread's stack.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) const SCRIPT_STACK: usize = 1 << 30;
 
-/// Why `source` is refused, if it is: too long, or nested deeper than any form needs. Strings
-/// and comments are skipped; brackets in regular expressions and templates count, which only
-/// errs on the safe side.
+/// Why `source` is refused, if it is: too long, or nested deeper than any form needs, which
+/// would overflow the stack in boa's parser ([`crate::nesting`]).
 pub(crate) fn refuse(source: &str) -> Option<String> {
     if source.len() > MAX_SCRIPT_BYTES {
         return Some(format!("the script is too long ({} KiB; the limit is {} KiB)", source.len() / 1024, MAX_SCRIPT_BYTES / 1024));
     }
-    let too_deep = || Some("the script is nested too deeply to run safely".to_string());
-    let b = source.as_bytes();
-    let (mut depth, mut prefix, mut conditionals) = (0usize, 0usize, 0usize);
-    let mut i = 0;
-    while let Some(&c) = b.get(i) {
-        i += 1;
-        match c {
-            b'\'' | b'"' => {
-                // To the closing quote (or the end of the line, where an unclosed string ends).
-                while let Some(&d) = b.get(i) {
-                    i += 1;
-                    if d == b'\\' {
-                        i += 1;
-                    } else if d == c || d == b'\n' {
-                        break;
-                    }
-                }
-                prefix = 0;
-            }
-            b'/' if b.get(i) == Some(&b'/') => {
-                while b.get(i).is_some_and(|d| *d != b'\n') {
-                    i += 1;
-                }
-            }
-            b'/' if b.get(i) == Some(&b'*') => {
-                i += 1;
-                while i < b.len() && !b[i..].starts_with(b"*/") {
-                    i += 1;
-                }
-                i += 2;
-            }
-            b'(' | b'[' | b'{' => {
-                depth += 1;
-                if depth > MAX_BRACKET_DEPTH {
-                    return too_deep();
-                }
-                prefix = 0;
-            }
-            b')' | b']' | b'}' => {
-                depth = depth.saturating_sub(1);
-                prefix = 0;
-            }
-            b'!' | b'~' | b'+' | b'-' => {
-                prefix += 1;
-                if prefix > MAX_PREFIX_RUN {
-                    return too_deep();
-                }
-            }
-            b'?' => {
-                conditionals += 1;
-                if conditionals > MAX_CONDITIONALS {
-                    return too_deep();
-                }
-                prefix = 0;
-            }
-            c if c.is_ascii_whitespace() => {}
-            _ => prefix = 0,
-        }
-    }
-    None
+    crate::nesting::too_deep(source).then(|| "the script is nested too deeply to run safely".to_string())
 }
 
 /// Run `script` for `event`, after the document-level scripts (`doc_scripts`, which define the
