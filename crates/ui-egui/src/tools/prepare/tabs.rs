@@ -211,6 +211,8 @@ pub(super) fn validate_tab(ui: &mut egui::Ui, d: &mut FieldDraft) {
     }
 }
 
+/// Draw the Actions tab: a form to add an action for a trigger (or change the script of the one
+/// being edited), then the field's actions, each with Delete, and Edit for a script.
 pub(super) fn actions_tab(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::theme::Tokens) {
     use pdfcraft_engine::FieldTrigger as T;
     let editing = d.editing.is_some();
@@ -331,6 +333,8 @@ pub(super) fn actions_tab(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::them
 /// unless another calculation is chosen. The JavaScript engine runs no script past 256 KiB either.
 const MAX_EDITED_SCRIPT: usize = 256 * 1024;
 
+/// Draw the Calculate tab: no calculation, an operation over chosen fields, simplified field
+/// notation, or a custom calculation script (shown read-only past [`MAX_EDITED_SCRIPT`]).
 pub(super) fn calculate_tab(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::theme::Tokens) {
     #[derive(PartialEq, Clone, Copy)]
     enum Mode {

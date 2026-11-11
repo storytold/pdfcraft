@@ -65,8 +65,9 @@ pub fn asked_for_the_clipboard(h: &Harness<'static, PdfCraftApp>) -> bool {
 }
 
 /// The colour the last frame painted `word` of `script` in, where `word` is one token of it, or
-/// `None` when nothing painted `script` whole.
+/// `None` when nothing painted `script` whole or `word` isn't a piece of it on its own.
 pub fn painted_colour(h: &Harness<'static, PdfCraftApp>, script: &str, word: &str) -> Option<egui::Color32> {
+    /// `word`'s colour in `shape`, looking inside lists of shapes for the text that is `script`.
     fn walk(shape: &egui::Shape, script: &str, word: &str) -> Option<egui::Color32> {
         match shape {
             egui::Shape::Vec(shapes) => shapes.iter().find_map(|s| walk(s, script, word)),

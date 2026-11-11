@@ -804,6 +804,7 @@ mod tests {
         tokens
     }
 
+    /// The colour of `token` among `tokens`, or `None` when it isn't a piece of its own.
     fn colour_of(tokens: &[(String, Color32)], token: &str) -> Option<Color32> {
         tokens.iter().find(|(text, _)| text == token).map(|(_, colour)| *colour)
     }
