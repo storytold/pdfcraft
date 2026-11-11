@@ -387,6 +387,7 @@ fn app_alert_titles_are_clipped_and_charged() {
         requests: Vec::new(),
         doc: doc(),
         kept: 0,
+        retained: 0,
         dropped: 0,
     };
     h.alert(Message { title: Some("Order form".into()), ..Message::plain("Saved") });
@@ -2104,4 +2105,16 @@ fn a_plain_form_sees_the_xfa_version_but_not_installed() {
     assert_eq!(o.error, None);
     assert_eq!(o.value, "undefined number 3.5");
     assert_eq!(o.alerts, [Message::plain("old viewer")]);
+}
+
+/// Arrays assigned to several fields are held to one run-wide budget, and replacing a field's
+/// array frees its charge.
+#[test]
+fn retained_array_text_is_charged_across_fields() {
+    let fill = "var s = 'x'; while (s.length < 65536) s += s; var a = []; for (var i = 0; i < 320; i++) a.push(s);";
+    let one = |tail: &str| go(&format!("{fill} {tail}"), &Event::field("Calculate", "total", ""));
+    let o = one("getField('qty').textColor = a; getField('qty').textColor = a; getField('zip').textColor = ['RGB'];");
+    assert_eq!(o.error, None, "replacing an array frees its charge: {:?}", o.error);
+    let o = one("getField('qty').textColor = a; getField('zip').fillColor = a;");
+    assert!(o.error.as_deref().is_some_and(|e| e.contains("hold more than")), "{:?}", o.error);
 }

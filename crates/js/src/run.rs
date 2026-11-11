@@ -209,6 +209,7 @@ fn run_here(
         requests: Vec::new(),
         doc: doc.clone(),
         kept: 0,
+        retained: 0,
         dropped: 0,
     }));
     let mut out = Outcome { rc: true, value: event.value.clone(), change: event.change.clone(), ..Default::default() };

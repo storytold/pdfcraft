@@ -1,4 +1,4 @@
-use super::host::{arg, colour, error, function, host, read, s, set_value, strings, text, value_of, write};
+use super::host::{arg, charge, colour, error, function, host, kind_of, read, s, strings, text, text_bytes, value_for, value_of, write};
 use super::model::{DISPLAY_HIDDEN, DISPLAY_VISIBLE, FieldType, Request};
 use super::{Attribute, Context, JsArray, JsObject, JsResult, JsString, JsValue, NativeFunction, ObjectInitializer, js_string};
 
@@ -17,8 +17,9 @@ pub(crate) fn field_object(ctx: &mut Context, name: &str) -> JsObject {
     let value_get = getter!(ctx, n, |f, c| value_of(&f, c));
     let value_set = {
         fn set(_: &JsValue, args: &[JsValue], name: &JsString, c: &mut Context) -> JsResult<JsValue> {
-            let vals = strings(&arg(args, 0), c)?;
-            write(c, name, |f| set_value(f, vals))?;
+            let vals = value_for(kind_of(c, name)?, strings(&arg(args, 0), c)?);
+            charge(c, name, |f| text_bytes(&f.value), text_bytes(&vals))?;
+            write(c, name, |f| f.value = vals)?;
             Ok(JsValue::undefined())
         }
         function(ctx, NativeFunction::from_copy_closure_with_captures(set, n.clone()))
@@ -80,6 +81,7 @@ pub(crate) fn field_object(ctx: &mut Context, name: &str) -> JsObject {
     let text_color_set = {
         fn set(_: &JsValue, args: &[JsValue], name: &JsString, c: &mut Context) -> JsResult<JsValue> {
             let v = strings(&arg(args, 0), c)?;
+            charge(c, name, |f| f.text_color.as_deref().map_or(0, text_bytes), text_bytes(&v))?;
             write(c, name, |f| f.text_color = Some(v))?;
             Ok(JsValue::undefined())
         }
@@ -89,6 +91,7 @@ pub(crate) fn field_object(ctx: &mut Context, name: &str) -> JsObject {
     let fill_color_set = {
         fn set(_: &JsValue, args: &[JsValue], name: &JsString, c: &mut Context) -> JsResult<JsValue> {
             let v = strings(&arg(args, 0), c)?;
+            charge(c, name, |f| f.fill_color.as_deref().map_or(0, text_bytes), text_bytes(&v))?;
             write(c, name, |f| f.fill_color = Some(v))?;
             Ok(JsValue::undefined())
         }
