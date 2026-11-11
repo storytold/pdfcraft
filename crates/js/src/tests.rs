@@ -1144,6 +1144,31 @@ mod xfa_model {
         assert_eq!(o.result.as_deref(), Some("2"));
     }
 
+    #[test]
+    fn descendant_manager_precedes_a_later_direct_field() {
+        let mut model = form();
+        model.children.push(field("_row", "form1[0]._row[0]", "later", false));
+        let event = XfaEvent { activity: "click".into(), target: "form1[0].page1[0].go[0]".into(), ..Default::default() };
+        let o = run_xfa("this.resolveNode('$form.._row').addInstance(1)", &event, &XfaDoc::default(), &model, Limits::default());
+        assert_eq!(o.error, None, "{o:?}");
+        assert_eq!(o.effects, vec![XfaEffect::AddInstance { som: "form1[0].page1[0].table[0].row[2]".into() }]);
+    }
+
+    #[test]
+    fn bare_manager_precedes_a_real_field_in_an_outer_scope() {
+        let mut model = form();
+        model.children[0].children.push(field("_row", "form1[0].page1[0]._row[0]", "outer", false));
+        let event = XfaEvent { activity: "click".into(), target: "form1[0].page1[0].table[0].row[1].amount[0]".into(), ..Default::default() };
+        let o = run_xfa("this.resolveNode('_row').addInstance(1)", &event, &XfaDoc::default(), &model, Limits::default());
+        assert_eq!(o.error, None, "{o:?}");
+        assert_eq!(o.effects, vec![XfaEffect::AddInstance { som: "form1[0].page1[0].table[0].row[2]".into() }]);
+
+        let event = XfaEvent { activity: "click".into(), target: "form1[0].page1[0].go[0]".into(), ..Default::default() };
+        let o = run_xfa("this.resolveNode('_row').rawValue", &event, &XfaDoc::default(), &model, Limits::default());
+        assert_eq!(o.error, None, "{o:?}");
+        assert_eq!(o.result.as_deref(), Some("outer"));
+    }
+
     /// `xfa.host`, `xfa.layout`, `xfa.event` and `app` calls become effects, and messages keep
     /// their details.
     #[test]

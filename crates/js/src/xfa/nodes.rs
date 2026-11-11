@@ -195,13 +195,20 @@ fn descendant_manager<'a>(h: &XHost, parent: usize, step: &str, name: &'a str, i
     if depth > MAX_DEPTH {
         return None;
     }
-    if let Some(found) = manager_child(h, parent, step, name, index) {
-        return Some(found);
-    }
+    // Match the parent's child in its document position, after earlier child subtrees.
+    // A real child suppresses that parent's manager, even if the row occurs first.
+    let candidate = manager_child(h, parent, step, name, index);
     for &child in h.nodes.get(parent)?.children.iter() {
-        if h.nodes.get(child).is_some_and(|n| !n.gone)
-            && let Some(found) = descendant_manager(h, child, step, name, index, depth + 1)
-        {
+        let Some(node) = h.nodes.get(child).filter(|node| !node.gone) else { continue };
+        let at_child = match &candidate {
+            Some(ManagerMatch::Node(found)) => *found == child,
+            Some(ManagerMatch::Manager(..)) => &*node.name == name,
+            None => false,
+        };
+        if at_child {
+            return candidate;
+        }
+        if let Some(found) = descendant_manager(h, child, step, name, index, depth + 1) {
             return Some(found);
         }
     }
@@ -222,14 +229,20 @@ fn manager_at<'a>(h: &XHost, from: usize, expr: &'a str) -> Option<ManagerMatch<
     };
     let name = step.strip_prefix('_').filter(|name| !name.is_empty())?;
     if prefix.is_empty() {
-        if let Some(node) = resolve_som(h, from, expr).into_iter().next() {
-            return Some(ManagerMatch::Node(node));
+        // An unqualified name checks children, then siblings, then each enclosing scope.
+        // Check each scope's real child and manager together before moving outward.
+        let mut at = Some(from);
+        let mut depth = 0;
+        while let Some(scope) = at
+            && depth < MAX_DEPTH
+        {
+            if let Some(found) = manager_child(h, scope, step, name, index) {
+                return Some(found);
+            }
+            at = h.nodes.get(scope)?.parent;
+            depth += 1;
         }
-        if index != 0 {
-            return None;
-        }
-        let row = resolve_som(h, from, name).into_iter().next()?;
-        return h.nodes.get(row)?.parent.map(|parent| ManagerMatch::Manager(parent, name));
+        return None;
     }
     let descendant = prefix.ends_with('.');
     let parents = resolve_som(h, from, if descendant { prefix.strip_suffix('.').unwrap_or(prefix) } else { prefix });
