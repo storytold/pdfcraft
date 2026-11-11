@@ -10,7 +10,7 @@
 //!   cleared in a copy of the image (or the image is removed when its codec can't be re-encoded);
 //!   inline images under a region are removed;
 //! - vectors: fully covered paths are removed; partly covered ones are clipped so nothing shows
-//!   inside the regions; shadings are clipped the same way;
+//!   inside the regions; a shading whose clip can reach a region is removed;
 //! - form XObjects under a region are rewritten recursively into new objects (copy-on-write, so
 //!   other pages using the original are untouched).
 //!
@@ -30,7 +30,7 @@ mod layers;
 mod prune;
 
 use layers::strip_hidden_layers;
-use prune::{clip_out, extgstate_font, prune_form_resources};
+use prune::{extgstate_font, prune_form_resources};
 pub(crate) use prune::{prune, prune_patterns, prune_properties, resource_ops, unlink_doomed, unlink_pruned_patterns, unlink_undrawn};
 
 /// How deep this pass follows form XObjects. A form past it is removed rather than walked, which
@@ -46,6 +46,14 @@ pub(crate) const MAX_DEPTH: usize = 50;
 // A form a reader still shows must be walkable here, or a redaction removes content that is
 // visible; the build says so rather than a test, so the two limits cannot drift apart.
 const _: () = assert!(MAX_DEPTH >= pdfcraft_edit::text::MAX_FORM_DEPTH);
+
+/// The clip box before any clipping path: unbounded, so an unclipped shading reaches a mark
+/// wherever it lies. The box only meets `intersect` and `overlaps`, which take infinities.
+const UNCLIPPED: [f64; 4] = [f64::NEG_INFINITY, f64::NEG_INFINITY, f64::INFINITY, f64::INFINITY];
+
+fn intersect(a: [f64; 4], b: [f64; 4]) -> [f64; 4] {
+    [a[0].max(b[0]), a[1].max(b[1]), a[2].min(b[2]), a[3].min(b[3])]
+}
 /// Bounds on the removed text collected for the metadata check (#2448).
 const MAX_RUNS: usize = 100_000;
 const MAX_RUN_BYTES: usize = 64 * 1024;
@@ -93,6 +101,10 @@ struct Gs {
     scale: f64,
     leading: f64,
     rise: f64,
+    /// A box around the current clip, in device space: the intersection of the boxes of the
+    /// clipping paths in force (and form bounding boxes). Clips this pass does not track (text
+    /// clipping modes) only make it wider, so a hit test on it is conservative.
+    clip: [f64; 4],
     /// The tiling or shading pattern selected as the fill colour (`/Name scn`), and as the stroke
     /// colour (`/Name SCN`). Part of the graphics state, so `q`/`Q` save and restore them with
     /// everything else. A pattern's cell is a content stream of its own and this pass does not
@@ -131,7 +143,7 @@ pub(crate) struct Output {
     /// through a font set by `Tf` or an ExtGState: which of the page's patterns it paints with is
     /// not tracked, so the page keeps them all.
     pub keeps_all_patterns: bool,
-    /// Original property values retired by this scope or a nested form. Other resource holders
+    /// Original property and shading values retired by this scope or a nested form. Other resource holders
     /// may still name them; unlink only entries no surviving content uses.
     pub retired_properties: Vec<Object>,
     /// Glyphs / inline images still overlapping a region (verify mode).
@@ -394,6 +406,7 @@ pub(crate) fn process(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<
         scale: 1.0,
         leading: 0.0,
         rise: 0.0,
+        clip: UNCLIPPED,
         fill_pattern: None,
         stroke_pattern: None,
         type3_inherits: false,
@@ -559,7 +572,7 @@ impl Walk {
             }
             b"Tj" | b"TJ" | b"'" | b"\"" => self.show_text(scope, op, piece),
             b"BI" => Self::inline_image(&self.gs, scope, &mut self.out, op, piece),
-            b"sh" if scope.mode == Mode::Apply => Self::shading(&self.gs, scope, &mut self.clipped, op, piece),
+            b"sh" => Self::shading(&self.gs, scope, &mut self.out, op, piece),
             b"Do" => self.draw_xobject(doc, scope, resources, op, piece),
             // `/Name scn` selects a pattern as the fill colour; numbers select a plain colour
             // and clear it. `cs` with a space other than /Pattern clears it too.
@@ -634,6 +647,10 @@ impl Walk {
         let clips = std::mem::replace(&mut self.clip, false);
         let hit = scope.mode == Mode::Apply && op.op.as_slice() != b"n" && bbox.is_some_and(|b| scope.hits(b));
         if !hit {
+            // The clip narrows only when the clipping path is written: a dropped one clips nothing.
+            if clips && let Some(b) = bbox {
+                self.gs.clip = intersect(self.gs.clip, b);
+            }
             // The paint survives, so the pattern it draws with is still in use. `n` paints
             // nothing, so it uses none. A hit path is removed whole (F-008), pattern and all.
             let o = op.op.as_slice();
@@ -648,6 +665,7 @@ impl Walk {
         piece.changed = true;
         scope.report.paths_removed += 1;
         if scope.covered(b) && clips {
+            self.gs.clip = intersect(self.gs.clip, b);
             // Everything this clip lets through is under a mark, so an empty clip hides the same
             // content. The original outline is confidential and must not stay in the stream.
             for o in ["re", "W", "n"] {
@@ -821,16 +839,19 @@ impl Walk {
         None
     }
 
-    /// A shading fills the current clip: the regions are clipped out. Removing hidden content has
-    /// no regions, so the shading and its name stay as they are.
-    fn shading(gs: &Gs, scope: &Scope<'_>, clipped: &mut HashSet<usize>, op: Op, piece: &mut Piece) -> Option<Op> {
-        let Some(c) = clip_out(scope.rects, &gs.ctm, [-1e6, -1e6, 1e6, 1e6]).filter(|c| !c.is_empty()) else { return Some(op) };
+    /// A shading fills the current clip: one whose clip can reach a region is removed (or
+    /// counted, when verifying). Clipping the regions out of it would keep the shading's data,
+    /// and what it drew under the mark, in the file.
+    fn shading(gs: &Gs, scope: &mut Scope<'_>, out: &mut Output, op: Op, piece: &mut Piece) -> Option<Op> {
+        if !scope.hits(gs.clip) {
+            return Some(op);
+        }
+        if scope.mode == Mode::Verify {
+            out.residue += 1;
+            return Some(op);
+        }
+        scope.report.shadings_removed += 1;
         piece.changed = true;
-        clipped.insert(op.span.start);
-        piece.ops.push(Op::new("q", vec![]));
-        piece.ops.extend(c);
-        piece.ops.push(op);
-        piece.ops.push(Op::new("Q", vec![]));
         None
     }
 
@@ -1188,7 +1209,8 @@ fn xobject(
             let res = own.clone().unwrap_or_else(|| resources.clone());
             let saved_fonts = std::mem::take(&mut scope.fonts);
             scope.depth += 1;
-            let inner = process_from(doc, scope, std::slice::from_ref(&data), &res, Gs { ctm: fctm, ..gs.clone() });
+            let clip = bbox.map_or(gs.clip, |bb| intersect(gs.clip, fctm.bbox(bb)));
+            let inner = process_from(doc, scope, std::slice::from_ref(&data), &res, Gs { ctm: fctm, clip, ..gs.clone() });
             scope.depth -= 1;
             scope.fonts = saved_fonts;
             out.residue += inner.residue;

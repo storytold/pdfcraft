@@ -1,7 +1,32 @@
 use super::{
-    CosError, DecodeBudget, Dict, Document, HashMap, HashSet, MAX_DEPTH, Matrix, Metrics, ObjRef, Object, Op, Pieces, Rc, RedactError, Scope,
-    is_vertical, num, overlaps, page_streams, res_dict,
+    CosError, DecodeBudget, Dict, Document, HashMap, HashSet, MAX_DEPTH, Metrics, ObjRef, Object, Op, Pieces, Rc, RedactError, Scope, is_vertical,
+    page_streams, res_dict,
 };
+
+fn property_used(op: &Op) -> Option<&[u8]> {
+    matches!(op.op.as_slice(), b"BDC" | b"DP").then(|| op.last_name()).flatten()
+}
+
+fn shading_used(op: &Op) -> Option<&[u8]> {
+    op.is("sh").then(|| op.last_name()).flatten()
+}
+
+/// The resource name an operator uses from one category, if any.
+type NameUsed = fn(&Op) -> Option<&[u8]>;
+
+/// The resource categories a rewrite retires the unused entries of (their values may hold what
+/// was redacted: a description, or a shading's samples), with the name an operator uses from each.
+const RETIRED: [(&[u8], NameUsed); 2] = [(b"Properties", property_used), (b"Shading", shading_used)];
+
+/// The entries of `res` whose value a rewrite retired, as (category, name).
+fn retired_names(doc: &Document, res: &Dict, retired: &[Object]) -> Vec<(&'static [u8], Vec<u8>)> {
+    RETIRED
+        .iter()
+        .flat_map(|(category, _)| {
+            res_dict(doc, res, category).iter().filter(|(_, v)| retired.contains(v)).map(|(n, _)| (*category, n.to_vec())).collect::<Vec<_>>()
+        })
+        .collect()
+}
 
 /// Drop every `replaced` name of the XObject resources `xo` that the rewritten `content` no
 /// longer draws, so a full-rewrite save stops reaching the original image or form it named. A
@@ -307,9 +332,8 @@ pub(crate) fn unlink_doomed(doc: &mut Document, doomed: &[ObjRef], retired_prope
         };
         let mut xo = res_dict(doc, &res, b"XObject");
         let names: Vec<Vec<u8>> = xo.iter().filter(|(_, v)| v.as_ref().is_some_and(|r| doomed.contains(&r))).map(|(n, _)| n.to_vec()).collect();
-        let properties = res_dict(doc, &res, b"Properties");
-        let property_names: Vec<Vec<u8>> = properties.iter().filter(|(_, v)| retired_properties.contains(v)).map(|(n, _)| n.to_vec()).collect();
-        if names.is_empty() && property_names.is_empty() {
+        let retired = retired_names(doc, &res, retired_properties);
+        if names.is_empty() && retired.is_empty() {
             continue;
         }
         let mut contents = Vec::with_capacity(users.len());
@@ -335,7 +359,7 @@ pub(crate) fn unlink_doomed(doc: &mut Document, doomed: &[ObjRef], retired_prope
         if pruned {
             res.set(b"XObject".to_vec(), Object::Dict(xo));
         }
-        pruned |= prune_retired_properties(doc, &mut res, &property_names, &contents)?;
+        pruned |= prune_retired(doc, &mut res, &retired, &contents)?;
         if pruned {
             doc.update_dict(node, |d| d.set(b"Resources".to_vec(), Object::Dict(res)))?;
         }
@@ -347,36 +371,36 @@ pub(crate) fn unlink_doomed(doc: &mut Document, doomed: &[ObjRef], retired_prope
     Ok(())
 }
 
-/// Retire only properties removed from a rewritten scope, preserving names still used by any
-/// content sharing this holder. Different pages' streams must never be concatenated together.
-fn prune_retired_properties(doc: &Document, res: &mut Dict, names: &[Vec<u8>], contents: &[Vec<Vec<u8>>]) -> Result<bool, CosError> {
+/// Retire only the entries `names` (from [`retired_names`]) removed from a rewritten scope,
+/// preserving names still used by any content sharing this holder. Different pages' streams
+/// must never be concatenated together.
+fn prune_retired(doc: &Document, res: &mut Dict, names: &[(&[u8], Vec<u8>)], contents: &[Vec<Vec<u8>>]) -> Result<bool, CosError> {
     if names.is_empty() {
         return Ok(false);
     }
-    let mut used = HashSet::new();
+    let mut ops = Vec::new();
     for content in contents {
         // Each is one page's content or one form's, with the allowance of a page.
-        for op in resource_ops(doc, &mut DecodeBudget::page(), res, content)? {
-            if matches!(op.op.as_slice(), b"BDC" | b"DP")
-                && let Some(name) = op.last_name()
-            {
-                used.insert(name.to_vec());
+        ops.extend(resource_ops(doc, &mut DecodeBudget::page(), res, content)?);
+    }
+    let glyph_shadings = glyph_shading_names(doc, &mut DecodeBudget::page(), res)?;
+    let mut pruned = false;
+    for (category, used) in RETIRED {
+        let mut entries = res_dict(doc, res, category);
+        let mut changed = false;
+        for (_, name) in names.iter().filter(|(c, _)| *c == category) {
+            if !ops.iter().any(|op| used(op) == Some(name)) && !(category == b"Shading" && glyph_shadings.contains(name)) {
+                changed |= entries.remove(name).is_some();
             }
         }
-    }
-    let mut properties = res_dict(doc, res, b"Properties");
-    let mut pruned = false;
-    for name in names {
-        if !used.contains(name) {
-            pruned |= properties.remove(name).is_some();
+        if changed {
+            if entries.is_empty() {
+                res.remove(category);
+            } else {
+                res.set(category.to_vec(), Object::Dict(entries));
+            }
         }
-    }
-    if pruned {
-        if properties.is_empty() {
-            res.remove(b"Properties");
-        } else {
-            res.set(b"Properties".to_vec(), Object::Dict(properties));
-        }
+        pruned |= changed;
     }
     Ok(pruned)
 }
@@ -408,8 +432,7 @@ fn unlink_from_forms(doc: &mut Document, holders: &[ObjRef], doomed: &HashSet<Ob
                 continue;
             }
             let Some(mut res) = form.dict.get(b"Resources").and_then(|r| doc.resolve(r).as_dict().cloned()) else { continue };
-            let names: Vec<Vec<u8>> =
-                res_dict(doc, &res, b"Properties").iter().filter(|(_, value)| retired.contains(value)).map(|(name, _)| name.to_vec()).collect();
+            let names = retired_names(doc, &res, retired);
             let mut xo = res_dict(doc, &res, b"XObject");
             let doomed_names: Vec<Vec<u8>> =
                 xo.iter().filter(|(_, v)| v.as_ref().is_some_and(|r| doomed.contains(&r))).map(|(n, _)| n.to_vec()).collect();
@@ -422,7 +445,7 @@ fn unlink_from_forms(doc: &mut Document, holders: &[ObjRef], doomed: &HashSet<Ob
             if pruned {
                 res.set(b"XObject".to_vec(), Object::Dict(xo));
             }
-            pruned |= prune_retired_properties(doc, &mut res, &names, &[vec![data]])?;
+            pruned |= prune_retired(doc, &mut res, &names, &[vec![data]])?;
             if pruned {
                 doc.update_dict(reference, |d| d.set(b"Resources".to_vec(), Object::Dict(res.clone())))?;
             }
@@ -448,29 +471,6 @@ fn prune_doomed_xobjects(doc: &Document, content: &[Vec<u8>], xo: &mut Dict, doo
     Ok(pruned)
 }
 
-/// The clip that hides everything inside each region: one even-odd clip per region (a big
-/// rectangle with the region cut out), in the current user space. Returns `None` when the CTM
-/// can't be inverted (nothing is painted then anyway).
-pub(super) fn clip_out(rects: &[[f64; 4]], ctm: &Matrix, around: [f64; 4]) -> Option<Vec<Op>> {
-    let inv = ctm.invert()?;
-    let mut ops = Vec::new();
-    let big = [around[0] - 10.0, around[1] - 10.0, around[2] + 10.0, around[3] + 10.0];
-    for r in rects.iter().filter(|r| overlaps(**r, around, 0.0)) {
-        let outer = [(big[0], big[1]), (big[2], big[1]), (big[2], big[3]), (big[0], big[3])];
-        let inner = [(r[0], r[1]), (r[0], r[3]), (r[2], r[3]), (r[2], r[1])];
-        for poly in [outer, inner] {
-            for (k, (x, y)) in poly.iter().enumerate() {
-                let (u, v) = inv.apply(*x, *y);
-                ops.push(Op::new(if k == 0 { "m" } else { "l" }, vec![num(u), num(v)]));
-            }
-            ops.push(Op::new("h", vec![]));
-        }
-        ops.push(Op::new("W*", vec![]));
-        ops.push(Op::new("n", vec![]));
-    }
-    Some(ops)
-}
-
 /// The operators of `content`, and of every form without /Resources of its own that it draws
 /// through `res`, nested ones too: what draws with these resources. Each such form is read once,
 /// with its `/DecodeParms` given by reference, its decoded bytes charged to `budget`, so the
@@ -485,7 +485,9 @@ pub(crate) fn resource_ops(doc: &Document, budget: &mut DecodeBudget, res: &Dict
     let mut read = pdfcraft_content::ops(joined.data());
     let mut ops: Vec<Op> = read.by_ref().take(MAX_OPS + 1).collect();
     // Under the limit the reader ran to the end, so `skipped` counts all of it.
-    if read.skipped() > 0 || ops.len() > MAX_OPS {
+    // An inline image the renderer reads no image for leaves where the operators resume a guess (as
+    // `apply` refuses on a marked page): a resource used after it could look unused.
+    if read.skipped() > 0 || read.ambiguous_images() > 0 || ops.len() > MAX_OPS {
         return Err(CosError::Syntax { offset: 0, detail: "redaction could not fully read the content that uses these resources".into() });
     }
     let xobjects = res_dict(doc, res, b"XObject");
@@ -504,7 +506,7 @@ pub(crate) fn resource_ops(doc: &Document, budget: &mut DecodeBudget, res: &Dict
             let mut read = pdfcraft_content::ops(&data);
             ops.extend(read.by_ref().take((MAX_OPS + 1).saturating_sub(ops.len())));
             // `seen` gains at most one form for each `Do` in `ops`, so this bounds it too.
-            if ops.len() > MAX_OPS || read.skipped() > 0 {
+            if ops.len() > MAX_OPS || read.skipped() > 0 || read.ambiguous_images() > 0 {
                 return Err(CosError::Syntax { offset: 0, detail: "redaction could not fully inspect inherited form resources".into() });
             }
         }
@@ -513,25 +515,65 @@ pub(crate) fn resource_ops(doc: &Document, budget: &mut DecodeBudget, res: &Dict
     Ok(ops)
 }
 
+/// The shading names the glyph programs of `res`'s Type 3 fonts without resources of their own draw
+/// (`/Name sh`): those fonts paint through the resources of whatever shows them.
+fn glyph_shading_names(doc: &Document, budget: &mut DecodeBudget, res: &Dict) -> Result<HashSet<Vec<u8>>, CosError> {
+    let mut names = HashSet::new();
+    // The fonts `Tf` can select, and those an ExtGState's `/Font [font size]` entry selects.
+    let mut fonts: Vec<Object> = res_dict(doc, res, b"Font").iter().map(|(_, f)| f.clone()).collect();
+    for (_, state) in res_dict(doc, res, b"ExtGState").iter() {
+        if let Some(entry) = doc.resolve(state).as_dict().and_then(|d| d.get(b"Font")).map(|f| doc.resolve(f))
+            && let Some(font) = entry.as_array().and_then(|a| a.first())
+        {
+            fonts.push(font.clone());
+        }
+    }
+    for font in &fonts {
+        let Some(font) = doc.resolve(font).as_dict().cloned() else { continue };
+        if font.name(b"Subtype") != Some(b"Type3") || font.get(b"Resources").is_some_and(|r| doc.resolve(r).as_dict().is_some()) {
+            continue;
+        }
+        let Some(procs) = font.get(b"CharProcs").and_then(|c| doc.resolve(c).as_dict().cloned()) else { continue };
+        for (_, proc) in procs.iter() {
+            let Object::Stream(s) = &*doc.resolve(proc) else { continue };
+            let data = budget.decode(&doc.with_direct_parms(s))?;
+            names.extend(pdfcraft_content::ops(&data).filter_map(|op| shading_used(&op).map(<[u8]>::to_vec)));
+        }
+    }
+    Ok(names)
+}
+
+/// Drop the property and shading entries of `res` that the rewritten `content` (and the forms
+/// drawing through `res`) no longer uses, returning their values so other holders can be unlinked.
+///
+/// A shading a Type 3 glyph of `res`'s fonts draws (such a font without resources of its own paints
+/// through these) stays, though no content names it.
 pub(crate) fn prune_properties(doc: &Document, budget: &mut DecodeBudget, res: &mut Dict, content: &[Vec<u8>]) -> Result<Vec<Object>, CosError> {
-    let mut properties = res_dict(doc, res, b"Properties");
-    if properties.is_empty() {
+    if RETIRED.iter().all(|(category, _)| res_dict(doc, res, category).is_empty()) {
         return Ok(Vec::new());
     }
     let mut retired = Vec::new();
     let ops = resource_ops(doc, budget, res, content)?;
-    let names: Vec<Vec<u8>> = properties.iter().map(|(n, _)| n.to_vec()).collect();
-    for name in names {
-        if !ops.iter().any(|op| matches!(op.op.as_slice(), b"BDC" | b"DP") && op.last_name() == Some(&name))
-            && let Some(value) = properties.remove(&name)
-        {
-            retired.push(value);
+    let glyph_shadings = glyph_shading_names(doc, budget, res)?;
+    for (category, used) in RETIRED {
+        let mut entries = res_dict(doc, res, category);
+        if entries.is_empty() {
+            continue;
         }
-    }
-    if properties.is_empty() {
-        res.remove(b"Properties");
-    } else {
-        res.set(b"Properties".to_vec(), Object::Dict(properties));
+        let names: Vec<Vec<u8>> = entries.iter().map(|(n, _)| n.to_vec()).collect();
+        for name in names {
+            if !ops.iter().any(|op| used(op) == Some(&name))
+                && !(category == b"Shading" && glyph_shadings.contains(&name))
+                && let Some(value) = entries.remove(&name)
+            {
+                retired.push(value);
+            }
+        }
+        if entries.is_empty() {
+            res.remove(category);
+        } else {
+            res.set(category.to_vec(), Object::Dict(entries));
+        }
     }
     Ok(retired)
 }
