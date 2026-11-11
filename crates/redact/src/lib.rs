@@ -791,8 +791,10 @@ fn redact_page_content(
     }
     // An inline image the renderer reads no image for (no `EI` it accepts, or parameters it
     // can't read): where the page's operators resume after it is a guess, so neither removal
-    // nor the verify pass can be trusted on this page.
-    if out.ambiguous {
+    // nor the verify pass can be trusted on this page. Likewise bytes the parser can't read in
+    // what the walk read, the page's content or a form under a mark: text they hide is neither
+    // found nor removed, and other readers may draw it.
+    if out.ambiguous || out.unparsed {
         return Err(RedactError::Unreadable(pi + 1));
     }
     doomed_xobjects.extend_from_slice(&out.doomed);

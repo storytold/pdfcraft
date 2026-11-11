@@ -659,6 +659,17 @@ fn content_pass(doc: &mut Document, text: bool, layers: bool, write: bool) -> Re
         if let Some(error) = out.error {
             return Err(error.into());
         }
+        // Bytes the parser can't read, or an inline image whose end is a guess: the walk reads past
+        // them, so what it reads around them may not be what other readers draw (hidden text in a
+        // broken `TJ` is neither found nor removed). As for content that doesn't decode, count the
+        // page so the removal runs and refuses it.
+        if out.unparsed || out.ambiguous {
+            if write {
+                return Err(RedactError::Unreadable(pi + 1));
+            }
+            total += 1;
+            continue;
+        }
         let blocks = scope.layer_blocks;
         let glyphs = scope.report.glyphs;
         let retained_for_page = std::mem::take(&mut scope.retained_off_layers);

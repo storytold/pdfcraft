@@ -689,6 +689,38 @@ fn document_info_falls_back_to_the_xmp_packet() {
     assert_eq!(info(&doc, "Subject"), None);
 }
 
+/// The title read from XMP each frame (Initial View ▸ Show: Document Title) decodes the packet
+/// once, not on every read; an edit of the packet, or another document, reads afresh.
+#[test]
+fn the_xmp_packet_is_decoded_once_for_repeated_reads() {
+    let decodes = || crate::xmp::XMP_DECODES.with(std::cell::Cell::get);
+    let mut doc = doc_with_xmp(LIBREOFFICE_XMP.as_bytes());
+    doc.trailer_mut().remove(b"Info");
+    let before = decodes();
+    for _ in 0..10 {
+        assert_eq!(info(&doc, "Title").as_deref(), Some("Untitled 1"));
+        assert_eq!(info(&doc, "Author").as_deref(), Some("Old Author"));
+    }
+    assert_eq!(decodes() - before, 1);
+    set_info(&mut doc, "Title", "Report").unwrap();
+    doc.trailer_mut().remove(b"Info");
+    assert_eq!(info(&doc, "Title").as_deref(), Some("Report"), "the edited packet, not the one read before");
+    assert_eq!(decodes() - before, 2);
+    let mut other = doc_with_xmp(LIBREOFFICE_XMP.replace("Untitled 1", "Other").as_bytes());
+    other.trailer_mut().remove(b"Info");
+    assert_eq!(info(&other, "Title").as_deref(), Some("Other"), "another document's packet");
+    assert_eq!(info(&doc, "Title").as_deref(), Some("Report"));
+    let mut latin1 = LIBREOFFICE_XMP.as_bytes().to_vec();
+    latin1.extend_from_slice(&[b'<', 0xE9, b'>']);
+    let mut bad = doc_with_xmp(&latin1);
+    bad.trailer_mut().remove(b"Info");
+    let before = decodes();
+    for _ in 0..10 {
+        assert_eq!(info(&bad, "Title"), None);
+    }
+    assert_eq!(decodes() - before, 1, "an unreadable packet is not decoded again either");
+}
+
 #[test]
 fn document_info_edits_leave_files_without_usable_xmp_alone() {
     // No packet: none is added, for a custom property either.
