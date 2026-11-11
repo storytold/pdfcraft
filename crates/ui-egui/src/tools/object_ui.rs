@@ -496,8 +496,8 @@ pub(crate) fn nudge_keys(ctx: &egui::Context, keys: PageKeys, view: &mut DocView
     let mut step = egui::Vec2::ZERO;
     // Only an arrow pressed alone or with Shift, judged by each press's own modifiers (the
     // frame's can differ when a key is let go in the same frame). Alt+← / Alt+→ go back and
-    // forward through the view history (#3632) and Ctrl/⌘+← / → turn the page, both in
-    // `canvas::shortcuts`.
+    // forward through the view history (#3632, `canvas::shortcuts`), and Ctrl/⌘+← / → turn the
+    // page (the view's keys, after this in the key pass).
     keys.take_presses(ctx, |key, modifiers| {
         if modifiers.alt || modifiers.ctrl || modifiers.command || modifiers.mac_cmd {
             return false;
