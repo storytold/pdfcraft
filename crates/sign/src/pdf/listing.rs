@@ -214,13 +214,21 @@ pub(super) fn sig_fields(doc: &Document) -> Vec<Field> {
 /// [`MAX_FIELD_NAME_BYTES`]: the fields it could not reach are then unknown to the caller, which
 /// is what lets a permission lookup fail closed instead of guessing.
 pub(super) fn sig_fields_bounded(doc: &Document) -> (Vec<Field>, bool) {
+    let (out, cut, _) = fields_walk(doc);
+    (out, cut)
+}
+
+/// [`sig_fields_bounded`] plus the qualified name of every field of any type that the same walk
+/// reached, so a new field's name can be checked against all of them.
+pub(super) fn fields_walk(doc: &Document) -> (Vec<Field>, bool, HashSet<String>) {
     let mut out = Vec::new();
     let mut cut = false;
-    let Some(root) = doc.root() else { return (out, cut) };
+    let mut names = HashSet::new();
+    let Some(root) = doc.root() else { return (out, cut, names) };
     let Some(af) = doc.get(root).as_dict().and_then(|c| c.get(b"AcroForm").map(|a| doc.resolve(a))).and_then(|a| a.as_dict().cloned()) else {
-        return (out, cut);
+        return (out, cut, names);
     };
-    let Some(fields) = af.get(b"Fields").map(|f| doc.resolve(f)).and_then(|f| f.as_array().cloned()) else { return (out, cut) };
+    let Some(fields) = af.get(b"Fields").map(|f| doc.resolve(f)).and_then(|f| f.as_array().cloned()) else { return (out, cut, names) };
     let mut seen = HashSet::new();
     let mut stack: Vec<(Object, String, Option<Vec<u8>>, usize)> = fields.into_iter().rev().map(|f| (f, String::new(), None, 0)).collect();
     let mut name_bytes = 0usize;
@@ -251,6 +259,9 @@ pub(super) fn sig_fields_bounded(doc: &Document) -> (Vec<Field>, bool) {
             cut = true;
             break;
         }
+        if part.is_some() {
+            names.insert(name.clone());
+        }
         for k in sub.into_iter().rev() {
             stack.push((k, name.clone(), ft.clone(), depth + 1));
         }
@@ -263,7 +274,7 @@ pub(super) fn sig_fields_bounded(doc: &Document) -> (Vec<Field>, bool) {
             out.push(Field { name, r: o.as_ref(), dict: d, widgets: ws });
         }
     }
-    (out, cut)
+    (out, cut, names)
 }
 
 /// Every `/V` an AcroForm field holds, however deep: a standalone document timestamp must not be

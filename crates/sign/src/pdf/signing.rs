@@ -1,5 +1,5 @@
-use super::listing::{mk_rotation, nums, sig_fields_bounded};
-use super::{Certificate, Dict, DigestAlg, DigitalId, Document, HashSet, Object, PdfString, SaveOptions, SignError, SignedData, Stream};
+use super::listing::{fields_walk, mk_rotation, nums, sig_fields_bounded};
+use super::{Certificate, Dict, DigestAlg, DigitalId, Document, Object, PdfString, SaveOptions, SignError, SignedData, Stream};
 
 // ── signing ─────────────────────────────────────────────────────────────────────────────────
 
@@ -199,8 +199,8 @@ fn sign_inner(
     let pages = pdfcraft_annot::page_refs(&doc).map_err(|e| SignError::Pdf(e.to_string()))?;
     // A field the walk could not reach might be the one named, or might already hold the name an
     // automatic one would take, so a cut walk is not trusted for either.
-    let (fields, cut) = sig_fields_bounded(&doc);
-    let taken: HashSet<String> = fields.iter().map(|f| f.name.clone()).collect();
+    let (fields, cut, mut taken) = fields_walk(&doc);
+    taken.extend(fields.iter().map(|f| f.name.clone()));
     let existing = opts.field.as_deref().map(|n| {
         fields.into_iter().find(|f| f.name == n).ok_or_else(|| {
             let why = if cut {
