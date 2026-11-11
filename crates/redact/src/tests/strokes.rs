@@ -252,3 +252,20 @@ fn a_move_paints_nothing_until_something_draws_from_it() {
         assert_eq!(removed(content, ""), gone, "{}", String::from_utf8_lossy(content));
     }
 }
+
+/// The proof takes a line-state operator between building a path and painting it (`… l 12 w S`)
+/// as the walk does: it applies to that stroke, and the path stays to be checked. Before anything
+/// is applied, the 12-point line five points above the mark's top is found painting inside it; at 1
+/// point it isn't.
+#[test]
+fn the_proof_keeps_a_path_across_a_line_state_operator() {
+    let proof = |width: &str| {
+        let mut doc = one_page(format!("10 60 m 100 60 l {width} w S").as_bytes(), "", vec![]);
+        mark(&mut doc, 0, &[[40.0, 45.0, 60.0, 55.0]], "");
+        crate::tests_verify::prove_unapplied(&mut doc).to_text()
+    };
+    let text = proof("12");
+    assert!(text.contains("a path still paints inside the region"), "{text}");
+    let text = proof("1");
+    assert!(!text.contains("a path still paints inside the region"), "{text}");
+}

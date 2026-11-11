@@ -185,10 +185,14 @@ impl Geo<'_> {
                 path.clear();
                 continue;
             }
-            sub.clear();
-            clip = None;
-            drawn = Drawn::default();
-            path.clear();
+            // A line-state operator between building a path and painting it applies to that paint,
+            // as the walk takes it: the path stays. Any other operator ends the path unpainted.
+            if path.is_empty() || !matches!(o, b"w" | b"M" | b"j" | b"J" | b"d" | b"gs") {
+                sub.clear();
+                clip = None;
+                drawn = Drawn::default();
+                path.clear();
+            }
             match o {
                 b"q" => {
                     // The saved state carries the holes with it, so an unbounded stack of them
