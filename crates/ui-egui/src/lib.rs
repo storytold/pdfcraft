@@ -92,6 +92,8 @@ mod frame_guard;
 mod hooks;
 mod persist;
 mod platform;
+#[cfg(not(target_arch = "wasm32"))]
+mod script_dialog;
 mod state;
 mod tools;
 mod workflows;
@@ -655,6 +657,8 @@ pub struct PdfCraftApp {
     pub compare: Option<compare_ui::CompareState>,
     /// The JavaScript console and the Document JavaScripts draft.
     pub js_console: js_ui::JsConsole,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) script_pending: Option<script_dialog::Pending>,
     pub doc_js: js_ui::DocJsDraft,
     pub a11y: a11y_ui::A11yState,
     pub(crate) tags_state: tags_ui::State,

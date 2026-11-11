@@ -15,6 +15,7 @@ mod hostile_args;
 mod list_selection;
 mod model_3d;
 mod model_render;
+mod office;
 mod optimize_content_boundaries;
 mod portfolio_info;
 mod redact_after_stray_q_form;
@@ -23,4 +24,5 @@ mod stamp_locale;
 
 mod render_warnings;
 mod text_copy;
+mod timesheet_compat;
 mod unreadable_objects;

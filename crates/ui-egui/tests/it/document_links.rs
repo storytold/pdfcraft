@@ -490,6 +490,7 @@ fn a_button_script_cannot_open_a_local_program() {
     let _gpu = gpu();
     let mut h = harness();
     click_field(&mut h, "sneaky");
+    support::wait_until(&mut h, "script link refusal", |app| app.pending_link.is_some() || app.toast.is_some());
     assert_eq!(h.state().pending_link, None, "a file: address is never offered");
     assert_eq!(h.state().last_opened_url, None);
     let toast = h.state().toast.clone().expect("the user is told").0;
@@ -503,7 +504,7 @@ fn a_script_asks_first_and_only_once() {
     let id = h.state().views[0].id;
     let script = "app.launchURL('https://example.org/?q=' + 'first'); app.launchURL('https://example.org/second');";
     h.state_mut().run_button_script(id, "web", script);
-    h.run_steps(3);
+    support::wait_until(&mut h, "script link request", |app| app.pending_link.is_some());
     assert_eq!(h.state().pending_link, pending("https://example.org/?q=first", LinkOrigin::Script), "one dialog, for the first request");
     assert_eq!(h.state().last_opened_url, None);
 }
@@ -526,7 +527,7 @@ fn a_script_cannot_open_other_kinds_of_address() {
         let id = h.state().views[0].id;
         let script = format!("app.launchURL({});", serde_json::to_string(url).unwrap());
         h.state_mut().run_button_script(id, "web", &script);
-        h.run_steps(3);
+        support::wait_until(&mut h, "script link decision", |app| app.pending_link.is_some() || app.toast.is_some());
         assert_eq!(h.state().pending_link, None, "{url}");
         assert_eq!(h.state().last_opened_url, None, "{url}");
         assert!(h.state().toast.clone().is_some_and(|t| t.0.contains("won't open")), "{url}: {:?}", h.state().toast);
@@ -541,7 +542,7 @@ fn an_email_link_cannot_attach_a_local_file() {
         let id = h.state().views[0].id;
         let script = format!("app.launchURL({});", serde_json::to_string(url).unwrap());
         h.state_mut().run_button_script(id, "web", &script);
-        h.run_steps(3);
+        support::wait_until(&mut h, "script link decision", |app| app.pending_link.is_some() || app.toast.is_some());
         assert_eq!(h.state().pending_link, None, "{url}");
         assert_eq!(h.state().last_opened_url, None, "{url}");
         let toast = h.state().toast.clone().expect("the user is told").0;
@@ -555,7 +556,7 @@ fn prompt_for(url: &str) -> Harness<'static, PdfCraftApp> {
     let id = h.state().views[0].id;
     let script = format!("app.launchURL({});", serde_json::to_string(url).unwrap());
     h.state_mut().run_button_script(id, "web", &script);
-    h.run_steps(3);
+    assert!(support::step_until(&mut h, |h| h.query_by_label("Open link").is_some()), "script link prompt rendered");
     assert_eq!(h.state().pending_link, pending(url, LinkOrigin::Script));
     h
 }
