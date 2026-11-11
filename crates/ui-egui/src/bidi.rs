@@ -10,7 +10,7 @@
 use std::borrow::Cow;
 use std::ops::Range;
 
-use unicode_bidi::{bidi_class, BidiClass, BidiInfo};
+use unicode_bidi::{BidiClass, BidiInfo, bidi_class};
 #[cfg(test)]
 use unicode_bidi::{Level, ParagraphInfo};
 
