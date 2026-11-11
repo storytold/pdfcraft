@@ -8,7 +8,10 @@ thread_local! {
     /// retries a parse several ways, and each retry would resolve the same lengths again
     /// (exponential in the chain of streams whose lengths point at further streams). Each is
     /// kept with whether resolving it read unsaved edits.
-    pub(super) static LENGTHS: std::cell::RefCell<HashMap<ObjRef, (Option<i64>, bool)>> = std::cell::RefCell::new(HashMap::new());
+    pub(super) static LENGTHS: std::cell::RefCell<HashMap<ObjRef, Length>> = std::cell::RefCell::new(HashMap::new());
+    /// What the loads running on this thread have read ([`ReadFrame`]): how many frames are
+    /// open, the object numbers read inside them, and how often that list was full.
+    static READS: std::cell::RefCell<(u32, Vec<u32>, u64)> = const { std::cell::RefCell::new((0, Vec::new(), 0)) };
     /// Unsaved edits read on this thread (`Document::try_get`, and a `/Length` in `Document::load`).
     static OVERLAY_READS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     /// How deep `Document::scan_for` is nested on this thread, and how many indirect `/Length`
@@ -55,6 +58,94 @@ impl Drop for ScanLengths {
         SCAN_LENGTHS.with(|c| {
             let (depth, used) = c.get();
             c.set((depth.saturating_sub(1), used));
+        });
+    }
+}
+
+/// A resolved `/Length` in [`LENGTHS`]: its value, whether resolving it read unsaved edits, and
+/// what it read.
+pub(super) type Length = (Option<i64>, bool, Reads);
+
+/// The other objects a cached load read: an object stream for a member, an indirect `/Length`,
+/// and what those read in turn. Clones share the caches, so a document whose edits include one of
+/// them reads the object again instead (`Document::try_get`); `None` is a load that read more
+/// than [`Reads::MAX`], which such a document always reads again.
+#[derive(Clone, Debug, Default)]
+pub(super) struct Reads(Option<Arc<[u32]>>);
+
+impl Reads {
+    /// Objects one entry keeps: a member's stream and a length or two, and what they read.
+    const MAX: usize = 64;
+    /// Object numbers the open frames keep between them.
+    const HELD: usize = 4096;
+
+    /// Whether `overlay` (a document's edits) holds any of these objects.
+    pub(super) fn touch(&self, overlay: &BTreeMap<u32, Slot>) -> bool {
+        !overlay.is_empty() && self.0.as_ref().is_none_or(|nums| nums.iter().any(|n| overlay.contains_key(n)))
+    }
+
+    fn bytes(&self) -> usize {
+        self.0.as_ref().map_or(0, |nums| nums.len().saturating_mul(std::mem::size_of::<u32>()))
+    }
+}
+
+/// Counts `num` as read by the loads open on this thread, with what loading it read (`reads`).
+pub(super) fn note_read(num: u32, reads: Option<&Reads>) {
+    READS.with(|r| {
+        let (depth, held, full) = &mut *r.borrow_mut();
+        if *depth == 0 {
+            return;
+        }
+        let more = reads.map_or(Some(&[][..]), |r| r.0.as_deref());
+        match more {
+            Some(more) if held.len().saturating_add(more.len()) < Reads::HELD => {
+                held.push(num);
+                held.extend_from_slice(more);
+            }
+            _ => *full = full.wrapping_add(1),
+        }
+    });
+}
+
+/// Collects what one load reads, for [`Reads`]; frames nest, and each read counts for every
+/// frame open around it.
+pub(super) struct ReadFrame {
+    start: usize,
+    full: u64,
+}
+
+impl ReadFrame {
+    pub(super) fn enter() -> Self {
+        READS.with(|r| {
+            let (depth, held, full) = &mut *r.borrow_mut();
+            *depth = depth.saturating_add(1);
+            ReadFrame { start: held.len(), full: *full }
+        })
+    }
+
+    /// What was read since the frame opened.
+    pub(super) fn reads(&self) -> Reads {
+        READS.with(|r| {
+            let (_, held, full) = &*r.borrow();
+            if *full != self.full {
+                return Reads(None);
+            }
+            let mut nums = held.get(self.start..).unwrap_or_default().to_vec();
+            nums.sort_unstable();
+            nums.dedup();
+            Reads((nums.len() <= Reads::MAX).then(|| Arc::from(nums)))
+        })
+    }
+}
+
+impl Drop for ReadFrame {
+    fn drop(&mut self) {
+        READS.with(|r| {
+            let (depth, held, _) = &mut *r.borrow_mut();
+            *depth = depth.saturating_sub(1);
+            if *depth == 0 {
+                held.clear();
+            }
         });
     }
 }
@@ -122,6 +213,8 @@ pub(super) struct ObjStm {
     /// or offset is unusable ([`objstm_member`]).
     pub(super) index: Vec<Option<(u32, usize)>>,
     pub(super) data: Arc<Vec<u8>>,
+    /// What parsing it read: the stream itself and its `/Length`, `/DecodeParms` and so on.
+    pub(super) reads: Reads,
 }
 
 /// Where member `num` of an object stream starts: its `offset` past `/First` (`first`), when the
@@ -317,13 +410,14 @@ thread_local! {
 /// (#5873).
 #[derive(Default)]
 pub(crate) struct ObjectCache {
-    entries: HashMap<u32, (Loaded, usize)>,
+    entries: HashMap<u32, (Loaded, usize, Reads)>,
     owned: usize,
 }
 
 impl ObjectCache {
-    pub(crate) fn get(&self, num: &u32) -> Option<&Loaded> {
-        self.entries.get(num).map(|(object, _)| object)
+    /// What loading `num` gave, and what that load read.
+    pub(super) fn get(&self, num: &u32) -> Option<(&Loaded, &Reads)> {
+        self.entries.get(num).map(|(object, _, reads)| (object, reads))
     }
 
     #[cfg(test)]
@@ -331,9 +425,10 @@ impl ObjectCache {
         self.entries.contains_key(num)
     }
 
-    /// Keep what loading `num` gave, which holds `owned` bytes ([`loaded_bytes`]).
-    pub(crate) fn insert(&mut self, num: u32, object: Loaded, owned: usize) {
-        if let Some((_, before)) = self.entries.insert(num, (object, owned)) {
+    /// Keep what loading `num` gave, which holds `owned` bytes ([`loaded_bytes`]), and what it read.
+    pub(super) fn insert(&mut self, num: u32, object: Loaded, owned: usize, reads: Reads) {
+        let owned = owned.saturating_add(reads.bytes());
+        if let Some((_, before, _)) = self.entries.insert(num, (object, owned, reads)) {
             self.owned = self.owned.saturating_sub(before);
         }
         self.owned = self.owned.saturating_add(owned);
@@ -358,19 +453,14 @@ impl ObjectCache {
         self.owned = 0;
     }
 
-    /// Drop the cached failures `stale` picks. A failure holds no bytes, so the total stands.
-    pub(crate) fn forget_failures(&mut self, mut stale: impl FnMut(&u32) -> bool) {
-        self.entries.retain(|num, (loaded, _)| loaded.is_ok() || !stale(num));
-    }
-
     pub(crate) fn retain(&mut self, mut keep: impl FnMut(&u32) -> bool) {
         self.entries.retain(|num, _| keep(num));
-        self.owned = self.entries.values().fold(0usize, |n, (_, owned)| n.saturating_add(*owned));
+        self.owned = self.entries.values().fold(0usize, |n, (_, owned, _)| n.saturating_add(*owned));
     }
 
     #[cfg(test)]
     pub(crate) fn values(&self) -> impl Iterator<Item = &Arc<Object>> {
-        self.entries.values().filter_map(|(object, _)| object.as_ref().ok())
+        self.entries.values().filter_map(|(object, _, _)| object.as_ref().ok())
     }
 }
 
