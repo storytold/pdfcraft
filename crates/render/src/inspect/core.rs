@@ -161,8 +161,6 @@ pub(super) struct Inspector<'a> {
     /// Set when a field with an action went unlisted because the text allowance was spent, so the
     /// document still reports JavaScript.
     pub(super) field_actions: std::cell::Cell<bool>,
-}
-
     /// The first page widget naming each field as its `/Parent`, built when a field has no widget
     /// among its `/Kids`.
     pub(super) parent_widgets: OnceCell<HashMap<ObjectId, ObjectId>>,

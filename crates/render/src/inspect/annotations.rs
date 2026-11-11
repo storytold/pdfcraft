@@ -144,16 +144,7 @@ impl<'a> Inspector<'a> {
                 info.attachments.push(self.attachment(fs, AttachmentSource::Annotation { page, index }, text_budget, fallback));
             }
             if subtype == "Link" {
-                // read from the action, not the listed link: once the text budget is spent the action's name is not kept
-                if d.get(b"A").ok().and_then(|a| self.dict(a)).is_some_and(|a| self.name(a, b"S").as_deref() == Some("JavaScript")) {
-                    info.has_javascript = true;
-                }
-                if let Some(link) = self.link(page, index, d, info.uri_base.as_deref(), text_budget, &mut unfit_quads) {
-                    if matches!(&link.target, LinkTarget::Other(s) if s == "JavaScript") {
-                        info.has_javascript = true;
-                    }
-                    info.links.push(link);
-                }
+                self.collect_link(info, (page, index), d, text_budget, &mut unfit_quads);
                 continue;
             }
             // Not comments: form widgets, pop-ups and non-markup annotations such as the
@@ -372,6 +363,23 @@ impl<'a> Inspector<'a> {
             _ => Vec::new(),
         };
         Some(Link { page, index, rect, quads, target })
+    }
+
+    /// Lists the link annotation `d`, and notes the JavaScript it runs. JavaScript is read from the
+    /// action, not the listed link: once the text budget is spent the action's name is not kept.
+    fn collect_link(&self, info: &mut DocInfo, at: (usize, usize), d: &Dictionary, text_budget: &mut usize, unfit_quads: &mut HashSet<ObjectId>) {
+        info.has_javascript |= self.runs_javascript(d);
+        if let Some(link) = self.link(at.0, at.1, d, info.uri_base.as_deref(), text_budget, unfit_quads) {
+            if matches!(&link.target, LinkTarget::Other(s) if s == "JavaScript") {
+                info.has_javascript = true;
+            }
+            info.links.push(link);
+        }
+    }
+
+    /// Whether the link's own action is a JavaScript action.
+    fn runs_javascript(&self, d: &Dictionary) -> bool {
+        d.get(b"A").ok().and_then(|a| self.dict(a)).is_some_and(|a| self.name(a, b"S").as_deref() == Some("JavaScript"))
     }
 
     /// What an action does when a link or a bookmark runs it. Only a go-to's `/D` is a place in
