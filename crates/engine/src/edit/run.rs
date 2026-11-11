@@ -49,6 +49,7 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
         }
         Edit::AddMeasurement(_)
         | Edit::AddAnnotation(_)
+        | Edit::PasteComments { .. }
         | Edit::AddCustomStamp { .. }
         | Edit::AddModel3d { .. }
         | Edit::DeleteAnnotation { .. }
@@ -61,11 +62,14 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
         | Edit::LockAnnotation { .. }
         | Edit::MoveAnnotation { .. }
         | Edit::ReshapeAnnotation { .. }
+        | Edit::SetAnnotationPopup { .. }
         | Edit::ResizeAnnotation { .. }
         | Edit::StyleAnnotation { .. }
         | Edit::FillAnnotation { .. }
         | Edit::PartOpacity { .. }
         | Edit::FontSizeAnnotation { .. }
+        | Edit::BorderColorAnnotation { .. }
+        | Edit::BorderShapeAnnotation { .. }
         | Edit::SetAnnotationInfo { .. }
         | Edit::SetMeasurementScale { .. } => {
             if p.annotate() {
@@ -88,6 +92,11 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
                 Err(EditError::NotPermitted("changing security"))
             }
         }
+        // Converting the appearances of comments and form fields changes them too, which
+        // content changes alone do not allow.
+        Edit::ConvertColours { settings, .. } if settings.annotations && !(p.modify() && p.annotate()) => {
+            Err(EditError::NotPermitted(if p.modify() { "comments" } else { "changes to the document" }))
+        }
         // Converting to PDF/A takes the encryption off (PDF/A forbids it), so on an encrypted
         // document it is a change of security (#3921).
         Edit::ConvertPdfA { .. } => {
@@ -99,6 +108,7 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
         }
         Edit::SetInfo { .. }
         | Edit::AddHeaderFooter { .. }
+        | Edit::AddPrinterMarks { .. }
         | Edit::AddWatermark { .. }
         | Edit::AddBackground { .. }
         | Edit::RemoveMarks { .. }
@@ -108,9 +118,11 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
         | Edit::AddImage { .. }
         | Edit::UpdateContent { .. }
         | Edit::MoveObjects { .. }
+        | Edit::DeleteObjects { .. }
         | Edit::DeleteContent { .. }
         | Edit::ReplaceImage { .. }
         | Edit::PasteContent { .. }
+        | Edit::PasteObjects { .. }
         | Edit::ClearRedactions
         | Edit::RemoveHidden { .. }
         | Edit::ImportData { .. }
@@ -129,8 +141,11 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
         | Edit::MoveInTabOrder { .. }
         | Edit::SetCalculationOrder { .. }
         | Edit::SetInitialView(_)
+        | Edit::FixHairlines { .. }
         | Edit::AddAttachment { .. }
         | Edit::DeleteAttachment { .. }
+        | Edit::ConvertColours { .. }
+        | Edit::EditAttachmentDescription { .. }
         | Edit::AutoTagText
         | Edit::SetAltText { .. }
         | Edit::AutoTagFormFields
@@ -138,6 +153,7 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
         | Edit::MoveTag { .. }
         | Edit::MarkDecorative { .. }
         | Edit::MarkTagArtifact { .. }
+        | Edit::LayoutTableToBlocks { .. }
         | Edit::AddOcrText { .. }
         | Edit::EnhanceScan { .. }
         | Edit::SetDocumentScript { .. }
@@ -145,6 +161,7 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
         | Edit::RemoveStandardId { .. }
         | Edit::EditTextLine { .. }
         | Edit::EditTextBlock { .. }
+        | Edit::PrepareText { .. }
         | Edit::RegisterTextFont { .. }
         | Edit::EditPageImage { .. }
         | Edit::Flatten { .. }
@@ -159,6 +176,47 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
     }
 }
 
+/// What a comment import left out of comments it did import (an appearance it could not read),
+/// in the repair log as one line: said, not slipped in. The first five are named, each in at
+/// most [`SKIPPED_CHARS`] characters with control characters escaped (a name from the file
+/// holding a line break would otherwise read as a repair of its own).
+fn note_skipped(doc: &mut pdfcraft_cos::Document, report: &pdfcraft_xfdf::Report) {
+    if report.skipped.is_empty() {
+        return;
+    }
+    let shown: Vec<String> = report.skipped.iter().take(5).map(|s| skipped_text(s)).collect();
+    let more = report.skipped.len().saturating_sub(shown.len());
+    let more = if more > 0 { format!("; and {more} more") } else { String::new() };
+    doc.note_repair(format!(
+        "imported {} comment{} without the appearance the file gave {} (PdfCraft draws it where it can; it may look different or not show): {}{more}",
+        report.skipped.len(),
+        if report.skipped.len() == 1 { "" } else { "s" },
+        if report.skipped.len() == 1 { "it" } else { "them" },
+        shown.join("; ")
+    ));
+}
+
+/// At most this many characters of one skipped comment's description in the repair log.
+const SKIPPED_CHARS: usize = 200;
+
+/// `s` for one line of the repair log: control characters and line separators escaped, cut to
+/// [`SKIPPED_CHARS`] characters.
+fn skipped_text(s: &str) -> String {
+    let mut out = String::new();
+    for (n, c) in s.chars().enumerate() {
+        if n == SKIPPED_CHARS {
+            out.push('…');
+            break;
+        }
+        if c.is_control() || matches!(c, '\u{2028}' | '\u{2029}') {
+            out.extend(c.escape_default());
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
 /// Dates and unique ids stamped onto what an edit creates.
 pub(crate) struct EditCtx {
     /// Field scripts run (`None`: JavaScript is off) and what they produced.
@@ -171,12 +229,16 @@ pub(crate) struct EditCtx {
     pub(crate) xfa_datasets: Option<pdfcraft_cos::ObjRef>,
     /// A form script ran too long and was abandoned: the document's scripts go off.
     pub(crate) xfa_ran_away: bool,
+    /// An XFA enter or exit event whose scripts changed nothing: no edit to keep.
+    pub(crate) xfa_unchanged: bool,
     /// What the XFA scripts' time limits are multiplied by ([`Session::with_xfa_time_scale`]).
     pub(crate) xfa_time_scale: u32,
     /// The edit took the XFA out of the form: what went with it, for the document's warnings.
     pub(crate) xfa_removed: Vec<String>,
     /// Pages in the document, for `xfa.layout.pageCount()`.
     pub(crate) pages: usize,
+    /// Whether the viewer highlights form fields, for `app.runtimeHighlight`.
+    pub(crate) highlight: bool,
     pub(crate) date: Option<String>,
     /// Today in local time, for date tokens.
     pub(crate) today: (i64, u32, u32),
@@ -190,9 +252,34 @@ pub(crate) struct EditCtx {
     /// The overlay streams the edit's applied redactions added, which alone the renderer's check
     /// leaves out.
     pub(crate) redaction_overlays: Vec<pdfcraft_cos::ObjRef>,
+    /// What the edit's applied redactions left as it was that still holds the removed text.
+    pub(crate) redaction_elsewhere: Option<pdfcraft_redact::Elsewhere>,
+    /// What became of the PDF/A and PDF/UA identification when the edit's applied redactions
+    /// removed the catalog's XMP packet.
+    pub(crate) redaction_identification: pdfcraft_redact::Identification,
+    /// What [`Edit::PrepareText`] prepared, repaired and left grouped, for
+    /// [`Session::prepare_text`](crate::Session::prepare_text).
+    pub(crate) prepared: Option<pdfcraft_edit::text::forms::Preparation>,
 }
 
 impl EditCtx {
+    /// The field highlight (`app.runtimeHighlight`) the edit's next script reads: the field
+    /// scripts' runner holds it while there is one (its scripts change it there), else the edit.
+    pub(crate) fn highlight(&self) -> bool {
+        self.js.as_ref().map_or(self.highlight, |js| js.doc.highlight)
+    }
+
+    /// A script changed the field highlight: both script runtimes of the edit read the new one,
+    /// so a later edit of a batch sees it whichever kind of script it runs.
+    pub(crate) fn set_highlight(&mut self, on: bool) {
+        self.highlight = on;
+        if let Some(js) = self.js.as_mut() {
+            js.doc.highlight = on;
+        }
+    }
+
+    /// The context for one edit: `now` (the session's clock) dates it, and with `salt` seeds the
+    /// ids it makes.
     pub(crate) fn new(now: Option<i64>, salt: u64) -> Self {
         let mut seed = 0x9E37_79B9_7F4A_7C15u64 ^ salt;
         if let Some(t) = now {
@@ -209,9 +296,11 @@ impl EditCtx {
             xfa_out: Default::default(),
             xfa_datasets: None,
             xfa_ran_away: false,
+            xfa_unchanged: false,
             xfa_time_scale: 1,
             xfa_removed: Vec::new(),
             pages: 0,
+            highlight: false,
             date: now.map(pdfcraft_cos::pdf_date),
             today: (1970, 1, 1),
             seed,
@@ -219,6 +308,9 @@ impl EditCtx {
             rng: getrandom::fill,
             renamed_fields: Vec::new(),
             redaction_overlays: Vec::new(),
+            redaction_elsewhere: None,
+            redaction_identification: pdfcraft_redact::Identification::default(),
+            prepared: None,
         }
     }
 
@@ -303,6 +395,7 @@ fn run_edit_page_image(doc: &mut pdfcraft_cos::Document, page: usize, index: usi
         ImageEdit::Delete => pdfcraft_edit::ImageChange::Delete,
         ImageEdit::Arrange(order) => pdfcraft_edit::ImageChange::Arrange(*order),
         ImageEdit::RemoveCrop => pdfcraft_edit::ImageChange::RemoveCrop,
+        ImageEdit::Ungroup => pdfcraft_edit::ImageChange::Ungroup,
     };
     let page_model = pdfcraft_model::pages(doc)
         .into_iter()
@@ -327,13 +420,10 @@ fn run_edit_page_image(doc: &mut pdfcraft_cos::Document, page: usize, index: usi
     if let Some((added_idx, added_item)) = matched_added
         && let AddedContent::Image(ai) = added_item.content.clone()
     {
+        // Page visibility alone is not a crop: dragging an added image over the page edge
+        // must not discard its editable added-item identity on the next resize.
         let has_active_crop = ai.crop.iter().any(|v| v.abs() > 1e-6)
-            || img.visible_rect.is_some_and(|v| {
-                (v[0] - img.rect[0]).abs() > 1e-4
-                    || (v[1] - img.rect[1]).abs() > 1e-4
-                    || (v[2] - img.rect[2]).abs() > 1e-4
-                    || (v[3] - img.rect[3]).abs() > 1e-4
-            });
+            || img.frame_rect().is_none_or(|frame| frame.iter().zip(img.rect).any(|(a, b)| (a - b).abs() > 1e-4));
         let non_axis_transform = matches!(change, ImageEdit::Transform([a, b, c, d, _, _])
             if !((b.abs() < 1e-5 && c.abs() < 1e-5) || (a.abs() < 1e-5 && d.abs() < 1e-5)));
         let should_promote = has_active_crop
@@ -408,7 +498,7 @@ fn run_edit_page_image(doc: &mut pdfcraft_cos::Document, page: usize, index: usi
                 ai.image = new_image;
                 pdfcraft_edit::update_content(doc, page, added_idx, &AddedContent::Image(ai))?;
             }
-            ImageEdit::Crop(_) | ImageEdit::RemoveCrop | ImageEdit::RotateBy(_) | ImageEdit::Arrange(_) | ImageEdit::Delete => {
+            ImageEdit::Crop(_) | ImageEdit::RemoveCrop | ImageEdit::RotateBy(_) | ImageEdit::Arrange(_) | ImageEdit::Delete | ImageEdit::Ungroup => {
                 pdfcraft_edit::change_image(doc, page, index, &c)?;
             }
         }
@@ -416,6 +506,14 @@ fn run_edit_page_image(doc: &mut pdfcraft_cos::Document, page: usize, index: usi
         pdfcraft_edit::change_image(doc, page, index, &c)?;
     }
     Ok(())
+}
+
+/// After an edit that changes fields, their scripts or the calculation order: the edit's
+/// script runner reads the document as it now is, and builds its `calculateNow()` list again.
+fn invalidate_calculations(cx: &mut EditCtx, doc: &pdfcraft_cos::Document) {
+    if let Some(js) = cx.js.as_mut() {
+        js.invalidate_calculations(doc);
+    }
 }
 
 /// Perform an edit on a working copy (the caller discards it on error).
@@ -446,6 +544,7 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             let title = std::path::Path::new(name).file_stem().map_or_else(|| name.clone(), |s| s.to_string_lossy().into_owned());
             let outcome = pdfcraft_organize::insert_file_pages(doc, &src, &title, &pages, *at, *field_conflicts)?;
             cx.renamed_fields = outcome.renamed_fields;
+            invalidate_calculations(cx, doc);
         }
         Edit::AddBookmark { parent, index, title, page, left, top } => {
             pdfcraft_organize::add_bookmark_at(doc, parent, *index, title, *page, *left, *top)?;
@@ -496,9 +595,21 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         Edit::AddAnnotation(a) => {
             pdfcraft_annot::add_annotation(doc, a, &cx.meta())?;
         }
-        Edit::AddCustomStamp { page, rect, name, file, author } => {
+        Edit::PasteComments { xfdf, page, offset } => {
+            // Names from the edit's own id generator: unique to this paste within the document.
+            let prefix = cx.meta().id;
+            let report = pdfcraft_xfdf::import_comments(doc, xfdf, Some(*page), Some(&prefix), *offset)?;
+            if report.comments == 0 {
+                return Err(EditError::Invalid("the clipboard holds no comments".into()));
+            }
+            note_skipped(doc, &report);
+        }
+        Edit::AddCustomStamp { page, rect, name, file, author, line } => {
             let src = mark_source(doc, file)?;
-            let (sw, sh) = (src.size.0.max(1.0), src.size.1.max(1.0));
+            let line = line.as_deref().map(str::trim).filter(|l| !l.is_empty()).map(|l| l.chars().take(crate::MAX_STAMP_LINE).collect::<String>());
+            let picture = (src.size.0.max(1.0), src.size.1.max(1.0));
+            // A text line adds its band under the picture, and widens the stamp to fit (#1741).
+            let (sw, sh) = pdfcraft_annot::custom_stamp_size(picture, line.as_deref());
             let natural = rect[2] == rect[0] && rect[3] == rect[1];
             let rotation = pdfcraft_organize::page_rotation(doc, *page)?;
             // The picture as displayed: a quarter turn swaps its sides in user space.
@@ -510,7 +621,7 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             } else {
                 fit_picture(*rect, dw, dh)
             };
-            let shape = Shape::CustomStamp { rect, name: name.clone(), picture: src.xobject, image: src.image, size: (sw, sh) };
+            let shape = Shape::CustomStamp { rect, name: name.clone(), picture: src.xobject, image: src.image, size: picture, line };
             let style = pdfcraft_annot::Style::default_for(&shape);
             let new = NewAnnotation { page: *page, shape, style, contents: name.clone(), author: author.clone() };
             let index = pdfcraft_annot::add_annotation(doc, &new, &cx.meta())?;
@@ -537,13 +648,36 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         Edit::EraseInk { page, index, path, radius } => {
             pdfcraft_annot::erase_ink(doc, *page, *index, path, *radius, &cx.meta())?;
         }
+        Edit::FixHairlines { pages, settings } => {
+            let fixed = pdfcraft_edit::fix_hairlines(doc, pages, settings)?;
+            if fixed.lines == 0 {
+                return Err(EditError::Edit(pdfcraft_edit::EditError::Invalid("no hairlines found on those pages".into())));
+            }
+        }
         Edit::AddAttachment { name, bytes, description, mime } => {
             pdfcraft_organize::add_attachment(doc, name, bytes, description.as_deref(), mime.as_deref(), cx.date.as_deref())?;
         }
         Edit::DeleteAttachment { key } => pdfcraft_organize::delete_attachment(doc, key)?,
+        Edit::ConvertColours { pages, settings } => {
+            let mut recolour = |doc: &pdfcraft_cos::Document, s: &pdfcraft_cos::Stream, t: pdfcraft_edit::ColourTarget| {
+                let target = match t {
+                    pdfcraft_edit::ColourTarget::Gray => pdfcraft_optimize::ImageTarget::Gray,
+                    pdfcraft_edit::ColourTarget::Rgb => pdfcraft_optimize::ImageTarget::Rgb,
+                    pdfcraft_edit::ColourTarget::Cmyk => pdfcraft_optimize::ImageTarget::Cmyk,
+                };
+                pdfcraft_optimize::recolour_image(doc, s, target)
+            };
+            let done = pdfcraft_edit::convert_colours(doc, pages, settings, &mut recolour)?;
+            if done.colours == 0 && done.images == 0 {
+                return Err(EditError::Edit(pdfcraft_edit::EditError::Invalid("nothing on those pages needed converting".into())));
+            }
+        }
+        Edit::EditAttachmentDescription { key, description } => {
+            pdfcraft_organize::set_attachment_description(doc, key, description.as_deref())?;
+        }
         Edit::ReplaceText { page, quads, text, author, strike, caret } => {
-            // One `/NM` each: the caret replies to the strikeout, and XFDF names that reply by
-            // the strikeout's `/NM` (#2666).
+            // One `/NM` each: the strikeout is grouped with the caret, and XFDF names that link by
+            // the caret's `/NM` (#2666).
             let (strike_meta, caret_meta) = (cx.meta(), cx.meta());
             pdfcraft_annot::add_text_replacement(
                 doc,
@@ -565,6 +699,7 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         Edit::LockAnnotation { page, index, locked } => pdfcraft_annot::set_locked(doc, *page, *index, *locked)?,
         Edit::MoveAnnotation { page, index, dx, dy } => pdfcraft_annot::move_annotation(doc, *page, *index, *dx, *dy, &cx.meta())?,
         Edit::ReshapeAnnotation { page, index, points } => pdfcraft_annot::set_points(doc, *page, *index, points, &cx.meta())?,
+        Edit::SetAnnotationPopup { page, index, rect, open } => pdfcraft_annot::set_popup(doc, *page, *index, *rect, *open, &cx.meta())?,
         Edit::ResizeAnnotation { page, index, rect } => pdfcraft_annot::set_rect(doc, *page, *index, *rect, &cx.meta())?,
         Edit::StyleAnnotation { page, index, color, opacity, width, endings } => {
             pdfcraft_annot::set_style(
@@ -578,6 +713,8 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         Edit::FillAnnotation { page, index, fill } => pdfcraft_annot::set_fill(doc, *page, *index, *fill, &cx.meta())?,
         Edit::PartOpacity { page, index, fill, text } => pdfcraft_annot::set_part_opacity(doc, *page, *index, *fill, *text, &cx.meta())?,
         Edit::FontSizeAnnotation { page, index, size } => pdfcraft_annot::set_font_size(doc, *page, *index, *size, &cx.meta())?,
+        Edit::BorderColorAnnotation { page, index, color } => pdfcraft_annot::set_border_color(doc, *page, *index, *color, &cx.meta())?,
+        Edit::BorderShapeAnnotation { page, index, shape } => pdfcraft_annot::set_border_shape(doc, *page, *index, *shape, &cx.meta())?,
         Edit::SetAnnotationInfo { page, index, author, subject, icon } => {
             pdfcraft_annot::set_info(doc, *page, *index, author.as_deref(), subject.as_deref(), *icon, &cx.meta())?;
         }
@@ -586,17 +723,12 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
                 Some(js) => pdfcraft_forms::set_value_with(doc, name, value, js),
                 None => pdfcraft_forms::set_value(doc, name, value),
             };
-            match set(doc, value) {
-                Ok(()) => {}
-                // A date the field's format doesn't read may be typed by another of an XFA date
-                // field's patterns: it is kept in the first. Only a format refusal is tried
-                // again: it comes before any of the field's scripts run, so they run once.
-                Err(refused @ pdfcraft_forms::FormError::Format(_)) => match xfa::typed_date(doc, cx.xfa.as_deref(), name, value) {
-                    Some(typed) => set(doc, &typed)?,
-                    None => return Err(refused.into()),
-                },
-                Err(refused) => return Err(refused.into()),
-            }
+            // A date typed by another of an XFA date field's patterns is kept in the first, before
+            // the field's format reads it more loosely (`18OCT16` in a `YYYYMMDD|DDMMMYY` field is
+            // the 18th of October 2016, not a day of 2018).
+            let laid_out = pdfcraft_xfa::xfa_shape(doc).is_some_and(|s| s.laid_out);
+            let typed = if laid_out { xfa::typed_date(doc, cx.xfa.as_deref(), name, value) } else { None };
+            set(doc, typed.as_ref().unwrap_or(value))?;
         }
         Edit::ApplyScriptChanges { changes } => match cx.js.as_mut() {
             Some(js) => pdfcraft_forms::apply_script_changes(doc, changes, js)?,
@@ -604,12 +736,26 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         },
         Edit::XfaEvent { som, activity } => {
             let tpl = cx.xfa.clone().ok_or_else(|| EditError::Invalid("this is not a laid-out XFA form, or JavaScript is off".into()))?;
-            let mut run =
-                xfa::XfaRun { page_count: cx.pages, out: &mut cx.xfa_out, datasets: cx.xfa_datasets, ran_away: false, time_scale: cx.xfa_time_scale };
-            let ran = xfa::on_event(doc, &tpl, som, activity, &mut run);
+            let highlight = cx.highlight();
+            let mut run = xfa::XfaRun {
+                page_count: cx.pages,
+                out: &mut cx.xfa_out,
+                datasets: cx.xfa_datasets,
+                ran_away: false,
+                highlight,
+                time_scale: cx.xfa_time_scale,
+            };
+            let ran = if matches!(activity.as_str(), "enter" | "exit") {
+                xfa::on_focus(doc, &tpl, som, activity, &mut run).map(|changes| changes.is_empty())
+            } else {
+                xfa::on_event(doc, &tpl, som, activity, &mut run).map(|()| false)
+            };
             cx.xfa_datasets = run.datasets;
             cx.xfa_ran_away |= run.ran_away;
-            ran.map_err(EditError::Invalid)?;
+            // The next edit of a batch reads the highlight this one's scripts set.
+            let on = run.highlight;
+            cx.set_highlight(on);
+            cx.xfa_unchanged = ran.map_err(EditError::Invalid)?;
         }
         Edit::SetFieldImage { name, image } => {
             let (img, _) = embed_image(doc, name, image)?;
@@ -651,22 +797,32 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         }
         Edit::AddField { page, rect, kind, name } => {
             pdfcraft_forms::add_field(doc, *page, *rect, kind, name.as_deref())?;
+            invalidate_calculations(cx, doc);
         }
         Edit::SetFieldProps { name, props } => {
             pdfcraft_forms::set_props(doc, name, props)?;
+            invalidate_calculations(cx, doc);
         }
         Edit::DuplicateField { name, pages } => {
             if pdfcraft_forms::duplicate_field(doc, name, pages)? == 0 {
                 return Err(EditError::Form(pdfcraft_forms::FormError::Invalid(format!("{name} is already on those pages"))));
             }
+            invalidate_calculations(cx, doc);
         }
-        Edit::DeleteField { name } => pdfcraft_forms::delete_field(doc, name)?,
-        Edit::DeleteWidget { name, widget } => pdfcraft_forms::delete_widget(doc, name, *widget)?,
+        Edit::DeleteField { name } => {
+            pdfcraft_forms::delete_field(doc, name)?;
+            invalidate_calculations(cx, doc);
+        }
+        Edit::DeleteWidget { name, widget } => {
+            pdfcraft_forms::delete_widget(doc, name, *widget)?;
+            invalidate_calculations(cx, doc);
+        }
         Edit::SetTabOrder { pages, order } => pdfcraft_forms::set_tab_order(doc, pages, *order)?,
         Edit::MoveInTabOrder { name, earlier } => pdfcraft_forms::move_in_tab_order(doc, name, *earlier)?,
         // As after a script edit: the values the new order gives show at once.
         Edit::SetCalculationOrder { names } => {
             pdfcraft_forms::set_calculation_order(doc, names)?;
+            invalidate_calculations(cx, doc);
             match cx.js.as_mut() {
                 Some(js) => pdfcraft_forms::recalculate_with(doc, js)?,
                 None => pdfcraft_forms::recalculate(doc)?,
@@ -694,6 +850,7 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         }
         Edit::SetFieldScript { name, event, script } => {
             pdfcraft_forms::set_field_script(doc, name, event, script.as_deref())?;
+            invalidate_calculations(cx, doc);
             match cx.js.as_mut() {
                 Some(js) => pdfcraft_forms::recalculate_with(doc, js)?,
                 None => pdfcraft_forms::recalculate(doc)?,
@@ -705,13 +862,24 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         Edit::RemoveStandardId { standard } => pdfcraft_organize::remove_standard_id(doc, *standard)?,
         Edit::SetDocumentScript { name, script } => pdfcraft_forms::set_document_script(doc, name, script.as_deref())?,
         Edit::AddOcrText { page, words } => {
-            pdfcraft_edit::stamp(doc, *page, "OCR", pdfcraft_ocr::text_layer(words))?;
+            crate::ocr::layer::add_text(doc, *page, words)?;
         }
         Edit::EnhanceScan { images } => crate::scan_clean::write_back(doc, images)?,
         Edit::EditPageImage { page, index, change } => run_edit_page_image(doc, *page, *index, change)?,
         Edit::MoveObjects { page, objects, offset } => pdfcraft_edit::move_objects(doc, *page, objects, *offset)?,
+        Edit::DeleteObjects { page, objects } => crate::object_clip::delete(doc, *page, objects, |doc, edit| run_edit(doc, edit, cx))?,
+        Edit::PasteObjects { page, clip, offset } => crate::object_clip::paste(doc, *page, clip, *offset)?,
         Edit::EditTextBlock { page, block, text, style } => {
             pdfcraft_edit::rewrite_block(doc, *page, *block, Some(text), style)?;
+        }
+        Edit::PrepareText { page } => {
+            let result = pdfcraft_edit::text::forms::prepare(doc, *page)?;
+            if result.expanded == 0 && result.repaired_fonts == 0 {
+                return Err(EditError::Invalid(
+                    result.refused.first().cloned().unwrap_or_else(|| "this page has no supported grouped text to prepare".into()),
+                ));
+            }
+            cx.prepared = Some(result);
         }
         Edit::RegisterTextFont { page, bytes } => {
             pdfcraft_edit::text::register_text_font(doc, *page, bytes)?;
@@ -722,6 +890,12 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         }
         Edit::MarkTagArtifact { object } => {
             a11y::mark_tag_artifact(doc, *object).map_err(|e| EditError::Accessibility(e.to_string()))?;
+        }
+        Edit::LayoutTableToBlocks { object } => {
+            a11y::layout_table_to_blocks(doc, *object).map_err(|e| EditError::Accessibility(e.to_string()))?;
+        }
+        Edit::AddPrinterMarks { pages, settings, replace } => {
+            pdfcraft_edit::add_printer_marks(doc, pages, settings, *replace)?;
         }
         Edit::AddHeaderFooter { pages, settings, replace } => {
             let date = cx.today;
@@ -797,7 +971,10 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             pdfcraft_edit::add_content(doc, *page, &content)?;
         }
         Edit::ApplyRedactions { pages } => {
-            cx.redaction_overlays = pdfcraft_redact::apply(doc, pages.as_deref())?.overlays;
+            let report = pdfcraft_redact::apply(doc, pages.as_deref())?;
+            cx.redaction_overlays = report.overlays;
+            cx.redaction_elsewhere = Some(report.still_holding);
+            cx.redaction_identification = report.identification;
         }
         Edit::ClearRedactions => {
             pdfcraft_redact::clear_marks(doc, None)?;
@@ -842,7 +1019,10 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
                     // the data importer's error.
                     let mut data = doc.clone();
                     match pdfcraft_xfdf::import(&mut data, bytes) {
-                        Ok(_) => *doc = data,
+                        Ok(report) => {
+                            note_skipped(&mut data, &report);
+                            *doc = data;
+                        }
                         Err(e) if bytes[..bytes.len().min(1024)].windows(5).any(|w| w == b"%PDF-") => match comment_source(bytes) {
                             Ok(src) => import_pdf_comments(doc, &src)?,
                             Err(SourceProblem::Unreadable(_)) => return Err(e.into()),
@@ -911,6 +1091,11 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             doc.remove_encryption();
         }
         Edit::Batch { edits, .. } => {
+            // A form-script event runs on its own: in a batch, its scripts and those the batch's
+            // value edits run afterwards (change, exit) would interleave, an exit running twice.
+            if edits.iter().any(|e| matches!(e, Edit::XfaEvent { .. })) {
+                return Err(EditError::Invalid("a form script event can't be part of a batch of edits".into()));
+            }
             for e in edits {
                 run_edit(doc, e, cx)?;
             }
