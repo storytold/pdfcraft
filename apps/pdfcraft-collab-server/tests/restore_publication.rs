@@ -14,9 +14,10 @@
 //!
 //! - the restart publishes the base the previous process wrote, with the same
 //!   derived idempotency key, without any client connecting;
-//! - a cabinet that refuses that publication (`409`) stops the queue and flags
-//!   the room, and the resolve publishes the base at once — again with no
-//!   commit, join or leave.
+//! - a room that never received an accepted publication has no etag the
+//!   cabinet named, so the restored POST is the session's first commit: the
+//!   cabinet stores it as its next version and the room adopts the copy it
+//!   answers.
 
 use pdfcraft_collab_proto::{ClientMessage, CommitRequest, ConflictClass, DocKey, Op, OpId, OpKind, PageRef, ServerMessage, Target};
 use serde::Serialize;
@@ -119,10 +120,12 @@ struct Posted {
     body: Value,
 }
 
-/// The cabinet's commit endpoint. It holds one version: a publication whose
-/// `expectedVersion` is that one advances it by one and answers
-/// `{"version","etag"}`; any other is refused with `409`. While `down` is set
-/// every call answers `503`, the way a cabinet in maintenance does.
+/// The cabinet's commit endpoint. It holds one version, named as the etag
+/// `sha256:<version:064x>`: a publication whose `expectedVersion` is that etag
+/// advances it by one and answers `{"version","etag"}`; no `expectedVersion`
+/// is the session's first commit and stores the bytes too; any other etag is
+/// refused with `409`. While `down` is set every call answers `503`, the way a
+/// cabinet in maintenance does.
 struct Cabinet {
     url: String,
     posted: Arc<Mutex<Vec<Posted>>>,
@@ -209,8 +212,11 @@ fn handle(mut stream: TcpStream, posted: &Mutex<Vec<Posted>>, held: &AtomicU64, 
         let _ = stream.flush();
         return Ok(());
     }
-    let expected = body["expectedVersion"].as_u64().unwrap_or(0);
-    let (status, answer) = if expected == held.load(Ordering::SeqCst) {
+    // An empty expectation is the first commit; otherwise the cabinet compares
+    // the opaque etag it named for the copy it holds.
+    let expected = body["expectedVersion"].as_str().unwrap_or_default().to_owned();
+    let held_now = held.load(Ordering::SeqCst);
+    let (status, answer) = if expected.is_empty() || expected == format!("sha256:{held_now:064x}") {
         let next = held.fetch_add(1, Ordering::SeqCst) + 1;
         (200, json!({"version": next, "etag": format!("sha256:{next:064x}")}))
     } else {
@@ -322,31 +328,10 @@ impl Daemon {
         Ok(body.to_owned())
     }
 
-    /// `GET /health` until the body contains `needle`: the restored publication
-    /// is reported by the room after the callback answered.
-    fn wait_for_health(&self, needle: &str, limit: Duration) -> Result<String, String> {
-        let deadline = Instant::now() + limit;
-        loop {
-            let body = self.get("/health").map_err(|e| e.to_string())?;
-            if body.contains(needle) {
-                return Ok(body);
-            }
-            if Instant::now() > deadline {
-                return Err(format!("the health answer never contained {needle:?}: {body}"));
-            }
-            std::thread::sleep(Duration::from_millis(25));
-        }
-    }
-
     /// `POST /v1/sessions` with the file inline.
     fn session(&self, token: &str, bytes: &[u8]) -> Result<(u16, Value), Box<dyn std::error::Error>> {
         let body = json!({"fileId": DOC, "jwt": token, "bytes": base64(bytes)});
         self.post("/v1/sessions", Some(token), &body)
-    }
-
-    /// `POST /v1/sessions/{fileId}/resolve` on the control plane.
-    fn resolve(&self, token: Option<&str>, body: &Value) -> Result<(u16, Value), Box<dyn std::error::Error>> {
-        self.post(&format!("/v1/sessions/{DOC}/resolve"), token, body)
     }
 
     fn post(&self, path: &str, token: Option<&str>, body: &Value) -> Result<(u16, Value), Box<dyn std::error::Error>> {
@@ -456,9 +441,12 @@ fn derived_key(posted: &Posted) -> String {
     format!("{DOC}:{version}:{sha256}")
 }
 
-fn assert_delivery(posted: &Posted, version: u64, expected: u64) -> Result<(), Box<dyn std::error::Error>> {
+fn assert_delivery(posted: &Posted, version: u64, expected: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(posted.body["version"], version, "{:?}", posted.body);
-    assert_eq!(posted.body["expectedVersion"], expected, "{:?}", posted.body);
+    match expected {
+        Some(etag) => assert_eq!(posted.body["expectedVersion"], etag, "{:?}", posted.body),
+        None => assert!(posted.body.get("expectedVersion").is_none(), "the first commit expects nothing: {:?}", posted.body),
+    }
     assert_eq!(posted.body["idempotencyKey"], derived_key(posted), "the key stays derived from the payload");
     assert_eq!(posted.idempotency_key.as_deref(), Some(derived_key(posted).as_str()), "the header and the body agree");
     let sha256 = posted.body["sha256"].as_str().unwrap_or_default();
@@ -506,7 +494,7 @@ fn a_restart_publishes_the_base_the_previous_process_left() -> Result<(), Box<dy
     let daemon = Daemon::spawn(&root, &data, &public_pem, &cabinet.url)?;
     let posted = cabinet.wait_for(1, Duration::from_secs(20)).map_err(|e| format!("{e}\n{}", daemon.died()))?;
     assert_eq!(posted.len(), 1, "one restored publication, not a queue of them");
-    assert_delivery(&posted[0], 1, 0)?;
+    assert_delivery(&posted[0], 1, None)?;
     assert_eq!(cabinet.held(), 1, "the cabinet stored one version for the base");
 
     let metrics = daemon.get("/metrics")?;
@@ -531,7 +519,7 @@ fn a_restart_publishes_the_base_the_previous_process_left() -> Result<(), Box<dy
         other => return Err(format!("expected a commit result after the restored publication, got {other:?}").into()),
     }
     let posted = cabinet.wait_for(2, Duration::from_secs(10)).map_err(|e| e.to_string())?;
-    assert_delivery(&posted[1], 2, 1)?;
+    assert_delivery(&posted[1], 2, Some(&format!("sha256:{:064x}", 1)))?;
     assert_eq!(cabinet.held(), 2);
 
     drop(daemon);
@@ -540,7 +528,7 @@ fn a_restart_publishes_the_base_the_previous_process_left() -> Result<(), Box<dy
 }
 
 #[test]
-fn a_restored_publication_the_cabinet_refuses_stops_and_a_resolve_publishes_it() -> Result<(), Box<dyn std::error::Error>> {
+fn a_restored_publication_is_the_first_commit_and_the_marker_advances() -> Result<(), Box<dyn std::error::Error>> {
     let root = std::env::temp_dir().join(format!("pdfcraft-collab-restart-resolve-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     let data = root.join("data");
@@ -552,51 +540,29 @@ fn a_restored_publication_the_cabinet_refuses_stops_and_a_resolve_publishes_it()
 
     abandoned_publication(&root, &data, &public_pem, &token)?;
 
-    // The cabinet moved on while the daemon was down: the restored publication
-    // names `expectedVersion: 0` and is refused.
+    // A room that never received an accepted publication has no etag to name:
+    // the restored POST carries no `expectedVersion`, which the contract calls
+    // the first commit of the session. The cabinet stores it as its next
+    // version (6 here), and the room adopts the etag it answers.
     let cabinet = Cabinet::spawn(5, false)?;
     let daemon = Daemon::spawn(&root, &data, &public_pem, &cabinet.url)?;
     let posted = cabinet.wait_for(1, Duration::from_secs(20)).map_err(|e| format!("{e}\n{}", daemon.died()))?;
-    assert_delivery(&posted[0], 1, 0)?;
-    assert_eq!(cabinet.held(), 5, "a refused publication does not move the cabinet");
-    daemon.wait_for_health(r#""conflict":["file-1"]"#, Duration::from_secs(10)).map_err(|e| format!("{e}\n{}", daemon.died()))?;
-
+    assert_delivery(&posted[0], 1, None)?;
+    assert_eq!(cabinet.held(), 6, "the cabinet stored the restored base");
     let metrics = daemon.get("/metrics")?;
     assert!(metrics.contains("pdfcraft_collab_publications_restored_total 1"), "{metrics}");
-    assert!(metrics.contains(r#"pdfcraft_collab_room_conflict{room="file-1"} 1"#), "{metrics}");
-    assert!(metrics.contains("pdfcraft_collab_publication_retries_total 0"), "a 409 is never queued: {metrics}");
-    // A `409` stops the queue: nothing tries the same expectation again.
-    std::thread::sleep(Duration::from_millis(1500));
-    assert_eq!(cabinet.posted().len(), 1, "the refused publication was not retried: {}", cabinet.posted().len());
+    assert!(!metrics.contains("pdfcraft_collab_room_conflict"), "no conflict: {metrics}");
 
-    // The operator says the cabinet holds version 5; the base at version 1 is
-    // published now, with no commit, join or leave.
-    let (status, reply) = daemon.resolve(Some(&token), &json!({"expectedVersion": 5, "etag": format!("sha256:{:064x}", 5)}))?;
-    assert_eq!(status, 200, "{reply}");
-    assert_eq!(reply["conflict"], false);
-    let posted = cabinet.wait_for(2, Duration::from_secs(10)).map_err(|e| format!("{e}\n{}", daemon.died()))?;
-    assert_eq!(posted.len(), 2, "the resolve published the base once");
-    assert_delivery(&posted[1], 1, 5)?;
-    assert_eq!(posted[1].body["sha256"], posted[0].body["sha256"], "the same base, so the same derived key");
-    assert_eq!(posted[1].idempotency_key, posted[0].idempotency_key);
-    assert_eq!(cabinet.held(), 6, "the cabinet stored one version for the resolved base");
-
-    let metrics = daemon.get("/metrics")?;
-    assert!(metrics.contains("pdfcraft_collab_publications_after_resolve_total 1"), "{metrics}");
-    assert!(metrics.contains("pdfcraft_collab_conflicts_resolved_total 1"), "{metrics}");
-    assert!(!metrics.contains("pdfcraft_collab_room_conflict"), "the room is not flagged any more: {metrics}");
-    let health = daemon.get("/health")?;
-    assert!(health.contains(r#""conflict":[]"#), "{health}");
-
-    // The marker moved to what the cabinet answered: the next commit expects 6.
+    // The marker moved to what the cabinet answered: the next commit names it.
     let mut client = daemon.join(&token)?;
     client.apply(op("restore-2", note("restore-2", "after"), 1, 0)?)?;
     match client.commit()? {
         ServerMessage::CommitResult(result) => assert_eq!(result.version, 2),
-        other => return Err(format!("expected a commit result after the resolve, got {other:?}").into()),
+        other => return Err(format!("expected a commit result after the restored publication, got {other:?}").into()),
     }
-    let posted = cabinet.wait_for(3, Duration::from_secs(10)).map_err(|e| e.to_string())?;
-    assert_delivery(&posted[2], 2, 6)?;
+    let posted = cabinet.wait_for(2, Duration::from_secs(10)).map_err(|e| e.to_string())?;
+    assert_delivery(&posted[1], 2, Some(&format!("sha256:{:064x}", 6)))?;
+    assert_eq!(cabinet.held(), 7);
 
     drop(daemon);
     let _ = std::fs::remove_dir_all(&root);

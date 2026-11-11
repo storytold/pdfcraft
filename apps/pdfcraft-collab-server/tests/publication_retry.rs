@@ -390,9 +390,9 @@ fn a_lost_callback_answer_is_retried_with_the_same_key_and_one_version() -> Resu
     let first = &posted[0];
     let second = &posted[1];
     assert_eq!(first.body["version"], 1);
-    assert_eq!(first.body["expectedVersion"], 0);
+    assert!(first.body.get("expectedVersion").is_none(), "the first commit expects nothing: {:?}", first.body);
     assert_eq!(second.body["version"], 1, "the retry publishes the same version, not a new one");
-    assert_eq!(second.body["expectedVersion"], 0);
+    assert!(second.body.get("expectedVersion").is_none(), "the retry carries the same copy: {:?}", second.body);
     assert_eq!(second.body["sha256"], first.body["sha256"]);
     assert_eq!(second.idempotency_key, first.idempotency_key, "the retry carries the same idempotency key");
     assert_eq!(second.body["idempotencyKey"], first.body["idempotencyKey"]);
@@ -406,7 +406,8 @@ fn a_lost_callback_answer_is_retried_with_the_same_key_and_one_version() -> Resu
     assert!(health.contains(r#""conflict":[]"#), "{health}");
 
     // The retry advanced what the cabinet is believed to hold: the next commit
-    // expects version 1, so the marker moved without a second version.
+    // names the copy as an opaque etag (a string), never as a number, so the
+    // marker moved without a second version.
     client.apply(op("retry-2", note("retry-2", "after"), 1, 0)?)?;
     match client.commit()? {
         ServerMessage::CommitResult(result) => assert_eq!(result.version, 2),
@@ -414,7 +415,11 @@ fn a_lost_callback_answer_is_retried_with_the_same_key_and_one_version() -> Resu
     }
     let posted = cabinet.posted();
     let third = posted.last().ok_or("the second commit was not delivered")?;
-    assert_eq!((third.body["version"].as_u64(), third.body["expectedVersion"].as_u64()), (Some(2), Some(1)));
+    // The first answer named no etag, so the room adopted the digest of the copy
+    // it published; the second commit sends that back.
+    let expected = third.body["expectedVersion"].as_str().unwrap_or_default();
+    assert!(expected.starts_with("sha256:") && expected.len() == 71, "an opaque etag: {expected}");
+    assert_eq!(third.body["version"].as_u64(), Some(2));
     assert_eq!(cabinet.versions(), vec![1, 2], "two commits, two versions: the retry added none");
 
     drop(daemon);

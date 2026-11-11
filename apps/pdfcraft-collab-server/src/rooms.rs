@@ -65,8 +65,11 @@ impl Publisher {
 
     /// Send the committed file. The body is the contract of RFC §8:
     /// `{fileId, bytes, sha256, version, expectedVersion, idempotencyKey}`, with
-    /// the file base64-encoded. `expectedVersion` is the version the cabinet is
-    /// believed to hold, so the cabinet can refuse with `409` when it moved on.
+    /// the file base64-encoded. `expectedVersion` is the **etag** of the copy the
+    /// cabinet holds, a string (INTEGRATION.md §5.2, the same body DeckCraft's
+    /// room sends), so the cabinet can refuse with `409` when it moved on. It is
+    /// absent when the room has no copy the cabinet named — the first commit of
+    /// a session — because the cabinet numbers its own versions.
     ///
     /// The idempotency key names the payload (`fileId:version:sha256`), not the
     /// attempt: a retry after a lost response sends the same key, so a cabinet
@@ -75,24 +78,37 @@ impl Publisher {
     /// `Idempotency-Key` header.
     ///
     /// A `2xx` answer names the version the cabinet created (`{version, etag}`,
-    /// INTEGRATION.md §5.2); when the body carries it, that is the copy the
-    /// room adopts, and it is the `expectedVersion` of the next commit. An
-    /// answer without a usable body falls back to `expectedVersion + 1`: one
-    /// accepted publication is one cabinet version.
-    pub fn publish(&self, file_id: &str, version: u64, expected_version: u64, bytes: &[u8], sha256: &str) -> Result<Published, PublishError> {
+    /// INTEGRATION.md §5.2); when the body carries it, that is the copy the room
+    /// adopts, and its etag is the `expectedVersion` of the next commit. An
+    /// answer without a usable body falls back to the cabinet's numbering this
+    /// publication creates: one more than a numeric `expected` etag (this
+    /// cabinet's etag is its version tag), else the room's own version.
+    pub fn publish(&self, file_id: &str, version: u64, expected: Option<&str>, bytes: &[u8], sha256: &str) -> Result<Published, PublishError> {
         let key = idempotency_key(file_id, version, sha256);
-        let body = serde_json::json!({
-            "fileId": file_id,
-            "bytes": base64_encode(bytes),
-            "sha256": sha256,
-            "version": version,
-            "expectedVersion": expected_version,
-            "idempotencyKey": key,
-        })
-        .to_string();
+        let mut body = serde_json::Map::new();
+        body.insert("fileId".into(), file_id.into());
+        body.insert("bytes".into(), base64_encode(bytes).into());
+        body.insert("sha256".into(), sha256.into());
+        body.insert("version".into(), version.into());
+        // The cabinet's contract (INTEGRATION.md §5.2, the one DeckCraft's room
+        // speaks): `expectedVersion` is the **etag** of the copy the cabinet
+        // holds, a string, absent for the first commit. A number was refused by
+        // the cabinet's decoder and, sent as 0, would read as an expectation.
+        if let Some(etag) = expected.filter(|etag| !etag.is_empty()) {
+            body.insert("expectedVersion".into(), etag.into());
+        }
+        body.insert("idempotencyKey".into(), key.clone().into());
+        let body = serde_json::Value::Object(body).to_string();
         let headers = [("Idempotency-Key", key.as_str())];
         match self.client.post_json(&self.url, self.token.as_deref(), &headers, body.as_bytes()) {
-            Ok((status, answer)) if (200..300).contains(&status) => Ok(accepted_copy(&answer, expected_version, sha256)),
+            Ok((status, answer)) if (200..300).contains(&status) => {
+                // A body without the object falls back to the cabinet's numbering
+                // this publication creates: one more than the etag when it is
+                // numeric (this cabinet's etag is the version tag), else the
+                // room's version, which equals it until an operator resolved.
+                let fallback = expected.and_then(|etag| etag.parse::<u64>().ok()).map_or(version, |etag| etag.saturating_add(1));
+                Ok(accepted_copy(&answer, fallback, sha256))
+            }
             Ok((409, _)) => Err(PublishError::Conflict("the cabinet holds another version of the file".into())),
             // The cabinet is busy, a proxy timed out, or the file will be there
             // next time: another attempt with the same key may succeed.
@@ -103,12 +119,12 @@ impl Publisher {
     }
 }
 
-/// The cabinet's copy after a `2xx` callback answer. `expectedVersion + 1` is
-/// the fallback when the body is empty or not the documented object.
-fn accepted_copy(answer: &[u8], expected_version: u64, sha256: &str) -> Published {
+/// The cabinet's copy after a `2xx` callback answer; `fallback_version` is used
+/// when the body is empty or not the documented object.
+fn accepted_copy(answer: &[u8], fallback_version: u64, sha256: &str) -> Published {
     let parsed: Option<serde_json::Value> = serde_json::from_slice(answer).ok();
     let field = |name: &str| parsed.as_ref().and_then(|value| value.get(name));
-    let version = field("version").and_then(serde_json::Value::as_u64).unwrap_or_else(|| expected_version.saturating_add(1));
+    let version = field("version").and_then(serde_json::Value::as_u64).unwrap_or(fallback_version);
     let etag = field("etag").and_then(serde_json::Value::as_str).map_or_else(|| format!("sha256:{sha256}"), str::to_owned);
     Published { version, etag }
 }
@@ -140,14 +156,14 @@ struct CabinetPublication {
     publisher: Arc<Publisher>,
     file_id: String,
     version: u64,
-    expected_version: u64,
+    expected: Option<String>,
     bytes: Arc<Vec<u8>>,
     sha256: String,
 }
 
 impl Publication for CabinetPublication {
     fn run(&self) -> PublishOutcome {
-        match self.publisher.publish(&self.file_id, self.version, self.expected_version, self.bytes.as_slice(), &self.sha256) {
+        match self.publisher.publish(&self.file_id, self.version, self.expected.as_deref(), self.bytes.as_slice(), &self.sha256) {
             Ok(published) => Ok(Some(published)),
             Err(PublishError::Conflict(message)) => Err(AdapterError::new(ErrorCode::Conflict, message, false)),
             // The room keeps `publishing` and the queue tries the same body and
@@ -177,6 +193,16 @@ impl CabinetAdapter {
     #[cfg(test)]
     pub fn pdf(&self) -> &PdfAdapter {
         &self.pdf
+    }
+
+    /// The etag of the copy the cabinet holds: what the next publication sends
+    /// back as `expectedVersion`. `None` before the first accepted commit.
+    fn expected_etag(&self) -> Option<String> {
+        // Only a copy the cabinet has named: a room seeded with bytes carries
+        // the seed's own etag, which the cabinet never issued and would answer
+        // as a conflict. `expected` is set by an accepted commit or a resolve.
+        let copy = self.pdf.cabinet().filter(|copy| copy.expected.is_some())?;
+        (!copy.etag.is_empty()).then(|| copy.etag.clone())
     }
 
     /// Refuse a commit when the file the room was seeded from changed. The etag
@@ -221,7 +247,7 @@ impl Adapter for CabinetAdapter {
                     publisher: publisher.clone(),
                     file_id: self.file_id.clone(),
                     version,
-                    expected_version: self.expected_version,
+                    expected: self.expected_etag(),
                     bytes,
                     sha256: outcome.sha256.clone(),
                 }))
@@ -293,7 +319,7 @@ impl Adapter for CabinetAdapter {
             publisher: publisher.clone(),
             file_id: self.file_id.clone(),
             version,
-            expected_version: self.expected_version,
+            expected: self.expected_etag(),
             bytes: Arc::new(bytes),
             sha256,
         })))
@@ -787,7 +813,7 @@ mod tests {
         let body = requests.recv_timeout(Duration::from_secs(5))?;
         assert_eq!(body["fileId"], "file-1");
         assert_eq!(body["version"], 1);
-        assert_eq!(body["expectedVersion"], 0);
+        assert!(body.get("expectedVersion").is_none(), "the first commit expects nothing: {body}");
         assert_eq!(body["sha256"], result.sha256);
         assert_eq!(
             body["idempotencyKey"],
@@ -801,7 +827,10 @@ mod tests {
         edit(room, "n1")?;
         let second = commit(room, &editor, 2)?;
         let body = requests.recv_timeout(Duration::from_secs(5))?;
-        assert_eq!((body["version"].as_u64(), body["expectedVersion"].as_u64()), (Some(2), Some(1)));
+        // The simple cabinet answers no etag, so the room keeps `sha256:<digest>`
+        // of the copy it took: the first commit's digest.
+        let etag = format!("sha256:{}", result.sha256);
+        assert_eq!((body["version"].as_u64(), body["expectedVersion"].as_str()), (Some(2), Some(etag.as_str())));
         let published = Adapter::published(room.adapter()).ok_or("no cabinet marker")?;
         assert_eq!((published.version, published.etag), (2, format!("sha256:{}", second.sha256)));
         let _ = std::fs::remove_dir_all(&root);
@@ -812,7 +841,7 @@ mod tests {
     fn a_transport_failure_is_retryable_and_a_refused_body_is_not() -> Result<(), Box<dyn std::error::Error>> {
         let (url, requests) = cabinet(503)?;
         let publisher = Publisher::new(url, None, Duration::from_secs(5));
-        match publisher.publish("file-1", 1, 0, b"%PDF-1.7 x", "abc") {
+        match publisher.publish("file-1", 1, None, b"%PDF-1.7 x", "abc") {
             Err(PublishError::Retryable(message)) => assert!(message.contains("503"), "{message}"),
             other => return Err(format!("a 503 has to be retryable, got {other:?}").into()),
         }
@@ -823,11 +852,11 @@ mod tests {
         // attempt would be refused again, so it stays a plain failure.
         let (url, _requests) = cabinet(400)?;
         let publisher = Publisher::new(url, None, Duration::from_secs(5));
-        assert!(matches!(publisher.publish("file-1", 1, 0, b"%PDF-1.7 x", "abc"), Err(PublishError::Failed(_))));
+        assert!(matches!(publisher.publish("file-1", 1, None, b"%PDF-1.7 x", "abc"), Err(PublishError::Failed(_))));
 
         // No cabinet at all: the connection is the failure, and it is retryable.
         let publisher = Publisher::new("http://127.0.0.1:1/commit", None, Duration::from_millis(200));
-        assert!(matches!(publisher.publish("file-1", 1, 0, b"%PDF-1.7 x", "abc"), Err(PublishError::Retryable(_))));
+        assert!(matches!(publisher.publish("file-1", 1, None, b"%PDF-1.7 x", "abc"), Err(PublishError::Retryable(_))));
         Ok(())
     }
 
@@ -864,9 +893,12 @@ mod tests {
                     return;
                 }
                 let request: serde_json::Value = serde_json::from_slice(&body).unwrap_or(serde_json::Value::Null);
-                let expected = request["expectedVersion"].as_u64().unwrap_or(0);
+                // The cabinet compares opaque etags, not numbers: the room sends
+                // back exactly the etag this fixture named for the held version.
+                let expected = request["expectedVersion"].as_str().unwrap_or_default().to_owned();
+                let held_now = held.load(Ordering::SeqCst);
                 let _ = sender.send(request);
-                let (status, answer) = if expected == held.load(Ordering::SeqCst) {
+                let (status, answer) = if expected == format!("sha256:{held_now:064x}") {
                     let next = held.fetch_add(1, Ordering::SeqCst) + 1;
                     (200, format!("{{\"version\":{next},\"etag\":\"sha256:{next:064x}\"}}"))
                 } else {
@@ -912,11 +944,12 @@ mod tests {
         assert_eq!(again.code, ErrorCode::Conflict);
         for _ in 0..2 {
             let body = requests.recv_timeout(Duration::from_secs(5))?;
-            assert_eq!(body["expectedVersion"], 0, "an unresolved room keeps publishing the old expectation");
+            assert!(body.get("expectedVersion").is_none(), "an unresolved room keeps publishing the old expectation: {body}");
         }
 
         // The operator says the cabinet is at version 7.
-        room.resolve_conflict(Published { version: 7, etag: "sha256:77".into() })?;
+        let resolved = format!("sha256:{:064x}", 7);
+        room.resolve_conflict(Published { version: 7, etag: resolved.clone() })?;
         assert_eq!(room.conflict(), None);
         assert!(room.is_dirty(), "the unpublished work is still here");
 
@@ -924,7 +957,7 @@ mod tests {
         let result = commit(room, &editor, 2)?;
         let body = requests.recv_timeout(Duration::from_secs(5))?;
         assert_eq!(body["version"], 2);
-        assert_eq!(body["expectedVersion"], 7, "the resolved version is what the cabinet expects");
+        assert_eq!(body["expectedVersion"], resolved.as_str(), "the resolved etag is what the cabinet expects");
         assert_eq!(body["idempotencyKey"], format!("file-1:2:{}", result.sha256), "the key stays derived from the payload");
         // The cabinet answered `{version: 8}`; the next commit expects that,
         // not the room's number, so the resolution survives the publication.
@@ -933,7 +966,8 @@ mod tests {
         edit(room, "n2")?;
         commit(room, &editor, 3)?;
         let body = requests.recv_timeout(Duration::from_secs(5))?;
-        assert_eq!((body["version"].as_u64(), body["expectedVersion"].as_u64()), (Some(3), Some(8)));
+        let etag = format!("sha256:{:064x}", 8);
+        assert_eq!((body["version"].as_u64(), body["expectedVersion"].as_str()), (Some(3), Some(etag.as_str())));
         let _ = std::fs::remove_dir_all(&root);
         Ok(())
     }

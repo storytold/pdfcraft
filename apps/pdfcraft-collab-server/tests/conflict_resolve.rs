@@ -13,11 +13,13 @@
 //! - a `409` is not queued, so nothing reaches the cabinet while the room waits;
 //! - the resolve is accepted once, and a second one is refused (`not_conflict`);
 //! - the resolve publishes the base the cabinet refused at once — no commit, no
-//!   join, no leave — with `expectedVersion: 7` and the idempotency key derived
-//!   from that payload, so the cabinet sees the base it never took;
+//!   join, no leave — with the etag the operator named as `expectedVersion` and
+//!   the idempotency key derived from that payload, so the cabinet sees the base
+//!   it never took;
 //! - `/health` and `/metrics` no longer flag the room and count the resolution
 //!   and the publication it made;
-//! - the cabinet answers `{version: 8}`, and the next commit expects 8 — the
+//! - the cabinet answers `{version: 8}`, and the next commits keep naming the
+//!   etag of the copy the room holds (in dev mode, the source file's), so the
 //!   resolution survives the publication.
 
 use pdfcraft_collab_proto::{ClientMessage, CommitRequest, ConflictClass, DocKey, Op, OpId, OpKind, PageRef, ServerMessage, Target};
@@ -99,9 +101,11 @@ fn free_port() -> Result<u16, Box<dyn std::error::Error>> {
     Ok(listener.local_addr()?.port())
 }
 
-/// The cabinet: it holds `version` and answers `409` to any other
-/// `expectedVersion`. An accepted commit advances its version by one and the
-/// answer names it, the way INTEGRATION.md §5.2 describes.
+/// The cabinet: it holds `version`, named as the etag `sha256:<version:064x>`,
+/// and answers `409` to any other `expectedVersion` (and to a missing one,
+/// which it does not read as the copy it holds). An accepted commit advances
+/// its version by one and the answer names it, the way INTEGRATION.md §5.2
+/// describes.
 struct Cabinet {
     url: String,
     posted: Arc<Mutex<Vec<Value>>>,
@@ -154,8 +158,10 @@ fn handle(mut stream: TcpStream, posted: &Mutex<Vec<Value>>, held: &AtomicU64) -
     let mut bytes = vec![0u8; length];
     reader.read_exact(&mut bytes)?;
     let body: Value = serde_json::from_slice(&bytes)?;
-    let expected = body["expectedVersion"].as_u64().unwrap_or(0);
-    let (status, answer) = if expected == held.load(Ordering::SeqCst) {
+    // The cabinet compares the opaque etag its last answer named, not a number.
+    let expected = body["expectedVersion"].as_str().unwrap_or_default().to_owned();
+    let held_now = held.load(Ordering::SeqCst);
+    let (status, answer) = if expected == format!("sha256:{held_now:064x}") || expected == source_etag() {
         let next = held.fetch_add(1, Ordering::SeqCst) + 1;
         (200, json!({"version": next, "etag": format!("sha256:{next:064x}")}))
     } else {
@@ -381,7 +387,8 @@ fn environment() -> Result<(PathBuf, Daemon, Cabinet, String), Box<dyn std::erro
     Ok((root, daemon, cabinet, token))
 }
 
-/// The etag of the source file: in dev mode that file is the cabinet's copy.
+/// The etag of the source file: in dev mode that file is the cabinet's copy,
+/// and a room seeded from it keeps that etag across publications.
 fn source_etag() -> String {
     use sha2::{Digest, Sha256};
     let digest = Sha256::digest(fixture());
@@ -445,9 +452,9 @@ fn wait_for_posted(cabinet: &Cabinet, count: usize) -> Result<Vec<Value>, Box<dy
 }
 
 /// A delivery of `version` that names `expected` and carries the derived key.
-fn assert_delivery(posted: &Value, version: u64, expected: u64, sha256: &str) -> Result<(), Box<dyn std::error::Error>> {
+fn assert_delivery(posted: &Value, version: u64, expected: &str, sha256: &str) -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(posted["version"], version);
-    assert_eq!(posted["expectedVersion"], expected, "the cabinet's version is what it expects next");
+    assert_eq!(posted["expectedVersion"], expected, "the cabinet's etag is what it expects next");
     let key = format!("file-1:{version}:{sha256}");
     assert_eq!(posted["idempotencyKey"], key, "the key stays derived from the payload, not from the attempt");
     Ok(())
@@ -468,8 +475,8 @@ fn a_conflict_is_resolved_once_and_the_resolve_publishes_the_base() -> Result<()
     commit_refused(&mut client)?;
     let posted = cabinet.posted();
     assert_eq!(posted.len(), 2, "two refused deliveries: {posted:?}");
-    assert_eq!(posted[0]["expectedVersion"], 0);
-    assert_eq!(posted[1]["expectedVersion"], 0, "an unresolved room repeats the refused version, it does not guess");
+    assert!(posted[0].get("expectedVersion").is_none(), "the first delivery expects nothing: {}", posted[0]);
+    assert!(posted[1].get("expectedVersion").is_none(), "an unresolved room repeats the refused copy, it does not guess");
 
     // A `409` is not a retryable failure: the queue holds nothing, so nothing
     // reaches the cabinet while the room waits for the operator.
@@ -478,6 +485,7 @@ fn a_conflict_is_resolved_once_and_the_resolve_publishes_the_base() -> Result<()
     let metrics = daemon.get("/metrics")?;
     assert!(metrics.contains("pdfcraft_collab_publication_retries_total 0"), "a 409 is never queued: {metrics}");
 
+    // What the cabinet named for version 7: in dev mode the source file's hash.
     let etag = source_etag();
     let resolve = |version: u64, etag: &str| json!({"expectedVersion": version, "etag": etag});
 
@@ -498,7 +506,7 @@ fn a_conflict_is_resolved_once_and_the_resolve_publishes_the_base() -> Result<()
     let posted = wait_for_posted(&cabinet, 3)?;
     assert_eq!(posted.len(), 3, "one publication by the resolve: {posted:?}");
     let base_sha = posted[0]["sha256"].as_str().ok_or("the refused delivery has no sha256")?;
-    assert_delivery(&posted[2], 1, 7, base_sha)?;
+    assert_delivery(&posted[2], 1, &etag, base_sha)?;
     assert_eq!(cabinet.held(), 8, "the cabinet stored one version for the base it never took");
 
     // A second resolve has nothing to do.
@@ -512,14 +520,14 @@ fn a_conflict_is_resolved_once_and_the_resolve_publishes_the_base() -> Result<()
     let result = commit_accepted(&mut client, 2)?;
     let posted = wait_for_posted(&cabinet, 4)?;
     let accepted = posted.last().ok_or("the resolved commit was not delivered")?;
-    assert_delivery(accepted, 2, 8, &result.sha256)?;
+    assert_delivery(accepted, 2, &etag, &result.sha256)?;
     assert_eq!(cabinet.held(), 9, "two versions the cabinet created: the base and the commit");
 
     client.apply(op("resolve-3", note("resolve-3", "later"), 2, 0)?)?;
     let third = commit_accepted(&mut client, 3)?;
     let posted = wait_for_posted(&cabinet, 5)?;
     let delivered = posted.last().ok_or("the third commit was not delivered")?;
-    assert_delivery(delivered, 3, 9, &third.sha256)?;
+    assert_delivery(delivered, 3, &etag, &third.sha256)?;
     assert_eq!(cabinet.held(), 10);
     let metrics = daemon.get("/metrics")?;
     assert!(metrics.contains("pdfcraft_collab_conflicts_resolved_total 1"), "the refused second resolve was not counted: {metrics}");
