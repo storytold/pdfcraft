@@ -1,6 +1,7 @@
 use super::changes::classify_changes;
 use super::listing::{DigestCache, list, nums, sig_fields, text};
-use super::types::{Detail, Fill, Modification, Status, TrustStore};
+use super::locks::{Locked, locked_fields};
+use super::types::{Detail, Fill, Modification, Status, TrustStore, kind};
 use super::{
     Certificate, Dict, DigestAlg, Document, HashSet, ObjRef, Object, SignError, SignatureInfo, SignedData, Time, build_chain, build_chain_noted,
 };
@@ -20,6 +21,11 @@ struct VerifiedSignature<'a> {
     cms_time: Option<Time>,
     unverified_time: Option<Time>,
 }
+
+/// Most signature fields whose locks are compared for a signature that is not listed under any of
+/// the fields ending its signed revision; past it the locks are left undecided. Each costs a walk of
+/// the form, and a real revision ends with one signature.
+const MAX_UNBOUND_CANDIDATES: usize = 4;
 
 /// Validate one signature dictionary.
 pub fn validate(doc: &Document, bytes: &[u8], trust: &TrustStore, field: &str) -> Option<SignatureInfo> {
@@ -265,6 +271,7 @@ fn finish_validation(context: SignatureValidation<'_>, verified: VerifiedSignatu
     let revocation = check_dss_revocation(doc, signer.as_ref(), &at, info);
     let revoked = revocation == DssRevocation::Revoked;
     // Changes after signing.
+    let mut locks = Locked::Kept;
     info.modification = if covered == bytes.len() || bytes[covered..].iter().all(|b| b.is_ascii_whitespace() || *b == 0) {
         Modification::None
     } else {
@@ -273,16 +280,47 @@ fn finish_validation(context: SignatureValidation<'_>, verified: VerifiedSignatu
         // revision that holds no such signature does not say which permissions apply, so what
         // came after it is judged as when the revision cannot be read: not permitted.
         let old = cache.revision(doc, bytes, covered);
-        let signed = old.as_ref().and_then(|old| {
-            sig_fields(old)
-                .iter()
-                .filter_map(|f| f.signature(old))
-                .find(|v| nums(old, v, b"ByteRange").is_some_and(|b| b.len() == 4 && b[2] + b[3] == covered as f64))
-        });
-        match (old, signed) {
-            (Some(old), Some(v)) => {
-                set_certification(&old, &v, info);
-                classify_changes(doc, Some(old), info.certify)
+        // Every field of the signed revision whose signature ends it; the one this signature is
+        // listed under, when it is there, is the one it was made in.
+        let mut ending: Vec<_> = old
+            .as_ref()
+            .map(|old| {
+                sig_fields(old)
+                    .into_iter()
+                    .filter_map(|f| {
+                        let v = f.signature(old)?;
+                        nums(old, &v, b"ByteRange").is_some_and(|b| b.len() == 4 && b[2] + b[3] == covered as f64).then_some((f, v))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let bound = ending.iter().position(|(f, _)| f.name == info.field);
+        let candidates = match bound {
+            Some(i) => vec![ending.swap_remove(i)],
+            None => std::mem::take(&mut ending),
+        };
+        match (old, candidates.first()) {
+            (Some(old), Some((field, v))) => {
+                set_certification(&old, v, info);
+                // The fields this signature locks, as the signed revision has them, against the
+                // document now (#6757). Its locks are its own field's: when that field is not
+                // among those ending the revision, any of them could be it, so a lock on any of
+                // them leaves the check undecided rather than borrowing another field's. Each
+                // candidate costs a walk of the form, so past a few the check is undecided too.
+                locks = match bound {
+                    Some(_) => locked_fields(doc, &old, field, v),
+                    None if candidates.len() > MAX_UNBOUND_CANDIDATES => Locked::Unchecked,
+                    None if candidates.iter().any(|(f, v)| locked_fields(doc, &old, f, v) != Locked::Kept) => Locked::Unchecked,
+                    None => Locked::Kept,
+                };
+                match classify_changes(doc, Some(old), info.certify) {
+                    Modification::Allowed(_) if locks == Locked::Changed => Modification::Disallowed(vec![kind::LOCKED_FIELD]),
+                    Modification::Disallowed(mut kinds) if locks == Locked::Changed => {
+                        kinds.push(kind::LOCKED_FIELD);
+                        Modification::Disallowed(kinds)
+                    }
+                    m => m,
+                }
             }
             _ => classify_changes(doc, None, info.certify),
         }
@@ -305,6 +343,18 @@ fn finish_validation(context: SignatureValidation<'_>, verified: VerifiedSignatu
             info.details.push(said);
             problems = true;
         }
+    }
+    // A lock that could not be read or compared proves nothing either way: the changes may touch
+    // a field it locks, so the signature is not Valid.
+    if locks == Locked::Unchecked && !problems {
+        info.details.push(Detail::of(
+            "The signature could not be checked ({}).",
+            Fill::Reason("the fields this signature locks could not all be compared with the signed version".into()),
+        ));
+        if !revoked {
+            info.status = Status::Unknown;
+        }
+        problems = true;
     }
     if revocation == DssRevocation::Incomplete {
         if !problems {
