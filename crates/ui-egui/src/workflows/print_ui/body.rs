@@ -104,15 +104,27 @@ fn combo<T: PartialEq + Copy>(ui: &mut egui::Ui, id: &str, name: &str, value: &m
 }
 
 /// A standard card container for a Print dialog section matching the Preferences dialog design language.
-fn print_card<R>(ui: &mut egui::Ui, t: &Tokens, title: &str, icon: Option<&str>, content: impl FnOnce(&mut egui::Ui) -> R) -> R {
+fn print_card<R>(
+    ui: &mut egui::Ui,
+    t: &Tokens,
+    title: &str,
+    icon: Option<&str>,
+    width: f32,
+    min_height: Option<f32>,
+    content: impl FnOnce(&mut egui::Ui) -> R,
+) -> R {
     let card_fill = if t.kind == theme::ThemeKind::Light { Color32::from_rgb(0xF7, 0xF8, 0xFA) } else { Color32::from_rgb(0x24, 0x24, 0x28) };
     egui::Frame::new()
         .fill(card_fill)
         .stroke(Stroke::new(1.0, t.border))
         .corner_radius(egui::CornerRadius::same(8))
-        .inner_margin(egui::Margin::symmetric(12, 6))
+        .inner_margin(egui::Margin::symmetric(12, 4))
         .show(ui, |ui| {
-            ui.set_width(ui.available_width());
+            ui.set_width(width);
+            ui.set_max_width(width);
+            if let Some(h) = min_height {
+                ui.set_min_height(h);
+            }
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 6.0;
                 if let Some(ic) = icon {
@@ -120,7 +132,7 @@ fn print_card<R>(ui: &mut egui::Ui, t: &Tokens, title: &str, icon: Option<&str>,
                 }
                 ui.label(egui::RichText::new(crate::i18n::upper_label(title)).font(theme::semibold(12.0)).color(t.text));
             });
-            ui.add_space(3.0);
+            ui.add_space(2.0);
             content(ui)
         })
         .inner
@@ -206,7 +218,7 @@ pub(crate) fn body(
             ui.painter().line_segment([pos2(center.x - r, center.y + r), pos2(center.x + r, center.y - r)], Stroke::new(1.5, stroke_color));
         },
     );
-    ui.add_space(8.0);
+    ui.add_space(6.0);
 
     let settings = d.settings(sizes.len(), labels);
     let laid = settings.as_ref().ok().map(|s| print::layout(sizes, s));
@@ -217,18 +229,24 @@ pub(crate) fn body(
 
     // Cap the settings+preview area to the screen's available height (#4252, #5317).
     let screen_h = ui.ctx().input(|i| i.viewport_rect().height());
-    let max_h = (screen_h - 120.0).max(300.0);
+    let max_h = (screen_h - 235.0).max(300.0);
 
-    egui::ScrollArea::vertical().max_height(max_h).min_scrolled_height(max_h).auto_shrink([false, true]).show(ui, |ui| {
-        ui.horizontal_top(|ui| {
-            // Left Column: Settings Cards.
-            ui.vertical(|ui| {
-                ui.set_width(460.0);
-                ui.spacing_mut().item_spacing.y = 6.0;
+    egui::ScrollArea::vertical()
+        .id_salt("print-dialog-scroll")
+        .max_height(max_h)
+        .min_scrolled_height(max_h)
+        .auto_shrink([false, true])
+        .show(ui, |ui| {
+            ui.horizontal_top(|ui| {
+                // Left Column: Settings Cards.
+                ui.vertical(|ui| {
+                    ui.set_width(452.0);
+                    ui.set_max_width(452.0);
+                    ui.spacing_mut().item_spacing.y = 3.0;
 
-                // Card 1: Printer & Paper Setup
-                print_card(ui, t, tl!("Printer & Paper Setup"), Some("printer"), |ui| {
-                    egui::Grid::new("print-top").num_columns(2).spacing([8.0, 5.0]).show(ui, |ui| {
+                    // Card 1: Printer & Paper Setup
+                    print_card(ui, t, tl!("Printer & Paper Setup"), Some("printer"), 452.0, Some(140.0), |ui| {
+                        egui::Grid::new("print-top").num_columns(2).spacing([8.0, 2.0]).show(ui, |ui| {
                         let printer_caption = ui.label(tl!("Printer:"));
                         let before = d.printer.clone();
                         let browser = d.printer.as_deref() == Some(crate::web_print::BROWSER_PRINTER);
@@ -294,11 +312,17 @@ pub(crate) fn body(
 
                         if !d.printers_loading && d.printers.is_empty() {
                             ui.label("");
-                            ui.label(
-                                egui::RichText::new(tl!("No printers were found. Check that the printer is installed and the print spooler is running, then open Print again."))
-                                    .small()
-                                    .color(t.text_muted),
-                            );
+                            ui.scope(|ui| {
+                                ui.set_max_width(340.0);
+                                ui.add(
+                                    egui::Label::new(
+                                        egui::RichText::new(tl!("No printers were found. Check that the printer is installed and the print spooler is running, then open Print again."))
+                                            .small()
+                                            .color(t.text_muted),
+                                    )
+                                    .wrap(),
+                                );
+                            });
                             ui.end_row();
                         }
 
@@ -416,13 +440,13 @@ pub(crate) fn body(
                     });
 
                     if d.printer_two_sided() == Some(false) {
-                        ui.label(egui::RichText::new(tl!("This printer's driver doesn't take two-sided settings from other programs, so its own setting applies. Change it in Properties…")).small().color(t.text_muted));
+                        ui.add(egui::Label::new(egui::RichText::new(tl!("This printer's driver doesn't take two-sided settings from other programs, so its own setting applies. Change it in Properties…")).small().color(t.text_muted)).wrap());
                     }
                     if d.printer.as_deref() == Some(crate::web_print::BROWSER_PRINTER) {
-                        ui.label(egui::RichText::new(tl!("Copies, two-sided printing and colour are chosen in the browser's print dialog.")).small().color(t.text_muted));
+                        ui.add(egui::Label::new(egui::RichText::new(tl!("Copies, two-sided printing and colour are chosen in the browser's print dialog.")).small().color(t.text_muted)).wrap());
                     }
                     if let Some(e) = &d.driver_error {
-                        ui.label(egui::RichText::new(crate::i18n::fmt(tl!("Couldn't open the printer's preferences: {e}"), &[("e", e)])).small().color(t.text_muted));
+                        ui.add(egui::Label::new(egui::RichText::new(crate::i18n::fmt(tl!("Couldn't open the printer's preferences: {e}"), &[("e", e)])).small().color(t.text_muted)).wrap());
                     }
                     if d.show_driver_options {
                         if d.driver_options.is_none() && d.driver_options_loading.is_some() {
@@ -452,7 +476,7 @@ pub(crate) fn body(
                 });
 
                 // Card 2: Pages to Print
-                print_card(ui, t, tl!("Pages to Print"), Some("files"), |ui| {
+                print_card(ui, t, tl!("Pages to Print"), Some("files"), 452.0, Some(68.0), |ui| {
                     ui.horizontal(|ui| {
                         ui.label(tl!("Range:"));
                         let area_label = d.area.as_ref().map(|(page, a)| {
@@ -507,7 +531,7 @@ pub(crate) fn body(
                 });
 
                 // Card 3: Page Sizing & Handling
-                print_card(ui, t, tl!("Page Sizing & Handling"), Some("sliders-horizontal"), |ui| {
+                print_card(ui, t, tl!("Page Sizing & Handling"), Some("sliders-horizontal"), 452.0, Some(124.0), |ui| {
                     ui.horizontal_wrapped(|ui| {
                         for (h, label) in [
                             (Handling::Size, tl!("Size")),
@@ -523,7 +547,9 @@ pub(crate) fn body(
                         }
                     });
                     ui.add_space(2.0);
-                    match d.handling {
+                    ui.scope(|ui| {
+                        ui.set_min_height(44.0);
+                        match d.handling {
                         Handling::Size => {
                             ui.horizontal(|ui| {
                                 #[derive(PartialEq, Clone, Copy)]
@@ -659,6 +685,7 @@ pub(crate) fn body(
                             });
                         }
                     }
+                    });
                     ui.add_space(2.0);
                     ui.horizontal(|ui| {
                         ui.label(tl!("Orientation:"));
@@ -676,7 +703,7 @@ pub(crate) fn body(
                 });
 
                 // Card 4: Comments & Forms
-                print_card(ui, t, tl!("Comments & Forms"), Some("message-square"), |ui| {
+                print_card(ui, t, tl!("Comments & Forms"), Some("message-square"), 452.0, Some(68.0), |ui| {
                     combo(
                         ui,
                         "content",
@@ -719,8 +746,8 @@ pub(crate) fn body(
 
             // Right Column: Preview Card.
             ui.vertical(|ui| {
-                ui.set_width(PREVIEW_W + 28.0);
-                print_card(ui, t, tl!("Preview"), Some("eye"), |ui| {
+                ui.set_width(348.0);
+                print_card(ui, t, tl!("Preview"), Some("eye"), 348.0, Some(454.0), |ui| {
                     let (area, _) = ui.allocate_exact_size(vec2(PREVIEW_W, PREVIEW_H), egui::Sense::hover());
                     ui.painter().rect_filled(area, 6.0, t.hover);
                     match (&settings, sheets.get(d.sheet)) {
