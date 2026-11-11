@@ -288,6 +288,11 @@ impl<'a> Type3<'a> {
         self.recovery.cache.recover(FontKind::Type3, facts, glyph)
     }
 
+    /// PdfCraft patch (104): what the font keeps for the recovery rules.
+    pub(crate) fn recovery_info(&self) -> &FontRecovery {
+        &self.recovery
+    }
+
     /// PdfCraft patch (104): the font's style for text the recovery rules read, from its
     /// dictionary and descriptor (`/BaseFont` or `/Name`, `/Flags`, `/FontWeight`,
     /// `/ItalicAngle`); a Type 3 font has no program to add to them.

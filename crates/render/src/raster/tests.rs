@@ -2803,7 +2803,7 @@ trailer << /Root 1 0 R >>
 %%EOF";
     let pool = RenderPool::new(Arc::new(ONE_PAGE.to_vec()), 1, RenderConfig::default());
     let flag = lock(&pool.shared.stop).first().cloned().expect("one worker");
-    let settings = worker_settings(&pool.config, &flag);
+    let settings = worker_settings(&pool.config, &flag, &pool.shared.recovery);
     assert!(settings.cancelled.as_ref().is_some_and(|c| Arc::ptr_eq(c, &flag)));
     let shapes = Pdf::new(Arc::new(ONE_PAGE.to_vec())).expect("parses");
     let text = Pdf::new(Arc::new(TEXT.to_vec())).expect("parses");

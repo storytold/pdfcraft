@@ -86,16 +86,7 @@ fn layers(pdf: &Pdf) -> (PageText, Option<RecoveredText>, PageText, RecoveryCoun
     let settings = InterpreterSettings::default();
     let before = recovery_counters();
     let (strict, recovered) = extract_page_recovering(pdf, 0, &settings).unwrap();
-    let after = recovery_counters();
-    let cost = RecoveryCounters {
-        rule_calls: after.rule_calls - before.rule_calls,
-        guard_decisions: after.guard_decisions - before.guard_decisions,
-        facts_built: after.facts_built - before.facts_built,
-        glyph_facts_built: after.glyph_facts_built - before.glyph_facts_built,
-        program_walks: after.program_walks - before.program_walks,
-        type3_key_hashes: after.type3_key_hashes - before.type3_key_hashes,
-        outlines_classified: after.outlines_classified - before.outlines_classified,
-    };
+    let cost = recovery_counters().since(&before);
     (strict, recovered, extract_page(pdf, 0, &settings).unwrap(), cost)
 }
 

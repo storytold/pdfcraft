@@ -1466,6 +1466,8 @@ struct PageFrame<'a> {
     current_height: f32,
     pressed_page: Option<usize>,
     calc_hover: Option<crate::calc_order_ui::Focus>,
+    /// The form field widget under the pointer on any page, for its Mouse Enter and Exit scripts.
+    field_hover: Option<crate::forms_ui::WidgetRef>,
     /// A page took this frame's right-click.
     right_clicked: bool,
 }
@@ -1948,6 +1950,7 @@ fn draw_pages(
         current_height: f32::INFINITY,
         pressed_page: None,
         calc_hover: None,
+        field_hover: None,
         right_clicked: false,
     };
     for &i in visible_pages {
@@ -1962,10 +1965,12 @@ fn draw_pages(
         current_height,
         pressed_page,
         calc_hover,
+        field_hover,
         out: page_out,
         right_clicked,
         ..
     } = frame;
+    crate::forms_ui::hover_moved(view, field_hover);
     // A right-click no page took deselects the comment, so the page's menu opens, not the comment's,
     // and with Edit text the picture (one on a page went to that page, `page_input`).
     if resp.secondary_clicked() && !right_clicked {

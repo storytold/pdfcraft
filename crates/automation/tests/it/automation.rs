@@ -8986,6 +8986,61 @@ fn doc_optimize_stores_black_and_white_images_as_ccitt_group_4() {
     }
 }
 
+/// A mixed-raster page: a flat colour layer drawn through a one-bit soft mask, [`scanned_page`]'s
+/// scan, which the page no longer draws by name. `doc_optimize` stores the mask as Group 4, at its
+/// size, still the picture's soft mask, and counts it as an image; with `mono: retain` it stays.
+#[test]
+fn doc_optimize_stores_a_pictures_one_bit_soft_mask_as_ccitt_group_4() {
+    use pdfcraft_cos::{Dict, Document, ObjRef, Object, SaveOptions, Stream, write_full};
+    let dir = workdir("optimize-mono-mask");
+    let mut doc = Document::open(std::sync::Arc::new(scanned_page())).unwrap();
+    let find = |doc: &Document, kind: &[u8], key: &[u8]| {
+        doc.object_numbers().into_iter().map(|num| ObjRef { num, generation: doc.generation(num) }).find(|r| match &*doc.get(*r) {
+            Object::Stream(s) => s.dict.name(key) == Some(kind),
+            Object::Dict(d) => d.name(key) == Some(kind),
+            _ => false,
+        })
+    };
+    let scan = find(&doc, b"Image", b"Subtype").unwrap();
+    let page = find(&doc, b"Page", b"Type").unwrap();
+    let mut d = Dict::new();
+    d.set(b"Type".to_vec(), Object::name("XObject"));
+    d.set(b"Subtype".to_vec(), Object::name("Image"));
+    d.set(b"Width".to_vec(), Object::Int(250));
+    d.set(b"Height".to_vec(), Object::Int(100));
+    d.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+    d.set(b"ColorSpace".to_vec(), Object::name("DeviceRGB"));
+    d.set(b"SMask".to_vec(), Object::Ref(scan));
+    let picture = doc.add(Object::Stream(Stream::flate(d, &[0, 102, 204].repeat(250 * 100))));
+    doc.update_dict(page, |p| {
+        let mut x = Dict::new();
+        x.set(b"Scan".to_vec(), Object::Ref(picture));
+        let mut res = Dict::new();
+        res.set(b"XObject".to_vec(), Object::Dict(x));
+        p.set(b"Resources".to_vec(), Object::Dict(res));
+    })
+    .unwrap();
+    std::fs::write(dir.join("masked.pdf"), write_full(&doc, &SaveOptions::default()).unwrap()).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "masked.pdf" }))["doc"].as_u64().unwrap();
+    let kept = ok(&mut a, "doc_optimize", json!({ "doc": doc, "path": "kept.pdf", "mono": { "compression": "retain" } }));
+    assert_eq!(kept["images_recompressed"].as_u64(), Some(0), "{kept}");
+    let r = ok(&mut a, "doc_optimize", json!({ "doc": doc, "path": "small.pdf" }));
+    assert_eq!((r["images"].as_u64(), r["images_recompressed"].as_u64()), (Some(2), Some(1)), "the picture and its mask: {r}");
+    // In the copy written, the picture's soft mask is Group 4, at its size.
+    let small = Document::open(std::sync::Arc::new(std::fs::read(dir.join("small.pdf")).unwrap())).unwrap();
+    let picture = small
+        .object_numbers()
+        .into_iter()
+        .map(|num| small.get(ObjRef { num, generation: small.generation(num) }))
+        .find(|o| matches!(&**o, Object::Stream(s) if s.dict.contains(b"SMask")))
+        .unwrap();
+    let Object::Stream(picture) = &*picture else { unreachable!() };
+    let Object::Stream(mask) = &*small.get(picture.dict.reference(b"SMask").unwrap()) else { panic!("the soft mask is a stream") };
+    assert_eq!(mask.dict.name(b"Filter"), Some(&b"CCITTFaxDecode"[..]));
+    assert_eq!((mask.dict.int(b"Width"), mask.dict.int(b"Height")), (Some(1000), Some(400)));
+}
+
 /// A scan drawn at 600 ppi is averaged down to 300 ppi by default. `mono: { downsample: false }`
 /// keeps its size, `ppi` and `above_ppi` choose others, and values of the wrong type are refused.
 #[test]

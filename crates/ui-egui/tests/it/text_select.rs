@@ -783,3 +783,23 @@ fn copy_with_formatting_honours_permissions_too() {
     h.run_steps(2);
     assert!(h.get_by_label("Copy with formatting").accesskit_node().is_disabled(), "unavailable where copying is withheld");
 }
+
+/// With a text field focused (Find), Edit ▸ Copy with formatting is off: it copies the page's
+/// selection, which isn't what the user is working in, and the field has its own Copy.
+#[test]
+fn copy_with_formatting_is_off_while_a_text_field_has_focus() {
+    let (mut h, at) = harness(|_| {});
+    let sets = html_clipboard(h.state_mut(), true);
+    click(&mut h, at);
+    click(&mut h, at);
+    let item = craft_menu::CommandRef::new("edit.copy-with-formatting");
+    let ctx = h.ctx.clone();
+    assert!(h.state().menu_state(&ctx, &item).enabled, "a page selection: the item is on");
+    assert!(h.state_mut().execute("edit.find"));
+    h.run_steps(4);
+    assert!(h.ctx.text_edit_focused(), "the Find field has the focus");
+    assert!(!h.state().menu_state(&ctx, &item).enabled, "a focused field: the item is off");
+    h.state_mut().run_menu_command(&ctx, &item);
+    h.step();
+    assert!(sets.lock().unwrap().is_empty(), "nothing was copied from the page");
+}

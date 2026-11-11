@@ -156,7 +156,43 @@ pub struct GlyphStyle {
     pub italic: bool,
 }
 
+impl PageText {
+    /// What this text holds on the heap, for the render queue's byte allowance: its vectors'
+    /// capacities and each glyph's text.
+    pub(crate) fn heap_bytes(&self) -> usize {
+        let mut bytes = self
+            .glyphs
+            .capacity()
+            .saturating_mul(std::mem::size_of::<TextGlyph>())
+            .saturating_add(self.line_of.capacity().saturating_mul(std::mem::size_of::<u32>()))
+            .saturating_add(self.space_before.capacity());
+        for glyph in &self.glyphs {
+            bytes = bytes.saturating_add(glyph.text.capacity());
+        }
+        bytes
+    }
+}
+
 impl RecoveredText {
+    /// What this layer holds on the heap, for the render queue's byte allowance: its own text
+    /// (all of it, strict glyphs included, as its own copy) and its per-glyph readings, indices
+    /// and styles. The fonts' shared names are counted once per glyph's handle, not again.
+    pub(crate) fn heap_bytes(&self) -> usize {
+        let per = |len: usize, size: usize| len.saturating_mul(size);
+        let mut bytes = std::mem::size_of::<PageText>()
+            .saturating_add(self.text.heap_bytes())
+            .saturating_add(per(self.recovery.capacity(), std::mem::size_of::<Option<Recovery>>()))
+            .saturating_add(per(self.strict_index.capacity(), std::mem::size_of::<Option<usize>>()))
+            .saturating_add(per(self.layer_index.capacity(), std::mem::size_of::<Option<usize>>()))
+            .saturating_add(per(self.style.capacity(), std::mem::size_of::<Option<GlyphStyle>>()));
+        for r in self.recovery.iter().flatten() {
+            if let hayro::hayro_interpret::hayro_cmap::BfString::String(s) = &r.text {
+                bytes = bytes.saturating_add(s.capacity());
+            }
+        }
+        bytes
+    }
+
     /// A layer of `text` with each glyph's reading, strict index and style (one entry per glyph
     /// of `text`); `layer_index` is worked out from `strict_index`, for a strict layer of
     /// `strict_len` glyphs.
@@ -539,7 +575,11 @@ use layout::{is_rtl, union};
 use order::{Run, Scratch, Seg, collide, restarts_run};
 
 #[cfg(test)]
+mod cjk_fixture;
+#[cfg(test)]
 mod code_page_tests;
+#[cfg(test)]
+mod document_recovery_tests;
 #[cfg(test)]
 mod recovery_tests;
 #[cfg(test)]
