@@ -142,16 +142,43 @@ fn rules(old: &Document, field: &Field, value: &Dict) -> Result<Vec<Rule>, ()> {
     Ok(out)
 }
 
+/// What a signature locks, for judging what came after it: the objects of the signed revision no
+/// operation may change (each locked field's dictionary, those above it, and its widgets), and
+/// whether the locked fields as a whole are as they were ([`Locked`]). The objects are what a fill
+/// or a signature may not claim; the comparison catches what is no change to one object: a locked
+/// field removed, a second field under its name, a field added below it, or the form-wide
+/// defaults it is drawn with changed.
+pub(super) struct LockScope {
+    pub(super) state: Locked,
+    pub(super) objects: HashSet<u32>,
+}
+
+impl LockScope {
+    /// No lock: nothing is locked.
+    pub(super) fn none() -> LockScope {
+        LockScope { state: Locked::Kept, objects: HashSet::new() }
+    }
+}
+
 /// Whether any field the signature in `field` (signed with `value`) locks in the signed revision
 /// `old` is different in `doc`, the document as it is now. The signature's own field is one of
 /// them when its lock covers it: its value is the signature, which is checked anyway, but its
 /// widgets are what a reader sees of it.
+#[cfg(test)]
 pub(super) fn locked_fields(doc: &Document, old: &Document, field: &Field, value: &Dict) -> Locked {
-    let Ok(rules) = rules(old, field, value) else { return Locked::Unchecked };
+    lock_scope(doc, old, field, value).state
+}
+
+/// The fields the signature in `field` (signed with `value`) locks in the signed revision `old`,
+/// as objects, and whether they are as they were in `doc`, the document as it is now
+/// ([`LockScope`]).
+pub(super) fn lock_scope(doc: &Document, old: &Document, field: &Field, value: &Dict) -> LockScope {
+    let unchecked = || LockScope { state: Locked::Unchecked, objects: HashSet::new() };
+    let Ok(rules) = rules(old, field, value) else { return unchecked() };
     if rules.is_empty() {
-        return Locked::Kept;
+        return LockScope::none();
     }
-    let Some(before) = form_fields(old) else { return Locked::Unchecked };
+    let Some(before) = form_fields(old) else { return unchecked() };
     let mut locked_nodes = vec![false; before.nodes.len()];
     for rule in &rules {
         for (l, r) in locked_nodes.iter_mut().zip(rule.locks(&before)) {
@@ -162,19 +189,38 @@ pub(super) fn locked_fields(doc: &Document, old: &Document, field: &Field, value
     let is_locked = |entries: &[Entry]| entries.iter().any(|e| locked_nodes.get(e.node).copied().unwrap_or(false));
     let locked: Vec<&String> = before.fields.iter().filter(|(_, e)| is_locked(e)).map(|(n, _)| n).collect();
     if locked.is_empty() {
-        return Locked::Kept;
+        return LockScope::none();
     }
+    // Each locked field's objects as signed: its node and every node above it, and its widgets.
+    let mut objects = HashSet::new();
+    for entries in locked.iter().filter_map(|n| before.fields.get(*n)) {
+        for e in entries {
+            objects.extend(e.widget_refs.iter().map(|r| r.num));
+            let mut up = Some(e.node);
+            // Parents come before their kids in the walk, so the chain ends.
+            while let Some(n) = up.and_then(|i| before.nodes.get(i)) {
+                objects.extend(n.r.map(|r| r.num));
+                up = n.parent;
+            }
+        }
+    }
+    let state = compare(doc, old, &before, &locked, &is_locked);
+    LockScope { state, objects }
+}
+
+/// Whether the `locked` fields of the signed revision's form `before` are as they were in `doc`.
+fn compare(doc: &Document, old: &Document, before: &Form, locked: &[&String], is_locked: &dyn Fn(&[Entry]) -> bool) -> Locked {
     let Some(now) = form_fields(doc) else { return Locked::Unchecked };
     let mut same = Same { old, doc, left: MAX_COMPARED, assumed: HashSet::new() };
     let mut drawn_from_form = false;
     for name in locked {
-        let (Some(was), Some(is)) = (before.fields.get(name), now.fields.get(name)) else { return Locked::Changed };
+        let (Some(was), Some(is)) = (before.fields.get(*name), now.fields.get(*name)) else { return Locked::Changed };
         if was.len() != is.len() {
             return Locked::Changed;
         }
         for (w, i) in was.iter().zip(is) {
             drawn_from_form |= before.lacks_appearance(w);
-            match same.field(&before, w, &now, i) {
+            match same.field(before, w, &now, i) {
                 Some(true) => {}
                 Some(false) => return Locked::Changed,
                 None => return Locked::Unchecked,
@@ -218,6 +264,8 @@ pub(super) fn locked_fields(doc: &Document, old: &Document, field: &Field, value
 /// One field dictionary in a walk of the form: its fully qualified name, and the one above it.
 struct Node {
     name: String,
+    /// The field dictionary's object, when it is one of its own.
+    r: Option<ObjRef>,
     dict: Dict,
     parent: Option<usize>,
 }
@@ -226,6 +274,8 @@ struct Node {
 struct Entry {
     node: usize,
     widgets: Vec<Dict>,
+    /// The widgets that are objects of their own.
+    widget_refs: Vec<ObjRef>,
 }
 
 /// Every field of a form by fully qualified name, terminal or not, in walk order (a parent before
@@ -298,8 +348,8 @@ fn form_fields(doc: &Document) -> Option<Form> {
         let kids = d.get(b"Kids").map(|k| doc.resolve(k));
         let kids: Vec<Object> = kids.as_deref().and_then(Object::as_array).cloned().unwrap_or_default();
         entries_left = entries_left.checked_sub(kids.len())?;
-        form.nodes.push(Node { name: name.clone(), dict: d, parent });
-        let mut widgets = Vec::new();
+        form.nodes.push(Node { name: name.clone(), r: o.as_ref(), dict: d, parent });
+        let (mut widgets, mut widget_refs) = (Vec::new(), Vec::new());
         let mut sub = Vec::new();
         for k in kids {
             let kd = doc.resolve(&k);
@@ -310,12 +360,13 @@ fn form_fields(doc: &Document) -> Option<Form> {
                 sub.push(k);
             } else {
                 widgets.push(kd.clone());
+                widget_refs.extend(k.as_ref());
             }
         }
         for k in sub.into_iter().rev() {
             stack.push((k, Some(node), depth + 1));
         }
-        form.fields.entry(name).or_default().push(Entry { node, widgets });
+        form.fields.entry(name).or_default().push(Entry { node, widgets, widget_refs });
     }
     Some(form)
 }
@@ -469,7 +520,7 @@ mod tests {
         let mut form = Form { acroform: None, nodes: Vec::new(), fields: BTreeMap::new() };
         for n in names {
             let parent = n.rsplit_once('.').and_then(|(up, _)| names.iter().position(|x| *x == up));
-            form.nodes.push(Node { name: (*n).to_owned(), dict: Dict::new(), parent });
+            form.nodes.push(Node { name: (*n).to_owned(), r: None, dict: Dict::new(), parent });
         }
         form
     }

@@ -356,6 +356,74 @@ const ATTACKS: &[Case] = &[
     },
 ];
 
+/// Sign `doc` as it is, with edits not yet saved: they go into the signing revision.
+fn sign_edited(bytes: &[u8], certify: Option<u8>, field: Option<&str>, edit: impl FnOnce(&mut Document)) -> Vec<u8> {
+    let mut doc = open(bytes);
+    edit(&mut doc);
+    pdfcraft_sign::sign(&doc, &id(), &opts(certify, field, [150.0, 230.0, 280.0, 270.0])).unwrap()
+}
+
+/// An unsigned signature field "Witness", on the page and in the form.
+fn add_unsigned_signature_field(doc: &mut Document) {
+    let mut w = Dict::new();
+    w.set(b"Type".to_vec(), Object::name("Annot"));
+    w.set(b"Subtype".to_vec(), Object::name("Widget"));
+    w.set(b"FT".to_vec(), Object::name("Sig"));
+    w.set(b"T".to_vec(), PdfString::text("Witness"));
+    w.set(b"Rect".to_vec(), Object::Array([20, 20, 140, 60].map(Object::Int).to_vec()));
+    w.set(b"P".to_vec(), Object::Ref(r(PAGE)));
+    let w = doc.add(Object::Dict(w));
+    doc.update_dict(r(PAGE), |p| {
+        if let Some(Object::Array(a)) = p.get_mut(b"Annots") {
+            a.push(Object::Ref(w));
+        }
+    })
+    .unwrap();
+    edit_form(doc, |form| {
+        if let Some(Object::Array(fields)) = form.get_mut(b"Fields") {
+            fields.push(Object::Ref(w));
+        }
+    });
+}
+
+/// Changes the classifier this table was written beside permitted, which the operations
+/// recogniser of #7032 refuses: each refusal is intended.
+const STRICTER: &[Case] = &[
+    Case {
+        name: "an approval signature, then an unsigned signature field added (as in PDFBOX-6236)",
+        file: || edit_after(&sign(&form(), None, None), add_unsigned_signature_field),
+        rows: &[("Signature1", Valid)],
+    },
+    Case {
+        name: "an approval signature, then a signing step that also repaints a field whose value is unchanged (as in PDFBOX-4907)",
+        file: || {
+            sign_edited(&sign(&form(), None, None), None, None, |doc| {
+                let ap = appearance(doc, "Ann");
+                doc.update_dict(r(NAME), |w| w.set(b"AP".to_vec(), ap)).unwrap();
+            })
+        },
+        rows: &[("Signature1", Valid)],
+    },
+    Case {
+        name: "a P=2 certification, then the empty field signed with its name and actions changed",
+        file: || {
+            sign_edited(&sign(&form(), Some(2), None), None, Some("Approver"), |doc| {
+                doc.update_dict(r(6), |w| {
+                    w.set(b"T".to_vec(), PdfString::text("Approver"));
+                    w.set(b"AA".to_vec(), Object::Dict(Dict::new()));
+                })
+                .unwrap();
+            })
+        },
+        rows: &[("Signature1", Valid)],
+    },
+    Case {
+        name: "a P=2 certification, then the form's /SigFlags changed with nothing signed",
+        file: || edit_after(&sign(&form(), Some(2), None), |doc| edit_form(doc, |form| form.set(b"SigFlags".to_vec(), Object::Int(1)))),
+        rows: &[("Signature1", Valid)],
+    },
+];
+
 /// Every case's rows, as each one is and as it must be; the ones that differ, said in full.
 fn judge(cases: &[Case]) -> Vec<String> {
     let trust = trust();
@@ -399,4 +467,47 @@ fn every_legitimate_case_changes_the_file_after_its_first_signature() {
         let first = signatures(&open(&bytes), &bytes, &trust).into_iter().find(|s| s.field == case.rows[0].0).unwrap();
         assert!(matches!(first.modification, Modification::Allowed(_)), "{}: {:?}", case.name, first.modification);
     }
+}
+
+/// Stage 3 of #7032: the operations recogniser runs beside the classifier it is to replace, over
+/// every case of the table. It is never more permissive, and where it is stricter the case is
+/// one of [`STRICTER`], each a refusal intended.
+#[test]
+fn the_operations_recogniser_is_never_more_permissive() {
+    let permits = |m: &Modification| !matches!(m, Modification::Disallowed(_));
+    let (mut looser, mut stricter) = (Vec::new(), Vec::new());
+    for case in LEGITIMATE.iter().chain(ATTACKS).chain(STRICTER) {
+        let bytes = (case.file)();
+        let doc = open(&bytes);
+        for (field, _) in case.rows {
+            let Some((classified, recognised)) = pdfcraft_sign::pdf::shadow_changes(&doc, &bytes, field) else { continue };
+            let what = format!("{}: {field}: {classified:?} then, {recognised:?} now", case.name);
+            if permits(&recognised) && !permits(&classified) {
+                looser.push(what);
+            } else if !permits(&recognised) && permits(&classified) {
+                stricter.push((case.name, what));
+            }
+        }
+    }
+    assert!(
+        looser.is_empty(),
+        "more permissive:
+{}",
+        looser.join(
+            "
+"
+        )
+    );
+    let intended: Vec<&str> = STRICTER.iter().map(|c| c.name).collect();
+    let found: Vec<&str> = stricter.iter().map(|(name, _)| *name).collect();
+    assert_eq!(
+        found,
+        intended,
+        "stricter:
+{}",
+        stricter.iter().map(|(_, w)| w.as_str()).collect::<Vec<_>>().join(
+            "
+"
+        )
+    );
 }
