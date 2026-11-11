@@ -325,9 +325,12 @@ pub fn filled_rects(doc: &Document, page: &Dict) -> Result<Vec<FilledRect>, Audi
     let mut budget = DecodeBudget::page();
     let mut streams = Vec::with_capacity(contents.len());
     for c in &contents {
-        if let Object::Stream(s) = &*doc.resolve(c) {
-            streams.push(budget.decode_strict(doc, s)?);
-        }
+        // The text loader preserves every Contents slot. Keep empty pieces too, so a
+        // cover's paint position compares against text in the same original piece.
+        streams.push(match &*doc.resolve(c) {
+            Object::Stream(s) => budget.decode_strict(doc, s)?,
+            _ => Vec::new(),
+        });
     }
     let pieces = Pieces::join(&streams);
     let mut w = Walker { doc, pieces: &pieces, out: Vec::new(), ops_seen: 0, budget };

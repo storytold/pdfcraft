@@ -981,3 +981,42 @@ fn every_finding_record_counts_against_the_output_bound() {
     let short = crate::Limits { covered_text: 3 * one - 1, ..exact };
     assert!(matches!(crate::audit(&doc, short), Err(crate::AuditError::TooMuchOutput)));
 }
+
+/// Non-stream Contents entries draw nothing but still occupy a piece in the text loader.
+/// Covers must keep those same piece indices, including through indirect/missing entries.
+#[test]
+fn nonstream_content_pieces_preserve_cover_paint_order() {
+    for (contents, cover_piece, expected) in [
+        ("[null 9 0 R]", 1, 1),
+        ("[null 4 0 R 5 0 R]", 2, 1),
+        ("[null null 4 0 R 5 0 R]", 3, 1),
+        ("[7 0 R 4 0 R 5 0 R]", 2, 1),
+        ("[99 0 R 4 0 R 5 0 R]", 2, 1),
+        ("[42 4 0 R 5 0 R]", 2, 1),
+        ("[4 0 R null 5 0 R null]", 2, 1),
+        ("[8 0 R 4 0 R null 5 0 R]", 3, 1),
+        ("[null 5 0 R null 4 0 R]", 1, 0),
+    ] {
+        for color in ["0.533 g", "0.102 0.431 0.878 rg"] {
+            let mut b = Builder::new();
+            b.add("<< /Type /Catalog /Pages 2 0 R >>");
+            b.add("<< /Type /Pages /Kids [3 0 R] /Count 1 >>");
+            b.add(&format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents {contents} /Resources << /Font << /F1 6 0 R >> >> >>"));
+            b.add_stream(format!("{color} BT /F1 24 Tf 100 700 Td (SECRET) Tj ET").as_bytes());
+            b.add_stream(b"0 g 98 688 94 32 re f");
+            b.add(FONT);
+            b.add("null");
+            b.add_stream(b"");
+            b.add_stream(format!("{color} BT /F1 24 Tf 100 700 Td (SECRET) Tj ET 0 g 98 688 94 32 re f").as_bytes());
+            let doc = open(b.build());
+            let findings = audit_redactions(&doc).unwrap();
+            assert_eq!(findings.len(), expected, "{contents}, {color}: {findings:?}");
+            if expected != 0 {
+                assert_eq!(findings[0].covered_text, "SECRET");
+            }
+            let pages = pdfcraft_model::pages(&doc);
+            let covers = crate::cover::filled_rects(&doc, &pages[0].dict).unwrap();
+            assert_eq!(covers[0].pos.0, cover_piece, "{contents}");
+        }
+    }
+}
