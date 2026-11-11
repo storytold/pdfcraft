@@ -731,6 +731,9 @@ impl PdfCraftApp {
         // Last, after everything that can open or answer the "save changes?" question.
         self.attend_save_prompt(ctx);
         self.sync_native_menu(ctx);
+        // craft-menu may have put up a rebuilt menu bar under an open file panel (macOS).
+        #[cfg(not(target_arch = "wasm32"))]
+        self.pickers.sync_panel_menu();
         self.sync_titles(ctx);
     }
 
