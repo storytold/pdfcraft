@@ -194,29 +194,59 @@ pub fn line_pieces(line: &str, rtl: bool) -> Result<Vec<Piece>, ShapeError> {
     Ok(pieces)
 }
 
-/// The width of `text` at `size` as [`line_pieces`] lays it out in a paragraph of direction
-/// `rtl`: shaped text by its clusters' advances, the rest measured by `latin`. Text a face can't
-/// shape is measured by `latin` as a whole (drawing then shows why).
+/// A line left whole to the standard font.
+fn plain(line: &str) -> Vec<Piece> {
+    vec![Piece::Latin(line.to_string())]
+}
+
+/// [`line_pieces`] for a generated appearance, which draws what it can rather than refusing: a
+/// line a face can't shape (this build has none, or it lacks a character) keeps its Thai shaped,
+/// as before Arabic and Hebrew were drawn ([`thai_pieces`]), and is otherwise left in typing order
+/// to the standard font, whose encoder writes `?` for what it can't draw.
+/// [`first_undrawable_shaped`] reports that. Measuring, sizing and drawing all go through this, so
+/// they agree on every line.
+pub fn appearance_pieces(line: &str, rtl: bool) -> Vec<Piece> {
+    if !rtl && !has_shaped_script(line) {
+        return plain(line);
+    }
+    line_pieces(line, rtl).or_else(|_| thai_pieces(line)).unwrap_or_else(|_| plain(line))
+}
+
+/// The width of `text` at `size` as an appearance draws it ([`appearance_pieces`]) in a paragraph
+/// of direction `rtl`: shaped text by its clusters' advances, the rest measured by `latin`.
 pub fn line_width(text: &str, rtl: bool, size: f64, latin: impl Fn(&str, f64) -> f64) -> f64 {
     if !rtl && !has_shaped_script(text) {
         return latin(text, size);
     }
-    match line_pieces(text, rtl) {
-        Ok(pieces) => pieces_width(&pieces, size, 0.0, latin),
-        Err(_) => latin(text, size),
-    }
+    pieces_width(&appearance_pieces(text, rtl), size, 0.0, latin)
+}
+
+/// The widest a space between two words of `para` can be drawn at `size`: the standard font's,
+/// or, in a paragraph with Arabic or Hebrew, the script face's where that is wider. Which of them
+/// draws a space depends on the words around it (it takes the face inside a right-to-left run), so
+/// wrapping counts the widest and a wrapped line never comes out wider than it was measured.
+fn space_width(para: &str, size: f64, latin: &impl Fn(&str, f64) -> f64) -> f64 {
+    let faces = [(is_arabic as fn(char) -> bool, shape_arabic as fn(&str, bool) -> _), (is_hebrew, shape_hebrew)];
+    faces
+        .into_iter()
+        .filter(|(has, _)| para.chars().any(has))
+        .filter_map(|(_, shape)| shape(" ", true).ok())
+        .map(|clusters| clusters.iter().map(|c| c.advance * size).sum::<f64>())
+        .fold(latin(" ", size), f64::max)
 }
 
 /// `text` wrapped `width` wide at `size` for a box that draws its lines with [`line_pieces`]: each
 /// line with whether its paragraph reads right to left ([`rtl_base`]; every line of a paragraph
 /// takes its paragraph's direction). Words are measured as they will be drawn ([`line_width`]),
-/// and a mark stays on its letter.
+/// the spaces between them at their widest (`space_width`), and a mark stays on its letter.
 pub fn wrap(text: &str, size: f64, width: f64, latin: impl Fn(&str, f64) -> f64) -> Vec<(String, bool)> {
     let mut out = Vec::new();
     // A CRLF pair is one break, a lone CR or LF is one break each (as `wrap_with` reads them).
     for para in text.replace("\r\n", "\n").split(['\n', '\r']) {
         let rtl = rtl_base(para);
-        out.extend(crate::wrap_with(para, size, width, |s, size| line_width(s, rtl, size, &latin)).into_iter().map(|line| (line, rtl)));
+        let space = space_width(para, size, &latin);
+        let measure = |s: &str, size: f64| if s == " " { space } else { line_width(s, rtl, size, &latin) };
+        out.extend(crate::wrap_with(para, size, width, measure).into_iter().map(|line| (line, rtl)));
     }
     out
 }
@@ -432,21 +462,19 @@ pub fn appearance_lines(lines: &[String], fonts: &mut Dict) -> (Vec<Vec<Piece>>,
 }
 
 /// [`appearance_lines`] for a box that draws with [`line_pieces`]: `lines` as [`wrap`] gives them,
-/// each with its paragraph's direction, their Arabic, Hebrew and Thai shaped and in drawing order.
-/// A line a face can't shape (this build has none, or it lacks a character), and every line when a
-/// glyph can't be read, is left to the standard font, whose encoder writes `?` for what it can't
-/// draw; [`first_undrawable_shaped`] reports that.
+/// each with its paragraph's direction, their Arabic, Hebrew and Thai shaped and in drawing order
+/// ([`appearance_pieces`], which says what becomes of a line a face can't shape). Every line is
+/// left to the standard font when a glyph can't be read.
 pub fn shaped_appearance_lines(lines: &[(String, bool)], fonts: &mut Dict) -> (Vec<Vec<Piece>>, ShapedFonts) {
-    let pieces = lines
-        .iter()
-        .map(|(l, rtl)| if *rtl || has_shaped_script(l) { line_pieces(l, *rtl).unwrap_or_else(|_| plain(l)) } else { plain(l) })
-        .collect();
+    let pieces = lines.iter().map(|(l, rtl)| appearance_pieces(l, *rtl)).collect();
     appearance_fonts(pieces, lines.iter().map(|(l, _)| l.as_str()), fonts)
 }
 
-/// A line left whole to the standard font.
-fn plain(line: &str) -> Vec<Piece> {
-    vec![Piece::Latin(line.to_string())]
+/// Whether `pieces` hold right-to-left text shaped in its face, so that they are painted in an
+/// order other than the one typed and the line needs its typing order beside it
+/// ([`actual_text_span`]). A line left to the standard font, or with Thai alone, does not.
+pub fn reordered(pieces: &[Piece]) -> bool {
+    clusters([pieces]).any(|c| c.script != ShapedScript::Thai)
 }
 
 /// The Type 3 fonts for `pieces`' shaped clusters, built into `fonts` as direct objects; when a
@@ -471,13 +499,13 @@ pub fn thai_reach(line: &str) -> Option<[f64; 2]> {
 }
 
 /// [`thai_reach`] for a line drawn with [`line_pieces`]: how far its Arabic, Hebrew and Thai
-/// glyphs reach below and above its baseline, in em units; `None` without any, or when a face
-/// can't draw them.
+/// glyphs reach below and above its baseline, in em units; `None` without any, or when no face
+/// draws them.
 pub fn line_reach(line: &str) -> Option<[f64; 2]> {
     if !has_shaped_script(line) {
         return None;
     }
-    pieces_reach(&line_pieces(line, rtl_base(line)).ok()?)
+    pieces_reach(&appearance_pieces(line, rtl_base(line)))
 }
 
 /// How far the shaped glyphs of `pieces` reach below and above the baseline, in em units.
@@ -508,22 +536,30 @@ pub fn first_undrawable_in_line(line: &str) -> Option<char> {
     line.chars().find(|c| if is_thai(*c) { thai_fails } else { !crate::win_ansi_encodable(*c) })
 }
 
-/// [`first_undrawable`] for text drawn with [`line_pieces`] ([`shaped_appearance_lines`]): the
-/// first character that would come out as `?`. On a line the faces shape, that is one left to the
-/// standard font that it can't draw; on a line a face can't shape (this build has none, or it lacks
-/// a character), every character outside WinAnsiEncoding. Line breaks don't count, nor do the
-/// direction marks of a shaped line, which are never drawn.
+/// A character of `pieces` the standard font is left to draw and can't, which it writes as `?`;
+/// the first as drawn. `None` when every piece can be drawn.
+pub fn pieces_undrawable(pieces: &[Piece]) -> Option<char> {
+    pieces.iter().find_map(|p| match p {
+        Piece::Latin(s) => crate::first_non_win_ansi(s),
+        Piece::Shaped(_) => None,
+    })
+}
+
+/// [`first_undrawable`] for text an appearance draws with [`appearance_pieces`]
+/// ([`shaped_appearance_lines`]): a character that would come out as `?`, from the first line that
+/// has one. On a line the faces shape, that is one left to the standard font that it can't draw;
+/// on a line a face can't shape, every character outside WinAnsiEncoding but the Thai its face
+/// still draws. Line breaks don't count, nor do the direction marks of a shaped line, which are
+/// never drawn.
 pub fn first_undrawable_shaped(s: &str) -> Option<char> {
     s.split(['\n', '\r']).find_map(|line| {
         if !has_shaped_script(line) {
             return crate::first_non_win_ansi(line);
         }
+        // Shaped, the pieces are in drawing order; left to the standard font, in typing order.
         match line_pieces(line, rtl_base(line)) {
-            Ok(pieces) => pieces.iter().find_map(|p| match p {
-                Piece::Latin(s) => crate::first_non_win_ansi(s),
-                Piece::Shaped(_) => None,
-            }),
-            Err(_) => crate::first_non_win_ansi(line),
+            Ok(pieces) => pieces_undrawable(&pieces),
+            Err(_) => first_undrawable_in_line(line),
         }
     })
 }
@@ -862,5 +898,56 @@ mod tests {
             assert_eq!((texts.first().map(String::as_str), texts.last().map(String::as_str)), (Some("ם"), Some("ש")), "{texts:?}");
             assert_eq!(first_undrawable_shaped("שלום abc"), None);
         }
+    }
+
+    /// An appearance draws what it can: a line with a script that can't be shaped keeps its Thai
+    /// from the Thai face, as before Arabic and Hebrew were drawn, and no typing order is attached
+    /// to a line whose letters come out as `?`.
+    #[test]
+    fn a_line_with_a_script_that_cannot_be_shaped_keeps_its_thai() {
+        assert_eq!(appearance_pieces("plain", false), [Piece::Latin("plain".into())]);
+        assert!(!reordered(&appearance_pieces("plain", false)) && pieces_undrawable(&appearance_pieces("a☃", false)) == Some('☃'));
+        if crate::document_thai_font().is_none() {
+            return;
+        }
+        assert!(!reordered(&appearance_pieces("น้ำ", false)), "Thai is painted in typing order");
+        // Arabic this build can't shape: it has no Arabic face, or the face lacks the character.
+        let unshaped = if crate::document_arabic_font().is_none() {
+            Some('ب')
+        } else {
+            (0x0870..=0x08FFu32).filter_map(char::from_u32).find(|c| shape_arabic(&c.to_string(), true).is_err())
+        };
+        let Some(c) = unshaped else { return };
+        let line = format!("น้ำ {c}");
+        assert!(line_pieces(&line, false).is_err());
+        let pieces = appearance_pieces(&line, false);
+        assert!(
+            matches!(&pieces[..], [Piece::Shaped(thai), Piece::Latin(rest)] if thai.iter().all(|c| c.script == ShapedScript::Thai) && rest.ends_with(c)),
+            "{pieces:?}"
+        );
+        assert!(!reordered(&pieces));
+        assert_eq!(first_undrawable_shaped(&line), Some(c));
+        assert!(line_width(&line, false, 10.0, |_, _| 0.0) > 0.0 && line_reach(&line).is_some(), "the Thai is still measured as drawn");
+    }
+
+    /// A space inside a right-to-left run is drawn from the script face, between Latin words from
+    /// the standard font: wrapping counts the wider, so no line is drawn wider than it was measured.
+    #[test]
+    fn wrapped_mixed_lines_are_never_wider_than_the_box() {
+        if crate::document_arabic_font().is_none() {
+            return;
+        }
+        // A standard font with a very narrow space, as Times has beside the Arabic face.
+        let latin = |s: &str, size: f64| s.chars().map(|c| if c == ' ' { 0.05 } else { 0.5 }).sum::<f64>() * size;
+        let text = "test بت التناسب حل المعادلة test بت التناسب حل المعادلة test بت التناسب";
+        for width in [60.0, 75.0, 90.0, 120.0] {
+            let laid = wrap(text, 10.0, width, latin);
+            assert!(laid.len() > 1, "{laid:?}");
+            for (line, rtl) in &laid {
+                let drawn = pieces_width(&appearance_pieces(line, *rtl), 10.0, 0.0, latin);
+                assert!(drawn <= width + 1e-6, "{line:?} is {drawn} wide in {width}");
+            }
+        }
+        assert!(reordered(&appearance_pieces("test بت", false)));
     }
 }
