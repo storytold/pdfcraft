@@ -1579,6 +1579,11 @@ impl Color {
     }
 
     fn ink_from_srgb(&self) -> Option<[f32; 4]> {
+        // `to_rgba` turns a non-finite component into some finite colour, which is not the
+        // colour's ink, so such a colour has no tints.
+        if self.components.iter().any(|c| !c.is_finite()) {
+            return None;
+        }
         let [r, g, b, _] = self.to_rgba().components();
         crate::cmyk_inverse::srgb_to_cmyk([r, g, b])
     }

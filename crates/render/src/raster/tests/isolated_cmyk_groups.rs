@@ -352,3 +352,15 @@ trailer << /Root 1 0 R >>
         assert!(rgb[1] > 120 && rgb[0] < 60 && rgb[2] < 120, "blended in CMYK, green: {rgb:?}");
     }
 }
+
+/// An RGB colour with a non-finite component has no tints: converting it to RGB first would
+/// give some finite colour that is not its ink.
+#[test]
+fn an_rgb_colour_with_a_non_finite_component_has_no_tints() {
+    use hayro::hayro_interpret::color::AlphaColor;
+    use hayro::hayro_interpret::color::Color;
+    let rgb = |c: [f32; 3]| Color::from_rgba(AlphaColor::new([c[0], c[1], c[2], 1.0])).ink_tints();
+    assert!(rgb([0.5, 0.5, 0.5]).is_some());
+    assert_eq!(rgb([f32::NAN, 0.5, 0.5]), None);
+    assert_eq!(rgb([0.5, f32::INFINITY, 0.5]), None);
+}
