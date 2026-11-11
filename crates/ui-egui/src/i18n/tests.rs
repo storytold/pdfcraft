@@ -1188,6 +1188,28 @@ fn hindi_and_korean_are_registered_and_persist() {
 }
 
 #[test]
+fn tamil_is_registered_and_persists() {
+    needs_catalogs!();
+    let ta = Lang::from_code("ta").expect("ta registered");
+    assert_eq!(ta.name(), "தமிழ்");
+    assert_eq!(ta.english_name(), "Tamil");
+    assert!(!ta.rtl());
+    assert_eq!(normalize_pref("TA"), Some("ta"));
+    for tag in ["ta", "ta-IN", "ta-LK", "ta_IN.UTF-8", "TA-in"] {
+        assert_eq!(lang_from_tag(tag), Some(ta), "{tag}");
+    }
+    assert_eq!(first_supported("ta-IN\r\nen-US"), Some(ta));
+    let mut app = crate::PdfCraftApp::default();
+    app.set_option("language", "TA").unwrap();
+    assert_eq!(app.language, "ta");
+    let mut restored = crate::PdfCraftApp::default();
+    restored.restore(&app.persist());
+    assert_eq!(restored.language, "ta");
+    assert!(restored.set_option("language", "xx").is_err());
+    assert_eq!(restored.language, "ta");
+}
+
+#[test]
 fn bulgarian_is_registered() {
     needs_catalogs!();
     let bg = Lang::from_code("bg").expect("bg registered");
