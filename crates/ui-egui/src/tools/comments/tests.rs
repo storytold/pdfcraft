@@ -370,6 +370,29 @@ fn two_grids_in_one_parent_open_their_pickers_separately() {
 }
 
 #[test]
+fn swatch_grid_columns_match_swatch_size_and_spacing() {
+    // #6612: Grid::min_col_width must match the 22 pt swatch size, so swatches sit 28 pt
+    // apart (22 pt swatch + 6 pt spacing) rather than using egui's default ~40 pt column width.
+    use egui_kittest::kittest::Queryable;
+    let mut h = egui_kittest::Harness::new_ui(|ui| {
+        let _ = swatch_grid(ui, None);
+    });
+    h.run();
+    let yellow = h.get_by_label("Yellow").rect();
+    let orange = h.get_by_label("Orange").rect();
+    let plus = h.get_by_label("Other colour…").rect();
+    assert_eq!(yellow.width(), 22.0);
+    assert_eq!(orange.width(), 22.0);
+    assert_eq!(plus.width(), 22.0);
+    let gap = orange.left() - yellow.right();
+    assert!((gap - 6.0).abs() < 0.1, "swatches in the grid should have a 6 pt gap, but gap is {gap:.1} pt (yellow={yellow:?}, orange={orange:?})");
+    let pitch = orange.center().x - yellow.center().x;
+    assert!((pitch - 28.0).abs() < 0.1, "swatch columns should be 28 pt centre-to-centre (22 pt swatch + 6 pt gap), but pitch is {pitch:.1} pt");
+    let span = plus.right() - yellow.left();
+    assert!((span - 162.0).abs() < 0.1, "first row of 6 swatches should span 162 pt (6 * 22 + 5 * 6), but span is {span:.1} pt");
+}
+
+#[test]
 fn other_colour_opens_the_picker_inside_the_quick_bar_popup() {
     use egui_kittest::kittest::Queryable;
     let mut h = egui_kittest::Harness::new_ui_state(

@@ -237,9 +237,12 @@ fn rgb_of(c: Color32) -> Rgb {
     [c.r(), c.g(), c.b()].map(|v| f64::from(v) / 255.0)
 }
 
+/// Diameter of a round colour swatch.
+const SWATCH_SIZE: f32 = 22.0;
+
 /// One round swatch; `on` rings it as the current colour.
 fn swatch(ui: &mut egui::Ui, c: Rgb, on: bool, tooltip: &str) -> egui::Response {
-    let (r, resp) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::click());
+    let (r, resp) = ui.allocate_exact_size(vec2(SWATCH_SIZE, SWATCH_SIZE), Sense::click());
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tooltip));
     ui.painter().circle_filled(r.center(), 9.0, color32(c));
     ui.painter().circle_stroke(r.center(), 9.0, Stroke::new(1.0, Color32::from_black_alpha(40)));
@@ -251,7 +254,7 @@ fn swatch(ui: &mut egui::Ui, c: Rgb, on: bool, tooltip: &str) -> egui::Response 
 
 /// The "+" swatch that opens "Other colour…": a ring with a plus, the size of a swatch.
 fn other_colour_swatch(ui: &mut egui::Ui, open: bool) -> egui::Response {
-    let (r, resp) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::click());
+    let (r, resp) = ui.allocate_exact_size(vec2(SWATCH_SIZE, SWATCH_SIZE), Sense::click());
     let ink = ui.visuals().widgets.inactive.fg_stroke.color;
     ui.painter().circle_stroke(r.center(), 9.0, Stroke::new(1.0, ink.gamma_multiply(0.6)));
     let c = r.center();
@@ -279,7 +282,7 @@ pub fn swatch_grid(ui: &mut egui::Ui, current: Option<Rgb>) -> Option<Rgb> {
     let open_id = base.with("other-colour");
     let value_id = open_id.with("value");
     let mut open = ui.data(|d| d.get_temp::<bool>(open_id)).unwrap_or(false);
-    egui::Grid::new(base.with("swatches")).spacing(vec2(6.0, 6.0)).show(ui, |ui| {
+    egui::Grid::new(base.with("swatches")).spacing(vec2(6.0, 6.0)).min_col_width(SWATCH_SIZE).show(ui, |ui| {
         for (i, (name, c)) in SWATCHES.iter().enumerate() {
             if swatch(ui, *c, on(c), tl!(name)).clicked() {
                 picked = Some(*c);
