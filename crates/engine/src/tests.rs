@@ -13790,7 +13790,7 @@ fn redactions_applied_in_a_batch_get_the_renderer_check() {
     mark_shown_text(&mut s, id, "SECRET42");
     let apply = Edit::ApplyRedactions { pages: None };
     // Text added where the mark was shows under it again: the renderer sees it and refuses.
-    let under = AddedText { rect: [150.0, 120.0, 300.0, 180.0], text: "SECRET42 SECRET42".into(), ..Default::default() };
+    let under = AddedText { rect: [150.0, 130.0, 300.0, 160.0], text: "SECRET42 SECRET42".into(), ..Default::default() };
     let refused = s.apply(id, Edit::Batch { label: "Redact then write".into(), edits: vec![apply.clone(), Edit::AddText { page: 0, text: under }] });
     assert!(matches!(refused, Err(EditError::Redact(pdfcraft_redact::RedactError::Residue(n))) if n > 0), "{refused:?}");
     assert!(page_texts(&s, id)[0].contains("SECRET42"), "nothing changed");
