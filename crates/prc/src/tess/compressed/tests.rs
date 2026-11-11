@@ -57,6 +57,14 @@ fn a_walk_past_its_limit_stops() {
     assert_eq!(with(31).unwrap_err(), "the rebuild needs more than the decoded-element allowance left");
 }
 
+/// The triangles reserved up front fit the limit too.
+#[test]
+fn the_walk_reserves_within_its_limit() {
+    assert!(Walk::new(1 << 20, 10).tris.capacity() < 1 << 20);
+    assert!(Walk::new(1 << 20, 10).tris.capacity() <= 5);
+    assert!(Walk::new(4, usize::MAX).tris.capacity() >= 4);
+}
+
 /// Bit 0 alone continues across `[A C]`, keeping `W = B`.
 #[test]
 fn the_right_edge_is_entered_from_a_to_c() {

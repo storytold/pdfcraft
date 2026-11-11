@@ -65,7 +65,7 @@ pub(super) fn rebuild(a: &Arrays<'_>) -> Result<Rebuilt, &'static str> {
     if a.edge_status.len() != a.triangles.saturating_mul(3) {
         return Err("the one-status-per-triangle edge form is not reconstructed");
     }
-    let mut w = Walk::new(a.triangles);
+    let mut w = Walk::new(a.triangles, a.limit);
     w.walk(a)?;
     if w.slot != a.is_reference.len() || w.ri != a.references.len() || w.pi != a.points.len() {
         return Err("the decoded triangles do not use up the stored arrays");
@@ -176,8 +176,9 @@ struct Mark {
 }
 
 impl Walk {
-    fn new(t: usize) -> Self {
-        Walk { tris: Vec::with_capacity(t.min(1 << 20)), ..Walk::default() }
+    /// Reserves room for `t` triangles, no more than `limit` elements' worth (two each).
+    fn new(t: usize, limit: usize) -> Self {
+        Walk { tris: Vec::with_capacity(t.min(limit / 2).min(1 << 20)), ..Walk::default() }
     }
 
     fn mark(&self, tri: usize) -> Mark {
