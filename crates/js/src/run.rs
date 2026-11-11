@@ -233,6 +233,7 @@ fn run_here(script: &str, event: &Event, doc: &DocInfo, fields: Arc<Vec<FieldSta
     ctx.runtime_limits_mut().set_loop_iteration_limit(limits.loop_iterations);
     ctx.runtime_limits_mut().set_recursion_limit(limits.recursion);
     ctx.insert_data(RefCell::new(Host {
+        event_name: event.name.clone(),
         fields,
         changed: BTreeSet::new(),
         formatted: BTreeSet::new(),
