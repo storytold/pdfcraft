@@ -760,7 +760,7 @@ pub(crate) fn has_password_flag(doc: &Document) -> bool {
         if chain.len() >= MAX_FIELD_DEPTH || chain.iter().copied().any(sets_it) {
             return true;
         }
-        if subtree(vec![Object::Ref(chain.last().copied().unwrap_or(r))], &mut seen) {
+        if subtree(vec![Object::Ref(field_root(doc, &chain, r))], &mut seen) {
             return true;
         }
     }
@@ -776,7 +776,7 @@ pub(crate) fn has_password_flag(doc: &Document) -> bool {
             if chain.len() >= MAX_FIELD_DEPTH || chain.iter().copied().any(sets_it) {
                 return true;
             }
-            let root = chain.last().copied().unwrap_or(r);
+            let root = field_root(doc, &chain, r);
             if subtree(vec![Object::Ref(root)], &mut seen) {
                 return true;
             }
@@ -806,6 +806,12 @@ pub fn restore_password_values(doc: &mut Document, values: &[(String, String)]) 
         }
     }
     Ok(())
+}
+
+/// The topmost dictionary of `chain` (from [`field_chain`]): a `/Parent` that is not a dictionary
+/// ends the field tree, so the walk below it starts at the last one that is.
+fn field_root(doc: &Document, chain: &[ObjRef], r: ObjRef) -> ObjRef {
+    chain.iter().rev().copied().find(|c| doc.get(*c).as_dict().is_some()).unwrap_or(r)
 }
 
 /// `r` and its field ancestors (`/Parent`), nearest first, at most 64 deep and without repeats.

@@ -24,10 +24,15 @@ fn acro_password_fields(doc: &Document) -> Option<Vec<(String, String)>> {
     };
     struct AcroWalk<'a> {
         doc: &'a Document,
-        seen: std::collections::HashSet<ObjRef>,
+        /// Each field reached, with what it was reached with: its parent's name, type, flags and
+        /// default, which decide what it classifies as.
+        seen: std::collections::HashMap<ObjRef, Reach>,
+        /// Fields past the depth limit, with what they were reached with. One reached again from
+        /// another root in the same way was classified there; any other is not fully read.
+        cut: Vec<(ObjRef, Reach)>,
         out: Vec<(String, String)>,
-        truncated: bool,
     }
+    type Reach = (String, Option<Vec<u8>>, i64, Option<String>);
     impl AcroWalk<'_> {
         fn walk(
             &mut self,
@@ -39,12 +44,14 @@ fn acro_password_fields(doc: &Document) -> Option<Vec<(String, String)>> {
             depth: usize,
         ) {
             if depth > MAX_ACRO_DEPTH {
-                self.truncated |= items.iter().filter_map(Object::as_ref).any(|r| !self.seen.contains(&r));
+                let reach: Reach = (parent_name.to_string(), inherited_ft.map(<[u8]>::to_vec), inherited_ff, inherited_dv.map(str::to_string));
+                self.cut.extend(items.iter().filter_map(Object::as_ref).map(|r| (r, reach.clone())));
                 return;
             }
             for item in items {
                 let Some(r) = item.as_ref() else { continue };
-                if !self.seen.insert(r) {
+                let reach: Reach = (parent_name.to_string(), inherited_ft.map(<[u8]>::to_vec), inherited_ff, inherited_dv.map(str::to_string));
+                if self.seen.insert(r, reach).is_some() {
                     continue;
                 }
                 let obj = self.doc.get(r);
@@ -73,9 +80,12 @@ fn acro_password_fields(doc: &Document) -> Option<Vec<(String, String)>> {
             }
         }
     }
-    let mut w = AcroWalk { doc, seen: std::collections::HashSet::new(), out: Vec::new(), truncated: false };
+    let mut w = AcroWalk { doc, seen: std::collections::HashMap::new(), cut: Vec::new(), out: Vec::new() };
     w.walk(&top, "", None, 0, None, 0);
-    (!w.truncated).then_some(w.out)
+    // Decided once every root has been visited: a branch cut deep down may be reached shallower
+    // from a later root, and is then read in full.
+    let incomplete = w.cut.iter().any(|(r, reach)| w.seen.get(r) != Some(reach));
+    (!incomplete).then_some(w.out)
 }
 
 /// The `Want` entries needed to restore password fields in `doc`'s datasets packet to their
