@@ -28,12 +28,14 @@ use crate::{Command, Config, Event, SessionError, Sink};
 /// The longest wait between redials.
 const MAX_RETRY: Duration = Duration::from_secs(10);
 
-/// What arrived since the last frame, and the socket it came from.
+/// What the socket's callbacks queued, and the socket they came from. The queue
+/// itself lives on [`WebTransport`]: the callbacks own a clone of that `Rc`, and
+/// `read` drains the same one (a second deque here left every frame unread — the
+/// page dialled, the room said `welcome`, and the app waited forever).
 struct Inner {
     url: String,
     base_delay: Duration,
     socket: Option<WebSocket>,
-    incoming: VecDeque<ReadOutcome>,
     /// Redials so far, for the backoff.
     attempt: u32,
     /// When the next redial may happen; `None` while the socket is up.
@@ -69,7 +71,6 @@ impl WebTransport {
             url: url.to_string(),
             base_delay: base_delay.max(Duration::from_millis(50)),
             socket: None,
-            incoming: VecDeque::new(),
             attempt: 0,
             due: None,
             closures: Closers::default(),
@@ -159,9 +160,10 @@ impl Transport for WebTransport {
 
     fn read(&mut self) -> ReadOutcome {
         loop {
-            {
-                let mut inner = self.inner.borrow_mut();
-                if let Some(outcome) = inner.incoming.pop_front() {
+            let outcome = self.queue.borrow_mut().pop_front();
+            if let Some(outcome) = outcome {
+                {
+                    let mut inner = self.inner.borrow_mut();
                     match &outcome {
                         ReadOutcome::Opened => {
                             inner.attempt = 0;
@@ -177,8 +179,11 @@ impl Transport for WebTransport {
                         }
                         _ => {}
                     }
-                    return outcome;
                 }
+                return outcome;
+            }
+            {
+                let inner = self.inner.borrow();
                 if inner.socket.is_some() {
                     return ReadOutcome::Nothing;
                 }
