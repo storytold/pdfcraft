@@ -94,6 +94,21 @@ fn button_export_options(f: &Field, index: usize, value: &str) -> Result<Vec<Obj
     Ok(out)
 }
 
+/// The `/AA /C` action that stores `c`; `None` when it stores no calculation. A custom script is
+/// the author's own text, so it is written as a text string, as `set_field_script` writes it, and
+/// a letter outside ASCII reads the same in every viewer. The AF calls are written as they are.
+fn calculate_action(c: &crate::af::Calculate) -> Option<Object> {
+    let js = crate::af::calculate_js(c)?;
+    let text = match c {
+        crate::af::Calculate::Custom(_) => PdfString::text(&js),
+        _ => PdfString::literal(js.into_bytes()),
+    };
+    let mut a = Dict::new();
+    a.set(b"S".to_vec(), Object::name("JavaScript"));
+    a.set(b"JS".to_vec(), text);
+    Some(Object::Dict(a))
+}
+
 /// Change a field's properties (General and Options tabs) and redraw it.
 pub fn set_props(doc: &mut Document, name: &str, props: &FieldProps) -> Result<String, FormError> {
     if props.font_size.is_some_and(|size| !size.is_finite() || size < 0.0) {
@@ -125,6 +140,15 @@ pub fn set_props(doc: &mut Document, name: &str, props: &FieldProps) -> Result<S
         if f.widgets.get(*wi).is_none() {
             return invalid(format!("{name} has no widget {}", wi.saturating_add(1)));
         }
+    }
+    if props.caption_all.is_some() && f.kind != FieldKind::PushButton {
+        return invalid("only push buttons have a caption");
+    }
+    if props.caption_all.is_some() && f.widgets.is_empty() {
+        return invalid(format!("{name} has no widgets"));
+    }
+    if props.caption_all.is_some() && props.caption.is_some() {
+        return invalid("give a field caption or a widget caption, not both");
     }
     // Validated before anything is written, so a refused rotation leaves the document unchanged.
     if let Some(rotation) = props.rotation {
@@ -328,10 +352,12 @@ pub fn set_props(doc: &mut Document, name: &str, props: &FieldProps) -> Result<S
         }
         if let Some(c) = &props.calculate {
             aa.remove(b"C");
-            if let Some(js) = crate::af::calculate_js(c) {
-                aa.set(b"C".to_vec(), action(&js));
+            let action = calculate_action(c);
+            let calculated = action.is_some();
+            if let Some(action) = action {
+                aa.set(b"C".to_vec(), action);
             }
-            crate::calc_order::keep_listed(doc, f.obj, *c != crate::af::Calculate::None)?;
+            crate::calc_order::keep_listed(doc, f.obj, calculated)?;
         }
         doc.update_dict(f.obj, |d| {
             if aa.is_empty() {
@@ -559,6 +585,13 @@ fn apply_late_widget_props(doc: &mut Document, f: &Field, props: &FieldProps, ne
         let mut mk = doc.get(w.obj).as_dict().and_then(|d| d.get(b"MK").map(|m| doc.resolve(m).as_dict().cloned())).flatten().unwrap_or_default();
         mk.set(b"CA".to_vec(), PdfString::text(caption));
         doc.update_dict(w.obj, |d| d.set(b"MK".to_vec(), Object::Dict(mk)))?;
+    }
+    if let Some(caption) = &props.caption_all {
+        for w in &f.widgets {
+            let mut mk = doc.get(w.obj).as_dict().and_then(|d| d.get(b"MK").map(|m| doc.resolve(m).as_dict().cloned())).flatten().unwrap_or_default();
+            mk.set(b"CA".to_vec(), PdfString::text(caption));
+            doc.update_dict(w.obj, |d| d.set(b"MK".to_vec(), Object::Dict(mk)))?;
+        }
     }
     // A label-only edit must not replace another widget's custom appearances.
     let only = props.caption.as_ref().filter(|_| *props == (FieldProps { caption: props.caption.clone(), ..Default::default() })).map(|(wi, _)| *wi);

@@ -52,9 +52,13 @@ fn fixture(bad_objects: usize, bad_streams: usize) -> Vec<u8> {
         b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_vec(),
     ];
     objects.extend((0..bad_objects).map(|_| b"not-a-pdf-object".to_vec()));
-    // The member-header offset lies past the one-byte decoded content.
-    objects.extend((0..bad_streams).map(|_| b"<< /Type /ObjStm /N 1 /First 99 /Length 1 >>\nstream\nx\nendstream".to_vec()));
+    objects.extend((0..bad_streams).map(|_| invalid_object_stream()));
     pdf_with_objects(objects)
+}
+
+/// An object stream whose member-header offset lies past its one-byte content.
+fn invalid_object_stream() -> Vec<u8> {
+    b"<< /Type /ObjStm /N 1 /First 99 /Length 1 >>\nstream\nx\nendstream".to_vec()
 }
 
 /// Serialize synthetic indirect objects with a classic cross-reference table.
@@ -259,19 +263,18 @@ fn mixed_errors_and_warnings_share_one_budget_and_summary() {
 #[test]
 fn strict_error_still_reports_the_suppressed_diagnostics() {
     let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    // A single worker deterministically finishes the first stream's >8 warnings
-    // before encountering the bad object. No reliance on Rayon racing errors.
-    let pool = rayon::ThreadPoolBuilder::new().num_threads(1).build().unwrap();
+    // The reader expands containers in object-number order after the ordinary-object pass.
+    // The first container consumes the allowance before the second produces a strict error.
     start_capture();
-    let pdf = pdf_with_objects(vec![member_stream(1000, "outside"), b"not-an-object".to_vec()]);
-    let result = pool.install(|| Document::load_mem_with_options(&pdf, LoadOptions { strict: true, ..Default::default() }));
+    let pdf = pdf_with_objects(vec![member_stream(1000, "outside"), invalid_object_stream()]);
+    let result = Document::load_mem_with_options(&pdf, LoadOptions { strict: true, ..Default::default() });
     assert!(result.is_err(), "strict refusal must survive log suppression");
     let messages = records();
     assert_eq!(messages.len(), 9, "strict failure must emit the summary before returning");
     let (level, summary) = messages.last().unwrap();
     assert_eq!(*level, Level::Error);
     assert!(summary.starts_with("Object loading:"), "{messages:?}");
-    assert!(summary.contains("1 failed objects (0 object streams)"), "{summary}");
+    assert!(summary.contains("1 failed objects (1 object streams)"), "{summary}");
     assert!(summary.contains("1000 object stream warnings"), "{summary}");
     assert!(summary.contains("993 additional messages suppressed"), "{summary}");
 }
@@ -316,6 +319,33 @@ fn direct_object_stream_parsing_also_has_a_bounded_budget() {
     assert!(messages.last().unwrap().1.contains("1001 object stream warnings"));
     assert!(messages.last().unwrap().1.contains("993 additional messages suppressed"));
     assert!(messages.iter().all(|(level, _)| *level == Level::Warn));
+}
+
+/// Spending the last node preserves the first member and charges its warning to the same log.
+#[test]
+fn a_spent_node_budget_counts_toward_the_diagnostic_summary() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut index = String::from("1 0 2 3 ");
+    for id in 10..18 {
+        index.push_str(&format!("{id} 99 "));
+    }
+    let mut dict = lopdf::Dictionary::new();
+    dict.set("First", i64::try_from(index.len()).unwrap());
+    dict.set("N", 10);
+    let stream = lopdf::Stream::new(dict, format!("{index}42 43").into_bytes());
+    let budget = lopdf::NodeBudget::new(1);
+    start_capture();
+    let parsed = lopdf::ObjectStream::new_within(&stream, None, &budget).unwrap();
+    assert_eq!(parsed.objects.len(), 1);
+    assert_eq!(parsed.objects[&(1, 0)].as_i64().unwrap(), 42);
+    assert!(budget.spent());
+
+    let messages = records();
+    assert_eq!(messages.len(), 9);
+    assert!(messages[..8].iter().all(|(level, text)| *level == Level::Warn && text == "out-of-bounds offset in object stream"));
+    let (level, summary) = &messages[8];
+    assert_eq!(*level, Level::Warn);
+    assert!(summary.contains("9 object stream warnings") && summary.contains("1 additional messages suppressed"), "{summary}");
 }
 
 /// A valid compressed Length/Info pair in a stream whose N header is deliberately wrong.

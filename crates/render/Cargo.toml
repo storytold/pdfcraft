@@ -43,6 +43,3 @@ pdfcraft-content = { workspace = true }
 pdfcraft-testkit = { workspace = true }
 # Builds the decompression-bomb streams in the raster tests.
 flate2 = { workspace = true }
-
-# Runs the strict log-summary regression in a deterministic one-worker pool.
-rayon = "1"
