@@ -258,7 +258,17 @@ pub(crate) fn mcid_texts(doc: &Document, page: &Dict) -> HashMap<i64, String> {
                 if let Some(name) = op.name(0)
                     && !metrics.contains_key(name)
                 {
-                    let font = fonts.get(name).and_then(Object::as_ref);
+                    // Keyed by the object at the end of the reference chain, so names that reach one
+                    // font through different chains share its metrics (the hop limit is resolve's).
+                    let font = fonts.get(name).and_then(|o| {
+                        let (mut cur, mut last) = (o.clone(), None);
+                        for _ in 0..16 {
+                            let Object::Ref(r) = cur else { break };
+                            last = Some(r);
+                            cur = (*doc.get(r)).clone();
+                        }
+                        last
+                    });
                     let built = match font.and_then(|r| by_font.get(&r)) {
                         Some(m) => Some(m.clone()),
                         None => {
