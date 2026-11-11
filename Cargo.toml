@@ -152,7 +152,7 @@ lopdf = { path = "vendor/lopdf" }
 vello_common = { path = "vendor/vello_common" }
 vello_cpu = { path = "vendor/vello_cpu" }
 # The egui and winit crates below are pinned to immutable storytold git revisions (egui
-# 725a39fca940f77149ffbb9c58eef405a16997bc, winit a517b3846ee8457d84ee4975110bfda6797c44dc).
+# 725a39fca940f77149ffbb9c58eef405a16997bc, winit 934cb6a6406c794772c66654742f10445f32d0d9).
 # Only the retained `vendor/winit` and `vendor/egui-wgpu` copies are provenance for the app's
 # earlier patches and their source guards, not path patches; the other `vendor/` entries above
 # remain real path patches. See vendor/README.md and the migration plan.
@@ -170,4 +170,5 @@ egui_system_font_provider = { git = "https://github.com/storytold/egui.git", rev
 eframe = { git = "https://github.com/storytold/egui.git", rev = "725a39fca940f77149ffbb9c58eef405a16997bc" }
 egui_demo_lib = { git = "https://github.com/storytold/egui.git", rev = "725a39fca940f77149ffbb9c58eef405a16997bc" }
 egui_inspection = { git = "https://github.com/storytold/egui.git", rev = "725a39fca940f77149ffbb9c58eef405a16997bc" }
-winit = { git = "https://github.com/storytold/winit.git", rev = "a517b3846ee8457d84ee4975110bfda6797c44dc" }
+# Native Wayland pinch: storytold/winit#20 (immutable PR head; merge upstream before release).
+winit = { git = "https://github.com/storytold/winit.git", rev = "934cb6a6406c794772c66654742f10445f32d0d9" }
