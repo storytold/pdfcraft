@@ -956,6 +956,8 @@ pub struct Template {
     pub embedded_paths: std::collections::BTreeSet<Vec<String>>,
     /// What a user of the template keeps for as long as it lives (see [`TemplateCache`]).
     pub cache: TemplateCache,
+    /// What this crate keeps for as long as the template lives (see [`crate::memo`]).
+    pub(crate) memo: crate::memo::Memo,
 }
 
 /// Room for one value a user of a template keeps alongside it for as long as the template

@@ -121,7 +121,7 @@ be measured exponentially often in their nesting. A measurement budget backs thi
   | --- | --- | --- |
   | `/PCSom` | generated fields | the field's SOM path, so values go back to the data |
   | `/PCXfaLayout` | AcroForm | what laying out produced, so a saved form is not laid out again |
-  | `/PCXfaOverrides` | AcroForm | `<< /Presence << /som (hidden) … >> /Access << /som (readOnly) … >> /Overridden << /som (1) … >> /Props << /som << /border#0/fill#0/color#0@value (255,0,0) … >> … >> >>`: presence and access scripts set, calculated fields whose value the user typed over a calculation the form only recommends, and the property changes scripts made (by the object's SOM path, then the property's path from it and the attribute, `=` in front for a copy of a drawn edge or corner), by SOM path (instance 0 of a repeating subform stands for all presence and access); applied to the template before every layout, so undo, save and reopen keep them. Adobe's viewers draw from the XFA packets and don't read it; at most 10 000 presence or access entries, and 10 000 property changes in 1 MiB (64 on one object, 16 KiB a value), are read or written |
+  | `/PCXfaOverrides` | AcroForm | `<< /Presence << /som (hidden) … >> /Access << /som (readOnly) … >> /Overridden << /som (1) … >> /Props 12 0 R >>`, the object `/Props` names being `<< /som << /border#0/fill#0/color#0@value (255,0,0) … >> … >>`: presence and access scripts set, calculated fields whose value the user typed over a calculation the form only recommends, and the property changes scripts made (by the object's SOM path, then the property's path from it and the attribute, `=` in front for a copy of a drawn edge or corner; in an object of their own, as they can run to a megabyte, written over in place only when the document added it for them), by SOM path (instance 0 of a repeating subform stands for all presence and access); applied to the template before every layout, so undo, save and reopen keep them. Adobe's viewers draw from the XFA packets and don't read it; at most 10 000 presence or access entries, and 10 000 property changes in 1 MiB (64 on one object, 16 KiB a value), are read or written |
   | `/PCXfaDate` | generated date fields | `true`: text the field's date pattern doesn't read is kept, and shown, as typed rather than refused, as an XFA form keeps it; the forms layer reads it |
   | `/PCXfaNode` | generated fields above a signature field | `true`: the field names a step of the signature field's SOM path; a new layout replaces it with the fields it holds |
   | `/PCXfaClick` | generated push buttons | `true`: the template has a click script for this button. Such buttons carry no `/A`: XFA JavaScript is not Acrobat JavaScript, so it is never written as a `/S /JavaScript` action other viewers would run. PdfCraft finds the script by the field's `/PCSom` |
@@ -167,7 +167,10 @@ let form = pdfcraft_xfa::layout_xml(template_xml)?;       // pages of items, for
   of page-master content, is drawn with its own. The rules a change must meet (paths, colours,
   measurements, whole numbers, sizes) are one file, `prop_rules.rs`, read by both crates, so a
   script never reads back a value the form drops. `execValidate()` runs the null test on every
-  required object under the node and lists the empty ones in one message.
+  required object under the node and lists the empty ones in one message. An event's work
+  doesn't grow with the changes the form already keeps: the template keeps (`memo`) the changes
+  last read, with the object they came from, and the property tree each changed object was
+  given, so the next event neither checks the changes one by one nor builds those trees again.
   Not `xfa.template`, data descriptions, `xfa.connectionSet`, the choice-list methods
   (`addItem`, `clearItems`, `boundItem`; `selectedIndex` reads give a sink that accepts
   writes), a node's `value` as its value element, `traversal` and `overflow`, `execEvent`, or

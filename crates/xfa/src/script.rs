@@ -95,8 +95,9 @@ pub struct Overrides {
     /// ([`crate::restyle::prop_key`]), the value set. Bounded by
     /// [`crate::restyle::MAX_PROP_OVERRIDES`] changes and
     /// [`crate::restyle::MAX_PROP_OVERRIDE_BYTES`] bytes; changed only through
-    /// [`Overrides::set_prop`], which keeps the count.
-    props: BTreeMap<String, BTreeMap<String, String>>,
+    /// [`Overrides::set_prop`], which keeps the count. Shared with the template's memo (see
+    /// [`overrides_of`]) until changed.
+    props: Arc<crate::memo::PropMap>,
     prop_count: usize,
     prop_bytes: usize,
     /// Property changes the file held that were not kept when it was read (not a change a
@@ -162,7 +163,7 @@ impl Overrides {
         if count > crate::restyle::MAX_PROP_OVERRIDES || bytes > crate::restyle::MAX_PROP_OVERRIDE_BYTES {
             return Err(PropRefused::Full);
         }
-        self.props.entry(som.to_string()).or_default().insert(key, value.to_string());
+        Arc::make_mut(&mut self.props).entry(som.to_string()).or_default().insert(key, value.to_string());
         self.prop_count = count;
         self.prop_bytes = bytes;
         Ok(true)
@@ -202,10 +203,12 @@ impl Overrides {
                 .collect();
             changed
         }
+        // The property changes are copied (from the memo's) only when one of them moves.
+        let props_move = self.props.keys().any(|k| moved(k, head, index).as_deref() != Some(k.as_str()));
         let changed = rekey(&mut self.presence, head, index)
             | rekey(&mut self.access, head, index)
             | rekey(&mut self.overridden, head, index)
-            | rekey(&mut self.props, head, index);
+            | (props_move && rekey(Arc::make_mut(&mut self.props), head, index));
         self.prop_count = self.props.values().flat_map(|m| m.keys()).filter(|k| !k.starts_with('=')).count();
         self.prop_bytes =
             self.props.iter().map(|(s, m)| m.iter().map(|(k, v)| s.len().saturating_add(k.len()).saturating_add(v.len())).sum::<usize>()).sum();
@@ -241,6 +244,29 @@ fn acroform(doc: &Document) -> Option<(Option<pdfcraft_cos::ObjRef>, Dict)> {
 
 /// The overrides the document carries.
 pub fn overrides(doc: &Document) -> Overrides {
+    read_overrides(doc, None)
+}
+
+/// [`overrides`] for a document of the form `tpl`: when its property changes are the object this
+/// template's memo last read them from, they are taken from the memo rather than checked one by
+/// one again, so an event costs the same however many changes the form keeps.
+pub fn overrides_of(doc: &Document, tpl: &Template) -> Overrides {
+    read_overrides(doc, Some(&tpl.memo))
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Property changes read from documents (rather than taken from a memo), on this thread.
+    static KEPT_READ: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many property changes have been read from documents on this thread, since the last call.
+#[cfg(test)]
+pub(crate) fn take_kept_read() -> usize {
+    KEPT_READ.with(|c| c.replace(0))
+}
+
+fn read_overrides(doc: &Document, memo: Option<&crate::memo::Memo>) -> Overrides {
     let mut out = Overrides::default();
     let Some((_, acro)) = acroform(doc) else { return out };
     let Some(o) = acro.get(OVERRIDES_KEY).map(|o| doc.resolve(o)) else { return out };
@@ -258,9 +284,16 @@ pub fn overrides(doc: &Document) -> Overrides {
     }
     // Property changes: each checked and counted as a script's would be, so a file can hold
     // no more than a script could have made, and nothing a script couldn't have set.
-    if let Some(m) = d.get(b"Props").map(|m| doc.resolve(m))
-        && let Some(m) = m.as_dict()
+    if let Some(object) = d.get(b"Props").map(|m| doc.resolve(m))
+        && let Some(m) = object.as_dict()
     {
+        if let Some(kept) = memo.and_then(|memo| memo.kept(&object)) {
+            out.props = kept.props;
+            out.prop_count = kept.count;
+            out.prop_bytes = kept.bytes;
+            out.dropped = kept.dropped;
+            return out;
+        }
         // An entry refused (invalid, or past a limit) is counted in `dropped` for a note; no more
         // entries than the limit twice over are looked at, the rest counted unread.
         let mut read = 0usize;
@@ -280,6 +313,8 @@ pub fn overrides(doc: &Document) -> Overrides {
                     out.dropped = out.dropped.saturating_add(1);
                     continue;
                 };
+                #[cfg(test)]
+                KEPT_READ.with(|c| c.set(c.get().saturating_add(1)));
                 let key = String::from_utf8_lossy(key);
                 let (path, attr) = crate::restyle::split_key(&key);
                 let kept = if key.starts_with('=') { out.set_prop_copy(&som, path, attr, &v) } else { out.set_prop(&som, path, attr, &v) };
@@ -288,14 +323,34 @@ pub fn overrides(doc: &Document) -> Overrides {
                 }
             }
         }
+        if let Some(memo) = memo {
+            let kept = crate::memo::KeptProps { props: Arc::clone(&out.props), count: out.prop_count, bytes: out.prop_bytes, dropped: out.dropped };
+            memo.read(&object, kept);
+        }
     }
     out
+}
+
+/// Whether `o` is an object of property changes as [`set_overrides`] writes them: a dictionary,
+/// not empty, of dictionaries of strings.
+fn holds_prop_changes(o: &Object) -> bool {
+    o.as_dict()
+        .is_some_and(|d| !d.is_empty() && d.iter().all(|(_, sets)| sets.as_dict().is_some_and(|m| m.iter().all(|(_, v)| v.as_string().is_some()))))
 }
 
 /// Store `ov` in the document (none: the key is removed).
 pub fn set_overrides(doc: &mut Document, ov: &Overrides) -> Result<(), XfaError> {
     let Some(root) = doc.root() else { return Ok(()) };
     let Some((acro_ref, mut acro)) = acroform(doc) else { return Ok(()) };
+    // The property changes go in an object of their own: they can run to a megabyte, and the
+    // AcroForm dictionary that would otherwise hold them is read and copied on every edit. The
+    // one already there is written over only when this document added it since it was read and
+    // it still holds property changes: a reference in the file can name any object.
+    let props_ref = acro
+        .get(OVERRIDES_KEY)
+        .map(|o| doc.resolve(o))
+        .and_then(|o| o.as_dict().and_then(|d| d.get(b"Props")).and_then(Object::as_ref))
+        .filter(|r| doc.xref_entry(r.num).is_none() && doc.is_edited(r.num) && holds_prop_changes(&doc.get(*r)));
     if ov.is_empty() {
         acro.remove(OVERRIDES_KEY);
     } else {
@@ -312,14 +367,21 @@ pub fn set_overrides(doc: &mut Document, ov: &Overrides) -> Result<(), XfaError>
         }
         if !ov.props.is_empty() {
             let mut objects = Dict::new();
-            for (som, sets) in &ov.props {
+            for (som, sets) in ov.props.iter() {
                 let mut m = Dict::new();
                 for (k, v) in sets {
                     m.set(k.as_bytes().to_vec(), Object::String(PdfString::text(v)));
                 }
                 objects.set(som.as_bytes().to_vec(), Object::Dict(m));
             }
-            d.set(b"Props".to_vec(), Object::Dict(objects));
+            let r = match props_ref {
+                Some(r) => {
+                    doc.set(r, Object::Dict(objects));
+                    r
+                }
+                None => doc.add(Object::Dict(objects)),
+            };
+            d.set(b"Props".to_vec(), Object::Ref(r));
         }
         acro.set(OVERRIDES_KEY.to_vec(), Object::Dict(d));
     }
@@ -424,7 +486,7 @@ impl Walker<'_> {
                 &changed
             }
             Some(sets) => {
-                props = Some(Arc::new(crate::restyle::apply_props(&f.common.props, sets).0));
+                props = Some(crate::memo::applied(&self.tpl.memo, &f.common.props, sets));
                 f
             }
             None => f,
@@ -489,7 +551,7 @@ impl Walker<'_> {
         match self.sets(named, som) {
             // The tree is what restyling would give it (the changes applied to it), without
             // reading the object again.
-            Some(sets) => Arc::new(crate::restyle::apply_props(&node.common().props, sets).0),
+            Some(sets) => crate::memo::applied(&self.tpl.memo, &node.common().props, sets),
             None => Arc::clone(&node.common().props),
         }
     }
@@ -968,7 +1030,7 @@ pub fn apply_overrides_split(tpl: &Template, ov: &Overrides) -> Applied {
         }
     }
     let mut per_instance = crate::layout::PropChanges::new();
-    for (som, sets) in &ov.props {
+    for (som, sets) in ov.props.iter() {
         let taken = w.consumed.get(som);
         let left: BTreeMap<String, String> =
             sets.iter().filter(|(k, _)| taken.is_none_or(|t| !t.contains(k))).map(|(k, v)| (k.clone(), v.clone())).collect();
@@ -1150,7 +1212,7 @@ pub fn page_area_uses(doc: &Document, tpl: &Template) -> HashMap<String, usize> 
 pub fn rerender(doc: &mut Document, tpl: &Template) -> Result<Report, XfaError> {
     let packets = crate::read_packets(doc)?.ok_or(XfaError::NotXfa)?;
     let data = parse_datasets(&packets.xdp);
-    let ov = overrides(doc);
+    let ov = overrides_of(doc, tpl);
     let applied = apply_overrides_split(tpl, &ov);
     let mut form = crate::layout::layout_with_overrides(&applied.template, data.as_ref(), &ov, &applied.per_instance)?;
     form.warnings.extend(property_notes(&ov, &applied));

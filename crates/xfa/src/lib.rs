@@ -12,6 +12,7 @@ pub mod fixtures;
 pub mod image;
 pub mod layout;
 pub mod linked_images;
+mod memo;
 pub mod model;
 pub mod packets;
 pub mod parse;
@@ -110,8 +111,8 @@ pub use picture::typed_date;
 pub use script::{
     Applied, FormNode, LiveForm, MAX_FORM_NODES, NodeKind, OVERRIDES_KEY, Overrides, PropRefused, ScriptEvent, apply_overrides,
     apply_overrides_split, data_of, embedded_fields, field_grows_with_text, field_is_embedded, field_now, fields_by_som, form_tree, form_tree_paged,
-    has_focus_scripts, has_scripts, mark_value_override, overrides, page_area_uses, path_is_embedded, property_notes, refresh_props, refresh_value,
-    rerender, reset_default, set_overrides, template_of, value_overridden,
+    has_focus_scripts, has_scripts, mark_value_override, overrides, overrides_of, page_area_uses, path_is_embedded, property_notes, refresh_props,
+    refresh_value, rerender, reset_default, set_overrides, template_of, value_overridden,
 };
 
 #[derive(Debug, thiserror::Error)]

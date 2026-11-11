@@ -492,7 +492,7 @@ impl<'a, 'b> Runner<'a, 'b> {
     /// A runner for one event on `doc` and its template, its scripts sharing `budget_ms`.
     fn new(doc: &'a mut pdfcraft_cos::Document, tpl: &'a Template, run: &'a mut XfaRun<'b>, budget_ms: u64) -> Self {
         let data = pdfcraft_xfa::data_of(doc);
-        let ov = pdfcraft_xfa::overrides(doc);
+        let ov = pdfcraft_xfa::overrides_of(doc, tpl);
         let budget_ms = budget_ms.saturating_mul(u64::from(run.time_scale));
         Runner {
             doc,
@@ -1500,7 +1500,7 @@ pub(crate) fn widget_som(doc: &pdfcraft_cos::Document, field: &pdfcraft_forms::F
 pub(crate) fn has_event(doc: &pdfcraft_cos::Document, tpl: &Template, som: &str, activity: &str) -> bool {
     // Page-master copies have a SOM path of their own on each page (`master[1]…`).
     let uses = pdfcraft_xfa::page_area_uses(doc, tpl);
-    let live = pdfcraft_xfa::form_tree_paged(tpl, pdfcraft_xfa::data_of(doc).as_ref(), &pdfcraft_xfa::overrides(doc), &uses);
+    let live = pdfcraft_xfa::form_tree_paged(tpl, pdfcraft_xfa::data_of(doc).as_ref(), &pdfcraft_xfa::overrides_of(doc, tpl), &uses);
     live.events.iter().any(|e| e.som == som && e.activity == activity)
 }
 
@@ -1515,7 +1515,7 @@ pub(crate) fn scripted_som(doc: &pdfcraft_cos::Document, tpl: &Template, field: 
     let object = doc.get(field.obj);
     let som = object.as_dict()?.get(pdfcraft_xfa::SOM_KEY).map(|s| doc.resolve(s))?.as_string()?.to_text();
     let uses = pdfcraft_xfa::page_area_uses(doc, tpl);
-    let live = pdfcraft_xfa::form_tree_paged(tpl, pdfcraft_xfa::data_of(doc).as_ref(), &pdfcraft_xfa::overrides(doc), &uses);
+    let live = pdfcraft_xfa::form_tree_paged(tpl, pdfcraft_xfa::data_of(doc).as_ref(), &pdfcraft_xfa::overrides_of(doc, tpl), &uses);
     live.events.iter().any(|e| e.som == som && e.activity == activity).then_some(som)
 }
 
