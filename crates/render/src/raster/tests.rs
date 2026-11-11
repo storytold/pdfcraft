@@ -7364,6 +7364,95 @@ fn type1_font_programs_with_long_runs_of_numbers_load_quickly() {
     assert_eq!(&page.rgba[((38 * 40 + 1) * 4)..][..4], &[255, 0, 0, 255], "the rest of the page draws");
 }
 
+/// A Type 1 font program drawing `H` as a 400 by 700 box, as cleartext and an eexec section,
+/// with its two lengths (ISO 32000-2 §9.9 `/Length1`, `/Length2`; Adobe Type 1 Font Format
+/// §7). Contributor-original.
+fn box_type1_program() -> (Vec<u8>, usize, usize) {
+    /// Encrypts `plain` with the Type 1 cipher from `key` (Adobe Type 1 Font Format §7.1).
+    fn encrypt(plain: &[u8], key: u16) -> Vec<u8> {
+        let mut r = key;
+        plain
+            .iter()
+            .map(|&p| {
+                let c = p ^ (r >> 8) as u8;
+                r = (u16::from(c).wrapping_add(r)).wrapping_mul(52845).wrapping_add(22719);
+                c
+            })
+            .collect()
+    }
+    // Charstrings, after lenIV (4) zero bytes: `0 500 hsbw endchar` and `0 600 hsbw 100 0
+    // rmoveto 400 0 rlineto 0 700 rlineto -400 0 rlineto closepath endchar`.
+    let notdef = encrypt(&[0, 0, 0, 0, 139, 248, 136, 13, 14], 4330);
+    let h = encrypt(&[0, 0, 0, 0, 139, 248, 228, 13, 239, 139, 21, 248, 36, 139, 5, 139, 249, 80, 5, 252, 36, 139, 5, 9, 14], 4330);
+    let mut private = b"dup /Private 8 dict dup begin\n/RD{string currentfile exch readstring pop}executeonly def\n\
+/ND{noaccess def}executeonly def\n/NP{noaccess put}executeonly def\n/lenIV 4 def\n/password 5839 def\n\
+/BlueValues [] def\n/MinFeature {16 16} def\n2 index /CharStrings 2 dict dup begin\n"
+        .to_vec();
+    for (name, program) in [("/.notdef", notdef), ("/H", h)] {
+        private.extend_from_slice(format!("{name} {} RD ", program.len()).as_bytes());
+        private.extend_from_slice(&program);
+        private.extend_from_slice(b" ND\n");
+    }
+    private.extend_from_slice(b"end\nend\nreadonly put\nnoaccess put\ndup /FontName get exch definefont pop\nmark currentfile closefile\n");
+    let clear = b"%!PS-AdobeFont-1.0: CFN0Test 001\n11 dict begin\n/FontName /CFN0Test def\n/PaintType 0 def\n/FontType 1 def\n\
+/FontMatrix [0.001 0 0 0.001 0 0] readonly def\n/FontBBox {0 0 600 700} readonly def\n/Encoding StandardEncoding def\n\
+currentdict end\ncurrentfile eexec\n";
+    let binary = encrypt(&[&[0u8; 4][..], &private].concat(), 55665);
+    ([&clear[..], &binary].concat(), clear.len(), binary.len())
+}
+
+/// A simple font whose `/FontFile3` says `/Subtype /Type1C` (bare CFF) but holds a Type 1
+/// program, as Calamus SL writes every font (#6990), is drawn with that program, exactly as the
+/// same program under `/FontFile`, as cleartext and an eexec section or in PFB segments
+/// (vendored hayro-interpret patch 104). It was drawn with the standard substitute.
+#[test]
+fn a_type1c_font_file_holding_a_type1_program_draws_with_it() {
+    let (program, clear, binary) = box_type1_program();
+    // The same program in PFB segments: text, binary, end of file.
+    let segment = |kind: u8, data: &[u8]| [&[0x80, kind][..], &(data.len() as u32).to_le_bytes(), data].concat();
+    let pfb = [segment(1, &program[..clear]), segment(2, &program[clear..]), vec![0x80, 3]].concat();
+    // `file`: the descriptor's font file entry, the stream's other entries, and the program.
+    let render = |file: Option<(&str, String, &[u8])>| {
+        let content = b"BT /F1 30 Tf 6 24 Td (HHH) Tj ET";
+        let widths = vec!["560"; 95].join(" ");
+        let entry = file.as_ref().map_or(String::new(), |(key, _, _)| format!(" /{key} 7 0 R"));
+        let mut objects: Vec<Vec<u8>> = vec![
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 160 60] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>".to_vec(),
+            [format!("<< /Length {} >>\nstream\n", content.len()).into_bytes(), content.to_vec(), b"\nendstream".to_vec()].concat(),
+            format!("<< /Type /Font /Subtype /Type1 /BaseFont /CFN0Test /FirstChar 32 /LastChar 126 /Widths [{widths}] /FontDescriptor 6 0 R /Encoding /WinAnsiEncoding >>").into_bytes(),
+            format!("<< /Type /FontDescriptor /FontName /CFN0Test /Flags 32 /FontBBox [-200 -250 1100 950] /ItalicAngle 0 /Ascent 700 /Descent -220 /CapHeight 660 /StemV 80{entry} >>").into_bytes(),
+        ];
+        if let Some((_, extra, program)) = file {
+            objects
+                .push([format!("<< /Length {}{extra} >>\nstream\n", program.len()).into_bytes(), program.to_vec(), b"\nendstream".to_vec()].concat());
+        }
+        let mut pdf = b"%PDF-1.7\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, o) in objects.iter().enumerate() {
+            offsets.push(pdf.len());
+            pdf.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+            pdf.extend_from_slice(o);
+            pdf.extend_from_slice(b"\nendobj\n");
+        }
+        let xref = pdf.len();
+        pdf.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).as_bytes());
+        for o in offsets {
+            pdf.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+        }
+        pdf.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objects.len() + 1).as_bytes());
+        let page = PageRenderer::new(Arc::new(pdf), RenderConfig::default()).render(RenderRequest { page: 0, scale: 2.0, ..Default::default() });
+        assert!(page.error.is_none(), "{:?}", page.error);
+        page.rgba.to_vec()
+    };
+    let embedded = render(Some(("FontFile", format!(" /Length1 {clear} /Length2 {binary} /Length3 0"), &program)));
+    assert_ne!(embedded, render(None), "the program draws other glyphs than the substitute");
+    let type1c = " /Subtype /Type1C".to_string();
+    assert_eq!(render(Some(("FontFile3", type1c.clone(), &program))), embedded, "cleartext and eexec under /Type1C");
+    assert_eq!(render(Some(("FontFile3", type1c, &pfb))), embedded, "PFB segments under /Type1C");
+}
+
 /// From `cargo xtask fuzz`: an inline image claiming /W 4294967295 over four bytes of data
 /// hung in resampling (vendored hayro patch: `MAX_IMAGE_PIXELS`).
 #[test]
