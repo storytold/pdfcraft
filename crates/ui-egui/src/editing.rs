@@ -15,6 +15,8 @@ pub use save::PendingLock;
 pub use save::PendingOverwrite;
 #[cfg(target_arch = "wasm32")]
 pub(crate) use save::download;
+#[doc(hidden)]
+pub use save::download_mime_type;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use save::in_document_folder;
 pub use save::{SaveTarget, write_atomically};
@@ -583,6 +585,7 @@ impl PdfCraftApp {
                 self.leave_camera(i);
                 self.execute(command);
             }
+            Some(crate::canvas::ViewAction::Replace { all }) => self.replace_found(i, all),
             None => {}
         }
         // That tab comes forward when its value was refused (its editor is open again with the
@@ -1214,6 +1217,7 @@ fn is_form_edit(edit: &Edit) -> bool {
             | Edit::DuplicateField { .. }
             | Edit::SetFieldProps { .. }
             | Edit::SetFieldImage { .. }
+            | Edit::SetFieldImageTarget { .. }
             | Edit::SetFieldScript { .. }
             | Edit::SetCalculationOrder { .. }
             | Edit::ApplyScriptChanges { .. }
