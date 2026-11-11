@@ -103,6 +103,10 @@ impl Decryptor {
                     DecryptorTag::None => Some(data.to_vec()),
                     DecryptorTag::Rc4 => decrypt_rc4(key, data, id),
                     DecryptorTag::Aes128 => decrypt_aes128(key, data, id),
+                    // PdfCraft patch (46): Algorithm 1.A (ISO 32000-2 §7.6.3.3) is for 256-bit
+                    // file keys. A `/V 4` handler naming `/CFM /AESV3` with a 128-bit key
+                    // derives each object's key as for `AESV2`, as pdfcraft-crypt reads it.
+                    DecryptorTag::Aes256 if key.len() != 32 => decrypt_aes128(key, data, id),
                     DecryptorTag::Aes256 => decrypt_aes256(key, data),
                 }
             }

@@ -442,6 +442,119 @@ fn pdfdoc_encoding_round_trips() {
     for c in ['ğ', 'ş', 'İ', '\u{A0}', '\u{85}', 'Ж', '日'] {
         assert_eq!(pdfdoc_byte(c), None, "{c}");
     }
-    assert_eq!(legacy_candidates("Çok"), [Zeroizing::new(vec![0xC7, b'o', b'k'])]);
+    assert_eq!(legacy_candidates("Çok"), [Zeroizing::new(vec![0xC7, b'o', b'k']), Zeroizing::new("Çok".as_bytes().to_vec())]);
     assert_eq!(legacy_candidates("şifre"), [Zeroizing::new(b"ifre".to_vec()), Zeroizing::new("şifre".as_bytes().to_vec())]);
+}
+
+/// An R2–R4 dictionary whose `/O` and `/U` were made from raw password bytes, with Algorithm 3
+/// step c rehashing the first `owner_hashed` bytes of each digest (16 as the standard has it).
+fn legacy_dict(v: i64, r: i64, bits: i64, user: &[u8], owner: &[u8], owner_hashed: usize) -> EncryptDict {
+    let mut d = EncryptDict { filter: b"Standard".to_vec(), v, r, length_bits: bits, p: -4, encrypt_metadata: true, ..Default::default() };
+    let rk = owner_rc4_key_hashing(&d, owner, owner_hashed);
+    let mut o = rc4(&rk, &*pad(user));
+    if r >= 3 {
+        for i in 1..=19u8 {
+            let k: Vec<u8> = rk.iter().map(|b| b ^ i).collect();
+            o = rc4(&k, &o);
+        }
+    }
+    d.o = o;
+    let key = file_key_r4(&d, ID, user);
+    d.u = u_value_r4(&d, ID, &key);
+    d
+}
+
+/// A password PDFDocEncoding holds ("pässwört": ä and ö are 0xE4 and 0xF6) written as its UTF-8
+/// bytes, as `qpdf --password-mode=bytes` writes it, opens with that password, user and owner
+/// alike; the PDFDocEncoding-written one keeps opening too.
+#[test]
+fn a_pdfdoc_password_written_as_utf8_bytes_opens() {
+    for r in [2, 3, 4] {
+        let (v, bits) = if r == 2 { (1, 40) } else { (2, 128) };
+        let d = legacy_dict(v, r, bits, "pässwört".as_bytes(), "Öwnér".as_bytes(), 16);
+        let user = SecurityHandler::open(d.clone(), ID, Some("pässwört")).unwrap();
+        assert_eq!(user.auth(), Auth::User, "R{r}");
+        assert_eq!(user.file_key(), &*file_key_r4(&d, ID, "pässwört".as_bytes()), "R{r}");
+        let owner = SecurityHandler::open(d.clone(), ID, Some("Öwnér")).unwrap();
+        assert_eq!(owner.auth(), Auth::Owner, "R{r}");
+        assert_eq!(owner.recovered_user_password().as_deref().map(Vec::as_slice), Some("pässwört".as_bytes()), "R{r}");
+        for wrong in ["passwort", "pässwort", "Ownér"] {
+            assert_eq!(SecurityHandler::open(d.clone(), ID, Some(wrong)).unwrap_err(), CryptError::WrongPassword, "R{r} {wrong}");
+        }
+        let pdfdoc = legacy_dict(v, r, bits, b"p\xE4ssw\xF6rt", b"owner", 16);
+        assert_eq!(SecurityHandler::open(pdfdoc, ID, Some("pässwört")).unwrap().auth(), Auth::User, "R{r}");
+    }
+    assert_eq!(legacy_candidates("pässwört"), [Zeroizing::new(b"p\xE4ssw\xF6rt".to_vec()), Zeroizing::new("pässwört".as_bytes().to_vec())]);
+    assert_eq!(legacy_candidates("plain"), [Zeroizing::new(b"plain".to_vec())]);
+}
+
+/// R3 with a key shorter than 16 bytes: `/O` made by rehashing only the first n bytes in
+/// Algorithm 3 step c (as a 40-bit V1 R3 file in PDFBOX-3276 was written) authenticates the owner
+/// password, as qpdf and MuPDF accept it, and so does `/O` made as the standard has it. With the
+/// empty owner password (Algorithm 3 step a then uses the user password) the empty password is
+/// the owner password too.
+#[test]
+fn a_short_key_owner_password_opens_under_either_rehash() {
+    for bits in [40, 56, 88, 120] {
+        let n = (bits / 8) as usize;
+        for hashed in [n, 16] {
+            let case = format!("{bits}-bit key, step c over {hashed} bytes");
+            let d = legacy_dict(1, 3, bits, b"", b"", hashed);
+            let h = SecurityHandler::open(d.clone(), ID, None).unwrap();
+            assert_eq!(h.auth(), Auth::Owner, "{case}");
+            assert!(h.permissions().owner, "{case}");
+            let d = legacy_dict(2, 3, bits, b"usr", b"own", hashed);
+            let owner = SecurityHandler::open(d.clone(), ID, Some("own")).unwrap();
+            assert_eq!(owner.auth(), Auth::Owner, "{case}");
+            assert_eq!(owner.recovered_user_password().as_deref().map(Vec::as_slice), Some(&b"usr"[..]), "{case}");
+            let user = SecurityHandler::open(d.clone(), ID, Some("usr")).unwrap();
+            assert_eq!((user.auth(), user.file_key()), (Auth::User, owner.file_key()), "{case}");
+            assert_eq!(user.authenticate_owner(ID, "own").unwrap().auth(), Auth::Owner, "{case}");
+            assert_eq!(SecurityHandler::open(d, ID, Some("ow")).unwrap_err(), CryptError::WrongPassword, "{case}");
+        }
+    }
+    // A 128-bit key has one reading, and new encryption keeps writing the standard's.
+    assert_eq!(owner_rc4_keys(&legacy_dict(2, 3, 128, b"", b"", 16), b"").len(), 1);
+    let made = new(Algorithm::Rc4_128, "u", "o", -1);
+    assert_eq!(made.dict().o, legacy_dict(2, 3, 128, b"u", b"o", 16).o);
+}
+
+/// `/V 4` with `/CFM /AESV3` and a 128-bit key (§7.6.4.1 and Table 25 don't allow it; PDFBOX-5345):
+/// each object's key is MD5(key, object, generation, "sAlT"), as for AESV2, and AES-128 with it
+/// decrypts the data. Only a 256-bit key from R5/R6 is used directly (Algorithm 1.A), and only
+/// then does data left as stored survive renumbering.
+#[test]
+fn aesv3_with_a_128_bit_key_derives_object_keys_as_aesv2() {
+    let text = b"Crypto sample".to_vec();
+    let mut d = legacy_dict(4, 4, 128, b"", b"owner", 16);
+    d.crypt_filters = vec![(b"StdCF".to_vec(), Method::Aes256)];
+    d.stm_f = b"StdCF".to_vec();
+    d.str_f = b"StdCF".to_vec();
+    let h = SecurityHandler::open(d.clone(), ID, None).unwrap();
+    assert_eq!(h.file_key().len(), 16);
+    let (num, generation) = (7u32, 0u16);
+    let mut md5 = Md5::new();
+    md5.update(h.file_key());
+    md5.update(&num.to_le_bytes()[..3]);
+    md5.update(generation.to_le_bytes());
+    md5.update(b"sAlT");
+    let object_key = md5.finalize().to_vec();
+    let iv = [5u8; 16];
+    let written = [iv.to_vec(), aes_cbc_encrypt(&object_key, &iv, &text, true)].concat();
+    assert_eq!(h.decrypt_string(num, generation, &written), text);
+    assert_eq!(h.decrypt_stream(num, generation, &written, StreamKind::Normal), text);
+    let saved = h.encrypt_stream(num, generation, &text, StreamKind::Normal);
+    assert_eq!(aes_cbc_decrypt(&object_key, saved.first_chunk::<16>().unwrap(), &saved[16..], true), text);
+    // Data a keyless handler leaves as stored: AESV3 at R4 mixes in the object number, R6 doesn't.
+    let keyless = |mut d: EncryptDict| {
+        d.crypt_filters = vec![(b"EFF".to_vec(), Method::Aes256)];
+        (d.stm_f, d.str_f, d.ef_f) = (b"Identity".to_vec(), b"Identity".to_vec(), b"EFF".to_vec());
+        SecurityHandler::without_key(d).unwrap().survives_renumbering()
+    };
+    assert!(!keyless(d));
+    assert!(keyless(new(Algorithm::Aes256, "u", "o", -1).dict().clone()));
+    // R6 still uses its 256-bit key directly.
+    let r6 = new(Algorithm::Aes256, "u", "o", -1);
+    let written = [iv.to_vec(), aes_cbc_encrypt(r6.file_key(), &iv, &text, true)].concat();
+    assert_eq!(r6.decrypt_string(num, generation, &written), text);
 }

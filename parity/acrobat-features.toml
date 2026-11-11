@@ -154,8 +154,8 @@ milestone = "M1"
 status = "shipped"
 commands = ["file.open"]
 tools = ["doc_open"]
-evidence = ["crates/crypt/src/tests.rs::rc4_reference_vectors", "crates/cos/tests/it/encryption.rs::every_algorithm_round_trips_and_hides_the_content"]
-notes = ""
+evidence = ["crates/crypt/src/tests.rs::rc4_reference_vectors", "crates/cos/tests/it/encryption.rs::every_algorithm_round_trips_and_hides_the_content", "crates/crypt/src/tests.rs::a_short_key_owner_password_opens_under_either_rehash"]
+notes = "an R3 or R4 owner password authenticates whether /O was made with Algorithm 3 step c rehashing the whole digest, as the standard has it, or, for a key shorter than 16 bytes, only its first n bytes, as some producers wrote it and qpdf and MuPDF accept it"
 
 [[feature]]
 id = "core.open-aes"
@@ -166,8 +166,8 @@ milestone = "M1"
 status = "shipped"
 commands = ["file.open"]
 tools = ["doc_open"]
-evidence = ["crates/crypt/src/tests.rs::aes_cbc_nist_sp800_38a_vectors", "crates/cos/tests/it/encryption.rs::every_algorithm_round_trips_and_hides_the_content"]
-notes = ""
+evidence = ["crates/crypt/src/tests.rs::aes_cbc_nist_sp800_38a_vectors", "crates/cos/tests/it/encryption.rs::every_algorithm_round_trips_and_hides_the_content", "crates/crypt/src/tests.rs::aesv3_with_a_128_bit_key_derives_object_keys_as_aesv2"]
+notes = "a /V 4 handler naming /CFM /AESV3 with a 128-bit key (§7.6.4.1 allows only V2 or AESV2 at revision 4) derives per-object keys as for AESV2, as qpdf and PDFium read such files; only a 256-bit key is used directly (Algorithm 1.A)"
 
 [[feature]]
 id = "core.password-prompt"
@@ -190,8 +190,8 @@ milestone = "M1"
 status = "shipped"
 commands = []
 tools = []
-evidence = ["crates/crypt/src/tests.rs::r6_passwords_are_saslprepped"]
-notes = ""
+evidence = ["crates/crypt/src/tests.rs::r6_passwords_are_saslprepped", "crates/crypt/src/tests.rs::legacy_passwords_are_pdfdoc_encoded_with_a_utf8_fallback", "crates/crypt/src/tests.rs::a_pdfdoc_password_written_as_utf8_bytes_opens"]
+notes = "R5/R6 passwords are SASLprepped; R2-R4 passwords are tried in PDFDocEncoding and, when they have any non-ASCII character, as their UTF-8 bytes too, which some tools write"
 
 [[feature]]
 id = "core.owner-password-unlock"

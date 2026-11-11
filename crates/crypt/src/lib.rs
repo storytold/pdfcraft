@@ -270,12 +270,26 @@ impl SecurityHandler {
     }
 
     /// Whether data left as stored by a handler without the key still decrypts after its object
-    /// is renumbered: only AES-256 doesn't mix the object number into the key (Algorithm 1.A).
+    /// is renumbered: only AES-256 with a 256-bit file key doesn't mix the object number into the
+    /// key (Algorithm 1.A).
     pub fn survives_renumbering(&self) -> bool {
+        let direct = self.uses_file_key_directly();
         [self.methods.string, self.methods.stream, self.methods.embedded_file]
             .into_iter()
             .chain(self.methods.named.values().copied())
-            .all(|m| matches!(m, Method::Identity | Method::Aes256))
+            .all(|m| m == Method::Identity || (m == Method::Aes256 && direct))
+    }
+
+    /// Whether `AESV3` data is encrypted with the file key itself (Algorithm 1.A, §7.6.3.3) rather
+    /// than a per-object key (Algorithm 1, §7.6.3.2): for `/V 5` (§7.6.3.1) and for a 256-bit file
+    /// key, the only kind Algorithm 1.A is for, which revisions 5 and 6 make (a handler without
+    /// the key goes by the revision). A `/V 4` handler of revision 4 or earlier that names
+    /// `/CFM /AESV3` (§7.6.4.1 allows only `V2` or `AESV2` at revision 4, and Table 25 asks for a
+    /// 256-bit key with `AESV3`) has a key of at most 128 bits. The files seen in practice derive
+    /// per-object keys from it as for `AESV2`, MD5 of the key, the object, the generation and
+    /// "sAlT", and qpdf and PDFium read them that way too.
+    fn uses_file_key_directly(&self) -> bool {
+        self.dict.v >= 5 || self.dict.r >= 5 || self.key.len() == 32
     }
 
     /// Upgrade to owner access with the owner (permissions) password, as when a restricted
@@ -346,8 +360,9 @@ impl SecurityHandler {
         }
     }
 
-    /// Algorithm 1 (§7.6.3.2): the key for one object. AES-256 uses the file key directly
-    /// (Algorithm 1.A, §7.6.3.3).
+    /// Algorithm 1 (§7.6.3.2): the key for one object. AES-256 with a 256-bit file key uses the
+    /// file key directly (Algorithm 1.A, §7.6.3.3); with a shorter one it is derived as for
+    /// AES-128 (see [`Self::uses_file_key_directly`]).
     ///
     /// For an RC4 crypt filter under `/V 4`, a file key shorter than 16 bytes is first extended
     /// to 16 bytes with zeros. The standard doesn't say so (Algorithm 1 takes the n-byte key as
@@ -357,7 +372,7 @@ impl SecurityHandler {
     /// left as they are: `AESV2` takes a 128-bit key (Table 25), and Acrobat's extension is only
     /// seen with RC4. Every key PdfCraft writes under `/V 4` is 16 bytes already.
     fn object_key(&self, method: Method, num: u32, generation: u16) -> Zeroizing<Vec<u8>> {
-        if method == Method::Aes256 {
+        if method == Method::Aes256 && self.uses_file_key_directly() {
             return self.key.clone();
         }
         let mut key = self.key.clone();
@@ -368,7 +383,7 @@ impl SecurityHandler {
         h.update(&key);
         h.update(&num.to_le_bytes()[..3]);
         h.update(generation.to_le_bytes());
-        if method == Method::Aes128 {
+        if matches!(method, Method::Aes128 | Method::Aes256) {
             h.update(b"sAlT");
         }
         let mut digest = Zeroizing::new(h.finalize().to_vec());
@@ -470,11 +485,13 @@ fn legacy_password(pw: &str) -> Zeroizing<Vec<u8>> {
 }
 
 /// The bytes an R2–R4 password may have been written as: PDFDocEncoding, as the specification
-/// asks; and for a password with characters PDFDocEncoding lacks (ğ, ş, İ, …), which it gives
-/// no bytes, also its UTF-8 bytes, which qpdf and other tools write for such passwords.
+/// asks; and for a password with any non-ASCII character, also its UTF-8 bytes. Tools write
+/// those for a password with characters PDFDocEncoding lacks (ğ, ş, İ, …), and some for every
+/// non-ASCII password, even one PDFDocEncoding holds (qpdf's `--password-mode=bytes` writes
+/// "pässwört" as its UTF-8 bytes). An ASCII password is the same in both.
 fn legacy_candidates(pw: &str) -> Vec<Zeroizing<Vec<u8>>> {
     let mut out = vec![legacy_password(pw)];
-    if pw.chars().any(|c| pdfdoc_byte(c).is_none()) {
+    if !pw.is_ascii() {
         out.push(Zeroizing::new(pw.bytes().take(32).collect()));
     }
     out
@@ -557,15 +574,36 @@ fn user_key_r4(d: &EncryptDict, id0: &[u8], pw: &[u8]) -> Option<Zeroizing<Vec<u
 
 /// The RC4 key derived from an owner password (Algorithm 3, steps a–d).
 fn owner_rc4_key(d: &EncryptDict, owner_pw: &[u8]) -> Zeroizing<Vec<u8>> {
+    owner_rc4_key_hashing(d, owner_pw, 16)
+}
+
+/// Algorithm 3, steps a–d, with each of the 50 rehashes of step c taking the first `hashed` bytes
+/// of the previous digest. The standard hashes the whole digest (16 bytes); some producers hash
+/// only the first n bytes, as Algorithm 2 step h does (see [`owner_rc4_keys`]).
+fn owner_rc4_key_hashing(d: &EncryptDict, owner_pw: &[u8], hashed: usize) -> Zeroizing<Vec<u8>> {
     let n = key_len(d);
     let mut digest = Zeroizing::new(Md5::digest(*pad(owner_pw)).to_vec());
     if d.r >= 3 {
         for _ in 0..50 {
-            digest = Zeroizing::new(Md5::digest(&*digest).to_vec());
+            let take = hashed.min(digest.len());
+            digest = Zeroizing::new(Md5::digest(digest.get(..take).unwrap_or(&digest)).to_vec());
         }
     }
     digest.truncate(n);
     digest
+}
+
+/// The RC4 keys an owner password may have been turned into. The first is Algorithm 3 as the
+/// standard has it. For an R3 or R4 key shorter than 16 bytes some producers rehash only the first
+/// n bytes in step c (as Algorithm 2 step h does for the file key), and qpdf and MuPDF accept an
+/// owner password written that way, so it is tried too.
+fn owner_rc4_keys(d: &EncryptDict, owner_pw: &[u8]) -> Vec<Zeroizing<Vec<u8>>> {
+    let n = key_len(d);
+    let mut keys = vec![owner_rc4_key(d, owner_pw)];
+    if d.r >= 3 && n < 16 {
+        keys.push(owner_rc4_key_hashing(d, owner_pw, n));
+    }
+    keys
 }
 
 type SecretBytes = Zeroizing<Vec<u8>>;
@@ -573,10 +611,14 @@ type SecretBytes = Zeroizing<Vec<u8>>;
 /// Algorithm 7: authenticate an owner password (recover the user password from `/O`).
 /// Returns the file key and the recovered user password (padding removed).
 fn owner_key_r4(d: &EncryptDict, id0: &[u8], pw: &[u8]) -> Option<(SecretBytes, SecretBytes)> {
-    let rk = owner_rc4_key(d, pw);
+    owner_rc4_keys(d, pw).into_iter().find_map(|rk| owner_key_with(d, id0, &rk))
+}
+
+/// Algorithm 7 with one RC4 key from Algorithm 3, steps a–d.
+fn owner_key_with(d: &EncryptDict, id0: &[u8], rk: &[u8]) -> Option<(SecretBytes, SecretBytes)> {
     let mut user = Zeroizing::new(d.o[..d.o.len().min(32)].to_vec());
     if d.r == 2 {
-        user = Zeroizing::new(rc4(&rk, &user));
+        user = Zeroizing::new(rc4(rk, &user));
     } else {
         for i in (0..=19u8).rev() {
             let k = Zeroizing::new(rk.iter().map(|b| b ^ i).collect::<Vec<u8>>());
