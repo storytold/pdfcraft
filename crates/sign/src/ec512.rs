@@ -109,7 +109,7 @@ impl Curve {
     /// `k · p`, double-and-add from the top bit.
     fn mul(&self, k: &BoxedUint, p: &Point) -> Point {
         let mut acc: Point = None;
-        for i in (0..k.bits_vartime()).rev() {
+        for i in (0..k.bit_width_vartime()).rev() {
             acc = self.double(&acc);
             if bool::from(k.bit(i)) {
                 acc = self.add(&acc, p);
