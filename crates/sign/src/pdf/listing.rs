@@ -206,18 +206,30 @@ impl Field {
     }
 }
 
-/// The `/Ff` a field inherits through `/Parent` when it has none of its own. Bounded like the
-/// rest of the walk: a malformed parent chain simply ends the search.
+/// The `/Ff` a field inherits through `/Parent` when it has none of its own. Parents are read in
+/// place (no dictionary, `/Kids` array included, is copied per step). The whole chain is followed,
+/// each indirect parent once; one that loops back can't be searched to its end, so it reads as
+/// ReadOnly rather than as writable.
 fn parent_flags(doc: &Document, d: &Dict) -> Option<i64> {
-    let mut cur = d.clone();
-    for _ in 0..64 {
-        let parent = cur.get(b"Parent").map(|p| doc.resolve(p)).and_then(|p| p.as_dict().cloned())?;
-        if let Some(f) = parent.get(b"Ff").map(|f| doc.resolve(f)).and_then(|f| f.as_int()) {
+    let mut held: Option<std::sync::Arc<Object>> = None;
+    let mut seen = HashSet::new();
+    loop {
+        let cur = match &held {
+            Some(h) => h.as_dict()?,
+            None => d,
+        };
+        let link = cur.get(b"Parent")?;
+        if let Some(r) = link.as_ref()
+            && !seen.insert(r)
+        {
+            return Some(1);
+        }
+        let parent = doc.resolve(link);
+        if let Some(f) = parent.as_dict()?.get(b"Ff").map(|f| doc.resolve(f)).and_then(|f| f.as_int()) {
             return Some(f);
         }
-        cur = parent;
+        held = Some(parent);
     }
-    None
 }
 
 /// Every signature field, depth first in `/Fields` order.
@@ -444,5 +456,45 @@ mod read_only_tests {
         assert!(!leaf(&field_doc(3, None)).read_only(), "a short chain with no flags is writable");
         // 80 levels deep the flag still reaches the leaf: the walk carries it, not a /Parent scan
         assert!(leaf(&field_doc(80, Some(1))).read_only());
+    }
+
+    /// A signature field listed directly in `/Fields`, under `depth` parents linked by `/Parent`
+    /// alone, the topmost carrying `ff` (or, with `cycle`, linking back to the field).
+    fn parent_chain_doc(depth: usize, ff: Option<i64>, cycle: bool) -> Document {
+        let mut doc = Document::new_empty();
+        let mut leaf = Dict::new();
+        leaf.set(b"T".to_vec(), Object::Name(b"leaf".to_vec()));
+        leaf.set(b"FT".to_vec(), Object::Name(b"Sig".to_vec()));
+        let leaf_ref = doc.add(Object::Dict(leaf.clone()));
+        let mut parent = leaf_ref;
+        for i in 0..depth {
+            let mut d = Dict::new();
+            if i + 1 == depth {
+                match (ff, cycle) {
+                    (_, true) => d.set(b"Parent".to_vec(), Object::Ref(leaf_ref)),
+                    (Some(ff), _) => d.set(b"Ff".to_vec(), Object::Int(ff)),
+                    _ => {}
+                }
+            }
+            let this = doc.add(Object::Dict(d));
+            doc.update_dict(parent, |p| p.set(b"Parent".to_vec(), Object::Ref(this))).expect("parent");
+            parent = this;
+        }
+        let mut form = Dict::new();
+        form.set(b"Fields".to_vec(), Object::Array(vec![Object::Ref(leaf_ref)]));
+        let form_ref = doc.add(Object::Dict(form));
+        let root = doc.root().expect("a catalog");
+        doc.update_dict(root, |d| d.set(b"AcroForm".to_vec(), Object::Ref(form_ref))).expect("catalog");
+        doc
+    }
+
+    #[test]
+    fn a_read_only_flag_is_inherited_through_a_long_parent_chain() {
+        let leaf = |doc: &Document| sig_fields(doc).into_iter().find(|f| f.name == "leaf").expect("the leaf field");
+        assert!(leaf(&parent_chain_doc(3, Some(1), false)).read_only());
+        assert!(leaf(&parent_chain_doc(200, Some(1), false)).read_only(), "past 64 parents");
+        assert!(!leaf(&parent_chain_doc(200, Some(0), false)).read_only());
+        assert!(!leaf(&parent_chain_doc(200, None, false)).read_only());
+        assert!(leaf(&parent_chain_doc(5, None, true)).read_only(), "a loop can't be searched to its end");
     }
 }
