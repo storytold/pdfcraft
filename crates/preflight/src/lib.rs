@@ -1298,7 +1298,8 @@ fn chain_forbidden(doc: &Document, a: &Dict) -> Option<String> {
 fn hold_referenced(doc: &Document, list: &[Object], seen: &mut std::collections::HashSet<ObjRef>, held: &mut Vec<std::sync::Arc<Object>>) {
     for r in list.iter().filter_map(Object::as_ref).take(MAX_ACTION_CHAIN) {
         if seen.insert(r) {
-            held.push(doc.get(r));
+            // Resolved through any alias: a reference to a reference names its object's value.
+            held.push(doc.resolve(&Object::Ref(r)));
         }
     }
 }
@@ -1325,10 +1326,14 @@ fn walk_chain(
             Some(Object::Dict(next)) => stack.push(next),
             Some(Object::Array(list)) => {
                 *read = read.saturating_add(list.len().min(MAX_ACTION_CHAIN));
+                // A wide array is refused before any of it is queued.
+                if *read > MAX_ACTION_CHAIN {
+                    return Some("too deeply chained".into());
+                }
                 hold_referenced(doc, list, seen, held);
                 stack.extend(list.iter().filter_map(Object::as_dict));
             }
-            Some(Object::Ref(r)) if seen.insert(*r) => held.push(doc.get(*r)),
+            Some(Object::Ref(r)) if seen.insert(*r) => held.push(doc.resolve(&Object::Ref(*r))),
             _ => {}
         }
     }

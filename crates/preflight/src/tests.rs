@@ -578,6 +578,30 @@ fn an_array_only_next_chain_is_too_deeply_chained() {
     assert_eq!(chain_forbidden(&doc, &action), None);
 }
 
+/// A direct `/Next` array wider than the chain limit is refused as soon as it is charged, and a
+/// `/Next` that reaches its array through a reference alias is read through it.
+#[test]
+fn a_wide_direct_next_array_is_refused_and_an_alias_is_followed() {
+    let uri = || {
+        let mut d = Dict::new();
+        d.set(b"S".to_vec(), Object::name("URI"));
+        d
+    };
+    let mut action = uri();
+    action.set(b"Next".to_vec(), Object::Array((0..=MAX_ACTION_CHAIN).map(|_| Object::Dict(uri())).collect()));
+    let doc = Document::new_empty();
+    assert_eq!(chain_forbidden(&doc, &action).as_deref(), Some("too deeply chained"));
+    // `/Next` -> 1 0 R -> 2 0 R -> [ << /S /JavaScript >> ]
+    let mut doc = Document::new_empty();
+    let mut js = Dict::new();
+    js.set(b"S".to_vec(), Object::name("JavaScript"));
+    let list = doc.add(Object::Array(vec![Object::Dict(js)]));
+    let alias = doc.add(Object::Ref(list));
+    let mut action = uri();
+    action.set(b"Next".to_vec(), Object::Ref(alias));
+    assert_eq!(chain_forbidden(&doc, &action).as_deref(), Some("JavaScript"));
+}
+
 /// Every distinct output intent is declared, past eight; an identifier longer than any real one
 /// keeps its start.
 #[test]
