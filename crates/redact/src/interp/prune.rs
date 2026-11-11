@@ -19,11 +19,9 @@ pub(crate) fn prune(doc: &Document, budget: &mut DecodeBudget, xo: &mut Dict, re
     let res = Dict::from_iter([(b"XObject".to_vec(), Object::Dict(xo.clone()))]);
     let ops = resource_ops(doc, budget, &res, content)?;
     let drawn: HashSet<&[u8]> = ops.iter().filter(|op| op.is("Do")).filter_map(Op::last_name).collect();
-    for n in replaced {
-        if !drawn.contains(n.as_slice()) {
-            xo.remove(n);
-        }
-    }
+    let replaced: HashSet<&[u8]> = replaced.iter().map(Vec::as_slice).collect();
+    // In one pass: removing names one at a time moves the entries after each, every time.
+    xo.retain(|n, _| drawn.contains(n) || !replaced.contains(n));
     Ok(())
 }
 
@@ -148,7 +146,7 @@ pub(crate) fn unlink_undrawn(doc: &mut Document) -> Result<usize, RedactError> {
             continue;
         };
         let mut xo = res_dict(doc, &res, b"XObject");
-        let listed: Vec<Vec<u8>> = xo
+        let listed: HashSet<Vec<u8>> = xo
             .iter()
             .filter(|(_, v)| {
                 v.as_ref().is_some_and(|r| matches!(&*doc.get(r), Object::Stream(s) if matches!(s.dict.name(b"Subtype"), Some(b"Image" | b"Form"))))
@@ -162,10 +160,9 @@ pub(crate) fn unlink_undrawn(doc: &mut Document) -> Result<usize, RedactError> {
         // A form that goes may have been all that drew another name: look again while names go.
         for _ in 0..MAX_DEPTH {
             let Some(drawn) = names_drawn(doc, &res, &users, &index) else { break };
-            let mut gone = 0;
-            for name in listed.iter().filter(|name| !drawn.contains(*name)) {
-                gone += usize::from(xo.remove(name).is_some());
-            }
+            let before = xo.len();
+            xo.retain(|name, _| drawn.contains(name) || !listed.contains(name));
+            let gone = before - xo.len();
             if gone == 0 {
                 break;
             }
@@ -321,17 +318,19 @@ pub(crate) fn unlink_doomed(doc: &mut Document, doomed: &[ObjRef], retired_prope
         // What each page draws through this dictionary, worked out once for all the names.
         let drawn: Vec<_> =
             if names.is_empty() { Vec::new() } else { contents.iter().map(|content| names_content_draws(doc, content, &xo)).collect() };
+        let mut gone = HashSet::new();
         for n in names {
             match any_draws(&drawn, &n) {
                 Some(true) => {}
                 Some(false) => {
-                    xo.remove(&n);
-                    pruned = true;
+                    gone.insert(n);
                 }
                 None => return Err(RedactError::Residue(1)),
             }
         }
-        if pruned {
+        if !gone.is_empty() {
+            xo.retain(|n, _| !gone.contains(n));
+            pruned = true;
             res.set(b"XObject".to_vec(), Object::Dict(xo));
         }
         pruned |= prune_retired_properties(doc, &mut res, &property_names, &contents)?;
@@ -364,12 +363,10 @@ fn prune_retired_properties(doc: &Document, res: &mut Dict, names: &[Vec<u8>], c
         }
     }
     let mut properties = res_dict(doc, res, b"Properties");
-    let mut pruned = false;
-    for name in names {
-        if !used.contains(name) {
-            pruned |= properties.remove(name).is_some();
-        }
-    }
+    let retired: HashSet<&[u8]> = names.iter().map(Vec::as_slice).filter(|n| !used.contains(*n)).collect();
+    let before = properties.len();
+    properties.retain(|n, _| !retired.contains(n));
+    let pruned = properties.len() != before;
     if pruned {
         if properties.is_empty() {
             res.remove(b"Properties");
@@ -437,13 +434,19 @@ fn prune_doomed_xobjects(doc: &Document, content: &[Vec<u8>], xo: &mut Dict, doo
         return Ok(false);
     }
     let drawn = [names_content_draws(doc, content, xo)];
+    let mut gone = HashSet::new();
     for name in doomed_names {
         match any_draws(&drawn, name) {
             Some(true) => {}
-            Some(false) => pruned |= xo.remove(name).is_some(),
+            Some(false) => {
+                gone.insert(name.as_slice());
+            }
             None => return Err(CosError::Syntax { offset: 0, detail: "redaction could not fully inspect shared form resources".into() }),
         }
     }
+    let before = xo.len();
+    xo.retain(|n, _| !gone.contains(n));
+    pruned |= xo.len() != before;
     Ok(pruned)
 }
 
@@ -518,14 +521,15 @@ pub(crate) fn prune_properties(doc: &Document, budget: &mut DecodeBudget, res: &
     }
     let mut retired = Vec::new();
     let ops = resource_ops(doc, budget, res, content)?;
-    let names: Vec<Vec<u8>> = properties.iter().map(|(n, _)| n.to_vec()).collect();
-    for name in names {
-        if !ops.iter().any(|op| matches!(op.op.as_slice(), b"BDC" | b"DP") && op.last_name() == Some(&name))
-            && let Some(value) = properties.remove(&name)
-        {
-            retired.push(value);
+    // The names the content uses, read once for all of them, and the rest dropped in one pass.
+    let used: HashSet<&[u8]> = ops.iter().filter(|op| matches!(op.op.as_slice(), b"BDC" | b"DP")).filter_map(Op::last_name).collect();
+    properties.retain(|n, value| {
+        let keep = used.contains(n);
+        if !keep {
+            retired.push(value.clone());
         }
-    }
+        keep
+    });
     if properties.is_empty() {
         res.remove(b"Properties");
     } else {
@@ -537,12 +541,8 @@ pub(crate) fn prune_properties(doc: &Document, budget: &mut DecodeBudget, res: &
 pub(super) fn prune_form_resources(doc: &Document, budget: &mut DecodeBudget, res: &mut Dict, content: &[Vec<u8>]) -> Result<(), CosError> {
     let ops = resource_ops(doc, budget, res, content)?;
     let mut xo = res_dict(doc, res, b"XObject");
-    let names: Vec<Vec<u8>> = xo.iter().map(|(n, _)| n.to_vec()).collect();
-    for name in names {
-        if !ops.iter().any(|op| op.is("Do") && op.last_name() == Some(&name)) {
-            xo.remove(&name);
-        }
-    }
+    let drawn: HashSet<&[u8]> = ops.iter().filter(|op| op.is("Do")).filter_map(Op::last_name).collect();
+    xo.retain(|n, _| drawn.contains(n));
     res.set(b"XObject".to_vec(), Object::Dict(xo));
     Ok(())
 }
@@ -590,26 +590,28 @@ pub(super) fn extgstate_font(
 /// for [`unlink_pruned_patterns`].
 pub(crate) fn prune_patterns(doc: &Document, res: &mut Dict, seen: &[Vec<u8>], painted: &[Vec<u8>], pruned: &mut Vec<ObjRef>) -> usize {
     let Some(mut pat) = res.get(b"Pattern").map(|p| doc.resolve(p)).and_then(|p| p.as_dict().cloned()) else { return 0 };
-    let mut dropped = 0;
-    for n in seen {
-        if !painted.contains(n)
-            && let Some(value) = pat.get(n)
-        {
-            // Every object along the reference chain: a name can lead to a reference-valued
-            // object whose value is the cell, and the cell is what must not stay reachable.
-            let mut next = value.as_ref();
-            for _ in 0..MAX_DEPTH {
-                let Some(reference) = next else { break };
-                pruned.push(reference);
-                next = match &*doc.get(reference) {
-                    Object::Ref(r) => Some(*r),
-                    _ => None,
-                };
-            }
-            pat.remove(n);
-            dropped += 1;
+    // Each name once, however often the content selected it, and dropped in one pass.
+    let painted: HashSet<&[u8]> = painted.iter().map(Vec::as_slice).collect();
+    let unpainted: HashSet<&[u8]> = seen.iter().map(Vec::as_slice).filter(|n| !painted.contains(n)).collect();
+    let before = pat.len();
+    pat.retain(|n, value| {
+        if !unpainted.contains(n) {
+            return true;
         }
-    }
+        // Every object along the reference chain: a name can lead to a reference-valued
+        // object whose value is the cell, and the cell is what must not stay reachable.
+        let mut next = value.as_ref();
+        for _ in 0..MAX_DEPTH {
+            let Some(reference) = next else { break };
+            pruned.push(reference);
+            next = match &*doc.get(reference) {
+                Object::Ref(r) => Some(*r),
+                _ => None,
+            };
+        }
+        false
+    });
+    let dropped = before - pat.len();
     if dropped > 0 {
         if pat.is_empty() {
             res.remove(b"Pattern");
@@ -693,12 +695,10 @@ pub(crate) fn unlink_pruned_patterns(doc: &mut Document, pruned: &[ObjRef]) -> R
             continue;
         };
         let mut pat = res_dict(doc, &res, b"Pattern");
-        let names: Vec<Vec<u8>> = pat.iter().filter(|(_, v)| v.as_ref().is_some_and(|r| pruned.contains(&r))).map(|(n, _)| n.to_vec()).collect();
-        if names.is_empty() {
+        let before = pat.len();
+        pat.retain(|_, v| !v.as_ref().is_some_and(|r| pruned.contains(&r)));
+        if pat.len() == before {
             continue;
-        }
-        for n in &names {
-            pat.remove(n);
         }
         if pat.is_empty() {
             res.remove(b"Pattern");

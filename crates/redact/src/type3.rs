@@ -243,12 +243,11 @@ fn prune_font_forms(doc: &mut Document, font_res: &Dict) -> Result<(), CosError>
 fn prune_category(doc: &Document, font_res: &mut Dict, category: &[u8], used: &HashSet<Vec<u8>>) -> bool {
     let Some(sub_obj) = font_res.get(category) else { return false };
     let mut sub = doc.resolve(sub_obj).as_dict().cloned().unwrap_or_default();
-    let unused: Vec<Vec<u8>> = sub.iter().map(|(n, _)| n.to_vec()).filter(|n| !used.contains(n)).collect();
-    if unused.is_empty() {
+    // In one pass: removing names one at a time moves the entries after each, every time.
+    let before = sub.len();
+    sub.retain(|n, _| used.contains(n));
+    if sub.len() == before {
         return false;
-    }
-    for name in &unused {
-        sub.remove(name);
     }
     if sub.is_empty() {
         font_res.remove(category);
@@ -602,20 +601,11 @@ pub(crate) fn prune_type3_from_resources(
         }
     }
 
-    let mut changed = false;
-    let font_names: Vec<Vec<u8>> = fonts.iter().map(|(n, _)| n.to_vec()).collect();
-    for name in font_names {
-        if let Some(font_obj) = fonts.get(&name) {
-            let resolved = doc.resolve(font_obj);
-            if let Some(d) = resolved.as_dict()
-                && d.name(b"Subtype") == Some(b"Type3")
-                && !drawn_font_names.contains(&name)
-            {
-                fonts.remove(&name);
-                changed = true;
-            }
-        }
-    }
+    let before = fonts.len();
+    fonts.retain(|name, font_obj| {
+        drawn_font_names.contains(name) || doc.resolve(font_obj).as_dict().is_none_or(|d| d.name(b"Subtype") != Some(b"Type3"))
+    });
+    let changed = fonts.len() != before;
 
     if changed {
         if fonts.is_empty() {
@@ -803,14 +793,9 @@ fn clean_type3_font(
         detail: "redaction could not establish safe Type 3 font cleanup: CharProcs is not a dict".into(),
     })?;
 
-    let mut procs_changed = false;
-    let glyph_names: Vec<Vec<u8>> = char_procs.iter().map(|(n, _)| n.to_vec()).collect();
-    for g in glyph_names {
-        if !surviving.contains(&g) {
-            char_procs.remove(&g);
-            procs_changed = true;
-        }
-    }
+    let before = char_procs.len();
+    char_procs.retain(|g, _| surviving.contains(g));
+    let procs_changed = char_procs.len() != before;
 
     let FontKey::Ref(fr) = font_key;
     if char_procs.is_empty() {
@@ -872,16 +857,9 @@ fn remove_font_from_holders(
 ) -> Result<(), RedactError> {
     let clean_res = |doc: &Document, res: &mut Dict| -> bool {
         let mut fonts = res_dict(doc, res, b"Font");
-        let mut changed = false;
-        let names: Vec<Vec<u8>> = fonts.iter().map(|(n, _)| n.to_vec()).collect();
-        for n in names {
-            if let Some(val) = fonts.get(&n)
-                && val.as_ref().map(FontKey::Ref) == Some(*target_key)
-            {
-                fonts.remove(&n);
-                changed = true;
-            }
-        }
+        let before = fonts.len();
+        fonts.retain(|_, val| val.as_ref().map(FontKey::Ref) != Some(*target_key));
+        let changed = fonts.len() != before;
         if changed {
             if fonts.is_empty() {
                 res.remove(b"Font");
