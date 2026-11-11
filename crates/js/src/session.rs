@@ -129,8 +129,17 @@ impl Realm {
     }
     fn run_job(&mut self, job: Job) -> Outcome {
         let failed = |why: String| Outcome { rc: true, execution_refused: true, realm_untouched: true, error: Some(why), ..Default::default() };
+        // A script too long or too deeply nested to run is that script's error, as on `main`: the
+        // value stays and the edit's other scripts still run. The realm is not touched.
         if let Some(why) = crate::refuse(&job.script) {
-            return failed(why);
+            return Outcome {
+                rc: true,
+                realm_untouched: true,
+                value: job.event.value.clone(),
+                change: job.event.change.clone(),
+                error: Some(why),
+                ..Default::default()
+            };
         }
         if job.doc_scripts.len() > 1024 || job.doc_scripts.iter().try_fold(0usize, |n, s| n.checked_add(s.len())).is_none_or(|n| n > 1 << 20) {
             return failed("document scripts exceed their budget".into());
@@ -606,6 +615,17 @@ mod tests {
         let timeout = std::time::Duration::from_secs(5);
         assert_eq!(first.run_host_task(timeout, read_counter).result.as_deref(), Some("17"));
         assert_eq!(second.run_host_task(timeout, read_counter).result.as_deref(), Some("31"));
+    }
+
+    #[test]
+    /// A script too large to run fails on its own, like a script that throws, without refusing the edit.
+    fn an_oversized_script_is_an_error_not_a_refusal() {
+        let mut session = ScriptSession::default();
+        let long = format!("event.value = 1;/*{}*/", "x".repeat(300 * 1024));
+        let out = session.run(job(&long), &[]);
+        assert!(out.error.is_some());
+        assert!(!out.execution_refused);
+        assert!(session.run(job("1 + 1"), &[]).error.is_none());
     }
 
     #[cfg(not(target_arch = "wasm32"))]
