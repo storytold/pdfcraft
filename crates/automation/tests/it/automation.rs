@@ -11633,6 +11633,42 @@ fn thai_in_fill_sign_text_comments_fields_and_page_marks_is_drawn_and_found() {
     assert_eq!(page_text(&mut a, reopened)[0].matches(thai).count(), 5, "{:?}", page_text(&mut a, reopened));
 }
 
+/// #6879: Arabic and Hebrew typed into a text box comment or Fill & Sign text come out as Add text
+/// draws them, not as `?`: no warning, found by search in typing order after save and reopen, and
+/// page text as typed once flattened. A build without the face still adds them, drawn as `?`, and
+/// says so.
+#[test]
+fn arabic_and_hebrew_in_text_boxes_and_fill_sign_text_are_drawn_and_found() {
+    let cases = [
+        ("test بت التناسب", "التناسب", pdfcraft_fonts::document_arabic_font().is_some()),
+        ("שלום עולם test", "עולם", pdfcraft_fonts::document_hebrew_font(false).is_some()),
+    ];
+    for (i, (typed, word, has_face)) in cases.into_iter().enumerate() {
+        let dir = workdir(&format!("rtl-text-boxes-{i}"));
+        let mut a = auto(&dir);
+        let doc = ok(&mut a, "doc_open", json!({"path": "a.pdf"}))["doc"].as_u64().unwrap();
+        let calls = [
+            ("fill_sign_add", json!({"doc": doc, "page": 1, "type": "text", "at": [20, 40], "text": typed, "font_size": 14})),
+            ("comment_add", json!({"doc": doc, "page": 1, "type": "textbox", "rect": [20, 160, 200, 190], "contents": typed})),
+        ];
+        for (tool, args) in calls {
+            let r = ok(&mut a, tool, args);
+            assert_eq!(r.get("warnings").is_none(), has_face, "{tool}: {r}");
+        }
+        if !has_face {
+            continue;
+        }
+        ok(&mut a, "doc_save", json!({"doc": doc, "path": "rtl-boxes.pdf"}));
+        let reopened = ok(&mut a, "doc_open", json!({"path": "rtl-boxes.pdf"}))["doc"].as_u64().unwrap();
+        let found = ok(&mut a, "text_find", json!({"doc": reopened, "query": word}));
+        assert_eq!(found["count"], 2, "{found}");
+        let rendered = a.call("page_render", &json!({"doc": reopened, "page": 1, "dpi": 72})).unwrap();
+        assert!(rendered.iter().any(|c| matches!(c, Content::Png { data, .. } if !data.is_empty())));
+        ok(&mut a, "doc_flatten", json!({"doc": reopened}));
+        assert_eq!(page_text(&mut a, reopened)[0].matches(typed).count(), 2, "{:?}", page_text(&mut a, reopened));
+    }
+}
+
 #[test]
 fn hebrew_text_through_tools_saves_reopens_extracts_and_renders() {
     let dir = workdir("hebrew-content");

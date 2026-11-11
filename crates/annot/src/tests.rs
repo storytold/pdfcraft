@@ -5543,6 +5543,7 @@ fn arabic_and_hebrew_in_text_boxes_and_fill_sign_text_are_shaped_like_added_text
             assert_eq!(appearance::undrawable_text(d).map(|(_, c)| c), (!has_face).then_some(first));
             if !has_face {
                 assert!(content.contains('?') && pdfcraft_fonts::undrawn_mark(d).is_some(), "{content}");
+                assert!(!content.contains("ActualText"), "what can be copied is what can be seen: {content}");
                 continue;
             }
             assert!(!content.contains('?') && content.contains("/PCAr1 ") && content.contains("(test"), "{content}");
@@ -5564,6 +5565,13 @@ fn arabic_and_hebrew_in_text_boxes_and_fill_sign_text_are_shaped_like_added_text
             let (r, xs) = (rect(d), content.split(" Tm").filter_map(|s| s.rsplit(' ').nth(1)?.parse::<f64>().ok()).collect::<Vec<_>>());
             assert!(xs.len() > 2 && xs.windows(2).all(|w| w[0] <= w[1]) && xs.iter().all(|x| *x >= r[0] && *x <= r[2]), "{xs:?} in {r:?}");
         }
+    }
+    // Captions, labels and stamps are still drawn in Helvetica: they are measured as drawn, not by
+    // the faces a text box shapes with.
+    let helvetica = |s: &str| pdfcraft_fonts::Std14::Helvetica.text_width(s, 10.0);
+    assert_eq!((appearance::text_width("سلام", 10.0), appearance::text_width("שלום", 10.0)), (helvetica("سلام"), helvetica("שלום")));
+    if pdfcraft_fonts::document_arabic_font().is_some() {
+        assert!((appearance::text_width_in(pdfcraft_fonts::Std14::Helvetica, "سلام", 10.0) - helvetica("سلام")).abs() > 0.01);
     }
     // Retyping a box goes through the same layout: a Latin box becomes an Arabic one.
     if pdfcraft_fonts::document_arabic_font().is_some() {

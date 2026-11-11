@@ -202,10 +202,7 @@ pub fn first_undrawable(t: &AddedText) -> Option<char> {
     // What `shaped_layout` leaves to the standard font, exactly as `draw_shaped` splits it.
     wrapped(t).into_iter().find_map(|(line, rtl, _)| {
         let (pieces, _) = shaped_layout(t, &line, rtl).ok()?;
-        pieces.iter().find_map(|p| match p {
-            Piece::Latin(s) => pdfcraft_fonts::first_non_win_ansi(s),
-            Piece::Shaped(_) => None,
-        })
+        pdfcraft_fonts::shaped_text::pieces_undrawable(&pieces)
     })
 }
 
