@@ -19,7 +19,7 @@ fn form() -> Vec<u8> {
         "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
         "<< /Type /Annot /Subtype /Widget /FT /Tx /T (note) /V (struck) /Rect [60 300 280 330] /P 3 0 R /F 6 >>",
         "<< /Type /XObject /Subtype /Form /BBox [0 0 30 30] /Length 0 >>\nstream\n\nendstream",
-        "<< /Type /Annot /Subtype /Widget /FT /Btn /Ff 65536 /T (step) /Rect [20 200 120 230] /P 3 0 R /F 4 /MK << /CA (Step) >> /AA << /D << /S /JavaScript /JS (getField\\('log'\\).value += event.name + ';';) >> >> >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Btn /Ff 65536 /T (step) /Rect [20 232 120 248] /P 3 0 R /F 4 /MK << /CA (Step) >> /AA << /D << /S /JavaScript /JS (getField\\('log'\\).value += event.name + ';';) >> >> >>",
     ];
     let mut out = b"%PDF-1.7\n".to_vec();
     let mut offsets = Vec::new();
