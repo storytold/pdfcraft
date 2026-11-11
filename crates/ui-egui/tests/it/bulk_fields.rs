@@ -317,6 +317,68 @@ fn selecting_several_widgets_of_one_radio_group_does_not_duplicate_field_edits()
 }
 
 #[test]
+fn shared_button_style_sees_every_buttons_mark() {
+    // #6682: a radio group whose second button has its own mark is mixed, even when its first
+    // button matches the other field, and a shared style reaches that second button too.
+    use pdfcraft_engine::CheckStyle;
+    let mut h = harness();
+    for (export, x) in [("A", 100.0), ("B", 150.0)] {
+        h.state_mut().apply_edit(Edit::AddField {
+            page: 0,
+            rect: [x, 180.0, x + 14.0, 194.0],
+            kind: NewField::Radio { group: Some("group".into()), export: export.into() },
+            name: None,
+        });
+    }
+    for (name, style, widget) in [("consent", CheckStyle::Circle, None), ("group", CheckStyle::Star, Some(1))] {
+        let props = FieldProps { check_style: Some(style), check_style_widget: widget, ..Default::default() };
+        h.state_mut().apply_edit(Edit::SetFieldProps { name: name.into(), props: Box::new(props) });
+    }
+    let p = &mut h.state_mut().views[0].prepare;
+    p.selected = Some(("consent".into(), 0));
+    p.also = vec![("group".into(), 0)];
+    h.state_mut().execute("form.field.properties");
+    h.run_steps(4);
+    let d = h.state_mut().bulk_field_props.as_mut().unwrap();
+    assert!(d.check_style.mixed, "the group's second button is a star");
+    let untouched = d.clone();
+    assert!(untouched.edits(doc(&h)).unwrap().is_empty(), "without apply, every mark stays");
+    let d = h.state_mut().bulk_field_props.as_mut().unwrap();
+    (d.check_style.apply, d.check_style.value) = (true, CheckStyle::Circle);
+    h.get_by_label("OK").click();
+    h.run_steps(4);
+    assert_eq!(doc(&h).field_check_styles("group").unwrap(), [CheckStyle::Circle, CheckStyle::Circle]);
+}
+
+#[test]
+fn a_button_field_without_widgets_has_no_mark_to_compare() {
+    // #6682 review: a field with no widget has no mark of its own. It must not make the shared
+    // Button Style "Mixed", nor turn a style that already matches into an edit.
+    use pdfcraft_engine::CheckStyle;
+    let bytes = crate::forms::pdf_from_objects(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 5 0 R] /NeedAppearances true >> >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >>",
+        "<< /Type /Page /Parent 2 0 R /Annots [5 0 R] >>",
+        "<< /FT /Btn /Ff 49152 /T (empty) /Kids [] >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Btn /Ff 49152 /T (pick) /Rect [20 300 36 316] /P 3 0 R /F 4 /AP << /N << /a 6 0 R /Off 6 0 R >> >> >>",
+        "<< /Length 0 >>\nstream\n\nendstream",
+    ]);
+    let mut s = Session::new();
+    let id = s.open("empty.pdf", None, bytes.into(), None).unwrap();
+    let doc = s.get(id).unwrap();
+    assert_eq!(doc.field_check_styles("empty"), Some(vec![]), "a radio field with no widget");
+    assert_eq!(doc.field_check_styles("pick"), Some(vec![CheckStyle::Circle]));
+    let mut d = pdfcraft_ui_egui::bulk_fields::Draft::new(doc, vec!["empty".into(), "pick".into()]).unwrap();
+    assert_eq!((d.check_style.value, d.check_style.mixed), (CheckStyle::Circle, false));
+    d.check_style.apply = true;
+    assert!(d.edits(doc).unwrap().is_empty(), "every widget already has a circle");
+    d.check_style.value = CheckStyle::Square;
+    let edits = d.edits(doc).unwrap();
+    assert_eq!(edits.len(), 1, "only the field with a widget changes: {edits:?}");
+    assert!(matches!(&edits[0], Edit::SetFieldProps { name, .. } if name == "pick"), "{edits:?}");
+}
+
+#[test]
 fn escape_cancels_a_selection_rectangle_and_restores_the_previous_selection() {
     let mut h = harness();
     h.state_mut().views[0].prepare.selected = Some(("consent".into(), 0));

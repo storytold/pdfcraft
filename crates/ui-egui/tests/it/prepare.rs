@@ -720,6 +720,76 @@ fn options_tab_sets_the_check_box_style() {
 }
 
 #[test]
+fn button_style_of_a_group_with_mixed_marks_says_mixed() {
+    // #6682: each radio button has its own mark. A group whose buttons differ shows "Mixed",
+    // keeps every mark until a style is chosen, and then gives every button that style.
+    use pdfcraft_engine::{CheckStyle, Edit, FieldProps, NewField};
+    let mut h = harness();
+    for (export, x) in [("a", 40.0), ("b", 70.0)] {
+        h.state_mut().apply_edit(Edit::AddField {
+            page: 0,
+            rect: [x, 300.0, x + 16.0, 316.0],
+            kind: NewField::Radio { group: Some("pick".into()), export: export.into() },
+            name: None,
+        });
+    }
+    let star = FieldProps { check_style: Some(CheckStyle::Star), check_style_widget: Some(1), ..FieldProps::default() };
+    h.state_mut().apply_edit(Edit::SetFieldProps { name: "pick".into(), props: Box::new(star) });
+    let styles = |h: &Harness<'_, PdfCraftApp>| h.state().session.get(h.state().views[0].id).unwrap().field_check_styles("pick").unwrap();
+    assert_eq!(styles(&h), [CheckStyle::Circle, CheckStyle::Star]);
+    let open = |h: &mut Harness<'_, PdfCraftApp>| {
+        h.state_mut().open_field_props("pick", 0);
+        h.run_steps(2);
+        h.get_by_label("Options").click();
+        h.run_steps(2);
+    };
+    open(&mut h);
+    assert!(h.state().field_props.as_ref().unwrap().check_mixed, "the buttons differ");
+    h.get_by_value("Mixed");
+    const NOTE: &str = "The buttons have different styles. Choosing one gives it to every button.";
+    assert!(h.query_by_label(NOTE).is_some(), "the dialog says a style reaches every button");
+    assert_eq!(h.state().field_props.as_ref().unwrap().props(), None, "opening changes nothing");
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert_eq!(styles(&h), [CheckStyle::Circle, CheckStyle::Star], "OK without a choice keeps both marks");
+    open(&mut h);
+    h.get_by_value("Mixed").click();
+    h.run_steps(2);
+    h.get_by_label("Circle").click();
+    h.run_steps(2);
+    h.get_by_value("Circle");
+    assert!(h.query_by_label(NOTE).is_none(), "chosen: no longer mixed");
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert_eq!(styles(&h), [CheckStyle::Circle, CheckStyle::Circle], "choosing the first button's style still changes the second");
+}
+
+#[test]
+fn check_box_with_mixed_marks_says_so_in_its_own_words() {
+    // #6682 review: a check box whose widgets arrive with different marks (the second /MK
+    // indirect) opens as "Mixed", with the check-box wording of the note.
+    let bytes = crate::forms::pdf_from_objects(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] >> >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >>",
+        "<< /Type /Page /Parent 2 0 R /Annots [5 0 R 6 0 R] >>",
+        "<< /FT /Btn /T (agree) /Kids [5 0 R 6 0 R] >>",
+        "<< /Type /Annot /Subtype /Widget /Parent 4 0 R /Rect [20 300 36 316] /P 3 0 R /F 4 /AS /Off /MK << /CA (4) >> /AP << /N << /Yes 8 0 R /Off 8 0 R >> >> >>",
+        "<< /Type /Annot /Subtype /Widget /Parent 4 0 R /Rect [50 300 66 316] /P 3 0 R /F 4 /AS /Off /MK 7 0 R /AP << /N << /Yes 8 0 R /Off 8 0 R >> >> >>",
+        "<< /CA (H) >>",
+        "<< /Length 0 >>\nstream\n\nendstream",
+    ]);
+    let mut h = harness_with("marks.pdf", bytes);
+    h.state_mut().open_field_props("agree", 0);
+    h.run_steps(2);
+    h.get_by_label("Options").click();
+    h.run_steps(2);
+    assert!(h.state().field_props.as_ref().unwrap().check_mixed, "a check and a star");
+    h.get_by_value("Mixed");
+    assert!(h.query_by_label("This check box's widgets have different styles. Choosing one gives it to every widget.").is_some());
+    assert!(h.query_by_label("The buttons have different styles. Choosing one gives it to every button.").is_none(), "not the radio wording");
+}
+
+#[test]
 fn button_label_is_editable_without_renaming_the_field() {
     use pdfcraft_engine::{Edit, NewField};
     let mut h = harness();

@@ -5566,6 +5566,82 @@ fn replacing_pages_through_tools() {
 }
 
 #[test]
+fn radio_buttons_keep_their_own_marks_through_tools() {
+    // #6682: each button keeps its own mark (/MK /CA); widget changes one, and a group whose
+    // buttons differ reports "mixed" with each button's.
+    let dir = workdir("radio-marks");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    for (x, export) in [(20, "S"), (40, "L")] {
+        ok(
+            &mut a,
+            "form_add_field",
+            json!({ "doc": doc, "page": 1, "type": "radio", "rect": [x, 100, x + 14, 114], "group": "size", "export": export }),
+        );
+    }
+    let size = |a: &mut Automation| ok(a, "form_fields", json!({ "doc": doc }))["fields"][0].clone();
+    let s = size(&mut a);
+    assert_eq!((&s["check_style"], s.get("check_styles")), (&json!("circle"), None), "one style when the buttons agree");
+    ok(&mut a, "form_set_props", json!({ "doc": doc, "field": "size", "check_style": "star", "widget": 2 }));
+    let s = size(&mut a);
+    assert_eq!((&s["check_style"], &s["check_styles"]), (&json!("mixed"), &json!(["circle", "star"])));
+    let style = |widget: Value| json!({ "doc": doc, "field": "size", "check_style": "cross", "widget": widget });
+    match a.call("form_set_props", &style(json!(3))) {
+        Err(ToolError::Failed(m)) => assert!(m.contains("no widget 3; it has 2"), "the error names the missing button: {m}"),
+        other => panic!("there is no third button: {other:?}"),
+    }
+    for widget in [json!(0), json!(-1)] {
+        assert!(matches!(a.call("form_set_props", &style(widget)), Err(ToolError::InvalidArgs(_))), "widget is 1-based");
+    }
+    let bulk = json!({ "doc": doc, "fields": ["size"], "check_style": "cross", "widget": 1 });
+    assert!(matches!(a.call("form_set_props", &bulk), Err(ToolError::InvalidArgs(_))), "widget names one field's button");
+    assert_eq!(size(&mut a)["check_styles"], json!(["circle", "star"]), "a rejected change writes nothing");
+    ok(&mut a, "form_set_props", json!({ "doc": doc, "field": "size", "check_style": "square" }));
+    let s = size(&mut a);
+    assert_eq!((&s["check_style"], s.get("check_styles")), (&json!("square"), None), "without widget, every button changes");
+}
+
+#[test]
+fn form_fields_reports_the_marks_a_file_arrives_with() {
+    // #6682 review: a file's own mixed marks are reported when it opens, an indirect /MK too;
+    // a button field with no widget has no mark to report.
+    let dir = workdir("imported-marks");
+    let objects = [
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 7 0 R] >> >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >>",
+        "<< /Type /Page /Parent 2 0 R /Annots [5 0 R 6 0 R] >>",
+        "<< /FT /Btn /T (agree) /Kids [5 0 R 6 0 R] >>",
+        "<< /Type /Annot /Subtype /Widget /Parent 4 0 R /Rect [20 300 36 316] /P 3 0 R /F 4 /AS /Off /MK << /CA (4) >> /AP << /N << /Yes 9 0 R /Off 9 0 R >> >> >>",
+        "<< /Type /Annot /Subtype /Widget /Parent 4 0 R /Rect [50 300 66 316] /P 3 0 R /F 4 /AS /Off /MK 8 0 R /AP << /N << /Yes 9 0 R /Off 9 0 R >> >> >>",
+        "<< /FT /Btn /Ff 49152 /T (empty) /Kids [] >>",
+        "<< /CA (H) >>",
+        "<< /Length 0 >>\nstream\n\nendstream",
+    ];
+    let mut bytes = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, object) in objects.iter().enumerate() {
+        offsets.push(bytes.len());
+        bytes.extend_from_slice(format!("{} 0 obj\n{object}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = bytes.len();
+    bytes.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).as_bytes());
+    for o in offsets {
+        bytes.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    bytes.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objects.len() + 1).as_bytes());
+    std::fs::write(dir.join("marks.pdf"), bytes).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "marks.pdf" }))["doc"].as_u64().unwrap();
+    let fields = ok(&mut a, "form_fields", json!({ "doc": doc }))["fields"].clone();
+    let named = |name: &str| fields.as_array().unwrap().iter().find(|f| f["name"] == name).cloned().unwrap();
+    let agree = named("agree");
+    assert_eq!(agree["type"], "checkbox", "{agree}");
+    assert_eq!((&agree["check_style"], &agree["check_styles"]), (&json!("mixed"), &json!(["check", "star"])), "{agree}");
+    let empty = named("empty");
+    assert_eq!((empty.get("check_style"), empty.get("check_styles")), (None, None), "no widget, no mark: {empty}");
+}
+
+#[test]
 fn preparing_a_form_through_tools() {
     let dir = workdir("prepare");
     let mut a = auto(&dir);

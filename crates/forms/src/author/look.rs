@@ -246,10 +246,16 @@ impl CheckStyle {
     }
 }
 
-/// A check box's or radio button's style (from its first widget).
+/// A check box's or radio button's style, from its first widget. Each widget has its own
+/// (`/MK /CA`), so a field's widgets can differ: [`check_styles`] reads them all.
 pub fn check_style(doc: &Document, f: &Field) -> CheckStyle {
     let wd = f.widgets.first().and_then(|w| doc.get(w.obj).as_dict().cloned()).unwrap_or_default();
     CheckStyle::of_widget(doc, &wd, f.kind)
+}
+
+/// Each widget's style, in [`Field::widgets`] order.
+pub fn check_styles(doc: &Document, f: &Field) -> Vec<CheckStyle> {
+    f.widgets.iter().map(|w| CheckStyle::of_widget(doc, &doc.get(w.obj).as_dict().cloned().unwrap_or_default(), f.kind)).collect()
 }
 
 fn rgb_of(doc: &Document, o: Option<&Object>) -> Option<[f64; 3]> {
