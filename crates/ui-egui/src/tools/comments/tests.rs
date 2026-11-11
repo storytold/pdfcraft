@@ -634,6 +634,7 @@ fn markup_comment_markers_skip_rounded_inverted_clamp_bounds() {
             prefs: &prefs,
             allowed: true,
             hidden: false,
+            hidden_types: &[],
             redact_mark: ([0.0; 3], 1.0),
             keys: crate::page_keys::PageKeys::new(false),
         };
@@ -663,6 +664,7 @@ fn markup_comment_markers_stay_inside_turned_and_zoomed_pages() {
                 prefs: &prefs,
                 allowed: true,
                 hidden: false,
+                hidden_types: &[],
                 redact_mark: ([0.0; 3], 1.0),
                 keys: crate::page_keys::PageKeys::new(false),
             };
@@ -932,6 +934,7 @@ fn comment_marker_wins_over_an_overlapping_body_for_pick_and_hover() {
         prefs: &prefs,
         allowed: true,
         hidden: false,
+        hidden_types: &[],
         redact_mark: ([0.0; 3], 1.0),
         keys: crate::page_keys::PageKeys::new(false),
     };
