@@ -46,6 +46,7 @@ pub fn kind_label(a: &Annotation) -> &str {
         Some("FreeTextCallout") => "Callout",
         Some("PolygonCloud") => "Cloud",
         Some("FreeTextTypeWriter") => "Typewriter",
+        Some("FreehandHighlight") => "Freehand highlight",
         _ => subtype_label(&a.subtype),
     }
 }
