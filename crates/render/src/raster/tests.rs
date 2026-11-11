@@ -7447,6 +7447,13 @@ fn a_type1c_font_file_holding_a_type1_program_draws_with_it() {
         page.rgba.to_vec()
     };
     let embedded = render(Some(("FontFile", format!(" /Length1 {clear} /Length2 {binary} /Length3 0"), &program)));
+    // The page is 160 by 60 pt at scale 2. Each `H` is a box from 3 pt right of its origin,
+    // 12 pt wide and 21 pt tall on the baseline at y 24; the origins are 16.8 pt apart.
+    let dark = |x: usize, y: usize| embedded[(y * 320 + x) * 4] < 128;
+    for left in [9.0, 25.8, 42.6] {
+        assert!(dark(((left + 6.0) * 2.0) as usize, 51), "the box of the H at {left} pt is drawn");
+    }
+    assert!(!dark(46, 51) && !dark(30, 20) && !dark(30, 100), "nothing is drawn beside, above or below the boxes");
     assert_ne!(embedded, render(None), "the program draws other glyphs than the substitute");
     let type1c = " /Subtype /Type1C".to_string();
     assert_eq!(render(Some(("FontFile3", type1c.clone(), &program))), embedded, "cleartext and eexec under /Type1C");
