@@ -12314,11 +12314,13 @@ fn color_preserving_dark_through_tools_replaces_the_previous_reading_mode() {
     let original = render(&mut a, 1);
     let id = pdfcraft_engine::DocId(doc);
     let original_export = pdfcraft_engine::export::Exporter::new(a.session().get(id).unwrap()).png(0, 72.0).unwrap();
+    let error = a.call("view_reading_colors", &json!({"doc":doc,"mode":"unknown"})).unwrap_err();
+    assert!(error.to_string().contains("color-preserving-dark"), "{error}");
     // Same paper/ink endpoints: changing only the curve must invalidate the cached raster.
     ok(&mut a, "view_reading_colors", json!({"doc":doc,"mode":"custom","text":"#e6e6e6","background":"#1f1f1f"}));
     let grayscale = render(&mut a, 1);
     assert!(grayscale.chunks_exact(4).all(|pixel| pixel[0] == pixel[1] && pixel[1] == pixel[2]));
-    let echo = ok(&mut a, "view_reading_colors", json!({"doc":doc,"mode":"color-preserving-dark"}));
+    let echo = ok(&mut a, "view_reading_colors", json!({"doc":doc,"mode":"color-preserving-dark","text":"#123456","background":"#abcdef"}));
     assert_eq!(echo, json!({"mode":"color-preserving-dark","text":"#e6e6e6","background":"#1f1f1f","only_black":false,"line_art":true}));
     let colored = render(&mut a, 1);
     assert_eq!(pixel(&colored, 10, 290), [31, 31, 31, 255]);
@@ -12327,13 +12329,18 @@ fn color_preserving_dark_through_tools_replaces_the_previous_reading_mode() {
         .map(|(x, y)| pixel(&colored, x, y))
         .max_by_key(|p| i16::from(p[0]) - i16::from(p[2]))
         .unwrap();
-    assert!(text[0] > text[1] + 60 && text[1].abs_diff(text[2]) < 10, "red text stays red: {text:?}");
+    // The reference uses exact paper/ink endpoints. Storing them as bytes can shift a channel by one.
+    let expected = [207, 125, 120];
+    assert!(text[..3].iter().zip(expected).all(|(actual, expected)| actual.abs_diff(expected) <= 1), "red text {text:?}, reference {expected:?}");
+    assert_eq!(text[3], 255);
     assert_eq!(pixel(&render(&mut a, 2), 140, 80), [255, 0, 0, 255], "image remains original");
     assert_eq!(std::fs::read(dir.join("a.pdf")).unwrap(), source, "the view never writes the PDF");
     let document = a.session().get(id).unwrap();
     assert!(!document.dirty, "a reading choice is not an edit");
     assert_eq!(document.bytes.as_ref(), &source, "the working PDF is unchanged");
-    assert!(pdfcraft_engine::export::Exporter::new(document).png(0, 72.0).unwrap() == original_export, "image export ignores reading colours");
+    assert_eq!(pdfcraft_engine::export::Exporter::new(document).png(0, 72.0).unwrap(), original_export, "image export ignores reading colours");
+    ok(&mut a, "view_reading_colors", json!({"doc":doc,"mode":"custom","text":"#e6e6e6","background":"#1f1f1f"}));
+    assert_eq!(render(&mut a, 1), grayscale, "switching back invalidates the same-endpoint raster");
     ok(&mut a, "view_reading_colors", json!({"doc":doc,"mode":"off"}));
     assert_eq!(render(&mut a, 1), original);
 }

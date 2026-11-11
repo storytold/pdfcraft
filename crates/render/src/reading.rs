@@ -27,6 +27,9 @@ pub struct ReadingParams {
 }
 
 impl ReadingColors {
+    const DARK_INK: [u8; 3] = [230; 3];
+    const DARK_PAPER: [u8; 3] = [31; 3];
+
     /// Black text on a white page.
     pub const BLACK_ON_WHITE: Self = Self {
         params: Some(ReadingParams {
@@ -70,7 +73,7 @@ impl ReadingColors {
 
     /// Soft dark paper and light ink with recognizable source hues (Sebyoshi curve).
     pub const COLOR_PRESERVING_DARK: Self = Self {
-        params: Some(ReadingParams { text: [230, 230, 230], background: [31, 31, 31], only_black: false, line_art: true, preserve_hues: true }),
+        params: Some(ReadingParams { text: Self::DARK_INK, background: Self::DARK_PAPER, only_black: false, line_art: true, preserve_hues: true }),
     };
 
     /// Parses tool/settings input. `mode` is one of `off | black-on-white | white-on-black |
@@ -123,7 +126,7 @@ impl ReadingColors {
         match self.params {
             None => "off",
             Some(params) => {
-                if params.preserve_hues {
+                if params.preserve_hues && params.text == Self::DARK_INK && params.background == Self::DARK_PAPER {
                     "color-preserving-dark"
                 } else if Some(params) == Self::BLACK_ON_WHITE.params {
                     "black-on-white"
@@ -203,6 +206,10 @@ mod tests {
             ([187, 48, 39], [207, 125, 120]),
             ([24, 50, 208], [128, 140, 218]),
             ([61, 126, 51], [142, 191, 134]),
+            ([33, 179, 194], [83, 193, 205]),
+            ([190, 42, 162], [204, 116, 188]),
+            // Chroma 45/255 lies between the two neutralization thresholds.
+            ([135, 110, 90], [152, 144, 138]),
             ([253, 244, 161], [109, 101, 32]),
             ([240, 224, 48], [198, 185, 43]),
             ([250, 246, 242], [39, 39, 39]),
@@ -226,6 +233,14 @@ mod tests {
         assert_eq!(replacement.map(red, true), red, "only-black leaves coloured text unchanged");
         assert_eq!(replacement.map([0, 0, 0, 128], false), [0, 0, 0, 128], "line art can be excluded");
         assert_eq!(replacement.map([0, 0, 0, 128], true), [230, 230, 230, 128]);
+    }
+
+    #[test]
+    fn color_preserving_dark_identifies_custom_endpoints() {
+        let preset = ReadingColors::COLOR_PRESERVING_DARK.params.unwrap();
+        for custom in [ReadingParams { text: [221, 211, 201], ..preset }, ReadingParams { background: [42, 40, 38], ..preset }] {
+            assert_eq!(ReadingColors { params: Some(custom) }.mode_name(), "custom");
+        }
     }
 
     #[test]

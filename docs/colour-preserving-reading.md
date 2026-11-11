@@ -3,6 +3,8 @@
 Preferences → Reading colours → **Colour-preserving dark** selects an optional page-display
 curve. It keeps hues in solid text and line art while changing white paper to dark grey and
 black ink to off-white. The application theme is independent of this setting.
+The preset uses fixed paper and ink colours. Its Options section lets you limit which paints
+are changed.
 
 The same mode is available through the existing automation tool:
 
@@ -34,7 +36,8 @@ reference-colour tests allow one channel level for that endpoint quantization; t
 direct paint transform, without Sebyoshi's display-LUT interpolation.
 
 The renderer's existing rules still exclude pictures, shadings, tiling patterns and annotation
-appearances from colour replacement. A pending page uses the same paper colour as its raster.
+appearances from colour replacement. Solid stencil ink follows the line-art option. A pending
+page uses the same paper colour as its raster.
 Print previews, export and the document's saved bytes retain their original colours.
 
 ## Limits
@@ -47,7 +50,8 @@ remain available. Image-only scans and raster graphic/photo classification are s
 ## Verification
 
 - `cargo test -p pdfcraft-render color_preserving_dark` checks reference colours, alpha and paint
-  flags, actual page rendering, tile agreement, preserved image and annotation paints, and printing.
+  flags, preset identification, actual page rendering, tile agreement, preserved image, shading,
+  pattern and annotation paints, stencil ink, and printing.
 - `cargo test -p pdfcraft-automation color_preserving_dark` checks the tool schema, mode replacement,
   rendered coloured text and original image pixels, toggling off, and unchanged source bytes.
 - `cargo test -p pdfcraft-ui-egui color_preserving_dark` checks selection through the real

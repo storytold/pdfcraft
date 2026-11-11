@@ -4469,7 +4469,7 @@ fn image_exports_ignore_reading_colors_and_keep_unsaved_edits() {
             source.config.reading_colors = colors;
             let mut exporter = Exporter::from_source(source);
             let first = exporter.image(0, 72.0, format).unwrap();
-            assert!(first == expected[0], "single-page {} export with {}", format.label(), colors.mode_name());
+            assert_eq!(first, expected[0], "single-page {} export with {}", format.label(), colors.mode_name());
             let mut pages = Vec::new();
             exporter
                 .images_on(2, &[0, 1], 72.0, format, |page, bytes| {
@@ -4478,8 +4478,10 @@ fn image_exports_ignore_reading_colors_and_keep_unsaved_edits() {
                 })
                 .unwrap();
             assert_eq!(pages.len(), expected.len(), "every page was exported");
-            for ((page, actual), expected) in pages.into_iter().zip(expected) {
-                assert!(actual == *expected, "worker {} export, page {page}, with {}", format.label(), colors.mode_name());
+            // The sink gets pages in requested order, regardless of when the workers finish.
+            for ((page, actual), (expected_page, expected)) in pages.into_iter().zip(expected.iter().enumerate()) {
+                assert_eq!(page, expected_page, "workers hand over the requested page");
+                assert_eq!(&actual, expected, "worker {} export, page {page}, with {}", format.label(), colors.mode_name());
             }
         }
         assert_eq!(session.reading_colors(id), Some(colors), "export leaves the reader choice alone");

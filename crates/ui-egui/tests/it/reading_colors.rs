@@ -3,7 +3,7 @@
 
 use egui::accesskit::Role;
 use egui_kittest::Harness;
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 use pdfcraft_render::ReadingColors;
 use pdfcraft_ui_egui::PdfCraftApp;
 
@@ -107,8 +107,11 @@ fn reading_colours_preference_round_trips() {
 
 #[test]
 fn color_preserving_dark_can_be_selected_persisted_and_seeded() {
-    let mut h = Harness::builder().with_size(egui::vec2(1500.0, 1100.0)).build_eframe(|_cc| {
+    let mut custom = ReadingColors::COLOR_PRESERVING_DARK;
+    custom.params.as_mut().unwrap().text = [221, 211, 201];
+    let mut h = Harness::builder().with_size(egui::vec2(1500.0, 1100.0)).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::new();
+        app.restore(&serde_json::json!({"reading_colors":custom}).to_string());
         app.set_option("language", "en").unwrap();
         app.open_bytes("colours.pdf", None, pdf()).unwrap();
         app.set_option("dialog", "preferences").unwrap();
@@ -116,7 +119,12 @@ fn color_preserving_dark_can_be_selected_persisted_and_seeded() {
     });
     h.run_steps(4);
     let theme = h.state().theme_preference;
-    h.get_by(|node| node.role() == Role::Button && node.label().as_deref() == Some("Colour-preserving dark")).scroll_to_me();
+    assert_eq!(h.state().reading_colors, custom);
+    let preset = h.get_by(|node| node.role() == Role::Button && node.label().as_deref() == Some("Colour-preserving dark"));
+    assert_eq!(preset.accesskit_node().toggled(), Some(egui::accesskit::Toggled::False));
+    h.get_by_label("Page background");
+    h.get_by_label("Colour-preserving dark may reduce text contrast on bright coloured backgrounds.");
+    preset.scroll_to_me();
     h.run_steps(4);
     h.get_by(|node| node.role() == Role::Button && node.label().as_deref() == Some("Colour-preserving dark")).click();
     h.run_steps(2);
@@ -124,12 +132,23 @@ fn color_preserving_dark_can_be_selected_persisted_and_seeded() {
     assert_eq!(h.state().theme_preference, theme);
     let id = h.state().views[0].id;
     assert_eq!(h.state().session.reading_colors(id), Some(ReadingColors::COLOR_PRESERVING_DARK));
+    h.get_by_label("This preset uses fixed paper and ink colours.");
+    assert!(h.query_by_label("Page background").is_none(), "fixed preset hides the colour editors");
+    h.get_by_label("Only change the colour of black text or line art").click();
+    h.run_steps(2);
+    h.get_by_label("Change the colour of line art as well as text").click();
+    h.run_steps(2);
+    let expected = ReadingColors::parse("color-preserving-dark", None, None, Some(true), Some(false)).unwrap();
+    assert_eq!(h.state().reading_colors, expected);
+    assert_eq!(h.state().session.reading_colors(id), Some(expected));
+    let preset = h.get_by(|node| node.role() == Role::Button && node.label().as_deref() == Some("Colour-preserving dark"));
+    assert_eq!(preset.accesskit_node().toggled(), Some(egui::accesskit::Toggled::True));
 
     let mut restored = PdfCraftApp::new();
     restored.restore(&h.state().persist());
-    assert_eq!(restored.reading_colors, ReadingColors::COLOR_PRESERVING_DARK);
+    assert_eq!(restored.reading_colors, expected);
     restored.open_bytes("after-restart.pdf", None, pdf()).unwrap();
-    assert_eq!(restored.session.reading_colors(restored.views[0].id), Some(ReadingColors::COLOR_PRESERVING_DARK));
+    assert_eq!(restored.session.reading_colors(restored.views[0].id), Some(expected));
 
     // Settings written before this extension retain the existing luminance mapping.
     let mut legacy = PdfCraftApp::new();
