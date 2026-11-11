@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use pdfcraft_render::{PageInfo, PageRenderer, RenderConfig, RenderRequest, RequestKind};
 
-use crate::ocr::{self, Ocr};
+use crate::ocr::{self, Models, Ocr, OcrError};
 use crate::{DocId, Edit, EditError, Session};
 
 /// The long side of an A4 sheet in points. Matches Recognize Text's downsample rule.
@@ -212,10 +212,15 @@ impl ClearScanCursor {
             return Ok(self.advance(false));
         }
         if self.recognizer.is_none() {
-            if !ocr::available() {
+            // ClearScan reads with the ocrs models. Tesseract being installed is not enough.
+            if Models::find().is_none() {
                 return Err(ClearScanError::NoModels);
             }
-            self.recognizer = Some(ocr::engine().map_err(ClearScanError::Failed)?);
+            match Ocr::find() {
+                Ok(ocr) => self.recognizer = Some(Arc::new(ocr)),
+                Err(OcrError::NoModels) => return Err(ClearScanError::NoModels),
+                Err(error) => return Err(ClearScanError::Failed(error.to_string())),
+            }
         }
         let Some(ocr) = self.recognizer.clone() else {
             return Err(ClearScanError::Failed("text recognition did not start".into()));

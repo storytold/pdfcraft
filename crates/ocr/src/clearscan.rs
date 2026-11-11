@@ -24,7 +24,7 @@ use crate::background::{
 use crate::cluster::{ClusterParams, cluster};
 use crate::components::{AnalyzeOptions, analyze_page};
 use crate::grey::MAX_PIXELS;
-use crate::preprocess::{PreprocessedOptions, PreprocessedPage, preprocess};
+use crate::scan_prep::{PreprocessedOptions, PreprocessedPage, preprocess};
 use crate::type3::{Type3Glyph, Type3Metrics, baseline_in_prototype, em_pixels, synthesize_type3};
 use crate::vectorize::{VectorizeParams, vectorize};
 
@@ -741,7 +741,7 @@ mod tests {
 
     fn tuned(downsample: u32, max_skew_degrees: f64) -> ClearScanOptions {
         let base = ClearScanOptions::default().with_sensitivity(50);
-        ClearScanOptions { downsample, preprocess: crate::preprocess::PreprocessedOptions { max_skew_degrees, ..base.preprocess }, ..base }
+        ClearScanOptions { downsample, preprocess: crate::scan_prep::PreprocessedOptions { max_skew_degrees, ..base.preprocess }, ..base }
     }
 
     fn lines_for_left_ink(page: &PreprocessedPage) -> Result<Vec<AnnotatedLine>, OcrError> {

@@ -10,7 +10,7 @@
 //!   glyphs to the baseline when the synthesized font is placed.
 //!
 //! Boxes are in the pixel space of the image that was read, x right, y down, `[left, top,
-//! right, bottom]`. Reading a [`crate::preprocess::PreprocessedPage`] puts them in the
+//! right, bottom]`. Reading a [`crate::scan_prep::PreprocessedPage`] puts them in the
 //! deskewed frame; `to_original` carries them back to the scan.
 //!
 //! The metrics are estimated from the geometry of the recognized words: the bottom of a word

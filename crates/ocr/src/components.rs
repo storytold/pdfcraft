@@ -22,7 +22,7 @@
 use crate::OcrError;
 use crate::binarize::Bitmap;
 use crate::grey::MAX_PIXELS;
-use crate::preprocess::PreprocessedPage;
+use crate::scan_prep::PreprocessedPage;
 
 /// How ink pixels join into a blob.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -941,7 +941,7 @@ mod tests {
     #[test]
     fn analyze_page_reads_the_binarized_scan() {
         let pixels = vec![250_u8; 80 * 48];
-        let page = crate::preprocess::preprocess(&pixels, 80, 48, 1, &crate::PreprocessedOptions::default()).unwrap();
+        let page = crate::scan_prep::preprocess(&pixels, 80, 48, 1, &crate::PreprocessedOptions::default()).unwrap();
         let set = analyze_page(&page, &AnalyzeOptions::default()).unwrap();
         assert!(set.components().is_empty());
         assert_eq!(set.width(), page.binary.width());

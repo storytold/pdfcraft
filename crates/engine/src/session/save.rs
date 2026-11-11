@@ -1,6 +1,6 @@
 use super::{
-    Arc, DocId, EditError, Keys, OpenError, RecoverySnapshot, RenderPool, SaveOptions, Session, SignOptions, TrustStore, display_bytes,
-    display_config, guard, render_threads, signatures_of, writable, write_full, write_incremental, xfa_sync_datasets,
+    Arc, DocId, Document, EditError, Keys, OpenError, RecoverySnapshot, RenderPool, SaveOptions, Session, SignOptions, StatusCaptions, TrustStore,
+    display_bytes, display_config, guard, render_threads, signatures_of, writable, write_full, write_incremental, xfa_sync_datasets,
 };
 
 impl Session {
@@ -71,8 +71,15 @@ impl Session {
             let keys = editor.keys.clone();
             // The saved file carries no Password-field values (#3943, #3944); the open document keeps them.
             let typed = pdfcraft_forms::password_values(&editor.cos);
-            editor.cos =
+            // An incremental save keeps the old byte prefix and its object identities. A
+            // rewrite can reuse the same numbers for unrelated fields and icons.
+            let preserves_objects = bytes.starts_with(editor.saved.as_slice()) || bytes.starts_with(editor.cos.bytes().as_slice());
+            let reopened =
                 pdfcraft_cos::Document::open_with_password(bytes.clone(), keys.reopen.as_deref()).map_err(|e| EditError::Reopen(e.to_string()))?;
+            if !preserves_objects {
+                crate::js::replace_runtime(&mut doc.js_runtime);
+            }
+            editor.cos = reopened;
             pdfcraft_forms::restore_password_values(&mut editor.cos, &typed).map_err(|e| EditError::Reopen(e.to_string()))?;
             if !typed.is_empty() && doc.info.xfa.is_some() {
                 let mut datasets = None;
@@ -125,8 +132,9 @@ impl Session {
     }
 
     /// File ▸ Revert: back to the last saved version (or the file as opened). Undo history is
-    /// cleared, as in Acrobat.
+    /// cleared, as in Acrobat, and the document's opening scripts run again.
     pub fn revert(&mut self, id: DocId) -> Result<(), EditError> {
+        self.invalidate_javascript(id);
         let doc = self.doc_mut(id)?;
         let editor = doc.editor.as_mut().ok_or_else(|| EditError::ReadOnly(doc.read_only_reason.clone().unwrap_or_default()))?;
         let base = editor.saved.clone();
@@ -145,8 +153,14 @@ impl Session {
         editor.redo.clear();
         Self::adopt_keys(doc);
         Self::sync_dirty(doc);
+        // The changes whose exits ran are gone with the rest: skip no exit.
+        doc.xfa_exited.clear();
         doc.generation += 1;
-        Self::refresh(doc).inspect_err(|_| Self::show_released(doc))
+        Self::refresh(doc).inspect_err(|_| Self::show_released(doc))?;
+        // Reverting reopens the saved file, in a fresh realm: its opening scripts run again,
+        // as they do on opening it (#269).
+        self.run_open_scripts(id);
+        Ok(())
     }
 
     /// The document's file changed on disk (a LaTeX or Typst build rewrote it, #431): open
@@ -157,6 +171,12 @@ impl Session {
     pub fn reload(&mut self, id: DocId, bytes: Arc<Vec<u8>>) -> Result<(), OpenError> {
         let old = self.docs.iter().position(|d| d.id == id).ok_or_else(|| OpenError::Invalid("the document is not open".into()))?;
         let doc = &self.docs[old];
+        // Opening the replacement can initialize a new worker. Wait for the old
+        // invocation to finish before allowing repeated reloads of this document.
+        #[cfg(not(target_arch = "wasm32"))]
+        if doc.js_runtime.lock().map_err(|_| OpenError::Invalid("script runtime unavailable".into()))?.is_executing() {
+            return Err(OpenError::Invalid("a script is still running in this document; retry the reload once it finishes".into()));
+        }
         let (name, path, generation) = (doc.name.clone(), doc.path.clone(), doc.generation);
         let password = doc.editor.as_ref().and_then(|e| e.keys.reopen.clone()).or_else(|| doc.password.clone());
         let new_id = self.open(name, path, bytes, password.as_deref())?;
@@ -217,6 +237,15 @@ impl Session {
         out
     }
 
+    /// The snapshot [`Self::autosave_snapshots`] handed out for `id` could not be stored: the
+    /// document is due again, so the next autosave tries it again.
+    pub fn autosave_failed(&mut self, id: DocId) {
+        if let Some(d) = self.docs.iter_mut().find(|d| d.id == id) {
+            // Any generation but the current one leaves it due.
+            d.snapshot_generation = d.generation.wrapping_sub(1);
+        }
+    }
+
     /// Mark a document opened from a recovery file: it has unsaved changes and belongs at
     /// `path` (where Save writes), as when the session ended.
     pub fn mark_recovered(&mut self, id: DocId, path: Option<String>) {
@@ -242,15 +271,53 @@ impl Session {
     pub fn set_trusted_certificates(&mut self, certs: Vec<pdfcraft_sign::Certificate>) {
         self.trust = Arc::new(TrustStore { certs });
         for doc in &mut self.docs {
-            doc.trust = self.trust.clone();
-            let Some(editor) = doc.editor.as_mut() else { continue };
-            // Keep verdict refresh and renderer refresh together. Viewer caches are
-            // invalidated by the UI trust path; trust alone changes no document artwork.
-            let signatures = if doc.signatures.is_empty() { Vec::new() } else { signatures_of(&editor.cos, &doc.bytes, &doc.trust, &doc.sig_cache) };
-            doc.display = display_bytes(Some(editor), &doc.bytes);
-            doc.signatures = Arc::new(signatures);
-            doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), display_config(&doc.config));
+            Self::revalidate(doc, self.trust.clone());
         }
+    }
+
+    /// Validate `doc`'s signatures against `trust`, and rebuild its display copy and renderer
+    /// with them: the verdicts choose what the copy draws. An unsigned document has nothing to
+    /// validate and keeps both. Viewer caches are invalidated by the UI trust path.
+    pub(crate) fn revalidate(doc: &mut Document, trust: Arc<TrustStore>) {
+        doc.trust = trust;
+        if doc.signatures.is_empty() {
+            return;
+        }
+        let Some(editor) = doc.editor.as_mut() else { return };
+        let mut signatures = signatures_of(&editor.cos, &doc.bytes, &doc.trust, &doc.sig_cache);
+        doc.display = display_bytes(Some(editor), &doc.bytes, &mut signatures, &doc.captions);
+        doc.signatures = Arc::new(signatures);
+        doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), display_config(&doc.config));
+    }
+
+    /// The words the caption of a named-layer signature appearance is drawn with
+    /// ([`pdfcraft_sign::show_status_layers`]), in the interface language. When they change, every
+    /// open document's display copy and renderer are rebuilt; like trust, this is not an edit.
+    /// Returns whether they changed.
+    pub fn set_signature_captions(&mut self, captions: StatusCaptions) -> bool {
+        if *self.captions == captions {
+            return false;
+        }
+        self.captions = Arc::new(captions);
+        for doc in &mut self.docs {
+            Self::draw_captions(doc, self.captions.clone());
+        }
+        true
+    }
+
+    /// Draw `doc`'s signature status layers with `captions`: the display copy and renderer are
+    /// rebuilt when it draws a signature's state (working file, generation and dirty unchanged).
+    /// Whether a state is drawn does not depend on the words: a caption that can't be drawn in
+    /// them is drawn in English.
+    pub(crate) fn draw_captions(doc: &mut Document, captions: Arc<StatusCaptions>) {
+        doc.captions = captions;
+        if !doc.signatures.iter().any(|s| s.verdict_shown) {
+            return;
+        }
+        let Some(editor) = doc.editor.as_mut() else { return };
+        let signatures = Arc::make_mut(&mut doc.signatures);
+        doc.display = display_bytes(Some(editor), &doc.bytes, signatures, &doc.captions);
+        doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), display_config(&doc.config));
     }
 
     /// The signing time as a PDF date in local time with its offset (`D:…+02'00'`).
@@ -276,7 +343,7 @@ impl Session {
             opts.date = self.signing_date();
         }
         // A typed Password-field value is not signed into the file (#3926), as it isn't saved.
-        let cos = writable(&editor.cos)?;
+        let cos = drawn_for_first_signature(writable(&editor.cos)?);
         Ok(Arc::new(pdfcraft_sign::sign(&cos, id, &opts)?))
     }
 
@@ -294,7 +361,7 @@ impl Session {
         if opts.date.is_empty() {
             opts.date = self.signing_date();
         }
-        let cos = writable(&editor.cos)?;
+        let cos = drawn_for_first_signature(writable(&editor.cos)?);
         let signed = Arc::new(pdfcraft_sign::sign_with_timestamp(&cos, id, &opts, tsa)?);
         // Checked like a save before anyone writes it (#2166).
         self.check_save(doc, &signed)?;
@@ -335,4 +402,79 @@ impl Session {
         }
         Ok(())
     }
+}
+
+/// `cos` with its form fields drawn, when the signature about to be made is the document's first
+/// and the form sets `/NeedAppearances` (#5939). That signature removes the flag, after which
+/// viewers show each field's stored appearance; a filled field whose stored appearance draws no
+/// text (an empty placeholder such as `/Tx BMC EMC`, or a stale look) would go blank. So every
+/// text and choice field is drawn from its value first, as the document is displayed
+/// ([`pdfcraft_forms::with_field_appearances`]), and the signature covers that look.
+///
+/// One exception: where PdfCraft's drawing would show a character as `?` (the field's font can't
+/// hold it) and the field's own appearance draws text, the field keeps its own appearance, which
+/// the program that filled it drew with a font that has the character. A field whose own
+/// appearance draws no text gets PdfCraft's drawing, `?` and all. Later signatures change
+/// nothing here: redrawing would count as a change to the earlier signatures.
+fn drawn_for_first_signature(cos: std::borrow::Cow<'_, pdfcraft_cos::Document>) -> std::borrow::Cow<'_, pdfcraft_cos::Document> {
+    use pdfcraft_forms::FieldKind;
+    if !pdfcraft_forms::need_appearances(&cos) || pdfcraft_sign::has_signatures(&cos) {
+        return cos;
+    }
+    let Some(mut drawn) = pdfcraft_forms::with_field_appearances(&cos) else { return cos };
+    for f in pdfcraft_forms::fields(&cos) {
+        if !matches!(f.kind, FieldKind::Text | FieldKind::Combo | FieldKind::List) {
+            continue;
+        }
+        for w in &f.widgets {
+            let own = cos.get(w.obj).as_dict().filter(|d| draws_text(&cos, d)).and_then(|d| d.get(b"AP").cloned());
+            // `.1`: the first character the drawing showed as `?`.
+            if let Some(ap) = own
+                && pdfcraft_forms::appearance::field_appearance_drawn(&cos, &f, w, &f.value, true).1.is_some()
+            {
+                drawn.update_dict(w.obj, |d| d.set(b"AP".to_vec(), ap)).ok();
+            }
+        }
+    }
+    std::borrow::Cow::Owned(drawn)
+}
+
+/// Whether the widget's normal appearance stream (`/AP /N`) shows text, itself or through the
+/// form XObjects it paints (a background-only one doesn't count).
+fn draws_text(cos: &pdfcraft_cos::Document, widget: &pdfcraft_cos::Dict) -> bool {
+    let ap = widget.get(b"AP").map(|ap| cos.resolve(ap));
+    let normal = ap.as_deref().and_then(|ap| ap.as_dict()).and_then(|ap| ap.get(b"N")).map(|n| cos.resolve(n));
+    let Some(pdfcraft_cos::Object::Stream(s)) = normal.as_deref() else { return false };
+    stream_draws_text(cos, s, &mut 16)
+}
+
+/// Whether the form stream `s` shows text, following `Do` into its form XObjects. `budget` caps
+/// the streams opened along the way; running out (deep nesting, a cycle, many XObjects) counts
+/// as text, so the field keeps its own appearance as it would without the look inside.
+fn stream_draws_text(cos: &pdfcraft_cos::Document, s: &pdfcraft_cos::Stream, budget: &mut u8) -> bool {
+    let Ok(data) = s.decoded() else { return false };
+    let resources = s.dict.get(b"Resources").map(|r| cos.resolve(r));
+    let xobjects = resources.as_deref().and_then(|r| r.as_dict()).and_then(|r| r.get(b"XObject")).map(|x| cos.resolve(x));
+    for op in pdfcraft_content::ops(&data) {
+        match op.op.as_slice() {
+            b"Tj" | b"TJ" | b"'" | b"\"" => return true,
+            b"Do" => {
+                let name = op.operands.first().and_then(|n| n.as_name());
+                let x = name.and_then(|n| xobjects.as_deref().and_then(|x| x.as_dict()).and_then(|x| x.get(n))).map(|x| cos.resolve(x));
+                let Some(pdfcraft_cos::Object::Stream(f)) = x.as_deref() else { continue };
+                if f.dict.name(b"Subtype") != Some(b"Form") {
+                    continue;
+                }
+                if *budget == 0 {
+                    return true;
+                }
+                *budget -= 1;
+                if stream_draws_text(cos, f, budget) {
+                    return true;
+                }
+            }
+            _ => {}
+        }
+    }
+    false
 }
