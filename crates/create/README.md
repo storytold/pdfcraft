@@ -43,11 +43,30 @@ folder. Where `/snap/bin` is on the `PATH` it can still be found there, so point
 `PDFCRAFT_SOFFICE` at a non-snap install if conversions fail. It takes seconds, so callers keep it
 off the frame thread. On the web it returns an error.
 
-Impress has no setting for linked content, and the profile settings are LibreOffice's own:
-PdfCraft doesn't sandbox the process's network access. Converting test documents whose linked
-sections, pictures and external cell references point at a local listener made no connection,
-with or without the Writer and Calc settings (LibreOffice 26.8.1, Windows, 2026-10-26), so the settings are a
-second line of defence rather than a measured fix.
+The profile settings are LibreOffice's own to honour, and they don't cover everything: Impress
+has no setting for linked content, and a picture linked from a web address is fetched by Impress
+and Calc whatever the profile says (LibreOffice 24.2.7, Linux, 2026-11-11: a presentation and a
+spreadsheet with such a picture each connected to a local listener; the Writer setting stopped
+the text document). So LibreOffice is started with no network where the system has a tool for it
+(`Sandbox`, #6953):
+
+- **Linux:** a network namespace of its own, through bubblewrap (`bwrap --unshare-net`) or, without
+  it, util-linux's `unshare --user --net`. Nothing is reachable from inside, this machine's own
+  services included.
+- **macOS:** `sandbox-exec` with a profile that denies the network. Written from Apple's
+  documentation of the tool and not yet run on a Mac.
+- **Windows, FreeBSD:** no such tool; see below.
+
+Which one works is found out once per LibreOffice, by converting a small document of PdfCraft's
+own inside each (a few seconds on the first conversion): user namespaces can be turned off, and
+a tool can start and LibreOffice still fail inside it. `libreoffice_sandbox()` names the tool in
+use. Where none works, the conversion still runs, under the profile alone.
+
+On every system the profile also sends web requests to a proxy that isn't there (127.0.0.1:9), so
+a linked picture on another machine isn't fetched even without a sandbox. LibreOffice doesn't use
+a proxy for this machine's own addresses, and other kinds of link (a file share) don't go through
+it, so on Windows and FreeBSD, and on a Linux without user namespaces, a document can still reach
+local services and shares.
 
 `IMAGE_EXTENSIONS`, `TEXT_EXTENSIONS` and `OFFICE_EXTENSIONS` are what the app's file pickers
 offer, so detection and pickers agree.
