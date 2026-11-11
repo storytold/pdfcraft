@@ -11,6 +11,8 @@ fn request_json(r: &pdfcraft_engine::js::Request) -> Value {
         R::LaunchUrl(u) => json!({ "url": u }),
         R::Submit(u) => json!({ "submit": u }),
         R::Focus(f) => json!({ "focus": f }),
+        R::FocusField { name, object_id } => json!({ "focus": name, "field_id": object_id }),
+        R::Zoom(z) => json!({"zoom":z}),
         R::Beep => json!({ "beep": true }),
         R::Highlight(on) => json!({ "highlight": on }),
         R::SaveAs => json!({ "save_as": true }),
@@ -30,9 +32,29 @@ impl Automation {
     /// messages, console lines, requests, error, the failing document scripts' errors and result.
     pub(crate) fn js_run(&mut self, a: &Args) -> Result<Value> {
         let id = self.doc(a)?.id;
+        let answers = match a.0.get("answers") {
+            None => Vec::new(),
+            Some(Value::Array(values)) if values.len() <= 32 => values
+                .iter()
+                .map(|v| match v {
+                    Value::Null => Ok(None),
+                    Value::String(s) if s.len() <= 4096 => Ok(Some(s.clone())),
+                    _ => Err(ToolError::InvalidArgs("answers must contain strings or null".into())),
+                })
+                .collect::<Result<Vec<_>>>()?,
+            _ => return Err(ToolError::InvalidArgs("answers must be an array of at most 32 strings or null".into())),
+        };
+        let identity =
+            a.0.get("field_id")
+                .map(|v| {
+                    v.as_u64()
+                        .filter(|id| *id < 1 << 48)
+                        .ok_or_else(|| ToolError::InvalidArgs("field_id must be an integer between 0 and 281474976710655".into()))
+                })
+                .transpose()?;
         let (script, field) = (a.str("script")?, a.opt_str("field")?);
-        // Applying the script's field changes runs the field scripts again; their output is reported with the script's.
-        let (mut o, edit) = self.session.with_own_js_output(id, |s| s.run_javascript(id, script, field)).map_err(failed)?;
+        let (mut o, edit) =
+            self.session.with_own_js_output(id, |s| s.run_javascript_answers_target(id, script, field, identity, &answers)).map_err(failed)?;
         o.alerts.extend(edit.alerts);
         o.console.extend(edit.console);
         o.requests.extend(edit.requests);
