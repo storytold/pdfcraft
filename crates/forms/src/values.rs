@@ -749,8 +749,20 @@ pub(crate) fn has_password_flag(doc: &Document) -> bool {
         false
     };
     let top = acroform(doc).and_then(|af| af.get(b"Fields").map(|o| doc.resolve(o)).and_then(|o| o.as_array().cloned())).unwrap_or_default();
+    let top_refs: Vec<ObjRef> = top.iter().filter_map(Object::as_ref).collect();
     if subtree(top, &mut seen) {
         return true;
+    }
+    // A `/Fields` entry may itself name a field above it through `/Parent` (one `fields` adopts when
+    // the entry has no name of its own), whether or not a page lists it.
+    for r in top_refs {
+        let chain = field_chain(doc, r);
+        if chain.len() >= MAX_FIELD_DEPTH || chain.iter().copied().any(sets_it) {
+            return true;
+        }
+        if subtree(vec![Object::Ref(chain.last().copied().unwrap_or(r))], &mut seen) {
+            return true;
+        }
     }
     // Widgets on the pages, the fields above them, and the fields below the topmost one.
     for p in page_refs(doc) {

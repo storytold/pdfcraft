@@ -5621,6 +5621,23 @@ fn a_password_field_below_an_adopted_page_field_is_found() {
     assert!(!has_password_values(&doc));
 }
 
+/// A nameless widget listed in `/Fields` and on no page, whose `/Parent` is an unlisted password
+/// field: the field walk adopts the parent, so the quick check follows the entry's `/Parent` too.
+#[test]
+fn a_password_parent_of_a_nameless_fields_entry_is_found() {
+    let mut doc = document(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R >>".into(),
+        "<< /Fields [6 0 R] /DA (/Helv 0 Tf 0 g) >>".into(),
+        "<< /T (pin) /FT /Tx /Ff 8192 /V (secret8) /Kids [6 0 R] >>".into(),
+        "<< /Type /Annot /Subtype /Widget /Parent 5 0 R /Rect [0 0 0 0] >>".into(),
+    ]);
+    assert!(fields(&doc).iter().any(|f| f.has(flags::PASSWORD) && f.value.iter().any(|v| v == "secret8")), "the field walk reads the parent");
+    assert!(has_password_flag(&doc));
+    assert_eq!(clear_password_values(&mut doc).unwrap(), 1);
+}
+
 /// #4018: a value that doesn't fit its box at the field's font size is reported (it is drawn cut
 /// at the box). An auto-sized field shrinks to fit, and a short or empty value fits.
 #[test]

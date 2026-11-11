@@ -89,13 +89,15 @@ fn password_dataset_wants(doc: &Document) -> Result<Vec<Want>, XfaError> {
     if datasets_stream_ref(doc).is_none() {
         return Ok(Vec::new());
     }
-    let Ok(Some(packet)) = datasets_packet(doc) else { return Ok(Vec::new()) };
-    let Some(data) = parse_datasets_packet(&packet) else { return Ok(Vec::new()) };
+    // Checked before the packet is read: a packet that can't be parsed leaves nothing to clear, but
+    // a form whose fields can't all be found is refused whatever the packet holds.
     let Some(acro_fields) = acro_password_fields(doc) else {
         return Err(XfaError::Malformed(
             "the form's fields nest too deeply to find every password field, so typed passwords could not be removed from its XFA data".into(),
         ));
     };
+    let Ok(Some(packet)) = datasets_packet(doc) else { return Ok(Vec::new()) };
+    let Some(data) = parse_datasets_packet(&packet) else { return Ok(Vec::new()) };
     Ok(with_template(doc, None, |tpl| {
         let mut candidates: Vec<(String, DataPath, String)> = Vec::new();
         let mut seen = std::collections::HashSet::new();
