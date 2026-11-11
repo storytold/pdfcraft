@@ -885,10 +885,10 @@ fn editing_a_callout_refits_the_box_and_keeps_the_leader() {
     let outer = rect(d);
     let f = |k: &[u8]| -> Vec<f64> { d.get(k).unwrap().as_array().unwrap().iter().map(|o| o.as_f64().unwrap()).collect() };
     let cl = f(b"CL");
-    // The leader line keeps its start and knee; the attach point follows the re-fitted box.
-    assert_eq!(&cl[..4], &[200.0, 520.0, 260.0, 560.0]);
+    // The box grows down from its top; the side the line meets stays where it was, so the line
+    // doesn't change (as Acrobat keeps it while a box is resized from its other corner).
     let want = expected_box(612.0, 200.0, long, 12.0, 2.0);
-    assert_eq!((cl[4], cl[5]), callout_attach([300.0, want[1], 500.0, 612.0], [260.0, 560.0]).into());
+    assert_eq!(cl, [200.0, 520.0, 260.0, 560.0, 300.0, 606.0]);
     // The text box (recovered from /Rect and /RD) keeps its width and top edge.
     let tb = [outer[0] + f(b"RD")[0], outer[1] + f(b"RD")[1], outer[2] - f(b"RD")[2], outer[3] - f(b"RD")[3]];
     assert_eq!((tb[0], tb[2], tb[3]), (300.0, 500.0, 612.0));
@@ -1609,36 +1609,43 @@ fn replace_text_groups_a_strikeout_and_a_caret() {
     .unwrap();
     let doc = reopen(&doc);
     let a = list(&doc, 0);
-    let strike = &a[i];
-    assert_eq!((strike.name(b"Subtype"), strike.name(b"IT")), (Some(&b"StrikeOut"[..]), Some(&b"StrikeOutTextEdit"[..])));
-    let caret = a.iter().find(|d| d.name(b"Subtype") == Some(b"Caret")).unwrap();
-    // The caret is the group's primary: a group's text is read from its primary and the
-    // subordinates' Contents are ignored (ISO 32000-2 §12.5.6.2), so the replacement is on it.
-    assert_eq!((text(caret, b"Contents").as_str(), caret.name(b"IT")), ("new words", Some(&b"Replace"[..])));
-    assert!(caret.get(b"IRT").is_none() && caret.get(b"RT").is_none(), "a primary has no /IRT: {caret:?}");
-    assert_eq!(strike.name(b"RT"), Some(&b"Group"[..]));
-    assert!(text(strike, b"Contents").is_empty());
+    // The caret is the group's primary (ISO 32000-2 §12.5.6.2): it holds the text, has no
+    // `/IRT`, and is what the call returns.
+    let caret = &a[i];
+    assert_eq!((caret.name(b"Subtype"), caret.name(b"IT")), (Some(&b"Caret"[..]), Some(&b"Replace"[..])));
+    assert_eq!(text(caret, b"Contents").as_str(), "new words");
+    assert!(caret.get(b"IRT").is_none() && caret.get(b"RT").is_none());
+    // The strikeout is its subordinate, with no text of its own.
+    let strike = a.iter().find(|d| d.name(b"Subtype") == Some(b"StrikeOut")).unwrap();
+    assert_eq!((strike.name(b"IT"), strike.name(b"RT")), (Some(&b"StrikeOutTextEdit"[..]), Some(&b"Group"[..])));
+    assert!(strike.get(b"Contents").is_none());
+    assert!(is_group_subordinate(strike));
     // #2666: the pair needs its own `/NM` each. XFDF names a reply by the `/NM` of what it
-    // replies to, so sharing one id writes `inreplyto` equal to the caret's own `name` and the
-    // pair does not survive an export and import.
+    // replies to, so sharing one id writes `inreplyto` equal to the subordinate's own `name`
+    // and the pair does not survive an export and import.
     assert_eq!(text(caret, b"NM").as_str(), "r-caret");
     assert_eq!(text(strike, b"NM").as_str(), "r");
-    assert_ne!(text(caret, b"NM"), text(strike, b"NM"), "the caret must not carry the strikeout's name");
     let irt = strike.reference(b"IRT").unwrap();
-    assert_eq!(text(doc.get(irt).as_dict().unwrap(), b"NM").as_str(), "r-caret", "the strikeout is grouped under the caret");
+    assert_eq!(text(doc.get(irt).as_dict().unwrap(), b"NM").as_str(), "r-caret", "the strikeout is grouped with the caret");
     let r = rect(caret);
     assert!(r[0] < 200.0 && r[2] > 200.0 && r[1] < 706.0, "at the end of the line, below its baseline: {r:?}");
-    // Deleting either one takes the other with it (the proposal is one comment).
+    let summary = summaries(&doc);
+    assert_eq!(summary.iter().filter(|s| s.page == 0 && !s.is_group_member()).count(), 2, "the fixture's Square and the caret: {summary:?}");
+    // Replace Text is one comment: deleting either the caret or the strikeout deletes both, as
+    // Acrobat does.
+    for member in [i, a.iter().position(|d| d.name(b"Subtype") == Some(b"StrikeOut")).unwrap()] {
+        let mut doc = doc.clone();
+        delete_annotation(&mut doc, 0, member).unwrap();
+        assert!(!list(&doc, 0).iter().any(|d| matches!(d.name(b"Subtype"), Some(b"Caret" | b"StrikeOut"))), "{member}");
+    }
     let marks = |doc: &Document| list(doc, 0).iter().filter(|d| matches!(d.name(b"Subtype"), Some(b"Caret" | b"StrikeOut"))).count();
-    let mut by_strike = doc.clone();
-    delete_annotation(&mut by_strike, 0, i).unwrap();
-    assert_eq!(marks(&by_strike), 0, "deleting the strikeout deletes the caret");
+    let si = a.iter().position(|d| d.name(b"Subtype") == Some(b"StrikeOut")).unwrap();
     let mut doc = doc;
     let c = list(&doc, 0).iter().position(|d| d.name(b"Subtype") == Some(b"Caret")).unwrap();
     // A locked caret keeps the strikeout too: the pair can't be broken by deleting the other.
     let mut locked = doc.clone();
     set_locked(&mut locked, 0, c, true).unwrap();
-    assert!(deletable(&locked, 0, i).is_err() && delete_annotation(&mut locked, 0, i).is_err(), "a locked caret refuses its strikeout's deletion");
+    assert!(deletable(&locked, 0, si).is_err() && delete_annotation(&mut locked, 0, si).is_err(), "a locked caret refuses its strikeout's deletion");
     assert_eq!(marks(&locked), 2);
     delete_annotation(&mut doc, 0, c).unwrap();
     assert_eq!(marks(&doc), 0, "deleting the caret deletes the strikeout");
@@ -1660,6 +1667,218 @@ fn replace_text_groups_a_strikeout_and_a_caret() {
     );
 }
 
+/// ISO 32000-2 §12.5.6.2: `/RT /Group` makes an annotation a subordinate of the group its
+/// `/IRT` annotation is primary of. Another `/RT` reads as a reply, and so does a bare `/IRT`.
+/// Deleting a member deletes just it, as Acrobat does, although §12.5.6.2 lists deletion among the
+/// operations that act on the entire group: the subordinate goes alone, and the primary goes with
+/// its replies and leaves its subordinate, which reads as a comment of its own.
+#[test]
+fn a_group_reads_as_one_and_deletes_by_member() {
+    let mut doc = fixture();
+    let square = add_annotation(&mut doc, &new(0, Shape::Rectangle { rect: [100.0, 100.0, 200.0, 200.0] }), &meta("sq")).unwrap();
+    let (_, sr) = annot_ref(&mut doc, 0, square).unwrap();
+    let irt = |doc: &mut Document, id: &str, rt: Option<&str>| {
+        let i = add_annotation(doc, &new(0, Shape::Oval { rect: [300.0, 300.0, 350.0, 350.0] }), &meta(id)).unwrap();
+        let (_, r) = annot_ref(doc, 0, i).unwrap();
+        doc.update_dict(r, |d| {
+            d.set(b"IRT".to_vec(), Object::Ref(sr));
+            if let Some(rt) = rt {
+                d.set(b"RT".to_vec(), Object::name(rt));
+            }
+        })
+        .unwrap();
+        i
+    };
+    let member = irt(&mut doc, "member", Some("Group"));
+    irt(&mut doc, "reply", None);
+    irt(&mut doc, "explicit", Some("R"));
+    irt(&mut doc, "odd", Some("Bogus"));
+    let doc = reopen(&doc);
+    let grouped: Vec<(String, bool)> =
+        summaries(&doc).into_iter().filter(|s| s.in_reply_to.is_some()).map(|s| (s.name.clone().unwrap_or_default(), s.is_group_member())).collect();
+    assert_eq!(
+        grouped,
+        [("member".into(), true), ("reply".into(), false), ("explicit".into(), false), ("odd".into(), false)],
+        "only /RT /Group groups"
+    );
+    let mut alone = doc.clone();
+    delete_annotation(&mut alone, 0, member).unwrap();
+    assert_eq!(list(&alone, 0).len(), list(&doc, 0).len() - 1, "the subordinate goes alone");
+    let mut doc = doc;
+    delete_annotation(&mut doc, 0, square).unwrap();
+    let left: Vec<Option<String>> = list(&doc, 0).iter().map(|d| d.get(b"NM").map(|_| text(d, b"NM"))).collect();
+    assert_eq!(left, [None, Some("member".into())], "the primary and its replies are gone; the fixture's Square and the subordinate stay");
+    let summary = summaries(&doc);
+    let member = summary.iter().find(|s| s.name.as_deref() == Some("member")).unwrap();
+    assert!(member.parent.is_none() && !member.is_group_member(), "left without its primary, it is a comment of its own: {member:?}");
+}
+
+/// A primary with one subordinate and one reply, all on page 0 of a reopened file. Returns the
+/// primary's and the subordinate's `/Annots` positions and references.
+fn group_of_two(text: &str) -> (Document, (usize, ObjRef), (usize, ObjRef)) {
+    let mut doc = fixture();
+    let primary = add_annotation(&mut doc, &new(0, Shape::Rectangle { rect: [100.0, 100.0, 200.0, 200.0] }), &meta("primary")).unwrap();
+    let (_, pr) = annot_ref(&mut doc, 0, primary).unwrap();
+    doc.update_dict(pr, |d| d.set(b"Contents".to_vec(), pdfcraft_cos::PdfString::text(text))).unwrap();
+    let member = add_annotation(&mut doc, &new(0, Shape::Oval { rect: [300.0, 300.0, 350.0, 350.0] }), &meta("member")).unwrap();
+    let (_, mr) = annot_ref(&mut doc, 0, member).unwrap();
+    doc.update_dict(mr, |d| {
+        d.set(b"IRT".to_vec(), Object::Ref(pr));
+        d.set(b"RT".to_vec(), Object::name("Group"));
+    })
+    .unwrap();
+    add_reply(&mut doc, 0, primary, "a reply", "Ada", &meta("reply")).unwrap();
+    (reopen(&doc), (primary, pr), (member, mr))
+}
+
+/// Deleting a group's primary leaves its subordinate a comment of its own, as Acrobat does: the
+/// subordinate loses its `/IRT` and keeps `/RT /Group`, so nothing refers to the deleted primary
+/// and a full save leaves its text out.
+#[test]
+fn deleting_a_primary_releases_its_subordinate() {
+    let (mut doc, (primary, _), (_, mr)) = group_of_two("primary secret text");
+    delete_annotation(&mut doc, 0, primary).unwrap();
+    let member = doc.get(mr).as_dict().cloned().unwrap();
+    assert!(member.get(b"IRT").is_none(), "the subordinate no longer names the deleted primary: {member:?}");
+    assert_eq!(member.name(b"RT"), Some(&b"Group"[..]), "its /RT stays, as Acrobat leaves it");
+    let s = summaries(&doc);
+    let listed = s.iter().find(|s| s.name.as_deref() == Some("member")).unwrap();
+    assert!(listed.parent.is_none() && listed.in_reply_to.is_none() && !listed.is_group_member(), "a comment of its own: {listed:?}");
+    assert!(!s.iter().any(|s| s.name.as_deref() == Some("reply")), "the primary's reply went with it");
+    let full = pdfcraft_cos::write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
+    assert!(!full.windows(19).any(|w| w == b"primary secret text"), "the deleted primary's text is not in a full save");
+}
+
+/// Deleting a subordinate leaves its primary as it was.
+#[test]
+fn deleting_a_subordinate_leaves_its_primary_untouched() {
+    let (mut doc, (_, pr), (member, _)) = group_of_two("primary text");
+    let before = doc.get(pr).as_dict().cloned();
+    delete_annotation(&mut doc, 0, member).unwrap();
+    assert_eq!(doc.get(pr).as_dict().cloned(), before);
+    assert!(summaries(&doc).iter().any(|s| s.name.as_deref() == Some("reply")), "the primary keeps its reply");
+}
+
+/// An inline subordinate (`/Annots` may hold a dictionary, though the standard asks for a
+/// reference) whose primary is deleted loses its `/IRT` in the page's list.
+#[test]
+fn an_inline_subordinate_is_released_too() {
+    let mut doc = fixture();
+    let primary = add_annotation(&mut doc, &new(0, Shape::Rectangle { rect: [100.0, 100.0, 200.0, 200.0] }), &meta("primary")).unwrap();
+    let (_, pr) = annot_ref(&mut doc, 0, primary).unwrap();
+    let p = page_refs(&doc).unwrap()[0];
+    let mut entries = annots(&doc, p);
+    let mut inline = Dict::new();
+    inline.set(b"Type".to_vec(), Object::name("Annot"));
+    inline.set(b"Subtype".to_vec(), Object::name("Square"));
+    inline.set(b"Rect".to_vec(), Object::Array([300, 300, 350, 350].map(Object::Int).to_vec()));
+    inline.set(b"IRT".to_vec(), Object::Ref(pr));
+    inline.set(b"RT".to_vec(), Object::name("Group"));
+    entries.push(Object::Dict(inline));
+    set_annots(&mut doc, p, entries).unwrap();
+    delete_annotation(&mut doc, 0, primary).unwrap();
+    let left = list(&doc, 0);
+    let inline = left.iter().find(|d| d.name(b"RT") == Some(b"Group")).expect("the inline subordinate stays");
+    assert!(inline.get(b"IRT").is_none());
+}
+
+/// Deleting follows `/IRT` replies by visiting each annotation once, with no step limit to cut a
+/// thread short: a thread of 200 replies (past the 64 steps the listings follow) goes whole, and
+/// replies or group members in a loop (`/IRT` back to each other) end the walk. A loop of group
+/// members deletes only the one picked; the other is released.
+#[test]
+fn deleting_follows_a_long_or_looping_irt_chain_once_each() {
+    let mut doc = fixture();
+    let top = add_annotation(&mut doc, &new(0, Shape::Rectangle { rect: [100.0, 100.0, 200.0, 200.0] }), &meta("top")).unwrap();
+    let mut on = top;
+    for k in 0..200 {
+        on = add_reply(&mut doc, 0, on, "reply", "Ada", &meta(&format!("r{k}"))).unwrap();
+    }
+    let before = list(&doc, 0).len();
+    delete_annotation(&mut doc, 0, top).unwrap();
+    assert_eq!(list(&doc, 0).len(), before - 201, "the comment and its 200-deep thread go together");
+    for rt in [None, Some("Group")] {
+        let mut doc = fixture();
+        let a = add_annotation(&mut doc, &new(0, Shape::Rectangle { rect: [100.0, 100.0, 200.0, 200.0] }), &meta("a")).unwrap();
+        let b = add_annotation(&mut doc, &new(0, Shape::Oval { rect: [300.0, 300.0, 350.0, 350.0] }), &meta("b")).unwrap();
+        let (_, ar) = annot_ref(&mut doc, 0, a).unwrap();
+        let (_, br) = annot_ref(&mut doc, 0, b).unwrap();
+        for (r, to) in [(ar, br), (br, ar)] {
+            doc.update_dict(r, |d| {
+                d.set(b"IRT".to_vec(), Object::Ref(to));
+                if let Some(rt) = rt {
+                    d.set(b"RT".to_vec(), Object::name(rt));
+                }
+            })
+            .unwrap();
+        }
+        let before = list(&doc, 0).len();
+        delete_annotation(&mut doc, 0, a).unwrap();
+        let left = list(&doc, 0);
+        match rt {
+            None => assert_eq!(left.len(), before - 2, "a reply loop goes whole"),
+            Some(_) => {
+                assert_eq!(left.len(), before - 1, "a group member goes alone");
+                assert!(doc.get(br).as_dict().is_some_and(|d| d.get(b"IRT").is_none()), "the other member is released");
+            }
+        }
+    }
+}
+
+/// A subordinate deep in a chain of subordinates, within the 64 annotations the listing follows
+/// up a chain or past them, is deleted alone: the chain above it stays.
+#[test]
+fn a_subordinate_deep_in_a_chain_is_deleted_alone() {
+    for subordinates in [63, 64, 65] {
+        let mut doc = fixture();
+        let top = add_annotation(&mut doc, &new(0, Shape::Rectangle { rect: [100.0, 100.0, 200.0, 200.0] }), &meta("top")).unwrap();
+        let (_, mut up) = annot_ref(&mut doc, 0, top).unwrap();
+        let mut last = top;
+        for k in 0..subordinates {
+            last = add_annotation(&mut doc, &new(0, Shape::Oval { rect: [300.0, 300.0, 350.0, 350.0] }), &meta(&format!("s{k}"))).unwrap();
+            let (_, r) = annot_ref(&mut doc, 0, last).unwrap();
+            doc.update_dict(r, |d| {
+                d.set(b"IRT".to_vec(), Object::Ref(up));
+                d.set(b"RT".to_vec(), Object::name("Group"));
+            })
+            .unwrap();
+            up = r;
+        }
+        let before = list(&doc, 0).len();
+        delete_annotation(&mut doc, 0, last).unwrap();
+        assert_eq!(list(&doc, 0).len(), before - 1, "{subordinates}: the subordinate is gone, the rest of its group stays");
+    }
+}
+
+/// A locked member doesn't hold back the deletion of another, the primary included: each goes
+/// alone (ISO 32000-2 §12.5.3, Table 167: Locked).
+#[test]
+fn a_locked_group_member_holds_back_no_other_deletion() {
+    let mut doc = fixture();
+    let top = add_annotation(&mut doc, &new(0, Shape::Rectangle { rect: [100.0, 100.0, 200.0, 200.0] }), &meta("top")).unwrap();
+    let (_, tr) = annot_ref(&mut doc, 0, top).unwrap();
+    let mut members = Vec::new();
+    for id in ["a", "b"] {
+        let i = add_annotation(&mut doc, &new(0, Shape::Oval { rect: [300.0, 300.0, 350.0, 350.0] }), &meta(id)).unwrap();
+        let (_, r) = annot_ref(&mut doc, 0, i).unwrap();
+        doc.update_dict(r, |d| {
+            d.set(b"IRT".to_vec(), Object::Ref(tr));
+            d.set(b"RT".to_vec(), Object::name("Group"));
+        })
+        .unwrap();
+        members.push(i);
+    }
+    set_locked(&mut doc, 0, members[1], true).unwrap();
+    let before = list(&doc, 0).len();
+    let mut alone = doc.clone();
+    delete_annotation(&mut alone, 0, members[0]).unwrap();
+    assert_eq!(list(&alone, 0).len(), before - 1, "the unlocked subordinate goes alone");
+    delete_annotation(&mut doc, 0, top).unwrap();
+    assert_eq!(list(&doc, 0).len(), before - 1, "the primary goes alone too");
+    let locked = list(&doc, 0).iter().filter(|d| d.get(b"F").and_then(|f| f.as_int()).is_some_and(|f| f & 128 != 0)).count();
+    assert_eq!(locked, 1, "the locked member stays");
+}
+
 /// Review on #5689 (CodeRabbit): clicking a Replace Text strikeout selects its caret, the
 /// group's primary, so a restyle from Comment Properties lands on the caret. Colour and opacity
 /// are the proposal's, so the strikeout is restyled and redrawn in the same edit, whichever
@@ -1679,8 +1898,9 @@ fn restyling_a_replace_text_pair_restyles_both_members() {
         strike_meta: &meta("r"),
         caret_meta: &meta("r-caret"),
     };
-    let s = add_text_replacement(&mut doc, tr).unwrap();
-    let c = list(&doc, 0).iter().position(|d| d.name(b"Subtype") == Some(b"Caret")).unwrap();
+    // The call returns the caret, the group's primary.
+    let c = add_text_replacement(&mut doc, tr).unwrap();
+    let s = list(&doc, 0).iter().position(|d| d.name(b"Subtype") == Some(b"StrikeOut")).unwrap();
     let color = |doc: &Document, i: usize| {
         list(doc, 0)[i].get(b"C").and_then(|o| o.as_array().cloned()).unwrap().iter().filter_map(Object::as_f64).collect::<Vec<_>>()
     };
@@ -2324,6 +2544,28 @@ fn non_markup_annotations_are_not_comments() {
     for s in ["Text", "FreeText", "Highlight", "Ink", "Stamp", "FileAttachment", "Redact", "Sound"] {
         assert!(is_comment_subtype(s), "{s}");
     }
+    // #3916: comment edits must refuse non-comment annotations (form widgets, links, pop-ups)
+    // when a stale `/Annots` index points at one.
+    for subtype in ["Widget", "Link", "Popup", "Watermark"] {
+        let mut doc = fixture();
+        let mut d = Dict::new();
+        d.set(b"Type".to_vec(), Object::name("Annot"));
+        d.set(b"Subtype".to_vec(), Object::name(subtype));
+        d.set(b"Rect".to_vec(), num_array(&[10.0, 10.0, 50.0, 30.0]));
+        d.set(b"Contents".to_vec(), PdfString::text("keep me"));
+        let w = doc.add(Object::Dict(d));
+        let p = page_refs(&doc).unwrap()[0];
+        let mut a = annots(&doc, p);
+        a.push(Object::Ref(w));
+        let idx = a.len() - 1;
+        set_annots(&mut doc, p, a).unwrap();
+
+        assert_eq!(delete_annotation(&mut doc, 0, idx), Err(AnnotError::NoSuchAnnotation { page: 0, index: idx }), "{subtype}");
+        assert_eq!(set_contents(&mut doc, 0, idx, "overwritten", &meta("m")), Err(AnnotError::NoSuchAnnotation { page: 0, index: idx }), "{subtype}");
+        assert_eq!(move_annotation(&mut doc, 0, idx, 5.0, 5.0, &meta("m")), Err(AnnotError::NoSuchAnnotation { page: 0, index: idx }), "{subtype}");
+        assert_eq!(props(&doc, 0, idx), None, "{subtype}");
+        assert_eq!(text(&list(&doc, 0)[idx], b"Contents"), "keep me", "{subtype} contents must be untouched");
+    }
 }
 
 /// A drawing (a drawn Fill & Sign signature is one) resizes by scaling its strokes into the new
@@ -2574,7 +2816,8 @@ fn free_text_properties_show_legacy_or_absent_border_width() {
         d.remove(b"Border");
     })
     .unwrap();
-    assert_eq!(props(&doc, 0, index).unwrap().width, Some(0.0));
+    // Neither /BS nor /Border: the /Border default [0 0 1] (ISO 32000-2 Table 166), as drawn.
+    assert_eq!(props(&doc, 0, index).unwrap().width, Some(1.0));
     doc.update_dict(reference, |d| {
         d.set(b"Border".to_vec(), Object::Array([0.0, 0.0, 4.0].into_iter().map(Object::Real).collect()));
     })
@@ -3526,6 +3769,978 @@ fn a_cloud_around_a_rotated_rectangle_bulges_outwards_either_way_round() {
     }
 }
 
+/// PdfCraft's own text boxes, typewriter text and redaction marks write `/BS` (width 0 for text
+/// boxes and typewriter text), `/DA /Helv` and a `/DS` that agrees with it, and quadrilaterals:
+/// the default border, `/DA` fonts, `/DS` and the `/Rect` outline leave them exactly as they were.
+#[test]
+fn pdfcraft_text_boxes_and_redaction_marks_look_as_before() {
+    let mut doc = fixture();
+    let mut tb = new(0, Shape::TextBox { rect: [100.0, 100.0, 220.0, 160.0], font_size: 12.5 });
+    tb.style = Style { color: [0.1, 0.2, 0.3], fill: Some([1.0, 1.0, 0.8]), ..Style::default_for(&tb.shape) };
+    tb.contents = "PdfCraft text box that wraps onto a second line".into();
+    let t = add_annotation(&mut doc, &tb, &meta("t")).unwrap();
+    let mut tw = new(0, Shape::Typewriter { rect: [100.0, 300.0, 300.0, 320.0], font_size: 10.0 });
+    tw.style = Style::default_for(&tw.shape);
+    let w = add_annotation(&mut doc, &tw, &meta("w")).unwrap();
+    let quads = vec![[100.0, 520.0, 200.0, 520.0, 100.0, 500.0, 200.0, 500.0]];
+    let mut rd = new(0, Shape::Redact { quads, overlay: String::new(), look: OverlayLook::default() });
+    rd.style = Style::default_for(&rd.shape);
+    let r = add_annotation(&mut doc, &rd, &meta("r")).unwrap();
+    let all = list(&doc, 0);
+    assert_eq!(
+        ap_content(&doc, &all[t]),
+        "1 1 0.8 rg\n100 100 120 60 re f\n100 100 120 60 re W n\nBT\n/Helv 12.5 Tf\n0.1 0.2 0.3 rg\n1 0 0 1 102 146.75 Tm (PdfCraft text box) Tj\n1 0 0 1 102 131.75 Tm (that wraps onto a) Tj\n1 0 0 1 102 116.75 Tm (second line) Tj\nET\n"
+    );
+    assert_eq!(text(&all[t], b"DS"), "font: Helvetica 12.5pt; text-align:left; color:#1A334D");
+    assert_eq!(ap_content(&doc, &all[w]), "100 300 200 20 re W n\nBT\n/Helv 10 Tf\n0 0 0 rg\n1 0 0 1 102 309 Tm (hello) Tj\nET\n");
+    assert_eq!(ap_content(&doc, &all[r]), "0.89 0.13 0.13 RG\n1 w\n100 520 m 200 520 l 200 500 l 100 500 l h S\n");
+    // New text keeps the box's look: Helvetica, /DA's exact colour (not /DS's 8-bit one).
+    set_contents(&mut doc, 0, t, "Edited", &meta("")).unwrap();
+    let d = &list(&doc, 0)[t];
+    assert_eq!(text(d, b"DS"), "font: Helvetica 12.5pt; text-align:left; color:#1A334D");
+    let ap = ap_content(&doc, d);
+    assert!(ap.contains("/Helv 12.5 Tf\n0.1 0.2 0.3 rg\n") && !ap.contains(" re S"), "{ap}");
+}
+
+/// The display appearance of the annotation dictionary `annot` on a page of a document whose
+/// form `/DR` maps `Helv`, `Cour`, `TiRo`, `F1` (Courier) and `F2` (a font that isn't standard),
+/// and the font resources it draws with.
+fn display_of(annot: &str) -> (String, Dict) {
+    let doc = document_of(&[
+        b"<< /Type /Catalog /Pages 2 0 R /AcroForm << /DR << /Font << /Helv 5 0 R /Cour 6 0 R /TiRo 7 0 R /F1 6 0 R /F2 9 0 R >> >> >> >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>",
+        b"<< /Type /Page /Parent 2 0 R /Annots [8 0 R] >>",
+        b"<< /Length 0 >>\nstream\n\nendstream",
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Courier /Encoding /WinAnsiEncoding >>",
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Times-Roman /Encoding /WinAnsiEncoding >>",
+        annot.as_bytes(),
+        b"<< /Type /Font /Subtype /TrueType /BaseFont /ABCDEF+HouseGothic >>",
+    ]);
+    let shown = with_missing_appearances(&doc).expect("drawn for display");
+    let d = list(&shown, 0).remove(0);
+    let n = d.get(b"AP").and_then(|a| a.as_dict()).and_then(|a| a.reference(b"N")).expect("/AP /N");
+    let Object::Stream(s) = &*shown.get(n) else { panic!("not a stream") };
+    let fonts = s.dict.get(b"Resources").and_then(|r| r.as_dict()).and_then(|r| r.get(b"Font")).and_then(|f| f.as_dict()).cloned();
+    (String::from_utf8_lossy(&s.decoded().unwrap()).into_owned(), fonts.unwrap_or_default())
+}
+
+fn base_fonts(fonts: &Dict) -> Vec<String> {
+    fonts.iter().filter_map(|(_, f)| f.as_dict()?.name(b"BaseFont").map(|b| String::from_utf8_lossy(b).into_owned())).collect()
+}
+
+/// A text box without `/BS` or `/Border` has the `/Border` default [0 0 1] (ISO 32000-2
+/// Table 166): a 1-pt border in the text colour. `/BS /W 0` or `/Border [0 0 0]` turn it off.
+#[test]
+fn free_text_without_a_border_entry_has_the_default_one() {
+    let (ap, _) = display_of("<< /Type /Annot /Subtype /FreeText /Rect [45 630 165 700] /DA (0 0 1 rg /Helv 12 Tf) /Contents (Hi) >>");
+    assert!(ap.contains("0 0 1 RG\n1 w\n45.5 630.5 119 69 re S\n"), "{ap}");
+    assert!(ap.contains("1 0 0 1 48 "), "text inset by the border: {ap}");
+    for off in ["/BS << /W 0 >>", "/Border [0 0 0]"] {
+        let (ap, _) = display_of(&format!("<< /Type /Annot /Subtype /FreeText /Rect [45 630 165 700] /DA (0 g /Helv 12 Tf) {off} /Contents (Hi) >>"));
+        assert!(!ap.contains(" re S"), "{off}: {ap}");
+    }
+}
+
+/// Review on #4365: a text box's new text is fitted with the border it is drawn with. A 4-pt border
+/// written as `/Border [0 0 4]` (no `/BS`) is drawn 4 pt wide, so the box grows as for `/BS /W 4`;
+/// before, the fit read only `/BS` and measured it with a 1-pt border, so the drawn text, wrapped
+/// 6 pt narrower, could run past the box.
+#[test]
+fn new_text_is_fitted_with_the_border_the_box_is_drawn_with() {
+    let fitted = |border: &str| {
+        let annot = format!("<< /Type /Annot /Subtype /FreeText /Rect [45 600 165 700] /DA (0 g /Helv 12 Tf) {border} /Contents (Hi) >>");
+        let mut doc = document_of(&[
+            b"<< /Type /Catalog /Pages 2 0 R >>",
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>",
+            b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>",
+            annot.as_bytes(),
+        ]);
+        set_contents(&mut doc, 0, 0, "Several words that wrap over a few lines of this box", &meta("")).unwrap();
+        list(&doc, 0).remove(0).get(b"Rect").and_then(|r| r.as_array()).map(|r| r.iter().filter_map(|x| x.as_f64()).collect::<Vec<f64>>()).unwrap()
+    };
+    let bs = fitted("/BS << /W 4 >>");
+    assert_eq!(fitted("/Border [0 0 4]"), bs, "the same 4-pt border, the same box");
+    assert_ne!(fitted("/BS << /W 1 >>"), bs, "a 1-pt border fits another box");
+}
+
+/// `/DA` names its font in the form's `/DR` (§12.7.4.3): a standard face is drawn in that face,
+/// with its widths for wrapping; any other font stays Helvetica.
+#[test]
+fn free_text_da_fonts_draw_in_their_standard_face() {
+    use pdfcraft_fonts::Std14;
+    let width = 120.0 - 2.0 * 2.0;
+    let words = "iiiiiiiiii iiiiiiiiii";
+    let lines = |face: Std14| pdfcraft_fonts::wrap_with(words, 12.0, width, |s, z| face.text_width(s, z)).len();
+    assert_eq!((lines(Std14::Helvetica), lines(Std14::Courier)), (1, 2), "the case tells the faces apart");
+    for (da, base, key, n) in [
+        ("0 g /Cour 12 Tf", "Courier", "/Cour 12 Tf", 2),
+        ("1 0 0 rg /TiRo 12 Tf", "Times-Roman", "/TiRo 12 Tf", 1),
+        ("0 g /F1 12 Tf", "Courier", "/Cour 12 Tf", 2),
+        ("0 g /F2 12 Tf", "Helvetica", "/Helv 12 Tf", 1),
+        ("0 g /Nowhere 12 Tf", "Helvetica", "/Helv 12 Tf", 1),
+        ("0 g /CoBo 12 Tf", "Courier-Bold", "/CoBo 12 Tf", 2),
+    ] {
+        let annot = format!("<< /Type /Annot /Subtype /FreeText /Rect [45 630 165 700] /DA ({da}) /BS << /W 0 >> /Contents ({words}) >>");
+        let (ap, fonts) = display_of(&annot);
+        assert_eq!(base_fonts(&fonts), [base], "{da}");
+        assert!(ap.contains(key), "{da}: {ap}");
+        assert_eq!(ap.matches(" Tj").count(), n, "{da}: wrapped at {base}'s widths: {ap}");
+    }
+}
+
+/// Thai in a text box whose `/DA` names Times is drawn from the Thai face and the rest of its
+/// text in Times: after a Thai run the text goes back to `/TiRo`, never to `/Helv`, and both
+/// kinds of font are in the appearance's resources.
+#[test]
+fn thai_in_a_times_text_box_keeps_times_for_the_rest() {
+    // "สวัสดี Hi": Thai first, then Latin.
+    let annot = "<< /Type /Annot /Subtype /FreeText /Rect [45 630 245 700] /DA (0 g /TiRo 12 Tf) /BS << /W 0 >> /Contents <FEFF0E2A0E270E310E2A0E140E35002000480069> >>";
+    let (ap, fonts) = display_of(annot);
+    assert!(!ap.contains("/Helv"), "{ap}");
+    assert!(base_fonts(&fonts).contains(&"Times-Roman".to_string()), "{fonts:?}");
+    if pdfcraft_fonts::document_thai_font().is_none() {
+        return;
+    }
+    assert!(ap.contains("/PCTh1 ") && !ap.contains('?'), "the Thai is shaped: {ap}");
+    assert_eq!(ap.matches("/TiRo 12 Tf").count(), 2, "Times is selected again after the Thai: {ap}");
+    assert!(fonts.get(b"PCTh1").and_then(|f| f.as_dict()).is_some_and(|f| f.name(b"Subtype") == Some(&b"Type3"[..])), "{fonts:?}");
+}
+
+/// `/DS` (Table 177) sets the face, size and colour over `/DA`'s; a malformed one is ignored.
+#[test]
+fn free_text_ds_style_is_drawn() {
+    let annot =
+        "<< /Type /Annot /Subtype /FreeText /Rect [45 630 165 700] /DA (0 g /Helv 12 Tf) /DS (font: Times 14pt; color: #008000) /Contents (Hi) >>";
+    let (ap, fonts) = display_of(annot);
+    assert_eq!(base_fonts(&fonts), ["Times-Roman"]);
+    assert!(ap.contains("/TiRo 14 Tf\n0 0.502 0 rg\n"), "{ap}");
+    let junk = format!("font: NaNpt; font-size: inf; color: rgb(1e999, x); {}", "\u{FFFD}".repeat(20_000));
+    let annot = format!("<< /Type /Annot /Subtype /FreeText /Rect [45 630 165 700] /DA (0 0 1 rg /Cour 9 Tf) /DS ({junk}) /Contents (Hi) >>");
+    let (ap, fonts) = display_of(&annot);
+    assert_eq!(base_fonts(&fonts), ["Courier"]);
+    assert!(ap.contains("/Cour 9 Tf\n0 0 1 rg\n"), "{ap}");
+}
+
+/// New text in a box drawn in Courier stays Courier: its rich text says so.
+#[test]
+fn new_text_keeps_a_foreign_box_face() {
+    let mut doc = document_of(&[
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>",
+        b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>",
+        b"<< /Type /Annot /Subtype /FreeText /Rect [45 630 165 700] /DA (0 g /Cour 12 Tf) /Contents (Hi) >>",
+    ]);
+    set_contents(&mut doc, 0, 0, "Hello", &meta("")).unwrap();
+    let d = &list(&doc, 0)[0];
+    assert_eq!(text(d, b"DS"), "font: Courier 12pt; text-align:left; color:#000000");
+    assert!(ap_content(&doc, d).contains("/Cour 12 Tf"));
+}
+
+/// A text box whose `/DS` overrides `/DA` reports the colour and size it is drawn in, and a colour
+/// or size change keeps the other drawn value.
+#[test]
+fn text_box_properties_report_the_drawn_style() {
+    let doc = || {
+        document_of(&[
+            b"<< /Type /Catalog /Pages 2 0 R >>",
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>",
+            b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>",
+            b"<< /Type /Annot /Subtype /FreeText /Rect [45 500 300 700] /Contents (Hi) /DA (1 0 0 rg /Helv 12 Tf) /DS (font: Helvetica 24pt; color:#0000FF) >>",
+        ])
+    };
+    let mut d = doc();
+    let p = props(&d, 0, 0).unwrap();
+    assert_eq!((p.color, p.font_size), (Some([0.0, 0.0, 1.0]), Some(24.0)));
+    set_style(&mut d, 0, 0, StyleChange::new(Some([0.0, 1.0, 0.0]), None, None, None), &meta("")).unwrap();
+    let p = props(&d, 0, 0).unwrap();
+    assert_eq!((p.color, p.font_size), (Some([0.0, 1.0, 0.0]), Some(24.0)), "a colour change keeps the drawn size");
+    let mut d = doc();
+    set_font_size(&mut d, 0, 0, 18.0, &meta("")).unwrap();
+    let p = props(&d, 0, 0).unwrap();
+    assert_eq!((p.color, p.font_size), (Some([0.0, 0.0, 1.0]), Some(18.0)), "a size change keeps the drawn colour");
+}
+
+/// A redaction mark without `/QuadPoints` marks `/Rect` (Table 195). While marked it is outlined
+/// only when it names an outline colour (an array `/OC` of three numbers); without one it draws
+/// nothing. Marks with quadrilaterals and no `/OC` colour are outlined in `/C` as before.
+#[test]
+fn redaction_marks_without_quadpoints_outline_their_rect_in_their_oc_colour() {
+    let (ap, _) = display_of("<< /Type /Annot /Subtype /Redact /Rect [45 470 165 540] /IC [0 0 0] /OC [1 0 0] /C [0 0 1] >>");
+    assert_eq!(ap, "1 0 0 RG\n1 w\n45.5 539.5 m 164.5 539.5 l 164.5 470.5 l 45.5 470.5 l h S\n");
+    // No /OC colour: nothing to draw while marked (no /C outline, no /IC fill, no overlay text).
+    let blank = |annot: &str| {
+        let annot = format!("<< /Type /Annot /Subtype /Redact /Rect [45 470 165 540] {annot} >>");
+        let doc = document_of(&[
+            b"<< /Type /Catalog /Pages 2 0 R >>",
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>",
+            b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>",
+            annot.as_bytes(),
+        ]);
+        with_missing_appearances(&doc).is_none()
+    };
+    // An /OC that isn't three finite numbers is no colour; an optional-content dictionary keeps its meaning.
+    for annot in [
+        "/C [0.9 0.1 0.1]",
+        "/IC [0 0 0] /OverlayText (REDACTED) /DA (1 1 1 rg /Helv 10 Tf) /C [0.9 0.1 0.1]",
+        "/OC [1 0]",
+        "/OC [(a) 0 0]",
+        "/OC << /Type /OCG /Name (L) >>",
+    ] {
+        assert!(blank(annot), "{annot}");
+    }
+    // With /OC, the interior colour and overlay text still wait for the redaction to be applied.
+    let (ap, _) =
+        display_of("<< /Type /Annot /Subtype /Redact /Rect [45 470 165 540] /OC [1 0 0] /IC [0 0 0] /OverlayText (X) /DA (1 1 1 rg /Helv 10 Tf) >>");
+    assert!(!ap.contains(" f\n") && !ap.contains("Tj"), "{ap}");
+    // With quadrilaterals and no /OC: the /C outline, as before.
+    let (ap, _) = display_of("<< /Type /Annot /Subtype /Redact /Rect [45 470 165 540] /QuadPoints [45 540 165 540 45 470 165 470] /C [0 0 1] >>");
+    assert_eq!(ap, "0 0 1 RG\n1 w\n45 540 m 165 540 l 165 470 l 45 470 l h S\n");
+}
+
+/// A redaction mark with quadrilaterals is outlined in its array `/OC` colour when it has one,
+/// over `/C`; without `/OC` in `/C`, and without either in the default red.
+#[test]
+fn redaction_marks_with_quadpoints_take_their_outline_from_oc_then_c() {
+    let quad = |extra: &str| {
+        display_of(&format!("<< /Type /Annot /Subtype /Redact /Rect [45 470 165 540] /QuadPoints [45 540 165 540 45 470 165 470] {extra} >>")).0
+    };
+    let outline = "1 w\n45 540 m 165 540 l 165 470 l 45 470 l h S\n";
+    assert_eq!(quad("/OC [0 0 1]"), format!("0 0 1 RG\n{outline}"), "/OC blue");
+    assert_eq!(quad("/OC [0 0 1] /C [0 1 0]"), format!("0 0 1 RG\n{outline}"), "/OC over /C");
+    assert_eq!(quad("/C [0 1 0]"), format!("0 1 0 RG\n{outline}"), "/C only");
+    assert_eq!(quad(""), format!("0.89 0.13 0.13 RG\n{outline}"), "neither: red");
+    // An optional-content /OC is not a colour.
+    assert_eq!(quad("/OC << /Type /OCG /Name (L) >> /C [0 1 0]"), format!("0 1 0 RG\n{outline}"), "OCG /OC");
+}
+
+/// The six unapplied marks of the synthetic fixture the parity note's observation used: an array
+/// `/OC` outlines the mark in its colour with or without `/QuadPoints`, beside `/C` or `/IC`; a
+/// mark without `/QuadPoints` or `/OC` draws nothing while marked.
+#[test]
+fn unapplied_redaction_marks_follow_their_oc_outline_colour() {
+    let quad = "/QuadPoints [60 520 260 520 60 420 260 420]";
+    let cases = [
+        ("/OC [0 0 1]", Some("0 0 1 RG")),
+        ("/C [0 1 0]", None),
+        ("/OC [0 0 1] /C [0 1 0]", Some("0 0 1 RG")),
+        ("/OC [0 0 1] /IC [0 0 0]", Some("0 0 1 RG")),
+        ("", None),
+        (&format!("/OC [0 0 1] {quad}"), Some("0 0 1 RG")),
+    ];
+    for (extra, colour) in cases {
+        let annot = format!("<< /Type /Annot /Subtype /Redact /Rect [60 420 260 520] {extra} >>");
+        match colour {
+            Some(colour) => {
+                let (ap, _) = display_of(&annot);
+                assert!(ap.starts_with(&format!("{colour}\n1 w\n")) && ap.ends_with(" h S\n") && !ap.contains(" f\n"), "{extra}: {ap}");
+            }
+            None => {
+                let doc = document_of(&[
+                    b"<< /Type /Catalog /Pages 2 0 R >>",
+                    b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>",
+                    b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>",
+                    annot.as_bytes(),
+                ]);
+                assert!(with_missing_appearances(&doc).is_none(), "{extra}: drawn");
+            }
+        }
+    }
+}
+
+/// New text re-fits the box in the face and size it is drawn in (`/DA`, or `/DS` where it sets
+/// one), so the rectangle holds every drawn line.
+#[test]
+fn new_text_refits_the_box_in_its_drawn_face_and_size() {
+    let bottom = |annot: &str, new_text: &str| {
+        let mut doc = document_of(&[
+            b"<< /Type /Catalog /Pages 2 0 R >>",
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>",
+            b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>",
+            annot.as_bytes(),
+        ]);
+        set_contents(&mut doc, 0, 0, new_text, &meta("")).unwrap();
+        let d = &list(&doc, 0)[0];
+        let rect: Vec<f64> = d.get(b"Rect").and_then(|r| r.as_array()).unwrap().iter().filter_map(|x| x.as_f64()).collect();
+        assert_eq!(rect[3], 700.0, "the top edge stays");
+        (rect[1], ap_content(&doc, d).matches(" Tj").count())
+    };
+    // The default 1-pt border: a 3-pt pad, so 114 pt for the text; the box is lines × 1.2 × size + 8 tall.
+    let words = "iiiiiiiiii iiiiiiiiii";
+    let fits = |b: f64, want: f64| (b - want).abs() < 1e-9;
+    let (b, n) = bottom("<< /Type /Annot /Subtype /FreeText /Rect [45 630 165 700] /DA (0 g /Helv 12 Tf) /Contents (Hi) >>", words);
+    assert!(n == 1 && fits(b, 700.0 - 14.4 - 8.0), "Helvetica: one line, bottom {b}");
+    let (b, n) = bottom("<< /Type /Annot /Subtype /FreeText /Rect [45 630 165 700] /DA (0 g /Cour 12 Tf) /Contents (Hi) >>", words);
+    assert!(n == 2 && fits(b, 700.0 - 2.0 * 14.4 - 8.0), "Courier: two lines, bottom {b}");
+    let (b, n) =
+        bottom("<< /Type /Annot /Subtype /FreeText /Rect [45 630 165 700] /DA (0 g /Helv 12 Tf) /DS (font: Helvetica 24pt) /Contents (Hi) >>", "Hi");
+    assert!(n == 1 && fits(b, 700.0 - 28.8 - 8.0), "/DS 24 pt: bottom {b}");
+}
+
+/// A colour or size change keeps the face a text box is drawn in: `/DA` keeps naming its font
+/// resource (here Courier, and a `/DR` font that is Times Bold), and `/DS` says the same face
+/// (ISO 32000-2 Table 177).
+#[test]
+fn a_colour_or_size_change_keeps_the_drawn_face() {
+    use pdfcraft_fonts::Std14;
+    let doc = |da: &str| {
+        let annot = format!("<< /Type /Annot /Subtype /FreeText /Rect [45 500 300 700] /Contents (Hi) /DA ({da}) >>");
+        document_of(&[
+            b"<< /Type /Catalog /Pages 2 0 R /AcroForm << /DR << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Times-Bold >> >> >> >> >>",
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>",
+            b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>",
+            annot.as_bytes(),
+        ])
+    };
+    let face = |doc: &Document| {
+        let d = &list(doc, 0)[0];
+        text_style::text_style(d, text_style::dr_face(doc, d)).face
+    };
+    for (da, font, want) in [("0 g /Cour 12 Tf", "/Cour", Std14::Courier), ("0 g /F1 12 Tf", "/F1", Std14::TimesBold)] {
+        let mut d = doc(da);
+        assert_eq!(face(&d), want, "{da}");
+        set_style(&mut d, 0, 0, StyleChange::new(Some([1.0, 0.0, 0.0]), None, None, None), &meta("")).unwrap();
+        assert_eq!(face(&d), want, "colour change, {da}");
+        assert!(text(&list(&d, 0)[0], b"DA").contains(&format!("{font} 12 Tf")), "{da}");
+        set_font_size(&mut d, 0, 0, 18.0, &meta("")).unwrap();
+        assert_eq!(face(&d), want, "size change, {da}");
+        let p = props(&d, 0, 0).unwrap();
+        assert_eq!((p.color, p.font_size), (Some([1.0, 0.0, 0.0]), Some(18.0)), "{da}");
+    }
+    // The Courier box's appearance draws Courier.
+    let mut d = doc("0 g /Cour 12 Tf");
+    set_style(&mut d, 0, 0, StyleChange::new(Some([1.0, 0.0, 0.0]), None, None, None), &meta("")).unwrap();
+    assert!(ap_content(&d, &list(&d, 0)[0]).contains("/Cour 12 Tf"));
+}
+
+/// A text box without an appearance is drawn from its `/DA` however the file wrote it: a `Tf`
+/// without a size, a zero size, a font name the form's `/DR` doesn't list, and hostile operands.
+/// The stream names the face the box is drawn in at a usable size, and no number in it is `NaN`
+/// or infinite.
+#[test]
+fn text_boxes_draw_from_any_da_string() {
+    let doc = |da: &str| {
+        let annot = format!("<< /Type /Annot /Subtype /FreeText /Rect [45 500 300 700] /Contents (Hi) /DA ({da}) >>");
+        document_of(&[
+            b"<< /Type /Catalog /Pages 2 0 R /AcroForm << /DR << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Times-Bold >> >> >> >> >>",
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>",
+            b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>",
+            annot.as_bytes(),
+        ])
+    };
+    for (da, tf, colour) in [
+        ("0 g /Cour Tf", "/Cour 12 Tf", "0 0 0 rg"),
+        ("0 g /Cour 0 Tf", "/Cour 12 Tf", "0 0 0 rg"),
+        ("0 g /Cour -5 Tf", "/Cour 12 Tf", "0 0 0 rg"),
+        ("NaN NaN NaN rg /Cour NaN Tf", "/Cour 12 Tf", "0 0 0 rg"),
+        ("inf g /Cour inf Tf", "/Cour 12 Tf", "0 0 0 rg"),
+        ("1 0 0 rg /Cour 1e300 Tf", "/Cour 400 Tf", "1 0 0 rg"),
+        // In `/DR`: Times Bold. Not in `/DR` and no standard name: Helvetica.
+        ("0 g /F1 Tf", "/TiBo 12 Tf", "0 0 0 rg"),
+        ("0 g /F9 11 Tf", "/Helv 11 Tf", "0 0 0 rg"),
+        // No Tf at all, or garbage.
+        ("0 0 1 rg", "/Helv 12 Tf", "0 0 1 rg"),
+        ("] [ << >> Tf", "/Helv 12 Tf", "0 0 0 rg"),
+    ] {
+        let mut d = doc(da);
+        set_appearance(&mut d, ObjRef::new(4, 0)).unwrap();
+        let content = ap_content(&d, &list(&d, 0)[0]);
+        assert!(content.contains(tf), "{da:?}: {content}");
+        assert!(content.contains(colour), "{da:?}: {content}");
+        let lower = content.to_ascii_lowercase();
+        assert!(!lower.contains("nan") && !lower.contains("inf"), "{da:?}: {content}");
+    }
+}
+
+/// A callout with its text box at [300 600 500 640], knee [260 620] and arrow point [200 520]:
+/// the knee line runs level from the box's left side, as Acrobat draws it.
+fn callout_fixture() -> (Document, usize) {
+    let mut doc = fixture();
+    let c = add_annotation(
+        &mut doc,
+        &new(
+            0,
+            Shape::Callout {
+                rect: [300.0, 600.0, 500.0, 640.0],
+                knee: [260.0, 620.0],
+                point: [200.0, 520.0],
+                font_size: 12.0,
+                ending: LineEnding::OpenArrow,
+            },
+        ),
+        &meta("c"),
+    )
+    .unwrap();
+    (doc, c)
+}
+
+fn nums(d: &Dict, k: &[u8]) -> Vec<f64> {
+    d.get(k).unwrap().as_array().unwrap().iter().map(|o| o.as_f64().unwrap()).collect()
+}
+
+/// The text box a callout's `/Rect` and `/RD` describe.
+fn callout_box_of(d: &Dict) -> [f64; 4] {
+    let (r, rd) = (rect(d), nums(d, b"RD"));
+    [r[0] + rd[0], r[1] + rd[1], r[2] - rd[2], r[3] - rd[3]]
+}
+
+/// #1152: a callout's arrow point and knee move on their own, as its handles drag them (Acrobat:
+/// "Callout text boxes have three parts: a text box, a knee line, and an end-point line. You can
+/// resize each part by dragging a handle", Acrobat DC Help, 11/28/2019, p. 357). The text box
+/// stays and the line re-attaches to it.
+#[test]
+fn a_callouts_arrow_point_and_knee_move_on_their_own() {
+    let (mut doc, c) = callout_fixture();
+    // The arrow point alone: the knee and the box stay.
+    set_points(&mut doc, 0, c, &[[150.0, 400.0], [260.0, 620.0]], &meta("p")).unwrap();
+    let doc = reopen(&doc);
+    let d = &list(&doc, 0)[c];
+    assert_eq!(nums(d, b"CL"), [150.0, 400.0, 260.0, 620.0, 300.0, 620.0]);
+    assert_eq!(callout_box_of(d), [300.0, 600.0, 500.0, 640.0]);
+    // /Rect holds the line (padded) and the box.
+    let r = rect(d);
+    assert!(r[0] < 150.0 && r[1] < 400.0 && r[2] >= 500.0 && r[3] >= 640.0, "{r:?}");
+    assert!(ap_content(&doc, d).contains("150 400 m"), "the line starts at the new arrow point");
+    // The knee alone, to the right of the box: the line now meets the right side.
+    let mut doc = doc;
+    set_points(&mut doc, 0, c, &[[150.0, 400.0], [560.0, 620.0]], &meta("k")).unwrap();
+    let d = &list(&doc, 0)[c];
+    assert_eq!(nums(d, b"CL"), [150.0, 400.0, 560.0, 620.0, 500.0, 620.0]);
+    assert_eq!(callout_box_of(d), [300.0, 600.0, 500.0, 640.0]);
+    assert_eq!(summaries(&doc).iter().find(|s| s.index == c).map(|s| s.points.clone()), Some(vec![[150.0, 400.0], [560.0, 620.0]]));
+}
+
+/// A callout's leader line as its box moves or is resized, as Acrobat Pro DC (a 2021 Continuous
+/// release) was seen to keep it (#1152): the arrow point never moves ("The text box moves around
+/// a stationary anchor point", Acrobat DC Help, 11/28/2019, p. 357); moved, the knee and the end
+/// come along;
+/// resized with the side the line meets left in place, nothing changes; that side moved, the line
+/// is laid out again from the side facing the arrow point with a 12 pt knee line, and the box stays
+/// where it was put (Acrobat moves it next to the arrow point).
+#[test]
+fn a_callouts_box_moves_around_its_arrow_and_keeps_the_knee_beside_it() {
+    let (mut doc, c) = callout_fixture();
+    let cl = |doc: &Document| nums(&list(doc, 0)[c], b"CL");
+    // Wider and taller, its left side where it was: the line stays.
+    set_rect(&mut doc, 0, c, [300.0, 580.0, 540.0, 640.0], &meta("r")).unwrap();
+    assert_eq!(cl(&doc), [200.0, 520.0, 260.0, 620.0, 300.0, 620.0]);
+    // Moved 40 right and 10 up, same size: the knee and the end come along.
+    set_rect(&mut doc, 0, c, [340.0, 590.0, 580.0, 650.0], &meta("m")).unwrap();
+    assert_eq!(cl(&doc), [200.0, 520.0, 300.0, 630.0, 340.0, 630.0]);
+    // The left side moved: the line meets its middle, the knee 12 pt out.
+    set_rect(&mut doc, 0, c, [380.0, 590.0, 580.0, 650.0], &meta("s")).unwrap();
+    assert_eq!(cl(&doc), [200.0, 520.0, 368.0, 620.0, 380.0, 620.0]);
+    assert_eq!(callout_box_of(&list(&doc, 0)[c]), [380.0, 590.0, 580.0, 650.0], "the box stays where it was put");
+    // Past the arrow point: the line leaves from the side facing it.
+    set_rect(&mut doc, 0, c, [100.0, 600.0, 180.0, 640.0], &meta("p")).unwrap();
+    assert_eq!(cl(&doc), [200.0, 520.0, 192.0, 620.0, 180.0, 620.0]);
+}
+
+/// The line is laid out again when the end no longer lies on the side it met (the box shrank past
+/// it), and from the side facing the arrow point, not the old knee, which can end up over the box.
+#[test]
+fn a_callout_is_laid_out_again_when_its_end_leaves_the_box() {
+    let (mut doc, c) = callout_fixture();
+    // Left side unmoved, but the box now starts above the end (300, 620).
+    set_rect(&mut doc, 0, c, [300.0, 625.0, 500.0, 640.0], &meta("a")).unwrap();
+    assert_eq!(nums(&list(&doc, 0)[c], b"CL"), [200.0, 520.0, 288.0, 632.5, 300.0, 632.5]);
+    let (mut doc, c) = callout_fixture();
+    // Over the old knee (260, 620), which would face the bottom; the arrow faces the left side.
+    set_rect(&mut doc, 0, c, [250.0, 590.0, 450.0, 640.0], &meta("b")).unwrap();
+    assert_eq!(nums(&list(&doc, 0)[c], b"CL"), [200.0, 520.0, 238.0, 615.0, 250.0, 615.0]);
+}
+
+/// Review on #4094: the page sends a callout's text box back as `f32` values, so a box moved or
+/// resized on screen comes back a few hundred-thousandths of a point off. That still counts as a
+/// move (the knee comes along) and as the same side (the line stays), not as a new layout.
+#[test]
+fn a_callout_box_sent_back_as_f32_still_moves_and_keeps_its_line() {
+    let mut doc = fixture();
+    let c = add_annotation(
+        &mut doc,
+        &new(
+            0,
+            Shape::Callout {
+                rect: [323.05, 292.14, 506.98, 374.91],
+                knee: [311.05, 333.53],
+                point: [299.05, 274.83],
+                font_size: 12.0,
+                ending: LineEnding::OpenArrow,
+            },
+        ),
+        &meta("c"),
+    )
+    .unwrap();
+    let f32s = |r: [f64; 4]| r.map(|v| f64::from(v as f32));
+    let cl = |doc: &Document| nums(&list(doc, 0)[c], b"CL");
+    let before = cl(&doc);
+    // Resized from the bottom right, its left side where it was.
+    set_rect(&mut doc, 0, c, f32s([323.05, 250.14, 540.98, 374.91]), &meta("r")).unwrap();
+    assert_eq!(cl(&doc), before, "the line stays");
+    // Moved by (47.62, 26.13), same size.
+    let tb = callout_box_of(&list(&doc, 0)[c]);
+    set_rect(&mut doc, 0, c, f32s([tb[0] + 47.62, tb[1] + 26.13, tb[2] + 47.62, tb[3] + 26.13]), &meta("m")).unwrap();
+    let after = cl(&doc);
+    assert!((after[2] - (before[2] + 47.62)).abs() < 0.01 && (after[3] - (before[3] + 26.13)).abs() < 0.01, "the knee came along: {after:?}");
+    assert_eq!((after[0], after[1]), (before[0], before[1]), "the arrow point stayed");
+}
+
+/// Review on #4094: a `/CL` with something other than a number in it is not read at all, rather
+/// than read with its numbers shifted into the wrong points.
+#[test]
+fn a_callout_line_with_a_non_number_is_not_read() {
+    let (mut doc, c) = callout_fixture();
+    let (_, r) = annot_ref(&mut doc, 0, c).unwrap();
+    doc.update_dict(r, |d| {
+        d.set(
+            b"CL".to_vec(),
+            Object::Array(vec![Object::name("x"), Object::Real(200.0), Object::Real(520.0), Object::Real(260.0), Object::Real(620.0)]),
+        )
+    })
+    .unwrap();
+    assert!(matches!(set_points(&mut doc, 0, c, &[[1.0, 1.0]], &meta("x")), Err(AnnotError::Invalid(_))), "not a callout line it can reshape");
+    assert_eq!(summaries(&doc).into_iter().find(|s| s.index == c).map(|s| (s.points.len(), s.text_box.is_some())), Some((0, false)));
+}
+
+/// A new callout's knee is Acrobat's: 12 pt out from the middle of the side facing the arrow.
+#[test]
+fn a_new_callouts_knee_line_is_twelve_points() {
+    let tb = [300.0, 600.0, 500.0, 640.0];
+    assert_eq!(callout_knee(tb, [200.0, 520.0]), [288.0, 620.0]);
+    assert_eq!(callout_knee(tb, [600.0, 700.0]), [512.0, 620.0]);
+    assert_eq!(callout_knee(tb, [400.0, 700.0]), [400.0, 652.0]);
+    assert_eq!(callout_knee(tb, [400.0, 500.0]), [400.0, 588.0]);
+}
+
+/// ISO 32000-2 Table 177: `/CL` may have four numbers (no knee). Resizing such a callout kept its
+/// line only with six, so the box lost `/RD` and the line was left outside `/Rect`.
+#[test]
+fn a_callout_without_a_knee_keeps_its_line() {
+    let (mut doc, c) = callout_fixture();
+    let (_, r) = annot_ref(&mut doc, 0, c).unwrap();
+    doc.update_dict(r, |d| d.set(b"CL".to_vec(), num_array(&[200.0, 520.0, 300.0, 620.0]))).unwrap();
+    set_rect(&mut doc, 0, c, [300.0, 580.0, 500.0, 640.0], &meta("r")).unwrap();
+    let d = &list(&doc, 0)[c];
+    assert_eq!(nums(d, b"CL"), [200.0, 520.0, 300.0, 620.0], "still four numbers, the left side unmoved");
+    assert_eq!(callout_box_of(d), [300.0, 580.0, 500.0, 640.0]);
+    assert!(rect(d)[1] < 520.0, "/Rect holds the line");
+    // Its one point is the arrow; a second adds a knee.
+    assert_eq!(summaries(&doc).iter().find(|s| s.index == c).map(|s| s.points.clone()), Some(vec![[200.0, 520.0]]));
+    set_points(&mut doc, 0, c, &[[210.0, 500.0]], &meta("p")).unwrap();
+    assert_eq!(nums(&list(&doc, 0)[c], b"CL"), [210.0, 500.0, 300.0, 620.0]);
+    set_points(&mut doc, 0, c, &[[210.0, 500.0], [250.0, 610.0]], &meta("k")).unwrap();
+    assert_eq!(nums(&list(&doc, 0)[c], b"CL"), [210.0, 500.0, 250.0, 610.0, 300.0, 620.0]);
+    // Back to no knee, then the left side moved: the end meets its middle.
+    let (_, r) = annot_ref(&mut doc, 0, c).unwrap();
+    doc.update_dict(r, |d| d.set(b"CL".to_vec(), num_array(&[210.0, 500.0, 300.0, 620.0]))).unwrap();
+    set_rect(&mut doc, 0, c, [280.0, 590.0, 500.0, 640.0], &meta("s")).unwrap();
+    assert_eq!(nums(&list(&doc, 0)[c], b"CL"), [210.0, 500.0, 280.0, 615.0]);
+}
+
+#[test]
+fn a_callout_refuses_points_it_cant_have() {
+    let (mut doc, c) = callout_fixture();
+    let before = list(&doc, 0)[c].clone();
+    for bad in [&[][..], &[[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]][..], &[[f64::NAN, 1.0]][..], &[[1e9, 1.0]][..]] {
+        assert!(matches!(set_points(&mut doc, 0, c, bad, &meta("x")), Err(AnnotError::Invalid(_))), "{bad:?}");
+    }
+    assert_eq!(list(&doc, 0)[c], before, "left as it was");
+    // Without a readable /RD there is no box to keep, so nothing moves.
+    let (_, r) = annot_ref(&mut doc, 0, c).unwrap();
+    doc.update_dict(r, |d| {
+        d.remove(b"RD");
+    })
+    .unwrap();
+    assert!(matches!(set_points(&mut doc, 0, c, &[[1.0, 1.0]], &meta("x")), Err(AnnotError::Invalid(_))));
+    // Nor with an /RD that puts the box outside /Rect (negative) or leaves no box (under 1 pt):
+    // set_points refuses, and summaries offer no text box to drag.
+    let outer = rect(&list(&doc, 0)[c]);
+    for rd in [[-5.0, 50.0, 0.0, 0.0], [0.0, 0.0, outer[2] - outer[0] - 0.5, 0.0]] {
+        doc.update_dict(r, |d| d.set(b"RD".to_vec(), num_array(&rd))).unwrap();
+        assert!(matches!(set_points(&mut doc, 0, c, &[[1.0, 1.0]], &meta("x")), Err(AnnotError::Invalid(_))), "{rd:?}");
+        assert_eq!(summaries(&doc).into_iter().find(|s| s.index == c).and_then(|s| s.text_box), None, "{rd:?}");
+    }
+}
+
+/// The side a knee faces: left or right of the box first, then above or below. A knee on the line
+/// of the left or right edge past the box is above or below it; the ties are in
+/// `a_callouts_knee_has_one_side_for_every_tie`.
+#[test]
+fn a_callouts_knee_faces_the_side_it_is_beyond() {
+    let tb = [100.0, 100.0, 200.0, 150.0];
+    assert_eq!(callout_side(tb, [99.0, 125.0]), Side::Left);
+    assert_eq!(callout_side(tb, [201.0, 125.0]), Side::Right);
+    assert_eq!(callout_side(tb, [100.0, 160.0]), Side::Top, "on the left edge's line");
+    assert_eq!(callout_side(tb, [200.0, 90.0]), Side::Bottom, "on the right edge's line");
+    assert_eq!(callout_side(tb, [150.0, 125.0]), Side::Bottom, "inside");
+    assert!(Side::Left.horizontal() && Side::Right.horizontal() && !Side::Top.horizontal() && !Side::Bottom.horizontal());
+}
+
+#[test]
+fn summaries_give_a_callouts_points_and_text_box() {
+    let (doc, c) = callout_fixture();
+    let s = summaries(&doc).into_iter().find(|s| s.index == c).unwrap();
+    assert_eq!(s.points, vec![[200.0, 520.0], [260.0, 620.0]]);
+    assert_eq!(s.text_box, Some([300.0, 600.0, 500.0, 640.0]));
+    let square = summaries(&doc).into_iter().find(|s| s.subtype == "Square").unwrap();
+    assert_eq!((square.points.len(), square.text_box), (0, None));
+}
+
+/// A callout whose text box can't be read (no `/RD`, a negative inset, or no box left inside
+/// `/Rect`) lists no points either, as `pdfcraft_render::inspect` does: `set_points` refuses it.
+#[test]
+fn summaries_give_no_callout_points_without_a_text_box() {
+    for rd in [None, Some([-1.0, 0.0, 0.0, 0.0]), Some([0.0, 0.0, 0.0, 1000.0])] {
+        let (mut doc, c) = callout_fixture();
+        let (_, r) = annot_ref(&mut doc, 0, c).unwrap();
+        doc.update_dict(r, |d| match rd {
+            Some(rd) => d.set(b"RD".to_vec(), num_array(&rd)),
+            None => {
+                d.remove(b"RD");
+            }
+        })
+        .unwrap();
+        let s = summaries(&doc).into_iter().find(|s| s.index == c).unwrap();
+        assert_eq!((s.points.len(), s.text_box), (0, None), "/RD {rd:?}");
+    }
+}
+
+/// Review on #4094: a callout given its arrow point alone keeps its knee. The new line was built
+/// from the one point and the end, so a six-number `/CL` silently became four.
+#[test]
+fn a_callouts_arrow_point_alone_keeps_its_knee() {
+    let (mut doc, c) = callout_fixture();
+    let before = nums(&list(&doc, 0)[c], b"CL");
+    assert_eq!(before.len(), 6, "{before:?}");
+    set_points(&mut doc, 0, c, &[[190.0, 500.0]], &meta("p")).unwrap();
+    let after = nums(&list(&doc, 0)[c], b"CL");
+    assert_eq!(after.len(), 6, "the knee stays: {after:?}");
+    assert_eq!(after[..2], [190.0, 500.0], "the arrow point moved");
+    assert_eq!(after[2..], before[2..], "the knee and the end are where they were");
+}
+
+/// Review on #4094: every tie has one defined side. Beside the box (left or right of it) wins over
+/// above or below it, so a knee off a corner diagonally, or on the line of the top or bottom edge
+/// past the box, takes the left or right side. On the box's outline a knee takes the side whose
+/// edge it lies on (within 0.01 pt), and a corner the left or right side, as beside the box.
+/// Inside the box, or with a coordinate that isn't a number, it takes the bottom side.
+#[test]
+fn a_callouts_knee_has_one_side_for_every_tie() {
+    let tb = [100.0, 100.0, 200.0, 150.0];
+    let cases: [([f64; 2], Side, &str); 30] = [
+        ([100.004, 125.0], Side::Left, "on the left edge, give or take an f32"),
+        ([199.996, 125.0], Side::Right, "on the right edge, give or take an f32"),
+        ([150.0, 149.996], Side::Top, "on the top edge, give or take an f32"),
+        ([100.02, 125.0], Side::Bottom, "inside, past the slack"),
+        ([150.0, 125.0], Side::Bottom, "inside, at the middle"),
+        ([110.0, 145.0], Side::Bottom, "inside, near the top-left corner"),
+        ([100.0, 125.0], Side::Left, "on the left edge"),
+        ([200.0, 125.0], Side::Right, "on the right edge"),
+        ([150.0, 150.0], Side::Top, "on the top edge"),
+        ([150.0, 100.0], Side::Bottom, "on the bottom edge"),
+        ([100.0, 150.0], Side::Left, "the top-left corner"),
+        ([200.0, 150.0], Side::Right, "the top-right corner"),
+        ([100.0, 100.0], Side::Left, "the bottom-left corner"),
+        ([200.0, 100.0], Side::Right, "the bottom-right corner"),
+        ([90.0, 150.0], Side::Left, "the top edge's line, left of the box"),
+        ([210.0, 150.0], Side::Right, "the top edge's line, right of the box"),
+        ([90.0, 100.0], Side::Left, "the bottom edge's line, left of the box"),
+        ([100.0, 160.0], Side::Top, "the left edge's line, above the box"),
+        ([100.0, 90.0], Side::Bottom, "the left edge's line, below the box"),
+        ([200.0, 160.0], Side::Top, "the right edge's line, above the box"),
+        ([90.0, 160.0], Side::Left, "diagonally off the top-left corner"),
+        ([210.0, 90.0], Side::Right, "diagonally off the bottom-right corner"),
+        ([f64::NAN, 125.0], Side::Bottom, "x not a number"),
+        ([150.0, f64::NAN], Side::Bottom, "y not a number"),
+        ([f64::NAN, 160.0], Side::Bottom, "x not a number, y above the box"),
+        ([f64::NAN, 90.0], Side::Bottom, "x not a number, y below the box"),
+        ([90.0, f64::NAN], Side::Bottom, "y not a number, x left of the box"),
+        ([210.0, f64::NAN], Side::Bottom, "y not a number, x right of the box"),
+        ([f64::NEG_INFINITY, 125.0], Side::Left, "infinitely far left"),
+        ([150.0, f64::INFINITY], Side::Top, "infinitely far up"),
+    ];
+    for (knee, side, what) in cases {
+        assert_eq!(callout_side(tb, knee), side, "{what}: {knee:?}");
+        // Written corners first, the box is the same box.
+        assert_eq!(callout_side([200.0, 150.0, 100.0, 100.0], knee), side, "{what}, corners first");
+        // The line meets the middle of that side.
+        let want = match side {
+            Side::Left => [100.0, 125.0],
+            Side::Right => [200.0, 125.0],
+            Side::Top => [150.0, 150.0],
+            Side::Bottom => [150.0, 100.0],
+        };
+        assert_eq!(callout_attach(tb, knee), want, "{what}");
+    }
+}
+
+/// A knee dragged exactly onto the box's left edge keeps the line on the left side, where its end
+/// already is, instead of sending it across the box to the bottom; a knee dragged inside the box
+/// meets the bottom side.
+#[test]
+fn a_callouts_knee_on_or_inside_the_box_meets_a_defined_side() {
+    let (mut doc, c) = callout_fixture();
+    set_points(&mut doc, 0, c, &[[200.0, 520.0], [300.0, 630.0]], &meta("edge")).unwrap();
+    assert_eq!(nums(&list(&doc, 0)[c], b"CL"), [200.0, 520.0, 300.0, 630.0, 300.0, 620.0]);
+    set_points(&mut doc, 0, c, &[[200.0, 520.0], [350.0, 620.0]], &meta("inside")).unwrap();
+    assert_eq!(nums(&list(&doc, 0)[c], b"CL"), [200.0, 520.0, 350.0, 620.0, 400.0, 600.0]);
+    assert_eq!(callout_box_of(&list(&doc, 0)[c]), [300.0, 600.0, 500.0, 640.0], "the box stays");
+}
+
+/// A callout's `/CL` read as numbers, and the check every edit must pass: four numbers (arrow
+/// point, end) or six (arrow point, knee, end), all finite (ISO 32000-2 Table 177), every point
+/// inside `/Rect`, and a text box (`/Rect` inset by `/RD`) at least 1 pt a side.
+fn assert_callout_line(d: &Dict, len: usize, what: &str) -> Vec<f64> {
+    let cl = nums(d, b"CL");
+    assert_eq!(cl.len(), len, "{what}: {cl:?}");
+    assert!(cl.iter().all(|v| v.is_finite()), "{what}: {cl:?}");
+    let r = rect(d);
+    for p in cl.chunks(2) {
+        assert!(p[0] >= r[0] - 1e-6 && p[0] <= r[2] + 1e-6 && p[1] >= r[1] - 1e-6 && p[1] <= r[3] + 1e-6, "{what}: {p:?} outside {r:?}");
+    }
+    let tb = callout_box_of(d);
+    assert!(tb[2] - tb[0] >= 1.0 && tb[3] - tb[1] >= 1.0, "{what}: text box {tb:?}");
+    cl
+}
+
+/// Review on #4094: every edit of a callout keeps `/CL` four numbers when it had four and six when
+/// it had six: the arrow point dragged, the knee dragged, the box moved, the box resized, the whole
+/// callout moved, and the file saved and opened again.
+#[test]
+fn every_callout_edit_keeps_four_or_six_numbers() {
+    for len in [4usize, 6] {
+        let (mut doc, c) = callout_fixture();
+        if len == 4 {
+            let (_, r) = annot_ref(&mut doc, 0, c).unwrap();
+            doc.update_dict(r, |d| d.set(b"CL".to_vec(), num_array(&[200.0, 520.0, 300.0, 620.0]))).unwrap();
+        }
+        let cl = |doc: &Document, what: &str| assert_callout_line(&list(doc, 0)[c], len, &format!("{len}: {what}"));
+        set_points(&mut doc, 0, c, &[[150.0, 400.0]], &meta("tip")).unwrap();
+        assert_eq!(cl(&doc, "the arrow point")[..2], [150.0, 400.0]);
+        if len == 6 {
+            set_points(&mut doc, 0, c, &[[150.0, 400.0], [260.0, 630.0]], &meta("knee")).unwrap();
+            assert_eq!(cl(&doc, "the knee")[2..4], [260.0, 630.0]);
+        }
+        let tb = callout_box_of(&list(&doc, 0)[c]);
+        set_rect(&mut doc, 0, c, [tb[0] + 40.0, tb[1] + 10.0, tb[2] + 40.0, tb[3] + 10.0], &meta("box")).unwrap();
+        assert_eq!(cl(&doc, "the box moved")[..2], [150.0, 400.0], "the arrow point stays");
+        let tb = callout_box_of(&list(&doc, 0)[c]);
+        set_rect(&mut doc, 0, c, [tb[0] + 30.0, tb[1] - 20.0, tb[2] + 10.0, tb[3]], &meta("size")).unwrap();
+        let before = cl(&doc, "the box resized");
+        move_annotation(&mut doc, 0, c, 20.0, -15.0, &meta("move")).unwrap();
+        let after = cl(&doc, "the callout moved");
+        let shifted: Vec<f64> = before.iter().enumerate().map(|(i, v)| v + if i % 2 == 0 { 20.0 } else { -15.0 }).collect();
+        assert_eq!(after, shifted, "{len}: every point moves with it");
+        let doc = reopen(&doc);
+        cl(&doc, "saved and opened again");
+    }
+}
+
+/// Review on #4094: a `/CL` that is neither four nor six finite numbers (two, three, five or eight
+/// numbers, an infinite or not-a-number value, an empty array, a nested array, a name or a string)
+/// is not a callout line PdfCraft can reshape. No edit panics, the arrow point and knee are
+/// refused, and none writes a `/CL` of another length: resizing leaves it as it was and moving
+/// shifts its numbers in place. A `/CL` held as an indirect object is read as the line it is.
+#[test]
+fn a_hostile_callout_line_is_never_rewritten_into_another_shape() {
+    let reals = |v: &[f64]| Object::Array(v.iter().map(|x| Object::Real(*x)).collect());
+    let hostile: Vec<(&str, Object)> = vec![
+        ("two numbers", reals(&[200.0, 520.0])),
+        ("three numbers", reals(&[200.0, 520.0, 260.0])),
+        ("five numbers", reals(&[200.0, 520.0, 260.0, 620.0, 300.0])),
+        ("eight numbers", reals(&[200.0, 520.0, 260.0, 620.0, 280.0, 620.0, 300.0, 620.0])),
+        ("not a number", reals(&[200.0, f64::NAN, 260.0, 620.0, 300.0, 620.0])),
+        ("infinite", reals(&[f64::INFINITY, 520.0, 260.0, 620.0])),
+        ("empty", Object::Array(Vec::new())),
+        ("nested", Object::Array(vec![reals(&[200.0, 520.0]), reals(&[300.0, 620.0])])),
+        ("a name", Object::name("CL")),
+        ("a string", PdfString::text("200 520 300 620").into()),
+    ];
+    for (what, cl) in hostile {
+        let (mut doc, c) = callout_fixture();
+        let (_, r) = annot_ref(&mut doc, 0, c).unwrap();
+        doc.update_dict(r, |d| d.set(b"CL".to_vec(), cl.clone())).unwrap();
+        let len = cl.as_array().map(Vec::len);
+        for points in [&[[150.0, 400.0]][..], &[[150.0, 400.0], [260.0, 630.0]][..]] {
+            assert!(set_points(&mut doc, 0, c, points, &meta("p")).is_err(), "{what}: {points:?}");
+        }
+        // Compared as written: a not-a-number value is never equal to itself.
+        let same = |doc: &Document| format!("{:?}", list(doc, 0)[c].get(b"CL")) == format!("{:?}", Some(&cl));
+        assert!(same(&doc), "{what}: refused, so unchanged");
+        let s = summaries(&doc).into_iter().find(|s| s.index == c).unwrap();
+        assert_eq!((s.points.len(), s.text_box), (0, None), "{what}: nothing to drag");
+        let _ = set_rect(&mut doc, 0, c, [300.0, 580.0, 520.0, 640.0], &meta("r"));
+        assert!(same(&doc), "{what}: resizing leaves it as it was");
+        let _ = move_annotation(&mut doc, 0, c, 20.0, -15.0, &meta("m"));
+        assert_eq!(list(&doc, 0)[c].get(b"CL").and_then(Object::as_array).map(Vec::len), len, "{what}: moved in place");
+        reopen(&doc);
+    }
+    // Held as an indirect object, a six-number line is a callout line like any other.
+    let (mut doc, c) = callout_fixture();
+    let line = doc.add(reals(&[200.0, 520.0, 260.0, 620.0, 300.0, 620.0]));
+    let (_, r) = annot_ref(&mut doc, 0, c).unwrap();
+    doc.update_dict(r, |d| d.set(b"CL".to_vec(), Object::Ref(line))).unwrap();
+    set_points(&mut doc, 0, c, &[[150.0, 400.0]], &meta("p")).unwrap();
+    assert_eq!(assert_callout_line(&list(&doc, 0)[c], 6, "indirect"), [150.0, 400.0, 260.0, 620.0, 300.0, 620.0]);
+}
+
+/// A pop-up is opened, closed and moved through `set_popup` (#comment.popups): a note's own
+/// pop-up follows, a comment without one gets one beside it, and the comment itself (its text,
+/// its date) is left alone. Summaries report the pop-up. Text boxes, Fill & Sign marks and
+/// replies have none of their own; a bad rectangle is refused.
+#[test]
+fn pop_ups_open_close_and_move_and_are_reported() {
+    let mut doc = fixture();
+    let note = add_annotation(&mut doc, &new(0, Shape::Note { at: [20.0, 280.0], icon: NoteIcon::Comment }), &meta("n1")).unwrap();
+    let before = summaries(&doc).into_iter().find(|s| s.index == note).unwrap();
+    assert_eq!(before.popup.map(|p| p.open), Some(false), "new notes have a closed pop-up");
+    set_popup(&mut doc, 0, note, None, Some(true), &meta("n1")).unwrap();
+    let after = summaries(&doc).into_iter().find(|s| s.index == note).unwrap();
+    assert_eq!(after.popup.map(|p| p.open), Some(true));
+    assert_eq!(after.popup.map(|p| p.rect), before.popup.map(|p| p.rect), "opening does not move it");
+    assert_eq!((after.modified, after.contents.as_deref()), (before.modified, Some("hello")), "the comment is untouched");
+    let (_, r) = annot_ref(&mut doc, 0, note).unwrap();
+    assert_eq!(annot_dict(&doc, r).get(b"Open"), Some(&Object::Bool(true)), "the note's own /Open follows");
+    set_popup(&mut doc, 0, note, Some([150.0, 100.0, 290.0, 200.0]), Some(false), &meta("n1")).unwrap();
+    let moved = summaries(&doc).into_iter().find(|s| s.index == note).unwrap();
+    assert_eq!(moved.popup, Some(PopupInfo { rect: [150.0, 100.0, 290.0, 200.0], open: false }));
+    assert_eq!(annot_dict(&doc, r).get(b"Open"), Some(&Object::Bool(false)));
+
+    // A highlight is created without a pop-up: the first open gives it one, beside it.
+    let mark = add_annotation(
+        &mut doc,
+        &new(0, Shape::TextMarkup { kind: Markup::Highlight, quads: vec![[20.0, 200.0, 120.0, 200.0, 20.0, 190.0, 120.0, 190.0]] }),
+        &meta("h1"),
+    )
+    .unwrap();
+    assert_eq!(summaries(&doc).into_iter().find(|s| s.index == mark).unwrap().popup, None);
+    set_popup(&mut doc, 0, mark, None, Some(true), &meta("h1")).unwrap();
+    let given = summaries(&doc).into_iter().find(|s| s.index == mark).unwrap().popup.expect("a pop-up now");
+    assert!(given.open);
+    assert!((given.rect[0] - 130.0).abs() < 0.01 && (given.rect[2] - 330.0).abs() < 0.01, "beside the mark: {:?}", given.rect);
+
+    // #2137 review: a /Popup naming another annotation (here the note) isn't this comment's: the
+    // note is left alone and the mark gets a pop-up of its own.
+    let (_, mr) = annot_ref(&mut doc, 0, mark).unwrap();
+    doc.update_dict(mr, |m| m.set(b"Popup".to_vec(), Object::Ref(r))).unwrap();
+    let note_before = annot_dict(&doc, r);
+    set_popup(&mut doc, 0, mark, Some([10.0, 10.0, 110.0, 60.0]), Some(true), &meta("h1")).unwrap();
+    assert_eq!(annot_dict(&doc, r), note_before, "the note isn't moved or opened");
+    let own = annot_dict(&doc, mr).reference(b"Popup").expect("a pop-up of its own");
+    assert_ne!(own, r);
+    assert_eq!(doc.get(own).as_dict().and_then(|p| p.reference(b"Parent")), Some(mr));
+    // Its own pop-up, with /Parent naming it, is the one moved next time.
+    set_popup(&mut doc, 0, mark, Some([12.0, 10.0, 112.0, 60.0]), None, &meta("h1")).unwrap();
+    assert_eq!(annot_dict(&doc, mr).reference(b"Popup"), Some(own), "the same pop-up");
+
+    // #2137 review: nor is it reported as the comment's (see the helper).
+    foreign_pop_ups_are_not_the_marks(&mut doc, r, mark, mr);
+
+    // None of their own.
+    let text_box = add_annotation(&mut doc, &new(0, Shape::TextBox { rect: [10.0, 10.0, 110.0, 40.0], font_size: 12.0 }), &meta("t1")).unwrap();
+    assert!(matches!(set_popup(&mut doc, 0, text_box, None, Some(true), &meta("t1")), Err(AnnotError::Invalid(_))));
+    let reply = add_reply(&mut doc, 0, note, "Agreed", "Ada", &meta("r1")).unwrap();
+    assert!(matches!(set_popup(&mut doc, 0, reply, None, Some(true), &meta("r1")), Err(AnnotError::Invalid(_))));
+    assert!(matches!(set_popup(&mut doc, 0, note, Some([0.0, 0.0, 0.5, 0.5]), None, &meta("n1")), Err(AnnotError::Invalid(_))));
+    assert!(matches!(set_popup(&mut doc, 0, note, Some([f64::NAN, 0.0, 10.0, 10.0]), None, &meta("n1")), Err(AnnotError::Invalid(_))));
+    assert!(matches!(set_popup(&mut doc, 0, 99, None, Some(true), &meta("n1")), Err(AnnotError::NoSuchAnnotation { .. })));
+
+    // #2137 review: /Annots may list the note through an object that is only a reference to it.
+    // Its pop-up's /Parent names the note itself, so the pop-up is still the note's.
+    let p = page_ref(&doc, 0).unwrap();
+    let via = doc.add(Object::Ref(r));
+    let list: Vec<Object> = annots(&doc, p).into_iter().map(|o| if o.as_ref() == Some(r) { Object::Ref(via) } else { o }).collect();
+    set_annots(&mut doc, p, list).unwrap();
+    let listed = summaries(&doc).into_iter().find(|s| s.index == note).unwrap();
+    assert_eq!(listed.popup, Some(PopupInfo { rect: [150.0, 100.0, 290.0, 200.0], open: false }), "listed through {via:?}");
+}
+
+/// #2137 review: a pop-up that is not the mark's own is neither reported as its pop-up nor
+/// changed through it (part of `pop_ups_open_close_and_move_and_are_reported`).
+fn foreign_pop_ups_are_not_the_marks(doc: &mut Document, note: ObjRef, mark: usize, mr: ObjRef) {
+    // #2137 review: nor is it reported as the comment's. A /Popup naming the note, or the note's
+    // own pop-up (its /Parent is the note), gives the mark no pop-up in the summaries.
+    let popup_of_mark = |doc: &Document| summaries(doc).into_iter().find(|s| s.index == mark).unwrap().popup;
+    let notes_popup = annot_dict(doc, note).reference(b"Popup").expect("the note's pop-up");
+    for foreign in [note, notes_popup] {
+        doc.update_dict(mr, |m| m.set(b"Popup".to_vec(), Object::Ref(foreign))).unwrap();
+        assert_eq!(popup_of_mark(doc), None, "{foreign:?} isn't the mark's");
+    }
+    // A pop-up whose /Parent isn't a reference (it must be one) isn't the mark's either: it is
+    // neither reported nor changed, and the mark gets one of its own.
+    let mut bad = Dict::new();
+    bad.set(b"Type".to_vec(), Object::name("Annot"));
+    bad.set(b"Subtype".to_vec(), Object::name("Popup"));
+    bad.set(b"Rect".to_vec(), Object::Array([0.0, 0.0, 50.0, 50.0].iter().map(|v| Object::Real(*v)).collect()));
+    bad.set(b"Parent".to_vec(), Object::Dict(Dict::new()));
+    let bad = doc.add(Object::Dict(bad));
+    doc.update_dict(mr, |m| m.set(b"Popup".to_vec(), Object::Ref(bad))).unwrap();
+    assert_eq!(popup_of_mark(doc), None, "a direct /Parent");
+    let bad_before = doc.get(bad).as_dict().cloned();
+    set_popup(doc, 0, mark, None, Some(true), &meta("h1")).unwrap();
+    assert_eq!(doc.get(bad).as_dict().cloned(), bad_before, "left alone");
+    assert_ne!(annot_dict(doc, mr).reference(b"Popup"), Some(bad));
+    // A pop-up with no /Parent at all is taken as the comment's.
+    let mut orphan = Dict::new();
+    orphan.set(b"Type".to_vec(), Object::name("Annot"));
+    orphan.set(b"Subtype".to_vec(), Object::name("Popup"));
+    orphan.set(b"Rect".to_vec(), Object::Array([0.0, 0.0, 50.0, 50.0].iter().map(|v| Object::Real(*v)).collect()));
+    let orphan = doc.add(Object::Dict(orphan));
+    doc.update_dict(mr, |m| m.set(b"Popup".to_vec(), Object::Ref(orphan))).unwrap();
+    assert_eq!(popup_of_mark(doc), Some(PopupInfo { rect: [0.0, 0.0, 50.0, 50.0], open: false }), "no /Parent");
+}
+
+/// #2137 review: a comment's own pop-up without a `/Rect` of four numbers reads as none; opening
+/// it gives it the place a new pop-up gets, so the window shows again.
+#[test]
+fn opening_a_pop_up_without_a_rect_gives_it_one() {
+    let mut doc = fixture();
+    let note = add_annotation(&mut doc, &new(0, Shape::Note { at: [20.0, 280.0], icon: NoteIcon::Comment }), &meta("n1")).unwrap();
+    let (_, r) = annot_ref(&mut doc, 0, note).unwrap();
+    let pr = annot_dict(&doc, r).reference(b"Popup").expect("new notes have a pop-up");
+    doc.update_dict(pr, |p| {
+        p.remove(b"Rect");
+    })
+    .unwrap();
+    assert_eq!(summaries(&doc).into_iter().find(|s| s.index == note).unwrap().popup, None, "no /Rect reads as no pop-up");
+    set_popup(&mut doc, 0, note, None, Some(true), &meta("n1")).unwrap();
+    let popup = summaries(&doc).into_iter().find(|s| s.index == note).unwrap().popup.expect("the pop-up reads again");
+    assert!(popup.open);
+    assert!(popup.rect[2] - popup.rect[0] >= 100.0 && popup.rect[3] - popup.rect[1] >= 100.0, "a window's size: {:?}", popup.rect);
+    assert_eq!(annot_dict(&doc, r).reference(b"Popup"), Some(pr), "the same pop-up, not a new one");
+}
+
+/// #2137 review: a pop-up rectangle with its corners reversed is read, and saved, with them in
+/// order (ISO 32000-2 §7.9.5: a reader normalises a rectangle). One whose numbers aren't finite
+/// as `f32` (a file's huge number) reads as no pop-up, and opening it gives it a new place.
+#[test]
+fn a_pop_up_rect_with_reversed_corners_is_put_in_order_and_a_huge_one_is_none() {
+    let mut doc = fixture();
+    let note = add_annotation(&mut doc, &new(0, Shape::Note { at: [20.0, 280.0], icon: NoteIcon::Comment }), &meta("n1")).unwrap();
+    let (_, r) = annot_ref(&mut doc, 0, note).unwrap();
+    let pr = annot_dict(&doc, r).reference(b"Popup").expect("new notes have a pop-up");
+    let popup = |doc: &Document| summaries(doc).into_iter().find(|s| s.index == note).unwrap().popup;
+    let set_rect = |doc: &mut Document, rect: [f64; 4]| doc.update_dict(pr, |p| p.set(b"Rect".to_vec(), num_array(&rect))).unwrap();
+
+    // Reversed in the file: read in order.
+    set_rect(&mut doc, [290.0, 200.0, 150.0, 100.0]);
+    assert_eq!(popup(&doc), Some(PopupInfo { rect: [150.0, 100.0, 290.0, 200.0], open: false }));
+    // Reversed through `set_popup`: saved in order.
+    set_popup(&mut doc, 0, note, Some([300.0, 220.0, 160.0, 120.0]), None, &meta("n1")).unwrap();
+    let saved: Vec<f64> =
+        doc.get(pr).as_dict().and_then(|p| p.get(b"Rect")).and_then(Object::as_array).unwrap().iter().filter_map(Object::as_f64).collect();
+    assert_eq!(saved, [160.0, 120.0, 300.0, 220.0]);
+
+    // A number too large for `f32` (or infinite): no pop-up, and opening it gives it a place.
+    for huge in [1e300, f64::INFINITY] {
+        set_rect(&mut doc, [0.0, 0.0, huge, 100.0]);
+        assert_eq!(popup(&doc), None, "{huge}");
+    }
+    set_popup(&mut doc, 0, note, None, Some(true), &meta("n1")).unwrap();
+    let given = popup(&doc).expect("the pop-up reads again");
+    assert!(given.open && given.rect.iter().all(|v| v.is_finite()), "{given:?}");
+}
+
 #[test]
 fn freehand_highlight_is_compatible_ink_with_marker_blending() {
     let shape = Shape::FreehandHighlight { strokes: vec![vec![[20.0, 100.0], [120.0, 100.0]]] };
@@ -4313,4 +5528,94 @@ fn summaries_list_only_usable_quads() {
     set_annots(&mut doc, page, entries).unwrap();
     let summary = summaries(&doc).into_iter().find(|a| a.page == 0 && a.index == 0).unwrap();
     assert_eq!(summary.quads, vec![QUAD.map(|v| v as f32)]);
+}
+
+/// A page as iOS Markup saves a signature: its private copy on the page and on the stamp, which
+/// also carries a normal appearance. A plain note follows the stamp, at index 1.
+fn apple_markup_page() -> Document {
+    document_of(&[
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>",
+        b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R 7 0 R] /AAPL:PPK 5 0 R /AAPL:PPKHash 5 0 R >>",
+        b"<< /Type /Annot /Subtype /Stamp /Rect [100 100 200 150] /F 644 /AP << /N 6 0 R >> /AAPL:AKExtras << /PPKType (draw) >> >>",
+        b"<< /Length 0 >>
+stream
+
+endstream",
+        b"<< /Type /XObject /Subtype /Form /BBox [0 0 100 50] /Length 22 >>
+stream
+0 0 1 RG 1 1 m 9 9 l S
+endstream",
+        b"<< /Type /Annot /Subtype /Text /Rect [400 400 420 420] /Contents (note) >>",
+    ])
+}
+
+/// Apple's copy is gone from the page and from every annotation left on it, and the drop is
+/// in the repair log (fidelity: never silent).
+fn assert_apple_copy_dropped(doc: &Document) {
+    assert!(doc.repair_log().iter().any(|l| l.contains("Apple Markup")), "{:?}", doc.repair_log());
+    let doc = reopen(doc);
+    let page = doc.get(page_refs(&doc).unwrap()[0]);
+    let page = page.as_dict().unwrap();
+    assert!(!page.contains(b"AAPL:PPK") && !page.contains(b"AAPL:PPKHash"));
+    let all = list(&doc, 0);
+    assert_eq!(all[0].name(b"Subtype"), Some(&b"Stamp"[..]));
+    assert!(all.iter().all(|d| !d.contains(b"AAPL:AKExtras")));
+}
+
+#[test]
+fn deleting_from_an_apple_markup_page_drops_apples_stale_copy() {
+    let mut doc = apple_markup_page();
+    delete_annotation(&mut doc, 0, 1).unwrap();
+    assert_apple_copy_dropped(&doc);
+}
+
+#[test]
+fn replying_on_an_apple_markup_page_drops_apples_stale_copy() {
+    let mut doc = apple_markup_page();
+    add_reply(&mut doc, 0, 1, "Agreed", "Bob", &meta("r")).unwrap();
+    assert_apple_copy_dropped(&doc);
+}
+
+#[test]
+fn marking_on_an_apple_markup_page_drops_apples_stale_copy() {
+    let mut doc = apple_markup_page();
+    set_marked(&mut doc, 0, 1, true, "Bob", &meta("m")).unwrap();
+    assert_apple_copy_dropped(&doc);
+}
+
+#[test]
+fn adding_to_an_apple_markup_page_drops_apples_stale_copy() {
+    let mut doc = apple_markup_page();
+    add_annotation(&mut doc, &new(0, Shape::Note { at: [300.0, 300.0], icon: NoteIcon::Comment }), &meta("n")).unwrap();
+    assert_apple_copy_dropped(&doc);
+    // The Markup stamp itself stays, with its flags and its appearance, byte for byte.
+    let doc = reopen(&doc);
+    let all = list(&doc, 0);
+    assert_eq!(all[0].get(b"F").and_then(Object::as_int), Some(644));
+    assert_eq!(ap_content(&doc, &all[0]), "0 0 1 RG 1 1 m 9 9 l S");
+}
+
+#[test]
+fn a_refused_edit_on_an_apple_markup_page_drops_nothing() {
+    // An inline, locked Markup stamp: restyling it is refused, so Apple's copy must stay put
+    // (promoting the inline dictionary to an object is not a change to the markup).
+    let mut doc = document_of(&[
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>",
+        b"<< /Type /Page /Parent 2 0 R /Annots [<< /Type /Annot /Subtype /Stamp /Rect [100 100 200 150] /F 644 /AAPL:AKExtras << /PPKType (draw) >> >>] /AAPL:PPK 4 0 R /AAPL:PPKHash 4 0 R >>",
+        b"<< /Length 0 >>
+stream
+
+endstream",
+    ]);
+    assert_eq!(
+        set_style(&mut doc, 0, 0, StyleChange { color: Some([1.0, 0.0, 0.0]), opacity: None, width: None, endings: None }, &meta("")),
+        Err(AnnotError::Invalid("the comment is locked".into()))
+    );
+    let page = doc.get(page_refs(&doc).unwrap()[0]);
+    let page = page.as_dict().unwrap();
+    assert!(page.contains(b"AAPL:PPK") && page.contains(b"AAPL:PPKHash"));
+    assert!(list(&doc, 0)[0].contains(b"AAPL:AKExtras"));
+    assert!(doc.repair_log().is_empty(), "{:?}", doc.repair_log());
 }
