@@ -352,7 +352,16 @@ impl PageAnnots {
 /// Whether `o` is an annotation whose `/Subtype` (resolved: it may be an indirect name) is
 /// `Popup`.
 fn is_popup(doc: &Document, o: &Object) -> bool {
-    doc.resolve(o).as_dict().and_then(|d| d.get(b"Subtype").map(|s| doc.resolve(s))).is_some_and(|s| s.as_name() == Some(b"Popup".as_slice()))
+    let resolved = doc.resolve(o);
+    let Some(d) = resolved.as_dict() else { return false };
+    if !d.get(b"Subtype").map(|s| doc.resolve(s)).is_some_and(|s| s.as_name() == Some(b"Popup".as_slice())) {
+        return false;
+    }
+    // A pop-up whose `/Parent` is a redaction mark would copy the mark along through it: it is not
+    // taken (the comment keeps no `/Popup`) rather than copied without its parent.
+    !d.get(b"Parent").map(|p| doc.resolve(p)).is_some_and(|p| {
+        p.as_dict().and_then(|d| d.get(b"Subtype").map(|s| doc.resolve(s))).is_some_and(|s| s.as_name() == Some(b"Redact".as_slice()))
+    })
 }
 
 #[cfg(test)]
@@ -724,6 +733,30 @@ mod tests {
         assert!(!all.windows(11).any(|w| w == b"MARK-SECRET"), "the mark was copied");
         let popup = by_contents(&one, "noted").1.reference(b"Popup").unwrap();
         assert!(one.iter().any(|(r, _)| *r == popup), "the pop-up with an indirect /Subtype is listed");
+    }
+
+    /// A pop-up whose `/Parent` is a redaction mark is skipped with the link to it, and the mark
+    /// does not come along through the pop-up.
+    #[test]
+    fn a_popup_whose_parent_is_a_redaction_mark_is_skipped() {
+        let src = build(&[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >>",
+            "<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>",
+            "<< /Type /Annot /Subtype /Text /Contents (carrier) /Rect [10 10 30 30] /Popup 5 0 R /P 3 0 R >>",
+            "<< /Type /Annot /Subtype /Popup /Rect [40 40 200 120] /Parent 6 0 R /P 3 0 R >>",
+            "<< /Type /Annot /Subtype /Redact /Rect [0 200 20 220] /Contents (MARK-SECRET) /P 3 0 R >>",
+        ]);
+        let mut doc = build(&[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >>",
+            "<< /Type /Page /Parent 2 0 R >>",
+        ]);
+        import_comments(&mut doc, &src).unwrap();
+        let one = page_annots(&doc, 0);
+        assert!(by_contents(&one, "carrier").1.get(b"Popup").is_none());
+        let all = pdfcraft_cos::write_full(&doc, &pdfcraft_cos::SaveOptions { object_streams: false, ..Default::default() }).unwrap();
+        assert!(!all.windows(11).any(|w| w == b"MARK-SECRET"), "the mark was copied");
     }
 
     #[test]

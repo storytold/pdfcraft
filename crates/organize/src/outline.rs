@@ -23,6 +23,10 @@ pub(crate) const LIST_DEPTH: usize = 32;
 
 /// Deepest name-tree node read when looking up named destinations.
 const NAME_TREE_DEPTH: usize = 32;
+/// Most name-tree nodes, entries and key bytes one lookup of named destinations reads.
+const MAX_DEST_NODES: usize = 200_000;
+const MAX_DEST_ENTRIES: usize = 100_000;
+const MAX_DEST_KEY_BYTES: usize = 16 << 20;
 
 /// Deepest chain of indirect or named destinations followed for one bookmark.
 const DEST_DEPTH: u8 = 8;
@@ -213,8 +217,12 @@ fn name_tree(doc: &Document) -> HashMap<Vec<u8>, Object> {
             true
         }
     };
+    let (mut visited, mut key_bytes) = (0usize, 0usize);
     while let Some((raw, depth)) = stack.pop() {
-        if depth > NAME_TREE_DEPTH {
+        // Past any of these limits nothing more is read: one bookmark's lookup is bounded, and a
+        // destination beyond them is not found (the bookmark then has none).
+        visited += 1;
+        if depth > NAME_TREE_DEPTH || visited > MAX_DEST_NODES || out.len() >= MAX_DEST_ENTRIES || key_bytes > MAX_DEST_KEY_BYTES {
             continue;
         }
         if let Object::Ref(r) = raw
@@ -230,6 +238,10 @@ fn name_tree(doc: &Document) -> HashMap<Vec<u8>, Object> {
                 if let [k, v] = pair
                     && let Some(key) = name_key(doc, k)
                 {
+                    key_bytes = key_bytes.saturating_add(key.len());
+                    if out.len() >= MAX_DEST_ENTRIES || key_bytes > MAX_DEST_KEY_BYTES {
+                        break;
+                    }
                     out.entry(key).or_insert_with(|| v.clone());
                 }
             }
