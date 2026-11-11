@@ -1,5 +1,6 @@
 # Where PdfCraft falls short of Acrobat Pro
 
+> **Last reviewed:** 2026-11-11 | **Last updated:** 2026-11-11 | **Change:** minor (gap 8: known residual risk for the LibreOffice sidecar, sandbox tracked in #6953; estimates unchanged)
 > **Last reviewed:** 2026-10-28 | **Last updated:** 2026-10-28 | **Change:** minor (M10, #4119 partial: Enhance scanned file cleans scanned pages in place: background removal, edge shadow removal, despeckle; estimates unchanged)
 > **Last reviewed:** 2026-10-25 · **Last updated:** 2026-10-25 · **Change:** minor (gaps 5 and 14 current state: native release Hans face via LXGW WenKai Lite; Arabic logical catalog, explicit RTL direction and mirrored stock chrome, with native/browser/IME workflows unqualified; no readiness re-estimate)
 > **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-15 · **Change:** minor (gap 3: #2517 a blank line stays a paragraph break; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
@@ -45,7 +46,7 @@ update the numbers.
 | 5 | Chinese UI lacks a web glyph face | localization | 6–12 | [localization-parity.md](localization-parity.md) |
 | 6 | Open-issue backlog of wrong results in shipped features | stability | 45–80 | this file |
 | 7 | OCR reads only unaccented Latin | feature | 40–75 | [file-format-parity.md](file-format-parity.md) |
-| 8 | Office export weak, Office import absent | file format | 55–100 | [file-format-parity.md](file-format-parity.md) |
+| 8 | Office export weak, Office import basic | file format | 55–100 | [file-format-parity.md](file-format-parity.md) |
 | 9 | No Preflight; PDF/A partial; PDF/X and PDF/UA absent | standards | 65–115 | [pdf-spec-parity.md](pdf-spec-parity.md) |
 | 10 | Signatures: no PKCS #11, timestamp servers or online revocation | feature, hardware | 40–70 | [pdf-spec-parity.md](pdf-spec-parity.md) |
 | 11 | Accessibility: checker only, no tagging tools | feature | 40–70 | [target-app-parity.md](target-app-parity.md) |
@@ -189,19 +190,29 @@ update the numbers.
 - **Estimate:** 40–75 h, partly blocked on openly licensed models. **Doc:**
   [file-format-parity.md](file-format-parity.md).
 
-### 8. Office export weak, Office import absent
+### 8. Office export weak, Office import basic
 
-- **Missing:** Word export that keeps layout; Excel and PowerPoint export; creating PDFs from Office,
-  HTML, web pages and PostScript; SVG/XML/EPS/PS/JPEG 2000 export.
+- **Missing:** Word export that keeps layout; Excel and PowerPoint export; creating PDFs from HTML,
+  web pages and PostScript; SVG/XML/EPS/PS/JPEG 2000 export. Office documents open from File ▸ Open
+  through an installed LibreOffice, but Insert pages, Combine files and Create ▸ Multiple files
+  don't take them yet.
 - **Evidence:** `create.export-docx` partial; the synthetic invoice regression for
   [#773](https://github.com/storytold/pdfcraft/issues/773) now covers absent inferred borders,
   floating watermark text and per-page section sizes. Exact font matching, vector rules and
   broader layout fidelity remain incomplete;
-  `create.export-xlsx`, `create.export-pptx`, `create.from-office`, `create.from-html` planned.
+  `create.from-office` partial (LibreOffice sidecar; Writer and Calc never update linked content,
+  but Impress has no such setting and the process's network access isn't sandboxed);
+  `create.export-xlsx`, `create.export-pptx`,
+  `create.from-html` planned.
+- **Known residual risk:** conversion runs the user's installed LibreOffice. PdfCraft
+  opens no connection itself. Macros are disabled, untrusted referer links are blocked,
+  and Writer and Calc never update links. Impress has no link-update setting, and the
+  `soffice` process isn't network-sandboxed, so linked content in presentations could be
+  fetched. Sandboxing the converter is [#6953](https://github.com/storytold/pdfcraft/issues/6953).
 - **Impact:** "Export PDF" and "Create PDF" are two of Acrobat's most used tools.
 - **Gate:** lossy or missing sub-cases of the convert-and-share workflow (partial, not blocking).
-  First beta items: Create PDF from Office (LibreOffice sidecar, 10–20 h) and a Word export that
-  keeps layout (20–35 h).
+  First beta items: the rest of Create PDF from Office (Insert, Combine and Create ▸ Multiple files
+  on a worker, a Create ▸ From Office command; 5–10 h) and a Word export that keeps layout (20–35 h).
 - **Estimate:** 55–100 h. **Doc:** [file-format-parity.md](file-format-parity.md).
 
 ### 9. No Preflight; PDF/A partial; PDF/X and PDF/UA absent
@@ -422,6 +433,8 @@ update the numbers.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-11 | minor | Gap 8: known residual risk for the LibreOffice sidecar (Impress has no link-update setting; the soffice process isn't network-sandboxed). Sandboxing tracked in #6953. Estimates unchanged. |
+| 2026-10-26 | minor | Gap 8: the LibreOffice profile never updates Writer or Calc linked content on load; Impress has no such setting and the process's network access isn't sandboxed. Estimates unchanged. |
 | 2026-10-25 | minor | Gaps 5 and 14 current state: native release builds embed LXGW WenKai Lite for Simplified Chinese, while the web build has no Hans face; Arabic catalogs stay logical with explicit RTL label direction and mirrored stock chrome, while native/browser RTL input, IME and complex workflows remain unqualified. Estimates unchanged. |
 | 2026-10-18 | minor | Gap 3: #2517 a partial rewrite keeps a kept source row in the paragraph and leaves the next marked region closed around its text. Estimates unchanged. |
 | 2026-10-15 | minor | Gap 3: #2517 a blank line at ordinary leading stays a paragraph break. Estimates unchanged. |
