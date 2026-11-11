@@ -1112,6 +1112,10 @@ pub(crate) fn lost_focus_once(r: &egui::Response, had: &mut bool) -> bool {
 /// artwork painted through it and the engine refuses (#3429). A Photoshop export draws every text
 /// object that way, so on such a page the refusal is the only answer the user will ever get: the
 /// message has to say where the text can still be changed, not only why this file cannot be.
+///
+/// Only the refusal that reaches `apply`. `clear_block` refuses the preview with its own wording,
+/// but `TextBackground::prepare` drops that error and leaves the editor without its background, so
+/// it never becomes a message; whether it should is the question #4786 is open on.
 pub(crate) fn text_edit_error(error: &pdfcraft_engine::EditError) -> String {
     text_edit_message(&error.to_string())
 }
@@ -1120,8 +1124,7 @@ pub(crate) fn text_edit_error(error: &pdfcraft_engine::EditError) -> String {
 /// `pdfcraft_engine::EditError` but not the inner `pdfcraft_edit` variant that carries the text.
 fn text_edit_message(detail: &str) -> String {
     match detail {
-        "text used as a clipping path cannot be edited: its glyphs mask the artwork behind them"
-        | "text used as a clipping path cannot be previewed for editing" => {
+        "text used as a clipping path cannot be edited: its glyphs mask the artwork behind them" => {
             tl!("This text is a mask the artwork is painted through, so editing it here would destroy the page. Change the text in the file this PDF was exported from, then export it again.").into()
         }
         _ => detail.to_string(),
@@ -1132,20 +1135,18 @@ fn text_edit_message(detail: &str) -> String {
 mod tests {
     use super::*;
 
-    /// Both clipping-path refusals reach the user as one sentence that says where the text can
+    /// The clipping-path refusal reaches the user as a sentence that says where the text can
     /// still be changed. Every other refusal keeps the engine's own wording, which headless
-    /// callers, scripts and bug reports read.
+    /// callers, scripts and bug reports read -- the preview refusal included, since it travels
+    /// to automation callers and never through here.
     #[test]
     fn a_clipping_path_refusal_says_where_the_text_can_be_changed() {
-        for detail in [
-            "text used as a clipping path cannot be edited: its glyphs mask the artwork behind them",
-            "text used as a clipping path cannot be previewed for editing",
-        ] {
-            let shown = text_edit_message(detail);
-            assert_ne!(shown, detail, "the engine's wording reached the user unchanged");
-            assert!(shown.contains("exported from"), "no way forward in: {shown}");
-        }
-        for detail in ["replacement text is empty", "the paragraph no longer exists"] {
+        let detail = "text used as a clipping path cannot be edited: its glyphs mask the artwork behind them";
+        let shown = text_edit_message(detail);
+        assert_ne!(shown, detail, "the engine's wording reached the user unchanged");
+        assert!(shown.contains("exported from"), "no way forward in: {shown}");
+        for detail in ["text used as a clipping path cannot be previewed for editing", "replacement text is empty", "the paragraph no longer exists"]
+        {
             assert_eq!(text_edit_message(detail), detail, "an unrelated refusal was rewritten");
         }
     }
