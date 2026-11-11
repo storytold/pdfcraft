@@ -70,8 +70,15 @@ pub struct Metrics {
     /// A stream these metrics come from (a CMap, the program, `/CIDToGIDMap`, a Type 3 glyph
     /// description) was left unread because the decode allowance [`Metrics::from_dict_within`]
     /// was given was spent: what it would have decided (code lengths, CIDs, widths, meanings, a
-    /// Type 3 font's height) is a guess.
+    /// Type 3 font's height) is a guess. It is set exactly when the allowance counted a refusal
+    /// during the read ([`DecodeBudget::refused`]), which callers that share it may refuse on; a
+    /// read that fails without one, such as an empty stream behind a filter nothing decodes,
+    /// doesn't set it, with or without anything left.
     pub past_allowance: bool,
+    /// A codespace range of the embedded CMap was dropped (not one to four bytes, or past the range
+    /// limit): how the font's codes split into characters is then a guess, and a caller that must
+    /// know which text a string holds (redaction) refuses to rely on it.
+    pub codespaces_dropped: bool,
 }
 
 fn nums(doc: &Document, o: Option<&Object>) -> Vec<f64> {
@@ -420,12 +427,16 @@ impl<'a> Reads<'a> {
     /// stage past `max` is unread. When what is left is more than what the stages before that one
     /// made and `max`, it is charged those two and isn't refused; otherwise, with more left than
     /// the stages' total (behind one filter, `max`), it is charged that total and isn't refused;
-    /// with no more left than that total, it spends all of it and counts as refused.
+    /// with no more left than that total, it spends all of it and counts as refused. Only what
+    /// the allowance counts as refused ([`DecodeBudget::refused`]) is noted: a read that fails
+    /// without one, such as an empty stream behind a filter nothing decodes, fails the same with
+    /// more left, and callers that refuse on that count must agree with [`Metrics::past_allowance`].
     fn decode(&mut self, stream: &Stream, max: usize) -> Option<Vec<u8>> {
+        let refused = self.budget.refused();
         match self.budget.decode_stages_within(self.doc, stream, max) {
             Ok(data) => Some(data),
             Err(_) => {
-                self.refused |= self.budget.remaining() == 0;
+                self.refused |= self.budget.refused() > refused;
                 None
             }
         }
@@ -491,10 +502,14 @@ fn type3_glyph_box(doc: &Document, font: &Dict, reads: &mut Reads<'_>) -> Option
             break;
         }
         let before = reads.budget.remaining();
+        let refused = reads.budget.refused();
         let read = reads.budget.decode_with_damage(doc, s, MAX_TYPE3_GLYPH_BYTES.min(left)).map(|(data, _)| data);
         left = left.saturating_sub(before.saturating_sub(reads.budget.remaining()));
         let Ok(data) = read else {
-            if reads.budget.remaining() == 0 {
+            // As in `Reads::decode`, only a refusal the allowance counts: a description that fails
+            // without one (an empty one nothing decodes, once the allowance is spent) leaves the
+            // rest to be read, or refused above.
+            if reads.budget.refused() > refused {
                 // The rest go unread too, for want of the reading's allowance.
                 reads.refused = true;
                 complete = false;
@@ -810,25 +825,39 @@ fn number(t: &Tok) -> Option<u32> {
     }
 }
 
+/// The font's `/BaseFont` (a Type 3 font's descriptor `/FontName` when it has none), read without
+/// building its metrics, so it decodes no CMap.
+pub fn base_font_name(doc: &Document, font: &Dict) -> String {
+    font.name(b"BaseFont")
+        .map(|name| String::from_utf8_lossy(name).into_owned())
+        .or_else(|| {
+            (font.name(b"Subtype") == Some(b"Type3"))
+                .then(|| dict(doc, font.get(b"FontDescriptor")))
+                .flatten()
+                .and_then(|d| d.name(b"FontName").map(|name| String::from_utf8_lossy(name).into_owned()))
+        })
+        .unwrap_or_default()
+}
+
 /// Codespace ranges and CID mappings from an embedded CMap stream, at most
 /// [`MAX_CMAP_RANGES`] of each (every glyph searches them).
 #[allow(clippy::type_complexity)]
-fn parse_cmap(data: &[u8]) -> (Vec<(usize, Vec<u8>, Vec<u8>)>, Vec<(u32, u32, u32)>) {
+fn parse_cmap(data: &[u8]) -> (Vec<(usize, Vec<u8>, Vec<u8>)>, Vec<(u32, u32, u32)>, bool) {
     let (mut spaces, mut cids) = (Vec::new(), Vec::new());
+    let mut dropped = false;
     let mut seen = HashSet::new();
     let mut toks = Lexer::new(data);
     while let Some(t) = toks.next() {
         match t {
             Tok::Word(b"begincodespacerange") => {
                 while let Some([lo, hi]) = entry(&mut toks, b"endcodespacerange") {
-                    if let (Tok::Hex(Some(lo)), Tok::Hex(Some(hi))) = (lo, hi)
-                        && lo.len() == hi.len()
+                    if let (Tok::Hex(Some(lo)), Tok::Hex(Some(hi))) = (lo, hi) {
                         // A code is at most four bytes; a repeated range can never match first, so it only costs every glyph a comparison.
-                        && (1..=4).contains(&lo.len())
-                        && spaces.len() < MAX_CMAP_RANGES
-                        && seen.insert((lo.clone(), hi.clone()))
-                    {
-                        spaces.push((lo.len(), lo, hi));
+                        if lo.len() != hi.len() || !(1..=4).contains(&lo.len()) || spaces.len() >= MAX_CMAP_RANGES {
+                            dropped = true;
+                        } else if seen.insert((lo.clone(), hi.clone())) {
+                            spaces.push((lo.len(), lo, hi));
+                        }
                     }
                 }
             }
@@ -854,7 +883,7 @@ fn parse_cmap(data: &[u8]) -> (Vec<(usize, Vec<u8>, Vec<u8>)>, Vec<(u32, u32, u3
         }
     }
     spaces.sort_by_key(|s| s.0);
-    (spaces, cids)
+    (spaces, cids, dropped)
 }
 
 impl Metrics {
@@ -884,6 +913,7 @@ impl Metrics {
             explicit_reverse: (32..127u8).map(|c| (char::from(c), u32::from(c))).collect(),
             outlined_cids: Vec::new(),
             past_allowance: false,
+            codespaces_dropped: false,
         }
     }
 
@@ -902,16 +932,7 @@ impl Metrics {
     pub fn from_dict_within(doc: &Document, font: &Dict, budget: &mut DecodeBudget) -> Self {
         let mut reads = Reads::new(doc, budget);
         let mut m = Self::read_metrics(doc, font, &mut reads);
-        let base = font
-            .name(b"BaseFont")
-            .map(|name| String::from_utf8_lossy(name).into_owned())
-            .or_else(|| {
-                (font.name(b"Subtype") == Some(b"Type3"))
-                    .then(|| dict(doc, font.get(b"FontDescriptor")))
-                    .flatten()
-                    .and_then(|d| d.name(b"FontName").map(|name| String::from_utf8_lossy(name).into_owned()))
-            })
-            .unwrap_or_default();
+        let base = base_font_name(doc, font);
         m.subset = base.len() > 7 && base.as_bytes()[6] == b'+' && base[..6].bytes().all(|b| b.is_ascii_uppercase());
         let (bold, italic) = style_from_name(&base);
         m.bold |= bold;
@@ -965,7 +986,8 @@ impl Metrics {
                 && let Object::Stream(s) = &*e
                 && let Some(data) = reads.decode(s, MAX_CMAP_BYTES)
             {
-                let (spaces, cids) = parse_cmap(&data);
+                let (spaces, cids, dropped) = parse_cmap(&data);
+                m.codespaces_dropped = dropped;
                 if !spaces.is_empty() {
                     m.codes = Codes::Ranges(spaces);
                 }
