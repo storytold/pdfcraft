@@ -126,6 +126,21 @@ impl Document {
         self.note_object(num, |notes| &mut notes.unreadable, reason);
     }
 
+    fn note_spaced_key(&self, num: u32) {
+        self.note_object(num, |notes| &mut notes.repaired, || "a dictionary key written with spaces was read as one key".into());
+    }
+
+    /// [`Self::scan_for`] counted as a read of `num` of its own: a spaced key it joins is noted
+    /// under `num`, not under the object whose read called it.
+    fn scan_for_noting(&self, num: u32) -> Option<(ObjRef, Object)> {
+        let outer = crate::parser::swap_spaced_keys(0);
+        let found = self.scan_for(num);
+        if crate::parser::swap_spaced_keys(outer) > 0 && found.is_some() {
+            self.note_spaced_key(num);
+        }
+        found
+    }
+
     /// Record `num` in the list `pick` chooses, once.
     fn note_object(&self, num: u32, pick: impl FnOnce(&mut ObjectNotes) -> &mut Noted, reason: impl FnOnce() -> String) {
         // A poisoned lock only means the object goes unlisted; the read itself is unaffected.
@@ -605,8 +620,10 @@ impl Document {
         let loaded = self.load(num, 0).map(Arc::new);
         let reads = frame.reads();
         drop(frame);
-        if crate::parser::swap_spaced_keys(outer) > 0 && loaded.is_ok() {
-            self.note_object(num, |notes| &mut notes.repaired, || "a dictionary key written with spaces was read as one key".into());
+        // The notes are shared by clones, so a load that read this document's edits (an edited
+        // object stream) is not noted, as it is not cached below.
+        if crate::parser::swap_spaced_keys(outer) > 0 && loaded.is_ok() && overlay_reads() == edits_read {
+            self.note_spaced_key(num);
         }
         if let Err(e) = &loaded
             && !matches!(e, CosError::Poisoned)
@@ -781,7 +798,7 @@ impl Document {
             _ if self.overlay.contains_key(&num) || matches!(self.xref_entry(num), Some(XrefEntry::Free { .. })) => {
                 return Err(CosError::MissingObject(num));
             }
-            _ => Arc::new(self.scan_for(num).map(|(id, o)| self.decrypted(id, o)).ok_or(CosError::MissingObject(num))?),
+            _ => Arc::new(self.scan_for_noting(num).map(|(id, o)| self.decrypted(id, o)).ok_or(CosError::MissingObject(num))?),
         };
         let Object::Stream(s) = &*loaded else { return Err(CosError::MissingObject(num)) };
         let n = s.dict.int(b"N").unwrap_or(0).clamp(0, 1_000_000) as usize;
