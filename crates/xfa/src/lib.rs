@@ -23,6 +23,7 @@ mod proto;
 pub mod restyle;
 pub mod script;
 pub mod text;
+mod traverse;
 pub mod validation_rules;
 
 use pdfcraft_cos::Document;
@@ -110,9 +111,9 @@ pub use pdf::{AREA_KEY, CLICK_KEY, DATE_KEY, LAYOUT_KEY, NODE_KEY, SOM_KEY, Stri
 pub use picture::typed_date;
 pub use script::{
     Applied, FormNode, LiveForm, MAX_FORM_NODES, NodeKind, OVERRIDES_KEY, Overrides, PropRefused, ScriptEvent, apply_overrides,
-    apply_overrides_split, data_of, embedded_fields, field_grows_with_text, field_is_embedded, field_now, fields_by_som, form_tree, form_tree_paged,
-    has_focus_scripts, has_scripts, mark_value_override, overrides, overrides_of, page_area_uses, path_is_embedded, property_notes, refresh_props,
-    refresh_value, rerender, reset_default, set_overrides, template_of, value_overridden,
+    apply_overrides_split, data_of, embedded_fields, field_grows_with_text, field_is_embedded, field_now, field_objects_by_som, fields_by_som,
+    form_tree, form_tree_paged, has_focus_scripts, has_scripts, mark_value_override, overrides, overrides_of, page_area_uses, path_is_embedded,
+    property_notes, refresh_props, refresh_value, rerender, reset_default, set_overrides, template_of, value_overridden,
 };
 
 #[derive(Debug, thiserror::Error)]
