@@ -1161,6 +1161,50 @@ fn repeated_annotations_are_listed_once_within_a_byte_budget() {
     assert!(notes.iter().map(retained).sum::<usize>() <= MAX_ANNOTATION_BYTES);
 }
 
+/// Blank text is not kept, so only reading it is charged: many comments sharing one large blank
+/// string stop being built at the budget instead of decoding it once each.
+#[test]
+fn comments_sharing_a_blank_string_stop_at_the_read_budget() {
+    let small = "<< /Subtype /Text /Rect [0 0 1 1] /Contents 7 0 R >> ".repeat(1200);
+    let pdf = format!(
+        "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+             2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+             3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots [{small}] >> endobj\n\
+             7 0 obj ({}) endobj\ntrailer << /Root 1 0 R >>\n%%EOF",
+        " ".repeat(64 << 10),
+    );
+    let doc = Document::load_mem(pdf.as_bytes()).expect("loads");
+    let page = PageInfo { width: 200.0, height: 200.0, crop: [0.0, 0.0, 200.0, 200.0], rotation: 0, label: String::new() };
+    let mut info = DocInfo { pages: vec![page], ..Default::default() };
+    Inspector::new(&doc).fill(&mut info);
+    assert!(!info.annotations.is_empty() && info.annotations.len() < 1200, "{}", info.annotations.len());
+}
+
+/// Many fields sharing one large tooltip, and one layer listed many times, are read within a byte
+/// allowance rather than once each.
+#[test]
+fn fields_sharing_a_tooltip_and_repeated_layers_stop_at_the_text_budget() {
+    let fields = (0..1300).map(|i| format!("<< /FT /Tx /T (f{i}) /TU 7 0 R /V 7 0 R >> ")).collect::<String>();
+    let pdf = format!(
+        "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [{fields}] >> \
+             /OCProperties << /OCGs [{}] >> >> endobj\n\
+             2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+             3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >> endobj\n\
+             6 0 obj << /Type /OCG /Name (Ink) >> endobj\n\
+             7 0 obj ({}) endobj\ntrailer << /Root 1 0 R >>\n%%EOF",
+        "6 0 R ".repeat(1000),
+        "x".repeat(32 << 10),
+    );
+    let doc = Document::load_mem(pdf.as_bytes()).expect("loads");
+    let page = PageInfo { width: 200.0, height: 200.0, crop: [0.0, 0.0, 200.0, 200.0], rotation: 0, label: String::new() };
+    let mut info = DocInfo { pages: vec![page], ..Default::default() };
+    Inspector::new(&doc).fill(&mut info);
+    let kept: usize = info.fields.iter().map(|f| f.tooltip.as_ref().map_or(0, String::len) + f.value.as_ref().map_or(0, String::len)).sum();
+    assert!(kept > 0 && kept <= super::core::MAX_FIELD_TEXT_BYTES, "{kept}");
+    assert!(info.fields.iter().any(|f| f.tooltip.is_none()), "text past the allowance is left out");
+    assert_eq!(info.layers.len(), 1);
+}
+
 /// A link reached through an indirect object that holds only a reference to it is the same
 /// annotation as the link itself, and so is a page array reached the same way: each is listed once.
 #[test]
@@ -2684,6 +2728,42 @@ fn inspection_keeps_no_private_page_data() {
         format!("{info:?}")
     };
     assert_eq!(report(with), report(without), "what inspection reports does not change");
+}
+
+/// A field with several widgets reports an action on any of them, not only the first, and so does
+/// the document's JavaScript flag.
+#[test]
+fn a_field_reports_an_action_on_a_later_widget() {
+    let pdf = "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] >> >> endobj\n\
+             2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+             3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >> endobj\n\
+             4 0 obj << /FT /Tx /T (f) /Kids [5 0 R 6 0 R] >> endobj\n\
+             5 0 obj << /Subtype /Widget /Rect [0 0 1 1] >> endobj\n\
+             6 0 obj << /Subtype /Widget /Rect [0 0 1 1] /A << /S /JavaScript /JS (app.alert(1)) >> >> endobj\n\
+             trailer << /Root 1 0 R >>\n%%EOF";
+    let doc = Document::load_mem(pdf.as_bytes()).expect("loads");
+    let page = PageInfo { width: 200.0, height: 200.0, crop: [0.0, 0.0, 200.0, 200.0], rotation: 0, label: String::new() };
+    let mut info = DocInfo { pages: vec![page], ..Default::default() };
+    Inspector::new(&doc).fill(&mut info);
+    assert!(info.fields.iter().any(|f| f.name == "f" && f.has_actions), "{:?}", info.fields);
+    assert!(info.has_javascript);
+}
+
+/// A shared descendant first reached at the depth limit (its action-bearing child cut) is read
+/// again from a shallower path, so the action is still found.
+#[test]
+fn an_action_below_a_shared_field_first_met_deep_is_found_from_a_shallower_path() {
+    // 1 is the root, 2..=32 a chain of 31 fields, 33 the shared field, 34 holds the action,
+    // 35 a short path to 33.
+    let mut bodies = vec!["<< /Kids [2 0 R 35 0 R] >>".to_string()];
+    for i in 2..=32 {
+        bodies.push(format!("<< /Kids [{} 0 R] >>", i + 1));
+    }
+    bodies.push("<< /Kids [34 0 R] >>".into());
+    bodies.push("<< /A << /S /JavaScript /JS (x) >> >>".into());
+    bodies.push("<< /Kids [33 0 R] >>".into());
+    let doc = Document::load_mem(&pdf_of(&bodies)).expect("loads");
+    assert!(Inspector::new(&doc).has_action(&Object::Reference((1, 0)), 0));
 }
 
 /// A `/Kids` entry that loops back, or names a root field that doesn't name this one as its

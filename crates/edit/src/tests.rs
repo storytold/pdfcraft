@@ -14042,6 +14042,39 @@ fn review_inside_scope_group_move_matches_direct_transform_under_outer_scale() {
     }
 }
 
+/// A page that names one font under 300 resource names builds its metrics once: each alias
+/// used to build (and keep) a set of its own.
+#[test]
+fn font_aliases_share_one_set_of_metrics() {
+    let fonts: String = (0..300).map(|i| format!(" /A{i} 5 0 R")).collect();
+    let content: String = format!("BT 72 700 Td {} ET", (0..300).map(|i| format!("/A{i} 12 Tf (x) Tj ")).collect::<String>());
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Contents 4 0 R /Resources << /Font <<{fonts} >> >> >>"),
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offs = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offs.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let x = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offs {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{x}\n%%EOF\n", objs.len() + 1).as_bytes());
+    let doc = Document::open(Arc::new(out)).unwrap();
+    text::METRICS_BUILT.with(|n| n.set(0));
+    let lines = text::text_lines(&doc, 0).unwrap();
+    assert!(lines.iter().map(|l| l.text.matches('x').count()).sum::<usize>() >= 300, "{lines:?}");
+    let built = text::METRICS_BUILT.with(std::cell::Cell::get);
+    assert!(built < 10, "metrics built {built} times for one font");
+}
+
 /// Each `Tj`/`TJ` moves the text matrix by the width of its text. A run shown later in the same
 /// text object without a `Td` or `Tm` of its own (a raised run in another colour, a column after
 /// a `TJ` gap) is placed by those advances. Rewriting the paragraph before it must keep them, as
@@ -14847,6 +14880,38 @@ fn a_thai_edit_that_spends_its_allowance_to_the_byte_goes_through() {
     };
     assert_eq!(edit(256), Ok(()));
     let error = edit(257).unwrap_err();
+    assert!(error.contains("THSarabunPSK") && error.contains("MiB of font data"), "{error}");
+}
+
+/// Only a read the allowance refuses leaves a font of the face unread for want of it. With the
+/// allowance spent to the byte as above, another font of the face, whose ToUnicode is an empty
+/// stream behind a filter nothing decodes (unread with any allowance), still has its program read,
+/// which the allowance refuses: the edit is refused, rather than going through without that font.
+#[test]
+fn a_font_of_the_face_unread_on_its_own_once_the_allowance_is_spent_still_refuses_the_edit() {
+    let mut program = legacy_thai_program();
+    program.resize((16 << 20) - 192, 0);
+    let mut unicode = LEGACY_THAI_UNICODE.to_vec();
+    unicode.resize(256, b' ');
+    let mut doc = text_page("BT /F1 16 Tf 50 650 Td <00d6> Tj ET");
+    let font = legacy_thai_font(&mut doc, "ABCDEF+THSarabunPSK", &program, &unicode);
+    doc.set(pdfcraft_cos::ObjRef::new(5, 0), Object::Dict(font));
+    // Not a subset, so its metrics read no program, only the ToUnicode.
+    let mut other = legacy_thai_font(&mut doc, "THSarabunPSK", &legacy_thai_program(), LEGACY_THAI_UNICODE);
+    let mut dict = Dict::new();
+    dict.set(b"Filter".to_vec(), Object::name("NoSuchFilter"));
+    other.set(b"ToUnicode".to_vec(), Object::Ref(doc.add(Object::Stream(Stream::from_raw(dict, Vec::new())))));
+    let other = doc.add(Object::Dict(other));
+    doc.update_dict(pdfcraft_cos::ObjRef::new(3, 0), |page| {
+        let Some(Object::Dict(mut resources)) = page.get(b"Resources").cloned() else { panic!("fixture") };
+        let Some(Object::Dict(mut fonts)) = resources.get(b"Font").cloned() else { panic!("fixture") };
+        fonts.set(b"F2".to_vec(), Object::Ref(other));
+        resources.set(b"Font".to_vec(), Object::Dict(fonts));
+        page.set(b"Resources".to_vec(), Object::Dict(resources));
+    })
+    .unwrap();
+    let style = BlockStyle { width: Some(400.0), ..Default::default() };
+    let error = text::rewrite_block(&mut doc, 0, 0, Some("กขค"), &style).unwrap_err().to_string();
     assert!(error.contains("THSarabunPSK") && error.contains("MiB of font data"), "{error}");
 }
 
