@@ -223,7 +223,7 @@ thread_local! {
 pub(crate) const MAX_SPACE_BYTES: usize = 1 << 20;
 
 /// How often a run reads a `/ColorSpace` dictionary given by reference: once, and once more after
-/// its names were let go or didn't fit. Named after that, it isn't read again, and a name in it
+/// its names were let go or didn't fit. Not kept after that, it isn't read again, and a name in it
 /// keeps the pattern.
 pub(crate) const MAX_READS: u8 = 2;
 
@@ -260,7 +260,8 @@ impl Space {
 
 /// What `cs` and `CS` have read of a run's colour spaces, kept for the run: what an object given
 /// by reference gives depends on it alone, not on the page, and reading an object again can parse
-/// it again, all of it (the document keeps no object larger than its cache), at every page, form
+/// it again, all of it (the document's object cache, once past 32 MiB, keeps only the object it
+/// read last), at every page, form
 /// and walk that names it. What is kept is what each name gives, not the objects read, within
 /// [`MAX_SPACE_BYTES`], and no dictionary is read more than [`MAX_READS`] times, however its names
 /// come and go. Apply tells it where each page's walk starts ([`PatternSpaces::next_page`]): the
@@ -316,8 +317,10 @@ impl PatternSpaces {
     /// `[/Pattern base]`. A name it doesn't have, or giving anything else, the renderer draws in
     /// another space or in DeviceGray. A form without resources of its own is given its caller's,
     /// where the renderer looks its names up too. (For one with resources of its own, the renderer
-    /// looks a name they lack up in its caller's, and this doesn't: the patterns this pass prunes
-    /// are the page's, and what such a form paints with is not told to the page. Nor does it look
+    /// looks a name they lack up in its caller's, and the walk doesn't, here or for its other names,
+    /// on `main` too: a page pattern such a form paints with through its caller's isn't passed to
+    /// the page, and is pruned, and an image it draws so isn't examined. Resolving a form's names
+    /// as the renderer does is a change of its own. Nor does it look
     /// a name the page's own resources lack up in its `/Pages` ancestors', as the renderer does:
     /// ISO 32000-2 §7.7.3.4 inherits `/Resources` whole, so there the name resets the pattern.)
     pub(crate) fn named(&mut self, doc: &Document, spaces: Option<&Object>, name: &[u8]) -> bool {
