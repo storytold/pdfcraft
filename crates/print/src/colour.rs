@@ -53,7 +53,23 @@ impl PrinterProfile {
         if meta.len() > MAX_PROFILE_BYTES {
             return Err(at(too_large()));
         }
-        let file = std::fs::File::open(path).map_err(|e| at(e.to_string()))?;
+        // Nonblocking on Unix, so a FIFO swapped in after the check does not block the open; the
+        // handle is then checked again, so the bytes read are those of a regular file.
+        let mut options = std::fs::OpenOptions::new();
+        options.read(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt as _;
+            options.custom_flags(if cfg!(target_os = "linux") { 0o4000 } else { 0x4 });
+        }
+        let file = options.open(path).map_err(|e| at(e.to_string()))?;
+        let meta = file.metadata().map_err(|e| at(e.to_string()))?;
+        if !meta.is_file() {
+            return Err(at("not a regular file".into()));
+        }
+        if meta.len() > MAX_PROFILE_BYTES {
+            return Err(at(too_large()));
+        }
         let bytes = read_limited(file, MAX_PROFILE_BYTES).map_err(at)?;
         PrinterProfile::from_bytes(&bytes).map_err(at)
     }
