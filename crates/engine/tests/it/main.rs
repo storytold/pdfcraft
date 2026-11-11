@@ -5,6 +5,7 @@ mod support {
 }
 
 mod date_locale;
+mod dingbat_check_box;
 mod document_fonts;
 mod form_rotation;
 mod marked_content_isolation;
@@ -13,3 +14,4 @@ mod office_export_images;
 mod private_image_resize;
 mod private_text_glyphs;
 mod stamp_locale;
+mod xfa_repeat;

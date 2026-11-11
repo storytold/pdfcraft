@@ -78,8 +78,14 @@ family (`sign`, `sign_with_timestamp`, `timestamp_document`, `embed_ltv`).
 | `catalog` | Acrobat's "All tools" information architecture as data — groups, sections, icons, hues, and an `Availability` of `Ready`, `Planned(milestone)` or `Provider`. The UI renders what is *not* built yet, honestly |
 | `actions` | PDF action dispatch (go-to, URI, named, set-layer-state, JavaScript) |
 | `links` | Link creation, properties, and finding URLs in page text |
+| `open_parameters` | A path's PDF open parameters (`manual.pdf#nameddest=Intro`, `#page=12`): the file to open and where to show it. The app and `doc_open` both read them |
 | `js` | The bridge to `pdfcraft-js`. `forms` never depends on `js` directly; the engine injects it, so a build without JavaScript is possible |
 | `xfa`, `ocr`, `compare`, `export` | Façades over the L3/L4 crates of the same names |
+
+AcroForm Keystroke, Validate, Calculate and Format scripts run automatically. Their Print,
+ShowPanel and SaveAs requests are ignored with a JavaScript console diagnostic; field values,
+alerts and other requests are retained. Explicit button and console scripts can still request
+printing (#4088).
 
 ## Not done here
 

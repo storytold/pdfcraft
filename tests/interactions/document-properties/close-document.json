@@ -1,0 +1,26 @@
+{
+  "schema": 1,
+  "name": "Document Properties: close-document",
+  "steps": [
+    {
+      "event": {"op": "open"},
+      "expect": {"error": null}
+    },
+    {
+      "event": {"op": "type", "field": "Title", "value": "Stale"},
+      "expect": {"error": null}
+    },
+    {
+      "event": {"op": "close_document"},
+      "expect": {"error": null, "properties_open": false, "draft": null, "active": "B.pdf", "document": {"title": "Second document", "dirty": false, "undo": null, "redo": null}, "original_bytes": true, "notice": "The document changed. Reopen Document Properties to edit the current version."}
+    },
+    {
+      "event": {"op": "open"},
+      "expect": {"error": null, "draft": {"title": "Second document"}}
+    },
+    {
+      "event": {"op": "click", "label": "Close"},
+      "expect": {"error": null}
+    }
+  ]
+}

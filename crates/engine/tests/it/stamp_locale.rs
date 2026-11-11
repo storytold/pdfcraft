@@ -59,5 +59,16 @@ fn hostile_injected_clock_offsets_do_not_panic() {
     for session in [Session::new().with_wall_clock(|| i64::MAX, || i64::MAX), Session::new().with_wall_clock(|| i64::MIN, || i64::MIN)] {
         assert!(!session.stamp_by_line_in_language("Ana", Some("pt-br")).is_empty());
         assert!(!session.stamp_by_line("Ada").is_empty());
+        assert!(!session.stamp_line("{date} {time}", "Ada").is_empty());
     }
+}
+
+#[test]
+fn localized_builtin_stamps_do_not_change_custom_template_dates() {
+    let mut session = Session::new().with_wall_clock(|| 1_792_024_200, || -3 * 3600);
+    session.set_date_language(Some("pt-br")).unwrap();
+    session.set_date_format("yyyy.mm.dd.").unwrap();
+    assert_eq!(session.stamp_by_line("Ana"), "Por Ana às 21:30, 14/10/2026");
+    // Upstream custom templates retain their own English date/time and single-pass expansion.
+    assert_eq!(session.stamp_line("{name}: {date} at {time}", " Ana {date} "), "Ana {date}: Oct 14, 2026 at 9:30 pm");
 }

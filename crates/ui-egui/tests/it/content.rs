@@ -724,6 +724,68 @@ fn format_text_rows_line_up_and_fit_the_panel() {
     }
 }
 
+/// The Tools pane can't be dragged narrower than Format text needs: at its smallest width no
+/// control reaches past the font list, which spans the panel.
+#[test]
+fn format_text_fits_the_tools_pane_at_its_narrowest() {
+    use egui::accesskit::Role;
+    let mut h = harness();
+    // At the largest interface size too: it scales points to pixels, and the layout is in points.
+    h.state_mut().set_option("ui-scale", "300").unwrap();
+    h.state_mut().side_panels.tools_width = 0.0;
+    assert!(h.state_mut().execute("edit.text"));
+    h.run_steps(3);
+    let font = h.query_all_by_role(Role::ComboBox).find(|n| n.value().as_deref() == Some("Helvetica")).map(|n| n.rect()).expect("the font list");
+    let rects = ["Alignment", "Colour", "Font size", "Character spacing", "Horizontal scale", "Line spacing", "Paragraph spacing"]
+        .into_iter()
+        .flat_map(|l| h.query_all_by_label(l).map(move |n| (l, n.rect())))
+        .chain(h.query_all_by_role(Role::ComboBox).map(|n| ("list", n.rect())))
+        .collect::<Vec<_>>();
+    for (label, r) in rects {
+        assert!(r.right() <= font.right() + 0.5, "{label} {r:?} reaches past the font list ({font:?})");
+    }
+    // The font list ends where the pane's own content does: the header's Close button is its right edge.
+    let close = h.get_by_label("Close panel").rect();
+    assert!((font.right() - close.right()).abs() < 1.5, "the font list {font:?} is not at the pane's content edge ({close:?})");
+    // The rows below scroll, and the scrollbar floats over their right edge: they stop short of it.
+    let image = h.get_by_label("Image").rect();
+    assert!(image.right() <= font.right() - 17.0, "the Image row {image:?} runs under the scrollbar ({font:?})");
+    // The right-hand column ends where the font list does, as the left one starts where it does.
+    for label in ["Paragraph spacing", "Character spacing"] {
+        let right = h.query_all_by_label(label).map(|n| n.rect().right()).fold(f32::MIN, f32::max);
+        assert!((right - font.right()).abs() < 1.5, "{label} ends at {right}, the font list at {}", font.right());
+    }
+}
+
+/// The lists and the size row in Format text fit the narrowest Tools pane in every interface
+/// language: "Auto" in the line spacing list and "Mixed" in the size field are translated, and in
+/// Czech or French they are much longer. The font list spans the pane, so nothing may end past it.
+#[test]
+fn format_text_lists_fit_the_narrowest_tools_pane_in_every_language() {
+    use egui::accesskit::Role;
+    for lang in pdfcraft_ui_egui::i18n::Lang::all() {
+        let mut h = harness();
+        // A script with no face on this machine (Lao without system fonts) can't be drawn at all.
+        if !h.ctx.fonts_mut(|f| f.has_glyphs(&egui::FontId::proportional(13.0), lang.name())) {
+            continue;
+        }
+        h.state_mut().set_option("language", lang.code()).unwrap();
+        h.state_mut().side_panels.tools_width = 0.0;
+        assert!(h.state_mut().execute("edit.text"));
+        h.run_steps(3);
+        let lists: Vec<egui::Rect> = h.query_all_by_role(Role::ComboBox).map(|n| n.rect()).collect();
+        // Found by its value (a font name, never translated), not as the widest list: an overrun
+        // could make another list the widest.
+        let font = h.query_all_by_role(Role::ComboBox).find(|n| n.value().as_deref() == Some("Helvetica")).map(|n| n.rect()).expect("the font list");
+        for r in &lists {
+            assert!(r.right() <= font.right() + 0.5, "{}: {r:?} reaches past the font list ({font:?})", lang.code());
+        }
+        // The size row too: its field reserves room for a translated "Mixed".
+        let align = h.get_by_label(pdfcraft_ui_egui::i18n::t("Alignment")).rect();
+        assert!(align.right() <= font.right() + 0.5, "{}: Alignment {align:?} reaches past the font list ({font:?})", lang.code());
+    }
+}
+
 #[test]
 fn format_text_panel_sets_alignment_and_lists_planned_controls_disabled() {
     use egui_kittest::kittest::NodeT;
@@ -975,6 +1037,177 @@ fn a_resized_added_picture_shows_only_at_its_new_size() {
     h.run_steps(2);
     let pixels = h.render().unwrap();
     assert!(red(&pixels, kept) > 100 && red(&pixels, gone) == 0, "the page raster has the picture at its new size");
+}
+
+/// #4477, #3938: in Edit a PDF, an added image can be resized repeatedly by its corner handles
+/// (including the outer part of the handle circle and when a corner reaches past the page edge)
+/// without losing selection to the object marquee, and dragging an out-of-bounds image back onto
+/// the page does not smear edge pixels across the out-of-bounds half.
+#[test]
+fn added_picture_resizes_repeatedly_and_drags_back_from_out_of_bounds_without_smear() {
+    let _gpu = gpu();
+    let mut h = harness();
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(2);
+    let mut png = Vec::new();
+    {
+        let mut enc = png::Encoder::new(&mut png, 60, 60);
+        enc.set_color(png::ColorType::Rgb);
+        let mut w = enc.write_header().unwrap();
+        w.write_image_data(&[200u8, 30, 30].repeat(3600)).unwrap();
+    }
+    h.state_mut().add_image("red.png".into(), png);
+    h.run_steps(3);
+    crate::support::settle(&mut h);
+
+    // 1. Grab the outer part of the lower-right corner handle (where the resize cursor is shown,
+    // outside r.expand(2.0)) and drag inward along one axis to shrink the image.
+    let rect0 = added(&h)[0].content.rect();
+    let r0 = item_on_screen(&h, rect0);
+    let grip1 = r0.expand(1.0).right_bottom() + egui::vec2(2.0, 2.0);
+    h.hover_at(grip1);
+    h.run_steps(2);
+    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::ResizeNwSe);
+    let to1 = grip1 + egui::vec2(-30.0, 0.0);
+    h.drag_at(grip1);
+    h.run_steps(1);
+    for k in 1..=4 {
+        h.hover_at(grip1 + (to1 - grip1) * (k as f32 / 4.0));
+        h.run_steps(1);
+    }
+    h.drop_at(to1);
+    h.run_steps(3);
+    assert_eq!(h.state().views[0].content.selected, Some((0, 0)), "the added image stays selected after releasing a corner resize");
+    let rect1 = added(&h)[0].content.rect();
+    assert!(rect1[2] - rect1[0] < (rect0[2] - rect0[0]) - 10.0, "first corner resize shrinks the image: {rect0:?} -> {rect1:?}");
+
+    // 2. Immediately resize again right after letting go, stretching past the right page edge,
+    // then shrink back from the out-of-bounds corner handle.
+    let r1 = item_on_screen(&h, rect1);
+    let page_right = h.state().views[0].page_screen_rect(0).unwrap().right();
+    let grip2 = r1.expand(1.0).right_bottom();
+    let to2 = pos2(page_right + 12.0, grip2.y);
+    h.hover_at(grip2);
+    h.run_steps(1);
+    h.drag_at(grip2);
+    h.run_steps(1);
+    for k in 1..=4 {
+        h.hover_at(grip2 + (to2 - grip2) * (k as f32 / 4.0));
+        h.run_steps(1);
+    }
+    h.drop_at(to2);
+    h.run_steps(3);
+    let rect2 = added(&h)[0].content.rect();
+    assert!(rect2[2] > 300.0, "second resize reaches past the page edge: {rect2:?}");
+
+    // Grab the corner handle that now sits outside the page rect and shrink it back inside.
+    let r2 = item_on_screen(&h, rect2);
+    let grip3 = r2.expand(1.0).right_bottom();
+    assert!(!h.state().views[0].page_screen_rect(0).unwrap().contains(grip3), "corner handle lies outside the page rect");
+    let to3 = pos2(page_right - 40.0, grip3.y);
+    h.hover_at(grip3);
+    h.run_steps(2);
+    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::ResizeNwSe);
+    h.drag_at(grip3);
+    h.run_steps(1);
+    for k in 1..=4 {
+        h.hover_at(grip3 + (to3 - grip3) * (k as f32 / 4.0));
+        h.run_steps(1);
+    }
+    h.drop_at(to3);
+    h.run_steps(3);
+    let rect3 = added(&h)[0].content.rect();
+    assert!(rect3[2] < 300.0, "out-of-bounds corner handle still resizes the image back inside: {rect2:?} -> {rect3:?}");
+
+    // 3. Place the image half below the bottom edge of the page (y = -30..30), wait for the page
+    // raster, then drag it up into the page: the out-of-bounds bottom half must not smear the
+    // page edge's red texels across the lower half during the drag preview.
+    let img = match &added(&h)[0].content {
+        pdfcraft_engine::AddedContent::Image(i) => pdfcraft_engine::AddedImage { rect: [120.0, -30.0, 180.0, 30.0], ..i.clone() },
+        _ => panic!(),
+    };
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::UpdateContent { page: 0, index: 0, content: pdfcraft_engine::AddedContent::Image(img) }));
+    crate::support::settle(&mut h);
+    let from = item_on_screen(&h, [120.0, -30.0, 180.0, 30.0]);
+    let grab = pos2(from.center().x, from.top() + 10.0);
+    let shift = egui::vec2(0.0, -120.0);
+    h.hover_at(grab);
+    h.run_steps(1);
+    h.drag_at(grab);
+    h.run_steps(1);
+    for k in 1..=4 {
+        h.hover_at(grab + shift * (k as f32 / 4.0));
+        h.run_steps(1);
+    }
+    crate::support::settle(&mut h);
+    let moved = from.translate(shift);
+    let upper_half = egui::Rect::from_min_max(moved.min + egui::vec2(4.0, 4.0), pos2(moved.max.x - 4.0, moved.center().y - 4.0));
+    let lower_half = egui::Rect::from_min_max(pos2(moved.min.x + 4.0, moved.center().y + 4.0), moved.max - egui::vec2(4.0, 4.0));
+    let pixels = h.render().unwrap();
+    if let Ok(dir) = std::env::var("PDFCRAFT_SHOTS") {
+        pixels.save(format!("{dir}/added-image-outside-page-drag.png")).unwrap();
+    }
+    assert!(red(&pixels, upper_half) > 100, "the in-bounds half of the picture follows the drag");
+    assert_eq!(red(&pixels, lower_half), 0, "the out-of-bounds half must not smear edge texels across the lower half");
+    h.drop_at(grab + shift);
+    crate::support::settle(&mut h);
+}
+
+/// A short page leaves empty window under the scroll content. A handle dragged into that
+/// margin has to start another resize after the pointer is released.
+#[test]
+fn a_handle_in_the_viewport_below_a_short_page_starts_another_resize() {
+    let _gpu = gpu();
+    let mut h = harness();
+    h.state_mut().set_option("zoom", "50").unwrap();
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(2);
+    let mut png = Vec::new();
+    {
+        let mut enc = png::Encoder::new(&mut png, 60, 60);
+        enc.set_color(png::ColorType::Rgb);
+        let mut w = enc.write_header().unwrap();
+        w.write_image_data(&[200u8, 30, 30].repeat(3600)).unwrap();
+    }
+    h.state_mut().add_image("red.png".into(), png);
+    h.run_steps(3);
+    let img = match &added(&h)[0].content {
+        pdfcraft_engine::AddedContent::Image(i) => pdfcraft_engine::AddedImage { rect: [40.0, 0.0, 100.0, 40.0], ..i.clone() },
+        _ => panic!("added an image"),
+    };
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::UpdateContent { page: 0, index: 0, content: pdfcraft_engine::AddedContent::Image(img) }));
+    h.run_steps(3);
+    let page = h.state().views[0].page_screen_rect(0).unwrap();
+    let grip = item_on_screen(&h, [40.0, 0.0, 100.0, 40.0]).expand(1.0).right_bottom();
+    let below = pos2(grip.x, page.bottom() + 80.0);
+    assert!(below.y < 880.0, "the margin point stays in the window: {below:?}");
+    h.hover_at(grip);
+    h.run_steps(1);
+    h.drag_at(grip);
+    h.run_steps(1);
+    for k in 1..=4 {
+        h.hover_at(grip + (below - grip) * (k as f32 / 4.0));
+        h.run_steps(1);
+    }
+    h.drop_at(below);
+    h.run_steps(3);
+    let pulled = added(&h)[0].content.rect();
+    assert!(pulled[1] < -5.0, "the first drag leaves the page: {pulled:?}");
+    let grip2 = item_on_screen(&h, pulled).expand(1.0).right_bottom();
+    assert!(grip2.y > page.bottom() + 40.0, "the handle is below the page margin: grip {grip2:?} page {page:?}");
+    let to = pos2(grip2.x, grip2.y - 36.0);
+    h.hover_at(grip2);
+    h.run_steps(1);
+    h.drag_at(grip2);
+    h.run_steps(1);
+    for k in 1..=4 {
+        h.hover_at(grip2 + (to - grip2) * (k as f32 / 4.0));
+        h.run_steps(1);
+    }
+    h.drop_at(to);
+    h.run_steps(3);
+    let again = added(&h)[0].content.rect();
+    assert!(again[1] > pulled[1] + 5.0, "the second press never started a resize: {pulled:?} -> {again:?}");
 }
 
 /// Bug A for added text: with one line of the box selected, an alignment applies to that line
@@ -1427,4 +1660,113 @@ fn typing_in_one_tab_never_reaches_another_tabs_added_text() {
     h.key_press_modifiers(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, egui::Key::Z);
     h.run_steps(3);
     assert_eq!(h.state().views[1].content.draft.as_ref().map(|d| d.text.as_str()), Some("Reviewed"), "the other tab's typing stays out");
+}
+
+/// Out-of-page editing grips do not turn the invisible image body into a context-menu target.
+#[test]
+fn image_context_menu_requires_visible_body_even_when_the_frame_crosses_the_page() {
+    for visible in [false, true] {
+        let mut h = harness();
+        assert!(h.state_mut().execute("edit.edit_text"));
+        h.run_steps(2);
+        let mut png = Vec::new();
+        image::RgbImage::from_pixel(20, 20, image::Rgb([200, 30, 30]))
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        h.state_mut().add_image("edge.png".into(), png);
+        h.run_steps(3);
+        let image = match &added(&h)[0].content {
+            pdfcraft_engine::AddedContent::Image(i) => pdfcraft_engine::AddedImage { rect: [260.0, 150.0, 340.0, 230.0], ..i.clone() },
+            _ => panic!("added an image"),
+        };
+        assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::UpdateContent {
+            page: 0,
+            index: 0,
+            content: pdfcraft_engine::AddedContent::Image(image),
+        }));
+        h.run_steps(3);
+        h.state_mut().views[0].image_selection = Some(pdfcraft_ui_egui::ImageSelection::at(0, 0));
+        let x = if visible { 280.0 } else { 320.0 };
+        let point = item_on_screen(&h, [x, 190.0, x, 190.0]).center();
+        assert_eq!(h.state().views[0].page_screen_rect(0).unwrap().contains(point), visible);
+        h.hover_at(point);
+        h.run_steps(1);
+        h.event(egui::Event::PointerButton { pos: point, button: egui::PointerButton::Secondary, pressed: true, modifiers: Default::default() });
+        h.event(egui::Event::PointerButton { pos: point, button: egui::PointerButton::Secondary, pressed: false, modifiers: Default::default() });
+        h.run_steps(2);
+        // Flip horizontal also appears in the persistent sidebar; Arrange image is menu-only.
+        assert_eq!(h.query_all_by_label("Arrange image").next().is_some(), visible, "image menu requires visible body");
+    }
+}
+
+/// The rail's page and zoom fields are the same size, and each sits wholly inside the rail, so
+/// neither box is cut off at the edge (the page box lost its right side once the rail's contents
+/// changed width).
+#[test]
+fn rail_page_and_zoom_fields_match_and_fit_the_rail() {
+    let mut h = harness();
+    h.run_steps(3);
+    // The rail is 49 pt wide at the window's right edge (1400 pt wide), inside a 1 pt border.
+    let (rail_left, rail_right) = (1400.0 - 49.0 + 1.0, 1400.0 - 1.0);
+    let rail = h.get_by_label("Bookmarks").rect();
+    let (page, zoom) = (h.get_by_label("Current page").rect(), h.get_by_label("Zoom").rect());
+    assert_eq!((page.width(), page.height()), (zoom.width(), zoom.height()), "{page:?} vs {zoom:?}");
+    // The size `RAIL_FIELD_SIZE` sets: wide enough for "6400%", the largest zoom.
+    assert_eq!((page.width(), page.height()), (42.0, 22.0), "{page:?}");
+    for r in [page, zoom] {
+        assert!(r.left() >= rail_left && r.right() <= rail_right, "{r:?} is cut off by the rail ({rail_left}..{rail_right})");
+        assert!((r.center().x - rail.center().x).abs() < 1.0, "{r:?} is off the rail's centre ({rail:?})");
+    }
+}
+
+/// Added text, typed and selected with Done.
+fn selected_added_text() -> Harness<'static, PdfCraftApp> {
+    let mut h = harness();
+    assert!(h.state_mut().execute("edit.text"));
+    h.run_steps(2);
+    let p = at(&h, 40.0, 300.0);
+    click(&mut h, p);
+    h.event(egui::Event::Text("Reviewed".into()));
+    h.run_steps(2);
+    h.get_by_label("Done adding text").click();
+    h.run_steps(5);
+    assert_eq!(h.state().views[0].content.selected, Some((0, 0)));
+    h
+}
+
+/// Delete and Escape with a dialog open are the dialog's: the added text selected behind it stays
+/// and stays selected. Delete removed it, and Escape deselected it as it closed the dialog.
+#[test]
+fn delete_and_escape_under_a_dialog_leave_the_selected_added_text() {
+    for key in [egui::Key::Delete, egui::Key::Escape] {
+        let mut h = selected_added_text();
+        h.state_mut().dialog = Some(pdfcraft_ui_egui::Dialog::Shortcuts);
+        h.run_steps(3);
+        h.key_press(key);
+        h.run_steps(3);
+        assert_eq!(added(&h).len(), 1, "{key:?} under a dialog deletes nothing");
+        assert_eq!(h.state().views[0].content.selected, Some((0, 0)), "{key:?}: still selected");
+        assert_eq!(h.state().dialog.is_none(), key == egui::Key::Escape, "{key:?}: only Escape closes it");
+    }
+}
+
+/// The Escape that closes a dialog opened from a menu while added text is being typed is the
+/// dialog's: the typing stays, in the editor or added to the page. It was thrown away.
+#[test]
+fn escape_closing_a_dialog_over_added_text_being_typed_keeps_the_typing() {
+    let mut h = harness();
+    assert!(h.state_mut().execute("edit.text"));
+    h.run_steps(2);
+    let p = at(&h, 40.0, 300.0);
+    click(&mut h, p);
+    h.event(egui::Event::Text("Reviewed".into()));
+    h.run_steps(2);
+    assert!(h.state().views[0].content.draft.is_some(), "the editor is open");
+    crate::support::open_shortcuts_from_the_help_menu(&mut h);
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+    assert!(h.state().dialog.is_none(), "Escape closes the dialog");
+    let open = h.state().views[0].content.draft.as_ref().is_some_and(|d| d.text.contains("Reviewed"));
+    let added = added(&h).iter().any(|a| matches!(&a.content, pdfcraft_engine::AddedContent::Text(t) if t.text.contains("Reviewed")));
+    assert!(open || added, "the typing stays");
 }
