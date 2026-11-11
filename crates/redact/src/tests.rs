@@ -473,6 +473,7 @@ fn removed_text_kept_for_the_metadata_check_is_bounded_per_document() {
         removed_text: Vec::new(),
         removed_cut: false,
         removed_room: interp::MAX_REMOVED_BYTES,
+        property_room: interp::MAX_PROPERTY_COPIES,
         removed_everywhere: HashSet::new(),
         images: pdfcraft_cos::ImageBudget::new(&doc),
         removed_appearances: HashSet::new(),
@@ -6150,6 +6151,7 @@ mod limits;
 mod metadata_fail_closed;
 mod metadata_matching;
 mod operands_from_the_end;
+mod property_copies;
 mod property_retirement;
 mod surviving_references;
 mod text_state;

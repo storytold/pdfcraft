@@ -624,6 +624,8 @@ fn content_pass(doc: &mut Document, text: bool, layers: bool, write: bool) -> Re
     #[cfg(test)]
     CONTENT_PASSES.with(|n| n.set(n.get() + 1));
     let mut total = 0;
+    // What the run's pages may still copy of property lists into content, together.
+    let mut property_room = crate::interp::MAX_PROPERTY_COPIES;
     let mut retained_off_layers = std::collections::HashSet::new();
     // The original image and form XObjects the rewrite drops or replaces, on any page.
     let mut doomed = Vec::new();
@@ -648,7 +650,7 @@ fn content_pass(doc: &mut Document, text: bool, layers: bool, write: bool) -> Re
         let mut report = Report::default();
         let mode = if write { Mode::Apply } else { Mode::Verify };
         let mut images = pdfcraft_cos::ImageBudget::new(doc);
-        let mut scope = Scope::new(&[], mode, &mut report, budget, &mut images);
+        let mut scope = Scope::new(&[], mode, &mut report, budget, &mut images).with_property_room(property_room);
         if text {
             let c = page.crop(doc);
             scope.hidden_text = Some([c[0].min(c[2]), c[1].min(c[3]), c[0].max(c[2]), c[1].max(c[3])]);
@@ -656,8 +658,12 @@ fn content_pass(doc: &mut Document, text: bool, layers: bool, write: bool) -> Re
         scope.hidden_layers = off.iter().copied().collect();
         scope.layers_enabled = layers;
         let out = process(doc, &mut scope, &data, &resources, Matrix::IDENTITY);
+        property_room = scope.property_room;
         if let Some(error) = out.error {
             return Err(error.into());
+        }
+        if out.property_copies {
+            return Err(RedactError::PropertyCopies(pi + 1));
         }
         let blocks = scope.layer_blocks;
         let glyphs = scope.report.glyphs;

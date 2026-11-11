@@ -75,6 +75,13 @@ pub enum RedactError {
         "page {0} has vertical-writing text while a redaction mark is pending, and PdfCraft cannot tell whether that text lies under the mark yet, so nothing was changed"
     )]
     VerticalText(usize),
+    /// Stripping the replacement text from marked content would copy the property lists it names
+    /// into the content past [`interp::MAX_PROPERTY_COPIES`] for the run, on this page: many
+    /// blocks name a large one.
+    #[error(
+        "page {0} has marked content whose replacement text would be removed by copying its property lists past 16 MiB in all, so nothing was changed"
+    )]
+    PropertyCopies(usize),
     #[error(
         "redaction appearance has invalid geometry or exceeds the 8 MiB budget; reduce the marked area, turn off repeated text or apply fewer pages at once (nothing was redacted)"
     )]
@@ -542,6 +549,7 @@ fn apply_within(doc: &mut Document, pages: Option<&[usize]>, images: pdfcraft_co
         removed_text: Vec::new(),
         removed_cut: false,
         removed_room: interp::MAX_REMOVED_BYTES,
+        property_room: interp::MAX_PROPERTY_COPIES,
         removed_everywhere: HashSet::new(),
         images,
         removed_appearances: HashSet::new(),
@@ -744,6 +752,9 @@ struct Applying {
     /// Bytes of removed text later pages may still keep (`interp::MAX_REMOVED_BYTES` for the
     /// document).
     removed_room: usize,
+    /// Bytes of property lists later pages may still copy into content
+    /// (`interp::MAX_PROPERTY_COPIES` for the run).
+    property_room: usize,
     /// What clearing images may spend, across the run's pages.
     images: pdfcraft_cos::ImageBudget,
     /// Appearance streams of the annotations removed, on any page: one shared with a kept
@@ -763,19 +774,22 @@ fn redact_page_content(
     page: &pdfcraft_model::Page,
     rects: &[[f64; 4]],
 ) -> Result<(), RedactError> {
-    let Applying { report, doomed_xobjects, retired_properties, removed_text, removed_cut, removed_room, images, pruned_patterns, .. } = applying;
+    let Applying {
+        report, doomed_xobjects, retired_properties, removed_text, removed_cut, removed_room, property_room, images, pruned_patterns, ..
+    } = applying;
     // 1. Content.
     let mut budget = pdfcraft_cos::DecodeBudget::page();
     let (list, data) = page_streams_within(doc, &page.dict, pi, &mut budget)?;
     let resources = page.dict.get(b"Resources").and_then(|r| doc.resolve(r).as_dict().cloned()).unwrap_or_default();
     // What the walk leaves of the page's allowance, the cleanups below spend.
     let (out, mut budget) = {
-        let mut scope = Scope::new(rects, Mode::Apply, report, budget, images).with_removed_room(*removed_room);
+        let mut scope = Scope::new(rects, Mode::Apply, report, budget, images).with_removed_room(*removed_room).with_property_room(*property_room);
         let out = process(doc, &mut scope, &data, &resources, pdfcraft_content::Matrix::IDENTITY);
         scope.flush();
         removed_text.append(&mut scope.removed_text);
         *removed_cut |= scope.removed_cut;
         *removed_room = scope.removed_room;
+        *property_room = scope.property_room;
         (out, scope.into_budget())
     };
     // Fail closed: the interpreter lays vertical-writing text out horizontally, so it cannot
@@ -788,6 +802,9 @@ fn redact_page_content(
     }
     if out.vertical {
         return Err(RedactError::VerticalText(pi + 1));
+    }
+    if out.property_copies {
+        return Err(RedactError::PropertyCopies(pi + 1));
     }
     // An inline image the renderer reads no image for (no `EI` it accepts, or parameters it
     // can't read): where the page's operators resume after it is a guess, so neither removal
