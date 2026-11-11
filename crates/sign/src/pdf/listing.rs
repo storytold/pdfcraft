@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
 use super::types::{Detail, Modification, Status, TrustStore};
-use super::validate::{is_doc_timestamp, validate_doc_timestamp, validate_into};
+use super::validate::{Own, is_doc_timestamp, validate_doc_timestamp, validate_into};
 use super::{Arc, Dict, DigestAlg, Document, HashMap, HashSet, ObjRef, Object, SignatureInfo};
 
 /// Digests of signed byte ranges (and parsed signed revisions), kept across revalidations of
@@ -475,7 +475,8 @@ pub fn list_cached(doc: &Document, bytes: &[u8], trust: &TrustStore, cache: &Dig
             details: Vec::new(),
         };
         if let Some(v) = v {
-            validate_into(doc, bytes, trust, &v, &mut info, cache);
+            let own = Own::Field { field: f.r, value: f.dict.get(b"V").and_then(Object::as_ref) };
+            validate_into(doc, bytes, trust, &v, &mut info, cache, own);
         }
         out.push(info);
     }
@@ -518,7 +519,7 @@ pub fn list_cached(doc: &Document, bytes: &[u8], trust: &TrustStore, cache: &Dig
             verdict_shown: false,
             details: Vec::new(),
         };
-        validate_doc_timestamp(doc, bytes, d, &mut info, cache, trust);
+        validate_doc_timestamp(doc, bytes, d, &mut info, cache, trust, Own::Standalone(r));
         out.push(info);
     }
     if !whole {

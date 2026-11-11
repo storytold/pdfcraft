@@ -1,7 +1,8 @@
-use super::listing::{DigestCache, list, nums, sig_fields, text};
+use super::changes::same_object;
+use super::listing::{DigestCache, Field, list, nums, sig_fields, text};
 use super::locks::{LockScope, Locked, lock_scope};
 use super::operations::judge_changes;
-use super::types::{Detail, Fill, Modification, Status, TrustStore};
+use super::types::{Detail, Fill, Modification, Status, TrustStore, kind};
 use super::{
     Certificate, Dict, DigestAlg, Document, HashSet, ObjRef, Object, SignError, SignatureInfo, SignedData, Time, build_chain, build_chain_noted,
 };
@@ -12,6 +13,21 @@ struct SignatureValidation<'a> {
     trust: &'a TrustStore,
     info: &'a mut SignatureInfo,
     cache: &'a DigestCache,
+    own: Own,
+}
+
+/// Where the signature being validated was read from: the field that holds it, and its
+/// dictionary's object when `/V` refers to one. A signature is its signer's only in the field that
+/// held that same dictionary in the revision its byte range covers (#5175, #7032). A field added
+/// or renamed later, that names the signer's dictionary or holds a copy of it, has bytes that
+/// check out but was never signed.
+#[derive(Clone, Copy, Debug)]
+pub(super) enum Own {
+    /// In field `field` (`None`: written in place in its parent's or the form's array), value
+    /// `value` (`None`: written in place in the field).
+    Field { field: Option<ObjRef>, value: Option<ObjRef> },
+    /// A document timestamp of its own, object `0`.
+    Standalone(ObjRef),
 }
 
 struct VerifiedSignature<'a> {
@@ -21,11 +37,6 @@ struct VerifiedSignature<'a> {
     cms_time: Option<Time>,
     unverified_time: Option<Time>,
 }
-
-/// Most signature fields whose locks are compared for a signature that is not listed under any of
-/// the fields ending its signed revision; past it the locks are left undecided. Each costs a walk of
-/// the form, and a real revision ends with one signature.
-const MAX_UNBOUND_CANDIDATES: usize = 4;
 
 /// Validate one signature dictionary.
 pub fn validate(doc: &Document, bytes: &[u8], trust: &TrustStore, field: &str) -> Option<SignatureInfo> {
@@ -82,7 +93,7 @@ fn set_certification(doc: &Document, v: &Dict, info: &mut SignatureInfo) {
     }
 }
 
-pub(super) fn validate_into(doc: &Document, bytes: &[u8], trust: &TrustStore, v: &Dict, info: &mut SignatureInfo, cache: &DigestCache) {
+pub(super) fn validate_into(doc: &Document, bytes: &[u8], trust: &TrustStore, v: &Dict, info: &mut SignatureInfo, cache: &DigestCache, own: Own) {
     // A document timestamp can also be the value of a signature field (Documenso writes
     // `Timestamp_1` that way). Its `/Contents` is a bare RFC 3161 token, not a signature over the
     // document, so it must not be read as one.
@@ -90,7 +101,7 @@ pub(super) fn validate_into(doc: &Document, bytes: &[u8], trust: &TrustStore, v:
         info.sub_filter = Some("ETSI.RFC3161".to_string());
         info.doc_timestamp = true;
         info.timestamp = true;
-        validate_doc_timestamp(doc, bytes, v, info, cache, trust);
+        validate_doc_timestamp(doc, bytes, v, info, cache, trust, own);
         return;
     }
     info.date = text(doc, v, b"M");
@@ -129,7 +140,7 @@ pub(super) fn validate_into(doc: &Document, bytes: &[u8], trust: &TrustStore, v:
         info.details.push(Detail::of("PdfCraft can't check this signature yet: {}.", Fill::Reason(why.to_owned())));
     };
     if info.sub_filter.as_deref() == Some("adbe.x509.rsa_sha1") {
-        return validate_x509_rsa_sha1(SignatureValidation { doc, bytes, trust, info, cache }, v, (l0, o1, covered), &contents);
+        return validate_x509_rsa_sha1(SignatureValidation { doc, bytes, trust, info, cache, own }, v, (l0, o1, covered), &contents);
     }
     let sd = match SignedData::parse(&contents) {
         Ok(sd) => sd,
@@ -240,15 +251,16 @@ pub(super) fn validate_into(doc: &Document, bytes: &[u8], trust: &TrustStore, v:
         }
     }
     finish_validation(
-        SignatureValidation { doc, bytes, trust, info, cache },
+        SignatureValidation { doc, bytes, trust, info, cache, own },
         VerifiedSignature { covered, certificate: cert, embedded: &sd.certificates, cms_time: s.signing_time, unverified_time },
+        v,
     );
 }
 
 /// The verdict once the signature value has been checked: chain and trust, the signing time
 /// against the certificate's validity, and what later revisions changed.
-fn finish_validation(context: SignatureValidation<'_>, verified: VerifiedSignature<'_>) {
-    let SignatureValidation { doc, bytes, trust, info, cache } = context;
+fn finish_validation(context: SignatureValidation<'_>, verified: VerifiedSignature<'_>, v: &Dict) {
+    let SignatureValidation { doc, bytes, trust, info, cache, own } = context;
     let VerifiedSignature { covered, certificate: cert, embedded, cms_time, unverified_time } = verified;
     info.signing_time = cms_time.or_else(|| info.date.as_deref().and_then(Time::from_pdf));
     let mut pool = embedded.to_vec();
@@ -276,48 +288,26 @@ fn finish_validation(context: SignatureValidation<'_>, verified: VerifiedSignatu
         Modification::None
     } else {
         // The permissions are the signed revision's: a later one can rewrite `/P` (#1788) or the
-        // catalog's `/Perms`. This signature is the one whose byte range ends that revision. A
-        // revision that holds no such signature does not say which permissions apply, so what
-        // came after it is judged as when the revision cannot be read: not permitted.
+        // catalog's `/Perms`. This signature is the one whose byte range ends that revision, in
+        // the field it is listed under now. A revision that holds no signature ending it does not
+        // say which permissions apply, so what came after it is judged as when the revision
+        // cannot be read: not permitted.
         let old = cache.revision(doc, bytes, covered);
-        // Every field of the signed revision whose signature ends it; the one this signature is
-        // listed under, when it is there, is the one it was made in.
-        let mut ending: Vec<_> = old
-            .as_ref()
-            .map(|old| {
-                sig_fields(old)
-                    .into_iter()
-                    .filter_map(|f| {
-                        let v = f.signature(old)?;
-                        nums(old, &v, b"ByteRange").is_some_and(|b| b.len() == 4 && b[2] + b[3] == covered as f64).then_some((f, v))
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-        let bound = ending.iter().position(|(f, _)| f.name == info.field);
-        let candidates = match bound {
-            Some(i) => vec![ending.swap_remove(i)],
-            None => std::mem::take(&mut ending),
-        };
-        match (old, candidates.first()) {
-            (Some(old), Some((field, v))) => {
-                set_certification(&old, v, info);
-                // The fields this signature locks, as the signed revision has them, against the
-                // document now (#6757). Its locks are its own field's: when that field is not
-                // among those ending the revision, any of them could be it, so a lock on any of
-                // them leaves the check undecided rather than borrowing another field's. Each
-                // candidate costs a walk of the form, so past a few the check is undecided too.
-                let scope = match bound {
-                    Some(_) => lock_scope(doc, &old, field, v),
-                    None if candidates.len() > MAX_UNBOUND_CANDIDATES => LockScope { state: Locked::Unchecked, objects: HashSet::new() },
-                    None if candidates.iter().any(|(f, v)| lock_scope(doc, &old, f, v).state != Locked::Kept) => {
-                        LockScope { state: Locked::Unchecked, objects: HashSet::new() }
-                    }
-                    None => LockScope::none(),
-                };
-                locks = scope.state;
-                judge_changes(doc, Some(old), info.certify, &scope)
-            }
+        match (old, &own) {
+            (Some(old), Own::Field { field, value }) => match held_in(&old, &info.field, (*field, *value), v, covered) {
+                Held::By(signed_field, signed_value) => {
+                    set_certification(&old, &signed_value, info);
+                    // The fields this signature locks, as the signed revision has them, against
+                    // the document now (#6757).
+                    let scope = lock_scope(doc, &old, &signed_field, &signed_value);
+                    locks = scope.state;
+                    judge_changes(doc, Some(old), info.certify, &scope)
+                }
+                // Another field ended the signed revision: this one shows a signature it did not
+                // hold when signed, whatever the bytes check out to.
+                Held::Elsewhere => Modification::Disallowed(vec![kind::OTHER]),
+                Held::Nowhere => judge_changes(doc, None, info.certify, &LockScope::none()),
+            },
             _ => judge_changes(doc, None, info.certify, &LockScope::none()),
         }
     };
@@ -547,9 +537,52 @@ fn check_dss_revocation(doc: &Document, signer: Option<&Certificate>, at: &Optio
     }
 }
 
+/// Whether the signed revision `old` (the file up to `covered`) held the signature validated as
+/// field `name`: a field of that name, the same object as the one it is read from now (`own`:
+/// field and value), whose value is the same dictionary (`now` is the one read now) and ends
+/// that revision.
+enum Held {
+    By(Field, Dict),
+    /// Signed, but by another field.
+    Elsewhere,
+    /// No field holds a signature ending the revision.
+    Nowhere,
+}
+
+fn held_in(old: &Document, name: &str, (field, value): (Option<ObjRef>, Option<ObjRef>), now: &Dict, covered: usize) -> Held {
+    let ending: Vec<(Field, Dict)> = sig_fields(old)
+        .into_iter()
+        .filter_map(|f| {
+            let v = f.signature(old)?;
+            nums(old, &v, b"ByteRange").is_some_and(|b| b.len() == 4 && b[2] + b[3] == covered as f64).then_some((f, v))
+        })
+        .collect();
+    if ending.is_empty() {
+        return Held::Nowhere;
+    }
+    let same = |f: &Field, v: &Dict| {
+        let held = f.dict.get(b"V").and_then(Object::as_ref);
+        f.name == name && f.r == field && held == value && (value.is_some() || same_object(&Object::Dict(v.clone()), &Object::Dict(now.clone())))
+    };
+    match ending.into_iter().find(|(f, v)| same(f, v)) {
+        Some((f, v)) => Held::By(f, v),
+        None => Held::Elsewhere,
+    }
+}
+
 /// Validate a standalone document timestamp dictionary (`/ETSI.RFC3161`): the token must be
-/// cryptographically valid and its message imprint must cover the file's signed bytes.
-pub(super) fn validate_doc_timestamp(doc: &Document, bytes: &[u8], v: &Dict, info: &mut SignatureInfo, cache: &DigestCache, trust: &TrustStore) {
+/// cryptographically valid and its message imprint must cover the file's signed bytes. `own` is
+/// where it was read from: a field that must have held it when it was applied, or the object
+/// that must have been it then.
+pub(super) fn validate_doc_timestamp(
+    doc: &Document,
+    bytes: &[u8],
+    v: &Dict,
+    info: &mut SignatureInfo,
+    cache: &DigestCache,
+    trust: &TrustStore,
+    own: Own,
+) {
     info.date = text(doc, v, b"M");
     let invalid = |info: &mut SignatureInfo, why: Detail| {
         info.status = Status::Invalid;
@@ -598,7 +631,17 @@ pub(super) fn validate_doc_timestamp(doc: &Document, bytes: &[u8], v: &Dict, inf
     info.modification = if covered == bytes.len() || bytes[covered..].iter().all(|b| b.is_ascii_whitespace() || *b == 0) {
         Modification::None
     } else {
-        judge_changes(doc, cache.revision(doc, bytes, covered), None, &LockScope::none())
+        let old = cache.revision(doc, bytes, covered);
+        let held = old.as_ref().map(|old| match own {
+            Own::Field { field, value } => matches!(held_in(old, &info.field, (field, value), v, covered), Held::By(..)),
+            // The dictionary itself was in the revision it timestamps, as it was then.
+            Own::Standalone(r) => old.try_get(r.num).ok().is_some_and(|was| old.generation(r.num) == r.generation && same_object(&was, &doc.get(r))),
+        });
+        match held {
+            // Not the timestamp that was applied: a copy, or one named by a later field.
+            Some(false) => Modification::Disallowed(vec![kind::OTHER]),
+            _ => judge_changes(doc, old, None, &LockScope::none()),
+        }
     };
     match &info.modification {
         Modification::None => info.details.push(Detail::plain("This document has not been modified since this timestamp was applied.")),
@@ -677,7 +720,7 @@ pub(crate) fn signature_contents(doc: &Document) -> Vec<Vec<u8>> {
 /// signature as a DER OCTET STRING over the SHA-1 digest of the byte ranges, and `/Cert` holds the
 /// signer's certificate (then any others) as DER byte strings.
 fn validate_x509_rsa_sha1(context: SignatureValidation<'_>, v: &Dict, (l0, o1, covered): (usize, usize, usize), contents: &[u8]) {
-    let SignatureValidation { doc, bytes, trust, info, cache } = context;
+    let SignatureValidation { doc, bytes, trust, info, cache, own } = context;
     let fail = |info: &mut SignatureInfo, why: Detail| {
         info.status = Status::Invalid;
         info.details.push(why);
@@ -725,7 +768,66 @@ fn validate_x509_rsa_sha1(context: SignatureValidation<'_>, v: &Dict, (l0, o1, c
     info.details.push(Detail::plain("The signature uses the legacy adbe.x509.rsa_sha1 format."));
     info.details.extend(DigestAlg::Sha1.weakness().map(Detail::plain));
     finish_validation(
-        SignatureValidation { doc, bytes, trust, info, cache },
+        SignatureValidation { doc, bytes, trust, info, cache, own },
         VerifiedSignature { covered, certificate: cert, embedded: &certs, cms_time: None, unverified_time: None },
+        v,
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    /// A classic-xref PDF of `objs`, numbered from 1, with object 1 as the catalog.
+    fn pdf(objs: &[&str]) -> Document {
+        let mut out = b"%PDF-1.7\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, o) in objs.iter().enumerate() {
+            offsets.push(out.len());
+            out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+        }
+        let xref = out.len();
+        out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+        for o in offsets {
+            out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+        }
+        out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+        Document::open(Arc::new(out)).unwrap()
+    }
+
+    fn at(num: u32) -> ObjRef {
+        ObjRef { num, generation: 0 }
+    }
+
+    /// A signature is its signer's only in the field that held that dictionary in the revision it
+    /// signs: the same name, the same field object, the same value (#5175, #7032). Field "A"
+    /// (object 4) holds signature 5, which ends the revision at 1000; field "B" (object 6) holds
+    /// nothing.
+    #[test]
+    fn a_signature_is_bound_to_the_field_that_held_it_when_signed() {
+        let old = pdf(&[
+            "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 6 0 R] >> >>",
+            "<< /Type /Pages /Kids [] /Count 0 >>",
+            "<< >>",
+            "<< /FT /Sig /T (A) /V 5 0 R >>",
+            "<< /Type /Sig /ByteRange [0 10 20 980] /Contents <00> >>",
+            "<< /FT /Sig /T (B) >>",
+        ]);
+        let value = old.get(at(5)).as_dict().cloned().unwrap();
+        let held = |name: &str, field: Option<u32>, v: Option<u32>, now: &Dict, covered: usize| {
+            held_in(&old, name, (field.map(at), v.map(at)), now, covered)
+        };
+        assert!(matches!(held("A", Some(4), Some(5), &value, 1000), Held::By(f, _) if f.r == Some(at(4))));
+        // Read now under another name, from another field object, or from a copy of the value.
+        assert!(matches!(held("B", Some(6), Some(5), &value, 1000), Held::Elsewhere));
+        assert!(matches!(held("A", Some(7), Some(5), &value, 1000), Held::Elsewhere));
+        assert!(matches!(held("A", Some(4), Some(8), &value, 1000), Held::Elsewhere));
+        // A value read in place now, where the field held one by reference, is another one.
+        let mut other = value.clone();
+        other.set(b"Reason".to_vec(), Object::String(pdfcraft_cos::PdfString::text("forged")));
+        assert!(matches!(held("A", Some(4), None, &other, 1000), Held::Elsewhere));
+        // No field ends the revision there.
+        assert!(matches!(held("A", Some(4), Some(5), &value, 999), Held::Nowhere));
+    }
 }
