@@ -315,6 +315,8 @@ fn a_calculation_reads_each_named_field_once() {
     assert_eq!(calculation_reads("AFSimple_Calculate(\"SUM\", \"a, b\");"), ["a", "b"]);
 }
 
+/// Number formats show separators, decimals, currency and negatives as AFNumber_Format does,
+/// and the keystroke check stores the number.
 #[test]
 fn numbers_format_like_acrobat() {
     let n = |d, s, ng, c: &str, p| Format::Number { decimals: d, sep: s, neg: ng, currency: c.into(), prepend: p };
@@ -335,6 +337,36 @@ fn numbers_format_like_acrobat() {
     assert_eq!(keystroke(&Format::None, "Name", " \t"), Ok(" \t".into()));
 }
 
+/// A date field laid out for an XFA form keeps text its pattern doesn't read, as typed, and
+/// shows a date only for a value that is one: in the pattern already, or an ISO date. Another
+/// viewer keeps and shows such text the same way on a synthetic form; an ordinary date field
+/// still refuses it.
+#[test]
+fn xfa_date_fields_keep_and_show_what_their_pattern_does_not_read() {
+    let xfa = |fmt: &str| Actions { format: Format::Date(fmt.into()), xfa_date: true, ..Actions::default() };
+    let plain = |fmt: &str| Actions { format: Format::Date(fmt.into()), ..Actions::default() };
+    for (fmt, typed) in [("yyyy-mm-dd", "10/18/2016"), ("mm/dd/yyyy", "xyz"), ("yyyymmdd", "10/18/2016")] {
+        assert_eq!(xfa(fmt).keystroke("Date", typed), Ok(typed.to_string()), "{typed} in {fmt}");
+        assert!(plain(fmt).keystroke("Date", typed).is_err(), "an ordinary date field refuses {typed}");
+    }
+    assert_eq!(xfa("mm/dd/yyyy").keystroke("Date", "  pending  "), Ok("  pending  ".to_string()), "spaces and all");
+    // Shown: in the pattern, as it is; an ISO date, in the pattern; anything else as typed,
+    // where an ordinary field's looser reading would show a date the value doesn't hold.
+    let ymd = xfa("yyyymmdd");
+    assert_eq!(ymd.format_value("20161018"), "20161018");
+    assert_eq!(ymd.format_value("2016-10-18"), "20161018");
+    assert_eq!(ymd.format_value("26 10 18"), "26 10 18");
+    assert_ne!(plain("yyyymmdd").format_value("26 10 18"), "26 10 18", "read loosely as a date");
+    let mdy = xfa("mm/dd/yyyy");
+    assert_eq!(mdy.format_value("2016-10-18"), "10/18/2016");
+    assert_eq!(mdy.format_value("20161018"), "10/18/2016");
+    assert_eq!(mdy.format_value("10/18/2016"), "10/18/2016");
+    assert_eq!(mdy.format_value("xyz"), "xyz");
+    assert_eq!(mdy.format_value("2016-02-30"), "2016-02-30", "not a real day: as typed");
+    assert_eq!(xfa("ddmmmyy").format_value("18OCT16"), "18OCT16", "in the pattern, its case kept");
+}
+
+/// Date, time and mask formats show values in their pattern and refuse what doesn't fit.
 #[test]
 fn dates_times_and_masks() {
     let d = Format::Date("mm/dd/yyyy".into());
@@ -361,6 +393,35 @@ fn dates_times_and_masks() {
 }
 
 #[test]
+fn a_calculation_over_fields_without_values_is_0_for_every_operation() {
+    // A blank row: neither field has a value, so the form's lookup returns none.
+    let vals = |name: &str| -> Vec<String> { if name == "a" { vec!["2".into()] } else { vec![] } };
+    let simple = |op, f: &[&str]| calculate(&Calculate::Simple { op, fields: f.iter().map(|s| s.to_string()).collect() }, &vals);
+    for op in CalcOp::ALL {
+        assert_eq!(simple(op, &["qty", "price"]), Some("0".into()), "{op:?} of empty fields");
+        assert_eq!(simple(op, &[]), Some("0".into()), "{op:?} of no fields");
+    }
+    assert_eq!(simple(CalcOp::Product, &["a", "qty"]), Some("2".into()), "a field with no value is left out");
+}
+
+/// A drop-down's blank option is often a single space, the value it starts with. That is a value
+/// worth 0, so a row whose quantity is still blank reads 0 × price = 0. Read as "no value", it
+/// would be left out and the row would read the price alone.
+#[test]
+fn a_blank_option_of_a_single_space_is_a_value_worth_0() {
+    let vals = |name: &str| -> Vec<String> {
+        match name {
+            "qty" => vec![" ".into()],
+            "price" => vec!["605".into()],
+            _ => vec![],
+        }
+    };
+    let simple = |op, f: &[&str]| calculate(&Calculate::Simple { op, fields: f.iter().map(|s| s.to_string()).collect() }, &vals);
+    assert_eq!(simple(CalcOp::Product, &["qty", "price"]), Some("0".into()));
+    assert_eq!(simple(CalcOp::Product, &["qty", "none"]), Some("0".into()), "a blank quantity on a row without a price");
+}
+
+#[test]
 fn validation_and_calculation() {
     let r = Validate::Range { min: Some(0.0), max: Some(100.0) };
     assert!(validate(&r, "50").is_ok() && validate(&r, "").is_ok());
@@ -382,4 +443,80 @@ fn validation_and_calculation() {
     assert_eq!(simple(CalcOp::Sum, &["missing"]), Some("0".into()));
     assert_eq!(calculate(&Calculate::Notation("(a + b) * 2 - Unit\\ Price / 4".into()), &vals), Some("10".into()));
     assert_eq!(calculate(&Calculate::Notation("a +".into()), &vals), None);
+}
+
+/// Async for-of headers have the same regex-literal contexts as ordinary for-of headers.
+#[test]
+fn for_await_regex_literals_do_not_become_format_calls() {
+    for header in ["for await", "for /* gap */ await"] {
+        let js = format!("async function f() {{ {header} (const x of /AFPercent_Format(0, 0)/g) {{}} }} AFPercent_Format(2, 1);");
+        assert_eq!(parse_format(&js), Some(Format::Percent { decimals: 2, sep: 1 }));
+        let body = format!("async function f() {{ {header} (const x of xs) /AFPercent_Format(0, 0)/.test(x); }} AFPercent_Format(2, 1);");
+        assert_eq!(parse_format(&body), Some(Format::Percent { decimals: 2, sep: 1 }));
+    }
+    assert_eq!(parse_format("obj.await(x) / 2; AFPercent_Format(2, 1); var z = 1 / 2;"), Some(Format::Percent { decimals: 2, sep: 1 }));
+}
+
+#[test]
+fn identifier_of_in_conditions_keeps_division_and_real_format_calls() {
+    for header in [
+        "if (of / 2)",
+        "while (of / 2)",
+        "with (of / 2)",
+        "for (of / 2; ; )",
+        "for (var x = of / 2; ; )",
+        "for (var x = 0; of / 2; )",
+        "for (x of of / 2)",
+        "for (const x of of / 2)",
+        "for (x in of / 2)",
+        "for (var of / 2; ; )",
+        "for (obj.of / 2; ; )",
+    ] {
+        let js = format!("{header} AFPercent_Format(2, 1); var z = 1 / 2;");
+        assert_eq!(parse_format(&js), Some(Format::Percent { decimals: 2, sep: 1 }), "{header}");
+    }
+}
+
+#[test]
+fn destructured_for_of_targets_keep_regex_iterables_opaque() {
+    for header in ["for", "for await"] {
+        for target in ["const [x]", "const {x}", "(x)", "const {x = of / 2}", "obj.in", "obj.of", "const of"] {
+            let js = format!("async function f() {{ {header} ({target} of /AFPercent_Format(0, 0)/g) {{}} }} AFPercent_Format(2, 1);");
+            assert_eq!(parse_format(&js), Some(Format::Percent { decimals: 2, sep: 1 }), "{header} {target}");
+        }
+    }
+}
+
+/// A custom calculation script (#6630) is written as given, a blank one as no script; it reads the
+/// fields it names, and running it is the JavaScript engine's, not the AF calculator's.
+#[test]
+fn a_custom_calculation_script_is_kept_as_written() {
+    let js = "event.value = this.getField(\"a\").value * getField(\"b\").value; // getField(\"c\")";
+    let c = Calculate::Custom(js.into());
+    assert_eq!(calculate_js(&c).as_deref(), Some(js));
+    for blank in ["", " \r\n\t"] {
+        assert_eq!(calculate_js(&Calculate::Custom(blank.into())), None, "{blank:?}");
+    }
+    assert_eq!(c.reads(), ["a", "b"]);
+    assert_eq!(calculate(&c, &|_| vec!["2".into()]), None);
+}
+
+#[test]
+fn simple_calculations_fold_a_repeated_group_without_collecting_it() {
+    let group = |_: &str| vec!["2".to_string(); 3];
+    let list = |op, n: usize| Calculate::Simple { op, fields: vec!["g".to_string(); n] };
+    assert_eq!(calculate(&list(CalcOp::Sum, 4), &group).as_deref(), Some("24"));
+    assert_eq!(calculate(&list(CalcOp::Average, 4), &group).as_deref(), Some("2"));
+    assert_eq!(calculate(&list(CalcOp::Product, 2), &group).as_deref(), Some("64"));
+    assert_eq!(calculate(&list(CalcOp::Maximum, 2), &group).as_deref(), Some("2"));
+    assert_eq!(calculate(&list(CalcOp::Sum, 0), &group).as_deref(), Some("0"));
+}
+
+#[test]
+fn a_simple_calculation_that_expands_past_the_allowance_is_not_calculated() {
+    let thousand = |_: &str| vec!["1".to_string(); 1000];
+    let within = Calculate::Simple { op: CalcOp::Sum, fields: vec!["g".to_string(); 1000] };
+    let past = Calculate::Simple { op: CalcOp::Sum, fields: vec!["g".to_string(); 2000] };
+    assert_eq!(calculate(&within, &thousand).as_deref(), Some("1000000"));
+    assert_eq!(calculate(&past, &thousand), None);
 }
