@@ -9,7 +9,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use pdfcraft_cos::{Dict, Document, MAX_DECODED, Object, XrefEntry};
+use pdfcraft_cos::{Dict, Document, MAX_DECODED, ObjRef, Object, XrefEntry};
 
 /// The categories, in Acrobat's order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
