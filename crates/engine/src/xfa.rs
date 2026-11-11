@@ -24,6 +24,9 @@ const MAX_RELAYOUTS_PER_EVENT: usize = 50;
 const MAX_ALERTS_PER_EVENT: usize = 100;
 const MAX_CONSOLE_PER_EVENT: usize = 1_000;
 const MAX_ERRORS_PER_EVENT: usize = 100;
+/// Most `xfa.host.resetData` calls one event carries out: each scans the whole form.
+const MAX_RESETS_PER_EVENT: usize = 1_000;
+
 /// Time the scripts of one event may take in all before the rest are skipped: opening (and
 /// the calculations every change runs) is held tighter than a click.
 const OPEN_BUDGET_MS: u64 = 3_000;
@@ -457,6 +460,11 @@ struct Runner<'a, 'b> {
     clock: Clock,
     runs: usize,
     skipped: usize,
+    /// `resetData` calls this event made, and those left undone (past [`MAX_RESETS_PER_EVENT`] or
+    /// the event's time budget, which is kept as it was then: the clock is swapped before the end).
+    resets: usize,
+    resets_skipped: usize,
+    reset_skip_budget_ms: Option<u64>,
     relayouts: usize,
     relayouts_skipped: bool,
     /// Lay the form out once, when the event ends, rather than after every script that changed
@@ -510,6 +518,9 @@ impl<'a, 'b> Runner<'a, 'b> {
             clock: Clock::start(budget_ms),
             runs: 0,
             skipped: 0,
+            resets: 0,
+            resets_skipped: 0,
+            reset_skip_budget_ms: None,
             relayouts: 0,
             relayouts_skipped: false,
             defer_relayout: false,
@@ -776,12 +787,18 @@ impl<'a, 'b> Runner<'a, 'b> {
 
     /// `xfa.host.resetData`: the fields back to their defaults, in the form and the data.
     fn reset(&mut self, names: &[String]) -> Result<(), String> {
-        // A script may ask for thousands of resets, each a scan of the form: past the event's
-        // time budget they are skipped, as its remaining scripts are.
-        if self.clock.spent() {
-            self.skipped += 1;
+        // A script may ask for thousands of resets, each a scan of the form: past a count (which
+        // holds where the clock can't, in the browser) or the event's time budget they are
+        // skipped, and the event says so.
+        let late = self.clock.spent();
+        if late || self.resets >= MAX_RESETS_PER_EVENT {
+            self.resets_skipped += 1;
+            if late {
+                self.reset_skip_budget_ms = Some(self.clock.budget_ms);
+            }
             return Ok(());
         }
+        self.resets += 1;
         self.flush()?;
         let by_som = self.by_som().clone();
         let targets = (!names.is_empty()).then(|| ResetTargets::new(names));
@@ -1089,6 +1106,13 @@ impl<'a, 'b> Runner<'a, 'b> {
                 format!("the scripts took more than {} seconds", self.clock.budget_ms / 1000)
             };
             self.run.out.errors.push(format!("The form's scripts were stopped: {why}; {} more were skipped", self.skipped));
+        }
+        if self.resets_skipped > 0 {
+            let why = match self.reset_skip_budget_ms {
+                Some(ms) => format!("the scripts took more than {} seconds", ms / 1000),
+                None => format!("more than {MAX_RESETS_PER_EVENT} resets were asked for"),
+            };
+            self.run.out.errors.push(format!("The form's scripts were stopped: {why}; {} more resets were skipped", self.resets_skipped));
         }
         if self.dropped_output > 0 {
             self.run.out.errors.push(format!("The form's scripts produced too much output; {} more messages were left out", self.dropped_output));
