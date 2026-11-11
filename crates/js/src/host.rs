@@ -150,24 +150,6 @@ pub(crate) fn function(ctx: &mut Context, f: NativeFunction) -> JsFunction {
     FunctionObjectBuilder::new(ctx.realm(), f).build()
 }
 
-/// Bytes `s` takes once escaped by [`JsString::to_std_string_escaped`]: a valid scalar its UTF-8
-/// length, an unpaired surrogate the six bytes of its `\uXXXX` escape. Counted without a copy,
-/// and stopped once the count passes `cap`.
-pub(crate) fn escaped_len(s: &JsString, cap: usize) -> usize {
-    use boa_engine::string::CodePoint;
-    let mut n = 0usize;
-    for cp in s.code_points() {
-        n = n.saturating_add(match cp {
-            CodePoint::Unicode(c) => c.len_utf8(),
-            CodePoint::UnpairedSurrogate(_) => 6,
-        });
-        if n > cap {
-            break;
-        }
-    }
-    n
-}
-
 /// Format exactly the escaped UTF-8 representation used by `text`, refusing a
 /// write before it exceeds the remaining aggregate budget. No full Rust copy of
 /// an oversized JavaScript string is made just to discover its byte length.
@@ -316,6 +298,10 @@ pub(crate) fn value_for(kind: FieldType, vals: Vec<String>) -> Vec<String> {
         FieldType::ListBox => vals,
         _ => vals.into_iter().take(1).collect(),
     }
+}
+
+pub(crate) fn set_value(f: &mut FieldState, vals: Vec<String>) {
+    f.value = value_for(f.kind, vals);
 }
 
 #[cfg(test)]
