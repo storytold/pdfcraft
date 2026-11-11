@@ -57,7 +57,7 @@ struct Fragment {
 
 /// The ops `q`, one or more `cm`, `Do`, `Q` starting at `i`: the index after them, the matrix
 /// and the name drawn.
-fn group_at(ops: &[Op], i: usize) -> Option<(usize, Matrix, Vec<u8>)> {
+fn group_at(ops: &[Op], i: usize, reads: &std::cell::Cell<usize>) -> Option<(usize, Matrix, Vec<u8>)> {
     #[cfg(test)]
     GROUP_READS.with(|c| c.set(c.get().saturating_add(1)));
     if !ops.get(i)?.is("q") {
@@ -69,6 +69,8 @@ fn group_at(ops: &[Op], i: usize) -> Option<(usize, Matrix, Vec<u8>)> {
         m = Matrix::from_operands(&op.operands)?.then(&m);
         j += 1;
     }
+    // Every operator looked at is charged to the page's search allowance.
+    reads.set(reads.get().saturating_add(j - i + 1));
     #[cfg(test)]
     OP_READS.with(|c| c.set(c.get().saturating_add(j - i)));
     let draw = ops.get(j).filter(|o| o.is("Do"))?;
@@ -158,7 +160,7 @@ fn stacked(run: &mut [Fragment]) -> Option<Vec<std::ops::Range<usize>>> {
 
 /// The fragment groups from `i` on (at most `limit`) while they form a picture drawn row by row
 /// or strip by strip in one direction, up to a gap or a jump.
-fn drawn_in_sequence(ops: &[Op], i: usize, limit: usize, xobjects: &Dict, doc: &Document) -> Vec<Fragment> {
+fn drawn_in_sequence(ops: &[Op], i: usize, limit: usize, xobjects: &Dict, doc: &Document, reads: &std::cell::Cell<usize>) -> Vec<Fragment> {
     let mut run: Vec<Fragment> = Vec::new();
     let mut row_x = [0.0f64, 0.0];
     let mut cur_x = [0.0f64, 0.0];
@@ -169,7 +171,7 @@ fn drawn_in_sequence(ops: &[Op], i: usize, limit: usize, xobjects: &Dict, doc: &
     let mut complete = 0usize;
     let mut j = i;
     while run.len() < limit {
-        let Some((next, m, name)) = group_at(ops, j) else { break };
+        let Some((next, m, name)) = group_at(ops, j, reads) else { break };
         let Some((image, width, height, ..)) = fragment_image(doc, xobjects, &name) else { break };
         let [a, _, _, d, e, f] = m.0;
         let f2 = Fragment { image, rect: [e, f, e + a, f + d], width, height };
@@ -246,10 +248,10 @@ fn drawn_in_sequence(ops: &[Op], i: usize, limit: usize, xobjects: &Dict, doc: &
 }
 
 /// The op index after the first `count` fragment groups from `i`.
-fn run_end(ops: &[Op], i: usize, count: usize) -> usize {
+fn run_end(ops: &[Op], i: usize, count: usize, reads: &std::cell::Cell<usize>) -> usize {
     let mut j = i;
     for _ in 0..count {
-        match group_at(ops, j) {
+        match group_at(ops, j, reads) {
             Some((next, ..)) => j = next,
             None => break,
         }
@@ -392,9 +394,9 @@ fn merge_page(
     let mut out: Vec<Op> = Vec::with_capacity(ops.len());
     let (mut i, mut merged, mut k) = (0, 0, 0);
     let budget = ops.len().saturating_mul(SCAN_PER_OP).max(MIN_SCAN);
-    let mut scanned = 0usize;
+    let reads = std::cell::Cell::new(0usize);
     while i < ops.len() {
-        if scanned > budget {
+        if reads.get() > budget {
             out.extend(ops.get(i..).unwrap_or_default().iter().cloned());
             break;
         }
@@ -402,7 +404,7 @@ fn merge_page(
         let mut run = Vec::new();
         let mut kind: Option<(Object, usize)> = None;
         let mut j = i;
-        while let Some((next, m, name)) = group_at(&ops, j) {
+        while let Some((next, m, name)) = group_at(&ops, j, &reads) {
             let Some((image, width, height, cs, n)) = fragment_image(doc, &xobjects, &name) else { break };
             let [a, b, c, d, e, f] = m.0;
             if b.abs() > 1e-9 || c.abs() > 1e-9 || !(a > 0.0 && d > 0.0) {
@@ -416,13 +418,11 @@ fn merge_page(
             run.push(Fragment { image, rect: [e, f, e + a, f + d], width, height });
             j = next;
         }
-        scanned = scanned.saturating_add(run.len()).saturating_add(1);
         // Not one picture as a whole: a prefix drawn row by row or strip by strip may be.
         let mut rows = if run.len() >= MIN_FRAGMENTS { stacked(&mut run) } else { None };
         if run.len() >= MIN_FRAGMENTS && rows.is_none() {
-            run = drawn_in_sequence(&ops, i, run.len(), &xobjects, doc);
-            j = run_end(&ops, i, run.len());
-            scanned = scanned.saturating_add(run.len().saturating_mul(2)).saturating_add(2);
+            run = drawn_in_sequence(&ops, i, run.len(), &xobjects, doc, &reads);
+            j = run_end(&ops, i, run.len(), &reads);
             rows = stacked(&mut run);
         }
         let Some(((cs, n), rows)) = kind.zip(rows).filter(|_| run.len() >= MIN_FRAGMENTS) else {
@@ -635,7 +635,6 @@ mod tests {
         assert!(reads <= 40 * 4 * groups, "{reads} group reads");
     }
 
-<<<<<<< HEAD
     /// Side-by-side vertical strips and 2D tile grids merge into one image XObject while invalid
     /// or separated runs are handled per run.
     #[test]
@@ -779,7 +778,8 @@ mod tests {
             let merged = merge_page(&mut doc, page, &mut report, &mut |_| true, &mut ImageBudget::with_work(u64::MAX)).unwrap();
             assert_eq!((merged, report.merged_images), (0, 0));
         }
-=======
+    }
+
     /// The same with many `cm` operators in each group: the search reads a bounded number of operators
     /// for each one of the page, however the matrices are spread over the groups.
     #[test]
@@ -811,6 +811,5 @@ mod tests {
         assert_eq!(merged.ok(), Some(0));
         let reads = OP_READS.with(|c| c.get());
         assert!(reads <= 80 * 53 * groups, "{reads} operator reads");
->>>>>>> 9165f1e70 (fix(optimize): the fragment search charges every operator of a group it reads)
     }
 }
