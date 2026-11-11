@@ -589,8 +589,18 @@ mod tests {
     /// entry, and it is the paper the sheets were laid out on.
     #[test]
     fn spool_job_does_not_duplicate_media_option() {
-        let (index, _) = paper_named(None).unwrap();
-        let job = spool_job(&Args(&json!({ "options": { "InputSlot": "Tray3", "media": "A4" } })), "Office", "a.pdf".into(), None, index).unwrap();
+        let index = 0; // US Letter
+        let media_name = print::cups_media(index).unwrap();
+        let job = spool_job(
+            &Args(&json!({ "options": { "InputSlot": "Tray3", "media": "A4" } })),
+            "Office",
+            "a.pdf".into(),
+            None,
+            Some(media_name),
+            None,
+            &[],
+        )
+        .unwrap();
         let media: Vec<&(String, String)> = job.options.iter().filter(|(k, _)| k == "media").collect();
         assert_eq!(media, [print::media_option(index).as_ref().unwrap()]);
         assert!(job.options.contains(&("InputSlot".to_string(), "Tray3".to_string())));
