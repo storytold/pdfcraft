@@ -5943,3 +5943,68 @@ fn escape_abandons_a_drawing_and_leaves_find_open() {
     assert!(h.state().views[0].comments.gesture.is_none(), "Escape abandons it");
     assert!(h.state().views[0].find.is_some(), "and nothing else");
 }
+
+/// Delete reaches the selected comment while only a button has the keyboard, as after a click on
+/// the toolbar (#5012). The button kept it, and the comment stayed.
+#[test]
+fn delete_with_a_button_focused_deletes_the_selected_comment() {
+    let mut h = selected_square();
+    h.get_by_label("Select (V)").focus();
+    h.run_steps(1);
+    assert!(h.ctx.egui_wants_keyboard_input() && !h.ctx.text_edit_focused(), "a button has the keyboard");
+    h.key_press(egui::Key::Delete);
+    h.run_steps(3);
+    assert!(comments(&h).is_empty(), "Delete deletes the comment");
+}
+
+/// The number of form fields in the document.
+fn fields(h: &Harness<'static, PdfCraftApp>) -> usize {
+    let s = h.state();
+    s.session.get(s.views[0].id).unwrap().form.len()
+}
+
+/// One Delete deletes one selection, the newer: with a comment and a Prepare field selected, the
+/// field selected last goes, and the next Delete takes the comment. One Delete deleted both.
+#[test]
+fn one_delete_deletes_the_newer_selection_only() {
+    let mut h = selected_square();
+    assert!(h.state_mut().execute("form.add.text"));
+    h.run_steps(2);
+    drag_pt(&mut h, (160.0, 180.0), (280.0, 150.0));
+    h.run_steps(2);
+    // The comment again, after the field.
+    h.state_mut().views[0].comments.selected = None;
+    h.run_steps(2);
+    h.state_mut().views[0].comments.selected = Some((0, 0));
+    h.run_steps(2);
+    assert!(h.state().views[0].prepare.selected.is_some(), "a field is selected");
+    let before = fields(&h);
+    h.key_press(egui::Key::Delete);
+    h.run_steps(3);
+    assert!(comments(&h).is_empty(), "the comment, selected last, goes");
+    assert_eq!(fields(&h), before, "the field stays");
+    h.key_press(egui::Key::Delete);
+    h.run_steps(3);
+    assert_eq!(fields(&h), before - 1, "the next Delete takes the field");
+}
+
+/// In full screen, Backspace deletes a selected comment and leaves the page shown; with nothing
+/// selected it steps back a page. It did both at once.
+#[test]
+fn full_screen_backspace_deletes_a_selected_comment_before_it_steps_back() {
+    let mut h = selected_square();
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::L);
+    h.run_steps(6);
+    assert!(h.state().full_screen);
+    h.state_mut().set_option("page", "2").unwrap();
+    h.run_steps(4);
+    assert_eq!(h.state().views[0].current, 1);
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "the comment is still selected");
+    h.key_press(egui::Key::Backspace);
+    h.run_steps(4);
+    assert!(comments(&h).is_empty(), "Backspace deletes the comment");
+    assert_eq!(h.state().views[0].current, 1, "and stays on the page");
+    h.key_press(egui::Key::Backspace);
+    h.run_steps(4);
+    assert_eq!(h.state().views[0].current, 0, "the next steps back");
+}

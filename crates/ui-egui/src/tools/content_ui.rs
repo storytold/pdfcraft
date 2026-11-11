@@ -633,25 +633,23 @@ pub(crate) fn release_image_selection(view: &mut DocView, added: &[Added]) {
     }
 }
 
-/// Delete removes the selected item. Not while something is over the pages. (Escape is the key
-/// pass's, `canvas::key_order`.)
-pub(crate) fn keys(ctx: &egui::Context, keys: PageKeys, view: &mut DocView, image_controller_active: bool) {
+/// Delete or Backspace, from the key pass (`canvas::key_order`): the selected item goes, but not
+/// while a button is down (the press held would then name another item). Whether an item was
+/// selected to take the key; a picture the image controller has is the picture's.
+pub(crate) fn delete_key(view: &mut DocView, image_controller_active: bool) -> bool {
     if image_controller_active && view.image_selection.is_some()
         || matches!(view.pending_edit.as_ref(), Some(Edit::EditPageImage { .. }))
         || view.content.selected.is_none()
         || view.content.draft.is_some()
-        || ctx.egui_wants_keyboard_input()
     {
-        return;
+        return false;
     }
-    let del = keys.pressed(ctx, egui::Key::Delete) || keys.pressed(ctx, egui::Key::Backspace);
-    // Not while a button is down: the press held would then name another item.
-    if del
-        && !view.content.held
+    if !view.content.held
         && let Some((page, index)) = view.content.selected.take()
     {
         view.pending_edit = Some(Edit::DeleteContent { page, index });
     }
+    true
 }
 
 /// After an add: select the new item.

@@ -3522,20 +3522,11 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     // One crop, then back to selecting (as Acrobat does).
     let cropped = view.pending_edit.as_ref().is_some_and(|e| matches!(e, pdfcraft_engine::Edit::SetPageBox { .. }));
     let mut tool = app.quick_tool;
-    comments::keys(ui.ctx(), keys, view, info, allowed);
-    if preparing {
-        crate::prepare::keys(ui.ctx(), keys, view);
-    }
     if tool != QuickTool::EditText {
         view.image_selection = None;
         crate::content_ui::release_image_selection(view, &added);
     }
-    if editing_content {
-        crate::content_ui::keys(ui.ctx(), keys, view, tool == QuickTool::EditText);
-    }
-    if tool == QuickTool::Link {
-        crate::link_ui::keys(ui.ctx(), keys, view);
-    } else {
+    if tool != QuickTool::Link {
         view.links.selected = None;
     }
     if stamp_placed {

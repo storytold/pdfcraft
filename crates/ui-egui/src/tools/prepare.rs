@@ -822,15 +822,14 @@ fn cancel_marquee(prep: &mut PrepareView) {
     }
 }
 
-/// Delete removes the selected fields, while no text field has focus and nothing is over the pages.
-/// (Escape is the key pass's, `canvas::key_order`.)
-pub(crate) fn keys(ctx: &egui::Context, keys: PageKeys, view: &mut DocView) {
-    if ctx.egui_wants_keyboard_input() || view.prepare.selected.is_none() {
-        return;
+/// Delete or Backspace, from the key pass (`canvas::key_order`): the selected fields go. Whether
+/// any were selected to take the key.
+pub(crate) fn delete_key(view: &mut DocView) -> bool {
+    if view.prepare.selected.is_none() {
+        return false;
     }
-    if keys.pressed(ctx, egui::Key::Delete) || keys.pressed(ctx, egui::Key::Backspace) {
-        view.pending_edit = delete_selected(view);
-    }
+    view.pending_edit = delete_selected(view);
+    true
 }
 
 /// After an Add field edit: select the new field (the form's last).

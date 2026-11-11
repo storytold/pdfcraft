@@ -740,16 +740,16 @@ impl Gestures<'_> {
     }
 }
 
-/// Delete handling for comments (only while no text field has focus, and nothing is over the
-/// pages). Escape is the key pass's (`canvas::key_order`).
-pub(crate) fn keys(ctx: &egui::Context, keys: PageKeys, view: &mut DocView, info: &DocInfo, allowed: bool) {
-    if ctx.egui_wants_keyboard_input() {
-        return;
-    }
+/// Delete or Backspace, from the key pass (`canvas::key_order`): the selected comments go
+/// ([`delete_selected`]). Whether any were selected to take the key; a locked one stays, and still
+/// takes it.
+pub(crate) fn delete_key(view: &mut DocView, info: &DocInfo, allowed: bool) -> bool {
     let cv = &mut view.comments;
-    if allowed && cv.selected.is_some() && (keys.pressed(ctx, egui::Key::Delete) || keys.pressed(ctx, egui::Key::Backspace)) {
-        view.pending_edit = delete_selected(cv, info);
+    if !allowed || cv.selected.is_none() {
+        return false;
     }
+    view.pending_edit = delete_selected(cv, info);
+    true
 }
 
 /// The edit that deletes every selected comment (one undo step for several), and clears the

@@ -50,9 +50,9 @@ pub(super) fn run(view: &mut DocView, cx: &KeyCx<'_>, tool: &mut QuickTool) {
     let now = holding(view);
     view.key_ages.note(now);
     escape(view, cx, tool);
+    delete(view, cx);
     if *tool == QuickTool::EditText && doc.allows_modification() {
         crate::object_ui::nudge_keys(ctx, keys, view, doc);
-        crate::object_ui::delete_keys(ctx, keys, view);
     } else if doc.allows_annotation() {
         crate::comments::nudge_keys(ctx, keys, view, &doc.info);
     }
@@ -86,6 +86,46 @@ fn escape(view: &mut DocView, cx: &KeyCx<'_>, tool: &mut QuickTool) {
     let taken = cancel_drawing(view) || leave_mode(view, cx) || deselect(view, cx) || drop_tool(tool) || view.find.take().is_some();
     if taken {
         keys.take(ctx, egui::Key::Escape);
+    }
+}
+
+/// Delete and Backspace: one selection goes per press. The first in this order that holds something
+/// takes them:
+/// 1. what reads them itself later in the pass: an editor open on the page, a comment being drawn
+///    point by point (its last point goes), the Measure tool's points (Backspace);
+/// 2. a selection, the newest first. One that can't go yet (a button is down, an edit waits) still
+///    takes the key, so an older one doesn't go in its place.
+///
+/// In full screen Backspace steps back a page after these (the view's keys). A text field keeps
+/// them, but a focused button doesn't: after a click on the toolbar Delete still deletes (#5012).
+fn delete(view: &mut DocView, cx: &KeyCx<'_>) {
+    use egui::Key;
+    let KeyCx { ctx, keys, doc, tool, .. } = *cx;
+    let backspace = keys.pressed(ctx, Key::Backspace);
+    if !(backspace || keys.pressed(ctx, Key::Delete)) || ctx.text_edit_focused() || editor_open(view) {
+        return;
+    }
+    let drawing = matches!(view.comments.gesture, Some(crate::comments::Gesture::Draw { .. }));
+    if drawing || backspace && matches!(tool, QuickTool::Measure(_)) && !view.measure.points.is_empty() {
+        return;
+    }
+    let edit_text = tool == QuickTool::EditText && doc.allows_modification();
+    let held = ctx.input(|i| i.pointer.any_down());
+    for kind in view.key_ages.newest_first() {
+        let took = match kind {
+            Held::Objects => edit_text && crate::object_ui::delete_key(view),
+            Held::Picture => edit_text && crate::edit_text_ui::delete_picture(view, doc, held),
+            Held::Added => cx.editing_content && crate::content_ui::delete_key(view, tool == QuickTool::EditText),
+            Held::Comment => crate::comments::delete_key(view, &doc.info, doc.allows_annotation()),
+            Held::Field => cx.preparing && crate::prepare::delete_key(view),
+            Held::Link => tool == QuickTool::Link && crate::link_ui::delete_key(view),
+            Held::Picked | Held::Text => false,
+        };
+        if took {
+            keys.take(ctx, Key::Delete);
+            keys.take(ctx, Key::Backspace);
+            return;
+        }
     }
 }
 

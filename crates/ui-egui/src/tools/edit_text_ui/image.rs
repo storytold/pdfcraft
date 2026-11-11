@@ -482,13 +482,10 @@ fn apply_crop_mode(view: &mut DocView, image: &pdfcraft_engine::PageImage) {
     }
 }
 
-/// The keys of the picture selected on `page`, a page being drawn, so the page grid and the Pages
-/// panel have had theirs; nothing while the page is off the screen, as pages near it are drawn too.
-/// Delete or Backspace removes it, wherever on the pages the pointer is, unless it is being cropped or
-/// a button is down: the press held would then name another picture. In crop mode Enter applies
-/// the crop (Escape leaving it is the key pass's, `canvas::key_order`). Nothing while a text field
-/// has the keyboard.
-pub(crate) fn picture_keys(ctx: &egui::Context, keys: PageKeys, view: &mut DocView, page: usize, images: &[pdfcraft_engine::PageImage], held: bool) {
+/// The keys of the picture selected on `page`, a page being drawn; nothing while the page is off the
+/// screen, as pages near it are drawn too. In crop mode Enter applies the crop (Escape leaving it and
+/// Delete are the key pass's, `canvas::key_order`). Nothing while a text field has the keyboard.
+pub(crate) fn picture_keys(ctx: &egui::Context, keys: PageKeys, view: &mut DocView, page: usize, images: &[pdfcraft_engine::PageImage]) {
     if ctx.egui_wants_keyboard_input() || view.page_screen_rect(page).is_none() {
         return;
     }
@@ -496,22 +493,30 @@ pub(crate) fn picture_keys(ctx: &egui::Context, keys: PageKeys, view: &mut DocVi
     let index = s.index;
     let key = |k: egui::Key| keys.pressed(ctx, k);
     let image = images.get(index);
-    if s.crop.is_some() {
-        if key(egui::Key::Enter)
-            && let Some(image) = image
-        {
-            apply_crop_mode(view, image);
-        }
-    } else if !held && !s.dragging() && !s.turning && (key(egui::Key::Delete) || key(egui::Key::Backspace)) && image.is_some() {
-        // The key is the picture's: added content's own Delete runs later this frame.
-        keys.take(ctx, egui::Key::Delete);
-        keys.take(ctx, egui::Key::Backspace);
+    if s.crop.is_some()
+        && key(egui::Key::Enter)
+        && let Some(image) = image
+    {
+        apply_crop_mode(view, image);
+    }
+}
+
+/// Delete or Backspace, from the key pass (`canvas::key_order`): the selected picture goes, wherever
+/// on the pages the pointer is, unless its page is off the screen (the reader can't see what would
+/// go), it is being cropped, moved or turned, or a button is down (`held`: the press held would then
+/// name another picture). Whether a picture was selected to take the key.
+pub(crate) fn delete_picture(view: &mut DocView, doc: &pdfcraft_engine::Document, held: bool) -> bool {
+    let Some(s) = view.image_selection.as_ref() else { return false };
+    let (page, index) = (s.page, s.index);
+    let busy = held || s.crop.is_some() || s.dragging() || s.turning || view.page_screen_rect(page).is_none();
+    if !busy && index < doc.page_images(page).len() {
         view.image_selection = None;
         // Added content's selection follows the picture's (`content_ui::sync_image_selection`), and
         // goes with it: once the picture is gone it would be the next added item's.
         view.content.selected = None;
         view.pending_edit = Some(Edit::EditPageImage { page, index, change: pdfcraft_engine::ImageEdit::Delete });
     }
+    true
 }
 
 /// The page raster's picture of the box `from`, stretched into `to`, over blanks at `blank` (where

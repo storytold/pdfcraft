@@ -8,7 +8,6 @@ use pdfcraft_render::{DocInfo, LinkTarget};
 
 use crate::canvas::{DocView, PageToolContext, PageXform};
 use crate::page_cursor::Layer;
-use crate::page_keys::PageKeys;
 use crate::page_router::{Hit, Owner};
 use crate::theme::{self, Tokens};
 use crate::{PdfCraftApp, QuickTool, widgets};
@@ -216,16 +215,12 @@ pub(crate) fn paint(painter: &egui::Painter, xf: &PageXform, page: usize, info: 
     }
 }
 
-/// Delete removes the selected link. Not while something is over the pages. (Escape is the key
-/// pass's, `canvas::key_order`.)
-pub(crate) fn keys(ctx: &egui::Context, keys: PageKeys, view: &mut DocView) {
-    if view.links.selected.is_none() || ctx.egui_wants_keyboard_input() {
-        return;
-    }
-    let del = keys.pressed(ctx, egui::Key::Delete) || keys.pressed(ctx, egui::Key::Backspace);
-    if del && let Some((page, index)) = view.links.selected.take() {
-        view.pending_edit = Some(Edit::DeleteLink { page, index });
-    }
+/// Delete or Backspace, from the key pass (`canvas::key_order`): the selected link goes. Whether one
+/// was selected to take the key.
+pub(crate) fn delete_key(view: &mut DocView) -> bool {
+    let Some((page, index)) = view.links.selected.take() else { return false };
+    view.pending_edit = Some(Edit::DeleteLink { page, index });
+    true
 }
 
 impl PdfCraftApp {
