@@ -71,7 +71,9 @@ impl From<WireError> for ProjectionError {
 pub fn new_annotation_name(client_id: &str) -> String {
     static NEXT: AtomicU64 = AtomicU64::new(1);
     let clean: String = client_id.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '-' }).collect();
-    let ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
+    // `web_time` on wasm32: `std::time::SystemTime::now` panics there, and this
+    // runs when the page adds the first annotation.
+    let ms = web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
     let count = NEXT.fetch_add(1, Ordering::Relaxed);
     format!("{clean}-{ms:x}-{count:x}")
 }

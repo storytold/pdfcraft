@@ -14850,6 +14850,38 @@ fn a_thai_edit_that_spends_its_allowance_to_the_byte_goes_through() {
     assert!(error.contains("THSarabunPSK") && error.contains("MiB of font data"), "{error}");
 }
 
+/// Only a read the allowance refuses leaves a font of the face unread for want of it. With the
+/// allowance spent to the byte as above, another font of the face, whose ToUnicode is an empty
+/// stream behind a filter nothing decodes (unread with any allowance), still has its program read,
+/// which the allowance refuses: the edit is refused, rather than going through without that font.
+#[test]
+fn a_font_of_the_face_unread_on_its_own_once_the_allowance_is_spent_still_refuses_the_edit() {
+    let mut program = legacy_thai_program();
+    program.resize((16 << 20) - 192, 0);
+    let mut unicode = LEGACY_THAI_UNICODE.to_vec();
+    unicode.resize(256, b' ');
+    let mut doc = text_page("BT /F1 16 Tf 50 650 Td <00d6> Tj ET");
+    let font = legacy_thai_font(&mut doc, "ABCDEF+THSarabunPSK", &program, &unicode);
+    doc.set(pdfcraft_cos::ObjRef::new(5, 0), Object::Dict(font));
+    // Not a subset, so its metrics read no program, only the ToUnicode.
+    let mut other = legacy_thai_font(&mut doc, "THSarabunPSK", &legacy_thai_program(), LEGACY_THAI_UNICODE);
+    let mut dict = Dict::new();
+    dict.set(b"Filter".to_vec(), Object::name("NoSuchFilter"));
+    other.set(b"ToUnicode".to_vec(), Object::Ref(doc.add(Object::Stream(Stream::from_raw(dict, Vec::new())))));
+    let other = doc.add(Object::Dict(other));
+    doc.update_dict(pdfcraft_cos::ObjRef::new(3, 0), |page| {
+        let Some(Object::Dict(mut resources)) = page.get(b"Resources").cloned() else { panic!("fixture") };
+        let Some(Object::Dict(mut fonts)) = resources.get(b"Font").cloned() else { panic!("fixture") };
+        fonts.set(b"F2".to_vec(), Object::Ref(other));
+        resources.set(b"Font".to_vec(), Object::Dict(fonts));
+        page.set(b"Resources".to_vec(), Object::Dict(resources));
+    })
+    .unwrap();
+    let style = BlockStyle { width: Some(400.0), ..Default::default() };
+    let error = text::rewrite_block(&mut doc, 0, 0, Some("กขค"), &style).unwrap_err().to_string();
+    assert!(error.contains("THSarabunPSK") && error.contains("MiB of font data"), "{error}");
+}
+
 /// A THSarabunPSK-named subset that has OpenType Thai mark positioning is a modern face: it is
 /// shaped with its own layout like any source font, not by the legacy shaper (which would ask
 /// for Windows PUA alternates such a face doesn't need).

@@ -18,4 +18,7 @@ pdfcraft-engine = { workspace = true }
 pdfcraft-organize = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+# The `/NM` stamp: `std::time` panics on wasm32 ("time not implemented on this
+# platform"), and an annotation made in the browser reached it.
+web-time = { workspace = true }
 base64 = "0.23"
