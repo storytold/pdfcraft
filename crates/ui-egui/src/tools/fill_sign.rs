@@ -11,6 +11,7 @@ use pdfcraft_render::{DocInfo, PageInfo};
 
 use crate::canvas::{DocView, PageToolContext, PageXform};
 use crate::page_cursor::Layer;
+use crate::page_keys::PageKeys;
 use crate::theme::Tokens;
 
 mod scan;
@@ -604,6 +605,7 @@ pub enum FillAction {
 /// The in-place editor for typed text. Returns the edit once committed.
 pub(crate) fn type_box(
     ctx: &egui::Context,
+    keys: PageKeys,
     view: &mut DocView,
     info: &DocInfo,
     author: &str,
@@ -621,7 +623,7 @@ pub(crate) fn type_box(
     // Over the page, so only where the document shows: a box scrolled under the mode bar or a
     // side panel must leave them their pointer (#2755). It stays where it was placed, cut off as
     // the page is, rather than pushed back into the window.
-    egui::Area::new(egui::Id::unique(("fill-text", view.id.0)))
+    egui::Area::new(egui::Id::unique(("fill-text", view.view_key())))
         .fade_in(false)
         .order(egui::Order::Foreground)
         .fixed_pos(pos)
@@ -685,7 +687,7 @@ pub(crate) fn type_box(
                 t.focus = false;
             }
             // Taken here: the same press must not also leave the tool (one step back per press).
-            if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+            if keys.take(ui.ctx(), egui::Key::Escape) {
                 cancel = true;
             } else if r.lost_focus() && ruler_interaction {
                 r.request_focus();
