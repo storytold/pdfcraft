@@ -1,10 +1,26 @@
 # Vendored crates
 
+## edit-session
+
+Document Properties uses the dependency-free draft state machine from
+[edit-session 0.1.0-alpha.2](https://github.com/PerchAnton/edit-session/tree/033f7c3a67b825b8f222288788cc61234c0c945d).
+The manifest, library, lifecycle tests and both licenses match that revision byte for byte.
+The local README links here and rustfmt settings preserve upstream formatting. PdfCraft owns document identity, permissions and Undo.
+Review upstream changes before replacing the snapshot and run the lifecycle and Document Properties tests.
+
+| File | SHA-256 |
+| --- | --- |
+| [Cargo.toml](edit-session/Cargo.toml) | `19d3c1ee04b087a12975732b76f8c3bb14d2b158ec48dfa4dadc54aa73e964ba` |
+| [src/lib.rs](edit-session/src/lib.rs) | `b86bab15e5787bb2442ebf7aa17cadb75d18bbd10f1abd7a870a9a4bb2af66e3` |
+| [tests/lifecycle.rs](edit-session/tests/lifecycle.rs) | `34930f3942721491f8c96f251bcdf3304f9eddf39bcf0469334ab66a89c94e2a` |
+| [LICENSE-MIT](edit-session/LICENSE-MIT) | `665a942f9317a358930b470ad522a22a58ff6c346db0395463ec84dd3e19d775` |
+| [LICENSE-APACHE](edit-session/LICENSE-APACHE) | `cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30` |
+
 ## Window-stack provenance after the egui 0.37 migration
 
 The checked-in, resolved Cargo graph pins `winit` to storytold/winit
 `a517b3846ee8457d84ee4975110bfda6797c44dc` and the egui crates to storytold/egui
-`6d518fc799681571963842f95b55a6b68431b15a`. Neither `vendor/winit` nor
+`725a39fca940f77149ffbb9c58eef405a16997bc`. Neither `vendor/winit` nor
 `vendor/egui-wgpu` is a root `[patch.crates-io]` path entry. The retained copies
 record the app's earlier patches; their source-reading tests establish provenance,
 while the resolved forks and their behavioral tests establish runtime behavior.

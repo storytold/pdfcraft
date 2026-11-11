@@ -39,7 +39,7 @@ mod rewrite;
 #[cfg(test)]
 use blocks::wrap;
 pub use blocks::{
-    BlockKey, BlockStyle, RangeStyle, ReadingBlocks, TextBlock, block_overlapping, clear_block, reading_blocks, reading_blocks_checked,
+    BlockKey, BlockStyle, RangeStyle, ReadingBlocks, RunSources, TextBlock, block_overlapping, clear_block, reading_blocks, reading_blocks_checked,
     replace_block, text_blocks,
 };
 use blocks::{kept_words, paragraph_separator, row_break};
@@ -55,9 +55,11 @@ pub(crate) use fallback::{SOURCE_SPACE_CALLS, take_source_character_measurements
 use fallback::{add_type3_font, is_type3_fallback};
 pub(crate) use fallback::{glyph_path, type3_font_dict, unique_font_name};
 use interp::{Origin, Paint, union};
+#[cfg(test)]
+pub(crate) use lines::dropped_advances_within;
 pub(crate) use lines::{
-    ContentStream, FormBudget, Read, content_streams, content_streams_within, dict_in_place, drawn_before_damage, first_op_after_damage, form_call,
-    joined, resource_dict, rewritten_contents, splice,
+    ContentStream, FormBudget, Read, content_streams, content_streams_within, dict_in_place, drawn_before_damage, dropped_advances,
+    dropped_side_effects, first_op_after_damage, form_call, joined, reopen_text_object, resource_dict, rewritten_contents, splice,
 };
 pub use lines::{MAX_FORM_DEPTH, MAX_FORM_VISITS, glyph_text_lines, text_lines};
 use lines::{page_dict, word_lines};

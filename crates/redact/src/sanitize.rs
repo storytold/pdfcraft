@@ -662,7 +662,8 @@ fn content_pass(doc: &mut Document, text: bool, layers: bool, write: bool) -> Re
         let blocks = scope.layer_blocks;
         let glyphs = scope.report.glyphs;
         let retained_for_page = std::mem::take(&mut scope.retained_off_layers);
-        drop(scope);
+        // What the walk leaves of the page's allowance, the cleanups below spend.
+        let mut budget = scope.into_budget();
         total += out.residue + blocks + glyphs;
         retained_off_layers.extend(retained_for_page);
         if !write {
@@ -694,16 +695,18 @@ fn content_pass(doc: &mut Document, text: bool, layers: bool, write: bool) -> Re
             let mut res = resources.clone();
             if !out.xobjects.is_empty() || !out.replaced.is_empty() {
                 let mut xo = res.get(b"XObject").and_then(|x| doc.resolve(x).as_dict().cloned()).unwrap_or_default();
-                // A full save keeps whatever is still referenced: unlink the originals this page no
-                // longer draws so the removed form or image bytes cannot survive in the saved file.
-                crate::interp::prune(&mut xo, &out.replaced, &page_content);
+                // The rewritten XObjects first, as on Apply Redactions' pages: `prune` follows a
+                // rewritten form left without resources of its own only under a name it can find.
                 for (n, r) in &out.xobjects {
                     xo.set(n.clone(), Object::Ref(*r));
                 }
+                // A full save keeps whatever is still referenced: unlink the originals this page no
+                // longer draws so the removed form or image bytes cannot survive in the saved file.
+                crate::interp::prune(doc, &mut budget, &mut xo, &out.replaced, &page_content)?;
                 res.set(b"XObject".to_vec(), Object::Dict(xo));
             }
-            retired_properties.extend(crate::interp::prune_properties(doc, &mut res, &page_content)?);
-            crate::type3::prune_type3_from_resources(doc, &mut res, &page_content, Some(&page.dict))?;
+            retired_properties.extend(crate::interp::prune_properties(doc, &mut budget, &mut res, &page_content)?);
+            crate::type3::prune_type3_from_resources(doc, &mut budget, &mut res, &page_content, Some(&page.dict))?;
             doc.update_dict(page.obj, |d| {
                 d.set(b"Contents".to_vec(), Object::Array(new_list));
                 d.set(b"Resources".to_vec(), Object::Dict(res));
@@ -809,6 +812,20 @@ pub fn scan_only(doc: &Document, which: &[Hidden]) -> Vec<(Hidden, usize)> {
             (h, n)
         })
         .collect()
+}
+
+/// [`crate::globals::unshare`] for what left without marks: past `images` it is refused as finding
+/// what shares the dictionaries is, since the error redaction gives (redact fewer pages at a time)
+/// means nothing when no page was chosen.
+pub(crate) fn unshare_unmarked(
+    doc: &mut Document,
+    before: &std::collections::HashSet<u32>,
+    images: &mut pdfcraft_cos::ImageBudget,
+) -> Result<usize, RedactError> {
+    crate::globals::unshare(doc, before, images).map_err(|e| match e {
+        RedactError::ImagesPastAllowance => RedactError::SharedJbig2Budget,
+        e => e,
+    })
 }
 
 /// Take from the outline of catalog `cat` every action that does more than go to a place in this
@@ -920,6 +937,9 @@ pub(crate) fn remove_counted(
     let count = |h: Hidden| counts.iter().find(|c| c.0 == h).map_or(0, |c| c.1);
     let (root, _) = catalog(doc).ok_or(RedactError::NothingToApply)?;
     let mut done = Vec::new();
+    // What a full save keeps before anything is removed: an image that leaves, by whatever route
+    // below, takes a shared JBIG2 dictionary with it (`unshare_unmarked`, last).
+    let kept_before = crate::globals::kept(doc)?;
     let has_acroform = doc.get(root).as_dict().is_some_and(|d| d.contains(b"AcroForm"));
     let fields = which.contains(&Hidden::FormFields) && (count(Hidden::FormFields) > 0 || has_acroform);
     // Pages' annotation lists change only for these; otherwise every page is left as it is.
@@ -1038,6 +1058,9 @@ pub(crate) fn remove_counted(
     if done.is_empty() && unlinked == 0 {
         return Err(RedactError::NothingToApply);
     }
+    // Images stored again without a dictionary, and the dictionaries read to know copies, are
+    // decoded within an allowance of their own.
+    unshare_unmarked(doc, &kept_before, &mut pdfcraft_cos::ImageBudget::new(doc))?;
     // The rewrite drops the revisions that held the removed content, so it is a different file from
     // its source: it gets a new identifier, whoever asked for the removal (the remove-hidden edit
     // and the optimizer's discard option call this function directly, not through [`sanitize`]).
