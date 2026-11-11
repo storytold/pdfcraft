@@ -49,6 +49,8 @@ pub(super) struct Arrays<'a> {
     pub(super) triangles: usize,
     pub(super) is_reference: &'a [bool],
     pub(super) references: &'a [u32],
+    /// Budget elements the walk may hold at once (see [`Walk::held`]).
+    pub(super) limit: usize,
 }
 
 /// The rebuilt vertices and triangles, in walk order.
@@ -266,6 +268,16 @@ impl Walk {
         Ok((v, false))
     }
 
+    /// Budget elements (8 bytes each) the walk's arrays hold, by length: growth can add up to
+    /// as much again in spare capacity.
+    fn held(&self) -> usize {
+        let pos = self.pos.len().saturating_mul(3);
+        let tris = self.tris.len().saturating_mul(2);
+        let edges = self.edges.len().saturating_mul(2);
+        let stack = self.stack.len().saturating_mul(2);
+        pos.saturating_add(tris).saturating_add(edges).saturating_add(self.log.len()).saturating_add(stack)
+    }
+
     fn closed(&self, e: (u32, u32, u32)) -> bool {
         self.edges.get(&key(e.0, e.1)).copied().unwrap_or(0) >= 2
     }
@@ -283,6 +295,9 @@ impl Walk {
             }
         }
         self.tris.push([ta, tb, tc]);
+        if self.held() > a.limit {
+            return Err("the rebuild needs more than the decoded-element allowance left");
+        }
         let (mut left, mut right) = ((tc, tb, ta), (ta, tc, tb));
         if fold != flip {
             std::mem::swap(&mut left, &mut right);

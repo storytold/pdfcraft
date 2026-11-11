@@ -752,6 +752,33 @@ fn a_rebuilt_compressed_mesh_is_charged_its_triangles_and_faces() {
     assert_eq!(RANGE_ELEMENTS, 2);
 }
 
+/// A rebuild whose walk would outgrow the allowance left keeps the arrays compressed, even
+/// when the rebuilt mesh alone would have fit, and the stream reads on.
+#[test]
+fn a_compressed_rebuild_is_bounded_by_the_allowance_left() {
+    let fits = panel(1);
+    let bytes = fits.bytes();
+    let schema = Schema::default();
+    let read = |n| Ctx::new(BitReader::with_elements(&bytes, n), &schema, 8137).file_structure_tessellation();
+    let arrays = spent(&panel(9));
+    let mesh_alone = spent(&fits) - arrays;
+    let t = read(arrays + mesh_alone).unwrap();
+    assert!(matches!(t[..], [Tessellation::Compressed { triangles: 4, .. }]), "{t:?}");
+    assert!(matches!(read(crate::MAX_DECODED_ELEMENTS).unwrap()[..], [Tessellation::Mesh(_)]));
+}
+
+/// A face's nonzero behaviour styles its triangles even when its line attribute is 0 (the
+/// owner's graphics); all zero, the faces give no styles.
+#[test]
+fn a_compressed_face_behaviour_alone_styles_its_triangles() {
+    let attributes = |behaviours: Vec<i32>| FaceAttributes { multi: Vec::new(), line_attributes: vec![0], behaviours };
+    let a = attributes(vec![0x30]);
+    assert!(a.styled(1));
+    assert_eq!(a.styles(&[0, 0], 1), [TriangleStyle { style: 0, behaviour: 0x30 }; 2]);
+    assert!(!attributes(vec![0]).styled(1));
+    assert!(!attributes(Vec::new()).styled(1));
+}
+
 fn rebuilt(triangles: usize) -> compressed::Rebuilt {
     compressed::Rebuilt { positions: vec![[0.0; 3]; 3], triangles: (0..triangles).map(|i| [0, 1, u32::try_from(i).unwrap()]).collect() }
 }

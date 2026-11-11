@@ -5,7 +5,16 @@ use super::*;
 const S: f64 = std::f64::consts::SQRT_2;
 
 fn run(points: &[i64], status: &[i32], t: usize, is_ref: &[bool], refs: &[u32]) -> Result<Rebuilt, &'static str> {
-    rebuild(&Arrays { tolerance: 0.5, origin: [10.0, 0.0, 0.0], points, edge_status: status, triangles: t, is_reference: is_ref, references: refs })
+    rebuild(&Arrays {
+        tolerance: 0.5,
+        origin: [10.0, 0.0, 0.0],
+        points,
+        edge_status: status,
+        triangles: t,
+        is_reference: is_ref,
+        references: refs,
+        limit: usize::MAX,
+    })
 }
 
 fn close(a: V, b: V) -> bool {
@@ -24,6 +33,28 @@ fn a_seed_and_one_apex_rebuild() {
     assert!(close(p[0], [0.0, 0.0, 0.0]) && close(p[1], [2.0, 0.0, 0.0]));
     assert!(close(p[2], [0.0, 2.0, 0.0]), "{:?}", p[2]);
     assert!(close(p[3], [1.0 + 2.0 * S, 1.0 + S, -1.0]), "{:?}", p[3]);
+}
+
+/// The walk stops once its arrays would hold more than `limit` elements: the seed-and-apex
+/// pair ends holding four vertices (12), two triangles (4), five edges (10) and six logged
+/// edges (6), 32 in all.
+#[test]
+fn a_walk_past_its_limit_stops() {
+    let pts = [0, 0, 0, 4, 0, 0, -2, 4, 0, 2, -6, 2];
+    let with = |limit| {
+        rebuild(&Arrays {
+            tolerance: 0.5,
+            origin: [0.0; 3],
+            points: &pts,
+            edge_status: &[2, 0, 0, 0, 0, 0],
+            triangles: 2,
+            is_reference: &[false; 4],
+            references: &[],
+            limit,
+        })
+    };
+    assert_eq!(with(32).unwrap().triangles.len(), 2);
+    assert_eq!(with(31).unwrap_err(), "the rebuild needs more than the decoded-element allowance left");
 }
 
 /// Bit 0 alone continues across `[A C]`, keeping `W = B`.
@@ -248,6 +279,7 @@ fn a_strip_decodes_onto_the_encoders_working_mesh() {
         triangles: n - 2,
         is_reference: &vec![false; n],
         references: &[],
+        limit: usize::MAX,
     })
     .unwrap();
     assert_eq!(m.triangles[1..4], [[2, 1, 3], [2, 3, 4], [4, 3, 5]]);

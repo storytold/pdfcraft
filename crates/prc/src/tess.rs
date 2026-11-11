@@ -345,7 +345,10 @@ impl Ctx<'_, '_> {
             triangles: t,
             is_reference: &is_reference,
             references: &references,
+            limit: self.r.elements_left(),
         };
+        // A walk that would outgrow the allowance left stops there, and the arrays stay
+        // compressed, as do arrays the walk does not fit.
         let Ok(m) = compressed::rebuild(&arrays) else {
             return Ok(Tessellation::Compressed { triangles: t });
         };
@@ -435,9 +438,10 @@ struct FaceAttributes {
 impl FaceAttributes {
     /// Whether the faces give their triangles styles. The one-per-triangle layout of a flagged
     /// face is not established, so such a tessellation keeps its owner's graphics, as does one
-    /// whose attributes are all 0.
+    /// whose attributes and behaviours are all 0.
     fn styled(&self, faces: usize) -> bool {
-        !self.multi.iter().any(|&b| b) && self.line_attributes.len() == faces && self.line_attributes.iter().any(|&a| a != 0)
+        let behaviours = self.behaviours.len() == faces && self.behaviours.iter().any(|&b| b != 0);
+        !self.multi.iter().any(|&b| b) && self.line_attributes.len() == faces && (behaviours || self.line_attributes.iter().any(|&a| a != 0))
     }
 
     /// Per triangle, the style its face gives it; call only when [`Self::styled`].
