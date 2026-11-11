@@ -724,6 +724,15 @@ fn walk(
                         value.as_string().map(|s| s.to_text())
                     })
                     .flatten(),
+                mouse_up_script: if kind == FieldKind::Text {
+                    let aa = wd.get(b"AA").map(|a| doc.resolve(a));
+                    let action = aa.as_deref().and_then(Object::as_dict).and_then(|aa| aa.get(b"U")).or_else(|| wd.get(b"A"));
+                    action
+                        .filter(|a| doc.resolve(a).as_dict().and_then(|a| a.name(b"S")) == Some(b"JavaScript"))
+                        .and_then(|a| script(doc, a, &mut seen.scripts))
+                } else {
+                    None
+                },
                 list: (kind == FieldKind::List).then(|| appearance::list_rows_of(doc, inh.da.as_deref().unwrap_or("/Helv 0 Tf 0 g"), Some(d), wd)),
                 round: kind == FieldKind::Radio || (kind == FieldKind::CheckBox && appearance::is_round(doc, wd)),
             })

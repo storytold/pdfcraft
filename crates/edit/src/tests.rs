@@ -8358,6 +8358,72 @@ fn unchanged_runs_between_two_edits_keep_their_styles() {
     assert_eq!(style(&after, "Italic footnote"), style(&before, "Italic footer"));
 }
 
+/// Find and replace: two words replaced in one paragraph of several runs. Each replacement takes
+/// the run of the first character it replaces, and every run between them keeps its own style.
+#[test]
+fn replacing_words_apart_in_a_paragraph_keeps_every_run_between_them() {
+    let original = mixed_region_page();
+    let block = text::text_blocks(&original, 0).unwrap()[1].clone();
+    assert_eq!(block.editor_text, "About\nPlain bold text.\nItalic footer");
+    let about = block.editor_text.find("About").unwrap();
+    let text_word = block.editor_text.find("text").unwrap();
+    let (draft, sources) = block.replaced(&[about..about + 5, text_word..text_word + 4], "Info").unwrap();
+    assert_eq!(draft, "Info\nPlain bold Info.\nItalic footer");
+    let pieces: Vec<&str> = sources.iter().map(|(r, _)| &draft[r.clone()]).collect();
+    assert_eq!(pieces, ["Info", "\nPlain ", "bold", " Info.", "\nItalic footer"]);
+    let before = text::text_lines(&original, 0).unwrap();
+    let source_of = |word: &str| before.iter().position(|l| l.text.contains(word)).unwrap();
+    let runs: Vec<usize> = sources.iter().map(|(_, s)| *s).collect();
+    assert_eq!(runs, [source_of("About"), source_of("Plain"), source_of("bold"), source_of(" text."), source_of("Italic")]);
+    let mut doc = original.clone();
+    let style = text::BlockStyle { sources, ..Default::default() };
+    assert_eq!(text::rewrite_block(&mut doc, 0, 1, Some(&draft), &style).unwrap().substituted, None);
+    let reopened = reopen(&doc);
+    assert_eq!(text::text_blocks(&reopened, 0).unwrap()[1].editor_text, draft);
+    let lines = text::text_lines(&reopened, 0).unwrap();
+    let look = |l: &text::TextLine| (l.base_font.clone(), l.color);
+    let run = |word: &str| lines.iter().find(|l| l.text.contains(word)).unwrap_or_else(|| panic!("{word}: {lines:?}"));
+    assert_eq!(look(run("Info")), look(&before[source_of("About")]), "the first replacement takes About's run");
+    assert_eq!(look(run("Plain")), look(&before[source_of("Plain")]));
+    assert_eq!(look(run("bold")), look(&before[source_of("bold")]), "the run between the two replacements keeps its style");
+    assert_eq!(look(run("Info.")), look(&before[source_of(" text.")]));
+    assert_eq!(look(run("Italic")), look(&before[source_of("Italic")]));
+    // A replaced word that is a run of its own keeps that run's style, where aligning the old and
+    // new text (the inline editor's way) gives a changed word the run before it.
+    let bold = block.editor_text.find("bold").unwrap();
+    let (draft, sources) = block.replaced(std::slice::from_ref(&(bold..bold + 4)), "heavy").unwrap();
+    let mut doc = original.clone();
+    text::rewrite_block(&mut doc, 0, 1, Some(&draft), &text::BlockStyle { sources, ..Default::default() }).unwrap();
+    let lines = text::text_lines(&reopen(&doc), 0).unwrap();
+    let heavy = lines.iter().find(|l| l.text.contains("heavy")).unwrap_or_else(|| panic!("{lines:?}"));
+    assert_eq!(look(heavy), look(&before[source_of("bold")]), "the replacement keeps the bold run's style");
+    // Out of order, overlapping or inside a character: no draft.
+    assert!(block.replaced(&[text_word..text_word + 4, about..about + 5], "x").is_none());
+    assert!(block.replaced(&[0..3, 2..5], "x").is_none());
+    assert!(block.replaced(&[0..0, 3..4], "x").is_none(), "an empty range");
+    assert_eq!(block.replaced(&[], "x").map(|(d, _)| d), Some(block.editor_text.clone()));
+}
+
+/// Sources that don't cover the text in order, or name a run of another paragraph, are refused
+/// and change nothing.
+#[test]
+fn style_sources_must_cover_the_text_with_the_paragraphs_runs() {
+    let original = mixed_region_page();
+    let block = text::text_blocks(&original, 0).unwrap()[1].clone();
+    let draft = block.editor_text.replace("About", "Info");
+    let own = block.lines[0];
+    let other = text::text_blocks(&original, 0).unwrap()[0].lines[0];
+    let len = draft.len();
+    for sources in
+        [vec![(0..4, own)], vec![(0..4, own), (5..len, own)], vec![(0..len, other)], vec![(0..len + 1, own)], vec![(4..len, own), (0..4, own)]]
+    {
+        let mut doc = original.clone();
+        let style = text::BlockStyle { sources: sources.clone(), ..Default::default() };
+        assert!(text::rewrite_block(&mut doc, 0, 1, Some(&draft), &style).is_err(), "{sources:?}");
+        assert_eq!(text::text_blocks(&doc, 0).unwrap()[1].editor_text, block.editor_text);
+    }
+}
+
 #[test]
 fn disjoint_style_ranges_preserve_unselected_runs_and_validate_utf8_atomically() {
     let mut doc = mixed_region_page();
@@ -9994,11 +10060,16 @@ fn rewriting_a_paragraph_drawn_with_quote_operators_keeps_their_line_move_and_sp
 fn replacing_a_line_keeps_what_a_dropped_quote_copy_did() {
     let cases = [
         // The copy's `'` moves to the line the footer is placed from.
-        "BT /F1 12 Tf 14 TL 72 700 Td (Target line here) Tj ET BT 72.3 714 Td (Target line here) ' 0 -100 Td (Footer stays put) Tj ET",
+        (2, "BT /F1 12 Tf 14 TL 72 700 Td (Target line here) Tj ET BT 72.3 714 Td (Target line here) ' 0 -100 Td (Footer stays put) Tj ET"),
         // The copy's `"` sets the spacing the footer inherits in the next text object.
-        "BT /F1 12 Tf 0 TL 72 700 Td (Target line here) Tj ET BT 72.3 700 Td 3 2 (Target line here) \" ET BT 72 600 Td (Footer stays put) Tj ET",
+        (2, "BT /F1 12 Tf 0 TL 72 700 Td (Target line here) Tj ET BT 72.3 700 Td 3 2 (Target line here) \" ET BT 72 600 Td (Footer stays put) Tj ET"),
+        // Two copies, a `'` one and a `"` one: the footer takes the second's line and spacing.
+        (
+            3,
+            "BT /F1 12 Tf 0 TL 72 700 Td (Target line here) Tj ET BT 72.3 700 Td (Target line here) ' ET BT 72.6 700 Td 3 2 (Target line here) \" 0 -100 Td (Footer stays put) Tj ET",
+        ),
     ];
-    for content in cases {
+    for (drawn, content) in cases {
         let footer = |doc: &Document| {
             let lines = text::text_lines(doc, 0).unwrap();
             let f = lines.iter().find(|l| l.text == "Footer stays put").unwrap_or_else(|| panic!("no footer in {content}"));
@@ -10008,7 +10079,7 @@ fn replacing_a_line_keeps_what_a_dropped_quote_copy_did() {
         let before = footer(&original);
         let targets: Vec<usize> =
             text::text_lines(&original, 0).unwrap().iter().enumerate().filter(|(_, l)| l.text == "Target line here").map(|(i, _)| i).collect();
-        assert_eq!(targets.len(), 2, "{content}");
+        assert_eq!(targets.len(), drawn, "{content}");
         for target in targets {
             let mut doc = original.clone();
             text::replace_line(&mut doc, 0, target, "NEW TEXT").unwrap();
@@ -13971,6 +14042,39 @@ fn review_inside_scope_group_move_matches_direct_transform_under_outer_scale() {
     }
 }
 
+/// A page that names one font under 300 resource names builds its metrics once: each alias
+/// used to build (and keep) a set of its own.
+#[test]
+fn font_aliases_share_one_set_of_metrics() {
+    let fonts: String = (0..300).map(|i| format!(" /A{i} 5 0 R")).collect();
+    let content: String = format!("BT 72 700 Td {} ET", (0..300).map(|i| format!("/A{i} 12 Tf (x) Tj ")).collect::<String>());
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Contents 4 0 R /Resources << /Font <<{fonts} >> >> >>"),
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offs = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offs.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let x = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offs {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{x}\n%%EOF\n", objs.len() + 1).as_bytes());
+    let doc = Document::open(Arc::new(out)).unwrap();
+    text::METRICS_BUILT.with(|n| n.set(0));
+    let lines = text::text_lines(&doc, 0).unwrap();
+    assert!(lines.iter().map(|l| l.text.matches('x').count()).sum::<usize>() >= 300, "{lines:?}");
+    let built = text::METRICS_BUILT.with(std::cell::Cell::get);
+    assert!(built < 10, "metrics built {built} times for one font");
+}
+
 /// Each `Tj`/`TJ` moves the text matrix by the width of its text. A run shown later in the same
 /// text object without a `Td` or `Tm` of its own (a raised run in another colour, a column after
 /// a `TJ` gap) is placed by those advances. Rewriting the paragraph before it must keep them, as
@@ -14776,6 +14880,38 @@ fn a_thai_edit_that_spends_its_allowance_to_the_byte_goes_through() {
     };
     assert_eq!(edit(256), Ok(()));
     let error = edit(257).unwrap_err();
+    assert!(error.contains("THSarabunPSK") && error.contains("MiB of font data"), "{error}");
+}
+
+/// Only a read the allowance refuses leaves a font of the face unread for want of it. With the
+/// allowance spent to the byte as above, another font of the face, whose ToUnicode is an empty
+/// stream behind a filter nothing decodes (unread with any allowance), still has its program read,
+/// which the allowance refuses: the edit is refused, rather than going through without that font.
+#[test]
+fn a_font_of_the_face_unread_on_its_own_once_the_allowance_is_spent_still_refuses_the_edit() {
+    let mut program = legacy_thai_program();
+    program.resize((16 << 20) - 192, 0);
+    let mut unicode = LEGACY_THAI_UNICODE.to_vec();
+    unicode.resize(256, b' ');
+    let mut doc = text_page("BT /F1 16 Tf 50 650 Td <00d6> Tj ET");
+    let font = legacy_thai_font(&mut doc, "ABCDEF+THSarabunPSK", &program, &unicode);
+    doc.set(pdfcraft_cos::ObjRef::new(5, 0), Object::Dict(font));
+    // Not a subset, so its metrics read no program, only the ToUnicode.
+    let mut other = legacy_thai_font(&mut doc, "THSarabunPSK", &legacy_thai_program(), LEGACY_THAI_UNICODE);
+    let mut dict = Dict::new();
+    dict.set(b"Filter".to_vec(), Object::name("NoSuchFilter"));
+    other.set(b"ToUnicode".to_vec(), Object::Ref(doc.add(Object::Stream(Stream::from_raw(dict, Vec::new())))));
+    let other = doc.add(Object::Dict(other));
+    doc.update_dict(pdfcraft_cos::ObjRef::new(3, 0), |page| {
+        let Some(Object::Dict(mut resources)) = page.get(b"Resources").cloned() else { panic!("fixture") };
+        let Some(Object::Dict(mut fonts)) = resources.get(b"Font").cloned() else { panic!("fixture") };
+        fonts.set(b"F2".to_vec(), Object::Ref(other));
+        resources.set(b"Font".to_vec(), Object::Dict(fonts));
+        page.set(b"Resources".to_vec(), Object::Dict(resources));
+    })
+    .unwrap();
+    let style = BlockStyle { width: Some(400.0), ..Default::default() };
+    let error = text::rewrite_block(&mut doc, 0, 0, Some("กขค"), &style).unwrap_err().to_string();
     assert!(error.contains("THSarabunPSK") && error.contains("MiB of font data"), "{error}");
 }
 

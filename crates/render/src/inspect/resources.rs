@@ -121,9 +121,14 @@ impl<'a> Inspector<'a> {
             .unwrap_or_default();
         let auto = config.map(|c| self.view_auto_state(c)).unwrap_or_default();
         let Ok(Object::Array(ocgs)) = props.get(b"OCGs").map(|o| self.resolve(o)) else { return };
+        let mut seen = HashSet::new();
         for g in ocgs {
             let Some(d) = self.dict(g) else { continue };
             let id = g.as_reference().ok();
+            // A group listed twice is one layer (and its name is read once).
+            if id.is_some_and(|id| !seen.insert(id)) {
+                continue;
+            }
             // The View auto state, when it manages the group, then the configuration.
             let visible = match id {
                 Some(id) if let Some(&state) = auto.get(&id) => state,
@@ -132,7 +137,7 @@ impl<'a> Inspector<'a> {
                 _ => !base_off,
             };
             let Some(id) = id else { continue };
-            out.push(Layer { id, name: self.text(d, b"Name").unwrap_or_else(|| "Layer".into()), visible, initial: visible });
+            out.push(Layer { id, name: self.field_text(d, b"Name").unwrap_or_else(|| "Layer".into()), visible, initial: visible });
         }
     }
 
