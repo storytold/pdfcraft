@@ -85,7 +85,7 @@ pub(crate) fn action_fields(doc: &Document, o: &Object) -> Vec<String> {
 
 /// The fully qualified name of the field that `r` (a field or one of its widgets) belongs to,
 /// from the partial names (`/T`) up its `/Parent` chain.
-fn qualified_name(doc: &Document, r: ObjRef) -> Option<String> {
+pub(crate) fn qualified_name(doc: &Document, r: ObjRef) -> Option<String> {
     let mut parts = Vec::new();
     let mut seen = std::collections::HashSet::new();
     let mut cur = Some(r);

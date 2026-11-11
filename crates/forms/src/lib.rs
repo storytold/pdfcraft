@@ -31,8 +31,8 @@ pub use author::{
 };
 pub use calc_order::{CalculatedField, CalculationIssue, CalculationOrder, calculation_order, set_calculation_order};
 pub use scripting::{
-    FieldChange, FieldEvent, NoScripts, ScriptResult, Scripts, apply_script_changes, document_scripts, document_scripts_named, set_document_script,
-    set_field_script,
+    FieldChange, FieldEvent, NoScripts, PageEvent, PageScript, ScriptResult, Scripts, apply_script_changes, document_scripts, document_scripts_named,
+    page_scripts, set_document_script, set_field_script,
 };
 
 mod appearances;
@@ -46,7 +46,7 @@ pub use read::selected_options;
 pub use read::{Fields, acroform, adopted_page_fields, fields, fields_with_adopted};
 #[cfg(test)]
 use read::{MAX_SCRIPT_BYTES, PageWalk, enumerate, form_reads};
-use read::{first_by_export, script, script_budget};
+use read::{first_by_export, qualified_name, script, script_budget};
 pub use tab_order::{TabOrder, move_in_tab_order, set_tab_order, tab_orders};
 #[cfg(test)]
 use values::has_password_flag;
