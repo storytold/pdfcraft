@@ -981,7 +981,7 @@ sha256 = "c7468ec5c64330662b57e71c10a4c8538a501038f4c44ed0469dfb1e04ed7d3a"
 [[asset]]
 path = "assets/icons/freehand-highlighter.svg"
 title = "Freehand highlighter"
-author = "PdfCraft contributors"
+author = "Combiler01"
 source = "this repository"
 licence = "CC0-1.0"
 licence_file = "vendor/hayro-interpret/assets/CGATS_LICENSE.txt"
