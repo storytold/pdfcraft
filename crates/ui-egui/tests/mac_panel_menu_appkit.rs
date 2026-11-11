@@ -26,6 +26,13 @@ fn assert_panel_shortcuts(app: &objc2_app_kit::NSApplication, usual: &objc2_app_
 
 #[cfg(target_os = "macos")]
 fn main() {
+    // cargo-nextest asks a test binary for its tests (`--list`) before running them.
+    if std::env::args().any(|arg| arg == "--list") {
+        if !std::env::args().any(|arg| arg == "--ignored") {
+            println!("panel_shortcuts: test");
+        }
+        return;
+    }
     use objc2::MainThreadMarker;
     use objc2_app_kit::{NSApplication, NSMenu};
 
