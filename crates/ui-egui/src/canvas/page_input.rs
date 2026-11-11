@@ -10,6 +10,7 @@ use super::{
     signature_badges, verdict_mark_rect,
 };
 use crate::page_cursor::{Layer, Subject};
+use crate::page_keys::PageKeys;
 use crate::page_pointer::PagePointer;
 use crate::page_router::{Owner, PagePress, top};
 use crate::{QuickTool, comments, icons};
@@ -45,6 +46,8 @@ pub(crate) struct PageToolContext<'a> {
     pub page: usize,
     pub doc: &'a pdfcraft_engine::Document,
     pub info: &'a DocInfo,
+    /// This frame's keys as the pages see them.
+    pub keys: PageKeys,
 }
 
 /// The tools' input on one page. The hits at the press point decide who holds the press, and the
@@ -64,6 +67,7 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
         editing_content,
         form,
         info,
+        keys,
         placing,
         prefs,
         preparing,
@@ -76,8 +80,8 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
     } = frame.env;
     let PageSlot { i, xf, .. } = *slot;
     let PageFrame { resp, ptr, pointer, .. } = *frame;
-    let cx = PageToolContext { ui, resp, xf: &xf, ptr, page: i, doc, info };
-    let pcx = comments::PageCx { page: i, xf: &xf, ptr, info, tool, prefs, allowed, hidden: comments_hidden, redact_mark };
+    let cx = PageToolContext { ui, resp, xf: &xf, ptr, page: i, doc, info, keys };
+    let pcx = comments::PageCx { page: i, xf: &xf, ptr, info, tool, prefs, allowed, hidden: comments_hidden, redact_mark, keys };
     let (lines, images) =
         if matches!(tool, QuickTool::AddText | QuickTool::EditText) && can_modify { edit_inventory(view, doc, i) } else { Default::default() };
     let field_tool = match tool {
@@ -210,7 +214,7 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
     // the palette, another window or another tab has it (`gate`), as before.
     let gate = !(tool == QuickTool::EditText && view.objects.input_blocked());
     if tool == QuickTool::EditText && can_modify && gate {
-        crate::edit_text_ui::picture_keys(ui.ctx(), view, i, &images, ptr.any_down);
+        crate::edit_text_ui::picture_keys(ui.ctx(), keys, view, i, &images, ptr.any_down);
     }
     let on_objects = tool == QuickTool::EditText && can_modify && crate::object_ui::page_input(cx, press, view);
     let picks_up = matches!(tool, QuickTool::Select | QuickTool::AddText | QuickTool::EditText);
@@ -346,6 +350,7 @@ fn tool_input(
         doc,
         info,
         initials,
+        keys,
         signature,
         tool,
         units,
@@ -356,7 +361,7 @@ fn tool_input(
     } = frame.env;
     let PageSlot { i, xf, .. } = *slot;
     let PageFrame { resp, ptr, .. } = *frame;
-    let cx = PageToolContext { ui, resp, xf: &xf, ptr, page: i, doc, info };
+    let cx = PageToolContext { ui, resp, xf: &xf, ptr, page: i, doc, info, keys };
     let free = press == PagePress::Free;
     if let QuickTool::Measure(measure_tool) = tool {
         crate::measure_ui::page_input(ui, crate::measure_ui::Clicks::of(resp, free), doc, view, pcx, measure_tool, units);
@@ -892,6 +897,7 @@ pub(super) fn page_overlays(ui: &mut egui::Ui, view: &mut DocView, frame: &mut P
         form,
         generation,
         info,
+        keys,
         prepare_tab_order,
         prefs,
         preparing,
@@ -905,8 +911,8 @@ pub(super) fn page_overlays(ui: &mut egui::Ui, view: &mut DocView, frame: &mut P
     let PageSlot { i, r, xf } = *slot;
     let PageFrame { resp, ptr, pointer, .. } = *frame;
     let painter = ui.painter();
-    let tool_cx = PageToolContext { ui, resp, xf: &xf, ptr, page: i, doc, info };
-    let pcx = comments::PageCx { page: i, xf: &xf, ptr, info, tool, prefs, allowed, hidden: comments_hidden, redact_mark };
+    let tool_cx = PageToolContext { ui, resp, xf: &xf, ptr, page: i, doc, info, keys };
+    let pcx = comments::PageCx { page: i, xf: &xf, ptr, info, tool, prefs, allowed, hidden: comments_hidden, redact_mark, keys };
     // A press nobody holds picks the picture under it: a link's click follows the link only (ruling
     // 5), though its drag or double-click still lets the picked picture go, as does a drag the page
     // it is over first sees, whichever page it began on.
@@ -960,6 +966,9 @@ pub(super) fn page_overlays(ui: &mut egui::Ui, view: &mut DocView, frame: &mut P
     } else {
         crate::forms_ui::paint_page(painter, &xf, i, info, form, view, input.hover.as_ref());
         crate::forms_ui::tooltip(resp, form, input.hover.as_ref());
+        if let Some(hovered) = crate::forms_ui::hovered(form, input.hover.as_ref()) {
+            frame.field_hover = Some(hovered);
+        }
     }
 
     // Form-field highlight (Acrobat's "Highlight existing fields"); required fields get a

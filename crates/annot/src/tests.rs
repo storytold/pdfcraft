@@ -2544,6 +2544,28 @@ fn non_markup_annotations_are_not_comments() {
     for s in ["Text", "FreeText", "Highlight", "Ink", "Stamp", "FileAttachment", "Redact", "Sound"] {
         assert!(is_comment_subtype(s), "{s}");
     }
+    // #3916: comment edits must refuse non-comment annotations (form widgets, links, pop-ups)
+    // when a stale `/Annots` index points at one.
+    for subtype in ["Widget", "Link", "Popup", "Watermark"] {
+        let mut doc = fixture();
+        let mut d = Dict::new();
+        d.set(b"Type".to_vec(), Object::name("Annot"));
+        d.set(b"Subtype".to_vec(), Object::name(subtype));
+        d.set(b"Rect".to_vec(), num_array(&[10.0, 10.0, 50.0, 30.0]));
+        d.set(b"Contents".to_vec(), PdfString::text("keep me"));
+        let w = doc.add(Object::Dict(d));
+        let p = page_refs(&doc).unwrap()[0];
+        let mut a = annots(&doc, p);
+        a.push(Object::Ref(w));
+        let idx = a.len() - 1;
+        set_annots(&mut doc, p, a).unwrap();
+
+        assert_eq!(delete_annotation(&mut doc, 0, idx), Err(AnnotError::NoSuchAnnotation { page: 0, index: idx }), "{subtype}");
+        assert_eq!(set_contents(&mut doc, 0, idx, "overwritten", &meta("m")), Err(AnnotError::NoSuchAnnotation { page: 0, index: idx }), "{subtype}");
+        assert_eq!(move_annotation(&mut doc, 0, idx, 5.0, 5.0, &meta("m")), Err(AnnotError::NoSuchAnnotation { page: 0, index: idx }), "{subtype}");
+        assert_eq!(props(&doc, 0, idx), None, "{subtype}");
+        assert_eq!(text(&list(&doc, 0)[idx], b"Contents"), "keep me", "{subtype} contents must be untouched");
+    }
 }
 
 /// A drawing (a drawn Fill & Sign signature is one) resizes by scaling its strokes into the new
@@ -5506,4 +5528,94 @@ fn summaries_list_only_usable_quads() {
     set_annots(&mut doc, page, entries).unwrap();
     let summary = summaries(&doc).into_iter().find(|a| a.page == 0 && a.index == 0).unwrap();
     assert_eq!(summary.quads, vec![QUAD.map(|v| v as f32)]);
+}
+
+/// A page as iOS Markup saves a signature: its private copy on the page and on the stamp, which
+/// also carries a normal appearance. A plain note follows the stamp, at index 1.
+fn apple_markup_page() -> Document {
+    document_of(&[
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>",
+        b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R 7 0 R] /AAPL:PPK 5 0 R /AAPL:PPKHash 5 0 R >>",
+        b"<< /Type /Annot /Subtype /Stamp /Rect [100 100 200 150] /F 644 /AP << /N 6 0 R >> /AAPL:AKExtras << /PPKType (draw) >> >>",
+        b"<< /Length 0 >>
+stream
+
+endstream",
+        b"<< /Type /XObject /Subtype /Form /BBox [0 0 100 50] /Length 22 >>
+stream
+0 0 1 RG 1 1 m 9 9 l S
+endstream",
+        b"<< /Type /Annot /Subtype /Text /Rect [400 400 420 420] /Contents (note) >>",
+    ])
+}
+
+/// Apple's copy is gone from the page and from every annotation left on it, and the drop is
+/// in the repair log (fidelity: never silent).
+fn assert_apple_copy_dropped(doc: &Document) {
+    assert!(doc.repair_log().iter().any(|l| l.contains("Apple Markup")), "{:?}", doc.repair_log());
+    let doc = reopen(doc);
+    let page = doc.get(page_refs(&doc).unwrap()[0]);
+    let page = page.as_dict().unwrap();
+    assert!(!page.contains(b"AAPL:PPK") && !page.contains(b"AAPL:PPKHash"));
+    let all = list(&doc, 0);
+    assert_eq!(all[0].name(b"Subtype"), Some(&b"Stamp"[..]));
+    assert!(all.iter().all(|d| !d.contains(b"AAPL:AKExtras")));
+}
+
+#[test]
+fn deleting_from_an_apple_markup_page_drops_apples_stale_copy() {
+    let mut doc = apple_markup_page();
+    delete_annotation(&mut doc, 0, 1).unwrap();
+    assert_apple_copy_dropped(&doc);
+}
+
+#[test]
+fn replying_on_an_apple_markup_page_drops_apples_stale_copy() {
+    let mut doc = apple_markup_page();
+    add_reply(&mut doc, 0, 1, "Agreed", "Bob", &meta("r")).unwrap();
+    assert_apple_copy_dropped(&doc);
+}
+
+#[test]
+fn marking_on_an_apple_markup_page_drops_apples_stale_copy() {
+    let mut doc = apple_markup_page();
+    set_marked(&mut doc, 0, 1, true, "Bob", &meta("m")).unwrap();
+    assert_apple_copy_dropped(&doc);
+}
+
+#[test]
+fn adding_to_an_apple_markup_page_drops_apples_stale_copy() {
+    let mut doc = apple_markup_page();
+    add_annotation(&mut doc, &new(0, Shape::Note { at: [300.0, 300.0], icon: NoteIcon::Comment }), &meta("n")).unwrap();
+    assert_apple_copy_dropped(&doc);
+    // The Markup stamp itself stays, with its flags and its appearance, byte for byte.
+    let doc = reopen(&doc);
+    let all = list(&doc, 0);
+    assert_eq!(all[0].get(b"F").and_then(Object::as_int), Some(644));
+    assert_eq!(ap_content(&doc, &all[0]), "0 0 1 RG 1 1 m 9 9 l S");
+}
+
+#[test]
+fn a_refused_edit_on_an_apple_markup_page_drops_nothing() {
+    // An inline, locked Markup stamp: restyling it is refused, so Apple's copy must stay put
+    // (promoting the inline dictionary to an object is not a change to the markup).
+    let mut doc = document_of(&[
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>",
+        b"<< /Type /Page /Parent 2 0 R /Annots [<< /Type /Annot /Subtype /Stamp /Rect [100 100 200 150] /F 644 /AAPL:AKExtras << /PPKType (draw) >> >>] /AAPL:PPK 4 0 R /AAPL:PPKHash 4 0 R >>",
+        b"<< /Length 0 >>
+stream
+
+endstream",
+    ]);
+    assert_eq!(
+        set_style(&mut doc, 0, 0, StyleChange { color: Some([1.0, 0.0, 0.0]), opacity: None, width: None, endings: None }, &meta("")),
+        Err(AnnotError::Invalid("the comment is locked".into()))
+    );
+    let page = doc.get(page_refs(&doc).unwrap()[0]);
+    let page = page.as_dict().unwrap();
+    assert!(page.contains(b"AAPL:PPK") && page.contains(b"AAPL:PPKHash"));
+    assert!(list(&doc, 0)[0].contains(b"AAPL:AKExtras"));
+    assert!(doc.repair_log().is_empty(), "{:?}", doc.repair_log());
 }

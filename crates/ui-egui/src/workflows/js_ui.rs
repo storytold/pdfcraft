@@ -70,7 +70,14 @@ impl PdfCraftApp {
         }
         for r in out.requests {
             match r {
-                Request::Print => self.open_print(),
+                Request::Print => {
+                    if let Some(i) = view {
+                        // The print dialog reads the active document throughout its lifetime.
+                        // Keep the source selected; restoring the comparison tab would retarget it.
+                        self.active = Some(i);
+                        self.open_print();
+                    }
+                }
                 Request::GoToPage(p) => {
                     if let Some(i) = view {
                         self.views[i].go_to_page(p);
@@ -81,8 +88,12 @@ impl PdfCraftApp {
                     "The form asks to be submitted to {u}; PdfCraft doesn't send form data. Save the document to keep your entries.",
                     &[("u", &u)],
                 ),
-                Request::SaveAs => self.run_command("file.save_as"),
-                Request::Highlight(on) => self.script_highlight(id, on),
+                Request::SaveAs => {
+                    if let Some(i) = view {
+                        self.save_view(i, crate::SaveTarget::As);
+                    }
+                }
+                Request::OpenAttachment { name, open } => self.open_script_attachment(id, &name, open),
                 Request::ShowPanel(p) => {
                     let panel = match p {
                         Panel::Bookmarks => crate::RightPanel::Bookmarks,
@@ -94,10 +105,34 @@ impl PdfCraftApp {
                     // Show/Hide: a panel already showing closes.
                     self.right = (self.right != Some(panel)).then_some(panel);
                 }
-                Request::Focus(_) | Request::Beep | Request::Reset(_) => {}
+                Request::Zoom(z) => {
+                    if let Some(i) = view {
+                        self.views[i].zoom = (z / 100.0) as f32;
+                        self.views[i].fit = crate::canvas::Fit::None;
+                    }
+                }
+                Request::Highlight(on) => self.script_highlight(id, on),
+                Request::Focus(name) => self.focus_script_field(id, view, &name, None),
+                Request::FocusField { name, object_id } => self.focus_script_field(id, view, &name, Some(object_id)),
+                Request::Beep | Request::Reset(_) => {}
             }
         }
         self.show_script_messages(out.alerts);
+    }
+
+    fn focus_script_field(&mut self, id: DocId, view: Option<usize>, name: &str, object_id: Option<u64>) {
+        if let Some(i) = view
+            && let Some(f) = self.session.get(id).and_then(|d| {
+                d.form.iter().find(|f| object_id.map_or_else(|| f.name == name, |key| pdfcraft_engine::js::field_object_id(f.obj) == key))
+            })
+            && let Some((wi, widget)) = f.widgets.iter().enumerate().find(|(_, w)| !w.hidden && w.page.is_some())
+        {
+            let page = widget.page.unwrap_or(0);
+            if self.views[i].page_screen_rect(page).is_none() {
+                self.views[i].go_to_page(page);
+            }
+            self.views[i].forms.focus = Some(crate::forms_ui::open_focus(f, wi));
+        }
     }
 
     /// Show form script messages `messages` in order, each in the toast with its title and icon.
@@ -112,6 +147,23 @@ impl PdfCraftApp {
         if self.toast.is_none() {
             self.next_script_message();
         }
+    }
+
+    /// A form button's `exportDataObject`: the attached file `name` (its key in the document's
+    /// embedded files, else its file name), opened in a new tab when the script asks to open a
+    /// PDF, and otherwise offered to save. Other files aren't launched in other programs.
+    fn open_script_attachment(&mut self, id: DocId, name: &str, open: bool) {
+        let Some(doc) = self.session.get(id) else { return };
+        let keyed = |a: &pdfcraft_render::Attachment| matches!(&a.source, pdfcraft_render::AttachmentSource::Document { key } if key == name);
+        let index = doc.info.attachments.iter().position(keyed).or_else(|| doc.info.attachments.iter().position(|a| a.name == name));
+        let Some(i) = index else {
+            // The name is the form's own text: shortened, as file names are elsewhere.
+            let shown = crate::dialogs::shorten_middle(name, 80);
+            self.notify_fmt("The form asks for the attached file {name}, which this document doesn't have.", &[("name", &shown)]);
+            return;
+        };
+        // Whether it is a PDF is decided by its bytes, not its name (`attachment_action`).
+        self.attachment_action(id, i, open);
     }
 
     /// A form's script turned field highlighting on or off (`app.runtimeHighlight`): as the
@@ -148,13 +200,39 @@ impl PdfCraftApp {
         true
     }
 
+    /// Run document `id`'s catalog JavaScript for `event` (Will Save before a save, Will Print
+    /// before printing) and show what it said. What it changed is part of what is saved or
+    /// printed. A failing script is reported and the save or print still goes ahead.
+    pub(crate) fn run_document_actions(&mut self, id: DocId, event: pdfcraft_engine::js::DocumentScriptEvent) {
+        let before = self.session.get(id).map(|d| d.edit_generation());
+        let out = self.session.run_document_actions(id, event);
+        if self.session.get(id).map(|d| d.edit_generation()) != before
+            && let Some(i) = self.views.iter().position(|v| v.id == id)
+            && let Some(info) = self.session.get(id).map(|d| d.info.clone())
+        {
+            self.views[i].document_changed(&info);
+        }
+        if !out.is_empty() {
+            self.handle_js(id, out);
+        }
+    }
+
     /// Run a push button's JavaScript (its Mouse Up action).
     pub fn run_button_script(&mut self, id: DocId, field: &str, script: &str) {
+        self.run_button_script_target(id, field, None, script);
+    }
+    /// Run the action of the exact clicked button, preserving legacy name-only entry points.
+    pub fn run_button_script_target(&mut self, id: DocId, field: &str, identity: Option<u64>, script: &str) {
         // A script reads the fields: include what's still being typed in one (#166).
         if !self.commit_form_typing() {
             return;
         }
-        match self.session.run_javascript(id, script, Some(field)) {
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.session.get(id).is_some_and(|d| d.info.xfa.is_none()) {
+            self.start_ui_script(id, script, Some(field), identity);
+            return;
+        }
+        match self.session.run_javascript_target(id, script, Some(field), identity) {
             Ok(o) => {
                 if let Some(i) = self.views.iter().position(|v| v.id == id)
                     && let Some(info) = self.session.get(id).map(|d| d.info.clone())
