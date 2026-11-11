@@ -108,15 +108,16 @@ impl Automation {
         let mut total = pdfcraft_engine::ScriptRun::default();
         while total.ran < MAX_RUNS {
             let Some(at) = self.session.next_timer(id).filter(|at| *at <= end) else { break };
-            let run = self.session.run_timers(id, at.max(start));
+            let run = self.session.run_timers_at_most(id, at.max(start), MAX_RUNS - total.ran);
             if run.ran == 0 {
                 break;
             }
             merge_runs(&mut total, run);
         }
         let behind = self.session.next_timer(id).is_some_and(|at| at <= end);
-        // The clock ends where it was sent; a timer the run cap left behind counts on from there.
-        let last = self.session.run_timers(id, end);
+        // The clock ends where it was sent; a timer the run cap left behind counts on from there,
+        // and runs at the next call, not past the cap.
+        let last = self.session.run_timers_at_most(id, end, MAX_RUNS - total.ran);
         merge_runs(&mut total, last);
         self.renderers.remove(&id);
         let mut out = self.script_run_json(id, &total);

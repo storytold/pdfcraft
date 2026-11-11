@@ -75,3 +75,28 @@ fn js_page_and_js_advance_run_an_animation_that_page_render_draws() {
     let doc = a.session().get(pdfcraft_engine::DocId(id)).unwrap();
     assert!(!doc.dirty && doc.undo_depth() == 0, "the frames turned in the view only");
 }
+
+/// A page whose open action starts a 10 ms interval.
+const INTERVAL: &[u8] = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /AA << /O << /S /JavaScript /JS (var n = 0; app.setInterval\\('n++', 10\\);) >> >> >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+
+/// `js_advance` runs at most 6,000 timers, even with one still due where the clock ends: that
+/// one runs at the next call.
+#[test]
+fn js_advance_runs_no_more_timers_than_its_cap() {
+    let dir = std::env::temp_dir().join(format!("pdfcraft-js-advance-cap-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("interval.pdf"), INTERVAL).unwrap();
+    let mut a = Automation::new().with_root(&dir).unwrap();
+    let id = tool(&mut a, "doc_open", json!({ "path": "interval.pdf" }))["doc"].as_u64().unwrap();
+    tool(&mut a, "js_page", json!({ "doc": id, "page": 1 }));
+    let out = tool(&mut a, "js_advance", json!({ "doc": id, "ms": 60_010 }));
+    assert_eq!((out["ran"].clone(), out["stopped_early"].clone()), (json!(6000), json!(true)), "{out:?}");
+    let out = tool(&mut a, "js_advance", json!({ "doc": id, "ms": 0 }));
+    assert_eq!(out["ran"], json!(1), "{out:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

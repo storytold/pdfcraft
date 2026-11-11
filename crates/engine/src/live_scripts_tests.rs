@@ -220,3 +220,72 @@ fn get_ocgs_turns_a_layer_in_the_view() {
     assert_eq!(shown(&s, id, 0, 100, 150), [255, 255, 255, 255]);
     assert!(!s.get(id).unwrap().dirty);
 }
+
+/// A page action whose document edit is refused (here: past the reset limit) shows nothing it
+/// did either. The frame it showed stays hidden.
+#[test]
+fn a_page_action_whose_edit_is_refused_shows_nothing() {
+    let open = "getField('f1').display = display.visible; for (var i = 0; i < 70; i++) this.resetForm();";
+    let out = pdf(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 5 0 R] >> >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R] /AA << /O << /S /JavaScript /JS 8 0 R >> >> >>".into(),
+        widget("f0", 4, "/AP << /N 6 0 R >>"),
+        widget("f1", 6, "/AP << /N 7 0 R >>"),
+        fill("1 0 0"),
+        fill("0 1 0"),
+        format!("<< /Length {} >>\nstream\n{open}\nendstream", open.len()),
+    ]);
+    let mut s = Session::new();
+    let id = s.open("refused.pdf", None, Arc::new(out), None).unwrap();
+    let run = s.show_page(id, 0, 0.0);
+    assert!(!run.output.errors.is_empty(), "the edit was refused: {run:?}");
+    assert!(run.pages.is_empty(), "{run:?}");
+    assert_eq!(shown(&s, id, 0, 100, 150), RED, "the frame it showed stays hidden");
+}
+
+/// A field's calculation reads the document's layers (`getOCGs`), as page actions and buttons do.
+#[test]
+fn field_calculations_read_the_documents_layers() {
+    let calc = "var l = this.getOCGs(); event.value = l ? String(l.length) : 'none';";
+    let out = pdf(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 5 0 R] /CO [5 0 R] >> /OCProperties << /OCGs [6 0 R] /D << /Order [6 0 R] >> >> >>"
+            .into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R] >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (a) /Rect [10 10 90 30] /P 3 0 R >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (n) /Rect [10 40 90 60] /P 3 0 R /AA << /C << /S /JavaScript /JS 7 0 R >> >> >>".into(),
+        "<< /Type /OCG /Name (Red) >>".into(),
+        format!("<< /Length {} >>\nstream\n{calc}\nendstream", calc.len()),
+    ]);
+    let mut s = Session::new();
+    let id = s.open("calc.pdf", None, Arc::new(out), None).unwrap();
+    s.apply(id, crate::Edit::SetFieldValue { name: "a".into(), value: crate::FieldValue::Text("1".into()) }).unwrap();
+    let n = s.get(id).unwrap().form.iter().find(|f| f.name == "n").unwrap().value.clone();
+    assert_eq!(n, ["1"], "the calculation saw the document's one layer");
+}
+
+/// The viewer's hit test asks which fields the scripts show (`shown_by_scripts`): a frame they
+/// showed, and one they hid.
+#[test]
+fn the_view_says_which_fields_the_scripts_show() {
+    let mut s = Session::new();
+    let id = s.open("animation.pdf", None, Arc::new(animation_pdf()), None).unwrap();
+    assert_eq!(s.get(id).unwrap().shown_by_scripts("f1"), None);
+    s.show_page(id, 0, 0.0);
+    s.run_timers(id, 100.0);
+    let doc = s.get(id).unwrap();
+    assert_eq!((doc.shown_by_scripts("f0"), doc.shown_by_scripts("f1"), doc.shown_by_scripts("anim")), (Some(false), Some(true), None));
+}
+
+/// With a cap of none, timers due only move the clock on; they run at the next call.
+#[test]
+fn a_cap_of_no_timer_runs_only_moves_the_clock() {
+    let mut s = Session::new();
+    let id = s.open("animation.pdf", None, Arc::new(animation_pdf()), None).unwrap();
+    s.show_page(id, 0, 0.0);
+    let run = s.run_timers_at_most(id, 100.0, 0);
+    assert_eq!(run.ran, 0);
+    assert_eq!((s.script_clock(id), s.next_timer(id)), (Some(100.0), Some(100.0)));
+    assert_eq!(s.run_timers_at_most(id, 100.0, 1).ran, 1);
+}

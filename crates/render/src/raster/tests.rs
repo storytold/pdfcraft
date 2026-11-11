@@ -2773,7 +2773,24 @@ trailer << /Root 1 0 R >>
     let flipped = render(RenderConfig { annotations: Arc::new(vec![(5, 0, true), (6, 0, false)]), ..RenderConfig::default() });
     assert_eq!((px(&flipped, 25, 25), px(&flipped, 75, 25)), (red, white.clone()), "shown and hidden by object");
     let face = render(RenderConfig { appearances: Arc::new(vec![(6, 0, 9, 0), (5, 0, 99, 0)]), ..RenderConfig::default() });
-    assert_eq!((px(&face, 25, 25), px(&face, 75, 25)), (white, green), "drawn with the other form, scaled to its own rectangle");
+    assert_eq!((px(&face, 25, 25), px(&face, 75, 25)), (white.clone(), green), "drawn with the other form, scaled to its own rectangle");
+    let cleared = render(RenderConfig { appearances: Arc::new(vec![(6, 0, 0, 0)]), ..RenderConfig::default() });
+    assert_eq!(px(&cleared, 75, 25), white, "an override naming no form draws nothing (a cleared icon), not the button's own face");
+    // A print preview draws the page as it prints, without what the scripts show.
+    let config = RenderConfig {
+        annotations: Arc::new(vec![(5, 0, true), (6, 0, false)]),
+        appearances: Arc::new(vec![(6, 0, 9, 0)]),
+        ..RenderConfig::default()
+    };
+    let preview = PageRenderer::new(Arc::new(pdf.to_vec()), config).render(RenderRequest {
+        page: 0,
+        kind: RequestKind::Pixels,
+        tile: None,
+        scale: 1.0,
+        tag: PRINT_TAG,
+        ..Default::default()
+    });
+    assert_eq!((px(&preview, 25, 25), px(&preview, 75, 25)), (vec![255, 255, 255, 255], vec![0, 0, 255, 255]), "the print preview");
 }
 
 /// ISO 32000-2 Table 167: Invisible hides an annotation of a type that isn't standard and

@@ -388,7 +388,8 @@ fn render_page<'a>(
 ) -> Result<Output, (String, bool)> {
     // Print previews share the viewer pool, but must use the output font policy and the layers
     // as they print (`print_layers`). Keep the caller's cancellation/warning hooks and annotation
-    // settings. A fresh cache is essential: hayro keys cached fonts by PDF dictionary, not by the
+    // settings, except what a document's scripts show while it is read (`annotations`,
+    // `appearances`), which never prints. A fresh cache is essential: hayro keys cached fonts by PDF dictionary, not by the
     // font resolver, so the viewer cache could supply an installed face even after changing the
     // resolver (and a cached missing font from print preview could blank the viewer on switching
     // back); nothing drawn with the viewer's layers is reused either.
@@ -396,10 +397,13 @@ fn render_page<'a>(
     let print_cache;
     let print = req.tag & PRINT_TAG != 0;
     let print_layers = config.print_layers.as_ref().filter(|_| print);
-    let (settings, cache) = if (config.system_fonts && print) || print_layers.is_some() {
+    let live = !settings.annotation_overrides.is_empty() || !settings.appearance_overrides.is_empty();
+    let (settings, cache) = if print && (config.system_fonts || print_layers.is_some() || live) {
         print_settings = InterpreterSettings {
             font_resolver: RenderConfig { system_fonts: false, ..config.clone() }.settings().font_resolver,
             ocg_overrides: print_layers.cloned().unwrap_or_else(|| settings.ocg_overrides.clone()),
+            annotation_overrides: Arc::default(),
+            appearance_overrides: Arc::default(),
             ..settings.clone()
         };
         print_cache = RenderCache::new();

@@ -421,9 +421,17 @@ fn toggle_edit(f: &FormField, wi: usize) -> Option<Edit> {
     Some(Edit::SetFieldValue { name: f.name.clone(), value })
 }
 
-/// The first shown widget of `f` on `page` under the pointer at `p`, with its index.
-fn widget_at<'a>(xf: &PageXform, info: &DocInfo, page: usize, f: &'a FormField, p: egui::Pos2) -> Option<(usize, &'a FormWidget)> {
-    f.widgets.iter().enumerate().find(|(_, w)| w.page == Some(page) && !w.hidden && widget_rect(xf, info, page, w.rect).contains(p))
+/// The first shown widget of `f` on `page` under the pointer at `p`, with its index. `shown`:
+/// whether the document's scripts show `f` while it is read, over its widgets' own flags.
+fn widget_at<'a>(
+    xf: &PageXform,
+    info: &DocInfo,
+    page: usize,
+    f: &'a FormField,
+    shown: Option<bool>,
+    p: egui::Pos2,
+) -> Option<(usize, &'a FormWidget)> {
+    f.widgets.iter().enumerate().find(|(_, w)| w.page == Some(page) && shown.unwrap_or(!w.hidden) && widget_rect(xf, info, page, w.rect).contains(p))
 }
 
 /// The field whose sign tab is under `p`, of `tabs` in the order they are painted: where tabs
@@ -446,16 +454,26 @@ fn usable(f: &FormField, w: &FormWidget, allowed: bool) -> bool {
 /// press. It is the first widget under the pointer in the form's order, except on a sign tab
 /// (`tabs`, with the signature field each one signs), which is drawn over every field and so is
 /// on its own field. Over the page's text too: a check box drawn with a glyph, or set on printed
-/// text, is a button, not text to select.
-pub(crate) fn hit(xf: &PageXform, info: &DocInfo, page: usize, form: &[FormField], tabs: &[(&str, SignTab)], allowed: bool, p: Pos2) -> Option<Hit> {
+/// text, is a button, not text to select. The fields are `doc`'s, shown as its page actions and
+/// timers show them ([`pdfcraft_engine::Document::shown_by_scripts`]).
+pub(crate) fn hit(
+    xf: &PageXform,
+    info: &DocInfo,
+    page: usize,
+    doc: &pdfcraft_engine::Document,
+    tabs: &[(&str, SignTab)],
+    allowed: bool,
+    p: Pos2,
+) -> Option<Hit> {
     if !xf.rect.contains(p) {
         return None;
     }
     let under = |only: Option<&str>| {
-        form.iter()
+        doc.form
+            .iter()
             .enumerate()
             .filter(|(_, f)| only.is_none_or(|name| f.name == name && f.kind == FormFieldKind::Signature))
-            .find_map(|(fi, f)| widget_at(xf, info, page, f, p).map(|(wi, w)| (fi, f, wi, w)))
+            .find_map(|(fi, f)| widget_at(xf, info, page, f, doc.shown_by_scripts(&f.name), p).map(|(wi, w)| (fi, f, wi, w)))
     };
     // A tab lies inside its field's widget, so that widget is under the pointer too.
     let (field, f, widget, w) = tab_under(tabs, p).and_then(|name| under(Some(name))).or_else(|| under(None))?;

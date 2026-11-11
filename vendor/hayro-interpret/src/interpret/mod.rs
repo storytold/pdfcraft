@@ -124,7 +124,8 @@ pub struct InterpreterSettings {
     /// PdfCraft patch (105): annotations the viewer draws with a form XObject as their normal
     /// appearance (object number and generation of the annotation, then of the form), in their
     /// own `/Rect`: a push button a document's script gave another icon (`buttonSetIcon`) while
-    /// it is read, without changing the document.
+    /// it is read, without changing the document. An override naming an object that isn't a form
+    /// draws nothing (the script cleared the icon).
     pub appearance_overrides: Arc<Vec<(i32, i32, i32, i32)>>,
     /// PdfCraft patch: once this is `true`, interpretation stops before the next content
     /// operator. What was drawn is then incomplete, so only set it when the output will be
@@ -296,24 +297,25 @@ pub fn interpret_page<'a>(
             // by `/AS` (checkboxes, radio buttons, …). Upstream only handled the stream form.
             // PdfCraft patch (105): the viewer may draw it with another form instead
             // (`appearance_overrides`).
-            let face = obj
-                .and_then(|r| {
-                    context
-                        .settings
-                        .appearance_overrides
-                        .iter()
-                        .find(|(num, generation, _, _)| *num == r.obj_number && *generation == r.gen_number)
-                })
-                .and_then(|&(_, _, num, generation)| xref.get::<Stream<'_>>(hayro_syntax::object::ObjectIdentifier::new(num, generation)));
-            let normal = face.or_else(|| {
-                annot.get::<Dict<'_>>(AP).and_then(|ap| {
+            // An override naming an object that isn't a form draws nothing: a script cleared the
+            // button's icon.
+            let face = obj.and_then(|r| {
+                context
+                    .settings
+                    .appearance_overrides
+                    .iter()
+                    .find(|(num, generation, _, _)| *num == r.obj_number && *generation == r.gen_number)
+            });
+            let normal = match face {
+                Some(&(_, _, num, generation)) => xref.get::<Stream<'_>>(hayro_syntax::object::ObjectIdentifier::new(num, generation)),
+                None => annot.get::<Dict<'_>>(AP).and_then(|ap| {
                     ap.get::<Stream<'_>>(N).or_else(|| {
                         let states = ap.get::<Dict<'_>>(N)?;
                         let state = annot.get::<hayro_syntax::object::Name<'_>>(AS)?;
                         states.get::<Stream<'_>>(state.as_ref())
                     })
-                })
-            });
+                }),
+            };
             if let Some(apx) = normal.and_then(|o| FormXObject::new(&o)) {
                 let Some(rect) = annot.get::<Rect>(RECT) else {
                     continue;

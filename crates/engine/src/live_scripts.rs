@@ -91,8 +91,8 @@ impl ScriptRun {
 }
 
 /// The document's layers as scripts see them (`getOCGs`), in the viewer's order.
-pub(crate) fn js_layers(doc: &Document) -> Vec<pdfcraft_js::Layer> {
-    doc.info.layers.iter().map(|l| pdfcraft_js::Layer { name: l.name.clone(), on: l.visible, initial: l.initial }).collect()
+pub(crate) fn js_layers(info: &pdfcraft_render::DocInfo) -> Vec<pdfcraft_js::Layer> {
+    info.layers.iter().map(|l| pdfcraft_js::Layer { name: l.name.clone(), on: l.visible, initial: l.initial }).collect()
 }
 
 /// A field as scripts see it: as the document has it, but shown as page actions and timers
@@ -235,7 +235,7 @@ impl Session {
         let mut runner = crate::js::JsRunner::new(&cos, &doc.name, self.field_highlight);
         runner.doc.zoom = doc.js_zoom;
         runner.doc.page = doc.live.page.unwrap_or(doc.js_page);
-        runner.doc.layers = js_layers(doc);
+        runner.doc.layers = js_layers(&doc.info);
         let fields = pdfcraft_forms::fields(&cos);
         let states: Vec<_> = fields.iter().map(|f| live_state(doc, &cos, f, &runner.doc)).collect();
         let states = std::sync::Arc::new(states);
@@ -276,26 +276,18 @@ impl Session {
                 }
             }
         }
-        if !o.execution_refused
-            && let Some(doc) = self.docs.iter_mut().find(|d| d.id == id)
-            && !(shown.is_empty() && icons.is_empty())
-        {
-            for name in shown.iter().map(|(n, _)| n).chain(icons.iter().map(|(n, _)| n)) {
-                for p in doc.form.iter().filter(|f| f.name == *name).flat_map(|f| f.widgets.iter().filter_map(|w| w.page)) {
-                    if !run.pages.contains(&p) {
-                        run.pages.push(p);
-                    }
-                }
-            }
-            doc.live.shown.extend(shown);
-            doc.live.icons.extend(icons);
-            use_live_view(doc);
-        }
+        let refused = o.execution_refused;
         let generation = self.get(id).map(Document::edit_generation);
         let layers = |s: &Session| s.get(id).map(|d| d.info.layers.iter().map(|l| l.visible).collect::<Vec<_>>());
         let layers_before = layers(self);
         match self.apply_script_outcome(id, &states, o, false) {
-            Ok(o) => run.output.absorb(&o),
+            Ok(o) => {
+                run.output.absorb(&o);
+                // Only now: a script whose edits are refused shows nothing it did either.
+                if !refused {
+                    self.show_view_changes(id, shown, icons, run);
+                }
+            }
             Err(e) => run.output.errors.push(e.to_string()),
         }
         run.edited |= self.get(id).map(Document::edit_generation) != generation;
@@ -303,6 +295,25 @@ impl Session {
         if discard {
             self.invalidate_javascript(id);
         }
+    }
+
+    /// Show the fields a page action or timer of document `id` showed or hid (`shown`) or gave
+    /// another icon (`icons`), and add the pages they are on to `run`.
+    fn show_view_changes(&mut self, id: DocId, shown: Vec<(String, i32)>, icons: IconChanges, run: &mut ScriptRun) {
+        if shown.is_empty() && icons.is_empty() {
+            return;
+        }
+        let Some(doc) = self.docs.iter_mut().find(|d| d.id == id) else { return };
+        for name in shown.iter().map(|(n, _)| n).chain(icons.iter().map(|(n, _)| n)) {
+            for p in doc.form.iter().filter(|f| f.name == *name).flat_map(|f| f.widgets.iter().filter_map(|w| w.page)) {
+                if !run.pages.contains(&p) {
+                    run.pages.push(p);
+                }
+            }
+        }
+        doc.live.shown.extend(shown);
+        doc.live.icons.extend(icons);
+        use_live_view(doc);
     }
 
     /// Document `id` is read at page `page` (0-based), at `now_ms` on the caller's clock (on
@@ -348,8 +359,18 @@ impl Session {
     /// [`MAX_TIMER_RUNS`] of them. An interval that fell behind runs once and then counts its
     /// period from now, rather than catching up run by run.
     pub fn run_timers(&mut self, id: DocId, now_ms: f64) -> ScriptRun {
+        self.run_timers_at_most(id, now_ms, MAX_TIMER_RUNS)
+    }
+
+    /// [`Session::run_timers`], running at most `max` timers (and never more than
+    /// [`MAX_TIMER_RUNS`]). With `max` 0 it only moves the clock on to `now_ms`: the timers still
+    /// due run at the next call.
+    pub fn run_timers_at_most(&mut self, id: DocId, now_ms: f64, max: usize) -> ScriptRun {
         let mut run = ScriptRun::default();
-        for _ in 0..MAX_TIMER_RUNS {
+        if let Some(doc) = self.docs.iter_mut().find(|d| d.id == id) {
+            doc.live.clock = now_ms;
+        }
+        for _ in 0..max.min(MAX_TIMER_RUNS) {
             if self.js_off {
                 break;
             }
@@ -377,6 +398,15 @@ impl Session {
     /// The clock of document `id`'s live scripts: the time it was last given (milliseconds).
     pub fn script_clock(&self, id: DocId) -> Option<f64> {
         Some(self.get(id)?.live.clock)
+    }
+}
+
+impl Document {
+    /// Whether the document's page actions and timers show field `name` on screen (`Some`), over
+    /// its widgets' own Hidden and NoView flags; `None` when they left it as the document has it.
+    /// For the viewer's hit test: a frame they showed takes presses, and one they hid doesn't.
+    pub fn shown_by_scripts(&self, name: &str) -> Option<bool> {
+        self.live.shown.get(name).map(|d| on_screen(*d))
     }
 }
 

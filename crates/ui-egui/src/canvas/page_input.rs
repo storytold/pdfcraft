@@ -101,6 +101,7 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
         tool,
         pcx: &pcx,
         form,
+        doc,
         can_fill,
         can_modify,
         editing_content,
@@ -486,6 +487,8 @@ struct PageHits<'a> {
     tool: QuickTool,
     pcx: &'a comments::PageCx<'a>,
     form: &'a [pdfcraft_engine::FormField],
+    /// Its document: what its scripts show while it is read (`Document::shown_by_scripts`).
+    doc: &'a pdfcraft_engine::Document,
     can_fill: bool,
     can_modify: bool,
     /// Edit a PDF is open: added text and pictures can be picked up.
@@ -576,6 +579,7 @@ impl PageHits<'_> {
             tool,
             pcx,
             form,
+            doc,
             can_fill,
             can_modify,
             editing_content,
@@ -611,7 +615,7 @@ impl PageHits<'_> {
         let fields = if preparing {
             crate::prepare::hit(xf, info, page, form, field_tool, prepare_allowed, &view.prepare, p)
         } else if tool == QuickTool::Select {
-            crate::forms_ui::hit(xf, info, page, form, tabs, can_fill, p)
+            crate::forms_ui::hit(xf, info, page, doc, tabs, can_fill, p)
         } else {
             None
         };

@@ -181,6 +181,7 @@ impl Session {
             runner.runtime = doc.js_runtime.clone();
             runner.doc.zoom = doc.js_zoom;
             runner.doc.page = doc.js_page;
+            runner.doc.layers = crate::live_scripts::js_layers(&doc.info);
             cx.js = Some(runner);
         }
         cx.renamed_fields.clear();

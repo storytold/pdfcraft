@@ -536,6 +536,7 @@ impl JsRunner {
         let mut current = Self::new(cos, &self.doc.file_name, self.doc.runtime_highlight);
         current.doc.zoom = self.doc.zoom;
         current.doc.page = self.doc.page;
+        current.doc.layers = std::mem::take(&mut self.doc.layers);
         self.doc = current.doc;
         self.doc_scripts = current.doc_scripts;
         self.calculations = None;
@@ -1194,7 +1195,7 @@ impl Session {
         let mut runner = JsRunner::new(&cos, &doc.name, self.field_highlight);
         runner.doc.zoom = doc.js_zoom;
         runner.doc.page = doc.js_page;
-        runner.doc.layers = crate::live_scripts::js_layers(doc);
+        runner.doc.layers = crate::live_scripts::js_layers(&doc.info);
         let fields = pdfcraft_forms::fields(&cos);
         let states = std::sync::Arc::new(fields.iter().map(|f| crate::live_scripts::live_state(doc, &cos, f, &runner.doc)).collect::<Vec<_>>());
         let event = match target {
@@ -1675,7 +1676,7 @@ impl Session {
         let mut runner = JsRunner::new(cos, &doc.name, self.field_highlight);
         runner.doc.zoom = doc.js_zoom;
         runner.doc.page = doc.js_page;
-        runner.doc.layers = crate::live_scripts::js_layers(doc);
+        runner.doc.layers = crate::live_scripts::js_layers(&doc.info);
         let fields = pdfcraft_forms::fields(cos);
         validate_script_target(target, target_id, &fields)?;
         let states = std::sync::Arc::new(fields.iter().map(|f| crate::live_scripts::live_state(doc, cos, f, &runner.doc)).collect::<Vec<_>>());

@@ -1935,6 +1935,116 @@ fn the_viewer_runs_the_pages_open_action_and_its_timers() {
     assert!(n.as_deref().and_then(|n| n.parse::<u32>().ok()).is_some_and(|n| n >= 1), "the interval ran: {n:?}");
 }
 
+/// Under a dialog nothing acts on the document: the page's open action waits until it closes.
+#[test]
+fn page_actions_and_timers_wait_under_a_dialog() {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("timer.pdf", None, PAGE_TIMER.to_vec()).expect("opens");
+        app.dialog = Some(pdfcraft_ui_egui::Dialog::Shortcuts);
+        app
+    });
+    h.run_steps(3);
+    let id = h.state().views[0].id;
+    assert!(h.state_mut().session.next_timer(id).is_none(), "the open action waits under the dialog");
+    h.state_mut().dialog = None;
+    h.run_steps(2);
+    assert!(h.state_mut().session.next_timer(id).is_some(), "and runs once it closes");
+}
+
+/// A text field, with a default appearance for its editor.
+const FIELD_TIMER: &[u8] = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] /DA (/Helv 10 Tf 0 g) /DR << /Font << /Helv 5 0 R >> >> >> >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /Annots [4 0 R] >> endobj
+4 0 obj << /Type /Annot /Subtype /Widget /FT /Tx /T (clock) /Rect [50 100 250 130] /P 3 0 R /F 4 >> endobj
+5 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+
+/// Press field `name`'s first widget, wherever the document has it.
+fn press_field(h: &mut Harness<'static, PdfCraftApp>, name: &str) {
+    let p = {
+        let s = h.state();
+        let doc = s.session.get(s.views[0].id).unwrap();
+        let f = doc.form.iter().find(|f| f.name == name).unwrap();
+        pdfcraft_ui_egui::forms_ui::field_screen_rect(&s.views[0], &doc.info, f, 0).expect("on screen").center()
+    };
+    h.hover_at(p);
+    h.run_steps(1);
+    h.drag_at(p);
+    h.run_steps(1);
+    h.drop_at(p);
+    h.run_steps(3);
+}
+
+/// A time-out writing the field being edited shows in its editor: leaving the field then keeps the
+/// timer's value instead of writing the old one back.
+#[test]
+fn a_timer_writing_the_focused_field_shows_in_its_editor() {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("clock.pdf", None, FIELD_TIMER.to_vec()).expect("opens");
+        app.set_option("left", "closed").unwrap();
+        app.set_option("zoom", "150").unwrap();
+        app
+    });
+    for _ in 0..30 {
+        h.run_steps(2);
+    }
+    press_field(&mut h, "clock");
+    assert_eq!(h.state().views[0].forms.focus.as_ref().map(|f| (f.name.as_str(), f.text.as_str())), Some(("clock", "")));
+    // Set only now, with the field being edited: the harness's clock runs ahead of the test's.
+    let id = h.state().views[0].id;
+    let set = h.state_mut().session.run_javascript(id, "app.setTimeOut('getField(\"clock\").value = \"tick\";', 50);", None).expect("runs");
+    assert_eq!(set.error, None);
+    let value = |h: &Harness<'static, PdfCraftApp>| {
+        let s = h.state();
+        s.session.get(s.views[0].id).unwrap().form.iter().find(|f| f.name == "clock").unwrap().value.clone()
+    };
+    for _ in 0..600 {
+        if value(&h) == ["tick"] {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        h.run_steps(1);
+    }
+    assert_eq!(value(&h), ["tick"], "the time-out wrote the field");
+    let focus = h.state().views[0].forms.focus.as_ref().map(|f| (f.name.clone(), f.text.clone()));
+    assert_eq!(focus, Some(("clock".into(), "tick".into())), "the editor shows the time-out's value");
+}
+
+/// Two push buttons: "shown" hidden in the document and "gone" not; the page's open action shows
+/// the first and hides the second. Each one's mouse-up action says it was pressed.
+const SHOWN_BY_SCRIPT: &[u8] = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 5 0 R] >> >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R] /AA << /O << /S /JavaScript /JS (var pressed = ''; getField\\('shown'\\).display = display.visible; getField\\('gone'\\).display = display.hidden;) >> >> >> endobj
+4 0 obj << /Type /Annot /Subtype /Widget /FT /Btn /Ff 65536 /T (shown) /F 6 /Rect [50 200 250 240] /P 3 0 R /AA << /U << /S /JavaScript /JS (pressed += 'shown';) >> >> >> endobj
+5 0 obj << /Type /Annot /Subtype /Widget /FT /Btn /Ff 65536 /T (gone) /F 4 /Rect [50 100 250 140] /P 3 0 R /AA << /U << /S /JavaScript /JS (pressed += 'gone';) >> >> >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+
+/// A button the page's open action showed takes presses, and one it hid takes none, whatever
+/// their flags in the document say.
+#[test]
+fn buttons_take_presses_as_the_scripts_show_them() {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("frames.pdf", None, SHOWN_BY_SCRIPT.to_vec()).expect("opens");
+        app
+    });
+    h.run_steps(2);
+    press_field(&mut h, "shown");
+    press_field(&mut h, "gone");
+    let id = h.state().views[0].id;
+    let pressed = h.state_mut().session.run_javascript(id, "pressed", None).expect("runs").result;
+    assert_eq!(pressed.as_deref(), Some("shown"));
+}
+
 /// A radio group's read-only button can't be chosen by a click, while the group's other button
 /// can.
 #[test]

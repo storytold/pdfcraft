@@ -205,9 +205,20 @@ impl PdfCraftApp {
     /// when they fall due, such as an animation's frames (LaTeX `animate`). Only the active tab
     /// runs: an animation in another tab waits until its tab shows again.
     pub(crate) fn script_tick(&mut self, ctx: &egui::Context) {
+        // Nothing acts on the document under a dialog or prompt (`modal_open`): page actions and
+        // timers wait, and an interval that fell behind runs once when it closes.
+        if self.modal_open() {
+            return;
+        }
         let Some((i, id)) = self.active_ids() else { return };
         let now_ms = ctx.input(|input| input.time) * 1000.0;
         let page = self.views[i].current;
+        // The field being edited as it was, so a timer changing it shows in its editor while a
+        // draft the user already typed into is kept (as `run_field_triggers` does).
+        let before: Option<(String, Vec<String>)> =
+            self.views[i].forms.focus.as_ref().and_then(|e| {
+                crate::forms_ui::focused_field(e, &self.session.get(id)?.form).map(|f| (crate::forms_ui::draft_text(f), f.value.clone()))
+            });
         for run in [self.session.show_page(id, page, now_ms), self.session.run_timers(id, now_ms)] {
             if run.is_empty() {
                 continue;
@@ -215,6 +226,12 @@ impl PdfCraftApp {
             if run.edited {
                 if let Some(info) = self.session.get(id).map(|d| d.info.clone()) {
                     self.views[i].document_changed(&info);
+                }
+                if let Some(before) = &before
+                    && let Some(draft) = self.views[i].forms.focus.as_mut()
+                    && let Some(f) = self.session.get(id).and_then(|d| crate::forms_ui::focused_field(draft, &d.form))
+                {
+                    crate::forms_ui::refresh_draft(draft, (&before.0, &before.1), (crate::forms_ui::draft_text(f), &f.value));
                 }
             } else if run.layers {
                 self.views[i].invalidate_content();
