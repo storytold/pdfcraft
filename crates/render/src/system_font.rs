@@ -148,11 +148,17 @@ const WINDOWS_NAMED_FACES: &[(&str, &str)] = &[
     ("Batang", "batang.ttc"),
 ];
 
+/// Listed families whose bold is a face of its own, in a file of its own. Windows draws a bold
+/// request for such a family (a PDF writes it as `MicrosoftJhengHei,Bold`) with that face when its
+/// file is installed, so the font's CIDs are the bold face's glyph ids, which differ from the
+/// regular face's. For the other listed families, bold is the regular face emboldened.
+const WINDOWS_BOLD_FACES: &[(&str, &str)] =
+    &[("MicrosoftYaHei", "msyhbd.ttc"), ("MicrosoftJhengHei", "msjhbd.ttc"), ("MalgunGothic", "malgunbd.ttf")];
+
 /// How a font name is compared with a face's names: without a subset tag or a `,Bold`-style
-/// suffix (a style applied to the named face's own glyphs: `SimSun,Bold` still numbers its
-/// glyphs as SimSun, which has no bold face), ASCII letters and digits only, in
-/// lower case, so `MS-Mincho` is the face named `MS Mincho`. `None` when nothing is left (a name
-/// in another script), which then matches no face.
+/// suffix (which [`asks_for_bold`] reads), ASCII letters and digits only, in lower case, so
+/// `MS-Mincho` is the face named `MS Mincho`. `None` when nothing is left (a name in another
+/// script), which then matches no face.
 fn face_key(name: &str) -> Option<String> {
     let name = without_subset_tag(name);
     let name = name.split_once(',').map_or(name, |(base, _)| base);
@@ -160,23 +166,47 @@ fn face_key(name: &str) -> Option<String> {
     (!key.is_empty()).then_some(key)
 }
 
+/// Whether `name` asks for its face in bold with a `,Bold`-style suffix (`,Bold`, `,BoldItalic`).
+fn asks_for_bold(name: &str) -> bool {
+    without_subset_tag(name).split_once(',').is_some_and(|(_, style)| style.to_ascii_lowercase().contains("bold"))
+}
+
 /// The face, in `dir`, that the Identity CID font named `name` was made with, as `(bytes, face
 /// index)`: the file `table` gives for the name, and in it the face whose PostScript or family
-/// name is that name. `None` for a name the table doesn't list, a missing or unusable file, or a
-/// file without a face of that name: the font's CIDs are that face's glyph ids, so another
-/// face (another region, weight or version under another name) would draw unrelated glyphs.
-fn named_face_in(name: &str, dir: &Path, table: &[(&str, &str)]) -> Option<(Arc<Vec<u8>>, u32)> {
+/// name is that name. A `,Bold` name of a family `bold` lists is looked for in its bold file
+/// first, as the face whose family (or typographic family) is the name or whose PostScript or
+/// family name is the name with `Bold`; only when that file is missing is it the regular face.
+/// `None` for a name the table doesn't list, a missing or unusable file, or a file without a face
+/// of that name: the font's CIDs are that face's glyph ids, so another face (another region,
+/// weight or version under another name) would draw unrelated glyphs.
+fn named_face_in(name: &str, dir: &Path, table: &[(&str, &str)], bold: &[(&str, &str)]) -> Option<(Arc<Vec<u8>>, u32)> {
     let key = face_key(name)?;
-    let (_, file) = table.iter().find(|(listed, _)| face_key(listed).as_deref() == Some(key.as_str()))?;
-    let bytes = file_bytes(&dir.join(file))?;
-    let index = (0..MAX_FACES).find(|&index| {
-        let Ok(font) = skrifa::FontRef::from_index(&bytes, index) else { return false };
-        [StringId::POSTSCRIPT_NAME, StringId::FAMILY_NAME]
-            .into_iter()
-            .flat_map(|id| font.localized_strings(id))
-            .any(|n| face_key(&n.chars().collect::<String>()).as_deref() == Some(key.as_str()))
-    })?;
+    let listed =
+        |table: &[(&str, &str)]| table.iter().find(|(listed, _)| face_key(listed).as_deref() == Some(key.as_str())).map(|(_, file)| dir.join(file));
+    if asks_for_bold(name)
+        && let Some(bytes) = listed(bold).and_then(|path| file_bytes(&path))
+    {
+        // The bold file is installed, so it holds the face the CIDs number; the regular face
+        // would draw other characters.
+        let bold_key = format!("{key}bold");
+        let index =
+            face_named(&bytes, |id, n| n == bold_key || (n == key && matches!(id, StringId::FAMILY_NAME | StringId::TYPOGRAPHIC_FAMILY_NAME)))?;
+        return Some((bytes, index));
+    }
+    let bytes = file_bytes(&listed(table)?)?;
+    let index = face_named(&bytes, |id, n| n == key && matches!(id, StringId::POSTSCRIPT_NAME | StringId::FAMILY_NAME))?;
     Some((bytes, index))
+}
+
+/// The index of the first face in `bytes` with a PostScript, family or typographic family name
+/// whose [`face_key`] `wanted` accepts for that kind of name.
+fn face_named(bytes: &[u8], wanted: impl Fn(StringId, &str) -> bool) -> Option<u32> {
+    (0..MAX_FACES).find(|&index| {
+        let Ok(font) = skrifa::FontRef::from_index(bytes, index) else { return false };
+        [StringId::POSTSCRIPT_NAME, StringId::FAMILY_NAME, StringId::TYPOGRAPHIC_FAMILY_NAME]
+            .into_iter()
+            .any(|id| font.localized_strings(id).any(|n| face_key(&n.chars().collect::<String>()).is_some_and(|n| wanted(id, &n))))
+    })
 }
 
 /// The installed face to draw a CID font of `query`'s collection with, as `(data, face index)`.
@@ -193,15 +223,16 @@ pub(crate) fn fallback(query: &FallbackFontQuery) -> Option<(FontData, u32)> {
         }
         let name = query.post_script_name.as_deref()?;
         let key = face_key(name)?;
-        // Keyed by a name the table lists, so the cache holds at most one entry per listed face.
+        // Keyed by a name the table lists and whether it asks for bold, so the cache holds at
+        // most two entries per listed face, and a bold face is never taken for the regular one.
         if !WINDOWS_NAMED_FACES.iter().any(|(listed, _)| face_key(listed).as_deref() == Some(key.as_str())) {
             return None;
         }
-        type Named = HashMap<String, Option<(Arc<Vec<u8>>, u32)>>;
+        type Named = HashMap<(String, bool), Option<(Arc<Vec<u8>>, u32)>>;
         static NAMED: Mutex<Option<Named>> = Mutex::new(None);
         let mut named = NAMED.lock().unwrap_or_else(PoisonError::into_inner);
-        let found = named.get_or_insert_with(HashMap::new).entry(key).or_insert_with(|| {
-            named_face_in(name, &windows_fonts(), WINDOWS_NAMED_FACES).inspect(|(_, index)| {
+        let found = named.get_or_insert_with(HashMap::new).entry((key, asks_for_bold(name))).or_insert_with(|| {
+            named_face_in(name, &windows_fonts(), WINDOWS_NAMED_FACES, WINDOWS_BOLD_FACES).inspect(|(_, index)| {
                 log::info!("installed face for the Identity CID font {name}: face {index}");
             })
         });
@@ -523,6 +554,12 @@ mod tests {
         for name in ["", "\u{5B8B}\u{4F53}", "ABCDEF+", ",Bold", "+-_"] {
             assert_eq!(face_key(name), None, "{name:?}");
         }
+        for name in ["SimSun,Bold", "ABCDEF+SimSun,BoldItalic", "MicrosoftJhengHei,bold"] {
+            assert!(asks_for_bold(name), "{name}");
+        }
+        for name in ["SimSun", "SimSun,Italic", "MicrosoftYaHei-Bold", "ABCDEF+SimSun"] {
+            assert!(!asks_for_bold(name), "{name}");
+        }
     }
 
     /// The face an Identity font names is drawn only when the file holds a face carrying that
@@ -535,14 +572,42 @@ mod tests {
         std::fs::write(dir.join("inter.ttf"), include_bytes!("../../../assets/fonts/Inter-Regular.ttf")).unwrap();
         let table = [("Inter-Regular", "inter.ttf"), ("Inter", "inter.ttf"), ("SimSun", "inter.ttf"), ("Inter-Bold", "absent.ttf")];
         for name in ["Inter-Regular", "ABCDEF+Inter-Regular", "Inter-Regular,Bold", "Inter"] {
-            let (bytes, index) = named_face_in(name, &dir, &table).unwrap_or_else(|| panic!("{name}"));
+            let (bytes, index) = named_face_in(name, &dir, &table, &[]).unwrap_or_else(|| panic!("{name}"));
             assert_eq!((bytes.len(), index), (include_bytes!("../../../assets/fonts/Inter-Regular.ttf").len(), 0), "{name}");
         }
         // The file is there, but holds no face named SimSun.
-        assert!(named_face_in("SimSun", &dir, &table).is_none());
-        assert!(named_face_in("Inter-Bold", &dir, &table).is_none(), "a missing file");
-        assert!(named_face_in("Helvetica", &dir, &table).is_none(), "a name the table doesn't list");
-        assert!(named_face_in("\u{5B8B}\u{4F53}", &dir, &table).is_none(), "nothing comparable in the name");
+        assert!(named_face_in("SimSun", &dir, &table, &[]).is_none());
+        assert!(named_face_in("Inter-Bold", &dir, &table, &[]).is_none(), "a missing file");
+        assert!(named_face_in("Helvetica", &dir, &table, &[]).is_none(), "a name the table doesn't list");
+        assert!(named_face_in("\u{5B8B}\u{4F53}", &dir, &table, &[]).is_none(), "nothing comparable in the name");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A `,Bold` name of a family with a bold face in a file of its own is drawn with that face
+    /// when the file is installed: the font's CIDs are its glyph ids, and the regular face's would
+    /// be other characters. Without the file, Windows emboldened the regular face, so it is that
+    /// one; a bold file without the face draws nothing rather than the regular face.
+    #[test]
+    fn a_bold_name_draws_the_bold_face_of_its_family_where_one_is_installed() {
+        const REGULAR: &[u8] = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
+        const BOLD: &[u8] = include_bytes!("../../../assets/fonts/Inter-SemiBold.ttf");
+        let dir = std::env::temp_dir().join(format!("pdfcraft-bold-face-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("inter.ttf"), REGULAR).unwrap();
+        std::fs::write(dir.join("interbd.ttf"), BOLD).unwrap();
+        std::fs::write(dir.join("mono.ttf"), include_bytes!("../../../assets/fonts/JetBrainsMono-Regular.ttf")).unwrap();
+        let table = [("Inter", "inter.ttf")];
+        let len = |name: &str, bold: &[(&str, &str)]| named_face_in(name, &dir, &table, bold).map(|(bytes, _)| bytes.len());
+        let bold = [("Inter", "interbd.ttf")];
+        for name in ["Inter,Bold", "ABCDEF+Inter,BoldItalic"] {
+            assert_eq!(len(name, &bold), Some(BOLD.len()), "{name}: the bold face, by its typographic family");
+        }
+        for name in ["Inter", "Inter,Italic"] {
+            assert_eq!(len(name, &bold), Some(REGULAR.len()), "{name}: the regular face");
+        }
+        assert_eq!(len("Inter,Bold", &[]), Some(REGULAR.len()), "a family without a bold face");
+        assert_eq!(len("Inter,Bold", &[("Inter", "absent.ttf")]), Some(REGULAR.len()), "its bold file isn't installed");
+        assert_eq!(len("Inter,Bold", &[("Inter", "mono.ttf")]), None, "its bold file holds no such face");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -558,6 +623,14 @@ mod tests {
             let lower = file.to_lowercase();
             assert!(!["noto", "sourcehan", "adobe", "kozuka"].iter().any(|b| lower.contains(b)), "{file}");
         }
+        let mut families = std::collections::HashSet::new();
+        for (family, file) in WINDOWS_BOLD_FACES {
+            let key = face_key(family).expect("comparable");
+            assert!(keys.contains(&key), "{family}: a bold face of an unlisted family");
+            assert!(families.insert(key), "{family} listed twice");
+            let path = Path::new(file);
+            assert!(path.components().count() == 1 && path.extension().is_some_and(|e| e == "ttf" || e == "ttc"), "{file}");
+        }
     }
 
     /// Each listed face whose file is installed is found in that file under its own name, so a
@@ -571,7 +644,7 @@ mod tests {
         for (name, file) in WINDOWS_NAMED_FACES.iter().filter(|(_, file)| dir.join(file).is_file()) {
             checked += 1;
             let key = face_key(name);
-            let named = named_face_in(name, &dir, WINDOWS_NAMED_FACES).is_some_and(|(bytes, index)| {
+            let named = named_face_in(name, &dir, WINDOWS_NAMED_FACES, WINDOWS_BOLD_FACES).is_some_and(|(bytes, index)| {
                 skrifa::FontRef::from_index(bytes.as_ref(), index).is_ok_and(|font| {
                     [StringId::POSTSCRIPT_NAME, StringId::FAMILY_NAME]
                         .into_iter()
@@ -585,6 +658,25 @@ mod tests {
         }
         eprintln!("{checked} of {} listed faces installed", WINDOWS_NAMED_FACES.len());
         assert!(wrong.is_empty(), "not found under their names: {wrong:?}");
+    }
+
+    /// Each listed bold face whose file is installed is what its family's `,Bold` name draws: a
+    /// face of that file, not the regular face, so a wrong file name or a bold face named
+    /// otherwise can't send the name back to the regular face's glyph ids.
+    #[cfg(windows)]
+    #[test]
+    fn windows_finds_each_listed_bold_face_in_its_installed_file() {
+        let dir = windows_fonts();
+        let mut wrong = Vec::new();
+        for (family, file) in WINDOWS_BOLD_FACES.iter().filter(|(_, file)| dir.join(file).is_file()) {
+            let name = format!("{family},Bold");
+            let len = std::fs::metadata(dir.join(file)).map(|m| m.len()).ok();
+            let found = named_face_in(&name, &dir, WINDOWS_NAMED_FACES, WINDOWS_BOLD_FACES);
+            if found.is_none_or(|(bytes, _)| Some(bytes.len() as u64) != len) {
+                wrong.push(format!("{name} in {file}"));
+            }
+        }
+        assert!(wrong.is_empty(), "not found in their bold files: {wrong:?}");
     }
 
     /// Identity fonts are looked up by name only on Windows, where the faces have fixed files;
