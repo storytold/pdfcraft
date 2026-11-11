@@ -1668,11 +1668,11 @@ fn properties_rename_and_delete() {
 /// `/V` the deleted field inherited from it: it leaves too. An ancestor a sibling still has stays.
 #[test]
 fn deleting_the_last_kid_removes_the_emptied_ancestors_and_their_values() {
-    let form = |kids: &str| {
+    let form = |kids: &str, annots: &str| {
         document(&[
             "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
             "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
-            "<< /Type /Page /Parent 2 0 R /Annots [7 0 R 8 0 R] >>".into(),
+            format!("<< /Type /Page /Parent 2 0 R /Annots [{annots}] >>"),
             "<< /Fields [5 0 R] >>".into(),
             "<< /FT /Tx /T (outer) /V (SECRET) /DV (SECRET) /Kids [6 0 R] >>".into(),
             format!("<< /T (inner) /Parent 5 0 R /Kids [{kids}] >>"),
@@ -1684,11 +1684,13 @@ fn deleting_the_last_kid_removes_the_emptied_ancestors_and_their_values() {
         let af = doc.get(doc.root().unwrap()).as_dict().unwrap().get(b"AcroForm").map(|o| doc.resolve(o)).unwrap().as_dict().unwrap().clone();
         doc.resolve(af.get(b"Fields").unwrap()).as_array().unwrap().len()
     };
-    let mut doc = form("7 0 R");
+    let mut doc = form("7 0 R", "7 0 R");
     delete_field(&mut doc, "outer.inner.a").unwrap();
     assert_eq!(top(&doc), 0, "the emptied ancestors left /Fields");
+    let saved = pdfcraft_cos::write_full(&doc, &SaveOptions::default()).unwrap();
+    assert!(!saved.windows(6).any(|w| w == b"SECRET"), "the inherited value is gone from a full save");
 
-    let mut doc = form("7 0 R 8 0 R");
+    let mut doc = form("7 0 R 8 0 R", "7 0 R 8 0 R");
     delete_field(&mut doc, "outer.inner.a").unwrap();
     assert_eq!(top(&doc), 1, "an ancestor with a surviving kid stays");
     assert!(fields(&doc).iter().any(|f| f.name == "outer.inner.b"));
