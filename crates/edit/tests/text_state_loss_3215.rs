@@ -861,7 +861,7 @@ fn exact_rows_keep_graphics_isolation_outside_text_objects() {
 }
 
 #[test]
-fn surplus_tj_arrays_follow_the_drawn_last_operand() {
+fn surplus_tj_numbers_follow_the_drawn_last_operand() {
     for paragraph in [false, true] {
         check_positioned_geometry("BT /F1 24 Tf 72 700 Td (A ) Tj 0.001 Tc [(ta) 3 (il)] [(ta) -3 (il)] TJ ET", "A", "B", paragraph);
     }
@@ -1093,4 +1093,361 @@ fn moved_mixed_spacing_row_and_underlines_keep_soft_mask_anchor() {
         }
     }
     assert!(masks >= 3 && strokes >= 2, "the exact row and both underlines restate anchored mask paint");
+}
+
+#[test]
+fn exact_spacing_rejects_shaped_font_choice_atomically() {
+    use pdfcraft_edit::text::{BlockStyle, rewrite_block, text_editor_fonts};
+    let mut doc = fixture("BT /F1 24 Tf 72 700 Td (A ) Tj 0.001 Tc 95 Tz (tail) Tj ET");
+    let Some(font) = text_editor_fonts(&doc, 0).unwrap().into_iter().find(|font| font.choice_only) else {
+        assert!(std::env::var_os("CRAFT_FONTS_REQUIRED").is_none(), "the required font build must exercise the Thai choice");
+        return;
+    };
+    let before = write_full(&doc, &SaveOptions::default()).unwrap();
+    let numbers = doc.object_numbers();
+    let modified = doc.modified_objects();
+    let style = BlockStyle { resource: Some(font.resource), ..Default::default() };
+    let error = rewrite_block(&mut doc, 0, 0, Some("B tail"), &style).unwrap_err();
+    assert!(error.to_string().contains("mixed text spacing with shaped text"), "{error}");
+    assert_eq!(doc.object_numbers(), numbers, "refusal must not leave fallback font objects");
+    assert_eq!(doc.modified_objects(), modified, "refusal must not change existing objects");
+    assert_eq!(write_full(&doc, &SaveOptions::default()).unwrap(), before);
+    assert_eq!(text_blocks(&doc, 0).unwrap()[0].editor_text, "A tail");
+    assert_no_graphics_stack_inside_text(&doc);
+
+    // The supported unshaped Latin path stays usable after the failed font choice.
+    replace_block(&mut doc, 0, 0, "B tail").unwrap();
+    assert_eq!(text_blocks(&reopen(&doc), 0).unwrap()[0].editor_text, "B tail");
+}
+
+#[test]
+fn exact_spacing_rejects_multi_size_ocr_phrase_atomically() {
+    let mut doc = fixture("BT /F1 24 Tf 3 Tr 72 700 Td (A ) Tj 0.001 Tc 95 Tz (tail ) Tj /F1 12 Tf (small) Tj ET");
+    let blocks = text_blocks(&doc, 0).unwrap();
+    assert_eq!(blocks.len(), 1);
+    assert_eq!(blocks[0].editor_text, "A tail small");
+    assert!(blocks[0].phrase_size().is_some());
+    let lines = text_lines(&doc, 0).unwrap();
+    assert!(lines.iter().any(|line| (line.size - blocks[0].size).abs() > 1.0));
+    let before = write_full(&doc, &SaveOptions::default()).unwrap();
+    let numbers = doc.object_numbers();
+    let modified = doc.modified_objects();
+    let error = replace_block(&mut doc, 0, 0, "B tail small").unwrap_err();
+    assert!(error.to_string().contains("mixed text spacing in a multi-size OCR phrase"), "{error}");
+    assert_eq!(doc.object_numbers(), numbers);
+    assert_eq!(doc.modified_objects(), modified);
+    assert_eq!(write_full(&doc, &SaveOptions::default()).unwrap(), before);
+    assert_eq!(text_lines(&doc, 0).unwrap(), lines);
+
+    // An explicitly selected size does not rely on implicit OCR normalization and remains
+    // supported, with the exact source character spacing and scale still in force.
+    pdfcraft_edit::text::rewrite_block(
+        &mut doc,
+        0,
+        0,
+        Some("B tail small"),
+        &pdfcraft_edit::text::BlockStyle { size: Some(18.0), ..Default::default() },
+    )
+    .unwrap();
+    let after = reopen(&doc);
+    assert_eq!(text_blocks(&after, 0).unwrap()[0].editor_text, "B tail small");
+    assert!(text_lines(&after, 0).unwrap().iter().all(|line| (line.size - 18.0).abs() < 0.001));
+}
+
+#[test]
+fn exact_spacing_unicode_row_breaks_keep_retained_tj_offsets() {
+    for separator in ['\u{2028}', '\u{2029}', '\u{0085}', '\u{000B}', '\u{000C}', '\u{001C}', '\u{001D}', '\u{001E}'] {
+        for paragraph in [false, true] {
+            let mut doc = fixture("BT /F1 24 Tf 72 700 Td (A ) Tj 0.001 Tc [(ta) 3 (il)] TJ ET");
+            let before = untouched_word_width(&doc);
+            for first in ['B', 'C'] {
+                let draft = format!("{first}{separator}tail");
+                if paragraph {
+                    replace_block(&mut doc, 0, 0, &draft).unwrap();
+                } else {
+                    replace_line(&mut doc, 0, 0, &draft).unwrap();
+                }
+                doc = reopen(&doc);
+                let rows: Vec<_> = text_lines(&doc, 0).unwrap().into_iter().map(|line| line.text).collect();
+                let expected = if paragraph { vec![first.to_string(), "tail".to_owned()] } else { vec![format!("{first} tail")] };
+                assert_eq!(rows, expected, "U+{:04X}, paragraph={paragraph}", u32::from(separator));
+                let numbers = tj_numbers(&doc);
+                assert_eq!(numbers.len(), 1, "the retained a/i boundary keeps its one TJ: {numbers:?}");
+                assert!((numbers[0] - 3.0).abs() < 1e-10, "U+{:04X}: {numbers:?}", u32::from(separator));
+                assert!((untouched_word_width(&doc) - before).abs() < 0.001, "the retained tail keeps its width");
+                assert_no_graphics_stack_inside_text(&doc);
+            }
+        }
+    }
+}
+
+/// A plain first word beside two exact-spacing words in a separate public colour run.
+/// Each word has its own position, so a short edit can leave the other shows untouched.
+const OCR_PROTECTED: &str = "BT /F1 12 Tf 3 Tr 1 0 0 1 72 700 Tm (A) Tj 1 0 0 rg 0.0001 Tc 95 Tz 1 0 0 1 84 700 Tm [(ta) 3 (il)] TJ 0.001 Tc 90 Tz 1 0 0 1 102 700 Tm (end) Tj ET";
+
+fn word_only_style() -> pdfcraft_edit::text::BlockStyle {
+    pdfcraft_edit::text::BlockStyle { changed_words_only: true, cover: Some([1.0; 3]), ..Default::default() }
+}
+
+#[test]
+fn ocr_word_edit_keeps_protected_spacing_shows_untouched() {
+    use pdfcraft_edit::text::rewrite_block;
+    let mut doc = fixture(OCR_PROTECTED);
+    assert_eq!(text_blocks(&doc, 0).unwrap()[0].editor_text, "A tail end");
+    let before_states = character_states(&doc).into_iter().skip(1).collect::<Vec<_>>();
+    let before_positions = glyph_positions(&doc).into_iter().skip(1).collect::<Vec<_>>();
+    let before_tj = tj_numbers(&doc);
+    rewrite_block(&mut doc, 0, 0, Some("B tail end"), &word_only_style()).unwrap();
+    let after = reopen(&doc);
+    let kept = |ch: &char| "tailend".contains(*ch);
+    assert_eq!(character_states(&after).into_iter().filter(|(ch, ..)| kept(ch)).collect::<Vec<_>>(), before_states);
+    assert_eq!(glyph_positions(&after).into_iter().filter(|(ch, ..)| kept(ch)).collect::<Vec<_>>(), before_positions);
+    assert_eq!(tj_numbers(&after), before_tj, "the retained numeric gap stays in its original show");
+    let blocks = text_blocks(&after, 0).unwrap();
+    assert!(blocks.iter().any(|block| block.invisible && block.text == "tail end"));
+    assert!(blocks.iter().any(|block| !block.invisible && block.text == "B"));
+}
+
+fn assert_ocr_word_refusal(replacement: &str) {
+    use pdfcraft_edit::text::rewrite_block;
+    let mut doc = fixture(OCR_PROTECTED);
+    let saved = write_full(&doc, &SaveOptions::default()).unwrap();
+    let numbers = doc.object_numbers();
+    let modified = doc.modified_objects();
+    let lines = text_lines(&doc, 0).unwrap();
+    let error = rewrite_block(&mut doc, 0, 0, Some(replacement), &word_only_style()).unwrap_err();
+    assert!(error.to_string().contains("source TJ positioning cannot be mapped safely"), "{replacement}: {error}");
+    assert_eq!(doc.object_numbers(), numbers, "{replacement}: trial objects must not leak");
+    assert_eq!(doc.modified_objects(), modified, "{replacement}: trial covers must not leak");
+    assert_eq!(write_full(&doc, &SaveOptions::default()).unwrap(), saved);
+    assert_eq!(text_lines(&doc, 0).unwrap(), lines);
+}
+
+#[test]
+fn ocr_word_change_cannot_bypass_exact_spacing_refusal() {
+    assert_ocr_word_refusal("A tall end");
+}
+
+#[test]
+fn ocr_word_absorption_cannot_bypass_exact_spacing_refusal() {
+    assert_ocr_word_refusal("Extremelylong tail end");
+}
+
+#[test]
+fn ocr_word_fallback_keeps_exact_source_spacing() {
+    use pdfcraft_edit::text::rewrite_block;
+    let mut doc = fixture("BT /F1 24 Tf 3 Tr 72 700 Td (A ) Tj 0.0001 Tc 95 Tz (tail) Tj ET");
+    let before = character_states(&doc).into_iter().filter(|(ch, ..)| "tail".contains(*ch)).collect::<Vec<_>>();
+    rewrite_block(&mut doc, 0, 0, Some("B tail"), &word_only_style()).unwrap();
+    let after = reopen(&doc);
+    assert_eq!(character_states(&after).into_iter().filter(|(ch, ..)| "tail".contains(*ch)).collect::<Vec<_>>(), before);
+    assert!(text_blocks(&after, 0).unwrap().iter().all(|block| !block.invisible), "the safe full rewrite is the fallback");
+    assert_eq!(text_blocks(&after, 0).unwrap()[0].editor_text, "B tail");
+}
+
+fn subset_spacing_fixture(content: &str) -> Document {
+    use pdfcraft_cos::{ObjRef, Object};
+    let mut doc = fixture(content);
+    doc.update_dict(ObjRef::new(5, 0), |font| {
+        font.set(b"Subtype".to_vec(), Object::name("TrueType"));
+        font.set(b"BaseFont".to_vec(), Object::name("ABCDEF+Arial"));
+        font.set(b"FirstChar".to_vec(), Object::Int(97));
+        font.set(b"LastChar".to_vec(), Object::Int(98));
+        font.set(b"Widths".to_vec(), Object::Array(vec![Object::Int(500), Object::Int(520)]));
+    })
+    .unwrap();
+    doc
+}
+
+#[test]
+fn exact_spacing_subset_spaces_keep_actual_text_after_save() {
+    for paragraph in [false, true] {
+        let mut doc = subset_spacing_fixture("BT /F1 12 Tf 72 700 Td (a) Tj 0.001 Tc [(a) 3 (bba)] TJ ET");
+        assert_eq!(text_blocks(&doc, 0).unwrap()[0].editor_text, "aabba");
+        let draft = "aabba  ba";
+        if paragraph {
+            replace_block(&mut doc, 0, 0, draft).unwrap();
+        } else {
+            replace_line(&mut doc, 0, 0, draft).unwrap();
+        }
+        doc = reopen(&doc);
+        assert_eq!(text_blocks(&doc, 0).unwrap()[0].editor_text, draft);
+        assert!(pdfcraft_content::parse(&content_bytes(&doc)).ops.iter().any(|op| op.is("BDC")));
+        assert_no_graphics_stack_inside_text(&doc);
+        assert!(tj_numbers(&doc).iter().any(|number| (*number - 3.0).abs() < 1e-9), "retained intraword kerning survives");
+        let bytes = write_full(&doc, &SaveOptions::default()).unwrap();
+        let before = text_lines(&doc, 0).unwrap();
+        let second = if paragraph { replace_block(&mut doc, 0, 0, "aabba  ab") } else { replace_line(&mut doc, 0, 0, "aabba  ab") };
+        // ActualText collapses the glyph-to-byte mapping. The existing exact-positioning
+        // safety check must refuse a subsequent rewrite before it can discard those spaces.
+        let error = second.unwrap_err();
+        assert!(error.to_string().contains("source TJ positioning cannot be mapped safely"), "{error}");
+        assert_eq!(write_full(&doc, &SaveOptions::default()).unwrap(), bytes);
+        assert_eq!(text_lines(&doc, 0).unwrap(), before);
+    }
+}
+
+#[test]
+fn exact_spacing_subset_style_reassignment_refuses_atomically() {
+    use pdfcraft_edit::text::{BlockStyle, RangeStyle, rewrite_block};
+    let mut doc = subset_spacing_fixture("BT /F1 12 Tf 72 700 Td (ab) Tj 0.001 Tc (ba) Tj ET");
+    let before = write_full(&doc, &SaveOptions::default()).unwrap();
+    let lines = text_lines(&doc, 0).unwrap();
+    let style = BlockStyle {
+        ranges: vec![RangeStyle {
+            range: 2..4,
+            family: None,
+            resource: None,
+            size: None,
+            color: None,
+            underline: Some(true),
+            char_spacing: None,
+            scale: None,
+        }],
+        ..Default::default()
+    };
+    let error = rewrite_block(&mut doc, 0, 0, Some("ab  ba"), &style).unwrap_err();
+    assert!(error.to_string().contains("subset-space font or style reassignment"), "{error}");
+    assert_eq!(write_full(&doc, &SaveOptions::default()).unwrap(), before);
+    assert_eq!(text_lines(&doc, 0).unwrap(), lines);
+}
+
+#[test]
+fn exact_spacing_underlines_keep_signed_and_tiny_advances() {
+    use pdfcraft_edit::text::{BlockStyle, rewrite_block};
+    for (spacing, expected_delta) in [(-10.0, -1.996), (-8.004 + 5e-7, 0.0)] {
+        let mut doc = fixture("BT /F1 12 Tf 72 700 Td (A) Tj 0.001 Tc (B) Tj ET");
+        assert_eq!(text_lines(&doc, 0).unwrap().len(), 1);
+        rewrite_block(&mut doc, 0, 0, None, &BlockStyle { char_spacing: Some(spacing), underline: Some(true), ..Default::default() }).unwrap();
+        let saved = reopen(&doc);
+        assert_no_graphics_stack_inside_text(&saved);
+        let mut from = None;
+        let mut to = None;
+        let mut deltas = Vec::new();
+        for op in pdfcraft_content::parse(&content_bytes(&saved)).ops {
+            match op.op.as_slice() {
+                b"m" => from = op.num(0),
+                b"l" => to = op.num(0),
+                b"S" => deltas.push(to.take().unwrap() - from.take().unwrap()),
+                _ => {}
+            }
+        }
+        assert_eq!(deltas.len(), 2, "both exact segments retain underlines");
+        // Existing path serialization rounds the sub-micro-point case to a zero-length stroke.
+        assert!(deltas.iter().all(|delta| (delta - expected_delta).abs() < 1e-6), "spacing={spacing}: {deltas:?}");
+    }
+}
+
+#[test]
+fn explicit_source_runs_refuse_private_spacing_provenance_atomically() {
+    use pdfcraft_edit::text::{BlockStyle, rewrite_block};
+    for tail in ["(tail) Tj", "[(ta) 3 (il)] TJ"] {
+        let mut doc = fixture(&format!("BT /F1 12 Tf 72 700 Td (caf\\351 ) Tj 0.001 Tc 80 Tz {tail} ET"));
+        let block = text_blocks(&doc, 0).unwrap().remove(0);
+        assert_eq!(block.editor_text, "café tail");
+        let (draft, sources) = block.replaced(std::slice::from_ref(&(0.."café".len())), "café café").unwrap();
+        let style = BlockStyle { sources, ..Default::default() };
+        let bytes = write_full(&doc, &SaveOptions::default()).unwrap();
+        let objects = doc.object_numbers();
+        let modified = doc.modified_objects();
+        let lines = text_lines(&doc, 0).unwrap();
+        let error = rewrite_block(&mut doc, 0, 0, Some(&draft), &style).unwrap_err();
+        assert!(error.to_string().contains("explicit source runs with mixed text spacing"), "{error}");
+        assert_eq!(doc.object_numbers(), objects);
+        assert_eq!(doc.modified_objects(), modified);
+        assert_eq!(write_full(&doc, &SaveOptions::default()).unwrap(), bytes);
+        assert_eq!(text_lines(&doc, 0).unwrap(), lines);
+    }
+}
+
+#[test]
+fn ordinary_source_overrides_keep_multibyte_replacements_and_untouched_rows() {
+    use pdfcraft_edit::text::{BlockStyle, rewrite_block};
+    let mut doc = fixture("BT /F1 12 Tf 14 TL 72 700 Td [(Keep) -300 (row)] TJ T* (caf\\351 and caf\\351) Tj ET");
+    let block = text_blocks(&doc, 0).unwrap().remove(0);
+    let ranges: Vec<_> = block.editor_text.match_indices("café").map(|(at, word)| at..at + word.len()).collect();
+    assert_eq!(ranges.len(), 2);
+    let before = text_lines(&doc, 0).unwrap()[0].clone();
+    let (draft, sources) = block.replaced(&ranges, "déjà").unwrap();
+    rewrite_block(&mut doc, 0, 0, Some(&draft), &BlockStyle { sources, ..Default::default() }).unwrap();
+    let saved = reopen(&doc);
+    assert!(text_blocks(&saved, 0).unwrap()[0].editor_text.ends_with("déjà and déjà"));
+    let after = text_lines(&saved, 0).unwrap().remove(0);
+    assert_eq!((after.text, after.rect, after.ink), (before.text, before.rect, before.ink));
+    assert!(tj_numbers(&saved).contains(&-300.0));
+}
+
+#[test]
+fn tiny_quote_state_keeps_unselected_text_under_magnification() {
+    for paragraph in [false, true] {
+        let content = "q 1000 0 0 1 0 0 cm BT /F1 12 Tf 14 TL 0.072 714 Td 0.000003 0.000002 (Target words) \" 0 -100 Td (Footer stays put) Tj ET Q";
+        let mut doc = fixture(content);
+        let before: Vec<_> = glyph_positions(&doc).into_iter().skip("Target words".len()).collect();
+        if paragraph {
+            replace_block(&mut doc, 0, 0, "NEW").unwrap();
+        } else {
+            replace_line(&mut doc, 0, 0, "NEW").unwrap();
+        }
+        let saved = reopen(&doc);
+        let after: Vec<_> = glyph_positions(&saved).into_iter().filter(|(ch, ..)| !"NEW".contains(*ch)).collect();
+        assert_eq!(after.len(), before.len());
+        for ((a, x, y), (b, bx, by)) in after.into_iter().zip(before) {
+            assert_eq!(a, b);
+            assert!((x - bx).abs() < 1e-7 && (y - by).abs() < 1e-7, "{a}: ({x}, {y}) != ({bx}, {by})");
+        }
+    }
+}
+
+#[test]
+fn split_paragraph_keeps_precise_source_pen_and_dropped_advance() {
+    let mut doc = fixture(
+        "q 1000 0 0 1 0 0 cm BT /F1 12 Tf 0.00000307 Tc 14 TL 0.07200003 700 Td (Left) Tj [-20000.000003] TJ (Target words) Tj 0 Tc [-20000] TJ (Far) Tj T* (Next) Tj ET Q",
+    );
+    let blocks = text_blocks(&doc, 0).unwrap();
+    let target = blocks.iter().position(|b| b.text == "Target words").unwrap();
+    let place = |doc: &Document| {
+        text_lines(doc, 0).unwrap().into_iter().filter(|l| matches!(l.text.as_str(), "Far" | "Next")).map(|l| (l.text, l.rect)).collect::<Vec<_>>()
+    };
+    let before = place(&doc);
+    assert_eq!(before.len(), 2);
+    replace_block(&mut doc, 0, target, "NEW\nTEXT").unwrap();
+    let after = place(&reopen(&doc));
+    assert_eq!(after.len(), before.len());
+    for ((name, rect), (old_name, old)) in after.iter().zip(&before) {
+        assert_eq!(name, old_name);
+        assert!(rect.iter().zip(old).all(|(a, b)| (a - b).abs() < 1e-7), "{name}: {rect:?} != {old:?}");
+    }
+}
+
+#[test]
+fn actual_text_numeric_gap_with_dependent_text_refuses_after_reopen() {
+    for gap in ["[-500]", "[() -500]", "[-500 <>]"] {
+        assert_actual_text_gap_refusal(gap);
+    }
+}
+
+fn assert_actual_text_gap_refusal(gap: &str) {
+    let content = format!("BT /F1 12 Tf 72 700 Td /Span << /ActualText (a b) >> BDC (a) Tj {gap} TJ (b) Tj EMC 1 0 0 rg 3 Ts (Footer) Tj ET");
+    let mut doc = reopen(&fixture(&content));
+    for draft in ["new", "new\ntext"] {
+        let blocks = text_blocks(&doc, 0).unwrap();
+        let target = blocks.iter().position(|b| b.text == "a b").unwrap();
+        let bytes = write_full(&doc, &SaveOptions::default()).unwrap();
+        let objects = doc.object_numbers();
+        let modified = doc.modified_objects();
+        let lines = text_lines(&doc, 0).unwrap();
+        let result = replace_block(&mut doc, 0, target, draft);
+        assert!(result.is_err(), "gap {gap}, draft {draft:?} must refuse: {result:?}");
+        let error = result.unwrap_err();
+        assert!(error.to_string().contains("source numeric text gap"), "{error}");
+        assert_eq!(doc.object_numbers(), objects);
+        assert_eq!(doc.modified_objects(), modified);
+        assert_eq!(write_full(&doc, &SaveOptions::default()).unwrap(), bytes);
+        assert_eq!(text_lines(&doc, 0).unwrap(), lines);
+        doc = reopen(&doc);
+    }
+    // An absolute line move ends the dependency; the ordinary ActualText edit still works.
+    let mut independent = fixture(&content.replace("1 0 0 rg 3 Ts", "0 -100 Td 1 0 0 rg"));
+    replace_block(&mut independent, 0, 0, "new").unwrap();
+    assert!(text_blocks(&reopen(&independent), 0).unwrap().iter().any(|b| b.text == "new"));
 }

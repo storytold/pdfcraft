@@ -97,21 +97,13 @@ impl FieldAction {
     }
 }
 
-fn texts(doc: &Document, o: &Object) -> Vec<String> {
-    match &*doc.resolve(o) {
-        Object::Array(a) => a.iter().filter_map(|x| doc.resolve(x).as_string().map(|s| s.to_text())).collect(),
-        Object::String(s) => vec![s.to_text()],
-        _ => Vec::new(),
-    }
-}
-
 fn read(doc: &Document, o: &Object, pages: &[pdfcraft_cos::ObjRef], scripts: &mut pdfcraft_cos::DecodeBudget) -> Option<FieldAction> {
     let a = doc.resolve(o);
     let d = a.as_dict()?;
     Some(match d.name(b"S")? {
         b"JavaScript" => FieldAction::JavaScript(crate::script(doc, o, scripts).unwrap_or_default()),
         b"URI" => FieldAction::Uri(d.get(b"URI").and_then(|u| doc.resolve(u).as_string().map(|s| s.to_text())).unwrap_or_default()),
-        b"ResetForm" => FieldAction::Reset(d.get(b"Fields").map(|f| texts(doc, f)).unwrap_or_default()),
+        b"ResetForm" => FieldAction::Reset(d.get(b"Fields").map(|f| crate::read::action_fields(doc, f)).unwrap_or_default()),
         b"Named" => FieldAction::Named(d.name(b"N").map(|n| String::from_utf8_lossy(n).into_owned()).unwrap_or_default()),
         b"GoTo" => {
             let dest = d.get(b"D").map(|x| doc.resolve(x))?;
@@ -119,8 +111,8 @@ fn read(doc: &Document, o: &Object, pages: &[pdfcraft_cos::ObjRef], scripts: &mu
             FieldAction::GoTo(pages.iter().position(|p| *p == target)?)
         }
         b"Hide" => FieldAction::ShowHide {
-            fields: d.get(b"T").map(|t| texts(doc, t)).unwrap_or_default(),
-            hide: !matches!(d.get(b"H"), Some(Object::Bool(false))),
+            fields: d.get(b"T").map(|t| crate::read::action_fields(doc, t)).unwrap_or_default(),
+            hide: !d.get(b"H").is_some_and(|h| matches!(&*doc.resolve(h), Object::Bool(false))),
         },
         b"SubmitForm" => FieldAction::Submit(
             d.get(b"F")
@@ -343,4 +335,100 @@ pub fn set_field_actions(doc: &mut Document, name: &str, actions: &[(Trigger, Fi
         })?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reset_and_hide_actions_resolve_hierarchical_widget_and_indirect_field_targets() {
+        let mut doc = Document::new_empty();
+        let rect = || Object::Array(vec![0.into(), 0.into(), 50.into(), 20.into()]);
+
+        // 1. Hierarchical child field `address.city` (merged field + widget).
+        let address = doc.add(Object::Null);
+        let mut city = Dict::new();
+        city.set(b"Parent".to_vec(), Object::Ref(address));
+        city.set(b"FT".to_vec(), Object::name("Tx"));
+        city.set(b"T".to_vec(), PdfString::text("city"));
+        city.set(b"Subtype".to_vec(), Object::name("Widget"));
+        city.set(b"Rect".to_vec(), rect());
+        let city = doc.add(Object::Dict(city));
+        let mut addr_dict = Dict::new();
+        addr_dict.set(b"T".to_vec(), PdfString::text("address"));
+        addr_dict.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(city)]));
+        doc.set(address, Object::Dict(addr_dict));
+
+        // 2. Separated field `phone` whose widget dictionary has `/Parent` instead of `/T`.
+        let phone = doc.add(Object::Null);
+        let mut phone_widget = Dict::new();
+        phone_widget.set(b"Subtype".to_vec(), Object::name("Widget"));
+        phone_widget.set(b"Parent".to_vec(), Object::Ref(phone));
+        phone_widget.set(b"Rect".to_vec(), rect());
+        let phone_widget = doc.add(Object::Dict(phone_widget));
+        let mut phone_dict = Dict::new();
+        phone_dict.set(b"FT".to_vec(), Object::name("Tx"));
+        phone_dict.set(b"T".to_vec(), PdfString::text("phone"));
+        phone_dict.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(phone_widget)]));
+        doc.set(phone, Object::Dict(phone_dict));
+
+        // 3. Indirect string target `"email"`.
+        let email_str = doc.add(Object::String(PdfString::text("email")));
+        let targets = Object::Array(vec![Object::Ref(city), Object::Ref(phone_widget), Object::Ref(email_str)]);
+
+        let mut reset_action = Dict::new();
+        reset_action.set(b"S".to_vec(), Object::name("ResetForm"));
+        reset_action.set(b"Fields".to_vec(), targets.clone());
+        let reset_action = doc.add(Object::Dict(reset_action));
+
+        let indirect_false = doc.add(Object::Bool(false));
+        let mut hide_action = Dict::new();
+        hide_action.set(b"S".to_vec(), Object::name("Hide"));
+        hide_action.set(b"T".to_vec(), targets);
+        hide_action.set(b"H".to_vec(), Object::Ref(indirect_false));
+        let hide_action = doc.add(Object::Dict(hide_action));
+
+        let mut aa = Dict::new();
+        aa.set(b"D".to_vec(), Object::Ref(hide_action));
+        let mut btn = Dict::new();
+        btn.set(b"FT".to_vec(), Object::name("Btn"));
+        btn.set(b"Ff".to_vec(), Object::Int(1 << 16));
+        btn.set(b"T".to_vec(), PdfString::text("btn"));
+        btn.set(b"Subtype".to_vec(), Object::name("Widget"));
+        btn.set(b"Rect".to_vec(), rect());
+        btn.set(b"A".to_vec(), Object::Ref(reset_action));
+        btn.set(b"AA".to_vec(), Object::Dict(aa));
+        let btn = doc.add(Object::Dict(btn));
+
+        let root = doc.root().unwrap();
+        let pages_ref = doc.get(root).as_dict().and_then(|d| d.reference(b"Pages")).unwrap();
+        let mut page_dict = Dict::new();
+        page_dict.set(b"Type".to_vec(), Object::name("Page"));
+        page_dict.set(b"Parent".to_vec(), Object::Ref(pages_ref));
+        page_dict.set(b"MediaBox".to_vec(), Object::Array(vec![0.into(), 0.into(), 600.into(), 800.into()]));
+        page_dict.set(b"Annots".to_vec(), Object::Array(vec![Object::Ref(city), Object::Ref(phone_widget), Object::Ref(btn)]));
+        let page = doc.add(Object::Dict(page_dict));
+        doc.update_dict(pages_ref, |p| {
+            p.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(page)]));
+            p.set(b"Count".to_vec(), Object::Int(1));
+        })
+        .unwrap();
+        let mut form = Dict::new();
+        form.set(b"Fields".to_vec(), Object::Array(vec![Object::Ref(address), Object::Ref(phone), Object::Ref(btn)]));
+        doc.update_dict(root, |c| c.set(b"AcroForm".to_vec(), Object::Dict(form))).unwrap();
+
+        let expected = vec!["address.city".to_string(), "phone".to_string(), "email".to_string()];
+        let btn_field = fields(&doc).into_iter().find(|f| f.name == "btn").unwrap();
+        assert_eq!(btn_field.button, Some(crate::af::ButtonAction::Reset { fields: expected.clone(), exclude: false }));
+
+        let acts = field_actions(&doc, "btn").unwrap();
+        assert_eq!(
+            acts,
+            vec![
+                (Trigger::MouseUp, FieldAction::Reset(expected.clone())),
+                (Trigger::MouseDown, FieldAction::ShowHide { fields: expected, hide: false }),
+            ]
+        );
+    }
 }
