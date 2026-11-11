@@ -6,7 +6,7 @@
 //! one it doesn't leaves the page.
 
 use super::*;
-use crate::interp::SPACE_READS;
+use crate::interp::{MAX_SPACE_NAMES, SPACE_READS};
 
 /// A tiling pattern whose cell draws a rectangle and nothing else (object 7), which can stay.
 fn cell() -> Vec<u8> {
@@ -32,8 +32,8 @@ fn removed(content: &str, res: &str, extra: Vec<Vec<u8>>) -> usize {
 /// level, keeps the pattern the box beside the mark is filled with, as does `/Pattern` itself even
 /// where the resources name something else so; and a `cs` whose operand isn't a name, which the
 /// renderer skips. A grey space, a device space's name (read before the resources), a name the
-/// resources don't have, a name naming a name, and `null` reset it, and the pattern leaves the
-/// page. `CS` likewise for the stroke.
+/// resources don't have (a `/ColorSpace` that isn't a dictionary has none), a name naming a name,
+/// and `null` reset it, and the pattern leaves the page. `CS` likewise for the stroke.
 #[test]
 fn a_named_pattern_space_keeps_the_pattern() {
     let pattern = "/Pattern << /P0 7 0 R >>";
@@ -53,6 +53,7 @@ fn a_named_pattern_space_keeps_the_pattern() {
         ("/CSP", "<< /CSP /CSQ /CSQ /Pattern >>", None, 1),
         ("/CSP", "<< /CSP null >>", None, 1),
         ("/CSP", "<< /CSP 8 0 R >>", Some("/DeviceGray"), 1),
+        ("/CSP", "8 0 R", Some("[/CSP /Pattern]"), 1),
     ] {
         let extra: Vec<Vec<u8>> = extra.map(|e| e.as_bytes().to_vec()).into_iter().collect();
         let res = format!("{pattern} /ColorSpace {spaces}");
@@ -94,6 +95,8 @@ fn a_colour_space_dictionary_is_read_once_for_the_page() {
         SPACE_READS.with(std::cell::Cell::get)
     };
     let many = format!("/Pattern cs /P0 scn 20 140 100 30 re f {}20 40 100 30 re f", "/CSP cs ".repeat(20_000));
+    // With no pattern selected, `cs` has nothing to reset and reads nothing.
+    assert_eq!(reads("/CSP cs 20 40 100 30 re f", "/Pattern << /P0 7 0 R >> /ColorSpace 8 0 R", vec![spaces.clone()]), 0, "no pattern selected");
     // The dictionary by reference, an entry by reference, and an entry's first element by
     // reference.
     for (spaces_entry, extra) in
@@ -105,9 +108,11 @@ fn a_colour_space_dictionary_is_read_once_for_the_page() {
         assert_eq!(reads(&many, &res, vec![extra]), once, "20,000 cs with /ColorSpace {spaces_entry}");
     }
 
-    // A form with its own `/ColorSpace` (object 9) drawn once, then 1,000 times.
+    // A form with its own `/ColorSpace` (object 9), drawn once, then 1,000 times, with a pattern
+    // selected: without one, `cs` has nothing to reset and looks nothing up.
     let form = stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << /ColorSpace 9 0 R >>", b"/CSP cs 0 0 1 1 re f");
-    let drawn = |n: usize| reads(&"/Fm Do ".repeat(n), "/XObject << /Fm 8 0 R >>", vec![form.clone(), spaces.clone()]);
+    let drawn =
+        |n: usize| reads(&format!("/Pattern cs /P0 scn {}", "/Fm Do ".repeat(n)), "/XObject << /Fm 8 0 R >>", vec![form.clone(), spaces.clone()]);
     let one = drawn(1);
     assert!(one >= 1, "the form's dictionary is read");
     assert_eq!(drawn(1000), one, "a form drawn 1,000 times");
@@ -126,7 +131,33 @@ fn a_colour_space_dictionary_is_read_once_for_the_page() {
             })
             .collect();
         extra.push(spaces.clone());
-        reads("/Fm Do", "/XObject << /Fm 8 0 R >>", extra)
+        reads("/Pattern cs /P0 scn /Fm Do", "/XObject << /Fm 8 0 R >>", extra)
     };
     assert_eq!(nested(40), nested(1), "forms 40 deep");
+}
+
+/// What the lookup keeps for a page is what each name of the `/ColorSpace` dictionaries it reads
+/// gives, at most `MAX_SPACE_NAMES` names over the page. A dictionary that would go past it is left
+/// unread, and a name in it keeps the pattern: `/CSG`, grey, in a dictionary of `MAX_SPACE_NAMES`
+/// names resets it, in one name more keeps it, and so it does in one of 60,000 names read after a
+/// form with resources of its own read another 60,000. Without the form, it resets it.
+#[test]
+fn the_lookup_keeps_a_bounded_number_of_names() {
+    let spaces = |n: usize| {
+        let names: String = (1..n).map(|i| format!("/C{i} /DeviceGray ")).collect();
+        format!("<< {names}/CSG /DeviceGray >>").into_bytes()
+    };
+    let res = "/Pattern << /P0 7 0 R >> /ColorSpace 8 0 R";
+    assert_eq!(removed(&two_boxes("/CSG"), res, vec![spaces(MAX_SPACE_NAMES)]), 1, "within the allowance");
+    assert_eq!(removed(&two_boxes("/CSG"), res, vec![spaces(MAX_SPACE_NAMES + 1)]), 0, "past it");
+
+    // The form (object 8), drawn before the page selects `/P0` (a `Do` keeps the pattern
+    // selected), selects one of its own and reads its own `/ColorSpace` (object 9); the page's is
+    // object 10.
+    let form = stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << /ColorSpace 9 0 R >>", b"/PF scn /CSF cs");
+    let res = "/Pattern << /P0 7 0 R >> /XObject << /Fm 8 0 R >> /ColorSpace 10 0 R";
+    let content = |form: &str| format!("{form}/Pattern cs /P0 scn 20 140 100 30 re f /CSG cs 20 40 100 30 re f");
+    let extra = vec![form, spaces(60_000), spaces(60_000)];
+    assert_eq!(removed(&content("q /Fm Do Q "), res, extra.clone()), 0, "after the form's 60,000 names");
+    assert_eq!(removed(&content(""), res, extra), 1, "without the form");
 }

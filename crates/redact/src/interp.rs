@@ -212,14 +212,50 @@ thread_local! {
     pub(crate) static SPACE_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
+/// How many colour space names [`PatternSpaces`] keeps for a page, over all the `/ColorSpace`
+/// dictionaries given by reference it reads. One that would go past it is left unread, and a name
+/// in it keeps the pattern: a pattern kept that nothing shows is the side this errs on.
+pub(crate) const MAX_SPACE_NAMES: usize = 100_000;
+
+/// What a `/ColorSpace` entry gives, as far as `cs` and `CS` need to know.
+#[derive(Clone, Copy)]
+enum Space {
+    /// `/Pattern` or `[/Pattern base]`.
+    Pattern,
+    /// Anything else.
+    Other,
+    /// An entry given by reference, read when it is named.
+    Entry(ObjRef),
+    /// An array whose first element is given by reference, read when it is named.
+    Family(ObjRef),
+}
+
+impl Space {
+    fn of(entry: &Object) -> Self {
+        let pattern = |o: Option<&Object>| if o.and_then(Object::as_name) == Some(b"Pattern".as_slice()) { Space::Pattern } else { Space::Other };
+        match entry {
+            Object::Ref(r) => Space::Entry(*r),
+            Object::Array(a) => match a.first() {
+                Some(Object::Ref(r)) => Space::Family(*r),
+                first => pattern(first),
+            },
+            entry => pattern(Some(entry)),
+        }
+    }
+}
+
 /// What `cs` and `CS` have read of a page's colour spaces, kept for the page. A form drawn
 /// thousands of times, or nested deep, starts a scope each time, and reading an object again can
-/// parse it again, all of it: the document keeps no object larger than its cache.
+/// parse it again, all of it: the document keeps no object larger than its cache. What is kept is
+/// what each name gives, not the objects read, and at most [`MAX_SPACE_NAMES`] names.
 #[derive(Default)]
 struct PatternSpaces {
-    /// `/ColorSpace` dictionaries given by reference, as read.
-    held: HashMap<ObjRef, Arc<Object>>,
-    /// Whether a colour space given by reference is a Pattern space.
+    /// The `/ColorSpace` dictionaries given by reference, read once: what each name gives, or
+    /// `None` for one past the allowance.
+    held: HashMap<ObjRef, Option<HashMap<Vec<u8>, Space>>>,
+    /// The names `held` keeps.
+    names: usize,
+    /// Whether an entry given by reference is a Pattern space.
     known: HashMap<ObjRef, bool>,
     /// Whether an array's first element given by reference is the name `/Pattern`.
     families: HashMap<ObjRef, bool>,
@@ -240,39 +276,46 @@ impl PatternSpaces {
             b"DeviceRGB" | b"RGB" | b"DeviceGray" | b"G" | b"DeviceCMYK" | b"CMYK" | b"CalCMYK" => return false,
             _ => {}
         }
-        let held = match spaces {
-            Some(o @ Object::Ref(r)) => Some(Arc::clone(self.held.entry(*r).or_insert_with(|| read_space(doc, o)))),
+        let space = match spaces {
+            Some(o @ Object::Ref(r)) => {
+                if !self.held.contains_key(r) {
+                    let index = match &*read_space(doc, o) {
+                        Object::Dict(d) if d.len() > MAX_SPACE_NAMES.saturating_sub(self.names) => None,
+                        Object::Dict(d) => Some(d.iter().map(|(k, v)| (k.to_vec(), Space::of(v))).collect::<HashMap<_, _>>()),
+                        _ => Some(HashMap::new()),
+                    };
+                    self.names += index.as_ref().map_or(0, HashMap::len);
+                    self.held.insert(*r, index);
+                }
+                match self.held.get(r) {
+                    Some(Some(index)) => index.get(name).copied(),
+                    _ => return true,
+                }
+            }
+            Some(Object::Dict(d)) => d.get(name).map(Space::of),
             _ => None,
         };
-        let space = held.as_deref().or(spaces).and_then(Object::as_dict).and_then(|d| d.get(name));
         space.is_some_and(|space| self.is_pattern(doc, space))
     }
 
-    /// Whether `space`, an entry of a `/ColorSpace`, is `/Pattern` or `[/Pattern base]`.
-    fn is_pattern(&mut self, doc: &Document, space: &Object) -> bool {
+    /// Whether `space` is `/Pattern` or `[/Pattern base]`, reading what it gives by reference.
+    fn is_pattern(&mut self, doc: &Document, space: Space) -> bool {
         match space {
-            Object::Ref(r) => match self.known.get(r) {
+            Space::Pattern => true,
+            Space::Other => false,
+            Space::Entry(r) => match self.known.get(&r) {
                 Some(&known) => known,
                 None => {
-                    let found = self.reads_as_pattern(doc, &read_space(doc, space));
-                    self.known.insert(*r, found);
+                    // What a reference resolves to is no reference (`resolve` follows them).
+                    let found = match Space::of(&read_space(doc, &Object::Ref(r))) {
+                        Space::Entry(_) => false,
+                        read => self.is_pattern(doc, read),
+                    };
+                    self.known.insert(r, found);
                     found
                 }
             },
-            space => self.reads_as_pattern(doc, space),
-        }
-    }
-
-    /// Whether `space`, read, is `/Pattern` or an array whose first element is.
-    fn reads_as_pattern(&mut self, doc: &Document, space: &Object) -> bool {
-        match space {
-            Object::Array(a) => match a.first() {
-                Some(first @ Object::Ref(r)) => {
-                    *self.families.entry(*r).or_insert_with(|| read_space(doc, first).as_name() == Some(b"Pattern".as_slice()))
-                }
-                first => first.and_then(Object::as_name) == Some(b"Pattern".as_slice()),
-            },
-            space => space.as_name() == Some(b"Pattern".as_slice()),
+            Space::Family(r) => *self.families.entry(r).or_insert_with(|| read_space(doc, &Object::Ref(r)).as_name() == Some(b"Pattern".as_slice())),
         }
     }
 }
@@ -661,17 +704,16 @@ impl Walk {
             // A colour space resets the colour, and with it the pattern, unless it is a Pattern space
             // to the renderer, which keeps the pattern selected before (ISO 32000-2 §8.6.8 and
             // Poppler reset that too): `/Pattern`, or a name the resources give as `/Pattern` or
-            // `[/Pattern base]`, looked up as the renderer looks it up. One whose operand isn't a
-            // name is skipped by the renderer, and the colour stays.
+            // `[/Pattern base]`, looked up as the renderer looks it up, and only when there is a
+            // pattern to reset. One whose operand isn't a name is skipped by the renderer, and the
+            // colour stays.
             b"cs" | b"CS" => {
-                if let Some(name) = op.last_name()
+                let selected = if o == b"cs" { &mut self.gs.fill_pattern } else { &mut self.gs.stroke_pattern };
+                if selected.is_some()
+                    && let Some(name) = op.last_name()
                     && !scope.pattern_spaces.named(doc, resources.get(b"ColorSpace"), name)
                 {
-                    if o == b"cs" {
-                        self.gs.fill_pattern = None;
-                    } else {
-                        self.gs.stroke_pattern = None;
-                    }
+                    *selected = None;
                 }
                 Some(op)
             }
