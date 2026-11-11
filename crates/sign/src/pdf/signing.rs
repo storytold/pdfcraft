@@ -228,14 +228,15 @@ fn sign_inner(
     }
     // The field and its widget.
     let pages = pdfcraft_annot::page_refs(&doc).map_err(|e| SignError::Pdf(e.to_string()))?;
-    let existing = opts
-        .field
-        .as_deref()
-        .map(|n| sig_fields(&doc).into_iter().find(|f| f.name == n).ok_or_else(|| SignError::Pdf(format!("there is no signature field {n:?}"))));
+    let all_fields = sig_fields(&doc);
     // `turn`: how far the appearance is turned to read upright (`/MK /R`, counterclockwise).
-    let widgets = match existing {
-        Some(f) => {
-            let f = f?;
+    let widgets = match opts.field.as_deref() {
+        Some(n) => {
+            let mut matching = all_fields.iter().enumerate().filter(|(_, f)| f.name == n);
+            let (idx, f) = matching.next().ok_or_else(|| SignError::Pdf(format!("there is no signature field {n:?}")))?;
+            if matching.next().is_some() {
+                return Err(SignError::Pdf(format!("more than one signature field is named {n:?}")));
+            }
             if f.signature(&doc).is_some() {
                 return Err(SignError::Pdf(format!("the field {:?} is already signed", f.name)));
             }
@@ -243,14 +244,22 @@ fn sign_inner(
                 return Err(SignError::Pdf(format!("the value of the field {:?} is not a signature", f.name)));
             }
             let fr = f.r.ok_or_else(|| SignError::Pdf("the field is not an indirect object".into()))?;
-            doc.update_dict(fr, |d| d.set(b"V".to_vec(), Object::Ref(sig)))?;
             if f.widgets.is_empty() {
                 return Err(SignError::Pdf("the field has no widget".into()));
             }
+            let claimed_elsewhere: HashSet<u32> = all_fields
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| *i != idx)
+                .flat_map(|(_, other)| other.widgets.iter().filter_map(move |(wr, _)| wr.or(other.r).map(|r| r.num)))
+                .collect();
             let mut seen_widgets = HashSet::new();
             let mut list = Vec::with_capacity(f.widgets.len());
             for (wr, wd) in &f.widgets {
                 let target = wr.unwrap_or(fr);
+                if claimed_elsewhere.contains(&target.num) {
+                    return Err(SignError::Pdf(format!("the field {:?} shares a widget with another signature field", f.name)));
+                }
                 if !seen_widgets.insert(target) {
                     continue;
                 }
@@ -262,15 +271,16 @@ fn sign_inner(
                 // reoriented, so one without `/MK /R` is drawn as before.
                 list.push((target, rect, mk_rotation(&doc, wd)));
             }
+            doc.update_dict(fr, |d| d.set(b"V".to_vec(), Object::Ref(sig)))?;
             list
         }
         None => {
             let page = *pages.get(opts.page).ok_or_else(|| SignError::Pdf(format!("page {} does not exist", opts.page + 1)))?;
-            let taken: HashSet<String> = sig_fields(&doc).into_iter().map(|f| f.name).collect();
+            let taken: HashSet<&str> = all_fields.iter().map(|f| f.name.as_str()).collect();
             let fname = opts
                 .new_field_name
                 .clone()
-                .unwrap_or_else(|| (1..).map(|i| format!("Signature{i}")).find(|n| !taken.contains(n)).unwrap_or_default());
+                .unwrap_or_else(|| (1..).map(|i| format!("Signature{i}")).find(|n| !taken.contains(n.as_str())).unwrap_or_default());
             let rect = opts.rect.unwrap_or([0.0; 4]);
             let mut w = Dict::new();
             w.set(b"Type".to_vec(), Object::name("Annot"));
@@ -818,10 +828,26 @@ mod tests {
         };
         assert!(ap2_stream.dict.contains(b"Matrix"), "rotated widget appearance should carry /Matrix");
 
-        let trust = TrustStore { certs: vec![id.certificate] };
+        let trust = TrustStore { certs: vec![id.certificate.clone()] };
         let sigs = list(&signed_doc, &signed_bytes, &trust);
         assert_eq!(sigs.len(), 1);
         assert_eq!(sigs[0].status, Status::Valid);
+
+        // If another signature field also claims one of the field's widgets, signing is rejected
+        // before overwriting the shared widget's appearance.
+        let mut shared_doc = doc.clone();
+        let root = shared_doc.root().ok_or("missing catalog")?;
+        let mut other = Dict::new();
+        other.set(b"FT".to_vec(), Object::name("Sig"));
+        other.set(b"T".to_vec(), PdfString::text("OtherSig"));
+        other.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(widgets[1])]));
+        let other_ref = shared_doc.add(Object::Dict(other));
+        let field_ref = f.r.ok_or("missing field ref")?;
+        let mut af = Dict::new();
+        af.set(b"Fields".to_vec(), Object::Array(vec![Object::Ref(field_ref), Object::Ref(other_ref)]));
+        shared_doc.update_dict(root, |c| c.set(b"AcroForm".to_vec(), Object::Dict(af)))?;
+        let err = sign(&shared_doc, &id, &opts).unwrap_err();
+        assert_eq!(err.to_string(), "the field \"Sig\" shares a widget with another signature field");
         Ok(())
     }
 }
