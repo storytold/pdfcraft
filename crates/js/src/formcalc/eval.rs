@@ -277,11 +277,11 @@ impl Interp<'_> {
                         Some(e) => {
                             let raw = self.eval(e)?;
                             match self.nodes_of(&raw).first() {
-                                Some(i) => self.node(*i).map(|n| n.som.clone()).unwrap_or_default(),
+                                Some(i) => self.node(*i).map(|n| n.som.to_string()).unwrap_or_default(),
                                 None => {
                                     let s = self.to_str(&raw);
                                     let found = resolve_som(self.h, self.h.current, &s);
-                                    found.first().and_then(|i| self.node(*i)).map(|n| n.som.clone()).unwrap_or(s)
+                                    found.first().and_then(|i| self.node(*i)).map(|n| n.som.to_string()).unwrap_or(s)
                                 }
                             }
                         }
@@ -292,15 +292,23 @@ impl Interp<'_> {
                 }
                 _ => Ok(Val::Null),
             },
-            Val::Layout => match m.as_str() {
-                "page" | "abspage" => Ok(Val::Num(self.h.doc.page as f64 + if m == "page" { 1.0 } else { 0.0 })),
-                "pagecount" | "abspagecount" => Ok(Val::Num(self.h.doc.page_count as f64)),
-                "relayout" | "relayoutpagearea" => {
-                    self.h.push(XfaEffect::Relayout);
-                    Ok(Val::Null)
+            Val::Layout => {
+                // No layout method reads its arguments, but each is evaluated once, for what it
+                // does (a message box in an argument still shows), as the other objects' are.
+                for i in 0..args.len() {
+                    self.arg(args, i)?;
                 }
-                _ => Ok(Val::Num(0.0)),
-            },
+                match m.as_str() {
+                    // On screen every page is a sheet of its own (see the JavaScript `sheet`).
+                    "page" | "abspage" | "sheet" => Ok(Val::Num(self.h.doc.page as f64 + if m == "page" { 1.0 } else { 0.0 })),
+                    "pagecount" | "abspagecount" | "sheetcount" => Ok(Val::Num(self.h.doc.page_count as f64)),
+                    "relayout" | "relayoutpagearea" => {
+                        self.h.push(XfaEffect::Relayout);
+                        Ok(Val::Null)
+                    }
+                    _ => Ok(Val::Num(0.0)),
+                }
+            }
             Val::Xfa => match m.as_str() {
                 "resolvenode" | "resolvenodes" => {
                     let s = self.arg_str(args, 0)?;
@@ -396,7 +404,7 @@ impl Interp<'_> {
         match target {
             Val::Node(i) => {
                 let Some(n) = self.node(i) else { return Ok(()) };
-                let som = n.som.clone();
+                let som = n.som.to_string();
                 match prop {
                     "rawValue" | "value" | "formattedValue" => {
                         let text = self.to_str(&v);
