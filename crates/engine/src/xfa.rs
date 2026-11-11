@@ -24,6 +24,9 @@ const MAX_RELAYOUTS_PER_EVENT: usize = 50;
 const MAX_ALERTS_PER_EVENT: usize = 100;
 const MAX_CONSOLE_PER_EVENT: usize = 1_000;
 const MAX_ERRORS_PER_EVENT: usize = 100;
+/// Most `xfa.host.resetData` calls one event carries out: each scans the whole form.
+const MAX_RESETS_PER_EVENT: usize = 1_000;
+
 /// Time the scripts of one event may take in all before the rest are skipped: opening (and
 /// the calculations every change runs) is held tighter than a click.
 const OPEN_BUDGET_MS: u64 = 3_000;
@@ -258,10 +261,13 @@ struct ResetRun {
     /// may pass hundreds of thousands).
     seen: HashSet<String>,
     whole: bool,
+    /// The `resetData` calls this run holds.
+    calls: usize,
 }
 
 impl ResetRun {
     fn add(&mut self, names: &[String]) {
+        self.calls += 1;
         if self.whole {
             return;
         }
@@ -457,6 +463,13 @@ struct Runner<'a, 'b> {
     clock: Clock,
     runs: usize,
     skipped: usize,
+    /// `resetData` calls this event made, and those left undone (past [`MAX_RESETS_PER_EVENT`] or
+    /// the event's time budget, which is kept as it was then: the clock is swapped before the end).
+    resets: usize,
+    resets_skipped: usize,
+    /// Of those, the ones left undone because the clock was spent, and its budget then.
+    resets_timed_out: usize,
+    reset_skip_budget_ms: Option<u64>,
     relayouts: usize,
     relayouts_skipped: bool,
     /// Lay the form out once, when the event ends, rather than after every script that changed
@@ -510,6 +523,10 @@ impl<'a, 'b> Runner<'a, 'b> {
             clock: Clock::start(budget_ms),
             runs: 0,
             skipped: 0,
+            resets: 0,
+            resets_skipped: 0,
+            resets_timed_out: 0,
+            reset_skip_budget_ms: None,
             relayouts: 0,
             relayouts_skipped: false,
             defer_relayout: false,
@@ -940,10 +957,33 @@ impl<'a, 'b> Runner<'a, 'b> {
                 XfaEffect::ResetData(names) => {
                     // A script resetting several subforms in a row (`resetData` once for each)
                     // resets them together: the same fields end up at their defaults.
-                    pending_reset.get_or_insert_with(ResetRun::default).add(names);
+                    // A script may ask for thousands of resets, each a scan of the form: each call
+                    // counts, and past [`MAX_RESETS_PER_EVENT`] (which holds where the clock can't,
+                    // in the browser) or the event's time budget it is skipped, and the event says
+                    // so. A skipped call's names are not prepared.
+                    let late = self.clock.spent();
+                    if late || self.resets >= MAX_RESETS_PER_EVENT {
+                        self.resets_skipped += 1;
+                        if late {
+                            self.resets_timed_out += 1;
+                            self.reset_skip_budget_ms = Some(self.clock.budget_ms);
+                        }
+                    } else {
+                        self.resets += 1;
+                        pending_reset.get_or_insert_with(ResetRun::default).add(names);
+                    }
                     let next_is_reset = effects.get(at.saturating_add(1)).is_some_and(|e| matches!(e, XfaEffect::ResetData(_)));
                     if !next_is_reset && let Some(run) = pending_reset.take() {
-                        self.reset(run.names())?;
+                        // The deadline may have passed while the names were gathered: the batch is
+                        // then skipped, and its accepted calls counted as timed out (calls skipped
+                        // before are not counted again).
+                        if self.clock.spent() {
+                            self.resets_skipped += run.calls;
+                            self.resets_timed_out += run.calls;
+                            self.reset_skip_budget_ms = Some(self.clock.budget_ms);
+                        } else {
+                            self.reset(run.names())?;
+                        }
                     }
                 }
                 XfaEffect::Print => self.run.out.requests.push(Request::Print),
@@ -1083,6 +1123,19 @@ impl<'a, 'b> Runner<'a, 'b> {
                 format!("the scripts took more than {} seconds", self.clock.budget_ms / 1000)
             };
             self.run.out.errors.push(format!("The form's scripts were stopped: {why}; {} more were skipped", self.skipped));
+        }
+        let over_the_count = self.resets_skipped - self.resets_timed_out;
+        if over_the_count > 0 {
+            self.run.out.errors.push(format!(
+                "The form's scripts were stopped: more than {MAX_RESETS_PER_EVENT} resets were asked for; {over_the_count} more resets were skipped"
+            ));
+        }
+        if let (true, Some(ms)) = (self.resets_timed_out > 0, self.reset_skip_budget_ms) {
+            self.run.out.errors.push(format!(
+                "The form's scripts were stopped: the scripts took more than {} seconds; {} more resets were skipped",
+                ms / 1000,
+                self.resets_timed_out
+            ));
         }
         if self.dropped_output > 0 {
             self.run.out.errors.push(format!("The form's scripts produced too much output; {} more messages were left out", self.dropped_output));
