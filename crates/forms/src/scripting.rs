@@ -38,10 +38,17 @@ impl FieldEvent {
 pub struct FieldChange {
     pub name: String,
     pub value: Option<Vec<String>>,
+    /// This value came from a Calculate script; redraw it through the field's Format script.
+    pub formatted: bool,
     pub read_only: Option<bool>,
     pub required: Option<bool>,
     /// `display.visible` 0, `hidden` 1, `noPrint` 2, `noView` 3.
     pub display: Option<i32>,
+    /// Acrobat `textColor` / `fillColor` colour arrays: transparent `["T"]`, gray `["G", g]`,
+    /// `["RGB", r, g, b]` or `["CMYK", c, m, y, k]`, components between 0 and 1.
+    pub text_color: Option<Vec<String>>,
+    pub fill_color: Option<Vec<String>>,
+    pub caption: Option<String>,
     /// Move/resize the first widget, in PDF user space.
     pub rect: Option<[f64; 4]>,
 }
@@ -92,8 +99,9 @@ impl Scripts for NoScripts {
 
 /// Run the Keystroke (commit) and Validate scripts for a new text value. Returns the value to
 /// store, or why it is rejected.
-pub(crate) fn accept(doc: &mut Document, f: &Field, value: &str, scripts: &mut dyn Scripts) -> Result<String, FormError> {
+pub(crate) fn accept(doc: &mut Document, f: &Field, value: &str, scripts: &mut dyn Scripts) -> Result<(String, bool), FormError> {
     let mut v = value.to_string();
+    let mut refresh_field = false;
     for (event, script, default) in [
         (FieldEvent::Keystroke, &f.actions.scripts.keystroke, "The value entered does not match the format of the field"),
         (FieldEvent::Validate, &f.actions.scripts.validate, "The value entered is not valid for the field"),
@@ -101,13 +109,14 @@ pub(crate) fn accept(doc: &mut Document, f: &Field, value: &str, scripts: &mut d
         let Some(js) = script else { continue };
         let all = fields(doc);
         let r = scripts.run(event, js, f, &v, &all);
-        apply_changes(doc, &r.changes, &f.name)?;
+        refresh_field |= r.changes.iter().any(|change| change.name == f.name);
+        apply_changes(doc, &r.changes, &f.name, scripts)?;
         if !r.rc {
             return Err(FormError::Invalid(r.message.unwrap_or_else(|| format!("{default} [ {} ]", f.name))));
         }
         v = r.value;
     }
-    Ok(v)
+    Ok((v, refresh_field))
 }
 
 /// The text a custom Format script shows for `value`, if the field has one.
@@ -125,11 +134,17 @@ pub(crate) fn formatted_in_english(doc: &Document, f: &Field, value: &str, scrip
 }
 
 /// Apply script changes to other fields (values written without re-running their scripts;
-/// read-only, required and visibility as flags). `except` is the event's own field, whose value
-/// the event sets.
-pub(crate) fn apply_changes(doc: &mut Document, changes: &[FieldChange], except: &str) -> Result<(), FormError> {
+/// read-only, required and visibility as flags; button captions). `except` is the event's own
+/// field, whose value the event sets.
+pub(crate) fn apply_changes(doc: &mut Document, changes: &[FieldChange], except: &str, scripts: &mut dyn Scripts) -> Result<(), FormError> {
     if changes.is_empty() {
         return Ok(());
+    }
+    // Validate every colour before applying any part of the script's changes.
+    for c in changes {
+        for color in [&c.text_color, &c.fill_color].into_iter().flatten() {
+            js_color(color)?;
+        }
     }
     let all = fields(doc);
     for c in changes {
@@ -139,16 +154,21 @@ pub(crate) fn apply_changes(doc: &mut Document, changes: &[FieldChange], except:
             && *v != f.value
         {
             let value = match f.kind {
-                FieldKind::Text => FieldValue::Text(v.first().cloned().unwrap_or_default()),
-                FieldKind::CheckBox => f.check_box_value(v.first().map(String::as_str)),
-                FieldKind::Radio => FieldValue::Radio(v.first().cloned()),
-                FieldKind::Combo | FieldKind::List => FieldValue::Choice(v.clone()),
-                _ => continue,
+                FieldKind::Text => Some(FieldValue::Text(v.first().cloned().unwrap_or_default())),
+                FieldKind::CheckBox => Some(f.check_box_value(v.first().map(String::as_str))),
+                FieldKind::Radio => Some(FieldValue::Radio(v.first().cloned())),
+                FieldKind::Combo | FieldKind::List => Some(FieldValue::Choice(v.clone())),
+                _ => None,
             };
-            let mut tmp = f.clone();
-            tmp.flags &= !flags::NO_TOGGLE_TO_OFF;
-            tmp.actions = Default::default();
-            crate::write_value(doc, &tmp, &value, &mut NoScripts)?;
+            if let Some(value) = value {
+                let mut tmp = f.clone();
+                tmp.flags &= !flags::NO_TOGGLE_TO_OFF;
+                tmp.actions = Default::default();
+                crate::write_value(doc, &tmp, &value, &mut NoScripts)?;
+                if c.formatted {
+                    crate::redraw_calculated_value(doc, f, v, scripts)?;
+                }
+            }
         }
         let mut ff = f.flags;
         for (on, bit) in [(c.read_only, flags::READ_ONLY), (c.required, flags::REQUIRED)] {
@@ -177,6 +197,23 @@ pub(crate) fn apply_changes(doc: &mut Document, changes: &[FieldChange], except:
                 }
             }
         }
+        // Text can't be transparent: `["T"]` leaves its colour as it is. A transparent fill
+        // clears the background.
+        let text = c.text_color.as_deref().map(js_color).transpose()?.flatten();
+        let fill = c.fill_color.as_deref().map(js_color).transpose()?;
+        if text.is_some() || fill.is_some() {
+            crate::set_props(
+                doc,
+                &c.name,
+                &crate::FieldProps { appearance: Some(crate::LookPatch { text, fill, ..Default::default() }), ..Default::default() },
+            )?;
+        }
+        if let Some(caption) = &c.caption {
+            if f.kind != FieldKind::PushButton {
+                return Err(FormError::Invalid(format!("{} is not a push button", f.name)));
+            }
+            crate::set_props(doc, &f.name, &crate::FieldProps { caption_all: Some(caption.clone()), ..Default::default() })?;
+        }
         if let Some(rect) = c.rect {
             crate::set_props(doc, &c.name, &crate::FieldProps { rect: Some((0, rect)), ..Default::default() })?;
         }
@@ -184,10 +221,36 @@ pub(crate) fn apply_changes(doc: &mut Document, changes: &[FieldChange], except:
     Ok(())
 }
 
+/// An Acrobat colour array as the RGB the look model stores, `None` for transparent (`["T"]`).
+/// Gray and CMYK convert as Acrobat's `color.convert` does. Anything else (an unknown colour
+/// space, the wrong number of components, or a component that is not a finite number between
+/// 0 and 1) is refused, and with it the script's changes.
+fn js_color(values: &[String]) -> Result<Option<[f64; 3]>, FormError> {
+    let invalid = || FormError::Invalid("JavaScript field colours must be T, G, RGB or CMYK arrays with finite values between 0 and 1".into());
+    let (space, parts) = values.split_first().ok_or_else(invalid)?;
+    let mut numbers = [0.0; 4];
+    if parts.len() > numbers.len() {
+        return Err(invalid());
+    }
+    for (slot, part) in numbers.iter_mut().zip(parts) {
+        *slot = part.trim().parse::<f64>().ok().filter(|v| v.is_finite() && (0.0..=1.0).contains(v)).ok_or_else(invalid)?;
+    }
+    match (space.as_str(), parts.len()) {
+        ("T", 0) => Ok(None),
+        ("G", 1) => Ok(Some([numbers[0]; 3])),
+        ("RGB", 3) => Ok(Some([numbers[0], numbers[1], numbers[2]])),
+        ("CMYK", 4) => {
+            let [c, m, y, k] = numbers;
+            Ok(Some([1.0 - (c + k).min(1.0), 1.0 - (m + k).min(1.0), 1.0 - (y + k).min(1.0)]))
+        }
+        _ => Err(invalid()),
+    }
+}
+
 /// Apply what a button or console script changed (values, read-only, required, visibility),
 /// then recalculate.
 pub fn apply_script_changes(doc: &mut Document, changes: &[FieldChange], scripts: &mut dyn Scripts) -> Result<(), FormError> {
-    apply_changes(doc, changes, "")?;
+    apply_changes(doc, changes, "", scripts)?;
     crate::recalculate_with(doc, scripts)?;
     Ok(())
 }
