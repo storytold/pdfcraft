@@ -52,7 +52,26 @@ pub(super) fn run(view: &mut DocView, cx: &KeyCx<'_>, tool: &mut QuickTool) {
     escape(view, cx, tool);
     delete(view, cx);
     arrows(view, cx);
+    enter(view, cx);
     super::navigation::view_plain_keys(view, ctx, keys, speed);
+}
+
+/// Enter: an editor open on the page reads it itself; a picture in crop mode applies its crop; full
+/// screen steps forward with what is left (the view's keys). A comment drawn point by point and the
+/// Measure tool's points read their own Enter, as before.
+fn enter(view: &mut DocView, cx: &KeyCx<'_>) {
+    let KeyCx { ctx, keys, doc, tool, .. } = *cx;
+    if !keys.pressed(ctx, egui::Key::Enter) || typing(view, ctx) || editor_open(view) || tool != QuickTool::EditText || !doc.allows_modification() {
+        return;
+    }
+    // Not while its page is off the screen: the reader can't see the crop applied.
+    let crop = view.image_selection.as_ref().filter(|s| s.crop.is_some() && view.page_screen_rect(s.page).is_some());
+    let Some((page, index)) = crop.map(|s| (s.page, s.index)) else { return };
+    let images = doc.page_images(page);
+    if let Some(image) = images.get(index) {
+        crate::edit_text_ui::apply_crop_mode(view, image);
+        keys.take(ctx, egui::Key::Enter);
+    }
 }
 
 /// The arrows move the newest selection (each nudge takes the presses it uses, so an older

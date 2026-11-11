@@ -120,7 +120,8 @@ impl PdfCraftApp {
             self.quick_tool = QuickTool::Hand;
             self.space_hand = None;
         }
-        if space && self.space_hand.is_none() && self.quick_tool != QuickTool::Hand {
+        // In full screen Space steps forward a page (the view's keys), and that is all it does.
+        if space && self.space_hand.is_none() && self.quick_tool != QuickTool::Hand && !self.full_screen {
             self.space_hand = Some(self.quick_tool);
             self.quick_tool = QuickTool::Hand;
         }

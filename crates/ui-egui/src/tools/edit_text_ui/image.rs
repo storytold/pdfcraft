@@ -2,7 +2,6 @@ use super::{ACCENT, Color32, CornerRadius, DocInfo, DocView, Edit, MAX_OUTLINES,
 use crate::canvas::{ImageObb, PainterExt, image_screen_rect};
 use crate::image_engine::{CROP_ACCENT, apply_crop, apply_resize, apply_resize_proportional, draw_handle, draw_rule_of_thirds};
 use crate::page_cursor::Layer;
-use crate::page_keys::PageKeys;
 use crate::page_router::{CropPart, Hit, Owner, PagePress, PicturePart};
 
 /// What the pointer and the page are, for the image tools on one page.
@@ -469,7 +468,7 @@ fn crop_input(cx: &ImageCx<'_>, view: &mut DocView, i: usize, image: &pdfcraft_e
 
 /// Done in crop mode: it ends, and the picture `image` of the selection keeps the box kept (or
 /// all of itself again).
-fn apply_crop_mode(view: &mut DocView, image: &pdfcraft_engine::PageImage) {
+pub(crate) fn apply_crop_mode(view: &mut DocView, image: &pdfcraft_engine::PageImage) {
     let Some(s) = view.image_selection.as_mut() else { return };
     let Some(keep) = s.crop.take().map(|mode| mode.keep) else { return };
     let (page, index) = (s.page, s.index);
@@ -479,25 +478,6 @@ fn apply_crop_mode(view: &mut DocView, image: &pdfcraft_engine::PageImage) {
         }
     } else if image.visible_rect != Some(keep) {
         view.pending_edit = Some(Edit::EditPageImage { page, index, change: pdfcraft_engine::ImageEdit::Crop(keep) });
-    }
-}
-
-/// The keys of the picture selected on `page`, a page being drawn; nothing while the page is off the
-/// screen, as pages near it are drawn too. In crop mode Enter applies the crop (Escape leaving it and
-/// Delete are the key pass's, `canvas::key_order`). Nothing while a text field has the keyboard.
-pub(crate) fn picture_keys(ctx: &egui::Context, keys: PageKeys, view: &mut DocView, page: usize, images: &[pdfcraft_engine::PageImage]) {
-    if ctx.egui_wants_keyboard_input() || view.page_screen_rect(page).is_none() {
-        return;
-    }
-    let Some(s) = view.image_selection.as_ref().filter(|s| s.page == page) else { return };
-    let index = s.index;
-    let key = |k: egui::Key| keys.pressed(ctx, k);
-    let image = images.get(index);
-    if s.crop.is_some()
-        && key(egui::Key::Enter)
-        && let Some(image) = image
-    {
-        apply_crop_mode(view, image);
     }
 }
 
