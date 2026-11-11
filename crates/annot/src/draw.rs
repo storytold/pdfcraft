@@ -495,13 +495,53 @@ mod nfc_tests {
         let (_, r) = annot_ref(&mut doc, 0, idx)?;
         assert_eq!(pdfcraft_fonts::undrawn_mark(&annot_dict(&doc, r)), None);
 
-        // Editing the text box with decomposed text also composes to NFC and draws without `?`.
+        // Editing the text box with decomposed text fits the box height to the NFC-composed width
+        // (matching an edit with precomposed NFC text) and draws without `?`.
+        let nfd_line = "e\u{0301}e\u{0301}e\u{0301}e\u{0301}e\u{0301}e\u{0301}e\u{0301}e\u{0301}";
+        let nfc_line = "éééééééé";
+        let narrow = add_annotation(
+            &mut doc,
+            &NewAnnotation {
+                page: 0,
+                shape: Shape::TextBox { rect: [72.0, 500.0, 134.0, 530.0], font_size: 12.0 },
+                style: Style::default(),
+                contents: "x".into(),
+                author: String::new(),
+            },
+            &Meta::default(),
+        )?;
+        set_contents(&mut doc, 0, narrow, nfd_line, &Meta::default())?;
+        let (_, nr) = annot_ref(&mut doc, 0, narrow)?;
+        let nfd_rect = annot_dict(&doc, nr).get(b"Rect").cloned();
+        set_contents(&mut doc, 0, narrow, nfc_line, &Meta::default())?;
+        let nfc_rect = annot_dict(&doc, nr).get(b"Rect").cloned();
+        assert_eq!(nfd_rect, nfc_rect);
+
         set_contents(&mut doc, 0, idx, "Re\u{0301}sume\u{0301}", &Meta::default())?;
         let annots = summaries(&doc);
         let info = annots.get(idx).ok_or("missing edited annotation")?;
         assert_eq!(info.contents.as_deref(), Some("Résumé"));
         let (_, r) = annot_ref(&mut doc, 0, idx)?;
         assert_eq!(pdfcraft_fonts::undrawn_mark(&annot_dict(&doc, r)), None);
+
+        // Redaction overlay text in NFD composes before `undrawable_text` checks WinAnsi coverage.
+        let red = add_annotation(
+            &mut doc,
+            &NewAnnotation {
+                page: 0,
+                shape: Shape::Redact {
+                    quads: vec![[72.0, 400.0, 180.0, 400.0, 72.0, 420.0, 180.0, 420.0]],
+                    overlay: "Cafe\u{0301}".into(),
+                    look: Default::default(),
+                },
+                style: Style::default(),
+                contents: String::new(),
+                author: String::new(),
+            },
+            &Meta::default(),
+        )?;
+        let (_, red_r) = annot_ref(&mut doc, 0, red)?;
+        assert_eq!(annot_dict(&doc, red_r).get(b"OverlayText").and_then(Object::as_string).map(|s| s.to_text()), Some("Café".into()));
         Ok(())
     }
 }

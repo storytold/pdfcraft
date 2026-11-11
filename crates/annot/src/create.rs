@@ -313,11 +313,15 @@ pub(crate) fn on_side(rect: [f64; 4], side: Side, end: [f64; 2]) -> bool {
 
 /// Add a comment; returns its index in the page's `/Annots`.
 pub fn add_annotation(doc: &mut Document, new: &NewAnnotation, meta: &Meta) -> Result<usize, AnnotError> {
+    use unicode_normalization::UnicodeNormalization;
+
     let page = page_ref(doc, new.page)?;
     let style = &new.style;
     validate_style(style)?;
     let rect = rect_for(&new.shape, style)?;
-    let mut d = base_dict(new.shape.subtype(), rect, page, &new.contents, &new.author, meta);
+    let contents_nfc: String = new.contents.nfc().collect();
+    let author_nfc: String = new.author.nfc().collect();
+    let mut d = base_dict(new.shape.subtype(), rect, page, &contents_nfc, &author_nfc, meta);
     d.set(b"Subj".to_vec(), PdfString::text(subject(&new.shape)));
     if style.fill_opacity.into_iter().chain(style.text_opacity).any(|o| !o.is_finite()) {
         return Err(AnnotError::Invalid("invalid opacity".into()));
@@ -345,7 +349,10 @@ pub fn add_annotation(doc: &mut Document, new: &NewAnnotation, meta: &Meta) -> R
             d.set(b"C".to_vec(), rgb(style.color));
             d.set(b"QuadPoints".to_vec(), num_array(&quads.concat()));
         }
-        Shape::Redact { quads, overlay, look } => set_redaction_properties(&mut d, style, quads, overlay, look),
+        Shape::Redact { quads, overlay, look } => {
+            let overlay_nfc: String = overlay.nfc().collect();
+            set_redaction_properties(&mut d, style, quads, &overlay_nfc, look);
+        }
         Shape::Rectangle { .. } | Shape::Oval { .. } => {
             d.set(b"C".to_vec(), rgb(style.color));
             if let Some(f) = style.fill {
@@ -508,7 +515,7 @@ pub fn add_annotation(doc: &mut Document, new: &NewAnnotation, meta: &Meta) -> R
                 if matches!(turn, 90 | 180 | 270) {
                     d.set(b"PCTextRotate".to_vec(), Object::Int(turn));
                 }
-                let rect = fit_thai_ink(rect, turn, &new.contents, size, 2.0 + appearance::border_width(&d));
+                let rect = fit_thai_ink(rect, turn, &contents_nfc, size, 2.0 + appearance::border_width(&d));
                 // An oval or a circle goes around the text box, its text wrapped as displayed:
                 // after `/PCTextRotate`, which swaps the box's sides on a quarter-turned page.
                 shape_text_box(&mut d, rect, style.border_shape, style.width);
@@ -528,7 +535,7 @@ pub fn add_annotation(doc: &mut Document, new: &NewAnnotation, meta: &Meta) -> R
     {
         return Err(AnnotError::Undrawable(pdfcraft_fonts::undrawable_message(what, c)));
     }
-    refuse_undrawable_thai(d.name(b"Subtype") == Some(b"FreeText"), &new.contents)?;
+    refuse_undrawable_thai(d.name(b"Subtype") == Some(b"FreeText"), &contents_nfc)?;
     let r = doc.add(Object::Dict(d.clone()));
     draw_appearance(doc, r)?;
     let mut list = annots(doc, page);

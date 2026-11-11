@@ -298,9 +298,13 @@ pub fn with_replies_and_popups(doc: &Document, list: &[Object], doomed: impl Int
 /// new text: the wrap width and top edge stay, the height fits the wrapped lines. A circle snug
 /// around its text stays snug around the new text, centred where it was.
 pub fn set_contents(doc: &mut Document, page: usize, index: usize, text: &str, meta: &Meta) -> Result<(), AnnotError> {
+    use unicode_normalization::UnicodeNormalization;
+
     let (_, r) = annot_ref(doc, page, index)?;
     let before = annot_dict(doc, r);
     let free_text = before.name(b"Subtype") == Some(b"FreeText");
+    let nfc: String = text.nfc().collect();
+    let text = nfc.as_str();
     refuse_undrawable_thai(free_text, text)?;
     let snug = free_text && is_snug(&before);
     // The text keeps the look it is drawn with (`/DA`, or `/DS` where it sets one).
