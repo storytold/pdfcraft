@@ -1,4 +1,5 @@
 use super::spool;
+use crate::matching_paper;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum Orientation {
@@ -47,6 +48,20 @@ pub fn booklet_duplex(subset: BookletSubset) -> spool::Duplex {
     match subset {
         BookletSubset::BothSides => spool::Duplex::ShortEdge,
         BookletSubset::FrontOnly | BookletSubset::BackOnly => spool::Duplex::Off,
+    }
+}
+
+/// What a booklet's job asks the printer for, given whether its driver takes two-sided settings
+/// from other programs (`two_sided`, as the printer list reports it): [`booklet_duplex`], only as
+/// Acrobat enables two-sided printing "if available". A driver that doesn't (`Some(false)`) would
+/// refuse a two-sided job and print nothing, so both sides ask for nothing and its own setting
+/// applies, such as manual two-sided printing chosen in its Properties (#5772). A driver of
+/// unknown support is asked for two-sided as before; one side on its own is always one-sided.
+pub fn booklet_job_duplex(subset: BookletSubset, two_sided: Option<bool>) -> Option<spool::Duplex> {
+    match booklet_duplex(subset) {
+        spool::Duplex::Off => Some(spool::Duplex::Off),
+        _ if two_sided == Some(false) => None,
+        two_sided_duplex => Some(two_sided_duplex),
     }
 }
 
@@ -164,6 +179,10 @@ pub struct Settings {
     /// resolution before it is placed on the paper. The engine does the rendering; `impose` is
     /// then given the image-only document.
     pub raster: Option<Raster>,
+    /// Print a selected area (Acrobat's "print selected area"): only this rectangle of the one
+    /// page in `pages`, in that page's display space (points, origin at the bottom-left of the
+    /// page as shown, y up), sized like a page of its own by a [`Layout::Size`] choice.
+    pub area: Option<[f64; 4]>,
 }
 
 /// How pages are rendered when printing as image.
@@ -205,6 +224,7 @@ impl Default for Settings {
             content: Content::default(),
             raster: None,
             crops: Vec::new(),
+            area: None,
         }
     }
 }
@@ -281,4 +301,52 @@ pub fn cups_media(index: usize) -> Option<&'static str> {
 /// dialog's jobs and `doc_print`'s alike.
 pub fn media_option(index: usize) -> Option<(String, String)> {
     cups_media(index).map(|m| ("media".to_string(), m.to_string()))
+}
+
+/// Format custom dimensions in points as a CUPS custom media string (e.g. `Custom.300x500`).
+pub fn custom_media(size: (f64, f64)) -> String {
+    let format_dim = |d: f64| {
+        if (d.round() - d).abs() < 1e-4 {
+            format!("{:.0}", d.round())
+        } else {
+            let s = format!("{d:.2}");
+            s.trim_end_matches('0').trim_end_matches('.').to_string()
+        }
+    };
+    format!("Custom.{}x{}", format_dim(size.0), format_dim(size.1))
+}
+
+/// The CUPS media name for a paper by its name and dimensions.
+///
+/// Matches standard [`PAPERS`] presets by size first, then a clean driver-reported keyword,
+/// falling back to custom media dimensions (`Custom.<width>x<height>`).
+pub fn paper_media(name: Option<&str>, size: (f64, f64)) -> String {
+    if let Some(index) = matching_paper(size)
+        && let Some(media) = cups_media(index)
+    {
+        return media.to_string();
+    }
+    if let Some(n) = name {
+        let is_dim = n.split_once(['x', 'X', '*']).is_some_and(|(w, h)| {
+            let parse_dim = |d: &str| {
+                let d = d.trim().trim_start_matches("Custom.").trim_start_matches("custom.").trim_end_matches("points").trim_end_matches("pt").trim();
+                d.parse::<f64>().is_ok()
+            };
+            parse_dim(w) && parse_dim(h)
+        });
+        let is_clean = !n.is_empty()
+            && n.len() <= 64
+            && !n.contains(' ')
+            && !is_dim
+            && n.chars().all(|c| c.is_ascii_graphic() && !matches!(c, '/' | ':' | '=' | '"' | '\'' | '\\' | '{'));
+        if is_clean {
+            return n.to_string();
+        }
+    }
+    custom_media(size)
+}
+
+/// The media job option (`("media", <name>)`) for a paper by its optional name and dimensions.
+pub fn paper_media_option(name: Option<&str>, size: (f64, f64)) -> (String, String) {
+    ("media".to_string(), paper_media(name, size))
 }
