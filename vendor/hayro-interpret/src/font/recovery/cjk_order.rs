@@ -780,6 +780,9 @@ pub(crate) struct FontReading {
 impl Rule for StandardCjkGlyphOrder {
     const RULE: RecoveryRule = RecoveryRule::StandardCjkGlyphOrder;
     const KINDS: &'static [FontKind] = &[FontKind::CidTrueType, FontKind::CidCff];
+    /// Its guard weighs each reading by how common the characters it reads are across the
+    /// document, and pools subsets of one font.
+    const NEEDS_DOCUMENT_USAGE: bool = true;
     type Guard = FontReading;
 
     fn guard(font: &FontFacts<'_>) -> Option<FontReading> {

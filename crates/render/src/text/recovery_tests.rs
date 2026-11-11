@@ -306,7 +306,7 @@ fn cff_index(items: &[Vec<u8>]) -> Vec<u8> {
 
 /// A bare CFF program whose glyphs 1, 2, 3 … are named `names` (custom strings) and drawn by
 /// codes 1, 2, 3 … of its built-in encoding (format 0); every glyph is empty.
-fn cff_with_names(names: &[&str]) -> Vec<u8> {
+pub(super) fn cff_with_names(names: &[&str]) -> Vec<u8> {
     // Operands as five-byte integers, so the offsets don't change the Top DICT's size.
     let int = |v: usize| {
         let mut b = vec![29];

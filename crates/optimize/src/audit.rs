@@ -495,9 +495,10 @@ mod tests {
         assert_eq!(bytes_of(&after_self_ref, SpaceCategory::StructureInfo), struct_before);
 
         // Editing the object stream itself detaches its members from compressed stream sizing.
+        // The edit leaves the stream readable: one that broke `/First` would leave no members.
         edited
             .update_dict(ObjRef::new(stm_num, 0), |d| {
-                d.set(b"First".to_vec(), Object::Int(999_999));
+                d.set(b"Edited".to_vec(), Object::Bool(true));
             })
             .unwrap();
         let after_stream_edit = audit_space(&edited, 0);

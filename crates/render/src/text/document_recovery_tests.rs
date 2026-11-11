@@ -154,10 +154,11 @@ fn a_recovery_scope_is_shared_by_renderers_of_the_same_bytes_only() {
 
 use super::cjk_fixture::{Doc, Font, Show};
 
-/// A document's survey, run as Copy with formatting runs it before reading page 0.
+/// A document's survey, run as Copy with formatting runs it before reading page 0, for a rule
+/// that needs the usage of every kind of font the survey counts (no rule of this layer does).
 fn surveyed(doc: &Doc) -> Arc<RecoveryDocument> {
     let pdf = parse(doc.build());
-    let document = Arc::new(RecoveryDocument::new());
+    let document = Arc::new(RecoveryDocument::needing_usage_for_tests());
     extract_page_recovering(&pdf, 0, &settings(Some(document.clone()))).unwrap();
     assert!(document.prepared());
     document
@@ -267,7 +268,7 @@ fn a_survey_past_its_cap_leaves_the_document_without_evidence() {
 #[test]
 fn a_cancelled_survey_keeps_nothing() {
     let pdf = parse(Doc { fonts: vec![Font::truetype("ABCDEF+Kai", 20)], pages: vec![vec![Show::Text(0, vec![1])]] }.build());
-    let document = Arc::new(RecoveryDocument::new());
+    let document = Arc::new(RecoveryDocument::needing_usage_for_tests());
     let cancelled = InterpreterSettings { cancelled: Some(Arc::new(std::sync::atomic::AtomicBool::new(true))), ..settings(Some(document.clone())) };
     document.prepare(&pdf, &cancelled);
     assert!(!document.prepared());
@@ -327,4 +328,88 @@ fn a_group_keeps_its_name_and_each_members_counts() {
         vec![(b"Kai".to_vec(), vec![(vec![(10, 2), (11, 1)], 3), (vec![(20, 1), (21, 1)], 3)])],
         "CID 7, left out of the map, counts among the glyphs shown"
     );
+}
+
+/// A document is surveyed only for a rule that reads its usage evidence
+/// (`Rule::NEEDS_DOCUMENT_USAGE`). The standard CJK glyph orders do, for the kinds of font the
+/// survey counts, so a document is surveyed once, the first time it is read, as for a test
+/// document that needs the usage of every surveyed kind.
+#[test]
+fn a_document_is_surveyed_only_for_a_rule_that_needs_its_usage() {
+    let doc = Doc {
+        fonts: vec![Font::truetype("ABCDEF+Kai", 20), Font::cff("ABCDEF+Ming", vec![1, 2])],
+        pages: vec![vec![Show::Text(0, vec![1, 2]), Show::Text(1, vec![1])]],
+    };
+    let pdf = parse(doc.build());
+    let document = Arc::new(RecoveryDocument::new());
+    let before = recovery_counters();
+    extract_page_recovering(&pdf, 0, &settings(Some(document.clone()))).unwrap();
+    extract_page_recovering(&pdf, 0, &settings(Some(document.clone()))).unwrap();
+    let cost = recovery_counters().since(&before);
+    assert!(document.prepared());
+    assert_eq!((cost.survey_runs, cost.survey_pages, cost.survey_glyphs), (1, 1, 3), "{cost:?}");
+    assert_eq!(document.surveyed_fonts(), surveyed(&doc).surveyed_fonts());
+}
+
+/// The survey reads of a font only what it counts by, without building the font, and reads it
+/// as the built font does: the same fonts counted, of the same kind and glyph count, with the
+/// same number for every code. Here over TrueType programs through the identity map, a map
+/// stream, a short one and one of more than 65,536 entries, `Identity-V`, an accepted and a
+/// rejected `post` version; a CID-keyed CFF program, one with a map stream, a CFF program that
+/// is not CID-keyed, a Type 1 program and bytes that are no program; and fonts the survey
+/// passes over before reading a program.
+#[test]
+fn the_survey_reads_each_font_as_the_built_font_does() {
+    use super::cjk_fixture::Program;
+    use hayro::hayro_interpret::font::test_hooks::survey_classifications;
+    const TYPE1: &[u8] = include_bytes!("../../../../vendor/hayro-interpret/assets/FoxitFixed.pfb");
+    let with = |base: &str, program: Program| Font { program, ..Font::truetype(base, 1) };
+    let mut mapped = Font::truetype("AAAAAA+Mapped", 40);
+    mapped.cid_to_gid = Some((0..40).map(|cid| 39 - cid).collect());
+    let mut short = Font::truetype("AAAAAB+Short", 40);
+    short.cid_to_gid = Some(vec![0, 5, 6]);
+    let mut wrapped = Font::truetype("AAAAAC+Wrapped", 300);
+    wrapped.cid_to_gid = Some((0..70_000_u32).map(|i| u16::try_from(i % 300).unwrap()).collect());
+    let mut vertical = Font::truetype("AAAAAD+Vertical", 20);
+    vertical.encoding = "Identity-V";
+    let mut cff_mapped = Font::cff("AAAAAE+CffMapped", vec![5, 6]);
+    cff_mapped.cid_to_gid = Some(vec![0, 1, 2]);
+    let mut adobe = Font::truetype("AAAAAF+Adobe", 20);
+    adobe.ordering = "CNS1";
+    let mut named = Font::truetype("AAAAAG+Named", 20);
+    named.to_unicode = true;
+    let fonts = vec![
+        Font::truetype("ABCDEF+Plain", 30),
+        mapped,
+        short,
+        wrapped,
+        vertical,
+        with("ABCDEG+Swapped", Program::TrueTypePost(20, 0x0000_0003)),
+        with("ABCDEH+BadPost", Program::TrueTypePost(20, 0x0004_0000)),
+        Font::cff("ABCDEI+Cff", vec![3, 9, 12]),
+        cff_mapped,
+        with("ABCDEJ+Bare", Program::Raw(super::recovery_tests::cff_with_names(&["A", "B"]))),
+        with("ABCDEK+Type1", Program::Raw(TYPE1.to_vec())),
+        with("ABCDEL+Junk", Program::Raw(b"no font program".to_vec())),
+        adobe,
+        named,
+    ];
+    let shows = (0..fonts.len()).map(|f| Show::Text(f, vec![1, 2, 7])).collect();
+    let pdf = parse(Doc { fonts, pages: vec![shows] }.build());
+    let mut found = survey_classifications(&pdf, &InterpreterSettings::default());
+    found.sort_by_key(|(object, ..)| *object);
+    assert_eq!(found.len(), 14);
+    for (object, light, built) in &found {
+        assert!(
+            light == built,
+            "font object {object:?}: {:?} against {:?}",
+            light.as_ref().map(|l| (&l.0, l.1)),
+            built.as_ref().map(|b| (&b.0, b.1))
+        );
+    }
+    let kinds: Vec<Option<(&str, Option<u32>)>> = found.iter().map(|(_, light, _)| light.as_ref().map(|(k, g, _)| (k.as_str(), *g))).collect();
+    let tt = |glyphs| Some(("CidTrueType", Some(glyphs)));
+    assert_eq!(kinds, vec![tt(30), tt(40), tt(40), tt(300), tt(20), tt(20), None, Some(("CidCff", Some(4))), None, None, None, None, None, None]);
+    let wrapped = &found[3].1.as_ref().unwrap().2;
+    assert_eq!((wrapped[7], wrapped[5000]), (Some((65_536 + 7) % 300), Some(5000 % 300)), "CID 7 takes entry 65,543; CID 5000 its own");
 }

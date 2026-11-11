@@ -6,18 +6,19 @@
 //! ([`crate::InterpreterSettings::recovery_document`]), keeps each font's decisions for the whole
 //! document instead: a font is decided once, whichever page asks first and on whichever thread.
 //!
-//! It also holds the document's evidence for rules that read more than one font's own facts:
-//! how often each glyph of a font is shown across the document, and the fonts that are subsets
-//! of one font ([`FontUsage`], from the survey, `super::survey`). [`RecoveryDocument::prepare`]
-//! surveys the document once, before a page's fonts are decided, so every decision sees the
-//! whole document's evidence whichever page asks first.
+//! It also holds the document's evidence for rules that read more than one font's own facts
+//! (`Rule::NEEDS_DOCUMENT_USAGE`): how often each glyph of a font is shown across the document,
+//! and the fonts that are subsets of one font ([`FontUsage`], from the survey, `super::survey`).
+//! [`RecoveryDocument::prepare`] surveys the document once, before a page's fonts are decided,
+//! so every decision sees the whole document's evidence whichever page asks first; when no rule
+//! needs that evidence for a kind of font the survey counts, it surveys nothing.
 //!
 //! The guards are a function of the font and that evidence, so a decision kept here reads every
 //! page the same as a decision made on that page would. A font is known by [`font_key`]: its
 //! dictionary and the object it is, since a document may write two font objects with the same
 //! dictionary (the same descendant and program) and show different glyphs through each.
 
-use super::{Counter, Guards, count};
+use super::{Counter, FontKind, Guards, count};
 use crate::{CacheKey, InterpreterSettings};
 use hayro_syntax::Pdf;
 use hayro_syntax::object::Dict;
@@ -49,6 +50,9 @@ pub struct RecoveryDocument {
     /// Held while one thread surveys, so the others wait for its evidence instead of
     /// surveying too.
     surveying: Mutex<()>,
+    /// Tests: survey as if a rule needed the usage of every kind of font the survey counts.
+    #[cfg(feature = "test-counters")]
+    usage_for_tests: bool,
 }
 
 /// What the survey found in a document.
@@ -143,25 +147,57 @@ impl RecoveryDocument {
         Self::default()
     }
 
-    /// Survey `pdf` for the rules that read the whole document's evidence, unless that is
+    /// Test hook: a document whose survey runs as if a rule needed the usage evidence of every
+    /// kind of font the survey counts, so the survey can be tested without such a rule.
+    #[cfg(feature = "test-counters")]
+    pub fn needing_usage_for_tests() -> Self {
+        Self {
+            usage_for_tests: true,
+            ..Self::default()
+        }
+    }
+
+    /// The kinds of font the survey is to count: those it can count that some rule reads
+    /// usage evidence for (`Rule::NEEDS_DOCUMENT_USAGE`).
+    fn usage_kinds(&self) -> Vec<FontKind> {
+        #[cfg(feature = "test-counters")]
+        let all = self.usage_for_tests;
+        #[cfg(not(feature = "test-counters"))]
+        let all = false;
+        super::survey::SURVEYED_KINDS
+            .iter()
+            .copied()
+            .filter(|kind| all || Guards::need_usage(*kind))
+            .collect()
+    }
+
+    /// Survey `pdf` for the rules that read the whole document's usage evidence, unless that is
     /// done: once per document, before any of its fonts is decided (`extract_page_recovering`
-    /// calls it first). Bounded by counts, not time (see `recovery::survey`); a render pool runs
-    /// it outside a page's time limit. A read cancelled through `settings.cancelled` keeps
-    /// nothing, and the next call surveys again.
+    /// calls it first). When no rule needs that evidence for a kind of font the survey counts
+    /// (`Rule::NEEDS_DOCUMENT_USAGE`), nothing is read: the document is prepared, with no
+    /// evidence for any font. Bounded by counts, not time (see `recovery::survey`); a render
+    /// pool runs it outside a page's time limit. A read cancelled through `settings.cancelled`
+    /// keeps nothing, and the next call surveys again.
     pub fn prepare(&self, pdf: &Pdf, settings: &InterpreterSettings) {
         if self.evidence.get().is_some() {
+            return;
+        }
+        let kinds = self.usage_kinds();
+        if kinds.is_empty() {
+            let _ = self.evidence.set(Evidence::Counted(HashMap::new()));
             return;
         }
         let _surveying = lock(&self.surveying);
         if self.evidence.get().is_some() {
             return;
         }
-        if let Some(evidence) = super::survey::survey(pdf, settings) {
+        if let Some(evidence) = super::survey::survey(pdf, settings, &kinds) {
             let _ = self.evidence.set(evidence);
         }
     }
 
-    /// Whether [`Self::prepare`] has surveyed the document.
+    /// Whether [`Self::prepare`] has run for the document (and surveyed it, if a rule needs
+    /// that).
     pub fn prepared(&self) -> bool {
         self.evidence.get().is_some()
     }

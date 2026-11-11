@@ -11,6 +11,10 @@ pub(super) enum Program {
     TrueType(u16),
     /// A CID-keyed CFF program (`/FontFile3 /CIDFontType0C`) with these CIDs.
     Cff(Vec<u16>),
+    /// A TrueType program of this many glyphs whose `post` table has this version.
+    TrueTypePost(u16, u32),
+    /// These bytes as `/FontFile3 /CIDFontType0C` (under a `CIDFontType0` descendant).
+    Raw(Vec<u8>),
     /// No embedded program.
     None,
 }
@@ -98,7 +102,7 @@ impl Doc {
             };
             objects.push((type0_dict, None));
             let (subtype, file_key) = match font.program {
-                Program::Cff(_) => ("CIDFontType0", "/FontFile3"),
+                Program::Cff(_) | Program::Raw(_) => ("CIDFontType0", "/FontFile3"),
                 _ => ("CIDFontType2", "/FontFile2"),
             };
             let c2g = match &font.cid_to_gid {
@@ -130,6 +134,11 @@ impl Doc {
                     ("".into(), pdfcraft_testkit::truetype::subset(*glyphs, &drawn, pdfcraft_testkit::truetype::Cmap::None, None))
                 }
                 Program::Cff(cids) => ("/Subtype /CIDFontType0C".into(), pdfcraft_testkit::cff::cid_keyed(cids)),
+                Program::TrueTypePost(glyphs, post) => {
+                    let drawn = self.codes_of(i).into_iter().map(|c| font.glyph_of(c)).collect::<Vec<_>>();
+                    ("".into(), pdfcraft_testkit::truetype::subset(*glyphs, &drawn, pdfcraft_testkit::truetype::Cmap::None, Some(*post)))
+                }
+                Program::Raw(bytes) => ("/Subtype /CIDFontType0C".into(), bytes.clone()),
                 Program::None => ("".into(), Vec::new()),
             };
             objects.push((program_stream.0, Some(program_stream.1)));
