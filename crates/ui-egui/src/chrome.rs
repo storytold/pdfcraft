@@ -323,13 +323,30 @@ fn tab_menu(app: &PdfCraftApp, ui: &mut egui::Ui, index: usize, action: &mut Opt
     }
 }
 
+/// Info needed to draw the floating ghost of a tab being dragged, mirroring the tab's content.
+struct TabGhost<'a> {
+    name: &'a str,
+    icon: &'a str,
+    dirty: bool,
+    /// The tab's rect in the strip (used for sizing the ghost identically).
+    rect: Rect,
+}
+
 /// A tab of `place`'s strip (its tabs `slots`) being dragged (`dragged`: its index, and whether it
 /// was let go this frame). It moves the tab along the strip (#1537): a line marks the gap it will
 /// land in, and letting go drops it there. Over the right half of a page area that isn't split, or
 /// over split view's other pane, a hint shows where it would go instead, and letting go puts it
 /// there (`crate::panes`). `busy` is a close or menu choice this frame, which wins. Returns the
 /// pointer's x while the tab moves along the strip, for scrolling at the strip's edges.
-fn tab_drag(app: &mut PdfCraftApp, ui: &egui::Ui, slots: &[(usize, Rect)], dragged: Option<(usize, bool)>, place: Place, busy: bool) -> Option<f32> {
+fn tab_drag(
+    app: &mut PdfCraftApp,
+    ui: &egui::Ui,
+    slots: &[(usize, Rect)],
+    dragged: Option<(usize, bool)>,
+    place: Place,
+    busy: bool,
+    ghost: Option<TabGhost<'_>>,
+) -> Option<f32> {
     let (from, released) = dragged?;
     let pos = ui.ctx().pointer_latest_pos()?;
     match app.drop_target(pos, place) {
@@ -352,18 +369,90 @@ fn tab_drag(app: &mut PdfCraftApp, ui: &egui::Ui, slots: &[(usize, Rect)], dragg
                 let marker = marker.clamp(clip.left() + 1.0, (clip.right() - 1.0).max(clip.left() + 1.0));
                 ui.painter().vline(marker, span.shrink(4.0), Stroke::new(2.0, t.accent));
             }
+            if let Some(ghost) = ghost {
+                paint_tab_ghost(ui, pos, &ghost);
+            }
             Some(x)
         }
         target => {
             if !released {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
                 app.panes.drop_hint = app.drop_hint_rect(target);
+                if let Some(ghost) = ghost {
+                    paint_tab_ghost(ui, pos, &ghost);
+                }
             } else if !busy {
                 app.drop_tab(from, target);
             }
             None
         }
     }
+}
+
+/// Draw a semi-transparent floating copy of the dragged tab at the pointer position, as browsers
+/// do: the tab follows the cursor with a slight lift (drop shadow), giving clear visual feedback
+/// that the tab is in motion and where it will land.
+fn paint_tab_ghost(ui: &egui::Ui, pointer: egui::Pos2, ghost: &TabGhost<'_>) {
+    let t = Tokens::get(ui.ctx());
+    let tab_size = ghost.rect.size();
+    // Centre the ghost horizontally on the pointer, keeping its vertical position in the strip row.
+    let ghost_min = pointer - vec2(tab_size.x / 2.0, tab_size.y / 2.0);
+    let ghost_rect = Rect::from_min_size(ghost_min, tab_size);
+
+    // Paint on the Tooltip layer so the ghost floats above all other UI.
+    let layer = egui::LayerId::new(egui::Order::Tooltip, egui::Id::unique("tab-drag-ghost"));
+    let painter = ui.ctx().layer_painter(layer);
+
+    // Drop shadow for the floating effect.
+    let shadow = egui::Shadow { offset: [0, 4], blur: 12, spread: 2, color: Color32::from_black_alpha(60) };
+    painter.add(shadow.as_shape(ghost_rect, CornerRadius { nw: 7, ne: 7, sw: 0, se: 0 }));
+
+    // Ghost tab background at ~80% opacity.
+    let bg = t.chrome.gamma_multiply(0.95);
+    painter.rect_filled(ghost_rect, CornerRadius { nw: 7, ne: 7, sw: 0, se: 0 }, bg);
+    painter.rect_stroke(
+        ghost_rect.shrink(0.5),
+        CornerRadius { nw: 7, ne: 7, sw: 0, se: 0 },
+        Stroke::new(1.0, t.divider.gamma_multiply(0.6)),
+        egui::StrokeKind::Inside,
+    );
+
+    // Icon and label — painted into a child UI that targets the ghost layer, so that
+    // `icons::paint` (which uses `ui.painter()`) and text galleys land on the right layer.
+    let font = theme::regular(13.0);
+    let label_color = t.text.gamma_multiply(0.80);
+    let label_galley = crate::bidi::layout_ltr(ui, ghost.name.to_owned(), font, label_color);
+    let height = tab_size.y;
+    painter.galley(
+        ghost_rect.min + vec2(28.0, (height - label_galley.size().y) / 2.0),
+        label_galley,
+        label_color,
+    );
+
+    // Icon — build a temporary child UI on the ghost layer for image painting.
+    let mut ghost_ui = ui.new_child(
+        UiBuilder::new()
+            .layer_id(layer)
+            .max_rect(ghost_rect)
+            .sense(Sense::hover()),
+    );
+    let icon_color = t.accent.gamma_multiply(0.80);
+    icons::paint(
+        &mut ghost_ui,
+        Rect::from_min_size(ghost_rect.min + vec2(6.0, (height - 16.0) / 2.0), vec2(16.0, 16.0)),
+        ghost.icon,
+        15.0,
+        icon_color,
+    );
+
+    // Unsaved-changes dot, mirrored from the normal tab rendering.
+    if ghost.dirty {
+        let dot_center = ghost_rect.right_center() - vec2(16.0, 0.0);
+        painter.circle_filled(dot_center, 4.0, t.text.gamma_multiply(0.60));
+    }
+
+    // Apply transparency to the entire ghost layer so it looks lifted but not opaque.
+    ui.ctx().set_layer_opacity(layer, 0.82);
 }
 
 /// The tab strip of split view's second pane, in `strip`: its tabs share the width (no scrolling),

@@ -114,24 +114,16 @@ fn print_card<R>(
     content: impl FnOnce(&mut egui::Ui) -> R,
 ) -> R {
     let card_fill = if t.kind == theme::ThemeKind::Light { Color32::from_rgb(0xF7, 0xF8, 0xFA) } else { Color32::from_rgb(0x24, 0x24, 0x28) };
-    let card_id = ui.make_persistent_id(title);
-    let animated = crate::motion::animated(ui.ctx());
-
-    let is_hovered = ui.rect_contains_pointer(Rect::from_min_size(ui.cursor().min, vec2(width, min_height.unwrap_or(40.0))));
-    let hover_t = ui.ctx().animate_bool_with_time(card_id.with("hover"), is_hovered, if animated { 0.18 } else { 0.0 });
-    let border_color = t.border.lerp_to_gamma(t.text_muted.gamma_multiply(0.4), hover_t);
-
     egui::Frame::new()
         .fill(card_fill)
-        .stroke(Stroke::new(1.0, border_color))
+        .stroke(Stroke::new(1.0, t.border))
         .corner_radius(egui::CornerRadius::same(8))
         .inner_margin(egui::Margin::symmetric(12, 4))
         .show(ui, |ui| {
             ui.set_width(width);
             ui.set_max_width(width);
             if let Some(h) = min_height {
-                let current_h = ui.ctx().animate_value_with_time(card_id.with("min-h"), h, if animated { 0.15 } else { 0.0 });
-                ui.set_min_height(current_h);
+                ui.set_min_height(h);
             }
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 6.0;
@@ -149,7 +141,6 @@ fn print_card<R>(
 /// A segmented pill control for mutually exclusive choices in the Print dialog cards.
 fn segmented_pills<T: PartialEq + Copy>(ui: &mut egui::Ui, t: &Tokens, current: &mut T, options: &[(T, &str)]) -> bool {
     let mut changed = false;
-    let animated = crate::motion::animated(ui.ctx());
     egui::Frame::new()
         .fill(t.field)
         .stroke(Stroke::new(1.0, t.border))
@@ -167,12 +158,8 @@ fn segmented_pills<T: PartialEq + Copy>(ui: &mut egui::Ui, t: &Tokens, current: 
                     let (rect, resp) = ui.allocate_exact_size(vec2(w + 18.0, 24.0), egui::Sense::click());
                     resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::RadioButton, true, is_active, label));
 
-                    let pill_id = resp.id.with("pill-active");
-                    let active_factor = ui.ctx().animate_bool_with_time(pill_id, is_active, if animated { 0.15 } else { 0.0 });
-
-                    if active_factor > 0.001 {
-                        let fill = t.hover.lerp_to_gamma(t.accent, active_factor);
-                        ui.painter().rect(rect, egui::CornerRadius::same(12), fill, Stroke::NONE, egui::StrokeKind::Inside);
+                    if is_active {
+                        ui.painter().rect(rect, egui::CornerRadius::same(12), t.accent, Stroke::NONE, egui::StrokeKind::Inside);
                     } else {
                         let press = theme::Press::track(ui, &resp);
                         let fill = press.fill(Color32::TRANSPARENT, t.hover, t.pressed);
@@ -376,7 +363,7 @@ pub(crate) fn body(
                         let detecting = d.papers_loading();
                         ui.horizontal(|ui| {
                             let shown = if d.paper_is_custom() { d.paper_name().to_string() } else { tl!(&d.paper_name()).to_string() };
-                            craft_ui::ComboBox::from_id_salt("paper").selected_text(shown).width(180.0).show_ui(ui, |ui| {
+                            craft_ui::ComboBox::from_id_salt("paper").selected_text(shown).width(240.0).show_ui(ui, |ui| {
                                 if detecting {
                                     ui.add_enabled(false, egui::Label::new(tl!("Detecting paper…")));
                                 }
@@ -400,6 +387,19 @@ pub(crate) fn body(
                             if detecting {
                                 ui.label(egui::RichText::new(tl!("Detecting…")).small().color(t.text_muted));
                             }
+                        });
+                        if paper_clicked || d.paper != before {
+                            d.paper_overridden = true;
+                        }
+                        if paper_clicked && d.paper != before && d.paper == print::LABEL_PAPER && d.which != Which::Area {
+                            d.paper_before_label = Some(before);
+                            d.handling = Handling::Label;
+                            d.sheet = 0;
+                        }
+                        ui.end_row();
+
+                        ui.label("");
+                        ui.horizontal(|ui| {
                             let page_setup_tip = if spool::HAS_PRINTER_PREFERENCES {
                                 tl!("Selects paper size and orientation from the printer driver. For paper tray, print quality or other driver defaults, use Properties…")
                             } else {
@@ -432,17 +432,9 @@ pub(crate) fn body(
                             }
                             if d.paper_is_custom() && ui.button(tl!("Remove")).on_hover_text(tl!("Take this paper size off the list")).clicked() {
                                 d.remove_custom_paper();
-                                paper_clicked = true;
+                                d.paper_overridden = true;
                             }
                         });
-                        if paper_clicked || d.paper != before {
-                            d.paper_overridden = true;
-                        }
-                        if paper_clicked && d.paper != before && d.paper == print::LABEL_PAPER && d.which != Which::Area {
-                            d.paper_before_label = Some(before);
-                            d.handling = Handling::Label;
-                            d.sheet = 0;
-                        }
                         ui.end_row();
 
                         if d.custom_new.is_some() {
@@ -544,8 +536,8 @@ pub(crate) fn body(
                 });
 
                 // Card 3: Page Sizing & Handling
-                print_card(ui, t, tl!("Page Sizing & Handling"), Some("sliders-horizontal"), 452.0, Some(130.0), |ui| {
-                    ui.horizontal(|ui| {
+                print_card(ui, t, tl!("Page Sizing & Handling"), Some("sliders-horizontal"), 452.0, Some(124.0), |ui| {
+                    ui.horizontal_wrapped(|ui| {
                         for (h, label) in [
                             (Handling::Size, tl!("Size")),
                             (Handling::Poster, tl!("Poster")),
@@ -561,7 +553,7 @@ pub(crate) fn body(
                     });
                     ui.add_space(2.0);
                     ui.scope(|ui| {
-                        ui.set_min_height(50.0);
+                        ui.set_min_height(44.0);
                         match d.handling {
                         Handling::Size => {
                             ui.horizontal(|ui| {
@@ -692,7 +684,8 @@ pub(crate) fn body(
                             });
                             ui.horizontal(|ui| {
                                 ui.label(tl!("Binding:"));
-                                combo(ui, "binding", tl!("Binding:"), &mut d.binding, &[(Binding::Left, tl!("Left")), (Binding::Right, tl!("Right"))], 85.0);
+                                combo(ui, "binding", tl!("Binding:"), &mut d.binding, &[(Binding::Left, tl!("Left")), (Binding::Right, tl!("Right"))], 80.0);
+                                ui.add_space(8.0);
                                 let creep_label = ui.label(tl!("Creep:"));
                                 ui.add(egui::DragValue::new(&mut d.creep).range(0.0..=print::MAX_CREEP).speed(0.05).suffix(" pt"))
                                     .labelled_by(creep_label.id)
@@ -709,7 +702,7 @@ pub(crate) fn body(
                             t,
                             &mut d.orientation,
                             &[
-                                (Orientation::Auto, tl!("Auto portrait/landscape")),
+                                (Orientation::Auto, tl!("Auto")),
                                 (Orientation::Portrait, tl!("Portrait")),
                                 (Orientation::Landscape, tl!("Landscape")),
                             ],
@@ -718,42 +711,46 @@ pub(crate) fn body(
                 });
 
                 // Card 4: Comments & Forms
-                print_card(ui, t, tl!("Comments & Forms"), Some("message-square"), 452.0, Some(68.0), |ui| {
-                    combo(
-                        ui,
-                        "content",
-                        tl!("Comments & Forms"),
-                        &mut d.content,
-                        &[
-                            (Content::Document, tl!("Document")),
-                            (Content::DocumentAndMarkups, tl!("Document and markups")),
-                            (Content::DocumentAndStamps, tl!("Document and stamps")),
-                            (Content::FormFieldsOnly, tl!("Form fields only")),
-                        ],
-                        220.0,
-                    );
-                    ui.add_space(3.0);
-                    egui::CollapsingHeader::new(egui::RichText::new(crate::i18n::upper_label("Advanced")).font(theme::semibold(10.5)).color(t.text_faint))
-                        .id_salt("print-advanced")
-                        .default_open(d.as_image)
-                        .show(ui, |ui| {
-                            ui.horizontal(|ui| {
-                                ui.add(widgets::checkbox(&mut d.as_image, tl!("Print as image")));
-                                ui.add_enabled_ui(d.as_image, |ui| {
-                                    ui.label(tl!("Resolution:"));
-                                    let mut dpi = d.dpi.round() as u32;
-                                    combo(ui, "print-dpi", tl!("Resolution:"), &mut dpi, &[(150, "150 dpi"), (300, "300 dpi"), (600, "600 dpi")], 100.0);
-                                    d.dpi = f64::from(dpi);
-                                });
+                print_card(ui, t, tl!("Comments & Forms"), Some("message-square"), 452.0, None, |ui| {
+                    ui.horizontal(|ui| {
+                        combo(
+                            ui,
+                            "content",
+                            tl!("Comments & Forms"),
+                            &mut d.content,
+                            &[
+                                (Content::Document, tl!("Document")),
+                                (Content::DocumentAndMarkups, tl!("Document and markups")),
+                                (Content::DocumentAndStamps, tl!("Document and stamps")),
+                                (Content::FormFieldsOnly, tl!("Form fields only")),
+                            ],
+                            220.0,
+                        );
+                        let adv_label = crate::i18n::upper_label("Advanced");
+                        let is_open = d.show_advanced || d.as_image;
+                        if ui.button(adv_label).clicked() {
+                            d.show_advanced = !is_open;
+                        }
+                    });
+                    if d.show_advanced || d.as_image {
+                        ui.add_space(2.0);
+                        ui.horizontal(|ui| {
+                            ui.add(widgets::checkbox(&mut d.as_image, tl!("Print as image")));
+                            ui.add_enabled_ui(d.as_image, |ui| {
+                                ui.label(tl!("Resolution:"));
+                                let mut dpi = d.dpi.round() as u32;
+                                combo(ui, "print-dpi", tl!("Resolution:"), &mut dpi, &[(150, "150 dpi"), (300, "300 dpi"), (600, "600 dpi")], 100.0);
+                                d.dpi = f64::from(dpi);
                             });
-                            ui.label(
-                                egui::RichText::new(tl!(
-                                    "Use it when a printer skips text, shading or transparency. The print is no longer searchable text; with Print in grayscale, the pictures are grey."
-                                ))
-                                .small()
-                                .color(t.text_muted),
-                            );
                         });
+                        ui.label(
+                            egui::RichText::new(tl!(
+                                "Use it when a printer skips text, shading or transparency. The print is no longer searchable text; with Print in grayscale, the pictures are grey."
+                            ))
+                            .small()
+                            .color(t.text_muted),
+                        );
+                    }
                 });
             });
 

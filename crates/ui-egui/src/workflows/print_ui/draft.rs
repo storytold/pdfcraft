@@ -96,6 +96,7 @@ pub struct PrintDraft {
     /// Driver options set away from the printer's defaults, for `driver_options`' printer.
     pub driver_choices: std::collections::BTreeMap<String, String>,
     pub show_driver_options: bool,
+    pub show_advanced: bool,
     /// Why the printer's preferences window didn't open (Windows).
     pub driver_error: Option<String>,
     /// Label: turn a further 180°.
@@ -171,6 +172,7 @@ impl Default for PrintDraft {
             driver_options: None,
             driver_choices: Default::default(),
             show_driver_options: false,
+            show_advanced: false,
             driver_error: None,
             label_flip: false,
             crops: Vec::new(),
