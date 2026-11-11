@@ -14,23 +14,24 @@ use crate::model::{Area, Border, Common, Draw, ExclGroup, Field, Node, Prop, Pro
 use crate::prop_rules;
 
 /// Most property changes one form keeps, as many as it keeps presence or access changes. Of the
-/// 163 dynamic forms of 367, opened and given up to 50 generic interactions, 36 change properties:
-/// median 15, p90 134, at most 200 (Ontario Works 0983, colouring each field's text on open),
-/// so 50 times the most measured; the most property writes one form's scripts hold is 1,125.
+/// 245 dynamic forms of 500, opened and given 50 generic interactions, 79 keep property changes:
+/// median 21, p90 207, at most 1,431 (Ontario Works 0983, a tooltip for each field and a text
+/// colour, on open), so 7 times the most measured.
 pub const MAX_PROP_OVERRIDES: usize = 10_000;
 /// Most bytes of SOM paths, property paths and values those changes hold together. Measured:
-/// median 1,555 B, p90 12,716 B, at most 35,508 B (CFIA 5800), so about 30 times the most.
+/// median 2,122 B, p90 36,865 B, at most 240,796 B (Ontario Works 0983), so about 4 times the
+/// most.
 pub const MAX_PROP_OVERRIDE_BYTES: usize = 1 << 20;
 /// Longest value one change may set (a tooltip or a screen-reader text): the property budget
 /// of one whole object as the template is read ([`crate::parse::MAX_OBJECT_PROP_BYTES`]).
-/// The longest measured is 248 B (CFIA 5800's tooltips).
+/// The longest measured is 544 B.
 pub const MAX_PROP_VALUE: usize = crate::parse::MAX_OBJECT_PROP_BYTES;
 /// Most steps a property path takes from its object (the parser keeps 8 levels).
 const MAX_STEPS: usize = prop_rules::MAX_STEPS;
 const _: () = assert!(prop_rules::MAX_STEPS == crate::parse::MAX_PROP_DEPTH && prop_rules::MAX_VALUE == crate::parse::MAX_OBJECT_PROP_BYTES);
 /// Most property changes one object keeps, copies of the edges and corners the scripting host
-/// makes included (see [`crate::script::Overrides::set_prop`]). On the 163 dynamic forms of 367
-/// an object takes at most 3 (Indian passport PCC form), the deepest path 5 steps; a script
+/// makes included (see [`crate::script::Overrides::set_prop`]). On the 245 dynamic forms of 500
+/// an object takes at most 19, the deepest path 5 steps; a script
 /// that sets every attribute forms set on all of a border's edges and corners, with the copies
 /// the host makes of them, comes to about 40, so 64 leaves room. It bounds what one object can
 /// make (with [`prop_rules::MAX_INDEX`] and the steps), and so the work of laying it out again.

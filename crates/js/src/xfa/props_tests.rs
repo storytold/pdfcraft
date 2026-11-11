@@ -319,7 +319,7 @@ fn writes_are_read_back_in_the_run_and_handed_to_the_engine() {
     assert_eq!(o.effects, [set(som, "border#0/fill#0/color#0", Some("value"), "2,2,2"), set(som, "validate#0", Some("nullTest"), "error")]);
 }
 
-/// What forms write, as the 367 inventoried forms write it: a text property assigned directly
+/// What forms write, as public forms write it: a text property assigned directly
 /// (`assist.speak = …`), an edge by `getElement` (past the listed ones: the one function that
 /// decides it, `element_path`), the colour shorthands, validation messages.
 #[test]

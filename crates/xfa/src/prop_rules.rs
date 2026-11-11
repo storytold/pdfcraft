@@ -6,8 +6,8 @@
 /// Most steps a property path takes from its object: the template reader keeps 8 levels of
 /// property elements (`pdfcraft_xfa::parse::MAX_PROP_DEPTH`).
 pub const MAX_STEPS: usize = 8;
-/// Highest occurrence a step may name. On the 163 dynamic forms of 367 the highest a change names
-/// is 2; a border's edges and corners go to 3 and a validation message holds one text per test
+/// Highest occurrence a step may name. On the 245 dynamic forms of 500 the highest a change names
+/// is 3; a border's edges and corners go to 3 and a validation message holds one text per test
 /// and an unnamed one (4), so 7 leaves room; a higher one only multiplies what a path can make.
 pub const MAX_INDEX: usize = 7;
 /// Longest value one change may set, in bytes: the property budget of one whole object as the
