@@ -87,6 +87,17 @@ fn calculate_scripts_read_fields_and_set_the_value() {
     assert!(o.rc);
 }
 
+/// An array of field values copies each entry: one long string listed many times is held to
+/// the run's byte budget, not copied once per listing.
+#[test]
+fn an_array_of_values_stops_at_the_byte_budget() {
+    let fill = "var s = 'x'; while (s.length < 65536) s += s; var a = []; for (var i = 0; i < N; i++) a.push(s); getField('qty').value = a;";
+    let o = go(&fill.replace('N', "600"), &Event::field("Calculate", "total", ""));
+    assert!(o.error.as_deref().is_some_and(|e| e.contains("byte limit exceeded")), "{:?}", o.error);
+    let o = go(&fill.replace('N', "400"), &Event::field("Calculate", "total", ""));
+    assert_eq!(o.error, None);
+}
+
 /// `event.value` reads and writes as a plain value, numbers included, and the outcome says whether
 /// the script assigned it, even to the value it already had.
 #[test]
@@ -528,6 +539,7 @@ fn app_alert_titles_are_clipped_and_charged() {
         reset_calls: 0,
         reset_limit_exceeded: false,
         kept: 0,
+        retained: 0,
         dropped: 0,
     };
     h.alert(Message { title: Some("Order form".into()), ..Message::plain("Saved") });
@@ -1113,6 +1125,24 @@ mod xfa_model {
         assert_eq!(o.result.as_deref(), Some("7"));
     }
 
+    /// A copy of a subform costs its nodes, names and SOMs: instances of one with a long name
+    /// stop at the run's byte budget, well before the instance cap.
+    #[test]
+    fn instances_of_a_subform_with_long_names_stop_at_the_byte_budget() {
+        let mut f = form();
+        let table = &mut f.children[0].children[4];
+        assert_eq!(table.name, "table");
+        for row in &mut table.children {
+            row.children.push(field(&"n".repeat(1 << 20), "", "", false));
+        }
+        let ev = XfaEvent { activity: "click".into(), target: "form1[0].page1[0].go[0]".into(), ..Default::default() };
+        let o = run_xfa("for (var i = 0; i < 100; i++) table._row.addInstance(1); table._row.count", &ev, &XfaDoc::default(), &f, Limits::default());
+        assert_eq!(o.error, None, "{:?}", o.error);
+        let count: usize = o.result.as_deref().unwrap_or_default().parse().expect("a count");
+        assert!((3..50).contains(&count), "{count} instances");
+        assert_eq!(o.effects.iter().filter(|e| matches!(e, XfaEffect::AddInstance { .. })).count(), count - 2);
+    }
+
     /// On screen every page is a sheet of its own: `xfa.layout.sheet` counts it from 0, as
     /// `absPage` does (forms show `sheet(this) + 1`), and `sheetCount` is the page count.
     #[test]
@@ -1625,6 +1655,10 @@ mod formcalc {
 
     #[test]
     fn date2num_rejects_days_past_the_end_of_the_month() {
+        // A month name is read from the text's next few characters only, whatever follows.
+        let serial = calc(r#"Date2Num("2024-09-01")"#);
+        assert_eq!(calc(r#"Date2Num("September 1, 2024, and a note that runs on", "MMMM D, YYYY")"#), serial);
+        assert_eq!(calc(r#"Date2Num("Sep 1, 2024", "MMM D, YYYY")"#), serial);
         assert_eq!(calc(r#"Date2Num("2023-02-30")"#), "0");
         assert_eq!(calc(r#"Date2Num("31/04/2024", "DD/MM/YYYY")"#), "0");
         assert_eq!(calc(r#"Date2Num("2023-02-29")"#), "0");
@@ -2639,6 +2673,18 @@ fn a_plain_form_sees_the_xfa_version_but_not_installed() {
     assert_eq!(o.error, None);
     assert_eq!(o.value, "undefined number 3.5");
     assert_eq!(o.alerts, [Message::plain("old viewer")]);
+}
+
+/// Arrays assigned to several fields are held to one run-wide budget, and replacing a field's
+/// array frees its charge.
+#[test]
+fn retained_array_text_is_charged_across_fields() {
+    let fill = "var s = 'x'; while (s.length < 65536) s += s; var a = []; for (var i = 0; i < 320; i++) a.push(s);";
+    let one = |tail: &str| go(&format!("{fill} {tail}"), &Event::field("Calculate", "total", ""));
+    let o = one("getField('qty').textColor = a; getField('qty').textColor = a; getField('zip').textColor = ['RGB'];");
+    assert_eq!(o.error, None, "replacing an array frees its charge: {:?}", o.error);
+    let o = one("getField('qty').textColor = a; getField('zip').fillColor = a;");
+    assert!(o.error.as_deref().is_some_and(|e| e.contains("hold more than")), "{:?}", o.error);
 }
 
 #[test]
