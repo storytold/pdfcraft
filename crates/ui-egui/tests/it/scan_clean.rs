@@ -300,6 +300,37 @@ fn the_page_zooms_beside_the_result_window_and_escape_closes_it() {
     assert!(h.state().dialog.is_none() && h.state().scan_clean_result.is_none());
 }
 
+/// In full screen a click on the page turns it, but not beside the result window: the page there
+/// scrolls and zooms, and presses on it stay off.
+#[test]
+fn full_screen_clicks_beside_the_result_window_do_not_turn_the_page() {
+    let mut h = halftone_harness(&[true, true]);
+    assert!(h.state_mut().execute("view.full_screen"));
+    h.run_steps(2);
+    assert!(h.state().full_screen, "full screen");
+    enhance(&mut h);
+    assert_eq!(h.state().dialog, Some(pdfcraft_ui_egui::Dialog::EnhanceScanResult));
+    assert_eq!(current_page(&h), 0);
+    // Over the page, clear of the window.
+    let at = egui::pos2(1000.0, 600.0);
+    h.hover_at(at);
+    h.run_steps(1);
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() });
+    }
+    h.run_steps(3);
+    assert_eq!(current_page(&h), 0, "a click beside the window turned the page forward");
+    h.state_mut().views[0].go_to_page(1);
+    h.run_steps(3);
+    assert_eq!(current_page(&h), 1);
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed, modifiers: Default::default() });
+    }
+    h.run_steps(3);
+    assert_eq!(current_page(&h), 1, "a right-click beside the window turned the page back");
+    assert_eq!(h.state().dialog, Some(pdfcraft_ui_egui::Dialog::EnhanceScanResult), "and the window is still there");
+}
+
 /// Restore halftone scans is a choice in the dialog: unticked, a dotted scan is left to the other
 /// filters and no result window opens.
 #[test]

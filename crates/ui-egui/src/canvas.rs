@@ -3269,7 +3269,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     // Wheel zoom works in a visible window without focus, as wheel scrolling does; the other gestures need focus.
     let zoom_enabled = navigable && ui.is_enabled();
     let navigation_enabled = zoom_enabled && ui.input(|i| i.focused);
-    let present = presentation_click_state(ui, view, navigation_rect, navigation_enabled && app.quick_tool == QuickTool::Select);
+    let present = presentation_click_state(ui, view, navigation_rect, navigation_enabled && unobstructed && app.quick_tool == QuickTool::Select);
     pinch_zoom(ui, view, zoom_delta, navigation_rect, zoom_enabled);
     view.viewport_screen = avail;
     // Middle-button auto-scroll is a gesture begun on the page, which a dialog over it stops each
