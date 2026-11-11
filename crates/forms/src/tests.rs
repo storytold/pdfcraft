@@ -6802,6 +6802,48 @@ fn locked_button_export_edits_leave_the_document_unchanged() {
     }
 }
 
+/// A radio button that is read-only on its own (its own `/Ff`) can't be picked, and a selected one
+/// can't be switched away from, though the group as a whole is writable.
+#[test]
+fn a_read_only_radio_button_is_neither_picked_nor_left() {
+    let lock = |doc: &mut Document, num: u32| doc.update_dict(pdfcraft_cos::ObjRef::new(num, 0), |d| d.set(b"Ff".to_vec(), Object::Int(1))).unwrap();
+    let mut doc = radio_group_form();
+    lock(&mut doc, 7); // Medium
+    assert!(matches!(set_value(&mut doc, "size", &FieldValue::Radio(Some("M".into()))), Err(FormError::ReadOnly(_))));
+    set_value(&mut doc, "size", &FieldValue::Radio(Some("L".into()))).expect("an unlocked button is picked");
+    // Small (selected) locked: the group stays on it.
+    let mut doc = radio_group_form();
+    lock(&mut doc, 6);
+    assert!(matches!(set_value(&mut doc, "size", &FieldValue::Radio(Some("L".into()))), Err(FormError::ReadOnly(_))));
+    assert_eq!(field(&fields(&doc), "size").value, ["S"]);
+}
+
+/// The group's `/V` names its selection even when the button's `/AS` says nothing: a read-only
+/// button that `/V` selects is not switched away from either.
+#[test]
+fn a_read_only_radio_button_selected_by_the_group_value_is_not_left() {
+    let mut doc = radio_group_form();
+    doc.update_dict(pdfcraft_cos::ObjRef::new(6, 0), |d| {
+        d.set(b"Ff".to_vec(), Object::Int(1));
+        d.set(b"AS".to_vec(), Object::name("Off"));
+    })
+    .unwrap();
+    assert!(matches!(set_value(&mut doc, "size", &FieldValue::Radio(Some("L".into()))), Err(FormError::ReadOnly(_))));
+    assert_eq!(field(&fields(&doc), "size").value, ["S"]);
+}
+
+/// Clearing the form skips a group held by a read-only button and still clears the rest.
+#[test]
+fn clearing_the_form_goes_on_past_a_group_held_by_a_read_only_button() {
+    let mut doc = radio_group_form();
+    doc.update_dict(pdfcraft_cos::ObjRef::new(6, 0), |d| d.set(b"Ff".to_vec(), Object::Int(1))).unwrap();
+    doc.update_dict(pdfcraft_cos::ObjRef::new(9, 0), |d| d.set(b"DV".to_vec(), pdfcraft_cos::PdfString::text("Bob"))).unwrap();
+    assert_eq!(reset(&mut doc, None).unwrap(), 1);
+    let all = fields(&doc);
+    assert_eq!(field(&all, "size").value, ["S"]);
+    assert_eq!(field(&all, "name").value, ["Bob"]);
+}
+
 #[test]
 /// Cosmetic field updates skip calculations, while a value write still triggers the chain.
 fn script_cosmetic_mutations_do_not_run_the_calculation_chain() {
@@ -6935,6 +6977,26 @@ fn radio_buttons_without_as_sharing_the_value_show_one_on() {
     // One that has `/AS` naming the state is the one on.
     let doc = radio_without_as(49152, "/AS /Yes");
     assert_eq!(on_widgets(&doc, "r").0, [false, true, false]);
+}
+
+/// Two buttons share the on state `Yes`; the first is on by its `/AS` and the second is read-only
+/// and off. `/V` is `Yes` for both, but only the first is selected: picking another option switches
+/// the first off, which is allowed, and the read-only one never changes.
+#[test]
+fn a_read_only_button_sharing_the_on_state_of_the_selected_one_does_not_block() {
+    let mut doc = radio_without_as(49152, "/Ff 1 /AS /Off");
+    doc.update_dict(pdfcraft_cos::ObjRef::new(6, 0), |d| d.set(b"AS".to_vec(), Object::name("Yes"))).unwrap();
+    set_value(&mut doc, "r", &FieldValue::Radio(Some("No".into()))).expect("the writable selected button may be switched off");
+    assert_eq!(on_widgets(&doc, "r").0, [false, false, true]);
+}
+
+/// Selecting another button through `FieldValue::Widget` can't switch a read-only selected one off.
+#[test]
+fn a_read_only_selected_radio_button_is_not_left_by_picking_a_widget() {
+    let mut doc = radio_group_form();
+    doc.update_dict(pdfcraft_cos::ObjRef::new(6, 0), |d| d.set(b"Ff".to_vec(), Object::Int(1))).unwrap();
+    assert!(matches!(set_value(&mut doc, "size", &FieldValue::Widget(2)), Err(FormError::ReadOnly(_))));
+    assert_eq!(field(&fields(&doc), "size").value, ["S"]);
 }
 
 /// Table 227, ReadOnly: a processor "shall not allow a user to change the value". A button whose own
