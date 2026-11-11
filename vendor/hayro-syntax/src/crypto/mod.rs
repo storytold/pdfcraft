@@ -74,9 +74,11 @@ pub(crate) enum Decryptor {
 }
 
 #[derive(Debug, Copy, Clone)]
-pub(crate) enum DecryptionTarget {
+pub(crate) enum DecryptionTarget<'a> {
     String,
     Stream,
+    /// PdfCraft patch (30): a stream that names its own crypt filter.
+    NamedStream(&'a str),
 }
 
 impl Decryptor {
@@ -84,7 +86,7 @@ impl Decryptor {
         &self,
         id: ObjectIdentifier,
         data: &[u8],
-        target: DecryptionTarget,
+        target: DecryptionTarget<'_>,
     ) -> Option<Vec<u8>> {
         match self {
             Self::None => Some(data.to_vec()),
@@ -93,6 +95,8 @@ impl Decryptor {
                 let crypt_dict = match target {
                     DecryptionTarget::String => dict.string_filter,
                     DecryptionTarget::Stream => dict.stream_filter,
+                    // `/Identity` isn't in the table, and a name it hasn't got reads as that.
+                    DecryptionTarget::NamedStream(name) => dict.named.get(name).copied().unwrap_or(CryptDictionary::identity(0)),
                 };
 
                 match crypt_dict.cfm {
@@ -107,6 +111,52 @@ impl Decryptor {
 }
 
 pub(crate) fn get(
+    dict: &Dict<'_>,
+    id: &[u8],
+    password: &[u8],
+) -> Result<Decryptor, DecryptionError> {
+    match decryptor(dict, id, password) {
+        // PdfCraft patch (37): a document that encrypts only its embedded files, authorised when
+        // one is opened (`/AuthEvent /EFOpen`, ISO 32000-2 §7.6.6, Table 25), opens without a
+        // password: its strings and streams are in the clear, and nothing drawn reads an embedded
+        // file.
+        Err(DecryptionError::PasswordProtected) if password.is_empty() && efopen_only(dict) => {
+            Ok(Decryptor::None)
+        }
+        other => other,
+    }
+}
+
+/// PdfCraft patch (37): whether `dict` has crypt filters (V4 or later) that encrypt, each
+/// authorised only when an embedded file is opened (`/AuthEvent /EFOpen`), and neither `/StmF` nor
+/// `/StrF` names one. The embedded files use them through `/EFF` or a `/Crypt` filter of their
+/// own; earlier handlers (V1, V2) encrypt everything with RC4.
+fn efopen_only(dict: &Dict<'_>) -> bool {
+    if dict.get::<u8>(V).is_none_or(|v| v < 4) {
+        return false;
+    }
+    let Some(cf) = dict.get::<Dict<'_>>(CF) else {
+        return false;
+    };
+    let mut encrypting = Vec::new();
+    for key in cf.keys() {
+        let Some(filter) = cf.get::<Dict<'_>>(key.as_ref()) else {
+            continue;
+        };
+        let method = filter.get::<Name<'_>>(CFM).and_then(|n| DecryptorTag::from_name(&n));
+        if matches!(method, None | Some(DecryptorTag::None)) {
+            continue;
+        }
+        if filter.get::<Name<'_>>(b"AuthEvent").is_none_or(|e| e.as_str() != "EFOpen") {
+            return false;
+        }
+        encrypting.push(key.as_str().to_string());
+    }
+    let names = |key: &[u8]| dict.get::<Name<'_>>(key).is_some_and(|n| encrypting.iter().any(|e| e == n.as_str()));
+    !encrypting.is_empty() && !names(STM_F) && !names(STR_F)
+}
+
+fn decryptor(
     dict: &Dict<'_>,
     id: &[u8],
     password: &[u8],
@@ -145,7 +195,9 @@ pub(crate) fn get(
     };
 
     let byte_length = length / 8;
-    if byte_length == 0 {
+    // PdfCraft patch: revisions 2-4 derive an RC4 or AES-128 key from a 16-byte MD5 hash, so
+    // a longer /Length is malformed (and would slice past the end of the hash).
+    if byte_length == 0 || (revision <= 4 && byte_length > 16) {
         return Err(InvalidEncryption);
     }
 
@@ -292,10 +344,12 @@ fn decrypt_rc_aes(
     with_key(final_key)
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Clone)]
 pub(crate) struct DecryptorData {
     stream_filter: CryptDictionary,
     string_filter: CryptDictionary,
+    /// PdfCraft patch (30): `/CF`, for the streams that name a filter of their own.
+    named: HashMap<String, CryptDictionary>,
 }
 
 impl DecryptorData {
@@ -312,16 +366,23 @@ impl DecryptorData {
             }
         }
 
-        let stm_f = *mappings
-            .get(dict.get::<Name<'_>>(STM_F)?.as_str())
-            .unwrap_or(&CryptDictionary::identity(default_length));
-        let str_f = *mappings
-            .get(dict.get::<Name<'_>>(STR_F)?.as_str())
-            .unwrap_or(&CryptDictionary::identity(default_length));
+        // PdfCraft patch (30): `/Identity` is never an entry of `/CF`, whatever a file puts there,
+        // and `/StmF` and `/StrF` are optional, naming it by default (ISO 32000-2 Table 20).
+        mappings.remove("Identity");
+        let identity = CryptDictionary::identity(default_length);
+        let stm_f = dict
+            .get::<Name<'_>>(STM_F)
+            .and_then(|n| mappings.get(n.as_str()).copied())
+            .unwrap_or(identity);
+        let str_f = dict
+            .get::<Name<'_>>(STR_F)
+            .and_then(|n| mappings.get(n.as_str()).copied())
+            .unwrap_or(identity);
 
         Some(Self {
             stream_filter: stm_f,
             string_filter: str_f,
+            named: mappings,
         })
     }
 }
@@ -901,5 +962,17 @@ mod pdfcraft_password_tests {
         let user = rev56_dict(6, "caf\u{E9}".as_bytes(), b"owner", &key);
         assert_eq!(unlock(&user, "cafe\u{301}"), ok, "R6");
         assert_eq!(unlock(&user, "cafe"), wrong, "R6");
+    }
+
+    #[test]
+    #[cfg(feature = "std")]
+    fn legacy_key_length_above_128_bits_is_refused_not_a_panic() {
+        use crate::reader::{Reader, ReaderContext, ReaderExt};
+        let hex32 = "00".repeat(32);
+        for (length, expected) in [(128, DecryptionError::PasswordProtected), (256, InvalidEncryption)] {
+            let dict = format!("<< /Filter /Standard /V 2 /R 3 /Length {length} /P -4 /O <{hex32}> /U <{hex32}> >>");
+            let dict = Reader::new(dict.as_bytes()).read_with_context::<Dict<'_>>(&ReaderContext::dummy());
+            assert_eq!(get(&dict.unwrap(), b"", b"").err(), Some(expected), "/Length {length}");
+        }
     }
 }

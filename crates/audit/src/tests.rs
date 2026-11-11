@@ -720,9 +720,11 @@ fn runs_without_words_count_against_the_comparison_bound() {
     let doc = open(one_page(&content, ""));
     let lines = pdfcraft_edit::glyph_text_lines(&doc, &pdfcraft_model::pages(&doc)[0]).expect("text");
     assert_eq!(lines.iter().map(|l| (l.ink.len(), l.runs().count())).collect::<Vec<_>>(), [(1, 51)]);
-    let limits = crate::Limits { comparisons: 50, covered_text: usize::MAX };
+    // Plus the hidden line's text, read once to copy it.
+    let text = lines[0].text.len() / crate::TEXT_BYTES_PER_COMPARISON;
+    let limits = crate::Limits { comparisons: 50 + text, covered_text: usize::MAX };
     assert!(matches!(crate::audit(&doc, limits), Err(crate::AuditError::TooManyComparisons)));
-    let limits = crate::Limits { comparisons: 51, covered_text: usize::MAX };
+    let limits = crate::Limits { comparisons: 51 + text, covered_text: usize::MAX };
     assert_eq!(crate::audit(&doc, limits).expect("within the budget").len(), 1);
 }
 
@@ -746,14 +748,18 @@ fn copy_restricted_documents_withhold_covered_text() {
     let findings = audit_redactions(&user).expect("audit must run");
     assert_eq!(findings.len(), 1, "the cover is still reported: {findings:?}");
     assert_eq!(findings[0].covered_text, "");
-    // The output bound counts the text reported, so withheld text costs nothing.
-    let nothing = crate::Limits { comparisons: usize::MAX, covered_text: 0 };
+    // The output bound counts the text reported and the finding's record, so withheld text
+    // costs only the record.
+    let record = std::mem::size_of::<AuditFinding>();
+    let nothing = crate::Limits { comparisons: usize::MAX, covered_text: record };
     assert_eq!(crate::audit(&user, nothing).expect("withheld text is not output").len(), 1);
+    let none = crate::Limits { covered_text: record - 1, ..nothing };
+    assert!(matches!(crate::audit(&user, none), Err(crate::AuditError::TooMuchOutput)));
     let owner = Document::open_with_password(bytes, Some("owner")).expect("open");
     let findings = audit_redactions(&owner).expect("audit must run");
     assert_eq!(findings.len(), 1, "{findings:?}");
     assert_eq!(findings[0].covered_text, "SECRET DATA 123");
-    let exact = crate::Limits { comparisons: usize::MAX, covered_text: "SECRET DATA 123".len() };
+    let exact = crate::Limits { comparisons: usize::MAX, covered_text: "SECRET DATA 123".len() + record };
     assert!(crate::audit(&owner, exact).is_ok());
     let short = crate::Limits { covered_text: exact.covered_text - 1, ..exact };
     assert!(matches!(crate::audit(&owner, short), Err(crate::AuditError::TooMuchOutput)));
@@ -819,4 +825,53 @@ fn form_entries_past_the_page_allowance_fail_the_audit() {
     let resources: Dict = [(b"XObject".to_vec(), Object::Dict(xobjects))].into_iter().collect();
     let page: Dict = [(b"Contents".to_vec(), Object::Ref(draws)), (b"Resources".to_vec(), Object::Dict(resources))].into_iter().collect();
     assert!(matches!(crate::cover::filled_rects(&doc, &page), Err(crate::AuditError::TooManyForms)));
+}
+
+/// Copying a covered line's text walks all of it, padding included, so a long padded line under
+/// many covers costs its bytes once per cover, not one run per cover (CodeRabbit).
+#[test]
+fn covered_text_bytes_count_against_the_comparison_bound() {
+    // One run: 20 KiB of spaces around a word, which trims to the word alone.
+    let mut content = b"BT /F1 24 Tf 100 700 Td (".to_vec();
+    content.extend_from_slice(&[b' '; 10_000]);
+    content.extend_from_slice(b"SECRET");
+    content.extend_from_slice(&[b' '; 10_000]);
+    content.extend_from_slice(b") Tj ET\n0 g\n");
+    for _ in 0..10 {
+        content.extend_from_slice(b"-1 688 1000000 32 re f\n");
+    }
+    let doc = open(one_page(&content, ""));
+    let lines = pdfcraft_edit::glyph_text_lines(&doc, &pdfcraft_model::pages(&doc)[0]).expect("text");
+    assert_eq!(lines.len(), 1);
+    let bytes = lines[0].text.len();
+    assert!(bytes > 20_000, "{bytes} bytes of text");
+    // Each cover: one comparison for the line, plus its bytes when it is hidden.
+    let exact = crate::Limits { comparisons: 10 * (1 + bytes / crate::TEXT_BYTES_PER_COMPARISON), covered_text: usize::MAX };
+    let findings = crate::audit(&doc, exact).expect("within the budget");
+    assert_eq!(findings.len(), 10, "{findings:?}");
+    assert!(findings.iter().all(|f| f.covered_text == "SECRET"), "{findings:?}");
+    let short = crate::Limits { comparisons: exact.comparisons - 1, ..exact };
+    assert!(matches!(crate::audit(&doc, short), Err(crate::AuditError::TooManyComparisons)));
+}
+
+/// One annotation list shared by many pages makes a finding on each: every finding's record
+/// counts against the output bound, text or no text (CodeRabbit).
+#[test]
+fn every_finding_record_counts_against_the_output_bound() {
+    let content = b"BT /F1 24 Tf 100 700 Td (SECRET) Tj ET\n";
+    let mut b = Builder::new();
+    b.add("<< /Type /Catalog /Pages 2 0 R >>");
+    b.add("<< /Type /Pages /Kids [3 0 R 7 0 R 8 0 R] /Count 3 >>");
+    b.add("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> /Annots 6 0 R >>");
+    b.add_stream(content);
+    b.add(FONT);
+    b.add("[<< /Type /Annot /Subtype /Redact /Rect [95 685 200 725] >>]");
+    b.add("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> /Annots 6 0 R >>");
+    b.add("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> /Annots 6 0 R >>");
+    let doc = open(b.build());
+    let one = "SECRET".len() + std::mem::size_of::<AuditFinding>();
+    let exact = crate::Limits { comparisons: usize::MAX, covered_text: 3 * one };
+    assert_eq!(crate::audit(&doc, exact).expect("within the budget").len(), 3);
+    let short = crate::Limits { covered_text: 3 * one - 1, ..exact };
+    assert!(matches!(crate::audit(&doc, short), Err(crate::AuditError::TooMuchOutput)));
 }
