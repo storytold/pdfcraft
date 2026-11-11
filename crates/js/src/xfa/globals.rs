@@ -259,8 +259,15 @@ pub(crate) fn field_written(ctx: &mut Context, before: &crate::FieldState, after
         ("textColor", before.text_color != after.text_color),
         ("fillColor", before.fill_color != after.fill_color),
         ("rect", before.rect != after.rect),
-        // `buttonSetCaption`: a push button's caption is its XFA caption, not written here.
-        ("caption", before.caption != after.caption || before.caption_was_set != after.caption_was_set),
+        ("strokeColor", before.stroke_color != after.stroke_color),
+        ("textSize", before.text_size.to_bits() != after.text_size.to_bits()),
+        ("lineWidth", before.line_width.to_bits() != after.line_width.to_bits()),
+        ("borderStyle", before.border_style != after.border_style),
+        ("userName", before.user_name != after.user_name),
+        // `buttonSetCaption` / `buttonSetIcon`: a push button's caption and icon are its XFA
+        // caption and image, not written here.
+        ("caption", before.caption != after.caption || before.caption_written != after.caption_written),
+        ("icon", before.icon != after.icon || before.icon_written != after.icon_written),
     ];
     for (property, changed) in others {
         if changed {

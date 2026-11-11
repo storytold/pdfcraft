@@ -154,6 +154,11 @@ pub(crate) fn run_here(
         // objects reached through `event.target` keep `buttonSetCaption`.
         event_name: event.activity.clone(),
         fields: std::sync::Arc::clone(&doc.fields),
+        // No document icons (`getIcon`) and no field objects cached from an earlier run: each
+        // XFA script run makes its own field objects. `field_keys` stays empty so none is kept.
+        icons: Vec::new(),
+        objects: Default::default(),
+        field_keys: Default::default(),
         changed: Default::default(),
         formatted: Default::default(),
         alerts: Vec::new(),
@@ -168,12 +173,24 @@ pub(crate) fn run_here(
             page_boxes: Vec::new(),
             page_rotations: Vec::new(),
             xfa: true,
-            highlight: doc.highlight,
+            // Zoom is not an XFA event target member; the AcroForm default.
+            zoom: 100.0,
+            runtime_highlight: doc.highlight,
+            // No icons in an XFA script run (`icons` below is empty).
+            icon_epoch: 0,
+            icon_versions: Default::default(),
         },
         // `calculateNow()` belongs to the AcroForm document; an XFA form recalculates itself.
+        // `resetForm` through the event target is the XFA reset (`reset_form` in xfa/globals),
+        // not the AcroForm one, so the AcroForm reset budget starts unused.
         calculations: Default::default(),
         calculate_depth: 0,
-        calculate_steps: 0,
+        calculation_evaluations: 0,
+        calculation_limit_exceeded: false,
+        calculation_work: 0,
+        current_event: boa_engine::JsValue::undefined(),
+        reset_calls: 0,
+        reset_limit_exceeded: false,
         kept: 0,
         dropped: 0,
         xfa: true,

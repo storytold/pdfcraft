@@ -3824,8 +3824,8 @@ fn apply_frame_requests(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui, 
             crate::forms_ui::FormNotice::NoAction(name) => app.notify_fmt("{name} has no action", &[("name", &name)]),
         }
     }
-    if let Some((name, action)) = app.views[index].forms.button.take() {
-        run_button(app, index, &name, action);
+    if let Some((name, identity, action)) = app.views[index].forms.button.take() {
+        run_button(app, index, &name, identity, action);
     }
     if copy_selected {
         app.execute("edit.copy");
