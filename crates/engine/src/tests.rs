@@ -7491,13 +7491,15 @@ fn comparing_two_versions_of_a_document() {
     assert!(marks[0].contents.as_deref().unwrap().starts_with("Replaced: \"Monday.\""));
 }
 
+/// Built-in and custom actions run their steps on a file (with JavaScript on), report each
+/// step's progress, and fail cleanly on a file that is not a PDF.
 #[test]
 fn actions_run_their_steps_on_files() {
     let s = Session::new();
     let src = s.create_from_text("t", "Quarterly numbers").unwrap();
     let built = actions::builtin();
     let numbers = built.iter().find(|a| a.name == "Add Page Numbers").unwrap();
-    let r = actions::run_on(numbers, "q.pdf", src.clone(), |_, _| {}).unwrap();
+    let r = actions::run_on(numbers, "q.pdf", src.clone(), true, |_, _| {}).unwrap();
     let mut s2 = Session::new();
     let id = s2.open("out.pdf", None, r.bytes, None).unwrap();
     assert!(page_texts(&s2, id)[0].contains("Page 1 of 1"), "{:?}", page_texts(&s2, id));
@@ -7515,14 +7517,38 @@ fn actions_run_their_steps_on_files() {
         builtin: false,
     };
     let mut steps = Vec::new();
-    let r = actions::run_on(&custom, "q.pdf", src, |i, n| steps.push((i, n))).unwrap();
+    let r = actions::run_on(&custom, "q.pdf", src, true, |i, n| steps.push((i, n))).unwrap();
     assert_eq!(steps, [(0, 4), (1, 4), (2, 4), (3, 4)]);
     assert_eq!(r.log.len(), 4, "{:?}", r.log);
     let id = s2.open("out2.pdf", None, r.bytes, None).unwrap();
     let d = s2.get(id).unwrap();
     assert_eq!(d.info.title.as_deref(), Some("Q3"));
     assert!(page_texts(&s2, id)[0].contains("DRAFT"));
-    assert!(actions::run_on(&custom, "bad.pdf", Arc::new(b"nope".to_vec()), |_, _| {}).is_err());
+    assert!(actions::run_on(&custom, "bad.pdf", Arc::new(b"nope".to_vec()), true, |_, _| {}).is_err());
+}
+
+/// #5080: a "Run a JavaScript" step honours the caller's JavaScript preference. With it on, the
+/// step runs and writes the field; with it off, the step does not run, so `run_on` reports the
+/// refused script's error instead of saving a script-produced value. Before the fix each file
+/// opened in a fresh JavaScript-on session, so the step ran whatever the caller chose.
+#[test]
+fn an_action_runs_a_javascript_step_only_when_javascript_is_on() {
+    let action = actions::Action {
+        name: "Set price".into(),
+        description: String::new(),
+        steps: vec![actions::Step::RunJavaScript("getField('price').value = 3;".into())],
+        builtin: false,
+    };
+    let src = Arc::new(scripted_form());
+    // JavaScript on: the step runs, so the saved file has price = 3.
+    let on = actions::run_on(&action, "f.pdf", src.clone(), true, |_, _| {}).unwrap();
+    let mut s = Session::new();
+    s.set_javascript(false); // read the saved state without re-running any script
+    let id = s.open("on.pdf", None, on.bytes, None).unwrap();
+    let price = s.get(id).unwrap().form.iter().find(|f| f.name == "price").unwrap().value.clone();
+    assert_eq!(price, ["3"], "the script ran with JavaScript on");
+    // JavaScript off: the step does not run, so run_on fails rather than writing a scripted value.
+    assert!(actions::run_on(&action, "f.pdf", src, false, |_, _| {}).is_err());
 }
 
 /// A removal step that fails (here: a signed file can't be rewritten without its hidden data)
@@ -7539,7 +7565,7 @@ fn actions_fail_when_hidden_information_could_not_be_removed() {
     let signed = s.sign(id, &digital_id, SignOptions { page: 1, ..SignOptions::default() }).unwrap();
     let built = actions::builtin();
     let sanitize = built.iter().find(|a| a.name == "Sanitize Documents").unwrap();
-    let e = actions::run_on(sanitize, "signed.pdf", signed, |_, _| {}).map(|r| r.log).unwrap_err();
+    let e = actions::run_on(sanitize, "signed.pdf", signed, true, |_, _| {}).map(|r| r.log).unwrap_err();
     assert!(e.starts_with("Sanitize document:"), "{e}");
 }
 
@@ -10967,7 +10993,7 @@ fn an_action_appends_to_a_file_whose_field_walk_passes_a_signature_over() {
     let bytes = Arc::new(signed_field_named(64 << 10));
     let steps = vec![actions::Step::from_id("set_title", "Checked").unwrap()];
     let title = actions::Action { name: "Title".into(), description: String::new(), steps, builtin: false };
-    let r = actions::run_on(&title, "form.pdf", bytes.clone(), |_, _| {}).unwrap();
+    let r = actions::run_on(&title, "form.pdf", bytes.clone(), true, |_, _| {}).unwrap();
     assert!(r.bytes.starts_with(&bytes[..]), "the action rewrote the file instead of appending to it");
     let mut s = Session::new();
     let id = s.open("out.pdf", None, r.bytes, None).unwrap();
