@@ -633,6 +633,10 @@ impl PdfCraftApp {
             return false;
         }
         let Some((_, id)) = self.active_ids() else { return false };
+        // A form's Will Print script runs first: what it changes is printed.
+        if self.session.get(id).is_some_and(|d| d.allows_printing()) {
+            self.run_document_actions(id, pdfcraft_engine::js::DocumentScriptEvent::WillPrint);
+        }
         let Some(doc) = self.session.get(id) else { return false };
         let labels: Vec<String> = doc.info.pages.iter().map(|p| p.label.clone()).collect();
         let settings = match self.print_draft.settings(doc.info.pages.len(), &labels) {

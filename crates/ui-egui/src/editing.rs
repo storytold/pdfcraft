@@ -528,6 +528,7 @@ impl PdfCraftApp {
         // After the queued edit: a value typed into the field the focus left has been taken (and
         // its change has run the field's exit) before the focus scripts run.
         self.run_focus_scripts(i);
+        self.run_field_triggers(i);
         if !applied {
             // Nor may a shortcut pressed with it (⌘S right after Enter) run behind the refusal.
             self.deferred_commands.clear();
@@ -848,6 +849,31 @@ impl PdfCraftApp {
                     }
                     let out = self.session.take_js_output(id);
                     self.handle_js(id, out);
+                }
+                Err(e) => self.notify_error(e),
+            }
+        }
+    }
+
+    /// The pointer triggers tab `i` queued (Mouse Enter, Exit, Down, and a check box's Mouse Up
+    /// after its toggle), each running its widget's JavaScript in the document's realm (#269).
+    fn run_field_triggers(&mut self, i: usize) {
+        let Some(view) = self.views.get_mut(i) else { return };
+        let triggers = std::mem::take(&mut view.forms.triggers);
+        let id = view.id;
+        for (name, widget, trigger) in triggers {
+            match self.session.field_trigger(id, &name, widget, trigger) {
+                Ok(changed) => {
+                    if changed
+                        && let Some(info) = self.session.get(id).map(|d| d.info.clone())
+                        && let Some(view) = self.views.get_mut(i)
+                    {
+                        view.document_changed(&info);
+                    }
+                    let out = self.session.take_js_output(id);
+                    if !out.is_empty() {
+                        self.handle_js(id, out);
+                    }
                 }
                 Err(e) => self.notify_error(e),
             }
