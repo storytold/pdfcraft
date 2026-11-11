@@ -127,6 +127,25 @@ pub struct RecoveryCounters {
 }
 
 #[cfg(feature = "test-counters")]
+impl RecoveryCounters {
+    /// The work done since `before` (a reading taken earlier on the same thread), field by
+    /// field: what a test measures without naming every counter.
+    #[must_use]
+    pub fn since(&self, before: &Self) -> Self {
+        Self {
+            rule_calls: self.rule_calls.saturating_sub(before.rule_calls),
+            guard_decisions: self.guard_decisions.saturating_sub(before.guard_decisions),
+            facts_built: self.facts_built.saturating_sub(before.facts_built),
+            glyph_facts_built: self
+                .glyph_facts_built
+                .saturating_sub(before.glyph_facts_built),
+            program_walks: self.program_walks.saturating_sub(before.program_walks),
+            type3_key_hashes: self.type3_key_hashes.saturating_sub(before.type3_key_hashes),
+        }
+    }
+}
+
+#[cfg(feature = "test-counters")]
 thread_local! {
     static COUNTERS: std::cell::Cell<RecoveryCounters> = const {
         std::cell::Cell::new(RecoveryCounters {

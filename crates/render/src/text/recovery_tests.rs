@@ -1300,19 +1300,11 @@ fn dense_cjk_page(glyphs: u16, shown: usize) -> Vec<u8> {
 /// Both layers of `pdf`'s first page, the strict layer as the plain extraction reads it, and
 /// what reading both layers cost the recovery layer.
 fn recovering_costs(pdf: &Pdf) -> (PageText, Option<RecoveredText>, PageText, hayro::hayro_interpret::font::RecoveryCounters) {
-    use hayro::hayro_interpret::font::{RecoveryCounters, recovery_counters};
+    use hayro::hayro_interpret::font::recovery_counters;
     let settings = InterpreterSettings::default();
     let before = recovery_counters();
     let (strict, recovered) = extract_page_recovering(pdf, 0, &settings).unwrap();
-    let after = recovery_counters();
-    let cost = RecoveryCounters {
-        rule_calls: after.rule_calls - before.rule_calls,
-        guard_decisions: after.guard_decisions - before.guard_decisions,
-        facts_built: after.facts_built - before.facts_built,
-        glyph_facts_built: after.glyph_facts_built - before.glyph_facts_built,
-        program_walks: after.program_walks - before.program_walks,
-        type3_key_hashes: after.type3_key_hashes - before.type3_key_hashes,
-    };
+    let cost = recovery_counters().since(&before);
     (strict, recovered, extract_page(pdf, 0, &settings).unwrap(), cost)
 }
 
