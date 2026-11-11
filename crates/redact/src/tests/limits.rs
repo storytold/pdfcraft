@@ -76,3 +76,23 @@ fn many_layers_are_classified_in_linear_work() {
     assert_eq!(counts[&Hidden::HiddenLayers], N / 2);
     assert!(started.elapsed() < std::time::Duration::from_secs(30), "{:?}", started.elapsed());
 }
+
+/// The hidden-information scan read the whole page tree again for every page: 20 000 pages cost
+/// 400 million page visits. It reads the tree once per pass now.
+#[test]
+fn a_scan_of_many_pages_reads_the_page_tree_once() {
+    use crate::sanitize::{Hidden, scan};
+    const N: usize = 20_000;
+    let kids: String = (0..N).map(|i| format!("{} 0 R ", 4 + i)).collect();
+    let mut objs = vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        format!("<< /Type /Pages /Kids [{kids}] /Count {N} /MediaBox [0 0 300 300] >>").into_bytes(),
+        stream("", b"BT 3 Tr (x) Tj ET"),
+    ];
+    objs.extend((0..N).map(|_| b"<< /Type /Page /Parent 2 0 R /Contents 3 0 R >>".to_vec()));
+    let doc = pdf(objs);
+    let started = std::time::Instant::now();
+    let counts: HashMap<Hidden, usize> = scan(&doc).into_iter().collect();
+    assert_eq!(counts[&Hidden::HiddenText], N, "one invisible glyph on every page");
+    assert!(started.elapsed() < std::time::Duration::from_secs(60), "{:?}", started.elapsed());
+}
