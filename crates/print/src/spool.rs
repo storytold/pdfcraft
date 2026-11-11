@@ -2,8 +2,8 @@
 //! stay in PdfCraft; these adapters retain the application's print-error surface.
 
 pub use craft_print::{
-    Duplex, HANDLED_OPTIONS, HAS_PRINTER_PREFERENCES, Job, Printer, PrinterOption, Scaling, lp_args, lpstat_command, parse_lpoptions, parse_lpstat,
-    parse_lpstat_e, parse_ppd, parse_windows_printers, ppd_text, printers_parsed,
+    AUTO_SELECT, Duplex, HANDLED_OPTIONS, HAS_PRINTER_PREFERENCES, Job, Printer, PrinterOption, Scaling, apply_queue_defaults, lp_args,
+    lpstat_command, parse_lpoptions, parse_lpstat, parse_lpstat_e, parse_ppd, parse_windows_printers, ppd_text, printers_parsed,
 };
 
 #[cfg(any(windows, test))]
@@ -87,6 +87,26 @@ pub fn printer_queues() -> Vec<Printer> {
     #[cfg(all(windows, test))]
     PRINTER_BACKEND_CALLS.with(|c| c.set(c.get().saturating_add(1)));
     craft_print::printer_queues()
+}
+
+/// Whether `printer`'s driver renders XPS itself (Windows: v4 drivers, and v3 drivers with an XPS
+/// rendering filter); `Some(false)` for a GDI driver, `None` when it can't be read, on a Windows
+/// installation without the print DLLs, and on other systems. See [`gdi_driver`].
+pub fn xps_driver(printer: &str) -> Option<bool> {
+    if missing_print_dll().is_some() {
+        return None;
+    }
+    #[cfg(windows)]
+    let _provider = print_ticket_provider();
+    craft_print::xps_driver(printer)
+}
+
+/// Whether `printer`'s driver is a GDI (v3) one, which the XPS print API reaches through Windows'
+/// XPS-to-GDI conversion: a page with transparency prints there with halos, as black boxes or not
+/// at all (#5838, #5940, #6155), so the copy for it has its transparent sheets flattened first
+/// (`pdfcraft_engine::spooler::spooler_copy`). False when that can't be told.
+pub fn gdi_driver(printer: &str) -> bool {
+    xps_driver(printer) == Some(false)
 }
 
 /// Whether `printer`'s driver takes two-sided settings, read for that one printer; it can wait
@@ -252,13 +272,10 @@ pub(crate) fn printer_options_via_within(
     if let Some(b) = &ppd {
         localize(&mut options, b, lang);
     }
-    for (key, value) in current {
-        if let Some(o) = options.iter_mut().find(|o| o.key == key)
-            && o.choices.iter().any(|(c, _)| *c == value)
-        {
-            o.default = value;
-        }
-    }
+    // The queue's current choices become the defaults (names matched as CUPS matches them). On
+    // macOS the paper tray also starts on Auto Select, which is what a job naming no tray asks
+    // for, so the printer isn't held on an empty default tray (#3752, storytold/craft-libs#232).
+    apply_queue_defaults(&mut options, &current);
     options
 }
 
