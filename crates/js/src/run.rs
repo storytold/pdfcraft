@@ -16,86 +16,20 @@ pub(crate) const MAX_PRINTF_OUTPUT_BYTES: usize = 1 << 20;
 /// length costs the script nothing but the host one string per item; real lists are tiny.
 pub(crate) const MAX_ARRAY_LENGTH: u64 = 1 << 20;
 
-/// Deepest nesting of `(`, `[` and `{`.
-const MAX_BRACKET_DEPTH: usize = 64;
-
-/// Longest run of prefix operators (`!`, `~`, `+`, `-`).
-const MAX_PREFIX_RUN: usize = 64;
-
-/// Most `?` (conditional expressions nest without brackets).
-const MAX_CONDITIONALS: usize = 4096;
+/// Maximum calculated field scripts evaluated by `calculateNow()` during one JavaScript run.
+pub(crate) const MAX_CALCULATE_STEPS: usize = 4096;
 
 /// The script thread's stack.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) const SCRIPT_STACK: usize = 1 << 30;
 
-/// Why `source` is refused, if it is: too long, or nested deeper than any form needs. Strings
-/// and comments are skipped; brackets in regular expressions and templates count, which only
-/// errs on the safe side.
+/// Why `source` is refused, if it is: too long, or nested deeper than any form needs, which
+/// would overflow the stack in boa's parser ([`crate::nesting`]).
 pub(crate) fn refuse(source: &str) -> Option<String> {
     if source.len() > MAX_SCRIPT_BYTES {
         return Some(format!("the script is too long ({} KiB; the limit is {} KiB)", source.len() / 1024, MAX_SCRIPT_BYTES / 1024));
     }
-    let too_deep = || Some("the script is nested too deeply to run safely".to_string());
-    let b = source.as_bytes();
-    let (mut depth, mut prefix, mut conditionals) = (0usize, 0usize, 0usize);
-    let mut i = 0;
-    while let Some(&c) = b.get(i) {
-        i += 1;
-        match c {
-            b'\'' | b'"' => {
-                // To the closing quote (or the end of the line, where an unclosed string ends).
-                while let Some(&d) = b.get(i) {
-                    i += 1;
-                    if d == b'\\' {
-                        i += 1;
-                    } else if d == c || d == b'\n' {
-                        break;
-                    }
-                }
-                prefix = 0;
-            }
-            b'/' if b.get(i) == Some(&b'/') => {
-                while b.get(i).is_some_and(|d| *d != b'\n') {
-                    i += 1;
-                }
-            }
-            b'/' if b.get(i) == Some(&b'*') => {
-                i += 1;
-                while i < b.len() && !b[i..].starts_with(b"*/") {
-                    i += 1;
-                }
-                i += 2;
-            }
-            b'(' | b'[' | b'{' => {
-                depth += 1;
-                if depth > MAX_BRACKET_DEPTH {
-                    return too_deep();
-                }
-                prefix = 0;
-            }
-            b')' | b']' | b'}' => {
-                depth = depth.saturating_sub(1);
-                prefix = 0;
-            }
-            b'!' | b'~' | b'+' | b'-' => {
-                prefix += 1;
-                if prefix > MAX_PREFIX_RUN {
-                    return too_deep();
-                }
-            }
-            b'?' => {
-                conditionals += 1;
-                if conditionals > MAX_CONDITIONALS {
-                    return too_deep();
-                }
-                prefix = 0;
-            }
-            c if c.is_ascii_whitespace() => {}
-            _ => prefix = 0,
-        }
-    }
-    None
+    crate::nesting::too_deep(source).then(|| "the script is nested too deeply to run safely".to_string())
 }
 
 /// Run `script` for `event`, after the document-level scripts (`doc_scripts`, which define the
@@ -108,6 +42,33 @@ pub fn run(script: &str, event: &Event, doc: &DocInfo, fields: &[FieldState], do
 /// context; the first field write copies the snapshot, so neither the caller nor another
 /// script can observe uncommitted writes. Read-only calculations avoid copying the whole form.
 pub fn run_shared(script: &str, event: &Event, doc: &DocInfo, fields: Arc<Vec<FieldState>>, doc_scripts: &[String], limits: Limits) -> Outcome {
+    run_shared_calculations(script, event, doc, fields, doc_scripts, &Arc::new(Vec::new()), limits)
+}
+
+/// Like [`run_shared`], with the document's ordered calculated fields available to
+/// `calculateNow()` while this context is running.
+pub fn run_shared_calculations(
+    script: &str,
+    event: &Event,
+    doc: &DocInfo,
+    fields: Arc<Vec<FieldState>>,
+    doc_scripts: &[String],
+    calculations: &[(String, String)],
+    limits: Limits,
+) -> Outcome {
+    run_shared_calculations_shared(script, event, doc, fields, doc_scripts, &Arc::new(calculations.to_vec()), limits)
+}
+
+/// Like [`run_shared_calculations`], sharing its ordered calculation scripts with the context.
+pub fn run_shared_calculations_shared(
+    script: &str,
+    event: &Event,
+    doc: &DocInfo,
+    fields: Arc<Vec<FieldState>>,
+    doc_scripts: &[String],
+    calculations: &Arc<Vec<(String, String)>>,
+    limits: Limits,
+) -> Outcome {
     let failed = |why: String| Outcome { rc: true, value: event.value.clone(), change: event.change.clone(), error: Some(why), ..Default::default() };
     if let Some(why) = refuse(script) {
         return failed(why);
@@ -132,10 +93,11 @@ pub fn run_shared(script: &str, event: &Event, doc: &DocInfo, fields: Arc<Vec<Fi
         // The script's thread writes dates as this one asked (`with_english_printd`).
         let english = crate::format::printd_english();
         std::thread::scope(|scope| {
-            let spawned = std::thread::Builder::new()
-                .name("pdfcraft-js".into())
-                .stack_size(SCRIPT_STACK)
-                .spawn_scoped(scope, || crate::format::with_english_printd(english, || run_here(script, event, doc, fields, kept, skipped, limits)));
+            let spawned = std::thread::Builder::new().name("pdfcraft-js".into()).stack_size(SCRIPT_STACK).spawn_scoped(scope, || {
+                crate::format::with_english_printd(english, || {
+                    run_here(script, event, doc, fields, ScriptSetup { doc_scripts: kept, skipped, calculations }, limits)
+                })
+            });
             match spawned {
                 Ok(thread) => thread.join().unwrap_or_else(|_| failed("the script stopped with an internal error".into())),
                 Err(e) => failed(format!("the script engine could not start: {e}")),
@@ -143,7 +105,7 @@ pub fn run_shared(script: &str, event: &Event, doc: &DocInfo, fields: Arc<Vec<Fi
         })
     }
     #[cfg(target_arch = "wasm32")]
-    run_here(script, event, doc, fields, kept, skipped, limits)
+    run_here(script, event, doc, fields, ScriptSetup { doc_scripts: kept, skipped, calculations }, limits)
 }
 
 /// Host hooks that refuse to compile code from strings (`eval`, `Function` and its generator
@@ -185,15 +147,13 @@ fn doc_error(index: usize, error: &dyn std::fmt::Display) -> String {
 
 /// `doc_scripts` are the document scripts to run with their places among all of them;
 /// `skipped` the ones refused before running, with the reason.
-fn run_here(
-    script: &str,
-    event: &Event,
-    doc: &DocInfo,
-    fields: Arc<Vec<FieldState>>,
-    doc_scripts: &[(usize, &str)],
-    skipped: &[(usize, String)],
-    limits: Limits,
-) -> Outcome {
+struct ScriptSetup<'a> {
+    doc_scripts: &'a [(usize, &'a str)],
+    skipped: &'a [(usize, String)],
+    calculations: &'a Arc<Vec<(String, String)>>,
+}
+
+fn run_here(script: &str, event: &Event, doc: &DocInfo, fields: Arc<Vec<FieldState>>, setup: ScriptSetup<'_>, limits: Limits) -> Outcome {
     let mut ctx = match Context::builder().host_hooks(std::rc::Rc::new(NoCodeFromStrings)).build() {
         Ok(ctx) => ctx,
         Err(e) => {
@@ -204,17 +164,22 @@ fn run_here(
     ctx.runtime_limits_mut().set_loop_iteration_limit(limits.loop_iterations);
     ctx.runtime_limits_mut().set_recursion_limit(limits.recursion);
     ctx.insert_data(RefCell::new(Host {
+        event_name: event.name.clone(),
         fields,
         changed: BTreeSet::new(),
+        formatted: BTreeSet::new(),
         alerts: Vec::new(),
         console: Vec::new(),
         requests: Vec::new(),
         doc: doc.clone(),
+        calculations: Arc::clone(setup.calculations),
+        calculate_depth: 0,
+        calculate_steps: 0,
         kept: 0,
         dropped: 0,
     }));
     let mut out = Outcome { rc: true, value: event.value.clone(), change: event.change.clone(), ..Default::default() };
-    let mut doc_errors: Vec<(usize, String)> = skipped.iter().map(|(i, why)| (*i, doc_error(*i, why))).collect();
+    let mut doc_errors: Vec<(usize, String)> = setup.skipped.iter().map(|(i, why)| (*i, doc_error(*i, why))).collect();
     let result = (|| -> JsResult<()> {
         install(&mut ctx)?;
         let (ev, value_store) = event_object(&mut ctx, event)?;
@@ -222,7 +187,7 @@ fn run_here(
         // One document script that throws (calling a method PdfCraft lacks, say) must not keep
         // every field script in the form from running: what it defined before the error, and
         // the other scripts, stay available (#3940).
-        for &(i, d) in doc_scripts {
+        for &(i, d) in setup.doc_scripts {
             if let Err(e) = ctx.eval(Source::from_bytes(d)) {
                 doc_errors.push((i, doc_error(i, &e)));
             }
@@ -248,6 +213,7 @@ fn run_here(
     if let Some(h) = ctx.remove_data::<Shared>() {
         let h = h.into_inner();
         out.changed = h.changed.iter().map(|i| h.fields[*i].clone()).collect();
+        out.formatted = h.formatted.iter().filter_map(|&i| h.fields.get(i).map(|f| f.name.clone())).collect();
         out.alerts = h.alerts;
         out.console = h.console;
         out.requests = h.requests;
