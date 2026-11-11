@@ -256,10 +256,19 @@ impl Pruner<'_> {
         if !self.forms_seen.insert((r, inner_owner)) {
             return;
         }
+        // Each form entered uses the page's form allowance, and nothing more is read once either
+        // allowance is spent: what is left can't be told, so nothing of the file is pruned (as for a
+        // file nested too deep), rather than each remaining form being visited and its inherited
+        // dictionary cloned.
+        if self.budget.exhausted() || !self.budget.enter_form() {
+            self.too_deep = true;
+            return;
+        }
         #[cfg(test)]
         crate::work(1);
         match self.budget.decode_with_damage(self.doc, s, usize::MAX) {
             Ok((data, false)) => self.content(&data, &inner, inner_owner, depth + 1),
+            Err(_) if self.budget.exhausted() => self.too_deep = true,
             Ok((_, true)) | Err(_) => self.unread(&inner, inner_owner, depth + 1),
         }
     }
