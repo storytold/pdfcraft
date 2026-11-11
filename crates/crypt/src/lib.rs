@@ -127,6 +127,13 @@ impl Permissions {
     pub fn assemble(&self) -> bool {
         if self.is_revision_3_or_later() { self.bit(11) } else { self.bit(4) }
     }
+    /// Take pages out into another document (Extract, Split, a source of Combine or Insert
+    /// Pages): [`Self::assemble`] and copying (bit 5), since the pages carry their text and
+    /// graphics into a new file without the document's protection (#5081). "Any except
+    /// extracting pages" sets bit 4 but not bit 11, so at revision 3 and later it grants neither.
+    pub fn extract_pages(&self) -> bool {
+        self.assemble() && self.copy()
+    }
     /// Revision 3 and later need bit 3 as well as bit 12. Table 22 defines bit 12 for those
     /// revisions only: at revision 2 the print flag (bit 3) is all there is.
     pub fn print_high_quality(&self) -> bool {

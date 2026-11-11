@@ -203,6 +203,15 @@ pub fn recalculate(doc: &mut Document) -> Result<usize, FormError> {
 
 /// [`recalculate`], running custom Calculate (and Format) scripts through `scripts`.
 pub fn recalculate_with(doc: &mut Document, scripts: &mut dyn Scripts) -> Result<usize, FormError> {
+    recalculate_values(doc, scripts, None)
+}
+
+/// Evaluate fields in calculation order. When a redraw set is supplied, record changed fields for formatting after the pass.
+fn recalculate_values(
+    doc: &mut Document,
+    scripts: &mut dyn Scripts,
+    mut deferred: Option<&mut std::collections::HashSet<ObjRef>>,
+) -> Result<usize, FormError> {
     let mut all = fields(doc);
     if !all.iter().any(calc_order::is_calculated) {
         return Ok(0);
@@ -211,6 +220,9 @@ pub fn recalculate_with(doc: &mut Document, scripts: &mut dyn Scripts) -> Result
     let order: Vec<ObjRef> = calc_order::run_order(doc, &all).0.into_iter().filter_map(|(i, _)| all.get(i)).map(|f| f.obj).collect();
     let mut changed = 0;
     for obj in order {
+        if scripts.stopped() {
+            break;
+        }
         let Some(f) = all.iter().find(|f| f.obj == obj).cloned() else { continue };
         let lookup = |n: &str| -> Vec<String> {
             let prefix = format!("{n}.");
@@ -218,13 +230,18 @@ pub fn recalculate_with(doc: &mut Document, scripts: &mut dyn Scripts) -> Result
         };
         let current = f.value.first().cloned().unwrap_or_default();
         let v = if let Some(js) = &f.actions.scripts.calculate {
-            let r = scripts.run(FieldEvent::Calculate, js, &f, &current, &all);
+            let r = scripts.run(FieldEvent::Calculate, js, &f, &current, &all, doc);
             // A script may set its own field through the field object (`getField("Total").value
             // = …`) rather than through `event.value`. `apply_changes` leaves the event's own
             // field to the event, so that value is the result unless the script also assigned
             // `event.value`, even the value it already had.
-            let own = r.changes.iter().find(|c| c.name == f.name).and_then(|c| c.value.as_ref()).map(|v| v.first().cloned().unwrap_or_default());
-            scripting::apply_changes(doc, &r.changes, &f.name, scripts)?;
+            let own = r
+                .changes
+                .iter()
+                .find(|c| c.name == f.name && c.object.is_none_or(|obj| obj == f.obj))
+                .and_then(|c| c.value.as_ref())
+                .map(|v| v.first().cloned().unwrap_or_default());
+            scripting::apply_changes(doc, &r.changes, &f.name, Some(f.obj), scripts)?;
             if !r.changes.is_empty() {
                 all = fields(doc);
             }
@@ -262,7 +279,12 @@ pub fn recalculate_with(doc: &mut Document, scripts: &mut dyn Scripts) -> Result
                     _ => {}
                 }
             })?;
-            redraw(doc, &f, std::slice::from_ref(&v), scripts)?;
+            if let Some(pending) = deferred.as_deref_mut() {
+                pending.insert(obj);
+            } else {
+                let current = all.iter().find(|field| field.obj == obj).unwrap_or(&f);
+                redraw(doc, current, std::slice::from_ref(&v), scripts)?;
+            }
             if let Some(target) = all.iter_mut().find(|x| x.obj == obj) {
                 target.value = vec![v];
             }
@@ -290,6 +312,11 @@ pub fn calculations_changed(before: &[Field], after: &[Field]) -> Vec<String> {
 }
 
 pub(crate) fn write_value(doc: &mut Document, f: &Field, value: &FieldValue, scripts: &mut dyn Scripts) -> Result<(), FormError> {
+    write_value_impl(doc, f, value, scripts, false)
+}
+
+/// Persist a value according to the field kind. A reset bypasses custom input validation and defers text and choice appearances.
+fn write_value_impl(doc: &mut Document, f: &Field, value: &FieldValue, scripts: &mut dyn Scripts, resetting: bool) -> Result<(), FormError> {
     match (f.kind, value) {
         (FieldKind::Text, FieldValue::Text(t)) => {
             if let Some(max) = f.max_len
@@ -305,17 +332,21 @@ pub(crate) fn write_value(doc: &mut Document, f: &Field, value: &FieldValue, scr
             // Keystroke (on commit) and Validate, as Acrobat runs them before accepting a value.
             let t = &f.actions.keystroke(&f.name, t).map_err(FormError::Format)?;
             af::validate(&f.actions.validate, t).map_err(FormError::Invalid)?;
-            let t = &scripting::accept(doc, f, t, scripts)?;
+            let (t, refresh_field) = if resetting { (t.clone(), false) } else { scripting::accept(doc, f, t, scripts)? };
             let shadow = t.is_empty() && crate::author::ancestor_sets(doc, f.obj, b"V");
             doc.update_dict(f.obj, |d| {
                 if t.is_empty() && !shadow {
                     d.remove(b"V");
                 } else {
-                    d.set(b"V".to_vec(), PdfString::text(t));
+                    d.set(b"V".to_vec(), PdfString::text(&t));
                 }
                 d.remove(b"RV");
             })?;
-            redraw(doc, f, std::slice::from_ref(t), scripts)
+            if resetting {
+                return Ok(());
+            }
+            let current = refresh_field.then(|| fields(doc).into_iter().find(|current| current.obj == f.obj)).flatten();
+            redraw(doc, current.as_ref().unwrap_or(f), std::slice::from_ref(&t), scripts)
         }
         (FieldKind::CheckBox | FieldKind::Radio, FieldValue::Widget(i)) => {
             // A button can be read-only on its own (its own `/Ff`), though the field isn't.
@@ -325,6 +356,9 @@ pub(crate) fn write_value(doc: &mut Document, f: &Field, value: &FieldValue, scr
             let Some(state) = f.widgets.get(*i).and_then(|w| w.on_state.clone()) else {
                 return invalid(format!("{:?} has no button {} with an on state", f.name, i.saturating_add(1)));
             };
+            if f.kind == FieldKind::Radio && radio_change_blocked(f, Some(&state), Some(*i)) {
+                return Err(FormError::ReadOnly(f.name.clone()));
+            }
             set_states(doc, f, Some(&state), Some(*i))
         }
         (FieldKind::CheckBox, v) => {
@@ -374,6 +408,9 @@ pub(crate) fn write_value(doc: &mut Document, f: &Field, value: &FieldValue, scr
             }
             if choice.is_none() && f.has(flags::NO_TOGGLE_TO_OFF) && !f.value.is_empty() {
                 return invalid(format!("{:?} must keep one option selected", f.name));
+            }
+            if radio_change_blocked(f, choice.as_deref(), None) {
+                return Err(FormError::ReadOnly(f.name.clone()));
             }
             set_states(doc, f, choice.as_deref(), None)
         }
@@ -462,6 +499,9 @@ pub(crate) fn write_value(doc: &mut Document, f: &Field, value: &FieldValue, scr
                 }
             })?;
             scroll_widgets(doc, f, &picked, f.options.len())?;
+            if resetting {
+                return Ok(());
+            }
             let mut shown = f.clone();
             shown.value = exports.clone();
             shown.selected = picked;
@@ -507,17 +547,49 @@ pub(crate) fn scroll_widgets(doc: &mut Document, f: &Field, picked: &[usize], co
     Ok(())
 }
 
+/// The one widget of an exclusive radio group that turns on when `on` is chosen (`pick` when it has
+/// that state, else the one already on, else the first); `None` when `on` is `None` or the group
+/// turns every widget with that state on together.
+fn chosen_widget(f: &Field, on: Option<&str>, pick: Option<usize>) -> Option<usize> {
+    let exclusive = f.kind == FieldKind::Radio && !f.has(flags::RADIOS_IN_UNISON);
+    on.filter(|_| exclusive).and_then(|c| {
+        let has = |i: &usize| f.widgets.get(*i).is_some_and(|w| w.on_state.as_deref() == Some(c));
+        let n = f.widgets.len();
+        pick.filter(has).or_else(|| (0..n).filter(has).find(|&i| f.widget_on(i))).or_else(|| (0..n).find(has))
+    })
+}
+
+/// Whether setting a radio group to `on` (through widget `pick`, when the caller chose a widget)
+/// would turn a read-only button on or off: such a button can't be picked, and a selected one can't
+/// be switched off by picking another. Judged per widget, by the state `set_states` would give it,
+/// so buttons sharing an on-state name are told apart by their `/AS`; the group's `/V` stands for
+/// the selection only when no button's `/AS` says which is on.
+fn radio_change_blocked(f: &Field, on: Option<&str>, pick: Option<usize>) -> bool {
+    let chosen = chosen_widget(f, on, pick);
+    let before = |i: usize, w: &Widget| {
+        let Some(s) = w.on_state.as_deref() else { return false };
+        if f.widget_on(i) {
+            return true;
+        }
+        // No button sharing this on state is on by its `/AS` and the group's `/V` names it: the
+        // first of them holds the selection, whatever its own `/AS` says (an `Off` among them).
+        let sharing = |x: &Widget| x.on_state.as_deref() == Some(s);
+        f.value.first().map(String::as_str) == Some(s)
+            && !f.widgets.iter().any(|x| sharing(x) && x.state.as_deref() == Some(s))
+            && f.widgets.iter().position(sharing) == Some(i)
+    };
+    f.widgets.iter().enumerate().any(|(i, w)| {
+        let after = on.is_some() && w.on_state.as_deref() == on && chosen.is_none_or(|k| k == i);
+        w.read_only && before(i, w) != after
+    })
+}
+
 /// Check boxes and radio buttons: `/V` on the field, `/AS` on each widget. The widgets whose on
 /// state is `on` turn on together in a check box (ISO 32000-2 §12.7.5.2.3, EXAMPLE 2) and in a
 /// radio group with RadiosInUnison. Without it, at most one radio button is on (Table 229,
 /// §12.7.5.2.3): widget `pick` when it has that state, else the one already on, else the first.
 fn set_states(doc: &mut Document, f: &Field, on: Option<&str>, pick: Option<usize>) -> Result<(), FormError> {
-    let exclusive = f.kind == FieldKind::Radio && !f.has(flags::RADIOS_IN_UNISON);
-    let chosen = on.filter(|_| exclusive).and_then(|c| {
-        let has = |i: &usize| f.widgets.get(*i).is_some_and(|w| w.on_state.as_deref() == Some(c));
-        let n = f.widgets.len();
-        pick.filter(has).or_else(|| (0..n).filter(has).find(|&i| f.widget_on(i))).or_else(|| (0..n).find(has))
-    });
+    let chosen = chosen_widget(f, on, pick);
     // `/V` names the on state, the same for every widget that has it: which of them is on is
     // their `/AS` alone (§12.7.5.2.4).
     let v = on.unwrap_or("Off");
@@ -824,8 +896,35 @@ fn unread_stream(doc: &Document, field: ObjRef, key: &[u8]) -> bool {
     false
 }
 
+/// Whether this snapshot contains a known default, including a genuinely absent /DV.
+/// An unread nonempty default stream is unknown, not an instruction to clear the field.
+/// Reuse this policy when exposing reset defaults to other execution layers.
+pub fn default_value_known(doc: &Document, field: &Field) -> bool {
+    !field.default.is_empty() || !unread_stream(doc, field.obj, b"DV")
+}
+
 /// Acrobat's Clear form: every field (or the named ones) back to its default value.
 pub fn reset(doc: &mut Document, names: Option<&[String]>) -> Result<usize, FormError> {
+    reset_with_counts(doc, names).map(|(reset, _)| reset)
+}
+
+/// Restore defaults and report direct resets and dependent calculation writes separately.
+pub fn reset_with_counts(doc: &mut Document, names: Option<&[String]>) -> Result<(usize, usize), FormError> {
+    reset_with_scripts(doc, names, &mut NoScripts)
+}
+
+/// Restore defaults and then run the active calculation callbacks once.
+pub fn reset_with_scripts(doc: &mut Document, names: Option<&[String]>, scripts: &mut dyn Scripts) -> Result<(usize, usize), FormError> {
+    reset_with_formatting(doc, names, scripts, true)
+}
+
+/// Restore defaults with their script formatting, optionally deferring custom calculations.
+pub fn reset_with_formatting(
+    doc: &mut Document,
+    names: Option<&[String]>,
+    scripts: &mut dyn Scripts,
+    calculate_with_scripts: bool,
+) -> Result<(usize, usize), FormError> {
     let all = fields(doc);
     if all.is_empty() {
         return Err(FormError::NoForm);
@@ -839,12 +938,13 @@ pub fn reset(doc: &mut Document, names: Option<&[String]>) -> Result<usize, Form
     }
     let named: Option<std::collections::HashSet<&str>> = names.map(|n| n.iter().map(String::as_str).collect());
     let mut changed = 0;
+    let mut redraw_fields = std::collections::HashSet::new();
     for f in all.iter().filter(|f| named.as_ref().is_none_or(|n| n.contains(f.name.as_str()))) {
         // A default the reading didn't decode (its budget spent) is unknown, not empty: clearing
         // the field to nothing would lose the value it should go back to. A value it didn't decode
         // isn't known to be the default, so it is reset.
         let unread = |key: &[u8], read: &[String]| read.is_empty() && unread_stream(doc, f.obj, key);
-        if unread(b"DV", &f.default) || (f.value == f.default && !unread(b"V", &f.value)) {
+        if !default_value_known(doc, f) || (f.value == f.default && !unread(b"V", &f.value)) {
             continue;
         }
         let v = match f.kind {
@@ -857,11 +957,33 @@ pub fn reset(doc: &mut Document, names: Option<&[String]>) -> Result<usize, Form
         // A reset is not blocked by NoToggleToOff: go through the writer directly.
         let mut tmp = f.clone();
         tmp.flags &= !flags::NO_TOGGLE_TO_OFF;
-        write_value(doc, &tmp, &v, &mut NoScripts)?;
-        changed += 1;
+        match write_value_impl(doc, &tmp, &v, scripts, true) {
+            Ok(()) => {
+                changed += 1;
+                if matches!(f.kind, FieldKind::Text | FieldKind::Combo | FieldKind::List) {
+                    redraw_fields.insert(f.obj);
+                }
+            }
+            // a read-only button of the group holds the value: this field is left as it is, and the
+            // rest of the form is still cleared
+            Err(FormError::ReadOnly(_)) => {}
+            Err(e) => return Err(e),
+        }
     }
-    recalculate(doc)?;
-    Ok(changed)
+    let calculation_runner: &mut dyn Scripts = if calculate_with_scripts { scripts } else { &mut NoScripts };
+    let recalculated = recalculate_values(doc, calculation_runner, Some(&mut redraw_fields))?;
+    // Format scripts can read other fields. Draw from the final values once all
+    // selected defaults and calculated values have been written.
+    if !redraw_fields.is_empty() {
+        let mut no_scripts = NoScripts;
+        for f in fields(doc).into_iter().filter(|f| redraw_fields.contains(&f.obj)) {
+            // A host may stop callbacks and still commit the reset. Its widgets must
+            // continue to reflect the saved values.
+            let formatting: &mut dyn Scripts = if scripts.stopped() { &mut no_scripts } else { scripts };
+            redraw(doc, &f, &f.value, formatting)?;
+        }
+    }
+    Ok((changed, recalculated))
 }
 
 /// Marks option `i` picked; false when it already was, or there is no such option.

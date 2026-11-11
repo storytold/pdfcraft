@@ -35,6 +35,10 @@ const MAX_SHARED: usize = 1 << 16;
 pub(crate) struct Painting {
     /// Something paints transparently.
     pub(crate) transparency: bool,
+    /// Something paints with a soft mask, a constant alpha below 1 or a blend mode: what
+    /// `transparency` holds except a transparency group, which on its own paints opaque content
+    /// as it would be painted without it ([`crate::page_uses_transparency`]).
+    pub(crate) paints_transparently: bool,
     /// The blend modes graphics states name that ISO 32000-1 doesn't define.
     pub(crate) unknown_blend_modes: Vec<String>,
 }
@@ -42,6 +46,7 @@ pub(crate) struct Painting {
 impl Painting {
     fn add(&mut self, other: &Painting) {
         self.transparency |= other.transparency;
+        self.paints_transparently |= other.paints_transparently;
         for name in &other.unknown_blend_modes {
             self.add_blend_mode(name);
         }
@@ -297,7 +302,9 @@ impl Walk<'_> {
         // A soft mask is a dictionary; `/None`, null or anything else is none (ISO 32000-1 Table 58).
         let smask = g.get(b"SMask").map(|m| held(doc, m));
         let mask = smask.as_deref().is_some_and(|m| matches!(m, Object::Dict(_)));
-        self.found.transparency |= below_one(b"CA") || below_one(b"ca") || blend || mask;
+        let paints = below_one(b"CA") || below_one(b"ca") || blend || mask;
+        self.found.transparency |= paints;
+        self.found.paints_transparently |= paints;
         if let Some(bm) = bm.as_deref() {
             unknown_blend_modes(doc, bm, &mut self.found);
         }
@@ -319,6 +326,7 @@ impl Walk<'_> {
             let soft_mask = d.get(b"SMask").is_some_and(|m| matches!(&*held(doc, m), Object::Stream(_)));
             let in_data = d.get(b"SMaskInData").and_then(|v| held(doc, v).as_int()).is_some_and(|v| v > 0);
             self.found.transparency |= soft_mask || in_data;
+            self.found.paints_transparently |= soft_mask || in_data;
             return;
         }
         let group = d
@@ -522,5 +530,28 @@ mod tests {
         assert!(page_names_blending_space(&doc, &pages[1].dict));
         assert!(!page_names_blending_space(&doc, &pages[2].dict));
         assert!(!page_names_blending_space(&doc, &pages[3].dict));
+    }
+
+    #[test]
+    fn a_transparency_group_alone_does_not_paint_transparently() {
+        let doc = build(&[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+            "<< /Type /Page /Parent 2 0 R /Resources << /XObject << /Fm 4 0 R >> >> >>",
+            "<< /Type /XObject /Subtype /Form /BBox [0 0 10 10] /Group << /S /Transparency >> /Length 0 >>\nstream\n\nendstream",
+        ]);
+        let page = &pdfcraft_model::pages(&doc)[0];
+        assert!(page_painting(&doc, &page.dict, &mut Shared::default()).transparency);
+        assert!(!crate::page_uses_transparency(&doc, &page.dict));
+
+        // The same group with a constant alpha below 1 inside it.
+        let doc = build(&[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+            "<< /Type /Page /Parent 2 0 R /Resources << /XObject << /Fm 4 0 R >> >> >>",
+            "<< /Type /XObject /Subtype /Form /BBox [0 0 10 10] /Group << /S /Transparency >> /Resources << /ExtGState << /G << /ca 0.5 >> >> >> /Length 0 >>\nstream\n\nendstream",
+        ]);
+        let page = &pdfcraft_model::pages(&doc)[0];
+        assert!(crate::page_uses_transparency(&doc, &page.dict));
     }
 }
