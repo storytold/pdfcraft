@@ -84,6 +84,19 @@ fn click_pt(h: &mut Harness<'static, PdfCraftApp>, p: (f32, f32)) {
     let p = at(h, p.0, p.1);
     click(h, p);
 }
+/// Click a page point with modifier keys held (⌘-click adds a comment to the selection).
+fn click_pt_with(h: &mut Harness<'static, PdfCraftApp>, p: (f32, f32), modifiers: egui::Modifiers) {
+    let p = at(h, p.0, p.1);
+    h.hover_at(p);
+    h.event(egui::Event::ModifiersChanged(modifiers));
+    h.run_steps(1);
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed, modifiers });
+        h.run_steps(1);
+    }
+    h.event(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
+    h.run_steps(2);
+}
 
 /// A text field by its placeholder ("Add a comment", "Add a reply").
 fn field<'a>(h: &'a Harness<'static, PdfCraftApp>, placeholder: &'a str) -> egui_kittest::Node<'a> {
@@ -141,6 +154,53 @@ fn sidebar_comment_centres_the_annotation_at_high_zoom() {
             h.render().unwrap().save(format!("{dir}/comment-centred.png")).unwrap();
         }
     }
+}
+
+/// A double-click on the text of a card in the Comments panel edits it, as one on its header does
+/// (a click there would select a word): on a selected card, and on one the first click selects.
+#[test]
+fn double_clicking_a_cards_text_edits_it() {
+    for selected in [true, false] {
+        double_click_a_cards_text(selected);
+    }
+}
+
+fn double_click_a_cards_text(selected: bool) {
+    // Frames 1/60 s apart, so two clicks make a double-click.
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(1.0 / 60.0).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("text.pdf", None, TEXT_FIXTURE.to_vec()).expect("opens");
+        app.set_option("left", "closed").unwrap();
+        app.set_option("panel", "comments").unwrap();
+        let shape = pdfcraft_engine::Shape::Note { at: [150.0, 90.0], icon: pdfcraft_engine::NoteIcon::Comment };
+        assert!(app.apply_edit(pdfcraft_engine::Edit::AddAnnotation(pdfcraft_engine::NewAnnotation {
+            page: 0,
+            style: pdfcraft_engine::Style::default_for(&shape),
+            shape,
+            contents: "Edit this note".into(),
+            author: "Tester".into(),
+        })));
+        app.views[0].comments.selected = selected.then_some((0, 0));
+        app
+    });
+    h.run_steps(4);
+    crate::support::settle(&mut h);
+    assert_eq!(h.state().views[0].comments.selected.is_some(), selected);
+    let p = h.query_all_by_label("Edit this note").next().expect("the card's text").rect().center();
+    h.hover_at(p);
+    h.run_steps(1);
+    for _ in 0..2 {
+        for pressed in [true, false] {
+            h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
+        }
+        h.run_steps(1);
+    }
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "selected: {selected}");
+    assert_eq!(h.state().views[0].comments.editing, Some((0, 0, "Edit this note".into())), "selected: {selected}");
+    // And the editor is drawn.
+    note_editor(&h);
 }
 
 #[test]
@@ -554,8 +614,72 @@ fn selected_text_comment_action_opens_note_composer() {
     h.run_steps(3);
     h.get_by_label("Add comment").click();
     h.run_steps(2);
-    assert!(matches!(h.state().views[0].comments.composer.as_ref().map(|c| &c.kind), Some(pdfcraft_ui_egui::comments::ComposerKind::Note)));
+    assert!(matches!(
+        h.state().views[0].comments.composer.as_ref().map(|c| &c.kind),
+        Some(pdfcraft_ui_egui::comments::ComposerKind::TextNote { .. })
+    ));
+    h.get_by_label("Add comment");
+    assert!(h.query_by_label("Sticky note").is_none());
     assert!(h.state().views[0].selected_text().is_none());
+}
+
+#[test]
+fn selection_note_replaced_by_sticky_note_posts_at_the_new_anchor() {
+    let mut h = harness(|_| {});
+    h.state_mut().views[0].select_text(0, 4, 8);
+    h.run_steps(3);
+    h.get_by_label("Add comment").click();
+    h.run_steps(2);
+    h.state_mut().set_option("quick", "note").unwrap();
+    click_pt(&mut h, (250.0, 180.0));
+    let anchor = h.state().views[0].comments.composer.as_ref().unwrap().at;
+    field(&h, "Add a comment").type_text("New sticky note");
+    h.run_steps(2);
+    h.get_by_label("Post").click();
+    h.run_steps(3);
+    let c = comments(&h);
+    assert_eq!(c.len(), 1);
+    assert_eq!(c[0].subtype, "Text");
+    assert_eq!(c[0].contents.as_deref(), Some("New sticky note"));
+    assert!(c[0].quads.is_empty());
+    assert!((anchor[0] - 250.0).abs() < 1.0 && (anchor[1] - 180.0).abs() < 1.0);
+    assert!((f64::from(c[0].rect[0]) - anchor[0]).abs() < 1.0 && (f64::from(c[0].rect[3]) - anchor[1]).abs() < 1.0, "{:?}", c[0].rect);
+}
+
+#[test]
+fn selection_note_posts_highlight_and_hovers_author_and_comment() {
+    let _gpu = std::env::var_os("PDFCRAFT_SHOTS").map(|_| crate::gpu());
+    let mut h = harness(|_| {});
+    h.state_mut().views[0].select_text(0, 4, 8);
+    let selected = h.state().views[0].selected_text().unwrap();
+    h.run_steps(3);
+    h.get_by_label("Add comment").click();
+    h.run_steps(2);
+    field(&h, "Add a comment").type_text("Check these words");
+    h.run_steps(2);
+    h.get_by_label("Post").click();
+    h.run_steps(3);
+    crate::support::settle(&mut h);
+    let c = comments(&h);
+    assert_eq!(c.len(), 1);
+    assert_eq!(c[0].subtype, "Highlight");
+    assert_eq!(c[0].contents.as_deref(), Some("Check these words"));
+    assert!(!c[0].quads.is_empty());
+    let hover = format!("{}\nCheck these words", c[0].author.as_deref().expect("comment has an author"));
+    h.state_mut().set_option("panel", "none").unwrap();
+    h.state_mut().views[0].comments.selected = None;
+    h.hover_at(pos2(0.0, 0.0));
+    h.run_steps(3);
+    assert!(h.query_by_label(&hover).is_none());
+    let r = c[0].rect;
+    let p = at(&h, (r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0);
+    h.hover_at(p);
+    h.run_steps(3);
+    h.get_by_label(&hover);
+    assert!(h.query_by_label_contains(&selected).is_none(), "hover omits the selected text");
+    if let Ok(dir) = std::env::var("PDFCRAFT_SHOTS") {
+        h.render().unwrap().save(format!("{dir}/selection-comment-hover.png")).unwrap();
+    }
 }
 
 #[test]
@@ -909,8 +1033,8 @@ fn comments_are_selected_moved_and_deleted_with_the_select_tool() {
 }
 
 /// A line's ends have handles: dragging one with the Select tool changes the line's length and
-/// angle (Shift holds it to 45°), as one undo step. The line tool keeps drawing from an end: a
-/// new line starts there rather than dragging the one just drawn.
+/// angle (Shift holds it level or plumb with the other end), as one undo step. The line tool keeps
+/// drawing from an end: a new line starts there rather than dragging the one just drawn.
 #[test]
 fn line_ends_are_dragged_to_change_length_and_angle() {
     let mut h = harness(|app| app.set_option("quick", "line").unwrap());
@@ -934,7 +1058,7 @@ fn line_ends_are_dragged_to_change_length_and_angle() {
     assert!((p[1][0] - 200.0).abs() < 1.0 && (p[1][1] - 160.0).abs() < 1.0, "the dragged end follows: {p:?}");
     let id = h.state().views[0].id;
     assert_eq!(h.state().session.get(id).unwrap().can_undo(), Some("Reshape comment"));
-    // Shift: held to the nearest 45° from the other end (39° here).
+    // Shift: held level or plumb with the other end, here level (110 pt across, 90 up).
     let a = at(&h, 200.0, 160.0);
     let b = at(&h, 150.0, 190.0);
     h.hover_at(a);
@@ -951,8 +1075,7 @@ fn line_ends_are_dragged_to_change_length_and_angle() {
     h.event(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
     h.run_steps(1);
     let p = ends(&h);
-    let (dx, dy) = (p[1][0] - p[0][0], p[1][1] - p[0][1]);
-    assert!(dx > 50.0 && (dx - dy).abs() < 0.5, "45°: {p:?}");
+    assert!((p[1][1] - p[0][1]).abs() < 0.01 && (p[1][0] - 150.0).abs() < 1.0, "level: {p:?}");
     // Undo puts the line back as it was before the drag.
     h.state_mut().undo();
     h.run_steps(2);
@@ -1036,6 +1159,80 @@ fn alt_arrows_navigate_instead_of_nudging_the_selected_comment() {
     assert!(comments(&h)[0].rect[0] > before[0], "→ nudged it");
 }
 
+/// Over the first corner, where a click closes the polygon, the rubber band runs to that corner
+/// with Shift held too: the closing side the click will make, not a level or plumb one.
+#[test]
+fn the_rubber_band_shows_the_closing_side_with_shift_held() {
+    let _gpu = crate::gpu();
+    let mut h = harness(|app| app.set_option("quick", "polygon").unwrap());
+    for p in [(40.0, 40.0), (140.0, 40.0), (140.0, 140.0)] {
+        click_pt(&mut h, p);
+    }
+    h.event(egui::Event::ModifiersChanged(egui::Modifiers::SHIFT));
+    h.hover_at(at(&h, 40.0, 40.0) + egui::vec2(2.0, 2.0));
+    h.run_steps(3);
+    let pixels = h.render().unwrap();
+    // Halfway along the diagonal closing side, (90, 90).
+    let m = at(&h, 90.0, 90.0);
+    let drawn = (-2..=2).any(|d: i32| {
+        let v = pixels.get_pixel((m.x as i32 + d) as u32, (m.y as i32 + d) as u32).0;
+        v[0] > 150 && v[1] < 100 && v[2] < 100
+    });
+    assert!(drawn, "the closing side is drawn");
+    h.event(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
+    h.run_steps(1);
+}
+
+/// Shift holds a new line or arrow level or plumb with where it starts, and each new side of
+/// connected lines or a polygon with the corner before (a CAD drawing's ortho mode). Without
+/// Shift they go where the pointer is.
+#[test]
+fn shift_holds_new_lines_and_sides_level_or_plumb() {
+    let mut h = harness(|app| app.set_option("quick", "line").unwrap());
+    let shift = |h: &mut Harness<'static, PdfCraftApp>, on: bool| {
+        h.event(egui::Event::ModifiersChanged(if on { egui::Modifiers::SHIFT } else { egui::Modifiers::NONE }));
+        h.run_steps(1);
+    };
+    let points = |h: &Harness<'static, PdfCraftApp>, subtype: &str| {
+        // In the order drawn: the list isn't sorted by index.
+        let mut drawn: Vec<_> = comments(h).into_iter().filter(|a| a.subtype == subtype).collect();
+        drawn.sort_by_key(|a| a.index);
+        drawn.into_iter().map(|a| a.points).collect::<Vec<_>>()
+    };
+    let close = |p: [f32; 2], q: [f32; 2]| (p[0] - q[0]).abs() < 1.0 && (p[1] - q[1]).abs() < 1.0;
+    shift(&mut h, true);
+    drag_pt(&mut h, (40.0, 100.0), (140.0, 120.0));
+    drag_pt(&mut h, (200.0, 40.0), (215.0, 150.0));
+    shift(&mut h, false);
+    drag_pt(&mut h, (40.0, 160.0), (140.0, 190.0));
+    let lines = points(&h, "Line");
+    assert_eq!(lines.len(), 3, "{lines:?}");
+    assert!(close(lines[0][0], [40.0, 100.0]) && close(lines[0][1], [140.0, 100.0]), "mostly across: level: {lines:?}");
+    assert!(close(lines[1][0], [200.0, 40.0]) && close(lines[1][1], [200.0, 150.0]), "mostly up: plumb: {lines:?}");
+    assert!(close(lines[2][1], [140.0, 190.0]), "no Shift, no hold: {lines:?}");
+
+    h.state_mut().set_option("quick", "arrow").unwrap();
+    shift(&mut h, true);
+    drag_pt(&mut h, (260.0, 180.0), (150.0, 170.0));
+    shift(&mut h, false);
+    let arrow = points(&h, "Line").pop().expect("an arrow");
+    assert!(close(arrow[1], [150.0, 180.0]), "an arrow too, leftwards: {arrow:?}");
+
+    // Connected lines: each click with Shift is held to the corner before.
+    h.state_mut().set_option("quick", "polyline").unwrap();
+    click_pt(&mut h, (20.0, 20.0));
+    shift(&mut h, true);
+    click_pt(&mut h, (90.0, 30.0));
+    click_pt(&mut h, (95.0, 80.0));
+    shift(&mut h, false);
+    click_pt(&mut h, (130.0, 60.0));
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    let poly = points(&h, "PolyLine").pop().expect("connected lines");
+    assert_eq!(poly.len(), 4, "{poly:?}");
+    assert!(close(poly[1], [90.0, 20.0]) && close(poly[2], [90.0, 80.0]) && close(poly[3], [130.0, 60.0]), "{poly:?}");
+}
+
 #[test]
 fn a_shape_just_drawn_resizes_from_its_handles_without_the_select_tool() {
     // #2338: the new shape showed its handles, but only the Select tool answered them.
@@ -1090,6 +1287,9 @@ fn panel_width(h: &Harness<'static, PdfCraftApp>) -> f32 {
 
 #[test]
 fn the_panel_keeps_its_width_with_a_reply_box_open() {
+    if crate::support::skip_without_catalogs("the_panel_keeps_its_width_with_a_reply_box_open") {
+        return;
+    }
     // The reply row reserved 48 px for "Post"; Russian's wider button overflowed it, and a
     // resizable panel keeps the width its content used, so every repaint widened the panel.
     let mut h = harness(|app| app.set_option("panel", "comments").unwrap());
@@ -1237,6 +1437,165 @@ fn shapes_take_a_fill_colour_from_the_quick_bar_and_properties() {
     assert_eq!(h.state().comment_prefs.style(CommentTool::Rectangle).fill, Some([0.0, 0.0, 1.0]));
 }
 
+/// Comment Properties ▸ Border shape puts an oval or a circle around a text box's text; a
+/// callout has none to choose. Make Properties Default carries it into the Text box tool.
+#[test]
+fn text_box_properties_choose_the_border_shape() {
+    use pdfcraft_engine::BorderShape;
+    use pdfcraft_ui_egui::comments::CommentTool;
+    let mut h = harness(|_| {});
+    let shape = pdfcraft_engine::Shape::TextBox { rect: [40.0, 120.0, 200.0, 160.0], font_size: 12.0 };
+    let mut style = pdfcraft_engine::Style::default_for(&shape);
+    style.width = 1.0;
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::AddAnnotation(pdfcraft_engine::NewAnnotation {
+        page: 0,
+        shape,
+        style,
+        contents: "Pos. 3".into(),
+        author: "Tester".into(),
+    })));
+    h.run_steps(2);
+    h.state_mut().open_comment_props(0, 0);
+    h.run_steps(2);
+    h.get_by_label("Border shape");
+    {
+        let d = h.state_mut().comment_props.as_mut().expect("open");
+        assert_eq!(d.original.border_shape, Some(BorderShape::Rectangle));
+        d.edited.border_shape = Some(BorderShape::Oval);
+        d.make_default = true;
+    }
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    let s = h.state();
+    let doc = s.session.get(s.views[0].id).unwrap();
+    assert_eq!(doc.comment_props(0, 0).unwrap().border_shape, Some(BorderShape::Oval));
+    assert_eq!(doc.can_undo(), Some("Change comment properties"));
+    assert_eq!(s.comment_prefs.style(CommentTool::TextBox).border_shape, BorderShape::Oval, "the default for new text boxes");
+}
+
+/// Thickness 0 in Comment Properties takes a circle away with the line, as Border ▸ None does on
+/// the toolbar, and a default made from it draws no circle either.
+#[test]
+fn no_thickness_in_text_box_properties_takes_the_circle_away() {
+    use pdfcraft_engine::BorderShape;
+    use pdfcraft_ui_egui::comments::CommentTool;
+    let mut h = harness(|_| {});
+    let shape = pdfcraft_engine::Shape::TextBox { rect: [40.0, 120.0, 200.0, 160.0], font_size: 12.0 };
+    let mut style = pdfcraft_engine::Style::default_for(&shape);
+    style.width = 1.0;
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::AddAnnotation(pdfcraft_engine::NewAnnotation {
+        page: 0,
+        shape,
+        style,
+        contents: "Pos. 3".into(),
+        author: "Tester".into(),
+    })));
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::BorderShapeAnnotation { page: 0, index: 0, shape: BorderShape::Circle }));
+    h.state_mut().comment_prefs.set_border_shape(CommentTool::TextBox, BorderShape::Circle);
+    h.run_steps(2);
+    h.state_mut().open_comment_props(0, 0);
+    h.run_steps(2);
+    {
+        let d = h.state_mut().comment_props.as_mut().expect("open");
+        assert_eq!(d.original.border_shape, Some(BorderShape::Circle));
+        d.edited.width = Some(0.0);
+        d.make_default = true;
+    }
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    let s = h.state();
+    let doc = s.session.get(s.views[0].id).unwrap();
+    let p = doc.comment_props(0, 0).unwrap();
+    assert_eq!((p.width, p.border_shape), (Some(0.0), Some(BorderShape::Rectangle)));
+    assert_eq!(doc.can_undo(), Some("Change comment properties"));
+    assert_eq!(s.comment_prefs.style(CommentTool::TextBox).border_shape, BorderShape::Rectangle, "the default for new text boxes");
+}
+
+/// A filled rectangle's line and fill, and a text box's text, border and fill, each take an
+/// opacity of their own in Properties; Make Properties Default carries them into the tool, so
+/// the next rectangle is drawn with a see-through fill and an opaque line.
+#[test]
+fn comment_properties_set_each_parts_opacity() {
+    use pdfcraft_ui_egui::comments::CommentTool;
+    let mut h = harness(|app| app.set_option("quick", "square").unwrap());
+    h.state_mut().comment_prefs.set_fill(CommentTool::Rectangle, Some([1.0, 1.0, 0.0]));
+    h.run_steps(2);
+    drag_pt(&mut h, (40.0, 100.0), (140.0, 40.0));
+    let props = |h: &Harness<'static, PdfCraftApp>, index: usize| {
+        let s = h.state();
+        let p = s.session.get(s.views[0].id).unwrap().comment_props(0, index).unwrap();
+        (p.opacity, p.fill_opacity, p.text_opacity)
+    };
+    h.state_mut().open_comment_props(0, 0);
+    h.run_steps(2);
+    // The sliders (each labelled by its row, which shares the name).
+    h.get_by_role_and_label(egui::accesskit::Role::Slider, "Line opacity");
+    h.get_by_role_and_label(egui::accesskit::Role::Slider, "Fill opacity");
+    assert_eq!(h.query_all_by_label("Text opacity").count(), 0, "a rectangle has no text");
+    {
+        let d = h.state_mut().comment_props.as_mut().expect("open");
+        d.edited.fill_opacity = Some(0.3);
+        d.make_default = true;
+    }
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert_eq!(props(&h, 0), (1.0, Some(0.3), None));
+    assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_undo(), Some("Change comment properties"));
+    assert_eq!(h.state().comment_prefs.style(CommentTool::Rectangle).fill_opacity, Some(0.3));
+    h.state_mut().set_option("quick", "square").unwrap();
+    h.run_steps(2);
+    drag_pt(&mut h, (160.0, 100.0), (260.0, 40.0));
+    assert_eq!(props(&h, 1), (1.0, Some(0.3), None), "the next rectangle takes the default");
+
+    // A text box with a border and a fill: its text, border and fill.
+    let shape = pdfcraft_engine::Shape::TextBox { rect: [40.0, 120.0, 200.0, 160.0], font_size: 12.0 };
+    let mut style = pdfcraft_engine::Style::default_for(&shape);
+    (style.width, style.fill) = (1.0, Some([1.0, 1.0, 0.6]));
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::AddAnnotation(pdfcraft_engine::NewAnnotation {
+        page: 0,
+        shape,
+        style,
+        contents: "Note".into(),
+        author: "Tester".into(),
+    })));
+    h.state_mut().set_option("quick", "select").unwrap();
+    h.run_steps(2);
+    h.state_mut().open_comment_props(0, 2);
+    h.run_steps(2);
+    for label in ["Text opacity", "Border opacity", "Fill opacity"] {
+        h.get_by_role_and_label(egui::accesskit::Role::Slider, label);
+    }
+    if let Ok(dir) = std::env::var("PDFCRAFT_SHOTS") {
+        let _gpu = crate::gpu();
+        h.render().unwrap().save(format!("{dir}/comment-part-opacity.png")).unwrap();
+    }
+    {
+        let d = h.state_mut().comment_props.as_mut().expect("open");
+        (d.edited.opacity, d.edited.fill_opacity) = (0.5, Some(0.2));
+    }
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert_eq!(props(&h, 2), (0.5, Some(0.2), Some(1.0)), "the border at half, the fill at a fifth, the text opaque");
+    // Without its fill and border, the text is the whole text box: its opacity is the comment's.
+    h.state_mut().open_comment_props(0, 2);
+    h.run_steps(2);
+    {
+        let d = h.state_mut().comment_props.as_mut().expect("open");
+        (d.edited.fill, d.edited.width) = (None, Some(0.0));
+    }
+    h.run_steps(2);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    h.state_mut().open_comment_props(0, 2);
+    h.run_steps(2);
+    let shown = egui_kittest::kittest::NodeT::accesskit_node(&h.get_by_role_and_label(egui::accesskit::Role::Slider, "Text opacity")).numeric_value();
+    assert_eq!(shown, Some(100.0), "the text's slider shows the opacity it is drawn at, not the border's half");
+    h.state_mut().comment_props.as_mut().expect("open").edited.opacity = 0.4;
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert_eq!(props(&h, 2), (0.4, Some(0.4), Some(0.4)));
+}
+
 #[test]
 fn the_panel_filters_and_sorts() {
     let mut h = harness(|app| {
@@ -1332,6 +1691,32 @@ fn the_panel_preserves_threads_source_order_and_unfiltered_page_counts() {
     assert_eq!(h.query_all_by_label("Needle first reply").count(), 0, "nothing replies to the unnamed root");
 }
 
+// Contributor-original PDF. A status is set on a reply (its /IRT names the reply, ISO 32000-2
+// §12.5.6.3), not on the comment; the status reply's text is found only there.
+const REPLY_STATUS_FIXTURE: &[u8] = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [5 0 R 6 0 R 7 0 R 8 0 R] >> endobj
+5 0 obj << /Type /Annot /Subtype /Text /Rect [20 140 40 160] /T (Alpha) /Contents (Plain root) >> endobj
+6 0 obj << /Type /Annot /Subtype /Text /Rect [60 140 80 160] /T (Beta) /Contents (Other root) >> endobj
+7 0 obj << /Type /Annot /Subtype /Text /Rect [20 100 40 120] /IRT 5 0 R /T (Reader) /Contents (Ordinary reply) >> endobj
+8 0 obj << /Type /Annot /Subtype /Text /Rect [20 100 40 120] /IRT 7 0 R /T (Carol) /StateModel /Review /State /Accepted /Contents (Reply-status token) >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+
+#[test]
+fn search_finds_a_comment_by_the_status_set_on_one_of_its_replies() {
+    let mut h = harness_with_bytes(REPLY_STATUS_FIXTURE.to_vec(), |app| {
+        app.set_option("panel", "comments").unwrap();
+        app.views[0].comments.search = Some("reply-status token".into());
+    });
+    h.run_steps(2);
+    h.get_by_label("Plain root");
+    h.get_by_label("Ordinary reply");
+    assert_eq!(h.query_all_by_label("Other root").count(), 0, "the other comment has no such status");
+    assert_eq!(h.query_all_by_label("No comments match.").count(), 0);
+}
+
 // Contributor-original PDF, shaped like PyMuPDF output: every page's first comment is named
 // `fitz-A0`, so only the `/IRT` reference tells which comment a reply belongs to.
 const PER_PAGE_NAMES: &[u8] = b"%PDF-1.7
@@ -1411,7 +1796,7 @@ fn one_reply_is_deleted_from_its_menu_and_the_thread_stays() {
     assert_eq!(h.query_all_by_label("Wrong reply").count(), 0);
     assert_eq!(h.query_all_by_label("Answer to the wrong reply").count(), 0);
     h.get_by_label("Right reply");
-    h.get_by_label("Accepted");
+    h.get_by_label("Ben: Accepted"); // One badge per reviewer.
     assert_eq!(h.state().session.get(id).unwrap().can_undo(), Some("Delete comment"), "one undo step");
 
     // Copy text copies the reply's text.
@@ -1919,6 +2304,9 @@ fn polygons_clouds_connected_lines_callouts_and_inserted_text() {
     let callout = comments(&h).into_iter().find(|a| a.subtype == "FreeText").expect("a callout");
     assert_eq!(callout.contents.as_deref(), Some("Why?"));
     assert!(callout.rect[0] <= 60.0 && callout.rect[1] <= 160.0, "holds the leader: {:?}", callout.rect);
+    // Its knee line is Acrobat's: level, 12 pt out from the middle of the box's left side.
+    let (tb, knee) = (callout.text_box.expect("a text box"), callout.points[1]);
+    assert!((knee[0] - (tb[0] - 12.0)).abs() < 0.01 && (knee[1] - (tb[1] + tb[3]) / 2.0).abs() < 0.01, "{tb:?} {knee:?}");
 
     // Insert text at a click.
     h.state_mut().set_option("quick", "caret").unwrap();
@@ -2038,6 +2426,68 @@ fn the_panel_filters_by_colour_and_checkmark() {
     assert_eq!(cards(&h), before);
 }
 
+/// ISO 32000-2 §12.5.6.3 and Table 174: a comment shows each reviewer's latest status, with
+/// their name, and a status set back to None stays shown; a checkmark shows only for the
+/// reviewer who set it.
+#[test]
+fn the_panel_shows_each_reviewers_status_and_only_my_checkmark() {
+    let mut h = harness(|app| {
+        app.set_option("panel", "comments").unwrap();
+        app.set_option("quick", "square").unwrap();
+    });
+    drag_pt(&mut h, (40.0, 100.0), (140.0, 40.0));
+    h.state_mut().set_option("quick", "select").unwrap();
+    let me = h.state().comment_prefs.author.clone();
+    let other = format!("{me} (other)");
+    for (state, author) in [
+        (pdfcraft_engine::ReviewState::Accepted, "Bob"),
+        (pdfcraft_engine::ReviewState::Completed, "Carol"),
+        (pdfcraft_engine::ReviewState::Rejected, "Bob"),
+        (pdfcraft_engine::ReviewState::Completed, "Dan"),
+        (pdfcraft_engine::ReviewState::None, "Dan"),
+    ] {
+        h.state_mut().apply_edit(pdfcraft_engine::Edit::SetAnnotationStatus { page: 0, index: 0, state, author: author.into() });
+    }
+    h.state_mut().apply_edit(pdfcraft_engine::Edit::MarkAnnotation { page: 0, index: 0, marked: true, author: other.clone() });
+    h.state_mut().views[0].comments.selected = Some((0, 0));
+    h.run_steps(2);
+    h.get_by_label("Bob: Rejected");
+    h.get_by_label("Carol: Completed");
+    h.get_by_label("Dan: None");
+    assert_eq!(h.query_all_by_label("Bob: Accepted").count(), 0, "only Bob's latest");
+    assert!(h.query_all_by_label("Remove checkmark").next().is_none(), "another reviewer's checkmark isn't mine");
+    h.get_by_label("Mark with checkmark");
+
+    // Filters: a comment stays while any reviewer's status is shown; one nobody set a status on
+    // counts as None; the checkmark filter goes by my checkmark only.
+    h.state_mut().set_option("quick", "circle").unwrap();
+    drag_pt(&mut h, (160.0, 100.0), (260.0, 40.0));
+    h.state_mut().set_option("quick", "select").unwrap();
+    h.state_mut().views[0].comments.selected = None;
+    h.run_steps(2);
+    let cards = |h: &Harness<'static, PdfCraftApp>| (h.query_all_by_label("Rectangle").count(), h.query_all_by_label("Oval").count());
+    let shown = cards(&h);
+    h.state_mut().views[0].comments.hidden_statuses = vec!["Rejected".into()];
+    h.run_steps(2);
+    assert_eq!(cards(&h), shown, "Carol's and Dan's statuses still show the rectangle");
+    h.state_mut().views[0].comments.hidden_statuses = vec!["None".into()];
+    h.run_steps(2);
+    assert_eq!(cards(&h), (shown.0, shown.1 - 1), "the oval has no status, so it counts as None");
+    h.state_mut().views[0].comments.hidden_statuses = vec!["Rejected".into(), "Completed".into(), "None".into()];
+    h.run_steps(2);
+    assert_eq!(cards(&h), (shown.0 - 1, shown.1 - 1), "every status hidden");
+    h.state_mut().views[0].comments.hidden_statuses.clear();
+    h.state_mut().views[0].comments.hidden_checks = vec!["Checked".into()];
+    h.run_steps(2);
+    assert_eq!(cards(&h), shown, "another reviewer's checkmark isn't mine");
+
+    h.state_mut().views[0].comments.hidden_checks.clear();
+    h.state_mut().views[0].comments.selected = Some((0, 0));
+    h.state_mut().comment_prefs.author = other;
+    h.run_steps(2);
+    h.get_by_label("Remove checkmark");
+}
+
 #[test]
 fn make_current_properties_default() {
     let mut h = harness(|app| {
@@ -2124,6 +2574,114 @@ fn properties_dialog_makes_the_strikethrough_colour_default() {
     assert!(made.iter().zip(green).all(|(m, r)| (f64::from(*m) - r).abs() < 0.01), "the next strikethrough is green: {made:?}");
 }
 
+/// A text box with neither a border nor a fill is all text: Make Properties Default (and the
+/// context menu's Make Current Properties Default) gives the tool the opacity its text is drawn
+/// at, the one Comment Properties shows, not the comment's /CA.
+#[test]
+fn a_text_only_text_box_made_default_gives_the_tool_its_texts_opacity() {
+    use pdfcraft_engine::{Edit, NewAnnotation, Shape, Style};
+    use pdfcraft_ui_egui::comments::CommentTool;
+    let mut h = harness(|_| {});
+    let shape = Shape::TextBox { rect: [100.0, 600.0, 220.0, 630.0], font_size: 12.0 };
+    let style = Style { width: 0.0, fill: None, ..Style::default_for(&shape) };
+    assert!(h.state_mut().apply_edit(Edit::AddAnnotation(NewAnnotation {
+        page: 0,
+        shape,
+        style,
+        contents: "Faint".into(),
+        author: "Tester".into()
+    })));
+    h.run_steps(2);
+    let index = comments(&h).iter().find(|a| a.contents.as_deref() == Some("Faint")).map(|a| a.index).expect("the text box");
+    // As the automation's comment_edit sets it.
+    assert!(h.state_mut().apply_edit(Edit::PartOpacity { page: 0, index, fill: None, text: Some(0.5) }));
+    h.run_steps(2);
+    let opacity = |h: &Harness<'static, PdfCraftApp>| h.state().comment_prefs.style(CommentTool::TextBox).opacity;
+    assert!((opacity(&h) - 1.0).abs() < 1e-6);
+    h.state_mut().open_comment_props(0, index);
+    h.run_steps(2);
+    h.get_by_label("Make Properties Default").click();
+    h.run_steps(1);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert!((opacity(&h) - 0.5).abs() < 1e-6, "the text's 50 %: {}", opacity(&h));
+    // The context menu's way, from a tool at 100 % again.
+    h.state_mut().comment_prefs.set_opacity(CommentTool::TextBox, 1.0);
+    h.state_mut().make_comment_default(0, index);
+    assert!((opacity(&h) - 0.5).abs() < 1e-6, "the text's 50 %: {}", opacity(&h));
+}
+
+/// Make Properties Default on a text box with a border colour of its own gives the Text box tool
+/// that colour.
+#[test]
+fn a_text_box_made_default_gives_the_tool_its_border_colour() {
+    use pdfcraft_engine::{Edit, NewAnnotation, Shape, Style};
+    use pdfcraft_ui_egui::comments::CommentTool;
+    let mut h = harness(|_| {});
+    let shape = Shape::TextBox { rect: [100.0, 600.0, 220.0, 630.0], font_size: 12.0 };
+    let style = Style { width: 1.0, ..Style::default_for(&shape) };
+    assert!(h.state_mut().apply_edit(Edit::AddAnnotation(NewAnnotation {
+        page: 0,
+        shape,
+        style,
+        contents: "Framed".into(),
+        author: "Tester".into()
+    })));
+    h.run_steps(2);
+    let index = comments(&h).iter().find(|a| a.contents.as_deref() == Some("Framed")).map(|a| a.index).expect("the text box");
+    let red = Some([0.89, 0.13, 0.13]);
+    assert!(h.state_mut().apply_edit(Edit::BorderColorAnnotation { page: 0, index, color: red }));
+    assert_ne!(h.state().comment_prefs.style(CommentTool::TextBox).border_color, red);
+    h.state_mut().open_comment_props(0, index);
+    h.run_steps(2);
+    h.get_by_label("Make Properties Default").click();
+    h.run_steps(1);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert_eq!(h.state().comment_prefs.style(CommentTool::TextBox).border_color, red);
+}
+
+/// The Text box tool's Border colour button shows the selected text box's own border colour
+/// (Comment Properties may have given it one), and the tool's again with none selected.
+#[test]
+fn the_border_colour_button_shows_the_selected_text_boxs_colour() {
+    use pdfcraft_engine::{Edit, NewAnnotation, Shape, Style};
+    let mut h = harness(|app| app.set_option("quick", "freetext").unwrap());
+    let shape = Shape::TextBox { rect: [100.0, 600.0, 220.0, 630.0], font_size: 12.0 };
+    let style = Style { width: 1.0, ..Style::default_for(&shape) };
+    assert!(h.state_mut().apply_edit(Edit::AddAnnotation(NewAnnotation {
+        page: 0,
+        shape,
+        style,
+        contents: "Framed".into(),
+        author: "Tester".into()
+    })));
+    h.run_steps(2);
+    let index = comments(&h).iter().find(|a| a.contents.as_deref() == Some("Framed")).map(|a| a.index).expect("the text box");
+    // A border colour of its own, which the tool doesn't have.
+    assert!(h.state_mut().apply_edit(Edit::BorderColorAnnotation { page: 0, index, color: Some([0.0, 0.47, 0.84]) }));
+    h.run_steps(2);
+    // The colour the button's square is drawn in.
+    let shown = |h: &Harness<'static, PdfCraftApp>| {
+        let button = h.get_by_label("Border colour").rect();
+        h.output().shapes.iter().find_map(|s| match &s.shape {
+            egui::Shape::Rect(r) if r.stroke.width == 3.0 && button.contains_rect(r.rect) => Some(r.stroke.color),
+            _ => None,
+        })
+    };
+    // A new text box comes selected.
+    h.state_mut().views[0].comments.selected = None;
+    h.run_steps(3);
+    let tool = shown(&h).expect("the button's square");
+    h.state_mut().views[0].comments.selected = Some((0, index));
+    h.run_steps(3);
+    let own = shown(&h).expect("the button's square");
+    assert!(own != tool && own.b() > 200 && own.r() < 30, "the selected text box's blue: {own:?}, the tool's {tool:?}");
+    h.state_mut().views[0].comments.selected = None;
+    h.run_steps(3);
+    assert_eq!(shown(&h), Some(tool), "the tool's colour again");
+}
+
 /// #1302: making an arrow's properties the default updates the Arrow tool, not later plain lines.
 #[test]
 fn an_arrows_default_does_not_restyle_lines() {
@@ -2177,24 +2735,57 @@ fn highlighting_an_area_off_the_text() {
     let q = c[0].quads[0];
     assert!((q[0] - 40.0).abs() < 3.0 && (q[1] - 100.0).abs() < 3.0, "{q:?}");
     // Dragging over text still highlights the text (once the text layer is in).
-    let mut glyphs = None;
-    for _ in 0..200 {
-        h.run_steps(1);
+    support::wait_until(&mut h, "the page's text layer", |app| {
+        let v = &app.views[0];
+        v.glyph_screen_pos(0, 4).is_some() && v.glyph_screen_pos(0, 14).is_some()
+    });
+    let (a, b) = {
         let v = &h.state().views[0];
-        if let (Some(a), Some(b)) = (v.glyph_screen_pos(0, 4), v.glyph_screen_pos(0, 14)) {
-            glyphs = Some((a, b));
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
-    let (a, b) = glyphs.expect("text layer");
+        (v.glyph_screen_pos(0, 4).expect("text layer"), v.glyph_screen_pos(0, 14).expect("glyph"))
+    };
     drag(&mut h, a, b);
     assert_eq!(comments(&h).len(), 2);
+}
+
+/// A Replace Text proposal is picked by its strikeout too, not only by its small caret: the
+/// strikeout is grouped under the caret (`/RT /Group`), and a click on it selects the caret, the
+/// proposal, so it can be deleted or restyled from either part.
+#[test]
+fn clicking_a_replace_text_strikeout_selects_the_proposal() {
+    let pdf = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [5 0 R 4 0 R] >> endobj
+4 0 obj << /Type /Annot /Subtype /Caret /Rect [135 95 145 105] /C [0 0 1] /T (Bob) /IT /Replace /Contents (slow red) >> endobj
+5 0 obj << /Type /Annot /Subtype /StrikeOut /Rect [40 100 130 120] /QuadPoints [40 120 130 120 40 100 130 100] /C [1 0 0] /T (Bob) /IT /StrikeOutTextEdit /IRT 4 0 R /RT /Group >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+    let mut h = harness(move |app| {
+        app.open_bytes("replace.pdf", None, pdf.to_vec()).expect("opens");
+        app.close_tab(0);
+    });
+    h.run_steps(6);
+    let caret = comments(&h).into_iter().find(|a| a.subtype == "Caret").expect("the caret");
+    let p = at(&h, 70.0, 110.0);
+    click(&mut h, p);
+    assert_eq!(h.state().views[0].comments.selected, Some((caret.page, caret.index)), "the strikeout picks the proposal");
+    // Review on #5689 (CodeRabbit): a drag from the strikeout, or from the caret, moves neither:
+    // the proposal lies on the text it replaces, and the caret alone would leave the strikeout.
+    let caret_at = at(&h, 140.0, 100.0);
+    for from in [p, caret_at] {
+        drag(&mut h, from, from + egui::vec2(60.0, 40.0));
+        h.run_steps(3);
+        let now = comments(&h).into_iter().find(|a| a.subtype == "Caret").expect("the caret");
+        assert_eq!(now.rect, caret.rect, "the caret stays on the text");
+    }
+    assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_undo(), None, "nothing was moved");
 }
 
 #[test]
 fn replacing_text_strikes_it_and_adds_a_caret() {
     let mut h = harness(|app| app.set_option("quick", "replace").unwrap());
+    // Review on #5689 (CodeRabbit): both parts take the Replace text tool's style.
+    h.state_mut().comment_prefs.set_color(pdfcraft_ui_egui::comments::CommentTool::ReplaceText, [0.1, 0.6, 0.2]);
     drag_pt(&mut h, (20.0, 155.0), (120.0, 155.0));
     assert!(h.state().views[0].comments.composer.is_some(), "the composer asks for the replacement");
     field(&h, "Replacement text").type_text("slow red");
@@ -2205,15 +2796,27 @@ fn replacing_text_strikes_it_and_adds_a_caret() {
     let strike = c.iter().find(|a| a.subtype == "StrikeOut").expect("a strikeout");
     let caret = c.iter().find(|a| a.subtype == "Caret").expect("a caret");
     assert_eq!(caret.contents.as_deref(), Some("slow red"));
-    assert_eq!(caret.in_reply_to, strike.name, "grouped with the strikeout");
+    assert_eq!((strike.color, caret.color), (Some([0.1, 0.6, 0.2]), Some([0.1, 0.6, 0.2])), "one style for the proposal");
+    // The caret is the group's primary, the strikeout its `/RT /Group` subordinate (ISO 32000-2 §12.5.6.2).
+    assert_eq!(strike.in_reply_to, caret.name, "the strikeout is grouped with the caret");
+    assert!(strike.is_group_member() && !caret.grouped && !caret.is_reply());
     assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_undo(), Some("Replace text"));
     assert_eq!(h.state().quick_tool, QuickTool::Select);
-    // The strikeout is the Replace text tool's, not Strikethrough's (#3947): the panel names it
-    // so, and Make Current Properties Default updates the Replace text tool.
+    // Both members are the Replace text tool's, not Strikethrough's or Insert text's (#3947), so
+    // Make Current Properties Default updates the Replace text tool.
     assert_eq!(pdfcraft_ui_egui::comments::tool_for(strike), Some(pdfcraft_ui_egui::comments::CommentTool::ReplaceText));
+    assert_eq!(pdfcraft_ui_egui::comments::tool_for(caret), Some(pdfcraft_ui_egui::comments::CommentTool::ReplaceText));
+    // The panel's card is the caret's, the group's primary: it shows the replacement, and
+    // nothing is named Strikethrough.
     h.state_mut().set_option("panel", "comments").unwrap();
     h.run_steps(3);
+    // One card, the caret's, showing the replacement text; sorted by type, its group is named
+    // Replace text (not Insert text, and no Strikethrough).
+    assert_eq!(h.query_all_by_label("slow red").count(), 1, "one comment with the replacement text");
+    h.state_mut().views[0].comments.sort = pdfcraft_ui_egui::comments::SortBy::Type;
+    h.run_steps(3);
     assert!(h.query_by_role_and_label(egui::accesskit::Role::Label, "Replace text").is_some(), "the panel names the comment Replace text");
+    assert!(h.query_by_role_and_label(egui::accesskit::Role::Label, "Insert text").is_none(), "not Insert text");
     assert!(h.query_by_role_and_label(egui::accesskit::Role::Label, "Strikethrough").is_none(), "not Strikethrough");
 }
 
@@ -2347,16 +2950,12 @@ fn a_middle_drag_with_a_drawing_tool_scrolls_instead_of_drawing() {
     assert!(!s.views[0].middle_panning(), "releasing the wheel ends the pan");
     let moved = s.views[0].page_screen_rect(0).expect("page 1 on screen").top();
     if cfg!(target_os = "linux") {
-        // Linux latches auto-scroll instead of panning with the drag.
-        assert!(s.views[0].auto_scrolling());
+        // Linux auto-scrolls while the wheel is held and stops on release.
+        assert!(!s.views[0].auto_scrolling());
     } else {
         assert!((moved - (top - 120.0)).abs() < 1.0, "the page follows the pointer: {top} -> {moved}");
     }
     // The tool still draws with the primary button afterwards.
-    if cfg!(target_os = "linux") {
-        h.key_press(egui::Key::Escape);
-        h.run_steps(2);
-    }
     drag_pt(&mut h, (60.0, 120.0), (200.0, 80.0));
     let kinds: Vec<String> = comments(&h).into_iter().map(|a| a.subtype).collect();
     assert_eq!(kinds, ["Ink"]);
@@ -2562,6 +3161,36 @@ fn hover_markup_at(h: &mut Harness<'static, PdfCraftApp>, x: f32, y: f32) {
     };
     h.hover_at(p);
     h.run_steps(3);
+}
+
+#[test]
+fn imported_commented_markup_keeps_author_at_rotated_zoomed_page_edges() {
+    let _gpu = std::env::var_os("PDFCRAFT_SHOTS").map(|_| crate::gpu());
+    for subtype in ["Highlight", "Underline", "StrikeOut", "Squiggly"] {
+        for (page_rotation, view_rotation) in [(0, 0), (90, 0), (0, 90), (90, 90)] {
+            for zoom in ["50", "125"] {
+                let pdf = String::from_utf8(markup_hover_fixture(subtype, page_rotation, "", ""))
+                    .unwrap()
+                    .replace("/Rect [20 105 250 165]", "/Rect [270 180 300 200]")
+                    .replace(
+                        "/QuadPoints [120 165 250 165 120 145 250 145 20 125 100 125 20 105 100 105]",
+                        "/QuadPoints [270 200 300 200 270 180 300 180]",
+                    );
+                let mut h = markup_hover_harness(pdf.into_bytes(), view_rotation);
+                h.state_mut().set_option("zoom", zoom).unwrap();
+                h.run_steps(4);
+                support::settle(&mut h);
+                hover_markup_at(&mut h, 285.0, 190.0);
+                h.get_by_label("Ada\nFirst multiline comment");
+                if subtype == "Highlight"
+                    && matches!((page_rotation, view_rotation, zoom), (0, 0, "50") | (90, 90, "125"))
+                    && let Ok(dir) = std::env::var("PDFCRAFT_SHOTS")
+                {
+                    h.render().unwrap().save(format!("{dir}/edge-comment-{page_rotation}-{view_rotation}-{zoom}.png")).unwrap();
+                }
+            }
+        }
+    }
 }
 
 #[test]
@@ -2865,7 +3494,16 @@ fn a_moved_comment_is_drawn_where_it_goes_before_release() {
     for shape in
         [pdfcraft_engine::Shape::Rectangle { rect: [30.0, 30.0, 70.0, 70.0] }, pdfcraft_engine::Shape::Oval { rect: [230.0, 30.0, 270.0, 70.0] }]
     {
-        let style = pdfcraft_engine::Style { color: [1.0, 0.0, 0.0], opacity: 1.0, width: 2.0, fill: Some([1.0, 0.0, 0.0]) };
+        let style = pdfcraft_engine::Style {
+            color: [1.0, 0.0, 0.0],
+            opacity: 1.0,
+            width: 2.0,
+            fill: Some([1.0, 0.0, 0.0]),
+            fill_opacity: None,
+            text_opacity: None,
+            border_color: None,
+            border_shape: pdfcraft_engine::BorderShape::Rectangle,
+        };
         assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::AddAnnotation(pdfcraft_engine::NewAnnotation {
             page: 0,
             shape,
@@ -2925,7 +3563,7 @@ fn moved_fill_and_sign_text_is_drawn_where_it_goes_before_release() {
     click_pt(&mut h, (40.0, 150.0));
     h.event(egui::Event::Text("WWWWWW".into()));
     h.run_steps(1);
-    h.key_press(egui::Key::Enter);
+    click(&mut h, pos2(350.0, 850.0)); // Outside the field: Enter now inserts a line break.
     h.run_steps(3);
     let a = comments(&h).into_iter().find(|a| a.contents.as_deref() == Some("WWWWWW")).expect("the typed text");
     assert!(a.fill_sign && a.subtype == "FreeText", "{a:?}");
@@ -3021,6 +3659,828 @@ fn an_upright_comment_on_a_turned_page_is_drawn_where_it_goes_before_release() {
     assert_eq!(h.state().session.get(id).unwrap().edit_generation(), generation, "pointer frames never edit the document");
     h.drop_at(from + delta);
     h.run_steps(3);
+}
+
+// Contributor-original PDF: a Square, a Circle grouped with it (`/RT /Group`) that keeps its own
+// author, text and colour, an ordinary reply and a reply to the Circle.
+const GROUP_FIXTURE: &[u8] = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [5 0 R 6 0 R 7 0 R 8 0 R] >> endobj
+5 0 obj << /Type /Annot /Subtype /Square /Rect [20 20 100 80] /NM (sq-primary) /T (Alice) /Contents (Primary) /C [1 0 0] >> endobj
+6 0 obj << /Type /Annot /Subtype /Circle /Rect [180 120 260 180] /NM (circ-sub) /T (Bob) /Contents (Subordinate) /C [0 0 1] /IRT 5 0 R /RT /Group >> endobj
+7 0 obj << /Type /Annot /Subtype /Text /Rect [120 20 140 40] /NM (reply) /T (Carol) /Contents (Plain reply) /IRT 5 0 R >> endobj
+8 0 obj << /Type /Annot /Subtype /Text /Rect [120 50 140 70] /NM (sub-reply) /T (Dan) /Contents (Reply to the subordinate) /IRT 6 0 R >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+
+/// ISO 32000-2 §12.5.6.2: a group is one comment, its primary's. The panel lists the Square
+/// with both replies (the one to the Circle joins its thread) and not the Circle's own author
+/// or text; clicking the Circle on the page selects the group, which is the Square's card.
+#[test]
+fn a_group_is_one_comment_in_the_panel_and_on_the_page() {
+    let mut h = harness_with_bytes(GROUP_FIXTURE.to_vec(), |app| app.set_option("panel", "comments").unwrap());
+    h.get_by_label("Primary");
+    h.get_by_label("Plain reply");
+    h.get_by_label("Reply to the subordinate");
+    assert_eq!(h.query_all_by_label("Subordinate").count(), 0, "the subordinate's own text is ignored");
+    assert_eq!(h.query_all_by_label("Bob").count(), 0, "the subordinate's own author is ignored");
+    let p = at(&h, 220.0, 150.0);
+    click(&mut h, p);
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "clicking the Circle selects its group");
+    h.state_mut().views[0].comments.selected = None;
+    let p = at(&h, 60.0, 50.0);
+    click(&mut h, p);
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)));
+    // #4358 review: a right-click on the Circle selects the group too, so the menu is the
+    // comment's, and a double-click there opens the group's pop-up window, which is the Square's
+    // (comment.popups).
+    h.state_mut().views[0].comments.selected = None;
+    let p = at(&h, 220.0, 150.0);
+    h.hover_at(p);
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Secondary, pressed: true, modifiers: Default::default() });
+    h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Secondary, pressed: false, modifiers: Default::default() });
+    h.run_steps(3);
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "a right-click on the Circle selects its group");
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    h.state_mut().views[0].comments.selected = None;
+    crate::support::input::double_click(&mut h, p);
+    h.run_steps(4);
+    let c = comments(&h);
+    let primary = c.iter().find(|a| a.contents.as_deref() == Some("Primary")).expect("the primary");
+    assert_eq!(primary.popup.map(|w| w.open), Some(true), "a double-click on the Circle opens its group's window");
+    assert_eq!(h.state().views[0].comments.popup_rects.len(), 1, "one window");
+}
+
+/// As in Acrobat desktop, Delete deletes the group member clicked and keeps the rest of its
+/// group, although ISO 32000-2 §12.5.6.2 lists deletion among the operations that act on the
+/// entire group. The Circle goes with its reply and the Square stays; the Square goes with its
+/// reply and the Circle stays, a comment of its own.
+#[test]
+fn delete_deletes_the_group_member_clicked() {
+    let shapes = |h: &Harness<'static, PdfCraftApp>| -> Vec<(String, bool)> {
+        let mut out: Vec<(String, bool)> = comments(h).iter().filter(|a| a.subtype != "Text").map(|a| (a.subtype.clone(), a.is_comment())).collect();
+        out.sort();
+        out
+    };
+    let mut h = harness_with_bytes(GROUP_FIXTURE.to_vec(), |_| {});
+    click_pt(&mut h, (220.0, 150.0));
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "the group is selected");
+    h.key_press(egui::Key::Delete);
+    h.run_steps(3);
+    assert_eq!(shapes(&h), [("Square".to_string(), true)], "the Circle goes, the Square stays");
+    let texts: Vec<String> = comments(&h).iter().filter_map(|a| a.contents.clone()).collect();
+    assert!(!texts.iter().any(|c| c == "Reply to the subordinate") && texts.iter().any(|c| c == "Plain reply"), "{texts:?}");
+    h.state_mut().undo();
+    h.run_steps(3);
+
+    click_pt(&mut h, (60.0, 50.0));
+    h.key_press(egui::Key::Delete);
+    h.run_steps(3);
+    assert_eq!(shapes(&h), [("Circle".to_string(), true)], "the Square goes, the Circle stays as a comment of its own");
+}
+
+/// CodeRabbit on #4358: the member a click on the page picked is forgotten once the selection is
+/// made anywhere else. After clicking the Circle, choosing the group's card in the Comments panel
+/// selects the comment the card shows, the Square, so Delete deletes the Square, not the Circle
+/// the page click remembered.
+#[test]
+fn choosing_the_groups_card_makes_delete_act_on_the_card_not_the_member_clicked() {
+    let shapes = |h: &Harness<'static, PdfCraftApp>| -> Vec<String> {
+        let mut out: Vec<String> = comments(h).iter().filter(|a| a.subtype != "Text").map(|a| a.subtype.clone()).collect();
+        out.sort();
+        out
+    };
+    let mut h = harness_with_bytes(GROUP_FIXTURE.to_vec(), |app| app.set_option("panel", "comments").unwrap());
+    click_pt(&mut h, (220.0, 150.0));
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "the Circle's click selects the group");
+    // The selected card's header row, with its author.
+    h.get_by_label("Alice").click();
+    h.run_steps(3);
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "the card selects the same group");
+    h.key_press(egui::Key::Delete);
+    h.run_steps(3);
+    assert_eq!(shapes(&h), ["Circle".to_string()], "the card's comment, the Square, goes; the Circle stays");
+}
+
+/// One 300×200 page with a callout: text box [150 100 250 140], knee (120, 120) on the box's
+/// left, arrow point (60, 60).
+const CALLOUT_FIXTURE: &[u8] = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [4 0 R] >> endobj
+4 0 obj << /Type /Annot /Subtype /FreeText /IT /FreeTextCallout /Rect [50 50 250 140] /RD [100 50 0 0]
+  /CL [60 60 120 120 150 120] /LE /OpenArrow /DA (/Helv 10 Tf 0 g) /Contents (Note) /F 4 >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+
+fn callout(h: &Harness<'static, PdfCraftApp>) -> Annotation {
+    comments(h).into_iter().find(|a| a.subtype == "FreeText").expect("the callout")
+}
+
+fn near_pt(p: [f32; 2], x: f32, y: f32) -> bool {
+    (p[0] - x).abs() < 1.5 && (p[1] - y).abs() < 1.5
+}
+
+fn last_edit(h: &Harness<'static, PdfCraftApp>) -> Option<String> {
+    h.state().session.get(h.state().views[0].id).unwrap().can_undo().map(str::to_owned)
+}
+
+/// #1152: a selected callout's three parts change on their own, as in Acrobat ("Callout text
+/// boxes have three parts: a text box, a knee line, and an end-point line. You can resize each
+/// part by dragging a handle. The knee line can be resized in one direction only", Acrobat DC
+/// Help, 11/28/2019, p. 357).
+#[test]
+fn a_callouts_arrow_knee_and_text_box_are_dragged_on_their_own() {
+    let mut h = harness_with_bytes(CALLOUT_FIXTURE.to_vec(), |app| app.set_option("quick", "select").unwrap());
+    let c = callout(&h);
+    assert_eq!((c.points.clone(), c.text_box), (vec![[60.0, 60.0], [120.0, 120.0]], Some([150.0, 100.0, 250.0, 140.0])));
+    click_pt(&mut h, (200.0, 120.0));
+    assert_eq!(h.state().views[0].comments.selected, Some((0, c.index)));
+
+    // The knee line is level, so the knee moves sideways only, and not into the box.
+    drag_pt(&mut h, (120.0, 120.0), (95.0, 160.0));
+    let c = callout(&h);
+    assert!(near_pt(c.points[1], 95.0, 120.0) && near_pt(c.points[0], 60.0, 60.0), "{:?}", c.points);
+    assert_eq!(last_edit(&h).as_deref(), Some("Reshape comment"));
+    drag_pt(&mut h, (95.0, 120.0), (200.0, 120.0));
+    assert!(near_pt(callout(&h).points[1], 138.0, 120.0), "stopped 12 pt short of the box: {:?}", callout(&h).points);
+    drag_pt(&mut h, (138.0, 120.0), (110.0, 120.0));
+
+    // The arrow point moves alone.
+    drag_pt(&mut h, (60.0, 60.0), (40.0, 30.0));
+    let c = callout(&h);
+    assert!(near_pt(c.points[0], 40.0, 30.0) && near_pt(c.points[1], 110.0, 120.0), "{:?}", c.points);
+    assert_eq!(c.text_box, Some([150.0, 100.0, 250.0, 140.0]));
+
+    // The text box resizes from its own handles (not /Rect's); its left side, where the line meets
+    // it, stays, so the line doesn't change.
+    drag_pt(&mut h, (250.0, 100.0), (270.0, 80.0));
+    let c = callout(&h);
+    let tb = c.text_box.expect("a text box");
+    assert!((tb[0] - 150.0).abs() < 1.5 && (tb[1] - 80.0).abs() < 1.5 && (tb[2] - 270.0).abs() < 1.5 && (tb[3] - 140.0).abs() < 1.5, "{tb:?}");
+    assert!(near_pt(c.points[0], 40.0, 30.0) && near_pt(c.points[1], 110.0, 120.0), "{:?}", c.points);
+    assert_eq!(last_edit(&h).as_deref(), Some("Resize comment"));
+
+    // Dragged from inside, the box moves alone: the arrow stays, the knee comes along.
+    drag_pt(&mut h, (200.0, 120.0), (220.0, 130.0));
+    let c = callout(&h);
+    let tb = c.text_box.expect("a text box");
+    assert!((tb[0] - 170.0).abs() < 1.5 && (tb[3] - 150.0).abs() < 1.5, "{tb:?}");
+    assert!(near_pt(c.points[0], 40.0, 30.0) && near_pt(c.points[1], 130.0, 130.0), "{:?}", c.points);
+
+    // Dragged by its leader line, the whole callout moves.
+    drag_pt(&mut h, (85.0, 75.0), (95.0, 75.0));
+    let c = callout(&h);
+    assert!(near_pt(c.points[0], 50.0, 30.0) && near_pt(c.points[1], 140.0, 130.0), "{:?}", c.points);
+    assert_eq!(last_edit(&h).as_deref(), Some("Move comment"));
+
+    // Each drag was one undo step.
+    h.state_mut().undo();
+    h.run_steps(2);
+    assert!(near_pt(callout(&h).points[0], 40.0, 30.0));
+}
+
+/// #2137 review: a pop-up is edited under comment permission, not change permission: in a
+/// document whose security allows comments but not changes, an open pop-up still takes typing
+/// and closes.
+#[test]
+fn a_pop_up_is_editable_where_comments_are_allowed_but_changes_are_not() {
+    let plain = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [4 0 R 5 0 R] >> endobj
+4 0 obj << /Type /Annot /Subtype /Text /Rect [20 150 40 170] /T (Ada) /Popup 5 0 R >> endobj
+5 0 obj << /Type /Annot /Subtype /Popup /Parent 4 0 R /Rect [60 60 260 160] /Open true >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+    let mut doc = pdfcraft_cos::Document::open(std::sync::Arc::new(plain.to_vec())).unwrap();
+    doc.set_encryption(&pdfcraft_cos::NewEncryption {
+        algorithm: pdfcraft_cos::Algorithm::Aes256,
+        user_password: "",
+        owner_password: "owner",
+        // Everything but bit 4, modifying the document.
+        permissions: -1 ^ 8,
+        encrypt_metadata: true,
+        seed: [4; 32],
+    })
+    .unwrap();
+    let bytes = pdfcraft_cos::write_full(&doc, &Default::default()).unwrap();
+    let mut h = harness(move |app| {
+        app.open_bytes("restricted.pdf", None, bytes).expect("opens");
+        // Only the restricted document, so it is the first view.
+        app.close_tab(0);
+    });
+    h.run_steps(6);
+    let (_, window) = h.state().views[0].comments.popup_rects.first().copied().expect("the open pop-up shows");
+    field(&h, "Add a comment");
+    let close = h.query_all_by_label("Close").find(|n| window.contains(n.rect().center())).expect("the pop-up's ×");
+    close.click();
+    h.run_steps(4);
+    let note = comments(&h).into_iter().find(|a| a.subtype == "Text").expect("the note");
+    assert_eq!(note.popup.map(|p| p.open), Some(false), "closed");
+}
+
+/// #2137 review: a pop-up lists the comment's text replies only, as the Comments panel does. A
+/// review status (`/StateModel /Review`) and a checkmark (`/StateModel /Marked`, the private
+/// reply Mark writes) are replies too, but not ones to read in the thread.
+#[test]
+fn a_pop_up_lists_text_replies_but_not_status_or_checkmark_replies() {
+    let pdf = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [4 0 R 5 0 R 6 0 R 7 0 R 8 0 R] >> endobj
+4 0 obj << /Type /Annot /Subtype /Text /Rect [20 150 40 170] /T (Ada) /NM (note-1) /Contents (Please check) /Popup 5 0 R >> endobj
+5 0 obj << /Type /Annot /Subtype /Popup /Parent 4 0 R /Rect [60 40 260 160] /Open true >> endobj
+6 0 obj << /Type /Annot /Subtype /Text /Rect [20 150 40 170] /F 32 /T (Bob) /NM (reply-1) /IRT 4 0 R /Contents (Agreed with this) >> endobj
+7 0 obj << /Type /Annot /Subtype /Text /Rect [20 150 40 170] /F 32 /T (Bob) /NM (reply-2) /IRT 4 0 R /State /Accepted /StateModel /Review /Contents (Accepted set by Bob) >> endobj
+8 0 obj << /Type /Annot /Subtype /Text /Rect [20 150 40 170] /F 32 /T (Ada) /NM (reply-3) /IRT 4 0 R /State /Marked /StateModel /Marked /Contents (Marked set by Ada) >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+    let mut h = harness(move |app| {
+        app.open_bytes("thread.pdf", None, pdf.to_vec()).expect("opens");
+        app.close_tab(0);
+    });
+    h.run_steps(6);
+    let (_, window) = h.state().views[0].comments.popup_rects.first().copied().expect("the open pop-up shows");
+    let in_window = |text: &str| h.query_all_by(|n| shows_text(n, text)).any(|n| window.contains(n.rect().center()));
+    assert!(in_window("Agreed with this"), "the text reply");
+    assert!(!in_window("Accepted set by Bob"), "not the review status");
+    assert!(!in_window("Marked set by Ada"), "not the checkmark");
+}
+
+/// A Replace Text proposal: a strikeout and a caret grouped by `/IRT` and `/RT /Group`, with the
+/// pop-up `open`. `caret_first` writes the caret as the group's primary, holding the replacement,
+/// with the strikeout grouped under it; otherwise the strikeout is the primary and the
+/// replacement is on the caret grouped under it, as PdfCraft used to write it.
+fn replace_text_pdf(caret_first: bool, open: bool) -> Vec<u8> {
+    let primary = if caret_first { 4 } else { 5 };
+    let strike = format!(
+        "<< /Type /Annot /Subtype /StrikeOut /Rect [40 100 140 120] /QuadPoints [40 120 140 120 40 100 140 100] /C [1 0 0] /T (Ada) /IT /StrikeOutTextEdit{} >>",
+        if caret_first { " /IRT 4 0 R /RT /Group" } else { " /Popup 6 0 R" }
+    );
+    let caret = format!(
+        "<< /Type /Annot /Subtype /Caret /Rect [135 95 145 105] /C [0 0 1] /T (Bob) /Contents (slow red){} >>",
+        if caret_first { " /IT /Replace /Popup 6 0 R" } else { " /IRT 5 0 R /RT /Group" }
+    );
+    format!(
+        "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [5 0 R 4 0 R 6 0 R] >> endobj
+4 0 obj {caret} endobj
+5 0 obj {strike} endobj
+6 0 obj << /Type /Annot /Subtype /Popup /Parent {primary} 0 R /Rect [160 20 290 150] /Open {open} >> endobj
+trailer << /Root 1 0 R >>
+%%EOF",
+    )
+    .into_bytes()
+}
+
+/// A Replace Text proposal's window shows the replacement as the comment's text, and the other
+/// member of the group is part of the comment, not a reply panel (ISO 32000-2 §12.5.6.2: a group's
+/// members are one unit). Both layouts: the caret as the primary, and the strikeout as the primary
+/// with the replacement on the grouped caret, as `main` writes it (#5688).
+#[test]
+fn a_replace_text_window_shows_the_replacement_as_its_text_not_as_a_reply() {
+    for caret_first in [true, false] {
+        let pdf = replace_text_pdf(caret_first, true);
+        let mut h = harness(move |app| {
+            app.open_bytes("replace.pdf", None, pdf).expect("opens");
+            app.close_tab(0);
+        });
+        h.run_steps(6);
+        let (_, window) = h.state().views[0].comments.popup_rects.first().copied().expect("the open pop-up shows");
+        let boxes: Vec<String> = h
+            .query_all_by(|n| n.role() == Role::MultilineTextInput)
+            .filter(|n| window.contains(n.rect().center()))
+            .map(|n| n.value().unwrap_or_default())
+            .collect();
+        assert_eq!(boxes, ["slow red"], "caret first: {caret_first}: one box, the replacement");
+    }
+}
+
+/// A locked Replace Text proposal, as `main` writes it (the strikeout primary and locked, the
+/// replacement on the grouped caret), shows the replacement in its window read-only: locking the
+/// comment locks the text the window shows for it.
+#[test]
+fn a_locked_replace_text_window_shows_the_replacement_read_only() {
+    let pdf = String::from_utf8(replace_text_pdf(false, true))
+        .unwrap()
+        .replace("/IT /StrikeOutTextEdit /Popup", "/IT /StrikeOutTextEdit /F 128 /Popup")
+        .into_bytes();
+    let mut h = harness(move |app| {
+        app.open_bytes("replace.pdf", None, pdf).expect("opens");
+        app.close_tab(0);
+    });
+    h.run_steps(6);
+    let (_, window) = h.state().views[0].comments.popup_rects.first().copied().expect("the open pop-up shows");
+    let inside = |n: &egui_kittest::Node<'_>| window.contains(n.rect().center());
+    let boxes = h.query_all_by(|n| n.role() == Role::MultilineTextInput).filter(inside).count();
+    assert_eq!(boxes, 0, "no box to type in while the comment is locked");
+    assert!(h.query_all_by_label("slow red").any(|n| inside(&n)), "the replacement is shown");
+}
+
+/// A double-click on a Replace Text proposal opens the group's one window, the primary's, in
+/// either layout. (A double-click on the member grouped under it opens the same
+/// window once members are picked on the page; main hit-tests only the primary.)
+#[test]
+fn a_double_click_on_a_replace_text_opens_its_one_window() {
+    for (caret_first, on_caret) in [(true, true), (false, false)] {
+        let pdf = replace_text_pdf(caret_first, false);
+        let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(1.0 / 60.0).build_eframe(move |_cc| {
+            let mut app = PdfCraftApp::new();
+            app.set_option("language", "en").unwrap();
+            app.open_bytes("replace.pdf", None, pdf.clone()).expect("opens");
+            app.set_option("left", "closed").unwrap();
+            app
+        });
+        h.run_steps(4);
+        crate::support::settle(&mut h);
+        h.run_steps(45);
+        let target = if on_caret { (140.0, 98.0) } else { (60.0, 110.0) };
+        let p = at(&h, target.0, target.1);
+        h.hover_at(p);
+        h.run_steps(1);
+        for _ in 0..2 {
+            h.drag_at(p);
+            h.run_steps(1);
+            h.drop_at(p);
+            h.run_steps(1);
+        }
+        h.run_steps(4);
+        let primary_subtype = if caret_first { "Caret" } else { "StrikeOut" };
+        let c = comments(&h);
+        let primary = c.iter().find(|a| a.subtype == primary_subtype).expect("the primary");
+        assert_eq!(primary.popup.map(|w| w.open), Some(true), "caret first: {caret_first}, on the caret: {on_caret}: the group's window opened");
+        assert_eq!(h.state().views[0].comments.popup_rects.len(), 1, "one window");
+    }
+}
+
+/// A double-click on a sticky note opens its pop-up window on the page, where its text is read
+/// and edited; the title bar drags it (saved as the pop-up's place, one undo step); × closes it
+/// (comment.popups).
+#[test]
+fn a_double_click_opens_a_notes_pop_up_which_drags_and_closes() {
+    // Frames a sixtieth apart, so two clicks land within egui's double-click time.
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(1.0 / 60.0).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("text.pdf", None, TEXT_FIXTURE.to_vec()).expect("opens");
+        app.set_option("left", "closed").unwrap();
+        app.set_option("author", "Tester").unwrap();
+        app.set_option("quick", "note").unwrap();
+        app
+    });
+    h.run_steps(4);
+    crate::support::settle(&mut h);
+    click_pt(&mut h, (60.0, 160.0));
+    field(&h, "Add a comment").type_text("Please check");
+    h.run_steps(2);
+    h.get_by_label("Post").click();
+    h.run_steps(3);
+    let note = comments(&h).into_iter().find(|a| a.subtype == "Text").expect("the note");
+    assert_eq!(note.popup.map(|p| p.open), Some(false));
+    assert!(h.state().views[0].comments.popup_rects.is_empty(), "closed pop-ups are not shown");
+    // Well after the Post click, so egui does not count the next clicks with it.
+    h.run_steps(45);
+
+    // Double-click the icon.
+    let icon = at(&h, (note.rect[0] + note.rect[2]) / 2.0, (note.rect[1] + note.rect[3]) / 2.0);
+    h.hover_at(icon);
+    h.run_steps(1);
+    for _ in 0..2 {
+        h.drag_at(icon);
+        h.run_steps(1);
+        h.drop_at(icon);
+        h.run_steps(1);
+    }
+    h.run_steps(4);
+    let note = comments(&h).into_iter().find(|a| a.subtype == "Text").expect("the note");
+    assert_eq!(note.popup.map(|p| p.open), Some(true), "the pop-up opened");
+    assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_undo(), Some("Open comment pop-up"));
+    let (_, window) = h.state().views[0].comments.popup_rects.first().copied().expect("the pop-up is on screen");
+    // Its title names the kind of comment and its author.
+    h.get_by_label("Note – Tester");
+
+    // Drag the title bar 80 px right and 40 px down: the pop-up's place on the page moves.
+    let before = note.popup.unwrap().rect;
+    let bar = pos2(window.left() + 30.0, window.top() + 12.0);
+    drag(&mut h, bar, bar + egui::vec2(80.0, 40.0));
+    let note = comments(&h).into_iter().find(|a| a.subtype == "Text").expect("the note");
+    let after = note.popup.unwrap().rect;
+    // 80 × 40 screen pixels is about 20 × 10 pt at this zoom.
+    assert!(after[0] > before[0] + 10.0 && after[1] < before[1] - 5.0, "moved right and down on the page: {before:?} -> {after:?}");
+    assert!(((after[2] - after[0]) - (before[2] - before[0])).abs() < 0.5, "the same width");
+    assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_undo(), Some("Move comment pop-up"));
+
+    // Close it.
+    h.get_by_label("Close").click();
+    h.run_steps(4);
+    let note = comments(&h).into_iter().find(|a| a.subtype == "Text").expect("the note");
+    assert_eq!(note.popup.map(|p| p.open), Some(false));
+    assert!(h.state().views[0].comments.popup_rects.is_empty());
+    assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_undo(), Some("Close comment pop-up"));
+}
+
+// Contributor-original PDF: two notes sharing one /NM (as PyMuPDF names them), both with an open
+// pop-up; the second has a reply by reference and a reply to that reply, which has no /NM.
+const POPUPS_SHARING_A_NAME: &[u8] = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [4 0 R 5 0 R 6 0 R 7 0 R 8 0 R 9 0 R] >> endobj
+4 0 obj << /Type /Annot /Subtype /Text /Rect [20 160 40 180] /NM (fitz-A0) /T (Alpha) /Contents (First note) /Popup 5 0 R /Open true >> endobj
+5 0 obj << /Type /Annot /Subtype /Popup /Rect [60 110 160 190] /Parent 4 0 R /Open true >> endobj
+6 0 obj << /Type /Annot /Subtype /Text /Rect [20 40 40 60] /NM (fitz-A0) /T (Beta) /Contents (Second note) /Popup 7 0 R /Open true >> endobj
+7 0 obj << /Type /Annot /Subtype /Popup /Rect [180 -250 290 90] /Parent 6 0 R /Open true >> endobj
+8 0 obj << /Type /Annot /Subtype /Text /Rect [20 40 40 60] /NM (fitz-A1) /IRT 6 0 R /T (Gamma) /Contents (Reply by reference) >> endobj
+9 0 obj << /Type /Annot /Subtype /Text /Rect [20 40 40 60] /IRT 8 0 R /T (Delta) /Contents (Reply to the reply) >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+
+/// A pop-up reads its comment's thread by `/IRT` reference, as the Comments panel does: the
+/// replies show once, in the second note's window only, at any depth, though both notes share
+/// one `/NM`.
+#[test]
+fn a_pop_up_lists_its_replies_by_reference_when_names_repeat() {
+    let h = harness_with_bytes(POPUPS_SHARING_A_NAME.to_vec(), |_| {});
+    let windows = h.state().views[0].comments.popup_rects.clone();
+    assert_eq!(windows.len(), 2, "both notes' pop-ups are open: {windows:?}");
+    let (_, second) = windows.iter().find(|(key, _)| *key == (0, 2)).copied().expect("the second note's pop-up");
+    for text in ["Reply by reference", "Reply to the reply"] {
+        // The Comments panel lists the thread too; count only what the windows show.
+        let shown: Vec<Pos2> =
+            h.query_all_by(|n| shows_text(n, text)).map(|n| n.rect().center()).filter(|c| windows.iter().any(|(_, w)| w.contains(*c))).collect();
+        assert_eq!(shown.len(), 1, "{text:?} shows in one window: {shown:?}");
+        assert!(shown.iter().all(|c| second.contains(*c)), "{text:?} is in the second note's window");
+    }
+}
+
+// Contributor-original PDF: one blue note with its pop-up open beside it.
+const BLUE_NOTE_WITH_OPEN_POP_UP: &[u8] = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [4 0 R 5 0 R] >> endobj
+4 0 obj << /Type /Annot /Subtype /Text /Rect [20 160 40 180] /C [0 0 1] /T (Alpha) /Contents (A note) /Popup 5 0 R /Open true >> endobj
+5 0 obj << /Type /Annot /Subtype /Popup /Rect [120 20 260 120] /Parent 4 0 R /Open true >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+
+/// What the connectors of comments in colour `color` painted in the last frame: each wedge
+/// (its point, the two ends of its base, its colour: `color`, faded).
+fn connectors(h: &Harness<'static, PdfCraftApp>, color: egui::Color32) -> Vec<(Pos2, [Pos2; 2], egui::Color32)> {
+    fn walk(shape: &egui::Shape, color: egui::Color32, out: &mut Vec<(Pos2, [Pos2; 2], egui::Color32)>) {
+        match shape {
+            egui::Shape::Mesh(m) => {
+                if let [tip, b0, b1] = m.vertices.as_slice()
+                    && tip.color.a() > 0
+                    && tip.color.a() < 255
+                    && tip.color.to_opaque() == color
+                {
+                    out.push((tip.pos, [b0.pos, b1.pos], tip.color));
+                }
+            }
+            egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| walk(s, color, out)),
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    for clipped in &h.output().shapes {
+        walk(&clipped.shape, color, &mut out);
+    }
+    out
+}
+
+/// A comment's connector (comment.connector-lines): a faint wedge in the comment's colour from
+/// the edge of the comment nearest its open pop-up to a base on the window's edge around the
+/// point nearest the comment; shown
+/// while the pointer is on the comment or on the window or the comment is selected, and not
+/// otherwise.
+#[test]
+fn a_connector_line_joins_a_comment_to_its_open_pop_up_while_the_pointer_is_on_either() {
+    let mut h = harness_with_bytes(BLUE_NOTE_WITH_OPEN_POP_UP.to_vec(), |_| {});
+    let blue = egui::Color32::from_rgb(0, 0, 255);
+    let (_, window) = h.state().views[0].comments.popup_rects.first().copied().expect("the pop-up is open");
+    let mark = egui::Rect::from_two_pos(at(&h, 20.0, 180.0), at(&h, 40.0, 160.0));
+    let on_edge = |r: egui::Rect, p: Pos2| {
+        r.expand(1.0).contains(p) && [p.x - r.left(), r.right() - p.x, p.y - r.top(), r.bottom() - p.y].iter().any(|d| d.abs() < 1.0)
+    };
+
+    // Away from both: no connector.
+    h.hover_at(at(&h, 280.0, 190.0));
+    h.run_steps(2);
+    assert!(connectors(&h, blue).is_empty(), "no connector with the pointer elsewhere");
+
+    // On the note or on its window: one wedge, from the note's edge to the window's.
+    for (what, pointer) in [("the note", mark.center()), ("the window", window.center())] {
+        h.hover_at(pointer);
+        h.run_steps(2);
+        let found = connectors(&h, blue);
+        assert_eq!(found.len(), 1, "one connector with the pointer on {what}: {found:?}");
+        let (tip, [b0, b1], base) = found[0];
+        assert!(on_edge(mark, tip), "its point is on the note's edge {mark:?}: {tip:?}");
+        // The nearest point of the note: its lower right corner.
+        assert!(tip.distance(mark.right_bottom()) < 1.0, "{tip:?}");
+        assert!(on_edge(window, b0) && on_edge(window, b1), "its base is on the window's edge {window:?}: {b0:?} {b1:?}");
+        // The base lies along one side, around the window's upper left corner, and is wider than a line.
+        assert!((b0.x - b1.x).abs() < 0.5 || (b0.y - b1.y).abs() < 0.5, "along one side: {b0:?} {b1:?}");
+        assert!(b0.distance(b1) >= 10.0, "a base, not a line: {b0:?} {b1:?}");
+        assert!(b0.distance(window.left_top()).min(b1.distance(window.left_top())) < 1.0, "at the corner: {b0:?} {b1:?}");
+        // The wedge is faint, in the comment's hue.
+        assert!(base.a() < 255 && base.a() > 0 && base.to_opaque() == blue, "the wedge is faint blue: {base:?}");
+    }
+
+    // Selected, the note keeps its connector with the pointer elsewhere.
+    h.state_mut().views[0].comments.selected = Some((0, 0));
+    h.hover_at(at(&h, 280.0, 190.0));
+    h.run_steps(2);
+    assert_eq!(connectors(&h, blue).len(), 1, "a selected comment shows its connector");
+}
+
+/// A note with an open pop-up and a thread of replies: "Second" and "Third" answer the note,
+/// "Second, first answer" answers "Second" (`/IRT` to a reply).
+const NOTE_WITH_A_THREAD: &[u8] = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [4 0 R 5 0 R 6 0 R 7 0 R 8 0 R] >> endobj
+4 0 obj << /Type /Annot /Subtype /Text /Rect [20 160 40 180] /C [1 0.85 0.2] /T (Alpha) /Contents (First) /Popup 5 0 R /Open true >> endobj
+5 0 obj << /Type /Annot /Subtype /Popup /Rect [60 -250 280 150] /Parent 4 0 R /Open true >> endobj
+6 0 obj << /Type /Annot /Subtype /Text /Rect [20 160 40 180] /T (Beta) /Contents (Second) /IRT 4 0 R /F 30 >> endobj
+7 0 obj << /Type /Annot /Subtype /Text /Rect [20 160 40 180] /T (Beta) /Contents (Second, first answer) /IRT 6 0 R /F 30 >> endobj
+8 0 obj << /Type /Annot /Subtype /Text /Rect [20 160 40 180] /T (Beta) /Contents (Third) /IRT 4 0 R /F 30 >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+
+/// A pop-up window (comment.popup-windows) is laid out as the readers' are: a title bar with the
+/// comment's kind and author; the comment's text; its replies as panels in thread order, an
+/// answer to a reply inside that reply's panel; and a Reply button under each, which opens a box
+/// that posts an answer to that comment or reply.
+#[test]
+fn a_pop_up_threads_its_replies_and_takes_a_new_one() {
+    let mut h = harness_with_bytes(NOTE_WITH_A_THREAD.to_vec(), |_| {});
+    let (_, window) = h.state().views[0].comments.popup_rects.first().copied().expect("the pop-up is open");
+    h.get_by_label("Note – Alpha");
+    // Each reply's text box, inside the window.
+    let rect = |h: &Harness<'static, PdfCraftApp>, text: &str| {
+        let found: Vec<egui::Rect> = h.query_all_by(|n| shows_text(n, text)).map(|n| n.rect()).filter(|r| window.contains_rect(*r)).collect();
+        assert_eq!(found.len(), 1, "{text:?} once in the window: {found:?}");
+        found[0]
+    };
+    let (second, answer, third) = (rect(&h, "Second"), rect(&h, "Second, first answer"), rect(&h, "Third"));
+    assert!(second.bottom() < answer.top() && answer.bottom() < third.top(), "thread order: {second:?} {answer:?} {third:?}");
+    assert!(
+        answer.left() > second.left() + 4.0 && answer.right() < second.right() - 4.0,
+        "the answer sits inside its reply's panel: {second:?} {answer:?}"
+    );
+    assert!((third.left() - second.left()).abs() < 1.0, "replies to the note line up: {second:?} {third:?}");
+    // The Reply buttons, top to bottom: the note's, then each reply's.
+    let replies = |h: &Harness<'static, PdfCraftApp>| {
+        let mut b: Vec<egui::Rect> =
+            h.query_all_by(|n| n.role() == Role::Button && n.label().as_deref() == Some("Reply")).map(|n| n.rect()).collect();
+        b.sort_by(|x, y| x.top().total_cmp(&y.top()));
+        b
+    };
+    assert_eq!(replies(&h).len(), 4, "one under the note and each reply");
+
+    // The note's Reply: Enter starts a new line in the box, as in the readers' pop-ups; Post posts.
+    let before = comments(&h).len();
+    let at = replies(&h)[0].center();
+    click(&mut h, at);
+    field(&h, "Add a reply").type_text("Fourth");
+    h.run_steps(2);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(2);
+    assert_eq!(comments(&h).len(), before, "Enter does not post");
+    h.event(egui::Event::Text("line two".into()));
+    h.run_steps(2);
+    h.get_by_label("Post").click();
+    h.run_steps(3);
+    let all = comments(&h);
+    let note = all.iter().find(|a| a.contents.as_deref() == Some("First")).expect("the note");
+    let reply = all.iter().find(|a| a.contents.as_deref() == Some("Fourth\nline two")).expect("the reply was added, on two lines");
+    assert_eq!(reply.parent, Some((note.page, note.index)));
+    assert_eq!(reply.author.as_deref(), Some("Tester"));
+    assert!(h.state().views[0].comments.popup_reply.is_none(), "the box closes");
+
+    // A reply's own Reply answers that reply; Ctrl+Enter posts too, as in the comment composer.
+    let second_key = all.iter().find(|a| a.contents.as_deref() == Some("Second")).map(|a| (a.page, a.index)).expect("the reply");
+    let at = replies(&h)[1].center();
+    click(&mut h, at);
+    field(&h, "Add a reply").type_text("Fifth");
+    h.run_steps(2);
+    h.key_press_modifiers(egui::Modifiers::CTRL, egui::Key::Enter);
+    h.run_steps(3);
+    let fifth = comments(&h).into_iter().find(|a| a.contents.as_deref() == Some("Fifth")).expect("Ctrl+Enter posts");
+    assert_eq!(fifth.parent, Some(second_key), "it answers the reply");
+
+    // Cancel closes the box without posting.
+    let before = comments(&h).len();
+    let at = replies(&h)[0].center();
+    click(&mut h, at);
+    field(&h, "Add a reply").type_text("Never mind");
+    h.run_steps(2);
+    h.get_by_label("Cancel").click();
+    h.run_steps(3);
+    assert_eq!(comments(&h).len(), before);
+    assert!(h.state().views[0].comments.popup_reply.is_none());
+}
+
+/// A note with an open pop-up and `replies` replies to it.
+fn note_with_replies(replies: usize) -> Vec<u8> {
+    let annots: String = (0..replies + 2).map(|i| format!("{} 0 R ", i + 4)).collect();
+    let mut pdf = format!(
+        "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [{annots}] >> endobj
+4 0 obj << /Type /Annot /Subtype /Text /Rect [20 160 40 180] /T (Alpha) /Contents (First) /Popup 5 0 R /Open true >> endobj
+5 0 obj << /Type /Annot /Subtype /Popup /Rect [60 10 280 150] /Parent 4 0 R /Open true >> endobj
+"
+    );
+    for i in 0..replies {
+        pdf.push_str(&format!(
+            "{} 0 obj << /Type /Annot /Subtype /Text /Rect [20 160 40 180] /T (Beta) /Contents (Reply {i}) /IRT 4 0 R /F 30 >> endobj\n",
+            i + 6
+        ));
+    }
+    pdf.push_str("trailer << /Root 1 0 R >>\n%%EOF");
+    pdf.into_bytes()
+}
+
+/// A pop-up window keeps its height however long its thread grows: the text and replies scroll
+/// inside it, as in the readers' pop-ups, rather than the window growing down the screen.
+#[test]
+fn a_long_thread_scrolls_inside_its_pop_up() {
+    let height = |replies: usize| {
+        let h = harness_with_bytes(note_with_replies(replies), |_| {});
+        let (_, window) = h.state().views[0].comments.popup_rects.first().copied().expect("the pop-up is open");
+        window.height()
+    };
+    let (short, long) = (height(1), height(25));
+    assert!((short - long).abs() < 2.0, "the same height with 1 reply and with 25: {short} {long}");
+    assert!(long < 600.0, "within the screen: {long}");
+}
+
+/// Dragging a pop-up window's lower right corner resizes it, and the new size is saved with the
+/// comment (the pop-up's `/Rect`) at the same place, in one undo step; the window shows it.
+#[test]
+fn a_pop_ups_corner_resizes_it() {
+    let mut h = harness_with_bytes(BLUE_NOTE_WITH_OPEN_POP_UP.to_vec(), |_| {});
+    let (_, window) = h.state().views[0].comments.popup_rects.first().copied().expect("the pop-up is open");
+    let before = comments(&h).into_iter().find(|a| a.subtype == "Text").and_then(|a| a.popup).expect("its pop-up").rect;
+    let corner = window.right_bottom() - egui::vec2(3.0, 3.0);
+    drag(&mut h, corner, corner + egui::vec2(80.0, 60.0));
+    h.run_steps(3);
+    let after = comments(&h).into_iter().find(|a| a.subtype == "Text").and_then(|a| a.popup).expect("its pop-up").rect;
+    // Wider and taller on the page, its upper left corner where it was.
+    assert!(after[2] - after[0] > before[2] - before[0] + 5.0, "wider: {before:?} -> {after:?}");
+    assert!(after[3] - after[1] > before[3] - before[1] + 5.0, "taller: {before:?} -> {after:?}");
+    assert!((after[0] - before[0]).abs() < 0.5 && (after[3] - before[3]).abs() < 0.5, "the same place: {before:?} -> {after:?}");
+    assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_undo(), Some("Move comment pop-up"));
+    let (_, resized) = h.state().views[0].comments.popup_rects.first().copied().expect("still open");
+    // The window shows the saved size, in points on screen whatever the zoom.
+    assert!((resized.width() - (after[2] - after[0])).abs() < 3.0, "as wide as saved: {after:?} {resized:?}");
+    assert!((resized.height() - (after[3] - after[1])).abs() < 3.0, "as tall as saved: {after:?} {resized:?}");
+    assert!(resized.width() > window.width() + 60.0 && resized.height() > window.height() + 40.0, "bigger on screen: {window:?} -> {resized:?}");
+    assert!((resized.left_top() - window.left_top()).length() < 1.0, "in the same place on screen");
+}
+
+/// A pop-up window's box holding `text` (a comment's or a reply's).
+fn shows_text(n: &egui_kittest::kittest::AccessKitNode<'_>, text: &str) -> bool {
+    n.role() == Role::MultilineTextInput && n.value().as_deref() == Some(text)
+}
+
+/// On a page turned a quarter (View ▸ Rotate View), a resized pop-up window stays where it is on
+/// screen and shows the size it was dragged to.
+#[test]
+fn a_pop_up_resized_on_a_turned_page_stays_in_place() {
+    let mut h = harness_with_bytes(BLUE_NOTE_WITH_OPEN_POP_UP.to_vec(), |app| app.views[0].rotation = 90);
+    let (_, window) = h.state().views[0].comments.popup_rects.first().copied().expect("the pop-up is open");
+    let corner = window.right_bottom() - egui::vec2(3.0, 3.0);
+    drag(&mut h, corner, corner + egui::vec2(80.0, 60.0));
+    h.run_steps(3);
+    let (_, resized) = h.state().views[0].comments.popup_rects.first().copied().expect("still open");
+    assert!((resized.left_top() - window.left_top()).length() < 1.0, "in the same place on screen: {window:?} -> {resized:?}");
+    assert!((resized.width() - window.width() - 80.0).abs() < 3.0, "80 px wider: {window:?} -> {resized:?}");
+    // Taller by the drag, less what its text had already stretched it.
+    assert!(resized.height() > window.height() + 50.0, "taller: {window:?} -> {resized:?}");
+}
+
+/// #2137 review: the composer's Post, clicked while a pop-up's box holds unsaved text, also
+/// saves that text as the box loses the focus. Both land in one frame and both are kept.
+#[test]
+fn posting_from_the_composer_keeps_a_pop_ups_unsaved_text() {
+    let mut h = harness_with_bytes(BLUE_NOTE_WITH_OPEN_POP_UP.to_vec(), |app| app.set_option("quick", "note").unwrap());
+    // Low on the left, so the composer stays clear of the window.
+    click_pt(&mut h, (30.0, 40.0));
+    // The composer opens with its editor focused.
+    h.run_steps(2);
+    h.event(egui::Event::Text("New note".into()));
+    h.run_steps(2);
+    let box_at = h.query_all_by(|n| shows_text(n, "A note")).next().expect("the pop-up's box").rect().right_center() - egui::vec2(4.0, 0.0);
+    click(&mut h, box_at);
+    h.event(egui::Event::Text(" edited".into()));
+    h.run_steps(2);
+    assert!(h.state().views[0].comments.composer.is_some(), "the composer is still open");
+    let post = h.get_by_label("Post").rect().center();
+    click(&mut h, post);
+    h.run_steps(3);
+    let all = comments(&h);
+    assert!(
+        all.iter().any(|a| a.contents.as_deref() == Some("New note")),
+        "the composer's note: {:?}",
+        all.iter().map(|a| &a.contents).collect::<Vec<_>>()
+    );
+    assert!(
+        all.iter().any(|a| a.contents.as_deref() == Some("A note edited")),
+        "the pop-up's text: {:?}",
+        all.iter().map(|a| &a.contents).collect::<Vec<_>>()
+    );
+}
+
+/// #2137 review: what a pop-up holds for a comment (a reply being typed, unsaved text) follows
+/// that comment when a deletion moves it, and is dropped when an undo or a page edit leaves its
+/// (page, index) naming another; other edits keep it.
+#[test]
+fn a_pop_ups_unsaved_work_follows_its_comment_or_is_dropped() {
+    use pdfcraft_engine::Edit;
+    let mut h = harness_with_bytes(NOTE_WITH_A_THREAD.to_vec(), |_| {});
+    let key = |h: &Harness<'static, PdfCraftApp>, text: &str| {
+        comments(h).into_iter().find(|a| a.contents.as_deref() == Some(text)).map(|a| (a.page, a.index)).expect(text)
+    };
+    let (second, third) = (key(&h, "Second"), key(&h, "Third"));
+    h.state_mut().views[0].comments.popup_reply = Some((third.0, third.1, "draft".into()));
+
+    // Another edit, on another comment: the draft stays.
+    assert!(h.state_mut().apply_edit(Edit::SetAnnotationContents { page: second.0, index: second.1, text: "Second!".into() }));
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].comments.popup_reply, Some((third.0, third.1, "draft".into())));
+
+    // Deleting "Second" (and its answer) moves "Third" up: the draft goes with it.
+    assert!(h.state_mut().apply_edit(Edit::DeleteAnnotation { page: second.0, index: second.1 }));
+    h.run_steps(2);
+    let moved = key(&h, "Third");
+    assert_ne!(moved, third, "Third moved up");
+    assert_eq!(h.state().views[0].comments.popup_reply, Some((moved.0, moved.1, "draft".into())), "the draft is still Third's");
+
+    // Undo puts the thread back: the draft is dropped rather than left on another reply.
+    h.state_mut().undo();
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].comments.popup_reply, None);
+
+    // A page inserted before it: the comment's (page, index) now names nothing of it.
+    let note = key(&h, "First");
+    h.state_mut().views[0].comments.popup_text = Some((note.0, note.1, "unsaved".into()));
+    assert!(h.state_mut().apply_edit(Edit::InsertBlankPage { at: 0, width: 300.0, height: 200.0 }));
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].comments.popup_text, None);
+}
+
+/// #2137 review: text typed into a pop-up and not yet saved is saved when × closes the window:
+/// the click takes the focus from the box and closes it in one frame, one undo step for both.
+#[test]
+fn closing_a_pop_up_saves_its_typed_text() {
+    let mut h = harness_with_bytes(BLUE_NOTE_WITH_OPEN_POP_UP.to_vec(), |_| {});
+    let box_at = h.query_all_by(|n| shows_text(n, "A note")).next().expect("the pop-up's box").rect().right_center() - egui::vec2(4.0, 0.0);
+    click(&mut h, box_at);
+    h.event(egui::Event::Text(" for you".into()));
+    h.run_steps(2);
+    let (_, window) = h.state().views[0].comments.popup_rects.first().copied().expect("the pop-up is open");
+    let close = h.query_all_by_label("Close").map(|n| n.rect().center()).find(|c| window.contains(*c)).expect("the window's ×");
+    click(&mut h, close);
+    h.run_steps(3);
+    let note = comments(&h).into_iter().find(|a| a.subtype == "Text").expect("the note");
+    assert_eq!(note.contents.as_deref(), Some("A note for you"), "the typed text is saved");
+    assert_eq!(note.popup.map(|p| p.open), Some(false), "and the window closed");
+    assert!(h.state().views[0].comments.popup_text.is_none());
+    h.state_mut().undo();
+    h.run_steps(2);
+    let note = comments(&h).into_iter().find(|a| a.subtype == "Text").expect("the note");
+    assert_eq!((note.contents.as_deref(), note.popup.map(|p| p.open)), (Some("A note"), Some(true)), "one undo step for both");
+}
+
+/// The selection bar stays inside the pages' area: its place was worked out for a 520 pt bar,
+/// so longer labels (German here) pushed it over the side panel next to a selection on the right.
+#[test]
+fn the_selection_bar_stays_inside_the_pages_area() {
+    let mut h = harness(|app| app.set_option("language", "de").unwrap());
+    // Narrower than the harness, as with a side panel open.
+    h.set_size(egui::vec2(1100.0, 900.0));
+    h.run_steps(4);
+    // The rightmost glyph of "The quick brown fox": the bar opens at its left.
+    let last = (0..64).filter_map(|i| h.state().views[0].glyph_screen_pos(0, i).map(|p| (i, p.x))).max_by(|a, b| a.1.total_cmp(&b.1)).unwrap().0;
+    h.state_mut().views[0].select_text(0, last, last);
+    h.run_steps(4);
+    let viewport = h.state().views[0].viewport_rect();
+    // The bar's whole area, frame included, not only its first and last buttons.
+    let id = egui::Id::unique(("text-selection-actions", h.state().views[0].view_key()));
+    let bar = h.ctx.memory(|m| m.area_rect(id)).expect("the selection bar is shown");
+    // The bar opens at the selection's left edge: past the area's right edge, without the clamp.
+    let anchor = h.state().views[0].glyph_screen_rect(0, last).unwrap().left();
+    assert!(anchor + bar.width() > viewport.right(), "selection at {anchor}, bar {} wide, area {viewport:?}", bar.width());
+    assert!(viewport.contains_rect(bar), "bar {bar:?} inside {viewport:?}");
 }
 
 /// `n` pages with one comment each, "Card 1" to "Card n".
@@ -3142,8 +4602,45 @@ fn hotbar_picker_adds_and_runs_freehand_highlight() {
     assert_eq!(h.state().quick_tool, QuickTool::Comment(pdfcraft_ui_egui::comments::CommentTool::FreehandHighlight));
 }
 
+/// #6548: resting on the hotbar's gear showed two stacked tooltips, "Hotbar settings" and
+/// "Hotbar settings / add tools". It shows the longer one only and keeps its short name.
+#[test]
+fn hotbar_settings_button_shows_one_tooltip() {
+    let mut h = harness(|_| {});
+    h.run_steps(2);
+    h.get_by_label("Hotbar settings").hover();
+    // egui shows a tooltip once the pointer has rested `tooltip_delay` seconds of *input* time,
+    // and the harness advances that clock by a fixed step every frame, so the wait is counted in
+    // simulated seconds rather than slept: it cannot pass early or depend on the machine's speed.
+    let delay = f64::from(h.ctx.global_style().interaction.tooltip_delay);
+    let start = h.ctx.input(|i| i.time);
+    let elapsed = |h: &Harness<'static, PdfCraftApp>| h.ctx.input(|i| i.time) - start;
+    // The button's name; a second tooltip repeating it would make two. Checked after every
+    // frame, so one that shows only briefly is caught too.
+    let names = |h: &Harness<'static, PdfCraftApp>| h.query_all_by_label("Hotbar settings").count();
+    let mut frames = 0;
+    while h.query_all_by_label("Hotbar settings / add tools").next().is_none() {
+        assert!(elapsed(&h) < 4.0 * delay && frames < 100, "no tooltip after {:.2}s of rest", elapsed(&h));
+        h.step();
+        frames += 1;
+        assert_eq!(names(&h), 1, "a second tooltip at {:.2}s", elapsed(&h));
+    }
+    // Rest two more delays, so a second tooltip would have had its chance to open.
+    let shown = elapsed(&h);
+    while elapsed(&h) < shown + 2.0 * delay && frames < 100 {
+        h.step();
+        frames += 1;
+        assert_eq!(names(&h), 1, "a second tooltip at {:.2}s", elapsed(&h));
+    }
+    assert_eq!(h.query_all_by_label("Hotbar settings / add tools").count(), 1, "the tooltip shows");
+    assert_eq!(names(&h), 1, "the button's name, and no second tooltip");
+}
+
 #[test]
 fn hotbar_picker_searches_translated_tool_labels() {
+    if crate::support::skip_without_catalogs("hotbar_picker_searches_translated_tool_labels") {
+        return;
+    }
     let mut h = harness(|app| {
         app.set_option("language", "fr").unwrap();
     });
@@ -3200,6 +4697,29 @@ fn hotbar_vertical_size_and_docking() {
 }
 
 #[test]
+fn hotbar_settings_layout_and_side_controls_are_reachable_by_label() {
+    let mut h = harness(|_| {});
+    h.get_by_label("Hotbar settings").click();
+    h.run_steps(3);
+    fn vertical(h: &Harness<'static, PdfCraftApp>) -> serde_json::Value {
+        serde_json::from_str::<serde_json::Value>(&h.state().persist()).unwrap()["hotbar"]["vertical"].clone()
+    }
+    let before = vertical(&h);
+    h.get_by_role_and_label(Role::Switch, "Vertical layout").click();
+    h.run_steps(3);
+    assert_ne!(vertical(&h), before, "the layout switch toggles by its label");
+    h.get_by_role_and_label(Role::RadioButton, "Right").click();
+    h.run_steps(3);
+    let saved: serde_json::Value = serde_json::from_str(&h.state().persist()).unwrap();
+    assert_eq!(saved["hotbar"]["dock"], "right");
+    assert_eq!(saved["hotbar"]["vertical"], true, "docking at the side lays the bar out vertically");
+    h.get_by_role_and_label(Role::RadioButton, "Float").click();
+    h.run_steps(3);
+    let saved: serde_json::Value = serde_json::from_str(&h.state().persist()).unwrap();
+    assert!(saved["hotbar"]["dock"].is_null());
+}
+
+#[test]
 fn hotbar_settings_reopen_even_with_remembered_collapsed_state() {
     let mut h = harness(|_| {});
     let mut collapsed =
@@ -3246,5 +4766,1085 @@ fn hotbar_full_side_strip_spans_each_edge_and_returns_to_float() {
     h.state_mut().set_option("hotbar-side", "float").unwrap();
     h.run_steps(5);
     let size = h.ctx.data_mut(|d| d.get_temp::<egui::Vec2>(egui::Id::unique("custom-hotbar"))).unwrap();
-    assert!(size.x < 150.0 && size.y < 150.0, "floating toolbar is compact: {size:?}");
+    let (length, thickness) = if size.y > size.x { (size.y, size.x) } else { (size.x, size.y) };
+    assert!(thickness <= 64.0 && length < 550.0, "floating toolbar is compact: {size:?}");
+}
+
+#[test]
+fn hotbar_docked_left_does_not_override_quick_tools() {
+    let mut h = harness(|app| {
+        app.set_option("hotbar-side", "left").unwrap();
+    });
+    h.run_steps(5);
+    // Controls in the docked bar share one layout, so none may overlap (#5890).
+    let labels = ["Drag hotbar", "Select (V)", "Hand (H)", "Add a sticky note", "Highlight", "Draw", "Fill & Sign: Add signature", "Hotbar settings"];
+    let rects: Vec<_> = labels.iter().map(|&label| h.get_by_label(label).rect()).collect();
+    for (i, a) in rects.iter().enumerate() {
+        for (j, b) in rects.iter().enumerate().skip(i + 1) {
+            let overlap = a.min.x < b.max.x && b.min.x < a.max.x && a.min.y < b.max.y && b.min.y < a.max.y;
+            assert!(!overlap, "{} overlaps {}: {a:?} / {b:?}", labels[i], labels[j]);
+        }
+    }
+}
+
+#[test]
+fn hotbar_docked_in_compact_window_keeps_settings_button_visible() {
+    for side in ["left", "right"] {
+        let mut h = Harness::builder().with_size(egui::vec2(800.0, 480.0)).build_eframe(move |_cc| {
+            let mut app = PdfCraftApp::new();
+            app.set_option("language", "en").unwrap();
+            app.open_bytes("text.pdf", None, TEXT_FIXTURE.to_vec()).expect("opens");
+            app.set_option("left", "closed").unwrap();
+            app.set_option("hotbar-side", side).unwrap();
+            app.set_option("hotbar-size", "48").unwrap();
+            app
+        });
+        h.run_steps(5);
+        let settings_rect = h.get_by_label("Hotbar settings").rect();
+        assert!(settings_rect.max.y <= 480.0, "{side} hotbar settings button must stay within window height: {settings_rect:?}");
+    }
+}
+
+#[test]
+fn hotbar_settings_menu_closes_on_click_outside() {
+    let mut h = harness(|app| {
+        app.open_bytes("text.pdf", None, TEXT_FIXTURE.to_vec()).expect("opens");
+    });
+    h.get_by_label("Hotbar settings").click();
+    h.run_steps(3);
+    assert!(h.query_by_label("Close menu").is_some());
+
+    // Clicking outside on the canvas dismisses the settings menu
+    h.event(egui::Event::PointerButton {
+        pos: egui::pos2(600.0, 300.0),
+        button: egui::PointerButton::Primary,
+        pressed: true,
+        modifiers: Default::default(),
+    });
+    h.event(egui::Event::PointerButton {
+        pos: egui::pos2(600.0, 300.0),
+        button: egui::PointerButton::Primary,
+        pressed: false,
+        modifiers: Default::default(),
+    });
+    h.run_steps(3);
+    assert!(h.query_by_label("Close menu").is_none(), "clicking outside closes the hotbar settings menu");
+
+    // Reopening and clicking another tool outside dismisses the menu and activates that tool
+    h.get_by_label("Hotbar settings").click();
+    h.run_steps(3);
+    assert!(h.query_by_label("Close menu").is_some());
+    h.get_by_label("Hand (H)").click();
+    h.run_steps(3);
+    assert!(h.query_by_label("Close menu").is_none());
+    assert_eq!(h.state().quick_tool, QuickTool::Hand);
+}
+
+#[test]
+fn hotbar_picker_in_narrow_viewport_fits_within_screen_width() {
+    let mut h = Harness::builder().with_size(egui::vec2(270.0, 480.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("text.pdf", None, TEXT_FIXTURE.to_vec()).expect("opens");
+        app
+    });
+    h.get_by_label("Hotbar settings").click();
+    h.run_steps(5);
+    let close_btn = h.get_by_label("Close menu");
+    assert!(close_btn.rect().max.x <= 270.0, "Close menu button must stay within viewport width: {:?}", close_btn.rect());
+}
+
+#[test]
+fn hotbar_floating_picker_does_not_overlap_rendered_bar() {
+    let mut h = Harness::builder().with_size(egui::vec2(1000.0, 600.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("text.pdf", None, TEXT_FIXTURE.to_vec()).expect("opens");
+        app
+    });
+    let settings_btn = h.get_by_label("Hotbar settings");
+    let settings_rect = settings_btn.rect();
+    settings_btn.click();
+    h.run_steps(5);
+
+    let picker_close = h.get_by_label("Close menu");
+    let picker_rect = picker_close.rect();
+    assert!(
+        picker_rect.min.x >= settings_rect.max.x || picker_rect.max.x <= settings_rect.min.x,
+        "picker ({:?}) must not overlap the settings button ({:?}) on the floating bar",
+        picker_rect,
+        settings_rect
+    );
+}
+
+fn edit_composer_preserves_only_typewriter_whitespace(kind: u8) {
+    let shots = std::env::var_os("PDFCRAFT_COMPOSER_SHOTS").is_some();
+    let _gpu = shots.then(crate::gpu);
+    use pdfcraft_engine::{Edit, NewAnnotation, NoteIcon, Shape, Style};
+    let mut h = harness(move |app| {
+        app.set_option("layout", "single").unwrap();
+        app.set_option("panel", "comments").unwrap();
+        app.quick_tool = QuickTool::Select;
+        // Both pages use index 0, with opposite intents. The lookup must use page AND index.
+        for page in 0..2 {
+            let typewriter = if page == 0 { kind != 0 } else { kind == 0 };
+            let shape = if typewriter {
+                Shape::Typewriter { rect: [40.0, 40.0, 180.0, 90.0], font_size: 10.0 }
+            } else if kind == 2 {
+                Shape::Note { at: [80.0, 80.0], icon: NoteIcon::Comment }
+            } else {
+                Shape::TextBox { rect: [40.0, 40.0, 180.0, 90.0], font_size: 10.0 }
+            };
+            let style = Style::default_for(&shape);
+            assert!(app.apply_edit(Edit::AddAnnotation(NewAnnotation { page, shape, style, contents: "Original".into(), author: "Tester".into() })));
+        }
+    });
+    h.state_mut().views[0].go_to_page(1);
+    h.run_steps(4);
+    support::settle(&mut h);
+    let point = {
+        let s = h.state();
+        let v = &s.views[0];
+        let doc = s.session.get(v.id).unwrap();
+        let a = doc.info.annotations.iter().find(|a| a.page == 1 && a.index == 0).unwrap();
+        let page = v.page_screen_rect(1).expect("the second page is visible");
+        let info = &doc.info.pages[1];
+        let p = info.user_to_view((a.rect[0] + a.rect[2]) / 2.0, (a.rect[1] + a.rect[3]) / 2.0);
+        page.min + egui::vec2(p[0], p[1]) * (page.width() / info.width)
+    };
+    support::input::double_click(&mut h, point);
+    h.run_steps(3);
+    if kind == 2 {
+        // A double-click on a sticky note opens its pop-up window, as in Acrobat; its edit
+        // composer is the page menu's "Edit text…".
+        let popup_open = |h: &Harness<'static, PdfCraftApp>| {
+            let s = h.state();
+            let doc = s.session.get(s.views[0].id).unwrap();
+            doc.info.annotations.iter().find(|a| a.page == 1 && a.index == 0).unwrap().popup.is_some_and(|p| p.open)
+        };
+        assert!(h.state().views[0].comments.composer.is_none(), "a note's double-click opens no composer");
+        assert!(popup_open(&h), "a note's double-click opens its pop-up");
+        h.hover_at(point);
+        h.run_steps(1);
+        h.event(egui::Event::PointerButton { pos: point, button: egui::PointerButton::Secondary, pressed: true, modifiers: Default::default() });
+        h.event(egui::Event::PointerButton { pos: point, button: egui::PointerButton::Secondary, pressed: false, modifiers: Default::default() });
+        h.run_steps(3);
+        h.get_all_by_label("Edit text…").last().unwrap().click();
+        h.run_steps(3);
+    }
+    let c = h.state().views[0].comments.composer.as_ref().expect("the edit composer is open");
+    assert_eq!(c.page, 1);
+    assert_eq!(c.kind, pdfcraft_ui_egui::comments::ComposerKind::Edit(0));
+    h.input_mut().events.push(egui::Event::Text(" edited\n\n".into()));
+    let ctx = h.ctx.clone();
+    let mut raw = std::mem::take(h.input_mut());
+    h.state_mut().prepare_raw_input(&ctx, &mut raw);
+    *h.input_mut() = raw;
+    h.step();
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].comments.composer.as_ref().unwrap().text, "Original edited\n\n");
+    if shots {
+        h.render().unwrap().save(format!("/tmp/5954-composer-{kind}.png")).unwrap();
+    }
+    h.get_all_by_label("Post").last().unwrap().click();
+    h.run_steps(3);
+    assert!(h.state().views[0].comments.composer.is_none());
+    let id = h.state().views[0].id;
+    let bytes = h.state().session.save_bytes(id).unwrap();
+    // Check the raw saved string: ordinary-comment reader trimming must not hide a bad post.
+    let cos = pdfcraft_cos::Document::open(bytes.clone()).unwrap();
+    let pages = pdfcraft_model::pages(&cos);
+    let annots = cos.resolve(pages[1].dict.get(b"Annots").unwrap());
+    let annot = cos.resolve(&annots.as_array().unwrap()[0]);
+    let contents = cos.resolve(annot.as_dict().unwrap().get(b"Contents").unwrap());
+    let expected = if kind == 0 { "Original edited\n\n" } else { "Original edited" };
+    assert_eq!(contents.as_string().unwrap().to_text(), expected, "only a typewriter edit preserves trailing blank lines");
+    let mut reopened = pdfcraft_engine::Session::new();
+    let again = reopened.open("edited.pdf", None, bytes, None).unwrap();
+    let saved = reopened.get(again).unwrap().info.annotations.iter().find(|a| a.page == 1 && a.index == 0).unwrap();
+    assert_eq!(saved.contents.as_deref(), Some(expected));
+}
+
+#[test]
+fn typewriter_edit_composer_keeps_trailing_blank_lines() {
+    edit_composer_preserves_only_typewriter_whitespace(0);
+}
+
+#[test]
+fn other_edit_composers_keep_trimming_trailing_whitespace() {
+    for kind in [1, 2] {
+        edit_composer_preserves_only_typewriter_whitespace(kind);
+    }
+}
+
+/// ⌘-click (Ctrl on Linux and Windows) adds comments to the selection and takes one out again;
+/// Delete removes every selected comment as one undo step.
+#[test]
+fn ctrl_click_selects_several_comments_and_delete_removes_them_all() {
+    let mut h = harness(|app| app.set_option("quick", "square").unwrap());
+    for (a, b) in [((20.0, 20.0), (60.0, 60.0)), ((100.0, 20.0), (140.0, 60.0)), ((180.0, 20.0), (220.0, 60.0))] {
+        drag_pt(&mut h, a, b);
+    }
+    assert_eq!(comments(&h).len(), 3);
+    h.state_mut().set_option("quick", "select").unwrap();
+    h.run_steps(2);
+    click_pt(&mut h, (40.0, 40.0));
+    assert_eq!(h.state().views[0].comments.selection(), vec![(0, 0)]);
+    click_pt_with(&mut h, (120.0, 40.0), egui::Modifiers::COMMAND);
+    click_pt_with(&mut h, (200.0, 40.0), egui::Modifiers::COMMAND);
+    assert_eq!(h.state().views[0].comments.selection(), vec![(0, 2), (0, 0), (0, 1)], "the handles go to the one clicked last");
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 2)));
+    // ⌘-click on a selected comment takes it out again.
+    click_pt_with(&mut h, (40.0, 40.0), egui::Modifiers::COMMAND);
+    assert_eq!(h.state().views[0].comments.selection(), vec![(0, 2), (0, 1)]);
+    // Delete: both go, as one step.
+    h.key_press(egui::Key::Delete);
+    h.run_steps(3);
+    let left = comments(&h);
+    assert_eq!(left.len(), 1, "{left:?}");
+    assert!((left[0].rect[0] - 20.0).abs() < 1.0, "the unselected first rectangle stays: {:?}", left[0].rect);
+    assert!(h.state().views[0].comments.selection().is_empty());
+    let id = h.state().views[0].id;
+    assert_eq!(h.state().session.get(id).unwrap().can_undo(), Some("Delete comments"));
+    h.state_mut().undo();
+    assert_eq!(comments(&h).len(), 3);
+    // A plain click selects one alone again.
+    click_pt(&mut h, (120.0, 40.0));
+    assert_eq!(h.state().views[0].comments.selection(), vec![(0, 1)]);
+    // On the page ⇧-click adds one too, and takes it out again (a range is the panel's).
+    click_pt_with(&mut h, (200.0, 40.0), egui::Modifiers::SHIFT);
+    assert_eq!(h.state().views[0].comments.selection().len(), 2, "{:?}", h.state().views[0].comments.selection());
+    click_pt_with(&mut h, (200.0, 40.0), egui::Modifiers::SHIFT);
+    assert_eq!(h.state().views[0].comments.selection(), vec![(0, 1)]);
+}
+
+/// Dragging one of several selected comments moves them all, whichever of them is grabbed: the
+/// grabbed one takes the handles and the one that had them stays selected.
+#[test]
+fn dragging_any_selected_comment_moves_the_whole_selection() {
+    let mut h = harness(|app| app.set_option("quick", "square").unwrap());
+    for (a, b) in [((20.0, 20.0), (60.0, 60.0)), ((100.0, 20.0), (140.0, 60.0)), ((180.0, 20.0), (220.0, 60.0))] {
+        drag_pt(&mut h, a, b);
+    }
+    h.state_mut().set_option("quick", "select").unwrap();
+    h.run_steps(2);
+    click_pt(&mut h, (40.0, 40.0));
+    click_pt_with(&mut h, (120.0, 40.0), egui::Modifiers::COMMAND);
+    click_pt_with(&mut h, (200.0, 40.0), egui::Modifiers::COMMAND);
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 2)), "the last one clicked has the handles");
+    // Drag the first one (not the one with the handles) 30 points up.
+    let before = comments(&h);
+    drag_pt(&mut h, (40.0, 40.0), (40.0, 70.0));
+    let after = comments(&h);
+    assert_eq!(after.len(), 3);
+    for (a, b) in before.iter().zip(&after) {
+        assert!((b.rect[1] - a.rect[1] - 30.0).abs() < 1.5, "every selected rectangle moved up 30 pt: {:?} from {:?}", b.rect, a.rect);
+    }
+    let selection = h.state().views[0].comments.selection();
+    assert_eq!(selection.len(), 3, "all three stay selected: {selection:?}");
+    assert_eq!(selection[0], (0, 0), "the grabbed one has the handles");
+    let id = h.state().views[0].id;
+    assert_eq!(h.state().session.get(id).unwrap().can_undo(), Some("Move comments"));
+    // A locked one in the selection stays where it is; the others still move (it would refuse
+    // the whole step otherwise, and nothing would move).
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::LockAnnotation { page: 0, index: 1, locked: true }));
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].comments.selection().len(), 3);
+    let before = comments(&h);
+    drag_pt(&mut h, (40.0, 70.0), (40.0, 90.0));
+    let after = comments(&h);
+    // By index: the list isn't kept in index order.
+    let bottom = |list: &[Annotation], i: usize| list.iter().find(|a| a.index == i).map(|a| a.rect[1]).expect("still there");
+    for i in 0..3 {
+        let moved = bottom(&after, i) - bottom(&before, i);
+        if i == 1 {
+            assert!(moved.abs() < 0.01, "the locked one stays: moved {moved}");
+        } else {
+            assert!((moved - 20.0).abs() < 1.5, "rectangle {i} moved up 20 pt: moved {moved}");
+        }
+    }
+    assert_eq!(h.state().session.get(id).unwrap().can_undo(), Some("Move comments"));
+}
+
+/// Copied comments on the pointer take the click whatever tool is on: with Fill & Sign's Text
+/// tool or a stamp tool still on, the click places the bundle and opens no text box or stamp.
+#[test]
+fn copied_comments_take_the_click_from_the_tool_that_is_on() {
+    use pdfcraft_ui_egui::fill_sign::FillTool;
+    let mut h = harness(|_| {});
+    let id = h.state().views[0].id;
+    let shape = pdfcraft_engine::Shape::Rectangle { rect: [20.0, 20.0, 60.0, 60.0] };
+    let style = pdfcraft_engine::Style::default_for(&shape);
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::AddAnnotation(pdfcraft_engine::NewAnnotation {
+        page: 0,
+        shape,
+        style,
+        contents: String::new(),
+        author: "Tester".into(),
+    })));
+    h.run_steps(2);
+    h.state_mut().views[0].comments.select_only((0, 0));
+    assert!(h.state_mut().execute("comment.copy"));
+    let count = |h: &Harness<'static, PdfCraftApp>| h.state().session.get(id).unwrap().info.annotations.len();
+    for (tool, at) in [(QuickTool::Fill(FillTool::Text), (150.0, 100.0)), (QuickTool::Stamp(pdfcraft_engine::StampKind::Approved), (200.0, 160.0))] {
+        h.state_mut().quick_tool = tool;
+        h.run_steps(2);
+        let before = count(&h);
+        assert!(h.state_mut().execute("comment.paste"));
+        click_pt(&mut h, at);
+        assert_eq!(count(&h), before + 1, "{tool:?}: the copy, and nothing else");
+        assert!(h.state().views[0].fill_text.is_none(), "{tool:?}: no text box opens");
+        assert!(h.state().views[0].comments.gesture.is_none());
+        let placed = h.state().session.get(id).unwrap().info.annotations.iter().max_by_key(|a| a.index).map(|a| a.rect).expect("placed");
+        assert!(((placed[0] + placed[2]) / 2.0 - at.0).abs() < 1.0, "{tool:?}: centred on the click: {placed:?}");
+        assert_eq!(h.state().quick_tool, tool, "the tool stays on for the next click");
+    }
+    // Afterwards the tool takes its clicks again.
+    h.state_mut().quick_tool = QuickTool::Fill(FillTool::Text);
+    h.run_steps(2);
+    click_pt(&mut h, (100.0, 200.0));
+    assert!(h.state().views[0].fill_text.is_some(), "Fill & Sign's Text tool opens its box again");
+}
+
+/// Two boxes on page 1 of the active document, and a reply to the first.
+fn add_two_boxes_and_a_reply(h: &mut Harness<'static, PdfCraftApp>) {
+    for rect in [[20.0, 20.0, 60.0, 60.0], [100.0, 20.0, 140.0, 60.0]] {
+        let shape = pdfcraft_engine::Shape::Rectangle { rect };
+        let style = pdfcraft_engine::Style::default_for(&shape);
+        assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::AddAnnotation(pdfcraft_engine::NewAnnotation {
+            page: 0,
+            shape,
+            style,
+            contents: "Box".into(),
+            author: "Tester".into(),
+        })));
+    }
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::ReplyToAnnotation { page: 0, index: 0, text: "Reply".into(), author: "Tester".into() }));
+    h.run_steps(2);
+}
+
+/// Copied comments paste into another document on its current page, each with its replies, as
+/// new comments (a second paste gives a second set); the copies are selected afterwards.
+#[test]
+fn copied_comments_paste_into_another_document() {
+    let mut h = harness(|app| {
+        app.open_bytes("other.pdf", None, TEXT_FIXTURE.to_vec()).expect("opens");
+        app.active = Some(0);
+    });
+    let (source, target) = (h.state().views[0].id, h.state().views[1].id);
+    add_two_boxes_and_a_reply(&mut h);
+    // Adding a comment selects it; with nothing selected there is nothing to copy.
+    h.state_mut().views[0].comments.clear_selection();
+    assert!(!h.state_mut().execute("comment.copy"), "nothing selected: nothing to copy");
+    {
+        let cv = &mut h.state_mut().views[0].comments;
+        cv.select_only((0, 0));
+        cv.also.push((0, 1));
+    }
+    assert!(h.state_mut().execute("comment.copy"));
+    assert_eq!(h.state().comment_clipboard.as_ref().map(|c| c.count), Some(2));
+    // Into the other document: Edit ▸ Paste comments hangs the bundle on the pointer, a click
+    // places it, centred there (the two boxes span 20..140 × 20..60: centre 80, 40).
+    h.state_mut().active = Some(1);
+    h.run_steps(2);
+    assert!(h.state_mut().execute("comment.paste"));
+    let count = |h: &Harness<'static, PdfCraftApp>| h.state().session.get(target).unwrap().info.annotations.len();
+    assert_eq!(count(&h), 0, "nothing placed yet");
+    assert!(matches!(h.state().views[1].comments.gesture, Some(pdfcraft_ui_egui::comments::Gesture::Place { count: 2, .. })));
+    click_pt(&mut h, (150.0, 100.0));
+    let pasted = h.state().session.get(target).unwrap().info.annotations.clone();
+    assert_eq!(pasted.len(), 3, "two comments and the reply: {pasted:?}");
+    assert!(pasted.iter().all(|a| a.page == 0), "on the page clicked: {pasted:?}");
+    let parent = pasted.iter().find(|a| a.in_reply_to.is_none() && (a.rect[0] - 90.0).abs() < 1.0).expect("the first box, moved by (70, 60)");
+    assert!((parent.rect[1] - 80.0).abs() < 1.0 && (parent.rect[2] - 130.0).abs() < 1.0, "{:?}", parent.rect);
+    assert_eq!(pasted.iter().find(|a| a.in_reply_to.is_some()).and_then(|r| r.in_reply_to.clone()), parent.name, "the reply follows its copy");
+    assert_eq!(h.state().views[1].comments.selection().len(), 2, "the copies are selected");
+    assert!(h.state().views[1].comments.gesture.is_none());
+    assert_eq!(h.state().session.get(target).unwrap().can_undo(), Some("Paste comments"));
+    assert_eq!(h.state().session.get(source).unwrap().info.annotations.len(), 3, "the source is untouched");
+    // The page menu's Paste comments places the bundle where the menu was opened: page 2 here.
+    h.state_mut().views[1].comments.paste_request = Some((1, [100.0, 100.0]));
+    h.run_steps(3);
+    assert_eq!(count(&h), 6);
+    let second: Vec<_> =
+        h.state().session.get(target).unwrap().info.annotations.iter().filter(|a| a.page == 1 && a.in_reply_to.is_none()).cloned().collect();
+    assert_eq!(second.len(), 2);
+    let centre_x = (second.iter().map(|a| a.rect[0]).fold(f32::MAX, f32::min) + second.iter().map(|a| a.rect[2]).fold(f32::MIN, f32::max)) / 2.0;
+    assert!((centre_x - 100.0).abs() < 1.0, "centred at the menu's point: {second:?}");
+    // ⌘V (a Paste event) hangs the bundle on the pointer again; Escape lets it go.
+    h.event(egui::Event::Paste(String::new()));
+    h.run_steps(3);
+    assert!(h.state().views[1].comments.gesture.is_some());
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+    assert!(h.state().views[1].comments.gesture.is_none());
+    assert_eq!(count(&h), 6, "nothing placed");
+    h.state_mut().undo();
+    assert_eq!(count(&h), 3);
+    // XFDF arriving from the system clipboard pastes too, even without the app's clipboard.
+    let xfdf = h.state().comment_clipboard.clone().unwrap().xfdf;
+    h.state_mut().comment_clipboard = None;
+    assert!(!h.state_mut().execute("comment.paste"), "nothing copied: disabled");
+    h.event(egui::Event::Paste(xfdf.clone()));
+    h.run_steps(3);
+    click_pt(&mut h, (200.0, 120.0));
+    assert_eq!(count(&h), 6);
+    h.event(egui::Event::Paste("just text".into()));
+    h.run_steps(3);
+    assert!(h.state().views[1].comments.gesture.is_none(), "plain text is not a paste of comments");
+    // Nor when comments were copied earlier: a word copied in another app since is that word.
+    h.state_mut().comment_clipboard = Some(pdfcraft_ui_egui::CommentClip { xfdf, count: 2 });
+    h.event(egui::Event::Paste("a word from elsewhere".into()));
+    h.run_steps(3);
+    assert!(h.state().views[1].comments.gesture.is_none(), "the old comments don't hang on the pointer");
+    // Nothing legible on the system clipboard: the app's own copied comments.
+    h.event(egui::Event::Paste(String::new()));
+    h.run_steps(3);
+    assert!(h.state().views[1].comments.gesture.is_some());
+}
+
+/// Connected lines (and polygons) finish from the right-click menu too, as other editors do;
+/// the menu also takes the last point back and cancels the drawing.
+#[test]
+fn connected_lines_are_completed_from_the_context_menu() {
+    let mut h = harness(|app| app.set_option("quick", "polyline").unwrap());
+    for p in [(20.0, 150.0), (60.0, 130.0), (100.0, 150.0)] {
+        click_pt(&mut h, p);
+    }
+    assert_eq!(comments(&h).len(), 0, "still drawing");
+    let right_click = |h: &mut Harness<'static, PdfCraftApp>, p: (f32, f32)| {
+        let p = at(h, p.0, p.1);
+        h.hover_at(p);
+        h.run_steps(1);
+        for pressed in [true, false] {
+            h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Secondary, pressed, modifiers: egui::Modifiers::NONE });
+            h.run_steps(1);
+        }
+        h.run_steps(2);
+    };
+    right_click(&mut h, (120.0, 100.0));
+    h.get_by_label("Complete").click();
+    h.run_steps(3);
+    let c = comments(&h);
+    assert_eq!(c.len(), 1, "{c:?}");
+    assert_eq!(c[0].subtype, "PolyLine");
+    // A polygon needs three points: with two, Complete is greyed; Undo last point and Cancel drawing work.
+    h.state_mut().set_option("quick", "polygon").unwrap();
+    for p in [(150.0, 150.0), (200.0, 150.0)] {
+        click_pt(&mut h, p);
+    }
+    assert_eq!(drawn_points(&h), 2);
+    right_click(&mut h, (220.0, 100.0));
+    assert!(h.get_by_label("Complete").accesskit_node().is_disabled());
+    h.get_by_label("Undo last point").click();
+    h.run_steps(3);
+    assert_eq!(drawn_points(&h), 1);
+    right_click(&mut h, (220.0, 100.0));
+    h.get_by_label("Cancel drawing").click();
+    h.run_steps(3);
+    assert_eq!(drawn_points(&h), 0);
+    assert!(h.state().views[0].comments.gesture.is_none());
+    assert_eq!(comments(&h).len(), 1, "nothing else was drawn");
+    // On the second page, with the first on screen in the same frame: Complete reaches the page
+    // the drawing is on (the first page passes first and must not take the request).
+    h.state_mut().set_option("quick", "polyline").unwrap();
+    h.state_mut().set_option("zoom", "50").unwrap();
+    crate::support::settle(&mut h);
+    assert!(h.state().views[0].page_screen_rect(0).is_some(), "page 1 is on screen too");
+    let at2 = |h: &Harness<'static, PdfCraftApp>, x: f32, y: f32| {
+        let r = h.state().views[0].page_screen_rect(1).expect("page 2 on screen");
+        pos2(r.left() + x / 300.0 * r.width(), r.top() + (200.0 - y) / 200.0 * r.height())
+    };
+    for (x, y) in [(20.0, 100.0), (60.0, 80.0)] {
+        let p = at2(&h, x, y);
+        click(&mut h, p);
+    }
+    assert_eq!(drawn_points(&h), 2);
+    let p = at2(&h, 150.0, 150.0);
+    h.hover_at(p);
+    h.run_steps(1);
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Secondary, pressed, modifiers: egui::Modifiers::NONE });
+        h.run_steps(1);
+    }
+    h.run_steps(2);
+    h.get_by_label("Complete").click();
+    h.run_steps(3);
+    let c = comments(&h);
+    assert_eq!(c.len(), 2, "{c:?}");
+    assert!(c.iter().any(|a| a.page == 1 && a.subtype == "PolyLine"), "{c:?}");
+    assert!(h.state().views[0].comments.gesture.is_none());
+}
+
+/// Properties on one of several selected comments changes all of them, each where it applies: the
+/// colour goes to every one, the line width to the shapes, the font size to the text box alone;
+/// a locked one stays as it is. One undo step. Colouring the selection works the same way.
+#[test]
+fn properties_change_every_selected_comment_where_it_applies() {
+    use pdfcraft_engine::{Edit, NewAnnotation, Shape, Style};
+    let mut h = harness(|_| {});
+    let shapes = [
+        Shape::Rectangle { rect: [20.0, 20.0, 60.0, 60.0] },
+        Shape::Oval { rect: [80.0, 20.0, 120.0, 60.0] },
+        Shape::TextBox { rect: [140.0, 20.0, 200.0, 40.0], font_size: 12.0 },
+        Shape::Rectangle { rect: [220.0, 20.0, 260.0, 60.0] },
+    ];
+    for shape in shapes {
+        let style = Style::default_for(&shape);
+        assert!(h.state_mut().apply_edit(Edit::AddAnnotation(NewAnnotation {
+            page: 0,
+            shape,
+            style,
+            contents: "x".into(),
+            author: "Tester".into()
+        })));
+    }
+    assert!(h.state_mut().apply_edit(Edit::LockAnnotation { page: 0, index: 3, locked: true }));
+    {
+        let c = &mut h.state_mut().views[0].comments;
+        c.selected = Some((0, 0));
+        c.also = vec![(0, 1), (0, 2), (0, 3)];
+    }
+    h.run_steps(2);
+    h.state_mut().open_comment_props(0, 0);
+    h.run_steps(2);
+    h.get_by_label("Changes here apply to all 4 selected comments");
+    {
+        let d = h.state_mut().comment_props.as_mut().expect("open");
+        assert_eq!(d.others.len(), 3);
+        d.edited.color = Some([0.0, 0.0, 1.0]);
+        d.edited.width = Some(4.0);
+    }
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    let props = |h: &Harness<'static, PdfCraftApp>, index: usize| {
+        let s = h.state();
+        s.session.get(s.views[0].id).unwrap().comment_props(0, index).unwrap()
+    };
+    for index in [0, 1] {
+        let p = props(&h, index);
+        assert_eq!((p.color, p.width), (Some([0.0, 0.0, 1.0]), Some(4.0)), "shape {index}");
+    }
+    assert_eq!(props(&h, 2).color, Some([0.0, 0.0, 1.0]), "the text box's text colour");
+    let locked = props(&h, 3);
+    assert_ne!(locked.color, Some([0.0, 0.0, 1.0]), "the locked rectangle stays as it was");
+    let s = h.state();
+    assert_eq!(s.session.get(s.views[0].id).unwrap().can_undo(), Some("Change comment properties"), "one undo step");
+    // From the text box: its font size changes, and the shapes, which have none, keep their look.
+    h.state_mut().views[0].comments.selected = Some((0, 2));
+    h.state_mut().views[0].comments.also = vec![(0, 0), (0, 1)];
+    h.state_mut().open_comment_props(0, 2);
+    h.run_steps(2);
+    h.state_mut().comment_props.as_mut().expect("open").edited.font_size = Some(20.0);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert_eq!(props(&h, 2).font_size, Some(20.0));
+    assert_eq!((props(&h, 0).font_size, props(&h, 0).width), (None, Some(4.0)));
+    // Colouring the selection (the context menu's Colour with several selected).
+    h.state_mut().colour_selected_comments([1.0, 0.0, 0.0]);
+    h.run_steps(2);
+    for index in [0, 1, 2] {
+        assert_eq!(props(&h, index).color, Some([1.0, 0.0, 0.0]), "comment {index}");
+    }
+    assert_ne!(props(&h, 3).color, Some([1.0, 0.0, 0.0]));
+}
+
+/// Comment Properties' text opacity, set with several comments selected, goes to the other text
+/// boxes whose text shows an opacity of its own (a border or a fill), and leaves a text-only box,
+/// whose one opacity is the whole comment's, as it was.
+#[test]
+fn part_opacity_changes_every_selected_comment_that_shows_the_part() {
+    use pdfcraft_engine::{Edit, NewAnnotation, Shape, Style};
+    let mut h = harness(|_| {});
+    for (n, width) in [1.0, 1.0, 0.0].into_iter().enumerate() {
+        let x = 20.0 + 100.0 * n as f64;
+        let shape = Shape::TextBox { rect: [x, 20.0, x + 80.0, 40.0], font_size: 12.0 };
+        let style = Style { width, ..Style::default_for(&shape) };
+        assert!(h.state_mut().apply_edit(Edit::AddAnnotation(NewAnnotation {
+            page: 0,
+            shape,
+            style,
+            contents: "x".into(),
+            author: "Tester".into()
+        })));
+    }
+    let props = |h: &Harness<'static, PdfCraftApp>, index: usize| {
+        let s = h.state();
+        s.session.get(s.views[0].id).unwrap().comment_props(0, index).unwrap()
+    };
+    let text_only = props(&h, 2);
+    {
+        let c = &mut h.state_mut().views[0].comments;
+        c.selected = Some((0, 0));
+        c.also = vec![(0, 1), (0, 2)];
+    }
+    h.run_steps(2);
+    h.state_mut().open_comment_props(0, 0);
+    h.run_steps(2);
+    h.state_mut().comment_props.as_mut().expect("open").edited.text_opacity = Some(0.4);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    for index in [0, 1] {
+        let text = props(&h, index).text_opacity.expect("a text box's text opacity");
+        assert!((text - 0.4).abs() < 1e-3, "bordered box {index}: {text}");
+    }
+    let after = props(&h, 2);
+    assert_eq!((after.text_opacity, after.opacity), (text_only.text_opacity, text_only.opacity), "the text-only box keeps its look");
+}
+
+/// Escape with a Fill & Sign tool on and several comments selected deselects them all first,
+/// then drops the tool.
+#[test]
+fn escape_with_a_fill_tool_deselects_every_comment_then_drops_the_tool() {
+    use pdfcraft_ui_egui::fill_sign::FillTool;
+    let mut h = harness(|_| {});
+    add_two_boxes_and_a_reply(&mut h);
+    h.state_mut().quick_tool = QuickTool::Fill(FillTool::Text);
+    {
+        let c = &mut h.state_mut().views[0].comments;
+        c.selected = Some((0, 0));
+        c.also = vec![(0, 1)];
+    }
+    h.run_steps(2);
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    let c = &h.state().views[0].comments;
+    assert!(c.selected.is_none() && c.also.is_empty(), "the whole selection goes");
+    assert_eq!(h.state().quick_tool, QuickTool::Fill(FillTool::Text), "the tool stays for now");
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    assert_eq!(h.state().quick_tool, QuickTool::Select);
+}
+
+/// A square drawn and selected with the Select tool.
+fn selected_square() -> Harness<'static, PdfCraftApp> {
+    let mut h = harness(|app| app.set_option("quick", "square").unwrap());
+    drag_pt(&mut h, (40.0, 100.0), (140.0, 40.0));
+    h.state_mut().set_option("quick", "select").unwrap();
+    click_pt(&mut h, (250.0, 20.0));
+    click_pt(&mut h, (90.0, 70.0));
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)));
+    h
+}
+
+/// Delete or Backspace with a dialog open is the dialog's: the comment selected behind it stays.
+/// Both deleted it.
+#[test]
+fn delete_under_a_dialog_leaves_the_selected_comment() {
+    use pdfcraft_ui_egui::Dialog;
+    for (dialog, key) in [(Dialog::Shortcuts, egui::Key::Delete), (Dialog::About, egui::Key::Backspace)] {
+        let mut h = selected_square();
+        h.state_mut().dialog = Some(dialog);
+        h.run_steps(3);
+        h.key_press(key);
+        h.run_steps(3);
+        assert_eq!(comments(&h).len(), 1, "{key:?} under a dialog deletes nothing");
+        assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "and the comment stays selected");
+    }
+}
+
+/// Escape with a dialog open closes the dialog and nothing else: the comment stays selected. It
+/// was deselected too.
+#[test]
+fn escape_under_a_dialog_closes_it_and_keeps_the_selected_comment() {
+    let mut h = selected_square();
+    h.state_mut().dialog = Some(pdfcraft_ui_egui::Dialog::Shortcuts);
+    h.run_steps(3);
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+    assert!(h.state().dialog.is_none(), "Escape closes the dialog");
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "and nothing else");
+}
+
+/// With a menu of the menu bar open, Delete is the menu's: the comment stays. It was deleted.
+#[test]
+fn delete_with_a_menu_open_leaves_the_selected_comment() {
+    let mut h = selected_square();
+    crate::support::open_menu(&mut h, "View");
+    assert!(egui::Popup::is_any_open(&h.ctx), "the menu is open");
+    h.key_press(egui::Key::Delete);
+    h.run_steps(3);
+    assert_eq!(comments(&h).len(), 1);
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "the comment was still selected for the Delete");
+}
+
+/// Edit ▸ Delete removes the selected comment: the key a menu click stands for is not under the
+/// menu it came from.
+#[test]
+fn edit_delete_removes_the_selected_comment() {
+    let mut h = selected_square();
+    crate::support::open_menu(&mut h, "Edit");
+    crate::support::menu_row(&h, "Delete").click();
+    h.run_steps(4);
+    assert!(comments(&h).is_empty());
+}
+
+/// The Escape that closes a dialog opened from a menu while a comment is being typed is the
+/// dialog's: the typing stays, in the composer or posted. It was thrown away.
+#[test]
+fn escape_closing_a_dialog_over_a_comment_being_typed_keeps_the_typing() {
+    let mut h = harness(|app| app.set_option("quick", "note").unwrap());
+    click_pt(&mut h, (250.0, 180.0));
+    field(&h, "Add a comment").click();
+    h.run_steps(2);
+    h.event(egui::Event::Text("First line".into()));
+    h.run_steps(2);
+    crate::support::open_shortcuts_from_the_help_menu(&mut h);
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+    assert!(h.state().dialog.is_none(), "Escape closes the dialog");
+    let open = h.state().views[0].comments.composer.as_ref().is_some_and(|c| c.text.contains("First line"));
+    let posted = comments(&h).iter().any(|c| c.contents.as_deref().is_some_and(|t| t.contains("First line")));
+    assert!(open || posted, "the typing stays");
+}
+
+/// With a menu of the menu bar open, the arrows are the menu's: the selected comment stays put.
+#[test]
+fn an_arrow_with_a_menu_open_leaves_the_selected_comment_where_it_is() {
+    let mut h = selected_square();
+    let before = comments(&h)[0].rect;
+    crate::support::open_menu(&mut h, "View");
+    h.key_press(egui::Key::ArrowRight);
+    h.run_steps(3);
+    assert_eq!(comments(&h)[0].rect, before, "not moved");
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "the comment was still selected for the arrow");
+}
+
+/// Edit ▸ Delete from a native menu with the comment's own menu still open removes the comment:
+/// the click never reaches the window, so Edit ▸ Delete closes the popup, as a click anywhere else
+/// would, before its key joins the pages'. The popup held the Delete.
+#[test]
+fn edit_delete_with_a_popup_open_removes_the_selected_comment() {
+    let mut h = selected_square();
+    let p = at(&h, 90.0, 70.0);
+    h.hover_at(p);
+    h.run_steps(1);
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Secondary, pressed, modifiers: egui::Modifiers::NONE });
+        h.run_steps(1);
+    }
+    h.run_steps(2);
+    assert!(egui::Popup::is_any_open(&h.ctx), "the comment's menu is open");
+    let ctx = h.ctx.clone();
+    h.state_mut().run_menu_command(&ctx, &craft_menu::CommandRef::new("edit.delete"));
+    h.run_steps(4);
+    assert!(comments(&h).is_empty(), "Edit ▸ Delete removed the comment");
+}
+
+/// A native menu's click never reaches the window, so Edit ▸ Delete closes the Hotbar tools window,
+/// as it closes egui's popups, and removes the selected comment. The window held the Delete.
+#[test]
+fn edit_delete_from_a_native_menu_with_the_hotbar_window_open_removes_the_comment() {
+    let mut h = selected_square();
+    h.get_by_label("Hotbar settings").click();
+    h.run_steps(3);
+    assert!(h.query_by_label("Close menu").is_some(), "the Hotbar tools window is open");
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "the comment is still selected");
+    let ctx = h.ctx.clone();
+    h.state_mut().run_menu_command(&ctx, &craft_menu::CommandRef::new("edit.delete"));
+    h.run_steps(4);
+    assert!(h.query_by_label("Close menu").is_none(), "Edit ▸ Delete closed the Hotbar tools window");
+    assert!(comments(&h).is_empty(), "Edit ▸ Delete removed the comment");
+}
+
+/// Edit ▸ Delete goes to a text field that has the keyboard, as the user's Delete does: with the
+/// Hotbar tools window's search field focused, a native Edit ▸ Delete leaves the window open and
+/// deletes in the field. Closed, the window took the field with it, and the Delete removed the
+/// selected comment. (A native click on Edit ▸ Copy, Cut, Paste or Select all reaches a focused
+/// field as craft-menu's tap of the shortcut, not as a menu command.)
+#[test]
+fn edit_delete_from_a_native_menu_into_the_hotbar_window_search_keeps_the_window() {
+    let mut h = selected_square();
+    h.get_by_label("Hotbar settings").click();
+    h.run_steps(3);
+    assert!(h.query_by_label("Close menu").is_some(), "the Hotbar tools window is open");
+    let search = |h: &Harness<'static, PdfCraftApp>, text: &str| h.query_all_by_role(Role::TextInput).any(|n| n.value().as_deref() == Some(text));
+    assert!(search(&h, ""), "the search field is empty");
+    h.query_all_by_role(Role::TextInput).find(|n| n.value().as_deref() == Some("")).expect("the search field").click();
+    h.run_steps(2);
+    h.event(egui::Event::Text("pen".into()));
+    h.run_steps(2);
+    h.key_press(egui::Key::ArrowLeft);
+    h.run_steps(2);
+    assert!(search(&h, "pen"), "typed into the search field");
+    let ctx = h.ctx.clone();
+    h.state_mut().run_menu_command(&ctx, &craft_menu::CommandRef::new("edit.delete"));
+    h.run_steps(3);
+    assert!(h.query_by_label("Close menu").is_some(), "Edit ▸ Delete closed the Hotbar tools window");
+    assert!(search(&h, "pe"), "Edit ▸ Delete deleted in the search field");
+    assert_eq!(comments(&h).len(), 1, "Edit ▸ Delete removed the comment");
+}
+
+/// Full screen hides the hotbar and closes its tools window, which doesn't come back with the
+/// hotbar: back from full screen, a Delete on the pass that shows the hotbar again removes the
+/// selected comment with nothing over it. The window came back, drawn after that pass's keys.
+#[test]
+fn full_screen_closes_the_hotbar_tools_window() {
+    let mut h = selected_square();
+    h.get_by_label("Hotbar settings").click();
+    h.run_steps(3);
+    assert!(h.query_by_label("Close menu").is_some(), "the Hotbar tools window is open");
+    assert!(h.state_mut().execute("view.full_screen"));
+    h.run_steps(4);
+    assert!(h.state().full_screen, "full screen");
+    // Back, as a native menu's click is, between passes.
+    assert!(h.state_mut().execute("view.full_screen"));
+    h.key_press(egui::Key::Delete);
+    h.run_steps(4);
+    assert!(!h.state().full_screen, "back from full screen");
+    assert!(h.query_by_label("Close menu").is_none(), "the Hotbar tools window came back");
+    assert!(comments(&h).is_empty(), "Delete removed the comment");
+}
+
+/// A square drawn and selected, then the update prompt a check at start shows when it finds a
+/// newer release (the check waits until the square is selected).
+fn selected_square_under_the_update_prompt() -> Harness<'static, PdfCraftApp> {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let found = Arc::new(AtomicBool::new(false));
+    let answer = found.clone();
+    let mut h = harness(move |app| {
+        app.set_startup_update_check(true);
+        app.set_update_source(Arc::new(move || {
+            // Not forever: a test that fails before the square is selected leaves no thread behind.
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+            while !answer.load(Ordering::SeqCst) {
+                if std::time::Instant::now() >= deadline {
+                    return Ok(None);
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            Ok(Some(craft_update::Release {
+                tag: "v99.0.0".into(),
+                version: craft_update::parse_version("v99.0.0"),
+                html_url: "https://example.invalid/release".into(),
+                ..Default::default()
+            }))
+        }));
+        app.set_option("quick", "square").unwrap();
+    });
+    drag_pt(&mut h, (40.0, 100.0), (140.0, 40.0));
+    h.state_mut().set_option("quick", "select").unwrap();
+    click_pt(&mut h, (250.0, 20.0));
+    click_pt(&mut h, (90.0, 70.0));
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)));
+    found.store(true, Ordering::SeqCst);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while h.query_by_label_contains("is available").is_none() {
+        h.run_steps(2);
+        assert!(std::time::Instant::now() < deadline, "timed out waiting for the update prompt");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    h.run_steps(2);
+    h
+}
+
+/// The update prompt is over the window, in full screen too: Delete under it leaves the selected
+/// comment, and the Escape that closes it (Later) leaves it selected. Both acted on the comment.
+#[test]
+fn keys_under_the_update_prompt_leave_the_selected_comment() {
+    for full_screen in [false, true] {
+        let mut h = selected_square_under_the_update_prompt();
+        if full_screen {
+            assert!(h.state_mut().execute("view.full_screen"));
+            h.run_steps(4);
+            assert!(h.state().full_screen && h.query_by_label_contains("is available").is_some(), "full screen, the prompt over it");
+        }
+        h.key_press(egui::Key::Delete);
+        h.run_steps(3);
+        assert_eq!(comments(&h).len(), 1, "Delete under the update prompt deleted the comment (full screen: {full_screen})");
+        h.key_press(egui::Key::Escape);
+        h.run_steps(3);
+        assert!(h.query_by_label_contains("is available").is_none(), "Escape closed the prompt");
+        assert_eq!(h.state().full_screen, full_screen, "the Escape that closed the prompt is the prompt's alone");
+        let selected = h.state().views[0].comments.selected;
+        assert_eq!(selected, Some((0, 0)), "Escape under the update prompt deselected the comment (full screen: {full_screen})");
+    }
+}
+
+/// The update prompt leaves the menus on, but covers the pages as a dialog does: Edit ▸ Delete from
+/// a native menu under it leaves the selected comment, which the prompt hides.
+#[test]
+fn edit_delete_from_a_native_menu_under_the_update_prompt_leaves_the_comment() {
+    let mut h = selected_square_under_the_update_prompt();
+    let ctx = h.ctx.clone();
+    h.state_mut().run_menu_command(&ctx, &craft_menu::CommandRef::new("edit.delete"));
+    h.run_steps(4);
+    assert_eq!(comments(&h).len(), 1, "Edit ▸ Delete under the update prompt deleted the comment");
+    assert!(h.query_by_label_contains("is available").is_some(), "the prompt is still open");
+}
+
+/// "Open in Full Screen mode?", asked for a document that wants it, leaves the menus on as the
+/// update prompt does, and covers the pages as it does, in full screen too: neither the user's
+/// Delete nor Edit ▸ Delete from a native menu removes the comment selected in another document
+/// under it, and the Escape that answers the prompt is the prompt's alone.
+#[test]
+fn edit_delete_from_a_native_menu_under_the_full_screen_prompt_leaves_the_comment() {
+    for full_screen in [false, true] {
+        let mut h = selected_square();
+        if full_screen {
+            assert!(h.state_mut().execute("view.full_screen"));
+            h.run_steps(4);
+            assert!(h.state().full_screen, "full screen");
+        }
+        let deck = String::from_utf8(TEXT_FIXTURE.to_vec()).unwrap().replace("/Type /Catalog", "/Type /Catalog /PageMode /FullScreen").into_bytes();
+        h.state_mut().open_bytes("deck.pdf", None, deck).expect("the deck opens");
+        h.run_steps(3);
+        assert!(h.state().pending_full_screen.is_some(), "the full-screen prompt is open");
+        let ctx = h.ctx.clone();
+        h.state_mut().run_menu_command(&ctx, &craft_menu::CommandRef::with_params("window.document", serde_json::json!({ "index": 0 })));
+        h.run_steps(3);
+        assert_eq!(h.state().active, Some(0), "Window ▸ the first document switched to it");
+        assert!(h.state().pending_full_screen.is_some(), "the full-screen prompt is still open");
+        assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "the comment is still selected");
+        h.key_press(egui::Key::Delete);
+        h.run_steps(3);
+        assert_eq!(comments(&h).len(), 1, "Delete under the full-screen prompt deleted the comment (full screen: {full_screen})");
+        h.state_mut().run_menu_command(&ctx, &craft_menu::CommandRef::new("edit.delete"));
+        h.run_steps(4);
+        assert_eq!(comments(&h).len(), 1, "Edit ▸ Delete under the full-screen prompt deleted the comment (full screen: {full_screen})");
+        h.key_press(egui::Key::Escape);
+        h.run_steps(3);
+        assert!(h.state().pending_full_screen.is_none(), "Escape answered the prompt");
+        assert_eq!(h.state().full_screen, full_screen, "the Escape that answered the prompt is the prompt's alone");
+    }
+}
+
+/// The OCR Verify screen takes the pages' place, and the pages' own chords don't reach them under
+/// it: ⌘A selects none of the hidden page's text, and ⌘= leaves its zoom. Both acted on the
+/// hidden page, and stayed after the screen closed.
+#[test]
+fn chords_on_the_ocr_verify_screen_leave_the_hidden_page() {
+    let mut h = harness(|_| {});
+    h.state_mut().ocr_verify.open = true;
+    h.run_steps(3);
+    assert!(h.state().views[0].selected_text().is_none(), "nothing is selected");
+    let zoom = h.state().views[0].zoom;
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.run_steps(3);
+    assert!(h.state().views[0].selected_text().is_none(), "⌘A on the OCR Verify screen selected the hidden page's text");
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Equals);
+    h.run_steps(3);
+    assert_eq!(h.state().views[0].zoom, zoom, "⌘= on the OCR Verify screen zoomed the hidden page");
+    h.state_mut().ocr_verify.open = false;
+    h.run_steps(3);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.run_steps(3);
+    assert!(h.state().views[0].selected_text().is_some(), "with the screen closed, ⌘A selects the page's text");
+}
+
+/// The comment card's "…" menu is drawn from the button on the selected card. Undo with the menu
+/// open deselects the card, and egui kept the menu open with nowhere to show it: an open popup,
+/// which held every page key, H included.
+#[test]
+fn undo_with_a_card_menu_open_leaves_the_page_keys() {
+    let mut h = harness(|app| app.set_option("quick", "square").unwrap());
+    drag_pt(&mut h, (40.0, 100.0), (140.0, 40.0));
+    drag_pt(&mut h, (170.0, 180.0), (270.0, 120.0));
+    assert_eq!(comments(&h).len(), 2);
+    h.state_mut().set_option("quick", "select").unwrap();
+    h.state_mut().right = Some(pdfcraft_ui_egui::RightPanel::Comments);
+    h.run_steps(3);
+    click_pt(&mut h, (250.0, 20.0));
+    click_pt(&mut h, (90.0, 70.0));
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)));
+    h.get_by_label("More").click();
+    h.run_steps(2);
+    assert!(h.query_by_label("Set status").is_some(), "the card's menu is shown");
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Z);
+    h.run_steps(3);
+    assert_eq!(comments(&h).len(), 1, "Undo took the second square back");
+    assert_eq!(h.state().views[0].comments.selected, None, "and deselected the first");
+    assert!(!egui::Popup::is_any_open(&h.ctx), "the menu closed with its card's button");
+    h.key_press(egui::Key::H);
+    h.run_steps(2);
+    assert_eq!(h.state().quick_tool, QuickTool::Hand, "H picks the Hand tool");
+}
+
+/// ⌘C with a menu of the menu bar open is the menu's: the selected comment isn't copied.
+#[test]
+fn copy_with_a_menu_open_copies_no_comment() {
+    let mut h = selected_square();
+    support::open_menu(&mut h, "View");
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::C);
+    h.run_steps(3);
+    assert!(h.state().comment_clipboard.is_none(), "⌘C with a menu open copied the comment");
+}
+
+/// The OCR Verify screen takes the window: an arrow there leaves the comment selected on the
+/// hidden page where it is. It moved it.
+#[test]
+fn an_arrow_on_the_ocr_verify_screen_leaves_the_selected_comment() {
+    let mut h = selected_square();
+    let before = comments(&h)[0].rect;
+    h.state_mut().ocr_verify.open = true;
+    h.run_steps(3);
+    h.key_press(egui::Key::ArrowRight);
+    h.run_steps(3);
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "the comment is still selected");
+    assert_eq!(comments(&h)[0].rect, before, "the hidden comment moved");
+}
+
+/// #5767: Make Properties Default on a text box or callout keeps its font size too, so the next
+/// one (also after a restart) takes it, along with the colour.
+#[test]
+fn properties_dialog_makes_the_text_box_font_size_default() {
+    let blue = [0.0, 0.47, 0.84];
+    let mut h = harness(|_| {});
+    let font_size_of_last = |h: &Harness<'static, PdfCraftApp>| {
+        let s = h.state();
+        let doc = s.session.get(s.views[0].id).unwrap();
+        let last = doc.info.annotations.len() - 1;
+        doc.comment_props(0, last).unwrap()
+    };
+    for (quick, size, first, second, third) in
+        [("freetext", 24.0, (40.0, 60.0), (40.0, 120.0), (40.0, 100.0)), ("callout", 18.0, (150.0, 40.0), (150.0, 100.0), (150.0, 60.0))]
+    {
+        h.state_mut().set_option("quick", quick).unwrap();
+        if quick == "callout" {
+            drag_pt(&mut h, first, (first.0 + 60.0, first.1 + 20.0));
+        } else {
+            click_pt(&mut h, first);
+        }
+        post_text(&mut h, "First");
+        let index = comments(&h).len() - 1;
+        h.state_mut().open_comment_props(0, index);
+        h.run_steps(2);
+        {
+            let d = h.state_mut().comment_props.as_mut().expect("open");
+            d.edited.font_size = Some(size);
+            d.edited.color = Some(blue);
+        }
+        h.get_by_label("Make Properties Default").click();
+        h.run_steps(1);
+        h.get_by_label("OK").click();
+        h.run_steps(3);
+        assert_eq!(font_size_of_last(&h).font_size, Some(size));
+
+        // The next one takes the font size and the colour.
+        h.state_mut().set_option("quick", quick).unwrap();
+        if quick == "callout" {
+            drag_pt(&mut h, second, (second.0 + 60.0, second.1 + 20.0));
+        } else {
+            click_pt(&mut h, second);
+        }
+        post_text(&mut h, "Second");
+        let p = font_size_of_last(&h);
+        assert_eq!(p.font_size, Some(size), "{quick}: the next one takes the default font size");
+        assert_eq!(p.color, Some(blue), "{quick}: and the default colour");
+
+        // The default survives a restart.
+        let json = h.state().persist();
+        let mut fresh = harness(move |app| {
+            app.restore(&json);
+            app.set_option("quick", quick).unwrap();
+        });
+        if quick == "callout" {
+            drag_pt(&mut fresh, third, (third.0 + 60.0, third.1 + 20.0));
+        } else {
+            click_pt(&mut fresh, third);
+        }
+        post_text(&mut fresh, "Third");
+        assert_eq!(font_size_of_last(&fresh).font_size, Some(size), "{quick}: the default font size persisted");
+    }
 }
