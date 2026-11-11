@@ -660,6 +660,7 @@ impl Scripts for JsRunner {
             fields: states,
             doc_scripts: self.doc_scripts.clone(),
             calculations,
+            timer: None,
         };
         #[cfg(not(target_arch = "wasm32"))]
         let remaining = self.callback_time_left();
@@ -748,6 +749,7 @@ impl Scripts for JsRunner {
                 fields: states,
                 doc_scripts: self.doc_scripts.clone(),
                 calculations: calculations.clone(),
+                timer: None,
             };
             let remaining = self.callback_time_left();
             let outcome = if remaining.is_zero() {
@@ -1028,6 +1030,7 @@ impl Session {
                 fields: states.clone(),
                 doc_scripts: runner.doc_scripts,
                 calculations,
+                timer: None,
             },
             answers,
         );
@@ -1495,6 +1498,7 @@ impl Session {
             fields: states.clone(),
             doc_scripts: runner.doc_scripts,
             calculations: calculation_scripts(cos, &fields),
+            timer: None,
         };
         let receiver =
             doc.js_runtime.lock().map_err(|_| EditError::Invalid("script runtime unavailable".into()))?.start(job).map_err(EditError::Invalid)?;

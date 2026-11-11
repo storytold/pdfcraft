@@ -382,6 +382,9 @@ pub struct Outcome {
     pub doc_errors: Vec<String>,
     /// The script's completion value (what the console prints), unless undefined.
     pub result: Option<String>,
+    /// The timers of a document's retained realm as they stand after the run, in the order they
+    /// were set (`app.setInterval`, `app.setTimeOut`); none from a one-off run.
+    pub timers: Vec<crate::Timer>,
 }
 
 /// Bounds that keep a script from hanging the viewer.

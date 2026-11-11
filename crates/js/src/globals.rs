@@ -416,11 +416,6 @@ fn js_number(v: f64) -> String {
     if v.fract() == 0.0 && v.abs() < 1e15 { format!("{}", v as i64) } else { format!("{v}") }
 }
 
-fn timer(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
-    // Timers never fire in the sandbox; scripts get an object they can pass to clear*.
-    Ok(ObjectInitializer::new(ctx).build().into())
-}
-
 /// The `color` object: each named color (`transparent`, `black`, `red`, `cyan`, `gray`, …) as
 /// an array of its color space (`T`, `G`, `RGB` or `CMYK`) followed by its components.
 fn color_object(ctx: &mut Context) -> JsObject {
@@ -556,10 +551,10 @@ pub(crate) fn install(ctx: &mut Context) -> JsResult<()> {
         .function(NativeFunction::from_fn_ptr(launch_url), js_string!("launchURL"), 2)
         .function(NativeFunction::from_fn_ptr(crate::interaction::popup_menu), js_string!("popUpMenuEx"), 0)
         .function(NativeFunction::from_fn_ptr(exec_menu_item), js_string!("execMenuItem"), 1)
-        .function(NativeFunction::from_fn_ptr(timer), js_string!("setTimeOut"), 2)
-        .function(NativeFunction::from_fn_ptr(timer), js_string!("setInterval"), 2)
-        .function(NativeFunction::from_fn_ptr(noop), js_string!("clearTimeOut"), 1)
-        .function(NativeFunction::from_fn_ptr(noop), js_string!("clearInterval"), 1)
+        .function(NativeFunction::from_fn_ptr(crate::timers::set_time_out), js_string!("setTimeOut"), 2)
+        .function(NativeFunction::from_fn_ptr(crate::timers::set_interval), js_string!("setInterval"), 2)
+        .function(NativeFunction::from_fn_ptr(crate::timers::clear), js_string!("clearTimeOut"), 1)
+        .function(NativeFunction::from_fn_ptr(crate::timers::clear), js_string!("clearInterval"), 1)
         .property(js_string!("viewerType"), s("Exchange-Pro"), Attribute::READONLY)
         .property(js_string!("viewerVariation"), s("Full"), Attribute::READONLY)
         .property(js_string!("viewerVersion"), JsValue::from(24.0), Attribute::READONLY)
