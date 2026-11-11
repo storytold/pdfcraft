@@ -164,7 +164,7 @@ fn removing_or_shadowing_a_locked_field_changes_it() {
         })
         .unwrap();
     });
-    assert_eq!(approval(&removed, &trust).status, Status::Invalid);
+    assert_locked(&approval(&removed, &trust), "amount removed from the form");
     let shadowed = edit_after(&bytes, |doc| {
         let mut d = pdfcraft_cos::Dict::new();
         d.set(b"FT".to_vec(), Object::name("Tx"));
@@ -181,7 +181,7 @@ fn removing_or_shadowing_a_locked_field_changes_it() {
         })
         .unwrap();
     });
-    assert_eq!(approval(&shadowed, &trust).status, Status::Invalid);
+    assert_locked(&approval(&shadowed, &trust), "a second field named amount");
 }
 
 /// A locked field's value replaced by a cycle of references is compared within a bound: the
