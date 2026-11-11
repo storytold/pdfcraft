@@ -1514,6 +1514,40 @@ fn comment_properties_custom_colour_fill_and_stroke_survive_tab_changes() {
     assert_eq!((restored.color, restored.fill), (before.color, before.fill), "both fields form one undo step");
 }
 
+/// No fill discards an open custom fill picker immediately, without applying the pending RGB
+/// or removing the stored fill until the enclosing Properties dialog is accepted.
+#[test]
+fn comment_properties_no_fill_closes_the_open_custom_picker() {
+    use pdfcraft_engine::{Edit, NewAnnotation, Shape, Style};
+    let mut h = harness(|_| {});
+    let shape = Shape::Rectangle { rect: [40.0, 40.0, 140.0, 100.0] };
+    let mut style = Style::default_for(&shape);
+    style.fill = Some([1.0, 0.5, 0.0]);
+    assert!(h.state_mut().apply_edit(Edit::AddAnnotation(NewAnnotation { page: 0, shape, style, contents: "x".into(), author: "Tester".into() })));
+    let before = current_comment_props(&h);
+    h.state_mut().open_comment_props(0, 0);
+    h.run_steps(2);
+    h.query_all_by_label("Other colour…").nth(1).unwrap().click();
+    h.run_steps(3);
+    type_custom_rgb(&mut h, 0, [37, 119, 203]);
+    assert_custom_rgb(h.state().comment_props.as_ref().unwrap().edited.fill, [37, 119, 203]);
+    h.get_by_label("No fill").click();
+    h.run_steps(3);
+    assert!(
+        h.query_all_by_role(Role::SpinButton).all(|n| !n.value().is_some_and(|v| v.starts_with("R "))),
+        "No fill closes the expanded custom fill picker"
+    );
+    assert_eq!(h.state().comment_props.as_ref().unwrap().edited.fill, None);
+    assert_eq!(current_comment_props(&h).fill, before.fill, "the document still has its original fill before OK");
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert_eq!(current_comment_props(&h).fill, None);
+    assert_eq!(current_comment_props(&h).color, before.color, "No fill leaves the stroke alone");
+    h.state_mut().undo();
+    h.run_steps(3);
+    assert_eq!(current_comment_props(&h).fill, before.fill, "one undo restores the original fill");
+}
+
 /// The immediate-action quick bar still waits for Apply: RGB edits cannot create an undo
 /// entry per channel or silently restyle a selected comment before the user confirms them.
 #[test]
