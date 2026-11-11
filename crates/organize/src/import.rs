@@ -14,7 +14,8 @@
 //!   the kids that lead to a widget on those pages: the rest of the form stays behind with its
 //!   values;
 //! - structure-tree links (`/StructParent(s)`) and article beads (`/B`) are removed, because the
-//!   source structure tree is not copied;
+//!   source structure tree is not copied with the pages. Combine carries it afterwards and gives
+//!   the copies new links (see `tags`);
 //! - named destinations are resolved against the source's name tree and become explicit ones;
 //! - layers (optional content groups) used by the pages are registered in the destination's
 //!   `/OCProperties`, keeping their default on/off state.
@@ -30,6 +31,7 @@ mod carry;
 mod combine;
 mod copy;
 mod fields;
+mod tags;
 
 use carry::{Mark, source_outline, write_outline_level};
 pub(crate) use carry::{set_attachments, set_attachments_exact};
