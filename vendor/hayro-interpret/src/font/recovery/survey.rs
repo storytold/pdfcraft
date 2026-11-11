@@ -24,7 +24,7 @@
 use super::document::{Evidence, FontUsage, UsageGroup};
 use super::{Counter, FontKind, count};
 use crate::InterpreterSettings;
-use crate::font::cid::SurveyFont;
+use crate::font::cid::{SurveyFont, SurveyPrograms};
 use hayro_cmap::CidFamily;
 use hayro_syntax::Pdf;
 use hayro_syntax::content::TypedIter;
@@ -142,6 +142,8 @@ struct Survey<'s> {
     kinds: &'s [FontKind],
     /// Font dictionary key → index into `fonts`, or `None` for a font not counted.
     classified: HashMap<u128, Option<usize>>,
+    /// The programs (and maps) read so far, each once whatever font objects share it.
+    programs: SurveyPrograms,
     fonts: Vec<Surveyed>,
     operators: u64,
     glyphs: u64,
@@ -258,7 +260,7 @@ impl Survey<'_> {
         let Some(file) = candidate(dict) else {
             return Ok(None);
         };
-        let Some(font) = SurveyFont::read(dict) else {
+        let Some(font) = SurveyFont::read(dict, &mut self.programs) else {
             return Ok(None);
         };
         if !self.kinds.contains(&font.kind) {
@@ -533,6 +535,7 @@ pub(crate) fn survey(
         settings,
         kinds,
         classified: HashMap::new(),
+        programs: SurveyPrograms::default(),
         fonts: Vec::new(),
         operators: 0,
         glyphs: 0,
@@ -580,6 +583,7 @@ pub(crate) fn report(pdf: &Pdf, settings: &InterpreterSettings) -> Option<(bool,
         settings,
         kinds,
         classified: HashMap::new(),
+        programs: SurveyPrograms::default(),
         fonts: Vec::new(),
         operators: 0,
         glyphs: 0,
@@ -647,7 +651,8 @@ pub(crate) fn report(pdf: &Pdf, settings: &InterpreterSettings) -> Option<(bool,
 pub(crate) type Classified = Option<(FontKind, Option<u32>, Vec<Option<u32>>)>;
 
 /// Test hook: every Type 0 font the first [`SURVEY_PAGES`] pages name in their own resources
-/// (each object once), classified as the survey does ([`SurveyFont`]) and by building the font
+/// (each object once), classified as the survey does ([`SurveyFont`], programs shared between
+/// fonts read once) and by building the font
 /// ([`crate::font::cid::Type0Font`]) and asking it the same, as the survey did before it read
 /// fonts without building them: (object number, the survey's, the built font's).
 #[cfg(feature = "test-counters")]
@@ -657,6 +662,7 @@ pub(crate) fn classifications(
 ) -> Vec<(Option<i32>, Classified, Classified)> {
     use crate::font::cid::Type0Font;
     let codes = || 0..=u16::MAX;
+    let mut programs = SurveyPrograms::default();
     let mut seen = HashSet::new();
     let mut out = Vec::new();
     for page in pdf.pages().iter().take(SURVEY_PAGES) {
@@ -670,7 +676,7 @@ pub(crate) fn classifications(
             {
                 continue;
             }
-            let light = candidate(&dict).and_then(|_| SurveyFont::read(&dict)).map(|f| {
+            let light = candidate(&dict).and_then(|_| SurveyFont::read(&dict, &mut programs)).map(|f| {
                 let numbers = codes().map(|c| f.number(c)).collect();
                 (f.kind, f.glyphs, numbers)
             });

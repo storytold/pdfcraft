@@ -300,7 +300,8 @@ fn a_document_without_such_fonts_is_not_read() {
 
 /// Two font objects with the same dictionary (one descendant, one program) are two fonts to the
 /// survey: each shows its own glyphs, and a producer that merged subsets into one program may
-/// order each one's glyphs differently. They are subsets of one font, so they form a group.
+/// order each one's glyphs differently. They are subsets of one font, so they form a group. Their
+/// one program is read once.
 #[test]
 fn two_objects_of_one_dictionary_are_counted_apart() {
     let mut second = Font::truetype("ABCDEF+Kai", 40);
@@ -310,7 +311,10 @@ fn two_objects_of_one_dictionary_are_counted_apart() {
     let text = String::from_utf8_lossy(&bytes);
     assert_eq!(text.matches("/DescendantFonts [4 0 R]").count(), 2, "the second object repeats the first");
     let group = Some((2, vec![(3, 1), (4, 1), (5, 1)]));
+    let before = recovery_counters();
     assert_eq!(surveyed(&doc).surveyed_fonts(), vec![(vec![(3, 1), (4, 1)], group.clone()), (vec![(5, 1)], group)]);
+    let cost = recovery_counters().since(&before);
+    assert_eq!(cost.survey_programs, 1, "their one program is read once: {cost:?}");
 }
 
 /// A group keeps its name and each member's own counts, with every glyph a member shows (a CID
@@ -357,7 +361,8 @@ fn a_document_is_surveyed_only_for_a_rule_that_needs_its_usage() {
 /// stream, a short one and one of more than 65,536 entries, `Identity-V`, an accepted and a
 /// rejected `post` version; a CID-keyed CFF program, one with a map stream, a CFF program that
 /// is not CID-keyed, a Type 1 program and bytes that are no program; and fonts the survey
-/// passes over before reading a program.
+/// passes over before reading a program; and a second object of a font, whose program and map
+/// the survey has read already.
 #[test]
 fn the_survey_reads_each_font_as_the_built_font_does() {
     use super::cjk_fixture::Program;
@@ -393,12 +398,14 @@ fn the_survey_reads_each_font_as_the_built_font_does() {
         with("ABCDEL+Junk", Program::Raw(b"no font program".to_vec())),
         adobe,
         named,
+        Font { alias_of: Some(1), ..Font::truetype("AAAAAA+Mapped", 40) },
+        Font { alias_of: Some(7), ..Font::cff("ABCDEI+Cff", vec![3, 9, 12]) },
     ];
     let shows = (0..fonts.len()).map(|f| Show::Text(f, vec![1, 2, 7])).collect();
     let pdf = parse(Doc { fonts, pages: vec![shows] }.build());
     let mut found = survey_classifications(&pdf, &InterpreterSettings::default());
     found.sort_by_key(|(object, ..)| *object);
-    assert_eq!(found.len(), 14);
+    assert_eq!(found.len(), 16);
     for (object, light, built) in &found {
         assert!(
             light == built,
@@ -409,7 +416,27 @@ fn the_survey_reads_each_font_as_the_built_font_does() {
     }
     let kinds: Vec<Option<(&str, Option<u32>)>> = found.iter().map(|(_, light, _)| light.as_ref().map(|(k, g, _)| (k.as_str(), *g))).collect();
     let tt = |glyphs| Some(("CidTrueType", Some(glyphs)));
-    assert_eq!(kinds, vec![tt(30), tt(40), tt(40), tt(300), tt(20), tt(20), None, Some(("CidCff", Some(4))), None, None, None, None, None, None]);
+    assert_eq!(
+        kinds,
+        vec![
+            tt(30),
+            tt(40),
+            tt(40),
+            tt(300),
+            tt(20),
+            tt(20),
+            None,
+            Some(("CidCff", Some(4))),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            tt(40),
+            Some(("CidCff", Some(4)))
+        ]
+    );
     let wrapped = &found[3].1.as_ref().unwrap().2;
     assert_eq!((wrapped[7], wrapped[5000]), (Some((65_536 + 7) % 300), Some(5000 % 300)), "CID 7 takes entry 65,543; CID 5000 its own");
 }

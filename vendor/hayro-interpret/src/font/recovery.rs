@@ -111,6 +111,9 @@ pub(crate) enum Counter {
     SurveyPage,
     /// A glyph the document survey counted.
     SurveyGlyph,
+    /// An embedded program the document survey read (decoded and checked), once per program
+    /// stream however many fonts share it.
+    SurveyProgram,
 }
 
 /// Counts `counter` on this thread (only with the `test-counters` feature).
@@ -130,6 +133,7 @@ pub(crate) fn count(counter: Counter) {
             Counter::SurveyRun => &mut n.survey_runs,
             Counter::SurveyPage => &mut n.survey_pages,
             Counter::SurveyGlyph => &mut n.survey_glyphs,
+            Counter::SurveyProgram => &mut n.survey_programs,
         };
         *field = field.saturating_add(1);
         c.set(n);
@@ -165,6 +169,8 @@ pub struct RecoveryCounters {
     pub survey_pages: usize,
     /// Glyphs the document survey counted.
     pub survey_glyphs: usize,
+    /// Embedded programs the document survey read.
+    pub survey_programs: usize,
 }
 
 #[cfg(feature = "test-counters")]
@@ -186,6 +192,7 @@ impl RecoveryCounters {
             survey_runs: self.survey_runs.saturating_sub(before.survey_runs),
             survey_pages: self.survey_pages.saturating_sub(before.survey_pages),
             survey_glyphs: self.survey_glyphs.saturating_sub(before.survey_glyphs),
+            survey_programs: self.survey_programs.saturating_sub(before.survey_programs),
         }
     }
 }
@@ -204,6 +211,7 @@ thread_local! {
             survey_runs: 0,
             survey_pages: 0,
             survey_glyphs: 0,
+            survey_programs: 0,
         })
     };
 }
