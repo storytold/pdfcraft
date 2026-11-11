@@ -248,6 +248,23 @@ fn permission_bits_follow_table_22() {
     assert!(p.modify(), "owners ignore /P");
 }
 
+/// Page extraction (#5081) is assembly as the revision reads it, and copying (bit 5).
+#[test]
+fn page_extraction_needs_assembly_and_copying() {
+    let bit = |n: u32| 1i32 << (n - 1);
+    let user = |bits: i32, revision: i64| Permissions { bits, owner: false, revision };
+    // "Any except extracting pages" (bits 4, 6, 9; copying off) at revision 3 and later.
+    assert!(!user(bit(4) | bit(6) | bit(9), 4).extract_pages());
+    // Pages may change in place, but copying is withheld.
+    assert!(user(bit(11), 6).assemble() && !user(bit(11), 6).extract_pages());
+    assert!(user(bit(11) | bit(5), 6).extract_pages());
+    // Revision 2: bit 4 covers assembly, and its reserved bit 11 grants nothing.
+    assert!(user(bit(4), 2).assemble() && !user(bit(4) | bit(11), 2).extract_pages(), "copying withheld");
+    assert!(user(bit(4) | bit(5), 2).extract_pages());
+    assert!(!user(bit(5) | bit(11), 2).extract_pages(), "no assembly without bit 4 at revision 2");
+    assert!(Permissions { bits: 0, owner: true, revision: 2 }.extract_pages(), "owners ignore /P");
+}
+
 #[test]
 fn perms_limits_what_an_edited_p_grants() {
     let made = new(Algorithm::Aes256, "user pw", "owner pw", 0b0100); // print only
@@ -348,11 +365,13 @@ fn owner_authentication_recovers_the_user_password() {
     for alg in [Algorithm::Rc4_40, Algorithm::Rc4_128, Algorithm::Aes128] {
         let d = new(alg, "user pw", "owner pw", -1).dict().clone();
         let h = SecurityHandler::open(d.clone(), ID, Some("owner pw")).unwrap();
-        assert_eq!(h.recovered_user_password().as_deref(), Some(&b"user pw"[..]), "{alg:?}");
+        let _: &Zeroizing<Vec<u8>> = &h.key;
+        let _: &Option<Zeroizing<Vec<u8>>> = &h.recovered_user;
+        assert_eq!(h.recovered_user_password().as_deref().map(Vec::as_slice), Some(&b"user pw"[..]), "{alg:?}");
         assert_eq!(SecurityHandler::open(d, ID, Some("user pw")).unwrap().recovered_user_password(), None);
     }
     let d = new(Algorithm::Rc4_128, "", "owner", -1).dict().clone();
-    assert_eq!(SecurityHandler::open(d, ID, Some("owner")).unwrap().recovered_user_password().as_deref(), Some(&b""[..]));
+    assert_eq!(SecurityHandler::open(d, ID, Some("owner")).unwrap().recovered_user_password().as_deref().map(Vec::as_slice), Some(&b""[..]));
 }
 
 /// /O, /U and the first /ID of files qpdf 12.4.2 wrote (`--static-id`), with the file keys
@@ -393,7 +412,7 @@ fn legacy_passwords_are_pdfdoc_encoded_with_a_utf8_fallback() {
     assert_eq!((user.auth(), user.file_key().to_vec()), (Auth::User, hex("3564ffcea186122595ad55ee157da71f")));
     let owner = SecurityHandler::open(r3.clone(), &id, Some("Öğretmen")).unwrap();
     assert_eq!((owner.auth(), owner.file_key().to_vec()), (Auth::Owner, hex("3564ffcea186122595ad55ee157da71f")));
-    assert_eq!(owner.recovered_user_password(), Some(vec![0x9A, b'l', 0x9A, b'k', 0xA0]));
+    assert_eq!(owner.recovered_user_password(), Some(Zeroizing::new(vec![0x9A, b'l', 0x9A, b'k', 0xA0])));
     // Dropping ı and € (the old Latin-1 conversion) or a near miss doesn't open it.
     for wrong in ["lk", "ilik€", "ılık", "Ogretmen"] {
         assert_eq!(SecurityHandler::open(r3.clone(), &id, Some(wrong)).unwrap_err(), CryptError::WrongPassword, "{wrong}");
@@ -423,6 +442,6 @@ fn pdfdoc_encoding_round_trips() {
     for c in ['ğ', 'ş', 'İ', '\u{A0}', '\u{85}', 'Ж', '日'] {
         assert_eq!(pdfdoc_byte(c), None, "{c}");
     }
-    assert_eq!(legacy_candidates("Çok"), [vec![0xC7, b'o', b'k']]);
-    assert_eq!(legacy_candidates("şifre"), [b"ifre".to_vec(), "şifre".as_bytes().to_vec()]);
+    assert_eq!(legacy_candidates("Çok"), [Zeroizing::new(vec![0xC7, b'o', b'k'])]);
+    assert_eq!(legacy_candidates("şifre"), [Zeroizing::new(b"ifre".to_vec()), Zeroizing::new("şifre".as_bytes().to_vec())]);
 }
