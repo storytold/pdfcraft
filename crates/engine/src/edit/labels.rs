@@ -36,6 +36,7 @@ pub const EDIT_LABELS: &[&str] = &[
     "{batch} — fields renamed",
     "Attach {name}",
     "Delete attachment {key}",
+    "Edit attachment description",
     "Add bookmark",
     "Rename bookmark",
     "Delete bookmark",
@@ -76,6 +77,7 @@ pub const EDIT_LABELS: &[&str] = &[
     "Add stamp",
     "Add 3D model",
     "Delete comment",
+    "Paste comments",
     "Edit comment",
     "Reply",
     "Set status None",
@@ -91,6 +93,9 @@ pub const EDIT_LABELS: &[&str] = &[
     "Unlock comment",
     "Move comment",
     "Reshape comment",
+    "Open comment pop-up",
+    "Close comment pop-up",
+    "Move comment pop-up",
     "Resize comment",
     "Change comment properties",
     "Fill in {name}",
@@ -115,6 +120,7 @@ pub const EDIT_LABELS: &[&str] = &[
     "Delete document JavaScript",
     "Edit document JavaScript",
     "Edit text",
+    "Prepare grouped text",
     "Load document font",
     "Move object",
     "Move objects",
@@ -166,8 +172,16 @@ pub const EDIT_LABELS: &[&str] = &[
 /// The names of the batches built below L7, which an interface shows in the same places as
 /// [`EDIT_LABELS`] and so translates the same way. A batch built in the interface itself arrives
 /// already worded in the interface's language.
-pub const BATCH_LABELS: &[&str] =
-    &["Set document title", "Mark differences", "Detect form fields", "Run JavaScript", "Recognize text", field_table::LABEL, "Style"];
+pub const BATCH_LABELS: &[&str] = &[
+    "Set document title",
+    "Mark differences",
+    "Detect form fields",
+    "Run JavaScript",
+    "Recognize text",
+    field_table::LABEL,
+    "Style",
+    crate::find_replace::REPLACE_ALL,
+];
 
 impl Edit {
     /// Label for the Edit menu and history ("Undo Rotate pages").
@@ -216,6 +230,7 @@ impl Edit {
             Edit::AddCustomStamp { .. } => Label::of("Add stamp"),
             Edit::AddModel3d { .. } => Label::of("Add 3D model"),
             Edit::DeleteAnnotation { .. } => Label::of("Delete comment"),
+            Edit::PasteComments { .. } => Label::of("Paste comments"),
             Edit::SetAnnotationContents { .. } => Label::of("Edit comment"),
             Edit::ReplyToAnnotation { .. } => Label::of("Reply"),
             // The state's name is part of the wording: a language may need to agree it with the rest.
@@ -234,11 +249,16 @@ impl Edit {
             Edit::LockAnnotation { .. } => Label::of("Unlock comment"),
             Edit::MoveAnnotation { .. } => Label::of("Move comment"),
             Edit::ReshapeAnnotation { .. } => Label::of("Reshape comment"),
+            Edit::SetAnnotationPopup { rect: Some(_), .. } => Label::of("Move comment pop-up"),
+            Edit::SetAnnotationPopup { open: Some(true), .. } => Label::of("Open comment pop-up"),
+            Edit::SetAnnotationPopup { .. } => Label::of("Close comment pop-up"),
             Edit::ResizeAnnotation { .. } => Label::of("Resize comment"),
             Edit::StyleAnnotation { .. }
             | Edit::FillAnnotation { .. }
             | Edit::PartOpacity { .. }
             | Edit::FontSizeAnnotation { .. }
+            | Edit::BorderColorAnnotation { .. }
+            | Edit::BorderShapeAnnotation { .. }
             | Edit::SetAnnotationInfo { .. } => Label::of("Change comment properties"),
             Edit::SetFieldValue { name, .. } => Label::with("Fill in {name}", name.as_str()),
             Edit::SetFieldImage { name, .. } => Label::with("Set the image of {name}", name.as_str()),
@@ -250,8 +270,11 @@ impl Edit {
             Edit::SetTabOrder { .. } | Edit::MoveInTabOrder { .. } => Label::of("Set tab order"),
             Edit::SetCalculationOrder { .. } => Label::of("Set calculation order"),
             Edit::SetInitialView(_) => Label::of("Change initial view"),
+            Edit::FixHairlines { .. } => Label::of("Fix hairlines"),
             Edit::AddAttachment { name, .. } => Label::with("Attach {name}", name.as_str()),
             Edit::DeleteAttachment { key } => Label::with("Delete attachment {key}", key.as_str()),
+            Edit::ConvertColours { .. } => Label::of("Convert colours"),
+            Edit::EditAttachmentDescription { .. } => Label::of("Edit attachment description"),
             Edit::AutoTagText => Label::of("Automatically tag text"),
             Edit::SetAltText { .. } => Label::of("Set alternate text"),
             Edit::AutoTagFormFields => Label::of("Tag form fields"),
@@ -259,6 +282,7 @@ impl Edit {
             Edit::MoveTag { .. } => Label::of("Move object"),
             Edit::MarkDecorative { .. } => Label::of("Mark figure as decorative"),
             Edit::MarkTagArtifact { .. } => Label::of("Mark content as artifact"),
+            Edit::LayoutTableToBlocks { .. } => Label::of("Change tag properties"),
             Edit::AddOcrText { .. } => Label::of("Recognize text"),
             Edit::EnhanceScan { .. } => Label::of("Enhance scanned file"),
             Edit::ApplyScriptChanges { .. } => Label::of("Run JavaScript"),
@@ -270,6 +294,7 @@ impl Edit {
             Edit::SetDocumentScript { script: None, .. } => Label::of("Delete document JavaScript"),
             Edit::SetDocumentScript { .. } => Label::of("Edit document JavaScript"),
             Edit::EditTextLine { .. } | Edit::EditTextBlock { .. } => Label::of("Edit text"),
+            Edit::PrepareText { .. } => Label::of("Prepare grouped text"),
             Edit::RegisterTextFont { .. } => Label::of("Load document font"),
             Edit::MoveObjects { objects, .. } => plural("Move object", "Move objects", objects.len()),
             Edit::EditPageImage { change, .. } => Label::of(match change {
@@ -287,6 +312,7 @@ impl Edit {
                     pdfcraft_edit::ArrangeOrder::SendToBack => "Send to back",
                 },
                 ImageEdit::RemoveCrop => "Remove crop",
+                ImageEdit::Ungroup => "Ungroup artwork",
             }),
             Edit::AddHeaderFooter { replace: false, .. } => Label::of("Add header & footer"),
             Edit::AddHeaderFooter { .. } => Label::of("Update header & footer"),
@@ -297,12 +323,14 @@ impl Edit {
             Edit::RemoveMarks { kind: MarkKind::HeaderFooter } => Label::of("Remove header & footer"),
             Edit::RemoveMarks { kind: MarkKind::Watermark } => Label::of("Remove watermark"),
             Edit::RemoveMarks { kind: MarkKind::Background } => Label::of("Remove background"),
+            Edit::RemoveMarks { kind: MarkKind::PrinterMarks } => Label::of("Remove printer marks"),
+            Edit::AddPrinterMarks { .. } => Label::of("Add printer marks"),
             Edit::AddText { .. } => Label::of("Add text"),
             Edit::AddImage { .. } => Label::of("Add image"),
             Edit::UpdateContent { .. } => Label::of("Edit content"),
-            Edit::DeleteContent { .. } => Label::of("Delete content"),
+            Edit::DeleteContent { .. } | Edit::DeleteObjects { .. } => Label::of("Delete content"),
             Edit::ReplaceImage { .. } => Label::of("Replace image"),
-            Edit::PasteContent { .. } => Label::of("Paste"),
+            Edit::PasteContent { .. } | Edit::PasteObjects { .. } => Label::of("Paste"),
             Edit::ApplyRedactions { .. } => Label::of("Apply redactions"),
             Edit::ClearRedactions => Label::of("Remove redaction marks"),
             Edit::RemoveHidden { .. } => Label::of("Remove hidden information"),

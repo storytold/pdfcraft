@@ -1,12 +1,14 @@
-use super::{DataNode, DataPath, Field, MAX_DEPTH, MAX_NODES, Node, SomIndices, Template};
+use super::{DataNode, DataPath, Field, MAX_DEPTH, MAX_NODES, Node, SomIndices, Template, XFA_DATA_NS};
 
 fn to_node(n: roxmltree::Node, depth: usize) -> DataNode {
     let name = n.tag_name().name().to_string();
     let children: Vec<DataNode> =
         if depth < MAX_DEPTH { n.children().filter(|c| c.is_element()).map(|c| to_node(c, depth + 1)).collect() } else { Vec::new() };
-    // The text of a leaf is its value; a container's own text is whitespace.
-    let text = if children.is_empty() { n.children().filter_map(|c| c.text()).collect::<String>() } else { String::new() };
-    DataNode { name, text, children }
+    // The text of a leaf is its value (its text nodes: a comment is not part of it); a
+    // container's own text is whitespace.
+    let text = if children.is_empty() { n.children().filter(|c| c.is_text()).filter_map(|c| c.text()).collect::<String>() } else { String::new() };
+    let group = n.attribute((XFA_DATA_NS, "dataNode")) == Some("dataGroup");
+    DataNode { name, text, children, group }
 }
 
 /// The `xfa:data` element of the datasets packet in `xdp` (or a bare datasets document), as a
@@ -50,7 +52,11 @@ pub fn data_path(tpl: &Template, som: &str) -> DataPath {
     // The template children the next segment is looked up in; `None` until the root matched,
     // and again once a segment is not a container the template has.
     let mut level: Option<&[Node]> = None;
-    for (i, (name, index)) in som_to_path(som).into_iter().enumerate() {
+    let segments = som_to_path(som);
+    let page_area_index = page_area_index(tpl, &segments);
+    for (i, (name, index)) in segments.into_iter().enumerate() {
+        // A page area's SOM index is the page made from it; see [`page_area_index`].
+        let index = if i == 0 { page_area_index.unwrap_or(index) } else { index };
         let found = match level {
             None if i == 0 && tpl.root.common.name.as_deref() == Some(name.as_str()) => Some(Container::Children(&tpl.root.children)),
             None => None,
@@ -73,6 +79,36 @@ pub fn data_path(tpl: &Template, som: &str) -> DataPath {
         }
     }
     out
+}
+
+/// For a SOM path that starts at a page area (`Area[n].…`), the index its first segment takes in
+/// the data path, `None` for any other path. Each page made from a page area has its own SOM
+/// index, so the master content repeated on each page (a page number, an office-use box) binds
+/// apart on every page. A field whose bind shares one data node (`match="global"`, or an
+/// explicit data reference) binds as instance 0 on each page instead, so it shows the same value
+/// on all of them (XFA 3.3, "Page Background": a page-background field binds only through an
+/// explicit data reference).
+fn page_area_index(tpl: &Template, segments: &[(String, usize)]) -> Option<usize> {
+    let ((first, instance), rest) = segments.split_first()?;
+    if tpl.root.common.name.as_deref() == Some(first.as_str()) {
+        return None;
+    }
+    let areas = tpl.root.page_set.as_ref()?;
+    let area = areas.areas.iter().find(|a| a.name.as_deref() == Some(first.as_str()))?;
+    // The object the rest of the path names, inside the page area's own content.
+    let mut nodes: &[Node] = &area.items;
+    let mut target = None;
+    for (name, index) in rest {
+        let found = named_at(nodes, name, *index, 0)?;
+        target = Some(found);
+        nodes = match found {
+            Node::Subform(sf) => &sf.children,
+            Node::Area(a) => &a.children,
+            _ => &[],
+        };
+    }
+    let shared = matches!(target, Some(Node::Field(f)) if f.data_shared);
+    Some(if shared { 0 } else { *instance })
 }
 
 enum Container<'a> {
@@ -131,6 +167,16 @@ fn named_at<'a>(nodes: &'a [Node], name: &str, index: usize, depth: usize) -> Op
 /// as the form counts it ([`named_at`]). `None` when the template has no such field, or it is
 /// a button of an exclusion group (whose buttons take their value from the group).
 pub(crate) fn template_field<'a>(tpl: &'a Template, som: &str) -> Option<&'a Field> {
+    match template_object(tpl, som)? {
+        Node::Field(f) => Some(f),
+        _ => None,
+    }
+}
+
+/// The template object (field, exclusion group, subform...) the object at a SOM path is an
+/// instance of, found as [`template_field`] finds a field. `None` for the root and for a button
+/// of an exclusion group.
+pub(crate) fn template_object<'a>(tpl: &'a Template, som: &str) -> Option<&'a Node> {
     let path = som_to_path(som);
     let ((root, _), rest) = path.split_first()?;
     if tpl.root.common.name.as_deref() != Some(root.as_str()) {
@@ -145,10 +191,53 @@ pub(crate) fn template_field<'a>(tpl: &'a Template, som: &str) -> Option<&'a Fie
             _ => return None,
         };
     }
-    match named_at(children, last, *last_index, 0)? {
-        Node::Field(f) => Some(f),
-        _ => None,
+    named_at(children, last, *last_index, 0)
+}
+
+/// Every field with an `id`, with the SOM path the layout gives it: the root subform's
+/// fields under the root, a page area's under the area (as master pages lay them out), each
+/// named object adding its name and its number among its siblings (repeating subforms as their
+/// first instance). Bounded by [`MAX_DEPTH`].
+pub(crate) fn fields_with_ids(tpl: &Template) -> Vec<(&str, String, &Field)> {
+    fn walk<'a>(nodes: &'a [Node], som: &str, out: &mut Vec<(&'a str, String, &'a Field)>, depth: usize) {
+        if depth > MAX_DEPTH {
+            return;
+        }
+        let sibs = SomIndices::of(nodes);
+        for (i, n) in nodes.iter().enumerate() {
+            let here = match &n.common().name {
+                Some(name) if som.is_empty() => format!("{name}[{}]", sibs.at(i)),
+                Some(name) => format!("{som}.{name}[{}]", sibs.at(i)),
+                None => som.to_string(),
+            };
+            match n {
+                Node::Field(f) => {
+                    if let Some(id) = &f.common.id {
+                        out.push((id.as_str(), here, f));
+                    }
+                }
+                Node::Subform(s) => {
+                    walk(&s.children, &here, out, depth + 1);
+                    if let Some(ps) = &s.page_set {
+                        for a in &ps.areas {
+                            walk(&a.items, &a.name.as_ref().map(|n| format!("{n}[0]")).unwrap_or_default(), out, depth + 1);
+                        }
+                    }
+                }
+                Node::Area(a) => walk(&a.children, &here, out, depth + 1),
+                Node::ExclGroup(_) | Node::Draw(_) => {}
+            }
+        }
     }
+    let mut out = Vec::new();
+    let root = tpl.root.common.name.as_ref().map(|n| format!("{n}[0]")).unwrap_or_default();
+    walk(&tpl.root.children, &root, &mut out, 1);
+    if let Some(ps) = &tpl.root.page_set {
+        for a in &ps.areas {
+            walk(&a.items, &a.name.as_ref().map(|n| format!("{n}[0]")).unwrap_or_default(), &mut out, 1);
+        }
+    }
+    out
 }
 
 pub(super) fn path_som(path: &DataPath) -> String {
