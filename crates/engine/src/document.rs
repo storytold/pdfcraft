@@ -52,6 +52,9 @@ pub struct Document {
     pub(crate) config: RenderConfig,
     /// What field scripts printed or asked for (see [`Session::take_js_output`]).
     pub(crate) js_output: js::JsOutput,
+    pub(crate) js_runtime: js::Runtime,
+    pub(crate) js_zoom: f64,
+    pub(crate) js_page: usize,
     /// Dynamic XFA forms: what laying the template out produced (pages and fields are
     /// PdfCraft's; Adobe's viewers draw the form from the XFA packets themselves).
     pub xfa: Option<XfaLayout>,
@@ -551,9 +554,15 @@ impl Document {
         if self.allows_copying() { Ok(()) } else { Err(EditError::NotPermitted("copying text and images")) }
     }
 
-    /// Page changes (insert, delete, rotate, move, extract) are allowed.
+    /// Page changes (insert, delete, rotate, move) are allowed.
     pub fn allows_assembly(&self) -> bool {
         self.editable() && self.permissions().is_none_or(|p| p.assemble())
+    }
+
+    /// Pages may be taken out into new files (Extract, Split): the page changes above and copying,
+    /// since the new files don't keep the document's protection (#5081).
+    pub fn allows_page_extraction(&self) -> bool {
+        self.editable() && self.permissions().is_none_or(|p| p.extract_pages())
     }
 
     /// Redaction marks waiting to be applied.

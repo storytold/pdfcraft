@@ -99,8 +99,10 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
         ctx.set_cursor_icon(egui::CursorIcon::Default);
     }
     dialogs(app, ctx);
-    // Last, so it sits above Document Properties when Security's Unlock… asked for it.
+    // Above Document Properties when Security's Unlock… asked for it; script prompts stay on top.
     unlock(app, ctx);
+    #[cfg(not(target_arch = "wasm32"))]
+    app.show_script_dialog(ctx);
 }
 
 /// Draw the active modal dialog and apply the action the user chose.
@@ -1101,6 +1103,26 @@ fn dialog_replace_pages(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pend
         ui.label(egui::RichText::new(crate::i18n::fmt(tl!("of {name}"), &[("name", &d.src_pages.to_string())])).color(t.text_muted));
     });
     let fits = d.src_pages > 0;
+    let src_len = d.src_to.max(d.src_from) - d.src_from + 1;
+    if fits && src_len != n {
+        ui.add_space(4.0);
+        let delta_note = if src_len < n {
+            let removed = n - src_len;
+            if removed == 1 {
+                tl!("1 extra original page will be deleted.").to_owned()
+            } else {
+                crate::i18n::fmt(tl!("{name} extra original pages will be deleted."), &[("name", &removed.to_string())])
+            }
+        } else {
+            let added = src_len - n;
+            if added == 1 {
+                tl!("1 extra replacement page will be inserted.").to_owned()
+            } else {
+                crate::i18n::fmt(tl!("{name} extra replacement pages will be inserted."), &[("name", &added.to_string())])
+            }
+        };
+        ui.label(egui::RichText::new(delta_note).small().color(t.text_muted));
+    }
     ui.add_space(6.0);
     ui.label(
         egui::RichText::new(if fits {

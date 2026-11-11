@@ -437,8 +437,8 @@ impl Ctx<'_, '_> {
     pub(super) fn model_file(&mut self) -> Result<ModelFile, PrcError> {
         self.expect_type(MODEL_FILE)?;
         self.content_prc_base()?;
-        self.r.bit()?; // units_from_cad_file
-        self.r.double()?; // units_in_mm
+        let units_from_cad_file = self.r.bit()?;
+        let units_in_mm = self.r.double()?;
         let n = self.count(6, "root occurrences")?;
         let mut roots = Vec::with_capacity(n);
         for _ in 0..n {
@@ -447,6 +447,6 @@ impl Ctx<'_, '_> {
             self.r.bit()?; // is_active
             roots.push((id, index));
         }
-        Ok(ModelFile { roots })
+        Ok(ModelFile { roots, units_in_mm, units_from_cad_file })
     }
 }

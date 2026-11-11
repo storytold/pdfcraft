@@ -689,6 +689,38 @@ fn document_info_falls_back_to_the_xmp_packet() {
     assert_eq!(info(&doc, "Subject"), None);
 }
 
+/// The title read from XMP each frame (Initial View ▸ Show: Document Title) decodes the packet
+/// once, not on every read; an edit of the packet, or another document, reads afresh.
+#[test]
+fn the_xmp_packet_is_decoded_once_for_repeated_reads() {
+    let decodes = || crate::xmp::XMP_DECODES.with(std::cell::Cell::get);
+    let mut doc = doc_with_xmp(LIBREOFFICE_XMP.as_bytes());
+    doc.trailer_mut().remove(b"Info");
+    let before = decodes();
+    for _ in 0..10 {
+        assert_eq!(info(&doc, "Title").as_deref(), Some("Untitled 1"));
+        assert_eq!(info(&doc, "Author").as_deref(), Some("Old Author"));
+    }
+    assert_eq!(decodes() - before, 1);
+    set_info(&mut doc, "Title", "Report").unwrap();
+    doc.trailer_mut().remove(b"Info");
+    assert_eq!(info(&doc, "Title").as_deref(), Some("Report"), "the edited packet, not the one read before");
+    assert_eq!(decodes() - before, 2);
+    let mut other = doc_with_xmp(LIBREOFFICE_XMP.replace("Untitled 1", "Other").as_bytes());
+    other.trailer_mut().remove(b"Info");
+    assert_eq!(info(&other, "Title").as_deref(), Some("Other"), "another document's packet");
+    assert_eq!(info(&doc, "Title").as_deref(), Some("Report"));
+    let mut latin1 = LIBREOFFICE_XMP.as_bytes().to_vec();
+    latin1.extend_from_slice(&[b'<', 0xE9, b'>']);
+    let mut bad = doc_with_xmp(&latin1);
+    bad.trailer_mut().remove(b"Info");
+    let before = decodes();
+    for _ in 0..10 {
+        assert_eq!(info(&bad, "Title"), None);
+    }
+    assert_eq!(decodes() - before, 1, "an unreadable packet is not decoded again either");
+}
+
 #[test]
 fn document_info_edits_leave_files_without_usable_xmp_alone() {
     // No packet: none is added, for a custom property either.
@@ -2852,6 +2884,8 @@ fn replace_pages_fewer_replacements_deletes_excess_targets() {
 #[test]
 fn replace_pages_more_replacements_inserts_extras_after_targets() {
     let mut doc = open(fixture());
+    crate::number_pages(&mut doc, 0, 1, crate::LabelStyle::LowerRoman, "", 1).unwrap();
+    crate::number_pages(&mut doc, 2, 2, crate::LabelStyle::Decimal, "A-", 1).unwrap();
     add_bookmark(&mut doc, &[], 0, "First", 0).unwrap();
     add_bookmark(&mut doc, &[], 1, "Second", 1).unwrap();
     add_bookmark(&mut doc, &[], 2, "Third", 2).unwrap();
@@ -2867,10 +2901,12 @@ fn replace_pages_more_replacements_inserts_extras_after_targets() {
     let src = open(fixture());
     // Replace page 2 alone with all 3 pages of src: page 2 gets src page 1 in place (keeping its
     // annotation and bookmark), src pages 2 and 3 are inserted right after it, and original page 3
-    // moves to index 4 with its bookmark intact.
-    replace_pages(&mut doc, &[1], &src, &[0, 1, 2]).unwrap();
+    // moves to index 4 with its bookmark and page-label range ("A-1") intact.
+    let renamed = replace_pages(&mut doc, &[1], &src, &[0, 1, 2]).unwrap();
+    assert!(renamed.is_empty());
     let doc = open(write_full(&doc, &SaveOptions::default()).unwrap());
     assert_eq!(labels(&doc), ["Page 1", "Page 1", "Page 2", "Page 3", "Page 3"]);
+    assert_eq!(crate::page_labels(&doc).unwrap(), ["i", "ii", "iii", "iv", "A-1"]);
     let p2_after = doc.get(pages(&doc).unwrap()[1].obj);
     assert!(p2_after.as_dict().unwrap().contains(b"Annots"), "replaced page keeps annotations");
     let marks: Vec<(String, Option<usize>)> = bookmarks(&doc).into_iter().map(|b| (b.title, b.page)).collect();
@@ -2912,12 +2948,20 @@ fn replace_pages_all_targets_and_non_contiguous_selections() {
     replace_pages(&mut unit_dst, &[0], &src, &[1]).unwrap();
     assert!(!unit_dst.get(dst_p0).as_dict().unwrap().contains(b"UserUnit"));
 
-    // Extra inserted pages bring their form widgets along without renaming, while paired pages drop the temporary source widgets.
+    // Extra inserted pages bring their form widgets along without renaming when unique, while paired pages drop the temporary source widgets.
     let mut form_dst = doc_with_field("KeepOrig");
     let mut form_src = doc_with_field("PairedDropped");
     import_pages_with(&mut form_src, &doc_with_field("ExtraKept"), &[0], 1, FieldConflicts::Merge).unwrap();
-    replace_pages(&mut form_dst, &[0], &form_src, &[0, 1]).unwrap();
+    assert!(replace_pages(&mut form_dst, &[0], &form_src, &[0, 1]).unwrap().is_empty());
     assert_eq!(form_field_names(&form_dst), ["KeepOrig", "ExtraKept"]);
+
+    // Colliding fields on extra inserted pages are renamed so they stay independent of surviving destination fields.
+    let mut collide_dst = doc_with_field("KeepOrig");
+    let mut collide_src = doc_with_field("KeepOrig");
+    import_pages_with(&mut collide_src, &doc_with_field("KeepOrig"), &[0], 1, FieldConflicts::Merge).unwrap();
+    let renamed = replace_pages(&mut collide_dst, &[0], &collide_src, &[0, 1]).unwrap();
+    assert_eq!(renamed, [("KeepOrig".to_string(), "KeepOrig-1".to_string())]);
+    assert_eq!(form_field_names(&collide_dst), ["KeepOrig", "KeepOrig-1"]);
 }
 
 #[test]

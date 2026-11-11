@@ -570,8 +570,10 @@ pub fn duplicate_pages(doc: &mut Document, indices: &[usize], at: Option<usize>)
 /// only what the page shows changes (contents, resources and page boxes); the original pages'
 /// links, comments, form widgets and the bookmarks pointing at them stay. When `src_pages` is
 /// shorter than `targets`, the excess target pages are deleted; when `src_pages` is longer, the
-/// extra replacement pages are inserted right after the last replaced target page.
-pub fn replace_pages(doc: &mut Document, targets: &[usize], src: &Document, src_pages: &[usize]) -> Result<(), OrganizeError> {
+/// extra replacement pages are inserted right after the last replaced target page (shifting later
+/// page-label ranges with the pages they labelled, and renaming incoming form fields whose names
+/// collide with surviving fields; returns the renamed `(old, new)` field pairs).
+pub fn replace_pages(doc: &mut Document, targets: &[usize], src: &Document, src_pages: &[usize]) -> Result<Vec<(String, String)>, OrganizeError> {
     let n = page_count(doc)?;
     check(targets, n)?;
     let src_n = page_count(src)?;
@@ -585,7 +587,8 @@ pub fn replace_pages(doc: &mut Document, targets: &[usize], src: &Document, src_
     }
     let paired = targets.len().min(src_pages.len());
     let paired_targets = targets.get(..paired).unwrap_or_default();
-    let imported = import_pages(doc, src, src_pages, n)?;
+    let paired_src = src_pages.get(..paired).unwrap_or_default();
+    let imported = import_pages(doc, src, paired_src, n)?;
     let all = walk(doc)?;
     const SHOWN: [&[u8]; 10] =
         [b"Contents", b"Resources", b"MediaBox", b"CropBox", b"BleedBox", b"TrimBox", b"ArtBox", b"Rotate", b"UserUnit", b"Group"];
@@ -610,13 +613,14 @@ pub fn replace_pages(doc: &mut Document, targets: &[usize], src: &Document, src_
     let mut to_delete = targets.get(paired..).unwrap_or_default().to_vec();
     to_delete.extend(n..n + paired);
     delete_pages(doc, &to_delete)?;
-    let extra_count = src_pages.len().saturating_sub(paired);
-    let insert_at = paired_targets.iter().max().map_or(n, |last| last + 1);
-    if extra_count > 0 && insert_at < n {
-        let extra_indices: Vec<usize> = (n..n + extra_count).collect();
-        move_pages(doc, &extra_indices, insert_at)?;
+    let extra = src_pages.get(paired..).unwrap_or_default();
+    if extra.is_empty() {
+        return Ok(Vec::new());
     }
-    Ok(())
+    let insert_at = paired_targets.iter().max().map_or(n, |last| last + 1);
+    let outcome = import_pages_with(doc, src, extra, insert_at, FieldConflicts::Rename)?;
+    labels::shift_inserted_pages(doc, insert_at, extra.len())?;
+    Ok(outcome.renamed_fields)
 }
 
 /// Insert a blank page of `width × height` points at position `at` (0 = before the first page).

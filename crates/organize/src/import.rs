@@ -50,7 +50,7 @@ pub enum FieldConflicts {
     #[default]
     Rename,
     /// The older behaviour: a field that arrives with a taken name becomes one field with the
-    /// one already there. Duplicate, Replace, Extract and Split always use it.
+    /// one already there. Duplicate, Extract, Split and paired Replace pages use it.
     Merge,
 }
 
@@ -151,10 +151,11 @@ fn insert_file_bookmark(doc: &mut Document, mark: &Mark, after: usize) -> Result
 /// Copy pages `src_pages` (0-based, in the given order) of `src` into `dst`, inserting them at
 /// position `at`. Returns the new page references in order.
 ///
-/// Fields keep their names ([`FieldConflicts::Merge`]): this is what Duplicate and Replace
-/// Pages use, where the incoming fields are copies of the document's own and renaming them
-/// would silently change what the form exports. Combine and Insert from File, which bring in
-/// another document's fields, use [`import_pages_with`] and [`FieldConflicts::Rename`].
+/// Fields keep their names ([`FieldConflicts::Merge`]): this is what Duplicate and paired Replace
+/// Pages use, where the incoming fields are copies of the document's own (or temporary copies on
+/// pages replaced in place) and renaming them would silently change what the form exports. Combine,
+/// Insert from File and extra inserted Replace pages, which bring in another document's fields, use
+/// [`import_pages_with`] and [`FieldConflicts::Rename`].
 ///
 /// Resources identical to ones already in `dst` (the same fonts, images, colour profiles) are
 /// shared rather than stored twice (see `dedupe`).
