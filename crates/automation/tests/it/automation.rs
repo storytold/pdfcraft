@@ -9482,6 +9482,13 @@ fn javascript_through_tools() {
     assert_eq!(r["requests"][0]["page"], 2);
     let r = ok(&mut a, "js_run", json!({ "doc": doc, "script": "JSON.stringify(this.getPageBox())" }));
     assert_eq!(r["result"], "[0,300,200,0]");
+    ok(&mut a, "page_set_box", json!({ "doc":doc, "pages":[1], "box":"crop", "margins":[10,20,30,40] }));
+    let cropped = ok(&mut a, "js_run", json!({ "doc":doc, "script":"JSON.stringify(getPageBox('Crop',0))" }));
+    assert_eq!(cropped["result"], "[0,240,160,0]");
+    ok(&mut a, "page_set_box", json!({ "doc":doc, "pages":[2], "box":"media", "margins":[0,0,40,50] }));
+    let other_boxes = ok(&mut a, "js_run", json!({ "doc":doc, "script":"JSON.stringify([getPageBox('Media',0),getPageBox('Crop',1)])" }));
+    assert_eq!(other_boxes["result"], "[[-10,280,190,-20],[0,250,160,0]]");
+    ok(&mut a, "page_set_box", json!({ "doc":doc, "pages":[1], "box":"crop" }));
     let f = ok(&mut a, "form_fields", json!({ "doc": doc }));
     let total = f["fields"].as_array().unwrap().iter().find(|x| x["name"] == "Total").unwrap().clone();
     assert_eq!(total["value"], "3750");
@@ -9512,6 +9519,8 @@ fn javascript_through_tools() {
         json!({ "doc": doc, "field": "CaptionButton", "script": "getField('CaptionButton').buttonSetCaption('Continue'); getField('CaptionButton').buttonGetCaption();" }),
     );
     assert_eq!(r["result"], "Continue");
+    let routed = ok(&mut a, "js_run", json!({ "doc":doc, "field":"CaptionButton", "script":"event.name+'|'+event.targetName" }));
+    assert_eq!(routed["result"], "Mouse Up|CaptionButton");
     assert_eq!(
         ok(&mut a, "form_fields", json!({ "doc": doc }))["fields"].as_array().unwrap().iter().find(|f| f["name"] == "CaptionButton").unwrap()["caption"],
         "Continue"
@@ -9607,6 +9616,14 @@ fn detecting_form_fields_preserves_content_piece_comments() {
         } else {
             json!([])
         };
+        let check_inventory = |a: &mut Automation, doc| {
+            let mut fields = ok(a, "form_fields", json!({"doc": doc}))["fields"].clone();
+            for field in fields.as_array_mut().unwrap() {
+                assert!(field["field_id"].as_u64().is_some());
+                field.as_object_mut().unwrap().remove("field_id");
+            }
+            assert_eq!(fields, inventory);
+        };
         let check_text = |a: &mut Automation, doc| {
             let text = page_text(a, doc).join(" ");
             assert_eq!(text.split_whitespace().collect::<Vec<_>>(), ["FIRST", "LAST"]);
@@ -9627,12 +9644,12 @@ fn detecting_form_fields_preserves_content_piece_comments() {
         assert_eq!(ok(&mut a, "form_detect_fields", json!({"doc": doc, "add": false}))["fields"], candidates);
         assert_eq!(ok(&mut a, "form_fields", json!({"doc": doc}))["fields"], json!([]));
         assert_eq!(ok(&mut a, "form_detect_fields", json!({"doc": doc}))["fields"], candidates);
-        assert_eq!(ok(&mut a, "form_fields", json!({"doc": doc}))["fields"], inventory);
+        check_inventory(&mut a, doc);
         assert_eq!(ok(&mut a, "form_detect_fields", json!({"doc": doc}))["fields"], json!([]));
         ok(&mut a, "doc_save", json!({"doc": doc, "path": "saved.pdf"}));
         let mut reopened = auto(&dir);
         let again = ok(&mut reopened, "doc_open", json!({"path": "saved.pdf"}))["doc"].as_u64().unwrap();
-        assert_eq!(ok(&mut reopened, "form_fields", json!({"doc": again}))["fields"], inventory);
+        check_inventory(&mut reopened, again);
         check_text(&mut reopened, again);
         check_render(&mut reopened, again);
         std::fs::remove_dir_all(dir).unwrap();
