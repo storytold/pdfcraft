@@ -77,6 +77,16 @@ impl Session {
         // over the page as the renderer shows it, so the renderer has the last word: on every
         // apply the edit ran, a batch's included.
         if !cx.redaction_marks.is_empty() {
+            // A batch that deletes a marked page and adds pages cannot be tied back to the marks:
+            // a copy of a page may carry the text the redaction removed from the original only.
+            // Fail closed.
+            let before: std::collections::HashSet<_> = pdfcraft_model::pages(&editor.cos).iter().map(|p| p.obj).collect();
+            let after: std::collections::HashSet<_> = pdfcraft_model::pages(&next).iter().map(|p| p.obj).collect();
+            if cx.redaction_marks.iter().any(|(o, _)| !after.contains(o)) && after.iter().any(|o| !before.contains(o)) {
+                return Err(EditError::Invalid(
+                    "a batch that deletes a page with a redaction mark and adds pages can't be verified; the document was not changed".into(),
+                ));
+            }
             guard(|| shown_under_redactions(&next, &cx.redaction_marks, &cx.redaction_overlays, doc.password.as_deref()))
                 .unwrap_or_else(|m| Err(EditError::Invalid(format!("{} failed unexpectedly ({m}); the document was not changed", edit.label()))))?;
         }

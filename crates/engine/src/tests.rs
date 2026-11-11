@@ -10274,3 +10274,22 @@ fn redactions_applied_in_a_batch_get_the_renderer_check() {
     assert!(!page_texts(&s, id)[0].contains("SECRET42"), "{:?}", page_texts(&s, id));
     assert_eq!(s.get(id).unwrap().redaction_marks(), 0);
 }
+
+/// A batch that deletes a page holding a redaction mark and adds pages is refused whole: the
+/// marks cannot be tied to copies, so redaction fails closed. Without added pages it goes through.
+#[test]
+fn a_batch_that_deletes_a_marked_page_and_adds_pages_is_refused() {
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let page = one_line_page_with("/Font << /F1 4 0 R >>", "", "BT /F1 16 Tf 20 150 Td (Public words then SECRET42) Tj ET");
+    let id = s.open("batch.pdf", None, Arc::new(page), None).unwrap();
+    mark_shown_text(&mut s, id, "SECRET42");
+    let edits = vec![
+        Edit::ApplyRedactions { pages: None },
+        Edit::InsertBlankPage { at: 1, width: 612.0, height: 792.0 },
+        Edit::DeletePages { pages: vec![0] },
+    ];
+    let refused = s.apply(id, Edit::Batch { label: "x".into(), edits });
+    assert!(matches!(refused, Err(EditError::Invalid(_))), "{refused:?}");
+    assert!(page_texts(&s, id)[0].contains("SECRET42"), "nothing changed");
+    assert_eq!(s.get(id).unwrap().redaction_marks(), 1);
+}
