@@ -1,8 +1,8 @@
 use super::common::{button_action, date_pattern};
 use super::items::{BorderShape, Item, Widget, WidgetBorder, WidgetKind};
 use super::{
-    Access, Border, Ctx, Engine, Face, Field, HAlign, Layouter, MAX_DATA_IMAGE, Margin, Para, Placement, Presence, Rect, Ui, VAlign, Value, Views,
-    XfaError, data_date_letters, data_path, data_to_iso, is_on, iso_to_pattern, text,
+    Access, Border, Ctx, Engine, Face, Field, HAlign, Layouter, MAX_DATA_IMAGE, MAX_WIDGET_BYTES, Margin, Para, Placement, Presence, Rect, Ui,
+    VAlign, Value, Views, XfaError, data_date_letters, data_path, data_to_iso, is_on, iso_to_pattern, text,
 };
 
 impl Layouter<'_> {
@@ -250,6 +250,18 @@ impl Layouter<'_> {
             WidgetKind::Radio { on, .. } => vec![on.clone()],
             _ => Vec::new(),
         };
+        let held = name.len()
+            + som.len()
+            + [&tooltip, &value, &template_default].iter().map(|o| o.as_ref().map_or(0, String::len)).sum::<usize>()
+            + items.iter().map(String::len).sum::<usize>()
+            + match &kind {
+                WidgetKind::Choice { options, .. } => options.iter().map(|(a, b)| a.len() + b.len()).sum(),
+                _ => 0,
+            };
+        self.widget_bytes = self.widget_bytes.saturating_add(held);
+        if self.widget_bytes > MAX_WIDGET_BYTES {
+            return Err(XfaError::TooLarge("the form's field text is too large to lay out".into()));
+        }
         self.fields += 1;
         self.push(Item::Widget(Box::new(Widget {
             rect,

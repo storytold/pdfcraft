@@ -69,6 +69,13 @@ const MAX_DATA_IMAGE: usize = 32 << 20;
 /// own copy, so a large picture in repeating subforms would otherwise multiply into gigabytes
 /// (a failed allocation aborts the app); a real form's logos and photos stay far below.
 const MAX_IMAGE_BYTES: usize = 256 << 20;
+/// Most text bytes the widgets of one layout keep (names, tooltips, values, defaults and options),
+/// all copies together. Each widget holds its own copy, so a large value or tooltip in repeating
+/// subforms would otherwise multiply into gigabytes; a real form's fields stay far below this.
+#[cfg(not(test))]
+const MAX_WIDGET_BYTES: usize = 256 << 20;
+#[cfg(test)]
+const MAX_WIDGET_BYTES: usize = 1 << 20;
 /// Placeholder for the page count in text laid out before the count is known.
 const PAGE_COUNT_MARK: char = '\u{E000}';
 
@@ -181,6 +188,8 @@ struct Layouter<'t> {
     items: usize,
     /// Picture bytes laid out so far (see [`MAX_IMAGE_BYTES`]).
     image_bytes: usize,
+    /// Text bytes the widgets laid out so far hold (see [`MAX_WIDGET_BYTES`]).
+    widget_bytes: usize,
     /// Container sizes by (address of the subform or area in the template, available width,
     /// depth), with the inherited font and paragraph they were measured with.
     measured: RefCell<HashMap<MeasureKey, Measured>>,
@@ -271,6 +280,7 @@ fn layout_inner(tpl: &Template, data: Option<&DataNode>, overrides: Option<&crat
         fields: 0,
         items: 0,
         image_bytes: 0,
+        widget_bytes: 0,
         measured: RefCell::new(HashMap::new()),
         measures: Cell::new(0),
         drawn_chars: Cell::new(0),
