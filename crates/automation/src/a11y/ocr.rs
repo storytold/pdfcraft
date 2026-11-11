@@ -20,6 +20,7 @@ impl Automation {
             }
             settings.language = l.into();
         }
+        settings.engine = pdfcraft_engine::ocr::default_engine_for_language(&settings.language);
         if let Some(e) = a.opt_str("engine")? {
             settings.engine = match e.trim().to_ascii_lowercase().as_str() {
                 "ocrs" => EngineChoice::Ocrs,
@@ -488,9 +489,9 @@ impl Automation {
         // Updating sorts, lower-cases and rewrites the file, so this tool names dictionary files only:
         // pointed at `.env` or a README it would corrupt it.
         let file = std::path::Path::new(a.str("path")?).file_name().and_then(|n| n.to_str()).unwrap_or("");
-        let plain = file.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'));
+        let plain = file.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '+'));
         if file.len() > 64 || !plain || !file.starts_with("ocr-dictionary") || !file.ends_with(".txt") {
-            return Err(failed("path must name a dictionary file: ocr-dictionary-<language>.txt (letters, digits, '-', '_' and '.' only)"));
+            return Err(failed("path must name a dictionary file: ocr-dictionary-<language>.txt (letters, digits, '-', '_', '.' and '+' only)"));
         }
         let path = self.resolve(a.str("path")?, writing)?;
         let mut input = String::new();
@@ -512,7 +513,17 @@ impl Automation {
     pub(crate) fn ocr_status(&self) -> Result<Value> {
         use pdfcraft_engine::ocr;
         let dirs: Vec<String> = ocr::Models::search_dirs().iter().map(|d| d.to_string_lossy().into_owned()).collect();
-        let langs: Vec<Value> = ocr::LANGUAGES.iter().map(|(c, n)| json!({ "code": c, "name": n })).collect();
+        let langs: Vec<Value> = ocr::LANGUAGES
+            .iter()
+            .map(|(c, n)| {
+                let available = ocr::language_availability(c);
+                let mut value = json!({ "code": c, "name": n, "available": available.is_ok() });
+                if let Err(why) = available {
+                    value["unavailable"] = json!(why);
+                }
+                value
+            })
+            .collect();
         let engines: Vec<Value> = ocr::engines_status()
             .iter()
             .map(|e| {
@@ -567,6 +578,21 @@ fn shared_file_names(targets: &[std::path::PathBuf]) -> Vec<String> {
 #[cfg(test)]
 mod shared_output_name_tests {
     use super::*;
+
+    #[test]
+    fn language_defaults_select_a_capable_engine_but_preserve_explicit_choices() {
+        use pdfcraft_engine::ocr::EngineChoice;
+        let auto = Automation::new();
+        assert_eq!(auto.ocr_settings(&Args(&json!({}))).unwrap().engine, EngineChoice::Ocrs);
+        for language in ["ru", "en+ru"] {
+            assert_eq!(auto.ocr_settings(&Args(&json!({ "language": language }))).unwrap().engine, EngineChoice::Auto);
+            assert_eq!(
+                auto.ocr_settings(&Args(&json!({ "language": language, "engine": "ocrs" }))).unwrap().engine,
+                EngineChoice::Ocrs,
+                "an explicit incompatible choice is refused at engine selection, never silently changed"
+            );
+        }
+    }
 
     #[test]
     fn shared_output_names_follow_the_default_filesystem() {

@@ -80,6 +80,15 @@ impl Default for OcrDraft {
 }
 
 impl OcrDraft {
+    /// A newly selected language must start with an engine that can read its script.
+    pub(super) fn select_language(&mut self, language: &str) {
+        self.language = language.to_string();
+        if pdfcraft_engine::ocr::requires_tesseract(language) && self.engine == EngineChoice::Ocrs {
+            self.engine = EngineChoice::Auto;
+            self.strategy = self.engine.default_strategy();
+        }
+    }
+
     /// The recognition settings these choices make.
     pub fn settings(&self) -> OcrSettings {
         OcrSettings {
@@ -103,7 +112,7 @@ impl OcrDraft {
     /// defaults, like every other restored setting.
     pub fn apply_pref(&mut self, v: &serde_json::Value) {
         if let Some(l) = v["language"].as_str().filter(|l| LANGUAGES.iter().any(|x| x.0 == *l)) {
-            self.language = l.to_string();
+            self.select_language(l);
         }
         if let Some(e) = v["engine"].as_str() {
             self.engine = EngineChoice::parse(e);
@@ -265,7 +274,9 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
             let name = LANGUAGES.iter().find(|l| l.0 == d.language).map_or("English", |l| l.1);
             craft_ui::ComboBox::from_id_salt("ocr-language").selected_text(tl!(name)).width(220.0).show_ui(ui, |ui| {
                 for (code, name) in LANGUAGES {
-                    ui.selectable_value(&mut d.language, (*code).to_string(), tl!(*name));
+                    if ui.selectable_label(d.language == *code, tl!(*name)).clicked() {
+                        d.select_language(code);
+                    }
                 }
             });
             ui.end_row();
@@ -279,7 +290,14 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
                 let choices: [(EngineChoice, &str); 3] =
                     [(EngineChoice::Auto, "Automatic"), (EngineChoice::Ocrs, "Built-in"), (EngineChoice::Tesseract, "Tesseract")];
                 for (choice, name) in choices {
-                    ui.selectable_value(&mut d.engine, choice, tl!(name));
+                    let incompatible = choice == EngineChoice::Ocrs && pdfcraft_engine::ocr::requires_tesseract(&d.language);
+                    let response = ui.add_enabled(!incompatible, egui::Button::selectable(d.engine == choice, tl!(name)));
+                    if response.clicked() {
+                        d.engine = choice;
+                    }
+                    if incompatible {
+                        response.on_disabled_hover_text(tl!("The built-in OCR engine reads only English"));
+                    }
                 }
             });
             ui.end_row();
@@ -360,7 +378,9 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
     keep_asking_while_probing(ui.ctx());
     // The web build has no model files: it downloads the models the first time they're needed.
     #[cfg(target_arch = "wasm32")]
-    let downloading = d.engine != EngineChoice::Tesseract && pdfcraft_engine::ocr::engine_unavailable_reason(EngineChoice::Ocrs).is_some();
+    let downloading = !pdfcraft_engine::ocr::requires_tesseract(&d.language)
+        && d.engine != EngineChoice::Tesseract
+        && pdfcraft_engine::ocr::engine_unavailable_reason(EngineChoice::Ocrs).is_some();
     #[cfg(not(target_arch = "wasm32"))]
     let downloading = false;
     #[cfg(target_arch = "wasm32")]
@@ -387,20 +407,21 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
         }
         ui.add_space(6.0);
     }
-    if let Some(why) = pdfcraft_engine::ocr::engine_unavailable_reason(d.engine).filter(|_| !downloading) {
+    if let Some(why) = pdfcraft_engine::ocr::language_unavailable_reason(d.engine, &d.language).filter(|_| !downloading) {
         // Said in the interface's language: the built-in engine's missing models get the
         // notice users know; Tesseract's reasons are catalog keys of their own.
-        let text = match d.engine {
-            pdfcraft_engine::ocr::EngineChoice::Tesseract => crate::i18n::t(&why).to_string(),
-            _ => tl!("Text recognition isn't installed: its model files are missing. Reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them.")
-                .to_string(),
+        let text = if d.engine == EngineChoice::Tesseract || pdfcraft_engine::ocr::requires_tesseract(&d.language) {
+            crate::i18n::t(&why).to_string()
+        } else {
+            tl!("Text recognition isn't installed: its model files are missing. Reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them.")
+                .to_string()
         };
         ui.label(egui::RichText::new(text).small().color(t.text_muted));
         ui.add_space(6.0);
     }
     ui.add_space(6.0);
     let (mut go, mut cancel) = (false, false);
-    let can_run = pdfcraft_engine::ocr::engine_unavailable_reason(d.engine).is_none();
+    let can_run = pdfcraft_engine::ocr::language_unavailable_reason(d.engine, &d.language).is_none();
     ui.horizontal(|ui| {
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             if ui.add_enabled_ui(can_run, |ui| widgets::pill_button(ui, tl!("Recognize text"), true)).inner.clicked() {
@@ -424,6 +445,11 @@ impl PdfCraftApp {
         }
         if let Some(why) = self.session.get(id).and_then(|d| d.read_only_reason.clone()) {
             self.notify(why);
+            return;
+        }
+        #[cfg(target_arch = "wasm32")]
+        if pdfcraft_engine::ocr::requires_tesseract(&self.ocr_draft.language) {
+            self.notify_tr("Tesseract is not available in the web app");
             return;
         }
         #[cfg(target_arch = "wasm32")]
@@ -453,7 +479,7 @@ impl PdfCraftApp {
         let Some(scan) = self.scan_to_read() else { return };
         // the engine this run will use, not always the built-in one
         let mut settings = self.ocr_draft.settings();
-        if pdfcraft_engine::ocr::engine_unavailable_reason(settings.engine).is_some() {
+        if pdfcraft_engine::ocr::language_unavailable_reason(settings.engine, &settings.language).is_some() {
             self.await_ocr_models(&scan);
             return;
         }
@@ -473,7 +499,8 @@ impl PdfCraftApp {
     fn await_ocr_models(&mut self, scan: &ScanToRead) {
         self.views[scan.view].auto_ocr_awaiting_models.insert(scan.page, scan.generation);
         #[cfg(target_arch = "wasm32")]
-        if crate::ocr_web::state() == crate::ocr_web::State::NotStarted
+        if !pdfcraft_engine::ocr::requires_tesseract(&self.ocr_draft.language)
+            && crate::ocr_web::state() == crate::ocr_web::State::NotStarted
             && let Some(ctx) = self.ctx.clone()
         {
             crate::ocr_web::start(ctx);
@@ -665,6 +692,10 @@ impl PdfCraftApp {
         }
         #[cfg(target_arch = "wasm32")]
         {
+            if pdfcraft_engine::ocr::requires_tesseract(&settings.language) {
+                self.notify_tr("Tesseract is not available in the web app");
+                return;
+            }
             // The files wait for the models rather than having to be chosen again.
             if self.web_models_missing(settings.engine) {
                 self.ocr_web_waiting = Some((files, settings));
@@ -1070,6 +1101,24 @@ mod tests {
     use crate::{Dialog, LeftPanel, Mode, QuickTool};
     use pdfcraft_engine::ocr::{Recognizer, Recognizers};
     use pdfcraft_engine::{Edit, Session};
+
+    #[test]
+    fn russian_language_selection_and_preferences_choose_a_capable_engine() {
+        for language in ["ru", "en+ru"] {
+            let mut draft = OcrDraft::default();
+            draft.select_language(language);
+            assert_eq!(draft.language, language);
+            assert_eq!(draft.engine, EngineChoice::Auto);
+            assert_eq!(draft.strategy, EngineChoice::Auto.default_strategy());
+            let mut restored = OcrDraft::default();
+            restored.apply_pref(&draft.to_pref());
+            assert_eq!(restored.settings().language, language);
+            assert_eq!(restored.settings().engine, EngineChoice::Auto);
+            restored.apply_pref(&serde_json::json!({ "language": language, "engine": "ocrs" }));
+            assert_eq!(restored.engine, EngineChoice::Ocrs, "explicit preferences remain explicit");
+            assert!(pdfcraft_engine::ocr::language_unavailable_reason(restored.engine, language).unwrap().contains("only English"));
+        }
+    }
 
     /// A one-page PDF that is one picture covering the page.
     fn scan() -> Vec<u8> {

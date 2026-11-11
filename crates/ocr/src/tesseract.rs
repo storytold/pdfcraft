@@ -37,6 +37,7 @@ pub const LANGUAGE_CODES: &[(&str, &str)] = &[
     ("it", "ita"),
     ("pt", "por"),
     ("ru", "rus"),
+    ("en+ru", "rus+eng"),
     ("zh", "chi_sim"),
     ("ja", "jpn"),
     ("ko", "kor"),
@@ -53,6 +54,7 @@ pub const LANGUAGE_NAMES: &[(&str, &str)] = &[
     ("it", "Italian"),
     ("pt", "Portuguese"),
     ("ru", "Russian"),
+    ("en+ru", "Russian and English"),
     ("zh", "Chinese (Simplified)"),
     ("ja", "Japanese"),
     ("ko", "Korean"),
@@ -65,6 +67,17 @@ pub const LANGUAGE_NAMES: &[(&str, &str)] = &[
 pub fn language_code(code: &str) -> &'static str {
     let c = code.trim().to_ascii_lowercase();
     LANGUAGE_CODES.iter().find(|(k, _)| *k == c).map(|(_, v)| *v).unwrap_or("eng")
+}
+
+/// Why a requested language cannot run with this installed data set. Mixed recognition
+/// needs every named pack; it must never silently fall back to English or an installed subset.
+pub fn missing_language_data(code: &str, installed: &[(String, String)]) -> Option<String> {
+    let code = code.trim().to_ascii_lowercase();
+    let Some((_, data)) = LANGUAGE_CODES.iter().find(|(key, _)| *key == code) else {
+        return Some(format!("unsupported Tesseract language {code:?}"));
+    };
+    let missing: Vec<&str> = data.split('+').filter(|part| !installed.iter().any(|(have, _)| have == part)).collect();
+    (!missing.is_empty()).then(|| format!("Tesseract needs the {} language data; install the missing traineddata files", missing.join(" and ")))
 }
 
 /// The user-configured program location, when valid: `$PDFCRAFT_TESSERACT` (a user
@@ -90,9 +103,27 @@ fn locate(configured: Option<std::ffi::OsString>, search: impl FnOnce() -> Optio
 /// The first `tesseract` on the PATH that is an existing executable file. Entries that are not
 /// absolute are refused: a relative PATH entry resolves against the caller's working
 /// directory, which is neither stable nor a safe place to find a program. Also named by
-/// `ocr_status` (the engine reports where it would look, without probing).
+/// `ocr_status` (the engine reports where it would look, without probing). On Windows,
+/// also check the conventional installer directories after PATH; the installer need not add PATH.
 pub fn path_search() -> Option<PathBuf> {
-    path_search_in(std::env::split_paths(&std::env::var_os("PATH")?))
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    path_search_in(std::env::split_paths(&path)).or_else(installer_search)
+}
+
+#[cfg(windows)]
+fn installer_search() -> Option<PathBuf> {
+    let roots = ["ProgramW6432", "ProgramFiles", "ProgramFiles(x86)"].into_iter().filter_map(std::env::var_os).map(PathBuf::from);
+    installer_search_in(roots)
+}
+
+#[cfg(windows)]
+fn installer_search_in(roots: impl Iterator<Item = PathBuf>) -> Option<PathBuf> {
+    path_search_in(roots.filter(|root| root.is_absolute()).map(|root| root.join("Tesseract-OCR")))
+}
+
+#[cfg(not(windows))]
+fn installer_search() -> Option<PathBuf> {
+    None
 }
 
 /// [`path_search`] over an explicit directory list (so tests can pass one).
@@ -322,13 +353,7 @@ impl TesseractCli {
         version_line(&out, &err)
     }
 
-    /// Run the program with fixed argv, its stdout in a private temp file, under `timeout`
-    /// seconds and an output cap of `max_output` bytes. Returns the (capped) stdout.
-    fn run(&self, args: &[&str], timeout: Duration, max_output: u64) -> Result<String, OcrError> {
-        self.run_capture(args, timeout, max_output).map(|(out, _)| out)
-    }
-
-    /// [`Self::run`], also returning what the program wrote to stderr (up to
+    /// Run fixed argv with private output files, a timeout and output caps. Also return stderr (up to
     /// [`MAX_STDERR`] bytes, its end kept): some Tesseract versions print the `--list-langs`
     /// list there instead of on stdout.
     fn run_capture(&self, args: &[&str], timeout: Duration, max_output: u64) -> Result<(String, String), OcrError> {
@@ -471,6 +496,12 @@ impl Recognizer for TesseractCli {
 
     /// Write the page as a PNG and read it back as TSV.
     fn recognize(&self, image: &OcrImage, options: &RecognizeOptions) -> Result<Vec<Line>, OcrError> {
+        // Packs can be installed or removed while PdfCraft is running. Recheck immediately
+        // before recognition; a stale positive probe must not turn Russian into English.
+        self.refresh()?;
+        if let Some(reason) = missing_language_data(&options.language, &self.languages()) {
+            return Err(OcrError::Recognize(reason));
+        }
         let lang = language_code(&options.language);
         let png = encode_png(image)?;
         let dir = TempDir::create()?;
@@ -481,13 +512,28 @@ impl Recognizer for TesseractCli {
             f.write_all(&png).map_err(|e| OcrError::Process(format!("writing the image failed: {e}")))?;
         }
         // Fixed argv, no shell: tesseract <png> stdout -l <lang> tsv.
-        let tsv = self.run(&[&png_path.to_string_lossy(), "stdout", "-l", lang, "tsv"], self.timeout, self.max_output)?;
-        let (lines, truncated) = parse_tsv_bounded(&tsv);
-        if truncated {
-            return Err(OcrError::Recognize(format!("the {MAX_WORDS}-word limit was exceeded; the incomplete reading was rejected")));
-        }
-        Ok(lines)
+        let (tsv, stderr) = self.run_capture(&[&png_path.to_string_lossy(), "stdout", "-l", lang, "tsv"], self.timeout, self.max_output)?;
+        recognition_output(&tsv, &stderr)
     }
+}
+
+/// Interpret a successful process's output before any reading reaches a document.
+fn recognition_output(tsv: &str, stderr: &str) -> Result<Vec<Line>, OcrError> {
+    // With multiple languages Tesseract can exit successfully after loading only one pack.
+    // Refuse that incomplete reading, while allowing ordinary resolution warnings.
+    if let Some(failure) =
+        stderr.lines().map(str::trim).find(|line| line.starts_with("Failed loading language ") || line.starts_with("Error opening data file "))
+    {
+        let detail: String = failure.chars().take(2048).collect();
+        return Err(OcrError::Recognize(format!(
+            "Tesseract could not load the requested language data: {detail}. Install or replace the required traineddata files"
+        )));
+    }
+    let (lines, truncated) = parse_tsv_bounded(tsv);
+    if truncated {
+        return Err(OcrError::Recognize(format!("the {MAX_WORDS}-word limit was exceeded; the incomplete reading was rejected")));
+    }
+    Ok(lines)
 }
 
 /// Encode an RGBA raster as PNG (the interchange format Tesseract reads best).
@@ -681,6 +727,8 @@ mod tests {
         assert_eq!(language_code("en"), "eng");
         assert_eq!(language_code(" EN "), "eng", "trimmed, case-insensitive");
         assert_eq!(language_code("de"), "deu");
+        assert_eq!(language_code("ru"), "rus");
+        assert_eq!(language_code("en+ru"), "rus+eng", "mixed documents prioritize Russian");
         assert_eq!(language_code("ZH"), "chi_sim");
         assert_eq!(language_code("ja"), "jpn");
         assert_eq!(language_code("ko"), "kor");
@@ -693,6 +741,44 @@ mod tests {
             let mapped = language_code(code);
             assert!(LANGUAGE_CODES.iter().any(|(_, v)| *v == mapped), "{code:?} → {mapped:?} is not allow-listed");
         }
+    }
+
+    #[test]
+    fn mixed_russian_requires_both_installed_language_packs() {
+        let installed = |codes: &[&str]| codes.iter().map(|c| (c.to_string(), c.to_string())).collect::<Vec<_>>();
+        let english = installed(&["eng", "osd"]);
+        assert!(missing_language_data("en", &english).is_none());
+        assert!(missing_language_data("ru", &english).unwrap().contains("rus"));
+        assert!(missing_language_data("en+ru", &english).unwrap().contains("rus"));
+        let russian = installed(&["rus"]);
+        assert!(missing_language_data("ru", &russian).is_none());
+        assert!(missing_language_data("en+ru", &russian).unwrap().contains("eng"));
+        assert!(missing_language_data("en+ru", &installed(&["eng", "rus"])).is_none());
+        assert!(missing_language_data("xx", &english).unwrap().contains("unsupported"));
+    }
+
+    #[test]
+    fn successful_output_with_failed_language_data_is_refused() {
+        // Tesseract can list both packs, fail to load a corrupt rus file, then exit 0 with
+        // English-only TSV. A successful exit must not make that incomplete reading valid.
+        for stderr in ["Failed loading language 'rus'\nEstimating resolution as 353\n", "Error opening data file /tessdata/rus.traineddata\n"] {
+            let result = recognition_output(TSV, stderr);
+            assert!(matches!(result, Err(OcrError::Recognize(ref why)) if why.contains("rus")), "{result:?}");
+        }
+        let harmless = "Warning: Invalid resolution 0 dpi. Using 70 instead.\nEstimating resolution as 353\n";
+        assert_eq!(recognition_output(TSV, harmless).unwrap()[0].text(), "Hello world");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_installer_location_is_found_without_path() {
+        let dir = TempDir::create().unwrap();
+        let installed = dir.path.join("Tesseract-OCR");
+        std::fs::create_dir(&installed).unwrap();
+        let program = installed.join("tesseract.exe");
+        std::fs::write(&program, b"synthetic executable").unwrap();
+        assert_eq!(installer_search_in(std::iter::once(dir.path.clone())), Some(program));
+        assert!(installer_search_in(std::iter::once(PathBuf::from("relative"))).is_none());
     }
 
     #[test]
@@ -792,6 +878,40 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn mixed_recognition_rechecks_packs_and_passes_the_fixed_language_argument() {
+        let dir = TempDir::create().unwrap();
+        let script = dir.path.join("synthetic-recognizer");
+        std::fs::write(
+            &script,
+            concat!(
+                "#!/bin/sh\ncd \"$(dirname \"$0\")\" || exit 1\n",
+                "if [ \"$1\" = --list-langs ]; then cat languages; else printf '%s\\n' \"$@\" > arguments; ",
+                "if [ -f load-error ]; then printf \"Failed loading language 'rus'\\n\" >&2; fi; cat reading.tsv; fi\n"
+            ),
+        )
+        .unwrap();
+        make_executable(&script);
+        std::fs::write(dir.path.join("languages"), "eng\n").unwrap();
+        std::fs::write(dir.path.join("reading.tsv"), "5\t1\t1\t1\t1\t1\t0\t0\t4\t4\t95\tРусский\n").unwrap();
+        let recognizer = TesseractCli::new(script);
+        let options = RecognizeOptions { language: "en+ru".into(), ..Default::default() };
+        let image = blot(8, 8, 0, 0, 4, 4);
+        assert!(recognizer.recognize(&image, &options).unwrap_err().to_string().contains("rus"));
+        assert!(!dir.path.join("arguments").exists(), "missing packs are refused before recognition starts");
+        std::fs::write(dir.path.join("languages"), "eng\nrus\n").unwrap();
+        let lines = recognizer.recognize(&image, &options).unwrap();
+        assert_eq!(lines[0].text(), "Русский");
+        let arguments = std::fs::read_to_string(dir.path.join("arguments")).unwrap();
+        assert!(arguments.ends_with("stdout\n-l\nrus+eng\ntsv\n"), "{arguments}");
+        std::fs::write(dir.path.join("load-error"), "").unwrap();
+        assert!(recognizer.recognize(&image, &options).unwrap_err().to_string().contains("rus"), "exit 0 must not hide a corrupt listed pack");
+        std::fs::remove_file(dir.path.join("load-error")).unwrap();
+        std::fs::write(dir.path.join("languages"), "eng\n").unwrap();
+        assert!(recognizer.recognize(&image, &options).unwrap_err().to_string().contains("rus"), "removing a pack invalidates a previous success");
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn recognize_refuses_a_truncated_reading() {
         let dir = TempDir::create().unwrap();
         let script = dir.path.join("synthetic-recognizer");
@@ -802,7 +922,8 @@ mod tests {
         }
         let exact = tsv.lines().take(MAX_WORDS).collect::<Vec<_>>().join("\n");
         std::fs::write(dir.path.join("reading.tsv"), tsv).unwrap();
-        std::fs::write(&script, "#!/bin/sh\ncat \"$(dirname \"$0\")/reading.tsv\"\n").unwrap();
+        std::fs::write(&script, "#!/bin/sh\nif [ \"$1\" = --list-langs ]; then printf 'eng\\n'; else cat \"$(dirname \"$0\")/reading.tsv\"; fi\n")
+            .unwrap();
         make_executable(&script);
         let recognizer = TesseractCli::new(script);
         let result = recognizer.recognize(&blot(8, 8, 0, 0, 4, 4), &RecognizeOptions::default());
@@ -825,7 +946,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let script = dir.join("tesseract-hang");
-        std::fs::write(&script, "#!/bin/sh\nsleep 30\n").unwrap();
+        std::fs::write(&script, "#!/bin/sh\nif [ \"$1\" = --list-langs ]; then printf 'eng\\n'; else sleep 30; fi\n").unwrap();
         make_executable(&script);
         let mut t = TesseractCli::new(script);
         t.timeout = Duration::from_millis(500);
@@ -846,7 +967,11 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let script = dir.join("tesseract-flood");
-        std::fs::write(&script, "#!/bin/sh\nhead -c 100000000 /dev/zero | tr '\\0' 'x'\nsleep 30\n").unwrap();
+        std::fs::write(
+            &script,
+            "#!/bin/sh\nif [ \"$1\" = --list-langs ]; then printf 'eng\\n'; else head -c 100000000 /dev/zero | tr '\\0' 'x'; sleep 30; fi\n",
+        )
+        .unwrap();
         make_executable(&script);
         let mut t = TesseractCli::new(script);
         t.max_output = 1024;
@@ -869,7 +994,11 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let script = dir.join("tesseract-err-flood");
         // (below MAX_STDERR, past which the child is stopped: `an_stderr_flood_is_killed_while_the_child_runs`)
-        std::fs::write(&script, "#!/bin/sh\nhead -c 200000 /dev/zero | tr '\\0' 'e' >&2\necho flooded away\n").unwrap();
+        std::fs::write(
+            &script,
+            "#!/bin/sh\nif [ \"$1\" = --list-langs ]; then printf 'eng\\n'; else head -c 200000 /dev/zero | tr '\\0' 'e' >&2; echo flooded away; fi\n",
+        )
+        .unwrap();
         make_executable(&script);
         let mut t = TesseractCli::new(script);
         t.timeout = Duration::from_secs(10);
@@ -894,7 +1023,7 @@ mod tests {
         let png = encode_png(&blot(8, 8, 0, 0, 4, 4)).unwrap();
         std::fs::write(dir.join("page.png"), png).unwrap();
         let png_arg = dir.join("page.png").to_string_lossy().into_owned();
-        let tsv = t.run(&[png_arg.as_str(), "stdout", "-l", "eng", "tsv"], t.timeout, t.max_output).unwrap();
+        let (tsv, _) = t.run_capture(&[png_arg.as_str(), "stdout", "-l", "eng", "tsv"], t.timeout, t.max_output).unwrap();
         for (why, name) in [("the child's temp dir", "TMP="), ("temp", "TEMP="), ("lookup path", "PATH=")] {
             assert!(tsv.contains(name), "{why} must be passed: {tsv}");
         }
@@ -918,7 +1047,7 @@ $n = [PdfCraftOcrProbe.Console]::GetConsoleProcessList($ids, 256)
 "$([PdfCraftOcrProbe.Console]::GetConsoleWindow()) $($ids[0..($n-1)] -join ',')""#;
         let root = std::env::var_os("SystemRoot").map_or_else(|| PathBuf::from(r"C:\Windows"), PathBuf::from);
         let t = TesseractCli::new(root.join(r"System32\WindowsPowerShell\v1.0\powershell.exe"));
-        let text = t.run(&["-NoProfile", "-NonInteractive", "-Command", PROBE], t.timeout, t.max_output).unwrap();
+        let (text, _) = t.run_capture(&["-NoProfile", "-NonInteractive", "-Command", PROBE], t.timeout, t.max_output).unwrap();
         let (window, attached) = text.trim().split_once(' ').unwrap();
         assert_eq!(window, "0", "the program has a console window: {text}");
         let attached: Vec<u32> = attached.split(',').map(|id| id.parse().unwrap()).collect();

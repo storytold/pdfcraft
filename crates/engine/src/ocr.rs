@@ -15,7 +15,7 @@ use pdfcraft_render::text::TextFilter;
 use pdfcraft_render::{PageInfo, PageRenderer, RenderConfig, RenderRequest, RequestKind};
 
 pub use pdfcraft_ocr::{
-    ConfidenceBand, DETECTION_MODEL, LANGUAGES, Line, MergeStrategy, Models, Ocr, OcrError, OcrImage, PlacedWord, RECOGNITION_MODEL, Recognizer,
+    ConfidenceBand, DETECTION_MODEL, Line, MergeStrategy, Models, Ocr, OcrError, OcrImage, PlacedWord, RECOGNITION_MODEL, Recognizer,
     StrategyOutcome, Word, band_for, is_suspect, lines_from_json, low_confidence,
 };
 
@@ -23,6 +23,28 @@ use crate::{DocId, Edit, EditError, Session};
 
 pub mod dictionary;
 pub(crate) mod layer;
+
+/// Languages offered by PdfCraft. The built-in recognizer still advertises English only;
+/// Russian and mixed Russian/English need the corresponding installed Tesseract data.
+pub const LANGUAGES: &[(&str, &str)] = &[("en", "English"), ("ru", "Russian"), ("en+ru", "Russian and English")];
+
+/// Whether this language needs Tesseract rather than the Latin-only built-in model.
+pub fn requires_tesseract(language: &str) -> bool {
+    matches!(language, "ru" | "en+ru")
+}
+
+/// The default for a language when a caller has not explicitly selected an engine.
+pub fn default_engine_for_language(language: &str) -> EngineChoice {
+    if requires_tesseract(language) { EngineChoice::Auto } else { EngineChoice::Ocrs }
+}
+
+fn validate_language(language: &str) -> Result<(), String> {
+    if LANGUAGES.iter().any(|(code, _)| *code == language) {
+        Ok(())
+    } else {
+        Err(format!("unsupported OCR language {language:?}; choose en, ru or en+ru"))
+    }
+}
 
 /// Bound recognition/review inputs before cloning or planning glyphs.
 pub fn validate_ocr_words<'a>(words: impl IntoIterator<Item = &'a PlacedWord>) -> Result<usize, String> {
@@ -108,7 +130,7 @@ impl OutputMode {
 pub struct OcrSettings {
     /// Resolution pages are rendered at for recognition (Acrobat's "Downsample to" choices).
     pub dpi: f32,
-    /// Language code from [`LANGUAGES`] (the models read the Latin alphabet, whatever this says).
+    /// Language code from [`LANGUAGES`]; Russian needs Tesseract's installed language data.
     pub language: String,
     /// Leave pages that already have text alone (Acrobat reports "page contains renderable
     /// text" and skips them). When `false`, such pages are read too (a picture on a page that
@@ -275,14 +297,14 @@ fn ocrs_loaded() -> bool {
     ENGINES.lock().unwrap_or_else(|e| e.into_inner()).as_ref().is_some_and(|c| c.ocrs.is_some())
 }
 
-/// How long a negative engine probe (no program there) is remembered. A short TTL, not
-/// forever: a tesseract installed while the app runs is found by the next job, without a
-/// restart. An engine that was found is remembered for the session.
+/// How long an engine probe is remembered. A short TTL lets installed programs and
+/// language data change while the app runs, without a restart.
 #[cfg(not(target_arch = "wasm32"))]
 const NEGATIVE_TTL: Duration = Duration::from_secs(30);
 
 /// The remembered Tesseract probe: the configured location it answers for, the engine it
-/// found (`None` for a probe that failed), and when that probe happened.
+/// found (`None` for a probe that failed), and when that probe happened. Positive answers
+/// expire too, so installing language data is reflected without restarting the editor.
 #[cfg(not(target_arch = "wasm32"))]
 struct CachedTesseract {
     key: Option<String>,
@@ -290,7 +312,7 @@ struct CachedTesseract {
     at: Instant,
 }
 
-/// Whether a probe result still counts: a found engine for the session, a failed probe until
+/// Whether a model-availability result still counts: found models for the session, missing ones until
 /// [`NEGATIVE_TTL`] passes (split out so tests can pass the clock).
 #[cfg(not(target_arch = "wasm32"))]
 fn probe_fresh(found: bool, at: Instant, now: Instant) -> bool {
@@ -306,8 +328,8 @@ static TESSERACT_PROBE: Mutex<Option<CachedTesseract>> = Mutex::new(None);
 #[cfg(not(target_arch = "wasm32"))]
 static PROBING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-/// The Tesseract engine: found once (it answers `--list-langs` through a process) and then
-/// remembered, per configured path; a failed probe is retried after [`NEGATIVE_TTL`]. No
+/// The Tesseract engine: it answers `--list-langs` through a process, then is remembered per
+/// configured path for [`NEGATIVE_TTL`], including its installed language data. No
 /// static mutex is held while the discovery process runs: the cache is read under the lock,
 /// released for the probe, and the result is written back when it arrives (concurrent probes
 /// of the same location may both run; the last write wins and both answers are valid). A
@@ -343,9 +365,9 @@ enum Probe {
 /// What the cache holds for a location.
 #[cfg(not(target_arch = "wasm32"))]
 enum Cached {
-    /// A usable answer (see [`probe_fresh`]).
+    /// An answer younger than [`NEGATIVE_TTL`].
     Fresh(Option<Arc<dyn Recognizer>>),
-    /// A failed probe older than [`NEGATIVE_TTL`]: still the best known answer, but due again.
+    /// A probe older than [`NEGATIVE_TTL`]: still the best known answer, but due again.
     Stale(Option<Arc<dyn Recognizer>>),
     /// Nothing for this location.
     Missing,
@@ -400,7 +422,7 @@ fn cached_tesseract(configured: Option<&str>) -> Cached {
 fn cache_lookup(slot: Option<&CachedTesseract>, configured: Option<&str>, now: Instant) -> Cached {
     match slot {
         Some(c) if c.key.as_deref() == configured => {
-            if probe_fresh(c.found.is_some(), c.at, now) {
+            if now.duration_since(c.at) < NEGATIVE_TTL {
                 Cached::Fresh(c.found.clone())
             } else {
                 Cached::Stale(c.found.clone())
@@ -410,7 +432,7 @@ fn cache_lookup(slot: Option<&CachedTesseract>, configured: Option<&str>, now: I
     }
 }
 
-/// Whether the ocrs models are installed, remembered like the Tesseract probe (found: for the
+/// Whether the ocrs models are installed, remembered separately (found: for the
 /// session; missing: for [`NEGATIVE_TTL`]), so per-frame UI checks do not search the disk.
 #[cfg(not(target_arch = "wasm32"))]
 fn models_installed_cached() -> bool {
@@ -536,6 +558,14 @@ fn configured_tesseract(settings: &OcrSettings) -> Option<String> {
 /// asks for. "Automatic" is an ensemble when both engines are available; a named engine that
 /// cannot start fails with its cause named.
 pub fn recognizers(settings: &OcrSettings) -> Result<Recognizers, String> {
+    // The UI/tool catalog is narrower than Tesseract's long-standing library API. An
+    // explicitly selected Tesseract may still read any of its allow-listed languages.
+    if settings.engine != EngineChoice::Tesseract {
+        validate_language(&settings.language)?;
+    }
+    if requires_tesseract(&settings.language) && settings.engine == EngineChoice::Ocrs {
+        return Err(built_in_language_error());
+    }
     // The Tesseract probe (a `--list-langs` process) runs before any static mutex is taken, so
     // recognition on other threads is never blocked behind someone's discovery. A job that
     // names its engines never starts it: only Tesseract and Automatic read anything from it,
@@ -543,6 +573,11 @@ pub fn recognizers(settings: &OcrSettings) -> Result<Recognizers, String> {
     let configured = configured_tesseract(settings);
     let tesseract =
         if matches!(settings.engine, EngineChoice::Tesseract | EngineChoice::Auto) { tesseract_engine(configured.as_deref()) } else { None };
+    if requires_tesseract(&settings.language) || settings.engine == EngineChoice::Tesseract {
+        // The Latin-only reading cannot contribute to a Cyrillic ensemble: even a high
+        // confidence Latin look-alike is the wrong text. Use the capable engine alone.
+        return tesseract_recognizers(&settings.language, tesseract);
+    }
     let mut slot = ENGINES.lock().unwrap_or_else(|e| e.into_inner());
     let cache = slot.get_or_insert_with(|| EngineCache { ocrs: None });
     if cache.ocrs.is_none() {
@@ -552,13 +587,46 @@ pub fn recognizers(settings: &OcrSettings) -> Result<Recognizers, String> {
     let ocrs = cache.ocrs.clone();
     match settings.engine {
         EngineChoice::Ocrs => Ok(Recognizers { primary: ocrs.ok_or_else(models_missing)?, secondary: None }),
-        EngineChoice::Tesseract => Ok(Recognizers { primary: tesseract.ok_or_else(tesseract_unavailable)?, secondary: None }),
+        EngineChoice::Tesseract => tesseract_recognizers(&settings.language, tesseract),
         EngineChoice::Auto => match (ocrs, tesseract) {
             (Some(p), s) => Ok(Recognizers { primary: p, secondary: s }),
             (None, Some(p)) => Ok(Recognizers { primary: p, secondary: None }),
             (None, None) => Err(models_missing()),
         },
     }
+}
+
+fn built_in_language_error() -> String {
+    "the built-in OCR engine reads only English; choose Automatic or Tesseract for Russian".into()
+}
+
+fn tesseract_recognizers(language: &str, engine: Option<Arc<dyn Recognizer>>) -> Result<Recognizers, String> {
+    let primary = engine.ok_or_else(tesseract_unavailable)?;
+    if let Some(why) = missing_language_data(primary.as_ref(), language) {
+        return Err(why);
+    }
+    Ok(Recognizers { primary, secondary: None })
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn missing_language_data(engine: &dyn Recognizer, language: &str) -> Option<String> {
+    pdfcraft_ocr::tesseract::missing_language_data(language, &engine.languages())
+}
+
+#[cfg(target_arch = "wasm32")]
+fn missing_language_data(_engine: &dyn Recognizer, _language: &str) -> Option<String> {
+    Some(tesseract_unavailable())
+}
+
+/// Current per-language readiness for CLI/status calls. Unlike a UI frame this may wait
+/// for the cached Tesseract probe, but it does not load the built-in recognition models.
+pub fn language_availability(language: &str) -> Result<(), String> {
+    validate_language(language)?;
+    if language == "en" && (ocrs_loaded() || Models::find().is_some()) {
+        return Ok(());
+    }
+    let configured = configured_tesseract(&OcrSettings::default());
+    tesseract_recognizers(language, tesseract_engine(configured.as_deref())).map(|_| ())
 }
 
 /// Why Tesseract cannot run, named for the user.
@@ -595,7 +663,7 @@ pub fn available() -> bool {
 /// for library callers, and [`recognizers`] validates it on its own).
 ///
 /// Called on the UI thread every frame, so it never waits on a process: the answers are
-/// cached ([`NEGATIVE_TTL`] for a missing engine, refreshed in the background), and until the
+/// cached ([`NEGATIVE_TTL`], refreshed in the background), and until the
 /// first Tesseract probe lands the choice reads as "still checking" (see
 /// [`engine_probe_running`], to ask for another frame meanwhile).
 pub fn engine_unavailable_reason(engine: EngineChoice) -> Option<String> {
@@ -618,6 +686,33 @@ pub fn engine_unavailable_reason(engine: EngineChoice) -> Option<String> {
             (true, _) | (false, Ok(())) => None,
             (false, Err(why)) => Some(format!("{}; {why}", models_missing())),
         },
+    }
+}
+
+/// Readiness of an engine/language combination without blocking the UI thread. The
+/// background probe refreshes installed languages as well as executable availability.
+pub fn language_unavailable_reason(engine: EngineChoice, language: &str) -> Option<String> {
+    if let Err(why) = validate_language(language) {
+        return Some(why);
+    }
+    if requires_tesseract(language) && engine == EngineChoice::Ocrs {
+        return Some(built_in_language_error());
+    }
+    if !requires_tesseract(language) && engine != EngineChoice::Tesseract {
+        return engine_unavailable_reason(engine);
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let configured = configured_tesseract(&OcrSettings::default());
+        match tesseract_engine_now(configured.as_deref()) {
+            Probe::Known(Some(recognizer)) => missing_language_data(recognizer.as_ref(), language),
+            Probe::Known(None) => Some(tesseract_unavailable()),
+            Probe::Pending => Some(tesseract_checking()),
+        }
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        Some(tesseract_unavailable())
     }
 }
 
@@ -1403,6 +1498,55 @@ mod tests {
         assert_eq!(s.tesseract_path, None, "no configured tesseract path by default: the PATH decides");
     }
 
+    #[test]
+    fn russian_languages_require_a_capable_engine() {
+        assert_eq!(LANGUAGES.iter().map(|(code, _)| *code).collect::<Vec<_>>(), ["en", "ru", "en+ru"]);
+        assert_eq!(pdfcraft_ocr::LANGUAGES, &[("en", "English")], "the built-in model has not learned Cyrillic");
+        assert_eq!(default_engine_for_language("en"), EngineChoice::Ocrs);
+        for language in ["ru", "en+ru"] {
+            assert_eq!(default_engine_for_language(language), EngineChoice::Auto);
+            let settings = OcrSettings { language: language.into(), engine: EngineChoice::Ocrs, ..Default::default() };
+            let Err(why) = recognizers(&settings) else { panic!("a Latin model cannot read {language}") };
+            assert!(why.contains("only English"), "{why}");
+            assert_eq!(language_unavailable_reason(EngineChoice::Ocrs, language), Some(why));
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn russian_selection_uses_tesseract_alone_and_requires_each_pack() {
+        struct InstalledPacks(Vec<&'static str>);
+        impl Recognizer for InstalledPacks {
+            fn id(&self) -> &'static str {
+                "tesseract"
+            }
+            fn available(&self) -> bool {
+                true
+            }
+            fn languages(&self) -> Vec<(String, String)> {
+                self.0.iter().map(|code| (code.to_string(), code.to_string())).collect()
+            }
+            fn recognize(&self, _: &pdfcraft_ocr::OcrImage, _: &pdfcraft_ocr::RecognizeOptions) -> Result<Vec<pdfcraft_ocr::Line>, OcrError> {
+                Ok(Vec::new())
+            }
+        }
+        for language in ["ru", "en+ru"] {
+            let selected = tesseract_recognizers(language, Some(Arc::new(InstalledPacks(vec!["rus", "eng"])))).unwrap();
+            assert_eq!(selected.primary.id(), "tesseract");
+            assert!(selected.secondary.is_none(), "Latin look-alikes must not enter Cyrillic results");
+            let Err(why) = tesseract_recognizers(language, Some(Arc::new(InstalledPacks(vec!["eng"])))) else {
+                panic!("Russian data must be installed");
+            };
+            assert!(why.contains("rus"), "{why}");
+        }
+        let Err(why) = tesseract_recognizers("en+ru", Some(Arc::new(InstalledPacks(vec!["rus"])))) else {
+            panic!("mixed recognition needs English data too");
+        };
+        assert!(why.contains("eng"), "{why}");
+        let german = tesseract_recognizers("de", Some(Arc::new(InstalledPacks(vec!["deu"])))).unwrap();
+        assert_eq!(german.primary.id(), "tesseract", "explicit library callers keep existing Tesseract languages");
+    }
+
     /// A configured tesseract path that is not an absolute, existing, executable file makes
     /// the Tesseract choice unavailable — the explicit setting is never silently replaced by
     /// a PATH search (and this holds whatever this machine has installed).
@@ -1415,11 +1559,21 @@ mod tests {
         }
     }
 
-    /// A failed engine probe is remembered only for the negative TTL — a program installed
-    /// while the app runs is found by a later job, without a restart — while a found engine is
-    /// remembered for the session.
     #[test]
-    fn a_negative_probe_expires_a_found_engine_does_not() {
+    fn explicit_tesseract_library_languages_are_not_limited_to_the_ui_catalog() {
+        let settings = OcrSettings {
+            language: "de".into(),
+            engine: EngineChoice::Tesseract,
+            tesseract_path: Some("not/a/program".into()),
+            ..Default::default()
+        };
+        let Err(why) = recognizers(&settings) else { panic!("the configured program is invalid") };
+        assert!(why.contains("tesseract") && !why.contains("unsupported"), "the program, not the supported language, is unavailable: {why}");
+    }
+
+    /// Model presence is cheap to cache for the session; a missing installation is retried.
+    #[test]
+    fn a_negative_model_probe_expires_found_models_do_not() {
         let now = Instant::now();
         let old = now.checked_sub(Duration::from_secs(31)).unwrap();
         assert!(!probe_fresh(false, old, now), "past the TTL the probe is retried");
@@ -1439,7 +1593,7 @@ mod tests {
         assert_eq!(tesseract.program.as_deref(), Some("not/a/program"));
     }
 
-    /// What the interface sees of the cache: a fresh answer as is, an expired failed probe as
+    /// What the interface sees of the cache: a fresh answer as is, an expired probe as
     /// the best known answer (shown while it is retried, so the choice does not flicker), and
     /// nothing for a location nobody asked about.
     #[test]
@@ -1452,7 +1606,9 @@ mod tests {
         assert!(matches!(cache_lookup(Some(&failed(None, old)), None, now), Cached::Stale(None)));
         assert!(matches!(cache_lookup(Some(&failed(Some("/x"), now)), None, now), Cached::Missing), "another location is another question");
         let found = CachedTesseract { key: None, found: Some(Arc::new(Fake::new())), at: old };
-        assert!(matches!(cache_lookup(Some(&found), None, now), Cached::Fresh(Some(_))), "a found engine stays fresh");
+        assert!(matches!(cache_lookup(Some(&found), None, now), Cached::Stale(Some(_))), "installed packs can change while the app runs");
+        let found = CachedTesseract { at: now, ..found };
+        assert!(matches!(cache_lookup(Some(&found), None, now), Cached::Fresh(Some(_))));
     }
 
     /// Engine discovery never deadlocks or corrupts the cache: concurrent lookups with

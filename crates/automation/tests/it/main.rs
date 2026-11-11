@@ -15,6 +15,7 @@ mod hostile_args;
 mod list_selection;
 mod model_3d;
 mod model_render;
+mod ocr_languages;
 mod optimize_content_boundaries;
 mod portfolio_info;
 mod redact_after_stray_q_form;
