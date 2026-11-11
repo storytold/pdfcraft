@@ -150,11 +150,7 @@ fn apex(lo: V, hi: V, w: V, d: V) -> V {
 }
 
 /// Traversal state; `log` records every edge-count increment so a component can be rewound.
-///
-/// `edges`, `log` and `stack` are not charged to the element allowance: each triangle adds at
-/// most three edges, three log entries and one stack entry, and the triangle count is bounded
-/// by the face index array the caller has already charged. The allowance bounds them only to
-/// within that constant factor.
+/// Everything it holds is checked against [`Arrays::limit`] after each triangle.
 #[derive(Default)]
 struct Walk {
     pos: Vec<V>,
