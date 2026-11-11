@@ -9,6 +9,9 @@ use pdfcraft_cos::{DecodeBudget, Dict, Document, Object};
 use crate::text::ContentStream;
 use crate::{Content, EditError};
 
+mod clip;
+pub use clip::{CopiedObjects, copy_objects, paste_objects};
+
 pub const MAX_MOVE_OBJECTS: usize = 1_000;
 const MAX_PAGE_OBJECTS: usize = 10_000;
 const MAX_COORDINATE: f64 = 1e9;

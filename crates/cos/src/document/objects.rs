@@ -2,7 +2,8 @@ use std::collections::HashSet;
 
 use super::reader::find;
 use super::state::{
-    LENGTHS, LoadGuard, ObjStm, ObjectReader, ReadState, Slot, SourceIdentity, loaded_bytes, note_overlay_read, objstm_member, overlay_reads,
+    LENGTHS, LoadGuard, ObjStm, ObjectReader, ReadState, ScanLengths, Slot, SourceIdentity, loaded_bytes, loading, note_overlay_read, objstm_member,
+    overlay_reads,
 };
 use super::xref::{Revision, XrefEntry, XrefIndex};
 use super::{
@@ -88,6 +89,13 @@ impl Document {
 
     pub fn repair_log(&self) -> &[String] {
         &self.repair_log
+    }
+
+    /// Whether the file was rebuilt from its object headers because its last update has no `/Prev`
+    /// and so cut its page tree off the cross-reference chain (ISO 32000-2 §7.5.6, §7.5.8.2). The
+    /// renderer rebuilds such a file under the same conditions, so the two read the same objects.
+    pub fn rebuilt_unlinked_update(&self) -> bool {
+        self.unlinked_update
     }
 
     /// Objects of the file that could not be read, lowest number first, as lines such as
@@ -479,7 +487,14 @@ impl Document {
             let data = if *work == 0 { Cow::Borrowed(&[][..]) } else { undo(before, work)? };
             return pdfcraft_filters::decode_jbig2_within(&data, globals.as_deref().map(Vec::as_slice), columns, height, max, work).map_err(filter);
         }
-        let Some(p) = self.fax_params(s) else { return s.decoded_spending(max, work) };
+        let Some(p) = self.fax_params(s) else {
+            // The last filter gives the image's rows: rows without the tags of the PNG predictor
+            // they declare are read as they are (`pdfcraft_filters::decode_image_tolerant_within`).
+            return match height {
+                Some(rows) => s.decoded_image_rows_spending(max, rows, work),
+                None => s.decoded_spending(max, work),
+            };
+        };
         // As many rows as the image has: a /Rows below /Height would cut the picture short, and
         // rows past /Height aren't drawn.
         let p = pdfcraft_filters::CcittParams { rows: 0, ..p };
@@ -490,17 +505,6 @@ impl Document {
         let rows = u32::try_from(max / stride).unwrap_or(u32::MAX).min(height.unwrap_or(0));
         let data = undo(chain.split_last().map_or(&[][..], |(_, before)| before), work)?;
         pdfcraft_filters::decode_ccitt_within(&data, &p, rows, work).map_err(filter)
-    }
-
-    /// The `/JBIG2Globals` stream a JBIG2 image `s` names by reference in its last filter's
-    /// `/DecodeParms`: `None` for a stream whose last filter isn't `JBIG2Decode`, or one without
-    /// globals. Redaction finds with it the other images that share a redacted image's globals.
-    pub fn jbig2_globals_ref(&self, s: &Stream) -> Option<ObjRef> {
-        let chain = s.readable_filters().ok()?;
-        if !matches!(chain.last(), Some((pdfcraft_filters::Filter::Jbig2, _))) {
-            return None;
-        }
-        self.last_filter_parms(s).get(b"JBIG2Globals").and_then(Object::as_ref)
     }
 
     /// What the `/JBIG2Globals` stream of JBIG2 image `s` (in its last filter's `/DecodeParms`)
@@ -691,23 +695,7 @@ impl Document {
         match self.entries.lookup(num, &self.data) {
             None | Some(XrefEntry::Free { .. }) => Ok(Object::Null),
             Some(XrefEntry::InFile { offset, .. }) => {
-                let resolve = |r: ObjRef| {
-                    if self.overlay.contains_key(&r.num) {
-                        note_overlay_read();
-                    }
-                    // A length resolved through this document's edits counts as an edit read
-                    // on every reuse.
-                    if let Some((known, edits)) = LENGTHS.with(|m| m.borrow().get(&r).copied()) {
-                        if edits {
-                            note_overlay_read();
-                        }
-                        return known;
-                    }
-                    let edits_read = overlay_reads();
-                    let length = self.try_get_reference(r).ok().and_then(|o| o.as_int());
-                    LENGTHS.with(|m| m.borrow_mut().insert(r, (length, overlay_reads() != edits_read)));
-                    length
-                };
+                let resolve = |r: ObjRef| self.stream_length(r);
                 let off = offset as usize;
                 let at = |off: usize| match parse_indirect_shared(&self.data, off, &resolve, &self.endstreams) {
                     Ok((id, o)) if id.num == num => Some(self.decrypted(id, o)),
@@ -781,6 +769,29 @@ impl Document {
         Ok(stm)
     }
 
+    /// An indirect stream `/Length`, read through the loader's guard against cycles. Kept in
+    /// [`LENGTHS`] only during a load, which clears it when it ends: a scan of the file from
+    /// [`Self::objstm`] can come here without one.
+    fn stream_length(&self, r: ObjRef) -> Option<i64> {
+        if self.overlay.contains_key(&r.num) {
+            note_overlay_read();
+        }
+        let cached = loading();
+        // A length resolved through this document's edits counts as an edit read on every reuse.
+        if cached && let Some((known, edits)) = LENGTHS.with(|m| m.borrow().get(&r).copied()) {
+            if edits {
+                note_overlay_read();
+            }
+            return known;
+        }
+        let edits_read = overlay_reads();
+        let length = self.try_get_reference(r).ok().and_then(|o| o.as_int());
+        if cached {
+            LENGTHS.with(|m| m.borrow_mut().insert(r, (length, overlay_reads() != edits_read)));
+        }
+        length
+    }
+
     /// Last-resort lookup: scan the file for `num G obj`. What isn't there is remembered: each miss
     /// reads the whole file, and a file can refer to such an object from everywhere.
     fn scan_for(&self, num: u32) -> Option<(ObjRef, Object)> {
@@ -791,6 +802,8 @@ impl Document {
         super::tests::FILE_SCANS.with(|scans| scans.set(scans.get() + 1));
         let needle = format!("{num} ");
         let data = &self.data;
+        let budget = ScanLengths::enter();
+        let resolve = |r: ObjRef| if budget.take() { self.stream_length(r) } else { None };
         let mut found = None;
         let mut i = 0;
         while let Some(p) = find(data, needle.as_bytes(), i, data.len()) {
@@ -798,7 +811,11 @@ impl Document {
             if p > 0 && !is_whitespace(data[p - 1]) {
                 continue;
             }
-            if let Ok((id, o)) = parse_indirect_shared(data, p, &|_| None, &self.endstreams)
+            // An indirect `/Length` is resolved, as at the object's offset, or a stream that ends
+            // in a misspelt `endstream` is searched on into a later object's. A header that parses
+            // as far as the `/Length` starts with `num` itself, after white space. A budget shared
+            // with the scans this leads to bounds how often the file is read again ([`ScanLengths`]).
+            if let Ok((id, o)) = parse_indirect_shared(data, p, &resolve, &self.endstreams)
                 && id.num == num
             {
                 found = Some((id, o)); // keep the last (newest) definition
@@ -1051,7 +1068,7 @@ impl Document {
 /// The `/DecodeParms` entries the decoders read (ISO 32000-2 Tables 8, 11 and 13: the Flate and
 /// LZW predictors, CCITT, DCT's colour transform): numbers and flags a file may give by
 /// reference, which [`Dict::int`] doesn't follow.
-const DECODE_PARMS_KEYS: [&[u8]; 13] = [
+pub const DECODE_PARMS_KEYS: [&[u8]; 13] = [
     b"Predictor",
     b"Colors",
     b"BitsPerComponent",
