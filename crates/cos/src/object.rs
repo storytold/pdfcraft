@@ -747,6 +747,13 @@ mod tests {
     }
 
     #[test]
+    fn strict_decoding_is_bounded_by_the_callers_remaining_allowance() {
+        let stream = Stream::flate(Dict::new(), &vec![0u8; 1 << 20]);
+        assert!(matches!(stream.decoded_strict_within(1000), Err(CosError::Filter(_))));
+        assert_eq!(stream.decoded_strict_within(1 << 20).map(|v| v.len()).ok(), Some(1 << 20));
+    }
+
+    #[test]
     fn empty_filter_arrays_refuse_decoding_past_a_caller_limit() {
         let mut dict = Dict::new();
         dict.set(b"Filter".to_vec(), Object::Array(Vec::new()));
