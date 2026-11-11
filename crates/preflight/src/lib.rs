@@ -868,6 +868,22 @@ fn check_catalog_actions(doc: &Document, issue: &mut impl FnMut(&'static str, &'
     }
 }
 
+/// Whether something the page `page` paints with can paint transparently: a graphics state with
+/// a soft mask, a constant alpha (`/CA`, `/ca`) below 1 or a blend mode other than `Normal` or
+/// `Compatible`, or an image with a soft mask. `page` is a page dictionary with its inherited
+/// attributes filled in, as [`pdfcraft_model::pages`] lists it.
+///
+/// The search is the one PDF/A verification makes (ISO 32000-1 11.6.4.4 to 11.6.6): through the
+/// page's resources, the form XObjects, tiling patterns and Type 3 fonts they hold, and its
+/// annotations' appearance streams, within the same budgets, so a page that nests deeper than
+/// those reports what was found within them. A resource the page holds counts whether or not its
+/// content uses it. Unlike PDF/A, a transparency group on its own doesn't count: opaque content
+/// with normal blending looks the same inside one as without it, and many producers (Microsoft
+/// Word among them) give every page a group.
+pub fn page_uses_transparency(doc: &Document, page: &Dict) -> bool {
+    transparency::page_painting(doc, page, &mut transparency::Shared::default()).paints_transparently
+}
+
 fn check_transparency(
     doc: &Document,
     pages: &[pdfcraft_model::Page],
