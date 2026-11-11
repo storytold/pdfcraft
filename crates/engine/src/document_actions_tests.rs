@@ -158,7 +158,7 @@ fn will_print_runs_in_the_document_realm() {
 /// pointer and focus trigger, each appending `event.name` to `log`.
 fn triggers_form() -> Vec<u8> {
     let add =
-        |name: &str| format!("<< /S /JavaScript /JS (var l = getField\\('log'\\); l.value = l.value + '{name}:' + event.target.name + ';';) >>");
+        || "<< /S /JavaScript /JS (var l = getField\\('log'\\); l.value = l.value + event.name + ':' + event.target.name + ';';) >>".to_string();
     let objs = vec![
         "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 6 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 5 0 R >> >> >> >>".to_string(),
         "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>".into(),
@@ -167,11 +167,11 @@ fn triggers_form() -> Vec<u8> {
         "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),
         format!(
             "<< /Type /Annot /Subtype /Widget /FT /Tx /T (hot) /V () /Rect [20 200 180 220] /P 3 0 R /F 4 /AA << /E {} /X {} /D {} /U {} /Fo {} /Bl {} >> >>",
-            add("E"),
-            add("X"),
+            add(),
+            add(),
             "<< /S /JavaScript /JS (getField\\('log'\\).value += 'D;'; this.print\\(\\);) >>",
-            add("U"),
-            add("Fo"),
+            add(),
+            add(),
             "<< /S /JavaScript /JS (getField\\('log'\\).value += 'Bl;'; this.print\\(\\);) >>",
         ),
     ];

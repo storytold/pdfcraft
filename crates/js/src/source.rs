@@ -1,8 +1,9 @@
 //! `toSource()` on objects and arrays, which older forms use to keep state in a field or a
-//! global as text and `eval` it back (#269, ported from #344). Plain data only: strings,
-//! numbers, booleans, null, undefined, arrays and objects of them. Functions and cycles are
-//! refused, and so is a value past the depth, size or length bounds, rather than writing
-//! something that reads back as another value.
+//! global as text (#269, ported from #344). It writes a JavaScript literal of the value; scripts
+//! here can't `eval` it back, since strings never compile. Plain data only: strings, numbers,
+//! booleans, null, undefined, arrays and objects of them. Functions and cycles are refused, and
+//! so is a value past the depth, size or length bounds, rather than writing something that
+//! reads as another value.
 
 use super::host::{error, function, s, text};
 use super::{Context, JsArray, JsObject, JsResult, JsValue, NativeFunction, js_string};

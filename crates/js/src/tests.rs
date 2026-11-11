@@ -2703,18 +2703,21 @@ fn af_simple_calculate_bounds_selector_work_before_expansion() {
     assert!(out.error.as_deref().is_some_and(|e| e.contains("calculation field lookup exceeds")));
 }
 
-/// `toSource` writes plain state that `eval` reads back as the same value (#269, from #344).
+/// `toSource` writes plain state as a JavaScript literal of the same value (#269, from #344).
+/// Scripts here can't `eval` it back (strings never compile), so the exact text is checked.
 #[test]
-fn to_source_round_trips_plain_state() {
+fn to_source_writes_plain_state_as_a_literal() {
     let event = Event::doc("Console");
     let out = go(
         "var v = {tab: 2, name: 'a \"q\"\\n', on: true, none: null, list: ['qty', null, undefined, 1.5, [3]]}; \
-         var copy = eval(v.toSource()); \
-         [copy.tab, copy.name, copy.on, copy.none, copy.list.length, typeof copy.list[2], copy.list[3], copy.list[4][0], [1, 'x'].toSource()].join('|');",
+         [v.toSource(), [1, 'x'].toSource(), ({}).toSource()].join('|');",
         &event,
     );
     assert_eq!(out.error, None, "{out:?}");
-    assert_eq!(out.result.as_deref(), Some("2|a \"q\"\n|true||5|undefined|1.5|3|[1, \"x\"]"));
+    assert_eq!(
+        out.result.as_deref(),
+        Some(r#"({"tab":2, "name":"a \"q\"\n", "on":true, "none":null, "list":["qty", null, undefined, 1.5, [3]]})|[1, "x"]|({})"#)
+    );
     assert!(go("Object.keys({}).indexOf('toSource') < 0 && !({}).propertyIsEnumerable('toSource');", &event).result.as_deref() == Some("true"));
 }
 
