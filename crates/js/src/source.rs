@@ -66,6 +66,9 @@ impl Writer {
         if self.open.len() >= MAX_DEPTH {
             return Err(error("toSource: the value is nested too deeply"));
         }
+        if !o.is_array() && !plain(o, ctx) {
+            return Err(error("toSource: only plain objects, arrays, strings, numbers, booleans, null and undefined can be written"));
+        }
         self.open.push(o.clone());
         let out = if o.is_array() { self.array(o, ctx) } else { self.fields(o, ctx) };
         self.open.pop();
@@ -93,6 +96,10 @@ impl Writer {
                 PropertyKey::String(k) => k.to_std_string_escaped(),
                 PropertyKey::Index(i) => i.get().to_string(),
             };
+            // `"__proto__": v` in a literal sets the prototype rather than an own property.
+            if label == "__proto__" {
+                return Err(error("toSource: a property named __proto__ can't be written"));
+            }
             self.charge(label.len())?;
             let value = self.value(&o.get(key, ctx)?, ctx)?;
             items.push(format!("{}:{value}", quote(&label)));
@@ -106,6 +113,14 @@ impl Writer {
         self.bytes = self.bytes.checked_sub(n).ok_or_else(|| error("toSource: the result would be too long"))?;
         Ok(())
     }
+}
+
+/// Whether `o` is a plain object: an ordinary one whose prototype is `Object.prototype` (or
+/// none), so its own properties are all there is to it. A Date, a RegExp, a boxed value, a
+/// proxy or a class instance holds more than a literal of its properties would give back.
+fn plain(o: &JsObject, ctx: &Context) -> bool {
+    let object_prototype = ctx.intrinsics().constructors().object().prototype();
+    o.is_ordinary() && o.prototype().is_none_or(|p| p == object_prototype)
 }
 
 /// `text` as a double-quoted JavaScript string literal.

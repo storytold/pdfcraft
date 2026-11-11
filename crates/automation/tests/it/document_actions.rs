@@ -81,6 +81,9 @@ fn open_will_save_will_print_and_field_events_share_the_document_realm() {
     let printed = tool(&mut a, "doc_print", json!({ "doc": doc, "path": "printed.pdf" }));
     assert!(printed.get("will_print").is_none(), "nothing to report: {printed}");
     assert_eq!(log(&mut a, doc), "open1 Mouse Enter2 Blur save3 print4");
+    // A print with nowhere to go fails before Will Print runs.
+    assert!(a.call("doc_print", &json!({ "doc": doc })).is_err());
+    assert_eq!(log(&mut a, doc), "open1 Mouse Enter2 Blur save3 print4");
 
     // What Will Save changed is in the saved file.
     tool(&mut a, "js_enabled", json!({ "enabled": false }));

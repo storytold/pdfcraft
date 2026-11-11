@@ -524,7 +524,18 @@ impl PdfCraftApp {
         // click that brought this pane forward took the focus). It goes in first, as it came first.
         let (other_applied, stay) = self.apply_other_pane_edit(i);
         let modal = self.modal_open();
+        let generation = |app: &Self| app.views.get(i).and_then(|v| app.session.get(v.id)).map(|d| d.edit_generation());
+        let before = generation(self);
+        let queued = self.views.get(i).is_some_and(|v| v.pending_edit.is_some());
         let applied = self.apply_queued_edit(i) && other_applied;
+        // A click's Mouse Up waits on the edit it queued (a check box's toggle, a list's pick):
+        // when that was refused, the click did nothing and its Mouse Up doesn't run either.
+        if queued
+            && generation(self) == before
+            && let Some(view) = self.views.get_mut(i)
+        {
+            view.forms.triggers.retain(|(_, _, t)| *t != pdfcraft_engine::FieldTrigger::MouseUp);
+        }
         // After the queued edit: a value typed into the field the focus left has been taken (and
         // its change has run the field's exit) before the focus scripts run.
         self.run_focus_scripts(i);

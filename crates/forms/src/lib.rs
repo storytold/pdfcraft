@@ -24,7 +24,7 @@ mod calc_order;
 pub mod detect;
 mod scripting;
 pub mod table;
-pub use actions::{FieldAction, Trigger, field_action_chains, field_actions, set_field_actions, widget_script};
+pub use actions::{FieldAction, Trigger, field_action_chains, field_actions, set_field_actions, widget_scripts};
 pub use author::{
     BorderStyle, CheckStyle, FieldFont, FieldProps, Look, LookPatch, MIN_FIELD_SIDE, NewField, add_field, check_style, delete_field,
     delete_field_object, delete_widget, duplicate_field, look, redraw_field, redraw_fields, set_button_icon, set_button_icon_target, set_props,

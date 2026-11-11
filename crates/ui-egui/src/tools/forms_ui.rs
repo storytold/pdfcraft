@@ -578,6 +578,10 @@ pub(crate) fn page_input(
                 commit(view, form);
                 view.forms.focus = Some(open_focus(f, wi));
             }
+            // A combo box's click runs its Mouse Up JavaScript (#269).
+            if f.kind == FormFieldKind::Combo {
+                view.forms.triggers.push((f.name.clone(), wi, pdfcraft_engine::FieldTrigger::MouseUp));
+            }
         }
         FormFieldKind::List => {
             let Some(p) = ptr.within(xf.rect) else { return true };
@@ -623,6 +627,8 @@ pub(crate) fn page_input(
                     view.pending_edit = Some(list_pick_edit(form, f, picked));
                 }
             }
+            // A list box's click runs its Mouse Up JavaScript after the pick is stored (#269).
+            view.forms.triggers.push((f.name.clone(), wi, pdfcraft_engine::FieldTrigger::MouseUp));
         }
     }
     true

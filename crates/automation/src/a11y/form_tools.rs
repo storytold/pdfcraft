@@ -151,8 +151,8 @@ impl Automation {
             n => ToolError::InvalidArgs(format!("widget must be 1 to {n} for {name:?}")),
         })?;
         let id = doc.id;
-        let changed = self.session.field_trigger(id, name, widget, trigger).map_err(failed)?;
-        let out = self.session.take_js_output(id);
+        // Only this event's output: what opening or an earlier tool left waiting stays.
+        let (changed, out) = self.session.with_own_js_output(id, |s| s.field_trigger(id, name, widget, trigger)).map_err(failed)?;
         let mut result = js_output_json(&out);
         result["changed"] = json!(changed);
         Ok(result)

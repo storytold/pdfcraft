@@ -934,7 +934,8 @@ impl Session {
     /// pointer entered, left, pressed or released it, or it gained or lost the focus. Run that
     /// widget's JavaScript action for the trigger, if it has one, in the document's realm, with
     /// `event.type` "Field" and `event.name` "Mouse Enter", "Mouse Exit", "Mouse Down", "Mouse
-    /// Up", "Focus" or "Blur" (#269, ported from #344). What it changes is one undoable edit.
+    /// Up", "Focus" or "Blur" (#269, ported from #344), then those of the actions chained after
+    /// it (`/Next`). What each action changes is one undoable edit.
     /// Returns whether the document changed; what the script showed or asked for is in
     /// [`Session::take_js_output`]. Pointer and focus scripts run unasked, so they may not
     /// print, open Save As or show a panel; Mouse Down and Mouse Up come from a click and may.
@@ -952,7 +953,10 @@ impl Session {
         let Some(cos) = doc.editor.as_ref().map(|e| &e.cos) else { return Ok(false) };
         let field = doc.form.iter().find(|f| f.name == name).ok_or_else(|| EditError::Invalid(format!("there is no field named {name:?}")))?;
         let Some(w) = field.widgets.get(widget) else { return Ok(false) };
-        let Some(script) = pdfcraft_forms::widget_script(cos, w.obj, trigger) else { return Ok(false) };
+        let scripts = pdfcraft_forms::widget_scripts(cos, w.obj, trigger);
+        if scripts.is_empty() {
+            return Ok(false);
+        }
         let target_id = Some(field_object_id(field.obj));
         let event = match trigger {
             Trigger::OnFocus => "Focus",
@@ -960,18 +964,28 @@ impl Session {
             other => other.label(),
         };
         let before = doc.generation;
-        let o = self.run_javascript_job(id, &script, (Some(name), target_id), &[], Some(event), false)?;
         let mut out = JsOutput::default();
-        if matches!(trigger, Trigger::MouseUp | Trigger::MouseDown) {
-            out.append(JsOutput {
-                alerts: o.alerts,
-                console: o.console,
-                requests: o.requests,
-                errors: o.error.into_iter().chain(o.doc_errors.iter().cloned()).collect(),
-                doc_errors: o.doc_errors,
-            });
-        } else {
-            out.absorb(&o);
+        // Each action of a /Next chain runs on its own, as Acrobat runs them: one that fails
+        // doesn't stop the next.
+        for script in scripts {
+            let o = match self.run_javascript_job(id, &script, (Some(name), target_id), &[], Some(event), false) {
+                Ok(o) => o,
+                Err(e) => {
+                    out.errors.push(e.to_string());
+                    continue;
+                }
+            };
+            if matches!(trigger, Trigger::MouseUp | Trigger::MouseDown) {
+                out.append(JsOutput {
+                    alerts: o.alerts,
+                    console: o.console,
+                    requests: o.requests,
+                    errors: o.error.into_iter().chain(o.doc_errors.iter().cloned()).collect(),
+                    doc_errors: o.doc_errors,
+                });
+            } else {
+                out.absorb(&o);
+            }
         }
         let doc = self.doc_mut(id)?;
         doc.js_output.append(out);

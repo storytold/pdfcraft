@@ -287,3 +287,47 @@ fn a_check_box_mouse_up_reads_the_value_its_click_stored() {
     assert_eq!(log(&s, id), "up:Yes;up:Off;");
     assert!(note(&s), "hidden again");
 }
+
+/// A widget action's `/Next` chain runs too, each JavaScript action in order (depth first), past
+/// an action of another type at its head.
+#[test]
+fn a_widget_actions_next_chain_runs_each_script_in_order() {
+    use pdfcraft_forms::Trigger;
+    let js = |text: &str, next: &str| format!("<< /S /JavaScript /JS (getField\\('log'\\).value += '{text}';) {next} >>");
+    let chain = format!("<< /S /URI /URI (https://example.com/) /Next [{} {}] >>", js("a;", &format!("/Next {}", js("b;", ""))), js("c;", ""));
+    let objs = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 6 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 5 0 R >> >> >> >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 6 0 R] >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (log) /V () /Rect [20 250 180 270] /P 3 0 R /F 4 >>".into(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),
+        format!("<< /Type /Annot /Subtype /Widget /FT /Tx /T (hot) /V () /Rect [20 200 180 220] /P 3 0 R /F 4 /AA << /E {chain} >> >>"),
+    ];
+    let mut s = Session::new();
+    let id = s.open("chain.pdf", None, Arc::new(pdf_of(&objs)), None).unwrap();
+    assert!(s.field_trigger(id, "hot", 0, Trigger::MouseEnter).unwrap());
+    assert_eq!(log(&s, id), "a;b;c;");
+}
+
+/// `setAction` on a field that shares its name with another installs the script on that field,
+/// the one the script's object stands for, not the first of the name.
+#[test]
+fn set_action_installs_on_the_field_the_object_stands_for() {
+    let objs = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 6 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 5 0 R >> >> >> >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 6 0 R] >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (dup) /V () /Rect [20 250 180 270] /P 3 0 R /F 4 >>".into(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (dup) /V () /Rect [20 200 180 220] /P 3 0 R /F 4 >>".into(),
+    ];
+    let mut s = Session::new();
+    let id = s.open("dup.pdf", None, Arc::new(pdf_of(&objs)), None).unwrap();
+    let second = crate::js::field_object_id(pdfcraft_cos::ObjRef::new(6, 0));
+    let out =
+        s.run_javascript_answers_target(id, "event.target.setAction('Format', \"event.value = 'x';\");", Some("dup"), Some(second), &[]).unwrap();
+    assert_eq!(out.error, None, "{out:?}");
+    let cos = s.get(id).unwrap().editor.as_ref().unwrap().cos.clone();
+    let formats: Vec<(u32, bool)> = pdfcraft_forms::fields(&cos).iter().map(|f| (f.obj.num, f.actions.scripts.format.is_some())).collect();
+    assert_eq!(formats, [(4, false), (6, true)]);
+}

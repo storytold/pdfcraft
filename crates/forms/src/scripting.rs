@@ -219,7 +219,8 @@ fn set_action(doc: &mut Document, f: &Field, trigger: &str, script: &str) -> Res
         _ => None,
     };
     if let Some(event) = event {
-        return set_field_script(doc, &f.name, event, Some(script));
+        // The field the script's object stands for, even when another shares its name.
+        return set_script_of(doc, f, event, Some(script));
     }
     let key: &[u8] = match trigger {
         "MouseDown" => b"D",
@@ -569,6 +570,14 @@ pub fn document_action_scripts(doc: &Document, trigger: DocumentTrigger) -> Vec<
             cat.get(b"AA").map(|a| doc.resolve(a)).and_then(|a| a.as_dict().and_then(|d| d.get(key)).cloned())
         }
     };
+    chained_scripts(doc, first)
+}
+
+/// The JavaScript of action `first` and of the actions chained after it, in the order they run:
+/// the action, then its `/Next` actions depth first (ISO 32000-2 §12.6.2). Actions of other
+/// types are skipped; their `/Next` chains are still followed. Bounded: each object is read
+/// once and at most [`MAX_CHAINED_ACTIONS`] actions are visited.
+pub(crate) fn chained_scripts(doc: &Document, first: Option<Object>) -> Vec<String> {
     let mut budget = crate::script_budget();
     let mut seen: HashSet<u32> = HashSet::new();
     let mut pending: Vec<Object> = first.into_iter().collect();
@@ -660,7 +669,12 @@ pub fn set_document_script(doc: &mut Document, name: &str, js: Option<&str>) -> 
 /// (its widgets' `/A`). Calculated fields join the calculation order (`/CO`).
 pub fn set_field_script(doc: &mut Document, name: &str, event: &str, js: Option<&str>) -> Result<(), FormError> {
     let all = fields(doc);
-    let f = all.iter().find(|f| f.name == name).ok_or_else(|| FormError::NoSuchField(name.into()))?.clone();
+    let f = all.iter().find(|f| f.name == name).ok_or_else(|| FormError::NoSuchField(name.into()))?;
+    set_script_of(doc, f, event, js)
+}
+
+/// [`set_field_script`] for the field `f` itself, which may share its name with another.
+fn set_script_of(doc: &mut Document, f: &Field, event: &str, js: Option<&str>) -> Result<(), FormError> {
     let action = |doc: &mut Document, js: &str| {
         let mut a = pdfcraft_cos::Dict::new();
         a.set(b"S".to_vec(), Object::name("JavaScript"));

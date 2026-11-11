@@ -2732,6 +2732,10 @@ fn to_source_refuses_cycles_functions_and_oversized_state() {
         ("var v = []; v.length = 1000000; v.toSource();", "too long"),
         ("var v = []; for (var i = 0; i < 100; i++) v = [v]; v.toSource();", "nested too deeply"),
         ("var s = new Array(4097).join('x'); var v = []; for (var i = 0; i < 300; i++) v.push(s); v.toSource();", "too long"),
+        ("({when: new Date(0)}).toSource();", "only plain objects"),
+        ("[/x/].toSource();", "only plain objects"),
+        ("function C() { this.a = 1; } new C().toSource();", "only plain objects"),
+        ("var v = JSON.parse('{\"__proto__\": 1}'); v.toSource();", "__proto__"),
     ] {
         let out = go(script, &event);
         assert!(out.error.as_deref().is_some_and(|e| e.contains(expected)), "{script}: {out:?}");
