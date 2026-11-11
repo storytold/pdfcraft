@@ -57,39 +57,56 @@
   numbers and the delivery facts) on `b21b57b55` (that merge) on `80e99a2ed`
   (docs) on `afd28a2f9` (the merge of `92b965dba`) on `4f3e21245` (docs) on
   `a47329154` (docs(collab): the JWT crypto backend and the deny advisory);
-  **119 commits** not in `origin/main` (`git rev-list --count origin/main..HEAD`),
-  0 behind `d2916decb`, and this STATUS record is the next commit, so after it
-  the count is 120. The numbers the earlier briefs named — 85 commits, 9 behind,
+  **119 commits** not in `origin/main` (`git rev-list --count origin/main..HEAD`)
+  at that moment and 0 behind `d2916decb`. The STATUS record that carried those
+  numbers was committed as `ed8d11115` (docs only, `docs/collab/STATUS.md`,
+  +171/−60), so the count on the delivered head is **120**. The numbers the
+  earlier briefs named — 85 commits, 9 behind,
   5 ahead for `199076765`, then 86/11/6 at `0c57e2271`, 94/48/14 at
   `b3732c152`, 95/48/15 at `c26867e9c`, 110/48/30 at `f48ec4754`, 113/0 at
   `c1171d941`, 114/0 at `4f3e21245`, 116/0 at `80e99a2ed`, 117/0 at `b21b57b55`
   and 118/0 at `27438a646` — were right when they were measured; `origin/main`
   kept moving and each slice appended commits. Commits named below and in §4 by
   their pre-rebase hashes are mapped in the rebase sections of §4.
-- Delivery: PR #6622's `headRefOid` is **`84da974d9`**, and `git ls-remote fork
-  refs/heads/feature/realtime-collaboration` returns the same hash — the fork
-  and the PR carry this head, so the merge of `origin/main` is published, not
-  pending. `gh pr view 6622` reads `mergeable: MERGEABLE`,
-  `mergeStateStatus: UNSTABLE`, base `main`, not a draft, `reviewDecision`
-  empty, and one check — CodeRabbit `skipping` (`updatedAt` 2026-11-11
-  01:24:35Z). The `commits` field says 100 because GitHub pages it; the branch
-  is 119 commits over `origin/main`. The earlier header — head `80e99a2ed`,
-  `mergeable: false` / `"dirty"` — was true against `main`'s tip of that
-  moment (`ad3e6d4b8`, whose duplicate definition did not compile) and is
-  replaced by this line. **No workflow has run on `84da974d9`**: the five
-  workflow runs that appeared on `80e99a2ed` at `action_required` are not on
-  this head and the only check is CodeRabbit skipping, so the gate evidence is
-  the local sweep in §4, not a CI run, and approving the workflows stays the
-  maintainer's. The PR body was rewritten this pass (the text is
-  `pdfcraft/PR-DRAFT.md` from `## What` on) to describe this head and the
-  gates below. The docs commit that carries this record is **local**:
-  publishing it (a fast-forward to the branch) is the owner's, and until then
-  the fork and the PR stay at `84da974d9`.
+- Delivery, measured this pass on a clean tree: PR #6622's `headRefOid` is
+  **`ed8d11115`**, `git ls-remote fork refs/heads/feature/realtime-collaboration`
+  returns the same hash, and the local branch was at it (`git status
+  --porcelain` printed nothing) — the fork, the PR and the clone carried one
+  head, so **no commit was unpublished**. `ed8d11115` is `84da974d9` plus one
+  docs commit (`docs/collab/STATUS.md`, one file, +171/−60); its parent is that
+  merge, so the previous header's `84da974d9` is history rather than a second
+  head.
+  `gh pr view 6622` reads `mergeable: MERGEABLE`, `mergeStateStatus:
+  UNSTABLE`, base `main`, not a draft, `reviewDecision` empty, and the
+  `commits` field says 100 because GitHub pages the list. The head's only check
+  is CodeRabbit, `skipped`, started and completed **2026-11-11T03:34:25Z**
+  (`/commits/ed8d11115/check-runs` returns `total_count: 1`). Five workflow
+  runs do exist for the head — CI, FreeBSD, Windows ARM64, Nix and SonarCloud,
+  all created 03:34:19Z — but every one is `action_required` with `jobs: 0`:
+  nothing has run on `ed8d11115`, approving them stays the maintainer's, and
+  the gate evidence is the local sweep in §4, not a CI run. Position against
+  `main`: merge-base `d2916decb`, **120 commits ahead and 1 behind**
+  (`git rev-list --count HEAD..origin/main`); `origin/main` moved one tick to
+  **`41d959d94`** ("M7: replacing a line keeps both of two dropped quote
+  copies' line move and spacing (edit.text-edit) (#2961)") after the head was
+  cut. That is recorded as a fact, not acted on: the PR is still `MERGEABLE`,
+  so this pass did not re-merge `origin/main` and did not re-run the gates.
+  `git diff --shortstat d2916decb HEAD` — and `git diff --shortstat
+  origin/main...HEAD`, the behind tick touching none of the changed files —
+  is **108 files changed, 43354 insertions(+), 209 deletions(-)**. The PR body
+  (from `pdfcraft/PR-DRAFT.md`, `## What` on, rewritten last pass) names
+  `84da974d9` as the most recent merge, which is still right; it does not name
+  this docs head. The earlier header — head `80e99a2ed`, `mergeable: false` /
+  `"dirty"`, and the docs commit "local" — was true for its pass and is
+  replaced by this line. This record is the docs commit made after the
+  measurement above (one file, docs only); the fork and the PR stay at
+  `ed8d11115` until the owner pushes it, as with every docs pass before.
 - State: implemented behind the `collab` feature (off by default). **`CI=1
   cargo xtask ci` exits 0 on `84da974d9`** — all 10 steps, 156 test targets,
   **10027 passed, 0 failed, 18 ignored** (§4, "The merge of `origin/main`
-  `d2916decb`"). The totals equal those of `b21b57b55`, which is what main's
-  three commits predict: #6933/#6934 delete the duplicate definition and
+  `d2916decb`"); `ed8d11115` is that tree plus one docs file, and the gates
+  were not re-run on it. The totals equal those of `b21b57b55`, which is what
+  main's three commits predict: #6933/#6934 delete the duplicate definition and
   `d2916decb` edits a packaging script, and none of them adds a test. The sweep
   needs `CRAFT_I18N_DIR` (a craft-i18n worktree at `575cfdef`, the revision
   `craft-i18n.rev` pins) and `CRAFT_FONTS_DIR` (`b076417b`): without the
@@ -127,13 +144,13 @@ several `/NM`, per-line quads, the caret (`5bad54c40`, §4) — the conflict-res
   two structural operations over a page's whole link list (`2b61ff80f`, §4),
   and the whole-document link actions as `links.add_many`/`links.remove_many`
   over several pages at once (`b86c4963a`, §4). The fork carries all of it up
-  to `84da974d9`, including the earlier rebase onto
+  to `ed8d11115`, including the earlier rebase onto
   `origin/main` `ba28458ad` (§4, first table) and the merges of `debb826f2`,
   `92b965dba`, `ad3e6d4b8` and `d2916decb`. Nothing in the feature waits for a
-  push any more; the docs commits written on top of the merge are the owner's to
-  publish (see "Delivery"). The one presence item still outside this repository is the
-  host page's `pdfcraft:presence` payload: `craft-web-host` must gain optional
-  `page`/`selection` on its `Participant` (§5 p.4, §4).
+  push any more; the docs commit on top of the merge went out with the branch
+  (`ed8d11115`, see "Delivery"). The one presence item still outside this
+  repository is the host page's `pdfcraft:presence` payload: `craft-web-host`
+  must gain optional `page`/`selection` on its `Participant` (§5 p.4, §4).
 - Known gaps before production are listed in §5, the plan in §6. This pass
   adds no feature work: it merges the upstream tip (the second merge in
   two passes: `ad3e6d4b8` and then `d2916decb`), re-measures the whole sweep on
@@ -3911,12 +3928,18 @@ selections are done (§4, `b4e9179d8`); what remains of them is listed in §5 p.
 
 ### 6.6 Cleanup and submission
 
-- **Current delivery state (2026-11-11).** Head `84da974d9` is the fork's
-  branch tip and the PR's `headRefOid`; the local branch is one docs commit
-  above it (the record carrying this bullet);
-  `mergeable: MERGEABLE`, `mergeStateStatus: UNSTABLE`, and no workflow has run
-  on it (§4, "The merge of `origin/main` `d2916decb`"). The "not pushed" notes
-  in the older bullets below describe their own pass — they are history, not the
+- **Current delivery state (2026-11-11).** Head `ed8d11115` — the docs record
+  this bullet revises — is the fork's branch tip, the PR's `headRefOid` and the
+  local HEAD as measured (tree clean, `git ls-remote fork` = `git rev-parse
+  HEAD` = `ed8d11115`, so zero commits were unpublished). `mergeable:
+  MERGEABLE`, `mergeStateStatus: UNSTABLE`, `reviewDecision` empty; the only
+  check is CodeRabbit `skipped` at 03:34:25Z, and the five workflow runs on the
+  head are all `action_required` with zero jobs, so nothing has run there. The
+  branch is 120 commits over merge-base `d2916decb` (108 files, +43354/−209)
+  and 1 behind `origin/main` (`41d959d94`, #2961) — recorded, not re-merged,
+  and the gates were not re-run. This revision is one docs file, local until
+  the owner pushes it, as in every docs pass; the "not pushed" notes in the
+  older bullets below describe their own pass — they are history, not the
   current state.
 - **The `deny` step's advisory is closed** (`f31f00449`, 2026-11-10, not
   pushed): `crypto-bigint` 0.5.5 (RUSTSEC-2026-0387) is out of the graph —
