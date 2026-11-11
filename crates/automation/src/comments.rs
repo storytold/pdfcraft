@@ -5,7 +5,9 @@
 
 use std::collections::HashMap;
 
-use pdfcraft_engine::{Edit, LineEnding, Markup, NewAnnotation, NoteIcon, ReviewState, Rgb, Shape, StampGroup, StampKind, Style, SummarySort};
+use pdfcraft_engine::{
+    BorderShape, Edit, LineEnding, Markup, NewAnnotation, NoteIcon, ReviewState, Rgb, Shape, StampGroup, StampKind, Style, SummarySort,
+};
 use pdfcraft_render::{Annotation, PageInfo};
 use serde_json::{Value, json};
 
@@ -177,7 +179,21 @@ impl Automation {
         let doc = self.doc(a)?;
         let only = a.opt_int("page")?.map(|p| (p.max(1) - 1) as usize);
         let all = self.comments(a)?;
+        // A group (`/RT /Group`, ISO 32000-2 §12.5.6.2) lists as its primary, with the primary's
+        // attributes: the subordinates are neither comments nor replies, only its `group`.
+        let mut members: HashMap<(usize, usize), Vec<&Annotation>> = HashMap::new();
+        for (m, p) in all.iter().zip(pdfcraft_render::group_primaries(&all)) {
+            if let Some(p) = p.and_then(|p| all.get(p)) {
+                members.entry((p.page, p.index)).or_default().push(m);
+            }
+        }
         let view = |c: &Annotation| -> Value {
+            let group: Vec<Value> = members
+                .get(&(c.page, c.index))
+                .into_iter()
+                .flatten()
+                .map(|m| json!({ "id": m.name, "page": m.page + 1, "index": m.index + 1, "type": m.subtype }))
+                .collect();
             let mut v = json!({
                 "id": c.name,
                 "page": c.page + 1,
@@ -189,9 +205,31 @@ impl Automation {
                 "modified": c.modified,
                 "rect": crate::view_rect(&doc.info, c.page, c.shown_rect(doc.info.pages.get(c.page).map_or(0, |p| p.rotation))),
                 "color": c.color.map(hex),
+                "group": group,
+                // Unchanged on a page the viewer could not read, as `rect` is.
+                "popup": c.popup.map(|w| json!({ "rect": crate::view_rect(&doc.info, c.page, w.rect), "open": w.open })),
             });
-            // A line's ends, or the corners of connected lines, a polygon or a cloud, as
-            // comment_edit's `points` takes them.
+            // A text box's or typed text's oval or circle (a rectangle is not reported).
+            if c.subtype == "FreeText"
+                && let Some(shape) = doc.comment_props(c.page, c.index).and_then(|p| p.border_shape).filter(|s| *s != BorderShape::Rectangle)
+            {
+                v["border_shape"] = json!(shape.name().to_ascii_lowercase());
+            }
+            // How opaque it is drawn: as a whole, or its fill and text each at their own.
+            // Not for replies, which are drawn with the comment they answer.
+            if !c.is_reply()
+                && let Some(p) = doc.comment_props(c.page, c.index)
+            {
+                v["opacity"] = json!(p.opacity);
+                if let Some(f) = p.fill_opacity {
+                    v["fill_opacity"] = json!(f);
+                }
+                if let Some(t) = p.text_opacity {
+                    v["text_opacity"] = json!(t);
+                }
+            }
+            // A line's ends, the corners of connected lines, a polygon or a cloud, or a callout's
+            // arrow point and knee, as comment_edit's `points` takes them.
             // Unchanged on a page the viewer could not read, as `rect` is.
             if !c.points.is_empty() {
                 let round = |v: f32| (v * 100.0).round() / 100.0;
@@ -199,28 +237,36 @@ impl Automation {
                 v["points"] =
                     json!(c.points.iter().map(|q| page.map_or([q[0], q[1]], |p| p.user_to_view(q[0], q[1])).map(round)).collect::<Vec<_>>());
             }
+            // A callout's text box, as comment_edit's `rect` takes it (`rect` also holds the line).
+            if let Some(tb) = c.text_box {
+                v["text_box"] = json!(crate::view_rect(&doc.info, c.page, tb));
+            }
             v
         };
         // Every reply under the comment its thread starts from, at any depth, in document order:
         // a reply to a reply keeps its `/IRT` on the direct parent, so following one level would
-        // drop it. Parents are found by reference, as `/NM` need not be unique. A status or
-        // checkmark belongs to the annotation its `/IRT` names (ISO 32000-2 §12.5.6.2), as in the
-        // Comments panel: one set on a reply is not the comment's.
+        // drop it. Parents are found by reference, as `/NM` need not be unique. Status and
+        // checkmark replies are read through `review` instead. A group subordinate is in no
+        // thread, and a reply to one is the group's, its primary's.
         let tops = pdfcraft_render::thread_tops(&all);
         let mut threads: HashMap<(usize, usize), Vec<&Annotation>> = HashMap::new();
-        for r in &all {
+        for r in all.iter().filter(|r| r.state.is_none() && !r.is_group_member()) {
             let Some(&top) = tops.get(&(r.page, r.index)) else { continue };
-            let key = match r.parent {
-                Some(parent) if r.state.is_some() => parent,
-                _ => top,
-            };
-            threads.entry(key).or_default().push(r);
+            threads.entry(top).or_default().push(r);
         }
-        // An annotation's review status and checkmark: the latest of each set on it.
+        // An annotation's review states. A state reply's `/IRT` refers to the annotation whose
+        // state it sets, and a reviewer's later change replies to their previous one (ISO 32000-2
+        // §12.5.6.3), so a status on a reply is that reply's, as in the Comments panel. `status`
+        // is the latest set by anyone; `statuses` has each reviewer's latest (a state is "for the
+        // specified user"). Checkmarks are each reviewer's own too: `marked_by` names who has one
+        // on, and `marked` whether anyone has.
+        let review = pdfcraft_render::ReviewStates::new(&all);
         let states = |c: &Annotation, v: &mut Value| {
-            let set = threads.get(&(c.page, c.index)).map(Vec::as_slice).unwrap_or(&[]);
-            v["status"] = json!(set.iter().rev().filter(|r| !r.is_mark()).find_map(|r| r.state.clone()));
-            v["marked"] = json!(set.iter().rev().find(|r| r.is_mark()).is_some_and(|r| r.state.as_deref() == Some("Marked")));
+            v["status"] = json!(review.latest_status(c));
+            v["statuses"] = json!(review.statuses(c).iter().map(|(who, state)| json!({ "author": who, "status": state })).collect::<Vec<_>>());
+            let marked_by = review.marked(c);
+            v["marked"] = json!(!marked_by.is_empty());
+            v["marked_by"] = json!(marked_by);
         };
         let roots: Vec<Value> = all
             .iter()
@@ -232,7 +278,6 @@ impl Automation {
                 let thread = threads.get(&(c.page, c.index)).map(Vec::as_slice).unwrap_or(&[]);
                 v["replies"] = thread
                     .iter()
-                    .filter(|r| r.state.is_none())
                     .map(|r| {
                         let mut reply = view(r);
                         states(r, &mut reply);
@@ -253,6 +298,12 @@ impl Automation {
         if endings.is_some() && !matches!(kind, "line" | "arrow" | "polyline" | "callout") {
             return Err(ToolError::InvalidArgs("endings apply to a line, arrow, polyline or callout".into()));
         }
+        // Shift while drawing: each end or corner held level or plumb with the one before.
+        let ortho = a.opt_bool("ortho")?.unwrap_or(false);
+        if ortho && !matches!(kind, "line" | "arrow" | "polygon" | "cloud" | "polyline") {
+            return Err(ToolError::InvalidArgs("ortho applies to a line, arrow, polygon, cloud or polyline".into()));
+        }
+        let held = |last: [f64; 2], p: [f64; 2]| if ortho { pdfcraft_engine::measure::snap::ortho(last, p) } else { p };
         let markup = match kind {
             "highlight" => Some(Markup::Highlight),
             "underline" => Some(Markup::Underline),
@@ -325,7 +376,8 @@ impl Automation {
                     Shape::TextBox { rect: rect_to_user(&info, a.need::<4>("rect", "a text box")?), font_size }
                 }
                 "line" | "arrow" => {
-                    let (f, t) = (a.need::<2>("from", "a line")?, a.need::<2>("to", "a line")?);
+                    let f = a.need::<2>("from", "a line")?;
+                    let t = held(f, a.need::<2>("to", "a line")?);
                     let [start, end] = ending_pair(kind, endings.as_deref())?;
                     Shape::Line { from: to_user(&info, f[0], f[1]), to: to_user(&info, t[0], t[1]), start, end }
                 }
@@ -352,10 +404,15 @@ impl Automation {
                 "polygon" | "cloud" | "polyline" => {
                     let wrong = || ToolError::InvalidArgs(format!("{kind} needs `points`: an array of [x, y] points"));
                     let pts = a.get("points").and_then(|p| p.as_array()).ok_or_else(wrong)?;
+                    let mut last = None;
                     let vertices = pts
                         .iter()
                         .map(|p| match p.as_array().map(|p| p.iter().map(|v| v.as_f64()).collect::<Vec<_>>()).as_deref() {
-                            Some([Some(x), Some(y)]) => Ok(to_user(&info, *x, *y)),
+                            Some([Some(x), Some(y)]) => {
+                                let p = last.map_or([*x, *y], |l| held(l, [*x, *y]));
+                                last = Some(p);
+                                Ok(to_user(&info, p[0], p[1]))
+                            }
                             _ => Err(wrong()),
                         })
                         .collect::<Result<Vec<_>>>()?;
@@ -373,18 +430,8 @@ impl Automation {
                     let point = to_user(&info, t[0], t[1]);
                     let knee = match a.nums::<2>("knee")? {
                         Some(k) => to_user(&info, k[0], k[1]),
-                        // Halfway between the point and the box, level with the box's middle.
-                        None => {
-                            let mid = (rect[1] + rect[3]) / 2.0;
-                            let side = if point[0] < rect[0] {
-                                rect[0]
-                            } else if point[0] > rect[2] {
-                                rect[2]
-                            } else {
-                                (rect[0] + rect[2]) / 2.0
-                            };
-                            [(point[0] + side) / 2.0, mid]
-                        }
+                        // Acrobat's: 12 pt out from the middle of the side facing the point.
+                        None => pdfcraft_engine::callout_knee(rect, point),
                     };
                     Shape::Callout {
                         rect,
@@ -425,8 +472,27 @@ impl Automation {
         if let Some(o) = a.opt_num("opacity")? {
             style.opacity = o.clamp(0.0, 1.0);
         }
+        // The fill's and a text box's text's own opacities (the line keeps `opacity`).
+        let (fill_opacity, text_opacity) = (a.opt_num("fill_opacity")?, a.opt_num("text_opacity")?);
+        let texts = matches!(shape, Shape::TextBox { .. } | Shape::Typewriter { .. } | Shape::Callout { .. });
+        if fill_opacity.is_some() && !(texts || matches!(shape, Shape::Rectangle { .. } | Shape::Oval { .. } | Shape::Polygon { .. })) {
+            return Err(ToolError::InvalidArgs(
+                "fill_opacity applies to a rectangle, oval, polygon, cloud, text box, typewriter text or callout".into(),
+            ));
+        }
+        if text_opacity.is_some() && !texts {
+            return Err(ToolError::InvalidArgs("text_opacity applies to a text box, typewriter text or callout".into()));
+        }
+        style.fill_opacity = fill_opacity.map(|o| o.clamp(0.0, 1.0));
+        style.text_opacity = text_opacity.map(|o| o.clamp(0.0, 1.0));
         if let Some(w) = a.opt_num("width")? {
             style.width = w.max(0.0);
+        }
+        if let Some(b) = border_shape(a)? {
+            if !matches!(shape, Shape::TextBox { .. } | Shape::Typewriter { .. }) {
+                return Err(ToolError::InvalidArgs("border_shape is for a text box or typewriter text".into()));
+            }
+            style.border_shape = b;
         }
         let contents = a.opt_str("contents")?.unwrap_or_default().to_string();
         let author = a.opt_str("author")?.unwrap_or(DEFAULT_AUTHOR).to_string();
@@ -438,8 +504,12 @@ impl Automation {
             if contents.trim().is_empty() {
                 return Err(ToolError::InvalidArgs("replace needs `contents`: the replacement text".into()));
             }
+            // `/C` is a group attribute, taken from the primary (ISO 32000-2 §12.5.6.2), so the
+            // caret carries the colour too. Only the colour: opacity and the rest are the
+            // caret's own.
+            let mut caret = Style::default_for(&Shape::Caret { rect: [0.0; 4] });
+            caret.color = style.color;
             let strike = style;
-            let caret = Style::default_for(&Shape::Caret { rect: [0.0; 4] });
             let mut out = self.apply(a, Edit::ReplaceText { page, quads, text: contents, author, strike, caret })?;
             out["comment"] = json!({ "page": page + 1, "type": "replace" });
             return Ok(out);
@@ -488,6 +558,7 @@ impl Automation {
     }
 
     pub(crate) fn fill_sign_add(&mut self, a: &Args) -> Result<Value> {
+        let border_shape = border_shape(a)?;
         use pdfcraft_engine::FillMark;
         let page = self.page(a)?;
         let info = self.doc(a)?.info.pages[page].clone();
@@ -515,6 +586,25 @@ impl Automation {
         if !(4.0..=300.0).contains(&size) {
             return Err(ToolError::InvalidArgs("font_size must be 4–300 pt".into()));
         }
+        let requested_border = a.opt_num("border")?;
+        if requested_border.is_some() && !matches!(kind, "text" | "date") {
+            return Err(ToolError::InvalidArgs("border is only for type text or date".into()));
+        }
+        let border = requested_border.unwrap_or(0.0);
+        if !(0.0..=12.0).contains(&border) {
+            return Err(ToolError::InvalidArgs("border must be 0–12 pt".into()));
+        }
+        let border_color = a.opt_str("border_color")?.map(parse_color).transpose()?;
+        if border_color.is_some() && border <= 0.0 {
+            return Err(ToolError::InvalidArgs("border_color needs a border".into()));
+        }
+        if border_shape.is_some() && !matches!(kind, "text" | "date") {
+            return Err(ToolError::InvalidArgs("border_shape is only for type text or date".into()));
+        }
+        // Without a border an oval or a circle would grow the box around nothing drawn.
+        if border_shape.is_some_and(|s| s != BorderShape::Rectangle) && border <= 0.0 {
+            return Err(ToolError::InvalidArgs("border_shape needs a border".into()));
+        }
         if let Some(path) = a.opt_str("path")? {
             if !matches!(kind, "signature" | "initials") || a.opt_str("text")?.is_some() {
                 return Err(ToolError::InvalidArgs("path is only for an image signature or initials; pass either path or text".into()));
@@ -538,13 +628,16 @@ impl Automation {
             let edit = image.edit(page, &info, at, kind == "initials", &author).ok_or_else(|| ToolError::InvalidArgs("at must be finite".into()))?;
             return self.apply(a, edit);
         }
+        // A circle goes around the text, so its box is no wider than the text needs.
+        let min_width = if border_shape == Some(BorderShape::Circle) { 0.0 } else { 20.0 };
         let text_at = |t: &str| {
             let longest = t.lines().map(|line| pdfcraft_engine::annot_text::text_width(line, size)).fold(0.0, f64::max);
-            let w = (longest + 8.0).clamp(20.0, 600.0);
+            let w = (longest + 8.0).clamp(min_width, 600.0);
             let rows = pdfcraft_engine::annot_text::wrap(t, size, w - 4.0).len().max(1);
             let h = rows as f64 * size * 1.2 + 6.0;
-            let rect = pdfcraft_engine::text_box_at(i64::from(info.rotation), at, w, h).unwrap_or([at[0], at[1] - h, at[0] + w, at[1]]);
-            Shape::Typewriter { rect, font_size: size }
+            let [x0, y0, x1, y1] = pdfcraft_engine::text_box_at(i64::from(info.rotation), at, w, h).unwrap_or([at[0], at[1] - h, at[0] + w, at[1]]);
+            // A border goes around the box, so the text sits where it would without one.
+            Shape::Typewriter { rect: [x0 - border, y0 - border, x1 + border, y1 + border], font_size: size }
         };
         let (shape, contents) = match kind {
             "text" => {
@@ -590,6 +683,11 @@ impl Automation {
         if let Some(color) = requested_color {
             style.color = color;
         }
+        if matches!(shape, Shape::Typewriter { .. }) {
+            style.width = border;
+            style.border_color = border_color;
+            style.border_shape = border_shape.unwrap_or_default();
+        }
         self.apply(a, Edit::AddAnnotation(NewAnnotation { page, shape, style, contents, author }))
     }
 
@@ -612,6 +710,17 @@ impl Automation {
         let marked = a.opt_bool("marked")?.unwrap_or(true);
         let author = a.opt_str("author")?.unwrap_or(DEFAULT_AUTHOR).to_string();
         self.apply(a, Edit::MarkAnnotation { page, index, marked, author })
+    }
+
+    pub(crate) fn comment_popup(&mut self, a: &Args) -> Result<Value> {
+        let (page, index) = self.comment_target(a)?;
+        let info = self.doc(a)?.info.pages[page].clone();
+        let open = a.opt_bool("open")?;
+        let rect = a.nums::<4>("rect")?.map(|r| rect_to_user(&info, r));
+        if open.is_none() && rect.is_none() {
+            return Err(ToolError::InvalidArgs("nothing to change: pass open and/or rect".into()));
+        }
+        self.apply(a, Edit::SetAnnotationPopup { page, index, rect, open })
     }
 
     pub(crate) fn comment_lock(&mut self, a: &Args) -> Result<Value> {
@@ -656,6 +765,21 @@ impl Automation {
             let fill = if f.eq_ignore_ascii_case("none") { None } else { Some(parse_color(f)?) };
             edits.push(Edit::FillAnnotation { page, index, fill });
         }
+        if let Some(c) = a.opt_str("border_color")? {
+            let color = if c.eq_ignore_ascii_case("text") { None } else { Some(parse_color(c)?) };
+            edits.push(Edit::BorderColorAnnotation { page, index, color });
+        }
+        if let Some(shape) = border_shape(a)? {
+            edits.push(Edit::BorderShapeAnnotation { page, index, shape });
+        }
+        // After `opacity`, which sets the whole comment's.
+        let (fill_opacity, text_opacity) = (a.opt_num("fill_opacity")?, a.opt_num("text_opacity")?);
+        if fill_opacity.into_iter().chain(text_opacity).any(|o| !(0.0..=1.0).contains(&o)) {
+            return Err(ToolError::InvalidArgs("fill_opacity and text_opacity are 0–1".into()));
+        }
+        if fill_opacity.is_some() || text_opacity.is_some() {
+            edits.push(Edit::PartOpacity { page, index, fill: fill_opacity, text: text_opacity });
+        }
         if let Some(size) = a.opt_num("font_size")? {
             if !(1.0..=400.0).contains(&size) {
                 return Err(ToolError::InvalidArgs("font_size must be 1–400 pt".into()));
@@ -689,7 +813,7 @@ impl Automation {
         }
         if edits.is_empty() {
             return Err(ToolError::InvalidArgs(
-                "nothing to change: pass contents, color, opacity, width, fill, font_size, rect, move or points".into(),
+                "nothing to change: pass contents, color, opacity, fill_opacity, text_opacity, width, fill, border_color, border_shape, font_size, rect, move or points".into(),
             ));
         }
         let edit = if edits.len() == 1 { edits.remove(0) } else { Edit::Batch { label: "Edit comment".into(), edits } };
@@ -699,6 +823,49 @@ impl Automation {
     pub(crate) fn comment_delete(&mut self, a: &Args) -> Result<Value> {
         let (page, index) = self.comment_target(a)?;
         self.apply(a, Edit::DeleteAnnotation { page, index })
+    }
+
+    /// The XFDF of the listed comments and their replies (`comments`: 1-based [page, index] pairs).
+    pub(crate) fn comments_copy(&self, a: &Args) -> Result<Value> {
+        let id = self.doc(a)?.id;
+        let all = self.comments(a)?;
+        let shape = || ToolError::InvalidArgs("comments: [[page, index], …] (1-based, as comment_list reports)".into());
+        let list = a.get("comments").and_then(Value::as_array).ok_or_else(shape)?;
+        let mut which = Vec::with_capacity(list.len());
+        for item in list {
+            let pair = item.as_array().filter(|p| p.len() == 2).and_then(|p| Some((p.first()?.as_u64()?, p.get(1)?.as_u64()?)));
+            let Some((page, index)) = pair.filter(|(p, i)| *p >= 1 && *i >= 1) else { return Err(shape()) };
+            let (page, index) = (usize::try_from(page - 1).map_err(|_| shape())?, usize::try_from(index - 1).map_err(|_| shape())?);
+            if !all.iter().any(|c| c.page == page && c.index == index) {
+                return Err(failed(format!("there is no comment {} on page {} (see comment_list)", index + 1, page + 1)));
+            }
+            which.push((page, index));
+        }
+        let xfdf = self.session.export_comments(id, &which).map_err(failed)?;
+        Ok(json!({ "xfdf": xfdf, "comments": which.len() }))
+    }
+
+    /// Add the comments of `xfdf` (from `comments_copy`) to `page` as new comments.
+    pub(crate) fn comments_paste(&mut self, a: &Args) -> Result<Value> {
+        let page = self.page(a)?;
+        let xfdf = a.str("xfdf")?.to_owned();
+        if !pdfcraft_engine::is_xfdf_comments(&xfdf) {
+            return Err(ToolError::InvalidArgs("xfdf: the text comments_copy returned (XFDF with <annots>)".into()));
+        }
+        let offset = match a.nums::<2>("at")? {
+            Some([x, y]) => {
+                let info = self.doc(a)?.info.pages.get(page).cloned().ok_or_else(|| failed(format!("no page {}", page + 1)))?;
+                let [cx, cy] = to_user(&info, x, y);
+                let b =
+                    pdfcraft_engine::comments_bounds(&xfdf).ok_or_else(|| ToolError::InvalidArgs("xfdf: no comment with a rect to place".into()))?;
+                Some([cx - (b[0] + b[2]) / 2.0, cy - (b[1] + b[3]) / 2.0])
+            }
+            None => None,
+        };
+        let before = self.comments(a)?.len();
+        let mut out = self.apply(a, Edit::PasteComments { xfdf, page, offset })?;
+        out["comments"] = json!(self.comments(a)?.len().saturating_sub(before));
+        Ok(out)
     }
 }
 
@@ -729,6 +896,7 @@ impl Automation {
         let bytes = crate::read_input(&path)?;
         let file = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         let name = a.opt_str("name")?.map(str::to_owned).unwrap_or_else(|| file.rsplit_once('.').map_or(file.clone(), |(s, _)| s.to_owned()));
+        let author = a.opt_str("author")?.unwrap_or(DEFAULT_AUTHOR).to_string();
         let edit = Edit::AddCustomStamp {
             page,
             rect,
@@ -738,10 +906,26 @@ impl Automation {
                 bytes: std::sync::Arc::new(bytes),
                 page: a.opt_int("file_page")?.unwrap_or(1).max(1) as usize - 1,
             },
-            author: a.opt_str("author")?.unwrap_or(DEFAULT_AUTHOR).to_string(),
+            line: None,
+            author: author.clone(),
+        };
+        // A dynamic line (#1741): `{name}`, `{date}` and `{time}` filled in now.
+        let edit = match (edit, a.opt_str("line")?) {
+            (Edit::AddCustomStamp { page, rect, name, file, author, .. }, Some(t)) if !t.trim().is_empty() => {
+                let line = Some(self.session().stamp_line(t, &author));
+                Edit::AddCustomStamp { page, rect, name, file, author, line }
+            }
+            (edit, _) => edit,
         };
         self.apply(a, edit)
     }
+}
+
+/// `border_shape`: `rectangle`, `oval` or `circle`.
+fn border_shape(a: &Args) -> Result<Option<BorderShape>> {
+    a.opt_str("border_shape")?
+        .map(|s| BorderShape::parse(s).ok_or_else(|| ToolError::InvalidArgs(format!("unknown border_shape {s:?}: rectangle, oval or circle"))))
+        .transpose()
 }
 
 #[cfg(test)]
