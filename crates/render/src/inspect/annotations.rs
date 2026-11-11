@@ -45,11 +45,13 @@ impl RejectedJavaScript {
 pub(super) struct LinkScripts {
     remaining: usize,
     rejected: RejectedJavaScript,
+    /// Whether the warning that the budget ran out has been given.
+    limit_reported: bool,
 }
 
 impl Default for LinkScripts {
     fn default() -> Self {
-        Self { remaining: 4 << 20, rejected: RejectedJavaScript::default() }
+        Self { remaining: 4 << 20, rejected: RejectedJavaScript::default(), limit_reported: false }
     }
 }
 
@@ -138,6 +140,32 @@ impl<'a> Inspector<'a> {
 
     // ── annotations ─────────────────────────────────────────────────────────────────────────
 
+    /// Reads link `index` on `page` into `info.links`, noting that the document has JavaScript
+    /// and warning once when the link scripts' budget has run out (#2081).
+    #[allow(clippy::too_many_arguments)]
+    fn push_link(
+        &self,
+        info: &mut DocInfo,
+        page: usize,
+        index: usize,
+        d: &Dictionary,
+        text_budget: &mut usize,
+        unfit_quads: &mut HashSet<ObjectId>,
+        scripts: &mut LinkScripts,
+    ) {
+        let Some(link) = self.link(page, index, d, info.uri_base.as_deref(), text_budget, unfit_quads, scripts) else { return };
+        let refused = matches!(&link.target, LinkTarget::Other(s) if s == "JavaScript");
+        if refused || matches!(&link.target, LinkTarget::JavaScript(_)) {
+            info.has_javascript = true;
+        }
+        if refused && scripts.remaining == 0 && !scripts.limit_reported {
+            info.warnings
+                .push("Link JavaScript sources reached the 4 MiB document inspection limit; remaining JavaScript actions are unavailable.".into());
+            scripts.limit_reported = true;
+        }
+        info.links.push(link);
+    }
+
     /// `text_budget` is what is left of [`MAX_LINK_ATTACHMENT_TEXT_BYTES`].
     pub(super) fn annotations(&self, info: &mut DocInfo, text_budget: &mut usize) {
         // Indirect `/QuadPoints` arrays whose quadrilaterals did not fit what was left of the budget:
@@ -176,7 +204,6 @@ impl<'a> Inspector<'a> {
         let mut comments_full = false;
         // Link JavaScript has its own source budget, apart from link text (#2081).
         let mut scripts = LinkScripts::default();
-        let mut javascript_limit_reported = false;
         for (page, index, a) in entries {
             let Some(d) = self.dict(a) else { continue };
             // An annotation's `/Type`, when present, is `/Annot` (ISO 32000-2 §12.5.2, Table 166):
@@ -197,20 +224,7 @@ impl<'a> Inspector<'a> {
                 info.attachments.push(self.attachment(fs, AttachmentSource::Annotation { page, index }, text_budget, fallback));
             }
             if subtype == "Link" {
-                if let Some(link) = self.link(page, index, d, info.uri_base.as_deref(), text_budget, &mut unfit_quads, &mut scripts) {
-                    let refused = matches!(&link.target, LinkTarget::Other(s) if s == "JavaScript");
-                    if refused || matches!(&link.target, LinkTarget::JavaScript(_)) {
-                        info.has_javascript = true;
-                    }
-                    if refused && scripts.remaining == 0 && !javascript_limit_reported {
-                        info.warnings.push(
-                            "Link JavaScript sources reached the 4 MiB document inspection limit; remaining JavaScript actions are unavailable."
-                                .into(),
-                        );
-                        javascript_limit_reported = true;
-                    }
-                    info.links.push(link);
-                }
+                self.push_link(info, page, index, d, text_budget, &mut unfit_quads, &mut scripts);
                 continue;
             }
             // Not comments: form widgets, pop-ups and non-markup annotations such as the
