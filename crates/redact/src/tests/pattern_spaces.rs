@@ -1,9 +1,10 @@
 //! `cs` and `CS` reset the colour, and with it the pattern selected before, unless the renderer
 //! takes the space for a Pattern space: then it keeps the pattern (ISO 32000-2 §8.6.8 and Poppler
 //! reset that too). It reads the name as the renderer does: `/Pattern` itself, a device space's
-//! name never, and otherwise the first `/ColorSpace` that has the name, the scope's own resources
-//! first, then those of the scopes that drew it. A pattern the renderer still paints with is kept;
-//! one it doesn't leaves the page.
+//! name never, and otherwise the scope's own `/ColorSpace` (a form without resources of its own is
+//! given its caller's). The renderer also looks a name the scope lacks up in the resources of the
+//! scopes that drew it and of the page's `/Pages` ancestors; the walk doesn't. A pattern the
+//! renderer still paints with is kept; one it doesn't leaves the page.
 
 use super::*;
 use crate::interp::{ENTRY_BYTES, MAX_SPACE_BYTES, PatternSpaces, SPACE_READS};
@@ -242,6 +243,7 @@ fn a_walk_whose_patterns_nothing_prunes_reads_no_colour_space() {
         f(&mut doc);
         SPACE_READS.with(std::cell::Cell::get)
     };
+    assert_eq!(reads(&|doc| drop(crate::verify::Snapshot::capture(doc, None).unwrap())), 0, "the proof's snapshot");
     assert_eq!(reads(&|doc| drop(crate::sanitize::scan(doc))), 0, "Sanitize's scan");
     assert_eq!(reads(&|doc| drop(crate::sanitize::remove_hidden(doc, &[crate::sanitize::Hidden::HiddenText]))), 0, "Remove Hidden Information");
     assert_eq!(reads(&|doc| drop(apply(doc, None).unwrap())), 1, "Apply, its walk alone");

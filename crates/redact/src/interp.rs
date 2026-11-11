@@ -223,7 +223,8 @@ thread_local! {
 pub(crate) const MAX_SPACE_BYTES: usize = 1 << 20;
 
 /// How often a run reads a `/ColorSpace` dictionary given by reference: once, and once more after
-/// its names were let go. Named after that, it isn't read again, and a name in it keeps the pattern.
+/// its names were let go or didn't fit. Named after that, it isn't read again, and a name in it
+/// keeps the pattern.
 pub(crate) const MAX_READS: u8 = 2;
 
 /// What a kept name costs [`MAX_SPACE_BYTES`] besides its bytes: its place in the index, and the
@@ -314,9 +315,11 @@ impl PatternSpaces {
     /// otherwise the entry `spaces`, a scope's `/ColorSpace`, has for it, if that is `/Pattern` or
     /// `[/Pattern base]`. A name it doesn't have, or giving anything else, the renderer draws in
     /// another space or in DeviceGray. A form without resources of its own is given its caller's,
-    /// where the renderer looks its names up too. (One with resources of its own looks a name it
-    /// lacks up in its caller's, as the renderer does, but the patterns this pass prunes are the
-    /// page's, and what such a form paints with is not told to the page.)
+    /// where the renderer looks its names up too. (For one with resources of its own, the renderer
+    /// looks a name they lack up in its caller's, and this doesn't: the patterns this pass prunes
+    /// are the page's, and what such a form paints with is not told to the page. Nor does it look
+    /// a name the page's own resources lack up in its `/Pages` ancestors', as the renderer does:
+    /// ISO 32000-2 §7.7.3.4 inherits `/Resources` whole, so there the name resets the pattern.)
     pub(crate) fn named(&mut self, doc: &Document, spaces: Option<&Object>, name: &[u8]) -> bool {
         match name {
             b"Pattern" => return true,
@@ -352,7 +355,7 @@ impl PatternSpaces {
             self.settled.insert(r, true);
             return None;
         }
-        // Read before and let go since: what its names cost is known, so it isn't read only to
+        // Read before, and not kept since: what its names cost is known, so it isn't read only to
         // find they don't fit. Then they don't until the next page, as the page has let go of all
         // it can.
         if reads > 0 && !self.room(known) {

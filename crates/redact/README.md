@@ -139,7 +139,9 @@ skipping that mark. The count covers the marks on the pages being applied.
 
 Tiling-pattern cells are separate streams. Applying a mark removes a pattern resource when no
 surviving paint uses it. A `cs` or `CS` naming a colour space the resources give as a Pattern
-space keeps the pattern selected before it, as the app's renderer draws it. The names a run keeps
+space keeps the pattern selected before it, as the app's renderer draws it (in the page's or
+form's own resources; a name only a `/Pages` ancestor's resources give, which the renderer also
+reads, still resets it). The names a run keeps
 from `/ColorSpace` dictionaries given by reference are counted as their length and 128 bytes each,
 up to 1 MiB at once: reading one that doesn't fit lets go first of the names the page being
 walked hasn't named, and once a page of the rest, and no dictionary is read more than twice in a
