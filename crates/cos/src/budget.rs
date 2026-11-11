@@ -379,7 +379,10 @@ impl DecodeBudget {
             let result = decode(stream, max);
             let spent = match &result {
                 Ok((_, _, spent)) => (*spent).max(read),
-                Err((FilterError::LimitExceeded(_), _)) => max,
+                // The limit stops the decode, but not the scan of the encoded bytes it had to make.
+                Err((FilterError::LimitExceeded(_), _)) => max.max(read),
+                // A chain the runner rejects before reading anything paid for no scan.
+                Err((FilterError::Unsupported(_), spent)) => *spent,
                 Err((_, spent)) => (*spent).max(read),
             };
             self.bytes = self.bytes.saturating_sub(spent);
@@ -396,7 +399,8 @@ impl DecodeBudget {
                 Err(CosError::Filter(FilterError::LimitExceeded(self.limit).to_string()))
             }
             Err((e, spent)) => {
-                self.bytes = self.bytes.saturating_sub(spent.max(read));
+                let paid = if matches!(e, FilterError::Unsupported(_)) { spent } else { spent.max(read) };
+                self.bytes = self.bytes.saturating_sub(paid);
                 Err(CosError::Filter(e.to_string()))
             }
         }
@@ -923,6 +927,20 @@ mod tests {
     use super::*;
     use crate::Dict;
 
+    /// A decode stopped by its own limit still scanned the encoded bytes: a long whitespace prefix
+    /// under ASCIIHex is paid for each time, not just the limit.
+    #[test]
+    fn a_decode_stopped_by_its_limit_pays_for_the_scan() {
+        let mut dict = Dict::new();
+        dict.set(b"Filter".to_vec(), Object::name("ASCIIHexDecode"));
+        let mut raw = vec![b' '; 1 << 16];
+        raw.extend_from_slice(b"4142>");
+        let stream = Stream::from_raw(dict, raw);
+        let mut budget = DecodeBudget::new(1 << 20, 0);
+        assert!(budget.decode_within(&stream, 1).is_err());
+        assert_eq!(budget.remaining(), (1 << 20) - stream.raw.len());
+    }
+
     #[test]
     fn repeated_references_share_one_allowance() {
         let mut doc = Document::new_empty();
@@ -946,9 +964,11 @@ mod tests {
 
         let mut budget = DecodeBudget::new(10 << 20, 1);
         assert!(budget.decode_within(stream, 1000).is_err());
-        assert_eq!(budget.remaining(), (10 << 20) - 1000);
+        // The limit stops the decode but not the scan of the encoded bytes: those are paid for too.
+        let paid = 1000.max(stream.raw.len());
+        assert_eq!(budget.remaining(), (10 << 20) - paid);
         assert_eq!(budget.decode_within(stream, 2 << 20).map(|d| d.len()).ok(), Some(1 << 20));
-        assert_eq!(budget.remaining(), (9 << 20) - 1000);
+        assert_eq!(budget.remaining(), (9 << 20) - paid);
 
         assert!(budget.enter_form());
         assert!(!budget.enter_form());
