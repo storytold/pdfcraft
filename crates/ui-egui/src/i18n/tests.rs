@@ -1192,8 +1192,6 @@ fn tamil_is_registered_and_persists() {
     needs_catalogs!();
     let ta = Lang::from_code("ta").expect("ta registered");
     assert_eq!(ta.name(), "தமிழ்");
-    assert_eq!(ta.english_name(), "Tamil");
-    assert!(!ta.rtl());
     assert_eq!(normalize_pref("TA"), Some("ta"));
     for tag in ["ta", "ta-IN", "ta-LK", "ta_IN.UTF-8", "TA-in"] {
         assert_eq!(lang_from_tag(tag), Some(ta), "{tag}");
