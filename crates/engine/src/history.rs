@@ -38,7 +38,11 @@ pub(crate) enum Scope {
 /// Edits during which field scripts run.
 pub(crate) fn uses_scripts(edit: &Edit) -> bool {
     match edit {
-        Edit::SetFieldValue { .. } | Edit::ApplyScriptChanges { .. } | Edit::SetFieldScript { .. } | Edit::SetCalculationOrder { .. } => true,
+        Edit::SetFieldValue { .. }
+        | Edit::ResetForm { .. }
+        | Edit::ApplyScriptChanges { .. }
+        | Edit::SetFieldScript { .. }
+        | Edit::SetCalculationOrder { .. } => true,
         Edit::Batch { edits, .. } => edits.iter().any(uses_scripts),
         _ => false,
     }
@@ -47,8 +51,9 @@ pub(crate) fn uses_scripts(edit: &Edit) -> bool {
 pub(crate) fn scope_of(edit: &Edit) -> Scope {
     match edit {
         Edit::SetInfo { .. } => Scope::Metadata,
+        Edit::AddPrinterMarks { .. } => Scope::Full,
         // The Attachments list is read from the whole document.
-        Edit::AddAttachment { .. } | Edit::DeleteAttachment { .. } => Scope::Full,
+        Edit::AddAttachment { .. } | Edit::DeleteAttachment { .. } | Edit::EditAttachmentDescription { .. } => Scope::Full,
         // A file attachment also changes the Attachments list.
         Edit::AddAnnotation(a) if matches!(a.shape, Shape::Attachment { .. }) => Scope::Full,
         Edit::AddMeasurement(_)
@@ -66,6 +71,7 @@ pub(crate) fn scope_of(edit: &Edit) -> Scope {
         | Edit::EraseInk { .. }
         | Edit::MoveAnnotation { .. }
         | Edit::ReshapeAnnotation { .. }
+        | Edit::SetAnnotationPopup { .. }
         | Edit::ResizeAnnotation { .. }
         | Edit::StyleAnnotation { .. }
         | Edit::FillAnnotation { .. }
@@ -75,7 +81,11 @@ pub(crate) fn scope_of(edit: &Edit) -> Scope {
         | Edit::BorderShapeAnnotation { .. }
         | Edit::SetAnnotationInfo { .. } => Scope::Comments,
         Edit::AddLink { .. } | Edit::SetLink { .. } | Edit::DeleteLink { .. } | Edit::RemoveLinks { .. } | Edit::AddLinks { .. } => Scope::Links,
-        Edit::SetFieldValue { .. } | Edit::ResetForm { .. } | Edit::SetFieldImage { .. } | Edit::ApplyScriptChanges { .. } => Scope::Form,
+        Edit::SetFieldValue { .. }
+        | Edit::ResetForm { .. }
+        | Edit::SetFieldImage { .. }
+        | Edit::SetFieldImageTarget { .. }
+        | Edit::ApplyScriptChanges { .. } => Scope::Form,
         // Page content, resources and added content/marks only: the page tree, annotations,
         // fields, links and document metadata are untouched (see `refresh_content`).
         Edit::MoveObjects { .. }
@@ -96,6 +106,7 @@ pub(crate) fn scope_of(edit: &Edit) -> Scope {
         | Edit::AddWatermark { .. }
         | Edit::AddBackground { .. }
         | Edit::RemoveMarks { .. }
+        | Edit::ConvertColours { .. }
         | Edit::FixHairlines { .. }
         // Recognized text is an invisible text layer stamped on its page, with its font in the
         // page's resources (#6310): a full re-inspection made applying one word cost seconds on
