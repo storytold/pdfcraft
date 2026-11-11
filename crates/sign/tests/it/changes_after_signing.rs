@@ -386,13 +386,14 @@ fn add_unsigned_signature_field(doc: &mut Document) {
     });
 }
 
-/// Changes the classifier this table was written beside permitted, which the operations
-/// recogniser of #7032 refuses: each refusal is intended.
-const STRICTER: &[Case] = &[
+/// Changes the classifier before #7032 permitted, which the operations recogniser refuses: each
+/// refusal is intended. Run beside it in shadow, the recogniser was never more permissive, and
+/// these were the only cases of this table where it was stricter.
+const NEWLY_REFUSED: &[Case] = &[
     Case {
         name: "an approval signature, then an unsigned signature field added (as in PDFBOX-6236)",
         file: || edit_after(&sign(&form(), None, None), add_unsigned_signature_field),
-        rows: &[("Signature1", Valid)],
+        rows: &[("Signature1", NotValid)],
     },
     Case {
         name: "an approval signature, then a signing step that also repaints a field whose value is unchanged (as in PDFBOX-4907)",
@@ -402,7 +403,7 @@ const STRICTER: &[Case] = &[
                 doc.update_dict(r(NAME), |w| w.set(b"AP".to_vec(), ap)).unwrap();
             })
         },
-        rows: &[("Signature1", Valid)],
+        rows: &[("Signature1", NotValid)],
     },
     Case {
         name: "a P=2 certification, then the empty field signed with its name and actions changed",
@@ -415,12 +416,12 @@ const STRICTER: &[Case] = &[
                 .unwrap();
             })
         },
-        rows: &[("Signature1", Valid)],
+        rows: &[("Signature1", NotValid)],
     },
     Case {
         name: "a P=2 certification, then the form's /SigFlags changed with nothing signed",
         file: || edit_after(&sign(&form(), Some(2), None), |doc| edit_form(doc, |form| form.set(b"SigFlags".to_vec(), Object::Int(1)))),
-        rows: &[("Signature1", Valid)],
+        rows: &[("Signature1", NotValid)],
     },
 ];
 
@@ -457,6 +458,12 @@ fn changes_no_signature_permits_are_not_valid() {
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
 
+#[test]
+fn changes_refused_since_operations_explain_them_are_not_valid() {
+    let wrong = judge(NEWLY_REFUSED);
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
 /// The fill cases leave the earlier signature with permitted changes, not with none: the table
 /// tests what follows a signature, not an untouched file.
 #[test]
@@ -467,47 +474,4 @@ fn every_legitimate_case_changes_the_file_after_its_first_signature() {
         let first = signatures(&open(&bytes), &bytes, &trust).into_iter().find(|s| s.field == case.rows[0].0).unwrap();
         assert!(matches!(first.modification, Modification::Allowed(_)), "{}: {:?}", case.name, first.modification);
     }
-}
-
-/// Stage 3 of #7032: the operations recogniser runs beside the classifier it is to replace, over
-/// every case of the table. It is never more permissive, and where it is stricter the case is
-/// one of [`STRICTER`], each a refusal intended.
-#[test]
-fn the_operations_recogniser_is_never_more_permissive() {
-    let permits = |m: &Modification| !matches!(m, Modification::Disallowed(_));
-    let (mut looser, mut stricter) = (Vec::new(), Vec::new());
-    for case in LEGITIMATE.iter().chain(ATTACKS).chain(STRICTER) {
-        let bytes = (case.file)();
-        let doc = open(&bytes);
-        for (field, _) in case.rows {
-            let Some((classified, recognised)) = pdfcraft_sign::pdf::shadow_changes(&doc, &bytes, field) else { continue };
-            let what = format!("{}: {field}: {classified:?} then, {recognised:?} now", case.name);
-            if permits(&recognised) && !permits(&classified) {
-                looser.push(what);
-            } else if !permits(&recognised) && permits(&classified) {
-                stricter.push((case.name, what));
-            }
-        }
-    }
-    assert!(
-        looser.is_empty(),
-        "more permissive:
-{}",
-        looser.join(
-            "
-"
-        )
-    );
-    let intended: Vec<&str> = STRICTER.iter().map(|c| c.name).collect();
-    let found: Vec<&str> = stricter.iter().map(|(name, _)| *name).collect();
-    assert_eq!(
-        found,
-        intended,
-        "stricter:
-{}",
-        stricter.iter().map(|(_, w)| w.as_str()).collect::<Vec<_>>().join(
-            "
-"
-        )
-    );
 }

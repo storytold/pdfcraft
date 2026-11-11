@@ -605,8 +605,9 @@ fn opaque_appearance(doc: &mut Document) -> ObjRef {
 /// Signing is a new signature value. Under a "form fill and signing" certification (P=2), an
 /// empty signature widget added after signing, or the appearance of the signed file's empty
 /// signature field rewritten, signs nothing: it is an annotation that may draw anything over the
-/// signed page, which P=2 does not permit. P=3 permits it, as a comment change, not as signing.
-/// Signing the empty field keeps the certification valid.
+/// signed page, which P=2 does not permit. P=3 permits comments, but a widget is no comment: no
+/// operation P=3 permits adds one, or repaints one whose value is unchanged (#7032; as in
+/// PDFBOX-6236 and PDFBOX-4907). Signing the empty field keeps the certification valid.
 #[test]
 fn an_empty_signature_widget_added_or_restyled_after_certification_is_not_signing() {
     let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
@@ -621,25 +622,17 @@ fn an_empty_signature_widget_added_or_restyled_after_certification_is_not_signin
     let foreign: &[(&[u8], Object)] = &[(b"Foo", Object::name("Bar"))];
     for p in [2, 3] {
         let certified = pdfcraft_sign::sign(&open(&fixture()), &id, &SignOptions { certify: Some(p), ..opts() }).unwrap();
-        // What P=3 permits for each: the new annotation, and nothing about it is signing. The
-        // `<< /Foo /Bar >>` value is a new untyped dictionary object of its own, which counts as
-        // any new object does, as form fill; the other two add none.
-        for (what, edited, at_p3) in [
-            ("an empty signature widget added", edit_after(&certified, |doc| add_opaque_sig_widget(doc, None)), vec![kind::COMMENTS]),
-            (
-                "a signature widget added with a value that signs nothing",
-                edit_after(&certified, |doc| add_opaque_sig_widget(doc, Some(foreign))),
-                vec![kind::COMMENTS, kind::FORM_FILL],
-            ),
-            ("the empty field restyled", edit_after(&certified, restyled), vec![kind::COMMENTS]),
+        for (what, edited) in [
+            ("an empty signature widget added", edit_after(&certified, |doc| add_opaque_sig_widget(doc, None))),
+            ("a signature widget added with a value that signs nothing", edit_after(&certified, |doc| add_opaque_sig_widget(doc, Some(foreign)))),
+            ("the empty field restyled", edit_after(&certified, restyled)),
         ] {
             let s = check(&edited);
-            if p == 2 {
-                assert_ne!(s.status, Status::Valid, "P={p}, {what}: {:?}", s.modification);
-                assert_eq!(s.modification, Modification::Disallowed(vec![kind::COMMENTS]), "P={p}, {what}");
-            } else {
-                assert_eq!((s.status, s.modification), (Status::Valid, Modification::Allowed(at_p3)), "P={p}, {what}");
-            }
+            assert_ne!(s.status, Status::Valid, "P={p}, {what}: {:?}", s.modification);
+            // Said as the comment change it looks like where comments are not permitted, and as
+            // another change where they are.
+            let said = if p == 2 { kind::COMMENTS } else { kind::OTHER };
+            assert_eq!(s.modification, Modification::Disallowed(vec![said]), "P={p}, {what}");
         }
         // Signing the empty field is signing.
         let signed = pdfcraft_sign::sign(&open(&certified), &id, &SignOptions { field: Some("Approval".into()), ..opts() }).unwrap();

@@ -44,6 +44,12 @@ enum Op {
     /// Write the document information as a new object. As before this recogniser, a no-changes
     /// certification does not permit it.
     NewInfo,
+    /// Write cross-reference and object streams: how a save is stored, which shows nothing and is
+    /// not listed.
+    Plumbing,
+    /// Restate what was signed: a signed page's annotations listed again, the same ones in the
+    /// same order, in an array of their own. Not listed either.
+    Restated,
 }
 
 impl Op {
@@ -53,18 +59,19 @@ impl Op {
             Op::Fill | Op::Sign => matches!(p, Some(2 | 3) | None),
             Op::Annotate => matches!(p, Some(3) | None),
             Op::NewInfo => p != Some(1),
-            Op::Timestamp | Op::ValidationData | Op::Housekeeping => true,
+            Op::Timestamp | Op::ValidationData | Op::Housekeeping | Op::Plumbing | Op::Restated => true,
         }
     }
 
-    /// The word of [`kind`] it is listed by.
-    fn word(self) -> &'static str {
+    /// The word of [`kind`] it is listed by, if it is listed.
+    fn word(self) -> Option<&'static str> {
         match self {
-            Op::Fill => kind::FORM_FILL,
-            Op::Sign | Op::Timestamp => kind::SIGNATURE,
-            Op::Annotate => kind::COMMENTS,
-            Op::ValidationData => kind::SECURITY_STORE,
-            Op::Housekeeping | Op::NewInfo => kind::METADATA,
+            Op::Fill => Some(kind::FORM_FILL),
+            Op::Sign | Op::Timestamp => Some(kind::SIGNATURE),
+            Op::Annotate => Some(kind::COMMENTS),
+            Op::ValidationData => Some(kind::SECURITY_STORE),
+            Op::Housekeeping | Op::NewInfo => Some(kind::METADATA),
+            Op::Plumbing | Op::Restated => None,
         }
     }
 
@@ -314,10 +321,11 @@ impl Recogniser<'_> {
     /// A signed page's annotations (the page itself, or its `/Annots` array of its own): each
     /// one added is a signature's widget, or a comment; one removed or restacked is a comment
     /// change. A widget added for no signature, or one moved from another page, is unexplained.
+    /// The same annotations listed again restate what was signed.
     fn pages(&mut self) {
         let (doc, old, snapshot) = (self.doc, self.old, &self.seen.snapshot);
         for c in &self.seen.changes {
-            if !matches!(c.label, Some(kind::COMMENTS | kind::SIGNATURE)) {
+            if !matches!(c.label, Some(kind::COMMENTS | kind::SIGNATURE) | None) {
                 continue;
             }
             let Some(before) = c.before.as_deref() else { continue };
@@ -356,6 +364,9 @@ impl Recogniser<'_> {
                 }
             }
             if explained {
+                if ops.is_empty() {
+                    ops.push(Op::Restated);
+                }
                 for op in ops {
                     self.claim(c.num, op);
                 }
@@ -399,7 +410,7 @@ impl Recogniser<'_> {
                 (Some(_), _) if c.label == Some(kind::METADATA) && (Some(c.num) == snapshot.old_info || Some(c.num) == snapshot.old_metadata) => {
                     Some(Op::Housekeeping)
                 }
-                (None, Object::Stream(s)) if matches!(s.dict.name(b"Type"), Some(b"XRef" | b"ObjStm")) => Some(Op::Housekeeping),
+                (None, Object::Stream(s)) if matches!(s.dict.name(b"Type"), Some(b"XRef" | b"ObjStm")) => Some(Op::Plumbing),
                 (None, Object::Dict(_)) if Some(c.num) == info => Some(Op::NewInfo),
                 _ => None,
             };
@@ -497,7 +508,7 @@ impl Recogniser<'_> {
         if self.exhausted {
             note(&mut disallowed, kind::OTHER);
         }
-        let mut unexplained = false;
+        let mut unexplained = Vec::new();
         for c in &self.seen.changes {
             if c.before.is_some()
                 && let Some(label) = c.label.filter(|l| NEVER.contains(l))
@@ -507,7 +518,10 @@ impl Recogniser<'_> {
             }
             if let Some(ops) = self.claims.get(&c.num) {
                 for op in ops {
-                    note(if op.permitted(p) { &mut allowed } else { &mut disallowed }, op.word());
+                    let list = if op.permitted(p) { &mut allowed } else { &mut disallowed };
+                    if let Some(word) = op.word() {
+                        note(list, word);
+                    }
                 }
                 continue;
             }
@@ -524,7 +538,7 @@ impl Recogniser<'_> {
             };
             match word {
                 Some(w) => note(&mut disallowed, if Op::named(w).is_some_and(|op| op.permitted(p)) { kind::OTHER } else { w }),
-                None => unexplained = true,
+                None => unexplained.push(c.num),
             }
         }
         for what in &self.seen.freed {
@@ -538,10 +552,22 @@ impl Recogniser<'_> {
         }
         // A new object of no role of its own that nothing claims: data no operation brought.
         // Said only when nothing else is, as it is reached from a change listed already.
-        if unexplained && disallowed.is_empty() {
+        if !unexplained.is_empty() && disallowed.is_empty() && !unreferenced(self.doc, self.old, &unexplained) {
             disallowed.push(kind::OTHER);
         }
         if disallowed.is_empty() { Modification::Allowed(allowed) } else { Modification::Disallowed(disallowed) }
+    }
+}
+
+/// Whether nothing refers to any of the objects `nums`, in `doc` or in the signed revision `old`:
+/// written but not part of either document, they show nothing (writers leave such objects
+/// behind). One the signed revision referred to fills a reference that was signed, and one the
+/// document refers to is reached from a change. `false` when the references can't all be read.
+fn unreferenced(doc: &Document, old: &Document, nums: &[u32]) -> bool {
+    let referred = |d: &Document| super::changes::references(d).map(|found| found.into_iter().map(|r| r.num).collect::<HashSet<u32>>());
+    match (referred(doc), referred(old)) {
+        (Some(now), Some(then)) => nums.iter().all(|n| !now.contains(n) && !then.contains(n)),
+        _ => false,
     }
 }
 

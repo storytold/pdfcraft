@@ -7,7 +7,8 @@ use std::sync::Arc;
 use pdfcraft_cos::{Document, ObjRef, Object};
 
 use super::Modification;
-use super::changes::classify_changes;
+use super::locks::LockScope;
+use super::operations::judge_changes;
 
 /// One cross-reference row: an object written with header generation `.0` under row generation `.1`.
 enum Row<'a> {
@@ -65,7 +66,7 @@ fn r(num: u32, generation: u16) -> ObjRef {
 }
 
 fn assert_refused(doc: &Document, old: Document, p: u8) {
-    let verdict = classify_changes(doc, Some(old), Some(p));
+    let verdict = judge_changes(doc, Some(old), Some(p), &LockScope::none());
     assert!(matches!(verdict, Modification::Disallowed(_)), "P={p}: main returns {verdict:?}");
 }
 
@@ -207,7 +208,7 @@ fn hidden_shared_alias_form_fill() {
 }
 
 fn verdict(doc: &Document, old: Document, p: Option<u8>) -> Modification {
-    classify_changes(doc, Some(old), p)
+    judge_changes(doc, Some(old), p, &LockScope::none())
 }
 
 /// A widget whose /Annots entry is rewritten to a generation its slot never had no longer
@@ -369,9 +370,10 @@ fn a_signature_added_with_respelled_strings_is_signing() {
     };
     let respelled = now("<656E2D5553>", "<2F48656C76203020546620302067>");
     assert_eq!(verdict(&respelled.open(), signed.open(), Some(2)), Modification::Allowed(vec![super::kind::SIGNATURE]));
-    // A /DA that now says something else is a form change, however it is spelled.
+    // A /DA that now says something else is a form change, however it is spelled: it redraws
+    // every field that has no appearance of its own, which no fill or signature does (#7032).
     let restyled = now("<656E2D5553>", "<2F48656C7620313220546620302067>");
-    assert_eq!(verdict(&restyled.open(), signed.open(), None), Modification::Allowed(vec![super::kind::FORM_FILL, super::kind::SIGNATURE]));
+    assert_eq!(verdict(&restyled.open(), signed.open(), None), Modification::Disallowed(vec![super::kind::OTHER]));
 }
 
 /// A signed widget whose /Rect was written with reals, filled and saved by PdfCraft's own writer,

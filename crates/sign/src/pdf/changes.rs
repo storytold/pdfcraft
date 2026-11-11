@@ -1,4 +1,4 @@
-use super::types::{Modification, kind};
+use super::types::kind;
 use super::{Arc, Dict, Document, HashMap, HashSet, ObjRef, Object};
 use std::cell::{Cell, OnceCell};
 
@@ -154,40 +154,6 @@ pub(super) fn note(list: &mut Vec<&'static str>, what: &'static str) {
     }
 }
 
-/// What later revisions changed, classified as Acrobat reports it, under DocMDP `p` (or none:
-/// an approval signature permits form fill, comments and further signatures).
-pub(super) fn classify_changes(doc: &Document, old: Option<Document>, p: Option<u8>) -> Modification {
-    let Some(old) = old else {
-        return Modification::Disallowed(vec![kind::UNREADABLE]);
-    };
-    let observed = observe(doc, &old);
-    let (mut allowed, mut disallowed): (Vec<&'static str>, Vec<&'static str>) = (Vec::new(), observed.hard.clone());
-    for change in &observed.changes {
-        let Some(what) = change.label else { continue };
-        let ok = match (what, p) {
-            (kind::SIGNATURE | kind::SECURITY_STORE, _) => true,
-            (kind::FORM_FILL, Some(2 | 3) | None) => true,
-            (kind::COMMENTS, Some(3) | None) => true,
-            // Every save updates /Info (ModDate), signing included.
-            (kind::METADATA, _) => true,
-            _ => false,
-        };
-        note(if ok { &mut allowed } else { &mut disallowed }, what);
-    }
-    for what in &observed.freed {
-        note(&mut disallowed, what);
-    }
-    // DocMDP P=1 ("no changes allowed", ISO 32000-2 §12.8.2.2) permits only validation data to
-    // follow: the document security store, and document timestamps added for PAdES long-term
-    // archiving (§12.8.5). Those timestamps draw nothing. Any other signature added since — an
-    // approval signature, an unsigned signature widget, or a widget that paints over the signed
-    // page — is a change the certification forbids, however it is labelled.
-    if p == Some(1) {
-        only_validation_data(&mut allowed, &mut disallowed, doc, &old);
-    }
-    if disallowed.is_empty() { Modification::Allowed(allowed) } else { Modification::Disallowed(disallowed) }
-}
-
 /// Every object a later revision of `doc` changed or added since the signed revision `old`, each
 /// labelled by the role it had when signed, and the changes nothing can permit.
 pub(super) fn observe(doc: &Document, old: &Document) -> Observed {
@@ -307,21 +273,6 @@ pub(super) fn observe(doc: &Document, old: &Document) -> Observed {
     Observed { snapshot, dss, ends, hard, changes, freed }
 }
 
-/// DocMDP P=1 ("no changes allowed") permits only validation data to follow the signed revision:
-/// the security store, and document timestamps that draw nothing. A later approval signature, a
-/// visible widget or a changed catalog `/Perms` breaks the certification.
-fn only_validation_data(allowed: &mut Vec<&'static str>, disallowed: &mut Vec<&'static str>, doc: &Document, old: &Document) {
-    if allowed.contains(&kind::SIGNATURE) && !only_invisible_timestamps_added(doc, old) {
-        allowed.retain(|k| *k != kind::SIGNATURE);
-        if !disallowed.contains(&kind::SIGNATURE) {
-            disallowed.push(kind::SIGNATURE);
-        }
-    }
-    if perms_changed(doc, old) {
-        note(disallowed, kind::STRUCTURE);
-    }
-}
-
 /// Whether the catalog's `/Perms` differs from the signed revision's. It names the certification
 /// signature itself. Elsewhere a change to it is judged as signing; under P=1 dropping or
 /// redirecting it is a change like any other. Compared by content: an indirect /Perms rewritten
@@ -330,46 +281,6 @@ fn only_validation_data(allowed: &mut Vec<&'static str>, disallowed: &mut Vec<&'
 pub(super) fn perms_changed(doc: &Document, old: &Document) -> bool {
     let perms = |d: &Document| d.root().and_then(|r| d.get(r).as_dict().and_then(|c| c.get(b"Perms").map(|p| (*d.resolve(p)).clone())));
     !same_entry(perms(doc).as_ref(), perms(old).as_ref())
-}
-
-/// Whether every signature object `doc` gained or changed since the signed revision `old` is an
-/// invisible document timestamp. A signature annotation (a widget, or a dictionary carrying a
-/// signature value or role) that the signed revision did not hold byte for byte must be a
-/// `/SubFilter /ETSI.RFC3161` value in a widget that shows nothing — no positive-area `/Rect`,
-/// or the Hidden or NoView flag set. An approval signature, an empty signature widget, or a
-/// visible one fails, whatever `/Type` or `/SubFilter` it claims. Judged on the objects
-/// themselves, not on the `/AcroForm /Fields` listing, so a widget with no `/T` or one reached
-/// only through a page's `/Annots` is covered too.
-fn only_invisible_timestamps_added(doc: &Document, old: &Document) -> bool {
-    /// A widget shows nothing: no `/Rect` enclosing a positive area, or Hidden (2) / NoView (32).
-    fn invisible(doc: &Document, w: &Dict) -> bool {
-        let flags = w.get(b"F").and_then(|o| doc.resolve(o).as_int()).unwrap_or(0);
-        let area =
-            super::listing::nums(doc, w, b"Rect").filter(|r| r.len() == 4).is_some_and(|r| (r[0] - r[2]).abs() > 0.5 && (r[1] - r[3]).abs() > 0.5);
-        !area || flags & (2 | 32) != 0
-    }
-    for num in doc.object_numbers() {
-        let new = doc.get(ObjRef { num, generation: doc.generation(num) });
-        let Some(d) = new.as_dict() else { continue };
-        // A signature object: a signature value, or a field or widget that carries one.
-        let is_value = matches!(d.name(b"Type"), Some(b"Sig" | b"DocTimeStamp"));
-        let is_field = d.name(b"FT") == Some(b"Sig") || d.name(b"Subtype") == Some(b"Widget");
-        if !is_value && !is_field {
-            continue;
-        }
-        // Unchanged since signing: the certification already covered it.
-        if old.try_get(num).ok().filter(|o| !matches!(**o, Object::Null)).is_some_and(|o| same_object(&o, &new)) {
-            continue;
-        }
-        let value = if is_value { Some(d.clone()) } else { d.get(b"V").map(|v| doc.resolve(v)).and_then(|v| v.as_dict().cloned()) };
-        // A new or changed signature object passes only as an invisible document timestamp. A
-        // widget with no value (an empty signature field placed on the page) never does.
-        let timestamp = value.as_ref().is_some_and(super::validate::is_doc_timestamp);
-        if !timestamp || (is_field && !invisible(doc, d)) {
-            return false;
-        }
-    }
-    true
 }
 
 struct ChangedObjectClassifier<'a> {
@@ -471,7 +382,8 @@ impl ChangedObjectClassifier<'_> {
             // Only the signed revision's own /Info dictionary is a metadata change.
             Some(kind::METADATA)
         } else {
-            Some(change_kind(self.doc, self.old, self.ends, r.num, dict, previous))
+            // A new dictionary is not labelled by its shape: an operation claims it or it is refused.
+            previous.map(|previous| change_kind(self.doc, self.old, self.ends, r.num, dict, previous))
         }
     }
 
@@ -796,7 +708,7 @@ pub(super) fn annot_refs(doc: &Document, o: Option<&Object>, budget: &Cell<usize
 
 /// Every indirect reference in `doc`'s objects and trailer. `None` (nothing can be shown
 /// unreferenced) when an object can't be read, or past a bound on references or nesting.
-fn references(doc: &Document) -> Option<HashSet<ObjRef>> {
+pub(super) fn references(doc: &Document) -> Option<HashSet<ObjRef>> {
     const MAX_REFERENCES: usize = 1 << 22;
     const MAX_DEPTH: u8 = 64;
     fn walk(o: &Object, depth: u8, found: &mut HashSet<ObjRef>) -> bool {
@@ -1065,13 +977,6 @@ pub(super) fn same_entry(a: Option<&Object>, b: Option<&Object>) -> bool {
     }
 }
 
-/// Whether a dictionary was a signature object: a signature or timestamp value, a signature
-/// reference or its transform parameters, or a signature form field. Used to decide from the
-/// signed revision, so a later relabel of some other object cannot pose as a signature change.
-fn is_signature_dict(d: &Dict) -> bool {
-    matches!(d.name(b"Type"), Some(b"Sig" | b"DocTimeStamp" | b"SigRef" | b"TransformParams")) || d.name(b"FT") == Some(b"Sig")
-}
-
 /// The objects the signed pages draw from, by reference, with the role each held when signed
 /// (#1787): `true` for a container (a page's resources dictionary, or one of its category
 /// dictionaries), where a name added later can't be reached by unchanged content; `false` for
@@ -1223,100 +1128,73 @@ pub(super) fn lost_entries(doc: &Document, old: &Document, was: Option<&Object>,
     refs(old, was).iter().filter(|r| live(old, r)).any(|r| !now.contains(&r.num))
 }
 
-/// What changing the dictionary `before` (as signed; `None` for a new object) into `d` amounts
-/// to, judged by the role the object had when signed: signing, form fill, comments, page content
-/// or another change.
-fn change_kind(doc: &Document, old: &Document, ends: &RevisionEnds, num: u32, d: &Dict, before: Option<&Dict>) -> &'static str {
-    let ty = d.name(b"Type");
-    // A later revision cannot make an existing object a signature by relabelling it: a signature
-    // change is only a brand-new object, or one that was already a signature object when signed.
-    let signature_ok = before.is_none_or(is_signature_dict);
+/// What changing the dictionary `b` (as signed) into `d` amounts to, judged by the role the
+/// object had when signed: signing, form fill, comments, page content or another change. A new
+/// object has no role yet, and is not labelled: an operation claims it or it is refused
+/// ([`super::operations`]).
+fn change_kind(doc: &Document, old: &Document, ends: &RevisionEnds, num: u32, d: &Dict, b: &Dict) -> &'static str {
     // A signature widget that already held a signature is what the signature shows: moving it or
     // swapping its appearance can hide the signed page under it. Judged by the signed revision,
     // so relabelling the widget now does not change that.
-    if before.is_some_and(|b| {
-        b.name(b"Subtype") == Some(b"Widget") && b.name(b"FT") == Some(b"Sig") && b.get(b"V").is_some_and(|v| old.resolve(v).as_dict().is_some())
-    }) && !before.is_some_and(|b| same_entries(d, b, &[]))
+    if b.name(b"Subtype") == Some(b"Widget")
+        && b.name(b"FT") == Some(b"Sig")
+        && b.get(b"V").is_some_and(|v| old.resolve(v).as_dict().is_some())
+        && !same_entries(d, b, &[])
     {
         return kind::PAGE_CONTENT;
     }
     // A signed form field or widget keeps that role: its value, appearance or signature may
     // change, but turning it into a comment, another kind of annotation or another type of
     // field is no form fill.
-    if before.is_some_and(|b| {
-        (b.name(b"Subtype") == Some(b"Widget") || b.contains(b"FT")) && (d.name(b"Subtype") != b.name(b"Subtype") || d.name(b"FT") != b.name(b"FT"))
-    }) {
+    if (b.name(b"Subtype") == Some(b"Widget") || b.contains(b"FT")) && (d.name(b"Subtype") != b.name(b"Subtype") || d.name(b"FT") != b.name(b"FT")) {
         return kind::OTHER;
     }
     // Where a signed widget sits and whether it shows are what the page shows: filling the form
     // changes its value and appearance, never its rectangle or its flags.
-    if before.is_some_and(|b| {
-        b.name(b"Subtype") == Some(b"Widget") && (!same_entry(d.get(b"Rect"), b.get(b"Rect")) || !same_entry(d.get(b"F"), b.get(b"F")))
-    }) {
+    if b.name(b"Subtype") == Some(b"Widget") && (!same_entry(d.get(b"Rect"), b.get(b"Rect")) || !same_entry(d.get(b"F"), b.get(b"F"))) {
         return kind::PAGE_CONTENT;
     }
-    match ty {
-        // Only a new signature value or policy: rewriting a signed one is not a signature (#1788).
-        Some(b"Sig" | b"DocTimeStamp" | b"SigRef" | b"TransformParams") if before.is_none() => return kind::SIGNATURE,
-        Some(b"Catalog") => return before.map_or(kind::FORM_FILL, |b| catalog_kind(doc, old, ends, d, b)),
+    match d.name(b"Type") {
+        Some(b"Catalog") => return catalog_kind(doc, old, ends, d, b),
+        Some(b"Page") if !same_but_annots(d, b) => return kind::PAGE_CONTENT,
         Some(b"Page") => {
-            return match before {
-                Some(b) if !same_but_annots(d, b) => kind::PAGE_CONTENT,
-                Some(b) => {
-                    let was = refs(old, b.get(b"Annots"));
-                    let added: Vec<ObjRef> = refs(doc, d.get(b"Annots")).into_iter().filter(|r| !was.contains(r)).collect();
-                    added_annots(doc, old, ends, &added)
-                }
-                None => kind::COMMENTS,
-            };
+            let was = refs(old, b.get(b"Annots"));
+            let added: Vec<ObjRef> = refs(doc, d.get(b"Annots")).into_iter().filter(|r| !was.contains(r)).collect();
+            return added_annots(doc, old, ends, &added);
         }
-        Some(b"Pages") => return if before.is_some() { kind::PAGES } else { kind::STRUCTURE },
+        Some(b"Pages") => return kind::PAGES,
         _ => {}
     }
     // The role an existing object plays (annotation, form field, the form) is the one it had when
     // signed: keys its new version carries are written by whoever changed it. An indirect
     // /OCProperties rewritten with an added /FT still decides which layers show (#1787 judges a
     // signed page's resources this way; this applies it to every other object).
-    let role = before.unwrap_or(d);
     // Nor does an existing annotation or widget turned into another kind of annotation edit the
     // one it was: an empty signature widget rewritten as a /Square that covers signed text is no
     // signature change, and no comment either.
-    if before.is_some_and(|b| b.name(b"Subtype") != d.name(b"Subtype")) {
+    if b.name(b"Subtype") != d.name(b"Subtype") {
         return kind::OTHER;
     }
-    match role.name(b"Subtype") {
-        Some(b"Widget") => {
-            return match before {
-                // A new widget: signing only when it brings a new signature, as on a page.
-                None if gains_signature(doc, old, ends, num, d, None) => kind::SIGNATURE,
-                None => kind::COMMENTS,
-                // A signature field's widget, when signed and still: signing only when its field
-                // gains a signature. A restyled empty one signs nothing (#6755).
-                Some(b) if is_signature_field(old, b) => {
-                    if is_signature_field(doc, d) && gains_signature(doc, old, ends, num, d, Some(b)) {
-                        kind::SIGNATURE
-                    } else {
-                        kind::COMMENTS
-                    }
-                }
-                Some(b) => widget_change(doc, old, d, b),
-            };
+    match b.name(b"Subtype") {
+        // A signature field's widget, when signed and still: signing only when its field gains a
+        // signature. A restyled empty one signs nothing (#6755).
+        Some(b"Widget") if is_signature_field(old, b) => {
+            return if is_signature_field(doc, d) && gains_signature(doc, old, ends, num, d, Some(b)) { kind::SIGNATURE } else { kind::COMMENTS };
         }
+        Some(b"Widget") => return widget_change(doc, old, d, b),
         Some(b"Link") => return kind::LINKS,
-        Some(_) if role.name(b"Type") == Some(b"Annot") || role.contains(b"Rect") => return kind::COMMENTS,
+        Some(_) if b.name(b"Type") == Some(b"Annot") || b.contains(b"Rect") => return kind::COMMENTS,
         _ => {}
     }
-    if role.name(b"FT") == Some(b"Sig") && signature_ok {
+    // A later revision cannot make an existing object a signature by relabelling it: only one
+    // that was a signature field when signed is judged as one.
+    if b.name(b"FT") == Some(b"Sig") {
         return kind::SIGNATURE;
     }
-    if role.contains(b"Fields") {
-        return acroform_kind(doc, old, ends, d, before);
+    if b.contains(b"Fields") {
+        return acroform_kind(doc, old, ends, d, Some(b));
     }
-    if role.contains(b"FT") || (role.contains(b"T") && role.contains(b"Kids")) || role.contains(b"DR") {
-        return kind::FORM_FILL;
-    }
-    if before.is_none() {
-        // New objects referenced by changed ones (fonts, appearance resources).
+    if b.contains(b"FT") || (b.contains(b"T") && b.contains(b"Kids")) || b.contains(b"DR") {
         return kind::FORM_FILL;
     }
     kind::OTHER
@@ -1395,15 +1273,12 @@ mod tests {
             vec![],
         );
         assert_eq!(page_change_kind(&doc, &doc, &reordered, Some(&before)), unchanged);
-        assert_eq!(
-            change_kind(&doc, &doc, &OnceCell::new(), 0, &reordered, Some(&before)),
-            change_kind(&doc, &doc, &OnceCell::new(), 0, &before, Some(&before))
-        );
+        assert_eq!(change_kind(&doc, &doc, &OnceCell::new(), 0, &reordered, &before), change_kind(&doc, &doc, &OnceCell::new(), 0, &before, &before));
 
         // A changed value inside the nested dictionary still is a page content change.
         let changed = page(vec![("F2", font(&order, "Helvetica")), ("F1", font(&order, "Courier"))], vec![]);
         assert_eq!(page_change_kind(&doc, &doc, &changed, Some(&before)), Some(kind::PAGE_CONTENT));
-        assert_eq!(change_kind(&doc, &doc, &OnceCell::new(), 0, &changed, Some(&before)), kind::PAGE_CONTENT);
+        assert_eq!(change_kind(&doc, &doc, &OnceCell::new(), 0, &changed, &before), kind::PAGE_CONTENT);
     }
 
     /// The page as signed and the same page with its inline resources reordered are each no
@@ -1464,7 +1339,7 @@ mod tests {
         let swapped = page(vec![("F1", font(&["Type", "Encoding", "BaseFont"], "Times-Roman"))], vec![]);
         for (now, then) in [(&swapped, &signed), (&signed, &swapped)] {
             assert_eq!(page_change_kind(&doc, &doc, now, Some(then)), Some(kind::PAGE_CONTENT));
-            assert_eq!(change_kind(&doc, &doc, &OnceCell::new(), 0, now, Some(then)), kind::PAGE_CONTENT);
+            assert_eq!(change_kind(&doc, &doc, &OnceCell::new(), 0, now, then), kind::PAGE_CONTENT);
         }
     }
 
@@ -1518,8 +1393,8 @@ mod tests {
         doc.update_dict(ObjRef { num: 3, generation: 0 }, |p| p.set(b"DocMDP".to_vec(), Object::Ref(other))).unwrap();
         let edited = pdfcraft_cos::write_incremental(&doc, &pdfcraft_cos::SaveOptions { object_streams: false, ..Default::default() }).unwrap();
         let doc = Document::open(Arc::new(edited)).unwrap();
-        match classify_changes(&doc, Some(old), Some(1)) {
-            Modification::Disallowed(kinds) => assert!(kinds.contains(&kind::STRUCTURE), "{kinds:?}"),
+        match super::super::operations::judge_changes(&doc, Some(old), Some(1), &super::super::locks::LockScope::none()) {
+            super::super::Modification::Disallowed(kinds) => assert!(kinds.contains(&kind::STRUCTURE), "{kinds:?}"),
             other => panic!("the certification's /Perms changed in place under P=1: {other:?}"),
         }
     }

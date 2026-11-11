@@ -1,8 +1,7 @@
-use super::changes::classify_changes;
 use super::listing::{DigestCache, list, nums, sig_fields, text};
-use super::locks::{Locked, lock_scope};
+use super::locks::{LockScope, Locked, lock_scope};
 use super::operations::judge_changes;
-use super::types::{Detail, Fill, Modification, Status, TrustStore, kind};
+use super::types::{Detail, Fill, Modification, Status, TrustStore};
 use super::{
     Certificate, Dict, DigestAlg, Document, HashSet, ObjRef, Object, SignError, SignatureInfo, SignedData, Time, build_chain, build_chain_noted,
 };
@@ -308,22 +307,18 @@ fn finish_validation(context: SignatureValidation<'_>, verified: VerifiedSignatu
                 // among those ending the revision, any of them could be it, so a lock on any of
                 // them leaves the check undecided rather than borrowing another field's. Each
                 // candidate costs a walk of the form, so past a few the check is undecided too.
-                locks = match bound {
-                    Some(_) => lock_scope(doc, &old, field, v).state,
-                    None if candidates.len() > MAX_UNBOUND_CANDIDATES => Locked::Unchecked,
-                    None if candidates.iter().any(|(f, v)| lock_scope(doc, &old, f, v).state != Locked::Kept) => Locked::Unchecked,
-                    None => Locked::Kept,
-                };
-                match classify_changes(doc, Some(old), info.certify) {
-                    Modification::Allowed(_) if locks == Locked::Changed => Modification::Disallowed(vec![kind::LOCKED_FIELD]),
-                    Modification::Disallowed(mut kinds) if locks == Locked::Changed => {
-                        kinds.push(kind::LOCKED_FIELD);
-                        Modification::Disallowed(kinds)
+                let scope = match bound {
+                    Some(_) => lock_scope(doc, &old, field, v),
+                    None if candidates.len() > MAX_UNBOUND_CANDIDATES => LockScope { state: Locked::Unchecked, objects: HashSet::new() },
+                    None if candidates.iter().any(|(f, v)| lock_scope(doc, &old, f, v).state != Locked::Kept) => {
+                        LockScope { state: Locked::Unchecked, objects: HashSet::new() }
                     }
-                    m => m,
-                }
+                    None => LockScope::none(),
+                };
+                locks = scope.state;
+                judge_changes(doc, Some(old), info.certify, &scope)
             }
-            _ => classify_changes(doc, None, info.certify),
+            _ => judge_changes(doc, None, info.certify, &LockScope::none()),
         }
     };
     let mut problems = false;
@@ -407,37 +402,6 @@ fn finish_validation(context: SignatureValidation<'_>, verified: VerifiedSignatu
             Fill::Value(t.to_string()),
         ));
     }
-}
-
-/// For the shadow comparison of #7032 only, while the operations recogniser runs beside the
-/// classifier it replaces: the verdict on the changes after the signature in `field`, by the
-/// classifier (with its locks merged as validation merges them) and by the recogniser. `None`
-/// when the field holds no signature, nothing follows it, or its signed revision does not list it.
-#[doc(hidden)]
-pub fn shadow_changes(doc: &Document, bytes: &[u8], field: &str) -> Option<(Modification, Modification)> {
-    let f = sig_fields(doc).into_iter().find(|f| f.name == field)?;
-    let v = f.signature(doc)?;
-    let br = nums(doc, &v, b"ByteRange").filter(|b| b.len() == 4 && b.iter().all(|x| *x >= 0.0))?;
-    let covered = (br[2] + br[3]) as usize;
-    if covered >= bytes.len() {
-        return None;
-    }
-    let old = DigestCache::default().revision(doc, bytes, covered)?;
-    let (field, v) = sig_fields(&old).into_iter().filter(|f| f.name == field).find_map(|f| {
-        let v = f.signature(&old)?;
-        nums(&old, &v, b"ByteRange").is_some_and(|b| b.len() == 4 && b[2] + b[3] == covered as f64).then_some((f, v))
-    })?;
-    let certify = if is_doc_timestamp(&v) { None } else { docmdp_reference(&old, &v).filter(|_| names_certification(&old, &v)) };
-    let scope = lock_scope(doc, &old, &field, &v);
-    let legacy = match classify_changes(doc, Some(old.clone()), certify) {
-        Modification::Allowed(_) if scope.state == Locked::Changed => Modification::Disallowed(vec![kind::LOCKED_FIELD]),
-        Modification::Disallowed(mut kinds) if scope.state == Locked::Changed => {
-            kinds.push(kind::LOCKED_FIELD);
-            Modification::Disallowed(kinds)
-        }
-        m => m,
-    };
-    Some((legacy, judge_changes(doc, Some(old), certify, &scope)))
 }
 
 /// Distinct evidence streams read from one `/DSS` array.
@@ -634,7 +598,7 @@ pub(super) fn validate_doc_timestamp(doc: &Document, bytes: &[u8], v: &Dict, inf
     info.modification = if covered == bytes.len() || bytes[covered..].iter().all(|b| b.is_ascii_whitespace() || *b == 0) {
         Modification::None
     } else {
-        classify_changes(doc, cache.revision(doc, bytes, covered), None)
+        judge_changes(doc, cache.revision(doc, bytes, covered), None, &LockScope::none())
     };
     match &info.modification {
         Modification::None => info.details.push(Detail::plain("This document has not been modified since this timestamp was applied.")),
