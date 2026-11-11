@@ -164,6 +164,7 @@ pub(crate) fn remove_invalid(doc: &mut Document, pages: &[ObjRef]) -> Result<(us
 fn referenced_names(doc: &Document) -> HashSet<Vec<u8>> {
     let mut out = HashSet::new();
     let mut seen = HashSet::new();
+    let mut named_refs = HashSet::new();
     let mut stack = vec![Object::Dict(doc.trailer().clone())];
     if let Some(r) = doc.root() {
         stack.push(Object::Ref(r));
@@ -180,11 +181,21 @@ fn referenced_names(doc: &Document) -> HashSet<Vec<u8>> {
                 // string, and an unresolved ref has no name, so the destination it uses would
                 // look unreferenced and be removed. A GoToR or GoToE /D names a destination in
                 // another document, so it does not count as a use of this one's.
-                if let Some(n) = d.get(b"Dest").and_then(|x| dest_name(doc.resolve(x).as_ref())) {
+                // A name given by reference is copied once, however many dictionaries name it.
+                let mut named = |x: Option<&Object>| {
+                    let x = x?;
+                    if let Object::Ref(r) = x
+                        && !named_refs.insert(*r)
+                    {
+                        return None;
+                    }
+                    dest_name(doc.resolve(x).as_ref())
+                };
+                if let Some(n) = named(d.get(b"Dest")) {
                     out.insert(n);
                 }
                 if d.name(b"S") == Some(b"GoTo")
-                    && let Some(n) = d.get(b"D").and_then(|x| dest_name(doc.resolve(x).as_ref()))
+                    && let Some(n) = named(d.get(b"D"))
                 {
                     out.insert(n);
                 }
