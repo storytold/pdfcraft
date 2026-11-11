@@ -172,8 +172,9 @@ impl Ctx<'_, '_> {
         self.doubles("tessellation coordinates")
     }
 
-    /// `VertexColors` [WD 7.8.7.2] for `count` points, read past.
-    fn vertex_colors(&mut self, count: usize, in_wire: bool) -> Result<Vec<[u8; 4]>, PrcError> {
+    /// `VertexColors` [WD 7.8.7.2] for `count` points. Kept colours are charged to the element
+    /// budget before they are allocated; with `keep` false they are read past and none is stored.
+    fn vertex_colors(&mut self, count: usize, in_wire: bool, keep: bool) -> Result<Vec<[u8; 4]>, PrcError> {
         let rgba = self.r.bit()?;
         // prc-rs: `is_segment_color` exists only inside a wire.
         let per_segment = in_wire && self.r.bit()?;
@@ -187,8 +188,17 @@ impl Ctx<'_, '_> {
         if count > 0 && (count - 1).saturating_add(8 * bytes) > self.r.remaining() {
             return Err(PrcError::Truncated("vertex colours"));
         }
-        // `count` is at most the bits left (checked above), and each colour is pushed for at most
-        // two points: at most 8 bytes of colours per input bit.
+        if !keep {
+            for i in 0..count {
+                if i == 0 || !self.r.bit()? {
+                    for _ in 0..bytes {
+                        self.r.character()?;
+                    }
+                }
+            }
+            return Ok(Vec::new());
+        }
+        self.r.take_elements(points)?;
         let mut out = Vec::with_capacity(points);
         let mut last = [0, 0, 0, 255];
         for i in 0..count {
@@ -267,7 +277,7 @@ impl Ctx<'_, '_> {
         let mut face = Face { flags, start, data, textures, styles, behaviour: 0 };
         if self.r.bit()? {
             let n = face.point_count()?;
-            self.vertex_colors(n, false)?;
+            self.vertex_colors(n, false, false)?;
         }
         if !face.styles.is_empty() {
             let bits = self.r.unsigned_integer()?;
@@ -309,7 +319,7 @@ impl Ctx<'_, '_> {
                 _ => wires.push(wire),
             }
         }
-        let flat = if self.r.bit()? { self.vertex_colors(colours, true)? } else { Vec::new() };
+        let flat = if self.r.bit()? { self.vertex_colors(colours, true, true)? } else { Vec::new() };
         self.schema.skip_added_fields(TESS_3D_WIRE, &mut self.r)?;
         Ok(WireTessellation { colours: split_like(&wires, flat), polylines: wires })
     }

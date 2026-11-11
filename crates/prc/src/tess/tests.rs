@@ -761,3 +761,32 @@ fn the_globals_schema_and_the_tessellations_share_one_allowance() {
     assert!(within(need).is_ok());
     assert!(matches!(within(need - 1), Err(PrcError::TooManyElements { .. })));
 }
+
+/// A wire of [`SQUARE`]'s four points without indices, with four kept RGB colours or none.
+fn bare_wire(colours: bool) -> W {
+    let mut b = W::default();
+    square(&mut b, 175);
+    b.uint(0).bit(colours);
+    if colours {
+        b.bit(false).bit(false).bit(false).put(1, 24);
+        for _ in 1..4 {
+            b.bit(true);
+        }
+    }
+    section(1, &b)
+}
+
+#[test]
+fn kept_wire_colours_are_charged_before_they_are_made() {
+    let plain = spent(&bare_wire(false));
+    assert_eq!(spent(&bare_wire(true)) - plain, 4);
+    let bytes = bare_wire(true).bytes();
+    let schema = Schema::default();
+    let r = Ctx::new(BitReader::with_elements(&bytes, plain), &schema, 8137).file_structure_tessellation();
+    assert!(matches!(r, Err(PrcError::TooManyElements { .. })), "{r:?}");
+}
+
+#[test]
+fn face_colours_that_are_read_past_are_not_charged() {
+    assert_eq!(spent(&styled_face_section(&[], 7, 0x30)), spent(&styled_face_section(&[], 0, 0x30)));
+}
