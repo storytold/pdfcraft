@@ -303,6 +303,24 @@ mod tests {
     }
 
     #[test]
+    fn an_open_reported_after_the_greeting_is_not_a_second_hello() -> Result<(), Box<dyn std::error::Error>> {
+        // The page's socket opens before the first step and the hello goes out
+        // at once; the `Opened` the callback queued is read on a later step.
+        // That is the same connection, so it must not be greeted again (the
+        // room answers "this connection is already joined").
+        let doc = DocKey::new("file-1")?;
+        let mut session = super::Session::new(Config::new("ws://example/", "token", doc, ClientInfo { name: "test".into(), version: "0".into() }));
+        session.opened();
+        let mut socket = Scripted { incoming: Default::default(), written: Vec::new(), open: true };
+        assert_eq!(session.step(&mut socket), Step::Continue);
+        assert_eq!(socket.written.len(), 1, "the first hello");
+        socket.incoming.push_back(super::ReadOutcome::Opened);
+        assert_eq!(session.step(&mut socket), Step::Continue);
+        assert_eq!(socket.written.len(), 1, "one hello per connection");
+        Ok(())
+    }
+
+    #[test]
     fn an_unreadable_frame_is_a_notice_not_a_disconnect() -> Result<(), Box<dyn std::error::Error>> {
         let doc = DocKey::new("file-1")?;
         let mut session = super::Session::new(Config::new("ws://example/", "token", doc, ClientInfo { name: "test".into(), version: "0".into() }));

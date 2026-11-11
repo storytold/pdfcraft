@@ -130,6 +130,14 @@ impl Session {
         for _ in 0..MAX_FRAMES_PER_STEP {
             match socket.read() {
                 ReadOutcome::Opened => {
+                    // A greeting already went out on this socket: the page's
+                    // `WebSocket` can be open before the first step (the hello
+                    // is written straight away), and its `Opened` is read
+                    // afterwards. Treating that as a new connection sends a
+                    // second hello and the server answers "already joined".
+                    if self.live && self.greeted {
+                        continue;
+                    }
                     self.opened();
                     if !self.greet(socket) {
                         outcome = self.lost();
