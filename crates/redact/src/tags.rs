@@ -2,7 +2,7 @@
 //!
 //! Marked content (MCIDs) that applying redactions changed is found by comparing each MCID's
 //! operators before and after. Elements owning such content lose their alternate text, actual
-//! text and expansion (which may spell out the removed words);
+//! text, title and expansion (which may spell out the removed words), as do their ancestors;
 //! references to marked content that is now empty are dropped from the element.
 
 use std::collections::{HashMap, HashSet};
@@ -281,7 +281,7 @@ pub(crate) fn clean_within(
         }
         doc.update_dict(r, |e| {
             if sensitive {
-                for key in [&b"Alt"[..], b"ActualText", b"E"] {
+                for key in DESCRIPTIONS {
                     e.remove(key);
                 }
             }
@@ -321,8 +321,10 @@ impl Above {
     }
 }
 
-/// The keys of an element that describe its content.
-const DESCRIPTIONS: [&[u8]; 3] = [b"Alt", b"ActualText", b"E"];
+/// The keys of an element that describe its content, and so may repeat what was removed: one
+/// policy for the element that owned it, the elements above it and elements written in place.
+/// The title (`/T`) is included, as producers often fill it with the element's text.
+const DESCRIPTIONS: [&[u8]; 4] = [b"Alt", b"ActualText", b"T", b"E"];
 
 /// Each element's parents as the walk found them: through `/K`, which `/P` may not agree with.
 struct Parents(HashMap<ObjRef, Vec<Above>>);
@@ -539,7 +541,7 @@ pub(crate) fn drop_object_refs_within(doc: &mut Document, gone: &HashSet<ObjRef>
             // An element that lost an annotation keeps no text describing it, even with other
             // kids left: a link's alternate text often repeats the URL, an annotation's its
             // comment. Elements above it may describe it too.
-            for key in [&b"Alt"[..], b"ActualText", b"T", b"E"] {
+            for key in DESCRIPTIONS {
                 e.remove(key);
             }
         })?;

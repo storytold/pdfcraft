@@ -11,7 +11,7 @@
 //! Dialogs are drawn after the pages, so on the frame one opens egui has not met its layer yet:
 //! the reading also takes whether one is open.
 
-use egui::{Event, PointerButton, Pos2, Rect};
+use egui::{Event, Modifiers, PointerButton, Pos2, Rect};
 
 /// A primary-button press or release, and where it happened.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -39,18 +39,36 @@ pub(crate) struct PagePointer {
     pub origin: Option<Pos2>,
     /// This frame's primary presses and releases of a press the pages hold, in order.
     pub edges: Vec<Edge>,
+    /// Where this frame's last primary release of a press the pages hold was: where a click came
+    /// up, which the pointer may have left by the frame's end. Kept past the cap on `edges`.
+    pub released: Option<Pos2>,
     /// The primary button is down, wherever it was pressed: a gesture ends once it is up.
     pub primary_down: bool,
     /// Some button is down, wherever it was pressed.
     pub any_down: bool,
+    /// The modifier keys held at this frame's first primary press, or else now: a press with Shift
+    /// or ⌘ adds to a selection.
+    pub modifiers: Modifiers,
+    /// A primary press the pages hold turned into a drag this frame. egui's own `drag_started()`
+    /// counts every button, so a right-button drag would start what a left-button drag does.
+    pub drag_started: bool,
 }
 
 impl PagePointer {
     /// The pointer for `resp`, the content widget that holds every page, allocated in `ui`, while
     /// a dialog is open over the window or not (`modal`).
     pub(crate) fn read(ui: &egui::Ui, resp: &egui::Response, modal: bool) -> Self {
-        let (at, origin, edges, primary_down, any_down) =
-            ui.input(|i| (i.pointer.interact_pos(), i.pointer.press_origin(), edges(&i.events), i.pointer.primary_down(), i.pointer.any_down()));
+        let (at, origin, edges, released, primary_down, any_down, modifiers) = ui.input(|i| {
+            (
+                i.pointer.interact_pos(),
+                i.pointer.press_origin(),
+                edges(&i.events),
+                last_release(&i.events),
+                i.pointer.primary_down(),
+                i.pointer.any_down(),
+                press_modifiers(&i.events).unwrap_or(i.modifiers),
+            )
+        });
         // egui's own answer to "do the pages hold a press?": from the press on until the frame
         // of its click, release or drag stop. A drag can outlive egui's press while the
         // pointer is outside the window. With a dialog open only a drag counts, up to the frame
@@ -64,9 +82,10 @@ impl PagePointer {
             resp.dragged() || resp.drag_stopped() || (!modal && (resp.interact_pointer_pos().is_some() || press_origin.is_some_and(|p| on_top(&p))));
         let pos = at.filter(|p| held || on_top(p));
         if !held {
-            return Self { pos, origin: None, edges: Vec::new(), primary_down, any_down };
+            return Self { pos, origin: None, edges: Vec::new(), released: None, primary_down, any_down, modifiers, drag_started: false };
         }
-        Self { pos, origin: press_origin, edges, primary_down, any_down }
+        let drag_started = resp.drag_started_by(PointerButton::Primary);
+        Self { pos, origin: press_origin, edges, released, primary_down, any_down, modifiers, drag_started }
     }
 
     /// Where the pointer is, when it is inside `r`.
@@ -94,6 +113,22 @@ fn first_press(edges: &[Edge]) -> Option<Pos2> {
     edges.iter().find_map(|e| match e {
         Edge::Press(p) => Some(*p),
         Edge::Release(_) => None,
+    })
+}
+
+/// The modifier keys held at the first primary press among `events`.
+fn press_modifiers(events: &[Event]) -> Option<Modifiers> {
+    events.iter().find_map(|e| match e {
+        Event::PointerButton { button: PointerButton::Primary, pressed: true, modifiers, .. } => Some(*modifiers),
+        _ => None,
+    })
+}
+
+/// Where the last primary release among `events` was, however many came before it.
+fn last_release(events: &[Event]) -> Option<Pos2> {
+    events.iter().rev().find_map(|e| match e {
+        Event::PointerButton { pos, button: PointerButton::Primary, pressed: false, .. } if pos.is_finite() => Some(*pos),
+        _ => None,
     })
 }
 
