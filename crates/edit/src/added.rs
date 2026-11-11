@@ -9,9 +9,7 @@
 //! `/UserUnit` it was written for.
 
 use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString, Stream};
-use pdfcraft_fonts::{
-    GlyphError, GlyphOutline, ShapedCluster, ShapedScript, Std14, literal, shape_arabic, shape_hebrew, shape_thai, shape_thai_styled, shaped_glyph, win_ansi,
-};
+use pdfcraft_fonts::{GlyphError, GlyphOutline, ShapedScript, Std14, literal, shape_arabic, shape_hebrew, shape_thai_styled, shaped_glyph, win_ansi};
 use unicode_bidi::{Level, ParagraphBidiInfo};
 
 use crate::{EditError, MarkKind, check, contents, matrix_number, n, page_list, place_tagged};
