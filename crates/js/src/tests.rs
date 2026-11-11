@@ -19,12 +19,65 @@ fn fields() -> Vec<FieldState> {
 
 /// The document these tests' scripts run in.
 fn doc() -> DocInfo {
-    DocInfo { file_name: "order.pdf".into(), num_pages: 3, page: 0, info: vec![("title".into(), "Order".into())], highlight: false, xfa: false }
+    DocInfo { file_name: "order.pdf".into(), num_pages: 3, page: 0, info: vec![("title".into(), "Order".into())], ..Default::default() }
 }
 
 /// Run AcroForm JavaScript `script` for `event` on these tests' document and fields.
 fn go(script: &str, event: &Event) -> Outcome {
     run(script, event, &doc(), &fields(), &[], Limits::default())
+}
+
+#[test]
+fn calculate_now_reports_errors_and_continues() {
+    let calculations =
+        vec![("bad".into(), "getField('price').value = 'partial'; throw new Error('broken');".into()), ("good".into(), "event.value = 'ok';".into())];
+    let state = Arc::new(vec![
+        FieldState::new("bad", FieldType::Text, vec![]),
+        FieldState::new("good", FieldType::Text, vec![]),
+        FieldState::new("price", FieldType::Text, vec![]),
+    ]);
+    let outcome = run_shared_calculations(
+        "calculateNow(); console.println('continued');",
+        &Event::doc("Console"),
+        &doc(),
+        state,
+        &[],
+        &calculations,
+        Limits::default(),
+    );
+    assert_eq!(outcome.error, None);
+    assert!(outcome.console.iter().any(|line| line.contains("calculation script for bad failed: Error: broken")), "{outcome:?}");
+    assert!(outcome.console.iter().any(|line| line == "continued"), "{outcome:?}");
+    assert_eq!(outcome.changed.iter().find(|field| field.name == "good").unwrap().value, ["ok"]);
+    assert!(outcome.changed.iter().all(|field| field.name != "price"), "{outcome:?}");
+    assert_eq!(outcome.formatted, BTreeSet::from(["good".into()]));
+}
+
+#[test]
+fn calculate_now_sets_read_only_fields_and_handles_hundreds() {
+    let mut states = Vec::new();
+    let mut calculations = Vec::new();
+    for index in 0..300 {
+        let name = format!("field{index}");
+        let mut state = FieldState::new(name.clone(), FieldType::Text, vec![]);
+        state.readonly = true;
+        states.push(state);
+        calculations.push((name, "event.value = 'calculated';".into()));
+    }
+    let state = Arc::new(states);
+    let outcome =
+        run_shared_calculations("calculateNow();", &Event::doc("Console"), &doc(), Arc::clone(&state), &[], &calculations, Limits::default());
+    assert_eq!(outcome.error, None, "{outcome:?}");
+    assert_eq!(outcome.changed.len(), 300);
+    assert!(outcome.changed.iter().all(|field| field.value == ["calculated"] && field.readonly));
+}
+
+#[test]
+fn caught_calculate_now_recursion_has_a_step_limit() {
+    let calculations: Vec<_> = (0..600).map(|index| (format!("loop{index}"), "try { calculateNow(); } catch (e) {}".into())).collect();
+    let state = Arc::new(calculations.iter().map(|(name, _)| FieldState::new(name.clone(), FieldType::Text, vec![])).collect());
+    let outcome = run_shared_calculations("calculateNow();", &Event::doc("Console"), &doc(), state, &[], &calculations, Limits::default());
+    assert!(outcome.error.as_deref().is_some_and(|error| error.contains("calculateNow evaluation limit exceeded")), "{outcome:?}");
 }
 
 #[test]
@@ -48,6 +101,49 @@ fn the_outcome_says_whether_the_script_assigned_event_value() {
     assert_eq!((o.value.as_str(), o.value_set), ("7", false));
     let o = go("Object.keys(event).indexOf('value') >= 0;", &ev);
     assert_eq!(o.result.as_deref(), Some("true"), "value stays an enumerable property of event");
+}
+
+#[test]
+fn get_page_box_returns_supported_boxes_in_rotated_user_space() {
+    let mut document = doc();
+    document.page_boxes = vec![
+        [
+            [10.0, 20.0, 210.0, 320.0],
+            [20.0, 30.0, 200.0, 310.0],
+            [25.0, 35.0, 195.0, 305.0],
+            [30.0, 40.0, 190.0, 300.0],
+            [35.0, 45.0, 185.0, 295.0]
+        ];
+        3
+    ];
+    document.page_rotations = vec![0, 90, 270];
+    let out = run(
+        "JSON.stringify([this.getPageBox(), this.getPageBox('Media', 1), this.getPageBox('Bleed', 0), this.getPageBox('Trim', 0), this.getPageBox('Art', 2)])",
+        &Event::doc("Console"),
+        &document,
+        &[],
+        &[],
+        Limits::default(),
+    );
+    assert_eq!(out.error, None);
+    assert_eq!(out.result.as_deref(), Some("[[0,280,180,0],[-10,190,290,-10],[5,275,175,5],[10,270,170,10],[15,165,265,15]]"));
+}
+
+#[test]
+fn get_page_box_rejects_unknown_boxes_and_invalid_pages() {
+    for script in [
+        "this.getPageBox('BBox')",
+        "this.getPageBox(1)",
+        "this.getPageBox('Crop', -1)",
+        "this.getPageBox('Crop', 1.5)",
+        "this.getPageBox('Crop', 3)",
+        "this.getPageBox('Crop', null)",
+        "this.getPageBox('Crop', true)",
+        "this.getPageBox('Crop', '0')",
+    ] {
+        let out = go(script, &Event::doc("Console"));
+        assert!(out.error.is_some(), "{script}");
+    }
 }
 
 #[test]
@@ -90,6 +186,40 @@ fn scripts_change_other_fields_and_their_properties() {
     assert_eq!(total.text_color.as_deref(), Some(&["RGB".to_string(), "1".into(), "0".into(), "0".into()][..]));
     assert_eq!(o.changed.iter().find(|f| f.name == "agree").unwrap().value, ["Yes"]);
     assert_eq!(o.changed.iter().find(|f| f.name == "size").unwrap().value, ["l"]);
+}
+
+#[test]
+fn push_button_caption_methods_read_write_and_reject_other_faces() {
+    let mut button = FieldState::new("go", FieldType::Button, vec![]);
+    button.caption = Some("Old".into());
+    let fields = vec![button, FieldState::new("blank", FieldType::Button, vec![]), FieldState::new("text", FieldType::Text, vec![])];
+    let run = |script: &str| run(script, &Event::field("Mouse Up", "go", ""), &doc(), &fields, &[], Limits::default());
+    let got = run("event.value = getField('go').buttonGetCaption();");
+    assert_eq!(got.value, "Old");
+    let set = run("getField('go').buttonSetCaption('New'); event.value = getField('go').buttonGetCaption();");
+    assert_eq!(set.value, "New");
+    assert_eq!(set.changed[0].caption.as_deref(), Some("New"));
+    let same = run("getField('go').buttonSetCaption('Old');");
+    assert_eq!(same.changed[0].caption.as_deref(), Some("Old"), "same-text writes still update every widget");
+    assert!(run("getField('go').buttonSetCaption();").error.is_some());
+    let long_caption = "x".repeat(crate::xfa::MAX_LINE + 10);
+    let capped = run(&format!("getField('go').buttonSetCaption('{long_caption}');"));
+    assert_eq!(capped.error, None);
+    let caption = capped.changed[0].caption.as_deref().unwrap_or_default();
+    assert_eq!(caption.chars().count(), crate::xfa::MAX_LINE + 1);
+    assert!(caption.ends_with('…'));
+    let explicit = run("event.value = getField('go').buttonGetCaption(0);");
+    assert_eq!(explicit.value, "Old");
+    let format =
+        super::run("getField('go').buttonSetCaption('Discarded');", &Event::field("Format", "go", "Old"), &doc(), &fields, &[], Limits::default());
+    assert!(format.error.as_deref().is_some_and(|e| e.contains("buttonSetCaption is not available in a Format event")));
+    assert!(run("getField('go').buttonSetCaption('Bad', 1);").error.is_some());
+    assert!(run("getField('text').buttonSetCaption('Bad');").error.is_some());
+    assert!(run("getField('go').buttonGetCaption(1);").error.is_some());
+    let empty = run("event.value = getField('blank').buttonGetCaption();");
+    assert_eq!(empty.error, None);
+    assert_eq!(empty.value, "");
+    assert!(run("getField('text').buttonGetCaption();").error.is_some());
 }
 
 #[test]
@@ -390,12 +520,17 @@ fn app_alert_titles_are_clipped_and_charged() {
     // The title's bytes count against the budget with the text's, and a message the budget
     // has no room for is left out and counted.
     let mut h = Host {
+        event_name: "Open".into(),
         fields: Arc::new(Vec::new()),
         changed: BTreeSet::new(),
+        formatted: BTreeSet::new(),
         alerts: Vec::new(),
         console: Vec::new(),
         requests: Vec::new(),
         doc: doc(),
+        calculations: Arc::new(Vec::new()),
+        calculate_depth: 0,
+        calculate_steps: 0,
         kept: 0,
         dropped: 0,
     };
@@ -531,6 +666,8 @@ fn deeply_nested_scripts_fail_instead_of_crashing() {
     assert!(o.doc_errors.len() == 1 && o.doc_errors[0].contains("nested too deeply"), "{:?}", o.doc_errors);
 }
 
+/// Ordinary nesting below the guard's limits runs, and brackets in strings and comments don't
+/// count, however many there are.
 #[test]
 fn ordinary_nesting_still_runs() {
     let n = 40;
@@ -538,9 +675,162 @@ fn ordinary_nesting_still_runs() {
     let o = go(&s, &Event::field("Calculate", "a", ""));
     assert_eq!(o.error, None);
     assert_eq!(o.value, "5");
-    // Brackets in strings and comments don't count.
-    let s = format!("// {}\nevent.value = '{}'.length;", "(".repeat(1000), "[".repeat(1000));
+    let s = format!("// {}\n/* {} */ event.value = '{}'.length;", "(".repeat(1000), "{".repeat(1000), "[".repeat(1000));
     assert_eq!(go(&s, &Event::field("Calculate", "a", "")).value, "1000");
+}
+
+/// The reported #5079 reproduction: a regex literal whose body holds a quote (`/'/`) must not
+/// hide the brackets that follow it from the nesting guard. The old scan read `'` as the start
+/// of a string, so every `(` after `/'/` on the line was skipped; boa's unbounded recursive
+/// parser then overflowed the script thread's stack (the console's `js_run` path, on the
+/// `pdfcraft-js` thread) and aborted the app. With that scan, 200 brackets fail this assertion
+/// cleanly (boa reports a SyntaxError) and 64,000, the issue's file, overflow the stack.
+#[test]
+fn a_quote_in_a_regex_cannot_hide_nesting_from_the_guard() {
+    for n in [200, 64_000] {
+        let s = format!("event.value = /'/ {}1;", "(".repeat(n));
+        let o = go(&s, &Event::field("Calculate", "a", ""));
+        assert!(o.error.as_deref().is_some_and(|e| e.contains("nested too deeply")), "{n}: {:?}", o.error);
+    }
+}
+
+/// A quote in a regex character class, with the real nesting after it, is refused, while
+/// ordinary string and regex literals still run, strings of brackets of any length among them.
+#[test]
+fn nesting_guard_counts_brackets_hidden_by_a_regex_quote() {
+    let hidden = format!("var r = /['\"]/; event.value = {}1{}; event.value = 'ok';", "(".repeat(65), ")".repeat(65));
+    assert!(super::run::refuse(&hidden).is_some_and(|e| e.contains("nested too deeply")), "the regex quote must not hide parser nesting");
+
+    let o = go("event.value = '()[]{}'.length;", &Event::field("Calculate", "a", ""));
+    assert_eq!((o.error, o.value.as_str()), (None, "6"));
+    let o = go("var r = /['\"]/; event.value = r.test(\"'\") ? 1 : 0;", &Event::field("Calculate", "a", ""));
+    assert_eq!((o.error, o.value.as_str()), (None, "1"));
+    for n in [64, 65, 10_000] {
+        let o = go(&format!("event.value = '{}'.length;", "(".repeat(n)), &Event::field("Calculate", "a", ""));
+        assert_eq!((o.error, o.value), (None, n.to_string()));
+    }
+}
+
+/// A script that nests one level deeper on each line, behind a quote inside a regular
+/// expression: `x=` followed by lines of `(/"/,"))))",` (#5079, after the first fix). A scan
+/// that reads the regex's quote as the start of a string is out of phase with the real strings
+/// from there on: it reads `"/,"` as a string and the closing brackets in the real string
+/// `"))))"` as code, so on every line its depth falls back to 0 while boa's grows by one. 5,000
+/// lines are 65 KB, under the size limit, and nest 5,000 deep. The same with `'`, and with
+/// template text, which that scan didn't skip at all, is refused too. As deep as the limit,
+/// closed properly, is ordinary code and runs.
+#[test]
+fn a_quote_in_a_regex_cannot_put_the_guard_out_of_phase() {
+    use super::nesting::MAX_BRACKET_DEPTH;
+    for q in ["\"", "'", "`"] {
+        let line = format!("(/{q}/,{q}))))){q},\n");
+        for n in [MAX_BRACKET_DEPTH + 1, 5_000] {
+            let s = format!("x={}", line.repeat(n));
+            assert!(s.len() <= super::MAX_SCRIPT_BYTES);
+            assert!(super::run::refuse(&s).is_some_and(|e| e.contains("nested too deeply")), "{q} x {n}");
+        }
+        // The real strings alone, with no regex in front.
+        let s = format!("x={}", format!("({q}))))){q},").repeat(MAX_BRACKET_DEPTH + 1));
+        assert!(super::run::refuse(&s).is_some_and(|e| e.contains("nested too deeply")), "{q} without the regex");
+
+        let n = MAX_BRACKET_DEPTH;
+        let s = format!("var x={}0{};\nevent.value = x;", line.repeat(n), ")".repeat(n));
+        let o = go(&s, &Event::field("Calculate", "a", ""));
+        assert_eq!((o.error, o.value.as_str()), (None, "0"), "{q}");
+    }
+}
+
+/// Template substitutions nest like brackets, and template text, comments and regular
+/// expressions full of brackets, quotes and slashes still run.
+#[test]
+fn nesting_guard_reads_templates_regexes_and_comments() {
+    use super::nesting::MAX_BRACKET_DEPTH;
+    let nested = |n: usize| (0..n).fold("1".to_string(), |s, _| format!("`${{{s}}}`"));
+    let o = go(&format!("event.value = {};", nested(10)), &Event::field("Calculate", "a", ""));
+    assert_eq!((o.error, o.value.as_str()), (None, "1"));
+    assert!(super::run::refuse(&nested(MAX_BRACKET_DEPTH + 1)).is_some_and(|e| e.contains("nested too deeply")));
+
+    let s = [
+        "var r = /[(\\[{'\"`/]+/g, s = \"a(b[c{d'e`f/g\";",
+        "var t = `((( [[[ {{{ ' \" / ${s.replace(r, '')} ${'}'} )`;",
+        "var u = /\\(/.source + /[)]/.source + /(a)(?:b)/.source + /a{2}/.source;",
+        "// a comment with ((( and ' and \"",
+        "/* another with [[[ and ` and / */",
+        "var v = 10 / 2 / 5, w = (10 / 2) / 5, z = 1; z--> 0; <!-- an old-style comment (((",
+        "event.value = [t.length, u, v, w].join(' ');",
+    ]
+    .join("\n");
+    let o = go(&s, &Event::field("Calculate", "a", ""));
+    assert_eq!((o.error, o.value.as_str()), (None, "29 \\([)](a)(?:b)a{2} 1 1"));
+}
+
+/// A leading `#!` line is a comment: brackets in it don't count, while nesting on the lines
+/// after it still does.
+#[test]
+fn a_hashbang_line_is_read_as_a_comment() {
+    use super::nesting::MAX_BRACKET_DEPTH;
+    let s = format!("#!{}\nevent.value = 1;", "(".repeat(MAX_BRACKET_DEPTH + 1));
+    let o = go(&s, &Event::field("Calculate", "a", ""));
+    assert_eq!((o.error, o.value.as_str()), (None, "1"));
+    let n = MAX_BRACKET_DEPTH + 1;
+    let s = format!("#!\nevent.value = {}1{};", "(".repeat(n), ")".repeat(n));
+    assert!(super::run::refuse(&s).is_some_and(|e| e.contains("nested too deeply")));
+}
+
+/// Divisions don't add up to a refusal: a form's calculation rounds with `/` many times over,
+/// and on one long line, and each `/` could start a regular expression as far as the scan
+/// knows. The reading as a regular expression is dropped where boa would reject it.
+#[test]
+fn divisions_do_not_add_up_to_a_refusal() {
+    let s = format!("var a = 7, b = 2, x = 0;\n{}event.value = x;", "x = Math.round(a / b * 100) / 100; x = (a / b) / (b / b);\n".repeat(500));
+    assert!(s.len() <= super::MAX_SCRIPT_BYTES);
+    let o = go(&s, &Event::field("Calculate", "a", ""));
+    assert_eq!((o.error, o.value.as_str()), (None, "3.5"));
+    let s = format!("event.value = 1{};", "/1".repeat(2_000));
+    let o = go(&s, &Event::field("Calculate", "a", ""));
+    assert_eq!((o.error, o.value.as_str()), (None, "1"));
+}
+
+/// What the guard's reading assumes boa does: a string or regular expression can't run into a
+/// line break, and a regular expression's groups must match, all as syntax errors when boa
+/// reads the script. The guard drops a reading at those points; if boa ever accepted one of
+/// these, that reading could be boa's, and the guard would have to keep it.
+#[test]
+fn boa_rejects_what_the_nesting_guard_drops() {
+    for s in ["var r = /)/;", "var r = /(/;", "var r = /a)(b/;", "var r = /a\n/;", "var r = /a\\\n/;", "var s = 'a\nb';", "var s = \"a\rb\";"] {
+        // Rejected while boa reads the script, before the line in front of it runs.
+        let o = go(&format!("console.println('ran');\n{s}"), &Event::field("Calculate", "a", ""));
+        assert!(o.error.as_deref().is_some_and(|e| !e.contains("nested too deeply")), "{s:?}: {:?}", o.error);
+        assert!(o.console.is_empty(), "{s:?} was rejected only when it ran: {:?}", o.console);
+    }
+    for s in ["var r = /[(]/;", "var r = /\\)/;", "var r = /[)]/;", "var s = 'a\\\nb';", "var s = 'a\u{2028}b';"] {
+        let o = go(s, &Event::field("Calculate", "a", ""));
+        assert_eq!(o.error, None, "{s:?}");
+    }
+}
+
+/// The guard's three limits sit exactly where documented: 64 nested brackets, a run of 64
+/// prefix operators and 4,096 conditionals pass, and one more of each is refused.
+#[test]
+fn nesting_guard_limits_brackets_prefixes_and_conditionals_separately() {
+    assert_eq!(super::run::refuse(&format!("{}1{}", "(".repeat(64), ")".repeat(64))), None);
+    assert!(super::run::refuse(&format!("{}1{}", "(".repeat(65), ")".repeat(65))).is_some());
+
+    assert_eq!(super::run::refuse(&format!("{}1", "!".repeat(64))), None);
+    assert!(super::run::refuse(&format!("{}1", "!".repeat(65))).is_some());
+
+    assert_eq!(super::run::refuse(&"?".repeat(4096)), None);
+    assert!(super::run::refuse(&"?".repeat(4097)).is_some());
+}
+
+/// Closing brackets inside a comment don't cancel real nesting (#5079): 1,000 groups of 50
+/// opening brackets, each followed by a block comment holding 50 closing ones, nest 50,000 deep
+/// for the parser, and the guard refuses the script before boa parses it.
+#[test]
+fn closing_brackets_in_comments_do_not_cancel_nesting() {
+    let group = format!("{}/*{}*/", "(".repeat(50), ")".repeat(50));
+    let s = group.repeat(1000);
+    assert_eq!(super::run::refuse(&s).as_deref(), Some("the script is nested too deeply to run safely"));
 }
 
 /// Code built from strings at run time would reach the parser without the size and nesting
@@ -1637,7 +1927,21 @@ $host.gotoURL("https://example.org")"#,
             Limits { loop_iterations: u64::MAX, recursion: 32 },
             Some(std::time::Duration::ZERO),
         );
-        assert!(o.error.unwrap().contains("too long"));
+        assert!(o.abandoned && o.error.as_deref().is_some_and(|e| e.contains("ran longer")), "{o:?}");
+        // Stopped by its clock, a script keeps none of its changes, as when the caller stops
+        // waiting first: the outcome is the same whichever side notices. A loop adding rows
+        // until the clock stops it kept up to 1000 new rows when the script noticed first.
+        let o = crate::formcalc::run_formcalc_at(
+            "while (1) do table._row.addInstance(1) endwhile",
+            &ev,
+            &doc,
+            std::sync::Arc::new(form()),
+            false,
+            Limits { loop_iterations: u64::MAX, recursion: 32 },
+            Some(std::time::Duration::from_millis(50)),
+        );
+        assert!(o.abandoned && o.effects.is_empty() && o.notes.is_empty(), "{:?}, {} effects", o.error, o.effects.len());
+        assert!(o.error.as_deref().is_some_and(|e| e.contains("ran longer")), "{:?}", o.error);
         assert!(run_hostile_formcalc(&format!("{}1{}", "-".repeat(5000), "")).error.is_some());
         assert!(run_hostile_formcalc("var s = \"x\"\nfor i = 1 upto 100 do s = Concat(s, s) endfor\nLen(s)").error.unwrap().contains("too long"));
         assert!(run_hostile_formcalc("Space(1e12)").error.is_none());
@@ -1840,6 +2144,22 @@ mod session {
         assert!(started.elapsed() < std::time::Duration::from_secs(10), "{:?}", started.elapsed());
     }
 
+    /// The #5079 reproduction on the XFA-open path: an initialize script of `/'/` followed by
+    /// 64,000 `(` overflowed the `pdfcraft-xfa-session` thread's stack and aborted the app. The
+    /// nesting guard reads past the regex's quote, so the script is refused and the session stays
+    /// alive for the next one. So is one where the quote puts later strings out of phase, nesting
+    /// a level deeper on each of 5,000 lines.
+    #[test]
+    fn a_quote_in_a_regex_cannot_hide_nesting_from_an_initialize_script() {
+        let mut s = XfaSession::new(XfaDoc::default());
+        for hostile in [format!("/'/ {}1", "(".repeat(64_000)), format!("x={}", "(/\"/,\"))))\",\n".repeat(5_000))] {
+            let o = s.run(script(&hostile, false, "form1[0].page1[0].total[0]", "initialize"));
+            assert!(o.error.as_deref().is_some_and(|e| e.contains("nested too deeply")), "{:?}", o.error);
+        }
+        assert_eq!(s.dead(), None);
+        assert_eq!(s.run(script("1 + 1", false, "form1[0].page1[0].total[0]", "calculate")).result.as_deref(), Some("2"));
+    }
+
     /// A JavaScript or FormCalc script whose engine takes longer to be ready than the script's
     /// time limit still runs and returns its result, and the session stays alive.
     #[test]
@@ -1885,6 +2205,16 @@ mod session {
         slow.timeout = std::time::Duration::from_millis(200);
         let o = s.run(slow);
         assert!(o.abandoned || o.error.as_deref().is_some_and(|e| e.contains("too long")), "{o:?}");
+        // Whether the script's clock or the session's wait notices first, a FormCalc loop
+        // adding rows until the time is up is abandoned with none of its rows, and the session
+        // is dead after it.
+        let mut s = XfaSession::new(XfaDoc::default());
+        let mut slow = script("while (1) do table._row.addInstance(1) endwhile", true, "form1[0].page1[0].go[0]", "click");
+        slow.limits = Limits { loop_iterations: u64::MAX, recursion: 32 };
+        slow.timeout = std::time::Duration::from_millis(200);
+        let o = s.run(slow);
+        assert!(o.abandoned && o.effects.is_empty(), "{:?}, {} effects", o.error, o.effects.len());
+        assert!(s.dead().is_some_and(|w| w.contains("abandoned")));
     }
 }
 
@@ -1922,6 +2252,61 @@ fn shared_field_snapshots_isolate_writes_errors_and_script_globals() {
     assert_eq!(read.error, None);
     assert_eq!(read.value, "undefined:4:false");
     assert!(read.changed.is_empty());
+}
+
+mod data_objects {
+    use super::*;
+    use crate::xfa::{XfaDoc, XfaEffect, XfaEvent, run_xfa};
+
+    /// `exportDataObject`, as a document method or a bare global, asks to open the named attached
+    /// file when `nLaunch` is 1 or 2 and to save it otherwise; without `cName` it is an error.
+    #[test]
+    fn export_data_object_asks_to_open_or_save_an_attached_file() {
+        let o = go(
+            "this.exportDataObject({cName: 'Guide.pdf', nLaunch: 2}); exportDataObject('notes.txt'); \
+             this.exportDataObject({cName: 'form.pdf', nLaunch: 1});",
+            &Event::field("Mouse Up", "total", ""),
+        );
+        assert_eq!(o.error, None);
+        assert_eq!(
+            o.requests,
+            [
+                Request::OpenAttachment { name: "Guide.pdf".into(), open: true },
+                Request::OpenAttachment { name: "notes.txt".into(), open: false },
+                Request::OpenAttachment { name: "form.pdf".into(), open: true },
+            ]
+        );
+        let o = go("this.exportDataObject({nLaunch: 2})", &Event::field("Mouse Up", "total", ""));
+        assert!(o.error.as_deref().is_some_and(|e| e.contains("cName")), "{:?}", o.error);
+        assert!(o.requests.is_empty());
+    }
+
+    /// Only `nLaunch` 1 and 2 open the file: other values (1.5, 3, a huge number) save it, as the
+    /// default 0 does.
+    #[test]
+    fn export_data_object_opens_only_for_n_launch_1_and_2() {
+        for launch in ["1.5", "3", "1e9", "-1"] {
+            let o = go(&format!("this.exportDataObject({{cName: 'Guide.pdf', nLaunch: {launch}}});"), &Event::field("Mouse Up", "total", ""));
+            assert_eq!(o.requests, [Request::OpenAttachment { name: "Guide.pdf".into(), open: false }], "nLaunch {launch}");
+        }
+    }
+
+    /// In an XFA script `event.target` is the document, so `exportDataObject` works on it, while
+    /// `xfa.event.target` is still the node the event happened on.
+    #[test]
+    fn in_xfa_scripts_event_target_is_the_document_and_xfa_event_target_the_node() {
+        let event = XfaEvent { activity: "click".into(), target: "form1[0].page1[0].go[0]".into(), ..Default::default() };
+        let o = run_xfa(
+            "event.target.exportDataObject({cName: 'Guide.pdf', nLaunch: 2}); xfa.event.target.name",
+            &event,
+            &XfaDoc::default(),
+            &super::xfa_model::form(),
+            Limits::default(),
+        );
+        assert_eq!(o.error, None, "{o:?}");
+        assert_eq!(o.result.as_deref(), Some("go"), "xfa.event.target is still the button");
+        assert!(o.effects.contains(&XfaEffect::OpenAttachment { name: "Guide.pdf".into(), open: true }), "{:?}", o.effects);
+    }
 }
 
 mod runtime_highlight {
