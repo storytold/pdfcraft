@@ -3,18 +3,6 @@ use super::look::{BorderStyle, da_string, patch_da, patch_widget_look, redraw_wi
 use super::tree::{ancestor_sets, attach, check_place, child_named, clash, detach, ensure_form, inherited, name_parts, own_inherited};
 use super::{Dict, Document, Field, FieldKind, FieldProps, FormError, MIN_FIELD_SIDE, ObjRef, Object, PdfString, fields, flags, invalid};
 
-/// Swap width and height, keeping the center. `None` when that is not a usable widget.
-fn swapped_around_center(r: [f64; 4]) -> Option<[f64; 4]> {
-    if !r.iter().all(|v| v.is_finite()) {
-        return None;
-    }
-    let (x0, y0, x1, y1) = (r[0].min(r[2]), r[1].min(r[3]), r[0].max(r[2]), r[1].max(r[3]));
-    let (cx, cy) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0);
-    let (nw, nh) = (y1 - y0, x1 - x0);
-    let out = [cx - nw / 2.0, cy - nh / 2.0, cx + nw / 2.0, cy + nh / 2.0];
-    (out.iter().all(|v| v.is_finite()) && out[2] - out[0] >= MIN_FIELD_SIDE && out[3] - out[1] >= MIN_FIELD_SIDE).then_some(out)
-}
-
 /// Re-point a choice field's `/I`, positions in `/Opt`, at the new list `exports` after `/Opt` was
 /// replaced (ISO 32000-2 §12.7.5.4): the positions of the selected `values` still offered. `kept`
 /// are the old `/I` positions carried into the new list, which tell apart options sharing an
@@ -106,8 +94,32 @@ fn button_export_options(f: &Field, index: usize, value: &str) -> Result<Vec<Obj
     Ok(out)
 }
 
+/// The `/AA /C` action that stores `c`; `None` when it stores no calculation. A custom script is
+/// the author's own text, so it is written as a text string, as `set_field_script` writes it, and
+/// a letter outside ASCII reads the same in every viewer. The AF calls are written as they are.
+fn calculate_action(c: &crate::af::Calculate) -> Option<Object> {
+    let js = crate::af::calculate_js(c)?;
+    let text = match c {
+        crate::af::Calculate::Custom(_) => PdfString::text(&js),
+        _ => PdfString::literal(js.into_bytes()),
+    };
+    let mut a = Dict::new();
+    a.set(b"S".to_vec(), Object::name("JavaScript"));
+    a.set(b"JS".to_vec(), text);
+    Some(Object::Dict(a))
+}
+
 /// Change a field's properties (General and Options tabs) and redraw it.
 pub fn set_props(doc: &mut Document, name: &str, props: &FieldProps) -> Result<String, FormError> {
+    set_props_target(doc, name, None, props)
+}
+
+/// An exact script target can share its name with another field.
+pub(crate) fn set_props_object(doc: &mut Document, name: &str, object: ObjRef, props: &FieldProps) -> Result<String, FormError> {
+    set_props_target(doc, name, Some(object), props)
+}
+
+fn set_props_target(doc: &mut Document, name: &str, object: Option<ObjRef>, props: &FieldProps) -> Result<String, FormError> {
     if props.font_size.is_some_and(|size| !size.is_finite() || size < 0.0) {
         return invalid("font size must be a finite, non-negative number");
     }
@@ -124,7 +136,7 @@ pub fn set_props(doc: &mut Document, name: &str, props: &FieldProps) -> Result<S
         return invalid(crate::af::NOTATION_NOT_STORABLE);
     }
     let all = fields(doc);
-    let f = all.iter().find(|f| f.name == name).ok_or_else(|| FormError::NoSuchField(name.into()))?.clone();
+    let f = all.iter().find(|f| f.name == name && object.is_none_or(|obj| f.obj == obj)).ok_or_else(|| FormError::NoSuchField(name.into()))?.clone();
     let export_options = props.export_value.as_ref().map(|(index, value)| button_export_options(&f, *index, value)).transpose()?;
     if props.export_value.is_some() && props.options.is_some() {
         return invalid("give export_value or options, not both");
@@ -138,22 +150,18 @@ pub fn set_props(doc: &mut Document, name: &str, props: &FieldProps) -> Result<S
             return invalid(format!("{name} has no widget {}", wi.saturating_add(1)));
         }
     }
+    if props.caption_all.is_some() && f.kind != FieldKind::PushButton {
+        return invalid("only push buttons have a caption");
+    }
+    if props.caption_all.is_some() && f.widgets.is_empty() {
+        return invalid(format!("{name} has no widgets"));
+    }
+    if props.caption_all.is_some() && props.caption.is_some() {
+        return invalid("give a field caption or a widget caption, not both");
+    }
     // Validated before anything is written, so a refused rotation leaves the document unchanged.
-    // `Some(Some(rect))`: the widget's axis changes and it gets the swapped rectangle.
-    let mut rotated_rect: Option<Option<[f64; 4]>> = None;
-    if let Some((wi, rot)) = props.rotation {
-        if !matches!(rot, 0 | 90 | 180 | 270) {
-            return invalid("rotation must be 0, 90, 180 or 270 degrees");
-        }
-        let Some(w) = f.widgets.get(wi) else {
-            return invalid(format!("{name} has no widget {}", wi.saturating_add(1)));
-        };
-        let axis_change = (w.rotation % 180 == 0) != (rot % 180 == 0);
-        rotated_rect = Some(None);
-        if axis_change && props.rect.is_none() {
-            let Some(rect) = swapped_around_center(w.rect) else { return invalid("the field is too small") };
-            rotated_rect = Some(Some(rect));
-        }
+    if let Some(rotation) = props.rotation {
+        check_rotation(&f, name, rotation)?;
     }
     // A locked field only takes unlocking (Acrobat greys its properties out).
     if f.locked() && props.locked != Some(false) && *props != (FieldProps { locked: props.locked, ..FieldProps::default() }) {
@@ -234,6 +242,7 @@ pub fn set_props(doc: &mut Document, name: &str, props: &FieldProps) -> Result<S
     let mut list_picked = None;
     let (sort_items, old_selection) = items_to_sort(doc, &f, props);
     let parent_default = ancestor_sets(doc, f.obj, b"DV");
+    let parent_limit = ancestor_sets(doc, f.obj, b"MaxLen");
     doc.update_dict(f.obj, |d| {
         d.set(b"Ff".to_vec(), Object::Int(ff as i64));
         if let Some(t) = &props.tooltip {
@@ -246,6 +255,8 @@ pub fn set_props(doc: &mut Document, name: &str, props: &FieldProps) -> Result<S
         if let Some(m) = props.max_len {
             match m {
                 Some(m) => d.set(b"MaxLen".to_vec(), Object::Int(m as i64)),
+                // An absent key would inherit the parent's limit; zero is "no limit" (`read.rs`).
+                None if parent_limit => d.set(b"MaxLen".to_vec(), Object::Int(0)),
                 None => {
                     d.remove(b"MaxLen");
                 }
@@ -350,10 +361,12 @@ pub fn set_props(doc: &mut Document, name: &str, props: &FieldProps) -> Result<S
         }
         if let Some(c) = &props.calculate {
             aa.remove(b"C");
-            if let Some(js) = crate::af::calculate_js(c) {
-                aa.set(b"C".to_vec(), action(&js));
+            let action = calculate_action(c);
+            let calculated = action.is_some();
+            if let Some(action) = action {
+                aa.set(b"C".to_vec(), action);
             }
-            crate::calc_order::keep_listed(doc, f.obj, *c != crate::af::Calculate::None)?;
+            crate::calc_order::keep_listed(doc, f.obj, calculated)?;
         }
         doc.update_dict(f.obj, |d| {
             if aa.is_empty() {
@@ -363,7 +376,7 @@ pub fn set_props(doc: &mut Document, name: &str, props: &FieldProps) -> Result<S
             }
         })?;
     }
-    let only = apply_late_widget_props(doc, &f, props, &new_da, rotated_rect)?;
+    let only = apply_late_widget_props(doc, &f, props, &new_da)?;
     scroll_list(doc, f.obj, list_picked)?;
     redraw_or_join(doc, &f, name, &new_name, join.as_ref(), only)?;
     if props.calculate.is_some() {
@@ -508,7 +521,7 @@ fn redraw_or_join(doc: &mut Document, f: &Field, name: &str, new_name: &str, joi
         }
         Ok(())
     } else {
-        redraw_widgets(doc, new_name, only)
+        super::look::redraw_widgets_target(doc, new_name, Some(f.obj), only)
     }
 }
 
@@ -528,13 +541,19 @@ fn scroll_list(doc: &mut Document, field: ObjRef, list_picked: Option<(Vec<usize
     Ok(())
 }
 
-fn apply_late_widget_props(
-    doc: &mut Document,
-    f: &Field,
-    props: &FieldProps,
-    new_da: &str,
-    rotated_rect: Option<Option<[f64; 4]>>,
-) -> Result<Option<usize>, FormError> {
+/// Whether `set_props` can turn widget `wi` of `f` to `rot`: 0, 90, 180 or 270 degrees, of a
+/// widget the field has.
+fn check_rotation(f: &Field, name: &str, (wi, rot): (usize, i64)) -> Result<(), FormError> {
+    if !matches!(rot, 0 | 90 | 180 | 270) {
+        return invalid("rotation must be 0, 90, 180 or 270 degrees");
+    }
+    if f.widgets.get(wi).is_none() {
+        return invalid(format!("{name} has no widget {}", wi.saturating_add(1)));
+    }
+    Ok(())
+}
+
+fn apply_late_widget_props(doc: &mut Document, f: &Field, props: &FieldProps, new_da: &str) -> Result<Option<usize>, FormError> {
     // A complete look replaces widget /DA overrides. Partial changes were patched above
     // against each override, including size-only changes that keep its font and colour.
     if props.look.is_some() {
@@ -548,12 +567,11 @@ fn apply_late_widget_props(
             }
         }
     }
-    if let (Some((wi, rot)), Some(swapped)) = (props.rotation, rotated_rect)
+    // Only `/MK /R` changes: the widget stays where it is on the page, and the redraw below lays
+    // its content out along the turned direction inside the same rectangle.
+    if let Some((wi, rot)) = props.rotation
         && let Some(w) = f.widgets.get(wi)
     {
-        if let Some(rect) = swapped {
-            doc.update_dict(w.obj, |d| d.set(b"Rect".to_vec(), Object::Array(rect.iter().map(|v| Object::Real(*v)).collect())))?;
-        }
         let mut mk = doc.get(w.obj).as_dict().and_then(|d| d.get(b"MK").map(|m| doc.resolve(m).as_dict().cloned())).flatten().unwrap_or_default();
         if rot == 0 {
             mk.remove(b"R");
@@ -577,16 +595,28 @@ fn apply_late_widget_props(
         mk.set(b"CA".to_vec(), PdfString::text(caption));
         doc.update_dict(w.obj, |d| d.set(b"MK".to_vec(), Object::Dict(mk)))?;
     }
+    if let Some(caption) = &props.caption_all {
+        for w in &f.widgets {
+            let mut mk = doc.get(w.obj).as_dict().and_then(|d| d.get(b"MK").map(|m| doc.resolve(m).as_dict().cloned())).flatten().unwrap_or_default();
+            mk.set(b"CA".to_vec(), PdfString::text(caption));
+            doc.update_dict(w.obj, |d| d.set(b"MK".to_vec(), Object::Dict(mk)))?;
+        }
+    }
     // A label-only edit must not replace another widget's custom appearances.
     let only = props.caption.as_ref().filter(|_| *props == (FieldProps { caption: props.caption.clone(), ..Default::default() })).map(|(wi, _)| *wi);
     Ok(only)
 }
 
 /// Name field `old` `new` in each field's Calculate script that reads it
-/// ([`crate::af::rename_in_calculation`]).
+/// ([`crate::af::rename_in_calculation`]). Script streams share one budget, as a reading of the
+/// form's scripts does, however many fields name the same stream; past it, a script is left as
+/// it is, like one that won't decode. A Calculate action several fields share by reference is
+/// read and rewritten once, in place, so they all read the new name.
 fn rename_in_calculations(doc: &mut Document, all: &[Field], old: &str, new: &str) -> Result<(), FormError> {
     let aa_of =
         |doc: &Document, r: ObjRef| doc.get(r).as_dict().and_then(|d| d.get(b"AA").map(|a| doc.resolve(a))).and_then(|a| a.as_dict().cloned());
+    let mut scripts = crate::script_budget();
+    let mut shared = std::collections::HashSet::new();
     for f in all {
         // The script is the field's, or its only widget's when the field has none, as
         // `actions_of` reads it.
@@ -595,12 +625,16 @@ fn rename_in_calculations(doc: &mut Document, all: &[Field], old: &str, new: &st
             _ => None,
         };
         let Some((owner, mut aa)) = aa_of(doc, f.obj).map(|aa| (f.obj, aa)).or_else(only_widget) else { continue };
+        let by_ref = aa.get(b"C").and_then(Object::as_ref);
+        if by_ref.is_some_and(|r| !shared.insert(r)) {
+            continue;
+        }
         let Some(mut action) = aa.get(b"C").and_then(|a| doc.resolve(a).as_dict().cloned()) else { continue };
         let js = match action.get(b"JS").map(|js| doc.resolve(js)).as_deref() {
             Some(Object::String(s)) => s.to_text(),
             // A stream that isn't UTF-8 reads with replacement characters, which must not be
             // written back in place of what it holds.
-            Some(Object::Stream(s)) => match s.decoded().ok().and_then(|b| String::from_utf8(b).ok()) {
+            Some(Object::Stream(s)) => match scripts.decode(s).ok().and_then(|b| String::from_utf8(b).ok()) {
                 Some(js) => js,
                 None => continue,
             },
@@ -608,6 +642,10 @@ fn rename_in_calculations(doc: &mut Document, all: &[Field], old: &str, new: &st
         };
         let Some(js) = crate::af::rename_in_calculation(&js, old, new) else { continue };
         action.set(b"JS".to_vec(), PdfString::text(&js));
+        if let Some(r) = by_ref {
+            doc.update_dict(r, |d| *d = action)?;
+            continue;
+        }
         aa.set(b"C".to_vec(), Object::Dict(action));
         doc.update_dict(owner, |d| d.set(b"AA".to_vec(), Object::Dict(aa)))?;
     }
