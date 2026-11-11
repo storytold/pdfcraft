@@ -61,6 +61,12 @@ ignore = [
     { id = "RUSTSEC-2026-0370", reason = "zvariant unmaintained; Linux a11y stack via accesskit_unix" },
     { id = "RUSTSEC-2026-0371", reason = "zbus_names unmaintained; Linux a11y stack via accesskit_unix" },
     { id = "RUSTSEC-2026-0372", reason = "zvariant_derive unmaintained; Linux a11y stack via accesskit_unix" },
+    # PyO3 PyString::from_object buffer overflow advisory (RUSTSEC-2025-0020). pdfcraft-pyo3
+    # never uses PyString::from_object. Revisit when upgrading pyo3.
+    { id = "RUSTSEC-2025-0020", reason = "pdfcraft-pyo3 does not use PyString::from_object" },
+    # PyO3 PyCFunction::new_closure thread safety advisory (RUSTSEC-2026-0177). pdfcraft-pyo3
+    # uses declarative #[pyclass] and #[pymethods], never new_closure. Revisit when upgrading pyo3.
+    { id = "RUSTSEC-2026-0177", reason = "pdfcraft-pyo3 uses #[pyclass]/#[pymethods], not new_closure" },
 ]
 
 # egui's default UI fonts (Ubuntu-Light, Hack, emoji-icon-font): font licences on the AGENTS.md

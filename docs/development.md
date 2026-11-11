@@ -169,3 +169,8 @@ Relative includes resolve beside the config that contains them. Included directo
 digit-prefixed `*.conf` files, in lexical order; backups and disabled files are ignored. The scan
 limits each config to 1 MiB, visits at most 256 config files/directories, and bounds include depth
 to 16 and directory entries to 32,768. Cyclic includes are skipped.
+
+## Related documentation
+
+- [SDK & REST Service Guide](sdk.md) — Programmatic SDK (Rust, Python, TypeScript) and on-premise REST daemon.
+- [MCP Conventions](mcp.md) — Headless tool control protocol for AI agents (`pdfcraft-cli mcp`).
