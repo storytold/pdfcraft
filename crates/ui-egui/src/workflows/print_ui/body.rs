@@ -1,7 +1,7 @@
 use super::draft::{CUSTOM_SCALE, Handling, PrintDraft, Which};
 use super::{
-    Binding, BookletSubset, Color32, Content, Orientation, PAPERS, PREVIEW_BOX, PREVIEW_H, PREVIEW_W, PageOrder, Pos2, Rect, SizeMode, Stroke,
-    Subset, Tokens, pos2, print, printer_label, spool, still_looking, theme, vec2, widgets,
+    Binding, BookletSubset, Color32, Content, Orientation, PREVIEW_BOX, PREVIEW_H, PREVIEW_W, PageOrder, Pos2, Rect, SizeMode, Stroke, Subset,
+    Tokens, pos2, print, printer_label, spool, still_looking, theme, vec2, widgets,
 };
 
 /// The narrowest the title is still worth cutting: an ellipsis and a couple of pixels at the title's
@@ -201,6 +201,11 @@ pub(crate) fn body(
                     d.driver_error = None;
                     // What this printer was last printed with (#2001).
                     d.apply_setup();
+                    d.reset_unoverridden_custom_paper();
+                    d.apply_printer_papers(Vec::new());
+                    if let Some(p) = d.printer.clone() {
+                        d.read_papers_for = Some(p);
+                    }
                 }
                 ui.end_row();
                 // The spooler answered with no printer at all (#160): say so, rather than
@@ -247,23 +252,35 @@ pub(crate) fn body(
                 let paper_label = ui.label(tl!("Paper:"));
                 d.paper = d.paper.min(d.paper_count().saturating_sub(1));
                 let before = d.paper;
+                let mut paper_clicked = false;
+                let detecting = d.papers_loading();
                 ui.horizontal(|ui| {
                     // A standard size's name is translated; a custom paper keeps the name it was given.
-                    let shown = if d.paper_is_custom() { d.paper_name() } else { tl!(d.paper_name().as_str()).to_string() };
-                    craft_ui::ComboBox::from_id_salt("paper").selected_text(shown).width(260.0).show_ui(ui, |ui| {
-                        for (i, (name, _)) in PAPERS.iter().enumerate() {
-                            ui.selectable_value(&mut d.paper, i, tl!(name));
+                    let shown = if d.paper_is_custom() { d.paper_name().to_string() } else { tl!(&d.paper_name()).to_string() };
+                    craft_ui::ComboBox::from_id_salt("paper").selected_text(shown).width(180.0).show_ui(ui, |ui| {
+                        if detecting {
+                            ui.add_enabled(false, egui::Label::new(tl!("Detecting paper…")));
+                        }
+                        for (i, (name, _)) in d.papers.iter().enumerate() {
+                            if ui.selectable_value(&mut d.paper, i, tl!(name)).clicked() {
+                                paper_clicked = true;
+                            }
                         }
                         if !d.custom_papers.is_empty() {
                             ui.separator();
                         }
                         for (i, p) in d.custom_papers.iter().enumerate() {
                             let label = format!("{} ({})", p.name, d.units.size(p.width, p.height));
-                            ui.selectable_value(&mut d.paper, PAPERS.len() + i, label);
+                            if ui.selectable_value(&mut d.paper, d.papers.len() + i, label).clicked() {
+                                paper_clicked = true;
+                            }
                         }
                     })
                     .response
                     .labelled_by(paper_label.id);
+                    if detecting {
+                        ui.label(egui::RichText::new(tl!("Detecting…")).small().color(t.text_muted));
+                    }
                     if ui.button(tl!("Custom…")).on_hover_text(tl!("Add a paper size of your own to the list")).clicked() {
                         d.custom_new = match d.custom_new {
                             Some(_) => None,
@@ -272,10 +289,38 @@ pub(crate) fn body(
                     }
                     if d.paper_is_custom() && ui.button(tl!("Remove")).on_hover_text(tl!("Take this paper size off the list")).clicked() {
                         d.remove_custom_paper();
+                        paper_clicked = true;
+                    }
+                    let page_setup_tip = if spool::HAS_PRINTER_PREFERENCES {
+                        tl!("Selects paper size and orientation from the printer driver. For paper tray, print quality or other driver defaults, use Properties…")
+                    } else {
+                        tl!("Page setup dialog is not available on this system.")
+                    };
+                    let page_setup = ui
+                        .add_enabled(d.printer.is_some() && !browser && spool::HAS_PRINTER_PREFERENCES, egui::Button::new(tl!("Page Setup…")))
+                        .on_hover_text(page_setup_tip);
+                    if page_setup.clicked()
+                        && let Some(p) = d.printer.clone()
+                    {
+                        d.driver_error = None;
+                        #[cfg(windows)]
+                        let parent = winsafe::HWND::GetActiveWindow().map(|h| h.ptr() as isize);
+                        #[cfg(not(windows))]
+                        let parent = None;
+                        match spool::show_printer_properties(&p, parent) {
+                            Ok(Some((name, size))) => {
+                                d.apply_driver_paper(name, size);
+                            }
+                            Ok(None) => {}
+                            Err(e) => d.driver_error = Some(e.to_string()),
+                        }
                     }
                 });
+                if paper_clicked || d.paper != before {
+                    d.paper_overridden = true;
+                }
                 // Label stock gets the label layout (cut, turned upright, fitted).
-                if d.paper != before && d.paper == print::LABEL_PAPER && d.which != Which::Area {
+                if paper_clicked && d.paper != before && d.paper == print::LABEL_PAPER && d.which != Which::Area {
                     d.paper_before_label = Some(before);
                     d.handling = Handling::Label;
                     d.sheet = 0;
@@ -308,11 +353,12 @@ pub(crate) fn body(
             if let Some(&source) = sizes.get(d.current_page) {
                 ui.horizontal_wrapped(|ui| {
                     ui.label(crate::i18n::fmt(tl!("PDF page: {size}"), &[("size", &d.units.size(source.0, source.1))]));
-                    let matched = print::matching_paper(source);
+                    let matched = d.matching_paper(source);
                     if ui.add_enabled(matched.is_some(), egui::Button::new(tl!("Match page at 100%"))).clicked()
                         && let Some(paper) = matched
                     {
                         d.paper = paper;
+                        d.paper_overridden = true;
                         // A paper picked outright: nothing for leaving Label to give back.
                         d.paper_before_label = None;
                         d.handling = Handling::Size;
@@ -649,8 +695,13 @@ pub(crate) fn body(
     let (mut go, mut cancel) = (false, false);
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
         let looking = still_looking(d);
+        let waiting_paper = d.papers_loading();
         let label = if d.printer.is_some() || looking { tl!("Print") } else { tl!("Save as PDF") };
-        if ui.add_enabled_ui(settings.is_ok() && !sheets.is_empty() && !looking, |ui| widgets::pill_button(ui, label, true)).inner.clicked() {
+        if ui
+            .add_enabled_ui(settings.is_ok() && !sheets.is_empty() && !looking && !waiting_paper, |ui| widgets::pill_button(ui, label, true))
+            .inner
+            .clicked()
+        {
             go = true;
         }
         if widgets::pill_button(ui, tl!("Cancel"), false).clicked() {

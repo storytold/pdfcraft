@@ -619,9 +619,9 @@ impl PdfCraftApp {
 
     /// Open the Replace Pages dialog for `bytes`, replacing the selection (or the current page).
     pub fn start_replace(&mut self, name: String, bytes: Vec<u8>) {
-        let Some(i) = self.active else { return };
+        let Some((i, id)) = self.active_ids() else { return };
         let bytes = Arc::new(bytes);
-        let src_pages = match self.session.page_count_of(&name, &bytes) {
+        let src_pages = match self.session.replace_source(id, &name, &bytes) {
             Ok(n) => n,
             Err(e) => {
                 self.notify_fmt("Couldn't use {name}: {e}", &[("name", &name), ("e", &e.to_string())]);
@@ -666,9 +666,7 @@ impl PdfCraftApp {
                     continue;
                 }
             };
-            let converted =
-                self.session.convert_to_pdf(&name, &Arc::new(bytes)).and_then(|(_, pdf)| Ok((self.session.page_count_of(&name, &pdf)?, pdf)));
-            match converted {
+            match self.session.insert_source_inline(id, &name, &Arc::new(bytes)) {
                 Ok((pages, bytes)) => {
                     if self.apply_edit(Edit::InsertPagesFrom {
                         name,

@@ -1557,6 +1557,12 @@ fn date_languages_are_the_interface_languages() {
     assert_eq!(dates, interface);
 }
 
+/// The stale-draft notice remains discoverable after the UI modules are reorganized.
+#[test]
+fn properties_stale_notice_is_in_translation_scan() {
+    assert!(ui_literals().contains("The document changed. Reopen Document Properties to edit the current version."));
+}
+
 /// A report, not a check: the notifications pasting an image and pinning a tool show, in each
 /// language that has no translation for them yet (they show in English).
 #[test]
