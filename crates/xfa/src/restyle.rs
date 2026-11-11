@@ -15,16 +15,17 @@ use crate::prop_rules;
 
 /// Most property changes one form keeps, as many as it keeps presence or access changes. Of the
 /// 245 dynamic forms of 500, opened and given 50 generic interactions, 79 keep property changes:
-/// median 21, p90 207, at most 1,431 (Ontario Works 0983, a tooltip for each field and a text
-/// colour, on open), so 7 times the most measured.
+/// median 21, p90 186, p99 1,190, at most 1,431 (Ontario Works 0983, a tooltip for each field
+/// and a text colour, on open), so 7 times the most measured.
 pub const MAX_PROP_OVERRIDES: usize = 10_000;
 /// Most bytes of SOM paths, property paths and values those changes hold together. Measured:
-/// median 2,122 B, p90 36,865 B, at most 240,796 B (Ontario Works 0983), so about 4 times the
-/// most.
+/// median 2,140 B, p90 33,835 B, p99 114,864 B, at most 240,936 B (Ontario Works 0983), so
+/// about 4 times the most. Every change is read when the form opens and written again when a
+/// save follows a change, so the bound is what a script looping over properties can add.
 pub const MAX_PROP_OVERRIDE_BYTES: usize = 1 << 20;
 /// Longest value one change may set (a tooltip or a screen-reader text): the property budget
 /// of one whole object as the template is read ([`crate::parse::MAX_OBJECT_PROP_BYTES`]).
-/// The longest measured is 544 B.
+/// The longest measured is 546 B.
 pub const MAX_PROP_VALUE: usize = crate::parse::MAX_OBJECT_PROP_BYTES;
 /// Most steps a property path takes from its object (the parser keeps 8 levels).
 const MAX_STEPS: usize = prop_rules::MAX_STEPS;
