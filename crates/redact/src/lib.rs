@@ -588,9 +588,7 @@ fn apply_within(doc: &mut Document, pages: Option<&[usize]>, images: pdfcraft_co
                 // A reply or pop-up removed here can share its appearance with an annotation that
                 // stays on an unselected page, like one removed under a mark: the all-pages
                 // pattern check must see it.
-                if !appearance_scan_limit
-                    && let Some(d) = doc.get(r).as_dict()
-                {
+                if !appearance_scan_limit && let Some(d) = doc.get(r).as_dict() {
                     match appearance_refs(doc, d) {
                         Some(references) => removed_appearances.extend(references),
                         None => appearance_scan_limit = true,
