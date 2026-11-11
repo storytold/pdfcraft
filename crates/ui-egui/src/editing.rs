@@ -524,10 +524,22 @@ impl PdfCraftApp {
         // click that brought this pane forward took the focus). It goes in first, as it came first.
         let (other_applied, stay) = self.apply_other_pane_edit(i);
         let modal = self.modal_open();
+        let generation = |app: &Self| app.views.get(i).and_then(|v| app.session.get(v.id)).map(|d| d.edit_generation());
+        let before = generation(self);
+        let queued = self.views.get(i).is_some_and(|v| v.pending_edit.is_some());
         let applied = self.apply_queued_edit(i) && other_applied;
+        // A click's Mouse Up waits on the edit it queued (a check box's toggle, a list's pick):
+        // when that was refused, the click did nothing and its Mouse Up doesn't run either.
+        if queued
+            && generation(self) == before
+            && let Some(view) = self.views.get_mut(i)
+        {
+            view.forms.triggers.retain(|(_, t)| *t != pdfcraft_engine::FieldTrigger::MouseUp);
+        }
         // After the queued edit: a value typed into the field the focus left has been taken (and
         // its change has run the field's exit) before the focus scripts run.
         self.run_focus_scripts(i);
+        self.run_field_triggers(i);
         if !applied {
             // Nor may a shortcut pressed with it (⌘S right after Enter) run behind the refusal.
             self.deferred_commands.clear();
@@ -818,7 +830,8 @@ impl PdfCraftApp {
     /// ([`crate::forms_ui::refresh_draft`]), so leaving the field doesn't write the old value back.
     fn run_focus_scripts(&mut self, i: usize) {
         let Some(view) = self.views.get_mut(i) else { return };
-        let now = view.forms.focus.as_ref().map(|f| (f.name.clone(), f.widget));
+        // The field's object too: moving between fields sharing a name is a move (#344 review).
+        let now = view.forms.focus.as_ref().map(|f| (f.name.clone(), f.obj, f.widget));
         if view.forms.focused == now {
             return;
         }
@@ -826,13 +839,13 @@ impl PdfCraftApp {
         let id = view.id;
         let edited = view.forms.focus.clone();
         use pdfcraft_engine::js::FieldFocus;
-        for ((name, widget), focus) in [left.map(|l| (l, FieldFocus::Exit)), now.map(|n| (n, FieldFocus::Enter))].into_iter().flatten() {
+        for ((name, obj, widget), focus) in [left.map(|l| (l, FieldFocus::Exit)), now.map(|n| (n, FieldFocus::Enter))].into_iter().flatten() {
             // The edited field's value before this script, to tell its untouched draft from typing:
             // the exit of the field left may have changed it already, and the draft with it.
             let before: Option<(String, Vec<String>)> = edited.as_ref().and_then(|e| {
                 crate::forms_ui::focused_field(e, &self.session.get(id)?.form).map(|f| (crate::forms_ui::draft_text(f), f.value.clone()))
             });
-            match self.session.field_focus(id, &name, widget, focus) {
+            match self.session.field_focus_target(id, &name, obj.map(pdfcraft_engine::js::field_object_id), widget, focus) {
                 Ok(changed) => {
                     if changed
                         && let Some(info) = self.session.get(id).map(|d| d.info.clone())
@@ -848,6 +861,42 @@ impl PdfCraftApp {
                     }
                     let out = self.session.take_js_output(id);
                     self.handle_js(id, out);
+                }
+                Err(e) => self.notify_error(e),
+            }
+        }
+    }
+
+    /// The pointer triggers tab `i` queued (Mouse Enter, Exit, Down, and a check box's Mouse Up
+    /// after its toggle), each running its widget's JavaScript in the document's realm (#269).
+    fn run_field_triggers(&mut self, i: usize) {
+        let Some(view) = self.views.get_mut(i) else { return };
+        let triggers = std::mem::take(&mut view.forms.triggers);
+        let id = view.id;
+        for ((name, object, widget), trigger) in triggers {
+            // The field being edited as it was, so a script changing it shows in its editor
+            // while a draft the user already typed into is kept (as `run_focus_scripts` does).
+            let before: Option<(String, Vec<String>)> = self.views.get(i).and_then(|v| v.forms.focus.as_ref()).and_then(|e| {
+                crate::forms_ui::focused_field(e, &self.session.get(id)?.form).map(|f| (crate::forms_ui::draft_text(f), f.value.clone()))
+            });
+            match self.session.field_trigger_target(id, &name, Some(object), widget, trigger) {
+                Ok(changed) => {
+                    if changed
+                        && let Some(info) = self.session.get(id).map(|d| d.info.clone())
+                        && let Some(view) = self.views.get_mut(i)
+                    {
+                        view.document_changed(&info);
+                        if let Some(before) = &before
+                            && let Some(draft) = view.forms.focus.as_mut()
+                            && let Some(f) = self.session.get(id).and_then(|d| crate::forms_ui::focused_field(draft, &d.form))
+                        {
+                            crate::forms_ui::refresh_draft(draft, (&before.0, &before.1), (crate::forms_ui::draft_text(f), &f.value));
+                        }
+                    }
+                    let out = self.session.take_js_output(id);
+                    if !out.is_empty() {
+                        self.handle_js(id, out);
+                    }
                 }
                 Err(e) => self.notify_error(e),
             }
@@ -1578,6 +1627,43 @@ mod revert_draft_tests {
         assert_eq!(hint(&app), "", "hint's enter ran before the document is read");
         assert_eq!(app.views[0].forms.focus.as_ref().map(|f| f.text.as_str()), Some(""), "and its editor shows it");
     }
+    /// A pointer trigger whose script changes the field being edited shows the change in its
+    /// editor, unless the user already typed there: then the typed draft is kept.
+    #[test]
+    fn a_pointer_trigger_changing_the_edited_field_refreshes_an_untouched_draft() {
+        let objs = [
+            "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 6 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 5 0 R >> >> >> >>".to_string(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>".into(),
+            "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 6 0 R] >>".into(),
+            "<< /Type /Annot /Subtype /Widget /FT /Tx /T (name) /V (old) /Rect [20 250 180 270] /P 3 0 R /F 4 >>".into(),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),
+            "<< /Type /Annot /Subtype /Widget /FT /Tx /T (hot) /V () /Rect [20 200 180 220] /P 3 0 R /F 4 /AA << /E << /S /JavaScript /JS (getField\\('name'\\).value = 'new';) >> >> >>".into(),
+        ];
+        let mut pdf = b"%PDF-1.7\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, o) in objs.iter().enumerate() {
+            offsets.push(pdf.len());
+            pdf.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+        }
+        let xref = pdf.len();
+        pdf.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+        for o in offsets {
+            pdf.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+        }
+        pdf.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+        for (typed, shown) in [(false, "new"), (true, "typed")] {
+            let mut app = PdfCraftApp::new();
+            app.open_bytes("hot.pdf", None, pdf.clone()).unwrap();
+            let hot = app.session.get(app.views[0].id).unwrap().form.iter().find(|f| f.name == "hot").unwrap().obj;
+            let text = if typed { "typed" } else { "old" };
+            app.views[0].forms.focus = Some(Focus { text: text.into(), picked: vec!["old".into()], ..focus("") });
+            let hot = ("hot".to_string(), pdfcraft_engine::js::field_object_id(hot), 0);
+            app.views[0].forms.triggers.push((hot, pdfcraft_engine::FieldTrigger::MouseEnter));
+            app.run_field_triggers(0);
+            assert_eq!(app.views[0].forms.focus.as_ref().map(|f| f.text.as_str()), Some(shown), "typed: {typed}");
+        }
+    }
+
     #[test]
     fn successful_revert_clears_focused_or_queued_drafts_only_on_its_document() {
         for queued in [false, true] {

@@ -21,10 +21,33 @@ fn request_json(r: &pdfcraft_engine::js::Request) -> Value {
     }
 }
 
+/// The optional `field_id` argument: a field's identity from form_fields, selecting one of
+/// fields sharing a name.
+fn field_id(a: &Args) -> Result<Option<u64>> {
+    a.0.get("field_id")
+        .map(|v| {
+            v.as_u64()
+                .filter(|id| *id < 1 << 48)
+                .ok_or_else(|| ToolError::InvalidArgs("field_id must be an integer between 0 and 281474976710655".into()))
+        })
+        .transpose()
+}
+
 /// A message a script showed, as `js_run` reports it: its text, title (null when it gave none),
 /// icon and buttons.
 pub(crate) fn alert_json(m: &pdfcraft_engine::js::Message) -> Value {
     json!({ "message": m.text, "title": m.title, "icon": m.icon.name(), "buttons": m.buttons.name() })
+}
+
+/// What scripts that ran unasked (a document's Will Save or Will Print actions) showed, said
+/// or asked for, as tools report it.
+pub(crate) fn js_output_json(out: &pdfcraft_engine::js::JsOutput) -> Value {
+    json!({
+        "alerts": out.alerts.iter().map(alert_json).collect::<Vec<_>>(),
+        "console": out.console,
+        "requests": out.requests.iter().map(request_json).collect::<Vec<_>>(),
+        "errors": out.errors,
+    })
 }
 
 impl Automation {
@@ -44,14 +67,7 @@ impl Automation {
                 .collect::<Result<Vec<_>>>()?,
             _ => return Err(ToolError::InvalidArgs("answers must be an array of at most 32 strings or null".into())),
         };
-        let identity =
-            a.0.get("field_id")
-                .map(|v| {
-                    v.as_u64()
-                        .filter(|id| *id < 1 << 48)
-                        .ok_or_else(|| ToolError::InvalidArgs("field_id must be an integer between 0 and 281474976710655".into()))
-                })
-                .transpose()?;
+        let identity = field_id(a)?;
         let (script, field) = (a.str("script")?, a.opt_str("field")?);
         let (mut o, edit) =
             self.session.with_own_js_output(id, |s| s.run_javascript_answers_target(id, script, field, identity, &answers)).map_err(failed)?;
@@ -120,6 +136,39 @@ impl Automation {
         Ok(
             json!({ "changed": changed, "alerts": out.alerts.iter().map(alert_json).collect::<Vec<_>>(), "console": out.console, "requests": reqs, "errors": out.errors }),
         )
+    }
+
+    /// `js_event`: run the JavaScript widget `widget` (1-based) of field `field` has for `event`
+    /// (a trigger id: mouse_enter, mouse_exit, mouse_down, mouse_up, on_focus, on_blur); returns
+    /// whether the form changed and what the script showed or asked for.
+    pub(crate) fn js_event(&mut self, a: &Args) -> Result<Value> {
+        let event = a.str("event")?;
+        let trigger = pdfcraft_engine::FieldTrigger::from_id(event).ok_or_else(|| {
+            ToolError::InvalidArgs(format!("event must be mouse_enter, mouse_exit, mouse_down, mouse_up, on_focus or on_blur, not {event:?}"))
+        })?;
+        let name = a.str("field")?;
+        let identity = field_id(a)?;
+        let doc = self.doc(a)?;
+        let field =
+            doc.form.iter().find(|f| f.name == name && identity.is_none_or(|i| pdfcraft_engine::js::field_object_id(f.obj) == i)).ok_or_else(
+                || match identity {
+                    Some(i) => failed(format!("there is no field named {name:?} with field_id {i} (see form_fields)")),
+                    None => failed(format!("there is no field named {name:?} (see form_fields)")),
+                },
+            )?;
+        let widgets = field.widgets.len();
+        let widget = a.opt_int("widget")?.unwrap_or(1);
+        let widget = usize::try_from(widget).ok().and_then(|w| w.checked_sub(1)).filter(|w| *w < widgets).ok_or_else(|| match widgets {
+            0 => ToolError::InvalidArgs(format!("{name:?} has no widget")),
+            n => ToolError::InvalidArgs(format!("widget must be 1 to {n} for {name:?}")),
+        })?;
+        let (id, object) = (doc.id, pdfcraft_engine::js::field_object_id(field.obj));
+        // Only this event's output: what opening or an earlier tool left waiting stays.
+        let (changed, out) =
+            self.session.with_own_js_output(id, |s| s.field_trigger_target(id, name, Some(object), widget, trigger)).map_err(failed)?;
+        let mut result = js_output_json(&out);
+        result["changed"] = json!(changed);
+        Ok(result)
     }
 
     /// `form_merge_data`: merge the form data files at `paths` into one CSV at `path`, a row per
