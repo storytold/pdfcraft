@@ -168,7 +168,9 @@ fn plain_metadata(doc: &Document) -> bool {
         .is_some_and(|e| matches!(e.as_dict().and_then(|e| e.get(b"EncryptMetadata")), Some(Object::Bool(false))))
 }
 
-fn data(s: &Stream, num: u32, g: &Graph, encrypted: bool, plain_metadata: bool) -> Data {
+/// `left` is what the caller may still decode: a stream that would decode past it (in any filter
+/// stage) is `Unknown`, so no stage is allowed to grow beyond the shared budget first.
+fn data(s: &Stream, num: u32, g: &Graph, encrypted: bool, plain_metadata: bool, left: usize) -> Data {
     let d = &s.dict;
     // Streams the security handler leaves as stored, which a viewer may still decrypt.
     let ty = d.name(b"Type");
@@ -219,7 +221,7 @@ fn data(s: &Stream, num: u32, g: &Graph, encrypted: bool, plain_metadata: bool) 
     if !parms_line_up {
         return Data::Unknown;
     }
-    s.decoded_strict().map_or(Data::Unknown, Data::Decoded)
+    s.decoded_strict_within(left).map_or(Data::Unknown, Data::Decoded)
 }
 
 /// Drop the image and form XObjects that `pages` list in their own resources but no stream
@@ -254,7 +256,7 @@ pub(crate) fn remove_unused(doc: &mut Document, pages: &[ObjRef], progress: &mut
         }
         let obj = doc.get(ObjRef::new(*num, doc.generation(*num)));
         let Object::Stream(s) = &*obj else { continue };
-        match data(s, *num, &g, encrypted, plain_metadata) {
+        match data(s, *num, &g, encrypted, plain_metadata, DECODE_BUDGET.saturating_sub(decoded)) {
             Data::Picture => {}
             Data::Decoded(bytes) => {
                 decoded = decoded.saturating_add(bytes.len());

@@ -1202,6 +1202,7 @@ fn is_form_edit(edit: &Edit) -> bool {
             | Edit::DuplicateField { .. }
             | Edit::SetFieldProps { .. }
             | Edit::SetFieldImage { .. }
+            | Edit::SetFieldImageTarget { .. }
             | Edit::SetFieldScript { .. }
             | Edit::SetCalculationOrder { .. }
             | Edit::ApplyScriptChanges { .. }
