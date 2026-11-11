@@ -271,7 +271,7 @@ fn a_failed_save_as_pdf_keeps_the_dialog_open() {
 #[test]
 fn printing_landscape_sheets_tells_cups_to_turn_them() {
     use pdfcraft_engine::print::spool;
-    use std::sync::{Arc, Mutex};
+    use std::sync::{Arc, mpsc};
     let s = pdfcraft_engine::Session::new();
     let bytes = s.create_blank(842.0, 595.0, 2).unwrap();
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
@@ -281,15 +281,13 @@ fn printing_landscape_sheets_tells_cups_to_turn_them() {
         app
     });
     h.run_steps(4);
-    let jobs: Arc<Mutex<Vec<spool::Job>>> = Arc::default();
-    let sent = Arc::clone(&jobs);
+    let (sent, jobs) = mpsc::channel();
     h.state_mut().spooler = Some(Arc::new(move |_pdf: &[u8], job: &spool::Job| {
-        sent.lock().unwrap().push(job.clone());
+        let _ = sent.send(job.clone());
         Ok(String::new())
     }));
     // Print to the queue; `choose` sets the driver's choices once the dialog has its printer.
     let print = |h: &mut Harness<'static, PdfCraftApp>, choose: &dyn Fn(&mut pdfcraft_ui_egui::PrintDraft)| -> spool::Job {
-        let before = jobs.lock().unwrap().len();
         assert!(h.state_mut().execute("print.dialog"));
         h.run_steps(3);
         h.state_mut().print_draft.printer = Some("Test_Queue".into());
@@ -297,14 +295,21 @@ fn printing_landscape_sheets_tells_cups_to_turn_them() {
         choose(&mut h.state_mut().print_draft);
         h.run_steps(1);
         h.get_by(|n| n.label().as_deref() == Some("Print") && n.role() == Role::Button).click();
-        for _ in 0..400 {
-            h.run_steps(1);
-            if jobs.lock().unwrap().len() > before {
-                break;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        loop {
+            match jobs.try_recv() {
+                Ok(job) => break job,
+                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    assert!(std::time::Instant::now() < deadline, "the job reached the spooler");
+                    // Printing is started and completed during later UI frames.
+                    h.run_steps(1);
+                    std::thread::yield_now();
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    panic!("the spooler worker disconnected before sending the job");
+                }
             }
-            std::thread::sleep(std::time::Duration::from_millis(5));
         }
-        jobs.lock().unwrap().last().cloned().expect("the job reached the spooler")
     };
     let orientation = |job: &spool::Job| job.options.iter().filter(|(k, _)| k == "orientation-requested").map(|(_, v)| v.clone()).collect::<Vec<_>>();
     // Fit on Letter with Auto orientation lays both pages out on landscape sheets.
@@ -1602,6 +1607,14 @@ fn adding_custom_paper_overrides_pending_driver_default() {
         assert!(std::time::Instant::now() < deadline, "paper discovery started");
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
+    // The read starts as the dialog opens; its paper row may take a few more frames to draw (on
+    // hosted macOS it hadn't when the read started).
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while h.query_by_label("Custom…").is_none() {
+        assert!(std::time::Instant::now() < deadline, "the paper row is drawn");
+        h.run_steps(1);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
     h.get_by_label("Custom…").click();
     h.run_steps(2);
     let units = h.state().print_draft.units.per_point();
@@ -1680,14 +1693,15 @@ fn a_custom_paper_prints_at_its_size_and_its_printer_keeps_it() {
     }
     h.run_steps(8);
     h.get_by(|n| n.label().as_deref() == Some("Print") && n.role() == Role::Button).click();
-    for _ in 0..400 {
-        h.run_steps(1);
-        if !sent.lock().unwrap().is_empty() {
-            break;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let pdf = loop {
+        if let Some(pdf) = sent.lock().unwrap().first().cloned() {
+            break pdf;
         }
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
-    let pdf = sent.lock().unwrap().first().cloned().expect("the job reached the spooler");
+        assert!(std::time::Instant::now() < deadline, "the job reached the spooler");
+        h.run_steps(1);
+        std::thread::yield_now();
+    };
     let printed = pdfcraft_cos::Document::open(Arc::new(pdf)).unwrap();
     let sheet = pdfcraft_model::pages(&printed)[0].display_size(&printed);
     assert!((sheet.0.min(sheet.1) - 288.0).abs() < 0.5 && (sheet.0.max(sheet.1) - 432.0).abs() < 0.5, "the label paper: {sheet:?}");
@@ -1991,14 +2005,15 @@ fn each_printer_keeps_what_it_last_printed_with_across_a_restart() {
         }
         h.run_steps(2);
         h.get_by(|n| n.label().as_deref() == Some("Print") && n.role() == Role::Button).click();
-        for _ in 0..400 {
-            h.run_steps(1);
-            if jobs.lock().unwrap().len() > before {
-                break;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        loop {
+            if let Some(job) = jobs.lock().unwrap().get(before).cloned() {
+                break job;
             }
-            std::thread::sleep(std::time::Duration::from_millis(5));
+            assert!(std::time::Instant::now() < deadline, "the job reached the spooler");
+            h.run_steps(1);
+            std::thread::yield_now();
         }
-        jobs.lock().unwrap().last().cloned().expect("the job reached the spooler")
     };
     let setup = |h: &Harness<'static, PdfCraftApp>| {
         let d = &h.state().print_draft;

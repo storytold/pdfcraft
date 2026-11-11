@@ -1723,18 +1723,20 @@ fn undo_and_redo_restore_the_combine_list() {
     assert!(h.state().session.get(h.state().views[0].id).unwrap().can_undo().is_none());
 }
 
+/// A protected file that still allows page extraction (only printing is withheld) is listed
+/// for Combine with a warning that the result won't keep its security, not as a problem.
 #[test]
 fn protected_files_that_can_be_combined_are_flagged() {
     let mut h = harness(1, |app| {
         app.set_option("combine-view", "list").unwrap();
         app.use_files(
             pdfcraft_ui_egui::FilePurpose::Combine,
-            vec![("one.pdf".into(), fixture(1)), ("no-copy.pdf".into(), protected("", "owner", -1 ^ 16))],
+            vec![("one.pdf".into(), fixture(1)), ("no-print.pdf".into(), protected("", "owner", -1 ^ 4))],
         );
     });
     h.run_steps(3);
     let app = h.state();
-    assert!(app.combine_draft[1].problem.is_none(), "copying text is withheld, assembling pages isn't");
+    assert!(app.combine_draft[1].problem.is_none(), "printing is withheld, extracting pages isn't");
     h.get_by_label("Protected: the combined file won't keep its security settings");
     assert!(!h.get_by_label("Combine").accesskit_node().is_disabled(), "a warning, not a blocker");
 }
@@ -1837,10 +1839,10 @@ fn images_and_text_files_join_the_combine_list_as_pdfs() {
 #[test]
 fn files_that_cannot_be_read_are_listed_and_left_out_once_the_user_agrees() {
     let mut h = combine_of(&[("one.pdf", 2)]);
-    let bad = vec![("broken.jpg".to_string(), b"\xff\xd8\xff\xe0 not a JPEG".to_vec()), ("report.docx".to_string(), b"PK\x03\x04".to_vec())];
+    let bad = vec![("broken.jpg".to_string(), b"\xff\xd8\xff\xe0 not a JPEG".to_vec()), ("archive.zip".to_string(), b"PK\x03\x04".to_vec())];
     h.state_mut().use_files(pdfcraft_ui_egui::FilePurpose::Combine, bad);
     h.run_steps(3);
-    assert_eq!(combine_names(&h), ["one.pdf", "broken.jpg", "report.docx"]);
+    assert_eq!(combine_names(&h), ["one.pdf", "broken.jpg", "archive.zip"]);
     for f in &h.state().combine_draft[1..] {
         let why = f.problem.as_deref().expect("why it can't be combined");
         assert!(why.starts_with("Can't be read: ") && !why.contains(&f.name), "{why}");
@@ -1857,7 +1859,7 @@ fn files_that_cannot_be_read_are_listed_and_left_out_once_the_user_agrees() {
     h.run_steps(3);
     h.get_by_label("Leave out files that can't be read?");
     h.get_by_label("• broken.jpg");
-    h.get_by_label("• report.docx");
+    h.get_by_label("• archive.zip");
     h.get_by_label("Cancel").click();
     h.run_steps(3);
     assert!(h.query_by_label("Leave out files that can't be read?").is_none());
@@ -2134,7 +2136,7 @@ fn plus_between_pages_inserts_picked_files_there_in_order() {
     assert_eq!(texts_of(h.state(), 0), ["a note", "Page 1", "a note", "Page 2", "Page 3", "a note"]);
     // A file that can't be converted changes nothing.
     let before = texts_of(h.state(), 0);
-    h.state_mut().use_files(pdfcraft_ui_egui::FilePurpose::InsertPages, vec![("report.docx".into(), b"PK\x03\x04".to_vec())]);
+    h.state_mut().use_files(pdfcraft_ui_egui::FilePurpose::InsertPages, vec![("archive.zip".into(), b"PK\x03\x04".to_vec())]);
     h.run_steps(2);
     assert_eq!(texts_of(h.state(), 0), before);
 }
