@@ -484,7 +484,9 @@ pub(crate) fn resource_ops(doc: &Document, budget: &mut DecodeBudget, res: &Dict
     let mut read = pdfcraft_content::ops(joined.data());
     let mut ops: Vec<Op> = read.by_ref().take(MAX_OPS + 1).collect();
     // Under the limit the reader ran to the end, so `skipped` counts all of it.
-    if read.skipped() > 0 || ops.len() > MAX_OPS {
+    // An inline image the renderer reads no image for leaves where the operators resume a guess (as
+    // `apply` refuses on a marked page): a resource used after it could look unused.
+    if read.skipped() > 0 || read.ambiguous_images() > 0 || ops.len() > MAX_OPS {
         return Err(CosError::Syntax { offset: 0, detail: "redaction could not fully read the content that uses these resources".into() });
     }
     let xobjects = res_dict(doc, res, b"XObject");
@@ -503,7 +505,7 @@ pub(crate) fn resource_ops(doc: &Document, budget: &mut DecodeBudget, res: &Dict
             let mut read = pdfcraft_content::ops(&data);
             ops.extend(read.by_ref().take((MAX_OPS + 1).saturating_sub(ops.len())));
             // `seen` gains at most one form for each `Do` in `ops`, so this bounds it too.
-            if ops.len() > MAX_OPS || read.skipped() > 0 {
+            if ops.len() > MAX_OPS || read.skipped() > 0 || read.ambiguous_images() > 0 {
                 return Err(CosError::Syntax { offset: 0, detail: "redaction could not fully inspect inherited form resources".into() });
             }
         }
