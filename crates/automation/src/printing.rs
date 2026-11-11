@@ -143,7 +143,7 @@ fn spool_job(
         grey_pages: false,
         title,
         options: {
-            let mut options: Vec<(String, String)> = options.into_iter().filter(|(k, _)| k != "media").collect();
+            let mut options: Vec<(String, String)> = options.into_iter().filter(|(k, _)| !k.eq_ignore_ascii_case("media")).collect();
             if let Some(m) = media {
                 options.push(("media".to_string(), m.to_string()));
             }
