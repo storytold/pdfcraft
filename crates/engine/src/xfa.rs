@@ -327,6 +327,28 @@ fn split_instance(tpl: &Template, som: &str) -> Option<(pdfcraft_xfa::DataPath, 
     Some((path, parent_som, name, index))
 }
 
+/// The final layout index, which can differ from the index of the bound data node.
+fn indexed_som_tail(som: &str) -> Option<(&str, usize)> {
+    let (prefix, index) = som.strip_suffix(']')?.rsplit_once('[')?;
+    Some((prefix, index.parse().ok()?))
+}
+
+/// Adjust a pending focus when a sibling is deleted and its later instances are renumbered.
+fn shift_focus_after_removal(target: &mut Option<String>, prefix: &str, removed: usize) {
+    let Some((index, suffix)) = target
+        .as_deref()
+        .and_then(|som| som.strip_prefix(prefix)?.strip_prefix('[')?.split_once(']'))
+        .and_then(|(i, tail)| Some((i.parse::<usize>().ok()?, tail)))
+    else {
+        return;
+    };
+    if index == removed {
+        *target = None;
+    } else if index > removed {
+        *target = Some(format!("{prefix}[{}]{suffix}", index - 1));
+    }
+}
+
 /// A SOM path without its indexes (`form.page1.qty`), for matching names scripts pass.
 fn plain_som(som: &str) -> String {
     let mut out = String::with_capacity(som.len());
@@ -451,6 +473,8 @@ struct Runner<'a, 'b> {
     /// Field values to write, by name (the last wins).
     field_changes: std::collections::BTreeMap<String, Vec<String>>,
     by_som: Option<HashMap<String, String>>,
+    objects_by_som: HashMap<String, pdfcraft_cos::ObjRef>,
+    focus_requests: Vec<(usize, Option<String>)>,
     /// Widget names by the data node they bind to (built with `by_som`).
     by_path: Option<HashMap<pdfcraft_xfa::DataPath, Vec<String>>>,
     fields: Option<HashMap<String, FieldInfo>>,
@@ -498,6 +522,8 @@ impl<'a, 'b> Runner<'a, 'b> {
             pending: Vec::new(),
             field_changes: Default::default(),
             by_som: None,
+            objects_by_som: HashMap::new(),
+            focus_requests: Vec::new(),
             by_path: None,
             fields: None,
             cached: None,
@@ -559,13 +585,29 @@ impl<'a, 'b> Runner<'a, 'b> {
 
     fn by_som(&mut self) -> &HashMap<String, String> {
         if self.by_som.is_none() {
-            let by_som = pdfcraft_xfa::fields_by_som(self.doc);
+            let mut by_som = HashMap::new();
+            self.objects_by_som.clear();
+            for (som, (name, object)) in pdfcraft_xfa::field_objects_by_som(self.doc) {
+                self.objects_by_som.insert(som.clone(), object);
+                by_som.insert(som, name);
+            }
             let mut by_path: HashMap<pdfcraft_xfa::DataPath, Vec<String>> = HashMap::new();
-            for (som, name) in &by_som {
-                by_path.entry(pdfcraft_xfa::data_path(self.tpl, som)).or_default().push(name.clone());
+            for f in pdfcraft_forms::fields(self.doc) {
+                let som = self
+                    .doc
+                    .get(f.obj)
+                    .as_dict()
+                    .and_then(|d| d.get(pdfcraft_xfa::SOM_KEY).map(|s| self.doc.resolve(s)))
+                    .and_then(|s| s.as_string().map(|s| s.to_text()))
+                    .unwrap_or_else(|| f.name.clone());
+                let path = pdfcraft_xfa::data_path(self.tpl, &som);
+                if !path.is_empty() {
+                    by_path.entry(path).or_default().push(f.name);
+                }
             }
             for names in by_path.values_mut() {
                 names.sort();
+                names.dedup();
             }
             self.by_path = Some(by_path);
             self.by_som = Some(by_som);
@@ -749,7 +791,22 @@ impl<'a, 'b> Runner<'a, 'b> {
         let by_som = self.by_som().clone();
         let targets = (!names.is_empty()).then(|| ResetTargets::new(names));
         let wanted = |som: &str| targets.as_ref().is_none_or(|t| t.matches(som));
-        let listed: Option<Vec<String>> = targets.as_ref().map(|_| by_som.iter().filter(|(som, _)| wanted(som)).map(|(_, f)| f.clone()).collect());
+        let listed: Option<Vec<String>> = targets.as_ref().map(|_| {
+            let mut set = Vec::new();
+            for (som, f) in &by_som {
+                if wanted(som) {
+                    if !set.contains(f) {
+                        set.push(f.clone());
+                    }
+                    for peer in self.widgets_at(&pdfcraft_xfa::data_path(self.tpl, som)) {
+                        if !set.contains(&peer) {
+                            set.push(peer);
+                        }
+                    }
+                }
+            }
+            set
+        });
         // Fields and exclusion groups of the live form with no widget yet (a row an opening
         // script added, before the form is laid out again): their data goes back to the
         // template's default too, or the value would stay and be laid out and saved.
@@ -891,6 +948,13 @@ impl<'a, 'b> Runner<'a, 'b> {
                         // The data holds every shown instance before one is taken out.
                         counts.insert(key, have.saturating_sub(1));
                         self.data_op(pdfcraft_xfa::DataOp::Instances { parent: parent.clone(), name: name.clone(), count: have });
+                        // SOM indexes after the removed instance shift down. A focus on
+                        // the deleted instance itself must never reach its replacement.
+                        if let Some((prefix, removed)) = indexed_som_tail(som) {
+                            for (_, target) in &mut self.focus_requests {
+                                shift_focus_after_removal(target, prefix, removed);
+                            }
+                        }
                         let mut path = parent;
                         path.push((name, index));
                         self.data_op(pdfcraft_xfa::DataOp::Remove(path));
@@ -914,9 +978,8 @@ impl<'a, 'b> Runner<'a, 'b> {
                 XfaEffect::OpenAttachment { name, open } => self.run.out.requests.push(Request::OpenAttachment { name: name.clone(), open: *open }),
                 XfaEffect::ShowPanel(p) => self.run.out.requests.push(Request::ShowPanel(*p)),
                 XfaEffect::SetFocus(som) => {
-                    if let Some(name) = self.by_som().get(som).cloned() {
-                        self.run.out.requests.push(Request::Focus(name));
-                    }
+                    self.focus_requests.push((self.run.out.requests.len(), Some(som.clone())));
+                    self.run.out.requests.push(Request::Focus(String::new()));
                 }
                 XfaEffect::Beep => self.run.out.requests.push(Request::Beep),
                 XfaEffect::Highlight(on) => {
@@ -1026,6 +1089,16 @@ impl<'a, 'b> Runner<'a, 'b> {
             self.relayout()?;
         }
         self.flush()?;
+        if !self.focus_requests.is_empty() {
+            self.by_som();
+            for (index, som) in self.focus_requests.into_iter().rev() {
+                if let Some((name, object)) = som.as_ref().and_then(|som| self.by_som.as_ref()?.get(som).zip(self.objects_by_som.get(som))) {
+                    self.run.out.requests[index] = Request::FocusField { name: name.clone(), object_id: crate::js::field_object_id(*object) };
+                } else {
+                    self.run.out.requests.remove(index);
+                }
+            }
+        }
         self.session = None;
         if self.skipped > 0 {
             let why = if self.run.ran_away {
@@ -1440,6 +1513,30 @@ mod tests {
         assert_eq!(hits, 0);
         assert!(targets.matches("form1[0].page1[0].other49999[0]"));
         assert!(started.elapsed() < std::time::Duration::from_secs(2), "took {:?}", started.elapsed());
+    }
+
+    /// Verify that a shared layout name cannot cause a data-binding index to redirect pending focus.
+    #[test]
+    fn focus_shift_uses_the_som_index_when_data_binding_omits_the_segment() {
+        let (tpl, _) = pdfcraft_xfa::parse(
+            r#"<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+                <subform name="form"><area name="row"/><subform name="row"><occur min="1" max="4"/></subform></subform>
+            </template>"#,
+        )
+        .unwrap();
+        let removed = "form[0].row[1]";
+        assert_eq!(split_instance(&tpl, removed).unwrap().3, 0);
+        let (prefix, index) = indexed_som_tail(removed).unwrap();
+        for (before, after) in [
+            ("form[0].row[0].amount[0]", Some("form[0].row[0].amount[0]")),
+            ("form[0].row[1].amount[0]", None),
+            ("form[0].row[2].amount[0]", Some("form[0].row[1].amount[0]")),
+        ] {
+            let mut target = Some(before.to_owned());
+            shift_focus_after_removal(&mut target, prefix, index);
+            assert_eq!(target.as_deref(), after);
+        }
+        assert!(indexed_som_tail("form[0].row[bad]").is_none());
     }
 
     #[test]

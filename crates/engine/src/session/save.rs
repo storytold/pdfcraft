@@ -20,19 +20,24 @@ impl Session {
                 return Ok(shell.bytes.clone());
             }
             let cos = writable(&editor.cos)?;
-            return guard(|| -> Result<Arc<Vec<u8>>, EditError> {
+            let synced = guard(|| -> Result<Option<Arc<Vec<u8>>>, EditError> {
                 let mut shell_doc = pdfcraft_cos::Document::open_with_password(shell.bytes.clone(), editor.keys.reopen.as_deref())
                     .map_err(|e| EditError::Write(e.to_string()))?;
-                let changed = pdfcraft_xfa::sync_form_into_shell(&mut shell_doc, &cos).map_err(|e| EditError::Write(e.to_string()))?;
+                let Ok(changed) = pdfcraft_xfa::sync_form_into_shell(&mut shell_doc, &cos) else {
+                    return Ok(None);
+                };
                 if !changed {
-                    return Ok(shell.bytes.clone());
+                    return Ok(Some(shell.bytes.clone()));
                 }
                 // Keep the appended revision strictly to the datasets/form streams (#4309): no
                 // `/Info /ModDate` object may be added under the usage-rights or author signature.
                 let opts = SaveOptions { mod_date: None, drop_unlinked: true, ..SaveOptions::default() };
-                write_incremental(&shell_doc, &opts).map(Arc::new).map_err(|e| EditError::Write(e.to_string()))
+                write_incremental(&shell_doc, &opts).map(|b| Some(Arc::new(b))).map_err(|e| EditError::Write(e.to_string()))
             })
-            .map_err(EditError::Write)?;
+            .map_err(EditError::Write)??;
+            if let Some(bytes) = synced {
+                return Ok(bytes);
+            }
         }
         if !editor.cos.is_modified() && on_saved && (!editor.cos.reconstructed() || doc.is_signed()) {
             return Ok(editor.saved.clone());
@@ -128,6 +133,12 @@ impl Session {
                 editor.saved_keys = keys;
                 editor.unsaved_file = false;
             } else {
+                // An incremental save keeps the old byte prefix and its object identities. A
+                // rewrite can reuse the same numbers for unrelated fields and icons.
+                let preserves_objects = bytes.starts_with(editor.saved.as_slice()) || bytes.starts_with(editor.cos.bytes().as_slice());
+                if !preserves_objects {
+                    crate::js::replace_runtime(&mut doc.js_runtime);
+                }
                 let dropped_ur = editor.ur_shell.take().is_some();
                 editor.ur_data_only = false;
                 editor.cos = reopened;
@@ -189,6 +200,7 @@ impl Session {
     /// File ▸ Revert: back to the last saved version (or the file as opened). Undo history is
     /// cleared, as in Acrobat.
     pub fn revert(&mut self, id: DocId) -> Result<(), EditError> {
+        self.invalidate_javascript(id);
         let doc = self.doc_mut(id)?;
         let editor = doc.editor.as_mut().ok_or_else(|| EditError::ReadOnly(doc.read_only_reason.clone().unwrap_or_default()))?;
         let base = editor.saved.clone();
@@ -222,6 +234,12 @@ impl Session {
     pub fn reload(&mut self, id: DocId, bytes: Arc<Vec<u8>>) -> Result<(), OpenError> {
         let old = self.docs.iter().position(|d| d.id == id).ok_or_else(|| OpenError::Invalid("the document is not open".into()))?;
         let doc = &self.docs[old];
+        // Opening the replacement can initialize a new worker. Wait for the old
+        // invocation to finish before allowing repeated reloads of this document.
+        #[cfg(not(target_arch = "wasm32"))]
+        if doc.js_runtime.lock().map_err(|_| OpenError::Invalid("script runtime unavailable".into()))?.is_executing() {
+            return Err(OpenError::Invalid("a script is still running in this document; retry the reload once it finishes".into()));
+        }
         let (name, path, generation) = (doc.name.clone(), doc.path.clone(), doc.generation);
         let password = doc.editor.as_ref().and_then(|e| e.keys.reopen.clone()).or_else(|| doc.password.clone());
         let new_id = self.open(name, path, bytes, password.as_deref())?;
@@ -264,6 +282,7 @@ impl Session {
                     Some(e) if e.ur_shell.is_some() && e.ur_data_only => {
                         let Some(shell) = e.ur_shell.as_ref() else { continue };
                         let Ok(clean) = writable(&e.cos) else { continue };
+                        let has_pw = pdfcraft_forms::has_password_values(&e.cos) || pdfcraft_xfa::has_password_values(&e.cos);
                         let Ok(mut shell_doc) = pdfcraft_cos::Document::open_with_password(shell.bytes.clone(), e.keys.reopen.as_deref()) else {
                             continue;
                         };
@@ -275,7 +294,16 @@ impl Session {
                                 }
                             }
                             Ok(false) => shell.bytes.clone(),
-                            Err(_) => continue,
+                            Err(_) => {
+                                if has_pw {
+                                    match write_incremental(&clean, &SaveOptions::default()) {
+                                        Ok(b) => Arc::new(b),
+                                        Err(_) => continue,
+                                    }
+                                } else {
+                                    d.bytes.clone()
+                                }
+                            }
                         }
                     }
                     Some(e) if pdfcraft_forms::has_password_values(&e.cos) || pdfcraft_xfa::has_password_values(&e.cos) => {

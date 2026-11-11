@@ -1,6 +1,6 @@
 use super::{
     AddedContent, Arc, Edit, EditError, FieldValue, ImageEdit, NewAnnotation, Shape, a11y, copy_image, decode_data_file, embed_image, fit_picture,
-    image_content_type, is_xfa_data_file, js, mark_source, measure, model_poster, open_source, strip_xfa, unrestricted, xfa, xfa_after_data_change,
+    image_content_type, is_xfa_data_file, js, mark_source, measure, model_poster, strip_xfa, unrestricted, xfa, xfa_after_data_change,
 };
 use crate::SourceProblem;
 use crate::sources::{comment_source, import_pdf_comments};
@@ -78,7 +78,7 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
                 Err(EditError::NotPermitted("comments"))
             }
         }
-        Edit::SetFieldValue { .. } | Edit::ResetForm { .. } | Edit::SetFieldImage { .. } | Edit::ApplyScriptChanges { .. } | Edit::XfaEvent { .. } => {
+        Edit::SetFieldValue { .. } | Edit::ResetForm { .. } | Edit::SetFieldImage { .. } | Edit::SetFieldImageTarget { .. } | Edit::ApplyScriptChanges { .. } | Edit::XfaEvent { .. } => {
             if p.fill_forms() {
                 Ok(())
             } else {
@@ -221,6 +221,7 @@ fn skipped_text(s: &str) -> String {
 pub(crate) struct EditCtx {
     /// Field scripts run (`None`: JavaScript is off) and what they produced.
     pub(crate) js: Option<js::JsRunner>,
+    defer_reset_callbacks: bool,
     /// A laid-out XFA form's template (`None`: not an XFA form, or JavaScript is off) and what
     /// its scripts produced.
     pub(crate) xfa: Option<Arc<pdfcraft_xfa::model::Template>>,
@@ -266,7 +267,7 @@ impl EditCtx {
     /// The field highlight (`app.runtimeHighlight`) the edit's next script reads: the field
     /// scripts' runner holds it while there is one (its scripts change it there), else the edit.
     pub(crate) fn highlight(&self) -> bool {
-        self.js.as_ref().map_or(self.highlight, |js| js.doc.highlight)
+        self.js.as_ref().map_or(self.highlight, |js| js.doc.runtime_highlight)
     }
 
     /// A script changed the field highlight: both script runtimes of the edit read the new one,
@@ -274,7 +275,7 @@ impl EditCtx {
     pub(crate) fn set_highlight(&mut self, on: bool) {
         self.highlight = on;
         if let Some(js) = self.js.as_mut() {
-            js.doc.highlight = on;
+            js.doc.runtime_highlight = on;
         }
     }
 
@@ -292,6 +293,7 @@ impl EditCtx {
         }
         Self {
             js: None,
+            defer_reset_callbacks: false,
             xfa: None,
             xfa_out: Default::default(),
             xfa_datasets: None,
@@ -508,11 +510,11 @@ fn run_edit_page_image(doc: &mut pdfcraft_cos::Document, page: usize, index: usi
     Ok(())
 }
 
-/// After an edit that changes fields, their scripts or the calculation order: the edit's
-/// script runner reads the document as it now is, and builds its `calculateNow()` list again.
-fn invalidate_calculations(cx: &mut EditCtx, doc: &pdfcraft_cos::Document) {
+/// Forget cached calculation order and field metadata after changing the form structure.
+fn invalidate_form_script_snapshot(cx: &mut EditCtx) {
     if let Some(js) = cx.js.as_mut() {
-        js.invalidate_calculations(doc);
+        js.invalidate_calculations();
+        js.invalidate_field_snapshots();
     }
 }
 
@@ -529,13 +531,13 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         Edit::SetInfo { key, value } => pdfcraft_organize::set_info(doc, key, value)?,
         Edit::DuplicatePages { pages, at } => pdfcraft_organize::duplicate_pages(doc, pages, *at)?,
         Edit::ReplacePages { pages, name, bytes, src_pages } => {
-            let src = open_source(name, bytes)?;
+            let src = crate::sources::open_source_into(name, bytes, doc)?;
             pdfcraft_organize::replace_pages(doc, pages, &src, src_pages)?;
         }
         Edit::SetPageBox { pages, which, spec } => pdfcraft_organize::set_page_box(doc, pages, *which, *spec)?,
         Edit::SetTransition { pages, spec } => pdfcraft_organize::set_transition(doc, pages, spec)?,
         Edit::InsertPagesFrom { name, bytes, pages, at, field_conflicts } => {
-            let src = open_source(name, bytes)?;
+            let src = crate::sources::open_source_into(name, bytes, doc)?;
             let pages = match pages {
                 Some(p) => p.clone(),
                 None => (0..pdfcraft_organize::page_count(&src)?).collect(),
@@ -544,7 +546,7 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             let title = std::path::Path::new(name).file_stem().map_or_else(|| name.clone(), |s| s.to_string_lossy().into_owned());
             let outcome = pdfcraft_organize::insert_file_pages(doc, &src, &title, &pages, *at, *field_conflicts)?;
             cx.renamed_fields = outcome.renamed_fields;
-            invalidate_calculations(cx, doc);
+            invalidate_form_script_snapshot(cx);
         }
         Edit::AddBookmark { parent, index, title, page, left, top } => {
             pdfcraft_organize::add_bookmark_at(doc, parent, *index, title, *page, *left, *top)?;
@@ -731,7 +733,10 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             set(doc, typed.as_ref().unwrap_or(value))?;
         }
         Edit::ApplyScriptChanges { changes } => match cx.js.as_mut() {
-            Some(js) => pdfcraft_forms::apply_script_changes(doc, changes, js)?,
+            Some(js) => {
+                js.invalidate_field_snapshots();
+                pdfcraft_forms::apply_script_changes(doc, changes, js)?;
+            }
             None => pdfcraft_forms::apply_script_changes(doc, changes, &mut pdfcraft_forms::NoScripts)?,
         },
         Edit::XfaEvent { som, activity } => {
@@ -757,7 +762,14 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             cx.set_highlight(on);
             cx.xfa_unchanged = ran.map_err(EditError::Invalid)?;
         }
-        Edit::SetFieldImage { name, image } => {
+        Edit::SetFieldImage { name, image } | Edit::SetFieldImageTarget { name, image, .. } => {
+            let object = match edit {
+                Edit::SetFieldImageTarget { object, .. } => Some(*object),
+                _ => None,
+            };
+            if object.is_some_and(|object| !pdfcraft_forms::fields(doc).iter().any(|f| f.name == *name && f.obj == object)) {
+                return Err(EditError::Invalid("the selected image field is no longer available".into()));
+            }
             let (img, _) = embed_image(doc, name, image)?;
             let px = match &*doc.get(img) {
                 pdfcraft_cos::Object::Stream(s) => (s.dict.int(b"Width").unwrap_or(1) as u32, s.dict.int(b"Height").unwrap_or(1) as u32),
@@ -774,7 +786,7 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
                 let Some(content_type) = image_content_type(image) else {
                     return Err(EditError::Invalid(format!("{name}: an XFA form keeps a PNG, JPEG, GIF, BMP or TIFF picture; choose one of those")));
                 };
-                pdfcraft_forms::set_button_icon(doc, name, img, px)?;
+                pdfcraft_forms::set_button_icon_target(doc, name, object, img, px)?;
                 let som = pdfcraft_xfa::fields_by_som(doc).into_iter().find(|(_, n)| n == name).map(|(s, _)| s).unwrap_or_else(|| name.clone());
                 let path = match cx.xfa.as_deref() {
                     Some(tpl) => pdfcraft_xfa::data_path(tpl, &som),
@@ -789,40 +801,46 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
                 cx.xfa_out.errors.extend(r.warnings);
                 xfa_after_data_change(doc, cx, false)?;
             } else {
-                pdfcraft_forms::set_button_icon(doc, name, img, px)?;
+                pdfcraft_forms::set_button_icon_target(doc, name, object, img, px)?;
             }
         }
         Edit::ResetForm { names } => {
-            pdfcraft_forms::reset(doc, names.as_deref())?;
+            if let Some(js) = cx.js.as_mut() {
+                pdfcraft_forms::reset_with_formatting(doc, names.as_deref(), js, !cx.defer_reset_callbacks)?;
+            } else {
+                pdfcraft_forms::reset(doc, names.as_deref())?;
+            }
         }
         Edit::AddField { page, rect, kind, name } => {
             pdfcraft_forms::add_field(doc, *page, *rect, kind, name.as_deref())?;
-            invalidate_calculations(cx, doc);
+            invalidate_form_script_snapshot(cx);
         }
         Edit::SetFieldProps { name, props } => {
             pdfcraft_forms::set_props(doc, name, props)?;
-            invalidate_calculations(cx, doc);
+            invalidate_form_script_snapshot(cx);
         }
         Edit::DuplicateField { name, pages } => {
             if pdfcraft_forms::duplicate_field(doc, name, pages)? == 0 {
                 return Err(EditError::Form(pdfcraft_forms::FormError::Invalid(format!("{name} is already on those pages"))));
             }
-            invalidate_calculations(cx, doc);
+            invalidate_form_script_snapshot(cx);
         }
         Edit::DeleteField { name } => {
             pdfcraft_forms::delete_field(doc, name)?;
-            invalidate_calculations(cx, doc);
+            invalidate_form_script_snapshot(cx);
         }
         Edit::DeleteWidget { name, widget } => {
             pdfcraft_forms::delete_widget(doc, name, *widget)?;
-            invalidate_calculations(cx, doc);
+            invalidate_form_script_snapshot(cx);
         }
         Edit::SetTabOrder { pages, order } => pdfcraft_forms::set_tab_order(doc, pages, *order)?,
         Edit::MoveInTabOrder { name, earlier } => pdfcraft_forms::move_in_tab_order(doc, name, *earlier)?,
         // As after a script edit: the values the new order gives show at once.
         Edit::SetCalculationOrder { names } => {
             pdfcraft_forms::set_calculation_order(doc, names)?;
-            invalidate_calculations(cx, doc);
+            if let Some(js) = cx.js.as_mut() {
+                js.invalidate_calculations();
+            }
             match cx.js.as_mut() {
                 Some(js) => pdfcraft_forms::recalculate_with(doc, js)?,
                 None => pdfcraft_forms::recalculate(doc)?,
@@ -850,7 +868,9 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         }
         Edit::SetFieldScript { name, event, script } => {
             pdfcraft_forms::set_field_script(doc, name, event, script.as_deref())?;
-            invalidate_calculations(cx, doc);
+            if let Some(js) = cx.js.as_mut() {
+                js.invalidate_calculations();
+            }
             match cx.js.as_mut() {
                 Some(js) => pdfcraft_forms::recalculate_with(doc, js)?,
                 None => pdfcraft_forms::recalculate(doc)?,
@@ -1090,15 +1110,40 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             }
             doc.remove_encryption();
         }
-        Edit::Batch { edits, .. } => {
-            // A form-script event runs on its own: in a batch, its scripts and those the batch's
-            // value edits run afterwards (change, exit) would interleave, an exit running twice.
-            if edits.iter().any(|e| matches!(e, Edit::XfaEvent { .. })) {
-                return Err(EditError::Invalid("a form script event can't be part of a batch of edits".into()));
+        Edit::Batch { edits, .. } => run_batch(doc, edits, cx)?,
+    }
+    Ok(())
+}
+
+/// Apply an edit batch while keeping reset deferral scoped to adjacent script writeback.
+fn run_batch(doc: &mut pdfcraft_cos::Document, edits: &[Edit], cx: &mut EditCtx) -> Result<(), EditError> {
+    // A form-script event runs on its own: in a batch, its scripts and those the batch's
+    // value edits run afterwards (change, exit) would interleave, an exit running twice.
+    if edits.iter().any(|e| matches!(e, Edit::XfaEvent { .. })) {
+        return Err(EditError::Invalid("a form script event can't be part of a batch of edits".into()));
+    }
+    // Only contiguous resets immediately preceding script value writeback can
+    // defer callbacks. Other edits may read calculated values during validation.
+    let mut script_writeback = vec![false; edits.len()];
+    let mut writes_values = false;
+    for (index, edit) in edits.iter().enumerate().rev() {
+        match edit {
+            Edit::ResetForm { .. } => script_writeback[index] = writes_values,
+            Edit::ApplyScriptChanges { changes } => writes_values = changes.iter().any(|change| change.value.is_some()),
+            _ => writes_values = false,
+        }
+    }
+    let deferred = cx.defer_reset_callbacks;
+    for (index, e) in edits.iter().enumerate() {
+        cx.defer_reset_callbacks = script_writeback[index];
+        let result = run_edit(doc, e, cx);
+        cx.defer_reset_callbacks = deferred;
+        result?;
+        if let Some(js) = cx.js.as_mut() {
+            if js.refused.is_some() {
+                break;
             }
-            for e in edits {
-                run_edit(doc, e, cx)?;
-            }
+            js.refresh_after_batch_edit(doc, e);
         }
     }
     Ok(())
