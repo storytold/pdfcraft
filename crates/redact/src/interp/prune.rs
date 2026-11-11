@@ -358,7 +358,7 @@ fn prune_retired_properties(doc: &Document, res: &mut Dict, names: &[Vec<u8>], c
         // Each is one page's content or one form's, with the allowance of a page.
         for op in resource_ops(doc, &mut DecodeBudget::page(), res, content)? {
             if matches!(op.op.as_slice(), b"BDC" | b"DP")
-                && let Some(name) = op.name(1)
+                && let Some(name) = op.last_name()
             {
                 used.insert(name.to_vec());
             }
@@ -522,7 +522,7 @@ pub(crate) fn prune_properties(doc: &Document, budget: &mut DecodeBudget, res: &
     let ops = resource_ops(doc, budget, res, content)?;
     let names: Vec<Vec<u8>> = properties.iter().map(|(n, _)| n.to_vec()).collect();
     for name in names {
-        if !ops.iter().any(|op| matches!(op.op.as_slice(), b"BDC" | b"DP") && op.name(1) == Some(&name))
+        if !ops.iter().any(|op| matches!(op.op.as_slice(), b"BDC" | b"DP") && op.last_name() == Some(&name))
             && let Some(value) = properties.remove(&name)
         {
             retired.push(value);
