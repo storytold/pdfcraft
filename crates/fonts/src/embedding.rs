@@ -54,19 +54,35 @@ pub fn validate_document_input(bytes: &[u8]) -> Result<(), String> {
         return Err("this font family is excluded by the project's asset policy".into());
     }
     let f = FontRef::new(bytes).map_err(|e| e.to_string())?;
-    let attribution: String =
-        [StringId::COPYRIGHT_NOTICE, StringId::MANUFACTURER].into_iter().flat_map(|id| f.localized_strings(id)).map(|s| s.to_string()).collect();
-    if attribution.to_ascii_lowercase().contains("adobe") {
+    if any_name_record(&f, &[StringId::COPYRIGHT_NOTICE, StringId::MANUFACTURER], |t| t.to_ascii_lowercase().contains("adobe")) {
         return Err("Adobe-authored font assets are excluded by the project's asset policy".into());
     }
-    let license: String = f.localized_strings(StringId::LICENSE_DESCRIPTION).map(|s| s.to_string()).collect();
-    if !["SIL OPEN FONT", "SIL Open Font", "Apache License", "Ubuntu Font Licence", "Bitstream Vera", "MIT License"]
-        .iter()
-        .any(|l| license.contains(l))
-    {
+    let licences = ["SIL OPEN FONT", "SIL Open Font", "Apache License", "Ubuntu Font Licence", "Bitstream Vera", "MIT License"];
+    if !any_name_record(&f, &[StringId::LICENSE_DESCRIPTION], |t| licences.iter().any(|l| t.contains(l))) {
         return Err("select an openly licensed font whose name table declares its licence (OFL, Apache, Ubuntu, Bitstream Vera or MIT)".into());
     }
     Ok(())
+}
+
+/// Name-table text one policy check reads in all.
+const MAX_NAME_BYTES: usize = 1 << 20;
+
+/// Whether `found` holds for any record of the name-table strings `ids`, read one at a time
+/// within [`MAX_NAME_BYTES`] in all. The table can point many records at one large string, so
+/// the records are never joined, and reading stops once the allowance is spent.
+fn any_name_record(font: &FontRef, ids: &[skrifa::string::StringId], found: impl Fn(&str) -> bool) -> bool {
+    let mut left = MAX_NAME_BYTES;
+    for s in ids.iter().flat_map(|id| font.localized_strings(*id)) {
+        if left == 0 {
+            break;
+        }
+        let text = s.to_string();
+        left = left.saturating_sub(text.len().max(1));
+        if found(&text) {
+            return true;
+        }
+    }
+    false
 }
 
 /// Validate before allocating any PDF objects, so an invalid font cannot partly mutate a doc.
@@ -371,6 +387,17 @@ mod tests {
         embed(&mut doc, &mut second, bytes, "Inter").unwrap();
         assert_eq!(doc.scan_objects().filter(|(_, o)| matches!(o.as_ref(), Object::Stream(s) if s.dict.get(b"PCFullFont").is_some())).count(), 1);
         assert_eq!(face_key("ABCDEF+Droid-Sans-Fallback"), face_key("Droid Sans Fallback"));
+    }
+
+    #[test]
+    fn licence_policy_reads_name_records_one_at_a_time() {
+        use skrifa::string::StringId;
+        let bytes = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
+        assert!(validate_document_input(bytes).is_ok(), "an OFL font passes");
+        let face = FontRef::new(bytes).unwrap();
+        assert!(any_name_record(&face, &[StringId::LICENSE_DESCRIPTION], |t| t.contains("SIL Open Font")));
+        assert!(!any_name_record(&face, &[StringId::LICENSE_DESCRIPTION], |_| false));
+        assert!(!any_name_record(&face, &[], |_| true), "no ids, no records");
     }
 
     #[test]
