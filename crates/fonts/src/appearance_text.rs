@@ -100,10 +100,18 @@ pub struct LatinSource<'a> {
     /// The bytes that show a character in the font and its advance (em), or `None` when the
     /// font has no glyph for it.
     pub glyph: Box<LatinGlyph<'a>>,
+    /// The bytes that show a shaped word (its clusters in the order they are drawn: letters in
+    /// their joining forms, ligatures, punctuation) in the font and its advance (em), when the
+    /// font draws every one of them. `None`, or a word it lacks a form of, leaves the word to
+    /// the shaped face.
+    pub word: Option<Box<WordGlyphs<'a>>>,
 }
 
 /// What [`LatinSource::glyph`] answers for a character: its bytes in the font and advance (em).
 pub type LatinGlyph<'a> = dyn Fn(char) -> Option<(Vec<u8>, f64)> + 'a;
+
+/// What [`LatinSource::word`] answers for a shaped word: its bytes in the font and advance (em).
+pub type WordGlyphs<'a> = dyn Fn(&[ShapedCluster]) -> Option<(Vec<u8>, f64)> + 'a;
 
 impl std::fmt::Debug for LatinSource<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -195,6 +203,37 @@ fn push_latin(pieces: &mut Vec<Piece>, text: String, look: Look, sources: &[Lati
     }
 }
 
+/// Shaped `clusters`, in the order they are drawn, in `look`: a word the source font already
+/// draws every form of stays in that font, as Latin does, so an edit that needs no new letter
+/// form keeps the paragraph's face and widths. Any other word is drawn whole with the shaped
+/// face: a word's letters join, so it is never split between two fonts.
+fn push_shaped(pieces: &mut Vec<Piece>, clusters: Vec<ShapedCluster>, look: Look, sources: &[LatinSource<'_>]) {
+    let Some((source, lookup)) = look.source.and_then(|i| sources.get(i)).and_then(|s| Some((s, s.word.as_ref()?))) else {
+        pieces.push(Piece::Shaped(clusters, look));
+        return;
+    };
+    let space = |c: &ShapedCluster| c.text.chars().all(char::is_whitespace);
+    let mut shaped: Vec<ShapedCluster> = Vec::new();
+    for word in clusters.chunk_by(|a, b| space(a) == space(b)) {
+        let Some((bytes, advance)) = lookup(word).filter(|(bytes, advance)| !bytes.is_empty() && advance.is_finite() && *advance >= 0.0) else {
+            shaped.extend(word.iter().cloned());
+            continue;
+        };
+        if !shaped.is_empty() {
+            pieces.push(Piece::Shaped(std::mem::take(&mut shaped), look));
+        }
+        pieces.push(Piece::Source { bytes, advance, resource: source.resource.clone(), look });
+    }
+    if !shaped.is_empty() {
+        pieces.push(Piece::Shaped(shaped, look));
+    }
+}
+
+/// Whether any of `lines` draws with a shaped face rather than a font the page already has.
+pub fn draws_shaped(lines: &[Line]) -> bool {
+    lines.iter().flat_map(|line| &line.pieces).any(|piece| matches!(piece, Piece::Shaped(clusters, _) if !clusters.is_empty()))
+}
+
 #[derive(Clone, Debug)]
 pub struct Line {
     /// Unmodified logical text, including spaces and joining controls.
@@ -279,8 +318,14 @@ fn layout_pass(
             }
             for (kind, look, s) in segments {
                 let clusters = match kind {
-                    Some(ShapedScript::Arabic) => crate::shape_arabic(&s, run_rtl)?,
-                    Some(ShapedScript::ArabicBold) => crate::shape_arabic_bold(&s, run_rtl)?,
+                    Some(ShapedScript::Arabic) => {
+                        push_shaped(&mut pieces, crate::shape_arabic(&s, run_rtl)?, look, styles.sources);
+                        continue;
+                    }
+                    Some(ShapedScript::ArabicBold) => {
+                        push_shaped(&mut pieces, crate::shape_arabic_bold(&s, run_rtl)?, look, styles.sources);
+                        continue;
+                    }
                     Some(ShapedScript::Hebrew) => crate::shape_hebrew(&s, run_rtl)?,
                     Some(ShapedScript::Thai) => crate::shape_thai(&s)?,
                     Some(other) => crate::shape(&s, run_rtl, other)?,

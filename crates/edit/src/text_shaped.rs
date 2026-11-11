@@ -80,7 +80,7 @@ pub(super) fn rewrite(
     let page = page_dict(doc, page)?;
     let size = style.size.unwrap_or(first.size);
     let color = style.color.unwrap_or(first.color);
-    let sources = latin_sources(doc, &page.dict, &members);
+    let sources = latin_sources(doc, &page.dict, &members, lines);
     // Every run keeps its source look (a size, colour or weight asked for applies to all of them).
     // Italic is for the Latin runs: Arabic script has no italic and stays upright. Latin stays in
     // the run's own font where it has the glyphs, unless another weight is asked for.
@@ -143,6 +143,7 @@ pub(super) fn rewrite(
     };
     let laid = appearance_text::wrap_styled_with(draft, size, wrap_width, look(first), &spans, &sources)
         .map_err(|_| EditError::Invalid("the Arabic paragraph cannot be shaped within its limits".into()))?;
+    let draws_fallback = appearance_text::draws_shaped(&laid);
     let align = style.align.unwrap_or(if rtl { crate::added::Align::Right } else { crate::added::Align::Left });
     let left = if rtl && style.width.is_none() && style.align.is_none() { block.rect[2] - width } else { block.rect[0] } + dx;
     let top = first.origin.baseline + size * laid.first().map_or(0.9, |line| line.ascent) + dy;
@@ -289,7 +290,10 @@ pub(super) fn rewrite(
         dict.set(b"Contents".to_vec(), contents);
         dict.set(b"Resources".to_vec(), Object::Dict(resources));
     })?;
-    Ok(LineEdit { substituted: pdfcraft_fonts::document_arabic_font().map(|font| format!("{} Type3", font.family)) })
+    // Only a paragraph that draws with the fallback face reports it: one whose every word the
+    // page's own fonts already had keeps them.
+    let substituted = if draws_fallback { pdfcraft_fonts::document_arabic_font().map(|font| format!("{} Type3", font.family)) } else { None };
+    Ok(LineEdit { substituted })
 }
 
 /// A character's bytes in a source font and its advance (em).
@@ -299,7 +303,7 @@ type SourceGlyph = (Vec<u8>, f64);
 /// resource a run shows, with what it has glyphs for (a subset such as Word's Calibri keeps the
 /// characters the document uses). The fallback's own fonts are left out, and so is a resource
 /// whose name the drawing could not write as it is.
-fn latin_sources<'a>(doc: &Document, page: &Dict, members: &[&TextLine]) -> Vec<appearance_text::LatinSource<'a>> {
+fn latin_sources<'a>(doc: &Document, page: &Dict, members: &[&TextLine], lines: &[TextLine]) -> Vec<appearance_text::LatinSource<'a>> {
     let fonts = page.get(b"Resources").and_then(|o| doc.dict(o)).and_then(|r| r.get(b"Font").and_then(|f| doc.dict(f))).unwrap_or_default();
     let mut out: Vec<appearance_text::LatinSource<'a>> = Vec::new();
     for line in members {
@@ -309,21 +313,200 @@ fn latin_sources<'a>(doc: &Document, page: &Dict, members: &[&TextLine]) -> Vec<
             continue;
         }
         let Some(font) = fonts.get(name.as_bytes()).and_then(|f| doc.dict(f)) else { continue };
-        let metrics = Metrics::from_dict(doc, &font);
+        let metrics = std::rc::Rc::new(Metrics::from_dict(doc, &font));
+        let forms = shown_forms(doc, page, name, &metrics, lines);
+        let shaped = metrics.clone();
+        let word = move |clusters: &[pdfcraft_fonts::ShapedCluster]| shown_word(&forms, &shaped, clusters);
         let seen: std::cell::RefCell<HashMap<char, Option<SourceGlyph>>> = Default::default();
-        let glyph = move |c: char| {
-            seen.borrow_mut()
-                .entry(c)
-                .or_insert_with(|| {
-                    let bytes = metrics.encode(c.encode_utf8(&mut [0; 4]))?;
-                    let advance: f64 = metrics.codes(&bytes).iter().map(|(code, _)| metrics.width(*code)).sum();
-                    (advance.is_finite() && advance >= 0.0).then_some((bytes, advance))
-                })
-                .clone()
-        };
-        out.push(appearance_text::LatinSource { resource: name.to_owned(), glyph: Box::new(glyph) });
+        let glyph = move |c: char| seen.borrow_mut().entry(c).or_insert_with(|| source_glyph(&metrics, c)).clone();
+        out.push(appearance_text::LatinSource { resource: name.to_owned(), glyph: Box::new(glyph), word: Some(Box::new(word)) });
     }
     out
+}
+
+/// The bytes that show `c` in a source font and their advance (em), when its encoding has it.
+fn source_glyph(metrics: &Metrics, c: char) -> Option<SourceGlyph> {
+    let bytes = metrics.encode(c.encode_utf8(&mut [0; 4]))?;
+    let advance: f64 = metrics.codes(&bytes).iter().map(|(code, _)| metrics.width(*code)).sum();
+    (advance.is_finite() && advance >= 0.0).then_some((bytes, advance))
+}
+
+/// What names a letter form: the shaped face's glyphs for it and the characters it shows.
+type FormKey = (Vec<u32>, String);
+
+/// The letter forms a page draws in one font (see [`shown_forms`]): `None` for a form seen as
+/// two different glyphs.
+type Forms = HashMap<FormKey, Option<SourceGlyph>>;
+
+fn form_key(cluster: &pdfcraft_fonts::ShapedCluster) -> FormKey {
+    (cluster.glyphs.iter().map(|(id, _)| *id).collect(), cluster.text.clone())
+}
+
+/// The key of a ligature the source draws as one glyph and the shaped face as two clusters
+/// (lam-alef): `first` is drawn left of `second`, so in a right-to-left word it is read after it.
+fn pair_key(first: &pdfcraft_fonts::ShapedCluster, second: &pdfcraft_fonts::ShapedCluster) -> FormKey {
+    (first.glyphs.iter().chain(&second.glyphs).map(|(id, _)| *id).collect(), format!("{}{}", second.text, first.text))
+}
+
+/// Punctuation and digits drawn beside Arabic letters that have one glyph whatever is next to
+/// them and no mirrored form, so the font's own glyph for the character is the right one.
+fn plain_beside_letters(c: char) -> bool {
+    matches!(
+        c,
+        ' ' | '.' | ',' | ':' | ';' | '!' | '?' | '-' | '/' | '%' | '"' | '\'' | '\u{060c}' | '\u{061b}' | '\u{061f}' | '\u{066a}'..='\u{066c}'
+    ) || c.is_ascii_digit()
+        || matches!(u32::from(c), 0x0660..=0x0669 | 0x06f0..=0x06f9)
+}
+
+/// The bytes that show a shaped word (its clusters in the order they are drawn) in a source font
+/// and their advance (em): every letter in the form the page already draws, and the punctuation
+/// and digits its encoding has. `None` when any of it is missing, a mark included.
+fn shown_word(forms: &Forms, metrics: &Metrics, clusters: &[pdfcraft_fonts::ShapedCluster]) -> Option<SourceGlyph> {
+    let (mut bytes, mut advance) = (Vec::new(), 0.0);
+    let mut rest = clusters;
+    while let Some((first, tail)) = rest.split_first() {
+        let pair = tail.first().and_then(|second| forms.get(&pair_key(first, second)).cloned().flatten());
+        let (glyph, used) = match pair {
+            Some(glyph) => (glyph, 2),
+            None => {
+                let mut chars = first.text.chars();
+                let plain = chars.next().filter(|c| chars.next().is_none() && plain_beside_letters(*c));
+                (forms.get(&form_key(first)).cloned().flatten().or_else(|| source_glyph(metrics, plain?))?, 1)
+            }
+        };
+        bytes.extend(glyph.0);
+        advance += glyph.1;
+        rest = rest.get(used..).unwrap_or_default();
+    }
+    Some((bytes, advance))
+}
+
+/// A letter whose glyph depends on its neighbours and that a source glyph can stand for: Arabic
+/// letters, without the marks drawn on them (those are placed by the shaped face).
+fn joining_letter(c: char) -> bool {
+    matches!(u32::from(c), 0x0621..=0x064a | 0x066e..=0x066f | 0x0671..=0x06d3 | 0x06fa..=0x06ff | 0x0750..=0x077f)
+}
+
+/// A mark drawn on a letter (harakat, shadda, the small Quranic signs): no letter's form depends on it.
+fn letter_mark(c: char) -> bool {
+    matches!(u32::from(c), 0x064b..=0x065f | 0x0670 | 0x06d6..=0x06dc | 0x06df..=0x06e4 | 0x06e7..=0x06e8 | 0x06ea..=0x06ed)
+}
+
+/// The most glyphs of one font read from a page to learn its letter forms.
+const FORM_GLYPHS: usize = 65_536;
+
+/// The letters of one word as a page shows them, in the order they are shown: bytes and text.
+type ShownWord = Vec<(Vec<u8>, String)>;
+
+/// The Arabic letter forms the page already draws in the font resource `name`: for each form
+/// (as the shaped face names it, see [`FormKey`]) the bytes that show it in that font and its
+/// advance (em). A subset such as Word's keeps the glyphs but no layout tables, so which glyph is
+/// which form of a letter is only known from the words the page shows: a word's letters are read
+/// as drawn (right to left, the marks on them left out), shaped again, and each glyph is the form
+/// shaped at its place. Only letters that make a whole word of the page's own text teach
+/// anything: part of a word would be shaped as if it ended there. And a form two different glyphs
+/// were seen for is left out, so a guess never puts a wrong glyph on the page.
+fn shown_forms(doc: &Document, page: &Dict, name: &str, metrics: &Metrics, lines: &[TextLine]) -> Forms {
+    let mut forms = Forms::new();
+    let Ok(streams) = content_streams(doc, page) else { return forms };
+    let ops = crate::text::joined(&streams).parse().ops;
+    let words: std::collections::HashSet<String> = lines
+        .iter()
+        .flat_map(|line| line.text.split(|c: char| !joining_letter(c) && !letter_mark(c)))
+        .map(|word| word.chars().filter(|c| !letter_mark(*c)).collect::<String>())
+        .filter(|word| !word.is_empty())
+        .collect();
+    let mut word = ShownWord::new();
+    let mut read = 0usize;
+    let mut in_font = false;
+    for op in &ops {
+        match op.op.as_slice() {
+            b"Tf" => {
+                learn_forms(&mut forms, std::mem::take(&mut word), metrics, &words);
+                in_font = op.operands.first().and_then(Object::as_name) == Some(name.as_bytes());
+            }
+            // Another line or text object starts another word. A small move does not: Word places
+            // a mark with one, between two letters of a word.
+            b"BT" | b"ET" | b"Tm" | b"T*" | b"'" | b"\"" => learn_forms(&mut forms, std::mem::take(&mut word), metrics, &words),
+            b"Td" | b"TD" if op.operands.iter().any(|v| v.as_f64().is_none_or(|v| v.abs() > 40.0)) => {
+                learn_forms(&mut forms, std::mem::take(&mut word), metrics, &words);
+            }
+            _ => {}
+        }
+        if !in_font || !matches!(op.op.as_slice(), b"Tj" | b"TJ" | b"'" | b"\"") {
+            continue;
+        }
+        let shown: Vec<&Object> = match op.operands.last() {
+            Some(Object::Array(items)) => items.iter().collect(),
+            Some(other) => vec![other],
+            None => Vec::new(),
+        };
+        for item in shown {
+            let Some(string) = item.as_string() else {
+                // A kerning step keeps the word; a gap as wide as a space ends it.
+                if item.as_f64().is_some_and(|step| step.abs() > 150.0) {
+                    learn_forms(&mut forms, std::mem::take(&mut word), metrics, &words);
+                }
+                continue;
+            };
+            let mut at = 0usize;
+            for (code, len) in metrics.codes(&string.bytes) {
+                let bytes = string.bytes.get(at..at.saturating_add(len)).unwrap_or_default().to_vec();
+                at = at.saturating_add(len);
+                read = read.saturating_add(1);
+                if read > FORM_GLYPHS {
+                    return forms;
+                }
+                match metrics.text_of(code) {
+                    Some(text) if !text.is_empty() && text.chars().all(letter_mark) => {}
+                    Some(text) if !text.is_empty() && text.chars().all(joining_letter) => word.push((bytes, text.into_owned())),
+                    _ => learn_forms(&mut forms, std::mem::take(&mut word), metrics, &words),
+                }
+            }
+        }
+    }
+    learn_forms(&mut forms, word, metrics, &words);
+    forms
+}
+
+/// Adds what the letters shown for one word teach (see [`shown_forms`]), when they are one of
+/// the page's `words`.
+fn learn_forms(forms: &mut Forms, glyphs: ShownWord, metrics: &Metrics, words: &std::collections::HashSet<String>) {
+    if glyphs.is_empty() {
+        return;
+    }
+    let logical: String = glyphs.iter().rev().map(|(_, text)| text.as_str()).collect();
+    if !words.contains(&logical) {
+        return;
+    }
+    let Ok(clusters) = pdfcraft_fonts::shape_arabic(&logical, true) else { return };
+    // Each glyph is one cluster, or a ligature the shaped face keeps as two.
+    let mut rest = clusters.as_slice();
+    let mut learned = Vec::with_capacity(glyphs.len());
+    for (bytes, text) in glyphs {
+        let (key, used) = match rest {
+            [first, ..] if first.text == text => (form_key(first), 1),
+            [first, second, ..] if pair_key(first, second).1 == text => (pair_key(first, second), 2),
+            _ => return,
+        };
+        rest = rest.get(used..).unwrap_or_default();
+        learned.push((key, bytes));
+    }
+    if !rest.is_empty() {
+        return;
+    }
+    for (key, bytes) in learned {
+        let advance: f64 = metrics.codes(&bytes).iter().map(|(code, _)| metrics.width(*code)).sum();
+        let glyph = (advance.is_finite() && advance >= 0.0).then_some((bytes, advance));
+        forms
+            .entry(key)
+            .and_modify(|known| {
+                if *known != glyph {
+                    *known = None;
+                }
+            })
+            .or_insert(glyph);
+    }
 }
 
 /// The distance between a paragraph's evenly spaced source rows of one size, when it has two
