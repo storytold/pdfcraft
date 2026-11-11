@@ -296,3 +296,18 @@ fn a_document_without_such_fonts_is_not_read() {
     assert_eq!(cost.survey_pages, 0, "{cost:?}");
     assert!(document.surveyed_fonts().is_empty());
 }
+
+/// Two font objects with the same dictionary (one descendant, one program) are two fonts to the
+/// survey: each shows its own glyphs, and a producer that merged subsets into one program may
+/// order each one's glyphs differently. They are subsets of one font, so they form a group.
+#[test]
+fn two_objects_of_one_dictionary_are_counted_apart() {
+    let mut second = Font::truetype("ABCDEF+Kai", 40);
+    second.alias_of = Some(0);
+    let doc = Doc { fonts: vec![Font::truetype("ABCDEF+Kai", 40), second], pages: vec![vec![Show::Text(0, vec![3, 4]), Show::Text(1, vec![5])]] };
+    let bytes = doc.build();
+    let text = String::from_utf8_lossy(&bytes);
+    assert_eq!(text.matches("/DescendantFonts [4 0 R]").count(), 2, "the second object repeats the first");
+    let group = Some((2, vec![(3, 1), (4, 1), (5, 1)]));
+    assert_eq!(surveyed(&doc).surveyed_fonts(), vec![(vec![(3, 1), (4, 1)], group.clone()), (vec![(5, 1)], group)]);
+}

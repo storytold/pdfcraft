@@ -33,7 +33,7 @@ mod cid;
 mod generated;
 mod glyph_simulator;
 pub(crate) mod outline;
-mod recovery;
+pub(crate) mod recovery;
 mod standard_font;
 mod true_type;
 mod type1;
@@ -345,19 +345,15 @@ impl<'a> Font<'a> {
     }
 
     /// PdfCraft patch (104): keep the recovery rules' decisions for this font in `document`,
-    /// for every page read with it, under the font's cache key. A standard substitute (no
-    /// dictionary, key 0) decides on its own.
-    pub(crate) fn attach_recovery_document(&self, document: &Arc<RecoveryDocument>) {
-        if self.0 == 0 {
-            return;
-        }
+    /// for every page read with it, under `key` (`recovery::font_key`).
+    pub(crate) fn attach_recovery_document(&self, document: &Arc<RecoveryDocument>, key: u128) {
         let info = match &self.1 {
             FontType::Type1(t) => t.recovery_info(),
             FontType::TrueType(t) => t.recovery_info(),
             FontType::Type0(t) => t.recovery_info(),
             FontType::Type3(t) => t.recovery_info(),
         };
-        info.cache.attach(document.clone(), self.0);
+        info.cache.attach(document.clone(), key);
     }
 
     /// PdfCraft patch (90): whether this is a Type 3 font without `/Widths` (or

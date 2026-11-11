@@ -19,8 +19,8 @@
 
 use super::document::{Evidence, FontUsage, UsageGroup};
 use super::{Counter, FontKind, count};
+use crate::InterpreterSettings;
 use crate::font::cid::Type0Font;
-use crate::{CacheKey, InterpreterSettings};
 use hayro_cmap::CidFamily;
 use hayro_syntax::Pdf;
 use hayro_syntax::content::TypedIter;
@@ -104,8 +104,14 @@ pub(crate) struct PoolingKey {
 
 /// One font the survey counts.
 struct Surveyed {
-    /// Its key in the interpreter's font cache (`CacheKey` of its dictionary).
+    /// Its key in the document (`document::font_key`).
     key: u128,
+    /// Its dictionary's object, for reports.
+    #[cfg_attr(
+        not(feature = "test-counters"),
+        allow(dead_code, reason = "read by test reports")
+    )]
+    id: Option<ObjectIdentifier>,
     font: Type0Font,
     pooling: PoolingKey,
     /// Code shown → how often.
@@ -227,7 +233,7 @@ impl Survey<'_> {
 
     /// The surveyed font a dictionary is, building it the first time.
     fn font(&mut self, dict: &Dict<'_>) -> Result<Option<usize>, Stop> {
-        let key = dict.cache_key();
+        let key = super::document::font_key(dict);
         if let Some(known) = self.classified.get(&key) {
             return Ok(*known);
         }
@@ -262,6 +268,7 @@ impl Survey<'_> {
         let glyphs = font.program_glyphs();
         self.fonts.push(Surveyed {
             key,
+            id: dict.obj_id(),
             font,
             pooling: PoolingKey {
                 name: untagged_name(dict),
@@ -403,9 +410,9 @@ impl Survey<'_> {
 
     /// The evidence: each counted font's numbers, and the pooled numbers of each group of two
     /// or more fonts with the same [`PoolingKey`] (fonts that showed nothing are in no group).
-    fn evidence(self) -> Evidence {
-        let mut numbered: Vec<(u128, PoolingKey, Vec<(u32, u64)>)> = Vec::new();
-        for surveyed in self.fonts {
+    fn evidence(&self) -> Evidence {
+        let mut numbered: Vec<(u128, &PoolingKey, Vec<(u32, u64)>)> = Vec::new();
+        for surveyed in &self.fonts {
             if surveyed.counts.is_empty() {
                 continue;
             }
@@ -417,11 +424,11 @@ impl Survey<'_> {
                     *slot = slot.saturating_add(*n);
                 }
             }
-            numbered.push((surveyed.key, surveyed.pooling, sorted(numbers)));
+            numbered.push((surveyed.key, &surveyed.pooling, sorted(numbers)));
         }
         let mut groups: HashMap<&PoolingKey, (usize, HashMap<u32, u64>)> = HashMap::new();
         for (_, pooling, numbers) in &numbered {
-            let group = groups.entry(pooling).or_default();
+            let group = groups.entry(*pooling).or_default();
             group.0 = group.0.saturating_add(1);
             for &(number, n) in numbers {
                 let slot = group.1.entry(number).or_insert(0);
@@ -523,4 +530,63 @@ pub(crate) fn survey(pdf: &Pdf, settings: &InterpreterSettings) -> Option<Eviden
         Err(Stop::OverCap) => Some(Evidence::OverCap),
         Err(Stop::Cancelled) => None,
     }
+}
+
+/// One font of a [`report`].
+#[cfg(feature = "test-counters")]
+pub(crate) struct Reported {
+    /// Its dictionary's object number.
+    pub(crate) object: Option<i32>,
+    /// `/BaseFont` as written.
+    pub(crate) base: Vec<u8>,
+    /// (code, times shown, the number a rule reads for it).
+    pub(crate) codes: Vec<(u16, u64, Option<u32>)>,
+    /// The font's evidence, as a rule's guard gets it.
+    #[allow(dead_code, reason = "read by the rules' own reports")]
+    pub(crate) usage: Option<Arc<FontUsage>>,
+}
+
+/// Test and verification hook: the survey of `pdf`, font by font (`None` when cancelled; the
+/// flag says whether it passed a cap).
+#[cfg(feature = "test-counters")]
+pub(crate) fn report(pdf: &Pdf, settings: &InterpreterSettings) -> Option<(bool, Vec<Reported>)> {
+    let mut survey = Survey {
+        settings,
+        classified: HashMap::new(),
+        fonts: Vec::new(),
+        operators: 0,
+        glyphs: 0,
+        entries: 0,
+        forms: 0,
+        bytes: 0,
+    };
+    let evidence = match survey.pages(pdf) {
+        Ok(()) => survey.evidence(),
+        Err(Stop::OverCap) => Evidence::OverCap,
+        Err(Stop::Cancelled) => return None,
+    };
+    let over = matches!(evidence, Evidence::OverCap);
+    let fonts = survey
+        .fonts
+        .iter()
+        .map(|f| {
+            let mut codes: Vec<(u16, u64, Option<u32>)> = f
+                .counts
+                .iter()
+                .map(|(&c, &n)| (c, n, f.font.recovery_number(u32::from(c)).map(|(_, g)| g)))
+                .collect();
+            codes.sort_unstable();
+            let usage = match &evidence {
+                Evidence::Counted(map) => map.get(&f.key).cloned(),
+                Evidence::OverCap => None,
+            };
+            Reported {
+                object: f.id.map(|id| id.obj_number),
+                base: f.pooling.name.clone(),
+                codes,
+                usage,
+            }
+        })
+        .collect();
+    Some((over, fonts))
 }

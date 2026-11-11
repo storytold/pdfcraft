@@ -29,6 +29,9 @@ pub(super) struct Font {
     pub(super) ordering: &'static str,
     /// The encoding CMap's name.
     pub(super) encoding: &'static str,
+    /// Write the Type 0 dictionary of font `i` (an earlier one) instead, byte for byte: a second
+    /// object of the same font.
+    pub(super) alias_of: Option<usize>,
 }
 
 impl Font {
@@ -41,6 +44,7 @@ impl Font {
             cid_to_gid: None,
             ordering: "Identity",
             encoding: "Identity-H",
+            alias_of: None,
         }
     }
 
@@ -77,13 +81,15 @@ impl Doc {
             let at = objects.len() + 1;
             let (type0, cidfont, descriptor, program, extra) = (at, at + 1, at + 2, at + 3, at + 4);
             let tu = if font.to_unicode { format!(" /ToUnicode {extra} 0 R") } else { String::new() };
-            objects.push((
-                format!(
-                    "<< /Type /Font /Subtype /Type0 /BaseFont /{} /Encoding /{} /DescendantFonts [{cidfont} 0 R]{tu} >>",
-                    font.base, font.encoding
-                ),
-                None,
-            ));
+            let type0_dict = format!(
+                "<< /Type /Font /Subtype /Type0 /BaseFont /{} /Encoding /{} /DescendantFonts [{cidfont} 0 R]{tu} >>",
+                font.base, font.encoding
+            );
+            let type0_dict = match font.alias_of.and_then(|j| objects.get(2 + 5 * j)) {
+                Some((original, _)) => original.clone(),
+                None => type0_dict,
+            };
+            objects.push((type0_dict, None));
             let (subtype, file_key) = match font.program {
                 Program::Cff(_) => ("CIDFontType0", "/FontFile3"),
                 _ => ("CIDFontType2", "/FontFile2"),
@@ -184,9 +190,12 @@ impl Doc {
         for show in shows {
             match show {
                 Show::Text(font, codes) => {
-                    let hex: String = codes.iter().map(|c| format!("{c:04X}")).collect();
-                    let _ = write!(content, "BT /F{font} 10 Tf 20 {y} Td <{hex}> Tj ET ");
-                    y -= 12;
+                    // Forty glyphs a line, so every glyph is on the page.
+                    for line in codes.chunks(40) {
+                        let hex: String = line.iter().map(|c| format!("{c:04X}")).collect();
+                        let _ = write!(content, "BT /F{font} 10 Tf 20 {y} Td <{hex}> Tj ET ");
+                        y -= 12;
+                    }
                 }
                 Show::Form(inner, times) => {
                     let mut inner_xobjects = String::new();

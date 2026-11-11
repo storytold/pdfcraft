@@ -13,18 +13,29 @@
 //! whole document's evidence whichever page asks first.
 //!
 //! The guards are a function of the font and that evidence, so a decision kept here reads every
-//! page the same as a decision made on that page would; the key is the font dictionary's
-//! [`crate::CacheKey`], as the interpreter's own font cache uses.
+//! page the same as a decision made on that page would. A font is known by [`font_key`]: its
+//! dictionary and the object it is, since a document may write two font objects with the same
+//! dictionary (the same descendant and program) and show different glyphs through each.
 
 use super::{Counter, Guards, count};
-use crate::InterpreterSettings;
+use crate::{CacheKey, InterpreterSettings};
 use hayro_syntax::Pdf;
+use hayro_syntax::object::Dict;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 /// Most fonts whose decisions one document keeps: a document with more decides each further
 /// font on every page that shows it, as without a [`RecoveryDocument`], reading the same.
 const MAX_DOCUMENT_FONTS: usize = 1 << 14;
+
+/// The key a font has in a [`RecoveryDocument`] (and, while a page is read with one, in the
+/// interpreter's font cache): its dictionary's [`CacheKey`] and its object. Two objects with the
+/// same dictionary are the same font to draw, but each shows its own glyphs, and a producer that
+/// merges subsets into one program may order each object's glyphs differently.
+pub(crate) fn font_key(dict: &Dict<'_>) -> u128 {
+    let object = dict.obj_id().map(|id| (id.obj_number, id.gen_number));
+    crate::util::hash128(&(dict.cache_key(), object))
+}
 
 /// The recovery layer's state for one version of one document: the fonts' guard decisions,
 /// shared by every page and thread that reads it. Create one per document version (an edit makes

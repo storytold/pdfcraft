@@ -43,6 +43,7 @@ use skrifa::raw::types::Version16Dot16;
 use skrifa::{FontRef, GlyphId};
 use std::sync::{Arc, OnceLock};
 
+pub(crate) use document::font_key;
 pub use document::RecoveryDocument;
 
 /// A way to recover a glyph's text, named by the mechanism it reads.
@@ -210,6 +211,18 @@ pub mod test_hooks {
     /// The character the CFF standard string `sid` names.
     pub fn standard_string_char(sid: u32) -> Option<char> {
         super::orders::standard_string_char(sid)
+    }
+
+    /// The document survey of `pdf`, font by font: each counted font's object number,
+    /// `/BaseFont` without its subset tag, and (code, times shown, the number a rule reads),
+    /// with whether the survey passed a cap; `None` when it was cancelled.
+    #[allow(clippy::type_complexity, reason = "a test's view of the survey")]
+    pub fn survey_report(
+        pdf: &hayro_syntax::Pdf,
+        settings: &crate::InterpreterSettings,
+    ) -> Option<(bool, Vec<(Option<i32>, Vec<u8>, Vec<(u16, u64, Option<u32>)>)>)> {
+        let (over, fonts) = super::survey::report(pdf, settings)?;
+        Some((over, fonts.into_iter().map(|f| (f.object, f.base, f.codes)).collect()))
     }
 
     /// Caps the glyphs the document surveys run on this thread may count (`None`: the usual

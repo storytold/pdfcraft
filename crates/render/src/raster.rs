@@ -415,6 +415,15 @@ fn render_page<'a>(
         (settings, cache)
     };
     let reading = request_reading(config, &req);
+    // Only Copy with formatting's requests read with the document's recovery state; every other
+    // request interprets as without it.
+    let plain_settings;
+    let settings = if req.kind == RequestKind::RecoveredText || settings.recovery_document.is_none() {
+        settings
+    } else {
+        plain_settings = InterpreterSettings { recovery_document: None, ..settings.clone() };
+        &plain_settings
+    };
     if matches!(req.kind, RequestKind::Text | RequestKind::RecoveredText) {
         // Strict text never runs the recovery rules; a recovered-text request reads both layers
         // in one interpretation.
