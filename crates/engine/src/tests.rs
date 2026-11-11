@@ -13784,7 +13784,7 @@ fn image_transform_engine_refuses_singular_matrices_without_mutation() {
 #[test]
 fn xfa_reset_requests_are_bounded() {
     let names: Vec<String> = (0..500).map(|i| format!("nothing{i}")).chain(["qty".into()]).collect();
-    let script = format!(r#"for (var i = 0; i < 5000; i++) {{ xfa.host.resetData("{}"); }}"#, names.join(", "));
+    let script = format!(r#"for (var i = 0; i != 5000; i++) {{ xfa.host.resetData("{}"); }}"#, names.join(", "));
     let tpl = pdfcraft_xfa::fixtures::scripted_template().replace(r#"xfa.host.messageBox("Hello " + qty.rawValue);"#, &script);
     let bytes = Arc::new(pdfcraft_xfa::fixtures::shell(&tpl));
     let mut s = Session::new().with_clock(|| 1_700_000_000);
