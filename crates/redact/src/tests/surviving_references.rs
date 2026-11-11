@@ -150,6 +150,27 @@ fn a_shading_a_resourceless_type3_glyph_draws_stays_in_the_page_resources() {
     assert!(full_save_holds(&doc, b"GLYPH_SHADING_MESH"), "the glyph's shading was unlinked");
 }
 
+/// Only the shadings a resourceless Type 3 glyph names are kept for it: another shading removed
+/// under the mark still leaves the file.
+#[test]
+fn a_resourceless_type3_glyph_does_not_keep_a_shading_it_does_not_draw() {
+    let mesh = "/ShadingType 4 /ColorSpace /DeviceRGB /BitsPerCoordinate 8 /BitsPerComponent 8 /BitsPerFlag 8 /Decode [0 300 0 300 0 1 0 1 0 1]";
+    let mut doc = pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources 5 0 R >>".to_vec(),
+        stream("", b"/Sh1 sh BT /T3 10 Tf 200 200 Td (A) Tj ET"),
+        b"<< /Font << /T3 6 0 R >> /Shading << /Sh1 8 0 R /Sh2 9 0 R >> >>".to_vec(),
+        TYPE3.as_bytes().to_vec(),
+        stream("", b"/Sh2 sh"),
+        stream(mesh, b"REMOVED_SHADING_MESH"),
+        stream(mesh, b"GLYPH_SHADING_MESH"),
+    ]);
+    mark(&mut doc, 0, &[[0.0, 0.0, 300.0, 300.0]], "");
+    apply(&mut doc, None).unwrap();
+    assert!(!full_save_holds(&doc, b"REMOVED_SHADING_MESH"), "a shading no glyph draws was kept");
+}
+
 /// A Type 3 font whose displayed glyphs are redacted has its unused glyph programs unlinked from
 /// /CharProcs and exclusive graphical resources pruned, so they do not survive in a full save (F-011).
 #[test]

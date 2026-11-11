@@ -1260,7 +1260,7 @@ fn xobject(
             }
             if let Some(data) = &new_data {
                 let content = std::slice::from_ref(data);
-                match prune_properties(doc, &mut scope.budget, &mut cleaned_res, content, inner.keeps_all_patterns) {
+                match prune_properties(doc, &mut scope.budget, &mut cleaned_res, content) {
                     Ok(retired) => out.retired_properties.extend(retired),
                     Err(error) => {
                         out.error = Some(error);

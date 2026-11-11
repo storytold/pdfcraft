@@ -383,12 +383,13 @@ fn prune_retired(doc: &Document, res: &mut Dict, names: &[(&[u8], Vec<u8>)], con
         // Each is one page's content or one form's, with the allowance of a page.
         ops.extend(resource_ops(doc, &mut DecodeBudget::page(), res, content)?);
     }
+    let glyph_shadings = glyph_shading_names(doc, &mut DecodeBudget::page(), res)?;
     let mut pruned = false;
     for (category, used) in RETIRED {
         let mut entries = res_dict(doc, res, category);
         let mut changed = false;
         for (_, name) in names.iter().filter(|(c, _)| *c == category) {
-            if !ops.iter().any(|op| used(op) == Some(name)) {
+            if !ops.iter().any(|op| used(op) == Some(name)) && !(category == b"Shading" && glyph_shadings.contains(name)) {
                 changed |= entries.remove(name).is_some();
             }
         }
@@ -514,31 +515,46 @@ pub(crate) fn resource_ops(doc: &Document, budget: &mut DecodeBudget, res: &Dict
     Ok(ops)
 }
 
+/// The shading names the glyph programs of `res`'s Type 3 fonts without resources of their own draw
+/// (`/Name sh`): those fonts paint through the resources of whatever shows them.
+fn glyph_shading_names(doc: &Document, budget: &mut DecodeBudget, res: &Dict) -> Result<HashSet<Vec<u8>>, CosError> {
+    let mut names = HashSet::new();
+    for (_, font) in res_dict(doc, res, b"Font").iter() {
+        let Some(font) = doc.resolve(font).as_dict().cloned() else { continue };
+        if font.name(b"Subtype") != Some(b"Type3") || font.get(b"Resources").is_some_and(|r| doc.resolve(r).as_dict().is_some()) {
+            continue;
+        }
+        let Some(procs) = font.get(b"CharProcs").and_then(|c| doc.resolve(c).as_dict().cloned()) else { continue };
+        for (_, proc) in procs.iter() {
+            let Object::Stream(s) = &*doc.resolve(proc) else { continue };
+            let data = budget.decode(&doc.with_direct_parms(s))?;
+            names.extend(pdfcraft_content::ops(&data).filter_map(|op| shading_used(&op).map(<[u8]>::to_vec)));
+        }
+    }
+    Ok(names)
+}
+
 /// Drop the property and shading entries of `res` that the rewritten `content` (and the forms
 /// drawing through `res`) no longer uses, returning their values so other holders can be unlinked.
 ///
-/// `keep_shadings`: a Type 3 glyph without resources of its own was shown, and it paints with this
-/// scope's resources, so which shadings it draws is not known and none is retired.
-pub(crate) fn prune_properties(
-    doc: &Document,
-    budget: &mut DecodeBudget,
-    res: &mut Dict,
-    content: &[Vec<u8>],
-    keep_shadings: bool,
-) -> Result<Vec<Object>, CosError> {
+/// A shading a Type 3 glyph of `res`'s fonts draws (such a font without resources of its own paints
+/// through these) stays, though no content names it.
+pub(crate) fn prune_properties(doc: &Document, budget: &mut DecodeBudget, res: &mut Dict, content: &[Vec<u8>]) -> Result<Vec<Object>, CosError> {
     if RETIRED.iter().all(|(category, _)| res_dict(doc, res, category).is_empty()) {
         return Ok(Vec::new());
     }
     let mut retired = Vec::new();
     let ops = resource_ops(doc, budget, res, content)?;
+    let glyph_shadings = glyph_shading_names(doc, budget, res)?;
     for (category, used) in RETIRED {
         let mut entries = res_dict(doc, res, category);
-        if entries.is_empty() || (keep_shadings && category == b"Shading") {
+        if entries.is_empty() {
             continue;
         }
         let names: Vec<Vec<u8>> = entries.iter().map(|(n, _)| n.to_vec()).collect();
         for name in names {
             if !ops.iter().any(|op| used(op) == Some(&name))
+                && !(category == b"Shading" && glyph_shadings.contains(&name))
                 && let Some(value) = entries.remove(&name)
             {
                 retired.push(value);
