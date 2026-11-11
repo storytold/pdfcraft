@@ -14,9 +14,9 @@ fn form() -> Vec<u8> {
         "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R 6 0 R 8 0 R] >>",
         "<< /Type /Annot /Subtype /Widget /FT /Tx /T (log) /V () /Rect [20 350 280 370] /P 3 0 R /F 4 >>",
         "<< /Type /Annot /Subtype /Widget /FT /Tx /T (hot) /V () /Rect [20 250 280 290] /P 3 0 R /F 4 /AA << /E << /S /JavaScript /JS (getField\\('log'\\).value += 'in;';) >> /X << /S /JavaScript /JS (getField\\('log'\\).value += 'out;';) >> >> >>",
-        "<< /Type /Annot /Subtype /Widget /FT /Btn /T (strike) /V /Off /AS /Off /Rect [20 150 50 180] /P 3 0 R /F 4 /MK << /CA (4) >> /AP << /N << /Yes 9 0 R /Off 9 0 R >> >> /A << /S /JavaScript /JS (getField\\('note'\\).display = event.target.value == 'Off' ? display.hidden : display.visible; getField\\('log'\\).value += 'up:' + event.target.value + ';';) >> >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Btn /T (strike) /V /Off /AS /Off /Rect [20 300 50 330] /P 3 0 R /F 4 /MK << /CA (4) >> /AP << /N << /Yes 9 0 R /Off 9 0 R >> >> /A << /S /JavaScript /JS (getField\\('note'\\).display = event.target.value == 'Off' ? display.hidden : display.visible; getField\\('log'\\).value += 'up:' + event.target.value + ';';) >> >>",
         "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
-        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (note) /V (struck) /Rect [60 150 280 180] /P 3 0 R /F 6 >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (note) /V (struck) /Rect [60 300 280 330] /P 3 0 R /F 6 >>",
         "<< /Type /XObject /Subtype /Form /BBox [0 0 30 30] /Length 0 >>\nstream\n\nendstream",
     ];
     let mut out = b"%PDF-1.7\n".to_vec();

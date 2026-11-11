@@ -70,7 +70,11 @@ fn open_will_save_will_print_and_field_events_share_the_document_realm() {
     assert!(a.call("js_event", &json!({ "doc": doc, "field": "hot", "event": "keystroke" })).is_err());
     assert!(a.call("js_event", &json!({ "doc": doc, "field": "hot", "event": "mouse_up", "widget": 2 })).is_err());
 
-    let saved = tool(&mut a, "doc_save", json!({ "doc": doc, "path": "saved.pdf" }));
+    // Saved in place (incrementally): object numbers stay, so the realm is kept. A full
+    // rewrite starts a fresh realm for the next event.
+    let saved = tool(&mut a, "doc_save", json!({ "doc": doc }));
+    assert_eq!(saved["incremental"], true, "{saved}");
+    std::fs::copy(dir.join("form.pdf"), dir.join("saved.pdf")).unwrap();
     assert_eq!(saved["will_save"]["console"], json!(["saving"]), "{saved}");
     assert_eq!(log(&mut a, doc), "open1 Mouse Enter2 Blur save3");
 

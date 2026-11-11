@@ -256,3 +256,34 @@ fn set_items_and_set_action_are_written_to_the_document() {
     assert_eq!(size.options[0], ("m".to_string(), "Medium".to_string()));
     assert!(again.field_trigger(reopened, "size", 0, Trigger::MouseEnter).unwrap(), "the installed script is in the file");
 }
+
+/// A check box's Mouse Up, run after the click stored the new value, reads that value and can
+/// show or hide another field by it (#247).
+#[test]
+fn a_check_box_mouse_up_reads_the_value_its_click_stored() {
+    use crate::{Edit, FieldValue};
+    use pdfcraft_forms::Trigger;
+    let objs = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 6 0 R 7 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 5 0 R >> >> >> >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 6 0 R 7 0 R] >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (log) /V () /Rect [20 250 180 270] /P 3 0 R /F 4 >>".into(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Btn /T (strike) /V /Off /AS /Off /Rect [20 150 50 180] /P 3 0 R /F 4 /MK << /CA (4) >> /AP << /N << /Yes 8 0 R /Off 8 0 R >> >> /A << /S /JavaScript /JS (getField\\('note'\\).display = event.target.value == 'Off' ? display.hidden : display.visible; getField\\('log'\\).value += 'up:' + event.target.value + ';';) >> >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (note) /V (struck) /Rect [60 150 180 180] /P 3 0 R /F 6 >>".into(),
+        "<< /Type /XObject /Subtype /Form /BBox [0 0 30 30] /Length 0 >>\nstream\n\nendstream".into(),
+    ];
+    let mut s = Session::new();
+    let id = s.open("strike.pdf", None, Arc::new(pdf_of(&objs)), None).unwrap();
+    s.apply(id, Edit::SetFieldValue { name: "strike".into(), value: FieldValue::Text("Yes".into()) }).unwrap();
+    let ran = s.field_trigger(id, "strike", 0, Trigger::MouseUp);
+    let out = s.take_js_output(id);
+    assert!(ran.unwrap(), "{out:?}");
+    assert_eq!(log(&s, id), "up:Yes;");
+    let note = |s: &Session| s.get(id).unwrap().form.iter().find(|f| f.name == "note").unwrap().widgets[0].hidden;
+    assert!(!note(&s), "shown by the script");
+    s.apply(id, Edit::SetFieldValue { name: "strike".into(), value: FieldValue::Check(false) }).unwrap();
+    assert!(s.field_trigger(id, "strike", 0, Trigger::MouseUp).unwrap());
+    assert_eq!(log(&s, id), "up:Yes;up:Off;");
+    assert!(note(&s), "hidden again");
+}
