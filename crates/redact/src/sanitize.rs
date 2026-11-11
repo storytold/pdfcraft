@@ -716,7 +716,7 @@ fn content_pass(doc: &mut Document, text: bool, layers: bool, write: bool) -> Re
                 crate::interp::prune(doc, &mut budget, &mut xo, &out.replaced, &page_content)?;
                 res.set(b"XObject".to_vec(), Object::Dict(xo));
             }
-            retired_properties.extend(crate::interp::prune_properties(doc, &mut budget, &mut res, &page_content)?);
+            retired_properties.extend(crate::interp::prune_properties(doc, &mut budget, &mut res, &page_content, out.keeps_all_patterns)?);
             crate::type3::prune_type3_from_resources(doc, &mut budget, &mut res, &page_content, Some(&page.dict))?;
             doc.update_dict(page.obj, |d| {
                 d.set(b"Contents".to_vec(), Object::Array(new_list));

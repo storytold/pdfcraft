@@ -918,7 +918,7 @@ fn redact_page_content(
         // A Type 3 glyph without resources paints with patterns nobody tracked: keep them all.
         let painted = if out.keeps_all_patterns { &out.patterns_seen } else { &out.patterns_painted };
         report.patterns_removed += interp::prune_patterns(doc, &mut res, &out.patterns_seen, painted, pruned_patterns);
-        retired_properties.extend(interp::prune_properties(doc, &mut budget, &mut res, &cleaned_data)?);
+        retired_properties.extend(interp::prune_properties(doc, &mut budget, &mut res, &cleaned_data, out.keeps_all_patterns)?);
         type3::prune_type3_from_resources(doc, &mut budget, &mut res, &cleaned_data, Some(&page.dict))?;
         doc.update_dict(page.obj, |d| {
             d.set(b"Contents".to_vec(), Object::Array(new_list));

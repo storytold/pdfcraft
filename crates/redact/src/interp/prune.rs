@@ -516,7 +516,16 @@ pub(crate) fn resource_ops(doc: &Document, budget: &mut DecodeBudget, res: &Dict
 
 /// Drop the property and shading entries of `res` that the rewritten `content` (and the forms
 /// drawing through `res`) no longer uses, returning their values so other holders can be unlinked.
-pub(crate) fn prune_properties(doc: &Document, budget: &mut DecodeBudget, res: &mut Dict, content: &[Vec<u8>]) -> Result<Vec<Object>, CosError> {
+///
+/// `keep_shadings`: a Type 3 glyph without resources of its own was shown, and it paints with this
+/// scope's resources, so which shadings it draws is not known and none is retired.
+pub(crate) fn prune_properties(
+    doc: &Document,
+    budget: &mut DecodeBudget,
+    res: &mut Dict,
+    content: &[Vec<u8>],
+    keep_shadings: bool,
+) -> Result<Vec<Object>, CosError> {
     if RETIRED.iter().all(|(category, _)| res_dict(doc, res, category).is_empty()) {
         return Ok(Vec::new());
     }
@@ -524,7 +533,7 @@ pub(crate) fn prune_properties(doc: &Document, budget: &mut DecodeBudget, res: &
     let ops = resource_ops(doc, budget, res, content)?;
     for (category, used) in RETIRED {
         let mut entries = res_dict(doc, res, category);
-        if entries.is_empty() {
+        if entries.is_empty() || (keep_shadings && category == b"Shading") {
             continue;
         }
         let names: Vec<Vec<u8>> = entries.iter().map(|(n, _)| n.to_vec()).collect();
