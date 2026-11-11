@@ -1112,6 +1112,38 @@ mod xfa_model {
         assert!(o.effects.is_empty());
     }
 
+    #[test]
+    fn resolve_node_finds_descendant_instance_manager() {
+        let o = go("this.resolveNode('$form.._row').count", "form1[0].page1[0].go[0]", "click");
+        assert_eq!(o.error, None, "{o:?}");
+        assert_eq!(o.result.as_deref(), Some("2"));
+    }
+
+    #[test]
+    fn resolve_node_indexes_the_manager_not_its_rows() {
+        let o =
+            go("this.resolveNode('table._row[0]').count + '/' + (this.resolveNode('table._row[1]') === null)", "form1[0].page1[0].go[0]", "click");
+        assert_eq!(o.error, None, "{o:?}");
+        assert_eq!(o.result.as_deref(), Some("2/true"));
+    }
+
+    #[test]
+    fn resolve_node_preserves_document_order_across_manager_and_real_node() {
+        let mut model = form();
+        model.children[0].children.push(XfaNode {
+            name: "table".into(),
+            som: "form1[0].page1[0].table[1]".into(),
+            kind: Some(XfaKind::Subform),
+            index: 1,
+            children: vec![field("_row", "form1[0].page1[0].table[1]._row[0]", "later", false)],
+            ..Default::default()
+        });
+        let event = XfaEvent { activity: "click".into(), target: "form1[0].page1[0].go[0]".into(), ..Default::default() };
+        let o = run_xfa("this.resolveNode('table[*]._row').count", &event, &XfaDoc::default(), &model, Limits::default());
+        assert_eq!(o.error, None, "{o:?}");
+        assert_eq!(o.result.as_deref(), Some("2"));
+    }
+
     /// `xfa.host`, `xfa.layout`, `xfa.event` and `app` calls become effects, and messages keep
     /// their details.
     #[test]

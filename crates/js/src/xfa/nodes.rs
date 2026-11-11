@@ -173,17 +173,69 @@ pub(crate) fn resolve_som(h: &XHost, from: usize, expr: &str) -> Vec<usize> {
     cur
 }
 
-/// The instance manager named by a final `_name` SOM step. A bare `_name` searches the same
-/// enclosing scopes as a bare subform name; with a prefix, the prefix names its parent.
-fn manager_at<'a>(h: &XHost, from: usize, expr: &'a str) -> Option<(usize, &'a str)> {
+enum ManagerMatch<'a> {
+    Node(usize),
+    Manager(usize, &'a str),
+}
+
+/// A final `_name` SOM step can name a real child or its sibling instance manager. Keep their
+/// precedence local to each parent so an earlier manager wins over a later parent's child.
+fn manager_child<'a>(h: &XHost, parent: usize, step: &str, name: &'a str, index: usize) -> Option<ManagerMatch<'a>> {
+    let node =
+        h.nodes.get(parent)?.children.iter().copied().filter(|&child| h.nodes.get(child).is_some_and(|n| !n.gone && &*n.name == step)).nth(index);
+    if let Some(node) = node {
+        return Some(ManagerMatch::Node(node));
+    }
+    (index == 0 && child_named(h, parent, name).is_some()).then_some(ManagerMatch::Manager(parent, name))
+}
+
+/// Search parents in document order for a descendant `_name` step, including managers that
+/// are peers of the managed rows rather than modelled form nodes.
+fn descendant_manager<'a>(h: &XHost, parent: usize, step: &str, name: &'a str, index: usize, depth: usize) -> Option<ManagerMatch<'a>> {
+    if depth > MAX_DEPTH {
+        return None;
+    }
+    if let Some(found) = manager_child(h, parent, step, name, index) {
+        return Some(found);
+    }
+    for &child in h.nodes.get(parent)?.children.iter() {
+        if h.nodes.get(child).is_some_and(|n| !n.gone)
+            && let Some(found) = descendant_manager(h, child, step, name, index, depth + 1)
+        {
+            return Some(found);
+        }
+    }
+    None
+}
+
+/// The target named by a final `_name` SOM step. A bare `_name` searches the same enclosing
+/// scopes as a bare subform name; a qualified step searches each resolved parent in order.
+fn manager_at<'a>(h: &XHost, from: usize, expr: &'a str) -> Option<ManagerMatch<'a>> {
     let expr = expr.trim();
     let (prefix, last) = expr.rsplit_once('.').unwrap_or(("", expr));
-    let name = last.strip_prefix('_').filter(|name| !name.is_empty())?;
+    let (step, index) = match last.split_once('[') {
+        Some((step, selector)) => {
+            let selector = selector.strip_suffix(']')?;
+            (step, if selector == "*" { 0 } else { selector.parse::<usize>().ok()? })
+        }
+        None => (last, 0),
+    };
+    let name = step.strip_prefix('_').filter(|name| !name.is_empty())?;
     if prefix.is_empty() {
+        if let Some(node) = resolve_som(h, from, expr).into_iter().next() {
+            return Some(ManagerMatch::Node(node));
+        }
+        if index != 0 {
+            return None;
+        }
         let row = resolve_som(h, from, name).into_iter().next()?;
-        return h.nodes.get(row)?.parent.map(|parent| (parent, name));
+        return h.nodes.get(row)?.parent.map(|parent| ManagerMatch::Manager(parent, name));
     }
-    resolve_som(h, from, prefix).into_iter().find(|&parent| child_named(h, parent, name).is_some()).map(|parent| (parent, name))
+    let descendant = prefix.ends_with('.');
+    let parents = resolve_som(h, from, if descendant { prefix.strip_suffix('.').unwrap_or(prefix) } else { prefix });
+    parents
+        .into_iter()
+        .find_map(|parent| if descendant { descendant_manager(h, parent, step, name, index, 0) } else { manager_child(h, parent, step, name, index) })
 }
 
 /// The live descendants of node `from` named `name` (`from..name` in a SOM path), in document
@@ -418,12 +470,12 @@ pub(super) fn resolver(ctx: &mut Context, from: usize, many: bool) -> JsResult<J
                 (false, false) => props::prop_object(ctx, node, &path),
             };
         }
-        // A final `_row` names the row's instance manager, not a form node. Preserve a real
-        // child of that name when one exists, as normal SOM resolution does.
-        if !many && found.is_empty() {
-            let manager = manager_at(&host(ctx)?.borrow(), from, &expr);
-            if let Some((parent, name)) = manager {
-                return instance_manager(ctx, parent, name);
+        if !many {
+            let target = manager_at(&host(ctx)?.borrow(), from, &expr);
+            match target {
+                Some(ManagerMatch::Node(node)) => return node_object(ctx, node),
+                Some(ManagerMatch::Manager(parent, name)) => return instance_manager(ctx, parent, name),
+                None => {}
             }
         }
         if many {
