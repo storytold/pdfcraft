@@ -288,6 +288,7 @@ fn process_from(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<u8>], 
         }
         if !walk.path.is_empty() {
             done.ops.append(&mut walk.path);
+            done.ops.append(&mut walk.pending);
         }
         processed.push((done.ops, done.changed));
     }
@@ -353,6 +354,10 @@ struct Walk {
     path: Vec<Op>,
     path_box: Option<[f64; 4]>,
     clip: bool,
+    /// Line-state operators (`w`, `M`, `j`, `J`, `d`, `gs`) met while a path is open: they apply to
+    /// the stroke that ends it, so the path stays whole for the hit test, and they are written
+    /// after it, kept even when the path goes.
+    pending: Vec<Op>,
     out: Output,
 }
 
@@ -370,6 +375,7 @@ impl Walk {
             path: Vec::new(),
             path_box: None,
             clip: false,
+            pending: Vec::new(),
             out: Output::default(),
         }
     }
@@ -385,9 +391,15 @@ impl Walk {
             self.paint_path(scope, op, piece);
             return;
         }
+        if !self.path.is_empty() && matches!(o, b"w" | b"M" | b"j" | b"J" | b"d" | b"gs") {
+            self.graphics_state(doc, scope, &op);
+            self.pending.push(op);
+            return;
+        }
         if !self.path.is_empty() {
             // A path not ended by a painting operator: pass it through.
             piece.ops.append(&mut self.path);
+            piece.ops.append(&mut self.pending);
             self.path_box = None;
             self.clip = false;
         }
@@ -456,9 +468,11 @@ impl Walk {
         let bbox = path_box.map(|b| if strokes { self.stroke_box(b) } else { b });
         let body = std::mem::take(&mut self.path);
         let clips = std::mem::replace(&mut self.clip, false);
+        let pending = std::mem::take(&mut self.pending);
         let hit = scope.mode == Mode::Apply && op.op.as_slice() != b"n" && bbox.is_some_and(|b| scope.hits(b));
         if !hit {
             piece.ops.extend(body);
+            piece.ops.extend(pending);
             piece.ops.push(op);
             return;
         }
@@ -468,7 +482,10 @@ impl Walk {
         if scope.covered(path_box.unwrap_or(b)) && clips {
             // Keep the clipping, drop the painting.
             piece.ops.extend(body);
+            piece.ops.extend(pending);
             piece.ops.push(Op::new("n", vec![]));
+        } else {
+            piece.ops.extend(pending);
         }
         // Partial vector redaction must not retain underlying drawing commands
         // behind clipping (F-008). Refuse partial clip retention and remove the path.

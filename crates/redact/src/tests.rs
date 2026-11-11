@@ -3915,3 +3915,17 @@ fn a_square_cap_corner_under_a_shear_is_inside_the_pad() {
     mark(&mut doc, 0, &[[11.8, 0.8, 11.9, 0.95]], "");
     assert_eq!(apply(&mut doc, None).unwrap().paths_removed, 1);
 }
+
+/// A line width set between the path and its `S` still applies to that stroke, so the stroke is
+/// tested at the width it is painted with; the width itself stays, the path goes.
+#[test]
+fn a_width_set_between_the_path_and_its_stroke_does_not_hide_it_from_the_test() {
+    let mut doc = one_page(b"10 60 m 100 60 l 12 w S 5 5 m 9 9 l S", "", vec![]);
+    mark(&mut doc, 0, &[[40.0, 45.0, 60.0, 55.0]], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!(r.paths_removed, 1, "{r:?}");
+    let c = content(&doc, 0);
+    assert!(!c.contains("10 60 m") && !c.contains("100 60 l"), "the wide line reaches the mark: {c}");
+    assert!(c.contains("12 w"), "the width stays: {c}");
+    assert!(c.contains("5 5 m"), "the line elsewhere stays: {c}");
+}
