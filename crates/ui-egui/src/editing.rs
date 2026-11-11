@@ -390,6 +390,12 @@ impl PdfCraftApp {
             Some((s.page, target, ambiguous))
         });
         let had_selection = self.views.get(i).and_then(|v| v.image_selection.as_ref()).is_some();
+        // Undo is about to take back Edit's own text recognition: the page won't be read again
+        // by itself, and the user never asked for it, so the notice says how to get it back.
+        let undoing_auto_ocr = undo
+            && self.session.get(id).is_some_and(|d| {
+                d.can_undo() == Some("Recognize text") && self.views.get(i).is_some_and(|v| v.auto_ocr_steps.contains(&d.undo_depth()))
+            });
         let result = if undo { self.session.undo(id) } else { self.session.redo(id) };
         match result {
             Ok(label) => {
@@ -421,7 +427,9 @@ impl PdfCraftApp {
                     }
                 }
                 let label = crate::i18n::edit_label(&label);
-                if undo {
+                if undoing_auto_ocr {
+                    self.notify_tr("Undid Recognize text, which Edit ran on this scanned page. Redo, or Scan & OCR ▸ Recognize text, makes its text editable again.");
+                } else if undo {
                     self.notify_fmt("Undid {label}", &[("label", &label)]);
                 } else {
                     self.notify_fmt("Redid {label}", &[("label", &label)]);

@@ -946,10 +946,18 @@ impl PdfCraftApp {
         // redacted, while the worker was out); its reason says so.
         match self.session.apply_ocr_checked(doc, &found, &guard) {
             Ok(words) => {
-                if let Some(info) = self.session.get(doc).map(|d| d.info.clone())
+                if let Some((info, depth)) = self.session.get(doc).map(|d| (d.info.clone(), d.undo_depth()))
                     && let Some(view) = self.views.iter_mut().find(|v| v.id == doc)
                 {
                     view.document_changed(&info);
+                    // A step written here replaces any undone one at its place in the history;
+                    // only Edit's own is marked (a run that found nothing wrote no step).
+                    if words > 0 {
+                        view.auto_ocr_steps.retain(|&d| d < depth);
+                        if automatic {
+                            view.auto_ocr_steps.push(depth);
+                        }
+                    }
                 }
                 // An automatic run that found nothing (a page that has text of its own) says nothing.
                 if automatic && words == 0 {
@@ -1212,6 +1220,64 @@ mod tests {
         app.mode = Mode::Read;
         app.poll_ocr();
         assert_eq!(label(&app).as_deref(), Some("Recognize text"));
+    }
+    /// #6655: Undo of the recognition Edit ran by itself says how to get the text back (Edit won't
+    /// read the page again), and Redo still does. Undo of a recognition the user asked for, or of
+    /// any other step, says only what it undid. The result is made up, so no OCR models are needed.
+    #[test]
+    fn undoing_the_recognition_edit_ran_says_how_to_get_it_back() {
+        let finished = |app: &PdfCraftApp, automatic: bool| {
+            let id = app.active_ids().unwrap().1;
+            let generation = app.session.get(id).unwrap().edit_generation();
+            let word = pdfcraft_engine::ocr::PlacedWord {
+                text: "scanned".into(),
+                origin: [72.0, 700.0],
+                across: [60.0, 0.0],
+                up: [0.0, 12.0],
+                confidence: None,
+                source: "ocrs".into(),
+            };
+            let page = pdfcraft_engine::ocr::OcrPage { page: 0, words: vec![word], already_on_page: 0, skipped: None, notes: Vec::new() };
+            let progress = Arc::new(Mutex::new(OcrProgress { done: 1, total: 1, result: Some(Ok(vec![page])), cancel: false }));
+            let guard = app.session.ocr_guard(id).unwrap();
+            OcrRun { doc: id, progress, guard, automatic: automatic.then_some(AutoOcr { page: 0, generation }), editable: false }
+        };
+        let toast = |app: &mut PdfCraftApp| app.toast.take().map(|t| t.0).unwrap_or_default();
+        let hint = "Scan & OCR ▸ Recognize text";
+
+        let mut app = app_with(scan());
+        app.set_option("language", "en").unwrap();
+        // As `auto_ocr_scanned_page` starts it: the page is marked read.
+        app.views[0].auto_ocr_tried.insert(0);
+        app.ocr_run = Some(finished(&app, true));
+        app.poll_ocr();
+        let id = app.active_ids().unwrap().1;
+        assert_eq!(app.session.get(id).unwrap().can_undo(), Some("Recognize text"));
+        app.undo();
+        let said = toast(&mut app);
+        assert!(said.contains("Undid Recognize text") && said.contains("Redo") && said.contains(hint), "{said}");
+        assert_eq!(found(&mut app), None, "Edit still doesn't read the page again by itself");
+        app.redo();
+        assert_eq!(app.session.get(id).unwrap().can_undo(), Some("Recognize text"), "Redo brings it back");
+        assert_eq!(toast(&mut app), "Redid Recognize text");
+
+        // A recognition the user asked for, at the same place in the history, is an ordinary step.
+        app.undo();
+        app.ocr_run = Some(finished(&app, false));
+        app.poll_ocr();
+        assert_eq!(app.session.get(id).unwrap().can_undo(), Some("Recognize text"));
+        app.undo();
+        assert_eq!(toast(&mut app), "Undid Recognize text");
+
+        // So is any other step.
+        let mut app = app_with(scan());
+        app.set_option("language", "en").unwrap();
+        let id = app.active_ids().unwrap().1;
+        app.session.apply(id, Edit::InsertBlankPage { at: 1, width: 595.0, height: 842.0 }).unwrap();
+        let undone = app.session.get(id).unwrap().can_undo().unwrap().to_string();
+        app.undo();
+        let said = toast(&mut app);
+        assert!(said.starts_with("Undid ") && !said.contains(hint), "{said} ({undone})");
     }
     /// A run's result is for the document as it was when the run started. Once the document has
     /// changed, a result of Edit's is dropped, not applied to whatever page now has its index, and

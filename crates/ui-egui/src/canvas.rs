@@ -635,6 +635,10 @@ pub struct DocView {
     shown: bool,
     /// Pages that Edit already tried to turn into editable text (once each, so Undo sticks).
     pub(crate) auto_ocr_tried: std::collections::HashSet<usize>,
+    /// Where Edit's own "Recognize text" steps sit in the document's history (its undo depth just
+    /// after each). Undoing one says how to get the text back, since Edit won't read the page
+    /// again and the user never asked for it (#6655).
+    pub(crate) auto_ocr_steps: Vec<usize>,
     /// Pages Edit looked at and found not to be a scan, with the document's edit generation then:
     /// they are looked at again only after the document changes (an image added, say).
     pub(crate) auto_ocr_skipped: std::collections::HashMap<usize, u64>,
@@ -1099,6 +1103,7 @@ impl DocView {
             find_hold: None,
             shown: false,
             auto_ocr_tried: Default::default(),
+            auto_ocr_steps: Vec::new(),
             auto_ocr_skipped: Default::default(),
             auto_ocr_awaiting_models: Default::default(),
             wheel: Default::default(),
