@@ -1732,6 +1732,28 @@ fn added_thai_text_draws_following_spaces_digits_and_punctuation_with_the_thai_f
     assert!(fonts.iter().all(|f| f.starts_with("PCAr")), "one shaped face for the whole line: {fonts:?}");
 }
 
+/// A sign the Thai face draws joins the Thai run, so it is accepted where WinAnsi alone would
+/// refuse it (`ก−1`, U+2212 MINUS SIGN); one neither the face nor WinAnsi has is still refused.
+#[test]
+fn thai_text_is_checked_in_the_runs_that_draw_it() {
+    for bold in [false, true] {
+        if !pdfcraft_fonts::thai_has_styled('ก', bold) {
+            return;
+        }
+        let text = |s: &str| AddedText { rect: [72.0, 600.0, 400.0, 700.0], text: s.into(), size: 14.0, bold, ..AddedText::default() };
+        if pdfcraft_fonts::thai_has_styled('\u{2212}', bold) {
+            assert_eq!(first_undrawable(&text("ก\u{2212}1")), None, "bold {bold}");
+            let mut doc = fixture();
+            add_content(&mut doc, 0, &Content::Text(text("ก\u{2212}1"))).unwrap();
+        }
+        let snowman = '\u{2603}';
+        if !pdfcraft_fonts::thai_has_styled(snowman, bold) {
+            assert_eq!(first_undrawable(&text("ก\u{2603}")), Some(snowman), "bold {bold}");
+        }
+        assert_eq!(first_undrawable(&text("ทดสอบ 123")), None, "bold {bold}");
+    }
+}
+
 /// Bold Add Text Thai is drawn with the Thai document manifest's Bold face: the same text's glyph
 /// outlines differ between bold and regular. Skipped when the build has no distinct Bold face, where
 /// bold falls back to the Regular face and the outlines match.

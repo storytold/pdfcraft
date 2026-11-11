@@ -195,12 +195,11 @@ pub(super) fn is_hebrew(c: char) -> bool {
 /// draw (or that has no face to draw it). Page-content tools refuse such text; the Add-text editor
 /// keeps it open.
 pub fn first_undrawable(t: &AddedText) -> Option<char> {
-    if t.text.chars().any(is_thai) {
-        if let Some(c) = t.text.chars().find(|c| is_thai(*c) && !pdfcraft_fonts::thai_has_styled(*c, t.bold)) {
-            return Some(c);
-        }
-        let rest = AddedText { text: t.text.chars().filter(|c| !is_thai(*c)).collect(), ..t.clone() };
-        return first_undrawable(&rest);
+    // Thai text is always drawn shaped, and a space, digit or sign the Thai face has joins the Thai
+    // run (`ก−1`): so the laid-out runs below decide, not the characters one by one.
+    let thai = t.text.chars().any(is_thai);
+    if thai && let Some(c) = t.text.chars().find(|c| is_thai(*c) && !pdfcraft_fonts::thai_has_styled(*c, t.bold)) {
+        return Some(c);
     }
     // Arabic or Hebrew that nothing can draw: there's no face, or the face lacks it.
     if let Some(c) =
@@ -208,7 +207,7 @@ pub fn first_undrawable(t: &AddedText) -> Option<char> {
     {
         return Some(c);
     }
-    if !shaped_by_a_face(t) {
+    if !thai && !shaped_by_a_face(t) {
         // Drawn line by line in the item's standard font (`\n` splits lines). Without the face
         // that is also how `draw` redraws an existing item, so it's checked that way.
         return t.text.split('\n').find_map(pdfcraft_fonts::first_non_win_ansi);
