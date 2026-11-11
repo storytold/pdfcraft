@@ -87,7 +87,7 @@ never been measured side by side with Acrobat, and the first public releases (0.
 ### Weights
 
 Feature breadth weights the checklist's tiers by how much Acrobat users rely on them: **P0 50%,
-P1 30%, P2 15%, P3 5%** → 0.50 × 94.6 + 0.30 × 69.4 + 0.15 × 30.5 + 0.05 × 7.8 ≈ **73%**
+P1 30%, P2 15%, P3 5%** → 0.50 × 94.6 + 0.30 × 69.6 + 0.15 × 30.8 + 0.05 × 7.8 ≈ **73%**
 (2026-10-10: 94.2 for P0, 61.0 for P1 and 12.0 for P2, ≈ 67%).
 
 Ready for real work weights the areas by how often an Acrobat Pro user reaches for them (judgement:
@@ -191,7 +191,7 @@ features total and are shown for orientation; the others add to it.
 
 | Dimension | Ready | Weight | Remaining (h) | Counted | Evidence | Doc |
 |---|---|---|---|---|---|---|
-| Features (14 areas) | ≈ 49% depth; 71% breadth | 40% | 610–1,100 | base | Area table below | this file |
+| Features (14 areas) | ≈ 49% depth; 73% breadth | 40% | 610–1,100 | base | Area table below | this file |
 | UI/UX fidelity | ≈ 55% | 10% | 30–60 | additional | Acrobat-style shell, All tools, Home, command palette; missing single-key accelerators, rulers/guides, multiple windows, popups; user reports #739, #744, #746, #789 (#759 and #844 fixed) | [ui-parity.md](ui-parity.md) |
 | File formats and conversion | ≈ 40% | 12% | 120–220 | within features | PDF read/write strong, encrypted output included (#774 fixed); export Word is layout-poor (#773); no Excel/PowerPoint export, no Office/HTML/PostScript import | [file-format-parity.md](file-format-parity.md) |
 | PDF specification and standards | ≈ 60% | 8% | 150–260 | within features | ISO 32000 syntax, encryption, annotations and AcroForm strong; rendering and fonts borrowed from `hayro`; PDF 2.0 extras, linearization, public-key security absent; PDF/A partial, PDF/X/UA none | [pdf-spec-parity.md](pdf-spec-parity.md) |

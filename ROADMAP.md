@@ -89,7 +89,7 @@
 > **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-15 · **Change:** minor (M6: AcroForm XML text; estimates unchanged)
 > **Last reviewed:** 2026-10-17 · **Last updated:** 2026-10-17 · **Change:** minor (M10, gap 8: Office documents open through an installed LibreOffice; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 > **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-15 · **Change:** minor (M2/gap 12: the Annex D.2 alias codes read as the ink they draw in both tables; the text oracle scores reading order; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
-> **Last reviewed:** 2026-10-13 · **Last updated:** 2026-11-10 · **Change:** minor (M7 #1540: vector paths selected, moved, resized, recoloured and deleted; page objects aligned, distributed and arranged; checklist recounted with `cargo xtask parity`, last after merging `upstream/main` at 8559306f: ≈ 67% → ≈ 73% tier-weighted; readiness not re-judged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
+> **Last reviewed:** 2026-10-13 · **Last updated:** 2026-11-11 · **Change:** minor (M7 #1540: vector paths selected, moved, resized, recoloured and deleted; page objects aligned, distributed and arranged; checklist recounted with `cargo xtask parity`, last after merging `upstream/main` at 1d7a9f9f: ≈ 67% → ≈ 73% tier-weighted; readiness not re-judged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 > **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-15 · **Change:** minor (M14/#2383 GPU-limit candidate; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 > **Last reviewed:** 2026-10-12 · **Last updated:** 2026-10-13 · **Change:** minor (M4: indirect page rotations; M13: CLI check visits each directory once through aliases and cycles; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 > **Last reviewed:** 2026-10-13 · **Last updated:** 2026-10-13 · **Change:** minor (M6: preserve XML/XFDF attribute whitespace; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
@@ -185,7 +185,7 @@ Hours are calibrated as in [Effort and calibration](docs/target-app-parity.md#ef
 
 | Dimension | Ready | Weight | Remaining (h) | Doc |
 |---|---|---|---|---|
-| Features (14 areas) | ≈ 49% depth · 71% breadth | 40% | 610–1,100 | [target-app-parity.md](docs/target-app-parity.md#by-feature-area) |
+| Features (14 areas) | ≈ 49% depth · 73% breadth | 40% | 610–1,100 | [target-app-parity.md](docs/target-app-parity.md#by-feature-area) |
 | UI/UX fidelity | ≈ 55% | 10% | 30–60 | [ui-parity.md](docs/ui-parity.md) |
 | File formats and conversion | ≈ 40% | 12% | 120–220 (within features) | [file-format-parity.md](docs/file-format-parity.md) |
 | PDF specification and standards | ≈ 60% | 8% | 150–260 (within features) | [pdf-spec-parity.md](docs/pdf-spec-parity.md) |
