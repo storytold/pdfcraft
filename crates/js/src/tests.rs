@@ -1082,6 +1082,36 @@ mod xfa_model {
         assert_eq!(o.result.as_deref(), Some("4/1"));
     }
 
+    #[test]
+    fn resolve_node_reaches_instance_managers_in_som_paths() {
+        let o = go("this.resolveNode('table._row').addInstance(1)", "form1[0].page1[0].go[0]", "click");
+        assert_eq!(o.error, None, "{o:?}");
+        assert_eq!(o.effects, vec![XfaEffect::AddInstance { som: "form1[0].page1[0].table[0].row[2]".into() }]);
+
+        let o = go("this.resolveNode('table._row').removeInstance(this.parent.index)", "form1[0].page1[0].table[0].row[1].amount[0]", "click");
+        assert_eq!(o.error, None, "{o:?}");
+        assert_eq!(o.effects, vec![XfaEffect::RemoveInstance { som: "form1[0].page1[0].table[0].row[1]".into() }]);
+
+        let o = go(
+            "this.resolveNode('_row').count + '/' + xfa.resolveNode('table._row').max + '/' + (this.resolveNode('table._missing') === null)",
+            "form1[0].page1[0].table[0].row[0].amount[0]",
+            "click",
+        );
+        assert_eq!(o.error, None, "{o:?}");
+        assert_eq!(o.result.as_deref(), Some("2/-1/true"));
+
+        let mut bounded = form();
+        let table = bounded.children[0].children.iter_mut().find(|n| n.name == "table").unwrap();
+        for row in &mut table.children {
+            row.occur_max = Some(2);
+        }
+        let event = XfaEvent { activity: "click".into(), target: "form1[0].page1[0].go[0]".into(), ..Default::default() };
+        let o = run_xfa("this.resolveNode('table._row').addInstance(1) === null", &event, &XfaDoc::default(), &bounded, Limits::default());
+        assert_eq!(o.error, None, "{o:?}");
+        assert_eq!(o.result.as_deref(), Some("true"));
+        assert!(o.effects.is_empty());
+    }
+
     /// `xfa.host`, `xfa.layout`, `xfa.event` and `app` calls become effects, and messages keep
     /// their details.
     #[test]

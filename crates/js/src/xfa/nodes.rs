@@ -83,7 +83,8 @@ pub(crate) fn instances(h: &XHost, parent: usize, name: &str) -> Vec<usize> {
 }
 
 /// Resolve a SOM expression from node `from`: `$`, `$form`, `$record`, `$host`, `xfa.form…`,
-/// `parent`, `..name` (descendant search), `name[n]`, `name[*]`, `_name`.
+/// `parent`, `..name` (descendant search), `name[n]`, `name[*]`. Instance managers are
+/// resolved separately by [`manager_at`] because they are not form nodes.
 pub(crate) fn resolve_som(h: &XHost, from: usize, expr: &str) -> Vec<usize> {
     let expr = expr.trim();
     if expr.is_empty() {
@@ -170,6 +171,19 @@ pub(crate) fn resolve_som(h: &XHost, from: usize, expr: &str) -> Vec<usize> {
         }
     }
     cur
+}
+
+/// The instance manager named by a final `_name` SOM step. A bare `_name` searches the same
+/// enclosing scopes as a bare subform name; with a prefix, the prefix names its parent.
+fn manager_at<'a>(h: &XHost, from: usize, expr: &'a str) -> Option<(usize, &'a str)> {
+    let expr = expr.trim();
+    let (prefix, last) = expr.rsplit_once('.').unwrap_or(("", expr));
+    let name = last.strip_prefix('_').filter(|name| !name.is_empty())?;
+    if prefix.is_empty() {
+        let row = resolve_som(h, from, name).into_iter().next()?;
+        return h.nodes.get(row)?.parent.map(|parent| (parent, name));
+    }
+    resolve_som(h, from, prefix).into_iter().find(|&parent| child_named(h, parent, name).is_some()).map(|parent| (parent, name))
 }
 
 /// The live descendants of node `from` named `name` (`from..name` in a SOM path), in document
@@ -403,6 +417,14 @@ pub(super) fn resolver(ctx: &mut Context, from: usize, many: bool) -> JsResult<J
                 (false, true) => node_object(ctx, node),
                 (false, false) => props::prop_object(ctx, node, &path),
             };
+        }
+        // A final `_row` names the row's instance manager, not a form node. Preserve a real
+        // child of that name when one exists, as normal SOM resolution does.
+        if !many && found.is_empty() {
+            let manager = manager_at(&host(ctx)?.borrow(), from, &expr);
+            if let Some((parent, name)) = manager {
+                return instance_manager(ctx, parent, name);
+            }
         }
         if many {
             return list_object(ctx, &found);
