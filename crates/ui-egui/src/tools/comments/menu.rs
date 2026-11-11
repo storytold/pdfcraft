@@ -282,7 +282,7 @@ pub fn swatch_grid(ui: &mut egui::Ui, current: Option<Rgb>) -> Option<Rgb> {
     let open_id = base.with("other-colour");
     let value_id = open_id.with("value");
     let mut open = ui.data(|d| d.get_temp::<bool>(open_id)).unwrap_or(false);
-    egui::Grid::new(base.with("swatches")).spacing(vec2(6.0, 6.0)).min_col_width(SWATCH_SIZE).show(ui, |ui| {
+    let grid = egui::Grid::new(base.with("swatches")).spacing(vec2(6.0, 6.0)).min_col_width(SWATCH_SIZE).show(ui, |ui| {
         for (i, (name, c)) in SWATCHES.iter().enumerate() {
             if swatch(ui, *c, on(c), tl!(name)).clicked() {
                 picked = Some(*c);
@@ -312,7 +312,12 @@ pub fn swatch_grid(ui: &mut egui::Ui, current: Option<Rgb>) -> Option<Rgb> {
     }
     if open && picked.is_none() {
         let mut value = ui.data(|d| d.get_temp::<Color32>(value_id)).unwrap_or_else(|| current.map_or(Color32::BLACK, color32));
-        egui::widgets::color_picker::color_picker_color32(ui, &mut value, egui::widgets::color_picker::Alpha::Opaque);
+        // The picker's square and bars follow `slider_width`: give them the grid's width so the
+        // picker fills the popup instead of sitting at its left (#6612).
+        ui.scope(|ui| {
+            ui.spacing_mut().slider_width = grid.response.rect.width();
+            egui::widgets::color_picker::color_picker_color32(ui, &mut value, egui::widgets::color_picker::Alpha::Opaque);
+        });
         ui.data_mut(|d| d.insert_temp(value_id, value));
         // Dragging in the picker previews nothing; Apply commits once (one undo step).
         if ui.button(tl!("Apply")).clicked() {

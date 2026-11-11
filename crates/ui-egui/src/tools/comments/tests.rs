@@ -921,3 +921,24 @@ fn comment_marker_wins_over_an_overlapping_body_for_pick_and_hover() {
     super::input::describe(&hidden, &mut view);
     assert!(view.cursor.resolve(&ctx, QuickTool::Select).is_none());
 }
+
+#[test]
+fn the_custom_picker_is_as_wide_as_the_swatch_grid() {
+    // #6612: the picker's saturation/value square follows `slider_width`, and it is as tall as it
+    // is wide. Given the grid's width, the square pushes Apply well over a grid width below the
+    // swatches; at egui's default (about 100 pt) it sat at the popup's left, narrower than the grid.
+    use egui_kittest::kittest::Queryable;
+    let mut h = egui_kittest::Harness::new_ui(|ui| {
+        let _ = swatch_grid(ui, None);
+    });
+    h.run();
+    let grid_left = h.get_by_label("Yellow").rect().left();
+    let plus = h.get_by_label("Other colour…").rect();
+    let grid_width = plus.right() - grid_left;
+    h.get_by_label("Other colour…").click();
+    h.run();
+    let below = h.get_by_label("Apply").rect().top() - plus.bottom();
+    // The square alone is a grid width tall; the colour bars and hue strip add over 60 pt more.
+    // At egui's default width the whole picker is about 200 pt, short of this.
+    assert!(below >= grid_width + 60.0, "the picker's square is as wide as the grid: {below:.1} pt below the swatches, grid {grid_width:.1} pt");
+}
