@@ -75,7 +75,7 @@ pub(crate) fn save_prompt_key(ctx: &egui::Context, chosen: &mut PromptButton) ->
 pub(super) fn save_prompt(app: &mut PdfCraftApp, ctx: &egui::Context) {
     let Some(req) = app.close_request else { return };
     let index = match req {
-        CloseRequest::Tab(id) => app.views.iter().position(|v| v.id == id),
+        CloseRequest::Tab(id) => app.asking_tab(id),
         CloseRequest::Quit | CloseRequest::All => app.first_dirty(),
     };
     let Some(name) = index.and_then(|i| app.views.get(i)).and_then(|v| app.session.get(v.id)).map(|d| d.name.clone()) else {
@@ -130,7 +130,7 @@ pub(super) fn save_prompt(app: &mut PdfCraftApp, ctx: &egui::Context) {
 
 /// `name` cut to at most `max` characters by replacing its middle with "…", keeping the start and
 /// the end, where the extension and version suffixes sit. Counts `char`s, so it never splits one.
-fn shorten_middle(name: &str, max: usize) -> String {
+pub(crate) fn shorten_middle(name: &str, max: usize) -> String {
     let count = name.chars().count();
     if count <= max {
         return name.to_string();
@@ -351,7 +351,7 @@ pub(super) fn password(app: &mut PdfCraftApp, ctx: &egui::Context) {
     let message = crate::i18n::fmt(tl!("“{name}” is protected. Enter a password to open it."), &[("name", &prompt.name)]);
     match password_modal(ctx, "password", tl!("Password required"), message, &mut prompt.input, prompt.error.as_deref(), tl!("Open")) {
         Some(PasswordAnswer::Submit) => {
-            let pw = prompt.input.clone();
+            let pw = std::mem::take(&mut prompt.input);
             app.submit_password(Some(pw));
         }
         Some(PasswordAnswer::Cancel) => app.submit_password(None),
@@ -366,7 +366,7 @@ pub(super) fn unlock(app: &mut PdfCraftApp, ctx: &egui::Context) {
         crate::i18n::fmt(tl!("“{name}” has security restrictions. Enter its permissions password to lift them."), &[("name", &prompt.name)]);
     match password_modal(ctx, "unlock", tl!("Permissions password"), message, &mut prompt.input, prompt.error.as_deref(), tl!("Unlock")) {
         Some(PasswordAnswer::Submit) => {
-            let pw = prompt.input.clone();
+            let pw = std::mem::take(&mut prompt.input);
             app.submit_unlock(Some(pw));
         }
         Some(PasswordAnswer::Cancel) => app.submit_unlock(None),

@@ -1,7 +1,11 @@
 use super::*;
 
 fn build(objs: &[&str], trailer_extra: &str) -> Document {
-    let mut out = b"%PDF-1.7\n".to_vec();
+    build_with_header(b"%PDF-1.7\n%\xE2\xE3\xCF\xD3\n", objs, trailer_extra)
+}
+
+fn build_with_header(header: &[u8], objs: &[&str], trailer_extra: &str) -> Document {
+    let mut out = header.to_vec();
     let mut offsets = Vec::new();
     for (i, o) in objs.iter().enumerate() {
         offsets.push(out.len());
@@ -78,12 +82,14 @@ fn wordings_are_complete() {
     let source = include_str!("lib.rs");
     let mut said = Vec::new();
     let mut rest = source;
-    while let Some(at) = rest.find("issue(\"") {
-        rest = &rest[at + 7..];
+    // `issue(` and `located_issue(`, written on one line or, when rustfmt breaks it, on several.
+    while let Some(at) = rest.find("issue(") {
+        rest = &rest[at + 6..];
+        let Some(clause) = rest.trim_start().strip_prefix('"') else { continue };
         // Step over the clause, then take the wording that follows it.
-        let Some(end) = rest.find('"') else { break };
-        rest = &rest[end + 1..];
-        let Some(text) = rest.strip_prefix(", \"") else { continue };
+        let Some(end) = clause.find('"') else { break };
+        rest = &clause[end + 1..];
+        let Some(text) = rest.strip_prefix(',').map(str::trim_start).and_then(|r| r.strip_prefix('"')) else { continue };
         let Some(end) = text.find('"') else { break };
         said.push(&text[..end]);
         rest = text;
@@ -487,4 +493,1753 @@ fn an_output_intent_profile_header_is_read_within_a_size_cap() {
         doc.set(pdfcraft_cos::ObjRef::new(2, 0), Object::Stream(pdfcraft_cos::Stream::flate(Dict::new(), &profile)));
         assert_eq!(pdfa_intent_profile(&doc), Some(n), "a {size}-byte profile");
     }
+}
+
+#[test]
+fn typeless_annotations_indexed_cmyk_and_indirect_filter_elements_are_handled() {
+    // Annotations in /Annots that omit optional /Type /Annot and /P (while keeping required /Subtype
+    // and /Rect), whether indirect or direct dictionaries, are still verified and fixed by convert.
+    // A malformed /Annots dictionary without /Type /Annot and without /Rect is not treated as an
+    // annotation or destructively removed by convert.
+    let mut doc = build(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+            "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R 6 0 R 8 0 R << /Subtype /Movie /Rect [60 10 70 30] >> << /Subtype /Sound >> << /Subtype /Sound /Rect null >> << /Subtype /Sound /Rect 9 0 R >>] >>",
+            "<< /Subtype /Text /Rect [10 10 30 30] /P 3 0 R /AP << /N 7 0 R >> >>",
+            "<< /Subtype /Sound /Rect [50 10 60 30] >>",
+            "<< /Subtype /Widget /FT /Tx /T (f) /Rect [70 10 90 30] /F 4 /AA << /E << /S /URI /URI (https://example.com) >> >> /AP << /N 7 0 R >> >>",
+            "<< /Type /XObject /Subtype /Form /BBox [0 0 20 20] /Length 0 >>\nstream\n\nendstream",
+            "<< /Subtype /Movie >>",
+            "null",
+        ],
+        "",
+    );
+    let issues = verify(&doc, Level::A2b);
+    let msgs = messages(&issues);
+    assert!(msgs.contains(&"A Text annotation isn't set to print, or is hidden"), "{msgs:#?}");
+    assert!(msgs.contains(&"Sound annotations aren't allowed"), "{msgs:#?}");
+    assert!(msgs.contains(&"Movie annotations aren't allowed"), "{msgs:#?}");
+    assert!(msgs.contains(&"A Widget annotation has additional actions"), "{msgs:#?}");
+    assert!(!msgs.contains(&"A form field has additional actions"), "{msgs:#?}");
+    let r = convert(&mut doc, Level::A2b).unwrap();
+    assert!(r.remaining.is_empty(), "{:#?}", r.remaining);
+    // The two /Rect-bearing forbidden annotations (5 0 R and the inline /Movie with /Rect) were
+    // removed, while the /Rect-less or null-/Rect dictionaries (8 0 R and the inline /Sound
+    // entries) without /Type /Annot are left untouched rather than destructively stripped.
+    assert_eq!(&*doc.get(ObjRef::new(5, 0)), &Object::Null);
+    assert!(doc.get(ObjRef::new(8, 0)).as_dict().is_some());
+    let page_annots = doc.get(ObjRef::new(3, 0)).as_dict().and_then(|d| d.get(b"Annots")).and_then(Object::as_array).cloned().unwrap();
+    assert_eq!(page_annots.len(), 6, "{page_annots:#?}");
+    assert!(page_annots.iter().any(|entry| entry.as_ref() == Some(ObjRef::new(8, 0))));
+    assert_eq!(page_annots.iter().filter(|entry| entry.as_dict().is_some_and(|d| d.name(b"Subtype") == Some(b"Sound"))).count(), 3);
+
+    // Indexed and Separation colour spaces over DeviceCMYK on image XObjects or /ColorSpace resources count as CMYK.
+    let indexed_img = build(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+            "<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /XObject << /Im0 5 0 R >> >> >>",
+            "<< /Length 7 >>\nstream\n/Im0 Do\nendstream",
+            "<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace [/Indexed /DeviceCMYK 0 <00000000>] /BitsPerComponent 8 /Length 1 >>\nstream\n\u{0}\nendstream",
+        ],
+        "",
+    );
+    assert!(uses_cmyk(&indexed_img));
+
+    let res_cmyk = drawing("/CS0 cs 0 sc 0 0 10 10 re f", "/ColorSpace << /CS0 [/Indexed /DeviceCMYK 0 <00000000>] >>", &[]);
+    assert!(uses_cmyk(&res_cmyk));
+    let pattern_cmyk = drawing("0 0 10 10 re f", "/ColorSpace << /CS0 [/Pattern /DeviceCMYK] >>", &[]);
+    assert!(uses_cmyk(&pattern_cmyk));
+    let chained_cs = drawing("0 0 10 10 re f", "/ColorSpace << /CS0 5 0 R >>", &["6 0 R", "[7 0 R 8 0 R]", "/Pattern", "/DeviceCMYK"]);
+    assert!(uses_cmyk(&chained_cs));
+
+    // An indirect filter name inside a /Filter array or the /LZW abbreviation is still checked for LZWDecode.
+    let indirect_lzw = build(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+            "<< /Type /Page /Parent 2 0 R /Contents 4 0 R >>",
+            "<< /Filter [5 0 R] /Length 0 >>\nstream\n\nendstream",
+            "/LZWDecode",
+        ],
+        "",
+    );
+    assert!(messages(&verify(&indirect_lzw, Level::A2b)).contains(&"A stream uses LZW compression"));
+    let abbrev_lzw = build(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+            "<< /Type /Page /Parent 2 0 R /Contents 4 0 R >>",
+            "<< /Filter /LZW /Length 0 >>\nstream\n\nendstream",
+        ],
+        "",
+    );
+    assert!(messages(&verify(&abbrev_lzw, Level::A2b)).contains(&"A stream uses LZW compression"));
+}
+
+/// PDF/A-2 6.1.13 holds a file to the implementation limits of ISO 32000-1 Annex C (Table C.1):
+/// an integer past 32 bits, a string over 32767 bytes or a name over 127 bytes (decoded: a name
+/// written with `#xx` escapes counts its bytes once read), in an object or in content; and a page
+/// boundary under 3 or over 14400 units, read after inheritance, so a page that overrides its
+/// parent's box is judged by its own.
+#[test]
+fn implementation_limits_are_reported() {
+    let limits =
+        |doc: &Document| -> Vec<String> { verify(doc, Level::A2b).into_iter().filter(|i| i.clause == "6.1.13").map(|i| i.message).collect() };
+    let doc = |extra: &str, content: &str, parent_box: &str, page_box: &str| {
+        let objects = [
+            format!("<< /Type /Catalog /Pages 2 0 R {extra} >>"),
+            format!("<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox {parent_box} >>"),
+            format!("<< /Type /Page /Parent 2 0 R /Contents 4 0 R {page_box} >>"),
+            format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+        ];
+        let refs: Vec<&str> = objects.iter().map(String::as_str).collect();
+        build(&refs, "")
+    };
+    let ok = "[0 0 200 200]";
+    assert!(limits(&doc("", "", ok, "")).is_empty(), "{:?}", limits(&doc("", "", ok, "")));
+    assert_eq!(limits(&doc("/Big 2147483648", "", ok, "")), ["An integer is outside the 32-bit range"]);
+    assert_eq!(limits(&doc("/Small -2147483649", "", ok, "")), ["An integer is outside the 32-bit range"]);
+    assert!(limits(&doc("/Edge -2147483648 /Top 2147483647", "", ok, "")).is_empty());
+    assert_eq!(limits(&doc("", "2147483648 0 Td", ok, "")), ["An integer is outside the 32-bit range"]);
+    let long = "x".repeat(32768);
+    assert_eq!(limits(&doc(&format!("/S ({long})"), "", ok, "")), ["A string is longer than 32767 bytes"]);
+    assert_eq!(limits(&doc("", &format!("BT ({long}) Tj ET"), ok, "")), ["A string is longer than 32767 bytes"]);
+    assert!(limits(&doc(&format!("/S ({})", "x".repeat(32767)), "", ok, "")).is_empty());
+    let name = "n".repeat(128);
+    assert_eq!(limits(&doc(&format!("/V /{name}"), "", ok, "")), ["A name is longer than 127 bytes"]);
+    assert_eq!(limits(&doc(&format!("/{name} 1"), "", ok, "")), ["A name is longer than 127 bytes"]);
+    assert_eq!(limits(&doc("", &format!("/{name} Do"), ok, "")), ["A name is longer than 127 bytes"]);
+    // 200 bytes as written, 66 once the escapes are read.
+    let escaped = format!("A{}", "#41".repeat(65) + &"B".repeat(4));
+    assert!(limits(&doc(&format!("/V /{escaped}"), "", ok, "")).is_empty());
+    assert_eq!(limits(&doc("", "", "[0 0 2 200]", "")), ["Page 1 has a boundary smaller than 3 or larger than 14400 units"]);
+    assert_eq!(limits(&doc("", "", ok, "/CropBox [0 0 14401 200]")), ["Page 1 has a boundary smaller than 3 or larger than 14400 units"]);
+    assert!(limits(&doc("", "", "[0 0 2 2]", "/MediaBox [0 0 3 14400]")).is_empty(), "the page's own box overrides its parent's");
+}
+
+/// 6.1.13 also reads the trailer, a page's `/Contents` streams joined (operands may end one
+/// stream and their operator start the next, ISO 32000-1 7.8.2), values nested as deep as the
+/// parser allows, and a page box whose size overflows to infinity.
+#[test]
+fn implementation_limits_reach_the_trailer_split_content_deep_values_and_huge_boxes() {
+    let limits =
+        |doc: &Document| -> Vec<String> { verify(doc, Level::A2b).into_iter().filter(|i| i.clause == "6.1.13").map(|i| i.message).collect() };
+    let stream = |data: &str| {
+        format!(
+            "<< /Length {} >>
+stream
+{data}
+endstream",
+            data.len()
+        )
+    };
+    let page = |contents: &str, catalog_extra: &str, media: &str, trailer: &str| {
+        let (first, second) = contents.split_once('|').unwrap_or((contents, ""));
+        build(
+            &[
+                &format!("<< /Type /Catalog /Pages 2 0 R {catalog_extra} >>"),
+                &format!("<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox {media} >>"),
+                "<< /Type /Page /Parent 2 0 R /Contents [4 0 R 5 0 R] >>",
+                &stream(first),
+                &stream(second),
+            ],
+            trailer,
+        )
+    };
+    let ok = "[0 0 200 200]";
+    assert!(limits(&page("|", "", ok, "")).is_empty());
+    assert_eq!(limits(&page("|", "", ok, "/Custom 2147483648")), ["An integer is outside the 32-bit range"]);
+    let long = "x".repeat(32768);
+    assert_eq!(limits(&page(&format!("BT ({long})|Tj ET"), "", ok, "")), ["A string is longer than 32767 bytes"]);
+    let deep = format!("/Deep {}2147483648{}", "[".repeat(40), "]".repeat(40));
+    assert_eq!(limits(&page("|", &deep, ok, "")), ["An integer is outside the 32-bit range"]);
+    // Corners near ±1e308 are reals past the limit too, and the width overflows to infinity.
+    assert_eq!(
+        limits(&page("|", "", "[-1e308 0 1e308 200]", "")),
+        [
+            "A real number is outside ±3.403 × 10³⁸, or nonzero but within ±1.175 × 10⁻³⁸",
+            "Page 1 has a boundary smaller than 3 or larger than 14400 units"
+        ]
+    );
+}
+
+/// 6.1.13's two remaining limits of ISO 32000-1 Annex C: a real number beyond ±3.403 × 10³⁸ (or
+/// nonzero and nearer zero than ±1.175 × 10⁻³⁸), and
+/// a CID above 65535 that an embedded CMap of a Type 0 font maps to (a `begincidrange` reaching
+/// past it, a `begincidchar` naming one, or a CMap it uses through `/UseCMap`).
+#[test]
+fn implementation_limits_cover_reals_and_cids() {
+    let limits =
+        |doc: &Document| -> Vec<String> { verify(doc, Level::A2b).into_iter().filter(|i| i.clause == "6.1.13").map(|i| i.message).collect() };
+    let stream = |dict: &str, data: &str| format!("<< {dict} /Length {} >>\nstream\n{data}\nendstream", data.len());
+    let doc = |catalog_extra: &str, cmap: &str, used: &str| {
+        let first = stream("/Type /CMap /CMapName /Test-A /UseCMap 6 0 R", cmap);
+        let second = stream("/Type /CMap /CMapName /Test-B", used);
+        build(
+            &[
+                &format!("<< /Type /Catalog /Pages 2 0 R {catalog_extra} >>"),
+                "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+                "<< /Type /Page /Parent 2 0 R /Resources << /Font << /F 4 0 R >> >> >>",
+                "<< /Type /Font /Subtype /Type0 /BaseFont /Test /Encoding 5 0 R /DescendantFonts [] >>",
+                &first,
+                &second,
+            ],
+            "",
+        )
+    };
+    let range = |low: &str, high: &str, cid: u32| format!("1 begincidrange <{low}> <{high}> {cid} endcidrange");
+    let near = format!("34{}.0", "0".repeat(37));
+    let far = format!("4{}.0", "0".repeat(38));
+    assert!(limits(&doc(&format!("/R {near} /S -{near}"), &range("0000", "00ff", 65280), "")).is_empty(), "both at their limits");
+    assert_eq!(limits(&doc(&format!("/R {far}"), "", "")), ["A real number is outside ±3.403 × 10³⁸, or nonzero but within ±1.175 × 10⁻³⁸"]);
+    assert_eq!(limits(&doc(&format!("/R -{far}"), "", "")), ["A real number is outside ±3.403 × 10³⁸, or nonzero but within ±1.175 × 10⁻³⁸"]);
+    // A nonzero real nearer zero than ±1.175 × 10⁻³⁸ is not allowed either; zero and the
+    // smallest allowed magnitude are.
+    let tiny = format!("0.{}1", "0".repeat(39));
+    let smallest = format!("0.{}1175", "0".repeat(37));
+    assert!(limits(&doc(&format!("/Z 0.0 /M -0.0 /S {smallest} /T -{smallest}"), "", "")).is_empty(), "zero and the smallest real");
+    assert_eq!(limits(&doc(&format!("/R {tiny}"), "", "")), ["A real number is outside ±3.403 × 10³⁸, or nonzero but within ±1.175 × 10⁻³⁸"]);
+    assert_eq!(limits(&doc(&format!("/R -{tiny}"), "", "")), ["A real number is outside ±3.403 × 10³⁸, or nonzero but within ±1.175 × 10⁻³⁸"]);
+    let cid = ["A CMap maps a character code to a CID above 65535"];
+    assert_eq!(limits(&doc("", &range("3f00", "3fff", 65536), "")), cid);
+    assert_eq!(limits(&doc("", &range("0000", "0100", 65280), "")), cid, "the range reaches 65536");
+    assert_eq!(limits(&doc("", "1 begincidchar <01> 70000 endcidchar", "")), cid);
+    assert_eq!(limits(&doc("", &range("0000", "00ff", 0), &range("3f00", "3fff", 65536))), cid, "through /UseCMap");
+}
+
+/// PDF/A-2 6.2.4.4: Separation spaces of one colorant name agree on their alternate space and tint
+/// transform, also inside a DeviceN space's `/Colorants`; and a DeviceN space names each spot
+/// colorant it uses in its `/Colorants` (ISO 32000-1 8.6.6.5, Table 71). Process colorants (the
+/// CMYK four, and an NChannel space's `/Process` components) and `None` need no entry.
+#[test]
+fn separation_and_devicen_spaces_are_checked() {
+    let spots = |spaces: &str| -> Vec<String> {
+        let page = format!("<< /Type /Page /Parent 2 0 R /Resources << /ColorSpace << {spaces} >> >> >>");
+        let doc = build(
+            &[
+                "<< /Type /Catalog /Pages 2 0 R >>",
+                "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+                &page,
+                "<< /FunctionType 2 /Domain [0 1] /C0 [1 1 1] /C1 [1 0 0] /N 1 >>",
+                "<< /FunctionType 2 /Domain [0 1] /C0 [1 1 1] /C1 [0 1 0] /N 1 >>",
+                "<< /FunctionType 2 /Domain [0 1] /C0 [1 1 1] /C1 [1 0 0] /N 1 >>",
+            ],
+            "",
+        );
+        verify(&doc, Level::A2b).into_iter().filter(|i| i.clause == "6.2.4.4").map(|i| i.message).collect()
+    };
+    let red = |alt: &str, f: u32| format!("[/Separation /Red /{alt} {f} 0 R]");
+    // The same name, the same alternate and an identical tint transform (another object): fine.
+    assert!(spots(&format!("/A {} /B {}", red("DeviceRGB", 4), red("DeviceRGB", 6))).is_empty());
+    assert_eq!(
+        spots(&format!("/A {} /B {}", red("DeviceRGB", 4), red("DeviceRGB", 5))),
+        ["Separation colour spaces named Red differ in their alternate space or tint transform"]
+    );
+    assert_eq!(
+        spots(&format!("/A {} /B {}", red("DeviceRGB", 4), red("DeviceGray", 4))),
+        ["Separation colour spaces named Red differ in their alternate space or tint transform"]
+    );
+    // Inside two DeviceN spaces' Colorants.
+    let nchannel = |f: u32| format!("[/DeviceN [/Red] /DeviceRGB 4 0 R << /Subtype /NChannel /Colorants << /Red {} >> >>]", red("DeviceRGB", f));
+    assert_eq!(
+        spots(&format!("/A {} /B {}", nchannel(4), nchannel(5))),
+        ["Separation colour spaces named Red differ in their alternate space or tint transform"]
+    );
+    // Spot colorants need a Colorants entry; process colorants and None don't.
+    assert_eq!(
+        spots("/A [/DeviceN [/Spot1 /Cyan /None] /DeviceCMYK 4 0 R]"),
+        ["The spot colour Spot1 of a DeviceN colour space isn't in its Colorants dictionary"]
+    );
+    assert_eq!(
+        spots("/A [/DeviceN [/Spot1] /DeviceRGB 4 0 R << /Colorants << >> >>]"),
+        ["The spot colour Spot1 of a DeviceN colour space isn't in its Colorants dictionary"]
+    );
+    assert!(spots(&format!("/A [/DeviceN [/Red /Black] /DeviceRGB 4 0 R << /Colorants << /Red {} >> >>]", red("DeviceRGB", 4))).is_empty());
+    assert!(
+        spots("/A [/DeviceN [/PrCyan /Black] /DeviceCMYK 4 0 R << /Subtype /NChannel /Process << /ColorSpace /DeviceCMYK /Components [/PrCyan /M /Y /Black] >> >>]")
+            .is_empty()
+    );
+}
+
+/// From the review of the 6.2.4.4 checks: nested parts compare by content, `All` and `None` get
+/// no exemption, names may be given by reference, `/Process` exempts only in an NChannel space, a
+/// null `/Colorants` entry defines nothing, and a colour space nested deep is still found.
+#[test]
+fn separation_and_devicen_checks_follow_references_depth_and_nchannel() {
+    let spots = |spaces: &str| -> Vec<String> {
+        let page = format!("<< /Type /Page /Parent 2 0 R /Resources << /ColorSpace << {spaces} >> >> >>");
+        let icc = "<< /N 3 /Length 4 >>\nstream\nabcd\nendstream";
+        let doc = build(
+            &[
+                "<< /Type /Catalog /Pages 2 0 R >>",
+                "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+                &page,
+                "<< /FunctionType 2 /Domain [0 1] /C0 [1 1 1] /C1 [1 0 0] /N 1 >>",
+                "<< /FunctionType 2 /Domain [0 1] /C0 [1 1 1] /C1 [0 1 0] /N 1 >>",
+                icc,
+                icc,
+                "/Red",
+                "null",
+            ],
+            "",
+        );
+        verify(&doc, Level::A2b).into_iter().filter(|i| i.clause == "6.2.4.4").map(|i| i.message).collect()
+    };
+    let differ = |n: &str| vec![format!("Separation colour spaces named {n} differ in their alternate space or tint transform")];
+    let undefined = |n: &str| vec![format!("The spot colour {n} of a DeviceN colour space isn't in its Colorants dictionary")];
+    // Identical ICC streams under different numbers are the same alternate space.
+    assert!(spots("/A [/Separation /Red [/ICCBased 6 0 R] 4 0 R] /B [/Separation /Red [/ICCBased 7 0 R] 4 0 R]").is_empty());
+    assert_eq!(spots("/A [/Separation /All /DeviceRGB 4 0 R] /B [/Separation /All /DeviceRGB 5 0 R]"), differ("All"));
+    assert_eq!(spots("/A [/Separation 8 0 R /DeviceRGB 4 0 R] /B [/Separation /Red /DeviceRGB 5 0 R]"), differ("Red"));
+    assert_eq!(spots("/A [/DeviceN [/Spot] /DeviceRGB 4 0 R << /Process << /Components [/Spot] >> >>]"), undefined("Spot"));
+    assert_eq!(spots("/A [/DeviceN [/Spot] /DeviceRGB 4 0 R << /Colorants << /Spot null >> >>]"), undefined("Spot"));
+    assert_eq!(spots("/A [/DeviceN [/Spot] /DeviceRGB 4 0 R << /Colorants << /Spot 9 0 R >> >>]"), undefined("Spot"));
+    let deep = format!("/A {}[/DeviceN [/Spot] /DeviceRGB 4 0 R]{}", "[".repeat(40), "]".repeat(40));
+    assert_eq!(spots(&deep), undefined("Spot"));
+}
+
+/// From the second review of the 6.2.4.4 checks: a `/Colorants` entry is a Separation space of
+/// its own colorant, tint-transform streams compare by decoded data, and a structure shared by
+/// many definitions is compared once rather than once per path through it.
+#[test]
+fn separation_checks_match_colorant_entries_decode_streams_and_share_comparisons() {
+    // Two copies of a chain of arrays, each level naming the next twice: comparing them path by
+    // path takes about 2^19 steps.
+    const LEVELS: usize = 18;
+    let chain = |first: usize| -> Vec<String> {
+        (0..LEVELS).map(|k| if k + 1 < LEVELS { format!("[{n} 0 R {n} 0 R]", n = first + k + 1) } else { "[1 2 3]".into() }).collect()
+    };
+    let (a, b) = (5, 5 + LEVELS);
+    let spots = |spaces: &str| -> Vec<String> {
+        let page = format!("<< /Type /Page /Parent 2 0 R /Resources << /ColorSpace << {spaces} >> >> >>");
+        let mut objects = vec![
+            "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>".into(),
+            page,
+            "<< /FunctionType 2 /Domain [0 1] /C0 [1 1 1] /C1 [1 0 0] /N 1 >>".into(),
+        ];
+        objects.extend(chain(a));
+        objects.extend(chain(b));
+        objects.push("<< /FunctionType 4 /Domain [0 1] /Range [0 1 0 1 0 1] /Length 15 >>\nstream\n{ dup dup pop }\nendstream".into());
+        objects.push("<< /FunctionType 4 /Domain [0 1] /Range [0 1 0 1 0 1] /Filter /ASCIIHexDecode /Length 31 >>\nstream\n7B206475702064757020706F70207D>\nendstream".into());
+        objects.push("<< /FunctionType 4 /Domain [0 1] /Range [0 1 0 1 0 1] /Length 15 >>\nstream\n{ dup pop dup }\nendstream".into());
+        let objects: Vec<&str> = objects.iter().map(String::as_str).collect();
+        let doc = build(&objects, "");
+        verify(&doc, Level::A2b).into_iter().filter(|i| i.clause == "6.2.4.4").map(|i| i.message).collect()
+    };
+    let differ = vec!["Separation colour spaces named Red differ in their alternate space or tint transform".to_string()];
+    let undefined = vec!["The spot colour Spot of a DeviceN colour space isn't in its Colorants dictionary".to_string()];
+    // A Colorants entry that isn't a Separation space of the same colorant defines nothing.
+    assert_eq!(spots("/A [/DeviceN [/Spot] /DeviceRGB 4 0 R << /Colorants << /Spot /DeviceRGB >> >>]"), undefined);
+    assert_eq!(spots("/A [/DeviceN [/Spot] /DeviceRGB 4 0 R << /Colorants << /Spot [/Separation /Other /DeviceRGB 4 0 R] >> >>]"), undefined);
+    assert!(spots("/A [/DeviceN [/Spot] /DeviceRGB 4 0 R << /Colorants << /Spot [/Separation /Spot /DeviceRGB 4 0 R] >> >>]").is_empty());
+    // The same PostScript function, once plain and once hex-encoded, is the same tint transform.
+    let (plain, hex, other) = (5 + 2 * LEVELS, 6 + 2 * LEVELS, 7 + 2 * LEVELS);
+    assert!(spots(&format!("/A [/Separation /Red /DeviceRGB {plain} 0 R] /B [/Separation /Red /DeviceRGB {hex} 0 R]")).is_empty());
+    assert_eq!(spots(&format!("/A [/Separation /Red /DeviceRGB {plain} 0 R] /B [/Separation /Red /DeviceRGB {other} 0 R]")), differ);
+    // Equal copies compared again and again still leave room to find the one that differs.
+    let sep = |f: usize| format!("[/Separation /Red /DeviceRGB {f} 0 R]");
+    assert_eq!(spots(&format!("/A {} /B {} /C {} /D {} /E {}", sep(a), sep(b), sep(b), sep(b), sep(4))), differ);
+}
+
+const XMP_NS: &str = concat!(
+    r#"xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:dc="http://purl.org/dc/elements/1.1/" "#,
+    r#"xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmlns:xmpMM="http://ns.adobe.com/xap/1.0/mm/" "#,
+    r#"xmlns:stRef="http://ns.adobe.com/xap/1.0/sType/ResourceRef#" xmlns:xmpDM="http://ns.adobe.com/xmp/1.0/DynamicMedia/" "#,
+    r#"xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" xmlns:xmpTPg="http://ns.adobe.com/xap/1.0/t/pg/" "#,
+    r#"xmlns:stDim="http://ns.adobe.com/xap/1.0/sType/Dimensions#" xmlns:pdf="http://ns.adobe.com/pdf/1.3/" "#,
+    r#"xmlns:tiff="http://ns.adobe.com/tiff/1.0/" xmlns:exif="http://ns.adobe.com/exif/1.0/" xmlns:aux="http://ns.adobe.com/exif/1.0/aux/""#
+);
+
+/// The mistyped predefined properties of a packet whose one description holds `body` (its
+/// attributes, then `>` and its elements).
+fn mistyped(body: &str) -> Vec<String> {
+    let xmp = format!(
+        r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF {XMP_NS}><rdf:Description rdf:about="" {body}</rdf:Description></rdf:RDF></x:xmpmeta>"#
+    );
+    let parsed = xmp::parse(&xmp).expect("parses");
+    xmp_types::mistyped(&parsed).into_keys().map(|(name, _)| name).collect()
+}
+
+/// [`mistyped`] for the property `p` written as an element holding `v`.
+fn element(p: &str, v: &str) -> Vec<String> {
+    mistyped(&format!("><{p}>{v}</{p}>"))
+}
+
+/// PDF/A-2 6.6.2.3.1, simple values: their lexical forms (ISO 16684-1 8.2.1), as elements and attributes.
+#[test]
+fn xmp_simple_values_have_their_lexical_forms() {
+    // Simple types, as elements and as attributes.
+    assert!(element("crs:Contrast", "-25").is_empty());
+    assert_eq!(element("crs:Contrast", "25.0"), ["crs:Contrast"]);
+    assert_eq!(element("crs:Contrast", "4/1"), ["crs:Contrast"]);
+    assert!(element("crs:Exposure", "+.5").is_empty() && element("crs:Exposure", "5").is_empty());
+    assert_eq!(element("crs:Exposure", "5."), ["crs:Exposure"]);
+    assert_eq!(element("crs:Exposure", "1e3"), ["crs:Exposure"]);
+    assert!(element("pdf:Trapped", "True").is_empty());
+    assert_eq!(element("pdf:Trapped", "true"), ["pdf:Trapped"]);
+    assert_eq!(mistyped(r#"crs:AutoContrast="Yes">"#), ["crs:AutoContrast"]);
+    assert!(mistyped(r#"crs:AutoContrast="False">"#).is_empty());
+    for good in
+        ["2016", "2016-02", "2016-02-01", "2016-02-01T13:19Z", "2016-02-01T13:19:21+01:00", "2016-02-01T13:19:21.5-08:00", "2016-02-01T13:19:21"]
+    {
+        assert!(element("xmp:CreateDate", good).is_empty(), "{good}");
+    }
+    for bad in [
+        "16-02-01",
+        "2016-13-01",
+        "2016-02-32",
+        "2016-02T13:19",
+        "2016-02-01T25:00",
+        "2016-02-01T13:19:21+1:00",
+        "Feb 1 2016",
+        "2016-02-01T13:19Z01:00",
+    ] {
+        assert_eq!(element("xmp:CreateDate", bad), ["xmp:CreateDate"], "{bad}");
+    }
+    assert!(element("xmpDM:videoPixelAspectRatio", "1001/30000").is_empty());
+    assert_eq!(element("xmpDM:videoPixelAspectRatio", "1.5"), ["xmpDM:videoPixelAspectRatio"]);
+    // The whole text of a value counts, however a comment splits it.
+    assert_eq!(element("crs:Contrast", "5<!-- c -->.0"), ["crs:Contrast"]);
+    assert!(element("pdf:Trapped", "Tr<!-- c -->ue").is_empty());
+    // rdf:resource makes a URI, which only a text type takes.
+    assert_eq!(mistyped(r#"><crs:Contrast rdf:resource="5"/>"#), ["crs:Contrast"]);
+    // A GUID is a simple value but not a URI (ISO 16684-1 8.2.2.3).
+    assert!(element("xmpMM:DocumentID", "uuid:1234").is_empty());
+    assert_eq!(mistyped(r#"><xmpMM:DocumentID rdf:resource="uuid:1234"/>"#), ["xmpMM:DocumentID"]);
+    assert_eq!(
+        mistyped(r#"><xmpMM:DerivedFrom rdf:parseType="Resource"><stRef:instanceID rdf:resource="uuid:1"/></xmpMM:DerivedFrom>"#),
+        ["xmpMM:DerivedFrom"]
+    );
+}
+
+/// PDF/A-2 6.6.2.3.1, arrays: the kind, every item, and the languages of a language alternative.
+#[test]
+fn xmp_arrays_have_their_kind_and_item_types() {
+    // Text can't be an array or a structure; a simple value can be given as rdf:resource.
+    assert_eq!(element("crs:RawFileName", "<rdf:Seq><rdf:li>a</rdf:li></rdf:Seq>"), ["crs:RawFileName"]);
+    assert_eq!(mistyped(r#"><crs:RawFileName rdf:parseType="Resource"><crs:Exposure>1</crs:Exposure></crs:RawFileName>"#), ["crs:RawFileName"]);
+    assert!(mistyped(r#"><dc:source rdf:resource="http://example.com/a"/>"#).is_empty());
+    // Arrays: the kind and every item.
+    assert!(element("dc:creator", "<rdf:Seq><rdf:li>A</rdf:li><rdf:li>B</rdf:li></rdf:Seq>").is_empty());
+    assert_eq!(element("dc:creator", "<rdf:Bag><rdf:li>A</rdf:li></rdf:Bag>"), ["dc:creator"]);
+    assert_eq!(element("dc:creator", "A"), ["dc:creator"]);
+    assert_eq!(element("dc:date", "<rdf:Seq><rdf:li>2016-02-01</rdf:li><rdf:li>yesterday</rdf:li></rdf:Seq>"), ["dc:date"]);
+    assert_eq!(element("dc:date", "<rdf:Seq><rdf:_1>yesterday</rdf:_1></rdf:Seq>"), ["dc:date"]);
+    // Only white space around an array's items.
+    assert_eq!(element("dc:creator", "stray<rdf:Seq><rdf:li>A</rdf:li></rdf:Seq>"), ["dc:creator"]);
+    assert_eq!(element("dc:creator", "<rdf:Seq>stray<rdf:li>A</rdf:li></rdf:Seq>"), ["dc:creator"]);
+    // rdf:parseType or rdf:resource on the property makes its value something other than the array.
+    assert_eq!(mistyped(r#"><dc:creator rdf:parseType="Resource"><rdf:Seq><rdf:li>A</rdf:li></rdf:Seq></dc:creator>"#), ["dc:creator"]);
+    assert_eq!(mistyped(r#"><dc:creator rdf:resource="http://example.com/a"><rdf:Seq><rdf:li>A</rdf:li></rdf:Seq></dc:creator>"#), ["dc:creator"]);
+    assert!(element("dc:creator", "\n  <rdf:Seq>\n    <rdf:li>A</rdf:li>\n  </rdf:Seq>\n").is_empty());
+    // An rdf:resource element is empty.
+    assert_eq!(mistyped(r#"><dc:source rdf:resource="http://example.com/a"><rdf:Seq><rdf:li>x</rdf:li></rdf:Seq></dc:source>"#), ["dc:source"]);
+    // Language alternatives: an rdf:Alt whose items all carry xml:lang.
+    assert!(element("dc:title", r#"<rdf:Alt><rdf:li xml:lang="x-default">T</rdf:li></rdf:Alt>"#).is_empty());
+    assert_eq!(element("dc:title", "<rdf:Alt><rdf:li>T</rdf:li></rdf:Alt>"), ["dc:title"]);
+    assert_eq!(element("dc:title", "T"), ["dc:title"]);
+}
+
+/// PDF/A-2 6.6.2.3.1, structures in their three RDF/XML forms, nested, and qualified values.
+#[test]
+fn xmp_structures_have_their_field_types() {
+    // Structures in their three forms, with each known field checked.
+    assert!(mistyped(r#"><xmpMM:DerivedFrom rdf:parseType="Resource"><stRef:documentID>d</stRef:documentID><stRef:lastModifyDate>2016</stRef:lastModifyDate></xmpMM:DerivedFrom>"#).is_empty());
+    assert!(mistyped(r#"><xmpMM:DerivedFrom><rdf:Description stRef:documentID="d"/></xmpMM:DerivedFrom>"#).is_empty());
+    assert!(mistyped(r#"><xmpMM:DerivedFrom stRef:documentID="d"/>"#).is_empty());
+    assert_eq!(element("xmpMM:DerivedFrom", "uuid:1234"), ["xmpMM:DerivedFrom"]);
+    assert_eq!(mistyped(r#"><xmpMM:DerivedFrom rdf:parseType="Resource">letter</xmpMM:DerivedFrom>"#), ["xmpMM:DerivedFrom"]);
+    assert_eq!(
+        mistyped(r#"><xmpMM:DerivedFrom><rdf:Description stRef:documentID="d">letter</rdf:Description></xmpMM:DerivedFrom>"#),
+        ["xmpMM:DerivedFrom"]
+    );
+    assert_eq!(mistyped(r#"><xmpMM:DerivedFrom>letter<rdf:Description stRef:documentID="d"/></xmpMM:DerivedFrom>"#), ["xmpMM:DerivedFrom"]);
+    // Predefined properties inside a Pantry item keep their types.
+    let pantry = |v: &str| {
+        mistyped(&format!(
+            r#"><xmpMM:Pantry><rdf:Bag><rdf:li rdf:parseType="Resource"><crs:Contrast>{v}</crs:Contrast></rdf:li></rdf:Bag></xmpMM:Pantry>"#
+        ))
+    };
+    assert!(pantry("5").is_empty());
+    assert_eq!(pantry("high"), ["xmpMM:Pantry"]);
+    assert_eq!(
+        mistyped(r#"><xmpMM:DerivedFrom rdf:parseType="Resource"><stRef:lastModifyDate>soon</stRef:lastModifyDate></xmpMM:DerivedFrom>"#),
+        ["xmpMM:DerivedFrom"]
+    );
+    assert_eq!(mistyped(r#"><xmpMM:DerivedFrom stRef:lastModifyDate="soon"/>"#), ["xmpMM:DerivedFrom"]);
+    assert_eq!(mistyped(r#"><xmpTPg:MaxPageSize rdf:parseType="Resource"><stDim:w>8.5 in</stDim:w></xmpTPg:MaxPageSize>"#), ["xmpTPg:MaxPageSize"]);
+    // Nested: an array of structures holding a structure.
+    let marker = |start: &str| format!(r#"><xmpDM:markers><rdf:Seq><rdf:li rdf:parseType="Resource">{start}</rdf:li></rdf:Seq></xmpDM:markers>"#);
+    assert!(
+        mistyped(&marker(
+            r#"<xmpDM:startTime rdf:parseType="Resource"><xmpDM:value>50</xmpDM:value><xmpDM:scale>1/25</xmpDM:scale></xmpDM:startTime>"#
+        ))
+        .is_empty()
+    );
+    assert!(mistyped(&marker("<xmpDM:startTime>50f</xmpDM:startTime>")).is_empty());
+    assert_eq!(mistyped(&marker(r#"<xmpDM:startTime rdf:parseType="Resource"><xmpDM:value>5.5</xmpDM:value></xmpDM:startTime>"#)), ["xmpDM:markers"]);
+    // A qualified value is checked by its rdf:value.
+    assert!(mistyped(r#"><crs:Contrast rdf:parseType="Resource"><rdf:value>5</rdf:value><xmp:Label>q</xmp:Label></crs:Contrast>"#).is_empty());
+    assert_eq!(mistyped(r#"><crs:Contrast rdf:parseType="Resource"><rdf:value>five</rdf:value></crs:Contrast>"#), ["crs:Contrast"]);
+    // rdf:value as an attribute of the description.
+    assert!(mistyped(r#"><crs:Contrast><rdf:Description rdf:value="5" xmp:Label="q"/></crs:Contrast>"#).is_empty());
+    assert_eq!(mistyped(r#"><crs:Contrast><rdf:Description rdf:value="five" xmp:Label="q"/></crs:Contrast>"#), ["crs:Contrast"]);
+    // rdf:value as an attribute of an empty property element.
+    assert!(mistyped(r#"><crs:Contrast rdf:value="5" xmp:Label="q"/>"#).is_empty());
+    assert_eq!(mistyped(r#"><crs:Contrast rdf:value="five" xmp:Label="q"/>"#), ["crs:Contrast"]);
+    // Qualifiers that are predefined properties keep their types.
+    assert_eq!(
+        mistyped(r#"><crs:Contrast rdf:parseType="Resource"><rdf:value>5</rdf:value><crs:Exposure>high</crs:Exposure></crs:Contrast>"#),
+        ["crs:Contrast"]
+    );
+    assert_eq!(mistyped(r#"><crs:Contrast rdf:value="5" crs:Exposure="high"/>"#), ["crs:Contrast"]);
+    assert!(mistyped(r#"><crs:Contrast rdf:value="5" crs:Exposure="1.5"/>"#).is_empty());
+    // Nesting past any type's depth doesn't have the type.
+    let nested = |levels: usize| {
+        let open = r#"<rdf:value rdf:parseType="Resource">"#.repeat(levels);
+        let close = "</rdf:value>".repeat(levels);
+        mistyped(&format!(r#"><crs:Contrast rdf:parseType="Resource">{open}<rdf:value>5</rdf:value>{close}</crs:Contrast>"#))
+    };
+    assert!(nested(3).is_empty());
+    assert_eq!(nested(40), ["crs:Contrast"]);
+}
+
+/// PDF/A-2 6.6.2.3.1 through verify: one issue per mistyped property, not fixable.
+#[test]
+fn xmp_value_types_are_reported_by_verify() {
+    let metadata = |body: &str| {
+        let xmp = format!(r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF {XMP_NS}><rdf:Description rdf:about="" {body}/></rdf:RDF></x:xmpmeta>"#);
+        format!("<< /Type /Metadata /Subtype /XML /Length {} >>\nstream\n{xmp}\nendstream", xmp.len())
+    };
+    let issues = |doc: &Document| -> Vec<Issue> { verify(doc, Level::A2b).into_iter().filter(|i| i.clause == "6.6.2.3.1").collect() };
+    // Every mistyped property, once per metadata stream, by stream and then by name; not fixable.
+    let catalog = metadata(r#"crs:Contrast="high" crs:Exposure="bright""#);
+    let page = metadata(r#"crs:Contrast="higher""#);
+    let doc = build(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R /Metadata 3 0 R >>",
+            "<< /Type /Pages /Kids [4 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+            &catalog,
+            "<< /Type /Page /Parent 2 0 R /Metadata 5 0 R >>",
+            &page,
+        ],
+        "",
+    );
+    let found = issues(&doc);
+    let messages: Vec<&str> = found.iter().map(|i| i.message.as_str()).collect();
+    assert_eq!(
+        messages,
+        [
+            "The XMP property crs:Contrast in metadata stream 3 0 R should have the value type Integer",
+            "The XMP property crs:Exposure in metadata stream 3 0 R should have the value type Real",
+            "The XMP property crs:Contrast in metadata stream 5 0 R should have the value type Integer"
+        ]
+    );
+    let objects: Vec<Option<ObjRef>> = found.iter().map(|i| i.object).collect();
+    assert_eq!(objects, [Some(ObjRef::new(3, 0)), Some(ObjRef::new(3, 0)), Some(ObjRef::new(5, 0))]);
+    assert!(found.iter().all(|i| !i.fixable && i.page.is_none()));
+    // Said in another language, the property and the stream go where that language puts them, and
+    // what the document wrote goes in as it stands.
+    let reordered = |w: &str| w.replace("The XMP property {property} in metadata stream {object}", "In {object}, {property}");
+    assert_eq!(found[0].said(&in_english), found[0].message);
+    assert_eq!(found[0].said(&reordered), "In 3 0 R, crs:Contrast should have the value type Integer");
+    // A UTF-16 packet, either byte order, is read.
+    for big in [true, false] {
+        let xmp = format!(
+            r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF {XMP_NS}><rdf:Description rdf:about="" crs:Contrast="high"/></rdf:RDF></x:xmpmeta>"#
+        );
+        let mut data = if big { vec![0xFE, 0xFF] } else { vec![0xFF, 0xFE] };
+        data.extend(xmp.encode_utf16().flat_map(|u| if big { u.to_be_bytes() } else { u.to_le_bytes() }));
+        let hex: String = data.iter().map(|b| format!("{b:02X}")).collect();
+        let stream = format!("<< /Type /Metadata /Subtype /XML /Filter /ASCIIHexDecode /Length {} >>\nstream\n{hex}>\nendstream", hex.len() + 1);
+        let doc = build(&["<< /Type /Catalog /Pages 2 0 R /Metadata 3 0 R >>", "<< /Type /Pages /Kids [] /Count 0 >>", &stream], "");
+        assert_eq!(issues(&doc).len(), 1, "big-endian: {big}");
+    }
+    // A metadata stream of a page counts as well as the catalog's.
+    let good = metadata(r#"crs:Contrast="5""#);
+    let doc = build(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R /Metadata 3 0 R >>",
+            "<< /Type /Pages /Kids [4 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+            &good,
+            "<< /Type /Page /Parent 2 0 R /Metadata 5 0 R >>",
+            &page,
+        ],
+        "",
+    );
+    let found = issues(&doc);
+    assert_eq!(found.iter().map(|i| i.object).collect::<Vec<_>>(), [Some(ObjRef::new(5, 0))]);
+}
+
+/// PDF/A-2 6.6.2.3.1 for the TIFF, EXIF and Additional EXIF schemas of the September 2005 XMP
+/// Specification (pages 58–70), with the EXIF value types of pages 83–87.
+#[test]
+fn xmp_exif_schemas_have_their_value_types() {
+    // TIFF: integers, closed choices of integer, rationals, sequences, language alternatives.
+    assert!(element("tiff:ImageWidth", "256").is_empty());
+    assert_eq!(element("tiff:ImageWidth", "256 mm"), ["tiff:ImageWidth"]);
+    assert_eq!(element("tiff:Orientation", "4/1"), ["tiff:Orientation"]);
+    assert!(element("tiff:XResolution", "72/1").is_empty());
+    assert_eq!(element("tiff:XResolution", "<rdf:Seq><rdf:li>1/2</rdf:li></rdf:Seq>"), ["tiff:XResolution"]);
+    assert!(element("tiff:BitsPerSample", "<rdf:Seq><rdf:li>8</rdf:li><rdf:li>8</rdf:li></rdf:Seq>").is_empty());
+    assert_eq!(element("tiff:BitsPerSample", "<rdf:Seq><rdf:li>8</rdf:li><rdf:li>8.0</rdf:li></rdf:Seq>"), ["tiff:BitsPerSample"]);
+    assert_eq!(element("tiff:TransferFunction", "<rdf:Bag><rdf:li>0</rdf:li></rdf:Bag>"), ["tiff:TransferFunction"]);
+    assert_eq!(element("tiff:ImageDescription", "A picture"), ["tiff:ImageDescription"]);
+    // EXIF: GPS coordinates (page 85).
+    for good in ["51,30,26N", "0,5.25W", "120,5,0E", "8,0.000001S"] {
+        assert!(element("exif:GPSLatitude", good).is_empty(), "{good}");
+    }
+    for bad in ["51.5N", "51,30,26", "51,30.N", "51,30,26X", "N", "51,30,2.6N", "a,30,26N", "51,30N", "51.5,30,26N"] {
+        assert_eq!(element("exif:GPSLatitude", bad), ["exif:GPSLatitude"], "{bad}");
+    }
+    assert!(element("exif:GPSTimeStamp", "2016-02-01T13:19:21").is_empty());
+    assert_eq!(element("exif:ISOSpeedRatings", "100"), ["exif:ISOSpeedRatings"]);
+    // EXIF structures: Flash, OECF/SFR, CFAPattern, DeviceSettings (pages 85–87).
+    assert!(mistyped(r#"><exif:Flash rdf:parseType="Resource"><exif:Fired>True</exif:Fired><exif:Mode>3</exif:Mode></exif:Flash>"#).is_empty());
+    assert_eq!(mistyped(r#"><exif:Flash rdf:parseType="Resource"><exif:Fired>yes</exif:Fired></exif:Flash>"#), ["exif:Flash"]);
+    assert_eq!(mistyped(r#"><exif:Flash exif:Return="2.0"/>"#), ["exif:Flash"]);
+    assert_eq!(element("exif:Flash", "fired"), ["exif:Flash"]);
+    assert!(
+        mistyped(r#"><exif:OECF rdf:parseType="Resource"><exif:Values><rdf:Seq><rdf:li>1/2</rdf:li></rdf:Seq></exif:Values></exif:OECF>"#).is_empty()
+    );
+    assert_eq!(
+        mistyped(r#"><exif:OECF rdf:parseType="Resource"><exif:Values><rdf:Seq><rdf:li>0.5</rdf:li></rdf:Seq></exif:Values></exif:OECF>"#),
+        ["exif:OECF"]
+    );
+    assert_eq!(
+        mistyped(
+            r#"><exif:CFAPattern rdf:parseType="Resource"><exif:Values><rdf:Seq><rdf:li>1/2</rdf:li></rdf:Seq></exif:Values></exif:CFAPattern>"#
+        ),
+        ["exif:CFAPattern"]
+    );
+    assert_eq!(
+        mistyped(r#"><exif:DeviceSettingDescription rdf:parseType="Resource"><exif:Columns>2.0</exif:Columns></exif:DeviceSettingDescription>"#),
+        ["exif:DeviceSettingDescription"]
+    );
+    assert_eq!(
+        mistyped(r#"><exif:DeviceSettingDescription rdf:parseType="Resource"><exif:Settings>a</exif:Settings></exif:DeviceSettingDescription>"#),
+        ["exif:DeviceSettingDescription"]
+    );
+    // Additional EXIF properties (page 69).
+    assert!(element("aux:Lens", "50mm").is_empty());
+    assert_eq!(element("aux:Lens", "<rdf:Seq><rdf:li>50mm</rdf:li></rdf:Seq>"), ["aux:Lens"]);
+    assert_eq!(element("aux:SerialNumber", "<rdf:Bag><rdf:li>1</rdf:li></rdf:Bag>"), ["aux:SerialNumber"]);
+}
+
+/// The 6.6.2.3.3 findings of a packet whose extension schema bag holds `schema`, with the five
+/// description namespaces bound to the prefixes in `prefixes` (`pdfaSchema` and so on by default).
+fn extension(schema: &str, prefixes: [&str; 4]) -> (Vec<String>, Vec<&'static str>) {
+    let found = extension_findings(schema, prefixes);
+    (found.missing.into_iter().map(|m| m.entry).collect(), found.prefixes.into_iter().map(|p| p.own).collect())
+}
+
+/// [`extension`]'s findings in full, as if from the metadata stream `3 0 R`.
+fn extension_findings(schema: &str, prefixes: [&str; 4]) -> xmp_extension::Findings {
+    let [s, p, t, f] = prefixes;
+    let xmp = format!(
+        concat!(
+            r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">"#,
+            r#"<rdf:Description rdf:about="" xmlns:pdfaExtension="http://www.aiim.org/pdfa/ns/extension/" "#,
+            r#"xmlns:{s}="http://www.aiim.org/pdfa/ns/schema#" xmlns:{p}="http://www.aiim.org/pdfa/ns/property#" "#,
+            r#"xmlns:{t}="http://www.aiim.org/pdfa/ns/type#" xmlns:{f}="http://www.aiim.org/pdfa/ns/field#">"#,
+            r#"<pdfaExtension:schemas><rdf:Bag><rdf:li rdf:parseType="Resource">{schema}</rdf:li></rdf:Bag></pdfaExtension:schemas>"#,
+            r#"</rdf:Description></rdf:RDF></x:xmpmeta>"#
+        ),
+        s = s,
+        p = p,
+        t = t,
+        f = f,
+        schema = schema
+    );
+    let parsed = xmp::parse(&xmp).expect("parses");
+    let mut found = xmp_extension::Findings::default();
+    found.add(ObjRef::new(3, 0), &parsed);
+    found
+}
+
+const OWN: [&str; 4] = ["pdfaSchema", "pdfaProperty", "pdfaType", "pdfaField"];
+
+/// A complete schema description, with `drop` left out of it (`pdfaSchema:schema` and so on).
+fn schema_without(drop: &str) -> String {
+    let entry = |name: &str, value: &str| if name == drop { String::new() } else { format!("<{name}>{value}</{name}>") };
+    let property = ["pdfaProperty:name", "pdfaProperty:valueType", "pdfaProperty:category", "pdfaProperty:description"]
+        .iter()
+        .map(|n| entry(n, "x"))
+        .collect::<String>();
+    let field = ["pdfaField:name", "pdfaField:valueType", "pdfaField:description"].iter().map(|n| entry(n, "x")).collect::<String>();
+    let field = entry("pdfaType:field", &format!(r#"<rdf:Seq><rdf:li rdf:parseType="Resource">{field}</rdf:li></rdf:Seq>"#));
+    let value_type =
+        ["pdfaType:type", "pdfaType:namespaceURI", "pdfaType:prefix", "pdfaType:description"].iter().map(|n| entry(n, "x")).collect::<String>();
+    [
+        entry("pdfaSchema:schema", "Some schema"),
+        entry("pdfaSchema:namespaceURI", "http://example.com/ns/"),
+        entry("pdfaSchema:prefix", "ex"),
+        entry("pdfaSchema:property", &format!(r#"<rdf:Seq><rdf:li rdf:parseType="Resource">{property}</rdf:li></rdf:Seq>"#)),
+        entry("pdfaSchema:valueType", &format!(r#"<rdf:Seq><rdf:li rdf:parseType="Resource">{value_type}{field}</rdf:li></rdf:Seq>"#)),
+    ]
+    .concat()
+}
+
+/// PDF/A-2 6.6.2.3.3: every extension schema description has its required entries, in each of its
+/// four kinds, and writes each description namespace with its own prefix.
+#[test]
+fn xmp_extension_schema_descriptions_are_complete() {
+    assert_eq!(extension(&schema_without(""), OWN), (vec![], vec![]));
+    // The property and value type lists of a schema are optional.
+    assert_eq!(extension(&schema_without("pdfaSchema:property"), OWN), (vec![], vec![]));
+    assert_eq!(extension(&schema_without("pdfaSchema:valueType"), OWN), (vec![], vec![]));
+    // Every other entry is required.
+    for required in [
+        "pdfaSchema:schema",
+        "pdfaSchema:namespaceURI",
+        "pdfaSchema:prefix",
+        "pdfaProperty:name",
+        "pdfaProperty:valueType",
+        "pdfaProperty:category",
+        "pdfaProperty:description",
+        "pdfaType:type",
+        "pdfaType:namespaceURI",
+        "pdfaType:prefix",
+        "pdfaType:description",
+        "pdfaType:field",
+        "pdfaField:name",
+        "pdfaField:valueType",
+        "pdfaField:description",
+    ] {
+        assert_eq!(extension(&schema_without(required), OWN), (vec![required.to_string()], vec![]), "{required}");
+    }
+    // An entry may be an attribute of an rdf:Description item.
+    let as_attribute = r#"</rdf:li><rdf:li><rdf:Description pdfaSchema:schema="S" pdfaSchema:namespaceURI="http://e/" pdfaSchema:prefix="e"/>"#;
+    assert_eq!(extension(&format!("{}{as_attribute}", schema_without("")), OWN), (vec![], vec![]));
+    let missing_attribute = r#"</rdf:li><rdf:li><rdf:Description pdfaSchema:schema="S" pdfaSchema:prefix="e"/>"#;
+    assert_eq!(extension(&format!("{}{missing_attribute}", schema_without("")), OWN).0, ["pdfaSchema:namespaceURI"]);
+    // Each namespace with its own prefix: the right URI under another prefix breaks the rule.
+    for (i, own) in OWN.iter().enumerate() {
+        let mut prefixes = OWN;
+        prefixes[i] = "other";
+        let schema = schema_without("").replace(&format!("{own}:"), "other:");
+        assert_eq!(extension(&schema, prefixes), (vec![], vec![*own]), "{own}");
+    }
+    // A second property list is read as well as the first.
+    let complete = schema_without("");
+    let second = complete.replacen(
+        "</pdfaSchema:property>",
+        r#"</pdfaSchema:property><pdfaSchema:property><rdf:Seq><rdf:li rdf:parseType="Resource"><pdfaProperty:name>p</pdfaProperty:name></rdf:li></rdf:Seq></pdfaSchema:property>"#,
+        1,
+    );
+    assert_eq!(extension(&second, OWN).0, ["pdfaProperty:valueType", "pdfaProperty:category", "pdfaProperty:description"]);
+    // The container is an rdf:Bag (TechNote 0009, 4.2).
+    let container = |inner: &str| {
+        let xmp = format!(
+            r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:pdfaExtension="http://www.aiim.org/pdfa/ns/extension/" xmlns:pdfaSchema="http://www.aiim.org/pdfa/ns/schema#"><pdfaExtension:schemas>{inner}</pdfaExtension:schemas></rdf:Description></rdf:RDF></x:xmpmeta>"#
+        );
+        let mut found = xmp_extension::Findings::default();
+        found.add(ObjRef::new(3, 0), &xmp::parse(&xmp).expect("parses"));
+        found.not_bag.into_iter().map(|c| c.found).collect::<Vec<_>>()
+    };
+    let schema = r#"<rdf:li rdf:parseType="Resource"><pdfaSchema:schema>S</pdfaSchema:schema><pdfaSchema:namespaceURI>http://e/</pdfaSchema:namespaceURI><pdfaSchema:prefix>e</pdfaSchema:prefix></rdf:li>"#;
+    assert!(container(&format!("<rdf:Bag>{schema}</rdf:Bag>")).is_empty());
+    // What it holds instead is named as the packet writes it.
+    assert_eq!(container(&format!("<rdf:Seq>{schema}</rdf:Seq>")), ["rdf:Seq"]);
+    assert_eq!(container(r#"<rdf:Description pdfaSchema:schema="S"/>"#), ["rdf:Description"]);
+    assert_eq!(container(&format!("<rdf:Bag>{schema}</rdf:Bag><rdf:Bag/>")), ["rdf:Bag, rdf:Bag"]);
+    assert_eq!(container(""), [""]);
+    // The container itself is written as pdfaExtension too (TechNote 0009, 4.1).
+    let xmp = concat!(
+        r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">"#,
+        r#"<rdf:Description rdf:about="" xmlns:ext="http://www.aiim.org/pdfa/ns/extension/" "#,
+        r#"xmlns:pdfaSchema="http://www.aiim.org/pdfa/ns/schema#"><ext:schemas><rdf:Bag><rdf:li rdf:parseType="Resource">"#,
+        r#"<pdfaSchema:schema>S</pdfaSchema:schema><pdfaSchema:namespaceURI>http://e/</pdfaSchema:namespaceURI>"#,
+        r#"<pdfaSchema:prefix>e</pdfaSchema:prefix></rdf:li></rdf:Bag></ext:schemas></rdf:Description></rdf:RDF></x:xmpmeta>"#
+    );
+    let mut found = xmp_extension::Findings::default();
+    found.add(ObjRef::new(3, 0), &xmp::parse(xmp).expect("parses"));
+    assert!(found.missing.is_empty());
+    let written: Vec<(&str, &str, &str)> = found.prefixes.iter().map(|p| (p.namespace, p.own, p.written.as_str())).collect();
+    assert_eq!(written, [("http://www.aiim.org/pdfa/ns/extension/", "pdfaExtension", "ext")]);
+    // Through verify, under 6.6.2.3.3 and not fixable.
+    let xmp = concat!(
+        r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">"#,
+        r#"<rdf:Description rdf:about="" xmlns:pdfaExtension="http://www.aiim.org/pdfa/ns/extension/" "#,
+        r#"xmlns:pdfaSchema="http://www.aiim.org/pdfa/ns/schema#"><pdfaExtension:schemas><rdf:Bag><rdf:li rdf:parseType="Resource">"#,
+        r#"<pdfaSchema:schema>S</pdfaSchema:schema><pdfaSchema:prefix>e</pdfaSchema:prefix></rdf:li></rdf:Bag></pdfaExtension:schemas>"#,
+        r#"</rdf:Description></rdf:RDF></x:xmpmeta>"#
+    );
+    let stream = format!("<< /Type /Metadata /Subtype /XML /Length {} >>\nstream\n{xmp}\nendstream", xmp.len());
+    let doc = build(&["<< /Type /Catalog /Pages 2 0 R /Metadata 3 0 R >>", "<< /Type /Pages /Kids [] /Count 0 >>", &stream], "");
+    let issues: Vec<Issue> = verify(&doc, Level::A2b).into_iter().filter(|i| i.clause == "6.6.2.3.3").collect();
+    assert_eq!(issues.len(), 1);
+    assert_eq!(issues[0].message, "The XMP extension schema #1 in metadata stream 3 0 R has no pdfaSchema:namespaceURI entry");
+    assert_eq!(issues[0].object, Some(ObjRef::new(3, 0)));
+    assert!(!issues[0].fixable);
+}
+
+/// PDF/A-2 6.6.2.3.3: an entry that names something is incomplete when it is empty, while the
+/// human-readable descriptions may be empty (TechNote 0009, 4.3 to 4.6).
+#[test]
+fn xmp_extension_naming_entries_are_not_empty() {
+    let complete = schema_without("");
+    let emptied = |name: &str, value: &str, with: &str| {
+        let element = format!("<{name}>{value}</{name}>");
+        assert_eq!(complete.matches(&element).count(), 1, "{name}");
+        complete.replace(&element, &format!("<{name}>{with}</{name}>"))
+    };
+    let said = |schema: &str| -> Vec<(String, bool)> { extension_findings(schema, OWN).missing.into_iter().map(|m| (m.entry, m.empty)).collect() };
+    for (name, value) in [
+        ("pdfaSchema:namespaceURI", "http://example.com/ns/"),
+        ("pdfaSchema:prefix", "ex"),
+        ("pdfaProperty:name", "x"),
+        ("pdfaProperty:valueType", "x"),
+        ("pdfaProperty:category", "x"),
+        ("pdfaType:type", "x"),
+        ("pdfaType:namespaceURI", "x"),
+        ("pdfaType:prefix", "x"),
+        ("pdfaField:name", "x"),
+        ("pdfaField:valueType", "x"),
+    ] {
+        assert_eq!(said(&emptied(name, value, "")), [(name.to_owned(), true)], "{name}");
+        assert_eq!(said(&emptied(name, value, " \n\t ")), [(name.to_owned(), true)], "{name} blank");
+    }
+    for (name, value) in
+        [("pdfaSchema:schema", "Some schema"), ("pdfaProperty:description", "x"), ("pdfaType:description", "x"), ("pdfaField:description", "x")]
+    {
+        assert_eq!(said(&emptied(name, value, "")), [], "{name}");
+    }
+    // An empty element written shut, and an empty attribute, are empty too.
+    let shut = complete.replace("<pdfaType:prefix>x</pdfaType:prefix>", "<pdfaType:prefix/>");
+    assert_eq!(said(&shut), [("pdfaType:prefix".to_owned(), true)]);
+    let attribute = r#"</rdf:li><rdf:li><rdf:Description pdfaSchema:schema="S" pdfaSchema:namespaceURI="http://e/" pdfaSchema:prefix=" "/>"#;
+    assert_eq!(said(&format!("{complete}{attribute}")), [("pdfaSchema:prefix".to_owned(), true)]);
+    // A URI given as an rdf:resource, or a value given as rdf:value, is a value.
+    let resource =
+        complete.replace("<pdfaType:namespaceURI>x</pdfaType:namespaceURI>", r#"<pdfaType:namespaceURI rdf:resource="http://t.example/"/>"#);
+    assert_eq!(said(&resource), []);
+    let value = complete.replace("<pdfaType:type>x</pdfaType:type>", r#"<pdfaType:type rdf:value="T"/>"#);
+    assert_eq!(said(&value), []);
+    // A comment is not a value.
+    assert_eq!(said(&emptied("pdfaType:prefix", "x", "<!-- t -->")), [("pdfaType:prefix".to_owned(), true)]);
+
+    // Through verify, with their own wordings.
+    let xmp = concat!(
+        r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">"#,
+        r#"<rdf:Description rdf:about="" xmlns:pdfaExtension="http://www.aiim.org/pdfa/ns/extension/" "#,
+        r#"xmlns:pdfaSchema="http://www.aiim.org/pdfa/ns/schema#" xmlns:pdfaType="http://www.aiim.org/pdfa/ns/type#">"#,
+        r#"<pdfaExtension:schemas><rdf:Bag><rdf:li rdf:parseType="Resource">"#,
+        r#"<pdfaSchema:schema>S</pdfaSchema:schema><pdfaSchema:namespaceURI>http://a.example/</pdfaSchema:namespaceURI>"#,
+        r#"<pdfaSchema:prefix></pdfaSchema:prefix><pdfaSchema:valueType><rdf:Seq><rdf:li rdf:parseType="Resource">"#,
+        r#"<pdfaType:type>T</pdfaType:type><pdfaType:namespaceURI>http://t.example/</pdfaType:namespaceURI>"#,
+        r#"<pdfaType:prefix> </pdfaType:prefix><pdfaType:description>d</pdfaType:description>"#,
+        r#"<pdfaType:field><rdf:Seq/></pdfaType:field></rdf:li></rdf:Seq></pdfaSchema:valueType>"#,
+        r#"</rdf:li></rdf:Bag></pdfaExtension:schemas></rdf:Description></rdf:RDF></x:xmpmeta>"#
+    );
+    let stream = format!("<< /Type /Metadata /Subtype /XML /Length {} >>\nstream\n{xmp}\nendstream", xmp.len());
+    let doc = build(&["<< /Type /Catalog /Pages 2 0 R /Metadata 3 0 R >>", "<< /Type /Pages /Kids [] /Count 0 >>", &stream], "");
+    let messages: Vec<String> = verify(&doc, Level::A2b).into_iter().filter(|i| i.clause == "6.6.2.3.3").map(|i| i.message).collect();
+    assert_eq!(
+        messages,
+        [
+            "The XMP extension schema http://a.example/ in metadata stream 3 0 R has an empty pdfaSchema:prefix entry",
+            "The XMP extension schema http://a.example/ in metadata stream 3 0 R describes T with an empty pdfaType:prefix entry",
+        ]
+    );
+}
+
+/// PDF/A-2 6.6.2.3.3: each incomplete description is reported by itself, named by its schema's
+/// namespace URI, its own name and its metadata stream, and so is each misused prefix and container.
+#[test]
+fn xmp_extension_findings_say_where_they_are() {
+    // Two schemas lacking the same entries are two findings, each with its schema.
+    let schema = |uri: &str, property: &str| {
+        format!(
+            concat!(
+                r#"<pdfaSchema:schema>S</pdfaSchema:schema><pdfaSchema:namespaceURI>{uri}</pdfaSchema:namespaceURI>"#,
+                r#"<pdfaSchema:prefix>e</pdfaSchema:prefix><pdfaSchema:property><rdf:Seq><rdf:li rdf:parseType="Resource">{property}"#,
+                r#"</rdf:li></rdf:Seq></pdfaSchema:property>"#
+            ),
+            uri = uri,
+            property = property
+        )
+    };
+    let named = "<pdfaProperty:name>p</pdfaProperty:name><pdfaProperty:valueType>Text</pdfaProperty:valueType>";
+    let two = format!(r#"{}</rdf:li><rdf:li rdf:parseType="Resource">{}"#, schema("http://a.example/", named), schema("http://b.example/", ""));
+    let found = extension_findings(&two, OWN);
+    let said: Vec<(&str, Option<&str>, &str)> = found.missing.iter().map(|m| (m.schema.as_str(), m.item.as_deref(), m.entry.as_str())).collect();
+    assert_eq!(
+        said,
+        [
+            ("http://a.example/", Some("p"), "pdfaProperty:category"),
+            ("http://a.example/", Some("p"), "pdfaProperty:description"),
+            ("http://b.example/", Some("#1"), "pdfaProperty:name"),
+            ("http://b.example/", Some("#1"), "pdfaProperty:valueType"),
+            ("http://b.example/", Some("#1"), "pdfaProperty:category"),
+            ("http://b.example/", Some("#1"), "pdfaProperty:description"),
+        ]
+    );
+    assert!(found.missing.iter().all(|m| m.object == ObjRef::new(3, 0)));
+    // A field is named by its value type and its own name.
+    let field = schema_without("pdfaField:description")
+        .replace(">x</pdfaType:type>", ">Dim</pdfaType:type>")
+        .replace(">x</pdfaField:name>", ">w</pdfaField:name>");
+    let found = extension_findings(&field, OWN);
+    assert_eq!(found.missing.iter().map(|m| m.item.as_deref()).collect::<Vec<_>>(), [Some("Dim/w")]);
+    // A name the packet gives is repeated only so far.
+    let long = format!("http://example.com/{}", "a".repeat(400));
+    let found = extension_findings(&schema(&long, ""), OWN);
+    assert!(found.missing[0].schema.ends_with('…') && found.missing[0].schema.chars().count() == 201, "{}", found.missing[0].schema);
+    // So many findings are enough.
+    let many = vec![schema("http://m.example/", ""); 400].join(r#"</rdf:li><rdf:li rdf:parseType="Resource">"#);
+    assert_eq!(extension_findings(&many, OWN).missing.len(), 1000);
+
+    // Through verify: each wording, with the stream it is in.
+    let verify_packet = |description: &str| -> Vec<String> {
+        let xmp = format!(
+            concat!(
+                r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">"#,
+                r#"<rdf:Description rdf:about="" {}</rdf:Description></rdf:RDF></x:xmpmeta>"#
+            ),
+            description
+        );
+        let stream = format!("<< /Type /Metadata /Subtype /XML /Length {} >>\nstream\n{xmp}\nendstream", xmp.len());
+        let doc = build(&["<< /Type /Catalog /Pages 2 0 R /Metadata 3 0 R >>", "<< /Type /Pages /Kids [] /Count 0 >>", &stream], "");
+        verify(&doc, Level::A2b).into_iter().filter(|i| i.clause == "6.6.2.3.3").map(|i| i.message).collect()
+    };
+    let ns = r#"xmlns:pdfaExtension="http://www.aiim.org/pdfa/ns/extension/" xmlns:pdfaSchema="http://www.aiim.org/pdfa/ns/schema#" xmlns:pdfaProperty="http://www.aiim.org/pdfa/ns/property#""#;
+    assert_eq!(
+        verify_packet(&format!(
+            r#"{ns}><pdfaExtension:schemas><rdf:Bag><rdf:li rdf:parseType="Resource">{}</rdf:li></rdf:Bag></pdfaExtension:schemas>"#,
+            schema("http://a.example/", named)
+        )),
+        [
+            "The XMP extension schema http://a.example/ in metadata stream 3 0 R describes p without a pdfaProperty:category entry",
+            "The XMP extension schema http://a.example/ in metadata stream 3 0 R describes p without a pdfaProperty:description entry",
+        ]
+    );
+    assert_eq!(
+        verify_packet(&format!(
+            r#"{ns}><pdfaExtension:schemas><rdf:Seq><rdf:li rdf:parseType="Resource">{}</rdf:li></rdf:Seq></pdfaExtension:schemas>"#,
+            schema(
+                "http://a.example/",
+                &format!("{named}<pdfaProperty:category>external</pdfaProperty:category><pdfaProperty:description>d</pdfaProperty:description>")
+            )
+        )),
+        ["The XMP extension schema container in metadata stream 3 0 R holds rdf:Seq, not one rdf:Bag"]
+    );
+    assert_eq!(
+        verify_packet(&format!(r#"{ns}><pdfaExtension:schemas/>"#)),
+        ["The XMP extension schema container in metadata stream 3 0 R holds no rdf:Bag"]
+    );
+    let other = r#"xmlns:pdfaExtension="http://www.aiim.org/pdfa/ns/extension/" xmlns:s="http://www.aiim.org/pdfa/ns/schema#""#;
+    assert_eq!(
+        verify_packet(&format!(
+            r#"{other}><pdfaExtension:schemas><rdf:Bag><rdf:li rdf:parseType="Resource"><s:schema>S</s:schema><s:namespaceURI>http://a.example/</s:namespaceURI><s:prefix>e</s:prefix></rdf:li></rdf:Bag></pdfaExtension:schemas>"#
+        )),
+        ["Metadata stream 3 0 R writes the namespace http://www.aiim.org/pdfa/ns/schema# with the prefix s, not pdfaSchema"]
+    );
+    let default = r#"xmlns:pdfaExtension="http://www.aiim.org/pdfa/ns/extension/""#;
+    assert_eq!(
+        verify_packet(&format!(
+            r#"{default}><pdfaExtension:schemas><rdf:Bag><rdf:li rdf:parseType="Resource"><schema xmlns="http://www.aiim.org/pdfa/ns/schema#">S</schema><pdfaSchema:namespaceURI xmlns:pdfaSchema="http://www.aiim.org/pdfa/ns/schema#">http://a.example/</pdfaSchema:namespaceURI><pdfaSchema:prefix xmlns:pdfaSchema="http://www.aiim.org/pdfa/ns/schema#">e</pdfaSchema:prefix></rdf:li></rdf:Bag></pdfaExtension:schemas>"#
+        )),
+        ["Metadata stream 3 0 R writes the namespace http://www.aiim.org/pdfa/ns/schema# without a prefix, not with pdfaSchema"]
+    );
+}
+
+/// PDF/A-2 6.6.2.3.1 for the TIFF, EXIF and Additional EXIF schemas: a property is known by its
+/// namespace URI, whatever prefix the packet binds to it, and is named by the namespace's
+/// preferred prefix.
+#[test]
+fn xmp_exif_properties_are_known_by_namespace_uri() {
+    let tiff = r#"xmlns:foo="http://ns.adobe.com/tiff/1.0/""#;
+    assert_eq!(mistyped(&format!(r#"><foo:ImageWidth {tiff}>256 mm</foo:ImageWidth>"#)), ["tiff:ImageWidth"]);
+    assert!(mistyped(&format!(r#"><foo:ImageWidth {tiff}>256</foo:ImageWidth>"#)).is_empty());
+    assert_eq!(mistyped(r#"xmlns:bar="http://ns.adobe.com/exif/1.0/" bar:GPSLatitude="51.5N">"#), ["exif:GPSLatitude"]);
+    assert_eq!(
+        mistyped(r#"><baz:Lens xmlns:baz="http://ns.adobe.com/exif/1.0/aux/"><rdf:Seq><rdf:li>50mm</rdf:li></rdf:Seq></baz:Lens>"#),
+        ["aux:Lens"]
+    );
+    // The same local names in another namespace, even under the preferred prefixes, are not these
+    // properties.
+    let other = r#"xmlns:tiff="http://example.com/not-tiff/""#;
+    assert!(mistyped(&format!(r#"><tiff:ImageWidth {other}>256 mm</tiff:ImageWidth>"#)).is_empty());
+    assert!(mistyped(r#"xmlns:exif="http://example.com/not-exif/" exif:GPSLatitude="51.5N">"#).is_empty());
+    assert!(mistyped(r#"><aux:Lens xmlns:aux="http://example.com/not-aux/"><rdf:Seq><rdf:li>50mm</rdf:li></rdf:Seq></aux:Lens>"#).is_empty());
+}
+
+/// Holes are filled in one pass: the first `{}` from `value`, named holes from `values`, and what
+/// has nothing for it, a value's own braces and a brace left open stay as they are.
+#[test]
+fn wordings_fill_their_holes_once() {
+    let values = [("{a}", "{b}".to_owned()), ("{b}", "B".to_owned())];
+    assert_eq!(fill("x {a} {b} {c} {} {}", Some("{a}"), &values), "x {b} B {c} {a} {}");
+    assert_eq!(fill("{}", None, &[]), "{}");
+    assert_eq!(fill("open { and é {a", Some("v"), &values), "open { and é {a");
+    assert_eq!(fill("é{}ü", Some("v"), &[]), "évü");
+}
+
+/// PDF/A-2 6.6.2.3.1: a mistyped property is reported with the type the XMP Specification gives it,
+/// as the specification writes it.
+#[test]
+fn xmp_mistyped_properties_name_their_type() {
+    let types = |body: &str| -> Vec<(String, String)> {
+        let xmp = format!(
+            r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF {XMP_NS}><rdf:Description rdf:about="" {body}</rdf:Description></rdf:RDF></x:xmpmeta>"#
+        );
+        xmp_types::mistyped(&xmp::parse(&xmp).expect("parses")).into_iter().map(|((name, _), ty)| (name, ty)).collect()
+    };
+    let t = |name: &str, ty: &str| (name.to_owned(), ty.to_owned());
+    assert_eq!(
+        types(r#"crs:Contrast="high" crs:Exposure="bright" xmp:CreateDate="never">"#),
+        [t("crs:Contrast", "Integer"), t("crs:Exposure", "Real"), t("xmp:CreateDate", "Date")]
+    );
+    assert_eq!(
+        types("><xmpTPg:PlateNames>Cyan</xmpTPg:PlateNames><dc:title>T</dc:title>"),
+        [t("dc:title", "Lang Alt"), t("xmpTPg:PlateNames", "seq Text")]
+    );
+    assert_eq!(
+        types("><xmpTPg:MaxPageSize>A4</xmpTPg:MaxPageSize><xmpMM:History>h</xmpMM:History>"),
+        [t("xmpMM:History", "seq ResourceEvent"), t("xmpTPg:MaxPageSize", "Dimensions")]
+    );
+    assert_eq!(types("><xmpMM:Pantry>p</xmpMM:Pantry>"), [t("xmpMM:Pantry", "bag struct")]);
+    // The TIFF and EXIF types, as the 2005 edition writes them.
+    assert_eq!(types(r#"tiff:XResolution="0.5" exif:GPSLatitude="N">"#), [t("exif:GPSLatitude", "GPSCoordinate"), t("tiff:XResolution", "Rational")]);
+    assert_eq!(
+        types("><tiff:BitsPerSample>8</tiff:BitsPerSample><exif:Flash>fired</exif:Flash><exif:OECF>o</exif:OECF>"),
+        [t("exif:Flash", "Flash"), t("exif:OECF", "OECF/SFR"), t("tiff:BitsPerSample", "seq Integer")]
+    );
+}
+
+/// PDF/A-2 6.6.2.3.1: a property is known by its namespace URI, whatever prefix the packet binds
+/// to it, and is named by the namespace's preferred prefix and as the packet writes it. A property
+/// a predefined namespace doesn't define, and a namespace that isn't predefined, are left to the
+/// clauses about them.
+#[test]
+fn xmp_properties_are_known_by_namespace_uri_and_named_as_written() {
+    let crs = "http://ns.adobe.com/camera-raw-settings/1.0/";
+    let found = |body: &str| -> Vec<(String, String)> {
+        let xmp = format!(
+            r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF {XMP_NS}><rdf:Description rdf:about="" {body}</rdf:Description></rdf:RDF></x:xmpmeta>"#
+        );
+        xmp_types::mistyped(&xmp::parse(&xmp).expect("parses")).into_keys().collect()
+    };
+    let n = |name: &str, written: &str| (name.to_owned(), written.to_owned());
+    // Another prefix for the namespace, as an attribute and as an element, and no prefix at all.
+    assert_eq!(found(&format!(r#"xmlns:c="{crs}" c:Contrast="high">"#)), [n("crs:Contrast", "c:Contrast")]);
+    assert_eq!(found(&format!(r#"><c:Exposure xmlns:c="{crs}">bright</c:Exposure>"#)), [n("crs:Exposure", "c:Exposure")]);
+    assert_eq!(found(&format!(r#"><Exposure xmlns="{crs}">bright</Exposure>"#)), [n("crs:Exposure", "Exposure")]);
+    assert!(found(&format!(r#"xmlns:c="{crs}" c:Contrast="5">"#)).is_empty());
+    // The preferred prefix is written as it is.
+    assert_eq!(found(r#"crs:Contrast="high">"#), [n("crs:Contrast", "crs:Contrast")]);
+    // A long prefix is repeated only so far.
+    let long = "p".repeat(100);
+    let said = found(&format!(r#"xmlns:{long}="{crs}" {long}:Contrast="high">"#));
+    assert_eq!(said.len(), 1);
+    assert_eq!(said[0].1, format!("{}…:Contrast", "p".repeat(64)));
+    // The preferred prefix bound to another namespace is not that namespace.
+    assert!(found(r#"><crs:Contrast xmlns:crs="http://example.com/not-crs/">high</crs:Contrast>"#).is_empty());
+    assert!(found(r#"xmlns:dc="http://example.com/not-dc/" dc:title="T">"#).is_empty());
+    // A property a predefined namespace doesn't define, with any value.
+    assert!(found(r#"crs:NotAProperty="high" dc:notAProperty="T">"#).is_empty());
+    assert!(found("><xmp:NotAProperty><rdf:Seq><rdf:li>x</rdf:li></rdf:Seq></xmp:NotAProperty>").is_empty());
+    // A namespace that isn't predefined, with a predefined property's local name.
+    assert!(found(r#"xmlns:ex="http://example.com/ns/" ex:Contrast="high">"#).is_empty());
+    assert!(found(r#"><ex:title xmlns:ex="http://example.com/ns/">T</ex:title>"#).is_empty());
+
+    // Through verify, the written name is said when it differs.
+    let xmp = format!(
+        r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF {XMP_NS}><rdf:Description rdf:about="" xmlns:c="{crs}" c:Contrast="high" crs:Exposure="bright"/></rdf:RDF></x:xmpmeta>"#
+    );
+    let stream = format!("<< /Type /Metadata /Subtype /XML /Length {} >>\nstream\n{xmp}\nendstream", xmp.len());
+    let doc = build(&["<< /Type /Catalog /Pages 2 0 R /Metadata 3 0 R >>", "<< /Type /Pages /Kids [] /Count 0 >>", &stream], "");
+    let messages: Vec<String> = verify(&doc, Level::A2b).into_iter().filter(|i| i.clause == "6.6.2.3.1").map(|i| i.message).collect();
+    assert_eq!(
+        messages,
+        [
+            "The XMP property crs:Contrast in metadata stream 3 0 R, written c:Contrast, should have the value type Integer",
+            "The XMP property crs:Exposure in metadata stream 3 0 R should have the value type Real",
+        ]
+    );
+}
+
+/// PDF/A-2 6.6.2.3.1, the RDF/XML value forms XMP allows (ISO 16684-1 7.9.2.5): one `rdf:value`
+/// in a qualified value, no parse type but `Resource`, and an `rdf:resource` element left empty.
+#[test]
+fn xmp_value_forms_are_those_xmp_allows() {
+    // A qualified value has exactly one rdf:value.
+    assert_eq!(
+        mistyped(r#"><crs:Contrast rdf:parseType="Resource"><rdf:value>5</rdf:value><rdf:value>five</rdf:value></crs:Contrast>"#),
+        ["crs:Contrast"]
+    );
+    assert_eq!(
+        mistyped(r#"><crs:Contrast><rdf:Description rdf:value="five"><rdf:value>5</rdf:value></rdf:Description></crs:Contrast>"#),
+        ["crs:Contrast"]
+    );
+    assert!(mistyped(r#"><crs:Contrast><rdf:Description><rdf:value>5</rdf:value></rdf:Description></crs:Contrast>"#).is_empty());
+    // Only parseType="Resource" has a place in XMP; an rdf:resource element holds no element.
+    assert_eq!(mistyped(r#"><crs:Contrast rdf:parseType="Literal">5</crs:Contrast>"#), ["crs:Contrast"]);
+    assert_eq!(mistyped(r#"><xmpMM:DerivedFrom rdf:parseType="Literal" stRef:documentID="d"/>"#), ["xmpMM:DerivedFrom"]);
+    assert_eq!(
+        mistyped(r#"><xmpMM:DerivedFrom rdf:resource="urn:example"><rdf:Description stRef:documentID="d"/></xmpMM:DerivedFrom>"#),
+        ["xmpMM:DerivedFrom"]
+    );
+}
+
+/// PDF/A asks for the fonts "used for rendering" to be embedded (ISO 19005-2, 6.2.11.4.1). A font
+/// that only the form's default resources hold (`/AcroForm /DR`, ISO 32000-1 12.7.2) draws
+/// nothing, as in veraPDF's 6-4-1-t02-pass-a; one that a widget's appearance stream draws with is
+/// named in that stream's `/Resources`, and still has to be embedded.
+#[test]
+fn only_fonts_something_draws_with_must_be_embedded() {
+    let fonts =
+        |doc: &Document| -> Vec<String> { verify(doc, Level::A2b).into_iter().filter(|i| i.clause == "6.2.11.4").map(|i| i.message).collect() };
+    let form = |appearance_fonts: &str| {
+        build(
+            &[
+                "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [6 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 4 0 R /ZaDb 5 0 R >> >> >> >>",
+                "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+                "<< /Type /Page /Parent 2 0 R /Resources << >> /Annots [6 0 R] >>",
+                "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+                "<< /Type /Font /Subtype /Type1 /BaseFont /ZapfDingbats >>",
+                "<< /Type /Annot /Subtype /Widget /FT /Tx /T (name) /F 4 /Rect [10 10 90 30] /P 3 0 R /AP << /N 7 0 R >> >>",
+                &format!("<< /Type /XObject /Subtype /Form /BBox [0 0 80 20] /Resources << {appearance_fonts} >> /Length 0 >>\nstream\n\nendstream"),
+                // An object that is nothing but a reference to the Helvetica font (ISO 32000-1 7.3.10).
+                "4 0 R",
+            ],
+            "",
+        )
+    };
+    assert!(fonts(&form("")).is_empty(), "{:?}", fonts(&form("")));
+    assert_eq!(fonts(&form("/Font << /Helv 4 0 R >>")), ["The font Helvetica isn't embedded"]);
+    // Named through a reference to it, it is still the font something draws with.
+    assert_eq!(fonts(&form("/Font << /Helv 8 0 R >>")), ["The font Helvetica isn't embedded"]);
+    // A page's own font is checked as before.
+    assert_eq!(fonts(&messy()), ["The font Helvetica isn't embedded"]);
+}
+
+/// PDF/A-2 6.1.2: the file starts with `%PDF-1.0` to `%PDF-1.7` and an end-of-line marker, then a
+/// comment of `%` and four bytes above 127; Save as PDF/A rewrites a header that doesn't.
+#[test]
+fn file_header_is_checked_and_rewritten() {
+    let objs = ["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [] /Count 0 >>"];
+    let header = |h: &[u8]| -> Vec<String> {
+        let doc = build_with_header(h, &objs, "");
+        verify(&doc, Level::A2b).into_iter().filter(|i| i.clause == "6.1.2").map(|i| i.message).collect()
+    };
+    let version = || vec!["The file doesn't start with a %PDF-1.0 to %PDF-1.7 header line".to_string()];
+    let comment = || vec!["The file header isn't followed by a comment of four bytes above 127".to_string()];
+    for fine in [&b"%PDF-1.7\n%\xE2\xE3\xCF\xD3\n"[..], b"%PDF-1.4\r\n%\x80\x81\x82\x83af\r\n", b"%PDF-1.0\r%\xFF\xFF\xFF\xFF\r"] {
+        assert!(header(fine).is_empty(), "{}", String::from_utf8_lossy(fine));
+    }
+    let wrong_version = [
+        &b"%PDF-2.0\n%\xE2\xE3\xCF\xD3\n"[..],
+        b"%PDF-1.9\n%\xE2\xE3\xCF\xD3\n",
+        b"%PDF-1.70\n%\xE2\xE3\xCF\xD3\n",
+        b"%PDF-1.7   \n%\xE2\xE3\xCF\xD3\n",
+        b"SomeData\n%PDF-1.7\n%\xE2\xE3\xCF\xD3\n",
+    ];
+    for wrong in wrong_version {
+        assert_eq!(header(wrong), version(), "{}", String::from_utf8_lossy(wrong));
+    }
+    let wrong_comment = [
+        &b"%PDF-1.7\n%\xE2\xE3\xCF\n"[..],
+        b"%PDF-1.7\ninvalidData\n",
+        b"%PDF-1.7\n%a\xE3\xCF\xD3\n",
+        b"%PDF-1.7\n\n%\xE2\xE3\xCF\xD3\n",
+        b"%PDF-1.7\n",
+    ];
+    for wrong in wrong_comment {
+        assert_eq!(header(wrong), comment(), "{}", String::from_utf8_lossy(wrong));
+    }
+    // Save as PDF/A rewrites the header: the version drops to 1.7 and the next save is full.
+    let mut doc = build_with_header(b"%PDF-2.0\n%ab\n", &objs, "");
+    let report = convert(&mut doc, Level::A2b).unwrap();
+    assert!(report.fixed.iter().any(|f| f == "Rewrote the file header"));
+    assert_eq!(doc.version(), "1.7");
+    assert!(verify(&doc, Level::A2b).iter().all(|i| i.clause != "6.1.2"));
+    let saved = pdfcraft_cos::write_full(&doc, &Default::default()).unwrap();
+    assert!(saved.starts_with(b"%PDF-1.7\n%\xE2\xE3\xCF\xD3\n"));
+    // A good version with a short comment is rewritten too, keeping its version.
+    let mut doc = build_with_header(b"%PDF-1.4\n%ab\n", &objs, "");
+    assert!(!doc.full_save_required());
+    let report = convert(&mut doc, Level::A2b).unwrap();
+    assert!(report.fixed.iter().any(|f| f == "Rewrote the file header"));
+    assert!(doc.full_save_required());
+    assert_eq!(doc.version(), "1.4");
+    // A good header is left as it is.
+    let mut doc = build(&objs, "");
+    let report = convert(&mut doc, Level::A2b).unwrap();
+    assert!(!report.fixed.iter().any(|f| f == "Rewrote the file header"));
+}
+
+/// PDF/A-2 6.2.5: a graphics state has no transfer function, halftones of type 1 or 5 without a
+/// name, and a standard rendering intent, wherever it is kept.
+#[test]
+fn extended_graphics_states_are_checked() {
+    let gs = |states: &str| -> Vec<String> {
+        let page = format!("<< /Type /Page /Parent 2 0 R /Resources << /ExtGState << {states} >> >> >>");
+        let doc = build(
+            &[
+                "<< /Type /Catalog /Pages 2 0 R >>",
+                "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+                &page,
+                "<< /FunctionType 2 /Domain [0 1] /C0 [0] /C1 [1] /N 1 >>",
+                "<< /HalftoneType 1 /Frequency 60 /Angle 45 /SpotFunction /Round >>",
+                "<< /TR 4 0 R >>",
+                "<< /Type /Halftone /HalftoneType 6 /Width 2 /Height 2 /Length 4 >>\nstream\nabcd\nendstream",
+                "<< /Resources << /ExtGState << /X << /TR 4 0 R >> >> >> >>",
+            ],
+            "",
+        );
+        let issues = verify(&doc, Level::A2b).into_iter().filter(|i| i.clause == "6.2.5");
+        issues.inspect(|i| assert!(!i.fixable, "{}", i.message)).map(|i| i.message).collect()
+    };
+    let tr = "A graphics state has a transfer function (TR)";
+    let tr2 = "A graphics state has a transfer function (TR2) other than Default";
+    let name = "A halftone has a HalftoneName";
+    // What 6.2.5 allows.
+    assert!(gs("/A << /TR2 /Default /HT 5 0 R /RI /Perceptual >> /B << /HT /Default /RI /AbsoluteColorimetric >>").is_empty());
+    assert!(gs("/A << /HT << /HalftoneType 5 /Default 5 0 R /Cyan 5 0 R >> /RI /Saturation >> /B << /TR null >>").is_empty());
+    // Transfer functions.
+    assert_eq!(gs("/A << /TR 4 0 R >>"), [tr]);
+    assert_eq!(gs("/A << /TR /Identity >>"), [tr]);
+    assert_eq!(gs("/A 6 0 R"), [tr]);
+    assert_eq!(gs("/A << /TR2 4 0 R >>"), [tr2]);
+    assert_eq!(gs("/A << /TR2 /Identity >>"), [tr2]);
+    assert_eq!(gs("/A << /HTP [0 1] >>"), ["A graphics state has a halftone phase (HTP)"]);
+    // Halftones: the type, also of a type 5 halftone's colorants and of a stream, and the name.
+    assert_eq!(gs("/A << /HT << /HalftoneType 6 >> >>"), ["A halftone has type 6: only types 1 and 5 are allowed"]);
+    assert_eq!(gs("/A << /HT 7 0 R >>"), ["A halftone has type 6: only types 1 and 5 are allowed"]);
+    assert_eq!(
+        gs("/A << /HT << /HalftoneType 5 /Default 5 0 R /Magenta << /HalftoneType 10 >> >> >>"),
+        ["A halftone has type 10: only types 1 and 5 are allowed"]
+    );
+    assert_eq!(gs("/A << /HT << /HalftoneType 1 /HalftoneName (Screen) >> >>"), [name]);
+    assert_eq!(gs("/A << /HT << /HalftoneType 5 /Default << /HalftoneType 1 /HalftoneName (S) >> >> >>"), [name]);
+    // Rendering intents.
+    assert_eq!(gs("/A << /RI /Custom >>"), ["A graphics state has the rendering intent Custom, which isn't a standard one"]);
+    assert_eq!(gs("/A << /RI (Perceptual) >>"), ["A graphics state has a rendering intent that isn't a name"]);
+    // A halftone's type is required; a null name is no name.
+    let untyped = ["A halftone's HalftoneType is missing or isn't an integer"];
+    assert_eq!(gs("/A << /HT << /Frequency 60 >> >>"), untyped);
+    assert_eq!(gs("/A << /HT << /HalftoneType 1.0 >> >>"), untyped);
+    assert!(gs("/A << /HT << /HalftoneType 1 /HalftoneName null >> >>").is_empty());
+    // Transfer functions in halftones: only, and always, for a non-primary colorant.
+    let in_halftone = "A halftone has a transfer function, which only a non-primary colorant's halftone may have";
+    assert_eq!(gs("/A << /HT << /HalftoneType 1 /TransferFunction 4 0 R >> >>"), [in_halftone]);
+    assert_eq!(gs("/A << /HT << /HalftoneType 5 /Default 5 0 R /Cyan << /HalftoneType 1 /TransferFunction /Identity >> >> >>"), [in_halftone]);
+    // The primary components are those of DeviceGray, DeviceRGB and DeviceCMYK (ISO 32000-1 10.5.5.6).
+    assert_eq!(gs("/A << /HT << /HalftoneType 5 /Default 5 0 R /Gray << /HalftoneType 1 /TransferFunction /Identity >> >> >>"), [in_halftone]);
+    assert_eq!(
+        gs("/A << /HT << /HalftoneType 5 /Default 5 0 R /Spot 5 0 R /Red 5 0 R /Gray 5 0 R >> >>"),
+        ["The halftone for the colorant Spot has no transfer function"]
+    );
+    assert!(gs("/A << /HT << /HalftoneType 5 /Default 5 0 R /Black 5 0 R /Spot << /HalftoneType 1 /TransferFunction 4 0 R >> >> >>").is_empty());
+    // Private application data isn't graphics resources.
+    assert!(
+        gs("/A << /RI /Perceptual >> >> /PieceInfo << /App << /Private << /Resources << /ExtGState << /X << /TR 4 0 R >> >> >> >> >>").is_empty()
+    );
+    // Nor is an object (8) only private data refers to; one the page refers to is read.
+    assert!(gs("/A << /RI /Perceptual >> >> /PieceInfo << /App << /Private 8 0 R >> >> /Z <<").is_empty());
+    assert_eq!(gs("/A << /RI /Perceptual >> >> /Other 8 0 R /Z <<"), [tr]);
+    // A shading pattern holds one graphics state, not a dictionary of them.
+    let pattern = |gs: &str| format!("/A << /RI /Perceptual >> >> /Pattern << /P << /PatternType 2 /Shading << /ShadingType 2 >> /ExtGState {gs} >>");
+    assert_eq!(gs(&pattern("<< /TR 4 0 R >>")), [tr]);
+    assert!(gs(&pattern("<< /HT << /HalftoneType 1 >> >>")).is_empty());
+}
+
+/// From the review of the 6.2.5 check: references that differ only in generation reach the same
+/// object, which is read once.
+#[test]
+fn graphics_state_scan_reads_each_object_once_whatever_the_generation() {
+    let gens: String = (0..10).map(|g| format!("4 {g} R ")).collect();
+    let page = format!("<< /Type /Page /Parent 2 0 R /Same [{gens}] >>");
+    let doc =
+        build(&["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>", &page, "[1 2 3]"], "");
+    // The catalog, the page tree, the page and object 4.
+    assert_eq!(gstate::reached(&doc), 4);
+}
+
+/// PDF/A-2 6.1.3: the trailer `startxref` points to has a file identifier, two non-empty
+/// strings; Save as PDF/A gives a file one.
+#[test]
+fn trailer_file_identifier_is_checked_and_added() {
+    let objs = ["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [] /Count 0 >>"];
+    let id = |extra: &str| -> Vec<String> {
+        let doc = build(&objs, extra);
+        verify(&doc, Level::A2b).into_iter().filter(|i| i.clause == "6.1.3").map(|i| i.message).collect()
+    };
+    let missing = ["The trailer has no file identifier (ID)"];
+    let malformed = ["The file identifier (ID) in the trailer isn't two non-empty strings"];
+    assert!(id("/ID [<0011> (ab)]").is_empty());
+    assert_eq!(id(""), missing);
+    assert_eq!(id("/ID null"), missing);
+    for wrong in ["/ID [<><>]", "/ID [<0011>]", "/ID [<0011> <0011> <0011>]", "/ID [1 2]", "/ID (ab)"] {
+        assert_eq!(id(wrong), malformed, "{wrong}");
+    }
+    // An update without an /ID has none, whatever the trailer it replaces had.
+    let base = build(&objs, "/ID [<0011> <0011>]");
+    let mut bytes = base.bytes().to_vec();
+    let prev = bytes.windows(9).rposition(|w| w == b"startxref").unwrap();
+    let prev: usize = String::from_utf8_lossy(&bytes[prev + 10..]).lines().next().unwrap().trim().parse().unwrap();
+    let at = bytes.len();
+    bytes.extend_from_slice(
+        format!("xref\n0 1\n0000000000 65535 f \ntrailer\n<< /Size 3 /Root 1 0 R /Prev {prev} >>\nstartxref\n{at}\n%%EOF\n").as_bytes(),
+    );
+    let updated = Document::open(std::sync::Arc::new(bytes)).unwrap();
+    assert!(verify(&updated, Level::A2b).iter().any(|i| i.message == missing[0]));
+    // Save as PDF/A adds one, which a save keeps.
+    for extra in ["", "/ID [<><>]"] {
+        let mut doc = build(&objs, extra);
+        let report = convert(&mut doc, Level::A2b).unwrap();
+        assert!(report.fixed.iter().any(|f| f == "Added a file identifier (ID)"), "{extra}");
+        assert!(verify(&doc, Level::A2b).iter().all(|i| i.clause != "6.1.3"), "{extra}");
+        let saved = pdfcraft_cos::write_incremental(&doc, &Default::default()).unwrap();
+        let saved = Document::open(std::sync::Arc::new(saved)).unwrap();
+        assert!(verify(&saved, Level::A2b).iter().all(|i| i.clause != "6.1.3"), "{extra}");
+    }
+    // A good one is kept as it is.
+    let mut doc = build(&objs, "/ID [<0011> <0022>]");
+    let before = doc.trailer().get(b"ID").cloned();
+    assert!(!convert(&mut doc, Level::A2b).unwrap().fixed.iter().any(|f| f.contains("identifier")));
+    assert_eq!(doc.trailer().get(b"ID").cloned(), before);
+    // A malformed one keeps its non-empty first string, the permanent identifier (14.4).
+    let first = |doc: &Document| doc.trailer().get(b"ID").and_then(|id| id.as_array()?.first()?.as_string().map(|s| s.bytes.clone()));
+    let mut doc = build(&objs, "/ID [<0011> <>]");
+    let report = convert(&mut doc, Level::A2b).unwrap();
+    assert!(report.fixed.iter().any(|f| f == "Completed the file identifier (ID)"));
+    assert_eq!(first(&doc), Some(vec![0x00, 0x11]));
+    assert!(verify(&doc, Level::A2b).iter().all(|i| i.clause != "6.1.3"));
+    let mut doc = build(&objs, "/ID [<> <0011>]");
+    convert(&mut doc, Level::A2b).unwrap();
+    assert_eq!(first(&doc).map(|b| b.len()), Some(16));
+    // A first string longer than a conforming file may hold (Annex C) is made afresh too.
+    let long = format!("/ID [<{}> <>]", "ab".repeat(32768));
+    let mut doc = build(&objs, &long);
+    let report = convert(&mut doc, Level::A2b).unwrap();
+    assert!(report.fixed.iter().any(|f| f == "Added a file identifier (ID)"));
+    assert_eq!(first(&doc).map(|b| b.len()), Some(16));
+    let longest = format!("/ID [<{}> <>]", "ab".repeat(32767));
+    let mut doc = build(&objs, &longest);
+    convert(&mut doc, Level::A2b).unwrap();
+    assert_eq!(first(&doc).map(|b| b.len()), Some(32767));
+}
+
+/// PDF/A-2 6.5.1: the PDF 1.2 SetState and NOP actions aren't allowed, and a Named action may
+/// only name NextPage, PrevPage, FirstPage or LastPage; Save as PDF/A removes the others.
+#[test]
+fn set_state_no_op_and_named_actions_are_checked() {
+    let doc_with = |action: &str| {
+        let outline = format!("<< /Title (x) /Parent 4 0 R /A {action} >>");
+        build(
+            &[
+                "<< /Type /Catalog /Pages 2 0 R /Outlines 4 0 R >>",
+                "<< /Type /Pages /Kids [] /Count 0 >>",
+                &outline,
+                "<< /Type /Outlines /First 3 0 R /Last 3 0 R /Count 1 >>",
+                "/NextPage",
+                "/Named",
+                "/NOP",
+            ],
+            "",
+        )
+    };
+    let actions = |action: &str| -> Vec<String> {
+        verify(&doc_with(action), Level::A2b).into_iter().filter(|i| i.clause == "6.5.1").map(|i| i.message).collect()
+    };
+    assert_eq!(actions("<< /Type /Action /S /SetState /T [] >>"), ["A SetState action isn't allowed"]);
+    assert_eq!(actions("<< /S /NOP >>"), ["A NOP action isn't allowed"]);
+    assert_eq!(actions("<< /S /Named /N /Print >>"), ["A Named Print action isn't allowed"]);
+    assert_eq!(actions("<< /S /Named >>"), ["A Named action isn't allowed"]);
+    // Behind an allowed action, in its /Next.
+    assert_eq!(actions("<< /S /GoTo /D [0 /Fit] /Next << /S /NOP >> >>"), ["A NOP action isn't allowed"]);
+    for allowed in ["NextPage", "PrevPage", "FirstPage", "LastPage"] {
+        assert!(actions(&format!("<< /S /Named /N /{allowed} >>")).is_empty(), "{allowed}");
+    }
+    // The name given by reference (object 5 is /NextPage).
+    assert!(actions("<< /S /Named /N 5 0 R >>").is_empty());
+    // The type given by reference (object 6 is /Named, 7 is /NOP).
+    assert_eq!(actions("<< /S 6 0 R /N /Print >>"), ["A Named Print action isn't allowed"]);
+    assert_eq!(actions("<< /S 7 0 R >>"), ["A NOP action isn't allowed"]);
+    assert!(actions("<< /S 6 0 R /N 5 0 R >>").is_empty());
+    // Save as PDF/A removes them.
+    for action in ["<< /S /SetState /T [] >>", "<< /S /NOP >>", "<< /S /Named /N /Print >>"] {
+        let mut doc = doc_with(action);
+        convert(&mut doc, Level::A2b).unwrap();
+        assert!(verify(&doc, Level::A2b).iter().all(|i| i.clause != "6.5.1"), "{action}");
+    }
+    // A permitted Named action survives it, also one naming its page move by reference.
+    for action in ["<< /S /Named /N /NextPage >>", "<< /S /Named /N 5 0 R >>"] {
+        let mut doc = doc_with(action);
+        convert(&mut doc, Level::A2b).unwrap();
+        let outline = doc.get(ObjRef { num: 3, generation: 0 });
+        let kept = outline
+            .as_dict()
+            .and_then(|d| d.get(b"A"))
+            .and_then(Object::as_dict)
+            .map(|a| (a.name(b"S").map(<[u8]>::to_vec), a.get(b"N").map(|n| doc.resolve(n))));
+        let (s, n) = kept.unwrap_or_else(|| panic!("{action}: the action is gone"));
+        assert_eq!(s.as_deref(), Some(&b"Named"[..]), "{action}");
+        assert_eq!(n.as_deref().and_then(Object::as_name), Some(&b"NextPage"[..]), "{action}");
+    }
+}
+
+/// The SetState, NOP and Named checks of 6.5.1 apply wherever an action can be: the catalog's
+/// `/OpenAction`, an action standing alone as an object of its own (here one a page's `/AA`
+/// refers to), and a link's `/A`, not only an outline item's. A Named action's `/N` given by
+/// reference to a forbidden name is reported by that name. Save as PDF/A removes each one and
+/// keeps a Named page move in the same places.
+#[test]
+fn set_state_no_op_and_named_actions_are_checked_wherever_actions_are() {
+    // Object 5 is the standalone action, 6 is /Print and 7 is /NextPage.
+    let doc_with = |open_action: &str, page_aa: &str, link_action: &str, standalone: &str| {
+        let catalog = format!("<< /Type /Catalog /Pages 2 0 R {open_action} >>");
+        let page = format!("<< /Type /Page /Parent 2 0 R /Annots [4 0 R] {page_aa} >>");
+        let link = format!("<< /Type /Annot /Subtype /Link /Rect [0 0 0 0] /P 3 0 R /F 4 {link_action} >>");
+        build(&[&catalog, "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>", &page, &link, standalone, "/Print", "/NextPage"], "")
+    };
+    let goto = "<< /S /GoTo /D [3 0 R /Fit] >>";
+    // Where the action is, as (open action, page /AA, link /A, object 5).
+    let placed = |action: &str| {
+        [
+            ("an open action", doc_with(&format!("/OpenAction {action}"), "", "", goto)),
+            ("an open action by reference", doc_with("/OpenAction 5 0 R", "", "", action)),
+            ("a page's /AA", doc_with("", "/AA << /O 5 0 R >>", "", action)),
+            ("a link's /A", doc_with("", "", &format!("/A {action}"), goto)),
+        ]
+    };
+    let forbidden = [
+        ("<< /S /SetState /T [] >>", "A SetState action isn't allowed"),
+        ("<< /S /NOP >>", "A NOP action isn't allowed"),
+        ("<< /S /Named /N /Print >>", "A Named Print action isn't allowed"),
+        ("<< /S /Named /N 6 0 R >>", "A Named Print action isn't allowed"),
+    ];
+    let plain = pdfcraft_cos::SaveOptions { object_streams: false, ..Default::default() };
+    for (action, message) in forbidden {
+        for (place, mut doc) in placed(action) {
+            let issues = verify(&doc, Level::A2b);
+            let found: Vec<&str> = issues.iter().filter(|i| i.clause == "6.5.1").map(|i| i.message.as_str()).collect();
+            assert_eq!(found, [message], "{action} in {place}: {issues:#?}");
+            let r = convert(&mut doc, Level::A2b).unwrap();
+            let left: Vec<_> = r.remaining.iter().filter(|i| i.clause.starts_with("6.5")).collect();
+            assert!(left.is_empty(), "{action} in {place}: {left:#?}");
+            let bytes = pdfcraft_cos::write_full(&doc, &plain).unwrap();
+            for kind in [&b"/SetState"[..], b"/NOP", b"/Named"] {
+                assert!(!bytes.windows(kind.len()).any(|w| w == kind), "{action} in {place}: {}", String::from_utf8_lossy(&bytes));
+            }
+        }
+    }
+    // A Named page move, with its name given by reference, is allowed and kept outside /AA.
+    for (place, mut doc) in placed("<< /S /Named /N 7 0 R >>") {
+        let issues = verify(&doc, Level::A2b);
+        assert!(!issues.iter().any(|i| i.clause == "6.5.1"), "{place}: {issues:#?}");
+        convert(&mut doc, Level::A2b).unwrap();
+        let bytes = pdfcraft_cos::write_full(&doc, &plain).unwrap();
+        let kept = bytes.windows(6).any(|w| w == b"/Named");
+        assert_eq!(kept, place != "a page's /AA", "{place}: {}", String::from_utf8_lossy(&bytes));
+    }
+}
+
+/// 6.2.10: without a PDF/A output intent, a page whose resources can paint transparently names its
+/// blending colour space in its `/Group`. Transparency is found through graphics states, images,
+/// transparency groups, nested form XObjects, Type 3 fonts, patterns and annotation appearances.
+#[test]
+fn a_page_with_transparency_and_no_output_intent_names_its_blending_space() {
+    // With `intent`, the catalog has a PDF/A output intent, its profile the last object.
+    let blending = |intent: bool, page_extra: &str, resources: &str, extra: &[&str]| -> Vec<String> {
+        let profile = extra.len() + 4;
+        let intents =
+            format!("/OutputIntents [<< /Type /OutputIntent /S /GTS_PDFA1 /OutputConditionIdentifier (sRGB) /DestOutputProfile {profile} 0 R >>]");
+        let catalog = format!("<< /Type /Catalog /Pages 2 0 R {} >>", if intent { intents.as_str() } else { "" });
+        let page = format!("<< /Type /Page /Parent 2 0 R /Resources << {resources} >> {page_extra} >>");
+        let mut objs: Vec<&str> = vec![&catalog, "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>", &page];
+        objs.extend_from_slice(extra);
+        if intent {
+            objs.push(
+                "<< /N 3 /Length 0 >>
+stream
+
+endstream",
+            );
+        }
+        verify(&build(&objs, ""), Level::A2b).into_iter().filter(|i| i.clause == "6.2.10").map(|i| i.message).collect()
+    };
+    let said = ["Page 1 has transparency but no device-independent blending colour space or PDF/A output intent"];
+    let form = |dict: &str| format!("<< /Type /XObject /Subtype /Form /BBox [0 0 10 10] {dict} /Length 0 >>\nstream\n\nendstream");
+    let gs = |entries: &str| format!("/ExtGState << /G << {entries} >> >>");
+    for (what, resources, extra) in [
+        ("fill alpha", gs("/ca 0.5"), vec![]),
+        ("stroke alpha", gs("/CA 0.25"), vec![]),
+        ("blend mode", gs("/BM /Darken"), vec![]),
+        ("blend mode array", gs("/BM [/Multiply /Normal]"), vec![]),
+        ("soft mask", gs("/SMask << /S /Luminosity /G 4 0 R >>"), vec![form("")]),
+        (
+            "image soft mask",
+            "/XObject << /Im 4 0 R >>".to_owned(),
+            vec![
+                "<< /Subtype /Image /Width 1 /Height 1 /SMask 5 0 R /Length 0 >>\nstream\n\nendstream".to_owned(),
+                "<< /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 /Length 0 >>\nstream\n\nendstream".to_owned(),
+            ],
+        ),
+        (
+            "SMaskInData",
+            "/XObject << /Im 4 0 R >>".to_owned(),
+            vec!["<< /Subtype /Image /Width 1 /Height 1 /SMaskInData 1 /Length 0 >>\nstream\n\nendstream".to_owned()],
+        ),
+        ("transparency group", "/XObject << /Fm 4 0 R >>".to_owned(), vec![form("/Group << /S /Transparency >>")]),
+        (
+            "nested form",
+            "/XObject << /Fm 4 0 R >>".to_owned(),
+            vec![form("/Resources << /XObject << /In 5 0 R >> >>"), form("/Resources << /ExtGState << /G << /ca 0.5 >> >> >>")],
+        ),
+        (
+            "Type 3 font",
+            "/Font << /T3 4 0 R >>".to_owned(),
+            vec!["<< /Type /Font /Subtype /Type3 /Resources << /ExtGState << /G << /CA 0.5 >> >> >> >>".to_owned()],
+        ),
+        ("tiling pattern", "/Pattern << /P 4 0 R >>".to_owned(), vec![form("/PatternType 1 /Resources << /ExtGState << /G << /BM /Screen >> >> >>")]),
+        ("shading pattern", "/Pattern << /P << /PatternType 2 /ExtGState << /ca 0.5 >> >> >>".to_owned(), vec![]),
+    ] {
+        let extra: Vec<&str> = extra.iter().map(String::as_str).collect();
+        assert_eq!(blending(false, "", &resources, &extra), said, "{what}");
+        // A page group with a blending colour space, or a PDF/A output intent, satisfies the rule.
+        assert!(
+            blending(false, "/Group << /S /Transparency /CS [/CalRGB << /WhitePoint [0.9505 1 1.089] >>] >>", &resources, &extra).is_empty(),
+            "{what}: page /CS"
+        );
+        assert_eq!(blending(false, "/Group << /S /Transparency >>", &resources, &extra), said, "{what}: page group without /CS");
+        assert!(blending(true, "", &resources, &extra).is_empty(), "{what}: output intent");
+    }
+    // Annotation appearances, as one stream or a dictionary of streams by state.
+    let annot = |ap: &str| format!("<< /Type /Annot /Subtype /Widget /Rect [0 0 10 10] /AP << /N {ap} >> >>");
+    assert_eq!(blending(false, "/Annots [4 0 R]", "", &[&annot("5 0 R"), &form("/Group << /S /Transparency >>")]), said, "appearance");
+    assert_eq!(
+        blending(false, "/Annots [4 0 R]", "", &[&annot("<< /On 5 0 R /Off 6 0 R >>"), &form(""), &form("/Group << /S /Transparency >>")]),
+        said,
+        "appearance states"
+    );
+    // Opaque painting needs no blending colour space: alpha 1, Normal or Compatible blending, no
+    // soft mask, an image without one, a form that is no transparency group.
+    for (what, resources, extra) in [
+        ("opaque", gs("/CA 1 /ca 1.0 /BM /Normal /SMask /None"), vec![]),
+        ("compatible", gs("/BM [/Compatible /Darken]"), vec![]),
+        (
+            "image",
+            "/XObject << /Im 4 0 R >>".to_owned(),
+            vec!["<< /Subtype /Image /Width 1 /Height 1 /SMaskInData 0 /Length 0 >>\nstream\n\nendstream".to_owned()],
+        ),
+        (
+            "plain form, its resources cycling back to itself",
+            "/XObject << /Fm 4 0 R >>".to_owned(),
+            vec![form("/Resources << /XObject << /Me 4 0 R >> >>")],
+        ),
+        (
+            "Type 1 font",
+            "/Font << /F 4 0 R >>".to_owned(),
+            vec!["<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Resources << /ExtGState << /G << /ca 0.5 >> >> >> >>".to_owned()],
+        ),
+    ] {
+        let extra: Vec<&str> = extra.iter().map(String::as_str).collect();
+        assert!(blending(false, "", &resources, &extra).is_empty(), "{what}");
+    }
+}
+
+/// 6.2.10: a graphics state's blend mode, or each name of a blend mode array, is one ISO 32000-1
+/// 11.3.5 defines, whether the graphics state is an object of its own or written in a page's
+/// resources.
+#[test]
+fn blend_modes_are_the_ones_iso_32000_1_defines() {
+    let modes = |resources: &str, extra: &[&str]| -> Vec<String> {
+        let page = format!(
+            "<< /Type /Page /Parent 2 0 R /Group << /S /Transparency /CS [/CalRGB << /WhitePoint [0.9505 1 1.089] >>] >> /Resources << {resources} >> >>"
+        );
+        let mut objs: Vec<&str> =
+            vec!["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>", &page];
+        objs.extend_from_slice(extra);
+        verify(&build(&objs, ""), Level::A2b).into_iter().filter(|i| i.clause == "6.2.10").map(|i| i.message).collect()
+    };
+    let custom = ["A graphics state uses the blend mode Custom, which ISO 32000-1 doesn't define"];
+    assert_eq!(modes("/ExtGState << /G 4 0 R >>", &["<< /BM /Custom >>"]), custom, "an object of its own");
+    assert_eq!(modes("/ExtGState << /G << /BM /Custom >> >>", &[]), custom, "written in the resources");
+    assert_eq!(modes("/ExtGState << /G << /BM [/Multiply /Custom] >> >>", &[]), custom, "in an array");
+    let all = "/Normal /Compatible /Multiply /Screen /Overlay /Darken /Lighten /ColorDodge /ColorBurn /HardLight /SoftLight /Difference /Exclusion /Hue /Saturation /Color /Luminosity";
+    assert!(modes(&format!("/ExtGState << /G << /BM [{all}] >> >>"), &[]).is_empty());
+}
+
+/// 6.2.10's blending colour space is one PDF/A accepts without an output intent: not null, and
+/// not a device space unless the page gives it a default (6.2.4.3). An output intent stands in
+/// for it only with a profile.
+#[test]
+fn a_blending_space_is_device_independent_and_an_intent_has_a_profile() {
+    let page_said = ["Page 1 has transparency but no device-independent blending colour space or PDF/A output intent"];
+    let check = |catalog_extra: &str, page_extra: &str, extra: &[&str]| -> Vec<String> {
+        let catalog = format!("<< /Type /Catalog /Pages 2 0 R {catalog_extra} >>");
+        let page = format!("<< /Type /Page /Parent 2 0 R {page_extra} >>");
+        let mut objs: Vec<&str> = vec![&catalog, "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>", &page];
+        objs.extend_from_slice(extra);
+        verify(&build(&objs, ""), Level::A2b).into_iter().filter(|i| i.clause == "6.2.10").map(|i| i.message).collect()
+    };
+    let alpha = "/ExtGState << /G << /ca 0.5 >> >>";
+    let page = |group: &str, colour_spaces: &str| format!("/Group << /S /Transparency {group} >> /Resources << {alpha} {colour_spaces} >>");
+    assert_eq!(check("", &page("/CS null", ""), &[]), page_said, "a null /CS");
+    assert_eq!(check("", &page("/CS 9 0 R", ""), &[]), page_said, "a /CS naming no object");
+    // A device space needs a default of as many components (ISO 32000-1 8.6.5.6).
+    let cmyk_profile = "<< /N 4 /Length 0 >>\nstream\n\nendstream";
+    let cal = |family: &str| format!("[/{family} << /WhitePoint [0.9505 1 1.089] >>]");
+    for (device, default, space) in [
+        ("DeviceGray", "DefaultGray", cal("CalGray")),
+        ("DeviceRGB", "DefaultRGB", cal("CalRGB")),
+        ("DeviceCMYK", "DefaultCMYK", "[/ICCBased 4 0 R]".to_owned()),
+    ] {
+        assert_eq!(check("", &page(&format!("/CS /{device}"), ""), &[cmyk_profile]), page_said, "{device}");
+        let defaults = format!("/ColorSpace << /{default} {space} >>");
+        assert!(check("", &page(&format!("/CS /{device}"), &defaults), &[cmyk_profile]).is_empty(), "{device} with {default}");
+        let null = format!("/ColorSpace << /{default} null >>");
+        assert_eq!(check("", &page(&format!("/CS /{device}"), &null), &[cmyk_profile]), page_said, "{device} with a null {default}");
+    }
+    let wrong = format!("/ColorSpace << /DefaultGray {} >>", cal("CalRGB"));
+    assert_eq!(check("", &page("/CS /DeviceGray", &wrong), &[]), page_said, "DeviceGray with a CalRGB default");
+    // Only CalGray, CalRGB and gray, RGB or CMYK ICCBased spaces blend (ISO 32000-1 11.3.4).
+    assert!(check("", &page("/CS [/CalGray << /WhitePoint [0.9505 1 1.089] >>]", ""), &[]).is_empty(), "CalGray");
+    let icc = |n: u8, data: &str| format!("<< /N {n} /Length {} >>\nstream\n{data}\nendstream", data.len());
+    assert!(check("", &page("/CS [/ICCBased 4 0 R]", ""), &[&icc(3, "")]).is_empty(), "an ICC profile of three components");
+    for (what, cs, extra) in [
+        ("Indexed", "/CS [/Indexed /DeviceRGB 1 <000000FFFFFF>]".to_owned(), vec![]),
+        ("CalRGB without its dictionary", "/CS [/CalRGB]".to_owned(), vec![]),
+        ("CalGray without a white point", "/CS [/CalGray << >>]".to_owned(), vec![]),
+        ("CalRGB with a short white point", "/CS [/CalRGB << /WhitePoint [0.9505 1] >>]".to_owned(), vec![]),
+        ("CalRGB with a zero white point", "/CS [/CalRGB << /WhitePoint [0 0 0] >>]".to_owned(), vec![]),
+        ("CalGray with a white point whose Y isn't 1", "/CS [/CalGray << /WhitePoint [0.9505 0.5 1.089] >>]".to_owned(), vec![]),
+        ("CalRGB with a non-number in its white point", "/CS [/CalRGB << /WhitePoint [0.9505 1 /Z 1.089] >>]".to_owned(), vec![]),
+        ("Lab", "/CS [/Lab << /WhitePoint [0.9505 1 1.089] >>]".to_owned(), vec![]),
+        (
+            "Separation",
+            "/CS [/Separation /Spot /DeviceCMYK 4 0 R]".to_owned(),
+            vec!["<< /FunctionType 2 /Domain [0 1] /C1 [0 0 0 1] /N 1 >>".to_owned()],
+        ),
+        ("an ICC profile of two components", "/CS [/ICCBased 4 0 R]".to_owned(), vec![icc(2, "")]),
+        ("a Lab ICC profile", "/CS [/ICCBased 4 0 R]".to_owned(), vec![icc(3, &format!("{}Lab ", "\0".repeat(16)))]),
+        (
+            "an ICC profile of one component whose header says RGB",
+            "/CS [/ICCBased 4 0 R]".to_owned(),
+            vec![icc(1, &format!("{}RGB ", "\0".repeat(16)))],
+        ),
+        ("a pattern space", "/CS /Pattern".to_owned(), vec![]),
+    ] {
+        let extra: Vec<&str> = extra.iter().map(String::as_str).collect();
+        assert_eq!(check("", &page(&cs, ""), &extra), page_said, "{what}");
+    }
+    // A null soft mask is none: an otherwise opaque graphics state is not transparency.
+    assert!(check("", "/Resources << /ExtGState << /G << /SMask null >> >> >>", &[]).is_empty(), "/SMask null");
+    let intent = |profile: &str| format!("/OutputIntents [<< /Type /OutputIntent /S /GTS_PDFA1 /OutputConditionIdentifier (sRGB) {profile} >>]");
+    let opaque_group = format!("/Resources << {alpha} >>");
+    assert_eq!(check(&intent("/DestOutputProfile null"), &opaque_group, &[]), page_said, "a null profile");
+    assert_eq!(check(&intent(""), &opaque_group, &[]), page_said, "no profile");
+    assert!(check(&intent("/DestOutputProfile 4 0 R"), &opaque_group, &["<< /N 3 /Length 0 >>\nstream\n\nendstream"]).is_empty(), "a profile");
+    // Private data is no graphics state: a /BM there is not a blend mode.
+    assert!(check("/PieceInfo << /App << /Private << /BM /Bookkeeping >> >> >>", "", &[]).is_empty(), "/PieceInfo");
+}
+
+/// A form XObject first reached at the depth limit, where its resources go unread, is read again
+/// when a shallower place names it, so what it holds is not missed.
+#[test]
+fn transparency_reached_first_too_deep_is_found_from_a_shallower_place() {
+    let form = |dict: &str| format!("<< /Type /XObject /Subtype /Form /BBox [0 0 10 10] {dict} /Length 0 >>\nstream\n\nendstream");
+    // A chain of 32 forms, objects 4 to 35, the last naming form 36, which holds a translucent
+    // graphics state; the page names the chain first and form 36 after it.
+    let mut objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>".to_owned(),
+        "<< /Type /Page /Parent 2 0 R /Resources << /XObject << /A 4 0 R /B 36 0 R >> >> >>".to_owned(),
+    ];
+    for n in 4..=35 {
+        objs.push(form(&format!("/Resources << /XObject << /X {} 0 R >> >>", n + 1)));
+    }
+    objs.push(form("/Resources << /ExtGState << /G << /ca 0.5 >> >> >>"));
+    let objs: Vec<&str> = objs.iter().map(String::as_str).collect();
+    let said: Vec<String> = verify(&build(&objs, ""), Level::A2b).into_iter().filter(|i| i.clause == "6.2.10").map(|i| i.message).collect();
+    assert_eq!(said, ["Page 1 has transparency but no device-independent blending colour space or PDF/A output intent"]);
+}
+
+/// 6.2.10: an unknown blend mode is reported on the page whose resources reach it, as the
+/// transparency issue is, each page once.
+#[test]
+fn an_unknown_blend_mode_names_its_page() {
+    let page = "<< /Type /Page /Parent 2 0 R /Group << /S /Transparency /CS [/CalRGB << /WhitePoint [0.9505 1 1.089] >>] >> /Resources << /ExtGState << /G 5 0 R >> >> >>";
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 200 200] >>",
+        "<< /Type /Page /Parent 2 0 R >>",
+        page,
+        "<< /BM /Custom >>",
+    ];
+    let found: Vec<(String, Option<usize>)> =
+        verify(&build(&objs, ""), Level::A2b).into_iter().filter(|i| i.clause == "6.2.10").map(|i| (i.message, i.page)).collect();
+    assert_eq!(found, [("A graphics state uses the blend mode Custom, which ISO 32000-1 doesn't define".to_owned(), Some(1))]);
+}
+
+/// A `/BM` array of many unknown names gathers a bounded number of them.
+#[test]
+fn unknown_blend_mode_names_are_capped() {
+    let names: String = (0..1000).map(|k| format!("/Custom{k} ")).collect();
+    let page = format!(
+        "<< /Type /Page /Parent 2 0 R /Group << /S /Transparency /CS [/CalRGB << /WhitePoint [0.9505 1 1.089] >>] >> /Resources << /ExtGState << /G << /BM [/Multiply {names}] >> >> >> >>"
+    );
+    let objs = ["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>", &page];
+    let said: Vec<String> = verify(&build(&objs, ""), Level::A2b).into_iter().filter(|i| i.clause == "6.2.10").map(|i| i.message).collect();
+    assert_eq!(said.len(), 32);
+    assert_eq!(said.first().map(String::as_str), Some("A graphics state uses the blend mode Custom0, which ISO 32000-1 doesn't define"));
+}
+
+/// Pages that share a form read it once: the next page takes what was found under it from
+/// [`transparency::Shared`] in one read, and still reports it.
+#[test]
+fn pages_sharing_a_form_read_it_once() {
+    let form = |dict: &str| format!("<< /Type /XObject /Subtype /Form /BBox [0 0 10 10] {dict} /Length 0 >>\nstream\n\nendstream");
+    let pages = 50;
+    let first_form = 3 + pages;
+    let kids: String = (0..pages).map(|k| format!("{} 0 R ", 3 + k)).collect();
+    let mut objs =
+        vec!["<< /Type /Catalog /Pages 2 0 R >>".to_owned(), format!("<< /Type /Pages /Kids [{kids}] /Count {pages} /MediaBox [0 0 200 200] >>")];
+    for _ in 0..pages {
+        objs.push(format!("<< /Type /Page /Parent 2 0 R /Resources << /XObject << /F {first_form} 0 R >> >> >>"));
+    }
+    // A chain of ten forms, each with twenty graphics states, the last one translucent.
+    let gstates: String = (0..20).map(|k| format!("/G{k} << /CA 1 >> ")).collect();
+    for n in 0..10 {
+        let next = if n < 9 { format!("/XObject << /X {} 0 R >>", first_form + n + 1) } else { "/ExtGState << /T << /ca 0.5 >> >>".to_owned() };
+        objs.push(form(&format!("/Resources << /ExtGState << {gstates} >> {next} >>")));
+    }
+    let objs: Vec<&str> = objs.iter().map(String::as_str).collect();
+    let doc = build(&objs, "");
+    let list = pdfcraft_model::pages(&doc);
+    let mut shared = transparency::Shared::default();
+    let reads: Vec<usize> = list.iter().map(|p| transparency::page_reads(&doc, &p.dict, &mut shared)).collect();
+    assert!(reads.first().is_some_and(|&n| n > 200), "the first page reads the chain: {reads:?}");
+    assert!(reads.iter().skip(1).all(|&n| n == 2), "the others its resources and the form: {reads:?}");
+    let said = verify(&doc, Level::A2b).into_iter().filter(|i| i.clause == "6.2.10").count();
+    assert_eq!(said, pages, "every page has transparency");
+}
+
+/// A form whose reading stopped at the depth limit on one page is not kept as read: a page that
+/// names it from a shallower place reads what lies below it.
+#[test]
+fn a_form_cut_short_on_one_page_is_read_again_on_the_next() {
+    let form = |dict: &str| format!("<< /Type /XObject /Subtype /Form /BBox [0 0 10 10] {dict} /Length 0 >>\nstream\n\nendstream");
+    // Page 1 (object 3) names a chain of 33 forms, objects 5 to 37, whose last holds a translucent
+    // graphics state beyond the depth limit; page 2 (object 4) names form 20, from which it is near.
+    let mut objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+        "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 200 200] >>".to_owned(),
+        "<< /Type /Page /Parent 2 0 R /Resources << /XObject << /A 5 0 R >> >> >>".to_owned(),
+        "<< /Type /Page /Parent 2 0 R /Resources << /XObject << /A 20 0 R >> >> >>".to_owned(),
+    ];
+    for n in 5..=36 {
+        objs.push(form(&format!("/Resources << /XObject << /X {} 0 R >> >>", n + 1)));
+    }
+    objs.push(form("/Resources << /ExtGState << /G << /ca 0.5 >> >> >>"));
+    let objs: Vec<&str> = objs.iter().map(String::as_str).collect();
+    let said: Vec<String> = verify(&build(&objs, ""), Level::A2b).into_iter().filter(|i| i.clause == "6.2.10").map(|i| i.message).collect();
+    assert_eq!(said, ["Page 2 has transparency but no device-independent blending colour space or PDF/A output intent"]);
 }
