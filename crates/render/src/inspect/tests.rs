@@ -2321,6 +2321,7 @@ mod group_tests {
             state: None,
             quads: Vec::new(),
             locked: false,
+            locked_contents: false,
             intent: None,
             fill_sign: false,
             no_rotate: false,

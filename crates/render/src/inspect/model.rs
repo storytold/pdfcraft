@@ -901,6 +901,7 @@ mod review_state_tests {
                 state: state.map(Into::into),
                 quads: Vec::new(),
                 locked: false,
+                locked_contents: false,
                 intent: None,
                 fill_sign: false,
                 no_rotate: false,

@@ -505,6 +505,8 @@ fn context_menu_disables_edit_text_when_locked_contents_is_set() {
             fill_sign: false,
             points: Vec::new(),
             no_rotate: false,
+            text_box: None,
+            popup: None,
         }],
         ..Default::default()
     };
@@ -514,7 +516,8 @@ fn context_menu_disables_edit_text_when_locked_contents_is_set() {
     let mut h = egui_kittest::Harness::new_ui_state(
         |ui, (view, actions): &mut (DocView, Vec<CanvasAction>)| {
             ui.button("Page").context_menu(|ui| {
-                if let Some(a) = context_menu(ui, view, &info, &|_, _| true, &prefs, true, true) {
+                let rights = MenuRights { allowed: true, can_paste: false, can_modify: true };
+                if let Some(a) = context_menu(ui, view, &info, &|_, _| true, &prefs, rights) {
                     actions.push(a);
                 }
             });
@@ -634,6 +637,7 @@ fn stale_comment_state_is_cleared_and_delete_never_hits_non_comment_slots() {
         state: None,
         quads: Vec::new(),
         locked: false,
+        locked_contents: false,
         intent: None,
         fill_sign: false,
         no_rotate: false,
@@ -718,6 +722,7 @@ fn an_unnamed_shift_clears_state_for_the_old_index() {
         state: None,
         quads: Vec::new(),
         locked: false,
+        locked_contents: false,
         intent: None,
         fill_sign: false,
         no_rotate: false,
@@ -768,6 +773,7 @@ fn a_replace_text_group_makes_replace_text_defaults() {
         state: None,
         quads: Vec::new(),
         locked: false,
+        locked_contents: false,
         intent: intent.map(Into::into),
         fill_sign: false,
         no_rotate: false,
