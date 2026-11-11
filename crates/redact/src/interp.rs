@@ -19,6 +19,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
+use std::sync::Arc;
 
 use pdfcraft_content::{Matrix, Op, Pieces, contains, num, overlaps, serialize_ops, string};
 use pdfcraft_cos::{CosError, DecodeBudget, Dict, Document, ImageBudget, MAX_PAGE_FORMS, ObjRef, Object, Stream};
@@ -201,6 +202,86 @@ pub(crate) struct Scope<'a> {
     /// shared forms drawn from other shared forms would otherwise multiply the work with every
     /// level.
     budget: DecodeBudget,
+    /// What `cs` and `CS` have read of the page's colour spaces.
+    pattern_spaces: PatternSpaces,
+}
+
+#[cfg(test)]
+thread_local! {
+    /// How many objects given by reference `cs` and `CS` have read in the page's colour spaces.
+    pub(crate) static SPACE_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// What `cs` and `CS` have read of a page's colour spaces, kept for the page. A form drawn
+/// thousands of times, or nested deep, starts a scope each time, and reading an object again can
+/// parse it again, all of it: the document keeps no object larger than its cache.
+#[derive(Default)]
+struct PatternSpaces {
+    /// `/ColorSpace` dictionaries given by reference, as read.
+    held: HashMap<ObjRef, Arc<Object>>,
+    /// Whether a colour space given by reference is a Pattern space.
+    known: HashMap<ObjRef, bool>,
+    /// Whether an array's first element given by reference is the name `/Pattern`.
+    families: HashMap<ObjRef, bool>,
+}
+
+impl PatternSpaces {
+    /// Whether `cs` or `CS` with `name` selects a Pattern space, as the renderer reads the name:
+    /// `/Pattern` itself, never a device space's name (both read before the resources), and
+    /// otherwise the entry `spaces`, a scope's `/ColorSpace`, has for it, if that is `/Pattern` or
+    /// `[/Pattern base]`. A name it doesn't have, or giving anything else, the renderer draws in
+    /// another space or in DeviceGray. A form without resources of its own is given its caller's,
+    /// where the renderer looks its names up too. (One with resources of its own looks a name it
+    /// lacks up in its caller's, as the renderer does, but the patterns this pass prunes are the
+    /// page's, and what such a form paints with is not told to the page.)
+    fn named(&mut self, doc: &Document, spaces: Option<&Object>, name: &[u8]) -> bool {
+        match name {
+            b"Pattern" => return true,
+            b"DeviceRGB" | b"RGB" | b"DeviceGray" | b"G" | b"DeviceCMYK" | b"CMYK" | b"CalCMYK" => return false,
+            _ => {}
+        }
+        let held = match spaces {
+            Some(o @ Object::Ref(r)) => Some(Arc::clone(self.held.entry(*r).or_insert_with(|| read_space(doc, o)))),
+            _ => None,
+        };
+        let space = held.as_deref().or(spaces).and_then(Object::as_dict).and_then(|d| d.get(name));
+        space.is_some_and(|space| self.is_pattern(doc, space))
+    }
+
+    /// Whether `space`, an entry of a `/ColorSpace`, is `/Pattern` or `[/Pattern base]`.
+    fn is_pattern(&mut self, doc: &Document, space: &Object) -> bool {
+        match space {
+            Object::Ref(r) => match self.known.get(r) {
+                Some(&known) => known,
+                None => {
+                    let found = self.reads_as_pattern(doc, &read_space(doc, space));
+                    self.known.insert(*r, found);
+                    found
+                }
+            },
+            space => self.reads_as_pattern(doc, space),
+        }
+    }
+
+    /// Whether `space`, read, is `/Pattern` or an array whose first element is.
+    fn reads_as_pattern(&mut self, doc: &Document, space: &Object) -> bool {
+        match space {
+            Object::Array(a) => match a.first() {
+                Some(first @ Object::Ref(r)) => {
+                    *self.families.entry(*r).or_insert_with(|| read_space(doc, first).as_name() == Some(b"Pattern".as_slice()))
+                }
+                first => first.and_then(Object::as_name) == Some(b"Pattern".as_slice()),
+            },
+            space => space.as_name() == Some(b"Pattern".as_slice()),
+        }
+    }
+}
+
+/// The object `o` refers to, read for [`PatternSpaces`].
+fn read_space(doc: &Document, o: &Object) -> Arc<Object> {
+    #[cfg(test)]
+    SPACE_READS.with(|c| c.set(c.get() + 1));
+    doc.resolve(o)
 }
 
 impl<'a> Scope<'a> {
@@ -230,6 +311,7 @@ impl<'a> Scope<'a> {
             used_names: Vec::new(),
             depth: 0,
             budget,
+            pattern_spaces: PatternSpaces::default(),
         }
     }
 
@@ -576,13 +658,15 @@ impl Walk {
                 }
                 Some(op)
             }
+            // A colour space resets the colour, and with it the pattern, unless it is a Pattern space
+            // to the renderer, which keeps the pattern selected before (ISO 32000-2 §8.6.8 and
+            // Poppler reset that too): `/Pattern`, or a name the resources give as `/Pattern` or
+            // `[/Pattern base]`, looked up as the renderer looks it up. One whose operand isn't a
+            // name is skipped by the renderer, and the colour stays.
             b"cs" | b"CS" => {
-                // A Pattern space is told by the name `/Pattern` alone: one named through the
-                // resources' `/ColorSpace` clears the pattern, which the app's renderer keeps and
-                // Poppler doesn't (`cs` resets the colour, ISO 32000-2 §8.6.8). Looking the name up
-                // at each `cs` wants a cache for the page: a `/ColorSpace` too large for the
-                // document to keep is parsed again at each read.
-                if op.last_name() != Some(b"Pattern") {
+                if let Some(name) = op.last_name()
+                    && !scope.pattern_spaces.named(doc, resources.get(b"ColorSpace"), name)
+                {
                     if o == b"cs" {
                         self.gs.fill_pattern = None;
                     } else {
