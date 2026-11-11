@@ -665,10 +665,13 @@ impl Walk {
         piece.changed = true;
         scope.report.paths_removed += 1;
         if scope.covered(b) && clips {
-            // Keep the clipping, drop the painting.
             self.gs.clip = intersect(self.gs.clip, b);
-            piece.ops.extend(body);
-            piece.ops.push(Op::new("n", vec![]));
+            // Everything this clip lets through is under a mark, so an empty clip hides the same
+            // content. The original outline is confidential and must not stay in the stream.
+            for o in ["re", "W", "n"] {
+                let operands = if o == "re" { vec![num(0.0); 4] } else { vec![] };
+                piece.ops.push(Op::new(o, operands));
+            }
         }
         // Partial vector redaction must not retain underlying drawing commands
         // behind clipping (F-008). Refuse partial clip retention and remove the path.
