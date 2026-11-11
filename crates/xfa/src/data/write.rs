@@ -122,12 +122,13 @@ pub fn write_data_ops(doc: &mut Document, ops: &[DataOp], reuse: Option<ObjRef>)
             }
             DataOp::Instances { parent, name, count } => {
                 let done = queued.entry((parent, name.as_str())).or_insert(0);
-                // The path (its segments' buffers and their text) is held by the queued step and cloned
-                // again into `flush`'s dedup set, beside the label and the step itself.
+                // The path (its segments' buffers and their text) is held by the queued step, which a
+                // clone then `push` can leave with up to twice the room, and cloned again into
+                // `flush`'s dedup set, beside the label and the step itself.
                 let segment = std::mem::size_of::<(String, usize)>();
                 let path_bytes =
                     parent.iter().fold(segment.saturating_add(name.len()), |n, (p, _)| n.saturating_add(segment).saturating_add(p.len()));
-                let per_instance = path_bytes.saturating_mul(2).saturating_add(name.len()).saturating_add(16 + std::mem::size_of::<Want>());
+                let per_instance = path_bytes.saturating_mul(3).saturating_add(name.len()).saturating_add(16 + std::mem::size_of::<Want>());
                 while *done < (*count).min(MAX_INDEX) {
                     if ensured >= MAX_ENSURED {
                         capped = true;
