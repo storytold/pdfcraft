@@ -104,6 +104,23 @@ struct Gs {
     /// names up in this scope's resources (ISO 32000-2 §9.6.4), so a shown glyph may paint with
     /// any of this scope's patterns.
     type3_inherits: bool,
+    /// The line width, in user space (`w`, an ExtGState's `/LW`): a stroke paints half of it on
+    /// each side of its path.
+    line_width: f64,
+}
+
+/// The least a stroke reaches from its path, in device space: the thinnest line (`0 w`) still
+/// paints a device pixel, half a point at 72 dots an inch.
+const MIN_STROKE_REACH: f64 = 0.5;
+
+/// The device-space box a fill of a path with box `path` paints: its own, but [`MIN_STROKE_REACH`]
+/// across where it has no width or height, as the renderer paints the pixels such a path touches
+/// (ISO 32000-2 §10.7.4). A box of any extent is as it is, so a fill that only touches a region
+/// isn't taken for under it.
+fn fill_box(path: [f64; 4]) -> [f64; 4] {
+    let across = if path[2] > path[0] { 0.0 } else { MIN_STROKE_REACH };
+    let up = if path[3] > path[1] { 0.0 } else { MIN_STROKE_REACH };
+    [path[0] - across, path[1] - up, path[2] + across, path[3] + up]
 }
 
 /// What processing a scope produced.
@@ -392,6 +409,7 @@ pub(crate) fn process(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<
         fill_pattern: None,
         stroke_pattern: None,
         type3_inherits: false,
+        line_width: 1.0,
     };
     process_from(doc, scope, streams, resources, gs)
 }
@@ -543,7 +561,7 @@ impl Walk {
             self.clip = false;
         }
         let kept = match o {
-            b"q" | b"Q" | b"cm" | b"Tf" | b"gs" => {
+            b"q" | b"Q" | b"cm" | b"Tf" | b"gs" | b"w" => {
                 self.graphics_state(doc, scope, &op);
                 Some(op)
             }
@@ -617,12 +635,15 @@ impl Walk {
         let body = std::mem::take(&mut self.path);
         let bbox = self.path_box.take();
         let clips = std::mem::replace(&mut self.clip, false);
-        let hit = scope.mode == Mode::Apply && op.op.as_slice() != b"n" && bbox.is_some_and(|b| scope.hits(b));
+        let o = op.op.as_slice();
+        let strokes = matches!(o, b"S" | b"s" | b"B" | b"B*" | b"b" | b"b*");
+        // A stroke paints around its path: a line with no height under a region, or a thick one
+        // beside it, paints there. So does a fill of a path with no height or width.
+        let paints = bbox.map(|b| if strokes { self.stroke_box(b) } else { fill_box(b) });
+        let hit = scope.mode == Mode::Apply && o != b"n" && paints.is_some_and(|b| scope.hits(b));
         if !hit {
             // The paint survives, so the pattern it draws with is still in use. `n` paints
             // nothing, so it uses none. A hit path is removed whole (F-008), pattern and all.
-            let o = op.op.as_slice();
-            let strokes = matches!(o, b"S" | b"s" | b"B" | b"B*" | b"b" | b"b*");
             let fills = matches!(o, b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*");
             uses_patterns(&mut self.out, &self.gs, fills, strokes);
             piece.ops.extend(body);
@@ -641,6 +662,17 @@ impl Walk {
         // behind clipping (F-008). Refuse partial clip retention and remove the path.
     }
 
+    /// The device-space box a stroke of the path in `path` paints: half the line width on each
+    /// side, `√2` times that at a projecting cap's corner, through the CTM (a disc of radius `r`
+    /// reaches `r·√(a²+c²)` across and `r·√(b²+d²)` up), and at least [`MIN_STROKE_REACH`]. A
+    /// miter join can reach further, to the miter limit, and isn't counted.
+    fn stroke_box(&self, path: [f64; 4]) -> [f64; 4] {
+        let [a, b, c, d, _, _] = self.gs.ctm.0;
+        let half = self.gs.line_width / 2.0 * std::f64::consts::SQRT_2;
+        let (across, up) = ((half * a.hypot(c)).max(MIN_STROKE_REACH), (half * b.hypot(d)).max(MIN_STROKE_REACH));
+        [path[0] - across, path[1] - up, path[2] + across, path[3] + up]
+    }
+
     fn graphics_state(&mut self, doc: &Document, scope: &mut Scope<'_>, op: &Op) {
         match op.op.as_slice() {
             b"q" => self.stack.push((self.gs.clone(), self.tm, self.tlm)),
@@ -655,7 +687,17 @@ impl Walk {
                 }
             }
             b"Tf" => self.select_font(doc, scope, op),
+            // The width the renderer reads: the last operand, a surplus before it ignored. A
+            // negative one is taken at its size, which can only reach further.
+            b"w" => {
+                if let Some([width]) = op.nums::<1>() {
+                    self.gs.line_width = width.abs();
+                }
+            }
             _ => {
+                if let Some(width) = op.last_name().and_then(|n| extgstate_line_width(doc, &self.ext_gstates, n)) {
+                    self.gs.line_width = width;
+                }
                 if let Some((font, vertical, size)) = op.name(0).and_then(|n| extgstate_font(doc, scope, &self.ext_gstates, n, &self.fallback)) {
                     (self.gs.font, self.gs.vertical, self.gs.size) = (font, vertical, size);
                     // As for `Tf`: a Type 3 font without /Resources paints through this scope's.
@@ -1231,6 +1273,12 @@ fn xobject(
         }
         _ => None,
     }
+}
+
+/// The line width the ExtGState `name` sets (`/LW`), if it sets one: taken at its size, as `w`.
+fn extgstate_line_width(doc: &Document, ext_gstates: &Dict, name: &[u8]) -> Option<f64> {
+    let state = doc.resolve(ext_gstates.get(name)?);
+    Some(state.as_dict()?.get(b"LW").map(|w| doc.resolve(w))?.as_f64()?.abs())
 }
 
 /// Whether the ExtGState `name` sets a Type 3 font that has no `/Resources` of its own.

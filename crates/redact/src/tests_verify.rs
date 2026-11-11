@@ -619,6 +619,75 @@ fn opaque_spec() -> Spec<'static> {
     Spec { resources: "/Font << /F1 5 0 R /F2 7 0 R >>", extra: vec![OPAQUE_FONT.as_bytes().to_vec()], ..Spec::default() }
 }
 
+/// The proof finds a stroke by the paint its width lays down: a line through the region, which
+/// has no height, the thinnest included, and a fill of a path with no height or width, and a thick one beside the region whose paint reaches
+/// into it, its width set by `w` (the last operand), by an ExtGState's `/LW`, in a user space
+/// scaled each way, or inherited by a form; and a projecting cap's corner, `√2` times half the
+/// width from the end of a diagonal line. A thin line beside it, a width `Q` gives back, and a fill
+/// that only touches the region leave it clean.
+#[test]
+fn the_proof_finds_a_stroke_by_its_width() {
+    let blank = marked_content(b"BT /F1 10 Tf 10 200 Td (Public) Tj ET", Spec::default());
+    let snap = Snapshot::capture(&blank, None).unwrap();
+    let wide = "/ExtGState << /GS1 << /LW 30 >> /GSN << /LW -30 >> >> /XObject << /Fm 7 0 R >>";
+    let form = stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300]", b"0 0 1 RG 10 125 m 60 125 l S");
+    for (content, failed) in [
+        (&b"0 0 1 RG 10 100 m 60 100 l S"[..], true),
+        (b"0 0 1 RG 0 w 10 100 m 60 100 l S", true),
+        (b"0 0 1 rg 10 100 50 0 re f", true),
+        (b"0 0 1 rg 10 100 m 60 100 l f", true),
+        (b"0 0 1 rg 30 96 0 15 re f*", true),
+        (b"0 0 1 RG 30 w 10 125 m 60 125 l S", true),
+        (b"0 0 1 RG /GS1 gs 10 125 m 60 125 l S", true),
+        (b"0 0 1 RG (x) 30 w 10 125 m 60 125 l S", true),
+        (b"0 0 1 RG -30 w 10 125 m 60 125 l S", true),
+        (b"0 0 1 RG /GSN gs 10 125 m 60 125 l S", true),
+        (b"0 0 1 RG q 0 10 1 0 0 0 cm 3 w 12.5 10 m 12.5 60 l S Q", true),
+        (b"0 0 1 RG 0 0 1 rg 30 w 10 125 m 60 125 l 60 135 l 10 135 l h B", true),
+        (b"0 0 1 RG 0 0 1 rg 30 w 10 125 m 60 125 l 60 135 l 10 135 l h b", true),
+        (b"0 0 1 RG 30 w 10 125 m 60 125 l s", true),
+        (b"0 0 1 RG 2 J 20 w 80 107 m 120 147 l S", true),
+        (b"0 0 1 RG q 1 0 0 10 0 0 cm 3 w 10 12.5 m 60 12.5 l S Q", true),
+        (b"0 0 1 RG q 10 0 0 1 0 0 cm 3 w 8.5 100 m 8.5 105 l S Q", true),
+        (b"30 w /Fm Do", true),
+        (b"/Fm Do", false),
+        (b"0 0 1 RG 10 125 m 60 125 l S", false),
+        (b"0 0 1 RG q 30 w Q 10 125 m 60 125 l S", false),
+        (b"0 0 1 rg 10 112 50 10 re f", false),
+        (b"0 0 1 rg 70 100 10 5 re f", false),
+    ] {
+        let mut doc = marked_content(content, Spec { resources: wide, extra: vec![form.clone()], ..Spec::default() });
+        doc.require_full_save();
+        let proof = snap.prove(&doc, None, &ProofOptions::default());
+        assert_eq!(proof.entries[0].status == Status::Failed, failed, "{}: {}", String::from_utf8_lossy(content), proof.to_text());
+    }
+}
+
+/// The proof reads a width given by reference through it: an ExtGState given by reference, the
+/// whole `/ExtGState` by reference, and `/LW` itself; and a form's own ExtGState sets the width
+/// inside it.
+#[test]
+fn the_proof_reads_a_width_given_by_reference() {
+    let blank = marked_content(b"BT /F1 10 Tf 10 200 Td (Public) Tj ET", Spec::default());
+    let snap = Snapshot::capture(&blank, None).unwrap();
+    let line = "0 0 1 RG 10 125 m 60 125 l S";
+    let form = stream(
+        "/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << /ExtGState << /GS1 << /LW 30 >> >> >>",
+        format!("/GS1 gs {line}").as_bytes(),
+    );
+    for (content, resources, extra) in [
+        (format!("/GS1 gs {line}"), "/ExtGState << /GS1 7 0 R >>", b"<< /LW 30 >>".to_vec()),
+        (format!("/GS1 gs {line}"), "/ExtGState 7 0 R", b"<< /GS1 << /LW 30 >> >>".to_vec()),
+        (format!("/GS1 gs {line}"), "/ExtGState << /GS1 << /LW 7 0 R >> >>", b"30".to_vec()),
+        ("/Fm Do".to_string(), "/XObject << /Fm 7 0 R >>", form),
+    ] {
+        let mut doc = marked_content(content.as_bytes(), Spec { resources, extra: vec![extra], ..Spec::default() });
+        doc.require_full_save();
+        let proof = snap.prove(&doc, None, &ProofOptions::default());
+        assert_eq!(proof.entries[0].status, Status::Failed, "{content} with {resources}: {}", proof.to_text());
+    }
+}
+
 #[test]
 fn text_that_cannot_be_decoded_makes_a_region_unverifiable() {
     let mut doc = open(build_with(b"BT /F2 10 Tf 10 200 Td <00410042> Tj ET", opaque_spec()));

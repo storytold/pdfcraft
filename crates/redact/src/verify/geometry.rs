@@ -26,7 +26,14 @@ pub(super) struct Gs {
     pub(super) ctm: Matrix,
     /// Device-space boxes cut out of the clip (even-odd clips with a hole).
     pub(super) holes: Vec<[f64; 4]>,
+    /// The line width in user space (`w`, an ExtGState's `/LW`), which a stroke paints around
+    /// its path.
+    pub(super) line_width: f64,
 }
+
+/// The least a stroke reaches from its path in device space: the thinnest line still paints a
+/// device pixel, half a point at 72 dots an inch.
+const MIN_STROKE_REACH: f64 = 0.5;
 
 pub(super) struct Geo<'a> {
     pub(super) doc: &'a Document,
@@ -48,7 +55,7 @@ pub(super) fn check_geometry(doc: &Document, page: &Dict, regions: &[[f64; 4]], 
     let Ok(data) = page_content(doc, page, ctx, true) else { return unverifiable("the page content can't be read in full") };
     let mut geo = Geo { doc, ctx, regions, found: Vec::new(), reported: HashSet::new(), searched: HashSet::new() };
     let res = page.get(b"Resources").and_then(|r| doc.resolve(r).as_dict().cloned()).unwrap_or_default();
-    geo.run(&data, &res, Matrix::IDENTITY, Vec::new(), 0);
+    geo.run(&data, &res, Matrix::IDENTITY, Vec::new(), 1.0, 0);
     geo.appearances(page, &res);
     geo.found
 }
@@ -110,7 +117,7 @@ impl Geo<'_> {
                         continue;
                     };
                     let own = st.dict.get(b"Resources").and_then(|x| doc.resolve(x).as_dict().cloned());
-                    self.run(&data, own.as_ref().unwrap_or(res), ctm, Vec::new(), 1);
+                    self.run(&data, own.as_ref().unwrap_or(res), ctm, Vec::new(), 1.0, 1);
                 }
             }
         }
@@ -128,7 +135,7 @@ impl Geo<'_> {
         !gs.holes.iter().any(|h| contains(*h, reach, 0.01))
     }
 
-    fn run(&mut self, data: &[u8], res: &Dict, ctm: Matrix, holes: Vec<[f64; 4]>, depth: usize) {
+    fn run(&mut self, data: &[u8], res: &Dict, ctm: Matrix, holes: Vec<[f64; 4]>, line_width: f64, depth: usize) {
         if depth > MAX_DEPTH {
             for i in 0..self.regions.len() {
                 self.report(i, Finding::Unverifiable("forms are nested too deep to check"));
@@ -136,8 +143,9 @@ impl Geo<'_> {
             return;
         }
         let xobjects = res_dict(self.doc, res, b"XObject");
+        let states = res_dict(self.doc, res, b"ExtGState");
         self.hidden_images(res, depth);
-        let mut gs = Gs { ctm, holes };
+        let mut gs = Gs { ctm, holes, line_width };
         let mut stack: Vec<Gs> = Vec::new();
         // The current path in device space: its subpaths, and the clip operator it carries.
         let mut sub: Vec<Vec<(f64, f64)>> = Vec::new();
@@ -173,6 +181,19 @@ impl Geo<'_> {
                 b"cm" => {
                     if let Some(m) = op.nums::<6>() {
                         gs.ctm = Matrix(m).then(&gs.ctm);
+                    }
+                }
+                // Read as the renderer reads them, the last operand; a negative width at its size.
+                b"w" => {
+                    if let Some([width]) = op.nums::<1>() {
+                        gs.line_width = width.abs();
+                    }
+                }
+                b"gs" => {
+                    let state = op.last_name().and_then(|n| states.get(n)).map(|s| self.doc.resolve(s));
+                    let width = state.as_deref().and_then(Object::as_dict).and_then(|d| d.get(b"LW")).map(|w| self.doc.resolve(w));
+                    if let Some(width) = width.as_deref().and_then(Object::as_f64) {
+                        gs.line_width = width.abs();
                     }
                 }
                 b"sh" => {
@@ -221,8 +242,24 @@ impl Geo<'_> {
                 Some(b) => [b[0].min(u), b[1].min(v), b[2].max(u), b[3].max(v)],
             })
         });
+        // A stroke paints around its path: half the width on each side, `√2` times that at a
+        // projecting cap's corner, through the CTM, and at least `MIN_STROKE_REACH`. A fill of a
+        // path with no width or height still paints the pixels it touches (ISO 32000-2 §10.7.4):
+        // `MIN_STROKE_REACH` across there.
+        let strokes = matches!(o, b"S" | b"s" | b"B" | b"B*" | b"b" | b"b*");
+        let paints = bbox.map(|b| {
+            if !strokes {
+                let across = if b[2] > b[0] { 0.0 } else { MIN_STROKE_REACH };
+                let up = if b[3] > b[1] { 0.0 } else { MIN_STROKE_REACH };
+                return [b[0] - across, b[1] - up, b[2] + across, b[3] + up];
+            }
+            let [a, bb, c, d, _, _] = gs.ctm.0;
+            let half = gs.line_width / 2.0 * std::f64::consts::SQRT_2;
+            let (across, up) = ((half * a.hypot(c)).max(MIN_STROKE_REACH), (half * bb.hypot(d)).max(MIN_STROKE_REACH));
+            [b[0] - across, b[1] - up, b[2] + across, b[3] + up]
+        });
         if o != b"n"
-            && let Some(b) = bbox
+            && let Some(b) = paints
         {
             for i in self.touching(b) {
                 if self.unclipped(i, b, gs) {
@@ -283,7 +320,7 @@ impl Geo<'_> {
             return;
         };
         let own = s.dict.get(b"Resources").and_then(|r| self.doc.resolve(r).as_dict().cloned());
-        self.run(&data, own.as_ref().unwrap_or(parent), fctm, gs.holes.clone(), depth + 1);
+        self.run(&data, own.as_ref().unwrap_or(parent), fctm, gs.holes.clone(), gs.line_width, depth + 1);
     }
 
     /// Images drawn from tiling patterns, soft-mask groups and Type3 glyph procedures can't be
