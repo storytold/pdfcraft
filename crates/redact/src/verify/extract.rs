@@ -16,7 +16,7 @@ pub(super) fn carries_glyphs(op: &pdfcraft_content::Op) -> bool {
     let nonempty = |o: &Object| o.as_string().is_some_and(|s| !s.bytes.is_empty());
     match op.op.as_slice() {
         b"Tj" | b"'" | b"\"" => op.operands.last().is_some_and(nonempty),
-        b"TJ" => op.operands.first().and_then(Object::as_array).is_some_and(|a| a.iter().any(nonempty)),
+        b"TJ" => op.back(0).and_then(Object::as_array).is_some_and(|a| a.iter().any(nonempty)),
         _ => false,
     }
 }
@@ -552,7 +552,7 @@ impl Extractor<'_> {
         let o = op.op.as_slice();
         // Strings and TJ adjustments, in order.
         let items: Vec<&Object> = match o {
-            b"TJ" => op.operands.first().and_then(Object::as_array).map(|a| a.iter().collect()).unwrap_or_default(),
+            b"TJ" => op.back(0).and_then(Object::as_array).map(|a| a.iter().collect()).unwrap_or_default(),
             _ => op.operands.last().into_iter().collect(),
         };
         let mut any_text = false;
@@ -637,14 +637,15 @@ impl Extractor<'_> {
                     tm = Matrix::IDENTITY;
                     tlm = Matrix::IDENTITY;
                 }
-                b"Tc" => gs.tc = op.num(0).unwrap_or(0.0),
-                b"Tw" => gs.tw = op.num(0).unwrap_or(0.0),
-                b"Tz" => gs.th = op.num(0).unwrap_or(100.0) / 100.0,
-                b"TL" => gs.tl = op.num(0).unwrap_or(0.0),
-                b"Ts" => gs.rise = op.num(0).unwrap_or(0.0),
+                // Operands are read from the end, as the renderer reads them.
+                b"Tc" => gs.tc = op.num_back(0).unwrap_or(0.0),
+                b"Tw" => gs.tw = op.num_back(0).unwrap_or(0.0),
+                b"Tz" => gs.th = op.num_back(0).unwrap_or(100.0) / 100.0,
+                b"TL" => gs.tl = op.num_back(0).unwrap_or(0.0),
+                b"Ts" => gs.rise = op.num_back(0).unwrap_or(0.0),
                 b"Tf" => {
-                    gs.font = op.name(0).map(<[u8]>::to_vec).unwrap_or_default();
-                    gs.size = op.num(1).unwrap_or(0.0);
+                    gs.font = op.name_back(1).map(<[u8]>::to_vec).unwrap_or_default();
+                    gs.size = op.num_back(0).unwrap_or(0.0);
                 }
                 b"Td" | b"TD" => {
                     if let Some([x, y]) = op.nums::<2>() {
@@ -671,7 +672,7 @@ impl Extractor<'_> {
                         tm = tlm;
                     }
                     if o == b"\""
-                        && let (Some(aw), Some(ac)) = (op.num(0), op.num(1))
+                        && let (Some(aw), Some(ac)) = (op.num_back(2), op.num_back(1))
                     {
                         (gs.tw, gs.tc) = (aw, ac);
                     }
@@ -686,7 +687,7 @@ impl Extractor<'_> {
                     self.show_text(font, &op, &gs, &mut tm, placed);
                 }
                 b"Do" => {
-                    let Some(name) = op.name(0) else { continue };
+                    let Some(name) = op.last_name() else { continue };
                     let Some(entry) = xobjects.get(name) else { continue };
                     if let Object::Stream(s) = &*doc.resolve(entry)
                         && s.dict.name(b"Subtype") == Some(b"Form")
