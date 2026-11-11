@@ -579,6 +579,46 @@ fn the_save_button_is_greyed_out_until_there_is_something_to_save() {
     let _ = std::fs::remove_file(out);
 }
 
+/// CodeRabbit on #5336: typing held by the other pane of a split view of the same document is
+/// what Save commits, so the button stays available while that pane holds it.
+#[test]
+fn typing_in_the_other_pane_of_a_split_view_keeps_save_available() {
+    let out = temp_path("split-typing-save.pdf");
+    std::fs::write(&out, fixture(2)).unwrap();
+    let path = out.to_string_lossy().into_owned();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe({
+        let path = path.clone();
+        move |_| {
+            let mut app = PdfCraftApp::new();
+            app.set_option("language", "en").unwrap();
+            app.open_bytes("split-typing-save.pdf", Some(path), fixture(2)).unwrap();
+            app
+        }
+    });
+    h.ctx.set_os(egui::os::OperatingSystem::Windows);
+    h.run_steps(4);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Backslash);
+    h.run_steps(3);
+    assert_eq!(h.state().views.len(), 2, "the document is shown in both panes");
+    let disabled = |h: &Harness<'static, PdfCraftApp>| h.get_by_role_and_label(Role::Button, "Save (Ctrl+S)").accesskit_node().is_disabled();
+    assert!(disabled(&h), "nothing to save yet");
+    let active = h.state().active.unwrap();
+    let other = 1 - active;
+    h.state_mut().views[other].fill_text = Some(pdfcraft_ui_egui::fill_sign::TypeBox {
+        page: 0,
+        at: [40.0, 40.0],
+        text: "typed".into(),
+        size: 10.0,
+        color: [0.0; 3],
+        border: Default::default(),
+        focus: false,
+    });
+    h.run_steps(2);
+    assert_eq!(h.state().active, Some(active), "the pane with the button's document is still active");
+    assert!(!disabled(&h), "the other pane's typing is saved with the document");
+    let _ = std::fs::remove_file(out);
+}
+
 /// FredApps on #5336: a file repaired as it opened (here, its cross-reference offset is wrong)
 /// keeps Save available, since only a save keeps the repair; the saved file opens clean, and the
 /// button greys out.
