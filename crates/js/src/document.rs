@@ -1,5 +1,6 @@
 use super::host::{
-    FieldKey, arg, charge, colour, error, function, host, kind_of, read, s, set_value, strings, text, text_bytes, text_line, value_for, value_of, write,
+    FieldKey, arg, charge, colour, error, function, host, kind_of, read, s, set_value, strings, text, text_bytes, text_line, value_for, value_of,
+    write,
 };
 use super::model::{DISPLAY_HIDDEN, DISPLAY_VISIBLE, FieldType, Request};
 use super::{Attribute, Context, JsArray, JsObject, JsResult, JsString, JsValue, NativeFunction, ObjectInitializer, js_string};
