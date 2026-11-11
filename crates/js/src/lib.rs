@@ -45,6 +45,7 @@ mod host;
 mod model;
 mod nesting;
 mod run;
+mod source;
 
 #[cfg(test)]
 pub(crate) use format::PRINTD_SCANNED;
