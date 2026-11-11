@@ -21,9 +21,11 @@
 //! in [`RecoveryRule::ORDER`]: the first that reads a glyph wins.
 
 mod candidate;
+mod document;
 mod orders;
 mod small_caps;
 mod standard_order;
+mod survey;
 mod widths;
 
 use crate::font::FontFlags;
@@ -40,6 +42,9 @@ use skrifa::{FontRef, GlyphId, MetadataProvider};
 use small_caps::AdobeSmallCaps;
 use standard_order::StandardStringOrder;
 use std::sync::{Arc, OnceLock};
+
+pub(crate) use document::font_key;
+pub use document::RecoveryDocument;
 
 /// A way to recover a glyph's text, named by the mechanism it reads.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -98,6 +103,19 @@ pub(crate) enum Counter {
     ProgramWalk,
     /// A Type 3 font's dictionary hashed for its cache key.
     Type3KeyHash,
+    /// A font's guards taken from its document's decisions ([`RecoveryDocument`]) instead of
+    /// decided again.
+    DecisionReused,
+    /// A document survey begun: a rule needs the document's usage evidence
+    /// ([`Rule::NEEDS_DOCUMENT_USAGE`]), and [`RecoveryDocument::prepare`] looks for fonts to count.
+    SurveyRun,
+    /// A page whose content the document survey read ([`RecoveryDocument::prepare`]).
+    SurveyPage,
+    /// A glyph the document survey counted.
+    SurveyGlyph,
+    /// An embedded program the document survey read (decoded and checked), once per program
+    /// stream however many fonts share it.
+    SurveyProgram,
 }
 
 /// Counts `counter` on this thread (only with the `test-counters` feature).
@@ -113,6 +131,11 @@ pub(crate) fn count(counter: Counter) {
             Counter::GlyphFactsBuilt => &mut n.glyph_facts_built,
             Counter::ProgramWalk => &mut n.program_walks,
             Counter::Type3KeyHash => &mut n.type3_key_hashes,
+            Counter::DecisionReused => &mut n.decisions_reused,
+            Counter::SurveyRun => &mut n.survey_runs,
+            Counter::SurveyPage => &mut n.survey_pages,
+            Counter::SurveyGlyph => &mut n.survey_glyphs,
+            Counter::SurveyProgram => &mut n.survey_programs,
         };
         *field = field.saturating_add(1);
         c.set(n);
@@ -138,6 +161,42 @@ pub struct RecoveryCounters {
     pub program_walks: usize,
     /// Type 3 font dictionaries hashed for a cache key.
     pub type3_key_hashes: usize,
+    /// Fonts whose guards came from their document's decisions ([`RecoveryDocument`]), not
+    /// decided again.
+    pub decisions_reused: usize,
+    /// Document surveys begun (each looks through the pages' fonts, and reads their content
+    /// when one may be counted).
+    pub survey_runs: usize,
+    /// Pages the document survey read.
+    pub survey_pages: usize,
+    /// Glyphs the document survey counted.
+    pub survey_glyphs: usize,
+    /// Embedded programs the document survey read.
+    pub survey_programs: usize,
+}
+
+#[cfg(feature = "test-counters")]
+impl RecoveryCounters {
+    /// The work done since `before` (a reading taken earlier on the same thread), field by
+    /// field: what a test measures without naming every counter.
+    #[must_use]
+    pub fn since(&self, before: &Self) -> Self {
+        Self {
+            rule_calls: self.rule_calls.saturating_sub(before.rule_calls),
+            guard_decisions: self.guard_decisions.saturating_sub(before.guard_decisions),
+            facts_built: self.facts_built.saturating_sub(before.facts_built),
+            glyph_facts_built: self
+                .glyph_facts_built
+                .saturating_sub(before.glyph_facts_built),
+            program_walks: self.program_walks.saturating_sub(before.program_walks),
+            type3_key_hashes: self.type3_key_hashes.saturating_sub(before.type3_key_hashes),
+            decisions_reused: self.decisions_reused.saturating_sub(before.decisions_reused),
+            survey_runs: self.survey_runs.saturating_sub(before.survey_runs),
+            survey_pages: self.survey_pages.saturating_sub(before.survey_pages),
+            survey_glyphs: self.survey_glyphs.saturating_sub(before.survey_glyphs),
+            survey_programs: self.survey_programs.saturating_sub(before.survey_programs),
+        }
+    }
 }
 
 #[cfg(feature = "test-counters")]
@@ -150,6 +209,11 @@ thread_local! {
             glyph_facts_built: 0,
             program_walks: 0,
             type3_key_hashes: 0,
+            decisions_reused: 0,
+            survey_runs: 0,
+            survey_pages: 0,
+            survey_glyphs: 0,
+            survey_programs: 0,
         })
     };
 }
@@ -178,6 +242,40 @@ pub mod test_hooks {
     /// The character the CFF standard string `sid` names.
     pub fn standard_string_char(sid: u32) -> Option<char> {
         super::orders::standard_string_char(sid)
+    }
+
+    /// The document survey of `pdf`, font by font: each counted font's object number,
+    /// `/BaseFont` without its subset tag, and (code, times shown, the number a rule reads),
+    /// with whether the survey passed a cap; `None` when it was cancelled.
+    #[allow(clippy::type_complexity, reason = "a test's view of the survey")]
+    pub fn survey_report(
+        pdf: &hayro_syntax::Pdf,
+        settings: &crate::InterpreterSettings,
+    ) -> Option<(bool, Vec<(Option<i32>, Vec<u8>, Vec<(u16, u64, Option<u32>)>)>)> {
+        let (over, fonts) = super::survey::report(pdf, settings)?;
+        Some((over, fonts.into_iter().map(|f| (f.object, f.base, f.codes)).collect()))
+    }
+
+    /// The fonts of `pdf`'s pages, classified as the document survey reads them without
+    /// building them, and as the built font gives the same: (object number, the survey's
+    /// kind, glyph count and number for every code, the built font's), `None` for a font not
+    /// counted. Equal pairs show the survey's reading matches the fonts the pages draw.
+    #[allow(clippy::type_complexity, reason = "a test's view of the survey")]
+    pub fn survey_classifications(
+        pdf: &hayro_syntax::Pdf,
+        settings: &crate::InterpreterSettings,
+    ) -> Vec<(Option<i32>, Option<(String, Option<u32>, Vec<Option<u32>>)>, Option<(String, Option<u32>, Vec<Option<u32>>)>)> {
+        let show = |c: super::survey::Classified| c.map(|(kind, glyphs, numbers)| (format!("{kind:?}"), glyphs, numbers));
+        super::survey::classifications(pdf, settings)
+            .into_iter()
+            .map(|(object, light, built)| (object, show(light), show(built)))
+            .collect()
+    }
+
+    /// Caps the glyphs the document surveys run on this thread may count (`None`: the usual
+    /// cap), so a test can pass it with a small document.
+    pub fn set_survey_glyph_cap(cap: Option<u64>) {
+        super::survey::GLYPH_CAP.with(|c| c.set(cap));
     }
 
     /// The candidate policy's choice among `candidates`.
@@ -283,6 +381,29 @@ pub(crate) struct FontFacts<'a> {
     /// For a Type 0 font shown through an identity CMap and `/CIDToGIDMap`: the strict text of
     /// the code that draws glyph id `id`.
     pub(crate) id_text: Option<&'a dyn Fn(u32) -> Option<BfString>>,
+    /// Type 0 fonts: whether the encoding CMap is `Identity-H` or `Identity-V`, whatever the
+    /// `/CIDToGIDMap` (ISO 32000-2 §9.7.5.2: two-byte codes that are CIDs).
+    #[allow(
+        dead_code,
+        reason = "read by the rules that read a Type 0 font's glyph ids in a standard order"
+    )]
+    pub(crate) identity_encoding: bool,
+    /// How many glyphs the embedded program has: a TrueType or OpenType program's `maxp`
+    /// count, a CFF program's number of charstrings. `None` without an embedded program.
+    #[allow(
+        dead_code,
+        reason = "read by the rules that read a Type 0 font's glyph ids in a standard order"
+    )]
+    pub(crate) program_glyphs: Option<u32>,
+    /// How often the font's glyphs are shown across its document, and its group of subsets of
+    /// one font ([`RecoveryDocument`]'s survey): for the guards of rules whose evidence is the
+    /// document's text. `None` without a surveyed document, or for a font the survey doesn't
+    /// count.
+    #[allow(
+        dead_code,
+        reason = "read by the rules whose evidence is the document's text"
+    )]
+    pub(crate) usage: Option<Arc<document::FontUsage>>,
 }
 
 impl FontFacts<'_> {
@@ -301,6 +422,9 @@ impl FontFacts<'_> {
             ids: None,
             id_width: None,
             id_text: None,
+            identity_encoding: false,
+            program_glyphs: None,
+            usage: None,
         }
     }
 }
@@ -332,6 +456,21 @@ pub(crate) trait Rule {
     /// guard isn't decided and its facts aren't built, so a font no rule reads costs one
     /// check per glyph and nothing else.
     const KINDS: &'static [FontKind];
+    /// Whether the rule's guard reads the whole document's usage evidence
+    /// ([`FontFacts::usage`]): how often each glyph of the font is shown across the document,
+    /// and the font's group of subsets of one font. A rule that decides from one font's own
+    /// facts leaves it `false`; one that weighs a reading against the document's text (for
+    /// instance a standard glyph order for Japanese, Korean or Chinese text, judged by how
+    /// common the characters it reads are) sets it.
+    ///
+    /// [`RecoveryDocument::prepare`] surveys a document only when a rule that sets it can take
+    /// a kind of font the survey counts ([`Self::KINDS`]); with no such rule, no document is
+    /// surveyed and no font has evidence. The survey counts Type 0 fonts with an `Identity-H`
+    /// or `Identity-V` encoding over an embedded TrueType, OpenType or CID-keyed CFF program,
+    /// without a `/ToUnicode` stream or an Adobe character collection
+    /// ([`FontKind::CidTrueType`] and [`FontKind::CidCff`]). A rule that needs usage of other
+    /// kinds of font would extend what the survey counts, not add a second survey.
+    const NEEDS_DOCUMENT_USAGE: bool = false;
     /// What the font-level decision keeps.
     type Guard;
     /// Whether the font qualifies, decided once per font.
@@ -362,6 +501,12 @@ impl Guards {
             || AdobeSmallCaps::KINDS.contains(&kind)
     }
 
+    /// Whether some rule that reads the document's usage evidence
+    /// ([`Rule::NEEDS_DOCUMENT_USAGE`]) can take a font of `kind`.
+    pub(crate) fn need_usage(kind: FontKind) -> bool {
+        needs_usage::<NumberedLatin1Names>(kind) || needs_usage::<MacGlyphOrder>(kind)
+    }
+
     fn decide(font: &FontFacts<'_>) -> Self {
         count(Counter::GuardDecision);
         Self {
@@ -381,9 +526,14 @@ impl Guards {
     }
 }
 
-/// The font-level decisions of one font, made the first time a glyph of it asks.
+/// The font-level decisions of one font, made the first time a glyph of it asks, or taken from
+/// its document's ([`RecoveryDocument`]) when the font was read with one.
 #[derive(Debug, Default)]
-pub(crate) struct RecoveryCache(OnceLock<Guards>);
+pub(crate) struct RecoveryCache {
+    guards: OnceLock<Arc<Guards>>,
+    /// The document the font was read from, and the font's key there.
+    document: OnceLock<(Arc<RecoveryDocument>, u128)>,
+}
 
 /// A font's style for text the recovery rules read ([`crate::font::Glyph::recovery_style`]),
 /// worked out once per font and shared by its glyphs.
@@ -504,6 +654,12 @@ impl std::fmt::Debug for Guards {
 }
 
 impl RecoveryCache {
+    /// Keep the font's decisions in `document`, under `key` (its dictionary's cache key): set
+    /// once, before any glyph of the font asks.
+    pub(crate) fn attach(&self, document: Arc<RecoveryDocument>, key: u128) {
+        let _ = self.document.set((document, key));
+    }
+
     /// The recovered reading of one glyph of a font of `kind`: `facts` builds the font's facts
     /// (of that kind; called for the guards the first time, and again only when some rule takes
     /// the font), `glyph` the glyph's (built only when some rule takes the font). A font of a
@@ -522,7 +678,14 @@ impl RecoveryCache {
             count(Counter::FactsBuilt);
             facts()
         };
-        let guards = self.0.get_or_init(|| Guards::decide(&facts()));
+        let guards = self.guards.get_or_init(|| match self.document.get() {
+            Some((document, key)) => document.guards(*key, || {
+                let mut font = facts();
+                font.usage = document.usage(*key);
+                Guards::decide(&font)
+            }),
+            None => Arc::new(Guards::decide(&facts())),
+        });
         if guards.none() {
             return None;
         }
@@ -544,6 +707,11 @@ impl RecoveryCache {
             }
         })
     }
+}
+
+/// Whether rule `R` reads the document's usage evidence for a font of `kind`.
+fn needs_usage<R: Rule>(kind: FontKind) -> bool {
+    R::NEEDS_DOCUMENT_USAGE && R::KINDS.contains(&kind)
 }
 
 /// Rule `R`'s guard for `font`, asked only of a font of a kind it can take ([`Rule::KINDS`]).

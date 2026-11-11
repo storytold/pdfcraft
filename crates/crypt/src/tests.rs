@@ -248,6 +248,23 @@ fn permission_bits_follow_table_22() {
     assert!(p.modify(), "owners ignore /P");
 }
 
+/// Page extraction (#5081) is assembly as the revision reads it, and copying (bit 5).
+#[test]
+fn page_extraction_needs_assembly_and_copying() {
+    let bit = |n: u32| 1i32 << (n - 1);
+    let user = |bits: i32, revision: i64| Permissions { bits, owner: false, revision };
+    // "Any except extracting pages" (bits 4, 6, 9; copying off) at revision 3 and later.
+    assert!(!user(bit(4) | bit(6) | bit(9), 4).extract_pages());
+    // Pages may change in place, but copying is withheld.
+    assert!(user(bit(11), 6).assemble() && !user(bit(11), 6).extract_pages());
+    assert!(user(bit(11) | bit(5), 6).extract_pages());
+    // Revision 2: bit 4 covers assembly, and its reserved bit 11 grants nothing.
+    assert!(user(bit(4), 2).assemble() && !user(bit(4) | bit(11), 2).extract_pages(), "copying withheld");
+    assert!(user(bit(4) | bit(5), 2).extract_pages());
+    assert!(!user(bit(5) | bit(11), 2).extract_pages(), "no assembly without bit 4 at revision 2");
+    assert!(Permissions { bits: 0, owner: true, revision: 2 }.extract_pages(), "owners ignore /P");
+}
+
 #[test]
 fn perms_limits_what_an_edited_p_grants() {
     let made = new(Algorithm::Aes256, "user pw", "owner pw", 0b0100); // print only

@@ -920,6 +920,11 @@ fn extract_page_with(
     filter: TextFilter,
     recover: bool,
 ) -> Result<(PageText, Option<RecoveredText>), String> {
+    // The rules that read the whole document's text need its survey before any of the page's
+    // fonts is decided: once per document, and not counted against the page's own time.
+    if recover && let Some(document) = &settings.recovery_document {
+        document.prepare(pdf, settings);
+    }
     let started = Started::now();
     let pages = pdf.pages();
     let p = pages.get(page).ok_or("the page could not be read")?;
