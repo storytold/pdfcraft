@@ -946,7 +946,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let script = dir.join("tesseract-hang");
-        std::fs::write(&script, "#!/bin/sh\nsleep 30\n").unwrap();
+        std::fs::write(&script, "#!/bin/sh\nif [ \"$1\" = --list-langs ]; then printf 'eng\\n'; else sleep 30; fi\n").unwrap();
         make_executable(&script);
         let mut t = TesseractCli::new(script);
         t.timeout = Duration::from_millis(500);
@@ -967,7 +967,11 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let script = dir.join("tesseract-flood");
-        std::fs::write(&script, "#!/bin/sh\nhead -c 100000000 /dev/zero | tr '\\0' 'x'\nsleep 30\n").unwrap();
+        std::fs::write(
+            &script,
+            "#!/bin/sh\nif [ \"$1\" = --list-langs ]; then printf 'eng\\n'; else head -c 100000000 /dev/zero | tr '\\0' 'x'; sleep 30; fi\n",
+        )
+        .unwrap();
         make_executable(&script);
         let mut t = TesseractCli::new(script);
         t.max_output = 1024;
@@ -990,7 +994,11 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let script = dir.join("tesseract-err-flood");
         // (below MAX_STDERR, past which the child is stopped: `an_stderr_flood_is_killed_while_the_child_runs`)
-        std::fs::write(&script, "#!/bin/sh\nhead -c 200000 /dev/zero | tr '\\0' 'e' >&2\necho flooded away\n").unwrap();
+        std::fs::write(
+            &script,
+            "#!/bin/sh\nif [ \"$1\" = --list-langs ]; then printf 'eng\\n'; else head -c 200000 /dev/zero | tr '\\0' 'e' >&2; echo flooded away; fi\n",
+        )
+        .unwrap();
         make_executable(&script);
         let mut t = TesseractCli::new(script);
         t.timeout = Duration::from_secs(10);
