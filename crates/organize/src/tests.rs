@@ -2962,6 +2962,29 @@ fn replace_pages_all_targets_and_non_contiguous_selections() {
     let renamed = replace_pages(&mut collide_dst, &[0], &collide_src, &[0, 1]).unwrap();
     assert_eq!(renamed, [("KeepOrig".to_string(), "KeepOrig-1".to_string())]);
     assert_eq!(form_field_names(&collide_dst), ["KeepOrig", "KeepOrig-1"]);
+
+    // Links on extra inserted pages that target a paired source page resolve to the surviving replaced target page.
+    let mut link_dst = open(fixture());
+    let mut link_src = open(fixture());
+    let src_p0 = pages(&link_src).unwrap()[0].obj;
+    let src_p1 = pages(&link_src).unwrap()[1].obj;
+    let link_annot = link_src.add(Object::Dict({
+        let mut d = Dict::new();
+        d.set(b"Type".to_vec(), Object::name("Annot"));
+        d.set(b"Subtype".to_vec(), Object::name("Link"));
+        d.set(b"Rect".to_vec(), Object::Array(vec![0.into(), 0.into(), 20.into(), 20.into()]));
+        d.set(b"Dest".to_vec(), Object::Array(vec![Object::Ref(src_p0), Object::name("Fit")]));
+        d
+    }));
+    link_src.update_dict(src_p1, |d| d.set(b"Annots".to_vec(), Object::Array(vec![Object::Ref(link_annot)]))).unwrap();
+    replace_pages(&mut link_dst, &[1], &link_src, &[0, 1]).unwrap();
+    let dst_pages = pages(&link_dst).unwrap();
+    let replaced_target = dst_pages[1].obj;
+    let extra_page = dst_pages[2].obj;
+    let extra_annots = link_dst.get(extra_page).as_dict().and_then(|d| d.get(b"Annots")).and_then(Object::as_array).cloned().unwrap();
+    let copied_link = link_dst.resolve(&extra_annots[0]);
+    let dest = copied_link.as_dict().and_then(|d| d.get(b"Dest")).and_then(Object::as_array).unwrap();
+    assert_eq!(dest.first().and_then(Object::as_ref), Some(replaced_target));
 }
 
 #[test]

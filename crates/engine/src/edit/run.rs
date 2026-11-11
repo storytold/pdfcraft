@@ -253,6 +253,11 @@ pub(crate) struct EditCtx {
     /// The overlay streams the edit's applied redactions added, which alone the renderer's check
     /// leaves out.
     pub(crate) redaction_overlays: Vec<pdfcraft_cos::ObjRef>,
+    /// The marks the edit's applied redactions took out (a batch's included), as they were when
+    /// each apply ran, for the renderer's check.
+    /// Each applied mark with the page object it was drawn on, which a later page move changes the
+    /// index of but not the identity.
+    pub(crate) redaction_marks: Vec<(pdfcraft_cos::ObjRef, pdfcraft_redact::Mark)>,
     /// What the edit's applied redactions left as it was that still holds the removed text.
     pub(crate) redaction_elsewhere: Option<pdfcraft_redact::Elsewhere>,
     /// What became of the PDF/A and PDF/UA identification when the edit's applied redactions
@@ -310,6 +315,7 @@ impl EditCtx {
             rng: getrandom::fill,
             renamed_fields: Vec::new(),
             redaction_overlays: Vec::new(),
+            redaction_marks: Vec::new(),
             redaction_elsewhere: None,
             redaction_identification: pdfcraft_redact::Identification::default(),
             prepared: None,
@@ -518,6 +524,26 @@ fn invalidate_form_script_snapshot(cx: &mut EditCtx) {
     }
 }
 
+fn run_replace_pages(
+    doc: &mut pdfcraft_cos::Document,
+    pages: &[usize],
+    name: &str,
+    bytes: &std::sync::Arc<Vec<u8>>,
+    src_pages: &[usize],
+    cx: &mut EditCtx,
+) -> Result<(), EditError> {
+    let src = crate::sources::open_source_into(name, bytes, doc)?;
+    let renamed = pdfcraft_organize::replace_pages(doc, pages, &src, src_pages)?;
+    if src_pages.len() != pages.len() {
+        cx.pages = pdfcraft_organize::page_count(doc).unwrap_or(cx.pages);
+    }
+    if src_pages.len() != pages.len() || !renamed.is_empty() {
+        invalidate_form_script_snapshot(cx);
+    }
+    cx.renamed_fields.extend(renamed);
+    Ok(())
+}
+
 /// Perform an edit on a working copy (the caller discards it on error).
 pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> Result<(), EditError> {
     match edit {
@@ -529,14 +555,18 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             pdfcraft_organize::insert_blank_page(doc, *at, *width, *height)?;
         }
         Edit::SetInfo { key, value } => pdfcraft_organize::set_info(doc, key, value)?,
-        Edit::DuplicatePages { pages, at } => pdfcraft_organize::duplicate_pages(doc, pages, *at)?,
-        Edit::ReplacePages { pages, name, bytes, src_pages } => {
-            let src = crate::sources::open_source_into(name, bytes, doc)?;
-            cx.renamed_fields = pdfcraft_organize::replace_pages(doc, pages, &src, src_pages)?;
-            if src_pages.len() != pages.len() || !cx.renamed_fields.is_empty() {
-                invalidate_form_script_snapshot(cx);
+        Edit::DuplicatePages { pages, at } => {
+            // A copy of a page cannot be tied back to the marks an earlier redaction of this edit
+            // applied: text put back under a mark would sit on the copy, unchecked. Fail closed.
+            if !cx.redaction_marks.is_empty() {
+                return Err(EditError::Invalid(
+                    "a batch that applies redactions can't also copy pages: the copies can't be checked against the marks; the document was not changed"
+                        .into(),
+                ));
             }
+            pdfcraft_organize::duplicate_pages(doc, pages, *at)?
         }
+        Edit::ReplacePages { pages, name, bytes, src_pages } => run_replace_pages(doc, pages, name, bytes, src_pages, cx)?,
         Edit::SetPageBox { pages, which, spec } => pdfcraft_organize::set_page_box(doc, pages, *which, *spec)?,
         Edit::SetTransition { pages, spec } => pdfcraft_organize::set_transition(doc, pages, spec)?,
         Edit::InsertPagesFrom { name, bytes, pages, at, field_conflicts } => {
@@ -548,7 +578,7 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             // The file's bookmarks come along under one named after it, as in Combine Files.
             let title = std::path::Path::new(name).file_stem().map_or_else(|| name.clone(), |s| s.to_string_lossy().into_owned());
             let outcome = pdfcraft_organize::insert_file_pages(doc, &src, &title, &pages, *at, *field_conflicts)?;
-            cx.renamed_fields = outcome.renamed_fields;
+            cx.renamed_fields.extend(outcome.renamed_fields);
             invalidate_form_script_snapshot(cx);
         }
         Edit::AddBookmark { parent, index, title, page, left, top } => {
@@ -994,8 +1024,15 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             pdfcraft_edit::add_content(doc, *page, &content)?;
         }
         Edit::ApplyRedactions { pages } => {
+            let model = pdfcraft_model::pages(doc);
+            cx.redaction_marks.extend(
+                pdfcraft_redact::marks(doc)
+                    .into_iter()
+                    .filter(|m| pages.as_ref().is_none_or(|p| p.contains(&m.page)))
+                    .filter_map(|m| model.get(m.page).map(|p| (p.obj, m))),
+            );
             let report = pdfcraft_redact::apply(doc, pages.as_deref())?;
-            cx.redaction_overlays = report.overlays;
+            cx.redaction_overlays.extend(report.overlays);
             cx.redaction_elsewhere = Some(report.still_holding);
             cx.redaction_identification = report.identification;
         }

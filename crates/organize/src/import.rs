@@ -75,8 +75,21 @@ pub fn import_pages_with(
     at: usize,
     conflicts: FieldConflicts,
 ) -> Result<ImportOutcome, OrganizeError> {
+    import_pages_with_paired(dst, src, src_pages, at, conflicts, HashMap::new())
+}
+
+/// [`import_pages_with`], also resolving destinations on `src_pages` that target `paired_pages`
+/// (source page → surviving replaced target page in `dst`).
+pub(crate) fn import_pages_with_paired(
+    dst: &mut Document,
+    src: &Document,
+    src_pages: &[usize],
+    at: usize,
+    conflicts: FieldConflicts,
+    paired_pages: HashMap<ObjRef, ObjRef>,
+) -> Result<ImportOutcome, OrganizeError> {
     let before: HashSet<u32> = dst.object_numbers().into_iter().collect();
-    let imported = match import_pages_mapped(dst, src, src_pages, at, conflicts) {
+    let imported = match import_pages_mapped_with(dst, src, src_pages, at, conflicts, paired_pages) {
         Ok(imported) => imported,
         Err(e) => {
             // A refusal while copying (a source too deep to follow) has only added objects:
@@ -204,6 +217,17 @@ fn import_pages_mapped(
     at: usize,
     conflicts: FieldConflicts,
 ) -> Result<Imported, OrganizeError> {
+    import_pages_mapped_with(dst, src, src_pages, at, conflicts, HashMap::new())
+}
+
+fn import_pages_mapped_with(
+    dst: &mut Document,
+    src: &Document,
+    src_pages: &[usize],
+    at: usize,
+    conflicts: FieldConflicts,
+    paired_pages: HashMap<ObjRef, ObjRef>,
+) -> Result<Imported, OrganizeError> {
     let source = walk(src)?;
     if let Some(bad) = src_pages.iter().find(|i| **i >= source.len()) {
         return Err(OrganizeError::NoSuchPage(*bad));
@@ -226,6 +250,9 @@ fn import_pages_mapped(
         .collect();
     if src_pages.iter().collect::<HashSet<_>>().len() < source.len() {
         copier.kept = Some(Rc::new(fields_on(src, copier.pages.keys().copied())));
+    }
+    for (src_page, dst_page) in paired_pages {
+        copier.pages.entry(src_page).or_insert(dst_page);
     }
     let mut annot_pages = HashMap::new();
     let mut new_pages = Vec::new();

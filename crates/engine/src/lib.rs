@@ -201,4 +201,6 @@ fn display_config(config: &pdfcraft_render::RenderConfig) -> pdfcraft_render::Re
 pub const MAX_STAMP_LINE: usize = 200;
 
 #[cfg(test)]
+mod document_actions_tests;
+#[cfg(test)]
 mod tests;

@@ -590,13 +590,18 @@ pub fn replace_pages(doc: &mut Document, targets: &[usize], src: &Document, src_
     let paired_src = src_pages.get(..paired).unwrap_or_default();
     let imported = import_pages(doc, src, paired_src, n)?;
     let all = walk(doc)?;
+    let src_all = walk(src)?;
+    let mut paired_map = std::collections::HashMap::with_capacity(paired);
     const SHOWN: [&[u8]; 10] =
         [b"Contents", b"Resources", b"MediaBox", b"CropBox", b"BleedBox", b"TrimBox", b"ArtBox", b"Rotate", b"UserUnit", b"Group"];
-    for (t, new) in paired_targets.iter().zip(&imported) {
+    for ((t, s), new) in paired_targets.iter().zip(paired_src).zip(&imported) {
         // The imported page with its inherited attributes resolved.
         let (_, inherited) = all.iter().find(|(r, _)| r == new).cloned().unwrap_or((*new, Dict::new()));
         let src_dict = doc.get(*new).as_dict().cloned().unwrap_or_default();
         let Some(&(target, _)) = all.get(*t) else { continue };
+        if let Some(&(src_page, _)) = src_all.get(*s) {
+            paired_map.entry(src_page).or_insert(target);
+        }
         doc.update_dict(target, |d| {
             for k in SHOWN {
                 match src_dict.get(k).or_else(|| inherited.get(k)) {
@@ -618,7 +623,7 @@ pub fn replace_pages(doc: &mut Document, targets: &[usize], src: &Document, src_
         return Ok(Vec::new());
     }
     let insert_at = paired_targets.iter().max().map_or(n, |last| last + 1);
-    let outcome = import_pages_with(doc, src, extra, insert_at, FieldConflicts::Rename)?;
+    let outcome = import::import_pages_with_paired(doc, src, extra, insert_at, FieldConflicts::Rename, paired_map)?;
     labels::shift_inserted_pages(doc, insert_at, extra.len())?;
     Ok(outcome.renamed_fields)
 }
