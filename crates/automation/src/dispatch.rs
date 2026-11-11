@@ -711,11 +711,7 @@ impl Automation {
             "form_fields" => self.form_fields(&a)?,
             "form_fill" => self.form_fill(&a)?,
             "form_focus" => self.form_focus(&a)?,
-            "form_set_image" => {
-                let path = self.resolve(a.str("path")?, false)?;
-                let bytes = read_input(&path)?;
-                self.apply(&a, Edit::SetFieldImage { name: a.str("field")?.to_owned(), image: Arc::new(bytes) })?
-            }
+            "form_set_image" => self.form_set_image(&a)?,
             "form_reset" => self.form_reset(&a)?,
             "form_add_field" => self.form_add_field(&a)?,
             "form_add_field_table" => self.form_add_field_table(&a)?,
@@ -731,6 +727,7 @@ impl Automation {
             "doc_hidden_info" => self.doc_hidden_info(&a)?,
             "printers" => self.printers()?,
             "printer_options" => self.printer_options(&a)?,
+            "printer_papers" => self.printer_papers(&a)?,
             "link_list" => self.link_list(&a)?,
             "link_open" => self.link_open(&a)?,
             "link_add" => self.link_add(&a)?,

@@ -1,0 +1,32 @@
+name: Nightly macOS
+
+# The workspace's tests on macOS, each night and on demand. Pull requests and main run Linux and
+# Windows only (ci.yml): the org's 5 macOS runners are kept for release builds, and release.yml
+# builds and signs the macOS app without running the tests. This one leg a night finds a
+# macOS-only failure within a day, not at release time or from a user.
+on:
+  schedule:
+    - cron: "41 2 * * *"
+  workflow_dispatch:
+
+# The token is only used to check out the code: no job writes to the repository.
+permissions:
+  contents: read
+
+# A newer run replaces one still queued or running.
+concurrency:
+  group: nightly-macos-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    # Tracks @main so suite-wide CI fixes reach every app without a PR in each repository.
+    uses: storytold/craft-common-actions/.github/workflows/gate.yml@main
+    with:
+      os: '["macos-latest"]'
+      # Same craft-fonts commit as ci.yml, release.yml and freebsd.yml.
+      craft-fonts-ref: b076417b5880bd4154bd22f00695b1d28c6bea83
+      # Every test, and all of their failures in one run. The whole workspace took 37 minutes on
+      # macos-latest on 10 Nov 2026.
+      command: cargo test --workspace --locked --no-fail-fast
+      timeout-minutes: 90
