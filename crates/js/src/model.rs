@@ -74,6 +74,11 @@ pub struct FieldState {
     pub caption_mixed: bool,
     pub icon_mixed: bool,
     pub icon_written: bool,
+    /// JavaScript actions a script installed with `setAction` during this run, by trigger
+    /// (`MouseUp`, `MouseDown`, `MouseEnter`, `MouseExit`, `OnFocus`, `OnBlur`, `Keystroke`,
+    /// `Validate`, `Calculate`, `Format`), the last one for each trigger. Empty in a snapshot:
+    /// the host reads the document's own actions from the PDF.
+    pub actions: Vec<(String, String)>,
 }
 
 impl FieldState {
@@ -108,6 +113,7 @@ impl FieldState {
             caption_mixed: false,
             icon_mixed: false,
             icon_written: false,
+            actions: Vec::new(),
         }
     }
 
