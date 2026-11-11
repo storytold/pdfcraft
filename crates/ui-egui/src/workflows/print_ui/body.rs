@@ -114,16 +114,24 @@ fn print_card<R>(
     content: impl FnOnce(&mut egui::Ui) -> R,
 ) -> R {
     let card_fill = if t.kind == theme::ThemeKind::Light { Color32::from_rgb(0xF7, 0xF8, 0xFA) } else { Color32::from_rgb(0x24, 0x24, 0x28) };
+    let card_id = ui.make_persistent_id(title);
+    let animated = crate::motion::animated(ui.ctx());
+
+    let is_hovered = ui.rect_contains_pointer(Rect::from_min_size(ui.cursor().min, vec2(width, min_height.unwrap_or(40.0))));
+    let hover_t = ui.ctx().animate_bool_with_time(card_id.with("hover"), is_hovered, if animated { 0.18 } else { 0.0 });
+    let border_color = t.border.lerp_to_gamma(t.text_muted.gamma_multiply(0.4), hover_t);
+
     egui::Frame::new()
         .fill(card_fill)
-        .stroke(Stroke::new(1.0, t.border))
+        .stroke(Stroke::new(1.0, border_color))
         .corner_radius(egui::CornerRadius::same(8))
         .inner_margin(egui::Margin::symmetric(12, 4))
         .show(ui, |ui| {
             ui.set_width(width);
             ui.set_max_width(width);
             if let Some(h) = min_height {
-                ui.set_min_height(h);
+                let current_h = ui.ctx().animate_value_with_time(card_id.with("min-h"), h, if animated { 0.15 } else { 0.0 });
+                ui.set_min_height(current_h);
             }
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 6.0;
@@ -141,6 +149,7 @@ fn print_card<R>(
 /// A segmented pill control for mutually exclusive choices in the Print dialog cards.
 fn segmented_pills<T: PartialEq + Copy>(ui: &mut egui::Ui, t: &Tokens, current: &mut T, options: &[(T, &str)]) -> bool {
     let mut changed = false;
+    let animated = crate::motion::animated(ui.ctx());
     egui::Frame::new()
         .fill(t.field)
         .stroke(Stroke::new(1.0, t.border))
@@ -158,8 +167,12 @@ fn segmented_pills<T: PartialEq + Copy>(ui: &mut egui::Ui, t: &Tokens, current: 
                     let (rect, resp) = ui.allocate_exact_size(vec2(w + 18.0, 24.0), egui::Sense::click());
                     resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::RadioButton, true, is_active, label));
 
-                    if is_active {
-                        ui.painter().rect(rect, egui::CornerRadius::same(12), t.accent, Stroke::NONE, egui::StrokeKind::Inside);
+                    let pill_id = resp.id.with("pill-active");
+                    let active_factor = ui.ctx().animate_bool_with_time(pill_id, is_active, if animated { 0.15 } else { 0.0 });
+
+                    if active_factor > 0.001 {
+                        let fill = t.hover.lerp_to_gamma(t.accent, active_factor);
+                        ui.painter().rect(rect, egui::CornerRadius::same(12), fill, Stroke::NONE, egui::StrokeKind::Inside);
                     } else {
                         let press = theme::Press::track(ui, &resp);
                         let fill = press.fill(Color32::TRANSPARENT, t.hover, t.pressed);
@@ -531,8 +544,8 @@ pub(crate) fn body(
                 });
 
                 // Card 3: Page Sizing & Handling
-                print_card(ui, t, tl!("Page Sizing & Handling"), Some("sliders-horizontal"), 452.0, Some(124.0), |ui| {
-                    ui.horizontal_wrapped(|ui| {
+                print_card(ui, t, tl!("Page Sizing & Handling"), Some("sliders-horizontal"), 452.0, Some(130.0), |ui| {
+                    ui.horizontal(|ui| {
                         for (h, label) in [
                             (Handling::Size, tl!("Size")),
                             (Handling::Poster, tl!("Poster")),
@@ -548,7 +561,7 @@ pub(crate) fn body(
                     });
                     ui.add_space(2.0);
                     ui.scope(|ui| {
-                        ui.set_min_height(44.0);
+                        ui.set_min_height(50.0);
                         match d.handling {
                         Handling::Size => {
                             ui.horizontal(|ui| {
@@ -674,10 +687,12 @@ pub(crate) fn body(
                                         (BookletSubset::FrontOnly, tl!("Front side only")),
                                         (BookletSubset::BackOnly, tl!("Back side only")),
                                     ],
-                                    130.0,
+                                    140.0,
                                 );
+                            });
+                            ui.horizontal(|ui| {
                                 ui.label(tl!("Binding:"));
-                                combo(ui, "binding", tl!("Binding:"), &mut d.binding, &[(Binding::Left, tl!("Left")), (Binding::Right, tl!("Right"))], 80.0);
+                                combo(ui, "binding", tl!("Binding:"), &mut d.binding, &[(Binding::Left, tl!("Left")), (Binding::Right, tl!("Right"))], 85.0);
                                 let creep_label = ui.label(tl!("Creep:"));
                                 ui.add(egui::DragValue::new(&mut d.creep).range(0.0..=print::MAX_CREEP).speed(0.05).suffix(" pt"))
                                     .labelled_by(creep_label.id)
