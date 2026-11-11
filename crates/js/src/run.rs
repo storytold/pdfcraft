@@ -51,7 +51,16 @@ pub(crate) fn refuse(source: &str) -> Option<String> {
     if crate::nesting::too_deep(source) {
         return Some("the script is nested too deeply to run safely".to_string());
     }
-    preflight::refuse(source)
+    // A leading `#!` line is a comment (the nesting guard reads it so); blank it for the chain
+    // scan, keeping its length.
+    match source.strip_prefix("#!") {
+        Some(rest) => {
+            let end = rest.find(['\n', '\r', '\u{2028}', '\u{2029}']).map_or(source.len(), |i| i + 2);
+            let blanked: String = source[..end].chars().map(|_| ' ').chain(source[end..].chars()).collect();
+            preflight::refuse(&blanked)
+        }
+        None => preflight::refuse(source),
+    }
 }
 
 /// Run `script` for `event`, after the document-level scripts (`doc_scripts`, which define the

@@ -786,7 +786,8 @@ mod tests {
             format!("var a=0\n{}a", "a=2**3\n".repeat(6000)),
             format!("var a=0;{}a;", "a+=1;".repeat(6000)),
             format!("var a=0;{}a;", "a=2**3;".repeat(6000)),
-            format!("var a=0;{}a;", "a=(1===1)?1:2;".repeat(5000)),
+            // Within the nesting guard's 4,096 conditionals.
+            format!("var a=0;{}a;", "a=(1===1)?1:2;".repeat(4000)),
         ];
         for (script, expected) in scripts.into_iter().zip(["2", "1", "1", "8", "6000", "8", "1"]) {
             let mut worker = ScriptSession::default();

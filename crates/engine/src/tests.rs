@@ -14024,7 +14024,8 @@ fn vm_limit_refuses_partial_script_writes() {
     assert_eq!(s.run_javascript(id, "typeof rejected;", None).unwrap().result.as_deref(), Some("undefined"));
 }
 
-/// A refusal before the first callback starts leaves the committed realm available.
+/// A script refused before it runs fails on its own, as on `main`: the edit goes through, the
+/// error is reported, and the committed realm is untouched.
 #[test]
 fn preflight_refusal_preserves_committed_callback_state() {
     let (mut s, id) = reset_order_session("");
@@ -14032,10 +14033,10 @@ fn preflight_refusal_preserves_committed_callback_state() {
     s.apply(id, Edit::SetFieldScript { name: "qty".into(), event: "validate".into(), script: Some(nested) }).unwrap();
     s.set_javascript(true);
     s.run_javascript(id, "var committed = 42;", None).unwrap();
-    let before = s.save_bytes(id).unwrap();
+    let _ = s.take_js_output(id);
     let edit = Edit::SetFieldValue { name: "qty".into(), value: pdfcraft_forms::FieldValue::Text("10".into()) };
-    assert!(matches!(s.apply(id, edit), Err(EditError::Invalid(_))));
-    assert_eq!(s.save_bytes(id).unwrap(), before);
+    s.apply(id, edit).unwrap();
+    assert!(s.take_js_output(id).errors.iter().any(|e| e.contains("nested too deeply")));
     assert_eq!(s.run_javascript(id, "committed;", None).unwrap().result.as_deref(), Some("42"));
 }
 
