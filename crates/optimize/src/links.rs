@@ -2,6 +2,7 @@
 //! refers to.
 
 use std::collections::{HashSet, VecDeque};
+use std::sync::Arc;
 
 use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString};
 
@@ -165,6 +166,7 @@ fn referenced_names(doc: &Document) -> HashSet<Vec<u8>> {
     let mut out = HashSet::new();
     let mut seen = HashSet::new();
     let mut named_refs = HashSet::new();
+    let mut named_held: std::collections::HashMap<*const Object, Arc<Object>> = std::collections::HashMap::new();
     let mut stack = vec![Object::Dict(doc.trailer().clone())];
     if let Some(r) = doc.root() {
         stack.push(Object::Ref(r));
@@ -181,7 +183,8 @@ fn referenced_names(doc: &Document) -> HashSet<Vec<u8>> {
                 // string, and an unresolved ref has no name, so the destination it uses would
                 // look unreferenced and be removed. A GoToR or GoToE /D names a destination in
                 // another document, so it does not count as a use of this one's.
-                // A name given by reference is copied once, however many dictionaries name it.
+                // A name given by reference is copied once, however many dictionaries (or aliases
+                // of the object) name it. The objects are kept so an address is never reused.
                 let mut named = |x: Option<&Object>| {
                     let x = x?;
                     if let Object::Ref(r) = x
@@ -189,7 +192,11 @@ fn referenced_names(doc: &Document) -> HashSet<Vec<u8>> {
                     {
                         return None;
                     }
-                    dest_name(doc.resolve(x).as_ref())
+                    let held = doc.resolve(x);
+                    if matches!(x, Object::Ref(_)) && named_held.insert(Arc::as_ptr(&held), held.clone()).is_some() {
+                        return None;
+                    }
+                    dest_name(held.as_ref())
                 };
                 if let Some(n) = named(d.get(b"Dest")) {
                     out.insert(n);
