@@ -137,7 +137,8 @@ impl Realm {
             return self.fire(job, id);
         }
         // A script too long or too deeply nested to run is that script's error, as on `main`: the
-        // value stays and the edit's other scripts still run. The realm is not touched.
+        // value stays and the edit's other scripts still run. The realm is not touched, so its
+        // timers are as they were: they are reported, as after any run, or the viewer drops them.
         if let Some(why) = crate::refuse(&job.script) {
             return Outcome {
                 rc: true,
@@ -145,6 +146,7 @@ impl Realm {
                 value: job.event.value.clone(),
                 change: job.event.change.clone(),
                 error: Some(why),
+                timers: self.context.as_ref().map(crate::timers::report).unwrap_or_default(),
                 ..Default::default()
             };
         }
@@ -677,6 +679,17 @@ mod tests {
         let changed = Job { doc_scripts: vec!["var other = 1;".into()], ..fire(1) };
         let gone = s.run(changed, &[]);
         assert!(gone.timers.is_empty() && gone.changed.is_empty(), "{gone:?}");
+    }
+    #[test]
+    /// A script refused before it runs (too long) leaves the realm as it was and reports the
+    /// timers it still has: the viewer keeps only the timers a run reports.
+    fn a_script_refused_before_it_runs_reports_the_realms_timers() {
+        let mut s = ScriptSession::default();
+        let set = s.run(job("app.setInterval('1', 40);"), &[]);
+        assert_eq!(set.timers.len(), 1);
+        let refused = s.run(job(&"1;".repeat(crate::MAX_SCRIPT_BYTES)), &[]);
+        assert!(refused.realm_untouched && !refused.execution_refused && refused.error.is_some(), "{:?}", refused.error);
+        assert_eq!(refused.timers, set.timers);
     }
     #[test]
     /// Retained Field identity, custom properties and keypad buffers persist locally while separate documents stay isolated.

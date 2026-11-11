@@ -289,3 +289,15 @@ fn a_cap_of_no_timer_runs_only_moves_the_clock() {
     assert_eq!((s.script_clock(id), s.next_timer(id)), (Some(100.0), Some(100.0)));
     assert_eq!(s.run_timers_at_most(id, 100.0, 1).ran, 1);
 }
+
+/// A script refused before it runs (too long) leaves the page's timers running.
+#[test]
+fn a_script_refused_before_it_runs_keeps_the_pages_timers() {
+    let mut s = Session::new();
+    let id = s.open("t.pdf", None, Arc::new(timer_pdf("app.setInterval('1', 10);")), None).unwrap();
+    s.show_page(id, 0, 0.0);
+    assert_eq!(s.next_timer(id), Some(10.0));
+    let refused = s.run_javascript(id, &"1;".repeat(256 * 1024), None).expect("runs");
+    assert!(refused.error.is_some(), "the script is refused");
+    assert_eq!(s.next_timer(id), Some(10.0), "and the interval still runs");
+}

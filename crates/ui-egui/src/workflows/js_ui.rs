@@ -213,13 +213,20 @@ impl PdfCraftApp {
         let Some((i, id)) = self.active_ids() else { return };
         let now_ms = ctx.input(|input| input.time) * 1000.0;
         let page = self.views[i].current;
-        // The field being edited as it was, so a timer changing it shows in its editor while a
-        // draft the user already typed into is kept (as `run_field_triggers` does).
-        let before: Option<(String, Vec<String>)> =
-            self.views[i].forms.focus.as_ref().and_then(|e| {
+        // The page's actions, then its timers, if what the actions asked for left the viewer as it
+        // was: a page they went to runs its close and open actions (next frame) before any timer,
+        // and a dialog they opened holds the timers too.
+        for timers in [false, true] {
+            if timers && (self.modal_open() || self.active_ids() != Some((i, id)) || self.views[i].current != page) {
+                ctx.request_repaint();
+                break;
+            }
+            // The field being edited as it was, so a script changing it shows in its editor while
+            // a draft the user already typed into is kept (as `run_field_triggers` does).
+            let before: Option<(String, Vec<String>)> = self.views[i].forms.focus.as_ref().and_then(|e| {
                 crate::forms_ui::focused_field(e, &self.session.get(id)?.form).map(|f| (crate::forms_ui::draft_text(f), f.value.clone()))
             });
-        for run in [self.session.show_page(id, page, now_ms), self.session.run_timers(id, now_ms)] {
+            let run = if timers { self.session.run_timers(id, now_ms) } else { self.session.show_page(id, page, now_ms) };
             if run.is_empty() {
                 continue;
             }

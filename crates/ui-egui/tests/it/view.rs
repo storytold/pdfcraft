@@ -1953,6 +1953,40 @@ fn page_actions_and_timers_wait_under_a_dialog() {
     assert!(h.state_mut().session.next_timer(id).is_some(), "and runs once it closes");
 }
 
+/// Three pages: the first's open action starts an interval counting `n`; the second's open
+/// action goes on to the third, and its close action stops the interval.
+const PAGE_HOP: &[u8] = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R 4 0 R 5 0 R] /Count 3 /MediaBox [0 0 300 400] >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /AA << /O << /S /JavaScript /JS (var n = 0; var t = app.setInterval\\('n++', 10\\);) >> >> >> endobj
+4 0 obj << /Type /Page /Parent 2 0 R /AA << /O << /S /JavaScript /JS (this.pageNum = 2;) >> /C << /S /JavaScript /JS (app.clearInterval\\(t\\);) >> >> >> endobj
+5 0 obj << /Type /Page /Parent 2 0 R >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+
+/// A page whose open action goes to another page runs no timer before its close action: the
+/// interval that close action stops doesn't run in between.
+#[test]
+fn timers_wait_for_the_page_a_page_action_goes_to() {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("hop.pdf", None, PAGE_HOP.to_vec()).expect("opens");
+        app
+    });
+    h.run_steps(2);
+    let id = h.state().views[0].id;
+    assert!(h.state_mut().session.next_timer(id).is_some(), "the first page's open action set the interval");
+    let count = |h: &mut Harness<'static, PdfCraftApp>| h.state_mut().session.run_javascript(id, "n", None).expect("runs").result;
+    let before = count(&mut h);
+    std::thread::sleep(std::time::Duration::from_millis(30));
+    h.state_mut().views[0].go_to_page(1);
+    h.run_steps(4);
+    assert_eq!(h.state().views[0].current, 2, "the second page's open action went on");
+    assert_eq!(h.state_mut().session.next_timer(id), None, "and its close action stopped the interval");
+    assert_eq!(count(&mut h), before, "which didn't run in between");
+}
+
 /// A text field, with a default appearance for its editor.
 const FIELD_TIMER: &[u8] = b"%PDF-1.7
 1 0 obj << /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] /DA (/Helv 10 Tf 0 g) /DR << /Font << /Helv 5 0 R >> >> >> >> endobj
