@@ -914,16 +914,14 @@ pub fn from_images_with_resolution(images: &[(String, Vec<u8>)], resolution: Ima
 /// endian) and is dropped; without one the bytes are UTF-8 when they are valid UTF-8, and
 /// otherwise the Windows code page they most likely are: 1254 (Turkish) or 1252 (Western).
 pub fn decode_text(bytes: &[u8]) -> String {
-    use unicode_normalization::UnicodeNormalization;
-    let raw = if let Some((encoding, bom)) = encoding_rs::Encoding::for_bom(bytes) {
+    if let Some((encoding, bom)) = encoding_rs::Encoding::for_bom(bytes) {
         encoding.decode_without_bom_handling(bytes.get(bom..).unwrap_or_default()).0.into_owned()
     } else if let Ok(text) = std::str::from_utf8(bytes) {
         text.to_string()
     } else {
         let encoding = if turkish_code_page(bytes) { encoding_rs::WINDOWS_1254 } else { encoding_rs::WINDOWS_1252 };
         encoding.decode_without_bom_handling(bytes).0.into_owned()
-    };
-    raw.nfc().collect()
+    }
 }
 
 /// Windows-1254 and 1252 differ only in six bytes: Ğ İ Ş ğ ı ş in 1254 are Ð Ý Þ ð ý þ in 1252.
@@ -1079,9 +1077,16 @@ mod nfc_tests {
         };
         assert_eq!(inter_s.decoded()?, inter_nfc_s.decoded()?);
 
-        // A combining mark with no composed form after NFC that neither face draws (a + U+1AB0) is refused naming U+1AB0.
+        // A combining mark with no composed form after NFC (such as i + U+0307, which Inter's cmap
+        // covers as a spacing/combining glyph, or a + U+1AB0) is refused naming the mark.
+        let dot_err = from_text("t", "i\u{0307}", LETTER, 12.0).err().ok_or("expected refusal for i + U+0307")?;
+        assert!(dot_err.to_string().contains("U+0307"), "got {dot_err}");
         let err = from_text("t", "a\u{1AB0}", LETTER, 12.0).err().ok_or("expected refusal for a + U+1AB0")?;
         assert!(err.to_string().contains("U+1AB0"), "got {err}");
+
+        // `decode_text` stays lossless so imported redaction word lists (`FilePurpose::RedactWords`)
+        // preserve decomposed sequences as-is.
+        assert_eq!(decode_text("Cafe\u{0301}".as_bytes()), "Cafe\u{0301}");
         Ok(())
     }
 }

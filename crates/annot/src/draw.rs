@@ -542,6 +542,28 @@ mod nfc_tests {
         )?;
         let (_, red_r) = annot_ref(&mut doc, 0, red)?;
         assert_eq!(annot_dict(&doc, red_r).get(b"OverlayText").and_then(Object::as_string).map(|s| s.to_text()), Some("Café".into()));
+
+        // A combining mark that remains uncomposed after NFC (such as i + U+0307) is refused
+        // naming U+0307 on both FreeText creation and editing without mutating the annotation.
+        let create_err = add_annotation(
+            &mut doc,
+            &NewAnnotation {
+                page: 0,
+                shape: Shape::TextBox { rect: [72.0, 300.0, 200.0, 340.0], font_size: 12.0 },
+                style: Style::default(),
+                contents: "i\u{0307}".into(),
+                author: String::new(),
+            },
+            &Meta::default(),
+        )
+        .err()
+        .ok_or("expected refusal for i + U+0307 in new FreeText")?;
+        assert!(create_err.to_string().contains("U+0307"), "got {create_err}");
+
+        let edit_err =
+            set_contents(&mut doc, 0, idx, "i\u{0307}", &Meta::default()).err().ok_or("expected refusal for i + U+0307 in set_contents")?;
+        assert!(edit_err.to_string().contains("U+0307"), "got {edit_err}");
+        assert_eq!(summaries(&doc).get(idx).and_then(|s| s.contents.as_deref()), Some("Résumé"));
         Ok(())
     }
 }
