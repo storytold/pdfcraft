@@ -291,7 +291,11 @@ impl PdfCraftApp {
                         view.pending_text_open = None;
                     }
                 }
-                let message = if matches!(edit, Edit::MoveObjects { .. }) { crate::object_ui::move_error(&e) } else { e.to_string() };
+                let message = match &edit {
+                    Edit::MoveObjects { .. } => crate::object_ui::move_error(&e),
+                    Edit::EditTextBlock { .. } | Edit::EditTextLine { .. } => crate::edit_text_ui::text_edit_error(&e),
+                    _ => e.to_string(),
+                };
                 self.notify_fmt("{label} failed: {e}", &[("label", &crate::i18n::edit_label(&label)), ("e", &message)]);
                 false
             }

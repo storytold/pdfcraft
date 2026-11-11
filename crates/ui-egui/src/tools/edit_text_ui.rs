@@ -1106,9 +1106,49 @@ pub(crate) fn lost_focus_once(r: &egui::Response, had: &mut bool) -> bool {
     std::mem::replace(had, has) && !has
 }
 
+/// Keep the UI refusal actionable and translated; headless callers retain the detailed error.
+///
+/// Text drawn as a clipping path is a mask rather than ink, so rewriting it would destroy the
+/// artwork painted through it and the engine refuses (#3429). A Photoshop export draws every text
+/// object that way, so on such a page the refusal is the only answer the user will ever get: the
+/// message has to say where the text can still be changed, not only why this file cannot be.
+pub(crate) fn text_edit_error(error: &pdfcraft_engine::EditError) -> String {
+    text_edit_message(&error.to_string())
+}
+
+/// The mapping itself, so it can be tested without building an engine error: this crate sees
+/// `pdfcraft_engine::EditError` but not the inner `pdfcraft_edit` variant that carries the text.
+fn text_edit_message(detail: &str) -> String {
+    match detail {
+        "text used as a clipping path cannot be edited: its glyphs mask the artwork behind them"
+        | "text used as a clipping path cannot be previewed for editing" => {
+            tl!("This text is a mask the artwork is painted through, so editing it here would destroy the page. Change the text in the file this PDF was exported from, then export it again.").into()
+        }
+        _ => detail.to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Both clipping-path refusals reach the user as one sentence that says where the text can
+    /// still be changed. Every other refusal keeps the engine's own wording, which headless
+    /// callers, scripts and bug reports read.
+    #[test]
+    fn a_clipping_path_refusal_says_where_the_text_can_be_changed() {
+        for detail in [
+            "text used as a clipping path cannot be edited: its glyphs mask the artwork behind them",
+            "text used as a clipping path cannot be previewed for editing",
+        ] {
+            let shown = text_edit_message(detail);
+            assert_ne!(shown, detail, "the engine's wording reached the user unchanged");
+            assert!(shown.contains("exported from"), "no way forward in: {shown}");
+        }
+        for detail in ["replacement text is empty", "the paragraph no longer exists"] {
+            assert_eq!(text_edit_message(detail), detail, "an unrelated refusal was rewritten");
+        }
+    }
 
     /// Where an edge's reach above or below its box overlaps the next paragraph's edge, the
     /// paragraph the pointer is level with takes the press, whichever is drawn on top (the play
