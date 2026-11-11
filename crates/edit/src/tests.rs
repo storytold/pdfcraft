@@ -8672,6 +8672,69 @@ fn arabic_fallback_keeps_the_right_anchor_and_resets_inherited_text_state() {
     }
 }
 
+/// A page as Word writes Arabic: one font whose glyphs are letter forms (no layout tables, no
+/// font program), a row shown left to right. `A` is initial seen, `B` medial lam, `C` final meem,
+/// `D` initial meem, `E` medial seen. The row reads «سلم مسلم.».
+fn arabic_forms_page() -> Document {
+    let cmap = "/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapType 2 def \
+         1 begincodespacerange <00> <FF> endcodespacerange 7 beginbfchar \
+         <20> <0020> <2E> <002E> <41> <0633> <42> <0644> <43> <0645> <44> <0645> <45> <0633> \
+         endbfchar endcmap CMapName currentdict /CMap defineresource pop end end";
+    let widths: Vec<_> = (32..=69).map(|c| if c == 32 { "250" } else { "500" }).collect();
+    build(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
+        &stream("", "BT /F1 12 Tf 300 700 Td [(.CBED) 20 ( ) -20 (CBA)] TJ ET"),
+        &format!(
+            "<< /Type /Font /Subtype /Type1 /BaseFont /FakeArabic /FirstChar 32 /LastChar 69 /Widths [{}] /ToUnicode 6 0 R >>",
+            widths.join(" ")
+        ),
+        &stream("", cmap),
+    ])
+}
+
+/// A subset such as Word's keeps the glyphs of the letter forms the document uses and nothing
+/// that says which glyph is which form, so every Arabic edit, a deleted word included, was
+/// redrawn in the fallback face: wider, so rows wrapped over the next paragraph, where a Latin
+/// paragraph kept its font. A word whose every form the page already draws keeps the page's
+/// font; only a word needing a form the page lacks takes the fallback.
+#[test]
+fn arabic_words_whose_letter_forms_the_page_draws_keep_the_pages_font() {
+    if pdfcraft_fonts::document_arabic_font().is_none() {
+        return;
+    }
+    let shown = |doc: &Document| {
+        let (content, _) = joined_ops(doc);
+        (content.matches("/F1 ").count(), content.contains("PCShaped"), content)
+    };
+    let doc = arabic_forms_page();
+    assert_eq!(text::text_blocks(&doc, 0).unwrap()[0].editor_text, "سلم مسلم.");
+
+    // A word deleted, and a word made of forms the page has (initial seen, final meem).
+    for (draft, bytes) in [("مسلم.", vec!["2E43424544"]), ("سم مسلم.", vec!["2E43424544", "4341"])] {
+        let mut doc = arabic_forms_page();
+        let edit = text::replace_block(&mut doc, 0, 0, draft).unwrap();
+        assert_eq!(edit.substituted, None, "{draft}: nothing was substituted");
+        let doc = reopen(&doc);
+        let (in_source, fallback, content) = shown(&doc);
+        assert!(!fallback && in_source >= 1, "{draft} is drawn in the page's font: {content}");
+        for hex in bytes {
+            assert!(content.contains(&format!("<{hex}> Tj")), "{draft} shows the page's own glyphs {hex}: {content}");
+        }
+        assert_eq!(text::text_blocks(&doc, 0).unwrap()[0].editor_text, draft);
+    }
+
+    // Initial lam is a form the page never draws: that word alone takes the fallback face.
+    let mut doc = arabic_forms_page();
+    let edit = text::replace_block(&mut doc, 0, 0, "لم مسلم.").unwrap();
+    assert!(edit.substituted.is_some(), "the fallback is reported");
+    let doc = reopen(&doc);
+    let (_, fallback, content) = shown(&doc);
+    assert!(fallback && content.contains("<2E43424544> Tj"), "one word in the fallback, the other in the page's font: {content}");
+    assert_eq!(text::text_blocks(&doc, 0).unwrap()[0].editor_text, "لم مسلم.");
+}
+
 fn mixed_region_page() -> Document {
     let mut doc = text_page(
         "BT /F2 1 Tf 18 0 0 18 123 700 Tm (TITLE) Tj ET \
