@@ -150,6 +150,26 @@ fn a_shading_a_resourceless_type3_glyph_draws_stays_in_the_page_resources() {
     assert!(full_save_holds(&doc, b"GLYPH_SHADING_MESH"), "the glyph's shading was unlinked");
 }
 
+/// A resourceless Type 3 font selected through an ExtGState `/Font` entry draws `/Sh1 sh` in its
+/// glyph program through the page's resources: the entry stays, though no `/Font` resource lists it.
+#[test]
+fn a_shading_an_extgstate_selected_type3_glyph_draws_stays() {
+    let mesh = "/ShadingType 4 /ColorSpace /DeviceRGB /BitsPerCoordinate 8 /BitsPerComponent 8 /BitsPerFlag 8 /Decode [0 300 0 300 0 1 0 1 0 1]";
+    let mut doc = pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources 5 0 R >>".to_vec(),
+        stream("", b"/GS1 gs 0 0 20 20 re f BT 200 200 Td (A) Tj ET"),
+        b"<< /ExtGState << /GS1 << /Font [6 0 R 10] >> >> /Shading << /Sh1 8 0 R >> >>".to_vec(),
+        TYPE3.as_bytes().to_vec(),
+        stream("", b"/Sh1 sh"),
+        stream(mesh, b"GLYPH_SHADING_MESH"),
+    ]);
+    mark(&mut doc, 0, &[[0.0, 0.0, 30.0, 30.0]], "");
+    apply(&mut doc, None).unwrap();
+    assert!(full_save_holds(&doc, b"GLYPH_SHADING_MESH"), "the glyph's shading was unlinked");
+}
+
 /// Only the shadings a resourceless Type 3 glyph names are kept for it: another shading removed
 /// under the mark still leaves the file.
 #[test]
@@ -485,6 +505,35 @@ fn a_shared_shading_after_an_ambiguous_inline_image_is_not_unlinked() {
     let before = full_save_holds(&doc, b"SHARED_MESH");
     assert!(before);
     assert!(apply(&mut doc, None).is_err(), "the shared shading's use on page 2 can't be read");
+}
+
+/// Type 3 cleanup decoded a glyph program again for every font listing it: 2 000 fonts sharing
+/// one large program read it 2 000 times. It is read once now, and the cleanup still keeps the
+/// glyph every font shows.
+#[test]
+fn a_glyph_program_many_type3_fonts_share_is_read_once() {
+    const FONTS: usize = 2_000;
+    let names: String = (0..FONTS).map(|i| format!("/T{i} {} 0 R ", 6 + i)).collect();
+    let shows: String = (0..FONTS).map(|i| format!("/T{i} 10 Tf (A) Tj ")).collect();
+    let mut objs = vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Font << {names}>> >> >>").into_bytes(),
+        stream("", format!("BT 10 100 Td {shows}ET").as_bytes()),
+        stream("", [b"SHARED_GLYPH ".as_slice(), &b"0 0 m 1 1 l S ".repeat(50_000)].concat()),
+    ];
+    objs.extend((0..FONTS).map(|_| {
+        b"<< /Type /Font /Subtype /Type3 /FontBBox [0 0 1000 1000] /FontMatrix [0.001 0 0 0.001 0 0] /FirstChar 65 /LastChar 65 /Widths [0] /Encoding << /Differences [65 /A] >> /CharProcs << /A 5 0 R >> >>".to_vec()
+    }));
+    let mut doc = pdf(objs);
+    // The glyphs are drawn at x 10 with no width, so a mark away from them leaves them all.
+    mark(&mut doc, 0, &[[200.0, 200.0, 250.0, 250.0]], "");
+    let started = std::time::Instant::now();
+    apply(&mut doc, None).unwrap();
+    assert!(started.elapsed() < std::time::Duration::from_secs(60), "{:?}", started.elapsed());
+    let font = doc.get(ObjRef::new(6, 0));
+    let procs = doc.resolve(font.as_dict().unwrap().get(b"CharProcs").unwrap());
+    assert!(procs.as_dict().unwrap().contains(b"A"), "the glyph every font shows was unlinked");
 }
 
 /// A Type 3 font with glyphs A (its program object 7) and B (object 8), at object 6.

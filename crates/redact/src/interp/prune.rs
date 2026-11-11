@@ -519,7 +519,16 @@ pub(crate) fn resource_ops(doc: &Document, budget: &mut DecodeBudget, res: &Dict
 /// (`/Name sh`): those fonts paint through the resources of whatever shows them.
 fn glyph_shading_names(doc: &Document, budget: &mut DecodeBudget, res: &Dict) -> Result<HashSet<Vec<u8>>, CosError> {
     let mut names = HashSet::new();
-    for (_, font) in res_dict(doc, res, b"Font").iter() {
+    // The fonts `Tf` can select, and those an ExtGState's `/Font [font size]` entry selects.
+    let mut fonts: Vec<Object> = res_dict(doc, res, b"Font").iter().map(|(_, f)| f.clone()).collect();
+    for (_, state) in res_dict(doc, res, b"ExtGState").iter() {
+        if let Some(entry) = doc.resolve(state).as_dict().and_then(|d| d.get(b"Font")).map(|f| doc.resolve(f))
+            && let Some(font) = entry.as_array().and_then(|a| a.first())
+        {
+            fonts.push(font.clone());
+        }
+    }
+    for font in &fonts {
         let Some(font) = doc.resolve(font).as_dict().cloned() else { continue };
         if font.name(b"Subtype") != Some(b"Type3") || font.get(b"Resources").is_some_and(|r| doc.resolve(r).as_dict().is_some()) {
             continue;
