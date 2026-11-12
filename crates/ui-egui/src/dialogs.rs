@@ -2265,12 +2265,12 @@ mod password_draft_tests {
         app.start_signing(0, None, None, None);
         let sign = app.sign_draft.as_mut().unwrap();
         sign.step = crate::sign_ui::SignStep::Choose;
-        sign.password = "sign password".into();
+        sign.password = zeroize::Zeroizing::new("sign password".into());
         sign.new_id.password = "new ID password".into();
         sign.new_id.confirm = "new ID password".into();
         sign.new_id.file_password = "import password".into();
-        app.protect_draft.password = "view password".into();
-        app.protect_draft.confirm = "view password".into();
+        app.protect_draft.password = zeroize::Zeroizing::new("view password".into());
+        app.protect_draft.confirm = zeroize::Zeroizing::new("view password".into());
         app.protect_draft.protection.open_password = Some("open password".into());
         app.protect_draft.protection.permissions_password = Some("owner password".into());
     }
@@ -2308,13 +2308,13 @@ mod password_draft_tests {
             });
             h.run_steps(2);
             if dialog == Dialog::Protect {
-                assert_eq!(h.state().protect_draft.password, "view password");
-                assert_eq!(h.state().protect_draft.confirm, "view password");
+                assert_eq!(h.state().protect_draft.password, zeroize::Zeroizing::new("view password".into()));
+                assert_eq!(h.state().protect_draft.confirm, zeroize::Zeroizing::new("view password".into()));
                 assert!(h.state().sign_draft.is_none());
             } else {
                 assert_protect_cleared(h.state());
                 let sign = h.state().sign_draft.as_ref().unwrap();
-                assert_eq!(sign.password, "sign password");
+                assert_eq!(sign.password, zeroize::Zeroizing::new("sign password".into()));
                 assert_eq!(sign.new_id.password, "new ID password");
                 assert_eq!(sign.new_id.confirm, "new ID password");
                 assert_eq!(sign.new_id.file_password, "import password");
@@ -2330,8 +2330,8 @@ mod password_draft_tests {
         for _ in 0..2 {
             for replacement in ["none", "about", "sign", "certify"] {
                 app.set_option("dialog", "protect").unwrap();
-                app.protect_draft.password = "old password".into();
-                app.protect_draft.confirm = "old password".into();
+                app.protect_draft.password = zeroize::Zeroizing::new("old password".into());
+                app.protect_draft.confirm = zeroize::Zeroizing::new("old password".into());
                 app.set_option("dialog", replacement).unwrap();
                 assert_protect_cleared(&app);
                 app.set_option("dialog", "protect").unwrap();
@@ -2354,11 +2354,11 @@ mod password_draft_tests {
     fn selecting_the_active_protect_dialog_keeps_its_password() {
         let mut app = PdfCraftApp::new();
         app.set_option("dialog", "protect").unwrap();
-        app.protect_draft.password = "current password".into();
-        app.protect_draft.confirm = "current password".into();
+        app.protect_draft.password = zeroize::Zeroizing::new("current password".into());
+        app.protect_draft.confirm = zeroize::Zeroizing::new("current password".into());
         app.set_option("dialog", "protect").unwrap();
-        assert_eq!(app.protect_draft.password, "current password");
-        assert_eq!(app.protect_draft.confirm, "current password");
+        assert_eq!(app.protect_draft.password, zeroize::Zeroizing::new("current password".into()));
+        assert_eq!(app.protect_draft.confirm, zeroize::Zeroizing::new("current password".into()));
     }
 
     #[test]
