@@ -101,7 +101,7 @@ impl CffFontBlob {
         self.0.backing_cart().clone()
     }
 
-    /// PdfCraft patch (104): whether [`Self::new`] reads `data` (the same checks: a CFF font,
+    /// PdfCraft patch (105): whether [`Self::new`] reads `data` (the same checks: a CFF font,
     /// a readable `Cff` table, and a font dict that can be read), and then whether the program
     /// is CID-keyed and its glyph count, found without building the blob, for the document
     /// survey.
@@ -207,7 +207,7 @@ impl CffFontBlob {
         Self::new(Arc::new(cff.offset_data().as_ref().to_vec()))
     }
 
-    /// PdfCraft patch (104): a CID-keyed program's CIDs, from its charset in glyph order, at
+    /// PdfCraft patch (105): a CID-keyed program's CIDs, from its charset in glyph order, at
     /// most 65,536 of them; nothing for a font without a charset.
     pub(crate) fn charset_cids(&self) -> Vec<u32> {
         self.charset()
@@ -290,7 +290,7 @@ fn post_version_accepted(f: &FontRef<'_>) -> bool {
 }
 
 impl OpenTypeFontBlob {
-    /// PdfCraft patch (104): whether [`Self::new`] reads `data`, and then the program's glyph
+    /// PdfCraft patch (105): whether [`Self::new`] reads `data`, and then the program's glyph
     /// count (`maxp`; `None` without one), found without building the blob (no copy, no
     /// hinting instance), for the document survey. The `loca` format fix [`Self::new`] may make
     /// rewrites `head.indexToLocFormat` only, which neither the table directory, `post` nor

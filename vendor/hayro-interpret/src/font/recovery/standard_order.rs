@@ -1,4 +1,4 @@
-//! PdfCraft patch (104): [`StandardStringOrder`], rule N, a font whose CIDs or codes are CFF
+//! PdfCraft patch (105): [`StandardStringOrder`], rule N, a font whose CIDs or codes are CFF
 //! standard string ids.
 //!
 //! A converter that turns a Type 1 font into a CID-keyed CFF font can number each glyph by the

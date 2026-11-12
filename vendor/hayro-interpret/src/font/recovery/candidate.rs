@@ -1,4 +1,4 @@
-//! PdfCraft patch (104): the candidate policy every recovery rule's reading passes through.
+//! PdfCraft patch (105): the candidate policy every recovery rule's reading passes through.
 //!
 //! A rule names characters from evidence that isn't a `/ToUnicode` map: a glyph name, a glyph's
 //! place in a standard order, a font's own `cmap`. Some of what that evidence names is not text

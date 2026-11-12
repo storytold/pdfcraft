@@ -27,6 +27,10 @@ pub(crate) struct Host {
     pub(crate) reset_limit_exceeded: bool,
     /// Bytes of text kept in alerts, console lines and requests, against [`xfa::MAX_PAYLOAD`].
     pub(crate) kept: usize,
+    /// Bytes of text the script has added to the fields' values and colours, net of what it
+    /// replaced, against [`xfa::MAX_PAYLOAD`]: each assignment alone is capped, so without this
+    /// many fields could each hold a maximal array.
+    pub(crate) retained: usize,
     /// Alerts, console lines and requests the limits left out.
     pub(crate) dropped: usize,
 }
@@ -262,12 +266,42 @@ pub(crate) fn value_of(f: &FieldState, ctx: &mut Context) -> JsValue {
     }
 }
 
-pub(crate) fn set_value(f: &mut FieldState, vals: Vec<String>) {
-    f.value = match f.kind {
+/// Bytes of text in `v`, counting each string's heap size and its handle.
+pub(crate) fn text_bytes(v: &[String]) -> usize {
+    v.iter().fold(0usize, |n, t| n.saturating_add(t.len()).saturating_add(std::mem::size_of::<String>()))
+}
+
+/// Charge the replacement of the text `old` selects from field `name` with `new_bytes` of text to
+/// the run's retained-text budget; an assignment the budget has no room for is an error and
+/// charges nothing.
+pub(crate) fn charge(ctx: &Context, name: &FieldKey, old: impl FnOnce(&FieldState) -> usize, new_bytes: usize) -> JsResult<()> {
+    let i = field_index(ctx, name)?;
+    let mut h = host(ctx)?.borrow_mut();
+    let freed = old(&h.fields[i]);
+    let total = h.retained.saturating_sub(freed).saturating_add(new_bytes);
+    if total > xfa::MAX_PAYLOAD {
+        return Err(error(format!("the fields' values and colours hold more than {} bytes of text", xfa::MAX_PAYLOAD)));
+    }
+    h.retained = total;
+    Ok(())
+}
+
+pub(crate) fn kind_of(ctx: &Context, name: &FieldKey) -> JsResult<FieldType> {
+    let i = field_index(ctx, name)?;
+    Ok(host(ctx)?.borrow().fields[i].kind)
+}
+
+/// What a field of `kind` keeps of the values assigned to it.
+pub(crate) fn value_for(kind: FieldType, vals: Vec<String>) -> Vec<String> {
+    match kind {
         FieldType::CheckBox | FieldType::RadioButton => vals.into_iter().filter(|v| v != "Off" && !v.is_empty()).take(1).collect(),
         FieldType::ListBox => vals,
         _ => vals.into_iter().take(1).collect(),
-    };
+    }
+}
+
+pub(crate) fn set_value(f: &mut FieldState, vals: Vec<String>) {
+    f.value = value_for(f.kind, vals);
 }
 
 #[cfg(test)]

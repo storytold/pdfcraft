@@ -1,4 +1,4 @@
-//! PdfCraft patch (104): [`AdobeSmallCaps`], rule M, the Adobe Glyph List's private use small
+//! PdfCraft patch (105): [`AdobeSmallCaps`], rule M, the Adobe Glyph List's private use small
 //! capitals and oldstyle figures read as the characters they are forms of.
 //!
 //! The Adobe Glyph List names an expert font's small capitals and oldstyle figures with code
