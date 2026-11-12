@@ -1853,7 +1853,7 @@ fn missing_print_dlls_are_named() {
 #[test]
 fn printing_without_the_print_dlls_is_refused_before_the_spooler() {
     use crate::spool::{
-        PRINT_DLLS, PRINTER_BACKEND_CALLS, SYSTEM32_FOR_TEST, printer_queues, printers, query_printers, query_two_sided, submit,
+        PRINT_DLLS, PRINTER_BACKEND_CALLS, SYSTEM32_FOR_TEST, printer_queues, printers, query_paper_info, query_printers, query_two_sided, submit,
         submit_with_progress, two_sided,
     };
     let dir = std::env::temp_dir().join(format!("pdfcraft-print-no-dlls-{}", std::process::id()));
@@ -1875,6 +1875,7 @@ fn printing_without_the_print_dlls_is_refused_before_the_spooler() {
     assert!(printer_queues().is_empty(), "queue-only discovery is unavailable");
     assert!(query_printers().is_empty(), "isolated discovery is unavailable");
     assert_eq!(query_two_sided("PdfCraft test: no such printer", &std::sync::atomic::AtomicBool::new(false)), None);
+    assert_eq!(query_paper_info("PdfCraft test: no such printer", &std::sync::atomic::AtomicBool::new(false)), None);
     assert_eq!(two_sided("PdfCraft test: no such printer"), None, "two-sided support is unknown");
     assert_eq!(PRINTER_BACKEND_CALLS.with(|c| c.get()), 0, "the printer backend wasn't asked");
     SYSTEM32_FOR_TEST.with(|d| *d.borrow_mut() = None);
