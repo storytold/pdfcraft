@@ -16,6 +16,7 @@ mod hostile_args;
 mod list_selection;
 mod model_3d;
 mod model_render;
+mod ocr_languages;
 mod office;
 mod optimize_content_boundaries;
 mod page_actions;

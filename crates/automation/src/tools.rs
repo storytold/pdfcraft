@@ -1526,8 +1526,8 @@ pub fn tools() -> Vec<ToolDef> {
                     "doc": doc(),
                     "pages": pages("to recognise (default: all)"),
                     "dpi": { "type": "number", "minimum": 72, "maximum": 600, "description": "Resolution pages are read at (default 300; a scanned page is read at most at its own resolution)." },
-                    "language": { "type": "string", "enum": language_enum(), "description": "Document language (default en)." },
-                    "engine": { "type": "string", "enum": ["auto", "ocrs", "tesseract"], "description": "Which engine reads the pages (default ocrs). auto: ocrs first and tesseract as the second engine, combined by strategy (only the engines that can run take part)." },
+                    "language": { "type": "string", "enum": language_enum(), "description": "Document language (default en). ru and en+ru require an installed Tesseract with rus, or both rus and eng language packs respectively." },
+                    "engine": { "type": "string", "enum": ["auto", "ocrs", "tesseract"], "description": "Which engine reads the pages (default ocrs for en, auto for ru/en+ru). auto combines available readers for English; Russian and mixed Russian/English use Tesseract alone because the built-in model cannot read Cyrillic. Selecting ocrs explicitly for ru/en+ru is refused." },
                     "strategy": { "type": "string", "enum": ["primary", "confidence", "rover"], "description": "How two engines' readings combine: primary = the first engine alone; confidence = the second engine joins when the first reading's mean confidence is under 70 or unknown; rover = both always read, merged. Default: confidence with engine auto, primary otherwise." },
                     "output_mode": { "type": "string", "enum": ["searchable", "editable"], "description": "searchable (default): invisible text over the pages of the open document. editable: a NEW <document>_ocr-style file of visible text written to out; the source is not touched." },
                     "out": { "type": "string", "description": "Where the editable output is written (required with output_mode editable; a new file: never the source path, never an existing file)." },
@@ -1591,7 +1591,7 @@ pub fn tools() -> Vec<ToolDef> {
                 }),
                 &["paths", "folder"],
             )),
-        t("ocr_status", "OCR status", "Whether text recognition is available, where it looks for models (release packages include them; a source build fetches them with `cargo xtask models`; PDFCRAFT_MODELS overrides), its languages, and the engines: ocrs (built in, models) and tesseract (an installed program, with its path).")
+        t("ocr_status", "OCR status", "Whether text recognition is available, where it looks for models (release packages include them; a source build fetches them with `cargo xtask models`; PDFCRAFT_MODELS overrides), and the engines: ocrs (built in, English models) and tesseract (an installed program, with its path). Each language reports its own availability and the reason when unavailable; Russian and mixed Russian/English require the corresponding installed Tesseract language packs.")
             .ro()
             .cmd("ocr.recognize")
             .with(schema(json!({}), &[])),
