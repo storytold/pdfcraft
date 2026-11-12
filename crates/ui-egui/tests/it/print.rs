@@ -2120,6 +2120,8 @@ fn manual_two_sided_prints_the_fronts_then_the_backs_on_continue() {
     print_fronts(&mut h);
     assert_eq!(wait_for(&mut h, 1), [(2, Some(spool::Duplex::Off))], "the fronts, one-sided");
     assert_eq!(h.state().dialog, Some(Dialog::ManualDuplex));
+    // The modal takes its own size over the next frames after Print's; a click before then misses.
+    h.run_steps(3);
     h.get_by_label("Continue").click();
     assert_eq!(wait_for(&mut h, 2).get(1), Some(&(2, Some(spool::Duplex::Off))), "page 2 and the last sheet's blank back");
     assert_eq!(h.state().dialog, None);
@@ -2127,6 +2129,7 @@ fn manual_two_sided_prints_the_fronts_then_the_backs_on_continue() {
     print_fronts(&mut h);
     assert_eq!(wait_for(&mut h, 3).len(), 3);
     assert_eq!(h.state().dialog, Some(Dialog::ManualDuplex));
+    h.run_steps(3);
     h.get_by_label("Cancel").click();
     assert_eq!(wait_for(&mut h, 4).len(), 3, "cancelled: the backs are not sent");
     assert_eq!(h.state().dialog, None);
