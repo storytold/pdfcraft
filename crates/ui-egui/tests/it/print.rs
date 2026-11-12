@@ -2201,3 +2201,37 @@ fn manual_two_sided_offers_the_backs_again_when_they_fail() {
     assert_eq!(sent.iter().map(|j| j.0).collect::<Vec<_>>(), [2, 2, 2], "the fronts once, the backs twice");
     assert!(wait_until(&mut h, |h| h.state().dialog.is_none()));
 }
+
+/// #2860: a second manual two-sided print while the first one's backs are still on their way to
+/// the spooler is refused, with the Print dialog kept open: it would take the place of those
+/// backs, which a failure then could not offer again. They stay saved.
+#[test]
+fn manual_two_sided_waits_for_the_backs_before_another() {
+    use std::sync::{Arc, Mutex};
+    let (mut h, jobs) = manual_two_sided_harness(Default::default());
+    print_fronts(&mut h);
+    assert_eq!(wait_for_jobs(&mut h, &jobs, 1).len(), 1);
+    assert!(wait_until(&mut h, |h| !h.get_by_label("Continue").accesskit_node().is_disabled()));
+    // From here the spooler holds each job until `gate` is let go, then refuses it.
+    let gate = Arc::new(Mutex::new(()));
+    let held = gate.lock().unwrap();
+    let (g, sent) = (Arc::clone(&gate), Arc::clone(&jobs));
+    h.state_mut().spooler = Some(Arc::new(move |_pdf: &[u8], job: &pdfcraft_engine::print::spool::Job| {
+        let _open = g.lock();
+        sent.lock().unwrap().push((0, job.duplex));
+        Err("the printer is offline".into())
+    }));
+    click_continue(&mut h);
+    assert!(wait_until(&mut h, |h| h.state().dialog.is_none()), "the backs are on their way");
+
+    print_fronts(&mut h);
+    h.run_steps(3);
+    assert_eq!(h.state().dialog, Some(Dialog::Print), "refused: the dialog stays open, with its settings");
+    let toast = h.state().toast.as_ref().map(|(m, _)| m.clone()).unwrap_or_default();
+    assert!(toast.contains("Wait until the second side"), "the user is told why: {toast:?}");
+
+    drop(held);
+    assert_eq!(wait_for_jobs(&mut h, &jobs, 2).len(), 2, "only the backs reached the spooler");
+    assert!(wait_until(&mut h, |h| h.state().dialog == Some(Dialog::ManualDuplex)), "the saved backs are offered again, in place of Print");
+    assert_eq!(jobs.lock().unwrap().len(), 2);
+}
