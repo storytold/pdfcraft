@@ -157,7 +157,8 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
                 // extension level 8.
                 (A::Aes256, tl!("256-bit AES (PDF 2.0)")),
                 (A::Aes128, tl!("128-bit AES (PDF 1.6)")),
-                (A::Rc4_128, tl!("128-bit RC4 (PDF 1.4)")),
+                // Leaving the metadata unencrypted takes a crypt filter, which is PDF 1.5.
+                (A::Rc4_128, if p.encrypt_metadata { tl!("128-bit RC4 (PDF 1.4)") } else { tl!("128-bit RC4 (PDF 1.5)") }),
                 (A::Rc4_40, tl!("40-bit RC4 (PDF 1.3)")),
             ];
             let cur = algos.iter().find(|(a, _)| *a == p.algorithm).map_or(algos[0].1, |(_, l)| *l);

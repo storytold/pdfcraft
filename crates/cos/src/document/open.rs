@@ -518,8 +518,9 @@ impl Document {
 
     /// The catalog's `/Extensions` with an Adobe extension of at least `level` against base version
     /// 1.7 (§7.12), or `None` when it already has one, or when `/Extensions` or its `/ADBE` entry is
-    /// something this cannot add to (not a dictionary, or an `/ADBE` that is neither a dictionary
-    /// nor an array), which is kept as it is. Other developers' entries are kept.
+    /// something this cannot add to (not a dictionary, an `/ADBE` against a later or unreadable base
+    /// version, or one that is neither a dictionary nor an array), which is kept as it is. Other
+    /// developers' entries are kept.
     fn with_adbe_extension(&self, extensions: Option<&Object>, level: i64) -> Option<Dict> {
         let mut extensions = match extensions.map(|e| self.resolve(e)) {
             None => Dict::new(),
@@ -547,8 +548,12 @@ impl Document {
                     d.set(b"ExtensionLevel".to_vec(), Object::Int(level));
                     Object::Dict(d)
                 }
-                // One against another base version stays, next to this one (an array, PDF 2.0).
-                Object::Dict(_) => Object::Array(vec![(*existing).clone(), Object::Dict(adbe)]),
+                // One against an earlier base version is replaced: it extended a version PDF 1.7
+                // already includes, and an array, which could keep both, is PDF 2.0's (§7.12.2),
+                // not valid in the PDF 1.7 file this declares. One against a later or unreadable
+                // base version is left as it is.
+                Object::Dict(d) if base(d).is_some_and(|b| b < (1, 7)) => Object::Dict(adbe),
+                Object::Dict(_) => return None,
                 Object::Array(list) if list.iter().any(reaches) => return None,
                 Object::Array(list) => {
                     let mut list = list.clone();

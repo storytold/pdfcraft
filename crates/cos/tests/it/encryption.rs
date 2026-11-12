@@ -335,6 +335,12 @@ fn encryption_never_lowers_a_version_and_keeps_other_extensions() {
     let catalog = doc.get(doc.root().unwrap()).as_dict().cloned().unwrap();
     let extensions = doc.resolve(catalog.get(b"Extensions").unwrap()).as_dict().cloned().unwrap();
     assert!(extensions.get(b"GLGR").is_some() && extensions.get(b"ADBE") == Some(&adbe(8)));
+    // An Adobe extension against an earlier base version is superseded by the 1.7 one, never
+    // turned into an array (PDF 2.0 only, §7.12.2); one against an unreadable base version is kept.
+    let (_, doc) = protect_versioned(versioned("1.7", " /Extensions << /ADBE << /BaseVersion /1.6 /ExtensionLevel 2 >> >>"), Algorithm::Aes256);
+    assert_eq!(catalog_declarations(&doc).1, Some(adbe(8)));
+    let (_, doc) = protect_versioned(versioned("1.7", " /Extensions << /ADBE << /BaseVersion (odd) /ExtensionLevel 2 >> >>"), Algorithm::Aes256);
+    assert!(matches!(catalog_declarations(&doc).1, Some(Object::Dict(d)) if d.get(b"ExtensionLevel") == Some(&Object::Int(2))));
     // An /Extensions that is not a dictionary is left as it is.
     let (_, doc) = protect_versioned(versioned("1.7", " /Extensions 7"), Algorithm::Aes256);
     let catalog = doc.get(doc.root().unwrap()).as_dict().cloned().unwrap();

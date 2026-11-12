@@ -111,6 +111,8 @@ fn rc4_128_can_leave_the_metadata_unencrypted() {
     pick(&mut h, "256-bit AES (PDF 2.0)", "128-bit RC4 (PDF 1.4)");
     h.get_by_label(EXCEPT).click();
     h.run_steps(2);
+    // The crypt filter that says so is PDF 1.5, and the list says it.
+    assert!(h.query_all_by_role(Role::ComboBox).any(|n| n.value().as_deref() == Some("128-bit RC4 (PDF 1.5)")));
     type_into(&mut h, "Type Password", "Open-Sesame-42");
     type_into(&mut h, "Re-type Password", "Open-Sesame-42");
     h.get_by_label("Apply").click();
