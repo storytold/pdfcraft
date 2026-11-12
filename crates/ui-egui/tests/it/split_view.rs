@@ -315,3 +315,21 @@ fn closing_the_second_panes_tab_from_its_strip_keeps_the_program_running() {
     assert!(h.state().panes.split.is_none());
     assert_eq!(h.state().views.len(), 1);
 }
+
+/// The line marking the active pane sits under the menus (#7010). It was painted on a layer of
+/// its own at the menus' order, and egui draws such a layer after every menu and popup of that
+/// order, so the line crossed an open menu.
+#[test]
+fn the_active_panes_line_is_drawn_under_the_menus() {
+    let mut h = harness(&["right.pdf", "left.pdf"]);
+    let right = index(&h, "right.pdf");
+    h.state_mut().split_tab(right, false);
+    h.run_steps(4);
+    let painted = |h: &Harness<'static, PdfCraftApp>, order: egui::Order| {
+        ["main-pane", "second-pane"]
+            .iter()
+            .any(|salt| h.ctx.graphics(|g| g.get(egui::LayerId::new(order, egui::Id::unique(("active-pane", *salt)))).is_some()))
+    };
+    assert!(!painted(&h, egui::Order::Foreground), "the line is not painted at the menus' order");
+    assert!(painted(&h, egui::Order::Middle), "the line is painted above the pages, below the menus");
+}

@@ -615,10 +615,12 @@ fn pane(app: &mut PdfCraftApp, ui: &mut egui::Ui, rect: Rect, place: Place, fron
         (Place::Second, None) => {}
     }
     app.panes.drawing = Place::Main;
-    // The active pane is marked along its top edge.
+    // The active pane is marked along its top edge: over the pages, under the menus (#7010). A
+    // layer with no area is drawn after every area of its order, so at Foreground it crossed
+    // open menus and popups.
     if active {
         let edge = Rect::from_min_size(rect.min, vec2(rect.width(), 2.0));
-        ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::unique(("active-pane", salt)))).rect_filled(edge, 0.0, t.accent);
+        ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Middle, egui::Id::unique(("active-pane", salt)))).rect_filled(edge, 0.0, t.accent);
     }
 }
 
