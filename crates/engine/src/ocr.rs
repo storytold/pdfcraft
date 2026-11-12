@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use pdfcraft_render::text::TextFilter;
-use pdfcraft_render::{PageInfo, PageRenderer, RenderConfig, RenderRequest, RequestKind};
+use pdfcraft_render::{PageInfo, PageRenderer, PageText, RenderConfig, RenderRequest, RequestKind, TextGlyph};
 
 pub use pdfcraft_ocr::{
     ConfidenceBand, DETECTION_MODEL, LANGUAGES, Line, MergeStrategy, Models, Ocr, OcrError, OcrImage, PlacedWord, RECOGNITION_MODEL, Recognizer,
@@ -232,6 +232,14 @@ impl OcrPage {
         self.words.iter().map(|w| w.text.as_str()).collect::<Vec<_>>().join(" ")
     }
 
+    /// The words as a text layer of `info`'s page, in page view space: what selecting, finding
+    /// and copying use, without adding the text to the document. Recognition gives no positions
+    /// inside a word, so its box is shared out between its characters; lines, reading order and
+    /// word gaps come from the same layout as extracted text.
+    pub fn view_text(&self, info: &PageInfo) -> PageText {
+        pdfcraft_render::text::layout(self.words.iter().flat_map(|w| word_glyphs(w, info)).collect())
+    }
+
     /// Mean of the confidences the page's words report (`None` when none do).
     pub fn mean_confidence(&self) -> Option<f32> {
         let (sum, n) = self.words.iter().filter_map(|w| w.confidence).fold((0.0f64, 0usize), |(s, n), c| (s + c as f64, n + 1));
@@ -245,6 +253,39 @@ impl OcrPage {
     pub fn suspects(&self) -> Vec<usize> {
         self.words.iter().enumerate().filter(|(_, w)| pdfcraft_ocr::is_suspect(w.confidence)).map(|(i, _)| i).collect()
     }
+}
+
+/// `word`'s characters as glyphs in `info`'s page view space, each an equal share of the word's
+/// box along its baseline. Characters that would land off any finite position are left out.
+fn word_glyphs(word: &PlacedWord, info: &PageInfo) -> Vec<TextGlyph> {
+    let chars: Vec<char> = word.text.chars().filter(|c| !c.is_whitespace()).collect();
+    let n = chars.len() as f64;
+    // A point of the word's box: `t` along its baseline, `s` up its left edge (both 0 to 1).
+    let at = |t: f64, s: f64| {
+        let u = word.origin[0] + word.across[0] * t + word.up[0] * s;
+        let v = word.origin[1] + word.across[1] * t + word.up[1] * s;
+        info.user_to_view(u as f32, v as f32)
+    };
+    let ([x0, y0], [x1, y1]) = (at(0.0, 0.0), at(1.0, 0.0));
+    let length = (x1 - x0).hypot(y1 - y0);
+    let direction = if length.is_finite() && length > 0.0 { [(x1 - x0) / length, (y1 - y0) / length] } else { [1.0, 0.0] };
+    chars
+        .iter()
+        .enumerate()
+        .filter_map(|(k, c)| {
+            let (t0, t1) = (k as f64 / n, (k + 1) as f64 / n);
+            // The edge towards the next line (the baseline) first, in the writing direction.
+            let quad = [at(t0, 0.0), at(t1, 0.0), at(t1, 1.0), at(t0, 1.0)];
+            let (xs, ys) = (quad.map(|p| p[0]), quad.map(|p| p[1]));
+            let rect = [
+                xs.into_iter().fold(f32::INFINITY, f32::min),
+                ys.into_iter().fold(f32::INFINITY, f32::min),
+                xs.into_iter().fold(f32::NEG_INFINITY, f32::max),
+                ys.into_iter().fold(f32::NEG_INFINITY, f32::max),
+            ];
+            rect.iter().all(|v| v.is_finite()).then(|| TextGlyph { text: c.to_string(), rect, quad, direction })
+        })
+        .collect()
 }
 
 /// The engines a job reads with: one primary and, for ensemble strategies, an optional
@@ -720,19 +761,25 @@ impl OcrJob {
 
     /// Read the pages. `progress(done, total)` is called before each page; returning `false`
     /// stops (the pages read so far are returned).
-    pub fn run(self, recognizers: &Recognizers, mut progress: impl FnMut(usize, usize) -> bool) -> Vec<OcrPage> {
+    pub fn run(self, recognizers: &Recognizers, progress: impl FnMut(usize, usize) -> bool) -> Vec<OcrPage> {
+        let mut out = Vec::new();
+        self.run_each(recognizers, progress, |page| out.push(page));
+        out
+    }
+
+    /// [`Self::run`], handing each page to `found` as soon as it is read, so a viewer can use it
+    /// while the next one is being read.
+    pub fn run_each(self, recognizers: &Recognizers, mut progress: impl FnMut(usize, usize) -> bool, mut found: impl FnMut(OcrPage)) {
         let total = self.pages.len();
         let mut steps = self.steps();
-        let mut out = Vec::new();
         while progress(steps.done(), total) {
             match steps.next_page() {
                 None => break,
-                Some(Err(skipped)) => out.push(skipped),
-                Some(Ok(shot)) => out.push(shot.read(recognizers)),
+                Some(Err(skipped)) => found(skipped),
+                Some(Ok(shot)) => found(shot.read(recognizers)),
             }
         }
         progress(total, total);
-        out
     }
 
     /// Read the pages one at a time, preparing each page's image and recognising it separately:
@@ -2387,5 +2434,69 @@ mod tests {
         }
         let errors = row[want.len()];
         assert!(errors * 100 <= want.len(), "{errors} word errors in {} words:\n{read}", want.len());
+    }
+
+    /// A word recognised at `rect` (view space: x0, top, x1, bottom), placed as `OcrJob::run` places
+    /// it, through the page's view → user mapping.
+    fn placed(info: &PageInfo, text: &str, [l, t, r, b]: [f32; 4]) -> PlacedWord {
+        let user = |x: f32, y: f32| {
+            let [u, v] = info.view_to_user(x, y);
+            [u as f64, v as f64]
+        };
+        let (o, br, tl) = (user(l, b), user(r, b), user(l, t));
+        PlacedWord {
+            text: text.into(),
+            origin: o,
+            across: [br[0] - o[0], br[1] - o[1]],
+            up: [tl[0] - o[0], tl[1] - o[1]],
+            confidence: None,
+            source: String::new(),
+        }
+    }
+
+    fn ocr_page(info: &PageInfo, words: &[(&str, [f32; 4])]) -> OcrPage {
+        OcrPage { page: 0, words: words.iter().map(|(t, r)| placed(info, t, *r)).collect(), already_on_page: 0, skipped: None, notes: Vec::new() }
+    }
+
+    fn near(a: [f32; 4], b: [f32; 4]) -> bool {
+        a.iter().zip(b).all(|(x, y)| (x - y).abs() < 0.01)
+    }
+
+    /// Recognised words read as a text layer: lines, word gaps, and a box per character.
+    #[test]
+    fn recognised_words_become_a_text_layer_in_view_space() {
+        let info = PageInfo { width: 612.0, height: 792.0, label: "1".into(), crop: [0.0, 0.0, 612.0, 792.0], rotation: 0 };
+        let found = ocr_page(
+            &info,
+            &[("Hello", [100.0, 100.0, 160.0, 112.0]), ("world", [166.0, 100.0, 220.0, 112.0]), ("Next", [100.0, 120.0, 148.0, 132.0])],
+        );
+        let text = found.view_text(&info);
+        assert_eq!(text.plain_text(), "Hello world\nNext");
+        assert_eq!(text.glyphs.len(), 14);
+        assert!(near(text.glyphs[0].rect, [100.0, 100.0, 112.0, 112.0]), "{:?}", text.glyphs[0].rect);
+        assert!(near(text.glyphs[13].rect, [136.0, 120.0, 148.0, 132.0]), "{:?}", text.glyphs[13].rect);
+        assert_eq!(text.word_at(7), Some((5, 9)), "a double-click selects the word");
+    }
+
+    /// A page shown turned (`/Rotate 90`): words are read upright on screen, so their boxes come
+    /// back where they were seen and run left to right.
+    #[test]
+    fn recognised_words_on_a_turned_page_stay_where_they_were_read() {
+        let info = PageInfo { width: 792.0, height: 612.0, label: "1".into(), crop: [0.0, 0.0, 612.0, 792.0], rotation: 90 };
+        let found = ocr_page(&info, &[("Turned", [300.0, 200.0, 372.0, 214.0])]);
+        let text = found.view_text(&info);
+        assert_eq!(text.plain_text(), "Turned");
+        assert!(near(text.glyphs[0].rect, [300.0, 200.0, 312.0, 214.0]), "{:?}", text.glyphs[0].rect);
+        assert!(text.glyphs.iter().all(|g| (g.direction[0] - 1.0).abs() < 1e-4 && g.direction[1].abs() < 1e-4), "{:?}", text.glyphs[0].direction);
+    }
+
+    #[test]
+    fn blank_and_malformed_words_add_no_glyphs() {
+        let info = PageInfo { width: 612.0, height: 792.0, label: "1".into(), crop: [0.0, 0.0, 612.0, 792.0], rotation: 0 };
+        let nan =
+            PlacedWord { text: "x".into(), origin: [f64::NAN, 0.0], across: [10.0, 0.0], up: [0.0, 10.0], confidence: None, source: String::new() };
+        let found =
+            OcrPage { page: 0, words: vec![nan, placed(&info, " ", [0.0, 0.0, 5.0, 5.0])], already_on_page: 0, skipped: None, notes: Vec::new() };
+        assert!(found.view_text(&info).is_empty());
     }
 }

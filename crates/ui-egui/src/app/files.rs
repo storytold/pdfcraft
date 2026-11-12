@@ -1067,7 +1067,9 @@ impl PdfCraftApp {
             return;
         }
         self.remember_view(index);
-        let view = self.views.remove(index);
+        let mut view = self.views.remove(index);
+        // Its background recognition may still be reading a page: none starts until it is done.
+        self.auto_ocr_closed.take_from(&mut view.auto_ocr);
         let (id, place) = (view.id, view.place());
         // Another tab showing the same document (split view) keeps it open.
         if !self.views.iter().any(|v| v.id == id) {

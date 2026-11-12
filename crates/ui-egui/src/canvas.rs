@@ -69,7 +69,7 @@ use organize::organize_grid;
 use organize::sharp_enough;
 pub(crate) use page_input::PageToolContext;
 use page_input::{PageInput, cancel_on_escape, page_overlays, page_tool_input, text_layer};
-use selection::{Selection, Span, click_unit, selection_actions};
+use selection::{NoText, Selection, Span, click_unit, no_text_bar, selection_actions};
 pub use xform::PageXform;
 use xform::snap_to_pixels;
 use zoom::anchored_scroll;
@@ -590,6 +590,12 @@ pub struct DocView {
     /// Addresses written as plain text on a page (#4207), with the text layer they were found in.
     text_links: HashMap<usize, (Arc<PageText>, Arc<[TextLink]>)>,
     pub(crate) text_failed: HashSet<usize>,
+    /// Text recognised in the background on pages whose own text layer is empty (scans): the
+    /// view's, never the document's, and the page's text layer whenever that is read again.
+    /// Dropped when pages may have moved ([`Self::document_changed`]).
+    pub(crate) ocr_texts: HashMap<usize, Arc<PageText>>,
+    /// The background recognition of this document's scanned pages.
+    pub(crate) auto_ocr: crate::auto_ocr::AutoOcr,
     pub find: Option<Find>,
     selection: Option<Selection>,
     /// Select All while scrolling continuously (#2639): the text of every page of the document,
@@ -601,6 +607,9 @@ pub struct DocView {
     /// The drag in progress started a text selection: the wheel scrolls the page during it
     /// (#721), which egui's scroll area refuses while anything is dragged.
     selection_drag: bool,
+    /// A text selection tried on a page whose text layer is empty: the bar offering Recognize
+    /// text. A scan has nothing to select until its text is recognized.
+    no_text: Option<NoText>,
     /// Clicks in the current run on the text layer: two select a word, three the line, four the page.
     clicks: u32,
     last_press_time: f64,
@@ -1000,6 +1009,9 @@ impl DocView {
         self.org_drag = None;
         self.panel_drag = None;
         self.selection_drag = false;
+        // The Recognize text bar a press on a page with no text opened goes with the press. Left
+        // open over the page, it took the right-click that follows an Escape-cancelled press.
+        self.no_text = None;
         self.router.cancel();
         self.auto_scroll.cancel();
         self.prepare.cancel_pointer_gesture();
@@ -1076,11 +1088,14 @@ impl DocView {
             texts: HashMap::new(),
             text_links: HashMap::new(),
             text_failed: HashSet::new(),
+            ocr_texts: HashMap::new(),
+            auto_ocr: crate::auto_ocr::AutoOcr::default(),
             find: None,
             selection: None,
             all_text: false,
             actions_dismissed: None,
             selection_drag: false,
+            no_text: None,
             clicks: 0,
             last_press_time: 0.0,
             last_press_pos: None,
@@ -1186,6 +1201,9 @@ impl DocView {
     /// adopt the new page geometry, keeping the reader's place where possible.
     pub fn document_changed(&mut self, info: &DocInfo) {
         self.invalidate_content();
+        // Pages may have moved, so text recognised on one may belong to another now.
+        self.ocr_texts.clear();
+        self.auto_ocr.reset();
         self.frame_geometry_changed = true;
         self.page_count = info.pages.len();
         self.page_sizes = info.pages.iter().map(|p| (p.width, p.height)).collect();
@@ -1256,6 +1274,8 @@ impl DocView {
         fresh.viewport_h = self.viewport_h;
         fresh.viewport_screen = self.viewport_screen;
         fresh.pane = self.pane.clone();
+        // A recognition worker still reading the old version is waited for before the new one is.
+        fresh.auto_ocr.take_over(&mut self.auto_ocr);
         *self = fresh;
         // Marks the kept images out of date and clamps the page to the new page count.
         self.document_changed(info);
@@ -3493,7 +3513,12 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     view.auto_scroll.paint(ui, avail);
     if unobstructed && matches!(tool, QuickTool::Select | QuickTool::ColumnSelect) {
         copy_selected |= selection_actions(ui, avail, view, info, prefs, allowed && !comments_hidden, can_copy);
+        // A combinator rather than an `if let`: this function is at clippy's cognitive-complexity limit.
+        image_action = no_text_bar(ui, avail, view, can_modify, keys).map(crate::edit_text_ui::ImageAction::Recognize).or(image_action);
+    } else {
+        view.no_text = None;
     }
+    crate::auto_ocr::progress_bar(ui, avail, view, unobstructed);
 
     // Collect all main-page demand, including cached surfaces, for byte admission later.
     // Pan-settle debounce for tiled pages: each tile costs a full page interpret, so holding

@@ -1198,7 +1198,8 @@ fn signatures_changed_after_edit(
 
 /// A comment or content edit changes one page, `page`: keep every other raster. Opening, closing
 /// or moving a pop-up changes none: the window is drawn over the page, and a /Popup annotation
-/// paints nothing in the raster (ISO 32000-2 §12.5.6.14).
+/// paints nothing in the raster (ISO 32000-2 §12.5.6.14). A content edit may also change the
+/// picture text was recognised from, so that text goes too.
 fn one_page_changed(
     view: &mut crate::DocView,
     edit: &Edit,
@@ -1206,7 +1207,9 @@ fn one_page_changed(
     annots_before: &[pdfcraft_render::Annotation],
     info: &pdfcraft_render::DocInfo,
 ) {
-    if !matches!(edit, Edit::SetAnnotationPopup { .. }) {
+    if content_page(edit).is_some() {
+        view.content_page_changed(page);
+    } else if !matches!(edit, Edit::SetAnnotationPopup { .. }) {
         view.page_changed(page);
     }
     if let Edit::DeleteAnnotation { page, index } = edit {
