@@ -588,19 +588,23 @@ const MODE_BAR_SEARCH_MIN: f32 = 140.0;
 
 pub fn mode_bar(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
+    let rtl = crate::i18n::current().rtl();
+    let outer = if rtl { Layout::right_to_left(Align::Center) } else { Layout::left_to_right(Align::Center) };
+    let inner = if rtl { Layout::left_to_right(Align::Center) } else { Layout::right_to_left(Align::Center) };
     // The document in the active tab may hide the menu or the tools (`crate::viewer_prefs`).
     let hidden = app.hidden_interface();
     egui::Panel::top("mode_bar")
         .exact_size(48.0)
         .frame(egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin::symmetric(10, 0)).stroke(Stroke::new(1.0, t.divider)))
         .show(ui, |ui| {
-            ui.horizontal_centered(|ui| {
+            ui.with_layout(outer, |ui| {
                 ui.spacing_mut().item_spacing.x = 2.0;
                 // The menus, unless the native macOS menu bar has them or the document hides them.
                 if app.native_menu.is_none() && !hidden.menubar {
                     app.menu_bar_ui(ui);
                     ui.add_space(6.0);
-                    ui.painter().vline(ui.cursor().left(), ui.max_rect().y_range().shrink(12.0), Stroke::new(1.0, t.divider));
+                    let rule_x = if rtl { ui.cursor().right() } else { ui.cursor().left() };
+                    ui.painter().vline(rule_x, ui.max_rect().y_range().shrink(12.0), Stroke::new(1.0, t.divider));
                     ui.add_space(10.0);
                 }
                 if hidden.toolbar {
@@ -638,7 +642,7 @@ pub fn mode_bar(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     });
                 }
                 let left = ui.available_width();
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                ui.with_layout(inner, |ui| {
                     ui.spacing_mut().item_spacing.x = 4.0;
                     let has_doc = app.active.is_some();
                     ui.add_enabled_ui(has_doc, |ui| {
