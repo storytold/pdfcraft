@@ -262,6 +262,10 @@ fn assert_within_tolerance(actual: &[V], source: &[V], tolerance: f64) {
     }
 }
 
+fn triangle_seed(x: f64, status: i32, face: u32) -> Recipe {
+    Recipe::Seed { slots: [Slot::Point([x, 0.0, 0.0]), Slot::Point([x + 2.0, 0.0, 0.0]), Slot::Point([x, 2.0, 0.0])], status, face }
+}
+
 #[test]
 fn independent_seed_and_apex_match_a_hand_computed_stream() {
     let encoded = encode(
@@ -277,5 +281,26 @@ fn independent_seed_and_apex_match_a_hand_computed_stream() {
     let rebuilt = rebuild(&encoded.arrays(usize::MAX)).unwrap();
     assert_eq!(rebuilt.triangles, [[0, 1, 2], [2, 1, 3]]);
     let expected = [[10.0, 0.0, 0.0], [12.0, 0.0, 0.0], [10.0, 2.0, 0.0], [11.0 + 2.0 * S, 1.0 + S, -1.0]];
+    assert_positions(&rebuilt.positions, &expected);
+}
+
+#[test]
+fn independent_components_and_a_reference_are_rebuilt() {
+    let encoded = encode(
+        [0.0; 3],
+        0.5,
+        &[
+            triangle_seed(0.0, 2, 0),
+            Recipe::Apex { edge: (2, 1), opposite: 0, slot: Slot::Reference(0), status: 0, face: 0 },
+            triangle_seed(5.0, 0, 1),
+        ],
+    );
+
+    let rebuilt = rebuild(&encoded.arrays(usize::MAX)).unwrap();
+    assert_eq!(rebuilt.triangles, [[0, 1, 2], [2, 1, 0], [3, 4, 5]]);
+    assert_eq!(encoded.references, [0]);
+    assert_eq!(encoded.face_of, [0, 0, 1]);
+    assert_eq!(rebuilt.positions.len(), 6);
+    let expected = [[0.0, 0.0, 0.0], [2.0, 0.0, 0.0], [0.0, 2.0, 0.0], [5.0, 0.0, 0.0], [7.0, 0.0, 0.0], [5.0, 2.0, 0.0]];
     assert_positions(&rebuilt.positions, &expected);
 }
