@@ -357,8 +357,7 @@ mod tests {
     }
 
     /// The attributes of every `<link>` element in `html`, outside comments: a tag that is only
-    /// mentioned in a comment, or commented out, is not on the page. Enough HTML for index.html,
-    /// which these tests own: double-quoted values, and bare names (`data-trunk`) as "".
+    /// mentioned in a comment, or commented out, is not on the page.
     fn links(html: &str) -> Vec<std::collections::BTreeMap<String, String>> {
         let mut page = String::new();
         let mut rest = html;
@@ -367,30 +366,47 @@ mod tests {
             rest = rest[start..].find("-->").map_or("", |end| &rest[start + end + 3..]);
         }
         page.push_str(rest);
-        page.split("<link")
-            .skip(1)
-            .filter_map(|tag| tag.split('>').next())
-            .map(|tag| {
-                let mut attrs = std::collections::BTreeMap::new();
-                let mut rest = tag.trim_end_matches('/');
-                while let Some(start) = rest.find(|c: char| !c.is_whitespace() && c != '/') {
-                    rest = &rest[start..];
-                    let end = rest.find(|c: char| c.is_whitespace() || c == '=').unwrap_or(rest.len());
-                    let name = rest[..end].to_string();
-                    rest = &rest[end..];
-                    let value = match rest.strip_prefix("=\"") {
-                        Some(quoted) => {
-                            let close = quoted.find('"').expect("closing quote");
-                            rest = &quoted[close + 1..];
-                            quoted[..close].to_string()
+        page.split("<link").skip(1).filter_map(|tag| tag.split('>').next()).map(attributes).collect()
+    }
+
+    /// The attributes of one tag's text (after `<link`, before `>`), the way HTML reads them:
+    /// spaces may surround `=`, a value may be double-quoted, single-quoted or bare, and a name
+    /// with no `=` (`data-trunk`) has the value "". Every step consumes at least one character,
+    /// so malformed text ends the loop instead of spinning on it.
+    fn attributes(tag: &str) -> std::collections::BTreeMap<String, String> {
+        let mut attrs = std::collections::BTreeMap::new();
+        let mut chars = tag.chars().peekable();
+        let skip_space = |chars: &mut std::iter::Peekable<std::str::Chars<'_>>| {
+            while chars.next_if(|c| c.is_whitespace() || *c == '/').is_some() {}
+        };
+        loop {
+            skip_space(&mut chars);
+            let mut name = String::new();
+            while let Some(c) = chars.next_if(|c| !c.is_whitespace() && *c != '=' && *c != '/') {
+                name.push(c);
+            }
+            skip_space(&mut chars);
+            let mut value = String::new();
+            if chars.next_if_eq(&'=').is_some() {
+                skip_space(&mut chars);
+                match chars.next_if(|c| *c == '"' || *c == '\'') {
+                    Some(quote) => value.extend(chars.by_ref().take_while(|c| *c != quote)),
+                    None => {
+                        while let Some(c) = chars.next_if(|c| !c.is_whitespace()) {
+                            value.push(c);
                         }
-                        None => String::new(),
-                    };
-                    attrs.insert(name, value);
+                    }
                 }
-                attrs
-            })
-            .collect()
+            }
+            if name.is_empty() {
+                // A stray `=` or quote with no name before it: drop it and go on; at the end, stop.
+                if chars.next().is_none() {
+                    return attrs;
+                }
+                continue;
+            }
+            attrs.insert(name, value);
+        }
     }
 
     /// Whether `html` has a `<link>` with every one of `want`'s attributes and values.
@@ -404,6 +420,14 @@ mod tests {
         assert!(has_link(live, &[("data-trunk", ""), ("rel", "copy-file"), ("href", "a.json")]));
         assert!(!has_link(&format!("<!-- {live} -->"), &[("rel", "copy-file")]), "a commented-out link is not on the page");
         assert!(!has_link(r#"<link rel="icon" href="a.json" />"#, &[("rel", "copy-file")]), "every attribute must match");
+        // HTML allows spaces around `=`, single quotes and bare values.
+        assert!(has_link(r#"<link rel = "manifest" href = 'm.json' >"#, &[("rel", "manifest"), ("href", "m.json")]));
+        assert!(has_link("<link rel=manifest href=m.json>", &[("rel", "manifest"), ("href", "m.json")]));
+        // Malformed text ends instead of looping: a stray `=`, an unclosed quote, a lone name.
+        for tag in [r#"<link = "x" rel="icon">"#, r#"<link rel="icon"#, "<link rel=", "<link ="] {
+            let _ = links(tag);
+        }
+        assert!(has_link(r#"<link = "x" rel="icon">"#, &[("rel", "icon")]));
     }
 
     /// The installed app is offered for PDFs only if the page links a manifest that Trunk copies
