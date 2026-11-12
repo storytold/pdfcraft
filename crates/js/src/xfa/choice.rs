@@ -5,16 +5,32 @@
 use boa_engine::{Context, JsObject, JsResult, JsString, JsValue};
 
 use super::host::{XHost, host};
-use super::props::{ItemList, is_choice_list, list_count, list_entries, prop_ref, saved_list};
+use super::props::{ItemList, is_choice_list, list_count, list_entries, prop_ref, saved_list, with_list_texts};
 use super::{arg, text};
 
 /// The most entries a script may give one list: more is left out.
 pub(crate) const MAX_ITEMS: usize = 10_000;
 
-/// The entries the list shows and those it saves (the same when it saves what it shows), as texts.
-fn lists(h: &XHost, node: usize) -> (Vec<String>, Vec<String>) {
+/// Which list the field shows, and which it saves (`None` when it saves what it shows).
+fn which(h: &XHost, node: usize) -> (usize, Option<usize>) {
     let saved = saved_list(h, node);
     let shown = (0..list_count(h, node).max(1)).find(|i| Some(*i) != saved).unwrap_or(0);
+    (shown, saved)
+}
+
+/// The text of entry `i` of a list, copying only that entry.
+fn text_at(h: &XHost, node: usize, list: usize, i: usize) -> Option<String> {
+    with_list_texts(h, node, list, |it| it.nth(i).map(str::to_string))
+}
+
+/// Where `t` is in a list.
+fn position(h: &XHost, node: usize, list: usize, t: &str) -> Option<usize> {
+    with_list_texts(h, node, list, |mut it| Iterator::position(&mut it, |s| s == t))
+}
+
+/// The entries the list shows and those it saves (the same when it saves what it shows), as texts.
+fn lists(h: &XHost, node: usize) -> (Vec<String>, Vec<String>) {
+    let (shown, saved) = which(h, node);
     let texts = |list: usize| list_entries(h, node, list).into_iter().map(|(_, t)| t).collect::<Vec<_>>();
     let shown_texts = texts(shown);
     let saved_texts = match saved {
@@ -51,8 +67,7 @@ fn set_lists(h: &mut XHost, node: usize, shown: Vec<String>, saved: Vec<String>)
 /// The run's copy of the lists, made from the template's the first time a method changes them (each text charged against
 /// the script's payload): the shown list's index and the saved one's, `None` when it saves what it shows.
 fn state(h: &mut XHost, node: usize) -> (usize, Option<usize>) {
-    let saved = saved_list(h, node);
-    let shown = (0..list_count(h, node).max(1)).find(|i| Some(*i) != saved).unwrap_or(0);
+    let (shown, saved) = which(h, node);
     if h.nodes.get(node).is_some_and(|n| n.items.is_none()) {
         let (shown_texts, saved_texts) = lists(h, node);
         set_lists(h, node, shown_texts, saved_texts);
@@ -64,7 +79,7 @@ fn state(h: &mut XHost, node: usize) -> (usize, Option<usize>) {
 
 /// `length`: how many entries a choice list shows; `None` for any other node.
 pub(crate) fn length(h: &XHost, node: usize) -> Option<usize> {
-    is_choice_list(h, node).then(|| lists(h, node).0.len())
+    is_choice_list(h, node).then(|| with_list_texts(h, node, which(h, node).0, |it| it.count()))
 }
 
 /// `selectedIndex`: the entry the field's value is (by what it saves, else what it shows), or -1.
@@ -73,8 +88,8 @@ pub(crate) fn selected_index(h: &XHost, node: usize) -> Option<i64> {
         return None;
     }
     let value = h.nodes.get(node).map(|n| n.value.clone()).unwrap_or_default();
-    let (shown, saved) = lists(h, node);
-    let at = saved.iter().position(|s| *s == value).or_else(|| shown.iter().position(|s| *s == value));
+    let (shown, saved) = which(h, node);
+    let at = position(h, node, saved.unwrap_or(shown), &value).or_else(|| position(h, node, shown, &value));
     Some(at.map_or(-1, |i| i as i64))
 }
 
@@ -92,9 +107,10 @@ fn index(v: &JsValue, ctx: &mut Context) -> JsResult<Option<usize>> {
 fn item_at(r: &JsObject, args: &[JsValue], ctx: &mut Context, saved: bool) -> JsResult<JsValue> {
     let node = target(r, ctx)?;
     let Some(i) = index(&arg(args, 0), ctx)? else { return Ok(JsValue::null()) };
-    let (shown, kept) = lists(&host(ctx)?.borrow(), node);
-    let list = if saved { kept } else { shown };
-    Ok(list.get(i).map_or(JsValue::null(), |t| JsString::from(t.as_str()).into()))
+    let h = host(ctx)?.borrow();
+    let (shown, kept) = which(&h, node);
+    let list = if saved { kept.unwrap_or(shown) } else { shown };
+    Ok(text_at(&h, node, list, i).map_or(JsValue::null(), |t| JsString::from(t.as_str()).into()))
 }
 
 /// `getDisplayItem(i)`: what entry `i` shows, or `null`.
@@ -115,8 +131,9 @@ pub(crate) fn bound_item(_: &JsValue, args: &[JsValue], r: &JsObject, ctx: &mut 
         return Ok(given);
     }
     let t = text(&given, ctx)?;
-    let (shown, saved) = lists(&host(ctx)?.borrow(), node);
-    let bound = shown.iter().position(|s| *s == t).and_then(|i| saved.get(i)).cloned().unwrap_or(t);
+    let h = host(ctx)?.borrow();
+    let (shown, saved) = which(&h, node);
+    let bound = position(&h, node, shown, &t).and_then(|i| text_at(&h, node, saved.unwrap_or(shown), i)).unwrap_or(t);
     Ok(JsString::from(bound.as_str()).into())
 }
 
@@ -179,6 +196,11 @@ pub(crate) fn delete_item(_: &JsValue, args: &[JsValue], r: &JsObject, ctx: &mut
     let node = target(r, ctx)?;
     let i = index(&arg(args, 0), ctx)?;
     let mut h = host(ctx)?.borrow_mut();
+    // an index past the end changes nothing, not even the run's copy of the lists
+    let len = with_list_texts(&h, node, which(&h, node).0, |it| it.count());
+    if i.is_none_or(|i| i >= len) {
+        return Ok(JsValue::from(false));
+    }
     let (shown, saved) = state(&mut h, node);
     let Some(lists) = h.nodes.get_mut(node).and_then(|n| n.items.as_mut()) else { return Ok(JsValue::from(false)) };
     let Some(i) = i.filter(|i| lists.get(shown).is_some_and(|l| *i < l.entries.len())) else { return Ok(JsValue::from(false)) };
@@ -192,7 +214,8 @@ pub(crate) fn delete_item(_: &JsValue, args: &[JsValue], r: &JsObject, ctx: &mut
     Ok(JsValue::from(true))
 }
 
-/// `setItems("a,b,c")`, or `setItems("shown1,saved1,shown2,saved2", 2)`: the entries, replacing the list's.
+/// `setItems("a,b,c")`, or `setItems("shown1,saved1,shown2,saved2", 2)`: the entries, replacing the list's; `false`, and the
+/// list as it was, when the texts don't make whole pairs.
 pub(crate) fn set_items(_: &JsValue, args: &[JsValue], r: &JsObject, ctx: &mut Context) -> JsResult<JsValue> {
     let node = target(r, ctx)?;
     let all = text(&arg(args, 0), ctx)?;
@@ -200,12 +223,14 @@ pub(crate) fn set_items(_: &JsValue, args: &[JsValue], r: &JsObject, ctx: &mut C
         Some(v) if !v.is_undefined() => v.to_number(ctx)? == 2.0,
         _ => false,
     };
-    let parts: Vec<String> = if all.is_empty() { Vec::new() } else { all.split(',').map(str::to_string).collect() };
-    let (shown, saved): (Vec<String>, Vec<String>) = if pairs {
-        parts.chunks(2).map(|c| (c[0].clone(), c.get(1).cloned().unwrap_or_else(|| c[0].clone()))).unzip()
-    } else {
-        (parts.clone(), parts)
-    };
+    if pairs && !all.is_empty() && all.split(',').count() % 2 != 0 {
+        return Ok(JsValue::from(false));
+    }
+    // only the texts the list can keep are copied
+    let keep = if pairs { MAX_ITEMS * 2 } else { MAX_ITEMS };
+    let parts: Vec<String> = if all.is_empty() { Vec::new() } else { all.split(',').take(keep).map(str::to_string).collect() };
+    let (shown, saved): (Vec<String>, Vec<String>) =
+        if pairs { parts.chunks_exact(2).filter_map(|c| Some((c.first()?.clone(), c.get(1)?.clone()))).unzip() } else { (parts.clone(), parts) };
     set_lists(&mut host(ctx)?.borrow_mut(), node, shown, saved);
-    Ok(JsValue::undefined())
+    Ok(JsValue::from(true))
 }

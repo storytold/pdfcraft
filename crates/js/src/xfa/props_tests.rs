@@ -445,6 +445,8 @@ fn choice_list_methods_read_and_change_the_items() {
             "this.setItems('a,1,b,2', 2); this.boundItem('b') + ',' + this.deleteItem(0) + ',' + this.deleteItem(5) + ',' + this.length + ',' + this.items.nodes.length",
             "2,true,false,1,1",
         ),
+        // texts that don't make whole pairs leave the list as it was
+        ("this.setItems('a,1,b', 2) + ',' + this.length + ',' + this.setItems('a,1', 2) + ',' + this.getSaveItem(0)", "false,2,true,1"),
         // the list methods' entries are what `items` reads afterwards
         ("this.clearItems(); this.addItem('Peru', 'PE'); this.getElement('items', 1).nodes.item(0).value + this.items.nodes.item(0).value", "PEPeru"),
         (

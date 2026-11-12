@@ -447,6 +447,16 @@ pub(crate) fn list_entries(h: &XHost, node: usize, list: usize) -> Vec<(String, 
         .unwrap_or_default()
 }
 
+/// The texts of [`list_entries`] without copying the list: `f` gets an iterator over them.
+pub(crate) fn with_list_texts<R>(h: &XHost, node: usize, list: usize, f: impl FnOnce(&mut dyn Iterator<Item = &str>) -> R) -> R {
+    if let Some(lists) = h.nodes.get(node).and_then(|n| n.items.as_ref()) {
+        let entries = lists.get(list).map_or(&[][..], |l| l.entries.as_slice());
+        return f(&mut entries.iter().map(|(_, t)| t.as_str()));
+    }
+    let children = template_prop(h, node, &join("", "items", list)).map_or(&[][..], |p| p.children.as_slice());
+    f(&mut children.iter().map(|c| c.text.as_deref().unwrap_or_default()))
+}
+
 /// Which of the field's `<items>` lists holds the values saved to the data: the one the template marks `save="1"`, else the
 /// second when there are two (the list methods add one), else none (the shown text is the value).
 pub(crate) fn saved_list(h: &XHost, node: usize) -> Option<usize> {
