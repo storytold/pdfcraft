@@ -10,6 +10,7 @@ fn printer_worker_only_accepts_read_only_queries() {
         vec!["--craft-printer-query", "list", "", "unexpected"],
         vec!["--craft-printer-query", "list", "unexpected-printer"],
         vec!["--craft-printer-query", "two-sided", ""],
+        vec!["--craft-printer-query", "paper-info", ""],
     ] {
         let output = Command::new(env!("CARGO_BIN_EXE_pdfcraft-cli")).args(args).output().unwrap();
         assert!(!output.status.success());
@@ -21,6 +22,12 @@ fn printer_worker_only_accepts_read_only_queries() {
         .unwrap();
     assert!(output.status.success());
     assert_eq!(serde_json::from_slice::<Option<bool>>(&output.stdout).unwrap(), None);
+    let output = Command::new(env!("CARGO_BIN_EXE_pdfcraft-cli"))
+        .args(["--craft-printer-query", "paper-info", "pdfcraft-test: no such printer"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert_eq!(serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap(), serde_json::json!([[], null]));
 }
 
 #[test]
@@ -48,5 +55,19 @@ fn printer_worker_preserves_available_names_and_default() {
             .unwrap();
         assert!(capability.status.success());
         assert_eq!(serde_json::from_slice::<Option<bool>>(&capability.stdout).unwrap(), printer["two_sided"].as_bool());
+    }
+    if let Some(printer) = answer["printers"].as_array().unwrap().iter().find(|p| p["name"] == "Microsoft Print to PDF") {
+        let name = printer["name"].as_str().unwrap();
+        let expected = pdfcraft_engine::print::spool::printer_paper_info(name);
+        let output = Command::new(env!("CARGO_BIN_EXE_pdfcraft-cli")).args(["--craft-printer-query", "paper-info", name]).output().unwrap();
+        assert!(output.status.success());
+        let actual: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(actual[0], serde_json::json!(expected.0));
+        if let Some((_, (w, h))) = expected.1 {
+            assert!((actual[1][0].as_f64().unwrap() - w).abs() < 0.01);
+            assert!((actual[1][1].as_f64().unwrap() - h).abs() < 0.01);
+        } else {
+            assert!(actual[1].is_null());
+        }
     }
 }
