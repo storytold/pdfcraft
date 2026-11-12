@@ -2206,6 +2206,18 @@ fn reconstruction_takes_the_trailer_from_a_cross_reference_stream() {
     assert_eq!((field(b"Title"), field(b"Creator"), field(b"Subject")), (b"Kept".to_vec(), b"Me".to_vec(), b"new".to_vec()));
 }
 
+/// A rebuild finds an object whose header is glued to the `endobj` before it (`endobj3 0 obj`,
+/// as Microsoft Print To PDF writes some, #7082): only a header after white space or `>` counted,
+/// so object 3 was lost.
+#[test]
+fn reconstruction_finds_an_object_glued_to_the_endobj_before_it() {
+    let pdf = b"%PDF-1.4\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Glued true >> endobj\ntrailer << /Root 1 0 R >>\n%%EOF\n";
+    let doc = Document::open(Arc::new(pdf.to_vec())).unwrap();
+    assert!(doc.reconstructed(), "{:?}", doc.repair_log());
+    let page = doc.get(crate::ObjRef { num: 3, generation: 0 });
+    assert_eq!(page.as_dict().and_then(|d| d.get(b"Glued")), Some(&Object::Bool(true)), "object 3 is found: {page:?}");
+}
+
 /// A rebuild prefers a trailer whose /Root is the catalog (as `root_is_catalog` judges it): a
 /// later cross-reference stream whose /Root points at the Info dictionary does not replace an
 /// earlier good trailer, or a full save would write the Info dictionary as /Root.

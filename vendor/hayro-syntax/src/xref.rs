@@ -289,6 +289,14 @@ fn fallback_xref_map_inner<'a>(
                         }
                     }
                 }
+            } else if r.peek_bytes(7).is_some_and(|b| {
+                b.starts_with(b"endobj") && b.get(6).is_some_and(u8::is_ascii_digit)
+            }) {
+                // PdfCraft patch: (hayro-syntax (46)) an object header glued to the `endobj`
+                // before it (`endobj5 0 obj`, as Microsoft Print To PDF writes some) starts right
+                // after `endobj`. Skipping the whole token lost object 5 and read the `0 obj` left
+                // over as object 0, so a page's Type0 font went missing and it drew blank (#7082).
+                let _ = r.skip_bytes(6);
             } else {
                 // We can skip everything until the next white space character,
                 // as there cannot possibly be any new dictionary/object identifier

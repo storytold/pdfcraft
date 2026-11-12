@@ -807,8 +807,9 @@ fn object_headers(data: &[u8]) -> Vec<(u32, u64, u16, usize)> {
     let mut headers = Vec::new();
     let mut i = 0;
     while i < data.len() {
-        // Object headers start at a line start (or after whitespace).
-        let at_start = i == 0 || is_whitespace(data[i - 1]) || data[i - 1] == b'>';
+        // Object headers start at a line start (or after whitespace), or right after an
+        // `endobj` they are glued to (`endobj5 0 obj`, as Microsoft Print To PDF writes some, #7082).
+        let at_start = i == 0 || is_whitespace(data[i - 1]) || data[i - 1] == b'>' || data.get(i.saturating_sub(6)..i) == Some(b"endobj".as_slice());
         if at_start && data[i].is_ascii_digit() {
             let mut lx = Lexer::new(data, i);
             let n = lx.token();
