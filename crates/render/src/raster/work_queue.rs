@@ -503,6 +503,35 @@ mod tests {
         assert!(extra >= glyphs * (std::mem::size_of::<crate::TextGlyph>() + std::mem::size_of::<Option<usize>>() * 2), "{extra}");
     }
 
+    /// A recovered layer's font names count toward its bytes, each once however many glyphs
+    /// share it: a long `/BaseFont` is held by the result as long as the layer is.
+    #[test]
+    fn a_recovered_layers_font_names_count_once_each() {
+        let glyphs = 1_000;
+        let long = 1 << 20;
+        let glyph = |c: char| crate::TextGlyph { text: c.to_string(), rect: [0.0; 4], quad: [[0.0; 2]; 4], direction: [1.0, 0.0] };
+        let text = Arc::new(crate::text::PageText {
+            glyphs: (0..glyphs).map(|_| glyph('a')).collect(),
+            line_of: vec![0; glyphs],
+            space_before: vec![false; glyphs],
+            truncated: false,
+        });
+        let layer = |name: &str| {
+            let font: Arc<str> = Arc::from(name);
+            let style = crate::text::GlyphStyle { font: Some(font), ..Default::default() };
+            crate::text::RecoveredText::new(text.clone(), vec![None; glyphs], vec![None; glyphs], vec![Some(style); glyphs], glyphs)
+        };
+        let bytes = |layer: crate::text::RecoveredText| {
+            let mut p = page(req(0), 4);
+            p.text = Some(text.clone());
+            p.recovered = Some(Arc::new(layer));
+            result_bytes(&p)
+        };
+        let extra = bytes(layer(&"N".repeat(long))) - bytes(layer("N"));
+        assert!(extra >= long - 1, "the name is held by the result: {extra}");
+        assert!(extra < 2 * long, "shared by every glyph, counted once: {extra}");
+    }
+
     #[test]
     fn oversized_completion_is_admitted_alone_and_cancellation_releases_waiters() {
         let q = Arc::new(WorkQueue { max_bytes: 512, max_count: 2, ..Default::default() });

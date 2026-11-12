@@ -176,7 +176,8 @@ impl PageText {
 impl RecoveredText {
     /// What this layer holds on the heap, for the render queue's byte allowance: its own text
     /// (all of it, strict glyphs included, as its own copy) and its per-glyph readings, indices
-    /// and styles. The fonts' shared names are counted once per glyph's handle, not again.
+    /// and styles. The fonts' shared names are counted once each, however many glyphs' handles
+    /// share them (a `/BaseFont` name has no length limit of its own).
     pub(crate) fn heap_bytes(&self) -> usize {
         let per = |len: usize, size: usize| len.saturating_mul(size);
         let mut bytes = std::mem::size_of::<PageText>()
@@ -188,6 +189,12 @@ impl RecoveredText {
         for r in self.recovery.iter().flatten() {
             if let hayro::hayro_interpret::hayro_cmap::BfString::String(s) = &r.text {
                 bytes = bytes.saturating_add(s.capacity());
+            }
+        }
+        let mut names = HashSet::new();
+        for name in self.style.iter().flatten().filter_map(|s| s.font.as_ref()) {
+            if names.insert(std::sync::Arc::as_ptr(name).cast::<u8>()) {
+                bytes = bytes.saturating_add(name.len());
             }
         }
         bytes
