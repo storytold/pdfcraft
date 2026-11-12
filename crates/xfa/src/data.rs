@@ -35,8 +35,8 @@ pub(crate) use import::MAX_IMPORT_BYTES;
 pub use import::{DataImport, ImportNode, export_data, import_data, parse_data_file, write_data_image};
 pub use passwords::{clear_password_values, has_password_values};
 pub use path::{data_path, parse_datasets, som_to_path};
-pub(crate) use path::{fields_with_ids, template_field};
-pub use values::{FieldData, FieldDatum, is_on, read_values, read_values_with};
+pub(crate) use path::{fields_with_ids, template_field, template_object};
+pub use values::{FieldData, FieldDatum, is_on, name_text, radio_dataset_value, radio_state_for_item, read_values, read_values_with};
 #[cfg(test)]
 pub(crate) use write::ENSURED;
 pub use write::{
@@ -112,11 +112,25 @@ impl DataNode {
     /// elements (one way a multi-select list's picks are stored), those on separate lines.
     pub fn value_at(&self, path: &[(String, usize)]) -> Option<String> {
         let n = self.get(path)?;
-        if n.children.is_empty() || !n.children.iter().all(|c| c.name == "value") {
+        if !n.holds_picks() {
             return Some(n.text.clone());
         }
-        Some(n.children.iter().map(|c| c.text.trim()).filter(|t| !t.is_empty()).take(1000).collect::<Vec<_>>().join("\n"))
+        Some(picks_of(n.children.iter().map(|c| c.text.as_str())).collect::<Vec<_>>().join("\n"))
     }
+
+    /// Whether this node holds a multi-select list's picks: children, all `value` elements.
+    pub(crate) fn holds_picks(&self) -> bool {
+        !self.children.is_empty() && self.children.iter().all(|c| c.name == "value")
+    }
+}
+
+/// Most picks a multi-select value is read or written with.
+pub(crate) const MAX_PICKS: usize = 1000;
+
+/// The picks among `texts` (`value` elements, or the lines of a value): non-empty, trimmed, at
+/// most [`MAX_PICKS`].
+pub(crate) fn picks_of<'a>(texts: impl Iterator<Item = &'a str>) -> impl Iterator<Item = &'a str> {
+    texts.map(str::trim).filter(|t| !t.is_empty()).take(MAX_PICKS)
 }
 
 /// One change to the data, for [`write_data_ops`].
@@ -134,13 +148,21 @@ pub enum DataOp {
 impl DataNode {
     /// The node at `path`, made (with empty siblings before it) where missing; `None` past
     /// the index cap.
-    fn ensure(&mut self, path: &[(String, usize)]) -> Option<&mut DataNode> {
+    fn ensure(&mut self, path: &[(String, usize)], budget: &mut usize) -> Option<&mut DataNode> {
         let mut node = self;
         for (name, idx) in path {
             if *idx >= MAX_INDEX {
                 return None;
             }
             let have = node.children.iter().filter(|c| &c.name == name).count();
+            // Every skipped sibling owns a copy of the name: bounded as `Build::at` bounds a write.
+            // The budget is the whole path's, not each level's: a deep path that is affordable at
+            // every level taken alone would otherwise allocate its way past the bound.
+            let need = (*idx + 1).saturating_sub(have).saturating_mul(name.len());
+            if need > *budget {
+                return None;
+            }
+            *budget -= need;
             for _ in have..=*idx {
                 node.children.push(DataNode { name: name.clone(), ..Default::default() });
             }
@@ -152,9 +174,11 @@ impl DataNode {
     /// Apply `op` to this tree (the root is the `xfa:data` element), as [`write_data_ops`]
     /// will to the packet, so scripts that run before it is written see the change.
     pub fn apply(&mut self, op: &DataOp) {
+        // One budget for the op's whole path, as `Build::at` bounds a write.
+        let mut budget = build::MAX_NEW_NAME_BYTES;
         match op {
             DataOp::Value { path, text } => {
-                if let Some(n) = self.ensure(path) {
+                if let Some(n) = self.ensure(path, &mut budget) {
                     // A multi-select list's picks, one `value` each (see `value_at`), told apart
                     // as the packet writer does: `value` leaves only, or a group holding none.
                     let picks = if n.children.is_empty() { n.group } else { n.children.iter().all(|c| c.name == "value" && c.children.is_empty()) };
@@ -175,7 +199,7 @@ impl DataNode {
                 if let Some(&last) = count.checked_sub(1).as_ref() {
                     let mut path = parent.clone();
                     path.push((name.clone(), last.min(MAX_INDEX.saturating_sub(1))));
-                    let _ = self.ensure(&path);
+                    let _ = self.ensure(&path, &mut budget);
                 }
             }
             DataOp::Remove(path) => {

@@ -1,6 +1,7 @@
 use super::core::{limited_pdf_string, pretty_date, spend};
 use super::model::{
-    Annotation, AttachmentSource, DestView, Field, FieldKind, LayerOp, Link, LinkTarget, RemoteDestination, link_replies, state_or_default,
+    Annotation, AttachmentSource, DestView, Field, FieldKind, LayerOp, Link, LinkTarget, Popup, RemoteDestination, fill_group_text, link_replies,
+    state_or_default,
 };
 use super::navigation::text_string;
 use super::{Dictionary, DocInfo, Entry, HashMap, HashSet, Inspector, Object, ObjectId};
@@ -143,12 +144,7 @@ impl<'a> Inspector<'a> {
                 info.attachments.push(self.attachment(fs, AttachmentSource::Annotation { page, index }, text_budget, fallback));
             }
             if subtype == "Link" {
-                if let Some(link) = self.link(page, index, d, info.uri_base.as_deref(), text_budget, &mut unfit_quads) {
-                    if matches!(&link.target, LinkTarget::Other(s) if s == "JavaScript") {
-                        info.has_javascript = true;
-                    }
-                    info.links.push(link);
-                }
+                self.collect_link(info, (page, index), d, text_budget, &mut unfit_quads);
                 continue;
             }
             // Not comments: form widgets, pop-ups and non-markup annotations such as the
@@ -158,6 +154,20 @@ impl<'a> Inspector<'a> {
                 continue;
             }
             if comments_full {
+                continue;
+            }
+            // Text that trims to nothing is not kept, so `retained` never sees it: charge what is
+            // read, so many comments sharing one huge blank string stop being decoded over and over.
+            let raw: usize = [&b"T"[..], b"Contents", b"M", b"NM", b"State", b"DA"]
+                .iter()
+                .filter_map(|k| match d.get(k).map(|o| self.resolve(o)) {
+                    Ok(Object::String(b, _) | Object::Name(b)) => Some(b.len()),
+                    _ => None,
+                })
+                .fold(0, usize::saturating_add);
+            // (charged once: below, by the larger of these raw bytes and what the annotation keeps)
+            if kept.saturating_add(raw) > MAX_ANNOTATION_BYTES {
+                comments_full = true;
                 continue;
             }
             let rect = rect4(self.resolve(d.get(b"Rect").unwrap_or(&Object::Null)));
@@ -207,6 +217,35 @@ impl<'a> Inspector<'a> {
                 }
                 _ => Vec::new(),
             };
+            // A callout: its arrow point and knee, and its text box (keep in step with
+            // `pdfcraft_annot::summaries`).
+            let (points, text_box) = match self.callout(d, rect) {
+                Some((lead, text_box)) if subtype == "FreeText" => (lead, Some(text_box)),
+                _ => (points, None),
+            };
+            // Only the comment's own pop-up: a pop-up annotation whose /Parent, if any, is a
+            // reference to this comment (keep in step with `pdfcraft_annot::summaries`).
+            let own = self.resolved_id(a);
+            let is_own = |p: &&Dictionary| {
+                self.name(p, b"Subtype").as_deref() == Some("Popup")
+                    && p.get(b"Parent")
+                        .map_or(true, |parent| parent.as_reference().is_ok() && self.resolved_id(parent).is_some_and(|id| Some(id) == own))
+            };
+            // A pop-up without a `/Rect` of four numbers finite as `f32` is none, as
+            // `pdfcraft_annot::summaries` reads it: both lists of the comments agree. Its corners
+            // may come in any order.
+            let popup = d.get(b"Popup").ok().and_then(|o| self.dict(o)).filter(is_own).and_then(|p| {
+                let rect = self.resolve(p.get(b"Rect").ok()?).as_array().ok()?;
+                let nums: Vec<f32> = rect.iter().filter_map(|v| self.resolve(v).as_float().ok()).collect();
+                let [x0, y0, x1, y1] = nums[..] else { return None };
+                if !nums.iter().all(|v| v.is_finite()) {
+                    return None;
+                }
+                Some(Popup {
+                    rect: [x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1)],
+                    open: p.get(b"Open").ok().and_then(|o| self.resolve(o).as_bool().ok()).unwrap_or(false),
+                })
+            });
             let annotation = Annotation {
                 page,
                 subtype,
@@ -229,8 +268,10 @@ impl<'a> Inspector<'a> {
                 fill_sign,
                 no_rotate: d.get(b"F").is_ok_and(|f| draw_flags(self.resolve(f)) & 16 != 0),
                 points,
+                text_box,
+                popup,
             };
-            kept = kept.saturating_add(retained(&annotation));
+            kept = kept.saturating_add(retained(&annotation).max(raw));
             if kept > MAX_ANNOTATION_BYTES {
                 comments_full = true;
                 continue;
@@ -239,6 +280,27 @@ impl<'a> Inspector<'a> {
         }
         info.annotations.sort_by(|a, b| a.page.cmp(&b.page).then(b.rect[3].total_cmp(&a.rect[3])));
         link_replies(&mut info.annotations);
+        fill_group_text(&mut info.annotations);
+    }
+
+    /// A callout's arrow point and knee (`/CL`, four or six numbers, without the end that meets
+    /// the text box) and its text box (`/Rect`, here `rect`, inset by `/RD`); ISO 32000-2
+    /// Table 177. `None` when either is missing or unusable.
+    fn callout(&self, d: &Dictionary, rect: [f32; 4]) -> Option<(Vec<[f32; 2]>, [f32; 4])> {
+        let nums = |key: &[u8]| -> Option<Vec<f32>> {
+            match self.resolve(d.get(key).ok()?) {
+                Object::Array(v) => v.iter().map(|o| self.resolve(o).as_float().ok()).collect(),
+                _ => None,
+            }
+        };
+        let cl = nums(b"CL").filter(|l| matches!(l.len(), 4 | 6) && l.iter().all(|x| x.is_finite()))?;
+        let rd = nums(b"RD").filter(|v| v.len() == 4 && v.iter().all(|x| x.is_finite() && *x >= 0.0))?;
+        let tb = [rect[0] + rd[0], rect[1] + rd[1], rect[2] - rd[2], rect[3] - rd[3]];
+        if tb[2] - tb[0] < 1.0 || tb[3] - tb[1] < 1.0 {
+            return None;
+        }
+        let (_, lead) = cl.as_chunks::<2>().0.split_last()?;
+        Some((lead.to_vec(), tb))
     }
 
     /// The link annotation `d`, at position `index` of page `page`'s `/Annots`: where its `/Dest`
@@ -303,6 +365,23 @@ impl<'a> Inspector<'a> {
         Some(Link { page, index, rect, quads, target })
     }
 
+    /// Lists the link annotation `d`, and notes the JavaScript it runs. JavaScript is read from the
+    /// action, not the listed link: once the text budget is spent the action's name is not kept.
+    fn collect_link(&self, info: &mut DocInfo, at: (usize, usize), d: &Dictionary, text_budget: &mut usize, unfit_quads: &mut HashSet<ObjectId>) {
+        info.has_javascript |= self.runs_javascript(d);
+        if let Some(link) = self.link(at.0, at.1, d, info.uri_base.as_deref(), text_budget, unfit_quads) {
+            if matches!(&link.target, LinkTarget::Other(s) if s == "JavaScript") {
+                info.has_javascript = true;
+            }
+            info.links.push(link);
+        }
+    }
+
+    /// Whether the link's own action is a JavaScript action.
+    fn runs_javascript(&self, d: &Dictionary) -> bool {
+        d.get(b"A").ok().and_then(|a| self.dict(a)).is_some_and(|a| self.name(a, b"S").as_deref() == Some("JavaScript"))
+    }
+
     /// What an action does when a link or a bookmark runs it. Only a go-to's `/D` is a place in
     /// this document; a remote go-to's names a page or destination of another file (ISO 32000-2
     /// §12.6.4.3). `None` for an action without a type, or a go-to whose destination is not here.
@@ -323,7 +402,7 @@ impl<'a> Inspector<'a> {
             "SetOCGState" => self.layer_state(a),
             "GoToR" => self.remote_go_to(a).unwrap_or_else(|| LinkTarget::Other("GoToR".into())),
             "Launch" => self.launch_pdf(a).unwrap_or_else(|| LinkTarget::Other("Launch".into())),
-            other => LinkTarget::Other(other.to_string()),
+            other => LinkTarget::Other(spend(other.as_bytes(), text_budget, |b| String::from_utf8_lossy(b).into_owned()).unwrap_or_default()),
         })
     }
 
@@ -439,6 +518,53 @@ impl<'a> Inspector<'a> {
 
     // ── form fields ─────────────────────────────────────────────────────────────────────────
 
+    /// Whether `o` or one of its descendants under `/Kids` carries an action (`/A` or `/AA`). It
+    /// walks the same tree `field` does, bounded the same way: a field left out of the listing for
+    /// want of text allowance can still have its action on a widget several levels down.
+    pub(super) fn has_action(&self, o: &Object, depth: u32) -> bool {
+        self.has_action_seen(o, depth, &mut HashMap::new())
+    }
+
+    /// The walk behind [`Self::has_action`]. Each indirect descendant is read again only from a
+    /// shallower depth than before (the depth limit may have cut its subtree): a field tree whose
+    /// `/Kids` repeat the same objects would otherwise be walked exponentially, and this reads each
+    /// object at most once per depth.
+    fn has_action_seen(&self, o: &Object, depth: u32, seen: &mut HashMap<ObjectId, u32>) -> bool {
+        if depth > 32 {
+            return false;
+        }
+        if let Object::Reference(id) = o {
+            if seen.get(id).is_some_and(|&first| first <= depth) {
+                return false;
+            }
+            seen.insert(*id, depth);
+        }
+        let Some(d) = self.dict(o) else { return false };
+        if self.carries_action(d) {
+            return true;
+        }
+        let kids = match d.get(b"Kids").map(|k| self.resolve(k)) {
+            Ok(Object::Array(k)) => k,
+            _ => return false,
+        };
+        kids.iter().any(|k| self.has_action_seen(k, depth + 1, seen))
+    }
+
+    /// Whether `/A` or `/AA` here holds an action. An editor can leave an empty dictionary (or
+    /// array) behind, and that is no action: a document with none must not report JavaScript. An
+    /// `/A` is an action when it carries `/S`; an `/AA` is one when an event maps to such an action.
+    fn carries_action(&self, d: &Dictionary) -> bool {
+        let action = |o: &Object| matches!(self.resolve(o), Object::Dictionary(a) if a.get(b"S").is_ok());
+        [&b"A"[..], &b"AA"[..]].iter().any(|k| match d.get(k) {
+            Ok(o) => match self.resolve(o) {
+                Object::Dictionary(x) => x.get(b"S").is_ok() || x.iter().any(|(_, v)| action(v)),
+                Object::Array(a) => a.iter().any(action),
+                _ => false,
+            },
+            Err(_) => false,
+        })
+    }
+
     pub(super) fn field(
         &self,
         o: &'a Object,
@@ -457,19 +583,35 @@ impl<'a> Inspector<'a> {
         }
         let Some(d) = self.dict(o) else { return };
         let (parent_name, parent_ft, parent_ff) = parent.unwrap_or(("", None, None));
-        let partial = self.text(d, b"T");
-        let full = match (&partial, parent_name.is_empty()) {
-            (Some(t), true) => t.clone(),
-            (Some(t), false) => format!("{parent_name}.{t}"),
-            (None, _) => parent_name.to_string(),
-        };
-        let ft = self.name(d, b"FT").or(parent_ft);
-        let ff = d.get(b"Ff").ok().and_then(|x| x.as_i64().ok()).or(parent_ff);
         // Non-terminal: has kids that are fields (they carry /T). Widgets-only kids are terminal.
         let mut kids: Vec<Object> = match d.get(b"Kids").map(|k| self.resolve(k)) {
             Ok(Object::Array(k)) => k.clone(),
             _ => Vec::new(),
         };
+        // A field left unlisted for want of text allowance still has its actions counted, through
+        // its whole subtree: an action can sit on a descendant widget, not only on the field.
+        let unlisted = || {
+            if self.has_action(o, 0) {
+                self.field_actions.set(true);
+            }
+        };
+        // A /T that does not fit the allowance lists no field (not one under its parent's name).
+        let Ok(partial) = self.field_text_within(d, b"T") else {
+            unlisted();
+            return;
+        };
+        let full = match (&partial, parent_name.is_empty()) {
+            (Some(t), true) => t.clone(),
+            (Some(t), false) => format!("{parent_name}.{t}"),
+            (None, _) => parent_name.to_string(),
+        };
+        // Every field copies its parent's full name: charge it, and list no more once it is spent.
+        if !self.field_charge(full.len()) {
+            unlisted();
+            return;
+        }
+        let ft = self.name(d, b"FT").or(parent_ft);
+        let ff = d.get(b"Ff").ok().and_then(|x| x.as_i64().ok()).or(parent_ff);
         let (field_kids, widget_kids): (Vec<Object>, Vec<Object>) =
             kids.iter().cloned().partition(|k| self.dict(k).is_some_and(|kd| kd.get(b"T").is_ok()));
         let field_kids: Vec<_> = field_kids.iter().filter(|k| !self.not_a_child(walk, o, k)).collect();
@@ -517,17 +659,37 @@ impl<'a> Inspector<'a> {
             _ => FieldKind::Unknown,
         };
         let value = match d.get(b"V").map(|v| self.resolve(v)) {
-            Ok(Object::Name(n)) => Some(String::from_utf8_lossy(n).into_owned()),
-            Ok(Object::String(bytes, _)) => Some(text_string(bytes)),
-            Ok(Object::Array(a)) => Some(
-                a.iter()
-                    .filter_map(|x| match self.resolve(x) {
-                        Object::String(bytes, _) => Some(text_string(bytes)),
-                        _ => None,
-                    })
-                    .collect::<Vec<_>>()
-                    .join(", "),
-            ),
+            Ok(Object::Name(n)) => self.field_spend(n, |n| String::from_utf8_lossy(n).into_owned()),
+            Ok(Object::String(bytes, _)) => self.field_spend(bytes, text_string),
+            Ok(Object::Array(a)) => {
+                let mut shown = Vec::new();
+                let mut dropped = false;
+                for x in a {
+                    let text = match self.resolve(x) {
+                        Object::String(bytes, _) => self.field_spend(bytes, text_string),
+                        // A name entry (`/V [/Opt1 (b)]`) is a selection too, as the forms reader
+                        // takes it; leaving it out reported a partial selection as complete.
+                        Object::Name(n) => self.field_spend(n, |n| String::from_utf8_lossy(n).into_owned()),
+                        _ => continue,
+                    };
+                    // The ", " between selections is charged to the allowance like the text.
+                    match text {
+                        Some(text) if shown.is_empty() || self.field_charge(2) => shown.push(text),
+                        _ => dropped = true,
+                    }
+                }
+                // A selected value the allowance could not hold shows as an omission rather than
+                // as part of a complete selection (its few bytes are charged, fit or not).
+                let mut value = shown.join(", ");
+                if dropped {
+                    self.field_charge(5);
+                    if !value.is_empty() {
+                        value.push_str(", ");
+                    }
+                    value.push('…');
+                }
+                Some(value)
+            }
             Ok(Object::Dictionary(_)) if kind == FieldKind::Signature => Some("signed".into()),
             _ => None,
         };
@@ -549,9 +711,11 @@ impl<'a> Inspector<'a> {
             .and_then(|p| self.page_of(p))
             .or_else(|| self.find_widget_page(o, &kids))
             .or_else(|| named.and_then(|id| self.annotation_pages.get_or_init(|| self.annotation_pages()).get(&id).copied()));
-        let has_actions = d.get(b"AA").is_ok() || widget.is_some_and(|w| w.get(b"AA").is_ok() || w.get(b"A").is_ok());
+        let has_actions = self.carries_action(d)
+            || widget.is_some_and(|w| self.carries_action(w))
+            || kids.iter().any(|k| self.dict(k).is_some_and(|w| self.carries_action(w)));
         let rect = widget.and_then(|w| w.get(b"Rect").ok()).map(|r| rect4(self.resolve(r)));
-        out.push(Field { name: full, kind, value, page, tooltip: self.text(d, b"TU"), has_actions, rect });
+        out.push(Field { name: full, kind, value, page, tooltip: self.field_text(d, b"TU"), has_actions, rect });
     }
 
     /// Whether `k`, listed in the `/Kids` of field `o`, is not a child of `o` after all: `o` itself
