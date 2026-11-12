@@ -155,8 +155,8 @@ fn delete(view: &mut DocView, cx: &KeyCx<'_>) {
             Held::Picked | Held::Text => false,
         };
         if took {
-            keys.take(ctx, Key::Delete);
-            keys.take(ctx, Key::Backspace);
+            // With its modifiers too (Ctrl+Backspace): the view would step back a page with it.
+            keys.take_presses(ctx, |key, _| matches!(key, Key::Delete | Key::Backspace));
             return;
         }
     }

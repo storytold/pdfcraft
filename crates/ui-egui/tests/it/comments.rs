@@ -6009,6 +6009,23 @@ fn full_screen_backspace_deletes_a_selected_comment_before_it_steps_back() {
     assert_eq!(h.state().views[0].current, 0, "the next steps back");
 }
 
+/// A Backspace with Ctrl is one press too: in full screen it deletes a selected comment and the
+/// page stays. It also stepped back a page.
+#[test]
+fn full_screen_ctrl_backspace_deletes_a_selected_comment_and_stays() {
+    let mut h = selected_square();
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::L);
+    h.run_steps(6);
+    assert!(h.state().full_screen);
+    h.state_mut().set_option("page", "2").unwrap();
+    h.run_steps(4);
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "the comment is still selected");
+    h.key_press_modifiers(egui::Modifiers::CTRL, egui::Key::Backspace);
+    h.run_steps(4);
+    assert!(comments(&h).is_empty(), "Ctrl+Backspace deletes the comment");
+    assert_eq!(h.state().views[0].current, 1, "and stays on the page");
+}
+
 /// The arrows move one selection, the newer: with a comment and then a Prepare field selected, the
 /// field moves and the comment stays. The comment moved, and the field didn't.
 #[test]
