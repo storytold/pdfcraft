@@ -23,6 +23,7 @@ pub fn rasterize(doc: &Document, pages: &[usize], raster: &Raster, content: Cont
     let mut config = src.config.clone();
     // The copy below holds only what prints, so the viewer's own comment hiding plays no part.
     config.hide_comments = false;
+    config.hidden_comment_types = std::sync::Arc::new(Vec::new());
     // Printing is not the View event: a layer the auto state turns off on screen keeps its
     // configured state on paper, as in a print that goes out as vectors.
     config.for_print = true;

@@ -81,7 +81,20 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
     let PageSlot { i, xf, .. } = *slot;
     let PageFrame { resp, ptr, pointer, .. } = *frame;
     let cx = PageToolContext { ui, resp, xf: &xf, ptr, page: i, doc, info, keys };
-    let pcx = comments::PageCx { page: i, xf: &xf, ptr, info, tool, prefs, allowed, hidden: comments_hidden, redact_mark, keys };
+    let hidden_types = view.comments.hidden_types.clone();
+    let pcx = comments::PageCx {
+        page: i,
+        xf: &xf,
+        ptr,
+        info,
+        tool,
+        prefs,
+        allowed,
+        hidden: comments_hidden,
+        hidden_types: &hidden_types,
+        redact_mark,
+        keys,
+    };
     let (lines, images) =
         if matches!(tool, QuickTool::AddText | QuickTool::EditText) && can_modify { edit_inventory(view, doc, i) } else { Default::default() };
     let field_tool = match tool {
@@ -912,7 +925,20 @@ pub(super) fn page_overlays(ui: &mut egui::Ui, view: &mut DocView, frame: &mut P
     let PageFrame { resp, ptr, pointer, .. } = *frame;
     let painter = ui.painter();
     let tool_cx = PageToolContext { ui, resp, xf: &xf, ptr, page: i, doc, info, keys };
-    let pcx = comments::PageCx { page: i, xf: &xf, ptr, info, tool, prefs, allowed, hidden: comments_hidden, redact_mark, keys };
+    let hidden_types = view.comments.hidden_types.clone();
+    let pcx = comments::PageCx {
+        page: i,
+        xf: &xf,
+        ptr,
+        info,
+        tool,
+        prefs,
+        allowed,
+        hidden: comments_hidden,
+        hidden_types: &hidden_types,
+        redact_mark,
+        keys,
+    };
     // A press nobody holds picks the picture under it: a link's click follows the link only (ruling
     // 5), though its drag or double-click still lets the picked picture go, as does a drag the page
     // it is over first sees, whichever page it began on.
