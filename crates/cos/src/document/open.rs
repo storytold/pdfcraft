@@ -441,7 +441,12 @@ impl Document {
             let mut cf = Dict::new();
             let mut std_cf = Dict::new();
             std_cf.set(b"Type".to_vec(), Object::name("CryptFilter"));
-            let (cfm, len) = if d.v >= 5 { ("AESV3", 32) } else { ("AESV2", 16) };
+            // Length in bytes, as the standard security handler writes it (Table 25).
+            let (cfm, len) = match d.crypt_filters.first().map(|(_, m)| *m) {
+                Some(pdfcraft_crypt::Method::Rc4) => ("V2", 16),
+                Some(pdfcraft_crypt::Method::Aes128) => ("AESV2", 16),
+                _ => ("AESV3", 32),
+            };
             std_cf.set(b"CFM".to_vec(), Object::name(cfm));
             std_cf.set(b"Length".to_vec(), Object::Int(len));
             std_cf.set(b"AuthEvent".to_vec(), Object::name("DocOpen"));
@@ -461,13 +466,100 @@ impl Document {
         if let Some(Object::Ref(old)) = self.trailer.get(b"Encrypt").cloned() {
             self.free(old);
         }
+        let needs = encryption_version(d);
         let r = self.add(e);
         self.trailer.set(b"Encrypt".to_vec(), Object::Ref(r));
+        if let Some(needs) = needs {
+            self.declare_encryption_version(needs)?;
+        }
         // Objects are still read with the original handler; saves use the new one.
         self.out_security = Some(Arc::new(h));
         self.out_encrypt_num = Some(r.num);
         self.encryption_changed = true;
         Ok(())
+    }
+
+    /// Make the file say the PDF version its new encryption needs (see [`encryption_version`]).
+    /// A version only ever goes up: the header is raised when neither it nor the catalog
+    /// `/Version` reaches `needs.version` (§7.7.2: the later of the two applies), and a catalog
+    /// `/Version` below it is raised too, since an extension's `/BaseVersion` may not exceed
+    /// either (§7.12.4). The header suffices because a change of security is always saved in full.
+    fn declare_encryption_version(&mut self, needs: EncryptionVersion) -> Result<(), CosError> {
+        let root = self.root();
+        let catalog = root.map(|r| self.get(r));
+        let catalog = catalog.as_deref().and_then(Object::as_dict);
+        let catalog_version = catalog.and_then(|c| c.get(b"Version")).map(|v| self.resolve(v)).and_then(|v| v.as_name().and_then(parse_version));
+        let header = parse_version(self.version().as_bytes());
+        let declared = header.max(catalog_version);
+        let name = format!("{}.{}", needs.version.0, needs.version.1);
+        let mut catalog_update = Vec::new();
+        if catalog_version.is_some_and(|v| v < needs.version) {
+            catalog_update.push((b"Version".to_vec(), Object::name(&name)));
+        }
+        // PDF 2.0 defines the encryption itself (Table 20 `V 5`); before it, a file says it uses
+        // the extension that added it.
+        if let Some(level) = needs.adbe_extension_level.filter(|_| declared < Some((2, 0)))
+            && let Some(extensions) = self.with_adbe_extension(catalog.and_then(|c| c.get(b"Extensions")), level)
+        {
+            catalog_update.push((b"Extensions".to_vec(), Object::Dict(extensions)));
+        }
+        if declared < Some(needs.version) {
+            self.set_version(name);
+        }
+        match root {
+            Some(root) if !catalog_update.is_empty() => self.update_dict(root, |c| {
+                for (key, value) in catalog_update {
+                    c.set(key, value);
+                }
+            }),
+            _ => Ok(()),
+        }
+    }
+
+    /// The catalog's `/Extensions` with an Adobe extension of at least `level` against base version
+    /// 1.7 (§7.12), or `None` when it already has one, or when `/Extensions` or its `/ADBE` entry is
+    /// something this cannot add to (not a dictionary, or an `/ADBE` that is neither a dictionary
+    /// nor an array), which is kept as it is. Other developers' entries are kept.
+    fn with_adbe_extension(&self, extensions: Option<&Object>, level: i64) -> Option<Dict> {
+        let mut extensions = match extensions.map(|e| self.resolve(e)) {
+            None => Dict::new(),
+            Some(e) => e.as_dict()?.clone(),
+        };
+        let base = |d: &Dict| d.get(b"BaseVersion").map(|b| self.resolve(b)).and_then(|b| b.as_name().and_then(parse_version));
+        let reaches = |o: &Object| {
+            let o = self.resolve(o);
+            o.as_dict().is_some_and(|d| {
+                let at = d.get(b"ExtensionLevel").map(|l| self.resolve(l)).and_then(|l| l.as_int());
+                base(d) == Some((1, 7)) && at.is_some_and(|at| at >= level)
+            })
+        };
+        let mut adbe = Dict::new();
+        adbe.set(b"BaseVersion".to_vec(), Object::name("1.7"));
+        adbe.set(b"ExtensionLevel".to_vec(), Object::Int(level));
+        let entry = match extensions.get(b"ADBE").map(|a| self.resolve(a)) {
+            None => Object::Dict(adbe),
+            Some(existing) => match &*existing {
+                Object::Dict(_) if reaches(&existing) => return None,
+                // A lower Adobe level against 1.7 is raised: levels only grow over time and each
+                // includes the earlier ones (§7.12.5).
+                Object::Dict(d) if base(d) == Some((1, 7)) => {
+                    let mut d = d.clone();
+                    d.set(b"ExtensionLevel".to_vec(), Object::Int(level));
+                    Object::Dict(d)
+                }
+                // One against another base version stays, next to this one (an array, PDF 2.0).
+                Object::Dict(_) => Object::Array(vec![(*existing).clone(), Object::Dict(adbe)]),
+                Object::Array(list) if list.iter().any(reaches) => return None,
+                Object::Array(list) => {
+                    let mut list = list.clone();
+                    list.push(Object::Dict(adbe));
+                    Object::Array(list)
+                }
+                _ => return None,
+            },
+        };
+        extensions.set(b"ADBE".to_vec(), entry);
+        Some(extensions)
     }
 
     /// Remove password protection (requires the document to be open — any authenticated
@@ -491,6 +583,39 @@ impl Document {
             _ => o,
         }
     }
+}
+
+/// What a file must declare to use an encryption.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct EncryptionVersion {
+    /// The PDF version (major, minor) that introduced it.
+    version: (u32, u32),
+    /// The Adobe extension level against PDF 1.7 that added it before PDF 2.0, if any.
+    adbe_extension_level: Option<i64>,
+}
+
+/// The PDF version an encryption needs (ISO 32000-2 Table 20 `V`, Table 25 `CFM`): 40-bit RC4
+/// (`V 1`) PDF 1.3, longer RC4 keys (`V 2`) PDF 1.4, crypt filters (`V 4`) PDF 1.5, `AESV2` PDF
+/// 1.6, and `V 5` (AES-256, `R 6`) PDF 2.0, which a PDF 1.7 file declares as Adobe extension
+/// level 8 (§7.12). The levels are the ones qpdf's manual gives for each encryption it writes.
+fn encryption_version(d: &pdfcraft_crypt::EncryptDict) -> Option<EncryptionVersion> {
+    let plain = |minor| Some(EncryptionVersion { version: (1, minor), adbe_extension_level: None });
+    match d.v {
+        5.. => Some(EncryptionVersion { version: (1, 7), adbe_extension_level: Some(8) }),
+        4 if d.crypt_filters.iter().any(|(_, m)| *m == pdfcraft_crypt::Method::Aes128) => plain(6),
+        4 => plain(5),
+        2 | 3 => plain(4),
+        _ => plain(3),
+    }
+}
+
+/// A PDF version name or header version (`1.7`, `2.0`) as (major, minor): two integers with a
+/// period between them (§7.12.4 NOTE), not a real number. `None` for anything else.
+fn parse_version(v: &[u8]) -> Option<(u32, u32)> {
+    let v = std::str::from_utf8(v).ok()?;
+    let (major, minor) = v.split_once('.')?;
+    let digits = |s: &str| if !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()) { s.parse::<u32>().ok() } else { None };
+    Some((digits(major)?, digits(minor)?))
 }
 
 /// The repair-log line for a file rebuilt because its last update has no `/Prev`.

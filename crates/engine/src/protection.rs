@@ -51,9 +51,9 @@ pub struct Protection {
     pub copy: bool,
     /// "Enable text access for screen reader devices".
     pub accessibility: bool,
-    /// Compatibility level; AES-256 (Acrobat X and later) by default.
+    /// The encryption; 256-bit AES by default.
     pub algorithm: pdfcraft_cos::Algorithm,
-    /// `false`: "Encrypt all document contents except metadata".
+    /// `false`: "Encrypt all document contents except metadata" (not with 40-bit RC4).
     pub encrypt_metadata: bool,
 }
 
@@ -128,10 +128,15 @@ impl Protection {
         if [&self.open_password, &self.permissions_password].into_iter().flatten().any(String::is_empty) {
             return bad("passwords can't be empty");
         }
+        // Leaving the metadata unencrypted takes a crypt filter (ISO 32000-2 Table 21
+        // EncryptMetadata: meaningful only for V 4 and 5), which 40-bit RC4 has not.
+        if !self.encrypt_metadata && !self.algorithm.can_leave_metadata_unencrypted() {
+            return bad("40-bit RC4 always encrypts the metadata; choose 128-bit RC4 or AES to leave it unencrypted");
+        }
         if self.algorithm != pdfcraft_cos::Algorithm::Aes256
             && [&self.open_password, &self.permissions_password].into_iter().flatten().any(|p| p.chars().any(|c| !(' '..='~').contains(&c)))
         {
-            return bad("this compatibility level supports only plain ASCII passwords; use AES-256 (Acrobat X and later)");
+            return bad("this compatibility level supports only plain ASCII passwords; use 256-bit AES");
         }
         // Encryption keys on a password as `effective_password` gives it (AES-256: SASLprep,
         // which drops soft hyphens and folds compatibility forms; older levels: the first 32

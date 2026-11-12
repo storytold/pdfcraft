@@ -456,9 +456,13 @@ proptest! {
             prop_assert_ne!(&yes.decrypt_string(7, 0, &no.encrypt_string(7, 0, &data))[..], &data[..], "a key built for plain metadata must not decrypt a file whose keys encrypt it");
         }
 
-        // Revisions below 4 always encrypt metadata, whatever the caller asked for.
-        let legacy = create(&NewEncryption { algorithm: Algorithm::Rc4_128, user_password: "user", owner_password: "owner", permissions: -1, encrypt_metadata: false, seed: [0x5e; 32] }, ID).unwrap();
-        prop_assert!(legacy.dict().encrypt_metadata && legacy.encrypts_metadata(), "V<4 always encrypts metadata, as create() documents");
+        // 40-bit RC4 (revision 2, no crypt filters) always encrypts metadata, whatever the caller
+        // asked for; 128-bit RC4 asked to leave it plain moves to revision 4 with an RC4 crypt
+        // filter, where the flag can be said.
+        let legacy = create(&NewEncryption { algorithm: Algorithm::Rc4_40, user_password: "user", owner_password: "owner", permissions: -1, encrypt_metadata: false, seed: [0x5e; 32] }, ID).unwrap();
+        prop_assert!(legacy.dict().encrypt_metadata && legacy.encrypts_metadata(), "V 1 always encrypts metadata, as create() documents");
+        let rc4 = create(&NewEncryption { algorithm: Algorithm::Rc4_128, user_password: "user", owner_password: "owner", permissions: -1, encrypt_metadata: false, seed: [0x5e; 32] }, ID).unwrap();
+        prop_assert!(rc4.dict().r == 4 && !rc4.encrypts_metadata(), "128-bit RC4 keeps the request through a crypt filter");
     }
 
 }
