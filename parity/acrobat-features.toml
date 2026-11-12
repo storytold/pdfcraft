@@ -9146,8 +9146,8 @@ milestone = "M12"
 status = "partial"
 commands = ["a11y.autotag"]
 tools = ["accessibility_autotag_preview", "accessibility_autotag_apply"]
-evidence = ["crates/automation/tests/it/automation.rs::autotag_preview_proposes_text_without_changing_the_pdf", "crates/automation/tests/it/automation.rs::autotag_apply_writes_reviewable_tags_and_survives_save_reopen", "crates/ui-egui/tests/it/accessibility.rs::automatic_text_tagging_opens_reviewable_tags"]
-notes = "Auto-tag writes real marked content, a Document structure element, P tags and a parent tree for text-only PDFs, with undo and Tags-panel review. It refuses mixed content, forms, annotations and existing tags. The preview separately proposes headings. Images, tables, lists, links, fields and headings are not classified or tagged by Apply."
+evidence = ["crates/automation/tests/it/automation.rs::autotag_preview_proposes_text_without_changing_the_pdf", "crates/automation/tests/it/automation.rs::autotag_apply_writes_reviewable_tags_and_survives_save_reopen", "crates/automation/tests/it/automation.rs::autotag_apply_tags_headings_by_size_across_pages", "crates/a11y/src/autotag_roles.rs::levels_rank_styles_largest_first_and_never_skip_a_level", "crates/ui-egui/tests/it/accessibility.rs::automatic_text_tagging_opens_reviewable_tags"]
+notes = "Auto-tag writes real marked content, a Document structure element, H1-H6 and P tags and a parent tree for text-only PDFs, with undo and Tags-panel review. A text object is a heading when it is short and larger or bolder than the body text; levels rank those styles across the document and never skip a level. It refuses mixed content, forms, annotations and existing tags. The preview still proposes headings by its own single-line rule, so it can differ from Apply. Running headers and footers can still become headings (#7065); invisible text (render mode 3) is ignored. Images, tables, lists, links and fields are not classified or tagged by Apply."
 
 [[feature]]
 id = "a11y.autotag-fields"
