@@ -910,7 +910,7 @@ pub(crate) fn second_side_body(ui: &mut egui::Ui) -> (bool, bool) {
     ui.label(egui::RichText::new(tl!("Print the second side")).font(theme::semibold(18.0)));
     ui.add_space(8.0);
     ui.label(tl!(
-        "When the first side has finished printing, take the printed sheets out and turn the stack over, keeping the top edge of the pages going into the printer first. Put the stack back in the paper tray so the printer prints on the blank sides, then choose Continue."
+        "When the first side has finished printing, take the printed sheets out without changing their order. Put them back in the paper tray so the printer prints on the blank side, with the top of the pages going in first. On most printers with a front tray, that means printed side up. Then choose Continue. If the backs land on the wrong sheets, change \"Second side in reverse order\" and print again."
     ));
     ui.add_space(12.0);
     let (mut go, mut cancel) = (false, false);

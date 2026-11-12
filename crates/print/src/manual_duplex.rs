@@ -6,12 +6,18 @@
 //! every layout that prints both sides of a sheet in turn works the same way. Side `2k` is the
 //! front of sheet `k`, side `2k + 1` its back.
 //!
-//! The stack is always turned over the same way, keeping the top of the pages going into the
-//! printer first. That makes the backs come out as "flip on long edge" would for paper fed short
+//! The stack always goes back with the top of the pages going into the printer first, as it did
+//! for the fronts. That makes the backs come out as "flip on long edge" would for paper fed short
 //! edge first; "flip on short edge" turns each back 180° on the sheet instead
 //! ([`Side::turned`]), so the person never has to turn the stack end to end. A tray fed long edge
 //! first swaps the two; the dialog's wording says which edge the pages bind on, as two-sided
 //! printing does.
+//!
+//! Whether the backs need `reverse` depends on how the stack goes back, not on the driver: a
+//! driver that prints every job last page first does so for both passes, and it cancels out. Put
+//! back printed side up without turning it over (most front-tray printers; checked on an HP
+//! OfficeJet Pro 9120e), the last sheet printed is on top and the backs go reversed; turned over,
+//! they go in sheet order.
 
 use std::sync::Arc;
 

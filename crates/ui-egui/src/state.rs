@@ -146,7 +146,7 @@ pub enum Dialog {
     RedactApply,
     /// File ▸ Print.
     Print,
-    /// Manual two-sided printing: turn the stack over, then print the backs (#2860).
+    /// Manual two-sided printing: put the printed stack back, then print the backs (#2860).
     ManualDuplex,
     /// File ▸ Revert confirmation.
     Revert,

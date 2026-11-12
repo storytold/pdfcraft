@@ -271,7 +271,9 @@ pub(crate) fn body(
                                 ],
                                 140.0,
                             );
-                            ui.add(widgets::checkbox(&mut d.manual_reverse, tl!("Second side in reverse order")));
+                            ui.add(widgets::checkbox(&mut d.manual_reverse, tl!("Second side in reverse order"))).on_hover_text(tl!(
+                                "Usually needed when the printed sheets go back in printed side up without being turned over, as on most printers with a front tray. Leave it off if you turn the stack over."
+                            ));
                         });
                         ui.end_row();
                     }
