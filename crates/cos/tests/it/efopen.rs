@@ -222,3 +222,18 @@ fn the_password_given_later_unlocks_the_embedded_files() {
     doc.set(EMBEDDED, Object::Stream(edited));
     assert!(matches!(doc.unlock(PASSWORD), Err(CosError::Security(_))));
 }
+
+/// An embedded file kept in an external file (`/F` in its stream dictionary) has no data here to
+/// encrypt (ISO 32000-2 §7.6.2), so a document opened without the embedded files' password doesn't
+/// hold it as stored ciphertext: it can be copied and saved like any stream.
+#[test]
+fn an_external_embedded_file_is_not_held_as_stored() {
+    let doc = Document::open(Arc::new(fixture(Algorithm::Aes256, "EFOpen"))).unwrap();
+    assert!(doc.embedded_files_locked());
+    let mut embedded = stream(&doc, EMBEDDED);
+    assert!(doc.reads_as_stored(&embedded));
+    embedded.dict.set(b"F".to_vec(), Object::String(pdfcraft_cos::PdfString::text("note.txt")));
+    assert!(!doc.reads_as_stored(&embedded));
+    embedded.dict.set(b"F".to_vec(), Object::Null);
+    assert!(doc.reads_as_stored(&embedded), "a null /F is an absent one");
+}

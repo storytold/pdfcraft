@@ -160,6 +160,10 @@ pub(crate) fn stream_reads_as_stored(doc: &Document, h: &SecurityHandler, s: &St
         return false;
     }
     let _scope = FollowScope::enter();
+    // Its data is in another file, not encrypted here (§7.6.2), so nothing of it is held as stored.
+    if external(doc, &s.dict) {
+        return false;
+    }
     let named = named_crypt_filter(doc, &s.dict);
     let ty = s.dict.get(b"Type").map(|t| followed(doc, t));
     let kind = match (&named, ty.as_deref().and_then(Object::as_name)) {
