@@ -2176,7 +2176,7 @@ mod session {
     }
 
     fn object(name: &str, som: Option<&str>, text: &str) -> ScriptObjectCode {
-        ScriptObjectCode { name: name.into(), som: som.map(str::to_string), text: text.into(), bare: true }
+        ScriptObjectCode { name: name.into(), som: som.map(str::to_string), text: text.into(), bare: true, unnamed: false }
     }
 
     /// `source` run on `total` with `objects` reachable: its result, or its error.
@@ -2189,7 +2189,8 @@ mod session {
 
     /// Script objects are compiled when a script first uses them, with every top-level member their code declares (read by
     /// the parser: a quote in a regular expression hides nothing, nested locals are not members), whatever order they were
-    /// declared in. Each one is built once per script, `this` being its subform, which reaches it as a child too. An object
+    /// declared in. Each one is built once for the session's scripts and keeps its state between them, `this` being its subform,
+    /// which reaches it as a child too. An object
     /// named like a host global replaces it, one named like a built-in does not, and one that does not load fails only the
     /// scripts that use it.
     #[test]
@@ -2203,11 +2204,25 @@ mod session {
         // declared before the object it uses
         let order = [object("A", None, "var max = B.mb(5);"), object("B", None, "function mb(n) { return n * 1048576; }")];
         assert_eq!(with_objects(&mut s, "A.max", &order).as_deref(), Ok("5242880"));
-        // one instance per script, reached through its subform and resolveNode as well
+        // one instance for the session, reached through its subform and resolveNode as well
         let calcs = object("calcs", Some("form1[0]"), "var n = 0; function sumFields(p) { return ++n; }\nvar who = this.name;");
         let calls = "calcs.sumFields(); form1.calcs.sumFields(); xfa.resolveNode('form1.calcs').sumFields() + ',' + calcs.who";
         assert_eq!(with_objects(&mut s, calls, std::slice::from_ref(&calcs)).as_deref(), Ok("3,form1"));
-        assert_eq!(with_objects(&mut s, "xfa.resolveNode('calcs').sumFields()", &[calcs]).as_deref(), Ok("1"));
+        assert_eq!(with_objects(&mut s, "xfa.resolveNode('calcs').sumFields()", std::slice::from_ref(&calcs)).as_deref(), Ok("4"));
+        // an object's functions read the running script's form and event, though another script built it
+        let reader = [object("Reader", None, "function who() { return xfa.event.name + ':' + xfa.host.numPages; }")];
+        assert_eq!(with_objects(&mut s, "Reader.who()", &reader).as_deref(), Ok("calculate:1"));
+        let mut click = script("Reader.who()", false, "form1[0].page1[0].total[0]", "click");
+        click.objects = reader.to_vec();
+        assert_eq!(s.run(click).result.as_deref(), Some("click:1"));
+        // a form whose structure changed (a row added) gets a new engine, its objects built again
+        let mut grown = script("calcs.sumFields()", false, "form1[0].page1[0].total[0]", "calculate");
+        let page = &mut std::sync::Arc::make_mut(&mut grown.root).children[0];
+        let mut row = page.children[0].clone();
+        row.som = format!("{}x", row.som);
+        page.children.push(row);
+        grown.objects = vec![calcs];
+        assert_eq!(s.run(grown).result.as_deref(), Some("1"));
         // a host global gives way, a built-in does not
         let named = [object("util", None, "function enableField(f) { return 1; }"), object("Number", Some("form1[0]"), "var x = 9;")];
         assert_eq!(with_objects(&mut s, "util.enableField(1) + Number('3') + form1.Number.x", &named).as_deref(), Ok("13"));
@@ -2233,10 +2248,17 @@ mod session {
         let o =
             with_objects(&mut s, "Calc.who + ',' + form1.Calc.who + ',' + form1.layout.f() + ',' + form1.value.f()", &[outer, inner, layout, value]);
         assert_eq!(o.as_deref(), Ok("inner,outer,declared,value"));
-        // the members an object exports count against the script's bound as well as its text
+        // an object declaring more names than any real one is refused rather than compiled for minutes
         let names: String = (0..100_000).map(|i| format!("var v{i};")).collect();
         let e = with_objects(&mut s, "Wide.v1", &[object("Wide", None, &names)]).unwrap_err();
-        assert!(e.contains("pass 8 MiB"), "{e}");
+        assert!(e.contains("more than 2048"), "{e}");
+        // a module no script names runs once the object it extends is built
+        let mut module = object("module_x", Some("form1[0]"), "NS.jForm.x = { f: function () { return 'ok'; } };");
+        module.unnamed = true;
+        let ns = object("NS", Some("form1[0]"), "var jForm = {};");
+        assert_eq!(with_objects(&mut s, "NS.jForm.x.f()", &[ns.clone(), module.clone()]).as_deref(), Ok("ok"));
+        let broken = ScriptObjectCode { text: "NS.jForm.y = <x/>;".into(), name: "module_y".into(), ..module };
+        assert_eq!(with_objects(&mut s, "typeof NS.jForm.y", &[ns, broken]).as_deref(), Ok("undefined"));
         let e = with_objects(&mut s, "Deep.x", &[object("Deep", None, &format!("var x = {}1;", "(".repeat(64_000)))]).unwrap_err();
         assert!(e.contains("nested too deeply"), "{e}");
         assert_eq!(s.dead(), None);

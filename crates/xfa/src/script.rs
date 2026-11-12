@@ -912,6 +912,9 @@ pub struct ReachableObject {
     pub som: Option<String>,
     pub text: Arc<str>,
     pub bare: bool,
+    /// No event script names it (other objects may): a module that extends another object, loaded when an object its code
+    /// names loads (`NS.jForm.x = …` once `NS` is built), as Acrobat builds every object up front.
+    pub unnamed: bool,
 }
 
 /// Every script object of a form, read once per form rather than for each script: what the unique-name fallback of
@@ -920,6 +923,8 @@ pub struct ReachableObject {
 pub struct ScriptObjectIndex {
     all: Vec<(String, Option<String>, Arc<str>)>,
     counts: HashMap<String, usize>,
+    /// Names of objects that no event script mentions.
+    unnamed: std::collections::HashSet<String>,
     /// Whether every object was read: past [`MAX_INDEXED_OBJECTS`] a name can't be known to be the only one of its kind.
     complete: bool,
 }
@@ -935,7 +940,22 @@ impl ScriptObjectIndex {
         for (name, _, _) in &index.all {
             *index.counts.entry(name.clone()).or_insert(0) += 1;
         }
+        index.unnamed = index.never_named(tpl);
         index
+    }
+
+    /// The object names no event script mentions (as a word, strings and comments included). Objects may: a main object that
+    /// lists its modules is itself loaded only by the scripts that name it.
+    fn never_named(&self, tpl: &Template) -> std::collections::HashSet<String> {
+        let mut left: std::collections::HashSet<String> = self.counts.keys().cloned().collect();
+        if !left.is_empty() {
+            each_script(tpl, &mut |text| {
+                for w in words(text) {
+                    left.remove(w);
+                }
+            });
+        }
+        left
     }
 
     fn add(&mut self, objects: &[ScriptObject], som: Option<&str>) {
@@ -1054,17 +1074,61 @@ pub fn script_objects_for(tpl: &Template, index: &ScriptObjectIndex, som: &str) 
             for x in out.iter_mut().filter(|x| x.name == o.name) {
                 x.bare = false;
             }
-            out.push(ReachableObject { name: o.name.clone(), som: som.clone(), text: Arc::clone(&o.text), bare: true });
+            let unnamed = index.complete && index.unnamed.contains(&o.name);
+            out.push(ReachableObject { name: o.name.clone(), som: som.clone(), text: Arc::clone(&o.text), bare: true, unnamed });
         }
     }
     if index.complete {
         for (name, som, text) in &index.all {
             if index.counts.get(name) == Some(&1) && !out.iter().any(|x| x.name == *name) {
-                out.push(ReachableObject { name: name.clone(), som: som.clone(), text: Arc::clone(text), bare: true });
+                let unnamed = index.unnamed.contains(name);
+                out.push(ReachableObject { name: name.clone(), som: som.clone(), text: Arc::clone(text), bare: true, unnamed });
             }
         }
     }
     out
+}
+
+/// The identifier-like words of `text` (`$` and `_` included), strings and comments not told apart.
+fn words(text: &str) -> impl Iterator<Item = &str> {
+    text.split(|c: char| !(c.is_alphanumeric() || c == '_' || c == '$')).filter(|w| !w.is_empty())
+}
+
+/// Calls `f` with the text of every event, calculate and validate script of `tpl`, page masters' included.
+fn each_script(tpl: &Template, f: &mut impl FnMut(&str)) {
+    fn field(fd: &Field, f: &mut impl FnMut(&str)) {
+        for s in fd.scripts.iter().chain(&fd.calculate).chain(&fd.validate) {
+            f(&s.text);
+        }
+    }
+    fn walk(nodes: &[Node], depth: usize, f: &mut impl FnMut(&str)) {
+        if depth > MAX_DEPTH {
+            return;
+        }
+        for n in nodes {
+            match n {
+                Node::Subform(sf) => {
+                    sf.scripts.iter().for_each(|s| f(&s.text));
+                    walk(&sf.children, depth + 1, f);
+                    if let Some(ps) = &sf.page_set {
+                        ps.areas.iter().for_each(|a| walk(&a.items, depth + 1, f));
+                    }
+                }
+                Node::Area(a) => walk(&a.children, depth + 1, f),
+                Node::Field(fd) => field(fd, f),
+                Node::ExclGroup(g) => {
+                    g.scripts.iter().for_each(|s| f(&s.text));
+                    g.fields.iter().for_each(|fd| field(fd, f));
+                }
+                Node::Draw(_) => {}
+            }
+        }
+    }
+    tpl.root.scripts.iter().for_each(|s| f(&s.text));
+    walk(&tpl.root.children, 1, f);
+    if let Some(ps) = &tpl.root.page_set {
+        ps.areas.iter().for_each(|a| walk(&a.items, 1, f));
+    }
 }
 
 /// The index of a SOM segment (`page[2]` is 2).
@@ -1210,5 +1274,30 @@ mod script_object_tests {
         let mut big = tpl.clone();
         big.root.script_objects = (0..4100).map(|i| object(&format!("o{i}"))).collect();
         assert!(!reach(&big, "form[0]").iter().any(|o| o.name == "Inner"));
+    }
+
+    #[test]
+    fn an_object_no_event_script_names_is_marked_unnamed() {
+        use crate::model::{Field, Script};
+        let text = |name: &str, text: &str| ScriptObject { name: name.into(), text: text.into() };
+        let script = Script { activity: "calculate".into(), text: "this.rawValue = NS.jForm.x.f() + calcs.sum();".into(), formcalc: false };
+        let field = Field { common: named("t"), calculate: Some(script), ..Default::default() };
+        let tpl = Template {
+            root: Subform {
+                common: named("form"),
+                script_objects: vec![
+                    text("NS", "var jForm = {};"),
+                    text("module_x", "NS.jForm.x = { f: function () { return 'ok'; } }; // module_x"),
+                    text("calcs", "function sum() { return helper.one(); }"),
+                    text("helper", "function one() { return 1; }"),
+                ],
+                children: vec![Node::Field(Box::new(field))],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let unnamed: Vec<_> = reach(&tpl, "form[0].t[0]").into_iter().filter(|o| o.unnamed).map(|o| o.name).collect();
+        // `helper` only another object names
+        assert_eq!(unnamed, ["module_x", "helper"]);
     }
 }

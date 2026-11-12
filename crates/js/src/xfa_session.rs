@@ -1,9 +1,10 @@
 //! One script engine for a whole form event. Every script of the event runs on one thread
-//! (with the script stack), each in a fresh JavaScript context on a fresh copy of the form as
-//! the caller holds it, so scripts can't see each other's variables or objects and a script
-//! that failed halfway leaves no state behind in the engine; what a script changed (up to its
-//! error, when it failed) reaches the next one only through the caller, which applies the
-//! effects and sends the form as it then is. Before,
+//! (with the script stack), on a fresh copy of the form as the caller holds it: what a script
+//! changed in the form (up to its error, when it failed) reaches the next one only through the
+//! caller, which applies the effects and sends the form as it then is. The scripts share one
+//! JavaScript context while the form keeps its structure, as Acrobat's do: the script objects
+//! are built once for them and keep their state, and a global a script sets without declaring
+//! it is there for the next (what a script declares stays its own). Before,
 //! every script also got a thread of its own and the caller rebuilt the form for each: a form
 //! with hundreds of calculations spent its open-time budget on that.
 //!
@@ -139,6 +140,7 @@ mod native {
                         });
                         let _ = reply.send(Reply::Outcome(Box::new(o)));
                     }
+                    crate::xfa::drop_kept();
                 });
                 spawned.map_err(|e| format!("the script engine could not start: {e}"))?;
                 super::ENGINES_STARTED.with(|n| n.set(n.get().saturating_add(1)));
@@ -255,6 +257,7 @@ mod native {
         /// event (on other targets it goes with the session's thread).
         fn drop(&mut self) {
             crate::xfa::forget_base();
+            crate::xfa::drop_kept();
         }
     }
 }
