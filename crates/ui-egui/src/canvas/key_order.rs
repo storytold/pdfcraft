@@ -84,9 +84,10 @@ fn arrows(view: &mut DocView, cx: &KeyCx<'_>) {
     let mut objects_asked = false;
     for kind in view.key_ages.newest_first() {
         match kind {
+            // One nudge moves the objects or the picture, whichever of them is newer.
             Held::Objects | Held::Picture if edit_text && !objects_asked => {
                 objects_asked = true;
-                crate::object_ui::nudge_keys(ctx, keys, view, doc);
+                crate::object_ui::nudge_keys(ctx, keys, view, doc, kind == Held::Picture);
             }
             Held::Comment if !edit_text && doc.allows_annotation() => crate::comments::nudge_keys(ctx, keys, view, &doc.info),
             // Prepare a form, #2608.

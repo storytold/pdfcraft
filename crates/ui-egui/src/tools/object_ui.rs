@@ -483,13 +483,15 @@ fn on_frame(r: Rect, p: Pos2) -> bool {
 }
 
 /// The arrow keys move the selected image or objects a point, Shift and an arrow ten points,
-/// as in Acrobat. They are taken before the view turns the page with them.
-pub(crate) fn nudge_keys(ctx: &egui::Context, keys: PageKeys, view: &mut DocView, doc: &Document) {
+/// as in Acrobat. They are taken before the view turns the page with them. With both selected,
+/// `picture_first`: the picture was selected after the objects (the key pass says), and it moves.
+pub(crate) fn nudge_keys(ctx: &egui::Context, keys: PageKeys, view: &mut DocView, doc: &Document, picture_first: bool) {
     if ctx.egui_wants_keyboard_input() || view.pending_edit.is_some() {
         return;
     }
     let image = view.image_selection.as_ref().filter(|s| !s.dragging()).map(|s| (s.page, s.index));
     let objects = view.objects.page.filter(|_| !view.objects.selected.is_empty() && view.objects.gesture.is_none());
+    let objects = objects.filter(|_| !(picture_first && image.is_some()));
     let Some(page) = objects.or(image.map(|(page, _)| page)) else { return };
     let Some(xf) = view.page_xform(page) else { return };
     use egui::Key;
