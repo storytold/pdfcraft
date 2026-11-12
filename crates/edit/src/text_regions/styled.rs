@@ -1320,12 +1320,7 @@ impl<'a> RowSpacing<'a> {
             // Half the size, for a paragraph the page did not have (see `set`).
             None => (style.size.unwrap_or(first.size) / 2.0, false),
         };
-        let baseline_of = |r: usize| block.rows.get(r).and_then(|r| r.first()).and_then(|i| lines.get(*i)).map(|l| l.origin.baseline);
-        let row_step = (1..block.rows.len())
-            .filter_map(|r| Some(baseline_of(r - 1)? - baseline_of(r)?))
-            .filter(|v| *v > 0.0)
-            .fold(None, |min: Option<f64>, v| Some(min.map_or(v, |m| m.min(v))))
-            .unwrap_or(first.size * 1.5);
+        let row_step = source_row_step(block, lines, first.size * 1.5);
         let sources = row_sources(block, draft, row_ranges, &explicit);
         Ok(Self {
             block,
@@ -1353,10 +1348,7 @@ impl<'a> RowSpacing<'a> {
         // The baseline of the source row above the source row this row starts.
         let above = source_row.and_then(|j| self.run_of(j.checked_sub(1)?)).map(|l| l.origin.baseline);
         // The space this row already had above it, beyond the ordinary row step.
-        let existing = match (anchor, above) {
-            (Some(a), Some(above)) => (above - a.origin.baseline - self.row_step).max(0.0),
-            _ => 0.0,
-        };
+        let existing = source_row.map_or(0.0, |j| existing_gap(self.block, self.lines, self.row_step, j));
         let starts_paragraph =
             row_index > 0 && self.explicit.get(row_index).copied().unwrap_or(false) && (anchor.is_none() || (self.set && existing > 0.5));
         let paragraph = starts_paragraph.then_some(self.gap);
@@ -1702,12 +1694,34 @@ impl Origins {
     }
 }
 
+/// The baseline of source row `row`'s first run.
+fn source_baseline(block: &TextBlock, lines: &[TextLine], row: usize) -> Option<f64> {
+    block.rows.get(row).and_then(|r| r.first()).and_then(|i| lines.get(*i)).map(|l| l.origin.baseline)
+}
+
+/// The ordinary step between the block's source rows: the smallest, or `fallback` for one row.
+pub(crate) fn source_row_step(block: &TextBlock, lines: &[TextLine], fallback: f64) -> f64 {
+    (1..block.rows.len())
+        .filter_map(|r| Some(source_baseline(block, lines, r - 1)? - source_baseline(block, lines, r)?))
+        .filter(|v| *v > 0.0)
+        .fold(None, |min: Option<f64>, v| Some(min.map_or(v, |m| m.min(v))))
+        .unwrap_or(fallback)
+}
+
+/// The space source row `row` already had above it, beyond the ordinary `row_step`.
+pub(crate) fn existing_gap(block: &TextBlock, lines: &[TextLine], row_step: f64, row: usize) -> f64 {
+    match (source_baseline(block, lines, row), row.checked_sub(1).and_then(|r| source_baseline(block, lines, r))) {
+        (Some(here), Some(above)) => (above - here - row_step).max(0.0),
+        _ => 0.0,
+    }
+}
+
 /// For each output row (a range of the draft's characters), the source row it starts: row 0
 /// starts row 0, and a row the draft's line break started (`explicit`) starts the source row
 /// after that break when the break is one of the source's, left alone by the edit. A wrapped
 /// row, or one after a break the edit inserted, starts none. When the source rows can't be told
 /// apart by their line breaks, each row is paired with the source row at its own position.
-fn row_sources(block: &TextBlock, draft: &str, rows: &[std::ops::Range<usize>], explicit: &[bool]) -> Vec<Option<usize>> {
+pub(crate) fn row_sources(block: &TextBlock, draft: &str, rows: &[std::ops::Range<usize>], explicit: &[bool]) -> Vec<Option<usize>> {
     let old: Vec<char> = block.editor_text.chars().collect();
     let breaks: Vec<usize> = old.iter().enumerate().filter(|(_, c)| **c == '\n').map(|(i, _)| i).collect();
     if breaks.len().saturating_add(1) != block.rows.len() {

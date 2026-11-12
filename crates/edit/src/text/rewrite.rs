@@ -6,8 +6,8 @@ use super::fallback::{
 use super::interp::{Carry, Origin, TextState, interpret};
 use super::lines::{content_streams, joined, page_dict, rewritten_contents, splice, text_lines};
 use super::{
-    Dict, Document, EditError, HashMap, Matrix, Metrics, Object, Op, PdfString, TextLine, TextSession, alignment_frame, group_blocks, is_centred,
-    parse, rewrite_changed_words, rewrite_styled_block,
+    Dict, Document, EditError, HashMap, Matrix, Metrics, Object, Op, PdfString, TextLine, TextSession, alignment_frame, existing_gap, group_blocks,
+    is_centred, parse, rewrite_changed_words, rewrite_styled_block, row_sources, source_row_step,
 };
 
 /// What replacing a line did.
@@ -282,28 +282,66 @@ fn paragraph_text(text: &str) -> String {
         .collect()
 }
 
-/// Every paragraph (text between line breaks) wrapped on its own, with a flag per line that is a
-/// paragraph's first after the first paragraph.
-fn wrap_paragraphs(text: &str, width: f64, advance: impl Fn(&str) -> f64) -> (Vec<(String, bool, usize)>, Vec<bool>) {
+/// The wrapped lines, and for each the paragraph it starts (see [`wrap_paragraphs`]).
+type Wrapped = (Vec<(String, bool, usize)>, Vec<Option<usize>>);
+
+/// Every paragraph (text between line breaks) wrapped on its own, with, per line, the number of
+/// the paragraph it starts when it is a paragraph's first line after the first paragraph.
+fn wrap_paragraphs(text: &str, width: f64, advance: impl Fn(&str) -> f64) -> Wrapped {
     let (mut wrapped, mut starts) = (Vec::new(), Vec::new());
     for (paragraph, text) in text.split('\n').enumerate() {
         for (line, wrapped_line) in wrap(text, width, &advance).into_iter().enumerate() {
             wrapped.push(wrapped_line);
-            starts.push(paragraph > 0 && line == 0);
+            starts.push((paragraph > 0 && line == 0).then_some(paragraph));
         }
     }
     (wrapped, starts)
 }
 
-/// The gap before a paragraph, in text space, beyond the line step.
-fn paragraph_gap(style: &BlockStyle, k: f64) -> Result<f64, EditError> {
+/// The gap before each wrapped line, in text space, beyond the line step: none except before the
+/// first line of a paragraph after the first (`starts` says which paragraph that is).
+///
+/// A spacing that is set (`Some(0.0)` is none) goes before every such line: every line is laid out
+/// afresh, and it replaces whatever space the page had there. Unset, the paragraphs follow the same
+/// rule as the styled path (`RowSpacing`): a paragraph the draft's line break started anew gets
+/// half the size, and one the page already had keeps the space it had above it, so choosing a
+/// family or applying the draft again moves no source row. Which paragraph is which comes from
+/// aligning the draft to the source's rows ([`row_sources`]).
+fn paragraph_gaps(
+    (b, lines): (&TextBlock, &[TextLine]),
+    text: &str,
+    starts: &[Option<usize>],
+    style: &BlockStyle,
+    (k, size): (f64, f64),
+) -> Result<Vec<f64>, EditError> {
     match style.paragraph_spacing {
-        Some(p) if p.is_finite() => Ok((p / k).clamp(0.0, 14_400.0)),
-        Some(_) => Err(EditError::Invalid("the paragraph spacing must be a number".into())),
-        // The editor's draft breaks every source row, so a default spacing would spread
-        // the rows of one paragraph apart: none is added unless one is asked for.
-        None => Ok(0.0),
+        Some(p) if p.is_finite() => {
+            let gap = (p / k).clamp(0.0, 14_400.0);
+            return Ok(starts.iter().map(|s| if s.is_some() { gap } else { 0.0 }).collect());
+        }
+        Some(_) => return Err(EditError::Invalid("the paragraph spacing must be a number".into())),
+        None => {}
     }
+    let mut at = 0;
+    let ranges: Vec<std::ops::Range<usize>> = text
+        .split('\n')
+        .map(|paragraph| {
+            let range = at..at + paragraph.chars().count();
+            at = range.end + 1;
+            range
+        })
+        .collect();
+    let explicit: Vec<bool> = (0..ranges.len()).map(|i| i > 0).collect();
+    let sources = row_sources(b, text, &ranges, &explicit);
+    let row_step = source_row_step(b, lines, size * k * 1.5);
+    Ok(starts
+        .iter()
+        .map(|s| match s.and_then(|paragraph| sources.get(paragraph)) {
+            Some(Some(source)) => existing_gap(b, lines, row_step, *source) / k,
+            Some(None) => size / 2.0,
+            None => 0.0,
+        })
+        .collect())
 }
 
 /// Where a paragraph sits on its page, for choosing the width it is laid out in.
@@ -582,8 +620,6 @@ struct LineWriter<'a> {
     space: f64,
     char_spacing: f64,
     lead: f64,
-    /// The gap before a paragraph's first line, beyond the line step.
-    gap: f64,
 }
 
 /// Where a wrapped line stands in its paragraph.
@@ -591,8 +627,9 @@ struct LineWriter<'a> {
 struct LineRow {
     /// The last line of the text (not justified).
     last: bool,
-    /// The first line of a paragraph after the first.
-    starts_paragraph: bool,
+    /// The gap before the line, beyond the line step: set only on a paragraph's first line after
+    /// the first (see [`paragraph_gaps`]).
+    gap: f64,
 }
 
 /// What carries over from one line to the next.
@@ -658,7 +695,7 @@ impl LineWriter<'_> {
         let (shown, visible) = self.shown(line, body, tw);
         let dx = if tw > 0.0 { 0.0 } else { self.alignment.offset(visible, line_align) };
         // The line step, plus the gap before a paragraph's first line.
-        let step = if index > 0 { self.lead + if pos.starts_paragraph { self.gap } else { 0.0 } } else { 0.0 };
+        let step = if index > 0 { self.lead + pos.gap } else { 0.0 };
         if index > 0 {
             // Inside this text object, so the marker starts and ends here. `/PCHard` is a newline
             // that was already in the text. `/PCSoft` rejoins when the box widens, with `/N` the
@@ -738,7 +775,7 @@ impl LineWriter<'_> {
     fn write_all(
         &self,
         wrapped: &[(String, bool, usize)],
-        starts: &[bool],
+        gaps: &[f64],
         cursor: &mut LineCursor,
         ops: &mut Vec<Op>,
     ) -> Result<Vec<(f64, f64, f64)>, EditError> {
@@ -753,7 +790,7 @@ impl LineWriter<'_> {
                 // Every line but the last is justified: a line break in the draft separates the rows
                 // of one paragraph, as the paragraph editor sends them, not paragraphs.
                 let last = i + 1 >= wrapped.len();
-                let pos = LineRow { last, starts_paragraph: starts.get(i).copied().unwrap_or(false) };
+                let pos = LineRow { last, gap: gaps.get(i).copied().unwrap_or(0.0) };
                 self.write_line(i, line, (row, *soft, *gap), pos, cursor, ops)
             })
             .collect()
@@ -779,7 +816,7 @@ fn block_ops(
     plan: &BlockPlan<'_>,
     writer: &LineWriter<'_>,
     wrapped: &[(String, bool, usize)],
-    starts: &[bool],
+    gaps: &[f64],
     show_font: String,
 ) -> Result<Vec<Op>, EditError> {
     let n = pdfcraft_content::num;
@@ -804,7 +841,7 @@ fn block_ops(
     }
     ops.extend(state.ops());
     ops.push(Op::new("Tm", plan.tm.iter().map(|v| n(*v)).collect()));
-    let underlines = writer.write_all(wrapped, starts, &mut cursor, &mut ops)?;
+    let underlines = writer.write_all(wrapped, gaps, &mut cursor, &mut ops)?;
     ops.push(Op::new("ET", vec![]));
     if plan.underline {
         ops.extend(underline_ops(&state.fill, &plan.tm, plan.size, &underlines));
@@ -988,7 +1025,7 @@ pub(crate) fn rewrite_block_from(
         width
     };
     let right_edge = if anchored_right { right_edge } else { width };
-    // Every paragraph wrapped on its own; `starts` marks a paragraph's first line.
+    // Every paragraph wrapped on its own; `starts` marks a paragraph's first line (but the first's).
     let (wrapped, starts) = wrap_paragraphs(&text, width + 0.5, |s| advance.of(s));
     let font = choose_font(
         &FontInputs {
@@ -1005,7 +1042,7 @@ pub(crate) fn rewrite_block_from(
         &mut fonts_res,
     )?;
     let lead = line_lead(&b, &lines, style, &LeadScale { k, size, old_size, leading: o_state.leading });
-    let gap = paragraph_gap(style, k)?;
+    let gaps = paragraph_gaps((&b, &lines), &text, &starts, style, (k, size))?;
     let start = last.ops.first().copied().unwrap_or(emit.bt_op);
     let split = shows_before_paragraph(&ops, emit.bt_op, start, &dropped);
     // What the text after the paragraph expects, and what is in force where the paragraph is
@@ -1031,7 +1068,6 @@ pub(crate) fn rewrite_block_from(
         space: source.space,
         char_spacing: o_state.char_spacing,
         lead,
-        gap,
     };
     let at = if split { start } else { emit.bt_op };
     // Revealed OCR text that something is painted over goes on top of the page, where it starts
@@ -1053,7 +1089,7 @@ pub(crate) fn rewrite_block_from(
         size,
         underline: style.underline == Some(true),
     };
-    let mut block_ops = block_ops(&plan, &writer, &wrapped, &starts, font.show_font.clone())?;
+    let mut block_ops = block_ops(&plan, &writer, &wrapped, &gaps, font.show_font.clone())?;
     let on_top = crate::lift_on_top(over, &mut block_ops);
     let n = pdfcraft_content::num;
     block_ops.extend(after.ops().into_iter().filter(|op| !op.is("Tf") || after.font.is_some()));

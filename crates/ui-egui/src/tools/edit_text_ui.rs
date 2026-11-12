@@ -225,7 +225,7 @@ pub struct Extras {
     pub underline: bool,
     pub line_spacing: f64,
     /// Space between paragraphs in points (a line break in the box starts one); 0 = unset (a
-    /// new paragraph in text that keeps the page's rows gets half the size, otherwise none).
+    /// new paragraph gets half the size; rows the page had keep their space).
     pub paragraph_spacing: f64,
     pub char_spacing: f64,
     pub scale: f64,

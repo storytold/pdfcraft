@@ -126,3 +126,51 @@ fn styled_source_rows_keep_their_steps_when_no_spacing_is_set() {
     let s = steps(&doc);
     assert!(close(&s, &[12.0]), "{s:?}");
 }
+
+/// Choosing a family takes the single-style path, which lays every row out afresh.
+fn single(spacing: Option<f64>) -> text::BlockStyle {
+    text::BlockStyle { family: Some((crate::Family::Times, false, false)), paragraph_spacing: spacing, ..Default::default() }
+}
+
+/// The single-style path, like the styled one: unset, a paragraph the draft's break adds gets half
+/// the size (a 12 pt step and 5 pt apart, 17), and asking for none takes it away again.
+#[test]
+fn a_new_single_style_paragraph_gets_half_the_size_when_no_spacing_is_set() {
+    let mut doc = page(&rows(&["One", "Three"]));
+    text::rewrite_block(&mut doc, 0, 0, Some("One\nTwo\nThree"), &single(None)).unwrap();
+    let s = steps(&doc);
+    assert!(close(&s, &[17.0, 12.0]), "{s:?}");
+    let mut doc = page(&rows(&["One", "Three"]));
+    text::rewrite_block(&mut doc, 0, 0, Some("One\nTwo\nThree"), &single(Some(0.0))).unwrap();
+    let s = steps(&doc);
+    assert!(close(&s, &[12.0, 12.0]), "{s:?}");
+}
+
+/// Rows the page had keep their steps when no spacing is set, whichever way the draft breaks
+/// around them, and a gap a source row already had is kept, not added to.
+#[test]
+fn single_style_source_rows_keep_their_steps_when_no_spacing_is_set() {
+    let mut doc = page(&rows(&["One", "Two"]));
+    text::rewrite_block(&mut doc, 0, 0, Some("One\nTwo"), &single(None)).unwrap();
+    let s = steps(&doc);
+    assert!(close(&s, &[12.0]), "{s:?}");
+    // `Three` sits 16 pt below `Two`: a 4 pt gap, kept.
+    let mut doc = page("BT /F1 10 Tf 72 700 Td (One) Tj 0 -12 Td (Two) Tj 0 -16 Td (Three) Tj ET");
+    text::rewrite_block(&mut doc, 0, 0, Some("One\nTwo\nThree"), &single(None)).unwrap();
+    let s = steps(&doc);
+    assert!(close(&s, &[12.0, 16.0]), "{s:?}");
+    // A row added at the end is the only one set apart.
+    let mut doc = page(&rows(&["One", "Two"]));
+    text::rewrite_block(&mut doc, 0, 0, Some("One\nTwo\nNew"), &single(None)).unwrap();
+    let s = steps(&doc);
+    assert!(close(&s, &[12.0, 17.0]), "{s:?}");
+}
+
+/// A set spacing replaces the gap a single-style row already had (never adds to it).
+#[test]
+fn single_style_spacing_that_is_set_replaces_the_gap_a_row_had() {
+    let mut doc = page("BT /F1 10 Tf 72 700 Td (One) Tj 0 -12 Td (Two) Tj 0 -16 Td (Three) Tj ET");
+    text::rewrite_block(&mut doc, 0, 0, Some("One\nTwo\nThree"), &single(Some(10.0))).unwrap();
+    let s = steps(&doc);
+    assert!(close(&s, &[22.0, 22.0]), "{s:?}");
+}

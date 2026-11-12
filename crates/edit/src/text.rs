@@ -25,7 +25,7 @@ mod regions;
 #[path = "text_session.rs"]
 mod session;
 pub use fallback::strip_subset_tag;
-use regions::{alignment_frame, group_blocks, is_centred, rewrite_changed_words, rewrite_styled_block};
+use regions::{alignment_frame, existing_gap, group_blocks, is_centred, rewrite_changed_words, rewrite_styled_block, row_sources, source_row_step};
 pub use session::TextSession;
 
 mod blocks;
