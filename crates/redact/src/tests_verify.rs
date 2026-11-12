@@ -698,6 +698,8 @@ fn the_proof_finds_a_mitered_corner() {
         ("0 0 1 RG 20 w 40 135 m 60 225 l 20 225 l h S".into(), true),
         ("0 0 1 RG 20 w 40 135 1 1 re 60 225 l 20 225 l h S".into(), true),
         ("1 j 0 0 1 RG 20 w 40 135 m 40 135 1 1 re 60 225 l 20 225 l h S".into(), false),
+        // Closed at the point before `re`, where the renderer starts the segments after it.
+        ("0 0 1 RG 20 w 20 225 m 40 135 l 40 255 1 1 re 60 225 l 20 225 l h S".into(), true),
         ("0 0 1 RG 20 w 40 135 m 60 225 l 20 225 l s".into(), true),
         ("0 0 1 RG 20 w 40 135 m 60 225 l 20 225 l 40 135 l S".into(), false),
         ("0 0 1 RG 20 w 20 225 m 25 202.5 35 157.5 40 135 c 60 225 l S".into(), true),

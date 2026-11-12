@@ -97,8 +97,10 @@ fn a_width_given_by_reference_reaches_under_a_mark() {
 /// mitered). A curve meets the line at its tangent: arriving or leaving across the page, the
 /// corner is blunt.
 /// Closed by `h`, `s`, `b` or `b*`, the subpath joins at its start too; drawn back to its start and not
-/// closed, it has ends there, not a corner; and a line after `h` or a rectangle starts a subpath
-/// of its own, and has no corner with the segment before. Where the renderer takes two points for
+/// closed, it has ends there, not a corner; and a line after `h` starts a subpath of its own, and
+/// has no corner with the segment before. A segment after a rectangle the renderer starts from the
+/// point before it (until #6968), so its corners aren't the model's: the path is taken to reach as
+/// far as the limit lets, unless a move comes between. Where the renderer takes two points for
 /// one, the corner is as it draws it: a curve's control point a ten-millionth of a unit from its
 /// end, leaving by `c` or arriving by `y`, gives it no tangent, nor does one written with a last
 /// digit it doesn't read (`120.00000000000001`), and a line that short, closing or mid-path, is
@@ -144,7 +146,12 @@ fn a_mitered_corner_reaching_under_a_mark_is_removed() {
         ("20 w 120 175 m 140 265 l 100 265 l 120 175 l h S".into(), 1),
         ("20 w 120 175 m 140 265 l 100 265 l 120 175 l S".into(), 0),
         ("20 w 120 175 m 100 265 l h 140 265 l S".into(), 0),
-        ("20 w 100 265 m 120 175 l 200 200 1 1 re 140 265 l S".into(), 0),
+        // The renderer starts a segment after `re` at the point before it: the triangle closed
+        // there mitres at (120, 175). A single segment after `re` joins nothing, but is taken to
+        // reach as far all the same; a move after the rectangle ends that.
+        ("20 w 100 265 m 120 175 l 120 295 1 1 re 140 265 l 100 265 l h S".into(), 1),
+        ("20 w 100 265 m 120 175 l 200 200 1 1 re 140 265 l S".into(), 1),
+        ("20 w 200 200 1 1 re 100 170 m 140 170 l S".into(), 0),
         ("20 w 100 265 m 105 242.5 115 197.5 120 175 c 140 265 l S".into(), 1),
         ("20 w 100 265 m 115 197.5 120 175 v 140 265 l S".into(), 1),
         ("20 w 100 265 m 110 220 120 175 y 140 265 l S".into(), 1),

@@ -28,7 +28,14 @@ pub(crate) fn miter_reach(ops: &[Op], closes: bool, limit: f64) -> f64 {
     // way: a corner a millionth past the limit is taken for mitered.
     let limit = limit * (1.0 + 1e-6);
     let mut joins = Joins { limit, reach: 1.0, start: (0.0, 0.0), at: (0.0, 0.0), first: Vec::new(), last: Vec::new(), opening: true };
+    // After `re` the renderer starts a segment from the point before the rectangle, not from its
+    // corner (vendored `hayro-interpret`, until #6968): the corners such a segment makes aren't
+    // the ones read here, so a path with one may mitre anywhere, as far as the limit lets.
+    let mut after_rectangle = false;
     for op in ops {
+        if after_rectangle && matches!(op.op.as_slice(), b"l" | b"c" | b"v" | b"y") {
+            joins.reach = joins.reach.max(limit);
+        }
         // Each operator's points are its last operands, as the renderer takes them; one whose
         // operands aren't numbers is skipped. Where the content parser reads a number the renderer
         // doesn't (`1.75e2`), the renderer drops the operands before it and skips the operator
@@ -37,6 +44,7 @@ pub(crate) fn miter_reach(ops: &[Op], closes: bool, limit: f64) -> f64 {
             b"m" => {
                 if let Some([x, y]) = op.nums::<2>() {
                     joins.begin((x, y));
+                    after_rectangle = false;
                 }
             }
             b"l" => {
@@ -61,6 +69,7 @@ pub(crate) fn miter_reach(ops: &[Op], closes: bool, limit: f64) -> f64 {
             b"re" => {
                 if let Some([x, y, _, _]) = op.nums::<4>() {
                     joins.begin((x, y));
+                    after_rectangle = true;
                 }
             }
             b"h" => joins.close(),
