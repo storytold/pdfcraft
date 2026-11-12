@@ -2722,8 +2722,8 @@ milestone = "M4"
 status = "shipped"
 commands = ["page.rotate", "page.rotate_ccw"]
 tools = ["page_rotate"]
-evidence = ["crates/organize/src/tests.rs::rotate_repeated_indices_accumulate_from_the_current_page_value", "crates/organize/src/tests.rs::rotate_uses_inherited_rotation_and_round_trips", "crates/ui-egui/tests/it/editing.rs::command_click_toggles_and_rotation_applies_to_selection", "crates/ui-egui/tests/it/editing.rs::organize_page_actions_rotate_only_the_named_page_and_undo", "crates/ui-egui/tests/it/editing.rs::organize_local_actions_respect_document_permissions", "crates/organize/src/tests.rs::indirect_page_rotation_is_read_and_updated_from_its_effective_value", "crates/organize/src/tests.rs::malformed_indirect_rotations_keep_the_zero_fallback"]
-notes = "Rotation queries and edits resolve direct and inherited indirect integer values; full and incremental save regressions preserve sibling rotations. Existing quarter-turn restrictions and malformed-value zero fallback remain."
+evidence = ["crates/organize/src/tests.rs::rotate_repeated_indices_accumulate_from_the_current_page_value", "crates/organize/src/tests.rs::rotate_uses_inherited_rotation_and_round_trips", "crates/ui-egui/tests/it/editing.rs::command_click_toggles_and_rotation_applies_to_selection", "crates/ui-egui/tests/it/editing.rs::organize_page_actions_rotate_only_the_named_page_and_undo", "crates/ui-egui/tests/it/editing.rs::organize_local_actions_respect_document_permissions", "crates/organize/src/tests.rs::indirect_page_rotation_is_read_and_updated_from_its_effective_value", "crates/organize/src/tests.rs::malformed_indirect_rotations_keep_the_zero_fallback", "crates/ui-egui/tests/it/editing.rs::rotating_pages_from_the_thumbnail_menu_is_undoable"]
+notes = "Rotation queries and edits resolve direct and inherited indirect integer values; full and incremental save regressions preserve sibling rotations. Existing quarter-turn restrictions and malformed-value zero fallback remain. The Pages thumbnail context menu rotates the clicked page or selection in either direction, with Undo (#7052)."
 
 [[feature]]
 id = "organize.rotate-filters"
