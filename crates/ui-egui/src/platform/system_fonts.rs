@@ -336,12 +336,14 @@ fn han_candidates(traditional: bool) -> Vec<PathBuf> {
     if cfg!(windows) {
         // Microsoft YaHei / JhengHei, then the older SimSun / MingLiU collections.
         let files: &[&str] = if traditional {
-            &["msjh.ttc", "msyh.ttc", "mingliu.ttc", "simsun.ttc", "NotoSansCJK-Regular.ttc"]
+            &["msjh.ttc", "msyh.ttc", "mingliu.ttc", "simsun.ttc"]
         } else {
-            &["msyh.ttc", "msjh.ttc", "simsun.ttc", "mingliu.ttc", "NotoSansCJK-Regular.ttc"]
+            &["msyh.ttc", "msjh.ttc", "simsun.ttc", "mingliu.ttc"]
         };
         let mut list: Vec<PathBuf> = files.iter().map(|f| windows_fonts().join(f)).collect();
-        // Noto installed for the current user only lives under LOCALAPPDATA.
+        // Noto installed for the current user only lives under LOCALAPPDATA. Try the
+        // region-specific face before the multi-language collection so Simplified
+        // text does not take Japanese glyph shapes from the collection.
         if let Some(local) = std::env::var_os("LOCALAPPDATA") {
             let user_fonts = PathBuf::from(local).join(r"Microsoft\Windows\Fonts");
             let noto: &[&str] = if traditional {
@@ -351,6 +353,8 @@ fn han_candidates(traditional: bool) -> Vec<PathBuf> {
             };
             list.extend(noto.iter().map(|f| user_fonts.join(f)));
         }
+        // System-wide collection as a last resort.
+        list.push(windows_fonts().join("NotoSansCJK-Regular.ttc"));
         list
     } else if cfg!(target_os = "macos") {
         macos_han_candidates(traditional)
@@ -367,13 +371,13 @@ fn han_candidates(traditional: bool) -> Vec<PathBuf> {
             "droid/DroidSansFallbackFull.ttf",
             "truetype/arphic/uming.ttc",
             "arphic-uming/uming.ttc",
+            "opentype/noto/NotoSansCJKsc-Regular.otf",
+            "noto-cjk/NotoSansCJKsc-Regular.otf",
+            "NotoSansCJKsc-Regular.otf",
             "opentype/noto/NotoSansCJK-Regular.ttc",
             "noto-cjk/NotoSansCJK-Regular.ttc",
             "google-noto-cjk/NotoSansCJK-Regular.ttc",
             "NotoSansCJK-Regular.ttc",
-            "opentype/noto/NotoSansCJKsc-Regular.otf",
-            "noto-cjk/NotoSansCJKsc-Regular.otf",
-            "NotoSansCJKsc-Regular.otf",
             "opentype/noto/NotoSansCJKtc-Regular.otf",
             "noto-cjk/NotoSansCJKtc-Regular.otf",
             "NotoSansCJKtc-Regular.otf",
@@ -575,6 +579,22 @@ mod tests {
         assert!(
             list.iter().any(|p| p.to_string_lossy().contains("NotoSansCJK")),
             "Simplified Chinese candidates must try an installed Noto Sans CJK face: {list:?}"
+        );
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn hans_candidates_include_noto_sans_cjk_review_regression_1() {
+        let list = han_candidates(false);
+        // The Simplified Chinese OTF face must be tried before the multi-language
+        // Noto Sans CJK collection, whose first face is Japanese; otherwise
+        // Simplified interface text can take Japanese glyph shapes from the
+        // collection.
+        let sc_otf = list.iter().position(|p| p.file_name().is_some_and(|n| n == "NotoSansCJKsc-Regular.otf"));
+        let ttc = list.iter().position(|p| p.file_name().is_some_and(|n| n == "NotoSansCJK-Regular.ttc"));
+        assert!(
+            sc_otf.is_some_and(|i| ttc.map_or(true, |j| i < j)),
+            "Simplified Chinese candidates must try NotoSansCJKsc-Regular.otf before NotoSansCJK-Regular.ttc: {list:?}"
         );
     }
 
