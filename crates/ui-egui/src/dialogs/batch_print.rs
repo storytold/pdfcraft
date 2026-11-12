@@ -35,6 +35,12 @@ pub struct BatchPrintDraft {
 }
 
 impl BatchPrintDraft {
+    pub fn clear(&mut self) {
+        self.step = BatchPrintStep::SelectFiles;
+        self.items.clear();
+        self.preview_cache.clear();
+    }
+
     pub fn select_all(&mut self, select: bool) {
         for item in &mut self.items {
             item.selected = select;
@@ -69,17 +75,15 @@ impl BatchPrintDraft {
             if let Ok(bytes) = std::fs::read(&path) {
                 let arc_bytes = Arc::new(bytes);
                 file_arc = Some(arc_bytes.clone());
-                if let Ok(info) = pdfcraft_render::inspect(arc_bytes.clone(), None) {
+                if let Ok(info) = pdfcraft_render::inspect(arc_bytes, None) {
                     for p in info.pages {
                         page_sizes.push((f64::from(p.width), f64::from(p.height)));
                         page_labels.push(p.label);
                     }
-                } else if let Some(n) = pdfcraft_engine::source_page_count(&arc_bytes, None) {
-                    for i in 0..n {
-                        page_sizes.push((595.0, 842.0));
-                        page_labels.push((i + 1).to_string());
-                    }
                 }
+            }
+            if page_sizes.is_empty() {
+                continue;
             }
             let page_count = page_sizes.len();
             self.items.push(BatchPrintItem {
@@ -111,6 +115,7 @@ fn show_file_selection(ui: &mut egui::Ui, app: &mut PdfCraftApp) -> (bool, bool)
 
     // Toolbar buttons
     ui.horizontal(|ui| {
+        #[cfg(not(target_arch = "wasm32"))]
         if widgets::pill_button(ui, tl!("Add folder…"), false).clicked() {
             app.batch_print_pick_folder();
         }
@@ -235,30 +240,16 @@ fn show_print_settings(ui: &mut egui::Ui, app: &mut PdfCraftApp) -> (bool, bool)
         app.batch_print.last_grayscale = is_grayscale;
     }
 
-    // Extract sizes, labels, and rendering handles for all selected items
+    // Extract sizes and labels for all selected items
     let mut all_sizes: Vec<(f64, f64)> = Vec::new();
     let mut all_labels: Vec<String> = Vec::new();
-    let mut pages_render_data: Vec<(Option<Arc<Vec<u8>>>, usize)> = Vec::new();
     let mut selected_count = 0usize;
 
     for item in app.batch_print.items.iter().filter(|i| i.selected) {
         selected_count += 1;
-        let bytes = if let Some(b) = &item.bytes {
-            Some(b.clone())
-        } else if let Some(path) = &item.path {
-            std::fs::read(path).ok().map(Arc::new)
-        } else if let Some(id) = item.doc_id
-            && let Some(doc) = app.session.get(id)
-        {
-            Some(doc.bytes.clone())
-        } else {
-            None
-        };
-
-        for (p_idx, (&size, label)) in item.page_sizes.iter().zip(&item.page_labels).enumerate() {
+        for (&size, label) in item.page_sizes.iter().zip(&item.page_labels) {
             all_sizes.push(size);
             all_labels.push(label.clone());
-            pages_render_data.push((bytes.clone(), p_idx));
         }
     }
 
@@ -286,17 +277,15 @@ fn show_print_settings(ui: &mut egui::Ui, app: &mut PdfCraftApp) -> (bool, bool)
                 return Some(handle.id());
             }
 
-            let Some((Some(bytes), doc_p)) = pages_render_data.get(p) else {
-                return None;
-            };
+            let (bytes, doc_p) = find_page_render_source(&app.batch_print.items, &app.session, p)?;
 
             let (w, h) = all_sizes.get(p).copied().unwrap_or((595.0, 842.0));
             let scale = (800.0 / (w.max(h) as f32)).clamp(0.2, 3.0);
 
             let config = pdfcraft_render::RenderConfig { system_fonts: true, ..Default::default() };
-            let mut r = pdfcraft_render::PageRenderer::new(bytes.clone(), config);
+            let mut r = pdfcraft_render::PageRenderer::new(bytes, config);
             let out = r.render(pdfcraft_render::RenderRequest {
-                page: *doc_p,
+                page: doc_p,
                 kind: pdfcraft_render::RequestKind::Pixels,
                 tile: None,
                 scale,
@@ -322,6 +311,27 @@ fn show_print_settings(ui: &mut egui::Ui, app: &mut PdfCraftApp) -> (bool, bool)
         let dummy_labels = vec!["1".to_string()];
         crate::print_ui::body(ui, &mut app.print_draft, &t, &dummy_sizes, &dummy_labels, &mut |_| None)
     }
+}
+
+fn find_page_render_source(items: &[BatchPrintItem], session: &pdfcraft_engine::Session, mut page_idx: usize) -> Option<(Arc<Vec<u8>>, usize)> {
+    for item in items.iter().filter(|i| i.selected) {
+        if page_idx < item.page_sizes.len() {
+            let bytes = if let Some(b) = &item.bytes {
+                Some(b.clone())
+            } else if let Some(path) = &item.path {
+                std::fs::read(path).ok().map(Arc::new)
+            } else if let Some(id) = item.doc_id
+                && let Some(doc) = session.get(id)
+            {
+                Some(doc.bytes.clone())
+            } else {
+                None
+            };
+            return bytes.map(|b| (b, page_idx));
+        }
+        page_idx -= item.page_sizes.len();
+    }
+    None
 }
 
 #[cfg(test)]

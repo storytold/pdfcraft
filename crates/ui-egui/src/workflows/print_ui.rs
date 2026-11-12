@@ -383,8 +383,22 @@ impl PdfCraftApp {
         let mut printed_count = 0usize;
         let mut failed_count = 0usize;
 
-        for item in selected {
+        for item in &selected {
+            let mut succeeded = false;
             if let Some(doc_id) = item.doc_id {
+                // A form's Will Print script runs first: what it changes is printed.
+                if self.session.get(doc_id).is_some_and(|d| d.allows_printing()) {
+                    let before = self.session.get(doc_id).map(|d| d.edit_generation());
+                    self.run_document_actions(doc_id, pdfcraft_engine::js::DocumentScriptEvent::WillPrint);
+                    if self.session.get(doc_id).map(|d| d.edit_generation()) != before && self.print_draft.handling == Handling::Label {
+                        self.print_draft.crop_pages = None;
+                        self.read_label_crops(doc_id);
+                    }
+                }
+                if self.print_draft.handling == Handling::Label {
+                    self.print_draft.crop_pages = None;
+                    self.read_label_crops(doc_id);
+                }
                 if let Some(doc) = self.session.get(doc_id) {
                     let labels: Vec<String> = doc.info.pages.iter().map(|p| p.label.clone()).collect();
                     if let Ok(settings) = self.print_draft.settings(doc.info.pages.len(), &labels)
@@ -396,17 +410,19 @@ impl PdfCraftApp {
                             print::add_cups_orientation(&mut job.options, &sheets);
                         }
                         if self.send_to_printer(printer.clone(), bytes, job) {
-                            printed_count += 1;
-                            continue;
+                            succeeded = true;
                         }
                     }
                 }
-                failed_count += 1;
-            } else if let Some(path) = item.path {
+            } else if let Some(path) = &item.path {
                 #[cfg(not(target_arch = "wasm32"))]
-                if let Ok(file_bytes) = std::fs::read(&path) {
+                if let Ok(file_bytes) = std::fs::read(path) {
                     let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
                     if let Ok(temp_id) = self.session.open(&name, Some(path.to_string_lossy().to_string()), std::sync::Arc::new(file_bytes), None) {
+                        if self.print_draft.handling == Handling::Label {
+                            self.print_draft.crop_pages = None;
+                            self.read_label_crops(temp_id);
+                        }
                         if let Some(doc) = self.session.get(temp_id) {
                             let labels: Vec<String> = doc.info.pages.iter().map(|p| p.label.clone()).collect();
                             if let Ok(settings) = self.print_draft.settings(doc.info.pages.len(), &labels)
@@ -418,15 +434,26 @@ impl PdfCraftApp {
                                     print::add_cups_orientation(&mut job.options, &sheets);
                                 }
                                 if self.send_to_printer(printer.clone(), bytes, job) {
-                                    printed_count += 1;
-                                    self.session.close(temp_id);
-                                    continue;
+                                    succeeded = true;
                                 }
                             }
                         }
                         self.session.close(temp_id);
                     }
                 }
+            }
+
+            if succeeded {
+                printed_count += 1;
+                if let Some(target) = self
+                    .batch_print
+                    .items
+                    .iter_mut()
+                    .find(|i| (item.doc_id.is_some() && i.doc_id == item.doc_id) || (item.path.is_some() && i.path == item.path))
+                {
+                    target.selected = false;
+                }
+            } else {
                 failed_count += 1;
             }
         }
@@ -438,7 +465,7 @@ impl PdfCraftApp {
             self.notify_fmt("{n} documents could not be printed", &[("n", &failed_count.to_string())]);
         }
 
-        printed_count > 0
+        failed_count == 0 && printed_count > 0
     }
 
     /// Label printing: find each printed page's printed area (a quick low-resolution render, as

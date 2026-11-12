@@ -2222,6 +2222,9 @@ fn finish_close(app: &mut PdfCraftApp, dialog: Dialog, modal_closed: bool, req: 
         if dialog == Dialog::AttachmentDescription {
             app.attachment_description_draft = None;
         }
+        if dialog == Dialog::BatchPrint {
+            app.batch_print.clear();
+        }
         app.discard_properties();
         app.bulk_field_props = None;
         app.unmarked_page = Default::default();
