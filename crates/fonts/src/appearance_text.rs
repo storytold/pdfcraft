@@ -110,8 +110,26 @@ pub struct LatinSource<'a> {
 /// What [`LatinSource::glyph`] answers for a character: its bytes in the font and advance (em).
 pub type LatinGlyph<'a> = dyn Fn(char) -> Option<(Vec<u8>, f64)> + 'a;
 
-/// What [`LatinSource::word`] answers for a shaped word: its bytes in the font and advance (em).
-pub type WordGlyphs<'a> = dyn Fn(&[ShapedCluster]) -> Option<(Vec<u8>, f64)> + 'a;
+/// What [`LatinSource::word`] answers for a shaped word.
+pub type WordGlyphs<'a> = dyn Fn(&[ShapedCluster]) -> Option<SourceWord> + 'a;
+
+/// A shaped word in a source font: the bytes that show its letters, in the order they are drawn,
+/// their advance (em), and the marks on them.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct SourceWord {
+    pub bytes: Vec<u8>,
+    pub advance: f64,
+    pub marks: Vec<SourceMark>,
+}
+
+/// A mark of a [`SourceWord`]: the bytes that show it, and where its origin goes from the word's
+/// start on the baseline (em). A font without layout tables has no rule for this, so the offset is
+/// one the page itself draws the mark at, on the same form of the same letter.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SourceMark {
+    pub bytes: Vec<u8>,
+    pub at: [f64; 2],
+}
 
 impl std::fmt::Debug for LatinSource<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -171,6 +189,8 @@ enum Piece {
         advance: f64,
         resource: String,
         look: Look,
+        /// Marks drawn over the run, each from the run's start (see [`SourceMark`]).
+        marks: Vec<SourceMark>,
     },
 }
 
@@ -191,11 +211,11 @@ fn push_latin(pieces: &mut Vec<Piece>, text: String, look: Look, sources: &[Lati
             pieces.push(Piece::Latin(std::mem::take(&mut standard), look));
         }
         match pieces.last_mut() {
-            Some(Piece::Source { bytes: shown, advance: total, look: last, .. }) if *last == look => {
+            Some(Piece::Source { bytes: shown, advance: total, look: last, marks, .. }) if *last == look && marks.is_empty() => {
                 shown.extend(bytes);
                 *total += advance;
             }
-            _ => pieces.push(Piece::Source { bytes, advance, resource: source.resource.clone(), look }),
+            _ => pieces.push(Piece::Source { bytes, advance, resource: source.resource.clone(), look, marks: Vec::new() }),
         }
     }
     if !standard.is_empty() {
@@ -215,14 +235,20 @@ fn push_shaped(pieces: &mut Vec<Piece>, clusters: Vec<ShapedCluster>, look: Look
     let space = |c: &ShapedCluster| c.text.chars().all(char::is_whitespace);
     let mut shaped: Vec<ShapedCluster> = Vec::new();
     for word in clusters.chunk_by(|a, b| space(a) == space(b)) {
-        let Some((bytes, advance)) = lookup(word).filter(|(bytes, advance)| !bytes.is_empty() && advance.is_finite() && *advance >= 0.0) else {
+        let usable = |word: &SourceWord| {
+            !word.bytes.is_empty()
+                && word.advance.is_finite()
+                && word.advance >= 0.0
+                && word.marks.iter().all(|mark| !mark.bytes.is_empty() && mark.at.iter().all(|v| v.is_finite()))
+        };
+        let Some(SourceWord { bytes, advance, marks }) = lookup(word).filter(usable) else {
             shaped.extend(word.iter().cloned());
             continue;
         };
         if !shaped.is_empty() {
             pieces.push(Piece::Shaped(std::mem::take(&mut shaped), look));
         }
-        pieces.push(Piece::Source { bytes, advance, resource: source.resource.clone(), look });
+        pieces.push(Piece::Source { bytes, advance, resource: source.resource.clone(), look, marks });
     }
     if !shaped.is_empty() {
         pieces.push(Piece::Shaped(shaped, look));
@@ -811,11 +837,15 @@ pub fn draw_positioned(lines: &[Line], size: f64, positions: &[[f64; 2]], color:
                     out.extend_from_slice(b" Tj\n");
                     pen += look.latin.text_width(s, at);
                 }
-                Piece::Source { bytes, advance, resource, look } => {
+                Piece::Source { bytes, advance, resource, look, marks } => {
                     fill(&mut out, look.color);
                     let at = size * look.scale;
-                    let hex: String = bytes.iter().map(|b| format!("{b:02X}")).collect();
-                    out.extend(format!("/{resource} {} Tf 1 0 0 1 {} {} Tm <{hex}> Tj\n", n(at), n(pen), n(*y)).bytes());
+                    let hex = |bytes: &[u8]| bytes.iter().map(|b| format!("{b:02X}")).collect::<String>();
+                    out.extend(format!("/{resource} {} Tf 1 0 0 1 {} {} Tm <{}> Tj\n", n(at), n(pen), n(*y), hex(bytes)).bytes());
+                    for mark in marks {
+                        let [dx, dy] = mark.at;
+                        out.extend(format!("1 0 0 1 {} {} Tm <{}> Tj\n", n(pen + dx * at), n(*y + dy * at), hex(&mark.bytes)).bytes());
+                    }
                     pen += advance * at;
                 }
                 Piece::Shaped(cs, look) => {

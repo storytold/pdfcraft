@@ -8735,6 +8735,86 @@ fn arabic_words_whose_letter_forms_the_page_draws_keep_the_pages_font() {
     assert_eq!(text::text_blocks(&doc, 0).unwrap()[0].editor_text, "لم مسلم.");
 }
 
+/// [`arabic_forms_page`] with a damma on the first word's seen, drawn as Word draws it: in a show
+/// of its own before its letter, 0.6 pt right of the letter's start and 0.48 pt below the
+/// baseline (`F`, a glyph that advances nothing). The row reads «سُلم مسلم.».
+fn arabic_marks_forms_page() -> Document {
+    let cmap = "/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapType 2 def \
+         1 begincodespacerange <00> <FF> endcodespacerange 8 beginbfchar \
+         <20> <0020> <2E> <002E> <41> <0633> <42> <0644> <43> <0645> <44> <0645> <45> <0633> <46> <064F> \
+         endbfchar endcmap CMapName currentdict /CMap defineresource pop end end";
+    let widths: Vec<_> = (32..=70)
+        .map(|c| match c {
+            32 => "250",
+            70 => "0",
+            _ => "500",
+        })
+        .collect();
+    build(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
+        // «.مسلم» from 300, a space, then «لم» of the first word from 333, the damma, and its seen at 345.
+        &stream("", "BT /F1 12 Tf 1 0 0 1 300 700 Tm (.CBED CB) Tj 45.6 -0.48 Td (F) Tj -0.6 0.48 Td (A) Tj ET"),
+        &format!(
+            "<< /Type /Font /Subtype /Type1 /BaseFont /FakeArabic /FirstChar 32 /LastChar 70 /Widths [{}] /ToUnicode 6 0 R >>",
+            widths.join(" ")
+        ),
+        &stream("", cmap),
+    ])
+}
+
+/// The marks of a subset font have no rule for where they go: Word wrote each one where the
+/// complete font put it, and the subset keeps only the glyph. So a word with harakat was drawn in
+/// the fallback face even when every letter kept the page's font, and a vowelled row came out in
+/// two faces. A mark is now drawn where the page itself draws that mark on that form of that
+/// letter; a mark on a form the page never draws it on still takes the fallback, with its word.
+#[test]
+fn arabic_marks_are_drawn_where_the_page_draws_them_on_the_same_letter_form() {
+    if pdfcraft_fonts::document_arabic_font().is_none() {
+        return;
+    }
+    let doc = arabic_marks_forms_page();
+    assert_eq!(text::text_blocks(&doc, 0).unwrap()[0].editor_text, "سُلم مسلم.");
+
+    // The marked word moved, and another word with the same letter form and mark («سُم»).
+    for draft in ["مسلم سُلم.", "سُم مسلم."] {
+        let mut doc = arabic_marks_forms_page();
+        let edit = text::replace_block(&mut doc, 0, 0, draft).unwrap();
+        assert_eq!(edit.substituted, None, "{draft}: nothing was substituted");
+        let doc = reopen(&doc);
+        let (content, ops) = joined_ops(&doc);
+        assert!(!content.contains("PCShaped"), "{draft} is drawn in the page's font: {content}");
+        // The damma is shown on its own, 0.6 pt right of and 0.48 pt below where its seen starts.
+        let shows: Vec<(f64, f64, Vec<u8>)> = ops
+            .windows(2)
+            .filter_map(|pair| match pair {
+                [tm, tj] if tm.op == b"Tm" && tj.op == b"Tj" => {
+                    Some((tm.operands.get(4)?.as_f64()?, tm.operands.get(5)?.as_f64()?, tj.operands.first()?.as_string()?.bytes.clone()))
+                }
+                _ => None,
+            })
+            .collect();
+        let mark = shows.iter().find(|(_, _, bytes)| bytes == b"F").unwrap_or_else(|| panic!("{draft}: the damma is shown: {content}"));
+        let word = shows.iter().find(|(_, _, bytes)| bytes.ends_with(b"A")).unwrap_or_else(|| panic!("{draft}: the word is shown: {content}"));
+        let seen = word.0 + 6.0 * (word.2.len() - 1) as f64;
+        assert!(
+            (mark.0 - seen - 0.6).abs() < 0.01 && (mark.1 - word.1 + 0.48).abs() < 0.01,
+            "{draft}: damma at {mark:?}, its seen at {seen}: {content}"
+        );
+        assert_eq!(text::text_blocks(&doc, 0).unwrap()[0].editor_text, draft);
+    }
+
+    // A damma on initial meem is something the page never draws: that word takes the fallback.
+    let mut doc = arabic_marks_forms_page();
+    let edit = text::replace_block(&mut doc, 0, 0, "مُسلم سُلم.").unwrap();
+    assert!(edit.substituted.is_some(), "the fallback is reported");
+    let doc = reopen(&doc);
+    let (content, _) = joined_ops(&doc);
+    assert!(content.contains("PCShaped") && content.contains("<46> Tj"), "one word in the fallback, the other with its own damma: {content}");
+    assert_eq!(text::text_blocks(&doc, 0).unwrap()[0].editor_text, "مُسلم سُلم.");
+}
+
 fn mixed_region_page() -> Document {
     let mut doc = text_page(
         "BT /F2 1 Tf 18 0 0 18 123 700 Tm (TITLE) Tj ET \
