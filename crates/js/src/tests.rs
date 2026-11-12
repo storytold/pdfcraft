@@ -541,6 +541,7 @@ fn app_alert_titles_are_clipped_and_charged() {
         kept: 0,
         retained: 0,
         dropped: 0,
+        layers_changed: Default::default(),
     };
     h.alert(Message { title: Some("Order form".into()), ..Message::plain("Saved") });
     assert_eq!(h.kept, "Saved".len() + "Order form".len());
@@ -2747,6 +2748,29 @@ fn af_simple_calculate_bounds_selector_work_before_expansion() {
     let out =
         run("AFSimple_Calculate('SUM',new Array(4096).fill('n'));", &Event::doc("Console"), &Default::default(), &fields, &[], Default::default());
     assert!(out.error.as_deref().is_some_and(|e| e.contains("calculation field lookup exceeds")));
+}
+
+/// `getOCGs` lists the document's layers; setting `state` turns one, which the run reports, and
+/// a document without layers gives `null` (#169, from #4751).
+#[test]
+fn get_ocgs_lists_layers_and_reports_the_ones_a_script_turns() {
+    let layers =
+        vec![crate::Layer { name: "Frame 1".into(), on: true, initial: true }, crate::Layer { name: "Frame 2".into(), on: false, initial: false }];
+    let layered = DocInfo { layers, ..doc() };
+    let out = run(
+        "var o = this.getOCGs(); var before = o.map(function (l) { return l.name + '=' + l.state + '/' + l.initState; }).join(','); \
+         o[0].state = false; o[1].state = true; before + ' ' + o[1].state;",
+        &Event::doc("Console"),
+        &layered,
+        &[],
+        &[],
+        Default::default(),
+    );
+    assert_eq!(out.error, None);
+    assert_eq!(out.result.as_deref(), Some("Frame 1=true/true,Frame 2=false/false true"));
+    assert_eq!(out.layers, [(0, false), (1, true)]);
+    let none = run("this.getOCGs() === null;", &Event::doc("Console"), &doc(), &[], &[], Default::default());
+    assert_eq!(none.result.as_deref(), Some("true"));
 }
 
 /// `toSource` writes plain state as a JavaScript literal of the same value (#269, from #344).

@@ -108,7 +108,7 @@ impl OutlineFont {
         }
     }
 
-    /// PdfCraft patch (105): the recovery rules' reading of a code drawn as glyph `gid` (see
+    /// PdfCraft patch (107): the recovery rules' reading of a code drawn as glyph `gid` (see
     /// `font::recovery`), given its strict text when that is more than control characters.
     pub(crate) fn recovery(
         &self,
@@ -123,7 +123,7 @@ impl OutlineFont {
         }
     }
 
-    /// PdfCraft patch (105): the font's style for text the recovery rules read, worked out on
+    /// PdfCraft patch (107): the font's style for text the recovery rules read, worked out on
     /// first use and shared by every glyph of the font.
     pub(crate) fn recovery_style(&self) -> crate::font::RecoveredFontStyle {
         let info = match self {

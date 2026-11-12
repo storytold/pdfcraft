@@ -187,6 +187,8 @@ pub struct DocInfo {
     pub xfa: bool,
     pub zoom: f64,
     pub runtime_highlight: bool,
+    /// The document's layers (optional content groups), for `getOCGs`, in the viewer's order.
+    pub layers: Vec<crate::Layer>,
 }
 
 /// The icon a script's message shows: `app.alert`'s `nIcon` and `xfa.host.messageBox`'s
@@ -388,6 +390,12 @@ pub struct Outcome {
     pub doc_errors: Vec<String>,
     /// The script's completion value (what the console prints), unless undefined.
     pub result: Option<String>,
+    /// The timers of a document's retained realm as they stand after the run, in the order they
+    /// were set (`app.setInterval`, `app.setTimeOut`); none from a one-off run.
+    pub timers: Vec<crate::Timer>,
+    /// Layers the script turned on or off (`ocg.state`), as they are now: their places in
+    /// [`DocInfo::layers`], and whether each is on.
+    pub layers: Vec<(usize, bool)>,
 }
 
 /// Bounds that keep a script from hanging the viewer.

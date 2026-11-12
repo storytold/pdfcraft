@@ -1,4 +1,4 @@
-//! PdfCraft patch (105): the standard glyph orders and encodings the recovery rules read, in one
+//! PdfCraft patch (107): the standard glyph orders and encodings the recovery rules read, in one
 //! place, each read through the Adobe Glyph List ([`glyph_name_to_unicode`]) and the candidate
 //! policy ([`super::candidate`]):
 //!

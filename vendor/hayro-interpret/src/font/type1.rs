@@ -24,7 +24,7 @@ pub(crate) struct Type1Font(
     /// PdfCraft patch: whether the font's numbered glyph names all name their own codes
     /// (`numbered_names_name_their_codes`), worked out on first use.
     OnceLock<bool>,
-    /// PdfCraft patch (105): what the recovery rules need, and their decisions.
+    /// PdfCraft patch (107): what the recovery rules need, and their decisions.
     FontRecovery,
 );
 
@@ -182,12 +182,12 @@ impl Type1Font {
         })
     }
 
-    /// PdfCraft patch (105): what the font keeps for the recovery rules.
+    /// PdfCraft patch (107): what the font keeps for the recovery rules.
     pub(crate) fn recovery_info(&self) -> &FontRecovery {
         &self.4
     }
 
-    /// PdfCraft patch (105): the recovery rules' reading of a code (see `font::recovery`),
+    /// PdfCraft patch (107): the recovery rules' reading of a code (see `font::recovery`),
     /// given its strict text when that is more than control characters.
     pub(crate) fn recovery(
         &self,
