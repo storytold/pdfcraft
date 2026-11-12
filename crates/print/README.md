@@ -89,7 +89,9 @@ monochrome output, with the stock in the user's settings at most 4.5 in on its s
 as a Zebra ZDesigner queue) is printed through `src/label.rs` instead: each sheet is rendered at
 the printer's resolution, made black and white, and sent pixel for pixel through GDI with the
 user's own Printing Preferences, so QR codes and seals come out without dither and the label's
-stock, cutter, shift and darkness are the user's, as in Acrobat.
+stock, cutter, shift and darkness are the user's, as in Acrobat. Edges are thresholded and flat
+grey areas (fills, logos) get a fixed dot pattern. A print whose sheets aren't the stock in the
+user's settings is refused before anything is sent, since its pictures would be cut off.
 
 On Windows, **Printer default** reads the selected driver's current `DEVMODEW` duplex
 setting immediately before submission and carries that binding explicitly into the job
