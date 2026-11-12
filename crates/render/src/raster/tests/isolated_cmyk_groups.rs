@@ -280,3 +280,48 @@ fn the_color_blend_mode_over_an_empty_cmyk_group_keeps_every_k_level() {
     }
     assert!(wrong.is_empty(), "K levels drawn wrong (level, plain, blended): {wrong:?}");
 }
+
+/// A group larger than the renderer blends in CMYK at once (hayro patch (27): 2^24 device
+/// pixels) used to be blended in RGB instead: a page enlarged to 11 x 17 in for Print as image
+/// at 600 dpi drew the X's of a print test file's CMYK blend patches. It is now blended in bands
+/// of whole rows. Here the band is lowered to a few rows, so the group is blended in many
+/// bands, across the anti-aliased edge of a triangle as well: the result is the same as in one
+/// piece, and still CMYK's (magenta under black with Difference is green).
+#[test]
+fn a_cmyk_group_blended_in_bands_is_the_group_blended_whole() {
+    let group = "0 1 0 0 k 0 0 m 200 0 l 0 200 l f /Diff gs 0 0 0 1 k 0 0 200 200 re f";
+    let pdf = format!(
+        "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 220 220] /Contents 4 0 R /Resources << /XObject << /X0 5 0 R >> >> >> endobj
+4 0 obj << /Length 28 >> stream
+q 1 0 0 1 10 10 cm /X0 Do Q
+endstream endobj
+5 0 obj << /Type /XObject /Subtype /Form /BBox [0 0 200 200] /Group << /S /Transparency /CS /DeviceCMYK /I true >> /Resources << /ExtGState << /Diff << /BM /Difference >> >> >> /Length {} >> stream
+{group}
+endstream endobj
+trailer << /Root 1 0 R >>
+%%EOF",
+        group.len()
+    );
+    let mut r = PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default());
+    let request = RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 2.0, tag: 0, ..Default::default() };
+    let whole = r.render(request);
+    // 400 device pixels a row: bands of 7 rows, the last one shorter.
+    hayro::set_cmyk_band_pixels(Some(2_800));
+    let banded = r.render(request);
+    hayro::set_cmyk_band_pixels(None);
+    assert!(whole.error.is_none() && banded.error.is_none(), "{:?} {:?}", whole.error, banded.error);
+    assert_eq!((whole.width, whole.height), (banded.width, banded.height));
+    let worst = whole.rgba.iter().zip(banded.rgba.iter()).map(|(a, b)| a.abs_diff(*b)).max().unwrap_or(0);
+    assert!(worst <= 1, "bands differ from the whole group by up to {worst}");
+    // Inside the triangle (device (100, 340), the group's point (40, 40)): magenta under black.
+    let at = |p: &RenderedPage, x: u32, y: u32| p.rgba[((y * p.width + x) * 4) as usize..][..3].to_vec();
+    for page in [&whole, &banded] {
+        let rgb = at(page, 100, 340);
+        // CMYK's 1 0 1 0 through the CMYK profile is (0, 166, 81); blended in RGB it would be
+        // magenta, red and blue high and green low.
+        assert!(rgb[1] > 120 && rgb[0] < 60 && rgb[2] < 120, "blended in CMYK, green: {rgb:?}");
+    }
+}
