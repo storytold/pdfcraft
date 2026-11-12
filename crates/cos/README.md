@@ -76,8 +76,8 @@ another. Edits never touch the original bytes.
   revision R2–R6 (RC4, AES-128/256), crypt filters, `/EFF` embedded-file encryption, and
   `/EncryptMetadata`. `security.rs` knows what the spec exempts — the `/Encrypt` dictionary, xref
   streams and the strings of their dictionaries, the trailer `/ID`, objects inside an object stream
-  (the stream is encrypted whole), and under `/EncryptMetadata false` (`/V` 4 and 5) the catalog's
-  `/Metadata` stream only. An `/Encrypt` that refers to nothing reads as no encryption; one that is
+  (the stream is encrypted whole), the data of a stream kept in an external file (`/F`), and under
+  `/EncryptMetadata false` (`/V` 4 and 5) the catalog's `/Metadata` stream only. An `/Encrypt` that refers to nothing reads as no encryption; one that is
   there but can't be read is kept, and the document is not saved (`Document::encryption_unreadable`).
 
 ## Writing
