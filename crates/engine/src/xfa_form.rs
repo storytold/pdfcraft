@@ -432,6 +432,7 @@ fn edit_is_xfa_data_only(edit: &Edit, prev: &pdfcraft_cos::Document, next: &pdfc
         }
         Edit::ImportData { bytes, .. } => {
             !bytes[..bytes.len().min(1024)].windows(5).any(|w| w == b"%PDF-")
+                && acroform_field_properties_unchanged(prev, next)
                 && (matches!(decode_data_file(bytes), Some(Ok(t)) if is_xfa_data_file(&t) && xfa_errors.is_empty())
                     || pdfcraft_xfdf::export_xfdf(prev, true, false, "") == pdfcraft_xfdf::export_xfdf(next, true, false, ""))
         }
