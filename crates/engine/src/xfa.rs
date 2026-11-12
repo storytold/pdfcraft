@@ -996,20 +996,17 @@ impl<'a, 'b> Runner<'a, 'b> {
                 r
             }
         };
-        // a JavaScript event may call the script objects of its subform, which are defined in front of it
-        let prelude = if ev.formcalc {
-            String::new()
+        // a JavaScript event may call the script objects of its subform and those above it by name
+        let objects = if ev.formcalc {
+            Vec::new()
         } else {
-            match pdfcraft_xfa::script_objects_for(self.tpl, &ev.som, &ev.script) {
-                Ok(prelude) => prelude,
-                Err(why) => {
-                    self.error(format!("{} ({}): {why}", ev.som, ev.activity));
-                    return Ok(None);
-                }
-            }
+            pdfcraft_xfa::script_objects_for(self.tpl, &ev.som)
+                .into_iter()
+                .map(|o| pdfcraft_js::xfa::ScriptObjectCode { name: o.name, som: o.som, text: o.text })
+                .collect()
         };
         let script = Script {
-            prelude,
+            objects,
             source: ev.script.clone(),
             formcalc: ev.formcalc,
             event,

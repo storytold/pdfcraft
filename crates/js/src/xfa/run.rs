@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use super::globals::install;
-use super::host::{Shared, XHost};
+use super::host::{Shared, XHost, host};
 use super::model::{XfaDoc, XfaEvent, XfaNode, XfaOutcome, clip_result};
 use super::{Attribute, Context, JsResult, Limits, RefCell, Source, js_string, refuse, s, text};
 
@@ -136,15 +136,15 @@ pub(crate) fn run_here(
     limits: Limits,
     started: &dyn Fn(),
 ) -> XfaOutcome {
-    run_here_with(script, "", event, doc, root, reuse, limits, started)
+    run_here_with(script, Vec::new(), event, doc, root, reuse, limits, started)
 }
 
-/// [`run_here`] with `prelude`, the form's script objects, defined first. They are part of the form, so they are not held
-/// to the size a script may have (their own bound is the caller's), only to its nesting.
+/// [`run_here`] with the script objects the script can reach, each compiled when the script first uses it. They are part of
+/// the form, so they are not held to the size a script may have, only to their own bounds and nesting.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn run_here_with(
     script: &str,
-    prelude: &str,
+    objects: Vec<super::objects::ScriptObjectCode>,
     event: &XfaEvent,
     doc: &XfaDoc,
     root: Arc<XfaNode>,
@@ -159,20 +159,17 @@ pub(crate) fn run_here_with(
     };
     ctx.runtime_limits_mut().set_loop_iteration_limit(limits.loop_iterations);
     ctx.runtime_limits_mut().set_recursion_limit(limits.recursion);
-    let host_state = XHost::new(root, reuse, &event.target, doc);
+    let mut host_state = XHost::new(root, reuse, &event.target, doc);
+    host_state.objects = objects;
     let current = host_state.current;
     ctx.insert_data(RefCell::new(host_state));
     let mut out = XfaOutcome::default();
     let result = (|| -> JsResult<()> {
         install(&mut ctx, event, doc, current)?;
+        let objects = host(&ctx)?.borrow().objects.clone();
+        super::objects::define(&mut ctx, &objects)?;
         // Ready for the script: its time starts now, the set-up above not charged to it.
         started();
-        if !prelude.is_empty() {
-            if let Some(why) = crate::run::refuse_nesting(prelude) {
-                return Err(boa_engine::JsNativeError::range().with_message(why).into());
-            }
-            ctx.eval(Source::from_bytes(prelude.as_bytes()))?;
-        }
         ctx.register_global_property(js_string!("__xfa_src"), s(script), Attribute::CONFIGURABLE)?;
         // Direct eval inside a function called on the node: `this` is the node and the
         // completion value is the script's last expression (what a calculate script yields).

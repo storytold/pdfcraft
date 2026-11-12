@@ -288,7 +288,8 @@ fn node_get(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValu
                 None if props::NODE_PROPS.contains(&other) => props::prop_object(ctx, idx, &props::node_prop_path(other))?,
                 // Members not modelled yet take any read or write without complaint.
                 None if SINK_MEMBERS.contains(&other) => sink(ctx)?,
-                None => JsValue::undefined(),
+                // a script object the subform declares (`form1.calcs.sumFields()`, XFA 3.3 chapter 3)
+                None => super::objects::child_object(ctx, idx, other)?,
             }
         }
     })
@@ -409,8 +410,28 @@ pub(super) fn resolver(ctx: &mut Context, from: usize, many: bool) -> JsResult<J
         }
         match found.first() {
             Some(i) => node_object(ctx, *i),
-            None => Ok(JsValue::null()),
+            None => object_by_som(ctx, from, &expr),
         }
     }
     Ok(function(ctx, NativeFunction::from_copy_closure_with_captures(resolve, key)).into())
+}
+
+/// `resolveNode("form1.calcs")` or `resolveNode("calcs")` naming a script object rather than a node: the object, or `null`.
+fn object_by_som(ctx: &mut Context, from: usize, expr: &str) -> JsResult<JsValue> {
+    let (parent, name) = match expr.rsplit_once('.') {
+        Some((p, n)) => (Some(p), n),
+        None => (None, expr),
+    };
+    let name = name.split('[').next().unwrap_or(name);
+    let found = match parent {
+        Some(p) => {
+            let first = resolve_som(&host(ctx)?.borrow(), from, p).first().copied();
+            match first {
+                Some(i) => super::objects::child_object(ctx, i, name)?,
+                None => JsValue::undefined(),
+            }
+        }
+        None => super::objects::named_object(ctx, name)?,
+    };
+    Ok(if found.is_undefined() { JsValue::null() } else { found })
 }

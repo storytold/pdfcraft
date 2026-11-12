@@ -527,7 +527,8 @@ impl Default for Occur {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ScriptObject {
     pub name: String,
-    pub text: String,
+    /// Shared: every script that can reach the object is handed it.
+    pub text: std::sync::Arc<str>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -853,6 +854,8 @@ impl Rect {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct PageSet {
     pub areas: Vec<PageArea>,
+    /// `<variables><script name="…">` of the page set (and of page sets inside it): reached by the page masters' scripts.
+    pub script_objects: Vec<ScriptObject>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -869,6 +872,8 @@ pub struct PageArea {
     /// How many pages must use this master: a layout that ends with fewer adds pages for it.
     /// Zero without an `<occur>`.
     pub occur_min: usize,
+    /// `<variables><script name="…">` of the page area: reached by its own scripts.
+    pub script_objects: Vec<ScriptObject>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]

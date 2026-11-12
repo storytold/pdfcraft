@@ -62,9 +62,9 @@ pub(crate) fn refuse_nesting(source: &str) -> Option<String> {
         Some(rest) => {
             let end = rest.find(['\n', '\r', '\u{2028}', '\u{2029}']).map_or(source.len(), |i| i + 2);
             let blanked: String = source[..end].chars().map(|_| ' ').chain(source[end..].chars()).collect();
-            preflight::refuse_any_length(&blanked)
+            preflight::refuse(&blanked)
         }
-        None => preflight::refuse_any_length(source),
+        None => preflight::refuse(source),
     }
 }
 

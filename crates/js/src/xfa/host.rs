@@ -110,6 +110,10 @@ pub(crate) struct XHost {
     /// Bytes of edges and corners copied when a script reached sides a border doesn't list,
     /// against [`super::props::MAX_COPIED`].
     pub(super) copied: usize,
+    /// The script objects the script can reach ([`super::objects`]).
+    pub(crate) objects: Vec<super::objects::ScriptObjectCode>,
+    /// Bytes of script object code compiled for the script, against [`super::objects::MAX_LOADED_BYTES`].
+    pub(crate) loaded_bytes: usize,
 }
 
 impl XHost {
@@ -153,6 +157,8 @@ impl XHost {
             prop_writes: super::props::PropWrites::new(),
             dropped_prop_writes: 0,
             copied: 0,
+            objects: Vec::new(),
+            loaded_bytes: 0,
         }
     }
 
