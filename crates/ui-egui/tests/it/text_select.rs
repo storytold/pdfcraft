@@ -105,6 +105,42 @@ fn quick_clicks_with_the_highlighter_mark_only_the_word() {
     assert!(app.views[0].selected_text().is_none());
 }
 
+/// Wait (a few frames at most, well inside the multi-click window) for the page a mark just
+/// re-rendered to have its text layer back.
+fn text_back(h: &mut Harness<'static, PdfCraftApp>) {
+    for _ in 0..8 {
+        if !h.state().render_pending() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        h.run_steps(1);
+    }
+}
+
+/// Review of #5017: with a markup tool, a third quick press after a double-click starts over
+/// from one click, so its drag selects and marks what it moves over, even though the
+/// double-click's mark has used up the selection.
+#[test]
+fn a_markup_drag_right_after_a_double_click_marks_what_it_drags_over() {
+    let (mut h, at) = harness(|app| assert!(app.execute("comment.underline")));
+    click(&mut h, at);
+    text_back(&mut h);
+    click(&mut h, at);
+    text_back(&mut h);
+    // A glyph inside "jumps over the dog", on the second line.
+    let below = h.state().views[0].glyph_screen_pos(0, 23).expect("glyph on screen");
+    press_and_move(&mut h, at, below);
+    h.event(Event::PointerButton { pos: below, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(3);
+    crate::support::wait_until(&mut h, "the dragged underline", |app| {
+        app.session.get(app.views[0].id).is_some_and(|d| d.info.annotations.len() == 2) && !app.render_pending()
+    });
+    let app = h.state();
+    let doc = app.session.get(app.views[0].id).unwrap();
+    let marks: Vec<(&str, usize)> = doc.info.annotations.iter().map(|a| (a.subtype.as_str(), a.quads.len())).collect();
+    assert_eq!(marks, [("Underline", 1), ("Underline", 2)], "the double-clicked word, then the two lines dragged over");
+}
+
 /// Press at `from`, move to `to` and release there.
 fn drag(h: &mut Harness<'static, PdfCraftApp>, from: Pos2, to: Pos2) {
     h.event(Event::PointerButton { pos: from, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
@@ -943,6 +979,23 @@ fn a_highlight_across_pages_selects_its_last_part_and_opens_its_note() {
     let on_page_2 = doc.info.annotations.iter().find(|a| a.page == 1 && a.subtype == "Highlight").map(|a| a.index).expect("a highlight on page 2");
     assert_eq!(app.views[0].comments.selected, Some((1, on_page_2)), "the part where the selection ends is selected");
     assert!(app.views[0].comments.editing.as_ref().is_some_and(|(p, i, _)| (*p, *i) == (1, on_page_2)), "its note is open");
+}
+
+/// Review of #5017: dragged back up, from page 2 to page 1, the selection ends on page 1: the
+/// highlight's part there is the one selected, with its note open.
+#[test]
+fn a_highlight_dragged_back_across_pages_selects_its_part_where_the_drag_ended() {
+    let mut h = three_pages();
+    let (from, to) = (glyph_on(&h, 0, 7), glyph_on(&h, 1, 10));
+    drag(&mut h, to, from);
+    h.run_steps(3);
+    assert!(h.state_mut().execute("comment.highlight"));
+    h.run_steps(3);
+    let app = h.state();
+    let doc = app.session.get(app.views[0].id).unwrap();
+    let on_page_1 = doc.info.annotations.iter().find(|a| a.page == 0 && a.subtype == "Highlight").map(|a| a.index).expect("a highlight on page 1");
+    assert_eq!(app.views[0].comments.selected, Some((0, on_page_1)), "the part where the drag ended is selected");
+    assert!(app.views[0].comments.editing.as_ref().is_some_and(|(p, i, _)| (*p, *i) == (0, on_page_1)), "its note is open");
 }
 
 /// Review of #5017: only markup on a text selection across pages is followed up as one markup.

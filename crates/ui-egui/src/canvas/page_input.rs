@@ -697,7 +697,8 @@ pub(super) fn text_layer(ui: &mut egui::Ui, view: &mut DocView, frame: &mut Page
             // this page's, so it starts the selection here, for the next page to extend. A press
             // something on the page keeps (a link, a comment) selects nothing.
             let column = tool == QuickTool::ColumnSelect || ui.input(|input| input.modifiers.alt);
-            start_selection_drag(view, i, &text, column, xf.screen_to_view(origin), xf.screen_to_view(p));
+            let clicks = selection_click_count(view.clicks, tool);
+            start_selection_drag(view, i, &text, clicks, column, xf.screen_to_view(origin), xf.screen_to_view(p));
         }
     }
 }
@@ -810,7 +811,8 @@ fn update_selection_on_press(ui: &egui::Ui, view: &mut DocView, text: &PageText,
     }
     if gesture.ptr.drag_started && press_here && gesture.text_drag {
         let origin = gesture.xf.screen_to_view(gesture.ptr.origin.unwrap_or(gesture.pointer));
-        start_selection_drag(view, gesture.page, text, gesture.column, origin, (gesture.vx, gesture.vy));
+        let clicks = selection_click_count(view.clicks, gesture.tool);
+        start_selection_drag(view, gesture.page, text, clicks, gesture.column, origin, (gesture.vx, gesture.vy));
     }
 }
 

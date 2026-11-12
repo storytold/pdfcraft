@@ -247,7 +247,7 @@ pub(crate) fn page_input(cx: PageToolContext<'_>, tool: crate::QuickTool, over_t
             let r = Rect::from_two_pos(start, end).intersect(xf.rect);
             if r.width() >= 3.0 && r.height() >= 3.0 {
                 let (a, b) = (to_user(xf, info, page, r.min), to_user(xf, info, page, r.max));
-                view.pending_redaction = Some((tool, vec![(page, vec![rect_quad([a[0], a[1], b[0], b[1]])])]));
+                view.pending_redaction = Some((tool, vec![(page, vec![rect_quad([a[0], a[1], b[0], b[1]])])], page));
             }
         }
         return true;
@@ -276,9 +276,9 @@ pub(crate) fn after_text(resp: &egui::Response, page: usize, info: &DocInfo, vie
     }
     let finished = resp.drag_stopped_by(egui::PointerButton::Primary) || resp.double_clicked();
     match view.tool_marks(crate::QuickTool::Redact, finished, Some(page), true, info) {
-        crate::canvas::ToolMarks::Marks(marks) => {
+        crate::canvas::ToolMarks::Marks(marks, head) => {
             view.clear_selection();
-            view.pending_redaction = Some((crate::QuickTool::Redact, marks));
+            view.pending_redaction = Some((crate::QuickTool::Redact, marks, head));
         }
         crate::canvas::ToolMarks::Unreadable => view.redaction_refused = true,
         crate::canvas::ToolMarks::None => {}

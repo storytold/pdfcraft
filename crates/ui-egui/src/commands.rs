@@ -497,7 +497,7 @@ impl PdfCraftApp {
                 {
                     // Pages still to be read are marked when they are, by the tool now picked.
                     let tool_now = self.quick_tool;
-                    if let crate::canvas::ToolMarks::Marks(marks) = self.views[i].tool_marks(tool_now, true, None, false, &doc.info) {
+                    if let crate::canvas::ToolMarks::Marks(marks, head) = self.views[i].tool_marks(tool_now, true, None, false, &doc.info) {
                         let edits: Vec<Edit> = marks
                             .into_iter()
                             .map(|(page, quads)| {
@@ -507,7 +507,7 @@ impl PdfCraftApp {
                                 Edit::AddAnnotation(pdfcraft_engine::NewAnnotation { page, shape, style, contents: String::new(), author })
                             })
                             .collect();
-                        if let Some(edit) = self.views[i].selection_marks_edit(edits) {
+                        if let Some(edit) = self.views[i].selection_marks_edit(edits, head) {
                             self.views[i].clear_selection();
                             self.apply_edit(edit);
                         }
@@ -791,9 +791,9 @@ impl PdfCraftApp {
                     // Pages still to be read are marked when they are, by the Redact tool now
                     // picked; a page that could not be read refuses the whole selection.
                     match self.views[i].tool_marks(crate::QuickTool::Redact, true, None, true, &doc.info) {
-                        crate::canvas::ToolMarks::Marks(marks) => {
+                        crate::canvas::ToolMarks::Marks(marks, head) => {
                             let edits: Vec<Edit> = marks.into_iter().map(|(page, quads)| self.redact_prefs.mark(page, quads, &author)).collect();
-                            if let Some(edit) = self.views[i].selection_marks_edit(edits) {
+                            if let Some(edit) = self.views[i].selection_marks_edit(edits, head) {
                                 self.views[i].clear_selection();
                                 self.apply_edit(edit);
                             }

@@ -34,6 +34,15 @@ impl Selection {
         }
     }
 
+    /// The page the selection ends on, where its drag finished: a reading-order selection's head
+    /// page, a column selection's own page.
+    pub(super) fn head_page(&self) -> usize {
+        match self.span {
+            Span::Run { head_page, .. } => head_page,
+            Span::Column { .. } => self.page,
+        }
+    }
+
     /// Whether the selection runs over more than one page.
     pub(super) fn spans_pages(&self) -> bool {
         self.pages().start() != self.pages().end()
@@ -90,8 +99,9 @@ impl Selection {
 pub(crate) enum ToolMarks {
     /// Nothing to mark now (perhaps later, once the selection's pages are read).
     None,
-    /// (page, quads) for each page the selection covers: mark them all, in one undo step.
-    Marks(Vec<(usize, Vec<[f64; 8]>)>),
+    /// (page, quads) for each page the selection covers: mark them all, in one undo step. Then
+    /// the page the selection ends on, where the drag finished ([`DocView::selection_marks_edit`]).
+    Marks(Vec<(usize, Vec<[f64; 8]>)>, usize),
     /// The selection covers a page whose text could not be read: not marked, say why.
     Unreadable,
 }
@@ -120,13 +130,15 @@ impl TextSpan {
 
 /// A drag pressed on `page` starts a text selection there: from the glyph nearest `origin`, or
 /// a column rectangle from `origin` to `to` (page view space). After a multi-click the word or
-/// line the clicks selected stays, for the drag to extend by that unit.
-pub(super) fn start_selection_drag(view: &mut DocView, page: usize, text: &PageText, column: bool, origin: (f32, f32), to: (f32, f32)) {
+/// line the clicks selected stays, for the drag to extend by that unit. `clicks` is the press's
+/// effective click count (`selection_click_count`): past a double click, tools other than Select
+/// start over from one.
+pub(super) fn start_selection_drag(view: &mut DocView, page: usize, text: &PageText, clicks: u32, column: bool, origin: (f32, f32), to: (f32, f32)) {
     // A drag replaces the selection without passing through none, so a re-drag over text whose
     // bar Copy closed would keep the bar hidden.
     view.actions_dismissed = None;
     view.selection_drag = true;
-    if view.clicks < 2 {
+    if clicks < 2 {
         let (ox, oy) = origin;
         view.selection = if column {
             Some(Selection { page, span: Span::Column { rect: [ox, oy, to.0, to.1] } })
@@ -225,16 +237,17 @@ impl DocView {
             return ToolMarks::None;
         }
         self.marks_waiting = None;
-        ToolMarks::Marks(marks)
+        ToolMarks::Marks(marks, sel.head_page())
     }
 
     /// The edit adding what a tool marks on a text selection, one edit per page, as one undo
     /// step ([`one_undo_step`]). Across pages it is marked as such for `apply_edit`
-    /// ([`Self::marks_across_pages`]), which follows it up as one markup: other batches of
-    /// comments (Redact's page range or search) are not followed up.
-    pub(crate) fn selection_marks_edit(&mut self, edits: Vec<Edit>) -> Option<Edit> {
+    /// ([`Self::marks_across_pages`]), with `head`, the page the selection ends on, which it
+    /// follows up as one markup: other batches of comments (Redact's page range or search) are
+    /// not followed up.
+    pub(crate) fn selection_marks_edit(&mut self, edits: Vec<Edit>, head: usize) -> Option<Edit> {
         let edit = one_undo_step(edits);
-        self.marks_across_pages = matches!(edit, Some(Edit::Batch { .. }));
+        self.marks_across_pages = matches!(edit, Some(Edit::Batch { .. })).then_some(head);
         edit
     }
 
@@ -371,6 +384,22 @@ pub(crate) fn one_undo_step(mut edits: Vec<Edit>) -> Option<Edit> {
     Some(Edit::Batch { label, edits })
 }
 
+/// Where the selection bar goes: next to the selected text where the drag ended, which is on
+/// screen. Forward, the last rectangle on the head's page; backward across pages, the first one
+/// there. Otherwise (a column, or nothing selected on the head's page) the last rectangle on the
+/// last page with text selected.
+pub(super) fn bar_anchor(selection: &Selection, texts: &[(usize, &Arc<PageText>)]) -> Option<(usize, [f32; 4])> {
+    let at_head = selection.text_span().and_then(|span| {
+        let Span::Run { head_page, .. } = selection.span else { return None };
+        let backward = span.start.0 == head_page && span.start.0 != span.end.0;
+        let (_, text) = texts.iter().find(|(p, _)| *p == head_page)?;
+        let rects = selection.rects_on(head_page, text);
+        let rect = if backward { rects.first() } else { rects.last() };
+        rect.map(|r| (head_page, *r))
+    });
+    at_head.or_else(|| texts.iter().rev().find_map(|(p, t)| selection.rects_on(*p, t).last().map(|r| (*p, *r))))
+}
+
 /// Actions on an existing text selection, next to the selected words.
 pub(super) fn selection_actions(
     ui: &mut egui::Ui,
@@ -394,9 +423,8 @@ pub(super) fn selection_actions(
     if view.selected_text().is_none() {
         return false;
     }
-    // Next to where the selection ends: the last rectangle on its last page with text selected.
     let Some(texts) = view.selection_texts() else { return false };
-    let Some((page, last)) = texts.iter().rev().find_map(|(p, t)| selection.rects_on(*p, t).last().map(|r| (*p, *r))) else { return false };
+    let Some((page, last)) = bar_anchor(&selection, &texts) else { return false };
     let Some(xf) = view.page_xform(page) else { return false };
     // A comment or a replacement sits on one page: across pages, only markup and Copy.
     let across_pages = selection.spans_pages();
@@ -470,7 +498,7 @@ pub(super) fn selection_actions(
                     author: prefs.author.clone(),
                 })
             });
-            view.pending_edit = view.selection_marks_edit(edits.collect());
+            view.pending_edit = view.selection_marks_edit(edits.collect(), selection.head_page());
         }
         // Copy is dispatched through the app after the view borrow ends.
         SelectionAction::Copy => {}

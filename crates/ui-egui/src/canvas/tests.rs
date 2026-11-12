@@ -1314,6 +1314,37 @@ fn line_text(s: &str) -> PageText {
     }
 }
 
+/// Two lines of two glyphs: "ab" at the top, "cd" below it.
+fn two_line_text() -> PageText {
+    let glyph =
+        |c: char, y: f32| pdfcraft_render::TextGlyph { text: c.into(), rect: [0.0, y, 10.0, y + 10.0], quad: [[0.0, 0.0]; 4], direction: [1.0, 0.0] };
+    PageText {
+        glyphs: vec![glyph('a', 0.0), glyph('b', 0.0), glyph('c', 20.0), glyph('d', 20.0)],
+        line_of: vec![0, 0, 1, 1],
+        space_before: vec![false; 4],
+        truncated: false,
+    }
+}
+
+/// Review of #5017: the selection bar goes where the drag ended, which is on screen: dragged
+/// back from page 3 to page 1, at the start of what page 1 has selected, not at the end of page
+/// 3 (perhaps scrolled away).
+#[test]
+fn the_selection_bar_sits_where_the_drag_ended() {
+    let text = Arc::new(two_line_text());
+    let texts: Vec<(usize, &Arc<PageText>)> = (1..=3).map(|p| (p, &text)).collect();
+    let anchor = |s: Selection| super::selection::bar_anchor(&s, &texts).map(|(page, r)| (page, r[1]));
+    // Backward: page 1, its top line (the first rectangle there).
+    let back = Selection { page: 3, span: Span::Run { anchor: 1, head: 0, head_page: 1 } };
+    assert_eq!(anchor(back), Some((1, 0.0)));
+    // Forward: page 3, the last line selected there.
+    let forward = Selection { page: 1, span: Span::Run { anchor: 0, head: 3, head_page: 3 } };
+    assert_eq!(anchor(forward), Some((3, 20.0)));
+    // On one page, as before: the end of the selection, whichever way it was dragged.
+    assert_eq!(anchor(Selection::run(2, 3, 0)), Some((2, 20.0)));
+    assert_eq!(anchor(Selection::run(2, 0, 3)), Some((2, 20.0)));
+}
+
 #[test]
 fn a_selection_across_pages_takes_the_rest_of_the_first_and_the_start_of_the_last() {
     let s = Selection { page: 1, span: Span::Run { anchor: 2, head: 1, head_page: 3 } };
@@ -3376,7 +3407,7 @@ fn redaction_refuses_a_selection_over_an_unreadable_page() {
     assert!(v.selection_has_unreadable_page());
     assert_eq!(v.tool_marks(QuickTool::Redact, true, None, true, &info), ToolMarks::Unreadable);
     let pages = |m: ToolMarks| match m {
-        ToolMarks::Marks(m) => m.into_iter().map(|(p, _)| p).collect::<Vec<_>>(),
+        ToolMarks::Marks(m, _) => m.into_iter().map(|(p, _)| p).collect::<Vec<_>>(),
         other => panic!("marks expected, got {other:?}"),
     };
     let highlight = QuickTool::Comment(comments::CommentTool::Highlight);
@@ -3410,9 +3441,9 @@ fn a_marking_tool_waits_for_the_selections_pages() {
     w.texts = v.texts.clone();
     w.selection = Some(sel);
     assert_eq!(w.tool_marks(tool, true, Some(3), false, &info), ToolMarks::None);
-    assert!(matches!(w.tool_marks(tool, false, Some(2), false, &info), ToolMarks::Marks(ref m) if m.len() == 3));
+    assert!(matches!(w.tool_marks(tool, false, Some(2), false, &info), ToolMarks::Marks(ref m, _) if m.len() == 3));
     assert_eq!(w.tool_marks(tool, false, Some(2), false, &info), ToolMarks::None, "marked once");
-    assert!(matches!(v.tool_marks(tool, false, Some(1), false, &info), ToolMarks::Marks(ref m) if m.len() == 3));
+    assert!(matches!(v.tool_marks(tool, false, Some(1), false, &info), ToolMarks::Marks(ref m, _) if m.len() == 3));
     // Another tool, or another selection, does not inherit the wait.
     v.texts.remove(&1);
     assert_eq!(v.tool_marks(tool, true, Some(0), false, &info), ToolMarks::None);

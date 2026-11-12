@@ -77,7 +77,10 @@ impl PdfCraftApp {
         if objects {
             self.copy_objects(i, ctx, cut);
         }
-        let text_selected = copy && self.views.get(i).and_then(|v| v.selected_text()).is_some_and(|t| !t.is_empty());
+        // A selection across pages still being read has no text yet, but is selected all the
+        // same: ⌘C starts its copy rather than copying the selected comments.
+        let text_selected =
+            copy && self.views.get(i).is_some_and(|v| v.selection_waits_for_text().is_some() || v.selected_text().is_some_and(|t| !t.is_empty()));
         if copy
             && !objects
             && (text_selected || !self.copy_selected_comments(i))
@@ -614,5 +617,28 @@ mod review_tests {
         ctx.run_ui(egui::RawInput { events: vec![egui::Event::Cut], ..Default::default() }, |ui| app.clipboard_keys(0, ui.ctx()))
             .drop_without_applying_deltas();
         assert!(app.views[0].image_selection.is_some());
+    }
+
+    /// Review of #5017: ⌘C on a text selection still waiting for its pages' text starts its copy,
+    /// even with a comment selected too, rather than copying the comment.
+    #[test]
+    fn a_selection_waiting_for_its_text_takes_copy_over_a_selected_comment() {
+        let mut app = PdfCraftApp::new();
+        app.system_clipboard = false;
+        app.create_blank();
+        let shape = pdfcraft_engine::Shape::Rectangle { rect: [10.0, 10.0, 50.0, 50.0] };
+        let style = pdfcraft_engine::Style::default_for(&shape);
+        let note = pdfcraft_engine::NewAnnotation { page: 0, shape, style, contents: String::new(), author: String::new() };
+        assert!(app.apply_edit(pdfcraft_engine::Edit::AddAnnotation(note)));
+        app.views[0].comments.select_only((0, 0));
+        // The page's text is not read yet: the selection waits for it.
+        app.views[0].texts.clear();
+        app.views[0].select_text(0, 0, 0);
+        assert!(app.views[0].selection_waits_for_text().is_some());
+        let ctx = egui::Context::default();
+        ctx.run_ui(egui::RawInput { events: vec![egui::Event::Copy], ..Default::default() }, |ui| app.clipboard_keys(0, ui.ctx()))
+            .drop_without_applying_deltas();
+        assert!(app.document_copy.is_some(), "the selection's copy started");
+        assert!(app.comment_clipboard.is_none(), "the comment was not copied");
     }
 }

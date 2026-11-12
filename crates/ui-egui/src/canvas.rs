@@ -712,7 +712,8 @@ pub struct DocView {
     pub redact_drag: crate::redact_ui::AreaDrag,
     /// With the tool that made them, read when they are styled: a key handled later in the same
     /// frame (Escape back to Select) must not turn an area highlight into a redaction.
-    pub pending_redaction: Option<(QuickTool, PageMarks)>,
+    /// The last field is the page the marks are followed up on (where a selection ended).
+    pub pending_redaction: Option<(QuickTool, PageMarks, usize)>,
     /// How many Apply redactions steps are in effect in this view. While it is above 0, Save
     /// proposes the name with `_Redacted` ([`pdfcraft_engine::redacted_file_name`]), and while it is
     /// above `redactions_downloaded`, Save asks where.
@@ -736,8 +737,9 @@ pub struct DocView {
     pub(crate) redaction_refused: bool,
     /// The next edit applied is markup on a text selection across pages, one comment per page in
     /// one batch ([`DocView::selection_marks_edit`]): `apply_edit` follows it up as one markup and
-    /// takes this back, whatever becomes of the edit.
-    pub(crate) marks_across_pages: bool,
+    /// takes this back, whatever becomes of the edit. It holds the page the selection ends on,
+    /// whose markup is followed up.
+    pub(crate) marks_across_pages: Option<usize>,
     /// A marking tool finished this text selection while a page it covers was still to be read
     /// (or none was drawn): it is marked once they are ([`DocView::tool_marks`]).
     marks_waiting: Option<(QuickTool, Selection)>,
@@ -1178,7 +1180,7 @@ impl DocView {
             saved_redactions_cut_off: false,
             redactions_downloaded: 0,
             redaction_refused: false,
-            marks_across_pages: false,
+            marks_across_pages: None,
             marks_waiting: None,
             crop_drag: None,
             camera: None,
@@ -3701,7 +3703,7 @@ fn apply_frame_requests(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui, 
     if std::mem::take(&mut app.views[index].redaction_refused) {
         app.notify_tr("Part of the selected text is on a page whose text could not be read, so nothing was marked for redaction. Mark that page with a box instead.");
     }
-    if let Some((made_by, marks)) = app.views[index].pending_redaction.take() {
+    if let Some((made_by, marks, head)) = app.views[index].pending_redaction.take() {
         let author = app.comment_prefs.author.clone();
         let edits: Vec<pdfcraft_engine::Edit> = marks
             .into_iter()
@@ -3721,7 +3723,7 @@ fn apply_frame_requests(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui, 
                 }
             })
             .collect();
-        let edit = app.views[index].selection_marks_edit(edits);
+        let edit = app.views[index].selection_marks_edit(edits, head);
         app.views[index].pending_edit = edit;
     }
     match image_action {
