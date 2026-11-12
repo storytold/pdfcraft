@@ -228,7 +228,7 @@ fn sign_inner(
     }
     // The field and its widget.
     let pages = pdfcraft_annot::page_refs(&doc).map_err(|e| SignError::Pdf(e.to_string()))?;
-    let all_fields = sig_fields(&doc);
+    let (all_fields, whole) = walk_sig_fields(&doc);
     // `turn`: how far the appearance is turned to read upright (`/MK /R`, counterclockwise).
     let widgets = match opts.field.as_deref() {
         Some(n) => {
@@ -246,6 +246,12 @@ fn sign_inner(
             let fr = f.r.ok_or_else(|| SignError::Pdf("the field is not an indirect object".into()))?;
             if f.widgets.is_empty() {
                 return Err(SignError::Pdf("the field has no widget".into()));
+            }
+            if !whole && f.dict.contains(b"Kids") {
+                return Err(SignError::Pdf(
+                    "this form has too many fields, or a field name too long, for PdfCraft to read them all, so it can't sign this signature field"
+                        .into(),
+                ));
             }
             let claimed_elsewhere: HashSet<u32> = all_fields
                 .iter()
@@ -861,6 +867,17 @@ mod tests {
         })?;
         let err = sign(&direct_kid_doc, &id, &opts).unwrap_err();
         assert_eq!(err.to_string(), "the field's widget is not an indirect object");
+
+        // If `walk_sig_fields` stops at `MAX_ENTRIES` before reading all of the field's `/Kids`,
+        // signing is rejected rather than leaving trailing widgets unsigned.
+        let mut capped_doc = doc.clone();
+        let mut capped_kids = vec![Object::Ref(widgets[0]); super::super::listing::MAX_ENTRIES];
+        capped_kids.push(Object::Ref(widgets[1]));
+        capped_doc.update_dict(field_ref, |d| {
+            d.set(b"Kids".to_vec(), Object::Array(capped_kids));
+        })?;
+        let err = sign(&capped_doc, &id, &opts).unwrap_err();
+        assert!(err.to_string().contains("too many fields"), "{err}");
         Ok(())
     }
 }
