@@ -327,8 +327,27 @@ impl Automation {
         let warnings = self.apply_with_warnings(id, pdfcraft_engine::Edit::ConvertPdfA { level })?;
         let after = self.pdfa_verify(a)?;
         let remaining = after["issues"].clone();
-        let fixed: Vec<Value> =
-            before.iter().filter(|i| i["fixable"] == true && !remaining.as_array().unwrap_or(&Vec::new()).contains(i)).cloned().collect();
+        let remaining: Vec<(String, Option<usize>)> = remaining
+            .as_array()
+            .unwrap_or(&Vec::new())
+            .iter()
+            .filter_map(|i| {
+                let clause = i.get("clause")?.as_str()?.to_owned();
+                let page = i.get("page").and_then(Value::as_u64).map(|p| p as usize);
+                Some((clause, page))
+            })
+            .collect();
+        let fixed: Vec<Value> = before
+            .iter()
+            .filter(|i| {
+                i["fixable"] == true
+                    && !remaining.contains(&(
+                        i.get("clause").and_then(Value::as_str).unwrap_or("").to_owned(),
+                        i.get("page").and_then(Value::as_u64).map(|p| p as usize),
+                    ))
+            })
+            .cloned()
+            .collect();
         let mut out = after;
         out["fixed"] = Value::Array(fixed);
         Ok(with_warnings(out, warnings))
@@ -434,6 +453,9 @@ impl Automation {
 
     fn compare_pages_arg(&self, a: &Args) -> Result<Vec<usize>> {
         let Some(raw) = a.opt_ints("pages")? else { return Ok(Vec::new()) };
+        if raw.is_empty() {
+            return Err(ToolError::InvalidArgs("pages must list at least one page".into()));
+        }
         let new = self.doc(a)?.id;
         let other = a.int("other")?;
         let max_pages = [new, u64::try_from(other).ok().and_then(|o| self.session.get(pdfcraft_engine::DocId(o))).map(|d| d.id).unwrap_or(new)]

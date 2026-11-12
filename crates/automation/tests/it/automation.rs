@@ -9937,6 +9937,16 @@ fn compare_pages_limits_text_comparison() {
 }
 
 #[test]
+fn doc_compare_mark_rejects_an_empty_pages_array() {
+    let dir = workdir("compare-mark-empty-pages");
+    let mut a = auto(&dir);
+    let v1 = ok(&mut a, "doc_create", json!({ "from": "text", "text": "Rent is 900 per month." }))["doc"].as_u64().unwrap();
+    let v2 = ok(&mut a, "doc_create", json!({ "from": "text", "text": "Rent is 950 per month." }))["doc"].as_u64().unwrap();
+    let refused = a.call("doc_compare_mark", &json!({ "doc": v2, "other": v1, "pages": [] }));
+    assert!(matches!(refused, Err(ToolError::InvalidArgs(_))), "{refused:?}");
+}
+
+#[test]
 fn actions_through_tools() {
     let dir = workdir("actions");
     let mut a = auto(&dir);
