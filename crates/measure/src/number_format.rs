@@ -17,8 +17,8 @@ pub const MAX_UNITS: usize = 8;
 const MAX_TEXT: usize = 24;
 /// Largest denominator of a fraction (`F /F`).
 const MAX_DENOMINATOR: i64 = 1 << 16;
-/// A remainder this close below a whole step counts as the step: `3.5 ft` stored as
-/// `3.4999999999 ft` still cuts to 6 in, not 5 in.
+/// A remainder this close below a whole step of the last unit, in steps, counts as the step:
+/// `3.5 ft` stored as `3.4999999999 ft` still cuts to 6 in, not 5 in.
 const NUDGE: f64 = 1e-6;
 
 /// How the part of the last unit below a whole one shows (`F`).
@@ -128,9 +128,15 @@ impl NumberFormat {
 /// for: compound units (feet and inches), fractions, or values cut off to whole units.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Formats {
+    /// `X`: changes along the x axis (and the y axis when there is no `Y`).
     pub x: Vec<NumberFormat>,
+    /// `Y`: changes along the y axis, in its own units, as read.
     pub y: Option<Vec<NumberFormat>>,
+    /// `CYX`: y-axis units in one x-axis unit, as read with `y` (1 without it).
+    pub cyx: f64,
+    /// `D`: distances.
     pub distance: Vec<NumberFormat>,
+    /// `A`: areas.
     pub area: Vec<NumberFormat>,
 }
 
@@ -142,6 +148,9 @@ impl Formats {
 
     /// Checks every array as [`crate::Scale::validate`] checks a scale's own fields.
     pub(crate) fn validate(&self) -> Result<(), &'static str> {
+        if !self.cyx.is_finite() || !(1e-12..=1e12).contains(&self.cyx) {
+            return Err("scale factors must be finite and between 1e-12 and 1e12");
+        }
         self.arrays().try_for_each(|a| validate(a))
     }
 
@@ -259,14 +268,17 @@ pub(crate) fn format(value: f64, formats: &[NumberFormat]) -> String {
     if !value.is_finite() {
         return String::new();
     }
+    let steps = last.steps();
     let mut wholes = Vec::with_capacity(formats.len());
     let mut rest = value.abs();
-    for next in formats.iter().skip(1) {
-        let whole = (rest + NUDGE).floor();
+    for (i, next) in formats.iter().enumerate().skip(1) {
+        // The nudge is a fraction of a step of the last unit, however many units lie between.
+        let per_step = formats.iter().skip(i).fold(steps, |p, f| p * f.factor);
+        let nudge = if per_step.is_finite() && per_step > 1.0 { NUDGE / per_step } else { NUDGE };
+        let whole = (rest + nudge).floor();
         wholes.push(whole);
         rest = ((rest - whole) * next.factor).max(0.0);
     }
-    let steps = last.steps();
     let mut count = if last.remainder == Remainder::Truncate { (rest * steps + NUDGE).floor() } else { (rest * steps).round() };
     carry(&mut count, steps, &mut wholes, formats);
     let mut out = String::new();
@@ -403,6 +415,12 @@ mod tests {
         assert_eq!(format(1.9, &odd), "1 a 2 b");
         // A whole unit stored a hair below itself is still whole, factor whole or not.
         assert_eq!(format(2.0 - 1e-10, &odd), "2 a 0 b");
+        // ... but a value a step of the last unit short of it is not, however small the step.
+        let metres = vec![unit("km", 1.0, Remainder::Decimal, 100), unit("m", 1000.0, Remainder::Decimal, 1000)];
+        assert_eq!(format(1.0 - 9e-7, &metres), "0 km 999.999 m");
+        let miles =
+            vec![unit("mi", 1.0, Remainder::Decimal, 100), unit("ft", 5280.0, Remainder::Decimal, 100), unit("in", 12.0, Remainder::Fraction, 64)];
+        assert_eq!(format(1.0 - 9e-7, &miles), "0 mi 5,279 ft 11 15/16 in");
         // A value stored a hair below a whole step still cuts to it.
         let cut = vec![unit("ft", 1.0, Remainder::Decimal, 100), unit("in", 12.0, Remainder::Truncate, 1)];
         assert_eq!(format(3.4999999999, &cut), "3 ft 6 in");
@@ -497,6 +515,7 @@ mod tests {
         let f = Formats {
             x: feet_inches(16),
             y: Some(feet_inches(16)),
+            cyx: 1.0,
             distance: feet_inches(16),
             area: vec![unit("ft²", 1.0, Remainder::Decimal, 100)],
         };
@@ -504,6 +523,8 @@ mod tests {
         let elements = 3 * 2 + 1;
         assert_eq!(f.held_bytes(), 3 * ((2 + 4) + (2 + 4)) + ("ft²".len() + 4) + elements * std::mem::size_of::<NumberFormat>());
         assert_eq!(f.validate(), Ok(()));
+        let bad = Formats { cyx: 0.0, ..f.clone() };
+        assert_eq!(bad.validate(), Err("scale factors must be finite and between 1e-12 and 1e12"));
         let bad = Formats { y: Some(Vec::new()), ..f };
         assert_eq!(bad.validate(), Err("number formats have 1 to 8 units"));
     }

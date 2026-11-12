@@ -69,6 +69,8 @@ pub struct Scale {
     pub distance_factor: f64,
     pub area_factor: f64,
     pub area_unit: String,
+    /// Decimal places of a distance. With [`Scale::formats`], those of the last distance unit
+    /// when it shows decimals (0 otherwise); the formats, not this, label the readings.
     pub precision: u8,
     pub ratio: String,
     /// The number format arrays of an imported scale whose units are compound (feet and inches)
@@ -184,9 +186,18 @@ impl Scale {
         d.set(b"R".to_vec(), PdfString::text(&self.ratio));
         if let Some(f) = &self.formats {
             d.set(b"X".to_vec(), imported(&f.x, &self.unit, self.x));
-            if self.x != self.y {
-                d.set(b"Y".to_vec(), imported(f.y.as_deref().unwrap_or(&f.x), &self.unit, self.y));
-                d.set(b"CYX".to_vec(), Object::Real(1.0));
+            match &f.y {
+                // Y keeps its own units, and the CYX that converts them to X's.
+                Some(ys) => {
+                    let unit = ys.first().map_or(self.unit.as_str(), |f| f.unit.as_str());
+                    d.set(b"Y".to_vec(), imported(ys, unit, self.y / f.cyx));
+                    d.set(b"CYX".to_vec(), Object::Real(f.cyx));
+                }
+                None if self.x != self.y => {
+                    d.set(b"Y".to_vec(), imported(&f.x, &self.unit, self.y));
+                    d.set(b"CYX".to_vec(), Object::Real(1.0));
+                }
+                None => {}
             }
             d.set(b"D".to_vec(), imported(&f.distance, &self.unit, self.distance_factor));
             d.set(b"A".to_vec(), imported(&f.area, &self.area_unit, self.area_factor));
@@ -220,12 +231,12 @@ impl Scale {
         let xs = format(b"X")?;
         let (unit, x) = first(&xs)?;
         let ys = if d.contains(b"Y") { Some(format(b"Y")?) } else { None };
-        let y = match &ys {
+        let (y, cyx) = match &ys {
             Some(ys) => {
-                first(ys)?.1
-                    * d.get(b"CYX").and_then(|o| doc.resolve(o).as_f64()).ok_or_else(|| invalid("Y scale requires CYX for lengths and areas"))?
+                let cyx = d.get(b"CYX").and_then(|o| doc.resolve(o).as_f64()).ok_or_else(|| invalid("Y scale requires CYX for lengths and areas"))?;
+                (first(ys)?.1 * cyx, cyx)
             }
-            None => x,
+            None => (x, 1.0),
         };
         let distances = format(b"D")?;
         let (distance_unit, distance_factor) = first(&distances)?;
@@ -244,7 +255,7 @@ impl Scale {
                     .and_then(|f| u8::try_from(f.denominator.max(1).ilog10()).ok())
             })
             .unwrap_or(0);
-        let formats = (!plain).then_some(Formats { x: xs, y: ys, distance: distances, area: areas });
+        let formats = (!plain).then_some(Formats { x: xs, y: ys, cyx, distance: distances, area: areas });
         let out = Self { x, y, unit, distance_factor, area_factor, area_unit, precision, ratio: text(doc, d, b"R"), formats };
         out.validate()?;
         Ok(out)

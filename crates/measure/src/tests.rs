@@ -679,3 +679,26 @@ fn compound_and_fractional_scales_read_label_and_carry_into_new_measurements() {
     // A plain decimal scale keeps no formats and labels as before.
     assert_eq!(Scale::read(&d, &Object::Dict(Scale::new(2.0, "m", 3).unwrap().dictionary().unwrap())).unwrap().formats, None);
 }
+
+/// A compound Y in units of its own (metres and centimetres against feet and inches) is written
+/// back as read, with its CYX, so a viewer showing y coordinates reads the same units.
+#[test]
+fn a_compound_y_keeps_its_units_and_cyx() {
+    let x = "[<< /U (ft) /C 0.0138888888888889 >> << /U (in) /C 12 /F /F /D 16 >>]";
+    let y = "[<< /U (m) /C 0.000352778 >> << /U (cm) /C 100 /D 10 >>]";
+    let measure = format!("<< /Type /Measure /Subtype /RL /X {x} /Y {y} /CYX 3.28084 /D {x} /A [<< /U (sq ft) /C 1 >>] >>");
+    let d = fixture("", &format!("/VP [<< /Type /Viewport /BBox [0 0 612 792] /Measure {measure} >>]"), &[]);
+    let scale = scale_at(&d, 0, [10.0, 10.0]).unwrap();
+    close(scale.y, 0.000352778 * 3.28084);
+    let written = scale.dictionary().unwrap();
+    close(written.get(b"CYX").and_then(Object::as_f64).unwrap(), 3.28084);
+    let ys = written.get(b"Y").and_then(Object::as_array).unwrap();
+    let first = ys[0].as_dict().unwrap();
+    assert_eq!(text(&d, first, b"U"), "m");
+    close(first.get(b"C").and_then(Object::as_f64).unwrap(), 0.000352778);
+    assert_eq!(text(&d, ys[1].as_dict().unwrap(), b"U"), "cm");
+    let again = Scale::read(&d, &Object::Dict(written)).unwrap();
+    close(again.y, scale.y);
+    let formats = again.formats.unwrap();
+    assert_eq!((formats.y.unwrap()[1].factor, formats.cyx), (100.0, 3.28084));
+}
