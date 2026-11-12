@@ -382,8 +382,8 @@ fn the_lookup_counts_what_it_keeps() {
 
 /// A `/ColorSpace` given through objects that hold only a reference to it is read as often as one
 /// given directly: what is kept or known of it is kept for the object the references end at. 200
-/// forms, each giving the page's 5,000 spaces through an object of its own, read them as often as
-/// one form does.
+/// forms, each giving one shared `/ColorSpace` of 5,000 spaces as its own, through an object of its
+/// own that only refers to it, read it as often as one form does.
 #[test]
 fn a_colour_space_dictionary_given_through_other_objects_is_read_once() {
     let spaces: String = (0..5000).map(|i| format!("/C{i} /DeviceGray ")).collect();
@@ -397,12 +397,14 @@ fn a_colour_space_dictionary_given_through_other_objects_is_read_once() {
         let names: String = (0..forms).map(|i| format!("/F{i} {} 0 R ", 9 + forms + i)).collect();
         let draws: String = (0..forms).map(|i| format!("/F{i} Do ")).collect();
         SPACE_READS.with(|c| c.set(0));
+        CHAIN_READS.with(|c| c.set(0));
         assert_eq!(removed(&format!("/Pattern cs /P0 scn {draws}"), &format!("/Pattern << /P0 7 0 R >> /XObject << {names}>>"), extra), 0);
-        SPACE_READS.with(std::cell::Cell::get)
+        (SPACE_READS.with(std::cell::Cell::get), CHAIN_READS.with(std::cell::Cell::get))
     };
-    let one = through(1);
+    let (one, chain) = through(1);
     assert!(one >= 1, "the dictionary is read");
-    assert_eq!(through(200), one, "200 forms, each through an object of its own");
+    // Each object that refers on is read once, and the dictionary once, for whichever leads there.
+    assert_eq!(through(200), (one, chain + 199), "200 forms, each through an object of its own");
     // Where each chain ends is looked for once: 20,000 `cs` through one follow it as often as one.
     let chain = |content: &str| {
         CHAIN_READS.with(|c| c.set(0));
@@ -427,4 +429,59 @@ fn a_colour_space_is_followed_as_far_as_references_are() {
     assert_eq!(chained(1), 0, "one object between");
     assert_eq!(chained(32), 0, "32 objects between");
     assert_eq!(chained(33), 1, "33 objects between");
+}
+
+/// An entry, or an array's first element, given through an object that only refers on is read for
+/// what it leads to once, however many such objects lead there: 200 entries, each through an
+/// object of its own to one `/Pattern`, read it as often as one, and each of their own objects once.
+#[test]
+fn what_entries_lead_to_is_read_once() {
+    let reads = |entries: usize, family: bool| {
+        let mut objs = vec![b"/Pattern".to_vec()];
+        objs.extend((0..entries).map(|_| b"7 0 R".to_vec()));
+        let doc = one_page(b"", "", objs);
+        let spaces = Object::Dict(
+            (0..entries)
+                .map(|i| {
+                    let r = Object::Ref(ObjRef::new(u32::try_from(8 + i).unwrap(), 0));
+                    (format!("C{i}").into_bytes(), if family { Object::Array(vec![r, Object::Name(b"DeviceRGB".to_vec())]) } else { r })
+                })
+                .collect(),
+        );
+        let mut lookup = PatternSpaces::default();
+        SPACE_READS.with(|c| c.set(0));
+        CHAIN_READS.with(|c| c.set(0));
+        for i in 0..entries {
+            assert!(lookup.named(&doc, Some(&spaces), format!("C{i}").as_bytes()), "/C{i} is a Pattern space");
+        }
+        (SPACE_READS.with(std::cell::Cell::get), CHAIN_READS.with(std::cell::Cell::get))
+    };
+    for family in [false, true] {
+        let (one, chain) = reads(1, family);
+        assert!(one >= 1, "what they lead to is read");
+        assert_eq!(reads(200, family), (one, chain + 199), "200 through objects of their own, first elements: {family}");
+    }
+}
+
+/// The lookup follows objects that only refer on exactly as far as `Document::resolve` does: a
+/// `/ColorSpace`, and an entry, at the end of chains of 28 to 36 such objects give what `resolve`
+/// reads there, `/Pattern` where it reaches the end and nothing past it.
+#[test]
+fn the_lookup_follows_references_as_far_as_the_document_does() {
+    for links in 28..=36 {
+        for (end, spaces) in [("<< /CSP /Pattern >>", None), ("/Pattern", Some("CSP"))] {
+            let mut objs: Vec<Vec<u8>> = (0..links).map(|k| format!("{} 0 R", 8 + k).into_bytes()).collect();
+            objs.push(end.as_bytes().to_vec());
+            let doc = one_page(b"", "", objs);
+            let start = Object::Ref(ObjRef::new(7, 0));
+            let read = doc.resolve(&start);
+            let (spaces, resolved) = match spaces {
+                None => (start.clone(), read.as_dict().and_then(|d| d.name(b"CSP")) == Some(b"Pattern".as_slice())),
+                Some(name) => {
+                    (Object::Dict(Dict::from_iter([(name.as_bytes().to_vec(), start.clone())])), read.as_name() == Some(b"Pattern".as_slice()))
+                }
+            };
+            assert_eq!(PatternSpaces::default().named(&doc, Some(&spaces), b"CSP"), resolved, "{links} objects between, ending in {end}");
+        }
+    }
 }

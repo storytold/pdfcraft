@@ -295,11 +295,13 @@ pub(crate) struct PatternSpaces {
     settled: HashMap<ObjRef, bool>,
     /// How often each dictionary was read, and what its names cost.
     reads: HashMap<ObjRef, (u8, usize)>,
-    /// Whether an entry given by reference is a Pattern space.
+    /// Whether what an entry given by reference leads to is a Pattern space, by where it ends.
     known: HashMap<ObjRef, bool>,
-    /// Whether an array's first element given by reference is the name `/Pattern`.
+    /// Whether what an array's first element given by reference leads to is the name `/Pattern`,
+    /// by where it ends.
     families: HashMap<ObjRef, bool>,
-    /// Where each `/ColorSpace` reference's chain ends ([`PatternSpaces::chain_end`]).
+    /// Where each reference the lookup follows ends ([`PatternSpaces::chain_end`]): a
+    /// `/ColorSpace`, an entry, or an array's first element.
     ends: HashMap<ObjRef, Option<ObjRef>>,
 }
 
@@ -356,7 +358,9 @@ impl PatternSpaces {
     }
 
     /// The object `r`'s chain of objects that hold only a reference ends at, followed as far as
-    /// [`Document::resolve`] follows one: `None` past that, where it gives no dictionary.
+    /// [`Document::resolve`] follows one: `None` past that, where it gives nothing. An object found
+    /// to end a chain is recorded as ending its own, so a chain reaching it later stops there
+    /// unread: it holds no reference, and a large one would be read again for each chain.
     fn chain_end(&mut self, doc: &Document, r: ObjRef) -> Option<ObjRef> {
         if let Some(&end) = self.ends.get(&r) {
             return end;
@@ -365,6 +369,10 @@ impl PatternSpaces {
         let mut end = None;
         // The object `r` names, then each of the 32 more `resolve` follows.
         for _ in 0..=MAX_REFERENCE_HOPS {
+            if self.ends.get(&at) == Some(&Some(at)) {
+                end = Some(at);
+                break;
+            }
             #[cfg(test)]
             CHAIN_READS.with(|c| c.set(c.get() + 1));
             let Object::Ref(next) = &*doc.get(at) else {
@@ -372,6 +380,9 @@ impl PatternSpaces {
                 break;
             };
             at = *next;
+        }
+        if let Some(found) = end {
+            self.ends.insert(found, end);
         }
         self.ends.insert(r, end);
         end
@@ -459,27 +470,35 @@ impl PatternSpaces {
         match space {
             Space::Pattern => true,
             Space::Other => false,
-            Space::Entry(r) => match self.known.get(&r) {
-                Some(&known) => known,
-                None => {
-                    // What a reference resolves to is no reference (`resolve` follows them).
-                    let found = match Space::of(&read_space(doc, &Object::Ref(r))) {
-                        Space::Entry(_) => false,
-                        read => self.is_pattern(doc, read),
-                    };
-                    self.known.insert(r, found);
-                    found
+            // What a reference leads to is read once, whatever leads to it ([`Self::chain_end`]);
+            // a chain longer than `resolve` follows gives nothing.
+            Space::Entry(r) => {
+                let Some(end) = self.chain_end(doc, r) else { return false };
+                match self.known.get(&end) {
+                    Some(&known) => known,
+                    None => {
+                        // The end of a chain is no reference.
+                        let found = match Space::of(&read_space(doc, &Object::Ref(end))) {
+                            Space::Entry(_) => false,
+                            read => self.is_pattern(doc, read),
+                        };
+                        self.known.insert(end, found);
+                        found
+                    }
                 }
-            },
-            Space::Family(r) => *self.families.entry(r).or_insert_with(|| read_space(doc, &Object::Ref(r)).as_name() == Some(b"Pattern".as_slice())),
+            }
+            Space::Family(r) => {
+                let Some(end) = self.chain_end(doc, r) else { return false };
+                *self.families.entry(end).or_insert_with(|| read_space(doc, &Object::Ref(end)).as_name() == Some(b"Pattern".as_slice()))
+            }
         }
     }
 }
 
-/// The object `o` refers to, read for [`PatternSpaces`].
 /// How many references [`Document::resolve`] follows past the first object.
 const MAX_REFERENCE_HOPS: usize = 32;
 
+/// The object `o` refers to, read for [`PatternSpaces`].
 fn read_space(doc: &Document, o: &Object) -> Arc<Object> {
     #[cfg(test)]
     SPACE_READS.with(|c| c.set(c.get() + 1));
