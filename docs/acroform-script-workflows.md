@@ -99,7 +99,7 @@ resets it, Revert, or a full save) has no timers.
 
 Fields that page actions and timers show, hide or give another icon (`display`,
 `buttonSetIcon`) change only how the document is shown, through view-only render overrides
-(hayro-interpret patches 104 and 105). They aren't saved, printed or exported, and they don't
+(hayro-interpret patches 105 and 106). They aren't saved, printed or exported, and they don't
 mark the document as changed. Buttons and the console see the fields as shown, and a `display`
 or icon a button writes into the document takes over from the view's. A value or a reset from
 a page action or timer is one undoable edit.

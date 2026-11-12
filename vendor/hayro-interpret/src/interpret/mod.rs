@@ -117,11 +117,11 @@ pub struct InterpreterSettings {
     /// `ocg_overrides`. On by default: that is the state for viewing. Off for output made for
     /// printing, which the View event is not.
     pub view_auto_state: bool,
-    /// PdfCraft patch (104): viewer overrides for annotations (object number, generation, shown),
+    /// PdfCraft patch (105): viewer overrides for annotations (object number, generation, shown),
     /// applied in place of their Hidden and NoView flags: what a document's scripts show and
     /// hide while it is read (frames of an animation), without changing the document.
     pub annotation_overrides: Arc<Vec<(i32, i32, bool)>>,
-    /// PdfCraft patch (105): annotations the viewer draws with a form XObject as their normal
+    /// PdfCraft patch (106): annotations the viewer draws with a form XObject as their normal
     /// appearance (object number and generation of the annotation, then of the form), in their
     /// own `/Rect`: a push button a document's script gave another icon (`buttonSetIcon`) while
     /// it is read, without changing the document. An override naming an object that isn't a form
@@ -234,7 +234,7 @@ pub fn interpret_page<'a>(
         // annotations, each group in `/Annots` order, as other readers draw them: a filled
         // comment listed after a check box covered the box. ISO 32000-2 doesn't order the two.
         // Two passes over the array, so nothing is held for every entry of a long one.
-        // PdfCraft patch (104): each annotation with its object, so the viewer can show or hide
+        // PdfCraft patch (105): each annotation with its object, so the viewer can show or hide
         // it by its object (`annotation_overrides`). An entry that isn't a dictionary is
         // skipped; it no longer ends the list.
         let xref = context.xref;
@@ -252,7 +252,7 @@ pub fn interpret_page<'a>(
 
             // Annotation should be hidden (Hidden = bit 2, NoView = bit 6).
             // PdfCraft patch: NoView was not honoured upstream.
-            // PdfCraft patch (104): the viewer's override, when it has one, decides instead.
+            // PdfCraft patch (105): the viewer's override, when it has one, decides instead.
             let overridden = obj.and_then(|r| {
                 context
                     .settings
@@ -295,7 +295,7 @@ pub fn interpret_page<'a>(
 
             // PdfCraft patch: `/N` may be a stream or a dictionary of appearance states selected
             // by `/AS` (checkboxes, radio buttons, …). Upstream only handled the stream form.
-            // PdfCraft patch (105): the viewer may draw it with another form instead
+            // PdfCraft patch (106): the viewer may draw it with another form instead
             // (`appearance_overrides`).
             // An override naming an object that isn't a form draws nothing: a script cleared the
             // button's icon.

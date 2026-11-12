@@ -2741,7 +2741,7 @@ trailer << /Root 1 0 R >>
     assert_eq!(px(&hidden, 20, 80), vec![255, 0, 0, 255], "fields stay");
 }
 
-/// The viewer's overrides (patches 104 and 105) show a hidden widget, hide a shown one and draw
+/// The viewer's overrides (patches 105 and 106) show a hidden widget, hide a shown one and draw
 /// one with another form, by object; an entry of `/Annots` that isn't a dictionary is skipped.
 #[test]
 fn annotation_and_appearance_overrides_change_only_the_view() {

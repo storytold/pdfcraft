@@ -275,6 +275,7 @@ pub(crate) fn run_in_context(
         reset_calls: setup.reset_calls,
         reset_limit_exceeded: false,
         kept: 0,
+        retained: 0,
         dropped: 0,
         layers_changed: BTreeSet::new(),
     }));
