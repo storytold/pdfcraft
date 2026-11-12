@@ -6,12 +6,18 @@
 //! information key maps to the XMP property PDF/A pairs it with (ISO 19005-1 §6.7.3, the same
 //! mapping `pdfcraft-preflight` writes): Title → `dc:title`, Author → `dc:creator`, Subject →
 //! `dc:description`, Keywords → `pdf:Keywords`, Creator → `xmp:CreatorTool`, Producer →
-//! `pdf:Producer`.
+//! `pdf:Producer`. A custom property (Document Properties ▸ Custom) is kept as `pdfx:<name>`, plain
+//! text in the `http://ns.adobe.com/pdfx/1.3/` schema where Acrobat keeps them, so tools that read
+//! XMP see it too; one whose name can't be an XML element name stays in `/Info` only, and a
+//! PDF/A packet gets no new one (see [`sync_info`]).
 //!
 //! The packet is edited as text, touching only the property that changed: everything else in it
 //! (other schemas, padding, unknown properties) stays byte for byte. A file without XMP gets
 //! none, and a packet this can't edit safely (not UTF-8, no `rdf:RDF`, too large to decode) is
 //! left as it was.
+
+use std::cell::RefCell;
+use std::sync::{Arc, Weak};
 
 use pdfcraft_cos::{Document, Object, Stream};
 
@@ -24,6 +30,8 @@ const MAX_XMP: usize = 16 << 20;
 const DC: &str = "http://purl.org/dc/elements/1.1/";
 const PDF: &str = "http://ns.adobe.com/pdf/1.3/";
 const XMP: &str = "http://ns.adobe.com/xap/1.0/";
+/// Adobe's PDF extension schema: custom document properties, each under its own name.
+const PDFX: &str = "http://ns.adobe.com/pdfx/1.3/";
 
 /// How an XMP property holds its value.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -50,26 +58,97 @@ fn property(key: &str) -> Option<(&'static str, &'static str, Shape)> {
 }
 
 /// After the information entry `key` became `value` (empty: removed), make the catalog's XMP
-/// packet say the same. Does nothing for keys XMP doesn't mirror, files without XMP, and packets
-/// that can't be edited safely.
+/// packet say the same: the standard keys' properties, and `pdfx:<key>` for a custom property.
+/// Does nothing for standard keys XMP doesn't mirror (the dates, Trapped), custom names that
+/// aren't XML names, files without XMP, and packets that can't be edited safely.
+///
+/// A custom property is left alone where `pdfx:` would not mean Adobe's schema (a packet binding
+/// the prefix to another namespace keeps its own property), and in a packet that declares PDF/A
+/// one is changed or removed where it stands but never added: PDF/A-1 to -3 allow a schema only
+/// when the packet describes it in an extension schema (ISO 19005-2 §6.6.2.3), so a new `pdfx:`
+/// property would end the file's conformance. `/Info` keeps it either way.
 pub(crate) fn sync_info(doc: &mut Document, key: &str, value: &str) -> Result<(), OrganizeError> {
-    let Some((name, ns, shape)) = property(key) else { return Ok(()) };
-    edit_packet(doc, |xmp| set_property(xmp, name, ns, shape, value)).map(|_| ())
+    if let Some((name, ns, shape)) = property(key) {
+        return edit_packet(doc, |xmp| set_property(xmp, name, ns, shape, value)).map(|_| ());
+    }
+    if crate::STANDARD_INFO_KEYS.contains(&key) || !is_xml_name(key) {
+        return Ok(());
+    }
+    let name = format!("pdfx:{key}");
+    edit_packet(doc, |xmp| {
+        if binds_prefix_elsewhere(xmp, "pdfx", PDFX) {
+            return None;
+        }
+        // A declaration counts whatever its value says (CDATA, markup): it is the claim that matters.
+        if !has_property(xmp, &name) && has_property(xmp, "pdfaid:part") {
+            return None;
+        }
+        set_property(xmp, &name, PDFX, Shape::Text, value)
+    })
+    .map(|_| ())
+}
+
+/// Remove the `pdfx:` copies of the custom properties `keys` (see [`sync_info`]), unless the packet
+/// binds `pdfx` to another namespace, whose properties are its own; whether any was there.
+pub(crate) fn remove_custom_properties(doc: &mut Document, keys: &[&str]) -> Result<bool, OrganizeError> {
+    let names: Vec<String> = keys.iter().map(|k| format!("pdfx:{k}")).collect();
+    edit_packet(doc, |xmp| if binds_prefix_elsewhere(xmp, "pdfx", PDFX) { None } else { remove_all(xmp, &names) })
+}
+
+/// Whether `xmp` has the property `name`, as an element or an attribute, whatever its value.
+fn has_property(xmp: &str, name: &str) -> bool {
+    element_span(xmp, name).is_some() || attribute_span(xmp, name).is_some()
+}
+
+/// Whether `xmp` declares `prefix` for a namespace other than `ns` anywhere (`xmlns:pdfx="…"` on
+/// any element), so a property written with that prefix may belong to another schema. A
+/// declaration whose value never ends counts as another namespace.
+fn binds_prefix_elsewhere(xmp: &str, prefix: &str, ns: &str) -> bool {
+    let attr = format!("xmlns:{prefix}");
+    // Each declaration is read only up to its closing quote, and the first other value stops the
+    // search, so this is linear in the packet.
+    xmp.match_indices(&attr).any(|(i, _)| {
+        // `xmlns:pdfx` must end there (not `xmlns:pdfxid`), then `=` and a quoted value.
+        let Some(rest) = xmp.get(i + attr.len()..).and_then(|r| r.trim_start().strip_prefix('=')).map(str::trim_start) else {
+            return false;
+        };
+        let Some(quote) = rest.chars().next().filter(|c| matches!(c, '"' | '\'')) else { return false };
+        rest.get(1..).and_then(|v| v.get(..v.find(quote)?)).is_none_or(|value| value != ns)
+    })
+}
+
+/// Whether `name` can follow `pdfx:` in an element name: an XML name without a colon (XML 1.0
+/// §2.3 `NameStartChar` then `NameChar`s; Namespaces in XML `NCName`). Custom property names may
+/// hold characters XML names can't (`1st`, `Q&A`, `a:b`); those are not mirrored rather than
+/// written under an escaped name of our own.
+fn is_xml_name(name: &str) -> bool {
+    let start = |c: char| {
+        matches!(c,
+            'A'..='Z' | '_' | 'a'..='z' | '\u{C0}'..='\u{D6}' | '\u{D8}'..='\u{F6}' | '\u{F8}'..='\u{2FF}' | '\u{370}'..='\u{37D}'
+            | '\u{37F}'..='\u{1FFF}' | '\u{200C}'..='\u{200D}' | '\u{2070}'..='\u{218F}' | '\u{2C00}'..='\u{2FEF}'
+            | '\u{3001}'..='\u{D7FF}' | '\u{F900}'..='\u{FDCF}' | '\u{FDF0}'..='\u{FFFD}' | '\u{10000}'..='\u{EFFFF}')
+    };
+    let rest = |c: char| start(c) || matches!(c, '-' | '.' | '0'..='9' | '\u{B7}' | '\u{300}'..='\u{36F}' | '\u{203F}'..='\u{2040}');
+    let mut chars = name.chars();
+    chars.next().is_some_and(start) && chars.all(rest)
 }
 
 /// Remove every occurrence of the properties `names` from the catalog's XMP packet; whether any
 /// was there.
 pub(crate) fn remove_properties(doc: &mut Document, names: &[&str]) -> Result<bool, OrganizeError> {
-    edit_packet(doc, |xmp| {
-        let mut out: Option<String> = None;
-        for name in names {
-            // Each removal shortens the packet, so this ends.
-            while let Some(next) = set_property(out.as_deref().unwrap_or(xmp), name, "", Shape::Text, "") {
-                out = Some(next);
-            }
+    edit_packet(doc, |xmp| remove_all(xmp, names))
+}
+
+/// `xmp` without any occurrence of the properties `names`; `None` when none was there.
+fn remove_all(xmp: &str, names: &[impl AsRef<str>]) -> Option<String> {
+    let mut out: Option<String> = None;
+    for name in names {
+        // Each removal shortens the packet, so this ends.
+        while let Some(next) = set_property(out.as_deref().unwrap_or(xmp), name.as_ref(), "", Shape::Text, "") {
+            out = Some(next);
         }
-        out
-    })
+    }
+    out
 }
 
 /// Rewrite the catalog's XMP packet with `edit` (`None`: unchanged); whether it changed. Files
@@ -101,10 +180,41 @@ pub(crate) fn info_value(doc: &Document, key: &str) -> Option<String> {
     let (name, _, shape) = property(key)?;
     let root = doc.root()?;
     let r = doc.get(root).as_dict()?.reference(b"Metadata")?;
-    let obj = doc.get(r);
-    let Object::Stream(stream) = &*obj else { return None };
-    let xmp = String::from_utf8(stream.decoded_within(MAX_XMP).ok()?).ok()?;
+    let xmp = decoded_packet(&doc.get(r))?;
     get_property(&xmp, name, shape)
+}
+
+/// A decoded packet (`None`: unreadable) and the stream object it came from.
+type Held = (Weak<Object>, Option<Arc<str>>);
+
+thread_local! {
+    /// The packet [`decoded_packet`] last decoded (`None`: unreadable), with the stream object it
+    /// came from. The tab title can come from XMP and is read every frame; a packet decodes to
+    /// up to [`MAX_XMP`] bytes.
+    static PACKET: RefCell<Option<Held>> = const { RefCell::new(None) };
+}
+
+/// The text of the XMP stream `obj`, `None` when it isn't a stream or isn't UTF-8 within
+/// [`MAX_XMP`]. Decoded once while the document keeps handing out the same object: an edit or
+/// another document gives another one. The [`Weak`] keeps its address from being reused.
+fn decoded_packet(obj: &Arc<Object>) -> Option<Arc<str>> {
+    let same = |held: &Held| std::ptr::eq(held.0.as_ptr(), Arc::as_ptr(obj));
+    if let Ok(Some(text)) = PACKET.try_with(|p| p.borrow().as_ref().filter(|held| same(held)).map(|held| held.1.clone())) {
+        return text;
+    }
+    let Object::Stream(stream) = &**obj else { return None };
+    #[cfg(test)]
+    XMP_DECODES.with(|n| n.set(n.get() + 1));
+    let text = stream.decoded_within(MAX_XMP).ok().and_then(|b| String::from_utf8(b).ok()).map(Arc::<str>::from);
+    // Past the thread's end (a destructor reading it) the packet just isn't kept.
+    let _ = PACKET.try_with(|p| *p.borrow_mut() = Some((Arc::downgrade(obj), text.clone())));
+    text
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Packets [`decoded_packet`] decoded on this thread.
+    pub(crate) static XMP_DECODES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// The text of the property `name` in `xmp`, element or attribute form (see [`info_value`]).
@@ -195,8 +305,9 @@ fn unescape(text: &str) -> String {
             _ => entity
                 .strip_prefix("#x")
                 .or_else(|| entity.strip_prefix("#X"))
+                .filter(|h| h.bytes().all(|b| b.is_ascii_hexdigit()))
                 .and_then(|h| u32::from_str_radix(h, 16).ok())
-                .or_else(|| entity.strip_prefix('#').and_then(|d| d.parse().ok()))
+                .or_else(|| entity.strip_prefix('#').filter(|d| d.bytes().all(|b| b.is_ascii_digit())).and_then(|d| d.parse().ok()))
                 .and_then(char::from_u32),
         };
         match c {
@@ -294,24 +405,31 @@ fn element_span(xmp: &str, name: &str) -> Option<(usize, usize)> {
 /// start and end of its value, and its quote character. Only matches inside a start tag.
 fn attribute_span(xmp: &str, name: &str) -> Option<(usize, usize, usize, char)> {
     let mut from = 0;
-    // The last `<` and `>` before the match, found by one pass over the packet rather than by
-    // searching back from every match.
-    let (mut scanned, mut last_open, mut last_close) = (0, None, None);
+    // Track tag and quote state in one pass rather than searching back from every match.
+    let (mut scanned, mut in_tag, mut quote) = (0, false, None);
     while let Some(i) = xmp.get(from..).and_then(|s| s.find(name)).map(|i| i + from) {
         from = i + name.len();
         let before = xmp.get(..i)?;
         let gap = xmp.get(scanned..i)?;
         #[cfg(test)]
         crate::work(gap.len());
-        if let Some(at) = gap.rfind('<') {
-            last_open = Some(scanned + at);
-        }
-        if let Some(at) = gap.rfind('>') {
-            last_close = Some(scanned + at);
+        for c in gap.chars() {
+            if let Some(q) = quote {
+                if c == q {
+                    quote = None;
+                }
+            } else {
+                match c {
+                    '<' => in_tag = true,
+                    '>' if in_tag => in_tag = false,
+                    '\'' | '\"' if in_tag => quote = Some(c),
+                    _ => {}
+                }
+            }
         }
         scanned = i;
-        // Preceded by whitespace, and inside a tag (the last `<` comes after the last `>`).
-        if !before.ends_with(char::is_whitespace) || last_open < last_close || last_open.is_none() {
+        // Preceded by whitespace, and inside a start tag.
+        if !before.ends_with(char::is_whitespace) || !in_tag || quote.is_some() {
             continue;
         }
         let rest = xmp.get(from..)?;
@@ -340,6 +458,13 @@ mod tests {
    <dc:creator><rdf:Seq><rdf:li>Old Author</rdf:li></rdf:Seq></dc:creator>\n\
    <dc:description><rdf:Alt><rdf:li xml:lang=\"x-default\">Old subject</rdf:li></rdf:Alt></dc:description>\n\
   </rdf:Description>\n </rdf:RDF>\n</x:xmpmeta>\n<?xpacket end=\"w\"?>";
+
+    #[test]
+    fn unescape_rejects_signs_in_numeric_references() {
+        assert_eq!(unescape("a&#x+41;b&#+66;"), "a&#x+41;b&#+66;");
+        assert_eq!(unescape("&#x;&#;"), "&#x;&#;");
+        assert_eq!(unescape("&#x41;&#65;"), "AA");
+    }
 
     #[test]
     fn values_are_read_back_unescaped() {
@@ -415,6 +540,43 @@ mod tests {
         let out = set_property(packet, "dc:title", DC, Shape::LangAlt, "New").unwrap();
         assert!(out.contains("<dc:titles>keep</dc:titles>") && out.contains("say dc:title=\"no\""), "{out}");
         assert!(out.contains("<dc:title><rdf:Alt><rdf:li xml:lang=\"x-default\">New</rdf:li></rdf:Alt></dc:title></rdf:Description>"), "{out}");
+    }
+
+    #[test]
+    fn only_names_an_element_can_have_are_mirrored() {
+        for name in ["Project", "_draft", "Größe", "a.b-c_1", "日本語", "x·y", "Ω"] {
+            assert!(is_xml_name(name), "{name}");
+        }
+        for name in ["", "1st", "-x", ".x", "·x", "a:b", "Q&A", "it's", "a\"b", "×x", "a b", "a=b", "x\u{FFFE}"] {
+            assert!(!is_xml_name(name), "{name}");
+        }
+    }
+
+    #[test]
+    fn a_prefix_bound_to_another_namespace_is_found() {
+        for (xmp, other) in [
+            ("<d xmlns:pdfx=\"http://ns.adobe.com/pdfx/1.3/\"/>", false),
+            ("<d xmlns:pdfx = 'http://ns.adobe.com/pdfx/1.3/'/><e xmlns:pdfxid=\"http://www.npes.org/pdfx/ns/id/\"/>", false),
+            ("<d xmlns:pdfx=\"http://ns.adobe.com/pdfx/1.3/\"/><e xmlns:pdfx=\"http://www.npes.org/pdfx/ns/id/\"/>", true),
+            ("<d xmlns:pdfx='http://ns.adobe.com/pdfx/1.3", true),
+            ("<d xmlns:pdfx>", false),
+            ("", false),
+        ] {
+            assert_eq!(binds_prefix_elsewhere(xmp, "pdfx", PDFX), other, "{xmp}");
+        }
+    }
+
+    #[test]
+    fn attribute_like_text_inside_another_quoted_attribute_is_not_a_property() {
+        let packet = "<rdf:Description note='someone wrote dc:title=\"forged\" here'/>";
+        assert_eq!(attribute_span(packet, "dc:title"), None);
+    }
+
+    #[test]
+    fn apostrophe_in_text_does_not_hide_a_later_attribute() {
+        let packet = "<rdf:Description>don't</rdf:Description><rdf:Description dc:title='real'/>";
+        let found = attribute_span(packet, "dc:title").and_then(|(_, start, end, quote)| packet.get(start..end).map(|value| (value, quote)));
+        assert_eq!(found, Some(("real", '\'')));
     }
 
     #[test]

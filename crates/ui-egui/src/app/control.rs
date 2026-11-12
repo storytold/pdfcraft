@@ -47,8 +47,14 @@ impl PdfCraftApp {
             ("show_page_edge_shadows", _) => {
                 self.show_page_edge_shadows = value.parse::<bool>().map_err(|_| "show_page_edge_shadows must be true or false")?;
             }
+            ("update_check_at_start", _) => {
+                self.update_check_at_start = value.parse::<bool>().map_err(|_| "update_check_at_start must be true or false")?;
+            }
             ("scroll_speed", _) => {
                 self.scroll_speed = scroll_speed::ScrollSpeed::parse(value).ok_or("scroll_speed must be slow, normal, or fast")?;
+            }
+            ("invert_middle_drag", _) => {
+                self.invert_middle_drag = value.parse::<bool>().map_err(|_| "invert_middle_drag must be true or false")?;
             }
             ("animation_effects", _) => {
                 self.animation_effects = motion::AnimationEffects::parse(value).ok_or("animation_effects must be system, on, or off")?;
@@ -110,12 +116,14 @@ impl PdfCraftApp {
                     "header-footer" => Some(Dialog::Marks(pdfcraft_engine::MarkKind::HeaderFooter)),
                     "watermark" => Some(Dialog::Marks(pdfcraft_engine::MarkKind::Watermark)),
                     "background" => Some(Dialog::Marks(pdfcraft_engine::MarkKind::Background)),
+                    "printer-marks" => Some(Dialog::PrinterMarks),
                     "export-image" => Some(Dialog::Export(export_ui::ExportKind::Image)),
                     "word-count" => Some(Dialog::WordCount),
                     "export-text" => Some(Dialog::Export(export_ui::ExportKind::Text)),
                     "export-all-images" => Some(Dialog::Export(export_ui::ExportKind::AllImages)),
                     "accessibility-options" => Some(Dialog::AccessibilityOptions),
                     "recognize-text" => Some(Dialog::RecognizeText),
+                    "enhance-scan" => Some(Dialog::EnhanceScan),
                     "js-console" => Some(Dialog::JsConsole),
                     "document-js" => Some(Dialog::DocumentJs),
                     "preferences" => Some(Dialog::Preferences),
@@ -135,6 +143,13 @@ impl PdfCraftApp {
                         self.execute("page.number");
                         Some(Dialog::NumberPages)
                     }
+                    "convert-colours" => Some(Dialog::ConvertColours),
+                    "fix-hairlines" => {
+                        // Through the command, so it is refused with no document or none that
+                        // can be modified, as the menu is.
+                        self.execute("prepress.hairlines");
+                        return Ok(());
+                    }
                     "page-properties" => {
                         // Same path as the panel, so the selected pages and their order are seeded.
                         self.execute("page.properties");
@@ -146,6 +161,7 @@ impl PdfCraftApp {
                 if let Some(Dialog::Marks(kind)) = self.dialog {
                     self.marks_draft.opened(kind);
                 }
+                dialogs::discard_inactive_password_drafts(self);
             }
             ("tools", _) if value == "full" => self.expand_all_tools(),
             ("tools", _) => {
@@ -330,9 +346,12 @@ impl PdfCraftApp {
                     field if field.starts_with("field-") => QuickTool::Field(
                         prepare::FieldTool::from_command(&format!("form.add.{}", &field[6..])).ok_or_else(|| format!("unknown tool {field}"))?,
                     ),
-                    fill if fill.starts_with("fill-") => QuickTool::Fill(
-                        fill_sign::FillTool::from_command(&format!("sign.fill.{}", &fill[5..])).ok_or_else(|| format!("unknown tool {fill}"))?,
-                    ),
+                    fill if fill.starts_with("fill-") => {
+                        let tool =
+                            fill_sign::FillTool::from_command(&format!("sign.fill.{}", &fill[5..])).ok_or_else(|| format!("unknown tool {fill}"))?;
+                        self.fill_tool = tool;
+                        QuickTool::Fill(tool)
+                    }
                     other => {
                         let t = comments::CommentTool::from_command(&format!("comment.{other}")).ok_or_else(|| format!("unknown tool {other}"))?;
                         self.comment_prefs.group_tool[t.group()] = t;
@@ -341,6 +360,7 @@ impl PdfCraftApp {
                 };
             }
             ("author", _) => self.comment_prefs.author = value.to_string(),
+            ("folder-collapsed", _) => self.set_folder_collapsed(value)?,
             ("comment-tool-pinned", _) => {
                 self.comment_prefs.pinned = match value {
                     "true" => true,
@@ -353,6 +373,13 @@ impl PdfCraftApp {
                     "true" => true,
                     "false" => false,
                     _ => return Err("hide-empty-highlight-hover must be true or false".into()),
+                };
+            }
+            ("text-links", _) => {
+                self.text_links = match value {
+                    "true" => true,
+                    "false" => false,
+                    _ => return Err("text-links must be true or false".into()),
                 };
             }
             ("ui-scale", _) => self.ui_scale = ui_scale::parse(value)?,
@@ -383,7 +410,7 @@ impl PdfCraftApp {
                 let (p, i) = value.split_once(':').ok_or("comment: PAGE:INDEX")?;
                 let (p, i): (usize, usize) =
                     (p.trim().parse().map_err(|_| "comment: PAGE:INDEX")?, i.trim().parse().map_err(|_| "comment: PAGE:INDEX")?);
-                v.comments.selected = Some((p.saturating_sub(1), i.saturating_sub(1)));
+                v.comments.select_only((p.saturating_sub(1), i.saturating_sub(1)));
                 v.comments.reveal = true;
             }
             // `--combine-view list`: Combine files as thumbnails (grid) or as the table (list).

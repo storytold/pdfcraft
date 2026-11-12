@@ -14,6 +14,8 @@ pdfcraft-cos = { workspace = true }
 pdfcraft-render = { workspace = true }
 pdfcraft-organize = { workspace = true }
 pdfcraft-platform = { workspace = true }
+pdfcraft-prc = { workspace = true }
+pdfcraft-prc-render = { workspace = true }
 serde_json = { workspace = true }
 sha2 = "0.11"
 tempfile = "3.27"
@@ -26,6 +28,8 @@ default = ["mcp"]
 mcp = ["dep:base64"]
 
 [dev-dependencies]
+# Synthetic printer profiles for the app-managed print colour tests.
+craft-cms = { workspace = true }
 pdfcraft-fonts = { workspace = true }
 png = "0.18"
 flate2.workspace = true

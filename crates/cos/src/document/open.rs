@@ -1,7 +1,11 @@
 use super::reader::find;
-use super::state::Credentials;
+use super::state::{Credentials, Slot};
 use super::xref::XrefIndex;
-use super::{Arc, BTreeMap, CosError, Dict, Document, ObjRef, Object};
+use super::{Arc, BTreeMap, CosError, Dict, Document, HashSet, ObjRef, Object};
+
+/// More objects than `/Encrypt` and `/ID` refer to in any file, so that one which refers to the page
+/// tree, say, doesn't have a whole document read to open it.
+const MAX_ENCRYPT_MEMBERS: usize = 64;
 
 impl Document {
     /// A new document with an empty page tree (for split / extract / combine). It has no
@@ -17,8 +21,10 @@ impl Document {
             xref_oddities: Arc::default(),
             located: Arc::default(),
             repair_log: Arc::new(Vec::new()),
+            unlinked_update: false,
             cache: Arc::default(),
             objstms: Arc::default(),
+            unreadable: Arc::default(),
             jbig2_globals: Arc::default(),
             stream_limit: crate::object::MAX_DECODED,
             overlay: BTreeMap::new(),
@@ -27,8 +33,11 @@ impl Document {
             version: "1.7".into(),
             security: None,
             encrypt_num: None,
+            encrypt_members: Arc::default(),
+            unfound: Arc::default(),
             encryption_changed: false,
             full_save: false,
+            new_id: false,
             out_security: None,
             out_encrypt_num: None,
         };
@@ -101,8 +110,10 @@ impl Document {
             xref_oddities: Arc::default(),
             located: Arc::default(),
             repair_log: Arc::new(Vec::new()),
+            unlinked_update: false,
             cache: Arc::default(),
             objstms: Arc::default(),
+            unreadable: Arc::default(),
             jbig2_globals: Arc::default(),
             stream_limit: stream_limit.min(crate::object::MAX_DECODED),
             overlay: BTreeMap::new(),
@@ -111,8 +122,11 @@ impl Document {
             version,
             security: None,
             encrypt_num: None,
+            encrypt_members: Arc::default(),
+            unfound: Arc::default(),
             encryption_changed: false,
             full_save: false,
+            new_id: false,
             out_security: None,
             out_encrypt_num: None,
         };
@@ -122,6 +136,8 @@ impl Document {
         }
         let parsed = doc.read_xref_chain(&mut log);
         let mut authenticated = false;
+        // The newest section cut the page tree off from the chain (see `update_cuts_off_the_pages`).
+        let mut cut_off = false;
         let ok = match parsed {
             Ok((entries, trailer, revisions, oddities)) => {
                 doc.entries = Arc::new(entries);
@@ -135,19 +151,27 @@ impl Document {
                     doc.authenticate(&enc, &credentials)?;
                     authenticated = true;
                 }
-                doc.root_is_catalog()
+                let catalog = doc.root_is_catalog();
+                cut_off = catalog && doc.update_cuts_off_the_pages();
+                catalog && !cut_off
             }
             Err(e) => {
                 log.push(format!("cross-reference data unreadable ({e}); rebuilding from object headers"));
                 false
             }
         };
+        if cut_off {
+            log.push(UNLINKED_UPDATE.into());
+            doc.unlinked_update = true;
+        } else if !ok && !doc.entries.is_empty() {
+            log.push("cross-reference data does not lead to a valid catalog; rebuilding from object headers".into());
+        }
         if !ok {
-            if !doc.entries.is_empty() {
-                log.push("cross-reference data does not lead to a valid catalog; rebuilding from object headers".into());
-            }
             doc.reconstruct(&mut log)?;
         }
+        // Header generations are plaintext, including in encrypted files. Inspect only the
+        // bounded headers, not object bodies, and retain the compact xref representation.
+        doc.note_xref_generation_repairs(&mut log);
         doc.repair_log = Arc::new(log);
         // Reconstruction may have found a different trailer: (re)authenticate against it.
         if (!ok || !authenticated)
@@ -165,6 +189,24 @@ impl Document {
         }
         doc.next_num = max.saturating_add(1).max(size).max(1);
         Ok(doc)
+    }
+
+    /// Whether the chain of cross-reference sections ends at the newest one (no `/Prev`, or one
+    /// that isn't an offset) although the file holds earlier sections, and the catalog's `/Pages`
+    /// is not among the objects that one section reaches. ISO 32000-2 §7.5.6 and §7.5.8.2 require
+    /// the `/Prev`; without it the earlier revisions, page tree and all, are cut off, so the file
+    /// is rebuilt from its object headers as a damaged one is (the newest definition of each
+    /// object wins), and the repair log says why. (A file whose `/Root` itself is missing is
+    /// rebuilt anyway.)
+    fn update_cuts_off_the_pages(&self) -> bool {
+        if self.revisions.len() != 1 {
+            return false;
+        }
+        let Some(root) = self.root() else { return false };
+        let Ok(catalog) = self.try_get_reference(root) else { return false };
+        let Object::Dict(catalog) = &*catalog else { return false };
+        // The page tree first: the scan for an earlier `startxref` reads the whole file.
+        !catalog.get(b"Pages").is_some_and(|pages| matches!(&*self.resolve(pages), Object::Dict(_))) && earlier_sections(&self.data)
     }
 
     fn authenticate(&mut self, enc: &Object, credentials: &Credentials<'_>) -> Result<(), CosError> {
@@ -185,30 +227,117 @@ impl Document {
         };
         let params = crate::security::encrypt_dict(self, &dict);
         let id0 = self.first_id();
+        // Read here, while nothing is decrypted yet.
+        let members = self.encryption_members(enc);
         let handler = match credentials {
-            Credentials::Password(password) => Arc::new(pdfcraft_crypt::SecurityHandler::open(params, &id0, *password).map_err(|e| match e {
-                pdfcraft_crypt::CryptError::WrongPassword if password.is_none() => CosError::NeedsPassword,
-                pdfcraft_crypt::CryptError::WrongPassword => CosError::WrongPassword,
-                other => CosError::Security(other.to_string()),
-            })?),
-            // The same encryption as the document whose key this is: that key opens it.
-            Credentials::Handler { handler, id0: known } if *handler.dict() == params && *known == id0 => Arc::clone(handler),
+            Credentials::Password(password) => match pdfcraft_crypt::SecurityHandler::open(params.clone(), &id0, *password) {
+                Ok(handler) => Arc::new(handler),
+                // No password, or the empty one: what only the embedded files need isn't asked.
+                Err(pdfcraft_crypt::CryptError::WrongPassword) => match self.without_password(&dict, params) {
+                    Some(handler) if password.is_none_or(str::is_empty) => Arc::new(handler),
+                    _ if password.is_none() => return Err(CosError::NeedsPassword),
+                    _ => return Err(CosError::WrongPassword),
+                },
+                Err(other) => return Err(CosError::Security(other.to_string())),
+            },
+            // The same encryption as the document whose key this is: that key opens it. A handler
+            // without the key opens only what it would open by itself.
+            Credentials::Handler { handler, id0: known } if *handler.dict() == params && *known == id0 => {
+                if !handler.has_key() && !crate::security::efopen_only(self, &dict) {
+                    return Err(CosError::NeedsPassword);
+                }
+                Arc::clone(handler)
+            }
             Credentials::Handler { .. } => return Err(CosError::NeedsPassword),
         };
         self.security = Some(handler);
         self.encrypt_num = num;
+        self.encrypt_members = Arc::new(members);
         // Objects read while locating the catalog were read before decryption was possible.
+        self.cache = Arc::default();
+        self.objstms = Arc::default();
+        self.unreadable = Arc::default();
+        Ok(())
+    }
+
+    /// The handler for a document opened without a password that only its embedded files need
+    /// (see [`crate::security::efopen_only`]). Not a repair: ISO 32000-2 §7.6.6 has such a
+    /// document open so; [`Document::embedded_files_locked`] tells it.
+    fn without_password(&self, dict: &Dict, params: pdfcraft_crypt::EncryptDict) -> Option<pdfcraft_crypt::SecurityHandler> {
+        crate::security::efopen_only(self, dict).then(|| pdfcraft_crypt::SecurityHandler::without_key(params)).flatten()
+    }
+
+    /// A document opened without the password its embedded files need takes either password
+    /// later: with the file key its embedded files decrypt, so what was read as stored is read
+    /// again. Refused while an edited stream holds data read as stored, which the key would
+    /// encrypt a second time.
+    fn unlock_embedded_files(&mut self, password: &str) -> Result<(), CosError> {
+        let Some(current) = self.security.as_deref() else { return Ok(()) };
+        if self.overlay_entries().any(|(_, _, o)| matches!(o.as_deref(), Some(Object::Stream(s)) if self.reads_as_stored(s))) {
+            return Err(CosError::Security("an embedded file was edited before the password was given: save or undo that edit first".into()));
+        }
+        let handler = pdfcraft_crypt::SecurityHandler::open(current.dict().clone(), &self.first_id(), Some(password)).map_err(|e| match e {
+            pdfcraft_crypt::CryptError::WrongPassword => CosError::WrongPassword,
+            other => CosError::Security(other.to_string()),
+        })?;
+        self.security = Some(Arc::new(handler));
+        self.source_identity = Arc::new(());
         self.cache = Arc::default();
         self.objstms = Arc::default();
         Ok(())
     }
 
+    /// Whether the document opened without the password its embedded files need (`/AuthEvent
+    /// /EFOpen`): their data is held, and saved, as stored, and isn't to be read as the files.
+    pub fn embedded_files_locked(&self) -> bool {
+        self.security.as_deref().is_some_and(|h| !h.has_key())
+    }
+
+    /// Whether `s`, a stream of this document, holds encrypted data that reads as stored because the
+    /// document opened without the password its embedded files need (see
+    /// [`Document::embedded_files_locked`]). Such data isn't the file it encrypts.
+    pub fn reads_as_stored(&self, s: &crate::Stream) -> bool {
+        self.security.as_deref().is_some_and(|h| crate::security::stream_reads_as_stored(self, h, s))
+    }
+
     /// The first file identifier, part of the encryption key (empty when there is none).
     fn first_id(&self) -> Vec<u8> {
-        match self.trailer.get(b"ID") {
-            Some(Object::Array(a)) => a.first().and_then(|s| s.as_string()).map(|s| s.bytes.clone()).unwrap_or_default(),
-            _ => Vec::new(),
+        let id = self.trailer.get(b"ID").map(|id| self.resolve(id));
+        let first = id.as_deref().and_then(Object::as_array).and_then(|a| a.first()).map(|s| self.resolve(s));
+        first.as_deref().and_then(Object::as_string).map(|s| s.bytes.clone()).unwrap_or_default()
+    }
+
+    /// The objects `/Encrypt`, given as `enc`, and `/ID` refer to, the ones they refer to, and so
+    /// on, up to [`MAX_ENCRYPT_MEMBERS`]. Their strings aren't encrypted (ISO 32000-2 §7.6.2): the
+    /// key is made from them, so they have to read as stored, and stay so. A number with no object
+    /// behind it, and a stream, which those dictionaries never hold, isn't one: an object added
+    /// under that number later, or a page's content a hostile `/Encrypt` names, is encrypted.
+    fn encryption_members(&self, enc: &Object) -> HashSet<u32> {
+        let mut pending = Vec::new();
+        crate::writer::collect_refs(enc, &mut |r| pending.push(r));
+        if let Some(id) = self.trailer.get(b"ID") {
+            crate::writer::collect_refs(id, &mut |r| pending.push(r));
         }
+        let mut members = HashSet::new();
+        while let Some(r) = pending.pop() {
+            if members.len() >= MAX_ENCRYPT_MEMBERS || members.contains(&r.num) {
+                continue;
+            }
+            let held = self.get(r);
+            if matches!(&*held, Object::Null | Object::Stream(_)) {
+                continue;
+            }
+            members.insert(r.num);
+            crate::writer::collect_refs(&held, &mut |x| pending.push(x));
+        }
+        members
+    }
+
+    /// Whether object `num` is written as it is held, being one of [`Document::encryption_members`],
+    /// unedited, and the save writing the same `/Encrypt`. What was edited or added is encrypted
+    /// whatever its number.
+    pub(crate) fn stored_as_is(&self, num: u32) -> bool {
+        !self.encryption_changed && !self.is_edited(num) && self.encrypt_members.contains(&num)
     }
 
     /// Lift the restrictions of a document opened with its user password by entering the
@@ -217,6 +346,9 @@ impl Document {
     /// Both passwords unlock the same file key, so nothing read so far is decoded again.
     pub fn unlock(&mut self, password: &str) -> Result<(), CosError> {
         let Some(current) = self.security.as_deref() else { return Ok(()) };
+        if !current.has_key() {
+            return self.unlock_embedded_files(password);
+        }
         if current.auth() == pdfcraft_crypt::Auth::Owner {
             return Ok(());
         }
@@ -244,9 +376,23 @@ impl Document {
         self.full_save = true;
     }
 
+    /// Like [`Document::require_full_save`], and the rewritten file also gets a new file identifier
+    /// (`/ID`), so that a redacted or sanitized copy never claims to be its source (ISO 32000-2
+    /// §14.4). An encrypted file keeps the first string of its identifier, which its key depends on.
+    pub fn require_full_save_with_new_id(&mut self) {
+        self.full_save = true;
+        self.new_id = true;
+    }
+
     /// The next save must rewrite the whole file (see [`Document::require_full_save`]).
+    /// Repair-aware edits retaining two accepted generations cannot use one incremental slot.
     pub fn full_save_required(&self) -> bool {
-        self.full_save
+        self.full_save || self.overlay.values().any(|slot| matches!(slot, Slot::RepairedSet(..)))
+    }
+
+    /// The next full save gives the file a new identifier (see [`Document::require_full_save_with_new_id`]).
+    pub fn new_id_required(&self) -> bool {
+        self.new_id
     }
 
     /// Security was set or removed since the document was opened (the next save applies it).
@@ -270,8 +416,9 @@ impl Document {
     /// always a full rewrite. Returns the handler (authenticated as owner).
     pub fn set_encryption(&mut self, params: &pdfcraft_crypt::NewEncryption) -> Result<(), CosError> {
         // The file identifier is part of the key; make sure it exists and keep it.
-        let id0 = match self.trailer.get(b"ID") {
-            Some(Object::Array(a)) if a.len() == 2 => a[0].as_string().map(|s| s.bytes.clone()).unwrap_or_default(),
+        let id = self.trailer.get(b"ID").map(|id| self.resolve(id));
+        let id0 = match id.as_deref() {
+            Some(Object::Array(a)) if a.len() == 2 => self.first_id(),
             _ => {
                 let id = pdfcraft_crypt::file_id(&params.seed);
                 let s = Object::String(crate::PdfString { bytes: id.clone(), hex: true });
@@ -338,8 +485,19 @@ impl Document {
     /// Decrypt a freshly parsed indirect object if the document is encrypted.
     pub(super) fn decrypted(&self, id: ObjRef, o: Object) -> Object {
         match &self.security {
-            Some(h) if Some(id.num) != self.encrypt_num => crate::security::transform(h, &o, id.num, id.generation, crate::security::Pass::Decrypt),
+            Some(h) if Some(id.num) != self.encrypt_num && !self.encrypt_members.contains(&id.num) => {
+                crate::security::transform(self, h, &o, id.num, id.generation, crate::security::Pass::Decrypt)
+            }
             _ => o,
         }
     }
+}
+
+/// The repair-log line for a file rebuilt because its last update has no `/Prev`.
+const UNLINKED_UPDATE: &str = "the file's last update has no /Prev link to its earlier revisions, so their objects (the page tree among them) are unreachable through the cross-reference chain; rebuilding from object headers";
+
+/// Whether `data` has more than one `startxref`: an update was appended to it, or it is
+/// linearized (whose first-page section links to the main one).
+fn earlier_sections(data: &[u8]) -> bool {
+    find(data, b"startxref", 0, data.len()).and_then(|at| find(data, b"startxref", at.saturating_add(9), data.len())).is_some()
 }
