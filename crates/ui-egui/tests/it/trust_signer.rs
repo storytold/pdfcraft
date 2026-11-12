@@ -178,9 +178,25 @@ impl pdfcraft_engine::sign::TimestampAuthority for TestTsa {
 #[test]
 fn one_click_trust_on_a_document_timestamp_trusts_its_authority_for_timestamps() {
     let tsa = TestTsa::new();
+    // A document timestamp is an incremental update, so the base file needs a cross-reference
+    // table that the update can extend.
+    let objs: [&str; 3] =
+        ["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [3 0 R] /Count 1 >>", "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] >>"];
+    let mut base = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(base.len());
+        base.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = base.len();
+    base.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        base.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    base.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
     let stamped = {
         let mut app = PdfCraftApp::new();
-        app.open_bytes("contract.pdf", None, FIXTURE.to_vec()).expect("opens");
+        app.open_bytes("contract.pdf", None, base).expect("opens");
         let id = app.views[0].id;
         app.session.timestamp_document(id, &tsa, "D:20261006120000Z".into()).expect("stamps").to_vec()
     };
