@@ -333,7 +333,7 @@ fn dialog_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, dialog: Dialog, req: &m
             }
         }
         Dialog::ManualDuplex => {
-            let (go, cancel) = crate::print_ui::second_side_body(ui);
+            let (go, cancel) = crate::print_ui::second_side_body(ui, app.second_side_ready());
             req.second_side_now = go;
             req.close = go || cancel;
             return false;

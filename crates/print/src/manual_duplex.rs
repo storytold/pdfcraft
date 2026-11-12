@@ -23,7 +23,7 @@ use std::sync::Arc;
 
 use pdfcraft_cos::{Dict, Document, Object, SaveOptions, Stream, write_full};
 
-use crate::PrintError;
+use crate::{PrintError, Sheet};
 
 /// The edge the sheets turn on, as automatic two-sided printing names it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -75,6 +75,13 @@ pub fn plan(sides: usize, flip: Flip, reverse: bool) -> Result<Passes, PrintErro
         backs.reverse();
     }
     Ok(Passes { fronts, backs })
+}
+
+/// The sheets one pass prints, for what the spooler is told about them (CUPS's orientation,
+/// [`crate::add_cups_orientation`]): the sheet of each of `sides`, and the last sheet for a blank
+/// side, as [`pass_pdf`] sizes it. A job laid out both ways can have a pass that runs one way.
+pub fn pass_sheets(sheets: &[Sheet], sides: &[Side]) -> Vec<Sheet> {
+    sides.iter().filter_map(|s| s.page.map_or(sheets.last(), |p| sheets.get(p))).cloned().collect()
 }
 
 /// The print-ready PDF of one pass: the `sides` of `print_ready` (an [`crate::impose`] result)
@@ -253,5 +260,21 @@ mod tests {
         assert_eq!(text(&pages[1]), "q -1 0 0 -1 612 792 cm\n% side 1\n\nQ\n");
         assert_eq!(text(&pages[2]), "% side 0\n");
         assert!(pass_pdf(&bytes, &[side(3, false)]).is_err(), "a side past the end");
+    }
+
+    #[test]
+    fn a_pass_of_landscape_sheets_runs_landscape_in_a_mixed_job() {
+        let sheet = |w, h| Sheet { size: (w, h), placed: Vec::new(), borders: Vec::new(), lines: Vec::new() };
+        // A portrait front, a landscape back, a portrait front: the job as a whole is mixed.
+        let sheets = [sheet(612.0, 792.0), sheet(792.0, 612.0), sheet(612.0, 792.0)];
+        assert_eq!(crate::cups_orientation(&sheets), None);
+        let passes = plan(3, Flip::LongEdge, true).unwrap();
+        let backs = pass_sheets(&sheets, &passes.backs);
+        // The blank back takes the last sheet's size, as pass_pdf draws it.
+        assert_eq!(backs.iter().map(|s| s.size).collect::<Vec<_>>(), [(612.0, 792.0), (792.0, 612.0)]);
+        assert_eq!(crate::cups_orientation(&pass_sheets(&sheets, &passes.fronts)), None);
+        let two = [sheet(612.0, 792.0), sheet(792.0, 612.0)];
+        let backs = pass_sheets(&two, &plan(2, Flip::ShortEdge, false).unwrap().backs);
+        assert_eq!(crate::cups_orientation(&backs), Some(("orientation-requested".into(), "4".into())));
     }
 }

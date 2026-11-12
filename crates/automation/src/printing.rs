@@ -419,6 +419,9 @@ impl Automation {
                 Some((back, sides))
             }
         };
+        // CUPS's orientation comes from the sheets this pass prints, which can all run one way
+        // in a job laid out both ways.
+        let pass_sheets = manual_sides.as_ref().map(|(_, sides)| print::manual_duplex::pass_sheets(&laid_out, sides));
         // Where it goes is checked before the Will Print actions run, so a call that can't print
         // doesn't change the document.
         let destination = match (a.opt_str("path")?, printer) {
@@ -432,7 +435,7 @@ impl Automation {
                     duplex,
                     media.as_deref(),
                     settings.raster.as_ref(),
-                    &laid_out,
+                    pass_sheets.as_deref().unwrap_or(&laid_out),
                 )?)
             }
             _ => return Err(bad("pass either path (save the print-ready PDF) or printer (a name from printers, or \"default\")")),

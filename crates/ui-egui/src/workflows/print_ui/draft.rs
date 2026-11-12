@@ -50,7 +50,7 @@ pub struct PrintDraft {
     pub manual_duplex: bool,
     /// The edge a manual two-sided print turns on.
     pub manual_flip: print::manual_duplex::Flip,
-    /// Send the backs last sheet first (a printer that gives the stack back the other way round).
+    /// Send the backs last sheet first, as the stack put back printed side up needs (the default).
     pub manual_reverse: bool,
     pub which: Which,
     pub range: String,
@@ -143,7 +143,8 @@ impl Default for PrintDraft {
             duplex: None,
             manual_duplex: false,
             manual_flip: Default::default(),
-            manual_reverse: false,
+            // The window says to put the stack back printed side up, which needs the backs reversed.
+            manual_reverse: true,
             which: Which::All,
             range: String::new(),
             selected: Vec::new(),
