@@ -269,3 +269,45 @@ fn the_proof_keeps_a_path_across_a_line_state_operator() {
     let text = proof("1");
     assert!(!text.contains("a path still paints inside the region"), "{text}");
 }
+
+/// Each line-state operator between building a path and painting it applies to that paint, in the
+/// walk and in the proof alike, and only as the renderer reads it: a width by `gs` reaches the mark,
+/// a round join by `1 j` or a limit of 2 by `M` keeps a sharp corner's miter from it, a mitered
+/// join by `0 j` or a limit of 10 by `M` after them sends it there, and `J` or
+/// `d` with a name among its operands, which the renderer skips, sets nothing (the line stays 30
+/// points wide). The proof is run before anything is applied, the walk applies.
+#[test]
+fn every_line_state_operator_between_a_path_and_its_paint_applies_to_it() {
+    let res = "/ExtGState << /Thin << /LW 1 >> /Wide << /LW 30 >> >>";
+    for (content, gone) in [
+        (&b"30 w 100 160 m 140 160 l /Thin J S"[..], 1),
+        (b"30 w 100 160 m 140 160 l [1] /Thin d S", 1),
+        (b"30 w 100 160 m 140 160 l 2 J S", 1),
+        (b"30 w 100 160 m 140 160 l [3 2] 0 d S", 1),
+        (b"100 160 m 140 160 l /Wide gs S", 1),
+        (b"30 w 100 160 m 140 160 l /Thin gs S", 0),
+        (b"20 w 100 265 m 120 175 l 140 265 l S", 1),
+        (b"20 w 100 265 m 120 175 l 140 265 l 1 j S", 0),
+        (b"20 w 100 265 m 120 175 l 140 265 l 2 M S", 0),
+        (b"1 j 20 w 100 265 m 120 175 l 140 265 l 0 j S", 1),
+        (b"2 M 20 w 100 265 m 120 175 l 140 265 l 10 M S", 1),
+    ] {
+        let shown = String::from_utf8_lossy(content);
+        assert_eq!(removed(content, res), gone, "the walk: {shown}");
+        let mut doc = one_page(content, res, vec![]);
+        mark(&mut doc, 0, &[[90.0, 90.0, 150.0, 150.0]], "");
+        let text = crate::tests_verify::prove_unapplied(&mut doc).to_text();
+        assert_eq!(text.contains("a path still paints inside the region"), gone == 1, "the proof: {shown}: {text}");
+    }
+    // A graphics state named by `J` or `d` sets no font either: the text after it is placed at the 10
+    // points `Tf` gave, and its last two glyphs lie under the mark.
+    for content in [
+        &b"BT /F1 10 Tf ET 0 0 m 1 1 l 2 J n BT 70 120 Td (Secret) Tj ET"[..],
+        b"BT /F1 10 Tf ET 0 0 m 1 1 l /GF J n BT 70 120 Td (Secret) Tj ET",
+        b"BT /F1 10 Tf ET 0 0 m 1 1 l [1] /GF d n BT 70 120 Td (Secret) Tj ET",
+    ] {
+        let mut doc = one_page(content, "/ExtGState << /GF << /Font [5 0 R 0.01] >> >>", vec![]);
+        mark(&mut doc, 0, &[[90.0, 90.0, 150.0, 150.0]], "");
+        assert_eq!(apply(&mut doc, None).unwrap().glyphs, 2, "{}", String::from_utf8_lossy(content));
+    }
+}

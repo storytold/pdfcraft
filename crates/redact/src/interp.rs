@@ -541,7 +541,7 @@ struct Walk {
     clip: bool,
     /// The box of the moves' points since something last drew from one, which the path's box takes
     /// once something does; and whether the path ends closed, which `h` and a closing paint then
-    /// leave as it is ([`Interp::construct_path`]).
+    /// leave as it is ([`Walk::construct_path`]).
     moved: Option<[f64; 4]>,
     closed: bool,
     /// Line-state operators (`w`, `M`, `j`, `J`, `d`, `gs`) met while a path is open: they apply to
@@ -786,7 +786,7 @@ impl Walk {
                     self.gs.miter_limit = limit;
                 }
             }
-            _ => {
+            b"gs" => {
                 let stroke = |key: &[u8]| op.last_name().and_then(|n| extgstate_number(doc, &self.ext_gstates, n, key));
                 if let Some(width) = stroke(b"LW") {
                     self.gs.line_width = width.abs();
@@ -803,6 +803,9 @@ impl Walk {
                     self.gs.type3_inherits = op.last_name().is_some_and(|n| extgstate_type3_inherits(doc, &self.ext_gstates, n));
                 }
             }
+            // `J` and `d`, held while a path is open, set nothing the walk reads: a name among
+            // their operands is no graphics state.
+            _ => {}
         }
     }
 

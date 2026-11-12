@@ -87,6 +87,13 @@ impl Geo<'_> {
     /// output means what it paints can't be vouched for.
     fn appearances(&mut self, page: &Dict, res: &Dict) {
         let doc = self.doc;
+        // A NoRotate appearance is turned off its /Rect on a rotated page, by rules the screen and
+        // print don't share (flag 5, or implied for /Text, widgets and links among them or not), and
+        // a /Rotate the renderer can't read gives way to an inherited one. So an appearance is taken
+        // to land on its /Rect only on a page certainly not turned: no /Rotate (inherited), or a
+        // whole multiple of 360.
+        let unturned =
+            page.get(b"Rotate").is_none_or(|o| doc.resolve(o).as_int().and_then(|r| i32::try_from(r).ok()).is_some_and(|r| r.rem_euclid(360) == 0));
         for a in crate::annots_of(doc, page) {
             // A direct dictionary has no reference of its own; it is checked like an indirect
             // one (what its appearance paints does not depend on how it is stored).
@@ -127,6 +134,14 @@ impl Geo<'_> {
                         self.unverifiable("an annotation appearance can't be placed, so what it paints can't be checked");
                         continue;
                     };
+                    // The renderer clips an appearance to its /BBox where it lands, on its /Rect
+                    // (ISO 32000-2 §12.5.5), as a form's: one whose /Rect is beside every region,
+                    // as the walk tells it, paints none there, though a stroke along its edge
+                    // reaches past it. On a page that may be turned it is checked where it is
+                    // placed here, as before.
+                    if unturned && rect.is_some_and(|r| self.touching(r).is_empty()) {
+                        continue;
+                    }
                     let own = st.dict.get(b"Resources").and_then(|x| doc.resolve(x).as_dict().cloned());
                     self.run(&data, own.as_ref().unwrap_or(res), ctm, Vec::new(), INITIAL_PEN, 1);
                 }

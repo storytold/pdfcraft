@@ -1797,3 +1797,68 @@ fn page_content(doc: &Document) -> String {
     let (_, data) = page_streams(doc, &p.dict, 0).unwrap();
     data.iter().map(|d| String::from_utf8_lossy(d).into_owned()).collect::<Vec<_>>().join("\n")
 }
+
+/// An annotation whose appearance lands beside the region is clipped there (ISO 32000-2 §8.10.1,
+/// placed on its `/Rect` by §12.5.5): on a page not turned, the proof doesn't take its border,
+/// stroked along the appearance's edge, for paint in a region its `/Rect` only touches, nor a
+/// hairline along an edge 0.4 points from it, nor a border placed by a skewed `/Matrix` whose box
+/// rounds a hair into the region. One whose `/Rect` reaches into the region is checked: its border
+/// paints there. On a page that may be turned, where a NoRotate appearance is turned off its
+/// `/Rect` by rules the screen and print don't share, every appearance is checked where it is
+/// placed, as before: a border touching the region then fails it, whatever the flags or the
+/// subtype, as it does at a `/Rotate` the renderer may read otherwise (`null` under a turned
+/// `/Pages`, `90.5`).
+#[test]
+fn an_appearance_beside_the_region_paints_nothing_in_it() {
+    let annotated = |ap: &[u8], rect: &str, pages: &str, page: &str, annot: &str, form: &str| {
+        let objs = vec![
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            format!("<< /Type /Pages /Kids [3 0 R] /Count 1 {pages} >>").into_bytes(),
+            format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] {page} /Contents 4 0 R /Annots [7 0 R] /Resources << /Font << /F1 5 0 R >> >> >>")
+                .into_bytes(),
+            stream("", b"BT /F1 10 Tf 10 100 Td (SECRETVALUE) Tj ET"),
+            FONT.as_bytes().to_vec(),
+            format!("[{}]", vec!["500"; 95].join(" ")).into_bytes(),
+            format!("<< /Type /Annot {annot} /Rect {rect} /AP << /N 8 0 R >> >>").into_bytes(),
+            stream(&format!("/Type /XObject /Subtype /Form {form}"), ap),
+        ];
+        let mut doc = open(pdf_bytes(objs, ""));
+        mark(&mut doc, &[REGION]);
+        doc
+    };
+    let border = b"1 w 0.5 0.5 49 16 re S";
+    let square = "/Subtype /Square";
+    let plain = "/BBox [0 0 50 17]";
+    for (ap, rect, form) in [
+        (&border[..], "[70 95 120 112]", plain),
+        (b"0 w 0 0 m 50 0 l S", "[70.4 95 120.4 112]", plain),
+        (b"1 w 0.6 0.6 49 16 re S", "[8.1 112 69.7 120.3]", "/BBox [0.1 0.1 50.1 17.1] /Matrix [0.3 0.1 0.2 0.9 5 7]"),
+    ] {
+        let (applied, proof) = run(&mut annotated(ap, rect, "", "", square, form));
+        assert!(applied.is_ok() && proof.passed(), "{} at {rect}: {applied:?}: {}", String::from_utf8_lossy(ap), proof.to_text());
+    }
+    let paints = |proof: &Proof| proof.to_text().contains("a path still paints inside the region");
+    let proof = prove_unapplied(&mut annotated(border, "[60 95 110 112]", "", "", square, plain));
+    assert!(paints(&proof), "{}", proof.to_text());
+    // A /Rect touching the region from below: beside it on a page not turned; checked where placed
+    // on one that may be.
+    for (pages, page, annot, beside) in [
+        ("", "", "/Subtype /Square /F 16", true),
+        ("", "/Rotate 360", "/Subtype /Square /F 16", true),
+        ("", "/Rotate 90", "/Subtype /Square /F 16", false),
+        ("", "/Rotate 90", "/Subtype /Square", false),
+        ("", "/Rotate 180", "/Subtype /Square /F 16", false),
+        ("", "/Rotate 270", "/Subtype /Square /F 16", false),
+        ("", "/Rotate 90", "/Subtype /Text /F 4", false),
+        ("", "/Rotate 90", "/Subtype /Widget /F 20", false),
+        ("/Rotate 90", "", "/Subtype /Square /F 16", false),
+        ("/Rotate 90", "/Rotate null", "/Subtype /Square /F 16", false),
+        ("", "/Rotate 90.5", "/Subtype /Square /F 16", false),
+        // 360 × 2³²: past the 32 bits the renderer reads a rotation in, so it takes the inherited.
+        ("/Rotate 90", "/Rotate 1546188226560", "/Subtype /Square /F 16", false),
+    ] {
+        let (applied, proof) = run(&mut annotated(border, "[20 78 40 95]", pages, page, annot, plain));
+        assert_eq!(applied.is_ok() && proof.passed(), beside, "{pages} {page} {annot}: {applied:?}: {}", proof.to_text());
+        assert_eq!(paints(&proof), !beside, "{pages} {page} {annot}: {}", proof.to_text());
+    }
+}
