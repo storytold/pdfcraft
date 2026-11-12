@@ -85,6 +85,7 @@ mod scroll_prefetch;
 mod search_position;
 mod side_panels;
 mod signing;
+mod smooth_images;
 mod snapshot_tabs;
 mod split_view;
 mod split_view_edits;
