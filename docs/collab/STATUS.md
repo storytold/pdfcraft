@@ -3807,6 +3807,50 @@ reload right after a commit asks the user to reopen the document. The same
 message appears in a clean run whenever the join has to start from a compacted
 base.
 
+### A closed socket no longer takes the seat of a reader that still has one (2026-11-12)
+
+The cabinet's WebKit run of the same day reported a state the Chromium run never
+reached: the owner's page said `Not allowed: not in this session`, the room's
+counters said the editor was in the room, and the ticket and the socket were
+fine. It is a room defect, and `24f519a` fixes it.
+
+`Room` registers a participant by its actor — one seat per person, not per
+connection — but `Hub::disconnect` removed that seat, the role and the writing
+lease for **every** closed connection. The page opens a new socket on a ticket
+renewal and again after a reconnect, so the room can see the new `hello` before
+the old socket's close reaches it; the actor then had a live connection and no
+seat, and every operation, presence frame and resync from it was refused with
+`Forbidden: not in this session` while the interface looked connected. WebKit
+made the window easy to hit (slower wasm start, a second `hello` per page), a
+Chromium tab that is reopened or closed reaches it too.
+
+The rule is now the obvious one: only the last connection of an actor leaving
+gives up the seat, the lease and the operation window. The test
+`a_closed_connection_does_not_take_the_seat_of_the_same_actor` joins the same
+actor twice, closes one connection and expects the other one's operation to be
+accepted; on the old code it is refused with `Forbidden: not in this session`.
+
+Reproduced and re-checked in both engines through the cabinet (file 43):
+
+| Run | Before `24f519a` | After |
+|---|---|---|
+| WebKit, the same account in two tabs, one closed | `Connected … owner: Not allowed: not in this session`, every frame `{"type":"error","code":"forbidden","message":"not in this session"}` | `Connected … owner`, the highlight is applied |
+| Chromium, the same two tabs | (the same rule; not measured before the fix) | `applied` with `version 4` |
+| WebKit, owner + editor + viewer | — | all three `Connected`, `Участников: 1`/`2`, edits both ways, no `forbidden` |
+| WebKit, edit and a double Commit | — | `Committed version 1794502272` in the bar and in the app, two `200`s |
+
+The room binary built from `24f519a` is `bb42c7c5…fa691` and replaced
+`68df6a7b…63238` on `craft-sync-pdfcraft` at 2026-11-12 19:39 MSK.
+
+**A separate trap seen while measuring (not fixed here):** the app's own Save
+(toolbar, `file.save`, Ctrl+S) still sends `pdfcraft:save` **with bytes**, which
+the cabinet stores as an ordinary new version behind the room's back. The room's
+marker then names the previous copy, and the next commit — and the next ticket —
+answer `409`, until the operator re-seeds the room or resolves it. In a
+live session the Save should go through `collab_commit` (the room owns the
+document). One version of the deployed file 43 (8504 B, 16:05Z) came from exactly
+that path.
+
 ### Rebase onto `origin/main` `8d5d39ef` and the gate run at the rebased head (2026-11-09)
 
 The branch was 40 commits ahead of `43f24aa1` (the `origin/main` it had been
