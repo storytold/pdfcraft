@@ -14,7 +14,7 @@ pub mod input;
 /// A stable point at the centre of the visible horizontal document ruler.
 pub fn horizontal_ruler_point(h: &Harness<'static, PdfCraftApp>) -> egui::Pos2 {
     let viewport = h.state().views[0].viewport_rect();
-    egui::pos2(viewport.center().x, viewport.top() + pdfcraft_ui_egui::ruler::HORIZONTAL_RULER_HEIGHT / 2.0)
+    egui::pos2(viewport.center().x, viewport.top() + pdfcraft_ui_egui::HORIZONTAL_RULER_HEIGHT / 2.0)
 }
 
 /// Step frames until `ready` holds or 30 seconds pass, and say whether it held. For background work
@@ -56,6 +56,18 @@ pub fn wait_until(h: &mut Harness<'static, PdfCraftApp>, what: &str, ready: impl
         h.state().password_prompt.as_ref().map(|p| (&p.name, &p.error)),
         h.state().toast
     );
+}
+
+/// Advance UI frames until a background worker publishes a value, with the same bounded wait used
+/// by the rest of the integration harness.
+pub fn wait_for_background<T>(h: &mut Harness<'static, PdfCraftApp>, what: &str, mut poll: impl FnMut() -> Option<T>) -> T {
+    let mut value = None;
+    let ready = step_until(h, |_| {
+        value = poll();
+        value.is_some()
+    });
+    assert!(ready, "timed out waiting for {what}");
+    value.expect("the completed background value")
 }
 
 /// Open the in-window menu bar's `title` menu (File, Edit, View…).

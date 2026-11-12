@@ -5,6 +5,8 @@ use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
 use pdfcraft_ui_egui::{Dialog, PdfCraftApp};
 
+use crate::support::wait_for_background;
+
 fn harness() -> Harness<'static, PdfCraftApp> {
     harness_with_settings(None)
 }
@@ -295,21 +297,13 @@ fn printing_landscape_sheets_tells_cups_to_turn_them() {
         choose(&mut h.state_mut().print_draft);
         h.run_steps(1);
         h.get_by(|n| n.label().as_deref() == Some("Print") && n.role() == Role::Button).click();
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-        loop {
-            match jobs.try_recv() {
-                Ok(job) => break job,
-                Err(std::sync::mpsc::TryRecvError::Empty) => {
-                    assert!(std::time::Instant::now() < deadline, "the job reached the spooler");
-                    // Printing is started and completed during later UI frames.
-                    h.run_steps(1);
-                    std::thread::yield_now();
-                }
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                    panic!("the spooler worker disconnected before sending the job");
-                }
+        wait_for_background(h, "the job reached the spooler", || match jobs.try_recv() {
+            Ok(job) => Some(job),
+            Err(std::sync::mpsc::TryRecvError::Empty) => None,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                panic!("the spooler worker disconnected before sending the job");
             }
-        }
+        })
     };
     let orientation = |job: &spool::Job| job.options.iter().filter(|(k, _)| k == "orientation-requested").map(|(_, v)| v.clone()).collect::<Vec<_>>();
     // Fit on Letter with Auto orientation lays both pages out on landscape sheets.
@@ -1693,15 +1687,7 @@ fn a_custom_paper_prints_at_its_size_and_its_printer_keeps_it() {
     }
     h.run_steps(8);
     h.get_by(|n| n.label().as_deref() == Some("Print") && n.role() == Role::Button).click();
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-    let pdf = loop {
-        if let Some(pdf) = sent.lock().unwrap().first().cloned() {
-            break pdf;
-        }
-        assert!(std::time::Instant::now() < deadline, "the job reached the spooler");
-        h.run_steps(1);
-        std::thread::yield_now();
-    };
+    let pdf = wait_for_background(&mut h, "the job reached the spooler", || sent.lock().unwrap().first().cloned());
     let printed = pdfcraft_cos::Document::open(Arc::new(pdf)).unwrap();
     let sheet = pdfcraft_model::pages(&printed)[0].display_size(&printed);
     assert!((sheet.0.min(sheet.1) - 288.0).abs() < 0.5 && (sheet.0.max(sheet.1) - 432.0).abs() < 0.5, "the label paper: {sheet:?}");
@@ -2005,15 +1991,7 @@ fn each_printer_keeps_what_it_last_printed_with_across_a_restart() {
         }
         h.run_steps(2);
         h.get_by(|n| n.label().as_deref() == Some("Print") && n.role() == Role::Button).click();
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-        loop {
-            if let Some(job) = jobs.lock().unwrap().get(before).cloned() {
-                break job;
-            }
-            assert!(std::time::Instant::now() < deadline, "the job reached the spooler");
-            h.run_steps(1);
-            std::thread::yield_now();
-        }
+        wait_for_background(h, "the job reached the spooler", || jobs.lock().unwrap().get(before).cloned())
     };
     let setup = |h: &Harness<'static, PdfCraftApp>| {
         let d = &h.state().print_draft;

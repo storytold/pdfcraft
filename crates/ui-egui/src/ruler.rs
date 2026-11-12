@@ -57,14 +57,14 @@ const POINT_INTERVALS: &[f64] = &[
 
 /// Screen axis measured by a ruler. Values grow rightward or downward in displayed-page space.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RulerOrientation {
+pub(crate) enum RulerOrientation {
     Horizontal,
     Vertical,
 }
 
 /// Importance of a generated ruler tick.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum TickKind {
+pub(crate) enum TickKind {
     Minor,
     Quarter,
     Medium,
@@ -73,7 +73,7 @@ pub enum TickKind {
 
 /// Tick cadence selected for a unit at the current displayed scale.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct TickSpec {
+pub(crate) struct TickSpec {
     pub minor_interval_units: f64,
     pub medium_every: u32,
     pub major_every: u32,
@@ -82,7 +82,7 @@ pub struct TickSpec {
 
 /// One visible tick, in logical screen points and the selected display unit.
 #[derive(Clone, Debug, PartialEq)]
-pub struct RulerTick {
+pub(crate) struct RulerTick {
     pub screen_position: f64,
     pub value: f64,
     pub kind: TickKind,
@@ -95,7 +95,7 @@ pub struct RulerTick {
 /// `page_origin` is the displayed page's left or top edge on that same axis. The page length is in
 /// PDF points and `screen_points_per_pdf_point` is the final scale used to draw the page.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct RulerGeometry {
+pub(crate) struct RulerGeometry {
     pub orientation: RulerOrientation,
     pub ruler_start: f64,
     pub ruler_end: f64,
@@ -107,7 +107,7 @@ pub struct RulerGeometry {
 
 impl RulerGeometry {
     /// Whether all geometry can be converted without division by zero or non-finite coordinates.
-    pub fn is_valid(self) -> bool {
+    pub(crate) fn is_valid(self) -> bool {
         self.ruler_start.is_finite()
             && self.ruler_end.is_finite()
             && self.ruler_end > self.ruler_start
@@ -120,7 +120,7 @@ impl RulerGeometry {
     }
 
     /// Logical screen points occupied by one selected display unit.
-    pub fn screen_points_per_unit(self) -> Option<f64> {
+    pub(crate) fn screen_points_per_unit(self) -> Option<f64> {
         if !self.is_valid() {
             return None;
         }
@@ -131,7 +131,7 @@ impl RulerGeometry {
 }
 
 /// Choose a readable labelled interval and divide it into eight standard-ruler subdivisions.
-pub fn choose_tick_spec(unit: Unit, screen_points_per_unit: f64) -> Option<TickSpec> {
+pub(crate) fn choose_tick_spec(unit: Unit, screen_points_per_unit: f64) -> Option<TickSpec> {
     if !screen_points_per_unit.is_finite() || screen_points_per_unit <= 0.0 {
         return None;
     }
@@ -200,7 +200,8 @@ fn tick_kind(index: i64, spec: TickSpec) -> TickKind {
 }
 
 /// Convert PDF points from the displayed page origin to a logical screen position.
-pub fn page_points_to_screen(geometry: RulerGeometry, page_points: f64) -> Option<f64> {
+#[cfg(test)]
+pub(crate) fn page_points_to_screen(geometry: RulerGeometry, page_points: f64) -> Option<f64> {
     if !geometry.is_valid() || !page_points.is_finite() {
         return None;
     }
@@ -209,7 +210,8 @@ pub fn page_points_to_screen(geometry: RulerGeometry, page_points: f64) -> Optio
 }
 
 /// Convert a logical screen position to PDF points from the displayed page origin.
-pub fn screen_to_page_points(geometry: RulerGeometry, screen_position: f64) -> Option<f64> {
+#[cfg(test)]
+pub(crate) fn screen_to_page_points(geometry: RulerGeometry, screen_position: f64) -> Option<f64> {
     if !geometry.is_valid() || !screen_position.is_finite() {
         return None;
     }
@@ -219,7 +221,7 @@ pub fn screen_to_page_points(geometry: RulerGeometry, screen_position: f64) -> O
 
 /// Generate ticks across the complete ruler. The page supplies a stable origin and scale but does
 /// not clip the ticks; measurements continue through the pasteboard on both sides.
-pub fn visible_ticks(geometry: RulerGeometry) -> Vec<RulerTick> {
+pub(crate) fn visible_ticks(geometry: RulerGeometry) -> Vec<RulerTick> {
     let Some(screen_points_per_unit) = geometry.screen_points_per_unit() else {
         return Vec::new();
     };
@@ -334,7 +336,7 @@ fn gcd(mut a: i64, mut b: i64) -> i64 {
 /// Compact, screen-fixed ruler bands modelled on the reference application's canvas chrome.
 /// Zoom changes tick cadence, never the amount of document viewport reserved by the rulers.
 pub const HORIZONTAL_RULER_HEIGHT: f32 = 18.0;
-pub const VERTICAL_RULER_WIDTH: f32 = 20.0;
+pub(crate) const VERTICAL_RULER_WIDTH: f32 = 20.0;
 const HORIZONTAL_LABEL_OUTER_PADDING: f32 = 1.0;
 const HORIZONTAL_LABEL_AFTER_TICK: f32 = 3.0;
 const VERTICAL_LABEL_AFTER_TICK: f32 = 3.0;
@@ -342,7 +344,7 @@ const RULER_LABEL_SIZE: f32 = 9.0;
 
 /// Read-only paint input for one ruler band.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct RulerPaintInput {
+pub(crate) struct RulerPaintInput {
     pub orientation: RulerOrientation,
     pub rect: egui::Rect,
     pub page_origin: f64,
@@ -374,7 +376,7 @@ impl RulerPaintInput {
 }
 
 /// Paint one clipped read-only ruler band. The caller owns layout and pointer policy.
-pub fn paint_ruler(ui: &egui::Ui, input: RulerPaintInput) {
+pub(crate) fn paint_ruler(ui: &egui::Ui, input: RulerPaintInput) {
     let style = RulerPaintStyle::from_ui(ui);
     let painter = ui.painter().with_clip_rect(input.rect);
     painter.rect_filled(input.rect, egui::CornerRadius::ZERO, style.outside_background);
@@ -394,7 +396,7 @@ pub fn paint_ruler(ui: &egui::Ui, input: RulerPaintInput) {
 }
 
 /// Paint the inert square where horizontal and vertical rulers meet.
-pub fn paint_corner(ui: &egui::Ui, rect: egui::Rect, unit: Unit) {
+pub(crate) fn paint_corner(ui: &egui::Ui, rect: egui::Rect, unit: Unit) {
     let unit_label = match unit {
         Unit::Inches => tl!("in"),
         Unit::Millimetres => tl!("mm"),
