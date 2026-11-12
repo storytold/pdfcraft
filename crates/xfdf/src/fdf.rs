@@ -513,7 +513,7 @@ pub(crate) fn fdf_body(fdf: &Document) -> Result<Dict, DataError> {
 }
 
 pub(crate) fn import_fdf(doc: &mut Document, bytes: &[u8]) -> Result<Report, DataError> {
-    let fdf = Document::open(std::sync::Arc::new(bytes.to_vec())).map_err(|e| DataError::Malformed(e.to_string()))?;
+    let fdf = crate::open_data_file(bytes)?;
     let body = fdf_body(&fdf)?;
     let mut report = Report::default();
     let mut budget = ImportBudget::new();

@@ -37,7 +37,7 @@ pub use combine::{
     CombineOutcome, Combiner, Run, SplitBy, combine, combine_grouped, combine_grouped_with, combine_selected, combine_selected_with, combine_with,
     extract_pages, split, split_ranges,
 };
-pub(crate) use copy::{Copier, copy_object};
+pub(crate) use copy::{Copier, copy_object, readable};
 use copy::{MAX_COPY_DEPTH, SKIP_ON_PAGE};
 use fields::{add_kid, field_and_widget, register_fields, resolve_field_conflicts, split_own_field};
 pub use fields::{combine_field_conflicts, field_name_conflicts};
@@ -203,6 +203,8 @@ fn import_pages_mapped(
     at: usize,
     conflicts: FieldConflicts,
 ) -> Result<Imported, OrganizeError> {
+    // Before anything is added to `dst`.
+    readable(src)?;
     let source = walk(src)?;
     if let Some(bad) = src_pages.iter().find(|i| **i >= source.len()) {
         return Err(OrganizeError::NoSuchPage(*bad));
@@ -556,6 +558,7 @@ pub fn reachable(src: &Document, value: &Object, max_objects: usize, max_bytes: 
 /// or image) is shared rather than stored twice. Returns `value` as `dst` refers to it. A chain
 /// nested more than 256 levels deep is refused; [`reachable`] bounds the size first.
 pub fn import_value(dst: &mut Document, src: &Document, value: &Object) -> Result<Object, OrganizeError> {
+    readable(src)?;
     let before: HashSet<u32> = dst.object_numbers().into_iter().collect();
     let mut copier = Copier::new(src, HashMap::new(), HashMap::new());
     let copied = copier.copy_value(dst, value, None)?;
@@ -575,6 +578,7 @@ pub fn import_value(dst: &mut Document, src: &Document, value: &Object) -> Resul
 /// form and its displayed size in points.
 pub fn page_as_form(dst: &mut Document, src: &Document, page: usize) -> Result<(ObjRef, (f64, f64)), OrganizeError> {
     use pdfcraft_cos::Stream;
+    readable(src)?;
     let all = walk(src)?;
     // `walk` gives the inheritable attributes (resources, boxes, rotation); the content is
     // the page's own.

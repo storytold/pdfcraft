@@ -143,9 +143,21 @@ pub fn export_data(doc: &Document, format: Format) -> String {
 }
 
 /// The field values in a form data file (FDF or XFDF) or a filled-in PDF form, in file order.
+/// An FDF or PDF data file, opened. One whose `/Encrypt` is there but can't be read holds its
+/// values encrypted, with nothing to decrypt them: refused, not read as data.
+pub(crate) fn open_data_file(bytes: &[u8]) -> Result<Document, DataError> {
+    let doc = Document::open(std::sync::Arc::new(bytes.to_vec())).map_err(|e| DataError::Malformed(e.to_string()))?;
+    if doc.encryption_unreadable() {
+        return Err(DataError::Malformed(
+            "its encryption dictionary (/Encrypt) is damaged and can't be read, so its values can't be decrypted".into(),
+        ));
+    }
+    Ok(doc)
+}
+
 pub fn data_values(bytes: &[u8]) -> Result<Vec<(String, Vec<String>)>, DataError> {
     if bytes.starts_with(b"%FDF") {
-        let fdf = Document::open(std::sync::Arc::new(bytes.to_vec())).map_err(|e| DataError::Malformed(e.to_string()))?;
+        let fdf = open_data_file(bytes)?;
         let body = fdf_body(&fdf)?;
         let mut values = Vec::new();
         let mut budget = ImportBudget::new();
@@ -155,7 +167,7 @@ pub fn data_values(bytes: &[u8]) -> Result<Vec<(String, Vec<String>)>, DataError
         return Ok(values);
     }
     if bytes.starts_with(b"%PDF") || bytes.windows(5).take(1024).any(|w| w == b"%PDF-") {
-        let doc = Document::open(std::sync::Arc::new(bytes.to_vec())).map_err(|e| DataError::Malformed(e.to_string()))?;
+        let doc = open_data_file(bytes)?;
         return Ok(pdfcraft_forms::fields(&doc)
             .into_iter()
             .filter(|f| !matches!(f.kind, FieldKind::PushButton | FieldKind::Signature))
