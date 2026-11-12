@@ -238,7 +238,7 @@ impl DocView {
         self.errors.remove(&page);
         self.cut_pages.remove(&page);
         self.last_queue.clear();
-        if self.selection.is_some_and(|s| s.page == page) {
+        if self.selection.is_some_and(|s| s.pages().contains(&page)) {
             self.selection = None;
         }
     }
@@ -559,7 +559,7 @@ impl DocView {
         }
         let mut keep: HashSet<usize> = self.frame_visible.clone();
         if let Some(s) = self.selection {
-            keep.insert(s.page);
+            keep.extend(s.pages());
         }
         if let Some(f) = self.find.as_ref() {
             keep.extend(f.matches.iter().map(|(p, _)| *p));

@@ -431,7 +431,11 @@ pub(crate) fn page_after_text(resp: &egui::Response, cx: &PageCx<'_>, view: &mut
     let QuickTool::Comment(tool) = cx.tool else { return };
     let finished = resp.drag_stopped_by(egui::PointerButton::Primary) || resp.double_clicked();
     if tool == CommentTool::ReplaceText && cx.allowed && finished {
-        if let Some((page, quads)) = view.selection_quads(cx.info).filter(|(p, _)| *p == cx.page) {
+        // A replacement sits on one page: a selection across pages stays selected for the bar's
+        // markup or Copy.
+        if let Ok([(page, quads)]) = <[_; 1]>::try_from(view.selection_quads(cx.info))
+            && page == cx.page
+        {
             view.clear_selection();
             let last = quads.last().copied().unwrap_or_default();
             let at = [last[2].max(last[6]), last[1].max(last[3])];
@@ -443,12 +447,22 @@ pub(crate) fn page_after_text(resp: &egui::Response, cx: &PageCx<'_>, view: &mut
     if tool.markup().is_none() || !cx.allowed || !finished {
         return;
     }
-    if let Some(kind) = tool.markup()
-        && let Some((page, quads)) = view.selection_quads(cx.info).filter(|(p, _)| *p == cx.page)
-    {
+    let Some(kind) = tool.markup() else { return };
+    // Once, from whichever of the selection's pages is drawn: after an edge scroll its first page
+    // may be out of view. Every page it covers gets its own markup, in one undo step.
+    let marks = view.selection_quads(cx.info);
+    if marks.iter().any(|(p, _)| *p == cx.page) {
         view.clear_selection();
-        view.pending_edit = Some(new_comment(cx, tool, Shape::TextMarkup { kind, quads }, String::new()));
-        let _ = page;
+        let edits = marks.into_iter().map(|(page, quads)| {
+            Edit::AddAnnotation(pdfcraft_engine::NewAnnotation {
+                page,
+                shape: Shape::TextMarkup { kind, quads },
+                style: cx.prefs.style(tool),
+                contents: String::new(),
+                author: cx.prefs.author.clone(),
+            })
+        });
+        view.pending_edit = crate::canvas::one_undo_step(edits.collect());
     }
 }
 
