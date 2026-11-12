@@ -19,8 +19,11 @@ pub(crate) fn run(files: &[String], javascript: bool) -> Vec<String> {
     let mut leftover = Vec::new();
     for file in files {
         let printed = prepare(file, javascript).and_then(|(pdf, mut job)| {
-            // As the Print dialog sends it: on Windows large pictures become tiles (#5131).
-            let pdf = pdfcraft_engine::spooler::spooler_copy(pdf, &mut job);
+            // As the Print dialog sends it: on Windows large pictures become tiles (#5131), and a
+            // GDI (v3) driver gets transparent sheets flattened (#6155, #5838, #5940). The job
+            // names no printer, so the driver asked about is the default printer's.
+            let flatten = default_printer().is_some_and(|name| spool::gdi_driver(&name));
+            let pdf = pdfcraft_engine::spooler::spooler_copy(pdf, &mut job, flatten);
             spool::submit(&pdf, &job).map_err(|e| e.to_string())
         });
         match printed {
@@ -32,6 +35,11 @@ pub(crate) fn run(files: &[String], javascript: bool) -> Vec<String> {
         }
     }
     leftover
+}
+
+/// The system default printer's name, which the verb's jobs go to; none when there is none.
+fn default_printer() -> Option<String> {
+    spool::printers().into_iter().find(|p| p.default).map(|p| p.name)
 }
 
 /// The print-ready PDF of `path` and its job for the default printer, or why there is none.
