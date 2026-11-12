@@ -16,7 +16,8 @@ use crate::OrganizeError;
 const MAX_FORM_DEPTH: u8 = 8;
 /// Count every resource object and direct child; a graph beyond this is left unpruned.
 const MAX_GLYPH_RESOURCE_WORK: usize = 10_000;
-/// Resource entries [`Pruner::lend_own`] may queue in one run; a file that needs more is not pruned.
+/// Resource and font entries [`Pruner::lend_own`] may go through in one run; a file that needs
+/// more is not pruned.
 const MAX_LEND_WORK: usize = 100_000;
 
 /// The dictionary a set of drawn names belongs to.
@@ -218,20 +219,37 @@ impl Pruner<'_> {
             }
             let owner = Owner::Resources(res.as_ref().unwrap_or(r));
             // Type 3 glyphs draw from resources of their own, which nothing here reads either.
+            // Scanning the font catalog for them counts toward the walk's work.
+            let fonts = dict.get(b"Font").map(|f| self.doc.resolve(f)).and_then(|f| f.as_dict().map(Dict::len)).unwrap_or(0);
+            if !self.charge(fonts) {
+                return;
+            }
             self.protect_type3_resources(&dict, owner);
             let mut inner: Vec<Object> = lenders(self.doc, &dict);
             if let Some((xobjects, key)) = self.xobjects(&dict, owner) {
                 self.lent.insert(key);
                 inner.extend(xobjects.iter().map(|(_, x)| x.clone()));
             }
-            #[cfg(test)]
-            crate::work(inner.len());
-            let Some(left) = self.lend_work_left.checked_sub(inner.len()) else {
-                self.lend_work_left = 0;
+            if !self.charge(inner.len()) {
                 return;
-            };
-            self.lend_work_left = left;
+            }
             todo.extend(inner.iter().filter_map(Object::as_ref).map(|x| (x, depth + 1)));
+        }
+    }
+
+    /// Count `n` entries against [`MAX_LEND_WORK`]: `false` once it is spent.
+    fn charge(&mut self, n: usize) -> bool {
+        #[cfg(test)]
+        crate::work(n);
+        match self.lend_work_left.checked_sub(n) {
+            Some(left) => {
+                self.lend_work_left = left;
+                true
+            }
+            None => {
+                self.lend_work_left = 0;
+                false
+            }
         }
     }
 

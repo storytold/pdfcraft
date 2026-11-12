@@ -5116,6 +5116,31 @@ fn a_part_whose_appearance_or_pattern_may_draw_an_image_keeps_them() {
     assert!(xo(&glyphs, &res(&glyphs, fonts.get(b"T3").unwrap())).contains(b"ImA"), "the image a Type 3 glyph draws must stay");
 }
 
+/// Font catalogs the lending walk scans for Type 3 fonts count toward its work: past the limit
+/// (100,000 entries) the file is not pruned, so a page that draws nothing keeps its image.
+#[test]
+fn lending_counts_the_font_catalogs_it_scans() {
+    let (forms, fonts) = (20, 6_000);
+    let list = |n: usize, f: &dyn Fn(usize) -> String| (0..n).map(f).collect::<Vec<_>>().join(" ");
+    let mut b: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 200 200] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Contents 9 0 R /Resources << /XObject << /ImA 7 0 R >> >> >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Resources << >> /Annots [<< /Type /Annot /Subtype /Square /Rect [0 0 50 50] /AP << /N 5 0 R >> >>] >>".into(),
+        format!(
+            "<< /Subtype /Form /BBox [0 0 50 50] /Resources << /XObject << {} >> >> /Length 5 >>\nstream\n0 0 m\nendstream",
+            list(forms, &|i| format!("/F{i} {} 0 R", 10 + i))
+        ),
+        format!("<< {} >>", list(fonts, &|i| format!("/T{i} 8 0 R"))),
+        image(1, 1, 1),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".into(),
+        raw("0 0 m"),
+    ];
+    b.extend((0..forms).map(|_| "<< /Subtype /Form /BBox [0 0 1 1] /Resources << /Font 6 0 R >> /Length 5 >>\nstream\n0 0 m\nendstream".to_string()));
+    let part = full_roundtrip(&extract_pages(&open(build(&b, "/Root 1 0 R")), &[0, 1]).unwrap());
+    assert_eq!(xobject_names(&part, 0), vec![b"ImA".to_vec()], "20 scans of 6,000 fonts pass the limit, so nothing is pruned");
+}
+
 /// Forms an appearance lists that share one resource dictionary walk it once, so lending stays
 /// linear in the file.
 #[test]
