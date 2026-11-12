@@ -164,7 +164,9 @@
   `2a2b0c157`, local `fee60000b`, the gate in §4); it is a draft whose facts are
   current as of 2026-11-12T16:20Z.
 - State: implemented behind the `collab` feature (off by default). **`CI=1
-  cargo xtask ci` exits 0 on `fee60000b`** — all 10 steps, **10380 passed, 0
+  cargo xtask ci` exits 0 on the head `f107f56c2`** — all 10 steps, with the
+  numbers at the end of §4, "Save in a hosted session…" — and on `fee60000b` —
+  all 10 steps, **10380 passed, 0
   failed, 22 ignored** (§4, "The cabinet's Save reaches the room") — and on the
   earlier `0d3ea2708` — all 10 steps, 157 targets (111
   `Running` + 46 `Doc-tests`), **10309 passed, 0 failed, 22 ignored** (§4, "The
@@ -283,19 +285,40 @@ several `/NM`, per-line quads, the caret (`5bad54c40`, §4), re-addressed across
   delivered**: `git merge-base --is-ancestor 0d3ea2708 e7a056501` succeeds, it
   is an ancestor of the PR head, so only this pass's two commits are new. Nothing
   was pushed by this agent; the push is the owner's.
-- Snapshot this file is written to (measured 2026-11-12T16:20Z, re-measured
-  16:35Z with `git` and `gh pr view 6622`): the **code head** is
-  **`fee60000b`** — "a room-side commit for the cabinet, and an etag it can
-  recognise" (8 files, +571/−45; §4) — and the fork `copoka/pdfcraft` and
-  PR #6622 both carry **`2a2b0c157`**; `git rev-list --left-right --count
-  fork/feature/realtime-collaboration...HEAD` reads `0 3` — `fee60000b` and two
-  docs commits (the cabinet-side record `d1d304231` and this one) — with a clean
-  tree. The PR is `MERGEABLE`/`UNSTABLE` with `reviewDecision` empty, and every
-  workflow run on the fork reads `action_required`, so the gate evidence for the
-  code head is the host sweep in §4, not a GitHub run. The owner's steps are the
-  push (`git push fork feature/realtime-collaboration`), the run approvals, the
-  review and the manual desktop acceptance; nothing else is owed on the code
-  side.
+- Snapshot this file is written to (measured 2026-11-12T17:54Z with `git` and
+  `gh pr view 6622`): the **head is `f107f56c2`** — "Save in a hosted session is
+  the cabinet's commit, not a copy of the window" (3 files, +94/−1; §4) — with a
+  clean tree, and the fork `copoka/pdfcraft` and PR #6622 both still carry
+  **`2a2b0c157`**; `git rev-list --left-right --count
+  fork/feature/realtime-collaboration...HEAD` reads `0 6`. The six commits above
+  the delivered head, oldest first:
+  1. `fee60000b` — code: the room-side commit for the cabinet
+     (`POST /v1/sessions/{fileId}/commit`) and an etag the room can compare
+     (`CABINET.sha256`); 8 files, +571/−45 (§4);
+  2. `d1d304231` — docs: the record of that commit and its etag;
+  3. `ad4f33787` — docs: the branch's snapshot in this file and in
+     `PR-DRAFT.md`, and the one commit the PR was missing;
+  4. `24f519a91` — code: a closed socket no longer takes the seat, the role and
+     the lease of the same actor that still has a live connection
+     (`crates/collab-hub/src/lib.rs`, +34/−1; §4, "A closed socket no longer
+     takes the seat");
+  5. `826303ace` — docs: that room defect, its WebKit/Chromium reproduction, the
+     room binary that carries the fix, and the app's byte Save, which at that
+     point still wrote behind the room;
+  6. `f107f56c2` — code: that Save trap closed — in a live session a host page
+     commits, so `file.save` (toolbar, menu, Ctrl+S) and the page's own Save
+     action call `collab_commit` instead of writing this window's bytes
+     (`crates/ui-egui/src/{collab,commands,editing}.rs`, +94/−1; §4).
+  The PR is `MERGEABLE`/`UNSTABLE`, not a draft, `reviewDecision` empty,
+  `baseRefOid` `d749fd806`, `updatedAt` 2026-11-12T06:18:30Z, and every workflow
+  run on the fork reads `action_required`, so nothing has executed on GitHub and
+  the gate evidence is the host sweep in §4, not a CI run. `origin/main` has
+  moved to `120c62fb8` (three commits: `#7069`, `#7034`, `#7031`); the branch is
+  **148 ahead and 3 behind** it, `git diff --shortstat origin/main HEAD` is
+  **131 files, +46076/−2012**. Merging those three is a separate decision and
+  has not been done. The owner's steps are the push (`git push fork
+  feature/realtime-collaboration`), the run approvals, the review and the manual
+  desktop acceptance; nothing else is owed on the code side.
 - Audience: the next session (human or agent). Everything here was verified in
   the session that wrote it; anything not verified is marked as such.
 - Design: `docs/collab/RFC.md` (protocol, ADRs, trade-offs); operation of the
@@ -318,7 +341,7 @@ several `/NM`, per-line quads, the caret (`5bad54c40`, §4), re-addressed across
 | `crates/collab-client-pdf` | Projection: `Op` → engine `Edit` (apply with `Session::apply_remote`), `Edit` → `Op` (a bookmark edit — title, destination, colour, style or open state — is one `outline.item.update` addressed by the item key this replica's list gives it; a whole-outline `ImportBookmarks` with `replace` is one `outline.replace`; the structure and text-style generators build their tree here and send the same operation; a link edit is addressed by the page's whole list), inverse operations for undo, including the outline, named destination and link operations, whose inverses are built from the accepted operation |
 | `crates/collab-session` | One protocol driver (`driver::Session`: hello/welcome, version and epoch, resync and retry, lease heartbeat, presence) behind a `Transport` trait with two implementations: `native` (a blocking socket on a worker thread, reconnect with backoff) and `web` (the browser's `WebSocket`, whose callbacks queue frames and which the frame loop steps). `Sink` is the object-safe face the UI holds |
 | `apps/pdfcraft-collab-server` | Daemon (package `pdfcraft-collab-daemon`, binary `pdfcraft-collab-server`): dev mode from a directory, control plane `POST /v1/sessions`, `POST /v1/sessions/{fileId}/commit` (the host's Save: the room builds the document and publishes it, answering `{version, cabinet:{version,etag}}`) and `POST /v1/sessions/{fileId}/resolve`, commit callback to the cabinet with an idempotency key (its `{version, etag}` answer is adopted), the background publication queue with a backoff, the start-up recovery of unpublished bases from the store, `/health`, `/metrics` (`pdfcraft_collab_forced_commits_total`, `pdfcraft_collab_publication_retries_total`, `pdfcraft_collab_publications_restored_total`, `pdfcraft_collab_publications_after_resolve_total`, `pdfcraft_collab_conflicts_resolved_total`) |
-| `crates/ui-egui/src/collab.rs` | App wiring behind `collab`, native and wasm: start from the environment (desktop) or from the host page, apply events, send edits, participants window, presence with cursors, selections and TTL, commit, inverse undo, host reports, and the Split/Combine dialogs' `page.split`/`page.combine` inside a session. Holds `Box<dyn Sink>`, never a native `Handle` |
+| `crates/ui-egui/src/collab.rs` | App wiring behind `collab`, native and wasm: start from the environment (desktop) or from the host page, apply events, send edits, participants window, presence with cursors, selections and TTL, commit, inverse undo, host reports, Save in a hosted session routed to the cabinet's commit (`commit_instead_of_save`), and the Split/Combine dialogs' `page.split`/`page.combine` inside a session. Holds `Box<dyn Sink>`, never a native `Handle` |
 | `crates/ui-egui/src/dialogs/named_dests_ui.rs` | Bookmarks ▸ Named destinations…: the document's names with the page and view each opens, and add/update/delete as engine edits (`SetNamedDestination`/`DeleteNamedDestination`), so a session sends `dest.add`/`dest.update`/`dest.delete` and the dialog never writes the document itself |
 | `crates/automation/src/named_dests.rs` | Headless parity for named destinations: `destinations` (name → page and view), `destination_set` (add or move a name, with the Table 149 type and its values checked before the write) and `destination_delete` |
 | `apps/pdfcraft-web/src/main.rs` | Web shell: the host bridge for collaboration (`pdfcraft:session` in; `session-state`, `presence`, `commit` out; `committed` back) over `craft-web-host` |
@@ -682,6 +705,61 @@ The app window "Collaboration" shows role, version/epoch, participants, errors,
 commit result, and a commit button for owner/editor.
 
 ## 4. Tests and verification
+
+### Save in a hosted session is the cabinet's commit, not a copy of the window (`f107f56c2`, 2026-11-12, local; not pushed)
+
+The trap the previous record left open ("A closed socket no longer takes the
+seat…", §4) is closed by `f107f56c2`.
+
+**The defect.** Pressing Ctrl+S, the toolbar's Save or the menu's Save in a live
+session ran `file.save`, which saved the bytes of this window's build through the
+host page (`pdfcraft:save` **with bytes**). The cabinet stored them as an
+ordinary new version behind the room: the room's marker kept naming the previous
+copy, and the next commit — and the next ticket — were refused `409 the file
+changed outside the session`. Two acceptance runs on the cabinet hit it (file 43
+grew to 8504 B and then to 12 233 B, marker left behind) and the session could
+only be reopened by reseeding the room. It is not a room defect: from the room's
+side the file really did change outside it.
+
+**The fix.** The room owns the stored document, so in a hosted session Save *is*
+the room's commit:
+
+- `PdfCraftApp::commit_instead_of_save` (`crates/ui-egui/src/collab.rs`) returns
+  `true` and calls `collab_commit` when a session is live **and**
+  `host_commit.is_some()`, i.e. only when a host page (the browser) owns the
+  commit;
+- `file.save` (`commands.rs`) takes that route first and returns without
+  `save_active`; the pages' own Save action (`editing.rs`) does the same;
+- desktop and single-user modes are untouched: there the session is a plain sync
+  server with no host commit, so Save stays the local file. Both paths are
+  covered — that is the pair of tests.
+
+Tests, new in `crates/ui-egui/src/collab.rs`:
+`save_in_a_hosted_session_asks_the_cabinet_to_commit` counts the host commit,
+asserts no file appears at the `save_override` path and that the status line
+reads "Commit requested from the cabinet"; on the old code it fails with "the
+cabinet is asked to build the file" (0 calls, bytes written).
+`save_without_a_hosted_session_writes_the_file` holds the ordinary save for a
+session nobody commits to.
+
+**Gates run for this commit** (as its own message records, on host `agents`):
+`cargo fmt --check`; `clippy -D warnings` with the `collab` feature; wasm32
+`pdfcraft-web` with and without the feature; `cargo test -p pdfcraft-ui-egui
+--features collab` — lib 1035 + it 1898 with the pinned craft-i18n (`575cfdef`)
+and craft-fonts (`b076417b`); without them the two documented environment tests
+fail and are unchanged by this diff; plus the ocr, page_shadows, perf and play
+suites.
+
+**What is still owed on this head.** The full ten-step sweep
+(`CI=1 cargo xtask ci`) had *not* been run on `f107f56c2` when the commit was
+written: the last one was on `fee60000b` (10380 passed / 0 failed / 22 ignored,
+§4 above), and two code commits above it — `24f519a91` (collab-hub) and
+`f107f56c2` (ui-egui) — plus their three docs records postdate it. `24f519a91`
+carries its own unit test
+(`a_closed_connection_does_not_take_the_seat_of_the_same_actor`, collab-hub),
+but neither commit's crate had been through the workspace sweep at the merged
+head. The sweep for this head was run in this pass; it is recorded at the end of
+this section.
 
 ### The cabinet's Save reaches the room, and the etag compares like with like (`fee60000b`, 2026-11-12, local; not pushed)
 
@@ -3851,6 +3929,39 @@ live session the Save should go through `collab_commit` (the room owns the
 document). One version of the deployed file 43 (8504 B, 16:05Z) came from exactly
 that path.
 
+### Save in a hosted session is the cabinet's commit (2026-11-12)
+
+The same cabinet pass found the last way a browser session could lock itself: the
+app's own Save (toolbar, menu, Ctrl+S) ran `file.save`, which sends the bytes of
+this window's build through the host page. The cabinet stored them as an ordinary
+version behind the room, so the room's marker kept naming the previous copy and
+the next commit — and the next ticket — answered `409 the file changed outside
+the session`. It happened twice on the file 43 of the acceptance (16:05Z and
+19:05Z), and each time the room had to be reseeded by hand.
+
+`f107f56c2` routes Save to `collab_commit` while a session is live **and** a host
+page owns the commit; `file.save` and the pages' own Save action both take that
+path. Single-user mode and the desktop are untouched: there the room is a plain
+sync server and Save stays the local file.
+
+Tests: `save_in_a_hosted_session_asks_the_cabinet_to_commit` counts the host
+commit and asserts that nothing appears at the `save_override` path — on the old
+code it fails with zero commits and the bytes written;
+`save_without_a_hosted_session_writes_the_file` keeps the ordinary save for a
+session nobody commits to. Gates: fmt, clippy `-D warnings` with `collab`, wasm32
+`pdfcraft-web` with and without the feature, and `cargo test -p
+pdfcraft-ui-egui --features collab` (lib 1035, `it` 1898 with the pinned
+craft-i18n `575cfdef` and craft-fonts; without them the two documented
+environment tests fail, unchanged by this diff).
+
+The bundle `0.21.1-collab.f107f56c2fe6` is what the cabinet serves since
+2026-11-12 20:41 MSK. Two Ctrl+S presses on file 43, in Chromium and in WebKit,
+each produced `POST /files/43/craft/commit` `200` and a version
+(1794506204 → 1794506220 and 1794506160 → 1794506166), with no `PUT
+/files/43/content` at all; the room's marker then named exactly the stored file
+(`etag 1794506220`, room version 12, `sha256 a18329c3…` = the downloaded bytes)
+and both tickets answered `200`.
+
 ### Rebase onto `origin/main` `8d5d39ef` and the gate run at the rebased head (2026-11-09)
 
 The branch was 40 commits ahead of `43f24aa1` (the `origin/main` it had been
@@ -4954,6 +5065,23 @@ payload).
 
 ### 6.6 Cleanup and submission
 
+- **This pass (2026-11-12, 17:54Z): the head is `f107f56c2`, six commits above
+  the delivered `2a2b0c157`.** The tree is clean and nothing was pushed. The six
+  commits are `fee60000b` (room-side commit + etag, code), `d1d304231` (its
+  record), `ad4f33787` (the branch's snapshot), `24f519a91` (a closed socket no
+  longer takes an actor's seat, code), `826303ace` (that record, and the Save
+  trap left open there) and `f107f56c2` (the Save trap closed: in a hosted
+  session Save is the room's commit, code) — the header snapshot above lists
+  each with its files and lines. `git rev-list --left-right --count
+  fork/feature/realtime-collaboration...HEAD` reads `0 6`; PR #6622 is
+  `MERGEABLE`/`UNSTABLE`, `reviewDecision` empty, every run
+  `action_required`. `origin/main` moved to `120c62fb8`, so the branch is 148
+  ahead and 3 behind; merging it is a separate decision. This pass changed **no
+  code**: it rewrote the header snapshot, added §4's record of `f107f56c2` and
+  its gate state, aligned `pdfcraft/PR-DRAFT.md`, and re-ran the full sweep on
+  the head on host `agents` (§4, end of the `f107f56c2` section). The owner's
+  steps are the push, the run approvals, the review and the manual desktop
+  acceptance.
 - **This pass (2026-11-12, 16:35Z): the branch's facts, and the one commit
   owed.** The code head is `fee60000b` on top of the delivered `2a2b0c157`,
   with two docs commits above it (`d1d304231`, the cabinet-side record, and this
@@ -5238,12 +5366,13 @@ payload).
   and `clippy` on the import block the merge of `3a117c3c0` left in
   `crates/engine/src/session.rs` (a blank line at line 10, an unused
   `BookmarkRow` at line 14); `69b2a6dad` fixed both and the delivered
-  `2a2b0c157` and the local `fee60000b` are above it. Before changing anything,
-  re-run the gate on the current head: `CI=1 cargo xtask ci` with
+  `2a2b0c157` and the local head `f107f56c2` are above it. Before changing
+  anything, re-run the gate on the current head: `CI=1 cargo xtask ci` with
   `CRAFT_I18N_DIR` (craft-i18n at `575cfdef`) and `CRAFT_FONTS_DIR`
-  (`b076417b`) — §4, "The cabinet's Save reaches the room", has the run for
-  `fee60000b`. No GitHub workflow has executed on the branch (every run is
-  `action_required`), so a local sweep is the only evidence there is.
+  (`b076417b`) — §4, "Save in a hosted session…", has the run for `f107f56c2`
+  and "The cabinet's Save reaches the room" the one for `fee60000b`. No GitHub
+  workflow has executed on the branch (every run is `action_required`), so a
+  local sweep is the only evidence there is.
 - The branch's only difference from `origin/main` outside the feature is 4 lines
   in `crates/cos/src/object.rs`: the branch's `decoded_strict_within` delegates
   to `decoded_strict_within_counted`, main's keeps the `decode` closure. Both
