@@ -290,8 +290,12 @@ several `/NM`, per-line quads, the caret (`5bad54c40`, §4), re-addressed across
   the cabinet's commit, not a copy of the window" (3 files, +94/−1; §4) — with a
   clean tree, and the fork `copoka/pdfcraft` and PR #6622 both still carry
   **`2a2b0c157`**; `git rev-list --left-right --count
-  fork/feature/realtime-collaboration...HEAD` reads `0 6`. The six commits above
-  the delivered head, oldest first:
+  fork/feature/realtime-collaboration...HEAD` reads `0 6` at the measurement.
+  Two docs records now sit above it — `ff4a93462` (the cabinet-side acceptance,
+  written by the parallel acceptance pass) and this one — so the branch reads
+  `0 8` once this record is committed. The six
+  commits above
+  the delivered head at the measurement, oldest first:
   1. `fee60000b` — code: the room-side commit for the cabinet
      (`POST /v1/sessions/{fileId}/commit`) and an etag the room can compare
      (`CABINET.sha256`); 8 files, +571/−45 (§4);
@@ -311,8 +315,11 @@ several `/NM`, per-line quads, the caret (`5bad54c40`, §4), re-addressed across
      (`crates/ui-egui/src/{collab,commands,editing}.rs`, +94/−1; §4).
   The PR is `MERGEABLE`/`UNSTABLE`, not a draft, `reviewDecision` empty,
   `baseRefOid` `d749fd806`, `updatedAt` 2026-11-12T06:18:30Z, and every workflow
-  run on the fork reads `action_required`, so nothing has executed on GitHub and
-  the gate evidence is the host sweep in §4, not a CI run. `origin/main` has
+  run on the fork reads `action_required`, so nothing has executed on GitHub. The
+  gate evidence is the host sweep, and it was re-run on this head in this pass:
+  `CI=1 cargo xtask ci` exits 0, all ten steps, 10381 passed / 0 failed / 22
+  ignored (§4, "Save in a hosted session…", end of the section). `origin/main`
+  has
   moved to `120c62fb8` (three commits: `#7069`, `#7034`, `#7031`); the branch is
   **148 ahead and 3 behind** it, `git diff --shortstat origin/main HEAD` is
   **131 files, +46076/−2012**. Merging those three is a separate decision and
@@ -709,7 +716,10 @@ commit result, and a commit button for owner/editor.
 ### Save in a hosted session is the cabinet's commit, not a copy of the window (`f107f56c2`, 2026-11-12, local; not pushed)
 
 The trap the previous record left open ("A closed socket no longer takes the
-seat…", §4) is closed by `f107f56c2`.
+seat…", §4) is closed by `f107f56c2`. The cabinet-side acceptance of that fix —
+the deployed bundle and two Ctrl+S presses on file 43 in Chromium and WebKit — is
+recorded further down §4, "Save in a hosted session is the cabinet's commit
+(2026-11-12)"; this section is the change, its tests and its gate.
 
 **The defect.** Pressing Ctrl+S, the toolbar's Save or the menu's Save in a live
 session ran `file.save`, which saved the bytes of this window's build through the
@@ -750,16 +760,26 @@ and craft-fonts (`b076417b`); without them the two documented environment tests
 fail and are unchanged by this diff; plus the ocr, page_shadows, perf and play
 suites.
 
-**What is still owed on this head.** The full ten-step sweep
-(`CI=1 cargo xtask ci`) had *not* been run on `f107f56c2` when the commit was
-written: the last one was on `fee60000b` (10380 passed / 0 failed / 22 ignored,
-§4 above), and two code commits above it — `24f519a91` (collab-hub) and
-`f107f56c2` (ui-egui) — plus their three docs records postdate it. `24f519a91`
-carries its own unit test
-(`a_closed_connection_does_not_take_the_seat_of_the_same_actor`, collab-hub),
-but neither commit's crate had been through the workspace sweep at the merged
-head. The sweep for this head was run in this pass; it is recorded at the end of
-this section.
+**Gate, on `f107f56c2`, host `agents` (rustc 1.99.1, warm `target/`,
+`CARGO_BUILD_JOBS=8`).** `CI=1 cargo xtask ci` with `CRAFT_I18N_DIR`
+(craft-i18n at `575cfdef`) and `CRAFT_FONTS_DIR` (`b076417b`) exits
+**0 — all ten steps**, no retries: `fmt`; `clippy --workspace --all-targets
+-- -D warnings`; `cli-no-default-features`; `test` — **10370 passed, 0 failed,
+22 ignored** over 112 test targets, plus 46 doc-test targets, **11 passed**
+(10381 in all, 158 targets); `i18n-report`; `layers` (52 crates, no layering
+violations); `wasm` (44 crates); `license-check` (source documents and licensing
+metadata consistent); `deny` (advisories, bans, licences, sources ok);
+`parity` (859 features, 836 counted, 23 n/a). The new room test
+`a_closed_connection_does_not_take_the_seat_of_the_same_actor` appears in
+collab-hub's list and passes. That closes the gap this section named: the head
+is swept, not just `fee60000b`.
+
+One caveat worth keeping: the workspace sweep runs with the `collab` feature
+**off** (`ui-egui`'s lib target runs 1010 tests there), so the two Save tests are
+not in it. They were run for this commit separately —
+`cargo test -p pdfcraft-ui-egui --features collab`, lib 1035 + it 1898, as the
+commit's message records — and that is the run that covers the fix. Nothing has
+executed on GitHub: every workflow run on the fork is `action_required`.
 
 ### The cabinet's Save reaches the room, and the etag compares like with like (`fee60000b`, 2026-11-12, local; not pushed)
 
@@ -5072,16 +5092,20 @@ payload).
   longer takes an actor's seat, code), `826303ace` (that record, and the Save
   trap left open there) and `f107f56c2` (the Save trap closed: in a hosted
   session Save is the room's commit, code) — the header snapshot above lists
-  each with its files and lines. `git rev-list --left-right --count
-  fork/feature/realtime-collaboration...HEAD` reads `0 6`; PR #6622 is
-  `MERGEABLE`/`UNSTABLE`, `reviewDecision` empty, every run
+  each with its files and lines (the measurement was taken at `f107f56c2`; two
+  docs records sit above it — `ff4a93462` from the parallel cabinet-acceptance
+  pass and this one — so `0 6` becomes `0 8` once this record is committed).
+  `git rev-list --left-right --count
+  fork/feature/realtime-collaboration...HEAD` read `0 6` at the measurement; PR
+  #6622 is `MERGEABLE`/`UNSTABLE`, `reviewDecision` empty, every run
   `action_required`. `origin/main` moved to `120c62fb8`, so the branch is 148
   ahead and 3 behind; merging it is a separate decision. This pass changed **no
   code**: it rewrote the header snapshot, added §4's record of `f107f56c2` and
   its gate state, aligned `pdfcraft/PR-DRAFT.md`, and re-ran the full sweep on
-  the head on host `agents` (§4, end of the `f107f56c2` section). The owner's
-  steps are the push, the run approvals, the review and the manual desktop
-  acceptance.
+  the head on host `agents` — `CI=1 cargo xtask ci` exits 0, all ten steps,
+  10381 passed / 0 failed / 22 ignored (§4, "Save in a hosted session…", end of
+  the section). The owner's steps are the push, the run approvals, the review
+  and the manual desktop acceptance.
 - **This pass (2026-11-12, 16:35Z): the branch's facts, and the one commit
   owed.** The code head is `fee60000b` on top of the delivered `2a2b0c157`,
   with two docs commits above it (`d1d304231`, the cabinet-side record, and this
