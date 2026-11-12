@@ -334,8 +334,8 @@ pub(crate) fn body(
                     ui.end_row();
                 }
             });
-            // Reserve space beside the settings so a late answer cannot move controls or hide below the preview.
-            if cfg!(windows) || duplex_warning {
+            // Reserve space for a selected printer so a late answer cannot move controls or hide below the preview.
+            if (cfg!(windows) && d.printer.is_some()) || duplex_warning {
                 ui.add_visible(duplex_warning, egui::Label::new(egui::RichText::new(tl!("This printer's driver doesn't take two-sided settings from other programs, so its own setting applies. Change it in Properties…")).small().color(t.text_muted)));
             }
             if d.printer.as_deref() == Some(crate::web_print::BROWSER_PRINTER) {
