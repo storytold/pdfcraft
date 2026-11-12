@@ -72,7 +72,9 @@ fn size_of(list: &[Prop], depth: usize) -> (usize, usize) {
             .tag
             .len()
             .saturating_add(p.attrs.iter().map(|(k, v)| k.len().saturating_add(v.len())).sum::<usize>())
-            .saturating_add(p.text.as_ref().map_or(0, |t| t.len()));
+            // A validation's or calculation's script text isn't charged by the reader either
+            // (it has its own limit, `parse::MAX_VALIDATE_SCRIPT_BYTES`), and no change sets it.
+            .saturating_add(if p.tag == "script" { 0 } else { p.text.as_ref().map_or(0, |t| t.len()) });
         let (cn, cb) = size_of(&p.children, depth + 1);
         (n.saturating_add(1).saturating_add(cn), b.saturating_add(own).saturating_add(cb))
     })

@@ -440,6 +440,15 @@ fn a_write_past_the_objects_limit_on_changes_is_left_out() {
     assert_eq!(o.result.as_deref(), Some("20pt|Arial"), "{o:?}");
 }
 
+/// A value a property refuses changes nothing: a colour that isn't one, written to a border that
+/// lists fewer edges than it draws, doesn't make the sides it would have made first.
+#[test]
+fn a_refused_write_makes_no_sides() {
+    let o = go_on(&form(), "this.borderColor = 'not a colour'; this.border.getElement('edge', 3).color.value", "styled");
+    assert_eq!(o.error, None, "{o:?}");
+    assert!(o.effects.is_empty(), "{o:?}");
+}
+
 /// FormCalc reads a property object holding text (`$.assist.toolTip`) as its value where it
 /// takes a number or a truth value directly: a `for` bound, a negation, an `if` condition.
 /// Read as text it was right (`deref`), but read as a number it was 0, and as a condition true.

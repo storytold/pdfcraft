@@ -344,7 +344,8 @@ impl PdfCraftApp {
     /// The user's answer to [`Self::pending_calc_override`]: keep the value typed into the
     /// calculated field, or go back to the calculated value by undoing the entry (which also
     /// takes back the mark that kept the calculations off the field), in the document it was
-    /// made in, through the tab showing it (the active one when it does). The entry is undone
+    /// made in, through the tab showing it (the active one when it does; another is brought to
+    /// the front). The entry is undone
     /// only while it is still that document's last edit: when another edit followed it (the other
     /// pane's, in a split view), Undo would take that one back instead, so the value stays and
     /// the user is told.
@@ -357,8 +358,11 @@ impl PdfCraftApp {
         else {
             return;
         };
-        // A box open on the page is applied before the step, as for Undo; that is an edit too.
+        // The tab comes to the front, so a box open on its page is applied to its document
+        // (applying goes to the active one) before the step, as for Undo; that is an edit too.
+        self.active = Some(i);
         if !self.close_text_editors(i, id) {
+            self.notify(tl!("Your value was kept: the text open on the page couldn't be applied. Use Undo to take the entry back.").to_string());
             return;
         }
         if self.session.get(id).map(|d| d.edit_generation()) != Some(generation) {

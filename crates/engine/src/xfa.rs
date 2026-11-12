@@ -1444,9 +1444,11 @@ pub(crate) fn on_changes(
             && !pdfcraft_xfa::value_overridden(r.tpl, &r.ov, &som)
             && let Some(m) = rules::user_value_overrides(f.calc_override, f.calc_message.as_deref(), name)
         {
-            r.run.out.requests.push(Request::CalculationOverridden(m));
+            // Asked only when the entry is kept: past the form's limit on marks, the next
+            // calculation takes the field back, and there is no value to keep.
             if pdfcraft_xfa::mark_value_override(&mut r.ov, &som) {
                 r.ov_dirty = true;
+                r.run.out.requests.push(Request::CalculationOverridden(m));
             }
         }
         for ev in r.events_of(&som, "change") {
@@ -2388,6 +2390,28 @@ page1.note.presence = "visible""#);
         let saved = again.save_bytes(reopened).unwrap();
         let doc = pdfcraft_cos::Document::open(saved).unwrap();
         assert_eq!(pdfcraft_xfa::overrides(&doc).props().len(), 1);
+    }
+
+    /// Past the form's limit on fields kept over their calculations, an entry into a calculated
+    /// field isn't kept (the calculation takes the field back), so the user isn't asked whether
+    /// to keep it.
+    #[test]
+    fn no_value_to_keep_no_question() {
+        let mut doc = pdfcraft_cos::Document::open(Arc::new(checks_form())).unwrap();
+        let mut ov = pdfcraft_xfa::Overrides::default();
+        let mut i = 0usize;
+        while pdfcraft_xfa::mark_value_override(&mut ov, &format!("form[0].x{i}[0]")) {
+            i += 1;
+        }
+        pdfcraft_xfa::set_overrides(&mut doc, &ov).unwrap();
+        let bytes = pdfcraft_cos::write_full(&doc, &pdfcraft_cos::SaveOptions::default()).unwrap();
+        let mut s = crate::Session::new();
+        let id = s.open("full.pdf", None, Arc::new(bytes), None).unwrap();
+        let _ = s.take_js_output(id);
+        type_into(&mut s, id, "K2", "5");
+        let out = s.take_js_output(id);
+        assert!(out.requests.is_empty(), "{out:?}");
+        assert_eq!(value_of(&s, id, "K2"), "10", "calculated again");
     }
 
     /// A later script of the same event reads a radio button's value as the form gives it once

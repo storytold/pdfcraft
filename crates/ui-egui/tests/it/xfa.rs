@@ -445,6 +445,7 @@ fn using_the_calculated_value_undoes_that_entry_only() {
     h.get_by_label("Use calculated value").click();
     h.run_steps(3);
     assert_eq!(value(&h, "k2"), "10", "the entry was undone in its own document");
+    assert_eq!(h.state().active, Some(0), "its tab comes to the front, so what its page holds is applied to it");
 
     let mut h = open(recommended_calculation());
     type_value(&mut h, "k2", "5");

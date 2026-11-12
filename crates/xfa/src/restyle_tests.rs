@@ -614,6 +614,24 @@ fn a_split_fields_pieces_keep_its_changed_border() {
     }
 }
 
+/// A validation's script text isn't charged to the object's budget when changes are applied, as
+/// the template reader doesn't charge it: a field with a 20 KiB validation script still takes a
+/// font change.
+#[test]
+fn a_long_validation_script_leaves_room_for_changes() {
+    let script = format!("this.rawValue != \"x\"; // {}", "x".repeat(20 << 10));
+    let tpl = TEMPLATE.replace(
+        r#"<draw name="label""#,
+        &format!(r#"<field name="checked" w="2in" h="0.3in"><validate><script contentType="application/x-javascript">{script}</script></validate></field><draw name="label""#),
+    );
+    let t = crate::parse(&tpl).unwrap().0;
+    let props = &field(&t, "checked").common.props;
+    assert!(!props.cut);
+    let (after, cut) = apply_props(props, &sets(&[("font#0", Some("size"), "14pt")]));
+    assert!(!cut);
+    assert!(after.elements.iter().any(|e| e.tag == "font"));
+}
+
 fn one_edge() -> Template {
     let tpl = TEMPLATE.replace(
         r#"<draw name="label""#,

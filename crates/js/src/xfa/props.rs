@@ -1012,6 +1012,10 @@ impl XHost {
     /// border doesn't list is made first ([`XHost::instantiate`]), and the copy it is made as
     /// goes to the form too, so the form makes that side as the script reads it.
     pub(crate) fn write_prop(&mut self, node: usize, path: &str, name: Option<&str>, value: String) {
+        // A value the form refuses changes nothing, the sides it would have made included.
+        if property_value_ok(path, name, &value).is_err() {
+            return self.store_prop(node, path, name, value);
+        }
         self.copying = true;
         self.instantiate(node, path);
         self.copying = false;
