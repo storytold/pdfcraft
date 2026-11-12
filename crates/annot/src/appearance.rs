@@ -18,15 +18,15 @@ use pdfcraft_cos::{Dict, Object, PdfString, Stream};
 use pdfcraft_fonts::shaped_text;
 use pdfcraft_fonts::{first_undrawable, literal, win_ansi, wrap_with};
 
-/// The width of `text` at `size` as appearances draw it: Helvetica, with Thai shaped in the Thai
-/// face that text boxes draw it with.
+/// The width of `text` at `size` as appearances draw it: the box's standard face, with Thai and
+/// Japanese shaped in the craft-fonts faces text boxes draw them with.
 pub fn text_width(text: &str, size: f64) -> f64 {
     text_width_in(pdfcraft_fonts::Std14::Helvetica, text, size)
 }
 
 /// [`text_width`] in the standard `face` a text box draws its other text in.
 pub fn text_width_in(face: pdfcraft_fonts::Std14, text: &str, size: f64) -> f64 {
-    shaped_text::thai_width(text, size, |s, size| face.text_width(s, size))
+    shaped_text::shaped_width(text, size, |s, size| face.text_width(s, size))
 }
 
 /// `text` wrapped `width` wide as [`text_width`] measures it; a Thai mark stays on its letter.

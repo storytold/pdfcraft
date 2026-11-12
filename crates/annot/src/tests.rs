@@ -2616,42 +2616,42 @@ fn comment_text_the_standard_fonts_cannot_draw_is_kept_and_marked() {
     let mut doc = fixture();
     let mark = |doc: &Document, i: usize| pdfcraft_fonts::undrawn_mark(&list(doc, 0)[i]);
     let mut boxed = new(0, Shape::TextBox { rect: [100.0, 600.0, 300.0, 650.0], font_size: 12.0 });
-    boxed.contents = "签名 Ada".into();
+    boxed.contents = "ᚠᚢ Ada".into();
     let t = add_annotation(&mut doc, &boxed, &meta("t")).unwrap();
-    assert_eq!(text(&list(&doc, 0)[t], b"Contents"), "签名 Ada");
+    assert_eq!(text(&list(&doc, 0)[t], b"Contents"), "ᚠᚢ Ada");
     assert!(ap_content(&doc, &list(&doc, 0)[t]).contains("(?? Ada)"), "{}", ap_content(&doc, &list(&doc, 0)[t]));
-    assert_eq!(mark(&doc, t), Some('签'));
+    assert_eq!(mark(&doc, t), Some('ᚠ'));
     let typed = Shape::Typewriter { rect: [100.0, 700.0, 200.0, 716.0], font_size: 11.0 };
     let f = add_annotation(
         &mut doc,
-        &NewAnnotation { page: 0, style: Style::default_for(&typed), shape: typed, contents: "张三".into(), author: "Ada".into() },
+        &NewAnnotation { page: 0, style: Style::default_for(&typed), shape: typed, contents: "ᚠᚢ".into(), author: "Ada".into() },
         &meta("x"),
     )
     .unwrap();
-    assert_eq!(mark(&doc, f), Some('张'));
+    assert_eq!(mark(&doc, f), Some('ᚠ'));
     let stamp =
-        Shape::Stamp { rect: [100.0, 100.0, 260.0, 142.0], stamp: StampKind::DynApproved, by: Some("By 张三 at 2:14 pm, Oct 02, 2026".into()) };
+        Shape::Stamp { rect: [100.0, 100.0, 260.0, 142.0], stamp: StampKind::DynApproved, by: Some("By ᚠᚢ at 2:14 pm, Oct 02, 2026".into()) };
     let s = add_annotation(
         &mut doc,
-        &NewAnnotation { page: 0, style: Style::default_for(&stamp), shape: stamp, contents: String::new(), author: "张三".into() },
+        &NewAnnotation { page: 0, style: Style::default_for(&stamp), shape: stamp, contents: String::new(), author: "ᚠᚢ".into() },
         &meta("s"),
     )
     .unwrap();
-    assert_eq!(mark(&doc, s), Some('张'));
+    assert_eq!(mark(&doc, s), Some('ᚠ'));
     // Our own `?` appearance is redrawn on a restyle; Western European text clears the mark.
     set_style(&mut doc, 0, t, StyleChange::new(Some([1.0, 0.0, 0.0]), None, None, None), &meta("")).unwrap();
-    assert_eq!(mark(&doc, t), Some('签'));
+    assert_eq!(mark(&doc, t), Some('ᚠ'));
     set_contents(&mut doc, 0, t, "Zürich —\nGenève", &meta("")).unwrap();
     assert_eq!(mark(&doc, t), None);
-    set_contents(&mut doc, 0, t, "签名", &meta("")).unwrap();
-    assert_eq!((text(&list(&doc, 0)[t], b"Contents").as_str(), mark(&doc, t)), ("签名", Some('签')));
-    // A text box another program drew (with a font that has 欢): a restyle keeps that appearance.
+    set_contents(&mut doc, 0, t, "ᚠᚢ", &meta("")).unwrap();
+    assert_eq!((text(&list(&doc, 0)[t], b"Contents").as_str(), mark(&doc, t)), ("ᚠᚢ", Some('ᚠ')));
+    // A text box another program drew (with a font that has ᚠ): a restyle keeps that appearance.
     let mut foreign = Dict::new();
     foreign.set(b"Type".to_vec(), Object::name("Annot"));
     foreign.set(b"Subtype".to_vec(), Object::name("FreeText"));
     foreign.set(b"Rect".to_vec(), Object::Array([100.0, 400.0, 300.0, 430.0].iter().map(|v| Object::Real(*v)).collect()));
     foreign.set(b"DA".to_vec(), PdfString::literal(b"0 g /Helv 12 Tf".to_vec()));
-    foreign.set(b"Contents".to_vec(), PdfString::text("欢迎"));
+    foreign.set(b"Contents".to_vec(), PdfString::text("ᚠᚢ"));
     let mut drawn = Dict::new();
     drawn.set(b"Type".to_vec(), Object::name("XObject"));
     drawn.set(b"Subtype".to_vec(), Object::name("Form"));
@@ -2668,21 +2668,21 @@ fn comment_text_the_standard_fonts_cannot_draw_is_kept_and_marked() {
     let k = list(&doc, 0).len() - 1;
     let before = list(&doc, 0)[k].clone();
     let err = set_style(&mut doc, 0, k, StyleChange::new(Some([1.0, 0.0, 0.0]), Some(0.4), Some(6.0), None), &meta("")).unwrap_err();
-    assert!(matches!(&err, AnnotError::Undrawable(m) if m.contains("can't redraw") && m.contains("\"欢\" (U+6B22)")), "{err:?}");
+    assert!(matches!(&err, AnnotError::Undrawable(m) if m.contains("can't redraw") && m.contains("\"ᚠ\" (U+16A0)")), "{err:?}");
     assert_eq!(list(&doc, 0)[k], before, "a refused restyle keeps the colour, opacity, width and appearance");
     let err = set_rect(&mut doc, 0, k, [40.0, 40.0, 180.0, 90.0], &meta("")).unwrap_err();
     assert!(matches!(&err, AnnotError::Undrawable(_)), "{err:?}");
     assert_eq!(list(&doc, 0)[k], before, "a refused resize keeps the rectangle");
     // New text from the user is taken (and marked), as for any comment.
-    set_contents(&mut doc, 0, k, "欢迎光临", &meta("")).unwrap();
-    assert_eq!(mark(&doc, k), Some('欢'));
+    set_contents(&mut doc, 0, k, "ᚠᚢᚦ", &meta("")).unwrap();
+    assert_eq!(mark(&doc, k), Some('ᚠ'));
     // One without an appearance is shown in the display copy only; drawing it marks it.
     let mut bare = Dict::new();
     bare.set(b"Type".to_vec(), Object::name("Annot"));
     bare.set(b"Subtype".to_vec(), Object::name("FreeText"));
     bare.set(b"Rect".to_vec(), Object::Array([100.0, 300.0, 300.0, 330.0].iter().map(|v| Object::Real(*v)).collect()));
     bare.set(b"DA".to_vec(), PdfString::literal(b"0 g /Helv 12 Tf".to_vec()));
-    bare.set(b"Contents".to_vec(), PdfString::text("欢迎"));
+    bare.set(b"Contents".to_vec(), PdfString::text("ᚠᚢ"));
     let b = doc.add(Object::Dict(bare));
     let mut on_page = annots(&doc, page);
     on_page.push(Object::Ref(b));
@@ -2691,10 +2691,10 @@ fn comment_text_the_standard_fonts_cannot_draw_is_kept_and_marked() {
     assert!(shown.get(b).as_dict().unwrap().contains(b"AP"), "displayed anyway");
     assert!(!doc.get(b).as_dict().unwrap().contains(b"AP"), "the document itself is unchanged");
     set_appearance(&mut doc, b).unwrap();
-    assert_eq!(doc.get(b).as_dict().and_then(pdfcraft_fonts::undrawn_mark), Some('欢'));
+    assert_eq!(doc.get(b).as_dict().and_then(pdfcraft_fonts::undrawn_mark), Some('ᚠ'));
     // Kept through a save.
     let doc = reopen(&doc);
-    assert_eq!(text(&list(&doc, 0)[t], b"Contents"), "签名");
+    assert_eq!(text(&list(&doc, 0)[t], b"Contents"), "ᚠᚢ");
 }
 
 /// Content edits rebuild the display copy on every commit but leave annotations alone: the
@@ -5685,4 +5685,45 @@ endstream",
     assert!(page.contains(b"AAPL:PPK") && page.contains(b"AAPL:PPKHash"));
     assert!(list(&doc, 0)[0].contains(b"AAPL:AKExtras"));
     assert!(doc.repair_log().is_empty(), "{:?}", doc.repair_log());
+}
+
+/// A text box draws Japanese from the craft-fonts Japanese face as Type 3 glyphs with a ToUnicode
+/// map, so the characters show, copy and search instead of becoming `?`; Latin beside them keeps
+/// the box's standard font. Skipped without craft-fonts, like every test that needs a face.
+#[test]
+fn a_text_box_draws_japanese_from_the_japanese_face() {
+    if !pdfcraft_fonts::japanese_has('こ') {
+        eprintln!("skipping: built without craft-fonts");
+        return;
+    }
+    let mut doc = fixture();
+    let mut boxed = new(0, Shape::TextBox { rect: [100.0, 600.0, 320.0, 660.0], font_size: 12.0 });
+    boxed.contents = "こんにちは、世界。".into();
+    let t = add_annotation(&mut doc, &boxed, &meta("t")).unwrap();
+    let doc = reopen(&doc);
+    let d = &list(&doc, 0)[t];
+    assert_eq!(text(d, b"Contents"), "こんにちは、世界。", "the text is kept as typed");
+    assert_eq!(pdfcraft_fonts::undrawn_mark(d), None, "nothing is reported as undrawable");
+
+    let content = ap_content(&doc, d);
+    assert!(!content.contains('?'), "no character is written as ?: {content}");
+    assert!(content.contains("/PCTh"), "drawn from a Type 3 font: {content}");
+
+    // The font and its text map are objects of the saved file.
+    let n = d.get(b"AP").and_then(|a| a.as_dict()).and_then(|a| a.reference(b"N")).unwrap();
+    let ap = doc.get(n);
+    let fonts = ap.as_dict().and_then(|s| s.get(b"Resources")).and_then(|r| r.as_dict()).and_then(|r| r.get(b"Font")).and_then(|f| f.as_dict());
+    let font = fonts
+        .and_then(|f| f.iter().filter_map(|(_, v)| v.as_dict()).find(|d| d.name(b"Subtype") == Some(&b"Type3"[..])).cloned())
+        .expect("a Type 3 font");
+    let cmap = doc.get(font.reference(b"ToUnicode").expect("a ToUnicode map"));
+    let Object::Stream(cmap) = &*cmap else { panic!("ToUnicode is a stream object") };
+    let cmap = String::from_utf8_lossy(&cmap.decoded().unwrap()).into_owned();
+    assert!(cmap.contains("3053") || cmap.contains("3053".to_uppercase().as_str()), "こ is in the map: {cmap}");
+
+    // Japanese with no spaces wraps between characters instead of overflowing the box.
+    let lines = appearance::wrap("こんにちはこんにちはこんにちは", 12.0, 60.0);
+    assert!(lines.len() > 1, "{lines:?}");
+    assert!(lines.iter().all(|l| appearance::text_width(l, 12.0) <= 60.0 + 1e-6), "{lines:?}");
+    assert_eq!(lines.concat(), "こんにちはこんにちはこんにちは");
 }
