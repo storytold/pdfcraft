@@ -537,6 +537,7 @@ impl PdfCraftApp {
                 self.marks_draft.opened(kind);
                 self.marks_draft.preview = None;
                 if id.starts_with("edit.header_footer") {
+                    self.marks_draft.range.subset = crate::marks_ui::Subset::All;
                     match selection.as_ref().and_then(|s| Some((*s.first()?, *s.last()?))) {
                         Some((first, last)) => {
                             self.marks_draft.range.all = false;
@@ -1040,5 +1041,28 @@ mod tests {
         app.views[0].select_pages(&[]);
         assert!(app.execute("edit.header_footer"));
         assert!(app.marks_draft.range.all, "the range is every page again");
+    }
+
+    /// The header & footer dialog resets range.subset to All in both the selected-range
+    /// and no-selection branches (regression test for subset not being reset).
+    #[test]
+    fn header_footer_dialog_resets_to_all_pages_without_a_selection_review_regression_1() {
+        const PDF: &[u8] = b"%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R 4 0 R 5 0 R 6 0 R 7 0 R] /Count 5 /MediaBox [0 0 300 400] >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R >> endobj\n4 0 obj << /Type /Page /Parent 2 0 R >> endobj\n5 0 obj << /Type /Page /Parent 2 0 R >> endobj\n6 0 obj << /Type /Page /Parent 2 0 R >> endobj\n7 0 obj << /Type /Page /Parent 2 0 R >> endobj\ntrailer << /Root 1 0 R >>\n%%EOF";
+        let mut app = PdfCraftApp::new();
+        app.open_bytes("doc.pdf", None, PDF.to_vec()).unwrap();
+
+        // An earlier dialog left the subset on Even; opening Header & Footer with a
+        // selection must reset it to All.
+        app.views[0].select_pages(&[1, 2]);
+        app.marks_draft.range.subset = crate::marks_ui::Subset::Even;
+        assert!(app.execute("edit.header_footer"));
+        assert_eq!(app.marks_draft.range.subset, crate::marks_ui::Subset::All, "subset is All when a range is selected");
+
+        // An earlier dialog left the subset on Odd; opening Header & Footer with no
+        // selection must reset it to All again.
+        app.views[0].select_pages(&[]);
+        app.marks_draft.range.subset = crate::marks_ui::Subset::Odd;
+        assert!(app.execute("edit.header_footer"));
+        assert_eq!(app.marks_draft.range.subset, crate::marks_ui::Subset::All, "subset is All again when nothing is selected");
     }
 }
