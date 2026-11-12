@@ -432,11 +432,13 @@ fn cache_lookup(slot: Option<&CachedTesseract>, configured: Option<&str>, now: I
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+static MODELS: Mutex<Option<(bool, Instant)>> = Mutex::new(None);
+
 /// Whether the ocrs models are installed, remembered separately (found: for the
 /// session; missing: for [`NEGATIVE_TTL`]), so per-frame UI checks do not search the disk.
 #[cfg(not(target_arch = "wasm32"))]
 fn models_installed_cached() -> bool {
-    static MODELS: Mutex<Option<(bool, Instant)>> = Mutex::new(None);
     let mut slot = MODELS.lock().unwrap_or_else(|e| e.into_inner());
     if let Some((found, at)) = *slot
         && probe_fresh(found, at, Instant::now())
@@ -667,7 +669,7 @@ pub fn available() -> bool {
 /// first Tesseract probe lands the choice reads as "still checking" (see
 /// [`engine_probe_running`], to ask for another frame meanwhile).
 pub fn engine_unavailable_reason(engine: EngineChoice) -> Option<String> {
-    let ocrs = models_installed_cached();
+    let ocrs = ocrs_loaded() || models_installed_cached();
     #[cfg(not(target_arch = "wasm32"))]
     let tesseract = {
         let configured = std::env::var_os("PDFCRAFT_TESSERACT").map(|v| v.to_string_lossy().into_owned());
@@ -692,7 +694,7 @@ pub fn engine_unavailable_reason(engine: EngineChoice) -> Option<String> {
 /// Readiness of an engine/language combination without blocking the UI thread. The
 /// background probe refreshes installed languages as well as executable availability.
 pub fn language_unavailable_reason(engine: EngineChoice, language: &str) -> Option<String> {
-    language_unavailable_reason_with(engine, language, models_installed_cached(), || {
+    language_unavailable_reason_with(engine, language, ocrs_loaded() || models_installed_cached(), || {
         #[cfg(not(target_arch = "wasm32"))]
         {
             let configured = configured_tesseract(&OcrSettings::default());
@@ -1541,6 +1543,53 @@ mod tests {
         }
         fn recognize(&self, _: &pdfcraft_ocr::OcrImage, _: &pdfcraft_ocr::RecognizeOptions) -> Result<Vec<pdfcraft_ocr::Line>, OcrError> {
             Ok(Vec::new())
+        }
+    }
+
+    /// A recognizer installed in memory keeps English ready even with a negative model-file
+    /// probe. Isolate the caches in a child process so parallel tests cannot use the fake.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_loaded_recognizer_keeps_english_available_without_model_files() {
+        const CHILD: &str = "PDFCRAFT_TEST_LOADED_OCR_READINESS";
+        if std::env::var_os(CHILD).is_none() {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "ocr::tests::a_loaded_recognizer_keeps_english_available_without_model_files", "--nocapture"])
+                .env(CHILD, "1")
+                .output()
+                .unwrap();
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            assert!(output.status.success(), "{stdout}\n{}", String::from_utf8_lossy(&output.stderr));
+            assert!(stdout.contains("1 passed"), "the child must run the regression test: {stdout}");
+            return;
+        }
+
+        // Model discovery and Tesseract stay unavailable regardless of the host's files.
+        *MODELS.lock().unwrap() = Some((false, Instant::now()));
+        *TESSERACT_PROBE.lock().unwrap() =
+            Some(CachedTesseract { key: configured_tesseract(&OcrSettings::default()), found: None, at: Instant::now() });
+        assert!(!ocrs_loaded());
+        assert!(!models_installed_cached());
+        for engine in [EngineChoice::Ocrs, EngineChoice::Auto] {
+            assert!(engine_unavailable_reason(engine).is_some());
+            assert!(language_unavailable_reason(engine, "en").is_some());
+        }
+
+        // The same cache state as install(Ocr), without requiring the large model files.
+        *ENGINES.lock().unwrap() = Some(EngineCache { ocrs: Some(Arc::new(Fake::new())) });
+        assert!(ocrs_loaded());
+        assert!(!models_installed_cached());
+        for engine in [EngineChoice::Ocrs, EngineChoice::Auto] {
+            assert_eq!(language_unavailable_reason(engine, "en"), None, "{engine:?}");
+            assert_eq!(engine_unavailable_reason(engine), None, "{engine:?}");
+            for language in ["ru", "en+ru"] {
+                let expected = if engine == EngineChoice::Ocrs { built_in_language_error() } else { tesseract_unavailable() };
+                assert_eq!(language_unavailable_reason(engine, language), Some(expected));
+            }
+        }
+        assert_eq!(engine_unavailable_reason(EngineChoice::Tesseract), Some(tesseract_unavailable()));
+        for language in ["en", "ru", "en+ru"] {
+            assert_eq!(language_unavailable_reason(EngineChoice::Tesseract, language), Some(tesseract_unavailable()));
         }
     }
 
