@@ -64,7 +64,7 @@ impl PdfCraftApp {
         }
     }
 
-    /// Construct an application with the default session, panels, theme and control state.
+    /// Construct default session, panels, theme and control state with no active property-edit session.
     pub fn new() -> Self {
         Self {
             panes: Default::default(),
@@ -132,6 +132,8 @@ impl PdfCraftApp {
             updates: updates::Updates::default(),
             printer_source: None,
             options_source: None,
+            default_paper_source: None,
+            printer_papers_source: None,
             spooler: None,
             two_sided_source: None,
             print_tasks: print_ui::PrintTasks::default(),
@@ -163,6 +165,8 @@ impl PdfCraftApp {
             deferred_opens: Default::default(),
             #[cfg(not(target_arch = "wasm32"))]
             password_retry: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            pending_destinations: Vec::new(),
             #[cfg(not(target_arch = "wasm32"))]
             next_open_token: 0,
             #[cfg(not(target_arch = "wasm32"))]
@@ -207,6 +211,7 @@ impl PdfCraftApp {
             attachment_description_draft: None,
             view_draft: None,
             custom_draft: None,
+            props_session: None,
             requests: Default::default(),
             #[cfg(not(target_arch = "wasm32"))]
             pickers: Default::default(),
@@ -245,6 +250,8 @@ impl PdfCraftApp {
             compare_pages: String::new(),
             compare: None,
             js_console: Default::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            script_pending: None,
             doc_js: Default::default(),
             a11y: a11y_ui::A11yState::default(),
             tags_state: Default::default(),
@@ -276,6 +283,7 @@ impl PdfCraftApp {
             object_clip_mark: Default::default(),
             grid_drop: None,
             last_snapshot: None,
+            last_snapshot_of: None,
             last_copied_image: None,
             last_copied_file: None,
             system_clipboard: true,
@@ -299,6 +307,8 @@ impl PdfCraftApp {
             deferred_commands: Vec::new(),
             native_menu: None,
             menu_input: Vec::new(),
+            menu_pastes: 0,
+            page_keys: Default::default(),
             dialog_seen: None,
             dialog_epoch: 0,
             ctx: None,
@@ -377,9 +387,68 @@ impl PdfCraftApp {
         self.active.and_then(|i| self.views.get(i).map(|v| (i, v.id)))
     }
 
+    /// Whether something over the pages has the keyboard: what covers them
+    /// ([`Self::covers_pages`]), the hotbar's tools window, a popup, a menu of the menu bar, or the
+    /// bar holding the keyboard (Alt, F10).
+    pub(crate) fn over_pages(&self, ctx: &egui::Context) -> bool {
+        self.covers_pages()
+            || self.hotbar.picker_over_pages(ctx)
+            || egui::Popup::is_any_open(ctx)
+            || craft_menu::bar::is_open(ctx)
+            || craft_menu::bar::is_focused(ctx)
+    }
+
+    /// Edit ▸ Copy, Cut, Select all and Delete stand for keys, and Edit ▸ Paste for the paste the
+    /// platform answers with. They go where the user's would: to a text field that has the
+    /// keyboard, else to the pages. They join the input once the menu bar has let go of the keys,
+    /// which an in-window menu's click does a pass later (craft-menu stores the menu as open on
+    /// the pass its click closes it). A native menu's click leaves egui's popups and the Hotbar
+    /// tools window open, which hold the pages' keys; a click anywhere else closes them, and so
+    /// does this. Edit ▸ Paste asks the platform for the clipboard only then, so its answer, on a
+    /// later pass, is an ordinary paste. With a text field focused, a native click on Copy, Cut,
+    /// Paste or Select all doesn't come here: craft-menu taps the shortcut for the field instead.
+    fn release_menu_input(&mut self, ctx: &egui::Context) {
+        if self.menu_input.is_empty() && self.menu_pastes == 0 {
+            return;
+        }
+        if craft_menu::bar::is_open(ctx) || craft_menu::bar::is_focused(ctx) {
+            ctx.request_repaint();
+            return;
+        }
+        if !ctx.text_edit_focused() {
+            egui::Popup::close_all(ctx);
+            self.hotbar.close_picker();
+        }
+        let events = std::mem::take(&mut self.menu_input);
+        ctx.input_mut(|i| i.events.extend(events));
+        for _ in 0..std::mem::take(&mut self.menu_pastes) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaste);
+        }
+    }
+
+    /// Read mode and full screen hide the hotbar (the quick tools), and its tools window with it.
+    pub(crate) fn hotbar_hidden(&self) -> bool {
+        self.mode == crate::Mode::Read || self.full_screen
+    }
+
+    /// The pages are covered, and no page key reaches them, a menu click's included: by a dialog or
+    /// prompt that turns the menus off (`modal_open`), by the full-screen and update prompts, which
+    /// leave the menus on, by the palette, which turns them off, or by the OCR Verify screen, which
+    /// takes the pages' place.
+    pub(crate) fn covers_pages(&self) -> bool {
+        // Full screen draws the page alone: not the palette, nor the OCR Verify screen it was
+        // entered over. Dialogs and prompts show there too.
+        let shown = !(self.full_screen && self.active.is_some());
+        self.modal_open() || self.pending_full_screen.is_some() || self.updates.prompt_open() || (self.palette_open || self.ocr_verify.open) && shown
+    }
+
     /// A dialog or prompt is open over the window: the keyboard is its own, and nothing may act
     /// on the document underneath it.
     pub(crate) fn modal_open(&self) -> bool {
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.script_pending.as_ref().is_some_and(|pending| pending.has_prompt()) {
+            return true;
+        }
         self.dialog.is_some()
             || self.close_request.is_some()
             || self.password_prompt.is_some()
@@ -522,6 +591,8 @@ impl PdfCraftApp {
         self.injected_panic(crate::frame_guard::FramePart::Logic);
         self.ctx = Some(ctx.clone());
         #[cfg(not(target_arch = "wasm32"))]
+        self.poll_script_dialog(ctx);
+        #[cfg(not(target_arch = "wasm32"))]
         self.window_state.repair(ctx);
         self.dialog_epoch();
         // Notices raised outside `ui` (opened files, OS events, the control channel) translate too.
@@ -537,6 +608,7 @@ impl PdfCraftApp {
                 worker.set_context(ctx);
             }
             self.poll_pending_opens();
+            self.poll_pending_destinations();
         }
         self.check_restored_recent();
         // Chinese wants its own faces before the Japanese ones (one baseline per line).
@@ -674,11 +746,13 @@ impl PdfCraftApp {
         // Shortcuts deferred last frame: the text field has taken that frame's typing since.
         let deferred = std::mem::take(&mut self.deferred_commands);
         self.native_menu_clicks(ctx);
-        // The keys a menu click stands for (⌘C, Delete…), before anything reads this frame's keys.
-        if !self.menu_input.is_empty() {
-            let events = std::mem::take(&mut self.menu_input);
-            ctx.input_mut(|i| i.events.extend(events));
-        }
+        // The input a menu click stands for (⌘C, Delete…), before anything reads this frame's keys.
+        self.release_menu_input(ctx);
+        // A command's chord pressed with the keyboard on the menu bar (Alt, F10) takes it off the
+        // bar, so the chord runs in the same press, the pages' as well as the registry's.
+        craft_menu::bar::leave_for_shortcut(ctx);
+        self.hotbar.close_hidden_picker(ctx, self.hotbar_hidden());
+        self.page_keys = page_keys::PageKeys::new(self.over_pages(ctx));
         self.shortcuts(ctx);
         // Scrolling and group-drag previews are transient: never resume after changing tabs,
         // opening a modal/palette, or returning to a window that lost focus.

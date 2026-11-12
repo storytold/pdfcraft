@@ -7,6 +7,7 @@ use super::popups::has_popup;
 use super::state::{Composer, ComposerKind, Gesture, PageCx};
 use super::{Annotation, CommentPrefs, CommentTool, CommentView, DocInfo, DocView, Edit, Pos2, QuickTool, Rect, Shape, vec2};
 use crate::page_cursor::{Layer, Subject};
+use crate::page_keys::PageKeys;
 use crate::page_router::{CommentPart, Hit, Owner, PagePress};
 
 /// Comment input on one page, before text selection runs. `press` is what this page has to do with
@@ -28,7 +29,7 @@ pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, 
     };
     let caret_text = if cx.tool == QuickTool::Comment(CommentTool::Caret) { view.page_text(cx.page) } else { None };
     let cv = &mut view.comments;
-    if cv.gesture.is_some() && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+    if cv.gesture.is_some() && cx.keys.take(ui.ctx(), egui::Key::Escape) {
         cv.gesture = None;
         return true;
     }
@@ -210,10 +211,15 @@ pub(crate) fn describe(cx: &PageCx<'_>, view: &mut DocView) {
         .comments()
         // An open pop-up already shows the comment: no tooltip over it.
         .filter(|a| !a.popup.is_some_and(|w| w.open))
-        .filter(|a| cx.screen_rects(a).any(|r| r.contains(p)))
-        .filter_map(|a| hover_tip(a, cx.prefs).map(|text| (a.index, text)))
-        .max_by_key(|(index, _)| *index);
-    if let Some((_, text)) = top {
+        .filter_map(|a| {
+            let marker = cx.comment_marker_rect(a).is_some_and(|r| r.contains(p));
+            if !marker && !cx.screen_rects(a).any(|r| r.contains(p)) {
+                return None;
+            }
+            hover_tip(a, cx.prefs).map(|text| (marker, a.index, text))
+        })
+        .max_by_key(|(marker, index, _)| (*marker, *index));
+    if let Some((_, _, text)) = top {
         view.cursor.describe(Subject::Comment, text);
     }
 }
@@ -554,13 +560,12 @@ impl Gestures<'_> {
                 false
             }
         };
-        let finish =
-            resp.double_clicked() || ui.input(|i| i.key_pressed(egui::Key::Enter)) || (drawing_here && std::mem::take(&mut cv.finish_request));
+        let finish = resp.double_clicked() || cx.keys.pressed(ui.ctx(), egui::Key::Enter) || (drawing_here && std::mem::take(&mut cv.finish_request));
         // Backspace (or Delete) takes back the last point, e.g. after a wrong click; Undo does too.
         // Only while a drawing is in progress: otherwise Delete belongs to the selected comment.
         if matches!(cv.gesture, Some(Gesture::Draw { page, .. }) if page == cx.page)
             && !ui.ctx().egui_wants_keyboard_input()
-            && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Backspace) || i.consume_key(egui::Modifiers::NONE, egui::Key::Delete))
+            && (cx.keys.take(ui.ctx(), egui::Key::Backspace) || cx.keys.take(ui.ctx(), egui::Key::Delete))
         {
             cv.undo_point();
             return true;
@@ -739,13 +744,14 @@ impl Gestures<'_> {
     }
 }
 
-/// Delete / Escape handling for comments (only while no text field has focus).
-pub(crate) fn keys(ctx: &egui::Context, view: &mut DocView, tool: &mut QuickTool, allowed: bool) {
+/// Delete / Escape handling for comments (only while no text field has focus, and nothing is over
+/// the pages).
+pub(crate) fn keys(ctx: &egui::Context, keys: PageKeys, view: &mut DocView, info: &DocInfo, tool: &mut QuickTool, allowed: bool) {
     if ctx.egui_wants_keyboard_input() {
         return;
     }
     let cv = &mut view.comments;
-    if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+    if keys.pressed(ctx, egui::Key::Escape) {
         // One step back per press: cancel the gesture, then deselect, then drop the tool (a
         // comment tool, or a Fill & Sign one: its Text tool would otherwise open a box at every
         // click with no way out by the keyboard).
@@ -756,21 +762,19 @@ pub(crate) fn keys(ctx: &egui::Context, view: &mut DocView, tool: &mut QuickTool
             *tool = QuickTool::Select;
         }
     }
-    if allowed
-        && cv.selected.is_some()
-        && ctx.input(|i| i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace))
-        && let Some(edit) = delete_selected(cv)
-    {
-        view.pending_edit = Some(edit);
+    if allowed && cv.selected.is_some() && (keys.pressed(ctx, egui::Key::Delete) || keys.pressed(ctx, egui::Key::Backspace)) {
+        view.pending_edit = delete_selected(cv, info);
     }
 }
 
 /// The edit that deletes every selected comment (one undo step for several), and clears the
 /// selection. Later positions go first, so each deletion leaves the earlier ones where they are.
-pub(crate) fn delete_selected(cv: &mut CommentView) -> Option<Edit> {
+pub(crate) fn delete_selected(cv: &mut CommentView, info: &DocInfo) -> Option<Edit> {
     // A group's member picked on the page, with its group the selection alone, goes by itself, as
     // Acrobat deletes the member clicked ([`CommentView::target`]).
-    let mut keys = if cv.also.is_empty() { cv.target().into_iter().collect() } else { cv.selection() };
+    let raw = if cv.also.is_empty() { cv.target().into_iter().collect() } else { cv.selection() };
+    let mut keys: Vec<(usize, usize)> =
+        raw.into_iter().filter(|(page, index)| info.annotations.iter().any(|a| a.page == *page && a.index == *index && !a.locked)).collect();
     cv.clear_selection();
     keys.sort_unstable_by(|a, b| b.cmp(a));
     keys.dedup();
@@ -788,7 +792,7 @@ pub(crate) fn delete_selected(cv: &mut CommentView) -> Option<Edit> {
 /// on screen whatever the zoom, the page's rotation and the view's; the keys are taken before
 /// the view scrolls or turns the page with them. Each press is one undo step. Text markup stays
 /// with its text, and a locked comment where it is.
-pub(crate) fn nudge_keys(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) {
+pub(crate) fn nudge_keys(ctx: &egui::Context, keys: PageKeys, view: &mut DocView, info: &DocInfo) {
     if ctx.egui_wants_keyboard_input() || view.pending_edit.is_some() {
         return;
     }
@@ -804,26 +808,23 @@ pub(crate) fn nudge_keys(ctx: &egui::Context, view: &mut DocView, info: &DocInfo
     }
     use egui::Key;
     let mut step = egui::Vec2::ZERO;
-    ctx.input_mut(|i| {
-        // Only an arrow pressed alone or with ⌘/Ctrl or Shift, judged by each press's own
-        // modifiers. Alt+← / Alt+→ go back and forward through the view history in
-        // `canvas::shortcuts` (#3632), and egui's key patterns would let an extra Alt through.
-        // A Ctrl that isn't the command key (macOS) is left alone, as the patterns left it.
-        i.events.retain(|e| {
-            let egui::Event::Key { key, pressed: true, modifiers, .. } = e else { return true };
-            if modifiers.alt || (modifiers.ctrl && !modifiers.command) {
-                return true;
-            }
-            let direction = match key {
-                Key::ArrowLeft => vec2(-1.0, 0.0),
-                Key::ArrowRight => vec2(1.0, 0.0),
-                Key::ArrowUp => vec2(0.0, -1.0),
-                Key::ArrowDown => vec2(0.0, 1.0),
-                _ => return true,
-            };
-            step += direction * if modifiers.command || modifiers.shift { 10.0 } else { 1.0 };
-            false
-        });
+    // Only an arrow pressed alone or with ⌘/Ctrl or Shift, judged by each press's own
+    // modifiers. Alt+← / Alt+→ go back and forward through the view history in
+    // `canvas::shortcuts` (#3632), and egui's key patterns would let an extra Alt through.
+    // A Ctrl that isn't the command key (macOS) is left alone, as the patterns left it.
+    keys.take_presses(ctx, |key, modifiers| {
+        if modifiers.alt || (modifiers.ctrl && !modifiers.command) {
+            return false;
+        }
+        let direction = match key {
+            Key::ArrowLeft => vec2(-1.0, 0.0),
+            Key::ArrowRight => vec2(1.0, 0.0),
+            Key::ArrowUp => vec2(0.0, -1.0),
+            Key::ArrowDown => vec2(0.0, 1.0),
+            _ => return false,
+        };
+        step += direction * if modifiers.command || modifiers.shift { 10.0 } else { 1.0 };
+        true
     });
     if step == egui::Vec2::ZERO {
         return;

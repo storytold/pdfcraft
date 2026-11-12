@@ -2110,6 +2110,229 @@ fn japanese_fallback_reports_the_face_after_save_and_reopen() {
 }
 
 #[test]
+#[ignore = "manual mixed-script rewrite timing probe; run with --ignored --nocapture"]
+fn mixed_script_paragraph_rewrite_timing_probe() {
+    assert!(pdfcraft_fonts::document_japanese_font().is_some(), "the timing probe requires the release-pinned craft-fonts input");
+    for (repeats, width) in [(32, 480.0), (512, 480.0), (2048, 480.0), (512, 14_400.0)] {
+        let draft = "The quick brown fox шалом ".repeat(repeats);
+        let mut samples = Vec::new();
+        for _ in 0..3 {
+            let mut doc = text_page("BT /F1 12 Tf 72 700 Td (The quick brown fox) Tj ET");
+            let style = text::BlockStyle {
+                width: Some(width),
+                align: Some(added::Align::Center),
+                underline: Some(true),
+                char_spacing: Some(1.25),
+                scale: Some(80.0),
+                ..Default::default()
+            };
+            let start = std::time::Instant::now();
+            text::rewrite_block(&mut doc, 0, 0, Some(&draft), &style).unwrap();
+            samples.push(start.elapsed().as_micros());
+            assert!(text::text_lines(&doc, 0).unwrap().iter().any(|line| line.base_font == "Helvetica"));
+            std::hint::black_box(doc);
+        }
+        samples.sort_unstable();
+        eprintln!("mixed-script-rewrite bytes={} width={width} median_us={} samples_us={samples:?}", draft.len(), samples[1]);
+    }
+}
+
+#[test]
+fn mixed_script_source_measurements_are_bounded_by_distinct_characters() {
+    if without_craft_fonts("mixed_script_source_measurements_are_bounded_by_distinct_characters") {
+        return;
+    }
+    for resource in ["F1", "F2"] {
+        for repeats in [1, 256] {
+            for width in [80.0, 14_400.0] {
+                let draft = "ab шалом ab ".repeat(repeats);
+                let distinct = draft.chars().collect::<std::collections::HashSet<_>>().len();
+                let mut doc = text_page(&format!("BT /{resource} 12 Tf 72 700 Td (ab) Tj ET"));
+                let style = text::BlockStyle { width: Some(width), align: Some(added::Align::Justify), underline: Some(true), ..Default::default() };
+                text::take_source_character_measurements();
+                text::rewrite_block(&mut doc, 0, 0, Some(&draft), &style).unwrap();
+                let measured = text::take_source_character_measurements();
+                assert_eq!(measured, distinct, "{resource}, {repeats} repeats, width {width}: measure each distinct source candidate once");
+            }
+        }
+    }
+}
+
+#[test]
+fn mixed_script_cached_widths_follow_each_rewrite_state() {
+    if without_craft_fonts("mixed_script_cached_widths_follow_each_rewrite_state") {
+        return;
+    }
+    let draft = "ab шалом ab шалом ab шалом ab";
+    for (resource, size, spacing, scale) in [("F2", 12.0, 0.0, 100.0), ("F1", 18.0, 1.25, 80.0), ("F2", 18.0, 1.25, 80.0), ("F1", 12.0, 0.0, 100.0)] {
+        let mut doc = text_page(&format!("BT /{resource} 12 Tf 5 Tw 72 700 Td (ab) Tj ET"));
+        let original_font = doc.get(pdfcraft_cos::ObjRef::new(if resource == "F1" { 5 } else { 6 }, 0)).as_ref().clone();
+        let style = text::BlockStyle {
+            size: Some(size),
+            width: Some(120.0),
+            align: Some(added::Align::Center),
+            underline: Some(true),
+            char_spacing: Some(spacing),
+            scale: Some(scale),
+            ..Default::default()
+        };
+        text::rewrite_block(&mut doc, 0, 0, Some(draft), &style).unwrap();
+        let doc = reopen(&doc);
+        assert_eq!(doc.get(pdfcraft_cos::ObjRef::new(if resource == "F1" { 5 } else { 6 }, 0)).as_ref(), &original_font);
+        let lines = text::text_lines(&doc, 0).unwrap();
+        assert_eq!(text::text_blocks(&doc, 0).unwrap()[0].text.split_whitespace().collect::<Vec<_>>(), draft.split_whitespace().collect::<Vec<_>>());
+        let page = pdfcraft_model::pages(&doc).remove(0);
+        let fonts = doc.dict(doc.dict(page.dict.get(b"Resources").unwrap()).unwrap().get(b"Font").unwrap()).unwrap();
+        let ops = pdfcraft_content::parse(&page_content_bytes(&doc, 0)).ops;
+        let underlines: Vec<_> = ops.iter().filter(|op| op.is("m") || op.is("l")).collect();
+        let rows: Vec<_> = lines.chunk_by(|a, b| (a.origin_baseline() - b.origin_baseline()).abs() < 0.001).collect();
+        assert!(rows.len() > 1, "the cache must also be used while wrapping");
+        assert_eq!(underlines.len(), rows.len() * 2);
+        for (row, underline) in rows.into_iter().zip(underlines.as_chunks::<2>().0) {
+            // Recompute from the saved fonts, independently of the rewrite's cache.
+            let widths: Vec<_> = row
+                .iter()
+                .map(|line| {
+                    if line.text.chars().any(|ch| ch.is_ascii_alphabetic()) {
+                        assert_eq!(line.font, resource);
+                    }
+                    let m = pdfcraft_fonts::pdf::Metrics::from_dict(&doc, &doc.dict(fonts.get(line.font.as_bytes()).unwrap()).unwrap());
+                    let bytes = m.encode(&line.text).unwrap_or_else(|| panic!("saved font {} cannot encode {line:?}", m.base_font));
+                    m.codes(&bytes).iter().map(|(code, _)| m.width(*code) * size + spacing).sum::<f64>() * scale / 100.0
+                })
+                .collect();
+            let total: f64 = widths.iter().sum();
+            let left = (120.0 - total).max(0.0) / 2.0;
+            let mut x = 72.0 + left;
+            for (line, advance) in row.iter().zip(widths) {
+                assert!((line.baseline()[0] - x).abs() < 0.02, "{resource}, size {size}: {line:?}, expected {x}");
+                x += advance;
+            }
+            assert!((underline[0].operands[0].as_f64().unwrap() - left).abs() < 0.02);
+            assert!((underline[1].operands[0].as_f64().unwrap() - left - total).abs() < 0.02);
+        }
+    }
+}
+
+#[test]
+fn mixed_script_paragraph_keeps_the_source_font_without_an_explicit_line_break() {
+    if without_craft_fonts("mixed_script_paragraph_keeps_the_source_font_without_an_explicit_line_break") {
+        return;
+    }
+    let original = "The quick brown fox jumps over the lazy dog";
+    let ending = "and keeps running through the long field.";
+    let draft = format!("{original} шалом {ending}");
+    let mut doc = text_page(&format!("BT /F1 12 Tf 14.4 TL 72 700 Td ({original}) Tj T* ({ending}) Tj ET"));
+    let font = doc.get(pdfcraft_cos::ObjRef::new(5, 0)).as_ref().clone();
+    text::replace_block(&mut doc, 0, 0, &draft).unwrap();
+    let doc = reopen(&doc);
+    assert_eq!(doc.get(pdfcraft_cos::ObjRef::new(5, 0)).as_ref(), &font);
+    let lines = text::text_lines(&doc, 0).unwrap();
+    assert!(lines.iter().any(|l| l.base_font == "Helvetica" && l.text.contains("The quick brown fox")), "{lines:#?}");
+    for line in &lines {
+        if line.text.chars().any(|ch| ch.is_ascii_alphabetic()) {
+            assert_eq!(line.base_font, "Helvetica", "Latin must retain its source font: {line:?}");
+        }
+    }
+    assert!(lines.iter().any(|l| l.text.contains("шалом") && l.base_font != "Helvetica"));
+    assert_eq!(text::text_blocks(&doc, 0).unwrap()[0].text.split_whitespace().collect::<Vec<_>>(), draft.split_whitespace().collect::<Vec<_>>());
+    let fallback = page_font_programs(&doc).into_iter().filter(|(subtype, _)| subtype == b"Type3").count();
+    assert_eq!(fallback, 1, "the new letters share one fallback font");
+}
+
+#[test]
+fn mixed_script_subset_spaces_remain_extractable_after_saving() {
+    if without_craft_fonts("mixed_script_subset_spaces_remain_extractable_after_saving") {
+        return;
+    }
+    for (resource, draft) in [("F2", "ab шалом ab"), ("F2", "шалом ab"), ("F2", "ab шалом"), ("F1", "ab шалом ab")] {
+        for align in [added::Align::Left, added::Align::Center, added::Align::Right] {
+            let mut doc = text_page(&format!("BT /{resource} 12 Tf 72 700 Td (ab) Tj ET"));
+            let font_id = pdfcraft_cos::ObjRef::new(if resource == "F2" { 6 } else { 5 }, 0);
+            let original_font = doc.get(font_id).as_ref().clone();
+            let style =
+                text::BlockStyle { width: Some(300.0), align: Some(align), char_spacing: Some(1.25), scale: Some(80.0), ..Default::default() };
+            text::rewrite_block(&mut doc, 0, 0, Some(draft), &style).unwrap();
+            for bytes in [write_full(&doc, &Default::default()).unwrap(), pdfcraft_cos::write_incremental(&doc, &Default::default()).unwrap()] {
+                let saved = Document::open(Arc::new(bytes)).unwrap();
+                let lines = text::text_lines(&saved, 0).unwrap();
+                let decoded: String = lines.iter().map(|line| line.text.as_str()).collect();
+                assert_eq!(decoded, draft, "{resource}: edge spaces of source runs must be real extractable glyphs");
+                assert_eq!(text::text_blocks(&saved, 0).unwrap()[0].text, draft);
+                assert_eq!(saved.get(font_id).as_ref(), &original_font);
+                for line in lines.iter().filter(|line| line.text.chars().any(|ch| ch.is_ascii_alphabetic())) {
+                    assert_eq!(line.font, resource, "the Latin letters retain their source font: {line:?}");
+                }
+            }
+        }
+    }
+}
+
+/// Mixed-font fallback must preserve the refusal of unsupported per-row alignment.
+#[test]
+fn mixed_script_row_alignment_is_refused_without_changes() {
+    let mut doc = text_page("BT /F1 12 Tf 72 700 Td (Latin text) Tj ET");
+    let before = write_full(&doc, &SaveOptions::default()).unwrap();
+    let style = text::BlockStyle { width: Some(300.0), aligns: vec![Some(added::Align::Center)], ..Default::default() };
+    let err = text::rewrite_block(&mut doc, 0, 0, Some("abcшаломdef"), &style).unwrap_err();
+    assert!(err.to_string().contains("selected-row alignment"), "{err}");
+    assert_eq!(write_full(&doc, &SaveOptions::default()).unwrap(), before);
+}
+
+#[test]
+fn mixed_script_runs_use_source_and_fallback_advances_for_alignment() {
+    if without_craft_fonts("mixed_script_runs_use_source_and_fallback_advances_for_alignment") {
+        return;
+    }
+    for (resource, prefix, suffix) in [("F1", "abc", "def"), ("F2", "ab", "ab"), ("F1", "abc ", "def")] {
+        // Rewriting normalizes Tw; measuring a source space must use that same state.
+        let mut doc = text_page(&format!("BT /{resource} 12 Tf 5 Tw 72 700 Td ({prefix}) Tj ET"));
+        let draft = format!("{prefix}шалом{suffix}");
+        let style = text::BlockStyle {
+            width: Some(300.0),
+            align: Some(added::Align::Center),
+            char_spacing: Some(1.25),
+            scale: Some(80.0),
+            ..Default::default()
+        };
+        text::rewrite_block(&mut doc, 0, 0, Some(&draft), &style).unwrap();
+        let doc = reopen(&doc);
+        let lines = text::text_lines(&doc, 0).unwrap();
+        assert_eq!(text::text_blocks(&doc, 0).unwrap()[0].text, draft);
+        assert_eq!((lines[0].font.as_str(), lines[2].font.as_str()), (resource, resource));
+        let page = pdfcraft_model::pages(&doc).remove(0);
+        let resources = doc.dict(page.dict.get(b"Resources").unwrap()).unwrap();
+        let fonts = doc.dict(resources.get(b"Font").unwrap()).unwrap();
+        let advances: Vec<f64> = lines
+            .iter()
+            .zip([prefix, "шалом", suffix])
+            .map(|(line, part)| {
+                let font = doc.dict(fonts.get(line.font.as_bytes()).unwrap()).unwrap();
+                let m = pdfcraft_fonts::pdf::Metrics::from_dict(&doc, &font);
+                let bytes = m.encode(part).unwrap();
+                (m.codes(&bytes).iter().map(|(c, _)| m.width(*c) * 12.0).sum::<f64>() + part.chars().count() as f64 * 1.25) * 0.8
+            })
+            .collect();
+        let mut x = 72.0 + (300.0 - advances.iter().sum::<f64>()) / 2.0;
+        for (line, width) in lines.iter().zip(advances) {
+            assert!((line.baseline()[0] - x).abs() < 0.01, "{resource}: {line:?}, expected {x}");
+            x += width;
+        }
+    }
+}
+
+#[test]
+fn mixed_script_paragraph_batches_only_missing_glyphs_and_refuses_atomically() {
+    let mut doc = text_page("BT /F1 12 Tf 72 700 Td (Latin text) Tj ET");
+    // Cyrillic also uses bundled Inter in builds without craft-fonts.
+    text::rewrite_block_with_limit(&mut doc, 0, 0, Some("Latin шалом text"), &Default::default(), 2).unwrap();
+    assert_eq!(page_font_programs(&doc).iter().filter(|(subtype, _)| subtype == b"Type3").count(), 3);
+    let before = write_full(&doc, &Default::default()).unwrap();
+    assert!(text::replace_block(&mut doc, 0, 0, "Latin \u{FDFD} text").is_err());
+    assert_eq!(write_full(&doc, &Default::default()).unwrap(), before);
+}
+
+#[test]
 fn cyrillic_in_a_serif_line_falls_back_to_a_face_that_has_it() {
     if without_craft_fonts("cyrillic_in_a_serif_line_falls_back_to_a_face_that_has_it") {
         return;
@@ -2127,7 +2350,33 @@ fn cyrillic_in_a_serif_line_falls_back_to_a_face_that_has_it() {
         } else {
             text::replace_line(&mut doc, 0, 0, replacement).unwrap();
         }
-        assert_eq!(text::text_lines(&reopen(&doc), 0).unwrap()[0].text, replacement);
+        let doc = reopen(&doc);
+        if paragraph {
+            assert_eq!(text::text_blocks(&doc, 0).unwrap()[0].text, replacement);
+            assert!(text::text_lines(&doc, 0).unwrap().iter().any(|l| l.text.contains("world") && l.base_font == "Times-Roman"));
+        } else {
+            assert_eq!(text::text_lines(&doc, 0).unwrap()[0].text, replacement);
+        }
+    }
+}
+
+/// A subset missing spaces must still split source and fallback runs while aligning text.
+#[test]
+fn mixed_source_subset_without_space_keeps_fallback_runs_after_reopen() {
+    let draft = "a қ b a қ b";
+    for align in [added::Align::Left, added::Align::Center, added::Align::Justify] {
+        let mut doc = text_page("BT /F2 12 Tf 72 700 Td (ab) Tj ET");
+        let original = doc.get(pdfcraft_cos::ObjRef::new(6, 0)).as_ref().clone();
+        let style = text::BlockStyle { width: Some(36.0), align: Some(align), char_spacing: Some(1.25), scale: Some(80.0), ..Default::default() };
+        text::rewrite_block(&mut doc, 0, 0, Some(draft), &style).unwrap();
+        let doc = reopen(&doc);
+        assert_eq!(text::text_blocks(&doc, 0).unwrap()[0].text, draft);
+        assert_eq!(doc.get(pdfcraft_cos::ObjRef::new(6, 0)).as_ref(), &original);
+        let lines = text::text_lines(&doc, 0).unwrap();
+        assert!(lines.iter().any(|line| line.text.contains('a') && line.font == "F2"));
+        assert!(lines.iter().any(|line| line.text.contains('b') && line.font == "F2"));
+        assert!(lines.iter().any(|line| line.text.contains('қ') && line.base_font == "Inter-Regular"));
+        assert!(lines.iter().any(|line| line.text.contains(' ') && line.base_font == "Inter-Regular"));
     }
 }
 
@@ -2144,9 +2393,22 @@ fn uzbek_and_kazakh_cyrillic_use_the_bundled_latin_face() {
             assert_eq!(edit.substituted.as_deref(), Some("Inter Type3"), "{replacement}: {edit:?}");
             let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
             assert!(content.contains("/PCLat"), "{replacement}: {content}");
-            let lines = text::text_lines(&reopen(&doc), 0).unwrap();
-            assert_eq!(lines[0].text, replacement);
-            assert_eq!(lines[0].base_font, "Inter-Regular", "the generated font reports the face it drew");
+            let reopened = reopen(&doc);
+            let lines = text::text_lines(&reopened, 0).unwrap();
+            if paragraph {
+                assert_eq!(text::text_blocks(&reopened, 0).unwrap()[0].text, replacement);
+                for ch in ['a', 'b'].into_iter().filter(|ch| replacement.contains(*ch)) {
+                    assert!(lines.iter().any(|line| line.text.contains(ch) && line.base_font == "ABCDEF+Arial"), "{lines:?}");
+                }
+            } else {
+                assert_eq!(lines[0].text, replacement);
+            }
+            for ch in replacement.chars().filter(|ch| !ch.is_ascii()) {
+                assert!(
+                    lines.iter().any(|line| line.text.contains(ch) && line.base_font == "Inter-Regular"),
+                    "the generated Inter face draws {ch}: {lines:?}"
+                );
+            }
         }
     }
 }
@@ -8096,6 +8358,72 @@ fn unchanged_runs_between_two_edits_keep_their_styles() {
     assert_eq!(style(&after, "Italic footnote"), style(&before, "Italic footer"));
 }
 
+/// Find and replace: two words replaced in one paragraph of several runs. Each replacement takes
+/// the run of the first character it replaces, and every run between them keeps its own style.
+#[test]
+fn replacing_words_apart_in_a_paragraph_keeps_every_run_between_them() {
+    let original = mixed_region_page();
+    let block = text::text_blocks(&original, 0).unwrap()[1].clone();
+    assert_eq!(block.editor_text, "About\nPlain bold text.\nItalic footer");
+    let about = block.editor_text.find("About").unwrap();
+    let text_word = block.editor_text.find("text").unwrap();
+    let (draft, sources) = block.replaced(&[about..about + 5, text_word..text_word + 4], "Info").unwrap();
+    assert_eq!(draft, "Info\nPlain bold Info.\nItalic footer");
+    let pieces: Vec<&str> = sources.iter().map(|(r, _)| &draft[r.clone()]).collect();
+    assert_eq!(pieces, ["Info", "\nPlain ", "bold", " Info.", "\nItalic footer"]);
+    let before = text::text_lines(&original, 0).unwrap();
+    let source_of = |word: &str| before.iter().position(|l| l.text.contains(word)).unwrap();
+    let runs: Vec<usize> = sources.iter().map(|(_, s)| *s).collect();
+    assert_eq!(runs, [source_of("About"), source_of("Plain"), source_of("bold"), source_of(" text."), source_of("Italic")]);
+    let mut doc = original.clone();
+    let style = text::BlockStyle { sources, ..Default::default() };
+    assert_eq!(text::rewrite_block(&mut doc, 0, 1, Some(&draft), &style).unwrap().substituted, None);
+    let reopened = reopen(&doc);
+    assert_eq!(text::text_blocks(&reopened, 0).unwrap()[1].editor_text, draft);
+    let lines = text::text_lines(&reopened, 0).unwrap();
+    let look = |l: &text::TextLine| (l.base_font.clone(), l.color);
+    let run = |word: &str| lines.iter().find(|l| l.text.contains(word)).unwrap_or_else(|| panic!("{word}: {lines:?}"));
+    assert_eq!(look(run("Info")), look(&before[source_of("About")]), "the first replacement takes About's run");
+    assert_eq!(look(run("Plain")), look(&before[source_of("Plain")]));
+    assert_eq!(look(run("bold")), look(&before[source_of("bold")]), "the run between the two replacements keeps its style");
+    assert_eq!(look(run("Info.")), look(&before[source_of(" text.")]));
+    assert_eq!(look(run("Italic")), look(&before[source_of("Italic")]));
+    // A replaced word that is a run of its own keeps that run's style, where aligning the old and
+    // new text (the inline editor's way) gives a changed word the run before it.
+    let bold = block.editor_text.find("bold").unwrap();
+    let (draft, sources) = block.replaced(std::slice::from_ref(&(bold..bold + 4)), "heavy").unwrap();
+    let mut doc = original.clone();
+    text::rewrite_block(&mut doc, 0, 1, Some(&draft), &text::BlockStyle { sources, ..Default::default() }).unwrap();
+    let lines = text::text_lines(&reopen(&doc), 0).unwrap();
+    let heavy = lines.iter().find(|l| l.text.contains("heavy")).unwrap_or_else(|| panic!("{lines:?}"));
+    assert_eq!(look(heavy), look(&before[source_of("bold")]), "the replacement keeps the bold run's style");
+    // Out of order, overlapping or inside a character: no draft.
+    assert!(block.replaced(&[text_word..text_word + 4, about..about + 5], "x").is_none());
+    assert!(block.replaced(&[0..3, 2..5], "x").is_none());
+    assert!(block.replaced(&[0..0, 3..4], "x").is_none(), "an empty range");
+    assert_eq!(block.replaced(&[], "x").map(|(d, _)| d), Some(block.editor_text.clone()));
+}
+
+/// Sources that don't cover the text in order, or name a run of another paragraph, are refused
+/// and change nothing.
+#[test]
+fn style_sources_must_cover_the_text_with_the_paragraphs_runs() {
+    let original = mixed_region_page();
+    let block = text::text_blocks(&original, 0).unwrap()[1].clone();
+    let draft = block.editor_text.replace("About", "Info");
+    let own = block.lines[0];
+    let other = text::text_blocks(&original, 0).unwrap()[0].lines[0];
+    let len = draft.len();
+    for sources in
+        [vec![(0..4, own)], vec![(0..4, own), (5..len, own)], vec![(0..len, other)], vec![(0..len + 1, own)], vec![(4..len, own), (0..4, own)]]
+    {
+        let mut doc = original.clone();
+        let style = text::BlockStyle { sources: sources.clone(), ..Default::default() };
+        assert!(text::rewrite_block(&mut doc, 0, 1, Some(&draft), &style).is_err(), "{sources:?}");
+        assert_eq!(text::text_blocks(&doc, 0).unwrap()[1].editor_text, block.editor_text);
+    }
+}
+
 #[test]
 fn disjoint_style_ranges_preserve_unselected_runs_and_validate_utf8_atomically() {
     let mut doc = mixed_region_page();
@@ -9682,6 +10010,107 @@ fn a_clipping_copy_on_the_same_baseline_is_refused() {
     let block = text::rewrite_block(&mut doc, 0, 0, Some("EDITED"), &BlockStyle::default());
     assert!(matches!(&block, Err(EditError::Invalid(m)) if m.contains("clipping path")), "{block:?}");
     assert_eq!(text::text_lines(&doc, 0).unwrap().len(), 2, "refused means untouched");
+}
+
+/// `'` moves to the next line before it shows its text, and `"` also sets the word and character
+/// spacing (ISO 32000-2 §9.4.3, Table 107). Rewriting a paragraph drawn with them drops the
+/// operator but must keep what it did: text after it, positioned from that line or using that
+/// spacing, stays exactly where and how it was. Both the single-style paragraph path and the
+/// region path (a draft with a line break) are checked.
+#[test]
+fn rewriting_a_paragraph_drawn_with_quote_operators_keeps_their_line_move_and_spacing() {
+    let cases = [
+        // The next line is placed relative to the line `'` moved to.
+        "BT /F1 12 Tf 14 TL 72 714 Td (Target line here) ' 0 -100 Td (Footer stays put) Tj ET",
+        // The same with `"`, whose spacing the footer also inherits.
+        "BT /F1 12 Tf 14 TL 72 714 Td 3 2 (Target line here) \" 0 -100 Td (Footer stays put) Tj ET",
+        // Spacing set by `"` carries over into the next text object.
+        "BT /F1 12 Tf 14 TL 72 714 Td 3 2 (Target line here) \" ET BT 72 600 Td (Footer stays put) Tj ET",
+        // A split text object: text before the paragraph stays first, then the `'` lines go.
+        "BT /F1 12 Tf 14 TL 72 760 Td (Heading words) Tj 0 -46 Td (Target line here) Tj (more target) ' 0 -100 Td (Footer stays put) Tj ET",
+        // Split at a `'`: the rewrite's `Tm` there is already past its line move.
+        "BT /F1 12 Tf 14 TL 72 760 Td (Heading words) Tj 0 -32 Td (Target line here) ' (more target) ' 0 -100 Td (Footer stays put) Tj ET",
+    ];
+    for content in cases {
+        let footer = |doc: &Document| {
+            let lines = text::text_lines(doc, 0).unwrap();
+            let f = lines.iter().find(|l| l.text == "Footer stays put").unwrap_or_else(|| panic!("no footer in {content}"));
+            (f.rect, f.ink.clone())
+        };
+        let original = text_page(content);
+        let before = footer(&original);
+        let target = text::text_blocks(&original, 0).unwrap().iter().position(|b| b.text.starts_with("Target")).unwrap();
+        for draft in ["NEW TEXT", "NEW\nTEXT"] {
+            let mut doc = original.clone();
+            text::replace_block(&mut doc, 0, target, draft).unwrap();
+            let doc = reopen(&doc);
+            assert_eq!(footer(&doc), before, "{content} with {draft:?}");
+            let texts: Vec<String> = text::text_blocks(&doc, 0).unwrap().into_iter().map(|b| b.text).collect();
+            assert!(texts.iter().any(|t| t.contains("NEW")) && !texts.iter().any(|t| t.contains("Target")), "{content} with {draft:?}: {texts:?}");
+        }
+    }
+}
+
+/// [`text::replace_line`] also drops copies of the line drawn on the same baseline (a fake-bold
+/// overprint). A copy drawn with `'` or `"` must leave that operator's line move and spacing
+/// behind (ISO 32000-2 §9.4.3, Table 107), like the line's own first operator does: text after
+/// it is positioned from that line or uses that spacing. Each copy is tried as the target, so the
+/// one drawn with the quote operator is both the replaced line and the dropped copy.
+#[test]
+fn replacing_a_line_keeps_what_a_dropped_quote_copy_did() {
+    let cases = [
+        // The copy's `'` moves to the line the footer is placed from.
+        (2, "BT /F1 12 Tf 14 TL 72 700 Td (Target line here) Tj ET BT 72.3 714 Td (Target line here) ' 0 -100 Td (Footer stays put) Tj ET"),
+        // The copy's `"` sets the spacing the footer inherits in the next text object.
+        (2, "BT /F1 12 Tf 0 TL 72 700 Td (Target line here) Tj ET BT 72.3 700 Td 3 2 (Target line here) \" ET BT 72 600 Td (Footer stays put) Tj ET"),
+        // Two copies, a `'` one and a `"` one: the footer takes the second's line and spacing.
+        (
+            3,
+            "BT /F1 12 Tf 0 TL 72 700 Td (Target line here) Tj ET BT 72.3 700 Td (Target line here) ' ET BT 72.6 700 Td 3 2 (Target line here) \" 0 -100 Td (Footer stays put) Tj ET",
+        ),
+    ];
+    for (drawn, content) in cases {
+        let footer = |doc: &Document| {
+            let lines = text::text_lines(doc, 0).unwrap();
+            let f = lines.iter().find(|l| l.text == "Footer stays put").unwrap_or_else(|| panic!("no footer in {content}"));
+            (f.rect, f.ink.clone())
+        };
+        let original = text_page(content);
+        let before = footer(&original);
+        let targets: Vec<usize> =
+            text::text_lines(&original, 0).unwrap().iter().enumerate().filter(|(_, l)| l.text == "Target line here").map(|(i, _)| i).collect();
+        assert_eq!(targets.len(), drawn, "{content}");
+        for target in targets {
+            let mut doc = original.clone();
+            text::replace_line(&mut doc, 0, target, "NEW TEXT").unwrap();
+            let doc = reopen(&doc);
+            assert_eq!(footer(&doc), before, "{content} replacing line {target}");
+            let texts: Vec<String> = text::text_lines(&doc, 0).unwrap().into_iter().map(|l| l.text).collect();
+            assert!(texts.iter().any(|t| t == "NEW TEXT") && !texts.iter().any(|t| t.contains("Target")), "{content}: {texts:?}");
+        }
+    }
+}
+
+/// A copy dropped with the line it overprints moved the pen by its text: a run after it in its
+/// text object, placed by that pen, stays where it was (ISO 32000-2 §9.4.4).
+#[test]
+fn replacing_a_line_keeps_the_advance_of_a_dropped_copy() {
+    for content in [
+        "BT /F1 12 Tf 72 700 Td (Target line here) Tj ET BT 72.3 700 Td (Target line here) Tj [-20000] TJ (Far) Tj ET",
+        "BT /F1 12 Tf 0 TL 72 700 Td (Target line here) Tj ET BT 72.3 700 Td (Target line here) ' [-20000] TJ (Far) Tj ET",
+    ] {
+        let original = text_page(content);
+        let place = |doc: &Document| text::text_lines(doc, 0).unwrap().into_iter().find(|l| l.text == "Far").map(|l| l.rect);
+        let before = place(&original).unwrap_or_else(|| panic!("Far is a line of its own in {content}"));
+        // The line drawn first, so the one followed by Far is the copy.
+        let target = text::text_lines(&original, 0).unwrap().iter().position(|l| l.text == "Target line here").unwrap();
+        let mut doc = original.clone();
+        text::replace_line(&mut doc, 0, target, "NEW TEXT").unwrap();
+        let doc = reopen(&doc);
+        let texts: Vec<String> = text::text_lines(&doc, 0).unwrap().into_iter().map(|l| l.text).collect();
+        assert!(!texts.iter().any(|t| t.contains("Target")), "{content}: the copy went too: {texts:?}");
+        assert_eq!(place(&doc), Some(before), "{content}");
+    }
 }
 
 /// #2512: a session's drafts are laid out from the document as it was opened, never from each
@@ -12041,16 +12470,19 @@ fn variation_public_line_and_block_edits_preserve_selectors_after_reopen() {
 #[test]
 fn variation_public_selector_does_not_shift_centered_text_with_character_spacing() {
     // қ requires the same bundled fallback for both drafts, without optional font inputs.
-    for spacing in [0.0, 2.0] {
-        let mut plain = text_page("BT /F2 12 Tf 72 700 Td (ab) Tj ET");
-        let mut selected = plain.clone();
-        let style = text::BlockStyle { width: Some(100.0), align: Some(added::Align::Center), char_spacing: Some(spacing), ..Default::default() };
-        text::rewrite_block(&mut plain, 0, 0, Some("1қ"), &style).unwrap();
-        text::rewrite_block(&mut selected, 0, 0, Some("1\u{FE0F}қ"), &style).unwrap();
-        let a = text::text_lines(&reopen(&plain), 0).unwrap();
-        let b = text::text_lines(&reopen(&selected), 0).unwrap();
-        assert_eq!(a[0].base_font, b[0].base_font);
-        assert!(close(a[0].rect, b[0].rect), "Tc={spacing}: plain {:?}, selector {:?}", a[0].rect, b[0].rect);
+    // Exercise both retained source runs and a wholly substituted subset.
+    for resource in ["F1", "F2"] {
+        for spacing in [0.0, 2.0] {
+            let mut plain = text_page(&format!("BT /{resource} 12 Tf 72 700 Td (ab) Tj ET"));
+            let mut selected = plain.clone();
+            let style = text::BlockStyle { width: Some(100.0), align: Some(added::Align::Center), char_spacing: Some(spacing), ..Default::default() };
+            text::rewrite_block(&mut plain, 0, 0, Some("1қ"), &style).unwrap();
+            text::rewrite_block(&mut selected, 0, 0, Some("1\u{FE0F}қ"), &style).unwrap();
+            let a = text::text_lines(&reopen(&plain), 0).unwrap();
+            let b = text::text_lines(&reopen(&selected), 0).unwrap();
+            assert_eq!(a[0].base_font, b[0].base_font);
+            assert!(close(a[0].rect, b[0].rect), "{resource}, Tc={spacing}: plain {:?}, selector {:?}", a[0].rect, b[0].rect);
+        }
     }
 }
 /// Whole-paragraph alignment retains both soft wraps and typed hard breaks after save/reopen.
@@ -13610,6 +14042,157 @@ fn review_inside_scope_group_move_matches_direct_transform_under_outer_scale() {
     }
 }
 
+/// A page that names one font under 300 resource names builds its metrics once: each alias
+/// used to build (and keep) a set of its own.
+#[test]
+fn font_aliases_share_one_set_of_metrics() {
+    let fonts: String = (0..300).map(|i| format!(" /A{i} 5 0 R")).collect();
+    let content: String = format!("BT 72 700 Td {} ET", (0..300).map(|i| format!("/A{i} 12 Tf (x) Tj ")).collect::<String>());
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Contents 4 0 R /Resources << /Font <<{fonts} >> >> >>"),
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offs = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offs.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let x = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offs {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{x}\n%%EOF\n", objs.len() + 1).as_bytes());
+    let doc = Document::open(Arc::new(out)).unwrap();
+    text::METRICS_BUILT.with(|n| n.set(0));
+    let lines = text::text_lines(&doc, 0).unwrap();
+    assert!(lines.iter().map(|l| l.text.matches('x').count()).sum::<usize>() >= 300, "{lines:?}");
+    let built = text::METRICS_BUILT.with(std::cell::Cell::get);
+    assert!(built < 10, "metrics built {built} times for one font");
+}
+
+/// Each `Tj`/`TJ` moves the text matrix by the width of its text. A run shown later in the same
+/// text object without a `Td` or `Tm` of its own (a raised run in another colour, a column after
+/// a `TJ` gap) is placed by those advances. Rewriting the paragraph before it must keep them, as
+/// deleting a paragraph does: the run must not jump onto the new text. A kept run before the
+/// paragraph splits the text object, and what reopens it keeps that run's advance too.
+#[test]
+fn rewriting_a_paragraph_keeps_later_runs_on_its_baseline_in_place() {
+    let cases = [
+        ("BT /F1 12 Tf 72 700 Td (Target words) Tj 1 0 0 rg 3 Ts (Red) Tj ET", "Red"),
+        ("BT /F1 12 Tf 72 700 Td (Target words) Tj [-20000] TJ (Far) Tj ET", "Far"),
+        // Several dropped runs: each one's advance is kept.
+        ("BT /F1 12 Tf 72 700 Td (Target ) Tj (wor) Tj (ds) Tj [-20000] TJ (Far) Tj ET", "Far"),
+        // A kept run before the paragraph on its baseline: the text object is split there, and
+        // the pen it had reached is kept as well as the line matrix.
+        ("BT /F1 12 Tf 72 700 Td (Left) Tj [-20000] TJ (Target words) Tj [-20000] TJ (Far) Tj ET", "Far"),
+        ("BT /F1 12 Tf 72 700 Td (Left) Tj [-20000] TJ (Target ) Tj (words) Tj [-20000] TJ (Far) Tj ET", "Far"),
+        // The same with horizontal scaling and a later line placed from the line matrix.
+        ("BT /F1 12 Tf 80 Tz 14 TL 72 700 Td (Left) Tj [-20000] TJ (Target words) Tj [-20000] TJ (Far) Tj T* (Next) Tj ET", "Far"),
+        ("BT /F1 12 Tf 80 Tz 14 TL 72 700 Td (Left) Tj [-20000] TJ (Target words) Tj [-20000] TJ (Far) Tj T* (Next) Tj ET", "Next"),
+        // A `Q` puts back the text matrix its `q` saved: the `Tm` between them doesn't place `Far`.
+        ("BT /F1 12 Tf 72 700 Td (Target words) Tj q 1 0 0 1 300 300 Tm Q [-20000] TJ (Far) Tj ET", "Far"),
+        // A `Q` with nothing saved restores nothing: the advance is still kept.
+        ("BT /F1 12 Tf 72 700 Td (Target words) Tj Q [-20000] TJ (Far) Tj ET", "Far"),
+    ];
+    for (content, run) in cases {
+        let original = text_page(content);
+        let place = |doc: &Document| text::text_lines(doc, 0).unwrap().into_iter().find(|l| l.text == run).map(|l| l.rect);
+        let before = place(&original).unwrap_or_else(|| panic!("{run} is a line of its own in {content}"));
+        let target = text::text_blocks(&original, 0).unwrap().iter().position(|b| b.text == "Target words").unwrap();
+        for draft in ["NEW TEXT", "NEW\nTEXT"] {
+            let mut doc = original.clone();
+            text::replace_block(&mut doc, 0, target, draft).unwrap();
+            let after = place(&reopen(&doc)).unwrap_or_else(|| panic!("{run} is gone: {content} with {draft:?}"));
+            assert!(after.iter().zip(before).all(|(a, b)| (a - b).abs() < 1e-6), "{content} with {draft:?}: {before:?} -> {after:?}");
+        }
+    }
+}
+
+/// Vertical text advances down the column (ISO 32000-2 §9.4.4): runs dropped by a rewrite leave
+/// that advance, so a run later in the same text object stays where it was.
+#[test]
+fn rewriting_vertical_runs_keeps_a_later_run_in_its_column_in_place() {
+    // The second with a horizontal scaling (`Tz`), which a vertical advance doesn't take.
+    for content in [
+        "BT /V1 20 Tf 500 720 Td <0041> Tj <0042> Tj [-8000] TJ <0043> Tj ET",
+        "BT /V1 20 Tf 80 Tz 500 720 Td <0041> Tj <0042> Tj [-8000] TJ <0043> Tj ET",
+    ] {
+        vertical_runs_keep_a_later_run_in_place(content);
+    }
+}
+
+fn vertical_runs_keep_a_later_run_in_place(content: &str) {
+    let original = vertical_page(content);
+    let place = |doc: &Document| text::text_lines(doc, 0).unwrap().into_iter().find(|l| l.text == "C").map(|l| l.rect);
+    let before = place(&original).unwrap_or_else(|| panic!("C is a line of its own: {:?}", text::text_lines(&original, 0)));
+    let target = text::text_blocks(&original, 0).unwrap().iter().position(|b| b.text == "AB").unwrap();
+    for draft in [
+        "D", "D
+E",
+    ] {
+        let mut doc = original.clone();
+        text::replace_block(&mut doc, 0, target, draft).unwrap();
+        let after = place(&reopen(&doc)).unwrap_or_else(|| panic!("C is gone with {draft:?}"));
+        assert!(after.iter().zip(before).all(|(a, b)| (a - b).abs() < 1e-6), "{content} with {draft:?}: {before:?} -> {after:?}");
+    }
+}
+
+/// The advances read the glyphs without `/ActualText`, which can come to more text than the
+/// reading the edit was laid out from. Past the page's text budget that way, no advance is kept
+/// and the edit goes ahead, rather than refusing a page the reading allowed.
+#[test]
+fn dropped_advances_past_the_text_budget_keep_none_rather_than_refuse() {
+    let doc = text_page("BT /F1 12 Tf 72 700 Td (Drop) Tj [-20000] TJ (Far) Tj ET");
+    let ops = pdfcraft_content::parse(&page_content_bytes(&doc, 0)).ops;
+    let drop: std::collections::HashSet<usize> = ops.iter().position(|o| o.is("Tj")).into_iter().collect();
+    let page = pdfcraft_model::pages(&doc)[0].dict.clone();
+    let res = page.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
+    assert_eq!(text::dropped_advances_within(&doc, &ops, &res, &drop, None).len(), 1, "the advance Far relies on");
+    assert!(text::dropped_advances_within(&doc, &ops, &res, &drop, Some(2)).is_empty(), "too much text to read: none");
+}
+
+#[test]
+fn page_rules_refuse_unread_graphics_state() {
+    let mut dict = Dict::new();
+    dict.set(b"Filter".to_vec(), Object::name("UnsupportedFilter"));
+    let unread = Stream::from_raw(dict, b"2 0 0 2 0 0 cm".to_vec());
+    let damaged = damaged_flate(b"0 g\n", b"2 0 0 2 0 0 cm");
+    for stream in [unread, damaged] {
+        let mut doc = image_page_with("10 10 m 100 10 l S");
+        let incomplete = doc.add(Object::Stream(stream));
+        doc.update_dict(ObjRef::new(3, 0), |page| {
+            page.set(b"Contents".to_vec(), Object::Array(vec![Object::Ref(incomplete), Object::Ref(ObjRef::new(4, 0))]));
+        })
+        .unwrap();
+        assert!(page_rules(&doc, 0).is_err(), "later geometry cannot be trusted after unread graphics state");
+    }
+    assert_eq!(page_rules(&image_page_with("10 10 m 100 10 l S"), 0).unwrap(), [[10.0, 10.0, 100.0, 10.0]]);
+}
+
+#[test]
+fn image_editing_frame_keeps_page_edge_outside_explicit_clips() {
+    for (prefix, expected) in [
+        ("", [-30.0, -20.0, 70.0, 80.0]),
+        ("-10 -5 60 65 re W n ", [-10.0, -5.0, 50.0, 60.0]),
+        ("/PdfCraftImageCrop MP -10 -5 60 65 re W n ", [-10.0, -5.0, 50.0, 60.0]),
+    ] {
+        let doc = image_page_with(&format!("q {prefix}100 0 0 100 -30 -20 cm /Im0 Do Q"));
+        for doc in [&doc, &reopen(&doc)] {
+            let im = images::page_images(doc, 0).unwrap().remove(0);
+            assert_eq!(im.frame_rect(), Some(expected));
+            assert_eq!(im.has_editor_crop(), prefix.starts_with("/PdfCraftImageCrop"));
+            assert_eq!(im.visible_rect.unwrap()[0..2], [0.0, 0.0]);
+            assert!(!im.contains([-5.0, 10.0]), "out-of-page pixels stay unselectable");
+            assert!(im.contains([10.0, 10.0]));
+        }
+    }
+}
+
 #[test]
 fn explicit_builtin_thai_replaces_an_unavailable_source_without_installing_a_font() {
     let mut doc = text_page("BT /F1 16 Tf 50 700 Td (A) Tj ET BT /F2 12 Tf 50 600 Td (ab) Tj ET");
@@ -14275,6 +14858,61 @@ fn legacy_thai_subsets_are_read_within_one_budget_per_edit() {
     let error = text::rewrite_block(&mut distinct, 0, 0, Some("กขค"), &style).unwrap_err().to_string();
     assert!(error.contains("THSarabunPSK") && error.contains("MiB") && error.contains("choose a replacement font"), "{error}");
     assert_eq!(pdfcraft_cos::write_full(&distinct, &Default::default()).unwrap(), before, "a refused edit changes nothing");
+}
+
+/// An edit whose THSarabunPSK subset spends the edit's allowance to the byte goes through: only a
+/// read refused for want of it refuses the edit. The subset is read four times over its program
+/// (the edit's metrics read, `LegacyThaiFont`'s, the editor's program read and its metrics read)
+/// and three times over its ToUnicode, so a program 192 bytes short of 16 MiB and a ToUnicode of
+/// 256 bytes cost exactly the 64 MiB; a byte more of ToUnicode is three past it.
+#[test]
+fn a_thai_edit_that_spends_its_allowance_to_the_byte_goes_through() {
+    let mut program = legacy_thai_program();
+    program.resize((16 << 20) - 192, 0);
+    let edit = |unicode_len: usize| {
+        let mut unicode = LEGACY_THAI_UNICODE.to_vec();
+        unicode.resize(unicode_len, b' ');
+        let mut doc = text_page("BT /F1 16 Tf 50 650 Td <00d6> Tj ET");
+        let font = legacy_thai_font(&mut doc, "ABCDEF+THSarabunPSK", &program, &unicode);
+        doc.set(pdfcraft_cos::ObjRef::new(5, 0), Object::Dict(font));
+        let style = BlockStyle { width: Some(400.0), ..Default::default() };
+        text::rewrite_block(&mut doc, 0, 0, Some("กขค"), &style).map(|_| ()).map_err(|e| e.to_string())
+    };
+    assert_eq!(edit(256), Ok(()));
+    let error = edit(257).unwrap_err();
+    assert!(error.contains("THSarabunPSK") && error.contains("MiB of font data"), "{error}");
+}
+
+/// Only a read the allowance refuses leaves a font of the face unread for want of it. With the
+/// allowance spent to the byte as above, another font of the face, whose ToUnicode is an empty
+/// stream behind a filter nothing decodes (unread with any allowance), still has its program read,
+/// which the allowance refuses: the edit is refused, rather than going through without that font.
+#[test]
+fn a_font_of_the_face_unread_on_its_own_once_the_allowance_is_spent_still_refuses_the_edit() {
+    let mut program = legacy_thai_program();
+    program.resize((16 << 20) - 192, 0);
+    let mut unicode = LEGACY_THAI_UNICODE.to_vec();
+    unicode.resize(256, b' ');
+    let mut doc = text_page("BT /F1 16 Tf 50 650 Td <00d6> Tj ET");
+    let font = legacy_thai_font(&mut doc, "ABCDEF+THSarabunPSK", &program, &unicode);
+    doc.set(pdfcraft_cos::ObjRef::new(5, 0), Object::Dict(font));
+    // Not a subset, so its metrics read no program, only the ToUnicode.
+    let mut other = legacy_thai_font(&mut doc, "THSarabunPSK", &legacy_thai_program(), LEGACY_THAI_UNICODE);
+    let mut dict = Dict::new();
+    dict.set(b"Filter".to_vec(), Object::name("NoSuchFilter"));
+    other.set(b"ToUnicode".to_vec(), Object::Ref(doc.add(Object::Stream(Stream::from_raw(dict, Vec::new())))));
+    let other = doc.add(Object::Dict(other));
+    doc.update_dict(pdfcraft_cos::ObjRef::new(3, 0), |page| {
+        let Some(Object::Dict(mut resources)) = page.get(b"Resources").cloned() else { panic!("fixture") };
+        let Some(Object::Dict(mut fonts)) = resources.get(b"Font").cloned() else { panic!("fixture") };
+        fonts.set(b"F2".to_vec(), Object::Ref(other));
+        resources.set(b"Font".to_vec(), Object::Dict(fonts));
+        page.set(b"Resources".to_vec(), Object::Dict(resources));
+    })
+    .unwrap();
+    let style = BlockStyle { width: Some(400.0), ..Default::default() };
+    let error = text::rewrite_block(&mut doc, 0, 0, Some("กขค"), &style).unwrap_err().to_string();
+    assert!(error.contains("THSarabunPSK") && error.contains("MiB of font data"), "{error}");
 }
 
 /// A THSarabunPSK-named subset that has OpenType Thai mark positioning is a modern face: it is
