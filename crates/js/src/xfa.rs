@@ -34,7 +34,7 @@ pub(crate) use host::forget_base;
 pub(crate) use host::{HNode, XHost};
 pub(crate) use model::{FormCopy, MAX_LINE, MAX_PAYLOAD, clip, clip_result, reset_names};
 pub use model::{MAX_ALERTS, MAX_CONSOLE, MAX_EFFECTS, XfaDoc, XfaEffect, XfaEvent, XfaKind, XfaNode, XfaOutcome, XfaPropSet};
-pub(crate) use nodes::{child_named, descendants_named, instances, resolve_som};
+pub(crate) use nodes::{child_named, descendants_named, instance_place, instances, resolve_som, scope_of, scoped};
 pub use props::{MAX_CHANGES_PER_OBJECT, XfaProp, XfaProps, property_value_ok};
 #[cfg(test)]
 pub(crate) use run::run_within_limits;

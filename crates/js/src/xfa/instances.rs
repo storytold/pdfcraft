@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use super::host::{HNode, XHost, host};
@@ -143,10 +144,16 @@ fn child_som(parent_som: String, name: &str, index: usize) -> String {
 fn subtree_bytes(h: &XHost, src: usize, depth: usize) -> usize {
     let Some(n) = h.nodes.get(src).filter(|_| depth <= MAX_DEPTH) else { return 0 };
     let own = std::mem::size_of::<HNode>().saturating_add(n.name.len()).saturating_add(n.som.len());
-    n.children
-        .iter()
-        .filter(|&&k| !h.nodes.get(k).is_some_and(|c| c.gone || c.repeatable && c.index > 0))
-        .fold(own, |sum, &k| sum.saturating_add(subtree_bytes(h, k, depth + 1)))
+    copied_children(h, &n.children).into_iter().fold(own, |sum, k| sum.saturating_add(subtree_bytes(h, k, depth + 1)))
+}
+
+/// The children a copy of their parent takes: the live ones, and of a repeating subform its
+/// first instance only (the later ones follow it under the same name). Which instance is the
+/// first is told by the order, not by its number: a subform's first instance is numbered after
+/// the same-named objects before it in its SOM scope, which need not be 0.
+fn copied_children(h: &XHost, kids: &[usize]) -> Vec<usize> {
+    let mut repeating: HashSet<&str> = HashSet::new();
+    kids.iter().copied().filter(|&k| h.nodes.get(k).is_some_and(|c| !c.gone && (!c.repeatable || repeating.insert(&c.name)))).collect()
 }
 
 /// A copy of `src`'s subtree (values cleared, properties the template's) under `parent`,
@@ -160,7 +167,6 @@ fn clone_subtree(h: &mut XHost, src: usize, parent: Option<usize>, depth: usize)
         (
             HNode {
                 name: n.name.clone(),
-                unnamed: n.unnamed,
                 som: "".into(),
                 kind: n.kind,
                 value: String::new(),
@@ -193,12 +199,8 @@ fn clone_subtree(h: &mut XHost, src: usize, parent: Option<usize>, depth: usize)
     h.nodes.push(template);
     h.forget_som_owners();
     let mut copied = Vec::new();
-    for k in kids.iter().copied() {
-        // Nested repeating subforms copy their first instance only.
-        let skip = h.nodes.get(k).is_some_and(|c| c.gone || c.repeatable && c.index > 0);
-        if skip {
-            continue;
-        }
+    // Nested repeating subforms copy their first instance only.
+    for k in copied_children(h, &kids) {
         if let Some(ci) = clone_subtree(h, k, Some(idx), depth + 1) {
             copied.push(ci);
         }
@@ -234,7 +236,11 @@ impl XHost {
         // The copy's SOM, as `renumber` will give it, so its effect is reserved before the copy.
         let name = h.nodes.get(first).map(|n| n.name.to_string()).unwrap_or_default();
         let parent_som = h.nodes.get(parent).map(|p| p.som.to_string()).unwrap_or_default();
-        let som = child_som(parent_som, &name, live.len());
+        // Instances are numbered on from the first, which follows the same-named objects before
+        // it in its SOM scope (XFA 3.3 pp. 94-95), so the new one is one past the last.
+        let last = live.last().copied().unwrap_or(first);
+        let index = h.nodes.get(last).map_or(live.len(), |n| n.index.saturating_add(1));
+        let som = child_som(parent_som, &name, index);
         // The copy's nodes, their names and SOMs, are charged to the run's byte budget before
         // they are made: a subtree with long names must not be copied past it.
         let copied = subtree_bytes(h, first, 0);
@@ -242,9 +248,8 @@ impl XHost {
             return None;
         }
         let new = clone_subtree(h, first, Some(parent), 0)?;
-        let last = live.last().copied().unwrap_or(first);
         if let Some(n) = h.nodes.get_mut(new) {
-            n.index = live.len();
+            n.index = index;
         }
         // Keep instances together: right after the last one.
         if let Some(p) = h.nodes.get_mut(parent) {
@@ -304,9 +309,9 @@ impl XHost {
             h.keep_occur_on(gone, next);
         }
         // Later instances move down one.
-        for (k, &inst) in live.iter().enumerate().skip(i + 1) {
+        for &inst in live.iter().skip(i + 1) {
             if let Some(n) = h.nodes.get_mut(inst) {
-                n.index = k - 1;
+                n.index = n.index.saturating_sub(1);
             }
             renumber(h, inst, 0);
         }

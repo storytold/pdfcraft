@@ -462,6 +462,12 @@ pub struct Common {
     /// scripts to read (see [`Props`]). Shared: the live form's instances of the object and
     /// copies of the template point at the same tree.
     pub props: std::sync::Arc<Props>,
+    /// The object's number among the same-named objects of its SOM scope (`Name[n]`), 0 for an
+    /// unnamed one: XFA 3.3 ch. 3, "Transparent Nodes" (pp. 94-95, Example 3.12) counts them
+    /// across unnamed subforms and areas, whose children are named as their parent's. The parser
+    /// fills it in ([`crate::numbering`]); a repeating subform's later instances count on from
+    /// it. Copies of the object keep it.
+    pub som_index: usize,
 }
 
 /// A container's or object's `<traversal>` links, as SOM references relative to it. Only the
@@ -566,23 +572,13 @@ impl Node {
     }
 }
 
+/// The SOM index of each of a container's children ([`Common::som_index`]): what every walk of
+/// the template (layout, live form, tab order, data) numbers them by, so they agree.
 pub(crate) struct SomIndices(Vec<usize>);
 
 impl SomIndices {
     pub(crate) fn of(children: &[Node]) -> Self {
-        let mut seen = std::collections::HashMap::new();
-        SomIndices(
-            children
-                .iter()
-                .map(|c| {
-                    c.common().name.as_deref().map_or(0, |name| {
-                        let n = seen.entry(name).or_insert(0);
-                        *n += 1;
-                        *n - 1
-                    })
-                })
-                .collect(),
-        )
+        SomIndices(children.iter().map(|c| c.common().som_index).collect())
     }
 
     pub(crate) fn at(&self, i: usize) -> usize {

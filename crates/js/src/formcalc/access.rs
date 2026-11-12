@@ -3,8 +3,8 @@ use super::CLOCK_EVERY;
 use super::ast::{Expr, Idx};
 use super::value::{Val, num_text, parse_num};
 use super::{
-    HNode, HashSet, Interp, LIST_TOO_LONG, MAX_LIST, MAX_PARSE_DEPTH, MAX_STEPS, R, RAN_TOO_LONG, child_named, descendants_named, instances, props,
-    resolve_som,
+    HNode, HashSet, Interp, LIST_TOO_LONG, MAX_LIST, MAX_PARSE_DEPTH, MAX_STEPS, R, RAN_TOO_LONG, child_named, descendants_named, instance_place,
+    instances, props, resolve_som, scope_of, scoped,
 };
 
 impl Interp<'_> {
@@ -342,7 +342,8 @@ impl Interp<'_> {
             "name" => Val::Str(n.name.to_string()),
             "somExpression" => Val::Str(n.som.to_string()),
             "className" => Val::Str(n.kind.class_name().into()),
-            "index" | "instanceIndex" => Val::Num(n.index as f64),
+            "index" => Val::Num(n.index as f64),
+            "instanceIndex" => Val::Num(instance_place(self.h, i) as f64),
             "presence" => Val::Str(n.presence.to_string()),
             "access" => Val::Str(n.access.to_string()),
             "isNull" => Val::Num(if n.value.is_empty() { 1.0 } else { 0.0 }),
@@ -359,7 +360,7 @@ impl Interp<'_> {
             "parent" => n.parent.map_or(Val::Null, Val::Node),
             "nodes" => Val::List(n.children.iter().copied().filter(|c| self.node(*c).is_some()).map(Val::Node).collect()),
             "all" => match n.parent {
-                Some(p) => Val::List(instances(self.h, p, &n.name).into_iter().map(Val::Node).collect()),
+                Some(p) => Val::List(scoped(self.h, scope_of(self.h, p), &n.name).into_iter().map(Val::Node).collect()),
                 None => Val::Node(i),
             },
             "instanceManager" => match n.parent {
@@ -370,9 +371,14 @@ impl Interp<'_> {
             | "dataNode" | "defaultValue" | "editValue" | "selectedIndex" | "event" | "traversal" => Val::Sink,
             other => {
                 if let Some(child) = other.strip_prefix('_') {
-                    return Ok(if child_named(self.h, i, child).is_some() { Val::Im(i, child.to_string()) } else { Val::Null });
+                    // The manager of the container the subform is a child of: an unnamed subform
+                    // of this one when the name was found through it.
+                    return Ok(match child_named(self.h, i, child) {
+                        Some(c) => Val::Im(self.node(c).and_then(|n| n.parent).unwrap_or(i), child.to_string()),
+                        None => Val::Null,
+                    });
                 }
-                let found = instances(self.h, i, other);
+                let found = scoped(self.h, i, other);
                 match found.as_slice() {
                     [] => Val::Null,
                     [one] => Val::Node(*one),
@@ -431,10 +437,11 @@ impl Interp<'_> {
                     let v = self.eval(e)?;
                     return Ok(self.nodes_list(&v));
                 }
-                // The name resolves to its first instance; `row[*]` means every sibling of it.
+                // The name resolves to its first instance; `row[*]` means every object of the
+                // name in its SOM scope.
                 for first in resolve_som(self.h, self.h.current, name) {
                     match self.node(first).and_then(|n| n.parent.map(|p| (p, n.name.clone()))) {
-                        Some((p, n)) => self.gather(&mut out, &mut seen, instances(self.h, p, &n))?,
+                        Some((p, n)) => self.gather(&mut out, &mut seen, scoped(self.h, scope_of(self.h, p), &n))?,
                         None => self.gather(&mut out, &mut seen, [first])?,
                     }
                 }
@@ -442,7 +449,7 @@ impl Interp<'_> {
             Expr::Member(base, name) => {
                 let b = self.eval(base)?;
                 for i in self.nodes_list(&b) {
-                    self.gather(&mut out, &mut seen, instances(self.h, i, name))?;
+                    self.gather(&mut out, &mut seen, scoped(self.h, i, name))?;
                 }
                 if out.is_empty() {
                     let v = self.member(b, name)?;

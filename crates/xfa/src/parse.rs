@@ -305,6 +305,8 @@ fn parse_common(n: XmlNode, warnings: &mut Vec<String>) -> Common {
         para: parse_para(child(n, "para")),
         col_span: n.attribute("colSpan").and_then(|c| c.trim().parse::<usize>().ok()).unwrap_or(1).clamp(1, 64),
         traversal: parse_traversal(child(n, "traversal")),
+        // Numbered once the whole template is read ([`crate::numbering`]).
+        som_index: 0,
     }
 }
 
@@ -1558,6 +1560,7 @@ pub fn parse(xml: &str) -> Result<(Template, Vec<String>), XfaError> {
         }
         apply_saved_state(&mut root_sf.children, saved_root, 0);
     }
+    crate::numbering::number(&mut root_sf);
     let mut page_roles = Vec::new();
     let root_node = [Node::Subform(Box::new(root_sf.clone()))];
     collect_page_roles(&root_node, &mut page_roles, 0);

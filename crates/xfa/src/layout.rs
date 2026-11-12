@@ -98,6 +98,19 @@ impl Ctx {
         }
         out
     }
+
+    /// [`Self::with_som`] for an exclusion group. An unnamed one is `group`, as the live form
+    /// names it ([`crate::script::form_tree`]), so its buttons are told from the fields beside it.
+    fn with_group_som(&self, c: &Common, index: usize) -> Ctx {
+        let mut out = self.with_som(c, index);
+        if c.name.is_none() {
+            if !out.som.is_empty() {
+                out.som.push('.');
+            }
+            out.som.push_str(&format!("group[{index}]"));
+        }
+        out
+    }
 }
 
 /// (address of a subform or area in the template, available width bits, depth, SOM path of the

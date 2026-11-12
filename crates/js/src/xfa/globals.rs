@@ -311,7 +311,8 @@ pub(super) fn install(ctx: &mut Context, event: &XfaEvent, doc: &XfaDoc, current
         .build();
     ctx.register_global_property(js_string!("util"), util, rw)?;
     // Unqualified names: the current node's children, its siblings, then each ancestor's
-    // children, the nearest first. Instance managers as `_name`.
+    // children, the nearest first, each with the content of its unnamed subforms and areas
+    // (which SOM names see through, XFA 3.3 pp. 94-95). Instance managers as `_name`.
     let scopes: Vec<usize> = {
         let h = host(ctx)?.borrow();
         let mut out = vec![current];
@@ -383,21 +384,22 @@ pub(super) fn install(ctx: &mut Context, event: &XfaEvent, doc: &XfaDoc, current
     ];
     let mut defined: HashSet<String> = RESERVED.iter().map(ToString::to_string).collect();
     for scope in scopes {
-        let kids: Vec<(usize, String, bool)> = {
+        // Each with the container it is a child of, whose instance manager counts it.
+        let kids: Vec<(usize, String, Option<usize>)> = {
             let h = host(ctx)?.borrow();
-            h.nodes
-                .get(scope)
-                .map(|n| n.children.iter().filter_map(|&c| h.nodes.get(c).map(|k| (c, k.name.to_string(), k.repeatable && !k.gone))).collect())
-                .unwrap_or_default()
+            super::nodes::scope_members(&h, scope)
+                .into_iter()
+                .filter_map(|c| h.nodes.get(c).map(|k| (c, k.name.to_string(), k.parent.filter(|_| k.repeatable && !k.gone))))
+                .collect()
         };
-        for (c, name, repeatable) in kids {
+        for (c, name, repeating_in) in kids {
             if !is_identifier(&name) || defined.contains(&name) {
                 continue;
             }
             let obj = node_object(ctx, c)?;
             ctx.register_global_property(JsString::from(name.as_str()), obj, rw)?;
-            if repeatable {
-                let im = instance_manager(ctx, scope, &name)?;
+            if let Some(owner) = repeating_in {
+                let im = instance_manager(ctx, owner, &name)?;
                 ctx.register_global_property(JsString::from(format!("_{name}").as_str()), im, rw)?;
             }
             defined.insert(name);

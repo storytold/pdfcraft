@@ -4747,16 +4747,6 @@ fn strip_marks_document_as_requiring_full_save() {
     assert!(doc.full_save_required(), "stripping XFA packets must require a full save to prevent data exposure in incremental saves");
 }
 
-#[test]
-fn som_indices_count_earlier_same_named_siblings() {
-    let draw = |name: Option<&str>| {
-        Node::Draw(Box::new(Draw { common: Common { name: name.map(str::to_string), ..Default::default() }, ..Default::default() }))
-    };
-    let children = [draw(Some("a")), draw(Some("b")), draw(Some("a")), draw(None), draw(Some("a")), draw(Some("b"))];
-    let sibs = SomIndices::of(&children);
-    assert_eq!((0..=children.len()).map(|i| sibs.at(i)).collect::<Vec<_>>(), [0, 0, 1, 0, 2, 1, 0]);
-}
-
 /// A TIFF is drawn as viewers show it, turned by its Orientation tag: a 2 × 1 picture (red,
 /// blue) tagged 6 (turn 90° clockwise) is 1 × 2, red above blue, in layout and in the PDF.
 #[test]
@@ -8118,18 +8108,17 @@ two"
     }
 }
 
-/// Which SOM paths several objects of the form share with an unnamed one ([`crate::som_is_shared`]):
+/// Which SOM paths more than one object of the form has or may have ([`crate::som_is_shared`]):
 /// two unnamed fields or exclusion groups of one container (`field[0]`, `group[0]`), a field
-/// named `field` beside an unnamed one, unnamed buttons of one group, an unnamed field in an
-/// unnamed subform that occurs twice, one in a repeating subform's second instance and in a
-/// same-named subform after it (both `row[1]`), and ones in two page areas of one name. Not
-/// shared: a named object, a lone unnamed one, a repeating subform's later instance, a named
-/// subform holding an unnamed one (which takes its path), and named objects the live form gives
-/// one path that XFA 3.3 numbers apart (p. 95: a named object and one of its name and number in
-/// an unnamed subform beside it, the copies in an unnamed subform that occurs twice, form 052's
-/// `verified` subforms, each in an unnamed subform). The answer agrees with the live form's
-/// paths: every path its objects own (not taken from their parent) is shared exactly when more
-/// than one owns it and one of them is unnamed.
+/// named `field` beside an unnamed one, unnamed buttons of one group, the content of an unnamed
+/// subform that occurs twice (each instance names it as the first does), a repeating subform's
+/// second instance and a same-named subform after it (both `row[1]`) with what they hold, and
+/// what two page areas of one name hold. Not shared: a lone unnamed object, a repeating
+/// subform's later instance that nothing else is numbered as, a named subform holding an unnamed
+/// one (which takes its path), and same-named objects in unnamed subforms of one container,
+/// which count up through them (XFA 3.3 p. 95; form 052's `verified` subforms, each in an
+/// unnamed subform). The answer agrees with the live form's paths: every path its objects own
+/// (not taken from their parent) is shared exactly when more than one owns it.
 #[test]
 fn som_paths_several_objects_share_are_told() {
     let xdp = r##"<?xml version="1.0" encoding="UTF-8"?>
@@ -8194,9 +8183,14 @@ fn som_paths_several_objects_share_are_told() {
         "form[0].literal[0].field[0]",
         "form[0].twice[0].field[0]",
         "form[0].rows2[0].row[1].field[0]",
+        "form[0].rows2[0].row[1].item[0]",
+        "form[0].rows2[0].row[1]",
+        "form[0].twice[0].a[0]",
         "p[0].field[0]",
         "#pageArea[1].field[0]",
         "q[0].field[0]",
+        "q[0].pn[0]",
+        "q[0]",
     ] {
         assert!(shared(som), "{som}");
     }
@@ -8209,18 +8203,22 @@ fn som_paths_several_objects_share_are_told() {
         "form[0].one[0].g[0].b[0]",
         "form[0].nested[0]",
         "form[0].nested[0].x[0]",
+        "form[0].nested[0].x[1]",
         "form[0].nested[0].y[0]",
         "form[0].rows[0].row[2].item[0]",
-        "form[0].twice[0].a[0]",
-        "form[0].rows2[0].row[1].item[0]",
+        "form[0].rows[0].row[7].item[0]",
+        "form[0].rows2[0].row[0]",
         "form[0].rows2[0].row[0].field[0]",
+        "form[0].rows2[0].row[2].item[0]",
         "form[0].tax[0].verified[0]",
         "form[0].tax[0].verified[0].yes[0]",
-        "form[0].tax[0].verified[0].no[0]",
+        "form[0].tax[0].verified[1]",
+        "form[0].tax[0].verified[1].no[0]",
         "p[0].pn[0]",
-        "q[0].pn[0]",
         "#pageArea[1].pn[0]",
         "#pageArea[7].field[0]",
+        "#pageArea[1]",
+        "p[0]",
         "form[0].nowhere[0].field[0]",
         "elsewhere[0].field[0]",
         "",
@@ -8229,20 +8227,17 @@ fn som_paths_several_objects_share_are_told() {
     }
     // Against the live form's own paths, page areas' content included.
     let live = crate::form_tree(&tpl, None, &crate::Overrides::default());
-    let mut owners: std::collections::HashMap<String, (usize, bool)> = std::collections::HashMap::new();
-    fn walk(n: &crate::FormNode, parent: &str, owners: &mut std::collections::HashMap<String, (usize, bool)>) {
+    let mut owners: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    fn walk(n: &crate::FormNode, parent: &str, owners: &mut std::collections::HashMap<String, usize>) {
         if n.som != parent {
-            let o = owners.entry(n.som.clone()).or_default();
-            o.0 += 1;
-            o.1 |= n.unnamed;
+            *owners.entry(n.som.clone()).or_default() += 1;
         }
         n.children.iter().for_each(|c| walk(c, &n.som, owners));
     }
     walk(&live.root, "", &mut owners);
     assert!(owners.len() > 30, "{owners:?}");
-    // Named objects the live form gives one path are there too (and not counted as shared).
-    assert!(owners.iter().any(|(_, &(n, unnamed))| n > 1 && !unnamed), "{owners:?}");
-    for (som, &(n, unnamed)) in &owners {
-        assert_eq!(shared(som), n > 1 && unnamed, "{som}: {n} owner(s), one unnamed: {unnamed}");
+    assert!(owners.values().any(|&n| n > 1), "{owners:?}");
+    for (som, &n) in &owners {
+        assert_eq!(shared(som), n > 1, "{som}: {n} owner(s)");
     }
 }

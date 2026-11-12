@@ -35,7 +35,10 @@ impl Layouter<'_> {
         if depth > MAX_DEPTH || spent > MAX_MEASURES {
             return (c.w.unwrap_or(avail_w), c.h.unwrap_or(0.0));
         }
-        let own = ctx.with_som(c, index);
+        let own = match node {
+            Node::ExclGroup(_) => ctx.with_group_som(c, index),
+            _ => ctx.with_som(c, index),
+        };
         // Only containers recurse; their addresses are stable for the whole layout (the
         // template is borrowed, the root and page areas are held by the layouter). Without data
         // every instance is alike, so one measurement serves them all, unless scripts changed

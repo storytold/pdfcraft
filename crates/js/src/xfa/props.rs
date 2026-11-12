@@ -758,8 +758,7 @@ pub(crate) fn resolve_into_props(h: &XHost, from: usize, expr: &str) -> Vec<(usi
             // empty, until a node's value is its value element.
             .filter(|&n| !(first == "value" && h.nodes.get(n).is_some_and(|x| x.kind == XfaKind::Draw)))
             .flat_map(|n| {
-                let named = !by_class
-                    && h.nodes.get(n).is_some_and(|x| x.children.iter().any(|&c| h.nodes.get(c).is_some_and(|c| !c.gone && &*c.name == first)));
+                let named = !by_class && super::child_named(h, n, first).is_some();
                 // The child shadows the property for the whole rest: what the child lacks names nothing
                 // here (a property of the child is found where the head names the child).
                 if named {
@@ -1140,17 +1139,16 @@ impl XHost {
 
     /// Whether node `node` has no SOM path of its own, which the form keeps property changes by:
     /// an unnamed subform, area or draw shares its parent's (a change kept there is its named
-    /// parent's), and an unnamed field or exclusion group shares its path with any other object
-    /// that has it (unnamed fields of one container are each `field[0]`). XFA 3.3 gives unnamed
-    /// objects no SOM path of their own ("Transparent Nodes", p. 94), so the form keeps no change
-    /// for one of them there (one kept at that path would reach every object there,
-    /// `pdfcraft_xfa::som_is_shared`), and a write to it is refused rather than handed to all.
+    /// parent's), and any other object shares its path when another live object has it too. The
+    /// form keeps no change for one of them there (one kept at that path would reach every
+    /// object there, `pdfcraft_xfa::som_is_shared`), so a write to it is refused rather than
+    /// handed to all.
     ///
-    /// Named objects only can share a path too: the form numbers each container's children
-    /// among their own siblings, where XFA 3.3 numbers the children of an unnamed subform as its
-    /// parent's (p. 95, Example 3.12), so two `verified` subforms, each in an unnamed subform,
-    /// are both `verified[0]` here and `verified[0]`, `verified[1]` there. Those writes are not
-    /// refused, as the form keeps them: by that one path, so each reaches all of them.
+    /// Named objects have a path each, numbered through unnamed subforms and areas (XFA 3.3
+    /// ch. 3, "Transparent Nodes", pp. 94-95, Example 3.12). The paths more than one object
+    /// has: unnamed fields and exclusion groups of one container (each `field[0]`, `group[0]`),
+    /// the content of an unnamed subform made more than once, and an instance of a repeating
+    /// subform numbered as a same-named object after it.
     pub(crate) fn shares_som(&self, node: usize) -> bool {
         let Some(n) = self.nodes.get(node) else { return false };
         if n.kind == XfaKind::Form {
@@ -1159,7 +1157,7 @@ impl XHost {
         if !self.owns_som(node) {
             return true;
         }
-        self.path_owners().get(&n.som).is_some_and(|o| o.count > 1 && o.unnamed)
+        self.path_owners().get(&n.som).is_some_and(|o| o.count > 1)
     }
 
     /// Who owns each SOM path among the live objects ([`XHost::som_owners`]): counted the first
@@ -1173,9 +1171,8 @@ impl XHost {
             let mut owners: super::host::SomOwnerCounts = HashMap::new();
             for (i, m) in self.nodes.iter().enumerate() {
                 if !m.gone && m.kind != XfaKind::Form && self.owns_som(i) {
-                    let o = owners.entry(Arc::clone(&m.som)).or_insert(super::host::PathOwners { count: 0, unnamed: false, last: i });
+                    let o = owners.entry(Arc::clone(&m.som)).or_insert(super::host::PathOwners { count: 0, last: i });
                     o.count = o.count.saturating_add(1);
-                    o.unnamed |= m.unnamed;
                     o.last = i;
                 }
             }
@@ -1191,7 +1188,7 @@ impl XHost {
 
     /// Whether node `node`'s SOM path is not simply its parent's (as an unnamed subform's, area's
     /// or draw's is).
-    fn owns_som(&self, node: usize) -> bool {
+    pub(crate) fn owns_som(&self, node: usize) -> bool {
         let Some(n) = self.nodes.get(node) else { return false };
         n.parent.and_then(|p| self.nodes.get(p)).is_none_or(|p| p.som != n.som)
     }
@@ -1291,13 +1288,13 @@ impl XHost {
         if sets.is_empty() {
             return;
         }
-        // Each change goes to the object owning its path, the last one where named objects share
-        // it, and to none where one of its owners is unnamed or the object takes its parent's
-        // path ([`XHost::shares_som`]): the changes there are not its own. Found by the counts of
-        // who owns each path, made once for the scripts of an event, as this runs before each.
+        // Each change goes to the object owning its path, and to none where several objects have
+        // the path or the object takes its parent's ([`XHost::shares_som`]): the changes there
+        // are not its own. Found by the counts of who owns each path, made once for the scripts
+        // of an event, as this runs before each.
         let owners = self.path_owners();
         let found: Vec<(usize, &super::XfaPropSet)> =
-            sets.iter().filter_map(|p| owners.get(p.som.as_str()).filter(|o| !(o.count > 1 && o.unnamed)).map(|o| (o.last, p))).collect();
+            sets.iter().filter_map(|p| owners.get(p.som.as_str()).filter(|o| o.count == 1).map(|o| (o.last, p))).collect();
         for (i, p) in found {
             let key = change_key(&p.path, p.attr.as_deref());
             self.note_key(i, if p.copied { format!("={key}") } else { key });

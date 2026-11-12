@@ -565,7 +565,7 @@ impl Layouter<'_> {
         if let Some(b) = &g.common.border {
             self.draw_border(b, rect)?;
         }
-        let ctx = ctx.with_som(&g.common, sib);
+        let ctx = ctx.with_group_som(&g.common, sib);
         // The group's data node holds the selected button's on value.
         let selected: Option<String> =
             self.data.and_then(|d| d.text_at(&data_path(self.tpl, &ctx.som))).map(|t| t.trim().to_string()).filter(|t| !t.is_empty());

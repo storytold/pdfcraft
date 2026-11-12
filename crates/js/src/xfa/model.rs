@@ -29,10 +29,6 @@ impl XfaKind {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct XfaNode {
     pub name: String,
-    /// The template object has no name: [`Self::name`] is the one the form gives it (`field`,
-    /// `group`, `#subform`, …), and XFA 3.3 gives it no SOM path of its own ("Transparent
-    /// Nodes", p. 94).
-    pub unnamed: bool,
     /// The SOM expression naming this instance (`form[0].head[0].familyName[0]`).
     pub som: String,
     pub kind: Option<XfaKind>,
@@ -48,7 +44,8 @@ pub struct XfaNode {
     pub repeatable: bool,
     pub occur_min: usize,
     pub occur_max: Option<usize>,
-    /// This instance's index among its same-named siblings.
+    /// The number in this object's SOM path: its place among the same-named objects of its SOM
+    /// scope (which runs through unnamed subforms and areas, XFA 3.3 pp. 94-95).
     pub index: usize,
     pub children: Vec<XfaNode>,
     /// Fields: the value shown in the field's display picture, what `formattedValue` reads;

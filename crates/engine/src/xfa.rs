@@ -239,7 +239,6 @@ fn to_js_with(n: &FormNode, copies: &HashMap<usize, Arc<XfaProps>>, depth: usize
     let copy = |p: &Arc<Props>| copies.get(&(Arc::as_ptr(p) as usize)).cloned().unwrap_or_else(|| Arc::new(convert_props(p)));
     XfaNode {
         name: n.name.clone(),
-        unnamed: n.unnamed,
         som: n.som.clone(),
         kind: n.kind.map(|k| match k {
             NodeKind::Subform => XfaKind::Subform,
@@ -937,9 +936,9 @@ impl<'a, 'b> Runner<'a, 'b> {
     /// that isn't one, a measurement that doesn't read) is refused with a console note, and the
     /// property keeps what it had; past the form's limit on changes, one note says so.
     fn set_property(&mut self, ev: &ScriptEvent, som: &str, path: &str, attr: Option<&str>, value: &str, copied: bool) {
-        // Several objects at one SOM path, one of them unnamed (unnamed fields of one container):
-        // a change kept there would reach all of them, so none is kept, as the scripting host
-        // refuses it too.
+        // Several objects may have this SOM path (unnamed fields of one container, say): a change
+        // kept there would reach all of them, so none is kept, as the scripting host refuses it
+        // too.
         let shared = pdfcraft_xfa::som_is_shared(self.tpl, som);
         if shared {
             if !copied {
@@ -2059,13 +2058,11 @@ mod tests {
     }
 
     /// Two `verified` subforms, each in an unnamed subform of one container (corpus form 052,
-    /// Ontario Works 0983), are both `…tax[0].verified[0]` here, because PdfCraft numbers each
-    /// container's children among their own siblings; XFA 3.3 numbers them `verified[0]` and
-    /// `verified[1]` ("Transparent Nodes", p. 95, Example 3.12). Each check box's initialize
-    /// script colours its own font, and the form keeps the change (by the one path both share),
-    /// as the scripting host hands it over: neither refuses it as a write to a shared path. With
-    /// an unnamed check box in each instead, the path is one the form can't keep a change for,
-    /// and both refuse it.
+    /// Ontario Works 0983), are `…tax[0].verified[0]` and `…tax[0].verified[1]`: same-named
+    /// objects are numbered through unnamed subforms (XFA 3.3 "Transparent Nodes", p. 95,
+    /// Example 3.12). Each check box's initialize script colours its own font, and the form
+    /// keeps each change at its own path. An unnamed check box in each instead is the one
+    /// `field[0]` of its `verified`, a path of its own too.
     #[test]
     fn named_objects_numbered_apart_by_xfa_keep_their_property_writes() {
         let open = |name: &str| {
@@ -2081,13 +2078,16 @@ mod tests {
             let kept = pdfcraft_xfa::overrides(&pdfcraft_cos::Document::open(s.get(id).unwrap().bytes.clone()).unwrap());
             (kept, out)
         };
-        let (kept, out) = open(r#"name="yes""#);
-        let som = "form[0].page1[0].tax[0].verified[0].yes[0]";
-        assert_eq!(kept.props().get(som).and_then(|m| m.get("font#0/fill#0/color#0@value")).map(String::as_str), Some("0,0,255"), "{kept:?}");
-        assert!(!out.console.iter().any(|l| l.contains("SOM path")), "{out:?}");
-        let (kept, out) = open("");
-        assert!(kept.props().is_empty(), "{:?}", kept.props());
-        assert!(out.console.iter().any(|l| l.contains("SOM path")), "{out:?}");
+        for (name, last) in [(r#"name="yes""#, "yes[0]"), ("", "field[0]")] {
+            let (kept, out) = open(name);
+            assert_eq!(kept.props().len(), 2, "{name}: one change each: {:?}", kept.props());
+            for k in 0..2 {
+                let som = format!("form[0].page1[0].tax[0].verified[{k}].{last}");
+                let colour = kept.props().get(&som).and_then(|m| m.get("font#0/fill#0/color#0@value"));
+                assert_eq!(colour.map(String::as_str), Some("0,0,255"), "{som}: {kept:?}");
+            }
+            assert!(!out.console.iter().any(|l| l.contains("SOM path")), "{name}: {out:?}");
+        }
     }
 
     /// Unnamed fields of one container share their SOM path (`…field[0]`), which the form keeps

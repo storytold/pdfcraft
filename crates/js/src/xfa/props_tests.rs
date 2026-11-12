@@ -1355,7 +1355,7 @@ fn an_added_instance_reads_the_templates_properties_not_the_first_instances_chan
 /// would reach both), and reads back as before. A named field beside them takes its write.
 #[test]
 fn a_write_to_one_of_two_objects_sharing_a_som_path_is_refused() {
-    let unnamed = || XfaNode { name: "field".into(), unnamed: true, som: "form1[0].field[0]".into(), ..node("field", XfaKind::Field, &[], vec![]) };
+    let unnamed = || XfaNode { name: "field".into(), som: "form1[0].field[0]".into(), ..node("field", XfaKind::Field, &[], vec![]) };
     let mut root = form();
     root.children.extend([unnamed(), unnamed()]);
     let o = go_on(&root, "this.fillColor = '1,2,3'; xfa.form.form1.plain.fillColor = '4,5,6'; this.fillColor", "field");
@@ -1370,39 +1370,51 @@ fn a_write_to_one_of_two_objects_sharing_a_som_path_is_refused() {
     assert_eq!(o.effects, [set("form1[0].field[0]", "border#0/fill#0/color#0", Some("value"), "1,2,3")]);
 }
 
-/// Two named objects the form gives one SOM path, as it does two `verified` subforms each in an
-/// unnamed subform (corpus form 052): XFA 3.3 numbers them `verified[0]` and `verified[1]`
-/// ("Transparent Nodes", p. 95, Example 3.12), so each has a path of its own there, and a
-/// write to either is handed to the form (which keeps it by the one path) rather than refused.
-/// An unnamed object at that path makes it one the form can't keep a change for again.
+/// Named objects have a SOM path each, numbered through unnamed subforms (XFA 3.3 "Transparent
+/// Nodes", p. 95, Example 3.12: two `yes` fields, each in an unnamed subform, are `yes[0]` and
+/// `yes[1]`), so a write to one is handed to the form for that one. Where the form does give
+/// two named objects one path (a later instance of a repeating subform numbered as a same-named
+/// object after it), a write to either is refused like any other the form can't keep for one
+/// object, rather than reaching both.
 #[test]
-fn a_write_to_one_of_two_named_objects_given_one_som_path_is_kept() {
-    let named = || XfaNode { name: "yes".into(), som: "form1[0].yes[0]".into(), ..node("yes", XfaKind::Field, &[], vec![]) };
+fn a_write_to_a_named_object_is_kept_for_it_unless_another_has_its_som_path() {
+    let yes = |i: usize| XfaNode { name: "yes".into(), som: format!("form1[0].yes[{i}]"), index: i, ..node("yes", XfaKind::Field, &[], vec![]) };
+    let inside = |kid: XfaNode| XfaNode {
+        name: "#subform".into(),
+        som: "form1[0]".into(),
+        kind: Some(XfaKind::Subform),
+        children: vec![kid],
+        ..Default::default()
+    };
     let mut root = form();
-    root.children.extend([named(), named()]);
-    let o = go_on(&root, "this.font.fill.color.value = '0,0,255'; this.font.fill.color.value", "yes");
+    root.children.extend([inside(yes(0)), inside(yes(1))]);
+    let ev = XfaEvent { activity: "click".into(), target: "form1[0].yes[1]".into(), ..Default::default() };
+    let o = run_xfa("this.font.fill.color.value = '0,0,255'; this.font.fill.color.value", &ev, &XfaDoc::default(), &root, Limits::default());
     assert_eq!(o.error, None, "{o:?}");
     assert_eq!(o.result.as_deref(), Some("0,0,255"), "{o:?}");
-    assert_eq!(o.effects, [set("form1[0].yes[0]", "font#0/fill#0/color#0", Some("value"), "0,0,255")]);
+    assert_eq!(o.effects, [set("form1[0].yes[1]", "font#0/fill#0/color#0", Some("value"), "0,0,255")]);
     assert!(!o.console.iter().any(|l| l.contains("SOM path")), "{o:?}");
-    // With an unnamed field there too, refused.
-    root.children.push(XfaNode { name: "yes".into(), unnamed: true, ..named() });
-    let o = go_on(&root, "this.font.fill.color.value = '0,0,255'", "yes");
+    // Two named objects with one path: refused, and read back as before.
+    let mut root = form();
+    root.children.extend([yes(0), yes(0)]);
+    let o = go_on(&root, "this.font.fill.color.value = '0,0,255'; this.font.fill.color.value", "yes");
+    assert_eq!(o.error, None, "{o:?}");
+    assert_eq!(o.result.as_deref(), Some("0,0,0"), "{o:?}");
     assert!(o.effects.is_empty(), "{o:?}");
     assert!(o.console.iter().any(|l| l.contains("shares its SOM path")), "{o:?}");
 }
 
 /// The changes earlier scripts of an event made are put in each script's copy of the form
-/// before it runs (`XHost::preset`): on the object whose SOM path they name (the last of named
-/// objects given one path), never on one without a path of its own (an unnamed field beside
-/// another, which the form keeps no change for). The objects are found by who owns each path,
+/// before it runs (`XHost::preset`): on the object whose SOM path they name, never on one
+/// without a path of its own (an unnamed field beside another, or named objects given one
+/// path, which the form keeps no change for). The objects are found by who owns each path,
 /// counted once for the scripts of an event: counting the whole form again before each script
 /// added more than a second to opening Ontario Works 0983 (1,571 opening scripts).
 #[test]
 fn changes_from_earlier_scripts_are_put_on_their_objects_counting_the_paths_once() {
     use super::super::XfaPropSet;
     use super::take_owners_counted;
-    let unnamed = || XfaNode { name: "field".into(), unnamed: true, ..node("field", XfaKind::Field, &[], vec![]) };
+    let unnamed = || node("field", XfaKind::Field, &[], vec![]);
     let mut root = form();
     root.children.extend([unnamed(), unnamed(), node("twin", XfaKind::Field, &[], vec![]), node("twin", XfaKind::Field, &[], vec![])]);
     root.children.extend((0..500).map(|i| node(&format!("f{i}"), XfaKind::Field, &[], vec![])));
@@ -1422,10 +1434,8 @@ fn changes_from_earlier_scripts_are_put_on_their_objects_counting_the_paths_once
         }
         let mut written: Vec<(usize, &str)> = h.prop_writes.keys().filter_map(|&i| h.nodes.get(i).map(|n| (i, &*n.som))).collect();
         written.sort_unstable();
-        let last_twin = h.nodes.iter().rposition(|n| &*n.name == "twin").unwrap();
         let soms: Vec<&str> = written.iter().map(|w| w.1).collect();
-        assert_eq!(soms, ["form1[0].plain[0]", "form1[0].twin[0]", "form1[0].f499[0]"], "the unnamed fields share their path and take none");
-        assert_eq!(written.get(1).map(|w| w.0), Some(last_twin), "the last of the named twins");
+        assert_eq!(soms, ["form1[0].plain[0]", "form1[0].f499[0]"], "the unnamed fields share their path and take none, nor do the twins");
         assert_eq!(super::attr(&h, h.current, "font#0", "size").as_deref(), Some("14pt"));
     }
 }
@@ -1438,14 +1448,14 @@ fn changes_from_earlier_scripts_are_put_on_their_objects_counting_the_paths_once
 #[test]
 fn who_owns_each_path_is_counted_once_for_the_scripts_of_an_event() {
     use super::take_owners_counted;
-    let unnamed = || XfaNode { name: "field".into(), unnamed: true, ..node("field", XfaKind::Field, &[], vec![]) };
+    let unnamed = || node("field", XfaKind::Field, &[], vec![]);
     let mut root = form();
     root.children.extend([unnamed(), unnamed()]);
     root.children.extend((0..500).map(|i| node(&format!("f{i}"), XfaKind::Field, &[], vec![])));
     let root = Arc::new(root);
     let doc = XfaDoc::default();
     let host = || super::super::XHost::new(Arc::clone(&root), true, "form1[0].plain[0]", &doc);
-    let field = |h: &super::super::XHost| h.nodes.iter().position(|n| n.unnamed).unwrap();
+    let field = |h: &super::super::XHost| h.nodes.iter().position(|n| &*n.name == "field").unwrap();
     let plain = |h: &super::super::XHost| h.current;
     let _ = take_owners_counted();
     let h = host();

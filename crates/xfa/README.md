@@ -168,18 +168,23 @@ let form = pdfcraft_xfa::layout_xml(template_xml)?;       // pages of items, for
   of page-master content, is drawn with its own. The rules a change must meet (paths, colours,
   measurements, whole numbers, sizes) are one crate, `pdfcraft-xfa-rules` (re-exported here as
   `prop_rules`), that this crate and `pdfcraft-js` both depend on, so a script never reads back a
-  value the form drops. An object whose SOM path, by which the changes are kept, is not its own
-  keeps none (`som_is_shared`): an unnamed subform, area or draw takes its parent's, and an
-  unnamed field or exclusion group (`…field[0]`, `…group[0]`) shares its path with any other
-  object the live form gives it (another unnamed one of the container, or its copy in an unnamed
-  subform that occurs twice); XFA 3.3 gives unnamed objects no path of their own ("Transparent
-  Nodes", p. 94). A write to one is refused with a console note, by the script and by the form,
-  and such a change a file holds is left out, as is a calculation override at such a path. Who
-  owns which path is worked out once per template. PdfCraft numbers each container's children
-  among their own siblings, where XFA 3.3 numbers an unnamed subform's children as its
-  parent's (p. 95, Example 3.12), so named objects can get one path too (two `verified`
-  subforms, each in an unnamed subform, are both `verified[0]`); a write to one of them is kept,
-  by that path, and reaches each of them. `execValidate()` runs the null test on every
+  value the form drops. Same-named objects are numbered through unnamed subforms and areas,
+  which add no path segment (XFA 3.3 ch. 3, "Transparent Nodes", pp. 94-95, Example 3.12): the
+  numbers are worked out once, when the template is read (`numbering`, `Common::som_index`),
+  and the layout, the live form scripts run on, the Tab order and the template look-ups all
+  read them, so two `verified` subforms, each in an unnamed subform of one container, are
+  `verified[0]` and `verified[1]` and keep a change each. Scripts resolve names the same way
+  (`form1.yes[1]` is the second `yes` of `form1`, through its unnamed subforms and areas). A
+  SOM path more than one object of the form has or may have keeps no change
+  (`som_is_shared`): an unnamed subform, area or draw takes its parent's path, unnamed fields
+  and exclusion groups of one container are each `…field[0]` or `…group[0]`, each instance of
+  an unnamed subform the template makes more than once names its content as the first does,
+  and the later instances of a named subform that may repeat count on from its number, which a
+  same-named object after it in the template has too. A write to one is refused with a
+  console note, by the script and by the form, and such a change a file holds is left out, as
+  is a calculation override at such a path. Who owns which path is worked out once per
+  template. An unnamed exclusion group's buttons are named under `group[n]` by the layout and
+  the Tab order, as scripts name them. `execValidate()` runs the null test on every
   required object under the node and lists the empty ones in one message. An event's work
   doesn't grow with the changes the form already keeps: the template keeps (`memo`) the changes
   last read, with the object they came from, the property tree each changed object was given,

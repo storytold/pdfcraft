@@ -12,8 +12,6 @@ use super::{Context, HashMap, JsResult, Message, RefCell, error};
 #[derive(Clone)]
 pub(crate) struct HNode {
     pub(crate) name: Arc<str>,
-    /// See [`XfaNode::unnamed`].
-    pub(crate) unnamed: bool,
     pub(crate) som: Arc<str>,
     pub(crate) kind: XfaKind,
     pub(crate) value: String,
@@ -45,12 +43,11 @@ pub(crate) struct HNode {
     pub(crate) items: Option<Vec<super::props::ItemList>>,
 }
 
-/// The objects of the form that own one SOM path ([`XHost::som_owners`]): how many, whether one
-/// of them is unnamed, and the last of them in document order.
+/// The objects of the form that own one SOM path ([`XHost::som_owners`]): how many, and the
+/// last of them in document order.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct PathOwners {
     pub(crate) count: u32,
-    pub(crate) unnamed: bool,
     pub(crate) last: usize,
 }
 
@@ -91,7 +88,6 @@ pub(crate) fn forget_base() {
 fn flattened(root: &XfaNode) -> Vec<HNode> {
     let mut nodes = vec![HNode {
         name: "form".into(),
-        unnamed: false,
         som: "".into(),
         kind: XfaKind::Form,
         value: String::new(),
@@ -420,7 +416,6 @@ fn flatten(n: &XfaNode, parent: Option<usize>, out: &mut Vec<HNode>, depth: usiz
     let idx = out.len();
     out.push(HNode {
         name: n.name.as_str().into(),
-        unnamed: n.unnamed,
         som: n.som.as_str().into(),
         kind: n.kind.unwrap_or(XfaKind::Subform),
         value: n.value.clone(),

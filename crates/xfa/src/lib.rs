@@ -14,6 +14,7 @@ pub mod layout;
 pub mod linked_images;
 mod memo;
 pub mod model;
+mod numbering;
 pub mod packets;
 pub mod parse;
 pub mod pdf;
@@ -188,6 +189,9 @@ pub fn render_into(doc: &mut Document) -> Result<Report, XfaError> {
     warnings.dedup();
     Ok(Report { pages: written.pages, fields: written.fields, template_bytes: packets.xdp.len(), warnings })
 }
+
+#[cfg(test)]
+mod numbering_tests;
 
 #[cfg(test)]
 mod repeat_tests;
