@@ -314,9 +314,9 @@ fn latin_sources<'a>(doc: &Document, page: &Dict, members: &[&TextLine], lines: 
         }
         let Some(font) = fonts.get(name.as_bytes()).and_then(|f| doc.dict(f)) else { continue };
         let metrics = std::rc::Rc::new(Metrics::from_dict(doc, &font));
-        let forms = shown_forms(doc, page, name, &metrics, lines);
+        let learned = shown_forms(doc, page, name, &metrics, lines);
         let shaped = metrics.clone();
-        let word = move |clusters: &[pdfcraft_fonts::ShapedCluster]| shown_word(&forms, &shaped, clusters);
+        let word = move |clusters: &[pdfcraft_fonts::ShapedCluster]| shown_word(&learned, &shaped, clusters);
         let seen: std::cell::RefCell<HashMap<char, Option<SourceGlyph>>> = Default::default();
         let glyph = move |c: char| seen.borrow_mut().entry(c).or_insert_with(|| source_glyph(&metrics, c)).clone();
         out.push(appearance_text::LatinSource { resource: name.to_owned(), glyph: Box::new(glyph), word: Some(Box::new(word)) });
@@ -334,9 +334,28 @@ fn source_glyph(metrics: &Metrics, c: char) -> Option<SourceGlyph> {
 /// What names a letter form: the shaped face's glyphs for it and the characters it shows.
 type FormKey = (Vec<u32>, String);
 
-/// The letter forms a page draws in one font (see [`shown_forms`]): `None` for a form seen as
-/// two different glyphs.
-type Forms = HashMap<FormKey, Option<SourceGlyph>>;
+/// A mark the page draws on a letter: the bytes that show it and its origin from the letter's (em).
+type SeenMark = (Vec<u8>, [f64; 2]);
+
+/// What a page teaches about one of its fonts (see [`shown_forms`]). `None` is a form, or the
+/// marks on one, that the page draws in two different ways: it is never guessed.
+#[derive(Default)]
+struct Learned {
+    /// The glyph of each letter form.
+    forms: HashMap<FormKey, Option<SourceGlyph>>,
+    /// The marks on a letter form, for the marks on it ([`same_marks`]).
+    marks: HashMap<(FormKey, String), Option<Vec<SeenMark>>>,
+    /// The words the page draws, each as the page first draws it: a word still in the text is
+    /// drawn again glyph for glyph, whatever its forms and marks.
+    words: HashMap<WordKey, SeenRun>,
+}
+
+/// A word as a page draws it: its letters from left to right, each with its advance (em), and
+/// its marks, each with the letter it sits on and its origin from that letter's (em).
+struct SeenRun {
+    letters: Vec<SourceGlyph>,
+    marks: Vec<(usize, Vec<u8>, [f64; 2])>,
+}
 
 fn form_key(cluster: &pdfcraft_fonts::ShapedCluster) -> FormKey {
     (cluster.glyphs.iter().map(|(id, _)| *id).collect(), cluster.text.clone())
@@ -358,31 +377,113 @@ fn plain_beside_letters(c: char) -> bool {
         || matches!(u32::from(c), 0x0660..=0x0669 | 0x06f0..=0x06f9)
 }
 
-/// The bytes that show a shaped word (its clusters in the order they are drawn) in a source font
-/// and their advance (em): every letter in the form the page already draws, and the punctuation
-/// and digits its encoding has. `None` when any of it is missing, a mark included.
-fn shown_word(forms: &Forms, metrics: &Metrics, clusters: &[pdfcraft_fonts::ShapedCluster]) -> Option<SourceGlyph> {
-    let (mut bytes, mut advance) = (Vec::new(), 0.0);
+/// A shaped word (its clusters in the order they are drawn) in a source font, when the font can
+/// draw all of it: `None` when any letter form, or any mark on one, is something the page never
+/// draws.
+///
+/// The punctuation and digits around the letters take the glyphs the font's encoding has. The
+/// letters between them are drawn as the page draws that very word when it has it (see
+/// [`Learned::words`]), else form by form (see [`letters_by_form`]).
+fn shown_word(learned: &Learned, metrics: &Metrics, clusters: &[pdfcraft_fonts::ShapedCluster]) -> Option<appearance_text::SourceWord> {
+    let mut word = appearance_text::SourceWord::default();
+    let plain = |cluster: &pdfcraft_fonts::ShapedCluster| {
+        let mut chars = cluster.text.chars();
+        chars.next().filter(|c| chars.next().is_none() && plain_beside_letters(*c))
+    };
+    for run in clusters.chunk_by(|a, b| plain(a).is_some() == plain(b).is_some()) {
+        if let Some(first) = run.first().filter(|first| plain(first).is_some()) {
+            // Tried cluster by cluster: a comma a font draws needs no letter beside it.
+            let _ = first;
+            for cluster in run {
+                let (bytes, advance) = source_glyph(metrics, plain(cluster)?)?;
+                word.bytes.extend(bytes);
+                word.advance += advance;
+            }
+            continue;
+        }
+        match word_key(run).and_then(|key| learned.words.get(&key)) {
+            Some(seen) => {
+                let mut starts = Vec::with_capacity(seen.letters.len());
+                for (bytes, advance) in &seen.letters {
+                    starts.push(word.advance);
+                    word.bytes.extend(bytes);
+                    word.advance += advance;
+                }
+                for (letter, bytes, [dx, dy]) in &seen.marks {
+                    word.marks.push(appearance_text::SourceMark { bytes: bytes.clone(), at: [starts.get(*letter)? + dx, *dy] });
+                }
+            }
+            None => letters_by_form(learned, run, &mut word)?,
+        }
+    }
+    Some(word)
+}
+
+/// What names a word whatever order its marks were typed or shaped in: its letters as read, and
+/// the marks on each.
+type WordKey = (String, Vec<String>);
+
+/// The [`WordKey`] of shaped clusters in the order they are drawn, right to left: read from the
+/// last one, each letter is followed by its marks.
+fn word_key(clusters: &[pdfcraft_fonts::ShapedCluster]) -> Option<WordKey> {
+    let mut letters = String::new();
+    let mut marks: Vec<Vec<char>> = Vec::new();
+    for c in clusters.iter().rev().flat_map(|cluster| cluster.text.chars()) {
+        if letter_mark(c) {
+            marks.last_mut()?.push(c);
+        } else if joining_letter(c) {
+            letters.push(c);
+            marks.push(Vec::new());
+        } else {
+            return None;
+        }
+    }
+    Some((letters, marks.into_iter().map(|on| same_marks(on.into_iter())).collect()))
+}
+
+/// Adds shaped letters and their marks (in the order they are drawn) to `word`, each letter in
+/// the form the page already draws and each mark where the page draws it on that form. In a
+/// right-to-left word the marks typed after a letter are drawn before it, so they are held until
+/// their letter comes.
+fn letters_by_form(learned: &Learned, clusters: &[pdfcraft_fonts::ShapedCluster], word: &mut appearance_text::SourceWord) -> Option<()> {
+    let mut held: Vec<&str> = Vec::new();
     let mut rest = clusters;
     while let Some((first, tail)) = rest.split_first() {
-        let pair = tail.first().and_then(|second| forms.get(&pair_key(first, second)).cloned().flatten());
-        let (glyph, used) = match pair {
-            Some(glyph) => (glyph, 2),
+        if !first.text.is_empty() && first.text.chars().all(letter_mark) {
+            held.push(&first.text);
+            rest = tail;
+            continue;
+        }
+        let pair = tail.first().and_then(|second| learned.forms.get(&pair_key(first, second)).cloned().flatten());
+        let (key, glyph, used) = match pair {
+            Some(glyph) => (None, glyph, 2),
             None => {
-                let mut chars = first.text.chars();
-                let plain = chars.next().filter(|c| chars.next().is_none() && plain_beside_letters(*c));
-                (forms.get(&form_key(first)).cloned().flatten().or_else(|| source_glyph(metrics, plain?))?, 1)
+                // A letter the shaped face keeps in one cluster with its marks.
+                let key = if first.text.chars().any(letter_mark) {
+                    let letters: String = first.text.chars().filter(|c| !letter_mark(*c)).collect();
+                    let base = first.glyphs.iter().map(|(id, _)| vec![*id]).find(|id| learned.forms.contains_key(&(id.clone(), letters.clone())))?;
+                    held.push(first.text.get(letters.len()..)?);
+                    (base, letters)
+                } else {
+                    form_key(first)
+                };
+                (Some(key.clone()), learned.forms.get(&key).cloned().flatten()?, 1)
             }
         };
-        bytes.extend(glyph.0);
-        advance += glyph.1;
+        if !held.is_empty() {
+            let typed = same_marks(held.drain(..).flat_map(str::chars));
+            let seen = learned.marks.get(&(key?, typed)).cloned().flatten()?;
+            word.marks.extend(seen.into_iter().map(|(bytes, [dx, dy])| appearance_text::SourceMark { bytes, at: [word.advance + dx, dy] }));
+        }
+        word.bytes.extend(glyph.0);
+        word.advance += glyph.1;
         rest = rest.get(used..).unwrap_or_default();
     }
-    Some((bytes, advance))
+    held.is_empty().then_some(())
 }
 
 /// A letter whose glyph depends on its neighbours and that a source glyph can stand for: Arabic
-/// letters, without the marks drawn on them (those are placed by the shaped face).
+/// letters, without the marks drawn on them.
 fn joining_letter(c: char) -> bool {
     matches!(u32::from(c), 0x0621..=0x064a | 0x066e..=0x066f | 0x0671..=0x06d3 | 0x06fa..=0x06ff | 0x0750..=0x077f)
 }
@@ -395,45 +496,83 @@ fn letter_mark(c: char) -> bool {
 /// The most glyphs of one font read from a page to learn its letter forms.
 const FORM_GLYPHS: usize = 65_536;
 
-/// The letters of one word as a page shows them, in the order they are shown: bytes and text.
-type ShownWord = Vec<(Vec<u8>, String)>;
+/// One glyph a page shows: the bytes that show it, its text, where its origin is on the page and
+/// how far it advances, and the size of its em across and up the page.
+struct Placed {
+    bytes: Vec<u8>,
+    text: String,
+    at: [f64; 2],
+    advance: f64,
+    em: [f64; 2],
+    /// More glyphs of the same mark, drawn straight after it and beside it, that the font gives
+    /// no text of their own: Word draws a shadda with a kasra as two glyphs, names both marks on
+    /// the first and calls the second a space.
+    with: Vec<(Vec<u8>, [f64; 2])>,
+}
 
-/// The Arabic letter forms the page already draws in the font resource `name`: for each form
-/// (as the shaped face names it, see [`FormKey`]) the bytes that show it in that font and its
-/// advance (em). A subset such as Word's keeps the glyphs but no layout tables, so which glyph is
-/// which form of a letter is only known from the words the page shows: a word's letters are read
-/// as drawn (right to left, the marks on them left out), shaped again, and each glyph is the form
-/// shaped at its place. Only letters that make a whole word of the page's own text teach
-/// anything: part of a word would be shaped as if it ended there. And a form two different glyphs
-/// were seen for is left out, so a guess never puts a wrong glyph on the page.
-fn shown_forms(doc: &Document, page: &Dict, name: &str, metrics: &Metrics, lines: &[TextLine]) -> Forms {
-    let mut forms = Forms::new();
-    let Ok(streams) = content_streams(doc, page) else { return forms };
-    let ops = crate::text::joined(&streams).parse().ops;
-    let words: std::collections::HashSet<String> = lines
-        .iter()
-        .flat_map(|line| line.text.split(|c: char| !joining_letter(c) && !letter_mark(c)))
-        .map(|word| word.chars().filter(|c| !letter_mark(*c)).collect::<String>())
-        .filter(|word| !word.is_empty())
-        .collect();
-    let mut word = ShownWord::new();
-    let mut read = 0usize;
-    let mut in_font = false;
-    for op in &ops {
+/// The glyphs a page's content shows in the font resource `name`, where it draws them upright.
+/// Only this font's widths are known, so after a show in another font the pen is unknown until
+/// the content places it again.
+fn placed_glyphs(ops: &[Op], name: &str, metrics: &Metrics) -> Vec<Placed> {
+    let mut out = Vec::new();
+    let (mut ctm, mut saved) = (Matrix::IDENTITY, Vec::new());
+    let (mut tm, mut line) = (Matrix::IDENTITY, Matrix::IDENTITY);
+    let (mut size, mut spacing, mut word_spacing, mut scale, mut leading, mut rise) = (0.0f64, 0.0f64, 0.0f64, 1.0f64, 0.0f64, 0.0f64);
+    let (mut in_font, mut lost) = (false, false);
+    // Where the last letter sits: what a mark is drawn above or below.
+    let mut baseline: Option<f64> = None;
+    let number = |op: &Op, at: usize| op.operands.get(at).and_then(Object::as_f64).filter(|v| v.is_finite());
+    for op in ops {
+        let next_line = |by: [f64; 2], line: &mut Matrix, tm: &mut Matrix, lost: &mut bool| {
+            *line = Matrix::translate(by[0], by[1]).then(line);
+            *tm = *line;
+            *lost = false;
+        };
         match op.op.as_slice() {
-            b"Tf" => {
-                learn_forms(&mut forms, std::mem::take(&mut word), metrics, &words);
-                in_font = op.operands.first().and_then(Object::as_name) == Some(name.as_bytes());
+            // The text state is part of the graphics state: `Q` puts the spacing, font and size back.
+            b"q" if saved.len() < 64 => saved.push((ctm, size, spacing, word_spacing, scale, leading, rise, in_font)),
+            b"Q" => {
+                if let Some(state) = saved.pop() {
+                    (ctm, size, spacing, word_spacing, scale, leading, rise, in_font) = state;
+                }
             }
-            // Another line or text object starts another word. A small move does not: Word places
-            // a mark with one, between two letters of a word.
-            b"BT" | b"ET" | b"Tm" | b"T*" | b"'" | b"\"" => learn_forms(&mut forms, std::mem::take(&mut word), metrics, &words),
-            b"Td" | b"TD" if op.operands.iter().any(|v| v.as_f64().is_none_or(|v| v.abs() > 40.0)) => {
-                learn_forms(&mut forms, std::mem::take(&mut word), metrics, &words);
+            b"cm" => ctm = Matrix::from_operands(&op.operands).map_or(ctm, |m| m.then(&ctm)),
+            b"BT" => {
+                (tm, line, lost) = (Matrix::IDENTITY, Matrix::IDENTITY, false);
+            }
+            b"Tf" => {
+                in_font = op.operands.first().and_then(Object::as_name) == Some(name.as_bytes());
+                size = number(op, 1).unwrap_or(0.0);
+            }
+            b"Tc" => spacing = number(op, 0).unwrap_or(0.0),
+            b"Tw" => word_spacing = number(op, 0).unwrap_or(0.0),
+            b"Tz" => scale = number(op, 0).unwrap_or(100.0) / 100.0,
+            b"TL" => leading = number(op, 0).unwrap_or(0.0),
+            b"Ts" => rise = number(op, 0).unwrap_or(0.0),
+            b"Td" => next_line([number(op, 0).unwrap_or(0.0), number(op, 1).unwrap_or(0.0)], &mut line, &mut tm, &mut lost),
+            b"TD" => {
+                leading = -number(op, 1).unwrap_or(0.0);
+                next_line([number(op, 0).unwrap_or(0.0), -leading], &mut line, &mut tm, &mut lost);
+            }
+            b"T*" => next_line([0.0, -leading], &mut line, &mut tm, &mut lost),
+            b"Tm" => {
+                if let Some(m) = Matrix::from_operands(&op.operands) {
+                    (tm, line, lost) = (m, m, false);
+                }
+            }
+            b"'" => next_line([0.0, -leading], &mut line, &mut tm, &mut lost),
+            b"\"" => {
+                word_spacing = number(op, 0).unwrap_or(0.0);
+                spacing = number(op, 1).unwrap_or(0.0);
+                next_line([0.0, -leading], &mut line, &mut tm, &mut lost);
             }
             _ => {}
         }
-        if !in_font || !matches!(op.op.as_slice(), b"Tj" | b"TJ" | b"'" | b"\"") {
+        if !matches!(op.op.as_slice(), b"Tj" | b"TJ" | b"'" | b"\"") {
+            continue;
+        }
+        if !in_font {
+            lost = true;
             continue;
         }
         let shown: Vec<&Object> = match op.operands.last() {
@@ -443,9 +582,8 @@ fn shown_forms(doc: &Document, page: &Dict, name: &str, metrics: &Metrics, lines
         };
         for item in shown {
             let Some(string) = item.as_string() else {
-                // A kerning step keeps the word; a gap as wide as a space ends it.
-                if item.as_f64().is_some_and(|step| step.abs() > 150.0) {
-                    learn_forms(&mut forms, std::mem::take(&mut word), metrics, &words);
+                if let Some(step) = item.as_f64().filter(|v| v.is_finite()) {
+                    tm = Matrix::translate(-step / 1000.0 * size * scale, 0.0).then(&tm);
                 }
                 continue;
             };
@@ -453,60 +591,273 @@ fn shown_forms(doc: &Document, page: &Dict, name: &str, metrics: &Metrics, lines
             for (code, len) in metrics.codes(&string.bytes) {
                 let bytes = string.bytes.get(at..at.saturating_add(len)).unwrap_or_default().to_vec();
                 at = at.saturating_add(len);
-                read = read.saturating_add(1);
-                if read > FORM_GLYPHS {
-                    return forms;
+                let space = if len == 1 && code == 32 { word_spacing } else { 0.0 };
+                let advance = (metrics.width(code) * size + spacing + space) * scale;
+                let [a, b, c, d, ..] = tm.then(&ctm).0;
+                let origin = tm.then(&ctm).apply(0.0, rise);
+                let em = [size * scale * a, size * d];
+                let upright = b.abs() <= 1e-6 * a.abs() && c.abs() <= 1e-6 * d.abs() && em.iter().all(|v| v.is_finite() && *v > 0.0);
+                if !lost && upright && advance.is_finite() {
+                    if out.len() >= FORM_GLYPHS {
+                        return out;
+                    }
+                    let text = metrics.text_of(code).map(std::borrow::Cow::into_owned).unwrap_or_default();
+                    let at = [origin.0, origin.1];
+                    // A glyph without text, or a "space" drawn off the letters' baseline, straight
+                    // after a mark and beside it: the rest of that mark.
+                    let nameless =
+                        text.is_empty() || (text.chars().all(char::is_whitespace) && baseline.is_some_and(|y: f64| (at[1] - y).abs() > 0.08 * em[1]));
+                    let part_of = out.last_mut().filter(|last: &&mut Placed| {
+                        nameless
+                            && !last.text.is_empty()
+                            && last.text.chars().all(letter_mark)
+                            && (last.at[0] - at[0]).abs() <= 0.5 * em[0]
+                            && last.em == em
+                    });
+                    match part_of {
+                        Some(mark) => mark.with.push((bytes, at)),
+                        None => {
+                            if !text.is_empty() && text.chars().all(joining_letter) {
+                                baseline = Some(at[1]);
+                            }
+                            out.push(Placed { bytes, text, at, advance: advance * a, em, with: Vec::new() });
+                        }
+                    }
                 }
-                match metrics.text_of(code) {
-                    Some(text) if !text.is_empty() && text.chars().all(letter_mark) => {}
-                    Some(text) if !text.is_empty() && text.chars().all(joining_letter) => word.push((bytes, text.into_owned())),
-                    _ => learn_forms(&mut forms, std::mem::take(&mut word), metrics, &words),
+                if advance.is_finite() {
+                    tm = Matrix::translate(advance, 0.0).then(&tm);
                 }
             }
         }
     }
-    learn_forms(&mut forms, word, metrics, &words);
-    forms
+    out
 }
 
-/// Adds what the letters shown for one word teach (see [`shown_forms`]), when they are one of
-/// the page's `words`.
-fn learn_forms(forms: &mut Forms, glyphs: ShownWord, metrics: &Metrics, words: &std::collections::HashSet<String>) {
-    if glyphs.is_empty() {
-        return;
+/// The letters of one word as a page draws them, from left to right, and the marks drawn on it.
+struct SeenWord<'a> {
+    letters: Vec<&'a Placed>,
+    marks: Vec<&'a Placed>,
+}
+
+/// The words a page draws in Arabic letters: letters on one baseline at one size, each starting
+/// where the one before ends, with the marks drawn over them. Where the glyphs are counts, not
+/// the order the content shows them in: Word shows a mark before its letter, in a show of its own.
+fn seen_words(glyphs: &[Placed]) -> Vec<SeenWord<'_>> {
+    let is = |glyph: &Placed, test: fn(char) -> bool| !glyph.text.is_empty() && glyph.text.chars().all(test);
+    let mut bases: Vec<&Placed> = glyphs.iter().filter(|glyph| !is(glyph, letter_mark)).collect();
+    // Rows from the top of the page down, each from left to right.
+    bases.sort_by(|a, b| b.at[1].total_cmp(&a.at[1]).then(a.at[0].total_cmp(&b.at[0])));
+    let mut rows: Vec<Vec<&Placed>> = Vec::new();
+    for glyph in bases {
+        match rows.last_mut().filter(|row| {
+            row.first()
+                .is_some_and(|head| (head.at[1] - glyph.at[1]).abs() <= 0.2 * glyph.em[1] && (head.em[0] - glyph.em[0]).abs() <= 1e-3 * glyph.em[0])
+        }) {
+            Some(row) => row.push(glyph),
+            None => rows.push(vec![glyph]),
+        }
     }
-    let logical: String = glyphs.iter().rev().map(|(_, text)| text.as_str()).collect();
-    if !words.contains(&logical) {
-        return;
+    let mut words: Vec<SeenWord<'_>> = Vec::new();
+    for row in &mut rows {
+        row.sort_by(|a, b| a.at[0].total_cmp(&b.at[0]));
+        let mut open = false;
+        for glyph in row.iter().copied() {
+            if !is(glyph, joining_letter) {
+                open = false;
+                continue;
+            }
+            let joined = open
+                && words
+                    .last()
+                    .and_then(|word| word.letters.last())
+                    .is_some_and(|last| (-0.7..=0.3).contains(&((glyph.at[0] - last.at[0] - last.advance) / glyph.em[0])));
+            match words.last_mut().filter(|_| joined) {
+                Some(word) => word.letters.push(glyph),
+                None => words.push(SeenWord { letters: vec![glyph], marks: Vec::new() }),
+            }
+            open = true;
+        }
     }
+    // Each mark belongs to the word it is drawn over: the nearest one, within a third of an em.
+    for mark in glyphs.iter().filter(|glyph| is(glyph, letter_mark)) {
+        let away = |word: &SeenWord<'_>| {
+            let (first, last) = (word.letters.first()?, word.letters.last()?);
+            let up = (mark.at[1] - first.at[1]).abs() / first.em[1];
+            let across = (first.at[0] - mark.at[0]).max(mark.at[0] - last.at[0] - last.advance).max(0.0) / first.em[0];
+            (up <= 0.9 && across <= 0.35 && (first.em[0] - mark.em[0]).abs() <= 1e-3 * first.em[0]).then_some(across + up * 0.01)
+        };
+        let nearest = words.iter().enumerate().filter_map(|(index, word)| Some((away(word)?, index))).min_by(|a, b| a.0.total_cmp(&b.0));
+        if let Some(word) = nearest.and_then(|(_, index)| words.get_mut(index)) {
+            word.marks.push(mark);
+        }
+    }
+    words
+}
+
+/// What the page already draws in the font resource `name`: the glyph of each Arabic letter form,
+/// and where each mark sits on each form. A subset such as Word's keeps the glyphs but no layout
+/// tables, so which glyph is which form of a letter, and where a mark goes on it, is only known
+/// from the words the page shows: a word's letters are read as drawn (right to left), shaped
+/// again, and each glyph is the form shaped at its place.
+///
+/// Only letters that make a whole word of the page's own text teach anything: part of a word
+/// would be shaped as if it ended there. And what the page draws in two different ways is left
+/// out, so a guess never puts a wrong glyph or a misplaced mark on the page.
+fn shown_forms(doc: &Document, page: &Dict, name: &str, metrics: &Metrics, lines: &[TextLine]) -> Learned {
+    let mut learned = Learned::default();
+    let Ok(streams) = content_streams(doc, page) else { return learned };
+    let ops = crate::text::joined(&streams).parse().ops;
+    // The page's words without their marks, each with the ways the page marks it.
+    let mut marked: HashMap<String, Vec<&str>> = HashMap::new();
+    for word in lines.iter().flat_map(|line| line.text.split(|c: char| !joining_letter(c) && !letter_mark(c))).filter(|word| !word.is_empty()) {
+        let ways = marked.entry(word.chars().filter(|c| !letter_mark(*c)).collect()).or_default();
+        if !ways.contains(&word) {
+            ways.push(word);
+        }
+    }
+    let glyphs = placed_glyphs(&ops, name, metrics);
+    for word in seen_words(&glyphs) {
+        learn_word(&mut learned, &word, &marked, metrics);
+    }
+    learned
+}
+
+/// Adds what one drawn word teaches (see [`shown_forms`]), when it is one of the page's words.
+fn learn_word(learned: &mut Learned, word: &SeenWord<'_>, marked: &HashMap<String, Vec<&str>>, metrics: &Metrics) {
+    let logical: String = word.letters.iter().rev().map(|glyph| glyph.text.as_str()).collect();
+    let Some(ways) = marked.get(&logical) else { return };
+    let glyph_of = |glyph: &Placed| {
+        let advance: f64 = metrics.codes(&glyph.bytes).iter().map(|(code, _)| metrics.width(*code)).sum();
+        (advance.is_finite() && advance >= 0.0).then(|| (glyph.bytes.clone(), advance))
+    };
+    // The marks on each drawn letter. A word whose marks can't be told apart teaches nothing.
+    let Some((on, marks)) = marks_of(word, ways) else { return };
+    // The word as a whole: the first way the page draws it.
+    if let Some(letters) = word.letters.iter().map(|glyph| glyph_of(glyph)).collect::<Option<Vec<_>>>() {
+        let all = marks.iter().enumerate().flat_map(|(letter, (_, seen))| seen.iter().map(move |(bytes, at)| (letter, bytes.clone(), *at))).collect();
+        learned.words.entry((logical.clone(), on)).or_insert(SeenRun { letters, marks: all });
+    }
+    // Its letter forms: each glyph is one cluster of the word shaped again, or a ligature the
+    // shaped face keeps as two.
     let Ok(clusters) = pdfcraft_fonts::shape_arabic(&logical, true) else { return };
-    // Each glyph is one cluster, or a ligature the shaped face keeps as two.
     let mut rest = clusters.as_slice();
-    let mut learned = Vec::with_capacity(glyphs.len());
-    for (bytes, text) in glyphs {
+    let mut keys = Vec::with_capacity(word.letters.len());
+    for glyph in &word.letters {
         let (key, used) = match rest {
-            [first, ..] if first.text == text => (form_key(first), 1),
-            [first, second, ..] if pair_key(first, second).1 == text => (pair_key(first, second), 2),
+            [first, ..] if first.text == glyph.text => (form_key(first), 1),
+            [first, second, ..] if pair_key(first, second).1 == glyph.text => (pair_key(first, second), 2),
             _ => return,
         };
         rest = rest.get(used..).unwrap_or_default();
-        learned.push((key, bytes));
+        keys.push(key);
     }
     if !rest.is_empty() {
         return;
     }
-    for (key, bytes) in learned {
-        let advance: f64 = metrics.codes(&bytes).iter().map(|(code, _)| metrics.width(*code)).sum();
-        let glyph = (advance.is_finite() && advance >= 0.0).then_some((bytes, advance));
-        forms
-            .entry(key)
+    for ((key, glyph), (typed, seen)) in keys.into_iter().zip(&word.letters).zip(marks) {
+        let form = glyph_of(glyph);
+        learned
+            .forms
+            .entry(key.clone())
             .and_modify(|known| {
-                if *known != glyph {
+                if *known != form {
                     *known = None;
                 }
             })
-            .or_insert(glyph);
+            .or_insert(form);
+        // A ligature's marks sit on two letters: they are known for the whole word only.
+        if typed.is_empty() || glyph.text.chars().count() != 1 {
+            continue;
+        }
+        let same = |known: &Vec<SeenMark>| {
+            known.len() == seen.len()
+                && known.iter().zip(&seen).all(|(a, b)| a.0 == b.0 && (a.1[0] - b.1[0]).abs() <= 0.03 && (a.1[1] - b.1[1]).abs() <= 0.03)
+        };
+        learned
+            .marks
+            .entry((key, typed))
+            .and_modify(|known| {
+                if !known.as_ref().is_some_and(same) {
+                    *known = None;
+                }
+            })
+            .or_insert(Some(seen));
     }
+}
+
+/// The marks on one letter in an order that doesn't depend on how they were typed or shaped: the
+/// same marks are the same key.
+fn same_marks(marks: impl Iterator<Item = char>) -> String {
+    let mut sorted: Vec<char> = marks.collect();
+    sorted.sort_unstable();
+    sorted.into_iter().collect()
+}
+
+/// The marks on each letter of a drawn word (see [`shown_forms`]): for each letter as read, its
+/// marks ([`same_marks`]); and for each drawn letter, from left to right, the marks it carries and
+/// the glyphs that draw them, each with its origin from the letter's (em).
+///
+/// The page's text says which letter carries which marks; a mark that sits on several letters of
+/// the word is matched to them from right to left. One glyph may draw two marks (Word draws a
+/// shadda and its vowel as one). `None` when the text marks the word in more than one way that
+/// fits the marks drawn, or in none.
+#[allow(clippy::type_complexity)]
+fn marks_of(word: &SeenWord<'_>, ways: &[&str]) -> Option<(Vec<String>, Vec<(String, Vec<SeenMark>)>)> {
+    let drawn = same_marks(word.marks.iter().flat_map(|mark| mark.text.chars()));
+    let marks_on = |way: &str| {
+        let mut on: Vec<String> = Vec::new();
+        for c in way.chars() {
+            match on.last_mut().filter(|_| letter_mark(c)) {
+                Some(marks) => marks.push(c),
+                None if letter_mark(c) => return None,
+                None => on.push(String::new()),
+            }
+        }
+        Some(on.into_iter().map(|marks| same_marks(marks.chars())).collect::<Vec<_>>())
+    };
+    let mut fitting: Vec<Vec<String>> =
+        ways.iter().filter(|way| same_marks(way.chars().filter(|c| letter_mark(*c))) == drawn).filter_map(|way| marks_on(way)).collect();
+    fitting.dedup();
+    let [on] = fitting.as_slice() else { return None };
+    // Each drawn letter with the letters of the text it shows (a ligature shows two), right to left.
+    let mut letter = 0usize;
+    let mut used = vec![false; word.marks.len()];
+    let mut out = Vec::with_capacity(word.letters.len());
+    for glyph in word.letters.iter().rev() {
+        let shows = glyph.text.chars().count();
+        let typed = same_marks(on.iter().skip(letter).take(shows).flat_map(|marks| marks.chars()));
+        letter = letter.saturating_add(shows);
+        // Until every mark on the letter is drawn: the rightmost glyph not yet taken that draws
+        // only marks still missing.
+        let mut missing: Vec<char> = typed.chars().collect();
+        let mut seen: Vec<SeenMark> = Vec::with_capacity(missing.len());
+        let from_letter = |at: [f64; 2]| [(at[0] - glyph.at[0]) / glyph.em[0], (at[1] - glyph.at[1]) / glyph.em[1]];
+        while !missing.is_empty() {
+            let draws_missing = |mark: &Placed| {
+                let mut left = missing.clone();
+                mark.text.chars().all(|c| left.iter().position(|m| *m == c).map(|at| left.swap_remove(at)).is_some())
+            };
+            let (index, mark) = word
+                .marks
+                .iter()
+                .enumerate()
+                .filter(|(index, mark)| !used.get(*index).copied().unwrap_or(true) && draws_missing(mark))
+                .max_by(|a, b| a.1.at[0].total_cmp(&b.1.at[0]))?;
+            if let Some(slot) = used.get_mut(index) {
+                *slot = true;
+            }
+            for c in mark.text.chars() {
+                if let Some(at) = missing.iter().position(|m| *m == c) {
+                    missing.swap_remove(at);
+                }
+            }
+            seen.push((mark.bytes.clone(), from_letter(mark.at)));
+            seen.extend(mark.with.iter().map(|(bytes, at)| (bytes.clone(), from_letter(*at))));
+        }
+        out.push((typed, seen));
+    }
+    out.reverse();
+    Some((on.clone(), out))
 }
 
 /// The distance between a paragraph's evenly spaced source rows of one size, when it has two
