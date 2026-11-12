@@ -39,6 +39,7 @@ fn home_shows_welcome_and_tools() {
     h.get_by_label("Open file");
 }
 
+/// Verify that changing the tools panel side in Preferences moves the pane and persists.
 #[test]
 fn tools_panel_side_preference_moves_and_persists() {
     use pdfcraft_ui_egui::Dialog;
@@ -72,13 +73,14 @@ fn painted_text(h: &Harness<'static, PdfCraftApp>) -> Vec<(String, bool, egui::R
         .collect()
 }
 
+/// Verify that long recent file names and paths truncate before colliding with the page count.
 #[test]
 fn long_recent_names_and_paths_are_cut_before_the_page_count() {
     let name = format!("{}.pdf", "Quarterly report final version ".repeat(10));
     let path = format!("/{}/{name}", "A folder with a long name".repeat(8));
     let h = harness({
         let (name, path) = (name.clone(), path.clone());
-        move |app| app.recent.push(pdfcraft_ui_egui::RecentFile { name, path, pages: 7, size: 2048 })
+        move |app| app.recent.push(pdfcraft_ui_egui::RecentFile { name, path, pages: 7, size: 2048, pinned: false })
     });
     let text = painted_text(&h);
     let detail = text.iter().find(|(s, ..)| s.starts_with("7 pages")).expect("the row shows its page count").2;
@@ -89,6 +91,7 @@ fn long_recent_names_and_paths_are_cut_before_the_page_count() {
     }
 }
 
+/// Verify that removing a single recent file or clearing all unpinned recent files updates Home.
 #[test]
 fn home_removes_one_recent_file_or_clears_them_all() {
     // Tall enough that the Recent list is on screen without scrolling.
@@ -96,7 +99,7 @@ fn home_removes_one_recent_file_or_clears_them_all() {
         let mut app = PdfCraftApp::new();
         app.set_option("language", "en").unwrap();
         for name in ["first.pdf", "second.pdf", "third.pdf"] {
-            app.recent.push(pdfcraft_ui_egui::RecentFile { name: name.into(), path: format!("/nowhere/{name}"), pages: 1, size: 0 });
+            app.recent.push(pdfcraft_ui_egui::RecentFile { name: name.into(), path: format!("/nowhere/{name}"), pages: 1, size: 0, pinned: false });
         }
         app
     });
@@ -115,6 +118,76 @@ fn home_removes_one_recent_file_or_clears_them_all() {
     assert!(h.query_by_label("Clear Recent Files").is_none(), "and goes away with nothing left to clear");
 }
 
+/// Pinning a recent file moves it to the top of Recent, keeps it across Clear Recent Files and
+/// new opens, and persists its pinned state across a restart (#4772).
+#[test]
+fn home_pins_recent_file_to_top_keeps_it_across_clear_and_persists() {
+    let dir = std::env::temp_dir().join(format!("pdfcraft-pin-recent-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let files: Vec<(String, String)> = ["first.pdf", "second.pdf", "third.pdf"]
+        .into_iter()
+        .map(|name| {
+            let p = dir.join(name);
+            std::fs::write(&p, FIXTURE).unwrap();
+            (name.to_string(), p.to_string_lossy().into_owned())
+        })
+        .collect();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1600.0)).build_eframe({
+        let files = files.clone();
+        move |_cc| {
+            let mut app = PdfCraftApp::new();
+            app.set_option("language", "en").unwrap();
+            for (name, path) in files {
+                app.recent.push(pdfcraft_ui_egui::RecentFile { name, path, pages: 1, size: FIXTURE.len(), pinned: false });
+            }
+            app
+        }
+    });
+    h.run_steps(4);
+    h.get_by_label("second.pdf").hover();
+    h.run_steps(2);
+    h.get_by_label("Pin second.pdf to Recent").click();
+    h.run_steps(2);
+    let names: Vec<String> = h.state().recent.iter().map(|r| r.name.clone()).collect();
+    assert_eq!(names, ["second.pdf", "first.pdf", "third.pdf"], "pinning moves the file to the top of Recent");
+    assert!(h.state().recent[0].pinned);
+
+    // Opening more files (past the 12-file cap) and reopening the pinned file keeps it pinned at the top.
+    for i in 0..14 {
+        let extra = dir.join(format!("extra-{i}.pdf"));
+        h.state_mut().open_bytes(&format!("extra-{i}.pdf"), Some(extra.to_string_lossy().into_owned()), FIXTURE.to_vec()).unwrap();
+    }
+    assert_eq!(h.state().recent.len(), 12);
+    assert_eq!(h.state().recent[0].name, "second.pdf", "pinned file stays at the top past the 12-file cap");
+    assert!(h.state().recent[0].pinned);
+    h.state_mut().open_bytes("second.pdf", Some(files[1].1.clone()), FIXTURE.to_vec()).unwrap();
+    assert!(h.state().recent[0].pinned, "reopening a pinned file preserves its pinned state");
+    h.state_mut().active = None;
+    h.run_steps(2);
+
+    // Clear Recent Files removes unpinned files and keeps pinned ones.
+    h.get_by_label("Clear Recent Files").click();
+    h.run_steps(2);
+    let remaining: Vec<(&str, bool)> = h.state().recent.iter().map(|r| (r.name.as_str(), r.pinned)).collect();
+    assert_eq!(remaining, [("second.pdf", true)], "Clear Recent Files keeps pinned files");
+
+    // Pinned state survives persistence round-trip, even when the file is temporarily missing at startup.
+    let saved = h.state().persist();
+    let _ = std::fs::remove_dir_all(&dir);
+    let mut restarted = PdfCraftApp::new();
+    restarted.restore(&saved);
+    assert_eq!(restarted.recent.len(), 1);
+    assert_eq!(restarted.recent[0].name, "second.pdf");
+    assert!(restarted.recent[0].pinned, "pinned state survives persist and restore");
+
+    // The unpin button stays reachable on a pinned row and unpins it when clicked.
+    h.get_by_label("Unpin second.pdf from Recent").click();
+    h.run_steps(2);
+    assert!(!h.state().recent[0].pinned, "clicking Unpin clears the pinned state");
+}
+
+/// Verify that clicking View more in the sidebar lists every tool group in the catalog.
 #[test]
 fn every_catalog_tool_is_listed_after_view_more() {
     let mut h = harness(|_| {});
@@ -125,6 +198,7 @@ fn every_catalog_tool_is_listed_after_view_more() {
     }
 }
 
+/// Verify that expanding All tools shows every category and filters tools by search query.
 #[test]
 fn expanded_all_tools_lists_every_tool_by_category_and_searches() {
     let mut h = harness(|_| {});

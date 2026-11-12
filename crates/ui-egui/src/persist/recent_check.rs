@@ -76,9 +76,10 @@ impl PdfCraftApp {
         let finished = Arc::strong_count(slot) == 1;
         let gone = std::mem::take(&mut *slot.lock().unwrap_or_else(PoisonError::into_inner));
         if !gone.is_empty() {
-            // A file opened since the check began is there, whatever the worker found earlier.
+            // A file opened since the check began is there, whatever the worker found earlier;
+            // pinned files stay in the list across check cycles (#4772).
             let opened = &self.recent_check.opened;
-            self.recent.retain(|r| !gone.contains(&r.path) || opened.contains(&r.path));
+            self.recent.retain(|r| r.pinned || !gone.contains(&r.path) || opened.contains(&r.path));
         }
         // The worker has finished (or panicked) and everything it found is taken.
         if finished {
@@ -97,7 +98,7 @@ mod tests {
     #[test]
     fn a_file_opened_while_the_check_is_pending_stays() {
         let mut app = PdfCraftApp::new();
-        app.recent = vec![crate::state::RecentFile { name: "a.pdf".into(), path: "/gone/a.pdf".into(), pages: 1, size: 0 }];
+        app.recent = vec![crate::state::RecentFile { name: "a.pdf".into(), path: "/gone/a.pdf".into(), pages: 1, size: 0, pinned: false }];
         // The worker's answer is waiting: it found the file gone.
         app.recent_check.gone = Some(Arc::new(Mutex::new(vec!["/gone/a.pdf".to_string()])));
         app.recent_check.opened("/gone/a.pdf");
