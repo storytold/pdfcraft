@@ -188,7 +188,7 @@ pub use pdfcraft_edit::ArrangeOrder;
 
 use clock::{local_utc_offset, parse_ymd};
 pub use doc_state::{DocId, ImageEdit, OptimizeReport, RecoverySnapshot, SplitPart, guard, merge_data_files};
-use doc_state::{LOW_RESOLUTION_PRINT_DPI, render_threads, renderer_password, signatures_of, writable};
+use doc_state::{LOW_RESOLUTION_PRINT_DPI, editor_signatures, render_threads, renderer_password, signatures_of, writable};
 
 /// The configuration of the pool that draws the viewer: the document's own, plus installed CJK
 /// fonts for fonts a PDF does not embed (`pdfcraft_render::RenderConfig::system_fonts`). Exports,
@@ -201,5 +201,7 @@ fn display_config(config: &pdfcraft_render::RenderConfig) -> pdfcraft_render::Re
 /// How long a custom stamp's text line may be, in characters (#1741).
 pub const MAX_STAMP_LINE: usize = 200;
 
+#[cfg(test)]
+mod document_actions_tests;
 #[cfg(test)]
 mod tests;

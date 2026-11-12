@@ -1,6 +1,6 @@
 use super::{
     Arc, DocId, Document, EditError, Keys, OpenError, RecoverySnapshot, RenderPool, SaveOptions, Session, SignOptions, StatusCaptions, TrustStore,
-    display_bytes, display_config, guard, render_threads, signatures_of, writable, write_full, write_incremental, xfa_sync_datasets,
+    display_bytes, display_config, editor_signatures, guard, render_threads, writable, write_full, write_incremental, xfa_sync_datasets,
 };
 
 impl Session {
@@ -198,7 +198,7 @@ impl Session {
     }
 
     /// File ▸ Revert: back to the last saved version (or the file as opened). Undo history is
-    /// cleared, as in Acrobat.
+    /// cleared, as in Acrobat, and the document's opening scripts run again.
     pub fn revert(&mut self, id: DocId) -> Result<(), EditError> {
         self.invalidate_javascript(id);
         let doc = self.doc_mut(id)?;
@@ -223,7 +223,11 @@ impl Session {
         // The changes whose exits ran are gone with the rest: skip no exit.
         doc.xfa_exited.clear();
         doc.generation += 1;
-        Self::refresh(doc).inspect_err(|_| Self::show_released(doc))
+        Self::refresh(doc).inspect_err(|_| Self::show_released(doc))?;
+        // Reverting reopens the saved file, in a fresh realm: its opening scripts run again,
+        // as they do on opening it (#269).
+        self.run_open_scripts(id);
+        Ok(())
     }
 
     /// The document's file changed on disk (a LaTeX or Typst build rewrote it, #431): open
@@ -376,7 +380,7 @@ impl Session {
             return;
         }
         let Some(editor) = doc.editor.as_mut() else { return };
-        let mut signatures = signatures_of(&editor.cos, &doc.bytes, &doc.trust, &doc.sig_cache);
+        let mut signatures = editor_signatures(editor, &doc.bytes, &doc.trust, &doc.sig_cache);
         doc.display = display_bytes(Some(editor), &doc.bytes, &mut signatures, &doc.captions);
         doc.signatures = Arc::new(signatures);
         doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), display_config(&doc.config));

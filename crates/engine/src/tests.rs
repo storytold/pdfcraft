@@ -3542,9 +3542,10 @@ fn the_renderer_check_refuses_text_still_shown_under_a_mark() {
     mark_shown_text(&mut s, id, "SECRET42");
     let doc = s.get(id).unwrap();
     let mut cos = doc.editor.as_ref().unwrap().cos.clone();
-    let marks = pdfcraft_redact::marks(&cos);
+    let model = pdfcraft_model::pages(&cos);
+    let marks: Vec<_> = pdfcraft_redact::marks(&cos).into_iter().filter_map(|m| model.get(m.page).map(|p| (p.obj, m))).collect();
     let refused = |cos: &pdfcraft_cos::Document| {
-        let shown = shown_under_redactions(cos, &marks, &[], &doc.info.pages, None);
+        let shown = shown_under_redactions(cos, &marks, &[], None);
         matches!(shown, Err(EditError::Redact(pdfcraft_redact::RedactError::Residue(n))) if n > 0)
     };
     assert!(refused(&cos));
@@ -8339,6 +8340,8 @@ fn dynamic_xfa_fill_only_save_keeps_usage_rights_and_signature_valid() {
     let mut s = Session::new().with_clock(|| 1_700_000_000).with_xfa_time_scale(20);
     s.set_trusted_certificates(vec![anchor.clone()]);
     let id = s.open("ur-array.pdf", None, original.clone(), None).unwrap();
+    assert_eq!(s.get(id).unwrap().signatures[0].status, pdfcraft_sign::Status::Valid);
+    assert_eq!(s.get(id).unwrap().signatures[0].modification, pdfcraft_sign::Modification::None);
     s.apply(id, Edit::SetFieldValue { name: "familyName".into(), value: FieldValue::Text("Kaur".into()) }).unwrap();
     s.apply(id, Edit::SetFieldValue { name: "secret".into(), value: FieldValue::Text("hunter2".into()) }).unwrap();
 
@@ -8359,11 +8362,14 @@ fn dynamic_xfa_fill_only_save_keeps_usage_rights_and_signature_valid() {
     assert_eq!(sigs[0].signed_len, original.len(), "byte range covers exact original shell");
     assert_eq!(sigs[0].modification, pdfcraft_sign::Modification::Allowed(vec![pdfcraft_sign::kind::FORM_FILL]), "{:?}", sigs[0]);
 
-    // Password values (#3944) are kept in memory across `mark_saved` and never written to the shell.
+    // Password values (#3944) are kept in memory across `mark_saved` and never written to the shell,
+    // and the live document's signature status validates against the preserved shell rather than the laid-out revision.
     let saved_packets = pdfcraft_xfa::read_packets(&saved_cos).unwrap().unwrap();
     assert!(!saved_packets.xdp.contains("hunter2"), "password scrubbed from saved shell");
     s.mark_saved(id, saved.clone(), Some("ur-array.pdf".into())).unwrap();
     assert!(!s.get(id).unwrap().dirty);
+    assert_eq!(s.get(id).unwrap().signatures[0].status, pdfcraft_sign::Status::Valid);
+    assert_eq!(s.get(id).unwrap().signatures[0].modification, pdfcraft_sign::Modification::Allowed(vec![pdfcraft_sign::kind::FORM_FILL]));
     assert_eq!(s.get(id).unwrap().info.pages.len(), 1, "laid-out form remains displayed after mark_saved");
     assert_eq!(s.get(id).unwrap().form.iter().find(|f| f.name == "secret").unwrap().value, vec!["hunter2".to_string()]);
 
@@ -8460,6 +8466,33 @@ fn dynamic_xfa_usage_rights_edge_cases_reconstructed_undo_past_save_and_imports(
     s.undo(iid).unwrap();
     assert!(!s.get(iid).unwrap().xfa.as_ref().unwrap().warnings.iter().any(|w| w.contains("usage rights")));
     assert!(pdfcraft_xfa::has_usage_rights(&pdfcraft_cos::Document::open(s.save_bytes(iid).unwrap()).unwrap()));
+
+    // 4. `ApplyScriptChanges` with value-only changes preserves usage-rights shell saving, whereas
+    //    appearance/metadata changes (`text_size`, `stroke_color`, `line_width`, `border_style`,
+    //    `user_name`) select the laid-out save path so the property change survives saving.
+    let val_only =
+        pdfcraft_forms::FieldChange { name: "familyName".into(), value: Some(vec!["Rao".into()]), ..pdfcraft_forms::FieldChange::default() };
+    s.apply(iid, Edit::ApplyScriptChanges { changes: vec![val_only] }).unwrap();
+    assert!(!s.get(iid).unwrap().xfa.as_ref().unwrap().warnings.iter().any(|w| w.contains("usage rights")));
+    assert!(pdfcraft_xfa::has_usage_rights(&pdfcraft_cos::Document::open(s.save_bytes(iid).unwrap()).unwrap()));
+
+    for non_data in [
+        pdfcraft_forms::FieldChange { name: "familyName".into(), text_size: Some(14.0), ..Default::default() },
+        pdfcraft_forms::FieldChange {
+            name: "familyName".into(),
+            stroke_color: Some(vec!["RGB".into(), "1".into(), "0".into(), "0".into()]),
+            ..Default::default()
+        },
+        pdfcraft_forms::FieldChange { name: "familyName".into(), line_width: Some(2.0), ..Default::default() },
+        pdfcraft_forms::FieldChange { name: "familyName".into(), border_style: Some("dashed".into()), ..Default::default() },
+        pdfcraft_forms::FieldChange { name: "familyName".into(), user_name: Some("Surname".into()), ..Default::default() },
+    ] {
+        s.apply(iid, Edit::ApplyScriptChanges { changes: vec![non_data] }).unwrap();
+        assert!(s.get(iid).unwrap().xfa.as_ref().unwrap().warnings.iter().any(|w| w.contains("usage rights")));
+        assert!(!pdfcraft_xfa::has_usage_rights(&pdfcraft_cos::Document::open(s.save_bytes(iid).unwrap()).unwrap()));
+        s.undo(iid).unwrap();
+        assert!(!s.get(iid).unwrap().xfa.as_ref().unwrap().warnings.iter().any(|w| w.contains("usage rights")));
+    }
 }
 
 #[test]
@@ -14135,6 +14168,66 @@ fn image_transform_engine_refuses_singular_matrices_without_mutation() {
         assert!(s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Transform(matrix) }).is_err());
         assert_eq!(s.get(id).unwrap().bytes, before);
     }
+}
+
+/// The renderer's check covers a redaction applied inside a batch too, with the marks as they
+/// were when it ran: one the batch itself added is checked, and text a later edit of the batch
+/// puts back under a mark refuses the whole batch.
+#[test]
+fn redactions_applied_in_a_batch_get_the_renderer_check() {
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let page = one_line_page_with("/Font << /F1 4 0 R >>", "", "BT /F1 16 Tf 20 150 Td (Public words then SECRET42) Tj ET");
+    let id = s.open("batch.pdf", None, Arc::new(page), None).unwrap();
+    mark_shown_text(&mut s, id, "SECRET42");
+    let apply = Edit::ApplyRedactions { pages: None };
+    // Text added where the mark was shows under it again: the renderer sees it and refuses.
+    let under = AddedText { rect: [150.0, 130.0, 300.0, 160.0], text: "SECRET42 SECRET42".into(), ..Default::default() };
+    let refused = s.apply(id, Edit::Batch { label: "Redact then write".into(), edits: vec![apply.clone(), Edit::AddText { page: 0, text: under }] });
+    assert!(matches!(refused, Err(EditError::Redact(pdfcraft_redact::RedactError::Residue(n))) if n > 0), "{refused:?}");
+    assert!(page_texts(&s, id)[0].contains("SECRET42"), "nothing changed");
+    assert_eq!(s.get(id).unwrap().redaction_marks(), 1);
+    // Applied alone in a batch, the redaction goes through, and the text is gone.
+    s.apply(id, Edit::Batch { label: "Redact".into(), edits: vec![apply] }).unwrap();
+    assert!(!page_texts(&s, id)[0].contains("SECRET42"), "{:?}", page_texts(&s, id));
+    assert_eq!(s.get(id).unwrap().redaction_marks(), 0);
+}
+
+/// A batch that deletes a page holding a redaction mark and adds pages is refused whole: the
+/// marks cannot be tied to copies, so redaction fails closed. Without added pages it goes through.
+#[test]
+fn a_batch_that_deletes_a_marked_page_and_adds_pages_is_refused() {
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let page = one_line_page_with("/Font << /F1 4 0 R >>", "", "BT /F1 16 Tf 20 150 Td (Public words then SECRET42) Tj ET");
+    let id = s.open("batch.pdf", None, Arc::new(page), None).unwrap();
+    mark_shown_text(&mut s, id, "SECRET42");
+    let edits = vec![
+        Edit::ApplyRedactions { pages: None },
+        Edit::InsertBlankPage { at: 1, width: 612.0, height: 792.0 },
+        Edit::DeletePages { pages: vec![0] },
+    ];
+    let refused = s.apply(id, Edit::Batch { label: "x".into(), edits });
+    assert!(matches!(refused, Err(EditError::Invalid(_))), "{refused:?}");
+    assert!(page_texts(&s, id)[0].contains("SECRET42"), "nothing changed");
+    assert_eq!(s.get(id).unwrap().redaction_marks(), 1);
+}
+
+/// A batch that applies redactions and then copies a page is refused whole: the copy can't be tied
+/// to the marks, so text restored under one would be unchecked. Copying first, or alone, is fine.
+#[test]
+fn a_batch_that_applies_redactions_and_copies_a_page_is_refused() {
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let page = one_line_page_with("/Font << /F1 4 0 R >>", "", "BT /F1 16 Tf 20 150 Td (Public words then SECRET42) Tj ET");
+    let id = s.open("batch.pdf", None, Arc::new(page), None).unwrap();
+    mark_shown_text(&mut s, id, "SECRET42");
+    let apply = Edit::ApplyRedactions { pages: None };
+    let copy = Edit::DuplicatePages { pages: vec![0], at: None };
+    let refused = s.apply(id, Edit::Batch { label: "x".into(), edits: vec![apply.clone(), copy.clone()] });
+    assert!(matches!(&refused, Err(EditError::Invalid(m)) if m.contains("copy pages")), "{refused:?}");
+    assert!(page_texts(&s, id)[0].contains("SECRET42"), "nothing changed");
+    assert_eq!(s.get(id).unwrap().redaction_marks(), 1);
+    // Copying before the redaction is applied puts the mark on the copy too, and both are checked.
+    s.apply(id, Edit::Batch { label: "y".into(), edits: vec![copy, apply] }).unwrap();
+    assert!(page_texts(&s, id).iter().all(|t| !t.contains("SECRET42")), "{:?}", page_texts(&s, id));
 }
 
 /// A reset in an opening script reaches a field of a row an earlier opening script added, before

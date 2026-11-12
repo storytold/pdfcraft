@@ -793,14 +793,19 @@ impl<'a, 'b> Runner<'a, 'b> {
         let wanted = |som: &str| targets.as_ref().is_none_or(|t| t.matches(som));
         let listed: Option<Vec<String>> = targets.as_ref().map(|_| {
             let mut set = Vec::new();
+            let mut seen = HashSet::new();
+            let mut paths = HashSet::new();
             for (som, f) in &by_som {
                 if wanted(som) {
-                    if !set.contains(f) {
+                    if seen.insert(f.clone()) {
                         set.push(f.clone());
                     }
-                    for peer in self.widgets_at(&pdfcraft_xfa::data_path(self.tpl, som)) {
-                        if !set.contains(&peer) {
-                            set.push(peer);
+                    let path = pdfcraft_xfa::data_path(self.tpl, som);
+                    if paths.insert(path.clone()) {
+                        for peer in self.widgets_at(&path) {
+                            if seen.insert(peer.clone()) {
+                                set.push(peer);
+                            }
                         }
                     }
                 }

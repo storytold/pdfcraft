@@ -424,7 +424,8 @@ pub(crate) fn keeps_xfa_usage_rights(
 
 fn edit_is_xfa_data_only(edit: &Edit, prev: &pdfcraft_cos::Document, next: &pdfcraft_cos::Document, xfa_errors: &[String]) -> bool {
     match edit {
-        Edit::SetFieldValue { .. } | Edit::ResetForm { .. } | Edit::XfaEvent { .. } => true,
+        Edit::SetFieldValue { .. } | Edit::ResetForm { .. } => acroform_field_properties_unchanged(prev, next),
+        Edit::XfaEvent { .. } => true,
         Edit::SetFieldImage { name, .. } => {
             xfa_errors.is_empty()
                 && pdfcraft_forms::fields(prev).iter().any(|f| f.name == *name && f.button == Some(pdfcraft_forms::af::ButtonAction::ImportIcon))
@@ -434,16 +435,150 @@ fn edit_is_xfa_data_only(edit: &Edit, prev: &pdfcraft_cos::Document, next: &pdfc
                 && (matches!(decode_data_file(bytes), Some(Ok(t)) if is_xfa_data_file(&t) && xfa_errors.is_empty())
                     || pdfcraft_xfdf::export_xfdf(prev, true, false, "") == pdfcraft_xfdf::export_xfdf(next, true, false, ""))
         }
-        Edit::ApplyScriptChanges { changes } => changes.iter().all(|c| {
-            c.read_only.is_none()
-                && c.required.is_none()
-                && c.display.is_none()
-                && c.text_color.is_none()
-                && c.fill_color.is_none()
-                && c.caption.is_none()
-                && c.rect.is_none()
-        }),
+        Edit::ApplyScriptChanges { changes } => changes.iter().all(field_change_is_value_only) && acroform_field_properties_unchanged(prev, next),
         Edit::Batch { edits, .. } => edits.iter().all(|e| edit_is_xfa_data_only(e, prev, next, xfa_errors)),
+        _ => false,
+    }
+}
+
+/// Whether `c` changes only a field's value (no flags, appearance, geometry, options or actions
+/// that [`pdfcraft_xfa::sync_form_into_shell`] cannot serialize into the XFA packets).
+pub(crate) fn field_change_is_value_only(c: &pdfcraft_forms::FieldChange) -> bool {
+    let pdfcraft_forms::FieldChange {
+        name: _,
+        object: _,
+        value: _,
+        formatted: _,
+        read_only,
+        required,
+        display,
+        caption,
+        text_color,
+        fill_color,
+        rect,
+        stroke_color,
+        text_size,
+        line_width,
+        border_style,
+        user_name,
+        icon,
+        options,
+        actions,
+    } = c;
+    read_only.is_none()
+        && required.is_none()
+        && display.is_none()
+        && text_color.is_none()
+        && fill_color.is_none()
+        && caption.is_none()
+        && rect.is_none()
+        && text_size.is_none()
+        && stroke_color.is_none()
+        && line_width.is_none()
+        && border_style.is_none()
+        && user_name.is_none()
+        && icon.is_none()
+        && options.is_none()
+        && actions.is_empty()
+}
+
+/// Whether no pre-existing AcroForm field in `next` had non-value properties (flags, appearance,
+/// geometry, options, tooltip or actions) modified by an AcroForm callback during `prev -> next`,
+/// and no non-XFA shell field changed value without a matching laid-out XFA field holding that
+/// value.
+fn acroform_field_properties_unchanged(prev: &pdfcraft_cos::Document, next: &pdfcraft_cos::Document) -> bool {
+    let prev_fields = pdfcraft_forms::fields(prev);
+    let next_fields = pdfcraft_forms::fields(next);
+    let prev_by_obj: std::collections::HashMap<pdfcraft_cos::ObjRef, &pdfcraft_forms::Field> = prev_fields.iter().map(|f| (f.obj, f)).collect();
+    for after in &next_fields {
+        let Some(before) = prev_by_obj.get(&after.obj) else { continue };
+        if !field_properties_unchanged(prev, before, next, after) {
+            return false;
+        }
+        let is_laid_out_xfa = next.get(after.obj).as_dict().is_some_and(|d| d.contains(pdfcraft_xfa::SOM_KEY));
+        if !is_laid_out_xfa && before.value != after.value {
+            let shared_with_xfa = next_fields.iter().any(|other| {
+                other.obj != after.obj
+                    && other.value == after.value
+                    && next
+                        .get(other.obj)
+                        .as_dict()
+                        .and_then(|d| d.get(pdfcraft_xfa::SOM_KEY).map(|s| next.resolve(s)))
+                        .and_then(|s| s.as_string().map(|s| s.to_text()))
+                        .is_some_and(|som| som == after.name || other.name == after.name)
+            });
+            if !shared_with_xfa {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+fn field_properties_unchanged(
+    prev: &pdfcraft_cos::Document,
+    before: &pdfcraft_forms::Field,
+    next: &pdfcraft_cos::Document,
+    after: &pdfcraft_forms::Field,
+) -> bool {
+    if before.flags != after.flags
+        || before.options != after.options
+        || before.da != after.da
+        || before.tooltip != after.tooltip
+        || before.actions != after.actions
+        || before.widgets.len() != after.widgets.len()
+        || !same_dict_entry(prev, before.obj, next, after.obj, b"AA")
+    {
+        return false;
+    }
+    before.widgets.iter().zip(&after.widgets).all(|(wb, wa)| {
+        wb.obj == wa.obj
+            && wb.rect == wa.rect
+            && wb.hidden == wa.hidden
+            && wb.read_only == wa.read_only
+            && wb.caption == wa.caption
+            && wb.mouse_up_script == wa.mouse_up_script
+            && [b"F".as_slice(), b"MK".as_slice(), b"BS".as_slice(), b"AA".as_slice()]
+                .into_iter()
+                .all(|key| same_dict_entry(prev, wb.obj, next, wa.obj, key))
+    })
+}
+
+fn same_dict_entry(
+    prev: &pdfcraft_cos::Document,
+    obj_a: pdfcraft_cos::ObjRef,
+    next: &pdfcraft_cos::Document,
+    obj_b: pdfcraft_cos::ObjRef,
+    key: &[u8],
+) -> bool {
+    let a = prev.get(obj_a);
+    let b = next.get(obj_b);
+    let va = a.as_dict().and_then(|d| d.get(key));
+    let vb = b.as_dict().and_then(|d| d.get(key));
+    same_resolved_object(prev, va, next, vb, 0)
+}
+
+fn same_resolved_object(
+    prev: &pdfcraft_cos::Document,
+    a: Option<&pdfcraft_cos::Object>,
+    next: &pdfcraft_cos::Document,
+    b: Option<&pdfcraft_cos::Object>,
+    depth: usize,
+) -> bool {
+    if depth > 8 {
+        return false;
+    }
+    match (a.map(|o| prev.resolve(o)), b.map(|o| next.resolve(o))) {
+        (None, None) => true,
+        (Some(a), Some(b)) => match (&*a, &*b) {
+            (pdfcraft_cos::Object::Dict(da), pdfcraft_cos::Object::Dict(db)) => {
+                da.len() == db.len() && da.iter().all(|(k, va)| same_resolved_object(prev, Some(va), next, db.get(k), depth + 1))
+            }
+            (pdfcraft_cos::Object::Array(aa), pdfcraft_cos::Object::Array(ab)) => {
+                aa.len() == ab.len() && aa.iter().zip(ab.iter()).all(|(va, vb)| same_resolved_object(prev, Some(va), next, Some(vb), depth + 1))
+            }
+            (oa, ob) => oa == ob,
+        },
         _ => false,
     }
 }

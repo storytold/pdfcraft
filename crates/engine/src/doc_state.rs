@@ -116,6 +116,62 @@ pub(crate) fn signatures_of(
     pdfcraft_sign::pdf::list_cached(cos, bytes, trust, cache)
 }
 
+/// Validate the signature fields of `editor` (whose working laid-out bytes are `bytes`). When the
+/// document is a dynamic XFA form whose usage-rights shell is still preserved (`ur_data_only`),
+/// validate signed entries against the shell revision that Save writes rather than the laid-out
+/// revision whose replaced page tree would look like a disallowed modification (#4309).
+pub(crate) fn editor_signatures(
+    editor: &crate::history::Editor,
+    bytes: &[u8],
+    trust: &TrustStore,
+    cache: &pdfcraft_sign::DigestCache,
+) -> Vec<SignatureInfo> {
+    let mut sigs = signatures_of(&editor.cos, bytes, trust, cache);
+    let Some(shell) = editor.ur_shell.as_ref().filter(|_| editor.ur_data_only && sigs.iter().any(|s| s.signed)) else {
+        return sigs;
+    };
+    let on_saved = !editor.cos.is_modified() && Arc::ptr_eq(editor.cos.bytes(), &editor.saved) && !shell.open_modified;
+    let shell_pair = if on_saved {
+        pdfcraft_cos::Document::open_with_password(shell.bytes.clone(), editor.keys.reopen.as_deref()).ok().map(|cos| (cos, shell.bytes.clone()))
+    } else {
+        writable(&editor.cos).ok().and_then(|clean| {
+            let mut shell_doc = pdfcraft_cos::Document::open_with_password(shell.bytes.clone(), editor.keys.reopen.as_deref()).ok()?;
+            match pdfcraft_xfa::sync_form_into_shell(&mut shell_doc, &clean).ok()? {
+                true => {
+                    let opts = pdfcraft_cos::SaveOptions { mod_date: None, drop_unlinked: true, ..Default::default() };
+                    let synced = Arc::new(pdfcraft_cos::write_incremental(&shell_doc, &opts).ok()?);
+                    let reopened = pdfcraft_cos::Document::open_with_password(synced.clone(), editor.keys.reopen.as_deref()).ok()?;
+                    Some((reopened, synced))
+                }
+                false => Some((shell_doc, shell.bytes.clone())),
+            }
+        })
+    };
+    let Some((shell_cos, shell_bytes)) = shell_pair else {
+        return sigs;
+    };
+    let shell_sigs = signatures_of(&shell_cos, &shell_bytes, trust, cache);
+    for sig in sigs.iter_mut().filter(|s| s.signed) {
+        let matched = shell_sigs
+            .iter()
+            .find(|s| {
+                s.signed
+                    && s.doc_timestamp == sig.doc_timestamp
+                    && s.signed_len == sig.signed_len
+                    && (s.field == sig.field || sig.field.ends_with(&format!(".{}", s.field)) || s.field.ends_with(&format!(".{}", sig.field)))
+            })
+            .or_else(|| shell_sigs.iter().find(|s| s.signed && s.doc_timestamp == sig.doc_timestamp && s.signed_len == sig.signed_len));
+        if let Some(shell_sig) = matched {
+            sig.status = shell_sig.status;
+            sig.modification = shell_sig.modification.clone();
+            sig.details = shell_sig.details.clone();
+            sig.certify = shell_sig.certify;
+            sig.revision = shell_sig.revision;
+        }
+    }
+    sigs
+}
+
 /// What Optimize PDF did.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct OptimizeReport {

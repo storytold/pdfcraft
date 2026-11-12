@@ -2,9 +2,9 @@
 use super::check_refresh_panic;
 use super::{
     Arc, DocId, Document, Edit, EditCtx, EditError, Label, MAX_UNDO, ObjectKind, OnceLock, RenderPool, SaveOptions, Scope, Session,
-    XFA_REMOVED_PREFIX, XFA_SCRIPTS_OFF, carry_verdict_marks, check_permission, comment_list, display_bytes, display_config, guard, info_fields,
-    inspect, js, keys_after, note_warnings, render_threads, run_edit, scan_colours, scope_of, shown_under_redactions, signatures_of, sync_xfa_state,
-    undrawn_notices, uses_scripts, write_incremental, xfa, xfa_sync_datasets, xfa_sync_shared_fields,
+    XFA_REMOVED_PREFIX, XFA_SCRIPTS_OFF, carry_verdict_marks, check_permission, comment_list, display_bytes, display_config, editor_signatures,
+    guard, info_fields, inspect, js, keys_after, note_warnings, render_threads, run_edit, scan_colours, scope_of, shown_under_redactions,
+    sync_xfa_state, undrawn_notices, uses_scripts, write_incremental, xfa, xfa_sync_datasets, xfa_sync_shared_fields,
 };
 use crate::{EditNotice, MarkKind, print_preview_layers};
 
@@ -185,6 +185,7 @@ impl Session {
         }
         cx.renamed_fields.clear();
         cx.redaction_overlays.clear();
+        cx.redaction_marks.clear();
         // `next` is a copy: if the edit fails or crashes, the document is unchanged.
         run_checked_edit(&mut next, &edit, &mut cx)?;
         // A field's enter or exit scripts that changed nothing leave no edit behind (no undo step,
@@ -195,11 +196,20 @@ impl Session {
             return Ok(None);
         }
         // Redaction removed what its own interpreter places under the marks. The marks were drawn
-        // over the page as the renderer shows it, so the renderer has the last word.
-        if let Edit::ApplyRedactions { pages } = &edit {
-            let marks: Vec<pdfcraft_redact::Mark> =
-                pdfcraft_redact::marks(&editor.cos).into_iter().filter(|m| pages.as_ref().is_none_or(|p| p.contains(&m.page))).collect();
-            guard(|| shown_under_redactions(&next, &marks, &cx.redaction_overlays, &doc.info.pages, doc.password.as_deref()))
+        // over the page as the renderer shows it, so the renderer has the last word: on every
+        // apply the edit ran, a batch's included.
+        if !cx.redaction_marks.is_empty() {
+            // A batch that deletes a marked page and adds pages cannot be tied back to the marks:
+            // a copy of a page may carry the text the redaction removed from the original only.
+            // Fail closed.
+            let before: std::collections::HashSet<_> = pdfcraft_model::pages(&editor.cos).iter().map(|p| p.obj).collect();
+            let after: std::collections::HashSet<_> = pdfcraft_model::pages(&next).iter().map(|p| p.obj).collect();
+            if cx.redaction_marks.iter().any(|(o, _)| !after.contains(o)) && after.iter().any(|o| !before.contains(o)) {
+                return Err(EditError::Invalid(
+                    "a batch that deletes a page with a redaction mark and adds pages can't be verified; the document was not changed".into(),
+                ));
+            }
+            guard(|| shown_under_redactions(&next, &cx.redaction_marks, &cx.redaction_overlays, doc.password.as_deref()))
                 .unwrap_or_else(|m| Err(EditError::Invalid(format!("{} failed unexpectedly ({m}); the document was not changed", edit.label()))))?;
         }
         // Renamed fields are said, not slipped in: a repair-log note (with the caveat that
@@ -530,7 +540,7 @@ impl Session {
             #[cfg(test)]
             check_refresh_panic();
             if !doc.signatures.is_empty() {
-                let mut signatures = signatures_of(&editor.cos, &bytes, &doc.trust, &doc.sig_cache);
+                let mut signatures = editor_signatures(editor, &bytes, &doc.trust, &doc.sig_cache);
                 // The display copy is kept for a metadata edit, and so are its marks, unless the
                 // edit changed a verdict (a certification can forbid it): the page then draws the
                 // new one.
@@ -581,7 +591,7 @@ impl Session {
         }
         doc.info.file_size = bytes.len();
         doc.form = form;
-        let mut signatures = if doc.signatures.is_empty() { Vec::new() } else { signatures_of(&editor.cos, &bytes, &doc.trust, &doc.sig_cache) };
+        let mut signatures = if doc.signatures.is_empty() { Vec::new() } else { editor_signatures(editor, &bytes, &doc.trust, &doc.sig_cache) };
         doc.display = display_bytes(Some(editor), &bytes, &mut signatures, &doc.captions);
         doc.signatures = Arc::new(signatures);
         doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), display_config(&doc.config));
@@ -646,7 +656,7 @@ impl Session {
             doc.marker_scan = OnceLock::new();
         }
         doc.info.file_size = bytes.len();
-        let mut signatures = if doc.signatures.is_empty() { Vec::new() } else { signatures_of(&editor.cos, &bytes, &doc.trust, &doc.sig_cache) };
+        let mut signatures = if doc.signatures.is_empty() { Vec::new() } else { editor_signatures(editor, &bytes, &doc.trust, &doc.sig_cache) };
         doc.display = display_bytes(Some(editor), &bytes, &mut signatures, &doc.captions);
         doc.signatures = Arc::new(signatures);
         doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), display_config(&doc.config));
@@ -740,7 +750,7 @@ impl Session {
         if invalidate_links {
             doc.links = OnceLock::new();
         }
-        let mut signatures = signatures_of(&editor.cos, &bytes, &doc.trust, &doc.sig_cache);
+        let mut signatures = editor_signatures(editor, &bytes, &doc.trust, &doc.sig_cache);
         doc.display = display_bytes(Some(editor), &bytes, &mut signatures, &doc.captions);
         doc.signatures = Arc::new(signatures);
         doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), display_config(&doc.config));

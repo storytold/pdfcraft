@@ -7,8 +7,8 @@ use pdfcraft_render::{DocInfo, OpenError, RenderConfig, RenderPool, inspect};
 
 use crate::history::{Editor, Keys, TextBlocksCache, UrShell};
 use crate::{
-    AppearanceCache, DocId, Document, Session, StatusCaptions, TrustStore, XFA_SCRIPTS_OFF, XfaLayout, display_bytes, display_config, guard,
-    info_fields, js, note_warnings, print_preview_layers, recovered_render_password, render_threads, same_pages, signatures_of,
+    AppearanceCache, DocId, Document, Session, StatusCaptions, TrustStore, XFA_SCRIPTS_OFF, XfaLayout, display_bytes, display_config,
+    editor_signatures, guard, info_fields, js, note_warnings, print_preview_layers, recovered_render_password, render_threads, same_pages,
     sync_usage_rights_warning, xfa, xfa_layout, xfa_values_from_datasets,
 };
 
@@ -103,35 +103,7 @@ impl Session {
             Self::draw_captions(&mut document, self.captions.clone());
         }
         self.docs.push(document);
-        if !self.js_off && self.get(id).is_some_and(|d| d.info.xfa.is_none() && !d.document_scripts().is_empty()) {
-            match self.run_opening_javascript(id) {
-                Ok(mut out) => {
-                    out.requests.retain(|r| {
-                        matches!(
-                            r,
-                            js::Request::Highlight(_)
-                                | js::Request::Zoom(_)
-                                | js::Request::Focus(_)
-                                | js::Request::FocusField { .. }
-                                | js::Request::GoToPage(_)
-                        )
-                    });
-                    if let Some(doc) = self.docs.iter_mut().find(|d| d.id == id) {
-                        doc.js_output.requests.extend(out.requests);
-                        doc.js_output.alerts.extend(out.alerts);
-                        doc.js_output.console.extend(out.console);
-                        doc.js_output.errors.extend(out.error);
-                        doc.js_output.doc_errors.extend(out.doc_errors.iter().cloned());
-                        doc.js_output.errors.extend(out.doc_errors);
-                    }
-                }
-                Err(e) => {
-                    if let Some(doc) = self.docs.iter_mut().find(|d| d.id == id) {
-                        doc.js_output.errors.push(e.to_string());
-                    }
-                }
-            }
-        }
+        self.run_open_scripts(id);
         id
     }
 
@@ -374,7 +346,7 @@ impl Session {
             Err(_) => (None, Some("the document structure could not be read for editing".into())),
         };
         let sig_cache = Arc::new(pdfcraft_sign::DigestCache::default());
-        let mut signatures = editor.as_ref().map(|e| signatures_of(&e.cos, &bytes, &context.trust, &sig_cache)).unwrap_or_default();
+        let mut signatures = editor.as_ref().map(|e| editor_signatures(e, &bytes, &context.trust, &sig_cache)).unwrap_or_default();
         // The inspection reads only `/Info`; a file stating its title or author only in XMP still
         // shows them (#2373).
         if let Some(e) = &editor {
