@@ -14398,6 +14398,31 @@ fn a_budget_refusal_discards_pdf_edits_and_callback_globals() {
     assert_eq!(s.run_javascript(id, "typeof fromRejectedEdit;", None).unwrap().result.as_deref(), Some("undefined"));
 }
 
+/// A batch whose field scripts ran and that a redaction check then refuses leaves the script realm
+/// as it was, like the document: here the check that a deleted marked page can't be tied to the
+/// pages the batch added.
+#[test]
+fn a_batch_a_redaction_check_refuses_discards_callback_globals() {
+    let (mut s, id) = reset_order_session("");
+    let script = Some("var fromRefusedBatch = 1;".to_string());
+    s.apply(id, Edit::SetFieldScript { name: "qty".into(), event: "keystroke".into(), script }).unwrap();
+    let shape = Shape::Redact { quads: vec![pdfcraft_annot::rect_quad([10.0, 10.0, 60.0, 30.0])], overlay: String::new(), look: Default::default() };
+    let mark = NewAnnotation { page: 0, style: Style::default_for(&shape), shape, contents: String::new(), author: "Ada".into() };
+    s.apply(id, Edit::AddAnnotation(mark)).unwrap();
+    s.set_javascript(true);
+    let before = s.save_bytes(id).unwrap();
+    let edits = vec![
+        Edit::SetFieldValue { name: "qty".into(), value: pdfcraft_forms::FieldValue::Text("10".into()) },
+        Edit::ApplyRedactions { pages: None },
+        Edit::InsertBlankPage { at: 1, width: 612.0, height: 792.0 },
+        Edit::DeletePages { pages: vec![0] },
+    ];
+    let refused = s.apply(id, Edit::Batch { label: "x".into(), edits });
+    assert!(matches!(&refused, Err(EditError::Invalid(m)) if m.contains("can't be verified")), "{refused:?}");
+    assert_eq!(s.save_bytes(id).unwrap(), before);
+    assert_eq!(s.run_javascript(id, "typeof fromRefusedBatch;", None).unwrap().result.as_deref(), Some("undefined"));
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn timeout_after_undo_releases_the_stale_script_runtime() {
