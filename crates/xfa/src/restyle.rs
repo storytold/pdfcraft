@@ -123,13 +123,18 @@ pub fn apply_props(base: &Props, sets: &BTreeMap<String, String>) -> (Props, boo
     for (_, _, key, value) in order {
         let (path, attr) = split_key(key);
         let Some(st) = steps(path) else { continue };
+        // The tree and its charge before a change that adds elements: put back when the change
+        // is left out at any step, so a refused change leaves no empty element behind.
+        let mut undo: Option<(Vec<Prop>, usize)> = None;
         if find_mut(&mut out.elements, &st, 0).is_none() {
             // The change adds elements: made on a copy kept until they fit the budget.
-            let before = out.elements.clone();
+            undo = Some((out.elements.clone(), bytes));
             add_missing(&mut out.elements, &st, 0);
             let (n, b) = charged_size(&out.elements);
             if n > crate::parse::MAX_OBJECT_PROPS || b > crate::parse::MAX_OBJECT_PROP_BYTES {
-                out.elements = before;
+                if let Some((elements, _)) = undo {
+                    out.elements = elements;
+                }
                 cut = true;
                 continue;
             }
@@ -145,22 +150,24 @@ pub fn apply_props(base: &Props, sets: &BTreeMap<String, String>) -> (Props, boo
         };
         let new = attr.map_or(0, str::len).saturating_add(value.len());
         let grown = if uncharged { bytes } else { bytes.saturating_sub(old).saturating_add(new) };
-        if grown > crate::parse::MAX_OBJECT_PROP_BYTES {
+        let fits = grown <= crate::parse::MAX_OBJECT_PROP_BYTES
+            && match attr {
+                Some(name) => p.attrs.len() < crate::parse::MAX_PROP_ATTRS || p.attrs.iter().any(|(k, _)| k == name),
+                None => true,
+            };
+        if !fits {
+            if let Some((elements, charged)) = undo {
+                out.elements = elements;
+                bytes = charged;
+            }
             cut = true;
             continue;
         }
         match attr {
-            Some(name) => {
-                let room = p.attrs.len() < crate::parse::MAX_PROP_ATTRS;
-                match p.attrs.iter_mut().find(|(k, _)| k == name) {
-                    Some(slot) => slot.1 = value.to_string(),
-                    None if room => p.attrs.push((name.to_string(), value.to_string())),
-                    None => {
-                        cut = true;
-                        continue;
-                    }
-                }
-            }
+            Some(name) => match p.attrs.iter_mut().find(|(k, _)| k == name) {
+                Some(slot) => slot.1 = value.to_string(),
+                None => p.attrs.push((name.to_string(), value.to_string())),
+            },
             None => p.text = Some(Arc::from(value.as_str())),
         }
         bytes = grown;

@@ -1259,6 +1259,26 @@ fn an_instances_own_page_breaks_are_laid_out() {
     assert_eq!(page_of(&form, "form[0].grid[0].row[0].cell[0]"), 1);
     let ov = overrides("form[0].rows[0].row[0]", &[("breakAfter#0", Some("targetType"), "pageArea")]);
     assert_eq!(rows(&laid_out(&t, &ov)), [0, 1, 1], "a break after the first row");
+    // A table's rows alike, the header row (the overflow leader) starting the new page.
+    let grid = |form: &crate::Form| [0, 1, 2].map(|i| page_of(form, &format!("form[0].grid[0].row[{i}].cell[0]")));
+    let ov = overrides("form[0].grid[0].row[1]", &[("breakBefore#0", Some("targetType"), "pageArea")]);
+    assert_eq!(grid(&laid_out(&t, &ov)), [0, 1, 1], "a table row's own break before");
+    let ov = overrides("form[0].grid[0].row[1]", &[("breakAfter#0", Some("targetType"), "pageArea")]);
+    assert_eq!(grid(&laid_out(&t, &ov)), [0, 0, 1], "a table row's own break after");
+    let led = OWN_ROWS.replace(
+        r#"<subform name="grid" layout="table" columnWidths="2in"><subform name="row" layout="row">"#,
+        r#"<subform name="grid" layout="table" columnWidths="2in"><overflow leader="head"/><subform name="head" layout="row"><draw name="title" h="0.3in"><value><text>Head</text></value></draw></subform><subform name="row" layout="row">"#,
+    );
+    let tl = crate::parse(&led).unwrap().0;
+    let form = laid_out(&tl, &overrides("form[0].grid[0].row[1]", &[("breakBefore#0", Some("targetType"), "pageArea")]));
+    let heads: Vec<usize> = form
+        .pages
+        .iter()
+        .enumerate()
+        .filter(|(_, p)| p.items.iter().any(|i| matches!(i, Item::Text(s) if s.text == "Head")))
+        .map(|(n, _)| n)
+        .collect();
+    assert_eq!((grid(&form), heads), ([0, 1, 1], vec![0, 1]), "the header row repeats on the new page");
     // The template's own break: once, before the first row.
     let broken = OWN_ROWS.replace(r#"<subform name="row" layout="tb"><occur min="3" max="3"/><field name="cell" w="2in" h="0.3in"><ui><textEdit/></ui></field></subform></subform>
  <subform name="box""#, r#"<subform name="row" layout="tb"><occur min="3" max="3"/><breakBefore targetType="pageArea"/><field name="cell" w="2in" h="0.3in"><ui><textEdit/></ui></field></subform></subform>
@@ -1292,4 +1312,105 @@ fn a_groups_own_changes_size_its_row() {
     // Each button stands in a field 0.3in (21.6pt) tall.
     assert!((r1.y - r0.y - 21.6 - 18.0).abs() < 0.01, "the second row's group margin: {r0:?} {r1:?}");
     assert!((r2.y - r1.y - 21.6).abs() < 0.01, "the third row comes after the second's field: {r1:?} {r2:?}");
+}
+
+/// A row subform outside a table is as tall as its cells and its margins, once (its cells
+/// already take them): its cells keep their height and what follows starts where it ends.
+#[test]
+fn a_rows_margins_count_once_in_its_height() {
+    let t = crate::parse(
+        r##"<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="p"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <subform name="line" layout="row"><margin topInset="0.25in" bottomInset="0.25in"/><field name="a" w="2in" h="0.3in"><ui><textEdit/></ui></field></subform>
+ <field name="after" w="2in" h="0.3in"><ui><textEdit/></ui></field>
+</subform></template>"##,
+    )
+    .unwrap()
+    .0;
+    let form = laid_out(&t, &Overrides::default());
+    let rect =
+        |som: &str| items(&form).into_iter().find_map(|i| if let Item::Widget(w) = i { (w.som == som).then_some(w.rect) } else { None }).unwrap();
+    let (a, after) = (rect("form[0].line[0].a[0]"), rect("form[0].after[0]"));
+    // The cell stretches to the row's inner height: its own 0.3in, not a margin's worth more.
+    assert!((a.y - 36.0 - 18.0).abs() < 0.01 && (a.h - 21.6).abs() < 0.01, "{a:?}");
+    assert!((after.y - (a.bottom() + 18.0)).abs() < 0.01, "the row's bottom margin once: {a:?} {after:?}");
+}
+
+/// A change left out for the object's budget leaves nothing behind: the elements it would have
+/// added (an edge under a new border) are not kept empty, where they would be drawn as a
+/// default border.
+#[test]
+fn a_change_left_out_for_the_budget_adds_no_empty_element() {
+    use crate::model::{Prop, Props};
+    // Room for the border and the edge (10 bytes of tags), not for the thickness on top.
+    let filler =
+        Prop { tag: "desc".into(), text: Some(std::sync::Arc::from("x".repeat(crate::parse::MAX_OBJECT_PROP_BYTES - 11 - 4))), ..Default::default() };
+    let base = Props { elements: vec![filler], ..Default::default() };
+    let (out, cut) = apply_props(&base, &sets(&[("border#0/edge#0", Some("thickness"), "3pt")]));
+    assert!(cut);
+    assert_eq!(out.elements.iter().map(|e| e.tag.as_str()).collect::<Vec<_>>(), ["desc"], "no empty border kept");
+}
+
+/// A script's change to how often a subform occurs, made inside one instance of a repeating
+/// subform (it stays with that instance), is laid out there: the second outer row gets the three
+/// inner rows its `initial` and `max` now give, the first keeps one, and what follows comes
+/// after them. The live form scripts read counts the same.
+#[test]
+fn an_occurrence_changed_inside_one_instance_is_laid_out_there() {
+    let t = crate::parse(
+        r##"<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="p"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <subform name="outer" layout="tb"><occur min="2" max="2"/>
+  <subform name="inner" layout="tb"><occur min="1" max="1"/><field name="f" w="2in" h="0.3in"><ui><textEdit/></ui></field></subform></subform>
+ <field name="after" w="2in" h="0.3in"><ui><textEdit/></ui></field>
+</subform></template>"##,
+    )
+    .unwrap()
+    .0;
+    let ov = overrides("form[0].outer[1].inner[0]", &[("occur#0", Some("max"), "3"), ("occur#0", Some("initial"), "3")]);
+    let form = laid_out(&t, &ov);
+    let soms: Vec<(String, f64)> =
+        items(&form).into_iter().filter_map(|i| if let Item::Widget(w) = i { Some((w.som.clone(), w.rect.y)) } else { None }).collect();
+    let names: Vec<&str> = soms.iter().map(|(s, _)| s.as_str()).collect();
+    assert_eq!(
+        names,
+        [
+            "form[0].outer[0].inner[0].f[0]",
+            "form[0].outer[1].inner[0].f[0]",
+            "form[0].outer[1].inner[1].f[0]",
+            "form[0].outer[1].inner[2].f[0]",
+            "form[0].after[0]",
+        ]
+    );
+    assert!(soms.windows(2).all(|w| (w[1].1 - w[0].1 - 21.6).abs() < 0.01), "one under another: {soms:?}");
+    let live = crate::form_tree(&t, None, &ov);
+    let outer: Vec<usize> =
+        live.root.children.iter().filter(|n| n.name == "outer").map(|o| o.children.iter().filter(|n| n.name == "inner").count()).collect();
+    assert_eq!(outer, [1, 3], "the live form agrees");
+}
+
+/// Tab order takes in the instances such a change adds, as the layout counts them: in each
+/// inner row, positioned fields go left to right (the traversal's order for positioned
+/// content), whatever the template lists first.
+#[test]
+fn tab_order_counts_an_occurrence_changed_inside_one_instance() {
+    let t = crate::parse(
+        r##"<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="p"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <subform name="outer" layout="tb"><occur min="2" max="2"/>
+  <subform name="inner" layout="position" w="7in" h="0.4in"><occur min="1" max="1"/>
+   <field name="right" x="4in" y="0in" w="2in" h="0.3in"><ui><textEdit/></ui></field>
+   <field name="left" x="0in" y="0in" w="2in" h="0.3in"><ui><textEdit/></ui></field></subform></subform>
+</subform></template>"##,
+    )
+    .unwrap()
+    .0;
+    let ov = overrides("form[0].outer[1].inner[0]", &[("occur#0", Some("max"), "3"), ("occur#0", Some("initial"), "3")]);
+    let form = laid_out(&t, &ov);
+    let order: Vec<String> = items(&form).into_iter().filter_map(|i| if let Item::Widget(w) = i { Some(w.som.clone()) } else { None }).collect();
+    let names: Vec<&str> = order.iter().map(|s| s.rsplit('.').next().unwrap_or("")).collect();
+    assert_eq!(names, ["left[0]", "right[0]"].repeat(4), "{order:?}");
 }

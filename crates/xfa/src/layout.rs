@@ -31,6 +31,7 @@ mod pages;
 pub(crate) use common::date_pattern;
 pub use common::formatted_value;
 use common::{collect_names, collect_values};
+pub(crate) use draw::occur_at;
 pub(crate) use items::UNDERLINE_DROP;
 pub use items::{Action, BorderShape, Form, Item, Page, Rounded, Turned, Widget, WidgetBorder, WidgetKind};
 
@@ -221,14 +222,15 @@ pub fn instance_count(occur: &Occur, from_data: usize) -> usize {
 /// Property changes by the SOM path of the object instance they were made to.
 pub type PropChanges = std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>;
 
-/// How many instances of `sf` the layout makes under the container at `parent_som`: its `occur`
-/// and the instances `data` holds ([`instance_count`]). The traversal counts them the same way.
-pub(crate) fn subform_instances(tpl: &Template, data: Option<&DataNode>, sf: &Subform, parent_som: &str) -> usize {
+/// How many instances of `sf` the layout makes under the container at `parent_som`: its
+/// `occur` (the template's, or as a script changed it, see [`occur_at`]) and the instances
+/// `data` holds ([`instance_count`]). The traversal counts them the same way.
+pub(crate) fn subform_instances_with(tpl: &Template, data: Option<&DataNode>, sf: &Subform, occur: &Occur, parent_som: &str) -> usize {
     let from_data = match (&sf.common.name, data) {
-        (Some(name), Some(d)) if sf.occur.max != Some(1) => d.count(&data_path(tpl, parent_som), name),
+        (Some(name), Some(d)) if occur.max != Some(1) => d.count(&data_path(tpl, parent_som), name),
         _ => 0,
     };
-    instance_count(&sf.occur, from_data)
+    instance_count(occur, from_data)
 }
 
 /// Lay a template out, with the values and repeat counts of `data` (the `xfa:data` element).
@@ -314,7 +316,7 @@ fn layout_inner(
         fill_page_count(&mut p.items, &count);
     }
     // Tab goes the way the template's traversal says.
-    crate::traverse::order_widgets(&root_node, tpl, data, &mut l.pages);
+    crate::traverse::order_widgets(&root_node, tpl, data, props, &mut l.pages);
     #[cfg(test)]
     LAID_OUT_ITEMS.with(|c| c.set(l.items));
     Ok(Form { pages: l.pages, fields: l.fields, warnings: l.warnings })

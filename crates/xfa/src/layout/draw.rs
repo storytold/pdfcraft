@@ -4,8 +4,8 @@ use std::collections::BTreeMap;
 use super::common::clean_name;
 use super::items::{Item, Rounded, Turned};
 use super::{
-    Arc, Border, Common, Ctx, Draw, ExclGroup, Face, Field, FillKind, Font, Hatch, Layout, Layouter, MAX_DEPTH, MAX_IMAGE_BYTES, Node, Para, Rect,
-    Side, SomIndices, Stroke, Subform, Value, XfaError, data_path, text,
+    Arc, Border, Common, Ctx, Draw, ExclGroup, Face, Field, FillKind, Font, Hatch, Layout, Layouter, MAX_DEPTH, MAX_IMAGE_BYTES, Node, Occur, Para,
+    Rect, Side, SomIndices, Stroke, Subform, Value, XfaError, data_path, text,
 };
 
 impl Layouter<'_> {
@@ -109,6 +109,14 @@ impl Layouter<'_> {
         }
     }
 
+    /// How often subform `node` occurs under the container at `parent_som`, its first instance
+    /// at SOM index `sib` (p. 786): as a script changed it on that first instance, which the
+    /// instance manager's limits follow (they are the subform's, not one instance's), when the
+    /// change stays with that instance (inside a repeating subform); else the template's.
+    pub(super) fn own_occur(&self, node: &Node, parent_som: &str, sib: usize) -> Occur {
+        occur_at(self.props, node, parent_som, sib)
+    }
+
     /// Where pages break before and after instance `sib` of subform `node` under `ctx` (XFA 3.3
     /// p. 632), when scripts changed that instance's breaks; `None` when they didn't.
     pub(super) fn own_breaks(&self, node: &Node, ctx: &Ctx, sib: usize) -> Option<(bool, bool)> {
@@ -209,7 +217,7 @@ impl Layouter<'_> {
                             // say) gets its instances, as in a flowed one, one under another,
                             // each as tall as its own content, and the rows past them are
                             // reported as there.
-                            let instances = self.laid_out_instances(k, &ctx.som);
+                            let instances = self.laid_out_instances(k, &ctx.som, sibs.at(i));
                             for instance in 0..instances {
                                 let sib = sibs.at(i).saturating_add(instance);
                                 let (w, h) = self.size_at(k, inner.w, &ctx, depth + 1, sib);
@@ -221,8 +229,8 @@ impl Layouter<'_> {
                     Layout::LrTb | Layout::RlTb => {
                         // A repeating subform here (rows of fields under a heading) gets its
                         // instances, as in the other layouts, and the rows past them are reported.
-                        for k in s.children.iter().filter(|k| k.common().presence.occupies()) {
-                            self.laid_out_instances(k, &ctx.som);
+                        for (i, k) in s.children.iter().enumerate().filter(|(_, k)| k.common().presence.occupies()) {
+                            self.laid_out_instances(k, &ctx.som, sibs.at(i));
                         }
                         let (placed, _) = self.pack_instances(&s.children, inner.w, &ctx, depth, &ctx.som);
                         // The sibling indices of each `subformSet` the steps go into, found once per
@@ -269,7 +277,7 @@ impl Layouter<'_> {
                                 // A repeating row (a table in a positioned subform, say) gets its
                                 // instances one under another, as in a flowed table (XFA 3.3,
                                 // "Tables", p. 327), and the rows past them are reported.
-                                for instance in 0..self.laid_out_instances(k, &ctx.som) {
+                                for instance in 0..self.laid_out_instances(k, &ctx.som, csib) {
                                     let h = self.row_height(r, &cols, inner.w, &ctx, depth + 1, csib.saturating_add(instance));
                                     self.draw_row(r, &cols, Rect::new(inner.x, y, inner.w, h), &ctx, depth + 1, csib + instance)?;
                                     y += h;
@@ -684,4 +692,21 @@ fn own_from<'a>(c: &'a Common, sets: &BTreeMap<String, String>, roots: &[&str]) 
         Some(t) => Cow::Owned(crate::restyle::restyled_common(c, &t)),
         None => Cow::Borrowed(c),
     }
+}
+
+/// How often subform `node` occurs under the container at `parent_som`, its first instance at
+/// SOM index `sib`, with the occurrence changes `props` keeps for that first instance (see
+/// [`Layouter::own_occur`]); the template's when there are none, and a default for what isn't a
+/// subform. The layout and the traversal count instances with it alike.
+pub(crate) fn occur_at(props: &super::PropChanges, node: &Node, parent_som: &str, sib: usize) -> Occur {
+    let Node::Subform(sf) = node else { return Occur::default() };
+    let changed = sf.common.name.as_deref().filter(|_| !props.is_empty()).and_then(|name| {
+        let som = if parent_som.is_empty() { format!("{name}[{sib}]") } else { format!("{parent_som}.{name}[{sib}]") };
+        let taken = taken(props.get(&som)?, &["occur"])?;
+        match crate::restyle::restyled(node, &taken) {
+            Node::Subform(s) => Some(s.occur),
+            _ => None,
+        }
+    });
+    changed.unwrap_or(sf.occur)
 }

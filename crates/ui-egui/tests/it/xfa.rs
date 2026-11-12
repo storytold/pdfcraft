@@ -465,6 +465,37 @@ fn using_the_calculated_value_changes_that_field_only() {
     assert!(asked(&h).is_empty());
 }
 
+/// While the question about a calculated field is shown, no editor stays open on the page: one
+/// open on the field, holding the typed value, is closed under the question, so after the
+/// answer nothing is left to type over the calculated value again.
+#[test]
+fn no_editor_stays_open_on_the_field_while_the_calculation_question_is_shown() {
+    let mut h = open(recommended_calculation());
+    // k2 is the second 0.3in row of the page, 0.5in in: its middle at (1.5in, 0.95in).
+    let r = h.state().views[0].page_screen_rect(0).expect("on screen");
+    let p = r.min + egui::vec2(r.width() * 108.0 / 612.0, r.height() * 68.4 / 792.0);
+    h.hover_at(p);
+    h.run_steps(1);
+    h.drag_at(p);
+    h.run_steps(1);
+    h.drop_at(p);
+    h.run_steps(3);
+    let k2 = field_name(&h, "k2");
+    assert_eq!(h.state().views[0].forms.focus.as_ref().map(|f| f.name.clone()), Some(k2.clone()), "the editor is open on k2");
+    let mut editor = h.state().views[0].forms.focus.clone().unwrap();
+    type_value(&mut h, "k2", "5");
+    assert_eq!(asked(&h), ["k2"]);
+    // An editor open on the field again, holding the typed value.
+    editor.text = "5".into();
+    h.state_mut().views[0].forms.focus = Some(editor);
+    h.run_steps(1);
+    assert!(h.state().views[0].forms.focus.is_none(), "closed under the question");
+    h.get_by_label("Use calculated value").click();
+    h.run_steps(3);
+    assert_eq!(value(&h, "k2"), "10");
+    assert!(h.state().views[0].forms.focus.is_none());
+}
+
 /// One edit that types over two recommended calculations (a batch of values) asks about each
 /// field in turn (XFA 3.3 p. 642: the warning is about the form object the user set). Using the
 /// calculated value for the first gives that field its calculated value and leaves the second

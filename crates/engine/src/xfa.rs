@@ -1447,7 +1447,9 @@ pub(crate) fn on_changes(
         let field = pdfcraft_xfa::field_now(r.tpl, &r.ov, &som);
         // A value typed into a calculated field: kept in place of the calculation, and the user
         // asked, when its override says so (see `validation_rules::user_value_overrides`).
-        if let Some(f) = field.as_ref().filter(|f| f.calculate.is_some())
+        // Only a calculation that runs (the live form leaves an empty script out) has a value
+        // to go back to.
+        if let Some(f) = field.as_ref().filter(|f| f.calculate.as_ref().is_some_and(|c| !c.text.trim().is_empty()))
             && !pdfcraft_xfa::value_overridden(r.tpl, &r.ov, &som)
             && let Some(m) = rules::user_value_overrides(f.calc_override, f.calc_message.as_deref(), name)
         {
@@ -2246,7 +2248,8 @@ $host.messageBox(concat(table.row[0].amount.mandatory, "|", table.resolveNode("r
 
     /// A form whose opening script gives a field a format test (picture, `error`, message), and
     /// four calculated fields: two whose calculation the user may override with a warning,
-    /// one that says `disabled` and one that keeps the default.
+    /// one that says `disabled` and one that keeps the default; and a warning over an empty
+    /// calculation script.
     fn checks_form() -> Vec<u8> {
         let template = r##"<?xml version="1.0" encoding="UTF-8"?>
 <xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
@@ -2264,6 +2267,7 @@ $host.messageBox(concat(table.row[0].amount.mandatory, "|", table.resolveNode("r
   <field name="K3" w="2in" h="0.3in"><ui><numericEdit/></ui><calculate override="disabled"><script contentType="application/x-javascript">K1.rawValue * 100</script></calculate></field>
   <field name="K4" w="2in" h="0.3in"><ui><numericEdit/></ui><calculate><script contentType="application/x-javascript">K1.rawValue * 1000</script></calculate></field>
   <field name="K5" w="2in" h="0.3in"><ui><numericEdit/></ui><calculate override="warning"><script contentType="application/x-javascript">K1.rawValue * 7</script></calculate></field>
+  <field name="K6" w="2in" h="0.3in"><ui><numericEdit/></ui><calculate override="warning"><script contentType="application/x-javascript">  </script></calculate></field>
  </subform>
 </subform>
 </template>
@@ -2394,6 +2398,12 @@ $host.messageBox(concat(table.row[0].amount.mandatory, "|", table.resolveNode("r
         s.undo(id).unwrap();
         s.undo(id).unwrap();
         assert_eq!(values(&s), ["5", "6", "12"]);
+        // A warning over an empty script calculates nothing: no question, nothing to go back to.
+        let _ = s.take_js_output(id);
+        type_into(&mut s, id, "K6", "4");
+        assert!(s.take_js_output(id).requests.is_empty());
+        assert_eq!(value_of(&s, id, "K6"), "4");
+        assert!(s.apply(id, crate::Edit::UseCalculatedValue { name: name(&s, "K6") }).is_err());
         // Not in a batch: its calculations would run before the form's data took the batch's
         // other values.
         let batch = crate::Edit::Batch { label: "Fill in form".into(), edits: vec![crate::Edit::UseCalculatedValue { name: k2.clone() }] };

@@ -144,7 +144,14 @@ impl Layouter<'_> {
         let w = clamp_opt(w, c.min_w, c.max_w);
         let h = match c.h {
             Some(h) => h,
-            None => self.content_height(node, (w - c.margin.horizontal()).max(1.0), ctx, &som, outer_para, depth) + c.margin.vertical(),
+            None => {
+                let content = self.content_height(node, (w - c.margin.horizontal()).max(1.0), ctx, &som, outer_para, depth);
+                match node {
+                    // A row's cells already take its margins (`cells`), as it is drawn.
+                    Node::Subform(s) if s.layout == Layout::Row => content,
+                    _ => content + c.margin.vertical(),
+                }
+            }
         };
         // A subform without a height is as tall as what it holds, flowed or positioned. XFA 3.3
         // p. 847 makes `minH` its minimum; Adobe Acrobat doesn't stretch one to it (IRCC's
@@ -160,7 +167,7 @@ impl Layouter<'_> {
     /// The height `k` takes with all its instances under the container at `som`, one under
     /// another, the first at SOM index `sib` among its siblings: each instance takes its own.
     fn instances_height(&self, k: &Node, inner_w: f64, ctx: &Ctx, depth: usize, som: &str, sib: usize) -> f64 {
-        (0..self.instances(k, som)).map(|i| self.size_at(k, inner_w, ctx, depth, sib.saturating_add(i)).1).sum()
+        (0..self.instances(k, som, sib)).map(|i| self.size_at(k, inner_w, ctx, depth, sib.saturating_add(i)).1).sum()
     }
 
     /// The height of `node`'s content within `inner_w` (inside its margins), whatever height it
@@ -194,7 +201,7 @@ impl Layouter<'_> {
                         .filter(|(_, k)| k.common().presence.occupies())
                         .map(|(i, k)| match k {
                             // Each instance of a repeating row takes its own height, as drawn.
-                            Node::Subform(r) if r.layout == Layout::Row => (0..self.instances(k, som))
+                            Node::Subform(r) if r.layout == Layout::Row => (0..self.instances(k, som, sibs.at(i)))
                                 .map(|n| self.row_height(r, &cols, inner_w, ctx, depth + 1, sibs.at(i).saturating_add(n)))
                                 .sum(),
                             _ => self.size_at(k, inner_w, ctx, depth + 1, sibs.at(i)).1,
@@ -475,14 +482,14 @@ impl Layouter<'_> {
             if let Node::Subform(s) = k
                 && s.set
             {
-                for instance in 0..self.instances(k, som) {
+                for instance in 0..self.instances(k, som, sibs.at(i)) {
                     let set_ctx = ctx.with_som(&s.common, sibs.at(i).saturating_add(instance));
                     let at: Vec<(usize, usize)> = path.iter().copied().chain([(i, instance)]).collect();
                     self.pack_into(&s.children, inner_w, &set_ctx, depth + 1, &set_ctx.som, &at, line, out);
                 }
                 continue;
             }
-            for instance in 0..self.instances(k, som) {
+            for instance in 0..self.instances(k, som, sibs.at(i)) {
                 let (w, h) = self.size_at(k, inner_w, ctx, depth + 1, sibs.at(i).saturating_add(instance));
                 let (x, y, line_h) = line;
                 if *x > 0.0 && *x + w > inner_w + 0.05 {

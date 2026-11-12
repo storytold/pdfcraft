@@ -52,7 +52,7 @@ pub fn format_message(given: Option<&str>, name: &str) -> String {
 pub fn conforms(picture: &str, value: &str) -> Option<bool> {
     let mut known = false;
     for clause in alternatives(picture) {
-        match clause_conforms(clause.trim(), value.trim()) {
+        match clause_conforms(clause.trim(), value) {
             Some(true) => return Some(true),
             Some(false) => known = true,
             None => {}
@@ -75,9 +75,11 @@ fn clause_conforms(clause: &str, value: &str) -> Option<bool> {
     };
     let symbols = tokens(pattern);
     match category {
+        // A text picture counts every character as entered (`X` takes a space); numbers and
+        // dates are read without the spaces around them.
         "text" | "" => Some(text_conforms(&symbols, value)),
-        "num" => num_conforms(&symbols, value),
-        "date" => date_conforms(&symbols, value),
+        "num" => num_conforms(&symbols, value.trim()),
+        "date" => date_conforms(&symbols, value.trim()),
         _ => None,
     }
 }
@@ -165,7 +167,10 @@ fn num_conforms(symbols: &[Sym], value: &str) -> Option<bool> {
                 '9' => (Takes::Digit, false),
                 'Z' => (Takes::DigitOrSpace, false),
                 'z' => (Takes::Digit, true),
-                '.' | 'v' | 'V' => (Takes::Char('.'), false),
+                '.' => (Takes::Char('.'), false),
+                // The radix that may be implied on input (XFA 3.3 p. 1178): `99V99` takes
+                // `10.50` and `1050`.
+                'v' | 'V' => (Takes::Char('.'), true),
                 ',' => (Takes::Char(','), true),
                 's' | '-' | '+' => (Takes::Sign, true),
                 'E' | 'C' | 'R' | 'D' | 'B' | '(' | ')' | '%' | '8' => return None,
@@ -318,6 +323,25 @@ mod tests {
 
     /// Picture clauses (XFA 3.3 ch. 24) as the format test reads them: text, numeric and date
     /// patterns, quoted literals, alternatives; a pattern this can't read is not a failure.
+    /// `v` and `V` are the radix the input may leave out (XFA 3.3 p. 1178); `.` must be there.
+    #[test]
+    fn an_implied_radix_may_be_left_out() {
+        assert_eq!(conforms("num{99V99}", "1050"), Some(true));
+        assert_eq!(conforms("num{99v99}", "10.50"), Some(true));
+        assert_eq!(conforms("num{99.99}", "1050"), Some(false));
+        assert_eq!(conforms("num{99.99}", "10.50"), Some(true));
+    }
+
+    /// A text picture takes the value as entered, spaces counted (`X` is any character); a
+    /// number or a date is read without the spaces around it.
+    #[test]
+    fn text_pictures_count_spaces_and_numbers_skip_them() {
+        assert_eq!(conforms("text{XX}", "a "), Some(true));
+        assert_eq!(conforms("text{X}", " a"), Some(false));
+        assert_eq!(conforms("num{99}", " 12 "), Some(true));
+        assert_eq!(conforms("date{YYYYMMDD}", " 20261112 "), Some(true));
+    }
+
     #[test]
     fn values_are_matched_against_picture_clauses() {
         let cases: &[(&str, &str, Option<bool>)] = &[
