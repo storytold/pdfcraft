@@ -643,7 +643,7 @@ impl<'a> Context<'a> {
         self.nesting_depth = self.nesting_depth.saturating_sub(1);
     }
     pub(crate) fn resolve_font(&mut self, font_dict: &Dict<'a>) -> Option<TextStateFont<'a>> {
-        // PdfCraft patch (104): while the recovery rules read the page, each font object is a font
+        // PdfCraft patch (105): while the recovery rules read the page, each font object is a font
         // of its own, even beside another object with the same dictionary: the rules decide each
         // by the glyphs it shows (`recovery::font_key`).
         let recovery_key = self
@@ -663,7 +663,7 @@ impl<'a> Context<'a> {
                         &self.settings.font_resolver,
                         &self.settings.cmap_resolver,
                     );
-                    // PdfCraft patch (104): the recovery rules decide the font once per
+                    // PdfCraft patch (105): the recovery rules decide the font once per
                     // document, not once per page.
                     if let (Some(font), Some(document), Some(key)) =
                         (&font, &self.settings.recovery_document, recovery_key)

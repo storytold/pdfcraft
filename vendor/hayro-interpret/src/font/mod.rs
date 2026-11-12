@@ -120,7 +120,7 @@ impl Glyph<'_> {
         }
     }
 
-    /// PdfCraft patch (104): the strict text ([`Self::as_unicode`], unchanged) and, in the same
+    /// PdfCraft patch (105): the strict text ([`Self::as_unicode`], unchanged) and, in the same
     /// call, the text the recovery rules read for the glyph, if any (see `font::recovery`): a
     /// reading of a glyph without strict text ([`RecoveryMode::Fill`]), or one that replaces
     /// strict text a rule judges untrustworthy ([`RecoveryMode::Override`]). Search, plain copy
@@ -136,7 +136,7 @@ impl Glyph<'_> {
         (strict, recovery)
     }
 
-    /// PdfCraft patch (104): the font's style, for styling text read by the recovery rules
+    /// PdfCraft patch (105): the font's style, for styling text read by the recovery rules
     /// (whose fonts often give no other way to know their family): `/BaseFont` as written,
     /// subset tag included, and bold and italic from the font descriptor (`/Flags` ForceBold
     /// and Italic, `/FontWeight` of 600 or more, a slanted `/ItalicAngle`) or an embedded
@@ -289,7 +289,7 @@ impl<'a> Type3Glyph<'a> {
 }
 
 impl Type3Glyph<'_> {
-    /// PdfCraft patch (104): a key identifying the glyph's font, as `OutlineGlyph::font_cache_key`
+    /// PdfCraft patch (105): a key identifying the glyph's font, as `OutlineGlyph::font_cache_key`
     /// does for outline fonts (the recovered layer's budgets count fonts by it).
     pub fn font_cache_key(&self) -> u128 {
         self.font.cache_key()
@@ -344,7 +344,7 @@ impl<'a> Font<'a> {
         Some(Self(cache_key, f_type))
     }
 
-    /// PdfCraft patch (104): keep the recovery rules' decisions for this font in `document`,
+    /// PdfCraft patch (105): keep the recovery rules' decisions for this font in `document`,
     /// for every page read with it, under `key` (`recovery::font_key`).
     pub(crate) fn attach_recovery_document(&self, document: &Arc<RecoveryDocument>, key: u128) {
         let info = match &self.1 {
@@ -840,7 +840,7 @@ pub(crate) fn glyph_name_numbers(name: &str) -> impl Iterator<Item = u32> + '_ {
 /// PdfCraft patch: whether a glyph name only numbers its glyph (see `glyph_name_numbers`): no
 /// reading through the glyph list or its `uni`/`u` forms, and one to three letters followed by
 /// one to six digits. Shared by `numbered_names_name_their_codes` and the recovery rules
-/// (patch 104).
+/// (patch 105).
 pub(crate) fn is_numbered_glyph_name(name: &str) -> bool {
     // The shape test first: it allocates nothing, and most names fail it.
     glyph_name_numbers(name).next().is_some()
@@ -859,7 +859,7 @@ pub(crate) fn is_numbered_glyph_name(name: &str) -> bool {
 /// (`/Differences [1 /C1 /C2 … /C80]`) names its own codes too, but the counter says nothing
 /// about the characters (`/C65` is the 65th glyph used, not `A`): a numbered name at a C0
 /// control code (below 32), which no text shows, gives such a counter away and fails the font,
-/// as it does for the recovery rules (patch 104).
+/// as it does for the recovery rules (patch 105).
 pub(crate) fn numbered_names_name_their_codes<'a>(
     names: impl IntoIterator<Item = (u8, &'a str)>,
 ) -> bool {

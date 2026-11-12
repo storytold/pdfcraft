@@ -31,7 +31,7 @@ pub(crate) struct TrueTypeFont {
     cache_key: u128,
     kind: Kind,
     to_unicode: Option<CMap>,
-    /// PdfCraft patch (104): what the recovery rules need, and their decisions.
+    /// PdfCraft patch (105): what the recovery rules need, and their decisions.
     recovery: FontRecovery,
 }
 
@@ -189,12 +189,12 @@ impl TrueTypeFont {
         }
     }
 
-    /// PdfCraft patch (104): what the font keeps for the recovery rules.
+    /// PdfCraft patch (105): what the font keeps for the recovery rules.
     pub(crate) fn recovery_info(&self) -> &FontRecovery {
         &self.recovery
     }
 
-    /// PdfCraft patch (104): the recovery rules' reading of a code (see `font::recovery`),
+    /// PdfCraft patch (105): the recovery rules' reading of a code (see `font::recovery`),
     /// given its strict text when that is more than control characters.
     pub(crate) fn recovery(
         &self,
