@@ -25,7 +25,7 @@ jobs:
     with:
       os: '["macos-latest"]'
       # Same craft-fonts commit as ci.yml, release.yml and freebsd.yml.
-      craft-fonts-ref: c1db6d1a8ed772191241c3d185e2104be84d8691
+      craft-fonts-ref: b076417b5880bd4154bd22f00695b1d28c6bea83
       # Every test, and all of their failures in one run. The whole workspace took 37 minutes on
       # macos-latest on 10 Nov 2026.
       command: cargo test --workspace --locked --no-fail-fast
