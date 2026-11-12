@@ -64,6 +64,8 @@ struct Pruner<'a> {
     /// page's for a name its own don't list. One the content draws nothing from is left as it
     /// is, not emptied.
     lent: HashSet<XKey>,
+    /// Streams whose resources were lent already ([`Pruner::lend_own`]).
+    lent_from: HashSet<ObjRef>,
 }
 
 impl Pruner<'_> {
@@ -189,16 +191,29 @@ impl Pruner<'_> {
         Some((self.doc.resolve(x).as_dict()?.clone(), key))
     }
 
-    /// Lend the `/XObject` dictionaries of `streams`' own `/Resources`, owned as a form's are: what
-    /// they draw isn't read here, so these stay whole even where a form drawing nothing shares them.
+    /// Lend the `/XObject` dictionaries of `streams`' own `/Resources`, owned as a form's are, and
+    /// those of the forms, patterns and soft-mask groups they list, nested up to [`MAX_FORM_DEPTH`]:
+    /// what they draw isn't read here, so these stay whole even where a form drawing nothing shares
+    /// them. Nesting past the limit stops the pruning, as it does for content.
     fn lend_own(&mut self, streams: &[Object]) {
-        for r in streams.iter().filter_map(Object::as_ref) {
+        let mut todo: Vec<(ObjRef, u8)> = streams.iter().filter_map(Object::as_ref).map(|r| (r, 0)).collect();
+        while let Some((r, depth)) = todo.pop() {
+            if !self.lent_from.insert(r) {
+                continue;
+            }
             let Object::Stream(s) = &*self.doc.get(r) else { continue };
             let Some(res) = s.dict.get(b"Resources") else { continue };
             let Some(dict) = self.doc.resolve(res).as_dict().cloned() else { continue };
-            if let Some((_, key)) = self.xobjects(&dict, Owner::Resources(res.as_ref().unwrap_or(r))) {
-                self.lent.insert(key);
+            if depth > MAX_FORM_DEPTH {
+                self.too_deep = true;
+                return;
             }
+            let mut inner: Vec<Object> = lenders(self.doc, &dict);
+            if let Some((xobjects, key)) = self.xobjects(&dict, Owner::Resources(res.as_ref().unwrap_or(r))) {
+                self.lent.insert(key);
+                inner.extend(xobjects.iter().map(|(_, x)| x.clone()));
+            }
+            todo.extend(inner.iter().filter_map(Object::as_ref).map(|x| (x, depth + 1)));
         }
     }
 
@@ -236,6 +251,8 @@ impl Pruner<'_> {
     /// resources are shared keeps what it draws from them too.
     fn unread(&mut self, resources: &Dict, owner: Owner, depth: u8) {
         self.protect_type3_resources(resources, owner);
+        let lenders = lenders(self.doc, resources);
+        self.lend_own(&lenders);
         let Some((xobjects, key)) = self.xobjects(resources, owner) else { return };
         self.unsure.insert(key);
         if depth > MAX_FORM_DEPTH {
@@ -408,13 +425,15 @@ pub(crate) fn prune_unused_xobjects(doc: &mut Document) -> Result<usize, Organiz
         forms_seen: HashSet::new(),
         partly_read: HashSet::new(),
         lent: HashSet::new(),
+        lent_from: HashSet::new(),
     };
     for (page, attrs) in &pages {
-        let Some(res) = attrs.get(b"Resources") else { continue };
-        let Some((res_dict, owner)) = resolve_resources(pruner.doc, res, *page) else { continue };
         let Some(pd) = pruner.doc.get(*page).as_dict().cloned() else { continue };
+        // A page's appearances keep what they draw from their own resources, with page resources or not.
         let appearances = appearance_streams(pruner.doc, &pd);
         pruner.lend_own(&appearances);
+        let Some(res) = attrs.get(b"Resources") else { continue };
+        let Some((res_dict, owner)) = resolve_resources(pruner.doc, res, *page) else { continue };
         if !appearances.is_empty()
             && let Some((_, key)) = pruner.xobjects(&res_dict, owner)
         {
