@@ -52,6 +52,7 @@ pub(crate) fn roles(objects: &[Evidence]) -> Vec<&'static str> {
     let mut styles: Vec<(i64, bool)> = objects.iter().filter(|e| candidate(e)).map(|e| (half_points(e.size), e.bold)).collect();
     styles.sort_by(|a, b| b.cmp(a));
     styles.dedup();
+    let ranks: HashMap<(i64, bool), usize> = styles.into_iter().enumerate().map(|(rank, style)| (style, rank)).collect();
     let mut previous = 0usize;
     objects
         .iter()
@@ -59,7 +60,7 @@ pub(crate) fn roles(objects: &[Evidence]) -> Vec<&'static str> {
             if !candidate(e) {
                 return "P";
             }
-            let rank = styles.iter().position(|s| *s == (half_points(e.size), e.bold)).unwrap_or(0);
+            let rank = ranks.get(&(half_points(e.size), e.bold)).copied().unwrap_or(0);
             let level = rank.saturating_add(1).min(previous.saturating_add(1)).min(HEADINGS.len());
             previous = level;
             HEADINGS.get(level.saturating_sub(1)).copied().unwrap_or("P")
@@ -93,7 +94,8 @@ struct State {
     tlm: Matrix,
     size: f64,
     leading: f64,
-    /// Text render mode 3: shown text that paints nothing, such as an OCR layer.
+    /// Text render mode 3 or 7: shown text that paints nothing, such as an OCR layer or a
+    /// clip-only object.
     invisible: bool,
     metrics: Option<Rc<Metrics>>,
 }
@@ -214,7 +216,7 @@ pub(crate) fn evidence(doc: &Document, fonts: &mut Fonts, resources: &Dict, ops:
                     .and_then(|name| by_name.entry(name.to_vec()).or_insert_with(|| resources.get(name).and_then(|f| fonts.get(doc, f))).clone());
             }
             b"TL" => state.leading = op.num(0).unwrap_or(state.leading),
-            b"Tr" => state.invisible = op.num(0) == Some(3.0),
+            b"Tr" => state.invisible = matches!(op.num(0), Some(m) if m == 3.0 || m == 7.0),
             b"Td" | b"TD" => {
                 if let Some([x, y]) = op.nums::<2>() {
                     if op.op == b"TD" {
@@ -370,11 +372,11 @@ mod tests {
     #[test]
     fn line_moves_leading_invisible_text_and_absurd_sizes() {
         let found = walk(
-            b"BT /F1 10 Tf 1 0 0 1 0 90 Tm (a) Tj 1 0 0 1 40 90 Tm (b) Tj 1 0 0 1 0 70 Tm (c) Tj ET               BT /F1 10 Tf 14 TL 0 0 Td (a) Tj 0 0 (b) \" 0 -12 TD (c) Tj T* (d) Tj ET               BT /F1 10 Tf 3 Tr (hidden) Tj 0 Tr (shown) Tj ET               BT /F1 2000000 Tf (huge) Tj ET",
+            b"BT /F1 10 Tf 1 0 0 1 0 90 Tm (a) Tj 1 0 0 1 40 90 Tm (b) Tj 1 0 0 1 0 70 Tm (c) Tj ET               BT /F1 10 Tf 14 TL 0 0 Td (a) Tj 0 0 (b) \" 0 -12 TD (c) Tj T* (d) Tj ET               BT /F1 10 Tf 3 Tr (hidden) Tj 7 Tr (clip) Tj 0 Tr (shown) Tj ET               BT /F1 2000000 Tf (huge) Tj ET",
         );
         assert_eq!(found[0].lines, 2, "a Tm on the same baseline is not a new line");
         assert_eq!(found[1].lines, 4, "\" and TD each start a line, and T* uses TD's leading");
-        assert_eq!(found[2].chars, 5, "render mode 3 text is not counted");
+        assert_eq!(found[2].chars, 5, "render mode 3 and 7 text is not counted");
         assert_eq!(found[3], Evidence::default(), "a size past 1e6 is dropped");
     }
 }
