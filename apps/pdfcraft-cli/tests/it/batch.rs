@@ -64,3 +64,40 @@ fn cli_batch_rejects_bad_flags_before_creating_outputs() {
         assert!(output.stdout.is_empty());
     }
 }
+
+#[test]
+fn cli_batch_writes_the_log_file_only_when_asked_review_regression_1() {
+    let dir = std::env::temp_dir().join(format!("pdfcraft-cli-batch-log-regression-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("input")).unwrap();
+    std::fs::write(dir.join("input/good.txt"), "Hello world").unwrap();
+    std::fs::write(dir.join("input/broken.pdf"), b"broken").unwrap();
+
+    let base = ["batch", "input", "--steps", "convert,optimize", "--out-dir", "out", "--recursive"];
+
+    // Test 1: --log is accepted as a valid option and appears in help
+    let help = Command::new(BIN).args(["batch", "--help"]).output().unwrap();
+    let help_text = String::from_utf8_lossy(&help.stdout);
+    assert!(help_text.contains("--log"), "CLI help should mention --log option: {help_text}");
+
+    // Test 2: Log write failure still prints batch report to stdout
+    let bad_log = dir.join("unwritable_dir");
+    std::fs::create_dir_all(&bad_log).unwrap();
+    let logged = Command::new(BIN).current_dir(&dir).args(base).arg("--log").arg(&bad_log).output().unwrap();
+    let stdout = String::from_utf8_lossy(&logged.stdout);
+    assert!(stdout.contains("completed") || stdout.contains("failed"), "Batch report should be printed to stdout even when log write fails: {stdout}");
+
+    // Test 3: Log write doesn't overwrite input files
+    let log_as_input = dir.join("input/good.txt");
+    let logged2 = Command::new(BIN).current_dir(&dir).args(base).arg("--log").arg(&log_as_input).output().unwrap();
+    let content = std::fs::read_to_string(&log_as_input).unwrap();
+    assert_eq!(content, "Hello world", "Input file should not be overwritten by log: {content}");
+
+    // Test 4: Dry-run log entries include planned output paths
+    let log_file = dir.join("dryrun.log");
+    let dry_run = Command::new(BIN).current_dir(&dir).args(base).arg("--log").arg(&log_file).arg("--dry-run").output().unwrap();
+    let log_text = std::fs::read_to_string(&log_file).expect("log file written for dry-run");
+    assert!(log_text.contains("planned") && log_text.contains("out/good.pdf"), "Dry-run log should include planned output paths: {log_text}");
+
+    std::fs::remove_dir_all(dir).unwrap();
+}
