@@ -8,7 +8,7 @@ use pdfcraft_cos::{Dict, Document, ObjRef, Object, Stream};
 
 use super::extract::{appearance_matrix, bbox_of, matrix_of, page_content, res_dict};
 use super::util::{Ctx, image_codec};
-use crate::stroke::{INITIAL_MITER_LIMIT, flat, join_miters, miter_reach};
+use crate::stroke::{INITIAL_MITER_LIMIT, fill_box, join_miters, stroke_box, union};
 use crate::verify::limits::{MAX_CLIP_SUBPATHS, MAX_DEPTH, MAX_GS_STACK, MAX_HOLES, MAX_PIXELS};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -41,10 +41,6 @@ pub(super) struct Pen {
 
 /// The pen a page starts with (ISO 32000-2 Table 51): a width of 1, mitered joins, a limit of 10.
 const INITIAL_PEN: Pen = Pen { width: 1.0, miters: true, miter_limit: INITIAL_MITER_LIMIT };
-
-/// The least a stroke reaches from its path in device space: the thinnest line still paints a
-/// device pixel, half a point at 72 dots an inch.
-const MIN_STROKE_REACH: f64 = 0.5;
 
 pub(super) struct Geo<'a> {
     pub(super) doc: &'a Document,
@@ -296,25 +292,11 @@ impl Geo<'_> {
     /// A path-painting operator `o` ends the current path, whose painted points lie in `bbox`:
     /// report what it paints over a region, and let an even-odd clip add its holes to `gs`.
     fn paint_path(&mut self, o: &[u8], gs: &mut Gs, sub: &[Vec<(f64, f64)>], ops: &[Op], clip: Option<bool>, bbox: Option<[f64; 4]>) {
-        // A stroke paints around its path: half the width on each side, `√2` times that at a
-        // projecting cap's corner or further at its sharpest mitered corner (`miter_reach`),
-        // through the CTM, and at least `MIN_STROKE_REACH`. A fill of a
-        // path with no width or height (or none to the renderer, `flat`) still paints the pixels it
-        // touches (ISO 32000-2 §10.7.4):
-        // `MIN_STROKE_REACH` across there.
+        // A stroke and a fill paint the boxes the walk measures them by (`stroke_box`, `fill_box`).
         let strokes = matches!(o, b"S" | b"s" | b"B" | b"B*" | b"b" | b"b*");
-        let paints = bbox.map(|b| {
-            if !strokes {
-                let across = if flat(b[0], b[2]) { MIN_STROKE_REACH } else { 0.0 };
-                let up = if flat(b[1], b[3]) { MIN_STROKE_REACH } else { 0.0 };
-                return [b[0] - across, b[1] - up, b[2] + across, b[3] + up];
-            }
-            let [a, bb, c, d, _, _] = gs.ctm.0;
-            let miter = if gs.pen.miters { miter_reach(ops, matches!(o, b"s" | b"b" | b"b*"), gs.pen.miter_limit) } else { 1.0 };
-            let half = gs.pen.width / 2.0 * miter.max(std::f64::consts::SQRT_2);
-            let (across, up) = ((half * a.hypot(c)).max(MIN_STROKE_REACH), (half * bb.hypot(d)).max(MIN_STROKE_REACH));
-            [b[0] - across, b[1] - up, b[2] + across, b[3] + up]
-        });
+        let closes = matches!(o, b"s" | b"b" | b"b*");
+        let paints =
+            bbox.map(|b| if strokes { stroke_box(b, ops, closes, &gs.ctm, gs.pen.width, gs.pen.miters, gs.pen.miter_limit) } else { fill_box(b) });
         if o != b"n"
             && let Some(b) = paints
         {
@@ -547,14 +529,6 @@ fn draw(op: &Op, ctm: &Matrix, current: bool, drawn: &mut Drawn) {
             drawn.closed |= o == b"re" && grown.is_some();
             drawn.at = union(drawn.at, grown);
         }
-    }
-}
-
-/// The box covering `a` and `b`, either of which may be none.
-fn union(a: Option<[f64; 4]>, b: Option<[f64; 4]>) -> Option<[f64; 4]> {
-    match (a, b) {
-        (Some(a), Some(b)) => Some([a[0].min(b[0]), a[1].min(b[1]), a[2].max(b[2]), a[3].max(b[3])]),
-        (a, b) => a.or(b),
     }
 }
 

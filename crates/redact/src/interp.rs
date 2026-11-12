@@ -23,7 +23,7 @@ use std::rc::Rc;
 use pdfcraft_content::{Matrix, Op, Pieces, contains, num, overlaps, serialize_ops, string};
 use pdfcraft_cos::{CosError, DecodeBudget, Dict, Document, ImageBudget, MAX_PAGE_FORMS, ObjRef, Object, Stream};
 
-use crate::stroke::{INITIAL_MITER_LIMIT, flat, join_miters, miter_reach};
+use crate::stroke::{INITIAL_MITER_LIMIT, fill_box, join_miters, stroke_box, union};
 use crate::{RedactError, Report, image, page_streams, tags};
 use pdfcraft_fonts::pdf::Metrics;
 
@@ -112,28 +112,6 @@ struct Gs {
     /// (`M`, `/ML`): a mitered corner reaches past half the width, up to the limit.
     miters: bool,
     miter_limit: f64,
-}
-
-/// The least a stroke reaches from its path, in device space: the thinnest line (`0 w`) still
-/// paints a device pixel, half a point at 72 dots an inch.
-const MIN_STROKE_REACH: f64 = 0.5;
-
-/// The device-space box a fill of a path with box `path` paints: its own, but [`MIN_STROKE_REACH`]
-/// across where it has no width or height (or none to the renderer, [`flat`]), as the renderer
-/// paints the pixels such a path touches (ISO 32000-2 §10.7.4). A box of any extent is as it is, so a fill that only touches a region
-/// isn't taken for under it.
-fn fill_box(path: [f64; 4]) -> [f64; 4] {
-    let across = if flat(path[0], path[2]) { MIN_STROKE_REACH } else { 0.0 };
-    let up = if flat(path[1], path[3]) { MIN_STROKE_REACH } else { 0.0 };
-    [path[0] - across, path[1] - up, path[2] + across, path[3] + up]
-}
-
-/// The box covering `a` and `b`, either of which may be none.
-fn union(a: Option<[f64; 4]>, b: Option<[f64; 4]>) -> Option<[f64; 4]> {
-    match (a, b) {
-        (Some(a), Some(b)) => Some([a[0].min(b[0]), a[1].min(b[1]), a[2].max(b[2]), a[3].max(b[3])]),
-        (a, b) => a.or(b),
-    }
 }
 
 /// What processing a scope produced.
@@ -715,7 +693,9 @@ impl Walk {
         // A stroke paints around its path: a line with no height under a region, or a thick one
         // beside it, paints there. So does a fill of a path with no height or width. A `W`/`W*`
         // makes the path as constructed the clip: what the paint reaches is the painting's alone.
-        let paints = path_box.map(|b| if strokes { self.stroke_box(b, &body, closes) } else { fill_box(b) });
+        let gs = &self.gs;
+        let paints =
+            path_box.map(|b| if strokes { stroke_box(b, &body, closes, &gs.ctm, gs.line_width, gs.miters, gs.miter_limit) } else { fill_box(b) });
         let hit = scope.mode == Mode::Apply && o != b"n" && paints.is_some_and(|b| scope.hits(b));
         if !hit {
             // The paint survives, so the pattern it draws with is still in use. `n` paints
@@ -740,19 +720,6 @@ impl Walk {
         }
         // Partial vector redaction must not retain underlying drawing commands
         // behind clipping (F-008). Refuse partial clip retention and remove the path.
-    }
-
-    /// The device-space box a stroke of the path `ops`, in box `path`, paints: half the line width
-    /// on each side, `√2` times that at a projecting cap's corner, or further at its sharpest
-    /// mitered corner ([`miter_reach`]; `closes`: the painting operator closes the path), through
-    /// the CTM (a disc of radius `r` reaches `r·√(a²+c²)` across and `r·√(b²+d²)` up), and at least
-    /// [`MIN_STROKE_REACH`].
-    fn stroke_box(&self, path: [f64; 4], ops: &[Op], closes: bool) -> [f64; 4] {
-        let [a, b, c, d, _, _] = self.gs.ctm.0;
-        let miter = if self.gs.miters { miter_reach(ops, closes, self.gs.miter_limit) } else { 1.0 };
-        let half = self.gs.line_width / 2.0 * miter.max(std::f64::consts::SQRT_2);
-        let (across, up) = ((half * a.hypot(c)).max(MIN_STROKE_REACH), (half * b.hypot(d)).max(MIN_STROKE_REACH));
-        [path[0] - across, path[1] - up, path[2] + across, path[3] + up]
     }
 
     fn graphics_state(&mut self, doc: &Document, scope: &mut Scope<'_>, op: &Op) {

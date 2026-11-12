@@ -1,10 +1,46 @@
-//! How far a stroke's mitered joins reach past its path. Shared by the walk and the proof, as the
-//! content parser and `Matrix` are: it is geometry, not a reading of the page.
+//! The box a path's paint covers, and how far a stroke's mitered joins reach past its path. Shared
+//! by the walk and the proof, as the content parser and `Matrix` are: it is geometry, not a reading
+//! of the page, and the proof must find what the walk misses by the same measure.
 
-use pdfcraft_content::Op;
+use pdfcraft_content::{Matrix, Op};
 
 /// The initial miter limit (ISO 32000-2 Table 51).
 pub(crate) const INITIAL_MITER_LIMIT: f64 = 10.0;
+
+/// The least a stroke reaches from its path, in device space: the thinnest line (`0 w`) still
+/// paints a device pixel, half a point at 72 dots an inch.
+pub(crate) const MIN_STROKE_REACH: f64 = 0.5;
+
+/// The device-space box a fill of a path with box `path` paints: its own, but [`MIN_STROKE_REACH`]
+/// across where it has no width or height (or none to the renderer, [`flat`]), as the renderer
+/// paints the pixels such a path touches (ISO 32000-2 §10.7.4). A box of any extent is as it is, so
+/// a fill that only touches a region isn't taken for under it.
+pub(crate) fn fill_box(path: [f64; 4]) -> [f64; 4] {
+    let across = if flat(path[0], path[2]) { MIN_STROKE_REACH } else { 0.0 };
+    let up = if flat(path[1], path[3]) { MIN_STROKE_REACH } else { 0.0 };
+    [path[0] - across, path[1] - up, path[2] + across, path[3] + up]
+}
+
+/// The device-space box a stroke of the path `ops`, in box `path`, paints with a line `width` wide:
+/// half the width on each side, `√2` times that at a projecting cap's corner, or further at its
+/// sharpest mitered corner where the joins are mitered (`miters`, [`miter_reach`] within `limit`;
+/// `closes`: the painting operator closes the path), through `ctm` (a disc of radius `r` reaches
+/// `r·√(a²+c²)` across and `r·√(b²+d²)` up), and at least [`MIN_STROKE_REACH`].
+pub(crate) fn stroke_box(path: [f64; 4], ops: &[Op], closes: bool, ctm: &Matrix, width: f64, miters: bool, limit: f64) -> [f64; 4] {
+    let [a, b, c, d, _, _] = ctm.0;
+    let miter = if miters { miter_reach(ops, closes, limit) } else { 1.0 };
+    let half = width / 2.0 * miter.max(std::f64::consts::SQRT_2);
+    let (across, up) = ((half * a.hypot(c)).max(MIN_STROKE_REACH), (half * b.hypot(d)).max(MIN_STROKE_REACH));
+    [path[0] - across, path[1] - up, path[2] + across, path[3] + up]
+}
+
+/// The box covering `a` and `b`, either of which may be none.
+pub(crate) fn union(a: Option<[f64; 4]>, b: Option<[f64; 4]>) -> Option<[f64; 4]> {
+    match (a, b) {
+        (Some(a), Some(b)) => Some([a[0].min(b[0]), a[1].min(b[1]), a[2].max(b[2]), a[3].max(b[3])]),
+        (a, b) => a.or(b),
+    }
+}
 
 /// Whether the line join `j` (or an ExtGState's `/LJ`) sets is mitered: 0, and any value but the
 /// round 1 and the bevelled 2, as the renderer reads it (its integer part).
