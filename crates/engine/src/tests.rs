@@ -15364,9 +15364,10 @@ fn efopen_attachment_pdf_with(algorithm: pdfcraft_cos::Algorithm, password: &str
 }
 
 /// The permissions password unlocks an attachment-only-encrypted document of either revision,
-/// and the document then takes a page edit, its full refresh and a save. The renderer reads R2–R4
-/// files only with the user password (ISO 32000-2 §7.6.4.3.3, Algorithm 7 recovers it from the
-/// owner password), so it is given that one; the save reopens with the password entered.
+/// and the document then takes a page edit, its full refresh, a save and a full rewrite, undo and
+/// redo. The renderer reads R2–R4 files only with the user password (ISO 32000-2 §7.6.4.3.3,
+/// Algorithm 7 recovers it from the owner password), so it is given that one; the save reopens
+/// with the password entered.
 #[test]
 fn the_permissions_password_of_attachment_only_encryption_keeps_editing_and_saving() {
     for algorithm in [pdfcraft_cos::Algorithm::Aes128, pdfcraft_cos::Algorithm::Aes256] {
@@ -15382,6 +15383,8 @@ fn the_permissions_password_of_attachment_only_encryption_keeps_editing_and_savi
         let saved = s.save_bytes(id).unwrap();
         s.check_save(id, &saved).unwrap_or_else(|e| panic!("{algorithm:?}: {e}"));
         s.mark_saved(id, saved, None).unwrap_or_else(|e| panic!("{algorithm:?}: {e}"));
+        let rewritten = s.save_full_bytes(id).unwrap();
+        s.check_save(id, &rewritten).unwrap_or_else(|e| panic!("{algorithm:?}, rewritten: {e}"));
         s.undo(id).unwrap_or_else(|e| panic!("{algorithm:?}: {e}"));
         s.redo(id).unwrap_or_else(|e| panic!("{algorithm:?}: {e}"));
         let doc = s.get(id).unwrap();

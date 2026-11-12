@@ -391,36 +391,31 @@ pub const ATTACHMENT_NEEDS_PASSWORD: &str = "the attachment is encrypted: enter 
 const MAX_ATTACHMENT_BYTES: usize = 1 << 30;
 
 /// Fetch an attachment's bytes (decoded), at most [`MAX_ATTACHMENT_BYTES`]. A damaged stream (Flate
-/// data cut short, say) is an error, never the part that decoded passed off as the whole file.
-/// The document is read through the document model, which decrypts each string and stream of an
-/// encrypted one with the crypt filter that applies to it (ISO 32000-2 §7.6.6, §7.4.10). Opened
-/// without the password its embedded files need (`/AuthEvent /EFOpen`), an attachment stored in
-/// the clear reads, and one encrypted for that password is [`ATTACHMENT_NEEDS_PASSWORD`], never
-/// its encrypted bytes.
+/// data cut short, say) is an error, never the part that decoded passed off as the whole file:
+/// the bytes are exported as a file. An encrypted document is read through the document model,
+/// which decrypts each string and stream with the crypt filter that applies to it (ISO 32000-2
+/// §7.6.6, §7.4.10). Opened without the password its embedded files need (`/AuthEvent /EFOpen`),
+/// an attachment stored in the clear reads, and one encrypted for that password is
+/// [`ATTACHMENT_NEEDS_PASSWORD`], never its encrypted bytes.
 pub fn attachment_data(bytes: &[u8], password: Option<&str>, att: &Attachment) -> Result<Vec<u8>, String> {
     let run = || -> Result<Vec<u8>, String> {
         // lopdf can't read a document opened without its key at all, and with the key it reads
         // the strings of one whose crypt filters differ (`/StrF /Identity`, say) as encrypted.
-        // It also passes the decoded part of a damaged stream as the whole: it is only the
-        // fallback for a file the model can't open.
-        if let Ok(model) = pdfcraft_cos::Document::open_with_password(std::sync::Arc::new(bytes.to_vec()), password) {
+        if let Ok(model) = pdfcraft_cos::Document::open_with_password(std::sync::Arc::new(bytes.to_vec()), password)
+            && model.security().is_some()
+        {
             return model_attachment_data(model, att);
         }
         let options = load_options(password);
         let doc = Document::load_mem_with_options(bytes, options).map_err(|e| e.to_string())?;
         let insp = Inspector::new(&doc);
         let stream = insp.resolve(embedded_file(&insp, att)?);
-        let stream = stream.as_stream().map_err(|e| e.to_string())?;
-        if stream.dict.get(b"Filter").is_ok() {
-            stream.decompressed_content_with_limit(MAX_ATTACHMENT_BYTES).map_err(|e| e.to_string())
-        } else {
-            Ok(stream.content.clone())
-        }
+        strict_decoded(stream.as_stream().map_err(|e| e.to_string())?)
     };
     catch_unwind(AssertUnwindSafe(run)).unwrap_or_else(|p| Err(format!("reading the attachment crashed: {}", crate::raster::panic_message(&p))))
 }
 
-/// [`attachment_data`] for `model`. An encrypted one's data is decrypted as it loads; opened
+/// [`attachment_data`] for `model`, an encrypted document. Its data is decrypted as it loads; opened
 /// without the password its embedded files need, the stream of an attachment that password
 /// encrypts is held as stored ([`pdfcraft_cos::Document::reads_as_stored`]), and one that no crypt
 /// filter encrypts (`/Identity`, ISO 32000-2 §7.6.6, §7.4.10) is in the clear and reads.
@@ -436,6 +431,39 @@ fn model_attachment_data(model: pdfcraft_cos::Document, att: &Attachment) -> Res
         return Err(ATTACHMENT_NEEDS_PASSWORD.into());
     }
     // Strict: the bytes are exported as a file, so a damaged stream must not pass for a shorter one.
+    stream.decoded_strict_within(MAX_ATTACHMENT_BYTES).map_err(|e| e.to_string())
+}
+
+/// `stream`'s data decoded as the document model decodes an attachment's
+/// ([`pdfcraft_cos::Stream::decoded_strict_within`], at most [`MAX_ATTACHMENT_BYTES`]): lopdf's own
+/// decoding returns what decoded before damage as the whole. Only `/Filter` and `/DecodeParms`
+/// matter to it, so only they are carried over; `/Crypt` was applied when the object loaded.
+fn strict_decoded(stream: &lopdf::Stream) -> Result<Vec<u8>, String> {
+    let name = |o: &Object| o.as_name().ok().map(|n| pdfcraft_cos::Object::Name(n.to_vec()));
+    let parms = |o: &Object| match o {
+        Object::Dictionary(d) => {
+            let mut out = pdfcraft_cos::Dict::new();
+            for key in [&b"Predictor"[..], b"Colors", b"BitsPerComponent", b"Columns", b"EarlyChange"] {
+                if let Ok(Object::Integer(v)) = d.get(key) {
+                    out.set(key.to_vec(), *v);
+                }
+            }
+            pdfcraft_cos::Object::Dict(out)
+        }
+        _ => pdfcraft_cos::Object::Null,
+    };
+    let mut dict = pdfcraft_cos::Dict::new();
+    match stream.dict.get(b"Filter") {
+        Ok(Object::Array(a)) => dict.set(b"Filter".to_vec(), a.iter().map(|f| name(f).unwrap_or(pdfcraft_cos::Object::Null)).collect::<Vec<_>>()),
+        Ok(other) => dict.set(b"Filter".to_vec(), name(other).unwrap_or(pdfcraft_cos::Object::Null)),
+        Err(_) => {}
+    }
+    match stream.dict.get(b"DecodeParms") {
+        Ok(Object::Array(a)) => dict.set(b"DecodeParms".to_vec(), a.iter().map(parms).collect::<Vec<_>>()),
+        Ok(other) => dict.set(b"DecodeParms".to_vec(), parms(other)),
+        Err(_) => {}
+    }
+    let stream = pdfcraft_cos::Stream { dict, raw: stream.content.clone().into() };
     stream.decoded_strict_within(MAX_ATTACHMENT_BYTES).map_err(|e| e.to_string())
 }
 

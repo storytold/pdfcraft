@@ -3080,32 +3080,29 @@ fn an_attachment_stored_in_the_clear_reads_without_the_password() {
     }
 }
 
-/// A Flate stream cut short: `words` compressed, then truncated to half its length.
-fn truncated_flate(words: &[u8]) -> Vec<u8> {
-    use std::io::Write as _;
-    let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
-    z.write_all(words).unwrap();
-    let mut full = z.finish().unwrap();
-    full.truncate(full.len() / 2);
-    full
-}
-
 /// An attachment whose Flate data is cut short is an error, encrypted or not, never the part that
-/// decoded passed off as the whole file (ISO 32000-2 §7.4.4: the stream is damaged).
+/// decoded passed off as the whole file (ISO 32000-2 §7.4.4: the stream is damaged). Intact, the
+/// same attachment reads whole on both paths.
 #[test]
 fn a_truncated_attachment_is_an_error_not_its_decoded_part() {
-    let words: Vec<u8> = (0..20_000u32).flat_map(|i| format!("line {i} of the attached file\n").into_bytes()).collect();
-    let damaged = truncated_flate(&words);
-    // Unencrypted: read by lopdf.
-    let plain = pdfcraft_testkit::Pdf::new()
-        .obj("<< /Type /Catalog /Pages 2 0 R /Names << /EmbeddedFiles << /Names [(note.txt) 4 0 R] >> >> >>")
-        .obj("<< /Type /Pages /Kids [3 0 R] /Count 1 >>")
-        .obj("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >>")
-        .obj("<< /Type /Filespec /F (note.txt) /EF << /F 5 0 R >> >>")
-        .stream("/Type /EmbeddedFile /Filter /FlateDecode", damaged.clone())
-        .build();
-    // Encrypted for its attachments alone (`/EFOpen`) and read with the password: by the model.
-    let mut protected = pdfcraft_cos::Document::open(Arc::new(plain.clone())).unwrap();
+    use std::io::Write as _;
+    let words: Vec<u8> = (0..20_000u32)
+        .flat_map(|i| {
+            format!(
+                "line {i} of the attached file
+"
+            )
+            .into_bytes()
+        })
+        .collect();
+    let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+    z.write_all(&words).unwrap();
+    let intact = z.finish().unwrap();
+    let damaged = intact.get(..intact.len() / 2).unwrap().to_vec();
+    let mut protected = pdfcraft_cos::Document::open(Arc::new(
+        pdfcraft_testkit::Pdf::new().obj("<< /Type /Catalog /Pages 2 0 R >>").obj("<< /Type /Pages /Kids [] /Count 0 >>").build(),
+    ))
+    .unwrap();
     protected
         .set_encryption(&pdfcraft_cos::NewEncryption {
             algorithm: pdfcraft_cos::Algorithm::Aes256,
@@ -3119,27 +3116,38 @@ fn a_truncated_attachment_is_an_error_not_its_decoded_part() {
     let handler = protected.output_handler().unwrap();
     let d = handler.dict();
     let hex = |b: &[u8]| b.iter().map(|b| format!("{b:02X}")).collect::<String>();
-    let encrypted = pdfcraft_testkit::Pdf::new()
-        .obj("<< /Type /Catalog /Pages 2 0 R /Names << /EmbeddedFiles << /Names [(note.txt) 4 0 R] >> >> >>")
-        .obj("<< /Type /Pages /Kids [3 0 R] /Count 1 >>")
-        .obj("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >>")
-        .obj("<< /Type /Filespec /F (note.txt) /EF << /F 5 0 R >> >>")
-        .stream("/Type /EmbeddedFile /Filter /FlateDecode", handler.encrypt_string(5, 0, &damaged))
-        .obj(format!(
-            "<< /Filter /Standard /V 5 /R 6 /O <{}> /U <{}> /OE <{}> /UE <{}> /Perms <{}> /P {} /CF << /StdCF << /AuthEvent /EFOpen /CFM /AESV3 /Length 32 >> >> /StmF /Identity /StrF /Identity /EFF /StdCF >>",
-            hex(&d.o),
-            hex(&d.u),
-            hex(&d.oe),
-            hex(&d.ue),
-            hex(&d.perms),
-            d.p
-        ))
-        .trailer_entry("/Encrypt 6 0 R /ID [<00> <00>]")
-        .build();
-    for (label, bytes, password) in [("plain", plain, None), ("encrypted", encrypted, Some(ATTACHMENT_PASSWORD))] {
-        let bytes = Arc::new(bytes);
-        let info = inspect(bytes.clone(), password).expect("opens");
-        let read = attachment_data(&bytes, password, &info.attachments[0]);
-        assert!(read.is_err(), "{label}: {:?} bytes of {} passed as the file", read.map(|r| r.len()), words.len());
+    // Unencrypted, read by lopdf; or encrypted for its attachments alone (`/EFOpen`) and read
+    // with the password, by the model.
+    let document = |flate: &[u8], encrypted: bool| {
+        let pdf = pdfcraft_testkit::Pdf::new()
+            .obj("<< /Type /Catalog /Pages 2 0 R /Names << /EmbeddedFiles << /Names [(note.txt) 4 0 R] >> >> >>")
+            .obj("<< /Type /Pages /Kids [3 0 R] /Count 1 >>")
+            .obj("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >>")
+            .obj("<< /Type /Filespec /F (note.txt) /EF << /F 5 0 R >> >>");
+        if !encrypted {
+            return pdf.stream("/Type /EmbeddedFile /Filter /FlateDecode", flate).build();
+        }
+        pdf.stream("/Type /EmbeddedFile /Filter /FlateDecode", handler.encrypt_string(5, 0, flate))
+            .obj(format!(
+                "<< /Filter /Standard /V 5 /R 6 /O <{}> /U <{}> /OE <{}> /UE <{}> /Perms <{}> /P {} /CF << /StdCF << /AuthEvent /EFOpen /CFM /AESV3 /Length 32 >> >> /StmF /Identity /StrF /Identity /EFF /StdCF >>",
+                hex(&d.o),
+                hex(&d.u),
+                hex(&d.oe),
+                hex(&d.ue),
+                hex(&d.perms),
+                d.p
+            ))
+            .trailer_entry("/Encrypt 6 0 R /ID [<00> <00>]")
+            .build()
+    };
+    for (encrypted, password) in [(false, None), (true, Some(ATTACHMENT_PASSWORD))] {
+        let read = |flate: &[u8]| {
+            let bytes = Arc::new(document(flate, encrypted));
+            let info = inspect(bytes.clone(), password).expect("opens");
+            attachment_data(&bytes, password, &info.attachments[0])
+        };
+        assert_eq!(read(&intact).as_deref(), Ok(&words[..]), "encrypted: {encrypted}");
+        let damaged = read(&damaged);
+        assert!(damaged.is_err(), "encrypted: {encrypted}: {:?} bytes of {} passed as the file", damaged.map(|r| r.len()), words.len());
     }
 }
