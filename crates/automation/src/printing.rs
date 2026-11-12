@@ -118,7 +118,7 @@ fn spool_job(
     title: String,
     duplex: Option<spool::Duplex>,
     media: Option<&str>,
-    raster: Option<print::Raster>,
+    raster: Option<&print::Raster>,
     sheets: &[print::Sheet],
 ) -> Result<spool::Job> {
     let options = match a.get("options") {
@@ -338,12 +338,19 @@ impl Automation {
         let (paper, media) = resolve_paper(a.opt_str("paper")?, resolved_printer.as_deref())?;
         // Print as image (Acrobat's Advanced Print Setup): pictures at `dpi`, grey when
         // `grayscale` is also asked for.
-        let raster = if a.opt_bool("as_image")?.unwrap_or(false) {
+        // App-managed colour converts those pictures into the printer's profile, so it prints
+        // as image whether or not as_image is given.
+        let colour = self.managed_colour(a)?;
+        let as_image = match a.opt_bool("as_image")? {
+            Some(false) if colour.is_some() => return Err(bad("color_management app prints the pages as images: leave out as_image false")),
+            asked => asked.unwrap_or(false) || colour.is_some(),
+        };
+        let raster = if as_image {
             let dpi = a.opt_num("dpi")?.unwrap_or(300.0);
             if !(72.0..=600.0).contains(&dpi) {
                 return Err(bad("dpi must be between 72 and 600"));
             }
-            Some(print::Raster { dpi, grayscale: a.opt_bool("grayscale")?.unwrap_or(false) })
+            Some(print::Raster { dpi, grayscale: a.opt_bool("grayscale")?.unwrap_or(false), colour })
         } else {
             None
         };
@@ -361,24 +368,60 @@ impl Automation {
         let settings = print::Settings { pages, paper, orientation, layout, content, raster, crops: Vec::new(), area };
         let laid_out = print::layout(&sizes, &settings).map_err(|e| bad(e.to_string()))?;
         let sheets = laid_out.len();
+        // Where it goes is checked before the Will Print actions run, so a call that can't print
+        // doesn't change the document.
+        let destination = match (a.opt_str("path")?, printer) {
+            (Some(p), None) => Destination::File(self.resolve(p, true)?),
+            (None, Some(printer)) => {
+                let actual_printer = resolved_printer.as_deref().unwrap_or(printer);
+                Destination::Printer(spool_job(
+                    a,
+                    actual_printer,
+                    self.doc(a)?.name.clone(),
+                    duplex,
+                    media.as_deref(),
+                    settings.raster.as_ref(),
+                    &laid_out,
+                )?)
+            }
+            _ => return Err(bad("pass either path (save the print-ready PDF) or printer (a name from printers, or \"default\")")),
+        };
+        // The document's Will Print actions run first: what they change is printed (#269).
+        let scripts = if self.doc(a)?.allows_printing() {
+            self.session.run_document_actions(id, pdfcraft_engine::js::DocumentScriptEvent::WillPrint)
+        } else {
+            Default::default()
+        };
         let bytes = self.session.print_pdf(id, &settings).map_err(failed)?;
         let mut out = json!({ "sheets": sheets, "pages": settings.pages.len(), "bytes": bytes.len() });
-        match (a.opt_str("path")?, printer) {
-            (Some(p), None) => {
-                let path = self.resolve(p, true)?;
+        if let Some(c) = settings.raster.as_ref().and_then(|r| r.colour.as_ref()) {
+            out["color_management"] =
+                json!({ "profile": c.profile.name(), "rendering_intent": c.intent.id(), "black_point_compensation": c.black_point });
+        }
+        if !scripts.is_empty() {
+            out["will_print"] = crate::a11y::form_tools::js_output_json(&scripts);
+        }
+        match destination {
+            Destination::File(path) => {
                 write_atomic(&path, &bytes)?;
                 out["path"] = json!(path.to_string_lossy());
             }
-            (None, Some(printer)) => {
-                let actual_printer = resolved_printer.as_deref().unwrap_or(printer);
-                let mut job = spool_job(a, actual_printer, self.doc(a)?.name.clone(), duplex, media.as_deref(), settings.raster, &laid_out)?;
-                let bytes = pdfcraft_engine::spooler::spooler_copy(bytes, &mut job);
+            Destination::Printer(mut job) => {
+                // A GDI (v3) driver gets transparent sheets flattened (#6155, #5838, #5940); XPS
+                // (v4) drivers print them as they are.
+                let flatten = job.printer.as_deref().is_some_and(spool::gdi_driver);
+                let bytes = pdfcraft_engine::spooler::spooler_copy(bytes, &mut job, flatten);
                 out["job"] = json!(spool::submit(&bytes, &job).map_err(|e| failed(e.to_string()))?);
             }
-            _ => return Err(bad("pass either path (save the print-ready PDF) or printer (a name from printers, or \"default\")")),
         }
         Ok(out)
     }
+}
+
+/// Where `doc_print` sends the sheets: a print-ready PDF file, or a printer's queue.
+enum Destination {
+    File(std::path::PathBuf),
+    Printer(spool::Job),
 }
 
 /// "WxH" with a unit (in, mm, cm or pt) as a portrait paper size in points; each side 1 to 200
@@ -518,10 +561,10 @@ mod tests {
     /// grayscale, which Microsoft Print to PDF keeps no setting for and the job was refused.
     #[test]
     fn grey_pictures_dont_ask_the_driver_for_grayscale() {
-        let grey = print::Raster { dpi: 300.0, grayscale: true };
-        let colour = print::Raster { dpi: 300.0, grayscale: false };
+        let grey = print::Raster { dpi: 300.0, grayscale: true, colour: None };
+        let colour = print::Raster { dpi: 300.0, grayscale: false, colour: None };
         let job = |args: Value, raster: Option<print::Raster>| {
-            spool_job(&Args(&args), "Office", String::new(), None, Some("Letter"), raster, &[]).unwrap().grayscale
+            spool_job(&Args(&args), "Office", String::new(), None, Some("Letter"), raster.as_ref(), &[]).unwrap().grayscale
         };
         assert!(job(json!({ "grayscale": true }), None), "vector pages: the driver makes them grey");
         assert!(!job(json!({ "grayscale": true }), Some(grey)), "grey pictures: nothing for the driver to do");
