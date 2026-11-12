@@ -1159,15 +1159,24 @@ impl XHost {
         if !self.owns_som(node) {
             return true;
         }
-        let owners = self.som_owners.get_or_init(|| {
+        self.path_owners().get(&n.som).is_some_and(|o| o.count > 1 && o.unnamed)
+    }
+
+    /// Who owns each SOM path among the live objects ([`XHost::som_owners`]): counted the first
+    /// time a script of the event asks, on the form it started from, and again after the objects
+    /// change. An object owns its path unless it is gone, the synthetic root, or takes its
+    /// parent's path ([`XHost::owns_som`]).
+    fn path_owners(&self) -> &super::host::SomOwnerCounts {
+        self.som_owners.get_or_init(|| {
             #[cfg(test)]
             OWNERS_COUNTED.with(|c| c.set(c.get().saturating_add(self.nodes.len())));
             let mut owners: super::host::SomOwnerCounts = HashMap::new();
             for (i, m) in self.nodes.iter().enumerate() {
                 if !m.gone && m.kind != XfaKind::Form && self.owns_som(i) {
-                    let c = owners.entry(Arc::clone(&m.som)).or_insert((0, false));
-                    c.0 = c.0.saturating_add(1);
-                    c.1 |= m.unnamed;
+                    let o = owners.entry(Arc::clone(&m.som)).or_insert(super::host::PathOwners { count: 0, unnamed: false, last: i });
+                    o.count = o.count.saturating_add(1);
+                    o.unnamed |= m.unnamed;
+                    o.last = i;
                 }
             }
             let owners = Arc::new(owners);
@@ -1177,8 +1186,7 @@ impl XHost {
                 super::host::remember_owners(root, &owners);
             }
             owners
-        });
-        owners.get(&n.som).is_some_and(|&(c, unnamed)| c > 1 && unnamed)
+        })
     }
 
     /// Whether node `node`'s SOM path is not simply its parent's (as an unnamed subform's, area's
@@ -1283,29 +1291,13 @@ impl XHost {
         if sets.is_empty() {
             return;
         }
-        // The objects at the paths the changes name, found in one walk: for each path, the last
-        // object that owns it, how many own it and whether one of them is unnamed. An object
-        // without a SOM path of its own ([`XHost::shares_som`]) gets none of them: one whose
-        // path is its parent's, or one of several owners of a path when one of them is unnamed.
-        // Only the named paths are counted, not every path of the form ([`XHost::som_owners`]),
-        // as this runs before every script of an event.
-        let mut at: HashMap<&str, (Option<usize>, u32, bool)> = sets.iter().map(|p| (p.som.as_str(), (None, 0, false))).collect();
-        for (i, n) in self.nodes.iter().enumerate() {
-            if n.gone || n.kind == XfaKind::Form {
-                continue;
-            }
-            let Some(e) = at.get_mut(&*n.som) else { continue };
-            if self.owns_som(i) {
-                *e = (Some(i), e.1.saturating_add(1), e.2 || n.unnamed);
-            }
-        }
-        let found: Vec<(usize, &super::XfaPropSet)> = sets
-            .iter()
-            .filter_map(|p| match at.get(p.som.as_str()) {
-                Some(&(Some(i), owners, unnamed)) if !(owners > 1 && unnamed) => Some((i, p)),
-                _ => None,
-            })
-            .collect();
+        // Each change goes to the object owning its path, the last one where named objects share
+        // it, and to none where one of its owners is unnamed or the object takes its parent's
+        // path ([`XHost::shares_som`]): the changes there are not its own. Found by the counts of
+        // who owns each path, made once for the scripts of an event, as this runs before each.
+        let owners = self.path_owners();
+        let found: Vec<(usize, &super::XfaPropSet)> =
+            sets.iter().filter_map(|p| owners.get(p.som.as_str()).filter(|o| !(o.count > 1 && o.unnamed)).map(|o| (o.last, p))).collect();
         for (i, p) in found {
             let key = change_key(&p.path, p.attr.as_deref());
             self.note_key(i, if p.copied { format!("={key}") } else { key });

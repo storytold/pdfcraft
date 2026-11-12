@@ -1393,32 +1393,41 @@ fn a_write_to_one_of_two_named_objects_given_one_som_path_is_kept() {
 }
 
 /// The changes earlier scripts of an event made are put in each script's copy of the form
-/// before it runs (`XHost::preset`): on the objects whose SOM path they name, never on one
-/// without a path of its own (an unnamed field beside another, which the form keeps no change
-/// for), and found by those paths alone. Counting who owns every path of the form, as telling
-/// one write apart does, cost each script a walk of the whole form: on Ontario Works 0983 (1,571
-/// opening scripts) it added more than a second to opening.
+/// before it runs (`XHost::preset`): on the object whose SOM path they name (the last of named
+/// objects given one path), never on one without a path of its own (an unnamed field beside
+/// another, which the form keeps no change for). The objects are found by who owns each path,
+/// counted once for the scripts of an event: counting the whole form again before each script
+/// added more than a second to opening Ontario Works 0983 (1,571 opening scripts).
 #[test]
-fn changes_from_earlier_scripts_are_put_on_their_objects_without_counting_every_path() {
+fn changes_from_earlier_scripts_are_put_on_their_objects_counting_the_paths_once() {
     use super::super::XfaPropSet;
     use super::take_owners_counted;
     let unnamed = || XfaNode { name: "field".into(), unnamed: true, ..node("field", XfaKind::Field, &[], vec![]) };
     let mut root = form();
-    root.children.extend([unnamed(), unnamed()]);
+    root.children.extend([unnamed(), unnamed(), node("twin", XfaKind::Field, &[], vec![]), node("twin", XfaKind::Field, &[], vec![])]);
     root.children.extend((0..500).map(|i| node(&format!("f{i}"), XfaKind::Field, &[], vec![])));
+    let root = Arc::new(root);
     let doc = XfaDoc::default();
-    let mut h = super::super::XHost::new(Arc::new(root), false, "form1[0].plain[0]", &doc);
     let set = |som: &str| XfaPropSet { som: som.into(), path: "font#0".into(), attr: Some("size".into()), value: "14pt".into(), copied: false };
+    let sets = [set("form1[0].plain[0]"), set("form1[0].field[0]"), set("form1[0].twin[0]"), set("form1[0].f499[0]"), set("form1[0].gone[0]")];
     let _ = take_owners_counted();
-    h.preset(&[set("form1[0].plain[0]"), set("form1[0].field[0]"), set("form1[0].f499[0]"), set("form1[0].gone[0]")]);
-    assert_eq!(take_owners_counted(), 0, "no path the changes don't name is counted");
-    let written: Vec<&str> = {
-        let mut w: Vec<&str> = h.prop_writes.keys().filter_map(|&i| h.nodes.get(i)).map(|n| &*n.som).collect();
-        w.sort_unstable();
-        w
-    };
-    assert_eq!(written, ["form1[0].f499[0]", "form1[0].plain[0]"], "the unnamed fields share their path and take none");
-    assert_eq!(super::attr(&h, h.current, "font#0", "size").as_deref(), Some("14pt"));
+    for script in 0..4 {
+        let mut h = super::super::XHost::new(Arc::clone(&root), true, "form1[0].plain[0]", &doc);
+        h.preset(&sets);
+        let counted = take_owners_counted();
+        if script == 0 {
+            assert!(counted > 500, "the first script counts the form: {counted}");
+        } else {
+            assert_eq!(counted, 0, "script {script} takes the counts");
+        }
+        let mut written: Vec<(usize, &str)> = h.prop_writes.keys().filter_map(|&i| h.nodes.get(i).map(|n| (i, &*n.som))).collect();
+        written.sort_unstable();
+        let last_twin = h.nodes.iter().rposition(|n| &*n.name == "twin").unwrap();
+        let soms: Vec<&str> = written.iter().map(|w| w.1).collect();
+        assert_eq!(soms, ["form1[0].plain[0]", "form1[0].twin[0]", "form1[0].f499[0]"], "the unnamed fields share their path and take none");
+        assert_eq!(written.get(1).map(|w| w.0), Some(last_twin), "the last of the named twins");
+        assert_eq!(super::attr(&h, h.current, "font#0", "size").as_deref(), Some("14pt"));
+    }
 }
 
 /// Who owns each SOM path, which a property write asks (`XHost::shares_som`), is counted once

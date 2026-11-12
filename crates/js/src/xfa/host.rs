@@ -45,8 +45,17 @@ pub(crate) struct HNode {
     pub(crate) items: Option<Vec<super::props::ItemList>>,
 }
 
-/// How many objects own each SOM path, and whether one of them is unnamed ([`XHost::som_owners`]).
-pub(crate) type SomOwnerCounts = HashMap<Arc<str>, (u32, bool)>;
+/// The objects of the form that own one SOM path ([`XHost::som_owners`]): how many, whether one
+/// of them is unnamed, and the last of them in document order.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct PathOwners {
+    pub(crate) count: u32,
+    pub(crate) unnamed: bool,
+    pub(crate) last: usize,
+}
+
+/// Who owns each SOM path of the form, by path.
+pub(crate) type SomOwnerCounts = HashMap<Arc<str>, PathOwners>;
 
 /// The form the last script on this thread started from: the snapshot, its nodes flattened, and
 /// who owns each of their SOM paths once a script counted them.
@@ -153,7 +162,7 @@ pub(crate) struct XHost {
     /// The writes being made are copies of a drawn edge or corner (`XHost::instantiate`), not
     /// the script's own.
     pub(crate) copying: bool,
-    /// How many live objects own each SOM path, and whether one of them is unnamed (see
+    /// Who owns each SOM path among the live objects ([`PathOwners`]; see
     /// [`XHost::shares_som`]), counted when first asked and again after the objects change (an
     /// instance added or removed); taken from the form the script started from when an earlier
     /// script of the event counted it there ([`BASE`]).
