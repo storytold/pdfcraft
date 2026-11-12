@@ -4622,6 +4622,30 @@ fn pages_export_as_png_jpeg_and_tiff() {
     assert_eq!((compression, predictor), (5, 1), "LZW, without a predictor");
 }
 
+/// Invert colours is how the reader sees the page, not part of the document: an image export
+/// keeps the document's own colours, in both inversion modes and in every image format.
+#[test]
+fn image_exports_keep_the_documents_colours_while_the_view_is_inverted() {
+    use crate::export::{Exporter, ImageFormat};
+    use pdfcraft_render::InvertPalette;
+    let formats = [ImageFormat::Png, ImageFormat::Jpeg { quality: 85 }, ImageFormat::Tiff];
+    let (mut s, id) = session_with(1);
+    let plain: Vec<Vec<u8>> = {
+        let mut ex = Exporter::new(s.get(id).unwrap());
+        formats.iter().map(|&f| ex.image(0, 72.0, f).unwrap()).collect()
+    };
+    for keep_images in [false, true] {
+        s.set_invert_palette(id, InvertPalette::PURE);
+        s.set_invert_keep_images(id, keep_images);
+        s.set_invert_colors(id, true);
+        let mut ex = Exporter::new(s.get(id).unwrap());
+        for (&format, expected) in formats.iter().zip(&plain) {
+            let exported = ex.image(0, 72.0, format).unwrap();
+            assert!(&exported == expected, "{} export with keep_images = {keep_images} differs from the document's colours", format.label());
+        }
+    }
+}
+
 /// Export ▸ Image draws several pages at once: each file is the one exporting that page alone
 /// writes, handed over in the order asked for, whatever the number of pages drawn at once.
 #[test]
