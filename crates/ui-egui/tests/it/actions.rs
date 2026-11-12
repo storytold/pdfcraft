@@ -143,9 +143,52 @@ fn test_action_spawn_non_wasm() {
     h.get_by_label("Action Wizard");
     h.get_by_label("1. Remove hidden information");
     h.get_by_label("Start").click();
-    h.run_steps(20);
-    let toast = h.state().toast.clone().unwrap().0;
-    assert!(toast.contains("Prepare for Distribution"), "Toast should contain action name: {}", toast);
+    h.run_steps(2);
+    // run_inline = false runs the action on a worker thread. A fixed number of steps does
+    // not wait for it, so poll until the run reports completion before reading output (#3919).
+    let mut waited = 0;
+    while h.state().action_run.is_some() && waited < 500 {
+        h.run_steps(1);
+        waited += 1;
+    }
+    assert!(h.state().action_run.is_none(), "the action worker never reported completion");
+    assert_eq!(h.state().toast.clone().unwrap().0, "Prepare for Distribution: 1 file done");
+    assert!(std::fs::read(dir.join("out/r.pdf")).unwrap().starts_with(b"%PDF"));
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn test_action_spawn_non_wasm_review_regression_1() {
+    let dir = std::env::temp_dir().join(format!("pdfcraft-action-spawn-review-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("out")).unwrap();
+    let src = Session::new().create_from_text("t", "Draft report").unwrap();
+    std::fs::write(dir.join("r.pdf"), &*src).unwrap();
+    let d = dir.clone();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.run_inline = false;
+        app.export_dir_override = Some(d.join("out").to_string_lossy().into_owned());
+        app.action_files_override = Some(vec![d.join("r.pdf").to_string_lossy().into_owned()]);
+        app
+    });
+    h.run_steps(2);
+    assert!(h.state_mut().execute("actions.distribution"));
+    h.run_steps(2);
+    h.get_by_label("Action Wizard");
+    h.get_by_label("1. Remove hidden information");
+    h.get_by_label("Start").click();
+    h.run_steps(2);
+    // run_inline = false runs the action on a worker thread. A fixed number of steps does
+    // not wait for it, so poll until the run reports completion before reading output (#3919).
+    let mut waited = 0;
+    while h.state().action_run.is_some() && waited < 500 {
+        h.run_steps(1);
+        waited += 1;
+    }
+    assert!(h.state().action_run.is_none(), "the action worker never reported completion");
+    assert_eq!(h.state().toast.clone().unwrap().0, "Prepare for Distribution: 1 file done");
     assert!(std::fs::read(dir.join("out/r.pdf")).unwrap().starts_with(b"%PDF"));
     std::fs::remove_dir_all(dir).unwrap();
 }
