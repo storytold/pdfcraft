@@ -29,13 +29,18 @@ pub(crate) fn identifier(xmp: &str, namespace: &str, local: &str) -> Option<Stri
     }
 }
 
-/// [`identifier`] through an XML parser; `Err` when the packet can't be parsed within the limits.
-fn parsed_identifier(xmp: &str, namespace: &str, local: &str) -> Result<Option<String>, ()> {
+/// `xmp` parsed within the depth, attribute and node limits; `None` when it can't be.
+pub(crate) fn parse(xmp: &str) -> Option<roxmltree::Document<'_>> {
     if !xml_limits_ok(xmp) {
-        return Err(());
+        return None;
     }
     let options = roxmltree::ParsingOptions { allow_dtd: false, nodes_limit: 100_000, ..Default::default() };
-    let doc = roxmltree::Document::parse_with_options(xmp, options).map_err(|_| ())?;
+    roxmltree::Document::parse_with_options(xmp, options).ok()
+}
+
+/// [`identifier`] through an XML parser; `Err` when the packet can't be parsed within the limits.
+fn parsed_identifier(xmp: &str, namespace: &str, local: &str) -> Result<Option<String>, ()> {
+    let doc = parse(xmp).ok_or(())?;
     for node in doc.descendants().filter(roxmltree::Node::is_element) {
         if let Some(value) = node.attribute((namespace, local)) {
             return Ok(Some(value.trim().to_owned()));
