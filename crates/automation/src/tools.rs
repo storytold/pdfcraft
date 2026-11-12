@@ -42,16 +42,25 @@ fn path(what: &str) -> Value {
     json!({ "type": "array", "items": { "type": "integer", "minimum": 1 }, "description": format!("{what}: 1-based positions from the top level, e.g. [2, 1] = the first child of the second bookmark.") })
 }
 
-/// A named destination's name, as destination_list gives it.
+/// A name a destination is given (destination_add, destination_rename's new_name): not empty, at
+/// most [`pdfcraft_organize::MAX_DESTINATION_NAME`] characters.
 fn destination_name(what: &str) -> Value {
-    json!({ "type": "string", "minLength": 1, "maxLength": pdfcraft_organize::MAX_DESTINATION_NAME, "description": format!("{what}: a named destination's name, as destination_list gives it.") })
+    json!({ "type": "string", "minLength": 1, "maxLength": pdfcraft_organize::MAX_DESTINATION_NAME, "description": format!("{what}: not blank, at most {} characters.", pdfcraft_organize::MAX_DESTINATION_NAME) })
 }
 
-/// destination_add's and destination_set's arguments: the destination and the place it goes to.
-fn destination_place(what: &str) -> Value {
+/// A destination the document already has, by its name as destination_list gives it. A file's
+/// own names are not held to the limits a new name is ([`destination_name`]), so a schema check
+/// must not refuse one the list returned.
+fn existing_destination(what: &str) -> Value {
+    json!({ "type": "string", "description": format!("{what}: a named destination's name, as destination_list gives it.") })
+}
+
+/// destination_add's and destination_set's arguments: the destination (`name`) and the place it
+/// goes to.
+fn destination_place(name: Value) -> Value {
     json!({
         "doc": doc(),
-        "name": destination_name(what),
+        "name": name,
         "page": { "type": "integer", "minimum": 1 },
         "top": { "type": "number", "minimum": -1000000, "maximum": 1000000, "description": "Points from the top of the displayed page." },
         "left": { "type": "number", "minimum": -1000000, "maximum": 1000000, "description": "Points from the left of the displayed page." }
@@ -494,26 +503,26 @@ pub fn tools() -> Vec<ToolDef> {
             "Add a named destination",
             "Name a place in the document, as Destinations panel ▸ New Destination does, so links, bookmarks and URLs (file.pdf#nameddest=name) can go to it. It goes to the top of the page, or to a place on it: top and left are points from the top-left of the displayed page, each optional, and a coordinate left out keeps the reader's position that way. The reader's zoom is kept. Refused when a destination already has the name. Undoable.",
         )
-        .with(schema(destination_place("Its name"), &["doc", "name", "page"])),
+        .with(schema(destination_place(destination_name("Its name")), &["doc", "name", "page"])),
         t(
             "destination_set",
             "Set a named destination",
             "Send a named destination to another place, as Destinations panel ▸ Set Destination does: page, top and left as destination_add takes them. Undoable.",
         )
-        .with(schema(destination_place("The destination"), &["doc", "name", "page"])),
+        .with(schema(destination_place(existing_destination("The destination")), &["doc", "name", "page"])),
         t(
             "destination_rename",
             "Rename a named destination",
             "Give a named destination another name, as Destinations panel ▸ Rename does; where it goes is kept. The document's own links, bookmarks and actions that name it take the new name; links from other files and URLs keep the old one. Refused when another destination has the new name. Undoable.",
         )
-        .with(schema(json!({ "doc": doc(), "name": destination_name("The destination"), "new_name": destination_name("Its new name") }), &["doc", "name", "new_name"])),
+        .with(schema(json!({ "doc": doc(), "name": existing_destination("The destination"), "new_name": destination_name("Its new name") }), &["doc", "name", "new_name"])),
         t(
             "destination_delete",
             "Delete a named destination",
             "Remove a named destination, as Destinations panel ▸ Delete does. The document's own links, bookmarks and actions that name it go to where it went instead; links from other files and URLs then go nowhere. Undoable.",
         )
         .destructive()
-        .with(schema(json!({ "doc": doc(), "name": destination_name("The destination") }), &["doc", "name"])),
+        .with(schema(json!({ "doc": doc(), "name": existing_destination("The destination") }), &["doc", "name"])),
         t(
             "bookmark_set_style",
             "Set a bookmark's style and colour",

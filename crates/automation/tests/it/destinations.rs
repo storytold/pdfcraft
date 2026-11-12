@@ -93,3 +93,21 @@ fn destination_tools_refuse_what_they_cannot_do_and_change_nothing() {
     assert!(refused(&mut a, "destination_rename", json!({ "doc": doc, "name": "Intro" })).contains("missing argument new_name"));
     assert_eq!(list(&mut a, doc), before);
 }
+
+/// The schemas hold only a new name to the name limits: a destination the file already has is
+/// picked by whatever name destination_list gives, so a schema-checking client can still set,
+/// rename or delete one whose name is longer than a new one may be.
+#[test]
+fn destination_schemas_limit_new_names_only() {
+    let tools = pdfcraft_automation::tools();
+    let arg = |tool: &str, arg: &str| tools.iter().find(|t| t.name == tool).unwrap().input_schema["properties"][arg].clone();
+    for (tool, name) in [("destination_add", "name"), ("destination_rename", "new_name")] {
+        let schema = arg(tool, name);
+        assert_eq!((&schema["minLength"], &schema["maxLength"]), (&json!(1), &json!(pdfcraft_organize::MAX_DESTINATION_NAME)), "{tool} {name}");
+    }
+    for tool in ["destination_set", "destination_rename", "destination_delete"] {
+        let schema = arg(tool, "name");
+        assert_eq!(schema["type"], "string", "{tool}");
+        assert!(schema.get("minLength").is_none() && schema.get("maxLength").is_none(), "{tool}: {schema}");
+    }
+}
