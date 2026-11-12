@@ -138,7 +138,7 @@ update the numbers.
   [#728](https://github.com/storytold/pdfcraft/issues/728),
   [#758](https://github.com/storytold/pdfcraft/issues/758),
   [#689](https://github.com/storytold/pdfcraft/issues/689) (Flatpak) predate the native face; the
-  web build still embeds only BIZ UDPGothic Regular plus the small Arabic, Hebrew, Thai and Devanagari faces.
+  web build still embeds only BIZ UDPGothic Regular plus the small Arabic, Hebrew, Thai, Devanagari, Telugu and Tamil faces.
   craft-fonts has Noto Sans CJK SC, but at 16.4 MB it is too large to embed whole; a web face needs
   a cut of it (storytold/craft-libs#213).
 - **Impact:** the second-largest language group sees a broken interface in the web build although

@@ -1207,6 +1207,32 @@ fn tamil_is_registered_and_persists() {
     assert_eq!(restored.language, "ta");
 }
 
+/// With a craft-fonts Tamil face, every Tamil translation has glyphs: with all interface faces
+/// (desktop) and with the Tamil face as the only craft-fonts face (the web build keeps it; Tamil
+/// labels must not need a Japanese, Telugu or Arabic face).
+#[test]
+fn tamil_labels_have_glyphs() {
+    let tamil: Vec<String> = pdfcraft_fonts::ui_tamil_fonts().iter().map(|f| f.name()).collect();
+    if tamil.is_empty() {
+        eprintln!("skipping Tamil glyph checks: build with CRAFT_FONTS_DIR and a Tamil face to run them");
+        return;
+    }
+    needs_catalogs!();
+    let ta = Lang::from_code("ta").expect("ta registered");
+    let labels: String = translations("ta").chars().chain(ta.name().chars()).filter(|c| !c.is_control()).collect();
+    let mut tamil_only = crate::theme::font_definitions();
+    for family in tamil_only.families.values_mut() {
+        family.retain(|name| !pdfcraft_fonts::CRAFT_FONTS.iter().any(|face| face.name() == *name) || tamil.contains(name));
+    }
+    use egui::epaint::text::{Fonts, TextOptions};
+    for (build, defs) in [("all faces", crate::theme::font_definitions()), ("Tamil face only", tamil_only)] {
+        let mut fonts = Fonts::new(TextOptions::default(), defs);
+        for id in [egui::FontId::proportional(13.0), egui::FontId::monospace(13.0), crate::theme::medium(13.0), crate::theme::semibold(17.0)] {
+            assert!(fonts.has_glyphs(&id, &labels), "{build}: {id:?} lacks a Tamil label glyph");
+        }
+    }
+}
+
 #[test]
 fn bulgarian_is_registered() {
     needs_catalogs!();
