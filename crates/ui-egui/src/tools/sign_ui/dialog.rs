@@ -97,7 +97,7 @@ fn choose(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
                 // A PIN typed for the previous selection must not reach another token: it
                 // could burn a failed-login attempt or lock it on the last one.
                 if d.selected != Some(i) {
-                    d.password.clear();
+                    d.password = zeroize::Zeroizing::new(String::new());
                 }
                 d.selected = Some(i);
                 d.confirm_remove = None;
@@ -462,7 +462,7 @@ fn sign_as(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
         ui.end_row();
         if entry.path.starts_with("pkcs11:") {
             let l = ui.label(tl!("Token PIN"));
-            let r = ui.add(crate::widgets::line(&mut d.password).password(true).desired_width(200.0)).labelled_by(l.id);
+            let r = ui.add(crate::widgets::line(&mut *d.password).password(true).desired_width(200.0)).labelled_by(l.id);
             if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                 go = true;
             }
@@ -482,7 +482,7 @@ fn sign_as(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
             );
         } else {
             let l = ui.label(tl!("Digital ID password"));
-            let r = ui.add(crate::widgets::line(&mut d.password).password(true).desired_width(200.0)).labelled_by(l.id);
+            let r = ui.add(crate::widgets::line(&mut *d.password).password(true).desired_width(200.0)).labelled_by(l.id);
             if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                 go = true;
             }
@@ -493,7 +493,7 @@ fn sign_as(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
     error(ui, &d.error);
     ui.horizontal(|ui| {
         if widgets::pill_button(ui, tl!("Back"), false).clicked() {
-            zeroize::Zeroize::zeroize(&mut d.password);
+            d.password = zeroize::Zeroizing::new(String::new());
             d.step = SignStep::Choose;
             d.error = None;
         }

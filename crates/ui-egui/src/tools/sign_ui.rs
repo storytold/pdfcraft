@@ -9,6 +9,7 @@ use std::path::PathBuf;
 use egui::{Align, Color32, CornerRadius, Layout, Pos2, Rect, Stroke, vec2};
 use pdfcraft_engine::sign::{self, Appearance, AppearanceLabels, Certificate, DigitalId, Name, PrivateKey};
 use pdfcraft_engine::{SignOptions, SignatureImage, SignatureInfo, SignatureStatus, StatusCaptions};
+use zeroize::Zeroizing;
 
 use crate::canvas::{DocView, PageToolContext, Snapshot, SnapshotKind};
 use crate::fill_sign::SavedSig;
@@ -128,7 +129,9 @@ pub struct SignDraft {
     pub certify: Option<u8>,
     pub step: SignStep,
     pub selected: Option<usize>,
-    pub password: String,
+    /// A `Zeroizing` string zeroes its buffer on drop, so the typed password doesn't linger
+    /// in freed memory; a clone's buffer is zeroized the same way.
+    pub password: Zeroizing<String>,
     pub reason: String,
     pub location: String,
     pub appearance: Appearance,
@@ -152,7 +155,7 @@ impl SignDraft {
             certify,
             step: if ids.is_empty() { SignStep::Configure } else { SignStep::Choose },
             selected: ids.iter().position(|e| e.unusable.is_none()),
-            password: String::new(),
+            password: Zeroizing::new(String::new()),
             reason: String::new(),
             location: String::new(),
             appearance: Appearance::default(),
@@ -162,13 +165,6 @@ impl SignDraft {
             error: None,
             confirm_remove: None,
         }
-    }
-}
-
-impl Drop for SignDraft {
-    fn drop(&mut self) {
-        use zeroize::Zeroize as _;
-        self.password.zeroize();
     }
 }
 
@@ -1124,7 +1120,7 @@ mod tests {
             app.digital_ids = vec![listed("/ids/grace.p12", "Grace Hopper")];
             let mut draft = SignDraft::new(0, None, None, None, &app.digital_ids);
             draft.step = SignStep::SignAs;
-            draft.password = "secret12".into();
+            draft.password = Zeroizing::new("secret12".into());
             app.sign_draft = Some(draft);
             app.dialog = Some(crate::Dialog::Sign);
             app
@@ -1153,7 +1149,7 @@ mod tests {
         assert!(d.new_id.password.is_empty() && d.new_id.confirm.is_empty() && d.new_id.file_password.is_empty());
 
         // Dismissing the modal with Escape clears sign_draft completely.
-        h.state_mut().sign_draft.as_mut().unwrap().password = "secret12".into();
+        h.state_mut().sign_draft.as_mut().unwrap().password = Zeroizing::new("secret12".into());
         h.key_press(egui::Key::Escape);
         h.run_steps(2);
         assert_eq!(h.state().dialog, None);
@@ -1177,7 +1173,7 @@ mod tests {
         import_app.save_override = Some(out_pdf.to_string_lossy().into_owned());
         let mut sign_draft = SignDraft::new(0, None, None, None, &import_app.digital_ids);
         sign_draft.step = SignStep::SignAs;
-        sign_draft.password = "secret12".into();
+        sign_draft.password = Zeroizing::new("secret12".into());
         import_app.sign_draft = Some(sign_draft);
         assert_eq!(import_app.finish_signing(), Ok(()));
         assert!(out_pdf.exists());

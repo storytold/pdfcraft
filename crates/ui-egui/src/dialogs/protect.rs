@@ -285,8 +285,8 @@ mod tests {
             let mut app = PdfCraftApp::new();
             app.set_option("language", "en").unwrap();
             app.dialog = Some(crate::Dialog::Protect);
-            app.protect_draft.password = "TopSecret123!".into();
-            app.protect_draft.confirm = "TopSecret123!".into();
+            app.protect_draft.password = zeroize::Zeroizing::new("TopSecret123!".into());
+            app.protect_draft.confirm = zeroize::Zeroizing::new("TopSecret123!".into());
             app
         });
         h.run_steps(2);
@@ -302,8 +302,8 @@ mod tests {
         {
             let app = h.state_mut();
             app.dialog = Some(crate::Dialog::Protect);
-            app.protect_draft.password = "AnotherSecret!".into();
-            app.protect_draft.confirm = "AnotherSecret!".into();
+            app.protect_draft.password = zeroize::Zeroizing::new("AnotherSecret!".into());
+            app.protect_draft.confirm = zeroize::Zeroizing::new("AnotherSecret!".into());
         }
         h.run_steps(2);
         h.key_press(egui::Key::Escape);
