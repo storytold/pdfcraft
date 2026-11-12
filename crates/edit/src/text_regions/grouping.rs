@@ -331,7 +331,19 @@ fn group_layout(lines: &[TextLine], mixed: bool) -> Vec<TextBlock> {
                 let scale = gap.abs().max(ngap.abs());
                 if same && ngap > tol * 0.8 && scale < tol * 4.0 && (ngap - gap).abs() <= scale * 0.08 + 0.5 { Some(gap) } else { None }
             });
-            let max_gap = own_leading.filter(|lead| *lead > tol * 0.4).or(stated).or(repeated).map_or(tol * 2.05, |lead| lead * 1.5);
+            // A lone row with none of those: the step to the row after it is the leading of the
+            // paragraph it opens, and the gap above it is a heading's or a blank line's when it
+            // is much wider (#3577).
+            let following = rows.get(row_at.saturating_add(1)).and_then(|next| {
+                let nfirst = next.first().and_then(|i| lines.get(*i))?;
+                let ngap = first.frame_origin().1 - nfirst.frame_origin().1;
+                (same_plane(first, nfirst) && ngap > tol * 0.8 && ngap < tol * 2.05).then_some(ngap)
+            });
+            let max_gap = own_leading
+                .filter(|lead| *lead > tol * 0.4)
+                .or(stated)
+                .or(repeated)
+                .map_or_else(|| following.map_or(tol * 2.05, |lead| (lead * 1.35).min(tol * 2.05)), |lead| lead * 1.5);
             // OCR lines stay apart: the scan fixes where each one is, so they never rewrap together.
             (!mixed || !(invisible(prev) || invisible(first)))
                 && (mixed || same_style(prev, first))
@@ -366,10 +378,13 @@ fn group_layout(lines: &[TextLine], mixed: bool) -> Vec<TextBlock> {
         if !block.rows.is_empty() {
             block.editor_text.push('\n');
         }
+        // The run placed before this one in the row, tracked rather than searched for: rows
+        // don't share runs, so it is the last one this loop pushed.
+        let mut prev_in_row: Option<&TextLine> = None;
         for &index in row {
             let Some(line) = lines.get(index) else { continue };
             // Some producers position separate words without encoding a space.
-            if let Some(prev) = block.lines.last().filter(|i| row.contains(i)).and_then(|i| lines.get(*i))
+            if let Some(prev) = prev_in_row
                 && !row_text.ends_with(char::is_whitespace)
                 && !line.text.starts_with(char::is_whitespace)
                 && line.frame_rect()[0] - prev.frame_rect()[2] > line.size * 0.12
@@ -383,6 +398,7 @@ fn group_layout(lines: &[TextLine], mixed: bool) -> Vec<TextBlock> {
             row_text.push_str(&line.text);
             block.invisible &= line.origin.state.render_mode == 3;
             block.lines.push(index);
+            prev_in_row = Some(line);
         }
         if !block.text.is_empty() {
             if block.text.ends_with('-') {
@@ -397,6 +413,17 @@ fn group_layout(lines: &[TextLine], mixed: bool) -> Vec<TextBlock> {
     }
     for block in &mut blocks {
         block.reflow_text = reflow_text(block, lines);
+    }
+    for block in blocks.iter_mut().filter(|block| block.invisible && block.lines.len() > 1) {
+        // Each word counts once: neighbouring words OCR sized alike share a run.
+        let words = block
+            .lines
+            .iter()
+            .filter_map(|i| lines.get(*i))
+            .flat_map(|line| std::iter::repeat_n(line.size, line.text.split_whitespace().count().max(1)));
+        if let Some(size) = median_size(words) {
+            block.size = size;
+        }
     }
     blocks
 }
@@ -451,4 +478,15 @@ fn break_gap(block: &TextBlock, lines: &[TextLine], row_index: usize) -> Option<
     // Short rows define the right edge by their own letters. A body line that fills the
     // measure leaves almost no room for the next word.
     (slack <= size * 0.75 && width >= size * 8.0 && (next[2] - next[0]) + size * 0.25 > slack).then_some(1)
+}
+
+/// The size an OCR phrase is set in. Recognize text sizes each word from its own box and a guess
+/// at how much of the em its letters fill, so one phrase's words come out several points apart
+/// (#3313); a rewrite draws the phrase at this one size. `None` when no size is usable.
+fn median_size(sizes: impl Iterator<Item = f64>) -> Option<f64> {
+    let mut sizes: Vec<f64> = sizes.filter(|size| size.is_finite() && *size > 0.0).collect();
+    sizes.sort_by(f64::total_cmp);
+    let middle = sizes.len() / 2;
+    let upper = sizes.get(middle).copied()?;
+    if sizes.len().is_multiple_of(2) { sizes.get(middle.saturating_sub(1)).map(|lower| (lower + upper) / 2.0) } else { Some(upper) }
 }
