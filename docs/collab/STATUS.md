@@ -263,6 +263,23 @@ several `/NM`, per-line quads, the caret (`5bad54c40`, §4), re-addressed across
   states how a turn/resync re-addresses a range and that the protocol has no
   `leave` message (a silent peer is the 30 s TTL). The code commit is
   `00c06ed5c`; code and docs are local, the push is the owner's.
+- This pass closes the last selection leftover: presence now addresses the form
+  field being typed into by its stable name and the caret's offset inside its
+  text, not only the field as an object (§4, "Form-field carets in presence",
+  2026-11-12). `Selection::Text` gains an optional `field: {name, offset}`; the
+  widget's box and the caret's user-space point still travel, so an older peer
+  keeps drawing the place. The editor records the offset and point each frame
+  from the galley it draws and clears them when the keyboard leaves, a page turn
+  re-addresses the frame to the new `epoch`, a field or page the form no longer
+  holds is not sent, and a password shares no caret. The code commit is
+  `c935ebadb`; docs follow on top. **Measured in this pass:** PR #6622's head is
+  still `e7a056501` (docs-only above `eb60bc5ff`), and `git rev-list
+  --left-right --count e7a056501...HEAD` reads `0 4` — `ac33dd212`,
+  `00c06ed5c`, `c56da220b` and `c935ebadb` are the only commits above it. The
+  etag fix `0d3ea2708` named in this pass's brief as unpushed is **already
+  delivered**: `git merge-base --is-ancestor 0d3ea2708 e7a056501` succeeds, it
+  is an ancestor of the PR head, so only this pass's two commits are new. Nothing
+  was pushed by this agent; the push is the owner's.
 - Audience: the next session (human or agent). Everything here was verified in
   the session that wrote it; anything not verified is marked as such.
 - Design: `docs/collab/RFC.md` (protocol, ADRs, trade-offs); operation of the
@@ -616,6 +633,92 @@ commit result, and a commit button for owner/editor.
 
 ## 4. Tests and verification
 
+### Form-field carets in presence, addressed by name and offset (2026-11-12, local; not pushed)
+
+The leftover `00c06ed5c` closed for text ranges was the field still being only an
+object: the caret was the range's active end, never the caret inside a form field
+being typed into (§5 p.4). A peer could see that its author was on the page and
+had a selection, but not which field the typing went into or where the caret sat
+inside it.
+
+**Wire change.** `Selection::Text` gains one optional member,
+`field: {name, offset}` (`crates/collab-proto/src/lib.rs`, `c935ebadb`):
+
+- `name` is the field's fully qualified name — its `/T` chain joined by dots, the
+  same stable address `Edit::SetFieldValue` and the app's field list use, and the
+  field equivalent of an annotation's `/NM`. Not a widget object and not a page
+  index: a turn, a move or an insert leaves it alone. Bounds:
+  `MAX_FIELD_NAME_BYTES` = 256; a longer name is not sent (the box and caret
+  point still are), and an empty one is refused `invalid` by
+  `Selection::validate` before the frame leaves the socket.
+- `offset` is the caret's position in characters into the draft the author has
+  typed so far. The draft's text never travels; presence keeps it out of
+  the frame, and a test asserts the encoded frame has no value.
+- `rect` is the widget's box in user space and `caret` its point, as for any
+  text selection, so a peer that does not know `field` still draws a box over the
+  field and a caret where the typing is. Both extensions are additive: an old
+  frame without `field` parses, and an old peer ignores the member
+  (`the_plain_selection_form_still_parses`).
+- The host page's report carries it as `ParticipantSelection::Text::field`
+  (`FieldCaretRef`); `craft-web-host` still does not pass page/selection on (a
+  foreign crate, §5 p.4), so this is app-side state like the rest.
+
+**Client rules** (`crates/ui-egui/src/tools/forms_ui.rs`, `collab.rs`):
+
+- while a text field (or an editable combo box) holds the keyboard, the editor
+  records the caret's character offset and its user-space point from the same
+  galley it draws (`Focus::caret`/`caret_at`, `record_caret`); the point goes
+  through `PageXform::screen_to_view` and `PageInfo::view_to_user`, so a turned
+  field and a rotated page are mapped back correctly;
+- `local_selection` puts a field ahead of a comment or a range: that is what the
+  person is doing. `field_selection` resolves the focused field's widget in the
+  form the session holds, so the page index and box are current after any page
+  operation, and refuses a widget whose page is gone or hidden;
+- losing the keyboard (Enter, Tab, Escape, a click away, a commit, another
+  document) clears both values and the next presence frame sends no field
+  selection; a field the form no longer holds (deleted field, deleted page) is
+  not sent at all. `overlay` clears the record at the top of each frame, so an
+  editor that did not draw this frame (scrolled away, a dialog took the keys)
+  cannot leave a stale trace;
+- a `page.rotate` and a catch-up replay keep the field address and re-address the
+  frame to the new `epoch`, the same `with_epoch` rule as a merge intent; an
+  epoch change from a page operation does not need to drop it, because the
+  address is the name, not the index;
+- a **password** field shares no presence: its caret's offset would be the length
+  of a secret. A name the frame cannot carry keeps the box and the caret point
+  and drops only `field`; no field's text or value is included.
+
+Tests:
+
+| Crate | Test |
+|---|---|
+| `collab-proto` | `a_field_caret_carries_its_name_and_offset` (round-trip, no-text frame, empty and over-`MAX_FIELD_NAME_BYTES` names refused, a field without a caret point validates) |
+| `collab-ws` e2e | `two_clients_share_a_selection_without_an_operation` (a field frame reaches two peers with its name and offset, box and point; the next frame with no selection takes it away; a late joiner sees it after its welcome; a viewer's presence is delivered while its operation is `forbidden`) |
+| `ui-egui` unit | `a_field_caret_is_addressed_by_name_and_offset_and_goes_with_the_focus`, `a_field_caret_survives_a_turn_and_goes_with_the_field_or_page`, `a_password_field_shares_no_caret_and_a_long_name_keeps_the_box`, `the_host_report_carries_a_participants_selection` (extended with `field`) |
+| `ui-egui` `it` (egui_kittest) | `forms::typing_in_a_field_records_the_caret_for_presence` — typing into the fixture's `name` field records the offset at the end of the draft and a point inside the widget's box in user space; Escape clears the focus |
+
+Gates at `c935ebadb` (host `agents`, rustc 1.99.1, warm `target/`):
+
+| Gate | Command | Result |
+|---|---|---|
+| Formatting | `cargo fmt --all -- --check` | pass |
+| Clippy (proto, client, client-pdf, ws, pdf, UI with the feature) | `cargo clippy -p pdfcraft-collab-proto -p pdfcraft-collab-client -p pdfcraft-collab-client-pdf -p pdfcraft-collab-ws -p pdfcraft-collab-pdf -p pdfcraft-ui-egui --features pdfcraft-ui-egui/collab --all-targets -- -D warnings` | pass |
+| E2E over a real socket | `cargo test -p pdfcraft-collab-ws --test e2e` | pass, **36/36** |
+| Selection tests in the UI | `cargo test -p pdfcraft-ui-egui --features pdfcraft-ui-egui/collab --lib collab::` | pass — **24** (1010 filtered out) |
+| Forms in the real shell | `cargo test -p pdfcraft-ui-egui --features pdfcraft-ui-egui/collab --test it -- forms::` | pass — **74** |
+| Tests, client / pdf / ws unit | `cargo test -p pdfcraft-collab-client -p pdfcraft-collab-pdf -p pdfcraft-collab-ws` | pass — client **14**, pdf **71**, ws unit **16**; the three doc-test targets run 0 |
+| Web shell (wasm) | `cargo xtask wasm` | pass — wasm32: 44 crates ok |
+
+What this does **not** cover: a peer does not resolve the field name against its
+own copy, so when *another* client deletes the field (not the page) the box stays
+on screen until the author's next frame or the 30 s TTL — a deleted page is
+dropped at once by the epoch rule. A same-name twin is disambiguated by the field
+object in the author's own list, but only the name travels (the box is what a
+peer draws). The caret's geometry is where the author drew it; a peer cannot
+recompute the offset's position in its own value, because the draft's text is
+deliberately not on the wire. `craft-web-host` still does not forward
+`selection`, so the cabinet's markers do not show it yet.
+
 ### Remote selections: per line, with the caret, re-addressed across a turn and a catch-up (2026-11-12, local; not pushed)
 
 The brief took the leftover §6.6 named: "per-line range geometry, caret". The
@@ -675,8 +778,8 @@ What this does **not** cover: a line's orientation *inside* a page — the wire
 carries an axis-aligned rectangle per line piece, so text rotated within the
 page (vertical text) is drawn as its box; the page's own `/Rotate` is carried
 because the geometry is in user space and the receiver maps it back with the
-page's rotation. The caret is still the range's active end, not the caret inside
-a form field (`forms_ui` owns that editor and has no page-space caret). A
+page's rotation. The caret here is the range's active end; the caret inside a form
+field is its own pass (2026-11-12, §4 above, `c935ebadb`). A
 selection spanning several pages still names only the comments on the page in
 view. The host page's `pdfcraft:presence` payload still cannot carry
 `page`/`selection` until `craft-web-host` gains the two optional fields (a
@@ -2716,8 +2819,8 @@ Gates at `5bad54c40` (host `agents`, rustc 1.99.1, warm `target/`):
 | Web shell (wasm) | `cargo check -p pdfcraft-web --target wasm32-unknown-unknown --features collab` | pass |
 
 What this does **not** cover: the caret is the active end of the current text
-selection, not the caret inside a form field being typed into (`forms_ui` owns
-that editor and has no page-space caret to hand over yet); only comments on the
+selection, not the caret inside a form field being typed into (closed later in
+`c935ebadb`, §4 above); only comments on the
 page in view are named, so a multi-page selection falls back to the primary
 comment's rectangle; and the host page still receives no selection until
 `craft-web-host` gains the two optional fields above. Selection painting has no
@@ -4223,8 +4326,17 @@ Ordered by the risk they pose to production.
    for a merge intent, applied to presence); a dropped socket clears the
    participant list, and a peer that goes quiet is the 30 s TTL (the protocol has
    no `leave` message).
-   What is still open: the caret is the range's active end, not the caret inside
-   a form field being typed into; a line's orientation inside a page is the
+   The field caret is closed in `c935ebadb` (§4, "Form-field carets in presence",
+   2026-11-12): `Selection::Text` carries an optional `field: {name, offset}` —
+   the field's fully qualified name and the caret's position in characters into
+   the draft, with the widget's box and the caret's user-space point, never the
+   text. The editor records it each frame and clears it when the keyboard leaves;
+   a turn and a catch-up re-address it to the new `epoch`; a field or page the
+   form no longer holds is not sent; a password shares no caret. A peer does not
+   resolve the name against its own form, so a field deleted by *another* client
+   keeps its box until the author's next frame or the TTL (a deleted page is
+   dropped at once by the epoch rule).
+   What is still open: a line's orientation inside a page is the
    axis-aligned box of its piece (the page's own `/Rotate` is carried); a
    selection spanning several pages names only the comments on the page in view;
    and the host page's `pdfcraft:presence`
@@ -4305,13 +4417,19 @@ Ordered by the risk they pose to production.
 
 Work in this order unless the owner says otherwise.
 
-**Deliver first.** `0d3ea2708` (the cabinet's `expectedVersion` as its etag,
-§4) and this docs commit are gated on the host but not pushed: this agent's
-permission denies `git push*`. `git push fork feature/realtime-collaboration`
-from the clone delivers both; then `gh pr view 6622` (head, `mergeStateStatus`)
-and `pdfcraft/PR-DRAFT.md` — still describing `95e2c9c97`/`69b2a6dad` — need the
-same facts before the owner publishes. Everything below is still open feature
-work; nothing in it is a prerequisite of that push.
+**Deliver first.** Measured 2026-11-12: `0d3ea2708` (the cabinet's
+`expectedVersion` as its etag, §4) is **already delivered** — it is an ancestor
+of PR #6622's head `e7a056501` (`git merge-base --is-ancestor` exits 0, §6.6).
+What is local and unpushed is this pass's work: `ac33dd212`, `00c06ed5c`,
+`c56da220b` (the web-path and remote-selection records) and the code `c935ebadb`
+plus the docs commit above it; `git rev-list --left-right --count
+e7a056501...HEAD` reads `0 5` with this record. This agent's permission still
+denies `git push*`; `git push fork feature/realtime-collaboration` from the
+clone delivers them, after which `gh pr view 6622` (head,
+`mergeStateStatus`) and `pdfcraft/PR-DRAFT.md` — still describing
+`95e2c9c97`/`69b2a6dad` — need the same facts before the owner publishes.
+Everything below is still open feature work; nothing in it is a prerequisite of
+that push.
 
 ### 6.1 Durable journal — done in this branch
 
@@ -4596,6 +4714,17 @@ payload).
 
 ### 6.6 Cleanup and submission
 
+- **This pass (2026-11-12): the field caret, and where the branch stands.**
+  Code `c935ebadb`, docs on top. `gh pr view 6622` still reads
+  `headRefOid e7a056501`; `git rev-list --left-right --count e7a056501...HEAD`
+  is `0 5` after this record (`ac33dd212`, `00c06ed5c`, `c56da220b`,
+  `c935ebadb`, docs), and the tree was clean when the gate ran. The brief's
+  list of unpushed commits named `0d3ea2708`; it is **delivered**, an ancestor
+  of `e7a056501` (`git merge-base --is-ancestor 0d3ea2708 e7a056501` exits 0),
+  so nothing else is owed on that side. The gate below ran on `c935ebadb` and
+  is green (§4, "Form-field carets in presence"): fmt, clippy `-D warnings`,
+  e2e 36/36, UI collab 24, forms 74, client 14, pdf 71, ws unit 16, wasm 44
+  crates. Nothing was pushed; the push and the CI approvals are the owner's.
 - **Delivery state (2026-11-11T23:37Z; head re-measured 2026-11-12).** The
   delivered head recorded here is `eb60bc5ff` —
   the delivery record of `6ac4e1130`, which is the D4 record on top of
