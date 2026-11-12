@@ -5,7 +5,8 @@
 //! the strings of their dictionaries (§7.5.8.2), the trailer `/ID`, objects inside object streams
 //! (the object stream is encrypted as a whole), the `/Contents` of signature dictionaries, and the
 //! document's metadata stream (the catalog's `/Metadata`) when `/EncryptMetadata` is false in a
-//! `/V` 4 or 5 dictionary (Table 21). Streams naming a crypt filter (`/Crypt` in `/Filter`) use that
+//! `/V` 4 or 5 dictionary (Table 21), and the data of a stream kept in an external file (`/F`).
+//! Streams naming a crypt filter (`/Crypt` in `/Filter`) use that
 //! filter; embedded files use `/EFF`.
 
 use std::cell::Cell;
@@ -167,6 +168,12 @@ pub(crate) fn stream_reads_as_stored(doc: &Document, h: &SecurityHandler, s: &St
         _ => StreamKind::Normal,
     };
     h.decrypts(kind)
+}
+
+/// Whether a stream with dictionary `d` keeps its data in an external file: its `/F` (a file
+/// specification, ISO 32000-2 Table 5), given directly or by reference, isn't null (§7.3.10).
+fn external(doc: &Document, d: &Dict) -> bool {
+    d.get(b"F").is_some_and(|f| !matches!(*followed(doc, f), Object::Null))
 }
 
 /// Whether `f`, an entry of a `/Filter` chain or its only filter, is `/Crypt`.
@@ -361,6 +368,12 @@ fn stream(
         return Object::Stream(s.clone());
     }
     if ty == Some(b"Metadata") && document_metadata_in_clear(doc, h, source, decrypt) {
+        return Object::Stream(Stream { dict: walked(&s.dict), raw: s.raw.clone() });
+    }
+    // The data of a stream in an external file isn't part of the PDF file, and isn't encrypted
+    // (§7.6.2); what is between `stream` and `endstream` is ignored (§7.3.8.1). Its dictionary's
+    // strings, the file specification among them, are.
+    if external(doc, &s.dict) {
         return Object::Stream(Stream { dict: walked(&s.dict), raw: s.raw.clone() });
     }
     let mut named = named_crypt_filter(doc, &s.dict);

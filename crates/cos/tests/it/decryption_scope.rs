@@ -473,3 +473,41 @@ fn a_dangling_encrypt_reference_reads_as_unencrypted() {
     assert_eq!(doc.repair_log().iter().filter(|l| l.contains("does not exist")).count(), 1, "{:?}", doc.repair_log());
     assert!(write_full(&doc, &SaveOptions::default()).is_ok());
 }
+
+/// A stream whose data is in an external file (`/F`, ISO 32000-2 Table 5) isn't encrypted:
+/// "When a PDF stream object refers to an external file, the stream's contents shall not be
+/// encrypted, since they are not part of the PDF file itself" (§7.6.2), and what is between
+/// `stream` and `endstream` is ignored (§7.3.8.1). Protecting such a document keeps those bytes
+/// as they are (0 bytes became 32 under AES), and reading leaves them as stored; its dictionary's
+/// strings, the file specification among them, are encrypted as any string is. A null `/F` is an
+/// absent one (§7.3.10). qpdf 12.4.2 encrypts these bytes too.
+#[test]
+fn an_external_file_streams_data_is_not_encrypted() {
+    const STORED: &str = "IGNORED-BYTES";
+    for (f, external) in [("/F (ext.bin)", true), ("/F 9 0 R", true), ("/F null", false)] {
+        let mut objs = metadata_objects(&stream("", SECRET.as_bytes()), &stream("/Type /Metadata /Subtype /XML", DOC_XMP.as_bytes()), "<< >>");
+        objs[0] = "<< /Type /Catalog /Pages 2 0 R /Metadata 5 0 R /PieceInfo << /X << /Private 8 0 R >> >> >>".into();
+        objs.push(stream(f, STORED.as_bytes()));
+        objs.push("(ext.bin)".into());
+        let mut doc = Document::open(Arc::new(file(&objs, ""))).unwrap();
+        for alg in [Algorithm::Rc4_128, Algorithm::Aes128, Algorithm::Aes256] {
+            let params =
+                NewEncryption { algorithm: alg, user_password: "", owner_password: "owner", permissions: -1, encrypt_metadata: true, seed: [4; 32] };
+            doc.set_encryption(&params).unwrap();
+            let saved = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
+            assert_eq!(holds(&saved, STORED), external, "{f} {alg:?}: written as stored");
+            assert!(!holds(&saved, "(ext.bin)") && !holds(&saved, SECRET), "{f} {alg:?}: the rest is encrypted");
+            let reread = Document::open(Arc::new(saved)).unwrap();
+            let catalog = reread.get(reread.root().unwrap());
+            let piece = catalog.as_dict().unwrap().get(b"PieceInfo").map(|p| reread.resolve(p)).unwrap();
+            let private = piece.as_dict().unwrap().get(b"X").map(|x| reread.resolve(x)).unwrap();
+            let num = private.as_dict().unwrap().reference(b"Private").unwrap().num;
+            let Object::Stream(s) = reread.try_get(num).unwrap().as_ref().clone() else { panic!("{f}: no stream") };
+            assert_eq!(s.raw.as_ref(), STORED.as_bytes(), "{f} {alg:?}: read as stored, or decrypted back");
+            if external && f.contains("(ext.bin)") {
+                let spec = s.dict.get(b"F").unwrap();
+                assert_eq!(spec.as_string().map(|s| s.bytes.as_slice()), Some(&b"ext.bin"[..]), "{f} {alg:?}: the file specification decrypts");
+            }
+        }
+    }
+}
