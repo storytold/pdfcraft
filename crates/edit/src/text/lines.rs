@@ -836,7 +836,7 @@ pub(super) fn reading_lines(doc: &Document, page: usize) -> Result<(Vec<TextLine
         let mut forms = invoked.into_iter().peekable();
         for s in shown {
             while let Some((_, name, ts)) = forms.next_if(|f| f.0 < s.op) {
-                enter(w, resources, &name, ts, &mut carry.text_left)?;
+                enter(w, resources, &name, ts, carry)?;
                 // Text after a form starts a new line.
                 last = None;
             }
@@ -854,12 +854,13 @@ pub(super) fn reading_lines(doc: &Document, page: usize) -> Result<(Vec<TextLine
             add_shown(&mut w.lines, &mut last, s, si);
         }
         for (_, name, ts) in forms {
-            enter(w, resources, &name, ts, &mut carry.text_left)?;
+            enter(w, resources, &name, ts, carry)?;
         }
         Ok(())
     }
-    /// `text_left`: the page's text budget, shared with the forms the page draws.
-    fn enter(w: &mut Walk, resources: &Dict, name: &[u8], ts: Ts, text_left: &mut usize) -> Result<(), EditError> {
+    /// `outer`: the carry of the stream drawing the form, whose text budget and lookup-table
+    /// allowance are the page's, shared with the forms it draws.
+    fn enter(w: &mut Walk, resources: &Dict, name: &[u8], ts: Ts, outer: &mut Carry) -> Result<(), EditError> {
         let Some(form) = form_call(w.doc, resources, name, ts.ctm, &w.path, &mut w.budget) else { return Ok(()) };
         let ops = parse(&form.data).ops;
         // The form starts with the graphics state at its `Do`, its own matrix applied.
@@ -874,8 +875,9 @@ pub(super) fn reading_lines(doc: &Document, page: usize) -> Result<(Vec<TextLine
             stack: Vec::new(),
             marked: Vec::new(),
             layers: Vec::new(),
-            text_left: *text_left,
+            text_left: outer.text_left,
             gap_space: false,
+            lookups: outer.lookups,
         };
         let stream = w.next_stream;
         w.next_stream = w.next_stream.saturating_add(1);
@@ -883,7 +885,8 @@ pub(super) fn reading_lines(doc: &Document, page: usize) -> Result<(Vec<TextLine
             w.path.push(r);
         }
         walk(w, &ops, form.resources(resources), &mut carry, &|_| stream)?;
-        *text_left = carry.text_left;
+        outer.text_left = carry.text_left;
+        outer.lookups = carry.lookups;
         if form.obj.is_some() {
             w.path.pop();
         }

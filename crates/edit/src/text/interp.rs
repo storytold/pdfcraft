@@ -1,7 +1,7 @@
 use super::fallback::is_type3_fallback;
 use super::rewrite::vertical_advance;
 use super::{Dict, Document, EditError, HashMap, Matrix, Metrics, Object, Op, Rc};
-use crate::colour::{Space, space_of};
+use crate::colour::{Lookups, Space, space_within};
 
 /// Text and graphics state captured for rewriting.
 #[derive(Clone, Debug, PartialEq)]
@@ -632,6 +632,9 @@ pub(super) struct Carry {
     /// Whether the last run ended in a space read from a gap, with the next operator a `Tj` or
     /// `TJ` that may start with the space glyph that gap widened.
     pub(super) gap_space: bool,
+    /// What decoding the Indexed lookup tables the rest of the page's `cs` operators select may
+    /// still cost (see [`crate::colour::MAX_PAGE_LOOKUPS`]), shared with the forms it draws.
+    pub(super) lookups: Lookups,
 }
 
 /// The most glyph text one page's extraction produces, in bytes. A ToUnicode destination is
@@ -664,19 +667,29 @@ impl Carry {
             dash: (Vec::new(), 0.0),
             line_cap: 0,
         };
-        Carry { ts, stack: Vec::new(), marked: Vec::new(), layers: Vec::new(), text_left: MAX_PAGE_TEXT, gap_space: false }
+        Carry { ts, stack: Vec::new(), marked: Vec::new(), layers: Vec::new(), text_left: MAX_PAGE_TEXT, gap_space: false, lookups: Lookups::page() }
     }
 }
 
-/// The colour space a `cs` operand selects (ISO 32000-2 §8.6.8): a family name, or a name in
-/// `spaces`, the `/ColorSpace` resources in force. `None` when it is neither, so the operands of
-/// the `sc`/`scn` after it are read by their count, as a reader that can't find the space would.
-fn selected_space(doc: &Document, operand: &Object, spaces: &Dict, cache: &mut HashMap<Vec<u8>, Option<Rc<Space>>>) -> Option<Rc<Space>> {
+/// The colour space a `cs` operand selects (ISO 32000-2 §8.6.8, Table 73): `DeviceGray`,
+/// `DeviceRGB`, `DeviceCMYK` and `Pattern` name their space directly and never a resource; any
+/// other name is looked up in `spaces`, the `/ColorSpace` resources in force. A name they don't
+/// hold that is an inline image's abbreviation (`G`, `RGB`, `CMYK`) or a family that needs
+/// parameters (`CalGray`, `CalRGB`) reads as its device kin. `None` for any other name, so the
+/// operands of the `sc`/`scn` after it are read by their count, as a reader that can't find the
+/// space would. Lookup tables decoded are charged to `lookups`.
+fn selected_space(
+    doc: &Document,
+    operand: &Object,
+    spaces: &Dict,
+    cache: &mut HashMap<Vec<u8>, Option<Rc<Space>>>,
+    lookups: &mut Lookups,
+) -> Option<Rc<Space>> {
     let name = operand.as_name()?;
     if let Some(space) = cache.get(name) {
         return space.clone();
     }
-    let family = matches!(name, b"DeviceGray" | b"DeviceRGB" | b"DeviceCMYK" | b"CalGray" | b"CalRGB" | b"Pattern" | b"G" | b"RGB" | b"CMYK");
+    let none = Dict::default();
     // A resource that is no colour space family (a misspelt family, a name naming another name)
     // reads as if missing rather than as DeviceGray.
     let known = |o: &Object| {
@@ -707,7 +720,16 @@ fn selected_space(doc: &Document, operand: &Object, spaces: &Dict, cache: &mut H
             )
         })
     };
-    let space = (family || spaces.get(name).is_some_and(known)).then(|| Rc::new(space_of(doc, operand, spaces, 0)));
+    let space = if matches!(name, b"DeviceGray" | b"DeviceRGB" | b"DeviceCMYK" | b"Pattern") {
+        Some(space_within(doc, operand, &none, 0, lookups))
+    } else if let Some(resource) = spaces.get(name).filter(|o| known(o)) {
+        Some(space_within(doc, resource, &none, 1, lookups))
+    } else if matches!(name, b"G" | b"RGB" | b"CMYK" | b"CalGray" | b"CalRGB") {
+        Some(space_within(doc, operand, &none, 0, lookups))
+    } else {
+        None
+    };
+    let space = space.map(Rc::new);
     cache.insert(name.to_vec(), space.clone());
     space
 }
@@ -1147,7 +1169,7 @@ pub(super) fn interpret(
             b"g" | b"rg" | b"k" => (ts.fill, ts.fill_space) = (vec![op.clone()], None),
             b"cs" => {
                 ts.fill = vec![op.clone()];
-                ts.fill_space = op.operands.first().and_then(|o| selected_space(doc, o, spaces_res, &mut spaces));
+                ts.fill_space = op.operands.first().and_then(|o| selected_space(doc, o, spaces_res, &mut spaces, &mut carry.lookups));
             }
             b"sc" | b"scn" => {
                 ts.fill.retain(|o| o.is("cs"));

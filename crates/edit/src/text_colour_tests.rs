@@ -12,7 +12,12 @@ use crate::text::{reading_blocks, text_lines};
 /// Objects 7 and 8 are ICC profile streams with `/N 3` and `/N 1` (no profile data: their
 /// component count is what the colour is read by).
 fn page(content: &str, colour_spaces: &str, form: &str, form_spaces: &str) -> Document {
-    let objs: Vec<String> = vec![
+    page_with(content, colour_spaces, form, form_spaces, &[])
+}
+
+/// [`page`], with `extra` as objects 9 onwards.
+fn page_with(content: &str, colour_spaces: &str, form: &str, form_spaces: &str, extra: &[String]) -> Document {
+    let mut objs: Vec<String> = vec![
         "<< /Type /Catalog /Pages 2 0 R >>".into(),
         "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
         format!(
@@ -29,6 +34,7 @@ fn page(content: &str, colour_spaces: &str, form: &str, form_spaces: &str) -> Do
         "<< /N 3 /Length 0 >>\nstream\n\nendstream".into(),
         "<< /N 1 /Length 0 >>\nstream\n\nendstream".into(),
     ];
+    objs.extend_from_slice(extra);
     let mut out = b"%PDF-1.7\n".to_vec();
     let mut offs = Vec::new();
     for (i, o) in objs.iter().enumerate() {
@@ -46,7 +52,7 @@ fn page(content: &str, colour_spaces: &str, form: &str, form_spaces: &str) -> Do
 
 /// Each line of `shows` (`colour-setting operators`, `text`) shown on a line of its own.
 fn content(shows: &[(&str, &str)]) -> String {
-    shows.iter().enumerate().map(|(i, (set, text))| format!("BT /F1 12 Tf 72 {} Td {set} ({text}) Tj ET\n", 700 - 40 * i)).collect()
+    shows.iter().enumerate().map(|(i, (set, text))| format!("BT /F1 12 Tf 72 {} Td {set} ({text}) Tj ET\n", 700 - 30 * i)).collect()
 }
 
 /// The colour each line of the page's own content is read in, by its text.
@@ -169,4 +175,47 @@ fn malformed_colour_spaces_fall_back_without_panicking() {
     assert!(near(colour_of(&doc, "Short"), [0.0; 3]), "{all:?}");
     // No tint transform: the tint is the darkness of the ink.
     assert!(near(colour_of(&doc, "Bare"), [0.0; 3]), "{all:?}");
+}
+
+/// §8.6.8, Table 73: only `DeviceGray`, `DeviceRGB`, `DeviceCMYK` and `Pattern` name a space
+/// directly. Any other name, an inline image's abbreviation such as `RGB` included, is a key in
+/// the `/ColorSpace` resources, so `/RGB` naming a four-component ICC profile reads its operands
+/// as CMYK. A reserved name still means its own space even when the resources hold an entry of
+/// that name, and an abbreviation the resources don't hold reads as its device space.
+#[test]
+fn only_the_reserved_names_select_a_space_without_the_resources() {
+    let cmyk_profile = "<< /N 4 /Length 0 >>\nstream\n\nendstream".to_string();
+    let spaces = "/RGB [/ICCBased 9 0 R] /CalRGB [/ICCBased 9 0 R] /DeviceRGB [/ICCBased 9 0 R]";
+    let shows = [
+        ("/RGB cs 0 0 0 0 scn", "Abbreviation"),
+        ("/CalRGB cs 0 0 0 1 scn", "Family"),
+        ("/DeviceRGB cs 0 0 1 scn", "Reserved"),
+        ("/CMYK cs 0 0 0 1 scn", "Unheld"),
+    ];
+    let doc = page_with(&content(&shows), spaces, "", "", &[cmyk_profile]);
+    // No ink at all in CMYK is white; read as RGB it was black.
+    assert!(near(colour_of(&doc, "Abbreviation"), [1.0; 3]), "{:?}", colours(&doc));
+    assert!(near(colour_of(&doc, "Family"), [0.0; 3]), "{:?}", colours(&doc));
+    assert!(near(colour_of(&doc, "Reserved"), [0.0, 0.0, 1.0]), "{:?}", colours(&doc));
+    assert!(near(colour_of(&doc, "Unheld"), [0.0; 3]), "{:?}", colours(&doc));
+}
+
+/// The Indexed lookup tables a page's text colours select are decoded against one allowance for
+/// the page ([`crate::colour::MAX_PAGE_LOOKUPS`]), not each on its own: twenty tables padded to
+/// 60 KiB, each with a red first entry, read red until the allowance runs out and then black (an
+/// empty table). Decoded each on its own, all twenty read red, however many there were.
+#[test]
+fn lookup_tables_share_one_allowance_for_the_page() {
+    const PADDED: usize = 60 << 10;
+    const TABLES: usize = 20;
+    let data = format!("FF0000{}>", "0".repeat(2 * (PADDED - 3)));
+    let extra: Vec<String> =
+        (0..TABLES).map(|_| format!("<< /Filter /ASCIIHexDecode /Length {} >>\nstream\n{data}\nendstream", data.len())).collect();
+    let spaces: String = (0..TABLES).map(|i| format!("/I{i} [/Indexed /DeviceRGB 0 {} 0 R] ", 9 + i)).collect();
+    let shows: Vec<(String, String)> = (0..TABLES).map(|i| (format!("/I{i} cs 0 scn"), format!("T{i}"))).collect();
+    let shows: Vec<(&str, &str)> = shows.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
+    let doc = page_with(&content(&shows), &spaces, "", "", &extra);
+    let reads = |colour: [f64; 3]| (0..TABLES).filter(|i| near(colour_of(&doc, &format!("T{i}")), colour)).count();
+    assert_eq!(reads([1.0, 0.0, 0.0]), crate::colour::MAX_PAGE_LOOKUPS / PADDED, "{:?}", colours(&doc));
+    assert_eq!(reads([0.0; 3]), TABLES - crate::colour::MAX_PAGE_LOOKUPS / PADDED, "{:?}", colours(&doc));
 }

@@ -5,7 +5,7 @@
 //! (exponential) tint transform into the alternate space; a sampled or PostScript tint function,
 //! or a pattern, falls back to a plain darkness so nothing reads as the wrong hue.
 
-use pdfcraft_cos::{Dict, Document, Object};
+use pdfcraft_cos::{Dict, Document, Object, Stream};
 
 /// A colour space as far as a fill colour needs it.
 #[derive(Clone, Debug, PartialEq)]
@@ -50,9 +50,63 @@ fn nums(doc: &Document, o: &Object) -> Vec<f64> {
     doc.resolve(o).as_array().map(|a| a.iter().filter_map(|v| doc.resolve(v).as_f64()).collect()).unwrap_or_default()
 }
 
+/// The most bytes one Indexed lookup table is decoded to when text colours are read. A table
+/// holds `hival + 1` entries of the base space's components (ISO 32000-2 §8.6.6.3): at most 256
+/// entries of a DeviceN space's 32 colourants, 8 KiB, so this leaves room for padding.
+pub(crate) const MAX_LOOKUP_DECODED: usize = 64 << 10;
+
+/// The most bytes all the Indexed lookup tables one page's text colours select are decoded to,
+/// together: a thousand RGB tables, where a form drawn again and again, or many names for one
+/// table, would otherwise decode the same table each time.
+pub(crate) const MAX_PAGE_LOOKUPS: usize = 1 << 20;
+
+/// What decoding Indexed lookup streams may still cost: `left` bytes in all, at most `cap` for
+/// one table. A table past either reads as empty, so its colours read as black.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Lookups {
+    left: usize,
+    cap: usize,
+}
+
+impl Lookups {
+    /// One page's allowance (see [`MAX_PAGE_LOOKUPS`]).
+    pub(crate) fn page() -> Self {
+        Lookups { left: MAX_PAGE_LOOKUPS, cap: MAX_LOOKUP_DECODED }
+    }
+
+    /// No allowance beyond [`Stream::decoded`]'s own limit, for each table alone.
+    fn per_table() -> Self {
+        Lookups { left: usize::MAX, cap: pdfcraft_cos::MAX_PAGE_DECODED }
+    }
+
+    /// The lookup table in `stream`, charged to the allowance: what it decoded to, or all the
+    /// decoding it was allowed when it failed (past its limit, or damaged).
+    fn decode(&mut self, stream: &Stream) -> Vec<u8> {
+        let max = self.cap.min(self.left);
+        if max == 0 {
+            return Vec::new();
+        }
+        match stream.decoded_within(max) {
+            Ok(table) => {
+                self.left = self.left.saturating_sub(table.len());
+                table
+            }
+            Err(_) => {
+                self.left = self.left.saturating_sub(max);
+                Vec::new()
+            }
+        }
+    }
+}
+
 /// The colour space an operand of `cs` names: a device space, or a name in the resources'
 /// `/ColorSpace` dictionary, or (inside arrays) a family.
 pub(crate) fn space_of(doc: &Document, operand: &Object, cs_res: &Dict, depth: u8) -> Space {
+    space_within(doc, operand, cs_res, depth, &mut Lookups::per_table())
+}
+
+/// [`space_of`], with the Indexed lookup streams it decodes charged to `lookups`.
+pub(crate) fn space_within(doc: &Document, operand: &Object, cs_res: &Dict, depth: u8, lookups: &mut Lookups) -> Space {
     if depth > 4 {
         return Space::Gray;
     }
@@ -64,7 +118,7 @@ pub(crate) fn space_of(doc: &Document, operand: &Object, cs_res: &Dict, depth: u
             b"DeviceCMYK" | b"CMYK" => Space::Cmyk,
             b"Pattern" => Space::Pattern,
             other => match cs_res.get(other) {
-                Some(o) => space_of(doc, o, &Dict::default(), depth + 1),
+                Some(o) => space_within(doc, o, &Dict::default(), depth + 1, lookups),
                 None => Space::Gray,
             },
         },
@@ -78,7 +132,7 @@ pub(crate) fn space_of(doc: &Document, operand: &Object, cs_res: &Dict, depth: u
                         _ => None,
                     });
                     if let Some(alt) = dict.as_ref().and_then(|d| d.get(b"Alternate").cloned()) {
-                        return space_of(doc, &alt, cs_res, depth + 1);
+                        return space_within(doc, &alt, cs_res, depth + 1, lookups);
                     }
                     match dict.and_then(|d| d.int(b"N")) {
                         Some(1) => Space::Gray,
@@ -97,12 +151,12 @@ pub(crate) fn space_of(doc: &Document, operand: &Object, cs_res: &Dict, depth: u
                     Space::Lab { white, range }
                 }
                 b"Indexed" | b"I" => {
-                    let base = a.get(1).map(|b| space_of(doc, b, cs_res, depth + 1)).unwrap_or(Space::Rgb);
+                    let base = a.get(1).map(|b| space_within(doc, b, cs_res, depth + 1, lookups)).unwrap_or(Space::Rgb);
                     let hival = a.get(2).and_then(|h| doc.resolve(h).as_f64()).unwrap_or(0.0).clamp(0.0, 255.0) as usize;
                     let table = match a.get(3).map(|t| doc.resolve(t)) {
                         Some(t) => match &*t {
                             Object::String(s) => s.bytes.clone(),
-                            Object::Stream(st) => st.decoded().unwrap_or_default(),
+                            Object::Stream(st) => lookups.decode(st),
                             _ => Vec::new(),
                         },
                         None => Vec::new(),
@@ -124,7 +178,7 @@ pub(crate) fn space_of(doc: &Document, operand: &Object, cs_res: &Dict, depth: u
                     } else {
                         a.get(1).map(|n| doc.resolve(n)).and_then(|n| n.as_array().map(Vec::len)).unwrap_or(1).max(1)
                     };
-                    let alt = a.get(2).map(|b| space_of(doc, b, cs_res, depth + 1)).unwrap_or(Space::Gray);
+                    let alt = a.get(2).map(|b| space_within(doc, b, cs_res, depth + 1, lookups)).unwrap_or(Space::Gray);
                     let exp = a.get(3).map(|f| doc.resolve(f)).and_then(|f| {
                         let d = match &*f {
                             Object::Dict(d) => d.clone(),
