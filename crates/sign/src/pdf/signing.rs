@@ -251,12 +251,12 @@ fn sign_inner(
                 .iter()
                 .enumerate()
                 .filter(|(i, _)| *i != idx)
-                .flat_map(|(_, other)| other.widgets.iter().filter_map(move |(wr, _)| wr.or(other.r).map(|r| r.num)))
+                .flat_map(|(_, other)| other.widgets.iter().filter_map(|(wr, _)| wr.map(|r| r.num)))
                 .collect();
             let mut seen_widgets = HashSet::new();
             let mut list = Vec::with_capacity(f.widgets.len());
             for (wr, wd) in &f.widgets {
-                let target = wr.unwrap_or(fr);
+                let target = (*wr).ok_or_else(|| SignError::Pdf("the field's widget is not an indirect object".into()))?;
                 if claimed_elsewhere.contains(&target.num) {
                     return Err(SignError::Pdf(format!("the field {:?} shares a widget with another signature field", f.name)));
                 }
@@ -848,6 +848,19 @@ mod tests {
         shared_doc.update_dict(root, |c| c.set(b"AcroForm".to_vec(), Object::Dict(af)))?;
         let err = sign(&shared_doc, &id, &opts).unwrap_err();
         assert_eq!(err.to_string(), "the field \"Sig\" shares a widget with another signature field");
+
+        // A direct child widget dictionary inside `/Kids` has no `ObjRef` (`wr = None`) and must
+        // be rejected rather than falling back to the parent field dictionary `fr`.
+        let mut direct_kid_doc = doc.clone();
+        let mut direct_w = Dict::new();
+        direct_w.set(b"Type".to_vec(), Object::name("Annot"));
+        direct_w.set(b"Subtype".to_vec(), Object::name("Widget"));
+        direct_w.set(b"Rect".to_vec(), Object::Array(vec![Object::Int(0), Object::Int(0), Object::Int(50), Object::Int(20)]));
+        direct_kid_doc.update_dict(field_ref, |d| {
+            d.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(widgets[0]), Object::Dict(direct_w)]));
+        })?;
+        let err = sign(&direct_kid_doc, &id, &opts).unwrap_err();
+        assert_eq!(err.to_string(), "the field's widget is not an indirect object");
         Ok(())
     }
 }
