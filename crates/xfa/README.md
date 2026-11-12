@@ -160,9 +160,10 @@ let form = pdfcraft_xfa::layout_xml(template_xml)?;       // pages of items, for
   (`restyle`): each write is a property change of the object instance, kept in
   `/PCXfaOverrides /Props`; the property group it falls under is read again by the functions that
   read the template (`parse::restyle_from`), so the border, fill, edges and corners, font,
-  paragraph, margins, widget border and kind of choice list, caption (font, reserve, label),
-  item lists, the Required flag, tooltip, maxChars, pictures, validation and format tests,
-  the calculation's override, page breaks and occurrences follow it. An object with one instance
+  paragraph, margins, the widget's border, multi-line, scrolling and check box shape, a choice
+  list taking typed text, caption (font, reserve, label), item lists, the Required flag,
+  tooltip, maxChars, pictures, validation and format tests, the calculation's override, page
+  breaks and occurrences follow it. An object with one instance
   takes its changes in the template; each instance of a repeating subform, and each page's copy
   of page-master content, is drawn with its own. The rules a change must meet (paths, colours,
   measurements, whole numbers, sizes) are one file, `prop_rules.rs`, read by both crates, so a

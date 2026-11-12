@@ -905,6 +905,15 @@ fn choice_of(e: XmlNode) -> ChoiceList {
     }
 }
 
+/// A widget's own flags: multi-line (`multiLine`), not scrolling (`vScrollPolicy` for a
+/// multi-line widget, else `hScrollPolicy`, `"off"`) and a round check box (`shape`).
+fn widget_flags(ui_el: Option<XmlNode<'_, '_>>) -> (bool, bool, bool) {
+    let multiline = ui_el.is_some_and(|e| e.attribute("multiLine").is_some_and(|m| m == "1" || m == "true"));
+    let no_scroll = ui_el.is_some_and(|e| e.attribute(if multiline { "vScrollPolicy" } else { "hScrollPolicy" }) == Some("off"));
+    let check_round = ui_el.is_some_and(|e| e.attribute("shape") == Some("round"));
+    (multiline, no_scroll, check_round)
+}
+
 /// Read again what a script's property changes affect: `x` is an element holding the object's
 /// property elements as they now are (see [`crate::restyle`]), and `touched` says which property
 /// elements the changes were under (`border`, `ui`, `caption`, …; `caption.value` when a change
@@ -932,6 +941,7 @@ pub(crate) fn restyle_from(node: &mut Node, x: XmlNode, touched: &dyn Fn(&str) -
                 f.ui_border = ui_el.and_then(|e| parse_border(child(e, "border")));
                 f.ui_margin = parse_margin(ui_el.and_then(|e| child(e, "margin")));
                 f.check_size = ui_el.and_then(|e| attr_measure(e, "size")).filter(|s| *s > 0.0);
+                (f.multiline, f.no_scroll, f.check_round) = widget_flags(ui_el);
                 f.picture = inner_text(x, "ui", "picture");
                 // The widget's kind stays the template's; a choice list's options follow it.
                 if f.ui == Ui::ChoiceList
@@ -1047,7 +1057,7 @@ fn parse_field(n: XmlNode, warnings: &mut Vec<String>) -> Field {
         (true, Some(e)) => choice_of(e),
         _ => ChoiceList::default(),
     };
-    let multiline = ui_el.is_some_and(|e| e.attribute("multiLine").is_some_and(|m| m == "1" || m == "true"));
+    let (multiline, no_scroll, check_round) = widget_flags(ui_el);
     let validate_el = child(n, "validate");
     let validate_message = validate_message_of(validate_el);
     let (format_test, format_picture, format_message) = format_test_of(validate_el);
@@ -1064,9 +1074,9 @@ fn parse_field(n: XmlNode, warnings: &mut Vec<String>) -> Field {
         ui_border: ui_el.and_then(|e| parse_border(child(e, "border"))),
         ui_margin: parse_margin(ui_el.and_then(|e| child(e, "margin"))),
         check_size: ui_el.and_then(|e| attr_measure(e, "size")).filter(|s| *s > 0.0),
-        check_round: ui_el.is_some_and(|e| e.attribute("shape") == Some("round")),
+        check_round,
         multiline,
-        no_scroll: ui_el.is_some_and(|e| e.attribute(if multiline { "vScrollPolicy" } else { "hScrollPolicy" }) == Some("off")),
+        no_scroll,
         caption: parse_caption(child(n, "caption"), warnings),
         value: parse_value(value_el, warnings),
         items,

@@ -412,6 +412,26 @@ fn a_change_refreshed_in_place_gives_what_a_fresh_build_gives() {
     assert_eq!(one(&live), one(&fresh));
 }
 
+/// A widget's own flags follow a change as the template's do: a text field made multi-line and
+/// not to scroll, a radio button drawn square (XFA 3.3 p. 865, p. 650).
+#[test]
+fn a_widgets_own_flags_follow_their_properties() {
+    let t = template();
+    let w = |t: &Template, som: &str| widgets(t).into_iter().find(|w| w.som == som).unwrap();
+    let before = w(&t, "form[0].plain[0]");
+    assert!(!before.multiline && !before.no_scroll);
+    let ov = overrides("form[0].plain[0]", &[("ui#0/textEdit#0", Some("multiLine"), "1"), ("ui#0/textEdit#0", Some("vScrollPolicy"), "off")]);
+    let got = w(&crate::apply_overrides(&t, &ov), "form[0].plain[0]");
+    assert!(got.multiline && got.no_scroll, "{got:?}");
+    let radio = |t: &Template| match w(t, "form[0].choice[0].a[0]").kind {
+        crate::WidgetKind::Radio { round, .. } => round,
+        other => panic!("{other:?}"),
+    };
+    assert!(radio(&t), "the template's shape=\"round\"");
+    let ov = overrides("form[0].choice[0].a[0]", &[("ui#0/checkButton#0", Some("shape"), "square")]);
+    assert!(!radio(&crate::apply_overrides(&t, &ov)));
+}
+
 /// A field whose property tree the reader cut short keeps the display picture the template
 /// gives when a change is refreshed in place, as a fresh build keeps it.
 #[test]
