@@ -945,6 +945,7 @@ fn combine_reads_answer_in_path_order_and_name_what_failed() {
     assert!(files[0].read.as_ref().unwrap().1.is_some(), "when it was last modified comes with the bytes");
     assert!(files[1].read.is_err(), "the missing file says why");
     assert_eq!(files[2].read.as_ref().unwrap().0, b"ay");
+}
 
 /// A password retry submits with priority and succeeds even when the open worker queue is full
 /// of ordinary background documents, placing the retry at the head of the worker queue.
