@@ -280,6 +280,18 @@ several `/NM`, per-line quads, the caret (`5bad54c40`, §4), re-addressed across
   delivered**: `git merge-base --is-ancestor 0d3ea2708 e7a056501` succeeds, it
   is an ancestor of the PR head, so only this pass's two commits are new. Nothing
   was pushed by this agent; the push is the owner's.
+- Snapshot this file is written to (measured 2026-11-12T16:20Z with `git` and
+  `gh pr view 6622`): local `HEAD` is **`fee60000b`** — "a room-side commit for
+  the cabinet, and an etag it can recognise" (8 files, +571/−45; §4) — and the
+  fork `copoka/pdfcraft` and PR #6622 both carry **`2a2b0c157`**;
+  `git rev-list --left-right --count
+  fork/feature/realtime-collaboration...HEAD` reads `0 1`, the tree is clean,
+  and the PR is `MERGEABLE`/`UNSTABLE` with `reviewDecision` empty. So
+  **exactly one commit is written and not delivered**; this record is a
+  docs-only commit on top of it (`0 2` after it). Every workflow run on the fork
+  still reads `action_required`, so the gate evidence for this head is the host
+  sweep in §4, not a GitHub run. Push, approvals and the manual desktop
+  acceptance are the owner's; nothing else is owed on the code side.
 - Audience: the next session (human or agent). Everything here was verified in
   the session that wrote it; anything not verified is marked as such.
 - Design: `docs/collab/RFC.md` (protocol, ADRs, trade-offs); operation of the
@@ -3624,6 +3636,79 @@ What this does **not** establish, and what to look at next:
   whether the binary currently on the cabinet was built from the final commit is
   a cabinet-side check this pass cannot make from here.
 
+### Both remainders of that run closed: the room-side commit and its etag (2026-11-12)
+
+The browser run above left two things undone, and the cabinet's M95 pass closed
+both. They were one defect seen from two sides: the cabinet never asked the room
+for the file, and the ticket carried the wrong kind of etag.
+
+**1. `pdfcraft:committed` never reached the app.** The app's "Commit to the
+cabinet" posts `pdfcraft:commit {sessionId}` and the cabinet's D3 route refused
+it (`400 the application has no room-side commit: Save sends the document
+itself`): PdfCraft opens its control plane with the cabinet's own session
+ticket (`bootstrap=ticket`), and only a `session`-mode room was asked to build
+the file. So the cabinet never got `{version, etag}` and never posted
+`pdfcraft:committed`; the version that appeared in the file came from the room's
+own idle commit, and the app's status line stayed at "Commit requested from the
+cabinet". The control plane now serves `POST /v1/sessions/{fileId}/commit` with
+the session ticket in `Authorization` (the file is in the token, the role must
+be able to write), and it answers `{version, cabinet: {version, etag}}` —
+GridCraft's shape, which the cabinet already reads. A clean room is answered
+from its marker, so a repeated Save publishes nothing; a refused publication is
+still a `409`.
+
+**2. `409` on every ticket after a commit.** `POST /v1/sessions` compared the
+tag the cabinet sent with the room's `CABINET` marker, but the cabinet sent
+none, so the room fell back to the SHA-256 of the bytes it had just received.
+The marker holds the cabinet's own tag (its version), so from the first accepted
+commit on the comparison was a digest against a version: `409`, and on the
+deployed file 43 the session could only be reopened by moving the room's state
+directory aside. The request now carries `etag` and `version` explicitly (the
+cabinet sends its file version), and the room compares like with like.
+
+A tag that moved is still a refusal, with one exception: the marker now records
+the digest of the bytes it published (`CabinetCopy::sha256`), so when the
+cabinet names a newer tag over *those* bytes the change is our own commit whose
+answer never reached the marker — a repeated POST, or a process that died
+between the answer and the marker write — and the room adopts the tag instead of
+blocking the session. Foreign bytes stay a `409`. `WsServer::commit_now` is the
+seam the control plane needed: the base is written under the hub lock, the
+cabinet call runs outside it, and a retryable failure goes to the publication
+queue rather than being lost.
+
+Gates on `fee60000b` (24 files touched): `cargo fmt --all --check`, clippy with
+`-D warnings` on the four touched crates, and `cargo test` — collab-daemon 39
+(5 new: the commit route with a ticket, a clean repeat that publishes nothing, a
+viewer and another file's ticket, a refused publication, and the double commit
+whose answer was lost), collab-ws 16 + e2e 36, collab-pdf 71, collab-server 33,
+collab-hub 5, collab-client-pdf 48, all passing.
+
+The room binary built from it is `68df6a7b…63238` (glibc 2.38, v0.21.1) and it
+is what `craft-sync-pdfcraft` runs on the cabinet since 2026-11-12 18:51 MSK.
+
+**Browser run on the cabinet (2026-11-12, file 43 `acceptance.pdf`, owner and
+editor through SSO, headless Chrome).** Recorded in the cabinet's
+`docs/CRAFT-ACCEPTANCE.md` §11 with screenshots:
+
+| What | Observed |
+|---|---|
+| An edit and the app's Commit | `POST /api/v1/files/43/craft/commit` `200`; the cabinet's bar `Версия: 1794499249`; the app's status `Committed version 1794499249`; the page received `pdfcraft:committed {version:1794499249, etag:"1794499249"}` |
+| A second Commit | `200` (a new version `1794499397` after the room's next build, and no `409`) |
+| A rapid double click | two commits, both `200` |
+| A foreign change of the file (an ordinary replace of its bytes) | the next ticket `409 conflict` |
+| The original bytes restored | ticket `200`: the tag moved to our own published bytes and the room adopted it |
+
+**What is still open (new, and not this fix):** a page loaded *after* a commit,
+while the room's journal is empty because the commit compacted it, is answered
+with a snapshot that carries a **base reference** (`{"type":"snapshot","mode":
+"base","base":{"sha256":…}}`), and the web client cannot take a base: it says
+"The server compacted the journal; reopen the document to catch up." The base
+delivery the DeckCraft client has (`GET /v1/sessions/{id}/base/{sha256}` +
+`collab-client-pdf` fetching it) is what PdfCraft needs next; until then a
+reload right after a commit asks the user to reopen the document. The same
+message appears in a clean run whenever the join has to start from a compacted
+base.
+
 ### Rebase onto `origin/main` `8d5d39ef` and the gate run at the rebased head (2026-11-09)
 
 The branch was 40 commits ahead of `43f24aa1` (the `origin/main` it had been
@@ -4417,17 +4502,21 @@ Ordered by the risk they pose to production.
 
 Work in this order unless the owner says otherwise.
 
-**Deliver first.** Measured 2026-11-12: `0d3ea2708` (the cabinet's
-`expectedVersion` as its etag, §4) is **already delivered** — it is an ancestor
-of PR #6622's head `e7a056501` (`git merge-base --is-ancestor` exits 0, §6.6).
-What is local and unpushed is this pass's work: `ac33dd212`, `00c06ed5c`,
-`c56da220b` (the web-path and remote-selection records) and the code `c935ebadb`
-plus the docs commit above it; `git rev-list --left-right --count
-e7a056501...HEAD` reads `0 5` with this record. This agent's permission still
-denies `git push*`; `git push fork feature/realtime-collaboration` from the
-clone delivers them, after which `gh pr view 6622` (head,
-`mergeStateStatus`) and `pdfcraft/PR-DRAFT.md` — still describing
-`95e2c9c97`/`69b2a6dad` — need the same facts before the owner publishes.
+**Deliver first.** Measured 2026-11-12T16:20Z (`git`, `gh pr view 6622`): the
+fork and PR #6622 carry **`2a2b0c157`**; this clone's `HEAD` is **`fee60000b`**
+("a room-side commit for the cabinet, and an etag it can recognise", §4), and
+`git rev-list --left-right --count
+fork/feature/realtime-collaboration...HEAD` reads `0 1`. **Exactly one commit
+is written and not delivered.** Everything the earlier versions of this section
+listed as unpushed — `ac33dd212`, `00c06ed5c`, `c56da220b`, `c935ebadb` — is
+**delivered**: they are ancestors of `2a2b0c157`, which is the fork tip and the
+PR head; `git merge-base --is-ancestor 2a2b0c157 HEAD` exits 0. This agent's
+permission still denies `git push*`, so `git push fork
+feature/realtime-collaboration` from this clone is the owner's step; after it
+`gh pr view 6622` must read `fee60000b`, and the fork's five workflows will
+wait again for a maintainer's approval (`action_required`, so no check has
+executed on the branch). The gate on this head is §4, "The cabinet's Save
+reaches the room", and `pdfcraft/PR-DRAFT.md` now carries the same facts.
 Everything below is still open feature work; nothing in it is a prerequisite of
 that push.
 
@@ -4714,17 +4803,17 @@ payload).
 
 ### 6.6 Cleanup and submission
 
-- **This pass (2026-11-12): the field caret, and where the branch stands.**
-  Code `c935ebadb`, docs on top. `gh pr view 6622` still reads
-  `headRefOid e7a056501`; `git rev-list --left-right --count e7a056501...HEAD`
-  is `0 5` after this record (`ac33dd212`, `00c06ed5c`, `c56da220b`,
-  `c935ebadb`, docs), and the tree was clean when the gate ran. The brief's
-  list of unpushed commits named `0d3ea2708`; it is **delivered**, an ancestor
-  of `e7a056501` (`git merge-base --is-ancestor 0d3ea2708 e7a056501` exits 0),
-  so nothing else is owed on that side. The gate below ran on `c935ebadb` and
-  is green (§4, "Form-field carets in presence"): fmt, clippy `-D warnings`,
-  e2e 36/36, UI collab 24, forms 74, client 14, pdf 71, ws unit 16, wasm 44
-  crates. Nothing was pushed; the push and the CI approvals are the owner's.
+- **This pass (2026-11-12, 16:20Z): the branch's facts, and the one commit
+  owed.** Local `HEAD` is `fee60000b` (code) on top of the delivered
+  `2a2b0c157`; the fork and PR #6622 read `2a2b0c157`, `git rev-list
+  --left-right --count fork/…...HEAD` is `0 1`, the tree is clean. This pass
+  changed **no code**: it rewrote §6's delivery paragraph, this bullet, §7's
+  first gotcha and `pdfcraft/PR-DRAFT.md` to that snapshot, and added §4's
+  record of `fee60000b` with the gate run on it. The earlier record that named
+  `e7a056501` as the head and five unpushed commits is history: `c935ebadb`
+  and the four commits beside it are ancestors of `2a2b0c157`. Nothing was
+  pushed; the push, the run approvals, the review and the manual desktop
+  acceptance (§5.2 p.4) are the owner's.
 - **Delivery state (2026-11-11T23:37Z; head re-measured 2026-11-12).** The
   delivered head recorded here is `eb60bc5ff` —
   the delivery record of `6ac4e1130`, which is the D4 record on top of
@@ -4992,13 +5081,16 @@ payload).
 
 ## 7. Gotchas for the next session
 
-- **The pushed head `95e2c9c97` is red on `fmt` and `clippy`, and the fix is two
-  lines in `crates/engine/src/session.rs`**: the blank line at the head of the
-  `use crate::{…}` list (line 10) and the unused `BookmarkRow` import (line 14),
-  both left by the merge of `3a117c3c0` (§4). Fix those, re-run `CI=1 cargo
-  xtask ci` with `CRAFT_I18N_DIR`/`CRAFT_FONTS_DIR`, and the head is expected to
-  be green; the other eight steps already pass on it (10225 tests). No CI has
-  run on it, so nothing else is known to be red.
+- **The red head `95e2c9c97` is history; do not re-fix it.** It failed `fmt`
+  and `clippy` on the import block the merge of `3a117c3c0` left in
+  `crates/engine/src/session.rs` (a blank line at line 10, an unused
+  `BookmarkRow` at line 14); `69b2a6dad` fixed both and the delivered
+  `2a2b0c157` and the local `fee60000b` are above it. Before changing anything,
+  re-run the gate on the current head: `CI=1 cargo xtask ci` with
+  `CRAFT_I18N_DIR` (craft-i18n at `575cfdef`) and `CRAFT_FONTS_DIR`
+  (`b076417b`) — §4, "The cabinet's Save reaches the room", has the run for
+  `fee60000b`. No GitHub workflow has executed on the branch (every run is
+  `action_required`), so a local sweep is the only evidence there is.
 - The branch's only difference from `origin/main` outside the feature is 4 lines
   in `crates/cos/src/object.rs`: the branch's `decoded_strict_within` delegates
   to `decoded_strict_within_counted`, main's keeps the `decode` closure. Both
