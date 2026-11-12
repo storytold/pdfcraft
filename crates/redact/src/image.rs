@@ -93,6 +93,17 @@ fn dct_components(doc: &Document, s: &Stream) -> Option<usize> {
     }
 }
 
+/// A DCT (JPEG) image's samples for clearing, paid for out of the run's image allowance first:
+/// the decoder reads the encoded bytes itself, so only a single 8-bit gray or RGB filter layout is
+/// decoded (#2246), and decoding a scan is work like any other codec's, so a file of many large
+/// JPEGs can't keep one apply busy past the allowance. `None` removes the image whole.
+fn dct_data(budget: &mut ImageBudget, s: &Stream, ncomp: usize, bpc: usize, w: usize, h: usize) -> Option<Vec<u8>> {
+    if bpc != 8 || !budget.pay_jpeg((w as u64).saturating_mul(h as u64).saturating_mul(ncomp as u64), &s.raw) {
+        return None;
+    }
+    jpeg_samples(&s.raw, ncomp, w, h)
+}
+
 /// The components of image `s`'s colour space, through any references (`None` when unknown).
 pub(crate) fn components(doc: &Document, s: &Stream) -> Option<usize> {
     let cs = crate::globals::followed(doc, s.dict.get(b"ColorSpace")?);
@@ -209,21 +220,7 @@ fn decode_and_clear(doc: &Document, s: &Stream, ctm: &Matrix, rects: &[[f64; 4]]
     // alone would skip such a predictor, and the cleared bytes would then miss the covered pixels),
     // and refuses a JBIG2 page of another size than the image: the renderer draws the whole page
     // into the image, so the rows cleared wouldn't be the ones a mark covers on screen.
-    let mut data = if is_dct {
-        // The JPEG decoder reads the encoded bytes itself, so the PDF filter chain above it must
-        // be empty and only 8-bit gray and RGB layouts are decoded (#2246).
-        if bpc != 8 {
-            return None;
-        }
-        // Decoding a scan is work like any other codec's: charge it before the decoder runs, so a
-        // file of many large JPEGs can't keep one apply busy past the run's allowance.
-        if !budget.pay_jpeg((w as u64).saturating_mul(h as u64).saturating_mul(ncomp as u64), &s.raw) {
-            return None;
-        }
-        jpeg_samples(&s.raw, ncomp, w, h)?
-    } else {
-        budget.decode(doc, s, allowance).ok()?
-    };
+    let mut data = if is_dct { dct_data(budget, s, ncomp, bpc, w, h)? } else { budget.decode(doc, s, allowance).ok()? };
     if data.len() < bytes {
         return None;
     }
