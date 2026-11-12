@@ -174,6 +174,8 @@ fn clone_subtree(h: &mut XHost, src: usize, parent: Option<usize>, depth: usize)
                 // The copy holds no value, so nothing is shown in its picture either.
                 formatted: None,
                 props: std::sync::Arc::clone(&n.props),
+                // A new instance holds no changes yet.
+                changed: Arc::from([]),
                 // A new instance lists what the template lists.
                 items: None,
             },

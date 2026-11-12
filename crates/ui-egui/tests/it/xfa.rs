@@ -430,3 +430,28 @@ fn typing_over_a_recommended_calculation_asks_whether_to_keep_the_value() {
     h.run_steps(3);
     assert_eq!(value(&h, "k2"), "10");
 }
+
+/// Using the calculated value undoes the entry in the document it was typed into, even when
+/// another document is in front by then; and only that entry: after a later edit to the
+/// document, the value stays (with a note) rather than the later edit being undone.
+#[test]
+fn using_the_calculated_value_undoes_that_entry_only() {
+    let mut h = open(recommended_calculation());
+    type_value(&mut h, "k2", "5");
+    assert!(h.state().pending_calc_override.is_some());
+    h.state_mut().open_bytes("other.pdf", None, recommended_calculation()).unwrap();
+    h.run_steps(4);
+    assert_ne!(h.state().active, Some(0), "the other document is in front");
+    h.get_by_label("Use calculated value").click();
+    h.run_steps(3);
+    assert_eq!(value(&h, "k2"), "10", "the entry was undone in its own document");
+
+    let mut h = open(recommended_calculation());
+    type_value(&mut h, "k2", "5");
+    // Another edit lands before the answer (as the other pane's can in a split view).
+    type_value(&mut h, "k1", "2");
+    h.get_by_label("Use calculated value").click();
+    h.run_steps(3);
+    assert_eq!((value(&h, "k1"), value(&h, "k2")), ("2".to_string(), "5".to_string()), "the later edit stays, and so does the value");
+    assert!(h.state().pending_calc_override.is_none());
+}

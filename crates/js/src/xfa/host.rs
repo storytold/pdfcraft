@@ -30,6 +30,8 @@ pub(crate) struct HNode {
     pub(crate) formatted: Option<Arc<str>>,
     /// See [`XfaNode::props`]; instances a script adds share their first instance's.
     pub(crate) props: std::sync::Arc<super::XfaProps>,
+    /// See [`XfaNode::changed`]; none for an instance a script adds.
+    pub(crate) changed: Arc<[String]>,
     /// A choice list's entries as a script's list methods leave them, one list per `<items>`;
     /// `None` while they are as the template lists them. The hook for PdfCraft's choice-list
     /// methods (`addItem`, `clearItems`; the Series 1 work, not on main yet), which will set it so
@@ -69,6 +71,7 @@ fn flattened(root: &XfaNode) -> Vec<HNode> {
         gone: false,
         formatted: None,
         props: Arc::default(),
+        changed: Arc::from([]),
         items: None,
     }];
     if let Some(ci) = flatten(root, Some(0), &mut nodes, 1)
@@ -108,6 +111,14 @@ pub(crate) struct XHost {
     pub(crate) prop_writes: super::props::PropWrites,
     /// Attributes written to a property past [`super::props::MAX_WRITTEN_ATTRS`], left out.
     pub(super) dropped_prop_writes: usize,
+    /// Writes of a new property to an object already holding
+    /// [`super::props::MAX_CHANGES_PER_OBJECT`] changes, left out as the form leaves them out.
+    pub(super) dropped_object_writes: usize,
+    /// The keys of the changes this event handed the form beyond the snapshot's
+    /// ([`XfaNode::changed`]), by node: the script's writes, the earlier scripts' and the
+    /// copies of drawn edges and corners (`=` first), as the form keeps them, for its limit on
+    /// changes to one object.
+    pub(super) run_keys: HashMap<usize, Vec<String>>,
     /// Bytes of edges and corners copied when a script reached sides a border doesn't list,
     /// against [`super::props::MAX_COPIED`].
     pub(super) copied: usize,
@@ -156,6 +167,8 @@ impl XHost {
             dropped_bytes: 0,
             prop_writes: super::props::PropWrites::new(),
             dropped_prop_writes: 0,
+            dropped_object_writes: 0,
+            run_keys: HashMap::new(),
             copied: 0,
             copying: false,
         }
@@ -300,6 +313,13 @@ impl XHost {
                 self.dropped_prop_writes
             ));
         }
+        if self.dropped_object_writes > 0 {
+            out.push(format!(
+                "the script changed more than {} properties of one object; {} more were left out",
+                super::props::MAX_CHANGES_PER_OBJECT,
+                self.dropped_object_writes
+            ));
+        }
         out
     }
 
@@ -364,6 +384,7 @@ fn flatten(n: &XfaNode, parent: Option<usize>, out: &mut Vec<HNode>, depth: usiz
         gone: false,
         formatted: n.formatted.as_deref().map(Arc::from),
         props: Arc::clone(&n.props),
+        changed: Arc::clone(&n.changed),
         items: None,
     });
     let mut kids = Vec::new();

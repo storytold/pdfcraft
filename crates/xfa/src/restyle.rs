@@ -78,6 +78,23 @@ fn size_of(list: &[Prop], depth: usize) -> (usize, usize) {
     })
 }
 
+/// [`size_of`] the object's property elements `list` as the template reader charges them to
+/// the object's budget: the entries of its first `crate::parse::MAX_ITEM_LISTS` item lists
+/// are not charged (they have the list's own bounds), only each list's element and attributes.
+fn charged_size(list: &[Prop]) -> (usize, usize) {
+    let mut lists = 0usize;
+    list.iter().fold((0usize, 0usize), |(n, b), p| {
+        let (pn, pb) = if p.tag == "items" && lists < crate::parse::MAX_ITEM_LISTS {
+            lists += 1;
+            let own = p.tag.len().saturating_add(p.attrs.iter().map(|(k, v)| k.len().saturating_add(v.len())).sum::<usize>());
+            (1, own)
+        } else {
+            size_of(std::slice::from_ref(p), 0)
+        };
+        (n.saturating_add(pn), b.saturating_add(pb))
+    })
+}
+
 /// The property tree `base` with the changes `sets` (by [`prop_key`]) applied, in the order of
 /// their keys, and whether any was left out for the object's budget. A change to a property
 /// the tree doesn't have adds it, as an element of its own that starts empty, so its other
@@ -94,7 +111,7 @@ fn size_of(list: &[Prop], depth: usize) -> (usize, usize) {
 /// property path are skipped.
 pub fn apply_props(base: &Props, sets: &BTreeMap<String, String>) -> (Props, bool) {
     let mut out = base.clone();
-    let mut bytes = size_of(&out.elements, 0).1;
+    let mut bytes = charged_size(&out.elements).1;
     let mut cut = false;
     // By path, a copy before a write to the same key (the host copies an element before a
     // script writes to it).
@@ -108,7 +125,7 @@ pub fn apply_props(base: &Props, sets: &BTreeMap<String, String>) -> (Props, boo
             // The change adds elements: made on a copy kept until they fit the budget.
             let before = out.elements.clone();
             add_missing(&mut out.elements, &st, 0);
-            let (n, b) = size_of(&out.elements, 0);
+            let (n, b) = charged_size(&out.elements);
             if n > crate::parse::MAX_OBJECT_PROPS || b > crate::parse::MAX_OBJECT_PROP_BYTES {
                 out.elements = before;
                 cut = true;
@@ -116,13 +133,16 @@ pub fn apply_props(base: &Props, sets: &BTreeMap<String, String>) -> (Props, boo
             }
             bytes = b;
         }
+        // An entry of a list the reader doesn't charge (see `charged_size`) isn't charged here
+        // either: the path's own bounds hold it (`MAX_ITEM_INDEX` entries, `MAX_VALUE` bytes).
+        let uncharged = matches!(st.as_slice(), [("items", k), _, ..] if *k < crate::parse::MAX_ITEM_LISTS);
         let Some(p) = find_mut(&mut out.elements, &st, 0) else { continue };
         let old = match attr {
             Some(name) => p.attrs.iter().find(|(k, _)| k == name).map_or(0, |(k, v)| k.len().saturating_add(v.len())),
             None => p.text.as_ref().map_or(0, |t| t.len()),
         };
         let new = attr.map_or(0, str::len).saturating_add(value.len());
-        let grown = bytes.saturating_sub(old).saturating_add(new);
+        let grown = if uncharged { bytes } else { bytes.saturating_sub(old).saturating_add(new) };
         if grown > crate::parse::MAX_OBJECT_PROP_BYTES {
             cut = true;
             continue;
@@ -267,6 +287,15 @@ pub fn draws(key: &str) -> bool {
 /// validation (script, message), its display picture (`format`) or its value element. When
 /// they don't, the live form needs only the tree with them applied ([`apply_props`]), not the
 /// field read again.
+/// Whether a change at `path` changes a field's value as the live form gives it to scripts:
+/// its items (a radio button's on value, a list's saved values), its data or edit picture
+/// (`bind`, `ui`, which also make it numeric) or its value element. The live form is built
+/// again for such a change, not only refreshed ([`crate::refresh_props`]).
+pub fn changes_live_value(path: &str) -> bool {
+    let root = path.trim_start_matches('=').split('#').next().unwrap_or("");
+    matches!(root, "items" | "bind" | "ui" | "value")
+}
+
 pub(crate) fn live_field_changes(sets: &BTreeMap<String, String>) -> bool {
     sets.keys().any(|k| {
         let root = k.trim_start_matches('=').split('#').next().unwrap_or("");

@@ -5,17 +5,14 @@ use super::{
     Views, XfaError, data_date_letters, data_path, data_to_iso, is_on, iso_to_pattern, text,
 };
 
+/// A radio button's group: its name, the on value of a button that lists none (its place in the
+/// group), the group's tooltip, and the on value the group's data selects.
+pub(super) type Radio<'a> = (&'a str, &'a str, Option<String>, Option<&'a str>);
+
 impl Layouter<'_> {
     /// Draw field `f`, instance `sib` under `ctx`, as scripts' property changes for that
     /// instance leave it (see [`Self::draw_field_as`]).
-    pub(super) fn draw_field(
-        &mut self,
-        f: &Field,
-        rect: Rect,
-        ctx: &Ctx,
-        radio: Option<(&str, &str, Option<String>, bool)>,
-        sib: usize,
-    ) -> Result<(), XfaError> {
+    pub(super) fn draw_field(&mut self, f: &Field, rect: Rect, ctx: &Ctx, radio: Option<Radio<'_>>, sib: usize) -> Result<(), XfaError> {
         match self.changes_of(&f.common, ctx, sib, Some("field")) {
             Some(sets) => {
                 let changed = crate::restyle::restyled_field(f, sets);
@@ -28,14 +25,7 @@ impl Layouter<'_> {
     /// Draw field `f` at `rect`: its border (a button's is its widget's box), its caption, then its
     /// widget, or its value as plain text when it is non-interactive, a barcode, or a text field
     /// taller than its content area. `radio` is set for a group's radio button; `sib` is its SOM index.
-    fn draw_field_as(
-        &mut self,
-        f: &Field,
-        rect: Rect,
-        ctx: &Ctx,
-        radio: Option<(&str, &str, Option<String>, bool)>,
-        sib: usize,
-    ) -> Result<(), XfaError> {
+    fn draw_field_as(&mut self, f: &Field, rect: Rect, ctx: &Ctx, radio: Option<Radio<'_>>, sib: usize) -> Result<(), XfaError> {
         if let Some(b) = &f.common.border
             && f.ui != Ui::Button
         {
@@ -205,11 +195,11 @@ impl Layouter<'_> {
                 let r = Rect::new(x, y, s, s);
                 let on = f.items.first().cloned().filter(|s| !s.trim().is_empty()).unwrap_or_else(|| "1".into());
                 let (kind, tip, checked) = match radio {
-                    Some((group, on_value, tip, chosen)) => (
-                        WidgetKind::Radio { group: group.to_string(), on: on_value.to_string(), round: f.check_round },
-                        tip.or_else(|| f.tooltip.clone()),
-                        chosen,
-                    ),
+                    Some((group, fallback_on, group_tip, selected)) => {
+                        let on_value = f.items.first().cloned().filter(|s| !s.trim().is_empty()).unwrap_or_else(|| fallback_on.to_string());
+                        let chosen = selected == Some(on_value.as_str());
+                        (WidgetKind::Radio { group: group.to_string(), on: on_value, round: f.check_round }, f.tooltip.clone().or(group_tip), chosen)
+                    }
                     None => (
                         WidgetKind::CheckBox { on: on.clone(), round: f.check_round },
                         f.tooltip.clone(),
@@ -261,8 +251,10 @@ impl Layouter<'_> {
             _ => (WidgetKind::Text, ui, widget_border(f.ui_border.as_ref(), false), plain_value, f.tooltip.clone()),
         };
         // A widget fill that is more than a colour (a pattern, a gradient, a stipple) is page
-        // content under the widget, whose own background stays clear (see `widget_border`).
-        if let Some(b) = f.ui_border.as_ref().filter(|b| b.fill().is_some() && b.fill_kind != FillKind::Solid) {
+        // content under the widget, whose own background stays clear (see `widget_border`). A
+        // button's box is its field border.
+        let widget_box = if f.ui == Ui::Button { f.common.border.as_ref() } else { f.ui_border.as_ref() };
+        if let Some(b) = widget_box.filter(|b| b.fill().is_some() && b.fill_kind != FillKind::Solid) {
             if let Some(base) = b.fill() {
                 self.push(Item::Fill { rect, color: base.0 })?;
             }

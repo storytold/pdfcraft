@@ -729,6 +729,9 @@ pub struct Field {
     /// `<validate><script>`: false (or an exception) shows `validate_message`; the value stays,
     /// as Acrobat marks the field invalid rather than reverting it.
     pub validate: Option<Script>,
+    /// The validation script while its test is turned off (`scriptTest="disabled"`, by the
+    /// template or a script): kept, so a script turning the test on again runs it.
+    pub validate_off: Option<Script>,
     pub validate_message: Option<String>,
     /// The validation's format test (`<validate formatTest>`, default `warning`), its picture
     /// clause (`<validate><picture>`) and its message (see [`crate::validation_rules`]).

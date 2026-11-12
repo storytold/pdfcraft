@@ -413,7 +413,7 @@ impl PropBudget {
 /// shown list and the saved values (XFA 3.3 p. 726, `<items/> [0..2]`), the two the field's own
 /// lists are read from. Forms do carry more (one public form has a third, empty, saved list);
 /// any further one is kept as an ordinary property, every entry charged to the object's budget.
-const MAX_ITEM_LISTS: usize = 2;
+pub(crate) const MAX_ITEM_LISTS: usize = 2;
 
 /// An `<items>` element (XFA 3.3 p. 758) as scripts read it: its attributes and its entries,
 /// each with its tag and text, as the choice list or check button shows them ([`parse_items`]:
@@ -996,10 +996,14 @@ pub(crate) fn restyle_from(node: &mut Node, x: XmlNode, touched: &dyn Fn(&str) -
                 f.required = must_be_filled(v);
                 f.validate_message = validate_message_of(v);
                 (f.format_test, f.format_picture, f.format_message) = format_test_of(v);
-                // The script stays as the template gives it (the copy here may be cut short);
-                // only a test turned off drops it.
+                // The script stays as the template gives it (the copy here may be cut short): a
+                // test turned off sets it aside, and one turned on again takes it back.
                 if v.and_then(|v| v.attribute("scriptTest")).map(str::trim) == Some("disabled") {
-                    f.validate = None;
+                    if let Some(s) = f.validate.take() {
+                        f.validate_off = Some(s);
+                    }
+                } else if f.validate.is_none() {
+                    f.validate = f.validate_off.take();
                 }
             }
         }
@@ -1097,6 +1101,10 @@ fn parse_field(n: XmlNode, warnings: &mut Vec<String>) -> Field {
         scripts,
         calculate: calculate_el.and_then(|c| child(c, "script")).map(|s| parse_script(s, "calculate")),
         validate: validate_script_of(validate_el),
+        validate_off: validate_el
+            .filter(|v| v.attribute("scriptTest").map(str::trim) == Some("disabled"))
+            .and_then(|v| child(v, "script"))
+            .map(|s| parse_script(s, "validate")),
         validate_message,
         required: must_be_filled(validate_el),
         numeric,

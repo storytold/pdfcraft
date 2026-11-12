@@ -107,7 +107,9 @@ impl PdfCraftApp {
                 }
                 Request::CalculationOverridden(message) => {
                     if self.pending_calc_override.is_none() {
-                        self.pending_calc_override = Some((id, message));
+                        // Handled as the entry is applied, so this is the generation it made.
+                        let generation = self.session.get(id).map_or(0, |d| d.edit_generation());
+                        self.pending_calc_override = Some((id, message, generation));
                     }
                 }
                 Request::Zoom(z) => {

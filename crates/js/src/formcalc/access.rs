@@ -118,6 +118,8 @@ impl Interp<'_> {
             Val::Str(s) => parse_num(s).unwrap_or(0.0),
             Val::Node(i) => self.to_num(&self.node_value(*i)),
             Val::List(items) => items.first().map_or(0.0, |x| self.to_num(x)),
+            // A property object reads as its value, as `deref` gives it (`for i = 1 upto $.font.size`).
+            Val::Prop(..) => self.to_num(&self.deref(v.clone())),
             _ => 0.0,
         }
     }
@@ -149,6 +151,7 @@ impl Interp<'_> {
                 self.truthy(&d)
             }
             Val::List(items) => !items.is_empty(),
+            Val::Prop(..) => self.truthy(&self.deref(v.clone())),
             _ => true,
         }
     }

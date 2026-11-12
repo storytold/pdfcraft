@@ -102,6 +102,10 @@ pub struct Overrides {
     /// [`overrides_of`]) until changed.
     props: Arc<crate::memo::PropMap>,
     prop_count: usize,
+    /// The copies of drawn edges and corners kept (`=` keys), at most
+    /// [`crate::restyle::MAX_PROP_OVERRIDES`] too, so a file holds no more entries than reading
+    /// it looks at (twice that limit).
+    prop_copies: usize,
     prop_bytes: usize,
     /// Property changes the file held that were not kept when it was read (not a change a
     /// script could make, or past the limits): counted for a note, as the next save leaves
@@ -140,7 +144,8 @@ impl Overrides {
     /// [`Overrides::set_prop`] for a value the scripting host copied from the edge or corner
     /// drawn on a side when a script reached one the border doesn't list (so that only that
     /// side changes): kept under its own key, applied before the writes to the same property,
-    /// and not counted as a change against the form's limit (its bytes are).
+    /// and not counted as a change against the form's limit (its bytes are, and the copies have
+    /// a limit of their own, as many).
     pub fn set_prop_copy(&mut self, som: &str, path: &str, attr: Option<&str>, value: &str) -> Result<bool, PropRefused> {
         self.set(som, path, attr, value, true)
     }
@@ -162,12 +167,17 @@ impl Overrides {
         };
         let removed = old.map_or(0, |v| v.len().saturating_sub(value.len()));
         let count = if old.is_some() || copy { self.prop_count } else { self.prop_count.saturating_add(1) };
+        let copies = if old.is_none() && copy { self.prop_copies.saturating_add(1) } else { self.prop_copies };
         let bytes = self.prop_bytes.saturating_add(added).saturating_sub(removed);
-        if count > crate::restyle::MAX_PROP_OVERRIDES || bytes > crate::restyle::MAX_PROP_OVERRIDE_BYTES {
+        if count > crate::restyle::MAX_PROP_OVERRIDES
+            || copies > crate::restyle::MAX_PROP_OVERRIDES
+            || bytes > crate::restyle::MAX_PROP_OVERRIDE_BYTES
+        {
             return Err(PropRefused::Full);
         }
         Arc::make_mut(&mut self.props).entry(som.to_string()).or_default().insert(key, value.to_string());
         self.prop_count = count;
+        self.prop_copies = copies;
         self.prop_bytes = bytes;
         Ok(true)
     }
@@ -213,6 +223,7 @@ impl Overrides {
             | rekey(&mut self.overridden, head, index)
             | (props_move && rekey(Arc::make_mut(&mut self.props), head, index));
         self.prop_count = self.props.values().flat_map(|m| m.keys()).filter(|k| !k.starts_with('=')).count();
+        self.prop_copies = self.props.values().flat_map(|m| m.keys()).filter(|k| k.starts_with('=')).count();
         self.prop_bytes =
             self.props.iter().map(|(s, m)| m.iter().map(|(k, v)| s.len().saturating_add(k.len()).saturating_add(v.len())).sum::<usize>()).sum();
         changed
@@ -261,6 +272,15 @@ pub fn overrides_of(doc: &Document, tpl: &Template) -> Overrides {
 thread_local! {
     /// Property changes read from documents (rather than taken from a memo), on this thread.
     static KEPT_READ: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Entries of documents' property changes looked at, kept or not, on this thread.
+    static ENTRIES_LOOKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many entries of property changes reading documents looked at on this thread, since the
+/// last call.
+#[cfg(test)]
+pub(crate) fn take_entries_looked() -> usize {
+    ENTRIES_LOOKED.with(|c| c.replace(0))
 }
 
 /// How many property changes have been read from documents on this thread, since the last call.
@@ -296,24 +316,35 @@ fn read_overrides(doc: &Document, memo: Option<&crate::memo::Memo>) -> Overrides
         if let Some(kept) = memo.and_then(|memo| memo.kept(&object)) {
             out.props = kept.props;
             out.prop_count = kept.count;
+            out.prop_copies = kept.copies;
             out.prop_bytes = kept.bytes;
             out.dropped = kept.dropped;
             return out;
         }
         // An entry refused (invalid, or past a limit) is counted in `dropped` for a note; no more
-        // entries than the limit twice over are looked at, the rest counted unread.
+        // entries than the limits allow (changes and copies, each up to the limit) are looked
+        // at, the rest counted unread, by their objects' sizes: an object named again and again
+        // costs a look-up each time, not its entries.
+        let most = crate::restyle::MAX_PROP_OVERRIDES.saturating_mul(2);
         let mut read = 0usize;
         for (som, sets) in m.iter() {
-            let Some(sets) = doc.resolve(sets).as_dict().cloned() else {
+            let resolved = doc.resolve(sets);
+            let Some(sets) = resolved.as_dict() else {
                 out.dropped = out.dropped.saturating_add(1);
                 continue;
             };
+            if read >= most {
+                out.dropped = out.dropped.saturating_add(sets.len());
+                continue;
+            }
             let som = String::from_utf8_lossy(som).into_owned();
-            for (key, v) in sets.iter() {
+            for (seen, (key, v)) in sets.iter().enumerate() {
+                #[cfg(test)]
+                ENTRIES_LOOKED.with(|c| c.set(c.get().saturating_add(1)));
                 read = read.saturating_add(1);
-                if read > crate::restyle::MAX_PROP_OVERRIDES.saturating_mul(2) {
-                    out.dropped = out.dropped.saturating_add(1);
-                    continue;
+                if read > most {
+                    out.dropped = out.dropped.saturating_add(sets.len().saturating_sub(seen));
+                    break;
                 }
                 let Some(v) = doc.resolve(v).as_string().map(|s| s.to_text()) else {
                     out.dropped = out.dropped.saturating_add(1);
@@ -330,7 +361,13 @@ fn read_overrides(doc: &Document, memo: Option<&crate::memo::Memo>) -> Overrides
             }
         }
         if let Some(memo) = memo {
-            let kept = crate::memo::KeptProps { props: Arc::clone(&out.props), count: out.prop_count, bytes: out.prop_bytes, dropped: out.dropped };
+            let kept = crate::memo::KeptProps {
+                props: Arc::clone(&out.props),
+                count: out.prop_count,
+                copies: out.prop_copies,
+                bytes: out.prop_bytes,
+                dropped: out.dropped,
+            };
             memo.read(&object, kept);
         }
     }
@@ -865,8 +902,10 @@ pub(crate) fn apply_overrides_to(nodes: &mut [Node], parent_som: &str, ov: &Over
 /// Apply the property changes `props` holds to each of `nodes` (children of `parent_som`) and
 /// their descendants, down to [`MAX_DEPTH`], by their SOM paths: the content of a page made from
 /// an unnamed page area, which the live form names `#pageArea[i]` and the layout doesn't (its
-/// objects' paths start at their own names). `true` when an object's changes don't all reach it
-/// (see [`crate::restyle::restyle`]).
+/// objects' paths start at their own names). An unnamed subform or area shares its parent's SOM
+/// path, as the live form names what it holds, and takes no change of its own; an exclusion
+/// group's buttons take theirs under the group's path. `true` when an object's changes don't
+/// all reach it (see [`crate::restyle::restyle`]).
 pub(crate) fn apply_props_to(nodes: &mut [Node], parent_som: &str, props: &crate::layout::PropChanges, depth: usize) -> bool {
     if depth > MAX_DEPTH {
         return false;
@@ -879,15 +918,31 @@ pub(crate) fn apply_props_to(nodes: &mut [Node], parent_som: &str, props: &crate
             Node::ExclGroup(_) => Some("group"),
             _ => None,
         };
-        let Some(name) = n.common().name.clone().or(name_default.map(str::to_string)) else { continue };
-        let som = child_som(parent_som, Some(&name), sibs.at(i));
-        if let Some(sets) = props.get(&som) {
+        let name = n.common().name.clone().or(name_default.map(str::to_string));
+        let som = child_som(parent_som, name.as_deref(), sibs.at(i));
+        if name.is_some()
+            && let Some(sets) = props.get(&som)
+        {
             cut |= crate::restyle::restyle(n, sets);
         }
         match n {
             Node::Subform(s) => cut |= apply_props_to(&mut s.children, &som, props, depth + 1),
             Node::Area(a) => cut |= apply_props_to(&mut a.children, &som, props, depth + 1),
-            Node::Field(_) | Node::Draw(_) | Node::ExclGroup(_) => {}
+            Node::ExclGroup(g) => {
+                let fields: Vec<Node> = g.fields.iter().map(|f| Node::Field(Box::new(f.clone()))).collect();
+                let fsibs = SomIndices::of(&fields);
+                for (fi, f) in g.fields.iter_mut().enumerate() {
+                    let fsom = child_som(&som, f.common.name.as_deref().or(Some("field")), fsibs.at(fi));
+                    if let Some(sets) = props.get(&fsom) {
+                        let mut node = Node::Field(Box::new(std::mem::take(f)));
+                        cut |= crate::restyle::restyle(&mut node, sets);
+                        if let Node::Field(changed) = node {
+                            *f = *changed;
+                        }
+                    }
+                }
+            }
+            Node::Field(_) | Node::Draw(_) => {}
         }
     }
     cut
@@ -966,14 +1021,17 @@ pub fn apply_overrides_split(tpl: &Template, ov: &Overrides) -> Applied {
                 let som = child_som(parent_som, name.as_deref(), sib);
                 let presence = name.as_ref().filter(|_| presence_on).and_then(|_| ov.presence.get(&som)).map(|p| Presence::parse(Some(p)));
                 let access = name.as_ref().filter(|_| presence_on).and_then(|_| ov.access.get(&som)).cloned();
-                let repeats = matches!(n, Node::Subform(s) if s.occur.max != Some(1));
+                // Occurrence changes first: they decide whether the subform repeats (a `max` set
+                // to 3 makes one that didn't), and with it whether the changes inside it are the
+                // template's or one instance's.
+                let occur = |k: &str| k.trim_start_matches('=').starts_with("occur#");
                 if props && name.is_some() && !in_repeat {
-                    if repeats {
-                        self.props(n, &som, &|k| k.trim_start_matches('=').starts_with("occur#"));
-                    } else {
-                        self.props(n, &som, &|_| true);
+                    self.props(n, &som, &occur);
+                    if !matches!(n, Node::Subform(s) if s.occur.max != Some(1)) {
+                        self.props(n, &som, &|k| !occur(k));
                     }
                 }
+                let repeats = matches!(n, Node::Subform(s) if s.occur.max != Some(1));
                 let inner = in_repeat || repeats;
                 match n {
                     Node::Subform(s) => {

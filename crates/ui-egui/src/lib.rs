@@ -855,8 +855,10 @@ pub struct PdfCraftApp {
     pub pending_full_screen: Option<DocId>,
     /// The user typed a value into an XFA field the form calculates, and the form recommends its
     /// calculated value (`<calculate override="warning">`): the value was kept, and the user is asked
-    /// whether to keep it or go back to the calculated value. The document and what the form says.
-    pub pending_calc_override: Option<(DocId, String)>,
+    /// whether to keep it or go back to the calculated value. The document, what the form says,
+    /// and the document's edit generation once the entry was made (going back undoes the entry
+    /// only while it is still the document's last edit).
+    pub pending_calc_override: Option<(DocId, String, u64)>,
     /// A document just opened asks for its window to fit its first page or to be centred
     /// (`FitWindow`, `CenterWindow`): done once the page is laid out.
     pub pending_window: Option<viewer_prefs::PendingWindow>,

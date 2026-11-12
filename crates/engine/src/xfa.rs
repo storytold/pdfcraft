@@ -252,6 +252,21 @@ fn to_js_with(n: &FormNode, copies: &HashMap<usize, Arc<XfaProps>>, depth: usize
         children: if depth > 256 { Vec::new() } else { n.children.iter().map(|c| to_js_with(c, copies, depth + 1)).collect() },
         props: copies.get(&(Arc::as_ptr(&n.props) as usize)).cloned().unwrap_or_else(|| Arc::new(convert_props(&n.props))),
         formatted: n.display_picture.as_deref().and_then(|p| pdfcraft_xfa::formatted_value(p, &n.value)),
+        changed: Arc::from([]),
+    }
+}
+
+/// Give each node of the snapshot `n` the keys of the property changes `ov` keeps for it
+/// ([`XfaNode::changed`]), so the script engine leaves out a write the form would refuse.
+fn mark_changed(n: &mut XfaNode, ov: &pdfcraft_xfa::Overrides, depth: usize) {
+    if ov.props().is_empty() {
+        return;
+    }
+    if let Some(sets) = ov.props().get(&n.som) {
+        n.changed = sets.keys().cloned().collect();
+    }
+    if depth <= 256 {
+        n.children.iter_mut().for_each(|c| mark_changed(c, ov, depth + 1));
     }
 }
 
@@ -563,7 +578,7 @@ impl<'a, 'b> Runner<'a, 'b> {
 
     /// A property change for the scripts that follow in this event: with the copy of the form
     /// they are given, rather than in a new copy of it, up to [`MAX_PENDING_PROPS`].
-    fn pend_prop(&mut self, som: &str, path: &str, attr: Option<&str>, value: &str) {
+    fn pend_prop(&mut self, som: &str, path: &str, attr: Option<&str>, value: &str, copied: bool) {
         if self.js_root.is_none() {
             return;
         }
@@ -576,6 +591,7 @@ impl<'a, 'b> Runner<'a, 'b> {
             path: path.to_string(),
             attr: attr.map(str::to_string),
             value: value.to_string(),
+            copied,
         });
     }
 
@@ -922,11 +938,15 @@ impl<'a, 'b> Runner<'a, 'b> {
                     self.changes.properties += 1;
                 }
                 // How often a subform occurs, or a validation script turned off, changes the
-                // instance managers and events: the tree is rebuilt for those.
-                let structural = path.starts_with("occur#") || (path.starts_with("validate#") && attr == Some("scriptTest"));
+                // instance managers and events, and a field's items, pictures or value element
+                // change the value scripts read (a radio button's on value): the tree is rebuilt
+                // for those.
+                let structural = path.starts_with("occur#")
+                    || (path.starts_with("validate#") && attr == Some("scriptTest"))
+                    || pdfcraft_xfa::restyle::changes_live_value(path);
                 // A later script in this event reads the change with the copy of the form it is
                 // given, which needs no copying again.
-                self.pend_prop(som, path, attr, value);
+                self.pend_prop(som, path, attr, value, copied);
                 let refreshed = !structural
                     && match self.cached.as_mut() {
                         Some(live) => pdfcraft_xfa::refresh_props(&mut live.root, &self.ov, som),
@@ -1093,7 +1113,9 @@ impl<'a, 'b> Runner<'a, 'b> {
                 self.pending_props.clear();
                 #[cfg(test)]
                 counts::bump(&counts::SNAPSHOTS);
-                let r = Arc::new(to_js(&self.live().root, tpl));
+                let mut r = to_js(&self.live().root, tpl);
+                mark_changed(&mut r, &self.ov, 0);
+                let r = Arc::new(r);
                 self.js_root = Some(Arc::clone(&r));
                 r
             }
@@ -1443,8 +1465,10 @@ pub(crate) fn on_changes(
             exited.push(som.clone());
         }
         // The format test, then the script test (XFA 3.3 p. 382), when the user leaves the
-        // field (p. 396); the value stays as typed.
+        // field (p. 396); the value stays as typed. The field as its change and exit scripts
+        // left it: one may have set the test, its picture or its message.
         let value = r.fields().get(name).map(|f| f.value.join("\n")).unwrap_or_default();
+        let field = pdfcraft_xfa::field_now(r.tpl, &r.ov, &som);
         let format_failed = field.as_ref().filter(|f| rules::format_fails(f.format_test, f.format_picture.as_deref(), &value));
         if let Some(f) = format_failed {
             r.alert(crate::js::Message::plain(rules::format_message(f.format_message.as_deref(), name)));
@@ -2180,6 +2204,8 @@ $host.messageBox(concat(table.row[0].amount.mandatory, "|", table.row[1].amount.
   <event activity="initialize"><script contentType="application/x-javascript">V2.validate.picture.value = "text{9999}"; V2.validate.formatTest = "error"; V2.formatMessage = "Custom format message";</script></event>
   <field name="V2" w="2in" h="0.3in"><ui><textEdit/></ui></field>
   <field name="V3" w="2in" h="0.3in"><ui><textEdit/></ui><validate><picture>text{99}</picture><message><text name="formatTest">Two digits</text></message></validate></field>
+  <field name="V4" w="2in" h="0.3in"><ui><textEdit/></ui><validate><picture>text{99}</picture><message><text name="formatTest">Two digits</text></message></validate><event activity="exit"><script contentType="application/x-javascript">this.validate.formatTest = "disabled";</script></event></field>
+  <field name="V5" w="2in" h="0.3in"><ui><textEdit/></ui><event activity="change"><script contentType="application/x-javascript">this.validate.picture.value = "text{99}"; this.validate.formatTest = "error"; this.formatMessage = "Set on change";</script></event></field>
   <field name="K1" w="2in" h="0.3in"><ui><numericEdit/></ui><value><decimal>1</decimal></value></field>
   <field name="K2" w="2in" h="0.3in"><ui><numericEdit/></ui><calculate override="warning"><script contentType="application/x-javascript">K1.rawValue * 10</script></calculate></field>
   <field name="K3" w="2in" h="0.3in"><ui><numericEdit/></ui><calculate override="disabled"><script contentType="application/x-javascript">K1.rawValue * 100</script></calculate></field>
@@ -2219,6 +2245,20 @@ $host.messageBox(concat(table.row[0].amount.mandatory, "|", table.row[1].amount.
         assert_eq!(s.take_js_output(id).alerts.iter().map(|m| m.text.as_str()).collect::<Vec<_>>(), ["Two digits"]);
         type_into(&mut s, id, "V3", "");
         assert!(s.take_js_output(id).alerts.is_empty());
+    }
+
+    /// The format test the user's entry is checked by is the one the field's change and exit
+    /// scripts leave: one turned off as the field is left says nothing, and one set as the value
+    /// changes says its message.
+    #[test]
+    fn the_format_test_is_the_one_the_fields_scripts_leave() {
+        let mut s = crate::Session::new();
+        let id = s.open("checks.pdf", None, Arc::new(checks_form()), None).unwrap();
+        let _ = s.take_js_output(id);
+        type_into(&mut s, id, "V4", "123");
+        assert!(s.take_js_output(id).alerts.is_empty(), "the exit script turned the test off");
+        type_into(&mut s, id, "V5", "abc");
+        assert_eq!(s.take_js_output(id).alerts.iter().map(|m| m.text.as_str()).collect::<Vec<_>>(), ["Set on change"]);
     }
 
     /// A value typed into a field whose calculation the form only recommends is kept, the
@@ -2348,6 +2388,75 @@ page1.note.presence = "visible""#);
         let saved = again.save_bytes(reopened).unwrap();
         let doc = pdfcraft_cos::Document::open(saved).unwrap();
         assert_eq!(pdfcraft_xfa::overrides(&doc).props().len(), 1);
+    }
+
+    /// A later script of the same event reads a radio button's value as the form gives it once
+    /// an earlier one changed the button's on value (its items): the form is built again for
+    /// such a change, as it is for the next event, not only refreshed.
+    #[test]
+    fn a_later_script_reads_a_value_an_items_change_moved() {
+        let template = r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="p"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <subform name="s" layout="tb">
+  <exclGroup name="g" layout="lr-tb">
+   <field name="a" w="1in" h="0.3in"><ui><checkButton shape="round"/></ui><items><text>1</text></items></field>
+   <field name="b" w="1in" h="0.3in"><ui><checkButton shape="round"/></ui><items><text>2</text></items></field>
+  </exclGroup>
+  <field name="pick" w="1in" h="0.3in"><ui><button/></ui><event activity="click"><script contentType="application/x-javascript">g.rawValue = "1";</script></event></field>
+  <field name="go" w="1in" h="0.3in"><ui><button/></ui>
+   <event activity="click"><script contentType="application/x-javascript">g.a.items.nodes.item(0).value = "9";</script></event>
+   <event activity="click"><script contentType="application/x-javascript">xfa.host.messageBox("[" + g.a.rawValue + "]");</script></event>
+  </field>
+ </subform>
+</subform>
+</template>
+</xdp:xdp>
+"##;
+        let mut s = crate::Session::new();
+        let id = s.open("radio.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(template)), None).unwrap();
+        s.apply(id, crate::Edit::XfaEvent { som: "form[0].s[0].pick[0]".into(), activity: "click".into() }).unwrap();
+        let _ = s.take_js_output(id);
+        s.apply(id, crate::Edit::XfaEvent { som: "form[0].s[0].go[0]".into(), activity: "click".into() }).unwrap();
+        let alerts: Vec<String> = s.take_js_output(id).alerts.iter().map(|m| m.text.clone()).collect();
+        // The group still holds "1", which is no longer the button's on value: not chosen.
+        assert_eq!(alerts, ["[null]"]);
+    }
+
+    /// A script never reads back a property change the form refuses: on a field already holding
+    /// the 64 changes the form keeps for one object (made by its opening script), a later
+    /// script's write to another property is left out, and it reads the property as it was.
+    #[test]
+    fn a_write_past_the_objects_limit_is_not_read_back() {
+        assert_eq!(pdfcraft_js::xfa::MAX_CHANGES_PER_OBJECT, pdfcraft_xfa::restyle::MAX_PROP_CHANGES_PER_OBJECT);
+        let template = r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="p"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <subform name="s" layout="tb">
+  <field name="full" w="2in" h="0.3in"><ui><textEdit/></ui><font typeface="Arial" size="10pt"/>
+   <event activity="initialize"><script contentType="application/x-javascript">for (var i = 0; i &lt; 64; i++) { this.font["x" + i] = "1"; }</script></event>
+   <event activity="click"><script contentType="application/x-javascript">this.font.size = "20pt"; this.font.x3 = "2"; xfa.host.messageBox(this.font.size + "|" + this.font.x3);</script></event>
+  </field>
+ </subform>
+</subform>
+</template>
+</xdp:xdp>
+"##;
+        let mut s = crate::Session::new();
+        let id = s.open("full.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(template)), None).unwrap();
+        let _ = s.take_js_output(id);
+        s.apply(id, crate::Edit::XfaEvent { som: "form[0].s[0].full[0]".into(), activity: "click".into() }).unwrap();
+        let alerts: Vec<String> = s.take_js_output(id).alerts.iter().map(|m| m.text.clone()).collect();
+        assert_eq!(alerts, ["10pt|2"], "the size is left out, the change to a kept property is not");
+        let doc = pdfcraft_cos::Document::open(s.get(id).unwrap().bytes.clone()).unwrap();
+        let kept = pdfcraft_xfa::overrides(&doc).props().get("form[0].s[0].full[0]").cloned().unwrap_or_default();
+        assert_eq!(kept.len(), 64);
+        assert_eq!(kept.get("font#0@x3").map(String::as_str), Some("2"));
+        assert!(!kept.contains_key("font#0@size"));
     }
 
     /// Hostile property writes leave the form whole: absurd sizes and reserves, NaN and infinite

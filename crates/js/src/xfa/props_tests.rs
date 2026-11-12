@@ -408,6 +408,52 @@ fn formcalc_reads_and_writes_properties() {
     );
 }
 
+/// The form keeps at most 64 property changes for one object: on an object holding as many, a
+/// write to a property it already changed is kept, a write to another is left out (with a
+/// note) rather than read back, and so is a copy of a drawn edge the form would refuse.
+#[test]
+fn a_write_past_the_objects_limit_on_changes_is_left_out() {
+    let mut root = form();
+    let kept: Vec<String> = (0..super::MAX_CHANGES_PER_OBJECT - 1)
+        .map(|i| format!("extras#0/text#{i}"))
+        .chain(["assist#0/toolTip#0".to_string()])
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    let styled = root.children.iter_mut().find(|c| c.name == "styled").unwrap();
+    styled.changed = kept.into();
+    let o = go_on(
+        &root,
+        "this.assist.toolTip.value = 'Kept'; this.font.size = '20pt'; this.border.getElement('edge', 3).color.value = '1,1,1'; [this.assist.toolTip.value, this.font.size].join('|')",
+        "styled",
+    );
+    assert_eq!(o.error, None, "{o:?}");
+    assert_eq!(o.result.as_deref(), Some("Kept|10pt"), "{o:?}");
+    let som = "form1[0].styled[0]";
+    assert_eq!(o.effects, [set(som, "assist#0/toolTip#0", None, "Kept")], "{o:?}");
+    assert!(o.notes.iter().any(|l| l.contains("more than 64 properties of one object")), "{o:?}");
+    // One fewer kept: the first new property fits, the next doesn't.
+    let mut root = form();
+    let styled = root.children.iter_mut().find(|c| c.name == "styled").unwrap();
+    styled.changed = (0..super::MAX_CHANGES_PER_OBJECT - 1).map(|i| format!("extras#0/text#{i:02}")).collect();
+    let o = go_on(&root, "this.font.size = '20pt'; this.font.typeface = 'Courier'; [this.font.size, this.font.typeface].join('|')", "styled");
+    assert_eq!(o.result.as_deref(), Some("20pt|Arial"), "{o:?}");
+}
+
+/// FormCalc reads a property object holding text (`$.assist.toolTip`) as its value where it
+/// takes a number or a truth value directly: a `for` bound, a negation, an `if` condition.
+/// Read as text it was right (`deref`), but read as a number it was 0, and as a condition true.
+#[test]
+fn formcalc_reads_a_property_as_its_value_in_numbers_and_conditions() {
+    let ev = XfaEvent { activity: "click".into(), target: "form1[0].styled[0]".into(), ..Default::default() };
+    let run = |s: &str| crate::formcalc::run_formcalc(s, &ev, &XfaDoc::default(), &form(), Limits::default());
+    let o = run(
+        "$.assist.toolTip = \"3\"\nvar n = 0\nfor i = 1 upto $.assist.toolTip do n = n + 1 endfor\nvar neg = -$.assist.toolTip\n$.assist.toolTip = \"0\"\nvar t = \"off\"\nif ($.assist.toolTip) then t = \"on\" endif\nconcat(n, \"|\", neg, \"|\", t)",
+    );
+    assert_eq!(o.error, None, "{o:?}");
+    assert_eq!(o.result.as_deref(), Some("3|-3|off"));
+}
+
 /// form1 > { label (a field captioned "Name:"), rich (a field whose caption is rich text),
 /// list (a choice list that takes typed text, with shown and saved items), box (a check button with on and off values) }
 fn caption_form() -> XfaNode {

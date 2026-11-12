@@ -29,6 +29,7 @@ pub(crate) type PropMap = BTreeMap<String, BTreeMap<String, String>>;
 pub(crate) struct KeptProps {
     pub(crate) props: Arc<PropMap>,
     pub(crate) count: usize,
+    pub(crate) copies: usize,
     pub(crate) bytes: usize,
     pub(crate) dropped: usize,
 }

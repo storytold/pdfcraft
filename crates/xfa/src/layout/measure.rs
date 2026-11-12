@@ -16,6 +16,16 @@ impl Layouter<'_> {
     /// own rows (XFA 3.3, "Tables", p. 327; Chapter 9, p. 336), so with data each is measured
     /// under its own SOM path.
     pub(super) fn size_at(&self, node: &Node, avail_w: f64, ctx: &Ctx, depth: usize, index: usize) -> (f64, f64) {
+        // A field or draw is measured as its instance's property changes leave it, as it is then
+        // drawn (a font size set on a later row's field makes that row taller).
+        let restyled;
+        let node = match self.restyled_leaf(node, ctx, index) {
+            Some(n) => {
+                restyled = n;
+                &restyled
+            }
+            None => node,
+        };
         let c = node.common();
         let spent = self.measures.get().saturating_add(1);
         self.measures.set(spent);
@@ -25,8 +35,10 @@ impl Layouter<'_> {
         let own = ctx.with_som(c, index);
         // Only containers recurse; their addresses are stable for the whole layout (the
         // template is borrowed, the root and page areas are held by the layouter). Without data
-        // every instance is alike, so one measurement serves them all.
-        let som = || if self.data.is_some() { own.som.clone() } else { String::new() };
+        // every instance is alike, so one measurement serves them all, unless scripts changed
+        // what this instance holds.
+        let per_instance = self.data.is_some() || self.changes_within(&own.som);
+        let som = || if per_instance { own.som.clone() } else { String::new() };
         let key = match node {
             Node::Subform(s) => Some((&**s as *const Subform as usize, avail_w.to_bits(), depth, som())),
             Node::Area(a) => Some((&**a as *const Area as usize, avail_w.to_bits(), depth, som())),
@@ -48,6 +60,37 @@ impl Layouter<'_> {
             cache.insert(key, Measured { font: ctx.font.clone(), para: ctx.para.clone(), size });
         }
         size
+    }
+
+    /// Field or draw `node`, instance `index` under `ctx`, with the property changes scripts made
+    /// to that instance that change how it is drawn; `None` when there are none (or it is
+    /// neither), so it is measured as it is.
+    fn restyled_leaf(&self, node: &Node, ctx: &Ctx, index: usize) -> Option<Node> {
+        let sets = match node {
+            Node::Field(f) => self.changes_of(&f.common, ctx, index, Some("field"))?,
+            Node::Draw(d) => self.changes_of(&d.common, ctx, index, None)?,
+            _ => return None,
+        };
+        if !sets.keys().any(|k| crate::restyle::draws(k)) {
+            return None;
+        }
+        match node {
+            Node::Field(f) => Some(Node::Field(Box::new(crate::restyle::restyled_field(f, sets)))),
+            Node::Draw(d) => Some(Node::Draw(Box::new(crate::restyle::restyled_draw(d, sets)))),
+            _ => None,
+        }
+    }
+
+    /// Whether scripts changed properties of an object inside the instance at `som` (or of the
+    /// instance itself), so its measurement can't stand for its other instances'.
+    fn changes_within(&self, som: &str) -> bool {
+        if som.is_empty() {
+            return !self.props.is_empty();
+        }
+        self.props
+            .range::<str, _>((std::ops::Bound::Included(som), std::ops::Bound::Unbounded))
+            .take_while(|(k, _)| k.starts_with(som))
+            .any(|(k, _)| k.get(som.len()..).is_some_and(|rest| rest.is_empty() || rest.starts_with('.')))
     }
 
     /// The size (width, height) of `node` within `avail_w`, uncached ([`Self::size_at`] caches it).

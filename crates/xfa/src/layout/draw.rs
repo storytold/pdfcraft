@@ -571,9 +571,10 @@ impl Layouter<'_> {
                 if !views.any() {
                     continue;
                 }
-                let on = f.items.first().cloned().filter(|s| !s.trim().is_empty()).unwrap_or_else(|| (i + 1).to_string());
-                let tip = f.tooltip.clone().or_else(|| g.tooltip.clone());
-                let chosen = selected.as_deref() == Some(on.as_str());
+                // The button's on value (its place in the group when it lists none) and tooltip
+                // are read from it as its instance's changes leave it ([`Self::draw_field`]); the
+                // group's tooltip stands in for a button without one.
+                let fallback_on = (i + 1).to_string();
                 // A group that must be answered makes each of its buttons required, as the group
                 // field they make is.
                 let required;
@@ -584,7 +585,8 @@ impl Layouter<'_> {
                     f
                 };
                 let outer = std::mem::replace(&mut self.views, views);
-                let drawn = self.draw_field(f, Rect::new(inner.x + r.x, inner.y + r.y, r.w, r.h), &ctx, Some((&group, &on, tip, chosen)), sibs.at(i));
+                let radio = Some((group.as_str(), fallback_on.as_str(), g.tooltip.clone(), selected.as_deref()));
+                let drawn = self.draw_field(f, Rect::new(inner.x + r.x, inner.y + r.y, r.w, r.h), &ctx, radio, sibs.at(i));
                 self.views = outer;
                 drawn?;
             }

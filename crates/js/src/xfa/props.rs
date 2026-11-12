@@ -53,6 +53,10 @@ const MAX_MULTI: usize = 64;
 /// Most attributes a script may write to one property in a run (the spec's elements have at most
 /// 20); past it more are left out and noted.
 pub(crate) const MAX_WRITTEN_ATTRS: usize = 64;
+/// Most property changes the form keeps for one object (`pdfcraft_xfa`'s
+/// `restyle::MAX_PROP_CHANGES_PER_OBJECT`, which the engine's tests hold this to): a write of
+/// another is left out here too, so a script never reads back a change the form refuses.
+pub const MAX_CHANGES_PER_OBJECT: usize = 64;
 /// Most properties one SOM expression resolves to (`row[*].border.edge[*]` over many rows):
 /// past it the rest are left out.
 const MAX_RESOLVED: usize = 4_096;
@@ -1023,6 +1027,10 @@ impl XHost {
         if !self.attr_room(node, path, name) {
             return;
         }
+        if !self.object_room(node, &change_key(path, name)) {
+            self.dropped_object_writes = self.dropped_object_writes.saturating_add(1);
+            return;
+        }
         let Some(som) = self.nodes.get(node).filter(|n| !n.gone && n.kind != XfaKind::Form).map(|n| n.som.to_string()) else { return };
         if let Err(why) = property_value_ok(path, name, &value) {
             let what = name.map_or_else(|| path.to_string(), |a| format!("{path} {a}"));
@@ -1037,8 +1045,17 @@ impl XHost {
         if path == "occur#0" {
             self.set_occur(node, name, &value);
         }
+        self.note_key(node, change_key(path, name));
         self.put_prop(node, path, name, value);
         self.record(effect);
+    }
+
+    /// Note that the form now keeps a change under `key` to node `node` (see [`Self::run_keys`]).
+    fn note_key(&mut self, node: usize, key: String) {
+        let keys = self.run_keys.entry(node).or_default();
+        if !keys.contains(&key) {
+            keys.push(key);
+        }
     }
 
     /// While a script writes ([`XHost::copying`]), hand the form a value copied from the edge or
@@ -1051,11 +1068,34 @@ impl XHost {
             return;
         }
         let Some(som) = self.nodes.get(node).filter(|n| !n.gone && n.kind != XfaKind::Form).map(|n| n.som.to_string()) else { return };
+        // Past the object's limit the form leaves the copy out, as it does here.
+        let key = format!("={}", change_key(path, name));
+        if !self.object_room(node, &key) {
+            return;
+        }
         let effect = XfaEffect::SetProperty { som, path: path.to_string(), attr: name.map(str::to_string), value: value.to_string(), copied: true };
         let bytes = super::model::payload(&effect);
         if self.reserve(&effect, bytes) {
             self.record(effect);
+            self.note_key(node, key);
         }
+    }
+
+    /// Whether the form can keep a change under `key` (see [`change_key`]) to node `node`: one
+    /// it keeps already, or one more within [`MAX_CHANGES_PER_OBJECT`], counting those it keeps
+    /// ([`XfaNode::changed`](super::XfaNode::changed)) and those this event added
+    /// ([`Self::run_keys`]).
+    fn object_room(&self, node: usize, key: &str) -> bool {
+        let Some(n) = self.nodes.get(node) else { return true };
+        let kept = |k: &str| n.changed.binary_search_by(|c| c.as_str().cmp(k)).is_ok();
+        if kept(key) {
+            return true;
+        }
+        let added = self.run_keys.get(&node).map_or(&[][..], Vec::as_slice);
+        if added.iter().any(|k| k == key) {
+            return true;
+        }
+        n.changed.len().saturating_add(added.iter().filter(|k| !kept(k)).count()) < MAX_CHANGES_PER_OBJECT
     }
 
     /// Whether the property at `path` can take the attribute `name` (one it has, or a new one
@@ -1127,6 +1167,8 @@ impl XHost {
             self.nodes.iter().enumerate().filter(|(_, n)| !n.gone && n.kind != XfaKind::Form).map(|(i, n)| (&*n.som, i)).collect();
         let found: Vec<(usize, &super::XfaPropSet)> = sets.iter().filter_map(|p| by_som.get(p.som.as_str()).map(|&i| (i, p))).collect();
         for (i, p) in found {
+            let key = change_key(&p.path, p.attr.as_deref());
+            self.note_key(i, if p.copied { format!("={key}") } else { key });
             self.put_prop(i, &p.path, p.attr.as_deref(), p.value.clone());
         }
     }
@@ -1632,6 +1674,15 @@ pub(crate) fn exec_validate(_: &JsValue, _: &[JsValue], r: &JsObject, ctx: &mut 
     }
     host(ctx)?.borrow_mut().push(XfaEffect::MessageBox(crate::Message::plain(super::clip(failures.join("\n")))));
     Ok(JsValue::from(false))
+}
+
+/// The key the form keeps a change under (`pdfcraft_xfa`'s `restyle::prop_key`): `path@attr`,
+/// or the path alone for a property's text.
+fn change_key(path: &str, attr: Option<&str>) -> String {
+    match attr {
+        Some(a) => format!("{path}@{a}"),
+        None => path.to_string(),
+    }
 }
 
 #[cfg(test)]

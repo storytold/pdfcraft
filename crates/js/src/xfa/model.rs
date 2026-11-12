@@ -53,6 +53,11 @@ pub struct XfaNode {
     /// The template's attributes and property elements of the object (border, ui, validate, …),
     /// shared: snapshots taken for each script point at the same tree.
     pub props: std::sync::Arc<super::XfaProps>,
+    /// The property changes the form already keeps for this instance, by key (`path@attr`, the
+    /// path alone for a text, `=` before a copy of a drawn edge or corner), sorted: a write
+    /// counts against the form's limit on changes to one object
+    /// ([`super::props::MAX_CHANGES_PER_OBJECT`]) unless its key is here already.
+    pub changed: std::sync::Arc<[String]>,
 }
 
 /// The event a script runs for.
@@ -146,6 +151,9 @@ pub struct XfaPropSet {
     pub path: String,
     pub attr: Option<String>,
     pub value: String,
+    /// A value copied from a drawn edge or corner ([`XfaEffect::SetProperty`]'s `copied`): the
+    /// form keeps it under a key of its own.
+    pub copied: bool,
 }
 
 /// The form a script runs on: the copy the caller holds, and the property changes earlier

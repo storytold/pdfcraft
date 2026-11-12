@@ -75,7 +75,8 @@ impl Layouter<'_> {
         };
         // The field breaks into pieces, each with the field's border all round (a border's
         // default `break="close"`, XFA 3.3 pp. 629–630): the border drawn round the whole field
-        // comes out, to be drawn round each piece once the break is known.
+        // comes out, to be drawn round each piece once the break is known, as the field was
+        // drawn (with its instance's changes, see `draw_field`).
         self.leaves.clear();
         let border = match (node, border_items) {
             (Node::Field(f), Some((start, end))) if first <= start => {
@@ -85,7 +86,10 @@ impl Layouter<'_> {
                 {
                     p.items.drain(start..end);
                 }
-                f.common.border.as_ref()
+                match self.changes_of(&f.common, ctx, sib, Some("field")) {
+                    Some(sets) => crate::restyle::restyled_border(&f.common, sets),
+                    None => f.common.border.clone(),
+                }
             }
             _ => None,
         };
@@ -93,7 +97,7 @@ impl Layouter<'_> {
         let split = self.split_block(first, y, drawn, false);
         let pieces = self.splitting.take().map(|s| s.pieces).unwrap_or_default();
         split?;
-        if let Some(b) = border {
+        if let Some(b) = &border {
             // The last piece first: a piece's place on its page stays where it was found.
             for (page, at, piece) in pieces.into_iter().rev() {
                 self.insert_border(b, piece, page, at)?;

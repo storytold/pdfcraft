@@ -253,7 +253,7 @@ pub(super) fn full_screen_prompt(app: &mut PdfCraftApp, ctx: &egui::Context) {
 /// then leave alone, or go back to the calculated value (the entry is undone). Going back is
 /// the default, and Escape or clicking outside chooses it.
 pub(super) fn calc_override_prompt(app: &mut PdfCraftApp, ctx: &egui::Context) {
-    let Some((id, message)) = app.pending_calc_override.clone() else { return };
+    let Some((id, message, _)) = app.pending_calc_override.clone() else { return };
     if app.session.get(id).is_none() {
         app.pending_calc_override = None;
         return;

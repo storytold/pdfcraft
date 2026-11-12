@@ -343,13 +343,29 @@ impl PdfCraftApp {
 
     /// The user's answer to [`Self::pending_calc_override`]: keep the value typed into the
     /// calculated field, or go back to the calculated value by undoing the entry (which also
-    /// takes back the mark that kept the calculations off the field). Only the entry in the
-    /// document showing is undone: if another one is active by now, the value stays.
+    /// takes back the mark that kept the calculations off the field), in the document it was
+    /// made in, through the tab showing it (the active one when it does). The entry is undone
+    /// only while it is still that document's last edit: when another edit followed it (the other
+    /// pane's, in a split view), Undo would take that one back instead, so the value stays and
+    /// the user is told.
     pub fn resolve_calc_override(&mut self, keep: bool) {
-        let Some((id, _)) = self.pending_calc_override.take() else { return };
-        if !keep && self.active_ids().is_some_and(|(_, active)| active == id) {
-            self.history_step(true);
+        let Some((id, _, generation)) = self.pending_calc_override.take() else { return };
+        if keep {
+            return;
         }
+        let Some(i) = self.active_ids().filter(|&(_, active)| active == id).map(|(i, _)| i).or_else(|| self.views.iter().position(|v| v.id == id))
+        else {
+            return;
+        };
+        // A box open on the page is applied before the step, as for Undo; that is an edit too.
+        if !self.close_text_editors(i, id) {
+            return;
+        }
+        if self.session.get(id).map(|d| d.edit_generation()) != Some(generation) {
+            self.notify(tl!("Your value was kept: the document changed after you typed it. Use Undo to take the entry back.").to_string());
+            return;
+        }
+        self.history_step_in(i, id, true);
     }
 
     pub fn redo(&mut self) {
@@ -389,6 +405,11 @@ impl PdfCraftApp {
 
     fn history_step(&mut self, undo: bool) {
         let Some((i, id)) = self.active_ids() else { return };
+        self.history_step_in(i, id, undo);
+    }
+
+    /// [`Self::history_step`] in document `id`, through tab `i`, which shows it.
+    fn history_step_in(&mut self, i: usize, id: pdfcraft_engine::DocId, undo: bool) {
         if !self.close_text_editors(i, id) {
             return;
         }
