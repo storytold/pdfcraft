@@ -527,7 +527,7 @@ impl PdfCraftApp {
                 // gaps is refused rather than applying to the pages in between.
                 let selection = if id.starts_with("edit.header_footer") { active.map(|i| self.views[i].selected.clone()) } else { None };
                 if let Some(selected) = selection.as_ref().filter(|s| !s.is_empty())
-                    && let (Some(&first), Some(&last)) = (selected.first(), selected.last())
+                    && let (Some(&first), Some(&last)) = (selected.iter().min(), selected.iter().max())
                     && last + 1 - first != selected.len()
                 {
                     self.notify_tr("Header and footer can only be applied to a run of neighbouring pages. Select one, such as pages 2 to 4.");
@@ -538,7 +538,7 @@ impl PdfCraftApp {
                 self.marks_draft.preview = None;
                 if id.starts_with("edit.header_footer") {
                     self.marks_draft.range.subset = crate::marks_ui::Subset::All;
-                    match selection.as_ref().and_then(|s| Some((*s.first()?, *s.last()?))) {
+                    match selection.as_ref().and_then(|s| Some((*s.iter().min()?, *s.iter().max()?))) {
                         Some((first, last)) => {
                             self.marks_draft.range.all = false;
                             self.marks_draft.range.from = first + 1;
