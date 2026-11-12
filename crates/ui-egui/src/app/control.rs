@@ -14,6 +14,20 @@ impl PdfCraftApp {
     ///
     /// This is the seed of the UI control channel (M3.9): the same verbs become `ui.set` calls.
     pub fn set_option(&mut self, key: &str, value: &str) -> Result<(), String> {
+        if key == "js-console" {
+            match value {
+                "open" => self.open_console(),
+                "closed" => self.close_console(),
+                _ => return Err("js-console must be open or closed".into()),
+            }
+            dialogs::discard_inactive_password_drafts(self);
+            return Ok(());
+        }
+        if key == "dialog" && value == "js-console" {
+            self.open_console();
+            dialogs::discard_inactive_password_drafts(self);
+            return Ok(());
+        }
         let view = self.active.and_then(|i| self.views.get_mut(i));
         match (key, view) {
             ("hotbar-size", _) => {

@@ -13,6 +13,19 @@ use crate::{PdfCraftApp, widgets};
 pub struct JsConsole {
     pub input: String,
     pub log: Vec<String>,
+    /// The desktop console lives in its own native viewport, independently of modal dialogs.
+    open: bool,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn console_viewport_id() -> egui::ViewportId {
+    egui::ViewportId::from_hash_of("pdfcraft-js-console")
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn restore_and_focus_viewport(ctx: &egui::Context, id: egui::ViewportId) {
+    ctx.send_viewport_cmd_to(id, egui::ViewportCommand::Minimized(false));
+    ctx.send_viewport_cmd_to(id, egui::ViewportCommand::Focus);
 }
 
 /// Document JavaScripts: the script being edited.
@@ -44,6 +57,50 @@ pub(crate) fn scripts_off_notice() -> String {
 }
 
 impl PdfCraftApp {
+    /// Whether the console is visible on this platform.
+    pub fn console_open(&self) -> bool {
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.dialog == Some(crate::Dialog::JsConsole)
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.js_console.open
+        }
+    }
+
+    /// Open the console without taking the document window's modal input.
+    pub fn open_console(&mut self) {
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.dialog = Some(crate::Dialog::JsConsole);
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if self.js_console.open
+                && let Some(ctx) = &self.ctx
+            {
+                restore_and_focus_viewport(ctx, console_viewport_id());
+            }
+            self.js_console.open = true;
+            if let Some(ctx) = &self.ctx {
+                ctx.request_repaint();
+            }
+        }
+    }
+
+    /// Close the console without changing any other dialog.
+    pub(crate) fn close_console(&mut self) {
+        #[cfg(target_arch = "wasm32")]
+        if self.dialog == Some(crate::Dialog::JsConsole) {
+            self.dialog = None;
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.js_console.open = false;
+        }
+    }
+
     /// Act on what scripts produced in document `id`: alerts are shown, console output goes to
     /// the console, print and page requests are carried out, links wait for the user's permission
     /// (form submissions are reported, never sent).
@@ -285,8 +342,18 @@ impl PdfCraftApp {
                     self.views[i].document_changed(&info);
                 }
                 let (error, result) = (o.error.clone(), o.result.clone());
+                #[cfg(not(target_arch = "wasm32"))]
+                let has_alerts = !o.alerts.is_empty();
                 let out = JsOutput { alerts: o.alerts, console: o.console, requests: o.requests, errors: Vec::new(), doc_errors: Vec::new() };
                 self.handle_js(id, out);
+                // Alerts and document dialogs appear in the main viewport. Bring that window
+                // forward when a script started in the separate console needs the user's answer.
+                #[cfg(not(target_arch = "wasm32"))]
+                if (has_alerts || self.modal_open())
+                    && let Some(ctx) = &self.ctx
+                {
+                    restore_and_focus_viewport(ctx, egui::ViewportId::ROOT);
+                }
                 match error {
                     Some(e) => self.js_console.log.push(format!("Error: {e}")),
                     None => self.js_console.log.extend(result),
@@ -297,13 +364,53 @@ impl PdfCraftApp {
     }
 }
 
-fn buttons(ui: &mut egui::Ui, primary: &str, others: &[&str]) -> Option<String> {
+/// Draw the desktop console in a separate operating-system window. An egui backend without
+/// multiple-viewports support embeds it as a movable window in the parent instead.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn show_console(app: &mut PdfCraftApp, ctx: &egui::Context) {
+    if !app.console_open() {
+        return;
+    }
+    let id = console_viewport_id();
+    let builder = egui::ViewportBuilder::default()
+        .with_title(tl!("JavaScript Console"))
+        .with_app_id("ai.storyteller.pdfcraft")
+        .with_inner_size([680.0, 440.0])
+        .with_min_inner_size([450.0, 300.0]);
+    ctx.show_viewport_immediate(id, builder, |ui, class| {
+        let close = if class == egui::ViewportClass::EmbeddedWindow {
+            scrolling_console_body(ui, app)
+        } else {
+            let close = egui::CentralPanel::default().show(ui, |ui| scrolling_console_body(ui, app)).inner;
+            close || ui.input(|i| i.viewport().close_requested())
+        };
+        if close {
+            app.close_console();
+        }
+    });
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn scrolling_console_body(ui: &mut egui::Ui, app: &mut PdfCraftApp) -> bool {
+    egui::ScrollArea::vertical()
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            let t = Tokens::get(ui.ctx());
+            console_body(ui, app, &t)
+        })
+        .inner
+}
+
+fn buttons(ui: &mut egui::Ui, primary: &str, primary_enabled: bool, others: &[&str]) -> Option<String> {
     let mut clicked = None;
     ui.horizontal(|ui| {
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             // Stable ids: the console's output above changes how many widgets come first.
             // Labels are translated for display; the returned id stays English.
-            if ui.push_id(primary, |ui| widgets::pill_button(ui, tl!(primary), true)).inner.clicked() {
+            let primary_response =
+                ui.push_id(primary, |ui| ui.add_enabled_ui(primary_enabled, |ui| widgets::pill_button(ui, tl!(primary), true)).inner).inner;
+            if primary_response.clicked() {
                 clicked = Some(primary.to_string());
             }
             for o in others {
@@ -319,6 +426,14 @@ fn buttons(ui: &mut egui::Ui, primary: &str, others: &[&str]) -> Option<String> 
 /// The JavaScript console. Returns `true` to close.
 pub(crate) fn console_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
     ui.label(egui::RichText::new(tl!("JavaScript Console")).font(theme::semibold(18.0)));
+    if let Some(name) = app.active_ids().and_then(|(_, id)| app.session.get(id)).map(|doc| doc.name.as_str()) {
+        ui.label(egui::RichText::new(name).color(t.text_muted));
+    } else {
+        ui.label(egui::RichText::new(tl!("Open a document first")).color(t.text_muted));
+    }
+    // A prompt in the document window still owns its answer. Keep the separate console from
+    // changing the document until that prompt is resolved.
+    let can_run = app.active_ids().is_some() && (app.dialog == Some(crate::Dialog::JsConsole) || !app.modal_open());
     ui.add_space(6.0);
     if !app.session.javascript() {
         ui.label(egui::RichText::new(tl!("JavaScript is turned off (Preferences ▸ JavaScript).")).small().color(t.text_muted));
@@ -337,7 +452,8 @@ pub(crate) fn console_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens)
         });
     });
     ui.add_space(6.0);
-    let input = ui.add(
+    let input = ui.add_enabled(
+        can_run,
         crate::widgets::block(&mut app.js_console.input)
             .code_editor()
             .desired_rows(4)
@@ -347,7 +463,7 @@ pub(crate) fn console_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens)
     );
     let run_key = input.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter) && i.modifiers.command);
     ui.add_space(8.0);
-    match buttons(ui, "Run", &["Close", "Clear"]).as_deref() {
+    match buttons(ui, "Run", can_run, &["Close", "Clear"]).as_deref() {
         Some("Run") => app.run_console(),
         Some("Clear") => app.js_console.log.clear(),
         Some("Close") => return true,
@@ -386,7 +502,7 @@ pub(crate) fn document_js_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tok
     ui.add(crate::widgets::block(&mut app.doc_js.script).code_editor().desired_rows(8).desired_width(f32::INFINITY).id_salt("doc-js-script"));
     ui.add_space(8.0);
     let name = app.doc_js.name.trim().to_string();
-    let close = match buttons(ui, "Save", &["Close", "Delete"]).as_deref() {
+    let close = match buttons(ui, "Save", true, &["Close", "Delete"]).as_deref() {
         Some("Save") if !name.is_empty() => {
             edit = Some(Edit::SetDocumentScript { name, script: Some(app.doc_js.script.clone()) });
             false
@@ -413,6 +529,84 @@ pub(crate) use crate::dialogs::preferences::{
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn reopening_a_minimized_console_restores_then_focuses_it() {
+        let ctx = egui::Context::default();
+        let id = console_viewport_id();
+        let mut app = PdfCraftApp::new();
+        app.open_console();
+        app.ctx = Some(ctx.clone());
+        let mut input = egui::RawInput::default();
+        input.viewports.insert(id, egui::ViewportInfo { minimized: Some(true), ..Default::default() });
+        let output = ctx.run_logic(&input, |_| app.open_console());
+        assert_eq!(output.viewport_commands[&id], [egui::ViewportCommand::Minimized(false), egui::ViewportCommand::Focus]);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn render_native_console(app: &mut PdfCraftApp, child_info: egui::ViewportInfo, size: egui::Vec2) {
+        let ctx = egui::Context::default();
+        ctx.set_fonts(crate::theme::font_definitions());
+        ctx.set_embed_viewports(false);
+        egui::Context::set_immediate_viewport_renderer(move |ctx, immediate| {
+            let ids = immediate.ids;
+            let mut viewport_ui = immediate.viewport_ui_cb;
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    viewport_id: ids.this,
+                    viewports: [(ids.this, child_info.clone())].into_iter().collect(),
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                    ..Default::default()
+                },
+                |ui| viewport_ui(ui),
+            );
+            output.textures_delta.clear();
+        });
+        let mut output = ctx.run_ui(
+            egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(900.0, 700.0))), ..Default::default() },
+            |ui| show_console(app, ui.ctx()),
+        );
+        output.textures_delta.clear();
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn native_console_close_request_closes_only_the_console() {
+        let mut app = PdfCraftApp::new();
+        app.dialog = Some(crate::Dialog::Preferences);
+        app.open_console();
+        let mut child = egui::ViewportInfo::default();
+        child.events.push(egui::ViewportEvent::Close);
+        render_native_console(&mut app, child, egui::vec2(680.0, 440.0));
+        assert!(!app.console_open());
+        assert_eq!(app.dialog, Some(crate::Dialog::Preferences));
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn minimum_console_size_can_scroll_the_close_button_into_view() {
+        use egui_kittest::{Harness, kittest::Queryable};
+
+        let previous_language = crate::i18n::current();
+        crate::i18n::set_current(crate::i18n::Lang::EN);
+        let app = PdfCraftApp::new();
+        let mut h = Harness::builder()
+            .with_size(egui::vec2(450.0, 300.0))
+            .with_context_setup(|ctx| ctx.set_fonts(crate::theme::font_definitions()))
+            .build_ui_state(
+                |ui, app| {
+                    scrolling_console_body(ui, app);
+                },
+                app,
+            );
+        h.get_by_label("Close").scroll_to_me();
+        h.run();
+        let viewport = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(450.0, 300.0));
+        let close = h.get_by_label("Close").rect();
+        assert!(viewport.contains_rect(close), "Close at {close:?} must fit within {viewport:?}");
+        crate::i18n::set_current(previous_language);
+    }
 
     #[test]
     fn date_language_names_fall_back_when_the_native_name_cannot_be_drawn() {

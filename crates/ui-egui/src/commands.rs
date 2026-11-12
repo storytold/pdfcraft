@@ -754,7 +754,7 @@ impl PdfCraftApp {
         match id {
             "a11y.check" => self.start_accessibility_check(),
             "a11y.find_untagged" => self.find_untagged_content(),
-            "tools.js_console" => self.dialog = Some(Dialog::JsConsole),
+            "tools.js_console" => self.open_console(),
             "tools.document_js" => {
                 self.doc_js = Default::default();
                 self.dialog = Some(Dialog::DocumentJs);

@@ -92,6 +92,13 @@ struct Pending {
 }
 
 pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
+    #[cfg(not(target_arch = "wasm32"))]
+    if app.dialog == Some(Dialog::JsConsole) {
+        // Older callers may still select this dialog directly. Move it out of the modal slot so
+        // the document window keeps its own pointer, keyboard, menus and other dialogs.
+        app.dialog = None;
+        app.open_console();
+    }
     // The page sets hover cursors from the raw pointer position (form fields, links, comments)
     // before any dialog is drawn, and nothing under a modal's backdrop takes clicks. Start from
     // the arrow; the modal's own widgets set theirs as they are drawn.
@@ -101,6 +108,8 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
     dialogs(app, ctx);
     // Above Document Properties when Security's Unlock… asked for it; script prompts stay on top.
     unlock(app, ctx);
+    #[cfg(not(target_arch = "wasm32"))]
+    crate::js_ui::show_console(app, ctx);
     #[cfg(not(target_arch = "wasm32"))]
     app.show_script_dialog(ctx);
 }

@@ -1127,7 +1127,7 @@ mod tests {
         app.mode = Mode::Read;
         assert_eq!(found(&mut app), None, "Read mode");
         app.mode = Mode::Edit;
-        app.dialog = Some(Dialog::JsConsole);
+        app.dialog = Some(Dialog::Preferences);
         assert_eq!(found(&mut app), None, "beneath a dialog");
         app.dialog = None;
         assert_eq!(found(&mut app), Some(0), "tried again once they are gone");
@@ -1198,7 +1198,7 @@ mod tests {
         app.poll_ocr();
         assert!(app.ocr_run.is_some() && label(&app).is_none(), "waits in Read mode");
         app.mode = Mode::Edit;
-        app.dialog = Some(Dialog::JsConsole);
+        app.dialog = Some(Dialog::Preferences);
         app.poll_ocr();
         assert!(app.ocr_run.is_some() && label(&app).is_none(), "waits beneath a dialog");
         app.dialog = None;
