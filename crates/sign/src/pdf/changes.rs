@@ -1049,9 +1049,11 @@ fn change_kind(doc: &Document, old: &Document, ends: &RevisionEnds, num: u32, d:
                 None if gains_signature(doc, old, ends, num, d, None) => kind::SIGNATURE,
                 None => kind::COMMENTS,
                 // A signature field's widget, when signed and still: signing only when its field
-                // gains a signature. A restyled empty one signs nothing (#6755).
+                // gains a signature, and nothing but its value and appearance changed (a renamed
+                // field or new actions are no part of signing). A restyled empty one signs
+                // nothing (#6755).
                 Some(b) if is_signature_field(old, b) => {
-                    if is_signature_field(doc, d) && gains_signature(doc, old, ends, num, d, Some(b)) {
+                    if is_signature_field(doc, d) && same_entries(d, b, &[b"V", b"AS", b"AP"]) && gains_signature(doc, old, ends, num, d, Some(b)) {
                         kind::SIGNATURE
                     } else {
                         kind::COMMENTS

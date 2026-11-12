@@ -649,6 +649,30 @@ fn an_empty_signature_widget_added_or_restyled_after_certification_is_not_signin
     }
 }
 
+/// Signing an empty signature field writes its value and the appearance that shows it, nothing
+/// else. Under a P=2 certification, the same revision renaming the field or giving its widget new
+/// actions is a change to the annotation, not signing, and breaks the certification.
+#[test]
+fn signing_an_empty_field_with_other_widget_changes_is_not_only_signing() {
+    let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
+    let trust = TrustStore { certs: vec![id.certificate.clone()] };
+    let check = |bytes: &[u8]| signatures(&open(bytes), bytes, &trust).into_iter().find(|s| s.certify == Some(2)).unwrap();
+    let certified = pdfcraft_sign::sign(&open(&fixture()), &id, &SignOptions { certify: Some(2), ..opts() }).unwrap();
+    let field = ObjRef { num: 6, generation: 0 };
+    let action = dict_of(vec![("S", Object::name("JavaScript")), ("JS", Object::String(PdfString::literal("app.alert(1)")))]);
+    for (what, name, change) in [
+        ("renamed", "Renamed", ("T", Object::String(PdfString::literal("Renamed")))),
+        ("given actions", "Approval", ("AA", Object::Dict(dict_of(vec![("K", Object::Dict(action.clone()))])))),
+    ] {
+        let mut doc = open(&certified);
+        doc.update_dict(field, |w| w.set(change.0.as_bytes().to_vec(), change.1.clone())).unwrap();
+        let signed = pdfcraft_sign::sign(&doc, &id, &SignOptions { field: Some(name.into()), ..opts() }).unwrap();
+        let s = check(&signed);
+        assert_ne!(s.status, Status::Valid, "the field signed and {what}: {:?}", s.modification);
+        assert!(matches!(&s.modification, Modification::Disallowed(k) if k.contains(&kind::COMMENTS)), "{what}: {:?}", s.modification);
+    }
+}
+
 /// A signature brings its widget with it: signing writes the value and the widget that shows it in
 /// one revision. Under a P=2 certification an approval signature may follow, but a widget added
 /// in a later revision that takes that signature's value (pointing at it, or as a kid of the
