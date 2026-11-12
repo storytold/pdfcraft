@@ -291,8 +291,8 @@ proptest::proptest! {
     #[test]
     fn malformed_dictionaries_never_panic(o in proptest::collection::vec(proptest::num::u8::ANY, 0..60),
                                           u in proptest::collection::vec(proptest::num::u8::ANY, 0..60),
-                                          r in 0i64..9, len in -10i64..300) {
-        let d = EncryptDict { filter: b"Standard".to_vec(), v: 4, r, length_bits: len, o, u, p: -1, encrypt_metadata: true, ..Default::default() };
+                                          r in 0i64..9, v in -2i64..8, len in -10i64..300) {
+        let d = EncryptDict { filter: b"Standard".to_vec(), v, r, length_bits: len, o, u, p: -1, encrypt_metadata: true, ..Default::default() };
         let _ = SecurityHandler::open(d, ID, Some("x"));
     }
 }
@@ -566,4 +566,98 @@ fn aesv3_with_a_128_bit_key_derives_object_keys_as_aesv2() {
     let r6 = new(Algorithm::Aes256, "u", "o", -1);
     let written = [iv.to_vec(), aes_cbc_encrypt(r6.file_key(), &iv, &text, true)].concat();
     assert_eq!(r6.decrypt_string(num, generation, &written), text);
+}
+
+/// An R5 or R6 dictionary keyed on raw password bytes (Algorithms 8–10 without SASLprep), as qpdf
+/// writes one from a password SASLprep would change.
+fn aes256_dict(r: i64, user: &[u8], owner: &[u8]) -> EncryptDict {
+    let key = [3u8; 32];
+    let (uv, uk, ov, ok) = ([1u8; 8], [2u8; 8], [4u8; 8], [5u8; 8]);
+    let u = [&hash_r6(r, user, &uv, &[])[..], &uv, &uk].concat();
+    let ue = aes_cbc_encrypt(&hash_r6(r, user, &uk, &[]), &[0; 16], &key, false);
+    let o = [&hash_r6(r, owner, &ov, &u)[..], &ov, &ok].concat();
+    let oe = aes_cbc_encrypt(&hash_r6(r, owner, &ok, &u), &[0; 16], &key, false);
+    EncryptDict { filter: b"Standard".to_vec(), v: 5, r, length_bits: 256, o, u, oe, ue, p: -4, encrypt_metadata: true, ..Default::default() }
+}
+
+/// ISO 32000-2 Algorithm 2.A keys R5/R6 files on the SASLprep form of a password, but qpdf (in
+/// every `--password-mode`), MuPDF and PDFium write and read it as typed: a decomposed "café" or a
+/// no-break space reaches the file unchanged. Such a file opens with the password as typed, user
+/// and owner alike, as it does in those readers, and as the renderer (`hayro-syntax`) already
+/// opened it. Every spelling is tried as the owner password before any as the user password.
+#[test]
+fn an_aes256_password_written_without_saslprep_opens_as_typed() {
+    for r in [5, 6] {
+        let d = aes256_dict(r, "cafe\u{301}".as_bytes(), "a\u{A0}b".as_bytes());
+        let user = SecurityHandler::open(d.clone(), ID, Some("cafe\u{301}")).unwrap();
+        assert_eq!((user.auth(), user.file_key()), (Auth::User, &[3u8; 32][..]), "R{r}");
+        assert_eq!(SecurityHandler::open(d.clone(), ID, Some("a\u{A0}b")).unwrap().auth(), Auth::Owner, "R{r}");
+        assert_eq!(user.authenticate_owner(ID, "a\u{A0}b").unwrap().auth(), Auth::Owner, "R{r}");
+        // The SASLprep forms are other passwords to this file, as to qpdf and MuPDF.
+        for wrong in ["caf\u{E9}", "a b", "cafe"] {
+            assert_eq!(SecurityHandler::open(d.clone(), ID, Some(wrong)).unwrap_err(), CryptError::WrongPassword, "R{r} {wrong:?}");
+        }
+        // One typed password, the user password in its SASLprep form and the owner password as
+        // typed: it opens as the owner.
+        let both = aes256_dict(r, "caf\u{E9}".as_bytes(), "cafe\u{301}".as_bytes());
+        assert_eq!(SecurityHandler::open(both, ID, Some("cafe\u{301}")).unwrap().auth(), Auth::Owner, "R{r}");
+    }
+    assert_eq!(
+        aes256_candidates("cafe\u{301}"),
+        [Zeroizing::new("caf\u{E9}".as_bytes().to_vec()), Zeroizing::new("cafe\u{301}".as_bytes().to_vec())]
+    );
+    assert_eq!(aes256_candidates("plain"), [Zeroizing::new(b"plain".to_vec())]);
+    // At most 127 bytes each: 64 decomposed é (192 bytes) and their 128-byte SASLprep form.
+    let long = "e\u{301}".repeat(64);
+    assert!(aes256_candidates(&long).iter().all(|c| c.len() == 127));
+}
+
+/// Algorithm 2 says a revision 2 key is always 5 bytes, but qpdf, MuPDF and PDFium all take
+/// `/Length` at revision 2 too: a `/V 2 /R 2 /Length 128` file keyed with 16 bytes opens in each,
+/// one keyed with 5 bytes in none. `/V 1` stays 40 bits (pdfcraft-cos reads it so).
+#[test]
+fn a_revision_2_key_has_the_length_length_gives() {
+    let o = vec![9u8; 32];
+    let mut d = EncryptDict { filter: b"Standard".to_vec(), v: 2, r: 2, length_bits: 128, o, p: -4, encrypt_metadata: true, ..Default::default() };
+    // Algorithm 2 by hand, without step h (revision 2): MD5 of the padded empty password, /O, /P
+    // and the ID, the first 16 bytes; /U is the padding encrypted with it (Algorithm 4).
+    let mut md5 = Md5::new();
+    md5.update(PADDING);
+    md5.update(&d.o);
+    md5.update((-4i32).to_le_bytes());
+    md5.update(ID);
+    let key = md5.finalize().to_vec();
+    d.u = rc4(&key, &PADDING);
+    let h = SecurityHandler::open(d.clone(), ID, None).unwrap();
+    assert_eq!(h.file_key(), &key[..]);
+    // The same file read as 40 bits has another /U.
+    d.u = rc4(&key[..5], &PADDING);
+    assert_eq!(SecurityHandler::open(d, ID, None).unwrap_err(), CryptError::WrongPassword);
+}
+
+/// Table 20 defines `/V` 1, 2, 4 and 5 (3 is unpublished); `/V 0` or no `/V` reads as RC4 with
+/// `/Length`, as MuPDF and PDFium read it. Other values are unsupported here and in the renderer.
+#[test]
+fn only_known_algorithms_open() {
+    let made = legacy_dict(2, 3, 128, b"", b"owner", 16);
+    for v in [0, 2] {
+        assert!(SecurityHandler::open(EncryptDict { v, ..made.clone() }, ID, None).is_ok(), "/V {v}");
+    }
+    for v in [3, 6, -1, 4_294_967_298] {
+        assert!(matches!(SecurityHandler::open(EncryptDict { v, ..made.clone() }, ID, None), Err(CryptError::Unsupported(_))), "/V {v}");
+    }
+}
+
+/// A user password with the byte 0x9F, which PDFDocEncoding leaves undefined and `pdfdoc_char`
+/// reads as U+FFFD: recovered with the owner password and handed on as text, as the engine hands
+/// it to the renderer, it reads back to the same bytes.
+#[test]
+fn an_undefined_pdfdoc_byte_in_a_password_reads_back() {
+    let user = b"\x9Fuser\xFF";
+    let d = legacy_dict(2, 3, 128, user, b"owner", 16);
+    let recovered = SecurityHandler::open(d.clone(), ID, Some("owner")).unwrap().recovered_user_password().unwrap();
+    assert_eq!(&recovered[..], user);
+    let text: String = recovered.iter().map(|b| pdfdoc_char(*b)).collect();
+    assert_eq!(text, "\u{FFFD}user\u{FF}");
+    assert_eq!(SecurityHandler::open(d, ID, Some(&text)).unwrap().auth(), Auth::User);
 }

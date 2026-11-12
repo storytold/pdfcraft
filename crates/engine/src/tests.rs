@@ -10510,6 +10510,188 @@ fn aes256_files_whose_passwords_saslprep_changes_open_as_typed() {
     }
 }
 
+/// A one-page file reading "Page 1", encrypted by `pdfcraft_crypt::create` with `params`, whose
+/// `/Encrypt` dictionary is written as text that `edit` may change first: what doesn't decide
+/// the key (a stale `/Length`, a longer `/U`, another `/V`) or what the key was made without
+/// (`/EncryptMetadata false` over a key made with metadata encrypted). The content stream is
+/// encrypted unless `edit` names `/StmF /Identity`.
+fn encrypted_page(params: &pdfcraft_cos::NewEncryption, edit: impl Fn(String) -> String) -> Arc<Vec<u8>> {
+    const ID0: &[u8] = b"0123456789abcdef";
+    let h = pdfcraft_crypt::create(params, ID0).unwrap();
+    let d = h.dict();
+    let hex = |b: &[u8]| b.iter().map(|x| format!("{x:02X}")).collect::<String>();
+    let mut e = format!("<< /Filter /Standard /V {} /R {} /Length {} /O <{}> /U <{}> /P {}", d.v, d.r, d.length_bits, hex(&d.o), hex(&d.u), d.p);
+    if d.v >= 4 {
+        let (cfm, len) = if d.v >= 5 { ("AESV3", 32) } else { ("AESV2", 16) };
+        e += &format!(" /CF << /StdCF << /Type /CryptFilter /CFM /{cfm} /Length {len} /AuthEvent /DocOpen >> >> /StmF /StdCF /StrF /StdCF");
+        if !d.encrypt_metadata {
+            e += " /EncryptMetadata false";
+        }
+    }
+    if d.r >= 5 {
+        e += &format!(" /OE <{}> /UE <{}> /Perms <{}>", hex(&d.oe), hex(&d.ue), hex(&d.perms));
+    }
+    let e = edit(e + " >>");
+    let text = b"BT /F1 24 Tf 20 150 Td (Page 1) Tj ET";
+    let content = if e.contains("/StmF /Identity") { text.to_vec() } else { h.encrypt_stream(4, 0, text, pdfcraft_crypt::StreamKind::Normal) };
+    let bytes = pdfcraft_testkit::Pdf::new()
+        .obj("<< /Type /Catalog /Pages 2 0 R >>")
+        .obj("<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>")
+        .obj("<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>")
+        .stream("", content)
+        .obj("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
+        .obj(e)
+        .trailer_entry("/Encrypt 6 0 R")
+        .trailer_entry(&format!("/ID [<{0}> <{0}>]", hex(ID0)))
+        .build();
+    Arc::new(bytes)
+}
+
+fn encryption(algorithm: pdfcraft_cos::Algorithm, user: &'static str, owner: &'static str) -> pdfcraft_cos::NewEncryption<'static> {
+    pdfcraft_cos::NewEncryption { algorithm, user_password: user, owner_password: owner, permissions: -1, encrypt_metadata: true, seed: [7; 32] }
+}
+
+/// Whether the document model and the renderer each open `bytes` with `password` (the renderer
+/// with what `render_password_for` gives it, as every render path does), and the page text when
+/// a session opens it.
+fn readings(bytes: &Arc<Vec<u8>>, password: Option<&str>) -> (bool, bool, Option<Vec<String>>) {
+    let cos = pdfcraft_cos::Document::open_with_password(bytes.clone(), password).is_ok();
+    let render = pdfcraft_render::inspect(bytes.clone(), crate::render_password_for(bytes.clone(), password).as_deref()).is_ok();
+    let mut s = Session::new();
+    let text = s.open("x.pdf", None, bytes.clone(), password).ok().map(|id| page_texts(&s, id));
+    (cos, render, text)
+}
+
+/// The document model (pdfcraft-cos) and the renderer (`hayro-syntax`) each authenticate and
+/// derive the key on their own; for every encryption dictionary, either both open the file with a
+/// password and show the page, or both refuse it. Each case here is one they read differently
+/// before (vendor/README.md, hayro-syntax (47)), with what qpdf, MuPDF and PDFium do with it.
+#[test]
+fn the_document_model_and_the_renderer_open_the_same_encrypted_files() {
+    use pdfcraft_cos::Algorithm::{Aes128, Aes256, Rc4_40, Rc4_128};
+    // Every case is checked, and every one that fails is reported.
+    let failed = std::cell::RefCell::new(Vec::new());
+    let expect = |bytes: &Arc<Vec<u8>>, pw: Option<&str>, case: &str, expected: (bool, bool, Option<Vec<String>>)| {
+        let got = readings(bytes, pw);
+        if got != expected {
+            failed.borrow_mut().push(format!("{case} with {pw:?}: {got:?}"));
+        }
+    };
+    let both_open = |bytes: &Arc<Vec<u8>>, pw: Option<&str>, case: &str| expect(bytes, pw, case, (true, true, Some(vec!["Page 1".to_string()])));
+    let both_refuse = |bytes: &Arc<Vec<u8>>, pw: Option<&str>, case: &str| expect(bytes, pw, case, (false, false, None));
+    // A stale `/Length 40` next to an AES-128 filter of 16 bytes (the renderer took the 40).
+    let stale = encrypted_page(&encryption(Aes128, "user", "owner"), |e| e.replace("/Length 128 ", "/Length 40 "));
+    for pw in ["user", "owner"] {
+        both_open(&stale, Some(pw), "stale /Length");
+    }
+    // `/V 0`, or no `/V`: RC4 with `/Length`, as MuPDF and PDFium read it (the renderer refused).
+    for (v, edit) in [("0", "/V 0"), ("absent", "")] {
+        let bytes = encrypted_page(&encryption(Rc4_128, "user", "owner"), |e| e.replace("/V 2", edit));
+        both_open(&bytes, Some("user"), &format!("/V {v}"));
+        both_open(&bytes, Some("owner"), &format!("/V {v}"));
+    }
+    // `/V 3` (unpublished) and a `/V` past 5, and `/R 7`: unknown to both (the model, or the
+    // renderer, opened them with keys made for something else).
+    for (case, from, to) in [("/V 3", "/V 2", "/V 3"), ("/V 4294967298", "/V 2", "/V 4294967298")] {
+        both_refuse(&encrypted_page(&encryption(Rc4_128, "user", "owner"), |e| e.replace(from, to)), Some("user"), case);
+    }
+    both_refuse(&encrypted_page(&encryption(Aes256, "user", "owner"), |e| e.replace("/R 6", "/R 7")), Some("user"), "/R 7");
+    // `/Length` past 128 bits or below 40, clamped (the renderer refused the file).
+    both_open(&encrypted_page(&encryption(Rc4_128, "user", "owner"), |e| e.replace("/Length 128", "/Length 256")), Some("user"), "/Length 256");
+    let v2_40 =
+        |length: &'static str| encrypted_page(&encryption(Rc4_40, "user", "owner"), move |e| e.replace("/V 1", "/V 2").replace("/Length 40", length));
+    for length in ["/Length 40", "/Length 0", "/Length -8"] {
+        both_open(&v2_40(length), Some("user"), length);
+    }
+    // A revision 2 `/U` longer than 32 bytes: its first 32 count (the renderer compared all).
+    let long_u = encrypted_page(&encryption(Rc4_40, "user", "owner"), |e| e.replacen("> /P", "00000000> /P", 1));
+    both_open(&long_u, Some("user"), "longer /U");
+    // `/EncryptMetadata false` over a key made with metadata encrypted (Algorithm 2 step f left
+    // out), as PDFium reads it too (the renderer refused it).
+    let metadata = encrypted_page(&encryption(Aes128, "user", "owner"), |e| format!("{} /EncryptMetadata false >>", e.strip_suffix(" >>").unwrap()));
+    for pw in ["user", "owner"] {
+        both_open(&metadata, Some(pw), "/EncryptMetadata false");
+    }
+    // `/OE` and `/UE` longer than 32 bytes: their first 32 count (the renderer refused them).
+    let long_oe = encrypted_page(&encryption(Aes256, "user", "owner"), |e| {
+        let (oe, ue) = (e.find("/OE <").unwrap() + 5 + 64, e.find("/UE <").unwrap() + 5 + 64);
+        let mut e = e;
+        for at in [ue, oe] {
+            e.insert_str(at, &"00".repeat(16));
+        }
+        e
+    });
+    for pw in ["user", "owner"] {
+        both_open(&long_oe, Some(pw), "longer /OE and /UE");
+    }
+    // An R2–R4 password with a character PDFDocEncoding lacks, written without it (as
+    // pdfcraft-crypt writes it, and MuPDF reads it): the renderer tried only the UTF-8 bytes.
+    let dropped = encrypted_page(&encryption(Rc4_128, "şifre", "owner"), |e| e);
+    both_open(&dropped, Some("şifre"), "dropped ş");
+    both_refuse(&dropped, Some("sifre"), "dropped ş");
+    // A user password with the byte 0x9F, undefined in PDFDocEncoding: opened with the owner
+    // password, the renderer gets it back as U+FFFD and reads that as 0x9F again.
+    let undefined = encrypted_page(&encryption(Rc4_128, "\u{FFFD}user\u{FF}", "owner"), |e| e);
+    for pw in ["owner", "\u{FFFD}user\u{FF}"] {
+        both_open(&undefined, Some(pw), "0x9F");
+    }
+    // The controls: the files as written, and a wrong password.
+    for (alg, case) in [(Rc4_40, "RC4-40"), (Rc4_128, "RC4-128"), (Aes128, "AES-128"), (Aes256, "AES-256")] {
+        let plain = encrypted_page(&encryption(alg, "user", "owner"), |e| e);
+        both_open(&plain, Some("user"), case);
+        both_open(&plain, Some("owner"), case);
+        both_refuse(&plain, Some("nope"), case);
+    }
+    let failed = failed.into_inner();
+    assert!(
+        failed.is_empty(),
+        "{}",
+        failed.join(
+            "
+"
+        )
+    );
+}
+
+/// Document Properties ▸ Security names the length of the key the file has, not the one its
+/// algorithm usually has: an `AESV3` filter of a `/V 4` handler has a 128-bit key (PDFBOX-5345;
+/// it said 256), a `/V 4` RC4 key can be 40 bits (it said 128), and a document that encrypts only
+/// its strings is still encrypted (it said "Attachments only").
+#[test]
+fn security_properties_name_the_key_the_file_has() {
+    use pdfcraft_cos::Algorithm::{Aes128, Aes256, Rc4_40, Rc4_128};
+    let method = |bytes: Arc<Vec<u8>>| {
+        let mut s = Session::new();
+        let id = s.open("x.pdf", None, bytes, Some("user")).unwrap();
+        s.get(id).unwrap().security_summary().unwrap().method
+    };
+    type Edit = fn(String) -> String;
+    let cases: [(pdfcraft_cos::Algorithm, Edit, &str); 7] = [
+        (Rc4_40, |e| e, "RC4, 40-bit"),
+        (Rc4_128, |e| e, "RC4, 128-bit"),
+        (Rc4_128, |e| e.replace("/Length 128", "/Length 256"), "RC4, 128-bit"),
+        (Aes128, |e| e, "AES, 128-bit"),
+        (Aes128, |e| e.replace("/AESV2", "/AESV3"), "AES, 128-bit"),
+        (Aes128, |e| e.replace("/StmF /StdCF", "/StmF /Identity"), "AES, 128-bit"),
+        (Aes256, |e| e, "AES, 256-bit"),
+    ];
+    let failed: Vec<String> = cases
+        .into_iter()
+        .filter_map(|(alg, edit, expected)| {
+            let got = method(encrypted_page(&encryption(alg, "user", "owner"), edit));
+            (got != expected).then(|| format!("{alg:?}: {got} for {expected}"))
+        })
+        .collect();
+    assert!(
+        failed.is_empty(),
+        "{}",
+        failed.join(
+            "
+"
+        )
+    );
+}
+
 /// A synthetic phone photo, 400 × 300 px: a white sheet, tilted, on a grey table, with a black
 /// mark in the sheet's top-left corner. Returns the PNG and the sheet's corners in pixels.
 fn camera_photo() -> (Vec<u8>, [[f64; 2]; 4]) {

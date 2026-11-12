@@ -60,7 +60,8 @@ pub struct EncryptDict {
     pub filter: Vec<u8>,
     pub v: i64,
     pub r: i64,
-    /// Key length in bits (`/Length`; 40 when absent).
+    /// File key length in bits: `/Length` (40 when absent, always 40 for `/V 1`), for `/V 4` the
+    /// crypt filter's (see pdfcraft-cos). Revisions 2–4 clamp it to 40–128.
     pub length_bits: i64,
     pub o: Vec<u8>,
     pub u: Vec<u8>,
@@ -209,12 +210,19 @@ impl SecurityHandler {
         if !dict.filter.is_empty() && dict.filter != b"Standard" {
             return Err(CryptError::Unsupported(format!("/Filter /{}", String::from_utf8_lossy(&dict.filter))));
         }
+        // Table 20: 1, 2 and 4 are the RC4/crypt-filter algorithms and 5 is AES-256; 0 (or no /V)
+        // reads as RC4 with /Length, as MuPDF and PDFium read it. 3 is unpublished and others are
+        // unknown: their data can't be decrypted, as in the renderer.
+        if !matches!(dict.v, 0 | 1 | 2 | 4 | 5) {
+            return Err(CryptError::Unsupported(format!("/V {}", dict.v)));
+        }
         let pw = password.unwrap_or("");
         let mut recovered_user = None;
+        // Every spelling as the owner password first, then every spelling as the user password:
+        // one typed password can be the user password in one spelling and the owner password in
+        // another.
         let (key, auth) = match dict.r {
             2..=4 => {
-                // Every spelling as the owner password first: one typed password can be the user
-                // password in one spelling and the owner password in another.
                 let candidates = legacy_candidates(pw);
                 if let Some((k, user)) = candidates.iter().find_map(|legacy| owner_key_r4(&dict, id0, legacy)) {
                     recovered_user = Some(user);
@@ -225,10 +233,10 @@ impl SecurityHandler {
                 }
             }
             5 | 6 => {
-                let pw = sasl_password(pw);
-                if let Some(k) = key_r6(&dict, &pw, true)? {
+                let candidates = aes256_candidates(pw);
+                if let Some(k) = first_key_r6(&dict, &candidates, true)? {
                     (k, Auth::Owner)
-                } else if let Some(k) = key_r6(&dict, &pw, false)? {
+                } else if let Some(k) = first_key_r6(&dict, &candidates, false)? {
                     (k, Auth::User)
                 } else {
                     return Err(CryptError::WrongPassword);
@@ -476,9 +484,12 @@ pub fn pdfdoc_byte(c: char) -> Option<u8> {
 }
 
 /// Revisions 2–4: the password in PDFDocEncoding (§7.6.4.3.2, Algorithm 2), at most 32 bytes.
-/// Characters PDFDocEncoding lacks are dropped.
+/// Characters PDFDocEncoding lacks are dropped, as MuPDF drops them. U+FFFD stands for the byte
+/// 0x9F, which PDFDocEncoding leaves undefined and [`pdfdoc_char`] reads as U+FFFD: a user
+/// password with that byte, recovered with the owner password and handed on as text, reads back
+/// to the same bytes.
 fn legacy_password(pw: &str) -> Zeroizing<Vec<u8>> {
-    Zeroizing::new(pw.chars().filter_map(pdfdoc_byte).take(32).collect())
+    Zeroizing::new(pw.chars().filter_map(|c| if c == '\u{FFFD}' { Some(0x9F) } else { pdfdoc_byte(c) }).take(32).collect())
 }
 
 /// The bytes an R2–R4 password may have been written as: PDFDocEncoding, as the specification
@@ -492,6 +503,26 @@ fn legacy_candidates(pw: &str) -> Vec<Zeroizing<Vec<u8>>> {
         out.push(Zeroizing::new(pw.bytes().take(32).collect()));
     }
     out
+}
+
+/// The bytes an R5/R6 password may have been written as: its SASLprep form (Algorithm 2.A, step
+/// a), and, where that differs, the password as typed, at most 127 bytes of UTF-8 each. qpdf,
+/// MuPDF and PDFium key and read passwords without SASLprep, so a decomposed "café" or a no-break
+/// space reaches the file as typed.
+fn aes256_candidates(pw: &str) -> Vec<Zeroizing<Vec<u8>>> {
+    let prepared = sasl_password(pw);
+    let typed = Zeroizing::new(pw.as_bytes().get(..127).unwrap_or(pw.as_bytes()).to_vec());
+    if typed == prepared { vec![prepared] } else { vec![prepared, typed] }
+}
+
+/// Algorithm 2.A for each of `candidates` in turn: the first file key one of them unlocks.
+fn first_key_r6(d: &EncryptDict, candidates: &[Zeroizing<Vec<u8>>], owner: bool) -> Result<Option<Zeroizing<Vec<u8>>>, CryptError> {
+    for pw in candidates {
+        if let Some(k) = key_r6(d, pw, owner)? {
+            return Ok(Some(k));
+        }
+    }
+    Ok(None)
 }
 
 /// Revisions 5–6: SASLprep (RFC 4013), UTF-8, at most 127 bytes.
@@ -510,8 +541,13 @@ fn pad(pw: &[u8]) -> Zeroizing<[u8; 32]> {
     out
 }
 
+/// The file key's length in bytes: `/Length` (in bits, 40 to 128). Algorithms 2 and 3 say 5 bytes
+/// for revision 2 whatever `/Length` says, but qpdf, MuPDF and PDFium all take `/Length` at
+/// revision 2 too (a `/V 2 /R 2 /Length 128` file opens in each of them only with a 16-byte key),
+/// and so does this. `/V 1` is always 40 bits (Table 20), which the caller puts in `length_bits`.
 fn key_len(d: &EncryptDict) -> usize {
-    if d.r == 2 { 5 } else { (d.length_bits.clamp(40, 128) / 8) as usize }
+    // Provably in 5..=16 after the clamp, so the cast is lossless.
+    (d.length_bits.clamp(40, 128) / 8) as usize
 }
 
 // ── Revisions 2–4 ──────────────────────────────────────────────────────────────────────────────
