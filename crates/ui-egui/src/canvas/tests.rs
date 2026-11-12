@@ -3231,5 +3231,38 @@ fn previous_and_next_view_restore_scroll_fraction_on_origin_page() -> Result<(),
     let (page, frac) = v.goto.ok_or("expected goto on second Previous view")?;
     assert_eq!(page, 0);
     assert!((frac - 0.5).abs() < 1e-5, "pending goto fraction beats stale screen_rects: {frac}");
+
+    // When `go_to_dest` sets a positioned destination (`goto_point`) and Previous view + Next view
+    // run before the next frame draws, the destination's vertical fraction is preserved.
+    let info = pdfcraft_render::DocInfo {
+        pages: (0..5)
+            .map(|_| pdfcraft_render::PageInfo { width: 300.0, height: 400.0, label: String::new(), crop: [0.0, 0.0, 300.0, 400.0], rotation: 0 })
+            .collect(),
+        ..Default::default()
+    };
+    v.go_to_dest(2, DestView::Xyz { left: None, top: Some(300.0), zoom: None }, &info);
+    assert!(v.view_history(false));
+    assert_eq!(v.current, 0);
+    assert!(v.view_history(true));
+    assert_eq!(v.current, 2);
+    let (page, frac) = v.goto.ok_or("expected goto on Next view after go_to_dest")?;
+    assert_eq!(page, 2);
+    assert!((frac - 0.25).abs() < 1e-5, "expected 0.25 destination fraction on page 2, got {frac}");
+
+    // In continuous view with two partially visible pages where `current` (page 1) starts below
+    // the viewport top (`y = 40 + gap + 200`), jumping away and returning preserves its signed
+    // offset (`-0.2`) rather than snapping page 1 to the top (`0.0`).
+    v.goto = None;
+    v.goto_point = None;
+    v.current = 1;
+    v.screen_rects = vec![
+        (0, Rect::from_min_size(pos2(100.0, 40.0 + gap - 814.0), vec2(600.0, 1000.0))),
+        (1, Rect::from_min_size(pos2(100.0, 40.0 + gap + 200.0), vec2(600.0, 1000.0))),
+    ];
+    v.go_to_page(4);
+    assert!(v.view_history(false));
+    let (page, frac) = v.goto.ok_or("expected goto when returning to partially visible page 1")?;
+    assert_eq!(page, 1);
+    assert!((frac - (-0.2)).abs() < 1e-5, "expected -0.2 signed offset on page 1, got {frac}");
     Ok(())
 }

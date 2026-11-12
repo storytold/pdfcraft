@@ -89,20 +89,27 @@ impl DocView {
         Some(p.xyz_for_view(keep_x.then_some(x), keep_y.then_some(y)))
     }
 
-    /// How far down `self.current` the viewport top sits (0..=1), as `goto` takes it (#6848).
+    /// How far down `self.current` the viewport top sits (-1..=1), as `goto` takes it (#6848).
     fn current_scroll_fraction(&self) -> f32 {
+        if let Some((p, _, Some(fy), rel)) = self.goto_point
+            && p == self.current
+            && fy.is_finite()
+        {
+            let h = self.screen_rects.iter().find(|(pg, _)| *pg == p).map_or(0.0, |(_, r)| r.height());
+            let shift = if h > 0.0 && rel.y.is_finite() { -rel.y / h } else { 0.0 };
+            return (fy + shift).clamp(-1.0, 1.0);
+        }
         if let Some((p, frac)) = self.goto
             && p == self.current
             && frac.is_finite()
         {
-            return frac.clamp(0.0, 1.0);
+            return frac.clamp(-1.0, 1.0);
         }
         if self.viewport_screen.is_positive()
             && let Some((_, r)) = self.screen_rects.iter().find(|(p, _)| *p == self.current)
             && r.height() > 0.0
-            && r.top() < self.viewport_screen.top() + self.page_gap()
         {
-            return ((self.viewport_screen.top() + self.page_gap() - r.top()) / r.height()).clamp(0.0, 1.0);
+            return ((self.viewport_screen.top() + self.page_gap() - r.top()) / r.height()).clamp(-1.0, 1.0);
         }
         0.0
     }
