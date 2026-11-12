@@ -82,6 +82,11 @@ pub fn remove_data_instance(doc: &mut Document, path: &DataPath) -> Result<Datas
 /// pass, which asks for the instances again).
 const MAX_ENSURED: usize = 200_000;
 
+/// Most bytes of path those queued instances hold together: each one owns a copy of its parent
+/// path (segment buffers included, twice while duplicates are dropped) and its name, so a long
+/// ancestor would otherwise be multiplied by the instance count. Ordinary paths are tens of bytes.
+const MAX_ENSURED_BYTES: usize = 128 << 20;
+
 // Instance nodes write_data_ops has queued on this thread, for tests that bound its work.
 #[cfg(test)]
 thread_local! {
@@ -99,7 +104,7 @@ pub fn write_data_ops(doc: &mut Document, ops: &[DataOp], reuse: Option<ObjRef>)
     let mut run: Vec<Want> = Vec::new();
     // Instances queued in this run, by parent and name: asking for more only queues the rest.
     let mut queued: HashMap<(&DataPath, &str), usize> = HashMap::new();
-    let (mut ensured, mut capped) = (0usize, false);
+    let (mut ensured, mut ensured_bytes, mut capped, mut capped_bytes) = (0usize, 0usize, false, false);
     let flush = |run: &mut Vec<Want>, steps: &mut Vec<Vec<Want>>, removes: &mut Vec<Option<DataPath>>| {
         if !run.is_empty() {
             let mut seen = std::collections::HashSet::new();
@@ -117,12 +122,24 @@ pub fn write_data_ops(doc: &mut Document, ops: &[DataOp], reuse: Option<ObjRef>)
             }
             DataOp::Instances { parent, name, count } => {
                 let done = queued.entry((parent, name.as_str())).or_insert(0);
+                // The path (its segments' buffers and their text) is held by the queued step, which a
+                // clone then `push` can leave with up to twice the room, and cloned again into
+                // `flush`'s dedup set, beside the label and the step itself.
+                let segment = std::mem::size_of::<(String, usize)>();
+                let path_bytes =
+                    parent.iter().fold(segment.saturating_add(name.len()), |n, (p, _)| n.saturating_add(segment).saturating_add(p.len()));
+                let per_instance = path_bytes.saturating_mul(3).saturating_add(name.len()).saturating_add(16 + std::mem::size_of::<Want>());
                 while *done < (*count).min(MAX_INDEX) {
                     if ensured >= MAX_ENSURED {
                         capped = true;
                         break;
                     }
+                    if ensured_bytes.saturating_add(per_instance) > MAX_ENSURED_BYTES {
+                        capped_bytes = true;
+                        break;
+                    }
                     ensured += 1;
+                    ensured_bytes += per_instance;
                     #[cfg(test)]
                     ENSURED.with(|n| n.set(n.get() + 1));
                     let k = *done;
@@ -153,6 +170,11 @@ pub fn write_data_ops(doc: &mut Document, ops: &[DataOp], reuse: Option<ObjRef>)
     let mut written = rewrite(doc, &plan, reuse)?;
     if capped {
         written.warnings.push(format!("XFA data instances not written past {MAX_ENSURED}: the rows were added and removed too often"));
+    }
+    if capped_bytes {
+        written
+            .warnings
+            .push(format!("XFA data instances not written past {MAX_ENSURED_BYTES} bytes of names: the rows were added and removed too often"));
     }
     Ok(written)
 }
