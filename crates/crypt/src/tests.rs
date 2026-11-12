@@ -445,3 +445,33 @@ fn pdfdoc_encoding_round_trips() {
     assert_eq!(legacy_candidates("Çok"), [Zeroizing::new(vec![0xC7, b'o', b'k'])]);
     assert_eq!(legacy_candidates("şifre"), [Zeroizing::new(b"ifre".to_vec()), Zeroizing::new("şifre".as_bytes().to_vec())]);
 }
+
+/// AES stream data is a 16-byte initialization vector and at least one whole block (ISO 32000-2
+/// §7.6.3.2); anything else is damaged, except no data at all. RC4 has no blocks to check.
+#[test]
+fn aes_stream_ciphertext_is_an_iv_and_whole_blocks() {
+    for alg in [Algorithm::Aes128, Algorithm::Aes256] {
+        let params =
+            NewEncryption { algorithm: alg, user_password: "u", owner_password: "o", permissions: -4, encrypt_metadata: true, seed: [9; 32] };
+        let h = create(&params, &[1; 16]).unwrap();
+        let whole = h.encrypt_stream(3, 0, b"some data", StreamKind::Normal);
+        assert!(!h.stream_ciphertext_damaged(&whole, StreamKind::Normal), "{alg:?}");
+        assert!(!h.stream_ciphertext_damaged(&[], StreamKind::Normal), "{alg:?}");
+        for len in [1, 15, 16, 31, whole.len() - 1] {
+            assert!(h.stream_ciphertext_damaged(whole.get(..len).unwrap(), StreamKind::Normal), "{alg:?} {len}");
+        }
+    }
+    let rc4 = create(
+        &NewEncryption {
+            algorithm: Algorithm::Rc4_128,
+            user_password: "u",
+            owner_password: "o",
+            permissions: -4,
+            encrypt_metadata: true,
+            seed: [9; 32],
+        },
+        &[1; 16],
+    )
+    .unwrap();
+    assert!(!rc4.stream_ciphertext_damaged(b"odd length", StreamKind::Normal));
+}

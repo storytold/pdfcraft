@@ -269,6 +269,14 @@ impl SecurityHandler {
         self.method(Some(kind)) != Method::Identity
     }
 
+    /// Whether `data`, stored stream data of `kind` that this handler decrypts with AES, is not a
+    /// 16-byte initialization vector followed by whole blocks, at least one (ISO 32000-2 §7.6.3.2:
+    /// CBC mode with PKCS#5 padding, which always adds a block's worth or less): it was cut short
+    /// or damaged, and decrypting it keeps only the whole blocks. No data at all is an empty stream.
+    pub fn stream_ciphertext_damaged(&self, data: &[u8], kind: StreamKind) -> bool {
+        matches!(self.method(Some(kind)), Method::Aes128 | Method::Aes256) && !data.is_empty() && (data.len() < 32 || !data.len().is_multiple_of(16))
+    }
+
     /// Whether data left as stored by a handler without the key still decrypts after its object
     /// is renumbered: only AES-256 doesn't mix the object number into the key (Algorithm 1.A).
     pub fn survives_renumbering(&self) -> bool {

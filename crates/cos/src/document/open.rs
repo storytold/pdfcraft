@@ -29,6 +29,7 @@ impl Document {
             cache: Arc::default(),
             objstms: Arc::default(),
             unreadable: Arc::default(),
+            damaged_ciphertext: Arc::default(),
             jbig2_globals: Arc::default(),
             stream_limit: crate::object::MAX_DECODED,
             overlay: BTreeMap::new(),
@@ -118,6 +119,7 @@ impl Document {
             cache: Arc::default(),
             objstms: Arc::default(),
             unreadable: Arc::default(),
+            damaged_ciphertext: Arc::default(),
             jbig2_globals: Arc::default(),
             stream_limit: stream_limit.min(crate::object::MAX_DECODED),
             overlay: BTreeMap::new(),
@@ -261,6 +263,7 @@ impl Document {
         self.cache = Arc::default();
         self.objstms = Arc::default();
         self.unreadable = Arc::default();
+        self.damaged_ciphertext = Arc::default();
         Ok(())
     }
 
@@ -288,6 +291,7 @@ impl Document {
         self.source_identity = Arc::new(());
         self.cache = Arc::default();
         self.objstms = Arc::default();
+        self.damaged_ciphertext = Arc::default();
         Ok(())
     }
 

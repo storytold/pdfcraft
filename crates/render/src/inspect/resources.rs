@@ -438,6 +438,10 @@ fn model_attachment_data(model: pdfcraft_cos::Document, att: &Attachment) -> Res
     if model.reads_as_stored(stream) {
         return Err(ATTACHMENT_NEEDS_PASSWORD.into());
     }
+    // Decryption keeps the whole blocks of AES data cut short: refused, not exported short.
+    if model.ciphertext_damaged(pdfcraft_cos::ObjRef { num, generation }) {
+        return Err("the attachment's encrypted data is damaged (cut short)".into());
+    }
     decode_attachment(stream)
 }
 
@@ -450,7 +454,8 @@ const BROTLI: &[u8] = b"BrotliDecode";
 /// document model's ([`pdfcraft_cos::Stream::decoded_strict_within`]); a `/BrotliDecode` stage is
 /// lopdf's, which refuses a truncated or corrupt stream and, like it, takes no `/DecodeParms`.
 /// `/Crypt` was applied when the object loaded. No data at all is an empty file, whatever the
-/// filters: nothing was encoded, so nothing is damaged (and lopdf read it so).
+/// filters: nothing was encoded, so nothing is damaged (and lopdf read it so). Stored data over
+/// [`MAX_ATTACHMENT_BYTES`] is refused before a stage-by-stage decoding copies it.
 fn decode_attachment(stream: &pdfcraft_cos::Stream) -> Result<Vec<u8>, String> {
     use pdfcraft_cos::Object as Cos;
     if stream.raw.is_empty() {
@@ -473,6 +478,9 @@ fn decode_attachment(stream: &pdfcraft_cos::Stream) -> Result<Vec<u8>, String> {
         Some(Cos::Array(a)) => a.iter().map(Some).collect(),
         _ => Vec::new(),
     };
+    if stream.raw.len() > MAX_ATTACHMENT_BYTES {
+        return Err(attachment_too_large());
+    }
     let mut data = stream.raw.to_vec();
     for (i, name) in names.into_iter().enumerate() {
         data = match name {
@@ -495,8 +503,8 @@ fn decode_attachment(stream: &pdfcraft_cos::Stream) -> Result<Vec<u8>, String> {
     Ok(data)
 }
 
-/// The error an unfiltered attachment larger than [`MAX_ATTACHMENT_BYTES`] gives, as the model's
-/// decoding words it.
+/// The error an attachment whose stored data is larger than [`MAX_ATTACHMENT_BYTES`] gives before
+/// that data is copied, as the model's decoding words it for unfiltered data.
 fn attachment_too_large() -> String {
     pdfcraft_cos::CosError::Filter(format!("decoded output exceeds the limit of {MAX_ATTACHMENT_BYTES} bytes")).to_string()
 }
@@ -505,8 +513,9 @@ fn attachment_too_large() -> String {
 /// decoding returns what decoded before damage as the whole. Only `/Filter` and `/DecodeParms`
 /// matter to it, so only they are carried over; `/Crypt` was applied when the object loaded.
 fn strict_decoded(stream: &lopdf::Stream) -> Result<Vec<u8>, String> {
-    // Unfiltered data is the attachment: refused before it is copied when it is too large.
-    if stream.dict.get(b"Filter").is_err() && stream.content.len() > MAX_ATTACHMENT_BYTES {
+    // Refused before it is copied when the stored data alone is too large: unfiltered, it is the
+    // attachment; filtered, it would be copied again stage by stage.
+    if stream.content.len() > MAX_ATTACHMENT_BYTES {
         return Err(attachment_too_large());
     }
     let name = |o: &Object| o.as_name().ok().map(|n| pdfcraft_cos::Object::Name(n.to_vec()));

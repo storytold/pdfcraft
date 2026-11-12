@@ -3084,6 +3084,12 @@ fn an_attachment_stored_in_the_clear_reads_without_the_password() {
 /// filter`, read as an app would: unencrypted, by lopdf; or encrypted for its attachments alone
 /// (`/EFOpen`, ISO 32000-2 §7.6.6) and read with the password, by the document model.
 fn read_one_attachment(filter: &str, data: &[u8], encrypted: bool) -> Result<Vec<u8>, String> {
+    read_one_attachment_stored(filter, data, encrypted, |stored| stored)
+}
+
+/// [`read_one_attachment`], the attachment's data stored as `store` leaves it (its ciphertext, when
+/// `encrypted`).
+fn read_one_attachment_stored(filter: &str, data: &[u8], encrypted: bool, store: impl Fn(Vec<u8>) -> Vec<u8>) -> Result<Vec<u8>, String> {
     let pdf = pdfcraft_testkit::Pdf::new()
         .obj("<< /Type /Catalog /Pages 2 0 R /Names << /EmbeddedFiles << /Names [(note.txt) 4 0 R] >> >> >>")
         .obj("<< /Type /Pages /Kids [3 0 R] /Count 1 >>")
@@ -3109,7 +3115,7 @@ fn read_one_attachment(filter: &str, data: &[u8], encrypted: bool) -> Result<Vec
         let d = handler.dict();
         let hex = |b: &[u8]| b.iter().map(|b| format!("{b:02X}")).collect::<String>();
         let pdf = pdf
-            .stream(&stream, handler.encrypt_string(5, 0, data))
+            .stream(&stream, store(handler.encrypt_string(5, 0, data)))
             .obj(format!(
                 "<< /Filter /Standard /V 5 /R 6 /O <{}> /U <{}> /OE <{}> /UE <{}> /Perms <{}> /P {} /CF << /StdCF << /AuthEvent /EFOpen /CFM /AESV3 /Length 32 >> >> /StmF /Identity /StrF /Identity /EFF /StdCF >>",
                 hex(&d.o),
@@ -3122,7 +3128,7 @@ fn read_one_attachment(filter: &str, data: &[u8], encrypted: bool) -> Result<Vec
             .trailer_entry("/Encrypt 6 0 R /ID [<00> <00>]");
         (pdf.build(), Some(ATTACHMENT_PASSWORD))
     } else {
-        (pdf.stream(&stream, data).build(), None)
+        (pdf.stream(&stream, store(data.to_vec())).build(), None)
     };
     let bytes = Arc::new(bytes);
     let info = inspect(bytes.clone(), password).expect("opens");
@@ -3272,4 +3278,19 @@ fn an_empty_filtered_attachment_is_an_empty_file() {
             assert_eq!(read_one_attachment(filter, b"", encrypted), Ok(Vec::new()), "{filter}, encrypted: {encrypted}");
         }
     }
+}
+
+/// An encrypted attachment whose AES data is cut short, inside a block or inside the
+/// initialization vector, is an error: decryption keeps only the whole blocks (ISO 32000-2
+/// §7.6.3.2), and that is not the file. Whole, the same data reads; stored empty, it is an empty file.
+#[test]
+fn an_attachment_whose_aes_data_is_cut_short_is_an_error() {
+    let words = b"the attached file, encrypted with AES-256".repeat(10);
+    let whole = read_one_attachment_stored("null", &words, true, |stored| stored);
+    assert_eq!(whole.as_deref(), Ok(&words[..]));
+    for keep in [|n: usize| n - 5, |n: usize| n - 16 - 5, |_| 10] {
+        let cut = read_one_attachment_stored("null", &words, true, |stored| stored.get(..keep(stored.len())).unwrap().to_vec());
+        assert!(cut.is_err(), "{:?} bytes passed as the file", cut.map(|c| c.len()));
+    }
+    assert_eq!(read_one_attachment_stored("null", &words, true, |_| Vec::new()), Ok(Vec::new()));
 }
