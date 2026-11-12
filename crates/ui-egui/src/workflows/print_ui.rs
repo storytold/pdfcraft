@@ -281,6 +281,7 @@ impl PdfCraftApp {
                     name: doc.name.clone(),
                     path: doc.path.as_ref().map(std::path::PathBuf::from),
                     doc_id: Some(doc.id),
+                    bytes: Some(doc.bytes.clone()),
                     page_count,
                     page_sizes,
                     page_labels,

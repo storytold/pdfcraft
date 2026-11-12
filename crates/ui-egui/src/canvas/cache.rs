@@ -932,7 +932,7 @@ pub(crate) fn texture_image(size: [usize; 2], pixels: pdfcraft_render::Pixels) -
 /// non-opaque colour's alpha is restored after multiplying the unmultiplied RGB by its
 /// luminance. This uses the display gamma-space weights users expect in editors/print dialogs,
 /// not the linear-light coefficients of a colour-managed render.
-pub(super) fn grayscale(mut img: egui::ColorImage) -> egui::ColorImage {
+pub(crate) fn grayscale(mut img: egui::ColorImage) -> egui::ColorImage {
     for c in img.pixels.iter_mut() {
         let a = c.a();
         let luminance = f32::from(c.r()) * 0.299_f32 + f32::from(c.g()) * 0.587_f32 + f32::from(c.b()) * 0.114_f32;

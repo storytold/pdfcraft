@@ -1,4 +1,6 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use egui::{Align, Color32, Layout, RichText};
 
@@ -9,6 +11,7 @@ pub struct BatchPrintItem {
     pub name: String,
     pub path: Option<PathBuf>,
     pub doc_id: Option<pdfcraft_engine::DocId>,
+    pub bytes: Option<Arc<Vec<u8>>>,
     pub page_count: usize,
     pub page_sizes: Vec<(f64, f64)>,
     pub page_labels: Vec<String>,
@@ -27,6 +30,8 @@ pub enum BatchPrintStep {
 pub struct BatchPrintDraft {
     pub step: BatchPrintStep,
     pub items: Vec<BatchPrintItem>,
+    pub preview_cache: HashMap<usize, egui::TextureHandle>,
+    pub last_grayscale: bool,
 }
 
 impl BatchPrintDraft {
@@ -60,8 +65,10 @@ impl BatchPrintDraft {
             let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
             let mut page_sizes = Vec::new();
             let mut page_labels = Vec::new();
+            let mut file_arc = None;
             if let Ok(bytes) = std::fs::read(&path) {
-                let arc_bytes = std::sync::Arc::new(bytes);
+                let arc_bytes = Arc::new(bytes);
+                file_arc = Some(arc_bytes.clone());
                 if let Ok(info) = pdfcraft_render::inspect(arc_bytes.clone(), None) {
                     for p in info.pages {
                         page_sizes.push((f64::from(p.width), f64::from(p.height)));
@@ -79,6 +86,7 @@ impl BatchPrintDraft {
                 name,
                 path: Some(path),
                 doc_id: None,
+                bytes: file_arc,
                 page_count,
                 page_sizes,
                 page_labels,
@@ -117,6 +125,7 @@ fn show_file_selection(ui: &mut egui::Ui, app: &mut PdfCraftApp) -> (bool, bool)
             app.batch_print.select_all(false);
         }
         if widgets::pill_button(ui, tl!("Clear list"), false).clicked() {
+            app.batch_print.preview_cache.clear();
             app.batch_print.items.clear();
         }
     });
@@ -162,6 +171,7 @@ fn show_file_selection(ui: &mut egui::Ui, app: &mut PdfCraftApp) -> (bool, bool)
 
     if let Some(idx) = remove_index {
         app.batch_print.items.remove(idx);
+        app.batch_print.preview_cache.clear();
     }
 
     ui.add_space(10.0);
@@ -193,6 +203,7 @@ fn show_file_selection(ui: &mut egui::Ui, app: &mut PdfCraftApp) -> (bool, bool)
     });
 
     if go_settings {
+        app.batch_print.preview_cache.clear();
         app.batch_print.step = BatchPrintStep::Settings;
         app.prepare_batch_print_settings();
     }
@@ -200,8 +211,16 @@ fn show_file_selection(ui: &mut egui::Ui, app: &mut PdfCraftApp) -> (bool, bool)
     (false, cancel)
 }
 
+fn apply_grayscale(img: &mut egui::ColorImage) {
+    for c in &mut img.pixels {
+        let lum = (f32::from(c.r()) * 0.299 + f32::from(c.g()) * 0.587 + f32::from(c.b()) * 0.114).round() as u8;
+        *c = Color32::from_rgba_premultiplied(lum, lum, lum, c.a());
+    }
+}
+
 fn show_print_settings(ui: &mut egui::Ui, app: &mut PdfCraftApp) -> (bool, bool) {
     let t = theme::Tokens::get(ui.ctx());
+    let ctx = ui.ctx().clone();
 
     if app.print_draft.handling == crate::print_ui::Handling::Label {
         let label_crop_ids: Vec<pdfcraft_engine::DocId> = app.batch_print.items.iter().filter(|i| i.selected).filter_map(|i| i.doc_id).collect();
@@ -210,25 +229,42 @@ fn show_print_settings(ui: &mut egui::Ui, app: &mut PdfCraftApp) -> (bool, bool)
         }
     }
 
-    let selected_items: Vec<&BatchPrintItem> = app.batch_print.items.iter().filter(|i| i.selected).collect();
-    let selected_count = selected_items.len();
+    let is_grayscale = app.print_draft.grayscale;
+    if app.batch_print.last_grayscale != is_grayscale {
+        app.batch_print.preview_cache.clear();
+        app.batch_print.last_grayscale = is_grayscale;
+    }
 
-    let mut go_back = false;
+    // Extract sizes, labels, and rendering handles for all selected items
     let mut all_sizes: Vec<(f64, f64)> = Vec::new();
     let mut all_labels: Vec<String> = Vec::new();
-    let mut page_to_view: Vec<(Option<usize>, usize)> = Vec::new();
+    let mut pages_render_data: Vec<(Option<Arc<Vec<u8>>>, usize)> = Vec::new();
+    let mut selected_count = 0usize;
 
-    for item in &selected_items {
-        let view_idx = item.doc_id.and_then(|id| app.views.iter().position(|v| v.id == id));
+    for item in app.batch_print.items.iter().filter(|i| i.selected) {
+        selected_count += 1;
+        let bytes = if let Some(b) = &item.bytes {
+            Some(b.clone())
+        } else if let Some(path) = &item.path {
+            std::fs::read(path).ok().map(Arc::new)
+        } else if let Some(id) = item.doc_id
+            && let Some(doc) = app.session.get(id)
+        {
+            Some(doc.bytes.clone())
+        } else {
+            None
+        };
+
         for (p_idx, (&size, label)) in item.page_sizes.iter().zip(&item.page_labels).enumerate() {
             all_sizes.push(size);
             all_labels.push(label.clone());
-            page_to_view.push((view_idx, p_idx));
+            pages_render_data.push((bytes.clone(), p_idx));
         }
     }
 
     let total_pages = all_sizes.len();
 
+    let mut go_back = false;
     ui.horizontal(|ui| {
         if widgets::pill_button(ui, tl!("Back to documents"), false).clicked() {
             go_back = true;
@@ -237,6 +273,7 @@ fn show_print_settings(ui: &mut egui::Ui, app: &mut PdfCraftApp) -> (bool, bool)
     });
 
     if go_back {
+        app.batch_print.preview_cache.clear();
         app.batch_print.step = BatchPrintStep::SelectFiles;
         return (false, false);
     }
@@ -244,27 +281,38 @@ fn show_print_settings(ui: &mut egui::Ui, app: &mut PdfCraftApp) -> (bool, bool)
     ui.add_space(6.0);
 
     if !all_sizes.is_empty() {
-        let rasters = crate::print_ui::preview_rasters(
-            &app.print_draft,
-            &all_sizes,
-            &all_labels,
-            ui.ctx().pixels_per_point(),
-            ui.ctx().input(|i| i.max_texture_side) as f32,
-        );
-
-        for &(p, scale) in &rasters {
-            if let Some(&(Some(view_idx), doc_p)) = page_to_view.get(p) {
-                let view = &mut app.views[view_idx];
-                view.set_print_grayscale(app.print_draft.grayscale);
-                view.queue_print_previews(&[(doc_p, scale)]);
-            }
-        }
-
         crate::print_ui::body(ui, &mut app.print_draft, &t, &all_sizes, &all_labels, &mut |p| {
-            if let Some(&(Some(view_idx), doc_p)) = page_to_view.get(p) {
-                let view = &mut app.views[view_idx];
-                view.need_thumbnail(doc_p, true);
-                view.page_preview(doc_p)
+            if let Some(handle) = app.batch_print.preview_cache.get(&p) {
+                return Some(handle.id());
+            }
+
+            let Some((Some(bytes), doc_p)) = pages_render_data.get(p) else {
+                return None;
+            };
+
+            let (w, h) = all_sizes.get(p).copied().unwrap_or((595.0, 842.0));
+            let scale = (800.0 / (w.max(h) as f32)).clamp(0.2, 3.0);
+
+            let config = pdfcraft_render::RenderConfig { system_fonts: true, ..Default::default() };
+            let mut r = pdfcraft_render::PageRenderer::new(bytes.clone(), config);
+            let out = r.render(pdfcraft_render::RenderRequest {
+                page: *doc_p,
+                kind: pdfcraft_render::RequestKind::Pixels,
+                tile: None,
+                scale,
+                tag: 0,
+                preview: true,
+            });
+
+            if out.error.is_none() && out.width > 0 && out.height > 0 {
+                let mut img = crate::canvas::texture_image([out.width as usize, out.height as usize], out.rgba);
+                if is_grayscale {
+                    apply_grayscale(&mut img);
+                }
+                let handle = ctx.load_texture(format!("batch-sheet-{p}"), img, egui::TextureOptions::LINEAR);
+                let id = handle.id();
+                app.batch_print.preview_cache.insert(p, handle);
+                Some(id)
             } else {
                 None
             }
@@ -287,6 +335,7 @@ mod tests {
             name: "doc1.pdf".to_string(),
             path: None,
             doc_id: None,
+            bytes: None,
             page_count: 5,
             page_sizes: vec![(595.0, 842.0); 5],
             page_labels: (1..=5).map(|n| n.to_string()).collect(),
@@ -297,6 +346,7 @@ mod tests {
             name: "doc2.pdf".to_string(),
             path: None,
             doc_id: None,
+            bytes: None,
             page_count: 10,
             page_sizes: vec![(595.0, 842.0); 10],
             page_labels: (1..=10).map(|n| n.to_string()).collect(),
