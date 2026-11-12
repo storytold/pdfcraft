@@ -1386,6 +1386,62 @@ fn arabic_and_hebrew_a_field_font_cannot_hold_are_shaped_right_to_left() {
     }
 }
 
+/// A combo box draws its value as a text field does, so in a build without the script's face it
+/// refuses an option, or typed text, it could only draw as `?` (and keeps the value it had), as
+/// a text field refuses it. With the face, both are shaped.
+#[test]
+fn a_combo_box_refuses_arabic_and_hebrew_it_cannot_draw_as_a_text_field_does() {
+    for (script, word, has_face) in [
+        ("Arabic", "سلام", pdfcraft_fonts::document_arabic_font().is_some()),
+        ("Hebrew", "שלום", pdfcraft_fonts::document_hebrew_font(false).is_some()),
+    ] {
+        // The option's text as a UTF-16BE hex string.
+        let option = format!("<FEFF{}>", word.encode_utf16().map(|u| format!("{u:04X}")).collect::<String>());
+        let objs: Vec<String> = vec![
+            "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+            "<< /Type /Page /Parent 2 0 R /Annots [6 0 R 7 0 R] >>".into(),
+            "<< /Fields [6 0 R 7 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 5 0 R >> >> >>".into(),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),
+            format!("<< /Type /Annot /Subtype /Widget /FT /Ch /T (pick) /Ff 131072 /Opt [(plain) [(x) {option}]] /V (plain) /DA (/Helv 12 Tf 0 g) /Rect [50 700 350 720] /P 3 0 R >>"),
+            "<< /Type /Annot /Subtype /Widget /FT /Ch /T (free) /Ff 393216 /Opt [(plain)] /V (plain) /DA (/Helv 12 Tf 0 g) /Rect [50 600 350 620] /P 3 0 R >>".into(),
+        ];
+        let mut doc = document(&objs);
+        let appearance = |doc: &Document, name: &str| -> String {
+            let all = fields(doc);
+            let wd = doc.get(field(&all, name).widgets[0].obj).as_dict().unwrap().clone();
+            let n = wd.get(b"AP").unwrap().as_dict().unwrap().reference(b"N").unwrap();
+            let Object::Stream(s) = &*doc.get(n) else { panic!() };
+            String::from_utf8_lossy(&s.decoded().unwrap()).into_owned()
+        };
+        // By the option's text, by its export value and by its position, and typed text.
+        let picks = [
+            ("pick", FieldValue::Text(word.into())),
+            ("pick", FieldValue::Choice(vec!["x".into()])),
+            ("pick", FieldValue::ChoiceIndices(vec![1])),
+            ("free", FieldValue::Text(format!("{word} 12"))),
+        ];
+        for (name, value) in picks {
+            if has_face {
+                set_value(&mut doc, name, &value).unwrap();
+                let ap = appearance(&doc, name);
+                assert!(!ap.contains('?') && ap.contains("/ActualText"), "{script} {name} {value:?}: {ap}");
+                assert!(undrawn_fields(&doc).is_empty() && !need_appearances(&doc), "{script} {name}");
+            } else {
+                let err = set_value(&mut doc, name, &value).unwrap_err();
+                assert!(
+                    matches!(&err, FormError::Invalid(m) if m.contains(script) && m.contains("CRAFT_FONTS_DIR")),
+                    "{script} {name} {value:?}: {err}"
+                );
+                assert_eq!(field(&fields(&doc), name).value, ["plain"], "{script} {name} {value:?}");
+            }
+        }
+        // Text the field's font draws is taken either way.
+        set_value(&mut doc, "free", &FieldValue::Text("typed".into())).unwrap();
+        assert_eq!(field(&fields(&doc), "free").value, ["typed"]);
+    }
+}
+
 /// A document that declares PDF/A can't ask other viewers to redraw its fields (PDF/A forbids
 /// `/NeedAppearances`): the value is still kept and its widget marked, and the flag stays off.
 #[test]
