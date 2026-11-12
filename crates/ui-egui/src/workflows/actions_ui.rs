@@ -28,6 +28,8 @@ pub struct RunProgress {
     pub done: usize,
     pub total: usize,
     pub message: Option<String>,
+    /// The action's name, so the progress says which action is running.
+    pub name: String,
 }
 
 /// Keep each desktop result, including when input basenames repeat or an earlier run already
@@ -94,13 +96,14 @@ impl PdfCraftApp {
             self.notify_tr("An action is already running");
             return;
         }
-        let progress = Arc::new(Mutex::new(RunProgress { total: files.len(), ..Default::default() }));
+        let progress = Arc::new(Mutex::new(RunProgress { total: files.len(), name: action.name.clone(), ..Default::default() }));
         let p = progress.clone();
         // The summary is written on the worker thread: draw it in the UI's language.
         let lang = crate::i18n::current();
         // Each file runs in its own session; it keeps this one's JavaScript preference.
         let javascript = self.session.javascript();
         let action_name = action.name.clone();
+        #[cfg(not(target_arch = "wasm32"))]
         let spawn_action_name = action.name.clone();
         let work = move || {
             let work = std::panic::AssertUnwindSafe(|| {
@@ -165,7 +168,10 @@ impl PdfCraftApp {
     pub(crate) fn poll_action(&mut self) {
         let Some(p) = self.action_run.clone() else { return };
         let state = match p.lock() {
-            Ok(mut s) => s.message.take().ok_or((s.done, s.total)),
+            Ok(mut s) => match s.message.take() {
+                Some(m) => Ok(m),
+                None => Err((s.done, s.total, s.name.clone())),
+            },
             // The worker stopped while holding the lock: it will never report back (#3919).
             Err(e) => {
                 self.action_run = None;
@@ -178,10 +184,13 @@ impl PdfCraftApp {
                 self.action_run = None;
                 self.notify(m);
             }
-            Err((done, total)) => {
-                let m = crate::i18n::fmt(
-                    tl!("Running action… file {d} of {t}"),
-                    &[("d", &(done + 1).min(total.max(1)).to_string()), ("t", &total.max(1).to_string())],
+            Err((done, total, name)) => {
+                let m = format!(
+                    "{name}: {}",
+                    crate::i18n::fmt(
+                        tl!("Running action… file {d} of {t}"),
+                        &[("d", &(done + 1).min(total.max(1)).to_string()), ("t", &total.max(1).to_string())],
+                    )
                 );
                 if self.toast.as_ref().is_none_or(|t| t.0 != m) {
                     self.notify(m);
