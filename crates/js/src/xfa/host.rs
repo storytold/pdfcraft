@@ -45,10 +45,31 @@ pub(crate) struct HNode {
     pub(crate) items: Option<Vec<super::props::ItemList>>,
 }
 
+/// How many objects own each SOM path, and whether one of them is unnamed ([`XHost::som_owners`]).
+pub(crate) type SomOwnerCounts = HashMap<Arc<str>, (u32, bool)>;
+
+/// The form the last script on this thread started from: the snapshot, its nodes flattened, and
+/// who owns each of their SOM paths once a script counted them.
+type Base = (Arc<XfaNode>, Vec<HNode>, Option<Arc<SomOwnerCounts>>);
+
 thread_local! {
     /// The form the last script on this thread started from, flattened: the next script of the
-    /// event starts from a copy of it while the engine sends the same form.
-    static BASE: std::cell::RefCell<Option<(Arc<XfaNode>, Vec<HNode>)>> = const { std::cell::RefCell::new(None) };
+    /// event starts from a copy of it while the engine sends the same form, and from the owners
+    /// of its SOM paths, counted once rather than by each script that writes a property.
+    static BASE: std::cell::RefCell<Option<Base>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Keep `owners`, counted on the nodes of `root` as flattened, for the next scripts started
+/// from it on this thread (see [`BASE`]); nothing when the thread now holds another form.
+pub(super) fn remember_owners(root: &Arc<XfaNode>, owners: &Arc<SomOwnerCounts>) {
+    BASE.with(|b| {
+        if let Ok(mut b) = b.try_borrow_mut()
+            && let Some((r, _, kept)) = b.as_mut()
+            && Arc::ptr_eq(r, root)
+        {
+            *kept = Some(Arc::clone(owners));
+        }
+    });
 }
 
 /// Let go of the form the scripts on this thread started from.
@@ -134,8 +155,12 @@ pub(crate) struct XHost {
     pub(crate) copying: bool,
     /// How many live objects own each SOM path, and whether one of them is unnamed (see
     /// [`XHost::shares_som`]), counted when first asked and again after the objects change (an
-    /// instance added or removed).
-    pub(super) som_owners: std::cell::OnceCell<HashMap<Arc<str>, (u32, bool)>>,
+    /// instance added or removed); taken from the form the script started from when an earlier
+    /// script of the event counted it there ([`BASE`]).
+    pub(super) som_owners: std::cell::OnceCell<Arc<SomOwnerCounts>>,
+    /// The form these nodes were copied from, kept on this thread ([`BASE`]), while they are as
+    /// copied (no instance added or removed): the owners counted on them are the form's too.
+    pub(super) base: Option<Arc<XfaNode>>,
 }
 
 impl XHost {
@@ -144,21 +169,25 @@ impl XHost {
     /// With `reuse`, the flattened form is kept on this thread for the next script given the
     /// same `root` (the scripts of one event, [`crate::xfa_session`]).
     pub(crate) fn new(root: Arc<XfaNode>, reuse: bool, target: &str, doc: &XfaDoc) -> XHost {
-        let nodes = if !reuse {
-            flattened(&root)
+        let (nodes, owners, base) = if !reuse {
+            (flattened(&root), None, None)
         } else {
             BASE.with(|b| {
                 let mut b = b.borrow_mut();
                 match b.as_ref() {
-                    Some((r, nodes)) if Arc::ptr_eq(r, &root) => nodes.clone(),
+                    Some((r, nodes, owners)) if Arc::ptr_eq(r, &root) => (nodes.clone(), owners.clone(), Some(root)),
                     _ => {
                         let nodes = flattened(&root);
-                        *b = Some((root, nodes.clone()));
-                        nodes
+                        *b = Some((Arc::clone(&root), nodes.clone(), None));
+                        (nodes, None, Some(root))
                     }
                 }
             })
         };
+        let som_owners = std::cell::OnceCell::new();
+        if let Some(owners) = owners {
+            let _ = som_owners.set(owners);
+        }
         let current = nodes.iter().position(|n| &*n.som == target && n.kind != XfaKind::Form).unwrap_or(1.min(nodes.len().saturating_sub(1)));
         XHost {
             nodes,
@@ -182,7 +211,8 @@ impl XHost {
             run_keys: HashMap::new(),
             copied: 0,
             copying: false,
-            som_owners: std::cell::OnceCell::new(),
+            som_owners,
+            base,
         }
     }
 

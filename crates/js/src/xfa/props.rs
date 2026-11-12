@@ -1160,13 +1160,21 @@ impl XHost {
             return true;
         }
         let owners = self.som_owners.get_or_init(|| {
-            let mut owners: HashMap<Arc<str>, (u32, bool)> = HashMap::new();
+            #[cfg(test)]
+            OWNERS_COUNTED.with(|c| c.set(c.get().saturating_add(self.nodes.len())));
+            let mut owners: super::host::SomOwnerCounts = HashMap::new();
             for (i, m) in self.nodes.iter().enumerate() {
                 if !m.gone && m.kind != XfaKind::Form && self.owns_som(i) {
                     let c = owners.entry(Arc::clone(&m.som)).or_insert((0, false));
                     c.0 = c.0.saturating_add(1);
                     c.1 |= m.unnamed;
                 }
+            }
+            let owners = Arc::new(owners);
+            // The nodes are still the form's as flattened: the next scripts started from it
+            // take these counts rather than counting again.
+            if let Some(root) = &self.base {
+                super::host::remember_owners(root, &owners);
             }
             owners
         });
@@ -1184,6 +1192,7 @@ impl XHost {
     /// which SOM path is counted again when next asked.
     pub(crate) fn forget_som_owners(&mut self) {
         self.som_owners = std::cell::OnceCell::new();
+        self.base = None;
     }
 
     /// Whether the form can keep a change under `key` (see [`change_key`]) to node `node`: one
@@ -1274,15 +1283,29 @@ impl XHost {
         if sets.is_empty() {
             return;
         }
-        // An object without a SOM path of its own: the changes there are not its own.
-        let by_som: HashMap<&str, usize> = self
-            .nodes
+        // The objects at the paths the changes name, found in one walk: for each path, the last
+        // object that owns it, how many own it and whether one of them is unnamed. An object
+        // without a SOM path of its own ([`XHost::shares_som`]) gets none of them: one whose
+        // path is its parent's, or one of several owners of a path when one of them is unnamed.
+        // Only the named paths are counted, not every path of the form ([`XHost::som_owners`]),
+        // as this runs before every script of an event.
+        let mut at: HashMap<&str, (Option<usize>, u32, bool)> = sets.iter().map(|p| (p.som.as_str(), (None, 0, false))).collect();
+        for (i, n) in self.nodes.iter().enumerate() {
+            if n.gone || n.kind == XfaKind::Form {
+                continue;
+            }
+            let Some(e) = at.get_mut(&*n.som) else { continue };
+            if self.owns_som(i) {
+                *e = (Some(i), e.1.saturating_add(1), e.2 || n.unnamed);
+            }
+        }
+        let found: Vec<(usize, &super::XfaPropSet)> = sets
             .iter()
-            .enumerate()
-            .filter(|&(i, n)| !n.gone && n.kind != XfaKind::Form && !self.shares_som(i))
-            .map(|(i, n)| (&*n.som, i))
+            .filter_map(|p| match at.get(p.som.as_str()) {
+                Some(&(Some(i), owners, unnamed)) if !(owners > 1 && unnamed) => Some((i, p)),
+                _ => None,
+            })
             .collect();
-        let found: Vec<(usize, &super::XfaPropSet)> = sets.iter().filter_map(|p| by_som.get(p.som.as_str()).map(|&i| (i, p))).collect();
         for (i, p) in found {
             let key = change_key(&p.path, p.attr.as_deref());
             self.note_key(i, if p.copied { format!("={key}") } else { key });
@@ -1791,6 +1814,20 @@ pub(crate) fn exec_validate(_: &JsValue, _: &[JsValue], r: &JsObject, ctx: &mut 
     }
     host(ctx)?.borrow_mut().push(XfaEffect::MessageBox(crate::Message::plain(super::clip(failures.join("\n")))));
     Ok(JsValue::from(false))
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Objects [`XHost::shares_som`] counted the SOM paths of (every object of the copy, each
+    /// time it counts them), on this thread.
+    static OWNERS_COUNTED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many objects' SOM paths [`XHost::shares_som`] has counted on this thread, since the last
+/// call.
+#[cfg(test)]
+pub(crate) fn take_owners_counted() -> usize {
+    OWNERS_COUNTED.with(|c| c.replace(0))
 }
 
 /// The key the form keeps a change under (`pdfcraft_xfa`'s `restyle::prop_key`): `path@attr`,

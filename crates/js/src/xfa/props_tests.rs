@@ -1391,3 +1391,74 @@ fn a_write_to_one_of_two_named_objects_given_one_som_path_is_kept() {
     assert!(o.effects.is_empty(), "{o:?}");
     assert!(o.console.iter().any(|l| l.contains("shares its SOM path")), "{o:?}");
 }
+
+/// The changes earlier scripts of an event made are put in each script's copy of the form
+/// before it runs (`XHost::preset`): on the objects whose SOM path they name, never on one
+/// without a path of its own (an unnamed field beside another, which the form keeps no change
+/// for), and found by those paths alone. Counting who owns every path of the form, as telling
+/// one write apart does, cost each script a walk of the whole form: on Ontario Works 0983 (1,571
+/// opening scripts) it added more than a second to opening.
+#[test]
+fn changes_from_earlier_scripts_are_put_on_their_objects_without_counting_every_path() {
+    use super::super::XfaPropSet;
+    use super::take_owners_counted;
+    let unnamed = || XfaNode { name: "field".into(), unnamed: true, ..node("field", XfaKind::Field, &[], vec![]) };
+    let mut root = form();
+    root.children.extend([unnamed(), unnamed()]);
+    root.children.extend((0..500).map(|i| node(&format!("f{i}"), XfaKind::Field, &[], vec![])));
+    let doc = XfaDoc::default();
+    let mut h = super::super::XHost::new(Arc::new(root), false, "form1[0].plain[0]", &doc);
+    let set = |som: &str| XfaPropSet { som: som.into(), path: "font#0".into(), attr: Some("size".into()), value: "14pt".into(), copied: false };
+    let _ = take_owners_counted();
+    h.preset(&[set("form1[0].plain[0]"), set("form1[0].field[0]"), set("form1[0].f499[0]"), set("form1[0].gone[0]")]);
+    assert_eq!(take_owners_counted(), 0, "no path the changes don't name is counted");
+    let written: Vec<&str> = {
+        let mut w: Vec<&str> = h.prop_writes.keys().filter_map(|&i| h.nodes.get(i)).map(|n| &*n.som).collect();
+        w.sort_unstable();
+        w
+    };
+    assert_eq!(written, ["form1[0].f499[0]", "form1[0].plain[0]"], "the unnamed fields share their path and take none");
+    assert_eq!(super::attr(&h, h.current, "font#0", "size").as_deref(), Some("14pt"));
+}
+
+/// Who owns each SOM path, which a property write asks (`XHost::shares_som`), is counted once
+/// for the scripts of an event started from the same form, not again by each script: Ontario
+/// Works 0983's opening scripts set 1,231 tooltips, each from a script of its own, and counting
+/// the whole form for each added a few tenths of a second to opening. A script that adds or
+/// removes an instance counts its own copy again, and leaves the form's counts as they were.
+#[test]
+fn who_owns_each_path_is_counted_once_for_the_scripts_of_an_event() {
+    use super::take_owners_counted;
+    let unnamed = || XfaNode { name: "field".into(), unnamed: true, ..node("field", XfaKind::Field, &[], vec![]) };
+    let mut root = form();
+    root.children.extend([unnamed(), unnamed()]);
+    root.children.extend((0..500).map(|i| node(&format!("f{i}"), XfaKind::Field, &[], vec![])));
+    let root = Arc::new(root);
+    let doc = XfaDoc::default();
+    let host = || super::super::XHost::new(Arc::clone(&root), true, "form1[0].plain[0]", &doc);
+    let field = |h: &super::super::XHost| h.nodes.iter().position(|n| n.unnamed).unwrap();
+    let plain = |h: &super::super::XHost| h.current;
+    let _ = take_owners_counted();
+    let h = host();
+    assert!(h.shares_som(field(&h)) && !h.shares_som(plain(&h)));
+    let all = take_owners_counted();
+    assert!(all > 500, "the first script counts the form: {all}");
+    for _ in 0..3 {
+        let h = host();
+        assert!(h.shares_som(field(&h)) && !h.shares_som(plain(&h)));
+    }
+    assert_eq!(take_owners_counted(), 0, "later scripts on the same form take the counts");
+    // A script that changes the objects counts its own copy again, and doesn't keep that.
+    let mut h = host();
+    h.forget_som_owners();
+    assert!(h.shares_som(field(&h)));
+    assert_eq!(take_owners_counted(), all);
+    let h = host();
+    assert!(h.shares_som(field(&h)));
+    assert_eq!(take_owners_counted(), 0, "the form's counts are as they were");
+    // Another form is counted for itself.
+    let other = Arc::new((*root).clone());
+    let h = super::super::XHost::new(other, true, "form1[0].plain[0]", &doc);
+    assert!(h.shares_som(field(&h)));
+    assert_eq!(take_owners_counted(), all);
+}
