@@ -936,9 +936,11 @@ pub(crate) fn signature_pad(
         if let Some(image) = &d.image {
             image_preview(ui, rect.shrink(8.0), image, preview);
         } else if let Some(problem) = d.image_import.as_ref().and_then(|d| d.problem.as_ref()) {
-            ui.put(rect.shrink(12.0), egui::Label::new(problem).wrap());
+            // The preview already owns its layout space. Overlays must not advance the cursor
+            // into that space again, shortening the centred dialog while a preview is pending.
+            ui.place(rect.shrink(12.0), egui::Label::new(problem).wrap());
         } else if d.image_import.as_ref().is_some_and(|d| d.worker.running.is_some()) {
-            ui.put(rect.shrink(12.0), egui::Spinner::new());
+            ui.place(rect.shrink(12.0), egui::Spinner::new());
         }
         let (apply, cancel) = pad_buttons(ui, d);
         return (apply, cancel, browse);
