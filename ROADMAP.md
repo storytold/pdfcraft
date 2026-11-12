@@ -5,6 +5,7 @@
 - 2026-11-04 (M6, PR #5699 reset estimate): Charge expanded-name scans and field-name copy/comparison bytes; add three negative regressions and byte-exact refusal checks.
 # PdfCraft roadmap
 
+> **Last reviewed:** 2026-11-11 | **Last updated:** 2026-11-11 | **Change:** minor (M10: Recognize Text ▸ Editable text and images runs ClearScan; estimates unchanged)
 > **Last reviewed:** 2026-10-31 | **Last updated:** 2026-10-31 | **Change:** patch (M6, PR #4166/#4088: integrate main f137a289 at 0.16.1; retain automatic-field Print suppression, explicit button/console printing and document-error provenance; 761 scoped tests and verification gates passed; 13-step CLI exercise and render inspection passed; existing warnings retained; estimates unchanged)
 > **Last reviewed:** 2026-11-09 | **Last updated:** 2026-11-09 | **Change:** patch (M10 #5130: preserve manual duplex defaults; validate DocumentDuplex review fix and CI formatting; estimates unchanged)
 >
@@ -260,6 +261,11 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 | 8 | 1.0 polish: performance, right-to-left, missing languages, keyboard-only (M14) | 55–95 |
 
 ## Progress log
+
+- **2026-11-11 (M10, ClearScan):** Recognize Text ▸ Output ▸ Editable text and images runs ClearScan on current main. The scan is deskewed, lettering is traced to Type 3 outlines with `/ToUnicode`, and that ink is painted out with the local paper colour. Sensitivity and downsample appear only for that output. One undo step, with stage progress and Cancel. CLI and MCP use `ocr_clearscan`. This is separate from Recognize Text ▸ Editable text, which writes a new document of visible text. English Latin only. Still missing: opening those glyphs in Edit text, and a textured background (one flat paper colour). Estimates unchanged.
+
+- **2026-10-30 (M10, ClearScan):** Background de-rendering paints each clustered glyph, and a one-pixel halo, with the paper colour sampled around it, and leaves photographs and rules in place. The cleaned raster is stored as Flate (grey or a flat tint) or JPEG (a photograph) under a content stream that fills the Type 3 glyphs. Estimates unchanged.
+
 - **2026-11-09 (M10, #5130):** Windows Printer default sends native two-sided bindings only when automatic duplex support is confirmed, preserving manual driver defaults (#5130/#5772); physical output remains unqualified. Both Windows submission paths preserve DLL guards and current spooler fixes. Review follow-up validates both duplex scopes through craft-print 9fe50c94 and corrects CI formatting. Estimates unchanged.
 
 - **2026-10-27 (M10, #5005):** Vector printing retains each annotation's optional-content membership when drawing its appearance.

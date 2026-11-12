@@ -17,6 +17,13 @@
 //! The ocrs models read the Latin alphabet (English and other languages written without
 //! accents); Tesseract (the `tesseract` module, off the web build) reads whatever its installed
 //! language packs cover.
+//!
+//! ClearScan is a separate pipeline for editable text. [`scan_prep`] turns the scan into a
+//! deskewed greyscale and a Sauvola/Otsu bitmap; [`Ocr::recognize_annotated`] keeps
+//! per-character boxes and line metrics. [`components`], [`align`], [`cluster`],
+//! [`vectorize`] and [`type3`] build searchable Type 3 outlines, [`background`] paints the
+//! redrawn ink out of the scan, and [`clearscan`] returns the one-page PDF. This is not
+//! [`preprocess`], which only cleans a raster before ordinary recognition.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -27,11 +34,35 @@ pub mod preprocess;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod tesseract;
 
+pub mod align;
+pub mod annotations;
+pub mod background;
+pub mod binarize;
+pub mod clearscan;
+pub mod cluster;
+pub mod components;
+pub mod deskew;
+pub mod grey;
+pub mod scan_prep;
+pub mod type3;
+pub mod vectorize;
+
+pub use align::{AlignParams, CharRef, MatchRole, PageAlignment, ResolvedGlyph, TouchingStrategy, align, iou};
+pub use annotations::{AnnotatedLine, AnnotatedWord, CharBox};
+pub use background::{
+    BackgroundEncoding, BackgroundImage, CleanedPage, ClearScanLayer, DerenderParams, GlyphShow, InkRegion, PageRaster, content_stream, derender,
+    embed_background, encoding_for, protected_regions, text_regions,
+};
+pub use cluster::{ClusterParams, Clusters, GlyphCluster, Prototype, SkipReason, cluster, cluster_pages};
+pub use components::{AnalyzeOptions, Component, ComponentKind, ComponentSet, Connectivity, FilterParams, analyze, analyze_page};
 pub use confidence::{ConfidenceBand, band_for, is_suspect, low_confidence};
 pub use merge::{MergeStrategy, StrategyOutcome, mean_confidence, recognize_with_strategy, rover_merge};
 pub use ocrs::{
     ALPHABET, DETECTION_MODEL, DETECTION_MODEL_SHA256, LANGUAGES, Models, Ocr, OcrsRecognizer, RECOGNITION_MODEL, RECOGNITION_MODEL_SHA256,
 };
+pub use scan_prep::{PreprocessedOptions, PreprocessedPage};
+pub use type3::{Type3Font, Type3Glyph, Type3Metrics, baseline_in_prototype, synthesize_type3};
+pub use vectorize::{ContourKind, GlyphOutline, VectorContour, VectorizeParams, vectorize};
 
 pub use pdfcraft_fonts::TextPlan;
 pub use pdfcraft_fonts::helvetica_width;
@@ -67,6 +98,19 @@ pub enum OcrError {
     OutputTooLarge(u64),
     #[error("tesseract failed: {0}")]
     Process(String),
+    #[error("preprocessing the page: {0}")]
+    Preprocess(String),
+    #[error("connected components: {0}")]
+    Components(String),
+    /// A Type 3 font could not be built. The message names the glyph and the limit.
+    #[error("Type 3 font: {0}")]
+    Type3(String),
+    /// The cleaned background could not be built or written. The message names the limit.
+    #[error("background: {0}")]
+    Background(String),
+    /// The ClearScan page could not be built. The message names the limit or the bad input.
+    #[error("ClearScan: {0}")]
+    ClearScan(String),
 }
 
 /// An RGBA8 raster, row-major, top-left origin: what the engines read. The fields are private
@@ -266,6 +310,24 @@ fn ink_extent(text: &str) -> (f64, f64) {
         .any(|c| c.is_uppercase() || c.is_ascii_digit() || "bdfhijklt!?/\\()[]{}|'\"#$%&@".contains(c) || (c.is_alphabetic() && !c.is_ascii()));
     let low = text.chars().any(|c| "gjpqy()[]{}|_".contains(c));
     (if tall { CAP_HEIGHT } else { X_HEIGHT }, if low { -DESCENT } else { 0.0 })
+}
+
+/// A PDF real for ClearScan's own content: no exponent, trailing zeros dropped, and a magnitude
+/// below the print precision written as zero. Type 3 charprocs, the background content stream,
+/// and the multi-font page stream all go through this so a coordinate is spelled one way.
+/// [`num`] is the invisible text layer's formatter and uses a tighter zero.
+pub(crate) fn pdf_num(value: f64) -> String {
+    let value = if value.abs() < 5.0e-5 { 0.0 } else { value };
+    let mut text = format!("{value:.4}");
+    if text.contains('.') {
+        while text.ends_with('0') {
+            text.pop();
+        }
+        if text.ends_with('.') {
+            text.pop();
+        }
+    }
+    if text == "-0" || text.is_empty() { "0".into() } else { text }
 }
 
 fn num(v: f64) -> String {

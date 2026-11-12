@@ -4577,8 +4577,13 @@ dependencies = [
 name = "pdfcraft-ocr"
 version = "0.21.1"
 dependencies = [
+ "image",
+ "kurbo 0.13.1",
  "ocrs",
+ "pdfcraft-cos",
  "pdfcraft-fonts",
+ "pdfcraft-oracle",
+ "pdfcraft-render",
  "png 0.18.1",
  "rten",
  "rten-imageproc",

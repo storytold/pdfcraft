@@ -1,5 +1,6 @@
 # Where PdfCraft falls short of Acrobat Pro
 
+> **Last reviewed:** 2026-11-11 | **Last updated:** 2026-11-11 | **Change:** minor (gap 7: ClearScan deskews a Latin scan and replaces its lettering with Type 3 outlines; other scripts, accents, Edit text on those glyphs, and a textured background remain. Estimates unchanged)
 > **Last reviewed:** 2026-11-11 | **Last updated:** 2026-11-11 | **Change:** minor (gap 8: known residual risk for the LibreOffice sidecar, sandbox tracked in #6953; estimates unchanged)
 > **Last reviewed:** 2026-10-28 | **Last updated:** 2026-10-28 | **Change:** minor (M10, #4119 partial: Enhance scanned file cleans scanned pages in place: background removal, edge shadow removal, despeckle; estimates unchanged)
 > **Last reviewed:** 2026-10-25 · **Last updated:** 2026-10-25 · **Change:** minor (gaps 5 and 14 current state: native release Hans face via LXGW WenKai Lite; Arabic logical catalog, explicit RTL direction and mirrored stock chrome, with native/browser/IME workflows unqualified; no readiness re-estimate)
@@ -176,16 +177,20 @@ update the numbers.
 
 ### 7. OCR reads only unaccented Latin
 
-- **Missing:** every other script and accented Latin; editable-text output; deskew, rotation,
-  despeckle and background clean-up as options of Recognize text (Enhance scanned file removes
-  the background and edge shadows on grey and RGB scans and despeckles those and 1-bit ones; it
-  reports CMYK, indexed, JPEG 2000, JBIG2 and CCITT scans and scans drawn inside Form XObjects
-  and leaves them as they are); MRC compression;
-  pluggable engines; OCR in the
-  browser; scanner input.
-- **Evidence:** `ocr.ocr-languages` partial ("the models read only the Latin alphabet without
-  accents"); 19 of 26 OCR features planned; [#744](https://github.com/storytold/pdfcraft/issues/744)
-  (Dutch). Acrobat ships on-device recognition for dozens of languages.
+- **Missing:** every other script and accented Latin; opening ClearScan's Type 3 glyphs in Edit
+  text; a textured background under a ClearScan letter (the paint is one flat paper colour);
+  deskew, rotation, despeckle and background clean-up as options of Recognize text (Enhance
+  scanned file removes the background and edge shadows on grey and RGB scans and despeckles
+  those and 1-bit ones; it reports CMYK, indexed, JPEG 2000, JBIG2 and CCITT scans and scans
+  drawn inside Form XObjects and leaves them as they are); MRC compression; pluggable engines;
+  OCR in the browser; scanner input. ClearScan (Recognize Text ▸ Editable text and images, and
+  `ocr_clearscan`) deskews an unaccented-Latin scan and replaces its lettering with Type 3
+  outlines. Recognize Text ▸ Editable text writes a new document of visible text instead.
+  See [clearscan.md](clearscan.md).
+- **Evidence:** `ocr.editable-text-output` partial; `ocr.deskew` partial; `ocr.ocr-languages`
+  partial ("the models read only the Latin alphabet without accents");
+  [#744](https://github.com/storytold/pdfcraft/issues/744) (Dutch). Acrobat ships on-device
+  recognition for dozens of languages.
 - **Impact:** scanned documents are a core Pro workflow outside English.
 - **Estimate:** 40–75 h, partly blocked on openly licensed models. **Doc:**
   [file-format-parity.md](file-format-parity.md).

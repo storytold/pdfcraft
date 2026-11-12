@@ -1515,6 +1515,19 @@ pub fn tools() -> Vec<ToolDef> {
             )),
         t("js_enabled", "JavaScript on or off", "Preferences ▸ JavaScript ▸ Enable Acrobat JavaScript: set it with `enabled`, or read it. With JavaScript off, field scripts other than Acrobat's AF calls don't run.")
             .with(schema(json!({ "enabled": { "type": "boolean" } }), &[])),
+        t("ocr_clearscan", "ClearScan", "Scan & OCR ▸ ClearScan: replace the lettering on a scanned page with resolution-independent Type 3 outlines traced from the scan (clean-room; no potrace). The page is rendered at dpi (72–600, default 300; a scan at or above the page-fit floor is not enlarged past its own pixels, and a coarser image may be raised to that floor), then optionally box-downsampled by downsample (1–8, default 1). sensitivity (0–100, default 50) is the binarizer: 0 keeps only the darkest ink, 100 picks up faint strokes, 50 is the ordinary paper setting. language is a hint (en; the models read the Latin alphabet). Pages that already contain text are skipped unless skip_text_pages is false. Photographs and rules stay; the scanned lettering is painted out with the surrounding paper colour and the vectors are drawn over that. Comments, links and bookmarks stay. Returns, per page, the recognised text (left out when copying is not allowed), glyph and cluster counts, or why the page was skipped or failed, plus a progress log of the stages. Needs the OCR models (ocr_status) only when a page is actually read; missing models fail the call. Undoable as one step.")
+            .with(schema(
+                json!({
+                    "doc": doc(),
+                    "pages": pages("to clearscan (default: all)"),
+                    "dpi": { "type": "number", "minimum": 72, "maximum": 600, "description": "Resolution pages are read at (default 300). A scan at or above the page-fit floor is not enlarged past its own pixels; a coarser image may be raised to that floor." },
+                    "sensitivity": { "type": "integer", "minimum": 0, "maximum": 100, "description": "Binarizer sensitivity, 0 (darkest ink only) to 100 (faint strokes). Default 50." },
+                    "downsample": { "type": "integer", "minimum": 1, "maximum": 8, "description": "Integer box downsample after rendering (default 1). A factor above 1 emits a downsample progress stage." },
+                    "language": { "type": "string", "enum": ["en"], "description": "Document language hint (default en)." },
+                    "skip_text_pages": { "type": "boolean", "description": "Leave pages that already contain text alone (default true)." },
+                }),
+                &["doc"],
+            )),
         t("ocr_recognize", "Recognize text (OCR)", "Scan & OCR ▸ Recognize text: render pages, read the words in them and add them as invisible text over the page image, so scanned pages become searchable and selectable (a searchable image; the image is not changed). Pages that already have text are skipped unless skip_text_pages or force_ocr say otherwise; words overlapping existing text are omitted and counted as already_on_page. With output_mode \"editable\" nothing is applied: a NEW document of visible text at the recognised boxes is written to out (which must not be the source; empty pages stay blank). engine and strategy choose the readers (an engine that cannot run is an error named up front); the four preprocessing flags clean the raster first. region reads just that part of one page ([x0, y0, x1, y1] in points from the top-left of the displayed page). Returns each page's recognised text, word count or why it was skipped. Needs the engines (ocr_status). Searchable output is undoable as one step.")
             .cmd("ocr.recognize")
             .with(schema(

@@ -230,6 +230,7 @@ impl PdfCraftApp {
             ocr_draft: ocr_ui::OcrDraft::default(),
             ocr_run: None,
             ocr_batch: None,
+            clearscan_run: None,
             #[cfg(target_arch = "wasm32")]
             ocr_web_batch: None,
             #[cfg(target_arch = "wasm32")]
@@ -277,6 +278,7 @@ impl PdfCraftApp {
             scan_clean_draft: scan_clean_ui::ScanCleanDraft::default(),
             scan_clean_run: None,
             progress_notice: None,
+            progress_job: widgets::ProgressJob::Other,
             page_clipboard: None,
             comment_clipboard: None,
             object_clipboard: None,

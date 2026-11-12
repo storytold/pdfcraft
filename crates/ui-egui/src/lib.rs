@@ -621,6 +621,8 @@ pub struct PdfCraftApp {
     pub ocr_draft: ocr_ui::OcrDraft,
     pub ocr_run: Option<ocr_ui::OcrRun>,
     pub ocr_batch: Option<std::sync::Arc<std::sync::Mutex<ocr_ui::BatchProgress>>>,
+    /// ClearScan from Recognize Text ▸ Editable text and images.
+    pub clearscan_run: Option<ocr_ui::ClearScanRun>,
     /// The web build's files being read in Web Workers (progress in `ocr_batch`).
     #[cfg(target_arch = "wasm32")]
     ocr_web_batch: Option<ocr_web::Batch>,
@@ -704,6 +706,8 @@ pub struct PdfCraftApp {
     pub scan_clean_run: Option<scan_clean_ui::ScanCleanRun>,
     /// A background job's progress card (see [`widgets::progress_notice`]).
     pub progress_notice: Option<widgets::ProgressNotice>,
+    /// Which job [`progress_notice`](Self::progress_notice)'s Cancel button stops.
+    pub progress_job: widgets::ProgressJob,
     /// Pages copied or cut in Organize Pages, ready to paste (into any document).
     pub page_clipboard: Option<PageClip>,
     /// Copied comments (XFDF), to paste into this or another document (M14).

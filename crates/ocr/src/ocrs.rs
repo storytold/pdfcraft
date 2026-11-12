@@ -204,6 +204,19 @@ impl Ocr {
             .filter(|l| !l.words.is_empty())
             .collect())
     }
+
+    /// The same recognition, keeping what glyph work needs: per-character boxes grouped into
+    /// words, and each line's baseline, x-height, cap height and descent
+    /// ([`crate::annotations::AnnotatedLine`]). Boxes are in the pixel space of the image read.
+    pub fn recognize_annotated(&self, pixels: &[u8], width: u32, height: u32) -> Result<Vec<crate::annotations::AnnotatedLine>, OcrError> {
+        crate::annotations::recognize(&self.engine, pixels, width, height)
+    }
+
+    /// Recognize a ClearScan page's deskewed greyscale. The annotations come back in the
+    /// deskewed frame, and the page's `to_original` maps them onto the scan.
+    pub fn recognize_page(&self, page: &crate::scan_prep::PreprocessedPage) -> Result<Vec<crate::annotations::AnnotatedLine>, OcrError> {
+        crate::annotations::recognize(&self.engine, page.grey.data(), page.grey.width(), page.grey.height())
+    }
 }
 
 /// The ocrs engine as a [`Recognizer`] (the default engine).
