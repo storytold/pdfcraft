@@ -15,4 +15,4 @@ flate2.workspace = true
 
 [dev-dependencies]
 # Reads the Excel export back in tests, as another program would.
-calamine = { version = "0.37.0", default-features = false }
+calamine = { version = "0.38.0", default-features = false }
