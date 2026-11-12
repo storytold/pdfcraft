@@ -200,6 +200,23 @@ impl PdfCraftApp {
         true
     }
 
+    /// Run document `id`'s catalog JavaScript for `event` (Will Save before a save, Will Print
+    /// before printing) and show what it said. What it changed is part of what is saved or
+    /// printed. A failing script is reported and the save or print still goes ahead.
+    pub(crate) fn run_document_actions(&mut self, id: DocId, event: pdfcraft_engine::js::DocumentScriptEvent) {
+        let before = self.session.get(id).map(|d| d.edit_generation());
+        let out = self.session.run_document_actions(id, event);
+        if self.session.get(id).map(|d| d.edit_generation()) != before
+            && let Some(i) = self.views.iter().position(|v| v.id == id)
+            && let Some(info) = self.session.get(id).map(|d| d.info.clone())
+        {
+            self.views[i].document_changed(&info);
+        }
+        if !out.is_empty() {
+            self.handle_js(id, out);
+        }
+    }
+
     /// Run a push button's JavaScript (its Mouse Up action).
     pub fn run_button_script(&mut self, id: DocId, field: &str, script: &str) {
         self.run_button_script_target(id, field, None, script);
