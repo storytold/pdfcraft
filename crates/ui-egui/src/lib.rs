@@ -42,6 +42,7 @@ pub use combine_ui::{Columns as CombineColumns, CombineView, Lock as CombineLock
 mod commands;
 pub mod control;
 mod menus;
+mod properties_session;
 /// Header & footer / watermark / background dialog types (tests and automation).
 pub mod marks {
     pub use crate::marks_ui::{MarksDraft, PageRange, Subset};
@@ -91,6 +92,8 @@ mod frame_guard;
 mod hooks;
 mod persist;
 mod platform;
+#[cfg(not(target_arch = "wasm32"))]
+mod script_dialog;
 mod state;
 mod tools;
 mod workflows;
@@ -589,6 +592,8 @@ pub struct PdfCraftApp {
     pub view_draft: Option<(DocId, pdfcraft_engine::InitialView)>,
     /// Document Properties ▸ Custom being edited.
     pub custom_draft: Option<(DocId, CustomDraft)>,
+    /// Original values and document revision for the editable Properties tabs.
+    pub(crate) props_session: Option<properties_session::Draft>,
     /// Files picked asynchronously for combine / insert (web).
     pub requests: files::Requests,
     /// Native file pickers in flight (they never block the frame; see `pickers`).
@@ -656,6 +661,8 @@ pub struct PdfCraftApp {
     pub compare: Option<compare_ui::CompareState>,
     /// The JavaScript console and the Document JavaScripts draft.
     pub js_console: js_ui::JsConsole,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) script_pending: Option<script_dialog::Pending>,
     pub doc_js: js_ui::DocJsDraft,
     pub a11y: a11y_ui::A11yState,
     pub(crate) tags_state: tags_ui::State,
