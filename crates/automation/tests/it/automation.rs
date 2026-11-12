@@ -5176,6 +5176,9 @@ fn fill_sign_marks_take_a_colour_that_is_saved() {
     ok(&mut a, "fill_sign_add", json!({ "doc": doc, "page": 1, "type": "check", "at": [20, 80] }));
     ok(&mut a, "fill_sign_add", json!({ "doc": doc, "page": 1, "type": "cross", "at": [40, 80], "color": "#3366CC" }));
     ok(&mut a, "fill_sign_add", json!({ "doc": doc, "page": 1, "type": "line", "at": [80, 80], "color": "#3366CC" }));
+    ok(&mut a, "fill_sign_add", json!({ "doc": doc, "page": 1, "type": "check", "at": [120, 80], "color": "#3366CC" }));
+    // The dot is filled, not stroked: its colour takes the `rg` branch.
+    ok(&mut a, "fill_sign_add", json!({ "doc": doc, "page": 1, "type": "dot", "at": [160, 80], "color": "#3366CC" }));
     assert!(matches!(
         a.call("fill_sign_add", &json!({ "doc": doc, "page": 1, "type": "dot", "at": [20, 120], "color": "#12" })),
         Err(ToolError::InvalidArgs(_))
@@ -5185,7 +5188,7 @@ fn fill_sign_marks_take_a_colour_that_is_saved() {
     let page = pdfcraft_model::pages(&pdf).remove(0);
     let annotations = pdf.resolve(page.dict.get(b"Annots").unwrap());
     let annotations = annotations.as_array().unwrap();
-    assert_eq!(annotations.len(), 3, "a refused call adds nothing");
+    assert_eq!(annotations.len(), 5, "a refused call adds nothing");
     let drawn: Vec<String> = annotations
         .iter()
         .map(|reference| {
@@ -5196,9 +5199,10 @@ fn fill_sign_marks_take_a_colour_that_is_saved() {
         })
         .collect();
     assert!(drawn[0].contains("0 0 0 RG"), "black by default: {}", drawn[0]);
-    for content in &drawn[1..] {
+    for content in &drawn[1..4] {
         assert!(content.contains("0.2 0.4 0.8 RG"), "the saved appearance strokes in the colour asked for: {content}");
     }
+    assert!(drawn[4].contains("0.2 0.4 0.8 rg"), "the saved dot fills in the colour asked for: {}", drawn[4]);
 }
 
 #[test]
