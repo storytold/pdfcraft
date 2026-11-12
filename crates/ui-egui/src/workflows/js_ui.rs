@@ -105,11 +105,11 @@ impl PdfCraftApp {
                     // Show/Hide: a panel already showing closes.
                     self.right = (self.right != Some(panel)).then_some(panel);
                 }
-                Request::CalculationOverridden(message) => {
-                    if self.pending_calc_override.is_none() {
-                        // Handled as the entry is applied, so this is the generation it made.
-                        let generation = self.session.get(id).map_or(0, |d| d.edit_generation());
-                        self.pending_calc_override = Some((id, message, generation));
+                // Each field the entry typed over is asked about on its own, in turn; a field
+                // still waiting for its answer is asked about once.
+                Request::CalculationOverridden { field, message } => {
+                    if !self.pending_calc_overrides.iter().any(|(d, f, _)| *d == id && *f == field) {
+                        self.pending_calc_overrides.push_back((id, field, message));
                     }
                 }
                 Request::Zoom(z) => {

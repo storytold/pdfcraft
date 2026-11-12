@@ -1,4 +1,5 @@
 use super::common::{WidgetRest, clamp_opt, divide, is_row, moved, solid_extent, split_line, split_widget, splittable, widget_box};
+use super::draw::DRAWN;
 use super::items::Item;
 use super::{
     Ctx, Frame, Layout, Layouter, MAX_DEPTH, MAX_INSTANCES, MAX_MEASURES, Node, Rect, SomIndices, Splitting, Subform, XfaError, data_path,
@@ -327,65 +328,93 @@ impl Layouter<'_> {
         }
         let Node::Subform(sf) = node else { return Ok(()) };
         self.check_measures()?;
-        if sf.break_before_page && self.page_has_flow() {
-            self.break_frames(0.0, true)?;
-        }
         // Data adds instances of a repeating subform (rows added in another viewer).
         let instances = self.laid_out_instances(node, &ctx.som);
         let ctx_parent = ctx;
+        // The template's page breaks go before the first instance and after the last; an
+        // instance whose breaks a script changed (XFA 3.3 p. 632) breaks as they now say.
+        let breaks = |l: &Self, i: usize| {
+            l.own_breaks(node, ctx_parent, sib.saturating_add(i))
+                .unwrap_or((i == 0 && sf.break_before_page, i.saturating_add(1) >= instances && sf.break_after_page))
+        };
+        if instances == 0 && sf.break_before_page && self.page_has_flow() {
+            self.break_frames(0.0, true)?;
+        }
         for i in 0..instances {
             // Every instance spends budget, so nested repeats that place nothing still stop.
             self.measures.set(self.measures.get().saturating_add(1));
             self.check_measures()?;
-            let ctx = ctx_parent.with_som(&sf.common, sib + i);
-            let (rect, _, _) = self.cursor();
-            let (x, w) = avail.unwrap_or((rect.x, rect.w));
-            let w = clamp_opt(sf.common.w.unwrap_or(w), sf.common.min_w, sf.common.max_w).min(w.max(1.0));
-            if !matches!(sf.layout, Layout::Tb | Layout::Table) || sf.common.h.is_some() {
-                // Not splittable: one block.
-                let (_, h) = self.size_at(node, w, ctx_parent, depth, sib + i);
-                self.flow_block(node, x, (w, h), ctx_parent, depth, sib + i)?;
-                continue;
+            let (before, after) = breaks(self, i);
+            if before && self.page_has_flow() {
+                self.break_frames(0.0, true)?;
             }
-            let m = sf.common.margin;
-            // Its border and fill go round what it takes from here, a part on each content area.
-            let framed = match self.flow_mark() {
-                Some(part) => {
-                    let border = self.border_of(&sf.common, ctx_parent, sib + i);
-                    self.frames.push(Frame { x, w, margin: m, border, part, parts: Vec::new(), lost: false, held: false });
-                    true
-                }
-                None => false,
-            };
-            self.advance(m.top);
-            let inner_x = x + m.left;
-            let inner_w = (w - m.horizontal()).max(1.0);
-            match sf.layout {
-                Layout::Table => self.flow_table(sf, inner_x, inner_w, &ctx, depth)?,
-                _ => {
-                    let sibs = SomIndices::of(&sf.children);
-                    for (ci, child) in sf.children.iter().enumerate() {
-                        if !child.common().presence.occupies() {
-                            continue;
-                        }
-                        let csib = sibs.at(ci);
-                        if let Node::Subform(_) = child
-                            && splittable(child)
-                        {
-                            self.flow_subform(child, Some((inner_x, inner_w)), &ctx, depth + 1, csib)?;
-                            continue;
-                        }
-                        self.flow_instances(child, inner_x, inner_w, &ctx, depth + 1, csib)?;
-                    }
-                }
-            }
-            self.advance(m.bottom);
-            if framed && let Some(frame) = self.frames.pop() {
-                self.finish_frame(frame)?;
+            self.flow_instance(node, sf, avail, ctx_parent, depth, sib + i)?;
+            if after {
+                self.break_frames(0.0, true)?;
             }
         }
-        if sf.break_after_page {
+        if instances == 0 && sf.break_after_page {
             self.break_frames(0.0, true)?;
+        }
+        Ok(())
+    }
+
+    /// Instance `sib` of subform `node` (`sf`) for [`Self::flow_subform_in`], with its own
+    /// border, margins, font and paragraph (a script may change one row's).
+    fn flow_instance(
+        &mut self,
+        node: &Node,
+        sf: &Subform,
+        avail: Option<(f64, f64)>,
+        ctx_parent: &Ctx,
+        depth: usize,
+        sib: usize,
+    ) -> Result<(), XfaError> {
+        let own = self.own(&sf.common, ctx_parent, sib, DRAWN);
+        let ctx = ctx_parent.with_som(&own, sib);
+        let (rect, _, _) = self.cursor();
+        let (x, w) = avail.unwrap_or((rect.x, rect.w));
+        let w = clamp_opt(sf.common.w.unwrap_or(w), sf.common.min_w, sf.common.max_w).min(w.max(1.0));
+        if !matches!(sf.layout, Layout::Tb | Layout::Table) || sf.common.h.is_some() {
+            // Not splittable: one block.
+            let (_, h) = self.size_at(node, w, ctx_parent, depth, sib);
+            return self.flow_block(node, x, (w, h), ctx_parent, depth, sib);
+        }
+        let m = own.margin;
+        // Its border and fill go round what it takes from here, a part on each content area.
+        let framed = match self.flow_mark() {
+            Some(part) => {
+                let border = own.border.clone();
+                self.frames.push(Frame { x, w, margin: m, border, part, parts: Vec::new(), lost: false, held: false });
+                true
+            }
+            None => false,
+        };
+        self.advance(m.top);
+        let inner_x = x + m.left;
+        let inner_w = (w - m.horizontal()).max(1.0);
+        match sf.layout {
+            Layout::Table => self.flow_table(sf, inner_x, inner_w, &ctx, depth)?,
+            _ => {
+                let sibs = SomIndices::of(&sf.children);
+                for (ci, child) in sf.children.iter().enumerate() {
+                    if !child.common().presence.occupies() {
+                        continue;
+                    }
+                    let csib = sibs.at(ci);
+                    if let Node::Subform(_) = child
+                        && splittable(child)
+                    {
+                        self.flow_subform(child, Some((inner_x, inner_w)), &ctx, depth + 1, csib)?;
+                        continue;
+                    }
+                    self.flow_instances(child, inner_x, inner_w, &ctx, depth + 1, csib)?;
+                }
+            }
+        }
+        self.advance(m.bottom);
+        if framed && let Some(frame) = self.frames.pop() {
+            self.finish_frame(frame)?;
         }
         Ok(())
     }

@@ -14709,3 +14709,44 @@ fn grouped_existing_thai_body_edits_saves_reopens_and_undo_restores_original_gly
     assert_eq!(page_text(&mut a, reopened), [new, old]);
     assert_eq!(ok(&mut a, "content_list", json!({"doc":reopened}))["count"], 0, "editing existing text must not create Add Text objects");
 }
+
+/// Headless, a value typed over a recommended calculation of a dynamic XFA form stays, and
+/// form_fill with `{"calculated": true}` puts that field back to its calculated value, that
+/// field only (XFA 3.3 p. 642); one never typed over, or one with other values, is refused.
+#[test]
+fn form_fill_puts_one_typed_over_calculation_back() {
+    let dir = workdir("xfa-calculated");
+    let template = r##"<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/"><template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="p"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <subform name="s" layout="tb">
+  <field name="k1" w="2in" h="0.3in"><ui><numericEdit/></ui><value><decimal>1</decimal></value></field>
+  <field name="k2" w="2in" h="0.3in"><ui><numericEdit/></ui><calculate override="warning"><script contentType="application/x-javascript">k1.rawValue * 10</script></calculate></field>
+  <field name="k3" w="2in" h="0.3in"><ui><numericEdit/></ui><calculate override="warning"><script contentType="application/x-javascript">k1.rawValue * 7</script></calculate></field>
+ </subform>
+</subform></template></xdp:xdp>"##;
+    std::fs::write(dir.join("form.pdf"), pdfcraft_xfa::fixtures::shell(template)).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "form.pdf" }))["doc"].as_u64().unwrap();
+    let fields = ok(&mut a, "form_fields", json!({ "doc": doc }));
+    let name =
+        |f: &str| fields["fields"].as_array().unwrap().iter().map(|x| x["name"].as_str().unwrap().to_string()).find(|n| n.ends_with(f)).unwrap();
+    let (k2, k3) = (name("k2"), name("k3"));
+    let values = |a: &mut Automation| {
+        let f = ok(a, "form_fields", json!({ "doc": doc }));
+        [&k2, &k3]
+            .map(|n| f["fields"].as_array().unwrap().iter().find(|x| x["name"] == n.as_str()).unwrap()["value"].as_str().unwrap_or("").to_string())
+    };
+    ok(&mut a, "form_fill", json!({ "doc": doc, "values": { k2.clone(): "5", k3.clone(): "6" } }));
+    assert_eq!(values(&mut a), ["5", "6"]);
+    ok(&mut a, "form_fill", json!({ "doc": doc, "values": { k3.clone(): { "calculated": true } } }));
+    assert_eq!(values(&mut a), ["5", "7"]);
+    let again = a.call("form_fill", &json!({ "doc": doc, "values": { k3.clone(): { "calculated": true } } }));
+    assert!(again.is_err(), "{again:?}");
+    let bad = a.call("form_fill", &json!({ "doc": doc, "values": { k2.clone(): { "calculated": false } } }));
+    assert!(bad.is_err(), "{bad:?}");
+    let mixed = a.call("form_fill", &json!({ "doc": doc, "values": { k2.clone(): { "calculated": true }, k3.clone(): "1" } }));
+    assert!(mixed.is_err(), "not with other values: {mixed:?}");
+    assert_eq!(values(&mut a), ["5", "7"]);
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -28,8 +28,11 @@ pub(crate) struct HNode {
     pub(crate) gone: bool,
     /// See [`XfaNode::formatted`]; dropped when a script sets the value, which it no longer shows.
     pub(crate) formatted: Option<Arc<str>>,
-    /// See [`XfaNode::props`]; instances a script adds share their first instance's.
+    /// See [`XfaNode::props`]; an instance a script adds takes the template's
+    /// ([`XfaNode::template_props`]).
     pub(crate) props: std::sync::Arc<super::XfaProps>,
+    /// See [`XfaNode::template_props`].
+    pub(crate) template_props: Option<std::sync::Arc<super::XfaProps>>,
     /// See [`XfaNode::changed`]; none for an instance a script adds.
     pub(crate) changed: Arc<[String]>,
     /// A choice list's entries as a script's list methods leave them, one list per `<items>`;
@@ -71,6 +74,7 @@ fn flattened(root: &XfaNode) -> Vec<HNode> {
         gone: false,
         formatted: None,
         props: Arc::default(),
+        template_props: None,
         changed: Arc::from([]),
         items: None,
     }];
@@ -384,6 +388,7 @@ fn flatten(n: &XfaNode, parent: Option<usize>, out: &mut Vec<HNode>, depth: usiz
         gone: false,
         formatted: n.formatted.as_deref().map(Arc::from),
         props: Arc::clone(&n.props),
+        template_props: n.template_props.clone(),
         changed: Arc::clone(&n.changed),
         items: None,
     });

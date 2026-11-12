@@ -191,6 +191,11 @@ fn convert_props(p: &Props) -> XfaProps {
 fn to_js(n: &FormNode, tpl: &Template) -> XfaNode {
     fn trees<'a>(n: &'a FormNode, out: &mut HashMap<usize, &'a Arc<Props>>, depth: usize) {
         out.entry(Arc::as_ptr(&n.props) as usize).or_insert(&n.props);
+        // The template's tree too, for instances an instance manager adds (see
+        // `XfaNode::template_props`), when the form keeps changes for this one.
+        if !Arc::ptr_eq(&n.props, &n.template_props) {
+            out.entry(Arc::as_ptr(&n.template_props) as usize).or_insert(&n.template_props);
+        }
         if depth <= 256 {
             n.children.iter().for_each(|c| trees(c, out, depth + 1));
         }
@@ -231,6 +236,7 @@ fn to_js(n: &FormNode, tpl: &Template) -> XfaNode {
 }
 
 fn to_js_with(n: &FormNode, copies: &HashMap<usize, Arc<XfaProps>>, depth: usize) -> XfaNode {
+    let copy = |p: &Arc<Props>| copies.get(&(Arc::as_ptr(p) as usize)).cloned().unwrap_or_else(|| Arc::new(convert_props(p)));
     XfaNode {
         name: n.name.clone(),
         som: n.som.clone(),
@@ -250,7 +256,8 @@ fn to_js_with(n: &FormNode, copies: &HashMap<usize, Arc<XfaProps>>, depth: usize
         occur_max: n.occur_max,
         index: n.index,
         children: if depth > 256 { Vec::new() } else { n.children.iter().map(|c| to_js_with(c, copies, depth + 1)).collect() },
-        props: copies.get(&(Arc::as_ptr(&n.props) as usize)).cloned().unwrap_or_else(|| Arc::new(convert_props(&n.props))),
+        props: copy(&n.props),
+        template_props: (!Arc::ptr_eq(&n.props, &n.template_props)).then(|| copy(&n.template_props)),
         formatted: n.display_picture.as_deref().and_then(|p| pdfcraft_xfa::formatted_value(p, &n.value)),
         changed: Arc::from([]),
     }
@@ -1448,7 +1455,7 @@ pub(crate) fn on_changes(
             // calculation takes the field back, and there is no value to keep.
             if pdfcraft_xfa::mark_value_override(&mut r.ov, &som) {
                 r.ov_dirty = true;
-                r.run.out.requests.push(Request::CalculationOverridden(m));
+                r.run.out.requests.push(Request::CalculationOverridden { field: name.clone(), message: m });
             }
         }
         for ev in r.events_of(&som, "change") {
@@ -1518,6 +1525,22 @@ pub(crate) fn typed_date(
         }
     };
     pdfcraft_xfa::typed_date(tpl, &som, text).map(pdfcraft_forms::FieldValue::Text)
+}
+
+/// The user chose the calculated value of field `name` over the value they typed (see
+/// [`on_changes`]): the mark that kept the calculations off the field is taken off, and the
+/// calculations run, which give it its calculated value again. Only that field's mark goes. A
+/// field without one (its calculation never overridden, or already back) is refused, so the
+/// edit changes nothing.
+pub(crate) fn use_calculated(doc: &mut pdfcraft_cos::Document, tpl: &Template, name: &str, run: &mut XfaRun) -> Result<(), String> {
+    let mut r = Runner::new(doc, tpl, run, OPEN_BUDGET_MS);
+    let som = r.by_som().iter().find(|(_, f)| *f == name).map(|(s, _)| s.clone()).ok_or_else(|| format!("there is no form field named {name:?}"))?;
+    if r.ov.overridden.remove(&som).is_none() {
+        return Err(format!("{name}: no value typed over its calculation is kept, so it has its calculated value already"));
+    }
+    r.ov_dirty = true;
+    r.calculates()?;
+    r.finish().map(|_| ())
 }
 
 /// A button's click script (or any event, by SOM path and activity), then calculations.
@@ -1991,6 +2014,35 @@ $host.messageBox(concat(table.row[0].amount.mandatory, "|", table.row[1].amount.
         assert_eq!(state(&s), removed);
     }
 
+    /// A row a script adds is a copy of the template's row (XFA 3.3, "Instance Manager",
+    /// p. 353): a script reads the template's properties on it, not the changes the form keeps
+    /// for the first row, and it is laid out and saved without them.
+    #[test]
+    fn a_row_a_script_adds_takes_the_templates_properties_not_the_first_rows_changes() {
+        let bytes = with_scripts(
+            r#"table.resolveNode("row[0]").amount.mandatory = "error";"#,
+            r#"table._row.addInstance(1)
+$host.messageBox(concat(table.row[0].amount.mandatory, "|", table.resolveNode("row[1]").amount.mandatory))"#,
+        );
+        let mut s = crate::Session::new();
+        let id = s.open("rows.pdf", None, Arc::new(bytes), None).unwrap();
+        let _ = s.take_js_output(id);
+        let out = s.run_javascript(id, "", Some("hello")).unwrap();
+        assert!(out.error.is_none(), "{out:?}");
+        let out = s.run_javascript(id, "", Some("legacy")).unwrap();
+        assert_eq!(out.alerts, [pdfcraft_js::Message::plain("error|disabled")], "{out:?}");
+        let d = s.get(id).unwrap();
+        let doc = pdfcraft_cos::Document::open(d.bytes.clone()).unwrap();
+        let required: Vec<String> = pdfcraft_xfa::fields_by_som(&doc)
+            .into_iter()
+            .filter(|(som, name)| som.contains(".amount[") && d.form.iter().any(|f| &f.name == name && f.has(pdfcraft_forms::flags::REQUIRED)))
+            .map(|(som, _)| som)
+            .collect();
+        assert_eq!(required, ["form[0].page1[0].table[0].row[0].amount[0]"]);
+        let kept: Vec<String> = pdfcraft_xfa::overrides(&doc).props().keys().cloned().collect();
+        assert_eq!(kept, ["form[0].page1[0].table[0].row[0].amount[0]"]);
+    }
+
     /// `occur.max` raised by a click lets the next click add more rows than the template
     /// allowed; the limit is kept with the form.
     #[test]
@@ -2194,7 +2246,7 @@ $host.messageBox(concat(table.row[0].amount.mandatory, "|", table.row[1].amount.
     }
 
     /// A form whose opening script gives a field a format test (picture, `error`, message), and
-    /// three calculated fields: one whose calculation the user may override with a warning,
+    /// four calculated fields: two whose calculation the user may override with a warning,
     /// one that says `disabled` and one that keeps the default.
     fn checks_form() -> Vec<u8> {
         let template = r##"<?xml version="1.0" encoding="UTF-8"?>
@@ -2212,6 +2264,7 @@ $host.messageBox(concat(table.row[0].amount.mandatory, "|", table.row[1].amount.
   <field name="K2" w="2in" h="0.3in"><ui><numericEdit/></ui><calculate override="warning"><script contentType="application/x-javascript">K1.rawValue * 10</script></calculate></field>
   <field name="K3" w="2in" h="0.3in"><ui><numericEdit/></ui><calculate override="disabled"><script contentType="application/x-javascript">K1.rawValue * 100</script></calculate></field>
   <field name="K4" w="2in" h="0.3in"><ui><numericEdit/></ui><calculate><script contentType="application/x-javascript">K1.rawValue * 1000</script></calculate></field>
+  <field name="K5" w="2in" h="0.3in"><ui><numericEdit/></ui><calculate override="warning"><script contentType="application/x-javascript">K1.rawValue * 7</script></calculate></field>
  </subform>
 </subform>
 </template>
@@ -2275,7 +2328,7 @@ $host.messageBox(concat(table.row[0].amount.mandatory, "|", table.row[1].amount.
         assert_eq!(["K2", "K3", "K4"].map(|f| value_of(&s, id, f)), ["10", "100", "1000"]);
         type_into(&mut s, id, "K2", "5");
         let out = s.take_js_output(id);
-        assert!(matches!(out.requests.as_slice(), [Request::CalculationOverridden(m)] if m.contains("K2")), "{out:?}");
+        assert!(matches!(out.requests.as_slice(), [Request::CalculationOverridden { message, .. }] if message.contains("K2")), "{out:?}");
         assert_eq!(value_of(&s, id, "K2"), "5");
         type_into(&mut s, id, "K1", "2");
         assert_eq!(["K2", "K3", "K4"].map(|f| value_of(&s, id, f)), ["5", "200", "2000"]);
@@ -2295,6 +2348,60 @@ $host.messageBox(concat(table.row[0].amount.mandatory, "|", table.row[1].amount.
         assert_eq!(value_of(&s, id, "K2"), "10");
         type_into(&mut s, id, "K1", "4");
         assert_eq!(value_of(&s, id, "K2"), "40");
+    }
+
+    /// One edit that types over two recommended calculations asks about each field on its own
+    /// (XFA 3.3 p. 642: the warning is about "the form object" the user set), and choosing the
+    /// calculated value for one gives back that field's calculation only: the other entry and
+    /// the edit's other values stay, and undo takes the choice back.
+    #[test]
+    fn each_overridden_calculation_of_one_edit_is_asked_about_and_answered_alone() {
+        let mut s = crate::Session::new();
+        let id = s.open("checks.pdf", None, Arc::new(checks_form()), None).unwrap();
+        let _ = s.take_js_output(id);
+        let name = |s: &crate::Session, f: &str| s.get(id).unwrap().form.iter().find(|x| x.name.ends_with(f)).unwrap().name.clone();
+        let text = |v: &str| pdfcraft_forms::FieldValue::Text(v.into());
+        let (k2, k5, v3) = (name(&s, "K2"), name(&s, "K5"), name(&s, "V3"));
+        let edits = vec![
+            crate::Edit::SetFieldValue { name: k2.clone(), value: text("5") },
+            crate::Edit::SetFieldValue { name: k5.clone(), value: text("6") },
+            crate::Edit::SetFieldValue { name: v3.clone(), value: text("12") },
+        ];
+        s.apply(id, crate::Edit::Batch { label: "Fill in form".into(), edits }).unwrap();
+        let asked: Vec<(String, bool)> = s
+            .take_js_output(id)
+            .requests
+            .into_iter()
+            .filter_map(|r| match r {
+                Request::CalculationOverridden { field, message } => Some((field.clone(), message.contains(field.rsplit('.').next().unwrap_or("")))),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(asked, [(k2.clone(), true), (k5.clone(), true)], "one question for each field, naming it");
+        let values = |s: &crate::Session| ["K2", "K5", "V3"].map(|f| value_of(s, id, f));
+        assert_eq!(values(&s), ["5", "6", "12"]);
+        // The calculated value for the second field only.
+        s.apply(id, crate::Edit::UseCalculatedValue { name: k5.clone() }).unwrap();
+        assert_eq!(values(&s), ["5", "7", "12"]);
+        type_into(&mut s, id, "K1", "2");
+        assert_eq!(values(&s), ["5", "14", "12"], "the first entry is still kept; the second field is calculated again");
+        // Kept with the form: the first field's mark only.
+        let saved = s.save_bytes(id).unwrap();
+        let mut again = crate::Session::new();
+        let reopened = again.open("saved.pdf", None, saved, None).unwrap();
+        type_into(&mut again, reopened, "K1", "3");
+        assert_eq!(["K2", "K5"].map(|f| value_of(&again, reopened, f)), ["5", "21"]);
+        // Undo takes the K1 change, then the choice, back.
+        s.undo(id).unwrap();
+        s.undo(id).unwrap();
+        assert_eq!(values(&s), ["5", "6", "12"]);
+        // Not in a batch: its calculations would run before the form's data took the batch's
+        // other values.
+        let batch = crate::Edit::Batch { label: "Fill in form".into(), edits: vec![crate::Edit::UseCalculatedValue { name: k2.clone() }] };
+        assert!(s.apply(id, batch).is_err());
+        // A field whose calculation wasn't typed over has nothing to go back to.
+        assert!(s.apply(id, crate::Edit::UseCalculatedValue { name: name(&s, "K4") }).is_err());
+        assert!(s.apply(id, crate::Edit::UseCalculatedValue { name: "nothing".into() }).is_err());
     }
 
     /// A caption's colour, a check box's on value and a choice list that stops taking typed text,

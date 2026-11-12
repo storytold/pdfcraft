@@ -369,11 +369,21 @@ pub(crate) fn restyled(node: &Node, sets: &BTreeMap<String, String>) -> Node {
     n
 }
 
-/// The border of an object whose common properties are `c`, with the changes `sets` applied.
-pub(crate) fn restyled_border(c: &Common, sets: &BTreeMap<String, String>) -> Option<Border> {
+/// The common properties `c` of an object (its border, margins, font and paragraph, and its
+/// property tree) with the changes `sets` applied (see [`restyle`]).
+pub(crate) fn restyled_common(c: &Common, sets: &BTreeMap<String, String>) -> Common {
     let mut n = Node::Area(Box::new(Area { common: c.clone(), children: Vec::new() }));
     restyle(&mut n, sets);
-    n.common().border.clone()
+    match n {
+        Node::Area(a) => a.common,
+        // `restyle` keeps the node's kind.
+        other => other.common().clone(),
+    }
+}
+
+/// The border of an object whose common properties are `c`, with the changes `sets` applied.
+pub(crate) fn restyled_border(c: &Common, sets: &BTreeMap<String, String>) -> Option<Border> {
+    restyled_common(c, sets).border
 }
 
 /// Draw `d` with the changes `sets` applied (see [`restyle`]).

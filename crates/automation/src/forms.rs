@@ -428,6 +428,19 @@ impl Automation {
         let mut edits = Vec::new();
         for (name, v) in values {
             let f = doc.form.iter().find(|f| &f.name == name).ok_or_else(|| failed(format!("there is no field named {name:?} (see form_fields)")))?;
+            // A dynamic XFA field whose calculation a value was typed over goes back to its
+            // calculated value (the answer to `calculation_overridden`), on its own: its
+            // calculations can't run inside a batch of values.
+            if let Some(c) = v.as_object().and_then(|o| o.get("calculated")) {
+                if c != &Value::Bool(true) {
+                    return Err(ToolError::InvalidArgs(format!("{name}: \"calculated\" takes true only")));
+                }
+                if values.len() > 1 {
+                    return Err(ToolError::InvalidArgs(format!("{name}: {{\"calculated\": true}} goes in a form_fill of its own, one field")));
+                }
+                edits.push(Edit::UseCalculatedValue { name: name.clone() });
+                continue;
+            }
             edits.push(Edit::SetFieldValue { name: name.clone(), value: value_for(f, v)? });
         }
         let edit = if edits.len() == 1 { edits.remove(0) } else { Edit::Batch { label: "Fill in form".into(), edits } };

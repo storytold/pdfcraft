@@ -282,6 +282,7 @@ impl Edit {
             Edit::EnhanceScan { .. } => Label::of("Enhance scanned file"),
             Edit::ApplyScriptChanges { .. } => Label::of("Run JavaScript"),
             Edit::XfaEvent { .. } => Label::of("Run form script"),
+            Edit::UseCalculatedValue { name } => Label::with("Use the calculated value of {name}", name.as_str()),
             // The level is the standard's own name ("PDF/A-2b"), so it goes in as it stands.
             Edit::ConvertPdfA { level } => Label::with("Save as {level}", level.label()),
             Edit::RemoveStandardId { standard } => Label::with("Remove {standard} identification", standard.label()),

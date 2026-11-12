@@ -148,7 +148,8 @@ fn subtree_bytes(h: &XHost, src: usize, depth: usize) -> usize {
         .fold(own, |sum, &k| sum.saturating_add(subtree_bytes(h, k, depth + 1)))
 }
 
-/// A copy of `src`'s subtree (values cleared) under `parent`, returning the copy's index.
+/// A copy of `src`'s subtree (values cleared, properties the template's) under `parent`,
+/// returning the copy's index.
 fn clone_subtree(h: &mut XHost, src: usize, parent: Option<usize>, depth: usize) -> Option<usize> {
     if depth > MAX_DEPTH || h.nodes.len() >= MAX_NODES {
         return None;
@@ -173,7 +174,11 @@ fn clone_subtree(h: &mut XHost, src: usize, parent: Option<usize>, depth: usize)
                 gone: false,
                 // The copy holds no value, so nothing is shown in its picture either.
                 formatted: None,
-                props: std::sync::Arc::clone(&n.props),
+                // A new instance is a copy of the template's object (XFA 3.3, "Instance
+                // Manager", p. 353): its properties are the template's, not the changes the
+                // form keeps for the instance it is copied from.
+                props: n.template_props.as_ref().map_or_else(|| Arc::clone(&n.props), Arc::clone),
+                template_props: None,
                 // A new instance holds no changes yet.
                 changed: Arc::from([]),
                 // A new instance lists what the template lists.

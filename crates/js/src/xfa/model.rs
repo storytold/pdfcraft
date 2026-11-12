@@ -53,6 +53,11 @@ pub struct XfaNode {
     /// The template's attributes and property elements of the object (border, ui, validate, …),
     /// shared: snapshots taken for each script point at the same tree.
     pub props: std::sync::Arc<super::XfaProps>,
+    /// The template's tree [`Self::props`] was made from, before the changes the form keeps for
+    /// this instance; `None` when there are none (`props` is the template's own). An instance
+    /// an instance manager adds starts from it: a new instance is a copy of the template's
+    /// object (XFA 3.3, "Instance Manager", p. 353), never of another instance's changes.
+    pub template_props: Option<std::sync::Arc<super::XfaProps>>,
     /// The property changes the form already keeps for this instance, by key (`path@attr`, the
     /// path alone for a text, `=` before a copy of a drawn edge or corner), sorted: a write
     /// counts against the form's limit on changes to one object

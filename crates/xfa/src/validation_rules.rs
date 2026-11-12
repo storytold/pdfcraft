@@ -292,10 +292,10 @@ impl CalcOverride {
 /// When a value the user typed into a calculated field stays, the warning said then. `warning`
 /// (p. 642) asks the user to dismiss the entry (back to the calculated value) or override the
 /// calculation: the value is kept and marked an override (`value@override`, p. 883), so later
-/// calculations leave the field alone, and the user is asked whether to go back, which undoes
-/// the entry (and the mark with it). Without anyone to ask (scripts run headless) the value is
-/// kept. `error` and `ignore` keep the calculated value, which the next calculation writes back
-/// (`None`).
+/// calculations leave the field alone, and the user is asked whether to go back, which takes
+/// the mark off that field and calculates it again. Without anyone to ask (scripts run
+/// headless) the value is kept. `error` and `ignore` keep the calculated value, which the next
+/// calculation writes back (`None`).
 pub fn user_value_overrides(o: CalcOverride, given: Option<&str>, name: &str) -> Option<String> {
     match o {
         CalcOverride::Warning => Some(match given.map(str::trim).filter(|m| !m.is_empty()) {

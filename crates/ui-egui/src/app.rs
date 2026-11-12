@@ -324,7 +324,7 @@ impl PdfCraftApp {
             community_card_closed: false,
             pending_link: None,
             pending_full_screen: None,
-            pending_calc_override: None,
+            pending_calc_overrides: Default::default(),
             pending_window: None,
             pending_remote_link: None,
             protect_draft: Default::default(),
@@ -456,7 +456,7 @@ impl PdfCraftApp {
             || self.unlock_prompt.is_some()
             || self.pending_link.is_some()
             || self.pending_remote_link.is_some()
-            || self.pending_calc_override.is_some()
+            || !self.pending_calc_overrides.is_empty()
             || self.updates.open
     }
 

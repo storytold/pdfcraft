@@ -1201,3 +1201,95 @@ fn changes_the_pages_dont_show_need_no_restyle() {
     let speak = plain.props.elements.iter().find(|e| e.tag == "assist").and_then(|a| a.children.iter().find(|c| c.tag == "speak"));
     assert_eq!(speak.and_then(|s| s.text.as_deref()), Some("Say this"));
 }
+
+/// Three repeating subforms, three instances each: flowed rows, rows in a positioned box (drawn,
+/// not flowed) and a table's rows.
+const OWN_ROWS: &str = r##"<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="p"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <subform name="rows" layout="tb"><subform name="row" layout="tb"><occur min="3" max="3"/><field name="cell" w="2in" h="0.3in"><ui><textEdit/></ui></field></subform></subform>
+ <subform name="box" layout="position" w="7in" h="2in"><subform name="list" layout="tb" x="0in" y="0in" w="7in"><subform name="row" layout="tb"><occur min="3" max="3"/><field name="cell" w="2in" h="0.3in"><ui><textEdit/></ui></field></subform></subform></subform>
+ <subform name="grid" layout="table" columnWidths="2in"><subform name="row" layout="row"><occur min="3" max="3"/><field name="cell" h="0.3in"><ui><textEdit/></ui></field></subform></subform>
+</subform></template>"##;
+
+/// A script's change to one instance of a repeating subform itself (not to what it holds) is
+/// laid out and drawn for that instance only: its font, which its fields inherit, and its
+/// margins, which move what it holds and what follows it; flowed, in a positioned box and as a
+/// table's row alike. A row's border change still draws.
+#[test]
+fn an_instances_own_font_and_margins_are_laid_out_and_drawn() {
+    let t = crate::parse(OWN_ROWS).unwrap().0;
+    let mut ov = Overrides::default();
+    for row in ["form[0].rows[0].row[1]", "form[0].box[0].list[0].row[1]", "form[0].grid[0].row[1]"] {
+        ov.set_prop(row, "font#0", Some("size"), "20pt").unwrap();
+        ov.set_prop(row, "margin#0", Some("topInset"), "0.25in").unwrap();
+        ov.set_prop(row, "border#0/edge#0/color#0", Some("value"), "0,0,255").unwrap();
+    }
+    let form = laid_out(&t, &ov);
+    let cell = |som: &str| {
+        items(&form)
+            .into_iter()
+            .find_map(|i| if let Item::Widget(w) = i { (w.som == som).then(|| (w.rect, w.face.size)) } else { None })
+            .unwrap_or_else(|| panic!("{som}"))
+    };
+    for parent in ["form[0].rows[0]", "form[0].box[0].list[0]", "form[0].grid[0]"] {
+        let [(r0, s0), (r1, s1), (r2, s2)] = [0, 1, 2].map(|i| cell(&format!("{parent}.row[{i}].cell[0]")));
+        assert_eq!((s0, s1, s2), (10.0, 20.0, 10.0), "{parent}: only the second row's font");
+        assert!((r1.y - r0.bottom() - 18.0).abs() < 0.01, "{parent}: the second row's top margin, {r0:?} {r1:?}");
+        assert!((r2.y - r1.bottom()).abs() < 0.01, "{parent}: the third row follows, {r1:?} {r2:?}");
+    }
+    let blue = rgb(0.0, 0.0, 255.0);
+    let blue_lines = items(&form).into_iter().filter(|i| matches!(i, Item::Line { color, .. } if *color == blue)).count();
+    assert!(blue_lines >= 3 * 4, "each second row's edges, {blue_lines}");
+}
+
+/// A script's change to where one instance of a repeating subform breaks the page (XFA 3.3
+/// p. 632) moves that instance only: the second row breaks to a new page, the others stay;
+/// rows without changes still break as the template says, before the first and after the last.
+#[test]
+fn an_instances_own_page_breaks_are_laid_out() {
+    let t = crate::parse(OWN_ROWS).unwrap().0;
+    let page_of =
+        |form: &crate::Form, som: &str| form.pages.iter().position(|p| p.items.iter().any(|i| matches!(i, Item::Widget(w) if w.som == som))).unwrap();
+    let rows = |form: &crate::Form| [0, 1, 2].map(|i| page_of(form, &format!("form[0].rows[0].row[{i}].cell[0]")));
+    assert_eq!(rows(&laid_out(&t, &Overrides::default())), [0, 0, 0]);
+    let ov = overrides("form[0].rows[0].row[1]", &[("break#0", Some("before"), "pageArea")]);
+    let form = laid_out(&t, &ov);
+    assert_eq!(rows(&form), [0, 1, 1], "the second row starts a page");
+    assert_eq!(page_of(&form, "form[0].grid[0].row[0].cell[0]"), 1);
+    let ov = overrides("form[0].rows[0].row[0]", &[("breakAfter#0", Some("targetType"), "pageArea")]);
+    assert_eq!(rows(&laid_out(&t, &ov)), [0, 1, 1], "a break after the first row");
+    // The template's own break: once, before the first row.
+    let broken = OWN_ROWS.replace(r#"<subform name="row" layout="tb"><occur min="3" max="3"/><field name="cell" w="2in" h="0.3in"><ui><textEdit/></ui></field></subform></subform>
+ <subform name="box""#, r#"<subform name="row" layout="tb"><occur min="3" max="3"/><breakBefore targetType="pageArea"/><field name="cell" w="2in" h="0.3in"><ui><textEdit/></ui></field></subform></subform>
+ <subform name="box""#);
+    let t = crate::parse(&broken).unwrap().0;
+    assert_eq!(rows(&laid_out(&t, &Overrides::default())), [0, 0, 0], "nothing on the page before it");
+    let ov = overrides("form[0].rows[0].row[2]", &[("breakBefore#0", Some("targetType"), "pageArea")]);
+    assert_eq!(rows(&laid_out(&t, &ov)), [0, 0, 1], "the third row's own break");
+}
+
+/// An exclusion group in a repeating subform is measured with its instance's changes, as it is
+/// drawn: a top margin set on the second row's group moves its buttons down, and the third row
+/// comes after them instead of over them.
+#[test]
+fn a_groups_own_changes_size_its_row() {
+    let t = crate::parse(
+        r##"<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="p"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <subform name="rows" layout="tb"><subform name="row" layout="tb"><occur min="3" max="3"/>
+  <exclGroup name="choice" layout="tb"><field name="a" w="1in" h="0.3in"><ui><checkButton/></ui><items><text>A</text></items></field></exclGroup></subform></subform>
+</subform></template>"##,
+    )
+    .unwrap()
+    .0;
+    let ov = overrides("form[0].rows[0].row[1].choice[0]", &[("margin#0", Some("topInset"), "0.25in")]);
+    let form = laid_out(&t, &ov);
+    let rect =
+        |som: &str| items(&form).into_iter().find_map(|i| if let Item::Widget(w) = i { (w.som == som).then_some(w.rect) } else { None }).unwrap();
+    let [r0, r1, r2] = [0, 1, 2].map(|i| rect(&format!("form[0].rows[0].row[{i}].choice[0].a[0]")));
+    // Each button stands in a field 0.3in (21.6pt) tall.
+    assert!((r1.y - r0.y - 21.6 - 18.0).abs() < 0.01, "the second row's group margin: {r0:?} {r1:?}");
+    assert!((r2.y - r1.y - 21.6).abs() < 0.01, "the third row comes after the second's field: {r1:?} {r2:?}");
+}

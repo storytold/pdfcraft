@@ -250,14 +250,15 @@ pub(super) fn full_screen_prompt(app: &mut PdfCraftApp, ctx: &egui::Context) {
 
 /// The user typed a value into an XFA field whose calculation the form only recommends
 /// (`<calculate override="warning">`, XFA 3.3 p. 642): keep the value, which the calculations
-/// then leave alone, or go back to the calculated value (the entry is undone). Going back is
-/// the default, and Escape or clicking outside chooses it.
+/// then leave alone, or go back to the field's calculated value. Going back is the default,
+/// and Escape or clicking outside chooses it. One field at a time: an edit that typed over
+/// several asks about each in turn.
 pub(super) fn calc_override_prompt(app: &mut PdfCraftApp, ctx: &egui::Context) {
-    let Some((id, message, _)) = app.pending_calc_override.clone() else { return };
-    if app.session.get(id).is_none() {
-        app.pending_calc_override = None;
-        return;
+    // Questions for documents closed since are dropped.
+    while app.pending_calc_overrides.front().is_some_and(|(id, _, _)| app.session.get(*id).is_none()) {
+        app.pending_calc_overrides.pop_front();
     }
+    let Some((_, _, message)) = app.pending_calc_overrides.front().cloned() else { return };
     let t = Tokens::get(ctx);
     let mut choice = None;
     let modal = widgets::show_modal(ctx, "calc_override_prompt", |ui| {

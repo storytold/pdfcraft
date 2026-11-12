@@ -241,10 +241,11 @@ pub fn layout(tpl: &Template, data: Option<&DataNode>) -> Result<Form, XfaError>
 /// template takes `ov` before this ([`crate::script::apply_overrides_split`]). Each object
 /// instance is drawn with the property changes `props` holds for it (`tpl` already has those of
 /// the objects with one instance): a repeating subform's later instances, and each page's copy
-/// of page-master content, get their own colours, borders, fonts and field flags. A field or
-/// draw is measured with its instance's changes, and an instance holding changed objects is
-/// measured on its own; a change to a repeating subform's own instance that would size it
-/// differently (its margins, its font) is laid out at the template's size.
+/// of page-master content, get their own colours, borders, fonts and field flags. A field,
+/// draw or exclusion group is measured with its instance's changes, and an instance holding
+/// changed objects is measured on its own; a repeating subform's instance is laid out and drawn
+/// with its own border, margins, font and paragraph, and breaks the page where its own breaks
+/// say.
 pub fn layout_with_overrides(tpl: &Template, data: Option<&DataNode>, ov: &crate::script::Overrides, props: &PropChanges) -> Result<Form, XfaError> {
     layout_inner(tpl, data, Some(ov), props)
 }

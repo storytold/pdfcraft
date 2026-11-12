@@ -1296,3 +1296,38 @@ fn formcalc_reads_captions_and_resolves_into_properties() {
     let o = fc("xfa.resolveNode(\"form1.label\").name", "label");
     assert_eq!((o.error.as_deref(), o.result.as_deref()), (None, Some("label")));
 }
+
+/// An instance an instance manager adds is a copy of the template's object (XFA 3.3, "Instance
+/// Manager", p. 353): it and what it holds read the template's properties, not the changes the
+/// form keeps for the instance it is copied from, whichever way it is added; a write to it
+/// counts against an empty list of kept changes.
+#[test]
+fn an_added_instance_reads_the_templates_properties_not_the_first_instances_changes() {
+    let thick = |t: &str| vec![p("border", &[], vec![p("edge", &[("thickness", t)], vec![])])];
+    let font = |s: &str| vec![p("font", &[("size", s)], vec![])];
+    let tree = |elements| Some(Arc::new(XfaProps { attrs: Vec::new(), elements }));
+    let field = XfaNode {
+        som: "form1[0].row[0].f[0]".into(),
+        template_props: tree(font("10pt")),
+        changed: Arc::from(["font#0@size".to_string()]),
+        ..node("f", XfaKind::Field, &[], font("20pt"))
+    };
+    let row = XfaNode {
+        som: "form1[0].row[0]".into(),
+        repeatable: true,
+        occur_min: 1,
+        children: vec![field],
+        template_props: tree(thick("1pt")),
+        changed: Arc::from(["border#0/edge#0@thickness".to_string()]),
+        ..node("row", XfaKind::Subform, &[], thick("3pt"))
+    };
+    let root = XfaNode { name: "form1".into(), som: "form1[0]".into(), kind: Some(XfaKind::Subform), children: vec![row], ..Default::default() };
+    for add in ["_row.addInstance(1)", "_row.insertInstance(1)", "_row.setInstances(2)", "_row.count = 2"] {
+        let script = format!(
+            "{add}; var r = xfa.resolveNode('xfa.form.form1.row[1]'); \
+             [this.border.edge.thickness, this.f.font.size, r.border.edge.thickness, r.f.font.size].join('|')"
+        );
+        let o = go_on(&root, &script, "row");
+        assert_eq!((o.error, o.result.as_deref()), (None, Some("3pt|20pt|1pt|10pt")), "{add}");
+    }
+}

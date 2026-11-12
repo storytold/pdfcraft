@@ -853,12 +853,12 @@ pub struct PdfCraftApp {
     /// A document just opened asks to be shown in Full Screen mode (`/PageMode /FullScreen`):
     /// the person is asked first, as in Acrobat, and this is the document waiting for the answer.
     pub pending_full_screen: Option<DocId>,
-    /// The user typed a value into an XFA field the form calculates, and the form recommends its
-    /// calculated value (`<calculate override="warning">`): the value was kept, and the user is asked
-    /// whether to keep it or go back to the calculated value. The document, what the form says,
-    /// and the document's edit generation once the entry was made (going back undoes the entry
-    /// only while it is still the document's last edit).
-    pub pending_calc_override: Option<(DocId, String, u64)>,
+    /// The user typed values into XFA fields the form calculates, and the form recommends their
+    /// calculated values (`<calculate override="warning">`, XFA 3.3 p. 642): the values were
+    /// kept, and the user is asked about each field in turn, the first one first, whether to keep
+    /// its value or go back to its calculated value. For each: the document, the field's name and
+    /// what the form says. One edit can type over several (a batch of values).
+    pub pending_calc_overrides: std::collections::VecDeque<(DocId, String, String)>,
     /// A document just opened asks for its window to fit its first page or to be centred
     /// (`FitWindow`, `CenterWindow`): done once the page is laid out.
     pub pending_window: Option<viewer_prefs::PendingWindow>,

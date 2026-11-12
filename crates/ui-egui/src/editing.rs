@@ -341,16 +341,14 @@ impl PdfCraftApp {
         false
     }
 
-    /// The user's answer to [`Self::pending_calc_override`]: keep the value typed into the
-    /// calculated field, or go back to the calculated value by undoing the entry (which also
-    /// takes back the mark that kept the calculations off the field), in the document it was
-    /// made in, through the tab showing it (the active one when it does; another is brought to
-    /// the front). The entry is undone
-    /// only while it is still that document's last edit: when another edit followed it (the other
-    /// pane's, in a split view), Undo would take that one back instead, so the value stays and
-    /// the user is told.
+    /// The user's answer to the first of [`Self::pending_calc_overrides`]: keep the value typed
+    /// into that calculated field, or go back to its calculated value
+    /// ([`Edit::UseCalculatedValue`]), in the document it was typed in, through the tab showing
+    /// it (the active one when it does; another is brought to the front). Going back changes
+    /// that field only: the other values the same edit set, and edits made since, stay. The
+    /// next field's question, if any, follows.
     pub fn resolve_calc_override(&mut self, keep: bool) {
-        let Some((id, _, generation)) = self.pending_calc_override.take() else { return };
+        let Some((id, field, _)) = self.pending_calc_overrides.pop_front() else { return };
         if keep {
             return;
         }
@@ -358,18 +356,14 @@ impl PdfCraftApp {
         else {
             return;
         };
-        // The tab comes to the front, so a box open on its page is applied to its document
-        // (applying goes to the active one) before the step, as for Undo; that is an edit too.
+        // The tab comes to the front, so the change goes to its document (edits go to the
+        // active one), after a box open on its page is applied, as for any edit.
         self.active = Some(i);
         if !self.close_text_editors(i, id) {
             self.notify(tl!("Your value was kept: the text open on the page couldn't be applied. Use Undo to take the entry back.").to_string());
             return;
         }
-        if self.session.get(id).map(|d| d.edit_generation()) != Some(generation) {
-            self.notify(tl!("Your value was kept: the document changed after you typed it. Use Undo to take the entry back.").to_string());
-            return;
-        }
-        self.history_step_in(i, id, true);
+        self.apply_edit(Edit::UseCalculatedValue { name: field });
     }
 
     pub fn redo(&mut self) {
@@ -409,11 +403,6 @@ impl PdfCraftApp {
 
     fn history_step(&mut self, undo: bool) {
         let Some((i, id)) = self.active_ids() else { return };
-        self.history_step_in(i, id, undo);
-    }
-
-    /// [`Self::history_step`] in document `id`, through tab `i`, which shows it.
-    fn history_step_in(&mut self, i: usize, id: pdfcraft_engine::DocId, undo: bool) {
         if !self.close_text_editors(i, id) {
             return;
         }

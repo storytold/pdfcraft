@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 
 use super::common::clean_name;
@@ -29,12 +30,13 @@ impl Layouter<'_> {
 
     /// [`Self::draw_row`]'s border and cells, once where the row shows is set.
     pub(super) fn draw_row_cells(&mut self, row: &Subform, cols: &[f64], rect: Rect, ctx: &Ctx, depth: usize, sib: usize) -> Result<(), XfaError> {
-        if let Some(b) = self.border_of(&row.common, ctx, sib) {
-            self.draw_border(&b, rect)?;
+        let own = self.own(&row.common, ctx, sib, DRAWN);
+        if let Some(b) = &own.border {
+            self.draw_border(b, rect)?;
         }
-        let ctx = ctx.with_som(&row.common, sib);
-        let inner = rect.inset(&row.common.margin);
-        let (cells, _) = self.cells(row, cols, inner.w, &ctx, depth);
+        let ctx = ctx.with_som(&own, sib);
+        let inner = rect.inset(&own.margin);
+        let (cells, _) = self.cells(row, &own, cols, inner.w, &ctx, depth);
         let sibs = SomIndices::of(&row.children);
         for (i, r) in cells {
             if let Some(k) = row.children.get(i) {
@@ -86,11 +88,35 @@ impl Layouter<'_> {
         self.props.get(&som)
     }
 
-    /// The border of container `c` (instance `sib` under `ctx`) as scripts changed it.
-    pub(super) fn border_of(&self, c: &Common, ctx: &Ctx, sib: usize) -> Option<Border> {
+    /// Container `c`'s own properties for instance `sib` under `ctx`, with the changes scripts
+    /// made to that instance in the property groups `roots` names ([`DRAWN`] or [`SIZED`]); the
+    /// template's when there are none. An object with one instance took its changes in the
+    /// template already ([`crate::script::apply_overrides_split`]); the instances of a
+    /// repeating subform, and what they hold, keep theirs here, each its own.
+    pub(super) fn own<'a>(&self, c: &'a Common, ctx: &Ctx, sib: usize, roots: &[&str]) -> Cow<'a, Common> {
         match self.changes_of(c, ctx, sib, None) {
-            Some(sets) => crate::restyle::restyled_border(c, sets),
-            None => c.border.clone(),
+            Some(sets) => own_from(c, sets, roots),
+            None => Cow::Borrowed(c),
+        }
+    }
+
+    /// [`Self::own`] for the instance whose own SOM path is `som`. An unnamed container shares
+    /// its parent's path, so it has no changes of its own.
+    pub(super) fn own_at<'a>(&self, c: &'a Common, som: &str, roots: &[&str]) -> Cow<'a, Common> {
+        match self.props.get(som).filter(|_| c.name.is_some()) {
+            Some(sets) => own_from(c, sets, roots),
+            None => Cow::Borrowed(c),
+        }
+    }
+
+    /// Where pages break before and after instance `sib` of subform `node` under `ctx` (XFA 3.3
+    /// p. 632), when scripts changed that instance's breaks; `None` when they didn't.
+    pub(super) fn own_breaks(&self, node: &Node, ctx: &Ctx, sib: usize) -> Option<(bool, bool)> {
+        let sets = self.changes_of(node.common(), ctx, sib, None)?;
+        let taken = taken(sets, &["break", "breakBefore", "breakAfter"])?;
+        match crate::restyle::restyled(node, &taken) {
+            Node::Subform(s) => Some((s.break_before_page, s.break_after_page)),
+            _ => None,
         }
     }
 
@@ -145,7 +171,7 @@ impl Layouter<'_> {
                 None => self.draw_group(g, rect, ctx, depth, sib),
             },
             Node::Area(a) => {
-                let ctx = ctx.with_som(&a.common, sib);
+                let ctx = ctx.with_som(&self.own(&a.common, ctx, sib, SIZED), sib);
                 let sibs = SomIndices::of(&a.children);
                 for (i, k) in a.children.iter().enumerate() {
                     self.draw_positioned_child(k, rect, &ctx, depth + 1, sibs.at(i))?;
@@ -157,12 +183,15 @@ impl Layouter<'_> {
                 // place nothing still stop.
                 self.measures.set(self.measures.get().saturating_add(1));
                 self.check_measures()?;
-                if let Some(b) = self.border_of(&s.common, ctx, sib) {
-                    self.draw_border(&b, rect)?;
+                // The instance's own border, margins, font and paragraph (a script may change
+                // one row's), for it and what it holds.
+                let own = self.own(&s.common, ctx, sib, DRAWN);
+                if let Some(b) = &own.border {
+                    self.draw_border(b, rect)?;
                 }
                 let parent_ctx = ctx;
-                let ctx = ctx.with_som(&s.common, sib);
-                let inner = rect.inset(&s.common.margin);
+                let ctx = ctx.with_som(&own, sib);
+                let inner = rect.inset(&own.margin);
                 let sibs = SomIndices::of(&s.children);
                 match s.layout {
                     Layout::Positioned => {
@@ -631,5 +660,28 @@ impl Layouter<'_> {
                 return candidate;
             }
         }
+    }
+}
+
+/// The property groups a container takes for each instance as it is drawn: its border (and
+/// fill), its margins, and the font and paragraph what it holds inherits.
+pub(super) const DRAWN: &[&str] = &["border", "margin", "font", "para"];
+/// Those of [`DRAWN`] that size it: a border takes no room of its own (its margins do).
+pub(super) const SIZED: &[&str] = &["margin", "font", "para"];
+
+/// The changes of `sets` (by [`crate::restyle::prop_key`]) in the property groups `roots`
+/// names; `None` when there are none.
+fn taken(sets: &BTreeMap<String, String>, roots: &[&str]) -> Option<BTreeMap<String, String>> {
+    let root = |k: &str| k.trim_start_matches('=').split(['#', '/', '@']).next().is_some_and(|r| roots.contains(&r));
+    let out: BTreeMap<String, String> = sets.iter().filter(|(k, _)| root(k)).map(|(k, v)| (k.clone(), v.clone())).collect();
+    (!out.is_empty()).then_some(out)
+}
+
+/// `c` with the changes of `sets` in the groups `roots` names applied; `c` itself when there
+/// are none.
+fn own_from<'a>(c: &'a Common, sets: &BTreeMap<String, String>, roots: &[&str]) -> Cow<'a, Common> {
+    match taken(sets, roots) {
+        Some(t) => Cow::Owned(crate::restyle::restyled_common(c, &t)),
+        None => Cow::Borrowed(c),
     }
 }

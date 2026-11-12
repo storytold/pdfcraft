@@ -183,7 +183,9 @@ let form = pdfcraft_xfa::layout_xml(template_xml)?;       // pages of items, for
   its validation picture doesn't describe (`formatTest`, XFA 3.3 p. 880) shows the format message
   when the user leaves the field, and stays. A value typed into a field whose calculation the
   form only recommends (`calculate override="warning"`, p. 642) is kept and marked an override
-  (`/Overridden`), and the app asks whether to keep it or go back to the calculated value.
+  (`/Overridden`), and the app asks whether to keep it or go back to the calculated value: about
+  each such field on its own, in turn, when one edit types over several, and going back changes
+  that field only (`Edit::UseCalculatedValue`; headless, `form_fill` with `{"calculated": true}`).
   These choices live in `validation_rules`.
   A hidden instance of a repeating subform hides every instance (overrides apply to the template).
   A repeating subform shows what its data holds once the data holds any instance, else its
