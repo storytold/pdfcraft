@@ -934,6 +934,21 @@ mod xfa_model {
 
     /// A calculate script finds its siblings by name and yields its last expression, and a
     /// value it sets comes back as an effect.
+    /// The script's node is in scope: `parent`, `rawValue` and `caption` without `this.` are its own, unless a nearer name or the
+    /// script's own variable takes them.
+    #[test]
+    fn a_scripts_node_members_are_read_without_this() {
+        let o = go("parent.name + ',' + rawValue + ',' + typeof caption + ',' + somExpression", "form1[0].page1[0].qty[0]", "calculate");
+        assert_eq!(o.result.as_deref(), Some("page1,4,object,form1[0].page1[0].qty[0]"), "{o:?}");
+        let o = go("rawValue = 7; this.rawValue", "form1[0].page1[0].qty[0]", "calculate");
+        assert_eq!(o.result.as_deref(), Some("7"), "{o:?}");
+        let o = go("var parent = 3; parent + ',' + typeof app.plugIns.toString().indexOf", "form1[0].page1[0].qty[0]", "calculate");
+        assert_eq!(o.result.as_deref(), Some("3,function"), "{o:?}");
+        // a child named like a member comes first
+        let o = go("details.presence", "form1[0].page1[0].qty[0]", "calculate");
+        assert_eq!(o.result.as_deref(), Some("hidden"), "{o:?}");
+    }
+
     #[test]
     fn calculate_scripts_see_siblings_by_name_and_yield_their_last_expression() {
         let o = go("qty.rawValue * price.rawValue", "form1[0].page1[0].total[0]", "calculate");
