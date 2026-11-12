@@ -400,3 +400,35 @@ fn independent_near_degenerate_parent_uses_an_orthogonal_frame() {
     assert_eq!(rebuilt.triangles, [[0, 1, 2], [2, 1, 3]]);
     assert_within_tolerance(&rebuilt.positions, &source, 1e-8);
 }
+
+#[test]
+fn independent_rebuild_requires_exact_arrays_and_enough_budget() {
+    let encoded = encode([0.0; 3], 0.5, &[triangle_seed(0.0, 0, 0)]);
+    assert!(rebuild(&encoded.arrays(usize::MAX)).is_ok());
+
+    let mut extra_point = encoded.clone();
+    extra_point.points.push(0);
+    assert_eq!(rebuild(&extra_point.arrays(usize::MAX)).unwrap_err(), "the decoded triangles do not use up the stored arrays",);
+
+    let mut extra_slot = encoded.clone();
+    extra_slot.is_reference.push(false);
+    assert_eq!(rebuild(&extra_slot.arrays(usize::MAX)).unwrap_err(), "the decoded triangles do not use up the stored arrays",);
+
+    let mut extra_reference = encoded.clone();
+    extra_reference.references.push(0);
+    assert_eq!(rebuild(&extra_reference.arrays(usize::MAX)).unwrap_err(), "the decoded triangles do not use up the stored arrays",);
+
+    assert_eq!(rebuild(&encoded.arrays(0)).unwrap_err(), "the rebuild needs more than the decoded-element allowance left",);
+}
+
+#[test]
+fn independent_faces_group_walk_order_triangles() {
+    let encoded = encode([0.0; 3], 0.5, &[triangle_seed(0.0, 0, 1), triangle_seed(5.0, 0, 0)]);
+    let rebuilt = rebuild(&encoded.arrays(usize::MAX)).unwrap();
+    let mesh = super::super::by_face(rebuilt, &encoded.face_of, encoded.faces(), &[]);
+
+    assert_eq!(mesh.faces, [0..1, 1..2]);
+    assert_eq!(mesh.triangles, [[3, 4, 5], [0, 1, 2]]);
+    let expected = [[0.0, 0.0, 0.0], [2.0, 0.0, 0.0], [0.0, 2.0, 0.0], [5.0, 0.0, 0.0], [7.0, 0.0, 0.0], [5.0, 2.0, 0.0]];
+    assert_positions(&mesh.positions, &expected);
+}
