@@ -459,7 +459,13 @@ impl Layouter<'_> {
                     if broke {
                         self.break_frames(0.0, true)?;
                     }
-                    if (self.make_room(h, led.map_or(0.0, |_| lead_h))? || broke)
+                    // After that break the leader goes first only where it and the row both
+                    // fit; a row too tall for both starts the page alone.
+                    let lead_fits = {
+                        let (rect, y, _) = self.cursor();
+                        y + lead_h + h <= rect.bottom() + 0.01
+                    };
+                    if (self.make_room(h, led.map_or(0.0, |_| lead_h))? || broke && lead_fits)
                         && let Some((li, l)) = led
                     {
                         let (_, y, _) = self.cursor();

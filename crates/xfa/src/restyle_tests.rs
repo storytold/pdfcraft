@@ -1414,3 +1414,28 @@ fn tab_order_counts_an_occurrence_changed_inside_one_instance() {
     let names: Vec<&str> = order.iter().map(|s| s.rsplit('.').next().unwrap_or("")).collect();
     assert_eq!(names, ["left[0]", "right[0]"].repeat(4), "{order:?}");
 }
+
+/// A table row that breaks to a new page by its own `breakBefore` starts it after the overflow
+/// leader when both fit there, and alone when the row is too tall for both.
+#[test]
+fn a_row_breaking_by_its_own_change_leaves_out_a_leader_that_doesnt_fit() {
+    let tpl = |row_h: &str| {
+        format!(
+            r##"<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="p"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <subform name="grid" layout="table" columnWidths="2in"><overflow leader="head"/>
+  <subform name="head" layout="row"><draw name="title" h="0.3in"><value><text>Head</text></value></draw></subform>
+  <subform name="row" layout="row"><field name="cell" h="1in"><ui><textEdit/></ui></field></subform>
+  <subform name="big" layout="row"><occur min="1" max="2"/><field name="cell" h="{row_h}"><ui><textEdit/></ui></field></subform></subform>
+</subform></template>"##
+        )
+    };
+    let heads = |row_h: &str| {
+        let t = crate::parse(&tpl(row_h)).unwrap().0;
+        let form = laid_out(&t, &overrides("form[0].grid[0].big[0]", &[("breakBefore#0", Some("targetType"), "pageArea")]));
+        form.pages.iter().map(|p| p.items.iter().filter(|i| matches!(i, Item::Text(s) if s.text == "Head")).count()).collect::<Vec<_>>()
+    };
+    assert_eq!(heads("1in"), [1, 1], "room for both: the leader starts the new page");
+    assert_eq!(heads("9.9in"), [1, 0], "no room for both: the row starts it alone");
+}
