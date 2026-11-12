@@ -566,6 +566,43 @@ fn the_calculation_question_waits_for_a_box_that_cant_be_applied() {
     assert!(asked(&h).is_empty());
 }
 
+/// A document waiting for a box on its page holds back its own question only: another
+/// document's question is asked meanwhile and can be answered, and the first document's is
+/// asked again once its box is cancelled.
+#[test]
+fn a_question_waiting_for_one_documents_box_doesnt_hold_back_anothers() {
+    let mut h = open(recommended_calculation());
+    type_value(&mut h, "k2", "5");
+    h.state_mut().views[0].content.draft = Some(unappliable_box());
+    h.run_steps(1);
+    h.get_by_label("Use calculated value").click();
+    h.run_steps(3);
+    assert!(h.query_by_label("Replace the calculated value?").is_none(), "waiting for the box");
+    // A second document, in front, types over its calculation.
+    h.state_mut().open_bytes("other.pdf", None, recommended_calculation()).unwrap();
+    h.run_steps(4);
+    let other = h.state().views[1].id;
+    let name = field_name(&h, "k2");
+    h.state_mut().apply_edit(pdfcraft_engine::Edit::SetFieldValue { name: name.clone(), value: pdfcraft_engine::FieldValue::Text("5".into()) });
+    h.run_steps(3);
+    assert_eq!(asked(&h), ["k2", "k2"]);
+    let value_in =
+        |h: &Harness<'static, PdfCraftApp>, id| h.state().session.get(id).unwrap().form.iter().find(|f| f.name == name).unwrap().value.join("");
+    assert_eq!(value_in(&h, other), "5");
+    h.get_by_label("Replace the calculated value?");
+    h.get_by_label("Use calculated value").click();
+    h.run_steps(3);
+    assert_eq!(value_in(&h, other), "10", "the other document's question was asked and answered");
+    assert_eq!((value(&h, "k2"), asked(&h)), ("5".to_string(), vec!["k2".to_string()]), "the first one's still waits");
+    assert!(h.query_by_label("Replace the calculated value?").is_none());
+    h.state_mut().views[0].content.draft = None;
+    h.run_steps(3);
+    h.get_by_label("Use calculated value").click();
+    h.run_steps(3);
+    assert_eq!(value(&h, "k2"), "10");
+    assert!(asked(&h).is_empty());
+}
+
 /// A question about a value no longer kept over its calculation (a reset took it back while
 /// the question waited, or before it was answered) needs no answer: it isn't asked again, and
 /// answering it changes nothing and reports nothing.

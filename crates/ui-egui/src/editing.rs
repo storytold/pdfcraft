@@ -341,17 +341,19 @@ impl PdfCraftApp {
         false
     }
 
-    /// The user's answer to the first of [`Self::pending_calc_overrides`]: keep the value typed
+    /// The user's answer to the question shown ([`Self::calc_override_asked`]): keep the value typed
     /// into that calculated field, or go back to its calculated value
     /// ([`Edit::UseCalculatedValue`]), in the document it was typed in, through the tab showing
     /// it (the active one when it does; another is brought to the front). Going back changes
     /// that field only: the other values the same edit set, and edits made since, stay. The
     /// next field's question, if any, follows. A value no longer kept over the calculation (a
     /// reset or an undo took it back meanwhile) needs nothing. When a box open on the page can't
-    /// be applied, nothing changes and the question waits ([`Self::calc_override_waits`]): it is
-    /// asked again once the box is finished or cancelled.
+    /// be applied, nothing changes and the document's questions wait
+    /// ([`Self::calc_override_waiting`]): they are asked again once the box is finished or
+    /// cancelled, and other documents' questions are asked meanwhile.
     pub fn resolve_calc_override(&mut self, keep: bool) {
-        let Some((id, field, message)) = self.pending_calc_overrides.pop_front() else { return };
+        let Some(at) = self.calc_override_asked() else { return };
+        let Some((id, field, message)) = self.pending_calc_overrides.remove(at) else { return };
         if keep || !self.session.calculation_overridden(id, &field) {
             return;
         }
@@ -363,8 +365,8 @@ impl PdfCraftApp {
         // active one), after a box open on its page is applied, as for any edit.
         self.active = Some(i);
         if !self.close_text_editors(i, id) {
-            self.pending_calc_overrides.push_front((id, field, message));
-            self.calc_override_waits = true;
+            self.pending_calc_overrides.insert(at, (id, field, message));
+            self.calc_override_waiting.insert(id);
             self.notify(
                 tl!("The text open on the page couldn't be applied, so your value stays for now. Finish or cancel that text to answer the question again.")
                     .to_string(),

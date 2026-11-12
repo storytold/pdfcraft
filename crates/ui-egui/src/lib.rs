@@ -859,10 +859,11 @@ pub struct PdfCraftApp {
     /// its value or go back to its calculated value. For each: the document, the field's name and
     /// what the form says. One edit can type over several (a batch of values).
     pub pending_calc_overrides: std::collections::VecDeque<(DocId, String, String)>,
-    /// The first of [`Self::pending_calc_overrides`] was answered "Use calculated value" while a
-    /// box open on its document's page couldn't be applied: the question waits, not shown, until
-    /// that box is finished or cancelled, and is asked again then.
-    pub calc_override_waits: bool,
+    /// Documents whose questions in [`Self::pending_calc_overrides`] wait, not shown: one was
+    /// answered "Use calculated value" while a box open on the document's page couldn't be
+    /// applied, so they are asked again once that box is finished or cancelled. Other
+    /// documents' questions are asked meanwhile.
+    pub calc_override_waiting: std::collections::HashSet<DocId>,
     /// A document just opened asks for its window to fit its first page or to be centred
     /// (`FitWindow`, `CenterWindow`): done once the page is laid out.
     pub pending_window: Option<viewer_prefs::PendingWindow>,

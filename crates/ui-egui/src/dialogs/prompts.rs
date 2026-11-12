@@ -252,30 +252,34 @@ pub(super) fn full_screen_prompt(app: &mut PdfCraftApp, ctx: &egui::Context) {
 /// (`<calculate override="warning">`, XFA 3.3 p. 642): keep the value, which the calculations
 /// then leave alone, or go back to the field's calculated value. Going back is the default,
 /// and Escape or clicking outside chooses it. One field at a time: an edit that typed over
-/// several asks about each in turn.
+/// several asks about each in turn. A document waiting for a box on its page holds back its own
+/// questions only.
 pub(super) fn calc_override_prompt(app: &mut PdfCraftApp, ctx: &egui::Context) {
     // Questions for documents closed since are dropped.
-    while app.pending_calc_overrides.front().is_some_and(|(id, _, _)| app.session.get(*id).is_none()) {
-        app.pending_calc_overrides.pop_front();
-        app.calc_override_waits = false;
-    }
-    let Some((id, field, message)) = app.pending_calc_overrides.front().cloned() else {
-        app.calc_override_waits = false;
-        return;
-    };
-    // Waiting for the box open on its document's page: asked again once it is finished or
+    let session = &app.session;
+    app.pending_calc_overrides.retain(|(id, _, _)| session.get(*id).is_some());
+    let pending = &app.pending_calc_overrides;
+    app.calc_override_waiting.retain(|id| pending.iter().any(|(d, _, _)| d == id));
+    // A document waiting for the box open on its page asks again once it is finished or
     // cancelled, unless the value is no longer kept over the calculation by then (a reset or an
     // undo took it back).
-    if app.calc_override_waits {
-        if app.views.iter().any(|v| v.id == id && (v.line_editor.is_some() || v.content.draft.is_some())) {
-            return;
-        }
-        app.calc_override_waits = false;
-        if !app.session.calculation_overridden(id, &field) {
-            app.pending_calc_overrides.pop_front();
-            return;
+    let views = &app.views;
+    let done: Vec<pdfcraft_engine::DocId> = app
+        .calc_override_waiting
+        .iter()
+        .copied()
+        .filter(|id| !views.iter().any(|v| v.id == *id && (v.line_editor.is_some() || v.content.draft.is_some())))
+        .collect();
+    for id in done {
+        app.calc_override_waiting.remove(&id);
+        if let Some(at) = app.pending_calc_overrides.iter().position(|(d, _, _)| *d == id)
+            && let Some((_, field, _)) = app.pending_calc_overrides.get(at)
+            && !app.session.calculation_overridden(id, field)
+        {
+            app.pending_calc_overrides.remove(at);
         }
     }
+    let Some((_, _, message)) = app.calc_override_asked().and_then(|at| app.pending_calc_overrides.get(at)).cloned() else { return };
     let t = Tokens::get(ctx);
     let mut choice = None;
     let modal = widgets::show_modal(ctx, "calc_override_prompt", |ui| {
