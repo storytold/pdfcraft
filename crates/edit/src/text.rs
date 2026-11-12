@@ -10,7 +10,7 @@
 //! otherwise it is set in Helvetica (WinAnsi), and the result says the font was substituted.
 //! Reflowing a paragraph to a new width is not done here (see `edit.text-reflow`).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use pdfcraft_content::{Matrix, Op, Pieces, parse, serialize_ops};
@@ -39,25 +39,29 @@ mod rewrite;
 #[cfg(test)]
 use blocks::wrap;
 pub use blocks::{
-    BlockKey, BlockStyle, RangeStyle, ReadingBlocks, TextBlock, block_overlapping, clear_block, reading_blocks, reading_blocks_checked,
+    BlockKey, BlockStyle, RangeStyle, ReadingBlocks, RunSources, TextBlock, block_overlapping, clear_block, reading_blocks, reading_blocks_checked,
     replace_block, text_blocks,
 };
 use blocks::{kept_words, paragraph_separator, row_break};
 pub use editor::{TextEditLayout, TextEditorFont, register_text_font, text_edit_layout, text_editor_fonts};
 use editor::{builtin_thai_choice, layout_draft};
-#[cfg(test)]
-pub(crate) use fallback::SOURCE_SPACE_CALLS;
 use fallback::{
     MAX_TYPE3_GLYPHS, Type3Glyph, fallback_face, needs_type3, no_fallback_font, no_glyph_for, same_base_font, same_font, source_encodes,
     source_family, source_program, source_show, source_space, source_width, type3_faces, type3_glyph, write_type3_glyphs,
 };
 #[cfg(test)]
+pub(crate) use fallback::{SOURCE_SPACE_CALLS, take_source_character_measurements};
+#[cfg(test)]
 use fallback::{add_type3_font, is_type3_fallback};
 pub(crate) use fallback::{glyph_path, type3_font_dict, unique_font_name};
+#[cfg(test)]
+pub(crate) use interp::METRICS_BUILT;
 use interp::{Origin, Paint, union};
+#[cfg(test)]
+pub(crate) use lines::dropped_advances_within;
 pub(crate) use lines::{
-    ContentStream, FormBudget, Read, content_streams, content_streams_within, dict_in_place, drawn_before_damage, first_op_after_damage, form_call,
-    joined, resource_dict, rewritten_contents, splice,
+    ContentStream, FormBudget, Read, content_streams, content_streams_within, dict_in_place, drawn_before_damage, dropped_advances,
+    dropped_side_effects, first_op_after_damage, form_call, joined, reopen_text_object, resource_dict, rewritten_contents, splice,
 };
 pub use lines::{MAX_FORM_DEPTH, MAX_FORM_VISITS, glyph_text_lines, text_lines};
 use lines::{page_dict, word_lines};
