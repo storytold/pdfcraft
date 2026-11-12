@@ -45,6 +45,12 @@ impl PrinterProfile {
     /// regular file (links followed) is refused before it is opened: opening a FIFO or a device
     /// can wait forever.
     pub fn read(path: &Path) -> Result<PrinterProfile, String> {
+        Self::read_checked(path, || {})
+    }
+
+    /// [`PrinterProfile::read`], running `before_open` between the path check and the open:
+    /// where a test swaps the file.
+    fn read_checked(path: &Path, before_open: impl FnOnce()) -> Result<PrinterProfile, String> {
         let at = |e: String| format!("{}: {e}", path.display());
         let meta = std::fs::metadata(path).map_err(|e| at(e.to_string()))?;
         if !meta.is_file() {
@@ -62,6 +68,7 @@ impl PrinterProfile {
             use std::os::unix::fs::OpenOptionsExt as _;
             options.custom_flags(if cfg!(target_os = "linux") { 0o4000 } else { 0x4 });
         }
+        before_open();
         let file = options.open(path).map_err(|e| at(e.to_string()))?;
         let meta = file.metadata().map_err(|e| at(e.to_string()))?;
         if !meta.is_file() {
@@ -274,6 +281,37 @@ mod tests {
         let (listed, refused) = outcome.expect("reading the FIFO blocked");
         assert_eq!(listed, 0, "the listing skipped the FIFO");
         assert!(refused.is_some_and(|e| e.contains("not a regular file")), "the FIFO was refused before it was opened");
+    }
+
+    /// A FIFO swapped in between the path check and the open is refused, without the open waiting
+    /// for a writer: the open is nonblocking and the opened handle is checked again.
+    #[cfg(unix)]
+    #[test]
+    fn a_fifo_swapped_in_after_the_check_is_refused_without_blocking() {
+        let dir = std::env::temp_dir().join(format!("pdfcraft-print-swap-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("printer.icc");
+        std::fs::write(&path, b"a regular file at the check").unwrap();
+        let probe = dir.join("probe");
+        if !std::process::Command::new("mkfifo").arg(&probe).status().is_ok_and(|s| s.success()) {
+            let _ = std::fs::remove_dir_all(&dir);
+            eprintln!("mkfifo is unavailable; skipped");
+            return;
+        }
+        // On a thread, so that an open which blocks fails the test instead of hanging it.
+        let (tx, rx) = std::sync::mpsc::channel();
+        let swap = path.clone();
+        std::thread::spawn(move || {
+            let read = PrinterProfile::read_checked(&swap, || {
+                std::fs::remove_file(&swap).unwrap();
+                assert!(std::process::Command::new("mkfifo").arg(&swap).status().unwrap().success());
+            });
+            let _ = tx.send(read.err());
+        });
+        let outcome = rx.recv_timeout(std::time::Duration::from_secs(10));
+        let _ = std::fs::remove_dir_all(&dir);
+        let refused = outcome.expect("opening the swapped-in FIFO blocked");
+        assert!(refused.as_deref().is_some_and(|e| e.contains("not a regular file")), "{refused:?}");
     }
 
     /// A grey printer profile whose darkest black is a light charcoal (8% luminance, L* 34):
