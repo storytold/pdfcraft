@@ -483,6 +483,15 @@ fn a_pdfdoc_password_written_as_utf8_bytes_opens() {
         }
         let pdfdoc = legacy_dict(v, r, bits, b"p\xE4ssw\xF6rt", b"owner", 16);
         assert_eq!(SecurityHandler::open(pdfdoc, ID, Some("pässwört")).unwrap().auth(), Auth::User, "R{r}");
+        // One typed password, the user password in PDFDocEncoding and the owner password in
+        // UTF-8: it opens as the owner, and it unlocks a session opened without a password.
+        let both = legacy_dict(v, r, bits, b"p\xE4ssw\xF6rt", "pässwört".as_bytes(), 16);
+        let owner = SecurityHandler::open(both.clone(), ID, Some("pässwört")).unwrap();
+        assert_eq!(owner.auth(), Auth::Owner, "R{r}");
+        assert_eq!(owner.recovered_user_password().as_deref().map(Vec::as_slice), Some(&b"p\xE4ssw\xF6rt"[..]), "R{r}");
+        let empty_user = legacy_dict(v, r, bits, b"", "pässwört".as_bytes(), 16);
+        let user = SecurityHandler::open(empty_user, ID, None).unwrap();
+        assert_eq!(user.authenticate_owner(ID, "pässwört").unwrap().auth(), Auth::Owner, "R{r}");
     }
     assert_eq!(legacy_candidates("pässwört"), [Zeroizing::new(b"p\xE4ssw\xF6rt".to_vec()), Zeroizing::new("pässwört".as_bytes().to_vec())]);
     assert_eq!(legacy_candidates("plain"), [Zeroizing::new(b"plain".to_vec())]);

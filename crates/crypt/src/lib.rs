@@ -213,19 +213,16 @@ impl SecurityHandler {
         let mut recovered_user = None;
         let (key, auth) = match dict.r {
             2..=4 => {
-                let mut found = None;
-                for legacy in legacy_candidates(pw) {
-                    if let Some((k, user)) = owner_key_r4(&dict, id0, &legacy) {
-                        recovered_user = Some(user);
-                        found = Some((k, Auth::Owner));
-                    } else if let Some(k) = user_key_r4(&dict, id0, &legacy) {
-                        found = Some((k, Auth::User));
-                    }
-                    if found.is_some() {
-                        break;
-                    }
+                // Every spelling as the owner password first: one typed password can be the user
+                // password in one spelling and the owner password in another.
+                let candidates = legacy_candidates(pw);
+                if let Some((k, user)) = candidates.iter().find_map(|legacy| owner_key_r4(&dict, id0, legacy)) {
+                    recovered_user = Some(user);
+                    (k, Auth::Owner)
+                } else {
+                    let user = candidates.iter().find_map(|legacy| user_key_r4(&dict, id0, legacy));
+                    (user.ok_or(CryptError::WrongPassword)?, Auth::User)
                 }
-                found.ok_or(CryptError::WrongPassword)?
             }
             5 | 6 => {
                 let pw = sasl_password(pw);
