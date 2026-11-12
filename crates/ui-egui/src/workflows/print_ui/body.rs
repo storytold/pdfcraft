@@ -459,6 +459,8 @@ pub(crate) fn body(
                         let overlap_label = ui.label(tl!("Overlap:"));
                         ui.add(egui::DragValue::new(&mut d.overlap).range(0.0..=144.0).suffix(" pt")).labelled_by(overlap_label.id);
                         ui.add(widgets::checkbox(&mut d.cut_marks, tl!("Cut marks")));
+                        ui.add(widgets::checkbox(&mut d.poster_labels, tl!("Tile labels")))
+                            .on_hover_text(tl!("Prints each sheet's page, row and column above it, for putting the poster together."));
                     });
                 }
                 Handling::Multiple => {
