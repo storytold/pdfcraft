@@ -234,6 +234,14 @@ several `/NM`, per-line quads, the caret (`5bad54c40`, §4) — the conflict-res
   `conflict` flag and the journal tail as they were. A kill between the base
   write and the `CURRENT` rename is covered at the `Store` level only (§5 p.1,
   §6.1); the real-process SIGKILL test covers the journal→base window.
+- This pass is docs only: the web path's browser run is recorded in §4 ("The
+  web path in a browser: two iframes, one room", 2026-11-12). It built this
+  branch's `apps/pdfcraft-web` with trunk on the build host, ran a dev room and
+  a cabinet-like page on loopback, and drove two iframes over CDP: both joined,
+  the owner highlighted page 1, the editor noted page 2, each side saw the
+  other's annotation, and `commit` → `committed` closed on the app's status. No
+  code changed; §1's trunk sentence and §6.3's "not exercised" line follow from
+  it. Nothing was pushed.
 - Audience: the next session (human or agent). Everything here was verified in
   the session that wrote it; anything not verified is marked as such.
 - Design: `docs/collab/RFC.md` (protocol, ADRs, trade-offs); operation of the
@@ -266,7 +274,10 @@ Both platforms run the same protocol: `collab-session` compiles on wasm32 with a
 `web-sys` `WebSocket` transport, and `ui-egui --features collab` compiles for
 wasm32 (§4, §6.3). `collab-ws` stays native-only (it is the server's transport);
 `collab-client`, `collab-client-pdf`, `collab-annot` and `collab-outline` are wasm-safe. The web
-build enables the feature with `trunk build --release --features collab`.
+build enables the feature with `trunk build --release`: the page turns `collab`
+on for its own asset through `data-cargo-features="collab"` in `index.html`,
+because a `--features` flag on the trunk command line reaches the OCR worker
+too and that crate has no such feature (§4, D4 item 1).
 
 ## 2. Decisions that are easy to undo wrongly
 
@@ -583,6 +594,119 @@ The app window "Collaboration" shows role, version/epoch, participants, errors,
 commit result, and a commit button for owner/editor.
 
 ## 4. Tests and verification
+
+### The web path in a browser: two iframes, one room (2026-11-12, local; not pushed)
+
+§6.3 left one line open: "a browser run against the cabinet's page (two
+iframes, `session` in, edits, `commit` out, `committed` back) — the code is
+compile-checked and driver-tested, not exercised in a browser here". The
+cabinet's acceptance run of 2026-11-11 did the chain against the real page
+(§4, "The browser bridge in the cabinet: D4 closed"); this pass repeats it
+locally, on the build host, from this branch's own bundle and a dev room, so it
+can be repeated without the cabinet. No product code changed: this entry, the
+§6.3 paragraph and one sentence in §1 are the whole pass.
+
+**Environment.** The build host `agents` (20 cores, 125 GB RAM, Ubuntu 24.04,
+rustc 1.99.1); trunk 0.22.1; the wasm bundle built from this branch's tree;
+headless Chromium 141.0.7390.37 (the Playwright headless shell) with
+`--use-angle=swiftshader --enable-unsafe-swiftshader`, WebGL 2 through
+SwiftShader; Node 22 for the driver. The daemon is the branch's
+`cargo build -p pdfcraft-collab-daemon` (binary `pdfcraft-collab-server`) in
+dev mode:
+
+```text
+pdfcraft-collab-server --documents .../documents --data .../data \
+  --jwt-secret-file .../jwt-secret --jwt-audience lzmkm \
+  --listen 127.0.0.1:8791 --health 127.0.0.1:8792 \
+  --origin http://127.0.0.1:9010 --app pdfcraft
+```
+
+One seed, `file-1.pdf`: two pages of plain text (Helvetica 18 pt, four lines
+each), generated for the run and normalised with Ghostscript. Tickets: HS256
+with a 32-byte development secret, `aud lzmkm`, `sub user-alice`/`user-bob`,
+`doc file-1` **and** `fileId file-1`, `app pdfcraft`, `role owner`/`editor`,
+`sid session-1`, two hours.
+
+The page is one origin, `http://127.0.0.1:9010/`, serving the `dist/web` bundle
+under `/app/` and a cabinet-like host page with two iframes,
+`/app/index.html?host=parent&webgl&control&author=alice` and `...=bob`. The
+host page answers `pdfcraft:ready` with `host`, `open` (the PDF's bytes as an
+`ArrayBuffer`) and `session` (its own ticket and role), records
+`session-state`, `presence` and `commit`, and answers `committed`. Input went
+through the Chrome DevTools Protocol; since the app draws on one canvas, the
+driver used the app's own `?control` channel for the pointer and keyboard
+(`ui.click`, `ui.drag`, `ui.type`, `ui.key`) and for state (`ui.state`,
+`ui.inspect`), and CDP for navigation, `Runtime.evaluate` and screenshots.
+
+The bundle: `cd apps/pdfcraft-web && trunk build --release` produced
+`dist/web` with `pdfcraft-web-fcbf58f0e625b9b3_bg.wasm` (48,221,940 bytes) and
+`pdfcraft-web-ea55eafed102e968.js`; the page carries `collab` through
+`index.html`'s `data-cargo-features="collab"`. Giving `--features collab` to
+the trunk command line is not the way (§4, D4 item 1: trunk applies it to every
+rust asset and the OCR worker has no such feature); §1's sentence that named
+that command is corrected to `trunk build --release` by this pass.
+
+**Result.**
+
+| Step | What was observed |
+|---|---|
+| `pdfcraft:ready` | both iframes: `version:"1"`, `appVersion:"0.21.0"`, `file:false`; the host answered each with `host`, `open` and `session` |
+| join | `Connected as user-alice · owner` and `Connected as user-bob · editor`; 21 `session-state`/`presence` frames in the window; each side's participant list showed the other (`user-bob:editor`, `user-alice:owner`) |
+| owner's edit, page 1 | `comment.highlight`, then a drag across the text line — the room accepted `version 1`, `actor user-alice`, `class merge`, `kind primitive`, `annotation.add` of a `text_markup` `highlight` (two quads, `x 60…478`, `y 732…710`), style yellow, `base_version 0` |
+| editor's edit, page 2 | `comment.note`, a click on page 2, the composer, the text "Browser run: editor sticky note on page two", Ctrl+Enter — `version 2`, `actor user-bob`, `annotation.add` of a `note` at `[183.6, 396]`, page index 1, contents in the operation; `base_version 1` |
+| presence | the app's Collaboration window read `user-bob · editor · page 2` on the owner's side and `user-alice · owner · page 1` on the editor's; both statuses stayed `Connected as …` through the edits |
+| the other side's annotation | the editor's Comments panel listed the owner's highlight (`user-alice`, `Highlight`, `Page 1`); the owner panned to page 2 and selected the editor's note — `ui.state` gave `selected_comment {page:2, index:1}` — and the screenshot shows both annotations in both panes and both panels |
+| commit | the owner's "Commit to the cabinet": `pdfcraft:commit {sessionId:"session-1", bytes:null}` (no bytes: the cabinet assembles the file); the host answered `pdfcraft:committed {version:2, etag:"sha256:f5d3b1b1…"}`; the app's status became `Committed version 2` |
+| rejects | none: two operations, both accepted (`/health` `ok:true`, the room's journal two records); the console had four warnings, all Chrome's "`integrity` is ignored for this preload" notice, and no error |
+
+**What the run found (harness-side; no product change was made).**
+
+1. **A text-markup gesture only selects text on the pane's current page.** With
+   one pane showing page 2 as current, drags and double-clicks on page 1 at
+   every offset between 2 % and 50 % of its rect started no selection and
+   `edit.copy` stayed disabled, while the same gestures on page 2 selected at
+   once; the run makes each edit on the page its pane has as current. A person
+   scrolling to the page does this without noticing.
+2. **With the left "All tools" panel open, Fit Width is a strip and the same
+   gestures miss even on the current page.** There the page measured 100 × 129
+   points and no line offset produced a selection; with the panel closed it was
+   281 × 364 points with the Comments panel open on the right and 611 × 790
+   with both side panels closed, and the first attempt at the PDF's second line
+   produced the highlight. The run closes that panel in both panes first
+   (`Close panel` in the accessibility tree).
+3. **The web shell joins the document from the token's `fileId` claim, not
+   `doc`.** `doc_key_from_token` (`crates/ui-egui/src/collab.rs`) reads
+   `fileId` and falls back to the host's `sessionId`; a ticket carrying only
+   `doc:"file-1"` therefore joined the room `session-1` and the server refused
+   it ("the session token is for another file"). The cabinet's ticket carries
+   both spellings (INTEGRATION.md §3.2), so the cabinet path is unaffected; a
+   hand-made development ticket must carry `fileId`.
+4. **The two iframes joined as different clients** (`client-<nanoseconds>`):
+   neither replaced the other and both edit streams reached the room — the
+   WordCraft `web-1` collision (§5.1 there) did not repeat.
+5. **In host mode the commit is the cabinet's, not the room's.** The app posts
+   `commit` with no bytes and waits for `committed`; nothing on the page can
+   send the room's own `Commit` (that is the desktop path). The test page
+   answered with the room's newest accepted version and the SHA-256 of the
+   room's committed base, and it stored no file: `CURRENT` stayed at 0 and the
+   journal at two records. The numbers in the row above are therefore what the
+   page *reported*, not a stored cabinet version.
+
+**What this does not establish.** The real cabinet's page, origin policy and
+`wss://`; its own commit (fetch or assemble the file, store it, advance
+`CURRENT`, send the real etag); two real browser profiles or machines; a person
+at the controls. The cabinet's run of 2026-11-11 covers the first two on
+production; this one covers repeatability on loopback.
+
+**The harness.** Not in the repository — it lives on the build host under
+`/home/markin/craft-runs/pdfcraft-web/`: `run.sh` (reset the room, start the
+daemon and the origin, fresh browser profile, the run), `server.mjs` (static
+bundle, tickets, `/room-state.json`), `cabinet.html` + `host.js` (the host
+page), `run.mjs` + `cdp.mjs` (the CDP driver, which writes `out/results.json`
+and the screenshots), `make-pdf.py` + `document.pdf`, `documents/file-1.pdf`.
+`run.sh` ends with a nonzero exit on any failed step. It is described here so it
+can be rebuilt, or moved into a test, when the repository wants a browser gate;
+nothing was committed from it.
 
 ### The cabinet's `expectedVersion` is its etag, not a number (`0d3ea2708`)
 
@@ -4241,11 +4365,14 @@ front of both (commit `81a92f32f`, §4):
 - The web feature is off by default:
   `cd apps/pdfcraft-web && trunk build --release --features collab`.
 
-Tests and gaps: §4. What is still open: a browser run against the cabinet's page
-(two iframes, `session` in, edits, `commit` out, `committed` back) — the code is
-compile-checked and driver-tested, not exercised in a browser here; the cabinet's
-own commit path is the one WordCraft documented, and the same page-side wiring
-has to be repeated for PdfCraft's origin/CSP.
+Tests and gaps: §4. The browser run this section left open is now on record
+twice: against the cabinet's real page (§4, "The browser bridge in the
+cabinet: D4 closed", 2026-11-11) and locally and reproducibly on the build
+host (§4, "The web path in a browser: two iframes, one room", 2026-11-12 —
+this branch's trunk bundle, a dev room, CDP). What remains for a person is the
+cabinet's own commit (store the file, advance the version, send the real etag),
+its origin/CSP with `wss://`, and two real profiles; the page-side wiring
+WordCraft documented is the one the local run exercises.
 
 ### 6.4 Cabinet contract and 409 — done in this branch
 
