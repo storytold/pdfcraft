@@ -335,10 +335,16 @@ impl<'a> Lexer<'a> {
         Ok(first)
     }
 
+    /// A number token. One with no finite value ([`has_no_finite_value`]: `+inf`, `-nan`, `1e400`,
+    /// `1` followed by 400 zeros) is null in its slot: absent as a dictionary value, not a number
+    /// in an array or among content operands. It is never clamped, and never an infinite or NaN
+    /// `Real`. The renderer's parser reads it the same way (hayro-syntax patch 36), so the model
+    /// and the renderer agree on page size and boxes (#6477).
     fn number(&mut self) -> Result<Object, CosError> {
         let start = self.pos;
         let tok = self.token();
         let s = std::str::from_utf8(tok).map_err(|_| self.err("bad number"))?;
+        let finite = |v: f64| if v.is_finite() { Object::Real(v) } else { Object::Null };
         if s.contains('.') {
             // Tolerate forms like "--5", "5-" or "1.2.3" by parsing the longest valid prefix.
             // Only a doubled sign needs a cleaned copy: a page of InDesign `/PieceInfo` is
@@ -347,16 +353,19 @@ impl<'a> Lexer<'a> {
             let t = s.trim_start_matches('+');
             let cleaned = if t.as_bytes().windows(2).any(|w| w == b"--") { std::borrow::Cow::Owned(t.replacen("--", "-", 1)) } else { t.into() };
             let v = cleaned.get(..real_prefix_len(cleaned.as_bytes())).and_then(|p| parse_counted::<f64>(p).ok());
-            return Ok(Object::Real(v.unwrap_or(0.0)));
+            return Ok(finite(v.unwrap_or(0.0)));
         }
         // Tolerate a doubled sign ("--280") like the real branch does.
         let t = s.trim_start_matches('+');
         let cleaned = t.strip_prefix('-').filter(|r| r.starts_with('-')).unwrap_or(t);
         match cleaned.parse::<i64>() {
             Ok(v) => Ok(Object::Int(v)),
+            // Checked before the conversion below, which reads only some sign spellings of a word
+            // form (`-inf` but not `-+inf`), where the renderer reads them all alike.
+            Err(_) if has_no_finite_value(s.as_bytes()) => Ok(Object::Null),
             Err(_) => {
                 // Out-of-range integers are treated as reals (§7.3.3 allows implementation limits).
-                cleaned.parse::<f64>().map(Object::Real).map_err(|_| CosError::Syntax { offset: start, detail: format!("bad number {s:?}") })
+                cleaned.parse::<f64>().map(finite).map_err(|_| CosError::Syntax { offset: start, detail: format!("bad number {s:?}") })
             }
         }
     }
@@ -386,6 +395,26 @@ fn real_prefix_len(s: &[u8]) -> usize {
         }
     }
     at
+}
+
+/// Whether `token`, a whole token, is a number with no finite value: a word form (`inf`,
+/// `infinity` or `nan` in any case) or a decimal number past the range of `f64` (`1` followed by
+/// 400 zeros, `1e400`), after any leading signs (#6477). Such a token is null in its slot, never
+/// clamped. hayro-syntax's `has_no_finite_value` (`vendor/hayro-syntax/src/object/number.rs`,
+/// patch 36) is the same rule for the renderer: keep the two definitions identical.
+fn has_no_finite_value(token: &[u8]) -> bool {
+    let mut body = token;
+    while let Some((b'+' | b'-', rest)) = body.split_first() {
+        body = rest;
+    }
+    const WORDS: [&[u8]; 3] = [b"inf", b"infinity", b"nan"];
+    if WORDS.iter().any(|w| body.eq_ignore_ascii_case(w)) {
+        return true;
+    }
+    if body.is_empty() || real_prefix_len(body) != body.len() {
+        return false;
+    }
+    std::str::from_utf8(body).ok().and_then(|s| s.parse::<f64>().ok()).is_some_and(|v| !v.is_finite())
 }
 
 #[cfg(test)]
@@ -651,6 +680,76 @@ mod tests {
         assert_eq!(obj("99999999999999999999"), Object::Real(1e20));
         assert_eq!(obj("12 0 R"), Object::Ref(ObjRef::new(12, 0)));
         assert_eq!(obj("12 0 obj").as_int(), Some(12), "12 followed by 0 obj is not a reference");
+    }
+
+    /// #6477: a number token with no finite value is null in its slot, never an infinite or NaN
+    /// real and never clamped, as the renderer's parser reads it (hayro-syntax patch 36). The
+    /// dictionary or array holding it keeps its other entries. The tokens are the shared list
+    /// every test of the rule uses (`pdfcraft_testkit::non_finite_tokens`).
+    #[test]
+    fn a_number_with_no_finite_value_is_null_in_its_slot() {
+        for t in pdfcraft_testkit::non_finite_tokens() {
+            assert!(has_no_finite_value(t.as_bytes()), "{t}");
+            assert_eq!(obj(&t), Object::Null, "{t}");
+            let mut lx = Lexer::new(t.as_bytes(), 0);
+            lx.object().unwrap_or_else(|e| panic!("{t}: {e}"));
+            assert_eq!(lx.pos, t.len(), "{t}: the whole token was read");
+
+            let Object::Dict(d) = obj(&format!("<< /UserUnit {t} /Rotate 90 >>")) else { panic!("{t}: not a dictionary") };
+            assert!(d.get(b"UserUnit").is_none_or(|v| *v == Object::Null), "{t}: absent at its slot");
+            assert_eq!(d.get(b"Rotate"), Some(&Object::Int(90)), "{t}");
+
+            let Object::Array(a) = obj(&format!("[0 0 {t} 792]")) else { panic!("{t}: not an array") };
+            assert_eq!(a, vec![Object::Int(0), Object::Int(0), Object::Null, Object::Int(792)], "{t}");
+        }
+        // Finite values, however written, keep their value.
+        let finite = format!("1{}", "0".repeat(300));
+        for t in ["1e5", "1e308", "-1.5", finite.as_str()] {
+            assert!(!has_no_finite_value(t.as_bytes()), "{t}");
+            assert!(obj(t).as_f64().is_some_and(f64::is_finite), "{t}");
+        }
+        for t in ["+", "-", ".", "", "infx", "nan5", "1e400x", "1.2.3", "-inf-"] {
+            assert!(!has_no_finite_value(t.as_bytes()), "{t}");
+        }
+    }
+
+    /// #6601 review: tokens the rule above does not take are not null either; what the object
+    /// parser makes of each is pinned here, not only that the rule refuses it. A damaged real
+    /// keeps its longest numeric prefix; a damaged integer or word is a bad number, and an
+    /// array holding one is refused with it (the parser's standing policy, unchanged here).
+    #[test]
+    fn malformed_number_tokens_keep_their_object_parser_outcome() {
+        assert_eq!(obj("1.2.3"), Object::Real(1.2));
+        assert_eq!(obj("[0 1.2.3 7]"), Object::Array(vec![Object::Int(0), Object::Real(1.2), Object::Int(7)]));
+        for t in ["1e400x", "-inf-", "infx"] {
+            assert!(Lexer::new(t.as_bytes(), 0).object().is_err(), "{t}: a bad number, not null");
+            let arr = format!("[0 {t} 7]");
+            assert!(Lexer::new(arr.as_bytes(), 0).object().is_err(), "{arr}");
+        }
+        // `infx` is not a number token at all: it starts with no sign, digit or dot, so it is
+        // an unknown keyword; between dictionary entries that is tolerated garbage, and as a
+        // value it refuses the dictionary.
+        assert!(Lexer::new(b"<< /A infx >>", 0).object().is_err());
+    }
+
+    /// #6601 review, hayro-syntax patch (38): a refused sign run over a dotted body is the real
+    /// branch's case. It collapses the first `--`, finds no real prefix in what is left and reads
+    /// 0.0, consuming the whole token, trailing garbage included, so the container survives. The
+    /// renderer reads these as zero too (`raster::tests::dotted_token_with_a_refused_sign_run_reads_as_zero`).
+    /// Without a dot the same run is a bad number (`---280`, `---1e5`), which the renderer reads
+    /// as null in its slot (patches (37) and (40)).
+    #[test]
+    fn a_dotted_token_with_a_refused_sign_run_reads_as_zero() {
+        for t in ["---1.5abc", "---280.0", "-+5.5", "---1e400.5"] {
+            assert_eq!(obj(t), Object::Real(0.0), "{t}");
+            let mut lx = Lexer::new(t.as_bytes(), 0);
+            lx.object().unwrap_or_else(|e| panic!("{t}: {e}"));
+            assert_eq!(lx.pos, t.len(), "{t}: the whole token was read");
+            assert_eq!(obj(&format!("[{t} 7]")), Object::Array(vec![Object::Real(0.0), Object::Int(7)]), "{t}");
+        }
+        for t in ["---280", "---1e5"] {
+            assert!(Lexer::new(t.as_bytes(), 0).object().is_err(), "{t}: a bad number");
+        }
     }
 
     #[test]

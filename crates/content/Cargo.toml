@@ -13,3 +13,7 @@ pdfcraft-cos = { workspace = true }
 # The renderer's content tokenizer, already in the tree through pdfcraft-cos: inline images end
 # where the renderer ends them.
 hayro-syntax = { workspace = true }
+
+[dev-dependencies]
+# The shared list of number tokens with no finite value (`non_finite_tokens`).
+pdfcraft-testkit = { workspace = true }

@@ -6,6 +6,7 @@ pub use crate::object::dict::Dict;
 pub use crate::object::name::Name;
 use crate::object::name::skip_name_like;
 pub use crate::object::null::Null;
+use crate::object::number::skip_non_finite;
 pub use crate::object::number::Number;
 pub use crate::object::rect::Rect;
 pub use crate::object::r#ref::{MaybeRef, ObjRef};
@@ -175,7 +176,15 @@ impl Skippable for Object<'_> {
                 _ => String::skip(r, is_content_stream),
             },
             b'(' => String::skip(r, is_content_stream),
-            b'.' | b'+' | b'-' | b'0'..=b'9' => Number::skip(r, is_content_stream),
+            // PdfCraft patch (36): a number with no finite value is skipped whole, so the
+            // dictionary or array holding it keeps its other entries (#6477).
+            b'.' | b'+' | b'-' | b'0'..=b'9' => {
+                let start = r.offset();
+                Number::skip(r, is_content_stream).or_else(|| {
+                    r.jump(start);
+                    skip_non_finite(r)
+                })
+            }
             b'[' => Array::skip(r, is_content_stream),
             // See test case operator-in-TJ-array-0: Be lenient and skip content operators in
             // array
@@ -211,7 +220,18 @@ impl<'a> Readable<'a> for Object<'a> {
                 _ => Self::String(String::read(r, ctx)?),
             },
             b'(' => Self::String(String::read(r, ctx)?),
-            b'.' | b'+' | b'-' | b'0'..=b'9' => Self::Number(Number::read(r, ctx)?),
+            // PdfCraft patch (36): a number with no finite value (`1e400`, `+nan`, 400 digits)
+            // is absent at its slot: a typed read (`f32`, `Rect`, a dictionary's `get`) finds
+            // nothing, and an object read finds null, as pdfcraft-cos reads it (#6477). Null
+            // also keeps the array and dictionary iterators, which unwrap what `skip` accepted,
+            // from meeting a token they can't read.
+            b'.' | b'+' | b'-' | b'0'..=b'9' => match Number::read(r, ctx) {
+                Some(n) => Self::Number(n),
+                None => {
+                    skip_non_finite(r)?;
+                    Self::Null(Null)
+                }
+            },
             b'[' => Self::Array(Array::read(r, ctx)?),
             // See the comment in `skip`.
             _ => {

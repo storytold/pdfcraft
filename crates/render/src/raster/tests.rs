@@ -562,6 +562,183 @@ fn function_limits_calculator_work_counts_unselected_branches() {
     assert!(function_limits_calculator_eval(&format!("{{ true {{ {branch} }} {{ {branch} 0 }} ifelse }}")).is_none());
 }
 #[test]
+fn number_with_a_sign_run_reads_as_one_array_element() {
+    // #6601 review: `Number::skip` accepts a token of three signs, 400 nines and a trailing
+    // minus as one number, but `Number::read` stopped after two signs, returned 0 and left
+    // the rest to be read as a second number, shifting every later array element. Since the
+    // sign-run follow-up, such a run is a bad number to both parsers (pdfcraft-cos refuses
+    // it too): it reads as one element still -- null, absent at its slot -- and the array
+    // keeps its shape.
+    use hayro_syntax::object::{Array, FromBytes, MaybeRef, Object};
+    let token = format!("---{}-", "9".repeat(400));
+    let src = format!("[{token} 7]");
+    let a = Array::from_bytes(src.as_bytes()).unwrap();
+    let items: Vec<_> = a.raw_iter().collect();
+    assert_eq!(items.len(), 2, "{items:?}");
+    assert!(matches!(items[0], MaybeRef::NotRef(Object::Null(_))), "{:?}", items[0]);
+    assert!(matches!(items[1], MaybeRef::NotRef(Object::Number(n)) if n.as_f64() == 7.0), "{:?}", items[1]);
+    // A finite sign run too: one element, not 0 followed by the number.
+    let a = Array::from_bytes("[---280 7]".as_bytes()).unwrap();
+    let items: Vec<_> = a.raw_iter().collect();
+    assert_eq!(items.len(), 2, "{items:?}");
+    assert!(matches!(items[0], MaybeRef::NotRef(Object::Null(_))), "{:?}", items[0]);
+    assert!(matches!(items[1], MaybeRef::NotRef(Object::Number(n)) if n.as_f64() == 7.0), "{:?}", items[1]);
+    // A tolerated doubled sign still reads as its value.
+    let a = Array::from_bytes("[--280 7]".as_bytes()).unwrap();
+    let items: Vec<_> = a.raw_iter().collect();
+    assert_eq!(items.len(), 2, "{items:?}");
+    assert!(matches!(items[0], MaybeRef::NotRef(Object::Number(n)) if n.as_f64() == -280.0), "{:?}", items[0]);
+    assert!(matches!(items[1], MaybeRef::NotRef(Object::Number(n)) if n.as_f64() == 7.0), "{:?}", items[1]);
+}
+#[test]
+fn dotted_token_with_a_refused_sign_run_reads_as_zero() {
+    // #6601 review, patch (38): a refused sign run over a dotted body is a zero, not
+    // an absent slot -- the model parser's real branch reads `---1.5abc` as 0.0 and
+    // keeps the array, trailing garbage included, and `---280.0` is the same zero.
+    use hayro_syntax::object::{Array, FromBytes, MaybeRef, Object};
+    for src in ["[---1.5abc 7]", "[---280.0 7]", "[---1e400.5 7]"] {
+        let a = Array::from_bytes(src.as_bytes()).unwrap();
+        let items: Vec<_> = a.raw_iter().collect();
+        assert_eq!(items.len(), 2, "{src}: {items:?}");
+        assert!(matches!(items[0], MaybeRef::NotRef(Object::Number(n)) if n.as_f64() == 0.0), "{src}: {:?}", items[0]);
+        assert!(matches!(items[1], MaybeRef::NotRef(Object::Number(n)) if n.as_f64() == 7.0), "{src}: {:?}", items[1]);
+        // The typed read agrees: a `Rect` reads the same two numbers.
+        assert_eq!(a.iter::<f32>().collect::<Vec<_>>(), vec![0.0, 7.0], "{src}");
+    }
+}
+
+/// #6601 review, hayro-syntax patch (40): `Number::skip` takes a refused sign run with an
+/// exponent and no dot (`---1e5`) as one token, and a bare refused run before white space
+/// (`--- `) too, but an object read refused both, so the array and dictionary iterators, which
+/// unwrap a read of what skip accepted, panicked. Both read as null in their slot now, like
+/// `---280` (patch (37)), and skip and read cover the same extent.
+#[test]
+fn a_refused_sign_run_with_an_exponent_reads_as_null_where_skip_accepts_it() {
+    use hayro_syntax::object::{Array, Dict, FromBytes, MaybeRef, Object};
+    use hayro_syntax::reader::{Reader, ReaderExt};
+    for t in ["---1e5", "---280e5", "---1E-5", "---1e+5", "-+1e5", "----1e5", "---1e", "---", "-+"] {
+        // One token: skip and read stop at the same place, and the read is null.
+        let src = format!("{t} 7");
+        let mut r = Reader::new(src.as_bytes());
+        assert!(r.skip::<Object<'_>>(false).is_some(), "{t}: skipped");
+        let skipped = r.offset();
+        let mut r = Reader::new(src.as_bytes());
+        let o = r.read_without_context::<Object<'_>>();
+        assert!(matches!(o, Some(Object::Null(_))), "{t}: {o:?}");
+        assert_eq!(r.offset(), skipped, "{t}: read and skip cover the same token");
+        assert_eq!(skipped, t.len(), "{t}: the whole token, nothing more");
+
+        // In an array, one element; the iterator reads what skip accepted.
+        let arr = format!("[{t} 7]");
+        let a = Array::from_bytes(arr.as_bytes()).unwrap_or_else(|| panic!("{arr}: readable"));
+        let items: Vec<_> = a.raw_iter().collect();
+        assert_eq!(items.len(), 2, "{arr}: {items:?}");
+        assert!(matches!(items[0], MaybeRef::NotRef(Object::Null(_))), "{arr}: {:?}", items[0]);
+        assert!(matches!(items[1], MaybeRef::NotRef(Object::Number(n)) if n.as_f64() == 7.0), "{arr}: {:?}", items[1]);
+
+        // In a dictionary, absent at its slot, and listing the entries reads it again.
+        let dict = format!("<< /A {t} /B 7 >>");
+        let d = Dict::from_bytes(dict.as_bytes()).unwrap_or_else(|| panic!("{dict}: readable"));
+        assert_eq!(d.get::<f64>(b"A"), None, "{dict}");
+        assert!(matches!(d.get::<Object<'_>>(b"A"), Some(Object::Null(_))), "{dict}");
+        assert_eq!(d.get::<i32>(b"B"), Some(7), "{dict}");
+        assert_eq!(d.entries().count(), 2, "{dict}");
+    }
+    // A trailing regular character still refuses the token on both paths, as before.
+    for t in ["---1e5x", "---1e5e5", "---280x"] {
+        let mut r = Reader::new(t.as_bytes());
+        assert!(r.skip::<Object<'_>>(false).is_none(), "{t}: not one token");
+        let mut r = Reader::new(t.as_bytes());
+        assert!(r.read_without_context::<Object<'_>>().is_none(), "{t}: not one token");
+    }
+}
+
+/// #6477, hayro-syntax patch (36), run from the workspace: the vendored crate's own tests
+/// (`object::number::pdfcraft_non_finite_tests`) don't run in CI. A token with no finite value
+/// (the shared list, `pdfcraft_testkit::non_finite_tokens`) is no number, an object reads it
+/// as null and skips it whole, and the container holding it keeps its other entries.
+#[test]
+fn a_number_with_no_finite_value_is_absent_at_its_slot() {
+    use hayro_syntax::object::{Array, Dict, FromBytes, MaybeRef, Number, Object, Rect};
+    use hayro_syntax::reader::{Reader, ReaderExt};
+    for t in pdfcraft_testkit::non_finite_tokens() {
+        let mut r = Reader::new(t.as_bytes());
+        assert!(r.read_without_context::<Number>().is_none(), "{t}: no number");
+        assert_eq!(r.offset(), 0, "{t}: a failed read leaves the reader where it was");
+        assert!(Reader::new(t.as_bytes()).read_without_context::<f32>().is_none(), "{t}: no f32");
+
+        let mut r = Reader::new(t.as_bytes());
+        let o = r.read_without_context::<Object<'_>>();
+        assert!(matches!(o, Some(Object::Null(_))), "{t}: {o:?}");
+        assert!(r.at_end(), "{t}: the whole token was read");
+        let mut r = Reader::new(t.as_bytes());
+        assert!(r.skip::<Object<'_>>(false).is_some(), "{t}: not skipped");
+        assert!(r.at_end(), "{t}: only part of the token was skipped");
+
+        let src = format!("<< /UserUnit {t} /Rotate 90 >>");
+        let d = Dict::from_bytes(src.as_bytes()).unwrap_or_else(|| panic!("{t}: the dictionary is readable"));
+        assert_eq!(d.get::<f64>(b"UserUnit"), None, "{t}: absent at its slot");
+        assert!(matches!(d.get::<Object<'_>>(b"UserUnit"), Some(Object::Null(_))), "{t}");
+        assert_eq!(d.get::<i32>(b"Rotate"), Some(90), "{t}");
+        // Listing the entries reads each one again; it must not meet a token it can't read.
+        assert_eq!(d.entries().count(), 2, "{t}");
+
+        let src = format!("[0 0 {t} 792]");
+        assert!(Reader::new(src.as_bytes()).read_without_context::<Rect>().is_none(), "{t}");
+        let a = Array::from_bytes(src.as_bytes()).unwrap_or_else(|| panic!("{t}: the array is readable"));
+        let items: Vec<_> = a.raw_iter().collect();
+        assert_eq!(items.len(), 4, "{t}");
+        assert!(matches!(items[2], MaybeRef::NotRef(Object::Null(_))), "{t}: {:?}", items[2]);
+        assert!(matches!(items[3], MaybeRef::NotRef(Object::Number(_))), "{t}");
+    }
+    // Finite values, however written, keep their value.
+    let finite = format!("1{}", "0".repeat(300));
+    for t in ["0", "-1.5", finite.as_str()] {
+        let v = Reader::new(t.as_bytes()).read_without_context::<f64>();
+        assert!(v.is_some_and(f64::is_finite), "{t}: {v:?}");
+    }
+}
+
+/// hayro-syntax patches (37)-(39), run from the workspace: the vendored crate's own
+/// `object::number::tests::sign_runs_follow_the_model_parser` doesn't run in CI. A doubled
+/// sign is tolerated, a longer or mixed run is no number, a refused run over a dotted body is
+/// zero, and skip consumes the whole token either way.
+#[test]
+fn sign_runs_follow_the_model_parser() {
+    use hayro_syntax::object::Number;
+    use hayro_syntax::reader::{Reader, ReaderExt};
+    let skips_whole = |src: &str| {
+        let mut r = Reader::new(src.as_bytes());
+        assert!(r.skip::<Number>(false).is_some(), "{src}: not skipped");
+        assert!(r.at_end(), "{src}: only part of the token was skipped");
+    };
+    for (src, want) in [("--280", -280), ("+-280", -280), ("++280", 280), ("+++280", 280), ("+280", 280), ("-280", -280)] {
+        let mut r = Reader::new(src.as_bytes());
+        assert_eq!(r.read_without_context::<i32>(), Some(want), "{src}");
+        assert!(r.at_end(), "{src}: the whole number was read, leaving nothing for a second one");
+        skips_whole(src);
+    }
+    assert_eq!(Reader::new(b"--280.5").read_without_context::<f64>(), Some(-280.5));
+    for src in ["---280", "----280", "-+-280", "-+280"] {
+        let mut r = Reader::new(src.as_bytes());
+        assert!(r.read_without_context::<Number>().is_none(), "{src}: a run the model refuses is no number");
+        assert_eq!(r.offset(), 0, "{src}");
+        skips_whole(src);
+    }
+    for src in ["---280.0", "---1.5abc", "-+5.5", "---1e400.5"] {
+        let mut r = Reader::new(src.as_bytes());
+        assert_eq!(r.read_without_context::<f64>(), Some(0.0), "{src}");
+        assert!(r.at_end(), "{src}: the whole token was read");
+        skips_whole(src);
+    }
+    // Three signs, 400 nines and a trailing minus: one token, refused whole, not split in two.
+    let huge = format!("---{}-", "9".repeat(400));
+    assert!(Reader::new(huge.as_bytes()).read_without_context::<Number>().is_none());
+    skips_whole(huge.as_str());
+    // A word form after a sign run is one token with no finite value, not 0 plus a stray.
+    assert!(Reader::new(b"---nan").read_without_context::<Number>().is_none());
+}
+#[test]
 fn function_limits_public_construction_work_and_depth() {
     use hayro::hayro_interpret::Function;
     use hayro_syntax::object::{FromBytes, Object};

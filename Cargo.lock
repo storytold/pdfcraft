@@ -4382,6 +4382,7 @@ version = "0.21.1"
 dependencies = [
  "hayro-syntax",
  "pdfcraft-cos",
+ "pdfcraft-testkit",
 ]
 
 [[package]]
