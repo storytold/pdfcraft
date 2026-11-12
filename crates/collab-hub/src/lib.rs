@@ -204,9 +204,17 @@ impl<A: Adapter> Hub<A> {
 
     pub fn disconnect(&mut self, id: ClientId) {
         let Some(client) = self.clients.remove(&id) else { return };
+        // Participants are people, not connections: the app opens a new socket
+        // on a ticket renewal and again after a reconnect, and the room can see
+        // the new `hello` before the old socket's close. The seat, the role and
+        // the lease belong to the actor, so only its last connection leaving
+        // gives them up.
+        let still_here = self.clients.values().any(|other| other.actor == client.actor && other.doc == client.doc);
         if let Some(entry) = self.rooms.get_mut(&client.doc) {
             entry.members.retain(|member| *member != id);
-            entry.room.disconnect(&client.actor);
+            if !still_here {
+                entry.room.disconnect(&client.actor);
+            }
         }
     }
 
@@ -465,6 +473,31 @@ mod tests {
         let outcome = pending.publish();
         assert!(hub.finish(pending, outcome).is_none(), "a successful publication leaves nothing to retry");
         assert!(matches!(hub.receive(editor).as_slice(), [ServerMessage::CommitResult(r)] if r.sha256 == "abc"));
+        Ok(())
+    }
+
+    #[test]
+    fn a_closed_connection_does_not_take_the_seat_of_the_same_actor() -> Result<(), Box<dyn std::error::Error>> {
+        let (mut hub, doc) = hub()?;
+        // The app opens a new socket on a ticket renewal (and again after a
+        // reconnect), so the room can see the new `hello` before it notices the
+        // old socket is gone. Participants are people, not connections: closing
+        // the old one must not take the seat, the lease or the role away.
+        let first = join(&mut hub, &doc, "editor", Role::Editor)?;
+        let second = join(&mut hub, &doc, "editor", Role::Editor)?;
+        hub.disconnect(first);
+        assert_eq!(hub.members(&doc), 1, "the new connection is still a member");
+
+        let add = op("add", ConflictClass::Merge, Target::Page(PageRef { index: 0, epoch: 0 }), 0, 0)?;
+        hub.send(second, ClientMessage::Op(add), 0)?;
+        assert!(
+            matches!(hub.receive(second).as_slice(), [ServerMessage::Applied(_)]),
+            "the actor still has a live connection, so its operations are accepted"
+        );
+
+        // The last connection of the actor leaving does release the seat.
+        hub.disconnect(second);
+        assert_eq!(hub.members(&doc), 0);
         Ok(())
     }
 
