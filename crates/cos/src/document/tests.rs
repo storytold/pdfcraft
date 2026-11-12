@@ -200,6 +200,8 @@ fn the_key_length_comes_from_the_filter_in_use() {
     assert_eq!(v4("", &std("V2", ""), "StdCF", "StdCF"), 128);
     assert_eq!(v4("/Length 40", "/MyCF << /CFM /V2 /Length 6 >>", "MyCF", "MyCF"), 48, "a filter not called StdCF");
     assert_eq!(v4("", "/MyCF << /CFM /V2 /Length 7 >>", "Identity", "MyCF"), 56, "strings only");
+    // A filter that leaves streams as they are decides nothing: the strings' AES filter does.
+    assert_eq!(v4("", &format!("/Clear << /CFM /None /Length 5 >> {}", std("AESV2", "/Length 16")), "Clear", "StdCF"), 128, "a clear /StmF");
     assert_eq!(length("<< /Filter /Standard /V 1 /R 2 /Length 128 >>"), 40);
     assert_eq!(length("<< /Filter /Standard /V 2 /R 3 /Length 56 >>"), 56);
     assert_eq!(length("<< /Filter /Standard /V 2 /R 3 >>"), 40);

@@ -119,8 +119,9 @@ pub(crate) fn encrypt_dict(doc: &Document, d: &Dict) -> EncryptDict {
 }
 
 /// The file key length of a `/V 4` handler, in bits, from the crypt filter strings and streams
-/// use (`/StmF`, else `/StrF`, else `/StdCF`): 128 for `AESV2` and `AESV3`, which take a 128-bit
-/// key at `/V 4` (Table 25; §7.6.4.1); for `V2` (RC4) the filter's `/Length` (in bytes, or bits in
+/// use (`/StmF`, else `/StrF`, whichever encrypts: `/CFM /None` leaves data as it is; else
+/// `/StdCF`): 128 for `AESV2` and `AESV3`, which take a 128-bit key at `/V 4` (Table 25;
+/// §7.6.4.1); for `V2` (RC4) the filter's `/Length` (in bytes, or bits in
 /// some files), else the dictionary's `/Length`, else 128. The dictionary's `/Length` is often a
 /// stale 40 next to an AES filter, so it counts only for RC4 without a length of its own, as MuPDF
 /// and PDFium read it. A length that isn't positive reads as absent. The renderer's
@@ -129,8 +130,10 @@ fn v4_length_bits(doc: &Document, d: &Dict) -> i64 {
     let int = |o: &Object| doc.resolve(o).as_int().filter(|n| *n > 0);
     let cf = d.get(b"CF").map(|c| doc.resolve(c)).and_then(|c| c.as_dict().cloned());
     let filter = |name: &[u8]| cf.as_ref().and_then(|cf| cf.get(name)).and_then(|f| doc.resolve(f).as_dict().cloned());
-    let named =
-        |key: &[u8]| d.get(key).and_then(|n| doc.resolve(n).as_name().map(<[u8]>::to_vec)).filter(|n| n != b"Identity").and_then(|n| filter(&n));
+    let encrypts = |f: &Dict| matches!(f.get(b"CFM").map(|m| doc.resolve(m)).as_deref().and_then(Object::as_name), Some(b"V2" | b"AESV2" | b"AESV3"));
+    let named = |key: &[u8]| {
+        d.get(key).and_then(|n| doc.resolve(n).as_name().map(<[u8]>::to_vec)).filter(|n| n != b"Identity").and_then(|n| filter(&n)).filter(encrypts)
+    };
     let Some(f) = named(b"StmF").or_else(|| named(b"StrF")).or_else(|| filter(b"StdCF")) else {
         return d.get(b"Length").and_then(int).unwrap_or(128);
     };

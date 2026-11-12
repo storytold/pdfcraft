@@ -10514,7 +10514,7 @@ fn aes256_files_whose_passwords_saslprep_changes_open_as_typed() {
 /// `/Encrypt` dictionary is written as text that `edit` may change first: what doesn't decide
 /// the key (a stale `/Length`, a longer `/U`, another `/V`) or what the key was made without
 /// (`/EncryptMetadata false` over a key made with metadata encrypted). The content stream is
-/// encrypted unless `edit` names `/StmF /Identity`.
+/// encrypted unless `edit` points `/StmF` at `/Identity` or a `/Clear` filter.
 fn encrypted_page(params: &pdfcraft_cos::NewEncryption, edit: impl Fn(String) -> String) -> Arc<Vec<u8>> {
     const ID0: &[u8] = b"0123456789abcdef";
     let h = pdfcraft_crypt::create(params, ID0).unwrap();
@@ -10533,7 +10533,11 @@ fn encrypted_page(params: &pdfcraft_cos::NewEncryption, edit: impl Fn(String) ->
     }
     let e = edit(e + " >>");
     let text = b"BT /F1 24 Tf 20 150 Td (Page 1) Tj ET";
-    let content = if e.contains("/StmF /Identity") { text.to_vec() } else { h.encrypt_stream(4, 0, text, pdfcraft_crypt::StreamKind::Normal) };
+    let content = if e.contains("/StmF /Identity") || e.contains("/StmF /Clear") {
+        text.to_vec()
+    } else {
+        h.encrypt_stream(4, 0, text, pdfcraft_crypt::StreamKind::Normal)
+    };
     let bytes = pdfcraft_testkit::Pdf::new()
         .obj("<< /Type /Catalog /Pages 2 0 R >>")
         .obj("<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>")
@@ -10584,6 +10588,12 @@ fn the_document_model_and_the_renderer_open_the_same_encrypted_files() {
     for pw in ["user", "owner"] {
         both_open(&stale, Some(pw), "stale /Length");
     }
+    // `/StmF` naming a filter that leaves streams as they are (`/CFM /None /Length 5`), and
+    // `/StrF` the AES-128 one: the key is the AES filter's 128 bits.
+    let clear = encrypted_page(&encryption(Aes128, "user", "owner"), |e| {
+        e.replace("/CF << ", "/CF << /Clear << /CFM /None /Length 5 >> ").replace("/StmF /StdCF", "/StmF /Clear")
+    });
+    both_open(&clear, Some("user"), "a clear /StmF");
     // `/V 0`, or no `/V`: RC4 with `/Length`, as MuPDF and PDFium read it (the renderer refused).
     for (v, edit) in [("0", "/V 0"), ("absent", "")] {
         let bytes = encrypted_page(&encryption(Rc4_128, "user", "owner"), |e| e.replace("/V 2", edit));

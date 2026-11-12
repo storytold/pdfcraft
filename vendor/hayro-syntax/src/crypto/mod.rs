@@ -170,8 +170,8 @@ fn int_entry(dict: &Dict<'_>, key: &[u8]) -> Option<i64> {
 
 /// PdfCraft patch (47): the file key length in bits as pdfcraft-cos reads it, `None` for a /V
 /// it doesn't support. /V 1 is 40 bits (ISO 32000-2 Table 20); /V 0 and 2 take /Length (40 when
-/// absent); /V 4 takes it from the crypt filter strings and streams use (/StmF, else /StrF, else
-/// /StdCF): 128 for AESV2 and AESV3, for V2 the filter's /Length (bytes, or bits in some files),
+/// absent); /V 4 takes it from the crypt filter strings and streams use (/StmF, else /StrF,
+/// whichever encrypts, else /StdCF): 128 for AESV2 and AESV3, for V2 the filter's /Length (bytes, or bits in some files),
 /// else the dictionary's, else 128 (a stale /Length 40 next to an AES filter is common); /V 5 is
 /// 256.
 fn key_length_bits(dict: &Dict<'_>, v: i64) -> Option<i64> {
@@ -186,6 +186,12 @@ fn key_length_bits(dict: &Dict<'_>, v: i64) -> Option<i64> {
                 dict.get::<Name<'_>>(key)
                     .filter(|n| n.deref() != b"Identity")
                     .and_then(|n| filter(n.deref()))
+                    // A filter that leaves data as it is (/CFM /None) decides nothing.
+                    .filter(|f| {
+                        f.get::<Name<'_>>(CFM)
+                            .and_then(|m| DecryptorTag::from_name(&m))
+                            .is_some_and(|t| t != DecryptorTag::None)
+                    })
             };
             match named(STM_F).or_else(|| named(STR_F)).or_else(|| filter(b"StdCF")) {
                 None => positive(dict).unwrap_or(128),
