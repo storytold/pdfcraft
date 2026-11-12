@@ -348,7 +348,6 @@ mod tests {
     }
 
     #[test]
---- END ===
     fn doc_batch_dry_run_lists_outputs_without_writing() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir(dir.path().join("input")).unwrap();
@@ -456,6 +455,5 @@ mod tests {
             assert!(log.contains(r"a\\nb.pdf: error"), "log should escape a literal backslash: {log}");
             assert!(!log.contains("a\nb.pdf"), "log should not contain a raw newline in a path: {log}");
         }
-    }
     }
 }
