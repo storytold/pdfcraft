@@ -76,7 +76,7 @@ help/docs polish: their script work is done, and each catalog lacks 46 strings o
 | Russian | `ru` | 2,515 (86.8%) | partial | yes |
 | Bulgarian | `bg` | 2,564 (88.5%) | partial | no |
 | Czech | `cs` | 2,847 (98.3%) | partial | yes |
-| Telugu | `te` | 2,513 (86.7%) | partial (the release-pinned craft-fonts has no Telugu face yet) | no |
+| Telugu | `te` | 2,513 (86.7%) | partial | no |
 | Hungarian | `hu` | 2,599 (89.7%) | partial | yes |
 | Ukrainian | `uk` | 2,600 (89.7%) | partial | yes |
 | Italian | `it` | 2,790 (96.3%) | partial | yes |
