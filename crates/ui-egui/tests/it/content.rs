@@ -1784,6 +1784,25 @@ fn escape_lets_go_of_added_text_before_it_closes_find() {
     assert!(h.state().views[0].find.is_some(), "and leaves Find open");
 }
 
+/// A Delete that arrives with the button coming up deletes the selected added text: the button
+/// is up by then. The key pass judged by the button as the pages last saw it, held, and the Delete
+/// was lost.
+#[test]
+fn delete_as_the_button_comes_up_deletes_the_added_text() {
+    let mut h = selected_added_text();
+    let p = at(&h, 44.0, 304.0);
+    h.hover_at(p);
+    h.run_steps(1);
+    let button = |pressed| egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+    h.input_mut().events.push(button(true));
+    h.step();
+    let delete = egui::Event::Key { key: egui::Key::Delete, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE };
+    h.input_mut().events.extend([button(false), delete]);
+    h.step();
+    h.run_steps(3);
+    assert!(added(&h).is_empty(), "the added text is deleted: {:?}", added(&h));
+}
+
 /// An editor open on the page has Escape before anything else: with added text being typed and
 /// Find open, the Escape is the editor's, and Find stays open. Find closed as well.
 #[test]

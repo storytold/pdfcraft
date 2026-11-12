@@ -148,7 +148,7 @@ fn delete(view: &mut DocView, cx: &KeyCx<'_>) {
         let took = match kind {
             Held::Objects => edit_text && crate::object_ui::delete_key(view),
             Held::Picture => edit_text && crate::edit_text_ui::delete_picture(view, doc, held),
-            Held::Added => cx.editing_content && crate::content_ui::delete_key(view, tool == QuickTool::EditText),
+            Held::Added => cx.editing_content && crate::content_ui::delete_key(view, tool == QuickTool::EditText, held),
             Held::Comment => crate::comments::delete_key(view, &doc.info, doc.allows_annotation()),
             Held::Field => cx.preparing && crate::prepare::delete_key(view),
             Held::Link => tool == QuickTool::Link && crate::link_ui::delete_key(view),

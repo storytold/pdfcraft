@@ -111,9 +111,6 @@ pub struct ContentView {
     grab: Option<(usize, Grab, Pos2)>,
     /// Where the press nobody holds began, on which page: Add text's click starts its new box there.
     pressed_at: Option<(usize, Pos2)>,
-    /// A button was down on the pages when they were last drawn (for [`delete_key`], which the key
-    /// pass runs before they are drawn again).
-    held: bool,
     undrawable: UndrawableMemo,
     layout: Option<(AddedText, f32, f64, [f64; 4])>,
 }
@@ -414,7 +411,6 @@ pub(crate) struct ContentCx<'a> {
 pub(crate) fn page_input(cx: PageToolContext<'_>, ccx: ContentCx<'_>, view: &mut DocView) -> bool {
     let PageToolContext { resp, xf, ptr, page, info, .. } = cx;
     let ContentCx { added, press, gate, picks_up, adding_text, edit_on_click, style } = ccx;
-    view.content.held = ptr.any_down;
     if !gate {
         return false;
     }
@@ -635,9 +631,10 @@ pub(crate) fn release_image_selection(view: &mut DocView, added: &[Added]) {
 }
 
 /// Delete or Backspace, from the key pass (`canvas::key_order`): the selected item goes, but not
-/// while a button is down (the press held would then name another item). Whether an item was
-/// selected to take the key; a picture the image controller has is the picture's.
-pub(crate) fn delete_key(view: &mut DocView, image_controller_active: bool) -> bool {
+/// while a button is down (`held`, as it is now: the press held would then name another item).
+/// Whether an item was selected to take the key; a picture the image controller has is the
+/// picture's.
+pub(crate) fn delete_key(view: &mut DocView, image_controller_active: bool, held: bool) -> bool {
     if image_controller_active && view.image_selection.is_some()
         || matches!(view.pending_edit.as_ref(), Some(Edit::EditPageImage { .. }))
         || view.content.selected.is_none()
@@ -645,9 +642,7 @@ pub(crate) fn delete_key(view: &mut DocView, image_controller_active: bool) -> b
     {
         return false;
     }
-    if !view.content.held
-        && let Some((page, index)) = view.content.selected.take()
-    {
+    if !held && let Some((page, index)) = view.content.selected.take() {
         view.pending_edit = Some(Edit::DeleteContent { page, index });
     }
     true
