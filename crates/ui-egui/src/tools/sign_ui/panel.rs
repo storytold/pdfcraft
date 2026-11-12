@@ -59,7 +59,11 @@ pub(crate) fn signature_status_style(status: SignatureStatus) -> (&'static str, 
 pub enum PanelAction {
     Validate,
     GoTo(usize),
+    /// Trust a signer, as a signer only (#6758).
     Trust(Box<Certificate>),
+    /// Trust a document timestamp's authority, for timestamps only (#6786): trusted as a signer
+    /// it would leave the timestamp Unknown.
+    TrustTsa(Box<Certificate>),
     ViewSigned {
         len: usize,
         revision: usize,
@@ -189,12 +193,15 @@ pub(crate) fn panel(ui: &mut egui::Ui, t: &Tokens, sigs: &[SignatureInfo], expan
                 // Trust exactly the signer shown above (s.certificate), not the chain top the
                 // document embedded, and as a signer only: it vouches for no certificate it
                 // issued (#6758). Trusting an issuer or root is a separate, explicit step in the
-                // Certificate Viewer's Trust tab, which names that certificate.
+                // Certificate Viewer's Trust tab, which names that certificate. A document
+                // timestamp's certificate is its authority's, so it is trusted for timestamps
+                // only: a trusted signer is not a trusted timestamp authority (#6786).
                 if let Some(c) = s.certificate.as_ref()
                     && s.status == SignatureStatus::Unknown
                     && ui.button(tl!("Add to trusted certificates")).clicked()
                 {
-                    action = Some(PanelAction::Trust(Box::new(c.clone())));
+                    let c = Box::new(c.clone());
+                    action = Some(if s.doc_timestamp { PanelAction::TrustTsa(c) } else { PanelAction::Trust(c) });
                 }
                 if ui.button(tl!("View signed version")).clicked() {
                     action = Some(PanelAction::ViewSigned { len: s.signed_len, revision: s.revision });
