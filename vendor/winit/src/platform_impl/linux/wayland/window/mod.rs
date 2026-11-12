@@ -176,6 +176,7 @@ impl Window {
         if let (Some(xdg_activation), Some(token)) =
             (xdg_activation.as_ref(), attributes.platform_specific.activation_token)
         {
+            super::super::startup_token::handing_back();
             xdg_activation.activate(token.token, &surface);
         }
 
