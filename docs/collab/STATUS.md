@@ -87,28 +87,35 @@
   of `95e2c9c97` fixed"), which was the head until `46d2e203a` re-based the line
   on v0.21.0; the fork and the PR carried `95e2c9c97` only until `28fd4e1b3` was
   pushed at 17:41Z.
-- Delivered head: **`eb60bc5ff`** ("docs(collab): the delivered head is
-  `6ac4e1130` — the owner pushed it, the runs await approval"). **Superseded on
-  2026-11-12**, and again at 16:20Z of that day: `gh pr view 6622` now reads
-  `headRefOid` `2a2b0c1571e5635a77f3ac90c83f2c89fdd4fc36` (the merge of
-  `origin/main` `d749fd806`), with the fork at the same commit; `e7a056501`
-  (the docs commit above `eb60bc5ff`) and `eb60bc5ff` are its ancestors, and
-  `fee60000b` is the one local commit above it (header's snapshot bullet). Everything below about
-  `eb60bc5ff` describes its own delivery and remains true of the runs measured
-  there; the PR head moved by one docs-only commit. Measured
-  2026-11-11T23:37Z, before the commit that carries this record: PR #6622's
-  `headRefOid`, the fork `copoka/pdfcraft`'s branch tip (`git ls-remote fork
+- Delivered head: **`f3a0ccde4`** ("docs(collab): the head `f107f56c2`, its six
+  commits and the sweep on it"), pushed to `copoka/pdfcraft` by the PR-sweep
+  pass at 19:45Z on 2026-11-12. Measured 2026-11-12T21:18Z with `git` and `gh pr view
+  6622`: PR #6622's `headRefOid`, the fork's branch tip (`git ls-remote fork
   refs/heads/feature/realtime-collaboration`) and this clone's HEAD all read
-  `eb60bc5ff`; `git rev-list --left-right --count
+  `f3a0ccde4`; `git rev-list --left-right --count
   fork/feature/realtime-collaboration...HEAD` reads `0 0`, and the tree is
-  clean.
-  This record adds one docs commit (`docs/collab/STATUS.md` alone) on top of it
-  and that commit is local — the agent's `git push*` denial still stands, while
-  the delivery to the PR is done, by the owner or the PR-sweep pass.
-  **`6ac4e1130` is no longer the fork head**: it is the previous delivered head,
-  one commit below `eb60bc5ff`, and the earlier version of this record that
-  named it the delivered head and itself local was right at 20:08Z and is
-  superseded by the push of 21:10Z ("Delivery", below).
+  clean. This record is one docs commit above it (`docs/collab/STATUS.md`
+  alone) and is local — the agent's `git push*` denial still stands — so with
+  it the count reads `0 1` and the delivered head stays `f3a0ccde4` until the
+  owner or `pr-agent` pushes again. The delivered line is **8 commits above `2a2b0c157`** (the previous
+  delivered head, the merge of `origin/main` `d749fd806`): 14 files changed,
+  +1181/−96 — the room-side commit with its etag (`fee60000b`), a closed socket
+  no longer taking an actor's seat (`24f519a91`), Save in a hosted session
+  routed to the cabinet's commit (`f107f56c2`) and five docs records (§4).
+  `gh pr view 6622` reads `mergeable: MERGEABLE`, `mergeStateStatus: UNSTABLE`,
+  `baseRefOid` `d749fd806`, not a draft, `reviewDecision` empty, `updatedAt`
+  2026-11-12T19:45:59Z, and every workflow run on the head is
+  `completed/action_required` — nothing has executed on GitHub. What remains is
+  the maintainer's run approvals and the decision on merging `origin/main`
+  (now `be9fe433c`: the branch is **150 ahead and 20 behind** it, `git diff
+  --shortstat origin/main HEAD` **162 files, +46290/−3924**). Everything below
+  that names `eb60bc5ff` or `2a2b0c157` describes an earlier delivery and
+  remains true of the runs measured there; `eb60bc5ff`, `e7a056501` and
+  `2a2b0c157` are ancestors of the delivered head. **`6ac4e1130` is not the
+  fork head either**: it is the delivery record below `eb60bc5ff`, and the
+  earlier version of this record that named it the delivered head and itself
+  local was right at 20:08Z on 2026-11-11 and is superseded by the push of
+  21:10Z ("Delivery", below).
   Under `eb60bc5ff`: the code head
   `0d3ea2708` (the cabinet's `expectedVersion` as its etag, §4), then three
   docs-only commits — `4d9a42819`, `6ac4e1130` and `eb60bc5ff` — on
@@ -130,12 +137,15 @@
   `origin/main` of their time; `46d2e203a` re-based the line on v0.21.0 and the
   commits on top add the contract fix and its records. Commits named below in
   §4 by their pre-merge hashes are mapped there.
-- Delivery, as measured 2026-11-11T23:37Z: PR #6622's `headRefOid` is
-  **`eb60bc5ff`**, and so is the fork `copoka/pdfcraft`'s branch tip (`git
+- Delivery, as measured 2026-11-11T23:37Z (history: superseded by the push of
+  `f3a0ccde4` at 2026-11-12T19:45Z, above): PR #6622's `headRefOid` was
+  **`eb60bc5ff`**, and so was the fork `copoka/pdfcraft`'s branch tip (`git
   ls-remote fork refs/heads/feature/realtime-collaboration`) and this clone's
-  HEAD, with a clean tree. This record is one docs commit on top of
-  `eb60bc5ff` and is local; the delivered head stays `eb60bc5ff` until the
-  owner or `pr-agent` pushes the branch again. `gh pr view 6622` reads
+  HEAD, with a clean tree. The record that carries this paragraph is one docs
+  commit on top of `eb60bc5ff` and is local; the delivered head stayed
+  `eb60bc5ff` until the owner or `pr-agent` pushed the branch again, which they
+  did four times (19:14Z, 21:10Z and 01:12Z on 2026-11-12 and 19:45Z that day),
+  the last one carrying `f3a0ccde4`. `gh pr view 6622` read
   `mergeable: MERGEABLE`, `mergeStateStatus: UNSTABLE`, `baseRefOid`
   `3650f01f2` (v0.21.0), not a draft, `reviewDecision` empty, `updatedAt`
   2026-11-11T21:10:56Z, and one check (CodeRabbit, `skipped`); the JSON's
@@ -160,12 +170,16 @@
   the host sweep on `0d3ea2708` in §4 ("The cabinet's `expectedVersion` is its
   etag"), which stands for `eb60bc5ff` because all three commits above the code
   head are docs-only.
-  `pdfcraft/PR-DRAFT.md` now describes the same snapshot (PR head
-  `2a2b0c157`, local `fee60000b`, the gate in §4); it is a draft whose facts are
-  current as of 2026-11-12T16:20Z.
+  `pdfcraft/PR-DRAFT.md` describes the earlier snapshot (its text still names PR
+  head `2a2b0c157` and local `fee60000b`), so it lags the delivery by the eight
+  commits the PR-sweep pass pushed; the gate it cites is the one in §4.
 - State: implemented behind the `collab` feature (off by default). **`CI=1
-  cargo xtask ci` exits 0 on the head `f107f56c2`** — all 10 steps, with the
-  numbers at the end of §4, "Save in a hosted session…" — and on `fee60000b` —
+  cargo xtask ci` exits 0 on the delivered head `f3a0ccde4`** — all 10 steps,
+  **10381 passed, 0 failed, 22 ignored**, re-run by the PR-sweep pass
+  (`.craft/reports/20261112-1950-pr-sweep.md`, log
+  `.craft/logs/gate-pdfcraft-f3a0ccde4-pin.log`; §4, "Save in a hosted
+  session…") — and on its ancestor `f107f56c2` — all 10 steps, with those same
+  numbers at the end of §4 — and on `fee60000b` —
   all 10 steps, **10380 passed, 0
   failed, 22 ignored** (§4, "The cabinet's Save reaches the room") — and on the
   earlier `0d3ea2708` — all 10 steps, 157 targets (111
@@ -228,8 +242,8 @@ several `/NM`, per-line quads, the caret (`5bad54c40`, §4), re-addressed across
   earlier merges went out with the branch (`ed8d11115` in an earlier pass,
   `95e2c9c97` before this one), `28fd4e1b3` with the v0.21.0 merge, and
   `0d3ea2708` plus the three docs commits, the last two in the pushes of 19:14Z
-  and 21:10Z (owner or `pr-agent`), so PR #6622 carries `eb60bc5ff` — see
-  "Delivery". The one
+  and 21:10Z (owner or `pr-agent`), so PR #6622 carried `eb60bc5ff` until the
+  2026-11-12 pushes; it now carries `f3a0ccde4` — see "Delivered head". The one
   presence item still outside
   this repository is the host page's `pdfcraft:presence` payload:
   `craft-web-host` must gain optional `page`/`selection` on its `Participant`
@@ -276,26 +290,23 @@ several `/NM`, per-line quads, the caret (`5bad54c40`, §4), re-addressed across
   keeps drawing the place. The editor records the offset and point each frame
   from the galley it draws and clears them when the keyboard leaves, a page turn
   re-addresses the frame to the new `epoch`, a field or page the form no longer
-  holds is not sent, and a password shares no caret. The code commit is
-  `c935ebadb`; docs follow on top. **Measured in this pass:** PR #6622's head is
-  still `e7a056501` (docs-only above `eb60bc5ff`), and `git rev-list
-  --left-right --count e7a056501...HEAD` reads `0 4` — `ac33dd212`,
-  `00c06ed5c`, `c56da220b` and `c935ebadb` are the only commits above it. The
-  etag fix `0d3ea2708` named in this pass's brief as unpushed is **already
+  holds it. The code commit is `c935ebadb`; docs follow on top. **Measured in
+  that pass:** PR #6622's head was then `e7a056501` (docs-only above
+  `eb60bc5ff`), and `git rev-list --left-right --count e7a056501...HEAD` read
+  `0 4` — `ac33dd212`, `00c06ed5c`, `c56da220b` and `c935ebadb` were the only
+  commits above it. Those four are ancestors of the delivered `f3a0ccde4`. The
+  etag fix `0d3ea2708` named in that pass's brief as unpushed was **already
   delivered**: `git merge-base --is-ancestor 0d3ea2708 e7a056501` succeeds, it
-  is an ancestor of the PR head, so only this pass's two commits are new. Nothing
-  was pushed by this agent; the push is the owner's.
-- Snapshot this file is written to (measured 2026-11-12T17:54Z with `git` and
-  `gh pr view 6622`): the **head is `f107f56c2`** — "Save in a hosted session is
-  the cabinet's commit, not a copy of the window" (3 files, +94/−1; §4) — with a
-  clean tree, and the fork `copoka/pdfcraft` and PR #6622 both still carry
-  **`2a2b0c157`**; `git rev-list --left-right --count
-  fork/feature/realtime-collaboration...HEAD` reads `0 6` at the measurement.
-  Two docs records now sit above it — `ff4a93462` (the cabinet-side acceptance,
-  written by the parallel acceptance pass) and this one — so the branch reads
-  `0 8` once this record is committed. The six
-  commits above
-  the delivered head at the measurement, oldest first:
+  is an ancestor of the PR head, so only that pass's two commits were new. Nothing
+  was pushed by this agent; the pushes are the owner's and `pr-agent`'s.
+- Snapshot this file is written to (measured 2026-11-12T21:18Z with `git` and
+  `gh pr view 6622`): the **delivered head is `f3a0ccde4`** — the docs record of
+  `f107f56c2` and the sweep on it — with a clean tree; the fork
+  `copoka/pdfcraft`, PR #6622 and this clone's HEAD all read `f3a0ccde4`, and
+  `git rev-list --left-right --count
+  fork/feature/realtime-collaboration...HEAD` reads `0 0`. The **eight commits
+  above the previous delivered head `2a2b0c157`** (14 files, +1181/−96),
+  oldest first:
   1. `fee60000b` — code: the room-side commit for the cabinet
      (`POST /v1/sessions/{fileId}/commit`) and an etag the room can compare
      (`CABINET.sha256`); 8 files, +571/−45 (§4);
@@ -312,20 +323,22 @@ several `/NM`, per-line quads, the caret (`5bad54c40`, §4), re-addressed across
   6. `f107f56c2` — code: that Save trap closed — in a live session a host page
      commits, so `file.save` (toolbar, menu, Ctrl+S) and the page's own Save
      action call `collab_commit` instead of writing this window's bytes
-     (`crates/ui-egui/src/{collab,commands,editing}.rs`, +94/−1; §4).
+     (`crates/ui-egui/src/{collab,commands,editing}.rs`, +94/−1; §4);
+  7. `ff4a93462` — docs: the cabinet-side acceptance of that Save;
+  8. `f3a0ccde4` — docs: this file's snapshot of `f107f56c2` and the sweep on
+     the head.
   The PR is `MERGEABLE`/`UNSTABLE`, not a draft, `reviewDecision` empty,
-  `baseRefOid` `d749fd806`, `updatedAt` 2026-11-12T06:18:30Z, and every workflow
-  run on the fork reads `action_required`, so nothing has executed on GitHub. The
-  gate evidence is the host sweep, and it was re-run on this head in this pass:
-  `CI=1 cargo xtask ci` exits 0, all ten steps, 10381 passed / 0 failed / 22
-  ignored (§4, "Save in a hosted session…", end of the section). `origin/main`
-  has
-  moved to `120c62fb8` (three commits: `#7069`, `#7034`, `#7031`); the branch is
-  **148 ahead and 3 behind** it, `git diff --shortstat origin/main HEAD` is
-  **131 files, +46076/−2012**. Merging those three is a separate decision and
-  has not been done. The owner's steps are the push (`git push fork
-  feature/realtime-collaboration`), the run approvals, the review and the manual
-  desktop acceptance; nothing else is owed on the code side.
+  `baseRefOid` `d749fd806`, `updatedAt` 2026-11-12T19:45:59Z, and every workflow
+  run on the fork reads `completed/action_required`, so nothing has executed on
+  GitHub. The gate evidence is the host sweep on the delivered head: `CI=1
+  cargo xtask ci` exits 0, all ten steps, 10381 passed / 0 failed / 22 ignored
+  (§4, "Save in a hosted session…", end of the section;
+  `.craft/reports/20261112-1950-pr-sweep.md`). `origin/main` has moved to
+  `be9fe433c`; the branch is **150 ahead and 20 behind** it, `git diff
+  --shortstat origin/main HEAD` is **162 files, +46290/−3924**. Merging it is a
+  separate decision and has not been done. The remainder is the maintainer's:
+  approve the runs on the head, then the review, the merge decision and the
+  manual desktop acceptance; nothing else is owed on the code side.
 - Audience: the next session (human or agent). Everything here was verified in
   the session that wrote it; anything not verified is marked as such.
 - Design: `docs/collab/RFC.md` (protocol, ADRs, trade-offs); operation of the
@@ -760,8 +773,13 @@ and craft-fonts (`b076417b`); without them the two documented environment tests
 fail and are unchanged by this diff; plus the ocr, page_shadows, perf and play
 suites.
 
-**Gate, on `f107f56c2`, host `agents` (rustc 1.99.1, warm `target/`,
-`CARGO_BUILD_JOBS=8`).** `CI=1 cargo xtask ci` with `CRAFT_I18N_DIR`
+**Gate, on `f3a0ccde4`, host `agents` (rustc 1.99.1, warm `target/`,
+`CARGO_BUILD_JOBS=8`).** The sweep was first run on `f107f56c2` in the pass that
+closed the Save trap and re-run on the delivered head `f3a0ccde4` by the
+PR-sweep pass before its push (`.craft/reports/20261112-1950-pr-sweep.md`, log
+`.craft/logs/gate-pdfcraft-f3a0ccde4-pin.log`); the two docs commits between
+them change no code, and the numbers are identical. `CI=1 cargo xtask ci` with
+`CRAFT_I18N_DIR`
 (craft-i18n at `575cfdef`) and `CRAFT_FONTS_DIR` (`b076417b`) exits
 **0 — all ten steps**, no retries: `fmt`; `clippy --workspace --all-targets
 -- -D warnings`; `cli-no-default-features`; `test` — **10370 passed, 0 failed,
@@ -4782,23 +4800,26 @@ Ordered by the risk they pose to production.
 
 Work in this order unless the owner says otherwise.
 
-**Deliver first.** Measured 2026-11-12T16:35Z (`git`, `gh pr view 6622`): the
-fork and PR #6622 carry **`2a2b0c157`**; this clone's **code head** is
-**`fee60000b`** ("a room-side commit for the cabinet, and an etag it can
-recognise", §4), and `git rev-list --left-right --count
-fork/feature/realtime-collaboration...HEAD` reads `0 3` — the code commit and
-two docs commits (the cabinet-side record `d1d304231` and the one before this
-paragraph). Everything the earlier versions of this section
-listed as unpushed — `ac33dd212`, `00c06ed5c`, `c56da220b`, `c935ebadb` — is
-**delivered**: they are ancestors of `2a2b0c157`, which is the fork tip and the
-PR head; `git merge-base --is-ancestor 2a2b0c157 HEAD` exits 0. This agent's
-permission still denies `git push*`, so `git push fork
-feature/realtime-collaboration` from this clone is the owner's step; after it
-`gh pr view 6622` must read this branch's tip — the docs commit above
-`fee60000b` — and the fork's five workflows will
-wait again for a maintainer's approval (`action_required`, so no check has
-executed on the branch). The gate on this head is §4, "The cabinet's Save
-reaches the room", and `pdfcraft/PR-DRAFT.md` now carries the same facts.
+**Deliver first.** Measured 2026-11-12T21:18Z (`git`, `gh pr view 6622`): the fork and
+PR #6622 carry **`f3a0ccde4`**, the same commit as this clone's HEAD at the
+measurement, and `git rev-list --left-right --count
+fork/feature/realtime-collaboration...HEAD` reads `0 0` with a clean tree (this
+record adds one local docs commit, so the count becomes `0 1`; the delivered
+head stays `f3a0ccde4`) — the
+delivered line is **8 commits above `2a2b0c157`** (14 files, +1181/−96): the
+room-side commit and its etag, the closed-socket seat fix, Save in a hosted
+session routed to the cabinet's commit, and five docs records. Everything the
+earlier versions of this section listed as unpushed — `fee60000b`, `24f519a91`,
+`f107f56c2` and the docs beside them — is **delivered**:
+`git merge-base --is-ancestor f107f56c2 f3a0ccde4` exits 0. The gate on this
+head is §4, "Save in a hosted session…" — `CI=1 cargo xtask ci` exits 0, all
+ten steps, 10381 passed / 0 failed / 22 ignored
+(`.craft/reports/20261112-1950-pr-sweep.md`). This agent's permission still
+denies `git push*`, and nothing is owed on the code side; the remainder is the
+maintainer's: approve the workflow runs on the head (`action_required`, so no
+check has executed on the branch), the review and the merge decision —
+including whether to merge `origin/main` (now `be9fe433c`, 20 commits the
+branch does not have) — and the manual desktop acceptance.
 Everything below is still open feature work; nothing in it is a prerequisite of
 that push.
 
@@ -5085,42 +5106,31 @@ payload).
 
 ### 6.6 Cleanup and submission
 
-- **This pass (2026-11-12, 17:54Z): the head is `f107f56c2`, six commits above
-  the delivered `2a2b0c157`.** The tree is clean and nothing was pushed. The six
-  commits are `fee60000b` (room-side commit + etag, code), `d1d304231` (its
-  record), `ad4f33787` (the branch's snapshot), `24f519a91` (a closed socket no
-  longer takes an actor's seat, code), `826303ace` (that record, and the Save
-  trap left open there) and `f107f56c2` (the Save trap closed: in a hosted
-  session Save is the room's commit, code) — the header snapshot above lists
-  each with its files and lines (the measurement was taken at `f107f56c2`; two
-  docs records sit above it — `ff4a93462` from the parallel cabinet-acceptance
-  pass and this one — so `0 6` becomes `0 8` once this record is committed).
-  `git rev-list --left-right --count
-  fork/feature/realtime-collaboration...HEAD` read `0 6` at the measurement; PR
-  #6622 is `MERGEABLE`/`UNSTABLE`, `reviewDecision` empty, every run
-  `action_required`. `origin/main` moved to `120c62fb8`, so the branch is 148
-  ahead and 3 behind; merging it is a separate decision. This pass changed **no
-  code**: it rewrote the header snapshot, added §4's record of `f107f56c2` and
-  its gate state, aligned `pdfcraft/PR-DRAFT.md`, and re-ran the full sweep on
-  the head on host `agents` — `CI=1 cargo xtask ci` exits 0, all ten steps,
-  10381 passed / 0 failed / 22 ignored (§4, "Save in a hosted session…", end of
-  the section). The owner's steps are the push, the run approvals, the review
+- **This pass (2026-11-12, 21:18Z): the status is synced to the delivered head
+  `f3a0ccde4`, eight commits above `2a2b0c157`.** The tree is clean, the fork
+  and PR #6622 read `f3a0ccde4`, `git rev-list --left-right --count
+  fork/feature/realtime-collaboration...HEAD` is `0 0` at the measurement (`0 1`
+  with this local docs record), and 14 files changed
+  (+1181/−96) over the previous delivery. The eight commits are `fee60000b`
+  (room-side commit + etag, code), `d1d304231` (its record), `ad4f33787` (the
+  branch's snapshot), `24f519a91` (a closed socket no longer takes an actor's
+  seat, code), `826303ace` (that record, and the Save trap left open there),
+  `f107f56c2` (the Save trap closed: in a hosted session Save is the room's
+  commit, code) and the two docs records above it (`ff4a93462`, the
+  cabinet-side acceptance; `f3a0ccde4`, the header snapshot and the sweep).
+  PR #6622 is `MERGEABLE`/`UNSTABLE`, `reviewDecision` empty, `baseRefOid`
+  `d749fd806`, every run `completed/action_required`. `origin/main` is at
+  `be9fe433c`, so the branch is 150 ahead and 20 behind; merging it is a
+  separate decision the maintainer has not taken. This pass changed **no
+  code**: it rewrote the header snapshot, "Delivered head" and this section to
+  the delivered head, retargeted §4's gate entry to `f3a0ccde4` — the PR-sweep
+  pass re-ran `CI=1 cargo xtask ci` there, exits 0, all ten steps, 10381
+  passed / 0 failed / 22 ignored (`.craft/reports/20261112-1950-pr-sweep.md`)
+  — and dropped the superseded `fee60000b`/`0 3` snapshot. The remainder is the
+  maintainer's: approve the runs on the head, the review, the merge decision
   and the manual desktop acceptance.
-- **This pass (2026-11-12, 16:35Z): the branch's facts, and the one commit
-  owed.** The code head is `fee60000b` on top of the delivered `2a2b0c157`,
-  with two docs commits above it (`d1d304231`, the cabinet-side record, and this
-  one); the fork and PR #6622 read `2a2b0c157`, `git rev-list
-  --left-right --count fork/…...HEAD` is `0 3`, the tree is clean. This pass
-  changed **no code**: it rewrote §6's delivery paragraph, this bullet, §7's
-  first gotcha and `pdfcraft/PR-DRAFT.md` to that snapshot, added §4's
-  record of `fee60000b` with the gate run on it, and folded the duplicate
-  records of that commit into one. The earlier record that named
-  `e7a056501` as the head and five unpushed commits is history: `c935ebadb`
-  and the four commits beside it are ancestors of `2a2b0c157`. Nothing was
-  pushed; the push, the run approvals, the review and the manual desktop
-  acceptance (§5.2 p.4) are the owner's.
-- **Delivery state (2026-11-11T23:37Z; head re-measured 2026-11-12).** The
-  delivered head recorded here is `eb60bc5ff` —
+- **Delivery state (2026-11-11T23:37Z; superseded three times since).** The
+  delivered head recorded here was `eb60bc5ff` —
   the delivery record of `6ac4e1130`, which is the D4 record on top of
   `0d3ea2708` (the etag fix, §4) on `28fd4e1b3` — and at that moment it was at
   once the local HEAD, the fork's branch tip and PR #6622's `headRefOid`;
@@ -5390,11 +5400,12 @@ payload).
   and `clippy` on the import block the merge of `3a117c3c0` left in
   `crates/engine/src/session.rs` (a blank line at line 10, an unused
   `BookmarkRow` at line 14); `69b2a6dad` fixed both and the delivered
-  `2a2b0c157` and the local head `f107f56c2` are above it. Before changing
-  anything, re-run the gate on the current head: `CI=1 cargo xtask ci` with
-  `CRAFT_I18N_DIR` (craft-i18n at `575cfdef`) and `CRAFT_FONTS_DIR`
-  (`b076417b`) — §4, "Save in a hosted session…", has the run for `f107f56c2`
-  and "The cabinet's Save reaches the room" the one for `fee60000b`. No GitHub
+  `f3a0ccde4` (as its ancestors `2a2b0c157` and `f107f56c2`) is above it.
+  Before changing anything, re-run the gate on the current head: `CI=1 cargo
+  xtask ci` with `CRAFT_I18N_DIR` (craft-i18n at `575cfdef`) and
+  `CRAFT_FONTS_DIR` (`b076417b`) — §4, "Save in a hosted session…", has the run
+  for the delivered `f3a0ccde4` and "The cabinet's Save reaches the room" the
+  one for `fee60000b`. No GitHub
   workflow has executed on the branch (every run is `action_required`), so a
   local sweep is the only evidence there is.
 - The branch's only difference from `origin/main` outside the feature is 4 lines
