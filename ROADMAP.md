@@ -1,6 +1,6 @@
 # PdfCraft roadmap
 
-> **Last reviewed:** 2026-11-11 · **Last updated:** 2026-11-11 · **Change:** minor (measured numbers refreshed at v0.21.0, cut from `main` `3650f01f`: checklist and code size, with issues and releases as of 2026-11-11; earlier header notes moved into the revision history and the progress log sorted; estimated readiness and hours not re-judged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
+> **Last reviewed:** 2026-11-12 · **Last updated:** 2026-11-12 · **Change:** minor (measured numbers refreshed at v0.21.0, cut from `main` `3650f01f`: checklist and code size, with issues as of 2026-11-11 and releases as of 2026-11-12; earlier header notes moved into the revision history and the progress log sorted; estimated readiness and hours not re-judged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 
 **Stage: alpha** · next: beta, ~25% (ready for real work 50% → 75%) and ~400–700 h away
 
@@ -47,7 +47,7 @@ editing (CJK and right-to-left only in part) and convert and share (Office→PDF
 loses layout, #773; password-protected files open in Acrobat since #836, #774). Those, unmeasured
 quality against Acrobat, the borrowed `hayro` renderer and 1,680 open issues (74 marked
 `priority: critical`, on 2026-11-11; 245 on 2026-10-10) keep it far from beta. The latest release is
-v0.21.0 (2026-11-11).
+v0.21.1 (2026-11-12), a bug-fix release that leaves the checklist as v0.21.0 had it.
 
 ### Readiness by audience
 
@@ -701,6 +701,7 @@ Newest first: the date, what moved, and the new overall estimate.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-12 | patch | Latest release v0.21.1 (bug fixes); its checklist matches v0.21.0, so the measured numbers stand. |
 | 2026-11-11 | minor | Measured numbers refreshed at v0.21.0, `main` at 3650f01f (breadth ≈ 73% tier-weighted, 64.1% unweighted; areas C, D, E, F, G, J, K and L; 1,680 open issues; 20.4k stars; v0.21.0). Estimated readiness and hours not re-judged. |
 | 2026-11-09 | minor | Measured numbers refreshed at v0.20.0, `main` at 9ee213ef (breadth ≈ 72% tier-weighted, 62.8% unweighted; areas; 1,774 open issues; 20.1k stars; v0.20.0); the stacked header notes moved into this table, the progress log sorted newest first and its strays folded in. Estimated readiness and hours not re-judged. |
 | 2026-11-09 | patch | M10 #5130: Windows Printer default sends native two-sided bindings only when automatic duplex support is confirmed, preserving manual driver defaults (#5130/#5772); physical output remains unqualified. Estimates unchanged. |
