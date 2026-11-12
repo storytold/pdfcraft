@@ -8671,11 +8671,11 @@ title = "Marks and bleeds when printing"
 area = "L"
 tier = "P2"
 milestone = "M11"
-status = "planned"
+status = "partial"
 commands = []
-tools = []
-evidence = []
-notes = ""
+tools = ["doc_print"]
+evidence = ["crates/engine/src/tests/print_marks.rs::printer_marks_go_on_the_printed_sheets_and_not_the_document", "crates/automation/tests/it/automation.rs::printing_with_printer_marks_through_tools"]
+notes = "doc_print marks (all, trim, bleed, registration, color_bars, page_info) and marks_weight: the marks of Add printer marks, drawn around each printed page on the print copy only, so the document is never changed; marks it already has print once. With a one-page-a-sheet layout (fit, actual, shrink, custom); the page is widened for them, so fit shrinks it to make room. Still missing against Acrobat: the Print dialog's Marks and Bleeds panel (headless only), the mark styles, and printing them with Print as image or app-managed colour (refused, as those print pages as pictures)."
 
 [[feature]]
 id = "print.trap-presets"

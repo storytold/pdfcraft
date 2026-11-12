@@ -1,6 +1,7 @@
 //! Printing tools: list printers, and print (or save the print-ready PDF) with Acrobat's Print
 //! dialog options.
 
+use pdfcraft_engine::PrinterMarks;
 use pdfcraft_engine::print::{self, Binding, BookletSubset, Layout, Orientation, PAPERS, PageOrder, SizeMode, Subset, spool};
 use serde_json::{Value, json};
 
@@ -39,6 +40,48 @@ fn job_duplex(value: &str, layout: &Layout, two_sided: impl FnOnce() -> Option<b
 /// has no such printer.
 fn printer_in(printers: Vec<spool::Printer>, printer: &str) -> Option<spool::Printer> {
     printers.into_iter().find(|p| if printer == "default" { p.default } else { p.name == printer })
+}
+
+/// What `doc_print`'s `marks` may name.
+const MARK_NAMES: &str = "marks must be a list of all, trim, bleed, registration, color_bars and page_info";
+
+/// `doc_print`'s `marks` and `marks_weight`: the printer's marks to print around each page, or
+/// `None` when none are asked for. The information line names the document (`name`) and the
+/// date (`today`, year, month, day).
+fn printer_marks(a: &Args, layout: &Layout, name: &str, (y, m, d): (i64, u32, u32)) -> Result<Option<PrinterMarks>> {
+    let Some(asked) = a.get("marks") else {
+        return if a.get("marks_weight").is_some() { Err(bad("marks_weight needs marks")) } else { Ok(None) };
+    };
+    let names = asked.as_array().filter(|names| !names.is_empty()).ok_or_else(|| bad(MARK_NAMES))?;
+    let mut marks = PrinterMarks {
+        trim: false,
+        bleed: false,
+        registration: false,
+        color_bars: false,
+        page_info: false,
+        label: name.to_string(),
+        date: format!("{y:04}-{m:02}-{d:02}"),
+        ..PrinterMarks::default()
+    };
+    for mark in names {
+        match mark.as_str() {
+            Some("all") => (marks.trim, marks.bleed, marks.registration, marks.color_bars, marks.page_info) = (true, true, true, true, true),
+            Some("trim") => marks.trim = true,
+            Some("bleed") => marks.bleed = true,
+            Some("registration") => marks.registration = true,
+            Some("color_bars") => marks.color_bars = true,
+            Some("page_info") => marks.page_info = true,
+            _ => return Err(bad(MARK_NAMES)),
+        }
+    }
+    marks.line_weight = a.opt_num("marks_weight")?.unwrap_or(0.25);
+    if !PrinterMarks::WEIGHTS.contains(&marks.line_weight) {
+        return Err(bad(format!("marks_weight must be from {} to {} points", PrinterMarks::WEIGHTS.start(), PrinterMarks::WEIGHTS.end())));
+    }
+    if !matches!(layout, Layout::Size(_)) {
+        return Err(bad("printer marks print one page a sheet: use layout fit, actual, shrink or custom"));
+    }
+    Ok(Some(marks))
 }
 
 /// An invalid-arguments error saying `m`.
@@ -301,6 +344,7 @@ impl Automation {
             },
             l => Layout::Size(print::names::parse_size_mode(l, 100.0).ok_or_else(|| bad(format!("unknown layout {l:?}")))?),
         };
+        let marks = printer_marks(a, &layout, &self.doc(a)?.name, self.session.today())?;
         let printer = a.opt_str("printer")?;
         // The printer whose driver a booklet's both sides were decided for. The job goes to it by
         // name, so "default" can't become another printer while the document is rendered. The
@@ -354,6 +398,9 @@ impl Automation {
         } else {
             None
         };
+        if marks.is_some() && raster.is_some() {
+            return Err(bad("printer marks print with the pages as they are: leave out as_image and color_management app"));
+        }
         let sizes: Vec<(f64, f64)> = self.doc(a)?.info.pages.iter().map(|p| (p.width as f64, p.height as f64)).collect();
         // Print a selected area: points from the top-left of the displayed page, as other tools
         // take rectangles; the print crate takes it y up.
@@ -365,6 +412,9 @@ impl Automation {
                 Some([r[0].min(r[2]), h - r[1].max(r[3]), r[0].max(r[2]), h - r[1].min(r[3])])
             }
         };
+        if marks.is_some() && area.is_some() {
+            return Err(bad("area prints part of a page, without printer marks: leave out one or the other"));
+        }
         let settings = print::Settings { pages, paper, orientation, layout, content, raster, crops: Vec::new(), area };
         let laid_out = print::layout(&sizes, &settings).map_err(|e| bad(e.to_string()))?;
         let sheets = laid_out.len();
@@ -392,7 +442,7 @@ impl Automation {
         } else {
             Default::default()
         };
-        let bytes = self.session.print_pdf(id, &settings).map_err(failed)?;
+        let bytes = self.session.print_pdf_marked(id, &settings, marks.as_ref()).map_err(failed)?;
         let mut out = json!({ "sheets": sheets, "pages": settings.pages.len(), "bytes": bytes.len() });
         if let Some(c) = settings.raster.as_ref().and_then(|r| r.colour.as_ref()) {
             out["color_management"] =
