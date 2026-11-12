@@ -34,4 +34,4 @@ pub use error::PrcError;
 pub use geometry::Matrix;
 pub use schema::Schema;
 pub use tess::{Tessellation, TriangleMesh, TriangleStyle};
-pub use tree::{EntityOverrides, MAX_PLACEMENTS, ModelNode, NameSource, Placement, Rgba, StyleAlpha};
+pub use tree::{EntityOverrides, MAX_PLACEMENTS, ModelNode, ModelUnits, NameSource, Placement, Rgba, StyleAlpha};
