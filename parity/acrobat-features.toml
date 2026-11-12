@@ -8642,6 +8642,18 @@ evidence = []
 notes = ""
 
 [[feature]]
+id = "print.color-handling"
+title = "Print colour handling (app-managed colours, printer profile)"
+area = "L"
+tier = "P1"
+milestone = "M11"
+status = "partial"
+commands = []
+tools = ["doc_print", "print_color_profiles"]
+evidence = ["crates/print/src/colour.rs::black_point_compensation_keeps_dark_shadows_apart", "crates/print/src/colour.rs::rgb_profiles_convert_the_values_and_keep_alpha", "crates/print/src/colour.rs::installed_profiles_are_rgb_and_grey_ones", "crates/engine/src/tests.rs::app_managed_colour_converts_the_printed_pictures", "crates/automation/tests/it/automation.rs::doc_print_with_app_managed_colour"]
+notes = "doc_print color_management app (#6269): the pages print as images (dpi, grayscale apply), converted from sRGB into an RGB or grey ICC printer profile (a file, or a name from print_color_profiles: the system's colour folders on Windows, macOS and Linux) with a rendering intent and black point compensation (default on), through craft-cms; the default leaves colour to the printer as before. The driver's own colour management should be off for such a job. Still missing against Acrobat: the Print dialog's Color Handling choice, CMYK printer profiles, vector pages converted without rendering them, and the document's output intent as the source of DeviceCMYK colours."
+
+[[feature]]
 id = "print.advanced-print-separations"
 title = "Print separations and in-RIP separations"
 area = "L"

@@ -726,6 +726,7 @@ impl Automation {
             "redact_clear" => self.redact_clear(&a)?,
             "doc_hidden_info" => self.doc_hidden_info(&a)?,
             "printers" => self.printers()?,
+            "print_color_profiles" => self.print_color_profiles()?,
             "printer_options" => self.printer_options(&a)?,
             "printer_papers" => self.printer_papers(&a)?,
             "link_list" => self.link_list(&a)?,
