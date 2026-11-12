@@ -395,6 +395,7 @@ fn changes(
                     .map(|id| pdfcraft_cos::ObjRef::new((id >> 16) as u32, id as u16)),
                 value: (a.value != b.value).then(|| a.value.clone()),
                 formatted: a.value != b.value && formatted.contains(&a.name),
+                ignore_max_len: false,
                 read_only: (a.readonly != b.readonly).then_some(a.readonly),
                 required: (a.required != b.required).then_some(a.required),
                 display: (a.display != b.display).then_some(a.display),

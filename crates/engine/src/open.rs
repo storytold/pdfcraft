@@ -238,6 +238,12 @@ impl Session {
                     match ran {
                         Ok(changes) if work.is_modified() => match rebase(&work) {
                             Ok((b, mut i, c)) => {
+                                // What opening noted before the scripts ran (values taken from
+                                // a static form's data) stays noted: the new reading of the
+                                // file does not repeat it.
+                                let mut warnings = info.warnings.clone();
+                                warnings.extend(i.warnings.drain(..).filter(|w| !info.warnings.contains(w)));
+                                i.warnings = warnings;
                                 // The file as saved differs from what opening shows: say so.
                                 if !changes.is_empty() {
                                     i.warnings.push(format!(

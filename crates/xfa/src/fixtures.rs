@@ -222,8 +222,9 @@ pub fn static_shell_many(n: usize) -> Vec<u8> {
 /// `b`, a protected `total` whose FormCalc calculate script is `a + b`, a text field `note`, and,
 /// inside an unnamed subform (AcroForm name `#subform[0]`), a text field `seen` calculated as
 /// `total ` and the total. Leaving `a` writes `left a` into `note`; leaving `b` hides `total`,
-/// which needs a new layout. Its datasets hold `data` (the children of `xfa:data`). No
-/// `/NeedsRendering`.
+/// which needs a new layout. As Designer sometimes writes it, the `total` widget carries
+/// `/MaxLen 1` though the template sets no `maxChars`. Its datasets hold `data` (the children
+/// of `xfa:data`). No `/NeedsRendering`.
 pub fn static_scripted_shell(data: &str) -> Vec<u8> {
     let xdp = format!(
         r#"<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/"><template xmlns="http://www.xfa.org/schema/xfa-template/3.3/"><subform name="form1" layout="tb"><pageSet><pageArea name="sheet"><contentArea x="0in" y="0in" w="8.5in" h="11in"/><medium short="8.5in" long="11in"/></pageArea></pageSet><subform name="page1" w="8.5in" h="11in"><field name="a" x="1in" y="1in" w="2in" h="0.3in"><ui><numericEdit/></ui><event activity="exit"><script>note = "left a"</script></event></field><field name="b" x="1in" y="1.5in" w="2in" h="0.3in"><ui><numericEdit/></ui><event activity="exit"><script>total.presence = "hidden"</script></event></field><field name="total" access="protected" x="1in" y="2in" w="2in" h="0.3in"><ui><numericEdit/></ui><calculate><script>a + b</script></calculate></field><field name="note" x="1in" y="2.5in" w="4in" h="0.3in"><ui><textEdit/></ui></field><subform x="1in" y="3in" w="4in" h="0.5in"><field name="seen" x="0in" y="0in" w="4in" h="0.3in"><ui><textEdit/></ui><calculate><script>Concat("total ", total)</script></calculate></field></subform></subform></subform></template><xfa:datasets xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"><xfa:data><form1><page1>{data}</page1></form1></xfa:data></xfa:datasets></xdp:xdp>"#
@@ -245,7 +246,7 @@ pub fn static_scripted_shell(data: &str) -> Vec<u8> {
         b"<< /T (page1[0]) /Parent 6 0 R /Kids [8 0 R 9 0 R 10 0 R 11 0 R 12 0 R] >>".to_vec(),
         widget("a", 7, 698, ""),
         widget("b", 7, 662, ""),
-        widget("total", 7, 626, " /Ff 1"),
+        widget("total", 7, 626, " /Ff 1 /MaxLen 1"),
         widget("note", 7, 590, ""),
         b"<< /T (#subform[0]) /Parent 7 0 R /Kids [13 0 R] >>".to_vec(),
         widget("seen", 12, 554, ""),

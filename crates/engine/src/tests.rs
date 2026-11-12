@@ -8407,6 +8407,9 @@ fn static_xfa_forms_run_their_template_scripts() {
     assert_eq!(value(&s, "#subform[0].seen[0]"), vec!["total 5".to_string()]);
     let doc = s.get(id).unwrap();
     assert!(!doc.dirty && doc.bytes.starts_with(&original[..]));
+    // Both are noted: the values taken from the data, and what the scripts then changed.
+    assert!(doc.info.warnings.iter().any(|w| w.contains("taken from this form's XFA data")), "{:?}", doc.info.warnings);
+    assert!(doc.info.warnings.iter().any(|w| w.contains("scripts changed it on opening")), "{:?}", doc.info.warnings);
     let before = names(&s);
     // A change runs the field's exit script and every calculation again.
     s.apply(id, Edit::SetFieldValue { name: "form1[0].page1[0].a[0]".into(), value: FieldValue::Text("10".into()) }).unwrap();
@@ -8432,6 +8435,28 @@ fn static_xfa_forms_run_their_template_scripts() {
     let d2 = s.get(id2).unwrap();
     assert_eq!(d2.form.iter().find(|f| f.name == "form1[0].page1[0].total[0]").unwrap().value, vec!["14".to_string()]);
     assert!(!d2.dirty && d2.bytes == saved, "nothing to recalculate");
+}
+
+/// A static XFA form's widget may carry a `/MaxLen` its template does not set (Designer writes
+/// `/MaxLen 1` on some calculated fields): it limits what is typed, not what a script computes,
+/// so a longer result is written, and the values written after it in the same run too.
+#[test]
+fn a_static_xfa_script_value_is_not_refused_by_the_widgets_max_len() {
+    let original = Arc::new(pdfcraft_xfa::fixtures::static_scripted_shell("<a>2</a><b>3</b>"));
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("static.pdf", None, original, None).expect("opens");
+    let value = |s: &Session, n: &str| s.get(id).unwrap().form.iter().find(|f| f.name == format!("form1[0].page1[0].{n}")).unwrap().value.clone();
+    assert_eq!(s.get(id).unwrap().form.iter().find(|f| f.name == "form1[0].page1[0].total[0]").unwrap().max_len, Some(1));
+    s.take_js_output(id);
+    s.apply(id, Edit::SetFieldValue { name: "form1[0].page1[0].a[0]".into(), value: FieldValue::Text("10".into()) }).unwrap();
+    let out = s.take_js_output(id);
+    assert!(out.errors.is_empty(), "{out:?}");
+    assert_eq!(value(&s, "total[0]"), vec!["13".to_string()]);
+    assert_eq!(value(&s, "#subform[0].seen[0]"), vec!["total 13".to_string()]);
+    let saved = s.save_bytes(id).unwrap();
+    let cos = pdfcraft_cos::Document::open(saved).unwrap();
+    let data = pdfcraft_xfa::parse_datasets(&pdfcraft_xfa::read_packets(&cos).unwrap().unwrap().xdp).unwrap();
+    assert_eq!(data.text_at(&pdfcraft_xfa::som_to_path("form1[0].page1[0].total[0]")), Some("13"));
 }
 
 /// A static XFA exclusion group laid out as a radio group with `/Opt [(1) (2)]` and on states
