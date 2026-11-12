@@ -7042,26 +7042,22 @@ fn number_gate_crop_box_with_no_finite_value_falls_back_to_the_media_box() {
 }
 
 /// A media box holding a token with no finite value is invalid on each side, exactly as one that
-/// isn't an array is, and each side's fallback is pinned to its value. The two readers' fallbacks
-/// for a page's own invalid media box differ: the model takes 612 × 792 (US Letter) and ignores
-/// an inherited box; the renderer takes an inherited box, then A4 (210 × 297 mm, about
-/// 595.28 × 841.89 pt). That is reader policy, not parsing, and this change leaves it alone.
+/// isn't an array is, and each side's fallback is pinned to its value. Both readers fall back to
+/// 612 × 792 (US Letter) for a page's own invalid media box: the model ignores an inherited box,
+/// and the renderer takes an inherited box first. The renderer's fallback was A4 when this test
+/// was written; hayro-syntax patch 44 has since made a page with no usable media box US Letter
+/// on that side too. That is reader policy, not parsing, and this change leaves it alone.
 #[test]
 fn number_gate_media_box_with_no_finite_value_is_invalid_on_each_side() {
     let letter: Geometry = ([0.0, 0.0, 612.0, 792.0], (612.0, 792.0));
-    // hayro-syntax's `A4`, computed as it computes it.
-    let per_mm = 1.0_f64 / (10.0 * 2.54) * 72.0;
-    let (a4_w, a4_h) = ((210.0 * per_mm) as f32, (297.0 * per_mm) as f32);
-    let a4: Geometry = ([0.0, 0.0, a4_w, a4_h], (a4_w, a4_h));
-    assert!((a4_w - 595.28).abs() < 0.01 && (a4_h - 841.89).abs() < 0.01, "{a4:?}");
 
     let not_a_box = number_gate_page("/MediaBox /NotABox", "");
     assert_eq!(number_gate_model(&not_a_box), letter, "model, /MediaBox /NotABox");
-    assert_eq!(number_gate_render(&not_a_box), a4, "renderer, /MediaBox /NotABox");
+    assert_eq!(number_gate_render(&not_a_box), letter, "renderer, /MediaBox /NotABox");
     for t in pdfcraft_testkit::non_finite_tokens() {
         let media = number_gate_page(&format!("/MediaBox [0 0 {t} 792]"), "");
         assert_eq!(number_gate_model(&media), letter, "model, /MediaBox [0 0 {t} 792]");
-        assert_eq!(number_gate_render(&media), a4, "renderer, /MediaBox [0 0 {t} 792]");
+        assert_eq!(number_gate_render(&media), letter, "renderer, /MediaBox [0 0 {t} 792]");
         assert_eq!(number_gate_model(&media), number_gate_model(&not_a_box), "model, /MediaBox [0 0 {t} 792]");
         assert_eq!(number_gate_render(&media), number_gate_render(&not_a_box), "renderer, /MediaBox [0 0 {t} 792]");
     }
