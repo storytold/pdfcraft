@@ -3250,6 +3250,12 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     // A menu click can open a dialog after the frame's first look.
     app.page_keys = app.page_keys.also(app.covers_pages());
     let keys = app.page_keys;
+    // Edit text's objects catch up with the document before the keys move or delete them: an
+    // arrow's nudge reaches the document after the pages are drawn, and the next press starts from
+    // where it left them.
+    let edit_text = app.quick_tool == QuickTool::EditText && doc.allows_modification();
+    let view = &mut app.views[index];
+    view.objects.prepare(doc, edit_text, view.pending_edit.is_some());
     // The pages' keys, for the active view only: Compare and split view draw two.
     if app.active == Some(index) {
         let cx = key_order::KeyCx { ctx: ui.ctx(), keys, doc, tool: app.quick_tool, preparing, editing_content, speed: app.scroll_speed };
@@ -3372,7 +3378,6 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     } else {
         view.prepare.selected = None;
     }
-    view.objects.prepare(doc, tool == QuickTool::EditText && can_modify, view.pending_edit.is_some());
     view.text_background.prepare(ui.ctx(), doc, view.line_editor.as_ref(), view.content.draft.as_ref(), scale);
     let added = if editing_content { doc.added().to_vec() } else { Vec::new() };
     let doc_links = if tool == QuickTool::Link { doc.links().to_vec() } else { Vec::new() };

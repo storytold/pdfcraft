@@ -129,8 +129,8 @@ impl ObjectSelection {
         self.select_paragraph = Some((page, block));
     }
 
-    /// `edit_waiting`: an edit made this pass hasn't reached the document yet (an arrow's nudge, in
-    /// the key pass): the selection it expects stays expected.
+    /// Before the pages' keys, once a pass. `edit_waiting`: an edit made earlier hasn't reached the
+    /// document yet, and the selection it expects stays expected.
     pub fn prepare(&mut self, doc: &Document, enabled: bool, edit_waiting: bool) {
         self.hold_editor = false;
         if !enabled {
@@ -170,8 +170,8 @@ impl ObjectSelection {
             // A refused edit keeps the generation and the original selection.
             self.pending = None;
         }
-        // The Escape that closed the editor asked for this, and the key pass, which lets Escape go
-        // to an open editor first, has already run.
+        // The Escape that closed the editor asked for this, last pass: the key pass had let the
+        // editor have it.
         if let Some((page, block)) = self.select_paragraph.take()
             && let Ok(objects) = self.inventory(doc, page)
             && let Some(object) = objects.into_iter().find(|o| o.target == ObjectTarget { kind: ObjectKind::Text, index: block })

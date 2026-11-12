@@ -543,6 +543,30 @@ fn command_a_selects_every_object_on_the_page_to_move_and_delete_together() {
     assert_eq!(objects(&h).len(), 4, "one undo brings every object back");
 }
 
+/// Arrows pressed in two frames in a row (a fast key repeat) move the objects twice, and they stay
+/// selected. The second move started from where they were before the first, and the selection
+/// went.
+#[test]
+fn objects_stay_selected_through_arrows_in_two_frames_in_a_row() {
+    let mut h = harness();
+    let before = objects(&h);
+    keys(&mut h, Modifiers::COMMAND, Key::A);
+    h.get_by_label("4 objects selected");
+    // Each in a frame of its own, the second a repeat: `key_press` would put the key's release
+    // between them, in a frame of its own.
+    for repeat in [false, true] {
+        let press = egui::Event::Key { key: Key::ArrowRight, physical_key: None, pressed: true, repeat, modifiers: Modifiers::NONE };
+        h.input_mut().events.push(press);
+        h.step();
+    }
+    h.event(egui::Event::Key { key: Key::ArrowRight, physical_key: None, pressed: false, repeat: false, modifiers: Modifiers::NONE });
+    h.run_steps(4);
+    for (old, new) in before.iter().zip(objects(&h)) {
+        assert!((new.rect[0] - old.rect[0] - 2.0).abs() < 0.01, "moved twice: {old:?} -> {new:?}");
+    }
+    h.get_by_label("4 objects selected");
+}
+
 /// In a paragraph open for typing, âŒ˜A selects its text, as before.
 #[test]
 fn command_a_in_an_open_paragraph_selects_its_text_not_the_objects() {
