@@ -1,0 +1,18 @@
+[package]
+name = "pdfcraft-prc"
+description = "PRC 3D model reader (ISO 14739-1): container, bit-level primitives, schema"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+flate2.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
