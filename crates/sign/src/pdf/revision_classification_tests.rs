@@ -469,6 +469,30 @@ fn a_signature_value_named_as_info_is_not_rewritten_as_metadata() {
     }
 }
 
+/// From review on #7041: the signed catalog's `/Perms`, also named as `/Info`, rewritten in place
+/// to name another signature as the certification, is no document information at any level.
+#[test]
+fn the_catalogs_perms_named_as_info_is_not_rewritten_as_metadata() {
+    let sig = "<< /Type /Sig /Filter /Adobe.PPKLite /SubFilter /adbe.pkcs7.detached /ByteRange [0 10 20 10] /Contents <00> >>";
+    let signed = with_info(
+        File::new().revision(&[
+            (1, Row::Obj(0, 0, "<< /Type /Catalog /Pages 2 0 R /Perms 7 0 R >>")),
+            (2, Row::Obj(0, 0, PAGES)),
+            (3, Row::Obj(0, 0, &page("/Annots []"))),
+            (4, Row::Obj(0, 0, &page("/Annots []"))),
+            (5, Row::Obj(0, 0, sig)),
+            (6, Row::Obj(0, 0, sig)),
+            (7, Row::Obj(0, 0, "<< /DocMDP 5 0 R >>")),
+        ]),
+        7,
+    );
+    let redirected = with_info(signed.clone().revision(&[(7, Row::Obj(0, 0, "<< /DocMDP 6 0 R >>"))]), 7);
+    for p in [Some(1), Some(2), Some(3), None] {
+        let v = verdict(&redirected.open(), signed.open(), p);
+        assert!(matches!(v, Modification::Disallowed(_)), "P={p:?}: {v:?}");
+    }
+}
+
 /// From review on #7041: an entry of a signed page's `/Annots` that led nowhere when signed,
 /// filled later with a widget the trailer names as `/Info`, puts a widget on the signed page. A
 /// dictionary with a role of its own is not document information because the trailer names it.

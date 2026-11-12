@@ -360,13 +360,7 @@ fn form_fields(doc: &Document) -> Option<Form> {
         let Some(d) = doc.resolve(&o).as_dict().cloned() else { continue };
         fields_left = fields_left.checked_sub(1)?;
         let prefix = parent.and_then(|p| form.nodes.get(p)).map_or("", |p| p.name.as_str());
-        let t = d.get(b"T").map(|t| doc.resolve(t));
-        // Measured before it is decoded, as a lock's names are: one long /T shared by many fields
-        // would otherwise be decoded once for each.
-        if t.as_deref().is_some_and(|t| stored_len(t) > MAX_STORED_NAME) {
-            return None;
-        }
-        let part = t.and_then(|t| exact_name(&t));
+        let part = d.get(b"T").and_then(|t| exact_name(&doc.resolve(t)));
         let name = match (part, prefix.is_empty()) {
             (Some(p), true) => p,
             (Some(p), false) => format!("{prefix}.{p}"),
@@ -791,7 +785,7 @@ endstream",
         // One name at the limit, listed as often as a lock may list names: far more bytes than are read.
         let shared = doc.add(Object::String(longest));
         let many = Object::Array(vec![Object::Ref(shared); MAX_LOCK_NAMES]);
-        assert!(MAX_LOCK_NAMES * MAX_FIELD_NAME_BYTES > MAX_NAME_BYTES);
+        const { assert!(MAX_LOCK_NAMES * MAX_FIELD_NAME_BYTES > MAX_NAME_BYTES) };
         assert!(rules(&doc, &sig_field(include(many)), &dict(vec![])).is_err());
     }
 

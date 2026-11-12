@@ -406,17 +406,21 @@ impl Recogniser<'_> {
     /// new `/Info` object. A dictionary that plays a role of its own (a signature value, an
     /// annotation, a field) is not document information because the trailer names it: rewriting
     /// a signature value that is also `/Info`, or filling a signed page's dangling `/Annots`
-    /// entry with a widget named as `/Info`, is no housekeeping.
+    /// entry with a widget named as `/Info`, is no housekeeping. Nor is the signed catalog's
+    /// `/Perms`, which names the certification: rewritten in place it keeps the catalog's
+    /// reference, so only [`perms_changed`] (at P=1) would see it otherwise.
     fn housekeeping(&mut self) {
-        let (doc, snapshot) = (self.doc, &self.seen.snapshot);
+        let (doc, old, snapshot) = (self.doc, self.old, &self.seen.snapshot);
         let info = doc.trailer().get(b"Info").and_then(Object::as_ref).map(|r| r.num);
+        let perms = old.root().and_then(|c| old.get(c).as_dict().and_then(|c| c.get(b"Perms").and_then(Object::as_ref))).map(|r| r.num);
         let no_role = |o: &Object| o.as_dict().is_none_or(|d| !has_role(d));
         let mut found = Vec::new();
         for c in &self.seen.changes {
             let op = match (&c.before, &*c.now) {
                 (Some(b), _)
                     if c.label == Some(kind::METADATA)
-                        && (Some(c.num) == snapshot.old_metadata || (Some(c.num) == snapshot.old_info && no_role(b) && no_role(&c.now))) =>
+                        && (Some(c.num) == snapshot.old_metadata
+                            || (Some(c.num) == snapshot.old_info && Some(c.num) != perms && no_role(b) && no_role(&c.now))) =>
                 {
                     Some(Op::Housekeeping)
                 }
