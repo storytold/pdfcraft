@@ -17,6 +17,8 @@ pub struct SecuritySummary {
     pub permissions: pdfcraft_cos::Permissions,
     /// Set in this session; written by the next save.
     pub pending: bool,
+    /// Certificate security (§7.6.5): the document opens with a digital ID, not a password.
+    pub certificate: bool,
 }
 
 /// What printing a protected document allows (Acrobat: Printing allowed).
@@ -180,6 +182,15 @@ pub(crate) fn certificate_secured(cos: &pdfcraft_cos::Document) -> bool {
     cos.output_handler().is_some_and(|h| h.dict().filter == pdfcraft_cos::PUBSEC_FILTER)
 }
 
+/// `error` as it reads for `cos`: a refusal by a certificate-protected file's permissions does not
+/// point to an owner password, which that file has none of.
+pub(crate) fn note_certificate(error: EditError, cos: &pdfcraft_cos::Document) -> EditError {
+    match error {
+        EditError::NotPermitted(what) if certificate_secured(cos) => EditError::NotPermittedCertificate(what),
+        other => other,
+    }
+}
+
 /// The document as it is now, with no encryption: what the renderer and inspector read when
 /// the file itself is certificate-protected.
 pub(crate) fn plain_copy(cos: &pdfcraft_cos::Document) -> Result<Arc<Vec<u8>>, EditError> {
@@ -200,18 +211,51 @@ pub(crate) fn working_file(cos: &pdfcraft_cos::Document) -> Result<Arc<Vec<u8>>,
 }
 
 /// What one of `identities` makes of the envelopes: the seed and permissions of the first
-/// envelope addressed to it.
-pub(crate) fn unlock_with_identities(identities: &[Arc<pdfcraft_sign::DigitalId>], envelopes: &[Vec<u8>]) -> Option<CertificateKey> {
+/// envelope addressed to it, or the message that says why none opens: no digital ID at all, an
+/// envelope for one of them that could not be opened (with the real reason), or none of them
+/// among the recipients, who are named.
+pub(crate) fn unlock_with_identities(identities: &[Arc<pdfcraft_sign::DigitalId>], envelopes: &[Vec<u8>]) -> Result<CertificateKey, String> {
+    let mut failure: Option<String> = None;
     for id in identities {
         for env in envelopes {
-            if let Ok(Some(content)) = pdfcraft_sign::envelope::open(env, id)
-                && let Some((seed, permissions)) = pdfcraft_cos::permissions_from_envelope(&content)
-            {
-                return Some(CertificateKey { seed, permissions });
+            match pdfcraft_sign::envelope::open(env, id) {
+                Ok(Some(content)) => {
+                    if let Some((seed, permissions)) = pdfcraft_cos::permissions_from_envelope(&content) {
+                        return Ok(CertificateKey { seed, permissions });
+                    }
+                    failure.get_or_insert_with(|| {
+                        format!("{} is a recipient, but what its envelope holds is not readable", id.certificate.display_name())
+                    });
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    failure
+                        .get_or_insert_with(|| format!("an envelope is addressed to {}, but it can't be opened: {e}", id.certificate.display_name()));
+                }
             }
         }
     }
-    None
+    let names = recipient_names(envelopes);
+    let what = format!("This document is encrypted with certificates, for specific people ({names})");
+    Err(match (identities.is_empty(), failure) {
+        (true, _) => format!("{what}. You have no digital ID to open it with: add the digital ID (.p12 or .pfx) of one of them."),
+        (false, Some(why)) => format!("{what}, and {why}."),
+        (false, None) => format!("{what}, and none of your digital IDs is among them."),
+    })
+}
+
+/// The recipients of the envelopes, a few of them named (issuer and serial number).
+fn recipient_names(envelopes: &[Vec<u8>]) -> String {
+    const SHOWN: usize = 4;
+    let all: Vec<String> = envelopes.iter().flat_map(|e| pdfcraft_sign::envelope::recipients(e)).collect();
+    if all.is_empty() {
+        return "recipients not readable".into();
+    }
+    let mut text = all.iter().take(SHOWN).map(|n| n.as_str()).collect::<Vec<_>>().join("; ");
+    if all.len() > SHOWN {
+        text.push_str(&format!("; and {} more", all.len() - SHOWN));
+    }
+    text
 }
 
 /// Opened as owner, or nothing is restricted (no permissions password was set): security may

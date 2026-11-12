@@ -553,7 +553,11 @@ impl Document {
 
     /// [`Self::allows_copying`], as the error to report when it isn't.
     pub fn check_copying(&self) -> Result<(), EditError> {
-        if self.allows_copying() { Ok(()) } else { Err(EditError::NotPermitted("copying text and images")) }
+        if self.allows_copying() {
+            return Ok(());
+        }
+        let denied = || EditError::NotPermitted("copying text and images");
+        Err(self.editor.as_ref().map_or_else(denied, |e| crate::protection::note_certificate(denied(), &e.cos)))
     }
 
     /// Page changes (insert, delete, rotate, move) are allowed.
@@ -674,13 +678,15 @@ impl Document {
         };
         let pending = editor.cos.encryption_changed();
         let permissions = if pending { pdfcraft_cos::Permissions { owner: false, ..h.permissions() } } else { h.permissions() };
-        let method = if d.filter == pdfcraft_cos::PUBSEC_FILTER {
-            let n = d.recipients.len();
+        let certificate = d.filter == pdfcraft_cos::PUBSEC_FILTER;
+        let method = if certificate {
+            // People, not CMS objects: one envelope can name several.
+            let n: usize = d.recipients.iter().map(|r| pdfcraft_sign::envelope::recipient_count(r)).sum();
             format!("{method} · certificates ({n} recipient{})", if n == 1 { "" } else { "s" })
         } else {
             method.to_string()
         };
-        Some(SecuritySummary { method, owner: h.auth() == pdfcraft_cos::Auth::Owner && !pending, permissions, pending })
+        Some(SecuritySummary { method, owner: h.auth() == pdfcraft_cos::Auth::Owner && !pending, permissions, pending, certificate })
     }
 
     /// Comment properties of the comment at `(page, index)` (Comment Properties dialog).

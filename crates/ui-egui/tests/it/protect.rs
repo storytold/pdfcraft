@@ -130,11 +130,16 @@ fn encrypting_with_certificates_and_opening_with_a_digital_id() {
     app.open_bytes("secret.pdf", None, bytes.to_vec()).unwrap();
     assert!(app.views.is_empty());
     let prompt = app.password_prompt.as_mut().expect("a digital ID is asked for");
-    assert!(prompt.digital_id.is_some() && prompt.error.is_none());
+    assert!(prompt.digital_id.is_some());
+    assert!(
+        prompt.error.as_deref().is_some_and(|e| e.contains("no digital ID") && e.contains("serial")),
+        "no ID yet, and the recipients are named: {:?}",
+        prompt.error
+    );
     prompt.digital_id = Some(sign_data("ec-p256.p12"));
     app.submit_password(Some("test".into()));
     let prompt = app.password_prompt.as_mut().expect("asked again");
-    assert_eq!(prompt.error.as_deref(), Some("None of your digital IDs can open this document."));
+    assert!(prompt.error.as_deref().is_some_and(|e| e.contains("none of your digital IDs is among them")), "{:?}", prompt.error);
     prompt.digital_id = Some(sign_data("chain.p12"));
     app.submit_password(Some("test".into()));
     assert!(app.password_prompt.is_none() && app.views.len() == 1, "Ada opens it");

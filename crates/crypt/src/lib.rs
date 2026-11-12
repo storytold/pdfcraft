@@ -106,6 +106,17 @@ pub const PUBSEC_SUBFILTER: &[u8] = b"adbe.pkcs7.s5";
 /// The crypt filter name Acrobat uses for public-key security.
 pub const PUBSEC_CF: &[u8] = b"DefaultCryptFilter";
 
+/// Bit 2 of an envelope's permissions: "permits change of encryption and enables all other
+/// permissions" (ISO 32000-2, Table 24).
+const PUBSEC_ALL_BIT: i32 = 0b10;
+
+/// The revision whose permission flags a public-key dictionary uses: it has no `/R`, and the
+/// sub-filter says it (§7.6.5.3): `adbe.pkcs7.s3` reads them as revision 2, s4 and s5 as
+/// revision 3 (Table 24).
+fn public_key_revision(sub_filter: &[u8]) -> i64 {
+    if sub_filter == b"adbe.pkcs7.s3" { 2 } else { 3 }
+}
+
 /// The 4 permission bytes an envelope carries after the seed (big-endian `/P`).
 pub fn permission_bytes(permissions: i32) -> [u8; 4] {
     permissions.to_be_bytes()
@@ -358,7 +369,9 @@ impl SecurityHandler {
         };
         let key = Zeroizing::new(public_key_file_key(seed, &dict.recipients, dict.encrypt_metadata, method, dict.length_bits));
         dict.p = permissions;
-        let auth = if permissions == -1 { Auth::Owner } else { Auth::User };
+        // Bit 2 "permits change of encryption and enables all other permissions" (ISO 32000-2,
+        // Table 24): whoever holds an envelope with it set has every permission, as the owner does.
+        let auth = if permissions == -1 || permissions & PUBSEC_ALL_BIT != 0 { Auth::Owner } else { Auth::User };
         Ok(Self::new(dict, key, auth, None))
     }
 
@@ -378,7 +391,8 @@ impl SecurityHandler {
     /// edited `/P` grants nothing extra. Without a readable `/Perms`, `/P` applies as before.
     pub fn permissions(&self) -> Permissions {
         let bits = self.perms_p().map_or(self.dict.p, |p| self.dict.p & p);
-        Permissions { bits, owner: self.auth == Auth::Owner, revision: self.dict.r }
+        let revision = if self.dict.filter == PUBSEC_FILTER { public_key_revision(&self.dict.sub_filter) } else { self.dict.r };
+        Permissions { bits, owner: self.auth == Auth::Owner, revision }
     }
 
     /// `/P` as `/Perms` holds it: AES-256 ECB of one block (= CBC with a zero IV), marked `adb`.

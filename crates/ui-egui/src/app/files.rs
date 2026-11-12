@@ -307,14 +307,14 @@ impl PdfCraftApp {
                         digital_id: None,
                     });
                 }
-                Err(pdfcraft_render::OpenError::NeedsCertificate) => {
+                Err(pdfcraft_render::OpenError::NeedsCertificate(why)) => {
                     self.password_prompt = Some(PasswordPrompt {
                         name: pending.name,
                         path: pending.path,
                         bytes,
                         stamp: pending.stamp,
                         input: String::new(),
-                        error: self.certificate_error(),
+                        error: Some(why),
                         activate: pending.activate,
                         recovered: pending.recovered,
                         then: pending.then,
@@ -365,7 +365,7 @@ impl PdfCraftApp {
                 });
                 return Ok(());
             }
-            Err(OpenError::NeedsCertificate) => {
+            Err(OpenError::NeedsCertificate(why)) => {
                 #[cfg(not(target_arch = "wasm32"))]
                 let stamp = path.as_deref().and_then(file_watch::Stamp::at);
                 self.password_prompt = Some(PasswordPrompt {
@@ -375,7 +375,7 @@ impl PdfCraftApp {
                     #[cfg(not(target_arch = "wasm32"))]
                     stamp,
                     input: String::new(),
-                    error: self.certificate_error(),
+                    error: Some(why),
                     activate,
                     recovered: None,
                     then: None,
@@ -817,12 +817,6 @@ impl PdfCraftApp {
         }
         #[cfg(not(target_arch = "wasm32"))]
         self.settle_launch_layout();
-    }
-
-    /// The prompt's error for a document encrypted with certificates: none the first time;
-    /// once a digital ID has been tried, that none of them opens it.
-    fn certificate_error(&self) -> Option<String> {
-        (!self.session.identities().is_empty()).then(|| "None of your digital IDs can open this document.".to_string())
     }
 
     /// Ask for the active document's permissions password, then run `then` (if any).

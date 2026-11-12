@@ -48,12 +48,17 @@ pub fn new_seed() -> Result<[u8; 20], SignError> {
 /// AES-256 gets an AES-256-CBC envelope, anything else AES-128-CBC: that mode is there for older
 /// readers, and its file key is no stronger.
 pub fn envelope(recipient: &Certificate, content: &[u8], algorithm: Algorithm) -> Result<Vec<u8>, SignError> {
-    let PublicKey::Rsa { n, e } = &recipient.public_key else {
-        return Err(SignError::Unsupported(format!(
-            "encrypting for {}: certificate encryption needs an RSA certificate (this one has another kind of key)",
-            recipient.display_name()
-        )));
-    };
+    envelope_for(&[recipient], content, algorithm)
+}
+
+/// One `EnvelopedData` for several recipients: the content is encrypted once and its key wrapped
+/// for each certificate, a `KeyTransRecipientInfo` apiece. ISO 32000-2 (Tables 23 and 27) asks for
+/// one CMS object per unique set of access permissions, so recipients whose envelope content is
+/// the same share one.
+pub fn envelope_for(recipients: &[&Certificate], content: &[u8], algorithm: Algorithm) -> Result<Vec<u8>, SignError> {
+    if recipients.is_empty() {
+        return Err(SignError::Unsupported("an envelope needs at least one recipient".into()));
+    }
     let iv = random(16)?;
     let (cek, content_oid, encrypted) = if algorithm == Algorithm::Aes256 {
         let cek = random(32)?;
@@ -64,14 +69,68 @@ pub fn envelope(recipient: &Certificate, content: &[u8], algorithm: Algorithm) -
         let encrypted = aes_encrypt::<aes::Aes128>(&cek, &iv, content)?;
         (cek, OID_AES128_CBC, encrypted)
     };
-    let encrypted_key = rsa_pkcs1_encrypt(n, e, &cek)?;
-    // KeyTransRecipientInfo, the recipient named by issuer and serial number.
-    let rid = der::seq(&[&recipient.issuer.raw, &der::uint(&recipient.serial)]);
-    let ktri = der::seq(&[&der::int(0), &rid, &der::algorithm(OID_RSA, Some(&der::null())), &der::octets(&encrypted_key)]);
+    let mut infos = Vec::with_capacity(recipients.len());
+    for recipient in recipients {
+        let PublicKey::Rsa { n, e } = &recipient.public_key else {
+            return Err(SignError::Unsupported(format!(
+                "encrypting for {}: certificate encryption needs an RSA certificate (this one has another kind of key)",
+                recipient.display_name()
+            )));
+        };
+        let encrypted_key = rsa_pkcs1_encrypt(n, e, &cek)?;
+        // KeyTransRecipientInfo, the recipient named by issuer and serial number.
+        let rid = der::seq(&[&recipient.issuer.raw, &der::uint(&recipient.serial)]);
+        infos.push(der::seq(&[&der::int(0), &rid, &der::algorithm(OID_RSA, Some(&der::null())), &der::octets(&encrypted_key)]));
+    }
+    let info_refs: Vec<&[u8]> = infos.iter().map(Vec::as_slice).collect();
     let content_alg = der::algorithm(content_oid, Some(&der::octets(&iv)));
     let eci = der::seq(&[&der::oid(OID_DATA), &content_alg, &der::tlv(0x80, &encrypted)]);
-    let enveloped = der::seq(&[&der::int(0), &der::set_of(&[&ktri]), &eci]);
+    let enveloped = der::seq(&[&der::int(0), &der::set_of(&info_refs), &eci]);
     Ok(der::seq(&[&der::oid(OID_ENVELOPED_DATA), &der::explicit(0, &enveloped)]))
+}
+
+/// The recipients an envelope names, as people read them: "CN=Bob, O=Example (serial 1A2B)" for
+/// a certificate named by issuer and serial number, or its key identifier. Empty when the
+/// envelope can't be read.
+pub fn recipients(cms: &[u8]) -> Vec<String> {
+    let Ok(infos) = recipient_infos(cms) else { return Vec::new() };
+    infos
+        .iter()
+        .filter(|r| r.tag == tag::SEQUENCE)
+        .filter_map(|r| {
+            let p = r.children().ok()?;
+            let rid = p.get(1)?;
+            if rid.tag == tag::SEQUENCE {
+                let parts = rid.children().ok()?;
+                let issuer = crate::x509::Name::parse(parts.first()?).map(|n| n.display()).unwrap_or_default();
+                let serial: String = der_uint_value(parts.get(1)?.uint_bytes()).iter().map(|b| format!("{b:02X}")).collect();
+                Some(format!("issued by {issuer}, serial {serial}"))
+            } else if rid.tag == 0x80 {
+                Some(format!("key {}", rid.value.iter().map(|b| format!("{b:02X}")).collect::<String>()))
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+/// How many recipients an envelope is addressed to (its `RecipientInfo`s).
+pub fn recipient_count(cms: &[u8]) -> usize {
+    recipient_infos(cms).map(|r| r.len()).unwrap_or(0)
+}
+
+/// The `RecipientInfo`s of a `ContentInfo` holding an `EnvelopedData`.
+fn recipient_infos(cms: &[u8]) -> Result<Vec<Tlv<'_>>, SignError> {
+    let info = Tlv::parse_all_ber(cms).map_err(|_| bad("not DER"))?;
+    let parts = info.expect(tag::SEQUENCE, "ContentInfo")?.children()?;
+    let body = parts.get(1).ok_or_else(|| bad("ContentInfo"))?;
+    let enveloped = body.inner()?.expect(tag::SEQUENCE, "EnvelopedData")?.children()?;
+    let mut it = enveloped.iter().skip(1);
+    let mut next = it.next().ok_or_else(|| bad("recipientInfos"))?;
+    if next.tag == 0xA0 {
+        next = it.next().ok_or_else(|| bad("recipientInfos"))?;
+    }
+    next.children()
 }
 
 /// Open an envelope with `id`: the content when the envelope names this identity (by issuer
@@ -195,46 +254,37 @@ fn rsa_pkcs1_encrypt(n: &[u8], e: &[u8], message: &[u8]) -> Result<Vec<u8>, Sign
     Ok(out)
 }
 
-/// A random source the decryption never draws on (no blinding is asked for).
-struct NoRng;
+/// The operating system's random generator, for the blinding of the RSA private-key operation.
+struct OsRng;
 
-impl rand_core::TryRng for NoRng {
-    type Error = std::convert::Infallible;
+impl rand_core::TryRng for OsRng {
+    type Error = getrandom::Error;
     fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
-        Ok(0)
+        let mut b = [0u8; 4];
+        getrandom::fill(&mut b)?;
+        Ok(u32::from_le_bytes(b))
     }
     fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
-        Ok(0)
+        let mut b = [0u8; 8];
+        getrandom::fill(&mut b)?;
+        Ok(u64::from_le_bytes(b))
     }
-    fn try_fill_bytes(&mut self, _dst: &mut [u8]) -> Result<(), Self::Error> {
-        Ok(())
+    fn try_fill_bytes(&mut self, dst: &mut [u8]) -> Result<(), Self::Error> {
+        getrandom::fill(dst)
     }
 }
-impl rand_core::TryCryptoRng for NoRng {}
+impl rand_core::TryCryptoRng for OsRng {}
 
-/// RSAES-PKCS1-v1_5 decryption with an RSA private key read from its PKCS #8 encoding.
+/// RSAES-PKCS1-v1_5 decryption with an RSA private key read from its PKCS #8 encoding. The
+/// private-key operation is blinded with random numbers and the padding is checked by the rsa
+/// crate in constant time, so a file opened over and over (through automation, say) gives a
+/// timing observer nothing.
 fn rsa_pkcs1_decrypt(key: &PrivateKey, encrypted: &[u8]) -> Result<Vec<u8>, SignError> {
+    use rsa::traits::PaddingScheme as _;
     let private = rsa_private_key(key)?;
-    let c = BoxedUint::from_be_slice_vartime(encrypted);
-    let PublicKey::Rsa { n, .. } = key.public_key() else { return Err(SignError::Unsupported("RSA".into())) };
-    let k = n.iter().skip_while(|b| **b == 0).count();
-    let m = rsa::hazmat::rsa_decrypt(None::<&mut NoRng>, &private, &c).map_err(|_| SignError::Crypto("RSA decryption failed".into()))?;
-    let mut em = m.to_be_bytes().to_vec();
-    while em.len() > k && em[0] == 0 {
-        em.remove(0);
-    }
-    while em.len() < k {
-        em.insert(0, 0);
-    }
-    // 00 02 PS 00 M
-    if em.len() < 11 || em[0] != 0 || em[1] != 2 {
-        return Err(SignError::Crypto("the wrapped key does not unwrap with this certificate's key".into()));
-    }
-    let sep = em[2..].iter().position(|b| *b == 0).ok_or_else(|| SignError::Crypto("the wrapped key is malformed".into()))?;
-    if sep < 8 {
-        return Err(SignError::Crypto("the wrapped key is malformed".into()));
-    }
-    Ok(em[2 + sep + 1..].to_vec())
+    rsa::Pkcs1v15Encrypt
+        .decrypt(Some(&mut OsRng), &private, encrypted)
+        .map_err(|_| SignError::Crypto("the wrapped key does not unwrap with this certificate's key".into()))
 }
 
 /// The RSA private key's numbers from its PKCS #8 `PrivateKeyInfo` (RFC 5208 + RFC 8017 A.1.2).
@@ -289,6 +339,29 @@ mod tests {
         let cms_other = envelope(&other.certificate, content, Algorithm::Aes256).unwrap();
         assert_eq!(open(&cms_other, &other).unwrap().as_deref(), Some(&content[..]));
         assert_eq!(open(&cms_other, &rsa_id).unwrap(), None);
+    }
+
+    #[test]
+    fn recipients_with_the_same_permissions_share_one_envelope() {
+        let a = crate::pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
+        let b = crate::pkcs12::open(&data("chain.p12"), "test").unwrap();
+        let content = b"seed-seed-seed-seed-\x00\x00\x03\x04";
+        let cms = envelope_for(&[&a.certificate, &b.certificate], content, Algorithm::Aes256).unwrap();
+        // One object, two recipients, each opening it with their own key.
+        assert_eq!(recipient_count(&cms), 2);
+        assert_eq!(open(&cms, &a).unwrap().as_deref(), Some(&content[..]));
+        assert_eq!(open(&cms, &b).unwrap().as_deref(), Some(&content[..]));
+        let names = recipients(&cms);
+        assert_eq!(names.len(), 2);
+        // (A SET OF is sorted, so the order is not the one given.)
+        assert!(names.iter().all(|n| n.contains("serial")), "{names:?}");
+        assert!(
+            names.iter().any(|n| n.contains(&a.certificate.issuer.display())) && names.iter().any(|n| n.contains(&b.certificate.issuer.display()))
+        );
+        assert_eq!(recipient_count(&envelope(&a.certificate, content, Algorithm::Aes128).unwrap()), 1);
+        assert!(envelope_for(&[], content, Algorithm::Aes256).is_err());
+        assert_eq!(recipient_count(b"garbage"), 0);
+        assert!(recipients(b"garbage").is_empty());
     }
 
     #[test]

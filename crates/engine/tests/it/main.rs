@@ -7,6 +7,7 @@ mod support {
 
 mod certificate_actions;
 mod certificate_display;
+mod certificate_permissions;
 mod certificate_scoped_refresh;
 mod certificate_working_file;
 mod dingbat_check_box;

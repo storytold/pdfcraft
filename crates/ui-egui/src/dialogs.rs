@@ -757,23 +757,29 @@ fn dialog_properties(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pending
                     }
                 }
                 Some(sec) => {
-                    row(ui, "Security method", tl!("Password security").to_string());
+                    // Certificate security opens with a digital ID, not a password.
+                    row(ui, "Security method", if sec.certificate { tl!("Certificate security") } else { tl!("Password security") }.to_string());
                     row(ui, "Encryption", sec.method.clone());
                     row(
                         ui,
                         "Opened with",
                         if sec.pending {
                             tl!("— (protection is applied when you save)").to_string()
+                        } else if sec.certificate && sec.owner {
+                            tl!("Your digital ID (no restrictions apply)").to_string()
+                        } else if sec.certificate {
+                            tl!("Your digital ID").to_string()
                         } else if sec.owner {
                             tl!("Owner password (no restrictions apply)").to_string()
                         } else {
                             tl!("User password").to_string()
                         },
                     );
-                    // A restricted document asks for its permissions password first.
-                    if doc.allows_security_change() || doc.can_unlock() {
+                    // A restricted document asks for its permissions password first; a certificate's
+                    // document has none (a recipient with all permissions changes it).
+                    if doc.allows_security_change() || (doc.can_unlock() && !sec.certificate) {
                         ui.horizontal(|ui| {
-                            if doc.can_unlock() && ui.button(tl!("Unlock…")).clicked() {
+                            if doc.can_unlock() && !sec.certificate && ui.button(tl!("Unlock…")).clicked() {
                                 req.link_command = Some("protect.unlock");
                             }
                             if ui.button(tl!("Change settings…")).clicked() {

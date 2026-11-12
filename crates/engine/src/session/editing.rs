@@ -166,7 +166,7 @@ impl Session {
         let signed = doc.is_signed();
         let editor = doc.editor.as_mut().ok_or(EditError::ReadOnly(reason))?;
         if let Some(p) = editor.cos.permissions() {
-            check_permission(&edit, &p)?;
+            check_permission(&edit, &p).map_err(|e| crate::protection::note_certificate(e, &editor.cos))?;
         }
         let Some(edit) = prepare_ocr_text_edit(editor, &doc.info, edit) else {
             return Ok(None);
@@ -477,10 +477,9 @@ impl Session {
     /// Comment and form edits skip the full re-inspection (seconds on very large files): the
     /// comment list and field values are re-read from the object graph instead.
     fn refresh_scoped(doc: &mut Document, scope: Scope) -> Result<(), EditError> {
-        // A certificate-protected document is inspected through a decrypted copy, so its info never
-        // says encrypted: only a change of password encryption needs the full refresh.
-        let password_encrypted = doc.editor.as_ref().is_some_and(|e| e.cos.output_handler().is_some() && !certificate_secured(&e.cos));
-        if scope == Scope::Full || doc.info.encrypted != password_encrypted {
+        // Only a change of encryption (a password's or certificates') needs the full refresh.
+        let encrypted = doc.editor.as_ref().is_some_and(|e| e.cos.output_handler().is_some());
+        if scope == Scope::Full || doc.info.encrypted != encrypted {
             return Self::refresh(doc);
         }
         if scope == Scope::Content {
@@ -695,6 +694,8 @@ impl Session {
         let info = inspect(bytes.clone(), doc.password.as_deref()).map_err(|e| EditError::Reopen(e.to_string()))?;
         // Keep the user's layer choices where the layers still exist.
         let mut info = info;
+        // The inspected copy of a certificate-protected file is decrypted; the file is not.
+        info.encrypted |= certificate_secured(&editor.cos);
         for l in &mut info.layers {
             if let Some(old) = doc.info.layers.iter().find(|o| o.id == l.id) {
                 l.visible = old.visible;

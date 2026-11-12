@@ -7,9 +7,9 @@ use pdfcraft_render::{DocInfo, OpenError, RenderConfig, RenderPool, inspect};
 
 use crate::history::{Editor, Keys, TextBlocksCache};
 use crate::{
-    AppearanceCache, CertificateKey, DocId, Document, Session, StatusCaptions, TrustStore, XFA_SCRIPTS_OFF, XfaLayout, display_bytes, display_config,
-    guard, info_fields, js, note_warnings, plain_copy, print_preview_layers, recovered_render_password, render_threads, same_pages, signatures_of,
-    unlock_with_identities, xfa, xfa_layout, xfa_values_from_datasets,
+    AppearanceCache, CertificateKey, DocId, Document, Session, StatusCaptions, TrustStore, XFA_SCRIPTS_OFF, XfaLayout, certificate_secured,
+    display_bytes, display_config, guard, info_fields, js, note_warnings, plain_copy, print_preview_layers, recovered_render_password,
+    render_threads, same_pages, signatures_of, unlock_with_identities, xfa, xfa_layout, xfa_values_from_datasets,
 };
 
 /// Immutable session state needed while a document is prepared away from its owning thread.
@@ -129,7 +129,7 @@ impl Session {
         // a decrypted copy, the editor keeps the file as it is (saves stay encrypted).
         let mut certificate = None;
         if let Ok(Err(pdfcraft_cos::CosError::NeedsCertificate(envelopes))) = &cos {
-            let key = unlock_with_identities(&context.identities, envelopes).ok_or(OpenError::NeedsCertificate)?;
+            let key = unlock_with_identities(&context.identities, envelopes).map_err(OpenError::NeedsCertificate)?;
             let opened = pdfcraft_cos::Document::open_with_credential(
                 bytes.clone(),
                 &pdfcraft_cos::Credential::Certificate { seed: key.seed, permissions: key.permissions },
@@ -370,6 +370,11 @@ impl Session {
         let sig_cache = Arc::new(pdfcraft_sign::DigestCache::default());
         // Signatures cover the file itself (`bytes` may be a decrypted copy of it).
         let mut signatures = editor.as_ref().map(|e| signatures_of(&e.cos, e.cos.bytes(), &context.trust, &sig_cache)).unwrap_or_default();
+        // A certificate-protected file is inspected through a decrypted copy, which does not say
+        // it is encrypted; the file is.
+        if editor.as_ref().is_some_and(|e| certificate_secured(&e.cos)) {
+            info.encrypted = true;
+        }
         // The inspection reads only `/Info`; a file stating its title or author only in XMP still
         // shows them (#2373).
         if let Some(e) = &editor {

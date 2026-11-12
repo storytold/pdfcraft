@@ -95,6 +95,7 @@ fn unusable(c: &Certificate) -> Option<&'static str> {
 }
 
 /// Recipients from a certificate file (DER, or PEM with one or more certificates).
+#[cfg(not(target_arch = "wasm32"))]
 pub fn recipients_from_file(path: &std::path::Path) -> Result<Vec<Recipient>, String> {
     let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let certs = sign::x509::load_certificates(&bytes).map_err(|e| format!("{}: {e}", path.display()))?;
@@ -220,6 +221,8 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
         }
     }
     ui.add_space(6.0);
+    // Only the native file picker sets it.
+    #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
     let mut browse = false;
     #[cfg(not(target_arch = "wasm32"))]
     if ui.button(tl!("Add certificate file…")).clicked() {
@@ -379,6 +382,8 @@ enum Answer {
 pub(crate) fn open_prompt(app: &mut PdfCraftApp, ctx: &egui::Context) {
     let files = id_files(app);
     let t = Tokens::get(ctx);
+    // Only the native file picker sets it.
+    #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
     let mut browse = false;
     let Some(prompt) = app.password_prompt.as_mut() else { return };
     let Some(chosen) = prompt.digital_id.as_mut() else { return };

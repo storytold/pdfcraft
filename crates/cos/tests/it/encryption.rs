@@ -483,6 +483,8 @@ fn public_key_security_round_trips_through_a_file() {
     let opened = Document::open_with_credential(Arc::new(bytes.clone()), &Credential::Certificate { seed, permissions: -1 }).unwrap();
     assert_eq!(opened.security().map(|s| s.auth()), Some(Auth::Owner));
     assert_eq!(page_content(&opened).as_deref(), Some(SECRET.as_bytes()));
+    // A crypt filter's /Length is in bits for public-key handlers (Table 25): 256 for AESV3.
+    assert_eq!(crypt_filter_length(&opened), Some(256));
     // A wrong seed decrypts to rubbish rather than the text.
     let wrong = Document::open_with_credential(Arc::new(bytes.clone()), &Credential::Certificate { seed: [1; 20], permissions: -1 }).unwrap();
     assert_ne!(page_content(&wrong).as_deref(), Some(SECRET.as_bytes()), "a wrong seed must not read the text");
@@ -500,6 +502,15 @@ fn public_key_security_round_trips_through_a_file() {
     let opened = Document::open_with_credential(Arc::new(bytes), &Credential::Certificate { seed, permissions: -1 }).unwrap();
     assert!(!opened.security().unwrap().encrypts_metadata());
     assert_eq!(page_content(&opened).as_deref(), Some(SECRET.as_bytes()));
+    assert_eq!(crypt_filter_length(&opened), Some(128), "AESV2: 128 bits");
+}
+
+/// The `/Length` of the public-key crypt filter in the `/Encrypt` dictionary.
+fn crypt_filter_length(doc: &Document) -> Option<i64> {
+    let encrypt = doc.resolve(doc.trailer().get(b"Encrypt")?);
+    let cf = doc.resolve(encrypt.as_dict()?.get(b"CF")?);
+    let filter = doc.resolve(cf.as_dict()?.get(b"DefaultCryptFilter")?);
+    doc.resolve(filter.as_dict()?.get(b"Length")?).as_int()
 }
 
 /// `protect`, with the `/Encrypt` dictionary written inline in the trailer, as MuPDF writes it,

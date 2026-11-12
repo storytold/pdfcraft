@@ -502,7 +502,9 @@ impl Document {
         filter.set(b"Type".to_vec(), Object::name("CryptFilter"));
         filter.set(b"CFM".to_vec(), Object::name(if d.v >= 5 { "AESV3" } else { "AESV2" }));
         filter.set(b"AuthEvent".to_vec(), Object::name("DocOpen"));
-        filter.set(b"Length".to_vec(), Object::Int(if d.v >= 5 { 32 } else { 16 }));
+        // Public-key handlers give a crypt filter's /Length in bits: 128 for AESV2, 256 for
+        // AESV3 (ISO 32000-2, Table 25).
+        filter.set(b"Length".to_vec(), Object::Int(if d.v >= 5 { 256 } else { 128 }));
         filter.set(b"Recipients".to_vec(), Object::Array(d.recipients.iter().map(|r| hex(r)).collect()));
         if !d.encrypt_metadata {
             filter.set(b"EncryptMetadata".to_vec(), Object::Bool(false));

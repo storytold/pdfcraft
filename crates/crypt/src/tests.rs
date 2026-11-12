@@ -259,6 +259,27 @@ fn public_key_security_derives_the_file_key_from_seed_and_envelopes() {
 }
 
 #[test]
+fn public_key_permissions_read_as_revision_3_and_bit_2_allows_everything() {
+    let seed = [7u8; 20];
+    let params = PublicKeyEncryption { algorithm: Algorithm::Aes256, recipients: vec![vec![1, 2, 3]], seed, permissions: -1, encrypt_metadata: true };
+    let dict = create_public_key(&params).unwrap().dict().clone();
+    // 00000304: printing (bit 3), filling forms (9) and accessibility (10), as Acrobat's low-resolution fill-and-sign.
+    let user = SecurityHandler::open_public_key(dict.clone(), &seed, 0x304).unwrap();
+    let p = user.permissions();
+    assert_eq!(p.revision, 3, "the sub-filter says it: a public-key dictionary has no /R");
+    assert!(p.print() && !p.print_high_quality() && p.fill_forms() && p.extract_for_accessibility());
+    assert!(!p.modify() && !p.copy() && !p.assemble() && !p.annotate());
+    // s3 reads the flags as revision 2's.
+    let s3 = EncryptDict { sub_filter: b"adbe.pkcs7.s3".to_vec(), ..dict.clone() };
+    assert_eq!(SecurityHandler::open_public_key(s3, &seed, 0x304).unwrap().permissions().revision, 2);
+    // Bit 2: "permits change of encryption and enables all other permissions".
+    let all = SecurityHandler::open_public_key(dict, &seed, 0b10).unwrap();
+    assert_eq!(all.auth(), Auth::Owner);
+    let p = all.permissions();
+    assert!(p.print_high_quality() && p.modify() && p.copy() && p.assemble() && p.annotate() && p.fill_forms() && p.extract_for_accessibility());
+}
+
+#[test]
 fn unsupported_handlers_are_reported() {
     let mut d = new(Algorithm::Aes128, "", "o", -1).dict().clone();
     d.filter = b"Adobe.PubSec".to_vec();
