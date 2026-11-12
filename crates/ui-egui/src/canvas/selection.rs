@@ -1,4 +1,5 @@
 use super::{Arc, DocInfo, DocView, Edit, HashMap, PageText, Pos2, Range, Rect, comments, pos2};
+use crate::QuickTool;
 use std::ops::RangeInclusive;
 
 /// A text selection. `page` is the page it started on: a column selection stays there, a
@@ -41,6 +42,11 @@ impl Selection {
     /// The reading-order glyphs selected on `page`, which has `len` glyphs; `None` off the
     /// selection's pages and for a column selection.
     pub(super) fn run_on(&self, page: usize, len: usize) -> Option<Range<usize>> {
+        self.text_span()?.on(page, len)
+    }
+
+    /// A reading-order selection's ends in reading order; `None` for a column selection.
+    pub(super) fn text_span(&self) -> Option<TextSpan> {
         let Span::Run { anchor, head, head_page } = self.span else { return None };
         // (page, glyph) pairs compare in reading order.
         let (start, end) = if (self.page, anchor) <= (head_page, head) {
@@ -48,12 +54,7 @@ impl Selection {
         } else {
             ((head_page, head), (self.page, anchor))
         };
-        if page < start.0 || page > end.0 {
-            return None;
-        }
-        let from = if page == start.0 { start.1 } else { 0 };
-        let to = if page == end.0 { end.1.saturating_add(1) } else { len };
-        Some(from..to.max(from))
+        Some(TextSpan { start, end })
     }
 
     /// One rectangle per selected piece of a line on `page`, in view space (highlighting,
@@ -81,6 +82,39 @@ impl Selection {
         if let Span::Run { head, head_page, .. } = &mut self.span {
             (*head, *head_page) = (glyph, page);
         }
+    }
+}
+
+/// What [`DocView::tool_marks`] gives a marking tool.
+#[derive(Debug, PartialEq)]
+pub(crate) enum ToolMarks {
+    /// Nothing to mark now (perhaps later, once the selection's pages are read).
+    None,
+    /// (page, quads) for each page the selection covers: mark them all, in one undo step.
+    Marks(Vec<(usize, Vec<[f64; 8]>)>),
+    /// The selection covers a page whose text could not be read: not marked, say why.
+    Unreadable,
+}
+
+/// Reading-order text from glyph `start.1` on page `start.0` to glyph `end.1` on page `end.0`,
+/// both included, `start` first: what a reading-order selection covers, which a copy reads off
+/// the UI thread too ([`crate::DocumentCopyJob::of_selection`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct TextSpan {
+    pub(crate) start: (usize, usize),
+    pub(crate) end: (usize, usize),
+}
+
+impl TextSpan {
+    /// The glyphs covered on `page`, which has `len` glyphs: the rest of the first page, every
+    /// page between whole, the last page up to its end glyph. `None` off its pages.
+    pub(crate) fn on(&self, page: usize, len: usize) -> Option<Range<usize>> {
+        if page < self.start.0 || page > self.end.0 {
+            return None;
+        }
+        let from = if page == self.start.0 { self.start.1 } else { 0 };
+        let to = if page == self.end.0 { self.end.1.saturating_add(1) } else { len };
+        Some(from..to.max(from))
     }
 }
 
@@ -142,9 +176,62 @@ impl DocView {
             .collect()
     }
 
+    /// A reading-order selection whose pages are not all read yet: Copy reads them off the UI
+    /// thread ([`crate::DocumentCopyJob::of_selection`]) rather than copying short or nothing.
+    pub(crate) fn selection_waits_for_text(&self) -> Option<TextSpan> {
+        self.selection.filter(|_| self.selection_texts().is_none())?.text_span()
+    }
+
+    /// Whether the selection covers a page whose text could not be read. Nothing there can be
+    /// selected, so a redaction of the rest would leave that page's content in place: Redact
+    /// refuses such a selection rather than mark it short.
+    pub(crate) fn selection_has_unreadable_page(&self) -> bool {
+        self.selection.is_some_and(|s| s.pages().any(|p| self.text_failed.contains(&p)))
+    }
+
+    /// What a marking tool (a markup tool, Redact) marks for the text selection a drag, a
+    /// multi-click or picking the tool just finished (`finished`): (page, quads) for every page
+    /// the selection covers, as [`Self::selection_quads`], returned once: from one of its pages
+    /// (`Some(page)`, called for each page drawn) or from anywhere (`None`). While a page it
+    /// covers is still to be read, or none of its pages is drawn, nothing is marked yet: the
+    /// selection is remembered with the tool and marked on a later frame, as long as neither has
+    /// changed meanwhile. With `whole`, a selection over a page whose text could not be read is
+    /// refused instead ([`Self::selection_has_unreadable_page`]).
+    pub(crate) fn tool_marks(&mut self, tool: QuickTool, finished: bool, page: Option<usize>, whole: bool, info: &DocInfo) -> ToolMarks {
+        let Some(sel) = self.selection else {
+            self.marks_waiting = None;
+            return ToolMarks::None;
+        };
+        if finished {
+            self.marks_waiting = Some((tool, sel));
+        }
+        if self.marks_waiting != Some((tool, sel)) {
+            return ToolMarks::None;
+        }
+        if whole && self.selection_has_unreadable_page() {
+            self.marks_waiting = None;
+            return ToolMarks::Unreadable;
+        }
+        if self.selection_texts().is_none() {
+            return ToolMarks::None;
+        }
+        let marks = self.selection_quads(info);
+        if marks.is_empty() {
+            // Every page is read and nothing is selected: nothing to wait for.
+            self.marks_waiting = None;
+            return ToolMarks::None;
+        }
+        if page.is_some_and(|page| !marks.iter().any(|(p, _)| *p == page)) {
+            return ToolMarks::None;
+        }
+        self.marks_waiting = None;
+        ToolMarks::Marks(marks)
+    }
+
     pub(crate) fn clear_selection(&mut self) {
         self.selection = None;
         self.actions_dismissed = None;
+        self.marks_waiting = None;
     }
 
     /// Select text on `page` from glyph `from` to glyph `to` (tests and automation).
