@@ -1,4 +1,4 @@
-//! PdfCraft patch (105): what the recovery layer keeps for a whole document.
+//! PdfCraft patch (107): what the recovery layer keeps for a whole document.
 //!
 //! The interpreter builds a page's fonts afresh for every page (each page has its own
 //! [`crate::InterpreterCache`]), and a font's rule guards were decided again with them. A

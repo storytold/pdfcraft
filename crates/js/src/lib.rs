@@ -74,6 +74,10 @@ mod geometry;
 pub use geometry::{rotate_rect, unrotate_rect};
 
 mod icons;
+mod ocg;
+pub use ocg::Layer;
+mod timers;
+pub use timers::{MAX_TIMERS, MIN_TIMER_MS, Timer};
 
 pub mod interaction;
 pub mod session;

@@ -1,4 +1,4 @@
-//! PdfCraft patch (105): the document survey: how often each glyph of a font is shown across a
+//! PdfCraft patch (107): the document survey: how often each glyph of a font is shown across a
 //! document, for rules whose evidence is the document's text as a whole rather than one font's
 //! program or one page (`Rule::NEEDS_DOCUMENT_USAGE`). It runs only when such a rule can take a
 //! kind of font it counts ([`SURVEYED_KINDS`]), and counts only fonts of those kinds.
