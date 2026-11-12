@@ -413,3 +413,80 @@ fn a_widget_rect_saved_back_as_integers_is_a_form_fill() {
     let moved = save(Some(20.5));
     assert_eq!(verdict(&moved, signed.open(), Some(2)), Modification::Disallowed(vec![super::kind::PAGE_CONTENT]));
 }
+
+/// `f` with its newest trailer naming object `info` as the document information. The trailer
+/// follows the cross-reference table, so no offset moves.
+fn with_info(mut f: File, info: u32) -> File {
+    let at = f.xref.unwrap();
+    let tail = String::from_utf8(f.bytes.split_off(at)).unwrap();
+    f.bytes.extend_from_slice(tail.replacen("/Root 1 0 R", &format!("/Root 1 0 R /Info {info} 0 R"), 1).as_bytes());
+    f
+}
+
+/// From review on #7041: a list box shown by one widget is filled by changing its value and the
+/// selected indices together. That is a form fill, as it is for a field whose widgets are
+/// objects of their own; the indices changed without a new value are not.
+#[test]
+fn a_list_box_widget_filled_with_its_indices_is_a_form_fill() {
+    let list = |v: &str, i: u8| {
+        format!("<< /Type /Annot /Subtype /Widget /FT /Ch /T (Pick) /Opt [(a) (b)] /V ({v}) /I [{i}] /Rect [20 20 120 40] /P 3 0 R >>")
+    };
+    let signed = File::new().revision(&[
+        (1, Row::Obj(0, 0, "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R] >> >>")),
+        (2, Row::Obj(0, 0, PAGES)),
+        (3, Row::Obj(0, 0, &page("/Annots [5 0 R]"))),
+        (4, Row::Obj(0, 0, &page("/Annots []"))),
+        (5, Row::Obj(0, 0, &list("a", 0))),
+    ]);
+    let filled = signed.clone().revision(&[(5, Row::Obj(0, 0, &list("b", 1)))]);
+    assert_eq!(verdict(&filled.open(), signed.open(), Some(2)), Modification::Allowed(vec![super::kind::FORM_FILL]));
+    let indices_only = signed.clone().revision(&[(5, Row::Obj(0, 0, &list("a", 1)))]);
+    assert!(matches!(verdict(&indices_only.open(), signed.open(), Some(2)), Modification::Disallowed(_)));
+}
+
+/// From review on #7041: a signature value the trailer also names as `/Info` is still the
+/// signature. Its `/Reason` rewritten is no change to the document information.
+#[test]
+fn a_signature_value_named_as_info_is_not_rewritten_as_metadata() {
+    let sig = |reason: &str| {
+        format!("<< /Type /Sig /Filter /Adobe.PPKLite /SubFilter /adbe.pkcs7.detached /ByteRange [0 10 20 10] /Contents <00> /Reason ({reason}) >>")
+    };
+    let signed = with_info(
+        File::new().revision(&[
+            (1, Row::Obj(0, 0, "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R] /SigFlags 3 >> >>")),
+            (2, Row::Obj(0, 0, PAGES)),
+            (3, Row::Obj(0, 0, &page("/Annots [5 0 R]"))),
+            (4, Row::Obj(0, 0, &page("/Annots []"))),
+            (5, Row::Obj(0, 0, "<< /Type /Annot /Subtype /Widget /FT /Sig /T (Approval) /V 6 0 R /Rect [150 20 280 70] /P 3 0 R >>")),
+            (6, Row::Obj(0, 0, &sig("Approved"))),
+        ]),
+        6,
+    );
+    let forged = with_info(signed.clone().revision(&[(6, Row::Obj(0, 0, &sig("Forged")))]), 6);
+    for p in [Some(1), Some(2), Some(3), None] {
+        let v = verdict(&forged.open(), signed.open(), p);
+        assert!(matches!(v, Modification::Disallowed(_)), "P={p:?}: {v:?}");
+    }
+}
+
+/// From review on #7041: an entry of a signed page's `/Annots` that led nowhere when signed,
+/// filled later with a widget the trailer names as `/Info`, puts a widget on the signed page. A
+/// dictionary with a role of its own is not document information because the trailer names it.
+#[test]
+fn a_widget_named_as_new_info_is_not_document_information() {
+    let signed = File::new().revision(&[
+        (1, Row::Obj(0, 0, "<< /Type /Catalog /Pages 2 0 R >>")),
+        (2, Row::Obj(0, 0, PAGES)),
+        (3, Row::Obj(0, 0, &page("/Annots [5 0 R]"))),
+        (4, Row::Obj(0, 0, &page("/Annots []"))),
+    ]);
+    let widget = "<< /Type /Annot /Subtype /Widget /FT /Tx /T (Pay) /V (1000) /Rect [20 20 120 40] /P 3 0 R /F 4 >>";
+    let filled = with_info(signed.clone().revision(&[(5, Row::Obj(0, 0, widget))]), 5);
+    for p in [Some(2), Some(3), None] {
+        let v = verdict(&filled.open(), signed.open(), p);
+        assert!(matches!(v, Modification::Disallowed(_)), "P={p:?}: {v:?}");
+    }
+    // A plain information dictionary written as a new object is still housekeeping.
+    let info = with_info(signed.clone().revision(&[(6, Row::Obj(0, 0, "<< /Producer (Writer) >>"))]), 6);
+    assert_eq!(verdict(&info.open(), signed.open(), Some(2)), Modification::Allowed(vec![super::kind::METADATA]));
+}

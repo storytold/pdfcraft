@@ -688,13 +688,14 @@ pub(super) fn stored_at(doc: &Document, num: u32) -> Vec<usize> {
 
 /// A change to an existing form widget that is not a signature's, `before` as signed and `d`
 /// now. Filling the form changes the field's value (the widget's own `/V`, or the one it inherits
-/// from its field, as a radio button or a field with several widgets does) and the appearance
-/// that shows it (`/AS`, `/AP`): that is form fill. Any other change, or a new appearance without
-/// a new value, is a change to the annotation (#6756).
+/// from its field, as a radio button or a field with several widgets does), a list box's selected
+/// indices with it (`/I`, as a field without widgets of its own may change them too), and the
+/// appearance that shows it (`/AS`, `/AP`): that is form fill. Any other change, or a new
+/// appearance without a new value, is a change to the annotation (#6756).
 fn widget_change(doc: &Document, old: &Document, d: &Dict, before: &Dict) -> &'static str {
     let value = |doc: &Document, d: &Dict| inherited(doc, d, b"V").map(|(_, v)| (*doc.resolve(&v)).clone());
     let filled = !same_entry(value(doc, d).as_ref(), value(old, before).as_ref());
-    if filled && same_entries(d, before, &[b"V", b"AS", b"AP"]) { kind::FORM_FILL } else { kind::COMMENTS }
+    if filled && same_entries(d, before, &[b"V", b"I", b"AS", b"AP"]) { kind::FORM_FILL } else { kind::COMMENTS }
 }
 
 /// The references in the annotation list `o` (inline or indirect), its length spent from

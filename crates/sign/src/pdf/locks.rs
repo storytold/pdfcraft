@@ -82,10 +82,26 @@ fn exact_name(o: &Object) -> Option<String> {
     }
 }
 
+/// How many bytes a name is stored in, before it is decoded.
+fn stored_len(o: &Object) -> usize {
+    match o {
+        Object::String(s) => s.bytes.len(),
+        Object::Name(n) => n.len(),
+        _ => 0,
+    }
+}
+
+/// Longest name read as stored: even as UTF-16, a name within [`MAX_FIELD_NAME_BYTES`] takes at
+/// most twice its length plus a two-byte mark. A longer one names no field that is compared.
+const MAX_STORED_NAME: usize = 2 * MAX_FIELD_NAME_BYTES + 2;
+
 /// A lock dictionary (`/Lock`) or FieldMDP transform parameters. `Err` when it is there but can't
 /// be read: its action is not one of the three, an `Include` or `Exclude` has no readable
-/// `/Fields` array, a name in it is not a string, or it lists more names than are read.
-fn rule(doc: &Document, d: &Dict) -> Result<Rule, ()> {
+/// `/Fields` array, a name in it is not a string, it lists more names than are read, or a name
+/// is stored in more bytes than a field name is read in, or its names together in more than
+/// `name_bytes` has left. Each name is measured before it is decoded: one long string listed
+/// many times, across many locks, would otherwise be decoded and hashed once for each.
+fn rule(doc: &Document, d: &Dict, name_bytes: &mut usize) -> Result<Rule, ()> {
     let action = match d.name(b"Action") {
         Some(b"All") => Action::All,
         Some(b"Include") => Action::Include,
@@ -102,7 +118,16 @@ fn rule(doc: &Document, d: &Dict) -> Result<Rule, ()> {
     if listed.len() > MAX_LOCK_NAMES {
         return Err(());
     }
-    let names = listed.iter().map(|n| exact_name(&doc.resolve(n)).ok_or(())).collect::<Result<_, _>>()?;
+    let mut names = NameSet::new();
+    for n in listed {
+        let n = doc.resolve(n);
+        let len = stored_len(&n);
+        if len > MAX_STORED_NAME {
+            return Err(());
+        }
+        *name_bytes = name_bytes.checked_sub(len).ok_or(())?;
+        names.insert(exact_name(&n).ok_or(())?);
+    }
     Ok(Rule { action, names })
 }
 
@@ -112,9 +137,11 @@ fn rule(doc: &Document, d: &Dict) -> Result<Rule, ()> {
 /// locks than are read.
 fn rules(old: &Document, field: &Field, value: &Dict) -> Result<Vec<Rule>, ()> {
     let mut out = Vec::new();
+    // The bytes of names all the locks list together, as the form walk bounds its own.
+    let mut name_bytes = MAX_NAME_BYTES;
     if let Some(lock) = field.dict.get(b"Lock").map(|l| old.resolve(l)) {
         match &*lock {
-            Object::Dict(d) => out.push(rule(old, d)?),
+            Object::Dict(d) => out.push(rule(old, d, &mut name_bytes)?),
             Object::Null => {}
             _ => return Err(()),
         }
@@ -134,7 +161,7 @@ fn rules(old: &Document, field: &Field, value: &Dict) -> Result<Vec<Rule>, ()> {
         }
         // A FieldMDP reference that does not say what it locks is a lock that can't be read.
         let params = rd.get(b"TransformParams").map(|p| old.resolve(p)).ok_or(())?;
-        out.push(rule(old, params.as_dict().ok_or(())?)?);
+        out.push(rule(old, params.as_dict().ok_or(())?, &mut name_bytes)?);
         if out.len() > MAX_RULES {
             return Err(());
         }
@@ -333,7 +360,13 @@ fn form_fields(doc: &Document) -> Option<Form> {
         let Some(d) = doc.resolve(&o).as_dict().cloned() else { continue };
         fields_left = fields_left.checked_sub(1)?;
         let prefix = parent.and_then(|p| form.nodes.get(p)).map_or("", |p| p.name.as_str());
-        let part = d.get(b"T").and_then(|t| exact_name(&doc.resolve(t)));
+        let t = d.get(b"T").map(|t| doc.resolve(t));
+        // Measured before it is decoded, as a lock's names are: one long /T shared by many fields
+        // would otherwise be decoded once for each.
+        if t.as_deref().is_some_and(|t| stored_len(t) > MAX_STORED_NAME) {
+            return None;
+        }
+        let part = t.and_then(|t| exact_name(&t));
         let name = match (part, prefix.is_empty()) {
             (Some(p), true) => p,
             (Some(p), false) => format!("{prefix}.{p}"),
@@ -742,6 +775,24 @@ endstream",
             doc.update_dict(at(4), |w| w.set(b"AP".to_vec(), Object::Dict(dict(vec![("N", Object::Null)])))).unwrap();
         });
         assert_eq!(locked_fields(&repainted, &old, &field, &value), Locked::Changed);
+    }
+
+    /// From review on #7041: a lock's names are measured before they are decoded. A name longer
+    /// than any field's, or one long string listed over and over (within the count of names a
+    /// lock may list), is a lock that can't be read, not one decoded and hashed for each entry.
+    #[test]
+    fn lock_names_are_bounded_in_bytes_before_they_are_read() {
+        let mut doc = Document::new_empty();
+        let include = |fields: Object| lock(vec![("Action", Object::name("Include")), ("Fields", fields)]);
+        let long = PdfString::literal(vec![b'a'; MAX_STORED_NAME + 1]);
+        assert!(rules(&doc, &sig_field(include(Object::Array(vec![Object::String(long)]))), &dict(vec![])).is_err());
+        let longest = PdfString::literal(vec![b'a'; MAX_FIELD_NAME_BYTES]);
+        assert!(rules(&doc, &sig_field(include(Object::Array(vec![Object::String(longest.clone())]))), &dict(vec![])).is_ok());
+        // One name at the limit, listed as often as a lock may list names: far more bytes than are read.
+        let shared = doc.add(Object::String(longest));
+        let many = Object::Array(vec![Object::Ref(shared); MAX_LOCK_NAMES]);
+        assert!(MAX_LOCK_NAMES * MAX_FIELD_NAME_BYTES > MAX_NAME_BYTES);
+        assert!(rules(&doc, &sig_field(include(many)), &dict(vec![])).is_err());
     }
 
     /// More locks than are read is a lock that can't be read.

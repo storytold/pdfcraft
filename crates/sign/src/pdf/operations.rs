@@ -403,18 +403,25 @@ impl Recogniser<'_> {
     }
 
     /// The signed `/Info` and XMP rewritten, cross-reference and object streams written, and a
-    /// new `/Info` object.
+    /// new `/Info` object. A dictionary that plays a role of its own (a signature value, an
+    /// annotation, a field) is not document information because the trailer names it: rewriting
+    /// a signature value that is also `/Info`, or filling a signed page's dangling `/Annots`
+    /// entry with a widget named as `/Info`, is no housekeeping.
     fn housekeeping(&mut self) {
         let (doc, snapshot) = (self.doc, &self.seen.snapshot);
         let info = doc.trailer().get(b"Info").and_then(Object::as_ref).map(|r| r.num);
+        let no_role = |o: &Object| o.as_dict().is_none_or(|d| !has_role(d));
         let mut found = Vec::new();
         for c in &self.seen.changes {
             let op = match (&c.before, &*c.now) {
-                (Some(_), _) if c.label == Some(kind::METADATA) && (Some(c.num) == snapshot.old_info || Some(c.num) == snapshot.old_metadata) => {
+                (Some(b), _)
+                    if c.label == Some(kind::METADATA)
+                        && (Some(c.num) == snapshot.old_metadata || (Some(c.num) == snapshot.old_info && no_role(b) && no_role(&c.now))) =>
+                {
                     Some(Op::Housekeeping)
                 }
                 (None, Object::Stream(s)) if matches!(s.dict.name(b"Type"), Some(b"XRef" | b"ObjStm")) => Some(Op::Plumbing),
-                (None, Object::Dict(_)) if Some(c.num) == info => Some(Op::NewInfo),
+                (None, Object::Dict(d)) if Some(c.num) == info && !has_role(d) => Some(Op::NewInfo),
                 _ => None,
             };
             found.extend(op.map(|op| (c.num, op)));
