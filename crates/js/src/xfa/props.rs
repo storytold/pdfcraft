@@ -1096,7 +1096,7 @@ impl XHost {
             })
             .collect();
         let keys: Vec<String> =
-            self.run_keys.get(&from).map(|ks| ks.iter().filter(|k| k.starts_with("occur#")).cloned().collect()).unwrap_or_default();
+            self.run_keys.get(&from).map(|ks| ks.iter().filter(|k| super::prop_rules::is_occurrence(k)).cloned().collect()).unwrap_or_default();
         // For reads only: the form moves the change it keeps itself (`Overrides::remove_instance`).
         for (k, v) in moved {
             self.put_prop(to, "occur#0", Some(k), v);
@@ -1149,8 +1149,13 @@ impl XHost {
     /// Whether the form can keep a change under `key` (see [`change_key`]) to node `node`: one
     /// it keeps already, or one more within [`MAX_CHANGES_PER_OBJECT`], counting those it keeps
     /// ([`XfaNode::changed`](super::XfaNode::changed)) and those this event added
-    /// ([`Self::run_keys`]).
+    /// ([`Self::run_keys`]). How often a subform occurs is not counted, as the form doesn't count
+    /// it ([`super::prop_rules::is_occurrence`]): the first instance keeps it beside its own.
     fn object_room(&self, node: usize, key: &str) -> bool {
+        let occurrence = super::prop_rules::is_occurrence;
+        if occurrence(key) {
+            return true;
+        }
         let Some(n) = self.nodes.get(node) else { return true };
         let kept = |k: &str| n.changed.binary_search_by(|c| c.as_str().cmp(k)).is_ok();
         if kept(key) {
@@ -1160,7 +1165,8 @@ impl XHost {
         if added.iter().any(|k| k == key) {
             return true;
         }
-        n.changed.len().saturating_add(added.iter().filter(|k| !kept(k)).count()) < MAX_CHANGES_PER_OBJECT
+        let held = n.changed.iter().filter(|k| !occurrence(k)).count();
+        held.saturating_add(added.iter().filter(|k| !kept(k) && !occurrence(k)).count()) < MAX_CHANGES_PER_OBJECT
     }
 
     /// Whether the property at `path` can take the attribute `name` (one it has, or a new one

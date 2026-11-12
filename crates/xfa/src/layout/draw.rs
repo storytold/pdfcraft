@@ -118,14 +118,16 @@ impl Layouter<'_> {
     }
 
     /// Where pages break before and after instance `sib` of subform `node` under `ctx` (XFA 3.3
-    /// p. 632), when scripts changed that instance's breaks; `None` when they didn't.
-    pub(super) fn own_breaks(&self, node: &Node, ctx: &Ctx, sib: usize) -> Option<(bool, bool)> {
-        let sets = self.changes_of(node.common(), ctx, sib, None)?;
-        let taken = taken(sets, &["break", "breakBefore", "breakAfter"])?;
-        match crate::restyle::restyled(node, &taken) {
-            Node::Subform(s) => Some((s.break_before_page, s.break_after_page)),
-            _ => None,
-        }
+    /// p. 632): `template` is where they break by the template's rule for that instance, and a
+    /// side scripts changed for that instance breaks as the change says instead (see
+    /// [`crate::restyle::instance_breaks`]; the template's break on that side comes with the
+    /// change only where the rule gives it to the instance).
+    pub(super) fn own_breaks(&self, node: &Node, ctx: &Ctx, sib: usize, template: (bool, bool)) -> (bool, bool) {
+        let Some(taken) = self.changes_of(node.common(), ctx, sib, None).and_then(|sets| taken(sets, &["break", "breakBefore", "breakAfter"])) else {
+            return template;
+        };
+        let (before, after) = crate::restyle::instance_breaks(node, &taken, template.0, template.1);
+        (before.unwrap_or(template.0), after.unwrap_or(template.1))
     }
 
     /// Draw `node` at `rect`, shown where it and what it is inside say ([`Common::views`]): an

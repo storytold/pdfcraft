@@ -108,8 +108,9 @@ pub struct Overrides {
     prop_copies: usize,
     prop_bytes: usize,
     /// Property changes the file held that were not kept when it was read (not a change a
-    /// script could make, or past the limits): counted for a note, as the next save leaves
-    /// them out.
+    /// script could make, or past the limits): counted for a note, as they aren't applied. The
+    /// file keeps them until the changes are written again ([`set_overrides`], after a script
+    /// changes a property), which leaves them out.
     pub dropped: usize,
 }
 
@@ -136,7 +137,8 @@ impl Overrides {
     /// to `value`. `Ok(true)` when that changed what is kept, `Ok(false)` when it was already so.
     /// Refused past [`crate::restyle::MAX_PROP_OVERRIDES`] changes or
     /// [`crate::restyle::MAX_PROP_OVERRIDE_BYTES`] bytes in the form, or
-    /// [`crate::restyle::MAX_PROP_CHANGES_PER_OBJECT`] on one object.
+    /// [`crate::restyle::MAX_PROP_CHANGES_PER_OBJECT`] on one object (how often a subform
+    /// occurs, at most three, not counted: [`crate::prop_rules::is_occurrence`]).
     pub fn set_prop(&mut self, som: &str, path: &str, attr: Option<&str>, value: &str) -> Result<bool, PropRefused> {
         self.set(som, path, attr, value, false)
     }
@@ -153,8 +155,10 @@ impl Overrides {
     fn set(&mut self, som: &str, path: &str, attr: Option<&str>, value: &str, copy: bool) -> Result<bool, PropRefused> {
         crate::restyle::check(path, attr, value).map_err(PropRefused::Invalid)?;
         let key = if copy { format!("={}", crate::restyle::prop_key(path, attr)) } else { crate::restyle::prop_key(path, attr) };
-        let on_object = self.props.get(som).map_or(0, BTreeMap::len);
-        if on_object >= crate::restyle::MAX_PROP_CHANGES_PER_OBJECT && self.props.get(som).is_none_or(|m| !m.contains_key(&key)) {
+        // How often a subform occurs isn't one instance's change (see `prop_rules::is_occurrence`).
+        let counted = |k: &str| !crate::prop_rules::is_occurrence(k);
+        let on_object = self.props.get(som).map_or(0, |m| m.keys().filter(|k| counted(k)).count());
+        if counted(&key) && on_object >= crate::restyle::MAX_PROP_CHANGES_PER_OBJECT && self.props.get(som).is_none_or(|m| !m.contains_key(&key)) {
             return Err(PropRefused::Full);
         }
         let old = self.props.get(som).and_then(|m| m.get(&key));
@@ -219,11 +223,13 @@ impl Overrides {
         // How often the subform occurs is the subform's, not the instance's (XFA 3.3 p. 786):
         // kept with the first instance, where it is read, it stays at `som` for the instance
         // that is first now (or for none, when no instance is left). Any other instance holds
-        // no such change.
+        // no such change. These three don't count against the changes one object keeps
+        // (`prop_rules::is_occurrence`), so the instance keeps them beside as many of its own as
+        // it may hold, and a save reads back the same.
         let occur: BTreeMap<String, String> = self
             .props
             .get(som)
-            .map(|m| m.iter().filter(|(k, _)| k.starts_with("occur#")).map(|(k, v)| (k.clone(), v.clone())).collect())
+            .map(|m| m.iter().filter(|(k, _)| crate::prop_rules::is_occurrence(k)).map(|(k, v)| (k.clone(), v.clone())).collect())
             .unwrap_or_default();
         // The property changes are copied (from the memo's) only when one of them moves.
         let props_move = self.props.keys().any(|k| moved(k, head, index).as_deref() != Some(k.as_str()));
@@ -635,11 +641,8 @@ impl Walker<'_> {
                     let named = sf.common.name.is_some();
                     // How often it occurs, as scripts changed it on its first instance (the
                     // instance manager's limits are the subform's, not one instance's).
-                    let first_som = child_som(parent_som, sf.common.name.as_deref(), sib);
-                    let occur = match self.sets(named, &first_som).map(|sets| crate::restyle::restyled(n, sets)) {
-                        Some(Node::Subform(changed)) => changed.occur,
-                        _ => sf.occur,
-                    };
+                    // Only the occurrence changes are read, as the layout counts instances.
+                    let occur = if named { crate::layout::occur_at(&self.ov.props, n, parent_som, sib) } else { sf.occur };
                     let from_data = match (&sf.common.name, self.data) {
                         (Some(name), Some(d)) if occur.max != Some(1) => d.count(&data_path(self.tpl, parent_som), name),
                         _ => 0,
@@ -1133,23 +1136,30 @@ pub fn apply_overrides_split(tpl: &Template, ov: &Overrides) -> Applied {
 /// validation's format test, its calculation's override), for checks after the user changes
 /// its value; `None` when no template field is there. Only the field's own changes, kept by its
 /// SOM path, apply to it (what [`apply_overrides_split`] gives it, whether in the template or per
-/// instance), so this restyles one field, not the form.
+/// instance), so this restyles one field, not the form, and only once for the same changes:
+/// the field is taken from the template's memo ([`crate::memo::restyled_field`]), as the live
+/// form takes it, so the checks of later events don't read it again.
 pub fn field_now(tpl: &Template, ov: &Overrides, som: &str) -> Option<Field> {
     let f = crate::data::template_field(tpl, som)?;
     Some(match ov.props().get(som) {
-        Some(sets) => crate::restyle::restyled_field(f, sets),
+        Some(sets) => Field::clone(&crate::memo::restyled_field(&tpl.memo, f, sets)),
         None => f.clone(),
     })
 }
 
 /// Whether the user overrode the calculation of the field at `som` (its value says so, as the
 /// template or a script set it, or [`mark_value_override`] did), so that calculations leave it
-/// alone.
+/// alone. Only a change to the value's `override` can change what the template says, so the
+/// field is restyled ([`field_now`]) only when one is kept.
 pub fn value_overridden(tpl: &Template, ov: &Overrides, som: &str) -> bool {
-    match ov.overridden.get(som) {
-        Some(v) => crate::validation_rules::is_override(Some(v)),
-        None => field_now(tpl, ov, som).is_some_and(|f| f.value_override),
+    if let Some(v) = ov.overridden.get(som) {
+        return crate::validation_rules::is_override(Some(v));
     }
+    let key = crate::restyle::prop_key("value#0", Some("override"));
+    if ov.props().get(som).is_some_and(|sets| sets.contains_key(&key)) {
+        return field_now(tpl, ov, som).is_some_and(|f| f.value_override);
+    }
+    crate::data::template_field(tpl, som).is_some_and(|f| f.value_override)
 }
 
 /// Keep that the user overrode the calculation of the field at `som`. False when that changed
@@ -1163,13 +1173,13 @@ pub fn mark_value_override(ov: &mut Overrides, som: &str) -> bool {
 }
 
 /// Notes for the layout's warnings: property changes the file held that weren't kept
-/// ([`Overrides::dropped`], which the next save leaves out) and objects some of whose changes
+/// ([`Overrides::dropped`], not applied) and objects some of whose changes
 /// don't reach the page ([`Applied::cut`]).
 pub fn property_notes(ov: &Overrides, applied: &Applied) -> Vec<String> {
     let mut out = Vec::new();
     if ov.dropped > 0 {
         out.push(format!(
-            "{} property change(s) scripts made, kept in the file, are not ones a script could make or are past the form's limits; they were left out and are not saved again",
+            "{} property change(s) kept in the file are not ones a script could make or are past the form's limits; they are left out and not applied",
             ov.dropped
         ));
     }

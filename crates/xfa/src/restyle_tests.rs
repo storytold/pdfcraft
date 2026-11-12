@@ -847,7 +847,11 @@ fn changes_that_cant_be_drawn_or_kept_are_noted() {
     assert!(crate::script::property_notes(&ov, &applied).iter().any(|n| n.contains("not drawn")));
     let mut ov = Overrides::default();
     ov.dropped = 2;
-    assert!(crate::script::property_notes(&ov, &crate::apply_overrides_split(&t, &ov)).iter().any(|n| n.contains("2 property change")));
+    let notes = crate::script::property_notes(&ov, &crate::apply_overrides_split(&t, &ov));
+    assert!(notes.iter().any(|n| n.contains("2 property change")));
+    // Review r2 (L2): they stay in the file until a script's change writes the changes again,
+    // so the note says only that they aren't applied.
+    assert!(notes.iter().any(|n| n.contains("not applied") && !n.contains("saved")), "{notes:?}");
 }
 
 /// A field on an unnamed page area is named by the live form as `#pageArea[i]…`: its changes
@@ -1488,4 +1492,146 @@ fn fields_in_rows_of_a_subform_a_script_made_repeat_are_found() {
     assert!(crate::field_now(&t, &Overrides::default(), som).is_some());
     // A field is not a subform: no second instance of one.
     assert!(crate::data::template_field(&t, "form[0].page1[0].qty[1]").is_none());
+}
+
+/// Review r2 (H1): an item list's entries are outside the object's budget, as the reader keeps
+/// them, so a change names only an entry a list holds and never adds one: a change to entry 999
+/// of a two-entry list, or to an entry of a list the field doesn't have, is left out (noted as
+/// cut) and adds nothing. A change to an entry there is still applied. Nothing goes under an
+/// entry, and a list past the field's two is an ordinary property, its entries up to 7.
+#[test]
+fn a_change_names_only_an_entry_the_list_holds() {
+    let tpl = TEMPLATE.replace(
+        r#"<draw name="label""#,
+        r#"<field name="pick" w="2in" h="0.3in"><ui><choiceList/></ui><items><text>A</text><text>B</text></items></field><draw name="label""#,
+    );
+    let t = crate::parse(&tpl).unwrap().0;
+    let props = &field(&t, "pick").common.props;
+    let entries = |p: &Props| p.elements.iter().filter(|e| e.tag == "items").map(|e| e.children.len()).collect::<Vec<_>>();
+    let (after, cut) = apply_props(props, &sets(&[("items#0/text#1", None, "Z")]));
+    assert!(!cut);
+    assert_eq!(after.elements.iter().find(|e| e.tag == "items").and_then(|e| e.children.get(1)).and_then(|c| c.text.as_deref()), Some("Z"));
+    for change in ["items#0/text#999", "items#0/text#2", "items#0/integer#0", "items#1/text#0"] {
+        let (after, cut) = apply_props(props, &sets(&[(change, None, "")]));
+        assert!(cut, "{change}");
+        assert_eq!(entries(&after), [2], "{change}: no entry added");
+    }
+    assert!(check("items#0/text#0/x#0", Some("a"), "1").is_err(), "nothing under an entry");
+    assert!(check("items#2/text#8", None, "x").is_err(), "a third list is an ordinary property");
+    assert!(check("items#1/text#999", None, "x").is_ok());
+    let ov = overrides("form[0].pick[0]", &[("items#0/text#0", None, "First"), ("items#0/text#999", None, "")]);
+    let applied = crate::apply_overrides_split(&t, &ov);
+    let pick = field(&applied.template, "pick");
+    assert_eq!(pick.items.iter().map(|i| i.as_str()).collect::<Vec<_>>(), ["First", "B"]);
+    assert_eq!(applied.cut, 1, "noted");
+}
+
+/// Review r2 (H1): a form holding as many changes as it keeps, each to entry 999 of an item
+/// list of a field that has none (two to each of 5,000 fields), adds no entry: the live form's
+/// trees stay small and the fields' lists empty, the memo keeps every field for the next build
+/// (none made again), and laying it out takes well under its bound.
+#[test]
+fn changes_to_far_list_entries_make_nothing() {
+    let fields: String = (0..5_000).map(|i| format!(r#"<field name="f{i}" w="1in" h="0.2in"><ui><choiceList/></ui></field>"#)).collect();
+    let t = crate::parse(&TEMPLATE.replace(r#"<draw name="label""#, &format!(r#"{fields}<draw name="label""#))).unwrap().0;
+    let mut ov = Overrides::default();
+    for i in 0..5_000 {
+        for list in 0..2 {
+            ov.set_prop(&format!("form[0].f{i}[0]"), &format!("items#{list}/text#999"), None, "").unwrap();
+        }
+    }
+    assert_eq!(ov.props().values().map(BTreeMap::len).sum::<usize>(), MAX_PROP_OVERRIDES);
+    let start = std::time::Instant::now();
+    let applied = crate::apply_overrides_split(&t, &ov);
+    let form = crate::layout::layout_with_overrides(&applied.template, None, &ov, &applied.per_instance).unwrap();
+    assert!(!form.pages.is_empty());
+    let _ = crate::memo::take_fields_made();
+    let live = crate::form_tree(&t, None, &ov);
+    let made = crate::memo::take_fields_made();
+    let live_again = crate::form_tree(&t, None, &ov);
+    let spent = start.elapsed();
+    assert_eq!(made, 5_000);
+    assert_eq!(crate::memo::take_fields_made(), 0, "the memo keeps every field for the next build");
+    let elements: usize = live.root.children.iter().map(|n| size_of(&n.props.elements, 0).0).sum();
+    assert!(elements <= 5_000 * 4, "{elements}");
+    let items: usize = applied.template.root.children.iter().map(|n| if let Node::Field(f) = n { f.items.len() } else { 0 }).sum();
+    assert_eq!(items, 0);
+    assert_eq!(live_again.root.children.len(), live.root.children.len());
+    assert!(spent < std::time::Duration::from_secs(5), "{spent:?}");
+}
+
+/// Review r2 (M1): a row whose script changed only where the page breaks after it doesn't take
+/// the template's break before as well: the template's break goes before the first row only,
+/// and in a table the template's row breaks aren't laid out at all, so the row breaks after
+/// itself and nowhere else. A row changed to break before (where the template breaks before)
+/// still does.
+#[test]
+fn a_rows_own_break_after_brings_no_break_before() {
+    let broken = OWN_ROWS.replace(r#"<occur min="3" max="3"/>"#, r#"<occur min="3" max="3"/><breakBefore targetType="pageArea"/>"#);
+    let t = crate::parse(&broken).unwrap().0;
+    let page_of =
+        |form: &crate::Form, som: &str| form.pages.iter().position(|p| p.items.iter().any(|i| matches!(i, Item::Widget(w) if w.som == som))).unwrap();
+    let rows = |form: &crate::Form, parent: &str| [0, 1, 2].map(|i| page_of(form, &format!("{parent}.row[{i}].cell[0]")));
+    let form = laid_out(&t, &Overrides::default());
+    assert_eq!((rows(&form, "form[0].rows[0]"), rows(&form, "form[0].grid[0]")), ([0, 0, 0], [0, 0, 0]));
+    let mut ov = Overrides::default();
+    for row in ["form[0].rows[0].row[1]", "form[0].grid[0].row[1]"] {
+        ov.set_prop(row, "breakAfter#0", Some("targetType"), "pageArea").unwrap();
+    }
+    let form = laid_out(&t, &ov);
+    assert_eq!(rows(&form, "form[0].rows[0]"), [0, 0, 1], "flowed: the second row breaks after itself only");
+    let grid = rows(&form, "form[0].grid[0]");
+    assert_eq!(grid[1] - grid[0], 0, "a table's row: no break before it, {grid:?}");
+    assert_eq!(grid[2] - grid[1], 1, "a table's row: the break after it, {grid:?}");
+    let ov = overrides("form[0].rows[0].row[2]", &[("break#0", Some("before"), "pageArea")]);
+    assert_eq!(rows(&laid_out(&t, &ov), "form[0].rows[0]"), [0, 0, 1], "the third row's own break before");
+}
+
+/// Review r2 (M2): how often a subform occurs doesn't count against the changes one object
+/// keeps. When the first row, holding `occur.max`, is removed, the next row keeps it beside as
+/// many changes of its own as an object may hold, and save and reopen keep every one of them
+/// (one was left out before). A row holding as many may still take an occurrence change, and
+/// no other.
+#[test]
+fn an_occurrence_change_moved_to_a_full_row_survives_reopen() {
+    let mut ov = overrides("form[0].rows[0].row[0]", &[("occur#0", Some("max"), "3")]);
+    for i in 0..MAX_PROP_CHANGES_PER_OBJECT {
+        ov.set_prop("form[0].rows[0].row[1]", &format!("extras#0/text#{}", i % 8), Some(&format!("a{i}")), "1").unwrap();
+    }
+    assert!(ov.remove_instance("form[0].rows[0].row[0]"));
+    let row = "form[0].rows[0].row[0]";
+    assert_eq!(ov.props()[row].len(), MAX_PROP_CHANGES_PER_OBJECT + 1);
+    let xdp = format!(r#"<?xml version="1.0" encoding="UTF-8"?><xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">{TEMPLATE}</xdp:xdp>"#);
+    let mut doc = pdfcraft_cos::Document::open(Arc::new(crate::fixtures::shell(&xdp))).unwrap();
+    crate::script::set_overrides(&mut doc, &ov).unwrap();
+    let back = crate::overrides(&doc);
+    assert_eq!(back.dropped, 0);
+    assert_eq!(back.props(), ov.props(), "every change read back");
+    let mut full = back;
+    assert_eq!(full.set_prop(row, "occur#0", Some("min"), "1"), Ok(true), "an occurrence change still fits");
+    assert_eq!(full.set_prop(row, "font#0", Some("size"), "9pt"), Err(PropRefused::Full), "no other one");
+}
+
+/// Review r2 (L1): the checks after an entry take the field from the template's memo
+/// (`field_now`): made once, then handed back; whether a calculation is overridden reads the
+/// field again only when a change to its value's `override` is kept; and the live form reads
+/// a repeating subform's first instance again only for its occurrence changes.
+#[test]
+fn checks_and_the_live_form_restyle_nothing_again() {
+    let t = template();
+    let mut ov = overrides("form[0].plain[0]", &[("validate#0", Some("formatTest"), "error")]);
+    let _ = (crate::memo::take_fields_made(), take_restyled());
+    assert!(!crate::value_overridden(&t, &ov, "form[0].plain[0]"));
+    assert_eq!((crate::memo::take_fields_made(), take_restyled()), (0, 0), "no override change: the template's");
+    for _ in 0..3 {
+        assert!(crate::field_now(&t, &ov, "form[0].plain[0]").is_some());
+    }
+    assert_eq!(crate::memo::take_fields_made(), 1, "made once, then handed back");
+    ov.set_prop("form[0].plain[0]", "value#0", Some("override"), "1").unwrap();
+    assert!(crate::value_overridden(&t, &ov, "form[0].plain[0]"));
+    ov.set_prop("form[0].rows[0].row[0]", "border#0/edge#0/color#0", Some("value"), "1,2,3").unwrap();
+    let _ = crate::form_tree(&t, None, &ov);
+    let _ = take_restyled();
+    let _ = crate::form_tree(&t, None, &ov);
+    assert_eq!(take_restyled(), 0, "a row without occurrence changes isn't read again");
 }

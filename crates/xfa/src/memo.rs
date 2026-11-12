@@ -181,6 +181,12 @@ pub(crate) fn applied_held(memo: &Memo) -> (usize, usize) {
     (trees(&a.new) + trees(&a.old), bytes(&a.new) + bytes(&a.old))
 }
 
+/// How many bytes the newest generation of fields [`restyled_field`] made holds.
+#[cfg(test)]
+pub(crate) fn fields_bytes(memo: &Memo) -> usize {
+    memo.fields.lock().unwrap_or_else(PoisonError::into_inner).bytes
+}
+
 /// Bytes of the changes `sets`.
 fn set_bytes(sets: &BTreeMap<String, String>) -> usize {
     sets.iter().fold(0usize, |n, (k, v)| n.saturating_add(k.len()).saturating_add(v.len()).saturating_add(48))
@@ -206,7 +212,13 @@ pub(crate) fn applied(memo: &Memo, base: &Arc<Props>, sets: &BTreeMap<String, St
 pub(crate) fn restyled_field(memo: &Memo, f: &Field, sets: &BTreeMap<String, String>) -> Arc<Field> {
     let cost = |f: &Field| {
         let scripts = f.scripts.iter().chain(&f.calculate).chain(&f.validate).fold(0usize, |n, s| n.saturating_add(s.text.len()));
-        tree_bytes(&f.common.props).saturating_add(std::mem::size_of::<Field>()).saturating_add(scripts)
+        // Its lists are its own copies (an item list holds up to `parse::MAX_ITEMS` entries,
+        // outside the object's property budget), so they count too, as do its texts.
+        let strings = f.items.iter().chain(&f.item_values).fold(0usize, |n, i| n.saturating_add(i.len()).saturating_add(std::mem::size_of::<String>()));
+        let texts = [&f.tooltip, &f.picture, &f.data_picture, &f.validate_message, &f.format_picture, &f.format_message, &f.calc_message, &f.display_picture]
+            .into_iter()
+            .fold(0usize, |n, t| n.saturating_add(t.as_ref().map_or(0, String::len)));
+        tree_bytes(&f.common.props).saturating_add(std::mem::size_of::<Field>()).saturating_add(scripts).saturating_add(strings).saturating_add(texts)
     };
     remembered(&memo.fields, &f.common.props, sets, cost, || {
         #[cfg(test)]
@@ -474,5 +486,27 @@ mod tests {
         assert_eq!(tip(&doc).as_deref(), Some("First"));
         doc.set(entry, sets("Second"));
         assert_eq!(tip(&doc).as_deref(), Some("Second"));
+    }
+
+    /// Review r2 (H1): a field the memo keeps counts its own copies of its item lists (outside
+    /// the object's property budget) against the generation's bytes, so fields with long lists
+    /// can't hold more than the memo says.
+    #[test]
+    fn a_kept_field_counts_its_item_lists() {
+        let entries: String = (0..1_000).map(|i| format!("<text>{}{i:04}</text>", "x".repeat(200))).collect();
+        let xdp = format!(
+            r#"<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/"><subform name="form" layout="tb">
+<pageSet><pageArea name="p"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+<field name="pick" w="2in" h="0.3in"><ui><choiceList/></ui><items>{entries}</items><items save="1">{entries}</items></field></subform></template>"#
+        );
+        let tpl = crate::parse(&xdp).unwrap().0;
+        let Some(crate::model::Node::Field(f)) = tpl.root.children.first() else { panic!() };
+        assert_eq!(f.items.len(), 1_000);
+        let sets = BTreeMap::from([("validate#0@nullTest".to_string(), "error".to_string())]);
+        let made = restyled_field(&tpl.memo, f, &sets);
+        assert!(made.required);
+        // The field's own lists, past its tree (which holds the entries too).
+        let lists = tree_bytes(&made.common.props) + 2 * 1_000 * 204;
+        assert!(fields_bytes(&tpl.memo) >= lists, "{} < {lists}", fields_bytes(&tpl.memo));
     }
 }

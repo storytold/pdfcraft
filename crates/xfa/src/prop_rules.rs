@@ -15,8 +15,22 @@ pub const MAX_INDEX: usize = 7;
 pub const MAX_VALUE: usize = 16 << 10;
 
 /// Highest entry of a field's item list a step may name: the template reader keeps 1,000
-/// entries a list (`pdfcraft_xfa::parse::MAX_ITEMS`).
+/// entries a list (`pdfcraft_xfa::parse::MAX_ITEMS`). On the 500 forms the longest list holds
+/// 615 entries (342 on the 245 dynamic ones). A change names an entry the list holds; it never
+/// adds one (`pdfcraft_xfa::restyle::apply_props`), as a script reaches only the entries there are.
 pub const MAX_ITEM_INDEX: usize = 999;
+/// How many of an object's `<items>` are lists, whose entries go to [`MAX_ITEM_INDEX`]: the
+/// shown list and the saved values (`pdfcraft_xfa::parse::MAX_ITEM_LISTS`). A further one is an
+/// ordinary property, its entries named up to [`MAX_INDEX`].
+pub const ITEM_LISTS: usize = 2;
+
+/// Whether the change kept under `key` (`path@attr`) is to how often a subform occurs
+/// (`occur#0@initial`, `min` or `max`, XFA 3.3 p. 786): the subform's, not one instance's, it
+/// is kept with the first instance, which keeps it beside its own changes when an earlier first
+/// one is removed. So these three don't count against the changes one object keeps.
+pub fn is_occurrence(key: &str) -> bool {
+    matches!(key, "occur#0@initial" | "occur#0@min" | "occur#0@max")
+}
 
 /// The property elements of an object a change may start at: those the template reader keeps
 /// for scripts (XFA 3.3 p. 78; caption p. 643, items p. 758, calculate p. 641).
@@ -85,17 +99,21 @@ pub fn is_name(s: &str) -> bool {
 
 /// The steps of a property path (`border#0/edge#1`) as (tag, occurrence), when it is one a
 /// change may name: 1 to [`MAX_STEPS`] steps, each a name and an occurrence up to
-/// [`MAX_INDEX`], starting at one of the [`ROOTS`]; a border's or rectangle's edges and
-/// corners occur at most four times (XFA 3.3 p. 629), so none past the fourth.
+/// [`MAX_INDEX`] (an entry of one of the first [`ITEM_LISTS`] item lists up to
+/// [`MAX_ITEM_INDEX`], and nothing under it), starting at one of the [`ROOTS`]; a border's or
+/// rectangle's edges and corners occur at most four times (XFA 3.3 p. 629), so none past the
+/// fourth.
 pub fn steps(path: &str) -> Option<Vec<(&str, usize)>> {
     let mut out: Vec<(&str, usize)> = Vec::new();
     for step in path.split('/') {
         let (tag, index) = step.rsplit_once('#')?;
         let index: usize = index.parse().ok()?;
         // An item list's entries go as far as the list does; every other step to MAX_INDEX.
-        let in_items = matches!(out.as_slice(), [("items", _)]);
-        let most = if in_items { MAX_ITEM_INDEX } else { MAX_INDEX };
-        if !is_name(tag) || index > most || out.len() >= MAX_STEPS {
+        let in_list = matches!(out.as_slice(), [("items", k)] if *k < ITEM_LISTS);
+        let most = if in_list { MAX_ITEM_INDEX } else { MAX_INDEX };
+        // An entry holds its value and nothing else (XFA 3.3 p. 758; the reader keeps no more).
+        let past_entry = matches!(out.as_slice(), [("items", k), _, ..] if *k < ITEM_LISTS);
+        if !is_name(tag) || index > most || out.len() >= MAX_STEPS || past_entry {
             return None;
         }
         let in_box = out.last().is_some_and(|(t, _)| matches!(*t, "border" | "rectangle"));

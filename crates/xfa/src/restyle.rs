@@ -29,13 +29,19 @@ pub const MAX_PROP_OVERRIDE_BYTES: usize = 1 << 20;
 pub const MAX_PROP_VALUE: usize = crate::parse::MAX_OBJECT_PROP_BYTES;
 /// Most steps a property path takes from its object (the parser keeps 8 levels).
 const MAX_STEPS: usize = prop_rules::MAX_STEPS;
-const _: () = assert!(prop_rules::MAX_STEPS == crate::parse::MAX_PROP_DEPTH && prop_rules::MAX_VALUE == crate::parse::MAX_OBJECT_PROP_BYTES);
+const _: () = assert!(
+    prop_rules::MAX_STEPS == crate::parse::MAX_PROP_DEPTH
+        && prop_rules::MAX_VALUE == crate::parse::MAX_OBJECT_PROP_BYTES
+        && prop_rules::ITEM_LISTS == crate::parse::MAX_ITEM_LISTS
+);
 /// Most property changes one object keeps, copies of the edges and corners the scripting host
 /// makes included (see [`crate::script::Overrides::set_prop`]). On the 245 dynamic forms of 500
 /// an object takes at most 19, the deepest path 5 steps; a script
 /// that sets every attribute forms set on all of a border's edges and corners, with the copies
-/// the host makes of them, comes to about 40, so 64 leaves room. It bounds what one object can
-/// make (with [`prop_rules::MAX_INDEX`] and the steps), and so the work of laying it out again.
+/// the host makes of them, comes to about 40, so 64 leaves room. How often a subform occurs
+/// (three changes at most, [`prop_rules::is_occurrence`]) is the subform's and isn't counted.
+/// What the changes make of one object's tree is bounded by the object's budget
+/// ([`apply_props`]), not by this count.
 pub const MAX_PROP_CHANGES_PER_OBJECT: usize = 64;
 
 pub use prop_rules::check;
@@ -109,8 +115,11 @@ fn charged_size(list: &[Prop]) -> (usize, usize) {
 /// it; a copy the host made (an `=` key) gives the copied values itself, ahead of the writes
 /// to the same property. The result stays within the
 /// template reader's budget for one object (`parse::MAX_OBJECT_PROPS` elements,
-/// `parse::MAX_OBJECT_PROP_BYTES` bytes): a change past it is left out. Keys that are no
-/// property path are skipped.
+/// `parse::MAX_OBJECT_PROP_BYTES` bytes): a change past it is left out. The entries of the
+/// object's item lists are outside that budget, as the reader keeps them (see
+/// [`charged_size`]), so a change names only an entry a list holds and never adds one: a
+/// change to an entry the list doesn't have is left out, and the lists hold no more entries
+/// than the template's. Keys that are no property path are skipped.
 pub fn apply_props(base: &Props, sets: &BTreeMap<String, String>) -> (Props, bool) {
     let mut out = base.clone();
     let mut bytes = charged_size(&out.elements).1;
@@ -126,6 +135,13 @@ pub fn apply_props(base: &Props, sets: &BTreeMap<String, String>) -> (Props, boo
         // The tree and its charge before a change that adds elements: put back when the change
         // is left out at any step, so a refused change leaves no empty element behind.
         let mut undo: Option<(Vec<Prop>, usize)> = None;
+        // An entry of a list the reader doesn't charge (see `charged_size`): only one the list
+        // holds, as no budget would bound the entries a change could add.
+        let uncharged = matches!(st.as_slice(), [("items", k), _, ..] if *k < crate::parse::MAX_ITEM_LISTS);
+        if uncharged && find_mut(&mut out.elements, &st, 0).is_none() {
+            cut = true;
+            continue;
+        }
         if find_mut(&mut out.elements, &st, 0).is_none() {
             // The change adds elements: made on a copy kept until they fit the budget.
             undo = Some((out.elements.clone(), bytes));
@@ -140,9 +156,8 @@ pub fn apply_props(base: &Props, sets: &BTreeMap<String, String>) -> (Props, boo
             }
             bytes = b;
         }
-        // An entry of a list the reader doesn't charge (see `charged_size`) isn't charged here
-        // either: the path's own bounds hold it (`MAX_ITEM_INDEX` entries, `MAX_VALUE` bytes).
-        let uncharged = matches!(st.as_slice(), [("items", k), _, ..] if *k < crate::parse::MAX_ITEM_LISTS);
+        // Nor are an entry's bytes charged here: the path's own bounds hold them (an entry the
+        // list holds, `MAX_VALUE` bytes).
         let Some(p) = find_mut(&mut out.elements, &st, 0) else { continue };
         let old = match attr {
             Some(name) => p.attrs.iter().find(|(k, _)| k == name).map_or(0, |(k, v)| k.len().saturating_add(v.len())),
@@ -184,7 +199,8 @@ fn add_missing(list: &mut Vec<Prop>, steps: &[(&str, usize)], depth: usize) {
     let have = list.iter().filter(|p| p.tag == *tag).count();
     if have <= *index {
         // `index` is at most `prop_rules::MAX_INDEX` (an edge or corner at most 3), so this adds
-        // a handful of elements.
+        // a handful of elements: an item list's entries, which go further, are never added
+        // (see `apply_props`).
         let added: Vec<Prop> = (have..=*index).map(|k| added_element(list, tag, have, k)).collect();
         let at = list.iter().rposition(|p| p.tag == *tag).map_or(list.len(), |i| i.saturating_add(1));
         for (k, p) in added.into_iter().enumerate() {
@@ -322,6 +338,8 @@ pub(crate) fn restyle(node: &mut Node, sets: &BTreeMap<String, String>) -> bool 
     if sets.is_empty() {
         return false;
     }
+    #[cfg(test)]
+    RESTYLED.with(|c| c.set(c.get().saturating_add(1)));
     let (props, mut cut) = apply_props(&node.common().props, sets);
     if node.common().props.cut {
         cut = true;
@@ -341,6 +359,18 @@ pub(crate) fn restyle(node: &mut Node, sets: &BTreeMap<String, String>) -> bool 
     }
     node.common_mut().props = Arc::new(props);
     cut
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Objects [`restyle`] read again, on this thread.
+    static RESTYLED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many objects [`restyle`] has read again on this thread, since the last call.
+#[cfg(test)]
+pub(crate) fn take_restyled() -> usize {
+    RESTYLED.with(|c| c.replace(0))
 }
 
 /// `node` alone, without what it holds (a subform's children and page set, a group's fields, a
@@ -374,6 +404,56 @@ pub(crate) fn restyled(node: &Node, sets: &BTreeMap<String, String>) -> Node {
     let mut n = shallow(node);
     restyle(&mut n, sets);
     n
+}
+
+/// Which side of an object the change kept under `key` can make the page break on (XFA 3.3
+/// p. 632; see `parse::page_breaks`): before (`breakBefore`'s `targetType`, `break`'s `before`)
+/// is `Some(true)`, after (`breakAfter`'s `targetType`) `Some(false)`; `None` for any other.
+fn break_side(key: &str) -> Option<bool> {
+    let (path, attr) = split_key(key);
+    let (tag, _) = path.rsplit_once('#').filter(|_| !path.contains('/'))?;
+    match (tag, attr?) {
+        ("breakBefore", "targetType") | ("break", "before") => Some(true),
+        ("breakAfter", "targetType") => Some(false),
+        _ => None,
+    }
+}
+
+/// Where the page breaks before and after one instance of subform `node` by the changes `sets`
+/// made to that instance (XFA 3.3 p. 632), each side `None` when no change is to it. The
+/// template's breaks go before the first instance and after the last only (the layout's rule):
+/// `template_before` and `template_after` say whether this instance takes them. For one that
+/// doesn't, a side the changes reach breaks as the changes alone say: the template's break on
+/// that side doesn't come with them, so a change to where a row breaks after it doesn't make it
+/// break before as well. An object whose template the reader cut short isn't laid out from its
+/// tree (see [`restyle`]): the template's rule stands, `(None, None)`.
+pub(crate) fn instance_breaks(
+    node: &Node,
+    sets: &BTreeMap<String, String>,
+    template_before: bool,
+    template_after: bool,
+) -> (Option<bool>, Option<bool>) {
+    let before = sets.keys().any(|k| break_side(k) == Some(true));
+    let after = sets.keys().any(|k| break_side(k) == Some(false));
+    if !(before || after) || node.common().props.cut {
+        return (None, None);
+    }
+    let mut n = shallow(node);
+    let props = Arc::make_mut(&mut n.common_mut().props);
+    for e in &mut props.elements {
+        let drop = match e.tag.as_str() {
+            "breakBefore" if !template_before => "targetType",
+            "break" if !template_before => "before",
+            "breakAfter" if !template_after => "targetType",
+            _ => continue,
+        };
+        e.attrs.retain(|(k, _)| k != drop);
+    }
+    restyle(&mut n, sets);
+    match n {
+        Node::Subform(s) => (before.then_some(s.break_before_page), after.then_some(s.break_after_page)),
+        _ => (None, None),
+    }
 }
 
 /// The common properties `c` of an object (its border, margins, font and paragraph, and its

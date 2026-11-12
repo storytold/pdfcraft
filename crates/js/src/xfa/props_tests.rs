@@ -387,6 +387,24 @@ fn occur_written_changes_what_the_instance_manager_allows() {
     assert!(o.effects.contains(&set("form1[0].rows[0]", "occur#0", Some("max"), "3")), "{o:?}");
 }
 
+/// Review r2 (M2): how often a subform occurs isn't counted against the changes the form keeps
+/// for one object (`prop_rules::is_occurrence`, as the form doesn't count it): a subform whose
+/// first instance holds as many changes as an object may still takes `occur.max`, and no
+/// other change.
+#[test]
+fn an_occurrence_write_fits_on_an_instance_holding_as_many_changes_as_it_may() {
+    let mut root = form();
+    let rows = root.children.iter_mut().find(|c| c.name == "rows").unwrap();
+    let mut kept: Vec<String> = (0..super::MAX_CHANGES_PER_OBJECT).map(|i| format!("extras#0@a{i:02}")).collect();
+    kept.push("occur#0@initial".to_string());
+    kept.sort();
+    rows.changed = kept.into();
+    let o = go_on(&root, "rows.occur.max = '3'; rows.font.size = '20pt'; [rows.occur.max, rows.font.size].join('|')", "plain");
+    assert_eq!(o.error, None, "{o:?}");
+    assert_eq!(o.result.as_deref(), Some("3|10pt"), "{o:?}");
+    assert_eq!(o.effects, [set("form1[0].rows[0]", "occur#0", Some("max"), "3")], "{o:?}");
+}
+
 /// FormCalc reads and writes the same property objects (`$.font.fill.color.value = …`).
 #[test]
 fn formcalc_reads_and_writes_properties() {

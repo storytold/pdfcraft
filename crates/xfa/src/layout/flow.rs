@@ -335,8 +335,8 @@ impl Layouter<'_> {
         // always one, see `instance_count`); an instance whose breaks a script changed (XFA 3.3
         // p. 632) breaks as they now say.
         let breaks = |l: &Self, i: usize| {
-            l.own_breaks(node, ctx_parent, sib.saturating_add(i))
-                .unwrap_or((i == 0 && sf.break_before_page, i.saturating_add(1) >= instances && sf.break_after_page))
+            let template = (i == 0 && sf.break_before_page, i.saturating_add(1) >= instances && sf.break_after_page);
+            l.own_breaks(node, ctx_parent, sib.saturating_add(i), template)
         };
         for i in 0..instances {
             // Every instance spends budget, so nested repeats that place nothing still stop.
@@ -449,7 +449,8 @@ impl Layouter<'_> {
                     // A row instance whose breaks a script changed (XFA 3.3 p. 632) breaks the
                     // page as they now say; the overflow leader starts the new page, as it does
                     // a page the table runs onto.
-                    let (before, after) = self.own_breaks(child, ctx, csib.saturating_add(inst)).unwrap_or((false, false));
+                    // The template's own row breaks aren't laid out in a table: only a row's own.
+                    let (before, after) = self.own_breaks(child, ctx, csib.saturating_add(inst), (false, false));
                     let broke = before && self.page_has_flow();
                     if broke {
                         self.break_frames(0.0, true)?;
