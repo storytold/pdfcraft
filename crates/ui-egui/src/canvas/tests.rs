@@ -3210,6 +3210,7 @@ fn previous_and_next_view_restore_scroll_fraction_on_origin_page() -> Result<(),
     assert_eq!(v.back, vec![0]);
 
     // Simulate scrolling 25% down page 3 before returning via Previous view.
+    v.goto = None;
     v.screen_rects = vec![(3, Rect::from_min_size(pos2(100.0, 40.0 + gap - 250.0), vec2(600.0, 1000.0)))];
     assert!(v.view_history(false));
     assert_eq!(v.current, 0);
@@ -3217,11 +3218,18 @@ fn previous_and_next_view_restore_scroll_fraction_on_origin_page() -> Result<(),
     assert_eq!(page, 0);
     assert!((frac - 0.5).abs() < 1e-5, "expected 0.5 scroll fraction on page 0, got {frac}");
 
-    // Next view returns to page 3 at its 25% scroll fraction.
+    // Next view returns to page 3 at its 25% scroll fraction; even if `screen_rects` still
+    // holds a stale entry for page 0 before the next frame draws, the pending `goto` fraction
+    // (0.5) on page 0 is preserved in `back_scroll`.
+    v.screen_rects = vec![(0, Rect::from_min_size(pos2(100.0, 40.0 + gap - 900.0), vec2(600.0, 1000.0)))];
     assert!(v.view_history(true));
     assert_eq!(v.current, 3);
     let (page, frac) = v.goto.ok_or("expected goto on Next view")?;
     assert_eq!(page, 3);
     assert!((frac - 0.25).abs() < 1e-5, "expected 0.25 scroll fraction on page 3, got {frac}");
+    assert!(v.view_history(false));
+    let (page, frac) = v.goto.ok_or("expected goto on second Previous view")?;
+    assert_eq!(page, 0);
+    assert!((frac - 0.5).abs() < 1e-5, "pending goto fraction beats stale screen_rects: {frac}");
     Ok(())
 }

@@ -91,18 +91,18 @@ impl DocView {
 
     /// How far down `self.current` the viewport top sits (0..=1), as `goto` takes it (#6848).
     fn current_scroll_fraction(&self) -> f32 {
+        if let Some((p, frac)) = self.goto
+            && p == self.current
+            && frac.is_finite()
+        {
+            return frac.clamp(0.0, 1.0);
+        }
         if self.viewport_screen.is_positive()
             && let Some((_, r)) = self.screen_rects.iter().find(|(p, _)| *p == self.current)
             && r.height() > 0.0
             && r.top() < self.viewport_screen.top() + self.page_gap()
         {
             return ((self.viewport_screen.top() + self.page_gap() - r.top()) / r.height()).clamp(0.0, 1.0);
-        }
-        if let Some((p, frac)) = self.goto
-            && p == self.current
-            && frac.is_finite()
-        {
-            return frac.clamp(0.0, 1.0);
         }
         0.0
     }
