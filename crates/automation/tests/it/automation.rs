@@ -10974,6 +10974,48 @@ fn repeated_xfa_print_buttons_work_through_tools_and_after_reopen() {
     check(&mut a, doc);
 }
 
+/// A globally bound field (`<bind match="global"/>`) a master page repeats on every page shows
+/// one value: form_fill into one copy fills them all, on the pages and after saving and
+/// reopening (#5485).
+#[test]
+fn filling_one_copy_of_a_global_xfa_field_fills_every_copy_through_tools() {
+    let dir = workdir("xfa-global-copies");
+    let template = pdfcraft_xfa::fixtures::repeated_print_button_template().replace(
+        "</pageArea>",
+        r#"<field name="client" x="200pt" y="24pt" w="200pt" h="25pt"><ui><textEdit/></ui><bind match="global"/></field></pageArea>"#,
+    );
+    std::fs::write(dir.join("global.pdf"), pdfcraft_xfa::fixtures::shell(&template)).unwrap();
+    let mut a = auto(&dir).with_xfa_time_scale(100);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "global.pdf" }))["doc"].as_u64().unwrap();
+    // The copies: the text fields that aren't a page's own note.
+    let copies = |a: &mut Automation, doc| -> Vec<serde_json::Value> {
+        let fields = ok(a, "form_fields", json!({ "doc": doc }));
+        fields["fields"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|f| f["type"] == "text" && !f["name"].as_str().unwrap().starts_with("note"))
+            .cloned()
+            .collect()
+    };
+    let before = copies(&mut a, doc);
+    assert_eq!(before.iter().map(|f| f["page"].as_u64().unwrap()).collect::<Vec<_>>(), [1, 2, 3], "{before:?}");
+    let mut values = serde_json::Map::new();
+    values.insert(before[1]["name"].as_str().unwrap().into(), json!("Ada Lovelace"));
+    ok(&mut a, "form_fill", json!({ "doc": doc, "values": values }));
+    let check = |a: &mut Automation, doc| {
+        let after = copies(a, doc);
+        assert!(after.iter().all(|f| f["value"] == "Ada Lovelace"), "{after:?}");
+        let found = ok(a, "text_find", json!({ "doc": doc, "query": "Ada Lovelace" }));
+        assert_eq!(found["count"], 3, "every page shows it: {found}");
+    };
+    check(&mut a, doc);
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "saved.pdf" }));
+    ok(&mut a, "doc_close", json!({ "doc": doc }));
+    let doc = ok(&mut a, "doc_open", json!({ "path": "saved.pdf" }))["doc"].as_u64().unwrap();
+    check(&mut a, doc);
+}
+
 /// form_focus runs a field's XFA enter and exit scripts on every focus change; scripts that
 /// change nothing leave no edit, a radio button's own scripts run for its widget, and unknown
 /// fields, widgets and events are refused.

@@ -15509,3 +15509,181 @@ fn inline_conversions_refuse_office_documents_without_running_libreoffice() {
     assert_eq!(s.convert_to_pdf_inline("notes.txt", &Arc::new(b"hello".to_vec())).unwrap().0, SourceKind::Text);
     assert!(s.as_pdf_inline("scan.jpg", &Arc::new(jpeg_bytes())).unwrap().starts_with(b"%PDF-"));
 }
+
+// Copies of a globally bound field (`<bind match="global"/>`) share one data value (XFA 3.3
+// pp. 87 and 176): an edit to any copy reaches every other copy, on screen, in the saved data
+// and after reopening (#5485). Some of these tests are adapted from wireless89's on #5368.
+
+/// The page-master copies of `shared` in [`master_round_trip_review_template`], one per page.
+fn shared_master_names(s: &Session, id: DocId) -> Vec<String> {
+    let by_som = pdfcraft_xfa::fields_by_som(&s.get(id).unwrap().editor.as_ref().unwrap().cos);
+    (0..3).map(|page| by_som.get(&format!("master[{page}].shared[0]")).unwrap_or_else(|| panic!("no copy on page {page}")).clone()).collect()
+}
+
+/// What each copy of `shared` shows.
+fn shared_master_shown(s: &Session, id: DocId) -> Vec<Vec<String>> {
+    let d = s.get(id).unwrap();
+    shared_master_names(s, id).iter().map(|name| d.form.iter().find(|f| &f.name == name).unwrap().value.clone()).collect()
+}
+
+/// The text the saved data holds for `shared`.
+fn shared_master_stored(saved: &Arc<Vec<u8>>) -> Option<String> {
+    let cos = pdfcraft_cos::Document::open(saved.clone()).unwrap();
+    pdfcraft_xfa::data_of(&cos).unwrap().text_at(&pdfcraft_xfa::som_to_path("master[0].shared[0]")).map(str::to_string)
+}
+
+fn shown_as(text: &str) -> Vec<Vec<String>> {
+    vec![vec![text.to_string()]; 3]
+}
+
+/// An unchanged copy no longer overwrites the edit when all the fields are written back.
+#[test]
+fn xfa_editing_a_global_master_field_keeps_the_new_shared_value() {
+    let mut s = Session::new().with_clock(|| 1_700_000_000).with_xfa_time_scale(100);
+    let id = s.open("global.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&master_round_trip_review_template())), None).unwrap();
+    assert_eq!(shared_master_shown(&s, id), shown_as("GLOBAL_VALUE"));
+    let names = shared_master_names(&s, id);
+    s.apply(id, Edit::SetFieldValue { name: names[1].clone(), value: FieldValue::Text("GLOBAL_CHANGED".into()) }).unwrap();
+    assert!(s.take_js_output(id).errors.is_empty());
+    let shown = shared_master_shown(&s, id);
+    let saved = s.save_bytes(id).unwrap();
+    let stored = shared_master_stored(&saved);
+    let again = s.open("again.pdf", None, saved, None).unwrap();
+    let reopened = shared_master_shown(&s, again);
+    assert_eq!(
+        (shown, stored.as_deref(), reopened),
+        (shown_as("GLOBAL_CHANGED"), Some("GLOBAL_CHANGED"), shown_as("GLOBAL_CHANGED")),
+        "shown, stored, reopened"
+    );
+}
+
+/// With no data yet, typing in one copy fills the blank copies, and they stay filled after a
+/// save and reopen; a page-local master field next to it keeps its own value on each page.
+#[test]
+fn xfa_typing_in_one_global_master_copy_fills_the_blank_copies() {
+    let blank = master_round_trip_review_template().replace("<master><shared>GLOBAL_VALUE</shared></master>", "");
+    let mut s = Session::new().with_clock(|| 1_700_000_000).with_xfa_time_scale(100);
+    let id = s.open("blank.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&blank)), None).unwrap();
+    assert!(shared_master_shown(&s, id).iter().all(|v| v.iter().all(String::is_empty)), "{:?}", shared_master_shown(&s, id));
+    let by_som = pdfcraft_xfa::fields_by_som(&s.get(id).unwrap().editor.as_ref().unwrap().cos);
+    let stamp = by_som.get("master[2].stamp[0]").unwrap().clone();
+    s.apply(id, Edit::SetFieldValue { name: stamp, value: FieldValue::Text("ONLY_PAGE_3".into()) }).unwrap();
+    let names = shared_master_names(&s, id);
+    s.apply(id, Edit::SetFieldValue { name: names[0].clone(), value: FieldValue::Text("Ada Lovelace".into()) }).unwrap();
+    assert!(s.take_js_output(id).errors.is_empty());
+    assert_eq!(shared_master_shown(&s, id), shown_as("Ada Lovelace"));
+    let saved = s.save_bytes(id).unwrap();
+    assert_eq!(shared_master_stored(&saved).as_deref(), Some("Ada Lovelace"));
+    let again = s.open("again.pdf", None, saved, None).unwrap();
+    assert_eq!(shared_master_shown(&s, again), shown_as("Ada Lovelace"));
+    let d = s.get(again).unwrap();
+    let by_som = pdfcraft_xfa::fields_by_som(&d.editor.as_ref().unwrap().cos);
+    let stamps: Vec<Vec<String>> = (0..3)
+        .map(|page| {
+            let n = by_som.get(&format!("master[{page}].stamp[0]")).unwrap();
+            d.form.iter().find(|f| &f.name == n).unwrap().value.clone()
+        })
+        .collect();
+    assert!(stamps[0].iter().chain(&stamps[1]).all(String::is_empty), "{stamps:?}");
+    assert_eq!(stamps[2], ["ONLY_PAGE_3"]);
+}
+
+/// In one batch the last copy given a value wins and other fields keep theirs; undo and redo
+/// take every copy back and forth together; clearing one copy clears them all. With scripts
+/// on and off.
+#[test]
+fn xfa_global_copies_share_batches_clearing_and_undo() {
+    for javascript in [true, false] {
+        let mut s = Session::new().with_clock(|| 1_700_000_000).with_xfa_time_scale(100);
+        s.set_javascript(javascript);
+        let id = s.open("shared.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&master_round_trip_review_template())), None).unwrap();
+        let names = shared_master_names(&s, id);
+        let fill = |name: &str, text: &str| Edit::SetFieldValue { name: name.into(), value: FieldValue::Text(text.into()) };
+        let note = |s: &Session| s.get(id).unwrap().form.iter().find(|f| f.name == "note1").unwrap().value.clone();
+        let before = note(&s);
+        let edits = vec![fill(&names[0], "FIRST"), fill(&names[2], "LAST"), fill("note1", "INDEPENDENT")];
+        s.apply(id, Edit::Batch { label: "Fill in".into(), edits }).unwrap();
+        assert_eq!(shared_master_shown(&s, id), shown_as("LAST"), "javascript {javascript}: the last edit wins");
+        assert_eq!(note(&s), ["INDEPENDENT"]);
+        s.undo(id).unwrap();
+        assert_eq!(shared_master_shown(&s, id), shown_as("GLOBAL_VALUE"), "javascript {javascript}: undo");
+        assert_eq!(note(&s), before);
+        s.redo(id).unwrap();
+        assert_eq!(shared_master_shown(&s, id), shown_as("LAST"), "javascript {javascript}: redo");
+        s.apply(id, fill(&names[1], "")).unwrap();
+        assert!(shared_master_shown(&s, id).iter().all(|v| v.iter().all(String::is_empty)), "javascript {javascript}: cleared");
+        let saved = s.save_bytes(id).unwrap();
+        assert_eq!(shared_master_stored(&saved).as_deref(), Some(""));
+        let again = s.open("again.pdf", None, saved, None).unwrap();
+        assert!(shared_master_shown(&s, again).iter().all(|v| v.iter().all(String::is_empty)));
+        assert_eq!(s.get(again).unwrap().form.iter().find(|f| f.name == "note1").unwrap().value, ["INDEPENDENT"]);
+    }
+}
+
+/// A copy a script made read-only still shows the shared value, and stays read-only.
+#[test]
+fn xfa_global_copies_update_read_only_copies_without_unlocking_them() {
+    let template = master_round_trip_review_template().replace(r#"stamp.rawValue = "MASTER_B_CLICK";"#, r#"shared.access = "readOnly";"#);
+    let mut s = Session::new().with_clock(|| 1_700_000_000).with_xfa_time_scale(100);
+    let id = s.open("protected.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&template)), None).unwrap();
+    let mark = pdfcraft_xfa::fields_by_som(&s.get(id).unwrap().editor.as_ref().unwrap().cos).get("master[2].mark[0]").unwrap().clone();
+    assert_eq!(s.run_javascript(id, "", Some(&mark)).unwrap().error, None);
+    let names = shared_master_names(&s, id);
+    let locked = |s: &Session| s.get(id).unwrap().form.iter().find(|f| f.name == names[2]).unwrap().flags & 1 != 0;
+    assert!(locked(&s));
+    s.apply(id, Edit::SetFieldValue { name: names[0].clone(), value: FieldValue::Text("NEW_SHARED".into()) }).unwrap();
+    assert_eq!(shared_master_shown(&s, id), shown_as("NEW_SHARED"));
+    assert!(locked(&s), "still read-only");
+    assert!(s.apply(id, Edit::SetFieldValue { name: names[2].clone(), value: FieldValue::Text("REFUSED".into()) }).is_err());
+    assert_eq!(shared_master_shown(&s, id), shown_as("NEW_SHARED"));
+}
+
+/// A date goes through each copy's own display picture, and into the data as a date.
+#[test]
+fn xfa_global_copies_share_dates_through_their_pictures() {
+    let template = master_round_trip_review_template()
+        .replace(
+            r#"<ui><textEdit/></ui><bind match="global"/>"#,
+            r#"<ui><dateTimeEdit/><picture>date{MM/DD/YYYY}</picture></ui><value><date/></value><bind match="global"/>"#,
+        )
+        .replace("<shared>GLOBAL_VALUE</shared>", "<shared>2026-10-18</shared>");
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("dates.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&template)), None).unwrap();
+    assert_eq!(shared_master_shown(&s, id), shown_as("10/18/2026"));
+    let names = shared_master_names(&s, id);
+    s.apply(id, Edit::SetFieldValue { name: names[1].clone(), value: FieldValue::Text("12/24/2026".into()) }).unwrap();
+    assert_eq!(shared_master_shown(&s, id), shown_as("12/24/2026"));
+    let saved = s.save_bytes(id).unwrap();
+    assert_eq!(shared_master_stored(&saved).as_deref(), Some("2026-12-24"));
+    let again = s.open("again.pdf", None, saved, None).unwrap();
+    assert_eq!(shared_master_shown(&s, again), shown_as("12/24/2026"));
+}
+
+/// Check boxes and lists share their state and saved value.
+#[test]
+fn xfa_global_copies_share_check_box_states_and_list_values() {
+    for checkbox in [true, false] {
+        let (ui, initial) = if checkbox {
+            (r#"<ui><checkButton/></ui><items><integer>1</integer><integer>0</integer></items><bind match="global"/>"#, "1")
+        } else {
+            (
+                r#"<ui><choiceList/></ui><items><text>Alpha</text><text>Beta</text></items><items save="1" presence="hidden"><text>A</text><text>B</text></items><bind match="global"/>"#,
+                "A",
+            )
+        };
+        let template = master_round_trip_review_template()
+            .replace(r#"<ui><textEdit/></ui><bind match="global"/>"#, ui)
+            .replace("<shared>GLOBAL_VALUE</shared>", &format!("<shared>{initial}</shared>"));
+        let mut s = Session::new().with_clock(|| 1_700_000_000);
+        let id = s.open("typed.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&template)), None).unwrap();
+        let names = shared_master_names(&s, id);
+        let value = if checkbox { FieldValue::Check(false) } else { FieldValue::Choice(vec!["B".into()]) };
+        s.apply(id, Edit::SetFieldValue { name: names[1].clone(), value }).unwrap();
+        let expected = if checkbox { Vec::new() } else { vec!["B".to_string()] };
+        assert_eq!(shared_master_shown(&s, id), vec![expected.clone(); 3], "checkbox {checkbox}");
+        let saved = s.save_bytes(id).unwrap();
+        assert_eq!(shared_master_stored(&saved).as_deref(), Some(if checkbox { "0" } else { "B" }));
+        let again = s.open("again.pdf", None, saved, None).unwrap();
+        assert_eq!(shared_master_shown(&s, again), vec![expected; 3], "checkbox {checkbox}: reopened");
+    }
+}
