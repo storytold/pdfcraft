@@ -161,7 +161,7 @@ pub(super) fn page_scroll<R>(
 }
 
 /// Run a push button's action (the ones that need no JavaScript engine).
-pub(super) fn run_button(app: &mut PdfCraftApp, index: usize, name: &str, action: pdfcraft_engine::form_scripts::ButtonAction) {
+pub(super) fn run_button(app: &mut PdfCraftApp, index: usize, name: &str, identity: u64, action: pdfcraft_engine::form_scripts::ButtonAction) {
     use pdfcraft_engine::form_scripts::ButtonAction as B;
     let pages = app.session.get(app.views[index].id).map_or(0, |d| d.info.pages.len());
     match action {
@@ -205,6 +205,9 @@ pub(super) fn run_button(app: &mut PdfCraftApp, index: usize, name: &str, action
                     read_only: None,
                     required: None,
                     display: Some(if hide { 1 } else { 0 }),
+                    caption: None,
+                    text_color: None,
+                    fill_color: None,
                     ..Default::default()
                 })
                 .collect();
@@ -234,10 +237,10 @@ pub(super) fn run_button(app: &mut PdfCraftApp, index: usize, name: &str, action
             "{name} submits the form to {url}; PdfCraft doesn't send form data. Save the document to keep your entries.",
             &[("name", name), ("url", &url)],
         ),
-        B::ImportIcon => app.choose_field_image(name),
+        B::ImportIcon => app.choose_field_image_target(app.views[index].id, name, Some(identity)),
         B::Script(js) => {
             let id = app.views[index].id;
-            app.run_button_script(id, name, &js);
+            app.run_button_script_target(id, name, Some(identity), &js);
         }
     }
 }
