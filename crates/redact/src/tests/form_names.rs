@@ -378,7 +378,8 @@ fn forms_nested_with_many_names_are_refused_past_the_bound() {
     assert!(!text.contains("page 1 can't be read"), "{text}");
     let text = crate::tests_verify::prove_unapplied(&mut beside(8)).to_text();
     assert!(text.contains("page 1 can't be read"), "{text}");
-    // Drawn by a pattern cell, they are searched for images.
+    // Drawn by a pattern cell, they are searched for images through their names as given, none of
+    // them copied, so the bound doesn't apply.
     let cell = stream(
         "/Type /Pattern /PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 300 300] /XStep 300 /YStep 300 /Resources << /XObject << /Fm0 8 0 R >> >>",
         b"/Fm0 Do",
@@ -386,7 +387,7 @@ fn forms_nested_with_many_names_are_refused_past_the_bound() {
     let mut patterned =
         page(8, "[0 0 300 300]", b"/Pattern cs /P0 scn 0 0 300 300 re f", "/Pattern << /P0 16 0 R >>", vec![cell], [0.0, 230.0, 300.0, 280.0]);
     let text = crate::tests_verify::prove_unapplied(&mut patterned).to_text();
-    assert!(text.contains("a pattern, soft mask or Type3 glyph can't be read in full"), "{text}");
+    assert!(!text.contains("a pattern, soft mask or Type3 glyph"), "{text}");
     // A form without resources of its own is read with its caller's, here a page `/XObject`, given
     // by reference, of `names` names `len` bytes long: ten nested with 15,000 short ones hold some
     // 9 MB, twenty some 19 MB; with 2,000 of 1,000 bytes, four hold some 8 MB, ten some 21 MB.
@@ -770,4 +771,242 @@ fn a_form_without_resources_takes_the_resources_of_what_draws_it() {
     };
     assert_eq!(at(1), vec![5, 7], "drawn by the page: the form with its own, and the rewritten one with the page's: {found:?}");
     assert_eq!(at(2), vec![7], "drawn inside the form with its own: that form's: {found:?}");
+}
+
+/// A soft mask's group without resources, given by a form's own `/ExtGState` and drawing the
+/// page's image, draws it on screen: the renderer looks the group's names up in those of the
+/// content using the soft mask, the form's own then the page's. The proof searches the group so
+/// too, and says it can't place the image. Where the form's own `/XObject` gives `/Im` as a form
+/// drawing nothing, there is no image to find.
+#[test]
+fn the_proof_searches_a_forms_own_soft_mask_through_its_callers_names() {
+    let prove = |form_res: &str| {
+        let image = stream("/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", b"x");
+        let form = stream(&format!("/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << {form_res} >>"), b"/GS1 gs 0 0 300 300 re f");
+        let group = stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Group << /S /Transparency /CS /DeviceGray >>", b"/Im Do");
+        let empty = stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300]", b"");
+        let mut doc = one_page(b"/Fm Do", "/XObject << /Im 7 0 R /Fm 8 0 R >>", vec![image, form, group, empty]);
+        mark(&mut doc, 0, &[[0.0, 230.0, 300.0, 280.0]], "");
+        crate::tests_verify::prove_unapplied(&mut doc).to_text()
+    };
+    let soft_mask = "/ExtGState << /GS1 << /SMask << /S /Luminosity /G 9 0 R >> >> >>";
+    let text = prove(soft_mask);
+    assert!(text.contains("an image inside a pattern, soft mask or Type3 glyph can't be placed or cleared"), "{text}");
+    let text = prove(&format!("{soft_mask} /XObject << /Im 10 0 R >>"));
+    assert!(!text.contains("an image inside a pattern, soft mask or Type3 glyph"), "{text}");
+}
+
+/// Two forms, each giving the same soft mask in its own `/ExtGState`, whose group without
+/// resources draws `/Im`: in `/A`, whose own `/XObject` gives `/Im` as a form drawing nothing, the
+/// group draws no image; in `/B`, which gives no `/XObject`, it draws the page's. Searched in `/A`
+/// first, the group is searched again in `/B`, whichever is drawn first; drawn by `/A` alone, it
+/// draws no image. So too where the group draws, through its own `/XObject`, a form without
+/// resources that draws `/Im`.
+#[test]
+fn a_soft_mask_drawn_through_two_forms_names_is_searched_in_each() {
+    let prove = |content: &[u8], group_res: &str, group_content: &[u8]| {
+        let image = stream("/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", b"x");
+        let soft_mask = "/ExtGState << /GS1 << /SMask << /S /Luminosity /G 10 0 R >> >> >>";
+        let form =
+            |res: &str| stream(&format!("/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << {res} >>"), b"/GS1 gs 0 0 300 300 re f");
+        let a = form(&format!("{soft_mask} /XObject << /Im 11 0 R >>"));
+        let b = form(soft_mask);
+        let group = stream(
+            &format!("/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Group << /S /Transparency /CS /DeviceGray >> {group_res}"),
+            group_content,
+        );
+        let empty = stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300]", b"");
+        let inner = stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300]", b"/Im Do");
+        let mut doc = one_page(content, "/XObject << /Im 7 0 R /A 8 0 R /B 9 0 R >>", vec![image, a, b, group, empty, inner]);
+        mark(&mut doc, 0, &[[0.0, 230.0, 300.0, 280.0]], "");
+        crate::tests_verify::prove_unapplied(&mut doc).to_text()
+    };
+    let flagged = "an image inside a pattern, soft mask or Type3 glyph can't be placed or cleared";
+    for (group_res, group_content) in [("", &b"/Im Do"[..]), ("/Resources << /XObject << /X 12 0 R >> >>", b"/X Do")] {
+        for content in [&b"/A Do /B Do"[..], b"/B Do /A Do"] {
+            let text = prove(content, group_res, group_content);
+            assert!(text.contains(flagged), "{text}");
+        }
+        let text = prove(b"/A Do", group_res, group_content);
+        assert!(!text.contains(flagged), "{text}");
+    }
+}
+
+/// A soft mask's group is searched once however many forms with `/XObject` names of their own
+/// give it, where every name it draws is its own; where it looks a name up through theirs, once in
+/// each, and past 4,096 such searches the proof says it can't check.
+#[test]
+fn hidden_content_is_searched_again_only_where_it_reads_its_callers_names() {
+    let searches = |forms: usize, group_res: &str| {
+        let soft_mask = "/ExtGState << /GS1 << /SMask << /S /Luminosity /G 8 0 R >> >> >>";
+        let mut objs = vec![
+            stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300]", b""),
+            stream(
+                &format!("/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Group << /S /Transparency /CS /DeviceGray >> {group_res}"),
+                b"/Im Do",
+            ),
+        ];
+        objs.extend((0..forms).map(|_| {
+            stream(
+                &format!("/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << {soft_mask} /XObject << /Im 7 0 R >> >>"),
+                b"/GS1 gs 0 0 300 300 re f",
+            )
+        }));
+        let names: String = (0..forms).map(|i| format!("/F{i} {} 0 R ", 9 + i)).collect();
+        let content: String = (0..forms).map(|i| format!("/F{i} Do ")).collect();
+        let mut doc = one_page(content.as_bytes(), &format!("/XObject << {names}>>"), objs);
+        mark(&mut doc, 0, &[[0.0, 230.0, 300.0, 280.0]], "");
+        crate::verify::HIDDEN_SEARCHES.with(|c| c.set(0));
+        let text = crate::tests_verify::prove_unapplied(&mut doc).to_text();
+        (crate::verify::HIDDEN_SEARCHES.with(std::cell::Cell::get), text)
+    };
+    let own = "/Resources << /XObject << /Im 7 0 R >> >>";
+    // The group and the form it draws, once each.
+    assert_eq!(searches(1, own).0, 2);
+    assert_eq!(searches(50, own).0, 2);
+    // Read through each form's names: the group once in each, the form it draws once.
+    assert_eq!(searches(1, "").0, 2);
+    assert_eq!(searches(50, "").0, 51);
+    let (_, text) = searches(4_097, "");
+    assert!(!text.contains("can't be read in full"), "{text}");
+    let (_, text) = searches(4_098, "");
+    assert!(text.contains("a pattern, soft mask or Type3 glyph can't be read in full"), "{text}");
+}
+
+/// The page's soft mask's group looks the XObjects it draws up in its own resources first, an
+/// entry there that is no stream passed over, as the renderer does: given its own `/Im` as a
+/// number, it draws the page's image; given it as a form drawing nothing, no image. A group that
+/// draws itself through its own names is searched once, as before, not refused.
+#[test]
+fn the_proof_looks_a_hidden_groups_names_up_as_the_renderer_does() {
+    let prove = |group_res: &str, content: &[u8]| {
+        let image = stream("/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", b"x");
+        let group =
+            stream(&format!("/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Group << /S /Transparency /CS /DeviceGray >> {group_res}"), content);
+        let empty = stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300]", b"");
+        let res = "/XObject << /Im 7 0 R >> /ExtGState << /GS1 << /SMask << /S /Luminosity /G 8 0 R >> >> >>";
+        let mut doc = one_page(b"/GS1 gs 0 0 300 300 re f", res, vec![image, group, empty]);
+        mark(&mut doc, 0, &[[0.0, 230.0, 300.0, 280.0]], "");
+        crate::tests_verify::prove_unapplied(&mut doc).to_text()
+    };
+    let flagged = "an image inside a pattern, soft mask or Type3 glyph can't be placed or cleared";
+    let text = prove("/Resources << /XObject << /Im 5 >> >>", b"/Im Do");
+    assert!(text.contains(flagged), "{text}");
+    let text = prove("/Resources << /XObject << /Im 9 0 R >> >>", b"/Im Do");
+    assert!(!text.contains(flagged), "{text}");
+    let text = prove("/Resources << /XObject << /Self 8 0 R >> >>", b"/Self Do");
+    assert!(!text.contains("a pattern, soft mask or Type3 glyph"), "{text}");
+}
+
+/// An appearance with resources of its own gives the page's pattern, whose cell draws `/Im`
+/// through the names of what paints with it: the page gives no `/Im`, the appearance gives an
+/// image. Searched with the page's names first, the cell is searched again with the appearance's,
+/// and the image found.
+#[test]
+fn the_proof_searches_a_pattern_again_with_an_appearances_names() {
+    let objs = vec![
+        b"<< /Type /Annot /Subtype /Square /Rect [0 0 300 300] /AP << /N 9 0 R >> >>".to_vec(),
+        stream("/Type /Pattern /PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 300 300] /XStep 300 /YStep 300 /Resources << >>", b"/Im Do"),
+        stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << /Pattern << /P0 8 0 R >> /XObject << /Im 10 0 R >> >>", b"0 0 m"),
+        stream("/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", b"x"),
+    ];
+    let mut doc = one_page(b"", "/Pattern << /P0 8 0 R >>", objs);
+    doc.update_dict(ObjRef::new(3, 0), |d| d.set(b"Annots".to_vec(), Object::Array(vec![Object::Ref(ObjRef::new(7, 0))]))).unwrap();
+    mark(&mut doc, 0, &[[0.0, 230.0, 300.0, 280.0]], "");
+    let text = crate::tests_verify::prove_unapplied(&mut doc).to_text();
+    assert!(text.contains("an image inside a pattern, soft mask or Type3 glyph can't be placed or cleared"), "{text}");
+}
+
+/// A Type 3 glyph looks the XObjects it draws up in its own resources, then in its font's
+/// `/Resources`, then in those of the content whose resources give the font, as the renderer
+/// does where that content shows it: the font's
+/// `/Im`, given directly or through `/Resources` by reference, is an image the proof can't place;
+/// the font's `/Im` given as a form drawing nothing hides the page's image, and the glyph's own
+/// hides the font's. A glyph two fonts share is searched with each font's names.
+#[test]
+fn the_proof_searches_a_type3_glyph_through_its_fonts_names() {
+    let prove_with = |fonts: &str, font_res: &str, glyph_res: &str, page_im: &str| {
+        let form = stream(
+            &format!("/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << /Font << {fonts} >> >>"),
+            b"BT /T3 100 Tf 10 250 Td (a) Tj ET",
+        );
+        let font = format!(
+            "<< /Type /Font /Subtype /Type3 /FontBBox [0 0 1000 1000] /FontMatrix [0.001 0 0 0.001 0 0] /CharProcs << /a 9 0 R >> /Encoding << /Type /Encoding /Differences [97 /a] >> /FirstChar 97 /LastChar 97 /Widths [1000] {font_res} >>"
+        );
+        let glyph = stream(glyph_res, b"1000 0 d0 /Im Do");
+        let image = stream("/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", b"x");
+        let empty = stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300]", b"");
+        let other = "<< /Type /Font /Subtype /Type3 /FontBBox [0 0 1000 1000] /FontMatrix [0.001 0 0 0.001 0 0] /CharProcs << /a 9 0 R >> /Encoding << /Type /Encoding /Differences [97 /a] >> /FirstChar 97 /LastChar 97 /Widths [1000] /Resources 12 0 R >>";
+        let objs = vec![form, font.into_bytes(), glyph, image, empty, b"<< /XObject << /Im 10 0 R >> >>".to_vec(), other.as_bytes().to_vec()];
+        let mut doc = one_page(b"/Fm Do", &format!("/XObject << /Fm 7 0 R {page_im} >>"), objs);
+        mark(&mut doc, 0, &[[0.0, 230.0, 300.0, 280.0]], "");
+        crate::tests_verify::prove_unapplied(&mut doc).to_text()
+    };
+    let prove = |font_res: &str, glyph_res: &str, page_im: &str| prove_with("/T3 8 0 R", font_res, glyph_res, page_im);
+    let flagged = "an image inside a pattern, soft mask or Type3 glyph can't be placed or cleared";
+    let text = prove("/Resources << /XObject << /Im 10 0 R >> >>", "", "");
+    assert!(text.contains(flagged), "{text}");
+    let text = prove("/Resources 12 0 R", "", "");
+    assert!(text.contains(flagged), "{text}");
+    let text = prove("/Resources << /XObject << /Im 11 0 R >> >>", "", "/Im 10 0 R");
+    assert!(!text.contains(flagged), "{text}");
+    let text = prove("/Resources << /XObject << /Im 10 0 R >> >>", "/Resources << /XObject << /Im 11 0 R >> >>", "");
+    assert!(!text.contains(flagged), "{text}");
+    // `/T3`'s `/Im` draws nothing, `/T4`'s (object 13) is the image.
+    let text = prove_with("/T3 8 0 R /T4 13 0 R", "/Resources << /XObject << /Im 11 0 R >> >>", "", "");
+    assert!(text.contains(flagged), "{text}");
+}
+
+/// A Type 3 font written directly in a form's `/Font`, its glyph drawing a form its font's
+/// `/XObject` gives: drawn 10 times, the glyph is searched as often as when the font is an object
+/// of its own, and drawn 4,100 times, the proof checks it rather than run out of searches, also
+/// with a `null` entry beside `/X`. Two
+/// such fonts giving `/X` as different objects are told apart: where one is an image, it is found.
+#[test]
+fn a_type3_font_written_in_place_is_searched_once() {
+    let searches = |font: &str, draws: usize| {
+        let form = stream(
+            &format!("/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << /Font << /T3 {font} >> >>"),
+            b"BT /T3 100 Tf 10 250 Td (a) Tj ET",
+        );
+        let glyph = stream("", b"1000 0 d0 /X Do");
+        let empty = stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300]", b"");
+        let objs = vec![form, glyph, empty, type3_font_drawing_x().into_bytes()];
+        let mut doc = one_page("/Fm Do ".repeat(draws).as_bytes(), "/XObject << /Fm 7 0 R >>", objs);
+        mark(&mut doc, 0, &[[0.0, 230.0, 300.0, 280.0]], "");
+        crate::verify::HIDDEN_SEARCHES.with(|c| c.set(0));
+        let text = crate::tests_verify::prove_unapplied(&mut doc).to_text();
+        (crate::verify::HIDDEN_SEARCHES.with(std::cell::Cell::get), text)
+    };
+    let direct = type3_font_drawing_x();
+    assert_eq!(searches(&direct, 10).0, searches("10 0 R", 10).0);
+    // An entry given as null names nothing (ISO 32000-2 §7.3.7), and changes nothing.
+    for font in [direct.clone(), direct.replace("/X 9 0 R", "/X 9 0 R /Y null")] {
+        assert_eq!(searches(&font, 1).0, searches(&font, 10).0);
+        let (_, text) = searches(&font, 4_100);
+        assert!(!text.contains("can't be read in full"), "{text}");
+    }
+    let form = |font: &str| {
+        stream(
+            &format!("/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << /Font << /T3 {font} >> >>"),
+            b"BT /T3 100 Tf 10 250 Td (a) Tj ET",
+        )
+    };
+    let objs = vec![
+        form(&direct),
+        stream("", b"1000 0 d0 /X Do"),
+        stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300]", b""),
+        stream("/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", b"x"),
+        form(&direct.replace("/X 9 0 R", "/X 10 0 R")),
+    ];
+    let mut doc = one_page(b"/Fm Do /Gm Do", "/XObject << /Fm 7 0 R /Gm 11 0 R >>", objs);
+    mark(&mut doc, 0, &[[0.0, 230.0, 300.0, 280.0]], "");
+    let text = crate::tests_verify::prove_unapplied(&mut doc).to_text();
+    assert!(text.contains("an image inside a pattern, soft mask or Type3 glyph can't be placed or cleared"), "{text}");
+}
+
+/// A Type 3 font whose glyph `/a` (object 8) draws `/X`, an empty form (object 9) its own
+/// `/XObject` gives.
+fn type3_font_drawing_x() -> String {
+    "<< /Type /Font /Subtype /Type3 /FontBBox [0 0 1000 1000] /FontMatrix [0.001 0 0 0.001 0 0] /CharProcs << /a 8 0 R >> /Encoding << /Type /Encoding /Differences [97 /a] >> /FirstChar 97 /LastChar 97 /Widths [1000] /Resources << /XObject << /X 9 0 R >> >> >>".to_string()
 }

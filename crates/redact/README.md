@@ -136,7 +136,12 @@ resources of its own, with a copy of its caller's), so the forms nested along
 one path may hold at most 16 MiB of resources between them, with resources of their own or
 without, each entry counted as its name's length and 56 bytes, with what a value gives directly:
 past that, Apply refuses the page and the proof says it can't check it, rather than hold the
-chain's depth times their size. The walk, the verification pass and the check of what pages
+chain's depth times their size. The verification's search for images inside pattern cells, soft
+masks and Type 3 glyphs looks names up so too (a glyph in its font's resources before those of
+the content whose resources give the font), reading them in place instead of copying them, so
+this bound doesn't apply there; it searches such a stream again in each scope where what it draws
+is looked up through what draws it, up to 4,096 such searches on a page, past which it says it
+can't check. The walk, the verification pass and the check of what pages
 sharing a resource dictionary still draw read it so; the cleanup of a rewritten page's own resources (the XObjects it
 replaced, its fonts and properties, and a rewritten form's own XObjects) and the Type 3 font cleanup don't, and can drop something such
 a form still draws beside a mark, or a property such a form's marked content names, which then shows
