@@ -222,7 +222,9 @@ impl<'a> FlexArrayIter<'a> {
                 Some(MaybeRef::NotRef(i)) => Some(i),
                 // PdfCraft patch (46): an item no object is read from (a lone sign such as `+`)
                 // reads as null in its slot, as in `raw_iter`, instead of ending the iteration
-                // and losing the items after it. An object of another type still ends it.
+                // and losing the items after it. An object of another type still ends it. The
+                // slot is passed only when null is a `T`: a typed read that fails leaves it in
+                // place, as a value of another type is, so the caller can read it as another type.
                 None => {
                     let mut probe = start.clone();
                     if probe
@@ -231,8 +233,10 @@ impl<'a> FlexArrayIter<'a> {
                     {
                         return None;
                     }
-                    self.reader = skip_unreadable_item(start, &self.ctx)?;
-                    Object::Null(Null).cast::<T>()
+                    let after = skip_unreadable_item(start, &self.ctx)?;
+                    let item = Object::Null(Null).cast::<T>()?;
+                    self.reader = after;
+                    Some(item)
                 }
             };
         }

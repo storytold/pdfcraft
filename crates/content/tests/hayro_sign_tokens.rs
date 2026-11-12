@@ -6,10 +6,15 @@
 //! token, dropping the items after it. Sign runs a number is read from (`-` reads as 0) keep
 //! reading as before.
 
-use hayro_syntax::object::{Array, Dict, FromBytes, Number, Object};
+use hayro_syntax::object::{Array, Dict, FromBytes, MaybeRef, Number, Object};
 
 /// Sign-only tokens, and two of them in a row.
 const SIGN_TOKENS: [&str; 8] = ["+", "++", "-", "--", "+-", "-+", "+ -", "+ +"];
+
+/// The lone signs the first pass accepts: a dictionary or array holding one must still parse.
+fn must_parse(tok: &str) -> bool {
+    matches!(tok, "+" | "++")
+}
 
 /// Whether no number is read from this sign run, so it is the unreadable kind.
 fn unreadable(sign: &str) -> bool {
@@ -22,6 +27,7 @@ fn a_dictionary_leaves_out_an_entry_made_only_of_signs() {
         let src = format!("<< /A {tok} /B 7 >>");
         let Some(dict) = Dict::from_bytes(src.as_bytes()) else {
             // Refused as a whole, as other unreadable dictionaries are: nothing to iterate.
+            assert!(!must_parse(tok), "{src} was refused");
             continue;
         };
         let entries: Vec<_> = dict.entries().map(|(k, _)| k.as_str().to_owned()).collect();
@@ -42,6 +48,7 @@ fn an_array_reads_a_token_made_only_of_signs_as_null_in_its_slot() {
     for tok in SIGN_TOKENS {
         let src = format!("[0 {tok} 7]");
         let Some(array) = Array::from_bytes(src.as_bytes()) else {
+            assert!(!must_parse(tok), "{src} was refused");
             continue;
         };
         let signs = tok.split_whitespace().count();
@@ -51,17 +58,39 @@ fn an_array_reads_a_token_made_only_of_signs_as_null_in_its_slot() {
         assert_eq!(items.len(), signs + 2, "{src}");
         assert_eq!(items.first().and_then(|o| o.clone().into_i32()), Some(0), "{src}");
         assert_eq!(items.last().and_then(|o| o.clone().into_i32()), Some(7), "{src}");
-        for (item, sign) in items.iter().skip(1).zip(tok.split_whitespace()) {
+        for ((item, raw), sign) in items.iter().zip(raw.iter()).skip(1).zip(tok.split_whitespace()) {
             if unreadable(sign) {
                 assert!(matches!(item, Object::Null(_)), "{src}: {item:?}");
+                assert!(matches!(raw, MaybeRef::NotRef(Object::Null(_))), "{src}: raw {raw:?}");
             } else {
                 assert!(matches!(item, Object::Number(_)), "{src}: {item:?}");
+                assert!(matches!(raw, MaybeRef::NotRef(Object::Number(_))), "{src}: raw {raw:?}");
             }
         }
         // A typed read still stops at a slot that is not a number, as at any other value.
         let numbers_before = 1 + tok.split_whitespace().take_while(|sign| !unreadable(sign)).count();
         let expected = if numbers_before == signs + 1 { signs + 2 } else { numbers_before };
         assert_eq!(array.iter::<f32>().count(), expected, "{src}");
+    }
+}
+
+/// A typed read that stops at an unreadable slot leaves the slot in place, as at a value of
+/// another type, so the caller can read it as an object and go on to the items after it.
+#[test]
+fn a_failed_typed_read_leaves_the_unreadable_slot_in_place() {
+    for (src, stop) in [("[0 + 7]", "+"), ("[0 /N 7]", "/N")] {
+        let array = Array::from_bytes(src.as_bytes()).unwrap_or_else(|| panic!("{src} parses"));
+        let mut iter = array.flex_iter();
+        assert_eq!(iter.next::<f32>(), Some(0.0), "{src}");
+        assert_eq!(iter.next::<f32>(), None, "{src}: {stop} is not a number");
+        let slot = iter.next::<Object<'_>>();
+        if stop == "+" {
+            assert!(matches!(slot, Some(Object::Null(_))), "{src}: {slot:?}");
+        } else {
+            assert!(matches!(slot, Some(Object::Name(_))), "{src}: {slot:?}");
+        }
+        assert_eq!(iter.next::<f32>(), Some(7.0), "{src}");
+        assert_eq!(iter.next::<f32>(), None, "{src}");
     }
 }
 
