@@ -100,10 +100,15 @@ fn path_len(path: &Path) -> usize {
     {
         path.as_os_str().encode_wide().count()
     }
-    #[cfg(not(windows))]
+    #[cfg(unix)]
     {
         use std::os::unix::ffi::OsStrExt;
         path.as_os_str().as_bytes().len()
+    }
+    // Neither (the browser build): the encoded length, which only its tests see.
+    #[cfg(not(any(unix, windows)))]
+    {
+        path.as_os_str().len()
     }
 }
 #[cfg(windows)]
