@@ -1310,6 +1310,7 @@ fn line_text(s: &str) -> PageText {
             .collect(),
         line_of: s.chars().map(|_| 0).collect(),
         space_before: s.chars().map(|_| false).collect(),
+        truncated: false,
     }
 }
 

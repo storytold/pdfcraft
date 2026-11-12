@@ -208,7 +208,7 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
             let (vx, vy) = xf.screen_to_view(p);
             text.as_ref().is_some_and(|t| t.glyph_at(vx, vy).is_some())
         };
-        crate::redact_ui::page_input(cx, over_text, press == PagePress::Free, view)
+        crate::redact_ui::page_input(cx, tool, over_text, press == PagePress::Free, view)
     };
     // Edit text's group: the objects selected together, added content, the paragraphs and the
     // pictures, each told what the press is to this page. Edit text ignores input while a dialog,

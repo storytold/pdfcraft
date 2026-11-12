@@ -98,6 +98,15 @@ fn select_after_edit(
                 view.comments.open_editor(a.page, n, String::new());
             }
         }
+        // Markup across pages, one comment on each ([`annotated_pages`]), is followed up as one
+        // markup is: on the page the selection ends, where the drag finished and is on screen,
+        // its comment selected and, for a highlight, its note open. One level: the last edit is an
+        // `AddAnnotation`, never another batch.
+        Edit::Batch { edits, .. } if edits.iter().all(|e| matches!(e, Edit::AddAnnotation(_))) => {
+            if let Some(last) = edits.last() {
+                select_after_edit(view, last, info, &[], quick_tool);
+            }
+        }
         // A group moved together stays selected (its positions don't change), so it
         // can be moved or copied again; anything else in a batch clears the selection.
         Edit::Batch { edits, .. } if edits.iter().all(|e| matches!(e, Edit::MoveAnnotation { .. })) => {}
@@ -242,7 +251,7 @@ impl PdfCraftApp {
                 } else {
                     view.document_changed(info);
                 }
-                if matches!(edit, Edit::AddAnnotation(_)) {
+                if matches!(edit, Edit::AddAnnotation(_)) || annotated_pages(&edit).is_some() {
                     view.comments.comment_added();
                 }
                 // A deletion moves the pop-ups' state with its comments (`annotation_deleted`).
