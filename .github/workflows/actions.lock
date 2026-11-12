@@ -14,6 +14,9 @@ workflows:
         - 'step-security/harden-runner@v2.22.4'
         - 'step-security/rust-cache@v2.9.2'
     '.github/workflows/house-rules.yml': []
+    '.github/workflows/lockfile.yml':
+        - 'actions/checkout@v7.0.1'
+        - 'step-security/harden-runner@v2.22.4'
     '.github/workflows/nightly-macos.yml': []
     '.github/workflows/nix.yml': []
     '.github/workflows/packaging-lint.yml':
