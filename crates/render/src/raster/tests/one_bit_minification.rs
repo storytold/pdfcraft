@@ -1,7 +1,8 @@
 //! Issue #1700: a 1-bit source shrunk by between 1:1 and 2:1 was drawn by picking single source
-//! pixels, so one-pixel strokes (Type 3 image-mask glyphs, fax-era and OCR fonts) vanished. The
-//! source is averaged over each target pixel's box, and the box ends are clamped to the source so
-//! a floating-point epsilon at the last pixel cannot drop the whole image back to picking.
+//! pixels, so one-pixel strokes (Type 3 image-mask glyphs, fax-era and OCR fonts) vanished. A
+//! 1-bit source is line art: it is area-averaged over the source each target pixel covers, so a
+//! stroke the picking grid misses keeps its coverage. `/ImageMask` and `/BitsPerComponent 1`
+//! sources and a Type 3 glyph's image mask all take that path, and so does a 1-bit `/SMask`.
 
 use super::*;
 
@@ -70,11 +71,10 @@ fn draw_one_bit_mask_row(width: usize, ink: usize, device: u32) -> RenderedPage 
     page
 }
 
-/// Floating-point epsilon: the far end of the last target pixel's box, `(tx + 1) * sx` with
-/// `sx = sw / tw`, can round a hair above the source width — 22 × (25 / 22) =
-/// 25.000000000000004 — so `ceil` took column `sw`, one past the last source column. That read
-/// returned `None` and the whole image silently fell back to nearest picking, which missed the
-/// stroke. The box ends are clamped to the source.
+/// Floating-point epsilon: the far end of the last target pixel's box can sit a hair above the
+/// source width — 22 × (25 / 22) = 25.000000000000004 — and an averaging that indexed the box
+/// directly read the row and column past the source, found nothing and dropped the whole image
+/// back to nearest picking, which missed the stroke. Both pairs must stay averaged.
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn one_bit_minification_clamps_the_last_box_to_the_source() {
@@ -108,4 +108,36 @@ fn a_one_bit_soft_mask_on_a_minified_colour_image_keeps_its_stroke() {
     // 40% of black over the white page: a mid-tone, not the page showing through.
     assert!((64..=191).contains(&px[0][0]), "the one-pixel stroke is lost: {:?}", &px[..2]);
     assert_eq!(px[5], [255, 255, 255, 255], "the far end stays white");
+}
+
+/// A Type 3 image-mask glyph shrunk 10:6: the charproc paints a 10×1 `/ImageMask` with its only
+/// stroke in column 1. Nearest picking reads column 0 for the first device pixel and drops the
+/// stroke; the 1-bit source is area-averaged instead, so 0.4 of that pixel is inked.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_one_bit_image_mask_glyph_keeps_its_stroke_when_minified() {
+    // Sample 0 paints (the mask's default decode), so column 1 is the stroke.
+    let data = hex(&[0xBFu8, 0xFF]);
+    let content = "BT /F1 1 Tf 0 0 Td (A) Tj ET";
+    let glyph = "10 0 d0 q 6 0 0 1 0 0 cm /Im0 Do Q";
+    let pdf = format!(
+        "%PDF-1.4\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+         2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+         3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 6 1] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj\n\
+         4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
+         5 0 obj << /Type /Font /Subtype /Type3 /FontBBox [0 0 6 1] /FontMatrix [1 0 0 1 0 0] /FirstChar 65 /LastChar 65 /Widths [6] /Encoding << /Differences [65 /a] >> /CharProcs << /a 6 0 R >> /Resources << /XObject << /Im0 7 0 R >> >> >> endobj\n\
+         6 0 obj << /Length {} >> stream\n{glyph}\nendstream endobj\n\
+         7 0 obj << /Type /XObject /Subtype /Image /Width 10 /Height 1 /ImageMask true /Filter /ASCIIHexDecode /Length {} >> stream\n{data}>\nendstream endobj\n\
+         trailer << /Root 1 0 R >>\n%%EOF\n",
+        content.len(),
+        glyph.len(),
+        data.len() + 1
+    );
+    let mut renderer = PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default());
+    let page = renderer.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() });
+    assert!(page.error.is_none(), "{:?}", page.error);
+    assert_eq!((page.width, page.height), (6, 1));
+    let gray: Vec<u8> = page.rgba.as_chunks::<4>().0.iter().map(|px| px[0]).collect();
+    assert!((64..=191).contains(&gray[0]), "the one-pixel stroke is lost: {gray:?}");
+    assert_eq!(gray[5], 255, "the far end stays white: {gray:?}");
 }
