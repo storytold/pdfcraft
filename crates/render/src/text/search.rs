@@ -50,16 +50,7 @@ pub(super) fn find(page: &PageText, query: &str, sensitive: bool, whole_words: b
     let texts: Vec<String> = page.glyphs.iter().map(|g| fold(&g.text)).collect();
     let divided: Vec<bool> = (0..texts.len()).map(|i| divides(page, &texts, i)).collect();
     let readings: &[Hyphen] = if divided.contains(&true) { &[Hyphen::Written, Hyphen::Joined, Hyphen::Kept] } else { &[Hyphen::Written] };
-    // KMP reuses a matched prefix instead of comparing a long query again at every position.
-    // The table is bounded by the page's already materialized character count.
-    let mut prefix = vec![0; needle.len()];
-    let mut matched = 0;
-    for (i, &c) in needle.iter().enumerate().skip(1) {
-        matched = advance(&needle, &prefix, matched, c);
-        if let Some(slot) = prefix.get_mut(i) {
-            *slot = matched;
-        }
-    }
+    let prefix = prefix_table(&needle);
     let mut hits: Vec<(Range<usize>, usize)> = Vec::new();
     for (r, &reading) in readings.iter().enumerate() {
         let (chars, zero_width_space) = characters(page, &texts, &divided, reading);
@@ -90,6 +81,58 @@ pub(super) fn find(page: &PageText, query: &str, sensitive: bool, whole_words: b
         }
     }
     kept
+}
+
+/// [`super::find_in_text`]: the same search over a string (find and replace matches a paragraph's
+/// text with it), as the byte ranges of the characters each hit covers. Hyphenated line ends do
+/// not arise in a string, so there is the one reading.
+pub(super) fn find_in_text(text: &str, query: &str, sensitive: bool, whole_words: bool, limit: usize) -> Vec<Range<usize>> {
+    if limit == 0 {
+        return Vec::new();
+    }
+    let fold = |s: &str| if sensitive { ligature_letters(s.to_owned()) } else { fold_case(&ligature_letters(s.to_owned())) };
+    let query: String = fold(query).chars().filter(|&c| !is_invisible(c)).collect();
+    let needle: Vec<char> = query.split_whitespace().collect::<Vec<_>>().join(" ").chars().collect();
+    if needle.is_empty() {
+        return Vec::new();
+    }
+    // Each character is owned by its index in the string, turned back into bytes at the end.
+    let mut chars: Vec<(char, usize)> = Vec::new();
+    let mut zero_width_space: Vec<bool> = Vec::new();
+    let mut pending_zero_width_space = false;
+    for (index, (_, c)) in text.char_indices().enumerate() {
+        for c in fold(c.encode_utf8(&mut [0; 4])).chars() {
+            if is_invisible(c) {
+                pending_zero_width_space |= c == '\u{200B}';
+                continue;
+            }
+            let c = if c.is_whitespace() { ' ' } else { c };
+            if c != ' ' || chars.last().is_none_or(|last| last.0 != ' ') {
+                chars.push((c, index));
+                zero_width_space.push(pending_zero_width_space && c != ' ');
+                pending_zero_width_space = false;
+            }
+        }
+    }
+    let starts: Vec<usize> = text.char_indices().map(|(at, _)| at).chain(std::iter::once(text.len())).collect();
+    search(&chars, &zero_width_space, &needle, &prefix_table(&needle), whole_words, limit)
+        .into_iter()
+        .filter_map(|hit| Some(*starts.get(hit.start)?..*starts.get(hit.end)?))
+        .collect()
+}
+
+/// KMP reuses a matched prefix instead of comparing a long query again at every position. The
+/// table is bounded by the page's already materialized character count.
+fn prefix_table(needle: &[char]) -> Vec<usize> {
+    let mut prefix = vec![0; needle.len()];
+    let mut matched = 0;
+    for (i, &c) in needle.iter().enumerate().skip(1) {
+        matched = advance(needle, &prefix, matched, c);
+        if let Some(slot) = prefix.get_mut(i) {
+            *slot = matched;
+        }
+    }
+    prefix
 }
 
 /// Whether glyph `i` ends its line with a hyphen that follows a letter of its word, and the next
