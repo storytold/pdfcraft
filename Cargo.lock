@@ -1185,6 +1185,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-cms"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=60ede99985ef1e5df87a2aca66ed538eb23dec99#60ede99985ef1e5df87a2aca66ed538eb23dec99"
+dependencies = [
+ "rayon",
+]
+
+[[package]]
 name = "craft-docpath"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=787a7a0f972fd1d7a7618fdbeca3a5267a0407ff#787a7a0f972fd1d7a7618fdbeca3a5267a0407ff"
@@ -4326,6 +4334,7 @@ name = "pdfcraft-automation"
 version = "0.21.1"
 dependencies = [
  "base64 0.23.1",
+ "craft-cms",
  "flate2",
  "image",
  "pdfcraft-cos",
@@ -4449,6 +4458,7 @@ name = "pdfcraft-engine"
 version = "0.21.1"
 dependencies = [
  "chrono",
+ "craft-cms",
  "craft-docpath",
  "getrandom 0.4.3",
  "icu_properties",
@@ -4664,6 +4674,7 @@ dependencies = [
 name = "pdfcraft-print"
 version = "0.21.1"
 dependencies = [
+ "craft-cms",
  "craft-print",
  "log",
  "pdfcraft-content",
