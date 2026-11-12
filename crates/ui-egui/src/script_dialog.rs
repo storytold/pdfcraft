@@ -456,9 +456,12 @@ mod link_script_tests {
     /// window's prompt, the answer resumes it, and its field change and openDoc consent apply.
     #[test]
     fn a_javascript_link_asks_its_menu_and_applies_its_result() {
-        let script = "getField\\('log'\\).value = app.popUpMenuEx\\({cName:'A', cReturn:'a'}\\) + event.type; app.openDoc\\('/abs/other.pdf'\\);";
+        // An absolute path on this system (the document has no folder): on Windows, Acrobat's
+        // `/C/…` form, which reads as `C:/…`.
+        let path = if cfg!(windows) { "/C/abs/other.pdf" } else { "/abs/other.pdf" };
+        let script = format!("getField\\('log'\\).value = app.popUpMenuEx\\({{cName:'A', cReturn:'a'}}\\) + event.type; app.openDoc\\('{path}'\\);");
         let mut app = PdfCraftApp::new();
-        app.open_bytes("link.pdf", None, linked(script)).unwrap();
+        app.open_bytes("link.pdf", None, linked(&script)).unwrap();
         let id = app.active_ids().unwrap().1;
         app.run_link_script(id, 0, 0);
         let ctx = egui::Context::default();
