@@ -224,6 +224,106 @@ fn only_the_documents_metadata_is_written_in_the_clear() {
     }
 }
 
+/// An incremental save, which keeps the object numbers, encrypts a page's edited metadata and
+/// leaves the catalog's edited metadata in the clear; a page that shares the catalog's metadata
+/// stream reads it as the catalog does.
+#[test]
+fn an_incremental_save_encrypts_only_what_is_not_the_documents_metadata() {
+    const EDITED_PAGE: &str = "<x:xmpmeta>edited page-level</x:xmpmeta>";
+    const EDITED_DOC: &str = "<x:xmpmeta>edited document-level</x:xmpmeta>";
+    let mut doc = Document::open_with_password(Arc::new(encrypted_by_hand(Algorithm::Aes128)), Some("own")).unwrap();
+    let xmp = |text: &str| {
+        let mut d = pdfcraft_cos::Dict::new();
+        d.set(b"Type".to_vec(), Object::name("Metadata"));
+        d.set(b"Subtype".to_vec(), Object::name("XML"));
+        Object::Stream(pdfcraft_cos::Stream::from_raw(d, text.as_bytes().to_vec()))
+    };
+    doc.set(pdfcraft_cos::ObjRef::new(6, 0), xmp(EDITED_PAGE));
+    doc.set(pdfcraft_cos::ObjRef::new(5, 0), xmp(EDITED_DOC));
+    let bytes = write_incremental(&doc, &SaveOptions::default()).unwrap();
+    assert!(!holds(&bytes, EDITED_PAGE), "the page's edited metadata was written in the clear");
+    assert!(holds(&bytes, EDITED_DOC), "the document's edited metadata stays readable");
+    let doc = Document::open(Arc::new(bytes)).unwrap();
+    assert_eq!(data_of(&doc, 6), EDITED_PAGE.as_bytes());
+    assert_eq!(data_of(&doc, 5), EDITED_DOC.as_bytes());
+
+    // The page's /Metadata given as the catalog's stream: one stream, in the clear.
+    let mut shared = encrypted_by_hand(Algorithm::Aes256);
+    let at = shared.windows(15).position(|w| w == b"/Metadata 6 0 R").unwrap();
+    // The same length: every offset stays.
+    shared.splice(at..at + 15, b"/Metadata 5 0 R".iter().copied());
+    let doc = Document::open(Arc::new(shared)).unwrap();
+    let page = doc.get(pdfcraft_cos::ObjRef::new(3, 0));
+    let shared_ref = page.as_dict().and_then(|p| p.reference(b"Metadata")).unwrap();
+    assert_eq!(data_of(&doc, shared_ref.num), DOC_XMP.as_bytes());
+}
+
+/// The source's catalog decides what decrypts: pointing the catalog's `/Metadata` at the page's
+/// stream before either is read leaves both as the file holds them, and a full save then writes
+/// the stream the edited catalog names in the clear.
+#[test]
+fn an_edited_catalog_metadata_does_not_change_what_decrypts() {
+    let mut doc = Document::open_with_password(Arc::new(encrypted_by_hand(Algorithm::Aes128)), Some("own")).unwrap();
+    let root = doc.root().unwrap();
+    doc.update_dict(root, |c| c.set(b"Metadata".to_vec(), Object::Ref(pdfcraft_cos::ObjRef::new(6, 0)))).unwrap();
+    assert_eq!(data_of(&doc, 6), PAGE_XMP.as_bytes(), "the page's metadata was left as ciphertext");
+    assert_eq!(data_of(&doc, 5), DOC_XMP.as_bytes(), "the document's metadata was decrypted as if encrypted");
+    let bytes = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
+    // The stream the edited catalog names is written in the clear (the other one no longer has
+    // anything referring to it, so a full save leaves it out).
+    assert!(holds(&bytes, PAGE_XMP), "the catalog as edited names what is in the clear");
+    let doc = Document::open(Arc::new(bytes)).unwrap();
+    let catalog = doc.get(doc.root().unwrap()).as_dict().cloned().unwrap();
+    let metadata = catalog.reference(b"Metadata").unwrap();
+    assert_eq!(data_of(&doc, metadata.num), PAGE_XMP.as_bytes());
+}
+
+/// A catalog `/Metadata` whose generation doesn't reach the object names no stream: the object
+/// under that number, the page's metadata, is encrypted as any stream is.
+#[test]
+fn a_catalog_metadata_reference_of_another_generation_names_nothing() {
+    let mut bytes = encrypted_by_hand(Algorithm::Aes128);
+    let at = bytes.windows(15).position(|w| w == b"/Metadata 5 0 R").unwrap();
+    // The same length: every offset stays.
+    bytes.splice(at..at + 15, b"/Metadata 6 1 R".iter().copied());
+    let doc = Document::open(Arc::new(bytes)).unwrap();
+    assert_eq!(data_of(&doc, 6), PAGE_XMP.as_bytes(), "the page's metadata was read as the document's");
+}
+
+/// A file rebuilt from its object headers keeps the trailer reconstruction finds: an unreadable
+/// `/Encrypt` in a trailer it leaves behind doesn't refuse saves of the file it keeps.
+#[test]
+fn an_unreadable_encrypt_in_a_trailer_reconstruction_drops_is_forgotten() {
+    // An update whose trailer names a damaged /Encrypt and a /Root that isn't there: the chain
+    // leads to no catalog, so the file is rebuilt, and the first trailer (with the catalog) kept.
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 200] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Contents 4 0 R >>".into(),
+        stream("", b"0 0 m 10 10 l S"),
+        "<< /Producer (plain) >>".into(),
+    ];
+    let mut bytes = file(&objs, "");
+    let update_at = bytes.len();
+    bytes.extend_from_slice(b"6 0 obj\nE< /Filter /Standard /V 4 /R 4 /Length 128 /P -4 /O <00> /U <00> >>\nendobj\n");
+    let xref = bytes.len();
+    let prev = bytes
+        .windows(9)
+        .rposition(|w| w == b"startxref")
+        .map(|p| String::from_utf8_lossy(&bytes[p + 10..]).lines().next().unwrap_or("").to_string())
+        .unwrap();
+    bytes.extend_from_slice(
+        format!("xref\n6 1\n{update_at:010} 00000 n \ntrailer\n<< /Size 7 /Root 9 0 R /Encrypt 6 0 R /Prev {prev} >>\nstartxref\n{xref}\n%%EOF\n")
+            .as_bytes(),
+    );
+    let doc = Document::open(Arc::new(bytes)).unwrap();
+    assert!(doc.reconstructed(), "{:?}", doc.repair_log());
+    assert!(doc.trailer().get(b"Encrypt").is_none(), "{:?}", doc.trailer());
+    assert!(!doc.encryption_unreadable(), "{:?}", doc.repair_log());
+    assert!(!doc.repair_log().iter().any(|l| l.contains("/Encrypt")), "{:?}", doc.repair_log());
+    assert!(write_full(&doc, &SaveOptions::default()).is_ok());
+}
+
 /// A file someone else encrypted with `/EncryptMetadata false` and a page-level metadata stream
 /// (as qpdf's `--cleartext-metadata` writes one) loses its security with the page's metadata
 /// decrypted, not with its ciphertext written as if it were the stream's data.

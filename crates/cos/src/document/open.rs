@@ -41,6 +41,7 @@ impl Document {
             out_security: None,
             out_encrypt_num: None,
             encrypt_unreadable: false,
+            source_metadata: None,
         };
         let mut pages = Dict::new();
         pages.set(b"Type".to_vec(), Object::name("Pages"));
@@ -131,6 +132,7 @@ impl Document {
             out_security: None,
             out_encrypt_num: None,
             encrypt_unreadable: false,
+            source_metadata: None,
         };
         let mut log = Vec::new();
         if headerless {
@@ -169,6 +171,10 @@ impl Document {
             log.push("cross-reference data does not lead to a valid catalog; rebuilding from object headers".into());
         }
         if !ok {
+            // What authenticating said about the /Encrypt of a trailer reconstruction may not keep
+            // is said again below, for the trailer it keeps.
+            doc.encrypt_unreadable = false;
+            Arc::make_mut(&mut doc.repair_log).retain(|l| l != ENCRYPT_DANGLING && l != ENCRYPT_UNREADABLE);
             doc.reconstruct(&mut log)?;
         }
         // Header generations are plaintext, including in encrypted files. Inspect only the
@@ -271,6 +277,8 @@ impl Document {
         self.cache = Arc::default();
         self.objstms = Arc::default();
         self.unreadable = Arc::default();
+        self.source_metadata = None;
+        self.source_metadata = crate::security::catalog_metadata(self);
         Ok(())
     }
 
@@ -289,6 +297,11 @@ impl Document {
     /// new data in the clear where readers decrypt.
     pub fn encryption_unreadable(&self) -> bool {
         self.encrypt_unreadable
+    }
+
+    /// See the field of that name: the source's document-level metadata stream.
+    pub(crate) fn source_metadata(&self) -> Option<u32> {
+        self.source_metadata
     }
 
     /// The handler for a document opened without a password that only its embedded files need

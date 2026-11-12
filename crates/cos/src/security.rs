@@ -360,7 +360,7 @@ fn stream(
     if decrypt && ty == Some(b"XRef") {
         return Object::Stream(s.clone());
     }
-    if ty == Some(b"Metadata") && document_metadata_in_clear(doc, h, source) {
+    if ty == Some(b"Metadata") && document_metadata_in_clear(doc, h, source, decrypt) {
         return Object::Stream(Stream { dict: walked(&s.dict), raw: s.raw.clone() });
     }
     let mut named = named_crypt_filter(doc, &s.dict);
@@ -380,19 +380,34 @@ fn stream(
     Object::Stream(Stream { dict, raw: raw.into() })
 }
 
-/// Whether object `num` of `doc`, a metadata stream, stays in the clear: it is the document's own, the one
-/// the catalog's `/Metadata` names, and `/EncryptMetadata` is false in a `/V` 4 or 5 dictionary.
-/// ISO 32000-2 Table 21 gives the entry for "the document-level metadata stream" only, and as
-/// meaningful with `/V` 4 or 5 only: every other metadata stream (a page's, an image's) is
-/// encrypted as any stream is. A catalog that reads as absent (past [`MAX_FOLLOWED`]) names none.
-fn document_metadata_in_clear(doc: &Document, h: &SecurityHandler, num: u32) -> bool {
+/// Whether object `num` of `doc`, a metadata stream, stays in the clear: it is the document's
+/// own, the one the catalog's `/Metadata` names, and `/EncryptMetadata` is false in a `/V` 4 or 5
+/// dictionary. ISO 32000-2 Table 21 gives the entry for "the document-level metadata stream" only,
+/// and as meaningful with `/V` 4 or 5 only: every other metadata stream (a page's, an image's) is
+/// encrypted as any stream is. Reading asks the source's catalog (an edit of `/Metadata` doesn't
+/// change what the file holds), writing the catalog as edited, which is the one written.
+fn document_metadata_in_clear(doc: &Document, h: &SecurityHandler, num: u32, decrypt: bool) -> bool {
     if h.encrypts_metadata() || !matches!(h.dict().v, 4 | 5) {
         return false;
     }
+    if decrypt {
+        return doc.source_metadata() == Some(num);
+    }
     // The catalog is no metadata stream, and reading it here would read this object again.
-    let Some(root) = doc.root().filter(|r| r.num != num) else { return false };
-    let root = Object::Ref(root);
+    if doc.root().is_none_or(|r| r.num == num) {
+        return false;
+    }
+    catalog_metadata(doc) == Some(num)
+}
+
+/// The object the catalog's `/Metadata` names, when the reference reaches it (its generation one
+/// the object takes). A catalog that reads as absent (past [`MAX_FOLLOWED`]) names none.
+pub(crate) fn catalog_metadata(doc: &Document) -> Option<u32> {
+    let _scope = FollowScope::enter();
+    let root = Object::Ref(doc.root()?);
     let catalog = followed(doc, &root);
-    let metadata = catalog.as_dict().and_then(|c| c.get(b"Metadata"));
-    matches!(metadata, Some(Object::Ref(r)) if r.num == num)
+    match catalog.as_dict()?.get(b"Metadata")? {
+        Object::Ref(r) if doc.accepted_generations(r.num).contains(&r.generation) => Some(r.num),
+        _ => None,
+    }
 }

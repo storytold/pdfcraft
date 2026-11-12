@@ -443,6 +443,32 @@ mod tests {
         out
     }
 
+    /// A password-protected file whose `startxref` is broken: the renderer's parser can't read it
+    /// at all, the document model rebuilds it and finds it needs the password. It asks for the
+    /// password, and with it the file opens.
+    #[test]
+    fn a_damaged_file_that_needs_a_password_asks_for_it() {
+        // `/Encrypt` naming null reads as no encryption.
+        let mut doc = pdfcraft_cos::Document::open(Arc::new(encrypted("null"))).expect("opens");
+        let params = pdfcraft_cos::NewEncryption {
+            algorithm: pdfcraft_cos::Algorithm::Aes256,
+            user_password: "u",
+            owner_password: "o",
+            permissions: -4,
+            encrypt_metadata: true,
+            seed: [7; 32],
+        };
+        doc.set_encryption(&params).expect("protects");
+        let mut bytes = pdfcraft_cos::write_full(&doc, &SaveOptions::default()).expect("writes");
+        let at = bytes.windows(9).rposition(|w| w == b"startxref").expect("a startxref");
+        bytes.truncate(at);
+        bytes.extend_from_slice(b"startxref\n99999\n%%EOF\n");
+        let bytes = Arc::new(bytes);
+        let asked = Session::new().open("locked.pdf", None, bytes.clone(), None);
+        assert!(matches!(asked, Err(OpenError::NeedsPassword)), "{:?}", asked.err().map(|e| e.to_string()));
+        assert!(Session::new().open("locked.pdf", None, bytes, Some("u")).is_ok(), "the password opens it");
+    }
+
     /// Encryption for certificate recipients is named as the document model names it, not as the
     /// renderer's parser does (`UnsupportedAlgorithm`).
     #[test]
