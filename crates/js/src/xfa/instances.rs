@@ -295,6 +295,10 @@ impl XHost {
         if let Some(n) = h.nodes.get_mut(gone) {
             n.gone = true;
         }
+        // How often the subform occurs stays with it, on the instance that is first now.
+        if let (0, Some(&next)) = (i, live.get(1)) {
+            h.keep_occur_on(gone, next);
+        }
         // Later instances move down one.
         for (k, &inst) in live.iter().enumerate().skip(i + 1) {
             if let Some(n) = h.nodes.get_mut(inst) {

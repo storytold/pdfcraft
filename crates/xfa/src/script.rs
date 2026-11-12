@@ -216,12 +216,25 @@ impl Overrides {
                 .collect();
             changed
         }
+        // How often the subform occurs is the subform's, not the instance's (XFA 3.3 p. 786):
+        // kept with the first instance, where it is read, it stays at `som` for the instance
+        // that is first now (or for none, when no instance is left). Any other instance holds
+        // no such change.
+        let occur: BTreeMap<String, String> = self
+            .props
+            .get(som)
+            .map(|m| m.iter().filter(|(k, _)| k.starts_with("occur#")).map(|(k, v)| (k.clone(), v.clone())).collect())
+            .unwrap_or_default();
         // The property changes are copied (from the memo's) only when one of them moves.
         let props_move = self.props.keys().any(|k| moved(k, head, index).as_deref() != Some(k.as_str()));
         let changed = rekey(&mut self.presence, head, index)
             | rekey(&mut self.access, head, index)
             | rekey(&mut self.overridden, head, index)
             | (props_move && rekey(Arc::make_mut(&mut self.props), head, index));
+        if !occur.is_empty() {
+            // Over the next instance's own changes, which it keeps beside them.
+            Arc::make_mut(&mut self.props).entry(som.to_string()).or_default().extend(occur);
+        }
         self.prop_count = self.props.values().flat_map(|m| m.keys()).filter(|k| !k.starts_with('=')).count();
         self.prop_copies = self.props.values().flat_map(|m| m.keys()).filter(|k| k.starts_with('=')).count();
         self.prop_bytes =
@@ -531,8 +544,8 @@ impl Walker<'_> {
         let mut props = None;
         let f = match self.ov.props.get(&som) {
             Some(sets) if crate::restyle::live_field_changes(sets) => {
-                changed = crate::restyle::restyled_field(f, sets);
-                &changed
+                changed = crate::memo::restyled_field(&self.tpl.memo, f, sets);
+                &*changed
             }
             Some(sets) => {
                 props = Some(crate::memo::applied(&self.tpl.memo, &f.common.props, sets));
@@ -587,9 +600,6 @@ impl Walker<'_> {
         }
     }
 
-    /// The live nodes of `nodes`, the children of `parent_som`, with their scripts recorded: one per
-    /// instance of a repeating subform (what the data holds, else its initial count). Nothing past
-    /// [`MAX_DEPTH`] is built, and building stops once the object budget is spent.
     /// The property changes scripts made to the object at `som`, when it is named (an unnamed
     /// draw, area or subform shares its parent's SOM path, so the changes there are not its own).
     fn sets(&self, named: bool, som: &str) -> Option<&BTreeMap<String, String>> {
@@ -606,6 +616,9 @@ impl Walker<'_> {
         }
     }
 
+    /// The live nodes of `nodes`, the children of `parent_som`, with their scripts recorded: one per
+    /// instance of a repeating subform (what the data holds, else its initial count). Nothing past
+    /// [`MAX_DEPTH`] is built, and building stops once the object budget is spent.
     fn children(&mut self, nodes: &[Node], parent_som: &str, depth: usize) -> Vec<FormNode> {
         let mut out = Vec::new();
         if depth > MAX_DEPTH {

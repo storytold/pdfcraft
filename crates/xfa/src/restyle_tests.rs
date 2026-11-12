@@ -791,6 +791,38 @@ fn a_removed_instances_changes_go_and_the_later_ones_move_down() {
     assert!(!ov.remove_instance("form[0].other[0].row[5]"), "nothing there");
 }
 
+/// How often a subform occurs is the subform's (XFA 3.3 p. 786), kept with its first instance:
+/// removing that instance leaves it for the one that is first now, beside that one's own
+/// changes, and the live form and the layout still read it.
+#[test]
+fn an_occur_change_stays_when_the_first_instance_is_removed() {
+    let t = template();
+    let mut ov = overrides(
+        "form[0].rows[0].row[0]",
+        &[("occur#0", Some("initial"), "2"), ("occur#0", Some("max"), "5"), ("border#0/edge#0/color#0", Some("value"), "2,2,2")],
+    );
+    ov.set_prop("form[0].rows[0].row[1]", "border#0/edge#0/color#0", Some("value"), "3,3,3").unwrap();
+    let maxes = |ov: &Overrides| {
+        let live = crate::form_tree(&t, None, ov);
+        let rows = live.root.children.iter().find(|n| n.name == "rows").unwrap();
+        rows.children.iter().map(|r| r.occur_max).collect::<Vec<_>>()
+    };
+    let laid_max = |ov: &Overrides| {
+        let laid = crate::apply_overrides(&t, ov);
+        let Some(Node::Subform(rows)) = laid.root.children.iter().find(|n| n.common().name.as_deref() == Some("rows")) else { panic!() };
+        let Some(Node::Subform(row)) = rows.children.first() else { panic!() };
+        row.occur.max
+    };
+    assert_eq!((maxes(&ov), laid_max(&ov)), (vec![Some(5), Some(5)], Some(5)));
+    assert!(ov.remove_instance("form[0].rows[0].row[0]"));
+    assert_eq!((maxes(&ov), laid_max(&ov)), (vec![Some(5), Some(5)], Some(5)));
+    let first: Vec<(&str, &str)> = ov.props()["form[0].rows[0].row[0]"].iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+    assert_eq!(first, [("border#0/edge#0/color#0@value", "3,3,3"), ("occur#0@initial", "2"), ("occur#0@max", "5")]);
+    // Removing a later instance leaves it alone.
+    assert!(!ov.remove_instance("form[0].rows[0].row[1]"));
+    assert_eq!(maxes(&ov), [Some(5), Some(5)]);
+}
+
 /// A template object the reader cut short isn't laid out from its property tree again (the
 /// tree lacks what the cut left out): its border stays the template's, scripts still read the
 /// change, and a note says so. Changes kept in a file that a script couldn't make are left out
@@ -1438,4 +1470,22 @@ fn a_row_breaking_by_its_own_change_leaves_out_a_leader_that_doesnt_fit() {
     };
     assert_eq!(heads("1in"), [1, 1], "room for both: the leader starts the new page");
     assert_eq!(heads("9.9in"), [1, 0], "no room for both: the row starts it alone");
+}
+
+/// The instances a script adds to a subform it made repeat (`occur.max` set on one the template
+/// doesn't repeat, XFA 3.3 p. 786) are instances of the template's subform: the checks that look
+/// a field up by its SOM path (its format test, a reset's default, whether it grows) find it.
+#[test]
+fn fields_in_rows_of_a_subform_a_script_made_repeat_are_found() {
+    let xdp = crate::fixtures::scripted_template().replace(r#"<occur min="1" max="-1"/>"#, r#"<occur min="1" max="1"/>"#).replace(
+        r#"<field name="item" h="0.3in"><ui><textEdit/></ui></field>"#,
+        r#"<field name="item" h="0.3in"><ui><textEdit/></ui><value><text>Default</text></value></field>"#,
+    );
+    let (t, _) = crate::parse(&xdp).unwrap();
+    let som = "form[0].page1[0].table[0].row[2].item[0]";
+    assert!(crate::data::template_field(&t, som).is_some());
+    assert_eq!(crate::reset_default(&t, som).as_deref(), Some("Default"));
+    assert!(crate::field_now(&t, &Overrides::default(), som).is_some());
+    // A field is not a subform: no second instance of one.
+    assert!(crate::data::template_field(&t, "form[0].page1[0].qty[1]").is_none());
 }

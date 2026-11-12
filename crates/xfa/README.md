@@ -170,10 +170,11 @@ let form = pdfcraft_xfa::layout_xml(template_xml)?;       // pages of items, for
   script never reads back a value the form drops. `execValidate()` runs the null test on every
   required object under the node and lists the empty ones in one message. An event's work
   doesn't grow with the changes the form already keeps: the template keeps (`memo`) the changes
-  last read, with the object they came from, and the property tree each changed object was
-  given, so the next event neither checks the changes one by one nor builds those trees again
-  (two generations of trees at most, each within 20,000 trees and 16 MiB, so a script that gives
-  an object new values event after event doesn't grow it without end).
+  last read, with the object they came from, the property tree each changed object was given,
+  and each field whose changes reach more than its tree (its validation, pictures or items), so
+  the next event neither checks the changes one by one nor builds those trees or reads those
+  fields again (two generations of each at most, each within 20,000 entries and 16 MiB, so a
+  script that gives an object new values event after event doesn't grow it without end).
   Not `xfa.template`, data descriptions, `xfa.connectionSet`, the choice-list methods
   (`addItem`, `clearItems`, `boundItem`; `selectedIndex` reads give a sink that accepts
   writes), a node's `value` as its value element, `traversal` and `overflow`, `execEvent`, or

@@ -331,15 +331,13 @@ impl Layouter<'_> {
         // Data adds instances of a repeating subform (rows added in another viewer).
         let instances = self.laid_out_instances(node, &ctx.som, sib);
         let ctx_parent = ctx;
-        // The template's page breaks go before the first instance and after the last; an
-        // instance whose breaks a script changed (XFA 3.3 p. 632) breaks as they now say.
+        // The template's page breaks go before the first instance and after the last (there is
+        // always one, see `instance_count`); an instance whose breaks a script changed (XFA 3.3
+        // p. 632) breaks as they now say.
         let breaks = |l: &Self, i: usize| {
             l.own_breaks(node, ctx_parent, sib.saturating_add(i))
                 .unwrap_or((i == 0 && sf.break_before_page, i.saturating_add(1) >= instances && sf.break_after_page))
         };
-        if instances == 0 && sf.break_before_page && self.page_has_flow() {
-            self.break_frames(0.0, true)?;
-        }
         for i in 0..instances {
             // Every instance spends budget, so nested repeats that place nothing still stop.
             self.measures.set(self.measures.get().saturating_add(1));
@@ -352,9 +350,6 @@ impl Layouter<'_> {
             if after {
                 self.break_frames(0.0, true)?;
             }
-        }
-        if instances == 0 && sf.break_after_page {
-            self.break_frames(0.0, true)?;
         }
         Ok(())
     }

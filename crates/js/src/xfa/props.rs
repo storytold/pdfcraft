@@ -269,8 +269,25 @@ fn is_side(parent: &str, tag: &str) -> bool {
     matches!(tag, "edge" | "corner") && matches!(parent, "border" | "rectangle")
 }
 
+/// The node whose property at `path` a read or write on node `node` reaches: for the `occur`
+/// of an instance of a repeating subform, the first instance under the same parent, else `node`.
+/// How often a subform occurs is the subform's, not one instance's (XFA 3.3 p. 786): the form
+/// keeps a change to it with the first instance, which the instance manager, the layout and the
+/// traversal read, so every instance reads and writes it there.
+pub(crate) fn occur_home(h: &XHost, node: usize, path: &str) -> usize {
+    if !path.starts_with("occur#") {
+        return node;
+    }
+    let Some(n) = h.nodes.get(node).filter(|n| n.kind == XfaKind::Subform && n.repeatable && !n.gone) else { return node };
+    if h.shares_parent_som(node) {
+        return node;
+    }
+    n.parent.and_then(|p| super::instances(h, p, &n.name).first().copied()).unwrap_or(node)
+}
+
 /// Whether a script made anything at `path` or under it in this run.
 fn made(h: &XHost, node: usize, path: &str) -> bool {
+    let node = occur_home(h, node, path);
     let below = format!("{path}/");
     h.prop_writes.get(&node).is_some_and(|m| m.keys().any(|k| k == path || k.starts_with(&below)))
 }
@@ -307,6 +324,7 @@ fn read_path(h: &XHost, node: usize, path: &str) -> Option<String> {
 
 /// The template's element at exactly `path` under node `node`, when the template has it.
 fn template_prop_at<'a>(h: &'a XHost, node: usize, path: &str) -> Option<&'a XfaProp> {
+    let node = occur_home(h, node, path);
     let props = &h.nodes.get(node)?.props;
     let mut list = &props.elements;
     let mut found = None;
@@ -325,6 +343,7 @@ fn template_prop<'a>(h: &'a XHost, node: usize, path: &str) -> Option<&'a XfaPro
 
 /// What a script wrote in this run to the property a read of `path` reads ([`read_path`]).
 fn written<'a>(h: &'a XHost, node: usize, path: &str) -> Option<&'a PropWrite> {
+    let node = occur_home(h, node, path);
     h.prop_writes.get(&node)?.get(&read_path(h, node, path)?)
 }
 
@@ -571,7 +590,7 @@ fn specified(h: &XHost, node: usize, path: &str, name: &str) -> bool {
     }
     // A write anywhere under the property `name` (any occurrence) makes it specified.
     let below = if path.is_empty() { format!("{name}#") } else { format!("{path}/{name}#") };
-    h.prop_writes.get(&node).is_some_and(|m| m.keys().any(|p| p.starts_with(&below)))
+    h.prop_writes.get(&occur_home(h, node, &below)).is_some_and(|m| m.keys().any(|p| p.starts_with(&below)))
 }
 
 /// How many of the property `name` `getElement` may reach under `path`: what the template has,
@@ -1012,8 +1031,10 @@ impl XHost {
     /// border doesn't list is made first ([`XHost::instantiate`]), and the copy it is made as
     /// goes to the form too, so the form makes that side as the script reads it.
     pub(crate) fn write_prop(&mut self, node: usize, path: &str, name: Option<&str>, value: String) {
-        // A value the form refuses changes nothing, the sides it would have made included.
-        if property_value_ok(path, name, &value).is_err() {
+        let node = occur_home(self, node, path);
+        // A value the form refuses changes nothing, the sides it would have made included, and
+        // neither does a write to an object the form keeps no changes for.
+        if property_value_ok(path, name, &value).is_err() || self.shares_parent_som(node) {
             return self.store_prop(node, path, name, value);
         }
         self.copying = true;
@@ -1028,6 +1049,14 @@ impl XHost {
     /// change the form won't get. A value the form would refuse ([`property_value_ok`]) is
     /// noted on the console and changes nothing.
     fn store_prop(&mut self, node: usize, path: &str, name: Option<&str>, value: String) {
+        if self.shares_parent_som(node) {
+            let som = self.nodes.get(node).map(|n| n.som.to_string()).unwrap_or_default();
+            let what = name.map_or_else(|| path.to_string(), |a| format!("{path} {a}"));
+            self.print(super::clip(format!(
+                "{som}: {what} not set: an unnamed object shares its parent's SOM path and keeps no property change of its own"
+            )));
+            return;
+        }
         if !self.attr_room(node, path, name) {
             return;
         }
@@ -1054,6 +1083,29 @@ impl XHost {
         self.record(effect);
     }
 
+    /// The first instance `from` of a repeating subform removed, `to` first now: how often the
+    /// subform occurs, as `from` reads it (this run's writes, else the change the form keeps
+    /// with the first instance, else the template's), is what `to` reads from now on
+    /// ([`occur_home`]), as the form keeps it with the first instance whichever is removed.
+    pub(crate) fn keep_occur_on(&mut self, from: usize, to: usize) {
+        let moved: Vec<(&str, String)> = ["initial", "max", "min"]
+            .into_iter()
+            .filter_map(|k| {
+                let v = attr(self, from, "occur#0", k)?;
+                (attr(self, to, "occur#0", k).as_ref() != Some(&v)).then_some((k, v))
+            })
+            .collect();
+        let keys: Vec<String> =
+            self.run_keys.get(&from).map(|ks| ks.iter().filter(|k| k.starts_with("occur#")).cloned().collect()).unwrap_or_default();
+        // For reads only: the form moves the change it keeps itself (`Overrides::remove_instance`).
+        for (k, v) in moved {
+            self.put_prop(to, "occur#0", Some(k), v);
+        }
+        for k in keys {
+            self.note_key(to, k);
+        }
+    }
+
     /// Note that the form now keeps a change under `key` to node `node` (see [`Self::run_keys`]).
     fn note_key(&mut self, node: usize, key: String) {
         let keys = self.run_keys.entry(node).or_default();
@@ -1068,7 +1120,7 @@ impl XHost {
     /// not take (a template's own odd value), or past the run's budget, is left out quietly: the
     /// form then makes that side from the side drawn there, as it is by then.
     fn copy_to_form(&mut self, node: usize, path: &str, name: Option<&str>, value: &str) {
-        if !self.copying || property_value_ok(path, name, value).is_err() {
+        if !self.copying || property_value_ok(path, name, value).is_err() || self.shares_parent_som(node) {
             return;
         }
         let Some(som) = self.nodes.get(node).filter(|n| !n.gone && n.kind != XfaKind::Form).map(|n| n.som.to_string()) else { return };
@@ -1083,6 +1135,15 @@ impl XHost {
             self.record(effect);
             self.note_key(node, key);
         }
+    }
+
+    /// Whether node `node` is an unnamed subform, area or draw: one sharing its parent's SOM
+    /// path, which the form keeps property changes by. The form gives such an object no change
+    /// of its own (a change kept at that path is its named parent's), so a write to it is
+    /// refused rather than handed to the parent.
+    pub(crate) fn shares_parent_som(&self, node: usize) -> bool {
+        let Some(n) = self.nodes.get(node) else { return false };
+        n.kind != XfaKind::Form && n.parent.and_then(|p| self.nodes.get(p)).is_some_and(|p| p.som == n.som)
     }
 
     /// Whether the form can keep a change under `key` (see [`change_key`]) to node `node`: one
@@ -1167,8 +1228,14 @@ impl XHost {
         if sets.is_empty() {
             return;
         }
-        let by_som: HashMap<&str, usize> =
-            self.nodes.iter().enumerate().filter(|(_, n)| !n.gone && n.kind != XfaKind::Form).map(|(i, n)| (&*n.som, i)).collect();
+        // An unnamed object shares its parent's SOM path: the changes there are the parent's.
+        let by_som: HashMap<&str, usize> = self
+            .nodes
+            .iter()
+            .enumerate()
+            .filter(|&(i, n)| !n.gone && n.kind != XfaKind::Form && !self.shares_parent_som(i))
+            .map(|(i, n)| (&*n.som, i))
+            .collect();
         let found: Vec<(usize, &super::XfaPropSet)> = sets.iter().filter_map(|p| by_som.get(p.som.as_str()).map(|&i| (i, p))).collect();
         for (i, p) in found {
             let key = change_key(&p.path, p.attr.as_deref());

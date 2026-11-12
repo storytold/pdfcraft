@@ -161,8 +161,10 @@ fn named<'a>(nodes: &'a [Node], name: &str, depth: usize) -> Option<&'a Node> {
 
 /// The child of `nodes` the SOM segment `name[index]` names, numbered as the form numbers its
 /// objects ([`SomIndices`]): same-named siblings count up, and the instances of a repeating
-/// subform take the numbers from its own on. Unnamed subforms and areas are looked through,
-/// as [`named`] does.
+/// subform take the numbers from its own on. Any subform counts as one that may repeat, not only
+/// one the template repeats: a script's `occur.max` makes one repeat that didn't (XFA 3.3
+/// p. 786), and the instances it adds are its own too. Unnamed subforms and areas are looked
+/// through, as [`named`] does.
 fn named_at<'a>(nodes: &'a [Node], name: &str, index: usize, depth: usize) -> Option<&'a Node> {
     if depth > MAX_DEPTH {
         return None;
@@ -177,7 +179,7 @@ fn named_at<'a>(nodes: &'a [Node], name: &str, index: usize, depth: usize) -> Op
         if sib == index {
             return Some(n);
         }
-        if sib < index && matches!(n, Node::Subform(sf) if sf.occur.max != Some(1)) {
+        if sib < index && matches!(n, Node::Subform(_)) {
             repeating = Some(n);
         }
     }

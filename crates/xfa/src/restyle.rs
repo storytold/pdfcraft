@@ -291,11 +291,6 @@ pub fn draws(key: &str) -> bool {
     !(key.starts_with("assist#0/speak#") || key.starts_with("desc#") || key.starts_with("extras#"))
 }
 
-/// Whether the changes `sets` touch what the live form takes from a field besides its property
-/// tree: its items (radio on values, saved values), data and edit pictures (`bind`, `ui`), its
-/// validation (script, message), its display picture (`format`) or its value element. When
-/// they don't, the live form needs only the tree with them applied ([`apply_props`]), not the
-/// field read again.
 /// Whether a change at `path` changes a field's value as the live form gives it to scripts:
 /// its items (a radio button's on value, a list's saved values), its data or edit picture
 /// (`bind`, `ui`, which also make it numeric) or its value element. The live form is built
@@ -305,6 +300,11 @@ pub fn changes_live_value(path: &str) -> bool {
     matches!(root, "items" | "bind" | "ui" | "value")
 }
 
+/// Whether the changes `sets` touch what the live form takes from a field besides its property
+/// tree: its items (radio on values, saved values), data and edit pictures (`bind`, `ui`), its
+/// validation (script, message), its display picture (`format`) or its value element. When
+/// they don't, the live form needs only the tree with them applied ([`apply_props`]), not the
+/// field read again.
 pub(crate) fn live_field_changes(sets: &BTreeMap<String, String>) -> bool {
     sets.keys().any(|k| {
         let root = k.trim_start_matches('=').split('#').next().unwrap_or("");

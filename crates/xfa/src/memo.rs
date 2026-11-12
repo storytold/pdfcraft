@@ -7,7 +7,10 @@
 //!   again;
 //! - the property trees those changes give the template's objects ([`applied`]): the live form
 //!   is built for each event, and handing back the tree it had keeps the script engine's copy of
-//!   it too (that copy is kept by tree).
+//!   it too (that copy is kept by tree);
+//! - the fields those changes give the template's fields when they change more than the tree
+//!   (a validation, a picture, items: [`restyled_field`]), for the same reason, and because
+//!   making one reads the field again.
 //!
 //! Neither is part of the template: a clone starts empty, and two compare equal. A poisoned lock
 //! only means a panic elsewhere while it was held; both are memos, so their contents stay valid.
@@ -17,7 +20,7 @@ use std::sync::{Arc, Mutex, PoisonError, Weak};
 
 use pdfcraft_cos::Object;
 
-use crate::model::Props;
+use crate::model::{Field, Props};
 
 /// The property changes as kept, by SOM path then property key (see
 /// [`crate::script::Overrides::props`]).
@@ -43,22 +46,29 @@ pub(crate) struct KeptProps {
 const MAX_APPLIED: usize = 20_000;
 const MAX_APPLIED_BYTES: usize = 16 << 20;
 
-/// One tree [`applied`] made: the tree it was made from (to tell a tree that is gone from one
-/// now at its address), the changes, and the result.
-type AppliedEntry = (Weak<Props>, BTreeMap<String, String>, Arc<Props>);
+/// One result [`applied`] (or [`restyled_field`]) made: the template object's tree it was
+/// made from (to tell a tree that is gone from one now at its address), the changes, and the
+/// result.
+type AppliedEntry<T> = (Weak<Props>, BTreeMap<String, String>, Arc<T>);
 
-/// Trees [`applied`] made, by the address of the tree they were made from and a hash of the
+/// Results [`applied`] made, by the address of the tree they were made from and a hash of the
 /// changes, so a look-up compares only the entries with that tree and those changes (and the
 /// rare collision), however many trees one template object has.
-type AppliedMap = HashMap<(usize, u64), Vec<AppliedEntry>>;
+type AppliedMap<T> = HashMap<(usize, u64), Vec<AppliedEntry<T>>>;
 
-/// The two generations of [`applied`]'s trees, and how many trees and bytes the newest holds.
-#[derive(Default)]
-struct Applied {
-    new: AppliedMap,
-    old: AppliedMap,
+/// The two generations of [`applied`]'s results, and how many results and bytes the newest
+/// holds.
+struct Applied<T> {
+    new: AppliedMap<T>,
+    old: AppliedMap<T>,
     trees: usize,
     bytes: usize,
+}
+
+impl<T> Default for Applied<T> {
+    fn default() -> Self {
+        Applied { new: HashMap::new(), old: HashMap::new(), trees: 0, bytes: 0 }
+    }
 }
 
 /// See the module documentation.
@@ -66,7 +76,8 @@ struct Applied {
 pub struct Memo {
     /// The object the property changes were last read from, and what was read.
     kept: Mutex<Option<(Arc<Object>, KeptProps)>>,
-    applied: Mutex<Applied>,
+    applied: Mutex<Applied<Props>>,
+    fields: Mutex<Applied<Field>>,
 }
 
 impl Clone for Memo {
@@ -106,12 +117,20 @@ impl Memo {
 thread_local! {
     /// Property trees [`applied`] made (rather than handed back), on this thread.
     static APPLIED_MADE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Fields [`restyled_field`] made (rather than handed back), on this thread.
+    static FIELDS_MADE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// How many property trees [`applied`] has made on this thread, since the last call.
 #[cfg(test)]
 pub(crate) fn take_applied_made() -> usize {
     APPLIED_MADE.with(|c| c.replace(0))
+}
+
+/// How many fields [`restyled_field`] has made on this thread, since the last call.
+#[cfg(test)]
+pub(crate) fn take_fields_made() -> usize {
+    FIELDS_MADE.with(|c| c.replace(0))
 }
 
 /// Bytes a property tree holds, roughly: each element and attribute, and their text.
@@ -157,8 +176,8 @@ pub(crate) fn take_applied_compared() -> usize {
 #[cfg(test)]
 pub(crate) fn applied_held(memo: &Memo) -> (usize, usize) {
     let a = memo.applied.lock().unwrap_or_else(PoisonError::into_inner);
-    let trees = |m: &AppliedMap| m.values().map(Vec::len).sum::<usize>();
-    let bytes = |m: &AppliedMap| m.values().flatten().map(|(_, s, t)| tree_bytes(t).saturating_add(set_bytes(s))).sum::<usize>();
+    let trees = |m: &AppliedMap<Props>| m.values().map(Vec::len).sum::<usize>();
+    let bytes = |m: &AppliedMap<Props>| m.values().flatten().map(|(_, s, t)| tree_bytes(t).saturating_add(set_bytes(s))).sum::<usize>();
     (trees(&a.new) + trees(&a.old), bytes(&a.new) + bytes(&a.old))
 }
 
@@ -172,9 +191,43 @@ fn set_bytes(sets: &BTreeMap<String, String>) -> usize {
 /// address, checked against the tree itself so a freed tree's address can't match; at most
 /// two generations of trees are kept (see [`MAX_APPLIED`]).
 pub(crate) fn applied(memo: &Memo, base: &Arc<Props>, sets: &BTreeMap<String, String>) -> Arc<Props> {
+    remembered(&memo.applied, base, sets, tree_bytes, || {
+        #[cfg(test)]
+        APPLIED_MADE.with(|c| c.set(c.get().saturating_add(1)));
+        crate::restyle::apply_props(base, sets).0
+    })
+}
+
+/// Template field `f` with the changes `sets` applied ([`crate::restyle::restyled_field`]),
+/// the same `Arc` each time the template's memo is asked for the same field and changes: the
+/// live form takes such a field's validation, pictures and items from it, and building the form
+/// again for each event doesn't read the field again. Kept by the field's property tree, which
+/// is its own (the reader makes one for each object), as [`applied`] keeps trees.
+pub(crate) fn restyled_field(memo: &Memo, f: &Field, sets: &BTreeMap<String, String>) -> Arc<Field> {
+    let cost = |f: &Field| {
+        let scripts = f.scripts.iter().chain(&f.calculate).chain(&f.validate).fold(0usize, |n, s| n.saturating_add(s.text.len()));
+        tree_bytes(&f.common.props).saturating_add(std::mem::size_of::<Field>()).saturating_add(scripts)
+    };
+    remembered(&memo.fields, &f.common.props, sets, cost, || {
+        #[cfg(test)]
+        FIELDS_MADE.with(|c| c.set(c.get().saturating_add(1)));
+        crate::restyle::restyled_field(f, sets)
+    })
+}
+
+/// What `make` gives for the template object whose tree is `base` and the changes `sets`, from
+/// `memo` when it holds it, else made and kept there (see [`applied`]); `cost` is the bytes a
+/// result holds.
+fn remembered<T>(
+    memo: &Mutex<Applied<T>>,
+    base: &Arc<Props>,
+    sets: &BTreeMap<String, String>,
+    cost: impl Fn(&T) -> usize,
+    make: impl FnOnce() -> T,
+) -> Arc<T> {
     let key = (Arc::as_ptr(base) as usize, sets_hash(sets));
     let same_base = |w: &Weak<Props>| w.upgrade().is_some_and(|b| Arc::ptr_eq(&b, base));
-    let find = |map: &AppliedMap| {
+    let find = |map: &AppliedMap<T>| {
         map.get(&key).and_then(|list| {
             list.iter()
                 .find(|(w, s, _)| {
@@ -185,20 +238,16 @@ pub(crate) fn applied(memo: &Memo, base: &Arc<Props>, sets: &BTreeMap<String, St
                 .map(|(_, _, out)| Arc::clone(out))
         })
     };
-    let mut a = memo.applied.lock().unwrap_or_else(PoisonError::into_inner);
+    let mut a = memo.lock().unwrap_or_else(PoisonError::into_inner);
     if let Some(out) = find(&a.new) {
         return out;
     }
     // Made in the generation before: kept in the newest one from now on.
     let out = match find(&a.old) {
         Some(out) => out,
-        None => {
-            #[cfg(test)]
-            APPLIED_MADE.with(|c| c.set(c.get().saturating_add(1)));
-            Arc::new(crate::restyle::apply_props(base, sets).0)
-        }
+        None => Arc::new(make()),
     };
-    let cost = tree_bytes(&out).saturating_add(set_bytes(sets));
+    let cost = cost(&out).saturating_add(set_bytes(sets));
     if a.trees >= MAX_APPLIED || a.bytes.saturating_add(cost) > MAX_APPLIED_BYTES {
         a.old = std::mem::take(&mut a.new);
         a.trees = 0;
@@ -337,6 +386,27 @@ mod tests {
             let again = crate::script::form_tree(&tpl, None, &ov);
             assert_eq!(take_applied_made(), 0, "{n} kept changes");
             assert_eq!(first.root, again.root);
+        }
+    }
+
+    /// Fields whose kept changes reach more than their tree (`mandatory`, kept as the
+    /// validation's `nullTest`) aren't read again when the live form is built again: none is
+    /// made again, whether the form keeps 2 such changes or 400. Counted, not timed.
+    #[test]
+    fn the_live_form_built_again_reads_no_changed_field_again() {
+        for n in [2, 400] {
+            let (_, tpl, _) = form_with_kept_changes(n);
+            let mut ov = crate::script::Overrides::default();
+            for i in 0..n {
+                assert_eq!(ov.set_prop(&format!("form[0].f{i}[0]"), "validate#0", Some("nullTest"), "error"), Ok(true));
+            }
+            let _ = take_fields_made();
+            let first = crate::script::form_tree(&tpl, None, &ov);
+            let made_first = take_fields_made();
+            let again = crate::script::form_tree(&tpl, None, &ov);
+            assert_eq!(first.root, again.root);
+            assert!(first.root.children.iter().zip(&again.root.children).all(|(a, b)| Arc::ptr_eq(&a.props, &b.props)), "the same trees");
+            assert_eq!((made_first, take_fields_made()), (n, 0), "{n} kept changes");
         }
     }
 
