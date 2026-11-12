@@ -558,6 +558,9 @@ impl PdfCraftApp {
                 }
             });
             self.show_print_progress();
+            // Each notice replaces the one before, so failures go last, and a second side's
+            // failure (with its check-the-stack warning) after any other.
+            finished.sort_by_key(|f| (f.1.is_err(), f.2));
             for (printer, result, second_side, partly) in finished {
                 let dropped = second_side && self.second_side_answered(result.is_ok(), partly);
                 match result {
@@ -1274,6 +1277,27 @@ mod tests {
             assert!(toast.contains("the printer is offline"), "{toast}");
             assert_eq!(toast.contains("check the stack"), !offered, "{toast}");
         }
+    }
+
+    /// The check-the-stack warning is the notice left showing when another job finishes in the
+    /// same poll after it.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_partway_second_side_warning_outlasts_other_results() {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        let job = PrintDraft::default().job("a.pdf");
+        app.print_tasks.second_side = Some(SecondSide { printer: "Office".into(), bytes: Vec::new(), job, waiting: Waiting::Backs });
+        let (backs, rx) = std::sync::mpsc::channel();
+        app.print_tasks.jobs.push(PrintJob { printer: "Office".into(), sheets: None, news: rx, second_side: true });
+        let (other, rx) = std::sync::mpsc::channel();
+        app.print_tasks.jobs.push(PrintJob { printer: "Den".into(), sheets: None, news: rx, second_side: false });
+        backs.send(JobNews::Sent(1, 2)).unwrap();
+        backs.send(JobNews::Done(Err("the printer is offline".into()))).unwrap();
+        other.send(JobNews::Done(Ok(String::new()))).unwrap();
+        app.poll_print();
+        let toast = app.toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
+        assert!(toast.contains("check the stack"), "{toast}");
     }
 
     /// Issue #1308: Current page is the page on screen, even when a later page is labelled with
