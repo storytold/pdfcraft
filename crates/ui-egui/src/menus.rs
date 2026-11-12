@@ -141,9 +141,13 @@ const EDIT: &[&str] = &[
     PASTE,
     DELETE,
     SEP,
+    "comment.copy",
+    "comment.paste",
+    SEP,
     SELECT_ALL,
     SEP,
     "edit.find",
+    "edit.replace",
     "edit.advanced_search",
     SEP,
     "edit.column_select",
@@ -168,9 +172,9 @@ const DISPLAY: &[&str] = &[
     "view.fit_one_page",
 ];
 const THEMES: &[&str] = &["view.theme.system", "view.theme.light", "view.theme.dark"];
-const PANES: &[&str] = &["view.side_panel", "view.tools_pane"];
+const PANES: &[&str] = &["view.side_panel", "view.tools_pane", "view.split"];
 const PANE_COMMANDS: &[&str] = &["comment.list", "form.fields", "ui.dock.reset"];
-const MODES: &[&str] = &["view.full_screen", "view.read_mode"];
+const MODES: &[&str] = &["view.full_screen", "view.read_mode", crate::viewer_prefs::TOGGLE];
 const PAGES: &[&str] = &[
     "page.organize",
     SEP,
@@ -190,9 +194,11 @@ const PAGES: &[&str] = &[
     "page.crop",
     "page.boxes",
     "page.number",
+    "page.properties",
     SEP,
     "bookmark.add",
     "bookmark.from_structure",
+    "bookmark.from_text_styles",
 ];
 /// Sign ▸ Fill & Sign, with the short labels of the Fill & Sign toolbar.
 const FILL: &[(&str, &str)] = &[
@@ -254,6 +260,14 @@ fn english(labeled: Labeled<'_>) -> Option<String> {
 }
 
 fn translate(english: &'static str) -> String {
+    // craft_menu's bar writes "⋯" (U+22EF, MIDLINE HORIZONTAL ELLIPSIS) itself, for the menu of
+    // titles that don't fit: a sentinel to translate, not an English phrase, and the only one of
+    // its four reserved labels no font this app ships or falls back to has a glyph for.
+    // MissingGlyphPolicy::Panic (egui 0.37) crashes on it. The ordinary ellipsis every other
+    // truncated label in this app already uses is in the bundled faces.
+    if english == "\u{22ef}" {
+        return "…".to_owned();
+    }
     tl!(english).to_owned()
 }
 
@@ -462,6 +476,10 @@ impl PdfCraftApp {
         let enabled_id = |id: &str| commands::command(id).is_some_and(|s| self.command_enabled(s));
         let index = param_index(command);
         let text = ctx.text_edit_focused() && matches!(command.id.as_str(), "edit.undo" | "edit.redo" | "edit.copy" | CUT | PASTE | SELECT_ALL);
+        // Objects selected together in Edit a PDF are what Copy and Cut take, and Paste brings
+        // back objects copied there.
+        let edit_objects = self.quick_tool == crate::QuickTool::EditText && !organize;
+        let doc = self.active_ids().and_then(|(_, id)| self.session.get(id));
         let enabled = text
             || match command.id.as_str() {
                 NO_RECENT => false,
@@ -474,6 +492,10 @@ impl PdfCraftApp {
                 "edit.copy" if view.is_some_and(|v| v.picked_image.is_some()) => {
                     self.active_ids().and_then(|(_, id)| self.session.get(id)).is_some_and(|d| d.allows_copying())
                 }
+                "edit.copy" | CUT if edit_objects && view.is_some_and(|v| v.objects.count() > 0) => {
+                    doc.is_some_and(|d| d.allows_copying() && (command.id != CUT || d.allows_modification()))
+                }
+                PASTE if edit_objects && self.object_clipboard.is_some() => doc.is_some_and(pdfcraft_engine::Document::allows_modification),
                 CUT => organize && enabled_id("page.cut"),
                 PASTE => organize && self.page_clipboard.is_some() && enabled_id("page.paste"),
                 SELECT_ALL | DELETE => has_doc,
@@ -491,6 +513,7 @@ impl PdfCraftApp {
             "view.read_mode" => Some(self.mode == crate::Mode::Read),
             "view.side_panel" => Some(self.right.is_some()),
             "view.tools_pane" => Some(self.left_open),
+            "view.split" => Some(self.panes.split.is_some()),
             "view.theme.system" => Some(self.theme_preference == ThemePreference::System),
             "view.theme.light" => Some(self.theme_preference == ThemePreference::Light),
             "view.theme.dark" => Some(self.theme_preference == ThemePreference::Dark),
@@ -530,7 +553,7 @@ impl PdfCraftApp {
             }
             "edit.copy" => self.menu_input.push(egui::Event::Copy),
             CUT => self.menu_input.push(egui::Event::Cut),
-            PASTE => ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaste),
+            PASTE => self.menu_pastes = self.menu_pastes.saturating_add(1),
             SELECT_ALL => self.menu_input.extend(key(egui::Key::A, egui::Modifiers::COMMAND)),
             DELETE => self.menu_input.extend(key(egui::Key::Delete, egui::Modifiers::NONE)),
             PANEL => self.choose_right_panel(panel(command)),
@@ -654,6 +677,22 @@ mod tests {
 
     fn item<'b>(bar: &'b MenuBar, command: &CommandRef) -> &'b Item {
         bar.find(command).unwrap_or_else(|| panic!("{} is in the menus", command.key()))
+    }
+
+    /// The bar's own overflow-menu sentinel is not rendered as typed: no font this app ships or
+    /// falls back to has U+22EF, and egui 0.37's `MissingGlyphPolicy::Panic` crashes on it when
+    /// the menu bar is narrow enough to need it. The editing tests that narrow the window while a
+    /// paragraph is open reproduce this end to end. The other three reserved labels are plain
+    /// ASCII, so untranslated is safe for them.
+    #[test]
+    fn the_overflow_menu_sentinel_is_not_passed_through_untranslated() {
+        crate::i18n::set_current(crate::i18n::Lang::EN);
+        let translated = translate("⋯");
+        assert_ne!(translated, "⋯", "no installed font has this glyph");
+        assert_eq!(translated, "…", "the ordinary ellipsis the rest of the app already uses");
+        for label in ["Menu", "Scroll menu up", "Scroll menu down"] {
+            assert_eq!(translate(label), label, "plain ASCII reserved labels need no substitution");
+        }
     }
 
     #[test]

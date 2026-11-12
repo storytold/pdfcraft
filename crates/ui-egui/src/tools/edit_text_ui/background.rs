@@ -1,4 +1,4 @@
-use super::*;
+use super::{Arc, Color32, Edit, LineEditor, PageXform, Pos2, TextTarget};
 
 /// A cached, read-only page background. The source glyphs are removed before rasterization;
 /// colour, pictures and unselected text beneath the editor remain visible.

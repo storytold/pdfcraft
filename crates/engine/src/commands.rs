@@ -18,8 +18,10 @@ pub enum Needs {
     Nothing,
     /// A document is open.
     Document,
-    /// The open document's security allows page changes (insert, delete, rotate, extract…).
+    /// The open document's security allows page changes (insert, delete, rotate…).
     Assembly,
+    /// The open document's security allows taking pages out into new files (extract, split).
+    PageExtraction,
     /// The open document's security allows content and metadata changes.
     Modification,
     /// The open document's security allows adding and changing comments.
@@ -163,6 +165,8 @@ const HELP: Option<&str> = Some("Help");
 
 /// Every command, in menu order.
 pub const COMMANDS: &[CommandSpec] = &[
+    c("view.select_tool", "Select", None, None, Document, "mouse-pointer-2"),
+    c("view.hand_tool", "Hand", None, None, Document, "hand"),
     c("file.open", "Open…", FILE, Some(Shortcut::cmd("O")), Nothing, "folder-open"),
     c("file.open_recent", "Open Recent", FILE, None, Nothing, "clock"),
     // Shown at the foot of File ▸ Open Recent and on Home, not as its own File menu item.
@@ -196,6 +200,9 @@ pub const COMMANDS: &[CommandSpec] = &[
     ct("edit.undo", "Undo", EDIT, Some(Shortcut::cmd("Z")), Undo, "undo-2"),
     ct("edit.redo", "Redo", EDIT, Some(Shortcut::cmd_shift("Z")), Redo, "redo-2"),
     c("edit.find", "Find…", EDIT, Some(Shortcut::cmd("F")), Document, "search"),
+    // Find and replace, in Edit text mode (the Find box's Replace row). Not ⌘H/Ctrl+H: macOS
+    // takes ⌘H to hide the app, and Ctrl+H is Read mode on Windows and Linux (as in Acrobat).
+    c("edit.replace", "Replace…", EDIT, Some(Shortcut::cmd_shift("H")), Modification, "replace"),
     c("edit.advanced_search", "Advanced search…", EDIT, Some(Shortcut::cmd_shift("F")), Document, "search"),
     c("view.palette", "Find tools and commands…", VIEW, Some(Shortcut::cmd("K")), Nothing, "search"),
     // Page display: View ▸ Page display and the rail's button list the base layouts as radios and
@@ -218,10 +225,27 @@ pub const COMMANDS: &[CommandSpec] = &[
     // Alt-drag for moving windows (several Linux window managers).
     // Copy events stay with the frontend so focused text inputs and page clipboard routing keep ownership.
     c("edit.copy", "Copy", EDIT, None, Copying, "copy"),
+    // Comments travel between documents as XFDF (M14): ⌘C with comments selected copies them,
+    // ⌘V pastes the copies onto the current page; the strip's Copy/Paste in the menus too.
+    c("comment.copy", "Copy comments", EDIT, None, Document, "copy"),
+    c("comment.paste", "Paste comments", EDIT, None, Annotate, "clipboard-paste"),
     c("edit.column_select", "Column select", EDIT, None, Document, "text-select"),
     c("edit.snapshot", "Take a snapshot", EDIT, None, Copying, "camera"),
     c("view.full_screen", "Full screen mode", VIEW, Some(Shortcut::cmd("L")), Document, "maximize"),
     c("view.read_mode", "Read mode", VIEW, Some(Shortcut { command: true, shift: false, mac_ctrl: true, key: "H" }), Document, "book-open"),
+    // Split view (Acrobat's Window ▸ Split): the current document in two panes, or back to one;
+    // a tab's right-click menu also splits right or down with any tab.
+    c("view.split", "Split", VIEW, Some(Shortcut::cmd("\\")), Document, "columns-2"),
+    // A document can hide the toolbars, menu and panels (ISO 32000-2 Table 147); this brings them
+    // back for its tab, and with nothing hidden hides them.
+    c(
+        "view.toggle_interface",
+        "Show or hide toolbars and panels",
+        VIEW,
+        Some(Shortcut { command: false, shift: false, mac_ctrl: false, key: "F8" }),
+        Document,
+        "panel-left",
+    ),
     // Browsers' tab keys (#1542): Ctrl+Tab on every platform, ⌃Tab rather than ⌘Tab on macOS,
     // where the system takes ⌘Tab. They follow the tabs' order on screen and wrap around, and
     // also run from Combine files, which has no document open.
@@ -259,6 +283,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     c("comment.underline", "Underline text", None, None, Annotate, "underline"),
     c("comment.strikeout", "Strikethrough text", None, None, Annotate, "strikethrough"),
     c("comment.squiggly", "Squiggly underline text", None, None, Annotate, "spline"),
+    c("comment.freehand_highlight", "Freehand-Highlight", None, None, Annotate, "highlighter"),
     c("comment.ink", "Draw freehand", None, None, Annotate, "pencil"),
     c("comment.line", "Draw a line", None, None, Annotate, "minus"),
     c("comment.arrow", "Draw an arrow", None, None, Annotate, "move-right"),
@@ -352,7 +377,9 @@ pub const COMMANDS: &[CommandSpec] = &[
     c("tools.document_js", "Document JavaScripts…", None, None, Modification, "file-code"),
     c("ocr.recognize", "Recognize text…", None, None, Modification, "scan-text"),
     c("ocr.enhance_camera", "Enhance camera image", None, None, Modification, "camera"),
+    c("ocr.enhance", "Enhance scanned file…", None, None, Modification, "sparkles"),
     c("ocr.recognize_batch", "Recognize text in multiple files…", None, None, Nothing, "files"),
+    c("ocr.correct", "Correct recognized text…", None, None, Document, "text-select"),
     c("a11y.check", "Check for accessibility…", None, None, Document, "accessibility"),
     c("a11y.find_untagged", "Find untagged content", None, None, Document, "search"),
     c("a11y.autotag", "Automatically tag PDF", None, None, Document, "tag"),
@@ -378,6 +405,8 @@ pub const COMMANDS: &[CommandSpec] = &[
     c("page.organize", "Organize pages", PAGES, None, Document, "layout-grid"),
     c("bookmark.add", "New bookmark", PAGES, Some(Shortcut::cmd("B")), Assembly, "bookmark-plus"),
     c("bookmark.from_structure", "New bookmarks from structure", PAGES, None, Assembly, "list"),
+    // Bookmarks from the lines set in chosen text styles, for headings that aren't tagged (#1693).
+    c("bookmark.from_text_styles", "New bookmarks from text styles…", PAGES, None, Assembly, "list"),
     c("page.rotate", "Rotate pages clockwise", PAGES, None, Assembly, "rotate-cw"),
     c("page.rotate_ccw", "Rotate pages counterclockwise", PAGES, None, Assembly, "rotate-ccw"),
     c("page.delete", "Delete pages", PAGES, None, Assembly, "trash-2"),
@@ -389,9 +418,14 @@ pub const COMMANDS: &[CommandSpec] = &[
     c("page.boxes", "Set page boxes…", PAGES, None, Assembly, "square-dashed-mouse-pointer"),
     c("page.insert", "Insert pages from file…", PAGES, None, Assembly, "file-input"),
     c("page.replace", "Replace pages…", PAGES, None, Assembly, "replace"),
-    c("page.extract", "Extract pages…", PAGES, None, Assembly, "file-output"),
-    c("page.split", "Split document…", PAGES, None, Assembly, "scissors"),
+    c("page.extract", "Extract pages…", PAGES, None, PageExtraction, "file-output"),
+    c("page.split", "Split document…", PAGES, None, PageExtraction, "scissors"),
     c("page.number", "Number pages…", PAGES, None, Assembly, "hash"),
+    c("prepress.marks", "Add printer marks…", None, None, Modification, "ruler"),
+    c("prepress.marks.remove", "Remove printer marks", None, None, Marks(crate::MarkKind::PrinterMarks), "ruler"),
+    c("prepress.convert_colors", "Convert colours…", None, None, Modification, "palette"),
+    c("prepress.hairlines", "Fix hairlines…", None, None, Modification, "minus"),
+    c("page.properties", "Page properties…", PAGES, None, Modification, "info"),
     c("help.shortcuts", "Keyboard shortcuts", HELP, None, Nothing, "circle-help"),
     c("help.discord", "Join the ArtCraft Discord", HELP, None, Nothing, "messages-square"),
     c("help.app_page", "PdfCraft web page", HELP, None, Nothing, "globe"),
@@ -417,6 +451,7 @@ pub fn is_enabled(spec: &CommandSpec, session: &Session, active: Option<DocId>) 
         Nothing => true,
         Document | TwoPageView => doc.is_some(),
         Assembly => doc.is_some_and(|d| d.allows_assembly()),
+        PageExtraction => doc.is_some_and(|d| d.allows_page_extraction()),
         Modification => doc.is_some_and(|d| d.allows_modification()),
         Annotate => doc.is_some_and(|d| d.allows_annotation()),
         Copying => doc.is_some_and(|d| d.allows_copying()),

@@ -42,8 +42,10 @@ pub struct Script {
     pub source: String,
     pub formcalc: bool,
     pub event: XfaEvent,
-    /// The form as the caller holds it now.
-    pub root: XfaNode,
+    /// The form as the caller holds it now. Send the same `Arc` while the form is unchanged:
+    /// the next script then starts from the copy the last one was given, without flattening the
+    /// form again.
+    pub root: std::sync::Arc<XfaNode>,
     pub limits: Limits,
     pub timeout: std::time::Duration,
 }
@@ -64,7 +66,7 @@ fn run_script(s: Script, doc: &XfaDoc, started: &dyn Fn()) -> XfaOutcome {
     if s.formcalc {
         // FormCalc has no engine to start: its time (and its own deadline) begins at once.
         started();
-        return crate::formcalc::run_formcalc_at(&s.source, &s.event, doc, s.root, s.limits, Some(s.timeout));
+        return crate::formcalc::run_formcalc_at(&s.source, &s.event, doc, s.root, true, s.limits, Some(s.timeout));
     }
     if let Some(why) = crate::refuse(&s.source) {
         started();
@@ -74,7 +76,7 @@ fn run_script(s: Script, doc: &XfaDoc, started: &dyn Fn()) -> XfaOutcome {
         started();
         return XfaOutcome { error: Some(format!("the form's script objects are too large ({} KiB)", s.prelude.len() / 1024)), ..Default::default() };
     }
-    crate::xfa::run_here_with(&s.source, &s.prelude, &s.event, doc, s.root, s.limits, started)
+    crate::xfa::run_here_with(&s.source, &s.prelude, &s.event, doc, s.root, true, s.limits, started)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -187,7 +189,15 @@ mod native {
             loop {
                 let left = deadline.map_or(limit, |d| d.saturating_duration_since(Instant::now()));
                 match worker.from.recv_timeout(left) {
-                    Ok(Reply::Outcome(o)) => return *o,
+                    Ok(Reply::Outcome(o)) => {
+                        // A FormCalc script its own clock stopped reports as abandoned: the
+                        // session ends as it does when the wait runs out first.
+                        if o.abandoned {
+                            self.dead = o.error.clone();
+                            self.worker = None;
+                        }
+                        return *o;
+                    }
                     Ok(Reply::Started) => {
                         // A second call changes nothing: the script's time has already begun.
                         if !running {
@@ -244,6 +254,14 @@ mod native {
 
         pub fn run(&mut self, script: Script) -> XfaOutcome {
             run_script(script, &self.doc, &|| {})
+        }
+    }
+
+    impl Drop for XfaSession {
+        /// The scripts ran on this thread: the form they started from is let go of with the
+        /// event (on other targets it goes with the session's thread).
+        fn drop(&mut self) {
+            crate::xfa::forget_base();
         }
     }
 }

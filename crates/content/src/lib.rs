@@ -58,6 +58,23 @@ impl Op {
     pub fn last_name(&self) -> Option<&[u8]> {
         self.operands.last().and_then(Object::as_name)
     }
+
+    /// Operand `k` counted from the end (0 is the last), as the renderer reads an operator's
+    /// operands: `(x) /OC /MC0 BDC` marks with `/OC /MC0`, and `(x) /F1 10 Tf` selects `/F1`.
+    pub fn back(&self, k: usize) -> Option<&Object> {
+        let i = self.operands.len().checked_sub(k)?.checked_sub(1)?;
+        self.operands.get(i)
+    }
+
+    /// [`Op::back`] as a name.
+    pub fn name_back(&self, k: usize) -> Option<&[u8]> {
+        self.back(k).and_then(Object::as_name)
+    }
+
+    /// [`Op::back`] as a number.
+    pub fn num_back(&self, k: usize) -> Option<f64> {
+        self.back(k).and_then(Object::as_f64)
+    }
 }
 
 /// A parsed stream.
@@ -67,8 +84,9 @@ pub struct Parsed {
     /// Bytes that could not be read as operands or operators.
     pub skipped: usize,
     /// Inline images the renderer's tokenizer reads no image for (it stops, or finds no `EI` it
-    /// accepts). Their end here is a guess, so the operators after them may not be the ones the
-    /// page draws.
+    /// accepts), so their end here is a guess and the operators after them may not be the ones
+    /// the page draws; and images it reads whose parameters this parser can't, which are missing
+    /// from `ops` although the page draws them.
     pub ambiguous_images: usize,
     /// For [`Pieces::parse`]: per piece, whether a comment runs into it from the piece before
     /// and whether one runs out of it into the next. Only boundaries are recorded, so the size
@@ -139,8 +157,8 @@ impl<'a> Ops<'a> {
         self.skipped
     }
 
-    /// Inline images read so far whose end is this parser's guess (as in
-    /// [`Parsed::ambiguous_images`]).
+    /// Inline images read so far that are ambiguous (as in [`Parsed::ambiguous_images`]): either
+    /// their end is this parser's guess, or the renderer reads them and this parser cannot.
     pub fn ambiguous_images(&self) -> usize {
         self.ambiguous_images
     }
@@ -291,7 +309,8 @@ struct Inline {
     image: Option<(Dict, Vec<u8>)>,
     /// The position after its `EI` (or the end of the stream).
     end: usize,
-    /// The renderer's tokenizer reads no image here, so `end` is this parser's guess.
+    /// The renderer's tokenizer reads no image here, so `end` is this parser's guess; or it reads
+    /// one whose parameters this parser can't, so `image` is `None` for an image the page draws.
     ambiguous: bool,
 }
 
@@ -339,7 +358,9 @@ fn inline_image(data: &[u8], bi: usize, pos: usize) -> Inline {
         {
             samples = rest;
         }
-        return Inline { image: readable.then(|| (dict, samples.to_vec())), end, ambiguous: false };
+        // The renderer draws an image whose parameters this parser can't read: it is not
+        // represented here, so a redaction can't inspect or remove it and must not trust the page.
+        return Inline { image: readable.then(|| (dict, samples.to_vec())), end, ambiguous: !readable };
     }
     if !readable {
         // Without an `EI` after it, the image runs to the end of the stream.
@@ -730,11 +751,14 @@ impl Matrix {
     pub fn invert(&self) -> Option<Matrix> {
         let [a, b, c, d, e, f] = self.0;
         let det = a * d - b * c;
-        if det.abs() < 1e-12 || !det.is_finite() {
+        if det == 0.0 || !det.is_finite() || det.abs() <= 1e-12 * ((a * d).abs() + (b * c).abs()) {
             return None;
         }
         let (ia, ib, ic, id) = (d / det, -b / det, -c / det, a / det);
-        Some(Matrix([ia, ib, ic, id, -(e * ia + f * ic), -(e * ib + f * id)]))
+        let inverse = [ia, ib, ic, id, -(e * ia + f * ic), -(e * ib + f * id)];
+        // A determinant that underflows toward zero can still pass the relative check above,
+        // and dividing by it overflows: such a matrix has no usable inverse.
+        inverse.iter().all(|v| v.is_finite()).then_some(Matrix(inverse))
     }
 
     /// The bounding box of a rectangle `[x0 y0 x1 y1]` after this transform.

@@ -1,7 +1,7 @@
 use super::interp::{Carry, interpret};
-use super::lines::{content_streams, page_dict, reading_lines, rewritten_contents, splice, text_lines};
+use super::lines::{content_streams, joined, page_dict, reading_lines, rewritten_contents, show_side_effects, splice, text_lines};
 use super::rewrite::{LineEdit, coincident_ops, rewrite_block};
-use super::*;
+use super::{Document, EditError, HashMap, Object, Op, TextLine, group_blocks, regions};
 
 /// An editable text region: adjacent runs on visual rows, followed by aligned rows.
 /// A region may contain several source fonts, sizes, colours and weights.
@@ -25,14 +25,31 @@ pub struct TextBlock {
     pub rows: Vec<Vec<usize>>,
     /// Text for the inline editor, with a newline only between visual rows.
     pub editor_text: String,
+    /// What a width change reflows. A wrap rejoins with a space; a break that was typed, or a
+    /// short line that still had room for the next word, stays a newline.
+    pub reflow_text: String,
     /// Byte ranges in `editor_text` and their source line indexes.
     pub spans: Vec<(std::ops::Range<usize>, usize)>,
     /// Every line is invisible text (rendering mode 3): an OCR layer over a scanned image, whose
-    /// pixels show the words. A rewrite draws the new text visibly (see [`BlockStyle::cover`]).
+    /// pixels show the words. A rewrite draws the new text visibly, on top of the page when
+    /// the scan is drawn after it (see [`BlockStyle::cover`]).
     pub invisible: bool,
 }
 
 impl TextBlock {
+    /// The one size a rewrite and the editor set an OCR phrase in, in place of each word's own
+    /// (#3313): the block's size, which for invisible text is its words' median. `None` for
+    /// visible text, whose runs keep their sizes.
+    pub fn phrase_size(&self) -> Option<f64> {
+        (self.invisible && self.size.is_finite() && self.size > 0.0).then_some(self.size)
+    }
+
+    /// Whether `draft` says what the paragraph says, give or take space around it. Spacing inside
+    /// it has to match: a typed second space is a change.
+    pub fn same_words(&self, draft: &str) -> bool {
+        draft.trim() == self.editor_text.trim()
+    }
+
     /// Preserve styles outside the changed ranges; inserted characters inherit the surrounding
     /// source run. The texts are aligned word by word, so words left untouched between two edits
     /// keep their own runs (#2198); past [`MAX_CHANGED_WORDS`] the draft counts as one change.
@@ -44,14 +61,7 @@ impl TextBlock {
         let old: Vec<_> = self.editor_text.chars().collect();
         let new: Vec<_> = draft.char_indices().collect();
         let chars: Vec<_> = new.iter().map(|(_, c)| *c).collect();
-        let mut original = Vec::with_capacity(old.len());
-        let mut span = 0;
-        for (byte, _) in self.editor_text.char_indices() {
-            while self.spans.get(span).is_some_and(|(r, _)| byte >= r.end) {
-                span += 1;
-            }
-            original.push(self.spans.get(span).or_else(|| self.spans.last()).map_or(0, |(_, i)| *i));
-        }
+        let original = self.char_sources();
         let mut sources = Vec::with_capacity(new.len());
         let slices = |text: &[char]| words(text).into_iter().map(|w| text.get(w).unwrap_or_default().to_vec()).collect::<Vec<_>>();
         let (old_words, new_words) = (slices(&old), slices(&chars));
@@ -152,6 +162,23 @@ fn edit_script<T: PartialEq>(a: &[T], b: &[T], max: usize) -> Option<Vec<Step>> 
     None
 }
 
+/// For each of `old`'s words, the index in `new` of the word it stays as in the shortest edit from
+/// one to the other (`None` when it goes), or `None` overall past [`MAX_CHANGED_WORDS`] changes.
+pub(crate) fn kept_words<T: PartialEq>(old: &[T], new: &[T]) -> Option<Vec<Option<usize>>> {
+    let mut kept = vec![None; old.len()];
+    let (mut o, mut n) = (0usize, 0usize);
+    for step in edit_script(old, new, MAX_CHANGED_WORDS)? {
+        if step == Step::Keep
+            && let Some(slot) = kept.get_mut(o)
+        {
+            *slot = Some(n);
+        }
+        o = o.saturating_add(usize::from(step != Step::Insert));
+        n = n.saturating_add(usize::from(step != Step::Delete));
+    }
+    Some(kept)
+}
+
 /// Walk Myers' saved frontiers back from the end to the edit script.
 fn backtrack(trace: &[Vec<isize>], n: isize, m: isize, max: isize) -> Vec<Step> {
     let at = |v: &[isize], k: isize| usize::try_from(k + max + 1).ok().and_then(|i| v.get(i).copied()).unwrap_or(0);
@@ -192,6 +219,79 @@ fn replaced(original: &[usize], at: usize, old: &[char], new: &[char], out: &mut
             Some(inherited)
         };
         out.push(source.unwrap_or(inherited));
+    }
+}
+
+/// Byte ranges of a paragraph's text and the source run (an index into [`text_lines`]) each one
+/// keeps the style of, in order ([`TextBlock::spans`], [`BlockStyle::sources`]).
+pub type RunSources = Vec<(std::ops::Range<usize>, usize)>;
+
+impl TextBlock {
+    /// The source run (an index into [`text_lines`]) of each character of `editor_text`. A
+    /// character no span covers (the line break between two rows, a space put between two runs)
+    /// belongs to the run that follows it.
+    fn char_sources(&self) -> Vec<usize> {
+        let mut original = Vec::with_capacity(self.editor_text.len());
+        let mut span = 0;
+        for (byte, _) in self.editor_text.char_indices() {
+            while self.spans.get(span).is_some_and(|(r, _)| byte >= r.end) {
+                span += 1;
+            }
+            original.push(self.spans.get(span).or_else(|| self.spans.last()).map_or(0, |(_, i)| *i));
+        }
+        original
+    }
+
+    /// `editor_text` with each of `ranges` (byte ranges in it, in order and not overlapping) put
+    /// in `with`, and the source run each byte range of the result keeps the style of
+    /// ([`BlockStyle::sources`]): every character outside the ranges its own, a replacement the
+    /// run of the first character it replaces. Spaces a replacement puts side by side become
+    /// one (deleting a word leaves one space between its neighbours), while a run of spaces the
+    /// paragraph already had stays, since the rewrite keeps every space typed. `None` when a
+    /// range is out of order, overlaps another or does not fall on character boundaries.
+    pub fn replaced(&self, ranges: &[std::ops::Range<usize>], with: &str) -> Option<(String, RunSources)> {
+        let mut end = 0;
+        for r in ranges {
+            if r.start < end || r.start >= r.end || self.editor_text.get(r.clone()).is_none() {
+                return None;
+            }
+            end = r.end;
+        }
+        // One run per stretch of the result: a piece from the same run right after it joins it.
+        fn extend(spans: &mut Vec<(std::ops::Range<usize>, usize)>, start: usize, len: usize, source: usize) {
+            match spans.last_mut() {
+                _ if len == 0 => {}
+                Some((range, last)) if *last == source && range.end == start => range.end = start.saturating_add(len),
+                _ => spans.push((start..start.saturating_add(len), source)),
+            }
+        }
+        let mut draft = String::with_capacity(self.editor_text.len());
+        let mut spans = Vec::new();
+        let mut next = ranges.iter().peekable();
+        // Right after a replacement: a space here would join one the draft ends with.
+        let mut joined = false;
+        let spacing = |c: char| c != '\n' && c != '\r' && paragraph_separator(c);
+        for ((byte, ch), source) in self.editor_text.char_indices().zip(self.char_sources()) {
+            if let Some(r) = next.peek()
+                && byte >= r.start
+            {
+                if byte == r.start {
+                    extend(&mut spans, draft.len(), with.len(), source);
+                    draft.push_str(with);
+                }
+                if byte.saturating_add(ch.len_utf8()) >= r.end {
+                    next.next();
+                    joined = true;
+                }
+                continue;
+            }
+            if std::mem::take(&mut joined) && spacing(ch) && draft.chars().next_back().is_some_and(spacing) {
+                continue;
+            }
+            extend(&mut spans, draft.len(), ch.len_utf8(), source);
+            draft.push(ch);
+        }
+        Some((draft, spans))
     }
 }
 
@@ -266,7 +366,7 @@ pub fn clear_block(doc: &mut Document, page: usize, block: usize) -> Result<(), 
     let p = page_dict(doc, page)?;
     let res = p.dict.get(b"Resources").and_then(|r| doc.resolve(r).as_dict().cloned()).unwrap_or_default();
     let streams = content_streams(doc, &p.dict)?;
-    let pieces = Pieces::join(&streams.iter().map(|(_, d)| d.as_slice()).collect::<Vec<_>>());
+    let pieces = joined(&streams);
     let ops = pieces.parse().ops;
     let shown = interpret(doc, &ops, &res, &mut HashMap::new(), &mut Carry::new(), None, None)?;
     let mut patches = HashMap::new();
@@ -281,19 +381,13 @@ pub fn clear_block(doc: &mut Document, page: usize, block: usize) -> Result<(), 
         }
         let mut replacement = Vec::new();
         if let Some(op) = ops.get(s.op) {
-            if op.is("\"") {
-                replacement.push(Op::new("Tw", vec![op.operands.first().cloned().unwrap_or(Object::Int(0))]));
-                replacement.push(Op::new("Tc", vec![op.operands.get(1).cloned().unwrap_or(Object::Int(0))]));
-            }
-            if op.is("'") || op.is("\"") {
-                replacement.push(Op::new("T*", vec![]));
-            }
+            replacement.extend(show_side_effects(op));
         }
         replacement.push(Op::new("TJ", vec![Object::Array(vec![pdfcraft_content::num(adjustment)])]));
         patches.insert(s.op, replacement);
     }
     let data = splice(&pieces, &ops, |i| patches.remove(&i).map_or((Vec::new(), true), |v| (v, false)));
-    let contents = rewritten_contents(doc, &streams, data);
+    let contents = rewritten_contents(doc, &streams, data)?;
     doc.update_dict(p.obj, |d| d.set(b"Contents".to_vec(), contents))?;
     Ok(())
 }
@@ -333,15 +427,31 @@ pub(crate) fn paragraph_separator(c: char) -> bool {
     c.is_whitespace() && c != '\u{3000}'
 }
 
+/// Characters that end a row rather than draw a glyph: the Unicode mandatory breaks (UAX #14
+/// class BK: vertical tab, form feed, U+2028 LINE SEPARATOR, U+2029 PARAGRAPH SEPARATOR), the
+/// next line (U+0085), the information separators (bidi class B) and CR/LF. Text pasted from a
+/// browser or Word carries these, so a rewrite moves to the next row instead of asking a font
+/// for an outline no face has (#6272).
+pub(crate) fn row_break(c: char) -> bool {
+    matches!(c, '\n' | '\r' | '\u{000B}' | '\u{000C}' | '\u{0085}' | '\u{001C}'..='\u{001E}' | '\u{2028}' | '\u{2029}')
+}
+
 /// Greedy word wrapping to `width` with `advance` giving a string's width. Each `\n` starts a
 /// new line. A row may also end inside a word of Chinese or Japanese text ([`crate::linebreak`]);
 /// those pieces join without a space. Every white-space character is written as one space, so
 /// a run of spaces typed between, before or after words stays (#4199); only the spaces where a
-/// row wraps are dropped.
-pub(super) fn wrap(text: &str, width: f64, advance: impl Fn(&str) -> f64) -> Vec<String> {
+/// row wraps are dropped (recorded as the third value, so a later rejoin can restore the exact
+/// count instead of guessing one, #2529). The bool is true when the line continues the previous
+/// one because the next word did not fit, rather than because of a newline; the number is how
+/// many separator characters stood where that wrap fell (0 for a Chinese/Japanese word split,
+/// which has no space of its own; meaningless when the bool is false).
+pub(super) fn wrap(text: &str, width: f64, advance: impl Fn(&str) -> f64) -> Vec<(String, bool, usize)> {
     let mut out = Vec::new();
     for row in text.split('\n') {
         let mut line = String::new();
+        let mut soft = false;
+        // The gap consumed right before `line` started: 0 until a wrap sets it.
+        let mut wrap_gap = 0usize;
         let start = out.len();
         // The separators read since the last word: each one boundary between `split` pieces.
         let mut gap = 0usize;
@@ -352,12 +462,17 @@ pub(super) fn wrap(text: &str, width: f64, advance: impl Fn(&str) -> f64) -> Vec
             if word.is_empty() {
                 continue;
             }
-            let spaces = " ".repeat(std::mem::take(&mut gap));
+            let gap_here = std::mem::take(&mut gap);
+            let spaces = " ".repeat(gap_here);
             for (i, piece) in crate::linebreak::pieces(word).into_iter().enumerate() {
                 let candidate = if i == 0 { format!("{line}{spaces}{piece}") } else { format!("{line}{piece}") };
                 // A row holding only the spaces that indent it doesn't wrap before its first word.
                 if line.chars().any(|c| c != ' ') && advance(&candidate) > width {
-                    out.push(std::mem::take(&mut line));
+                    out.push((std::mem::take(&mut line), soft, wrap_gap));
+                    soft = true;
+                    // A mid-word piece (i > 0) had no separator of its own; the first piece of a
+                    // word had exactly the separators just taken.
+                    wrap_gap = if i == 0 { gap_here } else { 0 };
                     line = piece.to_string();
                 } else {
                     line = candidate;
@@ -366,7 +481,7 @@ pub(super) fn wrap(text: &str, width: f64, advance: impl Fn(&str) -> f64) -> Vec
         }
         line.push_str(&" ".repeat(gap));
         if !line.is_empty() || out.len() == start {
-            out.push(line);
+            out.push((line, soft, wrap_gap));
         }
     }
     out
@@ -384,7 +499,7 @@ pub fn replace_block(doc: &mut Document, page: usize, block: usize, text: &str) 
 pub struct BlockStyle {
     /// Disjoint UTF-8 ranges in the replacement, each preserving unspecified source style.
     pub ranges: Vec<RangeStyle>,
-    /// Explicit page font resource (from register_text_font or the page font inventory).
+    /// Explicit page font resource or bundled document-font choice from the page font inventory.
     pub resource: Option<String>,
     /// A standard font family, bold, italic.
     pub family: Option<(crate::added::Family, bool, bool)>,
@@ -395,6 +510,9 @@ pub struct BlockStyle {
     /// Fill colour (RGB 0–1).
     pub color: Option<[f64; 3]>,
     pub align: Option<crate::added::Align>,
+    /// Rows (the text's lines between `\n`s) aligned other than the paragraph, by index; `None`
+    /// and rows past the end follow `align` ([`crate::paragraph_align`]).
+    pub aligns: Vec<Option<crate::added::Align>>,
     /// Draw a line under each line of text.
     pub underline: Option<bool>,
     /// Line spacing as a multiple of the font size (1.2 is ordinary).
@@ -409,6 +527,19 @@ pub struct BlockStyle {
     /// For an invisible paragraph ([`TextBlock::invisible`]): fill its old area with this colour
     /// (RGB 0–1) before the new text, hiding the scanned word beneath it.
     pub cover: Option<[f64; 3]>,
+    /// The source run each byte range of the new text keeps the style of (indexes into
+    /// [`text_lines`], as in [`TextBlock::spans`]), covering the text in order. Empty:
+    /// [`TextBlock::edited_spans`] works it out by aligning the old and new text, where a changed
+    /// word takes the run before it. Find and replace sets it ([`TextBlock::replaced`]): there a
+    /// replacement takes the run of the text it replaces, however many matches the paragraph has.
+    pub sources: RunSources,
+    /// For an invisible paragraph whose formatting nobody asked to change: cover and redraw only
+    /// the words the draft changes, and leave the rest as the scan shows them (#3313). The session
+    /// sets this; a caller that sets it should also give `cover`.
+    pub changed_words_only: bool,
+    /// How far across [`BlockStyle::cover`] may reach, whatever its padding: the edges of the words
+    /// on either side that stay (user space).
+    pub cover_between: Option<[f64; 2]>,
 }
 
 #[derive(Clone, Debug, PartialEq)]

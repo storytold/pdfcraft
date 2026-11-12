@@ -1,15 +1,44 @@
-use super::geometry::{HANDLES, grabs_points, handle_pos, is_markup, reshapable, reshaped, resizable};
-use super::state::{Gesture, PageCx, SETTLE_SECS};
-use super::*;
+use super::geometry::{HANDLES, handle_pos, held, is_callout, is_markup, reaches_points, reshapable, reshape_for, resizable};
+use super::popups::paint_connectors;
+use super::state::{CommentView, Gesture, PageCx, SETTLE_SECS};
+use super::{
+    Annotation, Color32, CommentTool, CornerRadius, DocInfo, DocView, Edit, LineEnding, NewAnnotation, Pos2, QuickTool, Rect, SELECT_BLUE, Shape,
+    Stroke, color32, icons, pos2, vec2,
+};
+use crate::page_router::{CommentPart, Hit, Owner};
 
-/// Paint comment selection, hover and gesture previews on a page.
-pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, cx: &PageCx<'_>, view: &DocView) {
+/// The comment outlined under the pointer: the one a press there would take (`hover`, the top hit),
+/// with the Select tool or, over its own marks, Fill & Sign. Not the selected comment, nor while a
+/// comment is moved, resized or drawn, nor one under a form field or added text that would take
+/// the press.
+pub(super) fn hover_outline<'c>(cx: &'c PageCx<'_>, cv: &CommentView, hover: Option<&Hit>) -> Option<&'c Annotation> {
+    let Some(Owner::Comment { index, part: CommentPart::Body }) = hover.map(|h| h.owner) else { return None };
+    let tool_outlines = matches!(cx.tool, QuickTool::Select | QuickTool::Fill(_));
+    (cv.gesture.is_none() && tool_outlines && cv.selected != Some((cx.page, index))).then(|| cx.get(index)).flatten()
+}
+
+/// Paint comment selection, hover and gesture previews on a page. `hover` is the top hit under the
+/// pointer.
+pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, cx: &PageCx<'_>, view: &DocView, hover: Option<&Hit>) {
     let cv = &view.comments;
+    // All commented text markup, including imported markup, gets a viewer-only
+    // marker. Plain markup has none; comment_marker_rect owns that distinction.
+    for a in cx.comments() {
+        if let Some(marker) = cx.comment_marker_rect(a)
+            && let Some(target) = cx.screen_rects(a).last()
+        {
+            painter.line_segment(
+                [marker.left_bottom(), pos2(target.right(), target.top())],
+                Stroke::new(1.0, Color32::from_rgba_unmultiplied(0xD4, 0x8A, 0x00, 150)),
+            );
+            icons::paint(ui, marker, "message-square", 12.0, Color32::from_rgb(0xD4, 0x8A, 0x00));
+        }
+    }
     let pointer = cx.ptr.pos;
     // A redaction mark shows its fill while the pointer is over it, as Acrobat's does, so the
     // marked area reads before anything is applied.
     if cv.gesture.is_none()
-        && let Some(a) = pointer.and_then(|p| cx.hit(p))
+        && let Some(a) = pointer.and_then(|p| cx.comment_at(p))
         && a.subtype == "Redact"
     {
         let ([r, g, b], opacity) = cx.redact_mark;
@@ -18,23 +47,33 @@ pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, cx: &PageCx<'_>
             painter.rect_filled(rect, CornerRadius::ZERO, fill);
         }
     }
-    if cv.gesture.is_none()
-        && let Some(a) = pointer.and_then(|p| cx.hit(p))
-        && (cx.tool == QuickTool::Select || matches!(cx.tool, QuickTool::Fill(_)) && a.fill_sign)
-        && cv.selected != Some((cx.page, a.index))
-    {
+    if let Some(a) = hover_outline(cx, cv, hover) {
         for r in cx.screen_rects(a) {
             painter.rect_stroke(r.expand(2.0), CornerRadius::same(2), Stroke::new(1.0, SELECT_BLUE.gamma_multiply(0.7)), egui::StrokeKind::Outside);
+        }
+    }
+    // The comments selected besides the one with the handles: outlined, not resizable.
+    for a in cv.also.iter().filter(|(p, _)| *p == cx.page).filter_map(|(_, i)| cx.get(*i)) {
+        for r in cx.screen_rects(a) {
+            painter.rect_stroke(r.expand(2.0), CornerRadius::ZERO, Stroke::new(1.0, SELECT_BLUE), egui::StrokeKind::Middle);
         }
     }
     if let Some((page, index)) = cv.selected
         && page == cx.page
         && let Some(a) = cx.get(index)
     {
+        // The rest of the group is selected with its primary.
+        for (m, _) in cx.group_members().into_iter().filter(|(_, p)| p.index == index) {
+            for r in cx.screen_rects(m) {
+                painter.rect_stroke(r.expand(2.0), CornerRadius::ZERO, Stroke::new(1.0, SELECT_BLUE), egui::StrokeKind::Middle);
+            }
+        }
         if is_markup(&a.subtype) && !a.quads.is_empty() {
             for r in cx.screen_rects(a) {
                 painter.rect_stroke(r.expand(2.0), CornerRadius::ZERO, Stroke::new(1.0, SELECT_BLUE), egui::StrokeKind::Middle);
             }
+            // Selected text markup is linked to its open pop-up too.
+            paint_connectors(painter, cx, view, pointer);
             return paint_gesture(painter, cx, view);
         }
         if view.signature_drag.contains(page, index) && matches!(cv.gesture, Some(Gesture::Move { page: p, index: i, .. }) if (p, i) == (page, index))
@@ -42,7 +81,8 @@ pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, cx: &PageCx<'_>
             return paint_gesture(painter, cx, view);
         }
         let shift = ui.input(|i| i.modifiers.shift);
-        if cx.allowed && grabs_points(cx.tool) && reshapable(a) {
+        let points = cx.allowed && reaches_points(cx.tool) && reshapable(a);
+        if points && !is_callout(a) {
             return paint_points(painter, cx, view, a, pointer, shift);
         }
         let r = cx.adjusted_rect(a, cv.gesture.as_ref(), pointer, shift, view.pending_edit.as_ref()).expand(2.0);
@@ -53,15 +93,30 @@ pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, cx: &PageCx<'_>
                 painter.circle(c, 4.5, Color32::WHITE, Stroke::new(1.0, SELECT_BLUE));
             }
         }
+        // A callout's arrow point and knee, over its text box's frame.
+        if points {
+            return paint_points(painter, cx, view, a, pointer, shift);
+        }
     }
+    paint_connectors(painter, cx, view, pointer);
     paint_gesture(painter, cx, view);
+}
+
+/// Whether dragging `a` from `from` moves a callout's text box alone: a press inside the box. Its
+/// arrow point stays and its knee comes along, as seen in Acrobat Pro DC (a 2021 Continuous
+/// release) and Acrobat Pro 2026.002.22031 (#1152), and "The text box moves around a stationary
+/// anchor point" (Acrobat DC Help, 11/28/2019, p. 357). A press on the leader line moves the whole
+/// callout (seen in the 2021 release).
+pub(super) fn moves_box_only(cx: &PageCx<'_>, a: &Annotation, from: Pos2) -> bool {
+    is_callout(a) && resizable(a) && cx.frame_rect(a).contains(from)
 }
 
 /// A selected line, connected lines, polygon or cloud: a handle on each end or corner and, while
 /// one is dragged (or its edit is on its way), the new shape over the old.
-/// The points a selected line, polygon or cloud is drawn with while it changes: an end or corner
-/// being dragged, the whole comment being moved by its body, or the edit just released (until the
-/// page is drawn again). `None` while it isn't changing.
+/// The points a selected line, polygon, cloud or callout is drawn with while it changes: an end,
+/// corner, arrow point or knee being dragged (moved by `reshape`: [`reshaped`], or a callout's
+/// [`callout_reshaped`]), the whole comment being moved by its body, or the edit just released
+/// (until the page is drawn again). `None` while it isn't changing.
 pub(super) fn changing_points(
     gesture: Option<&Gesture>,
     pending: Option<&Edit>,
@@ -69,12 +124,12 @@ pub(super) fn changing_points(
     points: &[[f64; 2]],
     to_user: impl Fn(Pos2) -> [f64; 2],
     pointer: Option<Pos2>,
-    shift: bool,
+    reshape: impl Fn(&[[f64; 2]], usize, [f64; 2]) -> Vec<[f64; 2]>,
 ) -> Option<Vec<[f64; 2]>> {
     let shifted = |dx: f64, dy: f64| points.iter().map(|q| [q[0] + dx, q[1] + dy]).collect();
     match (gesture, pending) {
         (Some(Gesture::Reshape { page: p, index: i, point, points: from }), _) if (*p, *i) == (page, index) => {
-            pointer.map(|at| reshaped(from, *point, to_user(at), shift))
+            pointer.map(|at| reshape(from, *point, to_user(at)))
         }
         (Some(Gesture::Move { page: p, index: i, from }), _) if (*p, *i) == (page, index) => pointer.map(|at| {
             let (a, b) = (to_user(*from), to_user(at));
@@ -82,6 +137,15 @@ pub(super) fn changing_points(
         }),
         (_, Some(Edit::ReshapeAnnotation { page: p, index: i, points: to })) if (*p, *i) == (page, index) => Some(to.clone()),
         (_, Some(Edit::MoveAnnotation { page: p, index: i, dx, dy })) if (*p, *i) == (page, index) => Some(shifted(*dx, *dy)),
+        // Moved with the rest of the selection: its own move in the batch.
+        (_, Some(Edit::Batch { edits, .. })) => edits.iter().find_map(|e| match e {
+            Edit::MoveAnnotation { page: p, index: i, dx, dy } if (*p, *i) == (page, index) => Some(shifted(*dx, *dy)),
+            _ => None,
+        }),
+        // A callout's text box resized (or moved alone): its points stay, and its line is drawn to
+        // the box where it is going (see `paint_points`).
+        (Some(Gesture::Resize { page: p, index: i, .. }), _) if (*p, *i) == (page, index) => pointer.map(|_| points.to_vec()),
+        (_, Some(Edit::ResizeAnnotation { page: p, index: i, .. })) if (*p, *i) == (page, index) => Some(points.to_vec()),
         _ => None,
     }
 }
@@ -89,17 +153,43 @@ pub(super) fn changing_points(
 fn paint_points(painter: &egui::Painter, cx: &PageCx<'_>, view: &DocView, a: &Annotation, pointer: Option<Pos2>, shift: bool) {
     let cv = &view.comments;
     let points: Vec<[f64; 2]> = a.points.iter().map(|q| [f64::from(q[0]), f64::from(q[1])]).collect();
-    let changing = changing_points(cv.gesture.as_ref(), view.pending_edit.as_ref(), (cx.page, a.index), &points, |p| cx.to_user(p), pointer, shift);
+    let reshape = |from: &[[f64; 2]], i: usize, to: [f64; 2]| reshape_for(a, from, i, to, shift);
+    let changing = changing_points(cv.gesture.as_ref(), view.pending_edit.as_ref(), (cx.page, a.index), &points, |p| cx.to_user(p), pointer, reshape);
     let changed = changing.is_some();
-    let points = changing.unwrap_or(points);
+    let mut points = changing.unwrap_or(points);
+    // A callout's box moved alone leaves its arrow point where it is.
+    if let (Some(Gesture::Move { page, index, from }), Some(first)) = (cv.gesture.as_ref(), a.points.first())
+        && (*page, *index) == (cx.page, a.index)
+        && moves_box_only(cx, a, *from)
+        && let Some(p) = points.first_mut()
+    {
+        *p = [f64::from(first[0]), f64::from(first[1])];
+    }
+    // A callout's box moved alone and released: its knee came along, as while it was dragged.
+    if let (Some(Edit::ResizeAnnotation { page, index, rect }), Some(tb)) = (view.pending_edit.as_ref(), a.text_box.filter(|_| is_callout(a)))
+        && (*page, *index) == (cx.page, a.index)
+    {
+        let tb = tb.map(f64::from);
+        let same = |a: f64, b: f64| (a - b).abs() < 0.01;
+        if same(rect[2] - rect[0], tb[2] - tb[0]) && same(rect[3] - rect[1], tb[3] - tb[1]) {
+            let (dx, dy) = (rect[0] - tb[0], rect[1] - tb[1]);
+            for q in points.iter_mut().skip(1) {
+                *q = [q[0] + dx, q[1] + dy];
+            }
+        }
+    }
     let screen: Vec<Pos2> = points.iter().map(|q| cx.to_screen(*q)).collect();
     if changed {
         let stroke = Stroke::new(1.5, SELECT_BLUE);
-        painter.add(if a.subtype == "Polygon" {
-            egui::Shape::closed_line(screen.clone(), stroke)
-        } else {
-            egui::Shape::line(screen.clone(), stroke)
-        });
+        // A callout's line ends where it meets the (possibly moving) text box.
+        let mut line = screen.clone();
+        if is_callout(a)
+            && let Some(toward) = points.last()
+        {
+            let tb = cx.rect_to_user(cx.adjusted_rect(a, cv.gesture.as_ref(), pointer, shift, view.pending_edit.as_ref()));
+            line.push(cx.to_screen(pdfcraft_engine::callout_attach(tb, *toward)));
+        }
+        painter.add(if a.subtype == "Polygon" { egui::Shape::closed_line(line, stroke) } else { egui::Shape::line(line, stroke) });
     }
     for c in screen {
         painter.circle(c, 4.5, Color32::WHITE, Stroke::new(1.0, SELECT_BLUE));
@@ -117,6 +207,82 @@ fn paint_gesture(painter: &egui::Painter, cx: &PageCx<'_>, view: &DocView) {
     {
         paint_draw(painter, cx, tool, points);
     }
+    // The bundle of copied comments, hanging on the pointer over this page: its box, and each
+    // comment's outline in its colour, so the drop can be aimed to the line.
+    if let Some(Gesture::Place { bounds, count, outlines, .. }) = &view.comments.gesture
+        && let Some(p) = cx.ptr.pos
+        && cx.xf.rect.contains(p)
+    {
+        let [x, y] = cx.to_user(p);
+        let (dx, dy) = (x - (bounds[0] + bounds[2]) / 2.0, y - (bounds[1] + bounds[3]) / 2.0);
+        let r = Rect::from_two_pos(cx.to_screen([bounds[0] + dx, bounds[1] + dy]), cx.to_screen([bounds[2] + dx, bounds[3] + dy]));
+        painter.rect_stroke(r.expand(2.0), CornerRadius::same(2), Stroke::new(1.0, SELECT_BLUE.gamma_multiply(0.6)), egui::StrokeKind::Middle);
+        let at = |q: [f64; 2]| cx.to_screen([q[0] + dx, q[1] + dy]);
+        for outline in outlines {
+            paint_outline(painter, outline, &at);
+        }
+        let label = crate::i18n::fmt(tl!("Comments: {n}"), &[("n", &count.to_string())]);
+        painter.text(r.left_top() + vec2(0.0, -4.0), egui::Align2::LEFT_BOTTOM, label, crate::theme::regular(11.0), SELECT_BLUE);
+    }
+}
+
+/// One copied comment's outline on screen (`at` maps a user-space point, moved to where the
+/// bundle hangs), in the comment's colour.
+fn paint_outline(painter: &egui::Painter, outline: &pdfcraft_engine::CommentOutline, at: &dyn Fn([f64; 2]) -> Pos2) {
+    use pdfcraft_engine::CommentOutline as O;
+    let color = |c: &Option<[f64; 3]>| {
+        c.map(|[r, g, b]| Color32::from_rgb((r.clamp(0.0, 1.0) * 255.0) as u8, (g.clamp(0.0, 1.0) * 255.0) as u8, (b.clamp(0.0, 1.0) * 255.0) as u8))
+            .unwrap_or(SELECT_BLUE)
+    };
+    match outline {
+        O::Rect { rect, round, color: c } => {
+            let stroke = Stroke::new(1.5, color(c));
+            let r = Rect::from_two_pos(at([rect[0], rect[1]]), at([rect[2], rect[3]]));
+            if *round {
+                let (cx, cy, rx, ry) = (r.center().x, r.center().y, r.width() / 2.0, r.height() / 2.0);
+                let points: Vec<Pos2> =
+                    (0..48).map(|i| i as f32 / 48.0 * std::f32::consts::TAU).map(|t| pos2(cx + rx * t.cos(), cy + ry * t.sin())).collect();
+                painter.add(egui::Shape::closed_line(points, stroke));
+            } else {
+                painter.rect_stroke(r, CornerRadius::ZERO, stroke, egui::StrokeKind::Middle);
+            }
+        }
+        O::Line { points, color: c } => {
+            let stroke = Stroke::new(1.5, color(c));
+            painter.add(egui::Shape::line(points.iter().map(|p| at(*p)).collect(), stroke));
+        }
+        O::Poly { points, closed, color: c } => {
+            let stroke = Stroke::new(1.5, color(c));
+            let points: Vec<Pos2> = points.iter().map(|p| at(*p)).collect();
+            painter.add(if *closed { egui::Shape::closed_line(points, stroke) } else { egui::Shape::line(points, stroke) });
+        }
+        O::Ink { strokes, color: c } => {
+            let stroke = Stroke::new(1.5, color(c));
+            for s in strokes {
+                painter.add(egui::Shape::line(s.iter().map(|p| at(*p)).collect(), stroke));
+            }
+        }
+        O::Quads { quads, color: c } => {
+            let fill = color(c).gamma_multiply(0.35);
+            for q in quads {
+                // Upper left, upper right, lower right, lower left: a closed shape in that order.
+                let points = vec![at([q[0], q[1]]), at([q[2], q[3]]), at([q[6], q[7]]), at([q[4], q[5]])];
+                painter.add(egui::Shape::convex_polygon(points, fill, Stroke::NONE));
+            }
+        }
+        O::Text { rect, text, size, color: c } => {
+            // At the page's zoom, wrapped in the box; too small to read at this zoom, left out.
+            let r = Rect::from_two_pos(at([rect[0], rect[1]]), at([rect[2], rect[3]]));
+            let zoom = at([1.0, 0.0]).distance(at([0.0, 0.0]));
+            let px = *size as f32 * zoom;
+            if !(px.is_finite() && px >= 3.0) {
+                return;
+            }
+            let pad = 2.0 * zoom;
+            let galley = painter.layout(text.clone(), egui::FontId::proportional(px.min(400.0)), color(c), (r.width() - 2.0 * pad).max(1.0));
+            painter.with_clip_rect(r.intersect(painter.clip_rect())).galley(r.min + vec2(pad, pad), galley, color(c));
+        }
+    }
 }
 
 /// A drawing tool's shape from its points (a live drag, or a released one still settling).
@@ -124,10 +290,10 @@ fn paint_draw(painter: &egui::Painter, cx: &PageCx<'_>, tool: &CommentTool, poin
     {
         let style = cx.prefs.style(*tool);
         let zoom = cx.xf.zoom();
-        let stroke = Stroke::new((style.width as f32 * zoom).max(1.0), color32(style.color));
+        let stroke = Stroke::new((style.width as f32 * zoom).max(1.0), color32(style.color).gamma_multiply(style.opacity as f32));
         let pts: Vec<Pos2> = points.iter().map(|p| cx.to_screen(*p)).collect();
         match tool {
-            CommentTool::Ink => {
+            CommentTool::Ink | CommentTool::FreehandHighlight => {
                 painter.add(egui::Shape::line(pts, stroke));
             }
             CommentTool::Eraser => {
@@ -154,10 +320,12 @@ fn paint_draw(painter: &egui::Painter, cx: &PageCx<'_>, tool: &CommentTool, poin
                 painter.add(egui::Shape::ellipse_stroke(r.center(), r.size() / 2.0, stroke));
             }
             CommentTool::Polygon | CommentTool::PolyLine | CommentTool::Cloud => {
-                // The vertices so far, and a rubber band to the pointer.
+                // The vertices so far, and a rubber band to where a click would put the next one: the
+                // first, where the click closes the shape, Shift or not.
                 let mut line = pts.clone();
                 if let Some(p) = cx.ptr.pos {
-                    line.push(p);
+                    let shift = painter.ctx().input(|i| i.modifiers.shift);
+                    line.push(if closes_at(cx, *tool, points, p) { pts[0] } else { cx.to_screen(held(points.last(), cx.to_user(p), shift)) });
                 }
                 painter.add(egui::Shape::line(line, stroke));
                 if let Some(first) = pts.first().filter(|_| *tool != CommentTool::PolyLine && pts.len() >= 3) {
@@ -176,6 +344,12 @@ fn paint_draw(painter: &egui::Painter, cx: &PageCx<'_>, tool: &CommentTool, poin
     }
 }
 
+/// Whether a click at `p` (on screen) closes the polygon or cloud drawn so far (`points`, user
+/// space): on its first point again, once it has three.
+pub(super) fn closes_at(cx: &PageCx<'_>, tool: CommentTool, points: &[[f64; 2]], p: Pos2) -> bool {
+    points.len() >= 3 && tool != CommentTool::PolyLine && cx.to_screen(points[0]).distance(p) <= 6.0
+}
+
 /// The shape a finished drawing gesture makes (`None` if it is too small to mean anything).
 pub(super) fn drawn_shape(tool: CommentTool, points: &[[f64; 2]]) -> Option<Shape> {
     let (first, last) = (*points.first()?, *points.last()?);
@@ -183,6 +357,7 @@ pub(super) fn drawn_shape(tool: CommentTool, points: &[[f64; 2]]) -> Option<Shap
     let rect = [first[0].min(last[0]), first[1].min(last[1]), first[0].max(last[0]), first[1].max(last[1])];
     let big = rect[2] - rect[0] >= 2.0 && rect[3] - rect[1] >= 2.0;
     match tool {
+        CommentTool::FreehandHighlight if !points.is_empty() => Some(Shape::FreehandHighlight { strokes: vec![points.to_vec()] }),
         CommentTool::Ink if !points.is_empty() => Some(Shape::Ink { strokes: vec![points.to_vec()] }),
         CommentTool::Line | CommentTool::Arrow if far => Some(Shape::Line {
             from: first,
@@ -206,7 +381,7 @@ pub(super) fn drawn_shape(tool: CommentTool, points: &[[f64; 2]]) -> Option<Shap
 /// per point, so the default 2 pt keeps the 12-pixel eraser it always had, and the thickness
 /// slider's 0.5–12 pt gives 3 to 72 pixels across. A setting that isn't a number is the default.
 fn eraser_radius_px(width: f64) -> f64 {
-    3.0 * if width.is_finite() { width.clamp(0.5, 12.0) } else { 2.0 }
+    3.0 * if width.is_finite() { width.clamp(0.5, super::MAX_LINE_WIDTH) } else { 2.0 }
 }
 
 /// Eraser: rub out drawings along `path` (user space); one undo step for all of them. It rubs

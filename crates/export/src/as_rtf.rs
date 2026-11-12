@@ -1,7 +1,7 @@
 use super::as_docx::rgb8;
 use super::as_html::allowed;
 use super::layout::{Block, Item, Page, count_lookup_steps, items};
-use super::*;
+use std::collections::HashMap;
 
 fn rtf_text(s: &str) -> String {
     let mut o = String::new();

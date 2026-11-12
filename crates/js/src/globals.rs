@@ -1,29 +1,107 @@
-use super::document::{field_object, get_field, get_nth_field_name, noop, num_fields, page_num_get, page_num_set, print, reset_form, submit_form};
+use super::document::{get_field, get_nth_field_name, noop, num_fields, page_num_get, page_num_set, print, reset_form, submit_form};
 use super::format::{printd, printf, printx, scand};
-use super::host::{arg, function, host, s, text, text_line};
+use super::host::{arg, error, function, host, s, strings, text, text_line};
 use super::model::{DISPLAY_HIDDEN, DISPLAY_NO_PRINT, DISPLAY_NO_VIEW, DISPLAY_VISIBLE, Event, Panel, Request};
-use super::*;
+use super::{
+    Arc, Attribute, Context, JsArray, JsObject, JsResult, JsString, JsValue, Message, MessageButtons, MessageIcon, NativeFunction, ObjectInitializer,
+    Source, js_string,
+};
 
 // ── app, util, console ──────────────────────────────────────────────────────────────────────
 
 /// A message argument: a string, or an object with `cMsg`, cut to a message's length.
 fn message(v: &JsValue, key: &str, ctx: &mut Context) -> JsResult<String> {
-    match v.as_object() {
-        Some(o) if !o.is_array() && !o.is_callable() => {
+    match named_params(v, key, ctx)? {
+        Some(o) => {
             let m = o.get(JsString::from(key), ctx)?;
             text_line(&m, ctx)
         }
-        _ => text_line(v, ctx),
+        None => text_line(v, ctx),
     }
 }
 
-/// `app.alert(cMsg)`: records the message, given as a string or as an object with `cMsg`, and
-/// returns 1 (the OK button).
+/// `v` as a method's single object of named parameters: an object (not an array or function)
+/// that has `key`, the parameter every such call names. Any other value, a `new String(…)` or a
+/// caught `Error` included, is the first positional argument, read as text.
+fn named_params(v: &JsValue, key: &str, ctx: &mut Context) -> JsResult<Option<JsObject>> {
+    match v.as_object() {
+        Some(o) if !o.is_array() && !o.is_callable() && o.has_property(JsString::from(key), ctx)? => Ok(Some(o.clone())),
+        _ => Ok(None),
+    }
+}
+
+/// A message's title: `v` as text cut to a message's length, `None` when it is missing or empty.
+fn title(v: &JsValue, ctx: &mut Context) -> JsResult<Option<String>> {
+    Ok(Some(text_line(v, ctx)?).filter(|t| !t.is_empty()))
+}
+
+/// An icon or buttons number: `v` as a number, `None` when it is missing or isn't one (a value
+/// that can't be converted counts as missing, so a bad argument never stops the message).
+fn code(v: &JsValue, ctx: &mut Context) -> Option<f64> {
+    if v.is_undefined() || v.is_null() {
+        return None;
+    }
+    v.to_number(ctx).ok()
+}
+
+/// `app.alert`'s message: `(cMsg, nIcon, nType, cTitle)`, or one object with those keys (as
+/// the JavaScript for Acrobat API Reference allows for every method with named parameters).
+pub(crate) fn alert_message(args: &[JsValue], ctx: &mut Context) -> JsResult<Message> {
+    let first = arg(args, 0);
+    let (text, icon, buttons, t) = match named_params(&first, "cMsg", ctx)? {
+        Some(o) => {
+            let get = |k: &str, ctx: &mut Context| o.get(JsString::from(k), ctx);
+            (get("cMsg", ctx)?, get("nIcon", ctx)?, get("nType", ctx)?, get("cTitle", ctx)?)
+        }
+        None => (first, arg(args, 1), arg(args, 2), arg(args, 3)),
+    };
+    Ok(Message {
+        text: text_line(&text, ctx)?,
+        title: title(&t, ctx)?,
+        icon: MessageIcon::from_code(code(&icon, ctx)),
+        buttons: MessageButtons::from_code(code(&buttons, ctx)),
+    })
+}
+
+/// `xfa.host.messageBox`'s message: `(message, title, icon, buttons)`, as the XFA
+/// specification orders them.
+pub(crate) fn message_box_message(args: &[JsValue], ctx: &mut Context) -> JsResult<Message> {
+    Ok(Message {
+        text: text_line(&arg(args, 0), ctx)?,
+        title: title(&arg(args, 1), ctx)?,
+        icon: MessageIcon::from_code(code(&arg(args, 2), ctx)),
+        buttons: MessageButtons::from_code(code(&arg(args, 3), ctx)),
+    })
+}
+
+/// `app.alert(cMsg, nIcon, nType, cTitle)`: records the message with its title, icon and buttons,
+/// given in that order or as one object with those keys, and returns 1 (the OK button).
 fn alert(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
-    let m = message(&arg(args, 0), "cMsg", ctx)?;
-    host(ctx)?.borrow_mut().alert(m);
-    // The OK button.
-    Ok(JsValue::from(1))
+    let m = alert_message(args, ctx)?;
+    host(ctx)?.borrow_mut().alert(m.clone());
+    if !crate::interaction::has_host() {
+        return Ok(JsValue::from(1));
+    }
+    let answer = crate::interaction::ask(crate::interaction::Prompt::Alert(m.clone()))?;
+    let fallback = match m.buttons {
+        MessageButtons::Ok => "1",
+        MessageButtons::YesNo => "3",
+        _ => "2",
+    };
+    let answer = answer.as_deref().unwrap_or(fallback);
+    let accepted = match m.buttons {
+        MessageButtons::Ok => ["1"].as_slice(),
+        MessageButtons::OkCancel => ["1", "2"].as_slice(),
+        MessageButtons::YesNo => ["3", "4"].as_slice(),
+        MessageButtons::YesNoCancel => ["2", "3", "4"].as_slice(),
+    };
+    if answer == "1" && !accepted.contains(&"1") {
+        return Ok(JsValue::from(2));
+    }
+    if !accepted.contains(&answer) {
+        return Err(error("invalid alert response"));
+    }
+    Ok(JsValue::from(answer.parse::<i32>().unwrap_or(2)))
 }
 
 /// `app.beep()`: queues a request to beep.
@@ -32,11 +110,63 @@ fn beep(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     Ok(JsValue::undefined())
 }
 
+/// `app.runtimeHighlight`: whether the viewer highlights form fields.
+fn runtime_highlight(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    Ok(JsValue::from(host(ctx)?.borrow().doc.runtime_highlight))
+}
+
+/// `app.runtimeHighlight = on`: asks the viewer to highlight form fields, or to stop. Later reads
+/// in the script see the new setting.
+fn set_runtime_highlight(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let on = arg(args, 0).to_boolean();
+    let mut h = host(ctx)?.borrow_mut();
+    if h.doc.runtime_highlight != on {
+        // Only the setting the script ends with matters: one request, the latest, under the
+        // host's request cap like any other. One the cap drops changes nothing, so the script
+        // goes on reading the setting the viewer has.
+        h.requests.retain(|r| !matches!(r, Request::Highlight(_)));
+        if h.request(Request::Highlight(on)) {
+            h.doc.runtime_highlight = on;
+        }
+    }
+    Ok(JsValue::undefined())
+}
+
 /// `app.launchURL(cURL)`: queues a request to open the URL, given as a string or as an object
 /// with `cURL`.
 fn launch_url(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     let u = message(&arg(args, 0), "cURL", ctx)?;
     host(ctx)?.borrow_mut().request(Request::LaunchUrl(u));
+    Ok(JsValue::undefined())
+}
+
+/// The attached file `exportDataObject` names, and whether to open it: from an object
+/// (`{cName, nLaunch}`) or from the arguments (`cName, cDIPath, bAllowAuth, nLaunch`). `nLaunch`
+/// 1 and 2 open the file; 0 (the default) and any other value save it.
+pub(crate) fn data_object(args: &[JsValue], ctx: &mut Context) -> JsResult<(String, bool)> {
+    let first = arg(args, 0);
+    // Any object of named parameters is read by key, one without `cName` too, so a missing name
+    // is refused rather than read as the object's text.
+    let named = first.as_object().filter(|o| !o.is_array() && !o.is_callable());
+    let name = match &named {
+        Some(o) => text_line(&o.get(js_string!("cName"), ctx)?, ctx)?,
+        None => text_line(&first, ctx)?,
+    };
+    if name.is_empty() {
+        return Err(error("exportDataObject needs cName, the attached file's name"));
+    }
+    let launch = match &named {
+        Some(o) => o.get(js_string!("nLaunch"), ctx)?,
+        None => arg(args, 3),
+    };
+    let launch = if launch.is_undefined() || launch.is_null() { 0.0 } else { launch.to_number(ctx)? };
+    Ok((name, launch == 1.0 || launch == 2.0))
+}
+
+/// `this.exportDataObject(…)`: asks the viewer to open or save an attached file.
+fn export_data_object(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let (name, open) = data_object(args, ctx)?;
+    host(ctx)?.borrow_mut().request(Request::OpenAttachment { name, open });
     Ok(JsValue::undefined())
 }
 
@@ -67,13 +197,49 @@ fn exec_menu_item(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<
     Ok(JsValue::undefined())
 }
 
-/// `app.response(…)`: always `null`, the answer for a canceled dialog, since no one is there to
-/// type one.
-fn response(_: &JsValue, _: &[JsValue], _: &mut Context) -> JsResult<JsValue> {
-    // No one to answer: as if the dialog was cancelled.
-    Ok(JsValue::null())
+/// Return a page box in Acrobat's rotated-user-space order: left, top, right, bottom.
+fn get_page_box(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let name = arg(args, 0);
+    let name = if name.is_undefined() {
+        "Crop".to_string()
+    } else {
+        name.as_string().ok_or_else(|| error("getPageBox box name must be a string"))?.to_std_string_escaped()
+    };
+    let which = match name.as_str() {
+        "Media" | "MediaBox" => 0,
+        "Crop" | "CropBox" => 1,
+        "Bleed" | "BleedBox" => 2,
+        "Trim" | "TrimBox" => 3,
+        "Art" | "ArtBox" => 4,
+        _ => return Err(error("getPageBox box name must be Media, Crop, Trim, Bleed, or Art")),
+    };
+    let page_value = arg(args, 1);
+    let page = if page_value.is_undefined() {
+        0
+    } else {
+        if !page_value.is_number() {
+            return Err(error("getPageBox page must be a non-negative in-range integer"));
+        }
+        let page = page_value.to_number(ctx)?;
+        if !page.is_finite() || page < 0.0 || page.fract() != 0.0 || page >= usize::MAX as f64 {
+            return Err(error("getPageBox page must be a non-negative in-range integer"));
+        }
+        page as usize
+    };
+    let (rect, rotation, crop) = {
+        let h = host(ctx)?.borrow();
+        let boxes = h.doc.page_boxes.get(page).ok_or_else(|| error("getPageBox page is outside the document"))?;
+        let rotation = h.doc.page_rotations.get(page).copied().unwrap_or(0);
+        (boxes[which], rotation, boxes[1])
+    };
+    let rotated = crate::rotate_rect(rect, crop, rotation);
+    if !rotated.iter().all(|value| value.is_finite()) {
+        return Err(error("getPageBox returned non-finite coordinates"));
+    }
+    Ok(JsArray::from_iter(rotated.into_iter().map(JsValue::from), ctx).into())
 }
 
+/// Write a bounded line to the script console.
 fn println(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     let m = text_line(&arg(args, 0), ctx)?;
     host(ctx)?.borrow_mut().print(m);
@@ -83,6 +249,171 @@ fn println(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue
 fn console_clear(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     host(ctx)?.borrow_mut().console.clear();
     Ok(JsValue::undefined())
+}
+
+/// Recalculate fields in the document's `/CO` order against the writes already made by this
+/// script. A small depth cap stops calculate scripts from recursing forever.
+fn calculate_now(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    const MAX_CALCULATE_DEPTH: usize = 8;
+    let calculations = {
+        let shared = host(ctx)?;
+        let mut h = shared.borrow_mut();
+        if h.calculation_limit_exceeded {
+            return Err(error("script calculation work limit exceeded"));
+        }
+        if h.calculate_depth >= MAX_CALCULATE_DEPTH {
+            h.calculation_limit_exceeded = true;
+            return Err(error("calculateNow recursion limit exceeded"));
+        }
+        h.calculate_depth += 1;
+        h.calculations.clone()
+    };
+    let previous_event = match ctx.global_object().get(js_string!("event"), ctx) {
+        Ok(event) => event,
+        Err(error) => {
+            if let Ok(shared) = host(ctx) {
+                let mut h = shared.borrow_mut();
+                h.calculate_depth = h.calculate_depth.saturating_sub(1);
+            }
+            return Err(error);
+        }
+    };
+    let result = (|| {
+        for (index, script) in calculations {
+            let Some(field) = host(ctx)?.borrow().fields.get(index).cloned() else { continue };
+            {
+                let shared = host(ctx)?;
+                let mut h = shared.borrow_mut();
+                if h.calculation_limit_exceeded || h.calculation_evaluations >= super::run::MAX_CALCULATE_STEPS {
+                    h.calculation_limit_exceeded = true;
+                    return Err(error("script calculation work limit exceeded"));
+                }
+                h.calculation_evaluations += 1;
+                if let Some(why) = super::run::refuse(&script) {
+                    h.calculation_limit_exceeded = true;
+                    return Err(error(why));
+                }
+            }
+            let mut event = Event::field("Calculate", &field.name, &field.value.first().cloned().unwrap_or_default());
+            event.target_id = field.object_id;
+            let (object, value_store) = event_object(ctx, &event)?;
+            ctx.global_object().set(js_string!("event"), object.clone(), true, ctx)?;
+            let (fields_before, changed_before, formatted_before) = {
+                let shared = host(ctx)?;
+                let h = shared.borrow();
+                (Arc::clone(&h.fields), h.changed.clone(), h.formatted.clone())
+            };
+            if let Err(err) = ctx.eval(Source::from_bytes(&script)) {
+                let shared = host(ctx)?;
+                let mut h = shared.borrow_mut();
+                if err.as_engine().is_some() || h.calculation_limit_exceeded || h.reset_limit_exceeded {
+                    return Err(err);
+                }
+                h.fields = fields_before;
+                h.changed = changed_before;
+                h.formatted = formatted_before;
+                h.print(format!("Calculate {}: {err}", field.name));
+                continue;
+            }
+            drop(fields_before);
+            if host(ctx)?.borrow().calculation_limit_exceeded {
+                return Err(error("script calculation work limit exceeded"));
+            }
+            let rc = object.get(js_string!("rc"), ctx)?;
+            if !rc.to_boolean() {
+                continue;
+            }
+            if !value_store.get(js_string!("set"), ctx)?.to_boolean() {
+                continue;
+            }
+            let value = object.get(js_string!("value"), ctx)?;
+            let value = text(&value, ctx)?;
+            let shared = host(ctx)?;
+            let mut h = shared.borrow_mut();
+            if index < h.fields.len() {
+                let target = Arc::make_mut(&mut h.fields).get_mut(index).ok_or_else(|| error("the field is no longer available"))?;
+                super::host::set_value(target, vec![value]);
+                h.changed.insert(index);
+                h.formatted.insert(index);
+            }
+        }
+        Ok(JsValue::undefined())
+    })();
+    let restored = ctx.global_object().set(js_string!("event"), previous_event, true, ctx).map(|_| JsValue::undefined());
+    if let Ok(shared) = host(ctx) {
+        let mut h = shared.borrow_mut();
+        h.calculate_depth = h.calculate_depth.saturating_sub(1);
+    }
+    result.and(restored)
+}
+
+/// Acrobat's built-in calculation helper, used by the scripts written by its Calculate tab.
+/// `AFSimple_Calculate(op, names)`, with the semantics of the native Simple calculation
+/// (`pdfcraft_forms::af::calculate`), so a total read right after `calculateNow()` is the one the
+/// commit path writes: a name also stands for every field under it (`b` sums `b.c` and `b.d`),
+/// each field counts its first value, and values are read as `AFMakeNumber` reads typed text
+/// (currency, `%`, group separators, a comma decimal separator), anything else counting as 0.
+fn af_simple_calculate(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let op = text(&arg(args, 0), ctx)?;
+    let names = strings(&arg(args, 1), ctx)?;
+    let fields = host(ctx)?.borrow().fields.clone();
+    // Charge selector comparisons before group expansion; the iterator keeps memory independent
+    // of how often selectors overlap or duplicate the same field.
+    let selector_bytes = names.iter().fold(0usize, |n, s| n.saturating_add(s.len()));
+    let work = fields.len().saturating_mul(names.len().saturating_add(selector_bytes));
+    let shared = host(ctx)?;
+    let mut h = shared.borrow_mut();
+    h.calculation_work = h.calculation_work.saturating_add(work);
+    let exhausted = h.calculation_work > 1 << 24;
+    h.calculation_limit_exceeded |= exhausted;
+    drop(h);
+    if exhausted {
+        return Err(error("calculation field lookup exceeds its work limit"));
+    }
+    let mut values = names
+        .iter()
+        .flat_map(|name| fields.iter().filter(move |f| f.name == *name || f.name.strip_prefix(name).is_some_and(|rest| rest.starts_with('.'))))
+        .filter_map(|field| field.value.first())
+        .map(|v| make_number(v).unwrap_or(0.0))
+        .peekable();
+    let result = match op.as_str() {
+        "SUM" => values.sum(),
+        "PRD" if values.peek().is_none() => 0.0,
+        "PRD" => values.product(),
+        "AVG" => {
+            let (count, total) = values.fold((0usize, 0.0), |(n, sum), v| (n.saturating_add(1), sum + v));
+            if count == 0 { 0.0 } else { total / count as f64 }
+        }
+        "MIN" => values.reduce(f64::min).unwrap_or(0.0),
+        "MAX" => values.reduce(f64::max).unwrap_or(0.0),
+        _ => 0.0,
+    };
+    Ok(s(&if result.is_finite() { js_number(result) } else { "0".into() }))
+}
+
+/// `AFMakeNumber`'s reading of typed text, as `pdfcraft_forms::af::make_number` has it: currency
+/// symbols, spaces, `'` and `%` ignored, `(7)` negative, and a comma the decimal separator when
+/// it comes last (`1.234,56`) or is not followed by exactly three digits.
+fn make_number(s: &str) -> Option<f64> {
+    let t: String = s.trim().chars().filter(|c| !c.is_whitespace() && !matches!(c, '$' | '€' | '£' | '¥' | '\'' | '%')).collect();
+    if t.is_empty() {
+        return None;
+    }
+    let neg = t.starts_with('(') && t.ends_with(')');
+    let t = t.trim_start_matches('(').trim_end_matches(')');
+    let normalized = match (t.rfind(','), t.rfind('.')) {
+        (Some(c), Some(d)) if c > d => t.replace('.', "").replace(',', "."),
+        (Some(c), None) if t.len() - c - 1 != 3 => t.replace(',', "."),
+        _ => t.replace(',', ""),
+    };
+    let v: f64 = normalized.parse().ok()?;
+    v.is_finite().then_some(if neg { -v } else { v })
+}
+
+/// A number as JavaScript prints it (integers without a fraction), as the native calculation
+/// writes it.
+fn js_number(v: f64) -> String {
+    if v.fract() == 0.0 && v.abs() < 1e15 { format!("{}", v as i64) } else { format!("{v}") }
 }
 
 fn timer(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
@@ -118,45 +449,96 @@ fn color_object(ctx: &mut Context) -> JsObject {
 /// The XFA version scripts see as `xfa_version`.
 const XFA_VERSION: f64 = 3.5;
 
-/// Defines the form object model's globals: the document's functions (`getField`, `resetForm`,
-/// `print`, `submitForm` and others) and properties (`numFields`, `pageNum`, `numPages`,
-/// `documentFileName`, `info`, the XFA version), and the `app`, `util`, `console`, `display` and
-/// `color` objects.
+/// Read the current zoom percentage, defaulting unset snapshots to actual size.
+fn zoom_get(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let z = host(ctx)?.borrow().doc.zoom;
+    Ok(JsValue::from(if z > 0.0 { z } else { 100.0 }))
+}
+/// Validate the requested percentage, update its live value and queue a native viewer zoom request.
+fn zoom_set(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let z = arg(args, 0).to_number(ctx)?;
+    if !z.is_finite() || !(1.0..=6400.0).contains(&z) {
+        return Err(error("zoom must be between 1 and 6400"));
+    }
+    let shared = host(ctx)?;
+    let mut host = shared.borrow_mut();
+    if host.request(Request::Zoom(z)) {
+        host.doc.zoom = z;
+    }
+    Ok(JsValue::undefined())
+}
+/// Read the current page count after page insertion/deletion without resetting script globals.
+fn num_pages_get(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    Ok(JsValue::from(host(ctx)?.borrow().doc.num_pages as f64))
+}
+
+/// Read the current file name, including a completed Save As in this retained realm.
+fn document_file_name_get(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    Ok(s(&host(ctx)?.borrow().doc.file_name))
+}
+
+/// Build the information object from the current snapshot, omitting metadata removed by edits.
+fn document_info_get(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let info = host(ctx)?.borrow().doc.info.clone();
+    let mut object = ObjectInitializer::new(ctx);
+    for (key, value) in info {
+        object.property(JsString::from(key.as_str()), s(&value), Attribute::all());
+    }
+    Ok(object.build().into())
+}
+
+/// Install the host API once; live document properties continue reading each job's snapshot.
 pub(crate) fn install(ctx: &mut Context) -> JsResult<()> {
-    let globals: [(&str, usize, NativeFunction); 9] = [
+    let globals: [(&str, usize, NativeFunction); 12] = [
         ("getField", 1, NativeFunction::from_fn_ptr(get_field)),
         ("getNthFieldName", 1, NativeFunction::from_fn_ptr(get_nth_field_name)),
         ("resetForm", 1, NativeFunction::from_fn_ptr(reset_form)),
         ("print", 1, NativeFunction::from_fn_ptr(print)),
         ("submitForm", 1, NativeFunction::from_fn_ptr(submit_form)),
         ("mailDoc", 1, NativeFunction::from_fn_ptr(noop)),
-        ("calculateNow", 0, NativeFunction::from_fn_ptr(noop)),
+        ("calculateNow", 0, NativeFunction::from_fn_ptr(calculate_now)),
+        ("getPageBox", 2, NativeFunction::from_fn_ptr(get_page_box)),
+        ("AFSimple_Calculate", 2, NativeFunction::from_fn_ptr(af_simple_calculate)),
         ("syncAnnotScan", 0, NativeFunction::from_fn_ptr(noop)),
         ("dirty", 0, NativeFunction::from_fn_ptr(noop)),
+        ("exportDataObject", 4, NativeFunction::from_fn_ptr(export_data_object)),
     ];
     for (name, len, f) in globals {
         ctx.register_global_callable(JsString::from(name), len, f)?;
     }
+    let zg = function(ctx, NativeFunction::from_fn_ptr(zoom_get));
+    let zs = function(ctx, NativeFunction::from_fn_ptr(zoom_set));
+
+    let border = ObjectInitializer::new(ctx)
+        .property(js_string!("s"), s("solid"), Attribute::all())
+        .property(js_string!("d"), s("dashed"), Attribute::all())
+        .property(js_string!("b"), s("beveled"), Attribute::all())
+        .property(js_string!("i"), s("inset"), Attribute::all())
+        .property(js_string!("u"), s("underline"), Attribute::all())
+        .build();
+    ctx.register_global_property(js_string!("border"), border, Attribute::CONFIGURABLE)?;
     let global = ctx.global_object();
+    global.define_property_or_throw(
+        js_string!("zoom"),
+        boa_engine::property::PropertyDescriptor::builder().get(zg).set(zs).configurable(true).build(),
+        ctx,
+    )?;
     let rw = Attribute::CONFIGURABLE;
     let nf = function(ctx, NativeFunction::from_fn_ptr(num_fields));
     let pg = function(ctx, NativeFunction::from_fn_ptr(page_num_get));
     let ps = function(ctx, NativeFunction::from_fn_ptr(page_num_set));
-    let (file, pages, info, xfa) = {
-        let h = host(ctx)?.borrow();
-        (h.doc.file_name.clone(), h.doc.num_pages, h.doc.info.clone(), h.doc.xfa)
-    };
-    let mut io = ObjectInitializer::new(ctx);
-    for (k, v) in &info {
-        io.property(JsString::from(k.as_str()), s(v), Attribute::all());
-    }
-    let info = io.build();
+    let xfa = host(ctx)?.borrow().doc.xfa;
     use boa_engine::property::PropertyDescriptor;
     global.define_property_or_throw(js_string!("numFields"), PropertyDescriptor::builder().get(nf).configurable(true), ctx)?;
     global.define_property_or_throw(js_string!("pageNum"), PropertyDescriptor::builder().get(pg).set(ps).configurable(true), ctx)?;
-    ctx.register_global_property(js_string!("numPages"), JsValue::from(pages as f64), rw)?;
-    ctx.register_global_property(js_string!("documentFileName"), s(&file), rw)?;
-    ctx.register_global_property(js_string!("info"), info, rw)?;
+    for (name, getter) in [
+        ("numPages", num_pages_get as fn(&JsValue, &[JsValue], &mut Context) -> JsResult<JsValue>),
+        ("documentFileName", document_file_name_get),
+        ("info", document_info_get),
+    ] {
+        let getter = function(ctx, NativeFunction::from_fn_ptr(getter));
+        global.define_property_or_throw(JsString::from(name), PropertyDescriptor::builder().get(getter).configurable(true), ctx)?;
+    }
     // XFA forms check both before they run: every document sees the XFA version, and only an
     // XFA form sees `xfa_installed`.
     ctx.register_global_property(js_string!("xfa_version"), JsValue::from(XFA_VERSION), rw)?;
@@ -164,11 +546,15 @@ pub(crate) fn install(ctx: &mut Context) -> JsResult<()> {
         ctx.register_global_property(js_string!("xfa_installed"), JsValue::from(true), rw)?;
     }
 
+    let highlight_get = function(ctx, NativeFunction::from_fn_ptr(runtime_highlight));
+    let highlight_set = function(ctx, NativeFunction::from_fn_ptr(set_runtime_highlight));
     let app = ObjectInitializer::new(ctx)
+        .accessor(js_string!("runtimeHighlight"), Some(highlight_get), Some(highlight_set), rw)
         .function(NativeFunction::from_fn_ptr(alert), js_string!("alert"), 1)
         .function(NativeFunction::from_fn_ptr(beep), js_string!("beep"), 0)
-        .function(NativeFunction::from_fn_ptr(response), js_string!("response"), 1)
+        .function(NativeFunction::from_fn_ptr(crate::interaction::response), js_string!("response"), 1)
         .function(NativeFunction::from_fn_ptr(launch_url), js_string!("launchURL"), 2)
+        .function(NativeFunction::from_fn_ptr(crate::interaction::popup_menu), js_string!("popUpMenuEx"), 0)
         .function(NativeFunction::from_fn_ptr(exec_menu_item), js_string!("execMenuItem"), 1)
         .function(NativeFunction::from_fn_ptr(timer), js_string!("setTimeOut"), 2)
         .function(NativeFunction::from_fn_ptr(timer), js_string!("setInterval"), 2)
@@ -205,6 +591,7 @@ pub(crate) fn install(ctx: &mut Context) -> JsResult<()> {
     ctx.register_global_property(js_string!("display"), display, rw)?;
     let color = color_object(ctx);
     ctx.register_global_property(js_string!("color"), color, rw)?;
+    crate::source::install(ctx)?;
     Ok(())
 }
 
@@ -218,12 +605,35 @@ pub(crate) fn platform() -> &'static str {
     }
 }
 
-pub(crate) fn event_object(ctx: &mut Context, e: &Event) -> JsObject {
-    let target = e.target.as_ref().map_or(JsValue::null(), |t| field_object(ctx, t).into());
-    ObjectInitializer::new(ctx)
+/// The `event` object for `e`, and the store behind its `value`: `value` holds what the script
+/// reads and writes, and `set` turns true once the script assigns `event.value`, even the value it
+/// already had. The store is out of the script's reach.
+pub(crate) fn event_object(ctx: &mut Context, e: &Event) -> JsResult<(JsObject, JsObject)> {
+    fn get(_: &JsValue, _: &[JsValue], store: &JsObject, c: &mut Context) -> JsResult<JsValue> {
+        store.get(js_string!("value"), c)
+    }
+    fn set(_: &JsValue, args: &[JsValue], store: &JsObject, c: &mut Context) -> JsResult<JsValue> {
+        store.set(js_string!("value"), arg(args, 0), false, c)?;
+        store.set(js_string!("set"), true, false, c)?;
+        Ok(JsValue::undefined())
+    }
+    let store = ObjectInitializer::new(ctx)
+        .property(js_string!("value"), s(&e.value), Attribute::all())
+        .property(js_string!("set"), false, Attribute::all())
+        .build();
+    let value_get = function(ctx, NativeFunction::from_copy_closure_with_captures(get, store.clone()));
+    let value_set = function(ctx, NativeFunction::from_copy_closure_with_captures(set, store.clone()));
+    let target = e.target.as_ref().map_or(JsValue::null(), |t| {
+        if e.target_id.is_some() {
+            crate::document::field_object_by_id(ctx, t, e.target_id).into()
+        } else {
+            crate::document::field_object(ctx, t).into()
+        }
+    });
+    let event = ObjectInitializer::new(ctx)
         .property(js_string!("name"), s(&e.name), Attribute::all())
         .property(js_string!("type"), s(&e.kind), Attribute::all())
-        .property(js_string!("value"), s(&e.value), Attribute::all())
+        .accessor(js_string!("value"), Some(value_get), Some(value_set), Attribute::CONFIGURABLE | Attribute::ENUMERABLE)
         .property(js_string!("change"), s(&e.change), Attribute::all())
         .property(js_string!("changeEx"), s(&e.change), Attribute::all())
         .property(js_string!("willCommit"), e.will_commit, Attribute::all())
@@ -235,5 +645,6 @@ pub(crate) fn event_object(ctx: &mut Context, e: &Event) -> JsObject {
         .property(js_string!("commitKey"), 0, Attribute::all())
         .property(js_string!("modifier"), false, Attribute::all())
         .property(js_string!("shift"), false, Attribute::all())
-        .build()
+        .build();
+    Ok((event, store))
 }

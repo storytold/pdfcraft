@@ -1,4 +1,4 @@
-use super::*;
+use super::{HashSet, Message};
 
 /// What kind of template object a node is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -50,6 +50,9 @@ pub struct XfaNode {
     /// Fields: the value shown in the field's display picture, what `formattedValue` reads;
     /// `None` when the picture doesn't change it (the raw value is read then).
     pub formatted: Option<String>,
+    /// The template's attributes and property elements of the object (border, ui, validate, …),
+    /// shared: snapshots taken for each script point at the same tree.
+    pub props: std::sync::Arc<super::XfaProps>,
 }
 
 /// The event a script runs for.
@@ -70,6 +73,8 @@ pub struct XfaDoc {
     /// The current page, 0-based.
     pub page: usize,
     pub page_count: usize,
+    /// Whether the viewer highlights form fields (`app.runtimeHighlight`).
+    pub highlight: bool,
 }
 
 /// Something a script changed or asked for.
@@ -95,9 +100,15 @@ pub enum XfaEffect {
     RemoveInstance {
         som: String,
     },
-    MessageBox(String),
+    /// `xfa.host.messageBox(…)`, or `app.alert(…)` in an XFA form's script.
+    MessageBox(Message),
     /// `xfa.host.resetData()`: the named fields, or every field when empty.
     ResetData(Vec<String>),
+    /// `event.target.exportDataObject(…)`: the attached file `name`, to open or to save.
+    OpenAttachment {
+        name: String,
+        open: bool,
+    },
     /// `app.execMenuItem("ShowHide…")`: show or hide a side panel.
     ShowPanel(crate::Panel),
     Print,
@@ -109,6 +120,8 @@ pub enum XfaEffect {
     Recalculate,
     /// `xfa.form.remerge()`, `xfa.layout.relayout()`.
     Relayout,
+    /// `app.runtimeHighlight = on`.
+    Highlight(bool),
 }
 
 /// What running a script did.
@@ -209,9 +222,17 @@ pub(super) fn payload(e: &XfaEffect) -> usize {
             som.len().saturating_add(s.len())
         }
         XfaEffect::AddInstance { som } | XfaEffect::RemoveInstance { som } => som.len(),
-        XfaEffect::MessageBox(s) | XfaEffect::LaunchUrl(s) | XfaEffect::SetFocus(s) => s.len(),
+        XfaEffect::OpenAttachment { name, .. } => name.len(),
+        XfaEffect::MessageBox(m) => m.bytes(),
+        XfaEffect::LaunchUrl(s) | XfaEffect::SetFocus(s) => s.len(),
         XfaEffect::ResetData(names) => names.iter().fold(0usize, |n, s| n.saturating_add(s.len()).saturating_add(std::mem::size_of::<String>())),
-        XfaEffect::Print | XfaEffect::SaveAs | XfaEffect::Beep | XfaEffect::Recalculate | XfaEffect::Relayout | XfaEffect::ShowPanel(_) => 0,
+        XfaEffect::Print
+        | XfaEffect::SaveAs
+        | XfaEffect::Beep
+        | XfaEffect::Recalculate
+        | XfaEffect::Relayout
+        | XfaEffect::Highlight(_)
+        | XfaEffect::ShowPanel(_) => 0,
     }
 }
 

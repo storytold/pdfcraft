@@ -97,23 +97,32 @@ fn ctrl_alt_q_types_an_email_without_quitting() {
 fn drawing_a_signature_creating_an_id_signing_and_trusting() {
     let dir = dir();
     let mut h = harness(dir.clone());
+    create_signing_id(&mut h);
+    sign_with_created_id(&mut h, &dir);
+    trust_signer_and_inspect_certificate(&mut h);
+    verify_signed_snapshot_reuse(&mut h);
+    verify_dirty_snapshot_close(&mut h);
+    assert_trust_and_id_persist(&h);
+}
+
+fn create_signing_id(h: &mut Harness<'static, PdfCraftApp>) {
     assert!(h.state_mut().execute("sign.digital"));
     assert_eq!(h.state().quick_tool, QuickTool::SignArea { certify: false });
-    let (a, b) = (at(&h, 40.0, 90.0), at(&h, 220.0, 40.0));
-    drag(&mut h, a, b);
+    let (a, b) = (at(h, 40.0, 90.0), at(h, 220.0, 40.0));
+    drag(h, a, b);
     assert_eq!(h.state().dialog, Some(Dialog::Sign));
     assert_eq!(h.state().sign_draft.as_ref().map(|d| d.step), Some(SignStep::Configure), "no IDs yet: configure one");
 
     // Create a new digital ID (P-256 keeps the test fast).
     h.get_by_label("Configure a Digital ID for Signing");
-    field(&h, "Name").click();
+    field(h, "Name").click();
     h.run_steps(1);
-    field(&h, "Name").type_text("Grace Hopper");
+    field(h, "Name").type_text("Grace Hopper");
     h.state_mut().sign_draft.as_mut().unwrap().new_id.key = 3;
     for (label, text) in [("Password", "secret12"), ("Confirm Password", "secret12")] {
-        field(&h, label).click();
+        field(h, label).click();
         h.run_steps(1);
-        field(&h, label).type_text(text);
+        field(h, label).type_text(text);
         h.run_steps(1);
     }
     h.get_by_label("Save").click();
@@ -124,31 +133,41 @@ fn drawing_a_signature_creating_an_id_signing_and_trusting() {
     h.get_by_label("Continue").click();
     h.run_steps(2);
     h.get_by_label("Sign as \"Grace Hopper\"");
+}
 
+fn sign_with_created_id(h: &mut Harness<'static, PdfCraftApp>, dir: &std::path::Path) {
     // A wrong password says so.
-    field(&h, "Digital ID password").click();
+    field(h, "Digital ID password").click();
     h.run_steps(1);
-    field(&h, "Digital ID password").type_text("nope");
-    support::outside_menus(&h, "Sign").click();
+    field(h, "Digital ID password").type_text("nope");
+    support::outside_menus(h, "Sign").click();
     h.run_steps(3);
     h.get_by_label("The password is incorrect.");
     h.state_mut().sign_draft.as_mut().unwrap().password = "secret12".into();
-    field(&h, "Reason").click();
+    field(h, "Reason").click();
     h.run_steps(1);
-    field(&h, "Reason").type_text("I approve");
-    support::outside_menus(&h, "Sign").click();
+    field(h, "Reason").type_text("I approve");
+    support::outside_menus(h, "Sign").click();
     h.run_steps(6);
 
     let s = h.state();
     assert_eq!(s.dialog, None);
     assert!(dir.join("contract_signed.pdf").exists());
-    let doc = s.session.get(s.views[0].id).unwrap();
-    assert_eq!(doc.name, "contract_signed.pdf");
-    let sig = doc.signatures.iter().find(|x| x.signed).expect("signed");
-    assert_eq!((sig.status, sig.reason.as_deref(), sig.page), (SignatureStatus::Unknown, Some("I approve"), Some(0)));
+    let doc = s.session.get(s.views[0].id);
+    assert!(doc.is_some(), "signed document remains open");
+    if let Some(doc) = doc {
+        assert_eq!(doc.name, "contract_signed.pdf");
+        let signature = doc.signatures.iter().find(|signature| signature.signed);
+        assert!(signature.is_some(), "the saved document contains a signature");
+        if let Some(signature) = signature {
+            assert_eq!((signature.status, signature.reason.as_deref(), signature.page), (SignatureStatus::Unknown, Some("I approve"), Some(0)));
+        }
+    }
     assert_eq!(s.right, Some(RightPanel::Signatures));
     h.get_by_label("At least one signature has problems.");
+}
 
+fn trust_signer_and_inspect_certificate(h: &mut Harness<'static, PdfCraftApp>) {
     // Signatures panel: expand, trust the signer → valid.
     h.get_by_label_contains("Signed by Grace Hopper").click();
     h.run_steps(2);
@@ -160,9 +179,13 @@ fn drawing_a_signature_creating_an_id_signing_and_trusting() {
     h.run_steps(3);
     h.get_by_label("Signed and all signatures are valid.");
     let s = h.state();
-    assert_eq!(s.session.get(s.views[0].id).unwrap().signatures[0].status, SignatureStatus::Valid);
+    let doc = s.session.get(s.views[0].id);
+    assert!(doc.is_some(), "the original signed document remains open");
+    if let Some(doc) = doc {
+        assert_eq!(doc.signatures[0].status, SignatureStatus::Valid);
+        assert!(!doc.dirty, "trust alone is not an edit");
+    }
     assert!(s.views[0].find.as_ref().is_some_and(|f| f.matches.is_empty()), "trust invalidates the view without zooming");
-    assert!(!s.session.get(s.views[0].id).unwrap().dirty, "trust alone is not an edit");
     // Show certificate: the Certificate Viewer.
     h.get_by_label("Show certificate…").click();
     h.run_steps(3);
@@ -181,13 +204,19 @@ fn drawing_a_signature_creating_an_id_signing_and_trusting() {
     h.get_by_label("OK").click();
     h.run_steps(2);
     assert_eq!(h.state().dialog, None);
+}
+
+fn verify_signed_snapshot_reuse(h: &mut Harness<'static, PdfCraftApp>) {
     // View signed version opens the bytes the signature covers as a new document.
     h.get_by_label("View signed version").click();
     h.run_steps(3);
     let s = h.state();
     assert_eq!(s.views.len(), 2);
-    let v = s.session.get(s.views[1].id).unwrap();
-    assert!(v.name.contains("signed version") && v.signatures.iter().any(|x| x.signed));
+    let signed_version = s.session.get(s.views[1].id);
+    assert!(signed_version.is_some(), "the signed version opens in its own tab");
+    if let Some(version) = signed_version {
+        assert!(version.name.contains("signed version") && version.signatures.iter().any(|signature| signature.signed));
+    }
     assert!(s.views[0].snapshot.is_none());
     assert!(s.views[1].snapshot.as_ref().is_some_and(|snap| snap.kind == pdfcraft_ui_egui::canvas::SnapshotKind::SignedVersion));
     // A repeat click reuses the snapshot tab instead of opening another identical one.
@@ -219,15 +248,20 @@ fn drawing_a_signature_creating_an_id_signing_and_trusting() {
         let Some(up) = node.parent() else { break };
         node = up;
     }
-    let close = close.expect("the notice bar holds its own Close");
+    assert!(close.is_some(), "the notice bar holds its own Close");
     // The bar's Close sits in the bar's row and the tab chrome's sits above it. Without
     // this the walk could reach the chrome's button, which closes the same tab, and the
     // test would pass with the bar's own button never pressed.
-    assert!(label_row.contains(close.rect().center().y), "the Close found is the bar's own");
-    close.click();
-    h.run_steps(2);
-    assert_eq!(h.state().views.len(), 1);
-    assert!(h.state().close_request.is_none());
+    if let Some(close) = close {
+        assert!(label_row.contains(close.rect().center().y), "the Close found is the bar's own");
+        close.click();
+        h.run_steps(2);
+        assert_eq!(h.state().views.len(), 1);
+        assert!(h.state().close_request.is_none());
+    }
+}
+
+fn verify_dirty_snapshot_close(h: &mut Harness<'static, PdfCraftApp>) {
     // Closing a dirty snapshot asks about saving instead of closing at once.
     h.get_by_label("View signed version").click();
     h.run_steps(3);
@@ -240,6 +274,9 @@ fn drawing_a_signature_creating_an_id_signing_and_trusting() {
     h.get_by_label("Don't save").click();
     h.run_steps(2);
     assert_eq!(h.state().views.len(), 1);
+}
+
+fn assert_trust_and_id_persist(h: &Harness<'static, PdfCraftApp>) {
     // Trusted certificates and the ID list persist.
     let saved = h.state().persist();
     let mut fresh = PdfCraftApp::new();
@@ -318,6 +355,59 @@ fn save_as_keeps_a_signed_document_incremental() {
     assert_eq!(status(&h), Some(SignatureStatus::Valid));
 }
 
+/// A one-page document whose only signature field is signed but named far past the 4096 bytes the
+/// signature field walk reads, with a cross-reference table so it opens as written.
+fn signature_past_the_field_walk() -> Vec<u8> {
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] >> >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [4 0 R] >>".into(),
+        format!("<< /Type /Annot /Subtype /Widget /FT /Sig /T ({}) /V 5 0 R /Rect [20 20 180 60] /P 3 0 R >>", "a".repeat(64 << 10)),
+        "<< /Type /Sig /Filter /Adobe.PPKLite /SubFilter /adbe.pkcs7.detached /ByteRange [0 1 2 1] /Contents <00> >>".into(),
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    out
+}
+
+#[test]
+fn save_as_appends_to_a_document_whose_field_walk_passes_a_signature_over() {
+    // The walk stops short of the signed field, so its signature is not listed; Save As must still
+    // treat the document as signed and append to it, or that signature would no longer cover it.
+    let bytes = signature_past_the_field_walk();
+    let (original, out) = (bytes.clone(), dir().join("copy.pdf"));
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("form.pdf", None, bytes).expect("opens");
+        app
+    });
+    h.run_steps(4);
+    // An edit to save: an unedited copy is the original's bytes, appended to or not.
+    let shape = pdfcraft_engine::Shape::Rectangle { rect: [200.0, 120.0, 260.0, 180.0] };
+    let style = pdfcraft_engine::Style::default_for(&shape);
+    let note = pdfcraft_engine::NewAnnotation { page: 0, style, shape, contents: "Checked".into(), author: "Tester".into() };
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::AddAnnotation(note)));
+    h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
+    assert!(h.state_mut().save_active(pdfcraft_ui_egui::SaveTarget::As), "the document can be saved as a copy");
+    let saved = std::fs::read(&out).expect("file written");
+    assert!(saved.starts_with(&original), "Save As rewrote the file instead of appending to it");
+    let mut s = pdfcraft_engine::Session::new();
+    let id = s.open("copy.pdf", None, std::sync::Arc::new(saved), None).expect("the copy opens");
+    let notes: Vec<_> = s.get(id).unwrap().info.annotations.iter().filter_map(|a| a.contents.as_deref()).collect();
+    assert!(notes.contains(&"Checked"), "the copy has the comment added before Save As: {notes:?}");
+}
+
 /// The fixture with an empty signature field across the bottom of the page.
 const WITH_FIELD: &[u8] = b"%PDF-1.7
 1 0 obj << /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [6 0 R] >> >> endobj
@@ -327,18 +417,31 @@ const WITH_FIELD: &[u8] = b"%PDF-1.7
 trailer << /Root 1 0 R >>
 %%EOF";
 
+/// Clicking an empty signature field opens Sign for that field, and signing fills it.
 #[test]
 fn clicking_an_empty_signature_field_signs_it() {
     let dir = dir().join("field");
     std::fs::create_dir_all(&dir).unwrap();
     let mut h = harness(dir.clone());
+    sign_the_empty_field(&mut h);
+    let s = h.state();
+    let sig = s.session.get(s.views[1].id).unwrap().signatures.iter().find(|x| x.field == "Approver").cloned().unwrap();
+    assert!(sig.signed && sig.visible);
+}
+
+/// The centre of `WITH_FIELD`'s signature field, opened as the second document.
+fn field_centre(h: &Harness<'static, PdfCraftApp>) -> Pos2 {
+    let r = h.state().views[1].page_screen_rect(0).expect("on screen");
+    pos2(r.left() + 150.0 / 300.0 * r.width(), r.top() + (200.0 - 50.0) / 200.0 * r.height())
+}
+
+/// Opens `WITH_FIELD` as the second document and signs its empty field with the test ID, by
+/// clicking the field.
+fn sign_the_empty_field(h: &mut Harness<'static, PdfCraftApp>) {
     h.state_mut().open_bytes("form.pdf", None, WITH_FIELD.to_vec()).unwrap();
     h.state_mut().active = Some(1);
     h.run_steps(6);
-    let p = {
-        let r = h.state().views[1].page_screen_rect(0).expect("on screen");
-        pos2(r.left() + 150.0 / 300.0 * r.width(), r.top() + (200.0 - 50.0) / 200.0 * r.height())
-    };
+    let p = field_centre(h);
     h.hover_at(p);
     h.run_steps(1);
     h.drag_at(p);
@@ -362,13 +465,129 @@ fn clicking_an_empty_signature_field_signs_it() {
         d.password = "test".into();
     }
     h.run_steps(2);
-    support::outside_menus(&h, "Sign").click();
+    support::outside_menus(h, "Sign").click();
     h.run_steps(6);
-    let s = h.state();
-    let sig = s.session.get(s.views[1].id).unwrap().signatures.iter().find(|x| x.field == "Approver").cloned().unwrap();
-    assert!(sig.signed && sig.visible);
 }
 
+/// Whether the page's hover tip shows and says `text`.
+fn tip_says(h: &Harness<'static, PdfCraftApp>, text: &str) -> bool {
+    let layer = egui::LayerId::new(egui::Order::Tooltip, egui::Id::unique("canvas-hover"));
+    let Some(tip) = h.ctx.memory(|m| m.area_rect(egui::Id::unique("canvas-hover")).filter(|_| m.areas().is_visible(&layer))) else { return false };
+    h.query_all_by_label_contains(text).any(|n| tip.contains(n.rect().center()))
+}
+
+/// A signed field's validation badge is the viewer's own mark, not part of the page: its verdict
+/// is the tip with any tool, beside that tool's cursor.
+#[test]
+fn a_signature_badge_says_its_verdict_with_any_tool() {
+    let dir = dir().join("badge");
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut h = harness(dir.clone());
+    sign_the_empty_field(&mut h);
+    let verdict = {
+        let s = h.state();
+        let sig = s.session.get(s.views[1].id).unwrap().signatures.iter().find(|x| x.field == "Approver").cloned().unwrap();
+        sig.summary()
+    };
+    let p = field_centre(&h);
+    let hover = |h: &mut Harness<'static, PdfCraftApp>, tool: QuickTool, at: Pos2| {
+        h.state_mut().quick_tool = tool;
+        h.run_steps(4);
+        h.hover_at(at);
+        h.run_steps(4);
+        (h.output().platform_output.cursor_icon, tip_says(h, verdict))
+    };
+    assert!(hover(&mut h, QuickTool::Select, p).1, "the Select tool shows the verdict");
+    let stamp = QuickTool::Stamp(pdfcraft_engine::StampKind::DynApproved);
+    assert_eq!(hover(&mut h, stamp, p + egui::vec2(1.0, 0.0)), (egui::CursorIcon::Crosshair, true), "so does a stamp, beside its crosshair");
+}
+
+/// Signing a dynamic form's signature box in the app runs its XFA preSign script as signing begins,
+/// so its notice and the value it sets show before the signer confirms, and that value is in the
+/// signed file; its postSign script runs once signed, its change left to save.
+#[test]
+fn signing_an_xfa_box_runs_its_signing_scripts_in_the_app() {
+    let dir = dir().join("xfa-events");
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut h = harness(dir.clone());
+    let bytes = pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::signing_events_template());
+    h.state_mut().open_bytes("events.pdf", None, bytes).unwrap();
+    h.state_mut().active = Some(1);
+    crate::support::settle(&mut h);
+    let named = |h: &Harness<'static, PdfCraftApp>, n: &str| {
+        let s = h.state();
+        s.session.get(s.views[1].id).unwrap().form.iter().find(|f| f.name == n || f.name.ends_with(&format!(".{n}[0]"))).cloned().unwrap()
+    };
+    let p = {
+        let s = h.state();
+        let doc = s.session.get(s.views[1].id).unwrap();
+        pdfcraft_ui_egui::forms_ui::field_screen_rect(&s.views[1], &doc.info, &named(&h, "sign"), 0).expect("on screen").center()
+    };
+    h.hover_at(p);
+    h.run_steps(1);
+    h.drag_at(p);
+    h.run_steps(1);
+    h.drop_at(p);
+    h.run_steps(3);
+    assert_eq!(h.state().dialog, Some(Dialog::Sign));
+    assert!(h.query_by_label_contains("Signing notice").is_some(), "the preSign script's notice shows before signing");
+    assert_eq!(named(&h, "when").value, ["signed"], "and what it set, under the dialog");
+    let entry = {
+        let id = pdfcraft_engine::sign::pkcs12::open(
+            &std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12")).unwrap(),
+            "test",
+        )
+        .unwrap();
+        h.state_mut().add_digital_id(concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12"), &id.certificate)
+    };
+    {
+        let d = h.state_mut().sign_draft.as_mut().unwrap();
+        d.selected = Some(entry);
+        d.step = SignStep::SignAs;
+        d.password = "test".into();
+    }
+    h.run_steps(2);
+    support::outside_menus(&h, "Sign").click();
+    h.run_steps(6);
+    // The signed file holds the preSign script's value; the postSign one waits to be saved.
+    let signed = std::fs::read(dir.join("contract_signed.pdf")).unwrap();
+    let mut s = pdfcraft_engine::Session::new();
+    let id = s.open("signed.pdf", None, std::sync::Arc::new(signed), None).unwrap();
+    let value =
+        |n: &str| s.get(id).unwrap().form.iter().find(|f| f.name == n || f.name.ends_with(&format!(".{n}[0]"))).map(|f| f.value.clone()).unwrap();
+    assert_eq!(value("when"), ["signed"]);
+    assert!(value("after").is_empty());
+    assert_eq!(named(&h, "after").value, ["done"]);
+    let st = h.state();
+    assert!(st.session.get(st.views[1].id).unwrap().dirty, "the postSign change is not saved yet");
+}
+
+/// Signing a dynamic form's box and then cancelling takes back what its preSign script changed.
+#[test]
+fn cancelling_signing_takes_back_the_presign_scripts_changes() {
+    let dir = dir().join("xfa-events-cancel");
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut h = harness(dir.clone());
+    let bytes = pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::signing_events_template());
+    h.state_mut().open_bytes("events.pdf", None, bytes).unwrap();
+    h.state_mut().active = Some(1);
+    crate::support::settle(&mut h);
+    let named = |h: &Harness<'static, PdfCraftApp>, n: &str| {
+        let s = h.state();
+        s.session.get(s.views[1].id).unwrap().form.iter().find(|f| f.name == n || f.name.ends_with(&format!(".{n}[0]"))).cloned().unwrap()
+    };
+    let sign = named(&h, "sign").name;
+    h.state_mut().start_signing(0, None, Some(sign), None);
+    h.run_steps(2);
+    assert_eq!(named(&h, "when").value, ["signed"]);
+    h.state_mut().dialog = None;
+    h.state_mut().sign_draft = None;
+    h.run_steps(3);
+    assert!(named(&h, "when").value.is_empty(), "taken back");
+    assert!(!named(&h, "when").read_only(), "and unlocked again");
+}
+
+/// A digital signature can show the Fill & Sign signature or an image where the name would be.
 #[test]
 fn the_fill_and_sign_signature_or_an_image_shows_in_a_digital_signature() {
     use pdfcraft_ui_egui::SignGraphic;
@@ -457,6 +676,9 @@ fn stamped(path: &std::path::Path) -> String {
 /// so under the preview: signing neither fails nor writes `?` for them.
 #[test]
 fn the_signature_labels_follow_the_interface_language() {
+    if crate::support::skip_without_catalogs("the_signature_labels_follow_the_interface_language") {
+        return;
+    }
     use pdfcraft_ui_egui::i18n::{Lang, tr};
     let p12 = concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12");
     let cert = pdfcraft_engine::sign::pkcs12::open(&std::fs::read(p12).unwrap(), "test").unwrap().certificate;

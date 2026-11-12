@@ -1,7 +1,9 @@
+use std::sync::Arc;
+
 use super::globals::install;
 use super::host::{Shared, XHost};
 use super::model::{XfaDoc, XfaEvent, XfaNode, XfaOutcome, clip_result};
-use super::*;
+use super::{Attribute, Context, JsResult, Limits, RefCell, Source, js_string, refuse, s, text};
 
 /// Run `script` for `event` on the form `root` (the root subform), from node `event.target`.
 pub fn run_xfa(script: &str, event: &XfaEvent, doc: &XfaDoc, root: &XfaNode, limits: Limits) -> XfaOutcome {
@@ -15,7 +17,7 @@ pub fn run_xfa(script: &str, event: &XfaEvent, doc: &XfaDoc, root: &XfaNode, lim
             let spawned = std::thread::Builder::new()
                 .name("pdfcraft-xfa-js".into())
                 .stack_size(crate::SCRIPT_STACK)
-                .spawn_scoped(scope, || run_here(script, event, doc, root.clone(), limits, &|| {}));
+                .spawn_scoped(scope, || run_here(script, event, doc, Arc::new(root.clone()), false, limits, &|| {}));
             match spawned {
                 Ok(thread) => thread.join().unwrap_or_else(|_| failed("the script stopped with an internal error".into())),
                 Err(e) => failed(format!("the script engine could not start: {e}")),
@@ -23,7 +25,7 @@ pub fn run_xfa(script: &str, event: &XfaEvent, doc: &XfaDoc, root: &XfaNode, lim
         })
     }
     #[cfg(target_arch = "wasm32")]
-    run_here(script, event, doc, root.clone(), limits, &|| {})
+    run_here(script, event, doc, Arc::new(root.clone()), false, limits, &|| {})
 }
 
 /// [`run_xfa`] with a time limit: a script still running `timeout` after the engine is ready
@@ -36,7 +38,7 @@ pub fn run_xfa_within(script: &str, event: &XfaEvent, doc: &XfaDoc, root: XfaNod
         return XfaOutcome { error: Some(why), ..Default::default() };
     }
     let (script, event, doc) = (script.to_string(), event.clone(), doc.clone());
-    run_within("pdfcraft-xfa-js", timeout, move |started| run_here(&script, &event, &doc, root, limits, started))
+    run_within("pdfcraft-xfa-js", timeout, move |started| run_here(&script, &event, &doc, Arc::new(root), false, limits, started))
 }
 
 /// Longest the script engine may take to be ready for a script (its thread and context, and
@@ -125,18 +127,28 @@ pub(crate) fn warm_up() {
 }
 
 /// `started` is called once the engine is ready: a time limit on the script runs from then.
-pub(crate) fn run_here(script: &str, event: &XfaEvent, doc: &XfaDoc, root: XfaNode, limits: Limits, started: &dyn Fn()) -> XfaOutcome {
-    run_here_with(script, "", event, doc, root, limits, started)
+pub(crate) fn run_here(
+    script: &str,
+    event: &XfaEvent,
+    doc: &XfaDoc,
+    root: Arc<XfaNode>,
+    reuse: bool,
+    limits: Limits,
+    started: &dyn Fn(),
+) -> XfaOutcome {
+    run_here_with(script, "", event, doc, root, reuse, limits, started)
 }
 
 /// [`run_here`] with `prelude`, the form's script objects, defined first. They are part of the form, so they are not held
 /// to the size a script may have (their own bound is the caller's), only to its nesting.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn run_here_with(
     script: &str,
     prelude: &str,
     event: &XfaEvent,
     doc: &XfaDoc,
-    root: XfaNode,
+    root: Arc<XfaNode>,
+    reuse: bool,
     limits: Limits,
     started: &dyn Fn(),
 ) -> XfaOutcome {
@@ -147,7 +159,7 @@ pub(crate) fn run_here_with(
     };
     ctx.runtime_limits_mut().set_loop_iteration_limit(limits.loop_iterations);
     ctx.runtime_limits_mut().set_recursion_limit(limits.recursion);
-    let host_state = XHost::new(root, &event.target, doc);
+    let host_state = XHost::new(root, reuse, &event.target, doc);
     let current = host_state.current;
     ctx.insert_data(RefCell::new(host_state));
     let mut out = XfaOutcome::default();

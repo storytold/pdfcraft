@@ -5,8 +5,15 @@ use std::sync::Arc;
 use pdfcraft_cos::{Dict, Document, ObjRef, Object, SaveOptions, Stream, write_full};
 use pdfcraft_filters::{Filter, Params};
 use pdfcraft_optimize::{
-    Compatibility, Compression, ImageSettings, OptimizeError, Settings, SpaceCategory, audit_space, effective_resolutions, optimize,
+    Compatibility, Compression, ImageSettings, MonoCompression, MonoSettings, OptimizeError, Settings, SpaceCategory, audit_space,
+    effective_resolutions, optimize,
 };
+
+/// What image `s` decodes to, its fax or JBIG2 data included, with no limit on the work: the
+/// samples an operation would read through its `ImageBudget`.
+fn decoded_image(doc: &Document, s: &Stream) -> Result<Vec<u8>, pdfcraft_cos::CosError> {
+    pdfcraft_cos::ImageBudget::with_work(u64::MAX).decode(doc, s, pdfcraft_cos::MAX_DECODED)
+}
 
 fn image(doc: &mut Document, w: u32, h: u32, n: usize, jpeg: bool, smask: Option<ObjRef>) -> ObjRef {
     // A smooth gradient with a little texture (photo-like).
@@ -218,6 +225,2188 @@ fn an_identity_decode_array_does_not_stop_reduce() {
     assert_eq!(stream(&doc, odd).dict.int(b"Width"), Some(900));
 }
 
+/// Rows of `w` 1-bit samples (1 white, 0 black), each starting on a byte: lines of text-like
+/// glyphs; or, with `noise`, random bits.
+fn bilevel(w: u32, h: u32, noise: bool) -> Vec<u8> {
+    let stride = (w as usize).div_ceil(8);
+    let mut data = vec![0xFF; stride * h as usize];
+    let mut seed = 0x9E37_79B9_7F4A_7C15u64;
+    let mut next = move || {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        seed
+    };
+    let mut black = |x: usize, y: usize| {
+        if x < w as usize && y < h as usize {
+            data[y * stride + x / 8] &= !(0x80 >> (x % 8));
+        }
+    };
+    if noise {
+        for y in 0..h as usize {
+            for x in 0..w as usize {
+                if next() & 1 == 0 {
+                    black(x, y);
+                }
+            }
+        }
+        return data;
+    }
+    // Lines 24 rows apart, of glyphs drawn from a few shapes (a stem, a bowl, an arch, a dotted
+    // stem) at any column, 1–3 columns apart with a wider gap between words: text as a scanner
+    // sees it. Clean, identical rows would favour Flate; a scan's ragged edges favour Group 4.
+    for line in (4..h as usize).step_by(24) {
+        let mut x = 8;
+        while x + 16 < w as usize {
+            let wide = 5 + (next() % 4) as usize;
+            let shape = next() % 4;
+            // Now and then a row of a stroke is a column wider or narrower at an edge, as a scan's
+            // edges are.
+            let mut ragged = || match next() % 8 {
+                0 => 0,
+                1 => 2,
+                _ => 1,
+            };
+            let mut fill = |x0: usize, x1: usize, y0: usize, y1: usize| {
+                for y in line + y0..line + y1 {
+                    let (left, right) = ((x + x0 + 1).saturating_sub(ragged()), x + x1 + ragged());
+                    for xx in left..right.saturating_sub(1) {
+                        black(xx, y);
+                    }
+                }
+            };
+            match shape {
+                0 => fill(0, 2, 0, 14),
+                1 => {
+                    fill(0, wide, 4, 6);
+                    fill(0, wide, 12, 14);
+                    fill(0, 2, 4, 14);
+                    fill(wide - 2, wide, 4, 14);
+                }
+                2 => {
+                    fill(0, 2, 4, 14);
+                    fill(wide - 2, wide, 6, 14);
+                    fill(0, wide - 1, 4, 6);
+                }
+                _ => {
+                    fill(0, 2, 7, 14);
+                    fill(0, 2, 2, 4);
+                }
+            }
+            x += wide + 2 + (next() % 2) as usize + if next() % 6 == 0 { 7 } else { 0 };
+        }
+    }
+    data
+}
+
+/// A 1-bit image of `data`, Flate-compressed (with `predictor`, a PNG predictor, if any), with
+/// `entries` added to its dictionary.
+fn mono_image(doc: &mut Document, w: u32, h: u32, data: &[u8], predictor: Option<i64>, entries: &[(&str, Object)]) -> ObjRef {
+    let mut d = Dict::new();
+    d.set(b"Type".to_vec(), Object::name("XObject"));
+    d.set(b"Subtype".to_vec(), Object::name("Image"));
+    d.set(b"Width".to_vec(), Object::Int(w as i64));
+    d.set(b"Height".to_vec(), Object::Int(h as i64));
+    for (k, v) in entries {
+        d.set(k.as_bytes().to_vec(), v.clone());
+    }
+    let s = match predictor {
+        None => Stream::flate(d, data),
+        Some(predictor) => {
+            let params = pdfcraft_filters::Params { predictor, colors: 1, bits_per_component: 1, columns: w as i64, early_change: 1 };
+            let mut parms = Dict::new();
+            parms.set(b"Predictor".to_vec(), Object::Int(predictor));
+            parms.set(b"BitsPerComponent".to_vec(), Object::Int(1));
+            parms.set(b"Columns".to_vec(), Object::Int(w as i64));
+            d.set(b"Filter".to_vec(), Object::name("FlateDecode"));
+            d.set(b"DecodeParms".to_vec(), Object::Dict(parms));
+            Stream::from_raw(d, pdfcraft_filters::encode(&pdfcraft_filters::Filter::Flate, &params, data).unwrap())
+        }
+    };
+    doc.add(Object::Stream(s))
+}
+
+fn render(doc: &Document) -> Vec<u8> {
+    let bytes = write_full(doc, &SaveOptions::default()).unwrap();
+    let mut r = pdfcraft_render::PageRenderer::new(Arc::new(bytes), pdfcraft_render::RenderConfig::default());
+    let out = r.render(pdfcraft_render::RenderRequest { page: 0, scale: 1.0, ..Default::default() });
+    assert!(out.error.is_none(), "{:?}", out.error);
+    out.rgba.to_vec()
+}
+
+/// Black-and-white images become CCITT Group 4, losslessly: the page looks the same to the pixel.
+/// Grey, an image mask (with a decode array that inverts it), an indexed image of two colours and
+/// one stored with a PNG predictor qualify; noise (bigger as G4), a 1-bit RGB image, one whose
+/// colour space is a resource name, one wider than Group 4 encodes and a tiny one (bigger as
+/// stored) are left alone, as is everything with `mono: Retain`.
+#[test]
+fn black_and_white_images_become_ccitt_group_4() {
+    let mut doc = Document::new_empty();
+    let (w, h) = (1200, 480);
+    let text = bilevel(w, h, false);
+    let gray = mono_image(&mut doc, w, h, &text, None, &[("BitsPerComponent", 1.into()), ("ColorSpace", Object::name("DeviceGray"))]);
+    let decode = Object::Array(vec![1.into(), 0.into()]);
+    let mask = mono_image(&mut doc, w, h, &text, None, &[("ImageMask", Object::Bool(true)), ("Decode", decode.clone())]);
+    let indexed_cs = Object::Array(vec![
+        Object::name("Indexed"),
+        Object::name("DeviceRGB"),
+        1.into(),
+        Object::String(pdfcraft_cos::PdfString::literal(vec![0xC0, 0x10, 0x10, 0xF8, 0xF0, 0xE0])),
+    ]);
+    let indexed = mono_image(&mut doc, w, h, &text, None, &[("BitsPerComponent", 1.into()), ("ColorSpace", indexed_cs.clone())]);
+    let predicted = mono_image(&mut doc, w, h, &text, Some(15), &[("BitsPerComponent", 1.into()), ("ColorSpace", Object::name("DeviceGray"))]);
+    let noise =
+        mono_image(&mut doc, 400, 200, &bilevel(400, 200, true), None, &[("BitsPerComponent", 1.into()), ("ColorSpace", Object::name("DeviceGray"))]);
+    let rgb = mono_image(
+        &mut doc,
+        400,
+        160,
+        &bilevel(1200, 160, false),
+        None,
+        &[("BitsPerComponent", 1.into()), ("ColorSpace", Object::name("DeviceRGB"))],
+    );
+    let wide = mono_image(
+        &mut doc,
+        40_000,
+        2,
+        &bilevel(40_000, 2, false),
+        None,
+        &[("BitsPerComponent", 1.into()), ("ColorSpace", Object::name("DeviceGray"))],
+    );
+    // A bare /Indexed is no colour space on its own: it names the page's resource, here RGB, so
+    // these samples are three to a pixel.
+    let named =
+        mono_image(&mut doc, 400, 160, &bilevel(1200, 160, false), None, &[("BitsPerComponent", 1.into()), ("ColorSpace", Object::name("Indexed"))]);
+    // 64 × 8 white: its Group 4 data is smaller than its Flate data, but not by the longer
+    // dictionary Group 4 needs.
+    let tiny = mono_image(&mut doc, 64, 8, &[0xFF; 64], None, &[("BitsPerComponent", 1.into()), ("ColorSpace", Object::name("DeviceGray"))]);
+    let tiny_g4 = pdfcraft_filters::encode_g4(&[0xFF; 64], 64, 8).unwrap();
+    assert!(tiny_g4.len() < stream(&doc, tiny).raw.len(), "{} against {}", tiny_g4.len(), stream(&doc, tiny).raw.len());
+    let p = page(
+        &mut doc,
+        &[("G", gray), ("M", mask), ("I", indexed), ("P", predicted), ("N", noise), ("R", rgb), ("W", wide), ("T", tiny), ("X", named)],
+        "q 300 0 0 120 20 660 cm /G Do Q q 0 0.4 0.8 rg 300 0 0 120 320 660 cm /M Do Q q 300 0 0 120 20 520 cm /I Do Q \
+         q 300 0 0 120 320 520 cm /P Do Q q 200 0 0 100 20 400 cm /N Do Q q 200 0 0 80 240 400 cm /R Do Q q 560 0 0 4 20 380 cm /W Do Q q 64 0 0 8 460 400 cm /T Do Q q 200 0 0 80 240 300 cm /X Do Q",
+    );
+    doc.update_dict(p, |d| {
+        if let Some(Object::Dict(res)) = d.get_mut(b"Resources") {
+            let mut cs = Dict::new();
+            cs.set(b"Indexed".to_vec(), Object::name("DeviceRGB"));
+            res.set(b"ColorSpace".to_vec(), Object::Dict(cs));
+        }
+    })
+    .unwrap();
+    let before = render(&doc);
+    let raw = |doc: &Document, r: ObjRef| stream(doc, r).raw;
+    let untouched = [noise, rgb, wide, tiny, named].map(|r| raw(&doc, r));
+
+    let mut kept = doc.clone();
+    let r = optimize(&mut kept, &Settings { mono: RETAIN, ..Settings::default() }).unwrap();
+    assert_eq!(r.images_recompressed, 0, "Retain keeps every image as it is");
+    assert!([gray, mask, indexed, predicted].iter().all(|i| raw(&kept, *i) == raw(&doc, *i)));
+
+    let r = optimize(&mut doc, &Settings::default()).unwrap();
+    assert_eq!(r.images_recompressed, 4);
+    assert!(r.image_bytes_after < r.image_bytes_before, "{} → {}", r.image_bytes_before, r.image_bytes_after);
+    for i in [gray, mask, indexed, predicted] {
+        let s = stream(&doc, i);
+        assert_eq!(s.dict.name(b"Filter"), Some(&b"CCITTFaxDecode"[..]));
+        let parms = s.dict.get(b"DecodeParms").and_then(Object::as_dict).cloned().unwrap();
+        assert_eq!((parms.int(b"K"), parms.int(b"Columns"), parms.int(b"Rows")), (Some(-1), Some(w as i64), Some(h as i64)));
+    }
+    assert_eq!(stream(&doc, mask).dict.get(b"Decode"), Some(&decode), "the decode array stays");
+    assert_eq!(stream(&doc, indexed).dict.get(b"ColorSpace"), Some(&indexed_cs), "the colour space stays");
+    assert_eq!([noise, rgb, wide, tiny, named].map(|r| raw(&doc, r)), untouched);
+    assert!(render(&doc) == before, "the page looks the same");
+}
+
+/// Which 1-bit images qualify for Group 4: those of one colour component, an ICC profile of one
+/// component and a DeviceN of one colourant among them, but not one of three components or two
+/// colourants (more than a bit a pixel); image masks of one bit, as `/BitsPerComponent 1` says or
+/// by default, but not one that says 8; and images past 80 million pixels too, where an image of
+/// eight bits would be left alone (`one_bit_images_are_decoded_up_to_their_own_limit` checks the
+/// bytes of rows a one-bit image may hold without decoding so much). The byte totals count exactly
+/// the images stored again.
+#[test]
+fn group_4_takes_images_of_one_bit_a_pixel_up_to_the_pixel_limit() {
+    let mut doc = Document::new_empty();
+    let (w, h) = (1200u32, 480u32);
+    let text = bilevel(w, h, false);
+    let icc = |doc: &mut Document, n: i64| {
+        let mut d = Dict::new();
+        d.set(b"N".to_vec(), Object::Int(n));
+        Object::Array(vec![Object::name("ICCBased"), Object::Ref(doc.add(Object::Stream(Stream::from_raw(d, Vec::new()))))])
+    };
+    let device_n = |colourants: &[&str]| {
+        let mut tint = Dict::new();
+        tint.set(b"FunctionType".to_vec(), Object::Int(2));
+        tint.set(b"Domain".to_vec(), Object::Array(vec![0.into(), 1.into()]));
+        tint.set(b"N".to_vec(), Object::Int(1));
+        Object::Array(vec![
+            Object::name("DeviceN"),
+            Object::Array(colourants.iter().map(|c| Object::name(c)).collect()),
+            Object::name("DeviceGray"),
+            Object::Dict(tint),
+        ])
+    };
+    let one_bit = |cs: Object| [("BitsPerComponent", 1.into()), ("ColorSpace", cs)];
+    let icc_1 = icc(&mut doc, 1);
+    let icc_1 = mono_image(&mut doc, w, h, &text, None, &one_bit(icc_1));
+    let icc_3 = icc(&mut doc, 3);
+    let icc_3 = mono_image(&mut doc, w, h, &bilevel(3 * w, h, false), None, &one_bit(icc_3));
+    let spot = mono_image(&mut doc, w, h, &text, None, &one_bit(device_n(&["Spot"])));
+    let two_spots = mono_image(&mut doc, w, h, &bilevel(2 * w, h, false), None, &one_bit(device_n(&["Spot", "Other"])));
+    let mask = |bits: i64| [("ImageMask", Object::Bool(true)), ("BitsPerComponent", bits.into())];
+    let mask_1 = mono_image(&mut doc, w, h, &text, None, &mask(1));
+    let mask_8 = mono_image(&mut doc, w, h, &bilevel(8 * w, h, false), None, &mask(8));
+    // 10,000 × 8,000 is the limit of an image of eight bits; one of one bit goes past it.
+    let grey = one_bit(Object::name("DeviceGray"));
+    let at_limit = mono_image(&mut doc, 10_000, 8_000, &bilevel(10_000, 8_000, false), None, &grey);
+    let past_limit = mono_image(&mut doc, 10_000, 8_001, &bilevel(10_000, 8_001, false), None, &grey);
+    let all = [icc_1, icc_3, spot, two_spots, mask_1, mask_8, at_limit, past_limit];
+    let names: Vec<String> = (0..all.len()).map(|i| format!("Im{i}")).collect();
+    // 200 × 80 pt is 432 ppi, 1800 × 1440 pt 400 ppi: below where monochrome downsampling starts.
+    let content: String = (0..all.len())
+        .map(|i| {
+            if i < 6 {
+                format!("q 200 0 0 80 {} {} cm /Im{i} Do Q ", 6 + 200 * (i % 3), 690 - 100 * (i / 3))
+            } else {
+                format!("q 1800 0 0 1440 0 0 cm /Im{i} Do Q ")
+            }
+        })
+        .collect();
+    page(&mut doc, &names.iter().map(String::as_str).zip(all).collect::<Vec<_>>(), &content);
+    let converted = [icc_1, spot, mask_1, at_limit, past_limit];
+    let left = [icc_3, two_spots, mask_8];
+    let before = |doc: &Document, refs: &[ObjRef]| refs.iter().map(|r| stream(doc, *r).raw).collect::<Vec<_>>();
+    let (old, untouched) = (before(&doc, &converted), before(&doc, &left));
+    let r = optimize(&mut doc, &Settings::default()).unwrap();
+    assert_eq!(r.images_recompressed, converted.len(), "{r:?}");
+    for i in converted {
+        assert_eq!(stream(&doc, i).dict.name(b"Filter"), Some(&b"CCITTFaxDecode"[..]), "{i:?}");
+    }
+    assert_eq!(before(&doc, &left), untouched);
+    let new = before(&doc, &converted);
+    assert_eq!((r.image_bytes_before, r.image_bytes_after), (old.iter().map(|b| b.len()).sum(), new.iter().map(|b| b.len()).sum()));
+}
+
+/// An image whose /DecodeParms are a reference, or hold numbers given by reference
+/// (`/Predictor 9 0 R`, which `Dict::int` doesn't follow), is read through them, as one with them
+/// direct: a predictor's tag bytes would otherwise shift every row, and the image would be stored
+/// again wrong. Here a 1-bit image with a PNG predictor (stored again as Group 4), an eight-bit
+/// grey one with a PNG predictor at 600 ppi (resampled), an eight-bit one of only black and white
+/// with PNG predictor 10 (each row's tag a 0, so the shifted rows would still be black and white;
+/// packed to one bit), and a two-entry indexed one the same way come out byte for byte as with
+/// direct parameters.
+#[test]
+fn images_whose_decode_parms_are_references_come_out_as_with_them_direct() {
+    let build = |how: &str| {
+        let mut doc = Document::new_empty();
+        let (w, h) = (1200u32, 480u32);
+        let grey = [("BitsPerComponent", 1.into()), ("ColorSpace", Object::name("DeviceGray"))];
+        let one_bit = mono_image(&mut doc, w, h, &bilevel(w, h, false), Some(15), &grey);
+        let black_and_white_samples = eight_bit(&bilevel(w, h, false), w, h);
+        let shades: Vec<u8> = (0..w * h).map(|i| ((i % w) * 255 / w) as u8 ^ ((i / w) as u8 & 0x0F)).collect();
+        let params = pdfcraft_filters::Params { predictor: 15, colors: 1, bits_per_component: 8, columns: w as i64, early_change: 1 };
+        let mut parms = Dict::new();
+        parms.set(b"Predictor".to_vec(), Object::Int(15));
+        parms.set(b"Columns".to_vec(), Object::Int(w as i64));
+        let mut d = Dict::new();
+        d.set(b"Type".to_vec(), Object::name("XObject"));
+        d.set(b"Subtype".to_vec(), Object::name("Image"));
+        d.set(b"Width".to_vec(), Object::Int(w as i64));
+        d.set(b"Height".to_vec(), Object::Int(h as i64));
+        d.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+        d.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+        d.set(b"Filter".to_vec(), Object::name("FlateDecode"));
+        d.set(b"DecodeParms".to_vec(), Object::Dict(parms));
+        let coded = pdfcraft_filters::encode(&pdfcraft_filters::Filter::Flate, &params, &shades).unwrap();
+        let eight_bit = doc.add(Object::Stream(Stream::from_raw(d.clone(), coded)));
+        let params = pdfcraft_filters::Params { predictor: 10, ..params };
+        let mut parms = Dict::new();
+        parms.set(b"Predictor".to_vec(), Object::Int(10));
+        parms.set(b"Columns".to_vec(), Object::Int(w as i64));
+        d.set(b"DecodeParms".to_vec(), Object::Dict(parms));
+        let black_and_white = pdfcraft_filters::encode(&pdfcraft_filters::Filter::Flate, &params, &black_and_white_samples).unwrap();
+        let packed = doc.add(Object::Stream(Stream::from_raw(d.clone(), black_and_white)));
+        let palette = vec![0, 0, 255, 255, 255, 255];
+        d.set(
+            b"ColorSpace".to_vec(),
+            Object::Array(vec![
+                Object::name("Indexed"),
+                Object::name("DeviceRGB"),
+                1.into(),
+                Object::String(pdfcraft_cos::PdfString::literal(palette)),
+            ]),
+        );
+        let entries = samples_of(&bilevel(w, h, false), w, h, [&[0], &[1]], 8);
+        let entries = pdfcraft_filters::encode(&pdfcraft_filters::Filter::Flate, &params, &entries).unwrap();
+        let indexed = doc.add(Object::Stream(Stream::from_raw(d, entries)));
+        for r in [one_bit, eight_bit, packed, indexed] {
+            let mut s = stream(&doc, r);
+            let Some(Object::Dict(mut parms)) = s.dict.get(b"DecodeParms").cloned() else { panic!("{:?}", s.dict) };
+            let made = match how {
+                "whole" => Object::Ref(doc.add(Object::Dict(parms))),
+                "numbers" => {
+                    for k in [&b"Predictor"[..], b"Columns"] {
+                        let v = parms.get(k).cloned().unwrap();
+                        parms.set(k.to_vec(), Object::Ref(doc.add(v)));
+                    }
+                    Object::Dict(parms)
+                }
+                _ => continue,
+            };
+            s.dict.set(b"DecodeParms".to_vec(), made);
+            doc.set(r, Object::Stream(s));
+        }
+        // 300 × 120 pt is 288 ppi; 144 × 57.6 pt is 600 ppi.
+        page(
+            &mut doc,
+            &[("A", one_bit), ("B", eight_bit), ("C", packed), ("D", indexed)],
+            "q 300 0 0 120 20 600 cm /A Do Q q 144 0 0 57.6 20 400 cm /B Do Q q 300 0 0 120 20 200 cm /C Do Q \
+             q 280 0 0 112 325 200 cm /D Do Q",
+        );
+        let before = [one_bit, eight_bit, packed, indexed].map(|r| stream(&doc, r).raw);
+        let r = optimize(&mut doc, &Settings::default()).unwrap();
+        assert_eq!((r.images_resampled, r.images_recompressed), (1, 3), "{r:?}");
+        let after = [one_bit, eight_bit, packed, indexed].map(|r| stream(&doc, r));
+        assert!(before.iter().zip(&after).all(|(b, a)| *b != a.raw), "all stored again");
+        assert_eq!(after[0].dict.name(b"Filter"), Some(&b"CCITTFaxDecode"[..]));
+        for s in &after[2..] {
+            assert_eq!((s.dict.int(b"BitsPerComponent"), s.dict.name(b"Filter")), (Some(1), Some(&b"CCITTFaxDecode"[..])));
+        }
+        after.map(|s| s.raw)
+    };
+    let direct = build("direct");
+    assert_eq!(build("whole"), direct, "the dictionary by reference");
+    assert_eq!(build("numbers"), direct, "the numbers inside by reference");
+}
+
+/// An image whose data decodes far past what its samples can need (a decompression bomb) is left
+/// alone rather than decoded up to the 1 GiB limit: a 1-bit one that would become Group 4, an
+/// eight-bit one that would be resampled, and an eight-bit one of only black and white that would
+/// be packed to one bit, each with four megabytes of zeros after its samples. Stored as ASCIIHex
+/// text under Flate, broken into lines of 64 digits, their samples aren't a bomb.
+#[test]
+fn images_whose_data_decodes_far_past_their_samples_are_left_alone() {
+    let (w, h) = (1200u32, 480u32);
+    let text = bilevel(w, h, false);
+    let shades: Vec<u8> = (0..w * h).map(|i| ((i % w) * 255 / w) as u8 ^ ((i / w) as u8 & 0x0F)).collect();
+    for padding in [0, 4 << 20] {
+        let mut doc = Document::new_empty();
+        let padded = |data: &[u8]| data.iter().copied().chain(std::iter::repeat_n(0, padding)).collect::<Vec<u8>>();
+        let grey = |bits: i64| [("BitsPerComponent", bits.into()), ("ColorSpace", Object::name("DeviceGray"))];
+        let one_bit = mono_image(&mut doc, w, h, &padded(&text), None, &grey(1));
+        let eight_bit = mono_image(&mut doc, w, h, &padded(&shades), None, &grey(8));
+        let packed = mono_image(&mut doc, w, h, &padded(&self::eight_bit(&text, w, h)), None, &grey(8));
+        // 300 × 120 pt is 288 ppi; 144 × 57.6 pt is 600 ppi.
+        page(
+            &mut doc,
+            &[("A", one_bit), ("B", eight_bit), ("C", packed)],
+            "q 300 0 0 120 20 600 cm /A Do Q q 144 0 0 57.6 20 400 cm /B Do Q q 300 0 0 120 20 200 cm /C Do Q",
+        );
+        let before = [one_bit, eight_bit, packed].map(|r| stream(&doc, r).raw);
+        let r = optimize(&mut doc, &Settings::default()).unwrap();
+        let after = [one_bit, eight_bit, packed].map(|r| stream(&doc, r).raw);
+        if padding == 0 {
+            assert_eq!((r.images_resampled, r.images_recompressed), (1, 2), "{r:?}");
+        } else {
+            assert_eq!((r.images_resampled, r.images_recompressed), (0, 0), "{r:?}");
+            assert_eq!(after, before);
+        }
+    }
+    let hex_lines = |data: &[u8]| {
+        let digits: Vec<u8> = data.iter().flat_map(|b| format!("{b:02X}").into_bytes()).collect();
+        let mut text: Vec<u8> = digits.chunks(64).flat_map(|line| line.iter().copied().chain(*b"\n")).collect();
+        text.push(b'>');
+        pdfcraft_filters::encode_flate(&text)
+    };
+    let mut doc = Document::new_empty();
+    let as_hex = |doc: &mut Document, data: &[u8], bits: i64, (w, h): (u32, u32)| {
+        let mut d = Dict::new();
+        d.set(b"Subtype".to_vec(), Object::name("Image"));
+        d.set(b"Width".to_vec(), Object::Int(w.into()));
+        d.set(b"Height".to_vec(), Object::Int(h.into()));
+        d.set(b"BitsPerComponent".to_vec(), Object::Int(bits));
+        d.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+        d.set(b"Filter".to_vec(), Object::Array(vec![Object::name("FlateDecode"), Object::name("ASCIIHexDecode")]));
+        doc.add(Object::Stream(Stream::from_raw(d, hex_lines(data))))
+    };
+    // Large enough that its hex text in lines is more than twice its samples and a byte a row
+    // plus 4 KiB: 2560 × 1200, drawn at 400 ppi.
+    let page_scan = bilevel(2560, 1200, false);
+    let one_bit = as_hex(&mut doc, &page_scan, 1, (2560, 1200));
+    let eight_bit = as_hex(&mut doc, &shades, 8, (w, h));
+    let packed = as_hex(&mut doc, &self::eight_bit(&text, w, h), 8, (w, h));
+    page(
+        &mut doc,
+        &[("A", one_bit), ("B", eight_bit), ("C", packed)],
+        "q 460.8 0 0 216 20 500 cm /A Do Q q 144 0 0 57.6 20 400 cm /B Do Q q 300 0 0 120 20 200 cm /C Do Q",
+    );
+    optimize(&mut doc, &Settings::default()).unwrap();
+    assert_eq!(stream(&doc, one_bit).dict.name(b"Filter"), Some(&b"CCITTFaxDecode"[..]), "1-bit hex text in lines: Group 4");
+    assert!(stream(&doc, eight_bit).dict.int(b"Width").is_some_and(|nw| nw < i64::from(w)), "8-bit hex text in lines: resampled");
+    assert_eq!(stream(&doc, packed).dict.int(b"BitsPerComponent"), Some(1), "8-bit black-and-white hex text in lines: packed");
+}
+
+/// Monochrome Images keeping each image's compression (and resampling as by default).
+const RETAIN: MonoSettings = MonoSettings { compression: MonoCompression::Retain, ..MonoSettings::REDUCE };
+
+/// Eight-bit samples (0 or 255) from rows of one-bit ones.
+fn eight_bit(bits: &[u8], w: u32, h: u32) -> Vec<u8> {
+    let stride = (w as usize).div_ceil(8);
+    (0..h as usize).flat_map(|y| (0..w as usize).map(move |x| if bits[y * stride + x / 8] & (0x80 >> (x % 8)) != 0 { 255 } else { 0 })).collect()
+}
+
+/// Eight-bit samples of only 0 and 255, dithered (Floyd–Steinberg) from a smooth picture as a
+/// scanner's halftone mode gives them: no shade but black and white, in short runs.
+fn dithered(w: u32, h: u32) -> Vec<u8> {
+    let (w, h) = (w as usize, h as usize);
+    let mut level: Vec<f32> = (0..w * h).map(|i| 127.5 + 127.5 * ((i % w) as f32 / 37.0).sin() * ((i / w) as f32 / 53.0).cos()).collect();
+    let mut out = vec![0u8; w * h];
+    for y in 0..h {
+        for x in 0..w {
+            let i = y * w + x;
+            let v = if level[i] < 128.0 { 0.0 } else { 255.0 };
+            out[i] = v as u8;
+            let e = level[i] - v;
+            if x + 1 < w {
+                level[i + 1] += e * 7.0 / 16.0;
+            }
+            if y + 1 < h {
+                if x > 0 {
+                    level[i + w - 1] += e * 3.0 / 16.0;
+                }
+                level[i + w] += e * 5.0 / 16.0;
+                if x + 1 < w {
+                    level[i + w + 1] += e / 16.0;
+                }
+            }
+        }
+    }
+    out
+}
+
+/// A dithered scan stored as eight-bit grey of only black and white is smaller downsampled and
+/// JPEG-compressed by the grey settings than packed to one bit, which can't shrink its dots: the
+/// smaller wins, so Reduce File Size makes it no larger than with Monochrome Images on Retain.
+/// Clean text is still packed to one bit at the same resolution.
+#[test]
+fn eight_bit_black_and_white_takes_the_smaller_of_one_bit_and_the_grey_settings() {
+    let (w, h) = (1200u32, 1500u32);
+    for (what, samples) in [("dither", dithered(w, h)), ("text", eight_bit(&bilevel(w, h, false), w, h))] {
+        let build = || {
+            let mut doc = Document::new_empty();
+            let img = mono_image(&mut doc, w, h, &samples, None, &[("BitsPerComponent", 8.into()), ("ColorSpace", Object::name("DeviceGray"))]);
+            // 288 × 360 pt is 300 ppi, above where the grey settings downsample.
+            page(&mut doc, &[("A", img)], "q 288 0 0 360 20 400 cm /A Do Q");
+            (doc, img)
+        };
+        let (mut doc, img) = build();
+        optimize(&mut doc, &Settings::default()).unwrap();
+        let (mut retained, _) = build();
+        optimize(&mut retained, &Settings { mono: RETAIN, ..Settings::default() }).unwrap();
+        let (s, kept) = (stream(&doc, img), stream(&retained, img));
+        let bits = if what == "dither" { 8 } else { 1 };
+        assert_eq!(s.dict.int(b"BitsPerComponent"), Some(bits), "{what}: {} bytes, {} with Retain", s.raw.len(), kept.raw.len());
+        if what == "dither" {
+            assert!(s.raw.len() <= kept.raw.len(), "{what}: {} bytes, {} with Retain", s.raw.len(), kept.raw.len());
+        }
+    }
+}
+
+/// The smaller of one bit and the grey settings counts the soft mask each leaves: packed, the
+/// image keeps its mask as it is; resampled by the grey settings, the mask is resampled with it.
+/// Clean text, 1200 × 1500 at 300 ppi, under a noisy mask. A mask as large: the grey settings
+/// shrink it by far more than packing saves on the image, and win. A mask of 640 × 800 (a soft
+/// mask may be another size than its image): resampled to the image's new size it shrinks only a
+/// little, by less than the grey settings' JPEG adds over the packed image, and packing wins.
+#[test]
+fn eight_bit_black_and_white_with_a_soft_mask_counts_the_mask() {
+    let (w, h) = (1200u32, 1500u32);
+    for ((mw, mh), grey_wins) in [((w, h), true), ((640, 800), false)] {
+        let mut doc = Document::new_empty();
+        let mut seed = 0x2545_F491_4F6C_DD1Du64;
+        let noise: Vec<u8> = (0..mw * mh)
+            .map(|_| {
+                seed ^= seed << 13;
+                seed ^= seed >> 7;
+                seed ^= seed << 17;
+                (seed >> 24) as u8
+            })
+            .collect();
+        let mask = mono_image(&mut doc, mw, mh, &noise, None, &[("BitsPerComponent", 8.into()), ("ColorSpace", Object::name("DeviceGray"))]);
+        let grey = [("BitsPerComponent", 8.into()), ("ColorSpace", Object::name("DeviceGray")), ("SMask", Object::Ref(mask))];
+        let img = mono_image(&mut doc, w, h, &eight_bit(&bilevel(w, h, false), w, h), None, &grey);
+        page(&mut doc, &[("A", img)], "q 288 0 0 360 20 400 cm /A Do Q");
+        optimize(&mut doc, &Settings::default()).unwrap();
+        let s = stream(&doc, img);
+        let expected = if grey_wins { (Some(8), Some(&b"DCTDecode"[..])) } else { (Some(1), Some(&b"CCITTFaxDecode"[..])) };
+        assert_eq!((s.dict.int(b"BitsPerComponent"), s.dict.name(b"Filter")), expected, "mask {mw} × {mh}: {:?}", s.dict);
+    }
+}
+
+/// Eight-bit grey images of only black and white (as some scanners and converters write scans)
+/// become one-bit Group 4, losslessly: the page looks the same, an inverting decode array
+/// included. Not touched by this: a grey image with any other shade, an indexed image (its samples
+/// are palette indices), one masked by colour key, and everything with `mono: Retain`.
+#[test]
+fn eight_bit_black_and_white_images_become_one_bit() {
+    let mut doc = Document::new_empty();
+    let (w, h) = (1200, 480);
+    let grey = eight_bit(&bilevel(w, h, false), w, h);
+    let image = |doc: &mut Document, data: &[u8], entries: &[(&str, Object)]| {
+        let mut d = Dict::new();
+        d.set(b"Type".to_vec(), Object::name("XObject"));
+        d.set(b"Subtype".to_vec(), Object::name("Image"));
+        d.set(b"Width".to_vec(), Object::Int(w as i64));
+        d.set(b"Height".to_vec(), Object::Int(h as i64));
+        d.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+        for (k, v) in entries {
+            d.set(k.as_bytes().to_vec(), v.clone());
+        }
+        doc.add(Object::Stream(Stream::flate(d, data)))
+    };
+    let gray_cs = ("ColorSpace", Object::name("DeviceGray"));
+    let plain = image(&mut doc, &grey, std::slice::from_ref(&gray_cs));
+    let decode = Object::Array(vec![1.into(), 0.into()]);
+    let inverted = image(&mut doc, &grey, &[gray_cs.clone(), ("Decode", decode.clone())]);
+    let mut shaded = grey.clone();
+    shaded[1000] = 128;
+    let shade = image(&mut doc, &shaded, std::slice::from_ref(&gray_cs));
+    let palette = Object::Array(vec![
+        Object::name("Indexed"),
+        Object::name("DeviceGray"),
+        255.into(),
+        Object::String(pdfcraft_cos::PdfString::literal((0..=255u8).rev().collect::<Vec<_>>())),
+    ]);
+    let indexed = image(&mut doc, &grey, &[("ColorSpace", palette)]);
+    let keyed = image(&mut doc, &grey, &[gray_cs, ("Mask", Object::Array(vec![0.into(), 0.into()]))]);
+    page(
+        &mut doc,
+        &[("A", plain), ("B", inverted), ("C", shade), ("D", indexed), ("E", keyed)],
+        "q 300 0 0 120 20 660 cm /A Do Q q 300 0 0 120 320 660 cm /B Do Q q 300 0 0 120 20 520 cm /C Do Q \
+         q 300 0 0 120 320 520 cm /D Do Q q 300 0 0 120 20 380 cm /E Do Q",
+    );
+    let before = render(&doc);
+    let raw = |doc: &Document, r: ObjRef| stream(doc, r).raw;
+    // Grey settings that leave grey images alone, so only this conversion acts.
+    let keep = ImageSettings { downsample: false, target_ppi: 150.0, above_ppi: 225.0, compression: Compression::Retain };
+    let settings = Settings { gray: keep, ..Settings::default() };
+
+    let mut kept = doc.clone();
+    let r = optimize(&mut kept, &Settings { mono: RETAIN, ..settings.clone() }).unwrap();
+    assert_eq!(r.images_recompressed, 0, "Retain keeps every image as it is");
+
+    let untouched = [shade, indexed, keyed].map(|r| raw(&doc, r));
+    let old: usize = [plain, inverted].map(|r| raw(&doc, r).len()).iter().sum();
+    let r = optimize(&mut doc, &settings).unwrap();
+    assert_eq!(r.images_recompressed, 2);
+    let new: usize = [plain, inverted].map(|r| raw(&doc, r).len()).iter().sum();
+    assert_eq!((r.image_bytes_before, r.image_bytes_after), (old, new), "the byte totals count both");
+    for i in [plain, inverted] {
+        let s = stream(&doc, i);
+        assert_eq!((s.dict.int(b"BitsPerComponent"), s.dict.name(b"Filter")), (Some(1), Some(&b"CCITTFaxDecode"[..])));
+    }
+    assert_eq!(stream(&doc, inverted).dict.get(b"Decode"), Some(&decode), "the decode array stays");
+    assert_eq!([shade, indexed, keyed].map(|r| raw(&doc, r)), untouched);
+    assert!(render(&doc) == before, "the page looks the same");
+}
+
+/// `bits` (1-bit rows) with each 0 as `values[0]` and each 1 as `values[1]`, at `bpc` bits a sample
+/// (each row starting on a new byte).
+fn samples_of(bits: &[u8], w: u32, h: u32, values: [&[u8]; 2], bpc: usize) -> Vec<u8> {
+    let (w, h) = (w as usize, h as usize);
+    let stride = w.div_ceil(8);
+    let mut out = Vec::new();
+    for y in 0..h {
+        let row: Vec<u8> = (0..w).flat_map(|x| values[usize::from(bits[y * stride + x / 8] & (0x80 >> (x % 8)) != 0)].iter().copied()).collect();
+        let mut packed = vec![0u8; (row.len() * bpc).div_ceil(8)];
+        for (i, s) in row.iter().enumerate() {
+            packed[i * bpc / 8] |= if bpc == 8 { *s } else { s << (8 - bpc - i * bpc % 8) };
+        }
+        out.extend(packed);
+    }
+    out
+}
+
+/// Eight-bit RGB of only black and white becomes one-bit grey, and an indexed image that uses only
+/// palette entries 0 and 1 becomes one bit with its palette (here blue and white), at 8 bits or 4,
+/// both as Group 4 and losslessly: the page looks the same to the pixel. An RGB decode array the
+/// same for each component becomes grey's, and an indexed image's default one goes. Not touched:
+/// RGB with any other colour, a decode array that differs between components, a colour-key mask or
+/// calibrated RGB; an indexed image that uses a third entry or has another decode array; and
+/// everything with `mono: Retain`.
+#[test]
+fn rgb_and_two_colour_indexed_black_and_white_images_become_one_bit() {
+    let mut doc = Document::new_empty();
+    let (w, h) = (1200u32, 480u32);
+    let text = bilevel(w, h, false);
+    let image = |doc: &mut Document, data: &[u8], bpc: i64, cs: Object, entries: &[(&str, Object)]| {
+        let mut d = Dict::new();
+        d.set(b"Type".to_vec(), Object::name("XObject"));
+        d.set(b"Subtype".to_vec(), Object::name("Image"));
+        d.set(b"Width".to_vec(), Object::Int(w.into()));
+        d.set(b"Height".to_vec(), Object::Int(h.into()));
+        d.set(b"BitsPerComponent".to_vec(), Object::Int(bpc));
+        d.set(b"ColorSpace".to_vec(), cs);
+        for (k, v) in entries {
+            d.set(k.as_bytes().to_vec(), v.clone());
+        }
+        doc.add(Object::Stream(Stream::flate(d, data)))
+    };
+    let rgb_cs = Object::name("DeviceRGB");
+    let rgb_data = samples_of(&text, w, h, [&[0, 0, 0], &[255, 255, 255]], 8);
+    let rgb = image(&mut doc, &rgb_data, 8, rgb_cs.clone(), &[]);
+    let pairs = |p: [i64; 6]| Object::Array(p.into_iter().map(Object::Int).collect());
+    let rgb_inverted = image(&mut doc, &rgb_data, 8, rgb_cs.clone(), &[("Decode", pairs([1, 0, 1, 0, 1, 0]))]);
+    let rgb_mixed = image(&mut doc, &rgb_data, 8, rgb_cs.clone(), &[("Decode", pairs([1, 0, 0, 1, 0, 1]))]);
+    let mut red = rgb_data.clone();
+    red[3000..3003].copy_from_slice(&[255, 0, 0]);
+    let rgb_red = image(&mut doc, &red, 8, rgb_cs.clone(), &[]);
+    let mut white_point = Dict::new();
+    white_point.set(b"WhitePoint".to_vec(), Object::Array(vec![Object::Real(0.9505), 1.into(), Object::Real(1.089)]));
+    let cal_rgb = image(&mut doc, &rgb_data, 8, Object::Array(vec![Object::name("CalRGB"), Object::Dict(white_point)]), &[]);
+    let rgb_keyed = image(&mut doc, &rgb_data, 8, rgb_cs, &[("Mask", pairs([0, 0, 0, 0, 0, 0]))]);
+    let palette = |entries: &[u8]| {
+        Object::Array(vec![
+            Object::name("Indexed"),
+            Object::name("DeviceRGB"),
+            (entries.len() as i64 / 3 - 1).into(),
+            Object::String(pdfcraft_cos::PdfString::literal(entries.to_vec())),
+        ])
+    };
+    let blue_white = palette(&[0, 0, 255, 255, 255, 255]);
+    let indices = samples_of(&text, w, h, [&[0], &[1]], 8);
+    let blue = image(&mut doc, &indices, 8, blue_white.clone(), &[]);
+    let default_decode = Object::Array(vec![0.into(), 255.into()]);
+    let blue_decoded = image(&mut doc, &indices, 8, blue_white.clone(), &[("Decode", default_decode)]);
+    let blue_4 = image(&mut doc, &samples_of(&text, w, h, [&[0], &[1]], 4), 4, blue_white.clone(), &[]);
+    let mut third = indices.clone();
+    third[3000] = 2;
+    let three = image(&mut doc, &third, 8, palette(&[0, 0, 255, 255, 255, 255, 255, 0, 0]), &[]);
+    let other_decode = image(&mut doc, &indices, 8, blue_white.clone(), &[("Decode", Object::Array(vec![0.into(), 1.into()]))]);
+    let all = [rgb, rgb_inverted, rgb_mixed, rgb_red, cal_rgb, rgb_keyed, blue, blue_decoded, blue_4, three, other_decode];
+    // 200 × 80 pt is 432 ppi: below where monochrome downsampling starts.
+    let names: Vec<String> = (0..all.len()).map(|i| format!("Im{i}")).collect();
+    let content: String =
+        (0..all.len()).map(|i| format!("q 200 0 0 80 {} {} cm /Im{i} Do Q ", 6 + 200 * (i % 3), 690 - 100 * (i / 3) as i64)).collect();
+    page(&mut doc, &names.iter().map(String::as_str).zip(all).collect::<Vec<_>>(), &content);
+    let before = render(&doc);
+    let raw = |doc: &Document, r: ObjRef| stream(doc, r).raw;
+    // Colour and grey settings that leave images alone, so only this conversion acts.
+    let keep = ImageSettings { downsample: false, target_ppi: 150.0, above_ppi: 225.0, compression: Compression::Retain };
+    let settings = Settings { color: keep, gray: keep, ..Settings::default() };
+
+    let mut kept = doc.clone();
+    let r = optimize(&mut kept, &Settings { mono: RETAIN, ..settings.clone() }).unwrap();
+    assert_eq!((r.images_resampled, r.images_recompressed), (0, 0), "Retain keeps every image as it is");
+
+    let untouched = [rgb_mixed, rgb_red, cal_rgb, rgb_keyed, three, other_decode].map(|r| raw(&doc, r));
+    let r = optimize(&mut doc, &settings).unwrap();
+    assert_eq!((r.images_resampled, r.images_recompressed), (0, 5), "{r:?}");
+    for (i, cs) in [
+        (rgb, Object::name("DeviceGray")),
+        (rgb_inverted, Object::name("DeviceGray")),
+        (blue, blue_white.clone()),
+        (blue_decoded, blue_white.clone()),
+        (blue_4, blue_white),
+    ] {
+        let s = stream(&doc, i);
+        assert_eq!(
+            (s.dict.int(b"BitsPerComponent"), s.dict.name(b"Filter"), s.dict.get(b"ColorSpace")),
+            (Some(1), Some(&b"CCITTFaxDecode"[..]), Some(&cs)),
+            "{i:?}"
+        );
+        assert_eq!(decoded_image(&doc, &s).unwrap(), text, "{i:?}");
+        let decode = if i == rgb_inverted { Some(Object::Array(vec![1.into(), 0.into()])) } else { None };
+        assert_eq!(s.dict.get(b"Decode").cloned(), decode, "{i:?}");
+    }
+    assert_eq!([rgb_mixed, rgb_red, cal_rgb, rgb_keyed, three, other_decode].map(|r| raw(&doc, r)), untouched);
+    assert!(render(&doc) == before, "the page looks the same");
+}
+
+/// Eight-bit black-and-white images in other one-component spaces are packed too: calibrated
+/// grey, an ICC profile of one component, a separation, each keeping its colour space. Calibrated
+/// RGB whose samples are only 0 and 1 is no indexed image, and stays as it is.
+#[test]
+fn eight_bit_black_and_white_in_other_one_component_spaces_is_packed() {
+    let mut doc = Document::new_empty();
+    let (w, h) = (1200u32, 480u32);
+    let text = bilevel(w, h, false);
+    let image = |doc: &mut Document, data: &[u8], cs: Object| {
+        let mut d = Dict::new();
+        d.set(b"Subtype".to_vec(), Object::name("Image"));
+        d.set(b"Width".to_vec(), Object::Int(w.into()));
+        d.set(b"Height".to_vec(), Object::Int(h.into()));
+        d.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+        d.set(b"ColorSpace".to_vec(), cs);
+        doc.add(Object::Stream(Stream::flate(d, data)))
+    };
+    let mut white_point = Dict::new();
+    white_point.set(b"WhitePoint".to_vec(), Object::Array(vec![Object::Real(0.9505), 1.into(), Object::Real(1.089)]));
+    let mut profile = Dict::new();
+    profile.set(b"N".to_vec(), Object::Int(1));
+    let profile = doc.add(Object::Stream(Stream::from_raw(profile, Vec::new())));
+    let mut tint = Dict::new();
+    tint.set(b"FunctionType".to_vec(), Object::Int(2));
+    tint.set(b"Domain".to_vec(), Object::Array(vec![0.into(), 1.into()]));
+    tint.set(b"N".to_vec(), Object::Int(1));
+    let spaces = [
+        Object::Array(vec![Object::name("CalGray"), Object::Dict(white_point.clone())]),
+        Object::Array(vec![Object::name("ICCBased"), Object::Ref(profile)]),
+        Object::Array(vec![Object::name("Separation"), Object::name("Spot"), Object::name("DeviceGray"), Object::Dict(tint)]),
+    ];
+    let grey = samples_of(&text, w, h, [&[0], &[255]], 8);
+    let packed = spaces.clone().map(|cs| image(&mut doc, &grey, cs));
+    let cal_rgb = Object::Array(vec![Object::name("CalRGB"), Object::Dict(white_point)]);
+    let cal_rgb = image(&mut doc, &samples_of(&text, w, h, [&[0, 0, 0], &[1, 1, 1]], 8), cal_rgb);
+    let names = ["A", "B", "C", "D"];
+    // 200 × 80 pt is 432 ppi: below where monochrome downsampling starts.
+    let content: String = (0..4).map(|i| format!("q 200 0 0 80 6 {} cm /{} Do Q ", 690 - 100 * i, names[i])).collect();
+    page(&mut doc, &names.into_iter().zip([packed[0], packed[1], packed[2], cal_rgb]).collect::<Vec<_>>(), &content);
+    let untouched = stream(&doc, cal_rgb).raw;
+    // Colour and grey settings that leave images alone, so only the packing acts.
+    let keep = ImageSettings { downsample: false, target_ppi: 150.0, above_ppi: 225.0, compression: Compression::Retain };
+    optimize(&mut doc, &Settings { color: keep, gray: keep, ..Settings::default() }).unwrap();
+    for (r, cs) in packed.iter().zip(&spaces) {
+        let s = stream(&doc, *r);
+        assert_eq!((s.dict.int(b"BitsPerComponent"), s.dict.get(b"ColorSpace")), (Some(1), Some(cs)), "{cs:?}");
+    }
+    assert_eq!(stream(&doc, cal_rgb).raw, untouched, "calibrated RGB");
+}
+
+/// A resampled Group 4 image is stored as 1-bit Flate when that is smaller, as any resampled image
+/// may be: here vertical stripes, whose identical rows Flate takes for almost nothing.
+#[test]
+fn a_resampled_group_4_image_is_stored_as_flate_when_smaller() {
+    let (w, h) = (1200u32, 480u32);
+    let stripes = vec![0x0Fu8; (w as usize).div_ceil(8) * h as usize];
+    let mut doc = Document::new_empty();
+    let mut d = Dict::new();
+    d.set(b"Subtype".to_vec(), Object::name("Image"));
+    d.set(b"Width".to_vec(), Object::Int(w.into()));
+    d.set(b"Height".to_vec(), Object::Int(h.into()));
+    d.set(b"BitsPerComponent".to_vec(), Object::Int(1));
+    d.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+    d.set(b"Filter".to_vec(), Object::name("CCITTFaxDecode"));
+    let mut parms = Dict::new();
+    parms.set(b"K".to_vec(), Object::Int(-1));
+    parms.set(b"Columns".to_vec(), Object::Int(w.into()));
+    d.set(b"DecodeParms".to_vec(), Object::Dict(parms));
+    let img = doc.add(Object::Stream(Stream::from_raw(d, pdfcraft_filters::encode_g4(&stripes, w, h).unwrap())));
+    // 144 × 57.6 pt is 600 ppi.
+    page(&mut doc, &[("A", img)], "q 144 0 0 57.6 20 600 cm /A Do Q");
+    let r = optimize(&mut doc, &Settings::default()).unwrap();
+    assert_eq!(r.images_resampled, 1, "{r:?}");
+    let s = stream(&doc, img);
+    assert_eq!((s.dict.int(b"Width"), s.dict.name(b"Filter")), (Some(600), Some(&b"FlateDecode"[..])));
+}
+
+/// A decode array is read as numbers, whichever way they are written: an indexed image's default
+/// as `[0 255.0]` or with an entry by reference, and RGB's inverting pairs with a real among them,
+/// pack as when written as integers.
+#[test]
+fn decode_arrays_read_as_numbers_however_written() {
+    let mut doc = Document::new_empty();
+    let (w, h) = (1200u32, 480u32);
+    let text = bilevel(w, h, false);
+    let image = |doc: &mut Document, data: &[u8], cs: Object, decode: Object| {
+        let mut d = Dict::new();
+        d.set(b"Subtype".to_vec(), Object::name("Image"));
+        d.set(b"Width".to_vec(), Object::Int(w.into()));
+        d.set(b"Height".to_vec(), Object::Int(h.into()));
+        d.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+        d.set(b"ColorSpace".to_vec(), cs);
+        d.set(b"Decode".to_vec(), decode);
+        doc.add(Object::Stream(Stream::flate(d, data)))
+    };
+    let palette = Object::Array(vec![
+        Object::name("Indexed"),
+        Object::name("DeviceRGB"),
+        1.into(),
+        Object::String(pdfcraft_cos::PdfString::literal(vec![0, 0, 255, 255, 255, 255])),
+    ]);
+    let indices = samples_of(&text, w, h, [&[0], &[1]], 8);
+    let max = doc.add(Object::Int(255));
+    let real = image(&mut doc, &indices, palette.clone(), Object::Array(vec![0.into(), Object::Real(255.0)]));
+    let referred = image(&mut doc, &indices, palette, Object::Array(vec![0.into(), Object::Ref(max)]));
+    let rgb = samples_of(&text, w, h, [&[0, 0, 0], &[255, 255, 255]], 8);
+    let pairs = Object::Array(vec![1.into(), 0.into(), 1.into(), 0.into(), Object::Real(1.0), 0.into()]);
+    let inverted = image(&mut doc, &rgb, Object::name("DeviceRGB"), pairs);
+    page(
+        &mut doc,
+        &[("A", real), ("B", referred), ("C", inverted)],
+        "q 200 0 0 80 6 690 cm /A Do Q q 200 0 0 80 6 590 cm /B Do Q q 200 0 0 80 6 490 cm /C Do Q",
+    );
+    let keep = ImageSettings { downsample: false, target_ppi: 150.0, above_ppi: 225.0, compression: Compression::Retain };
+    optimize(&mut doc, &Settings { color: keep, gray: keep, ..Settings::default() }).unwrap();
+    for r in [real, referred] {
+        let s = stream(&doc, r);
+        assert_eq!((s.dict.int(b"BitsPerComponent"), s.dict.get(b"Decode")), (Some(1), None), "{r:?}");
+    }
+    let s = stream(&doc, inverted);
+    let decode = Object::Array(vec![1.into(), 0.into()]);
+    assert_eq!((s.dict.int(b"BitsPerComponent"), s.dict.get(b"Decode")), (Some(1), Some(&decode)));
+}
+
+/// With Retain, a Group 3 halftone above 450 ppi, which isn't resampled, stays Group 3 byte for
+/// byte: Retain stores nothing again that it doesn't resample.
+#[test]
+fn retain_keeps_a_group_3_halftone_as_it_is() {
+    let (w, h) = (64u32, 64u32);
+    let a: Vec<u32> = vec![1; 64];
+    let b: Vec<u32> = std::iter::once(0).chain(std::iter::repeat_n(1, 64)).collect();
+    let runs: Vec<&[u32]> = (0..h).map(|y| if y % 2 == 0 { &a[..] } else { &b[..] }).collect();
+    let g3 = group_3(&runs, false, None);
+    let mut doc = Document::new_empty();
+    let mut d = Dict::new();
+    d.set(b"Subtype".to_vec(), Object::name("Image"));
+    d.set(b"Width".to_vec(), Object::Int(w.into()));
+    d.set(b"Height".to_vec(), Object::Int(h.into()));
+    d.set(b"BitsPerComponent".to_vec(), Object::Int(1));
+    d.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+    d.set(b"Filter".to_vec(), Object::name("CCITTFaxDecode"));
+    let mut parms = Dict::new();
+    parms.set(b"K".to_vec(), Object::Int(0));
+    parms.set(b"Columns".to_vec(), Object::Int(w.into()));
+    d.set(b"DecodeParms".to_vec(), Object::Dict(parms));
+    let fax = doc.add(Object::Stream(Stream::from_raw(d, g3.clone())));
+    // 7.68 pt for 64 samples is 600 ppi.
+    page(&mut doc, &[("A", fax)], "q 7.68 0 0 7.68 100 600 cm /A Do Q");
+    assert_eq!(decoded_image(&doc, &stream(&doc, fax)).unwrap().len(), 64 * 8, "the fixture decodes");
+    let r = optimize(&mut doc, &Settings { mono: RETAIN, ..Settings::default() }).unwrap();
+    assert_eq!((r.images_resampled, r.images_recompressed), (0, 0), "{r:?}");
+    assert_eq!(stream(&doc, fax).raw[..], g3[..]);
+}
+
+/// Black-and-white RGB stays RGB where grey would be drawn otherwise: drawn, on any of its uses,
+/// where `/DefaultGray` or `/DefaultRGB` is in force (ISO 32000-2 §8.6.5.6), from a page's
+/// resources or a form's own, as grey would then go through DefaultGray, or no longer through
+/// DefaultRGB; or with a soft mask whose `/Matte` has three components, one for each of RGB's. A
+/// form drawn where they are in force counts too, though it has resources of its own. The same
+/// image drawn plainly, or with a soft mask and no `/Matte`, becomes grey.
+#[test]
+fn black_and_white_rgb_stays_rgb_where_grey_would_be_drawn_otherwise() {
+    let mut doc = Document::new_empty();
+    let (w, h) = (1200u32, 480u32);
+    let rgb_data = samples_of(&bilevel(w, h, false), w, h, [&[0, 0, 0], &[255, 255, 255]], 8);
+    let image = |doc: &mut Document, cs: &str, data: &[u8], entries: &[(&str, Object)]| {
+        let mut d = Dict::new();
+        d.set(b"Type".to_vec(), Object::name("XObject"));
+        d.set(b"Subtype".to_vec(), Object::name("Image"));
+        d.set(b"Width".to_vec(), Object::Int(w.into()));
+        d.set(b"Height".to_vec(), Object::Int(h.into()));
+        d.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+        d.set(b"ColorSpace".to_vec(), Object::name(cs));
+        for (k, v) in entries {
+            d.set(k.as_bytes().to_vec(), v.clone());
+        }
+        doc.add(Object::Stream(Stream::flate(d, data)))
+    };
+    let opaque = vec![255u8; (w * h) as usize];
+    let plain_mask = image(&mut doc, "DeviceGray", &opaque, &[]);
+    let matte_mask = image(&mut doc, "DeviceGray", &opaque, &[("Matte", Object::Array(vec![0.into(); 3]))]);
+    let plain = image(&mut doc, "DeviceRGB", &rgb_data, &[]);
+    let masked = image(&mut doc, "DeviceRGB", &rgb_data, &[("SMask", Object::Ref(plain_mask))]);
+    let matted = image(&mut doc, "DeviceRGB", &rgb_data, &[("SMask", Object::Ref(matte_mask))]);
+    let [under_gray, under_rgb, shared, in_form, nested] = [(); 5].map(|_| image(&mut doc, "DeviceRGB", &rgb_data, &[]));
+    let mut white_point = Dict::new();
+    white_point.set(b"WhitePoint".to_vec(), Object::Array(vec![Object::Real(0.9505), 1.into(), Object::Real(1.089)]));
+    let spaces = |key: &str| {
+        let family = if key == "DefaultGray" { "CalGray" } else { "CalRGB" };
+        let mut c = Dict::new();
+        c.set(key.as_bytes().to_vec(), Object::Array(vec![Object::name(family), Object::Dict(white_point.clone())]));
+        Object::Dict(c)
+    };
+    let draw = |names: &[&str]| names.iter().enumerate().map(|(i, n)| format!("q 200 0 0 80 6 {} cm /{n} Do Q ", 690 - 100 * i)).collect::<String>();
+    let form = |doc: &mut Document, im: ObjRef, spaces: Option<Object>| {
+        let mut xobjects = Dict::new();
+        xobjects.set(b"Im".to_vec(), Object::Ref(im));
+        let mut resources = Dict::new();
+        resources.set(b"XObject".to_vec(), Object::Dict(xobjects));
+        if let Some(spaces) = spaces {
+            resources.set(b"ColorSpace".to_vec(), spaces);
+        }
+        let mut f = Dict::new();
+        f.set(b"Type".to_vec(), Object::name("XObject"));
+        f.set(b"Subtype".to_vec(), Object::name("Form"));
+        f.set(b"BBox".to_vec(), Object::Array(vec![0.into(), 0.into(), 612.into(), 792.into()]));
+        f.set(b"Resources".to_vec(), Object::Dict(resources));
+        doc.add(Object::Stream(Stream::from_raw(f, draw(&["Im"]).into_bytes())))
+    };
+    // Drawn plainly first, then where DefaultGray is in force: the second walk must happen.
+    let plain_form = form(&mut doc, nested, None);
+    page(&mut doc, &[("A", plain), ("B", masked), ("C", matted), ("D", shared), ("E", plain_form)], &draw(&["A", "B", "C", "D", "E"]));
+    for (key, xobjects) in [("DefaultGray", vec![("A", under_gray), ("B", shared), ("C", plain_form)]), ("DefaultRGB", vec![("A", under_rgb)])] {
+        let names: Vec<&str> = xobjects.iter().map(|(n, _)| *n).collect();
+        let p = page(&mut doc, &xobjects, &draw(&names));
+        doc.update_dict(p, |d| {
+            let mut res = d.get(b"Resources").and_then(Object::as_dict).cloned().unwrap();
+            res.set(b"ColorSpace".to_vec(), spaces(key));
+            d.set(b"Resources".to_vec(), Object::Dict(res));
+        })
+        .unwrap();
+    }
+    // A form with its own resources, DefaultGray among them, on a page without any.
+    let gray_form = form(&mut doc, in_form, Some(spaces("DefaultGray")));
+    page(&mut doc, &[("F", gray_form)], "/F Do");
+    let kept = [under_gray, under_rgb, shared, in_form, nested, matted];
+    let before = kept.map(|r| stream(&doc, r));
+    // Colour and grey settings that leave images alone, so only this conversion acts.
+    let keep = ImageSettings { downsample: false, target_ppi: 150.0, above_ppi: 225.0, compression: Compression::Retain };
+    let settings = Settings { color: keep, gray: keep, ..Settings::default() };
+    let r = optimize(&mut doc, &settings).unwrap();
+    assert_eq!((r.images_resampled, r.images_recompressed), (0, 2), "{r:?}");
+    for i in [plain, masked] {
+        let s = stream(&doc, i);
+        assert_eq!((s.dict.get(b"ColorSpace"), s.dict.int(b"BitsPerComponent")), (Some(&Object::name("DeviceGray")), Some(1)), "{i:?}");
+    }
+    for (i, b) in kept.iter().zip(&before) {
+        let s = stream(&doc, *i);
+        assert_eq!((&s.dict, &s.raw), (&b.dict, &b.raw), "{i:?}");
+    }
+
+    // A use that couldn't be followed (forms nested too deep) may be where DefaultGray is in force.
+    let mut doc = Document::new_empty();
+    let img = image(&mut doc, "DeviceRGB", &rgb_data, &[]);
+    let deep = nested_forms(&mut doc, img, 13);
+    page(&mut doc, &[("Im", img), ("F", deep)], &draw(&["Im", "F"]));
+    let before = stream(&doc, img);
+    optimize(&mut doc, &settings).unwrap();
+    assert_eq!(stream(&doc, img).raw, before.raw, "a use not followed");
+}
+
+/// An empty document, and a maker of images of only black and white as eight-bit `DeviceRGB`.
+fn rgb_page_fixture() -> (Document, impl Fn(&mut Document) -> ObjRef) {
+    let (w, h) = (1200u32, 480u32);
+    let rgb_data = samples_of(&bilevel(w, h, false), w, h, [&[0, 0, 0], &[255, 255, 255]], 8);
+    let image = move |doc: &mut Document| {
+        let mut d = Dict::new();
+        d.set(b"Type".to_vec(), Object::name("XObject"));
+        d.set(b"Subtype".to_vec(), Object::name("Image"));
+        d.set(b"Width".to_vec(), Object::Int(w.into()));
+        d.set(b"Height".to_vec(), Object::Int(h.into()));
+        d.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+        d.set(b"ColorSpace".to_vec(), Object::name("DeviceRGB"));
+        doc.add(Object::Stream(Stream::flate(d, &rgb_data)))
+    };
+    (Document::new_empty(), image)
+}
+
+/// `q … cm /N Do Q` for each name, one under the other.
+fn draw_each(names: &[&str]) -> String {
+    names.iter().enumerate().map(|(i, n)| format!("q 200 0 0 80 6 {} cm /{n} Do Q ", 690 - 100 * i)).collect()
+}
+
+/// An `/XObject` dictionary of `names`.
+fn xobject_dict(names: &[(&str, ObjRef)]) -> Dict {
+    let mut x = Dict::new();
+    for (n, r) in names {
+        x.set(n.as_bytes().to_vec(), Object::Ref(*r));
+    }
+    x
+}
+
+/// A stream drawing `/Im` (or nothing) whose `/Resources` is `resources`, with `extra` in its
+/// dictionary: a form, an appearance or a tiling pattern.
+fn drawing(doc: &mut Document, resources: Option<Object>, extra: &[(&str, Object)]) -> ObjRef {
+    let mut f = Dict::new();
+    f.set(b"BBox".to_vec(), Object::Array(vec![0.into(), 0.into(), 612.into(), 792.into()]));
+    if let Some(resources) = resources {
+        f.set(b"Resources".to_vec(), resources);
+    }
+    for (k, v) in extra {
+        f.set(k.as_bytes().to_vec(), v.clone());
+    }
+    doc.add(Object::Stream(Stream::from_raw(f, draw_each(&["Im"]).into_bytes())))
+}
+
+fn form_entries() -> [(&'static str, Object); 2] {
+    [("Type", Object::name("XObject")), ("Subtype", Object::name("Form"))]
+}
+
+/// Resources of `entries`.
+fn resources_of(entries: Vec<(&str, Object)>) -> Dict {
+    let mut res = Dict::new();
+    for (k, v) in entries {
+        res.set(k.as_bytes().to_vec(), v);
+    }
+    res
+}
+
+/// Give page `p` an annotation whose normal appearance is `appearance`.
+fn annotate(doc: &mut Document, p: ObjRef, appearance: ObjRef) {
+    let mut ap = Dict::new();
+    ap.set(b"N".to_vec(), Object::Ref(appearance));
+    let mut annotation = Dict::new();
+    annotation.set(b"Subtype".to_vec(), Object::name("Square"));
+    annotation.set(b"Rect".to_vec(), Object::Array(vec![0.into(), 0.into(), 100.into(), 100.into()]));
+    annotation.set(b"AP".to_vec(), Object::Dict(ap));
+    let annotation = doc.add(Object::Dict(annotation));
+    let mut annots = doc.get(p).as_dict().and_then(|d| d.get(b"Annots").and_then(|a| a.as_array().cloned())).unwrap_or_default();
+    annots.push(Object::Ref(annotation));
+    doc.update_dict(p, |d| d.set(b"Annots".to_vec(), Object::Array(annots))).unwrap();
+}
+
+/// `/DefaultGray` as a calibrated grey, in a `/ColorSpace` resource dictionary.
+fn default_gray() -> Object {
+    let mut white_point = Dict::new();
+    white_point.set(b"WhitePoint".to_vec(), Object::Array(vec![Object::Real(0.9505), 1.into(), Object::Real(1.089)]));
+    let mut c = Dict::new();
+    c.set(b"DefaultGray".to_vec(), Object::Array(vec![Object::name("CalGray"), Object::Dict(white_point)]));
+    Object::Dict(c)
+}
+
+/// Optimize with colour and grey settings that leave images alone, so only packing acts; the
+/// report's images resampled and stored again.
+fn pack_only(doc: &mut Document) -> (usize, usize) {
+    let keep = ImageSettings { downsample: false, target_ppi: 150.0, above_ppi: 225.0, compression: Compression::Retain };
+    let r = optimize(doc, &Settings { color: keep, gray: keep, ..Settings::default() }).unwrap();
+    (r.images_resampled, r.images_recompressed)
+}
+
+/// Black-and-white RGB becomes grey for every use at once, so it stays RGB, byte for byte, when
+/// any use may be beyond the page content and forms the optimizer reads, where other default
+/// colour spaces may be in force: drawn by an annotation's appearance whose resources make
+/// `/DefaultGray` the grey it would be drawn in; by a tiling pattern; through an `/XObject`
+/// dictionary, or a form, that a page shares with such an appearance;
+/// referred to with another generation by the page than by such an appearance; drawn plainly on
+/// one page and, named with another generation, on a page whose resources set `/DefaultGray`;
+/// drawn plainly and only listed (not drawn) where `/DefaultGray` is in force, under the same
+/// generation or another, as a Type3 glyph without resources could draw it there; or held in an
+/// array elsewhere (another image's `/Alternates`).
+#[test]
+fn black_and_white_rgb_used_beyond_the_page_content_read_stays_rgb() {
+    let (mut doc, image) = rgb_page_fixture();
+    let [in_annotation, in_pattern, shared_xobjects, shared_form, other_generation, generation_under_defaults, listed, listed_as_1, in_array] =
+        [(); 9].map(|_| image(&mut doc));
+    let gray_resources = |im: Object| Some(Object::Dict(resources_of(vec![("XObject", im), ("ColorSpace", default_gray())])));
+    let direct = |im: ObjRef| Object::Dict(xobject_dict(&[("Im", im)]));
+
+    let appearance = drawing(&mut doc, gray_resources(direct(in_annotation)), &form_entries());
+    let pattern_entries =
+        [("PatternType", 1.into()), ("PaintType", 1.into()), ("TilingType", 1.into()), ("XStep", 612.into()), ("YStep", 792.into())];
+    let pattern = drawing(&mut doc, Some(Object::Dict(resources_of(vec![("XObject", direct(in_pattern))]))), &pattern_entries);
+    let p = page(&mut doc, &[("A", in_annotation), ("B", in_pattern)], &(draw_each(&["A", "B"]) + "/Pattern cs /P scn 0 0 10 10 re f"));
+    annotate(&mut doc, p, appearance);
+    doc.update_dict(p, |d| {
+        let mut res = d.get(b"Resources").and_then(Object::as_dict).cloned().unwrap();
+        let mut patterns = Dict::new();
+        patterns.set(b"P".to_vec(), Object::Ref(pattern));
+        res.set(b"Pattern".to_vec(), Object::Dict(patterns));
+        d.set(b"Resources".to_vec(), Object::Dict(res));
+    })
+    .unwrap();
+
+    // An /XObject dictionary of its own, read for a page, and a form drawn by a page, each also
+    // used by an appearance under DefaultGray.
+    let x = doc.add(Object::Dict(xobject_dict(&[("Im", shared_xobjects)])));
+    let q = page(&mut doc, &[], &draw_each(&["Im"]));
+    doc.update_dict(q, |d| d.set(b"Resources".to_vec(), Object::Dict(resources_of(vec![("XObject", Object::Ref(x))])))).unwrap();
+    let appearance = drawing(&mut doc, gray_resources(Object::Ref(x)), &form_entries());
+    annotate(&mut doc, q, appearance);
+    let form = drawing(&mut doc, Some(Object::Dict(resources_of(vec![("XObject", direct(shared_form))]))), &form_entries());
+    let q = page(&mut doc, &[("F", form)], &draw_each(&["F"]));
+    let appearance = drawing(&mut doc, gray_resources(Object::Dict(xobject_dict(&[("Im", form)]))), &form_entries());
+    annotate(&mut doc, q, appearance);
+
+    // The page names it with generation 1 (it is 0); the appearance with 0.
+    let q = page(&mut doc, &[("Im", ObjRef { generation: 1, ..other_generation })], &draw_each(&["Im"]));
+    let appearance = drawing(&mut doc, gray_resources(direct(other_generation)), &form_entries());
+    annotate(&mut doc, q, appearance);
+
+    // Drawn plainly as 0, and as 1 where DefaultGray is in force.
+    page(&mut doc, &[("Im", generation_under_defaults)], &draw_each(&["Im"]));
+    let q = page(&mut doc, &[], &draw_each(&["Im"]));
+    let gray = resources_of(vec![
+        ("XObject", Object::Dict(xobject_dict(&[("Im", ObjRef { generation: 1, ..generation_under_defaults })]))),
+        ("ColorSpace", default_gray()),
+    ]);
+    doc.update_dict(q, |d| d.set(b"Resources".to_vec(), Object::Dict(gray))).unwrap();
+
+    // Drawn plainly, and only listed where DefaultGray is in force, as 0 and as 1.
+    page(&mut doc, &[("A", listed), ("B", listed_as_1)], &draw_each(&["A", "B"]));
+    let q = page(&mut doc, &[], "");
+    let gray = resources_of(vec![
+        ("XObject", Object::Dict(xobject_dict(&[("A", listed), ("B", ObjRef { generation: 1, ..listed_as_1 })]))),
+        ("ColorSpace", default_gray()),
+    ]);
+    doc.update_dict(q, |d| d.set(b"Resources".to_vec(), Object::Dict(gray))).unwrap();
+
+    // Another image drawn on the page lists it as an alternate.
+    let mut alternate = Dict::new();
+    alternate.set(b"Image".to_vec(), Object::Ref(in_array));
+    let holder = image(&mut doc);
+    doc.update_dict(holder, |d| {
+        d.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+        d.set(b"Alternates".to_vec(), Object::Array(vec![Object::Dict(alternate)]));
+    })
+    .unwrap();
+    page(&mut doc, &[("Im", in_array), ("Alt", holder)], &draw_each(&["Im"]));
+
+    let kept = [in_annotation, in_pattern, shared_xobjects, shared_form, other_generation, generation_under_defaults, listed, listed_as_1, in_array];
+    let before = kept.map(|r| stream(&doc, r));
+    pack_only(&mut doc);
+    for (i, b) in kept.iter().zip(&before) {
+        let s = stream(&doc, *i);
+        assert_eq!((&s.dict, &s.raw), (&b.dict, &b.raw), "{i:?}");
+    }
+}
+
+/// Black-and-white RGB that the page content and forms the optimizer reads are the only uses of
+/// becomes grey, however its resources are written: drawn on two pages, by a form, under two
+/// names on one page; through resources that are an object of their own, shared by two pages,
+/// whose `/XObject` dictionary is one too; through resources an object of their own with a direct
+/// `/XObject` dictionary; through resources a page inherits from the page tree; by a form whose
+/// `/Resources` is a reference; by a form without resources, through its page's; listed under a
+/// second name nothing draws; through resources an object of their own that a page without
+/// content lists too; and with an object nothing in the document reaches referring to it as well.
+#[test]
+fn black_and_white_rgb_drawn_only_where_the_optimizer_reads_becomes_grey() {
+    let (mut doc, image) = rgb_page_fixture();
+    let [everywhere, shared_resources, resources_object, inherited, form_resources_object, no_resources, spare_name, no_contents, unreachable] =
+        [(); 9].map(|_| image(&mut doc));
+    let set_resources = |doc: &mut Document, q: ObjRef, res: Object| doc.update_dict(q, |d| d.set(b"Resources".to_vec(), res)).unwrap();
+
+    let form =
+        drawing(&mut doc, Some(Object::Dict(resources_of(vec![("XObject", Object::Dict(xobject_dict(&[("Im", everywhere)])))]))), &form_entries());
+    page(&mut doc, &[("E", everywhere), ("F", form)], &draw_each(&["E", "F"]));
+    page(&mut doc, &[("E", everywhere), ("G", everywhere)], &draw_each(&["E", "G"]));
+
+    let x = doc.add(Object::Dict(xobject_dict(&[("Im", shared_resources)])));
+    let res = doc.add(Object::Dict(resources_of(vec![("XObject", Object::Ref(x))])));
+    for _ in 0..2 {
+        let q = page(&mut doc, &[], &draw_each(&["Im"]));
+        set_resources(&mut doc, q, Object::Ref(res));
+    }
+    let res = doc.add(Object::Dict(resources_of(vec![("XObject", Object::Dict(xobject_dict(&[("Im", resources_object)])))])));
+    let q = page(&mut doc, &[], &draw_each(&["Im"]));
+    set_resources(&mut doc, q, Object::Ref(res));
+
+    let q = page(&mut doc, &[], &draw_each(&["I"]));
+    doc.update_dict(q, |d| {
+        d.remove(b"Resources");
+    })
+    .unwrap();
+    let pages = doc.root().and_then(|r| doc.get(r).as_dict().and_then(|d| d.reference(b"Pages"))).unwrap();
+    set_resources(&mut doc, pages, Object::Dict(resources_of(vec![("XObject", Object::Dict(xobject_dict(&[("I", inherited)])))])));
+
+    let res = doc.add(Object::Dict(resources_of(vec![("XObject", Object::Dict(xobject_dict(&[("Im", form_resources_object)])))])));
+    let form = drawing(&mut doc, Some(Object::Ref(res)), &form_entries());
+    page(&mut doc, &[("F", form)], &draw_each(&["F"]));
+    let form = drawing(&mut doc, None, &form_entries());
+    page(&mut doc, &[("F", form), ("Im", no_resources)], &draw_each(&["F"]));
+
+    page(&mut doc, &[("C", spare_name), ("D", spare_name)], &draw_each(&["C"]));
+    let res = doc.add(Object::Dict(resources_of(vec![("XObject", Object::Dict(xobject_dict(&[("Im", no_contents)])))])));
+    for drawn in [true, false] {
+        let q = page(&mut doc, &[], &draw_each(&["Im"]));
+        set_resources(&mut doc, q, Object::Ref(res));
+        if !drawn {
+            doc.update_dict(q, |d| {
+                d.remove(b"Contents");
+            })
+            .unwrap();
+        }
+    }
+
+    page(&mut doc, &[("Im", unreachable)], &draw_each(&["Im"]));
+    // A form nothing refers to, drawing it under DefaultGray.
+    let orphan = resources_of(vec![("XObject", Object::Dict(xobject_dict(&[("Im", unreachable)]))), ("ColorSpace", default_gray())]);
+    drawing(&mut doc, Some(Object::Dict(orphan)), &form_entries());
+
+    let grey = [everywhere, shared_resources, resources_object, inherited, form_resources_object, no_resources, spare_name, no_contents, unreachable];
+    assert_eq!(pack_only(&mut doc), (0, grey.len()));
+    for i in grey {
+        let s = stream(&doc, i);
+        assert_eq!((s.dict.get(b"ColorSpace"), s.dict.int(b"BitsPerComponent")), (Some(&Object::name("DeviceGray")), Some(1)), "{i:?}");
+    }
+}
+
+/// LibreOffice writes one resources object for a page and its `/Pages` node, and a transparency
+/// group's form whose `/Resources` is that same object, which the object lists in turn. Black-
+/// and-white RGB in it becomes grey: every reference is one the page walk reads, the cycle
+/// included. Drawn from outside as well, by an appearance under `/DefaultGray` that draws the
+/// form, it stays RGB.
+#[test]
+fn black_and_white_rgb_in_resources_its_page_tree_and_a_form_share_becomes_grey() {
+    for outside in [false, true] {
+        let (mut doc, image) = rgb_page_fixture();
+        let img = image(&mut doc);
+        let res = doc.add(Object::Dict(Dict::new()));
+        let form = drawing(&mut doc, Some(Object::Ref(res)), &form_entries());
+        doc.update_dict(res, |d| d.set(b"XObject".to_vec(), Object::Dict(xobject_dict(&[("Im", img), ("Tr", form)])))).unwrap();
+        let p = page(&mut doc, &[], &draw_each(&["Im", "Tr"]));
+        let pages = doc.root().and_then(|r| doc.get(r).as_dict().and_then(|d| d.reference(b"Pages"))).unwrap();
+        for holder in [p, pages] {
+            doc.update_dict(holder, |d| d.set(b"Resources".to_vec(), Object::Ref(res))).unwrap();
+        }
+        if outside {
+            let gray = resources_of(vec![("XObject", Object::Dict(xobject_dict(&[("Im", form)]))), ("ColorSpace", default_gray())]);
+            let appearance = drawing(&mut doc, Some(Object::Dict(gray)), &form_entries());
+            annotate(&mut doc, p, appearance);
+        }
+        let before = stream(&doc, img);
+        pack_only(&mut doc);
+        let s = stream(&doc, img);
+        if outside {
+            assert_eq!((&s.dict, &s.raw), (&before.dict, &before.raw), "drawn from outside too");
+        } else {
+            assert_eq!((s.dict.get(b"ColorSpace"), s.dict.int(b"BitsPerComponent")), (Some(&Object::name("DeviceGray")), Some(1)));
+        }
+    }
+}
+
+/// Dense local mixed-sample patches are retained conservatively by the monochrome settings.
+/// One-bit Flate, CCITT and masks preserve samples; eight-bit bilevel inputs may be packed
+/// losslessly. Disable the independent gray/color reduction for the exact-render comparison:
+/// those settings can otherwise choose smaller grayscale/JPEG output for eight-bit sources.
+/// The Retain case separately checks that gray/color reduction remains available.
+#[test]
+fn ambiguous_monochrome_text_is_recompressed_without_lossy_reduction() {
+    let mut doc = Document::new_empty();
+    let (w, h) = (1200u32, 480u32);
+    let text = bilevel(w, h, false);
+    let grey = [("BitsPerComponent", 1.into()), ("ColorSpace", Object::name("DeviceGray"))];
+    let g4 = |doc: &mut Document, entries: &[(&str, Object)]| {
+        let mut d = Dict::new();
+        d.set(b"Subtype".to_vec(), Object::name("Image"));
+        d.set(b"Width".to_vec(), Object::Int(w.into()));
+        d.set(b"Height".to_vec(), Object::Int(h.into()));
+        d.set(b"Filter".to_vec(), Object::Array(vec![Object::name("CCITTFaxDecode")]));
+        let mut parms = Dict::new();
+        parms.set(b"K".to_vec(), Object::Int(-1));
+        parms.set(b"Columns".to_vec(), Object::Int(w.into()));
+        d.set(b"DecodeParms".to_vec(), Object::Array(vec![Object::Dict(parms)]));
+        for (k, v) in entries {
+            d.set(k.as_bytes().to_vec(), v.clone());
+        }
+        doc.add(Object::Stream(Stream::from_raw(d, pdfcraft_filters::encode_g4(&text, w, h).unwrap())))
+    };
+    // Group 4 behind ASCIIHexDecode, its parameters second in the array.
+    let behind_hex = |doc: &mut Document| {
+        let r = g4(doc, &grey);
+        let s = stream(doc, r);
+        let mut d = s.dict.clone();
+        let parms = d.get(b"DecodeParms").and_then(Object::as_array).and_then(|a| a.first()).cloned().unwrap();
+        d.set(b"Filter".to_vec(), Object::Array(vec![Object::name("ASCIIHexDecode"), Object::name("CCITTFaxDecode")]));
+        d.set(b"DecodeParms".to_vec(), Object::Array(vec![Object::Null, parms]));
+        let hex = s.raw.iter().map(|b| format!("{b:02x}")).chain([">".to_string()]).collect::<String>().into_bytes();
+        doc.set(r, Object::Stream(Stream::from_raw(d, hex)));
+        r
+    };
+    let flate = mono_image(&mut doc, w, h, &text, None, &grey);
+    let fax = g4(&mut doc, &grey);
+    let hex_fax = behind_hex(&mut doc);
+    let hex_at_400 = behind_hex(&mut doc);
+    let decode = Object::Array(vec![1.into(), 0.into()]);
+    let mask = mono_image(&mut doc, w, h, &text, None, &[("ImageMask", Object::Bool(true)), ("Decode", decode.clone())]);
+    let mut d = Dict::new();
+    d.set(b"Subtype".to_vec(), Object::name("Image"));
+    d.set(b"Width".to_vec(), Object::Int(w.into()));
+    d.set(b"Height".to_vec(), Object::Int(h.into()));
+    d.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+    d.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+    let eight = doc.add(Object::Stream(Stream::flate(d.clone(), &eight_bit(&text, w, h))));
+    d.set(b"ColorSpace".to_vec(), Object::name("DeviceRGB"));
+    let rgb = doc.add(Object::Stream(Stream::flate(d.clone(), &samples_of(&text, w, h, [&[0, 0, 0], &[255, 255, 255]], 8))));
+    d.set(b"Decode".to_vec(), Object::Array([1, 0, 1, 0, 1, 0].map(Object::Int).to_vec()));
+    let rgb_inverted = doc.add(Object::Stream(Stream::flate(d, &samples_of(&text, w, h, [&[255, 255, 255], &[0, 0, 0]], 8))));
+    let at_400 = mono_image(&mut doc, w, h, &text, None, &grey);
+    let fax_at_400 = g4(&mut doc, &grey);
+    let mut sm = Dict::new();
+    sm.set(b"Subtype".to_vec(), Object::name("Image"));
+    sm.set(b"Width".to_vec(), Object::Int(2));
+    sm.set(b"Height".to_vec(), Object::Int(1));
+    sm.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+    sm.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+    let smask = doc.add(Object::Stream(Stream::flate(sm, &[255, 200])));
+    let soft = mono_image(&mut doc, w, h, &text, None, &[grey[0].clone(), grey[1].clone(), ("SMask", Object::Ref(smask))]);
+    // 144 × 57.6 pt is 2 × 0.8 in: 600 ppi. 216 × 86.4 pt is 400 ppi.
+    page(
+        &mut doc,
+        &[
+            ("A", flate),
+            ("B", fax),
+            ("C", mask),
+            ("D", eight),
+            ("E", at_400),
+            ("F", fax_at_400),
+            ("G", soft),
+            ("H", hex_fax),
+            ("I", hex_at_400),
+            ("J", rgb),
+            ("K", rgb_inverted),
+        ],
+        "q 144 0 0 57.6 20 700 cm /A Do Q q 144 0 0 57.6 200 700 cm /B Do Q q 0 0 1 rg 144 0 0 57.6 380 700 cm /C Do Q \
+         q 144 0 0 57.6 20 600 cm /D Do Q q 216 0 0 86.4 200 580 cm /E Do Q q 216 0 0 86.4 20 480 cm /F Do Q \
+         q 144 0 0 57.6 260 480 cm /G Do Q q 144 0 0 57.6 430 600 cm /H Do Q q 216 0 0 86.4 20 360 cm /I Do Q q 144 0 0 57.6 260 380 cm /J Do Q \
+         q 144 0 0 57.6 430 480 cm /K Do Q",
+    );
+    let before = render(&doc);
+    let raw = |doc: &Document, r: ObjRef| stream(doc, r).raw;
+    let size = |doc: &Document, r: ObjRef| {
+        let d = stream(doc, r).dict;
+        (d.int(b"Width").unwrap(), d.int(b"Height").unwrap())
+    };
+    // This ragged text fixture has dense local mixed-sample patches. The conservative
+    // tone guard retains it too: a false positive costs size, not document content.
+
+    // The grey and colour settings left alone too: an image of more bits would otherwise take
+    // them when smaller.
+    let mut off = doc.clone();
+    let keep = ImageSettings { downsample: false, target_ppi: 150.0, above_ppi: 225.0, compression: Compression::Retain };
+    let mono = MonoSettings { downsample: false, ..MonoSettings::REDUCE };
+    let r = optimize(&mut off, &Settings { mono, gray: keep, color: keep, ..Settings::default() }).unwrap();
+    assert_eq!(r.images_resampled, 0, "{r:?}");
+    assert!([flate, fax, mask, eight, hex_fax, rgb, rgb_inverted].iter().all(|i| size(&off, *i) == (1200, 480)));
+
+    let mut kept = doc.clone();
+    let r = optimize(&mut kept, &Settings { mono: RETAIN, ..Settings::default() }).unwrap();
+    // Not the inverted RGB: the colour settings leave an image with a decode array alone.
+    assert_eq!(r.images_resampled, 2, "{r:?}");
+    assert_eq!(stream(&kept, flate).dict.name(b"Filter"), Some(&b"FlateDecode"[..]), "Retain: Flate stays Flate");
+    for i in [fax, hex_fax] {
+        assert_eq!(stream(&kept, i).dict.get(b"Filter"), stream(&doc, i).dict.get(b"Filter"), "Retain keeps the exact filter chain");
+    }
+    assert_eq!(raw(&kept, hex_at_400), raw(&doc, hex_at_400), "and nothing else changes");
+    for i in [flate, fax, hex_fax] {
+        assert_eq!((size(&kept, i), decoded_image(&kept, &stream(&kept, i)).unwrap()), ((1200, 480), text.clone()), "{i:?}");
+    }
+    let bits = [eight, rgb, rgb_inverted].map(|i| stream(&kept, i).dict.int(b"BitsPerComponent"));
+    assert_eq!(bits, [Some(8); 3], "Retain leaves eight bits to the grey and colour settings");
+
+    let untouched = [fax_at_400].map(|r| raw(&doc, r));
+    let hex_len = raw(&doc, hex_at_400).len();
+    let r = optimize(&mut doc, &Settings { gray: keep, color: keep, ..Settings::default() }).unwrap();
+    assert_eq!((r.images_resampled, r.images_recompressed), (0, 9), "{r:?}");
+    assert_eq!(stream(&doc, rgb).dict.get(b"ColorSpace"), Some(&Object::name("DeviceGray")));
+    for i in [flate, fax, mask, eight, hex_fax, rgb] {
+        let s = stream(&doc, i);
+        assert_eq!((size(&doc, i), s.dict.int(b"BitsPerComponent")), ((1200, 480), if i == mask { None } else { Some(1) }));
+        assert!(matches!(s.filters().as_slice(), [(Filter::CcittFax | Filter::Flate, _)]), "{i:?}");
+        assert_eq!(decoded_image(&doc, &s).unwrap(), text.clone(), "{i:?}");
+    }
+    assert_eq!(stream(&doc, mask).dict.get(b"Decode"), Some(&decode), "the decode array stays");
+    // Grey now, with grey's decode pair, which makes 1 black: its ties are black too.
+    let s = stream(&doc, rgb_inverted);
+    let inverting = Object::Array(vec![1.into(), 0.into()]);
+    assert_eq!(
+        (size(&doc, rgb_inverted), s.dict.get(b"ColorSpace"), s.dict.get(b"Decode")),
+        ((1200, 480), Some(&Object::name("DeviceGray")), Some(&inverting))
+    );
+    assert_eq!(decoded_image(&doc, &s).unwrap(), text.iter().map(|b| !b).collect::<Vec<u8>>(), "the same picture, ties black");
+    for i in [at_400, soft, hex_at_400] {
+        assert_eq!((size(&doc, i), stream(&doc, i).dict.name(b"Filter")), ((1200, 480), Some(&b"CCITTFaxDecode"[..])), "{i:?}");
+    }
+    assert!(raw(&doc, hex_at_400).len() < hex_len, "the ASCIIHexDecode is dropped");
+    assert_eq!(decoded_image(&doc, &stream(&doc, hex_at_400)).unwrap(), text, "and the picture kept");
+    assert_eq!([fax_at_400].map(|r| raw(&doc, r)), untouched);
+    let after = render(&doc);
+    assert_eq!(after, before, "conservative retention preserves the rendered page exactly");
+}
+
+/// Monochrome downsampling leaves a halftone or a dither at its resolution, as most new pixels
+/// would cover both black and white and taking the sample covering more would turn its tones
+/// solid: a 50% checkerboard, a 25% ordered dither and an error-diffused one, each at 600 ppi.
+/// Dense ragged text is retained too. Rows wider than a fax row (`MAX_CCITT_COLUMNS`)
+/// are never averaged: the averaging keeps a counter for each column.
+#[test]
+fn monochrome_downsampling_leaves_halftones_and_overwide_rows_at_their_resolution() {
+    let (w, h) = (1200u32, 480u32);
+    let stride = (w as usize).div_ceil(8);
+    let pattern = |white: &dyn Fn(usize, usize) -> bool| {
+        let mut data = vec![0u8; stride * h as usize];
+        for y in 0..h as usize {
+            for x in 0..w as usize {
+                if white(x, y) {
+                    data[y * stride + x / 8] |= 0x80 >> (x % 8);
+                }
+            }
+        }
+        data
+    };
+    let diffused = dithered(w, h);
+    let grey = [("BitsPerComponent", 1.into()), ("ColorSpace", Object::name("DeviceGray"))];
+    let mut doc = Document::new_empty();
+    let text = mono_image(&mut doc, w, h, &bilevel(w, h, false), None, &grey);
+    let halftones =
+        [pattern(&|x, y| (x + y) % 2 == 0), pattern(&|x, y| x % 2 == 1 || y % 2 == 1), pattern(&|x, y| diffused[y * w as usize + x] == 255)]
+            .map(|data| mono_image(&mut doc, w, h, &data, None, &grey));
+    // 144 × 57.6 pt is 600 ppi.
+    let names = ["T", "A", "B", "C"];
+    let content: String = (0..4).map(|i| format!("q 144 0 0 57.6 {} 600 cm /{} Do Q ", 6 + 150 * i, names[i])).collect();
+    page(&mut doc, &names.into_iter().zip([text, halftones[0], halftones[1], halftones[2]]).collect::<Vec<_>>(), &content);
+    optimize(&mut doc, &Settings::default()).unwrap();
+    let size = |r: ObjRef| {
+        let d = stream(&doc, r).dict;
+        (d.int(b"Width"), d.int(b"Height"))
+    };
+    assert_eq!(size(text), (Some(1200), Some(480)), "ambiguous dense text is retained conservatively");
+    for (i, r) in halftones.iter().enumerate() {
+        assert_eq!(size(*r), (Some(1200), Some(480)), "halftone {i}");
+    }
+
+    for (columns, resampled) in [(pdfcraft_filters::MAX_CCITT_COLUMNS, 1), (pdfcraft_filters::MAX_CCITT_COLUMNS + 1, 0)] {
+        let mut doc = Document::new_empty();
+        let white = vec![0xFF; (columns as usize).div_ceil(8) * 2];
+        let img = mono_image(&mut doc, columns, 2, &white, None, &grey);
+        // Far above 450 ppi both ways.
+        page(&mut doc, &[("A", img)], "q 612 0 0 0.1 0 400 cm /A Do Q");
+        let r = optimize(&mut doc, &Settings::default()).unwrap();
+        assert_eq!(r.images_resampled, resampled, "{columns} columns: {r:?}");
+    }
+}
+
+/// A fax image behind a decompression bomb is left alone: the filters before its decoder may
+/// produce no more than a fax code of its size can take (about a byte a pixel), not the 1 GiB
+/// limit. Here a Group 4 page at 600 ppi behind Flate, with four megabytes of zeros after its
+/// code; without them it is averaged down.
+#[test]
+fn a_fax_image_behind_a_decompression_bomb_is_left_alone() {
+    let (w, h) = (1200u32, 480u32);
+    let g4 = pdfcraft_filters::encode_g4(&bilevel(w, h, false), w, h).unwrap();
+    for padding in [0, 4 << 20] {
+        let mut doc = Document::new_empty();
+        let mut code = g4.clone();
+        code.resize(g4.len() + padding, 0);
+        let mut d = Dict::new();
+        d.set(b"Subtype".to_vec(), Object::name("Image"));
+        d.set(b"Width".to_vec(), Object::Int(w.into()));
+        d.set(b"Height".to_vec(), Object::Int(h.into()));
+        d.set(b"BitsPerComponent".to_vec(), Object::Int(1));
+        d.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+        d.set(b"Filter".to_vec(), Object::Array(vec![Object::name("FlateDecode"), Object::name("CCITTFaxDecode")]));
+        let mut parms = Dict::new();
+        parms.set(b"K".to_vec(), Object::Int(-1));
+        parms.set(b"Columns".to_vec(), Object::Int(w.into()));
+        d.set(b"DecodeParms".to_vec(), Object::Array(vec![Object::Null, Object::Dict(parms)]));
+        let img = doc.add(Object::Stream(Stream::from_raw(d, pdfcraft_filters::encode_flate(&code))));
+        // 144 × 57.6 pt is 600 ppi.
+        page(&mut doc, &[("A", img)], "q 144 0 0 57.6 20 600 cm /A Do Q");
+        let before = stream(&doc, img).raw;
+        let r = optimize(&mut doc, &Settings::default()).unwrap();
+        if padding == 0 {
+            assert_eq!(r.images_resampled, 0, "ambiguous local tones are retained: {r:?}");
+            assert_eq!(decoded_image(&doc, &stream(&doc, img)).unwrap(), bilevel(w, h, false));
+        } else {
+            assert_eq!((r.images_resampled, r.images_recompressed), (0, 0), "{r:?}");
+            assert_eq!(stream(&doc, img).raw, before);
+        }
+    }
+}
+
+/// A CCITT image `w` × `h` coded as Group 4 from `bits`, behind ASCIIHexDecode when `hex`.
+fn g4_image(doc: &mut Document, bits: &[u8], (w, h): (u32, u32), hex: bool) -> ObjRef {
+    let g4 = pdfcraft_filters::encode_g4(bits, w, h).unwrap();
+    let mut d = Dict::new();
+    d.set(b"Subtype".to_vec(), Object::name("Image"));
+    d.set(b"Width".to_vec(), Object::Int(w.into()));
+    d.set(b"Height".to_vec(), Object::Int(h.into()));
+    d.set(b"BitsPerComponent".to_vec(), Object::Int(1));
+    d.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+    let mut parms = Dict::new();
+    parms.set(b"K".to_vec(), Object::Int(-1));
+    parms.set(b"Columns".to_vec(), Object::Int(w.into()));
+    let data = if hex {
+        d.set(b"Filter".to_vec(), Object::Array(vec![Object::name("ASCIIHexDecode"), Object::name("CCITTFaxDecode")]));
+        d.set(b"DecodeParms".to_vec(), Object::Array(vec![Object::Null, Object::Dict(parms)]));
+        g4.iter().flat_map(|b| format!("{b:02x}").into_bytes()).chain(*b">").collect()
+    } else {
+        d.set(b"Filter".to_vec(), Object::name("CCITTFaxDecode"));
+        d.set(b"DecodeParms".to_vec(), Object::Dict(parms));
+        g4
+    };
+    doc.add(Object::Stream(Stream::from_raw(d, data)))
+}
+
+/// What Monochrome Images leaves alone and what it may still do. A Group 4 halftone above 450 ppi
+/// isn't resampled, so it stays byte for byte: alone, by default; behind ASCIIHexDecode, with
+/// Retain (by default it is stored again as Group 4 alone). Under Retain an ambiguous Flate scan
+/// keeps its bytes and resolution though Group 4 would be smaller. A busy Group 4 image behind ASCIIHexDecode, whose
+/// code is more than three times its raster, decodes within a fax code's bound and is stored
+/// again as Group 4 alone. Sixteen-bit grey of only 0x0000 and 0xFFFF isn't eight-bit black and
+/// white, and keeps its bytes.
+#[test]
+fn monochrome_images_keep_what_they_should() {
+    let (w, h) = (1200u32, 480u32);
+    let stride = (w as usize).div_ceil(8);
+    let checker: Vec<u8> = (0..h as usize).flat_map(|y| vec![if y % 2 == 0 { 0xAA } else { 0x55 }; stride]).collect();
+    let mut seed = 0x2545_F491_4F6C_DD1Du64;
+    let mut next = move || {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        seed
+    };
+    // Twelve dark bands a row, their edges ragged by up to five samples, as a scan's are.
+    let mut ragged = vec![0xFFu8; stride * h as usize];
+    for y in 0..h as usize {
+        for band in 0..12 {
+            let (x0, x1) = (band * 100 + (next() % 5) as usize, band * 100 + 50 + (next() % 5) as usize);
+            for x in x0..x1.min(w as usize) {
+                ragged[y * stride + x / 8] &= !(0x80 >> (x % 8));
+            }
+        }
+    }
+    let busy: Vec<u8> = (0..256).flat_map(|y| [if y % 2 == 0 { 0xAA } else { 0xFF }; 32]).collect();
+    let build = || {
+        let mut doc = Document::new_empty();
+        let alone = g4_image(&mut doc, &checker, (w, h), false);
+        let wrapped = g4_image(&mut doc, &checker, (w, h), true);
+        let grey = [("BitsPerComponent", 1.into()), ("ColorSpace", Object::name("DeviceGray"))];
+        let scan = mono_image(&mut doc, w, h, &ragged, None, &grey);
+        let fax = g4_image(&mut doc, &busy, (256, 256), true);
+        let mut d = Dict::new();
+        d.set(b"Subtype".to_vec(), Object::name("Image"));
+        d.set(b"Width".to_vec(), Object::Int(w.into()));
+        d.set(b"Height".to_vec(), Object::Int(h.into()));
+        d.set(b"BitsPerComponent".to_vec(), Object::Int(16));
+        d.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+        let samples: Vec<u8> = eight_bit(&bilevel(w, h, false), w, h).iter().flat_map(|v| [*v, *v]).collect();
+        let deep = doc.add(Object::Stream(Stream::flate(d, &samples)));
+        // 144 × 57.6 pt is 600 ppi; 46.08 pt for 256 samples is 400 ppi.
+        page(
+            &mut doc,
+            &[("A", alone), ("B", wrapped), ("C", scan), ("D", fax), ("E", deep)],
+            "q 144 0 0 57.6 20 700 cm /A Do Q q 144 0 0 57.6 200 700 cm /B Do Q q 144 0 0 57.6 20 600 cm /C Do Q \
+             q 46.08 0 0 46.08 200 600 cm /D Do Q q 144 0 0 57.6 20 500 cm /E Do Q",
+        );
+        (doc, [alone, wrapped, scan, fax, deep])
+    };
+    let raw = |doc: &Document, r: ObjRef| stream(doc, r).raw;
+    let filters = |doc: &Document, r: ObjRef| stream(doc, r).filters().len();
+
+    let (mut doc, [alone, wrapped, scan, fax, deep]) = build();
+    let before = [alone, deep].map(|r| raw(&doc, r));
+    optimize(&mut doc, &Settings::default()).unwrap();
+    assert_eq!([alone, deep].map(|r| raw(&doc, r)), before, "a Group 4 halftone alone, and sixteen-bit grey");
+    assert_eq!(filters(&doc, wrapped), 1, "a wrapped Group 4 halftone is stored again alone by default");
+    assert!(matches!(stream(&doc, scan).filters().as_slice(), [(Filter::CcittFax | Filter::Flate, _)]), "the scan: Group 4 or Flate");
+    assert_eq!(decoded_image(&doc, &stream(&doc, scan)).unwrap(), ragged, "the scan preserves every sample");
+    assert_eq!((stream(&doc, fax).dict.name(b"Filter"), filters(&doc, fax)), (Some(&b"CCITTFaxDecode"[..]), 1), "the busy fax image");
+
+    let (mut doc, [_, wrapped, scan, _, _]) = build();
+    let before = raw(&doc, wrapped);
+    let r = optimize(&mut doc, &Settings { mono: RETAIN, ..Settings::default() }).unwrap();
+    assert_eq!(raw(&doc, wrapped), before, "Retain: a wrapped Group 4 halftone stays as it is");
+    let s = stream(&doc, scan);
+    assert_eq!((s.dict.int(b"Width"), s.dict.name(b"Filter")), (Some(1200), Some(&b"FlateDecode"[..])), "Retain: {r:?}");
+    assert_eq!(decoded_image(&doc, &s).unwrap(), ragged, "Retain preserves every sample");
+}
+
+/// `rows` coded as CCITT Group 3, one-dimensional (`/K 0`): each row its runs in turn, white first,
+/// with ITU-T T.4's terminating codes for the few lengths used here. With `on_bytes`, each row
+/// starts on a byte: `Some(false)`, with no end-of-line codes (TIFF's Modified Huffman); `Some(true)`,
+/// after an end-of-line code that the fill ends on a byte (T.4's fill, as TIFF writes it).
+fn group_3(rows: &[&[u32]], mixed: bool, on_bytes: Option<bool>) -> Vec<u8> {
+    let code = |white: bool, run: u32| match (white, run) {
+        (true, 0) => "00110101",
+        (true, 1) => "000111",
+        (false, 1) => "010",
+        (true, 8) => "10011",
+        (true, 16) => "101010",
+        (true, 32) => "00011011",
+        (false, 8) => "000101",
+        (false, 16) => "0000010111",
+        (false, 32) => "000001101010",
+        _ => panic!("no code here for a run of {run}"),
+    };
+    let mut bits = String::new();
+    for row in rows {
+        let codes = mixed || on_bytes == Some(true);
+        if on_bytes.is_some() {
+            // The end-of-line code is 12 bits.
+            while !(bits.len() + if codes { 12 } else { 0 }).is_multiple_of(8) {
+                bits.push('0');
+            }
+        }
+        if codes {
+            bits.push_str("000000000001");
+        }
+        // Mixed coding (/K above 0): a 1 bit after the code, the row one-dimensional.
+        if mixed {
+            bits.push('1');
+        }
+        row.iter().enumerate().for_each(|(i, run)| bits.push_str(code(i % 2 == 0, *run)));
+    }
+    bits.as_bytes().chunks(8).map(|c| c.iter().enumerate().fold(0u8, |b, (i, d)| b | (u8::from(*d == b'1') << (7 - i)))).collect()
+}
+
+/// A Group 3 fax image is stored again as Group 4 when that is smaller, the same picture (to the
+/// pixel on the page, against the picture in Flate); with Retain it stays Group 3. One-dimensional (/K 0) and mixed (/K 1, with
+/// end-of-line codes) alike, and rows on bytes, with no codes and with codes the fill ends on a byte
+/// (without `/EndOfLine`, which reading by the flag misread).
+#[test]
+fn group_3_fax_images_become_group_4() {
+    let (w, h) = (64u32, 64u32);
+    let runs: Vec<&[u32]> = [&[32, 32][..], &[16; 4], &[8; 8], &[0, 16, 16, 32]].into_iter().flat_map(|r| std::iter::repeat_n(r, 16)).collect();
+    // White is 1, as CCITTFaxDecode gives it without /BlackIs1.
+    let mut bits = Vec::new();
+    for row in &runs {
+        let mut packed = [0u8; 8];
+        let mut x = 0;
+        for (i, run) in row.iter().enumerate() {
+            for p in x..x + *run as usize {
+                if i % 2 == 0 {
+                    packed[p / 8] |= 0x80 >> (p % 8);
+                }
+            }
+            x += *run as usize;
+        }
+        bits.extend(packed);
+    }
+    for (k, on_bytes) in [(0, None), (1, None), (0, Some(false)), (0, Some(true)), (1, Some(true))] {
+        let g3 = group_3(&runs, k > 0, on_bytes);
+        let (end_of_line, encoded_byte_align) = (k > 0 && on_bytes.is_none(), on_bytes.is_some());
+        let p = pdfcraft_filters::CcittParams { k, columns: w.into(), end_of_line, encoded_byte_align, ..Default::default() };
+        let mut work = u64::MAX;
+        assert_eq!(
+            pdfcraft_filters::decode_ccitt_within(&g3, &p, h, &mut work).unwrap(),
+            bits,
+            "/K {k}, on bytes {on_bytes:?}: the Group 3 data is the picture"
+        );
+
+        let mut doc = Document::new_empty();
+        let mut d = Dict::new();
+        d.set(b"Subtype".to_vec(), Object::name("Image"));
+        d.set(b"Width".to_vec(), Object::Int(w.into()));
+        d.set(b"Height".to_vec(), Object::Int(h.into()));
+        d.set(b"BitsPerComponent".to_vec(), Object::Int(1));
+        d.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+        // The page with the picture in Flate, as it should look.
+        let mut control = Document::new_empty();
+        let flate = control.add(Object::Stream(Stream::flate(d.clone(), &bits)));
+        page(&mut control, &[("A", flate)], "q 64 0 0 64 100 600 cm /A Do Q");
+        d.set(b"Filter".to_vec(), Object::name("CCITTFaxDecode"));
+        let mut parms = Dict::new();
+        parms.set(b"K".to_vec(), Object::Int(k));
+        parms.set(b"EndOfLine".to_vec(), Object::Bool(end_of_line));
+        parms.set(b"EncodedByteAlign".to_vec(), Object::Bool(encoded_byte_align));
+        parms.set(b"Columns".to_vec(), Object::Int(w.into()));
+        parms.set(b"Rows".to_vec(), Object::Int(h.into()));
+        d.set(b"DecodeParms".to_vec(), Object::Dict(parms));
+        let fax = doc.add(Object::Stream(Stream::from_raw(d, g3.clone())));
+        page(&mut doc, &[("A", fax)], "q 64 0 0 64 100 600 cm /A Do Q");
+
+        let mut kept = doc.clone();
+        optimize(&mut kept, &Settings { mono: RETAIN, ..Settings::default() }).unwrap();
+        assert_eq!(stream(&kept, fax).raw[..], g3[..], "/K {k}, on bytes {on_bytes:?}: Retain keeps Group 3");
+
+        let r = optimize(&mut doc, &Settings::default()).unwrap();
+        assert_eq!((r.images_resampled, r.images_recompressed), (0, 1), "/K {k}, on bytes {on_bytes:?}: {r:?}");
+        let s = stream(&doc, fax);
+        assert_eq!(doc.fax_params(&s).map(|p| p.k), Some(-1), "/K {k}, on bytes {on_bytes:?}: Group 4");
+        assert!(s.raw.len() < g3.len(), "{} bytes, from {}", s.raw.len(), g3.len());
+        assert_eq!(decoded_image(&doc, &s).unwrap(), bits, "/K {k}, on bytes {on_bytes:?}: the same picture");
+        assert!(render(&doc) == render(&control), "/K {k}, on bytes {on_bytes:?}: the page looks as the picture does");
+    }
+}
+
+/// The images of a document that are images, by object number.
+fn image_refs(doc: &Document) -> Vec<ObjRef> {
+    doc.object_numbers()
+        .into_iter()
+        .map(|num| ObjRef { num, generation: doc.generation(num) })
+        .filter(|r| matches!(&*doc.get(*r), Object::Stream(s) if s.dict.name(b"Subtype") == Some(b"Image")))
+        .collect()
+}
+
+/// Black-and-white images as lossless JBIG2: the page looks the same to the pixel (so
+/// JBIG2Decode gives black as 0, as the encoder assumes), and scan-like text comes out smaller
+/// than as Group 4. JBIG2Decode is PDF 1.4, so a PDF 1.3 document gets `/Version /1.4` in its
+/// catalog.
+#[test]
+fn black_and_white_images_become_jbig2() {
+    let mut doc = Document::new_empty();
+    let (w, h) = (1200, 480);
+    let text = bilevel(w, h, false);
+    let gray = mono_image(&mut doc, w, h, &text, None, &[("BitsPerComponent", 1.into()), ("ColorSpace", Object::name("DeviceGray"))]);
+    let decode = Object::Array(vec![1.into(), 0.into()]);
+    let mask = mono_image(&mut doc, w, h, &text, None, &[("ImageMask", Object::Bool(true)), ("Decode", decode.clone())]);
+    let indexed_cs = Object::Array(vec![
+        Object::name("Indexed"),
+        Object::name("DeviceRGB"),
+        1.into(),
+        Object::String(pdfcraft_cos::PdfString::literal(vec![0xC0, 0x10, 0x10, 0xF8, 0xF0, 0xE0])),
+    ]);
+    let indexed = mono_image(&mut doc, w, h, &text, None, &[("BitsPerComponent", 1.into()), ("ColorSpace", indexed_cs.clone())]);
+    page(
+        &mut doc,
+        &[("G", gray), ("M", mask), ("I", indexed)],
+        "q 300 0 0 120 20 660 cm /G Do Q q 0 0.4 0.8 rg 300 0 0 120 320 660 cm /M Do Q q 300 0 0 120 20 520 cm /I Do Q",
+    );
+    // The same document, as PDF 1.3.
+    let mut bytes = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
+    bytes[..8].copy_from_slice(b"%PDF-1.3");
+    let doc = Document::open(Arc::new(bytes)).unwrap();
+    assert_eq!(doc.version(), "1.3");
+    let before = render(&doc);
+
+    let mut g4 = doc.clone();
+    let as_g4 = optimize(&mut g4, &Settings::default()).unwrap();
+    let mut jbig2 = doc.clone();
+    let settings = Settings { mono: MonoSettings { compression: MonoCompression::Jbig2, ..MonoSettings::REDUCE }, ..Settings::default() };
+    let r = optimize(&mut jbig2, &settings).unwrap();
+    assert_eq!(r.images_recompressed, 3);
+    assert!(r.image_bytes_after < as_g4.image_bytes_after, "JBIG2 {} bytes, Group 4 {}", r.image_bytes_after, as_g4.image_bytes_after);
+    let images: Vec<Stream> = image_refs(&jbig2).into_iter().map(|i| stream(&jbig2, i)).collect();
+    assert_eq!(images.len(), 3);
+    // The same text three times: the grey image and the mask share one symbol dictionary, and the
+    // indexed image, which only those share, is coded alone.
+    let globals_of = |s: &Stream| s.dict.get(b"DecodeParms").and_then(Object::as_dict).map(|d| (d.len(), d.reference(b"JBIG2Globals")));
+    let is_indexed = |s: &Stream| s.dict.get(b"ColorSpace").and_then(Object::as_array).is_some();
+    let shared: Vec<_> = images.iter().filter(|s| !is_indexed(s)).map(globals_of).collect();
+    assert!(shared.len() == 2 && shared[0].is_some_and(|(n, g)| n == 1 && g.is_some()) && shared[0] == shared[1], "{shared:?}");
+    for s in &images {
+        assert_eq!(s.dict.name(b"Filter"), Some(&b"JBIG2Decode"[..]));
+        if is_indexed(s) {
+            assert!(!s.dict.contains(b"DecodeParms"));
+        }
+    }
+    assert!(images.iter().any(|s| s.dict.get(b"Decode") == Some(&decode)), "the decode array stays");
+    let indexed_kept =
+        |s: &Stream| s.dict.get(b"ColorSpace").and_then(Object::as_array).and_then(|a| a.first()).and_then(Object::as_name) == Some(b"Indexed");
+    assert!(images.iter().any(indexed_kept), "the colour space stays");
+    let catalog = jbig2.root().and_then(|r| jbig2.get(r).as_dict().cloned()).unwrap();
+    assert_eq!(catalog.name(b"Version"), Some(&b"1.4"[..]));
+    assert!(g4.root().and_then(|r| g4.get(r).as_dict().cloned()).is_some_and(|c| !c.contains(b"Version")), "Group 4 is PDF 1.0");
+    assert!(render(&jbig2) == before, "the page looks the same");
+    // The integration also supports changing an already-CCITT image to lossless JBIG2.
+    let mut from_g4 = g4.clone();
+    let converted = optimize(&mut from_g4, &settings).unwrap();
+    assert_eq!(converted.images_recompressed, 3);
+    assert!(render(&from_g4) == before, "CCITT decoded and re-encoded as JBIG2 keeps the picture");
+}
+
+/// A catalog `/Version` given by reference is read through it: a PDF 1.3 file whose catalog says
+/// 1.7 by reference keeps 1.7 when its images become JBIG2, rather than being lowered to 1.4; one
+/// whose catalog says 1.3 by reference gets 1.4.
+#[test]
+fn a_catalog_version_given_by_reference_is_read() {
+    for (catalog, after) in [("1.7", "1.7"), ("1.3", "1.4")] {
+        let mut doc = Document::new_empty();
+        let (w, h) = (1200, 480);
+        let text = bilevel(w, h, false);
+        let im = mono_image(&mut doc, w, h, &text, None, &[("BitsPerComponent", 1.into()), ("ColorSpace", Object::name("DeviceGray"))]);
+        page(&mut doc, &[("Im", im)], "q 300 0 0 120 20 660 cm /Im Do Q");
+        let version = doc.add(Object::name(catalog));
+        let root = doc.root().unwrap();
+        doc.update_dict(root, |c| c.set(b"Version".to_vec(), Object::Ref(version))).unwrap();
+        let mut bytes = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
+        bytes[..8].copy_from_slice(b"%PDF-1.3");
+        let mut doc = Document::open(Arc::new(bytes)).unwrap();
+        let settings = Settings { mono: MonoSettings { compression: MonoCompression::Jbig2, ..MonoSettings::REDUCE }, ..Settings::default() };
+        let r = optimize(&mut doc, &settings).unwrap();
+        assert_eq!(r.images_recompressed, 1);
+        let root = doc.root().unwrap();
+        let v = doc.get(root).as_dict().and_then(|c| c.get(b"Version").cloned()).unwrap();
+        assert_eq!(doc.resolve(&v).as_name(), Some(after.as_bytes()), "catalog {catalog} by reference");
+    }
+}
+
+/// Text as a renderer draws it at 300 dpi: lines 48 rows apart of a few letter shapes, each
+/// `#` a 3 × 3 block, three columns apart with a wider gap between words, every copy of a letter
+/// the same to the pixel.
+fn rendered_text(w: u32, h: u32) -> Vec<u8> {
+    rendered_text_from(w, h, 0x2545_F491_4F6C_DD1D)
+}
+
+/// [`rendered_text`], its letters picked from `seed`, which isn't 0.
+fn rendered_text_from(w: u32, h: u32, mut seed: u64) -> Vec<u8> {
+    const LETTERS: [&[&str]; 5] = [
+        &["##", "##", "##", "##", "##", "##", "##", "##", "##", "##"],
+        &["......", ".####.", "##..##", "##..##", "##..##", "##..##", ".####."],
+        &["##....", "##....", "##....", "#####.", "##..##", "##..##", "##..##", "#####."],
+        &["##..##", "##..##", "##..##", "##..##", ".#####"],
+        &["##", "##", "..", "##", "##", "##", "##", "##"],
+    ];
+    let stride = (w as usize).div_ceil(8);
+    let mut data = vec![0xFF; stride * h as usize];
+    let mut next = move || {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        seed
+    };
+    for baseline in (32..h as usize).step_by(48) {
+        let mut x = 8;
+        while x + 20 < w as usize {
+            let letter = LETTERS[(next() % 5) as usize];
+            for (dy, row) in letter.iter().enumerate() {
+                for (dx, c) in row.bytes().enumerate() {
+                    for (py, px) in (0..9).map(|k| (baseline + 1 + 3 * dy + k / 3 - 3 * letter.len(), x + 3 * dx + k % 3)) {
+                        if c == b'#' {
+                            data[py * stride + px / 8] &= !(0x80 >> (px % 8));
+                        }
+                    }
+                }
+            }
+            x += 3 * letter[0].len() + 3 + if next() % 5 == 0 { 12 } else { 0 };
+        }
+    }
+    data
+}
+
+/// Text whose letters repeat exactly, as rendered text does, becomes JBIG2 symbols: each letter
+/// stored once and its copies placed, several times smaller than JBIG2's generic coding of the
+/// same image, and the page looks the same.
+#[test]
+fn rendered_text_becomes_jbig2_symbols() {
+    let mut doc = Document::new_empty();
+    let (w, h) = (600, 480);
+    let text = rendered_text(w, h);
+    let im = mono_image(&mut doc, w, h, &text, None, &[("BitsPerComponent", 1.into()), ("ColorSpace", Object::name("DeviceGray"))]);
+    // One image pixel a device pixel at scale 1, so a wrong pixel shows.
+    page(&mut doc, &[("Im", im)], "q 600 0 0 480 6 300 cm /Im Do Q");
+    let before = render(&doc);
+    let settings = Settings { mono: MonoSettings { compression: MonoCompression::Jbig2, ..MonoSettings::REDUCE }, ..Settings::default() };
+    let r = optimize(&mut doc, &settings).unwrap();
+    assert_eq!(r.images_recompressed, 1);
+    let s = stream(&doc, im);
+    assert_eq!(s.dict.name(b"Filter"), Some(&b"JBIG2Decode"[..]));
+    let generic = pdfcraft_filters::encode_jbig2_generic(&text, w, h).unwrap();
+    assert!(s.raw.len() * 2 < generic.len(), "symbols {} bytes, generic {}", s.raw.len(), generic.len());
+    assert!(!s.dict.contains(b"DecodeParms"), "alone, it shares no dictionary");
+    assert!(render(&doc) == before, "the page looks the same");
+}
+
+/// Page `index` of `doc`, saved and opened again, rendered at scale 1.
+fn render_page(doc: &Document, index: usize) -> Vec<u8> {
+    let bytes = write_full(doc, &SaveOptions::default()).unwrap();
+    let mut r = pdfcraft_render::PageRenderer::new(Arc::new(bytes), pdfcraft_render::RenderConfig::default());
+    let out = r.render(pdfcraft_render::RenderRequest { page: index, scale: 1.0, ..Default::default() });
+    assert!(out.error.is_none(), "{:?}", out.error);
+    out.rgba.to_vec()
+}
+
+/// Text in a font of 26 letters, about 10 pt at 300 dpi: each letter 32 rows of a run from a stem
+/// down its left side, of 2 to 24 pixels, every copy the same to the pixel; lines 44 rows apart,
+/// the letters picked from `seed`, which isn't 0.
+fn font_text(w: u32, h: u32, mut seed: u64) -> Vec<u8> {
+    let mut font_seed = 0x2545_F491_4F6C_DD1Du64;
+    let next = |seed: &mut u64| {
+        *seed ^= *seed << 13;
+        *seed ^= *seed >> 7;
+        *seed ^= *seed << 17;
+        *seed
+    };
+    let letters: Vec<Vec<usize>> = (0..26).map(|_| (0..16).map(|_| 1 + (next(&mut font_seed) % 12) as usize).collect()).collect();
+    let stride = (w as usize).div_ceil(8);
+    let mut data = vec![0xFF; stride * h as usize];
+    for top in (8..(h as usize).saturating_sub(40)).step_by(44) {
+        let mut x = 8;
+        while x + 32 < w as usize {
+            let letter = &letters[(next(&mut seed) % 26) as usize];
+            for (row, run) in letter.iter().enumerate() {
+                for y in [top + 2 * row, top + 2 * row + 1] {
+                    for px in x..x + 2 * run {
+                        data[y * stride + px / 8] &= !(0x80 >> (px % 8));
+                    }
+                }
+            }
+            x += 2 * letter.iter().max().unwrap() + 4 + if next(&mut seed) % 6 == 0 { 14 } else { 0 };
+        }
+    }
+    data
+}
+
+/// The `/JBIG2Globals` an image names in its `/DecodeParms`.
+fn globals_of(doc: &Document, image: ObjRef) -> Option<ObjRef> {
+    stream(doc, image).dict.get(b"DecodeParms")?.as_dict()?.reference(b"JBIG2Globals")
+}
+
+/// Pages of text in one font, each letter the same to the pixel on every page, stored as JBIG2
+/// share one symbol dictionary (`/JBIG2Globals`): together they take less than each page coded
+/// alone, and every page looks the same, the last one, whose crosses no other page has, placing
+/// them from a dictionary of its own beside the shared one. The report counts the bytes they
+/// take, the globals once.
+#[test]
+fn jbig2_pages_share_one_symbol_dictionary() {
+    let mut doc = Document::new_empty();
+    let (w, h) = (600u32, 480u32);
+    let stride = (w as usize).div_ceil(8);
+    let pages: Vec<Vec<u8>> = (1..=4u64)
+        .map(|k| {
+            let mut text = font_text(w, h, k.wrapping_mul(0x9E37_79B9_7F4A_7C15));
+            if k == 4 {
+                // Crosses down the right margin, three pixels a stroke.
+                for top in (40..440).step_by(40) {
+                    for (dx, dy) in (0..9).map(|i| (i, 4)).chain((0..9).map(|i| (4, i))) {
+                        let (x, y) = (580 + dx, top + dy);
+                        text[y * stride + x / 8] &= !(0x80 >> (x % 8));
+                    }
+                }
+            }
+            text
+        })
+        .collect();
+    let images: Vec<ObjRef> = pages
+        .iter()
+        .map(|text| {
+            let im = mono_image(&mut doc, w, h, text, None, &[("BitsPerComponent", 1.into()), ("ColorSpace", Object::name("DeviceGray"))]);
+            page(&mut doc, &[("Im", im)], "q 600 0 0 480 6 300 cm /Im Do Q");
+            im
+        })
+        .collect();
+    let before: Vec<Vec<u8>> = (0..pages.len()).map(|p| render_page(&doc, p)).collect();
+    let alone: usize = pages.iter().map(|text| pdfcraft_filters::encode_jbig2(text, w, h).unwrap().len()).sum();
+    let settings = Settings { mono: MonoSettings { compression: MonoCompression::Jbig2, ..MonoSettings::REDUCE }, ..Settings::default() };
+    let report = optimize(&mut doc, &settings).unwrap();
+    let globals = globals_of(&doc, images[0]).expect("the first page names the globals");
+    assert!(images.iter().all(|im| globals_of(&doc, *im) == Some(globals)), "every page names the same globals");
+    let shared = stream(&doc, globals).raw.len() + images.iter().map(|im| stream(&doc, *im).raw.len()).sum::<usize>();
+    assert!(shared * 4 < alone * 3, "shared {shared} bytes, alone {alone}");
+    assert_eq!(report.image_bytes_after, shared);
+    for (p, before) in before.iter().enumerate() {
+        assert!(render_page(&doc, p) == *before, "page {p} looks the same");
+        let s = stream(&doc, images[p]);
+        assert_eq!(decoded_image(&doc, &s).unwrap(), pages[p], "page {p} decodes to its samples");
+    }
+    // Optimized again, each page would come out larger alone than it is beside the globals: the
+    // sharing stays.
+    let streams: Vec<Stream> = images.iter().map(|im| stream(&doc, *im)).collect();
+    let again = optimize(&mut doc, &settings).unwrap();
+    assert_eq!((again.images_recompressed, again.images_resampled), (0, 0));
+    assert!(images.iter().zip(&streams).all(|(im, s)| stream(&doc, *im) == *s));
+}
+
+/// Images share a dictionary only where that saves more than it takes: two pages of five small
+/// letters save less than their globals would take, and stay as they are coded alone.
+#[test]
+fn a_dictionary_that_saves_less_than_it_takes_isnt_shared() {
+    let mut doc = Document::new_empty();
+    let (w, h) = (600u32, 480u32);
+    let images: Vec<ObjRef> = (1..=2u64)
+        .map(|k| {
+            let text = rendered_text_from(w, h, k.wrapping_mul(0x9E37_79B9_7F4A_7C15));
+            let im = mono_image(&mut doc, w, h, &text, None, &[("BitsPerComponent", 1.into()), ("ColorSpace", Object::name("DeviceGray"))]);
+            page(&mut doc, &[("Im", im)], "q 600 0 0 480 6 300 cm /Im Do Q");
+            im
+        })
+        .collect();
+    let settings = Settings { mono: MonoSettings { compression: MonoCompression::Jbig2, ..MonoSettings::REDUCE }, ..Settings::default() };
+    let report = optimize(&mut doc, &settings).unwrap();
+    assert_eq!(report.images_recompressed, 2);
+    for im in &images {
+        let s = stream(&doc, *im);
+        assert_eq!((s.dict.name(b"Filter"), s.dict.contains(b"DecodeParms")), (Some(&b"JBIG2Decode"[..]), false));
+    }
+    // Optimized again, they code to what they are, no smaller: they stay.
+    let streams: Vec<Stream> = images.iter().map(|im| stream(&doc, *im)).collect();
+    assert_eq!(optimize(&mut doc, &settings).unwrap().images_recompressed, 0);
+    assert!(images.iter().zip(&streams).all(|(im, s)| stream(&doc, *im) == *s));
+}
+
+/// Only JBIG2 asked for shares: under Retain, JBIG2 pages drawn at 600 ppi are averaged and stored
+/// as JBIG2 again, each alone, as Retain changes nothing but their resolution.
+#[test]
+fn retained_jbig2_shares_nothing() {
+    let mut doc = Document::new_empty();
+    let (w, h) = (1200u32, 960u32);
+    let images: Vec<ObjRef> = (1..=4u64)
+        .map(|k| {
+            let text = font_text(w, h, k.wrapping_mul(0x9E37_79B9_7F4A_7C15));
+            let mut d = Dict::new();
+            for (key, value) in [("Type", Object::name("XObject")), ("Subtype", Object::name("Image")), ("ColorSpace", Object::name("DeviceGray"))] {
+                d.set(key.as_bytes().to_vec(), value);
+            }
+            for (key, value) in [("Width", i64::from(w)), ("Height", i64::from(h)), ("BitsPerComponent", 1)] {
+                d.set(key.as_bytes().to_vec(), Object::Int(value));
+            }
+            d.set(b"Filter".to_vec(), Object::name("JBIG2Decode"));
+            let im = doc.add(Object::Stream(Stream::from_raw(d, pdfcraft_filters::encode_jbig2(&text, w, h).unwrap())));
+            // 1200 samples over 144 pt: 600 ppi.
+            page(&mut doc, &[("Im", im)], "q 144 0 0 115.2 6 300 cm /Im Do Q");
+            im
+        })
+        .collect();
+    let settings = Settings { mono: MonoSettings { compression: MonoCompression::Retain, ..MonoSettings::REDUCE }, ..Settings::default() };
+    assert_eq!(optimize(&mut doc, &settings).unwrap().images_resampled, 4);
+    for im in images {
+        let s = stream(&doc, im);
+        assert_eq!((s.dict.name(b"Filter"), s.dict.contains(b"DecodeParms")), (Some(&b"JBIG2Decode"[..]), false));
+    }
+}
+
+/// Sixteen images at most share one dictionary, and two are enough: of eighteen, the first
+/// sixteen share one and the other two another.
+#[test]
+fn sixteen_images_at_most_share_a_dictionary() {
+    let mut doc = Document::new_empty();
+    let (w, h) = (600u32, 480u32);
+    let texts: Vec<Vec<u8>> = (1..=18u64).map(|k| font_text(w, h, k.wrapping_mul(0x9E37_79B9_7F4A_7C15))).collect();
+    let images: Vec<ObjRef> = texts
+        .iter()
+        .map(|text| {
+            let im = mono_image(&mut doc, w, h, text, None, &[("BitsPerComponent", 1.into()), ("ColorSpace", Object::name("DeviceGray"))]);
+            page(&mut doc, &[("Im", im)], "q 600 0 0 480 6 300 cm /Im Do Q");
+            im
+        })
+        .collect();
+    let settings = Settings { mono: MonoSettings { compression: MonoCompression::Jbig2, ..MonoSettings::REDUCE }, ..Settings::default() };
+    optimize(&mut doc, &settings).unwrap();
+    let globals: Vec<Option<ObjRef>> = images.iter().map(|im| globals_of(&doc, *im)).collect();
+    assert!(globals.iter().all(Option::is_some), "{globals:?}");
+    assert!(globals[..16].iter().all(|g| *g == globals[0]) && globals[16..].iter().all(|g| *g == globals[16]), "{globals:?}");
+    assert_ne!(globals[0], globals[16]);
+    for (k, (im, text)) in images.iter().zip(&texts).enumerate() {
+        assert!(decoded_image(&doc, &stream(&doc, *im)).unwrap() == *text, "image {k} decodes to its samples");
+    }
+}
+
+/// A JBIG2 scan goes through Monochrome Images like any black-and-white image. Above 450 ppi it
+/// is averaged as its Flate copy is, to the same samples, and stored as each compression asks:
+/// Group 4 or JBIG2, or Flate when that is smaller, or under Retain JBIG2 again; alone or behind another
+/// filter, and with `/JBIG2Globals`, which the new image doesn't refer to. Below 450 ppi it is
+/// stored again only when that is smaller: a generic region of text stays under Group 4, which
+/// is larger, and under Retain, and becomes symbols with JBIG2 asked for; behind ASCIIHex it is
+/// stored again alone, as Group 4 where the hex is spaced out. A JBIG2 page taller than the image
+/// is left alone.
+#[test]
+fn jbig2_scans_are_averaged_and_stored_again() {
+    // Black squares 16 samples a side on even rows and columns: at 600 ppi, halving leaves no new
+    // pixel covering both samples, so nothing keeps the picture at its resolution.
+    let (w, h) = (1200u32, 480u32);
+    let stride = (w as usize).div_ceil(8);
+    let mut squares = vec![0xFFu8; stride * h as usize];
+    for (top, left) in (0..h as usize / 32).flat_map(|r| (0..w as usize / 32).map(move |c| (r * 32 + 8, c * 32 + 8))) {
+        for y in top..top + 16 {
+            for x in left..left + 16 {
+                squares[y * stride + x / 8] &= !(0x80 >> (x % 8));
+            }
+        }
+    }
+    let grey = [("BitsPerComponent", 1.into()), ("ColorSpace", Object::name("DeviceGray"))];
+    let hex = |coded: &[u8]| -> Vec<u8> { coded.iter().flat_map(|b| format!("{b:02x}").into_bytes()).chain(*b">").collect() };
+    // An image of `coded` behind `filters`, with globals a decoder skips when `globals`, drawn at
+    // `width` × `height` pt.
+    let jbig2_page = |coded: &[u8], filters: &[&str], globals: bool, (iw, ih): (u32, u32), (width, height): (f64, f64)| {
+        let mut doc = Document::new_empty();
+        let mut d = Dict::new();
+        d.set(b"Subtype".to_vec(), Object::name("Image"));
+        d.set(b"Width".to_vec(), Object::Int(iw.into()));
+        d.set(b"Height".to_vec(), Object::Int(ih.into()));
+        for (k, v) in &grey {
+            d.set(k.as_bytes().to_vec(), v.clone());
+        }
+        d.set(b"Filter".to_vec(), Object::Array(filters.iter().map(|f| Object::name(f)).collect()));
+        if globals {
+            let g = doc.add(Object::Stream(Stream::from_raw(Dict::new(), vec![0, 0, 0, 0, 0x3E, 0, 0, 0, 0, 0, 4, 0, 0, 0, 1])));
+            let mut parms = Dict::new();
+            parms.set(b"JBIG2Globals".to_vec(), Object::Ref(g));
+            let entries = filters.iter().map(|f| if *f == "JBIG2Decode" { Object::Dict(parms.clone()) } else { Object::Null }).collect();
+            d.set(b"DecodeParms".to_vec(), Object::Array(entries));
+        }
+        let data = if filters.len() > 1 { hex(coded) } else { coded.to_vec() };
+        let im = doc.add(Object::Stream(Stream::from_raw(d, data)));
+        page(&mut doc, &[("Im", im)], &format!("q {width} 0 0 {height} 20 600 cm /Im Do Q"));
+        (doc, im)
+    };
+    let coded = pdfcraft_filters::encode_jbig2_generic(&squares, w, h).unwrap();
+    // 144 × 57.6 pt is 600 ppi.
+    let at_600 = (144.0, 57.6);
+    for compression in [MonoCompression::CcittG4, MonoCompression::Jbig2, MonoCompression::Retain] {
+        let settings = Settings { mono: MonoSettings { compression, ..MonoSettings::REDUCE }, ..Settings::default() };
+        let mut doc = Document::new_empty();
+        let im = mono_image(&mut doc, w, h, &squares, None, &grey);
+        page(&mut doc, &[("Im", im)], "q 144 0 0 57.6 20 600 cm /Im Do Q");
+        assert_eq!(optimize(&mut doc, &settings).unwrap().images_resampled, 1, "Flate, {compression:?}");
+        let averaged = decoded_image(&doc, &stream(&doc, im)).unwrap();
+        for (filters, globals) in [(&["JBIG2Decode"][..], false), (&["ASCIIHexDecode", "JBIG2Decode"][..], false), (&["JBIG2Decode"][..], true)] {
+            let (mut doc, im) = jbig2_page(&coded, filters, globals, (w, h), at_600);
+            let r = optimize(&mut doc, &settings).unwrap();
+            let s = stream(&doc, im);
+            let what = format!("{filters:?}, globals {globals}, {compression:?}: {r:?}");
+            assert_eq!((r.images_resampled, s.dict.int(b"Width"), s.dict.int(b"Height")), (1, Some(600), Some(240)), "{what}");
+            assert_eq!(decoded_image(&doc, &s).unwrap(), averaged, "{what}");
+            assert!(!s.dict.contains(b"DecodeParms") || s.dict.name(b"Filter") == Some(&b"CCITTFaxDecode"[..]), "{what}");
+            let filter = s.dict.name(b"Filter").map(<[u8]>::to_vec);
+            // The smallest of what each compression may store; under Retain, JBIG2 again.
+            let allowed: &[&[u8]] = match compression {
+                MonoCompression::CcittG4 => &[b"CCITTFaxDecode", b"FlateDecode"],
+                MonoCompression::Jbig2 => &[b"JBIG2Decode", b"FlateDecode"],
+                MonoCompression::Retain => &[b"JBIG2Decode"],
+            };
+            assert!(filter.as_deref().is_some_and(|f| allowed.contains(&f)), "{what}: {:?}", filter.map(String::from_utf8));
+        }
+    }
+
+    // At 300 ppi, below 450: rendered text, whose letters repeat, coded as one generic region.
+    let (tw, th) = (600u32, 480u32);
+    let text = rendered_text(tw, th);
+    let generic = pdfcraft_filters::encode_jbig2_generic(&text, tw, th).unwrap();
+    let at_300 = (144.0, 115.2);
+    for compression in [MonoCompression::CcittG4, MonoCompression::Retain] {
+        let settings = Settings { mono: MonoSettings { compression, ..MonoSettings::REDUCE }, ..Settings::default() };
+        let (mut doc, im) = jbig2_page(&generic, &["JBIG2Decode"], false, (tw, th), at_300);
+        let before = stream(&doc, im);
+        optimize(&mut doc, &settings).unwrap();
+        assert_eq!(stream(&doc, im), before, "JBIG2 below 450 ppi, {compression:?}");
+    }
+    let jbig2_asked = Settings { mono: MonoSettings { compression: MonoCompression::Jbig2, ..MonoSettings::REDUCE }, ..Settings::default() };
+    let (mut doc, im) = jbig2_page(&generic, &["JBIG2Decode"], false, (tw, th), at_300);
+    let r = optimize(&mut doc, &jbig2_asked).unwrap();
+    let s = stream(&doc, im);
+    assert_eq!((r.images_resampled, r.images_recompressed, s.dict.name(b"Filter")), (0, 1, Some(&b"JBIG2Decode"[..])), "{r:?}");
+    assert!(s.raw.len() * 2 < generic.len(), "symbols {} bytes, the generic region {}", s.raw.len(), generic.len());
+    assert_eq!(decoded_image(&doc, &s).unwrap(), text);
+    // Behind ASCIIHex it is stored again alone, being smaller so.
+    let (mut doc, im) = jbig2_page(&generic, &["ASCIIHexDecode", "JBIG2Decode"], false, (tw, th), at_300);
+    optimize(&mut doc, &jbig2_asked).unwrap();
+    let s = stream(&doc, im);
+    assert_eq!((s.filters().len(), s.dict.name(b"Filter")), (1, Some(&b"JBIG2Decode"[..])));
+    assert_eq!(decoded_image(&doc, &s).unwrap(), text);
+    // So it is as Group 4 when that is smaller: here the hex digits are spaced out, as ASCIIHex
+    // allows, so that the stream is many times the code.
+    let (mut doc, im) = jbig2_page(&generic, &["ASCIIHexDecode", "JBIG2Decode"], false, (tw, th), at_300);
+    let mut padded = stream(&doc, im);
+    padded.raw = generic.iter().flat_map(|b| format!("{b:02x}{}", " ".repeat(30)).into_bytes()).chain(*b">").collect::<Vec<u8>>().into();
+    doc.set(im, Object::Stream(padded));
+    optimize(&mut doc, &Settings::default()).unwrap();
+    let s = stream(&doc, im);
+    assert_eq!((s.filters().len(), s.dict.name(b"Filter")), (1, Some(&b"CCITTFaxDecode"[..])), "Group 4 alone");
+    assert_eq!(decoded_image(&doc, &s).unwrap(), text);
+
+    // A JBIG2 page taller than the image: the renderer draws the whole page into it, so it isn't
+    // read, and stays as it is.
+    let (mut doc, im) = jbig2_page(&coded, &["JBIG2Decode"], false, (w, h - 8), at_600);
+    let before = stream(&doc, im);
+    optimize(&mut doc, &Settings::default()).unwrap();
+    assert_eq!(stream(&doc, im), before, "a taller page");
+}
+
+/// A whole 300 dpi letter page of rendered text, more marks than one JBIG2 text region of the
+/// decoder PdfCraft renders with takes, still looks the same as JBIG2 symbols.
+#[test]
+fn a_dense_page_of_rendered_text_looks_the_same_as_jbig2_symbols() {
+    let mut doc = Document::new_empty();
+    let (w, h) = (2550, 3300);
+    let text = rendered_text(w, h);
+    let im = mono_image(&mut doc, w, h, &text, None, &[("BitsPerComponent", 1.into()), ("ColorSpace", Object::name("DeviceGray"))]);
+    page(&mut doc, &[("Im", im)], "q 612 0 0 792 0 0 cm /Im Do Q");
+    let before = render(&doc);
+    let settings = Settings { mono: MonoSettings { compression: MonoCompression::Jbig2, ..MonoSettings::REDUCE }, ..Settings::default() };
+    let r = optimize(&mut doc, &settings).unwrap();
+    assert_eq!(r.images_recompressed, 1);
+    let s = stream(&doc, im);
+    assert_eq!(s.dict.name(b"Filter"), Some(&b"JBIG2Decode"[..]));
+    assert!(s.raw.len() * 2 < pdfcraft_filters::encode_jbig2_generic(&text, w, h).unwrap().len(), "symbol coded");
+    // The copies take several text regions (segment type 7, ISO/IEC 14492 7.3), read from the
+    // segment headers (7.2): number, flags, referred-to count and numbers, page, data length.
+    let mut regions = 0;
+    let mut at = 0;
+    while let Some(header) = s.raw.get(at..at + 6) {
+        let refers = usize::from(header[5] >> 5);
+        let length = u32::from_be_bytes(s.raw[at + 7 + refers..at + 11 + refers].try_into().unwrap()) as usize;
+        regions += usize::from(header[4] & 0x3F == 7);
+        at += 11 + refers + length;
+    }
+    assert!(regions > 1, "{regions} text regions");
+    assert!(render(&doc) == before, "the page looks the same");
+}
+
 #[test]
 fn settings_choose_what_happens() {
     let mut doc = Document::new_empty();
@@ -261,6 +2450,347 @@ fn discards_and_clean_up() {
     assert!(!c.contains(b"StructTreeRoot") && !c.contains(b"MarkInfo"));
     let vp = c.get(b"ViewerPreferences").and_then(|v| v.as_dict().cloned()).unwrap();
     assert!(vp.contains(b"HideToolbar") && !vp.contains(b"Duplex"), "other preferences stay");
+}
+
+fn action(kind: &str) -> Dict {
+    let mut a = Dict::new();
+    a.set(b"S".to_vec(), Object::name(kind));
+    a
+}
+
+fn with(mut d: Dict, key: &str, value: impl Into<Object>) -> Dict {
+    d.set(key.as_bytes().to_vec(), value);
+    d
+}
+
+/// The kinds of the actions `o` runs, in order: each action, then its `/Next` actions.
+fn kinds(doc: &Document, o: Option<&Object>) -> Vec<String> {
+    let mut out = Vec::new();
+    let Some(o) = o else { return out };
+    match &*doc.resolve(o) {
+        Object::Array(items) => {
+            for item in items {
+                out.extend(kinds(doc, Some(item)));
+            }
+        }
+        Object::Dict(a) => {
+            out.push(String::from_utf8_lossy(a.name(b"S").unwrap_or_default()).into_owned());
+            out.extend(kinds(doc, a.get(b"Next")));
+        }
+        _ => {}
+    }
+    out
+}
+
+fn dict(doc: &Document, r: ObjRef) -> Dict {
+    doc.get(r).as_dict().cloned().unwrap()
+}
+
+#[test]
+fn form_submit_import_and_reset_actions_are_discarded_and_the_fields_stay() {
+    let mut doc = Document::new_empty();
+    let p = page(&mut doc, &[], "");
+    let root = doc.root().unwrap();
+    let triggers = with(Dict::new(), "U", action("ResetForm"));
+    let triggers = with(triggers, "E", with(action("JavaScript"), "JS", Object::String(pdfcraft_cos::PdfString::literal("app.alert(1)"))));
+    let button = with(with(with(Dict::new(), "Subtype", Object::name("Widget")), "FT", Object::name("Btn")), "A", action("SubmitForm"));
+    let button = doc.add(Object::Dict(with(button, "AA", triggers)));
+    let import = doc.add(Object::Dict(action("ImportData")));
+    let field = with(with(Dict::new(), "Subtype", Object::name("Widget")), "FT", Object::name("Tx"));
+    let field = doc.add(Object::Dict(with(field, "AA", with(Dict::new(), "K", Object::Ref(import)))));
+    let link = with(with(Dict::new(), "Subtype", Object::name("Link")), "A", with(action("GoTo"), "Next", action("SubmitForm")));
+    let link = doc.add(Object::Dict(with(link, "D", Object::Array(vec![Object::Ref(p), Object::name("Fit")]))));
+    let reset = doc.add(Object::Dict(action("ResetForm")));
+    doc.update_dict(p, |d| d.set(b"Annots".to_vec(), Object::Array(vec![Object::Ref(button), Object::Ref(field), Object::Ref(link)]))).unwrap();
+    doc.update_dict(root, |c| c.set(b"OpenAction".to_vec(), Object::Ref(reset))).unwrap();
+
+    let mut kept = doc.clone();
+    assert_eq!(optimize(&mut kept, &Settings::default()).unwrap().form_actions, 0, "the option is off by default");
+    assert_eq!(kinds(&kept, dict(&kept, button).get(b"A")), ["SubmitForm"]);
+
+    let r = optimize(&mut doc, &Settings { discard_form_actions: true, ..Settings::default() }).unwrap();
+    assert_eq!(r.form_actions, 5, "{r:?}");
+    let annots = dict(&doc, p).get(b"Annots").and_then(|a| a.as_array().cloned()).unwrap();
+    assert_eq!(annots.len(), 3, "the fields and the link stay");
+    let b = dict(&doc, button);
+    assert_eq!(b.name(b"FT"), Some(&b"Btn"[..]));
+    assert!(!b.contains(b"A"), "{b:?}");
+    let aa = b.get(b"AA").and_then(|a| a.as_dict().cloned()).unwrap();
+    assert_eq!((aa.contains(b"U"), kinds(&doc, aa.get(b"E"))), (false, vec!["JavaScript".to_string()]), "other triggers stay");
+    assert!(!dict(&doc, field).contains(b"AA"), "an emptied /AA goes");
+    assert_eq!(kinds(&doc, dict(&doc, link).get(b"A")), ["GoTo"]);
+    assert!(!dict(&doc, root).contains(b"OpenAction"));
+}
+
+#[test]
+fn a_discarded_form_action_hands_its_place_to_the_actions_after_it() {
+    let mut doc = Document::new_empty();
+    let p = page(&mut doc, &[], "");
+    let root = doc.root().unwrap();
+    // A reset whose /S is an indirect name.
+    let name = doc.add(Object::name("ResetForm"));
+    let reset = doc.add(Object::Dict(with(with(Dict::new(), "S", Object::Ref(name)), "Next", action("URI"))));
+    let submit = with(
+        action("SubmitForm"),
+        "Next",
+        Object::Array(vec![Object::Dict(action("JavaScript")), Object::Ref(reset), Object::Dict(action("Named"))]),
+    );
+    let link = doc.add(Object::Dict(with(with(Dict::new(), "Subtype", Object::name("Link")), "A", submit)));
+    // A reset whose chain comes back to itself.
+    let looped = doc.add(Object::Dict(action("ResetForm")));
+    doc.update_dict(looped, |a| a.set(b"Next".to_vec(), Object::Ref(looped))).unwrap();
+    doc.update_dict(p, |d| d.set(b"Annots".to_vec(), Object::Array(vec![Object::Ref(link)]))).unwrap();
+    doc.update_dict(root, |c| c.set(b"OpenAction".to_vec(), Object::Ref(looped))).unwrap();
+
+    let r = optimize(&mut doc, &Settings { discard_form_actions: true, ..Settings::default() }).unwrap();
+    assert_eq!(r.form_actions, 3, "{r:?}");
+    assert_eq!(kinds(&doc, dict(&doc, link).get(b"A")), ["JavaScript", "URI", "Named"]);
+    assert!(!dict(&doc, root).contains(b"OpenAction"));
+}
+
+#[test]
+fn a_form_action_listed_twice_in_a_chain_gives_way_both_times() {
+    let mut doc = Document::new_empty();
+    let p = page(&mut doc, &[], "");
+    let reset = doc.add(Object::Dict(with(action("ResetForm"), "Next", action("JavaScript"))));
+    let submit = with(action("SubmitForm"), "Next", Object::Array(vec![Object::Ref(reset), Object::Ref(reset)]));
+    let link = doc.add(Object::Dict(with(with(Dict::new(), "Subtype", Object::name("Link")), "A", submit)));
+    doc.update_dict(p, |d| d.set(b"Annots".to_vec(), Object::Array(vec![Object::Ref(link)]))).unwrap();
+    // An indirect submit that holds a direct reset in its /Next.
+    let root = doc.root().unwrap();
+    let opening = doc.add(Object::Dict(with(action("SubmitForm"), "Next", action("ResetForm"))));
+    doc.update_dict(root, |c| c.set(b"OpenAction".to_vec(), Object::Ref(opening))).unwrap();
+
+    let r = optimize(&mut doc, &Settings { discard_form_actions: true, ..Settings::default() }).unwrap();
+    assert_eq!(r.form_actions, 4, "each action counts once: {r:?}");
+    assert_eq!(kinds(&doc, dict(&doc, link).get(b"A")), ["JavaScript", "JavaScript"]);
+    assert!(!dict(&doc, root).contains(b"OpenAction"));
+}
+
+#[test]
+fn form_actions_chained_past_the_limit_stop_the_optimization() {
+    let mut doc = Document::new_empty();
+    page(&mut doc, &[], "");
+    let root = doc.root().unwrap();
+    let mut chain = action("ResetForm");
+    for _ in 0..80 {
+        chain = with(action("SubmitForm"), "Next", chain);
+    }
+    doc.update_dict(root, |c| c.set(b"OpenAction".to_vec(), chain)).unwrap();
+    let r = optimize(&mut doc, &Settings { discard_form_actions: true, ..Settings::default() });
+    assert!(matches!(r, Err(pdfcraft_optimize::OptimizeError::ActionLimit(at)) if at == root), "{r:?}");
+}
+
+#[test]
+fn a_next_array_that_lists_itself_is_left_as_it_is() {
+    let mut doc = Document::new_empty();
+    let p = page(&mut doc, &[], "");
+    let looped = doc.add(Object::Null);
+    doc.set(looped, Object::Array(vec![Object::Ref(looped)]));
+    let (first, second) = (doc.add(Object::Null), doc.add(Object::Null));
+    doc.set(first, Object::Array(vec![Object::Ref(second)]));
+    doc.set(second, Object::Array(vec![Object::Ref(first)]));
+    let link = |doc: &mut Document, next: ObjRef| {
+        let a = with(action("GoTo"), "Next", Object::Ref(next));
+        doc.add(Object::Dict(with(with(Dict::new(), "Subtype", Object::name("Link")), "A", a)))
+    };
+    let (own, pair) = (link(&mut doc, looped), link(&mut doc, first));
+    let submit = with(action("SubmitForm"), "Next", Object::Ref(looped));
+    let button = doc.add(Object::Dict(with(with(Dict::new(), "Subtype", Object::name("Widget")), "A", submit)));
+    doc.update_dict(p, |d| d.set(b"Annots".to_vec(), Object::Array(vec![Object::Ref(own), Object::Ref(pair), Object::Ref(button)]))).unwrap();
+    let settings = Settings { discard_form_actions: true, ..Settings::default() };
+
+    let mut cleaned = doc.clone();
+    let r = optimize(&mut cleaned, &settings).unwrap();
+    assert_eq!(r.form_actions, 1, "{r:?}");
+    for (l, next) in [(own, looped), (pair, first)] {
+        let a = dict(&cleaned, l).get(b"A").and_then(|a| a.as_dict().cloned()).unwrap();
+        assert_eq!(a.get(b"Next"), Some(&Object::Ref(next)), "{l:?}");
+    }
+    assert_eq!(dict(&cleaned, button).get(b"A"), Some(&Object::Ref(looped)), "the submit's /Next takes its place");
+
+    // An array that lists itself and a submit, directly or in an array inside it: a cleaned copy
+    // would still reach the submit.
+    for submit in [Object::Dict(action("SubmitForm")), Object::Array(vec![Object::Dict(action("SubmitForm"))])] {
+        let mut mixed = doc.clone();
+        mixed.set(first, Object::Array(vec![Object::Ref(second), submit]));
+        let r = optimize(&mut mixed, &settings);
+        assert!(matches!(r, Err(pdfcraft_optimize::OptimizeError::ActionLimit(_))), "{r:?}");
+    }
+}
+
+/// `referrers` actions whose `/Next` is one shared array of 2,000 actions, a submit among them.
+fn shared_next_array(referrers: usize) -> Document {
+    let mut doc = Document::new_empty();
+    page(&mut doc, &[], "");
+    let script = doc.add(Object::Dict(action("JavaScript")));
+    let mut items = vec![Object::Ref(script); 1_999];
+    items.push(Object::Dict(action("SubmitForm")));
+    let shared = doc.add(Object::Array(items));
+    for _ in 0..referrers {
+        doc.add(Object::Dict(with(action("GoTo"), "Next", Object::Ref(shared))));
+    }
+    doc
+}
+
+#[test]
+fn a_shared_next_array_cleaned_for_too_many_actions_stops_the_optimization() {
+    let settings = Settings { discard_form_actions: true, ..Settings::default() };
+    let mut doc = shared_next_array(400);
+    assert_eq!(optimize(&mut doc, &settings).unwrap().form_actions, 1);
+    // Each referrer is under the limit for one object; together they pass the document's.
+    let mut doc = shared_next_array(600);
+    let r = optimize(&mut doc, &settings);
+    assert!(matches!(r, Err(pdfcraft_optimize::OptimizeError::ActionLimit(_))), "{r:?}");
+}
+
+/// 80 direct dictionaries nested in each other under `/Deep`, the innermost one being `inner`.
+fn nested(inner: Dict) -> Object {
+    let mut o = Object::Dict(inner);
+    for _ in 0..80 {
+        o = Object::Dict(with(Dict::new(), "Deep", o));
+    }
+    o
+}
+
+#[test]
+fn deep_nesting_stops_the_optimization_only_when_a_form_action_is_past_the_limit() {
+    let mut doc = Document::new_empty();
+    let p = page(&mut doc, &[], "");
+    let plain = doc.add(nested(with(action("GoTo"), "Next", action("URI"))));
+    let link = doc.add(Object::Dict(with(with(Dict::new(), "Subtype", Object::name("Link")), "A", action("SubmitForm"))));
+    doc.update_dict(p, |d| {
+        d.set(b"Annots".to_vec(), Object::Array(vec![Object::Ref(link)]));
+        d.set(b"PieceInfo".to_vec(), Object::Ref(plain));
+    })
+    .unwrap();
+    let settings = Settings { discard_form_actions: true, ..Settings::default() };
+    let mut ok = doc.clone();
+    let r = optimize(&mut ok, &settings).unwrap();
+    assert_eq!(r.form_actions, 1, "deep nesting with no form action in it is left as it is: {r:?}");
+
+    let reset = doc.add(Object::Dict(action("ResetForm")));
+    for (n, inner) in [
+        action("SubmitForm"),
+        with(Dict::new(), "A", Object::Ref(reset)),
+        with(Dict::new(), "Next", Object::Ref(doc.add(Object::Array(vec![Object::Ref(reset)])))),
+        with(Dict::new(), "AA", Object::Ref(doc.add(Object::Dict(with(Dict::new(), "U", action("ImportData")))))),
+        with(Dict::new(), "AA", with(Dict::new(), "U", Object::Ref(reset))),
+        with(Dict::new(), "Next", Object::Array(vec![Object::Ref(reset)])),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut deep = doc.clone();
+        let held = deep.add(nested(inner));
+        deep.update_dict(p, |d| d.set(b"PieceInfo".to_vec(), Object::Ref(held))).unwrap();
+        let r = optimize(&mut deep, &settings);
+        assert!(matches!(r, Err(pdfcraft_optimize::OptimizeError::ActionLimit(at)) if at == held), "case {n}: {r:?}");
+    }
+}
+
+#[test]
+fn a_shared_additional_actions_dictionary_is_cleaned_for_each_field_that_uses_it() {
+    let mut doc = Document::new_empty();
+    let p = page(&mut doc, &[], "");
+    let triggers = with(with(Dict::new(), "U", action("SubmitForm")), "E", action("JavaScript"));
+    let shared = doc.add(Object::Dict(triggers));
+    let widget = |doc: &mut Document| doc.add(Object::Dict(with(with(Dict::new(), "Subtype", Object::name("Widget")), "AA", Object::Ref(shared))));
+    let (first, second) = (widget(&mut doc), widget(&mut doc));
+    doc.update_dict(p, |d| d.set(b"Annots".to_vec(), Object::Array(vec![Object::Ref(first), Object::Ref(second)]))).unwrap();
+
+    let r = optimize(&mut doc, &Settings { discard_form_actions: true, ..Settings::default() }).unwrap();
+    assert_eq!(r.form_actions, 1, "{r:?}");
+    for w in [first, second] {
+        assert_eq!(dict(&doc, w).get(b"AA"), Some(&Object::Ref(shared)), "the widgets still share one dictionary: {w:?}");
+    }
+    let aa = dict(&doc, shared);
+    assert_eq!((aa.contains(b"U"), kinds(&doc, aa.get(b"E"))), (false, vec!["JavaScript".to_string()]));
+}
+
+#[test]
+fn shared_indirect_actions_and_next_arrays_are_cleaned_once_and_stay_shared() {
+    let mut doc = Document::new_empty();
+    let p = page(&mut doc, &[], "");
+    // A shared submit whose /Next is a script that resets the form after it runs.
+    let script = with(action("JavaScript"), "Next", action("ResetForm"));
+    let submit = doc.add(Object::Dict(with(action("SubmitForm"), "Next", script)));
+    let next = doc.add(Object::Array(vec![Object::Dict(action("ImportData")), Object::Dict(action("URI")), Object::Dict(action("Named"))]));
+    let link = |doc: &mut Document| {
+        let a = with(action("GoTo"), "Next", Object::Ref(next));
+        doc.add(Object::Dict(with(with(Dict::new(), "Subtype", Object::name("Link")), "A", a)))
+    };
+    let widget = |doc: &mut Document| doc.add(Object::Dict(with(with(Dict::new(), "Subtype", Object::name("Widget")), "A", Object::Ref(submit))));
+    let (w1, w2, l1, l2) = (widget(&mut doc), widget(&mut doc), link(&mut doc), link(&mut doc));
+    doc.update_dict(p, |d| d.set(b"Annots".to_vec(), Object::Array([w1, w2, l1, l2].map(Object::Ref).to_vec()))).unwrap();
+
+    let r = optimize(&mut doc, &Settings { discard_form_actions: true, ..Settings::default() }).unwrap();
+    assert_eq!(r.form_actions, 3, "{r:?}");
+    for w in [w1, w2] {
+        assert_eq!(dict(&doc, w).get(b"A"), Some(&Object::Ref(submit)), "{w:?}");
+        assert_eq!(kinds(&doc, dict(&doc, w).get(b"A")), ["JavaScript"], "{w:?}");
+    }
+    for l in [l1, l2] {
+        let a = dict(&doc, l).get(b"A").and_then(|a| a.as_dict().cloned()).unwrap();
+        assert_eq!(a.get(b"Next"), Some(&Object::Ref(next)), "{l:?}");
+        assert_eq!(kinds(&doc, dict(&doc, l).get(b"A")), ["GoTo", "URI", "Named"], "{l:?}");
+    }
+}
+
+#[test]
+fn a_form_action_in_an_array_inside_an_indirect_next_array_is_counted() {
+    let mut doc = Document::new_empty();
+    let p = page(&mut doc, &[], "");
+    let next = doc.add(Object::Array(vec![Object::Array(vec![Object::Dict(action("ResetForm"))]), Object::Dict(action("URI"))]));
+    let a = with(action("GoTo"), "Next", Object::Ref(next));
+    let link = doc.add(Object::Dict(with(with(Dict::new(), "Subtype", Object::name("Link")), "A", a)));
+    doc.update_dict(p, |d| d.set(b"Annots".to_vec(), Object::Array(vec![Object::Ref(link)]))).unwrap();
+
+    let r = optimize(&mut doc, &Settings { discard_form_actions: true, ..Settings::default() }).unwrap();
+    assert_eq!(r.form_actions, 1, "{r:?}");
+    assert_eq!(kinds(&doc, dict(&doc, link).get(b"A")), ["GoTo", "URI"]);
+}
+
+#[test]
+fn a_shared_action_run_as_a_next_action_and_as_an_a_entry_stays_a_dictionary() {
+    let mut doc = Document::new_empty();
+    let p = page(&mut doc, &[], "");
+    // A reset before two actions, run by one link after a GoTo and by another as its /A.
+    let reset = doc.add(Object::Dict(with(
+        action("ResetForm"),
+        "Next",
+        Object::Array(vec![Object::Dict(action("JavaScript")), Object::Dict(action("URI"))]),
+    )));
+    let link = |doc: &mut Document, a: Object| doc.add(Object::Dict(with(with(Dict::new(), "Subtype", Object::name("Link")), "A", a)));
+    let after = link(&mut doc, Object::Dict(with(action("GoTo"), "Next", Object::Ref(reset))));
+    let runs = link(&mut doc, Object::Ref(reset));
+    doc.update_dict(p, |d| d.set(b"Annots".to_vec(), Object::Array([after, runs].map(Object::Ref).to_vec()))).unwrap();
+
+    let r = optimize(&mut doc, &Settings { discard_form_actions: true, ..Settings::default() }).unwrap();
+    assert_eq!(r.form_actions, 1, "{r:?}");
+    assert_eq!(dict(&doc, reset).name(b"S"), Some(&b"JavaScript"[..]), "the reset's place is taken by a dictionary");
+    assert_eq!(dict(&doc, runs).get(b"A"), Some(&Object::Ref(reset)));
+    assert_eq!(kinds(&doc, dict(&doc, runs).get(b"A")), ["JavaScript", "URI"]);
+    let a = dict(&doc, after).get(b"A").and_then(|a| a.as_dict().cloned()).unwrap();
+    assert_eq!(a.get(b"Next"), Some(&Object::Ref(reset)));
+    assert_eq!(kinds(&doc, dict(&doc, after).get(b"A")), ["GoTo", "JavaScript", "URI"]);
+}
+
+#[test]
+fn a_shared_submit_whose_script_runs_it_again_gives_way_to_the_script() {
+    let mut doc = Document::new_empty();
+    let p = page(&mut doc, &[], "");
+    // The widget comes first, so the walk reaches the submit through it.
+    let widget = doc.add(Object::Null);
+    let submit = doc.add(Object::Null);
+    doc.set(widget, Object::Dict(with(with(Dict::new(), "Subtype", Object::name("Widget")), "A", Object::Ref(submit))));
+    doc.set(submit, Object::Dict(with(action("SubmitForm"), "Next", with(action("JavaScript"), "Next", Object::Ref(submit)))));
+    doc.update_dict(p, |d| d.set(b"Annots".to_vec(), Object::Array(vec![Object::Ref(widget)]))).unwrap();
+    let r = optimize(&mut doc, &Settings { discard_form_actions: true, ..Settings::default() }).unwrap();
+    assert_eq!(r.form_actions, 1, "{r:?}");
+    assert_eq!(dict(&doc, widget).get(b"A"), Some(&Object::Ref(submit)));
+    let script = dict(&doc, submit);
+    assert_eq!((script.name(b"S"), script.get(b"Next")), (Some(&b"JavaScript"[..]), Some(&Object::Ref(submit))), "the script runs itself again");
 }
 
 #[test]
@@ -447,6 +2977,510 @@ fn invalid_links_and_unreferenced_destinations_go() {
     assert_eq!(optimize(&mut again, &off).unwrap().invalid_links, 0);
 }
 
+mod external_refs {
+    use super::*;
+
+    /// An action dictionary of type `s`, followed by `next` when given.
+    fn action(s: &str, next: Option<Object>) -> Object {
+        let mut d = Dict::new();
+        d.set(b"S".to_vec(), Object::name(s));
+        match s {
+            "GoToR" | "Launch" => d.set(b"F".to_vec(), Object::String(pdfcraft_cos::PdfString::literal(b"other.pdf".to_vec()))),
+            "URI" => d.set(b"URI".to_vec(), Object::String(pdfcraft_cos::PdfString::literal(b"https://example.com".to_vec()))),
+            _ => {}
+        }
+        if let Some(n) = next {
+            d.set(b"Next".to_vec(), n);
+        }
+        Object::Dict(d)
+    }
+
+    fn link_with(a: Option<Object>, dest: Option<Object>) -> Object {
+        let mut d = Dict::new();
+        d.set(b"Type".to_vec(), Object::name("Annot"));
+        d.set(b"Subtype".to_vec(), Object::name("Link"));
+        d.set(b"Rect".to_vec(), Object::Array(vec![0.into(), 0.into(), 10.into(), 10.into()]));
+        if let Some(a) = a {
+            d.set(b"A".to_vec(), a);
+        }
+        if let Some(dest) = dest {
+            d.set(b"Dest".to_vec(), dest);
+        }
+        Object::Dict(d)
+    }
+
+    /// The action types an `/A` value runs, in order (depth-first through `/Next`), at most 1,000.
+    fn chain(doc: &Document, a: &Object) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut stack = vec![a.clone()];
+        while let Some(o) = stack.pop() {
+            if out.len() >= 1_000 {
+                break;
+            }
+            match doc.resolve(&o).as_ref() {
+                Object::Array(items) => stack.extend(items.iter().rev().cloned()),
+                Object::Dict(d) => {
+                    out.push(
+                        d.get(b"S")
+                            .map(|s| doc.resolve(s))
+                            .and_then(|s| s.as_name().map(|n| String::from_utf8_lossy(n).into_owned()))
+                            .unwrap_or_default(),
+                    );
+                    if let Some(n) = d.get(b"Next") {
+                        stack.push(n.clone());
+                    }
+                }
+                _ => {}
+            }
+        }
+        out
+    }
+
+    /// A one-page document whose page holds `annots`, with one bookmark per action in `bookmarks`.
+    fn linked_doc(annots: impl FnOnce(&mut Document, ObjRef) -> Vec<Object>, bookmarks: &[Object]) -> (Document, ObjRef, Vec<ObjRef>) {
+        let mut doc = Document::new_empty();
+        let p = page(&mut doc, &[], "BT ET");
+        let annots = annots(&mut doc, p);
+        doc.update_dict(p, |d| d.set(b"Annots".to_vec(), Object::Array(annots))).unwrap();
+        let outlines = doc.add(Object::Null);
+        let items: Vec<ObjRef> = bookmarks.iter().map(|_| doc.add(Object::Null)).collect();
+        for (i, (r, a)) in items.iter().zip(bookmarks).enumerate() {
+            let mut item = Dict::new();
+            item.set(b"Title".to_vec(), Object::String(pdfcraft_cos::PdfString::literal(format!("Item {i}").into_bytes())));
+            item.set(b"Parent".to_vec(), Object::Ref(outlines));
+            item.set(b"A".to_vec(), a.clone());
+            if let Some(n) = items.get(i + 1) {
+                item.set(b"Next".to_vec(), Object::Ref(*n));
+            }
+            doc.set(*r, Object::Dict(item));
+        }
+        let mut o = Dict::new();
+        if let (Some(first), Some(last)) = (items.first(), items.last()) {
+            o.set(b"First".to_vec(), Object::Ref(*first));
+            o.set(b"Last".to_vec(), Object::Ref(*last));
+        }
+        doc.set(outlines, Object::Dict(o));
+        let root = doc.root().unwrap();
+        doc.update_dict(root, |c| c.set(b"Outlines".to_vec(), Object::Ref(outlines))).unwrap();
+        (doc, p, items)
+    }
+
+    fn annots_of(doc: &Document, p: ObjRef) -> Vec<Dict> {
+        let annots = doc.get(p).as_dict().unwrap().get(b"Annots").cloned().unwrap();
+        doc.resolve(&annots).as_array().unwrap().iter().map(|a| doc.resolve(a).as_dict().unwrap().clone()).collect()
+    }
+
+    #[test]
+    fn links_and_bookmarks_to_other_documents_are_discarded_and_links_within_stay() {
+        let (doc, p, items) = linked_doc(
+            |doc, p| {
+                let here = Object::Array(vec![Object::Ref(p), Object::name("Fit")]);
+                let mut goto = Dict::new();
+                goto.set(b"S".to_vec(), Object::name("GoTo"));
+                goto.set(b"D".to_vec(), here.clone());
+                let remote = doc.add(link_with(Some(action("GoToR", None)), None));
+                vec![
+                    Object::Ref(remote),
+                    link_with(Some(action("Launch", None)), None),
+                    link_with(Some(action("GoToE", None)), None),
+                    link_with(Some(action("URI", None)), None),
+                    link_with(Some(Object::Dict(goto)), None),
+                    link_with(None, Some(here)),
+                    link_with(Some(action("GoToR", Some(action("URI", None)))), None),
+                ]
+            },
+            &[action("GoToR", None), action("Named", None)],
+        );
+        let on = Settings { discard_external_refs: true, ..Settings::default() };
+        // Off by default: nothing changes.
+        let mut off = doc.clone();
+        let report = optimize(&mut off, &Settings::default()).unwrap();
+        assert_eq!((report.external_links, report.external_bookmarks), (0, 0));
+        assert_eq!(annots_of(&off, p).len(), 7);
+        let mut doc = doc;
+        let report = optimize(&mut doc, &on).unwrap();
+        assert_eq!((report.external_links, report.external_bookmarks, report.invalid_links), (4, 1, 0), "{report:?}");
+        let left: Vec<Vec<String>> = annots_of(&doc, p).iter().map(|d| d.get(b"A").map(|a| chain(&doc, a)).unwrap_or_default()).collect();
+        assert_eq!(
+            left,
+            [vec!["URI"], vec!["GoTo"], vec![], vec!["URI"]],
+            "the web link, the jump within and the /Dest link stay; the chained web link keeps its URI"
+        );
+        assert!(annots_of(&doc, p)[2].get(b"Dest").is_some());
+        let bookmark = |doc: &Document, r: ObjRef| doc.get(r).as_dict().unwrap().clone();
+        assert!(bookmark(&doc, items[0]).get(b"A").is_none(), "the bookmark stays, without its action");
+        assert_eq!(bookmark(&doc, items[0]).get(b"Next"), Some(&Object::Ref(items[1])), "and its place in the outline");
+        assert_eq!(chain(&doc, bookmark(&doc, items[1]).get(b"A").unwrap()), ["Named"]);
+    }
+
+    #[test]
+    fn discarding_a_remote_action_keeps_the_links_local_destination() {
+        let (mut doc, p, _) =
+            linked_doc(|_, p| vec![link_with(Some(action("GoToR", None)), Some(Object::Array(vec![Object::Ref(p), Object::name("Fit")])))], &[]);
+        let report = optimize(&mut doc, &Settings { discard_external_refs: true, ..Settings::default() }).unwrap();
+        assert_eq!(report.external_links, 1);
+        let bytes = write_full(&doc, &SaveOptions::default()).unwrap();
+        let reopened = Document::open(Arc::new(bytes)).unwrap();
+        let links = annots_of(&reopened, p);
+        assert_eq!(links.len(), 1);
+        assert!(links[0].get(b"A").is_none());
+        assert_eq!(links[0].get(b"Dest"), Some(&Object::Array(vec![Object::Ref(p), Object::name("Fit")])));
+    }
+
+    #[test]
+    fn repeated_indirect_remote_link_is_removed_from_one_page() {
+        let (mut doc, p, _) = linked_doc(
+            |doc, _| {
+                let link = doc.add(link_with(Some(action("GoToR", None)), None));
+                vec![Object::Ref(link), Object::Ref(link)]
+            },
+            &[],
+        );
+        let report = optimize(&mut doc, &Settings { discard_external_refs: true, ..Settings::default() }).unwrap();
+        assert_eq!(report.external_links, 1, "{report:?}");
+        assert!(annots_of(&doc, p).is_empty(), "both references leave the page");
+    }
+
+    #[test]
+    fn shared_indirect_remote_link_with_empty_next_is_removed_from_every_page() {
+        let (mut doc, first, items) = linked_doc(|_, _| Vec::new(), &[action("Named", None), action("GoToR", None)]);
+        let second = page(&mut doc, &[], "BT ET");
+        let link = doc.add(link_with(Some(action("GoToR", Some(Object::Array(vec![Object::Null])))), None));
+        for p in [first, second] {
+            doc.update_dict(p, |d| d.set(b"Annots".to_vec(), Object::Array(vec![Object::Ref(link)]))).unwrap();
+        }
+        doc.update_dict(items[0], |d| d.set(b"First".to_vec(), Object::Ref(items[1]))).unwrap();
+        let report = optimize(&mut doc, &Settings { discard_external_refs: true, ..Settings::default() }).unwrap();
+        assert_eq!(report.external_links, 1, "{report:?}");
+        assert_eq!(report.external_bookmarks, 1, "{report:?}");
+        assert!(doc.get(items[1]).as_dict().unwrap().get(b"A").is_none(), "the shared bookmark has no action");
+        assert!(annots_of(&doc, first).is_empty(), "the first page loses the link");
+        assert!(annots_of(&doc, second).is_empty(), "the second page loses the link");
+        assert!(doc.get(link).as_dict().unwrap().get(b"A").is_none(), "the shared link has no action");
+    }
+
+    #[test]
+    fn an_action_to_another_document_hands_its_place_to_the_actions_after_it() {
+        let (doc, p, _) = linked_doc(
+            |doc, p| {
+                let here = Object::Array(vec![Object::Ref(p), Object::name("Fit")]);
+                // A shared Launch, stored on its own with an indirect /S, followed by a web link.
+                let launch_name = doc.add(Object::name("Launch"));
+                let Object::Dict(mut launch) = action("Launch", Some(action("URI", None))) else { panic!("action() builds a dictionary") };
+                launch.set(b"S".to_vec(), Object::Ref(launch_name));
+                let launch = doc.add(Object::Dict(launch));
+                let mut goto = Dict::new();
+                goto.set(b"S".to_vec(), Object::name("GoTo"));
+                goto.set(b"D".to_vec(), here);
+                goto.set(
+                    b"Next".to_vec(),
+                    Object::Array(vec![action("GoToR", Some(action("JavaScript", None))), Object::Ref(launch), action("Named", None)]),
+                );
+                // A remote go-to whose web link comes back to it.
+                let (a1, a2) = (doc.add(Object::Null), doc.add(Object::Null));
+                doc.set(a1, action("GoToR", Some(Object::Ref(a2))));
+                doc.set(a2, action("URI", Some(Object::Ref(a1))));
+                // A remote go-to that leads a list: the rest follow the first action left.
+                let list = action("GoToR", Some(Object::Array(vec![action("SubmitForm", Some(action("Named", None))), action("URI", None)])));
+                vec![
+                    link_with(Some(Object::Dict(goto)), None),
+                    link_with(Some(Object::Ref(a1)), None),
+                    link_with(Some(list), None),
+                    link_with(Some(Object::Ref(launch)), None),
+                ]
+            },
+            &[],
+        );
+        let mut doc = doc;
+        let report = optimize(&mut doc, &Settings { discard_external_refs: true, ..Settings::default() }).unwrap();
+        assert_eq!(report.external_links, 4, "{report:?}");
+        let left: Vec<Vec<String>> = annots_of(&doc, p).iter().map(|d| chain(&doc, d.get(b"A").unwrap())).collect();
+        assert_eq!(
+            left,
+            [vec!["GoTo", "JavaScript", "URI", "Named"], vec!["URI"], vec!["SubmitForm", "Named", "URI"], vec!["URI"]],
+            "the actions after a removed one run in their order, and a chain that comes back ends there"
+        );
+    }
+
+    #[test]
+    fn entries_that_are_not_actions_do_not_take_the_place_of_a_removed_action() {
+        let (doc, p, items) = linked_doc(
+            |doc, _| {
+                // A null, then a reference to an empty object, before the web link.
+                let empty = doc.add(Object::Null);
+                let next = Object::Array(vec![Object::Null, Object::Ref(empty), action("URI", None), Object::Null]);
+                vec![link_with(Some(action("GoToR", Some(next))), None)]
+            },
+            &[
+                action("Launch", Some(Object::Array(vec![Object::Null, action("URI", None)]))),
+                action("GoToR", Some(Object::Array(vec![Object::Null, Object::Null]))),
+            ],
+        );
+        let mut doc = doc;
+        let report = optimize(&mut doc, &Settings { discard_external_refs: true, ..Settings::default() }).unwrap();
+        assert_eq!((report.external_links, report.external_bookmarks), (1, 2), "{report:?}");
+        let links = annots_of(&doc, p);
+        assert_eq!(links.len(), 1, "the link keeps its web link, so it stays on the page");
+        assert_eq!(chain(&doc, links[0].get(b"A").unwrap()), ["URI"]);
+        let bookmark = |r: ObjRef| doc.get(r).as_dict().unwrap().clone();
+        assert_eq!(chain(&doc, bookmark(items[0]).get(b"A").unwrap()), ["URI"]);
+        assert!(bookmark(items[1]).get(b"A").is_none(), "a chain of nulls alone leaves no action");
+    }
+
+    #[test]
+    fn a_chain_deeper_than_the_limit_loses_its_tail_and_one_without_a_remote_action_stays() {
+        let deep = |n: usize, last: &str| (0..n).fold(action(last, None), |next, _| action("URI", Some(next)));
+        let (doc, p, _) = linked_doc(|_, _| vec![link_with(Some(deep(600, "GoToR")), None), link_with(Some(deep(600, "Named")), None)], &[]);
+        let mut doc = doc;
+        let report = optimize(&mut doc, &Settings { discard_external_refs: true, ..Settings::default() }).unwrap();
+        assert_eq!(report.external_links, 1, "{report:?}");
+        let left: Vec<Vec<String>> = annots_of(&doc, p).iter().map(|d| chain(&doc, d.get(b"A").unwrap())).collect();
+        assert!(left[0].len() < 600 && left[0].iter().all(|s| s == "URI"), "cut before the remote go-to: {} actions", left[0].len());
+        assert_eq!(left[1].len(), 601, "a deep chain with nothing to remove is kept whole");
+    }
+
+    #[test]
+    fn a_long_chain_of_indirect_actions_stays_indirect_and_reads_back_after_saving() {
+        // 130 indirect web links, then a remote go-to: the parser reads at most 128 nested levels.
+        let mut tail = None;
+        let (doc, p, _) = linked_doc(
+            |doc, _| {
+                let mut r = doc.add(action("GoToR", None));
+                for _ in 0..130 {
+                    r = doc.add(action("URI", Some(Object::Ref(r))));
+                }
+                tail = Some(r);
+                vec![link_with(Some(Object::Ref(r)), None)]
+            },
+            &[],
+        );
+        let mut doc = doc;
+        let report = optimize(&mut doc, &Settings { discard_external_refs: true, ..Settings::default() }).unwrap();
+        assert_eq!(report.external_links, 1, "{report:?}");
+        let a = annots_of(&doc, p)[0].get(b"A").cloned().unwrap();
+        assert!(matches!(a, Object::Ref(r) if Some(r) != tail), "a new indirect action: {a:?}");
+        let old = Object::Ref(tail.unwrap());
+        assert_eq!(chain(&doc, &old).last().map(String::as_str), Some("GoToR"), "the old chain is not edited");
+        let bytes = write_full(&doc, &SaveOptions::default()).unwrap();
+        let reopened = Document::open(Arc::new(bytes)).unwrap();
+        let a = annots_of(&reopened, p)[0].get(b"A").cloned().unwrap();
+        assert_eq!(chain(&reopened, &a), vec!["URI"; 130], "every web link reads back");
+    }
+
+    #[test]
+    fn promoted_action_chains_read_back_after_saving() {
+        let (doc, p, _) = linked_doc(
+            |doc, _| {
+                let tail = (0..126).fold(action("Named", None), |next, _| action("Named", Some(next)));
+                let first = doc.add(tail);
+                let next = Object::Array(vec![Object::Ref(first), action("URI", None)]);
+                let link = doc.add(link_with(Some(action("GoToR", Some(next))), None));
+                vec![Object::Ref(link)]
+            },
+            &[],
+        );
+        let bytes = write_full(&doc, &SaveOptions::default()).unwrap();
+        let mut doc = Document::open(Arc::new(bytes)).unwrap();
+        let original = annots_of(&doc, p)[0].get(b"A").cloned().unwrap();
+        assert_eq!(chain(&doc, &original).len(), 129);
+        let report = optimize(&mut doc, &Settings { discard_external_refs: true, ..Settings::default() }).unwrap();
+        assert_eq!(report.external_links, 1);
+        let bytes = write_full(&doc, &SaveOptions::default()).unwrap();
+        let reopened = Document::open(Arc::new(bytes)).unwrap();
+        let a = annots_of(&reopened, p)[0].get(b"A").cloned().unwrap();
+        let expected: Vec<_> = std::iter::repeat_n("Named".to_string(), 127).chain(["URI".to_string()]).collect();
+        assert_eq!(chain(&reopened, &a), expected);
+    }
+
+    #[test]
+    fn shared_actions_that_multiply_stop_the_optimization_when_one_opens_another_document() {
+        use pdfcraft_optimize::OptimizeError;
+        // Forty levels of indirect actions, each listing the next level twice: 2^40 paths.
+        let shared = |doc: &mut Document, last: &str| {
+            let mut r = doc.add(action(last, None));
+            for _ in 0..40 {
+                r = doc.add(action("URI", Some(Object::Array(vec![Object::Ref(r), Object::Ref(r)]))));
+            }
+            r
+        };
+        let mut link = None;
+        let (doc, _, _) = linked_doc(
+            |doc, _| {
+                let a = shared(doc, "GoToR");
+                let r = doc.add(link_with(Some(Object::Ref(a)), None));
+                link = Some(r);
+                vec![Object::Ref(r)]
+            },
+            &[],
+        );
+        let on = Settings { discard_external_refs: true, ..Settings::default() };
+        let r = optimize(&mut doc.clone(), &on);
+        assert!(matches!(r, Err(OptimizeError::ExternalRefLimit(o)) if Some(o) == link), "{r:?}");
+        let (doc, p, _) = linked_doc(
+            |doc, _| {
+                let a = shared(doc, "Named");
+                vec![link_with(Some(Object::Ref(a)), None)]
+            },
+            &[],
+        );
+        let before = annots_of(&doc, p);
+        let mut doc = doc;
+        let report = optimize(&mut doc, &on).unwrap();
+        assert_eq!(report.external_links, 0, "{report:?}");
+        assert_eq!(annots_of(&doc, p), before, "nothing to remove, however the actions are shared");
+    }
+
+    #[test]
+    fn a_shared_chain_without_remote_actions_is_looked_at_once() {
+        // 600 levels that each list a 2,000-action chain of web links sixty times, then a remote go-to.
+        let (doc, p, _) = linked_doc(
+            |doc, _| {
+                let mut g = doc.add(action("URI", None));
+                for _ in 0..2_000 {
+                    g = doc.add(action("URI", Some(Object::Ref(g))));
+                }
+                let a = (0..600).fold(action("GoToR", None), |next, _| {
+                    let mut list = vec![Object::Ref(g); 60];
+                    list.push(next);
+                    action("URI", Some(Object::Array(list)))
+                });
+                vec![link_with(Some(a), None)]
+            },
+            &[],
+        );
+        let mut doc = doc;
+        let report = optimize(&mut doc, &Settings { discard_external_refs: true, ..Settings::default() }).unwrap();
+        assert_eq!(report.external_links, 1, "{report:?}");
+        let left = annots_of(&doc, p);
+        assert!(!chain(&doc, left[0].get(b"A").unwrap()).iter().any(|s| s == "GoToR"));
+    }
+
+    #[test]
+    fn a_link_named_through_an_indirect_subtype_is_discarded_and_a_form_field_keeps_its_action() {
+        let (doc, p, _) = linked_doc(
+            |doc, _| {
+                let name = doc.add(Object::name("Link"));
+                let Object::Dict(mut indirect) = link_with(Some(action("GoToR", None)), None) else { panic!("link_with() builds a dictionary") };
+                indirect.set(b"Subtype".to_vec(), Object::Ref(name));
+                let Object::Dict(mut widget) = link_with(Some(action("GoToR", None)), None) else { panic!("link_with() builds a dictionary") };
+                widget.set(b"Subtype".to_vec(), Object::name("Widget"));
+                vec![Object::Dict(indirect), Object::Dict(widget)]
+            },
+            &[],
+        );
+        let mut doc = doc;
+        let report = optimize(&mut doc, &Settings { discard_external_refs: true, ..Settings::default() }).unwrap();
+        assert_eq!(report.external_links, 1, "{report:?}");
+        let left = annots_of(&doc, p);
+        assert_eq!(left.len(), 1, "the link goes");
+        assert_eq!(left[0].name(b"Subtype"), Some(&b"Widget"[..]));
+        assert_eq!(chain(&doc, left[0].get(b"A").unwrap()), ["GoToR"], "the form field keeps its action");
+    }
+
+    #[test]
+    fn thread_actions_into_another_file_and_data_imports_are_discarded_and_threads_here_stay() {
+        let with_file = |s: &str| {
+            let Object::Dict(mut d) = action(s, None) else { panic!("action() builds a dictionary") };
+            d.set(b"F".to_vec(), Object::String(pdfcraft_cos::PdfString::literal(b"other.pdf".to_vec())));
+            d.set(b"D".to_vec(), Object::Int(0));
+            Object::Dict(d)
+        };
+        let here = {
+            let Object::Dict(mut d) = action("Thread", None) else { panic!("action() builds a dictionary") };
+            d.set(b"D".to_vec(), Object::Int(0));
+            Object::Dict(d)
+        };
+        let (doc, p, _) = linked_doc(
+            |_, _| {
+                vec![link_with(Some(with_file("Thread")), None), link_with(Some(here.clone()), None), link_with(Some(with_file("ImportData")), None)]
+            },
+            &[],
+        );
+        let mut doc = doc;
+        let report = optimize(&mut doc, &Settings { discard_external_refs: true, ..Settings::default() }).unwrap();
+        assert_eq!(report.external_links, 2, "{report:?}");
+        let left = annots_of(&doc, p);
+        assert_eq!(left.len(), 1);
+        assert_eq!(left[0].get(b"A"), Some(&here), "the thread in this document stays");
+    }
+
+    #[test]
+    fn an_outline_over_the_limit_stops_the_optimization() {
+        use pdfcraft_optimize::OptimizeError;
+        let bookmarks = vec![action("Named", None); 100_001];
+        let (doc, _, _) = linked_doc(|_, _| Vec::new(), &bookmarks);
+        let r = optimize(&mut doc.clone(), &Settings { discard_external_refs: true, ..Settings::default() });
+        assert!(matches!(r, Err(OptimizeError::ExternalRefLimit(_))), "{r:?}");
+    }
+
+    #[test]
+    fn bookmarks_stored_inside_other_bookmarks_lose_their_actions_too() {
+        let (mut doc, _, _) = linked_doc(|_, _| Vec::new(), &[]);
+        let bookmark = |title: &str, a: Object| {
+            let mut d = Dict::new();
+            d.set(b"Title".to_vec(), Object::String(pdfcraft_cos::PdfString::literal(title.as_bytes().to_vec())));
+            d.set(b"A".to_vec(), a);
+            d
+        };
+        let third = doc.add(Object::Dict(bookmark("C", action("GoToR", None))));
+        let mut second = bookmark("B", action("Launch", None));
+        second.set(b"First".to_vec(), Object::Ref(third));
+        let mut first = bookmark("A", action("GoToR", Some(action("Named", None))));
+        first.set(b"Next".to_vec(), Object::Dict(second));
+        let mut outlines = Dict::new();
+        outlines.set(b"First".to_vec(), Object::Dict(first));
+        let root = doc.root().unwrap();
+        doc.update_dict(root, |c| c.set(b"Outlines".to_vec(), Object::Dict(outlines))).unwrap();
+        let report = optimize(&mut doc, &Settings { discard_external_refs: true, ..Settings::default() }).unwrap();
+        assert_eq!(report.external_bookmarks, 3, "{report:?}");
+        let catalog = doc.get(root).as_dict().cloned().unwrap();
+        let first = catalog.get(b"Outlines").and_then(Object::as_dict).and_then(|o| o.get(b"First")).and_then(Object::as_dict).cloned().unwrap();
+        assert_eq!(chain(&doc, first.get(b"A").unwrap()), ["Named"]);
+        let second = first.get(b"Next").and_then(Object::as_dict).cloned().unwrap();
+        assert!(second.get(b"A").is_none());
+        assert!(doc.get(third).as_dict().unwrap().get(b"A").is_none());
+    }
+
+    #[test]
+    fn a_removed_link_kept_by_the_structure_tree_reads_back_without_its_action() {
+        let mut link = None;
+        let (doc, p, _) = linked_doc(
+            |doc, _| {
+                let r = doc.add(link_with(Some(action("GoToR", None)), None));
+                link = Some(r);
+                vec![Object::Ref(r)]
+            },
+            &[],
+        );
+        let mut doc = doc;
+        let mut objr = Dict::new();
+        objr.set(b"Type".to_vec(), Object::name("OBJR"));
+        objr.set(b"Obj".to_vec(), Object::Ref(link.unwrap()));
+        objr.set(b"Pg".to_vec(), Object::Ref(p));
+        let mut element = Dict::new();
+        element.set(b"S".to_vec(), Object::name("Link"));
+        element.set(b"K".to_vec(), Object::Dict(objr));
+        let mut tree = Dict::new();
+        tree.set(b"Type".to_vec(), Object::name("StructTreeRoot"));
+        tree.set(b"K".to_vec(), Object::Dict(element));
+        let tree = doc.add(Object::Dict(tree));
+        let root = doc.root().unwrap();
+        doc.update_dict(root, |c| c.set(b"StructTreeRoot".to_vec(), Object::Ref(tree))).unwrap();
+        let report = optimize(&mut doc, &Settings { discard_external_refs: true, ..Settings::default() }).unwrap();
+        assert_eq!(report.external_links, 1, "{report:?}");
+        assert!(annots_of(&doc, p).is_empty(), "the link leaves its page");
+        let bytes = write_full(&doc, &SaveOptions::default()).unwrap();
+        let reopened = Document::open(Arc::new(bytes)).unwrap();
+        let catalog = reopened.get(reopened.root().unwrap()).as_dict().cloned().unwrap();
+        let tree = reopened.dict(catalog.get(b"StructTreeRoot").unwrap()).unwrap();
+        let element = reopened.dict(tree.get(b"K").unwrap()).unwrap();
+        let objr = reopened.dict(element.get(b"K").unwrap()).unwrap();
+        let kept = reopened.dict(objr.get(b"Obj").unwrap()).unwrap();
+        assert_eq!(kept.name(b"Subtype"), Some(&b"Link"[..]));
+        assert!(kept.get(b"A").is_none(), "the link's object holds no action to another document: {kept:?}");
+    }
+}
+
 #[test]
 fn progress_is_reported_per_image_and_a_refusal_cancels() {
     use pdfcraft_optimize::{OptimizeError, Stage, optimize_with_progress};
@@ -460,7 +3494,9 @@ fn progress_is_reported_per_image_and_a_refusal_cancels() {
     };
     let mut seen = Vec::new();
     let report = optimize_with_progress(&mut build(), &Settings::default(), &mut |s| {
-        seen.push(s);
+        if !matches!(s, Stage::Reading { .. }) {
+            seen.push(s);
+        }
         true
     })
     .unwrap();
@@ -478,7 +3514,10 @@ fn progress_is_reported_per_image_and_a_refusal_cancels() {
 
     // Stopping after the first image.
     let mut calls = 0;
-    let r = optimize_with_progress(&mut build(), &Settings::default(), &mut |_| {
+    let r = optimize_with_progress(&mut build(), &Settings::default(), &mut |s| {
+        if matches!(s, Stage::Reading { .. }) {
+            return true;
+        }
         calls += 1;
         calls < 2
     });
@@ -904,6 +3943,52 @@ fn drawn_images(doc: &Document) -> Vec<Stream> {
         .collect()
 }
 
+/// A tolerated row must not be regrouped after its highest tile moves during X sorting.
+#[test]
+fn fragment_row_tolerance_preserves_every_tiles_pixels() {
+    for aligned in [true, false] {
+        for merge_fragments in [false, true] {
+            let mut doc = Document::new_empty();
+            let mut refs = Vec::new();
+            for gray in [20u8, 80, 140, 220] {
+                let mut d = Dict::new();
+                d.set(b"Type".to_vec(), Object::name("XObject"));
+                d.set(b"Subtype".to_vec(), Object::name("Image"));
+                d.set(b"Width".to_vec(), Object::Int(10));
+                d.set(b"Height".to_vec(), Object::Int(10));
+                d.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+                d.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+                refs.push(doc.add(Object::Stream(Stream::flate(d, &[gray; 100]))));
+            }
+            let content = if aligned {
+                "q 10 0 0 10 0 0 cm /T0 Do Q q 10 0 0 10 10 0 cm /T1 Do Q q 10 0 0 10 20 0 cm /T2 Do Q q 10 0 0 10 30 0 cm /T3 Do Q"
+            } else {
+                "q 10 0 0 10 0 0 cm /T0 Do Q q 10 0 0 9.992 10 0.009 cm /T1 Do Q q 10 0 0 9.982 20 0.018 cm /T2 Do Q q 10 0 0 9.991 30 0.009 cm /T3 Do Q"
+            };
+            page(&mut doc, &[("T0", refs[0]), ("T1", refs[1]), ("T2", refs[2]), ("T3", refs[3])], content);
+            let off = ImageSettings { downsample: false, compression: Compression::Retain, ..ImageSettings::REDUCE };
+            let report = optimize(&mut doc, &Settings { merge_fragments, color: off, gray: off, ..Settings::default() }).unwrap();
+            // Save and reopen, then inspect only images still drawn by the optimized page.
+            let doc = Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap();
+            let drawn = drawn_images(&doc);
+            if report.fragments_merged == 0 {
+                assert_eq!(report.merged_images, 0);
+                assert_eq!(drawn.len(), 4);
+                for (image, gray) in drawn.iter().zip([20u8, 80, 140, 220]) {
+                    assert_eq!(image.decoded().unwrap(), [gray; 100]);
+                }
+            } else {
+                assert!(merge_fragments);
+                assert_eq!((report.fragments_merged, report.merged_images, drawn.len()), (4, 1, 1));
+                let image = &drawn[0];
+                assert_eq!((image.dict.int(b"Width"), image.dict.int(b"Height")), (Some(40), Some(10)));
+                let row: Vec<_> = [20u8, 80, 140, 220].into_iter().flat_map(|gray| [gray; 10]).collect();
+                assert_eq!(image.decoded().unwrap(), row.repeat(10), "aligned={aligned}");
+            }
+        }
+    }
+}
+
 #[test]
 fn a_page_picture_printed_as_one_pixel_strips_is_merged_into_one_image() {
     // 120 strips, every other one JPEG and half as wide (as one PDF printer writes them).
@@ -968,6 +4053,87 @@ fn images_that_do_not_tile_a_picture_are_left_alone() {
     unmerged(&mut few, &all);
     let (mut off, _) = printed_page(40, |_| false, |_, s| s);
     unmerged(&mut off, &Settings { merge_fragments: false, ..Settings::default() });
+}
+
+/// zlib data that reads as `readable` and is then damaged, with more of the stream after the
+/// damage: a stored block, then a block of the reserved type (RFC 1951 §3.2.3), then `rest`.
+fn damaged_flate(readable: &[u8], rest: &[u8]) -> Stream {
+    let len = u16::try_from(readable.len()).unwrap();
+    let mut raw = vec![0x78, 0x01, 0x00];
+    raw.extend_from_slice(&len.to_le_bytes());
+    raw.extend_from_slice(&(!len).to_le_bytes());
+    raw.extend_from_slice(readable);
+    raw.push(0x07);
+    raw.extend_from_slice(rest);
+    let mut dict = Dict::new();
+    dict.set(b"Filter".to_vec(), Object::name("FlateDecode"));
+    Stream::from_raw(dict, raw)
+}
+
+/// A page whose content is damaged partway isn't all known: its strips aren't merged, which would
+/// write its content again without what follows the damage.
+#[test]
+fn strips_on_a_page_damaged_partway_are_left_as_they_are() {
+    let (mut doc, _) = printed_page(40, |_| false, |_, s| s);
+    let p = pdfcraft_annot::page_refs(&doc).unwrap()[0];
+    let bad = damaged_flate(b"0 g\n", b"q 1000 0 0 1 0 0 cm /R0 Do Q");
+    let damaged = doc.add(Object::Stream(bad.clone()));
+    let first = doc.get(p).as_dict().unwrap().get(b"Contents").cloned().unwrap();
+    let contents = Object::Array(vec![first, Object::Ref(damaged)]);
+    doc.update_dict(p, |d| d.set(b"Contents".to_vec(), contents.clone())).unwrap();
+    let r = optimize(&mut doc, &Settings::default()).unwrap();
+    assert_eq!((r.merged_images, r.fragments_merged), (0, 0), "{r:?}");
+    assert_eq!(doc.get(p).as_dict().unwrap().get(b"Contents"), Some(&contents));
+    assert_eq!(stream(&doc, damaged), bad);
+}
+
+/// An image may be drawn larger past the damage in a page's or a form's content, so no image is
+/// resampled for the uses before it.
+#[test]
+fn content_damaged_partway_leaves_every_image_at_its_resolution() {
+    for in_form in [false, true] {
+        let mut doc = Document::new_empty();
+        let img = image(&mut doc, 720, 720, 1, false, None);
+        let p = page(&mut doc, &[("Im", img)], "q 72 0 0 72 0 0 cm /Im Do Q");
+        assert_eq!(effective_resolutions(&doc, &[p])[&img], 720.0);
+        let mut bad = damaged_flate(b"q 72 0 0 72 0 0 cm /Im Do Q\n", b"q 720 0 0 720 0 0 cm /Im Do Q");
+        let added = if in_form {
+            bad.dict.set(b"Subtype".to_vec(), Object::name("Form"));
+            bad.dict.set(b"BBox".to_vec(), Object::Array(vec![0.into(), 0.into(), 1.into(), 1.into()]));
+            bad.dict.set(b"Resources".to_vec(), Object::Dict(resources(xobjects(&[("Im", img)]))));
+            let f = doc.add(Object::Stream(bad));
+            let res = Object::Dict(resources(xobjects(&[("Im", img), ("F", f)])));
+            doc.update_dict(p, |d| d.set(b"Resources".to_vec(), res)).unwrap();
+            content(&mut doc, "/F Do")
+        } else {
+            doc.add(Object::Stream(bad))
+        };
+        let first = doc.get(p).as_dict().unwrap().get(b"Contents").cloned().unwrap();
+        doc.update_dict(p, |d| d.set(b"Contents".to_vec(), Object::Array(vec![first, Object::Ref(added)]))).unwrap();
+        // Not measured, or measured as never resampled: the image pass reads only what was measured.
+        let ppi = effective_resolutions(&doc, &[p]).get(&img).copied().unwrap_or(f64::INFINITY);
+        assert_eq!(ppi, f64::INFINITY, "in a form: {in_form}");
+        let r = optimize(&mut doc, &Settings::default()).unwrap();
+        assert_eq!(r.images_resampled, 0, "{r:?}");
+    }
+}
+
+/// One page damaged partway stops resampling for the whole document: another page drawing the same
+/// image at its full resolution, whole, doesn't get it resampled either.
+#[test]
+fn content_damaged_partway_on_one_page_leaves_the_image_another_page_draws() {
+    let mut doc = Document::new_empty();
+    let img = image(&mut doc, 720, 720, 1, false, None);
+    let damaged = page(&mut doc, &[("Im", img)], "");
+    let bad = doc.add(Object::Stream(damaged_flate(b"0 g\n", b"q 720 0 0 720 0 0 cm /Im Do Q")));
+    doc.update_dict(damaged, |d| d.set(b"Contents".to_vec(), Object::Ref(bad))).unwrap();
+    let whole = page(&mut doc, &[("Im", img)], "q 72 0 0 72 0 0 cm /Im Do Q");
+    assert_eq!(effective_resolutions(&doc, &[whole])[&img], 720.0);
+    let ppi = effective_resolutions(&doc, &[damaged, whole]).get(&img).copied().unwrap_or(f64::INFINITY);
+    assert_eq!(ppi, f64::INFINITY);
+    let r = optimize(&mut doc, &Settings::default()).unwrap();
+    assert_eq!(r.images_resampled, 0, "{r:?}");
+    assert_eq!(doc.get(img).as_dict().and_then(|d| d.int(b"Width")), Some(720));
 }
 
 /// `levels` nested forms with their own resources, the innermost drawing `img` over the unit square.
@@ -1326,6 +4492,135 @@ fn named_dest_keys(doc: &Document) -> Vec<Vec<u8>> {
     arr.chunks(2).filter_map(|c| doc.resolve(&c[0]).as_string().map(|s| s.bytes.clone())).collect()
 }
 
+/// A `/PieceInfo` data dictionary holding `private`.
+fn app_data(private: Object) -> Object {
+    let mut d = Dict::new();
+    d.set(b"LastModified".to_vec(), Object::String(pdfcraft_cos::PdfString::literal(b"D:20260101000000Z".to_vec())));
+    d.set(b"Private".to_vec(), private);
+    Object::Dict(d)
+}
+
+fn marked(doc: &mut Document, marker: &str, extra: &[(&str, Object)]) -> ObjRef {
+    let mut d = Dict::new();
+    d.set(b"Marker".to_vec(), Object::String(pdfcraft_cos::PdfString::literal(marker.as_bytes().to_vec())));
+    for (k, v) in extra {
+        d.set(k.as_bytes().to_vec(), v.clone());
+    }
+    doc.add(Object::Dict(d))
+}
+
+fn saved(doc: &Document) -> Vec<u8> {
+    write_full(doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap()
+}
+
+fn contains(bytes: &[u8], text: &str) -> bool {
+    bytes.windows(text.len()).any(|w| w == text.as_bytes())
+}
+
+#[test]
+fn search_indexes_in_the_catalog_go_and_other_application_data_stays() {
+    let mut doc = Document::new_empty();
+    let p = page(&mut doc, &[], "BT ET");
+    // The first index holds two objects that refer to each other, and one the page also uses.
+    let shared = marked(&mut doc, "SHARED-DATA", &[]);
+    let a = marked(&mut doc, "INDEX-A", &[("Shared", Object::Ref(shared))]);
+    let b = marked(&mut doc, "INDEX-B", &[("Next", Object::Ref(a))]);
+    doc.update_dict(a, |d| d.set(b"Next".to_vec(), Object::Ref(b))).unwrap();
+    let c = marked(&mut doc, "INDEX-C", &[]);
+    let keep = marked(&mut doc, "KEEP-APP", &[]);
+    let mut info = Dict::new();
+    info.set(b"IBM-ODIndexes".to_vec(), app_data(Object::Ref(a)));
+    info.set(b"MySearchINDEX".to_vec(), app_data(Object::Ref(c)));
+    info.set(b"Illustrator".to_vec(), app_data(Object::Ref(keep)));
+    let root = doc.root().unwrap();
+    doc.update_dict(root, |cat| cat.set(b"PieceInfo".to_vec(), Object::Dict(info))).unwrap();
+    let mut page_info = Dict::new();
+    page_info.set(b"PageIndexer".to_vec(), app_data(Object::Ref(shared)));
+    doc.update_dict(p, |d| d.set(b"PieceInfo".to_vec(), Object::Dict(page_info))).unwrap();
+
+    // Off by default: nothing changes.
+    let mut untouched = doc.clone();
+    assert!(!Settings::default().discard_search_index);
+    assert_eq!(optimize(&mut untouched, &Settings::default()).unwrap().search_indexes, 0);
+    let bytes = saved(&untouched);
+    assert!(["INDEX-A", "INDEX-B", "INDEX-C", "KEEP-APP"].iter().all(|m| contains(&bytes, m)));
+
+    let r = optimize(&mut doc, &Settings { discard_search_index: true, ..Settings::default() }).unwrap();
+    assert_eq!(r.search_indexes, 2);
+    let cat = doc.get(root).as_dict().cloned().unwrap();
+    let info = cat.get(b"PieceInfo").and_then(Object::as_dict).cloned().unwrap();
+    assert_eq!(info.iter().map(|(k, _)| k.clone()).collect::<Vec<_>>(), vec![b"Illustrator".to_vec()]);
+    // The saved file leaves out the objects only the indexes held, the cycle included; the
+    // object the page also uses, the other application's data and the page's own entry stay.
+    let bytes = saved(&doc);
+    assert!(!["INDEX-A", "INDEX-B", "INDEX-C"].iter().any(|m| contains(&bytes, m)));
+    assert!(["SHARED-DATA", "KEEP-APP", "PageIndexer"].iter().all(|m| contains(&bytes, m)));
+    let reopened = Document::open(Arc::new(bytes)).unwrap();
+    let cat = reopened.get(reopened.root().unwrap()).as_dict().cloned().unwrap();
+    let info = reopened.dict(cat.get(b"PieceInfo").unwrap()).unwrap();
+    assert!(info.contains(b"Illustrator") && info.len() == 1);
+}
+
+#[test]
+fn an_indirect_piece_info_is_left_for_its_other_users() {
+    let mut doc = Document::new_empty();
+    let p = page(&mut doc, &[], "BT ET");
+    let idx = marked(&mut doc, "INDEX-DATA", &[]);
+    let mut info = Dict::new();
+    info.set(b"Index".to_vec(), app_data(Object::Ref(idx)));
+    let info = doc.add(Object::Dict(info));
+    let root = doc.root().unwrap();
+    doc.update_dict(root, |cat| cat.set(b"PieceInfo".to_vec(), Object::Ref(info))).unwrap();
+    doc.update_dict(p, |d| d.set(b"PieceInfo".to_vec(), Object::Ref(info))).unwrap();
+    let settings = Settings { discard_search_index: true, ..Settings::default() };
+    let r = optimize(&mut doc, &settings).unwrap();
+    // The catalog's only entry was an index, so /PieceInfo goes; the page keeps the shared one.
+    assert_eq!(r.search_indexes, 1);
+    assert!(!doc.get(root).as_dict().unwrap().contains(b"PieceInfo"));
+    assert!(doc.get(info).as_dict().unwrap().contains(b"Index"));
+    assert!(contains(&saved(&doc), "INDEX-DATA"));
+
+    // A /PieceInfo that is not a dictionary is left as it is.
+    let mut doc = Document::new_empty();
+    page(&mut doc, &[], "BT ET");
+    let root = doc.root().unwrap();
+    doc.update_dict(root, |cat| cat.set(b"PieceInfo".to_vec(), Object::Int(7))).unwrap();
+    assert_eq!(optimize(&mut doc, &settings).unwrap().search_indexes, 0);
+    assert_eq!(doc.get(root).as_dict().unwrap().int(b"PieceInfo"), Some(7));
+}
+
+#[test]
+fn retained_deep_application_data_reads_back_after_discarding_an_index() {
+    let mut doc = Document::new_empty();
+    page(&mut doc, &[], "BT ET");
+    let deep = (0..127).fold(Object::Int(7), |child, _| {
+        let mut d = Dict::new();
+        d.set(b"Child".to_vec(), child);
+        Object::Dict(d)
+    });
+    let mut info = Dict::new();
+    info.set(b"Index".to_vec(), app_data(Object::Int(0)));
+    info.set(b"OtherApp".to_vec(), deep);
+    let info = doc.add(Object::Dict(info));
+    let root = doc.root().unwrap();
+    doc.update_dict(root, |c| c.set(b"PieceInfo".to_vec(), Object::Ref(info))).unwrap();
+    let retained = |doc: &Document| {
+        let catalog = doc.get(doc.root().unwrap());
+        let info = doc.resolve(catalog.as_dict().unwrap().get(b"PieceInfo").unwrap());
+        let mut value = info.as_dict().unwrap().get(b"OtherApp").unwrap().clone();
+        for _ in 0..127 {
+            value = doc.resolve(&value).as_dict().unwrap().get(b"Child").unwrap().clone();
+        }
+        value
+    };
+    let mut doc = Document::open(Arc::new(saved(&doc))).unwrap();
+    assert_eq!(retained(&doc), Object::Int(7));
+    let report = optimize(&mut doc, &Settings { discard_search_index: true, ..Settings::default() }).unwrap();
+    assert_eq!(report.search_indexes, 1);
+    let reopened = Document::open(Arc::new(saved(&doc))).unwrap();
+    assert_eq!(retained(&reopened), Object::Int(7));
+}
+
 /// Page content long enough for LZW codes to grow past 9 bits, where `EarlyChange` matters.
 fn lzw_ops() -> Vec<u8> {
     (0..300).flat_map(|i| format!("{} {} m {} {} l S\n", i % 97, i * 7 % 389, i * 13 % 612, i * 31 % 792).into_bytes()).collect()
@@ -1419,6 +4714,42 @@ fn lzw_streams_become_flate_and_decode_to_the_same_bytes() {
     let parms = stream(&doc, img).dict.get(b"DecodeParms").and_then(Object::as_dict).cloned().unwrap();
     assert_eq!((parms.int(b"Predictor"), parms.int(b"Colors"), parms.int(b"Columns")), (Some(15), Some(3), Some(64)));
     assert!(!stream(&doc, c_late).dict.contains(b"DecodeParms"), "nothing left to say for the content stream");
+}
+
+/// A stream can take a second or more to store again, so a cancel lands between any two of them,
+/// and nothing runs after it.
+#[test]
+fn a_cancel_lands_during_the_lzw_pass() {
+    use pdfcraft_optimize::{OptimizeError, Stage, optimize_with_progress};
+    let build = |streams: usize| {
+        let mut doc = Document::new_empty();
+        let mut d = Dict::new();
+        d.set(b"Filter".to_vec(), Object::name("LZWDecode"));
+        for _ in 0..streams {
+            doc.add(Object::Stream(Stream::from_raw(d.clone(), lzw(&lzw_ops(), &Params::default()))));
+        }
+        page(&mut doc, &[], "0 0 1 1 re f");
+        doc
+    };
+    let asked = |streams: usize| {
+        let mut asked = 0;
+        optimize_with_progress(&mut build(streams), &Settings::default(), &mut |s| {
+            asked += usize::from(s == Stage::CleanUp);
+            true
+        })
+        .unwrap();
+        asked
+    };
+    let none = asked(0);
+    assert_eq!(asked(3), none + 3, "once a stream");
+    let mut left = none + 1;
+    let mut doc = build(3);
+    let r = optimize_with_progress(&mut doc, &Settings::default(), &mut |s| {
+        left -= usize::from(s == Stage::CleanUp);
+        left > 0
+    });
+    assert!(matches!(r, Err(OptimizeError::Cancelled)), "{r:?}");
+    assert_eq!(left, 0, "nothing runs after it");
 }
 
 #[test]
@@ -1535,4 +4866,945 @@ fn lzw_streams_that_cannot_be_read_or_are_not_asked_for_stay_unchanged() {
     let (mut doc, c) = with_content(filtered(&["LZWDecode"], good));
     assert_eq!(optimize(&mut doc, &Settings::default()).unwrap().lzw_streams, 1);
     assert_eq!(stream(&doc, c).decoded_strict().unwrap(), ops);
+}
+
+/// An indexed image's palette says which sample is dark, so a thin rule survives averaging as it does
+/// in grey: with the palette either way round, and the decode array either way, the averaged image
+/// holds the averaged DeviceGray one's samples (flipped where its samples are), and looks the same
+/// through a full save and render.
+#[test]
+fn indexed_thin_rules_survive_averaging_for_both_palette_orders_and_decodes() {
+    let (w, h) = (1200u32, 480u32);
+    let stride = (w as usize).div_ceil(8);
+    let mut gray_data = vec![0xFF; stride * h as usize];
+    for y in 0..h as usize {
+        gray_data[y * stride + 101 / 8] &= !(0x80 >> (101 % 8));
+    }
+    let mut gray = Document::new_empty();
+    let gray_image = mono_image(&mut gray, w, h, &gray_data, None, &[("BitsPerComponent", 1.into()), ("ColorSpace", Object::name("DeviceGray"))]);
+    page(&mut gray, &[("Im", gray_image)], "q 144 0 0 57.6 20 600 cm /Im Do Q");
+    let gray_render = render(&gray);
+    optimize(&mut gray, &Settings::default()).unwrap();
+    let gray_after = render(&Document::open(Arc::new(write_full(&gray, &SaveOptions::default()).unwrap())).unwrap());
+    let gray_stream = stream(&gray, gray_image);
+    let gray_samples = decoded_image(&gray, &gray_stream).unwrap();
+    assert_eq!((gray_stream.dict.int(b"Width"), gray_stream.dict.int(b"Height")), (Some(600), Some(240)));
+    assert!(gray_samples.iter().any(|b| *b != 0xFF), "the DeviceGray thin rule survives");
+    for white_first in [false, true] {
+        for inverted in [false, true] {
+            let mut data = vec![0xFF; stride * h as usize];
+            for y in 0..h as usize {
+                data[y * stride + 101 / 8] &= !(0x80 >> (101 % 8));
+            }
+            if white_first != inverted {
+                data.iter_mut().for_each(|b| *b = !*b);
+            }
+            let palette = if white_first { vec![255, 0] } else { vec![0, 255] };
+            let cs = Object::Array(vec![
+                Object::name("Indexed"),
+                Object::name("DeviceGray"),
+                1.into(),
+                Object::String(pdfcraft_cos::PdfString::literal(palette)),
+            ]);
+            let mut entries = vec![("BitsPerComponent", 1.into()), ("ColorSpace", cs)];
+            if inverted {
+                entries.push(("Decode", Object::Array(vec![1.into(), 0.into()])));
+            }
+            let mut doc = Document::new_empty();
+            let image = mono_image(&mut doc, w, h, &data, None, &entries);
+            page(&mut doc, &[("Im", image)], "q 144 0 0 57.6 20 600 cm /Im Do Q");
+            let before = render(&doc);
+            assert_eq!(before, gray_render, "the palette image is visually identical to DeviceGray");
+            optimize(&mut doc, &Settings::default()).unwrap();
+            let s = stream(&doc, image);
+            assert_eq!((s.dict.int(b"Width"), s.dict.int(b"Height")), (Some(600), Some(240)), "white-first={white_first}, inverted={inverted}");
+            // The rows are 600 samples, whole bytes: flipping each byte flips each sample.
+            let expected: Vec<u8> = gray_samples.iter().map(|b| if white_first != inverted { !b } else { *b }).collect();
+            assert_eq!(decoded_image(&doc, &s).unwrap(), expected, "white-first={white_first}, inverted={inverted}: the rule is dark");
+            let saved = Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap();
+            assert!(render(&saved) == gray_after, "palette white-first={white_first}, inverted={inverted}");
+        }
+    }
+}
+
+/// An image past what the JBIG2 decoder takes on a side, or past 2^28 pixels in all, stays as it
+/// is: JBIG2 can state the size, but PdfCraft's decoder refuses such a stream, so stored as JBIG2 it
+/// drew nothing here. At 65,535 on a side, and at 2^28 in all (past 80 million, which the
+/// monochrome step takes of a one-bit image), the same bars do become JBIG2, so the fixture does
+/// reach that choice, and the coding stored reads back through that decoder. Averaged, an image past
+/// 2^28 becomes small enough and is stored as JBIG2 too.
+#[test]
+fn an_image_too_large_for_the_jbig2_decoder_stays_as_it_is() {
+    for (w, h, stored) in [
+        (65_535u32, 16u32, &b"JBIG2Decode"[..]),
+        (16, 65_535, b"JBIG2Decode"),
+        (65_536, 16, b"FlateDecode"),
+        (16, 65_536, b"FlateDecode"),
+        (16_384, 16_384, b"JBIG2Decode"),
+        (16_384, 16_385, b"FlateDecode"),
+    ] {
+        let mut doc = Document::new_empty();
+        let image = mono_image(&mut doc, w, h, &bars(w, h), None, &[("BitsPerComponent", 1.into()), ("ColorSpace", Object::name("DeviceGray"))]);
+        page(&mut doc, &[("Im", image)], &format!("q {w} 0 0 {h} 0 0 cm /Im Do Q"));
+        let before = stream(&doc, image).raw.clone();
+        let settings =
+            Settings { mono: MonoSettings { compression: MonoCompression::Jbig2, downsample: false, ..MonoSettings::REDUCE }, ..Settings::default() };
+        optimize(&mut doc, &settings).unwrap();
+        let s = stream(&doc, image);
+        assert_eq!(s.dict.name(b"Filter"), Some(stored), "{w} × {h}");
+        if stored == b"FlateDecode" {
+            assert_eq!(s.raw, before, "{w} × {h}");
+        } else {
+            // The decoder gives padding bits as 0; the bars have them 1.
+            let mut bits = bars(w, h);
+            if w % 8 != 0 {
+                for row in bits.chunks_mut((w as usize).div_ceil(8)) {
+                    if let Some(last) = row.last_mut() {
+                        *last &= 0xFFu8 << (8 - w % 8);
+                    }
+                }
+            }
+            assert!(decoded_image(&doc, &s).unwrap() == bits, "{w} × {h} reads back");
+        }
+    }
+    let (w, h) = (16_384u32, 16_385u32);
+    let mut doc = Document::new_empty();
+    let image = mono_image(&mut doc, w, h, &bars(w, h), None, &[("BitsPerComponent", 1.into()), ("ColorSpace", Object::name("DeviceGray"))]);
+    let (pw, ph) = (f64::from(w) * 72.0 / 600.0, f64::from(h) * 72.0 / 600.0);
+    page(&mut doc, &[("Im", image)], &format!("q {pw} 0 0 {ph} 0 0 cm /Im Do Q"));
+    let settings = Settings { mono: MonoSettings { compression: MonoCompression::Jbig2, ..MonoSettings::REDUCE }, ..Settings::default() };
+    let r = optimize(&mut doc, &settings).unwrap();
+    assert_eq!(r.images_resampled, 1, "{r:?}");
+    assert_eq!(stream(&doc, image).dict.name(b"Filter"), Some(&b"JBIG2Decode"[..]), "averaged, it is stored as JBIG2");
+}
+
+/// The colour and grey steps leave an image over 80 million pixels as it is, whatever their settings
+/// (memory): 10,000 × 8,000 grey, the limit itself, drawn at 600 ppi, is resampled, and a row more
+/// stays as it is.
+#[test]
+fn grey_images_are_resampled_up_to_the_pixel_limit() {
+    for (h, resampled) in [(8_000u32, true), (8_001, false)] {
+        let mut doc = Document::new_empty();
+        let grey = image(&mut doc, 10_000, h, 1, false, None);
+        let before = stream(&doc, grey).raw.clone();
+        let (pw, ph) = (10_000.0 * 72.0 / 600.0, f64::from(h) * 72.0 / 600.0);
+        page(&mut doc, &[("G", grey)], &format!("q {pw} 0 0 {ph} 0 0 cm /G Do Q"));
+        let report = optimize(&mut doc, &Settings::default()).unwrap();
+        assert_eq!(report.images_resampled, usize::from(resampled), "10,000 × {h}: {report:?}");
+        let s = stream(&doc, grey);
+        if resampled {
+            assert_eq!(s.dict.int(b"Width"), Some(2_500), "10,000 × {h}");
+        } else {
+            assert!(s.dict.int(b"Width") == Some(10_000) && s.raw == before, "10,000 × {h} stays as it is");
+        }
+    }
+}
+
+/// Dark bars of irregular lengths across the long side of a `w` × `h` 1-bit image, which Flate
+/// shrinks less than JBIG2.
+fn bars(w: u32, h: u32) -> Vec<u8> {
+    let stride = (w as usize).div_ceil(8);
+    let mut data = vec![0xFF; stride * h as usize];
+    let mut state = 0x1234_5678u32;
+    let mut next = move || {
+        state ^= state << 13;
+        state ^= state >> 17;
+        state ^= state << 5;
+        state as usize
+    };
+    let long = w.max(h) as usize;
+    let mut at = 10;
+    while at + 60 < long {
+        let len = 5 + next() % 50;
+        for along in at..at + len {
+            for across in 0..12 {
+                let (x, y) = if w > h { (along, across) } else { (across, along) };
+                data[y * stride + x / 8] &= !(0x80 >> (x % 8));
+            }
+        }
+        at += len + 5 + next() % 50;
+    }
+    data
+}
+
+/// Past what the JBIG2 decoder takes on either side, an image packed from more bits, or one
+/// averaged to a size still past it, isn't stored as JBIG2 either: it becomes 1-bit Flate. Within
+/// the bound the same pictures do become JBIG2, so the fixtures reach that choice.
+#[test]
+fn what_is_too_large_for_jbig2_is_stored_another_way() {
+    let settings = |downsample| Settings {
+        mono: MonoSettings { compression: MonoCompression::Jbig2, downsample, ..MonoSettings::REDUCE },
+        ..Settings::default()
+    };
+    let (jbig2, flate) = (&b"JBIG2Decode"[..], &b"FlateDecode"[..]);
+    // Eight-bit grey of only black and white, packed to one bit first, wide and tall.
+    for (w, h, stored) in [(65_535u32, 16u32, jbig2), (65_536, 16, flate), (16, 65_535, jbig2), (16, 65_536, flate)] {
+        let (bits, stride) = (bars(w, h), (w as usize).div_ceil(8));
+        let grey: Vec<u8> = (0..h as usize)
+            .flat_map(|y| (0..w as usize).map(move |x| (y, x)))
+            .map(|(y, x)| if bits[y * stride + x / 8] & (0x80 >> (x % 8)) == 0 { 0 } else { 255 })
+            .collect();
+        let mut doc = Document::new_empty();
+        let image = mono_image(&mut doc, w, h, &grey, None, &[("BitsPerComponent", 8.into()), ("ColorSpace", Object::name("DeviceGray"))]);
+        page(&mut doc, &[("Im", image)], &format!("q {w} 0 0 {h} 0 0 cm /Im Do Q"));
+        optimize(&mut doc, &settings(false)).unwrap();
+        let s = stream(&doc, image);
+        assert_eq!(s.dict.name(b"Filter"), Some(stored), "{w} × {h}, packed");
+        assert_eq!(s.dict.int(b"BitsPerComponent"), Some(1), "{w} × {h}, packed");
+    }
+    // One bit, drawn at 600 ppi and averaged to 300: half the size, so 140,000 is still past it.
+    for (w, h, stored) in [(70_000u32, 16u32, jbig2), (140_000, 16, flate), (16, 70_000, jbig2), (16, 140_000, flate)] {
+        let mut doc = Document::new_empty();
+        let image = mono_image(&mut doc, w, h, &bars(w, h), None, &[("BitsPerComponent", 1.into()), ("ColorSpace", Object::name("DeviceGray"))]);
+        let (pw, ph) = (f64::from(w) * 72.0 / 600.0, f64::from(h) * 72.0 / 600.0);
+        page(&mut doc, &[("Im", image)], &format!("q {pw} 0 0 {ph} 0 0 cm /Im Do Q"));
+        optimize(&mut doc, &settings(true)).unwrap();
+        let s = stream(&doc, image);
+        assert_eq!(s.dict.name(b"Filter"), Some(stored), "{w} × {h}, averaged");
+        assert_eq!(s.dict.int(b"BitsPerComponent"), Some(1), "{w} × {h}, averaged");
+        assert_eq!((s.dict.int(b"Width"), s.dict.int(b"Height")), (Some(i64::from(w / 2)), Some(i64::from(h / 2))), "{w} × {h}, averaged");
+    }
+}
+
+/// An indexed image also drawn where the optimizer doesn't read (an annotation's appearance, where
+/// other default colour spaces may be in force and change which palette entry is darker) keeps its
+/// resolution, as black-and-white RGB keeps its colour space; drawn only on the page, it is
+/// averaged. A grey image is averaged either way: sample 0 stays dark in a grey space, and only an
+/// indexed image's palette depends on what's in force where it is drawn.
+#[test]
+fn an_indexed_image_used_beyond_the_page_content_read_is_not_averaged() {
+    let (w, h) = (1200u32, 480u32);
+    let stride = (w as usize).div_ceil(8);
+    let mut data = vec![0xFF; stride * h as usize];
+    for y in 0..h as usize {
+        data[y * stride + 101 / 8] &= !(0x80 >> (101 % 8));
+    }
+    let palette = Object::String(pdfcraft_cos::PdfString::literal(vec![0, 0, 0, 255, 255, 255]));
+    let indexed = Object::Array(vec![Object::name("Indexed"), Object::name("DeviceRGB"), 1.into(), palette]);
+    let cases = [(&indexed, false, 600), (&indexed, true, 1200), (&Object::name("DeviceGray"), false, 600), (&Object::name("DeviceGray"), true, 600)];
+    for (cs, in_annotation, width) in cases {
+        let mut doc = Document::new_empty();
+        let image = mono_image(&mut doc, w, h, &data, None, &[("BitsPerComponent", 1.into()), ("ColorSpace", cs.clone())]);
+        // 144 × 57.6 pt is 600 ppi.
+        let p = page(&mut doc, &[("Im", image)], "q 144 0 0 57.6 20 600 cm /Im Do Q");
+        if in_annotation {
+            let resources = Object::Dict({
+                let mut r = Dict::new();
+                r.set(b"XObject".to_vec(), Object::Dict(xobject_dict(&[("Im", image)])));
+                r
+            });
+            let appearance = drawing(&mut doc, Some(resources), &form_entries());
+            annotate(&mut doc, p, appearance);
+        }
+        optimize(&mut doc, &Settings::default()).unwrap();
+        assert_eq!(stream(&doc, image).dict.int(b"Width"), Some(width), "{cs:?}, in an annotation: {in_annotation}");
+    }
+}
+
+/// Which palette entry is darker comes from the colours, weighted as luma, and blue is darker than
+/// red whichever comes first. An array shaped like an indexed colour space and named otherwise has
+/// no palette, so its samples aren't averaged.
+#[test]
+fn an_indexed_palette_is_read_by_the_luma_of_its_colours() {
+    let (w, h) = (1200u32, 480u32);
+    let stride = (w as usize).div_ceil(8);
+    let mut data = vec![0xFF; stride * h as usize];
+    for y in 0..h as usize {
+        data[y * stride + 101 / 8] &= !(0x80 >> (101 % 8));
+    }
+    let palette = Object::String(pdfcraft_cos::PdfString::literal(vec![0, 0, 255, 255, 0, 0]));
+    let optimized = |space: &str| {
+        let cs = Object::Array(vec![Object::name(space), Object::name("DeviceRGB"), 1.into(), palette.clone()]);
+        let mut doc = Document::new_empty();
+        let image = mono_image(&mut doc, w, h, &data, None, &[("BitsPerComponent", 1.into()), ("ColorSpace", cs)]);
+        page(&mut doc, &[("Im", image)], "q 144 0 0 57.6 20 600 cm /Im Do Q");
+        optimize(&mut doc, &Settings::default()).unwrap();
+        let s = stream(&doc, image);
+        (s.dict.int(b"Width"), decoded_image(&doc, &s).unwrap())
+    };
+    let (width, samples) = optimized("Indexed");
+    assert_eq!(width, Some(600));
+    assert!(samples.iter().any(|b| *b != 0xFF), "the blue line, half a new pixel wide, stays as the dark sample");
+    assert_eq!(optimized("NotIndexed").0, Some(1200));
+}
+
+/// What is averaged, by how the image is spelled. A family or a base by reference, or a device base
+/// alone in an array, is the same colour space. `/I`, an inline abbreviation, and a real `hival`
+/// aren't one, and neither is a table too large to be a palette, which images share and which
+/// would be read for each. A colour key can hide the dark sample a tie goes to, so a thin rule of
+/// the other would be lost, in grey too; a stencil `/Mask` doesn't.
+#[test]
+fn an_indexed_image_is_averaged_only_in_a_spelling_it_can_read() {
+    let (w, h) = (1200u32, 480u32);
+    let stride = (w as usize).div_ceil(8);
+    let mut data = vec![0xFF; stride * h as usize];
+    for y in 0..h as usize {
+        data[y * stride + 101 / 8] &= !(0x80 >> (101 % 8));
+    }
+    let table = || Object::String(pdfcraft_cos::PdfString::literal(vec![0, 0, 0, 255, 255, 255]));
+    let indexed = |family: Object, base: Object, hival: Object, table: Object| Object::Array(vec![family, base, hival, table]);
+    let rgb = || Object::name("DeviceRGB");
+    let plain = || indexed(Object::name("Indexed"), rgb(), 1.into(), table());
+    let width = |make: &dyn Fn(&mut Document) -> Vec<(&'static str, Object)>| {
+        let mut doc = Document::new_empty();
+        let mut entries = vec![("BitsPerComponent", Object::Int(1))];
+        entries.extend(make(&mut doc));
+        let image = mono_image(&mut doc, w, h, &data, None, &entries);
+        page(&mut doc, &[("Im", image)], "q 144 0 0 57.6 20 600 cm /Im Do Q");
+        optimize(&mut doc, &Settings::default()).unwrap();
+        stream(&doc, image).dict.int(b"Width")
+    };
+    let averaged = Some(600);
+    let kept = Some(1200);
+    assert_eq!(width(&|_| vec![("ColorSpace", plain())]), averaged, "direct");
+    assert_eq!(
+        width(&|doc: &mut Document| {
+            let family = doc.add(Object::name("Indexed"));
+            vec![("ColorSpace", indexed(Object::Ref(family), rgb(), 1.into(), table()))]
+        }),
+        averaged,
+        "the family by reference"
+    );
+    let base = Object::Array(vec![rgb()]);
+    assert_eq!(width(&|_| vec![("ColorSpace", indexed(Object::name("Indexed"), base.clone(), 1.into(), table()))]), averaged, "the base in an array");
+    assert_eq!(width(&|_| vec![("ColorSpace", indexed(Object::name("I"), rgb(), 1.into(), table()))]), kept, "an inline abbreviation");
+    assert_eq!(width(&|_| vec![("ColorSpace", indexed(Object::name("Indexed"), rgb(), Object::Real(1.0), table()))]), kept, "a real hival");
+    let long = Object::String(pdfcraft_cos::PdfString::literal([vec![0, 0, 0, 255, 255, 255], vec![0; 4097]].concat()));
+    assert_eq!(width(&|_| vec![("ColorSpace", indexed(Object::name("Indexed"), rgb(), 1.into(), long.clone()))]), kept, "a string past a palette");
+    // 16 KiB of raw data is all a table may take, whatever it decodes to.
+    let mut d = Dict::new();
+    d.set(b"Filter".to_vec(), Object::name("ASCIIHexDecode"));
+    let table_of = |raw: usize| {
+        let d = d.clone();
+        let hex: Vec<u8> = b"000000FFFFFF".iter().copied().chain(std::iter::repeat_n(b' ', raw - 13)).chain(*b">").collect();
+        move |doc: &mut Document| doc.add(Object::Stream(pdfcraft_cos::Stream::from_raw(d.clone(), hex.clone())))
+    };
+    for (raw, expected) in [(16384, averaged), (16385, kept)] {
+        let add = table_of(raw);
+        assert_eq!(
+            width(&|doc: &mut Document| {
+                let table = add(doc);
+                vec![("ColorSpace", indexed(Object::name("Indexed"), rgb(), 1.into(), Object::Ref(table)))]
+            }),
+            expected,
+            "a stream of {raw} bytes"
+        );
+    }
+    let key = || Object::Array(vec![0.into(), 0.into()]);
+    assert_eq!(width(&|_| vec![("ColorSpace", plain()), ("Mask", key())]), kept, "a colour key, indexed");
+    assert_eq!(width(&|_| vec![("ColorSpace", Object::name("DeviceGray")), ("Mask", key())]), kept, "a colour key, grey");
+    assert_eq!(
+        width(&|doc: &mut Document| {
+            let key = doc.add(key());
+            vec![("ColorSpace", plain()), ("Mask", Object::Ref(key))]
+        }),
+        kept,
+        "a colour key by reference"
+    );
+}
+
+/// White margins must not hide a small screened photograph from the tone guard.
+#[test]
+fn mixed_text_and_small_halftone_regions_keep_their_tones_with_wide_white_margins() {
+    let (w, h) = (1200u32, 480u32);
+    let stride = (w as usize).div_ceil(8);
+    for side in [8usize, 40, 300] {
+        let mut data = vec![0xFF; stride * h as usize];
+        for y in 40..40 + side {
+            for x in 100..100 + side {
+                if (x + y) % 2 == 0 {
+                    data[y * stride + x / 8] &= !(0x80 >> (x % 8));
+                }
+            }
+        }
+        // A separate one-pixel text/rule stroke makes this a mixed-content scan.
+        for y in 380..420 {
+            data[y * stride + 801 / 8] &= !(0x80 >> (801 % 8));
+        }
+        let mut doc = Document::new_empty();
+        let image = mono_image(&mut doc, w, h, &data, None, &[("BitsPerComponent", 1.into()), ("ColorSpace", Object::name("DeviceGray"))]);
+        page(&mut doc, &[("Im", image)], "q 144 0 0 57.6 20 600 cm /Im Do Q");
+        let before = render(&doc);
+        optimize(&mut doc, &Settings::default()).unwrap();
+        let s = stream(&doc, image);
+        assert_eq!((s.dict.int(b"Width"), s.dict.int(b"Height")), (Some(w.into()), Some(h.into())));
+        assert_eq!(decoded_image(&doc, &s).unwrap(), data, "screened samples survive, not a solid patch");
+        let saved = Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap();
+        assert_eq!(render(&saved), before, "local halftone {side}x{side}");
+    }
+}
+
+#[test]
+fn dictionary_destinations_broken_named_destinations_and_both_dest_tables() {
+    let mut doc = Document::new_empty();
+    let p = page(&mut doc, &[], "BT ET");
+    let s = |t: &str| Object::String(pdfcraft_cos::PdfString::literal(t.as_bytes().to_vec()));
+    let dict_dest = |target: ObjRef| {
+        let mut d = Dict::new();
+        d.set(b"D".to_vec(), Object::Array(vec![Object::Ref(target), Object::name("Fit")]));
+        Object::Dict(d)
+    };
+    let link = |doc: &mut Document, dest: Object| {
+        let mut d = Dict::new();
+        d.set(b"Type".to_vec(), Object::name("Annot"));
+        d.set(b"Subtype".to_vec(), Object::name("Link"));
+        d.set(b"Rect".to_vec(), Object::Array(vec![0.into(), 0.into(), 10.into(), 10.into()]));
+        d.set(b"Dest".to_vec(), dest);
+        Object::Ref(doc.add(Object::Dict(d)))
+    };
+    let missing = ObjRef::new(999, 0);
+    // Links: (1) explicit dictionary destination to `p` (valid), (2) explicit dictionary
+    // destination to `missing` (invalid), (3) named destination "dict_ok" whose value is
+    // `<< /D [p /Fit] >>` (valid), (4) named destination "broken_tree" whose target page is
+    // `missing` (invalid).
+    let annots = vec![
+        link(&mut doc, dict_dest(p)),
+        link(&mut doc, dict_dest(missing)),
+        link(&mut doc, Object::Array(vec![Object::Int(i64::from(u32::MAX) + 1), Object::name("Fit")])),
+        link(&mut doc, s("dict_ok")),
+        link(&mut doc, s("broken_tree")),
+    ];
+    doc.update_dict(p, |d| d.set(b"Annots".to_vec(), Object::Array(annots))).unwrap();
+
+    // Bookmark with an indirect GoTo action pointing to "broken_old" in catalog /Dests (whose
+    // page is `missing`), and a second bookmark pointing to "old_ok" in catalog /Dests.
+    let outlines = doc.add(Object::Null);
+    let mut goto_broken = Dict::new();
+    goto_broken.set(b"S".to_vec(), Object::name("GoTo"));
+    goto_broken.set(b"D".to_vec(), Object::name("broken_old"));
+    let goto_broken = doc.add(Object::Dict(goto_broken));
+    let mut bm_broken = Dict::new();
+    bm_broken.set(b"Title".to_vec(), s("Broken"));
+    bm_broken.set(b"Parent".to_vec(), Object::Ref(outlines));
+    bm_broken.set(b"A".to_vec(), Object::Ref(goto_broken));
+    let bm_broken = doc.add(Object::Dict(bm_broken));
+    let mut bm_ok = Dict::new();
+    bm_ok.set(b"Title".to_vec(), s("Ok"));
+    bm_ok.set(b"Parent".to_vec(), Object::Ref(outlines));
+    bm_ok.set(b"Dest".to_vec(), Object::name("old_ok"));
+    let bm_ok = doc.add(Object::Dict(bm_ok));
+    doc.update_dict(bm_broken, |d| d.set(b"Next".to_vec(), Object::Ref(bm_ok))).unwrap();
+    let mut o = Dict::new();
+    o.set(b"First".to_vec(), Object::Ref(bm_broken));
+    o.set(b"Last".to_vec(), Object::Ref(bm_ok));
+    doc.set(outlines, Object::Dict(o));
+
+    // /Names /Dests has "broken_tree" (pointing to `missing`) and "dict_ok" (`<< /D [p /Fit] >>`).
+    let broken_dest = doc.add(dict_dest(missing));
+    let ok_dest = doc.add(dict_dest(p));
+    let mut tree = Dict::new();
+    tree.set(b"Names".to_vec(), Object::Array(vec![s("broken_tree"), Object::Ref(broken_dest), s("dict_ok"), Object::Ref(ok_dest)]));
+    let tree = doc.add(Object::Dict(tree));
+    let mut names = Dict::new();
+    names.set(b"Dests".to_vec(), Object::Ref(tree));
+
+    // Catalog /Dests has "broken_old" (pointing to `missing`) and "old_ok" (`<< /D [p /Fit] >>`).
+    let mut old_dests = Dict::new();
+    old_dests.set(b"broken_old".to_vec(), Object::Array(vec![Object::Ref(missing), Object::name("Fit")]));
+    old_dests.set(b"old_ok".to_vec(), dict_dest(p));
+    let old_dests = doc.add(Object::Dict(old_dests));
+
+    let root = doc.root().unwrap();
+    doc.update_dict(root, |c| {
+        c.set(b"Names".to_vec(), Object::Dict(names));
+        c.set(b"Dests".to_vec(), Object::Ref(old_dests));
+        c.set(b"Outlines".to_vec(), Object::Ref(outlines));
+    })
+    .unwrap();
+
+    // Space audit claims both /Names /Dests and catalog /Dests under NamedDestinations.
+    let only_tree = {
+        let mut d = doc.clone();
+        d.update_dict(root, |c| {
+            c.remove(b"Dests");
+        })
+        .unwrap();
+        audit_space(&d, 0).into_iter().find(|u| u.category == SpaceCategory::NamedDestinations).unwrap().bytes
+    };
+    let both_tables = audit_space(&doc, 0).into_iter().find(|u| u.category == SpaceCategory::NamedDestinations).unwrap().bytes;
+    assert!(both_tables > only_tree, "catalog /Dests is counted alongside /Names /Dests: {both_tables} vs {only_tree}");
+
+    let report = optimize(&mut doc, &Settings::default()).unwrap();
+    assert_eq!((report.invalid_links, report.invalid_bookmarks, report.unreferenced_dests), (3, 1, 2), "{report:?}");
+    let left_links = doc.get(p).as_dict().unwrap().get(b"Annots").unwrap().as_array().unwrap().len();
+    assert_eq!(left_links, 2, "the two valid dictionary/named links remain");
+    assert!(doc.get(bm_broken).as_dict().unwrap().get(b"A").is_none(), "broken bookmark action is cleared");
+    assert!(doc.get(bm_ok).as_dict().unwrap().get(b"Dest").is_some(), "valid bookmark destination stays");
+    assert_eq!(named_dest_keys(&doc), vec![b"dict_ok".to_vec()]);
+    let left_old = doc.get(old_dests).as_dict().cloned().unwrap();
+    assert!(left_old.contains(b"old_ok") && !left_old.contains(b"broken_old"), "{left_old:?}");
+}
+
+/// Recolouring keeps a picture's soft mask, but not a picture whose mask has a `/Matte`: that is
+/// a colour in the picture's own space.
+#[test]
+fn recolouring_keeps_soft_masks_and_leaves_matted_pictures() {
+    use pdfcraft_cos::{Dict, Document, Object, Stream};
+    use pdfcraft_optimize::{ImageTarget, recolour_image};
+    let mut doc = Document::new_empty();
+    let picture = |mask| {
+        let mut d = Dict::new();
+        d.set(b"Subtype".to_vec(), Object::name("Image"));
+        d.set(b"Width".to_vec(), Object::Int(1));
+        d.set(b"Height".to_vec(), Object::Int(1));
+        d.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+        d.set(b"ColorSpace".to_vec(), Object::name("DeviceRGB"));
+        d.set(b"SMask".to_vec(), Object::Ref(mask));
+        Stream::flate(d, &[255, 0, 0])
+    };
+    let plain = doc.add(Object::Stream(Stream::flate(Dict::new(), &[128])));
+    let new = recolour_image(&doc, &picture(plain), ImageTarget::Gray).unwrap();
+    assert_eq!(new.dict.get(b"SMask"), Some(&Object::Ref(plain)));
+    let mut matted = Dict::new();
+    matted.set(b"Matte".to_vec(), Object::Array(vec![Object::Int(0); 3]));
+    let matted = doc.add(Object::Stream(Stream::flate(matted, &[128])));
+    assert!(recolour_image(&doc, &picture(matted), ImageTarget::Gray).is_none());
+}
+
+/// A one-bit stencil of `w` × `h`, solid but for a hole in its middle.
+fn stencil(doc: &mut Document, w: u32, h: u32) -> ObjRef {
+    let row = (w as usize).div_ceil(8);
+    let mut bits = vec![0u8; row * h as usize];
+    for y in (h as usize / 3)..(2 * h as usize / 3) {
+        for x in (w as usize / 3)..(2 * w as usize / 3) {
+            bits[y * row + x / 8] |= 0x80 >> (x % 8);
+        }
+    }
+    let mut d = Dict::new();
+    d.set(b"Type".to_vec(), Object::name("XObject"));
+    d.set(b"Subtype".to_vec(), Object::name("Image"));
+    d.set(b"ImageMask".to_vec(), Object::Bool(true));
+    d.set(b"Width".to_vec(), Object::Int(i64::from(w)));
+    d.set(b"Height".to_vec(), Object::Int(i64::from(h)));
+    d.set(b"BitsPerComponent".to_vec(), Object::Int(1));
+    doc.add(Object::Stream(Stream::flate(d, &bits)))
+}
+
+/// A picture with a stencil mask is made smaller like any other: the mask has a resolution of its
+/// own, so it keeps its size and its bits (stored again as Group 4, as a picture's mask is) and the
+/// hole it cuts stays where it was.
+#[test]
+fn a_picture_with_a_stencil_mask_is_downsampled_under_its_mask() {
+    let mut doc = Document::new_empty();
+    let mask = stencil(&mut doc, 1200, 1200);
+    let img = image(&mut doc, 1200, 1200, 3, true, None);
+    let mut s = stream(&doc, img);
+    s.dict.set(b"Mask".to_vec(), Object::Ref(mask));
+    doc.set(img, Object::Stream(s));
+    let mask_before = stream(&doc, mask);
+    // 1200 pixels over two inches: 600 ppi.
+    page(&mut doc, &[("Im0", img)], "0 0 1 rg 0 0 612 792 re f q 144 0 0 144 100 100 cm /Im0 Do Q");
+    let before = render(&doc);
+    let report = optimize(&mut doc, &Settings::default()).unwrap();
+    assert_eq!(report.images_resampled, 1, "{report:?}");
+    let after = stream(&doc, img);
+    assert_eq!(after.dict.int(b"Width"), Some(300), "150 ppi");
+    assert_eq!(after.dict.reference(b"Mask"), Some(mask), "the mask stays on it");
+    let mask_after = stream(&doc, mask);
+    assert_eq!((mask_after.dict.int(b"Width"), mask_after.dict.int(b"Height")), (Some(1200), Some(1200)), "the mask isn't resampled");
+    assert_eq!(decoded_image(&doc, &mask_after).unwrap(), decoded_image(&doc, &mask_before).unwrap(), "and keeps its bits");
+    let rendered = render(&doc);
+    assert_eq!(rendered.len(), before.len());
+    let changed = before.iter().zip(&rendered).filter(|(a, b)| a.abs_diff(**b) > 96).count();
+    assert!(changed * 200 < before.len(), "the masked picture looks the same: {changed} of {} samples far off", before.len());
+    // The hole, the middle third of the picture on the 612 by 792 page, still shows what's behind it.
+    // Its first pixel all round is left out: the coarser picture blends into that a little.
+    for y in 597..643 {
+        for x in 149..195 {
+            let i = (y * 612 + x) * 4;
+            assert_eq!(rendered[i..i + 4], before[i..i + 4], "hole pixel ({x}, {y})");
+        }
+    }
+}
+
+/// A picture's masks of one bit a sample, which the page doesn't draw by name, are stored again as
+/// the monochrome settings ask, losslessly: a stencil `/Mask` (with a decode array that inverts it)
+/// and a one-bit `/SMask` become Group 4, keep their size and bits, and stay the pictures' masks;
+/// the page looks the same to the pixel. A mask two pictures share is stored once, and a stencil
+/// the page also draws by name is stored as that image. An eight-bit soft mask of only black and
+/// white stays as it is, to be resampled with its picture. With `mono: Retain` nothing changes.
+/// One-bit images past 80 million pixels are stored again, as images of eight bits that large are
+/// not: their rows hold a byte for each 8 samples. A picture's stencil mask and one-bit soft mask
+/// too.
+#[test]
+fn one_bit_images_past_80_million_pixels_are_stored_as_group_4() {
+    let mut doc = Document::new_empty();
+    let (w, h) = (9_000, 8_900);
+    let text = bilevel(w, h, false);
+    let one_bit = mono_image(&mut doc, w, h, &text, None, &[("BitsPerComponent", 1.into()), ("ColorSpace", Object::name("DeviceGray"))]);
+    let stencil = mono_image(&mut doc, w, h, &text, None, &[("ImageMask", Object::Bool(true))]);
+    let soft = mono_image(&mut doc, w, h, &text, None, &[("BitsPerComponent", 1.into()), ("ColorSpace", Object::name("DeviceGray"))]);
+    let masked = |doc: &mut Document, key: &str, mask: ObjRef| {
+        let picture = image(doc, 200, 80, 3, false, None);
+        let mut s = stream(doc, picture);
+        s.dict.set(key.as_bytes().to_vec(), Object::Ref(mask));
+        doc.set(picture, Object::Stream(s));
+        picture
+    };
+    let (picture, shaded) = (masked(&mut doc, "Mask", stencil), masked(&mut doc, "SMask", soft));
+    page(
+        &mut doc,
+        &[("I", one_bit), ("P", picture), ("S", shaded)],
+        "q 300 0 0 300 20 400 cm /I Do Q q 300 0 0 120 20 100 cm /P Do Q q 300 0 0 120 20 250 cm /S Do Q",
+    );
+    let keep = ImageSettings { downsample: false, compression: Compression::Retain, ..ImageSettings::REDUCE };
+    let mono = MonoSettings { downsample: false, ..MonoSettings::REDUCE };
+    let before = [one_bit, stencil, soft].map(|r| stream(&doc, r));
+    let r = optimize(&mut doc, &Settings { color: keep, gray: keep, mono, ..Settings::default() }).unwrap();
+    assert_eq!(r.images_recompressed, 3, "{r:?}");
+    for (r, old) in [one_bit, stencil, soft].into_iter().zip(&before) {
+        let new = stream(&doc, r);
+        assert_eq!(new.dict.name(b"Filter"), Some(&b"CCITTFaxDecode"[..]), "{r:?}");
+        assert!(new.raw.len() < old.raw.len(), "{r:?}: {} against {}", new.raw.len(), old.raw.len());
+        assert_eq!(decoded_image(&doc, &new).unwrap(), text, "{r:?} keeps its bits");
+    }
+}
+
+/// With the default settings (Reduce File Size), a one-bit image past 80 million pixels drawn at
+/// 600 ppi is averaged to 300 ppi, as a smaller one is: vertical stripes four samples wide.
+#[test]
+fn a_one_bit_image_past_80_million_pixels_is_averaged_with_the_default_settings() {
+    let (w, h) = (9_000u32, 8_900u32);
+    let mut doc = Document::new_empty();
+    let stripes = vec![0x0F; (w as usize).div_ceil(8) * h as usize];
+    let one_bit = mono_image(&mut doc, w, h, &stripes, None, &[("BitsPerComponent", 1.into()), ("ColorSpace", Object::name("DeviceGray"))]);
+    let (pw, ph) = (f64::from(w) * 72.0 / 600.0, f64::from(h) * 72.0 / 600.0);
+    page(&mut doc, &[("I", one_bit)], &format!("q {pw} 0 0 {ph} 0 0 cm /I Do Q"));
+    let r = optimize(&mut doc, &Settings::default()).unwrap();
+    assert_eq!(r.images_resampled, 1, "{r:?}");
+    let s = stream(&doc, one_bit);
+    assert_eq!((s.dict.int(b"Width"), s.dict.int(b"Height")), (Some(4_500), Some(4_450)));
+}
+
+#[test]
+fn a_pictures_one_bit_masks_are_stored_again() {
+    let mut doc = Document::new_empty();
+    let (w, h) = (1200, 480);
+    let text = bilevel(w, h, false);
+    let decode = Object::Array(vec![1.into(), 0.into()]);
+    let stencil_mask = mono_image(&mut doc, w, h, &text, None, &[("ImageMask", Object::Bool(true)), ("Decode", decode.clone())]);
+    let one_bit = mono_image(&mut doc, w, h, &text, None, &[("BitsPerComponent", 1.into()), ("ColorSpace", Object::name("DeviceGray"))]);
+    let wide: Vec<u8> = text.iter().flat_map(|b| (0..8).rev().map(move |i| if b >> i & 1 == 1 { 255 } else { 0 })).collect();
+    let eight_bit = mono_image(&mut doc, w, h, &wide, None, &[("BitsPerComponent", 8.into()), ("ColorSpace", Object::name("DeviceGray"))]);
+    let drawn = mono_image(&mut doc, w, h, &text, None, &[("ImageMask", Object::Bool(true))]);
+    let masked = |doc: &mut Document, key: &str, mask: ObjRef| {
+        let picture = image(doc, 200, 80, 3, false, None);
+        let mut s = stream(doc, picture);
+        s.dict.set(key.as_bytes().to_vec(), Object::Ref(mask));
+        doc.set(picture, Object::Stream(s));
+        picture
+    };
+    let a = masked(&mut doc, "Mask", stencil_mask);
+    let b = masked(&mut doc, "Mask", stencil_mask);
+    let c = masked(&mut doc, "SMask", one_bit);
+    let d = masked(&mut doc, "SMask", eight_bit);
+    let e = masked(&mut doc, "Mask", drawn);
+    page(
+        &mut doc,
+        &[("A", a), ("B", b), ("C", c), ("D", d), ("E", e), ("M", drawn)],
+        "q 300 0 0 120 20 660 cm /A Do Q q 300 0 0 120 320 660 cm /B Do Q q 300 0 0 120 20 520 cm /C Do Q \
+         q 300 0 0 120 320 520 cm /D Do Q q 300 0 0 120 20 380 cm /E Do Q q 0 0.4 0.8 rg 300 0 0 120 320 380 cm /M Do Q",
+    );
+    // Pictures in colour and grey are left as they are, so only the masks can change.
+    let keep = ImageSettings { downsample: false, compression: Compression::Retain, ..ImageSettings::REDUCE };
+    let settings = Settings { color: keep, gray: keep, ..Settings::default() };
+    let before = render(&doc);
+    let masks = [stencil_mask, one_bit, eight_bit, drawn].map(|r| stream(&doc, r));
+
+    let mut kept = doc.clone();
+    let r = optimize(&mut kept, &Settings { mono: RETAIN, ..settings.clone() }).unwrap();
+    assert_eq!(r.images_recompressed, 0, "Retain keeps every mask as it is");
+    assert_eq!([stencil_mask, one_bit, eight_bit, drawn].map(|r| stream(&kept, r)), masks);
+
+    let r = optimize(&mut doc, &settings).unwrap();
+    assert_eq!(r.images_recompressed, 3, "the shared stencil once, the soft mask, the stencil drawn by name once: {r:?}");
+    for (mask, old) in [(stencil_mask, &masks[0]), (one_bit, &masks[1]), (drawn, &masks[3])] {
+        let new = stream(&doc, mask);
+        assert_eq!(new.dict.name(b"Filter"), Some(&b"CCITTFaxDecode"[..]), "{mask:?}");
+        assert_eq!((new.dict.int(b"Width"), new.dict.int(b"Height")), (Some(w as i64), Some(h as i64)));
+        assert_eq!(decoded_image(&doc, &new).unwrap(), decoded_image(&doc, old).unwrap(), "{mask:?} keeps its bits");
+    }
+    assert_eq!(stream(&doc, stencil_mask).dict.get(b"Decode"), Some(&decode), "the decode array stays");
+    assert_eq!(stream(&doc, eight_bit), masks[2], "an eight-bit soft mask stays");
+    for (picture, key, mask) in
+        [(a, "Mask", stencil_mask), (b, "Mask", stencil_mask), (c, "SMask", one_bit), (d, "SMask", eight_bit), (e, "Mask", drawn)]
+    {
+        assert_eq!(stream(&doc, picture).dict.reference(key.as_bytes()), Some(mask), "{picture:?} keeps its mask");
+    }
+    assert!(render(&doc) == before, "the page looks the same");
+}
+
+/// Stored as JBIG2, a picture's mask is coded on its own: it shares no symbol dictionary with the
+/// images the page draws by name, which do share one.
+#[test]
+fn a_pictures_mask_stored_as_jbig2_shares_no_dictionary() {
+    let mut doc = Document::new_empty();
+    let (w, h) = (1200, 480);
+    let text = bilevel(w, h, false);
+    let mask = mono_image(&mut doc, w, h, &text, None, &[("ImageMask", Object::Bool(true))]);
+    let picture = image(&mut doc, 200, 80, 3, false, None);
+    let mut s = stream(&doc, picture);
+    s.dict.set(b"Mask".to_vec(), Object::Ref(mask));
+    doc.set(picture, Object::Stream(s));
+    let named: Vec<ObjRef> = (0..3)
+        .map(|_| mono_image(&mut doc, w, h, &text, None, &[("BitsPerComponent", 1.into()), ("ColorSpace", Object::name("DeviceGray"))]))
+        .collect();
+    page(
+        &mut doc,
+        &[("P", picture), ("G0", named[0]), ("G1", named[1]), ("G2", named[2])],
+        "q 300 0 0 120 20 660 cm /P Do Q q 300 0 0 120 320 660 cm /G0 Do Q q 300 0 0 120 20 520 cm /G1 Do Q q 300 0 0 120 320 520 cm /G2 Do Q",
+    );
+    let keep = ImageSettings { downsample: false, compression: Compression::Retain, ..ImageSettings::REDUCE };
+    let jbig2 = MonoSettings { compression: MonoCompression::Jbig2, ..MonoSettings::REDUCE };
+    let before = render(&doc);
+    let old = stream(&doc, mask);
+    optimize(&mut doc, &Settings { color: keep, gray: keep, mono: jbig2, ..Settings::default() }).unwrap();
+    let new = stream(&doc, mask);
+    assert_eq!(new.dict.name(b"Filter"), Some(&b"JBIG2Decode"[..]));
+    assert!(!new.dict.contains(b"DecodeParms"), "no /JBIG2Globals");
+    assert_eq!(decoded_image(&doc, &new).unwrap(), decoded_image(&doc, &old).unwrap());
+    assert!(named.iter().any(|r| stream(&doc, *r).dict.get(b"DecodeParms").is_some()), "the images drawn by name share one");
+    assert!(render(&doc) == before, "the page looks the same");
+}
+
+/// A colour-key mask names sample values: resampling or JPEG would make holes where there were none
+/// and fill those there were, so the picture stays as it is, however the array is written. A mask
+/// that can't be read as a stencil is no reason to change the picture either.
+#[test]
+fn a_picture_whose_mask_is_not_a_stencil_is_left_alone() {
+    type Mask = fn(&mut Document) -> Object;
+    fn key() -> Object {
+        Object::Array([250, 255, 250, 255, 250, 255].map(Object::Int).to_vec())
+    }
+    fn not_a_stencil(doc: &mut Document, change: fn(&mut Dict)) -> Object {
+        let mask = stencil(doc, 1200, 1200);
+        let mut s = stream(doc, mask);
+        change(&mut s.dict);
+        doc.set(mask, Object::Stream(s));
+        Object::Ref(mask)
+    }
+    let masks: [(&str, Mask); 5] = [
+        ("direct array", |_| key()),
+        ("array by reference", |doc| Object::Ref(doc.add(key()))),
+        ("nothing there", |doc| Object::Ref(doc.add(Object::Null))),
+        ("an image that says it isn't a stencil", |doc| {
+            not_a_stencil(doc, |d| {
+                d.set(b"ImageMask".to_vec(), Object::Bool(false));
+            })
+        }),
+        ("an image that doesn't say it is one", |doc| {
+            not_a_stencil(doc, |d| {
+                d.remove(b"ImageMask");
+            })
+        }),
+    ];
+    for (what, mask) in masks {
+        let mut doc = Document::new_empty();
+        let img = image(&mut doc, 1200, 1200, 3, true, None);
+        let mut s = stream(&doc, img);
+        let mask = mask(&mut doc);
+        s.dict.set(b"Mask".to_vec(), mask);
+        doc.set(img, Object::Stream(s));
+        let before = stream(&doc, img);
+        page(&mut doc, &[("Im0", img)], "q 144 0 0 144 100 100 cm /Im0 Do Q");
+        let report = optimize(&mut doc, &Settings::default()).unwrap();
+        assert_eq!(report.images_resampled + report.images_recompressed, 0, "{what}: {report:?}");
+        assert_eq!(stream(&doc, img), before, "{what}");
+    }
+}
+
+/// A resource dictionary shared by reference between thousands of pages is walked once by the
+/// space audit, not once per page.
+#[test]
+fn space_audit_walks_a_shared_resource_dictionary_once() {
+    let mut doc = Document::new_empty();
+    let img = image(&mut doc, 4, 4, 3, false, None);
+    let mut x = Dict::new();
+    for i in 0..5_000 {
+        x.set(format!("Im{i}").into_bytes(), Object::Ref(img));
+    }
+    let mut res = Dict::new();
+    res.set(b"XObject".to_vec(), Object::Dict(x));
+    let shared = doc.add(Object::Dict(res));
+    let pages = doc.root().and_then(|r| doc.get(r).as_dict().and_then(|d| d.reference(b"Pages"))).unwrap();
+    let mut kids = Vec::new();
+    for _ in 0..2_000 {
+        let mut p = Dict::new();
+        p.set(b"Type".to_vec(), Object::name("Page"));
+        p.set(b"Parent".to_vec(), Object::Ref(pages));
+        p.set(b"MediaBox".to_vec(), Object::Array(vec![0.into(), 0.into(), 612.into(), 792.into()]));
+        p.set(b"Resources".to_vec(), Object::Ref(shared));
+        kids.push(Object::Ref(doc.add(Object::Dict(p))));
+    }
+    doc.update_dict(pages, |d| {
+        d.set(b"Count".to_vec(), Object::Int(kids.len() as i64));
+        d.set(b"Kids".to_vec(), Object::Array(kids));
+    })
+    .unwrap();
+    let started = std::time::Instant::now();
+    let audit = audit_space(&doc, 1 << 20);
+    assert!(started.elapsed() < std::time::Duration::from_secs(5), "{:?}", started.elapsed());
+    assert!(audit.iter().any(|u| u.category == SpaceCategory::Images && u.bytes > 0), "{audit:?}");
+}
+
+/// A name tree whose nodes all share one kids array (by reference) is read once per node, not
+/// once per node per kid: the queue can't grow to the nodes times the kids.
+#[test]
+fn a_name_tree_sharing_one_kids_array_is_walked_once() {
+    let mut doc = Document::new_empty();
+    let p = page(&mut doc, &[], "BT ET");
+    let s = |t: &str| Object::String(pdfcraft_cos::PdfString::literal(t.as_bytes().to_vec()));
+    let fit = Object::Array(vec![Object::Ref(p), Object::name("Fit")]);
+    let kids = doc.add(Object::Array(Vec::new()));
+    let mut nodes = Vec::new();
+    for i in 0..3_000 {
+        let mut node = Dict::new();
+        node.set(b"Kids".to_vec(), Object::Ref(kids));
+        node.set(b"Names".to_vec(), Object::Array(vec![s(&format!("d{i}")), fit.clone()]));
+        nodes.push(Object::Ref(doc.add(Object::Dict(node))));
+    }
+    doc.set(kids, Object::Array(nodes));
+    let mut tree = Dict::new();
+    tree.set(b"Kids".to_vec(), Object::Ref(kids));
+    let tree = doc.add(Object::Dict(tree));
+    let mut names = Dict::new();
+    names.set(b"Dests".to_vec(), Object::Ref(tree));
+    let root = doc.root().unwrap();
+    doc.update_dict(root, |c| c.set(b"Names".to_vec(), Object::Dict(names))).unwrap();
+    let started = std::time::Instant::now();
+    let report = optimize(&mut doc, &Settings::default()).unwrap();
+    assert!(started.elapsed() < std::time::Duration::from_secs(10), "{:?}", started.elapsed());
+    assert_eq!(report.unreferenced_dests, 3_000, "every node's destination was found, once");
+}
+
+/// Pictures run on several threads: what comes out doesn't depend on how many.
+#[test]
+fn the_same_file_comes_out_with_any_number_of_threads() {
+    let build = || {
+        let mut doc = Document::new_empty();
+        let shared_mask = image(&mut doc, 1200, 1200, 1, false, None);
+        // Under a soft mask they share, at different sizes on the page: the second must start from
+        // the mask the first left. Each needs the mask at a different size.
+        let first = image(&mut doc, 1200, 1200, 3, true, Some(shared_mask));
+        let second = image(&mut doc, 1000, 1000, 3, true, Some(shared_mask));
+        page(&mut doc, &[("Im0", first)], "q 144 0 0 144 100 100 cm /Im0 Do Q");
+        page(&mut doc, &[("Im0", second)], "q 180 0 0 180 100 100 cm /Im0 Do Q");
+        // Enough others for the threads.
+        for page_no in 0..22u32 {
+            let img = image(&mut doc, 500 + page_no, 500, 3, true, None);
+            page(&mut doc, &[("Im0", img)], "q 72 0 0 72 100 100 cm /Im0 Do Q");
+        }
+        doc
+    };
+    let run = |workers| {
+        let mut doc = build();
+        let report = optimize(&mut doc, &Settings { workers: Some(workers), ..Settings::default() }).unwrap();
+        assert_eq!(report.images, 24, "{report:?}");
+        assert!(report.images_resampled + report.images_recompressed > 16, "{report:?}");
+        (write_full(&doc, &SaveOptions::default()).unwrap(), format!("{report:?}"))
+    };
+    let (one, one_report) = run(1);
+    for workers in [2, 4, 7] {
+        let (many, many_report) = run(workers);
+        assert_eq!(many_report, one_report, "{workers} threads count the same");
+        assert!(many == one, "{workers} threads write the same bytes");
+    }
+}
+
+/// A table that disagrees with an object's header leaves it reachable under two generations, as
+/// one object: each use decides from what the one before it left, with any number of threads.
+#[test]
+fn one_object_under_two_generations_comes_out_the_same_with_any_number_of_threads() {
+    let picture = |size: usize, extra: &str| {
+        let samples: Vec<u8> = (0..size * size).map(|i| ((i % size) * 255 / size) as u8 ^ ((i / size) as u8 & 7)).collect();
+        let dict = format!(
+            "<< /Type /XObject /Subtype /Image /Width {size} /Height {size} /BitsPerComponent 8 /ColorSpace /DeviceGray{extra} /Length {} >>\nstream\n",
+            samples.len()
+        );
+        [dict.as_bytes(), &samples, b"\nendstream"].concat()
+    };
+    let build = || {
+        // 1 the catalog, 2 the pages, 3 the mask, 4 and 5 under it, 6 the picture, 7 a picture that is
+        // also 8's mask, then the others.
+        let mut objects = vec![b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(), Vec::new()];
+        objects.push(picture(1200, ""));
+        objects.push(picture(1200, " /SMask 3 0 R"));
+        objects.push(picture(1000, " /SMask 3 1 R"));
+        objects.push(picture(1200, ""));
+        objects.push(picture(1200, ""));
+        objects.push(picture(1000, " /SMask 7 1 R"));
+        // Small under one generation, large under the other: they want different sizes.
+        let mut draws = vec![
+            ("4 0 R".to_string(), 144),
+            ("5 0 R".to_string(), 180),
+            ("6 0 R".to_string(), 72),
+            ("6 1 R".to_string(), 576),
+            ("7 0 R".to_string(), 72),
+            ("8 0 R".to_string(), 180),
+        ];
+        for i in 0..22 {
+            objects.push(picture(500 + i, ""));
+            draws.push((format!("{} 0 R", objects.len()), 72));
+        }
+        let mut kids = String::new();
+        for (drawn, size) in &draws {
+            let content = format!("q {size} 0 0 {size} 10 10 cm /Im0 Do Q");
+            objects.push(format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()).into_bytes());
+            let contents = objects.len();
+            objects.push(
+                format!(
+                    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents {contents} 0 R /Resources << /XObject << /Im0 {drawn} >> >> >>"
+                )
+                .into_bytes(),
+            );
+            kids.push_str(&format!("{} 0 R ", objects.len()));
+        }
+        objects[1] = format!("<< /Type /Pages /Kids [{kids}] /Count {} >>", draws.len()).into_bytes();
+        let mut bytes = b"%PDF-1.7\n".to_vec();
+        let mut table = format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1);
+        for (i, object) in objects.iter().enumerate() {
+            let num = i + 1;
+            // Headers say generation 0, and the table says 1 of these three.
+            let generation = u8::from(num == 3 || num == 6 || num == 7);
+            table.push_str(&format!("{:010} {generation:05} n \n", bytes.len()));
+            bytes.extend(format!("{num} 0 obj\n").as_bytes());
+            bytes.extend(object);
+            bytes.extend(b"\nendobj\n");
+        }
+        let start = bytes.len();
+        bytes.extend(table.as_bytes());
+        bytes.extend(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{start}\n%%EOF\n", objects.len() + 1).as_bytes());
+        let doc = Document::open(Arc::new(bytes)).unwrap();
+        for (num, generation) in [(3, 0), (3, 1), (6, 0), (6, 1), (7, 0), (7, 1)] {
+            assert!(matches!(&*doc.get(ObjRef { num, generation }), Object::Stream(_)), "{num} {generation} finds the object");
+        }
+        doc
+    };
+    let run = |workers| {
+        let mut doc = build();
+        let report = optimize(&mut doc, &Settings { workers: Some(workers), ..Settings::default() }).unwrap();
+        (write_full(&doc, &SaveOptions::default()).unwrap(), format!("{report:?}"))
+    };
+    let (one, one_report) = run(1);
+    for workers in [2, 4, 7] {
+        let (many, many_report) = run(workers);
+        assert_eq!(many_report, one_report, "{workers} threads count the same");
+        assert!(many == one, "{workers} threads write the same bytes");
+    }
+}
+
+/// Pages too small for a run aren't read, and that must not cost the smallest run there can be.
+#[test]
+fn the_fewest_strips_that_make_a_picture_are_merged() {
+    use pdfcraft_optimize::fragments::MIN_FRAGMENTS;
+    let keep = Settings {
+        gray: ImageSettings { downsample: false, target_ppi: 150.0, above_ppi: 225.0, compression: Compression::Retain },
+        ..Settings::default()
+    };
+    let (mut doc, _) = printed_page(MIN_FRAGMENTS as _, |_| false, |_, s| s);
+    let r = optimize(&mut doc, &keep).unwrap();
+    assert_eq!((r.merged_images, r.fragments_merged), (1, MIN_FRAGMENTS), "{r:?}");
+    let (mut doc, _) = printed_page((MIN_FRAGMENTS - 1) as _, |_| false, |_, s| s);
+    let r = optimize(&mut doc, &keep).unwrap();
+    assert_eq!((r.merged_images, r.fragments_merged), (0, 0), "{r:?}");
 }

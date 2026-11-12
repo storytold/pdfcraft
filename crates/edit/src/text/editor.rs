@@ -2,15 +2,30 @@ use super::blocks::{BlockStyle, TextBlock};
 use super::fallback::MAX_TYPE3_GLYPHS;
 use super::lines::{page_dict, text_lines};
 use super::rewrite::rewrite_block_from;
-use super::*;
+use super::{DecodeBudget, Dict, Document, EditError, Object, TextLine, TextSession};
 
-/// An embedded sfnt source face, read only for the inline editor. Bytes stay in memory and
-/// are never installed, copied into assets, or used as a font for another document.
+/// An embedded source font or an approved bundled document-font choice.
+/// Source bytes stay in memory and are never installed or copied into another document.
 #[derive(Clone, Debug)]
 pub struct TextEditorFont {
     pub resource: String,
     pub face: String,
     pub bytes: Vec<u8>,
+    /// A selectable replacement, rather than a source/matching preview face. Merely listing
+    /// this choice must not reload an open editor's font atlas.
+    pub choice_only: bool,
+}
+
+/// Reserved document-font choice for explicitly replacing text with the bundled Thai face.
+/// This is a selector, never a font resource written into a PDF.
+const BUILTIN_THAI_FONT: &str = "builtin:thai";
+
+pub(super) fn builtin_thai_choice(fonts: &Dict) -> String {
+    let mut choice = BUILTIN_THAI_FONT.to_owned();
+    while fonts.contains(choice.as_bytes()) {
+        choice.push('_');
+    }
+    choice
 }
 
 pub fn text_editor_fonts(doc: &Document, page: usize) -> Result<Vec<TextEditorFont>, EditError> {
@@ -30,8 +45,9 @@ pub fn text_editor_fonts(doc: &Document, page: usize) -> Result<Vec<TextEditorFo
         budget -= bytes.len();
         result.push(TextEditorFont {
             resource: String::from_utf8_lossy(name).into_owned(),
-            face: Metrics::from_dict(doc, &font).base_font.rsplit('+').next().unwrap_or_default().to_owned(),
+            face: pdfcraft_fonts::pdf::base_font_name(doc, &font).rsplit('+').next().unwrap_or_default().to_owned(),
             bytes,
+            choice_only: false,
         });
     }
     // The approved full face follows all source subsets in the editor's font stack. It can
@@ -43,8 +59,25 @@ pub fn text_editor_fonts(doc: &Document, page: usize) -> Result<Vec<TextEditorFo
                 continue;
             }
             budget -= full.bytes.len();
-            result.push(TextEditorFont { resource: format!("PCApproved{}", full.name()), face: face.clone(), bytes: full.bytes.to_vec() });
+            result.push(TextEditorFont {
+                resource: format!("PCApproved{}", full.name()),
+                face: face.clone(),
+                bytes: full.bytes.to_vec(),
+                choice_only: false,
+            });
         }
+    }
+    // A missing source family must not make the bundled Thai replacement undiscoverable.
+    // Offering it does not change the source; callers explicitly select this choice to replace it.
+    if let Some(thai) = pdfcraft_fonts::document_thai_font()
+        && thai.bytes.len() <= budget
+    {
+        result.push(TextEditorFont {
+            resource: builtin_thai_choice(&fonts),
+            face: thai.family.into(),
+            bytes: thai.bytes.to_vec(),
+            choice_only: true,
+        });
     }
     Ok(result)
 }

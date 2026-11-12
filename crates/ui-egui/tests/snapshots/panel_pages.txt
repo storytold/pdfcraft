@@ -7,6 +7,7 @@ Label = "100%"
 Button "Smaller thumbnails" [off]
 Slider "Thumbnail size"
 Button "Larger thumbnails" [off]
+Group "Pages"
 Button "Page 1" [off]
 Label = "1"
 Button "Page 2" [off]

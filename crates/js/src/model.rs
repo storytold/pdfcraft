@@ -37,11 +37,17 @@ pub const DISPLAY_NO_VIEW: i32 = 3;
 #[derive(Clone, Debug, PartialEq)]
 pub struct FieldState {
     pub name: String,
+    /// Stable PDF object identity, absent for synthetic name-only callers.
+    pub object_id: Option<u64>,
+    /// Runtime instance token; retired field references cannot alias reused PDF numbers.
+    pub instance_id: u64,
     pub kind: FieldType,
     /// Text: the text. Check box / radio: the selected export value (empty when off). Choice:
     /// the selected export values.
     pub value: Vec<String>,
     pub default: Vec<String>,
+    /// False when a PDF default stream was not decoded; reset must preserve the live value.
+    pub default_known: bool,
     pub readonly: bool,
     pub required: bool,
     pub display: i32,
@@ -50,17 +56,42 @@ pub struct FieldState {
     pub options: Vec<(String, String)>,
     pub char_limit: Option<usize>,
     /// `textColor` / `fillColor` as Acrobat colour arrays (`["RGB", r, g, b]` etc.), when set.
-    pub text_color: Option<Vec<String>>,
-    pub fill_color: Option<Vec<String>>,
+    pub text_color: Option<std::sync::Arc<[String]>>,
+    pub fill_color: Option<std::sync::Arc<[String]>>,
+    /// Normal push-button caption, when this is a button.
+    pub caption: Option<String>,
+    /// A setter ran, even if its text equals widget 0: other widgets may differ.
+    pub caption_written: bool,
+    pub rect: Option<[f64; 4]>,
+    pub page_rotation: i64,
+    pub page_crop: [f64; 4],
+    pub stroke_color: Option<std::sync::Arc<[String]>>,
+    pub text_size: f64,
+    pub line_width: f64,
+    pub border_style: String,
+    pub user_name: String,
+    pub icon: Option<u64>,
+    pub caption_mixed: bool,
+    pub icon_mixed: bool,
+    pub icon_written: bool,
+    /// JavaScript actions a script installed with `setAction` during this run, by trigger
+    /// (`MouseUp`, `MouseDown`, `MouseEnter`, `MouseExit`, `OnFocus`, `OnBlur`, `Keystroke`,
+    /// `Validate`, `Calculate`, `Format`), the last one for each trigger. Empty in a snapshot:
+    /// the host reads the document's own actions from the PDF.
+    pub actions: Vec<(String, String)>,
 }
 
 impl FieldState {
+    /// Construct a field snapshot with explicit defaults for optional appearance and interaction state.
     pub fn new(name: impl Into<String>, kind: FieldType, value: Vec<String>) -> FieldState {
         FieldState {
             name: name.into(),
+            object_id: None,
+            instance_id: 0,
             kind,
             value,
             default: Vec::new(),
+            default_known: true,
             readonly: false,
             required: false,
             display: DISPLAY_VISIBLE,
@@ -68,6 +99,21 @@ impl FieldState {
             char_limit: None,
             text_color: None,
             fill_color: None,
+            caption: None,
+            caption_written: false,
+            rect: None,
+            page_rotation: 0,
+            page_crop: [0.0; 4],
+            stroke_color: None,
+            text_size: 0.0,
+            line_width: 1.0,
+            border_style: "solid".into(),
+            user_name: String::new(),
+            icon: None,
+            caption_mixed: false,
+            icon_mixed: false,
+            icon_written: false,
+            actions: Vec::new(),
         }
     }
 
@@ -85,6 +131,8 @@ pub struct Event {
     pub kind: String,
     /// The field the event is for.
     pub target: Option<String>,
+    /// Identity for an unambiguous event.target, even with duplicate field names.
+    pub target_id: Option<u64>,
     pub value: String,
     pub change: String,
     pub will_commit: bool,
@@ -93,26 +141,157 @@ pub struct Event {
 impl Event {
     /// A field event (`event.type` = "Field").
     pub fn field(name: &str, target: &str, value: &str) -> Event {
-        Event { name: name.into(), kind: "Field".into(), target: Some(target.into()), value: value.into(), change: String::new(), will_commit: true }
+        Event {
+            name: name.into(),
+            kind: "Field".into(),
+            target: Some(target.into()),
+            target_id: None,
+            value: value.into(),
+            change: String::new(),
+            will_commit: true,
+        }
     }
 
     /// A document event (`event.type` = "Doc"), e.g. Open or WillSave.
     pub fn doc(name: &str) -> Event {
-        Event { name: name.into(), kind: "Doc".into(), target: None, value: String::new(), change: String::new(), will_commit: false }
+        Event {
+            name: name.into(),
+            kind: "Doc".into(),
+            target: None,
+            target_id: None,
+            value: String::new(),
+            change: String::new(),
+            will_commit: false,
+        }
     }
 }
 
 /// About the document, for `this.numPages`, `this.info` and the like.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct DocInfo {
+    /// Changes when history can replace an icon object under the same PDF reference.
+    pub icon_epoch: u64,
+    /// Revisions of referenced icons that can change independently across history.
+    pub icon_versions: std::sync::Arc<std::collections::BTreeMap<u64, u64>>,
     pub file_name: String,
     pub num_pages: usize,
     /// The current page, 0-based.
     pub page: usize,
     /// Document information (`this.info.title` etc.): lower-case key, value.
     pub info: Vec<(String, String)>,
+    /// Effective page boxes in PDF user space, ordered media, crop, bleed, trim, art.
+    pub page_boxes: Vec<[[f64; 4]; 5]>,
+    /// Clockwise page rotations, normalized to 0, 90, 180 or 270 degrees.
+    pub page_rotations: Vec<i64>,
     /// The document has an XFA form, so scripts see `xfa_installed`.
     pub xfa: bool,
+    pub zoom: f64,
+    pub runtime_highlight: bool,
+}
+
+/// The icon a script's message shows: `app.alert`'s `nIcon` and `xfa.host.messageBox`'s
+/// icon, numbered 0 to 3 in the JavaScript for Acrobat API Reference and the XFA
+/// specification alike.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum MessageIcon {
+    /// 0, the default.
+    #[default]
+    Error,
+    /// 1.
+    Warning,
+    /// 2.
+    Question,
+    /// 3.
+    Status,
+}
+
+impl MessageIcon {
+    /// The icon numbered `code`; a missing, fractional or out-of-range number is the default.
+    pub fn from_code(code: Option<f64>) -> MessageIcon {
+        match whole_code(code) {
+            Some(1) => MessageIcon::Warning,
+            Some(2) => MessageIcon::Question,
+            Some(3) => MessageIcon::Status,
+            _ => MessageIcon::Error,
+        }
+    }
+
+    /// A stable name for tools and logs: `error`, `warning`, `question` or `status`.
+    pub fn name(self) -> &'static str {
+        match self {
+            MessageIcon::Error => "error",
+            MessageIcon::Warning => "warning",
+            MessageIcon::Question => "question",
+            MessageIcon::Status => "status",
+        }
+    }
+}
+
+/// The buttons a script's message offers: `app.alert`'s `nType` and `xfa.host.messageBox`'s
+/// buttons, numbered 0 to 3 in both references.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum MessageButtons {
+    /// 0, the default.
+    #[default]
+    Ok,
+    /// 1.
+    OkCancel,
+    /// 2.
+    YesNo,
+    /// 3.
+    YesNoCancel,
+}
+
+impl MessageButtons {
+    /// The buttons numbered `code`; a missing, fractional or out-of-range number is the default.
+    pub fn from_code(code: Option<f64>) -> MessageButtons {
+        match whole_code(code) {
+            Some(1) => MessageButtons::OkCancel,
+            Some(2) => MessageButtons::YesNo,
+            Some(3) => MessageButtons::YesNoCancel,
+            _ => MessageButtons::Ok,
+        }
+    }
+
+    /// A stable name for tools and logs: `ok`, `ok_cancel`, `yes_no` or `yes_no_cancel`.
+    pub fn name(self) -> &'static str {
+        match self {
+            MessageButtons::Ok => "ok",
+            MessageButtons::OkCancel => "ok_cancel",
+            MessageButtons::YesNo => "yes_no",
+            MessageButtons::YesNoCancel => "yes_no_cancel",
+        }
+    }
+}
+
+/// `code` as one of the numbers 0 to 3 the references define, when it is exactly one.
+fn whole_code(code: Option<f64>) -> Option<u8> {
+    let c = code.filter(|c| c.is_finite() && c.fract() == 0.0 && (0.0..=3.0).contains(c))?;
+    // In 0..=3 and whole, so the cast is exact.
+    Some(c as u8)
+}
+
+/// A message a script showed (`app.alert`, `xfa.host.messageBox`), with the title, icon and
+/// buttons it asked for. Its text and title are cut to a message's length.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Message {
+    pub text: String,
+    /// The dialog's title, when the script gave one.
+    pub title: Option<String>,
+    pub icon: MessageIcon,
+    pub buttons: MessageButtons,
+}
+
+impl Message {
+    /// A message with only text: no title, the default icon and an OK button.
+    pub fn plain(text: impl Into<String>) -> Message {
+        Message { text: text.into(), ..Default::default() }
+    }
+
+    /// Bytes of text the message holds, charged to a run's budget.
+    pub(crate) fn bytes(&self) -> usize {
+        self.text.len().saturating_add(self.title.as_ref().map_or(0, String::len))
+    }
 }
 
 /// Something a script asked the viewer to do.
@@ -128,9 +307,22 @@ pub enum Request {
     Submit(String),
     /// `field.setFocus()`.
     Focus(String),
+    /// Focus a specific AcroForm field when several fields share its name.
+    FocusField {
+        name: String,
+        object_id: u64,
+    },
     Beep,
+    Zoom(f64),
+    Highlight(bool),
     /// `app.execMenuItem("SaveAs")` (XFA forms' Save buttons).
     SaveAs,
+    /// `this.exportDataObject(cName, …, nLaunch)`: the attached file `name`, to open (`nLaunch`
+    /// 1 or 2) or to save (0).
+    OpenAttachment {
+        name: String,
+        open: bool,
+    },
     /// `app.execMenuItem("ShowHide…")`: show the side panel, or hide it when it is showing.
     ShowPanel(Panel),
 }
@@ -166,14 +358,27 @@ impl Panel {
 /// What running a script did.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Outcome {
+    /// The runtime could not execute the callback safely.
+    pub execution_refused: bool,
+    /// Execution was refused before invoking any code in the retained realm.
+    pub realm_untouched: bool,
+    /// Sticky admission failure: callers must not commit a partial run, even if JS caught the error.
+    pub reset_limit_exceeded: bool,
+    /// Calculation exhaustion rejects script writeback even if the script catches the error.
+    pub calculation_limit_exceeded: bool,
     /// `event.rc`: `false` rejects the keystroke or value.
     pub rc: bool,
     /// `event.value` after the script.
     pub value: String,
+    /// Whether the script assigned `event.value`, even the value it already had.
+    pub value_set: bool,
     pub change: String,
     /// Fields whose value or properties the script changed, as they are now.
     pub changed: Vec<FieldState>,
-    pub alerts: Vec<String>,
+    /// Fields updated by Calculate scripts; their Format script must redraw the appearance.
+    pub formatted: std::collections::BTreeSet<String>,
+    /// The messages the script showed, in order.
+    pub alerts: Vec<Message>,
     pub console: Vec<String>,
     pub requests: Vec<Request>,
     /// The script's error (syntax error, exception, or a limit reached), if it failed.

@@ -2,7 +2,7 @@ use super::build::{Build, CONFLICT, CONTROL, NewNodes, STRUCTURED, TOO_MANY, bui
 use super::import::{ImportNode, serialize_nodes};
 use super::values::Want;
 use super::write::MAX_PACKET_WRITE;
-use super::*;
+use super::{DataPath, HashMap, MAX_NODES, XFA_DATA_NS};
 
 /// What a rewrite of the datasets packet does.
 #[derive(Clone, Copy)]
@@ -117,7 +117,7 @@ fn merge(text: &str, within: Within, op: Op, warnings: &mut Vec<String>) -> Merg
         warnings.push("The XFA data nests XML elements deeper than the reader accepts; the field values were not written to it".into());
         return Merged::Failed;
     }
-    let opts = || roxmltree::ParsingOptions { allow_dtd: false, nodes_limit: MAX_NODES };
+    let opts = || roxmltree::ParsingOptions { allow_dtd: false, nodes_limit: MAX_NODES, ..Default::default() };
     // A packet of an array may use the prefixes the XDP envelope declares: read it inside
     // an element declaring the usual ones.
     let wrapped;
@@ -271,6 +271,44 @@ fn merge(text: &str, within: Within, op: Op, warnings: &mut Vec<String>) -> Merg
     Merged::Changed(out)
 }
 
+/// Whether `node` is a multi-select choice list's data group: element children only, every one
+/// a `value` holding text alone; or, with no children, an element marked `xfa:dataNode=
+/// "dataGroup"`, as a group with no picks is written (XFA 3.3 p. 150).
+fn is_value_group(node: roxmltree::Node) -> bool {
+    let blank = node.children().filter(|c| c.is_text()).all(|c| c.text().is_some_and(|t| t.trim().is_empty()));
+    let mut elements = node.children().filter(|c| c.is_element()).peekable();
+    if elements.peek().is_none() {
+        return blank && marked_data_group(node);
+    }
+    blank && elements.all(|c| c.tag_name().name() == "value" && !c.children().any(|g| g.is_element()))
+}
+
+/// Whether `node` carries `xfa:dataNode="dataGroup"`.
+fn marked_data_group(node: roxmltree::Node) -> bool {
+    node.attribute((XFA_DATA_NS, "dataNode")) == Some("dataGroup")
+}
+
+/// The edit that marks the data group `node` as one, so that emptied of its picks it still loads
+/// as a group and not as a data value (XFA 3.3 p. 150): `xfa:dataNode="dataGroup"` added to its
+/// start tag, with the namespace declared there when the packet has no prefix for it.
+fn mark_data_group_edit(src: &str, node: roxmltree::Node) -> Option<Edit> {
+    let range = node.range();
+    let tag_end = start_tag_end(src, &range)?;
+    // Before `/>` of an empty tag, else before `>`.
+    let at = if src.get(..tag_end)?.ends_with('/') { tag_end.checked_sub(1)? } else { tag_end };
+    let text = match node.lookup_prefix(XFA_DATA_NS) {
+        Some(prefix) if !prefix.is_empty() => format!(" {prefix}:dataNode=\"dataGroup\""),
+        _ => {
+            // A prefix no namespace in scope is bound to, so declaring it rebinds nothing.
+            let prefix = (0..16)
+                .map(|i| if i == 0 { "pcxfa".to_string() } else { format!("pcxfa{i}") })
+                .find(|p| node.lookup_namespace_uri(Some(p)).is_none())?;
+            format!(" xmlns:{prefix}=\"{XFA_DATA_NS}\" {prefix}:dataNode=\"dataGroup\"")
+        }
+    };
+    Some(Edit { start: at, end: at, text })
+}
+
 /// The edits that put `wants` into the `data` element.
 fn merge_values(src: &str, data: roxmltree::Node, wants: &[Want], edits: &mut Vec<Edit>, warnings: &mut Vec<String>) {
     // Element children by local name, per element visited (built once each).
@@ -311,6 +349,44 @@ fn merge_values(src: &str, data: roxmltree::Node, wants: &[Want], edits: &mut Ve
                 continue;
             }
             let current: String = node.children().filter(|c| c.is_text()).filter_map(|c| c.text()).collect();
+            // A multi-select choice list is bound to a data group of `value` elements, one per
+            // pick, and its value is theirs joined by newlines (XFA 3.3 p. 198); a new pick
+            // replaces them all, as in Acrobat (p. 199).
+            if is_value_group(node) {
+                // Every text segment of each `value`, as `current` reads a leaf (a comment may
+                // split or lead it).
+                let held: Vec<String> = node
+                    .children()
+                    .filter(|c| c.is_element())
+                    .map(|c| c.children().filter(|t| t.is_text()).filter_map(|t| t.text()).collect())
+                    .collect();
+                // Pick by pick: one `value` holding a line break is not two picks.
+                let wanted: Vec<&str> = w.text.split('\n').filter(|v| !v.is_empty()).collect();
+                if held.iter().map(String::as_str).eq(wanted.iter().copied()) {
+                    continue;
+                }
+                let inner: String = wanted.iter().map(|v| format!("<value>{}</value>", escape(v).0)).collect();
+                // Emptied, the group keeps saying it is one (XFA 3.3 p. 150).
+                let needs_mark = wanted.is_empty() && !marked_data_group(node);
+                let mark = if needs_mark { mark_data_group_edit(src, node) } else { None };
+                if needs_mark && mark.is_none() {
+                    // No marker can be written (no free prefix): emptied, the group would load
+                    // as a data value, so it keeps its picks and the skip is reported.
+                    skipped(warnings, STRUCTURED, &w.som);
+                    continue;
+                }
+                match replace_edit(src, node, &inner) {
+                    Some(e) => {
+                        edits.extend(mark);
+                        edits.push(e);
+                    }
+                    None => skipped(warnings, STRUCTURED, &w.som),
+                }
+                if dropped {
+                    skipped(warnings, CONTROL, &w.som);
+                }
+                continue;
+            }
             if node.children().any(|c| c.is_element()) {
                 let all: String = node.descendants().filter(|c| c.is_text()).filter_map(|c| c.text()).collect();
                 // Ignore existing XML indentation, but not whitespace in the accepted value.
@@ -389,9 +465,9 @@ pub(super) fn readable(text: &str, within: Within, warnings: &mut Vec<String>) -
         warnings.push(format!("The XFA data would be larger than {} MB; it was not written", MAX_PACKET_WRITE >> 20));
         return false;
     }
-    let opts = roxmltree::ParsingOptions { allow_dtd: false, nodes_limit: MAX_NODES };
-    let ok = roxmltree::Document::parse_with_options(text, opts).is_ok()
-        || (within == Within::Packet && roxmltree::Document::parse_with_options(&format!("{WRAP_OPEN}{text}{WRAP_CLOSE}"), opts).is_ok());
+    let opts = || roxmltree::ParsingOptions { allow_dtd: false, nodes_limit: MAX_NODES, ..Default::default() };
+    let ok = roxmltree::Document::parse_with_options(text, opts()).is_ok()
+        || (within == Within::Packet && roxmltree::Document::parse_with_options(&format!("{WRAP_OPEN}{text}{WRAP_CLOSE}"), opts()).is_ok());
     if !ok {
         warnings.push("The XFA data would not be well-formed XML after this change; it was not written".into());
     }

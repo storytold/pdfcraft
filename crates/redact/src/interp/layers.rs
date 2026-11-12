@@ -1,4 +1,4 @@
-use super::*;
+use super::{Dict, Document, HashSet, ObjRef, Object, Op, Scope};
 
 impl<'a> Scope<'a> {
     /// Is this optional-content reference (an OCG or OCMD) hidden?
@@ -20,7 +20,7 @@ impl<'a> Scope<'a> {
         // groups. A membership dictionary's default policy is AnyOn.
         let d = doc.resolve(o);
         let Some(d) = d.as_dict() else { return false };
-        if d.name(b"Type") != Some(b"OCMD") {
+        if !has_type(doc, d, b"OCMD") {
             return false;
         }
         let groups: Vec<ObjRef> = match d.get(b"OCGs").map(|g| (*doc.resolve(g)).clone()) {
@@ -102,7 +102,7 @@ impl<'a> Scope<'a> {
         }
         let resolved = doc.resolve(expression);
         let complete = match &*resolved {
-            Object::Dict(d) if d.name(b"Type") == Some(b"OCG") => {
+            Object::Dict(d) if has_type(doc, d, b"OCG") => {
                 if let Some(r) = reference
                     && hidden_layers.contains(&r)
                 {
@@ -144,6 +144,11 @@ impl<'a> Scope<'a> {
         }
         *budget -= 1;
         let reference = expression.as_ref();
+        // A reference to a reference is no listed group: the renderer rejects the alias, so it
+        // is not taken as visible because the object it names isn't hidden.
+        if reference.is_some_and(|r| matches!(*doc.get(r), Object::Ref(_))) {
+            return None;
+        }
         if let Some(r) = reference
             && !path.insert(r)
         {
@@ -151,7 +156,7 @@ impl<'a> Scope<'a> {
         }
         let resolved = doc.resolve(expression);
         let result = match &*resolved {
-            Object::Dict(d) if d.name(b"Type") == Some(b"OCG") => reference.map(|r| !self.hidden_layers.contains(&r)),
+            Object::Dict(d) if has_type(doc, d, b"OCG") => reference.map(|r| !self.hidden_layers.contains(&r)),
             Object::Array(items) if (2..=4097).contains(&items.len()) => {
                 let operator = match items.first() {
                     Some(Object::Name(n)) => n.as_slice(),
@@ -195,6 +200,9 @@ impl<'a> Scope<'a> {
             if self.hidden_layers.contains(&r) {
                 return true;
             }
+            if matches!(*doc.get(r), Object::Ref(_)) {
+                return true;
+            }
             if !path.insert(r) {
                 return true;
             }
@@ -202,7 +210,7 @@ impl<'a> Scope<'a> {
         let resolved = doc.resolve(expression);
         let found = match &*resolved {
             Object::Array(items) => items.iter().any(|item| self.expression_mentions_hidden(doc, item, depth + 1, path, budget)),
-            Object::Dict(d) if d.name(b"Type") == Some(b"OCG") => expression.as_ref().is_none_or(|r| self.hidden_layers.contains(&r)),
+            Object::Dict(d) if has_type(doc, d, b"OCG") => expression.as_ref().is_none_or(|r| self.hidden_layers.contains(&r)),
             Object::Dict(_) => true,
             _ => false,
         };
@@ -225,8 +233,10 @@ pub(super) fn strip_hidden_layers(doc: &Document, scope: &mut Scope<'_>, ops: Ve
         match op.op.as_slice() {
             b"BDC" | b"BMC" => {
                 let this = op.is("BDC")
-                    && op.name(0) == Some(b"OC")
-                    && match op.operands.get(1) {
+                    // The tag and the property list are the last two operands, as the renderer
+                    // reads them: `(x) /OC /MC0 BDC` is a layer's block too.
+                    && op.name_back(1) == Some(b"OC")
+                    && match op.back(0) {
                         Some(Object::Name(n)) => props.get(n).is_some_and(|o| scope.layer_hidden(doc, o)),
                         Some(o) => scope.layer_hidden(doc, o),
                         None => false,
@@ -253,4 +263,10 @@ pub(super) fn strip_hidden_layers(doc: &Document, scope: &mut Scope<'_>, ops: Ve
         }
     }
     (out, removed)
+}
+
+/// Is this dictionary's `/Type` the given name? An indirect `/Type` is followed, as a viewer
+/// follows it: a group or membership dictionary must not escape classification through one.
+fn has_type(doc: &Document, d: &Dict, name: &[u8]) -> bool {
+    d.get(b"Type").is_some_and(|t| crate::resolve_chain(doc, t).as_name() == Some(name))
 }

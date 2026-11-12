@@ -25,6 +25,20 @@ impl Default for ProtectDraft {
     }
 }
 
+impl Drop for ProtectDraft {
+    fn drop(&mut self) {
+        use zeroize::Zeroize as _;
+        self.password.zeroize();
+        self.confirm.zeroize();
+        if let Some(pw) = &mut self.protection.open_password {
+            pw.zeroize();
+        }
+        if let Some(pw) = &mut self.protection.permissions_password {
+            pw.zeroize();
+        }
+    }
+}
+
 impl ProtectDraft {
     /// Why Apply is disabled, if it is.
     pub fn problem(&self) -> Option<&'static str> {
@@ -144,7 +158,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
                 (A::Rc4_40, tl!("Acrobat 3.0 and later (40-bit RC4)")),
             ];
             let cur = algos.iter().find(|(a, _)| *a == p.algorithm).map_or(algos[0].1, |(_, l)| *l);
-            egui::ComboBox::from_id_salt("protect-algo").width(300.0).selected_text(cur).show_ui(ui, |ui| {
+            craft_ui::ComboBox::from_id_salt("protect-algo").width(300.0).selected_text(cur).show_ui(ui, |ui| {
                 for (a, l) in algos {
                     ui.selectable_value(&mut p.algorithm, a, l);
                 }
@@ -164,7 +178,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
                 let opts =
                     [(Printing::None, tl!("None")), (Printing::Low, tl!("Low Resolution (150 dpi)")), (Printing::High, tl!("High Resolution"))];
                 let cur = opts.iter().find(|(o, _)| *o == p.printing).map_or(tl!("High Resolution"), |(_, l)| *l);
-                egui::ComboBox::from_id_salt("protect-print").width(300.0).selected_text(cur).show_ui(ui, |ui| {
+                craft_ui::ComboBox::from_id_salt("protect-print").width(300.0).selected_text(cur).show_ui(ui, |ui| {
                     for (o, l) in opts {
                         ui.selectable_value(&mut p.printing, o, l);
                     }
@@ -179,7 +193,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
                     (Changes::AnyExceptExtract, tl!("Any except extracting pages")),
                 ];
                 let cur = opts.iter().find(|(o, _)| *o == p.changes).map_or(tl!("None"), |(_, l)| *l);
-                egui::ComboBox::from_id_salt("protect-changes").width(300.0).selected_text(cur).show_ui(ui, |ui| {
+                craft_ui::ComboBox::from_id_salt("protect-changes").width(300.0).selected_text(cur).show_ui(ui, |ui| {
                     for (o, l) in opts {
                         ui.selectable_value(&mut p.changes, o, l);
                     }
@@ -250,5 +264,41 @@ mod tests {
         assert_eq!(strength("abc").0, "Weak");
         assert_eq!(strength("Abcdefg1").0, "Medium");
         assert_eq!(strength("Correct-Horse-9").0, "Strong");
+    }
+
+    #[test]
+    fn closing_the_protect_dialog_clears_the_password_draft() {
+        use egui_kittest::{Harness, kittest::Queryable};
+
+        let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(|_| {
+            let mut app = PdfCraftApp::new();
+            app.set_option("language", "en").unwrap();
+            app.dialog = Some(crate::Dialog::Protect);
+            app.protect_draft.password = "TopSecret123!".into();
+            app.protect_draft.confirm = "TopSecret123!".into();
+            app
+        });
+        h.run_steps(2);
+
+        // Clicking Cancel closes Dialog::Protect and clears the draft passwords.
+        h.get_by_label("Cancel").click();
+        h.run_steps(2);
+        assert_eq!(h.state().dialog, None);
+        assert!(h.state().protect_draft.password.is_empty(), "password must not linger after cancelling Dialog::Protect");
+        assert!(h.state().protect_draft.confirm.is_empty(), "confirm must not linger after cancelling Dialog::Protect");
+
+        // Pressing Escape on Dialog::Protect also clears the draft passwords.
+        {
+            let app = h.state_mut();
+            app.dialog = Some(crate::Dialog::Protect);
+            app.protect_draft.password = "AnotherSecret!".into();
+            app.protect_draft.confirm = "AnotherSecret!".into();
+        }
+        h.run_steps(2);
+        h.key_press(egui::Key::Escape);
+        h.run_steps(2);
+        assert_eq!(h.state().dialog, None);
+        assert!(h.state().protect_draft.password.is_empty(), "password must not linger after closing Dialog::Protect");
+        assert!(h.state().protect_draft.confirm.is_empty(), "confirm must not linger after closing Dialog::Protect");
     }
 }

@@ -1,5 +1,651 @@
 use super::*;
 
+/// What [`crate::reachable_objects`] gives is what a full save keeps: not an object nothing refers to, nor one
+/// a reference only dangles at, and a ring of references ends.
+#[test]
+fn what_is_reachable_is_what_a_full_save_keeps() {
+    let mut doc = Document::new_empty();
+    let root = doc.root().unwrap();
+    let kept = doc.add(Object::Int(7));
+    let dangling = ObjRef::new(4_000, 0);
+    let list = doc.add(Object::Null);
+    let ring = doc.add(Object::Array(vec![Object::Ref(list)]));
+    doc.set(list, Object::Array(vec![Object::Ref(kept), Object::Ref(ring), Object::Ref(dangling)]));
+    let orphan = doc.add(Object::Int(8));
+    doc.update_dict(root, |d| d.set(b"Held".to_vec(), Object::Ref(list))).unwrap();
+    let found = crate::reachable_objects(&doc).unwrap();
+    assert!([root, kept, list, ring].iter().all(|r| found.contains(&r.num)));
+    assert!(!found.contains(&orphan.num) && !found.contains(&dangling.num));
+    let saved = Document::open(Arc::new(crate::write_full(&doc, &crate::SaveOptions::default()).unwrap())).unwrap();
+    let holds = |n: i64| saved.scan_objects().any(|(_, o)| matches!(*o, Object::Int(v) if v == n));
+    assert!(holds(7) && !holds(8));
+}
+
+std::thread_local! {
+    /// How many times `Document::scan_for` read the file on this thread.
+    pub(super) static FILE_SCANS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// How many times `Document::objstm` decoded an object stream on this thread.
+    pub(super) static OBJSTM_DECODES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// A scan that doesn't find an object isn't made again: each reads the whole file, and a file can
+/// refer to such an object from every object it has.
+#[test]
+fn what_a_scan_of_the_file_did_not_find_is_remembered() {
+    let body = b"%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [] /Count 0 >> endobj\n";
+    let mut out = body.to_vec();
+    let xref = out.len();
+    out.extend_from_slice(b"xref\n0 4\n0000000000 65535 f \n");
+    out.extend_from_slice(format!("{:010} 00000 n \n", 9).as_bytes());
+    out.extend_from_slice(format!("{:010} 00000 n \n", body.iter().position(|b| *b == b'\n').unwrap() + 49).as_bytes());
+    out.extend_from_slice(b"0000000001 00000 n \n");
+    out.extend_from_slice(format!("trailer << /Size 4 /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n").as_bytes());
+    let doc = Document::open(Arc::new(out)).unwrap();
+    FILE_SCANS.with(|scans| scans.set(0));
+    for _ in 0..5 {
+        assert!(doc.try_get(3).is_err());
+    }
+    assert_eq!(FILE_SCANS.with(std::cell::Cell::get), 1);
+    let clone = doc.clone();
+    assert!(clone.try_get(3).is_err());
+    assert_eq!(FILE_SCANS.with(std::cell::Cell::get), 1, "a clone has the same file");
+}
+
+/// An object found by a scan of the file, because its cross-reference offset is wrong, has its
+/// indirect `/Length` resolved as at the right offset. Unresolved, a stream ending in a misspelt
+/// `endstream` (`endstrea`) was searched on into a later object's `endstream`, and took that
+/// object's header and data as its own.
+#[test]
+fn a_scanned_stream_resolves_its_indirect_length() {
+    let mut out = build(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [] /Count 0 >>",
+            "<< /Length 4 0 R >>\nstream\nHELLO\nendstrea",
+            "5",
+            "<< /Length 5 >>\nstream\nWORLD\nendstream",
+        ],
+        "/Root 1 0 R",
+    );
+    // Point object 3's entry at the catalog, so only the scan finds it.
+    let at = |needle: &[u8], out: &[u8]| out.windows(needle.len()).position(|w| w == needle).unwrap();
+    let catalog = format!("{:010} 00000 n ", at(b"1 0 obj", &out));
+    let entry = at(format!("{:010} 00000 n ", at(b"3 0 obj", &out)).as_bytes(), &out);
+    out.splice(entry..entry + catalog.len(), catalog.bytes());
+    let doc = Document::open(Arc::new(out)).unwrap();
+    let stream = doc.try_get(3).unwrap();
+    let Object::Stream(s) = &*stream else { panic!("stream expected: {stream:?}") };
+    assert_eq!(&s.raw[..], b"HELLO");
+}
+
+/// A scan of the file resolves only so many indirect `/Length` values. Each header that starts
+/// with the sought number is parsed, and a `/Length` naming an object the table cannot place scans
+/// the file for that one: with a hundred such headers, each naming another misplaced object, one
+/// lookup read the whole file a hundred and one times.
+#[test]
+fn a_scan_of_the_file_resolves_a_bounded_number_of_lengths() {
+    const HEADERS: u32 = 100;
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let catalog = out.len();
+    out.extend_from_slice(b"1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n");
+    let pages = out.len();
+    out.extend_from_slice(b"2 0 obj << /Type /Pages /Kids [] /Count 0 >> endobj\n");
+    // Object 3 is defined only by headers inside this string, each with its own misplaced /Length.
+    out.extend_from_slice(b"4 0 obj (\n");
+    for k in 0..HEADERS {
+        out.extend_from_slice(format!("3 0 obj << /Length {} 0 R >> stream\nX\nendstream endobj\n", 10 + k).as_bytes());
+    }
+    out.extend_from_slice(b") endobj\n");
+    let size = 10 + HEADERS;
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {size}\n0000000000 65535 f \n").as_bytes());
+    for num in 1..size {
+        let at = if num == 2 { pages } else { catalog };
+        out.extend_from_slice(format!("{at:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer << /Size {size} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n").as_bytes());
+    let doc = Document::open(Arc::new(out)).unwrap();
+    FILE_SCANS.with(|scans| scans.set(0));
+    let three = doc.try_get(3).unwrap();
+    assert!(matches!(&*three, Object::Stream(_)), "{three:?}");
+    let scans = FILE_SCANS.with(std::cell::Cell::get);
+    assert!(scans <= 1 + super::state::ScanLengths::MAX as usize, "{scans} scans of the file");
+}
+
+/// An object can be nothing but a reference to another. A chain of them is followed, and one that
+/// goes round ends in what isn't a dictionary or a name, without hanging.
+#[test]
+fn references_to_references_are_followed() {
+    let mut doc = Document::new_empty();
+    let name = doc.add(Object::name("Target"));
+    let one = doc.add(Object::Ref(name));
+    let two = doc.add(Object::Ref(one));
+    assert_eq!(doc.resolve(&Object::Ref(two)).as_name(), Some(b"Target".as_slice()));
+    let a = doc.add(Object::Null);
+    let b = doc.add(Object::Ref(a));
+    doc.set(a, Object::Ref(b));
+    assert_eq!(doc.resolve(&Object::Ref(a)).as_name(), None);
+}
+
+/// An object stream's `/DecodeParms` can be given by reference: without them a predictor isn't
+/// undone, so its members were lost.
+#[test]
+fn an_object_stream_with_parameters_by_reference_is_read() {
+    let members = b"3 0 << /Hidden (yes) >>";
+    // PNG Sub, one row.
+    let mut rows = vec![1u8];
+    let mut before = 0u8;
+    for b in members {
+        rows.push(b.wrapping_sub(before));
+        before = *b;
+    }
+    let coded = pdfcraft_filters::encode_flate(&rows);
+    let mut out = b"%PDF-1.5\n".to_vec();
+    let mut offs = [0usize; 7];
+    let mut obj = |out: &mut Vec<u8>, n: usize, body: &[u8]| {
+        offs[n] = out.len();
+        out.extend_from_slice(format!("{n} 0 obj\n").as_bytes());
+        out.extend_from_slice(body);
+        out.extend_from_slice(b"\nendobj\n");
+    };
+    obj(&mut out, 1, b"<< /Type /Catalog /Pages 2 0 R >>");
+    obj(&mut out, 2, b"<< /Type /Pages /Kids [] /Count 0 /Extra 3 0 R >>");
+    let mut stm = format!("<< /Type /ObjStm /N 1 /First 4 /Filter /FlateDecode /DecodeParms 6 0 R /Length {} >>\nstream\n", coded.len()).into_bytes();
+    stm.extend_from_slice(&coded);
+    stm.extend_from_slice(b"\nendstream");
+    obj(&mut out, 4, &stm);
+    let data = [2u8, 0, 4, 0];
+    let mut xs = format!("<< /Type /XRef /Size 7 /W [1 2 1] /Index [3 1] /Length {} >>\nstream\n", data.len()).into_bytes();
+    xs.extend_from_slice(&data);
+    xs.extend_from_slice(b"\nendstream");
+    obj(&mut out, 5, &xs);
+    obj(&mut out, 6, format!("<< /Predictor 11 /Columns {} >>", members.len()).as_bytes());
+    let table = out.len();
+    out.extend_from_slice(b"xref\n0 7\n0000000000 65535 f \n");
+    for (n, off) in offs.iter().enumerate().skip(1) {
+        let line = if n == 3 { "0000000000 65535 f \n".to_string() } else { format!("{off:010} 00000 n \n") };
+        out.extend_from_slice(line.as_bytes());
+    }
+    out.extend_from_slice(format!("trailer << /Size 7 /Root 1 0 R /XRefStm {} >>\nstartxref\n{table}\n%%EOF\n", offs[5]).as_bytes());
+    let doc = Document::open(Arc::new(out)).unwrap();
+    let hidden = doc.get(ObjRef::new(3, 0));
+    assert_eq!(hidden.as_dict().and_then(|d| d.get(b"Hidden")).and_then(Object::as_string).map(|s| s.bytes.clone()), Some(b"yes".to_vec()));
+}
+
+/// Each entry of an `/Encrypt` dictionary, and of a crypt filter in it, reads the same by reference.
+/// Read as absent, `/StmF` or `/CFM` was `/Identity`, so a whole file's streams stayed ciphertext.
+#[test]
+fn encrypt_dictionary_entries_read_the_same_by_reference() {
+    let string = |s: &str| Object::String(crate::PdfString::text(s));
+    let mut filter = Dict::new();
+    filter.set(b"CFM".to_vec(), Object::name("AESV2"));
+    filter.set(b"Length".to_vec(), Object::Int(5));
+    let cf = |filter: Dict| {
+        let mut cf = Dict::new();
+        cf.set(b"StdCF".to_vec(), Object::Dict(filter));
+        cf.set(b"Other".to_vec(), Object::Dict(Dict::new()));
+        Object::Dict(cf)
+    };
+    let mut d = Dict::new();
+    let entries = [
+        ("Filter", Object::name("Standard")),
+        ("V", Object::Int(4)),
+        ("R", Object::Int(4)),
+        ("Length", Object::Int(128)),
+        ("P", Object::Int(-44)),
+        ("O", string("owner")),
+        ("U", string("user")),
+        ("EncryptMetadata", Object::Bool(false)),
+        ("CF", cf(filter.clone())),
+        ("StmF", Object::name("StdCF")),
+        ("StrF", Object::name("Other")),
+        ("EFF", Object::name("StdCF")),
+    ];
+    for (key, value) in &entries {
+        d.set(key.as_bytes().to_vec(), value.clone());
+    }
+    let mut doc = Document::new_empty();
+    let direct = crate::security::encrypt_dict(&doc, &d);
+    assert_eq!((direct.stm_f.as_slice(), direct.str_f.as_slice(), direct.ef_f.as_slice()), (&b"StdCF"[..], &b"Other"[..], &b"StdCF"[..]));
+    assert_eq!(direct.length_bits, 40, "the filter's own length, in bytes");
+    assert!(!direct.encrypt_metadata);
+    assert_eq!(direct.crypt_filters.iter().filter(|(_, m)| *m == pdfcraft_crypt::Method::Aes128).count(), 1);
+    for (key, value) in &entries {
+        let mut one = d.clone();
+        let r = doc.add(value.clone());
+        one.set(key.as_bytes().to_vec(), Object::Ref(r));
+        assert_eq!(crate::security::encrypt_dict(&doc, &one), direct, "/{key}");
+    }
+    for key in ["CFM", "Length"] {
+        let mut by_reference = filter.clone();
+        let r = doc.add(filter.get(key.as_bytes()).unwrap().clone());
+        by_reference.set(key.as_bytes().to_vec(), Object::Ref(r));
+        let mut one = d.clone();
+        one.set(b"CF".to_vec(), cf(by_reference));
+        assert_eq!(crate::security::encrypt_dict(&doc, &one), direct, "/{key} in the filter");
+    }
+}
+
+/// /DecodeParms given by reference, whole, as array entries or as the numbers inside, are read
+/// once made direct: here a Flate predictor, which the stream alone doesn't see. Only the entries the filters use are
+/// resolved, and nothing is for a chain longer than a decoder takes.
+#[test]
+fn decode_parms_given_by_reference_are_read_once_direct() {
+    let rows = [1u8, 2, 3, 4, 5, 6, 7, 8];
+    let params = pdfcraft_filters::Params { predictor: 12, colors: 1, bits_per_component: 8, columns: 4, early_change: 1 };
+    let coded = pdfcraft_filters::encode(&pdfcraft_filters::Filter::Flate, &params, &rows).unwrap();
+    let mut parms = Dict::new();
+    parms.set(b"Predictor".to_vec(), Object::Int(12));
+    parms.set(b"Columns".to_vec(), Object::Int(4));
+    let mut doc = Document::new_empty();
+    let r = doc.add(Object::Dict(parms.clone()));
+    let array = doc.add(Object::Array(vec![Object::Ref(r)]));
+    let stream = |filters: usize, p: Object| {
+        let mut d = Dict::new();
+        d.set(b"Filter".to_vec(), Object::Array(vec![Object::name("FlateDecode"); filters]));
+        d.set(b"DecodeParms".to_vec(), p);
+        Stream::from_raw(d, coded.clone())
+    };
+    for p in [Object::Ref(r), Object::Array(vec![Object::Ref(r)]), Object::Ref(array)] {
+        let s = stream(1, p.clone());
+        assert_ne!(s.decoded().unwrap(), rows, "{p:?} read as it is");
+        assert_eq!(doc.with_direct_parms(&s).decoded().unwrap(), rows, "{p:?}");
+    }
+    // A number inside given by reference, which `Dict::int` doesn't follow: in the dictionary
+    // itself, and in an array's entry.
+    let twelve = doc.add(Object::Int(12));
+    let mut inner = parms.clone();
+    inner.set(b"Predictor".to_vec(), Object::Ref(twelve));
+    for p in [Object::Dict(inner.clone()), Object::Array(vec![Object::Dict(inner)])] {
+        let s = stream(1, p.clone());
+        assert_ne!(s.decoded().unwrap(), rows, "{p:?} read as it is");
+        assert_eq!(doc.with_direct_parms(&s).decoded().unwrap(), rows, "{p:?}");
+    }
+    // Only numbers and flags are copied: a key naming a big array, or an entry that is no
+    // dictionary, is left out (a file could name one big object from every key and filter).
+    let big = doc.add(Object::Array(vec![Object::Int(1); 100_000]));
+    let mut hostile = Dict::new();
+    hostile.set(b"Predictor".to_vec(), Object::Ref(big));
+    hostile.set(b"Columns".to_vec(), Object::Ref(big));
+    hostile.set(b"Colors".to_vec(), Object::Ref(twelve));
+    let entry = doc.add(Object::Dict(hostile));
+    let two = stream(2, Object::Array(vec![Object::Ref(entry), Object::Ref(big)]));
+    let made = doc.with_direct_parms(&two);
+    let made = made.dict.get(b"DecodeParms").and_then(Object::as_array).unwrap();
+    let first = made[0].as_dict().unwrap();
+    assert_eq!((first.contains(b"Predictor"), first.contains(b"Columns"), first.int(b"Colors")), (false, false, Some(12)));
+    assert!(matches!(made[1], Object::Null), "{:?}", made[1]);
+    let direct = stream(1, Object::Dict(parms));
+    assert!(matches!(doc.with_direct_parms(&direct), Cow::Borrowed(_)), "nothing to resolve");
+    assert_eq!(direct.decoded().unwrap(), rows);
+    // Entries past the filters' are left out, unresolved; so is everything past the chain limit.
+    let many = stream(1, Object::Array(vec![Object::Ref(r); 1000]));
+    let made = doc.with_direct_parms(&many);
+    assert_eq!(made.dict.get(b"DecodeParms").and_then(Object::as_array).map(Vec::len), Some(1));
+    let long = stream(pdfcraft_filters::MAX_CHAIN + 1, Object::Array(vec![Object::Ref(r); 9]));
+    assert!(matches!(doc.with_direct_parms(&long), Cow::Borrowed(_)));
+    // A chain as long as a decoder takes is resolved, and a `/Crypt` in it doesn't count, as
+    // the decoders leave it out: ASCIIHex as often as the limit allows, then the predictor's
+    // Flate, its parameters by reference.
+    let hex = |b: &[u8]| b.iter().flat_map(|x| format!("{x:02X}").into_bytes()).chain(*b">").collect::<Vec<u8>>();
+    let wrapped = (1..pdfcraft_filters::MAX_CHAIN).fold(coded.clone(), |data, _| hex(&data));
+    for crypt in [false, true] {
+        let mut names = vec![Object::name("ASCIIHexDecode"); pdfcraft_filters::MAX_CHAIN - 1];
+        names.push(Object::name("FlateDecode"));
+        if crypt {
+            names.insert(0, Object::name("Crypt"));
+        }
+        let mut entries = vec![Object::Null; names.len() - 1];
+        entries.push(Object::Ref(r));
+        let mut d = Dict::new();
+        d.set(b"Filter".to_vec(), Object::Array(names));
+        d.set(b"DecodeParms".to_vec(), Object::Array(entries));
+        let s = Stream::from_raw(d, wrapped.clone());
+        assert_eq!(doc.with_direct_parms(&s).decoded().unwrap(), rows, "with /Crypt: {crypt}");
+    }
+}
+
+/// A CCITT fax image reads through its /DecodeParms, given directly, in an array or by
+/// reference (its numbers too), with /BlackIs1, and behind other filters; one whose /Columns
+/// aren't its /Width is refused, /Height rows are decoded whatever /Rows says, and other images
+/// decode through their filters.
+#[test]
+fn fax_images_decode_with_their_parameters() {
+    // 10 × 3: the first five samples of each row white, the rest black.
+    let bits = [0b1111_1000, 0, 0b1111_1000, 0, 0b1111_1000, 0];
+    let coded = pdfcraft_filters::encode_g4(&bits, 10, 3).unwrap();
+    let mut doc = Document::new_empty();
+    let mut parms = Dict::new();
+    parms.set(b"K".to_vec(), Object::Int(-1));
+    parms.set(b"Columns".to_vec(), Object::Int(10));
+    let indirect = doc.add(Object::Dict(parms.clone()));
+    let image = |doc: &Document, parms: Option<Object>, width: i64, height: i64| {
+        let mut d = Dict::new();
+        d.set(b"Width".to_vec(), Object::Int(width));
+        d.set(b"Height".to_vec(), Object::Int(height));
+        d.set(b"Filter".to_vec(), Object::name("CCITTFaxDecode"));
+        if let Some(p) = parms {
+            d.set(b"DecodeParms".to_vec(), p);
+        }
+        doc.decoded_image(&Stream::from_raw(d, coded.clone()))
+    };
+    for p in [
+        Object::Dict(parms.clone()),
+        Object::Array(vec![Object::Dict(parms.clone())]),
+        Object::Ref(indirect),
+        Object::Array(vec![Object::Ref(indirect)]),
+    ] {
+        assert_eq!(image(&doc, Some(p.clone()), 10, 3).unwrap(), bits, "{p:?}");
+    }
+    let mut inverted = parms.clone();
+    inverted.set(b"BlackIs1".to_vec(), Object::Bool(true));
+    assert_eq!(
+        image(&doc, Some(Object::Dict(inverted)), 10, 3).unwrap(),
+        [0b0000_0111, 0b1100_0000, 0b0000_0111, 0b1100_0000, 0b0000_0111, 0b1100_0000]
+    );
+    assert_eq!(image(&doc, Some(Object::Dict(parms.clone())), 10, 2).unwrap(), bits[..4], "at most /Height rows");
+    // Within a bound: no more rows than it holds.
+    let mut bounded = Dict::new();
+    bounded.set(b"Width".to_vec(), Object::Int(10));
+    bounded.set(b"Height".to_vec(), Object::Int(3));
+    bounded.set(b"Filter".to_vec(), Object::name("CCITTFaxDecode"));
+    bounded.set(b"DecodeParms".to_vec(), Object::Dict(parms.clone()));
+    assert_eq!(doc.decoded_image_within(&Stream::from_raw(bounded, coded.clone()), 5).unwrap(), bits[..4], "two rows of two bytes in five");
+    let mut by_reference = Dict::new();
+    by_reference.set(b"K".to_vec(), Object::Ref(doc.add(Object::Int(-1))));
+    by_reference.set(b"Columns".to_vec(), Object::Ref(doc.add(Object::Int(10))));
+    assert_eq!(image(&doc, Some(Object::Dict(by_reference)), 10, 3).unwrap(), bits, "/K and /Columns by reference");
+    let mut understated = parms.clone();
+    understated.set(b"Rows".to_vec(), Object::Int(1));
+    assert_eq!(image(&doc, Some(Object::Dict(understated.clone())), 10, 3).unwrap(), bits, "/Height rows, whatever /Rows says");
+    // More /Rows than /Height (PDFBOX-771: 1,084,975,104), as the renderer reads it too.
+    let mut overstated = parms.clone();
+    overstated.set(b"Rows".to_vec(), Object::Int(1_000_000_000));
+    assert_eq!(image(&doc, Some(Object::Dict(overstated)), 10, 3).unwrap(), bits, "/Height rows, not /Rows past it");
+    // The parameters as the file gives them, /Rows included, and Table 11's defaults.
+    let mut d = Dict::new();
+    d.set(b"Filter".to_vec(), Object::name("CCITTFaxDecode"));
+    d.set(b"DecodeParms".to_vec(), Object::Dict(understated));
+    let p = doc.fax_params(&Stream::from_raw(d.clone(), Vec::new())).unwrap();
+    assert_eq!((p.k, p.columns, p.rows, p.end_of_block, p.black_is_1), (-1, 10, 1, true, false));
+    d.set(b"Filter".to_vec(), Object::name("FlateDecode"));
+    assert!(doc.fax_params(&Stream::from_raw(d, Vec::new())).is_none(), "not a fax image");
+    assert!(matches!(image(&doc, Some(Object::Dict(parms.clone())), 12, 3), Err(CosError::Filter(_))), "/Columns other than /Width");
+    assert!(matches!(image(&doc, None, 10, 3), Err(CosError::Filter(_))), "the default 1728 /Columns");
+    let mut plain = Dict::new();
+    plain.set(b"Filter".to_vec(), Object::name("FlateDecode"));
+    assert_eq!(doc.decoded_image(&Stream::from_raw(plain, pdfcraft_filters::encode_flate(&bits))).unwrap(), bits);
+
+    // Behind other filters, its parameters at its own place in the array (/Crypt counts).
+    let behind = |filters: &[Object], parms: &[Object], data: Vec<u8>| {
+        let mut d = Dict::new();
+        d.set(b"Width".to_vec(), Object::Int(10));
+        d.set(b"Height".to_vec(), Object::Int(3));
+        d.set(b"Filter".to_vec(), Object::Array(filters.to_vec()));
+        d.set(b"DecodeParms".to_vec(), Object::Array(parms.to_vec()));
+        doc.decoded_image(&Stream::from_raw(d, data))
+    };
+    let (fax, null, own) = (Object::name("CCITTFaxDecode"), Object::Null, Object::Dict(parms.clone()));
+    let hex = coded.iter().map(|b| format!("{b:02x}")).chain([">".to_string()]).collect::<String>().into_bytes();
+    let flated = pdfcraft_filters::encode_flate(&coded);
+    let ahx = [Object::name("AHx"), fax.clone()];
+    assert_eq!(behind(&ahx, &[null.clone(), Object::Ref(indirect)], hex.clone()).unwrap(), bits, "behind ASCIIHexDecode");
+    assert_eq!(
+        behind(&[Object::name("FlateDecode"), Object::name("CCF")], &[null.clone(), own.clone()], flated.clone()).unwrap(),
+        bits,
+        "behind Flate"
+    );
+    assert_eq!(behind(&[Object::name("Crypt"), fax.clone()], &[null.clone(), own.clone()], coded.clone()).unwrap(), bits, "after /Crypt");
+    // A /Crypt belongs first (§7.4.10); one after the fax filter leaves it its own entry.
+    assert_eq!(behind(&[fax.clone(), Object::name("Crypt")], &[own.clone(), null.clone()], coded.clone()).unwrap(), bits, "before /Crypt");
+    assert!(behind(&ahx, &[own.clone(), null.clone()], hex).is_err(), "the first entry is the other filter's");
+    assert!(behind(&[fax.clone(), Object::name("FlateDecode")], &[own.clone(), null.clone()], flated).is_err(), "CCITT, then Flate");
+    assert!(behind(&[Object::Int(5), fax], &[null, own], coded.clone()).is_err(), "a /Filter entry that isn't a name");
+}
+
+/// Images that share a `/JBIG2Globals` stream of the file decode it once a document: it is kept
+/// for the next, in every clone. A globals stream edited since is read afresh (the kept one is the
+/// file's), and objects added in memory aren't kept.
+#[test]
+fn shared_jbig2_globals_are_read_once() {
+    let bits = [0b1111_1000, 0, 0b1111_1000, 0, 0b1111_1000, 0];
+    let coded = pdfcraft_filters::encode_jbig2_generic(&bits, 10, 3).unwrap();
+    let mut doc = Document::new_empty();
+    let mut d = Dict::new();
+    d.set(b"Filter".to_vec(), Object::name("FlateDecode"));
+    let skipped = [0, 0, 0, 0, 0x3E, 0, 0, 0, 0, 0, 4, 0, 0, 0, 1];
+    let globals = doc.add(Object::Stream(Stream::from_raw(d, pdfcraft_filters::encode_flate(&skipped))));
+    let image = |doc: &mut Document| {
+        let mut d = Dict::new();
+        d.set(b"Width".to_vec(), Object::Int(10));
+        d.set(b"Height".to_vec(), Object::Int(3));
+        d.set(b"Filter".to_vec(), Object::name("JBIG2Decode"));
+        let mut parms = Dict::new();
+        parms.set(b"JBIG2Globals".to_vec(), Object::Ref(globals));
+        d.set(b"DecodeParms".to_vec(), Object::Dict(parms));
+        doc.add(Object::Stream(Stream::from_raw(d, coded.clone())))
+    };
+    let (a, b) = (image(&mut doc), image(&mut doc));
+    let stream = |doc: &Document, r: ObjRef| match &*doc.get(r) {
+        Object::Stream(s) => s.clone(),
+        _ => panic!("not a stream"),
+    };
+    assert_eq!(doc.decoded_image(&stream(&doc, a)).unwrap(), bits);
+    assert!(doc.jbig2_globals.lock().unwrap().is_empty(), "an object added in memory isn't kept");
+
+    // The same objects read from a file, the catalog holding on to the images (a full save may
+    // number them anew).
+    let root = doc.root().unwrap();
+    doc.update_dict(root, |c| c.set(b"Images".to_vec(), Object::Array(vec![Object::Ref(a), Object::Ref(b)]))).unwrap();
+    let file = crate::write_full(&doc, &crate::SaveOptions::default()).unwrap();
+    let mut doc = Document::open(Arc::new(file)).unwrap();
+    let images = doc.get(doc.root().unwrap()).as_dict().unwrap().get(b"Images").unwrap().as_array().unwrap().clone();
+    let (a, b) = (images[0].as_ref().unwrap(), images[1].as_ref().unwrap());
+    let parms = stream(&doc, a).dict.get(b"DecodeParms").unwrap().as_dict().unwrap().clone();
+    let globals = parms.reference(b"JBIG2Globals").unwrap();
+    let clone = doc.clone();
+    assert_eq!(doc.decoded_image(&stream(&doc, a)).unwrap(), bits);
+    assert_eq!(doc.jbig2_globals.lock().unwrap().len(), 1, "kept");
+    let kept = doc.jbig2_globals.lock().unwrap()[&globals.num].clone();
+    assert_eq!(clone.decoded_image(&stream(&clone, b)).unwrap(), bits, "the clone's other image");
+    let shared = clone.jbig2_globals.lock().unwrap()[&globals.num].clone();
+    assert!(Arc::ptr_eq(&kept, &shared), "the clone uses the one kept, not a second decode");
+    doc.set(globals, Object::Stream(Stream::from_raw(Dict::new(), b"not JBIG2".to_vec())));
+    assert!(doc.decoded_image(&stream(&doc, b)).is_err(), "the edited globals are read afresh");
+    assert_eq!(clone.decoded_image(&stream(&clone, b)).unwrap(), bits, "the clone keeps the file's");
+}
+
+/// A JBIG2 image's size is read as given directly, as every caller reads it first, and an image
+/// with neither is an error, not an image of no rows.
+#[test]
+fn a_jbig2_image_needs_its_size_given_directly() {
+    let coded = pdfcraft_filters::encode_jbig2_generic(&[0xFF, 0xFF], 8, 2).unwrap();
+    let mut doc = Document::new_empty();
+    let size = doc.add(Object::Int(2));
+    let image = |width: Object, height: Object| {
+        let mut d = Dict::new();
+        d.set(b"Width".to_vec(), width);
+        d.set(b"Height".to_vec(), height);
+        d.set(b"Filter".to_vec(), Object::name("JBIG2Decode"));
+        doc.decoded_image(&Stream::from_raw(d, coded.clone()))
+    };
+    assert!(image(Object::Int(8), Object::Int(2)).is_ok());
+    assert!(image(Object::Ref(size), Object::Int(2)).is_err(), "/Width by reference");
+    assert!(image(Object::Int(8), Object::Ref(size)).is_err(), "/Height by reference");
+}
+
+/// A document that kept globals of 64 MiB keeps no more, and the images past that still read:
+/// three streams of 22 MiB, shared by three images, are two kept and one decoded each time.
+#[test]
+fn kept_jbig2_globals_are_bounded_in_total() {
+    let bits = [0b1111_1000, 0, 0b1111_1000, 0, 0b1111_1000, 0];
+    let coded = pdfcraft_filters::encode_jbig2_generic(&bits, 10, 3).unwrap();
+    let length = 22 * 1024 * 1024;
+    let mut skipped = vec![0, 0, 0, 0, 0x3E, 0, 0];
+    skipped.extend_from_slice(&u32::try_from(4 + length).unwrap().to_be_bytes());
+    skipped.extend_from_slice(&[0, 0, 0, 1]);
+    skipped.resize(skipped.len() + length, 0);
+    let mut doc = Document::new_empty();
+    let mut images = Vec::new();
+    for _ in 0..3 {
+        let mut d = Dict::new();
+        d.set(b"Filter".to_vec(), Object::name("FlateDecode"));
+        let globals = doc.add(Object::Stream(Stream::from_raw(d, pdfcraft_filters::encode_flate(&skipped))));
+        let mut d = Dict::new();
+        d.set(b"Width".to_vec(), Object::Int(10));
+        d.set(b"Height".to_vec(), Object::Int(3));
+        d.set(b"Filter".to_vec(), Object::name("JBIG2Decode"));
+        let mut parms = Dict::new();
+        parms.set(b"JBIG2Globals".to_vec(), Object::Ref(globals));
+        d.set(b"DecodeParms".to_vec(), Object::Dict(parms));
+        images.push(Object::Ref(doc.add(Object::Stream(Stream::from_raw(d, coded.clone())))));
+    }
+    let root = doc.root().unwrap();
+    doc.update_dict(root, |c| c.set(b"Images".to_vec(), Object::Array(images))).unwrap();
+    let doc = Document::open(Arc::new(crate::write_full(&doc, &crate::SaveOptions::default()).unwrap())).unwrap();
+    let images = doc.get(doc.root().unwrap()).as_dict().unwrap().get(b"Images").unwrap().as_array().unwrap().clone();
+    for image in &images {
+        let Object::Stream(s) = &*doc.get(image.as_ref().unwrap()) else { panic!("not a stream") };
+        assert_eq!(doc.decoded_image(s).unwrap(), bits, "every image reads");
+    }
+    let kept = doc.jbig2_globals.lock().unwrap();
+    assert_eq!(kept.len(), 2, "two fit in 64 MiB, a third doesn't");
+    assert!(kept.values().all(|g| g.capacity() == g.len()), "what is kept holds no more than it counts");
+}
+
+/// Globals whose `/DecodeParms` are given by reference aren't kept: that's another object, so
+/// editing it changes what they decode to while the stream itself, the key kept by, stays the same.
+#[test]
+fn jbig2_globals_with_parameters_by_reference_are_read_afresh() {
+    let bits = [0b1111_1000, 0, 0b1111_1000, 0, 0b1111_1000, 0];
+    let coded = pdfcraft_filters::encode_jbig2_generic(&bits, 10, 3).unwrap();
+    let skipped = [0, 0, 0, 0, 0x3E, 0, 0, 0, 0, 0, 4, 0, 0, 0, 1];
+    let params = pdfcraft_filters::Params { predictor: 12, colors: 1, bits_per_component: 8, columns: 15, early_change: 1 };
+    let mut doc = Document::new_empty();
+    let mut parms = Dict::new();
+    parms.set(b"Predictor".to_vec(), Object::Int(12));
+    parms.set(b"Columns".to_vec(), Object::Int(15));
+    let parms = doc.add(Object::Dict(parms));
+    let mut d = Dict::new();
+    d.set(b"Filter".to_vec(), Object::name("FlateDecode"));
+    d.set(b"DecodeParms".to_vec(), Object::Ref(parms));
+    let predicted = pdfcraft_filters::encode(&pdfcraft_filters::Filter::Flate, &params, &skipped).unwrap();
+    let globals = doc.add(Object::Stream(Stream::from_raw(d, predicted)));
+    let mut d = Dict::new();
+    d.set(b"Width".to_vec(), Object::Int(10));
+    d.set(b"Height".to_vec(), Object::Int(3));
+    d.set(b"Filter".to_vec(), Object::name("JBIG2Decode"));
+    let mut image_parms = Dict::new();
+    image_parms.set(b"JBIG2Globals".to_vec(), Object::Ref(globals));
+    d.set(b"DecodeParms".to_vec(), Object::Dict(image_parms));
+    let image = doc.add(Object::Stream(Stream::from_raw(d, coded)));
+    let root = doc.root().unwrap();
+    doc.update_dict(root, |c| c.set(b"Image".to_vec(), Object::Ref(image))).unwrap();
+    let mut doc = Document::open(Arc::new(crate::write_full(&doc, &crate::SaveOptions::default()).unwrap())).unwrap();
+    let image = doc.get(doc.root().unwrap()).as_dict().unwrap().reference(b"Image").unwrap();
+    let stream = |doc: &Document| match &*doc.get(image) {
+        Object::Stream(s) => s.clone(),
+        _ => panic!("not a stream"),
+    };
+    assert_eq!(doc.decoded_image(&stream(&doc)).unwrap(), bits);
+    assert!(doc.jbig2_globals.lock().unwrap().is_empty(), "not kept");
+    let globals = stream(&doc).dict.get(b"DecodeParms").unwrap().as_dict().unwrap().reference(b"JBIG2Globals").unwrap();
+    let Object::Stream(g) = &*doc.get(globals) else { panic!("not a stream") };
+    let parms = g.dict.reference(b"DecodeParms").unwrap();
+    doc.set(parms, Object::Dict(Dict::new()));
+    assert!(doc.decoded_image(&stream(&doc)).is_err(), "without the predictor they read otherwise");
+}
+
+/// A JBIG2 image reads through its decoder, behind other filters too, with the `/JBIG2Globals` of
+/// its own `/DecodeParms` (a dictionary or its place in an array, /Crypt counting, by reference
+/// too): globals that can't be read are an error, and ones at another filter's place aren't its
+/// own, nor are those of a lone dictionary when other filters come first. Its page has to be its
+/// /Width × /Height, and fit the bound.
+#[test]
+fn jbig2_images_decode_with_their_globals() {
+    // 10 × 3: the first five samples of each row white, the rest black.
+    let bits = [0b1111_1000, 0, 0b1111_1000, 0, 0b1111_1000, 0];
+    let coded = pdfcraft_filters::encode_jbig2_generic(&bits, 10, 3).unwrap();
+    let hex = coded.iter().map(|b| format!("{b:02x}")).chain([">".to_string()]).collect::<String>().into_bytes();
+    let mut doc = Document::new_empty();
+    // An extension segment (ISO/IEC 14492 7.4.14), which a decoder skips, Flate-encoded; and data
+    // that isn't JBIG2.
+    let globals = |doc: &mut Document, data: &[u8]| {
+        let mut d = Dict::new();
+        d.set(b"Filter".to_vec(), Object::name("FlateDecode"));
+        let globals = doc.add(Object::Stream(Stream::from_raw(d, pdfcraft_filters::encode_flate(data))));
+        let mut parms = Dict::new();
+        parms.set(b"JBIG2Globals".to_vec(), Object::Ref(globals));
+        Object::Dict(parms)
+    };
+    let (good, bad) = (globals(&mut doc, &[0, 0, 0, 0, 0x3E, 0, 0, 0, 0, 0, 4, 0, 0, 0, 1]), globals(&mut doc, b"not JBIG2"));
+    let indirect = Object::Ref(doc.add(bad.clone()));
+    let image = |filters: &[&str], parms: Option<Object>, data: &[u8], (width, height): (i64, i64), max: usize| {
+        let mut d = Dict::new();
+        d.set(b"Width".to_vec(), Object::Int(width));
+        d.set(b"Height".to_vec(), Object::Int(height));
+        d.set(b"Filter".to_vec(), Object::Array(filters.iter().map(|f| Object::name(f)).collect()));
+        if let Some(p) = parms {
+            d.set(b"DecodeParms".to_vec(), p);
+        }
+        doc.decoded_image_within(&Stream::from_raw(d, data.to_vec()), max)
+    };
+    let jbig2 = ["JBIG2Decode"];
+    let full = (10, 3);
+    assert_eq!(image(&jbig2, None, &coded, full, MAX_DECODED).unwrap(), bits);
+    assert_eq!(image(&jbig2, Some(good.clone()), &coded, full, MAX_DECODED).unwrap(), bits, "globals it skips");
+    for parms in [bad.clone(), Object::Array(vec![bad.clone()]), indirect.clone(), Object::Array(vec![indirect])] {
+        let e = image(&jbig2, Some(parms.clone()), &coded, full, MAX_DECODED).unwrap_err();
+        assert!(e.to_string().contains("JBIG2"), "{parms:?}: {e}");
+    }
+    let behind = ["ASCIIHexDecode", "JBIG2Decode"];
+    assert_eq!(image(&behind, None, &hex, full, MAX_DECODED).unwrap(), bits, "behind ASCIIHexDecode");
+    assert!(image(&behind, Some(Object::Array(vec![Object::Null, bad.clone()])), &hex, full, MAX_DECODED).is_err(), "its own globals");
+    assert_eq!(image(&behind, Some(Object::Array(vec![bad.clone(), Object::Null])), &hex, full, MAX_DECODED).unwrap(), bits, "another's");
+    assert_eq!(image(&behind, Some(bad.clone()), &hex, full, MAX_DECODED).unwrap(), bits, "a lone dictionary, the first filter's");
+    let after_crypt = ["Crypt", "JBIG2Decode"];
+    assert!(image(&after_crypt, Some(Object::Array(vec![Object::Null, bad.clone()])), &coded, full, MAX_DECODED).is_err(), "after /Crypt");
+    assert_eq!(image(&after_crypt, Some(Object::Array(vec![bad, Object::Null])), &coded, full, MAX_DECODED).unwrap(), bits, "/Crypt's");
+
+    for size in [(11, 3), (9, 3), (10, 2), (10, 4)] {
+        assert!(image(&jbig2, None, &coded, size, MAX_DECODED).is_err(), "a page other than {size:?}");
+    }
+    assert_eq!(image(&jbig2, None, &coded, full, 6).unwrap(), bits, "the page within the bound");
+    assert!(image(&jbig2, None, &coded, full, 5).is_err(), "the page past the bound");
+}
+
+#[test]
+fn a_missing_file_id_is_derived_from_the_encryption_seed() {
+    let mut doc = Document::new_empty();
+    let seed = [9u8; 32];
+    doc.set_encryption(&pdfcraft_crypt::NewEncryption {
+        algorithm: pdfcraft_crypt::Algorithm::Aes256,
+        user_password: "user",
+        owner_password: "owner",
+        permissions: -4,
+        encrypt_metadata: true,
+        seed,
+    })
+    .unwrap();
+    let id = doc.trailer().get(b"ID").and_then(|o| o.as_array()).and_then(|a| a.first()).and_then(|o| o.as_string()).map(|s| s.bytes.clone());
+    assert_eq!(id.as_deref(), Some(pdfcraft_crypt::file_id(&seed).as_slice()));
+
+    let mut kept = Document::new_empty();
+    let fixed = Object::String(crate::PdfString { bytes: b"0123456789abcdef".to_vec(), hex: true });
+    kept.trailer_mut().set(b"ID".to_vec(), Object::Array(vec![fixed.clone(), fixed]));
+    kept.set_encryption(&pdfcraft_crypt::NewEncryption {
+        algorithm: pdfcraft_crypt::Algorithm::Aes256,
+        user_password: "user",
+        owner_password: "owner",
+        permissions: -4,
+        encrypt_metadata: true,
+        seed,
+    })
+    .unwrap();
+    let still = kept.trailer().get(b"ID").and_then(|o| o.as_array()).and_then(|a| a.first()).and_then(|o| o.as_string()).map(|s| s.bytes.clone());
+    assert_eq!(still.as_deref(), Some(b"0123456789abcdef".as_slice()));
+}
+
 #[test]
 fn a_read_state_matches_a_clone_and_no_changed_document() {
     let mut doc = Document::new_empty();
@@ -41,7 +687,7 @@ pub(crate) fn build(bodies: &[&str], trailer: &str) -> Vec<u8> {
 
 fn assert_compact_matches_materialized(doc: &Document) {
     assert!(matches!(doc.entries.as_ref(), XrefIndex::Compact { .. }), "valid xrefs should not retain a per-entry map");
-    let (entries, _, revisions, _) = doc.read_xref_chain_materialized(&mut Vec::new()).unwrap();
+    let (entries, _, revisions, _, _) = doc.read_xref_chain_materialized(&mut Vec::new()).unwrap();
     assert_eq!(revisions.as_slice(), doc.revisions());
     let max = entries.keys().next_back().copied().unwrap_or(0);
     assert_eq!(doc.entries.max_num(), max);
@@ -129,7 +775,7 @@ fn malformed_size_uses_the_materialized_compatibility_path() {
     let at = bytes.windows(marker.len()).position(|window| window == marker).unwrap();
     bytes[at..at + marker.len()].copy_from_slice(b"/Size 2");
     let doc = Document::open(Arc::new(bytes)).unwrap();
-    assert!(matches!(doc.entries.as_ref(), XrefIndex::Materialized(_)));
+    assert!(matches!(doc.entries.as_ref(), XrefIndex::Materialized(..)));
     assert_eq!(doc.next_num, 4);
     assert_eq!(doc.object_numbers(), vec![1, 2, 3]);
 }
@@ -170,6 +816,336 @@ fn an_entry_that_misses_its_object_is_found_by_searching_but_is_not_exact() {
     assert_eq!(doc.get(ObjRef { num: 3, generation: 0 }).as_string().map(|s| s.bytes.clone()), Some(b"three".to_vec()));
     assert!(!doc.xref_entry_is_exact(3));
     assert!(doc.xref_entry_is_exact(1) && doc.xref_entry_is_exact(2));
+}
+
+/// An object that can't be read at its entry or anywhere else is searched for in the whole file
+/// once: every later read, in a clone too, gives the same error without searching again. An
+/// edit of that number still answers for it.
+#[test]
+fn an_unreadable_object_is_searched_for_once() {
+    let bodies = ["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [] /Count 0 >>", "<< /Odd Key(x) >>"];
+    let doc = Document::open(Arc::new(build(&bodies, "/Root 1 0 R /Info 3 0 R"))).unwrap();
+    FILE_SCANS.with(|scans| scans.set(0));
+    let first = doc.try_get(3);
+    assert!(first.is_err(), "{first:?}");
+    for _ in 0..10 {
+        assert_eq!(doc.try_get(3), first);
+        assert_eq!(*doc.get(ObjRef::new(3, 0)), Object::Null);
+    }
+    let mut edited = doc.clone();
+    assert_eq!(edited.try_get(3), first);
+    assert_eq!(FILE_SCANS.with(std::cell::Cell::get), 1, "searches for an object that isn't there");
+    let report = doc.unreadable_objects();
+    assert_eq!(report.len(), 1, "cached failures must stay listed exactly once: {report:?}");
+    assert_eq!(edited.unreadable_objects(), report, "clones retain the cached failure diagnostic");
+    edited.set(ObjRef::new(3, 0), Object::Int(7));
+    assert_eq!(edited.try_get(3).as_deref(), Ok(&Object::Int(7)));
+    assert_eq!(doc.try_get(3), first, "the edit is the clone's alone");
+    edited.free(ObjRef::new(3, 0));
+    assert_eq!(edited.try_get(3).as_deref(), Ok(&Object::Null));
+}
+
+/// A member of an object stream that can't be decoded (here, one that decodes past the document's
+/// stream limit) is decoded once: every later read, in a clone too, gives the same error without
+/// decoding the stream again. The stream itself loads, so no search of the file is involved.
+#[test]
+fn a_member_of_an_undecodable_object_stream_is_decoded_once() {
+    let file = object_stream_file("3 0 ", &format!("<< /Hidden ({}) >>", "x".repeat(4096)), 0);
+    let doc = Document::open_with_stream_limit(Arc::new(file), None, 1024).unwrap();
+    OBJSTM_DECODES.with(|decodes| decodes.set(0));
+    let first = doc.try_get(3);
+    assert!(matches!(first, Err(CosError::Filter(_))), "{first:?}");
+    for _ in 0..10 {
+        assert_eq!(doc.try_get(3), first);
+    }
+    assert_eq!(doc.clone().try_get(3), first);
+    assert_eq!(OBJSTM_DECODES.with(std::cell::Cell::get), 1, "decodes an object stream that can't be decoded");
+}
+
+/// Clones share the cache, and an edit is one clone's alone: a member of an object stream that
+/// one clone freed or replaced still reads, in the others, from the file's stream.
+#[test]
+fn an_edited_object_stream_leaves_other_clones_members_alone() {
+    let file = Arc::new(object_stream_file("3 0 ", "<< /Hidden (yes) >>", 0));
+    let doc = Document::open(file.clone()).unwrap();
+    let mut freed = doc.clone();
+    freed.free(ObjRef::new(4, 0));
+    assert_eq!(freed.try_get(3), Err(CosError::MissingObject(4)));
+    assert_eq!(text_of(&doc, 3, b"Hidden").as_deref(), Some("yes"), "the free reached another clone");
+    let doc = Document::open(file).unwrap();
+    let mut replaced = doc.clone();
+    let mut dict = Dict::new();
+    dict.set(b"Type".to_vec(), Object::name("ObjStm"));
+    dict.set(b"N".to_vec(), Object::Int(1));
+    dict.set(b"First".to_vec(), Object::Int(4));
+    replaced.set(ObjRef::new(4, 0), crate::Stream::from_raw(dict, b"3 0 << /Hidden (no) >>".to_vec()));
+    assert_eq!(text_of(&replaced, 3, b"Hidden").as_deref(), Some("no"));
+    assert_eq!(text_of(&doc, 3, b"Hidden").as_deref(), Some("yes"), "the replacement reached another clone");
+}
+
+/// A member another clone read from the file's object stream is not what a clone that replaced
+/// the stream reads, nor is one the document read itself before replacing it.
+#[test]
+fn a_replaced_object_stream_hides_the_members_read_before() {
+    let replacement = || {
+        let mut dict = Dict::new();
+        dict.set(b"Type".to_vec(), Object::name("ObjStm"));
+        dict.set(b"N".to_vec(), Object::Int(1));
+        dict.set(b"First".to_vec(), Object::Int(4));
+        crate::Stream::from_raw(dict, b"3 0 << /Hidden (no) >>".to_vec())
+    };
+    let file = Arc::new(object_stream_file("3 0 ", "<< /Hidden (yes) >>", 0));
+    let doc = Document::open(file.clone()).unwrap();
+    assert_eq!(text_of(&doc, 3, b"Hidden").as_deref(), Some("yes"));
+    let mut replaced = doc.clone();
+    replaced.set(ObjRef::new(4, 0), replacement());
+    assert_eq!(text_of(&replaced, 3, b"Hidden").as_deref(), Some("no"), "another clone's read of the file's stream");
+    assert_eq!(text_of(&doc, 3, b"Hidden").as_deref(), Some("yes"), "the replacement reached another clone");
+    let mut doc = Document::open(file.clone()).unwrap();
+    assert_eq!(text_of(&doc, 3, b"Hidden").as_deref(), Some("yes"));
+    doc.set(ObjRef::new(4, 0), replacement());
+    assert_eq!(text_of(&doc, 3, b"Hidden").as_deref(), Some("no"), "the document's own read before the edit");
+    let doc = Document::open(file).unwrap();
+    assert_eq!(text_of(&doc, 3, b"Hidden").as_deref(), Some("yes"));
+    let mut freed = doc.clone();
+    freed.free(ObjRef::new(4, 0));
+    assert_eq!(freed.try_get(3), Err(CosError::MissingObject(4)), "another clone's read before the free");
+}
+
+/// An object stream another clone framed by the file's indirect `/Length` is not what a clone
+/// that edited that length reads.
+#[test]
+fn an_edited_object_stream_length_hides_the_members_read_before() {
+    let file = Arc::new(object_stream_file_with("3 0 ", "<< /Hidden (cut endstream here) >>", 0, true));
+    let doc = Document::open(file).unwrap();
+    assert_eq!(text_of(&doc, 3, b"Hidden").as_deref(), Some("cut endstream here"));
+    let mut edited = doc.clone();
+    edited.set(ObjRef::new(6, 0), Object::Int("3 0 << /Hidden (cut".len() as i64));
+    assert_ne!(text_of(&edited, 3, b"Hidden").as_deref(), Some("cut endstream here"), "another clone's framing of the stream");
+    assert_eq!(text_of(&doc, 3, b"Hidden").as_deref(), Some("cut endstream here"), "the edited length reached another clone");
+}
+
+/// A stream another clone read by the file's indirect `/Length` is not what a clone that edited
+/// that length reads.
+#[test]
+fn an_edited_stream_length_hides_the_stream_read_before() {
+    let bodies = [
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [] /Count 0 >>",
+        "<< /Length 4 0 R >>\nstream\nshort\nendstream long\nendstream",
+        "20",
+    ];
+    let mut out = b"%PDF-1.4\n".to_vec();
+    let mut table = String::from("xref\n0 5\n0000000000 65535 f \n");
+    for (n, body) in bodies.iter().enumerate() {
+        table.push_str(&format!("{:010} 00000 n \n", out.len()));
+        out.extend_from_slice(format!("{} 0 obj\n{body}\nendobj\n", n + 1).as_bytes());
+    }
+    let start = out.len();
+    out.extend_from_slice(format!("{table}trailer\n<< /Size 5 /Root 1 0 R >>\nstartxref\n{start}\n%%EOF\n").as_bytes());
+    let data = |doc: &Document| match &*doc.get(ObjRef::new(3, 0)) {
+        Object::Stream(s) => s.raw.to_vec(),
+        other => panic!("{other:?}"),
+    };
+    let doc = Document::open(Arc::new(out)).unwrap();
+    assert_eq!(data(&doc), b"short\nendstream long");
+    let mut edited = doc.clone();
+    edited.set(ObjRef::new(4, 0), Object::Int(5));
+    assert_eq!(data(&edited), b"short", "another clone's read by the file's length");
+    assert_eq!(data(&doc), b"short\nendstream long", "the edited length reached another clone");
+}
+
+/// A file whose object 3 sits in an object stream PNG-predicted by `/DecodeParms 6 1 R`, a
+/// generation the file doesn't have, and the parameters that make it decode.
+fn predicted_object_stream() -> (Vec<u8>, Dict) {
+    let members = b"3 0 << /Hidden (yes) >>";
+    // PNG Sub, one row.
+    let mut rows = vec![1u8];
+    let mut before = 0u8;
+    for b in members {
+        rows.push(b.wrapping_sub(before));
+        before = *b;
+    }
+    let coded = pdfcraft_filters::encode_flate(&rows);
+    let mut out = b"%PDF-1.5\n".to_vec();
+    let mut offs = [0usize; 7];
+    let mut obj = |out: &mut Vec<u8>, n: usize, body: &[u8]| {
+        offs[n] = out.len();
+        out.extend_from_slice(format!("{n} 0 obj\n").as_bytes());
+        out.extend_from_slice(body);
+        out.extend_from_slice(b"\nendobj\n");
+    };
+    obj(&mut out, 1, b"<< /Type /Catalog /Pages 2 0 R >>");
+    obj(&mut out, 2, b"<< /Type /Pages /Kids [] /Count 0 /Extra 3 0 R >>");
+    let mut stm = format!("<< /Type /ObjStm /N 1 /First 4 /Filter /FlateDecode /DecodeParms 6 1 R /Length {} >>\nstream\n", coded.len()).into_bytes();
+    stm.extend_from_slice(&coded);
+    stm.extend_from_slice(b"\nendstream");
+    obj(&mut out, 4, &stm);
+    let data = [2u8, 0, 4, 0];
+    let mut xs = format!("<< /Type /XRef /Size 7 /W [1 2 1] /Index [3 1] /Length {} >>\nstream\n", data.len()).into_bytes();
+    xs.extend_from_slice(&data);
+    xs.extend_from_slice(b"\nendstream");
+    obj(&mut out, 5, &xs);
+    obj(&mut out, 6, b"null");
+    let table = out.len();
+    out.extend_from_slice(b"xref\n0 7\n0000000000 65535 f \n");
+    for (n, off) in offs.iter().enumerate().skip(1) {
+        let line = if n == 3 { "0000000000 65535 f \n".to_string() } else { format!("{off:010} 00000 n \n") };
+        out.extend_from_slice(line.as_bytes());
+    }
+    out.extend_from_slice(format!("trailer << /Size 7 /Root 1 0 R /XRefStm {} >>\nstartxref\n{table}\n%%EOF\n", offs[5]).as_bytes());
+    let mut parms = Dict::new();
+    parms.set(b"Predictor".to_vec(), Object::Int(11));
+    parms.set(b"Columns".to_vec(), Object::Int(members.len() as i64));
+    (out, parms)
+}
+
+fn hidden(doc: &Document) -> Option<Vec<u8>> {
+    doc.get(ObjRef::new(3, 0)).as_dict().and_then(|d| d.get(b"Hidden")).and_then(Object::as_string).map(|s| s.bytes.clone())
+}
+
+/// An object stream whose `/DecodeParms` names a generation the file doesn't have decodes without
+/// them; a clone that sets that generation decodes with them, not by the stream another clone read.
+#[test]
+fn parameters_an_edit_makes_match_hide_the_object_stream_read_before() {
+    let (file, parms) = predicted_object_stream();
+    let doc = Document::open(Arc::new(file)).unwrap();
+    assert_eq!(hidden(&doc), None, "no object 6 1: no predictor undone");
+    let mut edited = doc.clone();
+    edited.set(ObjRef::new(6, 1), Object::Dict(parms));
+    assert_eq!(hidden(&edited), Some(b"yes".to_vec()), "another clone's stream, decoded without them");
+}
+
+/// The other way round: an object stream a clone decoded by its edited parameters stays that
+/// clone's, so the document it was cloned from still decodes by the file's.
+#[test]
+fn an_object_stream_decoded_by_edited_parameters_is_not_shared() {
+    let (file, parms) = predicted_object_stream();
+    let doc = Document::open(Arc::new(file)).unwrap();
+    let mut edited = doc.clone();
+    edited.set(ObjRef::new(6, 1), Object::Dict(parms));
+    assert_eq!(hidden(&edited), Some(b"yes".to_vec()));
+    assert_eq!(hidden(&doc), None, "the clone's decoding, read from the shared streams");
+}
+
+/// What a load read is kept only up to a bound; past it the load counts as having read every
+/// object, so a document with any edit reads it again.
+#[test]
+fn a_load_that_read_too_much_counts_as_reading_everything() {
+    use super::state::{ReadFrame, note_read};
+    let mut overlay = BTreeMap::new();
+    overlay.insert(999_999, Slot::Freed(1));
+    let frame = ReadFrame::enter();
+    for n in 0..8 {
+        note_read(n, None);
+    }
+    assert!(!frame.reads().touch(&overlay), "a few reads, none edited");
+    assert!(!frame.reads().touch(&BTreeMap::new()), "nothing is edited");
+    for n in 8..100 {
+        note_read(n, None);
+    }
+    assert!(frame.reads().touch(&overlay), "more objects than an entry keeps");
+    drop(frame);
+    let outer = ReadFrame::enter();
+    let inner = ReadFrame::enter();
+    for n in 0..5_000 {
+        note_read(n % 4, None);
+    }
+    assert!(inner.reads().touch(&overlay), "more reads than the thread keeps");
+    drop(inner);
+    assert!(outer.reads().touch(&overlay), "an outer frame missed them too");
+}
+
+/// A member that failed to load from the file's object stream is kept as a failure, but replacing
+/// or freeing that stream forgets it: the member then reads from the edit.
+#[test]
+fn an_edited_object_stream_forgets_its_members_failures() {
+    let file = Arc::new(object_stream_file("3 0 ", ") broken", 0));
+    let mut doc = Document::open(file.clone()).unwrap();
+    assert!(doc.try_get(3).is_err(), "the file's member does not parse");
+    let mut dict = Dict::new();
+    dict.set(b"Type".to_vec(), Object::name("ObjStm"));
+    dict.set(b"N".to_vec(), Object::Int(1));
+    dict.set(b"First".to_vec(), Object::Int(4));
+    doc.set(ObjRef::new(4, 0), crate::Stream::from_raw(dict, b"3 0 << /Hidden (fixed) >>".to_vec()));
+    assert_eq!(text_of(&doc, 3, b"Hidden").as_deref(), Some("fixed"), "the cached failure outlived the edit");
+    assert!(doc.try_get(3).is_ok());
+    let mut doc = Document::open(file).unwrap();
+    assert!(matches!(doc.try_get(3), Err(CosError::Syntax { .. })), "the file's member does not parse");
+    doc.free(ObjRef::new(4, 0));
+    assert_eq!(doc.try_get(3), Err(CosError::MissingObject(4)), "the freed stream's member");
+}
+
+/// An object stream framed by one clone's edit of its indirect `/Length` is that clone's alone:
+/// the others still read its members within the file's length.
+#[test]
+fn an_edited_object_stream_length_leaves_other_clones_members_alone() {
+    let file = Arc::new(object_stream_file_with("3 0 ", "<< /Hidden (cut endstream here) >>", 0, true));
+    let doc = Document::open(file).unwrap();
+    let mut edited = doc.clone();
+    // Ends the stream at the `endstream` inside the member's string.
+    let cut = "3 0 << /Hidden (cut".len();
+    edited.set(ObjRef::new(6, 0), Object::Int(cut as i64));
+    assert_ne!(text_of(&edited, 3, b"Hidden").as_deref(), Some("cut endstream here"), "the edited length was not used");
+    assert_eq!(text_of(&doc, 3, b"Hidden").as_deref(), Some("cut endstream here"), "the edited length reached another clone");
+}
+
+/// A `/Length` read through one clone's edits and reused within the same load still keeps that
+/// load to the clone. Here the file's offsets are header-relative behind junk, so object 10's
+/// offset first lands on object 12, whose length (object 8, in the edited object stream 9) is
+/// read; object 10's own length then loads object stream 4, framed by object 8 too.
+#[test]
+fn a_reused_edited_length_leaves_other_clones_members_alone() {
+    let mut out = b"%PDF-1.5\n".to_vec();
+    let mut offs = [0usize; 13];
+    let mut obj = |out: &mut Vec<u8>, n: usize, body: &[u8]| {
+        offs[n] = out.len();
+        out.extend_from_slice(format!("{n} 0 obj\n").as_bytes());
+        out.extend_from_slice(body);
+        out.extend_from_slice(b"\nendobj\n");
+    };
+    let stream = |dict: &str, data: &str| format!("<< {dict} >>\nstream\n{data}\nendstream").into_bytes();
+    obj(&mut out, 1, b"<< /Type /Catalog /Pages 2 0 R >>");
+    obj(&mut out, 2, b"<< /Type /Pages /Kids [] /Count 0 /Extra 3 0 R >>");
+    let inner = "11 0 3 2 5 << /Hidden (cut endstream here) >>";
+    obj(&mut out, 4, &stream("/Type /ObjStm /N 2 /First 9 /Length 8 0 R", inner));
+    let lengths = format!("8 0 {}", inner.len());
+    obj(&mut out, 9, &stream(&format!("/Type /ObjStm /N 1 /First 4 /Length {}", lengths.len()), &lengths));
+    obj(&mut out, 12, &stream("/Length 8 0 R", &"x".repeat(40)));
+    obj(&mut out, 10, &stream("/Length 11 0 R", "PDATA"));
+    // A cross-reference stream: a hybrid file's /XRefStm is not looked for behind junk.
+    let compressed = [(3, 4, 1), (8, 9, 0), (11, 4, 0)];
+    let mut data = Vec::new();
+    for (n, off) in offs.iter().enumerate() {
+        let row = match compressed.iter().find(|c| c.0 == n) {
+            Some(&(_, stream, index)) => [2, 0, stream, index],
+            None if *off == 0 => [0, 0, 0, 0],
+            None => {
+                let [.., hi, lo] = u32::try_from(*off).unwrap().to_be_bytes();
+                [1, hi, lo, 0]
+            }
+        };
+        data.extend_from_slice(&row);
+    }
+    let table = out.len();
+    let dict = format!("<< /Type /XRef /Size 14 /W [1 2 1] /Index [0 13] /Root 1 0 R /Length {} >>", data.len());
+    out.extend_from_slice(format!("13 0 obj\n{dict}\nstream\n").as_bytes());
+    out.extend_from_slice(&data);
+    out.extend_from_slice(format!("\nendstream\nendobj\nstartxref\n{table}\n%%EOF\n").as_bytes());
+    let mut file = vec![b'J'; offs[10] - offs[12] - 1];
+    file.push(b'\n');
+    file.extend_from_slice(&out);
+    let doc = Document::open(Arc::new(file)).unwrap();
+    let mut edited = doc.clone();
+    let cut = "11 0 3 2 5 << /Hidden (cut".len();
+    let mut dict = Dict::new();
+    dict.set(b"Type".to_vec(), Object::name("ObjStm"));
+    dict.set(b"N".to_vec(), Object::Int(1));
+    dict.set(b"First".to_vec(), Object::Int(4));
+    edited.set(ObjRef::new(9, 0), crate::Stream::from_raw(dict, format!("8 0 {cut}").into_bytes()));
+    assert!(matches!(&*edited.get(ObjRef::new(10, 0)), Object::Stream(s) if &s.raw[..] == b"PDATA"));
+    assert_ne!(text_of(&edited, 3, b"Hidden").as_deref(), Some("cut endstream here"), "the edited length was not used");
+    assert_eq!(text_of(&doc, 3, b"Hidden").as_deref(), Some("cut endstream here"), "the edited length reached another clone");
 }
 
 /// A classic table with `/Size` rows and object 0's free entry first, its subsection numbered
@@ -623,15 +1599,18 @@ fn reads_classic_revision_and_edits_are_copy_on_write() {
 fn object_numbers_merge_source_and_overlay_in_order() {
     let mut doc = Document::new_empty();
     doc.overlay.clear();
-    doc.entries = Arc::new(XrefIndex::Materialized(Arc::new(BTreeMap::from([
-        (0, XrefEntry::Free { next_generation: 65535 }),
-        (2, XrefEntry::InFile { offset: 10, generation: 7 }),
-        (4, XrefEntry::Free { next_generation: 9 }),
-        (6, XrefEntry::InStream { stream: 80, index: 1 }),
-        (8, XrefEntry::InFile { offset: 20, generation: 5 }),
-        (10, XrefEntry::InFile { offset: 30, generation: 3 }),
-        (u32::MAX, XrefEntry::InFile { offset: 40, generation: 1 }),
-    ]))));
+    doc.entries = Arc::new(XrefIndex::Materialized(
+        Arc::new(BTreeMap::from([
+            (0, XrefEntry::Free { next_generation: 65535 }),
+            (2, XrefEntry::InFile { offset: 10, generation: 7 }),
+            (4, XrefEntry::Free { next_generation: 9 }),
+            (6, XrefEntry::InStream { stream: 80, index: 1 }),
+            (8, XrefEntry::InFile { offset: 20, generation: 5 }),
+            (10, XrefEntry::InFile { offset: 30, generation: 3 }),
+            (u32::MAX, XrefEntry::InFile { offset: 40, generation: 1 }),
+        ])),
+        Arc::default(),
+    ));
     doc.set(ObjRef::new(1, 2), Object::Int(1)); // before the first live source slot
     doc.set(ObjRef::new(2, 8), Object::Int(2)); // override, without duplication
     doc.set(ObjRef::new(4, 9), Object::Int(4)); // reuse a source free slot
@@ -693,7 +1672,8 @@ fn temporary_reader_keeps_file_views_and_evicts_data_of_its_own() {
     // Data of its own (decrypted streams, strings) counts: past the budget the cache is
     // cleared after the next read, including a failed one.
     let owned = Object::Stream(crate::Stream::from_raw(Dict::new(), vec![b'y'; ObjectReader::STREAM_BYTES + 1]));
-    reader.document.cache.lock().unwrap().insert(3, Arc::new(owned));
+    let size = held_bytes(&owned, &reader.document.data, 0);
+    reader.document.cache.lock().unwrap().insert(3, Ok(Arc::new(owned)), size, Default::default());
     assert_eq!(*reader.get(ObjRef::new(99, 0)), Object::Null);
     assert!(reader.document.cache.lock().unwrap().is_empty(), "owned data over budget is evicted");
 }
@@ -776,13 +1756,14 @@ fn editor_cache_counts_deeply_nested_strings() {
     source.update_dict(source.root().unwrap(), |d| d.set(b"Extension".to_vec(), Object::Array(objects))).unwrap();
     let bytes = Arc::new(crate::write_full(&source, &crate::SaveOptions::default()).unwrap());
     let doc = Document::open(bytes).unwrap();
-    assert_eq!(owned_bytes(&nested, &doc.data, 0), 1 << 20);
+    let held = held_bytes(&nested, &doc.data, 0);
+    assert!((1 << 20..(1 << 20) + 4096).contains(&held), "the string and a little tree: {held}");
     let root = doc.get(doc.root().unwrap());
     for reference in root.as_dict().unwrap().get(b"Extension").unwrap().as_array().unwrap() {
         let Object::Ref(reference) = reference else { panic!("indirect object") };
         drop(doc.get(*reference));
         let cache = doc.cache.lock().unwrap();
-        let owned = cache.values().fold(0usize, |n, o| n.saturating_add(owned_bytes(o, &doc.data, 0)));
+        let owned = cache.values().fold(0usize, |n, o| n.saturating_add(held_bytes(o, &doc.data, 0)));
         let strings = cache.values().filter(|o| o.as_array().is_some()).count();
         assert!(strings << 20 <= Document::EDITOR_CACHE_BYTES + (1 << 20), "{strings} MiB strings cached, {owned} bytes counted");
     }
@@ -824,8 +1805,8 @@ fn editor_cache_stays_bounded() {
 
 #[test]
 fn editor_cache_byte_bound_fires() {
-    // 40 × 1 MB strings: far below the count cap, above the 32 MB byte budget. Each
-    // newcomer exceeds EDITOR_LARGE_OBJECT, so every insert takes a full accounting pass.
+    // 40 × 1 MB strings: far below the count cap, above the 32 MB byte budget, which is
+    // checked after every insertion.
     let mut source = Document::new_empty();
     let objects: Vec<_> = (0..40)
         .map(|i| {
@@ -905,8 +1886,14 @@ fn hybrid_reference_files_read_the_xref_stream_too() {
 /// stream puts it at position `member` of object stream 4, which holds `header` (the number
 /// and offset pairs) and then `members`.
 fn object_stream_file(header: &str, members: &str, member: u8) -> Vec<u8> {
+    object_stream_file_with(header, members, member, false)
+}
+
+/// [`object_stream_file`], with the stream's `/Length` in object 6 when `indirect_length`.
+fn object_stream_file_with(header: &str, members: &str, member: u8, indirect_length: bool) -> Vec<u8> {
     let mut out = b"%PDF-1.5\n".to_vec();
-    let mut offs = [0usize; 6];
+    let size = if indirect_length { 7 } else { 6 };
+    let mut offs = vec![0usize; size];
     let mut obj = |out: &mut Vec<u8>, n: usize, body: &[u8]| {
         offs[n] = out.len();
         out.extend_from_slice(format!("{n} 0 obj\n").as_bytes());
@@ -917,7 +1904,8 @@ fn object_stream_file(header: &str, members: &str, member: u8) -> Vec<u8> {
     obj(&mut out, 2, b"<< /Type /Pages /Kids [] /Count 0 /Extra 3 0 R >>");
     let count = header.split_whitespace().count() / 2;
     let inner = format!("{header}{members}");
-    let mut stm = format!("<< /Type /ObjStm /N {count} /First {} /Length {} >>\nstream\n", header.len(), inner.len()).into_bytes();
+    let length = if indirect_length { "6 0 R".to_string() } else { inner.len().to_string() };
+    let mut stm = format!("<< /Type /ObjStm /N {count} /First {} /Length {length} >>\nstream\n", header.len()).into_bytes();
     stm.extend_from_slice(inner.as_bytes());
     stm.extend_from_slice(b"\nendstream");
     obj(&mut out, 4, &stm);
@@ -926,13 +1914,16 @@ fn object_stream_file(header: &str, members: &str, member: u8) -> Vec<u8> {
     xs.extend_from_slice(&data);
     xs.extend_from_slice(b"\nendstream");
     obj(&mut out, 5, &xs);
+    if indirect_length {
+        obj(&mut out, 6, inner.len().to_string().as_bytes());
+    }
     let table = out.len();
-    out.extend_from_slice(b"xref\n0 6\n0000000000 65535 f \n");
+    out.extend_from_slice(format!("xref\n0 {size}\n0000000000 65535 f \n").as_bytes());
     for (n, off) in offs.iter().enumerate().skip(1) {
         let line = if n == 3 { "0000000000 65535 f \n".to_string() } else { format!("{off:010} 00000 n \n") };
         out.extend_from_slice(line.as_bytes());
     }
-    out.extend_from_slice(format!("trailer << /Size 6 /Root 1 0 R /XRefStm {} >>\nstartxref\n{table}\n%%EOF\n", offs[5]).as_bytes());
+    out.extend_from_slice(format!("trailer << /Size {size} /Root 1 0 R /XRefStm {} >>\nstartxref\n{table}\n%%EOF\n", offs[5]).as_bytes());
     out
 }
 
@@ -1267,6 +2258,176 @@ fn a_decompression_bomb_in_an_xref_stream_is_refused_and_the_file_reconstructed(
     assert!(doc.repair_log().iter().any(|l| l.contains("limit")), "{:?}", doc.repair_log());
 }
 
+/// A chain of cross-reference streams whose sections each stay well under the per-section
+/// limit but together list more than 8,388,607 rows (#5082). Too many rows for the compact
+/// reader, the chain was merged whole; it is now refused and the file rebuilt from object
+/// headers. The bulk rows are set aside (in use at offset 0), so the test holds a few bytes a row.
+#[test]
+fn a_cross_reference_chain_past_the_total_cap_is_refused_and_the_file_reconstructed() {
+    const BULK: usize = 4_200_000;
+    let mut bytes = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for body in
+        ["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [3 0 R] /Count 1 >>", "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>"]
+    {
+        offsets.push(bytes.len());
+        bytes.extend_from_slice(format!("{} 0 obj\n{body}\nendobj\n", offsets.len()).as_bytes());
+    }
+    // Objects 4 and 5: /W [1 0 0] rows of type 1 at offset 0, each a set-aside entry.
+    let bulk = pdfcraft_filters::encode_flate(&vec![1u8; BULK]);
+    let size = 16 + 2 * BULK;
+    let mut prev = None;
+    for (num, start) in [(4, 16 + BULK), (5, 16)] {
+        offsets.push(bytes.len());
+        let prev_key = prev.map(|p| format!(" /Prev {p}")).unwrap_or_default();
+        bytes.extend_from_slice(
+            format!(
+                "{num} 0 obj\n<< /Type /XRef /Size {size} /W [1 0 0] /Index [{start} {BULK}]{prev_key} /Filter /FlateDecode /Length {} >>\nstream\n",
+                bulk.len()
+            )
+            .as_bytes(),
+        );
+        bytes.extend_from_slice(&bulk);
+        bytes.extend_from_slice(b"\nendstream\nendobj\n");
+        prev = offsets.last().copied();
+    }
+    // Object 6, the newest section: objects 0 to 6 at their offsets.
+    let x = bytes.len();
+    offsets.push(x);
+    let mut rows = vec![0u8, 0, 0, 0, 0, 255];
+    for o in &offsets {
+        rows.push(1);
+        rows.extend_from_slice(&u32::try_from(*o).unwrap().to_be_bytes());
+        rows.push(0);
+    }
+    bytes.extend_from_slice(
+        format!("6 0 obj\n<< /Type /XRef /Size {size} /Root 1 0 R /W [1 4 1] /Index [0 7] /Prev {} /Length {} >>\nstream\n", offsets[4], rows.len())
+            .as_bytes(),
+    );
+    bytes.extend_from_slice(&rows);
+    bytes.extend_from_slice(format!("\nendstream\nendobj\nstartxref\n{x}\n%%EOF\n").as_bytes());
+
+    let doc = Document::open(Arc::new(bytes)).unwrap();
+    let log = doc.repair_log();
+    assert!(
+        log.iter().any(|l| l.contains("cross-reference chain lists more than 8388607 entries") && l.contains("rebuilding from object headers")),
+        "{log:?}"
+    );
+    assert!(log.iter().any(|l| l.starts_with("rebuilt cross-reference index")), "{log:?}");
+    assert!(doc.revisions().is_empty());
+    assert_eq!(doc.root(), Some(ObjRef::new(1, 0)));
+    let page = doc.try_get(3).unwrap();
+    assert_eq!(page.as_dict().and_then(|d| d.name(b"Type")), Some(&b"Page"[..]));
+    // The chain read itself is refused at the second bulk section, which each decode within its own limit.
+    let Err(CosError::Syntax { offset, detail }) = doc.read_xref_chain_materialized(&mut Vec::new()) else { panic!("the chain must be refused") };
+    assert_eq!(offset, offsets[3]);
+    assert!(detail.contains("more than 8388607 entries"), "{detail}");
+}
+
+/// Three classic tables listing 2, 1 and 1 rows, newest first: objects 1 and 2, then object 3
+/// (or object 1 again when `overlap`), then object 4.
+fn three_table_chain(overlap: bool) -> (Vec<u8>, usize) {
+    let mut bytes = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (num, body) in
+        ["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [] /Count 0 >>", "<< /Value 3 >>", "<< /Value 4 >>"].iter().enumerate()
+    {
+        offsets.push(bytes.len());
+        bytes.extend_from_slice(format!("{} 0 obj\n{body}\nendobj\n", num + 1).as_bytes());
+    }
+    let older = bytes.len();
+    bytes.extend_from_slice(format!("xref\n4 1\n{:010} 00000 n \ntrailer << /Size 5 /Root 1 0 R >>\n", offsets[3]).as_bytes());
+    let middle = bytes.len();
+    let middle_num = if overlap { 1 } else { 3 };
+    bytes.extend_from_slice(
+        format!("xref\n{middle_num} 1\n{:010} 00000 n \ntrailer << /Size 5 /Root 1 0 R /Prev {older} >>\n", offsets[middle_num - 1]).as_bytes(),
+    );
+    let newer = bytes.len();
+    bytes.extend_from_slice(
+        format!(
+            "xref\n1 1\n{:010} 00000 n \n2 1\n{:010} 00000 n \ntrailer << /Size 5 /Root 1 0 R /Prev {middle} >>\nstartxref\n{newer}\n%%EOF\n",
+            offsets[0], offsets[1],
+        )
+        .as_bytes(),
+    );
+    (bytes, older)
+}
+
+/// The chain's row limit counts every row merged (#5082): four rows over three sections pass a
+/// limit of 4 and are refused at the oldest section by a limit of 3, both when the sections
+/// list different objects and when one relists an object a newer section has (a map of three
+/// entries, but four rows merged).
+#[test]
+fn the_chain_row_limit_counts_disjoint_and_relisted_rows() {
+    for overlap in [false, true] {
+        let (bytes, older) = three_table_chain(overlap);
+        let doc = Document::open(Arc::new(bytes)).unwrap();
+        let (entries, ..) = doc.read_xref_chain_materialized_with_limit(&mut Vec::new(), 4).unwrap();
+        assert_eq!(entries.len(), if overlap { 3 } else { 4 });
+        let Err(CosError::Syntax { offset, detail }) = doc.read_xref_chain_materialized_with_limit(&mut Vec::new(), 3) else {
+            panic!("four rows must be refused by a limit of 3 (overlap: {overlap})")
+        };
+        assert_eq!(offset, older);
+        assert!(detail.contains("more than 3 entries"), "{detail}");
+    }
+}
+
+/// Rows set aside count against the chain's row limit (#5082): a hybrid file whose table puts
+/// object 3 at an offset while its /XRefStm puts it in an object stream merges six rows and sets
+/// one aside, so a limit of 7 passes and a limit of 6 refuses it.
+#[test]
+fn the_chain_row_limit_counts_hybrid_rows_set_aside() {
+    let mut bytes = object_stream_file("3 0 ", "<< /Hidden (yes) >>", 0);
+    // Object 3's row in the table (`xref\n0 6\n`, 20-byte rows): free, now in use at offset 9.
+    let row = find(&bytes, b"xref\n0 6\n", 0, bytes.len()).unwrap() + 9 + 3 * 20;
+    assert_eq!(&bytes[row..row + 20], b"0000000000 65535 f \n");
+    bytes[row..row + 20].copy_from_slice(b"0000000009 00000 n \n");
+    let doc = Document::open(Arc::new(bytes)).unwrap();
+    let (entries, _, _, oddities, _) = doc.read_xref_chain_materialized_with_limit(&mut Vec::new(), 7).unwrap();
+    assert_eq!(entries.len(), 6);
+    assert_eq!(oddities.iter().map(|(_, num)| *num).collect::<Vec<_>>(), vec![3]);
+    let Err(CosError::Syntax { detail, .. }) = doc.read_xref_chain_materialized_with_limit(&mut Vec::new(), 6) else {
+        panic!("six rows and one set aside must be refused by a limit of 6")
+    };
+    assert!(detail.contains("more than 6 entries"), "{detail}");
+}
+
+/// A cross-reference stream whose `/Index [0 4 0 4]` lists objects 0 to 3 twice, the same rows
+/// both times: eight rows read, four entries (#5082). The chain's row limit counts the rows
+/// read, before deduplication, so a limit of 8 passes and a limit of 7 refuses it.
+#[test]
+fn the_chain_row_limit_counts_rows_an_xref_stream_index_repeats() {
+    let mut bytes = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for body in ["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [] /Count 0 >>"] {
+        offsets.push(bytes.len());
+        bytes.extend_from_slice(format!("{} 0 obj\n{body}\nendobj\n", offsets.len()).as_bytes());
+    }
+    let x = bytes.len();
+    offsets.push(x);
+    let mut once = vec![0u8, 0, 0, 0, 0, 255];
+    for o in &offsets {
+        once.push(1);
+        once.extend_from_slice(&u32::try_from(*o).unwrap().to_be_bytes());
+        once.push(0);
+    }
+    let rows = [once.clone(), once].concat();
+    bytes.extend_from_slice(
+        format!("3 0 obj\n<< /Type /XRef /Size 4 /Root 1 0 R /W [1 4 1] /Index [0 4 0 4] /Length {} >>\nstream\n", rows.len()).as_bytes(),
+    );
+    bytes.extend_from_slice(&rows);
+    bytes.extend_from_slice(format!("\nendstream\nendobj\nstartxref\n{x}\n%%EOF\n").as_bytes());
+    let doc = Document::open(Arc::new(bytes)).unwrap();
+    let (entries, _, _, oddities, _) = doc.read_xref_chain_materialized_with_limit(&mut Vec::new(), 8).unwrap();
+    assert_eq!(entries.len(), 4);
+    assert!(oddities.is_empty(), "{oddities:?}");
+    let Err(CosError::Syntax { offset, detail }) = doc.read_xref_chain_materialized_with_limit(&mut Vec::new(), 7) else {
+        panic!("eight rows listing four objects must be refused by a limit of 7")
+    };
+    assert_eq!(offset, x);
+    assert!(detail.contains("more than 7 entries"), "{detail}");
+}
+
 #[test]
 fn a_stream_whose_length_is_itself_and_never_ends_loads_quickly() {
     // From the nightly fuzz job: `6 0 obj << /Length 6 0 R >> stream` with no `endstream`
@@ -1284,4 +2445,265 @@ fn a_stream_whose_length_is_itself_and_never_ends_loads_quickly() {
         let _ = tx.send(());
     });
     rx.recv_timeout(std::time::Duration::from_secs(20)).expect("loading must not retry exponentially");
+}
+
+/// A file whose object 3 (its `/Info`) can't be parsed: the rest reads.
+fn with_unreadable_info() -> Vec<u8> {
+    build(
+        &["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [] /Count 0 >>", "<< /Title (Report) /Author ) >>"],
+        "/Root 1 0 R /Info 3 0 R",
+    )
+}
+
+/// An object that can't be parsed reads as null and is listed once, by number and generation,
+/// with why. Clones and scans share the list, an edit takes the object off it (in that document
+/// only), and a sound file lists nothing.
+#[test]
+fn unreadable_objects_are_listed_with_the_reason() {
+    let doc = Document::open(Arc::new(with_unreadable_info())).unwrap();
+    assert!(doc.unreadable_objects().is_empty(), "nothing has read object 3 yet");
+    assert_eq!(*doc.get(ObjRef::new(3, 0)), Object::Null);
+    assert!(doc.try_get(3).is_err());
+    let lines = doc.unreadable_objects();
+    assert_eq!(lines.len(), 1, "read twice, listed once: {lines:?}");
+    assert!(lines[0].starts_with("object 3 0 could not be read: syntax error"), "{lines:?}");
+    let scanned = doc.clone();
+    assert_eq!(scanned.scan_objects_checked().filter(|(_, o)| o.is_err()).count(), 1);
+    assert_eq!(doc.unreadable_objects(), lines, "the scan found the same object");
+    let unread = Document::open(Arc::new(with_unreadable_info())).unwrap();
+    let scanned = unread.clone();
+    assert_eq!(scanned.scan_objects_checked().filter(|(_, o)| o.is_err()).count(), 1);
+    assert_eq!(unread.unreadable_objects(), lines, "a clone's scan reaches the original");
+    let mut edited = doc.clone();
+    edited.set(ObjRef::new(3, 0), Object::Dict(Dict::new()));
+    assert!(edited.unreadable_objects().is_empty(), "the edit replaced it");
+    assert_eq!(doc.unreadable_objects(), lines);
+    let sound =
+        build(&["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [] /Count 0 >>", "<< /Title (Report) >>"], "/Root 1 0 R /Info 3 0 R");
+    let sound = Document::open(Arc::new(sound)).unwrap();
+    assert_eq!(sound.scan_objects_checked().filter(|(_, o)| o.is_err()).count(), 0);
+    assert!(sound.unreadable_objects().is_empty());
+}
+
+/// A file rebuilt from its object headers still lists an object the scan could not read.
+#[test]
+fn a_rebuilt_file_lists_the_objects_its_scan_could_not_read() {
+    let text = "%PDF-1.7\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [] /Count 0 >>\nendobj\n3 0 obj\n<< /A ) >>\nendobj\n%%EOF\n";
+    let doc = Document::open(Arc::new(text.as_bytes().to_vec())).unwrap();
+    assert!(doc.repair_log().iter().any(|l| l.starts_with("rebuilt cross-reference index")), "{:?}", doc.repair_log());
+    let lines = doc.unreadable_objects();
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert!(lines[0].starts_with("object 3 0 could not be read: syntax error"), "{lines:?}");
+}
+
+/// The list keeps at most 100 objects and then says there were more; an object whose
+/// cross-reference offset holds no object is listed with that as its reason.
+#[test]
+fn the_unreadable_object_list_is_bounded() {
+    let mut bodies = vec!["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [] /Count 0 >>"];
+    bodies.extend(std::iter::repeat_n("<< /A ) >>", 120));
+    let doc = Document::open(Arc::new(build(&bodies, "/Root 1 0 R"))).unwrap();
+    assert_eq!(doc.scan_objects_checked().filter(|(_, o)| o.is_err()).count(), 120);
+    let lines = doc.unreadable_objects();
+    assert_eq!(lines.len(), 101, "{:?}", lines.last());
+    assert!(lines[0].starts_with("object 3 0 could not be read"), "{}", lines[0]);
+    assert_eq!(lines[100], "more objects could not be read; only the first 100 are listed");
+
+    let base = build(&["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [] /Count 0 >>", "(three)"], "/Root 1 0 R");
+    let text = String::from_utf8_lossy(&base).into_owned();
+    let gone = text.replacen("3 0 obj\n(three)", "9 0 obj\n(three)", 1);
+    let doc = Document::open(Arc::new(gone.into_bytes())).unwrap();
+    assert!(doc.try_get(3).is_err());
+    assert_eq!(
+        doc.unreadable_objects(),
+        ["object 3 0 could not be read: no readable copy was found at its cross-reference offset or elsewhere in the file"]
+    );
+}
+
+/// The unreadable list is shared by clones, and each hides what it has edited. A clone that edited
+/// every listed object still lists its own failures: hidden entries don't use up its allowance.
+#[test]
+fn objects_a_clone_edited_do_not_use_up_its_unreadable_allowance() {
+    let mut bodies = vec!["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [] /Count 0 >>"];
+    bodies.extend(std::iter::repeat_n("<< /A ) >>", 110));
+    let doc = Document::open(Arc::new(build(&bodies, "/Root 1 0 R"))).unwrap();
+    for num in 3..103 {
+        assert!(doc.try_get(num).is_err());
+    }
+    assert_eq!(doc.unreadable_objects().len(), 100);
+    let mut edited = doc.clone();
+    for num in 3..103 {
+        edited.set(ObjRef::new(num, 0), Object::Null);
+    }
+    for num in 103..113 {
+        assert!(edited.try_get(num).is_err());
+    }
+    let lines = edited.unreadable_objects();
+    assert_eq!(lines.len(), 10, "{lines:?}");
+    assert!(lines[0].starts_with("object 103 0 could not be read"), "{}", lines[0]);
+    let original = doc.unreadable_objects();
+    assert_eq!(original.len(), 101, "the original still shows at most 100, then says there were more");
+    assert_eq!(original[100], "more objects could not be read; only the first 100 are listed");
+}
+
+#[test]
+fn a_restored_revision_keeps_what_the_saved_file_held_in_object_streams() {
+    // The earlier revision: an empty document read back from a file whose catalog and pages
+    // sit in an object stream.
+    let earlier = Document::open(Arc::new(crate::write_full(&Document::new_empty(), &crate::SaveOptions::default()).unwrap())).unwrap();
+    // The saved revision adds an object the catalog links to, so a full save numbers its objects
+    // anew; an undo then returns to the earlier graph.
+    let mut later = earlier.clone();
+    let extra = later.add(Object::Int(7));
+    let root = later.root().unwrap();
+    later.update_dict(root, |c| c.set(b"Extra".to_vec(), Object::Ref(extra))).unwrap();
+    let saved = crate::write_full(&later, &crate::SaveOptions::default()).unwrap();
+    let mut base = Document::open(Arc::new(saved)).unwrap();
+    assert!(
+        base.object_numbers().iter().any(|&n| matches!(base.xref_entry(n), Some(XrefEntry::InStream { .. }))),
+        "the saved file holds objects in a stream"
+    );
+    base.overlay_changes_from(&earlier).unwrap();
+    let file = crate::write_incremental(&base, &crate::SaveOptions::default()).unwrap();
+    let reread = Document::open(Arc::new(file)).unwrap();
+    let catalog = reread.get(reread.root().unwrap()).as_dict().unwrap().clone();
+    assert!(catalog.get(b"Extra").is_none(), "the restored catalog");
+    let pages = reread.resolve(catalog.get(b"Pages").unwrap());
+    assert_eq!(pages.as_dict().and_then(|d| d.name(b"Type")), Some(&b"Pages"[..]), "the pages survive: {pages:?}");
+}
+
+/// The cache keeps the sum of what its objects hold as they come and go, so neither reader has
+/// to measure the cache again on every read (#5873).
+#[test]
+fn the_object_cache_keeps_its_total_as_objects_come_and_go() {
+    let data = Arc::new(Vec::new());
+    let one = Arc::new(Object::String(crate::PdfString::literal(vec![b'x'; 100])));
+    let two = Arc::new(Object::Array(vec![Object::Int(1); 10]));
+    let (a, b) = (held_bytes(&one, &data, 0), held_bytes(&two, &data, 0));
+    let mut cache = super::state::ObjectCache::default();
+    cache.insert(1, Ok(one.clone()), a, Default::default());
+    cache.insert(2, Ok(two), b, Default::default());
+    assert_eq!(cache.owned(), a + b);
+    cache.insert(2, Ok(one), a, Default::default());
+    assert_eq!(cache.owned(), a + a, "a replaced object no longer counts");
+    cache.retain(|n| *n == 1);
+    assert_eq!((cache.len(), cache.owned()), (1, a));
+    cache.clear();
+    assert_eq!((cache.len(), cache.owned()), (0, 0));
+}
+
+/// A dictionary of numbers owns no string or stream bytes, but parsed it is tens of thousands
+/// of values: InDesign's per-page `/PieceInfo`. Counting only strings and streams, the editing
+/// cache kept a thousand such pages and a 35 MB book held 1.5 GB (#5873). What the parsed tree
+/// holds counts now, so the byte budget bounds them.
+#[test]
+fn the_editor_cache_charges_a_dictionary_for_the_values_it_holds() {
+    let entries: String = (0..2000).map(|i| format!("/{i}[{i} 141 3 116.22 -375.993 1.0]")).collect();
+    let dict = format!("<< /PieceInfo << /InDesign << /Map << {entries} >> >> >> >>");
+    let count = 300;
+    let refs: String = (0..count).map(|i| format!("{} 0 R ", i + 2)).collect();
+    let mut bodies = vec![format!("<< /Type /Catalog /Extension [{refs}] >>")];
+    bodies.extend((0..count).map(|_| dict.clone()));
+    let bodies: Vec<&str> = bodies.iter().map(String::as_str).collect();
+    let doc = Document::open(Arc::new(build(&bodies, "/Root 1 0 R"))).unwrap();
+    let one = doc.get(crate::ObjRef::new(2, 0));
+    let held = held_bytes(&one, &doc.data, 0);
+    assert!(held > 2000 * std::mem::size_of::<Object>(), "the parsed tree counts: {held} bytes");
+    for i in 0..count {
+        drop(doc.get(crate::ObjRef::new(i as u32 + 2, 0)));
+    }
+    let cache = doc.cache.lock().unwrap();
+    assert!(cache.owned() <= Document::EDITOR_CACHE_BYTES, "{} bytes held", cache.owned());
+    assert!(cache.len() < count, "the byte budget evicted some, below the count cap: {} kept", cache.len());
+    let sum = cache.values().fold(0usize, |n, o| n.saturating_add(held_bytes(o, &doc.data, 0)));
+    assert_eq!(cache.owned(), sum, "the kept total is the cache's own");
+}
+
+/// The width (`/MediaBox` x1) of each of `pages`, in order.
+fn page_widths(pages: &[Dict]) -> Vec<Option<i64>> {
+    pages.iter().map(|p| p.get(b"MediaBox").and_then(Object::as_array).and_then(|b| b.get(2)).and_then(Object::as_int)).collect()
+}
+
+/// The pages of `doc` in page-tree order, as the dictionaries the document holds.
+fn page_tree_pages(doc: &Document) -> Vec<Dict> {
+    let catalog = doc.get(doc.root().expect("root"));
+    let pages = doc.resolve(catalog.as_dict().and_then(|c| c.get(b"Pages")).expect("/Pages"));
+    let kids = pages.as_dict().and_then(|p| p.get(b"Kids")).and_then(Object::as_array).cloned().unwrap_or_default();
+    kids.iter().filter_map(|k| doc.resolve(k).as_dict().cloned()).collect()
+}
+
+/// ISO 32000-2 §7.5.6 and §7.5.8.2: an update reaches the revisions before it through `/Prev`.
+/// One without it cuts them off, page tree and all. The file is rebuilt from its object headers
+/// as a damaged one is, so its page tree is found, the newest definition of each object wins, and
+/// the repair log says why; a save rewrites it in full, with every page.
+#[test]
+fn an_update_without_prev_is_rebuilt_with_its_page_tree_and_a_repair_note() {
+    let doc = Document::open(Arc::new(pdfcraft_testkit::update_without_prev(false))).expect("the unlinked file opens");
+    let pages = page_tree_pages(&doc);
+    assert_eq!(pages.len(), 3);
+    assert!(pages.first().is_some_and(|p| p.contains(b"Annots")), "the update's page wins: {pages:?}");
+    assert!(doc.reconstructed() && doc.rebuilt_unlinked_update());
+    assert!(doc.repair_log().iter().any(|l| l.contains("no /Prev")), "{:?}", doc.repair_log());
+    let catalog = doc.get(doc.root().expect("root"));
+    assert!(catalog.as_dict().is_some_and(|c| c.contains(b"Lang")), "the update's catalog wins");
+
+    let saved = crate::write_incremental(&doc, &crate::SaveOptions::default()).expect("saves");
+    let reopened = Document::open(Arc::new(saved)).expect("the saved file opens");
+    let pages = page_tree_pages(&reopened);
+    assert_eq!(page_widths(&pages), [Some(200), Some(300), Some(400)], "every page is saved, in order");
+    assert!(pages.first().is_some_and(|p| p.contains(b"Annots")), "the update's page is saved: {pages:?}");
+    let catalog = reopened.get(reopened.root().expect("root"));
+    assert!(catalog.as_dict().is_some_and(|c| c.contains(b"Lang")), "the update's catalog is saved");
+    assert!(reopened.repair_log().is_empty(), "{:?}", reopened.repair_log());
+
+    // The same file with `/Prev` reads through its chain, as before.
+    let linked = Document::open(Arc::new(pdfcraft_testkit::update_without_prev(true))).expect("the linked file opens");
+    assert_eq!(page_tree_pages(&linked).len(), 3);
+    assert!(!linked.reconstructed() && !linked.rebuilt_unlinked_update());
+    assert_eq!(linked.revisions().len(), 2);
+    assert!(linked.repair_log().is_empty(), "{:?}", linked.repair_log());
+}
+
+/// A hybrid update (ISO 32000-2 §7.5.8.4) without `/Prev`: its `/XRefStm` stream belongs to the
+/// update, so the earlier revision is cut off just the same, and the file is rebuilt.
+#[test]
+fn a_hybrid_update_without_prev_is_rebuilt_too() {
+    let doc = Document::open(Arc::new(pdfcraft_testkit::hybrid_update_without_prev(false))).expect("the unlinked file opens");
+    let pages = page_tree_pages(&doc);
+    assert_eq!(pages.len(), 3);
+    assert!(pages.first().is_some_and(|p| p.contains(b"Annots")), "the update's page wins: {pages:?}");
+    assert!(doc.rebuilt_unlinked_update(), "{:?}", doc.repair_log());
+    assert!(doc.repair_log().iter().any(|l| l.contains("no /Prev")), "{:?}", doc.repair_log());
+    let catalog = doc.get(doc.root().expect("root"));
+    assert!(catalog.as_dict().is_some_and(|c| c.contains(b"Lang")), "the update's catalog wins");
+    let linked = Document::open(Arc::new(pdfcraft_testkit::hybrid_update_without_prev(true))).expect("the linked file opens");
+    assert_eq!(page_tree_pages(&linked).len(), 3);
+    assert!(!linked.rebuilt_unlinked_update() && linked.repair_log().is_empty(), "{:?}", linked.repair_log());
+    assert_eq!(linked.revisions().len(), 2);
+}
+
+#[test]
+fn find_agrees_with_a_plain_window_search() {
+    let naive = |hay: &[u8], needle: &[u8], from: usize, to: usize| {
+        if from >= to || needle.is_empty() || to - from < needle.len() {
+            return None;
+        }
+        hay[from..to].windows(needle.len()).position(|w| w == needle).map(|p| p + from)
+    };
+    let mut seed = 0x9E37_79B9_7F4A_7C15u64;
+    let mut next = move || {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        seed
+    };
+    let alphabet = b"/XRef t\n<>0";
+    for _ in 0..20_000 {
+        let hay: Vec<u8> = (0..next() % 200).map(|_| alphabet[(next() % alphabet.len() as u64) as usize]).collect();
+        let needles: [&[u8]; 5] = [b"/XRef", b"trailer", b"R", b"ff", b"<<"];
+        let needle = needles[(next() % 5) as usize];
+        let from = (next() % (hay.len() as u64 + 1)) as usize;
+        let to = from + (next() % (hay.len() as u64 + 1 - from as u64)) as usize;
+        assert_eq!(find(&hay, needle, from, to), naive(&hay, needle, from, to), "{hay:?} {needle:?} {from} {to}");
+    }
 }

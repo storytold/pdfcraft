@@ -1,16 +1,36 @@
 use super::model::{DocInfo, FieldState, FieldType, Request};
 use super::run::MAX_ARRAY_LENGTH;
-use super::*;
+use super::{
+    Arc, BTreeSet, Context, FunctionObjectBuilder, JsArray, JsError, JsFunction, JsNativeError, JsResult, JsString, JsValue, Message, NativeFunction,
+    RefCell, xfa,
+};
 
 pub(crate) struct Host {
+    pub(crate) event_name: String,
     pub(crate) fields: Arc<Vec<FieldState>>,
+    pub(crate) icons: Vec<(super::JsObject, u64)>,
+    pub(crate) objects: std::collections::HashMap<(String, Option<u64>, u64), super::JsObject>,
+    pub(crate) field_keys: std::collections::HashSet<(String, Option<u64>, u64)>,
     pub(crate) changed: BTreeSet<usize>,
-    pub(crate) alerts: Vec<String>,
+    pub(crate) formatted: BTreeSet<usize>,
+    pub(crate) alerts: Vec<Message>,
     pub(crate) console: Vec<String>,
     pub(crate) requests: Vec<Request>,
     pub(crate) doc: DocInfo,
+    pub(crate) calculations: Vec<(usize, String)>,
+    pub(crate) calculate_depth: usize,
+    pub(crate) calculation_evaluations: usize,
+    pub(crate) calculation_limit_exceeded: bool,
+    pub(crate) calculation_work: usize,
+    pub(crate) current_event: JsValue,
+    pub(crate) reset_calls: usize,
+    pub(crate) reset_limit_exceeded: bool,
     /// Bytes of text kept in alerts, console lines and requests, against [`xfa::MAX_PAYLOAD`].
     pub(crate) kept: usize,
+    /// Bytes of text the script has added to the fields' values and colours, net of what it
+    /// replaced, against [`xfa::MAX_PAYLOAD`]: each assignment alone is capped, so without this
+    /// many fields could each hold a maximal array.
+    pub(crate) retained: usize,
     /// Alerts, console lines and requests the limits left out.
     pub(crate) dropped: usize,
 }
@@ -30,10 +50,12 @@ impl Host {
         }
     }
 
-    pub(crate) fn alert(&mut self, m: String) {
+    /// Keep message `m`, its text and title charged to the run's byte budget, up to
+    /// [`xfa::MAX_ALERTS`] messages.
+    pub(crate) fn alert(&mut self, m: Message) {
         if self.alerts.len() >= xfa::MAX_ALERTS {
             self.dropped = self.dropped.saturating_add(1);
-        } else if self.room(m.len()) {
+        } else if self.room(m.bytes()) {
             self.alerts.push(m);
         }
     }
@@ -48,26 +70,31 @@ impl Host {
 
     /// Record `r`, its names and URLs cut to a message's length, up to [`xfa::MAX_EFFECTS`]
     /// requests and the run's byte budget.
-    pub(crate) fn request(&mut self, r: Request) {
+    pub(crate) fn request(&mut self, r: Request) -> bool {
         if self.requests.len() >= xfa::MAX_EFFECTS {
             self.dropped = self.dropped.saturating_add(1);
-            return;
+            return false;
         }
         let r = match r {
             Request::Reset(names) => Request::Reset(names.into_iter().map(xfa::clip).collect()),
             Request::LaunchUrl(u) => Request::LaunchUrl(xfa::clip(u)),
             Request::Submit(u) => Request::Submit(xfa::clip(u)),
             Request::Focus(n) => Request::Focus(xfa::clip(n)),
+            Request::FocusField { name, object_id } => Request::FocusField { name: xfa::clip(name), object_id },
             other => other,
         };
         let bytes = match &r {
             Request::Reset(names) => names.iter().fold(0usize, |n, s| n.saturating_add(s.len()).saturating_add(std::mem::size_of::<String>())),
             Request::LaunchUrl(u) | Request::Submit(u) | Request::Focus(u) => u.len(),
+            Request::FocusField { name, .. } => name.len(),
+            Request::OpenAttachment { name, .. } => name.len(),
             _ => 0,
         };
-        if self.room(bytes) {
+        let kept = self.room(bytes);
+        if kept {
             self.requests.push(r);
         }
+        kept
     }
 }
 
@@ -123,6 +150,38 @@ pub(crate) fn function(ctx: &mut Context, f: NativeFunction) -> JsFunction {
     FunctionObjectBuilder::new(ctx.realm(), f).build()
 }
 
+/// Format exactly the escaped UTF-8 representation used by `text`, refusing a
+/// write before it exceeds the remaining aggregate budget. No full Rust copy of
+/// an oversized JavaScript string is made just to discover its byte length.
+pub(crate) fn text_with_budget(v: &JsValue, ctx: &mut Context, remaining: usize, limit_error: &str) -> JsResult<String> {
+    use std::fmt::Write;
+    if v.is_undefined() || v.is_null() {
+        return Ok(String::new());
+    }
+    let js = v.to_string(ctx)?;
+    let exceeded = || error(limit_error);
+    // Every UTF-16 unit contributes at least one byte in the escaped UTF-8 output.
+    if js.len() > remaining {
+        return Err(exceeded());
+    }
+    struct BoundedText {
+        text: String,
+        limit: usize,
+    }
+    impl std::fmt::Write for BoundedText {
+        fn write_str(&mut self, text: &str) -> std::fmt::Result {
+            if self.text.len().checked_add(text.len()).is_none_or(|len| len > self.limit) {
+                return Err(std::fmt::Error);
+            }
+            self.text.push_str(text);
+            Ok(())
+        }
+    }
+    let mut out = BoundedText { text: String::new(), limit: remaining };
+    write!(&mut out, "{}", js.display_escaped()).map_err(|_| exceeded())?;
+    Ok(out.text)
+}
+
 pub(crate) fn strings(v: &JsValue, ctx: &mut Context) -> JsResult<Vec<String>> {
     if let Some(o) = v.as_object()
         && o.is_array()
@@ -133,16 +192,23 @@ pub(crate) fn strings(v: &JsValue, ctx: &mut Context) -> JsResult<Vec<String>> {
             return Err(error(format!("array length exceeds {MAX_ARRAY_LENGTH}")));
         }
         let mut out = Vec::new();
+        let mut remaining = xfa::MAX_PAYLOAD;
         for i in 0..n {
             let x = a.get(i, ctx)?;
-            out.push(text(&x, ctx)?);
+            let value = text_with_budget(&x, ctx, remaining, "string array byte limit exceeded")?;
+            remaining = remaining.saturating_sub(value.len());
+            out.push(value);
         }
         return Ok(out);
     }
-    Ok(if v.is_undefined() || v.is_null() { Vec::new() } else { vec![text(v, ctx)?] })
+    Ok(if v.is_undefined() || v.is_null() {
+        Vec::new()
+    } else {
+        vec![text_with_budget(v, ctx, xfa::MAX_PAYLOAD, "string array byte limit exceeded")?]
+    })
 }
 
-pub(crate) fn colour(c: &Option<Vec<String>>, ctx: &mut Context) -> JsValue {
+pub(crate) fn colour(c: Option<&[String]>, ctx: &mut Context) -> JsValue {
     match c {
         None => JsArray::from_iter([s("T")], ctx).into(),
         Some(parts) => {
@@ -155,17 +221,29 @@ pub(crate) fn colour(c: &Option<Vec<String>>, ctx: &mut Context) -> JsValue {
 
 // ── field objects ───────────────────────────────────────────────────────────────────────────
 
-fn field_index(ctx: &Context, name: &JsString) -> JsResult<usize> {
-    let n = name.to_std_string_escaped();
-    host(ctx)?.borrow().fields.iter().position(|f| f.name == n).ok_or_else(|| error(format!("no field named {n}")))
+pub(crate) type FieldKey = (JsString, Option<u64>, u64);
+
+/// PDF identities survive renames; name-only synthetic fields retain name lookup semantics.
+pub(crate) fn field_cache_key(name: &str, id: Option<u64>, token: u64) -> (String, Option<u64>, u64) {
+    (if id.is_some() { String::new() } else { name.to_string() }, id, token)
 }
 
-pub(crate) fn read(ctx: &Context, name: &JsString) -> JsResult<FieldState> {
+fn field_index(ctx: &Context, name: &FieldKey) -> JsResult<usize> {
+    let n = name.0.to_std_string_escaped();
+    host(ctx)?
+        .borrow()
+        .fields
+        .iter()
+        .position(|f| name.1.map_or(f.name == n, |id| f.object_id == Some(id) && f.instance_id == name.2))
+        .ok_or_else(|| error(format!("no field named {n}")))
+}
+
+pub(crate) fn read(ctx: &Context, name: &FieldKey) -> JsResult<FieldState> {
     let i = field_index(ctx, name)?;
     Ok(host(ctx)?.borrow().fields[i].clone())
 }
 
-pub(crate) fn write(ctx: &Context, name: &JsString, change: impl FnOnce(&mut FieldState)) -> JsResult<()> {
+pub(crate) fn write(ctx: &Context, name: &FieldKey, change: impl FnOnce(&mut FieldState)) -> JsResult<()> {
     let i = field_index(ctx, name)?;
     let mut h = host(ctx)?.borrow_mut();
     let field = Arc::make_mut(&mut h.fields).get_mut(i).ok_or_else(|| error("the field is no longer available"))?;
@@ -188,10 +266,57 @@ pub(crate) fn value_of(f: &FieldState, ctx: &mut Context) -> JsValue {
     }
 }
 
-pub(crate) fn set_value(f: &mut FieldState, vals: Vec<String>) {
-    f.value = match f.kind {
+/// Bytes of text in `v`, counting each string's heap size and its handle.
+pub(crate) fn text_bytes(v: &[String]) -> usize {
+    v.iter().fold(0usize, |n, t| n.saturating_add(t.len()).saturating_add(std::mem::size_of::<String>()))
+}
+
+/// Charge the replacement of the text `old` selects from field `name` with `new_bytes` of text to
+/// the run's retained-text budget; an assignment the budget has no room for is an error and
+/// charges nothing.
+pub(crate) fn charge(ctx: &Context, name: &FieldKey, old: impl FnOnce(&FieldState) -> usize, new_bytes: usize) -> JsResult<()> {
+    let i = field_index(ctx, name)?;
+    let mut h = host(ctx)?.borrow_mut();
+    let freed = old(&h.fields[i]);
+    let total = h.retained.saturating_sub(freed).saturating_add(new_bytes);
+    if total > xfa::MAX_PAYLOAD {
+        return Err(error(format!("the fields' values and colours hold more than {} bytes of text", xfa::MAX_PAYLOAD)));
+    }
+    h.retained = total;
+    Ok(())
+}
+
+pub(crate) fn kind_of(ctx: &Context, name: &FieldKey) -> JsResult<FieldType> {
+    let i = field_index(ctx, name)?;
+    Ok(host(ctx)?.borrow().fields[i].kind)
+}
+
+/// What a field of `kind` keeps of the values assigned to it.
+pub(crate) fn value_for(kind: FieldType, vals: Vec<String>) -> Vec<String> {
+    match kind {
         FieldType::CheckBox | FieldType::RadioButton => vals.into_iter().filter(|v| v != "Off" && !v.is_empty()).take(1).collect(),
         FieldType::ListBox => vals,
         _ => vals.into_iter().take(1).collect(),
-    };
+    }
+}
+
+pub(crate) fn set_value(f: &mut FieldState, vals: Vec<String>) {
+    f.value = value_for(f.kind, vals);
+}
+
+#[cfg(test)]
+mod string_budget_review_tests {
+    use super::*;
+    #[test]
+    fn escaped_text_budget_counts_exact_utf8_bytes() {
+        let mut ctx = Context::default();
+        for (script, bytes) in [("'ascii'", 5), ("'é'", 2), ("'😀'", 4), ("'\\uD800'", 6)] {
+            let value = ctx.eval(boa_engine::Source::from_bytes(script)).unwrap();
+            let expected = text(&value, &mut ctx).unwrap();
+            assert_eq!(expected.len(), bytes);
+            assert_eq!(text_with_budget(&value, &mut ctx, bytes, "text limit").unwrap(), expected);
+            assert!(text_with_budget(&value, &mut ctx, bytes - 1, "text limit").is_err());
+        }
+        assert_eq!(text_with_budget(&JsValue::null(), &mut ctx, 0, "text limit").unwrap(), "");
+    }
 }
