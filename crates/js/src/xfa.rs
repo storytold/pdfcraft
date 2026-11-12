@@ -38,6 +38,6 @@ pub use props::{XfaProp, XfaProps};
 #[cfg(test)]
 pub(crate) use run::run_within_limits;
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) use run::{ENGINE_START_LIMIT, drop_kept, warm_up};
-pub(crate) use run::{run_here_with, run_within};
+pub(crate) use run::{ENGINE_START_LIMIT, warm_up};
+pub(crate) use run::{drop_kept, run_here_with, run_within};
 pub use run::{run_xfa, run_xfa_within};
