@@ -565,7 +565,15 @@ impl PdfCraftApp {
             Some(crate::canvas::ViewAction::InsertFromFileAt(at)) => self.insert_from_file_at(Some(at)),
             Some(crate::canvas::ViewAction::ReplacePages) => self.replace_pages_dialog(),
             Some(crate::canvas::ViewAction::Save) => {
-                self.save_active(SaveTarget::InPlace);
+                // The pages' own Save action takes the same route as the command:
+                // in a hosted session it is the cabinet's commit.
+                #[cfg(feature = "collab")]
+                let committed = self.commit_instead_of_save();
+                #[cfg(not(feature = "collab"))]
+                let committed = false;
+                if !committed {
+                    self.save_active(SaveTarget::InPlace);
+                }
             }
             Some(crate::canvas::ViewAction::Extract) => self.open_extract_dialog(),
             Some(crate::canvas::ViewAction::Split) => self.dialog = Some(crate::Dialog::Split),

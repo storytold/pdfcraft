@@ -198,6 +198,16 @@ impl PdfCraftApp {
             "file.clear_recent" => self.recent.clear(),
             "file.pin_folder" => self.pin_folder_dialog(),
             "file.save" => {
+                // A hosted session owns the document: Save is the cabinet's
+                // commit, not a copy of this window's build. Bytes written next
+                // to the room leave its marker on the previous copy, and the
+                // next commit (and the next ticket) answer 409.
+                #[cfg(feature = "collab")]
+                {
+                    if self.commit_instead_of_save() {
+                        return Some(true);
+                    }
+                }
                 self.save_active(SaveTarget::InPlace);
             }
             "file.save_as" => {

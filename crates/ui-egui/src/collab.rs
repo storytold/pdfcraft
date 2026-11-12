@@ -878,6 +878,24 @@ impl PdfCraftApp {
         }
     }
 
+    /// Save is the cabinet's commit while a hosted session owns the document.
+    ///
+    /// The room builds the stored file; a copy of this window's build written
+    /// next to it is a change the room never made, so its marker keeps naming the
+    /// previous copy and the next commit — and the next ticket — answer `409`
+    /// (the cabinet calls that an external change). Only a session the host page
+    /// owns commits this way: on the desktop the room is a plain sync server and
+    /// Save stays the local file, which is why the test for it lives here.
+    ///
+    /// Returns `true` when the commit was asked for and the caller must not save.
+    pub fn commit_instead_of_save(&mut self) -> bool {
+        if self.collab.is_some() && self.host_commit.is_some() {
+            self.collab_commit();
+            return true;
+        }
+        false
+    }
+
     /// What the host page shows in its participants panel, if a session is open.
     pub fn collab_state(&self) -> Option<CollabState> {
         self.collab.as_ref().map(|collab| collab.state(Instant::now()))
@@ -2348,6 +2366,63 @@ mod tests {
             reported_at: now,
         });
         ops
+    }
+
+    /// A hosted session owns the document, so Save is the cabinet's commit and
+    /// no bytes of this window's build are written next to the room: such a copy
+    /// would leave the room's marker on the previous file, and the next commit
+    /// and ticket would answer `409`.
+    #[test]
+    fn save_in_a_hosted_session_asks_the_cabinet_to_commit() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let mut app = PdfCraftApp::new();
+        app.open_bytes("t.pdf", None, fixture(1)).expect("the fixture opens");
+        let id = app.active_ids().map(|(_, id)| id).expect("a document");
+        session_on(&mut app, id);
+        let calls = Arc::new(AtomicUsize::new(0));
+        let counter = calls.clone();
+        app.host_commit = Some(Box::new(move || {
+            counter.fetch_add(1, Ordering::Relaxed);
+        }));
+        // The hook `save_active` would take: it writes to this path instead of
+        // opening a native dialog, so a byte save is visible as a file.
+        let dir = std::env::temp_dir().join(format!("pdfcraft-collab-save-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("a temporary directory");
+        let written = dir.join("save.pdf");
+        app.save_override = Some(written.to_string_lossy().into_owned());
+
+        app.run_command("file.save");
+
+        assert_eq!(calls.load(Ordering::Relaxed), 1, "the cabinet is asked to build the file");
+        assert!(!written.exists(), "nothing of this window is written next to the room: the room owns the stored document");
+        assert_eq!(
+            app.collab.as_ref().map(|collab| collab.status.as_str()),
+            Some("Commit requested from the cabinet"),
+            "the status line says what Save did"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Without a hosted session Save stays the ordinary save: the desktop's
+    /// room is a plain sync server and single-user mode knows no room at all.
+    #[test]
+    fn save_without_a_hosted_session_writes_the_file() {
+        let mut app = PdfCraftApp::new();
+        app.open_bytes("t.pdf", None, fixture(1)).expect("the fixture opens");
+        let id = app.active_ids().map(|(_, id)| id).expect("a document");
+        // A session, but nobody to commit to: the desktop case.
+        session_on(&mut app, id);
+        app.host_commit = None;
+        let dir = std::env::temp_dir().join(format!("pdfcraft-collab-save-local-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("a temporary directory");
+        let written = dir.join("save.pdf");
+        app.save_override = Some(written.to_string_lossy().into_owned());
+
+        app.run_command("file.save");
+
+        assert!(written.exists(), "Save without a host page writes the file");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// The Split dialog's action in a session is one `page.split`; the accepted
