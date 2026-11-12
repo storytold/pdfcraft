@@ -1,0 +1,22 @@
+{
+  "schema": 1,
+  "name": "Document Properties: undo-aba",
+  "steps": [
+    {
+      "event": {"op": "open"},
+      "expect": {"error": null}
+    },
+    {
+      "event": {"op": "type", "field": "Title", "value": "Stale"},
+      "expect": {"error": null}
+    },
+    {
+      "event": {"op": "external_edit_undo", "key": "Title", "value": "Temporary"},
+      "expect": {"error": null, "properties_open": false, "draft": null, "document": {"title": "Original", "undo": null, "redo": "Change Title"}, "notice": "The document changed. Reopen Document Properties to edit the current version."}
+    },
+    {
+      "event": {"op": "redo"},
+      "expect": {"error": null, "document": {"title": "Temporary", "undo": "Change Title", "redo": null}}
+    }
+  ]
+}
