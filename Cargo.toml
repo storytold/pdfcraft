@@ -26,7 +26,7 @@ craft-keymap = { git = "https://github.com/storytold/craft-libs", version = "0.1
 # the commit in `craft-i18n.rev`). Already in the tree through craft-ui.
 craft-i18n = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "787a7a0f972fd1d7a7618fdbeca3a5267a0407ff" }
 # Shared system spooler; document composition remains in pdfcraft-print.
-craft-print = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "e75aa0335e75bd338eb21a8150f73566dc221f78" }
+craft-print = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "83d6d085deb833bb55fdf8ec97c620deee17b7c6" }
 # ICC transforms for app-managed print colour.
 craft-cms = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "60ede99985ef1e5df87a2aca66ed538eb23dec99" }
 # Whether a path stored in a document may be opened (GoToR link targets).

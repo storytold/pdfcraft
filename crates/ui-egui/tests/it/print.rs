@@ -712,7 +712,7 @@ fn a_capability_reply_keeps_print_controls_in_place() {
     use pdfcraft_engine::print::spool::Printer;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
-    let mut ui = Harness::builder().with_size(egui::vec2(900.0, 766.0)).build_eframe(|_| {
+    let mut ui = Harness::builder().with_size(egui::vec2(900.0, 480.0)).build_eframe(|_| {
         let mut app = PdfCraftApp::new();
         app.set_option("language", "en").unwrap();
         app.open_bytes("form.pdf", None, include_bytes!("../data/form.pdf").to_vec()).unwrap();
@@ -741,7 +741,8 @@ fn a_capability_reply_keeps_print_controls_in_place() {
     settle_print(&mut ui, |app| app.print_draft.two_sided_for("Office") == Some(&Some(false)));
     assert_eq!(ui.get_by_label("Properties…").rect(), properties);
     assert_eq!(ui.get_by_role_and_label(Role::Button, "Print").rect(), print);
-    assert!(print.bottom() <= 766.0, "Print must remain within the window");
+    assert!(print.bottom() <= 480.0, "Print must remain within the window");
+    assert!(ui.get_by_label_contains("doesn't take two-sided settings").rect().bottom() <= print.top(), "the warning stays visible above Print");
     if let Ok(out) = std::env::var("PDFCRAFT_SHOT") {
         let _gpu = crate::gpu();
         ui.render().unwrap().save(out).unwrap();
@@ -1810,8 +1811,9 @@ fn gated_paper_detection_waits_for_current_read_after_reselection() {
     let tx_b = Arc::clone(&started_b_tx);
     h.state_mut().printer_papers_source = Some(Arc::new(move |p| {
         if p == "Printer A" {
+            let gate = rx_a.lock().unwrap();
             let _ = tx_a.lock().unwrap().send(());
-            let _ = rx_a.lock().unwrap().recv();
+            let _ = gate.recv();
             vec![("A-Paper 4x6".into(), (288.0, 432.0))]
         } else {
             let _ = tx_b.lock().unwrap().send(());
@@ -1850,12 +1852,12 @@ fn gated_paper_detection_waits_for_current_read_after_reselection() {
     h.state_mut().print_draft.read_papers_for = Some("Printer A".into());
     h.run_steps(1);
 
-    started_a_rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
     assert!(h.state().print_draft.papers_loading(), "the new read must keep Print disabled");
     assert!(!h.state_mut().print_now());
 
     // Completing the cancelled read leaves the current read pending.
     release_a_tx.send(()).unwrap();
+    started_a_rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
     h.run_steps(3);
     assert!(h.state().print_draft.papers_loading());
     assert!(!h.state_mut().print_now());

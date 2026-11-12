@@ -193,6 +193,8 @@ impl PdfCraftApp {
     /// Open the Print dialog, preselecting the default printer and reading papers in the background.
     pub fn open_print(&mut self) {
         let Some((i, _)) = self.active_ids() else { return };
+        #[cfg(not(target_arch = "wasm32"))]
+        self.print_tasks.papers.clear();
         self.print_draft.refresh_two_sided();
         let (printers, printers_loading) = match self.printer_source.clone() {
             // The list from the last time the dialog opened, until the fresh one arrives.
@@ -1134,6 +1136,14 @@ mod tests {
         app.dialog = None;
         app.poll_print();
         assert!(cancelled.load(Ordering::Acquire), "closing Print cancels the remaining paper query");
+        app.open_bytes("form.pdf", None, include_bytes!("../../tests/data/form.pdf").to_vec()).unwrap();
+        app.printer_source = Some(Arc::new(Vec::new));
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let (stale, answer) = std::sync::mpsc::channel();
+        app.print_tasks.papers.push(PendingPaperInfo { printer: "Other".into(), cancelled: cancelled.clone(), answer });
+        app.open_print();
+        assert!(cancelled.load(Ordering::Acquire), "a new dialog cancels old reads before the next poll");
+        assert!(stale.send((Vec::new(), None)).is_err());
     }
 
     /// A job being spooled holds the progress card, counting its sheets as the spooler reports

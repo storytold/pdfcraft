@@ -334,6 +334,10 @@ pub(crate) fn body(
                     ui.end_row();
                 }
             });
+            // Reserve space beside the settings so a late answer cannot move controls or hide below the preview.
+            if cfg!(windows) || duplex_warning {
+                ui.add_visible(duplex_warning, egui::Label::new(egui::RichText::new(tl!("This printer's driver doesn't take two-sided settings from other programs, so its own setting applies. Change it in Properties…")).small().color(t.text_muted)));
+            }
             if d.printer.as_deref() == Some(crate::web_print::BROWSER_PRINTER) {
                 ui.label(egui::RichText::new(tl!("Copies, two-sided printing and colour are chosen in the browser's print dialog.")).small().color(t.text_muted));
             }
@@ -684,10 +688,6 @@ pub(crate) fn body(
                         ui.label(egui::RichText::new(tl!("Drawing scale changes. Use Actual size for full-scale plans.")).small().color(t.text_muted));
                     }
                 }
-            }
-            // Reserve the notice beside the preview so a capability reply cannot move controls.
-            if cfg!(windows) || duplex_warning {
-                ui.add_visible(duplex_warning, egui::Label::new(egui::RichText::new(tl!("This printer's driver doesn't take two-sided settings from other programs, so its own setting applies. Change it in Properties…")).small().color(t.text_muted)));
             }
         });
     });
