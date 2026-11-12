@@ -24,6 +24,9 @@ pub struct ScriptObjectCode {
     pub name: String,
     pub som: Option<String>,
     pub text: Arc<str>,
+    /// Reached by its bare name: `false` for an outer object an inner one of the same name hides, which its subform still
+    /// reaches (`form1.Calc`).
+    pub bare: bool,
 }
 
 /// The most script object code one script may have compiled: each object is at most 2 MiB, and a script reaching many large
@@ -57,7 +60,7 @@ pub(super) fn define(ctx: &mut Context, objects: &[ScriptObjectCode]) -> JsResul
         objects
             .iter()
             .enumerate()
-            .filter(|(_, o)| !KEPT.contains(&o.name.as_str()) && !built_ins.contains(&o.name))
+            .filter(|(_, o)| o.bare && !KEPT.contains(&o.name.as_str()) && !built_ins.contains(&o.name))
             .map(|(k, o)| format!("[{k}, {:?}]", o.name))
             .collect()
     });
@@ -96,7 +99,7 @@ pub(super) fn child_object(ctx: &mut Context, idx: usize, name: &str) -> JsResul
 
 /// The reachable script object named `name`, wherever it is declared: what `resolveNode("calcs")` finds.
 pub(super) fn named_object(ctx: &mut Context, name: &str) -> JsResult<JsValue> {
-    let k = host(ctx)?.borrow().objects.iter().position(|o| o.name == name);
+    let k = host(ctx)?.borrow().objects.iter().position(|o| o.name == name && o.bare);
     k.map_or(Ok(JsValue::undefined()), |k| object_at(ctx, k))
 }
 
@@ -128,7 +131,7 @@ fn load(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
         return Err(failed(why).into());
     }
     let members = members_of(&object.text).map_err(failed)?;
-    let code = format!("(function () {{\n{}\n;return {{ {members} }};\n}})", object.text);
+    let code = format!("(function () {{\n{}\n;return (function (o) {{ {members} return o; }})({{}});\n}})", object.text);
     let build = ctx.eval(Source::from_bytes(code.as_bytes())).map_err(|e| failed(e.to_string()))?;
     let this = match this {
         Some(i) => node_object(ctx, i)?,
@@ -138,8 +141,9 @@ fn load(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     build.call(&this, &[], ctx).map_err(|e| failed(e.to_string()).into())
 }
 
-/// `name: name, …` for every function, variable and lexical name `text` declares at its top level (`var`s in its blocks
-/// too), read by the parser so regular expressions, templates and strings are read as they run.
+/// A live member on `o` for every function, variable and lexical name `text` declares at its top level (`var`s in its blocks
+/// too): reading it reads the binding, writing it writes the binding, so `Calc.step = 10` changes what `Calc.twice` uses.
+/// The names are read by the parser, so regular expressions, templates and strings are read as they run.
 fn members_of(text: &str) -> Result<Arc<str>, String> {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -165,6 +169,7 @@ fn read_members(text: &str) -> Result<Arc<str>, String> {
     let mut interner = Interner::default();
     let body = Parser::new(Source::from_bytes(text.as_bytes())).parse_function_body(&mut interner, false, false).map_err(|e| e.to_string())?;
     let mut names: Vec<String> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     for item in body.statements() {
         let syms: Vec<_> = match item {
             StatementListItem::Statement(s) => var_declared_names(&**s).into_iter().collect(),
@@ -172,11 +177,16 @@ fn read_members(text: &str) -> Result<Arc<str>, String> {
         };
         for sym in syms {
             let name = interner.resolve_expect(sym).to_string();
-            if !names.contains(&name) {
+            if seen.insert(name.clone()) {
                 names.push(name);
             }
         }
     }
     names.sort();
-    Ok(names.iter().map(|n| format!("{n}: {n}")).collect::<Vec<_>>().join(", ").into())
+    let member = |n: &String| {
+        format!(
+            "Object.defineProperty(o, {n:?}, {{ enumerable: true, configurable: true, get: function () {{ return {n}; }}, set: function (v) {{ {n} = v; }} }});"
+        )
+    };
+    Ok(names.iter().map(member).collect::<Vec<_>>().join(" ").into())
 }

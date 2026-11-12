@@ -2176,7 +2176,7 @@ mod session {
     }
 
     fn object(name: &str, som: Option<&str>, text: &str) -> ScriptObjectCode {
-        ScriptObjectCode { name: name.into(), som: som.map(str::to_string), text: text.into() }
+        ScriptObjectCode { name: name.into(), som: som.map(str::to_string), text: text.into(), bare: true }
     }
 
     /// `source` run on `total` with `objects` reachable: its result, or its error.
@@ -2220,6 +2220,17 @@ mod session {
         let big = |n: &str| object(n, None, &format!("var v = 1; // {}", "x".repeat(2 << 20)));
         let e = with_objects(&mut s, "O1.v + O2.v + O3.v + O4.v + O5.v", &[big("O1"), big("O2"), big("O3"), big("O4"), big("O5")]).unwrap_err();
         assert!(e.contains("pass 8 MiB"), "{e}");
+        // members are live: a write through the object reaches its functions, and theirs reach the object
+        let live = [object("Calc", None, "var step = 5; function twice(x) { return x * 2 + step; } function bump() { step++; }")];
+        assert_eq!(with_objects(&mut s, "Calc.step = 10; var a = Calc.twice(1); Calc.bump(); a + ',' + Calc.step", &live).as_deref(), Ok("12,11"));
+        // an outer object an inner one hides is still reached through its subform, and a declared object comes before a
+        // member the host only stands in for
+        let mut outer = object("Calc", Some("form1[0]"), "var who = 'outer';");
+        outer.bare = false;
+        let inner = object("Calc", Some("form1[0].page1[0]"), "var who = 'inner';");
+        let layout = object("layout", Some("form1[0]"), "function f() { return 'declared'; }");
+        let o = with_objects(&mut s, "Calc.who + ',' + form1.Calc.who + ',' + form1.layout.f()", &[outer, inner, layout]);
+        assert_eq!(o.as_deref(), Ok("inner,outer,declared"));
         let e = with_objects(&mut s, "Deep.x", &[object("Deep", None, &format!("var x = {}1;", "(".repeat(64_000)))]).unwrap_err();
         assert!(e.contains("nested too deeply"), "{e}");
         assert_eq!(s.dead(), None);

@@ -287,9 +287,13 @@ fn node_get(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValu
                 // only.
                 None if props::NODE_PROPS.contains(&other) => props::prop_object(ctx, idx, &props::node_prop_path(other))?,
                 // Members not modelled yet take any read or write without complaint.
-                None if SINK_MEMBERS.contains(&other) => sink(ctx)?,
-                // a script object the subform declares (`form1.calcs.sumFields()`, XFA 3.3 chapter 3)
-                None => super::objects::child_object(ctx, idx, other)?,
+                // a script object the subform declares (`form1.calcs.sumFields()`, XFA 3.3 chapter 3), before a member the host
+                // only stands in for (an object called `layout`)
+                None => match super::objects::child_object(ctx, idx, other)? {
+                    v if !v.is_undefined() => v,
+                    _ if SINK_MEMBERS.contains(&other) => sink(ctx)?,
+                    _ => JsValue::undefined(),
+                },
             }
         }
     })
