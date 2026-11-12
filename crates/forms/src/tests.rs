@@ -137,6 +137,71 @@ fn a_button_caption_its_fonts_encoding_cant_hold_is_reported() {
     assert_eq!(undrawn_fields(&doc), [("go".to_string(), '\u{2000B}')]);
 }
 
+/// A field-wide script caption must reach every widget, including shared dictionaries.
+#[test]
+fn script_caption_updates_every_widget_and_survives_save() {
+    let mut doc = one_page();
+    let a = add_field(&mut doc, 0, [40.0, 600.0, 200.0, 630.0], &NewField::Button { caption: "Original".into() }, Some("first")).unwrap();
+    let b = add_field(&mut doc, 0, [40.0, 500.0, 200.0, 530.0], &NewField::Button { caption: "Original".into() }, Some("second")).unwrap();
+    let all = fields(&doc);
+    let (first, second) = (field(&all, &a).obj, field(&all, &b).obj);
+    let mut parent = Dict::new();
+    parent.set(b"FT".to_vec(), Object::name("Btn"));
+    parent.set(b"Ff".to_vec(), Object::Int(flags::PUSH_BUTTON as i64));
+    parent.set(b"T".to_vec(), PdfString::text("clear_button"));
+    parent.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(first), Object::Ref(second)]));
+    let mut action = Dict::new();
+    action.set(b"S".to_vec(), Object::name("ResetForm"));
+    parent.set(b"A".to_vec(), Object::Dict(action.clone()));
+    let parent = doc.add(parent);
+    let mut mk = Dict::new();
+    let ca = Object::String(PdfString::text("Original"));
+    let ca = Object::Ref(doc.add(ca));
+    mk.set(b"CA".to_vec(), ca);
+    mk.set(b"TP".to_vec(), Object::Int(0));
+    mk.set(b"R".to_vec(), Object::Int(90));
+    mk.set(b"VendorNote".to_vec(), PdfString::text("kept"));
+    let mk = doc.add(mk);
+    let mut shared_ap = doc.get(first).as_dict().unwrap().get(b"AP").unwrap().as_dict().unwrap().clone();
+    let normal = shared_ap.get(b"N").unwrap().clone();
+    shared_ap.set(b"R".to_vec(), normal.clone());
+    shared_ap.set(b"D".to_vec(), normal);
+    shared_ap.set(b"VendorAP".to_vec(), PdfString::text("kept"));
+    let shared_ap = doc.add(shared_ap);
+    for widget in [first, second] {
+        doc.update_dict(widget, |d| {
+            for key in [b"FT".as_slice(), b"Ff", b"T"] {
+                d.remove(key);
+            }
+            d.set(b"Parent".to_vec(), Object::Ref(parent));
+            d.set(b"MK".to_vec(), Object::Ref(mk));
+            d.set(b"AP".to_vec(), Object::Ref(shared_ap));
+        })
+        .unwrap();
+    }
+    let af = doc.get(doc.root().unwrap()).as_dict().unwrap().reference(b"AcroForm").unwrap();
+    doc.update_dict(af, |d| d.set(b"Fields".to_vec(), Object::Array(vec![Object::Ref(parent)]))).unwrap();
+
+    for caption in ["Original", "", "Continue"] {
+        apply_script_changes(
+            &mut doc,
+            &[FieldChange { name: "clear_button".into(), caption: Some(caption.into()), ..Default::default() }],
+            &mut NoScripts,
+        )
+        .unwrap();
+        let bytes = pdfcraft_cos::write_full(&doc, &SaveOptions::default()).unwrap();
+        doc = Document::open(Arc::new(bytes)).unwrap();
+        let all = fields(&doc);
+        let button = field(&all, "clear_button");
+        assert_eq!(button.widgets.len(), 2);
+        for widget in &button.widgets {
+            assert_eq!(widget.caption.as_deref(), Some(caption));
+            let ap = doc.resolve(doc.get(widget.obj).as_dict().unwrap().get(b"AP").unwrap());
+            assert!(ap.as_dict().unwrap().get(b"N").is_some());
+        }
+    }
+}
+
 /// Changing one widget's caption on a push button with two widgets leaves the other widget, the
 /// shared `/MK` and the parent's action untouched, keeps the other `/MK` and `/AP` entries, and
 /// drops the stale rollover and down appearances, with a direct or indirect caption and either save.
@@ -221,6 +286,24 @@ fn button_caption_preserves_other_widgets_and_shared_dictionaries() {
             assert!(!apd.contains(b"R") && !apd.contains(b"D"), "stale hover/pressed text must not survive");
             assert!(ap(&doc, &f.widgets[1]).contains("(Clear Form) Tj"));
         }
+        let mut doc = original.clone();
+        set_props(&mut doc, "clear_button", &FieldProps { caption_all: Some("Continue".into()), ..Default::default() }).unwrap();
+        let doc = Document::open(Arc::new(pdfcraft_cos::write_full(&doc, &SaveOptions::default()).unwrap())).unwrap();
+        let f = field(&fields(&doc), "clear_button").clone();
+        assert_eq!(f.widgets.iter().map(|w| w.caption.as_deref()).collect::<Vec<_>>(), [Some("Continue"), Some("Continue")]);
+        assert!(f.widgets.iter().all(|w| ap(&doc, w).contains("(Continue) Tj")));
+
+        let mut doc = original.clone();
+        apply_script_changes(
+            &mut doc,
+            &[FieldChange { name: "clear_button".into(), caption: Some("Proceed".into()), ..Default::default() }],
+            &mut NoScripts,
+        )
+        .unwrap();
+        let doc = Document::open(Arc::new(pdfcraft_cos::write_full(&doc, &SaveOptions::default()).unwrap())).unwrap();
+        let f = field(&fields(&doc), "clear_button").clone();
+        assert_eq!(f.widgets.iter().map(|w| w.caption.as_deref()).collect::<Vec<_>>(), [Some("Proceed"), Some("Proceed")]);
+        assert!(f.widgets.iter().all(|w| ap(&doc, w).contains("(Proceed) Tj")));
     }
 }
 
@@ -240,6 +323,26 @@ fn button_caption_rejects_wrong_type_and_index_before_mutation() {
     assert_eq!(field(&fields(&doc), "go").widgets[0].caption.as_deref(), Some(""));
     assert!(undrawn_fields(&doc).is_empty());
     assert!(!ap(&doc, &field(&fields(&doc), "go").widgets[0]).contains(" Tj"));
+}
+
+#[test]
+fn field_wide_button_caption_rejects_a_field_without_widgets() {
+    let objs = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [] >>".into(),
+        "<< /Fields [5 0 R] >>".into(),
+        "<< /FT /Btn /T (empty) /Ff 65536 /Kids [] >>".into(),
+    ];
+    let mut doc = document(&objs);
+    let all_fields = fields(&doc);
+    let button = field(&all_fields, "empty");
+    assert_eq!(button.kind, FieldKind::PushButton);
+    assert!(button.widgets.is_empty());
+    let before = pdfcraft_cos::write_full(&doc, &SaveOptions::default()).unwrap();
+    let result = set_props(&mut doc, "empty", &FieldProps { caption_all: Some("Caption".into()), ..Default::default() });
+    assert!(result.is_err());
+    assert_eq!(pdfcraft_cos::write_full(&doc, &SaveOptions::default()).unwrap(), before);
 }
 
 /// Read the drawn strings together with the appearance's actual font after saving and reopening.
@@ -1368,6 +1471,52 @@ fn reset_restores_defaults() {
     assert!(matches!(reset(&mut doc, Some(&["nope".to_string()])), Err(FormError::NoSuchField(_))));
 }
 
+/// Check saved values and appearances when the host stops callbacks during calculation or formatting.
+#[test]
+fn reset_redraws_remaining_widgets_after_callbacks_stop() {
+    struct StopOn {
+        event: FieldEvent,
+        stopped: bool,
+        calls: Vec<FieldEvent>,
+    }
+    impl Scripts for StopOn {
+        fn stopped(&self) -> bool {
+            self.stopped
+        }
+
+        fn run(&mut self, event: FieldEvent, _: &str, _: &Field, value: &str, _: &[Field], _: &Document) -> ScriptResult {
+            assert!(!self.stopped, "callbacks must stop after refusal");
+            self.calls.push(event);
+            self.stopped = event == self.event;
+            ScriptResult { rc: true, value: value.into(), value_set: false, changes: Vec::new(), message: None }
+        }
+    }
+
+    for stop_event in [FieldEvent::Calculate, FieldEvent::Format] {
+        let mut doc = one_page();
+        for (name, y) in [("a", 700.0), ("b", 650.0), ("total", 600.0)] {
+            add_field(&mut doc, 0, [40.0, y, 200.0, y + 30.0], &NewField::Text { multiline: false }, Some(name)).unwrap();
+        }
+        for name in ["a", "b"] {
+            set_props(&mut doc, name, &FieldProps { default_value: Some(Some("Default".into())), ..Default::default() }).unwrap();
+            set_value(&mut doc, name, &FieldValue::Text("Before".into())).unwrap();
+            set_field_script(&mut doc, name, "format", Some("event.value = event.value;")).unwrap();
+        }
+        set_field_script(&mut doc, "total", "calculate", Some("event.value = 1;")).unwrap();
+        let mut host = StopOn { event: stop_event, stopped: false, calls: Vec::new() };
+        assert_eq!(reset_with_formatting(&mut doc, Some(&["a".into(), "b".into()]), &mut host, true).unwrap(), (2, 0));
+        assert_eq!(host.calls.last(), Some(&stop_event));
+        let saved = reopen(&doc);
+        let all = fields(&saved);
+        for name in ["a", "b"] {
+            let f = field(&all, name);
+            assert_eq!(f.value, ["Default"]);
+            let drawn = ap(&saved, &f.widgets[0]);
+            assert!(drawn.contains("(Default) Tj") && !drawn.contains("(Before) Tj"), "{name}: {drawn}");
+        }
+    }
+}
+
 #[test]
 fn documents_without_forms_say_so() {
     let mut doc = Document::new_empty();
@@ -1513,6 +1662,38 @@ fn properties_rename_and_delete() {
     let p = &page_refs(&doc)[0];
     let annots = doc.resolve(doc.get(*p).as_dict().unwrap().get(b"Annots").unwrap());
     assert_eq!(annots.as_array().unwrap().len(), 13 - 3, "the deleted widgets left the page");
+}
+
+/// A deleted field's ancestor left with no kids stays in `/Fields` as a field of its own, with the
+/// `/V` the deleted field inherited from it: it leaves too. An ancestor a sibling still has stays.
+#[test]
+fn deleting_the_last_kid_removes_the_emptied_ancestors_and_their_values() {
+    let form = |kids: &str, annots: &str| {
+        document(&[
+            "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+            format!("<< /Type /Page /Parent 2 0 R /Annots [{annots}] >>"),
+            "<< /Fields [5 0 R] >>".into(),
+            "<< /FT /Tx /T (outer) /V (SECRET) /DV (SECRET) /Kids [6 0 R] >>".into(),
+            format!("<< /T (inner) /Parent 5 0 R /Kids [{kids}] >>"),
+            "<< /Type /Annot /Subtype /Widget /T (a) /Parent 6 0 R /Rect [50 700 250 720] /P 3 0 R >>".into(),
+            "<< /Type /Annot /Subtype /Widget /T (b) /Parent 6 0 R /Rect [50 650 250 670] /P 3 0 R >>".into(),
+        ])
+    };
+    let top = |doc: &Document| {
+        let af = doc.get(doc.root().unwrap()).as_dict().unwrap().get(b"AcroForm").map(|o| doc.resolve(o)).unwrap().as_dict().unwrap().clone();
+        doc.resolve(af.get(b"Fields").unwrap()).as_array().unwrap().len()
+    };
+    let mut doc = form("7 0 R", "7 0 R");
+    delete_field(&mut doc, "outer.inner.a").unwrap();
+    assert_eq!(top(&doc), 0, "the emptied ancestors left /Fields");
+    let saved = pdfcraft_cos::write_full(&doc, &SaveOptions::default()).unwrap();
+    assert!(!saved.windows(6).any(|w| w == b"SECRET"), "the inherited value is gone from a full save");
+
+    let mut doc = form("7 0 R 8 0 R", "7 0 R 8 0 R");
+    delete_field(&mut doc, "outer.inner.a").unwrap();
+    assert_eq!(top(&doc), 1, "an ancestor with a surviving kid stays");
+    assert!(fields(&doc).iter().any(|f| f.name == "outer.inner.b"));
 }
 
 /// A parent `MASTER` with kids `a` and `b` (each a field merged with its widget) and `e` (a field
@@ -1708,7 +1889,8 @@ fn formats_validation_and_calculations_run_like_acrobat() {
 fn a_script_that_spells_the_markers_in_a_string_runs_as_a_script() {
     struct Ran;
     impl Scripts for Ran {
-        fn run(&mut self, _event: FieldEvent, _script: &str, _target: &Field, _value: &str, _fields: &[Field]) -> ScriptResult {
+        /// Synthetic script hook that returns controlled values/side effects so the calculation-chain behavior is observable.
+        fn run(&mut self, _event: FieldEvent, _script: &str, _target: &Field, _value: &str, _fields: &[Field], _doc: &Document) -> ScriptResult {
             ScriptResult { rc: true, value: "ran".into(), value_set: true, changes: Vec::new(), message: None }
         }
     }
@@ -1726,6 +1908,70 @@ fn a_script_that_spells_the_markers_in_a_string_runs_as_a_script() {
     assert_eq!(field(&fields(&doc), "total").value, ["ran"]);
 }
 
+/// The `/JS` string of field `name`'s `/AA /C` action, as stored.
+fn calculate_action_js(doc: &Document, name: &str) -> Option<PdfString> {
+    let f = field(&fields(doc), name).obj;
+    let aa = doc.get(f).as_dict().and_then(|d| d.get(b"AA").cloned()).map(|a| doc.resolve(&a))?;
+    let c = aa.as_dict().and_then(|aa| aa.get(b"C").cloned()).map(|c| doc.resolve(&c))?;
+    Some(c.as_dict().and_then(|c| c.get(b"JS")).and_then(|s| s.as_string()).expect("/JS is a string").clone())
+}
+
+/// Field Properties ▸ Calculate ▸ Custom calculation script (#6630): the script is written as
+/// given, as a text string, and reads back as the field's custom script, in the calculation
+/// order; a blank one removes the script and the field's place in the order.
+#[test]
+fn a_custom_calculation_script_is_written_as_given_and_a_blank_one_removes_it() {
+    use crate::af::Calculate;
+    let mut doc = one_page();
+    let text = NewField::Text { multiline: false };
+    add_field(&mut doc, 0, [50.0, 700.0, 250.0, 720.0], &text, Some("codice")).unwrap();
+    add_field(&mut doc, 0, [50.0, 660.0, 250.0, 680.0], &text, Some("barcode")).unwrap();
+    let js = "// Code 39: tra asterischi, così\r\nevent.value = \"*\" + this.getField(\"codice\").value + \"*\";";
+    let custom = |js: &str| FieldProps { calculate: Some(Calculate::Custom(js.into())), ..FieldProps::default() };
+    set_props(&mut doc, "barcode", &custom(js)).unwrap();
+    for doc in [doc.clone(), reopen(&doc)] {
+        let all = fields(&doc);
+        let actions = &field(&all, "barcode").actions;
+        assert_eq!((&actions.calculate, actions.scripts.calculate.as_deref()), (&Calculate::None, Some(js)), "read back as a script");
+        assert!(actions.unsupported.contains(&"calculate"));
+        let stored = calculate_action_js(&doc, "barcode").expect("an /AA /C action");
+        assert_eq!(stored.bytes, pdfcraft_cos::PdfString::text(js).bytes, "a text string, so ì isn't UTF-8 bytes another viewer reads as ì's pieces");
+        let order = calculation_order(&doc, &all);
+        assert_eq!(order.fields.iter().map(|f| (f.name.as_str(), f.listed)).collect::<Vec<_>>(), [("barcode", true)]);
+        assert_eq!(order.fields[0].reads, ["codice"]);
+    }
+    for blank in ["", " \n\t"] {
+        let mut doc = doc.clone();
+        set_props(&mut doc, "barcode", &custom(blank)).unwrap();
+        let all = fields(&doc);
+        let actions = &field(&all, "barcode").actions;
+        assert_eq!((&actions.calculate, actions.scripts.calculate.as_deref()), (&Calculate::None, None), "{blank:?}");
+        assert!(calculate_action_js(&doc, "barcode").is_none(), "{blank:?} writes no /C");
+        assert!(calculation_order(&doc, &all).fields.is_empty(), "{blank:?} leaves the calculation order");
+    }
+}
+
+/// A sum and a notation are still written as the AF calls they are, byte for byte, beside the
+/// custom script that is written as a text string (#6630).
+#[test]
+fn a_sum_and_a_notation_are_written_as_their_af_calls() {
+    use crate::af::{CalcOp, Calculate, calculate_js};
+    let mut doc = one_page();
+    let text = NewField::Text { multiline: false };
+    for (i, name) in ["a", "b", "total"].into_iter().enumerate() {
+        let y = 700.0 - 40.0 * i as f64;
+        add_field(&mut doc, 0, [50.0, y, 250.0, y + 20.0], &text, Some(name)).unwrap();
+    }
+    let sum = Calculate::Simple { op: CalcOp::Sum, fields: vec!["a".into(), "b".into()] };
+    for c in [sum, Calculate::Notation("a * b".into())] {
+        set_props(&mut doc, "total", &FieldProps { calculate: Some(c.clone()), ..FieldProps::default() }).unwrap();
+        let js = calculate_js(&c).unwrap();
+        assert_eq!(calculate_action_js(&doc, "total").map(|s| s.bytes), Some(js.into_bytes()), "{c:?}");
+        let all = fields(&reopen(&doc));
+        assert_eq!((&field(&all, "total").actions.calculate, &field(&all, "total").actions.scripts.calculate), (&c, &None));
+    }
+}
+
 /// An unsupported first AF call keeps the entire script and reaches the caller's interpreter.
 #[test]
 fn unsupported_first_validation_call_preserves_custom_script_dispatch() {
@@ -1734,7 +1980,7 @@ fn unsupported_first_validation_call_preserves_custom_script_dispatch() {
         calls: usize,
     }
     impl Scripts for RejectingInterpreter {
-        fn run(&mut self, event: FieldEvent, script: &str, target: &Field, value: &str, _fields: &[Field]) -> ScriptResult {
+        fn run(&mut self, event: FieldEvent, script: &str, target: &Field, value: &str, _fields: &[Field], _doc: &Document) -> ScriptResult {
             assert_eq!(event, FieldEvent::Validate);
             assert_eq!(script, JS);
             assert_eq!(target.name, "amount");
@@ -3539,10 +3785,12 @@ fn check_box_redraw_keeps_down_states_it_still_draws() {
 }
 
 #[test]
+/// A calculation side effect on a checkbox is visible to following calculated fields.
 fn recalc_chain_where_script_changes_checkbox() {
     struct TestScripts;
     impl Scripts for TestScripts {
-        fn run(&mut self, _event: FieldEvent, script: &str, _target: &Field, _value: &str, fields: &[Field]) -> ScriptResult {
+        /// Synthetic script hook that returns controlled values/side effects so the calculation-chain behavior is observable.
+        fn run(&mut self, _event: FieldEvent, script: &str, _target: &Field, _value: &str, fields: &[Field], _doc: &Document) -> ScriptResult {
             if script == "set_box" {
                 ScriptResult {
                     rc: true,
@@ -3551,10 +3799,14 @@ fn recalc_chain_where_script_changes_checkbox() {
                     changes: vec![FieldChange {
                         name: "agree".into(),
                         value: Some(vec!["Yes".into()]),
+                        formatted: false,
                         read_only: None,
                         required: None,
                         display: None,
-                        rect: None,
+                        caption: None,
+                        text_color: None,
+                        fill_color: None,
+                        ..Default::default()
                     }],
                     message: None,
                 }
@@ -3589,7 +3841,7 @@ fn recalc_chain_where_script_changes_checkbox() {
 fn a_calculated_combo_stores_the_export_value_of_the_option_it_names() {
     struct Pick;
     impl Scripts for Pick {
-        fn run(&mut self, _event: FieldEvent, script: &str, _target: &Field, _value: &str, _fields: &[Field]) -> ScriptResult {
+        fn run(&mut self, _event: FieldEvent, script: &str, _target: &Field, _value: &str, _fields: &[Field], _doc: &Document) -> ScriptResult {
             ScriptResult { rc: true, value: script.into(), value_set: true, changes: Vec::new(), message: None }
         }
     }
@@ -3614,7 +3866,7 @@ fn a_calculated_combo_stores_the_export_value_of_the_option_it_names() {
 fn an_export_value_wins_over_an_earlier_options_display_text() {
     struct Pick;
     impl Scripts for Pick {
-        fn run(&mut self, _event: FieldEvent, script: &str, _target: &Field, _value: &str, _fields: &[Field]) -> ScriptResult {
+        fn run(&mut self, _event: FieldEvent, script: &str, _target: &Field, _value: &str, _fields: &[Field], _doc: &Document) -> ScriptResult {
             ScriptResult { rc: true, value: script.into(), value_set: true, changes: Vec::new(), message: None }
         }
     }
@@ -3636,6 +3888,65 @@ fn an_export_value_wins_over_an_earlier_options_display_text() {
         assert_eq!(dict.get(b"V").cloned(), Some(Object::String(PdfString::text("fr"))));
         assert_eq!(dict.get(b"I").cloned(), Some(Object::Array(vec![Object::Int(1)])));
     }
+}
+
+#[test]
+fn validation_script_colour_is_used_when_the_field_redraws() {
+    struct TestScripts;
+    impl Scripts for TestScripts {
+        fn run(&mut self, _event: FieldEvent, _script: &str, _target: &Field, value: &str, _fields: &[Field], _doc: &Document) -> ScriptResult {
+            ScriptResult {
+                rc: true,
+                value: value.into(),
+                value_set: false,
+                changes: vec![FieldChange {
+                    name: "name".into(),
+                    text_color: Some(vec!["RGB".into(), "1".into(), "0".into(), "0".into()]),
+                    ..Default::default()
+                }],
+                message: None,
+            }
+        }
+    }
+
+    let mut doc = fixture();
+    set_field_script(&mut doc, "name", "validate", Some("set_red")).unwrap();
+    set_value_with(&mut doc, "name", &FieldValue::Text("Grace".into()), &mut TestScripts).unwrap();
+
+    let all = fields(&doc);
+    let f = field(&all, "name");
+    assert!(f.da.contains("1 0 0 rg"));
+    assert!(ap(&doc, &f.widgets[0]).contains("1 0 0 rg"), "redraw uses the Validate script's updated appearance");
+}
+
+#[test]
+fn calculation_script_colour_is_used_when_the_field_redraws() {
+    struct TestScripts;
+    impl Scripts for TestScripts {
+        fn run(&mut self, _event: FieldEvent, _script: &str, _target: &Field, _value: &str, _fields: &[Field], _doc: &Document) -> ScriptResult {
+            ScriptResult {
+                rc: true,
+                value: "Grace".into(),
+                value_set: true,
+                changes: vec![FieldChange {
+                    name: "name".into(),
+                    text_color: Some(vec!["RGB".into(), "1".into(), "0".into(), "0".into()]),
+                    ..Default::default()
+                }],
+                message: None,
+            }
+        }
+    }
+
+    let mut doc = fixture();
+    set_field_script(&mut doc, "name", "calculate", Some("set_red")).unwrap();
+    recalculate_with(&mut doc, &mut TestScripts).unwrap();
+
+    let all = fields(&doc);
+    let f = field(&all, "name");
+    assert_eq!(f.value, ["Grace"]);
+    assert!(f.da.contains("1 0 0 rg"));
+    assert!(ap(&doc, &f.widgets[0]).contains("1 0 0 rg"), "redraw uses the Calculate script's updated appearance");
 }
 
 #[test]
@@ -5290,6 +5601,75 @@ fn a_page_widget_inheriting_password_flag_beyond_depth_32_is_recognized() {
     assert!(!has_password_values(&doc));
 }
 
+/// A field reachable both near the top of the tree and at the end of a long branch: the field
+/// walk reaches it near the top and reads the password field below it, so the quick check must
+/// not stop at the long branch's depth limit and conclude there is none. The password field's
+/// widget is on the page but names no `/Parent`, so the page widgets alone don't find it either.
+#[test]
+fn a_password_field_past_the_depth_limit_on_one_branch_is_still_found() {
+    let chain = 64;
+    let x = 6 + chain; // the shared field
+    let y = x + 1; // the password field
+    let w = y + 1; // its widget
+    let mut objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        format!("<< /Type /Page /Parent 2 0 R /Annots [{w} 0 R] >>"),
+        "<< /Fields [5 0 R 6 0 R] /DA (/Helv 0 Tf 0 g) >>".into(),
+        format!("<< /T (short) /Kids [{x} 0 R] >>"),
+    ];
+    for d in 0..chain {
+        let next = if d + 1 == chain { x } else { 7 + d };
+        objs.push(format!("<< /T (n{d}) /Kids [{next} 0 R] >>"));
+    }
+    objs.push(format!("<< /T (shared) /Kids [{y} 0 R] >>"));
+    objs.push(format!("<< /FT /Tx /T (pin) /Ff 8192 /V (deepsecret) /Kids [{w} 0 R] >>"));
+    objs.push("<< /Type /Annot /Subtype /Widget /Rect [50 600 150 620] /P 3 0 R >>".into());
+    let mut doc = document(&objs);
+    assert!(fields(&doc).iter().any(|f| f.has(flags::PASSWORD)), "the field walk reads the password field");
+    assert!(has_password_flag(&doc));
+    assert!(has_password_values(&doc));
+    assert_eq!(clear_password_values(&mut doc).unwrap(), 1);
+    assert!(!has_password_values(&doc));
+}
+
+/// A password field below an unlisted field whose other widget is on the page: the field walk
+/// adopts the whole unlisted field from that widget, so the quick check looks below it too.
+#[test]
+fn a_password_field_below_an_adopted_page_field_is_found() {
+    let mut doc = document(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [6 0 R] >>".into(),
+        "<< /Fields [] /DA (/Helv 0 Tf 0 g) >>".into(),
+        "<< /T (grp) /Kids [6 0 R 7 0 R] >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (name) /Parent 5 0 R /Rect [50 700 150 720] /P 3 0 R >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (pin) /Ff 8192 /V (secret8) /Parent 5 0 R /Rect [0 0 0 0] >>".into(),
+    ]);
+    assert!(fields(&doc).iter().any(|f| f.has(flags::PASSWORD)), "the field walk adopts the password field");
+    assert!(has_password_flag(&doc));
+    assert!(has_password_values(&doc));
+    assert_eq!(clear_password_values(&mut doc).unwrap(), 1);
+    assert!(!has_password_values(&doc));
+}
+
+/// A nameless widget listed in `/Fields` and on no page, whose `/Parent` is an unlisted password
+/// field: the field walk adopts the parent, so the quick check follows the entry's `/Parent` too.
+#[test]
+fn a_password_parent_of_a_nameless_fields_entry_is_found() {
+    let mut doc = document(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R >>".into(),
+        "<< /Fields [6 0 R] /DA (/Helv 0 Tf 0 g) >>".into(),
+        "<< /T (pin) /FT /Tx /Ff 8192 /V (secret8) /Kids [6 0 R] >>".into(),
+        "<< /Type /Annot /Subtype /Widget /Parent 5 0 R /Rect [0 0 0 0] >>".into(),
+    ]);
+    assert!(fields(&doc).iter().any(|f| f.has(flags::PASSWORD) && f.value.iter().any(|v| v == "secret8")), "the field walk reads the parent");
+    assert!(has_password_flag(&doc));
+    assert_eq!(clear_password_values(&mut doc).unwrap(), 1);
+}
+
 /// #4018: a value that doesn't fit its box at the field's font size is reported (it is drawn cut
 /// at the box). An auto-sized field shrinks to fit, and a short or empty value fits.
 #[test]
@@ -5719,6 +6099,34 @@ fn set_values_reads_the_form_once_not_per_value() {
     assert!(set_values(&mut doc, &again).unwrap().iter().all(Result::is_ok));
     let reads = form_reads() - before;
     assert_eq!(reads, 3, "one to fill, one when f0 comes again, one to recalculate");
+}
+
+/// Redrawing every field of a large form reads the form once, not once per field: a laid out XFA
+/// form with a thousand rows holds thousands of fields, and reading them all again for each one
+/// took 15 s a relayout. The fields `keep` turns down keep the appearance they had.
+#[test]
+fn redraw_fields_reads_the_form_once_however_many_fields_it_holds() {
+    for n in [250u32, 1000] {
+        let mut objs: Vec<String> = vec![
+            "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        ];
+        let kids: Vec<String> = (0..n).map(|i| format!("{} 0 R", i + 5)).collect();
+        objs.push(format!("<< /Type /Page /Parent 2 0 R /Annots [{}] >>", kids.join(" ")));
+        objs.push(format!("<< /Fields [{}] /DA (/Helv 10 Tf 0 g) >>", kids.join(" ")));
+        for i in 0..n {
+            objs.push(format!("<< /Type /Annot /Subtype /Widget /FT /Tx /T (f{i}) /V (v{i}) /Rect [50 0 250 10] /P 3 0 R >>"));
+        }
+        let mut doc = document(&objs);
+        let before = form_reads();
+        redraw_fields(&mut doc, |_, f| f.name != "f0").unwrap();
+        assert_eq!(form_reads() - before, 1, "{n} fields");
+        let all = fields(&doc);
+        let has_ap = |name: &str| field(&all, name).widgets.iter().all(|w| doc.get(w.obj).as_dict().is_some_and(|d| d.contains(b"AP")));
+        assert!(!has_ap("f0"), "turned down: left as it was");
+        assert!((1..n).all(|i| has_ap(&format!("f{i}"))), "{n} fields");
+        assert!(ap(&doc, &field(&all, &format!("f{}", n - 1)).widgets[0]).contains(&format!("(v{})", n - 1)));
+    }
 }
 
 /// A radio group `size` with the buttons Small (on), Medium and Large, a per-widget `/Opt`, and
@@ -6463,6 +6871,93 @@ fn locked_button_export_edits_leave_the_document_unchanged() {
     }
 }
 
+/// A widget reached from `/Fields` as an unnamed kid of a plain field, whose own `/Parent` is an
+/// unlisted password field: the quick check must still read that `/Parent` chain.
+#[test]
+fn a_page_widget_seen_under_fields_still_has_its_parent_chain_checked() {
+    let doc = document(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [6 0 R] >>".into(),
+        "<< /Fields [5 0 R] /DA (/Helv 0 Tf 0 g) >>".into(),
+        "<< /T (grp) /Kids [6 0 R] >>".into(),
+        "<< /Type /Annot /Subtype /Widget /Parent 7 0 R /Rect [50 700 150 720] /P 3 0 R >>".into(),
+        "<< /FT /Tx /T (pin) /Ff 8192 /V (secret9) /Kids [6 0 R] >>".into(),
+    ]);
+    assert!(has_password_flag(&doc));
+}
+
+/// A radio button that is read-only on its own (its own `/Ff`) can't be picked, and a selected one
+/// can't be switched away from, though the group as a whole is writable.
+#[test]
+fn a_read_only_radio_button_is_neither_picked_nor_left() {
+    let lock = |doc: &mut Document, num: u32| doc.update_dict(pdfcraft_cos::ObjRef::new(num, 0), |d| d.set(b"Ff".to_vec(), Object::Int(1))).unwrap();
+    let mut doc = radio_group_form();
+    lock(&mut doc, 7); // Medium
+    assert!(matches!(set_value(&mut doc, "size", &FieldValue::Radio(Some("M".into()))), Err(FormError::ReadOnly(_))));
+    set_value(&mut doc, "size", &FieldValue::Radio(Some("L".into()))).expect("an unlocked button is picked");
+    // Small (selected) locked: the group stays on it.
+    let mut doc = radio_group_form();
+    lock(&mut doc, 6);
+    assert!(matches!(set_value(&mut doc, "size", &FieldValue::Radio(Some("L".into()))), Err(FormError::ReadOnly(_))));
+    assert_eq!(field(&fields(&doc), "size").value, ["S"]);
+}
+
+/// The group's `/V` names its selection even when the button's `/AS` says nothing: a read-only
+/// button that `/V` selects is not switched away from either.
+#[test]
+fn a_read_only_radio_button_selected_by_the_group_value_is_not_left() {
+    let mut doc = radio_group_form();
+    doc.update_dict(pdfcraft_cos::ObjRef::new(6, 0), |d| {
+        d.set(b"Ff".to_vec(), Object::Int(1));
+        d.set(b"AS".to_vec(), Object::name("Off"));
+    })
+    .unwrap();
+    assert!(matches!(set_value(&mut doc, "size", &FieldValue::Radio(Some("L".into()))), Err(FormError::ReadOnly(_))));
+    assert_eq!(field(&fields(&doc), "size").value, ["S"]);
+}
+
+/// Clearing the form skips a group held by a read-only button and still clears the rest.
+#[test]
+fn clearing_the_form_goes_on_past_a_group_held_by_a_read_only_button() {
+    let mut doc = radio_group_form();
+    doc.update_dict(pdfcraft_cos::ObjRef::new(6, 0), |d| d.set(b"Ff".to_vec(), Object::Int(1))).unwrap();
+    doc.update_dict(pdfcraft_cos::ObjRef::new(9, 0), |d| d.set(b"DV".to_vec(), pdfcraft_cos::PdfString::text("Bob"))).unwrap();
+    assert_eq!(reset(&mut doc, None).unwrap(), 1);
+    let all = fields(&doc);
+    assert_eq!(field(&all, "size").value, ["S"]);
+    assert_eq!(field(&all, "name").value, ["Bob"]);
+}
+
+#[test]
+/// Cosmetic field updates skip calculations, while a value write still triggers the chain.
+fn script_cosmetic_mutations_do_not_run_the_calculation_chain() {
+    struct Counter(usize);
+    impl Scripts for Counter {
+        /// Synthetic script hook that returns controlled values/side effects so the calculation-chain behavior is observable.
+        fn run(&mut self, event: FieldEvent, _: &str, _: &Field, value: &str, _: &[Field], _: &Document) -> ScriptResult {
+            if event == FieldEvent::Calculate {
+                self.0 += 1;
+            }
+            ScriptResult { rc: true, value: value.into(), value_set: false, changes: Vec::new(), message: None }
+        }
+    }
+    let mut doc = one_page();
+    add_field(&mut doc, 0, [40.0, 700.0, 200.0, 730.0], &NewField::Text { multiline: false }, Some("input")).unwrap();
+    add_field(&mut doc, 0, [40.0, 650.0, 200.0, 680.0], &NewField::Text { multiline: false }, Some("total")).unwrap();
+    set_field_script(&mut doc, "total", "calculate", Some("event.value = 1;")).unwrap();
+    let mut count = Counter(0);
+    apply_script_changes(
+        &mut doc,
+        &[FieldChange { name: "input".into(), fill_color: Some(vec!["RGB".into(), "1".into(), "0".into(), "0".into()]), ..Default::default() }],
+        &mut count,
+    )
+    .unwrap();
+    assert_eq!(count.0, 0, "a visual change must not evaluate the whole form");
+    apply_script_changes(&mut doc, &[FieldChange { name: "input".into(), value: Some(vec!["2".into()]), ..Default::default() }], &mut count).unwrap();
+    assert!(count.0 > 0, "value changes still calculate dependent fields");
+}
+
 /// Three radio groups whose buttons have the on states given (`S`, `M` … or a repeated `Yes`):
 /// `free` (Radio), `plain` (Radio | NoToggleToOff) and `unison` (… | RadiosInUnison).
 fn radio_groups() -> Document {
@@ -6567,6 +7062,26 @@ fn radio_buttons_without_as_sharing_the_value_show_one_on() {
     // One that has `/AS` naming the state is the one on.
     let doc = radio_without_as(49152, "/AS /Yes");
     assert_eq!(on_widgets(&doc, "r").0, [false, true, false]);
+}
+
+/// Two buttons share the on state `Yes`; the first is on by its `/AS` and the second is read-only
+/// and off. `/V` is `Yes` for both, but only the first is selected: picking another option switches
+/// the first off, which is allowed, and the read-only one never changes.
+#[test]
+fn a_read_only_button_sharing_the_on_state_of_the_selected_one_does_not_block() {
+    let mut doc = radio_without_as(49152, "/Ff 1 /AS /Off");
+    doc.update_dict(pdfcraft_cos::ObjRef::new(6, 0), |d| d.set(b"AS".to_vec(), Object::name("Yes"))).unwrap();
+    set_value(&mut doc, "r", &FieldValue::Radio(Some("No".into()))).expect("the writable selected button may be switched off");
+    assert_eq!(on_widgets(&doc, "r").0, [false, false, true]);
+}
+
+/// Selecting another button through `FieldValue::Widget` can't switch a read-only selected one off.
+#[test]
+fn a_read_only_selected_radio_button_is_not_left_by_picking_a_widget() {
+    let mut doc = radio_group_form();
+    doc.update_dict(pdfcraft_cos::ObjRef::new(6, 0), |d| d.set(b"Ff".to_vec(), Object::Int(1))).unwrap();
+    assert!(matches!(set_value(&mut doc, "size", &FieldValue::Widget(2)), Err(FormError::ReadOnly(_))));
+    assert_eq!(field(&fields(&doc), "size").value, ["S"]);
 }
 
 /// Table 227, ReadOnly: a processor "shall not allow a user to change the value". A button whose own
@@ -6962,4 +7477,22 @@ fn a_four_entry_mk_colour_with_a_null_is_cmyk_with_zero() {
     assert!(cmyk.contains("0 0 1 0 k") && cmyk.contains("1 0 0 0 K"), "CMYK background and border: {cmyk}");
     let rgb = off(&mut doc, "rgb");
     assert!(rgb.contains("0 0 1 rg") && rgb.contains("1 0 0 RG"), "three numbers stay RGB: {rgb}");
+}
+
+/// A Simple calculation counts the first value of a multiple-selection list, as `main` always
+/// has, so the native total and `AFSimple_Calculate` in a script agree.
+#[test]
+fn simple_calculation_counts_the_first_value_of_a_multiple_selection_list() {
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [5 0 R 6 0 R] >>".into(),
+        "<< /Fields [5 0 R 6 0 R] /CO [6 0 R] /DA (/Helv 0 Tf 0 g) >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Ch /Ff 2097152 /T (picks) /Opt [(4) (6)] /V [(4) (6)] /Rect [50 700 250 760] /P 3 0 R >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (total) /Rect [50 640 250 660] /P 3 0 R /AA << /C << /S /JavaScript /JS (AFSimple_Calculate\\(\"SUM\", new Array\\(\"picks\"\\)\\);) >> >> >>".into(),
+    ];
+    let mut doc = document(&objs);
+    assert_eq!(field(&fields(&doc), "picks").value, ["4", "6"]);
+    recalculate(&mut doc).unwrap();
+    assert_eq!(field(&fields(&doc), "total").value, ["4"]);
 }

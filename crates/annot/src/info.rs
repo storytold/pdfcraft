@@ -123,7 +123,7 @@ pub fn is_comment_subtype(subtype: &str) -> bool {
 
 /// Where a reference to a reference (`5 0 obj 6 0 R endobj`) ends, as `pdfcraft_render::inspect`
 /// follows it, within a few steps (a cycle stops there).
-fn final_ref(doc: &Document, mut r: ObjRef) -> ObjRef {
+pub(crate) fn final_ref(doc: &Document, mut r: ObjRef) -> ObjRef {
     for _ in 0..8 {
         match &*doc.get(r) {
             Object::Ref(next) => r = *next,
@@ -340,6 +340,9 @@ pub fn props(doc: &Document, page: usize, index: usize) -> Option<Props> {
     let direct = crate::draw::with_direct_values(doc, raw);
     let d = direct.as_ref();
     let subtype = String::from_utf8_lossy(d.name(b"Subtype")?).into_owned();
+    if !is_comment_subtype(&subtype) {
+        return None;
+    }
     // A text box reports the colour and size it is drawn in (`/DA`, or `/DS` where it sets one).
     let style = (subtype == "FreeText").then(|| text_style::text_style(d, None));
     let color = match &style {
