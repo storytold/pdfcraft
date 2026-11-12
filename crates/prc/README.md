@@ -29,7 +29,7 @@ BitReader: bit, bits, character, unsigned_integer, integer, integer_vbn, double_
 - `Tessellation::Mesh` is a `TriangleMesh`: positions, triangles, one triangle range per face, the stored normals and
   texture coordinates with each triangle's corner indices into them, and per-triangle line-attribute styles.
   `Wire` is polylines; `Markup` is read past.
-- `Tessellation::Compressed` is read to its end so later entities decode; its triangles are not rebuilt yet.
+- `Tessellation::Compressed` is read to its end so later entities decode. Recalculated-normal meshes in the accepted 3T form are rebuilt when their arrays fit; stored-normal meshes and unsupported traversals stay `Compressed`.
 - A face may carry at most 8 texture-coordinate sets; more is `Malformed`. Optimised vertex colours are `Unsupported`.
 - The product tree: each drawable tessellation placed by its occurrence path's locations and the item's coordinate
   systems (a 4x4 `Matrix`), coloured by the style inheritance rules, with occurrences' entity references applied
@@ -38,6 +38,6 @@ BitReader: bit, bits, character, unsigned_integer, integer, integer_vbn, double_
   came from, its visibility and the range of placements it drew.
 - Occurrence and prototype cycles are `Malformed`; the walk is capped at depth 64, 2^20 visits and `MAX_PLACEMENTS`.
 - A tree's markups (PMI), views, scene lights and clipping planes are read past, not modelled; so are textures.
-- Not yet in the crate: rebuilding compressed meshes, textures.
+- Not yet in the crate: stored-normal or one-status compressed mesh reconstruction, textures.
 - The `Double` code table's rows come from [prc-rs](https://github.com/ralovich/prc-rs) (MIT); its notice is in `src/acof/table.rs`.
   A few reading choices also follow prc-rs; each is marked `// prc-rs:` in the source.

@@ -139,3 +139,7 @@ Si le correctif touche le rendu ou son intégration, les tests et Clippy de `pdf
 - Les tests et les fixtures synthétiques sont originaux.
 - La branche de travail est `test/prc-compressed-validation`.
 - Une éventuelle PR de correctif référencera le ticket n° 1297 sans prétendre le résoudre entièrement.
+
+## 11. Actualisation pendant la planification — 2026-11-12
+
+La lecture de [N570](https://docs.techsoft3d.com/hoops/exchange/_downloads/a7028c5c324de43fc7d5083bfa100c2a/SC2N570-PRC-WD.pdf), §7.8.9.2, confirme qu’un drapeau de voisinage décrit chaque triangle. Les mentions de « trois statuts par triangle » dans cette spécification désignent la variante de tableau `3T` acceptée par le lecteur actuel, dont les `T` premiers drapeaux sont lus. Elles ne constituent pas une affirmation que cette disposition est normative. Le périmètre validé reste inchangé.

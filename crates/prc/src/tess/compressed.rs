@@ -350,4 +350,6 @@ impl Walk {
 }
 
 #[cfg(test)]
+mod independent;
+#[cfg(test)]
 mod tests;
