@@ -3,7 +3,7 @@
 use std::collections::{HashMap, HashSet};
 
 use pdfcraft_content::Pieces;
-use pdfcraft_cos::{CosError, Dict, Document, ObjRef, Object};
+use pdfcraft_cos::{CosError, DecodeBudget, Dict, Document, ObjRef, Object};
 
 use crate::{RedactError, page_streams};
 
@@ -130,6 +130,25 @@ struct UsedInGlyphs {
     properties: HashSet<Vec<u8>>,
 }
 
+impl UsedInGlyphs {
+    fn merge(&mut self, other: &UsedInGlyphs) {
+        self.xobjects.extend(other.xobjects.iter().cloned());
+        self.colorspaces.extend(other.colorspaces.iter().cloned());
+        self.patterns.extend(other.patterns.iter().cloned());
+        self.shadings.extend(other.shadings.iter().cloned());
+        self.extgstates.extend(other.extgstates.iter().cloned());
+        self.fonts.extend(other.fonts.iter().cloned());
+        self.properties.extend(other.properties.iter().cloned());
+    }
+}
+
+/// What one Type 3 cleanup reads of glyph programs: the resource names each indirect program
+/// uses, read once however many fonts share it, and one decoding allowance for all of them.
+struct GlyphReads {
+    used: HashMap<ObjRef, UsedInGlyphs>,
+    budget: DecodeBudget,
+}
+
 fn collect_used_resources_in_stream(data: &[u8], used: &mut UsedInGlyphs) -> Result<(), CosError> {
     // One operator at a time, so a glyph program of millions of them is never held whole. A byte
     // that can't be read anywhere in it still refuses, once the loop has read it all.
@@ -151,7 +170,7 @@ fn record_used(op: &pdfcraft_content::Op, used: &mut UsedInGlyphs) {
                 }
             }
             b"cs" | b"CS" => {
-                if let Some(n) = op.name(0) {
+                if let Some(n) = op.last_name() {
                     used.colorspaces.insert(n.to_vec());
                 }
             }
@@ -166,17 +185,17 @@ fn record_used(op: &pdfcraft_content::Op, used: &mut UsedInGlyphs) {
                 }
             }
             b"gs" => {
-                if let Some(n) = op.name(0) {
+                if let Some(n) = op.last_name() {
                     used.extgstates.insert(n.to_vec());
                 }
             }
             b"Tf" => {
-                if let Some(n) = op.name(0) {
+                if let Some(n) = op.name_back(1) {
                     used.fonts.insert(n.to_vec());
                 }
             }
             b"BDC" | b"DP" => {
-                if let Some(n) = op.name(1) {
+                if let Some(n) = op.last_name() {
                     used.properties.insert(n.to_vec());
                 }
             }
@@ -315,7 +334,7 @@ fn scan_content_stream(
             }
             b"gs" => {
                 apply_text_op(ctx, res, &op, &mut current_font);
-                if let Some(name) = op.name(0) {
+                if let Some(name) = op.last_name() {
                     scan_soft_mask(ctx, res, holder_ref, name, depth)?;
                 }
             }
@@ -338,12 +357,12 @@ fn scan_content_stream(
 fn apply_text_op(ctx: &mut ScanContext<'_>, res: &Dict, op: &pdfcraft_content::Op, current_font: &mut Option<FontKey>) {
     match op.op.as_slice() {
         b"Tf" => {
-            if let Some(name) = op.name(0) {
+            if let Some(name) = op.name_back(1) {
                 *current_font = resolve_font_in_res(ctx.doc, res, name).map(|(k, _)| k);
             }
         }
         b"gs" => {
-            if let Some(name) = op.name(0)
+            if let Some(name) = op.last_name()
                 && let Some((k, _)) = resolve_extgstate_font(ctx.doc, res, name)
             {
                 *current_font = Some(k);
@@ -477,7 +496,7 @@ fn add_soft_mask_ops(doc: &Document, res: &Dict, ops: &mut Vec<pdfcraft_content:
     while let Some(op) = ops.get(cursor) {
         let selected = match op.op.as_slice() {
             b"gs" => op
-                .name(0)
+                .last_name()
                 .and_then(|n| states.get(n))
                 .and_then(|s| doc.resolve(s).as_dict().and_then(|s| s.get(b"SMask").cloned()))
                 .and_then(|m| doc.resolve(&m).as_dict().and_then(|m| m.get(b"G").and_then(Object::as_ref))),
@@ -539,10 +558,19 @@ fn gs_font_object(doc: &Document, state_obj: &Object) -> Option<Object> {
     font_entry.into_iter().next()
 }
 
+/// Whether font `f` (a reference, or a font dictionary) is a Type 3 font, the only kind the font
+/// cleanup prunes: its `/Subtype` is read directly, as the cleanup's other readers read it, so one
+/// given by reference isn't recognised by any of them. Which allowance the cleanup's read is charged
+/// to, and what it prunes, both go by this.
+fn is_type3(doc: &Document, f: &Object) -> bool {
+    doc.resolve(f).as_dict().is_some_and(|d| d.name(b"Subtype") == Some(b"Type3"))
+}
+
 /// Prune Type 3 fonts from a rewritten page or form's `/Resources` dictionary if the rewritten
 /// content no longer draws any text using that font name. `page` is the page's dictionary when
 /// `res` are a page's resources. What it reads is charged to `budget`, what is left of the page's
-/// allowance.
+/// allowance, when the resources list a Type 3 font, and otherwise to an allowance of a page of its
+/// own (below).
 pub(crate) fn prune_type3_from_resources(
     doc: &Document,
     budget: &mut pdfcraft_cos::DecodeBudget,
@@ -556,12 +584,20 @@ pub(crate) fn prune_type3_from_resources(
     }
 
     // The operators of forms that draw through these resources count too: dropping a font a child
-    // form still shows would leave its text without one.
-    let mut ops = crate::interp::resource_ops(doc, budget, res, content)?;
+    // form still shows would leave its text without one. Without a Type 3 font nothing is pruned,
+    // but the read is still made: it refuses bytes the parser can't read in what the content draws,
+    // and on a page with nothing replaced and no properties listed no other check does, unless the
+    // document still lists a Type 3 font (`unlink_type3` then reads every page). The walk reads
+    // past them, so text they hide would stay under the mark. The read is then charged to an
+    // allowance of a page of its own, not to what the walk left of the page's, since it decides
+    // nothing about the fonts.
+    let type3 = fonts.iter().any(|(_, f)| is_type3(doc, f));
+    let mut own = pdfcraft_cos::DecodeBudget::page();
+    let mut ops = crate::interp::resource_ops(doc, if type3 { &mut *budget } else { &mut own }, res, content)?;
     // So do those of a page's annotation appearances, and of soft mask groups, without resources of
     // their own. They are read only when there is a Type 3 font to keep, so other files are not
     // refused over them.
-    if fonts.iter().any(|(_, f)| doc.resolve(f).as_dict().is_some_and(|d| d.name(b"Subtype") == Some(b"Type3"))) {
+    if type3 {
         if let Some(page) = page {
             // One total for all of them, as for the content: each appearance under the cap could
             // still add up to far more than it. Their decoded bytes, and their forms', are charged to
@@ -584,11 +620,11 @@ pub(crate) fn prune_type3_from_resources(
     let mut drawn_font_names = HashSet::new();
     for op in &ops {
         if op.is("Tf") {
-            if let Some(name) = op.name(0) {
+            if let Some(name) = op.name_back(1) {
                 drawn_font_names.insert(name.to_vec());
             }
         } else if op.is("gs")
-            && let Some(name) = op.name(0)
+            && let Some(name) = op.last_name()
         {
             let extg = res_dict(doc, res, b"ExtGState");
             if let Some(font_obj) = extg.get(name).and_then(|state_obj| gs_font_object(doc, state_obj)) {
@@ -605,15 +641,12 @@ pub(crate) fn prune_type3_from_resources(
     let mut changed = false;
     let font_names: Vec<Vec<u8>> = fonts.iter().map(|(n, _)| n.to_vec()).collect();
     for name in font_names {
-        if let Some(font_obj) = fonts.get(&name) {
-            let resolved = doc.resolve(font_obj);
-            if let Some(d) = resolved.as_dict()
-                && d.name(b"Subtype") == Some(b"Type3")
-                && !drawn_font_names.contains(&name)
-            {
-                fonts.remove(&name);
-                changed = true;
-            }
+        if let Some(font_obj) = fonts.get(&name)
+            && is_type3(doc, font_obj)
+            && !drawn_font_names.contains(&name)
+        {
+            fonts.remove(&name);
+            changed = true;
         }
     }
 
@@ -717,9 +750,10 @@ pub(crate) fn unlink_type3(doc: &mut Document) -> Result<(), RedactError> {
     }
 
     // For each Type 3 font: unlink unused glyphs from CharProcs and prune exclusive resources.
+    let mut reads = GlyphReads { used: HashMap::new(), budget: DecodeBudget::page() };
     for (font_key, font_dict) in &type3_fonts {
         let surviving = used_glyphs.get(font_key).cloned().unwrap_or_default();
-        clean_type3_font(doc, &holders, &form_holders, font_key, font_dict, &surviving)?;
+        clean_type3_font(doc, &holders, &form_holders, font_key, font_dict, &surviving, &mut reads)?;
     }
 
     Ok(())
@@ -794,6 +828,7 @@ fn clean_type3_font(
     font_key: &FontKey,
     font_dict: &Dict,
     surviving: &HashSet<Vec<u8>>,
+    reads: &mut GlyphReads,
 ) -> Result<(), RedactError> {
     let Some(char_procs_val) = font_dict.get(b"CharProcs") else {
         return Err(CosError::Syntax { offset: 0, detail: "redaction could not establish safe Type 3 font cleanup: missing CharProcs".into() }.into());
@@ -837,6 +872,10 @@ fn clean_type3_font(
 
     let mut used_in_glyphs = UsedInGlyphs::default();
     for (_, proc_val) in char_procs.iter() {
+        if let Some(used) = proc_val.as_ref().and_then(|r| reads.used.get(&r)) {
+            used_in_glyphs.merge(used);
+            continue;
+        }
         let resolved = doc.resolve(proc_val);
         let Object::Stream(s) = &*resolved else {
             return Err(CosError::Syntax {
@@ -845,8 +884,14 @@ fn clean_type3_font(
             }
             .into());
         };
-        let data = doc.with_direct_parms(s).decoded()?;
-        collect_used_resources_in_stream(&data, &mut used_in_glyphs)?;
+        // Past the allowance the cleanup can't be shown complete, and the redaction is refused.
+        let data = reads.budget.decode(&doc.with_direct_parms(s))?;
+        let mut used = UsedInGlyphs::default();
+        collect_used_resources_in_stream(&data, &mut used)?;
+        used_in_glyphs.merge(&used);
+        if let Some(r) = proc_val.as_ref() {
+            reads.used.insert(r, used);
+        }
     }
 
     if prune_type3_font_resources(doc, &mut f_res, &used_in_glyphs) {

@@ -373,6 +373,19 @@ fn only_grew_compares_huge_arrays_without_quadratic_work() {
     assert!(start.elapsed() < std::time::Duration::from_secs(10), "{:?}", start.elapsed());
 }
 
+/// A reference to a generation the object doesn't have reads as null: it is no repeat of the valid
+/// reference to the same object number that follows it.
+#[test]
+fn dss_evidence_skips_a_dead_reference_without_hiding_the_live_one() {
+    let mut doc = fixture(&[]);
+    let live = doc.add(Object::Stream(Stream::flate(Dict::new(), b"evidence")));
+    let dead = ObjRef::new(live.num, live.generation + 1);
+    let mut dss = Dict::new();
+    dss.set(b"CRLs".to_vec(), Object::Array(vec![Object::Ref(dead), Object::Ref(live)]));
+    let read: Vec<Vec<u8>> = DssEvidence::new(&doc, &dss, b"CRLs").collect();
+    assert_eq!(read, vec![b"evidence".to_vec()]);
+}
+
 #[test]
 fn dss_evidence_decodes_each_stream_once_within_its_caps() {
     // One small stream listed 1000 times, then streams that inflate past the evidence cap.
