@@ -1,11 +1,12 @@
 //! Bridging the COS object model and `pdfcraft-crypt`: reading `/Encrypt` dictionaries and
 //! decrypting / encrypting the strings and streams of an object (§7.6.2).
 //!
-//! Not encrypted, per the spec: the `/Encrypt` dictionary itself, cross-reference streams, the
-//! trailer `/ID`, objects inside object streams (the object stream is encrypted as a whole),
-//! the `/Contents` of signature dictionaries, and metadata streams when `/EncryptMetadata` is
-//! false. Streams naming a crypt filter (`/Crypt` in `/Filter`) use that filter; embedded files
-//! use `/EFF`.
+//! Not encrypted, per the spec: the `/Encrypt` dictionary itself, cross-reference streams and
+//! the strings of their dictionaries (§7.5.8.2), the trailer `/ID`, objects inside object streams
+//! (the object stream is encrypted as a whole), the `/Contents` of signature dictionaries, and the
+//! document's metadata stream (the catalog's `/Metadata`) when `/EncryptMetadata` is false in a
+//! `/V` 4 or 5 dictionary (Table 21). Streams naming a crypt filter (`/Crypt` in `/Filter`) use that
+//! filter; embedded files use `/EFF`.
 
 use std::cell::Cell;
 
@@ -298,8 +299,9 @@ pub(crate) enum Pass {
 /// dictionary's `/Contents` (see [`is_signature_dict`]).
 ///
 /// `o` is as `doc` holds it: what a stream's dictionary gives by reference is read from `doc`, so
-/// its references have to be the document's, not a save's renumbered ones.
-pub(crate) fn transform(doc: &Document, h: &SecurityHandler, o: &Object, num: u32, generation: u16, pass: Pass) -> Object {
+/// its references have to be the document's, not a save's renumbered ones. `source` is its number
+/// in `doc`, `num` and `generation` the ones it is encrypted with (a full save renumbers).
+pub(crate) fn transform(doc: &Document, h: &SecurityHandler, o: &Object, source: u32, num: u32, generation: u16, pass: Pass) -> Object {
     let _scope = FollowScope::enter();
     let decrypt = pass == Pass::Decrypt;
     let strings = |s: &PdfString| {
@@ -311,7 +313,7 @@ pub(crate) fn transform(doc: &Document, h: &SecurityHandler, o: &Object, num: u3
     // which overflowed the stack on a 10 KB file. A stream can't be nested, and a dictionary that
     // is reads as it says directly.
     match o {
-        Object::Stream(s) => stream(doc, s, &strings, h, num, generation, pass),
+        Object::Stream(s) => stream(doc, s, &strings, h, (source, num, generation), pass),
         Object::Dict(d) if is_signature_dict(Some(doc), d) => signature_dict(d, &strings),
         o => walk(o, &strings),
     }
@@ -344,18 +346,21 @@ fn stream(
     s: &Stream,
     strings: &dyn Fn(&PdfString) -> PdfString,
     h: &SecurityHandler,
-    num: u32,
-    generation: u16,
+    (source, num, generation): (u32, u32, u16),
     pass: Pass,
 ) -> Object {
     let decrypt = pass == Pass::Decrypt;
     let walked = |d: &Dict| -> Dict { d.iter().map(|(k, v)| (k.clone(), walk(v, strings))).collect() };
     let ty = s.dict.get(b"Type").map(|t| followed(doc, t));
     let ty = ty.as_deref().and_then(Object::as_name);
-    // Cross-reference streams are never encrypted (§7.5.8), but only reading may trust the
-    // label: a stream a producer calls /XRef stays plaintext if writing believes it, and the
-    // writer builds its own cross-reference streams outside this transform.
-    if (decrypt && ty == Some(b"XRef")) || (ty == Some(b"Metadata") && !h.encrypts_metadata()) {
+    // Cross-reference streams are never encrypted, their dictionaries' strings (`/ID`) neither
+    // (§7.5.8.2), but only reading may trust the label: a stream a producer calls /XRef stays
+    // plaintext if writing believes it, and the writer builds its own cross-reference streams
+    // outside this transform.
+    if decrypt && ty == Some(b"XRef") {
+        return Object::Stream(s.clone());
+    }
+    if ty == Some(b"Metadata") && document_metadata_in_clear(doc, h, source) {
         return Object::Stream(Stream { dict: walked(&s.dict), raw: s.raw.clone() });
     }
     let mut named = named_crypt_filter(doc, &s.dict);
@@ -373,4 +378,21 @@ fn stream(
     };
     let raw = if decrypt { h.decrypt_stream(num, generation, &s.raw, kind) } else { h.encrypt_stream(num, generation, &s.raw, kind) };
     Object::Stream(Stream { dict, raw: raw.into() })
+}
+
+/// Whether object `num` of `doc`, a metadata stream, stays in the clear: it is the document's own, the one
+/// the catalog's `/Metadata` names, and `/EncryptMetadata` is false in a `/V` 4 or 5 dictionary.
+/// ISO 32000-2 Table 21 gives the entry for "the document-level metadata stream" only, and as
+/// meaningful with `/V` 4 or 5 only: every other metadata stream (a page's, an image's) is
+/// encrypted as any stream is. A catalog that reads as absent (past [`MAX_FOLLOWED`]) names none.
+fn document_metadata_in_clear(doc: &Document, h: &SecurityHandler, num: u32) -> bool {
+    if h.encrypts_metadata() || !matches!(h.dict().v, 4 | 5) {
+        return false;
+    }
+    // The catalog is no metadata stream, and reading it here would read this object again.
+    let Some(root) = doc.root().filter(|r| r.num != num) else { return false };
+    let root = Object::Ref(root);
+    let catalog = followed(doc, &root);
+    let metadata = catalog.as_dict().and_then(|c| c.get(b"Metadata"));
+    matches!(metadata, Some(Object::Ref(r)) if r.num == num)
 }

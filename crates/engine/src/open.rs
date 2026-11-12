@@ -39,6 +39,22 @@ struct DocumentOpenData<'a> {
     xfa: Option<XfaLayout>,
 }
 
+/// Why a file the renderer can't open doesn't open, when the document model found it encrypted:
+/// a damaged file that needs a password needs the password first, and encryption the model can't
+/// read is named as the model names it (the security handler, say, `/Filter /Adobe.PubSec`), not
+/// as the renderer's parser reports it. Anything else is the renderer's verdict.
+fn security_verdict(render: OpenError, cos: &std::thread::Result<Result<pdfcraft_cos::Document, pdfcraft_cos::CosError>>) -> OpenError {
+    use pdfcraft_cos::CosError;
+    match (render, cos) {
+        (OpenError::Invalid(_) | OpenError::Unsupported(_), Ok(Err(CosError::NeedsPassword))) => OpenError::NeedsPassword,
+        (OpenError::Invalid(_) | OpenError::Unsupported(_), Ok(Err(CosError::WrongPassword))) => OpenError::WrongPassword,
+        (OpenError::Invalid(_) | OpenError::Unsupported(_), Ok(Err(CosError::Security(why)))) => {
+            OpenError::Unsupported(format!("PdfCraft can't decrypt this document: {why}"))
+        }
+        (render, _) => render,
+    }
+}
+
 impl OpenContext {
     /// This context with Highlight fields `on`, which the document's scripts read as
     /// `app.runtimeHighlight` while it opens. A new document opens with the remembered setting
@@ -133,7 +149,7 @@ impl Session {
                 let user = user.ok_or(OpenError::WrongPassword)?;
                 (inspect(bytes.clone(), Some(&user))?, Some(user))
             }
-            Err(e) => return Err(e),
+            Err(e) => return Err(security_verdict(e, &cos)),
         };
         // A dynamic XFA form is a shell around an XML template; lay the template out into real
         // pages and fields so the rest of the engine works on it. The original bytes stay: the
@@ -393,5 +409,80 @@ impl Session {
             xfa_warnings: Vec::new(),
             edit_notices: Vec::new(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A one-page file whose trailer has `trailer` added (`/Encrypt` given as object 5, `encrypt`).
+    fn encrypted(encrypt: &str) -> Vec<u8> {
+        let objs = [
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+            "<< /Type /Page /Parent 2 0 R /Contents 4 0 R >>",
+            "<< /Length 0 >>\nstream\n\nendstream",
+            encrypt,
+        ];
+        let mut out = b"%PDF-1.7\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, o) in objs.iter().enumerate() {
+            offsets.push(out.len());
+            out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+        }
+        let xref = out.len();
+        out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+        for o in offsets {
+            out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+        }
+        let id = "<00112233445566778899aabbccddeeff>";
+        out.extend_from_slice(
+            format!("trailer\n<< /Size {} /Root 1 0 R /Encrypt 5 0 R /ID [{id} {id}] >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes(),
+        );
+        out
+    }
+
+    /// Encryption for certificate recipients is named as the document model names it, not as the
+    /// renderer's parser does (`UnsupportedAlgorithm`).
+    #[test]
+    fn certificate_encryption_is_named_when_it_cant_be_opened() {
+        let bytes = encrypted("<< /Filter /Adobe.PubSec /SubFilter /adbe.pkcs7.s5 /V 4 /R 4 /Length 128 /Recipients [<3082>] >>");
+        let Err(e) = Session::new().open("pubsec.pdf", None, Arc::new(bytes), None) else { panic!("a /Adobe.PubSec file opened") };
+        let message = e.to_string();
+        assert!(message.contains("/Adobe.PubSec"), "{message}");
+        assert!(!message.contains("UnsupportedAlgorithm"), "{message}");
+    }
+
+    /// A file the renderer can't read that the document model found needs a password asks for the
+    /// password: once it is given, the file may well read.
+    #[test]
+    fn the_models_security_verdict_wins_over_an_unreadable_file() {
+        use pdfcraft_cos::CosError;
+        let invalid = || OpenError::Invalid("no readable page tree or cross-reference data was found".into());
+        let verdict = |cos: Result<pdfcraft_cos::Document, CosError>| security_verdict(invalid(), &Ok(cos));
+        assert!(matches!(verdict(Err(CosError::NeedsPassword)), OpenError::NeedsPassword));
+        assert!(matches!(verdict(Err(CosError::WrongPassword)), OpenError::WrongPassword));
+        assert!(matches!(verdict(Err(CosError::Security("x".into()))), OpenError::Unsupported(m) if m.ends_with(": x")));
+        // Anything else, the file read or not, stays the renderer's verdict.
+        assert!(matches!(verdict(Err(CosError::NotPdf)), OpenError::Invalid(_)));
+        assert!(matches!(verdict(Ok(pdfcraft_cos::Document::new_empty())), OpenError::Invalid(_)));
+        assert!(matches!(security_verdict(OpenError::WrongPassword, &Ok(Err(CosError::NeedsPassword))), OpenError::WrongPassword));
+    }
+
+    /// A file whose `/Encrypt` is damaged opens, but no save writes it: without the `/Encrypt` its
+    /// encrypted data could never be read again.
+    #[test]
+    fn a_file_whose_encryption_cant_be_read_is_not_saved() {
+        let bytes = encrypted("E< /Filter /Standard /V 4 /R 4 /Length 128 /P -4 /O <00> /U <00> >>");
+        let mut s = Session::new();
+        let id = s.open("damaged.pdf", None, Arc::new(bytes.clone()), None).expect("opens");
+        let refused = |r: Result<Arc<Vec<u8>>, crate::EditError>| r.is_err_and(|e| e.to_string().contains("/Encrypt"));
+        assert!(refused(s.save_full_bytes(id)), "Save As wrote it");
+        // Unedited, Save keeps the file's own bytes; an edit, written to be shown, is refused so.
+        assert!(s.save_bytes(id).is_ok_and(|b| b.as_slice() == bytes.as_slice()));
+        let edit = s.apply(id, crate::Edit::SetInfo { key: "Title".into(), value: "edited".into() });
+        assert!(edit.is_err_and(|e| e.to_string().contains("/Encrypt")), "an edit was written");
+        assert!(s.save_bytes(id).is_ok_and(|b| b.as_slice() == bytes.as_slice()));
     }
 }

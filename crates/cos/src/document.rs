@@ -86,6 +86,8 @@ pub struct Document {
     /// The handler and `/Encrypt` object number that saves use, when encryption changed.
     out_security: Option<Arc<pdfcraft_crypt::SecurityHandler>>,
     out_encrypt_num: Option<u32>,
+    /// See [`Document::encryption_unreadable`].
+    encrypt_unreadable: bool,
 }
 
 impl std::fmt::Debug for Document {

@@ -40,6 +40,7 @@ impl Document {
             new_id: false,
             out_security: None,
             out_encrypt_num: None,
+            encrypt_unreadable: false,
         };
         let mut pages = Dict::new();
         pages.set(b"Type".to_vec(), Object::name("Pages"));
@@ -129,6 +130,7 @@ impl Document {
             new_id: false,
             out_security: None,
             out_encrypt_num: None,
+            encrypt_unreadable: false,
         };
         let mut log = Vec::new();
         if headerless {
@@ -172,6 +174,8 @@ impl Document {
         // Header generations are plaintext, including in encrypted files. Inspect only the
         // bounded headers, not object bodies, and retain the compact xref representation.
         doc.note_xref_generation_repairs(&mut log);
+        // What authenticating noted (an /Encrypt that can't be used) goes after what reading did.
+        log.extend(doc.repair_log.iter().cloned());
         doc.repair_log = Arc::new(log);
         // Reconstruction may have found a different trailer: (re)authenticate against it.
         if (!ok || !authenticated)
@@ -212,18 +216,28 @@ impl Document {
     fn authenticate(&mut self, enc: &Object, credentials: &Credentials<'_>) -> Result<(), CosError> {
         // Authentication can change how the same input is decoded.
         self.source_identity = Arc::new(());
-        let (num, dict) = match enc {
-            Object::Ref(r) => (Some(r.num), self.get(*r).as_dict().cloned()),
-            Object::Dict(d) => (None, Some(d.clone())),
-            _ => (None, None),
+        // A reference to nothing reads as null (§7.3.10); an object that is there but doesn't read
+        // as a dictionary is an error, which tells the two apart.
+        let (num, held) = match enc {
+            Object::Ref(r) => (Some(r.num), self.try_get_reference(*r)),
+            o => (None, Ok(Arc::new(o.clone()))),
         };
-        let Some(dict) = dict else {
-            // A dangling /Encrypt: viewers treat the file as unencrypted, and so do we.
-            let mut log = self.repair_log.as_ref().clone();
-            log.push("the trailer names an /Encrypt dictionary that does not exist; reading the file as unencrypted".into());
-            self.repair_log = Arc::new(log);
-            self.trailer.remove(b"Encrypt");
-            return Ok(());
+        let dict = match held.as_deref() {
+            Ok(Object::Dict(d)) => d.clone(),
+            Ok(Object::Null) => {
+                // A dangling /Encrypt: viewers treat the file as unencrypted, and so do we.
+                self.note_repair_once(ENCRYPT_DANGLING);
+                self.trailer.remove(b"Encrypt");
+                return Ok(());
+            }
+            // There, but unreadable: what the file encrypts can't be decrypted, and a save would
+            // write it as if it were in the clear. The /Encrypt entry stays, and saves are refused
+            // (see `Document::encryption_unreadable`).
+            _ => {
+                self.note_repair_once(ENCRYPT_UNREADABLE);
+                self.encrypt_unreadable = true;
+                return Ok(());
+            }
         };
         let params = crate::security::encrypt_dict(self, &dict);
         let id0 = self.first_id();
@@ -258,6 +272,23 @@ impl Document {
         self.objstms = Arc::default();
         self.unreadable = Arc::default();
         Ok(())
+    }
+
+    /// Add `line` to the repair log unless it is there: a file rebuilt from its object headers is
+    /// authenticated again.
+    fn note_repair_once(&mut self, line: &str) {
+        if !self.repair_log.iter().any(|l| l == line) {
+            Arc::make_mut(&mut self.repair_log).push(line.into());
+        }
+    }
+
+    /// Whether the trailer's `/Encrypt` names an object that is there but doesn't read as an
+    /// encryption dictionary. Nothing the file encrypts can be decrypted then, so it reads as
+    /// stored, the `/Encrypt` entry is kept, and saving is refused: a file written without it
+    /// would hold encrypted data no reader could decrypt again, and one written with it would hold
+    /// new data in the clear where readers decrypt.
+    pub fn encryption_unreadable(&self) -> bool {
+        self.encrypt_unreadable
     }
 
     /// The handler for a document opened without a password that only its embedded files need
@@ -486,12 +517,18 @@ impl Document {
     pub(super) fn decrypted(&self, id: ObjRef, o: Object) -> Object {
         match &self.security {
             Some(h) if Some(id.num) != self.encrypt_num && !self.encrypt_members.contains(&id.num) => {
-                crate::security::transform(self, h, &o, id.num, id.generation, crate::security::Pass::Decrypt)
+                crate::security::transform(self, h, &o, id.num, id.num, id.generation, crate::security::Pass::Decrypt)
             }
             _ => o,
         }
     }
 }
+
+/// The repair-log line for an `/Encrypt` that refers to nothing.
+const ENCRYPT_DANGLING: &str = "the trailer names an /Encrypt dictionary that does not exist; reading the file as unencrypted";
+
+/// The repair-log line for an `/Encrypt` that is there but can't be read.
+const ENCRYPT_UNREADABLE: &str = "the trailer's /Encrypt dictionary is damaged and can't be read, so what the file encrypts can't be decrypted: it reads as stored, and the file can't be saved";
 
 /// The repair-log line for a file rebuilt because its last update has no `/Prev`.
 const UNLINKED_UPDATE: &str = "the file's last update has no /Prev link to its earlier revisions, so their objects (the page tree among them) are unreachable through the cross-reference chain; rebuilding from object headers";

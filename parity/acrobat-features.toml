@@ -178,8 +178,8 @@ milestone = "M1"
 status = "shipped"
 commands = ["file.open"]
 tools = ["doc_open"]
-evidence = ["crates/ui-egui/tests/it/editing.rs::password_prompt_opens_and_security_tab_reports_the_details", "crates/crypt/src/tests.rs::empty_user_password_opens_without_asking", "crates/ui-egui/src/platform/open_worker/tests.rs::a_chosen_tool_survives_wrong_password_retry_and_runs_after_unlock", "crates/ui-egui/src/platform/open_worker/tests.rs::startup_intake_waits_for_local_authentication_and_keeps_its_own_background_password_prompt", "crates/ui-egui/tests/it/pickers.rs::the_open_password_can_be_typed_through_an_input_method_however_the_file_is_opened"]
-notes = "the field takes typing through the platform input method, which typed keys go through on Linux, however the file was opened (#2818); checked with synthetic input-method events, not on a Linux desktop"
+evidence = ["crates/ui-egui/tests/it/editing.rs::password_prompt_opens_and_security_tab_reports_the_details", "crates/crypt/src/tests.rs::empty_user_password_opens_without_asking", "crates/ui-egui/src/platform/open_worker/tests.rs::a_chosen_tool_survives_wrong_password_retry_and_runs_after_unlock", "crates/ui-egui/src/platform/open_worker/tests.rs::startup_intake_waits_for_local_authentication_and_keeps_its_own_background_password_prompt", "crates/ui-egui/tests/it/pickers.rs::the_open_password_can_be_typed_through_an_input_method_however_the_file_is_opened", "crates/engine/src/open.rs::the_models_security_verdict_wins_over_an_unreadable_file"]
+notes = "the field takes typing through the platform input method, which typed keys go through on Linux, however the file was opened (#2818); checked with synthetic input-method events, not on a Linux desktop. A damaged file the renderer can't read asks for the password when the document model finds it needs one"
 
 [[feature]]
 id = "core.unicode-passwords"
@@ -250,8 +250,8 @@ milestone = "M1"
 status = "shipped"
 commands = []
 tools = []
-evidence = ["crates/cos/tests/it/encryption.rs::unencrypted_metadata_is_left_readable"]
-notes = ""
+evidence = ["crates/cos/tests/it/encryption.rs::unencrypted_metadata_is_left_readable", "crates/cos/tests/it/decryption_scope.rs::a_pages_metadata_stream_is_decrypted_when_metadata_is_left_in_the_clear", "crates/cos/tests/it/decryption_scope.rs::only_the_documents_metadata_is_written_in_the_clear", "crates/cos/tests/it/decryption_scope.rs::removing_security_writes_a_pages_metadata_decrypted", "crates/cos/tests/it/decryption_scope.rs::encrypt_metadata_means_nothing_below_v4", "crates/cos/tests/it/decryption_scope.rs::qpdf_cleartext_metadata_leaves_only_the_catalogs_in_the_clear"]
+notes = "only the document's metadata stream, the one the catalog's /Metadata names, stays in the clear, and only with /V 4 or 5 (ISO 32000-2 Table 21): a page's or an image's metadata stream is encrypted and decrypted as any stream, as qpdf's --cleartext-metadata writes it, so removing the security writes it decrypted. Checked against qpdf on synthetic files and on two PDFBox JIRA files (PDFBOX-4922, PDFBOX-907)"
 
 [[feature]]
 id = "core.unsupported-handlers"
@@ -262,8 +262,8 @@ milestone = "M1"
 status = "shipped"
 commands = []
 tools = []
-evidence = ["crates/crypt/src/tests.rs::unsupported_handlers_are_reported"]
-notes = ""
+evidence = ["crates/crypt/src/tests.rs::unsupported_handlers_are_reported", "crates/engine/src/open.rs::certificate_encryption_is_named_when_it_cant_be_opened"]
+notes = "opening names the handler the document model found (unsupported security handler: /Filter /Adobe.PubSec) when the renderer can't open the file either, rather than the renderer's parser error"
 
 [[feature]]
 id = "core.open-public-key"
@@ -322,8 +322,8 @@ milestone = "M1"
 status = "shipped"
 commands = ["file.save"]
 tools = ["doc_save"]
-evidence = ["crates/cos/tests/it/encryption.rs::incremental_edits_of_encrypted_documents_stay_encrypted", "crates/engine/src/tests.rs::encrypted_documents_open_edit_and_save_encrypted"]
-notes = ""
+evidence = ["crates/cos/tests/it/encryption.rs::incremental_edits_of_encrypted_documents_stay_encrypted", "crates/engine/src/tests.rs::encrypted_documents_open_edit_and_save_encrypted", "crates/cos/tests/it/decryption_scope.rs::an_unreadable_encrypt_dictionary_is_kept_and_saving_is_refused", "crates/engine/src/open.rs::a_file_whose_encryption_cant_be_read_is_not_saved", "crates/cos/tests/it/decryption_scope.rs::a_cross_reference_streams_id_reads_as_written"]
+notes = "a file whose /Encrypt is there but damaged (it doesn't parse as a dictionary) keeps the entry and is not saved, with a repair note: written without it, its encrypted data could never be decrypted again. An /Encrypt that refers to nothing still reads as no encryption. The strings of a cross-reference stream's dictionary (its /ID) are read as written (ISO 32000-2 7.5.8.2)"
 
 [[feature]]
 id = "core.copy-on-write-fidelity"
