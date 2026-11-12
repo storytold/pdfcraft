@@ -3080,54 +3080,36 @@ fn an_attachment_stored_in_the_clear_reads_without_the_password() {
     }
 }
 
-/// An attachment whose Flate data is cut short is an error, encrypted or not, never the part that
-/// decoded passed off as the whole file (ISO 32000-2 §7.4.4: the stream is damaged). Intact, the
-/// same attachment reads whole on both paths.
-#[test]
-fn a_truncated_attachment_is_an_error_not_its_decoded_part() {
-    use std::io::Write as _;
-    let words: Vec<u8> = (0..20_000u32)
-        .flat_map(|i| {
-            format!(
-                "line {i} of the attached file
-"
-            )
-            .into_bytes()
-        })
-        .collect();
-    let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
-    z.write_all(&words).unwrap();
-    let intact = z.finish().unwrap();
-    let damaged = intact.get(..intact.len() / 2).unwrap().to_vec();
-    let mut protected = pdfcraft_cos::Document::open(Arc::new(
-        pdfcraft_testkit::Pdf::new().obj("<< /Type /Catalog /Pages 2 0 R >>").obj("<< /Type /Pages /Kids [] /Count 0 >>").build(),
-    ))
-    .unwrap();
-    protected
-        .set_encryption(&pdfcraft_cos::NewEncryption {
-            algorithm: pdfcraft_cos::Algorithm::Aes256,
-            user_password: ATTACHMENT_PASSWORD,
-            owner_password: "owner pw",
-            permissions: -4,
-            encrypt_metadata: true,
-            seed: [5; 32],
-        })
+/// The data of `note.txt`, the one attachment of a document, stored as `data` under `/Filter
+/// filter`, read as an app would: unencrypted, by lopdf; or encrypted for its attachments alone
+/// (`/EFOpen`, ISO 32000-2 §7.6.6) and read with the password, by the document model.
+fn read_one_attachment(filter: &str, data: &[u8], encrypted: bool) -> Result<Vec<u8>, String> {
+    let pdf = pdfcraft_testkit::Pdf::new()
+        .obj("<< /Type /Catalog /Pages 2 0 R /Names << /EmbeddedFiles << /Names [(note.txt) 4 0 R] >> >> >>")
+        .obj("<< /Type /Pages /Kids [3 0 R] /Count 1 >>")
+        .obj("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >>")
+        .obj("<< /Type /Filespec /F (note.txt) /EF << /F 5 0 R >> >>");
+    let stream = format!("/Type /EmbeddedFile /Filter {filter}");
+    let (bytes, password) = if encrypted {
+        let mut protected = pdfcraft_cos::Document::open(Arc::new(
+            pdfcraft_testkit::Pdf::new().obj("<< /Type /Catalog /Pages 2 0 R >>").obj("<< /Type /Pages /Kids [] /Count 0 >>").build(),
+        ))
         .unwrap();
-    let handler = protected.output_handler().unwrap();
-    let d = handler.dict();
-    let hex = |b: &[u8]| b.iter().map(|b| format!("{b:02X}")).collect::<String>();
-    // Unencrypted, read by lopdf; or encrypted for its attachments alone (`/EFOpen`) and read
-    // with the password, by the model.
-    let document = |flate: &[u8], encrypted: bool| {
-        let pdf = pdfcraft_testkit::Pdf::new()
-            .obj("<< /Type /Catalog /Pages 2 0 R /Names << /EmbeddedFiles << /Names [(note.txt) 4 0 R] >> >> >>")
-            .obj("<< /Type /Pages /Kids [3 0 R] /Count 1 >>")
-            .obj("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >>")
-            .obj("<< /Type /Filespec /F (note.txt) /EF << /F 5 0 R >> >>");
-        if !encrypted {
-            return pdf.stream("/Type /EmbeddedFile /Filter /FlateDecode", flate).build();
-        }
-        pdf.stream("/Type /EmbeddedFile /Filter /FlateDecode", handler.encrypt_string(5, 0, flate))
+        protected
+            .set_encryption(&pdfcraft_cos::NewEncryption {
+                algorithm: pdfcraft_cos::Algorithm::Aes256,
+                user_password: ATTACHMENT_PASSWORD,
+                owner_password: "owner pw",
+                permissions: -4,
+                encrypt_metadata: true,
+                seed: [5; 32],
+            })
+            .unwrap();
+        let handler = protected.output_handler().unwrap();
+        let d = handler.dict();
+        let hex = |b: &[u8]| b.iter().map(|b| format!("{b:02X}")).collect::<String>();
+        let pdf = pdf
+            .stream(&stream, handler.encrypt_string(5, 0, data))
             .obj(format!(
                 "<< /Filter /Standard /V 5 /R 6 /O <{}> /U <{}> /OE <{}> /UE <{}> /Perms <{}> /P {} /CF << /StdCF << /AuthEvent /EFOpen /CFM /AESV3 /Length 32 >> >> /StmF /Identity /StrF /Identity /EFF /StdCF >>",
                 hex(&d.o),
@@ -3137,18 +3119,59 @@ fn a_truncated_attachment_is_an_error_not_its_decoded_part() {
                 hex(&d.perms),
                 d.p
             ))
-            .trailer_entry("/Encrypt 6 0 R /ID [<00> <00>]")
-            .build()
+            .trailer_entry("/Encrypt 6 0 R /ID [<00> <00>]");
+        (pdf.build(), Some(ATTACHMENT_PASSWORD))
+    } else {
+        (pdf.stream(&stream, data).build(), None)
     };
-    for (encrypted, password) in [(false, None), (true, Some(ATTACHMENT_PASSWORD))] {
-        let read = |flate: &[u8]| {
-            let bytes = Arc::new(document(flate, encrypted));
-            let info = inspect(bytes.clone(), password).expect("opens");
-            attachment_data(&bytes, password, &info.attachments[0])
-        };
-        assert_eq!(read(&intact).as_deref(), Ok(&words[..]), "encrypted: {encrypted}");
-        let damaged = read(&damaged);
+    let bytes = Arc::new(bytes);
+    let info = inspect(bytes.clone(), password).expect("opens");
+    attachment_data(&bytes, password, &info.attachments[0])
+}
+
+/// An attachment whose Flate data is cut short is an error, encrypted or not, never the part that
+/// decoded passed off as the whole file (ISO 32000-2 §7.4.4: the stream is damaged). Intact, the
+/// same attachment reads whole on both paths.
+#[test]
+fn a_truncated_attachment_is_an_error_not_its_decoded_part() {
+    use std::io::Write as _;
+    let words: Vec<u8> = (0..20_000u32).flat_map(|i| format!("line {i} of the attached file\n").into_bytes()).collect();
+    let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+    z.write_all(&words).unwrap();
+    let intact = z.finish().unwrap();
+    let damaged = intact.get(..intact.len() / 2).unwrap();
+    for encrypted in [false, true] {
+        assert_eq!(read_one_attachment("/FlateDecode", &intact, encrypted).as_deref(), Ok(&words[..]), "encrypted: {encrypted}");
+        let damaged = read_one_attachment("/FlateDecode", damaged, encrypted);
         assert!(damaged.is_err(), "encrypted: {encrypted}: {:?} bytes of {} passed as the file", damaged.map(|r| r.len()), words.len());
+    }
+}
+
+/// `data` as a Brotli stream (RFC 7932) of one uncompressed meta-block and an empty last one.
+fn brotli_stored(data: &[u8]) -> Vec<u8> {
+    // WBITS 16 (bit 0), ISLAST 0, MNIBBLES 4 (bits 2-3 zero), MLEN - 1 (bits 4-19), ISUNCOMPRESSED
+    // (bit 20), then padding to the byte: three header bytes, the data, and ISLAST + ISLASTEMPTY.
+    let header = (u32::try_from(data.len() - 1).unwrap() << 4) | (1 << 20);
+    let mut out = header.to_le_bytes().get(..3).unwrap().to_vec();
+    out.extend_from_slice(data);
+    out.push(0b11);
+    out
+}
+
+/// A Brotli-compressed attachment (`/BrotliDecode`) reads whole, encrypted or not, and is an error
+/// when its data is cut short: the model decodes every other filter, and lopdf decodes Brotli.
+#[test]
+fn a_brotli_attachment_reads_and_a_truncated_one_is_an_error() {
+    let words = b"the attached file, compressed with Brotli".repeat(40);
+    let intact = brotli_stored(&words);
+    let damaged = intact.get(..intact.len() / 2).unwrap();
+    for encrypted in [false, true] {
+        assert_eq!(read_one_attachment("/BrotliDecode", &intact, encrypted).as_deref(), Ok(&words[..]), "encrypted: {encrypted}");
+        assert!(read_one_attachment("/BrotliDecode", damaged, encrypted).is_err(), "encrypted: {encrypted}");
+        // A chain: ASCIIHex outside Brotli, decoded stage by stage.
+        let hexed: String = intact.iter().map(|b| format!("{b:02X}")).collect::<String>() + ">";
+        let chain = read_one_attachment("[/ASCIIHexDecode /BrotliDecode]", hexed.as_bytes(), encrypted);
+        assert_eq!(chain.as_deref(), Ok(&words[..]), "encrypted: {encrypted}");
     }
 }
 
@@ -3238,4 +3261,15 @@ fn finding_an_attachment_keeps_the_object_stream_limit() {
     let read = |limit| attachment_data_within(&out, Some(ATTACHMENT_PASSWORD), &att, limit);
     assert_eq!(read(1 << 20).as_deref(), Ok(ENCRYPTED_ATTACHMENT));
     assert!(read(64 << 10).is_err(), "a 128 KiB object stream was decoded under a 64 KiB limit");
+}
+
+/// An attachment stored as no data at all under a filter is an empty file, as lopdf read it before
+/// decoding turned strict: nothing was encoded, so nothing is damaged.
+#[test]
+fn an_empty_filtered_attachment_is_an_empty_file() {
+    for filter in ["/FlateDecode", "/BrotliDecode", "[/ASCII85Decode /FlateDecode]"] {
+        for encrypted in [false, true] {
+            assert_eq!(read_one_attachment(filter, b"", encrypted), Ok(Vec::new()), "{filter}, encrypted: {encrypted}");
+        }
+    }
 }

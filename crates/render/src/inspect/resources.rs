@@ -438,15 +438,77 @@ fn model_attachment_data(model: pdfcraft_cos::Document, att: &Attachment) -> Res
     if model.reads_as_stored(stream) {
         return Err(ATTACHMENT_NEEDS_PASSWORD.into());
     }
-    // Strict: the bytes are exported as a file, so a damaged stream must not pass for a shorter one.
-    stream.decoded_strict_within(MAX_ATTACHMENT_BYTES).map_err(|e| e.to_string())
+    decode_attachment(stream)
 }
 
-/// `stream`'s data decoded as the document model decodes an attachment's
-/// ([`pdfcraft_cos::Stream::decoded_strict_within`], at most [`MAX_ATTACHMENT_BYTES`]): lopdf's own
+/// The filter name of Brotli compression, which lopdf decodes and `pdfcraft-filters` doesn't.
+const BROTLI: &[u8] = b"BrotliDecode";
+
+/// An attachment's data, `stream` decoded strictly, at most [`MAX_ATTACHMENT_BYTES`] at every stage:
+/// the bytes are exported as a file, so a damaged stream (Flate data cut short, say) is an error,
+/// never what decoded before the damage passed off as the whole. Every filter but Brotli is the
+/// document model's ([`pdfcraft_cos::Stream::decoded_strict_within`]); a `/BrotliDecode` stage is
+/// lopdf's, which refuses a truncated or corrupt stream and, like it, takes no `/DecodeParms`.
+/// `/Crypt` was applied when the object loaded. No data at all is an empty file, whatever the
+/// filters: nothing was encoded, so nothing is damaged (and lopdf read it so).
+fn decode_attachment(stream: &pdfcraft_cos::Stream) -> Result<Vec<u8>, String> {
+    use pdfcraft_cos::Object as Cos;
+    if stream.raw.is_empty() {
+        return Ok(Vec::new());
+    }
+    let filter = stream.dict.get(b"Filter");
+    let names: Vec<&[u8]> = match filter {
+        Some(Cos::Name(n)) => vec![n.as_slice()],
+        Some(Cos::Array(a)) => a.iter().filter_map(Cos::as_name).collect(),
+        _ => Vec::new(),
+    };
+    // The whole chain at once when the model decodes all of it, which also refuses a /Filter
+    // that is not a name or an array of names.
+    let all_names = !matches!(filter, Some(Cos::Array(a)) if a.len() != names.len());
+    if !all_names || !names.contains(&BROTLI) {
+        return stream.decoded_strict_within(MAX_ATTACHMENT_BYTES).map_err(|e| e.to_string());
+    }
+    let parms: Vec<Option<&Cos>> = match stream.dict.get(b"DecodeParms") {
+        Some(d @ Cos::Dict(_)) => vec![Some(d)],
+        Some(Cos::Array(a)) => a.iter().map(Some).collect(),
+        _ => Vec::new(),
+    };
+    let mut data = stream.raw.to_vec();
+    for (i, name) in names.into_iter().enumerate() {
+        data = match name {
+            b"Crypt" => continue,
+            BROTLI => {
+                let mut dict = lopdf::Dictionary::new();
+                dict.set("Filter", Object::Name(BROTLI.to_vec()));
+                lopdf::Stream::new(dict, data).decompressed_content_with_limit(MAX_ATTACHMENT_BYTES).map_err(|e| e.to_string())?
+            }
+            _ => {
+                let mut dict = pdfcraft_cos::Dict::new();
+                dict.set(b"Filter".to_vec(), Cos::Name(name.to_vec()));
+                if let Some(p) = parms.get(i).copied().flatten() {
+                    dict.set(b"DecodeParms".to_vec(), p.clone());
+                }
+                pdfcraft_cos::Stream { dict, raw: data.into() }.decoded_strict_within(MAX_ATTACHMENT_BYTES).map_err(|e| e.to_string())?
+            }
+        };
+    }
+    Ok(data)
+}
+
+/// The error an unfiltered attachment larger than [`MAX_ATTACHMENT_BYTES`] gives, as the model's
+/// decoding words it.
+fn attachment_too_large() -> String {
+    pdfcraft_cos::CosError::Filter(format!("decoded output exceeds the limit of {MAX_ATTACHMENT_BYTES} bytes")).to_string()
+}
+
+/// `stream`, found by lopdf, decoded as [`decode_attachment`] decodes the model's: lopdf's own
 /// decoding returns what decoded before damage as the whole. Only `/Filter` and `/DecodeParms`
 /// matter to it, so only they are carried over; `/Crypt` was applied when the object loaded.
 fn strict_decoded(stream: &lopdf::Stream) -> Result<Vec<u8>, String> {
+    // Unfiltered data is the attachment: refused before it is copied when it is too large.
+    if stream.dict.get(b"Filter").is_err() && stream.content.len() > MAX_ATTACHMENT_BYTES {
+        return Err(attachment_too_large());
+    }
     let name = |o: &Object| o.as_name().ok().map(|n| pdfcraft_cos::Object::Name(n.to_vec()));
     let parms = |o: &Object| match o {
         Object::Dictionary(d) => {
@@ -471,8 +533,7 @@ fn strict_decoded(stream: &lopdf::Stream) -> Result<Vec<u8>, String> {
         Ok(other) => dict.set(b"DecodeParms".to_vec(), parms(other)),
         Err(_) => {}
     }
-    let stream = pdfcraft_cos::Stream { dict, raw: stream.content.clone().into() };
-    stream.decoded_strict_within(MAX_ATTACHMENT_BYTES).map_err(|e| e.to_string())
+    decode_attachment(&pdfcraft_cos::Stream { dict, raw: stream.content.clone().into() })
 }
 
 /// The `/EF` entry of the file specification `att` names: its embedded file stream, unresolved.
