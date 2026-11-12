@@ -147,6 +147,8 @@ fn spool_job(
             print::add_cups_orientation(&mut options, sheets);
             options
         },
+        // The job carries no settings from the Windows driver's own dialog.
+        driver_settings: None,
     })
 }
 
