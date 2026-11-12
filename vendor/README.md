@@ -173,7 +173,8 @@ codestream or a JP2 `jp2c` box). Covered by
 ones, so `hayro-interpret` `ImageXObject::decoded_raster` drops the hint when that key is the
 image's mask (no `/SMask` stream, no `/SMaskInData 1`): it is decoded at full size and
 resampled with its mask like any other image. Covered by
-`raster::tests::jpx_with_a_colour_key_mask_is_decoded_at_full_size`.
+`raster::tests::jpx_with_a_colour_key_mask_is_decoded_at_full_size` (the decoded size) and
+`raster::tests::jpx_colour_key_mask_keeps_its_transparency_when_drawn_small` (the pixels drawn).
 
 ## KenM76 integration patches
 

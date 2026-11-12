@@ -9576,6 +9576,41 @@ fn jpx_with_a_colour_key_mask_is_decoded_at_full_size() {
     }
 }
 
+/// The codestream of the 4x2 JP2 in vendored hayro-syntax's `filter::jpx` tests (written for
+/// them): one 8-bit component, one decomposition level, samples 0 1 0 1 / 1 0 1 0.
+const JPX_CHECKERBOARD: &[u8] = &[
+    0xff, 0x4f, 0xff, 0x51, 0x00, 0x29, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x07, 0x01, 0x01, 0xff, 0x52, 0x00,
+    0x0c, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x04, 0x04, 0x00, 0x01, 0xff, 0x5c, 0x00, 0x07, 0x40, 0x40, 0x48, 0x48, 0x50, 0xff, 0x64, 0x00, 0x25,
+    0x00, 0x01, 0x43, 0x72, 0x65, 0x61, 0x74, 0x65, 0x64, 0x20, 0x62, 0x79, 0x20, 0x4f, 0x70, 0x65, 0x6e, 0x4a, 0x50, 0x45, 0x47, 0x20, 0x76, 0x65,
+    0x72, 0x73, 0x69, 0x6f, 0x6e, 0x20, 0x32, 0x2e, 0x35, 0x2e, 0x34, 0xff, 0x90, 0x00, 0x0a, 0x00, 0x00, 0x00, 0x00, 0x00, 0x17, 0x00, 0x01, 0xff,
+    0x93, 0xcf, 0xb4, 0x08, 0x08, 0x67, 0x90, 0x07, 0x41, 0x08, 0xff, 0xd9,
+];
+
+/// Review on #3884, as drawn: a 4x2 JPX checkerboard of samples 0 and 1 whose colour key
+/// `/Mask [0 0]` hides the 0s, drawn over red at 2x1 pixels, where the size hint skips a
+/// resolution level. Half of each pixel's samples are keyed, so the red shows through half of
+/// it. Decoded at the reduced level, the samples were averages the key no longer matched, and
+/// the image covered the red.
+#[test]
+fn jpx_colour_key_mask_keeps_its_transparency_when_drawn_small() {
+    let image = format!(
+        "<< /Type /XObject /Subtype /Image /Width 4 /Height 2 /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /JPXDecode /Mask [0 0] /Length {} >>",
+        JPX_CHECKERBOARD.len()
+    );
+    let pdf = image_cache_pdf("1 0 0 rg 0 0 130 70 re f q 2 0 0 1 10 10 cm /A Do Q", "<< /XObject << /A 5 0 R >> >>", &[(&image, JPX_CHECKERBOARD)]);
+    let mut renderer = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
+    let out = renderer.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() });
+    assert!(out.error.is_none(), "{:?}", out.error);
+    let w = out.width as usize;
+    for x in [10, 11] {
+        let [r, g, b] = rgb_at(&out.rgba, w, x, 59);
+        assert!((100..=156).contains(&r) && g < 8 && b < 8, "half of pixel {x} shows the red under it: {:?}", [r, g, b]);
+    }
+    assert_eq!(rgb_at(&out.rgba, w, 9, 59), [255, 0, 0], "left of the image");
+    assert_eq!(rgb_at(&out.rgba, w, 12, 59), [255, 0, 0], "right of the image");
+}
+
 /// The decoded-image cache keyed every decode by the size the image is drawn at, but only
 /// a JPX stream decodes differently for a size: a scan was decoded again at every zoom step
 /// and kept once per zoom level (vendored hayro-interpret patch 32). An image drawn at five
