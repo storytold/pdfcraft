@@ -168,11 +168,19 @@ impl Automation {
         if flatten_fill_sign {
             self.apply(a, Edit::FlattenFillSign)?;
         }
+        // The document's Will Save actions run first: what they change is saved (#269).
+        let scripts = self.session.run_document_actions(id, pdfcraft_engine::js::DocumentScriptEvent::WillSave);
         let bytes = if full { self.session.save_full_bytes(id) } else { self.session.save_bytes(id) }.map_err(failed)?;
         // A save that adds or removes encryption, or must not keep the old revision (Sanitize,
         // redaction), is rewritten in full even when an incremental save was asked for.
         let incremental = !full && bytes.starts_with(&self.doc(a)?.saved_bytes());
-        self.publish_save(id, &target, bytes, incremental, write)
+        let mut out = self.publish_save(id, &target, bytes, incremental, write)?;
+        if !scripts.is_empty()
+            && let Some(o) = out.as_object_mut()
+        {
+            o.insert("will_save".into(), crate::a11y::form_tools::js_output_json(&scripts));
+        }
+        Ok(out)
     }
 
     /// Validate the prepared bytes before publishing them or marking the document saved.

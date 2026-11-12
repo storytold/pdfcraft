@@ -16,7 +16,7 @@ fn run_on_refuses_a_certificate_documents_file_bytes() {
     assert!(contains(&file, b"Adobe.PubSec"), "the file handed out is the encrypted one");
     assert!(!contains(&file, b"Unsaved 9KX2"), "the edit is not in clear");
     let action = Action { name: "Title".into(), description: String::new(), steps: vec![Step::SetTitle("Plain".into())], builtin: false };
-    match run_on(&action, "secret.pdf", file, |_, _| {}) {
+    match run_on(&action, "secret.pdf", file, true, |_, _| {}) {
         Ok(r) => panic!("the action ran and produced a {}-byte file", r.bytes.len()),
         Err(e) => assert!(e.contains("certificate"), "refused for want of a certificate: {e}"),
     }

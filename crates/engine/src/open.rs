@@ -105,6 +105,7 @@ impl Session {
             Self::draw_captions(&mut document, self.captions.clone());
         }
         self.docs.push(document);
+        self.run_open_scripts(id);
         id
     }
 
@@ -424,6 +425,9 @@ impl Session {
             editor,
             config,
             js_output: Default::default(),
+            js_runtime: Default::default(),
+            js_zoom: 100.0,
+            js_page: 0,
             xfa,
             xfa_template: None,
             xfa_scripts_off: false,
