@@ -206,6 +206,8 @@ fn main() -> eframe::Result {
     if let Some(code) = pdfcraft_platform::crypto_env::run_without_cpu_override() {
         std::process::exit(code);
     }
+    // aws-lc detects the CPU's features here, where it used to before `main` (`init_crypto`).
+    pdfcraft_engine::sign::init_crypto();
     // Windows: the update helper is a copy of this program started with `--finish-update`.
     #[cfg(windows)]
     if let Some(result) = craft_update::self_update::finish(&pdfcraft_ui_egui::UPDATE_APP, &std::env::args_os().skip(1).collect::<Vec<_>>()) {

@@ -10,10 +10,11 @@
 //!
 //! Two parts keep PdfCraft running:
 //! - `.cargo/config.toml` builds aws-lc with `BORINGSSL_NO_STATIC_INITIALIZER`, so it detects
-//!   the CPU on first use (`CRYPTO_library_init`, which aws-lc-rs calls) instead of in a static
-//!   initializer before `main`.
+//!   the CPU when `CRYPTO_library_init` is called instead of in a static initializer before
+//!   `main`.
 //! - [`run_without_cpu_override`], the first thing each executable's `main` does, runs the
-//!   program again without the variable, before anything uses aws-lc.
+//!   program again without the variable. Then `main` calls `pdfcraft_sign::init_crypto`, so the
+//!   CPU is detected at start as before, and every operation gets its fast code.
 //!
 //! Removing the variable from this process instead wouldn't work: aws-lc reads it through the C
 //! runtime's `getenv`, whose copy of the environment `std::env::remove_var` doesn't change on
