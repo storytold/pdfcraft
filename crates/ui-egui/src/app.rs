@@ -353,6 +353,7 @@ impl PdfCraftApp {
             redact_search: RedactSearchDraft::default(),
             hidden_draft: HiddenDraft::default(),
             print_draft: PrintDraft::default(),
+            batch_print: dialogs::batch_print::BatchPrintDraft::default(),
             link_draft: None,
             text_style: content_ui::default_style(),
             replace_draft: None,

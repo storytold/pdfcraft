@@ -8,6 +8,7 @@ use pdfcraft_engine::Edit;
 use crate::{CloseRequest, Dialog, PdfCraftApp, PropsTab, panels::human_size, widgets};
 
 pub(super) mod appearance;
+pub(super) mod batch_print;
 pub mod bookmark_styles_ui;
 pub(super) mod comment_props;
 pub(super) mod convert_colours_ui;
@@ -68,6 +69,7 @@ struct Pending {
     redact_now: Option<Dialog>,
     import_words: bool,
     print_go: bool,
+    batch_print_go: bool,
     revert_now: bool,
     overwrite_now: bool,
     overwrite_elsewhere: bool,
@@ -155,7 +157,7 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
     let modal = widgets::show_modal_sized(ctx, "dialog", remeasure, |ui| {
         ui.set_width(match dialog {
             Dialog::Properties(_) => 640.0,
-            Dialog::Print => 820.0,
+            Dialog::Print | Dialog::BatchPrint => 820.0,
             Dialog::FieldProps | Dialog::BulkFieldProps => 600.0,
             Dialog::Preferences => 610.0,
             Dialog::About => 820.0,
@@ -325,6 +327,12 @@ fn dialog_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, dialog: Dialog, req: &m
             if !dialog_print(ui, app, req) {
                 return false;
             }
+        }
+        Dialog::BatchPrint => {
+            let (go, cancel) = batch_print::dialog_batch_print(ui, app);
+            req.batch_print_go = go;
+            req.close = go || cancel;
+            return false;
         }
         Dialog::RemoveHidden => {
             let (ok, cancel) = crate::redact_ui::hidden_body(ui, &mut app.hidden_draft, &t);
@@ -1896,6 +1904,9 @@ fn finish_requests(app: &mut PdfCraftApp, dialog: Dialog, modal_closed: bool, re
     }
     // A print or save that fails keeps the dialog open, with the reason in a notice.
     if req.print_go && !app.print_now() {
+        req.close = false;
+    }
+    if req.batch_print_go && !app.print_batch_now() {
         req.close = false;
     }
     if req.revert_now {

@@ -261,6 +261,185 @@ impl PdfCraftApp {
         self.dialog = Some(crate::Dialog::Print);
     }
 
+    /// Open the Batch Print dialog.
+    pub fn open_batch_print(&mut self) {
+        self.batch_print = crate::dialogs::batch_print::BatchPrintDraft::default();
+        self.batch_print_add_open_documents();
+        self.dialog = Some(crate::Dialog::BatchPrint);
+    }
+
+    /// Add all open documents to batch print draft.
+    pub fn batch_print_add_open_documents(&mut self) {
+        for view in &self.views {
+            if let Some(doc) = self.session.get(view.id)
+                && !self.batch_print.items.iter().any(|i| i.doc_id == Some(doc.id))
+            {
+                let page_sizes: Vec<(f64, f64)> = doc.info.pages.iter().map(|p| (f64::from(p.width), f64::from(p.height))).collect();
+                let page_labels: Vec<String> = doc.info.pages.iter().map(|p| p.label.clone()).collect();
+                let page_count = doc.info.pages.len();
+                self.batch_print.items.push(crate::dialogs::batch_print::BatchPrintItem {
+                    name: doc.name.clone(),
+                    path: doc.path.as_ref().map(std::path::PathBuf::from),
+                    doc_id: Some(doc.id),
+                    page_count,
+                    page_sizes,
+                    page_labels,
+                    selected: true,
+                    is_tab: true,
+                });
+            }
+        }
+    }
+
+    /// Prepare print draft for batch print settings, reading printers in the background.
+    pub fn prepare_batch_print_settings(&mut self) {
+        let (printers, printers_loading) = match self.printer_source.clone() {
+            #[cfg(not(target_arch = "wasm32"))]
+            Some(source) => {
+                self.list_printers_in_background(source);
+                (self.print_draft.printers.clone(), true)
+            }
+            _ => (listed_printers(), false),
+        };
+        let mut keep = std::mem::take(&mut self.print_draft);
+        if keep.handling == Handling::Label {
+            keep.set_handling(Handling::Size);
+        }
+        let default = default_printer(&keep, &printers);
+        let picked = keep.printer_picked && offered(keep.printer.as_deref(), &printers);
+        let printer = if picked { keep.printer.clone() } else { default };
+        let changed = printer != keep.printer;
+        let fresh = PrintDraft::default();
+        self.print_draft = PrintDraft {
+            copies: fresh.copies,
+            range: fresh.range,
+            subset: fresh.subset,
+            reverse: fresh.reverse,
+            handling: fresh.handling,
+            per_sheet: fresh.per_sheet,
+            custom_grid: fresh.custom_grid,
+            cols: fresh.cols,
+            rows: fresh.rows,
+            order: fresh.order,
+            border: fresh.border,
+            auto_rotate: fresh.auto_rotate,
+            booklet_subset: fresh.booklet_subset,
+            poster_scale: fresh.poster_scale,
+            overlap: fresh.overlap,
+            cut_marks: fresh.cut_marks,
+            label_flip: fresh.label_flip,
+            orientation: fresh.orientation,
+            crops: Vec::new(),
+            crop_pages: None,
+            printers,
+            printers_loading,
+            printer_picked: picked,
+            units: self.units,
+            printer: printer.clone(),
+            current_page: 0,
+            sheet: 0,
+            selected: Vec::new(),
+            which: Which::All,
+            area: None,
+            custom_new: None,
+            ..keep
+        };
+        if changed {
+            self.print_draft.apply_setup();
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(p) = printer {
+            self.read_papers_in_background(p);
+        }
+        self.dialog = Some(crate::Dialog::BatchPrint);
+    }
+
+    /// Ask for a folder of PDFs to include in batch printing.
+    pub fn batch_print_pick_folder(&mut self) {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let dialog = rfd::AsyncFileDialog::new().set_title(tl!("Choose a folder of PDFs to print"));
+            self.ask_one(crate::pickers::Ask::Folder(dialog), None, move |app, dir| {
+                app.batch_print.add_folder_pdfs(&dir);
+            });
+        }
+    }
+
+    /// Print each selected document with the current print settings.
+    pub fn print_batch_now(&mut self) -> bool {
+        let selected: Vec<crate::dialogs::batch_print::BatchPrintItem> = self.batch_print.items.iter().filter(|i| i.selected).cloned().collect();
+
+        if selected.is_empty() {
+            self.notify_tr("No documents selected to print");
+            return false;
+        }
+
+        let Some(printer) = self.print_draft.printer.clone() else {
+            self.notify_tr("Please choose a printer for batch printing");
+            return false;
+        };
+
+        let mut printed_count = 0usize;
+        let mut failed_count = 0usize;
+
+        for item in selected {
+            if let Some(doc_id) = item.doc_id {
+                if let Some(doc) = self.session.get(doc_id) {
+                    let labels: Vec<String> = doc.info.pages.iter().map(|p| p.label.clone()).collect();
+                    if let Ok(settings) = self.print_draft.settings(doc.info.pages.len(), &labels)
+                        && let Ok(bytes) = self.session.print_pdf(doc_id, &settings)
+                    {
+                        let mut job = self.print_draft.job(&doc.name);
+                        let sizes: Vec<(f64, f64)> = doc.info.pages.iter().map(|p| (f64::from(p.width), f64::from(p.height))).collect();
+                        if let Ok(sheets) = print::layout(&sizes, &settings) {
+                            print::add_cups_orientation(&mut job.options, &sheets);
+                        }
+                        if self.send_to_printer(printer.clone(), bytes, job) {
+                            printed_count += 1;
+                            continue;
+                        }
+                    }
+                }
+                failed_count += 1;
+            } else if let Some(path) = item.path {
+                #[cfg(not(target_arch = "wasm32"))]
+                if let Ok(file_bytes) = std::fs::read(&path) {
+                    let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+                    if let Ok(temp_id) = self.session.open(&name, Some(path.to_string_lossy().to_string()), std::sync::Arc::new(file_bytes), None) {
+                        if let Some(doc) = self.session.get(temp_id) {
+                            let labels: Vec<String> = doc.info.pages.iter().map(|p| p.label.clone()).collect();
+                            if let Ok(settings) = self.print_draft.settings(doc.info.pages.len(), &labels)
+                                && let Ok(bytes) = self.session.print_pdf(temp_id, &settings)
+                            {
+                                let mut job = self.print_draft.job(&name);
+                                let sizes: Vec<(f64, f64)> = doc.info.pages.iter().map(|p| (f64::from(p.width), f64::from(p.height))).collect();
+                                if let Ok(sheets) = print::layout(&sizes, &settings) {
+                                    print::add_cups_orientation(&mut job.options, &sheets);
+                                }
+                                if self.send_to_printer(printer.clone(), bytes, job) {
+                                    printed_count += 1;
+                                    self.session.close(temp_id);
+                                    continue;
+                                }
+                            }
+                        }
+                        self.session.close(temp_id);
+                    }
+                }
+                failed_count += 1;
+            }
+        }
+
+        if printed_count > 0 {
+            self.notify_fmt("Sent {n} documents to printer", &[("n", &printed_count.to_string())]);
+        }
+        if failed_count > 0 {
+            self.notify_fmt("{n} documents could not be printed", &[("n", &failed_count.to_string())]);
+        }
+
+        printed_count > 0
+    }
+
     /// Label printing: find each printed page's printed area (a quick low-resolution render, as
     /// Fit Visible does) and which way its text runs. Only the pages being printed are read, at
     /// most [`LABEL_CROP_PAGES`] of them (the rest print whole); read again when they change.
