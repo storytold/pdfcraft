@@ -1,6 +1,6 @@
 #[cfg(test)]
 use super::core::inspect;
-use super::core::{Inspector, load_options};
+use super::core::{Inspector, LOAD_STREAM_LIMIT, load_options};
 use super::model::{Attachment, AttachmentSource, FontInfo, Layer, LayerItem, LayerRow, PageTransition, TransitionStyle};
 use super::navigation::{NameTreeSeen, text_string};
 use super::{AssertUnwindSafe, Dictionary, DocInfo, Document, HashMap, HashSet, LazyStructure, Object, ObjectId, catch_unwind};
@@ -398,15 +398,23 @@ const MAX_ATTACHMENT_BYTES: usize = 1 << 30;
 /// an attachment stored in the clear reads, and one encrypted for that password is
 /// [`ATTACHMENT_NEEDS_PASSWORD`], never its encrypted bytes.
 pub fn attachment_data(bytes: &[u8], password: Option<&str>, att: &Attachment) -> Result<Vec<u8>, String> {
+    attachment_data_within(bytes, password, att, LOAD_STREAM_LIMIT)
+}
+
+/// [`attachment_data`], the object and cross-reference streams of the document decoded to at most
+/// `stream_limit` bytes each while the file specification is found, as structural inspection
+/// decodes them ([`LOAD_STREAM_LIMIT`]): the attachment's own [`MAX_ATTACHMENT_BYTES`] bounds
+/// only its data.
+pub(super) fn attachment_data_within(bytes: &[u8], password: Option<&str>, att: &Attachment, stream_limit: usize) -> Result<Vec<u8>, String> {
     let run = || -> Result<Vec<u8>, String> {
         // lopdf can't read a document opened without its key at all, and with the key it reads
         // the strings of one whose crypt filters differ (`/StrF /Identity`, say) as encrypted.
-        if let Ok(model) = pdfcraft_cos::Document::open_with_password(std::sync::Arc::new(bytes.to_vec()), password)
+        if let Ok(model) = pdfcraft_cos::Document::open_with_stream_limit(std::sync::Arc::new(bytes.to_vec()), password, stream_limit)
             && model.security().is_some()
         {
             return model_attachment_data(model, att);
         }
-        let options = load_options(password);
+        let options = lopdf::LoadOptions { max_decompressed_size: Some(stream_limit), ..load_options(password) };
         let doc = Document::load_mem_with_options(bytes, options).map_err(|e| e.to_string())?;
         let insp = Inspector::new(&doc);
         let stream = insp.resolve(embedded_file(&insp, att)?);

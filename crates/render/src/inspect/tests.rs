@@ -3151,3 +3151,91 @@ fn a_truncated_attachment_is_an_error_not_its_decoded_part() {
         assert!(damaged.is_err(), "encrypted: {encrypted}: {:?} bytes of {} passed as the file", damaged.map(|r| r.len()), words.len());
     }
 }
+
+/// An encrypted document whose attachment's file specification sits in an object stream larger
+/// than the structural limit: finding the attachment decodes object streams to that limit, as
+/// inspection does, not to the 1 GiB an attachment's own data may take (ISO 32000-2 §7.5.7).
+#[test]
+fn finding_an_attachment_keeps_the_object_stream_limit() {
+    let mut protected = pdfcraft_cos::Document::open(Arc::new(
+        pdfcraft_testkit::Pdf::new().obj("<< /Type /Catalog /Pages 2 0 R >>").obj("<< /Type /Pages /Kids [] /Count 0 >>").build(),
+    ))
+    .unwrap();
+    protected
+        .set_encryption(&pdfcraft_cos::NewEncryption {
+            algorithm: pdfcraft_cos::Algorithm::Aes256,
+            user_password: ATTACHMENT_PASSWORD,
+            owner_password: "owner pw",
+            permissions: -4,
+            encrypt_metadata: true,
+            seed: [5; 32],
+        })
+        .unwrap();
+    let handler = protected.output_handler().unwrap();
+    let d = handler.dict();
+    let hex = |b: &[u8]| b.iter().map(|b| format!("{b:02X}")).collect::<String>();
+    // Object 4, the file specification, is the only member of object stream 7, padded to 128 KiB.
+    // `/StmF /Identity`: the object stream is in the clear; the attachment, 5, is encrypted.
+    let spec = b"<< /Type /Filespec /F (note.txt) /EF << /F 5 0 R >> >>";
+    let mut members = b"4 0 ".to_vec();
+    let first = members.len();
+    members.extend_from_slice(spec);
+    members.resize(128 << 10, b' ');
+    let cipher = handler.encrypt_string(5, 0, ENCRYPTED_ATTACHMENT);
+    let bodies: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R /Names << /EmbeddedFiles << /Names [(note.txt) 4 0 R] >> >> >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >>".to_vec(),
+        [format!("<< /Type /EmbeddedFile /Length {} >>\nstream\n", cipher.len()).as_bytes(), &cipher, b"\nendstream"].concat(),
+        format!(
+            "<< /Filter /Standard /V 5 /R 6 /O <{}> /U <{}> /OE <{}> /UE <{}> /Perms <{}> /P {} /CF << /StdCF << /AuthEvent /EFOpen /CFM /AESV3 /Length 32 >> >> /StmF /Identity /StrF /Identity /EFF /StdCF >>",
+            hex(&d.o),
+            hex(&d.u),
+            hex(&d.oe),
+            hex(&d.ue),
+            hex(&d.perms),
+            d.p
+        )
+        .into_bytes(),
+        [format!("<< /Type /ObjStm /N 1 /First {first} /Length {} >>\nstream\n", members.len()).as_bytes(), &members, b"\nendstream"].concat(),
+    ];
+    let numbers = [1u32, 2, 3, 5, 6, 7];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = std::collections::BTreeMap::new();
+    for (n, body) in numbers.iter().zip(&bodies) {
+        offsets.insert(*n, out.len());
+        out.extend_from_slice(format!("{n} 0 obj\n").as_bytes());
+        out.extend_from_slice(body);
+        out.extend_from_slice(b"\nendobj\n");
+    }
+    let xref_at = out.len();
+    // Cross-reference stream (§7.5.8), /W [1 4 2]: 0 free, 4 in object stream 7, 8 itself.
+    let mut rows = vec![0u8, 0, 0, 0, 0, 0xFF, 0xFF];
+    for n in 1u32..=8 {
+        let (kind, field2, field3) = match n {
+            4 => (2u8, 7u32, 0u16),
+            8 => (1, u32::try_from(xref_at).unwrap(), 0),
+            _ => (1, u32::try_from(offsets[&n]).unwrap(), 0),
+        };
+        rows.push(kind);
+        rows.extend_from_slice(&field2.to_be_bytes());
+        rows.extend_from_slice(&field3.to_be_bytes());
+    }
+    out.extend_from_slice(
+        format!("8 0 obj\n<< /Type /XRef /Size 9 /W [1 4 2] /Root 1 0 R /Encrypt 6 0 R /ID [<00> <00>] /Length {} >>\nstream\n", rows.len())
+            .as_bytes(),
+    );
+    out.extend_from_slice(&rows);
+    out.extend_from_slice(format!("\nendstream\nendobj\nstartxref\n{xref_at}\n%%EOF\n").as_bytes());
+    let att = Attachment {
+        name: "note.txt".into(),
+        description: None,
+        has_description: false,
+        size: None,
+        source: AttachmentSource::Document { key: "note.txt".into() },
+    };
+    // Within the limit the attachment is found and reads; past it, it isn't found.
+    let read = |limit| attachment_data_within(&out, Some(ATTACHMENT_PASSWORD), &att, limit);
+    assert_eq!(read(1 << 20).as_deref(), Ok(ENCRYPTED_ATTACHMENT));
+    assert!(read(64 << 10).is_err(), "a 128 KiB object stream was decoded under a 64 KiB limit");
+}
