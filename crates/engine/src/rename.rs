@@ -203,11 +203,112 @@ fn move_no_replace(old: &Path, new: &Path) -> std::io::Result<()> {
     }
 }
 
+/// The move made below a folder, without following a link (Linux only; see
+/// [`Session::rename_file_in`]).
+#[cfg(target_os = "linux")]
+mod rooted {
+    use rustix::fs::{AtFlags, Mode, OFlags, RenameFlags, linkat, openat, renameat, renameat_with, statat, unlinkat};
+    use rustix::io::Errno;
+    use std::io::{Error, ErrorKind, Result};
+    use std::os::fd::OwnedFd;
+    use std::path::{Component, Path};
+
+    fn refused(what: &str) -> Error {
+        Error::other(format!("the move can't be kept inside the allowed folder: {what}"))
+    }
+
+    fn open_dir(parent: &OwnedFd, name: &std::ffi::OsStr) -> Result<OwnedFd> {
+        openat(parent, name, OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC, Mode::empty()).map_err(|e| match e {
+            Errno::LOOP | Errno::NOTDIR => refused("a folder on the way is a link"),
+            e => e.into(),
+        })
+    }
+
+    /// `path` relative to `root`: as written, or else with its folder's links resolved (the file
+    /// itself is never resolved). Names below `root` only; `..` and the like are refused.
+    fn below(root: &Path, path: &Path) -> Result<std::path::PathBuf> {
+        let rel = match path.strip_prefix(root) {
+            Ok(rel) => rel.to_path_buf(),
+            Err(_) => {
+                let (Some(dir), Some(name)) = (path.parent(), path.file_name()) else { return Err(refused("no folder")) };
+                let dir = dir.canonicalize()?;
+                dir.strip_prefix(root.canonicalize()?).map_err(|_| refused("the file is outside it"))?.join(name)
+            }
+        };
+        if rel.components().any(|c| !matches!(c, Component::Normal(_))) {
+            return Err(refused("an odd name on the way"));
+        }
+        Ok(rel)
+    }
+
+    /// Same as [`super::move_no_replace`], with `old` and `new` (one folder, below `root`) reached
+    /// from an open `root` by names opened without following links.
+    pub(super) fn move_no_replace(root: &Path, old: &Path, new: &Path) -> Result<()> {
+        let (old, new) = (below(root, old)?, below(root, new)?);
+        let (Some(folder), Some(from), Some(to)) = (old.parent(), old.file_name(), new.file_name()) else { return Err(refused("no file name")) };
+        if new.parent() != Some(folder) {
+            return Err(refused("the new name is in another folder"));
+        }
+        let mut dir = openat(rustix::fs::CWD, root, OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC, Mode::empty())?;
+        for part in folder.components() {
+            dir = open_dir(&dir, part.as_os_str())?;
+        }
+        let kept = |e: Errno| -> Error { e.into() };
+        match renameat_with(&dir, from, &dir, to, RenameFlags::NOREPLACE) {
+            Ok(()) => Ok(()),
+            Err(Errno::EXIST) => {
+                // The same file under another letter case (case-insensitive folders) is renamed.
+                let at = |n: &std::ffi::OsStr| statat(&dir, n, AtFlags::SYMLINK_NOFOLLOW);
+                match (at(from), at(to)) {
+                    (Ok(a), Ok(b))
+                        if (a.st_dev, a.st_ino) == (b.st_dev, b.st_ino)
+                            && from.to_string_lossy().to_lowercase() == to.to_string_lossy().to_lowercase() =>
+                    {
+                        renameat(&dir, from, &dir, to).map_err(kept)
+                    }
+                    _ => Err(ErrorKind::AlreadyExists.into()),
+                }
+            }
+            // No renameat2 / NOREPLACE here: a hard link refuses a taken name atomically, then the
+            // old name goes (and the new one is taken away again if it can't).
+            Err(Errno::INVAL | Errno::NOSYS | Errno::OPNOTSUPP) => match linkat(&dir, from, &dir, to, AtFlags::empty()) {
+                Ok(()) => unlinkat(&dir, from, AtFlags::empty()).map_err(|e| {
+                    let _ = unlinkat(&dir, to, AtFlags::empty());
+                    kept(e)
+                }),
+                Err(e @ (Errno::EXIST | Errno::NOENT)) => Err(e.into()),
+                Err(_) => {
+                    if statat(&dir, to, AtFlags::SYMLINK_NOFOLLOW).is_ok() {
+                        return Err(ErrorKind::AlreadyExists.into());
+                    }
+                    renameat(&dir, from, &dir, to).map_err(kept)
+                }
+            },
+            Err(e) => Err(e.into()),
+        }
+    }
+}
+
 impl Session {
     /// Rename the file of document `id` to `typed` (see [`rename_target`]), in its own folder. The
     /// document must have a file and no unsaved changes. Returns the new path; the document keeps
     /// its undo history, only its name and path change.
     pub fn rename_file(&mut self, id: DocId, typed: &str) -> Result<String, RenameError> {
+        self.rename_file_in(id, typed, None)
+    }
+
+    /// [`rename_file`](Self::rename_file) for an automation caller confined to the write folder
+    /// `root`: on Linux the move itself is made below that folder, with no link followed on the way
+    /// (the folder is opened, each name down to the file's folder is opened with `O_NOFOLLOW`, and
+    /// the file is renamed with `renameat` there), so a folder swapped for a link between the
+    /// caller's check and the move can't carry the file out of `root`. Where that can't be done the
+    /// rename is refused rather than made unconfined.
+    ///
+    /// macOS and Windows keep the check-then-rename model the repo documents for confined paths
+    /// (the caller's check, then a plain rename); `root` is ignored there, as it is when `None`.
+    pub fn rename_file_in(&mut self, id: DocId, typed: &str, root: Option<&Path>) -> Result<String, RenameError> {
+        #[cfg(not(target_os = "linux"))]
+        let _ = root;
         let doc = self.get(id).ok_or_else(|| RenameError::Failed("the document is no longer open".into()))?;
         let current = PathBuf::from(doc.path.clone().ok_or(RenameError::NoFile)?);
         if doc.dirty {
@@ -220,7 +321,14 @@ impl Session {
         // to the folder, not to the file, and the system says so when it refuses.
         // `rename_target` checked that the name is free, but a file may appear under it before the
         // move (a sync client, another program): `move_no_replace` refuses to replace it.
-        move_no_replace(&current, &target).map_err(|e| match e.kind() {
+        #[cfg(target_os = "linux")]
+        let moved = match root {
+            Some(root) => rooted::move_no_replace(root, &current, &target),
+            None => move_no_replace(&current, &target),
+        };
+        #[cfg(not(target_os = "linux"))]
+        let moved = move_no_replace(&current, &target);
+        moved.map_err(|e| match e.kind() {
             std::io::ErrorKind::AlreadyExists => {
                 RenameError::Exists(target.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default())
             }
@@ -358,5 +466,35 @@ mod tests {
             assert!(matches!(new_file_name(&current, &long), Err(RenameError::Invalid(_))), "one past the limit");
             assert!(new_file_name(&current, &long[1..]).is_ok(), "exactly at the limit");
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_folder_swapped_for_a_link_out_of_the_root_is_refused_on_linux() {
+        let base = std::env::temp_dir().join(format!("pdfcraft-rename-root-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let (root, outside) = (base.join("root"), base.join("outside"));
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        let (inside_file, outside_file) = (root.join("sub/a.pdf"), outside.join("a.pdf"));
+        std::fs::write(&inside_file, b"in").unwrap();
+        std::fs::write(&outside_file, b"out").unwrap();
+        let root = root.canonicalize().unwrap();
+        // Plain move below the root works.
+        rooted::move_no_replace(&root, &root.join("sub/a.pdf"), &root.join("sub/b.pdf")).unwrap();
+        assert!(root.join("sub/b.pdf").exists() && !inside_file.exists());
+        // A taken name is refused, nothing replaced.
+        std::fs::write(root.join("sub/c.pdf"), b"c").unwrap();
+        let err = rooted::move_no_replace(&root, &root.join("sub/b.pdf"), &root.join("sub/c.pdf")).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::AlreadyExists);
+        // `sub` is swapped for a link to a folder outside the root after the caller's check.
+        std::fs::remove_dir_all(root.join("sub")).unwrap();
+        std::os::unix::fs::symlink(&outside, root.join("sub")).unwrap();
+        let err = rooted::move_no_replace(&root, &root.join("sub/a.pdf"), &root.join("sub/z.pdf")).unwrap_err();
+        assert!(err.to_string().contains("allowed folder"), "{err}");
+        assert!(outside_file.exists() && !outside.join("z.pdf").exists(), "nothing moved outside");
+        // A file outside the root is refused too.
+        assert!(rooted::move_no_replace(&root, &outside_file, &outside.join("y.pdf")).is_err());
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

@@ -174,7 +174,15 @@ impl Automation {
             let shown = target.to_string_lossy().into_owned();
             self.resolve_for(&shown, file_access::Access::Write, true)?;
         }
-        let path = self.session.rename_file(id, name).map_err(failed)?;
+        // The move is made below the write folder where the system allows it (Linux: no link on the
+        // way is followed, so a folder swapped for a link after the checks above can't carry the
+        // file out). macOS and Windows keep the check-then-rename model.
+        let root = match (self.roots.as_ref().and_then(|r| r.write_root()), self.root.as_deref()) {
+            (Some(w), Some(r)) => Some(if r.starts_with(w) { r } else { w }),
+            (w, r) => w.or(r),
+        }
+        .map(Path::to_path_buf);
+        let path = self.session.rename_file_in(id, name, root.as_deref()).map_err(failed)?;
         let doc = self.session.get(id).ok_or_else(|| failed("the renamed document is no longer open"))?;
         Ok(json!({ "path": path, "name": doc.name.clone(), "document": summary(doc) }))
     }
