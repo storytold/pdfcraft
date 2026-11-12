@@ -372,7 +372,7 @@ fn serve(listener: UnixListener) -> Claim {
     }
 }
 
-/// Read one launch's request, queue its files and confirm.
+/// Read one launch's request, confirm it and queue its files.
 #[cfg(any(windows, all(unix, not(target_os = "macos"))))]
 fn receive(stream: &UnixStream, server: &Server) -> std::io::Result<()> {
     use std::io::{BufRead, Read, Write};
@@ -385,9 +385,12 @@ fn receive(stream: &UnixStream, server: &Server) -> std::io::Result<()> {
         return Ok(());
     }
     let (paths, combine) = parse_request(&line).ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "not an open request"))?;
-    server.deliver(paths, combine);
+    // Confirm first: a launch whose confirmation never arrives opens the files itself, so the files
+    // are queued here only once the confirmation is on its way, never both.
     let mut writer = stream;
-    writer.write_all(b"ok\n")
+    writer.write_all(b"ok\n")?;
+    server.deliver(paths, combine);
+    Ok(())
 }
 
 #[cfg(test)]
