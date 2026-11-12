@@ -1140,11 +1140,17 @@ impl XHost {
 
     /// Whether node `node` has no SOM path of its own, which the form keeps property changes by:
     /// an unnamed subform, area or draw shares its parent's (a change kept there is its named
-    /// parent's), and unnamed fields or exclusion groups of one container share theirs with each
-    /// other (each is `field[0]`, `group[0]`), as can a named object and one with its name and
-    /// number in an unnamed subform beside it. The form gives such an object no change of its own
-    /// (one kept at that path would reach every object there, `pdfcraft_xfa::som_is_shared`), so
-    /// a write to it is refused rather than handed to all of them.
+    /// parent's), and an unnamed field or exclusion group shares its path with any other object
+    /// that has it (unnamed fields of one container are each `field[0]`). XFA 3.3 gives unnamed
+    /// objects no SOM path of their own ("Transparent Nodes", p. 94), so the form keeps no change
+    /// for one of them there (one kept at that path would reach every object there,
+    /// `pdfcraft_xfa::som_is_shared`), and a write to it is refused rather than handed to all.
+    ///
+    /// Named objects only can share a path too: the form numbers each container's children
+    /// among their own siblings, where XFA 3.3 numbers the children of an unnamed subform as its
+    /// parent's (p. 95, Example 3.12), so two `verified` subforms, each in an unnamed subform,
+    /// are both `verified[0]` here and `verified[0]`, `verified[1]` there. Those writes are not
+    /// refused, as the form keeps them: by that one path, so each reaches all of them.
     pub(crate) fn shares_som(&self, node: usize) -> bool {
         let Some(n) = self.nodes.get(node) else { return false };
         if n.kind == XfaKind::Form {
@@ -1154,16 +1160,17 @@ impl XHost {
             return true;
         }
         let owners = self.som_owners.get_or_init(|| {
-            let mut owners: HashMap<Arc<str>, u32> = HashMap::new();
+            let mut owners: HashMap<Arc<str>, (u32, bool)> = HashMap::new();
             for (i, m) in self.nodes.iter().enumerate() {
                 if !m.gone && m.kind != XfaKind::Form && self.owns_som(i) {
-                    let c = owners.entry(Arc::clone(&m.som)).or_insert(0);
-                    *c = c.saturating_add(1);
+                    let c = owners.entry(Arc::clone(&m.som)).or_insert((0, false));
+                    c.0 = c.0.saturating_add(1);
+                    c.1 |= m.unnamed;
                 }
             }
             owners
         });
-        owners.get(&n.som).is_some_and(|&c| c > 1)
+        owners.get(&n.som).is_some_and(|&(c, unnamed)| c > 1 && unnamed)
     }
 
     /// Whether node `node`'s SOM path is not simply its parent's (as an unnamed subform's, area's

@@ -40,6 +40,11 @@ pub enum NodeKind {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct FormNode {
     pub name: String,
+    /// The template object has no name: [`Self::name`] is the one the form gives it (`field`,
+    /// `group`, `#subform`, …). XFA 3.3 gives it no SOM path of its own ("Transparent Nodes",
+    /// p. 94), so where another object has its path, a change can't be kept for it alone
+    /// ([`crate::som_is_shared`]).
+    pub unnamed: bool,
     pub som: String,
     pub kind: Option<NodeKind>,
     pub value: String,
@@ -591,6 +596,7 @@ impl Walker<'_> {
         self.push_events(&som, &f.scripts, f.calculate.as_ref(), f.validate.as_ref(), f.validate_message.as_deref());
         FormNode {
             name: f.common.name.clone().unwrap_or_else(|| "field".into()),
+            unnamed: f.common.name.is_none(),
             som: som.clone(),
             kind: Some(NodeKind::Field),
             value,
@@ -678,6 +684,7 @@ impl Walker<'_> {
                         let children = self.children(&sf.children, &som, depth + 1);
                         out.push(FormNode {
                             name: sf.common.name.clone().unwrap_or_else(|| "#subform".into()),
+                            unnamed: !named,
                             som: som.clone(),
                             kind: Some(NodeKind::Subform),
                             value: String::new(),
@@ -701,6 +708,7 @@ impl Walker<'_> {
                     let children = self.children(&a.children, &som, depth + 1);
                     out.push(FormNode {
                         name: a.common.name.clone().unwrap_or_else(|| "#area".into()),
+                        unnamed: a.common.name.is_none(),
                         som: som.clone(),
                         kind: Some(NodeKind::Area),
                         presence: self.presence(a.common.name.as_deref(), &som, a.common.presence),
@@ -719,6 +727,7 @@ impl Walker<'_> {
                     let som = child_som(parent_som, d.common.name.as_deref(), sib);
                     out.push(FormNode {
                         name: d.common.name.clone().unwrap_or_else(|| "draw".into()),
+                        unnamed: d.common.name.is_none(),
                         som: som.clone(),
                         kind: Some(NodeKind::Draw),
                         value: d.value.plain().unwrap_or_default(),
@@ -748,6 +757,7 @@ impl Walker<'_> {
                     }
                     out.push(FormNode {
                         name: g.common.name.clone().unwrap_or_else(|| "group".into()),
+                        unnamed: g.common.name.is_none(),
                         som: som.clone(),
                         kind: Some(NodeKind::ExclGroup),
                         value: selected.unwrap_or_default(),
@@ -803,6 +813,7 @@ pub fn form_tree_paged(tpl: &Template, data: Option<&DataNode>, ov: &Overrides, 
                 }
                 root_node.children.push(FormNode {
                     name: area.name.clone().unwrap_or_else(|| "#pageArea".into()),
+                    unnamed: area.name.is_none(),
                     som,
                     kind: Some(NodeKind::Area),
                     presence: "visible".into(),
@@ -817,6 +828,208 @@ pub fn form_tree_paged(tpl: &Template, data: Option<&DataNode>, ov: &Overrides, 
         }
     }
     LiveForm { root: root_node, events: w.events, truncated: w.truncated }
+}
+
+/// One object (or one set of objects) the live form gives a SOM segment to inside a container,
+/// as [`SomOwners`] records it.
+#[derive(Clone, Copy, Debug)]
+struct Owner {
+    /// Its number among its same-named siblings ([`SomIndices`]).
+    index: usize,
+    /// A named subform that may repeat (`occur max` other than 1): its later instances take the
+    /// numbers from `index` on.
+    repeats: bool,
+    /// The template object has no name (a field the form calls `field`, a group `group`).
+    unnamed: bool,
+    /// How many live objects it stands for, up to 2: two when it is inside an unnamed subform
+    /// that occurs more than once (whose instances give their children one path).
+    copies: u8,
+    /// The container its children are named in, when it has any.
+    space: Option<usize>,
+}
+
+/// Who owns each SOM path the live form ([`form_tree_paged`]) names, made once per template
+/// and kept in its memo, so [`crate::som_is_shared`] costs a look-up per segment of the path,
+/// however large the form is and however many paths are asked about.
+///
+/// It follows the live naming: a container's children are numbered among their own siblings
+/// ([`SomIndices`]), and an unnamed subform or area adds no segment, so its children are named
+/// in its parent's container, each still numbered among its own siblings. XFA 3.3 (ch. 3,
+/// "Transparent Nodes", pp. 94-95, Example 3.12) numbers them across the unnamed subform
+/// instead (`Receipt.Description[0]` and `Receipt.Description[1]`), so where two *named*
+/// objects get one path here, the specification gives them two. Only *unnamed* objects have no
+/// path of their own there either: they are "invisible to the normal SOM syntax" (p. 94).
+#[derive(Debug, Default)]
+pub(crate) struct SomOwners {
+    /// The names each container gives its children's segments, and who owns each.
+    spaces: Vec<HashMap<String, Vec<Owner>>>,
+    /// The first segment: the root subform's name and named page areas', and their containers.
+    top: HashMap<String, Vec<usize>>,
+    /// Unnamed page areas' containers, by their place in the page set (`#pageArea[i]`).
+    unnamed_areas: HashMap<usize, usize>,
+    /// Objects recorded, against [`MAX_FORM_NODES`].
+    nodes: usize,
+}
+
+#[cfg(test)]
+thread_local! {
+    /// [`SomOwners`] made (rather than taken from a template's memo), on this thread.
+    static OWNERS_MADE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Owners [`SomOwners::shared`] looked at, on this thread.
+    static OWNERS_LOOKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many [`SomOwners`] have been made on this thread, since the last call.
+#[cfg(test)]
+pub(crate) fn take_owners_made() -> usize {
+    OWNERS_MADE.with(|c| c.replace(0))
+}
+
+/// How many owners telling whether paths are shared looked at on this thread, since the last
+/// call.
+#[cfg(test)]
+pub(crate) fn take_owners_looked() -> usize {
+    OWNERS_LOOKED.with(|c| c.replace(0))
+}
+
+impl SomOwners {
+    /// The owners of every path `tpl`'s live form names, down to [`MAX_DEPTH`] and within
+    /// [`MAX_FORM_NODES`] objects, as the live form is built.
+    pub(crate) fn of(tpl: &Template) -> SomOwners {
+        #[cfg(test)]
+        OWNERS_MADE.with(|c| c.set(c.get().saturating_add(1)));
+        let mut o = SomOwners::default();
+        let root = o.space(&tpl.root.children, 1);
+        if let Some(name) = &tpl.root.common.name {
+            o.top.entry(name.clone()).or_default().push(root);
+        }
+        if let Some(ps) = &tpl.root.page_set {
+            for (i, area) in ps.areas.iter().enumerate() {
+                let id = o.space(&area.items, 1);
+                match &area.name {
+                    Some(name) => o.top.entry(name.clone()).or_default().push(id),
+                    None => {
+                        o.unnamed_areas.insert(i, id);
+                    }
+                }
+            }
+        }
+        o
+    }
+
+    /// A new container holding `nodes`; its id.
+    fn space(&mut self, nodes: &[Node], depth: usize) -> usize {
+        let id = self.spaces.len();
+        self.spaces.push(HashMap::new());
+        self.fill(id, nodes, 1, depth);
+        id
+    }
+
+    /// Record `nodes` in container `id`, each standing for `copies` live objects; unnamed
+    /// subforms and areas are looked through.
+    fn fill(&mut self, id: usize, nodes: &[Node], copies: u8, depth: usize) {
+        if depth > MAX_DEPTH {
+            return;
+        }
+        let sibs = SomIndices::of(nodes);
+        for (i, n) in nodes.iter().enumerate() {
+            if self.nodes >= MAX_FORM_NODES {
+                return;
+            }
+            self.nodes += 1;
+            let (name, unnamed, repeats, space) = match n {
+                Node::Subform(sf) => match &sf.common.name {
+                    Some(name) => (name.as_str(), false, sf.occur.max != Some(1), Some(self.space(&sf.children, depth + 1))),
+                    None => {
+                        // Its instances (as many as the template makes: data makes none of an
+                        // unnamed one) each name their children here.
+                        let more = crate::layout::instance_count(&sf.occur, 0) > 1;
+                        self.fill(id, &sf.children, if more { 2 } else { copies }, depth + 1);
+                        continue;
+                    }
+                },
+                Node::Area(a) => match &a.common.name {
+                    Some(name) => (name.as_str(), false, false, Some(self.space(&a.children, depth + 1))),
+                    None => {
+                        self.fill(id, &a.children, copies, depth + 1);
+                        continue;
+                    }
+                },
+                // An unnamed draw takes its parent's path: it owns none.
+                Node::Draw(d) => match &d.common.name {
+                    Some(name) => (name.as_str(), false, false, None),
+                    None => continue,
+                },
+                Node::Field(f) => (f.common.name.as_deref().unwrap_or("field"), f.common.name.is_none(), false, None),
+                Node::ExclGroup(g) => {
+                    // Its buttons, numbered among themselves.
+                    let mut buttons: HashMap<String, Vec<Owner>> = HashMap::new();
+                    let mut seen: HashMap<&str, usize> = HashMap::new();
+                    for b in &g.fields {
+                        if self.nodes >= MAX_FORM_NODES {
+                            break;
+                        }
+                        self.nodes += 1;
+                        let index = b.common.name.as_deref().map_or(0, |name| {
+                            let n = seen.entry(name).or_insert(0);
+                            *n += 1;
+                            *n - 1
+                        });
+                        let owner = Owner { index, repeats: false, unnamed: b.common.name.is_none(), copies: 1, space: None };
+                        buttons.entry(b.common.name.clone().unwrap_or_else(|| "field".into())).or_default().push(owner);
+                    }
+                    let space = self.spaces.len();
+                    self.spaces.push(buttons);
+                    (g.common.name.as_deref().unwrap_or("group"), g.common.name.is_none(), false, Some(space))
+                }
+            };
+            let owner = Owner { index: sibs.at(i), repeats, unnamed, copies, space };
+            if let Some(container) = self.spaces.get_mut(id) {
+                container.entry(name.to_string()).or_default().push(owner);
+            }
+        }
+    }
+
+    /// Whether more than one live object has the SOM path `som` and one of them is unnamed (see
+    /// [`crate::som_is_shared`]). Each segment is looked up in the containers the path so far
+    /// reached: the object with that exact number, and any subform that may repeat numbered
+    /// below it (whose later instance it names), each owns it, so where two objects get one
+    /// path, both do, and their children's paths are looked up in both.
+    pub(crate) fn shared(&self, som: &str) -> bool {
+        let path = crate::data::som_to_path(som);
+        // The containers the path reached, each with how many live objects it stands for.
+        let unnamed_area = som.strip_prefix("#pageArea[").and_then(|r| r.split_once(']')).and_then(|(i, _)| i.parse::<usize>().ok());
+        let (mut reached, rest) = match unnamed_area {
+            Some(i) => (self.unnamed_areas.get(&i).map(|&id| (id, 1u8)).into_iter().collect::<Vec<_>>(), path.as_slice()),
+            None => {
+                let Some(((first, _), rest)) = path.split_first() else { return false };
+                (self.top.get(first).map(|ids| ids.iter().map(|&id| (id, 1u8)).collect()).unwrap_or_default(), rest)
+            }
+        };
+        let Some(((last, last_index), within)) = rest.split_last() else { return false };
+        let owners = |reached: &[(usize, u8)], name: &str, index: usize| -> Vec<(Owner, u8)> {
+            reached
+                .iter()
+                .filter_map(|&(id, copies)| Some((self.spaces.get(id)?.get(name)?, copies)))
+                .flat_map(|(owners, copies)| {
+                    #[cfg(test)]
+                    OWNERS_LOOKED.with(|c| c.set(c.get().saturating_add(owners.len())));
+                    owners
+                        .iter()
+                        .filter(move |o| o.index == index || (o.repeats && o.index < index))
+                        .map(move |o| (*o, copies.saturating_mul(o.copies).min(2)))
+                })
+                .collect()
+        };
+        for (name, index) in within {
+            reached = owners(&reached, name, *index).into_iter().filter_map(|(o, copies)| Some((o.space?, copies))).collect();
+            if reached.is_empty() {
+                return false;
+            }
+        }
+        let found = owners(&reached, last, *last_index);
+        found.iter().map(|(_, copies)| usize::from(*copies)).sum::<usize>() > 1 && found.iter().any(|(o, _)| o.unnamed)
+    }
 }
 
 /// Does the template declare any script (an event, calculation or validation)? Forms without

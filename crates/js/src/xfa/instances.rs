@@ -160,6 +160,7 @@ fn clone_subtree(h: &mut XHost, src: usize, parent: Option<usize>, depth: usize)
         (
             HNode {
                 name: n.name.clone(),
+                unnamed: n.unnamed,
                 som: "".into(),
                 kind: n.kind,
                 value: String::new(),

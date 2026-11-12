@@ -12,6 +12,8 @@ use super::{Context, HashMap, JsResult, Message, RefCell, error};
 #[derive(Clone)]
 pub(crate) struct HNode {
     pub(crate) name: Arc<str>,
+    /// See [`XfaNode::unnamed`].
+    pub(crate) unnamed: bool,
     pub(crate) som: Arc<str>,
     pub(crate) kind: XfaKind,
     pub(crate) value: String,
@@ -59,6 +61,7 @@ pub(crate) fn forget_base() {
 fn flattened(root: &XfaNode) -> Vec<HNode> {
     let mut nodes = vec![HNode {
         name: "form".into(),
+        unnamed: false,
         som: "".into(),
         kind: XfaKind::Form,
         value: String::new(),
@@ -129,9 +132,10 @@ pub(crate) struct XHost {
     /// The writes being made are copies of a drawn edge or corner (`XHost::instantiate`), not
     /// the script's own.
     pub(crate) copying: bool,
-    /// How many live objects own each SOM path (see [`XHost::shares_som`]), counted when first
-    /// asked and again after the objects change (an instance added or removed).
-    pub(super) som_owners: std::cell::OnceCell<HashMap<Arc<str>, u32>>,
+    /// How many live objects own each SOM path, and whether one of them is unnamed (see
+    /// [`XHost::shares_som`]), counted when first asked and again after the objects change (an
+    /// instance added or removed).
+    pub(super) som_owners: std::cell::OnceCell<HashMap<Arc<str>, (u32, bool)>>,
 }
 
 impl XHost {
@@ -377,6 +381,7 @@ fn flatten(n: &XfaNode, parent: Option<usize>, out: &mut Vec<HNode>, depth: usiz
     let idx = out.len();
     out.push(HNode {
         name: n.name.as_str().into(),
+        unnamed: n.unnamed,
         som: n.som.as_str().into(),
         kind: n.kind.unwrap_or(XfaKind::Subform),
         value: n.value.clone(),

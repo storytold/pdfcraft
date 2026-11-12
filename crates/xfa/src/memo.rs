@@ -11,9 +11,12 @@
 //! - the fields those changes give the template's fields when they change more than the tree
 //!   (a validation, a picture, items: [`restyled_field`]), for the same reason, and because
 //!   making one reads the field again.
+//! - who owns each SOM path the live form names ([`crate::script::SomOwners`]), which depends
+//!   on the template alone, so that telling whether objects share a path
+//!   ([`crate::som_is_shared`]) costs a few look-ups each time it is asked.
 //!
-//! Neither is part of the template: a clone starts empty, and two compare equal. A poisoned lock
-//! only means a panic elsewhere while it was held; both are memos, so their contents stay valid.
+//! None is part of the template: a clone starts empty, and two compare equal. A poisoned lock
+//! only means a panic elsewhere while it was held; all are memos, so their contents stay valid.
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex, PoisonError, Weak};
@@ -78,6 +81,9 @@ pub struct Memo {
     kept: Mutex<Option<(Arc<Object>, KeptProps)>>,
     applied: Mutex<Applied<Props>>,
     fields: Mutex<Applied<Field>>,
+    /// Who owns each SOM path the live form names ([`crate::script::SomOwners`]), made the first
+    /// time it is asked.
+    som_owners: std::sync::OnceLock<crate::script::SomOwners>,
 }
 
 impl Clone for Memo {
@@ -110,6 +116,11 @@ impl Memo {
     /// `kept` was read from `object`.
     pub(crate) fn read(&self, object: &Arc<Object>, kept: KeptProps) {
         *self.kept.lock().unwrap_or_else(PoisonError::into_inner) = Some((Arc::clone(object), kept));
+    }
+
+    /// Who owns each SOM path the live form of `tpl` (the template holding this memo) names.
+    pub(crate) fn som_owners(&self, tpl: &crate::model::Template) -> &crate::script::SomOwners {
+        self.som_owners.get_or_init(|| crate::script::SomOwners::of(tpl))
     }
 }
 
@@ -297,6 +308,42 @@ mod tests {
         }
         crate::script::set_overrides(&mut doc, &ov).unwrap();
         (doc, tpl, ov)
+    }
+
+    /// Who owns which SOM path is worked out once per template, not for each path asked about
+    /// or each read of a document's marks: a form of 20,000 fields in one unnamed subform whose
+    /// file keeps 10,000 typed-over calculations reads them with one look-up per segment of
+    /// each path, however wide the form, and none of them is dropped (named, none is shared).
+    /// Counted, not timed.
+    #[test]
+    fn who_owns_which_path_is_worked_out_once_per_template() {
+        let fields: String = (0..20_000).map(|i| format!(r#"<field name="f{i}" w="2in" h="0.3in"><ui><textEdit/></ui></field>"#)).collect();
+        let xdp = format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/"><subform name="form" layout="tb">
+<pageSet><pageArea name="p"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+<subform layout="tb">{fields}</subform></subform></template></xdp:xdp>"#
+        );
+        let mut doc = pdfcraft_cos::Document::open(Arc::new(crate::fixtures::shell(&xdp))).unwrap();
+        let tpl = crate::script::template_of(&doc).unwrap();
+        let mut ov = crate::script::Overrides::default();
+        for i in 0..10_000 {
+            ov.overridden.insert(format!("form[0].f{i}[0]"), "1".into());
+        }
+        crate::script::set_overrides(&mut doc, &ov).unwrap();
+        let _ = (crate::script::take_owners_made(), crate::script::take_owners_looked());
+        for _ in 0..3 {
+            assert_eq!(crate::script::overrides_of(&doc, &tpl).overridden.len(), 10_000);
+        }
+        assert!(!crate::som_is_shared(&tpl, "form[0].f19999[0]"));
+        assert_eq!(crate::script::take_owners_made(), 1, "made once for the template");
+        // One owner per path: each field's name is its own.
+        assert_eq!(crate::script::take_owners_looked(), 3 * 10_000 + 1);
+        // A clone of the template (a template laid out again) starts its own.
+        let again = tpl.clone();
+        assert!(!crate::som_is_shared(&again, "form[0].f0[0]"));
+        assert_eq!(crate::script::take_owners_made(), 1);
     }
 
     /// Once read, the property changes a document keeps are not read again for the next event:

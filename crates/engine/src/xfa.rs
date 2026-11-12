@@ -23,8 +23,6 @@ const MAX_SCRIPTS_PER_EVENT: usize = 2_000;
 const MAX_RELAYOUTS_PER_EVENT: usize = 50;
 /// Most message boxes, console lines and errors kept for one event.
 const MAX_ALERTS_PER_EVENT: usize = 100;
-/// Most SOM paths an event remembers whether objects share ([`Runner::shared_soms`]).
-const MAX_SHARED_LOOKUPS: usize = 4_096;
 const MAX_CONSOLE_PER_EVENT: usize = 1_000;
 const MAX_ERRORS_PER_EVENT: usize = 100;
 /// Time the scripts of one event may take in all before the rest are skipped: opening (and
@@ -241,6 +239,7 @@ fn to_js_with(n: &FormNode, copies: &HashMap<usize, Arc<XfaProps>>, depth: usize
     let copy = |p: &Arc<Props>| copies.get(&(Arc::as_ptr(p) as usize)).cloned().unwrap_or_else(|| Arc::new(convert_props(p)));
     XfaNode {
         name: n.name.clone(),
+        unnamed: n.unnamed,
         som: n.som.clone(),
         kind: n.kind.map(|k| match k {
             NodeKind::Subform => XfaKind::Subform,
@@ -505,10 +504,6 @@ struct Runner<'a, 'b> {
     restyle_pending: bool,
     /// A property change was refused because the form holds as many as it may (noted once).
     props_full: bool,
-    /// Whether other objects share each SOM path a script changed a property at
-    /// ([`pdfcraft_xfa::som_is_shared`]), looked up once per path in an event (up to
-    /// [`MAX_SHARED_LOOKUPS`] paths kept; past them each is looked up again).
-    shared_soms: HashMap<String, bool>,
     pending: Vec<pdfcraft_xfa::DataOp>,
     /// Field values to write, by name (the last wins).
     field_changes: std::collections::BTreeMap<String, Vec<String>>,
@@ -565,7 +560,6 @@ impl<'a, 'b> Runner<'a, 'b> {
             ov_dirty: false,
             restyle_pending: false,
             props_full: false,
-            shared_soms: HashMap::new(),
             pending: Vec::new(),
             field_changes: Default::default(),
             by_som: None,
@@ -943,18 +937,10 @@ impl<'a, 'b> Runner<'a, 'b> {
     /// that isn't one, a measurement that doesn't read) is refused with a console note, and the
     /// property keeps what it had; past the form's limit on changes, one note says so.
     fn set_property(&mut self, ev: &ScriptEvent, som: &str, path: &str, attr: Option<&str>, value: &str, copied: bool) {
-        // Several objects at one SOM path (unnamed fields of one container): a change kept there
-        // would reach all of them, so none is kept, as the scripting host refuses it too.
-        let shared = match self.shared_soms.get(som) {
-            Some(&shared) => shared,
-            None => {
-                let shared = pdfcraft_xfa::som_is_shared(self.tpl, som);
-                if self.shared_soms.len() < MAX_SHARED_LOOKUPS {
-                    self.shared_soms.insert(som.to_string(), shared);
-                }
-                shared
-            }
-        };
+        // Several objects at one SOM path, one of them unnamed (unnamed fields of one container):
+        // a change kept there would reach all of them, so none is kept, as the scripting host
+        // refuses it too.
+        let shared = pdfcraft_xfa::som_is_shared(self.tpl, som);
         if shared {
             if !copied {
                 let what = attr.map_or_else(|| path.to_string(), |a| format!("{path} {a}"));
@@ -2070,6 +2056,38 @@ mod tests {
         assert_eq!(out.console.iter().filter(|l| l.contains("shares its SOM path")).count(), 2, "{out:?}");
         let [alert] = out.alerts.as_slice() else { panic!("{out:?}") };
         assert!(alert.text.starts_with("subform|") && !alert.text.contains("51,102,153"), "{alert:?}");
+    }
+
+    /// Two `verified` subforms, each in an unnamed subform of one container (corpus form 052,
+    /// Ontario Works 0983), are both `…tax[0].verified[0]` here, because PdfCraft numbers each
+    /// container's children among their own siblings; XFA 3.3 numbers them `verified[0]` and
+    /// `verified[1]` ("Transparent Nodes", p. 95, Example 3.12). Each check box's initialize
+    /// script colours its own font, and the form keeps the change (by the one path both share),
+    /// as the scripting host hands it over: neither refuses it as a write to a shared path. With
+    /// an unnamed check box in each instead, the path is one the form can't keep a change for,
+    /// and both refuse it.
+    #[test]
+    fn named_objects_numbered_apart_by_xfa_keep_their_property_writes() {
+        let open = |name: &str| {
+            let box_ = format!(
+                r#"<field {name} w="1in" h="0.3in"><ui><checkButton/></ui><items><integer>1</integer><integer>0</integer></items><event activity="initialize"><script contentType="application/x-javascript">this.font.fill.color.value = "0,0,255";</script></event></field>"#
+            );
+            let one = format!(r#"<subform layout="tb"><subform name="verified" layout="tb">{box_}</subform></subform>"#);
+            let template = pdfcraft_xfa::fixtures::scripted_template()
+                .replace(r#"<field name="hello""#, &format!(r#"<subform name="tax" layout="tb">{one}{one}</subform><field name="hello""#));
+            let mut s = crate::Session::new();
+            let id = s.open("tax.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&template)), None).unwrap();
+            let out = s.take_js_output(id);
+            let kept = pdfcraft_xfa::overrides(&pdfcraft_cos::Document::open(s.get(id).unwrap().bytes.clone()).unwrap());
+            (kept, out)
+        };
+        let (kept, out) = open(r#"name="yes""#);
+        let som = "form[0].page1[0].tax[0].verified[0].yes[0]";
+        assert_eq!(kept.props().get(som).and_then(|m| m.get("font#0/fill#0/color#0@value")).map(String::as_str), Some("0,0,255"), "{kept:?}");
+        assert!(!out.console.iter().any(|l| l.contains("SOM path")), "{out:?}");
+        let (kept, out) = open("");
+        assert!(kept.props().is_empty(), "{:?}", kept.props());
+        assert!(out.console.iter().any(|l| l.contains("SOM path")), "{out:?}");
     }
 
     /// Unnamed fields of one container share their SOM path (`…field[0]`), which the form keeps

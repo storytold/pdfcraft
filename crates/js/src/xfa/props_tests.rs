@@ -1355,7 +1355,7 @@ fn an_added_instance_reads_the_templates_properties_not_the_first_instances_chan
 /// would reach both), and reads back as before. A named field beside them takes its write.
 #[test]
 fn a_write_to_one_of_two_objects_sharing_a_som_path_is_refused() {
-    let unnamed = || XfaNode { name: "field".into(), som: "form1[0].field[0]".into(), ..node("field", XfaKind::Field, &[], vec![]) };
+    let unnamed = || XfaNode { name: "field".into(), unnamed: true, som: "form1[0].field[0]".into(), ..node("field", XfaKind::Field, &[], vec![]) };
     let mut root = form();
     root.children.extend([unnamed(), unnamed()]);
     let o = go_on(&root, "this.fillColor = '1,2,3'; xfa.form.form1.plain.fillColor = '4,5,6'; this.fillColor", "field");
@@ -1368,4 +1368,26 @@ fn a_write_to_one_of_two_objects_sharing_a_som_path_is_refused() {
     root.children.push(unnamed());
     let o = go_on(&root, "this.fillColor = '1,2,3'", "field");
     assert_eq!(o.effects, [set("form1[0].field[0]", "border#0/fill#0/color#0", Some("value"), "1,2,3")]);
+}
+
+/// Two named objects the form gives one SOM path, as it does two `verified` subforms each in an
+/// unnamed subform (corpus form 052): XFA 3.3 numbers them `verified[0]` and `verified[1]`
+/// ("Transparent Nodes", p. 95, Example 3.12), so each has a path of its own there, and a
+/// write to either is handed to the form (which keeps it by the one path) rather than refused.
+/// An unnamed object at that path makes it one the form can't keep a change for again.
+#[test]
+fn a_write_to_one_of_two_named_objects_given_one_som_path_is_kept() {
+    let named = || XfaNode { name: "yes".into(), som: "form1[0].yes[0]".into(), ..node("yes", XfaKind::Field, &[], vec![]) };
+    let mut root = form();
+    root.children.extend([named(), named()]);
+    let o = go_on(&root, "this.font.fill.color.value = '0,0,255'; this.font.fill.color.value", "yes");
+    assert_eq!(o.error, None, "{o:?}");
+    assert_eq!(o.result.as_deref(), Some("0,0,255"), "{o:?}");
+    assert_eq!(o.effects, [set("form1[0].yes[0]", "font#0/fill#0/color#0", Some("value"), "0,0,255")]);
+    assert!(!o.console.iter().any(|l| l.contains("SOM path")), "{o:?}");
+    // With an unnamed field there too, refused.
+    root.children.push(XfaNode { name: "yes".into(), unnamed: true, ..named() });
+    let o = go_on(&root, "this.font.fill.color.value = '0,0,255'", "yes");
+    assert!(o.effects.is_empty(), "{o:?}");
+    assert!(o.console.iter().any(|l| l.contains("shares its SOM path")), "{o:?}");
 }

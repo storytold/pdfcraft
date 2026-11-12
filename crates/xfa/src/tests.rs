@@ -8118,13 +8118,18 @@ two"
     }
 }
 
-/// Which SOM paths several objects of the form share ([`crate::som_is_shared`]): two unnamed
-/// fields or exclusion groups of one container (`field[0]`, `group[0]`), a field named `field`
-/// beside an unnamed one, a named object and one of its name and number in an unnamed subform
-/// beside it, and unnamed buttons of one group. Not shared: a named object, a lone unnamed one,
-/// a repeating subform's later instance, and a named subform holding an unnamed one (which takes
-/// its path). The answer agrees with the live form's paths: every path its objects own (not
-/// taken from their parent) is shared exactly when more than one owns it.
+/// Which SOM paths several objects of the form share with an unnamed one ([`crate::som_is_shared`]):
+/// two unnamed fields or exclusion groups of one container (`field[0]`, `group[0]`), a field
+/// named `field` beside an unnamed one, unnamed buttons of one group, an unnamed field in an
+/// unnamed subform that occurs twice, one in a repeating subform's second instance and in a
+/// same-named subform after it (both `row[1]`), and ones in two page areas of one name. Not
+/// shared: a named object, a lone unnamed one, a repeating subform's later instance, a named
+/// subform holding an unnamed one (which takes its path), and named objects the live form gives
+/// one path that XFA 3.3 numbers apart (p. 95: a named object and one of its name and number in
+/// an unnamed subform beside it, the copies in an unnamed subform that occurs twice, form 052's
+/// `verified` subforms, each in an unnamed subform). The answer agrees with the live form's
+/// paths: every path its objects own (not taken from their parent) is shared exactly when more
+/// than one owns it and one of them is unnamed.
 #[test]
 fn som_paths_several_objects_share_are_told() {
     let xdp = r##"<?xml version="1.0" encoding="UTF-8"?>
@@ -8136,6 +8141,10 @@ fn som_paths_several_objects_share_are_told() {
    <field x="1in" y="0.1in" w="1in" h="0.3in"><ui><textEdit/></ui></field><field x="3in" y="0.1in" w="1in" h="0.3in"><ui><textEdit/></ui></field><field name="pn" x="5in" y="0.1in" w="1in" h="0.3in"><ui><textEdit/></ui></field></pageArea>
   <pageArea><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/>
    <field x="1in" y="0.1in" w="1in" h="0.3in"><ui><textEdit/></ui></field><field x="3in" y="0.1in" w="1in" h="0.3in"><ui><textEdit/></ui></field><field name="pn" x="5in" y="0.1in" w="1in" h="0.3in"><ui><textEdit/></ui></field></pageArea>
+  <pageArea name="q"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/>
+   <field x="1in" y="0.1in" w="1in" h="0.3in"><ui><textEdit/></ui></field><field name="pn" x="5in" y="0.1in" w="1in" h="0.3in"><ui><textEdit/></ui></field></pageArea>
+  <pageArea name="q"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/>
+   <field x="1in" y="0.1in" w="1in" h="0.3in"><ui><textEdit/></ui></field><field name="pn" x="5in" y="0.1in" w="1in" h="0.3in"><ui><textEdit/></ui></field></pageArea>
  </pageSet>
  <subform name="two" layout="tb">
   <field name="named" w="2in" h="0.3in"><ui><textEdit/></ui></field>
@@ -8160,6 +8169,17 @@ fn som_paths_several_objects_share_are_told() {
  <subform name="rows" layout="tb">
   <subform name="row" layout="tb"><occur min="3" max="-1" initial="3"/><field name="item" w="2in" h="0.3in"><ui><textEdit/></ui></field></subform>
  </subform>
+ <subform name="twice" layout="tb">
+  <subform layout="tb"><occur min="2" max="2" initial="2"/><field name="a" w="2in" h="0.3in"><ui><textEdit/></ui></field><field w="2in" h="0.3in"><ui><textEdit/></ui></field></subform>
+ </subform>
+ <subform name="rows2" layout="tb">
+  <subform name="row" layout="tb"><occur min="2" max="-1" initial="2"/><field name="item" w="2in" h="0.3in"><ui><textEdit/></ui></field><field w="2in" h="0.3in"><ui><textEdit/></ui></field></subform>
+  <subform name="row" layout="tb"><field name="item" w="2in" h="0.3in"><ui><textEdit/></ui></field><field w="2in" h="0.3in"><ui><textEdit/></ui></field></subform>
+ </subform>
+ <subform name="tax" layout="tb">
+  <subform layout="tb"><subform name="verified" layout="tb"><field name="yes" w="1in" h="0.3in"><ui><checkButton/></ui></field><field name="no" w="1in" h="0.3in"><ui><checkButton/></ui></field></subform></subform>
+  <subform layout="tb"><subform name="verified" layout="tb"><field name="yes" w="1in" h="0.3in"><ui><checkButton/></ui></field><field name="no" w="1in" h="0.3in"><ui><checkButton/></ui></field></subform></subform>
+ </subform>
 </subform>
 </template>
 </xdp:xdp>
@@ -8172,9 +8192,11 @@ fn som_paths_several_objects_share_are_told() {
         "form[0].two[0].group[0].field[0]",
         "form[0].one[0].h[0].field[0]",
         "form[0].literal[0].field[0]",
-        "form[0].nested[0].x[0]",
+        "form[0].twice[0].field[0]",
+        "form[0].rows2[0].row[1].field[0]",
         "p[0].field[0]",
         "#pageArea[1].field[0]",
+        "q[0].field[0]",
     ] {
         assert!(shared(som), "{som}");
     }
@@ -8186,9 +8208,17 @@ fn som_paths_several_objects_share_are_told() {
         "form[0].one[0].g[0].field[0]",
         "form[0].one[0].g[0].b[0]",
         "form[0].nested[0]",
+        "form[0].nested[0].x[0]",
         "form[0].nested[0].y[0]",
         "form[0].rows[0].row[2].item[0]",
+        "form[0].twice[0].a[0]",
+        "form[0].rows2[0].row[1].item[0]",
+        "form[0].rows2[0].row[0].field[0]",
+        "form[0].tax[0].verified[0]",
+        "form[0].tax[0].verified[0].yes[0]",
+        "form[0].tax[0].verified[0].no[0]",
         "p[0].pn[0]",
+        "q[0].pn[0]",
         "#pageArea[1].pn[0]",
         "#pageArea[7].field[0]",
         "form[0].nowhere[0].field[0]",
@@ -8199,16 +8229,20 @@ fn som_paths_several_objects_share_are_told() {
     }
     // Against the live form's own paths, page areas' content included.
     let live = crate::form_tree(&tpl, None, &crate::Overrides::default());
-    let mut owners: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-    fn walk(n: &crate::FormNode, parent: &str, owners: &mut std::collections::HashMap<String, usize>) {
+    let mut owners: std::collections::HashMap<String, (usize, bool)> = std::collections::HashMap::new();
+    fn walk(n: &crate::FormNode, parent: &str, owners: &mut std::collections::HashMap<String, (usize, bool)>) {
         if n.som != parent {
-            *owners.entry(n.som.clone()).or_default() += 1;
+            let o = owners.entry(n.som.clone()).or_default();
+            o.0 += 1;
+            o.1 |= n.unnamed;
         }
         n.children.iter().for_each(|c| walk(c, &n.som, owners));
     }
     walk(&live.root, "", &mut owners);
-    assert!(owners.len() > 20, "{owners:?}");
-    for (som, n) in &owners {
-        assert_eq!(shared(som), *n > 1, "{som}: {n} owner(s)");
+    assert!(owners.len() > 30, "{owners:?}");
+    // Named objects the live form gives one path are there too (and not counted as shared).
+    assert!(owners.iter().any(|(_, &(n, unnamed))| n > 1 && !unnamed), "{owners:?}");
+    for (som, &(n, unnamed)) in &owners {
+        assert_eq!(shared(som), n > 1 && unnamed, "{som}: {n} owner(s), one unnamed: {unnamed}");
     }
 }

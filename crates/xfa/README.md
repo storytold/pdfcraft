@@ -169,11 +169,17 @@ let form = pdfcraft_xfa::layout_xml(template_xml)?;       // pages of items, for
   measurements, whole numbers, sizes) are one crate, `pdfcraft-xfa-rules` (re-exported here as
   `prop_rules`), that this crate and `pdfcraft-js` both depend on, so a script never reads back a
   value the form drops. An object whose SOM path, by which the changes are kept, is not its own
-  keeps none (`som_is_shared`): an unnamed subform, area or draw shares its parent's, and unnamed
-  fields or exclusion groups of one container (`…field[0]`, `…group[0]`), or a named object and
-  one of its name and number in an unnamed subform beside it, share theirs. A write to one is
-  refused with a console note, by the script and by the form, and such a change a file holds is
-  left out, as is a calculation override at such a path. `execValidate()` runs the null test on every
+  keeps none (`som_is_shared`): an unnamed subform, area or draw takes its parent's, and an
+  unnamed field or exclusion group (`…field[0]`, `…group[0]`) shares its path with any other
+  object the live form gives it (another unnamed one of the container, or its copy in an unnamed
+  subform that occurs twice); XFA 3.3 gives unnamed objects no path of their own ("Transparent
+  Nodes", p. 94). A write to one is refused with a console note, by the script and by the form,
+  and such a change a file holds is left out, as is a calculation override at such a path. Who
+  owns which path is worked out once per template. PdfCraft numbers each container's children
+  among their own siblings, where XFA 3.3 numbers an unnamed subform's children as its
+  parent's (p. 95, Example 3.12), so named objects can get one path too (two `verified`
+  subforms, each in an unnamed subform, are both `verified[0]`); a write to one of them is kept,
+  by that path, and reaches each of them. `execValidate()` runs the null test on every
   required object under the node and lists the empty ones in one message. An event's work
   doesn't grow with the changes the form already keeps: the template keeps (`memo`) the changes
   last read, with the object they came from, the property tree each changed object was given,

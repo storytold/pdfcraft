@@ -29,6 +29,10 @@ impl XfaKind {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct XfaNode {
     pub name: String,
+    /// The template object has no name: [`Self::name`] is the one the form gives it (`field`,
+    /// `group`, `#subform`, …), and XFA 3.3 gives it no SOM path of its own ("Transparent
+    /// Nodes", p. 94).
+    pub unnamed: bool,
     /// The SOM expression naming this instance (`form[0].head[0].familyName[0]`).
     pub som: String,
     pub kind: Option<XfaKind>,
