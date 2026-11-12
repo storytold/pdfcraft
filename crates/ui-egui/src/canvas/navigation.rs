@@ -313,7 +313,7 @@ impl DocView {
         // Only an up-to-date view counts: the page drawn is the shown one, with no jump pending.
         let edge = self.goto.is_none()
             && self.goto_point.is_none()
-            && self.single_edges.is_some_and(|(page, top, bottom)| page == self.current && if dy < 0.0 { bottom } else { top });
+            && self.single_edges.is_some_and(|(page, top, bottom)| page == self.shown_first() && if dy < 0.0 { bottom } else { top });
         let Some(forward) = self.wheel.feed_edge(unit, dy, phase, now, can_turn && edge) else { return false };
         let before = self.current;
         self.step_page(forward);
@@ -327,6 +327,17 @@ impl DocView {
         }
         self.single_edges = None;
         true
+    }
+
+    /// The page `single_edges` is recorded for when the view is up to date: the first page drawn,
+    /// which in two-page view is the first page of the current page's spread. End, or a link, can
+    /// make the right-hand page current, and comparing with it then never matched, so ↑ / ↓ and
+    /// the wheel at an edge no longer turned the spread (#7087).
+    fn shown_first(&self) -> usize {
+        match self.layout {
+            PageLayout::TwoUp => self.spread_first(self.current),
+            PageLayout::Single => self.current,
+        }
     }
 }
 
@@ -558,7 +569,7 @@ fn view_keys(
             // Only an up-to-date view counts: the page drawn is the current one, with no jump pending.
             let at_end = !scrolls
                 && view.goto.is_none()
-                && view.single_edges.is_some_and(|(page, top, bottom)| page == view.current && if forward { bottom } else { top });
+                && view.single_edges.is_some_and(|(page, top, bottom)| page == view.shown_first() && if forward { bottom } else { top });
             if at_end {
                 let before = view.current;
                 view.step_page(forward);

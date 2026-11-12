@@ -935,6 +935,45 @@ fn two_page_view_steps_a_spread_at_a_time() {
     assert_eq!(pages, [1, 3, 1, 0]);
 }
 
+/// #7087: in two-page view End made the right-hand page of the last spread current, and ↑ / ↓
+/// then did nothing, because the edge they turn at is recorded for the spread's first page.
+#[test]
+fn up_and_down_still_turn_spreads_after_end() {
+    use egui::Key;
+    use pdfcraft_ui_egui::canvas::{Fit, PageLayout};
+    // Without a cover page 4 pages end on spread 3–4; with one, 5 pages end on spread 4–5.
+    for (pages, cover, back) in [(4, false, 0), (5, true, 1)] {
+        let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+            let mut app = PdfCraftApp::new();
+            app.set_option("language", "en").unwrap();
+            app.open_bytes("a.pdf", None, fixture(pages)).unwrap();
+            app
+        });
+        crate::support::settle(&mut h);
+        {
+            let v = &mut h.state_mut().views[0];
+            v.fit = Fit::Page;
+            v.layout = PageLayout::TwoUp;
+            v.cover = cover;
+            // Two-page view a spread at a time, not scrolling.
+            v.set_continuous(false);
+        }
+        h.run_steps(4);
+        let press = |h: &mut Harness<'static, PdfCraftApp>, key| {
+            h.key_press(key);
+            h.run_steps(4);
+            h.state().views[0].current
+        };
+        assert_eq!(press(&mut h, Key::ArrowDown), if cover { 1 } else { 2 }, "↓ turns a spread from the start (cover {cover})");
+        assert_eq!(press(&mut h, Key::End), pages - 1, "End: the last page, the right-hand one (cover {cover})");
+        assert_eq!(press(&mut h, Key::ArrowUp), back, "↑ goes back a spread (cover {cover})");
+        assert_eq!(press(&mut h, Key::ArrowDown), back + 2, "↓ comes forward again (cover {cover})");
+        assert_eq!(press(&mut h, Key::End), pages - 1, "End again (cover {cover})");
+        assert_eq!(press(&mut h, Key::ArrowDown), pages - 1, "↓ at the end stays (cover {cover})");
+        assert_eq!(press(&mut h, Key::ArrowUp), back, "and ↑ still turns (cover {cover})");
+    }
+}
+
 #[test]
 fn damaged_files_say_they_were_repaired() {
     // No cross-reference table: the file is reconstructed.
