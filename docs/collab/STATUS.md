@@ -88,7 +88,14 @@
   on v0.21.0; the fork and the PR carried `95e2c9c97` only until `28fd4e1b3` was
   pushed at 17:41Z.
 - Delivered head: **`eb60bc5ff`** ("docs(collab): the delivered head is
-  `6ac4e1130` — the owner pushed it, the runs await approval"). Measured
+  `6ac4e1130` — the owner pushed it, the runs await approval"). **Superseded on
+  2026-11-12**: `gh pr view 6622` now reads `headRefOid`
+  `e7a0565014a786f431111f70f54ba2e20fb62355` — the docs commit `e7a056501`
+  ("the delivered head is `eb60bc5ff` — five runs, none executed") is pushed
+  above `eb60bc5ff`, and this clone's HEAD was `ac33dd212` on top of it before
+  this pass (one docs commit, the web-path record). Everything below about
+  `eb60bc5ff` describes its own delivery and remains true of the runs measured
+  there; the PR head moved by one docs-only commit. Measured
   2026-11-11T23:37Z, before the commit that carries this record: PR #6622's
   `headRefOid`, the fork `copoka/pdfcraft`'s branch tip (`git ls-remote fork
   refs/heads/feature/realtime-collaboration`) and this clone's HEAD all read
@@ -192,7 +199,8 @@
   restyle and status replies (`ce5c38798`), the publication queue
   (`a639f30c0`) and its recovery after a restart plus the resolve's own
   publication (`21aaf357a`, §4), presence selections (`b4e9179d8`) and their second slice —
-several `/NM`, per-line quads, the caret (`5bad54c40`, §4) — the conflict-resolution
+several `/NM`, per-line quads, the caret (`5bad54c40`, §4), re-addressed across a turn
+  and a catch-up and cleared with a dropped session (§4, 2026-11-12) — the conflict-resolution
   endpoint (`62d48d30a`), line endings/font size/info (`c400147b3`), page
   replace/blank insert (`e9756d138`), page insert/duplicate (`b13933e9b`),
   page split/combine (`362f9c72b`), the Split/Combine dialogs sending them
@@ -234,14 +242,27 @@ several `/NM`, per-line quads, the caret (`5bad54c40`, §4) — the conflict-res
   `conflict` flag and the journal tail as they were. A kill between the base
   write and the `CURRENT` rename is covered at the `Store` level only (§5 p.1,
   §6.1); the real-process SIGKILL test covers the journal→base window.
-- This pass is docs only: the web path's browser run is recorded in §4 ("The
-  web path in a browser: two iframes, one room", 2026-11-12). It built this
-  branch's `apps/pdfcraft-web` with trunk on the build host, ran a dev room and
-  a cabinet-like page on loopback, and drove two iframes over CDP: both joined,
-  the owner highlighted page 1, the editor noted page 2, each side saw the
-  other's annotation, and `commit` → `committed` closed on the app's status. No
-  code changed; §1's trunk sentence and §6.3's "not exercised" line follow from
-  it. Nothing was pushed.
+  The two passes after that one are docs-only web-path evidence and this
+  selection acceptance pass; both are recorded at the top of §4.
+- The pass before this one was docs only: the web path's browser run is recorded
+  in §4 ("The web path in a browser: two iframes, one room", 2026-11-12). It
+  built this branch's `apps/pdfcraft-web` with trunk on the build host, ran a dev
+  room and a cabinet-like page on loopback, and drove two iframes over CDP: both
+  joined, the owner highlighted page 1, the editor noted page 2, each side saw
+  the other's annotation, and `commit` → `committed` closed on the app's status.
+  No code changed; §1's trunk sentence and §6.3's "not exercised" line follow
+  from it. Nothing was pushed.
+- This pass closes the remote-selection leftover named at §6.6: the range is
+  addressed per line, carries the author's caret, and is re-addressed to the new
+  epoch after a turn or a catch-up replay. The feature itself was already in
+  `5bad54c40` (an ancestor of HEAD); this pass added the acceptance tests the
+  brief named and two client rules — keeping the selection across `page.rotate`
+  and a snapshot tail (`DocView::document_keeping_selection`), and clearing the
+  participant list on `Disconnected`/`Joined` so a dropped socket draws no old
+  cursors or selections. §4 records it, §5 p.4 and §6.6 are updated, RFC §5 now
+  states how a turn/resync re-addresses a range and that the protocol has no
+  `leave` message (a silent peer is the 30 s TTL). The code commit is
+  `00c06ed5c`; code and docs are local, the push is the owner's.
 - Audience: the next session (human or agent). Everything here was verified in
   the session that wrote it; anything not verified is marked as such.
 - Design: `docs/collab/RFC.md` (protocol, ADRs, trade-offs); operation of the
@@ -594,6 +615,72 @@ The app window "Collaboration" shows role, version/epoch, participants, errors,
 commit result, and a commit button for owner/editor.
 
 ## 4. Tests and verification
+
+### Remote selections: per line, with the caret, re-addressed across a turn and a catch-up (2026-11-12, local; not pushed)
+
+The brief took the leftover §6.6 named: "per-line range geometry, caret". The
+feature is `5bad54c40` (docs `b6244142c`), an ancestor of HEAD: `Selection::Text`
+carries `quads` (one rectangle per line piece, reading order, ≤48) and `caret`
+(the active end, or the dragged corner of a column select), the canvas paints
+each piece and the caret in the actor's colour, and a range addressed to another
+epoch is not drawn. This pass does not rewrite it; it adds the acceptance
+evidence and the two client rules the brief's scenarios need:
+
+- **A turn and a catch-up keep the range.** `invalidate_content` clears the
+  view's text selection on every content change, so a peer's `page.rotate` (or
+  the snapshot tail replayed after a reconnect) erased the author's range before
+  the new epoch ever reached a peer. `DocView::document_keeping_selection`
+  (`crates/ui-egui/src/canvas.rs`) keeps the selection when its page still
+  exists; the applied operations and the snapshot's tail replay use it when they
+  leave page addresses alone (`keeps_page_addresses`: a merge operation, or
+  `page.rotate`), and clear it for a structural page operation that can move or
+  remove the page (`crates/ui-egui/src/collab.rs`). The next presence frame
+  carries the same lines with the new `epoch` — the `with_epoch` rule for a merge
+  intent, applied to presence. The text layer is re-extracted, so a frame or two
+  after the turn may carry no selection; it comes back at the new epoch.
+- **A dropped session draws no old room.** `Event::Disconnected` and
+  `Event::Joined` clear `participants`, so a cursor or a selection from the
+  socket that ended does not survive a reconnect; the new session re-learns who
+  is there from presence. A peer that simply goes quiet is still the 30 s TTL
+  (ADR-0006): the server forgets it at once on the socket close but has no
+  `leave` message, so peers expire it; RFC §5 now says exactly that instead of
+  claiming an immediate removal.
+
+One line of the brief asked that a viewer not publish a selection. `TASK.md`
+(§ roles: "`viewer` — только просмотр и presence"; § presence: "страница,
+viewport, курсор, выделенный текст/аннотация") and RFC §5 say the opposite: a
+selection is presence, never an operation. The e2e test therefore asserts a
+viewer's selection is delivered while its operation is `forbidden`; refusing
+viewer presence would take away what TASK.md grants it.
+
+Tests:
+
+| Crate | Test |
+|---|---|
+| `collab-ws` e2e | `two_clients_share_a_selection_without_an_operation` (a three-line range reaches two peers with three pieces and its caret; a cleared selection takes the caret away; a rotation moves the epoch to 1 and the same range re-addressed to it is delivered; a viewer's selection is presence while its operation is `forbidden`; a late joiner sees only the rotation) |
+| `ui-egui` | `a_merge_or_a_turn_keeps_the_page_addresses`, `a_three_line_range_is_one_rect_per_line_and_its_caret_goes_with_it`, `a_rotated_page_re_addresses_the_range_to_the_new_epoch`, `a_range_on_a_deleted_page_is_neither_sent_nor_drawn`, `a_disconnect_takes_the_remote_selections_away` |
+
+Gates at `00c06ed5c` (host `agents`, rustc 1.99.1, warm `target/`):
+
+| Gate | Command | Result |
+|---|---|---|
+| Formatting | `cargo fmt --all -- --check` | pass |
+| Clippy (collab crates, client-pdf, ws, and the UI with the feature) | `cargo clippy -p pdfcraft-collab-proto -p pdfcraft-collab-client -p pdfcraft-collab-client-pdf -p pdfcraft-collab-ws -p pdfcraft-collab-pdf -p pdfcraft-ui-egui --features pdfcraft-ui-egui/collab --all-targets -- -D warnings` | pass |
+| E2E over a real socket | `cargo test -p pdfcraft-collab-ws --test e2e` | pass, **36/36** |
+| Selection tests in the UI | `cargo test -p pdfcraft-ui-egui --features pdfcraft-ui-egui/collab --lib collab::` | pass — **21** (1010 filtered out) |
+| Tests, client / pdf / ws unit | `cargo test -p pdfcraft-collab-client -p pdfcraft-collab-pdf -p pdfcraft-collab-ws` | pass — client **14**, pdf **71**, ws unit **16**; the three doc-test targets run 0 |
+| Web shell (wasm) | `cargo xtask wasm` | pass — wasm32: 44 crates ok |
+
+What this does **not** cover: a line's orientation *inside* a page — the wire
+carries an axis-aligned rectangle per line piece, so text rotated within the
+page (vertical text) is drawn as its box; the page's own `/Rotate` is carried
+because the geometry is in user space and the receiver maps it back with the
+page's rotation. The caret is still the range's active end, not the caret inside
+a form field (`forms_ui` owns that editor and has no page-space caret). A
+selection spanning several pages still names only the comments on the page in
+view. The host page's `pdfcraft:presence` payload still cannot carry
+`page`/`selection` until `craft-web-host` gains the two optional fields (a
+foreign crate, ADR-0016).
 
 ### The web path in a browser: two iframes, one room (2026-11-12, local; not pushed)
 
@@ -4129,10 +4216,18 @@ Ordered by the risk they pose to production.
    including viewers, and it never becomes an operation or moves `version`.
    The rest of it is closed in `5bad54c40` (§4): several selected comments travel
    as a list (primary `/NM` plus `also`), a text range as one rectangle per line
-   piece with the caret at its active end, and the canvas draws each quad.
+   piece with the caret at its active end, and the canvas draws each quad. The
+   range is re-addressed, not dropped, after a turn or a catch-up replay (§4,
+   2026-11-12): the page and its glyphs are kept, the next frame carries the new
+   `epoch`, and a page that is gone takes the range with it (`with_epoch`'s rule
+   for a merge intent, applied to presence); a dropped socket clears the
+   participant list, and a peer that goes quiet is the 30 s TTL (the protocol has
+   no `leave` message).
    What is still open: the caret is the range's active end, not the caret inside
-   a form field being typed into; a selection spanning several pages names only
-   the comments on the page in view; and the host page's `pdfcraft:presence`
+   a form field being typed into; a line's orientation inside a page is the
+   axis-aligned box of its piece (the page's own `/Rotate` is carried); a
+   selection spanning several pages names only the comments on the page in view;
+   and the host page's `pdfcraft:presence`
    report still cannot carry the participants' page/selection, because
    `craft-web-host` (`7666e2b`, a foreign crate) describes a `Participant` as
    `clientId`/`role`/`color` only — its contract allows the two optional fields,
@@ -4493,22 +4588,32 @@ replicas equal).
 Still open here: the blob channel that would lift the 160 KiB page cap and make
 a page restore independent of one frame — decided as a separate PR after this
 one merges (§4 "Blob channel — decision"), so the cap stands until then. Remote
-selections are done (§4, `b4e9179d8`); what remains of them is listed in §5 p.4
-(several selected comments, per-line range geometry, caret).
+selections are done: several `/NM` and per-line range geometry with the caret
+(`5bad54c40`), re-addressed to the new epoch after a turn or a catch-up and
+cleared when their page goes (§4, 2026-11-12); what remains is listed in §5 p.4
+(a form-field caret, a line's own orientation, multi-page names, the host
+payload).
 
 ### 6.6 Cleanup and submission
 
-- **Delivery state (2026-11-11T23:37Z).** The delivered head is `eb60bc5ff` —
+- **Delivery state (2026-11-11T23:37Z; head re-measured 2026-11-12).** The
+  delivered head recorded here is `eb60bc5ff` —
   the delivery record of `6ac4e1130`, which is the D4 record on top of
   `0d3ea2708` (the etag fix, §4) on `28fd4e1b3` — and at that moment it was at
   once the local HEAD, the fork's branch tip and PR #6622's `headRefOid`;
   `git rev-list --left-right --count fork/…...HEAD` was `0 0` and the tree was
-  clean. **`6ac4e1130` is no longer the fork head**: it is the previous
-  delivered head, one commit below `eb60bc5ff`. This record is one docs commit
-  on top of `eb60bc5ff` and is local; the delivered head stays `eb60bc5ff`
+  clean. **Since then the PR head moved twice, and `gh pr view 6622` on
+  2026-11-12 reads `headRefOid e7a0565014a786f431111f70f54ba2e20fb62355`
+  (`updatedAt` 2026-11-12T01:12:28Z): `e7a056501` (a docs record) is pushed
+  above `eb60bc5ff`, and this clone's HEAD was `ac33dd212` (the web-path record)
+  on top of it before this pass. `e7a056501` is docs-only and has no workflow
+  run of its own; the five runs below belong to `eb60bc5ff` and stay its
+  record.** **`6ac4e1130` is no longer the fork head**: it is an earlier
+  delivered head, below `eb60bc5ff`. This record is on top of `ac33dd212` and
+  is local; the delivered head stays `e7a056501`
   until the owner or `pr-agent` pushes the branch again. The owner or the
-  PR-sweep pass made those pushes, at 19:14Z and 21:10Z; this agent's `git
-  push*` denial was not lifted, so nothing in this file was pushed by the
+  PR-sweep pass made those pushes, at 19:14Z, 21:10Z and 01:12Z; this agent's
+  `git push*` denial was not lifted, so nothing in this file was pushed by the
   agent. `mergeable: MERGEABLE`, `mergeStateStatus: UNSTABLE`,
   `baseRefOid` `3650f01f2`, not a draft, `reviewDecision` empty, one check
   (CodeRabbit, `skipped`), and five workflow runs on `eb60bc5ff` (CI
