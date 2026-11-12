@@ -1229,7 +1229,7 @@ fn an_instances_own_font_and_margins_are_laid_out_and_drawn() {
     let cell = |som: &str| {
         items(&form)
             .into_iter()
-            .find_map(|i| if let Item::Widget(w) = i { (w.som == som).then(|| (w.rect, w.face.size)) } else { None })
+            .find_map(|i| if let Item::Widget(w) = i { (w.som == som).then_some((w.rect, w.face.size)) } else { None })
             .unwrap_or_else(|| panic!("{som}"))
     };
     for parent in ["form[0].rows[0]", "form[0].box[0].list[0]", "form[0].grid[0]"] {

@@ -1785,12 +1785,11 @@ mod tests {
         assert!(copy.upgrade().is_none(), "closing the form drops its copies at once");
     }
 
-    /// A live form node whose property tree is told apart by an attribute.
+    /// A live form node whose property tree is told apart by an attribute; the template's own
+    /// (no changes kept for it), as `form_tree` gives such a node.
     fn marked(mark: &str) -> FormNode {
-        FormNode {
-            props: Arc::new(Props { attrs: vec![("mark".into(), mark.into())], elements: Vec::new(), ..Default::default() }),
-            ..Default::default()
-        }
+        let props = Arc::new(Props { attrs: vec![("mark".into(), mark.into())], elements: Vec::new(), ..Default::default() });
+        FormNode { template_props: Arc::clone(&props), props, ..Default::default() }
     }
 
     /// The copy made of a tree is the one every later snapshot of the form gets, and the map
