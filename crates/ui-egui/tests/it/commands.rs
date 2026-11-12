@@ -758,3 +758,25 @@ fn ctrl_tab_steps_through_the_tabs_in_order_and_wraps_around() {
         assert!(!doc.dirty, "switching tabs changes no document");
     }
 }
+
+#[test]
+fn macos_azerty_cmd_z_still_undoes() {
+    // The Dvorak-QWERTY guard must be active on macOS: physical Cmd+V (logical K) must not
+    // open the palette. This also proves the guard is not skipped on this platform.
+    let mut h = harness();
+    h.ctx.set_os(OperatingSystem::Mac);
+    h.run_steps(2);
+    h.event(egui::Event::Key { key: Key::K, physical_key: Some(Key::V), pressed: true, repeat: false, modifiers: Modifiers::COMMAND });
+    h.run_steps(2);
+    assert!(!h.state().palette_open, "physical Cmd+V must not open the Cmd+K palette");
+
+    // AZERTY puts Z on the physical W key. Cmd+Z is still undo, not a remapped shortcut.
+    h.state_mut().run_command("page.rotate");
+    h.run_steps(3);
+    assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().info.pages[0].rotation, 90);
+    h.event(egui::Event::Key { key: Key::Z, physical_key: Some(Key::W), pressed: true, repeat: false, modifiers: Modifiers::COMMAND });
+    h.run_steps(3);
+    let doc = h.state().session.get(h.state().views[0].id).unwrap();
+    assert_eq!(doc.info.pages[0].rotation, 0, "Cmd+Z on AZERTY is undo");
+    assert_eq!(doc.can_undo(), None);
+}
