@@ -215,6 +215,13 @@ fn node_get(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValu
     if let Some(c) = shadowing {
         return node_object(ctx, c);
     }
+    // A script object the subform declares comes first too, as a named child does (`form1.value` when it declares `value`).
+    if key != IDX && !host(ctx)?.borrow().objects.is_empty() {
+        let declared = super::objects::child_object(ctx, idx, &key)?;
+        if !declared.is_undefined() {
+            return Ok(declared);
+        }
+    }
     Ok(match key.as_str() {
         IDX => JsValue::from(idx as f64),
         "rawValue" | "value" => host(ctx)?.borrow().nodes.get(idx).map_or(JsValue::null(), value_js),

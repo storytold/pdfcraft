@@ -2229,8 +2229,14 @@ mod session {
         outer.bare = false;
         let inner = object("Calc", Some("form1[0].page1[0]"), "var who = 'inner';");
         let layout = object("layout", Some("form1[0]"), "function f() { return 'declared'; }");
-        let o = with_objects(&mut s, "Calc.who + ',' + form1.Calc.who + ',' + form1.layout.f()", &[outer, inner, layout]);
-        assert_eq!(o.as_deref(), Ok("inner,outer,declared"));
+        let value = object("value", Some("form1[0]"), "function f() { return 'value'; }");
+        let o =
+            with_objects(&mut s, "Calc.who + ',' + form1.Calc.who + ',' + form1.layout.f() + ',' + form1.value.f()", &[outer, inner, layout, value]);
+        assert_eq!(o.as_deref(), Ok("inner,outer,declared,value"));
+        // the members an object exports count against the script's bound as well as its text
+        let names: String = (0..100_000).map(|i| format!("var v{i};")).collect();
+        let e = with_objects(&mut s, "Wide.v1", &[object("Wide", None, &names)]).unwrap_err();
+        assert!(e.contains("pass 8 MiB"), "{e}");
         let e = with_objects(&mut s, "Deep.x", &[object("Deep", None, &format!("var x = {}1;", "(".repeat(64_000)))]).unwrap_err();
         assert!(e.contains("nested too deeply"), "{e}");
         assert_eq!(s.dead(), None);

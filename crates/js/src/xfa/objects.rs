@@ -131,6 +131,15 @@ fn load(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
         return Err(failed(why).into());
     }
     let members = members_of(&object.text).map_err(failed)?;
+    // the members it exports are code compiled too: a short object declaring many names comes to more than its text
+    {
+        let mut h = host(ctx)?.borrow_mut();
+        h.loaded_bytes = h.loaded_bytes.saturating_add(members.len());
+        if h.loaded_bytes > MAX_LOADED_BYTES {
+            let why = format!("the script object {} was not loaded: the script's objects pass {} MiB", object.name, MAX_LOADED_BYTES >> 20);
+            return Err(JsNativeError::range().with_message(why).into());
+        }
+    }
     let code = format!("(function () {{\n{}\n;return (function (o) {{ {members} return o; }})({{}});\n}})", object.text);
     let build = ctx.eval(Source::from_bytes(code.as_bytes())).map_err(|e| failed(e.to_string()))?;
     let this = match this {
