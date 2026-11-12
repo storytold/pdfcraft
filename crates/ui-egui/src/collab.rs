@@ -432,6 +432,27 @@ fn part_name(document: &str, part: &SplitPart) -> String {
     }
 }
 
+/// Whether a replayed operation leaves page addresses alone: a turn re-displays
+/// a page, and a merge operation touches no page list. Any structural page
+/// operation may move or remove pages, so a text range kept across it could
+/// name another page.
+fn keeps_page_addresses(op: &Op) -> bool {
+    op.class == pdfcraft_collab_proto::ConflictClass::Merge || op.payload.get("action").and_then(serde_json::Value::as_str) == Some("page.rotate")
+}
+
+/// Refresh a view after the room applied a change: a text range stays selected
+/// (and the next presence frame re-addresses it to the new epoch) when the
+/// change leaves page addresses alone, and is dropped otherwise.
+fn refresh_view(views: &mut [DocView], session: &pdfcraft_engine::Session, doc: DocId, index: usize, keeps: bool) {
+    let Some(document) = session.get(doc) else { return };
+    let Some(view) = views.get_mut(index) else { return };
+    if keeps {
+        view.document_keeping_selection(&document.info);
+    } else {
+        view.document_changed(&document.info);
+    }
+}
+
 /// Address an operation, and the page its target names, at `version`/`epoch`:
 /// what the session does when it queues an intent, and what a sequence does for
 /// each step after the previous answer moved the head on.
@@ -851,6 +872,11 @@ impl PdfCraftApp {
         let mut rollback_after_snapshot = false;
         match event {
             Event::Joined { welcome, .. } => {
+                // A new connection cannot vouch for what the old one saw: what this
+                // replica draws as other people's cursors and selections is what this
+                // socket has learned, and a record from a session that ended must not
+                // outlive it (a reconnect re-learns the room from its presence).
+                collab.participants.clear();
                 collab.actor = Some(welcome.actor_id.clone());
                 collab.role = welcome.role;
                 // The actor names the person; the nonce keeps this launch's ids unique.
@@ -871,11 +897,12 @@ impl PdfCraftApp {
                 }
                 match apply(&mut self.session, doc, &applied.op) {
                     Ok(_) => {
-                        if let Some(document) = self.session.get(doc)
-                            && let Some(view) = self.views.get_mut(index)
-                        {
-                            view.document_changed(&document.info);
-                        }
+                        // A turn re-displays a page and a merge operation touches no page
+                        // list: a text range keeps its page and its glyphs, so it can be
+                        // re-addressed to the new epoch. A structural page operation may
+                        // move or remove the page under it.
+                        let keeps = keeps_page_addresses(&applied.op);
+                        refresh_view(&mut self.views, &self.session, doc, index, keeps);
                     }
                     Err(e) => collab.error = Some(format!("A shared change could not be applied: {e}")),
                 }
@@ -946,17 +973,19 @@ impl PdfCraftApp {
                 if base.is_some() {
                     collab.error = Some("The server compacted the journal; reopen the document to catch up.".into());
                 } else {
+                    // A tail that only turns pages or merges touches no page list; a
+                    // structural page operation in it may move or remove pages, so the
+                    // range is not kept across that.
+                    let keeps = tail.iter().all(keeps_page_addresses);
                     for op in tail {
                         if let Err(e) = apply(&mut self.session, doc, &op) {
                             collab.error = Some(format!("A snapshot operation could not be applied: {e}"));
                             break;
                         }
                     }
-                    if let Some(document) = self.session.get(doc)
-                        && let Some(view) = self.views.get_mut(index)
-                    {
-                        view.document_changed(&document.info);
-                    }
+                    // The snapshot is the room's own tail applied on this copy: a
+                    // range that keeps its address is re-addressed to `epoch`.
+                    refresh_view(&mut self.views, &self.session, doc, index, keeps);
                 }
                 // A retry asked for this snapshot: now the rollback splits have a
                 // head to be built on.
@@ -977,6 +1006,10 @@ impl PdfCraftApp {
                 collab.status = format!("Committed version {version}", version = result.version);
             }
             Event::Disconnected => {
+                // The room's presence is gone with the socket: keeping what the old
+                // connection learned would draw a cursor or a selection the author may
+                // no longer have (and a reconnect would show it until the TTL).
+                collab.participants.clear();
                 collab.status = "Reconnecting…".into();
                 collab.connected = false;
             }
@@ -1543,9 +1576,9 @@ fn color_of_hex(color: &str) -> egui::Color32 {
 #[cfg(test)]
 mod tests {
     use super::{
-        ActorId, BTreeMap, CollabUi, DocId, DocKey, Duration, Event, Instant, Op, PRESENCE_TTL, PageRef, ParticipantSelection, PdfCraftApp, Presence,
-        RemoteSelectionKind, Role, Seen, Sink, doc_key_from_token, local_selection, rect_of_quads, role_from_name, role_name, text_selection,
-        visible_selection,
+        ActorId, BTreeMap, CollabUi, DocId, DocKey, Duration, Event, Instant, Op, OpId, PRESENCE_TTL, PageRef, ParticipantSelection, PdfCraftApp,
+        Presence, RemoteSelectionKind, Role, Seen, Sink, doc_key_from_token, keeps_page_addresses, local_selection, rect_of_quads, role_from_name,
+        role_name, text_selection, visible_selection,
     };
     use pdfcraft_collab_proto::{Selection, Target, Viewport};
 
@@ -1559,6 +1592,14 @@ mod tests {
             selection,
             color: "#3366cc".into(),
         })
+    }
+
+    /// `presence`, on `epoch`'s page tree: the frame's own page must name the epoch
+    /// the reader is in, or a peer that has moved on drops the frame.
+    fn presence_on(epoch: u64, selection: Option<Selection>) -> Result<Presence, Box<dyn std::error::Error>> {
+        let mut presence = presence(selection)?;
+        presence.page.epoch = epoch;
+        Ok(presence)
     }
 
     /// A selection is presence: it is drawn while the sender's presence is fresh, and it
@@ -1774,6 +1815,157 @@ mod tests {
             }
             other => panic!("a text selection, got {other:?}"),
         }
+    }
+
+    /// A one-page document and a view over it with a range across three
+    /// two-glyph lines: the shape presence carries as one rectangle per line.
+    fn three_line_selection() -> (pdfcraft_render::DocInfo, crate::canvas::DocView) {
+        use crate::canvas::{DocView, ViewDefaults};
+        use pdfcraft_render::{DocInfo, PageInfo};
+        let info = DocInfo {
+            pages: vec![PageInfo { width: 300.0, height: 400.0, label: String::new(), crop: [0.0, 0.0, 300.0, 400.0], rotation: 0 }],
+            ..Default::default()
+        };
+        let mut view = DocView::new(DocId(1), &info, ViewDefaults::default());
+        view.current = 0;
+        view.texts.insert(0, three_line_text());
+        view.select_text(0, 0, 5);
+        (info, view)
+    }
+
+    /// The text layer of [`three_line_selection`]: three lines of two glyphs.
+    fn three_line_text() -> std::sync::Arc<pdfcraft_render::PageText> {
+        use pdfcraft_render::{PageText, TextGlyph};
+        use std::sync::Arc;
+        let glyph = |x: f32, y: f32| TextGlyph { text: "x".into(), rect: [x, y, x + 10.0, y + 10.0], quad: [[x, y]; 4], direction: [1.0, 0.0] };
+        Arc::new(PageText {
+            glyphs: vec![glyph(10.0, 10.0), glyph(20.0, 10.0), glyph(10.0, 30.0), glyph(20.0, 30.0), glyph(10.0, 50.0), glyph(20.0, 50.0)],
+            line_of: vec![0, 0, 1, 1, 2, 2],
+            space_before: vec![false; 6],
+            truncated: false,
+        })
+    }
+
+    /// A range is kept across a replay only when the replay leaves page addresses
+    /// alone: a merge operation touches no page list, a turn re-displays a page. A
+    /// structural page operation can move or remove the page a range names.
+    #[test]
+    fn a_merge_or_a_turn_keeps_the_page_addresses() {
+        use pdfcraft_collab_client_pdf::{add_note_payload, merge_op, rotate_payload, structural_op};
+        let doc = DocKey::new("file-1").expect("a document key");
+        let page = Target::Page(PageRef { index: 0, epoch: 0 });
+        let note = merge_op(doc.clone(), OpId::new("op-note").expect("an id"), 0, 0, page.clone(), add_note_payload("n", [1.0, 1.0], "x", "ada"));
+        assert!(keeps_page_addresses(&note), "a merge operation touches no page list");
+        let turn = structural_op(doc.clone(), OpId::new("op-turn").expect("an id"), 0, 0, page.clone(), rotate_payload(90));
+        assert!(keeps_page_addresses(&turn), "a turn re-displays the page");
+        let delete = structural_op(doc, OpId::new("op-del").expect("an id"), 0, 0, page, serde_json::json!({"action": "page.delete"}));
+        assert!(!keeps_page_addresses(&delete), "a delete moves the pages under a range");
+    }
+
+    /// A range across three lines reaches a peer as one rectangle per line, at
+    /// the sender's epoch and with the caret; clearing the selection takes both
+    /// the range and the caret away in the next frame.
+    #[test]
+    fn a_three_line_range_is_one_rect_per_line_and_its_caret_goes_with_it() {
+        let (info, mut view) = three_line_selection();
+        let (page, quads, caret) = match local_selection(&view, &info, 4) {
+            Some(Selection::Text { page, quads, caret, .. }) => (page, quads, caret),
+            other => panic!("a text selection, got {other:?}"),
+        };
+        assert_eq!(page, PageRef { index: 0, epoch: 4 }, "the range is addressed at the sender's epoch");
+        assert_eq!(quads.len(), 3, "one rectangle per line: {quads:?}");
+        assert!(caret.is_some(), "the caret travels with the range");
+
+        // A cleared selection is what the next frame says: no range, no caret.
+        view.clear_selection();
+        assert_eq!(local_selection(&view, &info, 4), None, "a cleared selection is not sent, caret included");
+    }
+
+    /// A turn (and a catch-up replay) keeps the range: the view keeps its page and
+    /// glyphs, and the next frame sends the same lines at the new epoch, where a
+    /// peer draws them. The old-epoch frame is not drawn.
+    #[test]
+    fn a_rotated_page_re_addresses_the_range_to_the_new_epoch() -> Result<(), Box<dyn std::error::Error>> {
+        let (info, mut view) = three_line_selection();
+        let before = local_selection(&view, &info, 2).expect("a range before the turn");
+        let mut turned = info.clone();
+        turned.pages[0].rotation = 90;
+        view.document_keeping_selection(&turned);
+        // The text layer is re-extracted after a content invalidation; put the same
+        // glyphs back, as the renderer's answer would.
+        view.texts.insert(0, three_line_text());
+        let after = local_selection(&view, &turned, 3).expect("the range survives the turn and is re-addressed");
+
+        let (page, quads, caret) = match &after {
+            Selection::Text { page, quads, caret, .. } => (page, quads, caret),
+            other => panic!("a text selection, got {other:?}"),
+        };
+        assert_eq!(page.index, 0, "the page index is the one it was selected on");
+        assert_eq!(*page, PageRef { index: 0, epoch: 3 }, "the range is re-addressed to the epoch it is sent in");
+        assert_eq!(quads.len(), 3, "one rectangle per line after the turn: {quads:?}");
+        assert!(caret.is_some(), "the caret survives with the range");
+
+        let now = Instant::now();
+        let fresh = Seen { presence: presence_on(3, Some(after.clone()))?, at: now };
+        let drawn = visible_selection(&fresh, now, 3).expect("a peer in the new page tree draws the range");
+        assert!(matches!(&drawn.kind, RemoteSelectionKind::Rects(rects) if rects.len() == 3), "got {:?}", drawn.kind);
+        assert_eq!(drawn.caret, (*caret).map(|[x, y]| [x as f64, y as f64]), "the caret travels too");
+        let stale = Seen { presence: presence_on(3, Some(before))?, at: now };
+        assert!(visible_selection(&stale, now, 3).is_none(), "a range from the old page tree is not drawn");
+        Ok(())
+    }
+
+    /// A page that is gone takes its range with it: the sender says nothing, and a
+    /// peer in the new page tree does not draw the old-epoch frame (a page delete
+    /// moves the epoch, so a frame addressed before it is stale).
+    #[test]
+    fn a_range_on_a_deleted_page_is_neither_sent_nor_drawn() -> Result<(), Box<dyn std::error::Error>> {
+        let (info, mut view) = three_line_selection();
+        assert!(local_selection(&view, &info, 2).is_some());
+        let removed = pdfcraft_render::DocInfo { pages: Vec::new(), ..Default::default() };
+        view.document_keeping_selection(&removed);
+        assert_eq!(local_selection(&view, &removed, 3), None, "a range whose page is gone is not sent");
+
+        let now = Instant::now();
+        let frame = Selection::Text {
+            page: PageRef { index: 0, epoch: 2 },
+            rect: [10, 10, 30, 60],
+            quads: vec![[10, 50, 30, 60], [10, 30, 30, 40], [10, 10, 30, 20]],
+            caret: Some([30, 10]),
+        };
+        let seen = Seen { presence: presence_on(3, Some(frame))?, at: now };
+        assert!(visible_selection(&seen, now, 3).is_none(), "the deleted page's range is not drawn in the new epoch");
+        Ok(())
+    }
+
+    /// A dropped session takes the room's presence with it: what the old socket
+    /// learned (including a selection and its caret) is not drawn across a
+    /// reconnect, where the next `welcome` re-learns who is there.
+    #[test]
+    fn a_disconnect_takes_the_remote_selections_away() -> Result<(), Box<dyn std::error::Error>> {
+        let mut app = PdfCraftApp::new();
+        app.open_bytes("t.pdf", None, fixture(2)).expect("the fixture opens");
+        let id = app.active_ids().map(|(_, id)| id).expect("a document");
+        session_on(&mut app, id);
+        let now = Instant::now();
+        let selection = Selection::Text {
+            page: PageRef { index: 1, epoch: 2 },
+            rect: [10, 20, 30, 40],
+            quads: vec![[10, 30, 30, 40], [10, 20, 20, 30]],
+            caret: Some([20, 20]),
+        };
+        {
+            let collab = app.collab.as_mut().expect("a session");
+            collab.epoch = 2;
+            collab.participants.insert("bo".into(), Seen { presence: presence(Some(selection))?, at: now });
+            assert_eq!(collab.selections(now).len(), 1);
+        }
+        let ctx = egui::Context::default();
+        app.collab_event(Event::Disconnected, &ctx);
+        let collab = app.collab.as_ref().expect("a session");
+        assert!(collab.participants.is_empty(), "a dropped socket cannot vouch for the old room");
+        assert!(collab.selections(Instant::now()).is_empty(), "the selection and its caret are gone");
+        Ok(())
     }
 
     /// A comment on `page` with `/NM` `name` and an index in `/Annots`, for the local

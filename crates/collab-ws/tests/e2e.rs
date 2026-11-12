@@ -2094,7 +2094,9 @@ fn two_clients_reply_with_a_status_and_a_deleted_parent_refuses_a_reply() -> Res
 }
 
 /// A selection is presence, not an operation: another replica and a viewer see it, no
-/// version or journal entry follows, and the room still accepts edits afterwards.
+/// version or journal entry follows, and the room still accepts edits afterwards. A range
+/// keeps one rectangle per line and its caret, a cleared selection takes both away, and a
+/// structural turn re-addresses the range to the new epoch.
 #[test]
 fn two_clients_share_a_selection_without_an_operation() -> Result<(), Box<dyn std::error::Error>> {
     let handle = start()?;
@@ -2103,11 +2105,13 @@ fn two_clients_share_a_selection_without_an_operation() -> Result<(), Box<dyn st
     let mut bo = Peer::join(addr, "commenter:bo", "bo")?;
     let mut di = Peer::join(addr, "viewer:di", "di")?;
 
+    // Three lines of a range, each with its own piece of geometry, and the caret
+    // at the range's active end.
     let text = Selection::Text {
         page: PageRef { index: 0, epoch: 0 },
-        rect: [20, 280, 220, 320],
-        quads: vec![[20, 300, 220, 320], [20, 280, 120, 300]],
-        caret: Some([120, 280]),
+        rect: [20, 260, 220, 320],
+        quads: vec![[20, 300, 220, 320], [20, 280, 180, 300], [20, 260, 120, 280]],
+        caret: Some([120, 260]),
     };
     ada.send_presence(Some(text.clone()))?;
     for peer in [&mut bo, &mut di] {
@@ -2115,7 +2119,25 @@ fn two_clients_share_a_selection_without_an_operation() -> Result<(), Box<dyn st
             ServerMessage::Presence(presence) => {
                 assert_eq!(presence.actor_id, ada.actor);
                 assert_eq!(presence.selection, Some(text.clone()), "the selection travels as presence");
+                match presence.selection {
+                    Some(Selection::Text { quads, caret, .. }) => {
+                        assert_eq!(quads.len(), 3, "one piece per selected line");
+                        assert_eq!(caret, Some([120, 260]), "the caret travels with the range");
+                    }
+                    other => return Err(format!("expected a text selection, got {other:?}").into()),
+                }
             }
+            other => return Err(format!("expected presence, got {other:?}").into()),
+        }
+    }
+
+    // Clearing the selection is the next frame: no range, no caret. Presence is
+    // rate-limited per actor (10 Hz), so let the previous frame age first.
+    std::thread::sleep(Duration::from_millis(120));
+    ada.send_presence(None)?;
+    for peer in [&mut bo, &mut di] {
+        match peer.next()? {
+            ServerMessage::Presence(presence) => assert_eq!(presence.selection, None, "a cleared selection takes its caret with it"),
             other => return Err(format!("expected presence, got {other:?}").into()),
         }
     }
@@ -2137,14 +2159,42 @@ fn two_clients_share_a_selection_without_an_operation() -> Result<(), Box<dyn st
     let mut late = Peer::join(addr, "editor:eve", "eve")?;
     assert!(late.resync(0)?.is_empty(), "a selection is not journaled and is not an operation");
 
-    // The room still accepts an operation afterwards: presence left nothing behind.
+    // The room still accepts an operation afterwards: presence left nothing behind. A
+    // turn is structural, so it moves the page tree's epoch; the same range sent again is
+    // re-addressed to it (the client's `with_epoch` rule, for presence).
     let doc = DocKey::new("file-1")?;
-    let rotate = structural_op(doc, OpId::new("op-rotate")?, ada.version, ada.epoch, page(0, ada.epoch), rotate_payload(90));
+    let rotate = structural_op(doc.clone(), OpId::new("op-rotate")?, ada.version, ada.epoch, page(0, ada.epoch), rotate_payload(90));
     ada.send(rotate)?;
     for peer in [&mut ada, &mut bo, &mut di] {
         assert!(matches!(peer.settle()?, ServerMessage::Applied(_)));
     }
-    assert_eq!(ada.version, 1);
+    assert_eq!((ada.version, bo.version, di.version), (1, 1, 1));
+    assert_eq!((ada.epoch, bo.epoch, di.epoch), (1, 1, 1), "a structural operation moves the page tree");
+    let mut readdressed = text.clone();
+    if let Selection::Text { page, .. } = &mut readdressed {
+        *page = PageRef { index: 0, epoch: ada.epoch };
+    }
+    assert_ne!(readdressed, text, "the epoch changed, the geometry did not");
+    std::thread::sleep(Duration::from_millis(120));
+    ada.send_presence(Some(readdressed.clone()))?;
+    for peer in [&mut bo, &mut di] {
+        match peer.next()? {
+            ServerMessage::Presence(presence) => {
+                assert_eq!(presence.page.epoch, 1);
+                assert_eq!(presence.selection, Some(readdressed.clone()), "the range is re-addressed, not dropped");
+            }
+            other => return Err(format!("expected presence, got {other:?}").into()),
+        }
+    }
+
+    // A viewer shares its selection but cannot publish an edit: presence is not an
+    // operation, and the room refuses the operation without moving anything.
+    let forbidden =
+        merge_op(doc, OpId::new("op-viewer")?, ada.version, ada.epoch, page(0, ada.epoch), add_note_payload("di-1", [10.0, 10.0], "x", "di"));
+    di.send(forbidden)?;
+    assert!(matches!(di.settle()?, ServerMessage::Rejected(rejected) if rejected.code == ErrorCode::Forbidden));
+    assert_eq!(ada.version, 1, "a refused operation moved nothing");
+
     // A replica that joins after the edit sees the rotation alone: the selections are not
     // in the journal it catches up from.
     let mut last = Peer::join(addr, "viewer:frank", "frank")?;

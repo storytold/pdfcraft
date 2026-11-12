@@ -1320,6 +1320,23 @@ impl DocView {
         }
     }
 
+    /// A change that keeps what the pages are addressed by (a page turn, or a
+    /// replay whose operations leave page addresses alone). The text selection is
+    /// kept (its glyphs are still on the page), so the next presence frame
+    /// re-addresses the range to the new epoch instead of dropping it
+    /// (`with_epoch`'s rule for a merge intent, applied to presence). The text
+    /// layer itself is re-extracted, as for any content change.
+    #[cfg(feature = "collab")]
+    pub(crate) fn document_keeping_selection(&mut self, info: &DocInfo) {
+        let selection = self.selection;
+        let dismissed = self.actions_dismissed;
+        self.document_changed(info);
+        if let Some(selection) = selection.filter(|selection| selection.page < info.pages.len()) {
+            self.selection = Some(selection);
+            self.actions_dismissed = dismissed;
+        }
+    }
+
     /// The document's content or page list changed (an edit, undo or redo): drop caches and
     /// adopt the new page geometry, keeping the reader's place where possible.
     pub fn document_changed(&mut self, info: &DocInfo) {
