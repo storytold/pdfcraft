@@ -89,11 +89,11 @@
   pushed at 17:41Z.
 - Delivered head: **`eb60bc5ff`** ("docs(collab): the delivered head is
   `6ac4e1130` — the owner pushed it, the runs await approval"). **Superseded on
-  2026-11-12**: `gh pr view 6622` now reads `headRefOid`
-  `e7a0565014a786f431111f70f54ba2e20fb62355` — the docs commit `e7a056501`
-  ("the delivered head is `eb60bc5ff` — five runs, none executed") is pushed
-  above `eb60bc5ff`, and this clone's HEAD was `ac33dd212` on top of it before
-  this pass (one docs commit, the web-path record). Everything below about
+  2026-11-12**, and again at 16:20Z of that day: `gh pr view 6622` now reads
+  `headRefOid` `2a2b0c1571e5635a77f3ac90c83f2c89fdd4fc36` (the merge of
+  `origin/main` `d749fd806`), with the fork at the same commit; `e7a056501`
+  (the docs commit above `eb60bc5ff`) and `eb60bc5ff` are its ancestors, and
+  `fee60000b` is the one local commit above it (header's snapshot bullet). Everything below about
   `eb60bc5ff` describes its own delivery and remains true of the runs measured
   there; the PR head moved by one docs-only commit. Measured
   2026-11-11T23:37Z, before the commit that carries this record: PR #6622's
@@ -160,10 +160,13 @@
   the host sweep on `0d3ea2708` in §4 ("The cabinet's `expectedVersion` is its
   etag"), which stands for `eb60bc5ff` because all three commits above the code
   head are docs-only.
-  `pdfcraft/PR-DRAFT.md` still describes `95e2c9c97`/`69b2a6dad`; it is a draft
-  that needs the same facts before the owner publishes a new head.
+  `pdfcraft/PR-DRAFT.md` now describes the same snapshot (PR head
+  `2a2b0c157`, local `fee60000b`, the gate in §4); it is a draft whose facts are
+  current as of 2026-11-12T16:20Z.
 - State: implemented behind the `collab` feature (off by default). **`CI=1
-  cargo xtask ci` exits 0 on `0d3ea2708`** — all 10 steps, 157 targets (111
+  cargo xtask ci` exits 0 on `fee60000b`** — all 10 steps, **10380 passed, 0
+  failed, 22 ignored** (§4, "The cabinet's Save reaches the room") — and on the
+  earlier `0d3ea2708` — all 10 steps, 157 targets (111
   `Running` + 46 `Doc-tests`), **10309 passed, 0 failed, 22 ignored** (§4, "The
   cabinet's `expectedVersion` is its etag"). The gate on the previous head
   (`69b2a6dad`, before `46d2e203a` merged v0.21.0) was 10225/0/22; the 84 extra
@@ -280,18 +283,19 @@ several `/NM`, per-line quads, the caret (`5bad54c40`, §4), re-addressed across
   delivered**: `git merge-base --is-ancestor 0d3ea2708 e7a056501` succeeds, it
   is an ancestor of the PR head, so only this pass's two commits are new. Nothing
   was pushed by this agent; the push is the owner's.
-- Snapshot this file is written to (measured 2026-11-12T16:20Z with `git` and
-  `gh pr view 6622`): local `HEAD` is **`fee60000b`** — "a room-side commit for
-  the cabinet, and an etag it can recognise" (8 files, +571/−45; §4) — and the
-  fork `copoka/pdfcraft` and PR #6622 both carry **`2a2b0c157`**;
-  `git rev-list --left-right --count
-  fork/feature/realtime-collaboration...HEAD` reads `0 1`, the tree is clean,
-  and the PR is `MERGEABLE`/`UNSTABLE` with `reviewDecision` empty. So
-  **exactly one commit is written and not delivered**; this record is a
-  docs-only commit on top of it (`0 2` after it). Every workflow run on the fork
-  still reads `action_required`, so the gate evidence for this head is the host
-  sweep in §4, not a GitHub run. Push, approvals and the manual desktop
-  acceptance are the owner's; nothing else is owed on the code side.
+- Snapshot this file is written to (measured 2026-11-12T16:20Z, re-measured
+  16:35Z with `git` and `gh pr view 6622`): the **code head** is
+  **`fee60000b`** — "a room-side commit for the cabinet, and an etag it can
+  recognise" (8 files, +571/−45; §4) — and the fork `copoka/pdfcraft` and
+  PR #6622 both carry **`2a2b0c157`**; `git rev-list --left-right --count
+  fork/feature/realtime-collaboration...HEAD` reads `0 3` — `fee60000b` and two
+  docs commits (the cabinet-side record `d1d304231` and this one) — with a clean
+  tree. The PR is `MERGEABLE`/`UNSTABLE` with `reviewDecision` empty, and every
+  workflow run on the fork reads `action_required`, so the gate evidence for the
+  code head is the host sweep in §4, not a GitHub run. The owner's steps are the
+  push (`git push fork feature/realtime-collaboration`), the run approvals, the
+  review and the manual desktop acceptance; nothing else is owed on the code
+  side.
 - Audience: the next session (human or agent). Everything here was verified in
   the session that wrote it; anything not verified is marked as such.
 - Design: `docs/collab/RFC.md` (protocol, ADRs, trade-offs); operation of the
@@ -313,7 +317,7 @@ several `/NM`, per-line quads, the caret (`5bad54c40`, §4), re-addressed across
 | `crates/collab-client` | Client state machine: pending ops (≤8), version/epoch, gap → resync, retryable rejection → resync then resend, reconnect |
 | `crates/collab-client-pdf` | Projection: `Op` → engine `Edit` (apply with `Session::apply_remote`), `Edit` → `Op` (a bookmark edit — title, destination, colour, style or open state — is one `outline.item.update` addressed by the item key this replica's list gives it; a whole-outline `ImportBookmarks` with `replace` is one `outline.replace`; the structure and text-style generators build their tree here and send the same operation; a link edit is addressed by the page's whole list), inverse operations for undo, including the outline, named destination and link operations, whose inverses are built from the accepted operation |
 | `crates/collab-session` | One protocol driver (`driver::Session`: hello/welcome, version and epoch, resync and retry, lease heartbeat, presence) behind a `Transport` trait with two implementations: `native` (a blocking socket on a worker thread, reconnect with backoff) and `web` (the browser's `WebSocket`, whose callbacks queue frames and which the frame loop steps). `Sink` is the object-safe face the UI holds |
-| `apps/pdfcraft-collab-server` | Daemon (package `pdfcraft-collab-daemon`, binary `pdfcraft-collab-server`): dev mode from a directory, control plane `POST /v1/sessions` and `POST /v1/sessions/{fileId}/resolve`, commit callback to the cabinet with an idempotency key (its `{version, etag}` answer is adopted), the background publication queue with a backoff, the start-up recovery of unpublished bases from the store, `/health`, `/metrics` (`pdfcraft_collab_forced_commits_total`, `pdfcraft_collab_publication_retries_total`, `pdfcraft_collab_publications_restored_total`, `pdfcraft_collab_publications_after_resolve_total`, `pdfcraft_collab_conflicts_resolved_total`) |
+| `apps/pdfcraft-collab-server` | Daemon (package `pdfcraft-collab-daemon`, binary `pdfcraft-collab-server`): dev mode from a directory, control plane `POST /v1/sessions`, `POST /v1/sessions/{fileId}/commit` (the host's Save: the room builds the document and publishes it, answering `{version, cabinet:{version,etag}}`) and `POST /v1/sessions/{fileId}/resolve`, commit callback to the cabinet with an idempotency key (its `{version, etag}` answer is adopted), the background publication queue with a backoff, the start-up recovery of unpublished bases from the store, `/health`, `/metrics` (`pdfcraft_collab_forced_commits_total`, `pdfcraft_collab_publication_retries_total`, `pdfcraft_collab_publications_restored_total`, `pdfcraft_collab_publications_after_resolve_total`, `pdfcraft_collab_conflicts_resolved_total`) |
 | `crates/ui-egui/src/collab.rs` | App wiring behind `collab`, native and wasm: start from the environment (desktop) or from the host page, apply events, send edits, participants window, presence with cursors, selections and TTL, commit, inverse undo, host reports, and the Split/Combine dialogs' `page.split`/`page.combine` inside a session. Holds `Box<dyn Sink>`, never a native `Handle` |
 | `crates/ui-egui/src/dialogs/named_dests_ui.rs` | Bookmarks ▸ Named destinations…: the document's names with the page and view each opens, and add/update/delete as engine edits (`SetNamedDestination`/`DeleteNamedDestination`), so a session sends `dest.add`/`dest.update`/`dest.delete` and the dialog never writes the document itself |
 | `crates/automation/src/named_dests.rs` | Headless parity for named destinations: `destinations` (name → page and view), `destination_set` (add or move a name, with the Table 149 type and its values checked before the write) and `destination_delete` |
@@ -555,6 +559,23 @@ too and that crate has no such feature (§4, D4 item 1).
     process-level CryptoProvider" when both or neither is on. A repin is not
     available either: `jsonwebtoken` 11.1.0 is the newest release and pins
     `p256 = "0.13.2"`.
+27. **A Save in the host's page asks the room to publish; a tag that moved onto
+    our own bytes is adopted, not refused.** The page's `pdfcraft:commit` is
+    answered by `POST /v1/sessions/{fileId}/commit`: the room builds the
+    document it holds and publishes it through the same callback, and a clean
+    room is answered from its marker instead of publishing again (the same
+    assembly, so a repeated Save cannot create a second version). Do not build
+    the file in the cabinet for this class of room: the room's `apply_remote`
+    state is the document, and a second assembly path would be a second truth.
+    The tag the control plane compares is the cabinet's own opaque etag
+    (`{etag, version}` in the request, `CABINET.etag` in the room), never a
+    digest of the bytes — comparing a digest with a version refused every
+    reopen from the first accepted commit on. `CABINET.sha256` (the room's
+    digest of the base it published) is what lets a moved tag be recognised as
+    our own commit whose answer was lost: then `Room::adopt_cabinet` moves the
+    marker and the session continues; foreign bytes stay `409`. An operator's
+    `resolve` carries no bytes, so it cannot prove adoption and keeps the
+    refusal; a marker written before the field existed does the same.
 
 ## 3. Running it
 
@@ -586,11 +607,28 @@ cargo run -p pdfcraft-collab-daemon --release -- \
   contradictory pair is refused. The file name must equal `hello.doc`; `app`,
   when present, must equal `--app`.
 - `POST /v1/sessions` (`--control`, loopback, JWT required):
-  `{"fileId","jwt","etag"?,"bytes"|"initialBytes"|"url"}` → `201`/`200` with
-  `{"fileId","version","epoch","etag","created"}`; `401` bad token, `403`
-  token for another file, `400` bad body/etag, `409` the room holds another
-  etag, `404` no room and no source, `413` file too large, `502` the source URL
-  failed. `fileId` is restricted to `[A-Za-z0-9._-]{1,128}`.
+  `{"fileId","jwt","etag"?,"version"?,"bytes"|"initialBytes"|"url"}` →
+  `201`/`200` with `{"fileId","version","epoch","etag","created"}`; `401` bad
+  token, `403` token for another file, `400` bad body/etag, `409` the room
+  holds another etag, `404` no room and no source, `413` file too large, `502`
+  the source URL failed. `fileId` is restricted to `[A-Za-z0-9._-]{1,128}`.
+  `etag` is the cabinet's own opaque tag of the copy it holds (this cabinet's
+  is the file's version tag), not a digest of `bytes`, and `version` is the
+  cabinet's numbering of that copy; without them the room falls back to the
+  digest of `bytes` and cannot tell a newer cabinet tag from an external
+  change. A tag that moved onto bytes this room published is our own commit
+  whose answer was lost and is adopted; foreign bytes stay `409`.
+- `POST /v1/sessions/{fileId}/commit` (`--control`, loopback, the cabinet's
+  session ticket in `Authorization`) — the room-side Save: the room builds the
+  document it holds and publishes it through the commit callback, and the
+  answer names both versions. `200` `{"fileId","version","cabinet":{"version","etag"}}`
+  (a clean room is answered from its marker, so a repeated Save creates no
+  second version); `401` no/bad token, `403` another file or a role that cannot
+  write, `400` bad `fileId`, `404` no room, `409 busy` (a publication in
+  flight), `409 conflict` (the cabinet refused the publication), `409
+  unpublished` (the room never published a copy the cabinet holds), `502` saved
+  in the room but not published (retryable — the queue carries it on), `503`
+  hub unavailable.
 - `POST /v1/sessions/{fileId}/resolve` (`--control`, loopback,
   `Authorization: Bearer <service token>` — the same RS256 JWT, `owner`/`editor`,
   `fileId` must match the path): `{"expectedVersion": N, "etag": "sha256:<64 hex>"}`
@@ -644,6 +682,92 @@ The app window "Collaboration" shows role, version/epoch, participants, errors,
 commit result, and a commit button for owner/editor.
 
 ## 4. Tests and verification
+
+### The cabinet's Save reaches the room, and the etag compares like with like (`fee60000b`, 2026-11-12, local; not pushed)
+
+Two defects kept the cabinet's PdfCraft integration from finishing a save.
+
+**The save never reached the room.** The page's "Commit to the cabinet" posts
+`pdfcraft:commit`; the cabinet's D3 route refused it with `400`, because
+PdfCraft's control plane is opened by the cabinet's own session ticket and only
+a `session`-mode room had ever been asked to build the file. So the cabinet
+never asked the room, never received `{version, etag}` and never posted
+`pdfcraft:committed`; the version was only ever stored by the room's own idle
+commit, and the app's status line stayed at "Commit requested from the cabinet".
+
+`POST /v1/sessions/{fileId}/commit` (`apps/pdfcraft-collab-server/src/control.rs`):
+
+- `Authorization: Bearer <session ticket>`, verified by the same `Verifier` as
+  `hello`; the token's file must equal the path's (`403`), the role must be one
+  that writes — `can_structural()`, owner or editor (`403` otherwise) — and a
+  `fileId` that is not path-safe is `400`.
+- It calls `WsServer::commit_now` (`crates/collab-ws/src/serve.rs`), the seam
+  the control plane needed. Under the hub lock a clean room is answered from
+  its marker (`CommitNow::Clean`, the same `Published` a publication answers,
+  so a repeated Save creates no second version); otherwise
+  `Hub::commit_if_dirty` writes the base under the lock, the cabinet call runs
+  outside it (`Pending::publish`), `Hub::finish` records the outcome, a
+  retryable failure is queued with the usual doubling backoff and the compaction
+  the publication made due is queued too. `CommitNow` also carries `Missing`,
+  `Busy` (a publication in flight), `Conflict`, `Retryable` and `Failed`; it
+  never discards the room's work.
+- Answers: `200 {fileId, version, cabinet:{version, etag}}` (GridCraft's
+  shape); `401` no or bad token; `403` another file or a read-only role; `404`
+  no room; `409 busy`; `409 conflict` when the cabinet refused the publication;
+  `409 unpublished` when the room has never published a copy the cabinet holds
+  (the cabinet must not be told a version that does not exist); `502` when the
+  commit is saved in the room but not published (retryable — the queue carries
+  it on); `503` hub unavailable; `500` internal.
+
+**The ticket compared a digest with a version.** `POST /v1/sessions` compared
+the tag the cabinet sent with the room's marker; the cabinet sent none, so the
+room fell back to the SHA-256 of the bytes it had just received, while the
+marker holds the cabinet's own tag (this cabinet's is the file's version tag).
+From the first accepted commit on, every ticket compared a digest with a version
+and the control plane answered `409` — reproduced on the deployed file 43,
+where the session could only be reopened by moving the room's state directory
+aside.
+
+- The request now carries the cabinet's own `{etag, version}` explicitly
+  (`version` is what the next publication sends as `expectedVersion`), and
+  `rooms::Seed.cabinet_version` makes the room compare like with like.
+- `CABINET` gains `sha256`, the digest of the published base
+  (`crates/collab-pdf/src/store.rs`, `CabinetCopy.sha256`). A tag that moved is
+  still a refusal, with one exception: when the bytes the cabinet names are the
+  ones this room published — a retry, or a process that died between the
+  cabinet's answer and the marker write — the room adopts the tag
+  (`Room::adopt_cabinet`, reached through the one new `Room::adapter_mut`)
+  instead of blocking the session. Foreign bytes stay `409`; a marker written
+  before the field existed, and an operator's `resolve` (which sends no bytes),
+  keep the old refusal.
+- `apps/pdfcraft-collab-server/src/main.rs` seeds dev mode with
+  `cabinet_version: None`; there the etag remains the digest of
+  `--documents/<fileId>.pdf`.
+
+Tests, new in `apps/pdfcraft-collab-server/src/control.rs`:
+`a_commit_builds_the_file_and_names_both_versions`,
+`a_commit_needs_a_token_for_this_file_and_a_writing_role`,
+`a_refused_publication_is_a_409_and_a_repeat_is_still_a_409`,
+`a_tag_that_moved_to_our_own_bytes_is_adopted_and_a_foreign_one_is_refused`,
+`a_double_commit_survives_an_answer_that_never_reached_the_marker` — the route
+with a session ticket, a clean repeat that publishes nothing, a viewer's and
+another file's ticket refused, a refused publication, a marker written before
+the digest, and the double commit whose answer was lost.
+
+**Gate, on `fee60000b`, host `agents` (rustc 1.99.1, warm `target/`).**
+`CI=1 cargo xtask ci` with `CRAFT_I18N_DIR` (craft-i18n at `575cfdef`) and
+`CRAFT_FONTS_DIR` (`b076417b`) exits **0 — all ten steps**, no retries:
+`fmt`; `clippy --workspace --all-targets -- -D warnings`;
+`cli-no-default-features`; `test` — **10380 passed, 0 failed, 22 ignored**
+(the 71 more than the 10309 at `0d3ea2708` are this line's and the earlier
+undelivered ones'); `i18n-report`;
+`layers` (52 crates, no violation); `wasm` (44 crates); `license-check` (258
+repository assets, 7 bundled, 22 fetched); `deny` (advisories, bans, licences,
+sources ok); `parity` (859 features). A previous hand-run of the same crates in
+the commit's own message gave 39 daemon tests (5 new), 16 ws unit, 71
+collab-pdf, 33 collab-server and 36 e2e; the sweep above supersedes it, and
+nothing in it has run on GitHub — every workflow run on the fork is
+`action_required`.
 
 ### Form-field carets in presence, addressed by name and offset (2026-11-12, local; not pushed)
 
@@ -3642,45 +3766,19 @@ The browser run above left two things undone, and the cabinet's M95 pass closed
 both. They were one defect seen from two sides: the cabinet never asked the room
 for the file, and the ticket carried the wrong kind of etag.
 
-**1. `pdfcraft:committed` never reached the app.** The app's "Commit to the
-cabinet" posts `pdfcraft:commit {sessionId}` and the cabinet's D3 route refused
-it (`400 the application has no room-side commit: Save sends the document
-itself`): PdfCraft opens its control plane with the cabinet's own session
-ticket (`bootstrap=ticket`), and only a `session`-mode room was asked to build
-the file. So the cabinet never got `{version, etag}` and never posted
-`pdfcraft:committed`; the version that appeared in the file came from the room's
-own idle commit, and the app's status line stayed at "Commit requested from the
-cabinet". The control plane now serves `POST /v1/sessions/{fileId}/commit` with
-the session ticket in `Authorization` (the file is in the token, the role must
-be able to write), and it answers `{version, cabinet: {version, etag}}` —
-GridCraft's shape, which the cabinet already reads. A clean room is answered
-from its marker, so a repeated Save publishes nothing; a refused publication is
-still a `409`.
+The two defects and the fix they became are recorded above ("The cabinet's Save
+reaches the room, and the etag compares like with like"): the control plane's
+`POST /v1/sessions/{fileId}/commit` and its answers, the ticket's
+`{etag, version}` compared with the marker instead of a digest of the bytes, the
+`CABINET` digest that lets a moved tag be adopted, and `WsServer::commit_now` as
+the seam. What follows is what the cabinet-side pass saw.
 
-**2. `409` on every ticket after a commit.** `POST /v1/sessions` compared the
-tag the cabinet sent with the room's `CABINET` marker, but the cabinet sent
-none, so the room fell back to the SHA-256 of the bytes it had just received.
-The marker holds the cabinet's own tag (its version), so from the first accepted
-commit on the comparison was a digest against a version: `409`, and on the
-deployed file 43 the session could only be reopened by moving the room's state
-directory aside. The request now carries `etag` and `version` explicitly (the
-cabinet sends its file version), and the room compares like with like.
-
-A tag that moved is still a refusal, with one exception: the marker now records
-the digest of the bytes it published (`CabinetCopy::sha256`), so when the
-cabinet names a newer tag over *those* bytes the change is our own commit whose
-answer never reached the marker — a repeated POST, or a process that died
-between the answer and the marker write — and the room adopts the tag instead of
-blocking the session. Foreign bytes stay a `409`. `WsServer::commit_now` is the
-seam the control plane needed: the base is written under the hub lock, the
-cabinet call runs outside it, and a retryable failure goes to the publication
-queue rather than being lost.
-
-Gates on `fee60000b` (24 files touched): `cargo fmt --all --check`, clippy with
-`-D warnings` on the four touched crates, and `cargo test` — collab-daemon 39
-(5 new: the commit route with a ticket, a clean repeat that publishes nothing, a
-viewer and another file's ticket, a refused publication, and the double commit
-whose answer was lost), collab-ws 16 + e2e 36, collab-pdf 71, collab-server 33,
+Gates on `fee60000b` (8 files, +571/−45): the full sweep is in that section
+above — `CI=1 cargo xtask ci` exits 0, all ten steps, **10380 passed, 0 failed,
+22 ignored**. The touched crates were also run alone: collab-daemon 39 (5 new:
+the commit route with a ticket, a clean repeat that publishes nothing, a viewer
+and another file's ticket, a refused publication, and the double commit whose
+answer was lost), collab-ws 16 + e2e 36, collab-pdf 71, collab-server 33,
 collab-hub 5, collab-client-pdf 48, all passing.
 
 The room binary built from it is `68df6a7b…63238` (glibc 2.38, v0.21.1) and it
@@ -4457,7 +4555,14 @@ Ordered by the risk they pose to production.
    its own `{version, etag}` from the callback; the daemon now adopts that body
    as the copy it holds (falling back to `expectedVersion + 1`) and keeps both
    numbers in `CABINET`, so a cabinet with its own numbering works as long as
-   that number is per file and monotonic.
+   that number is per file and monotonic. **Done since (`fee60000b`, §4):** the
+   cabinet's Save reaches the room through `POST /v1/sessions/{fileId}/commit`,
+   which answers `{version, cabinet:{version, etag}}` and answers a clean room
+   from its marker; the ticket's `{etag, version}` is the cabinet's own tag and
+   numbering, compared with the marker instead of a digest of the bytes, and
+   `CABINET.sha256` lets a moved tag that names the room's own publication be
+   adopted. A marker written before that field, and an operator's `resolve`
+   (which carries no bytes), still refuse a moved tag.
 7. **No TLS in the daemon.** WSS, the control plane and the callback are
    expected to sit behind a reverse proxy; `https://` source URLs and callback
    URLs are refused with a clear error. No per-IP throttling, no session
@@ -4502,18 +4607,20 @@ Ordered by the risk they pose to production.
 
 Work in this order unless the owner says otherwise.
 
-**Deliver first.** Measured 2026-11-12T16:20Z (`git`, `gh pr view 6622`): the
-fork and PR #6622 carry **`2a2b0c157`**; this clone's `HEAD` is **`fee60000b`**
-("a room-side commit for the cabinet, and an etag it can recognise", §4), and
-`git rev-list --left-right --count
-fork/feature/realtime-collaboration...HEAD` reads `0 1`. **Exactly one commit
-is written and not delivered.** Everything the earlier versions of this section
+**Deliver first.** Measured 2026-11-12T16:35Z (`git`, `gh pr view 6622`): the
+fork and PR #6622 carry **`2a2b0c157`**; this clone's **code head** is
+**`fee60000b`** ("a room-side commit for the cabinet, and an etag it can
+recognise", §4), and `git rev-list --left-right --count
+fork/feature/realtime-collaboration...HEAD` reads `0 3` — the code commit and
+two docs commits (the cabinet-side record `d1d304231` and the one before this
+paragraph). Everything the earlier versions of this section
 listed as unpushed — `ac33dd212`, `00c06ed5c`, `c56da220b`, `c935ebadb` — is
 **delivered**: they are ancestors of `2a2b0c157`, which is the fork tip and the
 PR head; `git merge-base --is-ancestor 2a2b0c157 HEAD` exits 0. This agent's
 permission still denies `git push*`, so `git push fork
 feature/realtime-collaboration` from this clone is the owner's step; after it
-`gh pr view 6622` must read `fee60000b`, and the fork's five workflows will
+`gh pr view 6622` must read this branch's tip — the docs commit above
+`fee60000b` — and the fork's five workflows will
 wait again for a maintainer's approval (`action_required`, so no check has
 executed on the branch). The gate on this head is §4, "The cabinet's Save
 reaches the room", and `pdfcraft/PR-DRAFT.md` now carries the same facts.
@@ -4803,13 +4910,15 @@ payload).
 
 ### 6.6 Cleanup and submission
 
-- **This pass (2026-11-12, 16:20Z): the branch's facts, and the one commit
-  owed.** Local `HEAD` is `fee60000b` (code) on top of the delivered
-  `2a2b0c157`; the fork and PR #6622 read `2a2b0c157`, `git rev-list
-  --left-right --count fork/…...HEAD` is `0 1`, the tree is clean. This pass
+- **This pass (2026-11-12, 16:35Z): the branch's facts, and the one commit
+  owed.** The code head is `fee60000b` on top of the delivered `2a2b0c157`,
+  with two docs commits above it (`d1d304231`, the cabinet-side record, and this
+  one); the fork and PR #6622 read `2a2b0c157`, `git rev-list
+  --left-right --count fork/…...HEAD` is `0 3`, the tree is clean. This pass
   changed **no code**: it rewrote §6's delivery paragraph, this bullet, §7's
-  first gotcha and `pdfcraft/PR-DRAFT.md` to that snapshot, and added §4's
-  record of `fee60000b` with the gate run on it. The earlier record that named
+  first gotcha and `pdfcraft/PR-DRAFT.md` to that snapshot, added §4's
+  record of `fee60000b` with the gate run on it, and folded the duplicate
+  records of that commit into one. The earlier record that named
   `e7a056501` as the head and five unpushed commits is history: `c935ebadb`
   and the four commits beside it are ancestors of `2a2b0c157`. Nothing was
   pushed; the push, the run approvals, the review and the manual desktop
