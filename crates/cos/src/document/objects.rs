@@ -91,6 +91,12 @@ impl Document {
         &self.repair_log
     }
 
+    /// Whether the repair log records something read other than the file says: every line but
+    /// the note that `/Perms` disagrees with `/EncryptMetadata`, which changes nothing read.
+    pub fn structure_repaired(&self) -> bool {
+        self.repair_log.iter().any(|line| line != super::open::PERMS_MISMATCH)
+    }
+
     /// Whether the file was rebuilt from its object headers because its last update has no `/Prev`
     /// and so cut its page tree off the cross-reference chain (ISO 32000-2 §7.5.6, §7.5.8.2). The
     /// renderer rebuilds such a file under the same conditions, so the two read the same objects.

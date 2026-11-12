@@ -82,11 +82,18 @@ pub(crate) fn encrypt_dict(doc: &Document, d: &Dict) -> EncryptDict {
     if let Some(cf) = d.get(b"CF").map(|c| doc.resolve(c)).and_then(|c| c.as_dict().cloned()) {
         for (k, v) in cf.iter() {
             let Some(f) = doc.resolve(v).as_dict().cloned() else { continue };
-            let method = match name(&f, b"CFM").as_deref() {
-                Some(b"V2") => Method::Rc4,
-                Some(b"AESV2") => Method::Aes128,
-                Some(b"AESV3") => Method::Aes256,
-                _ => Method::Identity,
+            // ISO 32000-2 Table 25: `None` (the default) leaves data as it is to the standard
+            // handler; values other than these four are an algorithm the file can't be read with.
+            let cfm = f.get(b"CFM").map(|m| doc.resolve(m));
+            let method = match cfm.as_deref() {
+                None | Some(Object::Null) => Method::Identity,
+                Some(m) => match m.as_name() {
+                    Some(b"None") => Method::Identity,
+                    Some(b"V2") => Method::Rc4,
+                    Some(b"AESV2") => Method::Aes128,
+                    Some(b"AESV3") => Method::Aes256,
+                    _ => Method::Unsupported,
+                },
             };
             crypt_filters.push((k.clone(), method));
         }
@@ -170,10 +177,11 @@ pub(crate) fn efopen_only(doc: &Document, d: &Dict) -> bool {
     !encrypting.is_empty()
 }
 
-/// Whether `s`, read from a document whose handler has no file key, holds data that handler would
-/// decrypt, which therefore reads as stored: still encrypted.
+/// Whether `s` holds encrypted data that reads as stored: still encrypted. Either the handler has
+/// no file key and would decrypt it, or the stream names a crypt filter whose method the handler
+/// can't decrypt (ISO 32000-2 Table 25).
 pub(crate) fn stream_reads_as_stored(doc: &Document, h: &SecurityHandler, s: &Stream) -> bool {
-    if h.has_key() {
+    if h.has_key() && !h.dict().crypt_filters.iter().any(|(_, m)| *m == Method::Unsupported) {
         return false;
     }
     let _scope = FollowScope::enter();
@@ -184,7 +192,7 @@ pub(crate) fn stream_reads_as_stored(doc: &Document, h: &SecurityHandler, s: &St
         (None, Some(b"EmbeddedFile")) => StreamKind::EmbeddedFile,
         _ => StreamKind::Normal,
     };
-    h.decrypts(kind)
+    if h.has_key() { h.cannot_decrypt(kind) } else { h.decrypts(kind) }
 }
 
 /// Whether `f`, an entry of a `/Filter` chain or its only filter, is `/Crypt`.

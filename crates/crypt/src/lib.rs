@@ -32,6 +32,11 @@ pub enum CryptError {
     Unsupported(String),
     #[error("malformed encryption dictionary: {0}")]
     Malformed(String),
+    /// A crypt filter the document's strings, streams or embedded files use has a `/CFM` other
+    /// than `None`, `V2`, `AESV2` or `AESV3` (ISO 32000-2 Table 25: "Applications that encounter
+    /// other values shall report that the file is encrypted with an unsupported algorithm").
+    #[error("the file is encrypted with an unsupported algorithm: {0}")]
+    UnsupportedAlgorithm(String),
 }
 
 /// 32-byte padding string used by revisions 2–4 (§7.6.4.3.2, step a).
@@ -51,6 +56,11 @@ pub enum Method {
     Aes128,
     /// `AESV3`: AES-256-CBC.
     Aes256,
+    /// Any other `/CFM` (or one that isn't a name): a method this handler can't decrypt (ISO
+    /// 32000-2 Table 25 lists the only values to support). Data it encrypts is left as stored,
+    /// read and written alike, and [`SecurityHandler::open`] refuses a document whose strings,
+    /// streams or embedded files use it.
+    Unsupported,
 }
 
 /// The values of an `/Encrypt` dictionary that the handler needs.
@@ -216,6 +226,13 @@ impl SecurityHandler {
         if !matches!(dict.v, 0 | 1 | 2 | 4 | 5) {
             return Err(CryptError::Unsupported(format!("/V {}", dict.v)));
         }
+        // Before the password: no password reads data encrypted with a method this handler lacks.
+        if let Some(name) = unsupported_in_use(&dict) {
+            return Err(CryptError::UnsupportedAlgorithm(format!(
+                "crypt filter /{} has a /CFM other than None, V2, AESV2 or AESV3",
+                String::from_utf8_lossy(name)
+            )));
+        }
         let pw = password.unwrap_or("");
         let mut recovered_user = None;
         // Every spelling as the owner password first, then every spelling as the user password:
@@ -274,6 +291,14 @@ impl SecurityHandler {
         self.method(Some(kind)) != Method::Identity
     }
 
+    /// Whether data of `kind` is encrypted with a method this handler can't decrypt
+    /// ([`Method::Unsupported`]): only a stream naming such a crypt filter for itself, as
+    /// [`SecurityHandler::open`] refuses one its strings, streams or embedded files use. That data
+    /// is left as stored, and isn't what it encrypts.
+    pub fn cannot_decrypt(&self, kind: StreamKind) -> bool {
+        self.method(Some(kind)) == Method::Unsupported
+    }
+
     /// Whether data left as stored by a handler without the key still decrypts after its object
     /// is renumbered: only AES-256 with a 256-bit file key doesn't mix the object number into the
     /// key (Algorithm 1.A).
@@ -330,12 +355,27 @@ impl SecurityHandler {
 
     /// `/P` as `/Perms` holds it: AES-256 ECB of one block (= CBC with a zero IV), marked `adb`.
     fn perms_p(&self) -> Option<i32> {
+        let plain = self.perms_block()?;
+        Some(i32::from_le_bytes(*plain.first_chunk::<4>()?))
+    }
+
+    /// `/Perms` decrypted (Algorithm 13 step a), when it is one block marked `adb` (bytes 9–11).
+    fn perms_block(&self) -> Option<Zeroizing<Vec<u8>>> {
         if !matches!(self.dict.r, 5 | 6) || !self.has_key() {
             return None;
         }
         let plain = Zeroizing::new(aes_cbc_decrypt(&self.key, &[0; 16], self.dict.perms.first_chunk::<16>()?, false));
-        let p = i32::from_le_bytes(*plain.first_chunk::<4>()?);
-        (plain.get(9..12) == Some(&b"adb"[..])).then_some(p)
+        (plain.get(9..12) == Some(&b"adb"[..])).then_some(plain)
+    }
+
+    /// Whether byte 8 of a readable `/Perms` isn't the `T` or `F` that `/EncryptMetadata` gives
+    /// (Algorithm 13 step a, ISO 32000-2 §7.6.4.4.12: it "should match"). A "should", so the
+    /// document still opens, metadata read as `/EncryptMetadata` says: qpdf warns of it, and MuPDF
+    /// and PDFium open such files. False when `/Perms` can't be read, which [`Self::permissions`]
+    /// already reads past.
+    pub fn perms_metadata_mismatch(&self) -> bool {
+        let expected = if self.dict.encrypt_metadata { b'T' } else { b'F' };
+        self.perms_block().is_some_and(|plain| plain.get(8) != Some(&expected))
     }
 
     pub fn dict(&self) -> &EncryptDict {
@@ -402,7 +442,8 @@ impl SecurityHandler {
             return data.to_vec();
         }
         match method {
-            Method::Identity => data.to_vec(),
+            // Data whose method is unknown keeps the bytes it has, so a save writes it back as it was.
+            Method::Identity | Method::Unsupported => data.to_vec(),
             Method::Rc4 => rc4(&self.object_key(method, num, generation), data),
             Method::Aes128 | Method::Aes256 => {
                 let key = self.object_key(method, num, generation);
@@ -452,6 +493,20 @@ impl SecurityHandler {
     pub fn encrypts_strings(&self) -> bool {
         self.method(None) != Method::Identity
     }
+}
+
+/// The name of a crypt filter `d`'s strings, streams or embedded files use (`/StrF`, `/StmF`,
+/// `/EFF`, which defaults to `/StmF`) whose method is [`Method::Unsupported`]. Handlers older than
+/// crypt filters (`/V` below 4) encrypt everything with RC4 whatever `/CF` says. A filter `/CF`
+/// defines and nothing uses doesn't count: qpdf, MuPDF and PDFium all open such a file.
+fn unsupported_in_use(d: &EncryptDict) -> Option<&[u8]> {
+    if d.v < 4 {
+        return None;
+    }
+    let ef = if d.ef_f.is_empty() { &d.stm_f } else { &d.ef_f };
+    [&d.str_f, &d.stm_f, ef].into_iter().map(Vec::as_slice).find(|name| {
+        *name != b"Identity" && d.crypt_filters.iter().find(|(n, _)| n.as_slice() == *name).is_some_and(|(_, m)| *m == Method::Unsupported)
+    })
 }
 
 // ── Passwords ──────────────────────────────────────────────────────────────────────────────────

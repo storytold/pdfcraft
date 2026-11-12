@@ -10645,6 +10645,27 @@ fn the_document_model_and_the_renderer_open_the_same_encrypted_files() {
     for pw in ["owner", "\u{FFFD}user\u{FF}"] {
         both_open(&undefined, Some(pw), "0x9F");
     }
+    // A crypt filter method neither can decrypt (ISO 32000-2 Table 25), used by streams and
+    // strings, by strings only, by embedded files only, or a `/CFM /Identity` (a filter name, not
+    // a method): reported by both, with any password (both read the ciphertext as the page). One
+    // that nothing uses changes nothing.
+    type Edit = fn(String) -> String;
+    let unknown = |alg, edit: Edit| encrypted_page(&encryption(alg, "user", "owner"), edit);
+    let cases: [(&str, pdfcraft_cos::Algorithm, Edit); 4] = [
+        ("/CFM /AESV9", Aes256, |e| e.replace("/CFM /AESV3", "/CFM /AESV9")),
+        ("/StrF with /CFM /AESV9", Aes256, |e| e.replace("/CF << ", "/CF << /X << /CFM /AESV9 >> ").replace("/StrF /StdCF", "/StrF /X")),
+        ("/EFF with /CFM /AESV9", Aes128, |e| e.replace("/CF << ", "/CF << /X << /CFM /AESV9 >> ").replace("/StrF /StdCF", "/StrF /StdCF /EFF /X")),
+        ("/CFM /Identity", Aes128, |e| e.replace("/CFM /AESV2", "/CFM /Identity")),
+    ];
+    for (case, alg, edit) in cases {
+        for pw in [Some("user"), Some("owner"), Some("nope"), None] {
+            both_refuse(&unknown(alg, edit), pw, case);
+        }
+    }
+    both_open(&unknown(Aes256, |e| e.replace("/CF << ", "/CF << /X << /CFM /AESV9 >> ")), Some("user"), "an unused /CFM /AESV9");
+    // `/Perms` saying `T` beside `/EncryptMetadata false` (Algorithm 13 "should"): both open it.
+    let perms = encrypted_page(&encryption(Aes256, "user", "owner"), |e| e.replace("/StrF /StdCF", "/StrF /StdCF /EncryptMetadata false"));
+    both_open(&perms, Some("user"), "/Perms and /EncryptMetadata disagree");
     // The controls: the files as written, and a wrong password.
     for (alg, case) in [(Rc4_40, "RC4-40"), (Rc4_128, "RC4-128"), (Aes128, "AES-128"), (Aes256, "AES-256")] {
         let plain = encrypted_page(&encryption(alg, "user", "owner"), |e| e);

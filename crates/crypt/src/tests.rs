@@ -661,3 +661,67 @@ fn an_undefined_pdfdoc_byte_in_a_password_reads_back() {
     assert_eq!(text, "\u{FFFD}user\u{FF}");
     assert_eq!(SecurityHandler::open(d, ID, Some(&text)).unwrap().auth(), Auth::User);
 }
+
+/// ISO 32000-2 Table 25: a `/CFM` other than `None`, `V2`, `AESV2` or `AESV3` is an algorithm the
+/// file can't be read with, to be reported as such. A filter the strings, streams or embedded
+/// files use with such a method refuses the file before any password (none would read it); one
+/// `/CF` only defines, or a stream names for itself, doesn't, and that stream's data stays as
+/// stored, both ways.
+#[test]
+fn a_crypt_filter_method_in_use_that_cant_be_decrypted_is_reported() {
+    let made = new(Algorithm::Aes256, "user", "owner", -4).dict().clone();
+    let with = |filters: &[(&[u8], Method)], stm_f: &[u8], str_f: &[u8], ef_f: &[u8]| EncryptDict {
+        crypt_filters: filters.iter().map(|(n, m)| (n.to_vec(), *m)).collect(),
+        stm_f: stm_f.to_vec(),
+        str_f: str_f.to_vec(),
+        ef_f: ef_f.to_vec(),
+        ..made.clone()
+    };
+    let unknown: &[(&[u8], Method)] = &[(b"StdCF", Method::Aes256), (b"X", Method::Unsupported)];
+    for (case, d) in [
+        ("both", with(&[(b"StdCF", Method::Unsupported)], b"StdCF", b"StdCF", b"")),
+        ("streams", with(unknown, b"X", b"StdCF", b"")),
+        ("strings", with(unknown, b"StdCF", b"X", b"")),
+        ("embedded files", with(unknown, b"StdCF", b"StdCF", b"X")),
+    ] {
+        for pw in [Some("user"), Some("owner"), Some("wrong"), None] {
+            assert!(matches!(SecurityHandler::open(d.clone(), ID, pw), Err(CryptError::UnsupportedAlgorithm(_))), "{case} with {pw:?}");
+        }
+    }
+    // Defined and unused, or named by a stream: the file opens, and that stream reads as stored.
+    let h = SecurityHandler::open(with(unknown, b"StdCF", b"StdCF", b""), ID, Some("user")).unwrap();
+    let named = StreamKind::Named(b"X");
+    assert!(h.cannot_decrypt(named) && h.decrypts(named));
+    assert!(!h.cannot_decrypt(StreamKind::Normal) && !h.cannot_decrypt(StreamKind::EmbeddedFile));
+    assert_eq!(h.decrypt_stream(4, 0, b"stored", named), b"stored");
+    assert_eq!(h.encrypt_stream(4, 0, b"stored", named), b"stored");
+    assert!(!h.survives_renumbering());
+    // `/Identity` names no filter of `/CF`, whatever a file puts there; handlers before crypt
+    // filters encrypt everything with RC4.
+    assert!(SecurityHandler::open(with(&[(b"Identity", Method::Unsupported)], b"Identity", b"Identity", b""), ID, Some("user")).is_ok());
+    let rc4 = new(Algorithm::Rc4_128, "user", "owner", -4).dict().clone();
+    let old = EncryptDict { crypt_filters: vec![(b"StdCF".to_vec(), Method::Unsupported)], stm_f: b"StdCF".to_vec(), ..rc4 };
+    assert!(SecurityHandler::open(old, ID, Some("user")).is_ok());
+}
+
+/// Algorithm 13 (ISO 32000-2 §7.6.4.4.12): byte 8 of the decrypted `/Perms` "should match" `T` or
+/// `F` as `/EncryptMetadata` is true or false. Reported, not refused.
+#[test]
+fn perms_byte_8_is_checked_against_encrypt_metadata() {
+    let h = new(Algorithm::Aes256, "user", "owner", -4);
+    let open = |d: &EncryptDict| SecurityHandler::open(d.clone(), ID, Some("user")).unwrap();
+    let made = h.dict().clone();
+    assert!(!open(&made).perms_metadata_mismatch(), "T and true");
+    assert!(open(&EncryptDict { encrypt_metadata: false, ..made.clone() }).perms_metadata_mismatch(), "T and false");
+    let block = |flag: u8| {
+        let mut plain = aes_cbc_decrypt(h.file_key(), &[0; 16], made.perms.first_chunk::<16>().unwrap(), false);
+        plain[8] = flag;
+        aes_cbc_encrypt(h.file_key(), &[0; 16], &plain, false)
+    };
+    assert!(open(&EncryptDict { perms: block(b'F'), ..made.clone() }).perms_metadata_mismatch(), "F and true");
+    assert!(!open(&EncryptDict { perms: block(b'F'), encrypt_metadata: false, ..made.clone() }).perms_metadata_mismatch(), "F and false");
+    assert!(open(&EncryptDict { perms: block(b'X'), ..made.clone() }).perms_metadata_mismatch(), "neither");
+    // A /Perms that doesn't read as an `adb` block says nothing; R4 has none.
+    assert!(!open(&EncryptDict { perms: vec![0; 16], encrypt_metadata: false, ..made }).perms_metadata_mismatch());
+    assert!(!new(Algorithm::Aes128, "user", "owner", -4).perms_metadata_mismatch());
+}

@@ -52,12 +52,18 @@ enum DecryptorTag {
     Rc4,
     Aes128,
     Aes256,
+    /// PdfCraft patch (48): a `/CFM` other than `None`, `V2`, `AESV2` or `AESV3`, or one that
+    /// isn't a name (ISO 32000-2 Table 25: "Applications that encounter other values shall report
+    /// that the file is encrypted with an unsupported algorithm"), as pdfcraft-cos reads it.
+    Unsupported,
 }
 
 impl DecryptorTag {
     fn from_name(name: &Name<'_>) -> Option<Self> {
         match name.as_str() {
-            "None" | "Identity" => Some(Self::None),
+            // PdfCraft patch (48): `Identity` names a crypt filter (`/StmF`, `/StrF`), not a
+            // method; as a `/CFM` it is one of the "other values" of Table 25.
+            "None" => Some(Self::None),
             "V2" => Some(Self::Rc4),
             "AESV2" => Some(Self::Aes128),
             "AESV3" => Some(Self::Aes256),
@@ -101,6 +107,10 @@ impl Decryptor {
 
                 match crypt_dict.cfm {
                     DecryptorTag::None => Some(data.to_vec()),
+                    // PdfCraft patch (48): only a stream naming such a filter for itself gets
+                    // here (`decryptor` refuses one `/StmF`, `/StrF` or `/EFF` uses); it can't
+                    // be read.
+                    DecryptorTag::Unsupported => None,
                     DecryptorTag::Rc4 => decrypt_rc4(key, data, id),
                     DecryptorTag::Aes128 => decrypt_aes128(key, data, id),
                     // PdfCraft patch (46): Algorithm 1.A (ISO 32000-2 §7.6.3.3) is for 256-bit
@@ -251,6 +261,13 @@ fn decryptor(
         }
     };
 
+    // PdfCraft patch (48): a crypt filter strings, streams or embedded files use whose method
+    // can't be decrypted makes the file unreadable whatever the password, as pdfcraft-crypt
+    // refuses it (`SecurityHandler::open`).
+    if data.as_ref().is_some_and(|d| d.uses_unsupported(dict)) {
+        return Err(DecryptionError::UnsupportedAlgorithm);
+    }
+
     let owner_string = dict.get::<object::String<'_>>(O).ok_or(InvalidEncryption)?;
     let user_string = dict.get::<object::String<'_>>(U).ok_or(InvalidEncryption)?;
     let permissions = {
@@ -312,6 +329,7 @@ fn decryptor(
 
     match algorithm {
         DecryptorTag::None => Ok(Decryptor::None),
+        DecryptorTag::Unsupported => Err(DecryptionError::UnsupportedAlgorithm),
         DecryptorTag::Rc4 => Ok(Decryptor::Rc4 {
             key: decryption_key,
         }),
@@ -442,6 +460,17 @@ impl DecryptorData {
             named: mappings,
         })
     }
+
+    /// PdfCraft patch (48): whether `/StmF`, `/StrF` or `/EFF` (which defaults to `/StmF`) of
+    /// `dict` names a filter whose method is unsupported. One `/CF` defines and nothing uses
+    /// doesn't count, as in pdfcraft-crypt.
+    fn uses_unsupported(&self, dict: &Dict<'_>) -> bool {
+        let eff = dict.get::<Name<'_>>(b"EFF").and_then(|n| self.named.get(n.as_str()).copied());
+        [Some(self.stream_filter), Some(self.string_filter), eff]
+            .into_iter()
+            .flatten()
+            .any(|f| f.cfm == DecryptorTag::Unsupported)
+    }
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -452,7 +481,15 @@ struct CryptDictionary {
 
 impl CryptDictionary {
     fn from_dict(dict: &Dict<'_>, default_length: u16) -> Option<Self> {
-        let cfm = DecryptorTag::from_name(&dict.get::<Name<'_>>(CFM)?)?;
+        // PdfCraft patch (48): no `/CFM` (or a null one) is `None`, the default (Table 25),
+        // which leaves data as it is; any other value can't be decrypted. Upstream dropped the
+        // filter in both cases, so a stream or string using it was read as stored, ciphertext
+        // and all.
+        let cfm = match dict.get::<Name<'_>>(CFM) {
+            Some(name) => DecryptorTag::from_name(&name).unwrap_or(DecryptorTag::Unsupported),
+            None if !dict.contains_key(CFM) || dict.get::<object::Null>(CFM).is_some() => DecryptorTag::None,
+            None => DecryptorTag::Unsupported,
+        };
         // The standard security handler expresses the Length entry in bytes (e.g., 32 means a
         // length of 256 bits) and public-key security handlers express it as is (e.g., 256 means a
         // length of 256 bits).
