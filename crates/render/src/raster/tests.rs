@@ -7455,22 +7455,23 @@ fn block_source<T: Copy>(levels: [T; 8]) -> Vec<T> {
 }
 
 /// Draws one `size` image of colour space `space` (`data` as raw samples, with an optional gray
-/// `/SMask` of the same size) at 1:1 on a `device`-sized page, writing `/Interpolate` when given.
+/// `/SMask` of the same size, whose packed samples and bit depth are `alpha`) on a `device`-sized
+/// page, writing `/Interpolate` when given.
 fn draw_minified_image(
     space: &str,
     size: (u32, u32),
     interpolate: Option<bool>,
     data: &[u8],
-    alpha: Option<&[u8]>,
+    alpha: Option<(&[u8], u8)>,
     device: (u32, u32),
 ) -> RenderedPage {
     let (width, height) = size;
     let interp = interpolate.map_or_else(String::new, |value| format!("/Interpolate {value} "));
     let (smask, mask) = match alpha {
-        Some(alpha) => (
+        Some((alpha, bits)) => (
             "/SMask 6 0 R ",
             format!(
-                "6 0 obj << /Type /XObject /Subtype /Image /Width {width} /Height {height} /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /ASCIIHexDecode /Length {} >> stream\n{}>\nendstream endobj\n",
+                "6 0 obj << /Type /XObject /Subtype /Image /Width {width} /Height {height} /ColorSpace /DeviceGray /BitsPerComponent {bits} /Filter /ASCIIHexDecode /Length {} >> stream\n{}>\nendstream endobj\n",
                 hex(alpha).len() + 1,
                 hex(alpha)
             ),
@@ -7696,7 +7697,7 @@ fn non_integer_minification_averages_colour_and_mask_together() {
     // cover only transparent columns and show the page.
     let ramp = [10u8, 20, 30, 40, 50, 60, 70, 80, 90, 100];
     let mask = [255u8, 0, 0, 0, 255, 255, 0, 0, 0, 255];
-    let page = draw_minified_image("DeviceGray", (10, 1), None, &ramp, Some(&mask), (6, 1));
+    let page = draw_minified_image("DeviceGray", (10, 1), None, &ramp, Some((&mask, 8)), (6, 1));
     assert_eq!(
         page.rgba.as_chunks::<4>().0.to_vec(),
         vec![[108, 108, 108, 255], [255, 255, 255, 255], [132, 132, 132, 255], [138, 138, 138, 255], [255, 255, 255, 255], [162, 162, 162, 255]]
@@ -7771,7 +7772,7 @@ fn an_image_shrunk_one_way_and_stretched_the_other_is_still_averaged() {
 /// page. Premultiplied, the transparent sample adds nothing but its transparency.
 #[test]
 fn non_interpolated_minification_does_not_bleed_transparent_colour() {
-    let page = draw_minified_image("DeviceGray", (2, 1), None, &[255, 0], Some(&[255, 0]), (1, 1));
+    let page = draw_minified_image("DeviceGray", (2, 1), None, &[255, 0], Some((&[255, 0], 8)), (1, 1));
     assert_eq!(page.rgba.as_chunks::<4>().0.to_vec(), vec![[255, 255, 255, 255]]);
 }
 
@@ -7836,7 +7837,7 @@ fn non_interpolated_alpha_images_keep_their_colours_and_mask_when_minified() {
     let palette: [[u8; 3]; 8] = [[0, 0, 0], [255, 255, 255], [255, 0, 0], [0, 255, 0], [0, 0, 255], [255, 255, 0], [255, 0, 255], [0, 255, 255]];
     let rgb: Vec<u8> = block_source(palette).concat();
     let alpha = block_source([255u8, 0, 128, 255, 0, 255, 64, 128]);
-    let page = draw_minified_image("DeviceRGB", (8, 4), None, &rgb, Some(&alpha), (4, 2));
+    let page = draw_minified_image("DeviceRGB", (8, 4), None, &rgb, Some((&alpha, 8)), (4, 2));
     // Premultiplied colours composited over the white page: alpha 0 shows the page.
     let expected = vec![
         [0, 0, 0, 255],

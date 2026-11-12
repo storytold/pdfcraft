@@ -93,3 +93,19 @@ fn one_bit_minification_clamps_the_last_box_to_the_source() {
     let gray: Vec<u8> = page.rgba.as_chunks::<4>().0.iter().map(|px| px[0]).collect();
     assert!(gray[0] < 255, "the stroke is lost: {gray:?}");
 }
+
+/// An 8-bit colour image under a same-size 1-bit `/SMask`: the mask is line art, so a minified
+/// draw averages it instead of picking the source sample under each target pixel's centre. The
+/// mask's one-pixel stroke in column 1 of 10 covers 0.4 of device pixel 0 and must stay visible.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_one_bit_soft_mask_on_a_minified_colour_image_keeps_its_stroke() {
+    // Black 10×1 picture; the mask is opaque (sample 1) only in column 1 of 10.
+    let black = [0u8; 30];
+    let mask = [0x40u8, 0x00];
+    let page = draw_minified_image("DeviceRGB", (10, 1), None, &black, Some((&mask, 1)), (6, 1));
+    let px = page.rgba.as_chunks::<4>().0;
+    // 40% of black over the white page: a mid-tone, not the page showing through.
+    assert!((64..=191).contains(&px[0][0]), "the one-pixel stroke is lost: {:?}", &px[..2]);
+    assert_eq!(px[5], [255, 255, 255, 255], "the far end stays white");
+}
