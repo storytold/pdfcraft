@@ -120,10 +120,6 @@ pub(crate) struct XHost {
     /// A hash of the form's structure (each node's SOM and kind): the engine a session keeps serves the next script while it is
     /// the same, the objects it built pointing at the same nodes.
     pub(crate) shape: u64,
-    /// The event the script runs for: the realm the script objects live in is set up for it when the script first reaches one.
-    pub(crate) event: super::XfaEvent,
-    /// Whether that realm is set up for this script yet.
-    pub(crate) objects_ready: bool,
 }
 
 /// See [`XHost::shape`].
@@ -185,8 +181,6 @@ impl XHost {
             objects: Vec::new(),
             loaded_bytes: 0,
             shape,
-            event: super::XfaEvent::default(),
-            objects_ready: false,
         }
     }
 

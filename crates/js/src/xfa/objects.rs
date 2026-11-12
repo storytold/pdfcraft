@@ -49,7 +49,6 @@ const KEPT: &[&str] = &[
     "__xfa_load",
     "__xfa_extend",
     "__xfa_built",
-    "__xfa_prepare",
     "globalThis",
     "undefined",
     "eval",
@@ -68,14 +67,14 @@ thread_local! {
     static MEMBERS: RefCell<HashMap<u64, Result<Arc<str>, String>>> = RefCell::new(HashMap::new());
 }
 
-/// The script objects a script reaches, set up in the realm they are built in, with `expose`, which gives another realm the
-/// getters that reach them. Scripts reaching the same objects share it, and an object one of them built is that same
+/// The script objects a script reaches, set up on the engine's global object, with `expose`, which gives the getters that reach
+/// them again after a script's set-up put the host's globals back. Scripts reaching the same objects share it, and an object one of them built is that same
 /// object for the others: it is built once, and keeps its state.
 pub(super) struct Defined {
     /// See [`key`].
     pub(super) key: u64,
     expose: JsValue,
-    /// The bare names it defined in the objects' realm.
+    /// The bare names it defined on the global object.
     pub(super) names: Vec<String>,
 }
 
@@ -90,8 +89,8 @@ pub(super) fn key(objects: &[ScriptObjectCode]) -> u64 {
     h.finish()
 }
 
-/// Sets `objects` up in the current realm (the one they are built in): an object named like a host global (`util`, say)
-/// replaces it there and in each realm [`expose`] is given.
+/// Sets `objects` up on the global object: an object named like a host global (`util`, say) replaces it, there and each time
+/// [`expose`] gives the getters again.
 pub(super) fn setup(ctx: &mut Context, objects: &[ScriptObjectCode], key: u64) -> JsResult<Defined> {
     let globals: Vec<(usize, String)> = BUILT_INS.with(|built_ins| {
         objects
@@ -105,8 +104,6 @@ pub(super) fn setup(ctx: &mut Context, objects: &[ScriptObjectCode], key: u64) -
     ctx.register_global_property(js_string!("__xfa_load"), load, Attribute::CONFIGURABLE)?;
     let extend = function(ctx, NativeFunction::from_fn_ptr(extend));
     ctx.register_global_property(js_string!("__xfa_extend"), extend, Attribute::CONFIGURABLE)?;
-    let prepare = function(ctx, NativeFunction::from_fn_ptr(prepare));
-    ctx.register_global_property(js_string!("__xfa_prepare"), prepare, Attribute::CONFIGURABLE)?;
     let ids: Vec<String> = objects.iter().map(|o| format!("{:?}", identity(o))).collect();
     let names: Vec<String> = globals.iter().map(|(k, n)| format!("[{k}, {n:?}]")).collect();
     let code = format!(
@@ -116,7 +113,6 @@ pub(super) fn setup(ctx: &mut Context, objects: &[ScriptObjectCode], key: u64) -
   function loader(k) {{
     var id = ids[k];
     if (id === undefined) return undefined;
-    __xfa_prepare();
     if (id in built) return built[id];
     if (state[k] === 1) return undefined;
     state[k] = 1;
@@ -147,7 +143,7 @@ pub(super) fn setup(ctx: &mut Context, objects: &[ScriptObjectCode], key: u64) -
     Ok(Defined { key, expose, names: globals.into_iter().map(|(_, n)| n).collect() })
 }
 
-/// Gives the current realm (a script's own) the objects of `d`: `__xfa_object` and a getter for each bare name.
+/// Gives the global object the objects of `d` again: `__xfa_object` and a getter for each bare name.
 pub(super) fn expose(ctx: &mut Context, d: &Defined) -> JsResult<()> {
     let global: JsValue = ctx.global_object().into();
     match d.expose.as_callable() {
@@ -201,21 +197,6 @@ pub(super) fn child_object(ctx: &mut Context, idx: usize, name: &str) -> JsResul
 pub(super) fn named_object(ctx: &mut Context, name: &str) -> JsResult<JsValue> {
     let k = host(ctx)?.borrow().objects.iter().position(|o| o.name == name && o.bare);
     k.map_or(Ok(JsValue::undefined()), |k| object_at(ctx, k))
-}
-
-/// `__xfa_prepare()`: sets the realm the objects live in up for the running script (its form, event and `this`), the first
-/// time the script reaches an object: their code reads `xfa` there.
-fn prepare(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
-    let (event, doc, current) = {
-        let mut h = host(ctx)?.borrow_mut();
-        if h.objects_ready {
-            return Ok(JsValue::undefined());
-        }
-        h.objects_ready = true;
-        (h.event.clone(), h.doc.clone(), h.current)
-    };
-    super::globals::install(ctx, &event, &doc, current)?;
-    Ok(JsValue::undefined())
 }
 
 /// `__xfa_extend(k)`: loads the never-named objects whose code names object `k`, now that `k` is built (a failing one is left

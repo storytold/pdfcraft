@@ -153,34 +153,32 @@ pub(crate) fn run_here_with(
     started: &dyn Fn(),
 ) -> XfaOutcome {
     warm_up();
+    // A script that names a script object it reaches runs on the engine the session keeps while the form keeps its structure:
+    // the objects an earlier script built are there, with their state (as Acrobat builds them once for the form), and none is
+    // compiled again. Such scripts share the objects' global object, as Acrobat's do. Any other script runs on an engine of its
+    // own, so nothing it sets or changes outlives it.
+    let keep = reuse && names_an_object(script, &objects);
     let mut host_state = XHost::new(root, reuse, &event.target, doc);
-    host_state.objects = objects;
-    host_state.event = event.clone();
+    host_state.objects = if keep { objects } else { Vec::new() };
     let current = host_state.current;
     let shape = host_state.shape;
-    // A session's scripts share an engine while the form keeps its structure: the script objects one built are there, with
-    // their state, for the next (as Acrobat builds them once for the form), and none is compiled again. They live in the
-    // engine's own realm; each script runs in a realm of its own, so its globals and built-ins are its own.
-    // A form without script objects has nothing to keep: a fresh engine for each script is cheaper than realms piling up in one.
-    let keep = reuse && !host_state.objects.is_empty();
     let kept = if keep { KEPT_ENGINE.with(|k| k.borrow_mut().take()).filter(|k| k.shape == shape) } else { None };
     let mut kept = match kept {
         Some(k) => k,
         None => match Context::builder().host_hooks(std::rc::Rc::new(crate::CheckedCodeFromStrings)).build() {
-            Ok(ctx) => Kept { shape, ctx, defined: None, scripts: 0 },
+            Ok(ctx) => Kept { shape, ctx, defined: None },
             Err(e) => return XfaOutcome { error: Some(format!("the script engine could not start: {e}")), ..Default::default() },
         },
     };
-    kept.scripts += 1;
     let Kept { ctx, defined, .. } = &mut kept;
     ctx.runtime_limits_mut().set_loop_iteration_limit(limits.loop_iterations);
     ctx.runtime_limits_mut().set_recursion_limit(limits.recursion);
     ctx.insert_data(RefCell::new(host_state));
     let mut out = XfaOutcome::default();
-    let mut objects_realm = None;
     let result = (|| -> JsResult<()> {
-        // the objects are set up again only for a script that reaches others than the last one did (in their own realm, which
-        // is set up for this script's form and event when it first reaches one)
+        install(ctx, event, doc, current)?;
+        // the objects are set up again only for a script that reaches others than the last one did; their getters are given
+        // again after the set-up above, which put the host's globals back (`util`, when an object has that name)
         let objects = host(ctx)?.borrow().objects.clone();
         if !objects.is_empty() {
             let key = super::objects::key(&objects);
@@ -193,11 +191,6 @@ pub(crate) fn run_here_with(
                 *defined = Some(super::objects::setup(ctx, &objects, key)?);
             }
         }
-        if keep {
-            let realm = ctx.create_realm()?;
-            objects_realm = Some(ctx.enter_realm(realm));
-        }
-        install(ctx, event, doc, current)?;
         if let Some(d) = defined.as_ref() {
             super::objects::expose(ctx, d)?;
         }
@@ -221,9 +214,6 @@ pub(crate) fn run_here_with(
     if let Err(e) = result {
         out.error = Some(e.to_string());
     }
-    if let Some(realm) = objects_realm {
-        ctx.enter_realm(realm);
-    }
     if let Some(h) = ctx.remove_data::<Shared>() {
         let h = h.into_inner();
         out.notes = h.notes();
@@ -232,7 +222,7 @@ pub(crate) fn run_here_with(
     }
     clip_result(&mut out);
     // A script that froze the global object leaves nothing the next one can set up in: that one gets an engine of its own.
-    if keep && kept.scripts < SCRIPTS_PER_ENGINE && kept.ctx.global_object().is_extensible(&mut kept.ctx).unwrap_or(false) {
+    if keep && kept.ctx.global_object().is_extensible(&mut kept.ctx).unwrap_or(false) {
         KEPT_ENGINE.with(|k| *k.borrow_mut() = Some(kept));
     }
     out
@@ -244,13 +234,18 @@ struct Kept {
     ctx: Context,
     /// The script objects as the last script reached them.
     defined: Option<super::objects::Defined>,
-    /// Scripts run on it, against [`SCRIPTS_PER_ENGINE`].
-    scripts: u32,
 }
 
-/// Scripts one kept engine serves before a new one takes over: the engine holds on to every realm made in it (some 250 KiB
-/// each), so it is let go of before that grows, its objects built again in the next.
-const SCRIPTS_PER_ENGINE: u32 = 64;
+/// Whether `script` names one of the script objects it reaches (`calcs.sum()`, `form1.calcs`, `resolveNode("calcs")`): a
+/// script that names none can't reach their state, and runs on an engine of its own.
+fn names_an_object(script: &str, objects: &[super::objects::ScriptObjectCode]) -> bool {
+    if objects.is_empty() {
+        return false;
+    }
+    let words: std::collections::HashSet<&str> =
+        script.split(|c: char| !(c.is_alphanumeric() || c == '_' || c == '$')).filter(|w| !w.is_empty()).collect();
+    objects.iter().any(|o| words.contains(o.name.as_str()))
+}
 
 std::thread_local! {
     static KEPT_ENGINE: RefCell<Option<Kept>> = const { RefCell::new(None) };

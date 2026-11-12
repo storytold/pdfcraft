@@ -2215,6 +2215,19 @@ mod session {
         let mut click = script("Reader.who()", false, "form1[0].page1[0].total[0]", "click");
         click.objects = reader.to_vec();
         assert_eq!(s.run(click).result.as_deref(), Some("click:1"));
+        // the state lasts however many scripts the session runs (a library set up once by the form's first script)
+        let lib = object(
+            "lib",
+            Some("form1[0]"),
+            "var pages = null; function init() { pages = []; } function add(p) { pages.push(p); return pages.length; }",
+        );
+        assert_eq!(with_objects(&mut s, "lib.init(); 0", std::slice::from_ref(&lib)).as_deref(), Ok("0"));
+        for i in 1..=200 {
+            assert_eq!(with_objects(&mut s, "lib.add(this)", std::slice::from_ref(&lib)), Ok(i.to_string()));
+        }
+        // a script that names no object runs on an engine of its own: what the object scripts set is not there
+        assert_eq!(with_objects(&mut s, "leaked = 1; lib.add(this)", std::slice::from_ref(&lib)).as_deref(), Ok("201"));
+        assert_eq!(with_objects(&mut s, "typeof leaked", std::slice::from_ref(&lib)).as_deref(), Ok("undefined"));
         // a form whose structure changed (a row added) gets a new engine, its objects built again
         let mut grown = script("calcs.sumFields()", false, "form1[0].page1[0].total[0]", "calculate");
         let page = &mut std::sync::Arc::make_mut(&mut grown.root).children[0];

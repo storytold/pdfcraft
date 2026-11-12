@@ -1,10 +1,11 @@
 //! One script engine for a whole form event. Every script of the event runs on one thread
 //! (with the script stack), on a fresh copy of the form as the caller holds it: what a script
 //! changed in the form (up to its error, when it failed) reaches the next one only through the
-//! caller, which applies the effects and sends the form as it then is. The scripts share one
-//! JavaScript context while the form keeps its structure, as Acrobat's do: the script objects
-//! are built once for them and keep their state, and a global a script sets without declaring
-//! it is there for the next (what a script declares stays its own). Before,
+//! caller, which applies the effects and sends the form as it then is. The scripts that name a
+//! script object share one JavaScript context while the form keeps its structure, as Acrobat's
+//! do: the objects are built once for them and keep their state, and a global such a script sets
+//! without declaring it is there for the next (what a script declares stays its own). Every other
+//! script runs in a fresh context, so nothing it sets or changes outlives it. Before,
 //! every script also got a thread of its own and the caller rebuilt the form for each: a form
 //! with hundreds of calculations spent its open-time budget on that.
 //!
