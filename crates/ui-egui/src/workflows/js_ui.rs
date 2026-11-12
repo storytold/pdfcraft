@@ -330,11 +330,15 @@ impl PdfCraftApp {
 
     /// The console's Run: evaluate the input in the active document.
     pub fn run_console(&mut self) {
-        let Some((i, id)) = self.active_ids() else { return };
         let script = self.js_console.input.clone();
         if script.trim().is_empty() {
             return;
         }
+        // The separate console can run before the document's editor commits its text.
+        if !self.commit_form_typing() {
+            return;
+        }
+        let Some((i, id)) = self.active_ids() else { return };
         self.js_console.log.push(format!("> {}", script.trim()));
         match self.session.run_javascript(id, &script, None) {
             Ok(o) => {
@@ -529,6 +533,63 @@ pub(crate) use crate::dialogs::preferences::{
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn console_with_form_typing(queued: bool, reject: bool) -> PdfCraftApp {
+        let mut app = PdfCraftApp::new();
+        app.open_bytes("form.pdf", None, include_bytes!("../../tests/data/form.pdf").to_vec()).unwrap();
+        if reject {
+            assert!(app.apply_edit(Edit::SetFieldScript { name: "name".into(), event: "validate".into(), script: Some("event.rc = false;".into()) }));
+        }
+        let form = app.session.get(app.views[0].id).unwrap().form.clone();
+        let field = form.iter().find(|field| field.name == "name").unwrap();
+        let mut draft = crate::forms_ui::open_focus(field, 0);
+        draft.text = "typed".into();
+        app.views[0].forms.focus = Some(draft);
+        if queued {
+            crate::forms_ui::commit(&mut app.views[0], &form);
+        }
+        app
+    }
+
+    #[test]
+    fn console_commits_form_typing_before_running_scripts() {
+        for queued in [false, true] {
+            let mut app = console_with_form_typing(queued, false);
+            app.js_console.input =
+                "console.println(getField('name').value); getField('name').value = 'console saw ' + getField('name').value;".into();
+            app.run_console();
+            let doc = app.session.get(app.views[0].id).unwrap();
+            assert_eq!(doc.form.iter().find(|field| field.name == "name").unwrap().value, ["console saw typed"], "queued={queued}");
+            assert!(app.js_console.log.iter().any(|line| line == "typed"), "queued={queued}: {:?}", app.js_console.log);
+            assert!(app.views[0].forms.focus.is_none() && app.views[0].pending_edit.is_none(), "queued={queued}");
+        }
+    }
+
+    #[test]
+    fn empty_console_script_leaves_form_typing_uncommitted() {
+        let mut app = console_with_form_typing(false, false);
+        app.js_console.input = "  ".into();
+        app.run_console();
+        assert!(app.views[0].forms.focus.is_some());
+        assert!(app.js_console.log.is_empty());
+    }
+
+    #[test]
+    fn console_does_not_run_when_form_typing_is_rejected() {
+        for queued in [false, true] {
+            let mut app = console_with_form_typing(queued, true);
+            let id = app.views[0].id;
+            let before = app.session.get(id).unwrap().bytes.clone();
+            app.js_console.log.push("earlier output".into());
+            app.js_console.input = "getField('city').value = 'console ran'; console.println('console ran');".into();
+            app.run_console();
+            assert!(app.session.get(id).unwrap().bytes == before, "a refused draft must prevent console edits, queued={queued}");
+            assert_eq!(app.js_console.log, ["earlier output"], "no console execution or input echo, queued={queued}");
+            let draft = app.views[0].forms.focus.as_ref().expect("the rejected text stays editable");
+            assert_eq!(draft.text, "typed", "queued={queued}");
+            assert!(draft.request_focus && app.toast.is_some(), "the rejection is reported, queued={queued}");
+        }
+    }
 
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
