@@ -10,6 +10,11 @@ fn doc(annots: &str, extra: &[Vec<u8>]) -> Document {
         format!("<< /Type /Page /Parent 2 0 R /Annots {annots} >>").into_bytes(),
     ];
     objs.extend(extra.iter().cloned());
+    file(&objs)
+}
+
+/// A document of `objs`, numbered from 1; the first is the catalog.
+fn file(objs: &[Vec<u8>]) -> Document {
     let mut out = b"%PDF-1.7\n".to_vec();
     let mut offsets = Vec::new();
     for (i, o) in objs.iter().enumerate() {
@@ -51,6 +56,12 @@ fn a_3dref_leads_to_the_stream_it_names() {
 }
 
 #[test]
+fn a_3dref_and_its_format_may_be_named_through_references() {
+    let d = doc("[4 0 R]", &[annot("<< /Type 6 0 R /3D 5 0 R >>"), stream("/Type /3D /Subtype 7 0 R", b"PRC"), b"/3DRef".to_vec(), b"/PRC".to_vec()]);
+    assert_eq!(model_3d(&d, 0, 0), Ok(Model3d { kind: Model3dKind::Prc, data: b"PRC".to_vec() }));
+}
+
+#[test]
 fn a_u3d_stream_is_read_and_says_so() {
     let d = doc("[4 0 R]", &[annot("5 0 R"), stream("/Type /3D /Subtype /U3D", b"U3D")]);
     assert_eq!(model_3d(&d, 0, 0).map(|m| m.kind), Ok(Model3dKind::U3d));
@@ -85,4 +96,45 @@ fn another_annotation_is_not_a_3d_one() {
     assert_eq!(model_3d(&d, 0, 2), Err(AnnotError::NoSuchAnnotation { page: 0, index: 2 }));
     assert_eq!(model_3d_annotations(&d, 0), Ok(vec![1]));
     assert_eq!(model_3d_annotations(&d, 1), Err(AnnotError::NoSuchPage(1)));
+}
+
+#[test]
+fn shown_positions_follow_the_inspectors_rules() {
+    // A 3D annotation whose `/Subtype` is a reference, one listed twice, a hidden one, and a
+    // square: the first is listed, the repeat counted once, where it is first listed.
+    let d = doc(
+        "[6 0 R 4 0 R 7 0 R 4 0 R 8 0 R]",
+        &[
+            b"<< /Type /Annot /Subtype 5 0 R /Rect [0 0 1 1] >>".to_vec(),
+            b"/3D".to_vec(),
+            b"<< /Type /Annot /Subtype /Square /Rect [0 0 1 1] >>".to_vec(),
+            b"<< /Type /Annot /Subtype /3D /Rect [0 0 1 1] /F 2 >>".to_vec(),
+            b"<< /Type /Annot /Subtype /3D /Rect [0 0 1 1] >>".to_vec(),
+        ],
+    );
+    assert_eq!(shown_model_3d_positions(&d), Ok(vec![(0, 1), (0, 4)]));
+    assert_eq!(model_3d_annotations(&d, 0), Ok(vec![1, 2, 3, 4]));
+}
+
+#[test]
+fn an_annots_array_two_pages_share_is_counted_on_the_first() {
+    let d = file(&[
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R 4 0 R 5 0 R] /Count 3 /MediaBox [0 0 612 792] >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /Annots 6 0 R >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /Annots 6 0 R >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /Annots [7 0 R << /Type /Annot /Subtype /3D /Rect [0 0 1 1] >>] >>".to_vec(),
+        b"[<< /Type /Annot /Subtype /3D /Rect [0 0 1 1] >>]".to_vec(),
+        b"<< /Type /Annot /Subtype /3D /Rect [0 0 1 1] >>".to_vec(),
+    ]);
+    assert_eq!(shown_model_3d_positions(&d), Ok(vec![(0, 0), (2, 0), (2, 1)]));
+}
+
+#[test]
+fn at_most_1024_shown_3d_annotations_are_listed() {
+    let one = "<< /Type /Annot /Subtype /3D /Rect [0 0 1 1] >> ";
+    let d = doc(&format!("[{}]", one.repeat(MAX_SHOWN_3D + 1)), &[]);
+    let shown = shown_model_3d_positions(&d).expect("lists");
+    assert_eq!(shown.len(), MAX_SHOWN_3D);
+    assert_eq!(shown.last(), Some(&(0, MAX_SHOWN_3D - 1)));
 }

@@ -36,9 +36,9 @@ pub use core::{check_pages, inspect, pretty_date};
 #[cfg(test)]
 use core::{inspect_structure, spend};
 pub use model::{
-    Annotation, Attachment, AttachmentSource, DestView, Field, FieldKind, FontInfo, Layer, LayerItem, LayerOp, LayerRow, Link, LinkTarget,
-    MAX_GROUP_DEPTH, OutlineItem, PageInfo, PageTransition, Popup, Portfolio, PortfolioView, RemoteDestination, ReviewStates, TransitionStyle, Xfa,
-    fill_group_text, group_primaries, link_replies, thread_tops,
+    Annot3d, Annotation, Attachment, AttachmentSource, DestView, Dimension3d, Field, FieldKind, FontInfo, Format3d, Layer, LayerItem, LayerOp,
+    LayerRow, Link, LinkTarget, MAX_GROUP_DEPTH, OutlineItem, PageInfo, PageTransition, Popup, Portfolio, PortfolioView, Projection3d,
+    RemoteDestination, ReviewStates, TransitionStyle, View3d, Xfa, fill_group_text, group_primaries, link_replies, thread_tops,
 };
 pub use navigation::named_destination;
 #[cfg(test)]
@@ -74,6 +74,8 @@ pub struct DocInfo {
     pub annotations: Vec<Annotation>,
     pub fields: Vec<Field>,
     pub links: Vec<Link>,
+    /// 3D models (3D annotations) in page and `/Annots` order, at most 1024.
+    pub annots_3d: Vec<Annot3d>,
     /// The catalog's `/URI /Base` (ISO 32000-2 Table 211), the base for relative URI actions, when
     /// it is a string of at most [`crate::MAX_URI_BASE_BYTES`].
     pub uri_base: Option<String>,

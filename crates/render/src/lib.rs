@@ -19,9 +19,10 @@ pub mod text;
 pub mod transition;
 
 pub use inspect::{
-    Annotation, Attachment, AttachmentSource, DestView, DocInfo, Field, FieldKind, FontInfo, Layer, LayerItem, LayerOp, LayerRow, Link, LinkTarget,
-    MAX_GROUP_DEPTH, OutlineItem, PageInfo, PageTransition, Popup, Portfolio, PortfolioView, RemoteDestination, ReviewStates, TransitionStyle, Xfa,
-    attachment_data, check_pages, fill_group_text, group_primaries, inspect, link_replies, named_destination, pretty_date, thread_tops,
+    Annot3d, Annotation, Attachment, AttachmentSource, DestView, Dimension3d, DocInfo, Field, FieldKind, FontInfo, Format3d, Layer, LayerItem,
+    LayerOp, LayerRow, Link, LinkTarget, MAX_GROUP_DEPTH, OutlineItem, PageInfo, PageTransition, Popup, Portfolio, PortfolioView, Projection3d,
+    RemoteDestination, ReviewStates, TransitionStyle, View3d, Xfa, attachment_data, check_pages, fill_group_text, group_primaries, inspect,
+    link_replies, named_destination, pretty_date, thread_tops,
 };
 pub use link_area::{MAX_LINK_QUADS, MAX_URI_BASE_BYTES, link_quads, quad_contains, resolve_uri};
 pub use pixels::Pixels;

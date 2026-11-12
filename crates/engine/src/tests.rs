@@ -15023,6 +15023,57 @@ fn imported_bookmarks_undo_in_one_step() {
     assert!(s.get(id).unwrap().info.outline.is_empty());
 }
 
+#[test]
+fn deleting_a_comment_before_a_3d_model_moves_its_listed_position() {
+    let pdf = pdf_of(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 400] /Annots [4 0 R 5 0 R 6 0 R] >>",
+            "<< /Type /Annot /Subtype /Square /Rect [10 10 30 30] /C [1 0 0] >>",
+            "<< /Type /Annot /Subtype /3D /Rect [50 50 350 350] /F 2 >>",
+            "<< /Type /Annot /Subtype /3D /Rect [50 50 350 350] >>",
+        ]
+        .map(String::from),
+    );
+    let mut s = Session::new();
+    let id = s.open("models.pdf", None, Arc::new(pdf), None).expect("opens");
+    let indexes = |s: &Session| s.get(id).unwrap().info.annots_3d.iter().map(|a| a.index).collect::<Vec<_>>();
+    // The hidden model is not listed.
+    assert_eq!(indexes(&s), [2]);
+    s.apply(id, Edit::DeleteAnnotation { page: 0, index: 0 }).unwrap();
+    assert_eq!(indexes(&s), [1]);
+    s.undo(id).unwrap();
+    assert_eq!(indexes(&s), [2]);
+}
+
+#[test]
+fn deleting_a_comment_before_a_repeated_3d_model_keeps_the_list_right() {
+    // The model at 6 is listed twice; the inspector counts it once, at position 1.
+    let pdf = pdf_of(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 400] /Annots [4 0 R 6 0 R 6 0 R 5 0 R] >>",
+            "<< /Type /Annot /Subtype /Square /Rect [10 10 30 30] /C [1 0 0] >>",
+            "<< /Type /Annot /Subtype /3D /Rect [50 50 350 350] /Contents (second) >>",
+            "<< /Type /Annot /Subtype /3D /Rect [50 50 350 350] /Contents (first) >>",
+        ]
+        .map(String::from),
+    );
+    let mut s = Session::new();
+    let id = s.open("models.pdf", None, Arc::new(pdf), None).expect("opens");
+    let indexes = |s: &Session| s.get(id).unwrap().info.annots_3d.iter().map(|a| a.index).collect::<Vec<_>>();
+    assert_eq!(indexes(&s), [1, 3]);
+    s.apply(id, Edit::DeleteAnnotation { page: 0, index: 0 }).unwrap();
+    assert_eq!(indexes(&s), [0, 2]);
+    s.undo(id).unwrap();
+    assert_eq!(indexes(&s), [1, 3]);
+    // A model is not a comment, so Delete refuses it and the list stays as it was.
+    assert!(s.apply(id, Edit::DeleteAnnotation { page: 0, index: 3 }).is_err());
+    assert_eq!(indexes(&s), [1, 3]);
+}
+
 /// Rejected host writeback must invalidate globals for both synchronous and native completion.
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
@@ -15231,6 +15282,7 @@ fn mixed_widget_icons_are_normalized_with_history_and_save() {
         }
     }
 }
+
 /// A comment imported or pasted without the appearance its file carried (unreadable there) is
 /// said in the repair log, which the interface shows and the tools return.
 #[test]

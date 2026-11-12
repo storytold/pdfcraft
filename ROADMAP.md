@@ -262,6 +262,7 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 ## Progress log
 - **2026-11-09 (M10, #5130):** Windows Printer default sends native two-sided bindings only when automatic duplex support is confirmed, preserving manual driver defaults (#5130/#5772); physical output remains unqualified. Both Windows submission paths preserve DLL guards and current spooler fixes. Review follow-up validates both duplex scopes through craft-print 9fe50c94 and corrects CI formatting. Estimates unchanged.
 
+- **2026-11-04 (M12, 3D saved views):** A 3D annotation's default view (`/3DV`, else the 3D stream's `/DV`, else its first view; ISO 32000-2 §13.6.2 and §13.6.4) is read with the page's annotations: its camera-to-world matrix, centre of orbit, perspective or orthographic projection and background (`DocInfo::annots_3d`). `model_render` draws a model as that view shows it by default (`view: "saved"`), checked against Acrobat on a SOLIDWORKS export for angle and size, or framed from a direction as before (`view: "fit"`, or any `direction`), through `prc_render::Camera::from_view`. The pages outline each 3D annotation and say what it holds, since SOLIDWORKS writes a blank poster.
 - **2026-10-27 (M10, #5005):** Vector printing retains each annotation's optional-content membership when drawing its appearance.
   Shared appearances and existing layer state remain independent; estimates unchanged.
 
