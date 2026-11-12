@@ -286,12 +286,7 @@ fn nearest_premultiplied_rgba(
                 _ => return None,
             };
             let a = *alpha.get(si)?;
-            out.extend_from_slice(
-                &AlphaColor::from_rgba8(r, g, b, a)
-                    .premultiply()
-                    .to_rgba8()
-                    .to_u8_array(),
-            );
+            out.extend_from_slice(&premultiply_rgba8([r, g, b, a]));
         }
     }
     Some(out)
@@ -417,7 +412,7 @@ fn area_shrink_premultiplied(
                 [r, g, b] => [*r, *g, *b],
                 _ => return None,
             };
-            out.copy_from_slice(&AlphaColor::from_rgba8(r, g, b, *a).premultiply().to_rgba8().to_u8_array());
+            out.copy_from_slice(&premultiply_rgba8([r, g, b, *a]));
         }
         Some(())
     })
@@ -538,12 +533,35 @@ fn area_resize(
 fn premultiply_rgba(rgba: &mut [u8]) {
     let (chunks, _) = rgba.as_chunks_mut::<4>();
     for chunk in chunks {
-        let [r, g, b, a] = *chunk;
-        *chunk = AlphaColor::from_rgba8(r, g, b, a)
-            .premultiply()
-            .to_rgba8()
-            .to_u8_array();
+        *chunk = premultiply_rgba8(*chunk);
     }
+}
+
+/// PdfCraft patch: `AlphaColor::from_rgba8(r, g, b, a).premultiply().to_rgba8()`, read from a
+/// table of every sample and alpha that the same conversion fills once. Premultiplying works on
+/// each colour sample alone, so the table is exact; the per-sample float conversion it replaces
+/// was most of the time of drawing a large image under a same-size soft mask, as it ran on every
+/// source sample at each draw.
+fn premultiply_rgba8([r, g, b, a]: [u8; 4]) -> [u8; 4] {
+    if a == 255 {
+        return [r, g, b, a];
+    }
+    let row = &premultiplied_samples()[usize::from(a)];
+    [row[usize::from(r)], row[usize::from(g)], row[usize::from(b)], a]
+}
+
+/// PdfCraft patch: the table behind [`premultiply_rgba8`], indexed by alpha, then sample.
+fn premultiplied_samples() -> &'static [[u8; 256]; 256] {
+    static TABLE: std::sync::OnceLock<Box<[[u8; 256]; 256]>> = std::sync::OnceLock::new();
+    TABLE.get_or_init(|| {
+        let mut table = Box::new([[0_u8; 256]; 256]);
+        for (a, row) in table.iter_mut().enumerate() {
+            for (v, out) in row.iter_mut().enumerate() {
+                *out = AlphaColor::from_rgba8(v as u8, 0, 0, a as u8).premultiply().to_rgba8().r;
+            }
+        }
+        table
+    })
 }
 
 /// PdfCraft patch: most pieces one dashed stroke may be cut into. Stroke expansion keeps every
@@ -3174,7 +3192,9 @@ mod area_shrink_tests {
     use super::{
         AREA_ONE, AreaAxis, ImageData, LumaData, MAX_IMAGE_PIXELS, RgbData, area_shrink,
         area_shrink_premultiplied, area_taps, mask_on_image_grid, premultiply_rgba,
+        premultiply_rgba8,
     };
+    use vello_cpu::color::AlphaColor;
 
     /// Deterministic samples that vary from one to the next.
     fn noise(len: usize, seed: u32) -> Vec<u8> {
@@ -3187,6 +3207,21 @@ mod area_shrink_tests {
                 (x >> 24) as u8
             })
             .collect()
+    }
+
+    /// The table gives what the colour conversion gives, for every sample, alpha and channel.
+    #[test]
+    fn premultiplying_by_table_matches_the_colour_conversion() {
+        for a in 0..=255_u8 {
+            for v in 0..=255_u8 {
+                let w = v.wrapping_mul(37).wrapping_add(a);
+                for px in [[v, w, !v, a], [w, !v, v, a], [!v, v, w, a]] {
+                    let [r, g, b, a] = px;
+                    let want = AlphaColor::from_rgba8(r, g, b, a).premultiply().to_rgba8().to_u8_array();
+                    assert_eq!(premultiply_rgba8(px), want, "{px:?}");
+                }
+            }
+        }
     }
 
     /// The shrink as two whole passes, every row averaged down and then every row across, each
