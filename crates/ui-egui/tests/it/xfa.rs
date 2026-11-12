@@ -524,3 +524,75 @@ fn each_calculation_one_edit_types_over_is_asked_about_in_turn() {
     type_value(&mut h, "k1", "3");
     assert_eq!(["k2", "k3"].map(|f| value(&h, f)), ["30", "6"], "the first calculated again, the second kept");
 }
+
+/// A new text box that can't be applied: it names a page the document doesn't have (as a box
+/// left open on a page removed since would), so adding its text is refused.
+fn unappliable_box() -> pdfcraft_ui_egui::TextDraft {
+    pdfcraft_ui_egui::TextDraft {
+        page: 99,
+        index: None,
+        rect: [20.0, 600.0, 220.0, 620.0],
+        text: "Typed".into(),
+        style: Default::default(),
+        focus: false,
+        selection: None,
+        typing_from: None,
+    }
+}
+
+/// "Use calculated value" while a box open on the page can't be applied changes nothing and
+/// keeps the question: it waits, not shown, while the box stays open, and is asked again once
+/// the box is cancelled; answered then, the field takes its calculated value. The note says the
+/// value stays for now, not to use Undo (which takes back the last edit, not this entry).
+#[test]
+fn the_calculation_question_waits_for_a_box_that_cant_be_applied() {
+    let mut h = open(recommended_calculation());
+    type_value(&mut h, "k2", "5");
+    h.state_mut().views[0].content.draft = Some(unappliable_box());
+    h.run_steps(1);
+    h.get_by_label("Use calculated value").click();
+    h.run_steps(3);
+    assert_eq!(value(&h, "k2"), "5");
+    assert_eq!(asked(&h), ["k2"], "the question is kept");
+    assert!(h.query_by_label("Replace the calculated value?").is_none(), "not shown while the box is open");
+    let toast = h.state().toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
+    assert!(toast.contains("stays for now") && !toast.contains("Undo"), "{toast}");
+    h.state_mut().views[0].content.draft = None;
+    h.run_steps(3);
+    h.get_by_label("Replace the calculated value?");
+    h.get_by_label("Use calculated value").click();
+    h.run_steps(3);
+    assert_eq!(value(&h, "k2"), "10");
+    assert!(asked(&h).is_empty());
+}
+
+/// A question about a value no longer kept over its calculation (a reset took it back while
+/// the question waited, or before it was answered) needs no answer: it isn't asked again, and
+/// answering it changes nothing and reports nothing.
+#[test]
+fn a_question_a_reset_answered_is_dropped() {
+    let mut h = open(recommended_calculation());
+    type_value(&mut h, "k2", "5");
+    h.state_mut().views[0].content.draft = Some(unappliable_box());
+    h.run_steps(1);
+    h.get_by_label("Use calculated value").click();
+    h.run_steps(3);
+    h.state_mut().apply_edit(pdfcraft_engine::Edit::ResetForm { names: None });
+    h.run_steps(3);
+    assert_eq!(value(&h, "k2"), "10");
+    h.state_mut().views[0].content.draft = None;
+    h.run_steps(3);
+    assert!(asked(&h).is_empty());
+    assert!(h.query_by_label("Replace the calculated value?").is_none());
+
+    let mut h = open(recommended_calculation());
+    type_value(&mut h, "k2", "5");
+    h.state_mut().apply_edit(pdfcraft_engine::Edit::ResetForm { names: None });
+    h.run_steps(3);
+    h.state_mut().toast = None;
+    h.get_by_label("Use calculated value").click();
+    h.run_steps(3);
+    assert_eq!(value(&h, "k2"), "10");
+    assert!(asked(&h).is_empty());
+    assert!(h.state().toast.is_none(), "{:?}", h.state().toast);
+}

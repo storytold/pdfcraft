@@ -325,6 +325,7 @@ impl PdfCraftApp {
             pending_link: None,
             pending_full_screen: None,
             pending_calc_overrides: Default::default(),
+            calc_override_waits: false,
             pending_window: None,
             pending_remote_link: None,
             protect_draft: Default::default(),
@@ -456,8 +457,14 @@ impl PdfCraftApp {
             || self.unlock_prompt.is_some()
             || self.pending_link.is_some()
             || self.pending_remote_link.is_some()
-            || !self.pending_calc_overrides.is_empty()
+            || self.calc_override_shown()
             || self.updates.open
+    }
+
+    /// The question about a calculated field is on screen: one is pending and not waiting for a
+    /// box on the page to be finished ([`Self::calc_override_waits`]).
+    pub(crate) fn calc_override_shown(&self) -> bool {
+        !self.pending_calc_overrides.is_empty() && !self.calc_override_waits
     }
 
     /// Show `msg` in the toast now, in place of whatever it showed. Script messages still waiting

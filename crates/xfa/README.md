@@ -121,7 +121,7 @@ be measured exponentially often in their nesting. A measurement budget backs thi
   | --- | --- | --- |
   | `/PCSom` | generated fields | the field's SOM path, so values go back to the data |
   | `/PCXfaLayout` | AcroForm | what laying out produced, so a saved form is not laid out again |
-  | `/PCXfaOverrides` | AcroForm | `<< /Presence << /som (hidden) … >> /Access << /som (readOnly) … >> /Overridden << /som (1) … >> /Props 12 0 R >>`, the object `/Props` names being `<< /som << /border#0/fill#0/color#0@value (255,0,0) … >> … >>`: presence and access scripts set, calculated fields whose value the user typed over a calculation the form only recommends, and the property changes scripts made (by the object's SOM path, then the property's path from it and the attribute, `=` in front for a copy of a drawn edge or corner; in an object of their own, as they can run to a megabyte, written over in place only when the document added it for them), by SOM path (instance 0 of a repeating subform stands for all presence and access); applied to the template before every layout, so undo, save and reopen keep them. Adobe's viewers draw from the XFA packets and don't read it; at most 10 000 presence or access entries, and 10 000 property changes in 1 MiB (64 on one object besides how often a subform occurs, 16 KiB a value), are read, kept and written; an item list's entries are changed, never added. Entries a file holds past them, or that a script couldn't make, aren't applied (a layout note says so) and stay in the file until a script's change writes the changes again |
+  | `/PCXfaOverrides` | AcroForm | `<< /Presence << /som (hidden) … >> /Access << /som (readOnly) … >> /Overridden << /som (1) … >> /Props 12 0 R >>`, the object `/Props` names being `<< /som << /border#0/fill#0/color#0@value (255,0,0) … >> … >>`: presence and access scripts set, calculated fields whose value the user typed over a calculation the form only recommends, and the property changes scripts made (by the object's SOM path, then the property's path from it and the attribute, `=` in front for a copy of a drawn edge or corner; in an object of their own, as they can run to a megabyte, written over in place only when the document added it for them), by SOM path (instance 0 of a repeating subform stands for all presence and access); applied to the template before every layout, so undo, save and reopen keep them. Adobe's viewers draw from the XFA packets and don't read it; at most 10 000 presence or access entries, and 10 000 property changes in 1 MiB (64 on one object besides how often a subform occurs, 16 KiB a value), are read, kept and written; an item list's entries are changed, never added. Entries a file holds past them, that a script couldn't make, or kept by a SOM path several objects share, aren't applied (a layout note says so) and stay in the file until the overrides are next written: a script's change of a property, presence or access, a removed row, a value typed over a recommended calculation, the calculated value chosen back, or a reset (Clear Form, `resetData`) that takes a typed-over calculation's mark off |
   | `/PCXfaDate` | generated date fields | `true`: text the field's date pattern doesn't read is kept, and shown, as typed rather than refused, as an XFA form keeps it; the forms layer reads it |
   | `/PCXfaNode` | generated fields above a signature field | `true`: the field names a step of the signature field's SOM path; a new layout replaces it with the fields it holds |
   | `/PCXfaClick` | generated push buttons | `true`: the template has a click script for this button. Such buttons carry no `/A`: XFA JavaScript is not Acrobat JavaScript, so it is never written as a `/S /JavaScript` action other viewers would run. PdfCraft finds the script by the field's `/PCSom` |
@@ -166,8 +166,14 @@ let form = pdfcraft_xfa::layout_xml(template_xml)?;       // pages of items, for
   breaks and occurrences follow it. An object with one instance
   takes its changes in the template; each instance of a repeating subform, and each page's copy
   of page-master content, is drawn with its own. The rules a change must meet (paths, colours,
-  measurements, whole numbers, sizes) are one file, `prop_rules.rs`, read by both crates, so a
-  script never reads back a value the form drops. `execValidate()` runs the null test on every
+  measurements, whole numbers, sizes) are one crate, `pdfcraft-xfa-rules` (re-exported here as
+  `prop_rules`), that this crate and `pdfcraft-js` both depend on, so a script never reads back a
+  value the form drops. An object whose SOM path, by which the changes are kept, is not its own
+  keeps none (`som_is_shared`): an unnamed subform, area or draw shares its parent's, and unnamed
+  fields or exclusion groups of one container (`…field[0]`, `…group[0]`), or a named object and
+  one of its name and number in an unnamed subform beside it, share theirs. A write to one is
+  refused with a console note, by the script and by the form, and such a change a file holds is
+  left out, as is a calculation override at such a path. `execValidate()` runs the null test on every
   required object under the node and lists the empty ones in one message. An event's work
   doesn't grow with the changes the form already keeps: the template keeps (`memo`) the changes
   last read, with the object they came from, the property tree each changed object was given,
@@ -190,6 +196,8 @@ let form = pdfcraft_xfa::layout_xml(template_xml)?;       // pages of items, for
   (`/Overridden`), and the app asks whether to keep it or go back to the calculated value: about
   each such field on its own, in turn, when one edit types over several, and going back changes
   that field only (`Edit::UseCalculatedValue`; headless, `form_fill` with `{"calculated": true}`).
+  A reset (Clear Form, `form_reset`, `xfa.host.resetData`) gives the fields it covers their
+  template's state, the value's override included (pp. 581-582), so they are calculated again.
   These choices live in `validation_rules`.
   A hidden instance of a repeating subform hides every instance (overrides apply to the template).
   A repeating subform shows what its data holds once the data holds any instance, else its

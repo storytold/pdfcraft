@@ -14,6 +14,7 @@
 //! (its layout, its fields, the instance limits) and keeps in the file.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use boa_engine::object::ObjectInitializer;
 use boa_engine::object::builtins::{JsArray, JsProxy};
@@ -279,7 +280,7 @@ pub(crate) fn occur_home(h: &XHost, node: usize, path: &str) -> usize {
         return node;
     }
     let Some(n) = h.nodes.get(node).filter(|n| n.kind == XfaKind::Subform && n.repeatable && !n.gone) else { return node };
-    if h.shares_parent_som(node) {
+    if h.shares_som(node) {
         return node;
     }
     n.parent.and_then(|p| super::instances(h, p, &n.name).first().copied()).unwrap_or(node)
@@ -1034,7 +1035,7 @@ impl XHost {
         let node = occur_home(self, node, path);
         // A value the form refuses changes nothing, the sides it would have made included, and
         // neither does a write to an object the form keeps no changes for.
-        if property_value_ok(path, name, &value).is_err() || self.shares_parent_som(node) {
+        if property_value_ok(path, name, &value).is_err() || self.shares_som(node) {
             return self.store_prop(node, path, name, value);
         }
         self.copying = true;
@@ -1049,11 +1050,11 @@ impl XHost {
     /// change the form won't get. A value the form would refuse ([`property_value_ok`]) is
     /// noted on the console and changes nothing.
     fn store_prop(&mut self, node: usize, path: &str, name: Option<&str>, value: String) {
-        if self.shares_parent_som(node) {
+        if self.shares_som(node) {
             let som = self.nodes.get(node).map(|n| n.som.to_string()).unwrap_or_default();
             let what = name.map_or_else(|| path.to_string(), |a| format!("{path} {a}"));
             self.print(super::clip(format!(
-                "{som}: {what} not set: an unnamed object shares its parent's SOM path and keeps no property change of its own"
+                "{som}: {what} not set: the object shares its SOM path with another and keeps no property change of its own"
             )));
             return;
         }
@@ -1120,7 +1121,7 @@ impl XHost {
     /// not take (a template's own odd value), or past the run's budget, is left out quietly: the
     /// form then makes that side from the side drawn there, as it is by then.
     fn copy_to_form(&mut self, node: usize, path: &str, name: Option<&str>, value: &str) {
-        if !self.copying || property_value_ok(path, name, value).is_err() || self.shares_parent_som(node) {
+        if !self.copying || property_value_ok(path, name, value).is_err() || self.shares_som(node) {
             return;
         }
         let Some(som) = self.nodes.get(node).filter(|n| !n.gone && n.kind != XfaKind::Form).map(|n| n.som.to_string()) else { return };
@@ -1137,13 +1138,45 @@ impl XHost {
         }
     }
 
-    /// Whether node `node` is an unnamed subform, area or draw: one sharing its parent's SOM
-    /// path, which the form keeps property changes by. The form gives such an object no change
-    /// of its own (a change kept at that path is its named parent's), so a write to it is
-    /// refused rather than handed to the parent.
-    pub(crate) fn shares_parent_som(&self, node: usize) -> bool {
+    /// Whether node `node` has no SOM path of its own, which the form keeps property changes by:
+    /// an unnamed subform, area or draw shares its parent's (a change kept there is its named
+    /// parent's), and unnamed fields or exclusion groups of one container share theirs with each
+    /// other (each is `field[0]`, `group[0]`), as can a named object and one with its name and
+    /// number in an unnamed subform beside it. The form gives such an object no change of its own
+    /// (one kept at that path would reach every object there, `pdfcraft_xfa::som_is_shared`), so
+    /// a write to it is refused rather than handed to all of them.
+    pub(crate) fn shares_som(&self, node: usize) -> bool {
         let Some(n) = self.nodes.get(node) else { return false };
-        n.kind != XfaKind::Form && n.parent.and_then(|p| self.nodes.get(p)).is_some_and(|p| p.som == n.som)
+        if n.kind == XfaKind::Form {
+            return false;
+        }
+        if !self.owns_som(node) {
+            return true;
+        }
+        let owners = self.som_owners.get_or_init(|| {
+            let mut owners: HashMap<Arc<str>, u32> = HashMap::new();
+            for (i, m) in self.nodes.iter().enumerate() {
+                if !m.gone && m.kind != XfaKind::Form && self.owns_som(i) {
+                    let c = owners.entry(Arc::clone(&m.som)).or_insert(0);
+                    *c = c.saturating_add(1);
+                }
+            }
+            owners
+        });
+        owners.get(&n.som).is_some_and(|&c| c > 1)
+    }
+
+    /// Whether node `node`'s SOM path is not simply its parent's (as an unnamed subform's, area's
+    /// or draw's is).
+    fn owns_som(&self, node: usize) -> bool {
+        let Some(n) = self.nodes.get(node) else { return false };
+        n.parent.and_then(|p| self.nodes.get(p)).is_none_or(|p| p.som != n.som)
+    }
+
+    /// The objects changed (an instance added or removed, SOM paths numbered again): who owns
+    /// which SOM path is counted again when next asked.
+    pub(crate) fn forget_som_owners(&mut self) {
+        self.som_owners = std::cell::OnceCell::new();
     }
 
     /// Whether the form can keep a change under `key` (see [`change_key`]) to node `node`: one
@@ -1219,8 +1252,8 @@ impl XHost {
 }
 
 /// Whether a write may set `value` as attribute `attr` (`None`: the text) of the property at
-/// `path`: the rules the form applies before keeping a change, from the one file both read
-/// (`pdfcraft_xfa`'s `prop_rules.rs`, see [`super::prop_rules::check`]). A write refused here
+/// `path`: the rules the form applies before keeping a change, from the one crate both use
+/// (`pdfcraft_xfa_rules`, see [`super::prop_rules::check`]). A write refused here
 /// is noted and changes nothing, so a script never reads back a value the form won't get.
 pub fn property_value_ok(path: &str, attr: Option<&str>, value: &str) -> Result<(), String> {
     super::prop_rules::check(path, attr, value)
@@ -1234,12 +1267,12 @@ impl XHost {
         if sets.is_empty() {
             return;
         }
-        // An unnamed object shares its parent's SOM path: the changes there are the parent's.
+        // An object without a SOM path of its own: the changes there are not its own.
         let by_som: HashMap<&str, usize> = self
             .nodes
             .iter()
             .enumerate()
-            .filter(|&(i, n)| !n.gone && n.kind != XfaKind::Form && !self.shares_parent_som(i))
+            .filter(|&(i, n)| !n.gone && n.kind != XfaKind::Form && !self.shares_som(i))
             .map(|(i, n)| (&*n.som, i))
             .collect();
         let found: Vec<(usize, &super::XfaPropSet)> = sets.iter().filter_map(|p| by_som.get(p.som.as_str()).map(|&i| (i, p))).collect();

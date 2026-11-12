@@ -8117,3 +8117,98 @@ two"
         assert_eq!(tree, before, "{structured}");
     }
 }
+
+/// Which SOM paths several objects of the form share ([`crate::som_is_shared`]): two unnamed
+/// fields or exclusion groups of one container (`field[0]`, `group[0]`), a field named `field`
+/// beside an unnamed one, a named object and one of its name and number in an unnamed subform
+/// beside it, and unnamed buttons of one group. Not shared: a named object, a lone unnamed one,
+/// a repeating subform's later instance, and a named subform holding an unnamed one (which takes
+/// its path). The answer agrees with the live form's paths: every path its objects own (not
+/// taken from their parent) is shared exactly when more than one owns it.
+#[test]
+fn som_paths_several_objects_share_are_told() {
+    let xdp = r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet>
+  <pageArea name="p"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/>
+   <field x="1in" y="0.1in" w="1in" h="0.3in"><ui><textEdit/></ui></field><field x="3in" y="0.1in" w="1in" h="0.3in"><ui><textEdit/></ui></field><field name="pn" x="5in" y="0.1in" w="1in" h="0.3in"><ui><textEdit/></ui></field></pageArea>
+  <pageArea><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/>
+   <field x="1in" y="0.1in" w="1in" h="0.3in"><ui><textEdit/></ui></field><field x="3in" y="0.1in" w="1in" h="0.3in"><ui><textEdit/></ui></field><field name="pn" x="5in" y="0.1in" w="1in" h="0.3in"><ui><textEdit/></ui></field></pageArea>
+ </pageSet>
+ <subform name="two" layout="tb">
+  <field name="named" w="2in" h="0.3in"><ui><textEdit/></ui></field>
+  <field w="2in" h="0.3in"><ui><textEdit/></ui></field>
+  <field w="2in" h="0.3in"><ui><textEdit/></ui></field>
+  <exclGroup><field w="1in" h="0.3in"><ui><checkButton/></ui><items><integer>1</integer></items></field></exclGroup>
+  <exclGroup><field w="1in" h="0.3in"><ui><checkButton/></ui><items><integer>2</integer></items></field></exclGroup>
+ </subform>
+ <subform name="one" layout="tb">
+  <field w="2in" h="0.3in"><ui><textEdit/></ui></field>
+  <exclGroup name="g"><field w="1in" h="0.3in"><ui><checkButton/></ui><items><integer>1</integer></items></field><field name="b" w="1in" h="0.3in"><ui><checkButton/></ui><items><integer>2</integer></items></field></exclGroup>
+  <exclGroup name="h"><field w="1in" h="0.3in"><ui><checkButton/></ui><items><integer>1</integer></items></field><field w="1in" h="0.3in"><ui><checkButton/></ui><items><integer>2</integer></items></field></exclGroup>
+ </subform>
+ <subform name="literal" layout="tb">
+  <field name="field" w="2in" h="0.3in"><ui><textEdit/></ui></field>
+  <field w="2in" h="0.3in"><ui><textEdit/></ui></field>
+ </subform>
+ <subform name="nested" layout="tb">
+  <field name="x" w="2in" h="0.3in"><ui><textEdit/></ui></field>
+  <subform layout="tb"><field name="x" w="2in" h="0.3in"><ui><textEdit/></ui></field><field name="y" w="2in" h="0.3in"><ui><textEdit/></ui></field></subform>
+ </subform>
+ <subform name="rows" layout="tb">
+  <subform name="row" layout="tb"><occur min="3" max="-1" initial="3"/><field name="item" w="2in" h="0.3in"><ui><textEdit/></ui></field></subform>
+ </subform>
+</subform>
+</template>
+</xdp:xdp>
+"##;
+    let (tpl, _) = parse(xdp).unwrap();
+    let shared = |som: &str| crate::som_is_shared(&tpl, som);
+    for som in [
+        "form[0].two[0].field[0]",
+        "form[0].two[0].group[0]",
+        "form[0].two[0].group[0].field[0]",
+        "form[0].one[0].h[0].field[0]",
+        "form[0].literal[0].field[0]",
+        "form[0].nested[0].x[0]",
+        "p[0].field[0]",
+        "#pageArea[1].field[0]",
+    ] {
+        assert!(shared(som), "{som}");
+    }
+    for som in [
+        "form[0]",
+        "form[0].two[0]",
+        "form[0].two[0].named[0]",
+        "form[0].one[0].field[0]",
+        "form[0].one[0].g[0].field[0]",
+        "form[0].one[0].g[0].b[0]",
+        "form[0].nested[0]",
+        "form[0].nested[0].y[0]",
+        "form[0].rows[0].row[2].item[0]",
+        "p[0].pn[0]",
+        "#pageArea[1].pn[0]",
+        "#pageArea[7].field[0]",
+        "form[0].nowhere[0].field[0]",
+        "elsewhere[0].field[0]",
+        "",
+    ] {
+        assert!(!shared(som), "{som}");
+    }
+    // Against the live form's own paths, page areas' content included.
+    let live = crate::form_tree(&tpl, None, &crate::Overrides::default());
+    let mut owners: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    fn walk(n: &crate::FormNode, parent: &str, owners: &mut std::collections::HashMap<String, usize>) {
+        if n.som != parent {
+            *owners.entry(n.som.clone()).or_default() += 1;
+        }
+        n.children.iter().for_each(|c| walk(c, &n.som, owners));
+    }
+    walk(&live.root, "", &mut owners);
+    assert!(owners.len() > 20, "{owners:?}");
+    for (som, n) in &owners {
+        assert_eq!(shared(som), *n > 1, "{som}: {n} owner(s)");
+    }
+}

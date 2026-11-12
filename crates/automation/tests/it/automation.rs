@@ -14788,6 +14788,7 @@ fn grouped_existing_thai_body_edits_saves_reopens_and_undo_restores_original_gly
 /// Headless, a value typed over a recommended calculation of a dynamic XFA form stays, and
 /// form_fill with `{"calculated": true}` puts that field back to its calculated value, that
 /// field only (XFA 3.3 p. 642); one never typed over, or one with other values, is refused.
+/// form_reset calculates a typed-over field again, as the app's Clear Form does.
 #[test]
 fn form_fill_puts_one_typed_over_calculation_back() {
     let dir = workdir("xfa-calculated");
@@ -14823,5 +14824,14 @@ fn form_fill_puts_one_typed_over_calculation_back() {
     let mixed = a.call("form_fill", &json!({ "doc": doc, "values": { k2.clone(): { "calculated": true }, k3.clone(): "1" } }));
     assert!(mixed.is_err(), "not with other values: {mixed:?}");
     assert_eq!(values(&mut a), ["5", "7"]);
+    // A reset calculates a typed-over field again (XFA 3.3 pp. 581-582): form_reset takes k2's
+    // mark off, as Clear Form does in the app, and a later change of k1 reaches it.
+    ok(&mut a, "form_reset", json!({ "doc": doc }));
+    assert_eq!(values(&mut a), ["10", "7"]);
+    let k1 = name("k1");
+    ok(&mut a, "form_fill", json!({ "doc": doc, "values": { k1: "2" } }));
+    assert_eq!(values(&mut a), ["20", "14"]);
+    let again = a.call("form_fill", &json!({ "doc": doc, "values": { k2.clone(): { "calculated": true } } }));
+    assert!(again.is_err(), "nothing typed over is kept any more: {again:?}");
     let _ = std::fs::remove_dir_all(&dir);
 }

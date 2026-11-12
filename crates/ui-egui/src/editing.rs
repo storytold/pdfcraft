@@ -346,10 +346,13 @@ impl PdfCraftApp {
     /// ([`Edit::UseCalculatedValue`]), in the document it was typed in, through the tab showing
     /// it (the active one when it does; another is brought to the front). Going back changes
     /// that field only: the other values the same edit set, and edits made since, stay. The
-    /// next field's question, if any, follows.
+    /// next field's question, if any, follows. A value no longer kept over the calculation (a
+    /// reset or an undo took it back meanwhile) needs nothing. When a box open on the page can't
+    /// be applied, nothing changes and the question waits ([`Self::calc_override_waits`]): it is
+    /// asked again once the box is finished or cancelled.
     pub fn resolve_calc_override(&mut self, keep: bool) {
-        let Some((id, field, _)) = self.pending_calc_overrides.pop_front() else { return };
-        if keep {
+        let Some((id, field, message)) = self.pending_calc_overrides.pop_front() else { return };
+        if keep || !self.session.calculation_overridden(id, &field) {
             return;
         }
         let Some(i) = self.active_ids().filter(|&(_, active)| active == id).map(|(i, _)| i).or_else(|| self.views.iter().position(|v| v.id == id))
@@ -360,7 +363,12 @@ impl PdfCraftApp {
         // active one), after a box open on its page is applied, as for any edit.
         self.active = Some(i);
         if !self.close_text_editors(i, id) {
-            self.notify(tl!("Your value was kept: the text open on the page couldn't be applied. Use Undo to take the entry back.").to_string());
+            self.pending_calc_overrides.push_front((id, field, message));
+            self.calc_override_waits = true;
+            self.notify(
+                tl!("The text open on the page couldn't be applied, so your value stays for now. Finish or cancel that text to answer the question again.")
+                    .to_string(),
+            );
             return;
         }
         self.apply_edit(Edit::UseCalculatedValue { name: field });

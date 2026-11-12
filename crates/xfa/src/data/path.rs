@@ -192,6 +192,114 @@ fn named_at<'a>(nodes: &'a [Node], name: &str, index: usize, depth: usize) -> Op
     })
 }
 
+/// Whether more than one object of the form has the SOM path `som`, so that what is kept by that
+/// path (a script's property change, a calculation the user typed over) can't be told apart
+/// between them, and would reach every one of them. Each segment is looked up as the form numbers
+/// its objects ([`SomIndices`]), through unnamed subforms and areas (which add no segment): an
+/// unnamed field is `field[…]` and an unnamed exclusion group `group[…]`, as the live form names
+/// them, so two unnamed fields of one container, or a named one and an unnamed one inside an
+/// unnamed subform beside it, share their path. A segment past a repeating subform's own number
+/// names one of its instances. Page areas' content is looked up as the live form names it.
+/// `false` when the template has no object at `som` (the object a change can't reach is no
+/// concern here), and for the root and a page area themselves.
+pub fn som_is_shared(tpl: &Template, som: &str) -> bool {
+    /// The objects of `nodes` (looked through unnamed subforms and areas, down to [`MAX_DEPTH`])
+    /// the segment `name[index]` names, into `out`; stops at two, which is all the caller asks.
+    fn matches<'a>(nodes: &'a [Node], name: &str, index: usize, out: &mut Vec<&'a Node>, depth: usize) {
+        if depth > MAX_DEPTH || out.len() > 1 {
+            return;
+        }
+        let sibs = SomIndices::of(nodes);
+        let mut exact = false;
+        let mut repeating = None;
+        for (i, n) in nodes.iter().enumerate() {
+            let own = n.common().name.as_deref().or(match n {
+                Node::Field(_) => Some("field"),
+                Node::ExclGroup(_) => Some("group"),
+                _ => None,
+            });
+            if own != Some(name) {
+                continue;
+            }
+            let sib = sibs.at(i);
+            if sib == index {
+                exact = true;
+                out.push(n);
+            } else if sib < index && matches!(n, Node::Subform(sf) if sf.occur.max != Some(1)) {
+                repeating = Some(n);
+            }
+        }
+        if let Some(n) = repeating.filter(|_| !exact) {
+            out.push(n);
+        }
+        for n in nodes {
+            match n {
+                Node::Subform(sf) if sf.common.name.is_none() => matches(&sf.children, name, index, out, depth + 1),
+                Node::Area(a) if a.common.name.is_none() => matches(&a.children, name, index, out, depth + 1),
+                _ => {}
+            }
+        }
+    }
+    let path = som_to_path(som);
+    let areas = tpl.root.page_set.as_ref().map_or(&[][..], |ps| ps.areas.as_slice());
+    // The content of a page area: the live form names an unnamed one `#pageArea[i]` (`i` its
+    // place in the page set), a named one by its name; the root subform's, by its name.
+    let unnamed_area = som.strip_prefix("#pageArea[").and_then(|r| r.split_once(']')).and_then(|(i, _)| i.parse::<usize>().ok());
+    let (top, rest): (&[Node], &[(String, usize)]) = match unnamed_area {
+        Some(i) => match areas.get(i) {
+            Some(area) => (&area.items, &path),
+            None => return false,
+        },
+        None => {
+            let Some(((first, _), rest)) = path.split_first() else { return false };
+            if tpl.root.common.name.as_deref() == Some(first.as_str()) {
+                (&tpl.root.children, rest)
+            } else {
+                match areas.iter().find(|a| a.name.as_deref() == Some(first.as_str())) {
+                    Some(area) => (&area.items, rest),
+                    None => return false,
+                }
+            }
+        }
+    };
+    let mut nodes = top;
+    let mut segments = rest.iter();
+    while let Some((name, index)) = segments.next() {
+        let mut found = Vec::new();
+        matches(nodes, name, *index, &mut found, 0);
+        let one = match found.as_slice() {
+            [one] => *one,
+            [] => return false,
+            _ => return true,
+        };
+        nodes = match one {
+            Node::Subform(sf) => &sf.children,
+            Node::Area(a) => &a.children,
+            Node::ExclGroup(g) => {
+                // A button of the group, the last segment there can be: the buttons numbered as
+                // the form numbers them, through stand-ins that carry only each button's name,
+                // which is all the numbering reads.
+                let Some((name, index)) = segments.next() else { return false };
+                let buttons: Vec<Node> = g
+                    .fields
+                    .iter()
+                    .map(|f| {
+                        Node::Field(Box::new(Field {
+                            common: crate::model::Common { name: f.common.name.clone(), ..Default::default() },
+                            ..Default::default()
+                        }))
+                    })
+                    .collect();
+                let mut found = Vec::new();
+                matches(&buttons, name, *index, &mut found, 0);
+                return found.len() > 1;
+            }
+            Node::Field(_) | Node::Draw(_) => &[],
+        };
+    }
+    false
+}
+
 /// The template field the object at a SOM path is an instance of, each segment's number counted
 /// as the form counts it ([`named_at`]). `None` when the template has no such field, or it is
 /// a button of an exclusion group (whose buttons take their value from the group).

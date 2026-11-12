@@ -214,10 +214,12 @@ pub(crate) fn restyled_field(memo: &Memo, f: &Field, sets: &BTreeMap<String, Str
         let scripts = f.scripts.iter().chain(&f.calculate).chain(&f.validate).fold(0usize, |n, s| n.saturating_add(s.text.len()));
         // Its lists are its own copies (an item list holds up to `parse::MAX_ITEMS` entries,
         // outside the object's property budget), so they count too, as do its texts.
-        let strings = f.items.iter().chain(&f.item_values).fold(0usize, |n, i| n.saturating_add(i.len()).saturating_add(std::mem::size_of::<String>()));
-        let texts = [&f.tooltip, &f.picture, &f.data_picture, &f.validate_message, &f.format_picture, &f.format_message, &f.calc_message, &f.display_picture]
-            .into_iter()
-            .fold(0usize, |n, t| n.saturating_add(t.as_ref().map_or(0, String::len)));
+        let strings =
+            f.items.iter().chain(&f.item_values).fold(0usize, |n, i| n.saturating_add(i.len()).saturating_add(std::mem::size_of::<String>()));
+        let texts =
+            [&f.tooltip, &f.picture, &f.data_picture, &f.validate_message, &f.format_picture, &f.format_message, &f.calc_message, &f.display_picture]
+                .into_iter()
+                .fold(0usize, |n, t| n.saturating_add(t.as_ref().map_or(0, String::len)));
         tree_bytes(&f.common.props).saturating_add(std::mem::size_of::<Field>()).saturating_add(scripts).saturating_add(strings).saturating_add(texts)
     };
     remembered(&memo.fields, &f.common.props, sets, cost, || {

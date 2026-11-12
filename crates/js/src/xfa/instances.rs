@@ -121,6 +121,7 @@ fn renumber(h: &mut XHost, idx: usize, depth: usize) {
     if let Some(n) = h.nodes.get_mut(idx) {
         n.som = som.into();
     }
+    h.forget_som_owners();
     for k in kids.iter().copied() {
         renumber(h, k, depth + 1);
     }
@@ -189,6 +190,7 @@ fn clone_subtree(h: &mut XHost, src: usize, parent: Option<usize>, depth: usize)
     };
     let idx = h.nodes.len();
     h.nodes.push(template);
+    h.forget_som_owners();
     let mut copied = Vec::new();
     for k in kids.iter().copied() {
         // Nested repeating subforms copy their first instance only.
@@ -295,6 +297,7 @@ impl XHost {
         if let Some(n) = h.nodes.get_mut(gone) {
             n.gone = true;
         }
+        h.forget_som_owners();
         // How often the subform occurs stays with it, on the instance that is first now.
         if let (0, Some(&next)) = (i, live.get(1)) {
             h.keep_occur_on(gone, next);

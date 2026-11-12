@@ -372,6 +372,19 @@ impl Session {
     pub fn docs(&self) -> &[Document] {
         &self.docs
     }
+
+    /// Whether the value typed into the laid-out XFA field `name` of document `id` is kept over
+    /// the calculation the form recommends for it (the mark [`Edit::UseCalculatedValue`] takes
+    /// off). False once a reset, an undo of the entry, or the calculated value took it off, and
+    /// for a document that isn't open or isn't such a form.
+    ///
+    /// [`Edit::UseCalculatedValue`]: crate::Edit::UseCalculatedValue
+    pub fn calculation_overridden(&self, id: DocId, name: &str) -> bool {
+        let Some(d) = self.get(id) else { return false };
+        let Ok(doc) = pdfcraft_cos::Document::open_with_password(d.bytes.clone(), d.password.as_deref()) else { return false };
+        let ov = pdfcraft_xfa::overrides(&doc);
+        !ov.overridden.is_empty() && pdfcraft_xfa::fields_by_som(&doc).into_iter().any(|(som, n)| n == name && ov.overridden.contains_key(&som))
+    }
 }
 
 /// Convert a view-space text line rectangle into a normalized, finite PDF user-space rectangle.

@@ -108,9 +108,13 @@ pub struct Overrides {
     prop_copies: usize,
     prop_bytes: usize,
     /// Property changes the file held that were not kept when it was read (not a change a
-    /// script could make, or past the limits): counted for a note, as they aren't applied. The
-    /// file keeps them until the changes are written again ([`set_overrides`], after a script
-    /// changes a property), which leaves them out.
+    /// script could make, kept by a SOM path several objects share, or past the limits): counted
+    /// for a note, as they aren't applied. The file keeps them until the form's overrides are
+    /// next written ([`set_overrides`]), which leaves them out: after a script changes a
+    /// property, a presence or an access, removes a row, or resets fields whose calculation the
+    /// user typed over; after a value is typed over a calculation the form recommends; after
+    /// the calculated value is chosen back (`Edit::UseCalculatedValue`); and after Clear Form
+    /// (or a reset of named fields) takes such a field's mark off.
     pub dropped: usize,
 }
 
@@ -284,7 +288,7 @@ pub fn overrides(doc: &Document) -> Overrides {
 /// template's memo last read them from, they are taken from the memo rather than checked one by
 /// one again, so an event costs the same however many changes the form keeps.
 pub fn overrides_of(doc: &Document, tpl: &Template) -> Overrides {
-    read_overrides(doc, Some(&tpl.memo))
+    read_overrides(doc, Some(tpl))
 }
 
 #[cfg(test)]
@@ -308,7 +312,8 @@ pub(crate) fn take_kept_read() -> usize {
     KEPT_READ.with(|c| c.replace(0))
 }
 
-fn read_overrides(doc: &Document, memo: Option<&crate::memo::Memo>) -> Overrides {
+fn read_overrides(doc: &Document, tpl: Option<&Template>) -> Overrides {
+    let memo = tpl.map(|t| &t.memo);
     let mut out = Overrides::default();
     let Some((_, acro)) = acroform(doc) else { return out };
     let Some(o) = acro.get(OVERRIDES_KEY).map(|o| doc.resolve(o)) else { return out };
@@ -318,9 +323,15 @@ fn read_overrides(doc: &Document, memo: Option<&crate::memo::Memo>) -> Overrides
             && let Some(m) = m.as_dict()
         {
             for (k, v) in m.iter().take(MAX_OVERRIDES) {
-                if let Some(v) = v.as_string() {
-                    map.insert(String::from_utf8_lossy(k).into_owned(), v.to_text());
+                let Some(v) = v.as_string() else { continue };
+                let k = String::from_utf8_lossy(k).into_owned();
+                // A calculation the user typed over is the field's: one kept by a path several
+                // fields share would keep the calculation off all of them ([`mark_value_override`]
+                // keeps none there).
+                if which == b"Overridden" && tpl.is_some_and(|t| crate::data::som_is_shared(t, &k)) {
+                    continue;
                 }
+                map.insert(k, v.to_text());
             }
         }
     }
@@ -357,6 +368,14 @@ fn read_overrides(doc: &Document, memo: Option<&crate::memo::Memo>) -> Overrides
                 continue;
             }
             let som = String::from_utf8_lossy(som).into_owned();
+            // Changes kept by a path several objects share can't be told apart between them: a
+            // script's write there is refused ([`crate::data::som_is_shared`]), and so is one the
+            // file holds. Charged as read, so a file naming many such paths costs no more.
+            if tpl.is_some_and(|t| crate::data::som_is_shared(t, &som)) {
+                read = read.saturating_add(sets.len().max(1));
+                out.dropped = out.dropped.saturating_add(sets.len());
+                continue;
+            }
             for (seen, (key, v)) in sets.iter().enumerate() {
                 #[cfg(test)]
                 ENTRIES_LOOKED.with(|c| c.set(c.get().saturating_add(1)));
@@ -1163,9 +1182,10 @@ pub fn value_overridden(tpl: &Template, ov: &Overrides, som: &str) -> bool {
 }
 
 /// Keep that the user overrode the calculation of the field at `som`. False when that changed
-/// nothing, or the overrides already hold as many entries as they keep.
-pub fn mark_value_override(ov: &mut Overrides, som: &str) -> bool {
-    if ov.overridden.contains_key(som) || ov.overridden.len() >= MAX_OVERRIDES {
+/// nothing, the overrides already hold as many entries as they keep, or other fields share the
+/// path ([`crate::data::som_is_shared`]): a mark there would keep the calculation off them too.
+pub fn mark_value_override(tpl: &Template, ov: &mut Overrides, som: &str) -> bool {
+    if ov.overridden.contains_key(som) || ov.overridden.len() >= MAX_OVERRIDES || crate::data::som_is_shared(tpl, som) {
         return false;
     }
     ov.overridden.insert(som.to_string(), "1".to_string());

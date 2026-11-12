@@ -257,8 +257,25 @@ pub(super) fn calc_override_prompt(app: &mut PdfCraftApp, ctx: &egui::Context) {
     // Questions for documents closed since are dropped.
     while app.pending_calc_overrides.front().is_some_and(|(id, _, _)| app.session.get(*id).is_none()) {
         app.pending_calc_overrides.pop_front();
+        app.calc_override_waits = false;
     }
-    let Some((_, _, message)) = app.pending_calc_overrides.front().cloned() else { return };
+    let Some((id, field, message)) = app.pending_calc_overrides.front().cloned() else {
+        app.calc_override_waits = false;
+        return;
+    };
+    // Waiting for the box open on its document's page: asked again once it is finished or
+    // cancelled, unless the value is no longer kept over the calculation by then (a reset or an
+    // undo took it back).
+    if app.calc_override_waits {
+        if app.views.iter().any(|v| v.id == id && (v.line_editor.is_some() || v.content.draft.is_some())) {
+            return;
+        }
+        app.calc_override_waits = false;
+        if !app.session.calculation_overridden(id, &field) {
+            app.pending_calc_overrides.pop_front();
+            return;
+        }
+    }
     let t = Tokens::get(ctx);
     let mut choice = None;
     let modal = widgets::show_modal(ctx, "calc_override_prompt", |ui| {

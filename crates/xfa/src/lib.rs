@@ -18,7 +18,9 @@ pub mod packets;
 pub mod parse;
 pub mod pdf;
 pub mod picture;
-pub mod prop_rules;
+/// The rules a script's property change must meet, shared with the scripting host
+/// (`pdfcraft_js`): one crate both depend on.
+pub use pdfcraft_xfa_rules as prop_rules;
 mod proto;
 pub mod restyle;
 pub mod script;
@@ -102,7 +104,7 @@ pub use data::{DataImport, ImportNode, export_data, import_data, parse_data_file
 pub use data::{
     DataNode, DataOp, DataPath, DatasetsWrite, FieldData, FieldDatum, add_data_instances, build_data, clear_password_values, data_path,
     has_password_values, iso_to_pattern, parse_datasets, pattern_to_iso, radio_dataset_value, radio_state_for_item, read_values, read_values_with,
-    remove_data_instance, som_to_path, write_data_ops, write_data_value, write_datasets, write_datasets_reusing, write_datasets_with,
+    remove_data_instance, som_is_shared, som_to_path, write_data_ops, write_data_value, write_datasets, write_datasets_reusing, write_datasets_with,
 };
 pub use layout::{Action, BorderShape, Form, Item, MAX_PAGES, Page, Widget, WidgetKind, formatted_value, layout};
 pub use packets::{Encoding, Packets, decode as decode_packet, encode as encode_packet, read_packets};
@@ -169,7 +171,7 @@ pub fn render_into(doc: &mut Document) -> Result<Report, XfaError> {
     let (mut tpl, mut parse_warnings) = parse(&packets.xdp)?;
     parse_warnings.extend(linked_images::resolve(&mut tpl, doc));
     let data = parse_datasets(&packets.xdp);
-    let ov = overrides(doc);
+    let ov = overrides_of(doc, &tpl);
     let applied = script::apply_overrides_split(&tpl, &ov);
     let mut form = layout::layout_with_overrides(&applied.template, data.as_ref(), &ov, &applied.per_instance)?;
     form.warnings.extend(script::property_notes(&ov, &applied));

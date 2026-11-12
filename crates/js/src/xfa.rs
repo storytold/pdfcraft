@@ -24,11 +24,9 @@ mod instances;
 mod model;
 mod nodes;
 pub(crate) mod props;
-// The rules a property change must meet, shared word for word with the form (`pdfcraft_xfa`,
-// which reads them as `pdfcraft_xfa::prop_rules`): one source for both sides.
-#[path = "../../xfa/src/prop_rules.rs"]
-#[allow(dead_code)]
-pub(crate) mod prop_rules;
+// The rules a property change must meet, the crate the form (`pdfcraft_xfa`, which re-exports it
+// as `pdfcraft_xfa::prop_rules`) depends on too: one source for both sides.
+pub(crate) use pdfcraft_xfa_rules as prop_rules;
 mod run;
 
 #[cfg(target_arch = "wasm32")]

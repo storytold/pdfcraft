@@ -129,6 +129,9 @@ pub(crate) struct XHost {
     /// The writes being made are copies of a drawn edge or corner (`XHost::instantiate`), not
     /// the script's own.
     pub(crate) copying: bool,
+    /// How many live objects own each SOM path (see [`XHost::shares_som`]), counted when first
+    /// asked and again after the objects change (an instance added or removed).
+    pub(super) som_owners: std::cell::OnceCell<HashMap<Arc<str>, u32>>,
 }
 
 impl XHost {
@@ -175,6 +178,7 @@ impl XHost {
             run_keys: HashMap::new(),
             copied: 0,
             copying: false,
+            som_owners: std::cell::OnceCell::new(),
         }
     }
 

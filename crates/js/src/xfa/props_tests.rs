@@ -1349,3 +1349,23 @@ fn an_added_instance_reads_the_templates_properties_not_the_first_instances_chan
         assert_eq!((o.error, o.result.as_deref()), (None, Some("3pt|20pt|1pt|10pt")), "{add}");
     }
 }
+
+/// Two unnamed fields of one container share their SOM path (`…field[0]`), which the form keeps
+/// property changes by: a write to either is refused with a note, never handed to the form (it
+/// would reach both), and reads back as before. A named field beside them takes its write.
+#[test]
+fn a_write_to_one_of_two_objects_sharing_a_som_path_is_refused() {
+    let unnamed = || XfaNode { name: "field".into(), som: "form1[0].field[0]".into(), ..node("field", XfaKind::Field, &[], vec![]) };
+    let mut root = form();
+    root.children.extend([unnamed(), unnamed()]);
+    let o = go_on(&root, "this.fillColor = '1,2,3'; xfa.form.form1.plain.fillColor = '4,5,6'; this.fillColor", "field");
+    assert_eq!(o.error, None, "{o:?}");
+    assert_eq!(o.result.as_deref(), Some("255,255,255"), "read back as before");
+    assert_eq!(o.effects, [set("form1[0].plain[0]", "border#0/fill#0/color#0", Some("value"), "4,5,6")]);
+    assert!(o.console.iter().any(|l| l.contains("shares its SOM path")), "{o:?}");
+    // Alone, the unnamed field takes the write.
+    let mut root = form();
+    root.children.push(unnamed());
+    let o = go_on(&root, "this.fillColor = '1,2,3'", "field");
+    assert_eq!(o.effects, [set("form1[0].field[0]", "border#0/fill#0/color#0", Some("value"), "1,2,3")]);
+}

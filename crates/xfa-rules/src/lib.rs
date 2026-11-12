@@ -1,7 +1,8 @@
 //! The rules a script's property change must meet to be kept (XFA 3.3 ch. 3, "Properties vs.
 //! Children", p. 78, and the elements of ch. 17), shared word for word by the form
-//! (`pdfcraft_xfa::restyle`) and the scripting host (`pdfcraft_js`, which includes this file),
-//! so a script never reads back a change the form drops. Standard library only.
+//! (`pdfcraft_xfa::restyle`, which re-exports this crate as `pdfcraft_xfa::prop_rules`) and the
+//! scripting host (`pdfcraft_js`), both through their manifests, so a script never reads back a
+//! change the form drops. Standard library only.
 
 /// Most steps a property path takes from its object: the template reader keeps 8 levels of
 /// property elements (`pdfcraft_xfa::parse::MAX_PROP_DEPTH`).

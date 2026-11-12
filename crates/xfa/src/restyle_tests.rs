@@ -849,7 +849,7 @@ fn changes_that_cant_be_drawn_or_kept_are_noted() {
     ov.dropped = 2;
     let notes = crate::script::property_notes(&ov, &crate::apply_overrides_split(&t, &ov));
     assert!(notes.iter().any(|n| n.contains("2 property change")));
-    // Review r2 (L2): they stay in the file until a script's change writes the changes again,
+    // Review r2 (L2): they stay in the file until the overrides are next written (see `Overrides::dropped`),
     // so the note says only that they aren't applied.
     assert!(notes.iter().any(|n| n.contains("not applied") && !n.contains("saved")), "{notes:?}");
 }
@@ -1068,7 +1068,7 @@ fn a_fields_format_test_and_override_follow_the_changes() {
     assert_eq!((row(0), row(2)), (None, Some("num{9}".to_string())));
     // The user's override of the calculation, kept with the form.
     assert!(!crate::value_overridden(&t, &ov, "form[0].plain[0]"));
-    assert!(crate::mark_value_override(&mut ov, "form[0].plain[0]"));
+    assert!(crate::mark_value_override(&t, &mut ov, "form[0].plain[0]"));
     assert!(crate::value_overridden(&t, &ov, "form[0].plain[0]"));
 }
 
