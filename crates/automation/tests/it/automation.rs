@@ -14911,4 +14911,3 @@ fn pdfa_verify_rejects_document_without_editor() {
         "pdfa_verify must reject a document without an editor instead of reporting it compliant"
     );
 }
-}
