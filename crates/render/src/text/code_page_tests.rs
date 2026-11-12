@@ -1,4 +1,4 @@
-//! Copy with formatting's code-page rule (hayro-interpret patch 105, `CodePageByOutline`): a
+//! Copy with formatting's code-page rule (hayro-interpret patch 107, `CodePageByOutline`): a
 //! simple font that reads as WinAnsi but whose glyphs draw the letters of Windows-1250 or
 //! Windows-1257. The fonts here are synthetic TrueType programs whose glyphs are polygons: a
 //! base letter and the accent the test needs (a caron, a double acute, a macron …).

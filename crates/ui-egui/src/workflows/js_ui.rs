@@ -200,6 +200,62 @@ impl PdfCraftApp {
         true
     }
 
+    /// Each frame: the live scripts of the document being read (#169). Its page's open actions
+    /// run when the page changes (after the close actions of the page it was at), and its timers
+    /// when they fall due, such as an animation's frames (LaTeX `animate`). Only the active tab
+    /// runs: an animation in another tab waits until its tab shows again.
+    pub(crate) fn script_tick(&mut self, ctx: &egui::Context) {
+        // Nothing acts on the document under a dialog or prompt (`modal_open`): page actions and
+        // timers wait, and an interval that fell behind runs once when it closes.
+        if self.modal_open() {
+            return;
+        }
+        let Some((i, id)) = self.active_ids() else { return };
+        let now_ms = ctx.input(|input| input.time) * 1000.0;
+        let page = self.views[i].current;
+        // The page's actions, then its timers, if what the actions asked for left the viewer as it
+        // was: a page they went to runs its close and open actions (next frame) before any timer,
+        // and a dialog they opened holds the timers too.
+        for timers in [false, true] {
+            if timers && (self.modal_open() || self.active_ids() != Some((i, id)) || self.views[i].current != page) {
+                ctx.request_repaint();
+                break;
+            }
+            // The field being edited as it was, so a script changing it shows in its editor while
+            // a draft the user already typed into is kept (as `run_field_triggers` does).
+            let before: Option<(String, Vec<String>)> = self.views[i].forms.focus.as_ref().and_then(|e| {
+                crate::forms_ui::focused_field(e, &self.session.get(id)?.form).map(|f| (crate::forms_ui::draft_text(f), f.value.clone()))
+            });
+            let run = if timers { self.session.run_timers(id, now_ms) } else { self.session.show_page(id, page, now_ms) };
+            if run.is_empty() {
+                continue;
+            }
+            if run.edited {
+                if let Some(info) = self.session.get(id).map(|d| d.info.clone()) {
+                    self.views[i].document_changed(&info);
+                }
+                if let Some(before) = &before
+                    && let Some(draft) = self.views[i].forms.focus.as_mut()
+                    && let Some(f) = self.session.get(id).and_then(|d| crate::forms_ui::focused_field(draft, &d.form))
+                {
+                    crate::forms_ui::refresh_draft(draft, (&before.0, &before.1), (crate::forms_ui::draft_text(f), &f.value));
+                }
+            } else if run.layers {
+                self.views[i].invalidate_content();
+            } else {
+                for p in &run.pages {
+                    self.views[i].page_changed(*p);
+                }
+            }
+            self.handle_js(id, run.output);
+            ctx.request_repaint();
+        }
+        if let Some(at) = self.session.next_timer(id) {
+            let wait = ((at - now_ms) / 1000.0).clamp(0.0, 3600.0);
+            ctx.request_repaint_after(std::time::Duration::from_secs_f64(wait));
+        }
+    }
+
     /// Run document `id`'s catalog JavaScript for `event` (Will Save before a save, Will Print
     /// before printing) and show what it said. What it changed is part of what is saved or
     /// printed. A failing script is reported and the save or print still goes ahead.

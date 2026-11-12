@@ -154,7 +154,7 @@ impl JsOutput {
     /// Adds what a field's own script produced: its alerts, console lines, errors and requests,
     /// except a request to print, show a side panel, open Save As, or open or save an attached
     /// file, which is noted on the console and dropped.
-    fn absorb(&mut self, o: &Outcome) {
+    pub(crate) fn absorb(&mut self, o: &Outcome) {
         self.alert(o.alerts.iter().cloned());
         self.say(o.console.iter().cloned());
         // A field's own scripts (keystroke, format, validate, calculate) run unasked: only a
@@ -187,7 +187,8 @@ impl JsOutput {
         }
     }
 
-    pub(crate) fn append(&mut self, other: JsOutput) {
+    /// Adds what other scripts produced, telling a document script's error once.
+    pub fn append(&mut self, other: JsOutput) {
         self.alert(other.alerts);
         self.say(other.console);
         self.requests.extend(other.requests);
@@ -535,6 +536,7 @@ impl JsRunner {
         let mut current = Self::new(cos, &self.doc.file_name, self.doc.runtime_highlight);
         current.doc.zoom = self.doc.zoom;
         current.doc.page = self.doc.page;
+        current.doc.layers = std::mem::take(&mut self.doc.layers);
         self.doc = current.doc;
         self.doc_scripts = current.doc_scripts;
         self.calculations = None;
@@ -564,6 +566,7 @@ impl JsRunner {
             runtime_highlight: highlight,
             icon_epoch: 0,
             icon_versions: Default::default(),
+            layers: Vec::new(),
         };
         // Once XFA owns the form, the PDF container's scripts belong to its fallback view.
         // Keep them in the file and in Document JavaScripts, but do not initialize an
@@ -593,7 +596,7 @@ impl JsRunner {
 }
 
 /// Index calculation sources by PDF object identity, retaining their matching snapshot positions.
-fn calculation_scripts(cos: &pdfcraft_cos::Document, fields: &[Field]) -> Vec<(usize, String)> {
+pub(crate) fn calculation_scripts(cos: &pdfcraft_cos::Document, fields: &[Field]) -> Vec<(usize, String)> {
     #[cfg(test)]
     SNAPSHOT_WORK.with(|c| {
         let (g, p) = c.get();
@@ -664,6 +667,7 @@ impl Scripts for JsRunner {
             fields: states,
             doc_scripts: self.doc_scripts.clone(),
             calculations,
+            timer: None,
         };
         #[cfg(not(target_arch = "wasm32"))]
         let remaining = self.callback_time_left();
@@ -752,6 +756,7 @@ impl Scripts for JsRunner {
                 fields: states,
                 doc_scripts: self.doc_scripts.clone(),
                 calculations: calculations.clone(),
+                timer: None,
             };
             let remaining = self.callback_time_left();
             let outcome = if remaining.is_zero() {
@@ -1190,8 +1195,9 @@ impl Session {
         let mut runner = JsRunner::new(&cos, &doc.name, self.field_highlight);
         runner.doc.zoom = doc.js_zoom;
         runner.doc.page = doc.js_page;
+        runner.doc.layers = crate::live_scripts::js_layers(&doc.info);
         let fields = pdfcraft_forms::fields(&cos);
-        let states = std::sync::Arc::new(fields.iter().map(|f| field_state(&cos, f, &runner.doc)).collect::<Vec<_>>());
+        let states = std::sync::Arc::new(fields.iter().map(|f| crate::live_scripts::live_state(doc, &cos, f, &runner.doc)).collect::<Vec<_>>());
         let event = match target {
             Some(t) => pdfcraft_js::Event { will_commit: false, target_id, ..pdfcraft_js::Event::field(event_name.unwrap_or("Mouse Up"), t, "") },
             None => pdfcraft_js::Event::doc(event_name.unwrap_or("Console")),
@@ -1206,6 +1212,7 @@ impl Session {
                 fields: states.clone(),
                 doc_scripts: runner.doc_scripts,
                 calculations,
+                timer: None,
             },
             answers,
         );
@@ -1218,7 +1225,13 @@ impl Session {
     }
 
     /// Convert the worker snapshot delta and reset requests into permission-checked atomic document edits.
-    fn apply_script_outcome(&mut self, id: DocId, states: &[pdfcraft_js::FieldState], mut o: Outcome, opening: bool) -> Result<Outcome, EditError> {
+    pub(crate) fn apply_script_outcome(
+        &mut self,
+        id: DocId,
+        states: &[pdfcraft_js::FieldState],
+        mut o: Outcome,
+        opening: bool,
+    ) -> Result<Outcome, EditError> {
         if o.execution_refused {
             o.changed.clear();
             o.requests.clear();
@@ -1281,12 +1294,15 @@ impl Session {
             }
         }
         let changes = changes(&baseline, &o.changed, &o.formatted);
+        let written: Vec<String> = changes.iter().filter(|c| c.display.is_some() || c.icon.is_some()).map(|c| c.name.clone()).collect();
         if !changes.is_empty() {
             edits.push(Edit::ApplyScriptChanges { changes });
         }
         if !edits.is_empty() {
             self.apply(id, Edit::Batch { label: "Run JavaScript".into(), edits })?;
         }
+        // The timers the script left, the layers it turned, and how fields show (#169).
+        self.after_script(id, &o, &written);
         Ok(o)
     }
 }
@@ -1660,9 +1676,10 @@ impl Session {
         let mut runner = JsRunner::new(cos, &doc.name, self.field_highlight);
         runner.doc.zoom = doc.js_zoom;
         runner.doc.page = doc.js_page;
+        runner.doc.layers = crate::live_scripts::js_layers(&doc.info);
         let fields = pdfcraft_forms::fields(cos);
         validate_script_target(target, target_id, &fields)?;
-        let states = std::sync::Arc::new(fields.iter().map(|f| field_state(cos, f, &runner.doc)).collect::<Vec<_>>());
+        let states = std::sync::Arc::new(fields.iter().map(|f| crate::live_scripts::live_state(doc, cos, f, &runner.doc)).collect::<Vec<_>>());
         let job = pdfcraft_js::session::Job {
             script: script.into(),
             event: target.map_or_else(
@@ -1673,6 +1690,7 @@ impl Session {
             fields: states.clone(),
             doc_scripts: runner.doc_scripts,
             calculations: calculation_scripts(cos, &fields),
+            timer: None,
         };
         let receiver =
             doc.js_runtime.lock().map_err(|_| EditError::Invalid("script runtime unavailable".into()))?.start(job).map_err(EditError::Invalid)?;
@@ -2008,6 +2026,7 @@ mod widget_budget_review_tests {
             rotation: 0,
             caption: None,
             mouse_up_script: None,
+            mouse_down: false,
             list: None,
             round: false,
         };

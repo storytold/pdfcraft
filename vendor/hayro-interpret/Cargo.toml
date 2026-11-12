@@ -34,7 +34,7 @@ default = [
 ]
 embed-cmaps = ["hayro-cmap/embed-cmaps"]
 embed-fonts = []
-# PdfCraft patch (105): test-only counters (`font::recovery_rule_calls`).
+# PdfCraft patch (107): test-only counters (`font::recovery_rule_calls`).
 test-counters = []
 logging = [
     "dep:log",
