@@ -79,11 +79,20 @@ impl ProtectDraft {
             Some(if self.viewing { "Type a permissions password." } else { "Type a document open password." })
         } else if self.both && self.second != self.second_confirm {
             Some(if self.viewing { "The permissions passwords don't match." } else { "The document open passwords don't match." })
-        } else if self.both && self.second == self.password {
+        } else if self.both && self.same_to_the_file(&self.second, &self.password) {
             Some("The document open password and the permissions password must be different.")
         } else {
             None
         }
+    }
+
+    /// Whether the file would take `a` and `b` as one password: encryption keys on a password as
+    /// [`pdfcraft_cos::effective_password`] gives it (128-bit AES and RC4 keep its first 32
+    /// bytes, 256-bit AES its SASLprep), and the engine refuses two that come out the same. Checked
+    /// here so Apply stays disabled and nothing typed is lost.
+    fn same_to_the_file(&self, a: &str, b: &str) -> bool {
+        let algorithm = self.protection.algorithm;
+        pdfcraft_cos::effective_password(algorithm, a) == pdfcraft_cos::effective_password(algorithm, b)
     }
 
     /// Whether the edit restricts printing, changes and copying (a permissions password is set).
@@ -382,6 +391,15 @@ mod tests {
         d.second = "abc".into();
         d.second_confirm = "abc".into();
         assert_eq!(d.problem(), Some("The document open password and the permissions password must be different."));
+        // 128-bit AES keeps a password's first 32 bytes: two that differ only after them are one
+        // password to the file, which the engine refuses, so Apply stays disabled.
+        let a32 = "a".repeat(32);
+        d.protection.algorithm = pdfcraft_engine::Algorithm::Aes128;
+        (d.password, d.confirm) = (format!("{a32}1"), format!("{a32}1"));
+        (d.second, d.second_confirm) = (format!("{a32}2"), format!("{a32}2"));
+        assert_eq!(d.problem(), Some("The document open password and the permissions password must be different."));
+        d.protection.algorithm = pdfcraft_engine::Algorithm::Aes256;
+        assert_eq!(d.problem(), None, "256-bit AES keeps them apart");
         assert_eq!(strength("abc").0, "Weak");
         assert_eq!(strength("Abcdefg1").0, "Medium");
         assert_eq!(strength("Correct-Horse-9").0, "Strong");
