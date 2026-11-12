@@ -249,6 +249,8 @@ fn object_stream_member_extents_bound_owned_strings() {
     assert!(!parsed.objects.contains_key(&(201, 0)));
 }
 
+/// Members are read at their indexed offsets, in any order and with any whitespace around
+/// them; a number listed twice keeps its last entry.
 #[test]
 fn object_stream_member_extents_preserve_index_order_and_whitespace() {
     let members = b" \n42\n /Name \n[true 7]\n << /Key (value) >>\n (last)";
@@ -260,6 +262,170 @@ fn object_stream_member_extents_preserve_index_order_and_whitespace() {
     assert_eq!(parsed.objects.get(&(10, 0)).unwrap().as_name().unwrap(), b"Name");
     assert_eq!(parsed.objects.get(&(11, 0)).unwrap().as_array().unwrap(), &[Object::Boolean(true), Object::Integer(7)]);
     assert_eq!(parsed.objects.get(&(12, 0)).unwrap().as_dict().unwrap().get(b"Key").unwrap().as_str().unwrap(), b"value");
+}
+
+/// lopdf patch (7), #5083: a decoded object-stream member could build any number of objects
+/// (`0 0 0 ...` inside the decompression limit built ~120M and aborted). A member now builds at
+/// most the per-object node cap (1 << 22), so one array with more elements than that is skipped
+/// while a small member is kept. Without the node charge in the vendored parser the oversize
+/// array builds in full, so object 11 is present and the last assertion fails.
+#[test]
+fn object_stream_members_over_the_node_cap_are_skipped() {
+    let small = b"[ 1 2 3 ]";
+    let mut big = vec![b'['];
+    for _ in 0..4_300_000 {
+        big.extend_from_slice(b"0 ");
+    }
+    big.push(b']');
+    let mut members = small.to_vec();
+    let big_off = members.len();
+    members.extend_from_slice(&big);
+    let stream = indexed_object_stream(&[(10, 0), (11, big_off)], &members);
+    let parsed = lopdf::ObjectStream::new_with_limit(&stream, Some(16 << 20)).unwrap();
+    assert!(parsed.objects.contains_key(&(10, 0)), "the small member is kept");
+    assert!(!parsed.objects.contains_key(&(11, 0)), "the oversize member is skipped");
+}
+
+/// lopdf patch (7), #5083: an object stream reads at most 1,000,000 index entries (cos's `/N`
+/// clamp), so a huge index can't allocate an entry list or parse a member per entry. Of
+/// 1,000,001 distinct one-byte members, the last is never built.
+#[test]
+fn object_stream_index_entries_past_the_clamp_are_ignored() {
+    let count = 1_000_001_u32;
+    let mut members = Vec::with_capacity(2 * count as usize);
+    let pairs: Vec<(u32, usize)> = (1..=count)
+        .map(|id| {
+            let at = members.len();
+            members.extend_from_slice(b"0 ");
+            (id, at)
+        })
+        .collect();
+    let parsed = lopdf::ObjectStream::new_with_limit(&indexed_object_stream(&pairs, &members), None).unwrap();
+    assert_eq!(parsed.objects.len(), 1_000_000);
+    assert!(parsed.objects.contains_key(&(1_000_000, 0)));
+    assert!(!parsed.objects.contains_key(&(count, 0)), "the entry past the clamp is ignored");
+}
+
+/// Six object streams, each holding one nested member of seven objects.
+fn nested_object_streams() -> Vec<lopdf::Stream> {
+    (0..6).map(|i| indexed_object_stream(&[(100 + i, 0)], b"<< /A [1 [2]] /B << /C 3 >> >>")).collect()
+}
+
+/// lopdf patch (7), #5083: one load's object streams share a single node budget (the load-wide
+/// `MAX_LOAD_NODES`, here 12 nodes so the test stays small), so later streams are skipped once
+/// earlier ones spent it. A stream given a budget of its own would load all six.
+#[test]
+fn object_streams_of_one_load_share_their_node_budget() {
+    let streams = nested_object_streams();
+    let budget = lopdf::NodeBudget::new(12);
+    let loaded: usize = streams.iter().map(|s| lopdf::ObjectStream::new_within(s, None, &budget).unwrap().objects.len()).sum();
+    assert!(loaded > 0);
+    assert!(loaded < streams.len(), "the budget is shared by all streams");
+    assert!(budget.spent());
+}
+
+/// The shared budget holds across threads too, as rayon's workers load object streams in
+/// parallel: members reserve their share before parsing, so together they can't overshoot.
+#[test]
+fn object_streams_loaded_in_parallel_share_their_node_budget() {
+    let streams = nested_object_streams();
+    let budget = &lopdf::NodeBudget::new(12);
+    let loaded: usize = std::thread::scope(|scope| {
+        let workers: Vec<_> =
+            streams.iter().map(|s| scope.spawn(move || lopdf::ObjectStream::new_within(s, None, budget).unwrap().objects.len())).collect();
+        workers.into_iter().map(|w| w.join().unwrap()).sum()
+    });
+    assert!(loaded > 0);
+    assert!(loaded < streams.len(), "the budget is shared by all streams");
+}
+
+/// A member that fails to parse gives back the nodes it reserved and did not build, so a
+/// malformed member doesn't use up the budget of the members after it.
+#[test]
+fn a_malformed_object_stream_member_refunds_its_reservation() {
+    let stream = indexed_object_stream(&[(10, 0), (11, 3)], b"[1 [2]");
+    let budget = lopdf::NodeBudget::new(5);
+    let parsed = lopdf::ObjectStream::new_within(&stream, None, &budget).unwrap();
+    assert!(!parsed.objects.contains_key(&(10, 0)));
+    assert!(parsed.objects.contains_key(&(11, 0)));
+    assert!(!budget.spent(), "unused reservation from the malformed member is refunded");
+}
+
+/// A budget too small for every member builds them in index order, so the members a spent
+/// budget skips are the same on every load. Here the first member takes four of the five
+/// nodes, the second the last one, and the third is skipped. Parsed in parallel from the shared
+/// budget, the second and third could find it held by the first and be skipped as well.
+#[test]
+fn a_tight_budget_builds_object_stream_members_in_index_order() {
+    let stream = indexed_object_stream(&[(10, 0), (11, 8), (12, 10)], b"[1 2 3] 7 8");
+    let budget = lopdf::NodeBudget::new(5);
+    let parsed = lopdf::ObjectStream::new_within(&stream, None, &budget).unwrap();
+    assert!(parsed.objects.contains_key(&(10, 0)));
+    assert!(parsed.objects.contains_key(&(11, 0)), "the second member is built from what the first left");
+    assert!(!parsed.objects.contains_key(&(12, 0)), "the third member finds the budget spent");
+    assert!(budget.spent());
+}
+
+/// A PDF with a cross-reference stream whose Info dictionary (object 4) sits in object stream 3
+/// after `first`, a member listed before it.
+fn info_in_object_stream_pdf(first: &[u8]) -> Vec<u8> {
+    let info = b"<< /Title (Kept) >>";
+    let index = format!("5 0 4 {} ", first.len() + 1);
+    let mut data = index.clone().into_bytes();
+    data.extend_from_slice(first);
+    data.push(b' ');
+    data.extend_from_slice(info);
+    let mut pdf = b"%PDF-1.5\n".to_vec();
+    let mut offsets = [0_u32; 7];
+    let mut append = |pdf: &mut Vec<u8>, id: usize, head: &[u8], body: &[u8], tail: &[u8]| {
+        offsets[id] = pdf.len() as u32;
+        pdf.extend_from_slice(format!("{id} 0 obj\n").as_bytes());
+        pdf.extend_from_slice(head);
+        pdf.extend_from_slice(body);
+        pdf.extend_from_slice(tail);
+        pdf.extend_from_slice(b"\nendobj\n");
+    };
+    append(&mut pdf, 1, b"<< /Type /Catalog /Pages 2 0 R >>", b"", b"");
+    append(&mut pdf, 2, b"<< /Type /Pages /Kids [] /Count 0 >>", b"", b"");
+    let head = format!("<< /Type /ObjStm /N 2 /First {} /Length {} >>\nstream\n", index.len(), data.len());
+    append(&mut pdf, 3, head.as_bytes(), &data, b"\nendstream");
+    let xref_offset = pdf.len() as u32;
+    offsets[6] = xref_offset;
+    let mut records = Vec::new();
+    for (id, &offset) in offsets.iter().enumerate() {
+        let (kind, field, index) = match id {
+            0 => (0_u8, 0_u32, 0xffff_u16),
+            4 => (2, 3, 1),
+            5 => (2, 3, 0),
+            _ => (1, offset, 0),
+        };
+        records.push(kind);
+        records.extend_from_slice(&field.to_be_bytes());
+        records.extend_from_slice(&index.to_be_bytes());
+    }
+    let head = format!("<< /Type /XRef /Size 7 /Root 1 0 R /Info 4 0 R /W [1 4 2] /Length {} >>\nstream\n", records.len());
+    pdf.extend_from_slice(format!("6 0 obj\n{head}").as_bytes());
+    pdf.extend_from_slice(&records);
+    pdf.extend_from_slice(format!("\nendstream\nendobj\nstartxref\n{xref_offset}\n%%EOF\n").as_bytes());
+    pdf
+}
+
+/// lopdf patch (7), #5083: a lookup in an object stream (lopdf's metadata reader, or an indirect
+/// `/Length` read while loading) parses only the member it wants. It used to parse every member
+/// from one object's budget, so a member before it of more than `MAX_OBJECT_NODES` objects spent
+/// that budget and the wanted member was skipped: the Info dictionary read as missing.
+#[test]
+fn a_lookup_in_an_object_stream_parses_only_the_member_it_wants() {
+    let mut big = vec![b'['];
+    for _ in 0..4_300_000 {
+        big.extend_from_slice(b"0 ");
+    }
+    big.push(b']');
+    let metadata = Document::load_metadata_mem(&info_in_object_stream_pdf(&big)).unwrap();
+    assert_eq!(metadata.title.as_deref(), Some("Kept"));
+    // The fixture itself reads: with a small member before it, the Info dictionary was read before too.
+    let metadata = Document::load_metadata_mem(&info_in_object_stream_pdf(b"[1 2 3]")).unwrap();
+    assert_eq!(metadata.title.as_deref(), Some("Kept"));
 }
 
 #[test]
@@ -993,6 +1159,50 @@ fn repeated_annotations_are_listed_once_within_a_byte_budget() {
     assert!(notes.iter().all(|a| a.page == 0), "the shared array is the first page's");
     assert!(notes.len() > 1);
     assert!(notes.iter().map(retained).sum::<usize>() <= MAX_ANNOTATION_BYTES);
+}
+
+/// Blank text is not kept, so only reading it is charged: many comments sharing one large blank
+/// string stop being built at the budget instead of decoding it once each.
+#[test]
+fn comments_sharing_a_blank_string_stop_at_the_read_budget() {
+    let small = "<< /Subtype /Text /Rect [0 0 1 1] /Contents 7 0 R >> ".repeat(1200);
+    let pdf = format!(
+        "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+             2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+             3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots [{small}] >> endobj\n\
+             7 0 obj ({}) endobj\ntrailer << /Root 1 0 R >>\n%%EOF",
+        " ".repeat(64 << 10),
+    );
+    let doc = Document::load_mem(pdf.as_bytes()).expect("loads");
+    let page = PageInfo { width: 200.0, height: 200.0, crop: [0.0, 0.0, 200.0, 200.0], rotation: 0, label: String::new() };
+    let mut info = DocInfo { pages: vec![page], ..Default::default() };
+    Inspector::new(&doc).fill(&mut info);
+    assert!(!info.annotations.is_empty() && info.annotations.len() < 1200, "{}", info.annotations.len());
+}
+
+/// Many fields sharing one large tooltip, and one layer listed many times, are read within a byte
+/// allowance rather than once each.
+#[test]
+fn fields_sharing_a_tooltip_and_repeated_layers_stop_at_the_text_budget() {
+    let fields = (0..1300).map(|i| format!("<< /FT /Tx /T (f{i}) /TU 7 0 R /V 7 0 R >> ")).collect::<String>();
+    let pdf = format!(
+        "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [{fields}] >> \
+             /OCProperties << /OCGs [{}] >> >> endobj\n\
+             2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+             3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >> endobj\n\
+             6 0 obj << /Type /OCG /Name (Ink) >> endobj\n\
+             7 0 obj ({}) endobj\ntrailer << /Root 1 0 R >>\n%%EOF",
+        "6 0 R ".repeat(1000),
+        "x".repeat(32 << 10),
+    );
+    let doc = Document::load_mem(pdf.as_bytes()).expect("loads");
+    let page = PageInfo { width: 200.0, height: 200.0, crop: [0.0, 0.0, 200.0, 200.0], rotation: 0, label: String::new() };
+    let mut info = DocInfo { pages: vec![page], ..Default::default() };
+    Inspector::new(&doc).fill(&mut info);
+    let kept: usize = info.fields.iter().map(|f| f.tooltip.as_ref().map_or(0, String::len) + f.value.as_ref().map_or(0, String::len)).sum();
+    assert!(kept > 0 && kept <= super::core::MAX_FIELD_TEXT_BYTES, "{kept}");
+    assert!(info.fields.iter().any(|f| f.tooltip.is_none()), "text past the allowance is left out");
+    assert_eq!(info.layers.len(), 1);
 }
 
 /// A link reached through an indirect object that holds only a reference to it is the same
@@ -2518,6 +2728,42 @@ fn inspection_keeps_no_private_page_data() {
         format!("{info:?}")
     };
     assert_eq!(report(with), report(without), "what inspection reports does not change");
+}
+
+/// A field with several widgets reports an action on any of them, not only the first, and so does
+/// the document's JavaScript flag.
+#[test]
+fn a_field_reports_an_action_on_a_later_widget() {
+    let pdf = "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] >> >> endobj\n\
+             2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+             3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >> endobj\n\
+             4 0 obj << /FT /Tx /T (f) /Kids [5 0 R 6 0 R] >> endobj\n\
+             5 0 obj << /Subtype /Widget /Rect [0 0 1 1] >> endobj\n\
+             6 0 obj << /Subtype /Widget /Rect [0 0 1 1] /A << /S /JavaScript /JS (app.alert(1)) >> >> endobj\n\
+             trailer << /Root 1 0 R >>\n%%EOF";
+    let doc = Document::load_mem(pdf.as_bytes()).expect("loads");
+    let page = PageInfo { width: 200.0, height: 200.0, crop: [0.0, 0.0, 200.0, 200.0], rotation: 0, label: String::new() };
+    let mut info = DocInfo { pages: vec![page], ..Default::default() };
+    Inspector::new(&doc).fill(&mut info);
+    assert!(info.fields.iter().any(|f| f.name == "f" && f.has_actions), "{:?}", info.fields);
+    assert!(info.has_javascript);
+}
+
+/// A shared descendant first reached at the depth limit (its action-bearing child cut) is read
+/// again from a shallower path, so the action is still found.
+#[test]
+fn an_action_below_a_shared_field_first_met_deep_is_found_from_a_shallower_path() {
+    // 1 is the root, 2..=32 a chain of 31 fields, 33 the shared field, 34 holds the action,
+    // 35 a short path to 33.
+    let mut bodies = vec!["<< /Kids [2 0 R 35 0 R] >>".to_string()];
+    for i in 2..=32 {
+        bodies.push(format!("<< /Kids [{} 0 R] >>", i + 1));
+    }
+    bodies.push("<< /Kids [34 0 R] >>".into());
+    bodies.push("<< /A << /S /JavaScript /JS (x) >> >>".into());
+    bodies.push("<< /Kids [33 0 R] >>".into());
+    let doc = Document::load_mem(&pdf_of(&bodies)).expect("loads");
+    assert!(Inspector::new(&doc).has_action(&Object::Reference((1, 0)), 0));
 }
 
 /// A `/Kids` entry that loops back, or names a root field that doesn't name this one as its

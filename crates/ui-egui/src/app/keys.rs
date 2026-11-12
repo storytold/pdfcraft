@@ -10,6 +10,10 @@ impl PdfCraftApp {
         if self.close_request.is_some() {
             // These dialogs are drawn after the save prompt and own the keyboard while open.
             // Don't let Escape or Return resolve unsaved work underneath one.
+            #[cfg(not(target_arch = "wasm32"))]
+            if self.script_pending.as_ref().is_some_and(|pending| pending.has_prompt()) {
+                return;
+            }
             let covered = self.pending_link.is_some()
                 || self.pending_remote_link.is_some()
                 || self.pending_full_screen.is_some()

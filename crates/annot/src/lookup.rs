@@ -89,6 +89,56 @@ thread_local! {
     pub(crate) static ANNOTS_ENTRIES_COPIED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
+/// Apple Markup's private copy of a page's markup: on the page and on each of its annotations.
+const APPLE_PAGE_MARKUP: [&[u8]; 2] = [b"AAPL:PPK", b"AAPL:PPKHash"];
+const APPLE_ANNOT_MARKUP: &[u8] = b"AAPL:AKExtras";
+
+/// Drop Apple Markup's private copy of the page's markup once the annotation list changes. iOS
+/// draws Markup annotations from that copy, which no longer matches `/Annots`: iOS 26 showed a
+/// Markup signature in its own place and again over a signature added here. Without it, Apple
+/// draws every annotation from its appearance, as other viewers do. The drop is recorded in the
+/// document's repair log (iOS can no longer re-edit those strokes as live ink).
+fn drop_apple_markup(doc: &mut Document, page: ObjRef, list: &mut [Object]) -> Result<(), AnnotError> {
+    let mut dropped = false;
+    if doc.get(page).as_dict().is_some_and(|d| APPLE_PAGE_MARKUP.iter().any(|k| d.contains(k))) {
+        doc.update_dict(page, |d| {
+            for k in APPLE_PAGE_MARKUP {
+                d.remove(k);
+            }
+        })?;
+        dropped = true;
+    }
+    for entry in list {
+        match entry {
+            Object::Dict(d) if d.contains(APPLE_ANNOT_MARKUP) => {
+                d.remove(APPLE_ANNOT_MARKUP);
+                dropped = true;
+            }
+            Object::Ref(r) if doc.get(*r).as_dict().is_some_and(|d| d.contains(APPLE_ANNOT_MARKUP)) => {
+                doc.update_dict(*r, |d| {
+                    d.remove(APPLE_ANNOT_MARKUP);
+                })?;
+                dropped = true;
+            }
+            _ => {}
+        }
+    }
+    if dropped {
+        doc.note_repair(
+            "dropped Apple Markup's private copy of a page's annotations after the page changed; iOS draws them from their appearance instead of as editable ink"
+                .into(),
+        );
+    }
+    Ok(())
+}
+
+/// Replace a page's `/Annots` after an annotation was added, removed or answered: the point at
+/// which Apple Markup's private copy of the page goes stale (see [`drop_apple_markup`]).
+pub(crate) fn change_annots(doc: &mut Document, page: ObjRef, mut list: Vec<Object>) -> Result<(), AnnotError> {
+    drop_apple_markup(doc, page, &mut list)?;
+    Ok(set_annots(doc, page, list)?)
+}
+
 /// Replace a page's `/Annots`, writing into the shared array object when it is indirect. An empty
 /// list removes a direct `/Annots`.
 pub fn set_annots(doc: &mut Document, page: ObjRef, list: Vec<Object>) -> Result<(), pdfcraft_cos::CosError> {

@@ -309,17 +309,27 @@ fn a_fonts_streams_are_paid_for_from_its_allowance() {
 }
 
 /// With nothing left, an empty stream still reads, as the allowance reads one, and is no reason to
-/// call the font read past it; a stream with data is left unread, and is.
+/// call the font read past it; a stream with data is left unread, and is. An empty stream behind a
+/// filter nothing decodes is unread with any allowance, so it isn't either: the font is read past
+/// its allowance exactly when the allowance counts a refusal, which is what callers refuse on.
 #[test]
 fn an_empty_stream_reads_with_nothing_left() {
-    let past = |data: &[u8]| {
+    let past = |filter: Option<&str>, data: &[u8]| {
         let mut doc = Document::new_empty();
-        let unicode = Object::Ref(doc.add(Object::Stream(Stream::from_raw(Dict::new(), data.to_vec()))));
+        let mut dict = Dict::new();
+        if let Some(filter) = filter {
+            dict.set(b"Filter".to_vec(), Object::name(filter));
+        }
+        let unicode = Object::Ref(doc.add(Object::Stream(Stream::from_raw(dict, data.to_vec()))));
         let f = font(&mut doc, vec![("Subtype", Object::name("TrueType")), ("ToUnicode", unicode)]);
-        Metrics::from_dict_within(&doc, &f, &mut DecodeBudget::new(0, 0)).past_allowance
+        let mut budget = DecodeBudget::new(0, 0);
+        let past = Metrics::from_dict_within(&doc, &f, &mut budget).past_allowance;
+        assert_eq!(past, budget.refused() > 0, "{filter:?}");
+        past
     };
-    assert!(!past(b""));
-    assert!(past(b"1 beginbfchar <41> <0058> endbfchar"));
+    assert!(!past(None, b""));
+    assert!(!past(Some("NoSuchFilter"), b""));
+    assert!(past(None, b"1 beginbfchar <41> <0058> endbfchar"));
 }
 
 /// A stream behind one filter past its own limit, with more left than its limit, is left unread as
@@ -422,6 +432,45 @@ fn each_stage_of_a_metrics_stream_is_held_to_its_limit() {
     // 0.6 of the limit: its hex text, 1.2 of it, is past the limit; the stages make 1.8 of it.
     assert_eq!(read(MAX_CID_TO_GID * 6 / 20), (true, true));
     assert_eq!(read(MAX_CID_TO_GID / 4), (false, false));
+}
+
+/// The editor's program list reads a legacy Thai font's metrics after its program. With the program
+/// spending the allowance to the byte, a ToUnicode that is an empty stream behind a filter nothing
+/// decodes, unread with any allowance, doesn't put the metrics past the allowance: the program is
+/// listed. A ToUnicode with data is refused by the allowance, and the program isn't.
+#[test]
+fn an_editors_program_is_listed_past_a_stream_unread_on_its_own() {
+    let bytes = include_bytes!("../../../../assets/fonts/Inter-Regular.ttf");
+    let listed = |filter: Option<&str>, data: &[u8]| {
+        let mut doc = Document::new_empty();
+        let mut dict = Dict::new();
+        if let Some(filter) = filter {
+            dict.set(b"Filter".to_vec(), Object::name(filter));
+        }
+        let unicode = Object::Ref(doc.add(Object::Stream(Stream::from_raw(dict, data.to_vec()))));
+        let program = Object::Ref(doc.add(Object::Stream(Stream::from_raw(Dict::new(), bytes.to_vec()))));
+        let mut descriptor = Dict::new();
+        descriptor.set(b"FontFile2".to_vec(), program);
+        let f = font(
+            &mut doc,
+            vec![
+                ("Subtype", Object::name("TrueType")),
+                ("BaseFont", Object::name("THSarabunPSK")),
+                ("FirstChar", Object::Int(65)),
+                ("LastChar", Object::Int(65)),
+                ("Widths", Object::Array(vec![Object::Int(500)])),
+                ("Encoding", Object::name("WinAnsiEncoding")),
+                ("FontDescriptor", Object::Dict(descriptor)),
+                ("ToUnicode", unicode),
+            ],
+        );
+        let mut budget = DecodeBudget::new(bytes.len(), 0);
+        let listed = embedded_sfnt_within(&doc, &f, &mut budget).is_some();
+        assert_eq!(budget.remaining(), 0, "the program spends the allowance to the byte");
+        (listed, budget.refused())
+    };
+    assert_eq!(listed(Some("NoSuchFilter"), b""), (true, 0));
+    assert_eq!(listed(None, b"1 beginbfchar <41> <0058> endbfchar"), (false, 1));
 }
 
 /// The editor's program is held to its limit as the metrics reads' streams are: a 12 MiB program
@@ -967,6 +1016,41 @@ fn type3_glyph_boxes_are_paid_for_from_the_allowance() {
     assert_eq!(budget.remaining(), 0);
     let m = Metrics::from_dict_within(&doc, &f, &mut DecodeBudget::new(cost - 1, 0));
     assert!(m.past_allowance, "a byte short, the second description is left unread");
+}
+
+/// A glyph description that fails on its own once the allowance is spent to the byte, an empty one
+/// behind a filter nothing decodes, fails the same with more left: it doesn't make the metrics read
+/// past the allowance, and the descriptions after it are read, or refused by the allowance.
+#[test]
+fn a_type3_description_unread_on_its_own_is_not_past_the_allowance() {
+    let mut doc = Document::new_empty();
+    let procs = ["1 0 0 -20 1 300 d1", "", "1 0 0 0 1 400 d1"];
+    let mut f = type3(&mut doc, [1.0, 0.0, 0.0, 1.0, 0.0, 0.0], [0, 0, 0, 0], &procs);
+    let mut dict = Dict::new();
+    dict.set(b"Filter".to_vec(), Object::name("NoSuchFilter"));
+    let unread = Object::Ref(doc.add(Object::Stream(Stream::from_raw(dict, Vec::new()))));
+    let Some(Object::Dict(mut charprocs)) = f.get(b"CharProcs").cloned() else { panic!("CharProcs") };
+    charprocs.set(b"g1".to_vec(), unread);
+    f.set(b"CharProcs".to_vec(), Object::Dict(charprocs));
+    with_differences(&mut f, &["g0", "g1", "g2"].map(String::from));
+    let first = procs[0].len();
+    let whole = Metrics::from_dict_within(&doc, &f, &mut DecodeBudget::new(usize::MAX, 0));
+    assert!(!whole.past_allowance);
+    assert_eq!((whole.ascent, whole.descent), (400.0, -20.0));
+    // The first description spends it to the byte; the third, which has data, is refused.
+    let mut budget = DecodeBudget::new(first, 0);
+    let m = Metrics::from_dict_within(&doc, &f, &mut budget);
+    assert_eq!(budget.refused(), 1);
+    assert!(m.past_allowance);
+    // Without the third, nothing is refused, and the metrics aren't past the allowance.
+    let Some(Object::Dict(mut charprocs)) = f.get(b"CharProcs").cloned() else { panic!("CharProcs") };
+    charprocs.remove(b"g2");
+    f.set(b"CharProcs".to_vec(), Object::Dict(charprocs));
+    let mut budget = DecodeBudget::new(first, 0);
+    let m = Metrics::from_dict_within(&doc, &f, &mut budget);
+    assert_eq!((budget.refused(), budget.remaining()), (0, 0));
+    assert!(!m.past_allowance);
+    assert_eq!((m.ascent, m.descent), (300.0, -20.0));
 }
 
 /// A Type 3 font measured from its glyphs' `d1` boxes keeps them over a descriptor's `/Ascent`
@@ -1737,6 +1821,16 @@ fn low_codes_resolve_to_the_covering_range() {
     let covered: Vec<u32> = (0..0x70).filter(|&c| u.covering(c).is_some()).collect();
     assert_eq!(covered, [5, 6, 7, 100, 101]);
     assert_eq!((u.covering(0xFFFF).is_some(), u.covering(0x1_0001).is_some(), u.covering(0x1_0002).is_none()), (true, true, true));
+}
+
+#[test]
+fn base_font_name_matches_the_metrics_name() {
+    let doc = Document::new_empty();
+    let mut f = Dict::new();
+    f.set(b"BaseFont".to_vec(), Object::name("ABCDEF+Body"));
+    assert_eq!(base_font_name(&doc, &f), "ABCDEF+Body");
+    assert_eq!(base_font_name(&doc, &f), Metrics::from_dict(&doc, &f).base_font);
+    assert_eq!(base_font_name(&doc, &Dict::new()), "");
 }
 
 #[test]
