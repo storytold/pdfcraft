@@ -356,13 +356,63 @@ mod tests {
         std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join(rel)).unwrap_or_else(|e| panic!("{rel}: {e}"))
     }
 
+    /// The attributes of every `<link>` element in `html`, outside comments: a tag that is only
+    /// mentioned in a comment, or commented out, is not on the page. Enough HTML for index.html,
+    /// which these tests own: double-quoted values, and bare names (`data-trunk`) as "".
+    fn links(html: &str) -> Vec<std::collections::BTreeMap<String, String>> {
+        let mut page = String::new();
+        let mut rest = html;
+        while let Some(start) = rest.find("<!--") {
+            page.push_str(&rest[..start]);
+            rest = rest[start..].find("-->").map_or("", |end| &rest[start + end + 3..]);
+        }
+        page.push_str(rest);
+        page.split("<link")
+            .skip(1)
+            .filter_map(|tag| tag.split('>').next())
+            .map(|tag| {
+                let mut attrs = std::collections::BTreeMap::new();
+                let mut rest = tag.trim_end_matches('/');
+                while let Some(start) = rest.find(|c: char| !c.is_whitespace() && c != '/') {
+                    rest = &rest[start..];
+                    let end = rest.find(|c: char| c.is_whitespace() || c == '=').unwrap_or(rest.len());
+                    let name = rest[..end].to_string();
+                    rest = &rest[end..];
+                    let value = match rest.strip_prefix("=\"") {
+                        Some(quoted) => {
+                            let close = quoted.find('"').expect("closing quote");
+                            rest = &quoted[close + 1..];
+                            quoted[..close].to_string()
+                        }
+                        None => String::new(),
+                    };
+                    attrs.insert(name, value);
+                }
+                attrs
+            })
+            .collect()
+    }
+
+    /// Whether `html` has a `<link>` with every one of `want`'s attributes and values.
+    fn has_link(html: &str, want: &[(&str, &str)]) -> bool {
+        links(html).iter().any(|attrs| want.iter().all(|(k, v)| attrs.get(*k).map(String::as_str) == Some(*v)))
+    }
+
+    #[test]
+    fn links_ignore_comments() {
+        let live = r#"<link data-trunk rel="copy-file" href="a.json" />"#;
+        assert!(has_link(live, &[("data-trunk", ""), ("rel", "copy-file"), ("href", "a.json")]));
+        assert!(!has_link(&format!("<!-- {live} -->"), &[("rel", "copy-file")]), "a commented-out link is not on the page");
+        assert!(!has_link(r#"<link rel="icon" href="a.json" />"#, &[("rel", "copy-file")]), "every attribute must match");
+    }
+
     /// The installed app is offered for PDFs only if the page links a manifest that Trunk copies
     /// into the site, and that manifest declares a PDF file handler inside the app's scope.
     #[test]
     fn manifest_registers_pdf_file_handler() {
         let html = read("index.html");
-        assert!(html.contains(r#"<link rel="manifest" href="manifest.webmanifest" />"#), "index.html must link the manifest");
-        assert!(html.contains(r#"<link data-trunk rel="copy-file" href="manifest.webmanifest" />"#), "Trunk must copy the manifest");
+        assert!(has_link(&html, &[("rel", "manifest"), ("href", "manifest.webmanifest")]), "index.html must link the manifest");
+        assert!(has_link(&html, &[("data-trunk", ""), ("rel", "copy-file"), ("href", "manifest.webmanifest")]), "Trunk must copy the manifest");
 
         let m: serde_json::Value = serde_json::from_str(&read("manifest.webmanifest")).expect("manifest is JSON");
         assert_eq!(m["scope"], "./");
@@ -385,7 +435,10 @@ mod tests {
     #[test]
     fn manifest_icons_exist() {
         let html = read("index.html");
-        assert!(html.contains(r#"href="../../assets/app-icon/hicolor" data-target-path="icons""#));
+        assert!(
+            has_link(&html, &[("data-trunk", ""), ("rel", "copy-dir"), ("href", "../../assets/app-icon/hicolor"), ("data-target-path", "icons")]),
+            "Trunk must copy the app icons into icons/"
+        );
         let m: serde_json::Value = serde_json::from_str(&read("manifest.webmanifest")).expect("manifest is JSON");
         let icons = m["icons"].as_array().expect("icons");
         assert!(icons.iter().any(|i| i["sizes"] == "512x512"), "browsers want a 512 px icon to install");
