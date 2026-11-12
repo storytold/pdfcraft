@@ -51,7 +51,9 @@ pub struct Protection {
     pub copy: bool,
     /// "Enable text access for screen reader devices".
     pub accessibility: bool,
-    /// The encryption; 256-bit AES by default.
+    /// Compatibility level; AES-256 (Acrobat X and later) by default. The dialog offers the
+    /// guide's five: Acrobat 3.0 (`Rc4_40`), 5.0 (`Rc4_128`), 6.0 (`Rc4_128CryptFilter`), 7.0
+    /// (`Aes128`) and X (`Aes256`) and later.
     pub algorithm: pdfcraft_cos::Algorithm,
     /// `false`: "Encrypt all document contents except metadata" (not with 40-bit RC4).
     pub encrypt_metadata: bool,
@@ -136,7 +138,7 @@ impl Protection {
         if self.algorithm != pdfcraft_cos::Algorithm::Aes256
             && [&self.open_password, &self.permissions_password].into_iter().flatten().any(|p| p.chars().any(|c| !(' '..='~').contains(&c)))
         {
-            return bad("this compatibility level supports only plain ASCII passwords; use 256-bit AES");
+            return bad("this compatibility level supports only plain ASCII passwords; use AES-256 (Acrobat X and later)");
         }
         // Encryption keys on a password as `effective_password` gives it (AES-256: SASLprep,
         // which drops soft hyphens and folds compatibility forms; older levels: the first 32

@@ -68,7 +68,7 @@ fn title(doc: &Document) -> Option<String> {
     info.as_dict()?.get(b"Title").and_then(|t| doc.resolve(t).as_string().map(|s| s.to_text()))
 }
 
-const ALL: [Algorithm; 4] = [Algorithm::Rc4_40, Algorithm::Rc4_128, Algorithm::Aes128, Algorithm::Aes256];
+const ALL: [Algorithm; 5] = [Algorithm::Rc4_40, Algorithm::Rc4_128, Algorithm::Rc4_128CryptFilter, Algorithm::Aes128, Algorithm::Aes256];
 
 #[test]
 fn every_algorithm_round_trips_and_hides_the_content() {
@@ -292,6 +292,7 @@ fn each_level_writes_the_version_its_encryption_needs() {
         (Algorithm::Rc4_40, true, "1.3"),
         (Algorithm::Rc4_128, true, "1.4"),
         (Algorithm::Rc4_128, false, "1.5"),
+        (Algorithm::Rc4_128CryptFilter, true, "1.5"),
         (Algorithm::Aes128, true, "1.6"),
         (Algorithm::Aes256, true, "1.7"),
     ] {

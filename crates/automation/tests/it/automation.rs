@@ -3098,7 +3098,8 @@ fn protecting_through_tools() {
     ok(&mut c, "doc_open", json!({ "path": "open.pdf" }));
 }
 
-/// Each compatibility level writes its encryption and the PDF version it needs: 128-bit RC4 that
+/// Each compatibility level writes its encryption and the PDF version it needs: Acrobat 6.0
+/// (`rc4-128-crypt-filter`) is 128-bit RC4 through a crypt filter, PDF 1.5; 128-bit RC4 that
 /// leaves the metadata unencrypted goes through a crypt filter (PDF 1.5, ISO 32000-2 Table 20
 /// `V 4`) instead of being written with the metadata encrypted; AES-128 needs PDF 1.6 (Table 25)
 /// and AES-256 PDF 1.7 with Adobe extension level 8. 40-bit RC4 cannot leave it unencrypted, so
@@ -3111,6 +3112,7 @@ fn each_compatibility_level_writes_its_encryption_and_version() {
     let mut a = auto(&dir);
     for (compatibility, header, entries) in [
         ("rc4-128", "%PDF-1.5", &["/V 4", "/R 4", "/CFM /V2", "/EncryptMetadata false"][..]),
+        ("rc4-128-crypt-filter", "%PDF-1.5", &["/V 4", "/R 4", "/CFM /V2"][..]),
         ("aes-128", "%PDF-1.6", &["/V 4", "/CFM /AESV2", "/EncryptMetadata false"][..]),
         ("aes-256", "%PDF-1.7", &["/V 5", "/CFM /AESV3", "/BaseVersion /1.7", "/ExtensionLevel 8"][..]),
     ] {
@@ -3118,7 +3120,7 @@ fn each_compatibility_level_writes_its_encryption_and_version() {
         ok(
             &mut a,
             "doc_protect",
-            json!({ "doc": doc, "open_password": "open", "compatibility": compatibility, "encrypt_metadata": compatibility == "aes-256" }),
+            json!({ "doc": doc, "open_password": "open", "compatibility": compatibility, "encrypt_metadata": matches!(compatibility, "aes-256" | "rc4-128-crypt-filter") }),
         );
         let out = format!("{compatibility}.pdf");
         ok(&mut a, "doc_save", json!({ "doc": doc, "path": out }));

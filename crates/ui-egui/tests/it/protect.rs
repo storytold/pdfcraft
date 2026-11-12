@@ -83,11 +83,13 @@ fn editing_restrictions_via_advanced_options() {
     assert!(h.state().session.get(id).unwrap().allows_security_change());
 }
 
-/// Advanced Options names each encryption with the PDF version it needs, and leaving the metadata
-/// unencrypted works with 128-bit RC4 (through a crypt filter, `/V 4`, PDF 1.5) instead of being
-/// written with the metadata encrypted; 40-bit RC4 has no crypt filter, so the option is disabled.
+/// Advanced Options lists the guide's five compatibility levels, each with the PDF version it
+/// needs, and offers "All document contents except metadata" from Acrobat 6.0 on (Acrobat 9 guide:
+/// "This option is available when you select a compatibility to Acrobat 6.0 and later"): the
+/// levels whose encryption has crypt filters, where ISO 32000-2 Table 21 `EncryptMetadata` means
+/// something. Acrobat 6.0 writes 128-bit RC4 through a crypt filter (`/V 4`, `/CFM /V2`).
 #[test]
-fn rc4_128_can_leave_the_metadata_unencrypted() {
+fn acrobat_6_and_later_can_leave_the_metadata_unencrypted() {
     use egui::accesskit::Role;
 
     let mut h = harness();
@@ -101,18 +103,33 @@ fn rc4_128_can_leave_the_metadata_unencrypted() {
         h.get_by_label(to).click();
         h.run_steps(2);
     };
+    const X: &str = "Acrobat X and later (PDF 1.7, 256-bit AES)";
+    const A6: &str = "Acrobat 6.0 and later (PDF 1.5, 128-bit RC4)";
     const EXCEPT: &str = "All document contents except metadata";
     let disabled = |h: &Harness<'static, PdfCraftApp>| h.query_by(|n| n.label().as_deref() == Some(EXCEPT) && n.is_disabled()).is_some();
-    for label in ["128-bit AES (PDF 1.6)", "128-bit RC4 (PDF 1.4)", "40-bit RC4 (PDF 1.3)"] {
-        pick(&mut h, "256-bit AES (PDF 2.0)", label);
-        assert_eq!(disabled(&h), label.starts_with("40-bit"), "{label}");
-        pick(&mut h, label, "256-bit AES (PDF 2.0)");
+    // The list, in the guide's order.
+    h.query_all_by_role(Role::ComboBox).find(|n| n.value().as_deref() == Some(X)).expect(X).click();
+    h.run_steps(2);
+    let levels = [
+        X,
+        "Acrobat 7.0 and later (PDF 1.6, 128-bit AES)",
+        A6,
+        "Acrobat 5.0 and later (PDF 1.4, 128-bit RC4)",
+        "Acrobat 3.0 and later (PDF 1.3, 40-bit RC4)",
+    ];
+    let tops: Vec<f32> = levels.iter().map(|l| h.get_by_label(l).rect().top()).collect();
+    assert!(tops.windows(2).all(|w| w[0] < w[1]), "in the guide's order: {tops:?}");
+    h.get_by_label(X).click();
+    h.run_steps(2);
+    assert!(!disabled(&h), "Acrobat X");
+    for (level, offered) in levels.iter().zip([true, true, true, false, false]).skip(1) {
+        pick(&mut h, X, level);
+        assert_eq!(!disabled(&h), offered, "{level}");
+        pick(&mut h, level, X);
     }
-    pick(&mut h, "256-bit AES (PDF 2.0)", "128-bit RC4 (PDF 1.4)");
+    pick(&mut h, X, A6);
     h.get_by_label(EXCEPT).click();
     h.run_steps(2);
-    // The crypt filter that says so is PDF 1.5, and the list says it.
-    assert!(h.query_all_by_role(Role::ComboBox).any(|n| n.value().as_deref() == Some("128-bit RC4 (PDF 1.5)")));
     type_into(&mut h, "Type Password", "Open-Sesame-42");
     type_into(&mut h, "Re-type Password", "Open-Sesame-42");
     h.get_by_label("Apply").click();

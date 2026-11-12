@@ -794,6 +794,7 @@ impl Automation {
                 None | Some("aes-256") => Algorithm::Aes256,
                 Some("aes-128") => Algorithm::Aes128,
                 Some("rc4-128") => Algorithm::Rc4_128,
+                Some("rc4-128-crypt-filter") => Algorithm::Rc4_128CryptFilter,
                 Some("rc4-40") => Algorithm::Rc4_40,
                 Some(o) => return Err(ToolError::InvalidArgs(format!("unknown compatibility {o:?}"))),
             },

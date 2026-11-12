@@ -260,7 +260,7 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 | 8 | 1.0 polish: performance, right-to-left, missing languages, keyboard-only (M14) | 55–95 |
 
 ## Progress log
-- **2026-11-12 (M8, protect.encryption-level):** Password protection writes the PDF version its encryption needs (RC4-40 1.3, RC4-128 1.4, a crypt filter 1.5, AES-128 1.6, AES-256 2.0 or 1.7 with Adobe extension level 8), raising and never lowering it; 128-bit RC4 that leaves the metadata unencrypted goes through an RC4 crypt filter. The levels are named by encryption and PDF version. Estimates unchanged.
+- **2026-11-12 (M8, protect.encryption-level):** Password protection writes the PDF version its encryption needs (RC4-40 1.3, RC4-128 1.4, a crypt filter 1.5, AES-128 1.6, AES-256 2.0 or 1.7 with Adobe extension level 8), raising and never lowering it; 128-bit RC4 that leaves the metadata unencrypted goes through an RC4 crypt filter. The dialog lists the guide's five compatibility levels (Acrobat 6.0, 128-bit RC4 through a crypt filter, added), each with the PDF version it needs. Estimates unchanged.
 
 - **2026-11-09 (M10, #5130):** Windows Printer default sends native two-sided bindings only when automatic duplex support is confirmed, preserving manual driver defaults (#5130/#5772); physical output remains unqualified. Both Windows submission paths preserve DLL guards and current spooler fixes. Review follow-up validates both duplex scopes through craft-print 9fe50c94 and corrects CI formatting. Estimates unchanged.
 

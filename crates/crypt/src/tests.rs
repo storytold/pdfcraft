@@ -59,7 +59,7 @@ fn new(alg: Algorithm, user: &str, owner: &str, perms: i32) -> SecurityHandler {
     .unwrap()
 }
 
-const ALL: [Algorithm; 4] = [Algorithm::Rc4_40, Algorithm::Rc4_128, Algorithm::Aes128, Algorithm::Aes256];
+const ALL: [Algorithm; 5] = [Algorithm::Rc4_40, Algorithm::Rc4_128, Algorithm::Rc4_128CryptFilter, Algorithm::Aes128, Algorithm::Aes256];
 
 #[test]
 fn created_encryption_authenticates_owner_and_user() {
@@ -105,6 +105,16 @@ fn rc4_that_leaves_metadata_unencrypted_uses_a_crypt_filter() {
     let r2 = make(Algorithm::Rc4_40, false);
     assert_eq!((r2.dict().v, r2.dict().r, r2.dict().encrypt_metadata), (1, 2, true));
     assert!(!Algorithm::Rc4_40.can_leave_metadata_unencrypted() && Algorithm::Rc4_128.can_leave_metadata_unencrypted());
+    // The Acrobat 6.0 level always goes through the crypt filter, metadata encrypted or not.
+    for encrypt_metadata in [true, false] {
+        let a6 = make(Algorithm::Rc4_128CryptFilter, encrypt_metadata);
+        let d = a6.dict();
+        assert_eq!((d.v, d.r, d.length_bits, d.encrypt_metadata), (4, 4, 128, encrypt_metadata));
+        assert_eq!(d.crypt_filters, vec![(b"StdCF".to_vec(), Method::Rc4)]);
+        assert_eq!(SecurityHandler::open(d.clone(), ID, Some("u")).unwrap().file_key(), a6.file_key());
+    }
+    assert_eq!(make(Algorithm::Rc4_128CryptFilter, false).file_key(), cf.file_key(), "the same file as 128-bit RC4 asked to leave it");
+    assert!(Algorithm::Rc4_128CryptFilter.has_crypt_filters() && !Algorithm::Rc4_128.has_crypt_filters() && !Algorithm::Rc4_40.has_crypt_filters());
 }
 
 #[test]
