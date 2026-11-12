@@ -1188,10 +1188,10 @@ pub fn tools() -> Vec<ToolDef> {
                     "doc": doc(),
                     "pages": pages("to split (default: all)"),
                     "direction": { "type": "string", "enum": ["vertical", "horizontal", "grid"] },
-                    "parts": { "type": "integer", "minimum": 2, "description": "Number of parts (default 2 for 50/50 split)" },
-                    "rows": { "type": "integer", "minimum": 1, "description": "Number of rows (for grid mode)" },
-                    "columns": { "type": "integer", "minimum": 1, "description": "Number of columns (for grid mode)" },
-                    "ratio": { "type": "number", "minimum": 0.01, "maximum": 0.99, "description": "Custom cut ratio (0.01..0.99)" }
+                    "parts": { "type": "integer", "minimum": 2, "maximum": 100, "description": "Number of parts (default 2 for 50/50 split)" },
+                    "rows": { "type": "integer", "minimum": 1, "maximum": 50, "description": "Number of rows (for grid mode)" },
+                    "columns": { "type": "integer", "minimum": 1, "maximum": 50, "description": "Number of columns (for grid mode)" },
+                    "ratio": { "type": "number", "minimum": 0.0, "maximum": 1.0, "description": "Custom cut ratio (0.0..1.0)" }
                 }),
                 &["doc"],
             )),

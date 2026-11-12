@@ -1020,12 +1020,16 @@ impl Automation {
             (0..n).collect()
         };
         let direction = a.opt_str("direction")?.unwrap_or("vertical");
-        let parts = a.opt_int("parts")?.unwrap_or(2) as usize;
         let split = match direction {
             "vertical" => {
                 if let Some(ratio) = a.opt_num("ratio")? {
                     pdfcraft_engine::PageSplit::VerticalRatio(ratio)
                 } else {
+                    let parts = usize::try_from(a.opt_int("parts")?.unwrap_or(2))
+                        .map_err(|_| ToolError::InvalidArgs("parts must be a positive integer".into()))?;
+                    if !(2..=100).contains(&parts) {
+                        return Err(ToolError::InvalidArgs("parts must be between 2 and 100".into()));
+                    }
                     pdfcraft_engine::PageSplit::Vertical { parts }
                 }
             }
@@ -1033,12 +1037,23 @@ impl Automation {
                 if let Some(ratio) = a.opt_num("ratio")? {
                     pdfcraft_engine::PageSplit::HorizontalRatio(ratio)
                 } else {
+                    let parts = usize::try_from(a.opt_int("parts")?.unwrap_or(2))
+                        .map_err(|_| ToolError::InvalidArgs("parts must be a positive integer".into()))?;
+                    if !(2..=100).contains(&parts) {
+                        return Err(ToolError::InvalidArgs("parts must be between 2 and 100".into()));
+                    }
                     pdfcraft_engine::PageSplit::Horizontal { parts }
                 }
             }
             "grid" => {
-                let rows = a.opt_int("rows")?.unwrap_or(2) as usize;
-                let columns = a.opt_int("columns")?.unwrap_or(2) as usize;
+                let rows =
+                    usize::try_from(a.opt_int("rows")?.unwrap_or(2)).map_err(|_| ToolError::InvalidArgs("rows must be a positive integer".into()))?;
+                let columns = usize::try_from(a.opt_int("columns")?.unwrap_or(2))
+                    .map_err(|_| ToolError::InvalidArgs("columns must be a positive integer".into()))?;
+                let total = rows.checked_mul(columns).ok_or_else(|| ToolError::InvalidArgs("grid dimensions overflow".into()))?;
+                if rows < 1 || columns < 1 || rows > 50 || columns > 50 || total < 2 {
+                    return Err(ToolError::InvalidArgs("rows and columns must be between 1 and 50, with at least 2 total cells".into()));
+                }
                 pdfcraft_engine::PageSplit::Grid { rows, columns }
             }
             other => return Err(ToolError::InvalidArgs(format!("unsupported split direction: {other}"))),

@@ -62,8 +62,8 @@ pub fn calculate_slices(crop: [f64; 4], rot: u16, split: PageSplit) -> Result<Ve
     let mut visual_rects = Vec::new();
     match split {
         PageSplit::Vertical { parts } => {
-            if parts < 2 {
-                return Err(OrganizeError::Invalid("vertical split requires at least 2 parts".into()));
+            if !(2..=100).contains(&parts) {
+                return Err(OrganizeError::Invalid("vertical split requires between 2 and 100 parts".into()));
             }
             let n = parts as f64;
             for i in 0..parts {
@@ -73,8 +73,8 @@ pub fn calculate_slices(crop: [f64; 4], rot: u16, split: PageSplit) -> Result<Ve
             }
         }
         PageSplit::Horizontal { parts } => {
-            if parts < 2 {
-                return Err(OrganizeError::Invalid("horizontal split requires at least 2 parts".into()));
+            if !(2..=100).contains(&parts) {
+                return Err(OrganizeError::Invalid("horizontal split requires between 2 and 100 parts".into()));
             }
             let n = parts as f64;
             for i in 0..parts {
@@ -84,8 +84,13 @@ pub fn calculate_slices(crop: [f64; 4], rot: u16, split: PageSplit) -> Result<Ve
             }
         }
         PageSplit::Grid { rows, columns } => {
-            if rows < 1 || columns < 1 || (rows * columns < 2) {
-                return Err(OrganizeError::Invalid("grid split requires at least 2 total cells".into()));
+            let total = rows.checked_mul(columns).ok_or_else(|| {
+                OrganizeError::Invalid("grid dimensions overflow".into())
+            })?;
+            if rows < 1 || columns < 1 || rows > 50 || columns > 50 || total < 2 {
+                return Err(OrganizeError::Invalid(
+                    "grid split requires between 1 and 50 rows/columns and at least 2 total cells".into(),
+                ));
             }
             let r_f = rows as f64;
             let c_f = columns as f64;
@@ -100,15 +105,15 @@ pub fn calculate_slices(crop: [f64; 4], rot: u16, split: PageSplit) -> Result<Ve
             }
         }
         PageSplit::VerticalRatio(ratio) => {
-            if !ratio.is_finite() || !(0.01..=0.99).contains(&ratio) {
-                return Err(OrganizeError::Invalid("vertical split ratio must be between 0.01 and 0.99".into()));
+            if !ratio.is_finite() || ratio <= 0.0 || ratio >= 1.0 {
+                return Err(OrganizeError::Invalid("vertical split ratio must be between 0.0 and 1.0".into()));
             }
             visual_rects.push((0.0, 0.0, ratio, 1.0));
             visual_rects.push((ratio, 0.0, 1.0, 1.0));
         }
         PageSplit::HorizontalRatio(ratio) => {
-            if !ratio.is_finite() || !(0.01..=0.99).contains(&ratio) {
-                return Err(OrganizeError::Invalid("horizontal split ratio must be between 0.01 and 0.99".into()));
+            if !ratio.is_finite() || ratio <= 0.0 || ratio >= 1.0 {
+                return Err(OrganizeError::Invalid("horizontal split ratio must be between 0.0 and 1.0".into()));
             }
             visual_rects.push((0.0, 0.0, 1.0, ratio));
             visual_rects.push((0.0, ratio, 1.0, 1.0));

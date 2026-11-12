@@ -54,5 +54,9 @@ fn split_parts_vertical_horizontal_and_undo() {
     let r = tool(&mut a, "page_split_parts", json!({ "doc": doc, "direction": "grid", "rows": 2, "columns": 2 }));
     assert_eq!(r["pages"], 8);
 
+    // Rejects invalid / out-of-bound bounds.
+    assert!(a.call("page_split_parts", &json!({ "doc": doc, "parts": -1 })).is_err());
+    assert!(a.call("page_split_parts", &json!({ "doc": doc, "parts": 999 })).is_err());
+
     let _ = std::fs::remove_dir_all(&dir);
 }
