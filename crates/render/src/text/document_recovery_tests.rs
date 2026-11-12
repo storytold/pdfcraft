@@ -445,3 +445,49 @@ fn the_survey_reads_each_font_as_the_built_font_does() {
     let wrapped = &found[3].1.as_ref().unwrap().2;
     assert_eq!((wrapped[7], wrapped[5000]), (Some((65_536 + 7) % 300), Some(5000 % 300)), "CID 7 takes entry 65,543; CID 5000 its own");
 }
+
+/// Read with a document, font objects with byte-identical dictionaries are fonts of their own,
+/// each decided by the rules, so the page's budget of fonts asked (1,024) counts each of them: a
+/// page past it keeps its strict text. Counted by their shared dictionary, they were one font,
+/// and any number of them ran their guards.
+#[test]
+fn font_objects_with_the_same_dictionary_each_count_toward_the_page_font_budget() {
+    const FONTS_ASKED: usize = 1 << 10;
+    const CFF: &[u8] = include_bytes!("../../../../vendor/hayro-interpret/assets/FoxitFixed.pfb");
+    // Objects: 3 the page, 4 its content, 5 the descriptor, 6 the program, 7 onwards the fonts.
+    let page = |fonts: usize| {
+        let resources: String = (0..fonts).map(|i| format!("/F{i} {} 0 R ", 7 + i)).collect();
+        // Each font shows its word in a cell of its own, all of them on the page.
+        let content: String =
+            (0..fonts).map(|i| format!("/F{i} 6 Tf 1 0 0 1 {} {} Tm <010203> Tj ", 10 + 20 * (i % 29), 290 - 8 * (i / 29))).collect();
+        let mut pdf = pdfcraft_testkit::Pdf::new()
+            .obj("<< /Type /Catalog /Pages 2 0 R >>")
+            .obj("<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 300] >>")
+            .obj(format!("<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Font << {resources}>> >> >>"))
+            .stream("", format!("BT {content}ET"))
+            .obj(
+                "<< /Type /FontDescriptor /FontName /Numbered /Flags 4 /FontBBox [0 -200 1000 900] /ItalicAngle 0 /Ascent 800 /Descent -200 \
+                 /CapHeight 700 /StemV 80 /FontFile3 6 0 R >>",
+            )
+            .stream("/Subtype /Type1C", CFF);
+        for _ in 0..fonts {
+            pdf = pdf.obj(
+                "<< /Type /Font /Subtype /Type1 /BaseFont /Numbered /FirstChar 1 /LastChar 3 /Widths [600 600 600] /FontDescriptor 5 0 R \
+                 /Encoding << /Type /Encoding /Differences [1 /C83 /C111 /C99] >> >>",
+            );
+        }
+        parse(pdf.build())
+    };
+    let document = || settings(Some(Arc::new(RecoveryDocument::new())));
+
+    let within = page(FONTS_ASKED);
+    let before = recovery_counters();
+    let text = recovered(&within, 0, &document());
+    assert_eq!(recovery_counters().since(&before).guard_decisions, FONTS_ASKED, "each font object is decided");
+    assert_eq!(text.matches("Soc").count(), FONTS_ASKED);
+
+    let past = page(FONTS_ASKED + 1);
+    let (strict, layer) = extract_page_recovering(&past, 0, &document()).unwrap();
+    assert!(layer.is_none(), "past the fonts asked, the page has no recovered layer");
+    assert!(!strict.plain_text().contains("Soc"), "the strict text is kept as it is");
+}
