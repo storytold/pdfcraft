@@ -16,6 +16,8 @@ use crate::OrganizeError;
 const MAX_FORM_DEPTH: u8 = 8;
 /// Count every resource object and direct child; a graph beyond this is left unpruned.
 const MAX_GLYPH_RESOURCE_WORK: usize = 10_000;
+/// Resource entries [`Pruner::lend_own`] may queue in one run; a file that needs more is not pruned.
+const MAX_LEND_WORK: usize = 100_000;
 
 /// The dictionary a set of drawn names belongs to.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -64,8 +66,10 @@ struct Pruner<'a> {
     /// page's for a name its own don't list. One the content draws nothing from is left as it
     /// is, not emptied.
     lent: HashSet<XKey>,
-    /// Streams whose resources were lent already ([`Pruner::lend_own`]).
+    /// Streams, and shared resource dictionaries, lent from already ([`Pruner::lend_own`]).
     lent_from: HashSet<ObjRef>,
+    /// What is left of [`MAX_LEND_WORK`]; none left means the file is not pruned.
+    lend_work_left: usize,
 }
 
 impl Pruner<'_> {
@@ -203,16 +207,30 @@ impl Pruner<'_> {
             }
             let Object::Stream(s) = &*self.doc.get(r) else { continue };
             let Some(res) = s.dict.get(b"Resources") else { continue };
+            // Resources many streams share are lent from once.
+            if res.as_ref().is_some_and(|rr| !self.lent_from.insert(rr)) {
+                continue;
+            }
             let Some(dict) = self.doc.resolve(res).as_dict().cloned() else { continue };
             if depth > MAX_FORM_DEPTH {
                 self.too_deep = true;
                 return;
             }
+            let owner = Owner::Resources(res.as_ref().unwrap_or(r));
+            // Type 3 glyphs draw from resources of their own, which nothing here reads either.
+            self.protect_type3_resources(&dict, owner);
             let mut inner: Vec<Object> = lenders(self.doc, &dict);
-            if let Some((xobjects, key)) = self.xobjects(&dict, Owner::Resources(res.as_ref().unwrap_or(r))) {
+            if let Some((xobjects, key)) = self.xobjects(&dict, owner) {
                 self.lent.insert(key);
                 inner.extend(xobjects.iter().map(|(_, x)| x.clone()));
             }
+            #[cfg(test)]
+            crate::work(inner.len());
+            let Some(left) = self.lend_work_left.checked_sub(inner.len()) else {
+                self.lend_work_left = 0;
+                return;
+            };
+            self.lend_work_left = left;
             todo.extend(inner.iter().filter_map(Object::as_ref).map(|x| (x, depth + 1)));
         }
     }
@@ -426,6 +444,7 @@ pub(crate) fn prune_unused_xobjects(doc: &mut Document) -> Result<usize, Organiz
         partly_read: HashSet::new(),
         lent: HashSet::new(),
         lent_from: HashSet::new(),
+        lend_work_left: MAX_LEND_WORK,
     };
     for (page, attrs) in &pages {
         let Some(pd) = pruner.doc.get(*page).as_dict().cloned() else { continue };
@@ -446,8 +465,8 @@ pub(crate) fn prune_unused_xobjects(doc: &mut Document) -> Result<usize, Organiz
             Ok((_, true)) | Err(_) => pruner.unread(&res_dict, owner, 0),
         }
     }
-    let Pruner { used, unsure, glyph_budget_exhausted, too_deep, lent, .. } = pruner;
-    if glyph_budget_exhausted || too_deep {
+    let Pruner { used, unsure, glyph_budget_exhausted, too_deep, lent, lend_work_left, .. } = pruner;
+    if glyph_budget_exhausted || too_deep || lend_work_left == 0 {
         return Ok(0);
     }
     let mut removed = 0;

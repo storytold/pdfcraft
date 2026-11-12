@@ -5095,6 +5095,49 @@ fn a_part_whose_appearance_or_pattern_may_draw_an_image_keeps_them() {
     assert!(page_dict(&bare, 0).get(b"Resources").is_none(), "the case needs a page without resources");
     let ap = bare.resolve(annots(&bare, 0)[0].get(b"AP").unwrap()).as_dict().cloned().unwrap();
     assert!(xo(&bare, &res(&bare, ap.get(b"N").unwrap())).contains(b"ImA"), "the image of an appearance on a page without resources must stay");
+    // And Type 3 glyphs an appearance shows keep the image they draw from their own resources.
+    let glyphs = part_of(
+        "<< /Type /Page /Parent 2 0 R /Contents 9 0 R /Annots [<< /Type /Annot /Subtype /Square /Rect [0 0 50 50] /AP << /N 11 0 R >> >>] >>",
+        "<< /XObject << /Fm 10 0 R >> >>",
+        vec![
+            raw("/Fm Do"),
+            form("0 0 m"),
+            "<< /Subtype /Form /BBox [0 0 50 50] /Resources << /Font << /T3 13 0 R >> >> /Length 21 >>\nstream\nBT /T3 1 Tf (a) Tj ET\nendstream"
+                .into(),
+            "<< /XObject << /ImA 7 0 R >> >>".into(),
+            "<< /Type /Font /Subtype /Type3 /FontBBox [0 0 1 1] /FontMatrix [0.001 0 0 0.001 0 0] /CharProcs << /a 14 0 R >> \
+             /Encoding << /Type /Encoding /Differences [97 /a] >> /FirstChar 97 /LastChar 97 /Widths [1000] /Resources 12 0 R >>"
+                .into(),
+            raw("/ImA Do"),
+        ],
+    );
+    let ap = glyphs.resolve(annots(&glyphs, 0)[0].get(b"AP").unwrap()).as_dict().cloned().unwrap();
+    let fonts = glyphs.resolve(res(&glyphs, ap.get(b"N").unwrap()).get(b"Font").unwrap()).as_dict().cloned().unwrap();
+    assert!(xo(&glyphs, &res(&glyphs, fonts.get(b"T3").unwrap())).contains(b"ImA"), "the image a Type 3 glyph draws must stay");
+}
+
+/// Forms an appearance lists that share one resource dictionary walk it once, so lending stays
+/// linear in the file.
+#[test]
+fn lending_walks_shared_resources_once() {
+    let n = 300;
+    let names = |f: &dyn Fn(usize) -> String| (0..n).map(f).collect::<Vec<_>>().join(" ");
+    let mut b: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << >> /Annots [<< /Type /Annot /Subtype /Square /Rect [0 0 50 50] /AP << /N 5 0 R >> >>] >>"
+            .into(),
+        raw("0 0 m"),
+        format!("<< /Subtype /Form /BBox [0 0 50 50] /Resources << /XObject << {} >> >> /Length 5 >>\nstream\n0 0 m\nendstream", names(&|i| format!("/F{i} {} 0 R", 8 + i))),
+        format!("<< /XObject << {} >> >>", names(&|i| format!("/I{i} 7 0 R"))),
+        image(1, 1, 1),
+    ];
+    b.extend((0..n).map(|_| "<< /Subtype /Form /BBox [0 0 1 1] /Resources 6 0 R /Length 5 >>\nstream\n0 0 m\nendstream".to_string()));
+    let src = open(build(&b, "/Root 1 0 R"));
+    take_work();
+    extract_pages(&src, &[0]).unwrap();
+    let worked = take_work();
+    assert!(worked < 3 * n, "lending queued {worked} entries for {n} forms sharing {n} images");
 }
 
 /// A page without `/Contents` draws nothing either.
