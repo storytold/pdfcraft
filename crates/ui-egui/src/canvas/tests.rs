@@ -3461,6 +3461,26 @@ fn a_marking_tool_waits_for_the_selections_pages() {
     assert_eq!(v.tool_marks(tool, false, Some(0), false, &info), ToolMarks::None, "cleared");
 }
 
+/// Review of #5017: a wait ends as soon as the selection changes, so a new drag that passes back
+/// through the selection it was for doesn't mark that selection before the drag is let go.
+#[test]
+fn a_wait_ends_when_the_selection_changes() {
+    let info = thumbnail_info(3);
+    let mut v = DocView::new(DocId(1), &info, ViewDefaults::default());
+    v.texts.insert(0, Arc::new(line_text("abc")));
+    v.texts.insert(2, Arc::new(line_text("ghi")));
+    let sel = Selection { page: 0, span: Span::Run { anchor: 1, head: 1, head_page: 2 } };
+    v.selection = Some(sel);
+    let tool = QuickTool::Comment(comments::CommentTool::Underline);
+    assert_eq!(v.tool_marks(tool, true, Some(0), false, &info), ToolMarks::None, "page 2 is not read yet");
+    // A new drag starts elsewhere, page 2 is read, and the drag comes back to the same selection.
+    v.selection = Some(Selection::run(0, 0, 0));
+    assert_eq!(v.tool_marks(tool, false, Some(0), false, &info), ToolMarks::None);
+    v.texts.insert(1, Arc::new(line_text("def")));
+    v.selection = Some(sel);
+    assert_eq!(v.tool_marks(tool, false, Some(0), false, &info), ToolMarks::None, "not marked mid-drag");
+}
+
 /// Review of #5017 (FredApps): marks a tool is still waiting to make, for a page whose text has
 /// not arrived, never land on a page that changed or went away meanwhile. Deleting a page, or a
 /// change to a page the selection covers, ends the selection, and the wait goes with it.

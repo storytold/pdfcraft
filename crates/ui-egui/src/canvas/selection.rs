@@ -218,6 +218,9 @@ impl DocView {
             self.marks_waiting = Some((tool, sel));
         }
         if self.marks_waiting != Some((tool, sel)) {
+            // The selection or the tool changed: the wait is over, so a drag passing back through
+            // the selection it was for doesn't mark it before it is released.
+            self.marks_waiting = None;
             return ToolMarks::None;
         }
         if whole && self.selection_has_unreadable_page() {

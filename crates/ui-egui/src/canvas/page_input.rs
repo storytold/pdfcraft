@@ -823,10 +823,12 @@ fn selection_click_count(clicks: u32, tool: QuickTool) -> u32 {
 fn update_dragged_selection(view: &mut DocView, text: &PageText, gesture: &TextGesture<'_>) {
     let clicks = selection_click_count(view.clicks, gesture.tool);
     // The drag extends the selection on its own page and, for a reading-order selection the drag
-    // started, on any page the pointer moves on to.
-    if gesture.resp.dragged_by(egui::PointerButton::Primary)
+    // started, on any page the pointer moves on to. Its release frame too: a quick flick back
+    // onto an earlier page, drawn before the page that started the drag, may be over it only then.
+    let selecting = view.selection_drag || view.selection_drag_ended;
+    if (gesture.resp.dragged_by(egui::PointerButton::Primary) || gesture.resp.drag_stopped_by(egui::PointerButton::Primary))
         && let Some(mut selection) =
-            view.selection.filter(|selection| selection.page == gesture.page || (view.selection_drag && matches!(selection.span, Span::Run { .. })))
+            view.selection.filter(|selection| selection.page == gesture.page || (selecting && matches!(selection.span, Span::Run { .. })))
     {
         let hit = text.nearest(gesture.vx, gesture.vy);
         match selection.span {

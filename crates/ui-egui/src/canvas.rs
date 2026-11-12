@@ -605,6 +605,9 @@ pub struct DocView {
     /// The drag in progress started a text selection: the wheel scrolls the page during it
     /// (#721), which egui's scroll area refuses while anything is dragged.
     selection_drag: bool,
+    /// The frame a text-selection drag is released: `selection_drag` is already off, but the
+    /// pages still extend the selection to where it was let go.
+    selection_drag_ended: bool,
     /// Clicks in the current run on the text layer: two select a word, three the line, four the page.
     clicks: u32,
     last_press_time: f64,
@@ -1019,6 +1022,7 @@ impl DocView {
         self.org_drag = None;
         self.panel_drag = None;
         self.selection_drag = false;
+        self.selection_drag_ended = false;
         self.router.cancel();
         self.auto_scroll.cancel();
         self.prepare.cancel_pointer_gesture();
@@ -1100,6 +1104,7 @@ impl DocView {
             all_text: false,
             actions_dismissed: None,
             selection_drag: false,
+            selection_drag_ended: false,
             clicks: 0,
             last_press_time: 0.0,
             last_press_pos: None,
@@ -1890,6 +1895,7 @@ fn draw_pages(
     let (resp_rect, resp) = ui.allocate_exact_size(response_size, Sense::click_and_drag());
     view.page_widget = Some(resp.id);
     // A drag lasts only while egui reports it, so the mark can't outlive one.
+    view.selection_drag_ended = view.selection_drag && resp.drag_stopped_by(egui::PointerButton::Primary);
     if !resp.dragged_by(egui::PointerButton::Primary) {
         view.selection_drag = false;
     }

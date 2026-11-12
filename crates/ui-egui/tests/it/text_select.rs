@@ -105,16 +105,18 @@ fn quick_clicks_with_the_highlighter_mark_only_the_word() {
     assert!(app.views[0].selected_text().is_none());
 }
 
-/// Wait (a few frames at most, well inside the multi-click window) for the page a mark just
-/// re-rendered to have its text layer back.
-fn text_back(h: &mut Harness<'static, PdfCraftApp>) {
-    for _ in 0..8 {
-        if !h.state().render_pending() {
-            break;
+/// Wait for the page a mark just re-rendered to have its text layer back, glyph `g` of page 1
+/// on screen, within the multi-click window: at most 12 frames of 1/60 s, with real time between
+/// them for the render to finish.
+fn text_back(h: &mut Harness<'static, PdfCraftApp>, g: usize) {
+    for _ in 0..12 {
+        if !h.state().render_pending() && h.state().views[0].glyph_screen_pos(0, g).is_some() {
+            return;
         }
-        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::thread::sleep(std::time::Duration::from_millis(25));
         h.run_steps(1);
     }
+    panic!("the text layer did not come back within the multi-click window");
 }
 
 /// Review of #5017: with a markup tool, a third quick press after a double-click starts over
@@ -124,10 +126,9 @@ fn text_back(h: &mut Harness<'static, PdfCraftApp>) {
 fn a_markup_drag_right_after_a_double_click_marks_what_it_drags_over() {
     let (mut h, at) = harness(|app| assert!(app.execute("comment.underline")));
     click(&mut h, at);
-    text_back(&mut h);
     click(&mut h, at);
-    text_back(&mut h);
     // A glyph inside "jumps over the dog", on the second line.
+    text_back(&mut h, 23);
     let below = h.state().views[0].glyph_screen_pos(0, 23).expect("glyph on screen");
     press_and_move(&mut h, at, below);
     h.event(Event::PointerButton { pos: below, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
@@ -893,6 +894,22 @@ fn a_flick_off_the_page_still_selects_from_the_press() {
     h.hover_at(gap);
     h.run_steps(1);
     assert_eq!(h.state().views[0].selected_text().as_deref(), Some("e"), "started at the press, on page 1; the gap moves nothing");
+    h.hover_at(to);
+    h.run_steps(1);
+    h.event(Event::PointerButton { pos: to, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(1);
+    assert_eq!(h.state().views[0].selected_text().as_deref(), Some("ends with this line\nPage 2 ends"));
+}
+
+/// Review of #5017: a flick back up onto the page before, let go on the frame after the drag
+/// starts, selects up to where it was let go. The earlier page is drawn first, so the release
+/// frame is the only one that sees the pointer over it with the selection started.
+#[test]
+fn a_flick_back_onto_the_page_before_selects_to_the_release() {
+    let mut h = three_pages();
+    let (from, to) = (glyph_on(&h, 1, 10), glyph_on(&h, 0, 7));
+    h.event(Event::PointerButton { pos: from, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run_steps(1);
     h.hover_at(to);
     h.run_steps(1);
     h.event(Event::PointerButton { pos: to, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
