@@ -8515,6 +8515,41 @@ fn dynamic_xfa_usage_rights_edge_cases_reconstructed_undo_past_save_and_imports(
         s.undo(iid).unwrap();
         assert!(!s.get(iid).unwrap().xfa.as_ref().unwrap().warnings.iter().any(|w| w.contains("usage rights")));
     }
+
+    // 5. `keeps_xfa_usage_rights` rejects non-empty `xfa_errors`, accepts `SetFieldImageTarget` on
+    //    an XFA-bound image field, and rejects `SetFieldImage` on a PDF-only `ImportIcon` button.
+    let cos_snapshot = s.doc_mut(iid).unwrap().editor.as_ref().unwrap().cos.clone();
+    assert!(!crate::xfa_form::keeps_xfa_usage_rights(
+        &Edit::SetFieldValue { name: "familyName".into(), value: FieldValue::Text("Rao".into()) },
+        &cos_snapshot,
+        &cos_snapshot,
+        &[],
+        &["calculate script failed".into()],
+    ));
+    let mut img_cos = cos_snapshot;
+    pdfcraft_forms::add_field(&mut img_cos, 0, [72.0, 600.0, 140.0, 630.0], &pdfcraft_forms::NewField::Image, Some("pdfIcon")).unwrap();
+    let icon_obj = pdfcraft_forms::fields(&img_cos).into_iter().find(|f| f.name == "pdfIcon").unwrap().obj;
+    assert!(
+        !crate::xfa_form::keeps_xfa_usage_rights(
+            &Edit::SetFieldImage { name: "pdfIcon".into(), image: Arc::new(Vec::new()) },
+            &img_cos,
+            &img_cos,
+            &[],
+            &[]
+        ),
+        "PDF-only ImportIcon button without SOM_KEY must use the laid-out save path"
+    );
+    img_cos.update_dict(icon_obj, |d| d.set(pdfcraft_xfa::SOM_KEY.to_vec(), pdfcraft_cos::PdfString::text("form[0].head[0].pdfIcon[0]"))).unwrap();
+    assert!(
+        crate::xfa_form::keeps_xfa_usage_rights(
+            &Edit::SetFieldImageTarget { name: "pdfIcon".into(), object: icon_obj, image: Arc::new(Vec::new()) },
+            &img_cos,
+            &img_cos,
+            &[],
+            &[],
+        ),
+        "XFA-bound SetFieldImageTarget preserves usage-rights shell saving"
+    );
 }
 
 #[test]

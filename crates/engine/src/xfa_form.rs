@@ -418,6 +418,7 @@ pub(crate) fn keeps_xfa_usage_rights(
 ) -> bool {
     pdfcraft_xfa::existing_layout(next).is_some()
         && sync_warnings.is_empty()
+        && xfa_errors.is_empty()
         && pdfcraft_xfa::overrides_roundtrip(next)
         && edit_is_xfa_data_only(edit, prev, next, xfa_errors)
 }
@@ -426,9 +427,18 @@ fn edit_is_xfa_data_only(edit: &Edit, prev: &pdfcraft_cos::Document, next: &pdfc
     match edit {
         Edit::SetFieldValue { .. } | Edit::ResetForm { .. } => acroform_field_properties_unchanged(prev, next),
         Edit::XfaEvent { .. } => true,
-        Edit::SetFieldImage { name, .. } => {
+        Edit::SetFieldImage { name, .. } | Edit::SetFieldImageTarget { name, .. } => {
+            let target = match edit {
+                Edit::SetFieldImageTarget { object, .. } => Some(*object),
+                _ => None,
+            };
             xfa_errors.is_empty()
-                && pdfcraft_forms::fields(prev).iter().any(|f| f.name == *name && f.button == Some(pdfcraft_forms::af::ButtonAction::ImportIcon))
+                && pdfcraft_forms::fields(prev).iter().any(|f| {
+                    f.name == *name
+                        && target.is_none_or(|o| f.obj == o)
+                        && f.button == Some(pdfcraft_forms::af::ButtonAction::ImportIcon)
+                        && prev.get(f.obj).as_dict().is_some_and(|d| d.contains(pdfcraft_xfa::SOM_KEY))
+                })
         }
         Edit::ImportData { bytes, .. } => {
             !bytes[..bytes.len().min(1024)].windows(5).any(|w| w == b"%PDF-")
