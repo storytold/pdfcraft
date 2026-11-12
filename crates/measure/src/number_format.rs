@@ -187,33 +187,40 @@ pub(crate) fn read(doc: &Document, object: &Object) -> Result<Vec<NumberFormat>,
     if a.len() > MAX_UNITS {
         return Err("number formats of more than 8 units are not supported");
     }
-    a.iter().map(|o| read_one(doc, &doc.resolve(o))).collect()
+    a.iter().enumerate().map(|(i, o)| read_one(doc, &doc.resolve(o), i + 1 == a.len())).collect()
 }
 
-fn read_one(doc: &Document, o: &Object) -> Result<NumberFormat, &'static str> {
+fn read_one(doc: &Document, o: &Object, is_last: bool) -> Result<NumberFormat, &'static str> {
     let f = o.as_dict().ok_or("invalid number format dictionary")?;
     let get = |k: &[u8]| f.get(k).map(|v| doc.resolve(v));
     let text = |k: &[u8], default: &str| get(k).and_then(|v| v.as_string().map(PdfString::to_text)).unwrap_or_else(|| default.into());
-    let remainder = match get(b"F").as_deref().and_then(Object::as_name) {
-        None | Some(b"D") => Remainder::Decimal,
-        Some(b"F") => Remainder::Fraction,
-        Some(b"R") => Remainder::Round,
-        Some(b"T") => Remainder::Truncate,
-        Some(_) => return Err("unknown measurement number format"),
+    // ISO 32000-2 §12.9.2: only the last element formats a remainder (`/F`, `/D`, `/FD`);
+    // earlier elements always format whole units.
+    let (remainder, denominator, exact) = if is_last {
+        let remainder = match get(b"F").as_deref().and_then(Object::as_name) {
+            None | Some(b"D") => Remainder::Decimal,
+            Some(b"F") => Remainder::Fraction,
+            Some(b"R") => Remainder::Round,
+            Some(b"T") => Remainder::Truncate,
+            Some(_) => return Err("unknown measurement number format"),
+        };
+        let denominator = match remainder {
+            Remainder::Decimal => get(b"D").and_then(|v| v.as_int()).unwrap_or(100),
+            Remainder::Fraction => get(b"D").and_then(|v| v.as_int()).unwrap_or(16),
+            Remainder::Round | Remainder::Truncate => 1,
+        };
+        let denominator_ok = match remainder {
+            Remainder::Decimal => (0..=6).any(|p| 10_i64.pow(p) == denominator),
+            Remainder::Fraction => (1..=MAX_DENOMINATOR).contains(&denominator),
+            Remainder::Round | Remainder::Truncate => true,
+        };
+        if !denominator_ok {
+            return Err("unsupported measurement precision");
+        }
+        (remainder, denominator, matches!(get(b"FD").as_deref(), Some(Object::Bool(true))))
+    } else {
+        (Remainder::Decimal, 100, false)
     };
-    let denominator = match remainder {
-        Remainder::Decimal => get(b"D").and_then(|v| v.as_int()).unwrap_or(100),
-        Remainder::Fraction => get(b"D").and_then(|v| v.as_int()).unwrap_or(16),
-        Remainder::Round | Remainder::Truncate => 1,
-    };
-    let denominator_ok = match remainder {
-        Remainder::Decimal => (0..=6).any(|p| 10_i64.pow(p) == denominator),
-        Remainder::Fraction => (1..=MAX_DENOMINATOR).contains(&denominator),
-        Remainder::Round | Remainder::Truncate => true,
-    };
-    if !denominator_ok {
-        return Err("unsupported measurement precision");
-    }
     // An empty RD means the default decimal point.
     let decimal = Some(text(b"RD", ".")).filter(|s| !s.is_empty()).unwrap_or_else(|| ".".into());
     Ok(NumberFormat {
@@ -221,7 +228,7 @@ fn read_one(doc: &Document, o: &Object) -> Result<NumberFormat, &'static str> {
         factor: get(b"C").and_then(|v| v.as_f64()).ok_or("missing conversion factor")?,
         remainder,
         denominator,
-        exact: matches!(get(b"FD").as_deref(), Some(Object::Bool(true))),
+        exact,
         thousands: text(b"RT", ","),
         decimal,
         before: text(b"PS", " "),
@@ -231,13 +238,13 @@ fn read_one(doc: &Document, o: &Object) -> Result<NumberFormat, &'static str> {
 }
 
 /// Checks an array: 1 to [`MAX_UNITS`] elements, factors as a scale's, labels and separators of
-/// at most 24 printable characters, a decimal precision of 0 to 6 places and a denominator of 1
-/// to 65,536.
+/// at most 24 printable characters, and on the last element a decimal precision of 0 to 6 places
+/// or a fraction denominator of 1 to 65,536.
 fn validate(formats: &[NumberFormat]) -> Result<(), &'static str> {
     if formats.is_empty() || formats.len() > MAX_UNITS {
         return Err("number formats have 1 to 8 units");
     }
-    for f in formats {
+    for (i, f) in formats.iter().enumerate() {
         if !f.factor.is_finite() || !(1e-12..=1e12).contains(&f.factor) {
             return Err("scale factors must be finite and between 1e-12 and 1e12");
         }
@@ -247,13 +254,15 @@ fn validate(formats: &[NumberFormat]) -> Result<(), &'static str> {
         if [&f.thousands, &f.decimal, &f.before, &f.after].iter().any(|s| s.chars().count() > MAX_TEXT || s.chars().any(char::is_control)) {
             return Err("number format separators must be at most 24 printable characters");
         }
-        let denominator_ok = match f.remainder {
-            Remainder::Decimal => (0..=6).any(|p| 10_i64.pow(p) == f.denominator),
-            Remainder::Fraction => (1..=MAX_DENOMINATOR).contains(&f.denominator),
-            Remainder::Round | Remainder::Truncate => f.denominator == 1,
-        };
-        if !denominator_ok {
-            return Err("unsupported measurement precision");
+        if i + 1 == formats.len() {
+            let denominator_ok = match f.remainder {
+                Remainder::Decimal => (0..=6).any(|p| 10_i64.pow(p) == f.denominator),
+                Remainder::Fraction => (1..=MAX_DENOMINATOR).contains(&f.denominator),
+                Remainder::Round | Remainder::Truncate => f.denominator == 1,
+            };
+            if !denominator_ok {
+                return Err("unsupported measurement precision");
+            }
         }
     }
     Ok(())
@@ -506,6 +515,8 @@ mod tests {
             assert_eq!(parsed(&[], source).and_then(|f| validate(&f).map(|()| f)), Err(reason), "{source}");
         }
         assert_eq!(parsed(&[], "[<< /U (ft) /C 1 /F /F /D 65536 >>]").unwrap()[0].denominator, 65536);
+        // Only the last element's `/F` and `/D` format a remainder; earlier elements' `/F` and `/D` are ignored.
+        assert_eq!(parsed(&[], "[<< /U (ft) /C 1 /F /X /D 12 >> << /U (in) /C 12 /F /F /D 16 >>]").map(|f| f.len()), Ok(2));
         assert_eq!(parsed(&[], &units(MAX_UNITS)).map(|f| f.len()), Ok(MAX_UNITS));
     }
 

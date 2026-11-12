@@ -157,6 +157,12 @@ impl Scale {
         }
         if let Some(formats) = &self.formats {
             formats.validate().map_err(invalid)?;
+            if formats.y.is_some() {
+                let yf = self.y / formats.cyx;
+                if !yf.is_finite() || !(1e-12..=1e12).contains(&yf) {
+                    return Err(invalid("scale factors must be finite and between 1e-12 and 1e12"));
+                }
+            }
         }
         Ok(())
     }

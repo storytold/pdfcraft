@@ -701,4 +701,11 @@ fn a_compound_y_keeps_its_units_and_cyx() {
     close(again.y, scale.y);
     let formats = again.formats.unwrap();
     assert_eq!((formats.y.unwrap()[1].factor, formats.cyx), (100.0, 3.28084));
+    // If `Scale.y` is mutated so `self.y / cyx` exceeds the factor bound, `dictionary()` refuses it.
+    let mut overflow_y = scale;
+    if let Some(f) = &mut overflow_y.formats {
+        f.cyx = 1e-12;
+    }
+    overflow_y.y = 2.0;
+    assert!(overflow_y.dictionary().is_err());
 }
