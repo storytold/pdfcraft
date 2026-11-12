@@ -266,6 +266,19 @@ fn triangle_seed(x: f64, status: i32, face: u32) -> Recipe {
     Recipe::Seed { slots: [Slot::Point([x, 0.0, 0.0]), Slot::Point([x + 2.0, 0.0, 0.0]), Slot::Point([x, 2.0, 0.0])], status, face }
 }
 
+fn panel(target: V) -> Encoded {
+    encode(
+        [0.0; 3],
+        0.5,
+        &[
+            triangle_seed(0.0, 3, 0),
+            Recipe::Apex { edge: (2, 1), opposite: 0, slot: Slot::Point(target), status: 3, face: 0 },
+            Recipe::Apex { edge: (2, 3), opposite: 1, slot: Slot::Reference(0), status: 2, face: 0 },
+            Recipe::Apex { edge: (0, 3), opposite: 2, slot: Slot::Reference(1), status: 0, face: 0 },
+        ],
+    )
+}
+
 #[test]
 fn independent_seed_and_apex_match_a_hand_computed_stream() {
     let encoded = encode(
@@ -303,4 +316,39 @@ fn independent_components_and_a_reference_are_rebuilt() {
     assert_eq!(rebuilt.positions.len(), 6);
     let expected = [[0.0, 0.0, 0.0], [2.0, 0.0, 0.0], [0.0, 2.0, 0.0], [5.0, 0.0, 0.0], [7.0, 0.0, 0.0], [5.0, 2.0, 0.0]];
     assert_positions(&rebuilt.positions, &expected);
+}
+
+#[test]
+fn independent_fold_and_component_retry_rebuild_the_same_panel() {
+    let folded = [1.0 - 1.0 / S, 1.0 - S, 0.0];
+    let unfolded = [1.0 + S, 1.0 + 1.0 / S, 0.0];
+    for target in [folded, unfolded] {
+        let source = [[0.0, 0.0, 0.0], [2.0, 0.0, 0.0], [0.0, 2.0, 0.0], target];
+        let encoded = panel(target);
+        assert_within_tolerance(&encoded.positions, &source, 0.5);
+        let rebuilt = rebuild(&encoded.arrays(usize::MAX)).unwrap();
+        assert_eq!(rebuilt.triangles, [[0, 1, 2], [2, 1, 3], [2, 3, 0], [0, 3, 1]]);
+        assert_eq!(rebuilt.positions.len(), 4);
+        assert_within_tolerance(&rebuilt.positions, &source, 0.5);
+    }
+}
+
+#[test]
+fn independent_closed_continuation_uses_the_open_edge() {
+    let encoded = encode(
+        [0.0; 3],
+        0.5,
+        &[
+            triangle_seed(0.0, 2, 0),
+            Recipe::Apex { edge: (2, 1), opposite: 0, slot: Slot::Point([0.0, 0.0, 2.0]), status: 2, face: 0 },
+            Recipe::Apex { edge: (3, 1), opposite: 2, slot: Slot::Reference(0), status: 2, face: 0 },
+            Recipe::Apex { edge: (3, 0), opposite: 1, slot: Slot::Reference(2), status: 0, face: 0 },
+        ],
+    );
+
+    let source = [[0.0, 0.0, 0.0], [2.0, 0.0, 0.0], [0.0, 2.0, 0.0], [0.0, 0.0, 2.0]];
+    assert_within_tolerance(&encoded.positions, &source, 0.5);
+    let rebuilt = rebuild(&encoded.arrays(usize::MAX)).unwrap();
+    assert_eq!(rebuilt.triangles, [[0, 1, 2], [2, 1, 3], [3, 1, 0], [3, 0, 2]]);
+    assert_within_tolerance(&rebuilt.positions, &source, 0.5);
 }
