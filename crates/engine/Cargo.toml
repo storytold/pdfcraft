@@ -58,6 +58,8 @@ getrandom = "0.4"
 getrandom = { version = "0.4", features = ["wasm_js"] }
 
 [dev-dependencies]
+# Synthetic printer profiles for the app-managed print colour tests.
+craft-cms = { workspace = true }
 pdfcraft-testkit = { workspace = true }
 # JBIG2 fixtures (`encode_jbig2_generic`).
 pdfcraft-filters = { workspace = true }
