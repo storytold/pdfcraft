@@ -2252,6 +2252,12 @@ mod session {
         let names: String = (0..100_000).map(|i| format!("var v{i};")).collect();
         let e = with_objects(&mut s, "Wide.v1", &[object("Wide", None, &names)]).unwrap_err();
         assert!(e.contains("more than 2048"), "{e}");
+        // through the subform's variables: `#variables[0].name`, `subform.variables.name`, `variables.resolveNode(name)`
+        let header = object("headerScript", Some("form1[0].page1[0]"), "function configure(p) { return 'configured ' + p.name; }");
+        let calls = "page1.resolveNode('#variables[0].headerScript').configure(page1.parent) + ',' \
+            + xfa.resolveNode('form1.page1.#variables[0].headerScript').configure(page1) + ',' \
+            + page1.variables.headerScript.configure(page1) + ',' + xfa.form.resolveNode('form1.page1.#variables[0]').resolveNode('headerScript').configure(page1)";
+        assert_eq!(with_objects(&mut s, calls, &[header]).as_deref(), Ok("configured form1,configured page1,configured page1,configured page1"));
         // a module no script names runs once the object it extends is built
         let mut module = object("module_x", Some("form1[0]"), "NS.jForm.x = { f: function () { return 'ok'; } };");
         module.unnamed = true;

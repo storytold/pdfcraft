@@ -222,6 +222,10 @@ fn node_get(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValu
             return Ok(declared);
         }
     }
+    // `subform.variables.calcs`, unless a child of that name comes first
+    if key == "variables" && kind == super::model::XfaKind::Subform && child_named(&host(ctx)?.borrow(), idx, &key).is_none() {
+        return variables_object(ctx, idx);
+    }
     Ok(match key.as_str() {
         IDX => JsValue::from(idx as f64),
         "rawValue" | "value" => host(ctx)?.borrow().nodes.get(idx).map_or(JsValue::null(), value_js),
@@ -402,6 +406,10 @@ pub(super) fn resolver(ctx: &mut Context, from: usize, many: bool) -> JsResult<J
         // An expression that runs into an object's properties (`ui.#textEdit`, `border.edge[1]`),
         // for some of the objects it names at least: a child named as the property comes first
         // for each object on its own, in place ((child, "")).
+        // a path through a subform's variables names a script object
+        if !many && through_variables(&expr) {
+            return object_by_som(ctx, from, &expr);
+        }
         let props = props::resolve_into_props(&host(ctx)?.borrow(), from, &expr);
         if let Some((node, path)) = props.first().cloned() {
             {
@@ -433,16 +441,77 @@ fn object_by_som(ctx: &mut Context, from: usize, expr: &str) -> JsResult<JsValue
         Some((p, n)) => (Some(p), n),
         None => (None, expr),
     };
+    // `form1.#variables[0].calcs`, `form1.variables.calcs`: the step names where a subform keeps its objects, not a node
+    let (parent, through) = match parent {
+        Some(p) if is_variables_step(p) => (None, true),
+        Some(p) => match p.rsplit_once('.') {
+            Some((before, last)) if is_variables_step(last) => (Some(before), true),
+            _ => (Some(p), false),
+        },
+        None => (None, false),
+    };
+    let node = |ctx: &mut Context| -> JsResult<Option<usize>> {
+        Ok(match parent {
+            Some(p) => resolve_som(&host(ctx)?.borrow(), from, p).first().copied(),
+            None => Some(from),
+        })
+    };
+    // `form1.#variables[0]` itself
+    if is_variables_step(name) {
+        return match node(ctx)? {
+            Some(i) => variables_object(ctx, i),
+            None => Ok(JsValue::null()),
+        };
+    }
     let name = name.split('[').next().unwrap_or(name);
-    let found = match parent {
-        Some(p) => {
-            let first = resolve_som(&host(ctx)?.borrow(), from, p).first().copied();
-            match first {
-                Some(i) => super::objects::child_object(ctx, i, name)?,
-                None => JsValue::undefined(),
-            }
-        }
-        None => super::objects::named_object(ctx, name)?,
+    let found = match (parent, through) {
+        (None, false) => super::objects::named_object(ctx, name)?,
+        _ => match node(ctx)? {
+            Some(i) => super::objects::child_object(ctx, i, name)?,
+            None => JsValue::undefined(),
+        },
     };
     Ok(if found.is_undefined() { JsValue::null() } else { found })
+}
+
+/// A SOM step naming where a subform keeps its script objects: `#variables[0]` or `variables`.
+fn is_variables_step(step: &str) -> bool {
+    step == "variables" || step.split('[').next() == Some("#variables")
+}
+
+/// Whether a SOM expression goes through a subform's variables (`form1.#variables[0].calcs`).
+fn through_variables(expr: &str) -> bool {
+    expr.split('.').any(is_variables_step)
+}
+
+/// `subform.variables` (or `resolveNode("subform.#variables[0]")`): an object whose members are the script objects the subform at
+/// `idx` declares, with `resolveNode(name)` for one of them.
+fn variables_object(ctx: &mut Context, idx: usize) -> JsResult<JsValue> {
+    let target = ObjectInitializer::new(ctx).property(JsString::from(IDX), JsValue::from(idx as f64), Attribute::READONLY).build();
+    Ok(JsProxy::builder(target).get(variables_get).build(ctx)?.into())
+}
+
+fn variables_get(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let key = arg(args, 1);
+    if key.as_symbol().is_some() {
+        return Ok(JsValue::undefined());
+    }
+    let idx = match arg(args, 0).as_object() {
+        Some(t) => t.get(JsString::from(IDX), ctx)?.as_number().map(|n| n as usize),
+        None => None,
+    };
+    let Some(idx) = idx else { return Ok(JsValue::undefined()) };
+    let name = text(&key, ctx)?;
+    if name == "resolveNode" {
+        let key = ObjectInitializer::new(ctx).property(js_string!("idx"), JsValue::from(idx as f64), Attribute::READONLY).build();
+        fn named(_: &JsValue, args: &[JsValue], key: &JsObject, ctx: &mut Context) -> JsResult<JsValue> {
+            let idx = key.get(js_string!("idx"), ctx)?.to_number(ctx)? as usize;
+            let expr = text(&arg(args, 0), ctx)?;
+            let name = expr.rsplit('.').next().unwrap_or(&expr).split('[').next().unwrap_or("").to_string();
+            let found = super::objects::child_object(ctx, idx, &name)?;
+            Ok(if found.is_undefined() { JsValue::null() } else { found })
+        }
+        return Ok(function(ctx, NativeFunction::from_copy_closure_with_captures(named, key)).into());
+    }
+    super::objects::child_object(ctx, idx, &name)
 }
