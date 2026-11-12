@@ -414,6 +414,54 @@ fn items_read_the_list_state_once_one_is_set() {
     assert_eq!((list_entries(&h, bare, 0).len(), content(&h, bare, "items#0/text#0")), (1, "X".to_string()));
 }
 
+/// A choice list's methods (XFA 3.3 p. 405) read its shown and saved items and change the run's copy of them, which `length`,
+/// `selectedIndex` and `items.nodes` then follow: `boundItem` gives what the entry showing a text saves, `setItems` takes
+/// pairs, and text no entry shows comes back as it is.
+#[test]
+fn choice_list_methods_read_and_change_the_items() {
+    let items = |attrs: &[(&str, &str)], entries: &[&str]| p("items", attrs, entries.iter().map(|e| t("text", &[], e)).collect());
+    let ui = || p("ui", &[], vec![p("choiceList", &[], vec![])]);
+    let mut list = node("country", XfaKind::Field, &[], vec![ui(), items(&[], &["Canada", "France"]), items(&[("save", "1")], &["CA", "FR"])]);
+    list.value = "FR".into();
+    let plain = node("size", XfaKind::Field, &[], vec![ui(), items(&[], &["S", "M"])]);
+    let text = node("note", XfaKind::Field, &[], vec![]);
+    let root = XfaNode {
+        name: "form1".into(),
+        som: "form1[0]".into(),
+        kind: Some(XfaKind::Subform),
+        children: vec![list, plain, text],
+        ..Default::default()
+    };
+    let cases = [
+        (
+            "this.boundItem('France') + ',' + this.selectedIndex + ',' + this.length + ',' + this.getDisplayItem(1) + ',' + this.getSaveItem(9)",
+            "FR,1,2,France,null",
+        ),
+        (
+            "this.clearItems(); this.addItem('Japan', 'JP'); this.addItem('Peru'); this.boundItem('Japan') + ',' + this.length + ',' + this.boundItem('Peru') + ',' + this.boundItem('Mars')",
+            "JP,2,Peru,Mars",
+        ),
+        (
+            "this.setItems('a,1,b,2', 2); this.boundItem('b') + ',' + this.deleteItem(0) + ',' + this.deleteItem(5) + ',' + this.length + ',' + this.items.nodes.length",
+            "2,true,false,1,1",
+        ),
+        // the list methods' entries are what `items` reads afterwards
+        ("this.clearItems(); this.addItem('Peru', 'PE'); this.getElement('items', 1).nodes.item(0).value + this.items.nodes.item(0).value", "PEPeru"),
+        (
+            "xfa.resolveNode('size').boundItem('M') + ',' + xfa.resolveNode('size').getSaveItem(0) + ',' + xfa.resolveNode('size').selectedIndex",
+            "M,S,-1",
+        ),
+        // a field that is not a choice list has no length
+        ("typeof xfa.resolveNode('note').length", "undefined"),
+    ];
+    for (script, want) in cases {
+        assert_eq!(eval_on(&root, script, "country"), want, "{script}");
+    }
+    // a script can't grow a list past its bound
+    let o = go_on(&root, "for (var i = 0; i < 20000; i++) this.addItem('x' + i); this.length", "country");
+    assert_eq!(o.result.as_deref(), Some("10000"), "{o:?}");
+}
+
 /// A script can't grow the run past its limits: paths deeper than [`super::MAX_PATH`] take
 /// anything (a template nested deeper than the parser keeps), and one property keeps at most
 /// [`super::MAX_WRITTEN_ATTRS`] written attributes, with a note.

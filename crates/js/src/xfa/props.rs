@@ -447,8 +447,25 @@ pub(crate) fn list_entries(h: &XHost, node: usize, list: usize) -> Vec<(String, 
         .unwrap_or_default()
 }
 
+/// Which of the field's `<items>` lists holds the values saved to the data: the one the template marks `save="1"`, else the
+/// second when there are two (the list methods add one), else none (the shown text is the value).
+pub(crate) fn saved_list(h: &XHost, node: usize) -> Option<usize> {
+    // the run's copy keeps the shown list first and the saved one, if any, second
+    if let Some(lists) = h.nodes.get(node).and_then(|n| n.items.as_ref()) {
+        return (lists.len() >= 2).then_some(1);
+    }
+    let marked =
+        template_children(h, node, "").iter().filter(|p| p.tag == "items").position(|p| p.attrs.iter().any(|(k, v)| k == "save" && v == "1"));
+    marked.or_else(|| (list_count(h, node) >= 2).then_some(1))
+}
+
+/// Whether the field is a choice list (`<ui><choiceList>`).
+pub(crate) fn is_choice_list(h: &XHost, node: usize) -> bool {
+    template_prop_at(h, node, "ui#0").is_some_and(|ui| ui.children.iter().any(|w| w.tag == "choiceList"))
+}
+
 /// How many `<items>` lists the field has: the list state's, else the template's.
-fn list_count(h: &XHost, node: usize) -> usize {
+pub(crate) fn list_count(h: &XHost, node: usize) -> usize {
     match h.nodes.get(node).and_then(|n| n.items.as_ref()) {
         Some(lists) => lists.len(),
         None => template_children(h, node, "").iter().filter(|p| p.tag == "items").count(),
@@ -1062,7 +1079,7 @@ pub(crate) fn prop_object(ctx: &mut Context, node: usize, path: &str) -> JsResul
 }
 
 /// The node and path a property object (or its Proxy target) stands for.
-fn prop_ref(o: &JsObject, ctx: &mut Context) -> JsResult<(usize, String)> {
+pub(crate) fn prop_ref(o: &JsObject, ctx: &mut Context) -> JsResult<(usize, String)> {
     let n = o.get(JsString::from(NODE), ctx)?.to_number(ctx)?;
     if !n.is_finite() || n < 0.0 {
         return Err(error("not an XFA property"));

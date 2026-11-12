@@ -2,11 +2,11 @@ use super::globals::{recalculate, relayout};
 use super::host::{HNode, XHost, host};
 use super::instances::{instance_manager, list_object};
 use super::model::{MAX_DEPTH, XfaEffect};
-use super::props;
 use super::{
     Attribute, Context, JsObject, JsProxy, JsResult, JsString, JsValue, NativeFunction, ObjectInitializer, arg, as_number, clip, error, function,
     js_string, s, text,
 };
+use super::{choice, props};
 
 // ── node objects ────────────────────────────────────────────────────────────────────────────
 
@@ -268,7 +268,18 @@ fn node_get(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValu
             function(ctx, NativeFunction::from_fn_ptr(noop)).into()
         }
         "toString" | "valueOf" | "toJSON" => function(ctx, NativeFunction::from_fn_ptr(node_to_string)).into(),
-        "length" => JsValue::undefined(),
+        // a choice list's entries
+        "length" => choice::length(&host(ctx)?.borrow(), idx).map_or(JsValue::undefined(), |n| JsValue::from(n as f64)),
+        "selectedIndex" if choice::selected_index(&host(ctx)?.borrow(), idx).is_some() => {
+            JsValue::from(choice::selected_index(&host(ctx)?.borrow(), idx).unwrap_or(-1) as f64)
+        }
+        "clearItems" => node_method(ctx, idx, choice::clear_items),
+        "addItem" => node_method(ctx, idx, choice::add_item),
+        "deleteItem" => node_method(ctx, idx, choice::delete_item),
+        "setItems" => node_method(ctx, idx, choice::set_items),
+        "boundItem" => node_method(ctx, idx, choice::bound_item),
+        "getDisplayItem" => node_method(ctx, idx, choice::get_display_item),
+        "getSaveItem" => node_method(ctx, idx, choice::get_save_item),
         other => {
             if let Some(child) = other.strip_prefix('_') {
                 let exists = child_named(&host(ctx)?.borrow(), idx, child).is_some();
