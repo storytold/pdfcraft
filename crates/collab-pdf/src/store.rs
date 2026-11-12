@@ -6,7 +6,7 @@
 //!   CURRENT                 {"version":N,"epoch":E} — the base to load
 //!   versions/<N>/file.pdf   the document at version N
 //!   journal.jsonl           {"version":N,"actor":"…","op":{…}} per accepted operation
-//!   CABINET                 {"version":N,"etag":"…"} — what the cabinet holds
+//!   CABINET                 {"version":N,"etag":"…","sha256":"…"} — what the cabinet holds
 //! ```
 //!
 //! The layout is what makes a crash between "write the base" and "replace
@@ -64,6 +64,15 @@ pub struct CabinetCopy {
     /// conflicts could be resolved: then the two numbers agreed.
     #[serde(default)]
     pub expected: Option<u64>,
+    /// The SHA-256 (lower-case hex) of the bytes this marker describes: the
+    /// content the cabinet's `etag` names. The room's own digest, not the
+    /// cabinet's: it is what lets a later ticket that names the same bytes with
+    /// a newer tag be recognised as our own publication rather than an external
+    /// change (a commit whose answer was lost, or a re-open of the same file).
+    /// Absent in a marker written before this field existed, and for a copy an
+    /// operator named with `resolve` (no bytes travel there).
+    #[serde(default)]
+    pub sha256: Option<String>,
 }
 
 impl CabinetCopy {

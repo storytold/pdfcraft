@@ -205,6 +205,27 @@ impl CabinetAdapter {
         (!copy.etag.is_empty()).then(|| copy.etag.clone())
     }
 
+    /// Take the cabinet's copy as this room's own publication: the caller saw a
+    /// newer tag whose content is exactly the bytes this room published (a
+    /// commit of ours whose answer never reached the marker), so the session
+    /// continues instead of being refused. The room's own version of the
+    /// published base stays; only the cabinet's tag and numbering move.
+    pub fn adopt_cabinet(&mut self, expected_version: u64, etag: &str) -> Result<(), AdapterError> {
+        let current = self.pdf.cabinet();
+        let base = current.as_ref().map_or(0, |copy| copy.version);
+        let sha256 = current.and_then(|copy| copy.sha256);
+        self.pdf.set_cabinet(Some(CabinetCopy { version: base, etag: etag.to_owned(), expected: Some(expected_version), sha256 }))?;
+        self.expected_version = expected_version;
+        Ok(())
+    }
+
+    /// Whether these bytes are the copy the cabinet's marker describes: what the
+    /// control plane compares a sent file against to tell this room's own
+    /// publication from an external change.
+    pub fn published_matches(&self, sent: &[u8]) -> bool {
+        self.pdf.cabinet().is_some_and(|copy| same_published_content(&copy, sent))
+    }
+
     /// Refuse a commit when the file the room was seeded from changed. The etag
     /// is the SHA-256 of the file as seeded, so a rewritten file (a cabinet
     /// upload while the session was live) is caught before the base is written.
@@ -273,9 +294,14 @@ impl Adapter for CabinetAdapter {
             // room stays dirty so the next commit retries it.
             Err(_) => return Ok(()),
         };
+        // The digest of the bytes this marker describes. It is what a later
+        // ticket compares against: the cabinet's tag is opaque (its file
+        // modification time), so "the tag changed" alone cannot tell our own
+        // commit from an external change.
+        let sha256 = self.pdf.committed_base().ok().flatten().map(|bytes| sha256_of(bytes.as_slice()));
         // `version` is the room's; `expected` the cabinet's. They are equal
         // until an operator resolves a conflict with an external version.
-        self.pdf.set_cabinet(Some(CabinetCopy { version, etag, expected: Some(expected) }))?;
+        self.pdf.set_cabinet(Some(CabinetCopy { version, etag, expected: Some(expected), sha256 }))?;
         self.expected_version = expected;
         Ok(())
     }
@@ -294,7 +320,8 @@ impl Adapter for CabinetAdapter {
         // published base (used by the dirty check after a restart) stays what
         // the marker already had.
         let base = self.pdf.cabinet().map_or(0, |copy| copy.version);
-        let copy = published.map(|published| CabinetCopy { version: base, etag: published.etag, expected: Some(published.version) });
+        let sha256 = self.pdf.cabinet().and_then(|copy| copy.sha256);
+        let copy = published.map(|published| CabinetCopy { version: base, etag: published.etag, expected: Some(published.version), sha256 });
         self.pdf.set_cabinet(copy)?;
         self.expected_version = self.pdf.cabinet().map_or(0, |copy| copy.expected_version());
         Ok(())
@@ -339,7 +366,14 @@ pub struct Opened {
 
 pub struct Seed {
     pub bytes: Arc<Vec<u8>>,
+    /// The tag of the copy the cabinet holds: its own opaque value, not a
+    /// digest of `bytes`. A source without a cabinet (dev mode) uses the bytes'
+    /// digest, which is then what the marker compares against.
     pub etag: String,
+    /// The cabinet's numbering of that copy, when the caller names it: it is
+    /// what the next publication sends as `expectedVersion`. `None` for a source
+    /// without a cabinet.
+    pub cabinet_version: Option<u64>,
     pub mirror: Option<PathBuf>,
 }
 
@@ -411,45 +445,75 @@ pub fn etag_of_file(path: &Path) -> Result<String, String> {
     Ok(etag_of(&bytes))
 }
 
+/// Whether the bytes a caller sent are the ones the marker describes: the
+/// digest the room recorded when it published them. A marker without a digest
+/// (written before the field existed, or named by an operator's `resolve`, which
+/// sends no bytes) cannot prove it, and the caller's change stays an external
+/// one.
+fn same_published_content(copy: &CabinetCopy, sent: &[u8]) -> bool {
+    copy.sha256.as_deref().is_some_and(|sha| sha.eq_ignore_ascii_case(&sha256_of(sent)))
+}
+
 /// Open a room or resume it from its durable state.
 ///
 /// `seed` is the file the cabinet has. It is used to create a room, and its
-/// etag is compared with the room's when resuming: a different etag means the
-/// file changed outside the session, and the room is not resumed (RFC §8).
+/// tag is compared with the room's when resuming: a different tag means the
+/// file changed outside the session, and the room is not resumed (RFC §8) —
+/// unless the bytes are the ones this room published, which is our own commit
+/// whose answer never reached the marker (the retry sent it twice, or the
+/// process died between the cabinet's answer and the marker write). Then the
+/// cabinet's newer tag is adopted instead of blocking the session.
 pub fn open_room(hub: &mut Hub<CabinetAdapter>, config: &RoomsConfig, doc: DocKey, seed: Option<Seed>) -> Result<Opened, RoomError> {
     let dir = config.data.join(doc.as_str());
     let mut store = Store::open(dir)?;
     let (mut version, mut epoch) = store.base_state();
     let records = store.journal()?;
     let base = store.base()?;
-    let seed = seed.map(|seed| (seed.bytes, seed.etag, seed.mirror));
+    let seed = seed.map(|seed| (seed.bytes, seed.etag, seed.cabinet_version, seed.mirror));
 
     let (bytes, mirror, created) = match (base, seed) {
         (Some(base), seed) => {
-            if let Some((_, etag, _)) = &seed {
+            if let Some((sent, etag, cabinet_version, _)) = &seed {
                 match store.cabinet() {
                     Some(copy) if &copy.etag != etag => {
-                        return Err(RoomError::Conflict {
-                            message: format!("the file changed outside the session: the room holds {}", copy.etag),
-                            etag: Some(copy.etag.clone()),
-                            version,
-                        });
+                        // The cabinet's tag moved. If the bytes it holds are the
+                        // ones this room published, the change is ours: adopt
+                        // the tag instead of refusing the session.
+                        if !same_published_content(copy, sent) {
+                            return Err(RoomError::Conflict {
+                                message: format!("the file changed outside the session: the room holds {}", copy.etag),
+                                etag: Some(copy.etag.clone()),
+                                version,
+                            });
+                        }
+                        let expected = cabinet_version.unwrap_or_else(|| copy.expected_version());
+                        store.set_cabinet(Some(CabinetCopy {
+                            version: copy.version,
+                            etag: etag.clone(),
+                            expected: Some(expected),
+                            sha256: copy.sha256.clone(),
+                        }))?;
                     }
-                    // A room seeded before the marker existed adopts the etag
-                    // of the file it is resumed from.
-                    None => store.set_cabinet(Some(CabinetCopy { version, etag: etag.clone(), expected: None }))?,
+                    // A room seeded before the marker existed adopts the tag of
+                    // the file it is resumed from.
+                    None => store.set_cabinet(Some(CabinetCopy {
+                        version,
+                        etag: etag.clone(),
+                        expected: *cabinet_version,
+                        sha256: Some(sha256_of(sent)),
+                    }))?,
                     Some(_) => {}
                 }
             }
-            let mirror = seed.and_then(|(_, _, mirror)| mirror);
+            let mirror = seed.and_then(|(_, _, _, mirror)| mirror);
             (base, mirror, false)
         }
-        (None, Some((bytes, etag, mirror))) => {
+        (None, Some((bytes, etag, cabinet_version, mirror))) => {
             if bytes.len() > config.max_source_bytes {
                 return Err(RoomError::invalid(format!("the file is larger than the {} byte limit", config.max_source_bytes)));
             }
             store.write_base(0, 0, bytes.as_slice())?;
-            store.set_cabinet(Some(CabinetCopy { version: 0, etag, expected: None }))?;
+            store.set_cabinet(Some(CabinetCopy { version: 0, etag, expected: cabinet_version, sha256: Some(sha256_of(bytes.as_slice())) }))?;
             version = 0;
             epoch = 0;
             (bytes.to_vec(), mirror, true)
@@ -494,7 +558,7 @@ pub fn seed_rooms(hub: &mut Hub<CabinetAdapter>, documents: &Path, config: &Room
         let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else { continue };
         let doc = doc_key(stem).map_err(RoomError::invalid)?;
         let bytes = std::fs::read(&path).map_err(|e| RoomError::invalid(format!("could not read {}: {e}", path.display())))?;
-        let seed = Seed { etag: etag_of(&bytes), bytes: Arc::new(bytes), mirror: Some(path.clone()) };
+        let seed = Seed { etag: etag_of(&bytes), bytes: Arc::new(bytes), cabinet_version: None, mirror: Some(path.clone()) };
         open_room(hub, config, doc, Some(seed))?;
         opened += 1;
     }
@@ -799,7 +863,7 @@ mod tests {
         let config = config(&root, Some(publisher));
         let doc = DocKey::new("file-1")?;
         let bytes = Arc::new(fixture("one"));
-        let seed = Seed { etag: etag_of(&bytes), bytes: bytes.clone(), mirror: None };
+        let seed = Seed { etag: etag_of(&bytes), bytes: bytes.clone(), cabinet_version: None, mirror: None };
         let mut hub = Hub::new(RoomConfig::default());
         let opened = open_room(&mut hub, &config, doc.clone(), Some(seed))?;
         assert!(opened.created);
@@ -927,7 +991,7 @@ mod tests {
         let config = config(&root, Some(publisher));
         let doc = DocKey::new("file-1")?;
         let bytes = Arc::new(fixture("one"));
-        let seed = Seed { etag: etag_of(&bytes), bytes: bytes.clone(), mirror: None };
+        let seed = Seed { etag: etag_of(&bytes), bytes: bytes.clone(), cabinet_version: None, mirror: None };
         let mut hub = Hub::new(RoomConfig::default());
         open_room(&mut hub, &config, doc.clone(), Some(seed))?;
         let room = hub.room_mut(&doc).ok_or("no room")?;
@@ -980,7 +1044,7 @@ mod tests {
         let config = config(&root, Some(publisher));
         let doc = DocKey::new("file-1")?;
         let bytes = Arc::new(fixture("one"));
-        let seed = Seed { etag: etag_of(&bytes), bytes: bytes.clone(), mirror: None };
+        let seed = Seed { etag: etag_of(&bytes), bytes: bytes.clone(), cabinet_version: None, mirror: None };
         let mut hub = Hub::new(RoomConfig::default());
         open_room(&mut hub, &config, doc.clone(), Some(seed))?;
         let room = hub.room_mut(&doc).ok_or("no room")?;
@@ -1001,12 +1065,12 @@ mod tests {
         let config = config(&root, None);
         let doc = DocKey::new("file-1")?;
         let bytes = Arc::new(fixture("one"));
-        let seed = Seed { etag: etag_of(&bytes), bytes: bytes.clone(), mirror: None };
+        let seed = Seed { etag: etag_of(&bytes), bytes: bytes.clone(), cabinet_version: None, mirror: None };
         let mut hub = Hub::new(RoomConfig::default());
         open_room(&mut hub, &config, doc.clone(), Some(seed))?;
         drop(hub);
         let other = Arc::new(fixture("two"));
-        let changed = Seed { etag: etag_of(&other), bytes: other, mirror: None };
+        let changed = Seed { etag: etag_of(&other), bytes: other, cabinet_version: None, mirror: None };
         let mut hub = Hub::new(RoomConfig::default());
         let refused = open_room(&mut hub, &config, doc, Some(changed)).expect_err("the etag differs");
         match refused {

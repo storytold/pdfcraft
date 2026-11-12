@@ -252,7 +252,11 @@ impl PdfAdapter {
     /// this is a no-op.
     pub fn set_published(&mut self, published: Option<Published>) -> Result<(), AdapterError> {
         let base = self.cabinet().map_or(0, |copy| copy.version);
-        let copy = published.map(|published| CabinetCopy { version: base, etag: published.etag, expected: Some(published.version) });
+        // An operator's `resolve` names the cabinet's copy by its tag alone; the
+        // digest of our published base stays what the marker already had, so a
+        // later ticket that names those bytes is still recognised as ours.
+        let sha256 = self.cabinet().and_then(|copy| copy.sha256);
+        let copy = published.map(|published| CabinetCopy { version: base, etag: published.etag, expected: Some(published.version), sha256 });
         self.set_cabinet(copy)
     }
 

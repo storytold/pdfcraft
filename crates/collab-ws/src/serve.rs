@@ -392,6 +392,61 @@ impl<A: Adapter> WsServer<A> {
         }
         queued
     }
+
+    /// Publish a room now, because the cabinet asked for it: the `Save` of an
+    /// application whose room owns the document reaches the cabinet as
+    /// `POST /v1/sessions/{fileId}/commit`, and the control plane turns it into
+    /// this call (RFC §8, INTEGRATION.md §5.2).
+    ///
+    /// A clean room has nothing to publish: the answer is the copy the cabinet
+    /// already holds. Otherwise the base is written under the hub lock, the
+    /// cabinet call runs outside it (RFC §16), and the outcome is recorded like
+    /// any other publication — including the retry queue, so a cabinet that
+    /// answers `5xx` leaves a queued attempt instead of a lost document.
+    pub fn commit_now(&self, doc: &DocKey) -> Result<CommitNow, TransportError> {
+        let pending = {
+            let mut shared = lock(&self.shared)?;
+            let Some(room) = shared.hub.room(doc) else { return Ok(CommitNow::Missing) };
+            if !room.is_dirty() {
+                return Ok(CommitNow::Clean { version: room.version(), published: Adapter::published(room.adapter()) });
+            }
+            let busy = room.is_publishing();
+            match shared.hub.commit_if_dirty(doc) {
+                Some(pending) => pending,
+                None if busy => return Ok(CommitNow::Busy),
+                // Nobody to answer a failed commit, so the room keeps its
+                // journal and the next attempt sees the same dirty state.
+                None => return Ok(CommitNow::Failed("the room could not build the document".into())),
+            }
+        };
+        let mut pending = pending;
+        let outcome = pending.publish();
+        let failure = match &outcome {
+            Ok(_) => None,
+            Err(error) => Some(error.clone()),
+        };
+        let (version, published, queued) = {
+            let mut shared = lock(&self.shared)?;
+            let retry = shared.hub.finish(pending, outcome);
+            let (version, published) = shared.hub.room(doc).map_or((0, None), |room| (room.version(), Adapter::published(room.adapter())));
+            if let Some(publication) = retry {
+                shared.queue_publication(doc.clone(), publication, now_ms());
+            }
+            shared.queue_forced(doc, now_ms());
+            (version, published, shared.take_pending())
+        };
+        // The lock is released: the compactions this publication made due run
+        // like any other, outside it.
+        self.run_pending(queued);
+        match failure {
+            None => Ok(CommitNow::Published { version, published }),
+            Some(error) => Ok(match error.code {
+                ErrorCode::Conflict => CommitNow::Conflict(error.message),
+                _ if error.retryable => CommitNow::Retryable(error.message),
+                _ => CommitNow::Failed(error.message),
+            }),
+        }
+    }
 }
 
 impl<A: Adapter + Send + 'static> WsServer<A> {
@@ -792,6 +847,29 @@ pub enum ResolveError {
     Failed(String),
     #[error("the hub is unavailable")]
     Hub,
+}
+
+/// What asking a room to publish produced ([`WsServer::commit_now`]). The
+/// control plane maps these onto its HTTP answers; none of them silently
+/// discards the room's work.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CommitNow {
+    /// The room is clean: the cabinet already holds this copy, described the
+    /// same way a publication's answer describes it.
+    Clean { version: u64, published: Option<Published> },
+    /// A commit was published. `version` is the room's document version.
+    Published { version: u64, published: Option<Published> },
+    /// There is no room for this document.
+    Missing,
+    /// A publication of this document is in flight; another call may succeed.
+    Busy,
+    /// The cabinet refused the publication: the file changed outside the
+    /// session (`409`).
+    Conflict(String),
+    /// The cabinet did not take the file and the queue will try again.
+    Retryable(String),
+    /// The commit could not be built or published at all.
+    Failed(String),
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> Result<MutexGuard<'_, T>, TransportError> {

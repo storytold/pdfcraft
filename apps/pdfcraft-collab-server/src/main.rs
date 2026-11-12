@@ -650,7 +650,7 @@ mod tests {
         let config = rooms_config(&root);
         let doc = DocKey::new("file-1")?;
         let bytes = std::sync::Arc::new(fixture());
-        let seed = rooms::Seed { etag: rooms::etag_of(&bytes), bytes: bytes.clone(), mirror: None };
+        let seed = rooms::Seed { etag: rooms::etag_of(&bytes), bytes: bytes.clone(), cabinet_version: None, mirror: None };
         let mut hub = Hub::new(RoomConfig::default());
         let opened = rooms::open_room(&mut hub, &config, doc, Some(seed))?;
         assert!(opened.created);

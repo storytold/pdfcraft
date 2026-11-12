@@ -314,6 +314,14 @@ impl<A: Adapter> Room<A> {
         &self.adapter
     }
 
+    /// The adapter, mutably, for a control plane that moves the cabinet's marker
+    /// outside the commit path (an adopted tag, an operator's `resolve`).
+    /// Ordinary protocol traffic reaches the adapter only through this type's
+    /// own methods.
+    pub fn adapter_mut(&mut self) -> &mut A {
+        &mut self.adapter
+    }
+
     pub fn version(&self) -> u64 {
         self.version
     }
