@@ -263,6 +263,9 @@ impl PdfCraftApp {
 
     /// Open the Batch Print dialog.
     pub fn open_batch_print(&mut self) {
+        if !self.commit_form_typing() {
+            return;
+        }
         self.batch_print = crate::dialogs::batch_print::BatchPrintDraft::default();
         self.batch_print_add_open_documents();
         self.dialog = Some(crate::Dialog::BatchPrint);
@@ -368,6 +371,10 @@ impl PdfCraftApp {
 
     /// Print each selected document with the current print settings.
     pub fn print_batch_now(&mut self) -> bool {
+        if !self.commit_form_typing() {
+            return false;
+        }
+
         let selected: Vec<crate::dialogs::batch_print::BatchPrintItem> = self.batch_print.items.iter().filter(|i| i.selected).cloned().collect();
 
         if selected.is_empty() {
@@ -416,29 +423,35 @@ impl PdfCraftApp {
                 }
             } else if let Some(path) = &item.path {
                 #[cfg(not(target_arch = "wasm32"))]
-                if let Ok(file_bytes) = std::fs::read(path) {
-                    let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
-                    if let Ok(temp_id) = self.session.open(&name, Some(path.to_string_lossy().to_string()), std::sync::Arc::new(file_bytes), None) {
-                        if self.print_draft.handling == Handling::Label {
-                            self.print_draft.crop_pages = None;
-                            self.read_label_crops(temp_id);
-                        }
-                        if let Some(doc) = self.session.get(temp_id) {
-                            let labels: Vec<String> = doc.info.pages.iter().map(|p| p.label.clone()).collect();
-                            if let Ok(settings) = self.print_draft.settings(doc.info.pages.len(), &labels)
-                                && let Ok(bytes) = self.session.print_pdf(temp_id, &settings)
-                            {
-                                let mut job = self.print_draft.job(&name);
-                                let sizes: Vec<(f64, f64)> = doc.info.pages.iter().map(|p| (f64::from(p.width), f64::from(p.height))).collect();
-                                if let Ok(sheets) = print::layout(&sizes, &settings) {
-                                    print::add_cups_orientation(&mut job.options, &sheets);
-                                }
-                                if self.send_to_printer(printer.clone(), bytes, job) {
-                                    succeeded = true;
+                {
+                    let file_bytes = match &item.bytes {
+                        Some(b) => Some(b.clone()),
+                        None => std::fs::read(path).ok().map(std::sync::Arc::new),
+                    };
+                    if let Some(file_bytes) = file_bytes {
+                        let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+                        if let Ok(temp_id) = self.session.open(&name, Some(path.to_string_lossy().to_string()), file_bytes, None) {
+                            if self.print_draft.handling == Handling::Label {
+                                self.print_draft.crop_pages = None;
+                                self.read_label_crops(temp_id);
+                            }
+                            if let Some(doc) = self.session.get(temp_id) {
+                                let labels: Vec<String> = doc.info.pages.iter().map(|p| p.label.clone()).collect();
+                                if let Ok(settings) = self.print_draft.settings(doc.info.pages.len(), &labels)
+                                    && let Ok(bytes) = self.session.print_pdf(temp_id, &settings)
+                                {
+                                    let mut job = self.print_draft.job(&name);
+                                    let sizes: Vec<(f64, f64)> = doc.info.pages.iter().map(|p| (f64::from(p.width), f64::from(p.height))).collect();
+                                    if let Ok(sheets) = print::layout(&sizes, &settings) {
+                                        print::add_cups_orientation(&mut job.options, &sheets);
+                                    }
+                                    if self.send_to_printer(printer.clone(), bytes, job) {
+                                        succeeded = true;
+                                    }
                                 }
                             }
+                            self.session.close(temp_id);
                         }
-                        self.session.close(temp_id);
                     }
                 }
             }
