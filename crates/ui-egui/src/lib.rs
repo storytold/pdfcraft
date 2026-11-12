@@ -120,7 +120,7 @@ use canvas::wheel_boost;
 use canvas::wheel_pager;
 use canvas::zoom_snap;
 #[cfg(feature = "collab")]
-pub use collab::{CollabParticipant, CollabState, HostCollabStateFn, HostCommitFn, ParticipantSelection, SessionParams};
+pub use collab::{CollabParticipant, CollabState, FieldCaretRef, HostCollabStateFn, HostCommitFn, ParticipantSelection, SessionParams};
 use dialogs::appearance;
 pub use dialogs::bookmark_styles_ui;
 use dialogs::comment_props;

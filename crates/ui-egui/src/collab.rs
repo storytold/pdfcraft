@@ -17,9 +17,11 @@ use crate::hooks::HostSession;
 use pdfcraft_collab_client_pdf::{
     ProjectionError, SplitPart, apply, combine_parts_ops, inverse_after, inverse_for, ops_for_edit, split_pages_op, split_part,
 };
-use pdfcraft_collab_proto::{ActorId, Applied, ClientInfo, DocKey, ErrorCode, Op, OpId, PageRef, Presence, Role, Selection, Target, Viewport};
+use pdfcraft_collab_proto::{
+    ActorId, Applied, ClientInfo, DocKey, ErrorCode, FieldCaret, MAX_FIELD_NAME_BYTES, Op, OpId, PageRef, Presence, Role, Selection, Target, Viewport,
+};
 use pdfcraft_collab_session::{Config as WireConfig, Event, Sink};
-use pdfcraft_engine::{DocId, Document, Edit};
+use pdfcraft_engine::{DocId, Document, Edit, FormField, field_flags};
 use pdfcraft_render::DocInfo;
 use std::collections::BTreeMap;
 use web_time::{Duration, Instant, SystemTime};
@@ -106,8 +108,17 @@ pub enum ParticipantSelection {
     /// Selected comments by `/NM`, the one the participant acts on first.
     Annotations(Vec<String>),
     /// A text range on `page` (1-based): one rectangle per line piece in PDF user space,
-    /// and the caret at the active end.
-    Text { page: u32, rects: Vec<[i64; 4]>, caret: Option<[i64; 2]> },
+    /// the caret at the active end, and the form field being typed into, when that is
+    /// what the range is.
+    Text { page: u32, rects: Vec<[i64; 4]>, caret: Option<[i64; 2]>, field: Option<FieldCaretRef> },
+}
+
+/// A participant's caret inside a form field: the field's stable name and the offset
+/// in characters into what they have typed. Never the text itself.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FieldCaretRef {
+    pub name: String,
+    pub offset: u32,
 }
 
 impl CollabParticipant {
@@ -214,7 +225,7 @@ fn visible_selection(seen: &Seen, now: Instant, epoch: u64) -> Option<RemoteSele
             },
             caret: None,
         }),
-        Selection::Text { page, rect, quads, caret } => {
+        Selection::Text { page, rect, quads, caret, .. } => {
             if page.epoch != epoch {
                 return None;
             }
@@ -237,18 +248,25 @@ fn participant_selection(presence: &Presence) -> Option<ParticipantSelection> {
         Selection::Annotation { nm, also } => {
             Some(ParticipantSelection::Annotations(std::iter::once(nm.clone()).chain(also.iter().cloned()).collect()))
         }
-        Selection::Text { page, rect, quads, caret } => {
+        Selection::Text { page, rect, quads, caret, field } => {
             let rects = if quads.is_empty() { vec![*rect] } else { quads.clone() };
-            Some(ParticipantSelection::Text { page: page.index.saturating_add(1), rects, caret: *caret })
+            let field = field.as_ref().map(|field| FieldCaretRef { name: field.name.clone(), offset: field.offset });
+            Some(ParticipantSelection::Text { page: page.index.saturating_add(1), rects, caret: *caret, field })
         }
     }
 }
 
-/// What this client is selecting, in the form presence carries: the `/NM` of every selected
-/// comment on the page in view, else the selection's per-line rectangles in user space and
-/// its caret. `None` when nothing is selected. The payload is geometry and names only — never
-/// the document's text or the comment's contents.
-fn local_selection(view: &DocView, info: &DocInfo, epoch: u64) -> Option<Selection> {
+/// What this client is selecting, in the form presence carries: the form field being typed
+/// into, else the `/NM` of every selected comment on the page in view, else the selection's
+/// per-line rectangles in user space and its caret. `None` when nothing is selected. The
+/// payload is geometry and names only — never the document's text or the comment's contents.
+fn local_selection(view: &DocView, info: &DocInfo, form: &[FormField], epoch: u64) -> Option<Selection> {
+    // A field holding the keyboard is what the person is doing, even when a comment or a
+    // range is still selected: the caret inside it wins. Losing the editor clears the
+    // caret, so the trace goes with the focus.
+    if view.forms.focus.as_ref().is_some_and(|focus| focus.caret.is_some()) {
+        return field_selection(view, info, form, epoch);
+    }
     // Several comments selected together travel as one list: the primary first, then the
     // rest. Only comments on the page in view are named, because a presence frame names one
     // page; a comment on another page falls back to its rectangle, as before.
@@ -274,11 +292,54 @@ fn local_selection(view: &DocView, info: &DocInfo, epoch: u64) -> Option<Selecti
         && let Some(annotation) = info.annotations.iter().find(|a| a.page == page && a.index == index)
         && let Some(rect) = annotation_selection_rect(annotation)
     {
-        return Some(Selection::Text { page: PageRef { index: u32::try_from(page).ok()?, epoch }, rect, quads: Vec::new(), caret: None });
+        return Some(Selection::Text {
+            page: PageRef { index: u32::try_from(page).ok()?, epoch },
+            rect,
+            quads: Vec::new(),
+            caret: None,
+            field: None,
+        });
     }
     let (page, quads) = view.selection_quads(info)?;
     let page_ref = PageRef { index: u32::try_from(page).ok()?, epoch };
     Some(text_selection(quads, page_ref, view.selection_caret(info).filter(|(caret_page, _)| *caret_page == page).map(|(_, point)| point)))
+}
+
+/// The caret inside the form field being typed into, in the form presence carries: the
+/// field's stable name (its fully qualified `/T` chain) and the caret's offset in characters
+/// into the draft, its widget's box, and where the caret is in user space. The draft's text
+/// never travels. `None` when the field cannot be addressed (gone with its page or field
+/// list), when its name is too long to carry, or for a password — whose caret would be the
+/// length of a secret.
+fn field_selection(view: &DocView, info: &DocInfo, form: &[FormField], epoch: u64) -> Option<Selection> {
+    let focus = view.forms.focus.as_ref()?;
+    let offset = focus.caret?;
+    let field = form
+        .iter()
+        .find(|f| f.name == focus.name && focus.obj.is_none_or(|obj| f.obj == obj))
+        .or_else(|| form.iter().find(|f| f.name == focus.name))?;
+    if field.has(field_flags::PASSWORD) {
+        return None;
+    }
+    let widget = field.widgets.get(focus.widget)?;
+    let page = widget.page?;
+    if page >= info.pages.len() || widget.hidden {
+        return None;
+    }
+    let [x0, y0, x1, y1] = widget.rect;
+    if ![x0, y0, x1, y1].into_iter().all(f64::is_finite) {
+        return None;
+    }
+    // A name the wire cannot carry leaves the box and the caret point: an older shape of
+    // the same trace, not a dropped one.
+    let field = (field.name.len() <= MAX_FIELD_NAME_BYTES && !field.name.trim().is_empty()).then(|| FieldCaret { name: field.name.clone(), offset });
+    Some(Selection::Text {
+        page: PageRef { index: u32::try_from(page).ok()?, epoch },
+        rect: [round_unit_f64(x0), round_unit_f64(y0), round_unit_f64(x1), round_unit_f64(y1)],
+        quads: Vec::new(),
+        caret: focus.caret_at,
+        field,
+    })
 }
 
 /// A text range as presence carries it: the bounding box (what a peer that predates per-line
@@ -297,7 +358,7 @@ fn text_selection(quads: Vec<[f64; 8]>, page: PageRef, caret: Option<[f64; 2]>) 
         }
     }
     let caret = caret.map(|[x, y]| [round_unit_f64(x), round_unit_f64(y)]);
-    Selection::Text { page, rect, quads: rects, caret }
+    Selection::Text { page, rect, quads: rects, caret, field: None }
 }
 
 /// One view-space quad as the `[x0, y0, x1, y1]` whole units presence carries. A quad whose
@@ -1122,9 +1183,10 @@ impl PdfCraftApp {
         // The pointer over the page in PDF user space: the page module resolved
         // it this frame, so this is the same point the user sees.
         let cursor = view.local_cursor.filter(|(page, _)| *page == view.current).map(|(_, point)| [point[0].round() as i64, point[1].round() as i64]);
-        // The selection travels as a `/NM` or a rectangle, never as text: presence is not
-        // an operation and must not be a way to read the document's contents.
-        let selection = self.session.get(view.id).and_then(|document| local_selection(view, &document.info, collab.epoch));
+        // The selection travels as a `/NM`, a field's name and caret offset, or a rectangle,
+        // never as text: presence is not an operation and must not be a way to read the
+        // document's contents.
+        let selection = self.session.get(view.id).and_then(|document| local_selection(view, &document.info, &document.form, collab.epoch));
         let presence = Presence {
             actor_id: actor,
             role: collab.role,
@@ -1576,11 +1638,11 @@ fn color_of_hex(color: &str) -> egui::Color32 {
 #[cfg(test)]
 mod tests {
     use super::{
-        ActorId, BTreeMap, CollabUi, DocId, DocKey, Duration, Event, Instant, Op, OpId, PRESENCE_TTL, PageRef, ParticipantSelection, PdfCraftApp,
-        Presence, RemoteSelectionKind, Role, Seen, Sink, doc_key_from_token, keeps_page_addresses, local_selection, rect_of_quads, role_from_name,
-        role_name, text_selection, visible_selection,
+        ActorId, BTreeMap, CollabUi, DocId, DocKey, Duration, Event, FieldCaretRef, Instant, Op, OpId, PRESENCE_TTL, PageRef, ParticipantSelection,
+        PdfCraftApp, Presence, RemoteSelectionKind, Role, Seen, Sink, doc_key_from_token, keeps_page_addresses, local_selection, rect_of_quads,
+        role_from_name, role_name, text_selection, visible_selection,
     };
-    use pdfcraft_collab_proto::{Selection, Target, Viewport};
+    use pdfcraft_collab_proto::{FieldCaret, Selection, Target, Viewport};
 
     fn presence(selection: Option<Selection>) -> Result<Presence, Box<dyn std::error::Error>> {
         Ok(Presence {
@@ -1607,7 +1669,8 @@ mod tests {
     #[test]
     fn a_remote_selection_expires_with_its_presence() -> Result<(), Box<dyn std::error::Error>> {
         let now = Instant::now();
-        let selection = Selection::Text { page: PageRef { index: 1, epoch: 2 }, rect: [10, 20, 30, 40], quads: Vec::new(), caret: Some([30, 40]) };
+        let selection =
+            Selection::Text { page: PageRef { index: 1, epoch: 2 }, rect: [10, 20, 30, 40], quads: Vec::new(), caret: Some([30, 40]), field: None };
         let fresh = Seen { presence: presence(Some(selection.clone()))?, at: now };
         let drawn = visible_selection(&fresh, now, 2).expect("a fresh selection is drawn");
         assert_eq!(drawn.page, 1);
@@ -1627,7 +1690,7 @@ mod tests {
     #[test]
     fn a_text_selection_from_another_epoch_is_not_drawn() -> Result<(), Box<dyn std::error::Error>> {
         let now = Instant::now();
-        let selection = Selection::Text { page: PageRef { index: 1, epoch: 5 }, rect: [0, 0, 1, 1], quads: Vec::new(), caret: None };
+        let selection = Selection::Text { page: PageRef { index: 1, epoch: 5 }, rect: [0, 0, 1, 1], quads: Vec::new(), caret: None, field: None };
         let seen = Seen { presence: presence(Some(selection))?, at: now };
         assert!(visible_selection(&seen, now, 2).is_none(), "the range's own epoch is stale");
         Ok(())
@@ -1666,6 +1729,7 @@ mod tests {
             rect: [10, 70, 50, 100],
             quads: vec![[10, 90, 50, 100], [10, 70, 30, 80]],
             caret: Some([30, 70]),
+            field: None,
         };
         let seen = Seen { presence: presence(Some(selection))?, at: now };
         let drawn = visible_selection(&seen, now, 2).expect("a fresh selection is drawn");
@@ -1697,6 +1761,7 @@ mod tests {
                 rect: [10, 70, 50, 100],
                 quads: vec![[10, 90, 50, 100], [10, 70, 30, 80]],
                 caret: Some([31, 69]),
+                field: None,
             }
         );
         let many = vec![quads[0]; pdfcraft_collab_proto::MAX_SELECTION_QUADS + 1];
@@ -1738,6 +1803,7 @@ mod tests {
             rect: [10, 20, 30, 40],
             quads: vec![[10, 30, 30, 40], [10, 20, 20, 30]],
             caret: Some([20, 20]),
+            field: None,
         };
         {
             let collab = app.collab.as_mut().expect("a session");
@@ -1746,7 +1812,31 @@ mod tests {
         let state = app.collab_state().expect("a session");
         assert_eq!(
             state.participants[0].selection,
-            Some(ParticipantSelection::Text { page: 2, rects: vec![[10, 30, 30, 40], [10, 20, 20, 30]], caret: Some([20, 20]) })
+            Some(ParticipantSelection::Text { page: 2, rects: vec![[10, 30, 30, 40], [10, 20, 20, 30]], caret: Some([20, 20]), field: None })
+        );
+
+        // A field being typed into reaches the host page with its address and the
+        // caret's offset, never the draft's text.
+        let selection = Selection::Text {
+            page: PageRef { index: 1, epoch: 2 },
+            rect: [72, 640, 300, 660],
+            quads: Vec::new(),
+            caret: Some([140, 645]),
+            field: Some(FieldCaret { name: "form1.name".into(), offset: 3 }),
+        };
+        {
+            let collab = app.collab.as_mut().expect("a session");
+            collab.participants.get_mut("bo").expect("the participant").presence.selection = Some(selection);
+        }
+        let state = app.collab_state().expect("a session");
+        assert_eq!(
+            state.participants[0].selection,
+            Some(ParticipantSelection::Text {
+                page: 2,
+                rects: vec![[72, 640, 300, 660]],
+                caret: Some([140, 645]),
+                field: Some(FieldCaretRef { name: "form1.name".into(), offset: 3 }),
+            })
         );
 
         // Past the TTL the participant is inactive and claims no page or selection.
@@ -1781,7 +1871,7 @@ mod tests {
         view.comments.selected = Some((0, 1));
         view.comments.also = vec![(0, 2)];
         assert_eq!(
-            local_selection(&view, &info, 0),
+            local_selection(&view, &info, &[], 0),
             Some(Selection::Annotation { nm: "ada-2".into(), also: vec!["ada-3".into()] }),
             "the selected comments, not their text"
         );
@@ -1790,7 +1880,7 @@ mod tests {
         view.comments.selected = Some((0, 0));
         view.comments.also.clear();
         view.current = 1;
-        let selected = local_selection(&view, &info, 7).expect("the off-page comment still says where it is");
+        let selected = local_selection(&view, &info, &[], 7).expect("the off-page comment still says where it is");
         assert!(matches!(selected, Selection::Text { page: PageRef { index: 0, epoch: 7 }, .. }), "got {selected:?}");
 
         // A text selection: one rectangle per line piece, and the caret at the active end.
@@ -1807,7 +1897,7 @@ mod tests {
             }),
         );
         view.select_text(0, 0, 2);
-        let sent = local_selection(&view, &info, 0).expect("a text selection is sent");
+        let sent = local_selection(&view, &info, &[], 0).expect("a text selection is sent");
         match sent {
             Selection::Text { quads, caret, .. } => {
                 assert_eq!(quads.len(), 2, "one rectangle per line: {quads:?}");
@@ -1868,7 +1958,7 @@ mod tests {
     #[test]
     fn a_three_line_range_is_one_rect_per_line_and_its_caret_goes_with_it() {
         let (info, mut view) = three_line_selection();
-        let (page, quads, caret) = match local_selection(&view, &info, 4) {
+        let (page, quads, caret) = match local_selection(&view, &info, &[], 4) {
             Some(Selection::Text { page, quads, caret, .. }) => (page, quads, caret),
             other => panic!("a text selection, got {other:?}"),
         };
@@ -1878,7 +1968,7 @@ mod tests {
 
         // A cleared selection is what the next frame says: no range, no caret.
         view.clear_selection();
-        assert_eq!(local_selection(&view, &info, 4), None, "a cleared selection is not sent, caret included");
+        assert_eq!(local_selection(&view, &info, &[], 4), None, "a cleared selection is not sent, caret included");
     }
 
     /// A turn (and a catch-up replay) keeps the range: the view keeps its page and
@@ -1887,14 +1977,14 @@ mod tests {
     #[test]
     fn a_rotated_page_re_addresses_the_range_to_the_new_epoch() -> Result<(), Box<dyn std::error::Error>> {
         let (info, mut view) = three_line_selection();
-        let before = local_selection(&view, &info, 2).expect("a range before the turn");
+        let before = local_selection(&view, &info, &[], 2).expect("a range before the turn");
         let mut turned = info.clone();
         turned.pages[0].rotation = 90;
         view.document_keeping_selection(&turned);
         // The text layer is re-extracted after a content invalidation; put the same
         // glyphs back, as the renderer's answer would.
         view.texts.insert(0, three_line_text());
-        let after = local_selection(&view, &turned, 3).expect("the range survives the turn and is re-addressed");
+        let after = local_selection(&view, &turned, &[], 3).expect("the range survives the turn and is re-addressed");
 
         let (page, quads, caret) = match &after {
             Selection::Text { page, quads, caret, .. } => (page, quads, caret),
@@ -1915,16 +2005,167 @@ mod tests {
         Ok(())
     }
 
+    /// A one-page document and a view over it with nothing selected.
+    fn empty_view() -> (pdfcraft_render::DocInfo, crate::canvas::DocView) {
+        use crate::canvas::{DocView, ViewDefaults};
+        use pdfcraft_render::{DocInfo, PageInfo};
+        let info = DocInfo {
+            pages: vec![PageInfo { width: 300.0, height: 400.0, label: String::new(), crop: [0.0, 0.0, 300.0, 400.0], rotation: 0 }],
+            ..Default::default()
+        };
+        let mut view = DocView::new(DocId(1), &info, ViewDefaults::default());
+        view.current = 0;
+        (info, view)
+    }
+
+    /// A text field on page 0 with one widget box, `flags` as its `/Ff`.
+    fn text_field(name: &str, flags: u32) -> pdfcraft_engine::FormField {
+        pdfcraft_engine::FormField {
+            name: name.into(),
+            obj: pdfcraft_cos::ObjRef::new(4, 0),
+            kind: pdfcraft_engine::FormFieldKind::Text,
+            value: Vec::new(),
+            default: Vec::new(),
+            flags,
+            max_len: None,
+            options: Vec::new(),
+            selected: Vec::new(),
+            single_value_is_array: false,
+            da: String::new(),
+            quadding: 0,
+            tooltip: None,
+            widgets: vec![pdfcraft_engine::FormWidget {
+                mouse_up_script: None,
+                obj: pdfcraft_cos::ObjRef::new(4, 0),
+                page: Some(0),
+                rect: [72.0, 640.0, 300.0, 660.0],
+                on_state: None,
+                state: None,
+                tab: 0,
+                locked: false,
+                hidden: false,
+                read_only: false,
+                rotation: 0,
+                caption: None,
+                list: None,
+                round: false,
+            }],
+            actions: Default::default(),
+            button: None,
+        }
+    }
+
+    /// Put the editor on `field` holding the keyboard, its caret at `offset` into the
+    /// draft and at `at` in user space.
+    fn typing(view: &mut crate::canvas::DocView, field: &pdfcraft_engine::FormField, offset: u32, at: [i64; 2]) {
+        let mut focus = crate::forms_ui::open_focus(field, 0);
+        focus.caret = Some(offset);
+        focus.caret_at = Some(at);
+        view.forms.focus = Some(focus);
+    }
+
+    /// Presence addresses the field being typed into by its name and the caret's
+    /// offset inside its text, with the widget's box and the caret's point; losing the
+    /// keyboard takes the trace away, and a turn re-addresses it to the new epoch
+    /// without re-learning the address.
+    #[test]
+    fn a_field_caret_is_addressed_by_name_and_offset_and_goes_with_the_focus() {
+        let (info, mut view) = empty_view();
+        let field = text_field("form1.customer.name", 0);
+        typing(&mut view, &field, 7, [140, 645]);
+
+        let sent = local_selection(&view, &info, std::slice::from_ref(&field), 4).expect("a field caret is sent");
+        match &sent {
+            Selection::Text { page, rect, caret, field: address, quads } => {
+                assert_eq!(*page, PageRef { index: 0, epoch: 4 }, "the field is addressed at the sender's epoch");
+                assert_eq!(*rect, [72, 640, 300, 660], "the widget's box, so a peer without the address still draws it");
+                assert!(quads.is_empty(), "a field caret is not a text range");
+                assert_eq!(*caret, Some([140, 645]), "the point the caret was drawn at");
+                assert_eq!(
+                    address.as_ref().map(|a| (a.name.as_str(), a.offset)),
+                    Some(("form1.customer.name", 7)),
+                    "the field's stable name and the caret's offset inside its text"
+                );
+            }
+            other => panic!("a field caret, got {other:?}"),
+        }
+        // The frame carries no text: only the name, the offset and geometry.
+        let encoded = serde_json::to_string(&sent).expect("a frame encodes");
+        assert!(!encoded.contains("\"value\""), "the draft's text never travels: {encoded}");
+
+        // Losing the keyboard (a click outside, Enter, Tab) clears the caret, so the
+        // next frame takes the trace away.
+        view.forms.focus = None;
+        assert_eq!(local_selection(&view, &info, std::slice::from_ref(&field), 4), None, "no focus, no field caret");
+    }
+
+    /// A turn keeps the field: page addresses do not change, the widget stays on its
+    /// page and the next frame carries the new epoch. A field or a page that is gone
+    /// takes the trace with it.
+    #[test]
+    fn a_field_caret_survives_a_turn_and_goes_with_the_field_or_page() {
+        let (info, mut view) = empty_view();
+        let field = text_field("form1.name", 0);
+        typing(&mut view, &field, 3, [80, 645]);
+        let before = local_selection(&view, &info, std::slice::from_ref(&field), 2).expect("a field before the turn");
+
+        let mut turned = info.clone();
+        turned.pages[0].rotation = 90;
+        view.document_keeping_selection(&turned);
+        let after = local_selection(&view, &turned, std::slice::from_ref(&field), 3).expect("the field survives the turn");
+        match (&before, &after) {
+            (Selection::Text { page: was, field: Some(was_address), .. }, Selection::Text { page: is, field: Some(address), .. }) => {
+                assert_eq!(*was, PageRef { index: 0, epoch: 2 });
+                assert_eq!(*is, PageRef { index: 0, epoch: 3 }, "re-addressed to the epoch it is sent in");
+                assert_eq!(was_address, address, "the address is the field's name and offset, not geometry");
+            }
+            other => panic!("expected two field carets, got {other:?}"),
+        }
+
+        // The field is deleted (or its page is): the form no longer holds it, so
+        // neither the name nor the box is sent.
+        assert_eq!(local_selection(&view, &turned, &[], 3), None, "a field the form no longer holds is not sent");
+        view.forms.focus = Some({
+            let mut focus = crate::forms_ui::open_focus(&field, 0);
+            focus.caret = Some(3);
+            focus.caret_at = Some([80, 645]);
+            focus
+        });
+        let removed_page = pdfcraft_render::DocInfo { pages: Vec::new(), ..Default::default() };
+        assert_eq!(local_selection(&view, &removed_page, &[field], 3), None, "a widget whose page is gone is not sent");
+    }
+
+    /// A password's caret would be the length of a secret, so it never goes on the
+    /// wire; and a name the frame cannot carry keeps the box and the caret point.
+    #[test]
+    fn a_password_field_shares_no_caret_and_a_long_name_keeps_the_box() {
+        let (info, mut view) = empty_view();
+        let secret = text_field("form1.password", pdfcraft_engine::field_flags::PASSWORD);
+        typing(&mut view, &secret, 12, [140, 645]);
+        assert_eq!(local_selection(&view, &info, &[secret], 1), None, "a password's caret is not presence");
+
+        let long = text_field(&"n".repeat(pdfcraft_collab_proto::MAX_FIELD_NAME_BYTES + 1), 0);
+        typing(&mut view, &long, 2, [100, 645]);
+        match local_selection(&view, &info, &[long], 1).expect("the box and the caret still travel") {
+            Selection::Text { field, rect, caret, .. } => {
+                assert_eq!(field, None, "a name over the frame's bound is left out, not truncated");
+                assert_eq!(rect, [72, 640, 300, 660]);
+                assert_eq!(caret, Some([100, 645]));
+            }
+            other => panic!("a text selection, got {other:?}"),
+        }
+    }
+
     /// A page that is gone takes its range with it: the sender says nothing, and a
     /// peer in the new page tree does not draw the old-epoch frame (a page delete
     /// moves the epoch, so a frame addressed before it is stale).
     #[test]
     fn a_range_on_a_deleted_page_is_neither_sent_nor_drawn() -> Result<(), Box<dyn std::error::Error>> {
         let (info, mut view) = three_line_selection();
-        assert!(local_selection(&view, &info, 2).is_some());
+        assert!(local_selection(&view, &info, &[], 2).is_some());
         let removed = pdfcraft_render::DocInfo { pages: Vec::new(), ..Default::default() };
         view.document_keeping_selection(&removed);
-        assert_eq!(local_selection(&view, &removed, 3), None, "a range whose page is gone is not sent");
+        assert_eq!(local_selection(&view, &removed, &[], 3), None, "a range whose page is gone is not sent");
 
         let now = Instant::now();
         let frame = Selection::Text {
@@ -1932,6 +2173,7 @@ mod tests {
             rect: [10, 10, 30, 60],
             quads: vec![[10, 50, 30, 60], [10, 30, 30, 40], [10, 10, 30, 20]],
             caret: Some([30, 10]),
+            field: None,
         };
         let seen = Seen { presence: presence_on(3, Some(frame))?, at: now };
         assert!(visible_selection(&seen, now, 3).is_none(), "the deleted page's range is not drawn in the new epoch");
@@ -1953,6 +2195,7 @@ mod tests {
             rect: [10, 20, 30, 40],
             quads: vec![[10, 30, 30, 40], [10, 20, 20, 30]],
             caret: Some([20, 20]),
+            field: None,
         };
         {
             let collab = app.collab.as_mut().expect("a session");

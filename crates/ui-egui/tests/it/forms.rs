@@ -540,6 +540,36 @@ fn tabbing_into_a_filled_field_selects_it_so_typing_replaces() {
     assert_eq!(value(&h, "city"), ["Lyon"]);
 }
 
+/// Collaboration presence addresses the field being typed into by its name and the
+/// caret's offset inside its text (RFC §5). The editor records both from the same galley
+/// it draws, in user space; losing the keyboard clears them, so the trace goes with the
+/// focus.
+#[test]
+fn typing_in_a_field_records_the_caret_for_presence() {
+    let mut h = harness();
+    click_field(&mut h, "name", 0);
+    h.event(egui::Event::Text("Ada".into()));
+    h.run_steps(2);
+    let (text, offset, at, rect) = {
+        let s = h.state();
+        let focus = s.views[0].forms.focus.clone().expect("the field stays open while typing");
+        let doc = s.session.get(s.views[0].id).unwrap();
+        let widget = doc.form.iter().find(|f| f.name == "name").unwrap().widgets.first().expect("a widget");
+        (focus.text.clone(), focus.caret.expect("the caret's offset"), focus.caret_at.expect("the caret's point"), widget.rect)
+    };
+    assert_eq!(offset as usize, text.chars().count(), "the caret ends where the typing did");
+    assert!(
+        (rect[0] as i64 - 1..=rect[2] as i64 + 1).contains(&at[0]) && (rect[1] as i64 - 1..=rect[3] as i64 + 1).contains(&at[1]),
+        "the point is inside the field's box in user space: {at:?} in {rect:?}"
+    );
+
+    // Escape ends the editing without a commit: no focus, so the next presence frame
+    // carries no field caret.
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    assert!(h.state().views[0].forms.focus.is_none(), "the keyboard left the field");
+}
+
 #[test]
 fn dragging_over_another_fields_text_focuses_it_and_selects_from_the_press() {
     // Issue #2213: with the caret in one field, a drag over another field's text selected

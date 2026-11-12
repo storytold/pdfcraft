@@ -624,6 +624,7 @@ mod tests {
                 rect: [100, 200, 400, 260],
                 quads: vec![[100, 240, 400, 260], [100, 200, 320, 220]],
                 caret: Some([320, 200]),
+                field: None,
             }),
             color: "#3366cc".into(),
         };

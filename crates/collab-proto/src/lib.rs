@@ -58,6 +58,11 @@ pub const MAX_SELECTION_NAMES: usize = 32;
 /// falls back to its bounding box, so the frame stays under the limit.
 pub const MAX_SELECTION_QUADS: usize = 48;
 
+/// Longest form-field name a presence selection addresses, in bytes: the fully
+/// qualified name (`/T` chain, joined by dots) of the field being typed into.
+/// A longer name is not sent, so the field's box and caret still travel.
+pub const MAX_FIELD_NAME_BYTES: usize = 256;
+
 /// Largest bookmark path accepted.
 pub const MAX_BOOKMARK_DEPTH: usize = 64;
 
@@ -631,6 +636,30 @@ pub struct Viewport {
     pub zoom: f64,
 }
 
+/// The caret inside a form field being typed into: the field's stable address
+/// (its fully qualified name) and the caret's offset in characters into the text
+/// its author has typed so far. The text itself never travels (ADR-0006); a peer
+/// that cannot resolve the field still draws the box and the caret point the
+/// range carries.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FieldCaret {
+    pub name: String,
+    pub offset: u32,
+}
+
+impl FieldCaret {
+    /// A field name must be non-empty and at most [`MAX_FIELD_NAME_BYTES`] bytes.
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        if self.name.trim().is_empty() {
+            return Err(ProtocolError::Empty("field name"));
+        }
+        if self.name.len() > MAX_FIELD_NAME_BYTES {
+            return Err(ProtocolError::TooLong { field: "field name", len: self.name.len(), max: MAX_FIELD_NAME_BYTES });
+        }
+        Ok(())
+    }
+}
+
 /// What a participant has selected, as presence carries it: a comment name or
 /// geometry, never the document's text (ADR-0006). Both shapes are additive over
 /// the first wire form: a peer that predates the extra fields ignores them, and
@@ -655,9 +684,15 @@ pub enum Selection {
         /// sender only knows the bounding box.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         quads: Vec<[i64; 4]>,
-        /// The caret in user space, at the active end of the range.
+        /// The caret in user space, at the active end of the range, or inside the
+        /// field being typed into.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         caret: Option<[i64; 2]>,
+        /// When the range is a form field being typed into: the field's address and
+        /// the caret's offset inside its text. The box and the caret still say where
+        /// it is to a peer that does not read this.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        field: Option<FieldCaret>,
     },
 }
 
@@ -685,10 +720,13 @@ impl Selection {
                     return Err(ProtocolError::TooMany { field: "selection names", count, max: MAX_SELECTION_NAMES });
                 }
             }
-            Self::Text { page, quads, .. } => {
+            Self::Text { page, quads, field, .. } => {
                 page.validate()?;
                 if quads.len() > MAX_SELECTION_QUADS {
                     return Err(ProtocolError::TooMany { field: "selection quads", count: quads.len(), max: MAX_SELECTION_QUADS });
+                }
+                if let Some(field) = field {
+                    field.validate()?;
                 }
             }
         }
@@ -962,12 +1000,12 @@ mod tests {
     }
 
     /// A selection that only the first wire form describes still parses: `also`,
-    /// `quads` and `caret` are additive, so a peer that predates them keeps
-    /// sending (and reading) the plain form.
+    /// `quads`, `caret` and `field` are additive, so a peer that predates them
+    /// keeps sending (and reading) the plain form.
     #[test]
     fn the_plain_selection_form_still_parses() -> Result<(), Box<dyn std::error::Error>> {
         let text: Selection = serde_json::from_str(r#"{"kind":"text","page":{"index":3,"epoch":1},"rect":[1,2,3,4]}"#)?;
-        assert_eq!(text, Selection::Text { page: PageRef { index: 3, epoch: 1 }, rect: [1, 2, 3, 4], quads: Vec::new(), caret: None });
+        assert_eq!(text, Selection::Text { page: PageRef { index: 3, epoch: 1 }, rect: [1, 2, 3, 4], quads: Vec::new(), caret: None, field: None });
         assert_eq!(serde_json::to_string(&text)?, r#"{"kind":"text","page":{"index":3,"epoch":1},"rect":[1,2,3,4]}"#);
         let named: Selection = serde_json::from_str(r#"{"kind":"annotation","nm":"ada-hl-1"}"#)?;
         assert_eq!(named, Selection::Annotation { nm: "ada-hl-1".into(), also: Vec::new() });
@@ -987,12 +1025,50 @@ mod tests {
             rect: [10, 90, 50, 100],
             quads: vec![[10, 95, 50, 100], [10, 90, 30, 95]],
             caret: Some([30, 90]),
+            field: None,
         };
         text.validate()?;
         let encoded = serde_json::to_string(&text)?;
         assert!(encoded.contains(r#""quads":[[10,95,50,100],[10,90,30,95]]"#));
         assert!(encoded.contains(r#""caret":[30,90]"#));
         assert_eq!(serde_json::from_str::<Selection>(&encoded)?, text);
+        Ok(())
+    }
+
+    /// A form field being typed into is addressed by its name and the caret's
+    /// offset inside its text; the box and the caret point still describe it to a
+    /// peer that does not read the address, and no text travels.
+    #[test]
+    fn a_field_caret_carries_its_name_and_offset() -> Result<(), Box<dyn std::error::Error>> {
+        let field = FieldCaret { name: "form1.customer.name".into(), offset: 7 };
+        let text = Selection::Text {
+            page: PageRef { index: 0, epoch: 3 },
+            rect: [72, 640, 300, 660],
+            quads: Vec::new(),
+            caret: Some([140, 645]),
+            field: Some(field.clone()),
+        };
+        text.validate()?;
+        field.validate()?;
+        let encoded = serde_json::to_string(&text)?;
+        assert!(encoded.contains(r#""field":{"name":"form1.customer.name","offset":7}"#), "got {encoded}");
+        assert_eq!(serde_json::from_str::<Selection>(&encoded)?, text);
+        // A field with no caret point is still an address: a peer draws the box.
+        let boxed = Selection::Text {
+            page: PageRef { index: 0, epoch: 3 },
+            rect: [72, 640, 300, 660],
+            quads: Vec::new(),
+            caret: None,
+            field: Some(field.clone()),
+        };
+        boxed.validate()?;
+        // The address is bounded: an empty or oversized name is refused before it is shared.
+        assert_eq!(FieldCaret { name: " ".into(), offset: 0 }.validate(), Err(ProtocolError::Empty("field name")));
+        let long = FieldCaret { name: "n".repeat(MAX_FIELD_NAME_BYTES + 1), offset: 0 };
+        assert!(matches!(long.validate(), Err(ProtocolError::TooLong { field: "field name", .. })));
+        let too_long =
+            Selection::Text { page: PageRef { index: 0, epoch: 3 }, rect: [72, 640, 300, 660], quads: Vec::new(), caret: None, field: Some(long) };
+        assert!(too_long.validate().is_err());
         Ok(())
     }
 
@@ -1009,9 +1085,16 @@ mod tests {
             rect: [0, 0, 1, 1],
             quads: vec![[0, 0, 1, 1]; MAX_SELECTION_QUADS + 1],
             caret: None,
+            field: None,
         };
         assert!(matches!(quads.validate(), Err(ProtocolError::TooMany { field: "selection quads", .. })));
-        let off_page = Selection::Text { page: PageRef { index: MAX_PAGE_INDEX + 1, epoch: 0 }, rect: [0, 0, 1, 1], quads: Vec::new(), caret: None };
+        let off_page = Selection::Text {
+            page: PageRef { index: MAX_PAGE_INDEX + 1, epoch: 0 },
+            rect: [0, 0, 1, 1],
+            quads: Vec::new(),
+            caret: None,
+            field: None,
+        };
         assert_eq!(off_page.validate(), Err(ProtocolError::PageIndex(MAX_PAGE_INDEX + 1)));
         Ok(())
     }
@@ -1027,7 +1110,7 @@ mod tests {
             page: PageRef::new(1, 0)?,
             viewport: Viewport { x: 0.0, y: 0.0, zoom: 1.0 },
             cursor: None,
-            selection: Some(Selection::Text { page: PageRef { index: 1, epoch: 0 }, rect: [0, 0, 1, 1], quads, caret: None }),
+            selection: Some(Selection::Text { page: PageRef { index: 1, epoch: 0 }, rect: [0, 0, 1, 1], quads, caret: None, field: None }),
             color: "#112233".into(),
         };
         assert!(matches!(presence.validate(), Err(ProtocolError::PresenceTooLarge { .. })));

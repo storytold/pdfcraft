@@ -1450,6 +1450,8 @@ mod revert_draft_tests {
             calendar_text: None,
             list: Default::default(),
             had_focus: false,
+            caret: None,
+            caret_at: None,
         }
     }
 

@@ -15,7 +15,7 @@ use pdfcraft_collab_client_pdf::{
 use pdfcraft_collab_hub::Hub;
 use pdfcraft_collab_pdf::PdfAdapter;
 use pdfcraft_collab_proto::{
-    ActorId, ClientMessage, DocKey, ErrorCode, Op, OpId, PageRef, Presence, Role, Selection, ServerMessage, Target, Viewport,
+    ActorId, ClientMessage, DocKey, ErrorCode, FieldCaret, Op, OpId, PageRef, Presence, Role, Selection, ServerMessage, Target, Viewport,
 };
 use pdfcraft_collab_server::{Adapter, AdapterError, ApplyOutcome, CommitOutcome, Publication, PublishOutcome, RoomConfig};
 use pdfcraft_collab_ws::{Claims, Config, Hs256Verifier, ServerHandle, TokenError, Verifier, WsServer};
@@ -2093,6 +2093,29 @@ fn two_clients_reply_with_a_status_and_a_deleted_parent_refuses_a_reply() -> Res
     Ok(())
 }
 
+/// Read one presence frame and check it is the field caret `expected` names: the
+/// field's address and the caret's offset inside its text, with the box and the point.
+fn expect_field_caret(peer: &mut Peer, expected: &Selection) -> Result<ActorId, Box<dyn std::error::Error>> {
+    let Selection::Text { field: Some(address), caret, quads, .. } = expected else {
+        return Err(format!("not a field caret: {expected:?}").into());
+    };
+    match peer.next()? {
+        ServerMessage::Presence(presence) => {
+            assert_eq!(&presence.selection, &Some(expected.clone()), "the field caret travels as presence");
+            match presence.selection {
+                Some(Selection::Text { field: Some(sent), caret: sent_caret, quads: sent_quads, .. }) => {
+                    assert_eq!((sent.name.as_str(), sent.offset), (address.name.as_str(), address.offset), "the field and the caret inside it");
+                    assert_eq!(sent_caret, *caret, "the caret point travels too");
+                    assert_eq!(sent_quads, *quads, "a field caret is not a text range");
+                }
+                other => return Err(format!("expected a field caret, got {other:?}").into()),
+            }
+            Ok(presence.actor_id)
+        }
+        other => Err(format!("expected presence, got {other:?}").into()),
+    }
+}
+
 /// A selection is presence, not an operation: another replica and a viewer see it, no
 /// version or journal entry follows, and the room still accepts edits afterwards. A range
 /// keeps one rectangle per line and its caret, a cleared selection takes both away, and a
@@ -2112,6 +2135,7 @@ fn two_clients_share_a_selection_without_an_operation() -> Result<(), Box<dyn st
         rect: [20, 260, 220, 320],
         quads: vec![[20, 300, 220, 320], [20, 280, 180, 300], [20, 260, 120, 280]],
         caret: Some([120, 260]),
+        field: None,
     };
     ada.send_presence(Some(text.clone()))?;
     for peer in [&mut bo, &mut di] {
@@ -2131,8 +2155,24 @@ fn two_clients_share_a_selection_without_an_operation() -> Result<(), Box<dyn st
         }
     }
 
-    // Clearing the selection is the next frame: no range, no caret. Presence is
-    // rate-limited per actor (10 Hz), so let the previous frame age first.
+    // A form field being typed into is addressed by its name and the caret's offset
+    // inside its text; the widget's box and the caret's point still say where it is to
+    // a peer that does not read the address.
+    let field = Selection::Text {
+        page: PageRef { index: 0, epoch: 0 },
+        rect: [72, 640, 300, 660],
+        quads: Vec::new(),
+        caret: Some([140, 645]),
+        field: Some(FieldCaret { name: "form1.name".into(), offset: 3 }),
+    };
+    std::thread::sleep(Duration::from_millis(120));
+    ada.send_presence(Some(field.clone()))?;
+    for peer in [&mut bo, &mut di] {
+        expect_field_caret(peer, &field)?;
+    }
+
+    // Clearing the selection is the next frame: no range, no field, no caret. Presence
+    // is rate-limited per actor (10 Hz), so let the previous frame age first.
     std::thread::sleep(Duration::from_millis(120));
     ada.send_presence(None)?;
     for peer in [&mut bo, &mut di] {
@@ -2158,6 +2198,13 @@ fn two_clients_share_a_selection_without_an_operation() -> Result<(), Box<dyn st
     assert_eq!((ada.version, bo.version, di.version), (0, 0, 0), "presence never bumps the version");
     let mut late = Peer::join(addr, "editor:eve", "eve")?;
     assert!(late.resync(0)?.is_empty(), "a selection is not journaled and is not an operation");
+
+    // A late joiner learns the room from presence, not the journal: the next frame
+    // brings the field caret to it after its welcome.
+    std::thread::sleep(Duration::from_millis(120));
+    ada.send_presence(Some(field.clone()))?;
+    let author = expect_field_caret(&mut late, &field)?;
+    assert_eq!(author, ada.actor, "a late joiner sees the field caret after its welcome");
 
     // The room still accepts an operation afterwards: presence left nothing behind. A
     // turn is structural, so it moves the page tree's epoch; the same range sent again is
@@ -2213,7 +2260,7 @@ fn an_oversized_selection_is_refused_and_the_room_keeps_going() -> Result<(), Bo
     let mut bo = Peer::join(addr, "commenter:bo", "bo")?;
 
     let quads = vec![[0, 0, 10, 10]; pdfcraft_collab_proto::MAX_SELECTION_QUADS + 1];
-    let too_many = Selection::Text { page: PageRef { index: 0, epoch: 0 }, rect: [0, 0, 10, 10], quads, caret: None };
+    let too_many = Selection::Text { page: PageRef { index: 0, epoch: 0 }, rect: [0, 0, 10, 10], quads, caret: None, field: None };
     ada.send_presence(Some(too_many))?;
     match ada.next()? {
         ServerMessage::Error(error) => {
