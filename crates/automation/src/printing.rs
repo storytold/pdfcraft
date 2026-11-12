@@ -35,6 +35,36 @@ fn job_duplex(value: &str, layout: &Layout, two_sided: impl FnOnce() -> Option<b
     })
 }
 
+/// `doc_print`'s `manual_duplex`: which pass (`true` for the backs) and the edge the sheets turn
+/// on, from `duplex` (long edge unless it says short). A booklet already prints one side at a time
+/// with `booklet_subset`, and cut and stack needs single-sided sheets.
+fn manual_pass(a: &Args, layout: &Layout) -> Result<Option<(bool, print::manual_duplex::Flip)>> {
+    let Some(pass) = a.opt_str("manual_duplex")? else {
+        if a.opt_bool("reverse_backs")?.is_some() {
+            return Err(bad("reverse_backs needs manual_duplex"));
+        }
+        return Ok(None);
+    };
+    let back = match pass {
+        "front" => false,
+        "back" => true,
+        p => return Err(bad(format!("unknown manual_duplex {p:?}; choose front or back"))),
+    };
+    match layout {
+        Layout::Booklet { .. } => return Err(bad("a booklet prints one side at a time with booklet_subset front or back, not manual_duplex")),
+        Layout::Multiple { order: PageOrder::CutStack, .. } => {
+            return Err(bad("cut-and-stack printing needs single-sided sheets, not manual_duplex"));
+        }
+        _ => {}
+    }
+    let flip = match a.opt_str("duplex")?.unwrap_or("long-edge") {
+        "long-edge" => print::manual_duplex::Flip::LongEdge,
+        "short-edge" => print::manual_duplex::Flip::ShortEdge,
+        d => return Err(bad(format!("manual_duplex turns the sheets on duplex long-edge or short-edge, not {d:?}"))),
+    };
+    Ok(Some((back, flip)))
+}
+
 /// `printer` (a name, or "default" for the default printer) in `printers`; `None` when the list
 /// has no such printer.
 fn printer_in(printers: Vec<spool::Printer>, printer: &str) -> Option<spool::Printer> {
@@ -306,10 +336,16 @@ impl Automation {
         // name, so "default" can't become another printer while the document is rendered. The
         // queues are listed without asking every driver (#2192); only this one is asked.
         let mut asked = None;
-        let duplex = job_duplex(a.opt_str("duplex")?.unwrap_or("off"), &layout, || {
-            asked = printer.and_then(|p| printer_in(spool::printer_queues(), p));
-            spool::two_sided(&asked.as_ref()?.name)
-        })?;
+        let manual = manual_pass(a, &layout)?;
+        // Each pass of a manual two-sided print is one-sided; `duplex` named the edge it turns on.
+        let duplex = if manual.is_some() {
+            Some(spool::Duplex::Off)
+        } else {
+            job_duplex(a.opt_str("duplex")?.unwrap_or("off"), &layout, || {
+                asked = printer.and_then(|p| printer_in(spool::printer_queues(), p));
+                spool::two_sided(&asked.as_ref()?.name)
+            })?
+        };
         if (a.opt_int("cols")?.is_some() || a.opt_int("rows")?.is_some()) && !matches!(layout, Layout::Multiple { .. }) {
             return Err(bad("cols and rows need layout multiple"));
         }
@@ -367,7 +403,22 @@ impl Automation {
         };
         let settings = print::Settings { pages, paper, orientation, layout, content, raster, crops: Vec::new(), area };
         let laid_out = print::layout(&sizes, &settings).map_err(|e| bad(e.to_string()))?;
-        let sheets = laid_out.len();
+        let mut sheets = laid_out.len();
+        // The sides of this pass, planned before anything runs, so a pass with nothing to print
+        // changes nothing.
+        let manual_sides = match manual {
+            None => None,
+            Some((back, flip)) => {
+                let passes =
+                    print::manual_duplex::plan(sheets, flip, a.opt_bool("reverse_backs")?.unwrap_or(false)).map_err(|e| bad(e.to_string()))?;
+                let sides = if back { passes.backs } else { passes.fronts };
+                if sides.is_empty() {
+                    return Err(bad("one side only: there is no back to print; print manual_duplex front alone"));
+                }
+                sheets = sides.len();
+                Some((back, sides))
+            }
+        };
         // Where it goes is checked before the Will Print actions run, so a call that can't print
         // doesn't change the document.
         let destination = match (a.opt_str("path")?, printer) {
@@ -392,11 +443,20 @@ impl Automation {
         } else {
             Default::default()
         };
-        let bytes = self.session.print_pdf(id, &settings).map_err(failed)?;
+        let mut bytes = self.session.print_pdf(id, &settings).map_err(failed)?;
+        let mut pass = Value::Null;
+        if let Some((back, sides)) = &manual_sides {
+            bytes = print::manual_duplex::pass_pdf(&bytes, sides).map_err(|e| failed(e.to_string()))?;
+            let blank = sides.iter().filter(|s| s.page.is_none()).count();
+            pass = json!({ "pass": if *back { "back" } else { "front" }, "blank": blank });
+        }
         let mut out = json!({ "sheets": sheets, "pages": settings.pages.len(), "bytes": bytes.len() });
         if let Some(c) = settings.raster.as_ref().and_then(|r| r.colour.as_ref()) {
             out["color_management"] =
                 json!({ "profile": c.profile.name(), "rendering_intent": c.intent.id(), "black_point_compensation": c.black_point });
+        }
+        if !pass.is_null() {
+            out["manual_duplex"] = pass;
         }
         if !scripts.is_empty() {
             out["will_print"] = crate::a11y::form_tools::js_output_json(&scripts);

@@ -2071,3 +2071,63 @@ fn each_printer_keeps_what_it_last_printed_with_across_a_restart() {
     open(&mut gone);
     assert_eq!(setup(&gone), office);
 }
+
+/// #2860: Manual two-sided sends the fronts one-sided, then asks for the stack to be turned over;
+/// Continue sends the backs (page 2 and a blank for three pages), Cancel sends nothing more.
+#[test]
+fn manual_two_sided_prints_the_fronts_then_the_backs_on_continue() {
+    use pdfcraft_engine::print::spool;
+    use std::sync::{Arc, Mutex};
+    let s = pdfcraft_engine::Session::new();
+    let bytes = s.create_blank(612.0, 792.0, 3).unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("three.pdf", None, bytes.to_vec()).unwrap();
+        app
+    });
+    h.run_steps(4);
+    // Each job's sheets and two-sided setting.
+    let jobs = Arc::new(Mutex::new(Vec::<(usize, Option<spool::Duplex>)>::new()));
+    let sent = Arc::clone(&jobs);
+    h.state_mut().spooler = Some(Arc::new(move |pdf: &[u8], job: &spool::Job| {
+        let doc = pdfcraft_cos::Document::open(Arc::new(pdf.to_vec())).map_err(|e| e.to_string())?;
+        sent.lock().unwrap().push((pdfcraft_model::pages(&doc).len(), job.duplex));
+        Ok(String::new())
+    }));
+    let wait_for = |h: &mut Harness<'static, PdfCraftApp>, n: usize| {
+        for _ in 0..400 {
+            h.run_steps(1);
+            if jobs.lock().unwrap().len() >= n {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        jobs.lock().unwrap().clone()
+    };
+    let print_fronts = |h: &mut Harness<'static, PdfCraftApp>| {
+        assert!(h.state_mut().execute("print.dialog"));
+        h.run_steps(3);
+        h.state_mut().print_draft.printer = Some("Test_Queue".into());
+        h.run_steps(2);
+        if !h.state().print_draft.manual_duplex {
+            h.get_by_label("Manual two-sided").click();
+            h.run_steps(2);
+        }
+        h.get_by(|n| n.label().as_deref() == Some("Print") && n.role() == Role::Button).click();
+        h.run_steps(1);
+    };
+    print_fronts(&mut h);
+    assert_eq!(wait_for(&mut h, 1), [(2, Some(spool::Duplex::Off))], "the fronts, one-sided");
+    assert_eq!(h.state().dialog, Some(Dialog::ManualDuplex));
+    h.get_by_label("Continue").click();
+    assert_eq!(wait_for(&mut h, 2).get(1), Some(&(2, Some(spool::Duplex::Off))), "page 2 and the last sheet's blank back");
+    assert_eq!(h.state().dialog, None);
+
+    print_fronts(&mut h);
+    assert_eq!(wait_for(&mut h, 3).len(), 3);
+    assert_eq!(h.state().dialog, Some(Dialog::ManualDuplex));
+    h.get_by_label("Cancel").click();
+    assert_eq!(wait_for(&mut h, 4).len(), 3, "cancelled: the backs are not sent");
+    assert_eq!(h.state().dialog, None);
+}

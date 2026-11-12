@@ -8303,6 +8303,18 @@ evidence = ["crates/print/src/tests.rs::spooler_arguments_and_printer_list", "cr
 notes = "Manual two-sided defaults stay unspecified unless driver capabilities confirm automatic duplex (#5772); long/short edge via the spooler: lp -o sides=…, and the Windows driver's Duplex setting. Two-sided starts at Printer default: Windows reads the driver's current DEVMODE duplex and sends it explicitly (#5130), logging lookup failures and leaving duplex unspecified as a fallback; CUPS leaves duplex unspecified so the queue default applies (doc_print: duplex \"printer\"). Off or an edge overrides either. Physical output still needs hardware validation. Missing: the document's /ViewerPreferences /Duplex preset isn't read yet"
 
 [[feature]]
+id = "print.manual-duplex"
+title = "Manual two-sided printing"
+area = "L"
+tier = "P2"
+milestone = "M10"
+status = "shipped"
+commands = ["print.dialog"]
+tools = ["doc_print"]
+evidence = ["crates/print/src/manual_duplex.rs::five_sides_give_the_last_sheet_a_blank_back", "crates/print/src/manual_duplex.rs::six_sides_fill_three_sheets", "crates/print/src/manual_duplex.rs::a_pass_lists_its_sides_blanks_and_turns", "crates/automation/tests/it/automation.rs::manual_duplex_prints_fronts_then_backs", "crates/ui-egui/tests/it/print.rs::manual_two_sided_prints_the_fronts_then_the_backs_on_continue"]
+notes = "Requested in #2860 and #5407, for printers that print one side. Print ▸ Manual two-sided (long or short edge, second side in reverse order) sends the fronts of the sheets one-sided, then a window says to turn the stack over and put it back, and Continue sends the backs in the same sheet order (a blank back for the last sheet of an odd count; reversed, last sheet first, for a printer that gives the stack back the other way round). A short-edge flip turns each back 180°, so the stack is always turned the same way. Works on the laid-out sheets, so Size, Multiple, Poster and Label layouts all take it; booklets keep their own front/back choice and cut-and-stack refuses it. doc_print: manual_duplex front/back, duplex for the edge, reverse_backs. Not yet: a calibration page to find how a printer feeds the stack; physical output needs hardware validation."
+
+[[feature]]
 id = "print.n-up"
 title = "Multiple pages per sheet"
 area = "L"

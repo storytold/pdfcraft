@@ -6336,6 +6336,41 @@ fn printing_through_tools() {
     assert!(matches!(a.call("doc_print", &json!({ "doc": doc, "pages": "99", "path": "x.pdf" })), Err(ToolError::InvalidArgs(_))));
 }
 
+/// #2860: manual two-sided printing in two passes. Three pages make two sheets: the fronts are
+/// pages 1 and 3, the backs page 2 and a blank, last sheet first when reversed; a short-edge flip
+/// turns the backs. A one-page job has no back, and a booklet or cut-stack refuses the option.
+#[test]
+fn manual_duplex_prints_fronts_then_backs() {
+    let dir = workdir("manual-duplex");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let text_of = |a: &mut Automation, path: &str| -> Vec<String> {
+        let d = ok(a, "doc_open", json!({ "path": path }))["doc"].as_u64().unwrap();
+        page_text(a, d)
+    };
+    let r = ok(&mut a, "doc_print", json!({ "doc": doc, "manual_duplex": "front", "path": "front.pdf" }));
+    assert_eq!((r["sheets"].as_u64(), r["manual_duplex"]["pass"].as_str(), r["manual_duplex"]["blank"].as_u64()), (Some(2), Some("front"), Some(0)));
+    let front = text_of(&mut a, "front.pdf");
+    assert!(front[0].contains('1') && front[1].contains('3'), "{front:?}");
+    let r = ok(&mut a, "doc_print", json!({ "doc": doc, "manual_duplex": "back", "path": "back.pdf" }));
+    assert_eq!((r["sheets"].as_u64(), r["manual_duplex"]["blank"].as_u64()), (Some(2), Some(1)));
+    let back = text_of(&mut a, "back.pdf");
+    assert!(back[0].contains('2') && back[1].is_empty(), "{back:?}");
+    ok(&mut a, "doc_print", json!({ "doc": doc, "manual_duplex": "back", "reverse_backs": true, "duplex": "short-edge", "path": "back-rev.pdf" }));
+    let reversed = text_of(&mut a, "back-rev.pdf");
+    assert!(reversed[0].is_empty() && reversed[1].contains('2'), "{reversed:?}");
+    let bytes = std::fs::read(dir.join("back-rev.pdf")).unwrap();
+    assert!(String::from_utf8_lossy(&bytes).contains("q -1 0 0 -1 612 792 cm"), "a short-edge back is turned");
+
+    let bad = |a: &mut Automation, args: Value| matches!(a.call("doc_print", &args), Err(ToolError::InvalidArgs(_)));
+    assert!(bad(&mut a, json!({ "doc": doc, "pages": "1", "manual_duplex": "back", "path": "x.pdf" })), "one page has no back");
+    assert!(bad(&mut a, json!({ "doc": doc, "manual_duplex": "middle", "path": "x.pdf" })));
+    assert!(bad(&mut a, json!({ "doc": doc, "manual_duplex": "front", "duplex": "printer", "path": "x.pdf" })));
+    assert!(bad(&mut a, json!({ "doc": doc, "manual_duplex": "front", "layout": "booklet", "path": "x.pdf" })));
+    assert!(bad(&mut a, json!({ "doc": doc, "reverse_backs": true, "path": "x.pdf" })));
+    assert!(!dir.join("x.pdf").exists());
+}
+
 #[test]
 fn printer_papers_through_tools() {
     let dir = workdir("printer-papers");

@@ -100,6 +100,9 @@ pub(crate) struct PrintTasks {
     /// Cached papers and default paper per printer so switching printers avoids re-querying.
     #[cfg(not(target_arch = "wasm32"))]
     papers_cache: std::collections::HashMap<String, PaperInfo>,
+    /// The backs of a manual two-sided print, waiting for the stack to be turned over: the
+    /// printer, the pass's print-ready PDF and its job (#2860).
+    second_side: Option<(String, Vec<u8>, spool::Job)>,
     /// The browser print being drawn, a sheet a frame (`web_print`).
     #[cfg(target_arch = "wasm32")]
     web_job: Option<crate::web_print::WebPrintJob>,
@@ -678,10 +681,12 @@ impl PdfCraftApp {
                 // CUPS is told which way the sheets run (#2713), unless a driver choice already
                 // says; Windows' print ticket already is.
                 let sizes: Vec<(f64, f64)> = doc.info.pages.iter().map(|p| (f64::from(p.width), f64::from(p.height))).collect();
-                if let Ok(sheets) = print::layout(&sizes, &settings) {
-                    print::add_cups_orientation(&mut job.options, &sheets);
+                let sheets = print::layout(&sizes, &settings).unwrap_or_default();
+                print::add_cups_orientation(&mut job.options, &sheets);
+                match self.print_draft.manual() {
+                    Some(manual) => self.print_first_side(printer, &bytes, job, sheets.len(), manual),
+                    None => self.send_to_printer(printer, bytes, job),
                 }
-                self.send_to_printer(printer, bytes, job)
             }
             None => self.save_print_pdf(&name, bytes),
         };
@@ -690,6 +695,51 @@ impl PdfCraftApp {
             self.print_draft.remember_setup();
         }
         sent
+    }
+
+    /// Manual two-sided (#2860): send the fronts of the `sheets` sides of the print-ready
+    /// `bytes`, and keep the backs for [`Dialog::ManualDuplex`](crate::Dialog::ManualDuplex),
+    /// which asks for the stack to be turned over first. One side has no back to wait for.
+    fn print_first_side(
+        &mut self,
+        printer: String,
+        bytes: &[u8],
+        job: spool::Job,
+        sheets: usize,
+        (flip, reverse): (print::manual_duplex::Flip, bool),
+    ) -> bool {
+        let passes = print::manual_duplex::plan(sheets, flip, reverse).and_then(|p| {
+            let backs = if p.backs.is_empty() { None } else { Some(print::manual_duplex::pass_pdf(bytes, &p.backs)?) };
+            Ok((print::manual_duplex::pass_pdf(bytes, &p.fronts)?, backs))
+        });
+        let (fronts, backs) = match passes {
+            Ok(passes) => passes,
+            Err(e) => {
+                self.notify_error(e);
+                return false;
+            }
+        };
+        if !self.send_to_printer(printer.clone(), fronts, job.clone()) {
+            return false;
+        }
+        if let Some(backs) = backs {
+            self.print_tasks.second_side = Some((printer, backs, job));
+            self.dialog = Some(crate::Dialog::ManualDuplex);
+        }
+        true
+    }
+
+    /// The Continue of [`Dialog::ManualDuplex`](crate::Dialog::ManualDuplex): send the backs
+    /// kept by [`PdfCraftApp::print_first_side`].
+    pub(crate) fn print_second_side(&mut self) {
+        if let Some((printer, backs, job)) = self.print_tasks.second_side.take() {
+            self.send_to_printer(printer, backs, job);
+        }
+    }
+
+    /// The backs of a manual two-sided print, once the window asking for them has closed.
+    pub(crate) fn forget_second_side(&mut self) {
+        self.print_tasks.second_side = None;
     }
 
     /// Spool a job off the UI thread: on Windows every sheet is rendered at the printer's
@@ -852,6 +902,23 @@ impl PdfCraftApp {
             }
         }
     }
+}
+
+/// [`Dialog::ManualDuplex`](crate::Dialog::ManualDuplex): how to turn the printed stack over
+/// and put it back, with Continue (print the backs) and Cancel. Returns (continue, cancel).
+pub(crate) fn second_side_body(ui: &mut egui::Ui) -> (bool, bool) {
+    ui.label(egui::RichText::new(tl!("Print the second side")).font(theme::semibold(18.0)));
+    ui.add_space(8.0);
+    ui.label(tl!(
+        "When the first side has finished printing, take the printed sheets out and turn the stack over, keeping the top edge of the pages going into the printer first. Put the stack back in the paper tray so the printer prints on the blank sides, then choose Continue."
+    ));
+    ui.add_space(12.0);
+    let (mut go, mut cancel) = (false, false);
+    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        go = widgets::pill_button(ui, tl!("Continue"), true).clicked();
+        cancel = widgets::pill_button(ui, tl!("Cancel"), false).clicked();
+    });
+    (go, cancel)
 }
 
 /// The longest side, in pixels, of one page's print-preview raster (also kept within the GPU's
