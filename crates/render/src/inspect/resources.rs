@@ -390,18 +390,20 @@ pub const ATTACHMENT_NEEDS_PASSWORD: &str = "the attachment is encrypted: enter 
 /// The most bytes an attachment decodes to: a cap that defuses decompression bombs.
 const MAX_ATTACHMENT_BYTES: usize = 1 << 30;
 
-/// Fetch an attachment's bytes (decoded), at most [`MAX_ATTACHMENT_BYTES`]. An encrypted document
-/// is read through the document model, which decrypts each string and stream with the crypt
-/// filter that applies to it (ISO 32000-2 §7.6.6, §7.4.10). Opened without the password its
-/// embedded files need (`/AuthEvent /EFOpen`), an attachment stored in the clear reads, and one
-/// encrypted for that password is [`ATTACHMENT_NEEDS_PASSWORD`], never its encrypted bytes.
+/// Fetch an attachment's bytes (decoded), at most [`MAX_ATTACHMENT_BYTES`]. A damaged stream (Flate
+/// data cut short, say) is an error, never the part that decoded passed off as the whole file.
+/// The document is read through the document model, which decrypts each string and stream of an
+/// encrypted one with the crypt filter that applies to it (ISO 32000-2 §7.6.6, §7.4.10). Opened
+/// without the password its embedded files need (`/AuthEvent /EFOpen`), an attachment stored in
+/// the clear reads, and one encrypted for that password is [`ATTACHMENT_NEEDS_PASSWORD`], never
+/// its encrypted bytes.
 pub fn attachment_data(bytes: &[u8], password: Option<&str>, att: &Attachment) -> Result<Vec<u8>, String> {
     let run = || -> Result<Vec<u8>, String> {
         // lopdf can't read a document opened without its key at all, and with the key it reads
         // the strings of one whose crypt filters differ (`/StrF /Identity`, say) as encrypted.
-        if let Ok(model) = pdfcraft_cos::Document::open_with_password(std::sync::Arc::new(bytes.to_vec()), password)
-            && model.security().is_some()
-        {
+        // It also passes the decoded part of a damaged stream as the whole: it is only the
+        // fallback for a file the model can't open.
+        if let Ok(model) = pdfcraft_cos::Document::open_with_password(std::sync::Arc::new(bytes.to_vec()), password) {
             return model_attachment_data(model, att);
         }
         let options = load_options(password);
@@ -418,7 +420,7 @@ pub fn attachment_data(bytes: &[u8], password: Option<&str>, att: &Attachment) -
     catch_unwind(AssertUnwindSafe(run)).unwrap_or_else(|p| Err(format!("reading the attachment crashed: {}", crate::raster::panic_message(&p))))
 }
 
-/// [`attachment_data`] for `model`, an encrypted document. Its data is decrypted as it loads; opened
+/// [`attachment_data`] for `model`. An encrypted one's data is decrypted as it loads; opened
 /// without the password its embedded files need, the stream of an attachment that password
 /// encrypts is held as stored ([`pdfcraft_cos::Document::reads_as_stored`]), and one that no crypt
 /// filter encrypts (`/Identity`, ISO 32000-2 §7.6.6, §7.4.10) is in the clear and reads.
@@ -433,7 +435,8 @@ fn model_attachment_data(model: pdfcraft_cos::Document, att: &Attachment) -> Res
     if model.reads_as_stored(stream) {
         return Err(ATTACHMENT_NEEDS_PASSWORD.into());
     }
-    stream.decoded_within(MAX_ATTACHMENT_BYTES).map_err(|e| e.to_string())
+    // Strict: the bytes are exported as a file, so a damaged stream must not pass for a shorter one.
+    stream.decoded_strict_within(MAX_ATTACHMENT_BYTES).map_err(|e| e.to_string())
 }
 
 /// The `/EF` entry of the file specification `att` names: its embedded file stream, unresolved.

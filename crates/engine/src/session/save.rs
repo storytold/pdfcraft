@@ -118,12 +118,14 @@ impl Session {
         })?;
         // Saving a state that keeps the security it was opened with reopens it with the same
         // passwords, so it reopens as owner. A state whose attachments the password unlocked is
-        // read with it from now on (the file, its attachments, and the file a save reopens).
+        // read with it from now on (the file, its attachments, and the file a save reopens). The
+        // renderer takes only the user password of R2–R4 files: for their owner password it is
+        // given the user password owner authentication recovered.
         let adopt = |cos: &pdfcraft_cos::Document, keys: &mut Keys, unlocked_attachments: bool| {
             if !cos.encryption_changed() {
                 keys.reopen = Some(password.to_owned());
                 if unlocked_attachments {
-                    keys.render = Some(password.to_owned());
+                    keys.render = Some(crate::recovered_render_password(cos).unwrap_or_else(|| password.to_owned()));
                 }
             }
         };
