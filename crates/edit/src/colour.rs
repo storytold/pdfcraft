@@ -61,7 +61,7 @@ pub(crate) const MAX_LOOKUP_DECODED: usize = 64 << 10;
 pub(crate) const MAX_PAGE_LOOKUPS: usize = 1 << 20;
 
 /// What decoding Indexed lookup streams may still cost: `left` bytes in all, at most `cap` for
-/// one table. A table past either reads as empty, so its colours read as black.
+/// one table. A table past either reads as empty, so its colours read as black (see [`rgb`]).
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Lookups {
     left: usize,
@@ -251,7 +251,12 @@ pub(crate) fn rgb(space: &Space, values: &[f64]) -> [f64; 3] {
         Space::Indexed { base, hival, table } => {
             let n = base.components().max(1);
             let i = (v(0).max(0.0).round() as usize).min(*hival);
-            let vals: Vec<f64> = (0..n).map(|k| table.get(i * n + k).map(|b| *b as f64 / 255.0).unwrap_or(0.0)).collect();
+            // A table without this entry (too short, or not decoded: see `Lookups`) gives black
+            // whatever its base: zeros read in a CMYK base would be white.
+            let Some(entry) = table.get(i.saturating_mul(n)..i.saturating_add(1).saturating_mul(n)) else {
+                return [0.0, 0.0, 0.0];
+            };
+            let vals: Vec<f64> = entry.iter().map(|b| f64::from(*b) / 255.0).collect();
             // Lab tables hold the L*, a*, b* range in bytes; the others are 0..1 already.
             match &**base {
                 Space::Lab { range, .. } => {

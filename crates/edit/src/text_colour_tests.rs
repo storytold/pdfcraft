@@ -219,3 +219,16 @@ fn lookup_tables_share_one_allowance_for_the_page() {
     assert_eq!(reads([1.0, 0.0, 0.0]), crate::colour::MAX_PAGE_LOOKUPS / PADDED, "{:?}", colours(&doc));
     assert_eq!(reads([0.0; 3]), TABLES - crate::colour::MAX_PAGE_LOOKUPS / PADDED, "{:?}", colours(&doc));
 }
+
+/// An Indexed colour whose table has no entry for it reads as black whatever the base space: a
+/// CMYK table past the per-table limit, or too short, isn't read as zero ink (white).
+#[test]
+fn a_missing_lookup_entry_is_black_in_any_base() {
+    let big = format!("FFFFFFFF{}>", "0".repeat(2 * (crate::colour::MAX_LOOKUP_DECODED + 4)));
+    let extra = vec![format!("<< /Filter /ASCIIHexDecode /Length {} >>\nstream\n{big}\nendstream", big.len())];
+    let spaces = "/Big [/Indexed /DeviceCMYK 0 9 0 R] /Short [/Indexed /DeviceCMYK 1 <00000000>]";
+    let doc = page_with(&content(&[("/Big cs 0 scn", "Big"), ("/Short cs 1 scn", "Short"), ("/Short cs 0 scn", "Held")]), spaces, "", "", &extra);
+    assert!(near(colour_of(&doc, "Big"), [0.0; 3]), "{:?}", colours(&doc));
+    assert!(near(colour_of(&doc, "Short"), [0.0; 3]), "{:?}", colours(&doc));
+    assert!(near(colour_of(&doc, "Held"), [1.0; 3]), "an entry it has still reads: {:?}", colours(&doc));
+}
