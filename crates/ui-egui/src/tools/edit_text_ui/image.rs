@@ -266,7 +266,7 @@ fn same_rect(a: [f64; 4], b: [f64; 4]) -> bool {
 }
 
 /// Crop mode for the selected image `i` whose visible frame is `b` (screen). Returns `true`
-/// (the pointer is the crop's while it lasts; its keys are read by [`picture_keys`]).
+/// (the pointer is the crop's while it lasts; the key pass, `canvas::key_order`, reads its keys).
 #[allow(clippy::cognitive_complexity)]
 fn crop_input(cx: &ImageCx<'_>, view: &mut DocView, i: usize, image: &pdfcraft_engine::PageImage) -> bool {
     let ImageCx { ui, resp, xf, ptr, page, info, press, gate, .. } = *cx;

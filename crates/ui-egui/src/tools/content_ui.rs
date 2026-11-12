@@ -111,7 +111,8 @@ pub struct ContentView {
     grab: Option<(usize, Grab, Pos2)>,
     /// Where the press nobody holds began, on which page: Add text's click starts its new box there.
     pressed_at: Option<(usize, Pos2)>,
-    /// A button is down on the pages this frame (for [`keys`], which runs after them).
+    /// A button was down on the pages when they were last drawn (for [`delete_key`], which the key
+    /// pass runs before they are drawn again).
     held: bool,
     undrawable: UndrawableMemo,
     layout: Option<(AddedText, f32, f64, [f64; 4])>,
