@@ -85,17 +85,20 @@ fn cli_batch_writes_the_log_file_only_when_asked_review_regression_1() {
     std::fs::create_dir_all(&bad_log).unwrap();
     let logged = Command::new(BIN).current_dir(&dir).args(base).arg("--log").arg(&bad_log).output().unwrap();
     let stdout = String::from_utf8_lossy(&logged.stdout);
-    assert!(stdout.contains("completed") || stdout.contains("failed"), "Batch report should be printed to stdout even when log write fails: {stdout}");
+    assert!(
+        stdout.contains("completed") || stdout.contains("failed"),
+        "Batch report should be printed to stdout even when log write fails: {stdout}"
+    );
 
     // Test 3: Log write doesn't overwrite input files
     let log_as_input = dir.join("input/good.txt");
-    let logged2 = Command::new(BIN).current_dir(&dir).args(base).arg("--log").arg(&log_as_input).output().unwrap();
+    let _logged2 = Command::new(BIN).current_dir(&dir).args(base).arg("--log").arg(&log_as_input).output().unwrap();
     let content = std::fs::read_to_string(&log_as_input).unwrap();
     assert_eq!(content, "Hello world", "Input file should not be overwritten by log: {content}");
 
     // Test 4: Dry-run log entries include planned output paths
     let log_file = dir.join("dryrun.log");
-    let dry_run = Command::new(BIN).current_dir(&dir).args(base).arg("--log").arg(&log_file).arg("--dry-run").output().unwrap();
+    let _dry_run = Command::new(BIN).current_dir(&dir).args(base).arg("--log").arg(&log_file).arg("--dry-run").output().unwrap();
     let log_text = std::fs::read_to_string(&log_file).expect("log file written for dry-run");
     assert!(log_text.contains("planned") && log_text.contains("out/good.pdf"), "Dry-run log should include planned output paths: {log_text}");
 

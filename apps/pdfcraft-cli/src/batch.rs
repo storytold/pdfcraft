@@ -44,8 +44,7 @@ pub(super) fn run(args: &[String]) -> Result<(), CliError> {
     }
     let steps: Vec<_> = flag(args, "--steps").ok_or("batch: missing --steps (convert, ocr, optimize)")?.split(',').collect();
     let out = flag(args, "--out-dir").ok_or("batch: missing --out-dir")?;
-    let mut params =
-        json!({"paths":paths,"steps":steps,"out_dir":out,"recursive":seen.contains("--recursive"),"stop_on_error":seen.contains("--stop-on-error"),"dry_run":seen.contains("--dry-run")});
+    let mut params = json!({"paths":paths,"steps":steps,"out_dir":out,"recursive":seen.contains("--recursive"),"stop_on_error":seen.contains("--stop-on-error"),"dry_run":seen.contains("--dry-run")});
     for (option, key) in [("--ppi", "ppi"), ("--quality", "quality"), ("--dpi", "dpi")] {
         if let Some(v) = flag(args, option) {
             params[key] = serde_json::from_str(v).map_err(|_| format!("batch: {option} needs a number"))?;
@@ -68,23 +67,30 @@ pub(super) fn run(args: &[String]) -> Result<(), CliError> {
         });
         // Never let the log replace a file the batch read or published: collect every
         // discovered input and every output this batch wrote, then refuse a match.
-        let protected: Vec<PathBuf> = content.iter().filter_map(|c| match c {
-            pdfcraft_automation::Content::Json(v) => v["files"].as_array().map(|files| {
-                files.iter().filter_map(|f| {
-                    let mut names = Vec::new();
-                    if let Some(p) = f.get("path").and_then(|v| v.as_str()) {
-                        names.push(PathBuf::from(p));
-                    }
-                    if f.get("status").and_then(|v| v.as_str()) == Some("ok") {
-                        if let Some(p) = f.get("output").and_then(|v| v.as_str()) {
-                            names.push(PathBuf::from(p));
-                        }
-                    }
-                    Some(names)
-                }).flatten()
-            }),
-            _ => None,
-        }).flatten().collect();
+        let protected: Vec<PathBuf> = content
+            .iter()
+            .filter_map(|c| match c {
+                pdfcraft_automation::Content::Json(v) => v["files"].as_array().map(|files| {
+                    files
+                        .iter()
+                        .filter_map(|f| {
+                            let mut names = Vec::new();
+                            if let Some(p) = f.get("path").and_then(|v| v.as_str()) {
+                                names.push(PathBuf::from(p));
+                            }
+                            if f.get("status").and_then(|v| v.as_str()) == Some("ok") {
+                                if let Some(p) = f.get("output").and_then(|v| v.as_str()) {
+                                    names.push(PathBuf::from(p));
+                                }
+                            }
+                            Some(names)
+                        })
+                        .flatten()
+                }),
+                _ => None,
+            })
+            .flatten()
+            .collect();
         let target = if Path::new(path).is_absolute() {
             PathBuf::from(path)
         } else {
