@@ -2334,6 +2334,7 @@ $host.messageBox(concat(table.row.occur.max, "|", table._row.max))"#,
             (QTY, "qty.border.fill.color", "border#0/fill#0/color#0", Some("value"), "value", " 1 , 2 , 3 "),
             (QTY, "qty.border.fill.color", "border#0/fill#0/color#0", Some("value"), "value", "red"),
             (QTY, "qty.border.fill.color", "border#0/fill#0/color#0", Some("value"), "value", "1,2"),
+            (QTY, "qty.border.fill.color", "border#0/fill#0/color#0", Some("value"), "value", "NaN,0,0"),
             (QTY, "qty.border.edge", "border#0/edge#0", Some("thickness"), "thickness", "0.5pt"),
             (QTY, "qty.border.edge", "border#0/edge#0", Some("thickness"), "thickness", "2em"),
             (QTY, "qty.border.edge", "border#0/edge#0", Some("thickness"), "thickness", "thick"),
@@ -2926,11 +2927,13 @@ page1.note.presence = "visible""#);
         assert_eq!(alerts, ["[null]"]);
     }
 
-    /// The scripting host and the form refuse the same values: both check a change with the
-    /// rules of `pdfcraft-xfa-rules`, the crate both depend on. Values either side would take or
-    /// refuse alone are listed; each is judged alike.
+    /// The form keeps exactly the changes the scripting host lets a script make: what
+    /// `Overrides::set_prop` keeps (its own checks and budgets, on a form keeping nothing yet) is
+    /// what the host's check (`pdfcraft-xfa-rules`) accepts, for values taken and refused alike.
+    /// The rules themselves are tested in `pdfcraft-xfa-rules`, and a script's write end to end
+    /// in `a_script_reads_back_a_property_change_exactly_when_the_form_keeps_it`.
     #[test]
-    fn the_script_and_the_form_refuse_the_same_property_values() {
+    fn the_form_keeps_what_the_scripting_host_lets_through() {
         let cases: [(&str, Option<&str>, &str); 16] = [
             ("border#0/fill#0/color#0", Some("value"), "51,102,153"),
             ("border#0/fill#0/color#0", Some("value"), "red"),
@@ -2952,8 +2955,6 @@ page1.note.presence = "visible""#);
         let mut refused = 0;
         for (path, attr, value) in cases {
             let script = pdfcraft_js::xfa::property_value_ok(path, attr, value);
-            let form = pdfcraft_xfa::restyle::check(path, attr, value);
-            assert_eq!(script.is_ok(), form.is_ok(), "{path} {attr:?} {value:?}: {script:?} {form:?}");
             let mut ov = pdfcraft_xfa::Overrides::default();
             assert_eq!(script.is_ok(), ov.set_prop("form[0].s[0].f[0]", path, attr, value).is_ok(), "{path} {attr:?} {value:?}");
             refused += usize::from(script.is_err());

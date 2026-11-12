@@ -159,7 +159,9 @@ pub fn color_components(s: &str) -> Option<[f64; 3]> {
 
 /// Whether a change may set `value` as attribute `attr` (`None`: the text) of the property at
 /// `path`; `Err` says why not. A path that is no property ([`steps`]), text where a property
-/// holds none, a colour that is not `r,g,b`, a measurement or a whole number that doesn't read,
+/// holds none, a colour that is not `r,g,b` of finite numbers (the form draws `NaN` as 0, so a
+/// script would read back a colour other than the one drawn), a measurement or a whole number
+/// that doesn't read,
 /// and the attributes that say how a script runs or how the data binds (a validation script's,
 /// `bind`'s `match` and `ref`, which the form doesn't read again once open) are refused; the
 /// property keeps what it had. Other attributes take any value, as the template's do: one a
@@ -186,7 +188,7 @@ pub fn check(path: &str, attr: Option<&str>, value: &str) -> Result<(), String> 
     if tag == "script" || (tag == "bind" && matches!(attr, "match" | "ref")) {
         return Err(format!("{tag} {attr} is not changed once the form is open"));
     }
-    if tag == "color" && attr == "value" && color_components(value).is_none() {
+    if tag == "color" && attr == "value" && color_components(value).is_none_or(|c| c.iter().any(|v| !v.is_finite())) {
         return Err(format!("{value:?} is not a colour (r,g,b)"));
     }
     if MEASURES.contains(&attr) && measure(value).is_none() {
@@ -196,4 +198,116 @@ pub fn check(path: &str, attr: Option<&str>, value: &str) -> Result<(), String> 
         return Err(format!("{value:?} is not a whole number"));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const COLOR: &str = "border#0/fill#0/color#0";
+
+    /// A colour is three finite numbers: `NaN` and infinities (which `f64` parses) are refused,
+    /// as the form would draw them as 0, and what a script read back would not be drawn.
+    #[test]
+    fn colours_are_three_finite_numbers() {
+        for ok in ["51,102,153", " 1 , 2 , 3 ", "0,0,0,9", "255.5,0,0"] {
+            assert_eq!(check(COLOR, Some("value"), ok), Ok(()), "{ok}");
+        }
+        for bad in ["NaN,0,0", "0,inf,0", "0,0,-infinity", "red", "1,2", "", "1,,2"] {
+            assert!(check(COLOR, Some("value"), bad).is_err(), "{bad}");
+        }
+        // The template reader still reads them (and zeroes them when drawing).
+        assert!(color_components("NaN,0,0").is_some_and(|c| c[0].is_nan()));
+    }
+
+    /// Measurements read in points, in every unit XFA 3.3 names; non-finite numbers, `em`,
+    /// exponents and unknown units are refused, and huge values are clamped.
+    #[test]
+    fn measurements_read_in_points_and_refuse_what_is_not_one() {
+        assert_eq!(measure("72pt"), Some(72.0));
+        assert_eq!(measure("1in"), Some(72.0));
+        assert_eq!(measure(" 12 "), Some(12.0));
+        assert_eq!(measure("2pc"), Some(24.0));
+        assert!(measure("25.4mm").is_some_and(|v| (v - 72.0).abs() < 1e-9));
+        assert!(measure("2.54cm").is_some_and(|v| (v - 72.0).abs() < 1e-9));
+        assert_eq!(measure("1e309in"), None);
+        assert_eq!(measure("NaNpt"), None);
+        assert_eq!(measure("infpt"), None);
+        assert_eq!(measure("2em"), None);
+        assert_eq!(measure("thick"), None);
+        assert_eq!(measure("1e3pt"), None, "no exponents: the unit starts at the first letter");
+        assert_eq!(measure("100000000in"), Some(100_000.0));
+        assert_eq!(measure("-100000000in"), Some(-100_000.0));
+        assert!(check("font#0", Some("size"), "1e309in").is_err());
+        assert_eq!(check("caption#0", Some("reserve"), "-5in"), Ok(()));
+    }
+
+    /// Whole numbers where an attribute holds one (`occur max` may be -1).
+    #[test]
+    fn whole_numbers_are_whole() {
+        assert_eq!(check("occur#0", Some("max"), "-1"), Ok(()));
+        assert_eq!(check("occur#0", Some("max"), " 3 "), Ok(()));
+        for bad in ["three", "1.5", "", "99999999999999999999"] {
+            assert!(check("occur#0", Some("max"), bad).is_err(), "{bad}");
+        }
+        assert!(check("ui#0/textEdit#0/comb#0", Some("numberOfCells"), "x").is_err());
+    }
+
+    /// Paths are bounded: up to [`MAX_STEPS`] steps from one of the [`ROOTS`], each up to
+    /// [`MAX_INDEX`]; an entry of the first two item lists up to [`MAX_ITEM_INDEX`] with nothing
+    /// under it, a third list's up to [`MAX_INDEX`]; a border's edges and corners up to 3.
+    #[test]
+    fn paths_are_bounded() {
+        assert_eq!(steps("border#0/edge#1"), Some(vec![("border", 0), ("edge", 1)]));
+        assert!(steps("a#0/b#0/c#0/d#0/e#0/f#0/g#0/h#0").is_none(), "not a root");
+        assert!(steps("border#0/a#0/b#0/c#0/d#0/e#0/f#0/g#0").is_some(), "{MAX_STEPS} steps");
+        assert!(steps("border#0/a#0/b#0/c#0/d#0/e#0/f#0/g#0/h#0").is_none(), "one more");
+        assert!(steps("font#7").is_some());
+        assert!(steps("font#8").is_none());
+        assert!(steps("font").is_none());
+        assert!(steps("font#x").is_none());
+        assert!(steps("font#-1").is_none());
+        assert!(steps("").is_none());
+        assert!(steps("nowhere#0").is_none());
+        assert!(steps("border#0/edge#3").is_some());
+        assert!(steps("border#0/edge#4").is_none());
+        assert!(steps("border#0/corner#4").is_none());
+        assert!(steps("ui#0/edge#4").is_some(), "only a border's or rectangle's edges stop at 3");
+        assert!(steps("items#0/integer#999").is_some());
+        assert!(steps("items#1/text#999").is_some());
+        assert!(steps("items#0/integer#1000").is_none());
+        assert!(steps("items#0/text#0/x#0").is_none(), "nothing under an entry");
+        assert!(steps("items#2/text#7").is_some());
+        assert!(steps("items#2/text#8").is_none(), "a third list is an ordinary property");
+        assert!(steps("bad name#0").is_none());
+    }
+
+    /// Texts are set only where a property holds one; scripts and bindings are not changed.
+    #[test]
+    fn texts_scripts_and_bindings() {
+        assert_eq!(check("assist#0/toolTip#0", None, "tip"), Ok(()));
+        assert_eq!(check("caption#0/value#0/text#0", None, "Label"), Ok(()));
+        assert_eq!(check("items#0/text#3", None, "entry"), Ok(()));
+        assert!(check("value#0/text#0", None, "x").is_err(), "the object's value goes through its data");
+        assert!(check("font#0", None, "x").is_err());
+        assert!(check("validate#0/script#0", None, "true").is_err());
+        assert!(check("validate#0/script#0", Some("contentType"), "x").is_err());
+        assert!(check("bind#0", Some("match"), "none").is_err());
+        assert!(check("bind#0", Some("ref"), "$.x").is_err());
+        assert_eq!(check("value#0", Some("override"), "1"), Ok(()));
+        assert!(check("font#0", Some("bad name"), "1").is_err());
+        assert!(check("assist#0/toolTip#0", None, &"x".repeat(MAX_VALUE + 1)).is_err());
+        assert_eq!(check("assist#0/toolTip#0", None, &"x".repeat(MAX_VALUE)), Ok(()));
+    }
+
+    #[test]
+    fn names_and_occurrences() {
+        assert!(is_name("_a-1.b"));
+        assert!(!is_name("1a"));
+        assert!(!is_name(""));
+        assert!(!is_name(&"a".repeat(65)));
+        assert!(is_occurrence("occur#0@max"));
+        assert!(!is_occurrence("occur#1@max"));
+        assert!(!is_occurrence("occur#0@other"));
+    }
 }
