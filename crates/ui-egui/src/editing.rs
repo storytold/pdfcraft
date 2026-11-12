@@ -553,6 +553,7 @@ impl PdfCraftApp {
             }
             Some(crate::canvas::ViewAction::Extract) => self.open_extract_dialog(),
             Some(crate::canvas::ViewAction::Split) => self.dialog = Some(crate::Dialog::Split),
+            Some(crate::canvas::ViewAction::SplitPages) => self.dialog = Some(crate::Dialog::SplitPages),
             Some(crate::canvas::ViewAction::SplitBeforeSelected) => {
                 self.split_draft.mode = crate::SplitMode::Selection;
                 self.dialog = Some(crate::Dialog::Split);

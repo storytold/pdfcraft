@@ -172,6 +172,33 @@ impl Default for SplitDraft {
     }
 }
 
+/// Settings for the Split Pages (page into parts) dialog.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SplitPagesLayout {
+    /// 50% vertical split (2 parts: Left / Right).
+    Vertical2,
+    /// 50% horizontal split (2 parts: Top / Bottom).
+    Horizontal2,
+    /// 2x2 grid (4 parts: Top-Left, Top-Right, Bottom-Left, Bottom-Right).
+    Grid4,
+    /// Custom vertical ratio (e.g. custom percentage from left).
+    CustomRatio,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct SplitPagesDraft {
+    pub layout: SplitPagesLayout,
+    pub all_pages: bool,
+    pub parts: usize,
+    pub ratio_percent: f64,
+}
+
+impl Default for SplitPagesDraft {
+    fn default() -> Self {
+        Self { layout: SplitPagesLayout::Vertical2, all_pages: false, parts: 2, ratio_percent: 50.0 }
+    }
+}
+
 /// Acrobat's Split by: number of pages, file size, top-level bookmarks (and PdfCraft's
 /// before-selected-pages).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

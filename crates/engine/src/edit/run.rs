@@ -15,6 +15,7 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
         | Edit::ReversePages { .. }
         | Edit::InsertBlankPage { .. }
         | Edit::DuplicatePages { .. }
+        | Edit::SplitPages { .. }
         | Edit::ReplacePages { .. }
         | Edit::SetPageBox { .. }
         | Edit::SetTransition { .. }
@@ -545,6 +546,9 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
                 ));
             }
             pdfcraft_organize::duplicate_pages(doc, pages, *at)?
+        }
+        Edit::SplitPages { pages, split } => {
+            pdfcraft_organize::split_pages(doc, pages, *split)?;
         }
         Edit::ReplacePages { pages, name, bytes, src_pages } => {
             let src = crate::sources::open_source_into(name, bytes, doc)?;

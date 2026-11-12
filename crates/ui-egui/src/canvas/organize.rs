@@ -428,6 +428,10 @@ pub(super) fn organize_grid(
                         view.pending_action = Some(ViewAction::SplitBeforeSelected);
                         ui.close();
                     }
+                    if ui.button(tl!("Split pages into parts…")).clicked() {
+                        view.pending_action = Some(ViewAction::SplitPages);
+                        ui.close();
+                    }
                     if ui.add_enabled(editable, egui::Button::new(tl!("Replace pages…"))).clicked() {
                         view.pending_action = Some(ViewAction::ReplacePages);
                         ui.close();

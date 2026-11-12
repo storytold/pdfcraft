@@ -183,6 +183,7 @@ const PAGES: &[&str] = &[
     "page.replace",
     "page.extract",
     "page.split",
+    "page.split_parts",
     "page.duplicate",
     "page.delete",
     SEP,

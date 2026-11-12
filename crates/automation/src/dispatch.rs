@@ -315,6 +315,7 @@ impl Automation {
                 let at = self.opt_position(&a, "at")?;
                 self.apply(&a, Edit::DuplicatePages { pages, at })?
             }
+            "page_split_parts" => self.page_split_parts(&a)?,
             "page_set_box" => self.page_set_box(&a)?,
             "page_transition_set" => self.page_transition_set(&a)?,
             "doc_create" => self.doc_create(&a)?,
@@ -1009,5 +1010,39 @@ impl Automation {
         out["not_scanned"] = json!(numbered(&report.not_scanned));
         out["skipped"] = json!(skipped);
         Ok(out)
+    }
+
+    fn page_split_parts(&mut self, a: &Args<'_>) -> Result<Value> {
+        let pages = if a.get("pages").is_some() {
+            self.pages(a, "pages")?
+        } else {
+            let n = self.doc(a)?.info.pages.len();
+            (0..n).collect()
+        };
+        let direction = a.opt_str("direction")?.unwrap_or("vertical");
+        let parts = a.opt_int("parts")?.unwrap_or(2) as usize;
+        let split = match direction {
+            "vertical" => {
+                if let Some(ratio) = a.opt_num("ratio")? {
+                    pdfcraft_engine::PageSplit::VerticalRatio(ratio)
+                } else {
+                    pdfcraft_engine::PageSplit::Vertical { parts }
+                }
+            }
+            "horizontal" => {
+                if let Some(ratio) = a.opt_num("ratio")? {
+                    pdfcraft_engine::PageSplit::HorizontalRatio(ratio)
+                } else {
+                    pdfcraft_engine::PageSplit::Horizontal { parts }
+                }
+            }
+            "grid" => {
+                let rows = a.opt_int("rows")?.unwrap_or(2) as usize;
+                let columns = a.opt_int("columns")?.unwrap_or(2) as usize;
+                pdfcraft_engine::PageSplit::Grid { rows, columns }
+            }
+            other => return Err(ToolError::InvalidArgs(format!("unsupported split direction: {other}"))),
+        };
+        self.apply(a, Edit::SplitPages { pages, split })
     }
 }

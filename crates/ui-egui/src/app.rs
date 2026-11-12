@@ -219,6 +219,7 @@ impl PdfCraftApp {
             pick_override: None,
             export_dir_override: None,
             split_draft: SplitDraft::default(),
+            split_pages_draft: SplitPagesDraft::default(),
             extract_draft: ExtractDraft::default(),
             rotate_draft: RotateDraft::default(),
             summary_sort: Default::default(),

@@ -4982,3 +4982,95 @@ fn combining_some_pages_brings_only_their_bookmarks_and_no_attachments() {
     assert_eq!(source_bookmarks(&all), [("Chapter one".to_string(), vec!["Section".to_string()])]);
     assert!(attachments(&all));
 }
+
+#[test]
+fn split_pages_vertical_50_percent_unrotated() {
+    let mut doc = open(fixture());
+    let _ = insert_blank_page(&mut doc, 0, 600.0, 400.0).unwrap();
+    let initial_count = page_count(&doc).unwrap();
+
+    let created = split_pages(&mut doc, &[0], PageSplit::Vertical { parts: 2 }).unwrap();
+    assert_eq!(created, vec![0, 1]);
+    assert_eq!(page_count(&doc).unwrap(), initial_count + 1);
+
+    let boxes = page_boxes(&doc).unwrap();
+    let b0 = boxes[0][1];
+    let b1 = boxes[1][1];
+
+    assert_eq!(b0[0], 0.0);
+    assert_eq!(b0[2], 300.0);
+    assert_eq!(b1[0], 300.0);
+    assert_eq!(b1[2], 600.0);
+    assert_eq!(b0[3] - b0[1], 400.0);
+    assert_eq!(b1[3] - b1[1], 400.0);
+}
+
+#[test]
+fn split_pages_horizontal_50_percent_unrotated() {
+    let mut doc = open(fixture());
+    let _ = insert_blank_page(&mut doc, 0, 600.0, 400.0).unwrap();
+    let initial_count = page_count(&doc).unwrap();
+
+    let created = split_pages(&mut doc, &[0], PageSplit::Horizontal { parts: 2 }).unwrap();
+    assert_eq!(created, vec![0, 1]);
+    assert_eq!(page_count(&doc).unwrap(), initial_count + 1);
+
+    let boxes = page_boxes(&doc).unwrap();
+    let b0 = boxes[0][1];
+    let b1 = boxes[1][1];
+
+    assert_eq!(b0[2] - b0[0], 600.0);
+    assert_eq!(b1[2] - b1[0], 600.0);
+    assert_eq!(b0[3] - b0[1], 200.0);
+    assert_eq!(b1[3] - b1[1], 200.0);
+}
+
+#[test]
+fn split_pages_rotated_90_vertical() {
+    let mut doc = open(fixture());
+    let initial_count = page_count(&doc).unwrap();
+    assert_eq!(page_rotation(&doc, 0).unwrap(), 90);
+
+    let created = split_pages(&mut doc, &[0], PageSplit::Vertical { parts: 2 }).unwrap();
+    assert_eq!(created, vec![0, 1]);
+    assert_eq!(page_count(&doc).unwrap(), initial_count + 1);
+
+    let boxes = page_boxes(&doc).unwrap();
+    let b0 = boxes[0][1];
+    let b1 = boxes[1][1];
+    // Under Rotate 90, visual width corresponds to user height
+    assert_eq!(b0[2] - b0[0], 300.0);
+    assert_eq!(b1[2] - b1[0], 300.0);
+    assert_eq!(b0[3] - b0[1], 200.0);
+    assert_eq!(b1[3] - b1[1], 200.0);
+}
+
+#[test]
+fn split_pages_grid_2x2() {
+    let mut doc = open(fixture());
+    let initial_count = page_count(&doc).unwrap();
+    let created = split_pages(&mut doc, &[0], PageSplit::Grid { rows: 2, columns: 2 }).unwrap();
+    assert_eq!(created, vec![0, 1, 2, 3]);
+    assert_eq!(page_count(&doc).unwrap(), initial_count + 3);
+}
+
+#[test]
+fn split_pages_custom_ratio_unrotated() {
+    let mut doc = open(fixture());
+    let _ = insert_blank_page(&mut doc, 0, 600.0, 400.0).unwrap();
+
+    split_pages(&mut doc, &[0], PageSplit::VerticalRatio(0.25)).unwrap();
+    let boxes = page_boxes(&doc).unwrap();
+    let b0 = boxes[0][1];
+    let b1 = boxes[1][1];
+    assert!((b0[2] - b0[0] - 150.0).abs() < 1e-3);
+    assert!((b1[2] - b1[0] - 450.0).abs() < 1e-3);
+}
+
+#[test]
+fn split_pages_validation() {
+    let mut doc = open(fixture());
+    assert_eq!(split_pages(&mut doc, &[99], PageSplit::Vertical { parts: 2 }), Err(OrganizeError::NoSuchPage(99)));
+    assert!(split_pages(&mut doc, &[0], PageSplit::Vertical { parts: 1 }).is_err());
+    assert!(split_pages(&mut doc, &[0], PageSplit::VerticalRatio(1.5)).is_err());
+}
