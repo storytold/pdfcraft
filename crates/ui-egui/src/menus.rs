@@ -496,6 +496,10 @@ impl PdfCraftApp {
                     doc.is_some_and(|d| d.allows_copying() && (command.id != CUT || d.allows_modification()))
                 }
                 PASTE if edit_objects && self.object_clipboard.is_some() => doc.is_some_and(pdfcraft_engine::Document::allows_modification),
+                // Selected comments are what ⌘C copies when no text is selected, and ⌘V pastes
+                // copied ones (#7123); the menu items send those same events.
+                "edit.copy" if !organize && view.is_some_and(|v| v.comments.selected.is_some()) => enabled_id("comment.copy"),
+                PASTE if !organize && self.comment_clipboard.is_some() => enabled_id("comment.paste"),
                 CUT => organize && enabled_id("page.cut"),
                 PASTE => organize && self.page_clipboard.is_some() && enabled_id("page.paste"),
                 SELECT_ALL | DELETE => has_doc,

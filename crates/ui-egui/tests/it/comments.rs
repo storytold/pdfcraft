@@ -5531,6 +5531,26 @@ fn edit_delete_with_a_popup_open_removes_the_selected_comment() {
     assert!(comments(&h).is_empty(), "Edit ▸ Delete removed the comment");
 }
 
+/// Edit ▸ Copy and Paste take a selected drawn comment as ⌘C and ⌘V do (#7123). Both were
+/// greyed out, as the menu only counted selected text, pictures and objects.
+#[test]
+fn edit_copy_and_paste_are_enabled_for_a_selected_comment() {
+    let mut h = selected_square();
+    let state = |h: &Harness<'static, PdfCraftApp>, id: &str| h.state().menu_state(&h.ctx, &craft_menu::CommandRef::new(id)).enabled;
+    assert!(state(&h, "edit.copy"), "Edit ▸ Copy is enabled with a comment selected");
+    assert!(!state(&h, "edit.paste"), "nothing is copied yet");
+
+    let ctx = h.ctx.clone();
+    h.state_mut().run_menu_command(&ctx, &craft_menu::CommandRef::new("edit.copy"));
+    h.run_steps(4);
+    assert!(h.state().comment_clipboard.is_some(), "Edit ▸ Copy copied the comment");
+    assert!(state(&h, "edit.paste"), "Edit ▸ Paste is enabled with a comment copied");
+
+    h.state_mut().views[0].comments.selected = None;
+    h.run_steps(2);
+    assert!(!state(&h, "edit.copy"), "with nothing selected, Copy is greyed out again");
+}
+
 /// A native menu's click never reaches the window, so Edit ▸ Delete closes the Hotbar tools window,
 /// as it closes egui's popups, and removes the selected comment. The window held the Delete.
 #[test]
