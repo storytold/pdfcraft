@@ -335,11 +335,8 @@ fn other_candidates() -> Vec<PathBuf> {
 fn han_candidates(traditional: bool) -> Vec<PathBuf> {
     if cfg!(windows) {
         // Microsoft YaHei / JhengHei, then the older SimSun / MingLiU collections.
-        let files: &[&str] = if traditional {
-            &["msjh.ttc", "msyh.ttc", "mingliu.ttc", "simsun.ttc"]
-        } else {
-            &["msyh.ttc", "msjh.ttc", "simsun.ttc", "mingliu.ttc"]
-        };
+        let files: &[&str] =
+            if traditional { &["msjh.ttc", "msyh.ttc", "mingliu.ttc", "simsun.ttc"] } else { &["msyh.ttc", "msjh.ttc", "simsun.ttc", "mingliu.ttc"] };
         let mut list: Vec<PathBuf> = files.iter().map(|f| windows_fonts().join(f)).collect();
         // Noto installed for the current user only lives under LOCALAPPDATA. Try the
         // region-specific face before the multi-language collection so Simplified
