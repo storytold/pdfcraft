@@ -1,4 +1,4 @@
-//! PdfCraft patch (104): recovered text, for glyphs whose strict text is missing or
+//! PdfCraft patch (105): recovered text, for glyphs whose strict text is missing or
 //! untrustworthy.
 //!
 //! [`crate::font::Glyph::as_unicode`] reads a glyph's text the way ISO 32000-2 §9.10.2 lays
@@ -234,7 +234,7 @@ pub fn recovery_counters() -> RecoveryCounters {
     COUNTERS.with(std::cell::Cell::get)
 }
 
-/// PdfCraft patch (104) test hooks (the `test-counters` feature, enabled by pdfcraft-render's
+/// PdfCraft patch (105) test hooks (the `test-counters` feature, enabled by pdfcraft-render's
 /// dev-dependency only): the shared pieces the rules read, for tests outside the crate.
 #[cfg(feature = "test-counters")]
 pub mod test_hooks {

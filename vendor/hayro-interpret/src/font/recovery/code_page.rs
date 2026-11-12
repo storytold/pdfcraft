@@ -1,4 +1,4 @@
-//! PdfCraft patch (104): [`super::RecoveryRule::CodePageByOutline`], text shown in a Windows code
+//! PdfCraft patch (105): [`super::RecoveryRule::CodePageByOutline`], text shown in a Windows code
 //! page through a font that reads as WinAnsi.
 //!
 //! Fonts made for Central European and Baltic Windows (`Times New Roman CE`, `Arial Baltic`, and

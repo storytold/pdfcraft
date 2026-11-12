@@ -1824,6 +1824,16 @@ fn low_codes_resolve_to_the_covering_range() {
 }
 
 #[test]
+fn base_font_name_matches_the_metrics_name() {
+    let doc = Document::new_empty();
+    let mut f = Dict::new();
+    f.set(b"BaseFont".to_vec(), Object::name("ABCDEF+Body"));
+    assert_eq!(base_font_name(&doc, &f), "ABCDEF+Body");
+    assert_eq!(base_font_name(&doc, &f), Metrics::from_dict(&doc, &f).base_font);
+    assert_eq!(base_font_name(&doc, &Dict::new()), "");
+}
+
+#[test]
 fn refused_subset_reads_do_not_encode_unverified_glyphs() {
     let mut doc = Document::new_empty();
     let (mut f, sizes) = subset_type0(&mut doc, b"");

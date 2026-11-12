@@ -1,4 +1,4 @@
-//! PdfCraft patch (104): which accent a glyph's outline draws, for rules that check a reading
+//! PdfCraft patch (105): which accent a glyph's outline draws, for rules that check a reading
 //! against the glyph itself.
 //!
 //! [`classify`] looks at a glyph's contours (1000 units per em, y up, the baseline at 0) and

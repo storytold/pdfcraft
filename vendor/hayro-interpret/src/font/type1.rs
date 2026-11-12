@@ -24,7 +24,7 @@ pub(crate) struct Type1Font(
     /// PdfCraft patch: whether the font's numbered glyph names all name their own codes
     /// (`numbered_names_name_their_codes`), worked out on first use.
     OnceLock<bool>,
-    /// PdfCraft patch (104): what the recovery rules need, and their decisions.
+    /// PdfCraft patch (105): what the recovery rules need, and their decisions.
     FontRecovery,
 );
 
@@ -155,7 +155,7 @@ impl Type1Font {
         (c != BfString::Char('\0')).then_some(c)
     }
 
-    /// PdfCraft patch (104): the code's text by the font's encoding and glyph names, `/ToUnicode`
+    /// PdfCraft patch (105): the code's text by the font's encoding and glyph names, `/ToUnicode`
     /// aside: the strict text of a code `/ToUnicode` doesn't name.
     fn encoding_text(&self, code: u8) -> Option<BfString> {
         let found = match &self.1 {
@@ -186,12 +186,12 @@ impl Type1Font {
         })
     }
 
-    /// PdfCraft patch (104): what the font keeps for the recovery rules.
+    /// PdfCraft patch (105): what the font keeps for the recovery rules.
     pub(crate) fn recovery_info(&self) -> &FontRecovery {
         &self.4
     }
 
-    /// PdfCraft patch (104): the recovery rules' reading of a code (see `font::recovery`),
+    /// PdfCraft patch (105): the recovery rules' reading of a code (see `font::recovery`),
     /// given its strict text when that is more than control characters.
     pub(crate) fn recovery(
         &self,
@@ -241,7 +241,7 @@ impl Type1Font {
         self.4.cache.recover(kind, facts, glyph)
     }
 
-    /// PdfCraft patch (104): the outline of the glyph `code` draws from the embedded program, as
+    /// PdfCraft patch (105): the outline of the glyph `code` draws from the embedded program, as
     /// drawn; nothing for a standard font or a code that draws `.notdef`.
     fn embedded_outline(&self, code: u8) -> Option<BezPath> {
         if matches!(self.1, Kind::Standard(_)) {
@@ -260,7 +260,7 @@ impl Type1Font {
     }
 }
 
-/// PdfCraft patch (104): the width `/Widths` gives `code`, if it gives one.
+/// PdfCraft patch (105): the width `/Widths` gives `code`, if it gives one.
 fn explicit_width(widths: &[Width], code: u8) -> Option<f32> {
     match widths.get(usize::from(code)) {
         Some(Width::Value(w)) => Some(*w),
