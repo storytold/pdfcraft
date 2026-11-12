@@ -746,8 +746,17 @@ impl Document {
         // counts when nothing better is there.
         // A file whose only trailers are cross-reference streams (and whose `startxref` is gone
         // or points nowhere) keeps its /Info, /ID and /Encrypt this way.
+        // A /Root the slot does not answer is read by its own generation's header, as the
+        // renderer's rebuilt table does: a trailer naming `1 1 R` reaches `1 1 obj` where the
+        // slot keeps `1 0 obj`, and `keep_the_generation_reached` then gives it the slot.
         let rank = |at: usize, d: &Dict| {
-            let root = self.try_get_reference(d.reference(b"Root")?).ok()?;
+            let r = d.reference(b"Root")?;
+            let root = if self.reference_matches(r) {
+                self.try_get_reference(r).ok()?
+            } else {
+                let at = kept.get(&r.num).and_then(|(_, seen)| seen.get(&i32::from(r.generation))).and_then(|&o| usize::try_from(o).ok())?;
+                Arc::new(parse_indirect_shared(&data, at, &|_| None, &self.endstreams).ok()?.1)
+            };
             let Object::Dict(c) = &*root else { return None };
             Some((c.name(b"Type") == Some(b"Catalog") || c.contains(b"Pages"), at))
         };
@@ -877,6 +886,15 @@ impl Document {
                 refs_reached(&o, &mut queue);
             }
         }
+        // Object streams whose members the index lists: those were read from the body the slot
+        // holds, and the renderer reads them through its generation-0 key as well.
+        let holding_members: HashSet<u32> = entries
+            .values()
+            .filter_map(|e| match e {
+                XrefEntry::InStream { stream, .. } => Some(*stream),
+                _ => None,
+            })
+            .collect();
         let mut moved = Vec::new();
         let mut unsettled = false;
         for (num, generations) in reached {
@@ -886,6 +904,12 @@ impl Document {
             };
             let Some((held, bodies)) = shared.get_mut(&num) else { continue };
             if only == *held {
+                continue;
+            }
+            // Moving the slot would read those members from another stream: it stays, and the
+            // generation reached is left out.
+            if holding_members.contains(&num) {
+                unsettled = true;
                 continue;
             }
             let (Ok(generation), Some(&offset)) = (u16::try_from(only), bodies.get(&only)) else {

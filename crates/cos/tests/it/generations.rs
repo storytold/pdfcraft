@@ -598,11 +598,16 @@ fn a_rebuilt_index_records_a_body_it_leaves_out() {
 
 /// No usable cross-reference data, objects in file order as (number, generation, body).
 fn rebuilt_objects(objects: &[(u32, u16, &str)]) -> Arc<Vec<u8>> {
+    rebuilt_objects_rooted(objects, "1 0 R")
+}
+
+/// [`rebuilt_objects`] with the trailer's `/Root` given.
+fn rebuilt_objects_rooted(objects: &[(u32, u16, &str)], root: &str) -> Arc<Vec<u8>> {
     let mut pdf = String::from("%PDF-1.7\n");
     for (num, generation, body) in objects {
         pdf.push_str(&format!("{num} {generation} obj\n{body}\nendobj\n"));
     }
-    pdf.push_str("trailer\n<< /Size 8 /Root 1 0 R >>\nstartxref\n999999\n%%EOF\n");
+    pdf.push_str(&format!("trailer\n<< /Size 11 /Root {root} >>\nstartxref\n999999\n%%EOF\n"));
     Arc::new(pdf.into_bytes())
 }
 
@@ -645,4 +650,62 @@ fn a_rebuilt_index_keeps_generation_0_when_the_document_reaches_both() {
     assert_eq!(*doc.get(ObjRef::new(4, 1)), Object::Null);
     assert!(doc.repair_log().iter().any(|line| line.contains("left out 1 objects") && line.contains("(4 1)")), "{:?}", doc.repair_log());
     assert!(doc.rebuilt_with_unsettled_generations());
+}
+
+/// The only trailer names `/Root 1 1 R`, and both `1 0 obj` and `1 1 obj` are catalogs. The
+/// renderer roots the document at `1 1 obj`; the trailer used to be judged against the
+/// generation-0 slot alone, so it was passed over and cos rooted the document at `1 0 obj`
+/// (raised in review of #6767).
+#[test]
+fn a_rebuilt_index_roots_the_document_at_the_generation_its_trailer_names() {
+    let bytes = rebuilt_objects_rooted(
+        &[
+            (1, 0, "<< /Type /Catalog /Pages 2 0 R >>"),
+            (2, 0, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+            (3, 0, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 6 0 R >>"),
+            (6, 0, &format!("<< /Length {} >>\nstream\n{OTHER}\nendstream", OTHER.len())),
+            (1, 1, "<< /Type /Catalog /Pages 8 0 R >>"),
+            (8, 0, "<< /Type /Pages /Kids [9 0 R] /Count 1 >>"),
+            (9, 0, "<< /Type /Page /Parent 8 0 R /MediaBox [0 0 200 200] /Contents 7 0 R >>"),
+            (7, 0, &format!("<< /Length {} >>\nstream\n{COVER}\nendstream", COVER.len())),
+        ],
+        "1 1 R",
+    );
+    assert_eq!(pages_drawn_by_renderer(bytes.clone()), [COVER]);
+    let doc = Document::open(bytes).unwrap();
+    assert!(doc.reconstructed());
+    assert_eq!(doc.root(), Some(ObjRef::new(1, 1)));
+    assert!(!doc.rebuilt_with_unsettled_generations(), "only generation 1 is reached");
+    assert_eq!(drawn_by_cos(&doc).as_deref(), Some(COVER));
+    let saved = Arc::new(write_full(&doc, &SaveOptions::default()).unwrap());
+    assert_eq!(pages_drawn_by_renderer(saved), [COVER]);
+}
+
+/// `4 0 obj` and `4 1 obj` are object streams holding different values for member 10, and the
+/// document reaches `4 1 R` only. The renderer reads the member through the generation-0 stream,
+/// as the rebuilt index listed it; moving the slot to `4 1 obj` made a full save read it from
+/// the other stream (raised in review of #6767). The slot stays, and the document says a
+/// generation it reaches is left out.
+#[test]
+fn a_rebuilt_index_keeps_the_object_stream_its_members_were_read_from() {
+    let members = |value: i32| {
+        let data = format!("10 0 {value}");
+        format!("<< /Type /ObjStm /N 1 /First 5 /Length {} >>\nstream\n{data}\nendstream", data.len())
+    };
+    let bytes = rebuilt_objects(&[
+        (1, 0, "<< /Type /Catalog /Pages 2 0 R /Value 10 0 R /Streams 4 1 R >>"),
+        (2, 0, "<< /Type /Pages /Kids [] /Count 0 >>"),
+        (4, 0, &members(41)),
+        (4, 1, &members(42)),
+    ]);
+    let oracle = hayro_syntax::Pdf::new(bytes.clone()).unwrap();
+    assert_eq!(oracle.xref().get::<i32>(ObjectIdentifier::new(10, 0)), Some(41));
+    let doc = Document::open(bytes).unwrap();
+    assert!(doc.reconstructed());
+    assert_eq!(*doc.get(ObjRef::new(10, 0)), Object::Int(41));
+    // A full save renumbers: follow the catalog's `/Value`.
+    let saved = Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap();
+    let catalog = saved.get(saved.root().unwrap());
+    assert_eq!(*saved.resolve(catalog.as_dict().unwrap().get(b"Value").unwrap()), Object::Int(41));
+    assert!(doc.rebuilt_with_unsettled_generations(), "`4 1 R` is reached and reads as null");
 }
