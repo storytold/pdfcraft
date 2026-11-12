@@ -939,17 +939,28 @@ fn altgr_pressed(input: &egui::InputState, key: egui::Key) -> bool {
 /// QWERTZ, …) keep their logical shortcuts because their logical key is not the Dvorak letter
 /// for the physical key.
 fn is_dvorak_qwerty_remap(physical: egui::Key, logical: egui::Key) -> bool {
-    matches!((physical, logical),
-        (egui::Key::R, egui::Key::P) | (egui::Key::T, egui::Key::Y) |
-        (egui::Key::Y, egui::Key::F) | (egui::Key::U, egui::Key::G) |
-        (egui::Key::I, egui::Key::C) | (egui::Key::O, egui::Key::R) |
-        (egui::Key::P, egui::Key::L) | (egui::Key::S, egui::Key::O) |
-        (egui::Key::D, egui::Key::E) | (egui::Key::F, egui::Key::U) |
-        (egui::Key::G, egui::Key::I) | (egui::Key::H, egui::Key::D) |
-        (egui::Key::J, egui::Key::H) | (egui::Key::K, egui::Key::T) |
-        (egui::Key::L, egui::Key::N) | (egui::Key::X, egui::Key::Q) |
-        (egui::Key::C, egui::Key::J) | (egui::Key::V, egui::Key::K) |
-        (egui::Key::B, egui::Key::X) | (egui::Key::N, egui::Key::B)
+    matches!(
+        (physical, logical),
+        (egui::Key::R, egui::Key::P)
+            | (egui::Key::T, egui::Key::Y)
+            | (egui::Key::Y, egui::Key::F)
+            | (egui::Key::U, egui::Key::G)
+            | (egui::Key::I, egui::Key::C)
+            | (egui::Key::O, egui::Key::R)
+            | (egui::Key::P, egui::Key::L)
+            | (egui::Key::S, egui::Key::O)
+            | (egui::Key::D, egui::Key::E)
+            | (egui::Key::F, egui::Key::U)
+            | (egui::Key::G, egui::Key::I)
+            | (egui::Key::H, egui::Key::D)
+            | (egui::Key::J, egui::Key::H)
+            | (egui::Key::K, egui::Key::T)
+            | (egui::Key::L, egui::Key::N)
+            | (egui::Key::X, egui::Key::Q)
+            | (egui::Key::C, egui::Key::J)
+            | (egui::Key::V, egui::Key::K)
+            | (egui::Key::B, egui::Key::X)
+            | (egui::Key::N, egui::Key::B)
     )
 }
 
