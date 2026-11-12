@@ -130,6 +130,7 @@ fn atomic_saves_keep_finder_tags_and_binary_extended_attributes() {
         ("com.apple.metadata:_kMDItemUserTags", b"<plist version=\"1.0\"><array><string>PdfCraft\n6</string></array></plist>"),
         ("com.pdfcraft.test.binary", b"\0\xff\x80original\0"),
         ("com.pdfcraft.test.empty", b""),
+        ("com.apple.ResourceFork", b"\0\xfffork"),
     ];
     std::fs::write(&target, b"OLD").unwrap();
     for (name, value) in attributes {
@@ -188,7 +189,7 @@ fn a_failed_flush_keeps_the_original_extended_attributes() {
 #[cfg(target_os = "macos")]
 #[test]
 fn a_growing_resource_fork_refuses_publication_and_keeps_original() {
-    use rustix::fs::{XattrFlags, fgetxattr, fsetxattr, getxattr, setxattr};
+    use rustix::fs::{XattrFlags, fgetxattr_query, fsetxattr, getxattr, setxattr};
     let dir = test_dir("xattrs-growing-fork");
     let target = dir.join("out.pdf");
     let name = "com.apple.ResourceFork";
@@ -197,17 +198,18 @@ fn a_growing_resource_fork_refuses_publication_and_keeps_original() {
         setxattr(&target, name, b"ABC", XattrFlags::empty()).unwrap();
         let source = std::fs::File::open(&target).unwrap();
         let result = write_atomically_with(&target, b"REPLACEMENT PDF", form, [23], |staged| {
-            let size = fgetxattr(&source, name, &mut [] as &mut [u8])?;
-            let value = read_xattr_value(size, |buffer| {
-                if buffer.is_empty() {
-                    return Ok(fgetxattr(&source, name, buffer)?);
-                }
-                // HFS can return the prefix that fits instead of ERANGE. APFS need not
-                // have that behaviour: model the kernel response, not a timing race.
-                setxattr(&target, name, b"ABCD", XattrFlags::empty())?;
-                buffer.get_mut(..3).unwrap().copy_from_slice(b"ABC");
-                Ok(3)
-            })?;
+            let size = fgetxattr_query(&source, name)?;
+            let value = read_xattr_value(
+                size,
+                |buffer| {
+                    // HFS can return the prefix that fits instead of ERANGE. APFS need not
+                    // have that behaviour: model the kernel response, not a timing race.
+                    setxattr(&target, name, b"ABCD", XattrFlags::empty())?;
+                    buffer.get_mut(..3).unwrap().copy_from_slice(b"ABC");
+                    Ok(3)
+                },
+                || Ok(fgetxattr_query(&source, name)?),
+            )?;
             fsetxattr(staged, name, &value, XattrFlags::empty())?;
             Ok(())
         });
@@ -227,29 +229,29 @@ fn a_growing_resource_fork_refuses_publication_and_keeps_original() {
 #[test]
 fn attribute_reads_require_a_complete_value_and_stable_size() {
     for bytes in [&b""[..], &b"\0\xffB"[..]] {
-        let value = read_xattr_value(bytes.len(), |buffer| {
-            if !buffer.is_empty() {
+        let value = read_xattr_value(
+            bytes.len(),
+            |buffer| {
                 buffer.get_mut(..bytes.len()).unwrap().copy_from_slice(bytes);
-            }
-            Ok(bytes.len())
-        })
+                Ok(bytes.len())
+            },
+            || Ok(bytes.len()),
+        )
         .unwrap();
         assert_eq!(value, bytes);
     }
     for (before, read_len, after) in [(3, 2, 3), (3, 3, 4), (0, 1, 1), (3, 2, 2)] {
-        let result = read_xattr_value(before, |buffer| Ok(if buffer.is_empty() { after } else { read_len }));
+        let result = read_xattr_value(before, |_| Ok(read_len), || Ok(after));
         assert!(result.unwrap_err().to_string().contains("changed size"));
     }
-    let result = read_xattr_value(3, |buffer| {
-        if buffer.is_empty() { Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "size recheck refused")) } else { Ok(3) }
-    });
+    let result = read_xattr_value(3, |_| Ok(3), || Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "size recheck refused")));
     assert_eq!(result.unwrap_err().kind(), std::io::ErrorKind::PermissionDenied);
 }
 
 #[cfg(target_os = "macos")]
 #[test]
 fn oversized_extended_attributes_refuse_the_save_without_replacing_the_target() {
-    use rustix::fs::{XattrFlags, getxattr, setxattr};
+    use rustix::fs::{XattrFlags, getxattr_query, setxattr};
     let dir = test_dir("xattrs-limit");
     let target = dir.join("out.pdf");
     std::fs::write(&target, b"OLD").unwrap();
@@ -267,7 +269,7 @@ fn oversized_extended_attributes_refuse_the_save_without_replacing_the_target() 
     assert!(e.to_string().contains("Save As"), "{e}");
     assert!(!flushed, "metadata failure must stop before flush and rename");
     assert_eq!(std::fs::read(&target).unwrap(), b"OLD");
-    let size = getxattr(&target, "com.apple.ResourceFork", &mut [] as &mut [u8]).unwrap();
+    let size = getxattr_query(&target, "com.apple.ResourceFork").unwrap();
     assert_eq!(size, fork.len());
     assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
     std::fs::remove_dir_all(dir).unwrap();
