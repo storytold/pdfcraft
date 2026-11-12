@@ -29,6 +29,9 @@ pub struct TagInfo {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TagContentItem {
     pub page: Option<usize>,
+    /// The form XObject (or other stream) an MCR's `/Stm` names, whose content holds this mark and
+    /// numbers its MCIDs on its own; `None` for the page's own content.
+    pub stream: Option<ObjRef>,
     pub mcid: i64,
     pub text: String,
 }
@@ -214,24 +217,33 @@ pub fn tag_content(doc: &Document, object: ObjRef) -> Result<Vec<TagContentItem>
     if let Some(kids) = element.dict.get(b"K") {
         direct_marks(doc, kids, element.page, &mut seen, &mut marks)?;
     }
-    // Each page's content is parsed once, however many of its MCIDs the tag owns.
-    let mut texts: std::collections::HashMap<usize, std::collections::HashMap<i64, String>> = std::collections::HashMap::new();
+    // Each page's content, and each form's, is parsed once, however many of its MCIDs the tag owns.
+    type Texts = std::collections::HashMap<i64, String>;
+    let mut texts: std::collections::HashMap<(usize, Option<ObjRef>), Texts> = std::collections::HashMap::new();
+    let mut streams: std::collections::HashMap<usize, std::collections::HashSet<ObjRef>> = std::collections::HashMap::new();
     Ok(marks
         .into_iter()
-        .map(|(page, mcid)| {
+        .map(|(page, stm, mcid)| {
             let page = page.and_then(|p| page_index.get(&p).copied());
-            let text = page
-                .and_then(|i| {
-                    let page_texts = match texts.entry(i) {
-                        std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
-                        std::collections::hash_map::Entry::Vacant(e) => {
-                            e.insert(pages.get(i).map(|p| crate::headings::mcid_texts(doc, &p.dict)).unwrap_or_default())
-                        }
-                    };
-                    page_texts.get(&mcid).cloned()
-                })
-                .unwrap_or_default();
-            TagContentItem { page, mcid, text }
+            let dict = page.and_then(|i| pages.get(i)).map(|p| &p.dict);
+            // A `/Stm` naming one of the page's own content streams is the page's content.
+            let stream = match (stm, page) {
+                (Some(_), Some(i)) => alt::content_stream(stm, streams.entry(i).or_insert_with(|| alt::page_streams(doc, dict))),
+                _ => stm,
+            };
+            let text = match (page, stream) {
+                (Some(i), None) => {
+                    texts.entry((i, None)).or_insert_with(|| dict.map(|d| crate::headings::mcid_texts(doc, d)).unwrap_or_default()).get(&mcid)
+                }
+                (page, Some(form)) => texts
+                    .entry((page.unwrap_or(usize::MAX), Some(form)))
+                    .or_insert_with(|| crate::headings::form_mcid_texts(doc, form, dict))
+                    .get(&mcid),
+                (None, None) => None,
+            }
+            .cloned()
+            .unwrap_or_default();
+            TagContentItem { page, stream, mcid, text }
         })
         .collect())
 }
@@ -243,7 +255,7 @@ fn direct_marks(
     item: &Object,
     page: Option<ObjRef>,
     seen: &mut std::collections::HashSet<ObjRef>,
-    out: &mut Vec<(Option<ObjRef>, i64)>,
+    out: &mut Vec<(Option<ObjRef>, Option<ObjRef>, i64)>,
 ) -> Result<(), TagError> {
     const MAX_DEPTH: usize = 512;
     const MAX_MARKS: usize = 65_536;
@@ -260,7 +272,7 @@ fn direct_marks(
                 if out.len() >= MAX_MARKS {
                     return Err(TagError::ContentLimit);
                 }
-                out.push((page, *mcid));
+                out.push((page, None, *mcid));
             }
             Object::Array(items) => {
                 if items.len() > remaining.saturating_sub(stack.len()) {
@@ -273,7 +285,8 @@ fn direct_marks(
                     if out.len() >= MAX_MARKS {
                         return Err(TagError::ContentLimit);
                     }
-                    out.push((dict.get(b"Pg").and_then(Object::as_ref).or(page), mcid));
+                    // `/Stm`: the content is in that stream (a form XObject), numbered on its own.
+                    out.push((dict.get(b"Pg").and_then(Object::as_ref).or(page), alt::mcr_stm(dict), mcid));
                 }
             }
             Object::Ref(reference) if seen.insert(*reference) => {
@@ -484,10 +497,13 @@ mod tests {
         let table_marks = tag_content(&doc, ObjRef::new(7, 0)).unwrap();
         assert_eq!(
             table_marks,
-            [TagContentItem { page: Some(0), mcid: 0, text: "Hello".into() }, TagContentItem { page: Some(0), mcid: 1, text: "World".into() },]
+            [
+                TagContentItem { page: Some(0), stream: None, mcid: 0, text: "Hello".into() },
+                TagContentItem { page: Some(0), stream: None, mcid: 1, text: "World".into() },
+            ]
         );
         let th_marks = tag_content(&doc, ObjRef::new(8, 0)).unwrap();
-        assert_eq!(th_marks, [TagContentItem { page: Some(0), mcid: 0, text: "Hello".into() }]);
+        assert_eq!(th_marks, [TagContentItem { page: Some(0), stream: None, mcid: 0, text: "Hello".into() }]);
     }
 
     #[test]
