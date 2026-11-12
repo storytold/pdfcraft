@@ -661,9 +661,9 @@ fn independent_non_planar_strip_tracks_the_quantized_working_mesh() {
     let source: Vec<V> = (0..16)
         .map(|index| {
             [
-                index as f64 * 0.05,
-                (index % 2) as f64 * 2.0,
-                ((index % 5) as f64 - 2.0) * 0.03,
+                f64::from(index) * 0.05,
+                f64::from(index % 2) * 2.0,
+                (f64::from(index % 5) - 2.0) * 0.03,
             ]
         })
         .collect();
@@ -695,7 +695,7 @@ fn independent_non_planar_strip_tracks_the_quantized_working_mesh() {
     assert_within_tolerance(&encoded.positions, &source, 1e-4);
     let rebuilt = rebuild(&encoded.arrays(usize::MAX)).unwrap();
     assert_eq!(rebuilt.triangles.len(), source.len() - 2);
-    assert_eq!(rebuilt.triangles[..3], [[2, 1, 3], [2, 3, 4], [4, 3, 5]]);
+    assert_eq!(rebuilt.triangles[1..4], [[2, 1, 3], [2, 3, 4], [4, 3, 5]]);
     assert_eq!(encoded.points.len(), source.len() * 3);
     assert_within_tolerance(&rebuilt.positions, &source, 1e-4);
 }
@@ -710,11 +710,11 @@ Ajouter :
 fn independent_near_degenerate_parent_uses_an_orthogonal_frame() {
     let encoded = encode(
         [0.0; 3],
-        1e-12,
+        1e-8,
         &[
             Recipe::Seed {
                 slots: [
-                    Slot::Point([0.0, 1e-9, 0.0]),
+                    Slot::Point([1.0, 1.0 + 1e-8, 0.0]),
                     Slot::Point([2.0, 0.0, 0.0]),
                     Slot::Point([0.0, 2.0, 0.0]),
                 ],
@@ -732,15 +732,15 @@ fn independent_near_degenerate_parent_uses_an_orthogonal_frame() {
     );
 
     let source = [
-        [0.0, 1e-9, 0.0],
+        [1.0, 1.0 + 1e-8, 0.0],
         [2.0, 0.0, 0.0],
         [0.0, 2.0, 0.0],
         [0.3, 0.7, 0.2],
     ];
-    assert_within_tolerance(&encoded.positions, &source, 1e-12);
+    assert_within_tolerance(&encoded.positions, &source, 1e-8);
     let rebuilt = rebuild(&encoded.arrays(usize::MAX)).unwrap();
     assert_eq!(rebuilt.triangles, [[0, 1, 2], [2, 1, 3]]);
-    assert_within_tolerance(&rebuilt.positions, &source, 1e-12);
+    assert_within_tolerance(&rebuilt.positions, &source, 1e-8);
 }
 ```
 

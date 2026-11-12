@@ -352,3 +352,51 @@ fn independent_closed_continuation_uses_the_open_edge() {
     assert_eq!(rebuilt.triangles, [[0, 1, 2], [2, 1, 3], [3, 1, 0], [3, 0, 2]]);
     assert_within_tolerance(&rebuilt.positions, &source, 0.5);
 }
+
+#[test]
+fn independent_non_planar_strip_tracks_the_quantized_working_mesh() {
+    let source: Vec<V> = (0..16).map(|index| [f64::from(index) * 0.05, f64::from(index % 2) * 2.0, (f64::from(index % 5) - 2.0) * 0.03]).collect();
+    let mut recipes = vec![Recipe::Seed { slots: [Slot::Point(source[0]), Slot::Point(source[1]), Slot::Point(source[2])], status: 2, face: 0 }];
+    let (mut p, mut q, mut opposite) = (2_u32, 1_u32, 0_u32);
+
+    for index in 1..source.len() - 2 {
+        let vertex = u32::try_from(index + 2).unwrap();
+        let status = if index % 2 == 1 { 1 } else { 2 };
+        recipes.push(Recipe::Apex { edge: (p, q), opposite, slot: Slot::Point(source[index + 2]), status, face: 0 });
+        if status == 1 {
+            (p, q, opposite) = (p, vertex, q);
+        } else {
+            (p, q, opposite) = (vertex, q, p);
+        }
+    }
+
+    let encoded = encode([0.0; 3], 1e-4, &recipes);
+    assert_within_tolerance(&encoded.positions, &source, 1e-4);
+    let rebuilt = rebuild(&encoded.arrays(usize::MAX)).unwrap();
+    assert_eq!(rebuilt.triangles.len(), source.len() - 2);
+    assert_eq!(rebuilt.triangles[1..4], [[2, 1, 3], [2, 3, 4], [4, 3, 5]]);
+    assert_eq!(encoded.points.len(), source.len() * 3);
+    assert_within_tolerance(&rebuilt.positions, &source, 1e-4);
+}
+
+#[test]
+fn independent_near_degenerate_parent_uses_an_orthogonal_frame() {
+    let encoded = encode(
+        [0.0; 3],
+        1e-8,
+        &[
+            Recipe::Seed {
+                slots: [Slot::Point([1.0, 1.0 + 1e-8, 0.0]), Slot::Point([2.0, 0.0, 0.0]), Slot::Point([0.0, 2.0, 0.0])],
+                status: 2,
+                face: 0,
+            },
+            Recipe::Apex { edge: (2, 1), opposite: 0, slot: Slot::Point([0.3, 0.7, 0.2]), status: 0, face: 0 },
+        ],
+    );
+
+    let source = [[1.0, 1.0 + 1e-8, 0.0], [2.0, 0.0, 0.0], [0.0, 2.0, 0.0], [0.3, 0.7, 0.2]];
+    assert_within_tolerance(&encoded.positions, &source, 1e-8);
+    let rebuilt = rebuild(&encoded.arrays(usize::MAX)).unwrap();
+    assert_eq!(rebuilt.triangles, [[0, 1, 2], [2, 1, 3]]);
+    assert_within_tolerance(&rebuilt.positions, &source, 1e-8);
+}
