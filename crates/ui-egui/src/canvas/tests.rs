@@ -3232,8 +3232,10 @@ fn previous_and_next_view_restore_scroll_fraction_on_origin_page() -> Result<(),
     assert_eq!(page, 0);
     assert!((frac - 0.5).abs() < 1e-5, "pending goto fraction beats stale screen_rects: {frac}");
 
-    // When `go_to_dest` sets a positioned destination (`goto_point`) and Previous view + Next view
-    // run before the next frame draws, the destination's vertical fraction is preserved.
+    // When `go_to_dest` sets a positioned destination (`goto_point`) on an offscreen page and
+    // Previous view + Next view run before the next frame draws, the destination's vertical
+    // fraction (including the `page_gap` offset and any `/FitR` centring at the new zoom) is
+    // preserved from the pending page height rather than stale `screen_rects`.
     let info = pdfcraft_render::DocInfo {
         pages: (0..5)
             .map(|_| pdfcraft_render::PageInfo { width: 300.0, height: 400.0, label: String::new(), crop: [0.0, 0.0, 300.0, 400.0], rotation: 0 })
@@ -3241,13 +3243,24 @@ fn previous_and_next_view_restore_scroll_fraction_on_origin_page() -> Result<(),
         ..Default::default()
     };
     v.go_to_dest(2, DestView::Xyz { left: None, top: Some(300.0), zoom: None }, &info);
+    let expected_xyz = 0.25 + gap / v.pending_page_height(2, &info);
     assert!(v.view_history(false));
     assert_eq!(v.current, 0);
     assert!(v.view_history(true));
     assert_eq!(v.current, 2);
     let (page, frac) = v.goto.ok_or("expected goto on Next view after go_to_dest")?;
     assert_eq!(page, 2);
-    assert!((frac - 0.25).abs() < 1e-5, "expected 0.25 destination fraction on page 2, got {frac}");
+    assert!((frac - expected_xyz).abs() < 1e-5, "expected {expected_xyz} destination fraction on page 2, got {frac}");
+
+    v.go_to_dest(3, DestView::FitR { rect: [0.0, 200.0, 100.0, 300.0] }, &info);
+    let expected_fitr = (0.375 + (gap - v.viewport_h / 2.0) / v.pending_page_height(3, &info)).clamp(-1.0, 1.0);
+    assert!(v.view_history(false));
+    assert_eq!(v.current, 2);
+    assert!(v.view_history(true));
+    assert_eq!(v.current, 3);
+    let (page, frac) = v.goto.ok_or("expected goto on Next view after FitR go_to_dest")?;
+    assert_eq!(page, 3);
+    assert!((frac - expected_fitr).abs() < 1e-5, "expected {expected_fitr} FitR fraction on page 3, got {frac}");
 
     // In continuous view with two partially visible pages where `current` (page 1) starts below
     // the viewport top (`y = 40 + gap + 200`), jumping away and returning preserves its signed

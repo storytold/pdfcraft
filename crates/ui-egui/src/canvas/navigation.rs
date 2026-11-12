@@ -95,8 +95,15 @@ impl DocView {
             && p == self.current
             && fy.is_finite()
         {
-            let h = self.screen_rects.iter().find(|(pg, _)| *pg == p).map_or(0.0, |(_, r)| r.height());
-            let shift = if h > 0.0 && rel.y.is_finite() { -rel.y / h } else { 0.0 };
+            let h = if self.goto_point_h > 0.0 {
+                self.goto_point_h
+            } else if let Some(&(w, h)) = self.page_sizes.get(p) {
+                let dh = if self.rotation.is_multiple_of(180) { h } else { w };
+                self.scaled_page_height(dh, self.zoom)
+            } else {
+                self.screen_rects.iter().find(|(pg, _)| *pg == p).map_or(0.0, |(_, r)| r.height())
+            };
+            let shift = if h > 0.0 && rel.y.is_finite() { (self.page_gap() - rel.y) / h } else { 0.0 };
             return (fy + shift).clamp(-1.0, 1.0);
         }
         if let Some((p, frac)) = self.goto
@@ -140,6 +147,7 @@ impl DocView {
         self.reset_coarse_state();
         self.find_hold = None;
         self.goto_point = None;
+        self.goto_point_h = 0.0;
         self.goto = Some((page, 0.0));
         self.current = page;
     }
@@ -158,6 +166,7 @@ impl DocView {
     pub(crate) fn reveal_rect(&mut self, page: usize, rect: [f32; 4], info: &DocInfo) {
         self.go_to_page(page);
         self.goto_point = None;
+        self.goto_point_h = 0.0;
         let Some(p) = info.pages.get(self.current) else { return };
         if !rect.iter().all(|v| v.is_finite()) {
             return;
@@ -166,6 +175,7 @@ impl DocView {
         let x = rect[0] * 0.5 + rect[2] * 0.5;
         let y = rect[1] * 0.5 + rect[3] * 0.5;
         let [fx, fy] = p.dest_fraction(Some(x), Some(y), self.rotation);
+        self.goto_point_h = self.pending_page_height(self.current, info);
         self.goto_point = Some((self.current, fx, fy, vec2(self.viewport_w, self.viewport_h) / 2.0));
     }
 
@@ -186,6 +196,7 @@ impl DocView {
         self.go_to_page(page);
         let page = self.current;
         self.goto_point = None;
+        self.goto_point_h = 0.0;
         let Some(p) = info.pages.get(page) else { return };
         let point = |x: Option<f32>, y: Option<f32>| p.dest_fraction(x, y, self.rotation);
         // The window's top-left as far as pages go: its left edge is the gutter that keeps them
@@ -233,6 +244,7 @@ impl DocView {
             }
         };
         if fx.is_some() || fy.is_some() {
+            self.goto_point_h = self.pending_page_height(page, info);
             self.goto_point = Some((page, fx, fy, rel));
         }
     }
@@ -318,6 +330,7 @@ impl DocView {
         to_scroll.push((self.current, current_frac));
         let page = page.min(self.page_count.saturating_sub(1));
         self.goto_point = None;
+        self.goto_point_h = 0.0;
         self.goto = Some((page, frac));
         self.current = page;
         self.reset_coarse_state();

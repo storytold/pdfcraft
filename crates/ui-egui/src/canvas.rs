@@ -528,8 +528,9 @@ pub struct DocView {
     pub(crate) goto_side: Option<bool>,
     /// Pending position within that page from a destination ([`Self::go_to_dest`]): the point
     /// (fractions of the displayed page; `None` leaves that axis to `goto`) to put `rel` points
-    /// from the viewport's top-left corner.
+    /// from the viewport's top-left corner, and the page's pending displayed height in points.
     goto_point: Option<(usize, Option<f32>, Option<f32>, Vec2)>,
+    goto_point_h: f32,
     /// Pending keyboard scrolling, in points down (negative: up): ↓ / ↑, and Page Down /
     /// Page Up where the pages scroll.
     pub key_scroll: f32,
@@ -1052,6 +1053,7 @@ impl DocView {
             goto: None,
             goto_side: None,
             goto_point: None,
+            goto_point_h: 0.0,
             key_scroll: 0.0,
             key_side: 0.0,
             side_edges: None,
@@ -1210,6 +1212,7 @@ impl DocView {
         self.area_choice = None;
         self.goto = None;
         self.goto_point = None;
+        self.goto_point_h = 0.0;
         self.zoom_anchor = None;
         self.find_hold = None;
         self.flash = None;
@@ -3142,6 +3145,7 @@ fn hold_sharp_renders(ui: &egui::Ui, view: &mut DocView, scale: f32) -> bool {
 fn refine_goto_point(mut scroll: egui::ScrollArea, view: &mut DocView, geometry: &ScrollGeometry<'_>) -> egui::ScrollArea {
     let ScrollGeometry { rects, y_shift, content_w, content_h, avail, .. } = *geometry;
     if let Some((page, fx, fy, rel)) = view.goto_point.take() {
+        view.goto_point_h = 0.0;
         let r = rects[page.min(rects.len() - 1)];
         // Within the content, so an unreachable point never shows a frame scrolled past the end.
         let (max_x, max_y) = ((content_w - avail.width()).max(0.0), (content_h - avail.height()).max(0.0));
