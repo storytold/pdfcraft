@@ -565,7 +565,10 @@ fn validate_contextual_rows(rows: &[Vec<StyledChar>], kept: &[bool]) -> Result<(
 
 /// The horizontal scale that makes each source line, rewritten in its own font and text state,
 /// as wide as it is drawn (TJ kerning and justification are not in the text state), clamped to
-/// 50–200 %. A line moved to a document font, or given a family by its own range, keeps factor 1.
+/// 50–200 %. A line joined across several resources of one font is measured run by run, each run
+/// in its own resource (see below). A line moved to a document font, or given a family or a
+/// resource by its own range, keeps factor 1. No factor is worked out for a line whose measured
+/// width is not positive, or one with a run in a font that has no metrics.
 fn calibration_factors(
     lines: &[TextLine],
     metrics: &std::collections::BTreeMap<String, Metrics>,
@@ -683,7 +686,7 @@ fn page_font_metrics(
             metrics.insert(String::from_utf8_lossy(name).into_owned(), Metrics::from_dict(doc, font));
         }
     }
-    // The paragraph's own fonts are read even past that cap: each line's, and each of its runs'
+    // The paragraph's own fonts are read even past the 256-font cap: each line's, and each of its runs'
     // (a line can join several resources of one font, #3661).
     let shown = block
         .lines

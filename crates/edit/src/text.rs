@@ -126,7 +126,8 @@ pub struct TextLine {
     unreadable_mode: Option<String>,
     /// The runs the line joins, in content order: each one's text, the end of its words in
     /// `ink`, whether joining put a space before it, and its font resource (a line may join
-    /// several resources of one font, #3661). Empty when the line's text was put into another
+    /// several resources of one font, #3661). The resource is for the edit's width calibration
+    /// only: [`TextLine::runs`] does not yield it. Empty when the line's text was put into another
     /// order (see [`TextLine::runs`]).
     runs: Vec<(String, usize, bool, String)>,
     /// This line continues the previous one because a rewrite wrapped it (`/PCSoft`).
