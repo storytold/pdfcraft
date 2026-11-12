@@ -5,6 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>PdfCraft</title>
     <link data-trunk rel="rust" data-wasm-opt="z" />
+    <!-- Recognises text off the page's thread (crates/ui-egui/src/workflows/ocr_web.rs). -->
+    <link data-trunk rel="rust" href="../pdfcraft-ocr-worker/Cargo.toml" data-type="worker" data-loader-shim data-bindgen-target="web" data-wasm-opt="3" />
     <!-- Installable app (PWA): the manifest registers PdfCraft as a PDF handler, so an installed
          copy appears in the system's "Open with" list; src/main.rs (`launch_queue`) opens the files. -->
     <link rel="manifest" href="manifest.webmanifest" />
