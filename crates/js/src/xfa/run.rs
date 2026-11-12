@@ -179,6 +179,8 @@ pub(crate) fn run_here(
             // No icons in an XFA script run (`icons` below is empty).
             icon_epoch: 0,
             icon_versions: Default::default(),
+            // `getOCGs` is not an XFA event target member: no layers.
+            layers: Vec::new(),
         },
         // `calculateNow()` belongs to the AcroForm document; an XFA form recalculates itself.
         // `resetForm` through the event target is the XFA reset (`reset_form` in xfa/globals),
@@ -196,6 +198,7 @@ pub(crate) fn run_here(
         retained: 0,
         dropped: 0,
         xfa: true,
+        layers_changed: Default::default(),
     }));
     let mut out = XfaOutcome::default();
     let result = (|| -> JsResult<()> {

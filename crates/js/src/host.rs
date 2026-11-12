@@ -36,6 +36,8 @@ pub(crate) struct Host {
     /// The fields belong to an XFA form, named by their SOM expressions: what a script changes
     /// through them is changed in the form too ([`xfa::field_written`]).
     pub(crate) xfa: bool,
+    /// Layers a script turned on or off (`ocg.state`), by their places in [`DocInfo::layers`].
+    pub(crate) layers_changed: BTreeSet<usize>,
 }
 
 impl Host {
