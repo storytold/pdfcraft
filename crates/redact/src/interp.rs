@@ -1283,18 +1283,16 @@ fn xobject(
         // placement under a mark fails closed. Apply removes it, as it does a form it cannot read,
         // and verification counts it as what may remain. Its place is the unit square an image
         // fills or, when it has a `/BBox`, the box a form would draw in: either one under a mark
-        // counts.
+        // counts. Both are read as the proof reads a form's, entries by reference included; a
+        // `/Matrix` or `/BBox` that is present but malformed leaves its place unknown, so it counts
+        // as under a mark rather than as outside every one.
         _ => {
             let unit = gs.ctm.bbox([0.0, 0.0, 1.0, 1.0]);
-            let m = s.dict.get(b"Matrix").and_then(|m| Matrix::from_operands(doc.resolve(m).as_array()?)).unwrap_or_default();
-            let framed = s.dict.get(b"BBox").and_then(|b| {
-                let v: Vec<f64> = doc.resolve(b).as_array()?.iter().filter_map(Object::as_f64).collect();
-                match v.as_slice() {
-                    &[x0, y0, x1, y1] => Some(m.then(&gs.ctm).bbox([x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1)])),
-                    _ => None,
-                }
-            });
-            if !scope.hits(unit) && !framed.is_some_and(|b| scope.hits(b)) {
+            let framed = match (crate::verify::matrix_of(doc, &s.dict), crate::verify::bbox_of(doc, &s.dict)) {
+                (Ok(m), Ok(bbox)) => bbox.is_some_and(|b| scope.hits(m.then(&gs.ctm).bbox(b))),
+                _ => true,
+            };
+            if !scope.hits(unit) && !framed {
                 return None;
             }
             if scope.mode == Mode::Verify {

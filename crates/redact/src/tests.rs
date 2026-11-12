@@ -871,6 +871,31 @@ fn an_xobject_of_unknown_subtype_under_a_mark_goes() {
     }
 }
 
+/// An unclassifiable XObject's `/Matrix` and `/BBox` are read with their entries by reference, as
+/// the proof reads a form's. Read only directly, a box moved onto the mark was taken for the
+/// identity or for no box, and the placement was kept and not counted. Present but malformed, its
+/// place can't be told, so it counts. The direct entries are the control.
+#[test]
+fn an_xobject_of_unknown_subtype_is_placed_by_referenced_geometry() {
+    for geometry in [
+        "/Matrix [1 0 0 1 100 100] /BBox [0 0 10 10]",
+        "/Matrix [1 0 0 1 8 0 R 9 0 R] /BBox [0 0 10 10]",
+        "/BBox [100 100 10 0 R 10 0 R]",
+        "/Matrix [1 0 0 1 100] /BBox [0 0 10 10]",
+        "/BBox [0 0 10]",
+    ] {
+        let x = stream(&format!("/Type /XObject /Subtype /PS {geometry}"), [0]);
+        let mut doc = one_page(b"/X1 Do", "/XObject << /X1 7 0 R >>", vec![x, b"100".to_vec(), b"100".to_vec(), b"110".to_vec()]);
+        let rects = [[105.0, 105.0, 110.0, 110.0]];
+        assert_eq!(under(&mut doc, 0, &rects), 1, "{geometry}: verification counts it");
+        mark(&mut doc, 0, &rects, "");
+        let r = apply(&mut doc, None).unwrap();
+        assert_eq!(r.forms_removed, 1, "{geometry}: {r:?}");
+        let c = content(&doc, 0);
+        assert!(!c.contains("/X1 Do"), "{geometry}: {c}");
+    }
+}
+
 #[test]
 fn vectors_are_removed_or_clipped_and_inline_images_go() {
     let src = b"0 g 10 10 20 20 re f 0 0 300 300 re f q 10 0 0 10 50 50 cm BI /W 1 /H 1 /CS /G /BPC 8 ID \x80 EI Q 1 0 0 RG 150 150 m 160 160 l S";
