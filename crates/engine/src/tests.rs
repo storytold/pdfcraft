@@ -1575,8 +1575,13 @@ fn a_page_with_a_form_field_shown_twice_keeps_one_field() {
 #[test]
 fn files_that_cannot_be_converted_are_refused_clearly() {
     let s = Session::new();
-    let err = s.convert_to_pdf("report.docx", &Arc::new(b"PK\x03\x04".to_vec())).unwrap_err();
-    assert_eq!(err, EditError::Source("report.docx: this file type can't be converted; use a PDF, an image or a .txt file".into()));
+    let err = s.convert_to_pdf("archive.zip", &Arc::new(b"PK\x03\x04".to_vec())).unwrap_err();
+    assert_eq!(
+        err,
+        EditError::Source(
+            "archive.zip: this file type can't be converted; use a PDF, an image, a .txt file or a Word, Excel or PowerPoint file".into()
+        )
+    );
     assert!(matches!(s.convert_to_pdf("empty", &Arc::new(Vec::new())), Err(EditError::Source(_))));
     // Damaged inputs of a known type fail with an error, not a panic.
     assert!(s.convert_to_pdf("bad.png", &Arc::new(b"\x89PNG\r\n\x1a\nnope".to_vec())).is_err());
@@ -1597,8 +1602,8 @@ fn files_for_combine_are_made_into_pdfs_and_pdfs_pass_through() {
     assert!(Arc::ptr_eq(&s.as_pdf("old.PDF", &headless).unwrap(), &headless));
     assert!(s.as_pdf("scan.jpg", &Arc::new(jpeg_bytes())).unwrap().starts_with(b"%PDF-"));
     assert!(s.as_pdf("notes.txt", &Arc::new(b"hello".to_vec())).unwrap().starts_with(b"%PDF-"));
-    let err = s.as_pdf("report.docx", &Arc::new(b"PK\x03\x04".to_vec())).unwrap_err();
-    assert!(matches!(err, EditError::Source(m) if m.starts_with("report.docx: this file type can't be converted")));
+    let err = s.as_pdf("archive.zip", &Arc::new(b"PK\x03\x04".to_vec())).unwrap_err();
+    assert!(matches!(err, EditError::Source(m) if m.starts_with("archive.zip: this file type can't be converted")));
 }
 
 fn protected(user: &str, owner: &str, permissions: i32) -> Arc<Vec<u8>> {
@@ -1930,8 +1935,8 @@ fn low_resolution_printing_prints_pictures_of_at_most_150_dpi() {
     let low = s.open("low.pdf", None, bytes.clone(), None).unwrap();
     let width = f64::from(s.get(low).unwrap().info.pages[0].width);
     let actual = print::Settings { pages: vec![0], layout: print::Layout::Size(print::SizeMode::Actual), ..Default::default() };
-    for raster in [None, Some(print::Raster { dpi: 600.0, grayscale: false })] {
-        let printed = s.print_pdf(low, &print::Settings { raster, ..actual.clone() }).unwrap();
+    for raster in [None, Some(print::Raster { dpi: 600.0, grayscale: false, colour: None })] {
+        let printed = s.print_pdf(low, &print::Settings { raster: raster.clone(), ..actual.clone() }).unwrap();
         let mut s2 = Session::new();
         let id2 = s2.open("print.pdf", None, Arc::new(printed.clone()), None).unwrap();
         assert!(page_texts(&s2, id2).iter().all(|t| t.trim().is_empty()), "{raster:?}: no text is left");
@@ -3537,9 +3542,10 @@ fn the_renderer_check_refuses_text_still_shown_under_a_mark() {
     mark_shown_text(&mut s, id, "SECRET42");
     let doc = s.get(id).unwrap();
     let mut cos = doc.editor.as_ref().unwrap().cos.clone();
-    let marks = pdfcraft_redact::marks(&cos);
+    let model = pdfcraft_model::pages(&cos);
+    let marks: Vec<_> = pdfcraft_redact::marks(&cos).into_iter().filter_map(|m| model.get(m.page).map(|p| (p.obj, m))).collect();
     let refused = |cos: &pdfcraft_cos::Document| {
-        let shown = shown_under_redactions(cos, &marks, &[], &doc.info.pages, None);
+        let shown = shown_under_redactions(cos, &marks, &[], None);
         matches!(shown, Err(EditError::Redact(pdfcraft_redact::RedactError::Residue(n))) if n > 0)
     };
     assert!(refused(&cos));
@@ -3928,8 +3934,8 @@ fn printing_applies_the_print_auto_state() {
     }
     // Hidden in the panel, View entry (no Print recommendation) leaves the preview too.
     assert!(printed_blue[1] * 4 < printed_blue[0] * 3, "the preview follows the panel: {printed_blue:?} blue");
-    for raster in [None, Some(print::Raster { dpi: 72.0, grayscale: false })] {
-        let bytes = Arc::new(s.print_pdf(id, &print::Settings { pages: vec![0], raster, ..Default::default() }).unwrap());
+    for raster in [None, Some(print::Raster { dpi: 72.0, grayscale: false, colour: None })] {
+        let bytes = Arc::new(s.print_pdf(id, &print::Settings { pages: vec![0], raster: raster.clone(), ..Default::default() }).unwrap());
         let mut out = Session::new();
         let printed = out.open("print.pdf", None, bytes.clone(), None).unwrap();
         let (red, green, blue) = colours(&render_page(&out, printed));
@@ -5833,7 +5839,7 @@ fn assert_signature_artwork_survives_trust(mut cos: pdfcraft_cos::Document, expe
     }
     let mut settings = print::Settings { pages: vec![0], paper: (200.0, 200.0), ..Default::default() };
     let original_vector_print = printed_pixels(session.print_pdf(id, &settings).unwrap());
-    settings.raster = Some(print::Raster { dpi: 72.0, grayscale: false });
+    settings.raster = Some(print::Raster { dpi: 72.0, grayscale: false, colour: None });
     let original_raster_print = printed_pixels(session.print_pdf(id, &settings).unwrap());
     session.set_trusted_certificates(vec![anchor.clone()]);
     let doc = session.get(id).unwrap();
@@ -6198,7 +6204,7 @@ fn named_layer_states_reach_exports_and_both_print_modes() {
     assert!(text.contains("Signature valid") && !text.contains("Not Verified"), "{text:?}");
     let mut settings = print::Settings { pages: vec![0], paper: (400.0, 300.0), ..Default::default() };
     let (_, _, vector) = printed_pixels(s.print_pdf(id, &settings).unwrap());
-    settings.raster = Some(print::Raster { dpi: 72.0, grayscale: false });
+    settings.raster = Some(print::Raster { dpi: 72.0, grayscale: false, colour: None });
     let (_, _, raster) = printed_pixels(s.print_pdf(id, &settings).unwrap());
     for (mode, pixels) in [("vector", &vector), ("raster", &raster)] {
         assert!(pixels_near(pixels, VALID_GREEN) > 500, "{mode} print draws the valid state");
@@ -11313,7 +11319,7 @@ fn printing_as_image_sends_pictures_instead_of_pages() {
     let settings = print::Settings {
         pages: vec![1, 2, 1],
         layout: print::Layout::Size(print::SizeMode::Actual),
-        raster: Some(print::Raster { dpi: 100.0, grayscale: false }),
+        raster: Some(print::Raster { dpi: 100.0, grayscale: false, colour: None }),
         ..Default::default()
     };
     let bytes = s.print_pdf(id, &settings).unwrap();
@@ -11335,13 +11341,52 @@ fn printing_as_image_sends_pictures_instead_of_pages() {
     assert!((w as f64 - page_size.0 * 100.0 / 72.0).abs() <= 1.0, "{w} px for {} pt", page_size.0);
     assert!(images.iter().all(|d| d.name(b"ColorSpace") == Some(b"DeviceRGB")), "{images:?}");
     // Grayscale renders the pictures grey (the printer is not merely asked for monochrome).
-    let grey = s.print_pdf(id, &print::Settings { raster: Some(print::Raster { dpi: 72.0, grayscale: true }), ..settings.clone() }).unwrap();
+    let grey =
+        s.print_pdf(id, &print::Settings { raster: Some(print::Raster { dpi: 72.0, grayscale: true, colour: None }), ..settings.clone() }).unwrap();
     let mut s3 = Session::new();
     let id3 = s3.open("grey.pdf", None, Arc::new(grey), None).unwrap();
     let mut ex = crate::export::Exporter::new(s3.get(id3).unwrap());
     let png = ex.png(0, 36.0).unwrap();
     let img = image::load_from_memory(&png).unwrap().to_rgba8();
     assert!(img.pixels().all(|p| p[0] == p[1] && p[1] == p[2]), "every pixel grey");
+}
+
+/// #6269: with app-managed colour the printed pictures carry the printer profile's values, not
+/// sRGB's: a pure green page converted into a wider-gamut RGB profile gains red; without it the
+/// pictures stay sRGB.
+#[test]
+fn app_managed_colour_converts_the_printed_pictures() {
+    let pdf = pdfcraft_testkit::Pdf::new()
+        .obj("<< /Type /Catalog /Pages 2 0 R >>")
+        .obj("<< /Type /Pages /Kids [3 0 R] /Count 1 >>")
+        .obj("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Contents 4 0 R >>")
+        .stream("", "0 1 0 rg 0 0 100 100 re f")
+        .build();
+    let mut s = Session::new();
+    let id = s.open("green.pdf", None, Arc::new(pdf), None).unwrap();
+    let wide = craft_cms::Builtin::AdobeRgbCompat.profile().to_bytes();
+    let colour = print::colour::ManagedColour {
+        profile: print::colour::PrinterProfile::from_bytes(&wide).unwrap(),
+        intent: print::colour::Intent::RelativeColorimetric,
+        black_point: true,
+    };
+    let middle = |colour: Option<print::colour::ManagedColour>| {
+        let settings = print::Settings {
+            pages: vec![0],
+            layout: print::Layout::Size(print::SizeMode::Actual),
+            raster: Some(print::Raster { dpi: 72.0, grayscale: false, colour }),
+            ..Default::default()
+        };
+        let mut out = Session::new();
+        let printed = out.open("print.pdf", None, Arc::new(s.print_pdf(id, &settings).unwrap()), None).unwrap();
+        let png = crate::export::Exporter::new(out.get(printed).unwrap()).png(0, 72.0).unwrap();
+        let img = image::load_from_memory(&png).unwrap().to_rgba8();
+        img.get_pixel(img.width() / 2, img.height() / 2).0
+    };
+    let srgb = middle(None);
+    assert!(srgb[0] < 10 && srgb[1] > 245, "sRGB green: {srgb:?}");
+    let converted = middle(Some(colour));
+    assert!(converted[0] > 100 && converted[1] > 240, "the profile's values for sRGB green: {converted:?}");
 }
 
 /// A one-page PDF: a JPEG logo (DCTDecode) at the top and a big text title below it.
@@ -13154,7 +13199,7 @@ fn buttons_and_combs_left_to_the_viewer_are_displayed() {
     }
     assert_eq!(count(&shown, (95, 84, 97, 106), &blue), 0, "no line inside a cell");
     // Print as Image: the page as a picture, at 72 dpi so it is the size of the page here.
-    let raster = pdfcraft_print::Raster { dpi: 72.0, grayscale: false };
+    let raster = pdfcraft_print::Raster { dpi: 72.0, grayscale: false, colour: None };
     let pictures = crate::print_raster::rasterize(s.get(id).unwrap(), &[0], &raster, pdfcraft_print::Content::Document).unwrap();
     let printed = render(Arc::new(pictures));
     assert!(count(&printed, (24, 154, 56, 186), &red) > 60, "the check box prints");
@@ -13324,7 +13369,7 @@ fn need_appearances_buttons_are_displayed_from_their_captions() {
     let mut s = Session::new();
     let id = s.open("form.pdf", None, Arc::new(pdf(true)), None).unwrap();
     let shown = render(s.get(id).unwrap().display.clone());
-    let raster = pdfcraft_print::Raster { dpi: 72.0, grayscale: false };
+    let raster = pdfcraft_print::Raster { dpi: 72.0, grayscale: false, colour: None };
     let pictures = crate::print_raster::rasterize(s.get(id).unwrap(), &[0], &raster, pdfcraft_print::Content::Document).unwrap();
     let printed = render(Arc::new(pictures));
     for (page, how) in [(&shown, "shown"), (&printed, "printed")] {
@@ -13771,6 +13816,66 @@ fn image_transform_engine_refuses_singular_matrices_without_mutation() {
         assert!(s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Transform(matrix) }).is_err());
         assert_eq!(s.get(id).unwrap().bytes, before);
     }
+}
+
+/// The renderer's check covers a redaction applied inside a batch too, with the marks as they
+/// were when it ran: one the batch itself added is checked, and text a later edit of the batch
+/// puts back under a mark refuses the whole batch.
+#[test]
+fn redactions_applied_in_a_batch_get_the_renderer_check() {
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let page = one_line_page_with("/Font << /F1 4 0 R >>", "", "BT /F1 16 Tf 20 150 Td (Public words then SECRET42) Tj ET");
+    let id = s.open("batch.pdf", None, Arc::new(page), None).unwrap();
+    mark_shown_text(&mut s, id, "SECRET42");
+    let apply = Edit::ApplyRedactions { pages: None };
+    // Text added where the mark was shows under it again: the renderer sees it and refuses.
+    let under = AddedText { rect: [150.0, 130.0, 300.0, 160.0], text: "SECRET42 SECRET42".into(), ..Default::default() };
+    let refused = s.apply(id, Edit::Batch { label: "Redact then write".into(), edits: vec![apply.clone(), Edit::AddText { page: 0, text: under }] });
+    assert!(matches!(refused, Err(EditError::Redact(pdfcraft_redact::RedactError::Residue(n))) if n > 0), "{refused:?}");
+    assert!(page_texts(&s, id)[0].contains("SECRET42"), "nothing changed");
+    assert_eq!(s.get(id).unwrap().redaction_marks(), 1);
+    // Applied alone in a batch, the redaction goes through, and the text is gone.
+    s.apply(id, Edit::Batch { label: "Redact".into(), edits: vec![apply] }).unwrap();
+    assert!(!page_texts(&s, id)[0].contains("SECRET42"), "{:?}", page_texts(&s, id));
+    assert_eq!(s.get(id).unwrap().redaction_marks(), 0);
+}
+
+/// A batch that deletes a page holding a redaction mark and adds pages is refused whole: the
+/// marks cannot be tied to copies, so redaction fails closed. Without added pages it goes through.
+#[test]
+fn a_batch_that_deletes_a_marked_page_and_adds_pages_is_refused() {
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let page = one_line_page_with("/Font << /F1 4 0 R >>", "", "BT /F1 16 Tf 20 150 Td (Public words then SECRET42) Tj ET");
+    let id = s.open("batch.pdf", None, Arc::new(page), None).unwrap();
+    mark_shown_text(&mut s, id, "SECRET42");
+    let edits = vec![
+        Edit::ApplyRedactions { pages: None },
+        Edit::InsertBlankPage { at: 1, width: 612.0, height: 792.0 },
+        Edit::DeletePages { pages: vec![0] },
+    ];
+    let refused = s.apply(id, Edit::Batch { label: "x".into(), edits });
+    assert!(matches!(refused, Err(EditError::Invalid(_))), "{refused:?}");
+    assert!(page_texts(&s, id)[0].contains("SECRET42"), "nothing changed");
+    assert_eq!(s.get(id).unwrap().redaction_marks(), 1);
+}
+
+/// A batch that applies redactions and then copies a page is refused whole: the copy can't be tied
+/// to the marks, so text restored under one would be unchecked. Copying first, or alone, is fine.
+#[test]
+fn a_batch_that_applies_redactions_and_copies_a_page_is_refused() {
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let page = one_line_page_with("/Font << /F1 4 0 R >>", "", "BT /F1 16 Tf 20 150 Td (Public words then SECRET42) Tj ET");
+    let id = s.open("batch.pdf", None, Arc::new(page), None).unwrap();
+    mark_shown_text(&mut s, id, "SECRET42");
+    let apply = Edit::ApplyRedactions { pages: None };
+    let copy = Edit::DuplicatePages { pages: vec![0], at: None };
+    let refused = s.apply(id, Edit::Batch { label: "x".into(), edits: vec![apply.clone(), copy.clone()] });
+    assert!(matches!(&refused, Err(EditError::Invalid(m)) if m.contains("copy pages")), "{refused:?}");
+    assert!(page_texts(&s, id)[0].contains("SECRET42"), "nothing changed");
+    assert_eq!(s.get(id).unwrap().redaction_marks(), 1);
+    // Copying before the redaction is applied puts the mark on the copy too, and both are checked.
+    s.apply(id, Edit::Batch { label: "y".into(), edits: vec![copy, apply] }).unwrap();
+    assert!(page_texts(&s, id).iter().all(|t| !t.contains("SECRET42")), "{:?}", page_texts(&s, id));
 }
 
 /// A reset in an opening script reaches a field of a row an earlier opening script added, before
@@ -15358,4 +15463,49 @@ fn calculate_now_simple_calculation_reads_formatted_values_and_groups_as_the_nat
     assert!(out.error.is_none(), "{out:?}");
     assert!(out.console.iter().any(|line| line == "3244.75"), "calculateNow agrees with the native path: {out:?}");
     assert_eq!(total(&s), ["3244.75"]);
+}
+
+/// A Word document converts through LibreOffice when it is installed; without it, the error
+/// says what is missing rather than calling the file a broken PDF.
+#[test]
+fn office_documents_convert_through_libreoffice_or_explain_why_not() {
+    let mut s = Session::new();
+    let text = s.create_from_text("t", "Quarterly report").unwrap();
+    let id = s.open("t.pdf", None, text, None).unwrap();
+    let docx = Arc::new(s.get(id).unwrap().export_office(compare::OfficeFormat::Docx));
+    assert_eq!(source_kind("Report.docx", &docx), Some(SourceKind::Office));
+    match s.convert_to_pdf("Report.docx", &docx) {
+        Ok((kind, pdf)) => {
+            assert_eq!(kind, SourceKind::Office);
+            let converted = s.open_new("Report.pdf", pdf).unwrap();
+            assert!(page_texts(&s, converted).concat().contains("Quarterly report"));
+        }
+        // Only "not installed" is an acceptable failure: a conversion that fails, times out or
+        // makes no PDF must fail this test.
+        Err(e) => assert!(e.to_string().contains("LibreOffice, which isn't installed"), "{e}"),
+    }
+    // Combine treats it as a file to convert, not as a PDF to pass through.
+    assert!(
+        s.as_pdf("Report.docx", &docx).map_or_else(|e| e.to_string().contains("LibreOffice, which isn't installed"), |pdf| pdf.starts_with(b"%PDF-"))
+    );
+}
+
+/// The frame thread never waits for LibreOffice: Insert, Combine and Create Multiple refuse an
+/// Office document and point to File ▸ Open, while images and text still convert there.
+#[test]
+fn inline_conversions_refuse_office_documents_without_running_libreoffice() {
+    let s = Session::new();
+    let docx = Arc::new(b"PK\x03\x04\x14\x00".to_vec());
+    for err in
+        [s.convert_to_pdf_inline("Report.docx", &docx).map(|_| ()).unwrap_err(), s.as_pdf_inline("Report.docx", &docx).map(|_| ()).unwrap_err()]
+    {
+        assert_eq!(
+            err,
+            EditError::Source(
+                "Report.docx: Word, Excel and PowerPoint files can't be added here yet; open it with File ▸ Open, which converts it to a PDF".into()
+            )
+        );
+    }
+    assert_eq!(s.convert_to_pdf_inline("notes.txt", &Arc::new(b"hello".to_vec())).unwrap().0, SourceKind::Text);
+    assert!(s.as_pdf_inline("scan.jpg", &Arc::new(jpeg_bytes())).unwrap().starts_with(b"%PDF-"));
 }

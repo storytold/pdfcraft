@@ -57,6 +57,11 @@ pub struct FieldChange {
     pub border_style: Option<String>,
     pub user_name: Option<String>,
     pub icon: Option<Option<u64>>,
+    /// A combo box's or list box's new items (export value, text), from `setItems`.
+    pub options: Option<Vec<(String, String)>>,
+    /// JavaScript actions the script installed with `setAction`, by trigger name (`MouseUp`,
+    /// `OnFocus`, `Keystroke`, …), each replacing what the field ran for that trigger.
+    pub actions: Vec<(String, String)>,
 }
 
 /// What a script did.
@@ -171,6 +176,73 @@ fn protect_other_mk_owners(doc: &mut Document, field: &Field, owners: &std::coll
     Ok(())
 }
 
+/// Most items a script may give a choice field ([`FieldChange::options`]).
+const MAX_SCRIPT_OPTIONS: usize = 10_000;
+
+/// Write a combo box's or list box's items (export value, text) as its `/Opt`: a plain text
+/// where the two are the same, a pair where they differ (ISO 32000-2 Table 231). The selected
+/// indices (`/I`) no longer apply and go; the value is written after, and the field redrawn.
+fn write_options(doc: &mut Document, f: &Field, options: &[(String, String)]) -> Result<(), FormError> {
+    if !matches!(f.kind, FieldKind::Combo | FieldKind::List) {
+        return Err(FormError::Invalid(format!("{} is not a combo box or list box: it has no items to set", f.name)));
+    }
+    if options.len() > MAX_SCRIPT_OPTIONS {
+        return Err(FormError::Invalid(format!("a script may give a field at most {MAX_SCRIPT_OPTIONS} items")));
+    }
+    let opt = options
+        .iter()
+        .map(|(export, text)| {
+            if export == text {
+                Object::String(PdfString::text(text))
+            } else {
+                Object::Array(vec![Object::String(PdfString::text(export)), Object::String(PdfString::text(text))])
+            }
+        })
+        .collect();
+    doc.update_dict(f.obj, |d| {
+        d.set(b"Opt".to_vec(), Object::Array(opt));
+        d.remove(b"I");
+    })?;
+    crate::author::redraw_field_object(doc, &f.name, f.obj)
+}
+
+/// Install `script` as field `f`'s JavaScript for `trigger` (a `setAction` trigger name),
+/// replacing the action it had there: the field's `/AA` for Keystroke, Validate, Calculate and
+/// Format, each widget's `/A` (Mouse Up) or `/AA` for the rest.
+fn set_action(doc: &mut Document, f: &Field, trigger: &str, script: &str) -> Result<(), FormError> {
+    let event = match trigger {
+        "Keystroke" => Some("keystroke"),
+        "Validate" => Some("validate"),
+        "Calculate" => Some("calculate"),
+        "Format" => Some("format"),
+        "MouseUp" => Some("mouse_up"),
+        _ => None,
+    };
+    if let Some(event) = event {
+        // The field the script's object stands for, even when another shares its name.
+        return set_script_of(doc, f, event, Some(script));
+    }
+    let key: &[u8] = match trigger {
+        "MouseDown" => b"D",
+        "MouseEnter" => b"E",
+        "MouseExit" => b"X",
+        "OnFocus" => b"Fo",
+        "OnBlur" => b"Bl",
+        other => return Err(FormError::Invalid(format!("unknown action trigger {other:?}"))),
+    };
+    let mut action = pdfcraft_cos::Dict::new();
+    action.set(b"S".to_vec(), Object::name("JavaScript"));
+    action.set(b"JS".to_vec(), PdfString::text(script));
+    let action = doc.add(Object::Dict(action));
+    for w in &f.widgets {
+        let mut aa =
+            doc.get(w.obj).as_dict().and_then(|d| d.get(b"AA").map(|a| doc.resolve(a))).and_then(|a| a.as_dict().cloned()).unwrap_or_default();
+        aa.set(key.to_vec(), Object::Ref(action));
+        doc.update_dict(w.obj, |d| d.set(b"AA".to_vec(), Object::Dict(aa)))?;
+    }
+    Ok(())
+}
+
 /// [`formatted`] with dates in English names, for widgets whose fonts can't draw the date
 /// language's; `None` when the field has no Format script or the English run didn't happen.
 pub(crate) fn formatted_in_english(doc: &Document, f: &Field, value: &str, scripts: &mut dyn Scripts) -> Option<String> {
@@ -211,6 +283,19 @@ pub(crate) fn apply_changes(
 
     for c in changes {
         let Some(f) = all.iter().find(|f| f.name == c.name && c.object.is_none_or(|obj| f.obj == obj)) else { continue };
+        // New items go first, so a value among them is written against them.
+        let reread;
+        let f = match &c.options {
+            Some(options) => {
+                write_options(doc, f, options)?;
+                reread = fields(doc).into_iter().find(|x| x.obj == f.obj).unwrap_or_else(|| f.clone());
+                &reread
+            }
+            None => f,
+        };
+        for (trigger, script) in &c.actions {
+            set_action(doc, f, trigger, script)?;
+        }
         if let Some(v) = &c.value
             && !except_object.map_or(c.name == except, |obj| f.obj == obj)
             && *v != f.value
@@ -454,6 +539,79 @@ pub fn document_scripts_named(doc: &Document) -> Vec<(String, String)> {
     out
 }
 
+/// A document-level action trigger whose JavaScript the viewer runs (ISO 32000-2 §12.6.3,
+/// Table 199): the catalog's `/OpenAction`, or its `/AA` entries.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DocumentTrigger {
+    /// The catalog `/OpenAction`, once the document has opened.
+    Open,
+    /// `/AA /WS`, before the document is saved.
+    WillSave,
+    /// `/AA /WP`, before the document is printed.
+    WillPrint,
+}
+
+/// Most actions read for one document trigger, along its `/Next` chain. A chain can be cyclic
+/// or arbitrarily long; the rest are ignored.
+const MAX_CHAINED_ACTIONS: usize = 256;
+
+/// The JavaScript of the catalog actions for `trigger`, in the order a viewer runs them: the
+/// action, then its `/Next` actions depth first (§12.6.2). Actions of other types (a `/GoTo`
+/// open action, say) are skipped; their `/Next` chains are still followed. Bounded: each object
+/// is read once and at most [`MAX_CHAINED_ACTIONS`] actions are visited.
+pub fn document_action_scripts(doc: &Document, trigger: DocumentTrigger) -> Vec<String> {
+    let Some(root) = doc.root() else { return Vec::new() };
+    let cat = doc.get(root);
+    let Some(cat) = cat.as_dict() else { return Vec::new() };
+    let first = match trigger {
+        DocumentTrigger::Open => cat.get(b"OpenAction").cloned(),
+        DocumentTrigger::WillSave | DocumentTrigger::WillPrint => {
+            let key: &[u8] = if trigger == DocumentTrigger::WillSave { b"WS" } else { b"WP" };
+            cat.get(b"AA").map(|a| doc.resolve(a)).and_then(|a| a.as_dict().and_then(|d| d.get(key)).cloned())
+        }
+    };
+    chained_scripts(doc, first)
+}
+
+/// The JavaScript of action `first` and of the actions chained after it, in the order they run:
+/// the action, then its `/Next` actions depth first (ISO 32000-2 §12.6.2). Actions of other
+/// types are skipped; their `/Next` chains are still followed. Bounded: each object is read
+/// once and at most [`MAX_CHAINED_ACTIONS`] actions are visited.
+pub(crate) fn chained_scripts(doc: &Document, first: Option<Object>) -> Vec<String> {
+    let mut budget = crate::script_budget();
+    let mut seen: HashSet<u32> = HashSet::new();
+    let mut pending: Vec<Object> = first.into_iter().collect();
+    let mut visited = 0usize;
+    let mut out = Vec::new();
+    while let Some(raw) = pending.pop() {
+        visited += 1;
+        if visited > MAX_CHAINED_ACTIONS {
+            break;
+        }
+        if let Some(r) = raw.as_ref()
+            && !seen.insert(r.num)
+        {
+            continue;
+        }
+        let action = doc.resolve(&raw);
+        if let Some(list) = action.as_array() {
+            // Pushed in reverse so they run in the order listed.
+            pending.extend(list.iter().take(MAX_CHAINED_ACTIONS).rev().cloned());
+            continue;
+        }
+        let Some(d) = action.as_dict() else { continue };
+        if d.name(b"S") == Some(b"JavaScript".as_slice())
+            && let Some(js) = crate::script(doc, &raw, &mut budget)
+        {
+            out.push(js);
+        }
+        if let Some(next) = d.get(b"Next") {
+            pending.push(next.clone());
+        }
+    }
+    out
+}
+
 /// Call `f` on the array `o` is, or refers to, read in place: resolving a direct array would
 /// copy it.
 fn in_array(doc: &Document, o: &Object, f: impl FnOnce(&[Object])) {
@@ -511,7 +669,12 @@ pub fn set_document_script(doc: &mut Document, name: &str, js: Option<&str>) -> 
 /// (its widgets' `/A`). Calculated fields join the calculation order (`/CO`).
 pub fn set_field_script(doc: &mut Document, name: &str, event: &str, js: Option<&str>) -> Result<(), FormError> {
     let all = fields(doc);
-    let f = all.iter().find(|f| f.name == name).ok_or_else(|| FormError::NoSuchField(name.into()))?.clone();
+    let f = all.iter().find(|f| f.name == name).ok_or_else(|| FormError::NoSuchField(name.into()))?;
+    set_script_of(doc, f, event, js)
+}
+
+/// [`set_field_script`] for the field `f` itself, which may share its name with another.
+fn set_script_of(doc: &mut Document, f: &Field, event: &str, js: Option<&str>) -> Result<(), FormError> {
     let action = |doc: &mut Document, js: &str| {
         let mut a = pdfcraft_cos::Dict::new();
         a.set(b"S".to_vec(), Object::name("JavaScript"));

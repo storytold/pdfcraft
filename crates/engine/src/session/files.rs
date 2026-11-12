@@ -1,8 +1,16 @@
 use super::{
     Arc, CombineSource, Combined, DataFormat, DocId, EditError, Hairlines, HairlinesFixed, Hidden, ImageResolution, LOW_RESOLUTION_PRINT_DPI,
-    OptimizeReport, SaveOptions, Session, SourceKind, SplitPart, decode_text, guard, open_source, open_source_with, optimize, print,
+    OptimizeReport, SaveOptions, Session, SourceKind, SplitPart, decode_text, guard, office_to_pdf, open_source, open_source_with, optimize, print,
     print_layer_states, print_raster, set_default_layer_state, source_kind, writable, write_full,
 };
+
+/// Whether a conversion may run LibreOffice for an Office document (seconds, in another
+/// process) or must refuse it because the caller is on the frame thread.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Office {
+    Convert,
+    Refuse,
+}
 
 impl Session {
     /// The page count of another PDF (Replace Pages, Insert Pages dialogs).
@@ -41,30 +49,63 @@ impl Session {
         self.write_new(&doc)
     }
 
-    /// Convert a file Create understands (an image or plain text) to PDF bytes; a PDF is checked
-    /// (it must open and allow copying pages) and returned as it is.
+    /// Convert a file Create understands (an image, plain text or an Office document) to PDF
+    /// bytes; a PDF is checked (it must open and allow copying pages) and returned as it is.
+    /// An Office document runs LibreOffice ([`office_to_pdf`]), which takes seconds: keep it off
+    /// the frame thread ([`Self::convert_to_pdf_inline`] there).
     pub fn convert_to_pdf(&self, name: &str, bytes: &Arc<Vec<u8>>) -> Result<(SourceKind, Arc<Vec<u8>>), EditError> {
+        self.convert(name, bytes, Office::Convert)
+    }
+
+    /// [`Self::convert_to_pdf`] for a caller on the frame thread, which must not wait seconds for
+    /// LibreOffice: an Office document is refused, pointing to File ▸ Open, which converts it in
+    /// the background.
+    pub fn convert_to_pdf_inline(&self, name: &str, bytes: &Arc<Vec<u8>>) -> Result<(SourceKind, Arc<Vec<u8>>), EditError> {
+        self.convert(name, bytes, Office::Refuse)
+    }
+
+    fn convert(&self, name: &str, bytes: &Arc<Vec<u8>>, office: Office) -> Result<(SourceKind, Arc<Vec<u8>>), EditError> {
         let Some(kind) = source_kind(name, bytes) else {
-            return Err(EditError::Source(format!("{name}: this file type can't be converted; use a PDF, an image or a .txt file")));
+            return Err(EditError::Source(format!(
+                "{name}: this file type can't be converted; use a PDF, an image, a .txt file or a Word, Excel or PowerPoint file"
+            )));
         };
+        if kind == SourceKind::Office && office == Office::Refuse {
+            return Err(EditError::Source(format!(
+                "{name}: Word, Excel and PowerPoint files can't be added here yet; open it with File ▸ Open, which converts it to a PDF"
+            )));
+        }
         let title = name.rsplit_once('.').map_or(name, |(s, _)| s);
         // Image decoders read untrusted bytes: a panic in one must not take the app down.
         let created = guard(|| match kind {
             SourceKind::Pdf => open_source(name, bytes).map(|_| bytes.clone()),
             SourceKind::Image => self.create_from_images(&[(name.to_string(), bytes.to_vec())]),
             SourceKind::Text => self.create_from_text(title, &decode_text(bytes)),
+            SourceKind::Office => office_to_pdf(name, bytes),
         })
         .map_err(|_| EditError::Source(format!("{name}: the file could not be read")))?;
         Ok((kind, created?))
     }
 
-    /// A file for Insert Pages into `dest`, as PDF bytes and its page count: an image or text
-    /// file is converted, and a PDF is checked as the insert itself checks it, so a file under
-    /// `dest`'s own protection that withholds only page extraction is accepted, as pasted pages
-    /// are (#5081).
+    /// A file for Insert Pages into `dest`, as PDF bytes and its page count: an image, text or
+    /// Office file is converted, and a PDF is checked as the insert itself checks it, so a file
+    /// under `dest`'s own protection that withholds only page extraction is accepted, as pasted
+    /// pages are (#5081). An Office document runs LibreOffice: keep it off the frame thread
+    /// ([`Self::insert_source_inline`] there).
     pub fn insert_source(&self, dest: DocId, name: &str, bytes: &Arc<Vec<u8>>) -> Result<(usize, Arc<Vec<u8>>), EditError> {
+        self.insert_source_with(dest, name, bytes, Office::Convert)
+    }
+
+    /// [`Self::insert_source`] on the frame thread: Office documents are refused, as
+    /// [`Self::convert_to_pdf_inline`] refuses them. PDFs are still checked as the insert itself
+    /// checks them (#5081).
+    pub fn insert_source_inline(&self, dest: DocId, name: &str, bytes: &Arc<Vec<u8>>) -> Result<(usize, Arc<Vec<u8>>), EditError> {
+        self.insert_source_with(dest, name, bytes, Office::Refuse)
+    }
+
+    fn insert_source_with(&self, dest: DocId, name: &str, bytes: &Arc<Vec<u8>>, office: Office) -> Result<(usize, Arc<Vec<u8>>), EditError> {
         if !matches!(source_kind(name, bytes), Some(SourceKind::Pdf)) {
-            let (_, pdf) = self.convert_to_pdf(name, bytes)?;
+            let (_, pdf) = self.convert(name, bytes, office)?;
             return Ok((self.page_count_of(name, &pdf)?, pdf));
         }
         let src = crate::sources::open_source_into(name, bytes, self.cos(dest)?)?;
@@ -78,16 +119,26 @@ impl Session {
         Ok(pdfcraft_organize::page_count(&crate::sources::open_source_into(name, bytes, self.cos(dest)?)?)?)
     }
 
-    /// A file for Combine as PDF bytes: an image or text file is converted; a PDF is returned as
-    /// it is, unchecked (Combine reads it itself, with its password), as is a file named .pdf
-    /// without a `%PDF-` header, which the reader may still open.
+    /// A file for Combine as PDF bytes: an image, text or Office file is converted; a PDF is
+    /// returned as it is, unchecked (Combine reads it itself, with its password), as is a file
+    /// named .pdf without a `%PDF-` header, which the reader may still open.
     pub fn as_pdf(&self, name: &str, bytes: &Arc<Vec<u8>>) -> Result<Arc<Vec<u8>>, EditError> {
+        self.as_pdf_with(name, bytes, Office::Convert)
+    }
+
+    /// [`Self::as_pdf`] on the frame thread: Office documents are refused, as
+    /// [`Self::convert_to_pdf_inline`] refuses them.
+    pub fn as_pdf_inline(&self, name: &str, bytes: &Arc<Vec<u8>>) -> Result<Arc<Vec<u8>>, EditError> {
+        self.as_pdf_with(name, bytes, Office::Refuse)
+    }
+
+    fn as_pdf_with(&self, name: &str, bytes: &Arc<Vec<u8>>, office: Office) -> Result<Arc<Vec<u8>>, EditError> {
         let pdf = match source_kind(name, bytes) {
             Some(SourceKind::Pdf) => true,
-            Some(SourceKind::Image | SourceKind::Text) => false,
+            Some(SourceKind::Image | SourceKind::Text | SourceKind::Office) => false,
             None => name.to_ascii_lowercase().ends_with(".pdf"),
         };
-        if pdf { Ok(bytes.clone()) } else { self.convert_to_pdf(name, bytes).map(|(_, pdf)| pdf) }
+        if pdf { Ok(bytes.clone()) } else { self.convert(name, bytes, office).map(|(_, pdf)| pdf) }
     }
 
     /// Reduce File Size: Acrobat's defaults (colour and grey images above 225 ppi to 150 ppi,
@@ -185,8 +236,9 @@ impl Session {
         // Table 22, bit 12 clear: only a low-level representation may be printed, so the pages
         // always go as pictures, at no more than the low resolution.
         let low_res = doc.permissions().is_some_and(|p| !p.print_high_quality()).then(|| print::Raster {
-            dpi: settings.raster.map_or(LOW_RESOLUTION_PRINT_DPI, |r| r.dpi.min(LOW_RESOLUTION_PRINT_DPI)),
-            grayscale: settings.raster.is_some_and(|r| r.grayscale),
+            dpi: settings.raster.as_ref().map_or(LOW_RESOLUTION_PRINT_DPI, |r| r.dpi.min(LOW_RESOLUTION_PRINT_DPI)),
+            grayscale: settings.raster.as_ref().is_some_and(|r| r.grayscale),
+            colour: settings.raster.as_ref().and_then(|r| r.colour.clone()),
         });
         // Print as image: the pages used become pictures first, then the picture document is
         // imposed in their place (its page k is the k-th distinct source page used).
