@@ -251,6 +251,17 @@ fn assert_positions(actual: &[V], expected: &[V]) {
     }
 }
 
+#[allow(dead_code)]
+fn assert_within_tolerance(actual: &[V], source: &[V], tolerance: f64) {
+    assert_eq!(actual.len(), source.len(), "vertex counts differ");
+    let limit = tolerance * 3.0_f64.sqrt() / 2.0;
+    for (index, (actual, source)) in actual.iter().zip(source).enumerate() {
+        let difference = p_sub(*actual, *source);
+        let distance = p_dot(difference, difference).sqrt();
+        assert!(distance <= limit + 1e-12, "vertex {index}: distance {distance} exceeds {limit}; actual {actual:?}, source {source:?}");
+    }
+}
+
 #[test]
 fn independent_seed_and_apex_match_a_hand_computed_stream() {
     let encoded = encode(
@@ -265,5 +276,6 @@ fn independent_seed_and_apex_match_a_hand_computed_stream() {
     assert_eq!(encoded.points, [0, 0, 0, 4, 0, 0, -2, 4, 0, 2, -6, 2]);
     let rebuilt = rebuild(&encoded.arrays(usize::MAX)).unwrap();
     assert_eq!(rebuilt.triangles, [[0, 1, 2], [2, 1, 3]]);
-    assert_positions(&rebuilt.positions, &encoded.positions);
+    let expected = [[10.0, 0.0, 0.0], [12.0, 0.0, 0.0], [10.0, 2.0, 0.0], [11.0 + 2.0 * S, 1.0 + S, -1.0]];
+    assert_positions(&rebuilt.positions, &expected);
 }

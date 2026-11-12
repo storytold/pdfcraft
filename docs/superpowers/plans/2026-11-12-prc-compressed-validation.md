@@ -4,7 +4,7 @@
 
 **Goal:** Valider indépendamment la reconstruction `TESS_3D_Compressed` fusionnée dans la PR n° 7034, obtenir un cas minimal si un défaut géométrique subsiste, et ne modifier la production qu’après attribution démontrée de la cause.
 
-**Architecture:** Un module de test `independent.rs` sérialise des recettes explicites de triangles sans appeler le parcours ni les fonctions géométriques de production. L’oracle est le maillage de travail quantifié calculé par cet encodeur à partir de N570, puis comparé au résultat de `rebuild` et, pour le regroupement, de `by_face`. Les tests nouveaux sont des tests de caractérisation dont le résultat attendu est `PASS` ; tout échec déclenche le portail de diagnostic de la tâche 6 avant toute correction.
+**Architecture:** Un module de test `independent.rs` sérialise des recettes explicites de triangles sans appeler le parcours ni les fonctions géométriques de production. Les oracles géométriques sont externes à cet encodeur : positions littérales calculées manuellement pour les petits cas, ou topologie connue et borne d’erreur de quantification par rapport au maillage source pour les cas complexes. `encoded.positions` sert à diagnostiquer l’encodeur mais ne constitue pas une preuve géométrique à lui seul. Les tests nouveaux sont des tests de caractérisation dont le résultat attendu est `PASS` ; tout échec déclenche le portail de diagnostic de la tâche 6 avant toute correction.
 
 **Tech Stack:** Rust 2024, Cargo, tests unitaires `pdfcraft-prc`, writer binaire de test existant, N570 ISO/TC 171/SC 2, GitHub CLI pour la coordination.
 
@@ -16,6 +16,7 @@
 - Périmètre : normales recalculées et variante de tableau `3T` acceptée par le lecteur actuel. N570 §7.8.9.2 définit **un drapeau de voisinage par triangle** ; la disposition `3T`, dont les `T` premiers drapeaux sont lus par le code actuel, est une convention de fixture et n’est pas présentée comme normative. Source publique : https://docs.techsoft3d.com/hoops/exchange/_downloads/a7028c5c324de43fc7d5083bfa100c2a/SC2N570-PRC-WD.pdf
 - Exclusions : normales stockées, variante `T`, meilleur ajustement, planéité, récupération partielle, interface graphique, nouvelle crate, nouvelle dépendance et modification de CI.
 - L’encodeur de test n’appelle ni `Walk`, ni `apex`, ni `unitize`, ni `wd_length`, ni les aides arithmétiques de production. Il utilise uniquement les types `Arrays`, `Rebuilt` et la fonction `rebuild` comme API sous test.
+- Les positions attendues ne doivent pas provenir uniquement d’`encoded.positions`. Chaque test compare le résultat à des littéraux dérivés manuellement ou à `assert_within_tolerance(actual, source, tolerance)`, avec une borne euclidienne de `sqrt(3) / 2 * tolerance` par sommet. `encoded.positions` peut être vérifié de la même façon pour diagnostiquer l’encodeur.
 - Les fixtures sont originales. Les modèles externes restent locaux tant que leur licence de redistribution n’est pas établie ; aucun fichier externe n’est commité.
 - Aucune modification de production sans échec reproductible, oracle vérifié et cause attribuée. Si ce cas survient, appliquer le portail de la tâche 6 au lieu d’essayer un correctif spéculatif.
 - Chaque commit suit les règles PDFCraft : formatage, Clippy `-D warnings`, tests `pdfcraft-prc`, couches, assets et WASM. Les avertissements WASM déjà présents dans d’autres crates ne sont pas corrigés dans ce chantier.
@@ -44,7 +45,7 @@
 
 **Interfaces:**
 - Consumes: `compressed::Arrays<'a>`, `compressed::Rebuilt`, `compressed::rebuild(&Arrays<'_>) -> Result<Rebuilt, &'static str>`, et `V = [f64; 3]` du module parent.
-- Produces: `Slot`, `Recipe`, `Encoded`, `encode(origin: V, tolerance: f64, recipes: &[Recipe]) -> Encoded`, `Encoded::arrays(limit: usize) -> Arrays<'_>`, `Encoded::faces() -> usize`, `assert_positions(actual: &[V], expected: &[V])`. Les tâches 2 à 5 utilisent ces noms exacts.
+- Produces: `Slot`, `Recipe`, `Encoded`, `encode(origin: V, tolerance: f64, recipes: &[Recipe]) -> Encoded`, `Encoded::arrays(limit: usize) -> Arrays<'_>`, `Encoded::faces() -> usize`, `assert_positions(actual: &[V], expected: &[V])`, `assert_within_tolerance(actual: &[V], source: &[V], tolerance: f64)`. Les tâches 2 à 5 utilisent ces noms exacts.
 
 - [ ] **Step 1: Ajouter le module et un test qui ne compile pas encore**
 
@@ -94,7 +95,13 @@ fn independent_seed_and_apex_match_a_hand_computed_stream() {
     assert_eq!(encoded.points, [0, 0, 0, 4, 0, 0, -2, 4, 0, 2, -6, 2]);
     let rebuilt = rebuild(&encoded.arrays(usize::MAX)).unwrap();
     assert_eq!(rebuilt.triangles, [[0, 1, 2], [2, 1, 3]]);
-    assert_positions(&rebuilt.positions, &encoded.positions);
+    let expected = [
+        [10.0, 0.0, 0.0],
+        [12.0, 0.0, 0.0],
+        [10.0, 2.0, 0.0],
+        [11.0 + 2.0 * S, 1.0 + S, -1.0],
+    ];
+    assert_positions(&rebuilt.positions, &expected);
 }
 ```
 
@@ -352,13 +359,26 @@ fn assert_positions(actual: &[V], expected: &[V]) {
         }
     }
 }
+
+fn assert_within_tolerance(actual: &[V], source: &[V], tolerance: f64) {
+    assert_eq!(actual.len(), source.len(), "vertex counts differ");
+    let limit = tolerance * 3.0_f64.sqrt() / 2.0;
+    for (index, (actual, source)) in actual.iter().zip(source).enumerate() {
+        let difference = p_sub(*actual, *source);
+        let distance = p_dot(difference, difference).sqrt();
+        assert!(
+            distance <= limit + 1e-12,
+            "vertex {index}: distance {distance} exceeds {limit}; actual {actual:?}, source {source:?}",
+        );
+    }
+}
 ```
 
 - [ ] **Step 4: Vérifier le GREEN du cas manuel**
 
 Run: `cargo test -p pdfcraft-prc tess::compressed::independent::independent_seed_and_apex_match_a_hand_computed_stream -- --exact`
 
-Expected: PASS. En particulier, les douze entiers du tableau de points correspondent au calcul manuel N570 ; si ce tableau diffère, corriger d’abord l’encodeur de test.
+Expected: PASS. Les douze entiers du tableau de points et les quatre positions littérales sont deux oracles manuels indépendants de `encoded.positions` ; si l’un diffère, vérifier d’abord l’encodeur de test.
 
 - [ ] **Step 5: Aligner la documentation sur le comportement déjà fusionné**
 
@@ -453,7 +473,15 @@ fn independent_components_and_a_reference_are_rebuilt() {
     assert_eq!(encoded.references, [0]);
     assert_eq!(encoded.face_of, [0, 0, 1]);
     assert_eq!(rebuilt.positions.len(), 6);
-    assert_positions(&rebuilt.positions, &encoded.positions);
+    let expected = [
+        [0.0, 0.0, 0.0],
+        [2.0, 0.0, 0.0],
+        [0.0, 2.0, 0.0],
+        [5.0, 0.0, 0.0],
+        [7.0, 0.0, 0.0],
+        [5.0, 2.0, 0.0],
+    ];
+    assert_positions(&rebuilt.positions, &expected);
 }
 ```
 
@@ -491,7 +519,7 @@ git commit -m "test(prc): cover compressed components and references"
 - Modify: `crates/prc/src/tess/compressed/independent.rs`
 
 **Interfaces:**
-- Consumes: `Slot`, `Recipe`, `encode`, `triangle_seed`, `Encoded::arrays`, `assert_positions`, et la constante `S`.
+- Consumes: `Slot`, `Recipe`, `encode`, `triangle_seed`, `Encoded::arrays`, `assert_within_tolerance`, et la constante `S`.
 - Produces: `panel(target: V) -> Encoded`, local à ce module de test ; aucun autre module n’en dépend.
 
 - [ ] **Step 1: Ajouter les tests de pli et de reprise**
@@ -529,11 +557,13 @@ fn independent_fold_and_component_retry_rebuild_the_same_panel() {
     let folded = [1.0 - 1.0 / S, 1.0 - S, 0.0];
     let unfolded = [1.0 + S, 1.0 + 1.0 / S, 0.0];
     for target in [folded, unfolded] {
+        let source = [[0.0, 0.0, 0.0], [2.0, 0.0, 0.0], [0.0, 2.0, 0.0], target];
         let encoded = panel(target);
+        assert_within_tolerance(&encoded.positions, &source, 0.5);
         let rebuilt = rebuild(&encoded.arrays(usize::MAX)).unwrap();
         assert_eq!(rebuilt.triangles, [[0, 1, 2], [2, 1, 3], [2, 3, 0], [0, 3, 1]]);
         assert_eq!(rebuilt.positions.len(), 4);
-        assert_positions(&rebuilt.positions, &encoded.positions);
+        assert_within_tolerance(&rebuilt.positions, &source, 0.5);
     }
 }
 ```
@@ -574,9 +604,11 @@ fn independent_closed_continuation_uses_the_open_edge() {
         ],
     );
 
+    let source = [[0.0, 0.0, 0.0], [2.0, 0.0, 0.0], [0.0, 2.0, 0.0], [0.0, 0.0, 2.0]];
+    assert_within_tolerance(&encoded.positions, &source, 0.5);
     let rebuilt = rebuild(&encoded.arrays(usize::MAX)).unwrap();
     assert_eq!(rebuilt.triangles, [[0, 1, 2], [2, 1, 3], [3, 1, 0], [3, 0, 2]]);
-    assert_positions(&rebuilt.positions, &encoded.positions);
+    assert_within_tolerance(&rebuilt.positions, &source, 0.5);
 }
 ```
 
@@ -660,11 +692,12 @@ fn independent_non_planar_strip_tracks_the_quantized_working_mesh() {
     }
 
     let encoded = encode([0.0; 3], 1e-4, &recipes);
+    assert_within_tolerance(&encoded.positions, &source, 1e-4);
     let rebuilt = rebuild(&encoded.arrays(usize::MAX)).unwrap();
     assert_eq!(rebuilt.triangles.len(), source.len() - 2);
     assert_eq!(rebuilt.triangles[..3], [[2, 1, 3], [2, 3, 4], [4, 3, 5]]);
     assert_eq!(encoded.points.len(), source.len() * 3);
-    assert_positions(&rebuilt.positions, &encoded.positions);
+    assert_within_tolerance(&rebuilt.positions, &source, 1e-4);
 }
 ```
 
@@ -698,9 +731,16 @@ fn independent_near_degenerate_parent_uses_an_orthogonal_frame() {
         ],
     );
 
+    let source = [
+        [0.0, 1e-9, 0.0],
+        [2.0, 0.0, 0.0],
+        [0.0, 2.0, 0.0],
+        [0.3, 0.7, 0.2],
+    ];
+    assert_within_tolerance(&encoded.positions, &source, 1e-12);
     let rebuilt = rebuild(&encoded.arrays(usize::MAX)).unwrap();
     assert_eq!(rebuilt.triangles, [[0, 1, 2], [2, 1, 3]]);
-    assert_positions(&rebuilt.positions, &encoded.positions);
+    assert_within_tolerance(&rebuilt.positions, &source, 1e-12);
 }
 ```
 
@@ -798,7 +838,15 @@ fn independent_faces_group_walk_order_triangles() {
 
     assert_eq!(mesh.faces, [0..1, 1..2]);
     assert_eq!(mesh.triangles, [[3, 4, 5], [0, 1, 2]]);
-    assert_positions(&mesh.positions, &encoded.positions);
+    let expected = [
+        [0.0, 0.0, 0.0],
+        [2.0, 0.0, 0.0],
+        [0.0, 2.0, 0.0],
+        [5.0, 0.0, 0.0],
+        [7.0, 0.0, 0.0],
+        [5.0, 2.0, 0.0],
+    ];
+    assert_positions(&mesh.positions, &expected);
 }
 ```
 
@@ -902,7 +950,7 @@ Expected: aucun fichier non suivi, seulement les commits de validation et de doc
 Si tous les tests passent sans fixture externe et sans défaut, publier ce compte rendu avec le commit réel interpolé par le shell :
 
 ```bash
-commit=$(git rev-parse HEAD) && gh issue comment 1297 --repo storytold/pdfcraft --body "Independent synthetic validation at ${commit} is complete. The new encoder does not call the production traversal or geometry helpers. It covers a hand-computed seed/apex stream, disconnected components, vertex references, folds and component retry, a closed continuation edge, a non-planar strip, a near-degenerate frame, exact array consumption, budget limits, and face grouping. All independent tests pass, as do fmt, pdfcraft-prc Clippy with -D warnings, the full pdfcraft-prc test suite, layers, assets, and WASM. No production code was changed. Scope: recalculated-normal compressed meshes in the currently accepted 3T container form only; no SolidWorks files, stored normals, or one-status meshes were tested."
+commit=$(git rev-parse HEAD) && gh issue comment 1297 --repo storytold/pdfcraft --body "Independent synthetic validation at ${commit} is complete. The new encoder does not call the production traversal or geometry helpers; expectations are hand-computed literals or quantization bounds from source meshes, not encoder-generated positions alone. It covers a hand-computed seed/apex stream, disconnected components, vertex references, folds and component retry, a closed continuation edge, a non-planar strip, a near-degenerate frame, exact array consumption, budget limits, and face grouping. All independent tests pass, as do fmt, pdfcraft-prc Clippy with -D warnings, the full pdfcraft-prc test suite, layers, assets, and WASM. No production code was changed. Scope: recalculated-normal compressed meshes in the currently accepted 3T container form only; no SolidWorks files, stored normals, or one-status meshes were tested."
 ```
 
 Si une réponse de Ken a fourni des fichiers ou si un défaut a été trouvé, ne pas utiliser ce texte : publier à la place les commandes réellement exécutées, les empreintes des fixtures, le résultat précis et les limites correspondantes. Ne jamais déclarer « all passed » pour une commande non exécutée ou en échec.
