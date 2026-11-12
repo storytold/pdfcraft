@@ -218,6 +218,41 @@ pub fn static_shell_many(n: usize) -> Vec<u8> {
     assemble(objs)
 }
 
+/// A static XFA form whose template holds scripts: `form1[0].page1[0]` has number fields `a` and
+/// `b`, a protected `total` whose FormCalc calculate script is `a + b`, a text field `note`, and,
+/// inside an unnamed subform (AcroForm name `#subform[0]`), a text field `seen` calculated as
+/// `total ` and the total. Leaving `a` writes `left a` into `note`; leaving `b` hides `total`,
+/// which needs a new layout. Its datasets hold `data` (the children of `xfa:data`). No
+/// `/NeedsRendering`.
+pub fn static_scripted_shell(data: &str) -> Vec<u8> {
+    let xdp = format!(
+        r#"<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/"><template xmlns="http://www.xfa.org/schema/xfa-template/3.3/"><subform name="form1" layout="tb"><pageSet><pageArea name="sheet"><contentArea x="0in" y="0in" w="8.5in" h="11in"/><medium short="8.5in" long="11in"/></pageArea></pageSet><subform name="page1" w="8.5in" h="11in"><field name="a" x="1in" y="1in" w="2in" h="0.3in"><ui><numericEdit/></ui><event activity="exit"><script>note = "left a"</script></event></field><field name="b" x="1in" y="1.5in" w="2in" h="0.3in"><ui><numericEdit/></ui><event activity="exit"><script>total.presence = "hidden"</script></event></field><field name="total" access="protected" x="1in" y="2in" w="2in" h="0.3in"><ui><numericEdit/></ui><calculate><script>a + b</script></calculate></field><field name="note" x="1in" y="2.5in" w="4in" h="0.3in"><ui><textEdit/></ui></field><subform x="1in" y="3in" w="4in" h="0.5in"><field name="seen" x="0in" y="0in" w="4in" h="0.3in"><ui><textEdit/></ui><calculate><script>Concat("total ", total)</script></calculate></field></subform></subform></subform></template><xfa:datasets xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"><xfa:data><form1><page1>{data}</page1></form1></xfa:data></xfa:datasets></xdp:xdp>"#
+    );
+    let widget = |name: &str, parent: u32, y: u32, flags: &str| {
+        format!(
+            "<< /Type /Annot /Subtype /Widget /FT /Tx /T ({name}[0]){flags} /Parent {parent} 0 R /Rect [72 {y} 216 {}] /P 3 0 R /DA (/Helv 10 Tf 0 g) /MK << /BC [0 0 0] >> >>",
+            y + 22
+        )
+        .into_bytes()
+    };
+    let objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R /AcroForm << /XFA 5 0 R /Fields [6 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv << /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >> >> >> >> >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Annots [8 0 R 9 0 R 10 0 R 11 0 R 13 0 R] >>".to_vec(),
+        b"<< /Length 0 >>\nstream\n\nendstream".to_vec(),
+        format!("<< /Length {} >>\nstream\n{xdp}\nendstream", xdp.len()).into_bytes(),
+        b"<< /T (form1[0]) /Kids [7 0 R] >>".to_vec(),
+        b"<< /T (page1[0]) /Parent 6 0 R /Kids [8 0 R 9 0 R 10 0 R 11 0 R 12 0 R] >>".to_vec(),
+        widget("a", 7, 698, ""),
+        widget("b", 7, 662, ""),
+        widget("total", 7, 626, " /Ff 1"),
+        widget("note", 7, 590, ""),
+        b"<< /T (#subform[0]) /Parent 7 0 R /Kids [13 0 R] >>".to_vec(),
+        widget("seen", 12, 554, ""),
+    ];
+    assemble(objs)
+}
+
 /// A PDF file holding `objs` as objects 1, 2, … in order, with a cross-reference table and a
 /// trailer whose root is object 1.
 fn assemble(objs: Vec<Vec<u8>>) -> Vec<u8> {

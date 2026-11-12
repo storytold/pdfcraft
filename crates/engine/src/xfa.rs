@@ -297,6 +297,45 @@ fn field_soms(n: &FormNode, out: &mut HashSet<String>, depth: usize) {
     }
 }
 
+/// What effect `e` would change that only a new layout shows, and the SOM path it names, if it
+/// names one: a static form's pages are never laid out again, so it is not applied there.
+fn needs_layout(e: &XfaEffect) -> Option<(Option<&str>, &'static str)> {
+    match e {
+        XfaEffect::SetPresence { som, .. } => Some((Some(som), "show or hide an object")),
+        XfaEffect::SetAccess { som, .. } => Some((Some(som), "change whether a field can be filled in")),
+        XfaEffect::AddInstance { som } | XfaEffect::RemoveInstance { som } => Some((Some(som), "add or remove a repeated subform")),
+        XfaEffect::Relayout => Some((None, "lay the form out again")),
+        _ => None,
+    }
+}
+
+/// The SOM path a static XFA form's AcroForm field name stands for. Designer names each field
+/// by its SOM path, with `#subform[n]` for an unnamed subform, which has no part in the path
+/// (`form1[0].#subform[0].x[0]` is `form1[0].x[0]`).
+fn designer_som(name: &str) -> String {
+    name.split('.').filter(|seg| !seg.starts_with('#')).collect::<Vec<_>>().join(".")
+}
+
+/// A static XFA form's fields by the SOM path of the template field each is named for
+/// ([`designer_som`]): `som → (field name, field object)`, for paths among `soms` only. A path
+/// two fields stand for is left out, so a script never writes to the wrong one of them.
+fn static_field_objects(doc: &pdfcraft_cos::Document, soms: &HashSet<String>) -> HashMap<String, (String, pdfcraft_cos::ObjRef)> {
+    let mut out: HashMap<String, (String, pdfcraft_cos::ObjRef)> = HashMap::new();
+    let mut shared: HashSet<String> = HashSet::new();
+    for f in pdfcraft_forms::fields(doc) {
+        let som = designer_som(&f.name);
+        if !soms.contains(&som) || shared.contains(&som) {
+            continue;
+        }
+        if out.remove(&som).is_some() {
+            shared.insert(som);
+        } else {
+            out.insert(som, (f.name, f.obj));
+        }
+    }
+    out
+}
+
 /// The subform or other container at SOM path `som` in the live form under `n` (fields are
 /// skipped), searched at most 64 levels deep.
 fn find_container<'a>(n: &'a FormNode, som: &str, depth: usize) -> Option<&'a FormNode> {
@@ -495,6 +534,9 @@ struct Runner<'a, 'b> {
     /// A field embedded in rich text (a floating field) took a new value since the form was
     /// last laid out: the text that shows it is laid out again when the event ends.
     embedded_changed: bool,
+    /// The form's pages are its own (a static XFA form, which PdfCraft never laid out): it is
+    /// never laid out again, and its fields are found by their AcroForm names.
+    fixed_pages: bool,
 }
 
 impl<'a, 'b> Runner<'a, 'b> {
@@ -502,6 +544,7 @@ impl<'a, 'b> Runner<'a, 'b> {
     fn new(doc: &'a mut pdfcraft_cos::Document, tpl: &'a Template, run: &'a mut XfaRun<'b>, budget_ms: u64) -> Self {
         let data = pdfcraft_xfa::data_of(doc);
         let ov = pdfcraft_xfa::overrides(doc);
+        let fixed_pages = pdfcraft_xfa::existing_layout(doc).is_none();
         let budget_ms = budget_ms.saturating_mul(u64::from(run.time_scale));
         Runner {
             doc,
@@ -532,6 +575,7 @@ impl<'a, 'b> Runner<'a, 'b> {
             changes: Changes::default(),
             numbered: HashSet::new(),
             embedded_changed: false,
+            fixed_pages,
         }
     }
 
@@ -587,7 +631,14 @@ impl<'a, 'b> Runner<'a, 'b> {
         if self.by_som.is_none() {
             let mut by_som = HashMap::new();
             self.objects_by_som.clear();
-            for (som, (name, object)) in pdfcraft_xfa::field_objects_by_som(self.doc) {
+            let objects = if self.fixed_pages {
+                let mut soms = HashSet::new();
+                field_soms(&self.live().root, &mut soms, 0);
+                static_field_objects(self.doc, &soms)
+            } else {
+                pdfcraft_xfa::field_objects_by_som(self.doc)
+            };
+            for (som, (name, object)) in objects {
                 self.objects_by_som.insert(som.clone(), object);
                 by_som.insert(som, name);
             }
@@ -751,6 +802,11 @@ impl<'a, 'b> Runner<'a, 'b> {
 
     /// Lay the form out again and give the new widgets their appearances.
     fn relayout(&mut self) -> Result<(), String> {
+        // A static form's pages are the form: laying it out from the template would replace
+        // them. Its scripts' values are written as they are (`flush`).
+        if self.fixed_pages {
+            return self.flush();
+        }
         if self.relayouts >= MAX_RELAYOUTS_PER_EVENT {
             if !self.relayouts_skipped {
                 self.relayouts_skipped = true;
@@ -887,6 +943,13 @@ impl<'a, 'b> Runner<'a, 'b> {
             {
                 let note = format!("{} ({}): a script may only {what} when a button is clicked; ignored", ev.som, ev.activity);
                 self.console([note]);
+                continue;
+            }
+            if self.fixed_pages
+                && let Some((som, what)) = needs_layout(e)
+            {
+                let som = som.unwrap_or(&ev.som);
+                self.console([format!("{som}: this static XFA form keeps the pages it was made with, so a script can't {what} here; ignored")]);
                 continue;
             }
             match e {

@@ -11094,6 +11094,31 @@ fn xfa_scripts_run_for_buttons_and_field_changes_through_tools() {
     assert_eq!(r["alerts"], json!([{ "message": "Hello 4", "title": null, "icon": "error", "buttons": "ok" }]));
 }
 
+/// A static XFA form's template scripts run on open and on fills through the tools, and what
+/// they compute is saved.
+#[test]
+fn static_xfa_scripts_run_on_open_and_fills_through_tools() {
+    let dir = workdir("static-xfa-scripts");
+    std::fs::write(dir.join("static.pdf"), pdfcraft_xfa::fixtures::static_scripted_shell("<a>2</a><b>3</b>")).unwrap();
+    // Raised time limits: a busy machine does not stop the scripts this checks.
+    let mut a = auto(&dir).with_xfa_time_scale(100);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "static.pdf" }))["doc"].as_u64().unwrap();
+    let value = |a: &mut Automation, n: &str| {
+        let f = ok(a, "form_fields", json!({ "doc": doc }));
+        f["fields"].as_array().unwrap().iter().find(|f| f["name"] == n).map(|f| f["value"].clone())
+    };
+    assert_eq!(value(&mut a, "form1[0].page1[0].total[0]"), Some(json!("5")));
+    ok(&mut a, "form_fill", json!({ "doc": doc, "values": { "form1[0].page1[0].a[0]": "10" } }));
+    assert_eq!(value(&mut a, "form1[0].page1[0].total[0]"), Some(json!("13")));
+    assert_eq!(value(&mut a, "form1[0].page1[0].note[0]"), Some(json!("left a")));
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "saved.pdf" }));
+    ok(&mut a, "doc_close", json!({ "doc": doc }));
+    let doc = ok(&mut a, "doc_open", json!({ "path": "saved.pdf" }))["doc"].as_u64().unwrap();
+    let f = ok(&mut a, "form_fields", json!({ "doc": doc }));
+    let total = f["fields"].as_array().unwrap().iter().find(|f| f["name"] == "form1[0].page1[0].total[0]").map(|f| f["value"].clone());
+    assert_eq!(total, Some(json!("13")));
+}
+
 #[test]
 fn active_xfa_skips_container_fallback_scripts_after_save_and_reopen() {
     let dir = workdir("xfa-container-scripts");
