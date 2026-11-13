@@ -922,8 +922,8 @@ impl TilingCells {
 #[derive(Clone, Copy, Default)]
 struct InkState {
     pass: Option<InkPass>,
-    /// Something in the group has no ink tints (an RGB colour, a pattern, an image): the
-    /// group is drawn as before instead.
+    /// Something in the group has no ink tints (a pattern, an image, an ICCBased CMYK colour):
+    /// the group is drawn as before instead.
     unsupported: bool,
 }
 

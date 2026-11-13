@@ -2,6 +2,7 @@
 //! refers to.
 
 use std::collections::{HashSet, VecDeque};
+use std::sync::Arc;
 
 use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString};
 
@@ -52,8 +53,12 @@ fn tree_entries(doc: &Document, node: &Object) -> Vec<(Vec<u8>, Object)> {
                 }
             }
         }
-        if let Some(kids) = d.get(b"Kids").map(|x| doc.resolve(x)).and_then(|x| x.as_array().cloned()) {
-            queue.extend(kids.into_iter().map(|k| (k, depth + 1)));
+        // A kids array shared by reference is read once, and only kids not yet seen are queued:
+        // nodes sharing one array can't multiply the queue.
+        if let Some(kids) =
+            d.get(b"Kids").filter(|k| !matches!(k, Object::Ref(r) if !seen.insert(*r))).map(|x| doc.resolve(x)).and_then(|x| x.as_array().cloned())
+        {
+            queue.extend(kids.into_iter().filter(|k| !matches!(k, Object::Ref(r) if seen.contains(r))).map(|k| (k, depth + 1)));
         }
     }
     out
@@ -160,6 +165,8 @@ pub(crate) fn remove_invalid(doc: &mut Document, pages: &[ObjRef]) -> Result<(us
 fn referenced_names(doc: &Document) -> HashSet<Vec<u8>> {
     let mut out = HashSet::new();
     let mut seen = HashSet::new();
+    let mut named_refs = HashSet::new();
+    let mut named_held: std::collections::HashMap<*const Object, Arc<Object>> = std::collections::HashMap::new();
     let mut stack = vec![Object::Dict(doc.trailer().clone())];
     if let Some(r) = doc.root() {
         stack.push(Object::Ref(r));
@@ -176,11 +183,26 @@ fn referenced_names(doc: &Document) -> HashSet<Vec<u8>> {
                 // string, and an unresolved ref has no name, so the destination it uses would
                 // look unreferenced and be removed. A GoToR or GoToE /D names a destination in
                 // another document, so it does not count as a use of this one's.
-                if let Some(n) = d.get(b"Dest").and_then(|x| dest_name(doc.resolve(x).as_ref())) {
+                // A name given by reference is copied once, however many dictionaries (or aliases
+                // of the object) name it. The objects are kept so an address is never reused.
+                let mut named = |x: Option<&Object>| {
+                    let x = x?;
+                    if let Object::Ref(r) = x
+                        && !named_refs.insert(*r)
+                    {
+                        return None;
+                    }
+                    let held = doc.resolve(x);
+                    if matches!(x, Object::Ref(_)) && named_held.insert(Arc::as_ptr(&held), held.clone()).is_some() {
+                        return None;
+                    }
+                    dest_name(held.as_ref())
+                };
+                if let Some(n) = named(d.get(b"Dest")) {
                     out.insert(n);
                 }
                 if d.name(b"S") == Some(b"GoTo")
-                    && let Some(n) = d.get(b"D").and_then(|x| dest_name(doc.resolve(x).as_ref()))
+                    && let Some(n) = named(d.get(b"D"))
                 {
                     out.insert(n);
                 }
