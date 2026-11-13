@@ -37,6 +37,16 @@ pub use status_layers::{StatusCaptions, has_status_layers, show_status_layers, s
 pub use timestamp::{TimestampAuthority, TimestampQuery, TimestampToken};
 pub use x509::{Certificate, Name};
 
+/// Detect the CPU's features for aws-lc now. This build has it do so on first use rather than in
+/// a static initializer before `main` (`.cargo/config.toml`, `pdfcraft_platform::crypto_env`), and
+/// aws-lc-rs asks for it before most operations but not all: an RSA key generation went without,
+/// and ran on aws-lc's portable code. So each executable calls this once at start, after
+/// `crypto_env` has run it again without an `OPENSSL_ia32cap` that would stop it here.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn init_crypto() {
+    aws_lc_rs::init();
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum SignError {
     #[error("malformed data: {0}")]
