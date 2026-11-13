@@ -421,9 +421,17 @@ fn toggle_edit(f: &FormField, wi: usize) -> Option<Edit> {
     Some(Edit::SetFieldValue { name: f.name.clone(), value })
 }
 
-/// The first shown widget of `f` on `page` under the pointer at `p`, with its index.
-fn widget_at<'a>(xf: &PageXform, info: &DocInfo, page: usize, f: &'a FormField, p: egui::Pos2) -> Option<(usize, &'a FormWidget)> {
-    f.widgets.iter().enumerate().find(|(_, w)| w.page == Some(page) && !w.hidden && widget_rect(xf, info, page, w.rect).contains(p))
+/// The first shown widget of `f` on `page` under the pointer at `p`, with its index. `shown`:
+/// whether the document's scripts show `f` while it is read, over its widgets' own flags.
+fn widget_at<'a>(
+    xf: &PageXform,
+    info: &DocInfo,
+    page: usize,
+    f: &'a FormField,
+    shown: Option<bool>,
+    p: egui::Pos2,
+) -> Option<(usize, &'a FormWidget)> {
+    f.widgets.iter().enumerate().find(|(_, w)| w.page == Some(page) && shown.unwrap_or(!w.hidden) && widget_rect(xf, info, page, w.rect).contains(p))
 }
 
 /// The field whose sign tab is under `p`, of `tabs` in the order they are painted: where tabs
@@ -432,11 +440,13 @@ pub(crate) fn tab_under<'a>(tabs: &[(&'a str, SignTab)], p: egui::Pos2) -> Optio
     tabs.iter().rev().find(|(_, tab)| tab.rect.contains(p)).map(|(name, _)| *name)
 }
 
-/// Whether `w`, a widget of `f`, takes a press: fillable, a push button with an action, or an
+/// Whether `w`, a widget of `f`, takes a press: fillable, a push button with an action (a click
+/// or mouse-down one), or an
 /// empty signature field (signed by clicking it, Use a certificate). A radio button of a group can
 /// be read-only on its own.
 fn usable(f: &FormField, w: &FormWidget, allowed: bool) -> bool {
-    let pressable = f.kind == FormFieldKind::PushButton && !f.read_only() && f.button.is_some();
+    // A button acting only on mouse down (`/AA /D`) takes the press too, which runs it (#4751).
+    let pressable = f.kind == FormFieldKind::PushButton && !f.read_only() && (f.button.is_some() || w.mouse_down);
     allowed && !w.read_only && (fillable(f) || pressable || f.kind == FormFieldKind::Signature)
 }
 
@@ -444,16 +454,26 @@ fn usable(f: &FormField, w: &FormWidget, allowed: bool) -> bool {
 /// press. It is the first widget under the pointer in the form's order, except on a sign tab
 /// (`tabs`, with the signature field each one signs), which is drawn over every field and so is
 /// on its own field. Over the page's text too: a check box drawn with a glyph, or set on printed
-/// text, is a button, not text to select.
-pub(crate) fn hit(xf: &PageXform, info: &DocInfo, page: usize, form: &[FormField], tabs: &[(&str, SignTab)], allowed: bool, p: Pos2) -> Option<Hit> {
+/// text, is a button, not text to select. The fields are `doc`'s, shown as its page actions and
+/// timers show them ([`pdfcraft_engine::Document::shown_by_scripts`]).
+pub(crate) fn hit(
+    xf: &PageXform,
+    info: &DocInfo,
+    page: usize,
+    doc: &pdfcraft_engine::Document,
+    tabs: &[(&str, SignTab)],
+    allowed: bool,
+    p: Pos2,
+) -> Option<Hit> {
     if !xf.rect.contains(p) {
         return None;
     }
     let under = |only: Option<&str>| {
-        form.iter()
+        doc.form
+            .iter()
             .enumerate()
             .filter(|(_, f)| only.is_none_or(|name| f.name == name && f.kind == FormFieldKind::Signature))
-            .find_map(|(fi, f)| widget_at(xf, info, page, f, p).map(|(wi, w)| (fi, f, wi, w)))
+            .find_map(|(fi, f)| widget_at(xf, info, page, f, doc.shown_by_scripts(&f.name), p).map(|(wi, w)| (fi, f, wi, w)))
     };
     // A tab lies inside its field's widget, so that widget is under the pointer too.
     let (field, f, widget, w) = tab_under(tabs, p).and_then(|name| under(Some(name))).or_else(|| under(None))?;
@@ -551,6 +571,8 @@ pub(crate) fn page_input(
         _ if f.read_only() || w.read_only => view.forms.notice = Some(FormNotice::ReadOnly(f.name.clone())),
         FormFieldKind::PushButton => match &f.button {
             Some(a) => view.forms.button = Some((f.name.clone(), pdfcraft_engine::js::field_object_id(f.obj), a.clone())),
+            // Its press already ran its mouse-down action.
+            None if w.mouse_down => {}
             None => view.forms.notice = Some(FormNotice::NoAction(f.name.clone())),
         },
         FormFieldKind::Text if let Some(script) = &w.mouse_up_script => {
