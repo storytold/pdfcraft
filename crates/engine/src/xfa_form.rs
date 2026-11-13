@@ -423,22 +423,51 @@ pub(crate) fn keeps_xfa_usage_rights(
         && edit_is_xfa_data_only(edit, prev, next, xfa_errors)
 }
 
+fn field_som_key(doc: &pdfcraft_cos::Document, mut obj: pdfcraft_cos::ObjRef) -> Option<String> {
+    let mut seen = Vec::new();
+    for _ in 0..16 {
+        if seen.contains(&obj) {
+            return None;
+        }
+        seen.push(obj);
+        match &*doc.get(obj) {
+            pdfcraft_cos::Object::Ref(next) => obj = *next,
+            pdfcraft_cos::Object::Dict(d) => {
+                let raw = d.get(pdfcraft_xfa::SOM_KEY)?;
+                return doc.resolve(raw).as_string().map(|s| s.to_text());
+            }
+            _ => return None,
+        }
+    }
+    None
+}
+
 fn edit_is_xfa_data_only(edit: &Edit, prev: &pdfcraft_cos::Document, next: &pdfcraft_cos::Document, xfa_errors: &[String]) -> bool {
     match edit {
         Edit::SetFieldValue { .. } | Edit::ResetForm { .. } => acroform_field_properties_unchanged(prev, next),
         Edit::XfaEvent { .. } => true,
         Edit::SetFieldImage { name, .. } | Edit::SetFieldImageTarget { name, .. } => {
+            if !xfa_errors.is_empty() {
+                return false;
+            }
+            let Ok(tpl) = pdfcraft_xfa::template_of(prev) else {
+                return false;
+            };
             let target = match edit {
                 Edit::SetFieldImageTarget { object, .. } => Some(*object),
                 _ => None,
             };
-            xfa_errors.is_empty()
-                && pdfcraft_forms::fields(prev).iter().any(|f| {
-                    f.name == *name
-                        && target.is_none_or(|o| f.obj == o)
-                        && f.button == Some(pdfcraft_forms::af::ButtonAction::ImportIcon)
-                        && prev.get(f.obj).as_dict().is_some_and(|d| d.contains(pdfcraft_xfa::SOM_KEY))
-                })
+            let fields = pdfcraft_forms::fields(prev);
+            let mut matched_any = false;
+            for f in fields.iter().filter(|f| f.name == *name && target.is_none_or(|o| f.obj == o)) {
+                matched_any = true;
+                if f.button != Some(pdfcraft_forms::af::ButtonAction::ImportIcon)
+                    || !field_som_key(prev, f.obj).is_some_and(|som| pdfcraft_xfa::is_template_image_field(&tpl, &som))
+                {
+                    return false;
+                }
+            }
+            matched_any
         }
         Edit::ImportData { bytes, .. } => {
             !bytes[..bytes.len().min(1024)].windows(5).any(|w| w == b"%PDF-")

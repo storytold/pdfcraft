@@ -8516,8 +8516,9 @@ fn dynamic_xfa_usage_rights_edge_cases_reconstructed_undo_past_save_and_imports(
         assert!(!s.get(iid).unwrap().xfa.as_ref().unwrap().warnings.iter().any(|w| w.contains("usage rights")));
     }
 
-    // 5. `keeps_xfa_usage_rights` rejects non-empty `xfa_errors`, accepts `SetFieldImageTarget` on
-    //    an XFA-bound image field, and rejects `SetFieldImage` on a PDF-only `ImportIcon` button.
+    // 5. `keeps_xfa_usage_rights` rejects non-empty `xfa_errors`, accepts `SetFieldImage` /
+    //    `SetFieldImageTarget` only on genuine template `<imageEdit/>` fields, and rejects
+    //    PDF-only buttons (without `SOM_KEY`, with unmapped `SOM_KEY`, or mapped to non-image fields).
     let cos_snapshot = s.doc_mut(iid).unwrap().editor.as_ref().unwrap().cos.clone();
     assert!(!crate::xfa_form::keeps_xfa_usage_rights(
         &Edit::SetFieldValue { name: "familyName".into(), value: FieldValue::Text("Rao".into()) },
@@ -8541,14 +8542,60 @@ fn dynamic_xfa_usage_rights_edge_cases_reconstructed_undo_past_save_and_imports(
     );
     img_cos.update_dict(icon_obj, |d| d.set(pdfcraft_xfa::SOM_KEY.to_vec(), pdfcraft_cos::PdfString::text("form[0].head[0].pdfIcon[0]"))).unwrap();
     assert!(
-        crate::xfa_form::keeps_xfa_usage_rights(
+        !crate::xfa_form::keeps_xfa_usage_rights(
             &Edit::SetFieldImageTarget { name: "pdfIcon".into(), object: icon_obj, image: Arc::new(Vec::new()) },
             &img_cos,
             &img_cos,
             &[],
             &[],
         ),
-        "XFA-bound SetFieldImageTarget preserves usage-rights shell saving"
+        "ImportIcon button whose SOM_KEY is absent from the XFA template must use the laid-out save path"
+    );
+    img_cos.update_dict(icon_obj, |d| d.set(pdfcraft_xfa::SOM_KEY.to_vec(), pdfcraft_cos::PdfString::text("form[0].head[0].familyName[0]"))).unwrap();
+    assert!(
+        !crate::xfa_form::keeps_xfa_usage_rights(
+            &Edit::SetFieldImageTarget { name: "pdfIcon".into(), object: icon_obj, image: Arc::new(Vec::new()) },
+            &img_cos,
+            &img_cos,
+            &[],
+            &[],
+        ),
+        "ImportIcon button whose SOM_KEY resolves to a non-imageEdit template field must use the laid-out save path"
+    );
+
+    let img_xdp = r#"<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+        <template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+            <subform name="form" layout="tb">
+                <pageSet><pageArea name="p"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+                <subform name="head" layout="tb">
+                    <field name="photo" w="1in" h="1in"><ui><imageEdit/></ui></field>
+                </subform>
+            </subform>
+        </template>
+    </xdp:xdp>"#;
+    let img_shell = Arc::new(pdfcraft_xfa::fixtures::usage_rights_shell(img_xdp, "", false));
+    let pid = s.open("img-field.pdf", None, img_shell, None).unwrap();
+    let photo_cos = s.doc_mut(pid).unwrap().editor.as_ref().unwrap().cos.clone();
+    let photo_obj = pdfcraft_forms::fields(&photo_cos).into_iter().find(|f| f.name == "photo").unwrap().obj;
+    assert!(
+        crate::xfa_form::keeps_xfa_usage_rights(
+            &Edit::SetFieldImage { name: "photo".into(), image: Arc::new(Vec::new()) },
+            &photo_cos,
+            &photo_cos,
+            &[],
+            &[],
+        ),
+        "SetFieldImage on template imageEdit field preserves usage-rights shell saving"
+    );
+    assert!(
+        crate::xfa_form::keeps_xfa_usage_rights(
+            &Edit::SetFieldImageTarget { name: "photo".into(), object: photo_obj, image: Arc::new(Vec::new()) },
+            &photo_cos,
+            &photo_cos,
+            &[],
+            &[],
+        ),
+        "SetFieldImageTarget on template imageEdit field preserves usage-rights shell saving"
     );
 }
 

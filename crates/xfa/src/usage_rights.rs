@@ -92,6 +92,15 @@ pub fn can_preserve_usage_rights(doc: &Document) -> bool {
     }
 }
 
+/// Whether `som` binds to a data node and resolves to an `<imageEdit/>` field in `tpl` (under
+/// the body root subform or a master `pageArea`).
+pub fn is_template_image_field(tpl: &Template, som: &str) -> bool {
+    if crate::data_path(tpl, som).is_empty() {
+        return false;
+    }
+    crate::data::template_field(tpl, som).or_else(|| crate::data::page_area_field(tpl, som)).is_some_and(|f| f.ui == crate::model::Ui::ImageEdit)
+}
+
 /// Whether `doc`'s scripted `presence`/`access` overrides can be written to an XFA `<form>` packet
 /// and read back on reopen with identical live-form state.
 pub fn overrides_roundtrip(doc: &Document) -> bool {
@@ -1165,5 +1174,30 @@ mod tests {
             crate::parse_datasets(&crate::read_packets(&arr_saved).unwrap().unwrap().xdp).unwrap().text_at(&crate::som_to_path("form[0].city[0]")),
             Some("Oslo")
         );
+    }
+
+    #[test]
+    fn is_template_image_field_distinguishes_image_fields_from_other_widgets_and_missing_soms() {
+        let xdp = r#"<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+            <subform name="form" layout="tb">
+                <pageSet>
+                    <pageArea name="master">
+                        <contentArea w="7in" h="9in"/>
+                        <medium short="8.5in" long="11in"/>
+                        <field name="watermark" w="1in" h="1in"><ui><imageEdit/></ui></field>
+                    </pageArea>
+                </pageSet>
+                <field name="photo" w="1in" h="1in"><ui><imageEdit/></ui></field>
+                <field name="city" w="2in" h="0.3in"><ui><textEdit/></ui></field>
+                <field name="send" w="1in" h="0.3in"><ui><button/></ui></field>
+            </subform>
+        </template>"#;
+        let (tpl, _) = crate::parse(xdp).unwrap();
+        assert!(is_template_image_field(&tpl, "form[0].photo[0]"));
+        assert!(is_template_image_field(&tpl, "master[0].watermark[0]"));
+        assert!(!is_template_image_field(&tpl, "form[0].city[0]"));
+        assert!(!is_template_image_field(&tpl, "form[0].send[0]"));
+        assert!(!is_template_image_field(&tpl, "form[0].missing[0]"));
+        assert!(!is_template_image_field(&tpl, ""));
     }
 }

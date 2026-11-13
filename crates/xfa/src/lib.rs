@@ -111,7 +111,9 @@ pub use script::{
     field_grows_with_text, field_is_embedded, field_objects_by_som, fields_by_som, form_tree, form_tree_paged, has_focus_scripts, has_scripts,
     overrides, page_area_uses, path_is_embedded, refresh_value, rerender, reset_default, set_overrides, template_of,
 };
-pub use usage_rights::{USAGE_RIGHTS_REMOVED, can_preserve_usage_rights, has_usage_rights, overrides_roundtrip, sync_form_into_shell};
+pub use usage_rights::{
+    USAGE_RIGHTS_REMOVED, can_preserve_usage_rights, has_usage_rights, is_template_image_field, overrides_roundtrip, sync_form_into_shell,
+};
 
 #[derive(Debug, thiserror::Error)]
 pub enum XfaError {
