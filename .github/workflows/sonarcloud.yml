@@ -19,6 +19,6 @@ jobs:
     # Tracked at @main so org-wide CI improvements propagate without PR churn.
     uses: storytold/craft-common-actions/.github/workflows/sonarcloud.yml@main
     with:
-      # Match the font input used by the normal CI gate.
-      fonts-ref: 3d9ab3a132ed0eff457e424226a435a901da30d3
+      # Same craft-fonts commit as ci.yml and release.yml.
+      fonts-ref: b076417b5880bd4154bd22f00695b1d28c6bea83
     secrets: inherit
