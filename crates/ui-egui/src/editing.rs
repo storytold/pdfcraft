@@ -580,7 +580,14 @@ impl PdfCraftApp {
             }
             // The panel asked before deleting pages: open the confirmation dialog, which queues
             // the edit when confirmed.
-            Some(crate::canvas::ViewAction::ConfirmDeletePages(pages)) => self.request_delete_pages(i, pages),
+            Some(crate::canvas::ViewAction::ConfirmDeletePages { pages, generation }) => {
+                // The panel captured the pages with the document's generation when it asked: an
+                // edit that ran since makes those indices stale, so the ask is dropped rather
+                // than shown, and never names the newer document.
+                if self.views.get(i).and_then(|v| self.session.get(v.id)).is_some_and(|d| d.edit_generation() == generation) {
+                    self.request_delete_pages(i, pages);
+                }
+            }
             Some(crate::canvas::ViewAction::CameraNext(command)) => {
                 self.leave_camera(i);
                 self.execute(command);

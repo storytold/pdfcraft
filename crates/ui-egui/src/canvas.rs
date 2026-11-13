@@ -865,8 +865,12 @@ pub enum ViewAction {
     },
     /// Lock now, on the notice shown after a signature is placed (#2149).
     LockSignatures,
-    /// Ask before deleting the pages the panel picked, captured when the ask was made.
-    ConfirmDeletePages(Vec<usize>),
+    /// Ask before deleting the pages the panel picked, captured with the document's edit
+    /// generation when the ask was made.
+    ConfirmDeletePages {
+        pages: Vec<usize>,
+        generation: u64,
+    },
 }
 
 /// Default page right-click menu actions.

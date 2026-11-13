@@ -8098,6 +8098,19 @@ fn delete_with_the_pointer_on_the_pages_panel_deletes_a_page() {
     assert_eq!(h.state().session.get(id).unwrap().info.pages.len(), pages - 1, "a page goes");
 }
 
+/// An edit that runs between the Pages panel capturing the pages and the ask being processed
+/// makes those indices stale: the ask is dropped, so it never names the newer document.
+#[test]
+fn an_edit_before_the_pages_delete_ask_is_processed_drops_the_ask() {
+    let mut h = pages_panel(5);
+    let id = h.state().views[0].id;
+    let stale = h.state().session.get(id).unwrap().edit_generation() + 1;
+    h.state_mut().views[0].pending_action = Some(pdfcraft_ui_egui::canvas::ViewAction::ConfirmDeletePages { pages: vec![0], generation: stale });
+    h.run_steps(4);
+    assert!(h.state().dialog.is_none(), "the stale ask is dropped");
+    assert_eq!(h.state().session.get(id).unwrap().info.pages.len(), 5);
+}
+
 /// In crop mode, a right-click on another picture selects it for its menu, as without crop mode. It
 /// went to crop mode's whole-page hit, which unselected every picture.
 #[test]
