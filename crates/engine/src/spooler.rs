@@ -330,9 +330,14 @@ mod tests {
 
     /// A one-page PDF filling the page in red.
     fn red_page() -> Vec<u8> {
+        page_drawing(b"1 0 0 rg 0 0 612 792 re f")
+    }
+
+    /// A one-page PDF whose content is `operators`.
+    fn page_drawing(operators: &[u8]) -> Vec<u8> {
         let mut doc = Document::new_empty();
         let pages = doc.root().and_then(|r| doc.get(r).as_dict().and_then(|d| d.reference(b"Pages"))).unwrap();
-        let content = doc.add(Object::Stream(Stream::from_raw(Dict::new(), b"1 0 0 rg 0 0 612 792 re f".to_vec())));
+        let content = doc.add(Object::Stream(Stream::from_raw(Dict::new(), operators.to_vec())));
         let mut page = Dict::new();
         page.set("Type", Object::name("Page"));
         page.set("Parent", Object::Ref(pages));
@@ -383,6 +388,18 @@ mod tests {
         let mut colour = Job::default();
         assert_eq!(spooler_copy(red.clone(), &mut colour, false), red);
         assert!(!colour.grey_pages);
+    }
+
+    /// Bra1nZ on #7215: a grayscale job whose pages are already grey goes to the spooler as it is,
+    /// on every system, so a grey that the copy was already made into is never greyed again and
+    /// can't come out darker. The same holds for a copy this greying made.
+    #[test]
+    fn an_already_grey_page_is_not_greyed_again() {
+        for grey in [page_drawing(b"0.5 g 0 0 612 792 re f"), spooler_copy(red_page(), &mut Job { grayscale: true, ..Job::default() }, false)] {
+            let mut job = Job { grayscale: true, ..Job::default() };
+            assert_eq!(spooler_copy(grey.clone(), &mut job, false), grey);
+            assert!(job.grey_pages, "the pages are grey, so the job says so");
+        }
     }
 
     /// On Windows the spooler gets the tiled copy ([`tiled`]); elsewhere the bytes as they are.
