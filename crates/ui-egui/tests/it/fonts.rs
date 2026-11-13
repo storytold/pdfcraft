@@ -34,6 +34,26 @@ fn bundled_monochrome_symbols_have_glyphs() {
     }
 }
 
+/// A malformed UTF-8 PDF name is displayed lossily with U+FFFD. The bundled fonts must draw it
+/// in every interface family without relying on craft-fonts or a font installed on the machine.
+#[test]
+fn bundled_fonts_draw_the_replacement_character() {
+    use skrifa::MetadataProvider as _;
+
+    let defs = theme::font_definitions();
+    let data = &defs.font_data["JetBrainsMono"];
+    let face = skrifa::FontRef::from_index(data.font.as_ref().as_ref(), data.index).expect("the bundled JetBrains Mono face");
+    assert!(face.charmap().map(char::REPLACEMENT_CHARACTER).is_some(), "JetBrains Mono must contain U+FFFD");
+    for id in families() {
+        assert!(defs.families[&id.family].iter().any(|name| name == "JetBrainsMono"), "{id:?} has no bundled U+FFFD fallback");
+    }
+
+    let mut fonts = Fonts::new(TextOptions::default(), defs);
+    for id in families() {
+        assert!(fonts.has_glyphs(&id, "\u{FFFD}"), "{id:?} lacks U+FFFD");
+    }
+}
+
 /// Lays `text` out in every interface family and returns each galley's width.
 fn layout_widths(fonts: &mut Fonts, text: &str) -> Vec<f32> {
     let mut view = fonts.with_pixels_per_point(2.0);
