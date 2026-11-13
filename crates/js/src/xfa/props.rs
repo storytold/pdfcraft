@@ -478,13 +478,24 @@ fn entries(h: &XHost, node: usize, list: usize) -> Entries<'_> {
 }
 
 /// Whether a script wrote the text of an entry of one of the node's lists.
-fn items_written(h: &XHost, node: usize) -> bool {
+pub(crate) fn items_written(h: &XHost, node: usize) -> bool {
     h.prop_writes.get(&node).is_some_and(|m| m.keys().any(|k| k.starts_with("items#")))
 }
 
-/// The text a script wrote to the entry that is the `nth` of its tag in list `list`.
-fn written_entry(h: &XHost, node: usize, list: usize, tag: &str, nth: usize) -> Option<String> {
-    written(h, node, &format!("items#{list}/{tag}#{nth}")).and_then(|w| w.text.clone())
+/// The texts a script wrote to entries of the node's lists, by (list, tag, nth of that tag), taken out of the property writes
+/// so the list methods can fold them into the run's copy of the lists (a written attribute stays).
+pub(crate) fn take_item_writes(h: &mut XHost, node: usize) -> HashMap<(usize, String, usize), String> {
+    let mut out = HashMap::new();
+    let Some(writes) = h.prop_writes.get_mut(&node) else { return out };
+    for (path, w) in writes.iter_mut() {
+        if let [("items", list), (tag, nth)] = steps(path).as_slice()
+            && let Some(t) = w.text.take()
+        {
+            out.insert((*list, (*tag).to_string(), *nth), t);
+        }
+    }
+    writes.retain(|path, w| !path.starts_with("items#") || w.text.is_some() || !w.attrs.is_empty());
+    out
 }
 
 /// How many entries list `list` has, without reading them.
@@ -492,33 +503,15 @@ pub(crate) fn list_len(h: &XHost, node: usize, list: usize) -> usize {
     entries(h, node, list).len()
 }
 
-/// The text of entry `i` of list `list`, as `items` reads it (a script's write first).
+/// The text of entry `i` of list `list` (a script's writes to entries folded in first: see [`items_written`]).
 pub(crate) fn list_text(h: &XHost, node: usize, list: usize, i: usize) -> Option<String> {
-    let e = entries(h, node, list);
-    let (tag, t) = e.get(i)?;
-    if items_written(h, node) {
-        let nth = (0..i).filter(|j| e.get(*j).is_some_and(|(other, _)| other == tag)).count();
-        if let Some(w) = written_entry(h, node, list, tag, nth) {
-            return Some(w);
-        }
-    }
-    Some(t.to_string())
+    entries(h, node, list).get(i).map(|(_, t)| t.to_string())
 }
 
-/// Where the text `t` is in list `list`, as `items` reads the entries.
+/// Where the text `t` is in list `list`.
 pub(crate) fn list_position(h: &XHost, node: usize, list: usize, t: &str) -> Option<usize> {
     let e = entries(h, node, list);
-    if !items_written(h, node) {
-        return (0..e.len()).find(|i| e.get(*i).is_some_and(|(_, s)| s == t));
-    }
-    let mut seen: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
-    (0..e.len()).find(|i| {
-        let Some((tag, s)) = e.get(*i) else { return false };
-        let nth = seen.entry(tag).or_insert(0);
-        let text = written_entry(h, node, list, tag, *nth);
-        *nth += 1;
-        text.as_deref().unwrap_or(s) == t
-    })
+    (0..e.len()).find(|i| e.get(*i).is_some_and(|(_, s)| s == t))
 }
 
 /// Which of the field's `<items>` lists holds the values saved to the data: the one the template marks `save="1"`, else the

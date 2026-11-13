@@ -450,6 +450,12 @@ fn choice_list_methods_read_and_change_the_items() {
             "this.items.nodes.item(0).value = 'Kanada'; this.getDisplayItem(0) + ',' + this.boundItem('Kanada') + ',' + this.selectedIndex + ',' + this.length",
             "Kanada,CA,1,2",
         ),
+        // an entry's written text goes with it: deleted, the next entry is what follows
+        (
+            "this.items.nodes.item(0).value = 'Kanada'; this.deleteItem(0); this.getDisplayItem(0) + ',' + this.boundItem('Kanada') + ',' + this.items.nodes.item(0).value",
+            "France,Kanada,France",
+        ),
+        ("this.items.nodes.item(0).value = 'Kanada'; this.clearItems(); this.addItem('Peru'); this.getDisplayItem(0)", "Peru"),
         // texts that don't make whole pairs leave the list as it was
         ("this.setItems('a,1,b', 2) + ',' + this.length + ',' + this.setItems('a,1', 2) + ',' + this.getSaveItem(0)", "false,2,true,1"),
         // the list methods' entries are what `items` reads afterwards
@@ -468,7 +474,7 @@ fn choice_list_methods_read_and_change_the_items() {
     let o = go_on(&root, "for (var i = 0; i < 20000; i++) this.addItem('x' + i); this.length", "country");
     assert_eq!(o.result.as_deref(), Some("10000"), "{o:?}");
     // reading every entry of a full list, `length` each time, stays within the script's limits
-    let read_all = "this.clearItems(); for (var i = 0; i < 10000; i++) this.addItem('x' + i, 'v' + i); var n = 0; \
+    let read_all = "this.clearItems(); for (var i = 0; i < 10000; i++) this.addItem('x' + i, 'v' + i); this.items.nodes.item(0).value = 'x0'; var n = 0; \
                     for (var j = 0; j < this.length; j++) if (this.getDisplayItem(j) == 'x' + j && this.getSaveItem(j) == 'v' + j) n++; n";
     let o = go_on(&root, read_all, "country");
     assert_eq!(o.result.as_deref(), Some("10000"), "{o:?}");

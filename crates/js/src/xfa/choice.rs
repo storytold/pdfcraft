@@ -5,7 +5,11 @@
 use boa_engine::{Context, JsObject, JsResult, JsString, JsValue};
 
 use super::host::{XHost, host};
-use super::props::{ItemList, is_choice_list, list_count, list_entries, list_len, list_position, list_text, prop_ref, saved_list};
+use std::collections::HashMap;
+
+use super::props::{
+    ItemList, is_choice_list, items_written, list_count, list_entries, list_len, list_position, list_text, prop_ref, saved_list, take_item_writes,
+};
 use super::{arg, text};
 
 /// The most entries a script may give one list: more is left out.
@@ -18,10 +22,26 @@ fn which(h: &XHost, node: usize) -> (usize, Option<usize>) {
     (shown, saved)
 }
 
-/// The entries the list shows and those it saves (the same when it saves what it shows), as texts.
-fn lists(h: &XHost, node: usize) -> (Vec<String>, Vec<String>) {
+/// Each entry's text, with what a script wrote to it (`writes`, by list, tag and nth of that tag) instead.
+fn with_writes(entries: Vec<(String, String)>, list: usize, writes: &Writes) -> Vec<String> {
+    let mut nth: HashMap<String, usize> = HashMap::new();
+    entries
+        .into_iter()
+        .map(|(tag, t)| {
+            let n = nth.entry(tag.clone()).or_insert(0);
+            let key = (list, tag, *n);
+            *n += 1;
+            writes.get(&key).cloned().unwrap_or(t)
+        })
+        .collect()
+}
+
+type Writes = HashMap<(usize, String, usize), String>;
+
+/// The entries the list shows and those it saves (the same when it saves what it shows), as texts, with `writes` folded in.
+fn lists(h: &XHost, node: usize, writes: &Writes) -> (Vec<String>, Vec<String>) {
     let (shown, saved) = which(h, node);
-    let texts = |list: usize| list_entries(h, node, list).into_iter().map(|(_, t)| t).collect::<Vec<_>>();
+    let texts = |list: usize| with_writes(list_entries(h, node, list), list, writes);
     let shown_texts = texts(shown);
     let saved_texts = match saved {
         Some(i) => texts(i),
@@ -56,15 +76,33 @@ fn set_lists(h: &mut XHost, node: usize, shown: Vec<String>, saved: Vec<String>)
 
 /// The run's copy of the lists, made from the template's the first time a method changes them (each text charged against
 /// the script's payload): the shown list's index and the saved one's, `None` when it saves what it shows.
+/// What a script wrote to entries (`items.nodes.item(0).value = …`) is folded into the copy, so entries that move or go take
+/// their text with them.
 fn state(h: &mut XHost, node: usize) -> (usize, Option<usize>) {
+    let writes = take_item_writes(h, node);
     let (shown, saved) = which(h, node);
     if h.nodes.get(node).is_some_and(|n| n.items.is_none()) {
-        let (shown_texts, saved_texts) = lists(h, node);
+        let (shown_texts, saved_texts) = lists(h, node, &writes);
         set_lists(h, node, shown_texts, saved_texts);
         let two = h.nodes.get(node).and_then(|n| n.items.as_ref()).is_some_and(|l| l.len() > 1);
         return (0, two.then_some(1));
     }
+    if !writes.is_empty()
+        && let Some(lists) = h.nodes.get_mut(node).and_then(|n| n.items.as_mut())
+    {
+        for (i, l) in lists.iter_mut().enumerate() {
+            let texts = with_writes(std::mem::take(&mut l.entries), i, &writes);
+            l.entries = texts.into_iter().map(|t| ("text".to_string(), t)).collect();
+        }
+    }
     (shown, saved)
+}
+
+/// Fold what a script wrote to entries into the run's copy before reading them.
+fn settle(h: &mut XHost, node: usize) {
+    if items_written(h, node) {
+        state(h, node);
+    }
 }
 
 /// `length`: how many entries a choice list shows; `None` for any other node.
@@ -73,10 +111,11 @@ pub(crate) fn length(h: &XHost, node: usize) -> Option<usize> {
 }
 
 /// `selectedIndex`: the entry the field's value is (by what it saves, else what it shows), or -1.
-pub(crate) fn selected_index(h: &XHost, node: usize) -> Option<i64> {
+pub(crate) fn selected_index(h: &mut XHost, node: usize) -> Option<i64> {
     if !is_choice_list(h, node) {
         return None;
     }
+    settle(h, node);
     let value = h.nodes.get(node).map(|n| n.value.clone()).unwrap_or_default();
     let (shown, saved) = which(h, node);
     let at = list_position(h, node, saved.unwrap_or(shown), &value).or_else(|| list_position(h, node, shown, &value));
@@ -97,7 +136,8 @@ fn index(v: &JsValue, ctx: &mut Context) -> JsResult<Option<usize>> {
 fn item_at(r: &JsObject, args: &[JsValue], ctx: &mut Context, saved: bool) -> JsResult<JsValue> {
     let node = target(r, ctx)?;
     let Some(i) = index(&arg(args, 0), ctx)? else { return Ok(JsValue::null()) };
-    let h = host(ctx)?.borrow();
+    let mut h = host(ctx)?.borrow_mut();
+    settle(&mut h, node);
     let (shown, kept) = which(&h, node);
     let list = if saved { kept.unwrap_or(shown) } else { shown };
     Ok(list_text(&h, node, list, i).map_or(JsValue::null(), |t| JsString::from(t.as_str()).into()))
@@ -121,7 +161,8 @@ pub(crate) fn bound_item(_: &JsValue, args: &[JsValue], r: &JsObject, ctx: &mut 
         return Ok(given);
     }
     let t = text(&given, ctx)?;
-    let h = host(ctx)?.borrow();
+    let mut h = host(ctx)?.borrow_mut();
+    settle(&mut h, node);
     let (shown, saved) = which(&h, node);
     let bound = list_position(&h, node, shown, &t).and_then(|i| list_text(&h, node, saved.unwrap_or(shown), i)).unwrap_or(t);
     Ok(JsString::from(bound.as_str()).into())
@@ -130,7 +171,10 @@ pub(crate) fn bound_item(_: &JsValue, args: &[JsValue], r: &JsObject, ctx: &mut 
 /// `clearItems()`: no entries left.
 pub(crate) fn clear_items(_: &JsValue, _: &[JsValue], r: &JsObject, ctx: &mut Context) -> JsResult<JsValue> {
     let node = target(r, ctx)?;
-    set_lists(&mut host(ctx)?.borrow_mut(), node, Vec::new(), Vec::new());
+    let mut h = host(ctx)?.borrow_mut();
+    // what was written to the old entries goes with them
+    take_item_writes(&mut h, node);
+    set_lists(&mut h, node, Vec::new(), Vec::new());
     Ok(JsValue::undefined())
 }
 
@@ -221,6 +265,8 @@ pub(crate) fn set_items(_: &JsValue, args: &[JsValue], r: &JsObject, ctx: &mut C
     let parts: Vec<String> = if all.is_empty() { Vec::new() } else { all.split(',').take(keep).map(str::to_string).collect() };
     let (shown, saved): (Vec<String>, Vec<String>) =
         if pairs { parts.chunks_exact(2).filter_map(|c| Some((c.first()?.clone(), c.get(1)?.clone()))).unzip() } else { (parts.clone(), parts) };
-    set_lists(&mut host(ctx)?.borrow_mut(), node, shown, saved);
+    let mut h = host(ctx)?.borrow_mut();
+    take_item_writes(&mut h, node);
+    set_lists(&mut h, node, shown, saved);
     Ok(JsValue::from(true))
 }

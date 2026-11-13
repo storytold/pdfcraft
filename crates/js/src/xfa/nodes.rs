@@ -270,8 +270,8 @@ fn node_get(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValu
         "toString" | "valueOf" | "toJSON" => function(ctx, NativeFunction::from_fn_ptr(node_to_string)).into(),
         // a choice list's entries
         "length" => choice::length(&host(ctx)?.borrow(), idx).map_or(JsValue::undefined(), |n| JsValue::from(n as f64)),
-        "selectedIndex" if choice::selected_index(&host(ctx)?.borrow(), idx).is_some() => {
-            JsValue::from(choice::selected_index(&host(ctx)?.borrow(), idx).unwrap_or(-1) as f64)
+        "selectedIndex" if choice::selected_index(&mut host(ctx)?.borrow_mut(), idx).is_some() => {
+            JsValue::from(choice::selected_index(&mut host(ctx)?.borrow_mut(), idx).unwrap_or(-1) as f64)
         }
         "clearItems" => node_method(ctx, idx, choice::clear_items),
         "addItem" => node_method(ctx, idx, choice::add_item),
