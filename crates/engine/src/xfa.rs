@@ -1225,7 +1225,7 @@ impl<'a, 'b> Runner<'a, 'b> {
     fn calculates(&mut self) -> Result<(), String> {
         let events: Vec<ScriptEvent> = self.live().events.iter().filter(|e| e.activity == "calculate").cloned().collect();
         for ev in &events {
-            // A field whose calculation the user overrode keeps the user's value.
+            // A field whose value is marked an override (`value@override`) keeps its value.
             if pdfcraft_xfa::value_overridden(self.tpl, &self.ov, &ev.som) {
                 continue;
             }
@@ -2622,11 +2622,8 @@ $host.messageBox(concat(table._row.count, "|", table.row[0].head, "|", table.row
   <field name="V4" w="2in" h="0.3in"><ui><textEdit/></ui><validate><picture>text{99}</picture><message><text name="formatTest">Two digits</text></message></validate><event activity="exit"><script contentType="application/x-javascript">this.validate.formatTest = "disabled";</script></event></field>
   <field name="V5" w="2in" h="0.3in"><ui><textEdit/></ui><event activity="change"><script contentType="application/x-javascript">this.validate.picture.value = "text{99}"; this.validate.formatTest = "error"; this.formatMessage = "Set on change";</script></event></field>
   <field name="K1" w="2in" h="0.3in"><ui><numericEdit/></ui><value><decimal>1</decimal></value></field>
-  <field name="K2" w="2in" h="0.3in"><ui><numericEdit/></ui><calculate override="warning"><script contentType="application/x-javascript">K1.rawValue * 10</script></calculate></field>
-  <field name="K3" w="2in" h="0.3in"><ui><numericEdit/></ui><calculate override="disabled"><script contentType="application/x-javascript">K1.rawValue * 100</script></calculate></field>
+  <field name="K2" w="2in" h="0.3in"><ui><numericEdit/></ui><value override="1"><decimal>5</decimal></value><calculate><script contentType="application/x-javascript">K1.rawValue * 10</script></calculate></field>
   <field name="K4" w="2in" h="0.3in"><ui><numericEdit/></ui><calculate><script contentType="application/x-javascript">K1.rawValue * 1000</script></calculate></field>
-  <field name="K5" w="2in" h="0.3in"><ui><numericEdit/></ui><calculate override="warning"><script contentType="application/x-javascript">K1.rawValue * 7</script></calculate></field>
-  <field name="K6" w="2in" h="0.3in"><ui><numericEdit/></ui><calculate override="warning"><script contentType="application/x-javascript">  </script></calculate></field>
  </subform>
 </subform>
 </template>
@@ -2676,6 +2673,19 @@ $host.messageBox(concat(table._row.count, "|", table.row[0].head, "|", table.row
         assert!(s.take_js_output(id).alerts.is_empty(), "the exit script turned the test off");
         type_into(&mut s, id, "V5", "abc");
         assert_eq!(s.take_js_output(id).alerts.iter().map(|m| m.text.as_str()).collect::<Vec<_>>(), ["Set on change"]);
+    }
+
+    /// A field whose value the template marks an override (`value@override`, XFA 3.3 p. 883)
+    /// keeps its value when the form calculates, on opening and after an entry; a field without
+    /// the mark takes its calculation's result.
+    #[test]
+    fn a_value_marked_an_override_is_left_out_of_calculations() {
+        let mut s = crate::Session::new();
+        let id = s.open("checks.pdf", None, Arc::new(checks_form()), None).unwrap();
+        let now = |s: &crate::Session| ["K2", "K4"].map(|k| value_of(s, id, k));
+        assert_eq!(now(&s), ["5", "1000"]);
+        type_into(&mut s, id, "K1", "2");
+        assert_eq!(now(&s), ["5", "2000"]);
     }
 
     /// The script test's message is the one the field's exit script leaves, from the first
