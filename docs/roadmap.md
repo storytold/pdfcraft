@@ -1,15 +1,11 @@
 - 2026-11-04 (M6, PR #5699 group/cache/MK/button review): Expand calculation groups/duplicates with streaming bounded lookup; retain one canonical Field object per exposed identity and prune stale roots. Protect outside shared-MK owners and carry exact button IDs through native clicks and js_run, with regression and persistence coverage.
-
-> **Last reviewed:** 2026-11-12 | **Last updated:** 2026-11-12 | **Change:** patch (M3 #3460 review: keep Search option labels on one line and wrap whole checkboxes; verify English and German with valid synthetic PDFs; estimates unchanged)
-
-> **Last reviewed:** 2026-11-12 | **Last updated:** 2026-11-12 | **Change:** patch (M3 #3460: rebase accent-insensitive Find onto current main, retain upstream search readings and share the accent setting with Replace and text_replace; Greek folding remains a follow-up; estimates unchanged)
 - 2026-11-04 (M6, PR #5699 early reset/duplicate identities): Enforce the shared 64-call reset budget before argument conversion/scanning, with sticky atomic rejection and Open/event budget sharing. Preserve PDF object identity in Calculate order, live targets and value writeback; regress duplicate names, reversed order, native completion and persistence.
 - 2026-11-04 (M6, PR #5699 independent review): Preserve unknown defaults through the JS reset shadow; bound menu/response text before copies. Cover native/console reset persistence, inherited defaults, decode-budget exhaustion and exact Unicode dialog boundaries.
 - 2026-11-04 (M6, PR #5699 memory/widget bounds): Count reset widgets and bound escaped UTF-8 text conversion before copies; add negative and Unicode boundary regressions.
 - 2026-11-04 (M6, PR #5699 reset estimate): Charge expanded-name scans and field-name copy/comparison bytes; add three negative regressions and byte-exact refusal checks.
 # PdfCraft roadmap: milestones and what's next
 
-> **Last reviewed:** 2026-11-03 | **Last updated:** 2026-11-03 | **Change:** patch (M3 #3460: rebase PR #3889 onto main 9ce6d89f and remove all 18 obsolete UI TSV changes; translations are maintained in craft-i18n#141; Find and Search & Redact behavior and estimates unchanged)
+> **Last reviewed:** 2026-11-12 | **Last updated:** 2026-11-12 | **Change:** patch (M3 #3460: rebase onto main 175992b5a; Find and Replace share Latin accent options, Search checkboxes wrap whole with English/German coverage and valid fixtures; Greek folding remains a follow-up; estimates unchanged)
 
 > **Last reviewed:** 2026-10-27 | **Last updated:** 2026-10-27 | **Change:** minor (M10: vector printing preserves annotation optional-content membership; estimates unchanged)
 > **Last reviewed:** 2026-10-29 | **Last updated:** 2026-10-29 | **Change:** minor (M10 #5029: Text appearances have implicit NoRotate during vector printing even when the flag is clear; estimates unchanged)
@@ -177,8 +173,6 @@
 > **Last reviewed:** 2026-10-18 - **Last updated:** 2026-10-18 - **Change:** minor (M12 #2570: Dynamic XFA rich-text fields carry exData/maxLength into AcroForm MaxLen for reported and enforced Unicode character limits, retained after save/reopen. Estimates unchanged)
 > **Last reviewed:** 2026-10-18 - **Last updated:** 2026-10-18 - **Change:** minor (M4 #3309: bounded iterative named-destination pruning on page deletion; estimates unchanged)
 > **Last reviewed:** 2026-10-18 - **Last updated:** 2026-10-18 - **Change:** minor (M1 #2658: macOS atomic saves retain destination extended attributes, including Finder tags, and reject partial resource-fork reads after size changes. Metadata failures retain the original PDF and unsaved edit. Estimates unchanged)
-> **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M3 #3460: rebase PR #3889 onto main 0cba87ae; 2941 scoped tests pass (6 existing ignored), formatting, strict Clippy, layers/assets/parity and wasm checks pass; behavior and estimates unchanged)
-> **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M3 #3460: rebase PR #3889 onto main 7ca64298; 2751 scoped tests pass (6 existing ignored), formatting, strict Clippy, layers/assets/parity and wasm checks pass; behavior and estimates unchanged)
 
 Forward-looking: the milestones, the current focus and what comes next. The parity numbers behind
 it are in [target-app-parity.md](target-app-parity.md), the ranked work list in [gaps.md](gaps.md),

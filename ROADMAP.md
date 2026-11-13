@@ -1,15 +1,11 @@
 - 2026-11-04 (M6, PR #5699 group/cache/MK/button review): Expand calculation groups/duplicates with streaming bounded lookup; retain one canonical Field object per exposed identity and prune stale roots. Protect outside shared-MK owners and carry exact button IDs through native clicks and js_run, with regression and persistence coverage.
-
-> **Last reviewed:** 2026-11-12 | **Last updated:** 2026-11-12 | **Change:** patch (M3 #3460 review: keep Search option labels on one line and wrap whole checkboxes; verify English and German with valid synthetic PDFs; estimates unchanged)
-
-> **Last reviewed:** 2026-11-12 | **Last updated:** 2026-11-12 | **Change:** patch (M3 #3460: rebase accent-insensitive Find onto current main, retain upstream search readings and share the accent setting with Replace and text_replace; Greek folding remains a follow-up; estimates unchanged)
 - 2026-11-04 (M6, PR #5699 early reset/duplicate identities): Enforce the shared 64-call reset budget before argument conversion/scanning, with sticky atomic rejection and Open/event budget sharing. Preserve PDF object identity in Calculate order, live targets and value writeback; regress duplicate names, reversed order, native completion and persistence.
 - 2026-11-04 (M6, PR #5699 independent review): Preserve unknown defaults through the JS reset shadow; bound menu/response text before copies. Cover native/console reset persistence, inherited defaults, decode-budget exhaustion and exact Unicode dialog boundaries.
 - 2026-11-04 (M6, PR #5699 memory/widget bounds): Count reset widgets and bound escaped UTF-8 text conversion before copies; add negative and Unicode boundary regressions.
 - 2026-11-04 (M6, PR #5699 reset estimate): Charge expanded-name scans and field-name copy/comparison bytes; add three negative regressions and byte-exact refusal checks.
 # PdfCraft roadmap
 
-> **Last reviewed:** 2026-11-03 | **Last updated:** 2026-11-03 | **Change:** patch (M3 #3460: rebase PR #3889 onto main 9ce6d89f and remove all 18 obsolete UI TSV changes; translations are maintained in craft-i18n#141; Find and Search & Redact behavior and estimates unchanged)
+> **Last reviewed:** 2026-11-12 | **Last updated:** 2026-11-12 | **Change:** patch (M3 #3460: rebase onto main 175992b5a; Find and Replace share Latin accent options, Search checkboxes wrap whole with English/German coverage and valid fixtures; Greek folding remains a follow-up; estimates unchanged)
 
 > **Last reviewed:** 2026-10-31 | **Last updated:** 2026-10-31 | **Change:** patch (M6, PR #4166/#4088: integrate main f137a289 at 0.16.1; retain automatic-field Print suppression, explicit button/console printing and document-error provenance; 761 scoped tests and verification gates passed; 13-step CLI exercise and render inspection passed; existing warnings retained; estimates unchanged)
 > **Last reviewed:** 2026-11-09 | **Last updated:** 2026-11-09 | **Change:** patch (M10 #5130: preserve manual duplex defaults; validate DocumentDuplex review fix and CI formatting; estimates unchanged)
@@ -136,8 +132,6 @@
 > **Last reviewed:** 2026-10-18 - **Last updated:** 2026-10-18 - **Change:** minor (M12 #2570: Dynamic XFA rich-text fields carry exData/maxLength into AcroForm MaxLen for reported and enforced Unicode character limits, retained after save/reopen. Estimates unchanged)
 > **Last reviewed:** 2026-10-18 - **Last updated:** 2026-10-18 - **Change:** minor (M4 #3309: bounded iterative named-destination pruning on page deletion; estimates unchanged)
 > **Last reviewed:** 2026-10-18 - **Last updated:** 2026-10-18 - **Change:** minor (M1 #2658: macOS atomic saves retain destination extended attributes, including Finder tags, and reject partial resource-fork reads after size changes. Metadata failures retain the original PDF and unsaved edit. Estimates unchanged)
-> **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M3 #3460: rebase PR #3889 onto main 0cba87ae; 2941 scoped tests pass (6 existing ignored), formatting, strict Clippy, layers/assets/parity and wasm checks pass; behavior and estimates unchanged)
-> **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M3 #3460: rebase PR #3889 onto main 7ca64298; 2751 scoped tests pass (6 existing ignored), formatting, strict Clippy, layers/assets/parity and wasm checks pass; behavior and estimates unchanged)
 
 PdfCraft's one-page summary: how close it is to Adobe Acrobat Pro's offline feature set, and what
 comes next. Adobe's cloud services (Document Cloud, Acrobat Sign requests, shared review, the AI
@@ -270,9 +264,8 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 ## Progress log
 
-- **2026-11-12 (M3, #3460 review):** Search options move whole checkboxes to the next row instead of wrapping their labels mid-word. Default-pane kittest checks single-row, non-elided labels and every checkbox inside the clip in English and German; reverting the row-local nonwrapping allocation is the negative control. The accent fixture now computes stream lengths and xref offsets, and every open checks for no repair notes. Matching and Replace behavior are unchanged. Estimates unchanged.
+- **2026-11-12 (M3, #3460):** Rebase PR #3889 onto main 175992b5a, retaining upstream search readings, stop-at-limit behavior and roadmap history. Find passes its accent setting through Replace; text_find and text_replace both default accent_sensitive to false, while legacy search APIs and direct engine Replace defaults stay literal. Search options reserve whole checkbox slots so labels stay on one line inside the default pane in English and German; real clicks still toggle search. The synthetic fixture computes stream lengths and xref offsets and opens without repair notes. Production-input, headless and layout regressions have literal-revert red/green evidence; Greek folding remains a follow-up. Estimates unchanged.
 
-- **2026-11-12 (M3, #3460):** Rebase PR #3889 onto current main, retaining ligature, invisible-character, CJK line-continuation, hyphenated-line readings, whole-word rules, tool stop-at-limit behavior and upstream roadmap histories. The Find bar passes Accent-sensitive to Replace through an options-aware string matcher; text_find and text_replace both default accent_sensitive to false. Legacy search APIs and existing direct engine Replace callers remain accent-sensitive; the UI uses the complete options path. Production-input UI and headless regressions cover accented replacements and the sensitive option. Greek accent folding remains a follow-up. Estimates unchanged.
 - **2026-11-09 (M10, #5130):** Windows Printer default sends native two-sided bindings only when automatic duplex support is confirmed, preserving manual driver defaults (#5130/#5772); physical output remains unqualified. Both Windows submission paths preserve DLL guards and current spooler fixes. Review follow-up validates both duplex scopes through craft-print 9fe50c94 and corrects CI formatting. Estimates unchanged.
 
 - **2026-10-27 (M10, #5005):** Vector printing retains each annotation's optional-content membership when drawing its appearance.
