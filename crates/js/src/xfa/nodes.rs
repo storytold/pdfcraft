@@ -68,18 +68,58 @@ fn value_js(h: &HNode) -> JsValue {
     s(&h.value)
 }
 
-/// `(idx, name)` of the child of `parent` named `name`, first instance.
-pub(crate) fn child_named(h: &XHost, parent: usize, name: &str) -> Option<usize> {
-    let p = h.nodes.get(parent)?;
-    p.children.iter().copied().find(|&c| h.nodes.get(c).is_some_and(|n| !n.gone && &*n.name == name))
+/// The live children of `parent` as SOM names see them: an unnamed container is transparent (XFA 3.3 p. 105), its children
+/// counted as `parent`'s, after the container itself.
+pub(crate) fn visible_children(h: &XHost, parent: usize) -> Vec<usize> {
+    let mut out = Vec::new();
+    each_visible(h, parent, 0, &mut |c, _| {
+        out.push(c);
+        true
+    });
+    out
 }
 
-/// Every live instance named `name` under `parent`, in order.
+/// `(idx, name)` of the child of `parent` named `name`, first instance (through unnamed containers, see [`visible_children`]).
+pub(crate) fn child_named(h: &XHost, parent: usize, name: &str) -> Option<usize> {
+    let mut found = None;
+    each_visible(h, parent, 0, &mut |c, n| {
+        if &*n.name == name {
+            found = Some(c);
+            return false;
+        }
+        true
+    });
+    found
+}
+
+/// Every live instance named `name` under `parent`, in order (through unnamed containers).
 pub(crate) fn instances(h: &XHost, parent: usize, name: &str) -> Vec<usize> {
-    h.nodes
-        .get(parent)
-        .map(|p| p.children.iter().copied().filter(|&c| h.nodes.get(c).is_some_and(|n| !n.gone && &*n.name == name)).collect())
-        .unwrap_or_default()
+    let mut out = Vec::new();
+    each_visible(h, parent, 0, &mut |c, n| {
+        if &*n.name == name {
+            out.push(c);
+        }
+        true
+    });
+    out
+}
+
+/// Calls `f` on each child [`visible_children`] lists, in order, until it returns `false`; whether it went through them all.
+fn each_visible(h: &XHost, parent: usize, depth: usize, f: &mut dyn FnMut(usize, &HNode) -> bool) -> bool {
+    let Some(p) = h.nodes.get(parent) else { return true };
+    for &c in p.children.iter() {
+        let Some(n) = h.nodes.get(c) else { continue };
+        if n.gone {
+            continue;
+        }
+        if !f(c, n) {
+            return false;
+        }
+        if n.name.starts_with('#') && depth < MAX_DEPTH && !each_visible(h, c, depth + 1, f) {
+            return false;
+        }
+    }
+    true
 }
 
 /// Resolve a SOM expression from node `from`: `$`, `$form`, `$record`, `$host`, `xfa.form…`,

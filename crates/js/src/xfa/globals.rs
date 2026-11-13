@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use super::host::host;
 use super::instances::instance_manager;
 use super::model::{MAX_DEPTH, XfaDoc, XfaEffect, XfaEvent, clip, payload, reset_names};
-use super::nodes::{node_index, node_object, noop, resolve_som, resolver, sink};
+use super::nodes::{node_index, node_object, noop, resolve_som, resolver, sink, visible_children};
 use super::{
     Attribute, Context, JsResult, JsString, JsValue, NativeFunction, ObjectInitializer, arg, data_object, function, js_string, platform, printd,
     printf, printx, s, scand, text,
@@ -385,10 +385,7 @@ pub(super) fn install(ctx: &mut Context, event: &XfaEvent, doc: &XfaDoc, current
     for scope in scopes {
         let kids: Vec<(usize, String, bool)> = {
             let h = host(ctx)?.borrow();
-            h.nodes
-                .get(scope)
-                .map(|n| n.children.iter().filter_map(|&c| h.nodes.get(c).map(|k| (c, k.name.to_string(), k.repeatable && !k.gone))).collect())
-                .unwrap_or_default()
+            visible_children(&h, scope).into_iter().filter_map(|c| h.nodes.get(c).map(|k| (c, k.name.to_string(), k.repeatable))).collect()
         };
         for (c, name, repeatable) in kids {
             if !is_identifier(&name) || defined.contains(&name) {
