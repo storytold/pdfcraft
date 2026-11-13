@@ -18,12 +18,6 @@ fn request_json(r: &pdfcraft_engine::js::Request) -> Value {
         R::SaveAs => json!({ "save_as": true }),
         R::OpenAttachment { name, open } => json!({ "attachment": name, "open": open }),
         R::ShowPanel(p) => json!({ "panel": p.id() }),
-        // Headless, the value typed stays; form_fill with {"calculated": true} for the field
-        // goes back to the calculated value.
-        R::CalculationOverridden { field, message } => json!({ "calculation_overridden": message, "field": field }),
-        // The names earlier calculation_overridden requests gave are other fields' now (or
-        // none's); form_fields says which fields hold kept values, by their names now.
-        R::CalculationsMoved { fields } => json!({ "calculations_moved": fields }),
     }
 }
 

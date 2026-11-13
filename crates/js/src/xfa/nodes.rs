@@ -243,6 +243,9 @@ pub(crate) fn resolve_som(h: &XHost, from: usize, expr: &str) -> Vec<usize> {
                         while let Some(p) = at
                             && guard < MAX_DEPTH
                         {
+                            // An unnamed subform's or area's content is its container's
+                            // (pp. 94-95): the name is numbered among all of that scope.
+                            let p = scope_of(h, p);
                             found = scoped(h, p, name);
                             if !found.is_empty() {
                                 break;

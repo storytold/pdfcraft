@@ -295,8 +295,6 @@ impl Automation {
 
     pub(crate) fn form_fields(&self, a: &Args) -> Result<Value> {
         let doc = self.doc(a)?;
-        // The dynamic XFA fields whose typed values are kept over their calculations.
-        let typed_over = self.session.overridden_calculations(doc.id);
         let out: Vec<Value> = doc
             .form
             .iter()
@@ -340,9 +338,6 @@ impl Automation {
                 }
                 if let Some(c) = calculate_json(f) {
                     o.insert("calculate".into(), c);
-                }
-                if typed_over.contains(&f.name) {
-                    o.insert("calculation_overridden".into(), json!(true));
                 }
                 if !f.actions.unsupported.is_empty() {
                     o.insert("unsupported_scripts".into(), json!(f.actions.unsupported));
@@ -433,19 +428,6 @@ impl Automation {
         let mut edits = Vec::new();
         for (name, v) in values {
             let f = doc.form.iter().find(|f| &f.name == name).ok_or_else(|| failed(format!("there is no field named {name:?} (see form_fields)")))?;
-            // A dynamic XFA field whose calculation a value was typed over goes back to its
-            // calculated value (the answer to `calculation_overridden`), on its own: its
-            // calculations can't run inside a batch of values.
-            if let Some(c) = v.as_object().and_then(|o| o.get("calculated")) {
-                if c != &Value::Bool(true) {
-                    return Err(ToolError::InvalidArgs(format!("{name}: \"calculated\" takes true only")));
-                }
-                if values.len() > 1 {
-                    return Err(ToolError::InvalidArgs(format!("{name}: {{\"calculated\": true}} goes in a form_fill of its own, one field")));
-                }
-                edits.push(Edit::UseCalculatedValue { name: name.clone() });
-                continue;
-            }
             edits.push(Edit::SetFieldValue { name: name.clone(), value: value_for(f, v)? });
         }
         let edit = if edits.len() == 1 { edits.remove(0) } else { Edit::Batch { label: "Fill in form".into(), edits } };

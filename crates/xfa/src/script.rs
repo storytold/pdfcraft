@@ -49,9 +49,6 @@ pub struct FormNode {
     pub repeatable: bool,
     pub occur_min: usize,
     pub occur_max: Option<usize>,
-    /// Subforms: a script can't change how often it occurs ([`crate::occur_is_fixed`]), as the
-    /// template tells it, so the scripting host and the form refuse the same writes.
-    pub occur_fixed: bool,
     pub index: usize,
     pub children: Vec<FormNode>,
     /// Fields: the display picture (see [`Field::display_picture`]), for `formattedValue`.
@@ -93,10 +90,6 @@ pub struct LiveForm {
 pub struct Overrides {
     pub presence: BTreeMap<String, String>,
     pub access: BTreeMap<String, String>,
-    /// Calculated fields whose value the user typed over a calculation the form only recommends
-    /// (`calculate override="warning"`, XFA 3.3 p. 642), by SOM path, each `1`: the value is an
-    /// override (`value@override`, p. 883), which calculations leave alone.
-    pub overridden: BTreeMap<String, String>,
     /// Property changes (see [`crate::restyle`]): by SOM path, then by property key
     /// ([`crate::restyle::prop_key`]), the value set. Bounded by
     /// [`crate::restyle::MAX_PROP_OVERRIDES`] changes and
@@ -111,14 +104,11 @@ pub struct Overrides {
     prop_copies: usize,
     prop_bytes: usize,
     /// Property changes the file held that were not kept when it was read (not a change a
-    /// script could make, kept by a SOM path several objects share, or past the limits): counted
-    /// for a note, as they aren't applied. The file keeps them until the form's overrides are
-    /// next written ([`set_overrides`]), which leaves them out: after a script changes a
-    /// property, a presence or an access, removes a row, or resets fields whose calculation the
-    /// user typed over; after a value is typed over a calculation the form recommends; after
-    /// the calculated value is chosen back (`Edit::UseCalculatedValue`); after Clear Form (or a
-    /// reset of named fields) takes such a field's mark off; and after imported data takes a
-    /// mark off, or leaves out an object something was kept for ([`Overrides::retain_objects`]).
+    /// script could make, kept for an object the template may make more than once
+    /// ([`crate::som_made_once`]), or past the limits): counted for a note, as they aren't
+    /// applied. The file keeps them until the form's overrides are next written
+    /// ([`set_overrides`]), which leaves them out: after a script changes a property, a
+    /// presence or an access.
     pub dropped: usize,
 }
 
@@ -136,7 +126,7 @@ pub enum PropRefused {
 
 impl Overrides {
     pub fn is_empty(&self) -> bool {
-        self.presence.is_empty() && self.access.is_empty() && self.overridden.is_empty() && self.props.is_empty()
+        self.presence.is_empty() && self.access.is_empty() && self.props.is_empty()
     }
 
     /// The property changes, by SOM path.
@@ -148,9 +138,7 @@ impl Overrides {
     /// to `value`. `Ok(true)` when that changed what is kept, `Ok(false)` when it was already so.
     /// Refused past [`crate::restyle::MAX_PROP_OVERRIDES`] changes or
     /// [`crate::restyle::MAX_PROP_OVERRIDE_BYTES`] bytes in the form ([`PropRefused::Full`]), or
-    /// [`crate::restyle::MAX_PROP_CHANGES_PER_OBJECT`] on one object ([`PropRefused::ObjectFull`];
-    /// how often a subform occurs, at most three, not counted:
-    /// [`crate::prop_rules::is_occurrence`]).
+    /// [`crate::restyle::MAX_PROP_CHANGES_PER_OBJECT`] on one object ([`PropRefused::ObjectFull`]).
     pub fn set_prop(&mut self, som: &str, path: &str, attr: Option<&str>, value: &str) -> Result<bool, PropRefused> {
         self.set(som, path, attr, value, false)
     }
@@ -167,10 +155,8 @@ impl Overrides {
     fn set(&mut self, som: &str, path: &str, attr: Option<&str>, value: &str, copy: bool) -> Result<bool, PropRefused> {
         crate::restyle::check(path, attr, value).map_err(PropRefused::Invalid)?;
         let key = if copy { format!("={}", crate::restyle::prop_key(path, attr)) } else { crate::restyle::prop_key(path, attr) };
-        // How often a subform occurs isn't one instance's change (see `prop_rules::is_occurrence`).
-        let counted = |k: &str| !crate::prop_rules::is_occurrence(k);
-        let on_object = self.props.get(som).map_or(0, |m| m.keys().filter(|k| counted(k)).count());
-        if counted(&key) && on_object >= crate::restyle::MAX_PROP_CHANGES_PER_OBJECT && self.props.get(som).is_none_or(|m| !m.contains_key(&key)) {
+        let on_object = self.props.get(som).map_or(0, BTreeMap::len);
+        if on_object >= crate::restyle::MAX_PROP_CHANGES_PER_OBJECT && self.props.get(som).is_none_or(|m| !m.contains_key(&key)) {
             return Err(PropRefused::ObjectFull);
         }
         let old = self.props.get(som).and_then(|m| m.get(&key));
@@ -196,207 +182,6 @@ impl Overrides {
         self.prop_copies = copies;
         self.prop_bytes = bytes;
         Ok(true)
-    }
-
-    /// The instance at `som` (`…table[0].row[2]`) was removed: what scripts changed on it, or
-    /// on anything in it, goes with it, and the changes of the later instances of the same
-    /// subform move down one place (`row[3]…` becomes `row[2]…`), so presence, access and
-    /// property changes stay with the instance they were made to. A same-named object after the
-    /// subform in the template has a later instance's path too (`shared` says which paths are
-    /// more than one object's, [`crate::som_is_shared`]): no property change and no typed-over
-    /// calculation is kept there, so one that would move there goes instead, as it would when
-    /// the file is read again; a presence or access kept there counts as the instance's and
-    /// moves with the instances.
-    ///
-    /// Only what is kept for the subform's instances is read (the keys under `…row[`, which lie
-    /// together), so a removal costs what those hold, not what the form keeps. Returns whether
-    /// that changed anything, and what it cost: 1 for each kept entry read, and 16 more
-    /// (`REKEY_COST`) for each taken out or moved. A caller bounds the removals of an event by the second.
-    pub fn remove_instance(&mut self, som: &str, shared: impl Fn(&str) -> bool) -> (bool, usize) {
-        let Some((head, index)) = som.strip_suffix(']').and_then(|s| s.rsplit_once('[')) else { return (false, 0) };
-        let Ok(index) = index.parse::<usize>() else { return (false, 0) };
-        /// A key that goes with the removed instance (`None`), or moves: its instance's new
-        /// number, and its new key.
-        type Planned = (String, Option<(usize, String)>);
-        /// The keys of `map` that go or move, of those under `lo` (`head[`). `cost` counts
-        /// the keys read, and `REKEY_COST` more for each that goes or moves.
-        fn plan<V>(map: &BTreeMap<String, V>, lo: &str, index: usize, cost: &mut usize) -> Vec<Planned> {
-            let mut out = Vec::new();
-            for (k, _) in map.range::<str, _>((std::ops::Bound::Included(lo), std::ops::Bound::Unbounded)) {
-                *cost = cost.saturating_add(1);
-                // The keys under `lo` lie together: the first that isn't one ends them.
-                let Some(rest) = k.strip_prefix(lo) else { break };
-                let Some((n, tail)) = rest.split_once(']') else { continue };
-                let (Ok(n), true) = (n.parse::<usize>(), tail.is_empty() || tail.starts_with('.')) else { continue };
-                match n.cmp(&index) {
-                    std::cmp::Ordering::Less => {}
-                    std::cmp::Ordering::Equal => out.push((k.clone(), None)),
-                    std::cmp::Ordering::Greater => {
-                        let n = n.saturating_sub(1);
-                        out.push((k.clone(), Some((n, format!("{lo}{n}]{tail}")))));
-                    }
-                }
-            }
-            *cost = cost.saturating_add(out.len().saturating_mul(REKEY_COST));
-            out
-        }
-        /// Take the planned keys out of `map`: what moves, with its instance's new number and
-        /// its new key. Every key is taken out before one is put back, as a new key is often
-        /// the old key of the next instance.
-        fn take<V>(map: &mut BTreeMap<String, V>, planned: Vec<Planned>) -> Vec<(usize, String, V)> {
-            planned
-                .into_iter()
-                .filter_map(|(old, new)| {
-                    let v = map.remove(&old);
-                    let (n, key) = new?;
-                    Some((n, key, v?))
-                })
-                .collect()
-        }
-        let lo = format!("{head}[");
-        let mut cost = 0usize;
-        let presence = plan(&self.presence, &lo, index, &mut cost);
-        let access = plan(&self.access, &lo, index, &mut cost);
-        let overridden = plan(&self.overridden, &lo, index, &mut cost);
-        let props = plan(&self.props, &lo, index, &mut cost);
-        let changed = !(presence.is_empty() && access.is_empty() && overridden.is_empty() && props.is_empty());
-        // Whether instance `n`'s path is more than one object's. The keys of one instance lie
-        // together, so each instance is asked about once a map.
-        let mut asked: Option<(usize, bool)> = None;
-        let mut lands_shared = |n: usize| match asked {
-            Some((m, is)) if m == n => is,
-            _ => {
-                let is = shared(&format!("{lo}{n}]"));
-                asked = Some((n, is));
-                is
-            }
-        };
-        for (map, planned) in [(&mut self.presence, presence), (&mut self.access, access)] {
-            for (_, key, v) in take(map, planned) {
-                map.insert(key, v);
-            }
-        }
-        for (n, key, v) in take(&mut self.overridden, overridden) {
-            if !lands_shared(n) {
-                self.overridden.insert(key, v);
-            }
-        }
-        // The property changes are copied (from the memo's) only when one of them moves or goes.
-        if !props.is_empty() {
-            let mut counted = [self.prop_count, self.prop_copies, self.prop_bytes];
-            let map = Arc::make_mut(&mut self.props);
-            // How often the subform occurs is the subform's, not the instance's (XFA 3.3 p. 786):
-            // kept with the first instance, where it is read, it stays at `som` for the instance
-            // that is first now (or for none, when no instance is left). Any other instance holds
-            // no such change. These three don't count against the changes one object keeps
-            // (`prop_rules::is_occurrence`), so the instance keeps them beside as many of its own as
-            // it may hold, and a save reads back the same.
-            let mut occur: BTreeMap<String, String> = BTreeMap::new();
-            let mut moving = Vec::new();
-            for (old, new) in props {
-                let Some(sets) = map.remove(&old) else { continue };
-                uncount(&mut counted, footprint(&old, &sets));
-                match new {
-                    Some((n, key)) => moving.push((n, key, sets)),
-                    None if old == som => occur = sets.into_iter().filter(|(k, _)| crate::prop_rules::is_occurrence(k)).collect(),
-                    None => {}
-                }
-            }
-            for (n, key, sets) in moving {
-                if lands_shared(n) {
-                    continue;
-                }
-                if let Some(was) = map.get(&key) {
-                    uncount(&mut counted, footprint(&key, was));
-                }
-                count(&mut counted, footprint(&key, &sets));
-                map.insert(key, sets);
-            }
-            if !occur.is_empty() {
-                // Over the next instance's own changes, which it keeps beside them.
-                let sets = map.entry(som.to_string()).or_default();
-                uncount(&mut counted, footprint(som, sets));
-                sets.extend(occur);
-                count(&mut counted, footprint(som, sets));
-            }
-            [self.prop_count, self.prop_copies, self.prop_bytes] = counted;
-        }
-        #[cfg(test)]
-        {
-            // Counted as the changes moved, the counts are what counting them all gives.
-            let counted = [self.prop_count, self.prop_copies, self.prop_bytes];
-            self.recount();
-            assert_eq!(counted, [self.prop_count, self.prop_copies, self.prop_bytes], "after removing {som}");
-        }
-        (changed, cost)
-    }
-
-    /// Keep only what scripts changed on the objects the form still has (`live`, by SOM path):
-    /// after new data made the form anew with fewer objects (rows the data no longer holds),
-    /// the presence, the access, the mark of a typed-over calculation and the property changes
-    /// of an object that is gone go with it, so an object that later takes its path (a row
-    /// added again) starts as the template's. How often a subform occurs stays, as it is the
-    /// subform's and kept where its first instance is, or would be
-    /// ([`Overrides::remove_instance`]). `true` when anything went.
-    pub fn retain_objects(&mut self, live: impl Fn(&str) -> bool) -> bool {
-        /// Keep `map`'s live keys; `true` when one went.
-        fn keep<V>(map: &mut BTreeMap<String, V>, live: &impl Fn(&str) -> bool) -> bool {
-            let before = map.len();
-            map.retain(|som, _| live(som));
-            map.len() != before
-        }
-        let mut changed = keep(&mut self.presence, &live) | keep(&mut self.access, &live) | keep(&mut self.overridden, &live);
-        let stays = |k: &str| crate::prop_rules::is_occurrence(k);
-        // The property changes are copied (from the memo's) only when one of them goes.
-        if self.props.iter().any(|(som, m)| !live(som) && m.keys().any(|k| !stays(k))) {
-            let props = Arc::make_mut(&mut self.props);
-            for (som, m) in props.iter_mut() {
-                if !live(som) {
-                    m.retain(|k, _| stays(k));
-                }
-            }
-            props.retain(|_, m| !m.is_empty());
-            self.recount();
-            changed = true;
-        }
-        changed
-    }
-
-    /// Count the property changes kept again, after some moved or went.
-    fn recount(&mut self) {
-        let mut counted = [0usize; 3];
-        for (som, sets) in self.props.iter() {
-            count(&mut counted, footprint(som, sets));
-        }
-        [self.prop_count, self.prop_copies, self.prop_bytes] = counted;
-    }
-}
-
-/// What taking a kept entry out or moving it to its new key adds to the cost
-/// [`Overrides::remove_instance`] returns, where reading one adds 1. Measured over 40,000 entries
-/// kept for 1,000 rows: a row removed at the front (every entry moves) took about 730 ns an
-/// entry, one removed at the end (every entry read, none moved) about 45 ns.
-const REKEY_COST: usize = 16;
-
-/// What the property changes kept for the object at `som` count for: changes, copies of them
-/// (the keys starting with `=`), and bytes (the path, key and value of each).
-fn footprint(som: &str, sets: &BTreeMap<String, String>) -> [usize; 3] {
-    let copies = sets.keys().filter(|k| k.starts_with('=')).count();
-    let bytes = sets.iter().fold(0usize, |sum, (k, v)| sum.saturating_add(som.len()).saturating_add(k.len()).saturating_add(v.len()));
-    [sets.len().saturating_sub(copies), copies, bytes]
-}
-
-/// Add one object's [`footprint`] to the counts kept (changes, copies, bytes).
-fn count(counted: &mut [usize; 3], of: [usize; 3]) {
-    for (c, n) in counted.iter_mut().zip(of) {
-        *c = c.saturating_add(n);
-    }
-}
-
-/// Take one object's [`footprint`] from the counts kept.
-fn uncount(counted: &mut [usize; 3], of: [usize; 3]) {
-    for (c, n) in counted.iter_mut().zip(of) {
-        *c = c.saturating_sub(n);
     }
 }
 
@@ -465,28 +250,14 @@ fn read_overrides(doc: &Document, tpl: Option<&Template>) -> Overrides {
     let Some((_, acro)) = acroform(doc) else { return out };
     let Some(o) = acro.get(OVERRIDES_KEY).map(|o| doc.resolve(o)) else { return out };
     let Some(d) = o.as_dict() else { return out };
-    for (which, map) in [(&b"Presence"[..], &mut out.presence), (&b"Access"[..], &mut out.access), (&b"Overridden"[..], &mut out.overridden)] {
+    for (which, map) in [(&b"Presence"[..], &mut out.presence), (&b"Access"[..], &mut out.access)] {
         if let Some(m) = d.get(which).map(|m| doc.resolve(m))
             && let Some(m) = m.as_dict()
         {
             for (k, v) in m.iter().take(MAX_OVERRIDES) {
                 // Measured as the file holds it, before it is decoded.
                 let Some(v) = v.as_string().filter(|v| v.bytes.len() <= MAX_STATE_BYTES) else { continue };
-                let k = String::from_utf8_lossy(k).into_owned();
-                // A calculation the user typed over is the field's: one kept by a path several
-                // fields share would keep the calculation off all of them ([`mark_value_override`]
-                // keeps none there).
-                if which == b"Overridden" && tpl.is_some_and(|t| crate::data::som_is_shared(t, &k)) {
-                    continue;
-                }
-                let v = v.to_text();
-                // The mark is `1` ([`mark_value_override`] writes nothing else): an entry
-                // holding anything else is no mark, to whoever asks ([`value_overridden`], or
-                // whether the path is among the marks).
-                if which == b"Overridden" && !crate::validation_rules::is_override(Some(&v)) {
-                    continue;
-                }
-                map.insert(k, v);
+                map.insert(String::from_utf8_lossy(k).into_owned(), v.to_text());
             }
         }
     }
@@ -524,17 +295,16 @@ fn read_overrides(doc: &Document, tpl: Option<&Template>) -> Overrides {
                 continue;
             }
             let som = String::from_utf8_lossy(som).into_owned();
-            // Changes kept by a path several objects share can't be told apart between them: a
-            // script's write there is refused ([`crate::data::som_is_shared`]), and so is one the
-            // file holds. Charged as read (a path holding nothing too, without asking whose it
-            // is), so a file naming many paths costs no more than one holding as many changes.
-            if sets.is_empty() || tpl.is_some_and(|t| crate::data::som_is_shared(t, &som)) {
+            // Changes are kept only for an object the template makes no more than once
+            // ([`crate::data::som_made_once`]): a script's write elsewhere is refused, and so is
+            // one the file holds. Charged as read (a path holding nothing too, without asking
+            // whose it is), so a file naming many paths costs no more than one holding as many
+            // changes.
+            if sets.is_empty() || tpl.is_some_and(|t| !crate::data::som_made_once(t, &som)) {
                 read = read.saturating_add(sets.len().max(1));
                 out.dropped = out.dropped.saturating_add(sets.len());
                 continue;
             }
-            // Whether how often the subform there occurs is fixed, asked when a change names it.
-            let mut fixed: Option<bool> = None;
             for (seen, (key, v)) in sets.iter().enumerate() {
                 #[cfg(test)]
                 ENTRIES_LOOKED.with(|c| c.set(c.get().saturating_add(1)));
@@ -555,13 +325,6 @@ fn read_overrides(doc: &Document, tpl: Option<&Template>) -> Overrides {
                 KEPT_READ.with(|c| c.set(c.get().saturating_add(1)));
                 let key = String::from_utf8_lossy(key);
                 let (path, attr) = crate::restyle::split_key(&key);
-                // A script's change to how often a subform occurs is refused where it would give
-                // the subform's instances another object's path ([`crate::data::occur_is_fixed`]),
-                // and so is one the file holds.
-                if path.starts_with("occur#") && *fixed.get_or_insert_with(|| tpl.is_some_and(|t| crate::data::occur_is_fixed(t, &som))) {
-                    out.dropped = out.dropped.saturating_add(1);
-                    continue;
-                }
                 let kept = if key.starts_with('=') { out.set_prop_copy(&som, path, attr, &v) } else { out.set_prop(&som, path, attr, &v) };
                 if kept.is_err() {
                     out.dropped = out.dropped.saturating_add(1);
@@ -582,7 +345,7 @@ fn read_overrides(doc: &Document, tpl: Option<&Template>) -> Overrides {
     out
 }
 
-/// The longest a kept presence, access or typed-over mark is in a file, in bytes as the file
+/// The longest a kept presence or access is in a file, in bytes as the file
 /// holds it: the longest a script can set, `nonInteractive`, is 30 bytes as UTF-16 with its
 /// byte-order mark. A longer string is not decoded.
 const MAX_STATE_BYTES: usize = 64;
@@ -626,7 +389,7 @@ pub fn set_overrides(doc: &mut Document, ov: &Overrides) -> Result<(), XfaError>
         acro.remove(OVERRIDES_KEY);
     } else {
         let mut d = Dict::new();
-        for (which, map) in [("Presence", &ov.presence), ("Access", &ov.access), ("Overridden", &ov.overridden)] {
+        for (which, map) in [("Presence", &ov.presence), ("Access", &ov.access)] {
             if map.is_empty() {
                 continue;
             }
@@ -785,7 +548,6 @@ impl Walker<'_> {
             repeatable: false,
             occur_min: 1,
             occur_max: Some(1),
-            occur_fixed: false,
             index,
             children: Vec::new(),
             display_picture: f.display_picture.clone(),
@@ -867,7 +629,6 @@ impl Walker<'_> {
                             presence: self.presence(sf.common.name.as_deref(), &som, sf.common.presence),
                             access: "open".into(),
                             repeatable: occur.max != Some(1),
-                            occur_fixed: named && sf.occur.max == Some(1) && crate::data::occur_is_fixed(self.tpl, &som),
                             occur_min: occur.min,
                             occur_max: occur.max,
                             index,
@@ -1055,13 +816,6 @@ impl Named {
         let exact = exact.iter().inspect(looked).map_while(|o| Some((o.space?, o.copies)));
         exact.chain(many.iter().inspect(looked).filter_map(|o| Some((o.space?, o.copies))))
     }
-
-    /// Whether an object that occurs once is numbered `index` and another object is numbered
-    /// after it.
-    fn followed(&self, index: usize) -> bool {
-        let after = |owners: &[Owner]| owners.last().is_some_and(|o| o.index > index);
-        self.once.binary_search_by_key(&index, |o| o.index).is_ok() && (after(&self.once) || after(&self.many))
-    }
 }
 
 /// The most objects holding others one segment of a path may name for the path to be followed
@@ -1084,9 +838,10 @@ pub(crate) const MAX_REACHED: usize = 64;
 type Reached = (Vec<(usize, u8)>, String, usize);
 
 /// Who owns each SOM path the live form ([`form_tree_paged`]) names, made once per template
-/// and kept in its memo, so [`crate::som_is_shared`] costs a look-up in each container a
-/// segment of the path reaches (no more than [`MAX_REACHED`] a segment), however large the form
-/// is and however many paths are asked about.
+/// and kept in its memo, so [`crate::som_made_once`] costs one look-up a segment of the path
+/// and [`crate::som_is_shared`] one in each container a segment reaches (no more than
+/// [`MAX_REACHED`] a segment), however large the form is and however many paths are asked
+/// about.
 ///
 /// It follows the live naming: an unnamed subform or area adds no segment, so its children are
 /// named in its parent's container and numbered with that container's other children (XFA 3.3
@@ -1095,7 +850,7 @@ type Reached = (Vec<(usize, u8)>, String, usize);
 /// for two cases: the instances of an unnamed subform the template makes more than once each
 /// name their content as the first does ([`Owner::copies`]), and a later instance of a
 /// subform that may repeat takes the number of a same-named object after it
-/// ([`Owner::repeats`]). Unnamed fields and exclusion groups have no path of their own: each
+/// ([`Named::many`]). Unnamed fields and exclusion groups have no path of their own: each
 /// is `field[0]` or `group[0]` (unnamed objects are "invisible to the normal SOM syntax",
 /// p. 94).
 #[derive(Debug, Default)]
@@ -1111,13 +866,16 @@ pub(crate) struct SomOwners {
     unnamed_areas: HashMap<usize, usize>,
     /// Objects recorded, against [`MAX_FORM_NODES`].
     nodes: usize,
+    /// Whether an object's name holds `[` or `]`: such a name's segment reads as another
+    /// path's, so no path of the template is taken for one object's ([`SomOwners::made_once`]).
+    bracketed: bool,
 }
 
 #[cfg(test)]
 thread_local! {
     /// [`SomOwners`] made (rather than taken from a template's memo), on this thread.
     static OWNERS_MADE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-    /// Owners [`SomOwners::shared`] and [`SomOwners::followed`] looked at, on this thread.
+    /// Owners [`SomOwners::shared`] and [`SomOwners::made_once`] looked at, on this thread.
     static OWNERS_LOOKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
@@ -1127,8 +885,8 @@ pub(crate) fn take_owners_made() -> usize {
     OWNERS_MADE.with(|c| c.replace(0))
 }
 
-/// How many owners telling whether paths are shared looked at on this thread, since the last
-/// call.
+/// How many owners telling whether paths are shared, or name an object made once, looked at
+/// on this thread, since the last call.
 #[cfg(test)]
 pub(crate) fn take_owners_looked() -> usize {
     OWNERS_LOOKED.with(|c| c.replace(0))
@@ -1172,6 +930,7 @@ impl SomOwners {
         let id = self.spaces.len();
         self.spaces.push(HashMap::new());
         if let Some(name) = name {
+            self.bracketed |= name.contains(['[', ']']);
             self.top.insert(name.to_string(), (id, false));
         }
         id
@@ -1179,6 +938,7 @@ impl SomOwners {
 
     /// Put `owner` among the owners of `name` in container `id`.
     fn own(&mut self, id: usize, name: &str, repeats: bool, owner: Owner) {
+        self.bracketed |= name.contains(['[', ']']);
         let Some(container) = self.spaces.get_mut(id) else { return };
         let named = match container.get_mut(name) {
             Some(named) => named,
@@ -1322,17 +1082,75 @@ impl SomOwners {
         false
     }
 
-    /// Whether the object at `som` occurs once by the template and a same-named object is
-    /// numbered after it in its SOM scope (see [`crate::occur_is_fixed`]): made to repeat, its
-    /// second instance would take that object's path.
-    pub(crate) fn followed(&self, som: &str) -> bool {
-        let Ok((reached, last, index)) = self.reach(som) else { return false };
-        reached.iter().filter_map(|&(id, _)| self.spaces.get(id)?.get(&last)).any(|named| {
+    /// Whether `som` names an object the template makes no more than once, so that the path is
+    /// that object's whatever the data holds (see [`crate::som_made_once`]): it starts at the
+    /// root subform, and each segment after it names one object of its container that occurs
+    /// once, with no subform that may repeat numbered up to it (whose later instance would take
+    /// the number) and no second object of the number. `som` must be written as the live form
+    /// writes paths (`name[n]` for each segment, a `.` between two): a path in another form
+    /// names nothing here. A name may hold a `.` (`CheckList20.10[0]` is one segment, as each
+    /// ends at its number); no name of the template may hold `[` or `]`, with which one path
+    /// could be read two ways. One look-up a segment.
+    pub(crate) fn made_once(&self, som: &str) -> bool {
+        if self.bracketed {
+            return false;
+        }
+        let mut segments = written_segments(som);
+        // The root subform's container is the first made ([`SomOwners::of`]); a page area's
+        // content is on each page laid out from it, and a root without a name has no path.
+        let Some(Some((first, 0))) = segments.next() else { return false };
+        let Some(&(root, false)) = self.top.get(first) else { return false };
+        if root != 0 {
+            return false;
+        }
+        let mut space = Some(root);
+        for segment in segments {
+            let Some((name, index)) = segment else { return false };
+            let Some(named) = space.and_then(|id| self.spaces.get(id)).and_then(|s| s.get(name)) else { return false };
             #[cfg(test)]
             OWNERS_LOOKED.with(|c| c.set(c.get().saturating_add(1)));
-            named.followed(index)
-        })
+            let ([owner], []) = named.parts(index) else { return false };
+            if owner.copies != 1 {
+                return false;
+            }
+            space = owner.space;
+        }
+        true
     }
+}
+
+/// The segments of a SOM path written as the live form writes them, `name[n]` each with a `.`
+/// between two: each one's name and number, or `None` for (and after) a part not written so
+/// (no number, a number not written as the form writes it, an empty name). A segment ends at
+/// its `]`, so a name may hold a `.`.
+fn written_segments(som: &str) -> impl Iterator<Item = Option<(&str, usize)>> {
+    let mut rest = Some(som);
+    let mut first = true;
+    std::iter::from_fn(move || {
+        let mut left = rest.take()?;
+        if left.is_empty() && !first {
+            return None;
+        }
+        if !first {
+            left = match left.strip_prefix('.') {
+                Some(after) => after,
+                None => return Some(None),
+            };
+        }
+        first = false;
+        let segment = left.split_once(']').and_then(|(segment, after)| {
+            let (name, number) = segment.split_once('[')?;
+            let index = number.parse::<usize>().ok().filter(|i| i.to_string() == number)?;
+            (!name.is_empty()).then_some((name, index, after))
+        });
+        match segment {
+            Some((name, index, after)) => {
+                rest = Some(after);
+                Some(Some((name, index)))
+            }
+            None => Some(None),
+        }
+    })
 }
 
 /// Does the template declare any script (an event, calculation or validation)? Forms without
@@ -1679,30 +1497,16 @@ pub fn field_now(tpl: &Template, ov: &Overrides, som: &str) -> Option<Field> {
     })
 }
 
-/// Whether the user overrode the calculation of the field at `som` (its value says so, as the
-/// template or a script set it, or [`mark_value_override`] did), so that calculations leave it
-/// alone. Only a change to the value's `override` can change what the template says, so the
-/// field is restyled ([`field_now`]) only when one is kept.
+/// Whether the calculation of the field at `som` is overridden (its value says so,
+/// `value@override`, XFA 3.3 p. 883, as the template or a script set it), so that calculations
+/// leave it alone. Only a change to the value's `override` can change what the template says,
+/// so the field is restyled ([`field_now`]) only when one is kept.
 pub fn value_overridden(tpl: &Template, ov: &Overrides, som: &str) -> bool {
-    if let Some(v) = ov.overridden.get(som) {
-        return crate::validation_rules::is_override(Some(v));
-    }
     let key = crate::restyle::prop_key("value#0", Some("override"));
     if ov.props().get(som).is_some_and(|sets| sets.contains_key(&key)) {
         return field_now(tpl, ov, som).is_some_and(|f| f.value_override);
     }
     crate::data::template_field(tpl, som).is_some_and(|f| f.value_override)
-}
-
-/// Keep that the user overrode the calculation of the field at `som`. False when that changed
-/// nothing, the overrides already hold as many entries as they keep, or other fields share the
-/// path ([`crate::data::som_is_shared`]): a mark there would keep the calculation off them too.
-pub fn mark_value_override(tpl: &Template, ov: &mut Overrides, som: &str) -> bool {
-    if ov.overridden.contains_key(som) || ov.overridden.len() >= MAX_OVERRIDES || crate::data::som_is_shared(tpl, som) {
-        return false;
-    }
-    ov.overridden.insert(som.to_string(), "1".to_string());
-    true
 }
 
 /// Notes for the layout's warnings: property changes the file held that weren't kept

@@ -252,25 +252,20 @@ impl Session {
                     .map_err(EditError::Write)?;
                 cx.xfa_out.errors.extend(notes);
             }
-            /// The fields edit `e` (and the edits it batches) gives new values, and what it
-            /// resets: the whole form, or the fields it names.
-            fn collect(e: &Edit, changed: &mut Vec<String>, reset: &mut Option<xfa::FormReset>) {
+            /// The fields edit `e` (and the edits it batches) gives new values, and whether it
+            /// resets the form.
+            fn collect(e: &Edit, changed: &mut Vec<String>, reset: &mut bool) {
                 match e {
                     Edit::SetFieldValue { name, .. } => changed.push(name.clone()),
-                    Edit::ResetForm { names } => match (reset.as_mut(), names) {
-                        (Some(xfa::FormReset::All), _) => {}
-                        (_, None) => *reset = Some(xfa::FormReset::All),
-                        (Some(xfa::FormReset::Fields(have)), Some(names)) => have.extend(names.iter().cloned()),
-                        (None, Some(names)) => *reset = Some(xfa::FormReset::Fields(names.clone())),
-                    },
+                    Edit::ResetForm { .. } => *reset = true,
                     Edit::Batch { edits, .. } => edits.iter().for_each(|e| collect(e, changed, reset)),
                     _ => {}
                 }
             }
             let mut changed: Vec<String> = Vec::new();
-            let mut reset = None;
+            let mut reset = false;
             collect(&edit, &mut changed, &mut reset);
-            if !changed.is_empty() || reset.is_some() {
+            if !changed.is_empty() || reset {
                 let highlight = cx.highlight();
                 let mut run = xfa::XfaRun {
                     page_count: cx.pages,
@@ -282,7 +277,7 @@ impl Session {
                 };
                 // Every changed field's scripts, then the calculations once (after a reset,
                 // only those).
-                let ran = guard(|| xfa::on_changes(&mut next, &editor.cos, &tpl, &changed, reset.as_ref(), &mut run, &mut exited))
+                let ran = guard(|| xfa::on_changes(&mut next, &tpl, &changed, &mut run, &mut exited))
                     .unwrap_or_else(|m| Err(format!("the form's scripts failed unexpectedly ({m})")));
                 cx.xfa_datasets = run.datasets;
                 cx.xfa_ran_away |= run.ran_away;

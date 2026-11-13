@@ -87,6 +87,25 @@ fn javascript_names_see_through_unnamed_subforms_and_areas() {
     }
 }
 
+/// A relative name from a field inside an unnamed subform is numbered in the scope the field
+/// is in (its named container's), not among the unnamed subform's own content: `yes[1]` from
+/// `yes[0]` is the second `yes` of `form1`, which is in another unnamed subform.
+#[test]
+fn a_relative_name_from_inside_an_unnamed_subform_is_numbered_in_its_containers_scope() {
+    for (script, want) in [
+        ("this.resolveNode('yes[1]').rawValue", "2"),
+        ("this.resolveNode('yes[2]').somExpression", "form1[0].yes[2]"),
+        ("this.resolveNode('yes').rawValue", "1"),
+        ("xfa.resolveNodes('yes[*]').length", "3"),
+        ("String(this.resolveNode('yes[3]'))", "null"),
+    ] {
+        let o = js(&receipt(), script, "form1[0].yes[0]");
+        assert_eq!((o.error, o.result.as_deref()), (None, Some(want)), "{script}");
+    }
+    let o = fc(&receipt(), "yes[1] + yes[2]", "form1[0].yes[0]");
+    assert_eq!((o.error, o.result.as_deref()), (None, Some("6")));
+}
+
 #[test]
 fn formcalc_names_see_through_unnamed_subforms_and_areas() {
     for (script, want) in [
@@ -230,17 +249,6 @@ fn a_subform_that_occurs_once_is_no_instance_of_the_repeating_one_of_its_name() 
     assert_eq!(o.error, None, "{o:?}");
     assert_eq!(o.result.as_deref(), Some("1/10/30"));
     assert_eq!(o.effects, [XfaEffect::RemoveInstance { som: "form1[0].row[1]".into() }]);
-
-    // The header's `occur` is not the rows': their manager, asked for after the write, reads
-    // the rows' own.
-    let o = js(
-        &root,
-        "var h = xfa.resolveNode('form1.row[0]'); h.occur.min = '0'; var r = xfa.resolveNode('form1.row[2]'); \
-         [h.occur.min, r.instanceManager.min, r.occur.min].join('/')",
-        go,
-    );
-    assert_eq!(o.error, None, "{o:?}");
-    assert_eq!(o.result.as_deref(), Some("0/1/1"));
 }
 
 /// The same with the header and the rows each in an unnamed subform of the container: `_row`

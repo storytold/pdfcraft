@@ -12,8 +12,8 @@
 //!   (a validation, a picture, items: [`restyled_field`]), for the same reason, and because
 //!   making one reads the field again.
 //! - who owns each SOM path the live form names ([`crate::script::SomOwners`]), which depends
-//!   on the template alone, so that telling whether objects share a path
-//!   ([`crate::som_is_shared`]) costs a few look-ups each time it is asked.
+//!   on the template alone, so that telling whether a path names an object the template makes
+//!   once ([`crate::som_made_once`]) costs a few look-ups each time it is asked.
 //!
 //! None is part of the template: a clone starts empty, and two compare equal. A poisoned lock
 //! only means a panic elsewhere while it was held; all are memos, so their contents stay valid.
@@ -83,7 +83,7 @@ pub struct Memo {
     fields: Mutex<Applied<Field>>,
     /// Who owns each SOM path the live form names ([`crate::script::SomOwners`]), made the first
     /// time it is asked. Shared with those who ask away from the template
-    /// ([`crate::SharedPaths`]).
+    /// ([`crate::SomPaths`]).
     som_owners: std::sync::OnceLock<Arc<crate::script::SomOwners>>,
 }
 
@@ -235,10 +235,9 @@ pub(crate) fn field_bytes(f: &Field) -> usize {
     // Its lists are its own copies (an item list holds up to `parse::MAX_ITEMS` entries,
     // outside the object's property budget), so they count too, as do its texts.
     let strings = f.items.iter().chain(&f.item_values).fold(0usize, |n, i| n.saturating_add(i.len()).saturating_add(std::mem::size_of::<String>()));
-    let texts =
-        [&f.tooltip, &f.picture, &f.data_picture, &f.validate_message, &f.format_picture, &f.format_message, &f.calc_message, &f.display_picture]
-            .into_iter()
-            .fold(0usize, |n, t| n.saturating_add(t.as_ref().map_or(0, String::len)));
+    let texts = [&f.tooltip, &f.picture, &f.data_picture, &f.validate_message, &f.format_picture, &f.format_message, &f.display_picture]
+        .into_iter()
+        .fold(0usize, |n, t| n.saturating_add(t.as_ref().map_or(0, String::len)));
     // So is its value (a default text, a picture's bytes), and its caption's.
     let values = value_bytes(&f.value).saturating_add(f.caption.as_ref().map_or(0, |c| value_bytes(&c.value)));
     tree_bytes(&f.common.props)
@@ -298,6 +297,11 @@ fn remembered<T>(
         None => Arc::new(make()),
     };
     let cost = cost(&out).saturating_add(set_bytes(sets));
+    // One past a generation's budget by itself is not kept (it is made again when next asked
+    // for), so what the two generations hold stays within twice the budget.
+    if cost > MAX_APPLIED_BYTES {
+        return out;
+    }
     if a.trees >= MAX_APPLIED || a.bytes.saturating_add(cost) > MAX_APPLIED_BYTES {
         a.old = std::mem::take(&mut a.new);
         a.trees = 0;
@@ -336,10 +340,9 @@ mod tests {
     }
 
     /// Who owns which SOM path is worked out once per template, not for each path asked about
-    /// or each read of a document's marks: a form of 20,000 fields in one unnamed subform whose
-    /// file keeps 10,000 typed-over calculations reads them with one look-up per segment of
-    /// each path, however wide the form, and none of them is dropped (named, none is shared).
-    /// Counted, not timed.
+    /// or each property change read from a file: asking about 10,000 of the 20,000 fields of
+    /// one unnamed subform takes one look-up per segment of each path, however wide the form,
+    /// and each is its template object's alone (named, none is shared). Counted, not timed.
     #[test]
     fn who_owns_which_path_is_worked_out_once_per_template() {
         let fields: String = (0..20_000).map(|i| format!(r#"<field name="f{i}" w="2in" h="0.3in"><ui><textEdit/></ui></field>"#)).collect();
@@ -350,21 +353,16 @@ mod tests {
 <pageSet><pageArea name="p"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
 <subform layout="tb">{fields}</subform></subform></template></xdp:xdp>"#
         );
-        let mut doc = pdfcraft_cos::Document::open(Arc::new(crate::fixtures::shell(&xdp))).unwrap();
+        let doc = pdfcraft_cos::Document::open(Arc::new(crate::fixtures::shell(&xdp))).unwrap();
         let tpl = crate::script::template_of(&doc).unwrap();
-        let mut ov = crate::script::Overrides::default();
-        for i in 0..10_000 {
-            ov.overridden.insert(format!("form[0].f{i}[0]"), "1".into());
-        }
-        crate::script::set_overrides(&mut doc, &ov).unwrap();
         let _ = (crate::script::take_owners_made(), crate::script::take_owners_looked());
-        for _ in 0..3 {
-            assert_eq!(crate::script::overrides_of(&doc, &tpl).overridden.len(), 10_000);
+        for i in 0..10_000 {
+            assert!(crate::som_made_once(&tpl, &format!("form[0].f{i}[0]")), "f{i}");
         }
         assert!(!crate::som_is_shared(&tpl, "form[0].f19999[0]"));
         assert_eq!(crate::script::take_owners_made(), 1, "made once for the template");
         // One owner per path: each field's name is its own.
-        assert_eq!(crate::script::take_owners_looked(), 3 * 10_000 + 1);
+        assert_eq!(crate::script::take_owners_looked(), 10_000 + 1);
         // A clone of the template (a template laid out again) starts its own.
         let again = tpl.clone();
         assert!(!crate::som_is_shared(&again, "form[0].f0[0]"));
@@ -452,10 +450,10 @@ mod tests {
     #[test]
     fn documents_holding_other_changes_each_read_their_own() {
         let (doc, tpl, ov) = form_with_kept_changes(3);
-        let (other_doc, _, other) = form_with_kept_changes(4);
+        let (other_doc, other_tpl, other) = form_with_kept_changes(4);
         for _ in 0..3 {
             assert_eq!(crate::script::overrides_of(&doc, &tpl), ov);
-            assert_eq!(crate::script::overrides_of(&other_doc, &tpl), other);
+            assert_eq!(crate::script::overrides_of(&other_doc, &other_tpl), other);
         }
     }
 
@@ -510,6 +508,35 @@ mod tests {
         }
         let (_, bytes) = applied_held(&memo);
         assert!(bytes <= 2 * MAX_APPLIED_BYTES, "{bytes} bytes held");
+    }
+
+    /// A result that is past a generation's budget by itself is handed back and not kept: kept,
+    /// it would put the memo past its bound alone, and two of them past twice the bound. One
+    /// that fits is kept and found again.
+    #[test]
+    fn a_result_past_the_budget_by_itself_is_not_kept() {
+        let memo: Mutex<Applied<u8>> = Mutex::default();
+        let base = Arc::new(Props::default());
+        let sets = |v: &str| BTreeMap::from([("assist#0/toolTip#0".to_string(), v.to_string())]);
+        let held = |memo: &Mutex<Applied<u8>>| {
+            let a = memo.lock().unwrap_or_else(PoisonError::into_inner);
+            (a.new.len(), a.old.len(), a.trees, a.bytes)
+        };
+        let made = std::cell::Cell::new(0);
+        let make = || {
+            made.set(made.get() + 1);
+            7u8
+        };
+        let small = remembered(&memo, &base, &sets("small"), |_| 100, make);
+        let kept = held(&memo);
+        assert_eq!((kept.0, kept.1, kept.2), (1, 0, 1), "{kept:?}");
+        for _ in 0..2 {
+            assert_eq!(*remembered(&memo, &base, &sets("large"), |_| MAX_APPLIED_BYTES, make), 7);
+        }
+        assert_eq!(held(&memo), kept, "neither kept nor the cause of a new generation");
+        assert_eq!(made.get(), 3, "made each time it is asked for");
+        assert!(Arc::ptr_eq(&small, &remembered(&memo, &base, &sets("small"), |_| 100, make)));
+        assert_eq!(made.get(), 3);
     }
 
     /// Many instances of one object, each with its own changes (rows a script numbers): a

@@ -270,25 +270,8 @@ fn is_side(parent: &str, tag: &str) -> bool {
     matches!(tag, "edge" | "corner") && matches!(parent, "border" | "rectangle")
 }
 
-/// The node whose property at `path` a read or write on node `node` reaches: for the `occur`
-/// of an instance of a repeating subform, the first instance under the same parent, else `node`.
-/// How often a subform occurs is the subform's, not one instance's (XFA 3.3 p. 786): the form
-/// keeps a change to it with the first instance, which the instance manager, the layout and the
-/// traversal read, so every instance reads and writes it there.
-pub(crate) fn occur_home(h: &XHost, node: usize, path: &str) -> usize {
-    if !path.starts_with("occur#") {
-        return node;
-    }
-    let Some(n) = h.nodes.get(node).filter(|n| n.kind == XfaKind::Subform && n.repeatable && !n.gone) else { return node };
-    if h.shares_som(node) {
-        return node;
-    }
-    n.parent.and_then(|p| super::instances(h, p, &n.name).first().copied()).unwrap_or(node)
-}
-
 /// Whether a script made anything at `path` or under it in this run.
 fn made(h: &XHost, node: usize, path: &str) -> bool {
-    let node = occur_home(h, node, path);
     let below = format!("{path}/");
     h.prop_writes.get(&node).is_some_and(|m| m.keys().any(|k| k == path || k.starts_with(&below)))
 }
@@ -325,7 +308,6 @@ fn read_path(h: &XHost, node: usize, path: &str) -> Option<String> {
 
 /// The template's element at exactly `path` under node `node`, when the template has it.
 fn template_prop_at<'a>(h: &'a XHost, node: usize, path: &str) -> Option<&'a XfaProp> {
-    let node = occur_home(h, node, path);
     let props = &h.nodes.get(node)?.props;
     let mut list = &props.elements;
     let mut found = None;
@@ -344,7 +326,6 @@ fn template_prop<'a>(h: &'a XHost, node: usize, path: &str) -> Option<&'a XfaPro
 
 /// What a script wrote in this run to the property a read of `path` reads ([`read_path`]).
 fn written<'a>(h: &'a XHost, node: usize, path: &str) -> Option<&'a PropWrite> {
-    let node = occur_home(h, node, path);
     h.prop_writes.get(&node)?.get(&read_path(h, node, path)?)
 }
 
@@ -591,7 +572,7 @@ fn specified(h: &XHost, node: usize, path: &str, name: &str) -> bool {
     }
     // A write anywhere under the property `name` (any occurrence) makes it specified.
     let below = if path.is_empty() { format!("{name}#") } else { format!("{path}/{name}#") };
-    h.prop_writes.get(&occur_home(h, node, &below)).is_some_and(|m| m.keys().any(|p| p.starts_with(&below)))
+    h.prop_writes.get(&node).is_some_and(|m| m.keys().any(|p| p.starts_with(&below)))
 }
 
 /// How many of the property `name` `getElement` may reach under `path`: what the template has,
@@ -1031,10 +1012,9 @@ impl XHost {
     /// border doesn't list is made first ([`XHost::instantiate`]), and the copy it is made as
     /// goes to the form too, so the form makes that side as the script reads it.
     pub(crate) fn write_prop(&mut self, node: usize, path: &str, name: Option<&str>, value: String) {
-        let node = occur_home(self, node, path);
         // A value the form refuses changes nothing, the sides it would have made included, and
         // neither does a write to an object the form keeps no changes for.
-        if property_value_ok(path, name, &value).is_err() || self.shares_som(node) {
+        if property_value_ok(path, name, &value).is_err() || self.keeps_none(node) {
             return self.store_prop(node, path, name, value);
         }
         self.copying = true;
@@ -1049,21 +1029,11 @@ impl XHost {
     /// change the form won't get. A value the form would refuse ([`property_value_ok`]) is
     /// noted on the console and changes nothing.
     fn store_prop(&mut self, node: usize, path: &str, name: Option<&str>, value: String) {
-        if self.shares_som(node) {
+        if self.keeps_none(node) {
             let som = self.nodes.get(node).map(|n| n.som.to_string()).unwrap_or_default();
             let what = name.map_or_else(|| path.to_string(), |a| format!("{path} {a}"));
             self.print(super::clip(format!(
-                "{som}: {what} not set: the object shares its SOM path (another has it, or would as rows are added) and keeps no property change of its own"
-            )));
-            return;
-        }
-        // Nor does the form change how often a subform occurs where another instance would take
-        // the path of a same-named object after it (`pdfcraft_xfa::occur_is_fixed`).
-        if path.starts_with("occur#") && self.nodes.get(node).is_some_and(|n| n.occur_fixed) {
-            let som = self.nodes.get(node).map(|n| n.som.to_string()).unwrap_or_default();
-            let what = name.map_or_else(|| path.to_string(), |a| format!("{path} {a}"));
-            self.print(super::clip(format!(
-                "{som}: {what} not set: a same-named object is numbered after this subform, whose path another instance would take"
+                "{som}: {what} not set: the form keeps property changes only for objects its template makes once (not inside a subform that may repeat or a page area, and not at a SOM path several objects have)"
             )));
             return;
         }
@@ -1085,35 +1055,9 @@ impl XHost {
         if !self.reserve(&effect, bytes) {
             return;
         }
-        if path == "occur#0" {
-            self.set_occur(node, name, &value);
-        }
         self.note_key(node, change_key(path, name));
         self.put_prop(node, path, name, value);
         self.record(effect);
-    }
-
-    /// The first instance `from` of a repeating subform removed, `to` first now: how often the
-    /// subform occurs, as `from` reads it (this run's writes, else the change the form keeps
-    /// with the first instance, else the template's), is what `to` reads from now on
-    /// ([`occur_home`]), as the form keeps it with the first instance whichever is removed.
-    pub(crate) fn keep_occur_on(&mut self, from: usize, to: usize) {
-        let moved: Vec<(&str, String)> = ["initial", "max", "min"]
-            .into_iter()
-            .filter_map(|k| {
-                let v = attr(self, from, "occur#0", k)?;
-                (attr(self, to, "occur#0", k).as_ref() != Some(&v)).then_some((k, v))
-            })
-            .collect();
-        let keys: Vec<String> =
-            self.run_keys.get(&from).map(|ks| ks.iter().filter(|k| super::prop_rules::is_occurrence(k)).cloned().collect()).unwrap_or_default();
-        // For reads only: the form moves the change it keeps itself (`Overrides::remove_instance`).
-        for (k, v) in moved {
-            self.put_prop(to, "occur#0", Some(k), v);
-        }
-        for k in keys {
-            self.note_key(to, k);
-        }
     }
 
     /// Note that the form now keeps a change under `key` to node `node` (see [`Self::run_keys`]).
@@ -1130,7 +1074,7 @@ impl XHost {
     /// not take (a template's own odd value), or past the run's budget, is left out quietly: the
     /// form then makes that side from the side drawn there, as it is by then.
     fn copy_to_form(&mut self, node: usize, path: &str, name: Option<&str>, value: &str) {
-        if !self.copying || property_value_ok(path, name, value).is_err() || self.shares_som(node) {
+        if !self.copying || property_value_ok(path, name, value).is_err() || self.keeps_none(node) {
             return;
         }
         let Some(som) = self.nodes.get(node).filter(|n| !n.gone && n.kind != XfaKind::Form).map(|n| n.som.to_string()) else { return };
@@ -1147,12 +1091,12 @@ impl XHost {
         }
     }
 
-    /// Whether node `node` has no SOM path of its own, which the form keeps property changes by:
-    /// an unnamed subform, area or draw shares its parent's (a change kept there is its named
-    /// parent's), and any other object shares its path when the form's keeper says several
-    /// objects have it or may ([`super::SharedSoms`], `pdfcraft_xfa::som_is_shared`). The form
-    /// keeps no change for one of them there (one kept at that path would reach every object
-    /// there), so a write to it is refused rather than handed to all.
+    /// Whether the form keeps no property change for node `node`. It keeps them by SOM path, for
+    /// the objects its template makes once: so none for an unnamed subform, area or draw, which
+    /// has no path of its own (a change kept at its parent's is its named parent's), and none
+    /// where the form's keeper says so ([`super::UnkeptSoms`], `pdfcraft_xfa::som_made_once`):
+    /// inside a subform that may repeat or a page area, and at a path several objects have (one
+    /// kept there would reach every object there). A write to such an object is refused.
     ///
     /// Named objects have a path each, numbered through unnamed subforms and areas (XFA 3.3
     /// ch. 3, "Transparent Nodes", pp. 94-95, Example 3.12). The paths more than one object
@@ -1163,12 +1107,12 @@ impl XHost {
     /// The keeper is asked by path, so the answer costs the same after a script adds or removes
     /// instances (nothing is counted among the objects), and it is the form's own answer for
     /// the write: a script never reads back a change the form then leaves out.
-    pub(crate) fn shares_som(&self, node: usize) -> bool {
+    pub(crate) fn keeps_none(&self, node: usize) -> bool {
         let Some(n) = self.nodes.get(node) else { return false };
         if n.kind == XfaKind::Form {
             return false;
         }
-        !self.owns_som(node) || self.doc.shared.has(&n.som)
+        !self.owns_som(node) || self.doc.unkept.has(&n.som)
     }
 
     /// Who owned each SOM path among the objects when the script started
@@ -1208,13 +1152,8 @@ impl XHost {
     /// Whether the form can keep a change under `key` (see [`change_key`]) to node `node`: one
     /// it keeps already, or one more within [`MAX_CHANGES_PER_OBJECT`], counting those it keeps
     /// ([`XfaNode::changed`](super::XfaNode::changed)) and those this event added
-    /// ([`Self::run_keys`]). How often a subform occurs is not counted, as the form doesn't count
-    /// it ([`super::prop_rules::is_occurrence`]): the first instance keeps it beside its own.
+    /// ([`Self::run_keys`]).
     fn object_room(&self, node: usize, key: &str) -> bool {
-        let occurrence = super::prop_rules::is_occurrence;
-        if occurrence(key) {
-            return true;
-        }
         let Some(n) = self.nodes.get(node) else { return true };
         let kept = |k: &str| n.changed.binary_search_by(|c| c.as_str().cmp(k)).is_ok();
         if kept(key) {
@@ -1224,8 +1163,7 @@ impl XHost {
         if added.iter().any(|k| k == key) {
             return true;
         }
-        let held = n.changed.iter().filter(|k| !occurrence(k)).count();
-        held.saturating_add(added.iter().filter(|k| !kept(k) && !occurrence(k)).count()) < MAX_CHANGES_PER_OBJECT
+        n.changed.len().saturating_add(added.iter().filter(|k| !kept(k)).count()) < MAX_CHANGES_PER_OBJECT
     }
 
     /// Whether the property at `path` can take the attribute `name` (one it has, or a new one
@@ -1249,32 +1187,6 @@ impl XHost {
                 None => w.attrs.push((name.to_string(), value)),
             },
             None => w.text = Some(value),
-        }
-    }
-
-    /// `occur.min` or `occur.max` set on node `node` (XFA 3.3 p. 786): what the instance manager
-    /// allows for the rest of the run, for every instance of the subform, read as the template's
-    /// are (a whole number up to 1000; a negative `max` is unlimited and `max` is never below
-    /// `min`). A value that is no whole number changes nothing (the engine refuses it too).
-    fn set_occur(&mut self, node: usize, name: Option<&str>, value: &str) {
-        let Ok(v) = value.trim().parse::<i64>() else { return };
-        let Some((parent, own)) = self.nodes.get(node).map(|n| (n.parent, n.name.clone())) else { return };
-        // The instances of this node's subform: itself alone when it occurs once beside a
-        // repeating subform of its name.
-        let all = match parent.map(|p| super::instances(self, p, &own)) {
-            Some(all) if all.contains(&node) => all,
-            _ => vec![node],
-        };
-        for i in all {
-            let Some(n) = self.nodes.get_mut(i) else { continue };
-            match name {
-                Some("min") => n.occur_min = v.clamp(0, 1_000) as usize,
-                Some("max") if v < 0 => n.occur_max = None,
-                Some("max") => n.occur_max = Some(v.clamp(0, 1_000) as usize),
-                _ => continue,
-            }
-            n.occur_max = n.occur_max.map(|m| m.max(n.occur_min));
-            n.repeatable = n.occur_max != Some(1);
         }
     }
 }

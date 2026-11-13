@@ -105,19 +105,6 @@ impl PdfCraftApp {
                     // Show/Hide: a panel already showing closes.
                     self.right = (self.right != Some(panel)).then_some(panel);
                 }
-                // Each field the entry typed over is asked about on its own, in turn; a field
-                // still waiting for its answer is asked about once.
-                Request::CalculationOverridden { field, message } => {
-                    if !self.pending_calc_overrides.iter().any(|(d, f, _)| *d == id && *f == field) {
-                        self.pending_calc_overrides.push_back((id, field, message));
-                    }
-                }
-                // The names belong to other fields now, or to none: a question still waiting
-                // about one would be answered for the wrong field, so it goes (the value it
-                // was about stays kept, and the Forms tools can still take it back).
-                Request::CalculationsMoved { fields } => {
-                    self.pending_calc_overrides.retain(|(d, f, _)| *d != id || !fields.contains(f));
-                }
                 Request::Zoom(z) => {
                     if let Some(i) = view {
                         self.views[i].zoom = (z / 100.0) as f32;

@@ -27,7 +27,7 @@ pub(super) mod word_count_ui;
 mod tests;
 
 pub(crate) use prompts::{PromptButton, save_prompt_key, shorten_middle};
-use prompts::{calc_override_prompt, full_screen_prompt, link_prompt, password, remote_link_prompt, save_prompt, unlock};
+use prompts::{full_screen_prompt, link_prompt, password, remote_link_prompt, save_prompt, unlock};
 
 use crate::properties_session::INFO_KEYS;
 
@@ -112,7 +112,6 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
     link_prompt(app, ctx);
     remote_link_prompt(app, ctx);
     full_screen_prompt(app, ctx);
-    calc_override_prompt(app, ctx);
     crate::updates::dialog(app, ctx);
     if app.dialog != Some(Dialog::WordCount) {
         app.word_count_draft.cancel();

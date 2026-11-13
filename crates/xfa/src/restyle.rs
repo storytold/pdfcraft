@@ -38,8 +38,7 @@ const _: () = assert!(
 /// makes included (see [`crate::script::Overrides::set_prop`]). On the 245 dynamic forms of 500
 /// an object takes at most 19, the deepest path 5 steps; a script
 /// that sets every attribute forms set on all of a border's edges and corners, with the copies
-/// the host makes of them, comes to about 40, so 64 leaves room. How often a subform occurs
-/// (three changes at most, [`prop_rules::is_occurrence`]) is the subform's and isn't counted.
+/// the host makes of them, comes to about 40, so 64 leaves room.
 /// What the changes make of one object's tree is bounded by the object's budget
 /// ([`apply_props`]), not by this count.
 pub const MAX_PROP_CHANGES_PER_OBJECT: usize = 64;

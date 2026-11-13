@@ -325,26 +325,6 @@ pub enum Request {
     },
     /// `app.execMenuItem("ShowHide…")`: show the side panel, or hide it when it is showing.
     ShowPanel(Panel),
-    /// The value the user just typed into the calculated XFA field `field` (its name, as the
-    /// form lists it) was kept in place of the calculation, which the form only recommends
-    /// (`<calculate override="warning">`, XFA 3.3 p. 642): the message to show and the choice
-    /// to offer, keep it or go back to the calculated value (`Edit::UseCalculatedValue` in
-    /// pdfcraft-engine, which changes that field only). One for each such field an edit
-    /// changes. Never made by a script.
-    CalculationOverridden {
-        field: String,
-        message: String,
-    },
-    /// Values kept over calculations (see [`Request::CalculationOverridden`]) whose fields have
-    /// other names now, by the names they had: a field's name follows its place among the
-    /// form's fields, and the event's scripts added or removed a row, or showed or hid a part.
-    /// A question still held about one of them is dropped, since the name it would be answered
-    /// by is another field's now, or none's; the values stay kept. Comes before the same
-    /// event's own `CalculationOverridden` requests, which use the names as they are after it.
-    /// Never made by a script.
-    CalculationsMoved {
-        fields: Vec<String>,
-    },
 }
 
 /// A side panel a script can show or hide (`app.execMenuItem("ShowHideFileAttachment")`, …).

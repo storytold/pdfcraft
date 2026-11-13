@@ -248,92 +248,6 @@ pub(super) fn full_screen_prompt(app: &mut PdfCraftApp, ctx: &egui::Context) {
     }
 }
 
-/// The app's own question about a calculation typed over, for a form that gives none.
-const CALC_QUESTION: &str = "The form calculates {name}, and recommends its calculated value over the one you entered.";
-
-/// What the question about `field` says in `lang`. The form's own words are shown as they
-/// are. The sentence used when the form gives none (`validation_rules::user_value_overrides`)
-/// is the app's, so it is said in the interface's language; it names the field by its name in
-/// the document, as the Forms tools list it, and is as long as a question may be
-/// (`validation_rules::cut_question`) whatever the length of that name.
-fn calc_question(lang: crate::i18n::Lang, field: &str, message: &str) -> String {
-    use pdfcraft_xfa::validation_rules::{CalcOverride, cut_question, user_value_overrides};
-    if user_value_overrides(CalcOverride::Warning, None, field).as_deref() != Some(message) {
-        return message.to_string();
-    }
-    cut_question(crate::i18n::fmt(crate::i18n::tr(lang, CALC_QUESTION), &[("name", field)]))
-}
-
-/// The user typed a value into an XFA field whose calculation the form only recommends
-/// (`<calculate override="warning">`, XFA 3.3 p. 642): keep the value, which the calculations
-/// then leave alone, or go back to the field's calculated value. Going back is the default,
-/// and Escape or clicking outside chooses it. One field at a time: an edit that typed over
-/// several asks about each in turn. A document waiting for a box on its page holds back its own
-/// questions only.
-pub(super) fn calc_override_prompt(app: &mut PdfCraftApp, ctx: &egui::Context) {
-    // Questions for documents closed since are dropped.
-    let session = &app.session;
-    app.pending_calc_overrides.retain(|(id, _, _)| session.get(*id).is_some());
-    let pending = &app.pending_calc_overrides;
-    app.calc_override_waiting.retain(|id| pending.iter().any(|(d, _, _)| d == id));
-    // A document waiting for the box open on its page asks again once it is finished or
-    // cancelled, about each value still kept over its calculation by then (a reset or an undo
-    // may have taken some back).
-    let views = &app.views;
-    let done: Vec<pdfcraft_engine::DocId> = app
-        .calc_override_waiting
-        .iter()
-        .copied()
-        .filter(|id| !views.iter().any(|v| v.id == *id && (v.line_editor.is_some() || v.content.draft.is_some())))
-        .collect();
-    for id in done {
-        app.calc_override_waiting.remove(&id);
-        let session = &app.session;
-        app.pending_calc_overrides.retain(|(d, field, _)| *d != id || session.calculation_overridden(id, field));
-    }
-    let asked = app.calc_override_asked().and_then(|at| app.pending_calc_overrides.get(at));
-    let Some(message) = asked.map(|(_, field, m)| calc_question(crate::i18n::current(), field, m)) else { return };
-    let t = Tokens::get(ctx);
-    let mut choice = None;
-    let modal = widgets::show_modal(ctx, "calc_override_prompt", |ui| {
-        ui.set_width(460.0);
-        ui.horizontal(|ui| {
-            ui.add(crate::icons::image("triangle-alert", 22.0, t.accent));
-            ui.label(egui::RichText::new(tl!("Replace the calculated value?")).font(theme::semibold(16.0)));
-        });
-        ui.add_space(6.0);
-        // The form's own words, however many (`pdfcraft_xfa::validation_rules::MAX_QUESTION`):
-        // they scroll, and the buttons stay in reach.
-        egui::ScrollArea::vertical().max_height(160.0).show(ui, |ui| {
-            ui.add(egui::Label::new(message.as_str()).wrap());
-        });
-        ui.add_space(6.0);
-        ui.add(
-            egui::Label::new(
-                egui::RichText::new(tl!("Keep your value and the form stops calculating this field. Use the calculated value to undo your entry."))
-                    .color(t.text_muted)
-                    .small(),
-            )
-            .wrap(),
-        );
-        ui.add_space(14.0);
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if widgets::pill_button(ui, tl!("Use calculated value"), true).clicked() {
-                choice = Some(false);
-            }
-            if widgets::pill_button(ui, tl!("Keep my value"), false).clicked() {
-                choice = Some(true);
-            }
-        });
-    });
-    if choice.is_none() && modal.should_close() {
-        choice = Some(false);
-    }
-    if let Some(keep) = choice {
-        app.resolve_calc_override(keep);
-    }
-}
-
 /// Absolute document-controlled local paths require consent before any filesystem access.
 pub(super) fn remote_link_prompt(app: &mut PdfCraftApp, ctx: &egui::Context) {
     let Some(pending) = app.pending_remote_link.clone() else { return };
@@ -457,43 +371,6 @@ pub(super) fn unlock(app: &mut PdfCraftApp, ctx: &egui::Context) {
         }
         Some(PasswordAnswer::Cancel) => app.submit_unlock(None),
         None => {}
-    }
-}
-
-#[cfg(test)]
-mod calc_question_tests {
-    use super::{CALC_QUESTION, calc_question};
-    use crate::i18n::{Lang, fixture_lang};
-    use pdfcraft_xfa::validation_rules::{CalcOverride, user_value_overrides};
-
-    /// The app's own question is said in the interface's language and names the field; in
-    /// English it is the engine's sentence word for word (the two are one wording). What the
-    /// form says itself is shown as it is in every language.
-    #[test]
-    fn the_apps_own_question_is_translated_and_the_forms_is_not() {
-        let own = user_value_overrides(CalcOverride::Warning, None, "s.k2").unwrap();
-        assert_eq!(calc_question(Lang::EN, "s.k2", &own), own);
-        let l = fixture_lang("x-calc", &*format!("\t{CALC_QUESTION}\t{{name}} wird berechnet.\n").leak());
-        assert_eq!(calc_question(l, "s.k2", &own), "s.k2 wird berechnet.");
-        assert_eq!(calc_question(l, "s.k2", "Use the K2 the form works out."), "Use the K2 the form works out.");
-        // A question about another field is not this field's own sentence.
-        assert_eq!(calc_question(l, "s.k3", &own), own);
-    }
-
-    /// The app's own question about a field with a very long name is as long as a question
-    /// may be in the interface's language too, not only in the engine's English.
-    #[test]
-    fn the_apps_own_question_is_cut_in_every_language() {
-        use pdfcraft_xfa::validation_rules::MAX_QUESTION;
-        let name = "é".repeat(MAX_QUESTION + 50);
-        let own = user_value_overrides(CalcOverride::Warning, None, &name).unwrap();
-        let l = fixture_lang("x-calc-long", &*format!("\t{CALC_QUESTION}\tBerechnet wird {{name}}.\n").leak());
-        for lang in [Lang::EN, l] {
-            let said = calc_question(lang, &name, &own);
-            assert_eq!(said.chars().count(), MAX_QUESTION + 1);
-            assert!(said.ends_with('…'));
-        }
-        assert!(calc_question(l, &name, &own).starts_with("Berechnet wird é"));
     }
 }
 

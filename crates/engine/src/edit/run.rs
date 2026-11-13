@@ -78,13 +78,7 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
                 Err(EditError::NotPermitted("comments"))
             }
         }
-        Edit::SetFieldValue { .. }
-        | Edit::ResetForm { .. }
-        | Edit::SetFieldImage { .. }
-        | Edit::SetFieldImageTarget { .. }
-        | Edit::ApplyScriptChanges { .. }
-        | Edit::XfaEvent { .. }
-        | Edit::UseCalculatedValue { .. } => {
+        Edit::SetFieldValue { .. } | Edit::ResetForm { .. } | Edit::SetFieldImage { .. } | Edit::SetFieldImageTarget { .. } | Edit::ApplyScriptChanges { .. } | Edit::XfaEvent { .. } => {
             if p.fill_forms() {
                 Ok(())
             } else {
@@ -784,24 +778,6 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             cx.set_highlight(on);
             cx.xfa_unchanged = ran.map_err(EditError::Invalid)?;
         }
-        Edit::UseCalculatedValue { name } => {
-            let tpl = cx.xfa.clone().ok_or_else(|| EditError::Invalid("this is not a laid-out XFA form, or JavaScript is off".into()))?;
-            let highlight = cx.highlight();
-            let mut run = xfa::XfaRun {
-                page_count: cx.pages,
-                out: &mut cx.xfa_out,
-                datasets: cx.xfa_datasets,
-                ran_away: false,
-                highlight,
-                time_scale: cx.xfa_time_scale,
-            };
-            let ran = xfa::use_calculated(doc, &tpl, name, &mut run);
-            cx.xfa_datasets = run.datasets;
-            cx.xfa_ran_away |= run.ran_away;
-            let on = run.highlight;
-            cx.set_highlight(on);
-            ran.map_err(EditError::Invalid)?;
-        }
         Edit::SetFieldImage { name, image } | Edit::SetFieldImageTarget { name, image, .. } => {
             let object = match edit {
                 Edit::SetFieldImageTarget { object, .. } => Some(*object),
@@ -1168,11 +1144,6 @@ fn run_batch(doc: &mut pdfcraft_cos::Document, edits: &[Edit], cx: &mut EditCtx)
     // value edits run afterwards (change, exit) would interleave, an exit running twice.
     if edits.iter().any(|e| matches!(e, Edit::XfaEvent { .. })) {
         return Err(EditError::Invalid("a form script event can't be part of a batch of edits".into()));
-    }
-    // Nor going back to a calculated value: its calculations would run before the form's data
-    // takes the batch's other values.
-    if edits.iter().any(|e| matches!(e, Edit::UseCalculatedValue { .. })) {
-        return Err(EditError::Invalid("going back to a calculated value can't be part of a batch of edits".into()));
     }
     // Only contiguous resets immediately preceding script value writeback can
     // defer callbacks. Other edits may read calculated values during validation.

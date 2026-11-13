@@ -8,7 +8,7 @@ use std::collections::{HashMap, HashSet};
 use proptest::prelude::*;
 
 use super::*;
-use crate::data::{DataOp, occur_is_fixed, som_is_shared, template_field, template_object};
+use crate::data::{DataOp, som_is_shared, som_made_once, template_field, template_object};
 use crate::model::{Node, SomIndices, Template};
 use crate::numbering::MAX_SOM_INDEX;
 use crate::script::{FormNode, MAX_REACHED, NodeKind, Overrides, apply_overrides_split, form_tree, take_owners_looked};
@@ -221,95 +221,86 @@ fn a_number_past_a_repeating_subform_names_its_instance() {
     assert!(template_field(&tpl, "form1[0].row[2].y[0]").is_none());
     assert!(!som_is_shared(&tpl, "form1[0].row[0]"));
     assert!(som_is_shared(&tpl, "form1[0].row[1]"), "the second instance and the subform after it");
-    // Without one the template repeats, the nearest subform below the number is it (a script
-    // may have made it repeat).
+    // Without one the template repeats, the nearest subform below the number is it.
     let once = xdp(&format!("<subform name=\"row\">{}</subform><subform name=\"row\">{}</subform>", field("x"), field("y")), "");
     assert!(template_field(&template(&once), "form1[0].row[2].y[0]").is_some());
 }
 
-/// A subform a script makes repeat inside a subform that repeats. The change is the one row's
-/// (a change is kept by the path of the object it was made to): that row shows as many of the
-/// inner subform as its data holds, another row the one the template makes until a script
-/// changes its own too, and the layout and the live form name each field alike, with its own
-/// value, either way.
+/// The form keeps property changes for the objects the template makes once: a path written as
+/// the live form writes it, from the root subform, each segment one object that occurs once.
+/// Not inside a subform that may repeat or at a number its instances take, not where two
+/// objects have the path, not on page-area content, and not at a path written another way. A
+/// name holding a `.` is one segment; a name holding a bracket anywhere in the template leaves
+/// no path one object's.
 #[test]
-fn a_subform_made_to_repeat_inside_a_repeating_one_is_named_alike_by_layout_and_scripts() {
-    let item = format!("<subform name=\"item\" layout=\"tb\">{}</subform>", field("x"));
-    let body = format!("<subform name=\"row\" layout=\"tb\"><occur min=\"1\" max=\"-1\"/>{item}{}</subform>", field("total"));
-    let data = "<row><item><x>a</x></item><item><x>b</x></item><total>1</total></row>                <row><item><x>c</x></item><item><x>d</x></item><item><x>e</x></item><total>2</total></row>";
-    let xml = xdp(&body, data);
-    let tpl = template(&xml);
-    let data = parse_datasets(&xml);
-    let both = |ov: &Overrides| {
-        let mut live = Vec::new();
-        live_fields(&form_tree(&tpl, data.as_ref(), ov).root, &mut live);
-        // As the form is drawn: the occurrence changes made to the template first.
-        let applied = apply_overrides_split(&tpl, ov);
-        let form = crate::layout::layout_with_overrides(&applied.template, data.as_ref(), ov, &applied.per_instance).unwrap();
-        assert_eq!(widgets(&form), live, "the laid-out fields and the ones scripts see");
-        live
-    };
-    let mut ov = Overrides::default();
-    let first = pairs(&[("form1[0].row[0].item[0].x[0]", "a"), ("form1[0].row[0].total[0]", "1")]);
-    let second = pairs(&[("form1[0].row[1].item[0].x[0]", "c"), ("form1[0].row[1].total[0]", "2")]);
-    assert_eq!(both(&ov), [first.clone(), second.clone()].concat(), "as the template makes them");
-
-    assert!(!occur_is_fixed(&tpl, "form1[0].row[0].item[0]"));
-    assert_eq!(ov.set_prop("form1[0].row[0].item[0]", "occur#0", Some("max"), "-1").ok(), Some(true));
-    let first = pairs(&[("form1[0].row[0].item[0].x[0]", "a"), ("form1[0].row[0].item[1].x[0]", "b"), ("form1[0].row[0].total[0]", "1")]);
-    assert_eq!(both(&ov), [first.clone(), second].concat(), "the first row's own change");
-
-    assert_eq!(ov.set_prop("form1[0].row[1].item[0]", "occur#0", Some("max"), "-1").ok(), Some(true));
-    let second = pairs(&[
-        ("form1[0].row[1].item[0].x[0]", "c"),
-        ("form1[0].row[1].item[1].x[0]", "d"),
-        ("form1[0].row[1].item[2].x[0]", "e"),
-        ("form1[0].row[1].total[0]", "2"),
-    ]);
-    assert_eq!(both(&ov), [first, second].concat(), "and the second row's");
-}
-
-/// How often a subform occurs is fixed where it occurs once and a same-named object is numbered
-/// after it, whatever that object is and through unnamed containers: its second instance would
-/// take that object's path. The last of the name, a subform the template lets repeat, and a
-/// path with nothing at it are not, and the live form says the same of each of its subforms.
-#[test]
-fn a_subform_occurs_as_often_as_the_template_says_when_one_of_its_name_follows() {
-    /// The paths of the live form's subforms that are fixed.
-    fn fixed(n: &FormNode, out: &mut Vec<String>) {
-        if n.occur_fixed {
-            out.push(n.som.clone());
-        }
-        for c in &n.children {
-            fixed(c, out);
-        }
+fn a_path_names_an_object_made_once_where_nothing_repeats_or_shares_it() {
+    let unnamed = r#"<field w="100pt" h="12pt"><ui><textEdit/></ui></field>"#;
+    let body = format!(
+        "{a}{dotted}<subform name=\"once\">{b}<subform>{c}</subform></subform>         <subform name=\"row\" layout=\"tb\"><occur min=\"1\" max=\"-1\"/>{x}</subform><subform name=\"row\">{y}</subform>         <subform name=\"two\">{unnamed}{unnamed}</subform><subform name=\"pair\">{d}{d}</subform>         <subform><occur min=\"2\" max=\"2\"/>{twice}</subform>",
+        a = field("a"),
+        dotted = field("CheckList20.10"),
+        b = field("b"),
+        c = field("c"),
+        x = field("x"),
+        y = field("y"),
+        d = field("d"),
+        twice = field("twice"),
+    );
+    let tpl = template(&xdp(&body, ""));
+    for som in [
+        "form1[0]",
+        "form1[0].a[0]",
+        "form1[0].CheckList20.10[0]",
+        "form1[0].once[0]",
+        "form1[0].once[0].b[0]",
+        "form1[0].once[0].c[0]",
+        "form1[0].two[0]",
+        "form1[0].pair[0].d[0]",
+        "form1[0].pair[0].d[1]",
+    ] {
+        assert!(som_made_once(&tpl, som), "{som} is one object's, made once");
     }
-    let row = |occur: &str, inner: &str| format!("<subform name=\"row\" layout=\"tb\">{occur}{}</subform>", field(inner));
-    let cases: [(String, &[&str]); 6] = [
-        (format!("{}{}", row("", "x"), row("", "y")), &["form1[0].row[0]"]),
-        // The follower in an unnamed subform, which adds no segment and no numbering of its own.
-        (format!("{}<subform>{}</subform>", row("", "x"), row("", "y")), &["form1[0].row[0]"]),
-        // A field of the name follows.
-        (format!("{}{}", row("", "x"), field("row")), &["form1[0].row[0]"]),
-        // Three: all but the last.
-        (format!("{}{}{}", row("", "x"), row("", "y"), row("", "z")), &["form1[0].row[0]", "form1[0].row[1]"]),
-        // One the template lets repeat shares the paths after it already.
-        (format!("{}{}", row(r#"<occur min="1" max="-1"/>"#, "x"), row("", "y")), &[]),
-        // The follower is in a named subform: another scope.
-        (format!("{}<subform name=\"in\">{}</subform>", row("", "x"), row("", "y")), &[]),
-    ];
-    for (body, want) in cases {
-        let xml = xdp(&body, "");
-        let tpl = template(&xml);
-        let mut live = Vec::new();
-        fixed(&form_tree(&tpl, None, &Overrides::default()).root, &mut live);
-        assert_eq!(live, want, "{body}");
-        for som in ["form1[0].row[0]", "form1[0].row[1]", "form1[0].row[2]", "form1[0].in[0].row[0]"] {
-            assert_eq!(occur_is_fixed(&tpl, som), want.contains(&som), "{som} of {body}");
-        }
-        for som in ["", "form1[0]", "form1[0].none[0]", "form1[0].row[0].x[0]", "form1[0].row[4294967295]", "form1[0].row[0].row[0]"] {
-            assert!(!occur_is_fixed(&tpl, som), "{som} of {body}");
-        }
+    for som in [
+        // A subform that may repeat, what it holds, and the numbers its instances take.
+        "form1[0].row[0]",
+        "form1[0].row[0].x[0]",
+        "form1[0].row[1]",
+        "form1[0].row[1].y[0]",
+        "form1[0].row[2].x[0]",
+        // Two objects' path, and the content of an unnamed subform made twice.
+        "form1[0].two[0].field[0]",
+        "form1[0].twice[0]",
+        "form1[0].twice[1]",
+        // A page area, and what the template doesn't have.
+        "p[0]",
+        "form1[0].nothing[0]",
+        "form1[0].pair[0].d[2]",
+        "form1[1].a[0]",
+        "other[0].a[0]",
+        // Not written as the live form writes paths.
+        "",
+        ".",
+        "form1",
+        "form1.a",
+        "form1[0].a",
+        "form1[0].a[00]",
+        "form1[0].a[+0]",
+        "form1[0].a[0].",
+        "form1[0]..a[0]",
+        "form1[0].a[0]x",
+        "form1[0]a[0]",
+        "form1[0].[0]",
+        "form1[0].#field[0]",
+        "form1[0].a[0][0]",
+        "form1[0].a[99999999999999999999999]",
+        "xfa[0].form[0].form1[0].a[0]",
+    ] {
+        assert!(!som_made_once(&tpl, som), "{som:?} is not one object's the template makes once");
+    }
+    // `a[0].b` as a name: `form1[0].a[0].b[0]` would be it and the `b` of subform `a` alike.
+    let bracketed = template(&xdp(&format!("{}<subform name=\"a\">{}</subform>{}", field("a[0].b"), field("b"), field("c")), ""));
+    for som in ["form1[0]", "form1[0].c[0]", "form1[0].a[0].b[0]", "form1[0].a[0]"] {
+        assert!(!som_made_once(&bracketed, som), "{som}");
     }
 }
 
@@ -484,6 +475,32 @@ fn a_subform_named_as_an_area_keeps_its_place_in_the_data_path() {
     let shown = pairs(&[("form1[0].a[0].b[0]", "typed"), ("form1[0].a[1].c[0]", "")]);
     assert_eq!(scripts, shown);
     assert_eq!(widgets(&layout(&tpl, Some(&data)).unwrap()), shown);
+}
+
+/// A repeating subform's second instance and a same-named area after the subform are both
+/// `row[1]`. What the rest of the path names tells them apart: the `amount` only the subform
+/// holds binds in the second row, not under the area's parent as the area's `note` does, so the
+/// second row shows its own data and takes what is typed in it.
+#[test]
+fn a_rows_field_is_not_bound_as_a_same_named_areas() {
+    let body = format!(
+        "<subform name=\"row\" layout=\"tb\"><occur min=\"1\" max=\"-1\"/>{}</subform><area name=\"row\">{}</area>",
+        field("amount"),
+        field("note")
+    );
+    let xml = xdp(&body, "<row><amount>1</amount></row><row><amount>2</amount></row>");
+    let tpl = template(&xml);
+    assert_eq!(root_numbers(&tpl), ["row[0]", "row[1]"]);
+    let seg = |name: &str, index: usize| (name.to_string(), index);
+    assert_eq!(data_path(&tpl, "form1[0].row[1].amount[0]"), [seg("form1", 0), seg("row", 1), seg("amount", 0)]);
+    assert_eq!(data_path(&tpl, "form1[0].row[2].amount[0]"), [seg("form1", 0), seg("row", 2), seg("amount", 0)]);
+    assert_eq!(data_path(&tpl, "form1[0].row[1].note[0]"), [seg("form1", 0), seg("note", 0)], "the area's content binds under its parent");
+    assert_eq!(data_path(&tpl, "form1[0].row[1]"), [seg("form1", 0)], "the segment alone is the object numbered so");
+    assert!(template_field(&tpl, "form1[0].row[1].amount[0]").is_some() && template_field(&tpl, "form1[0].row[1].note[0]").is_some());
+    let shown = widgets(&layout_xml(&xml).unwrap());
+    for (som, value) in [("form1[0].row[0].amount[0]", "1"), ("form1[0].row[1].amount[0]", "2")] {
+        assert!(shown.contains(&(som.to_string(), value.to_string())), "{som}: {shown:?}");
+    }
 }
 
 /// An object's number is its data node's, and the data keeps 10,000 same-named nodes under one
@@ -857,22 +874,15 @@ fn named_subforms(nodes: &[Gen], out: &mut Vec<(usize, bool)>) {
 /// What [`more_instances`] gathers.
 struct Pick<'m> {
     base: &'m [Live],
-    areas: HashSet<&'m str>,
     times: HashMap<&'m str, usize>,
     more: HashMap<usize, usize>,
-    by_script: Vec<String>,
 }
 
 /// The generated subforms the data of the third property gives more instances than their
 /// templates start with, and how many more: named ones the model (`base`, without any) has at
-/// paths of their own, either repeating by the template (`max="-1"`) or made to by a script
-/// (the second of the pair: the paths whose `occur.max` a script sets to -1). A script changes
-/// how often a subform occurs on its first instance and only when no same-named object comes
-/// after it ([`occur_is_fixed`]), so those are taken where the subform has one path (nothing
-/// around it occurs more than once) and flows (content positioned by an area shows one
-/// instance, see [`generated`]).
-fn more_instances(top: &[Gen], base: &[Live]) -> (HashMap<usize, usize>, Vec<String>) {
-    fn walk(nodes: &[Gen], positioned: bool, repeats: bool, p: &mut Pick) {
+/// paths of their own that the template lets repeat (`max="-1"`).
+fn more_instances(top: &[Gen], base: &[Live]) -> HashMap<usize, usize> {
+    fn walk(nodes: &[Gen], p: &mut Pick) {
         for g in nodes {
             match &g.what {
                 What::Subform(occ, kids) => {
@@ -880,29 +890,19 @@ fn more_instances(top: &[Gen], base: &[Live]) -> (HashMap<usize, usize>, Vec<Str
                     let at: Vec<&Live> = base.iter().filter(|l| l.id == Some(g.id) && l.kind == Kind::Subform).collect();
                     let own =
                         g.name.is_some() && !at.is_empty() && at.iter().all(|l| p.times[l.som.as_str()] == 1 && !below_several(&p.times, &l.som));
-                    let mut inner = repeats || *occ != Occ::Once;
-                    match (occ, at.as_slice()) {
-                        (Occ::Repeats | Occ::TwiceOrMore, _) if own => {
-                            p.more.insert(g.id, 1 + g.id % 2);
-                        }
-                        // Every third of those that occur once.
-                        (Occ::Once, [one]) if own && g.id % 3 == 0 && !positioned && !repeats && !contested(base, &p.areas, one) => {
-                            p.more.insert(g.id, 1);
-                            p.by_script.push(one.som.clone());
-                            inner = true;
-                        }
-                        _ => {}
+                    if own && matches!(occ, Occ::Repeats | Occ::TwiceOrMore) {
+                        p.more.insert(g.id, 1 + g.id % 2);
                     }
-                    walk(kids, false, inner, p);
+                    walk(kids, p);
                 }
-                What::Area(kids) => walk(kids, true, repeats, p),
+                What::Area(kids) => walk(kids, p),
                 _ => {}
             }
         }
     }
-    let mut p = Pick { base, areas: areas(base), times: times(base), more: HashMap::new(), by_script: Vec::new() };
-    walk(top, false, false, &mut p);
-    (p.more, p.by_script)
+    let mut p = Pick { base, times: times(base), more: HashMap::new() };
+    walk(top, &mut p);
+    p.more
 }
 
 /// The data node at `path` below `root`, made where missing with empty nodes of its name
@@ -992,7 +992,7 @@ proptest! {
     }
 
     /// Data written from the specification's reading alone, with more rows than the template
-    /// starts with (of subforms that repeat, and of ones a script made repeat): the live form
+    /// starts with (of subforms that repeat): the live form
     /// and the layout make the instances the model has, each at the model's path, and a field
     /// that has a path and a data node of its own shows the value written for it. Left to the
     /// property above: a template where the data can't tell the instances of a subform that
@@ -1010,7 +1010,7 @@ proptest! {
         let mut body = String::new();
         render(&top, &mut body);
         let tpl = template(&xdp(&body, ""));
-        let (more, by_script) = more_instances(&top, &base);
+        let more = more_instances(&top, &base);
         let want = model(&top, &more);
         let times = times(&want);
         let areas = areas(&want);
@@ -1030,18 +1030,13 @@ proptest! {
             }
             written.push((k, path));
         }
-        let mut ov = Overrides::default();
-        for som in &by_script {
-            prop_assert!(!occur_is_fixed(&tpl, som), "{} in {}", som, body);
-            prop_assert_eq!(ov.set_prop(som, "occur#0", Some("max"), "-1").ok(), Some(true), "{} in {}", som, body);
-        }
+        let ov = Overrides::default();
 
         let tree = form_tree(&tpl, Some(&data), &ov);
         prop_assert!(!tree.truncated);
         prop_assert_eq!(&owned_content(&tree), &want.iter().map(|l| (l.som.clone(), l.kind)).collect::<Vec<_>>(), "the live form of {} with {:?}", body, data);
         let mut scripts = Vec::new();
         live_fields(&tree.root, &mut scripts);
-        // As the form is drawn: the occurrence changes made to the template first.
         let applied = apply_overrides_split(&tpl, &ov);
         let form = crate::layout::layout_with_overrides(&applied.template, Some(&data), &ov, &applied.per_instance).unwrap();
         let laid = widgets(&form);

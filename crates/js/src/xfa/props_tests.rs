@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use super::super::{SharedSoms, XfaDoc, XfaEffect, XfaEvent, XfaKind, XfaNode, XfaOutcome, run_xfa};
+use super::super::{UnkeptSoms, XfaDoc, XfaEffect, XfaEvent, XfaKind, XfaNode, XfaOutcome, run_xfa};
 use super::{XfaProp, XfaProps};
 use crate::Limits;
 
@@ -96,11 +96,11 @@ fn go_on(root: &XfaNode, script: &str, target: &str) -> XfaOutcome {
     run_xfa(script, &ev, &XfaDoc::default(), root, Limits::default())
 }
 
-/// A document whose form keeps no property change at the SOM paths `shared`, as the engine's
-/// says of the paths its template gives several objects.
-fn sharing(shared: &[&str]) -> XfaDoc {
-    let shared: Vec<String> = shared.iter().map(|s| s.to_string()).collect();
-    XfaDoc { shared: SharedSoms::new(move |som| shared.iter().any(|s| s == som)), ..Default::default() }
+/// A document whose form keeps no property change at the SOM paths `unkept`, as the engine's
+/// says of the paths its template doesn't make one object at.
+fn keeping_none_at(unkept: &[&str]) -> XfaDoc {
+    let unkept: Vec<String> = unkept.iter().map(|s| s.to_string()).collect();
+    XfaDoc { unkept: UnkeptSoms::new(move |som| unkept.iter().any(|s| s == som)), ..Default::default() }
 }
 
 /// [`go_on`] in the document `doc`.
@@ -383,34 +383,16 @@ fn the_writes_forms_make_name_their_properties() {
     );
 }
 
-/// `occur.max` written changes what the instance manager allows for the rest of the run (the
-/// engine keeps it for later runs).
+/// How often a subform occurs is not among the properties a script changes (`prop_rules`): a
+/// write to `occur`, from JavaScript or FormCalc, is noted on the console, the script reads what
+/// it read before, the instance manager allows what it allowed, and no effect goes to the form.
+/// The subform's other properties are written.
 #[test]
-fn occur_written_changes_what_the_instance_manager_allows() {
+fn occur_is_not_written() {
     let mut root = form();
     if let Some(rows) = root.children.iter_mut().find(|c| c.name == "rows") {
         rows.occur_max = Some(1);
         rows.repeatable = false;
-    }
-    let script = "var m = this.parent._rows; var a = m.addInstance(); rows.occur.max = '3'; var b = m.addInstance(); var c = m.addInstance(); \
-                  var d = m.addInstance(); [a === null, b !== null, c !== null, d === null, m.count, this.parent._rows.max].join('|')";
-    let o = go_on(&root, script, "plain");
-    assert_eq!(o.error, None, "{o:?}");
-    assert_eq!(o.result.as_deref(), Some("true|true|true|true|3|3"));
-    assert!(o.effects.contains(&set("form1[0].rows[0]", "occur#0", Some("max"), "3")), "{o:?}");
-}
-
-/// A subform the form says occurs as often as its template tells (`XfaNode::occur_fixed`: a
-/// same-named object is numbered after it) takes no write to `occur`, from JavaScript or
-/// FormCalc: the console says so, the script reads what it read before, the instance manager
-/// allows what it allowed, and no effect goes to the form. Its other properties are written.
-#[test]
-fn occur_is_not_written_where_the_form_fixes_it() {
-    let mut root = form();
-    if let Some(rows) = root.children.iter_mut().find(|c| c.name == "rows") {
-        rows.occur_max = Some(1);
-        rows.repeatable = false;
-        rows.occur_fixed = true;
     }
     let script = "var m = this.parent._rows; var read = function () { return [rows.occur.max, rows.occur.min, rows.occur.initial].join(); }; \
                   var before = read(); rows.occur.max = '3'; rows.occur.min = '2'; rows.occur.initial = '2'; var a = m.addInstance(); \
@@ -419,7 +401,7 @@ fn occur_is_not_written_where_the_form_fixes_it() {
     assert_eq!(o.error, None, "{o:?}");
     assert_eq!(o.result.as_deref(), Some("true|true|1|1|20pt"), "{o:?}");
     assert_eq!(o.effects, [set("form1[0].rows[0]", "font#0", Some("size"), "20pt")], "{o:?}");
-    let notes: Vec<&String> = o.console.iter().filter(|l| l.contains("a same-named object is numbered after this subform")).collect();
+    let notes: Vec<&String> = o.console.iter().filter(|l| l.contains("occur#0 is not a property scripts may change")).collect();
     assert_eq!(notes.len(), 3, "{o:?}");
     assert!(notes.first().is_some_and(|l| l.starts_with("form1[0].rows[0]: occur#0 max not set")), "{o:?}");
 
@@ -427,24 +409,6 @@ fn occur_is_not_written_where_the_form_fixes_it() {
     let o = crate::formcalc::run_formcalc("rows.occur.max = \"3\"\nrows.occur.max", &ev, &XfaDoc::default(), &root, Limits::default());
     assert_eq!((o.error.as_deref(), o.result.as_deref()), (None, Some("-1")), "what the fixture's `occur` element says: {o:?}");
     assert!(o.effects.is_empty() && o.console.iter().any(|l| l.contains("occur#0 max not set")), "{o:?}");
-}
-
-/// Review r2 (M2): how often a subform occurs isn't counted against the changes the form keeps
-/// for one object (`prop_rules::is_occurrence`, as the form doesn't count it): a subform whose
-/// first instance holds as many changes as an object may still takes `occur.max`, and no
-/// other change.
-#[test]
-fn an_occurrence_write_fits_on_an_instance_holding_as_many_changes_as_it_may() {
-    let mut root = form();
-    let rows = root.children.iter_mut().find(|c| c.name == "rows").unwrap();
-    let mut kept: Vec<String> = (0..super::MAX_CHANGES_PER_OBJECT).map(|i| format!("extras#0@a{i:02}")).collect();
-    kept.push("occur#0@initial".to_string());
-    kept.sort();
-    rows.changed = kept.into();
-    let o = go_on(&root, "rows.occur.max = '3'; rows.font.size = '20pt'; [rows.occur.max, rows.font.size].join('|')", "plain");
-    assert_eq!(o.error, None, "{o:?}");
-    assert_eq!(o.result.as_deref(), Some("3|10pt"), "{o:?}");
-    assert_eq!(o.effects, [set("form1[0].rows[0]", "occur#0", Some("max"), "3")], "{o:?}");
 }
 
 /// FormCalc reads and writes the same property objects (`$.font.fill.color.value = …`).
@@ -1421,14 +1385,14 @@ fn an_added_instance_reads_the_templates_properties_not_the_first_instances_chan
 /// Two unnamed fields of one container share their SOM path (`…field[0]`), which the form keeps
 /// property changes by: a write to either is refused with a note, never handed to the form (it
 /// would reach both), and reads back as before. A named field beside them takes its write.
-/// Which paths are shared is the form's to say ([`XfaDoc::shared`]), from its template, not
+/// Which paths it keeps none at is the form's to say ([`XfaDoc::unkept`]), from its template, not
 /// counted on the objects there now: a field alone at a path another object would take as rows
 /// are added is refused as the two are, since the form refuses it, and a script must not read
 /// back a change the form won't keep.
 #[test]
-fn a_write_to_an_object_at_a_som_path_the_form_says_is_shared_is_refused() {
+fn a_write_to_an_object_at_a_som_path_the_form_keeps_none_at_is_refused() {
     let unnamed = || XfaNode { name: "field".into(), som: "form1[0].field[0]".into(), ..node("field", XfaKind::Field, &[], vec![]) };
-    let doc = sharing(&["form1[0].field[0]"]);
+    let doc = keeping_none_at(&["form1[0].field[0]"]);
     for fields in [2, 1] {
         let mut root = form();
         root.children.extend((0..fields).map(|_| unnamed()));
@@ -1436,7 +1400,7 @@ fn a_write_to_an_object_at_a_som_path_the_form_says_is_shared_is_refused() {
         assert_eq!(o.error, None, "{fields}: {o:?}");
         assert_eq!(o.result.as_deref(), Some("255,255,255"), "{fields}: read back as before");
         assert_eq!(o.effects, [set("form1[0].plain[0]", "border#0/fill#0/color#0", Some("value"), "4,5,6")], "{fields}");
-        assert!(o.console.iter().any(|l| l.contains("shares its SOM path")), "{fields}: {o:?}");
+        assert!(o.console.iter().any(|l| l.contains("its template makes once")), "{fields}: {o:?}");
     }
     // At a path the form keeps changes at, the unnamed field takes the write.
     let mut root = form();
@@ -1474,11 +1438,11 @@ fn a_write_to_a_named_object_is_kept_for_it_unless_another_has_its_som_path() {
     // Two named objects with one path: refused, and read back as before.
     let mut root = form();
     root.children.extend([yes(0), yes(0)]);
-    let o = go_in(&sharing(&["form1[0].yes[0]"]), &root, "this.font.fill.color.value = '0,0,255'; this.font.fill.color.value", "yes");
+    let o = go_in(&keeping_none_at(&["form1[0].yes[0]"]), &root, "this.font.fill.color.value = '0,0,255'; this.font.fill.color.value", "yes");
     assert_eq!(o.error, None, "{o:?}");
     assert_eq!(o.result.as_deref(), Some("0,0,0"), "{o:?}");
     assert!(o.effects.is_empty(), "{o:?}");
-    assert!(o.console.iter().any(|l| l.contains("shares its SOM path")), "{o:?}");
+    assert!(o.console.iter().any(|l| l.contains("its template makes once")), "{o:?}");
 }
 
 /// The changes earlier scripts of an event made are put in each script's copy of the form
@@ -1517,7 +1481,7 @@ fn changes_from_earlier_scripts_are_put_on_their_objects_counting_the_paths_once
     }
 }
 
-/// A property write asks the form whether the object's SOM path is shared ([`XfaDoc::shared`]),
+/// A property write asks the form whether it keeps changes at the object's SOM path ([`XfaDoc::unkept`]),
 /// by the path as it is now: it counts no objects, however many rows the script added or
 /// removed before it. Counting the objects again after each row made a script that adds rows
 /// and styles each take time by rows × objects, against the time a script is given.
@@ -1534,7 +1498,7 @@ fn a_property_write_after_rows_are_added_or_removed_counts_no_objects() {
             asked.lock().unwrap().push(som.to_string());
             false
         };
-        XfaDoc { shared: SharedSoms::new(note), ..Default::default() }
+        XfaDoc { unkept: UnkeptSoms::new(note), ..Default::default() }
     };
     let mut h = super::super::XHost::new(Arc::new(root), true, "form1[0].plain[0]", &doc);
     let form1 = h.nodes.iter().position(|n| &*n.som == "form1[0]").unwrap();

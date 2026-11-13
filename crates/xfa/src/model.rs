@@ -739,10 +739,6 @@ pub struct Field {
     pub format_test: crate::validation_rules::Test,
     pub format_picture: Option<String>,
     pub format_message: Option<String>,
-    /// `<calculate override>`: what a value the user types into a calculated field does.
-    pub calc_override: crate::validation_rules::CalcOverride,
-    /// `<calculate><message>`: what is said when the user's value overrides the calculation.
-    pub calc_message: Option<String>,
     /// `<value override="1">`: the user overrode the calculation, which leaves the field alone.
     pub value_override: bool,
     /// Numeric fields (numericEdit, or a decimal/integer/float value) give scripts numbers.

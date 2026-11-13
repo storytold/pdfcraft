@@ -27,9 +27,6 @@ pdfcraft-content = { workspace = true }
 pdfcraft-ocr = { workspace = true }
 pdfcraft-render = { workspace = true }
 pdfcraft-model = { workspace = true }
-# The question about a value typed over an XFA calculation: the sentence used when the form
-# gives none is recognised, to show it in the interface's language (`dialogs/prompts.rs`).
-pdfcraft-xfa = { workspace = true }
 pdfcraft-platform = { workspace = true }
 egui = { workspace = true, features = ["bytemuck", "default_fonts", "monochrome_emoji_fonts"] }
 egui_extras = { workspace = true }
@@ -98,6 +95,7 @@ web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlE
 
 [dev-dependencies]
 craft-update = { workspace = true }
+pdfcraft-xfa = { workspace = true }
 # A content stream that inflates past the renderer's limits, for the cut-content notice test.
 flate2 = { workspace = true }
 egui_kittest = { workspace = true, features = ["eframe", "wgpu"] }

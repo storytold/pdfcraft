@@ -20,5 +20,4 @@ check(path, attr, value) -> Result<(), String>   // whether a change may set `va
 steps(path) -> Option<Vec<(&str, usize)>>         // `border#0/edge#1` as (tag, occurrence) steps
 measure(s) -> Option<f64>                         // an XFA measurement, in points
 color_components(s) -> Option<[f64; 3]>           // `r,g,b`, each 0-255
-is_occurrence(key) -> bool                        // `occur#0@initial|min|max`, kept by the subform
 ```

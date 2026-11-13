@@ -44,10 +44,6 @@ pub struct XfaNode {
     pub repeatable: bool,
     pub occur_min: usize,
     pub occur_max: Option<usize>,
-    /// Subforms: the form keeps no change to how often it occurs (it occurs once and a
-    /// same-named object is numbered after it, whose path another instance would take), so a
-    /// write to its `occur` is refused.
-    pub occur_fixed: bool,
     /// The number in this object's SOM path: its place among the same-named objects of its SOM
     /// scope (which runs through unnamed subforms and areas, XFA 3.3 pp. 94-95).
     pub index: usize,
@@ -91,42 +87,44 @@ pub struct XfaDoc {
     /// Whether the viewer highlights form fields (`app.runtimeHighlight`).
     pub highlight: bool,
     /// The SOM paths the form keeps no property change at.
-    pub shared: SharedSoms,
+    pub unkept: UnkeptSoms,
 }
 
-/// Which SOM paths several objects of the form have or may have, as whoever keeps the form
-/// tells it (the engine, from the template: `pdfcraft_xfa::SharedPaths`). The form keeps no
-/// property change at such a path (one kept there would reach every object there), so a
-/// script's write to an object at one is refused, and read back as it was. Told by the form's
-/// keeper rather than counted among the objects a script sees: both then give one answer for
-/// every path, whatever instances a script adds or removes. The default knows of none.
+/// Which SOM paths the form keeps no property change at, as whoever keeps the form tells it
+/// (the engine, from the template: `pdfcraft_xfa::SomPaths::made_once`). The form keeps
+/// property changes for the objects its template makes once: not for one inside a subform that
+/// may repeat or a page area, nor at a path several objects have (one kept there would reach
+/// every object there). A script's write to an object at such a path is refused, and read back
+/// as it was. Told by the form's keeper rather than counted among the objects a script sees:
+/// both then give one answer for every path, whatever instances a script adds or removes. The
+/// default keeps changes at every path.
 #[derive(Clone, Default)]
-pub struct SharedSoms(Option<std::sync::Arc<SharedTest>>);
+pub struct UnkeptSoms(Option<std::sync::Arc<UnkeptTest>>);
 
-/// Whether several objects have or may have the SOM path given.
-type SharedTest = dyn Fn(&str) -> bool + Send + Sync;
+/// Whether the form keeps no property change at the SOM path given.
+type UnkeptTest = dyn Fn(&str) -> bool + Send + Sync;
 
-impl SharedSoms {
-    /// `shared` tells whether several objects have or may have the SOM path it is given. It
-    /// is asked on the thread scripts run on, for each property write.
-    pub fn new(shared: impl Fn(&str) -> bool + Send + Sync + 'static) -> SharedSoms {
-        SharedSoms(Some(std::sync::Arc::new(shared)))
+impl UnkeptSoms {
+    /// `unkept` tells whether the form keeps no property change at the SOM path it is given.
+    /// It is asked on the thread scripts run on, for each property write.
+    pub fn new(unkept: impl Fn(&str) -> bool + Send + Sync + 'static) -> UnkeptSoms {
+        UnkeptSoms(Some(std::sync::Arc::new(unkept)))
     }
 
-    /// Whether several objects have or may have `som`.
+    /// Whether the form keeps no property change at `som`.
     pub(crate) fn has(&self, som: &str) -> bool {
-        self.0.as_ref().is_some_and(|shared| shared(som))
+        self.0.as_ref().is_some_and(|unkept| unkept(som))
     }
 }
 
-impl std::fmt::Debug for SharedSoms {
+impl std::fmt::Debug for UnkeptSoms {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(if self.0.is_some() { "SharedSoms(..)" } else { "SharedSoms(None)" })
+        f.write_str(if self.0.is_some() { "UnkeptSoms(..)" } else { "UnkeptSoms(None)" })
     }
 }
 
 /// Equal when both ask the same function, or neither asks one.
-impl PartialEq for SharedSoms {
+impl PartialEq for UnkeptSoms {
     fn eq(&self, other: &Self) -> bool {
         match (&self.0, &other.0) {
             (None, None) => true,

@@ -175,7 +175,6 @@ fn clone_subtree(h: &mut XHost, src: usize, parent: Option<usize>, depth: usize)
                 repeatable: n.repeatable,
                 occur_min: n.occur_min,
                 occur_max: n.occur_max,
-                occur_fixed: n.occur_fixed,
                 index: n.index,
                 parent,
                 children: Arc::from([]),
@@ -301,10 +300,6 @@ impl XHost {
         }
         if let Some(n) = h.nodes.get_mut(gone) {
             n.gone = true;
-        }
-        // How often the subform occurs stays with it, on the instance that is first now.
-        if let (0, Some(&next)) = (i, live.get(1)) {
-            h.keep_occur_on(gone, next);
         }
         // Later instances move down one.
         for &inst in live.iter().skip(i + 1) {

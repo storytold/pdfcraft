@@ -469,15 +469,6 @@ pub enum Edit {
         som: String,
         activity: String,
     },
-    /// The XFA field `name`, whose value the user typed over a calculation the form only
-    /// recommends (`<calculate override="warning">`, XFA 3.3 p. 642), goes back to its
-    /// calculated value: the mark that kept the calculations off it is taken off and they run.
-    /// Only that field changes (and what calculates from it); the answer to a
-    /// `CalculationOverridden` request. Not part of a batch: its calculations would run before
-    /// the form's data takes the batch's other values.
-    UseCalculatedValue {
-        name: String,
-    },
     /// Scan & OCR ▸ Recognize text: put recognised words on `page` as invisible text over the
     /// image (from [`ocr::OcrJob::run`](crate::ocr::OcrJob::run)).
     AddOcrText {

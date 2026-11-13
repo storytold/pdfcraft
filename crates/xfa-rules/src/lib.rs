@@ -25,16 +25,10 @@ pub const MAX_ITEM_INDEX: usize = 999;
 /// ordinary property, its entries named up to [`MAX_INDEX`].
 pub const ITEM_LISTS: usize = 2;
 
-/// Whether the change kept under `key` (`path@attr`) is to how often a subform occurs
-/// (`occur#0@initial`, `min` or `max`, XFA 3.3 p. 786): the subform's, not one instance's, it
-/// is kept with the first instance, which keeps it beside its own changes when an earlier first
-/// one is removed. So these three don't count against the changes one object keeps.
-pub fn is_occurrence(key: &str) -> bool {
-    matches!(key, "occur#0@initial" | "occur#0@min" | "occur#0@max")
-}
-
 /// The property elements of an object a change may start at: those the template reader keeps
-/// for scripts (XFA 3.3 p. 78; caption p. 643, items p. 758, calculate p. 641).
+/// for scripts (XFA 3.3 p. 78; caption p. 643, items p. 758, calculate p. 641). How often a
+/// subform occurs (`occur`, p. 786) is not among them: it is the subform's, not one object's,
+/// and no change to it is kept.
 pub const ROOTS: &[&str] = &[
     "border",
     "ui",
@@ -44,7 +38,6 @@ pub const ROOTS: &[&str] = &[
     "assist",
     "validate",
     "format",
-    "occur",
     "break",
     "breakBefore",
     "breakAfter",
@@ -85,8 +78,9 @@ pub const MEASURES: &[&str] = &[
     "tabDefault",
 ];
 
-/// Attributes that hold a whole number: occur p. 786 (`max` may be -1, unlimited), text
-/// `maxChars` p. 863, comb `numberOfCells` p. 657, barcode `dataLength`, exData `maxLength`.
+/// Attributes that hold a whole number: text `maxChars` p. 863, comb `numberOfCells` p. 657,
+/// barcode `dataLength`, exData `maxLength`, and `min`, `max` and `initial` wherever a
+/// property has them.
 pub const INTEGERS: &[&str] = &["min", "max", "initial", "maxChars", "numberOfCells", "dataLength", "maxLength"];
 
 /// An XML name as the template's tags and attributes are: a letter or `_`, then letters,
@@ -245,15 +239,24 @@ mod tests {
         assert_eq!(check("caption#0", Some("reserve"), "-5in"), Ok(()));
     }
 
-    /// Whole numbers where an attribute holds one (`occur max` may be -1).
+    /// Whole numbers where an attribute holds one.
     #[test]
     fn whole_numbers_are_whole() {
-        assert_eq!(check("occur#0", Some("max"), "-1"), Ok(()));
-        assert_eq!(check("occur#0", Some("max"), " 3 "), Ok(()));
-        for bad in ["three", "1.5", "", "99999999999999999999"] {
-            assert!(check("occur#0", Some("max"), bad).is_err(), "{bad}");
+        let comb = "ui#0/textEdit#0/comb#0";
+        assert_eq!(check(comb, Some("numberOfCells"), "-1"), Ok(()));
+        assert_eq!(check(comb, Some("numberOfCells"), " 3 "), Ok(()));
+        for bad in ["three", "1.5", "", "99999999999999999999", "x"] {
+            assert!(check(comb, Some("numberOfCells"), bad).is_err(), "{bad}");
         }
-        assert!(check("ui#0/textEdit#0/comb#0", Some("numberOfCells"), "x").is_err());
+    }
+
+    /// How often a subform occurs is no property a change may name.
+    #[test]
+    fn occur_is_not_changed() {
+        for attr in ["min", "max", "initial"] {
+            assert!(check("occur#0", Some(attr), "2").is_err(), "{attr}");
+        }
+        assert!(steps("occur#0").is_none());
     }
 
     /// Paths are bounded: up to [`MAX_STEPS`] steps from one of the [`ROOTS`], each up to
@@ -311,13 +314,10 @@ mod tests {
     }
 
     #[test]
-    fn names_and_occurrences() {
+    fn names() {
         assert!(is_name("_a-1.b"));
         assert!(!is_name("1a"));
         assert!(!is_name(""));
         assert!(!is_name(&"a".repeat(65)));
-        assert!(is_occurrence("occur#0@max"));
-        assert!(!is_occurrence("occur#1@max"));
-        assert!(!is_occurrence("occur#0@other"));
     }
 }

@@ -10,7 +10,7 @@ use crate::model::{
     Layout, Margin, Node, Occur, PageArea, PageRole, PageSet, ParaSpec, Paragraph, Placement, Presence, Prop, Props, Rect, RichText, Run, Script,
     Side, Stroke, Subform, Template, Traversal, Ui, VAlign, Value,
 };
-use crate::validation_rules::{CalcOverride, Test, is_override};
+use crate::validation_rules::{Test, is_override};
 
 /// Deepest element nesting followed (templates are shallow; hostile ones are not).
 const MAX_DEPTH: usize = 64;
@@ -972,11 +972,6 @@ pub(crate) fn restyle_from(node: &mut Node, x: XmlNode, touched: &dyn Fn(&str) -
                 let mut warnings = Vec::new();
                 (f.items, f.item_values) = parse_items(x, &mut warnings);
             }
-            if touched("calculate") {
-                let c = child(x, "calculate");
-                f.calc_override = CalcOverride::parse(c.and_then(|c| c.attribute("override")));
-                f.calc_message = test_message_of(c, "override");
-            }
             if touched("keep") {
                 f.keep_intact = child(x, "keep").and_then(|k| k.attribute("intact")).is_some_and(|v| v == "contentArea" || v == "pageArea");
             }
@@ -1067,13 +1062,10 @@ fn parse_field(n: XmlNode, warnings: &mut Vec<String>) -> Field {
     let validate_el = child(n, "validate");
     let validate_message = validate_message_of(validate_el);
     let (format_test, format_picture, format_message) = format_test_of(validate_el);
-    let calculate_el = child(n, "calculate");
     Field {
         format_test,
         format_picture,
         format_message,
-        calc_override: CalcOverride::parse(calculate_el.and_then(|c| c.attribute("override"))),
-        calc_message: test_message_of(calculate_el, "override"),
         value_override: is_override(value_el.and_then(|v| v.attribute("override"))),
         common: parse_common(n, warnings),
         ui: kind,
@@ -1101,7 +1093,7 @@ fn parse_field(n: XmlNode, warnings: &mut Vec<String>) -> Field {
         data_shared: child(n, "bind")
             .is_some_and(|b| b.attribute("match").is_some_and(|m| m.trim() == "global") || b.attribute("ref").is_some_and(|r| !r.trim().is_empty())),
         scripts,
-        calculate: calculate_el.and_then(|c| child(c, "script")).map(|s| parse_script(s, "calculate")),
+        calculate: child(n, "calculate").and_then(|c| child(c, "script")).map(|s| parse_script(s, "calculate")),
         validate: validate_script_of(validate_el),
         validate_off: validate_el
             .filter(|v| v.attribute("scriptTest").map(str::trim) == Some("disabled"))

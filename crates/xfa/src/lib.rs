@@ -103,9 +103,9 @@ pub(crate) fn xml_nesting_depth(text: &str) -> usize {
 
 pub use data::{DataImport, ImportNode, export_data, import_data, parse_data_file, write_data_image};
 pub use data::{
-    DataNode, DataOp, DataPath, DatasetsWrite, FieldData, FieldDatum, SharedPaths, add_data_instances, build_data, clear_password_values, data_path,
-    has_password_values, iso_to_pattern, occur_is_fixed, parse_datasets, pattern_to_iso, radio_dataset_value, radio_state_for_item, read_values,
-    read_values_with, remove_data_instance, som_is_shared, som_to_path, write_data_ops, write_data_value, write_datasets, write_datasets_reusing,
+    DataNode, DataOp, DataPath, DatasetsWrite, FieldData, FieldDatum, SomPaths, add_data_instances, build_data, clear_password_values, data_path,
+    has_password_values, iso_to_pattern, parse_datasets, pattern_to_iso, radio_dataset_value, radio_state_for_item, read_values, read_values_with,
+    remove_data_instance, som_is_shared, som_made_once, som_to_path, write_data_ops, write_data_value, write_datasets, write_datasets_reusing,
     write_datasets_with,
 };
 pub use layout::{Action, BorderShape, Form, Item, MAX_PAGES, Page, Widget, WidgetKind, formatted_value, layout};
@@ -116,8 +116,8 @@ pub use picture::typed_date;
 pub use script::{
     Applied, FormNode, LiveForm, MAX_FORM_NODES, NodeKind, OVERRIDES_KEY, Overrides, PropRefused, ScriptEvent, apply_overrides,
     apply_overrides_split, data_of, embedded_fields, field_grows_with_text, field_is_embedded, field_now, field_objects_by_som, fields_by_som,
-    form_tree, form_tree_paged, has_focus_scripts, has_scripts, mark_value_override, overrides, overrides_of, page_area_uses, path_is_embedded,
-    property_notes, refresh_props, refresh_value, rerender, reset_default, set_overrides, template_of, value_overridden,
+    form_tree, form_tree_paged, has_focus_scripts, has_scripts, overrides, overrides_of, page_area_uses, path_is_embedded, property_notes,
+    refresh_props, refresh_value, rerender, reset_default, set_overrides, template_of, value_overridden,
 };
 
 #[derive(Debug, thiserror::Error)]

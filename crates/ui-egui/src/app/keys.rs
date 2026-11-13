@@ -17,7 +17,6 @@ impl PdfCraftApp {
             let covered = self.pending_link.is_some()
                 || self.pending_remote_link.is_some()
                 || self.pending_full_screen.is_some()
-                || self.calc_override_shown()
                 || self.updates.open
                 || self.dialog.is_some()
                 || self.unlock_prompt.is_some();
