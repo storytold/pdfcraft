@@ -837,6 +837,22 @@ fn vectors_are_removed_or_clipped_and_inline_images_go() {
     assert!(c.contains("150 150 m"), "the line elsewhere stays");
 }
 
+/// A horizontal stroke's construction box has no area, so it overlapped nothing and stayed under
+/// the mark. The painted stroke is as wide as the line: a 12 pt line centred 5 pt above the mark
+/// reaches into it and goes; a 1 pt line there does not and stays.
+#[test]
+fn a_stroke_is_removed_by_its_painted_width() {
+    let src = b"12 w 10 60 m 100 60 l S 1 w 10 60 m 100 60 l S 4 w 10 50 m 100 50 l S";
+    let mut doc = one_page(src, "", vec![]);
+    mark(&mut doc, 0, &[[40.0, 45.0, 60.0, 55.0]], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!(r.paths_removed, 2, "{r:?}");
+    let c = content(&doc, 0);
+    assert!(!c.contains("12 w\n10 60 m"), "the wide line reaches the mark: {c}");
+    assert!(c.contains("1 w\n10 60 m\n100 60 l\nS"), "the thin line beside it stays: {c}");
+    assert!(!c.contains("10 50 m"), "the line through the mark goes: {c}");
+}
+
 /// A tiling pattern's cell is a content stream of its own and can draw text. Redacting a shape
 /// filled with such a pattern removed the fill from the page but left the pattern in the page's
 /// resources, so its cell -- with the text that was under the mark -- stayed in the saved file
@@ -6672,6 +6688,59 @@ fn a_reply_on_another_page_to_a_removed_popup_goes_too() {
     for gone in [&b"POPUP-REPLY"[..], b"POPUP-TEXT", b"PARENT-NOTE"] {
         assert!(!bytes.windows(gone.len()).any(|w| w == gone), "{} survived", String::from_utf8_lossy(gone));
     }
+}
+
+/// A hairline under a shrinking CTM still paints about a device pixel: its pad must not shrink
+/// with the CTM, or a mark on that ink misses it.
+#[test]
+fn a_hairline_under_a_shrinking_ctm_is_padded_by_half_a_unit() {
+    // Device line from (10, 10) to (50, 10); the mark lies on its painted pixel, above its axis.
+    let mut doc = one_page(b"0.01 0 0 0.01 0 0 cm 0 w 1000 1000 m 5000 1000 l S", "", vec![]);
+    mark(&mut doc, 0, &[[20.0, 10.2, 30.0, 10.4]], "");
+    assert_eq!(apply(&mut doc, None).unwrap().paths_removed, 1);
+}
+
+/// One `re` has four mitred corners: it is padded by the miter limit like any joined path.
+#[test]
+fn a_rectangle_stroke_is_padded_for_its_mitred_corners() {
+    let mut doc = one_page(b"2 w 100 100 50 50 re S", "", vec![]);
+    // Past half the line width from the rectangle, inside the miter reach.
+    mark(&mut doc, 0, &[[155.0, 120.0, 160.0, 130.0]], "");
+    assert_eq!(apply(&mut doc, None).unwrap().paths_removed, 1);
+}
+
+/// A projecting square cap's outer corner reaches lw/2 x sqrt(2) from the endpoint. Under a shear
+/// it maps past a pad of lw/2 times the CTM's stretch (the review's example: corner at x = 12).
+#[test]
+fn a_square_cap_corner_under_a_shear_is_inside_the_pad() {
+    let mut doc = one_page(b"1 0 1 1 0 0 cm 2 J 2 w 0 0 m 10 0 l S", "", vec![]);
+    mark(&mut doc, 0, &[[11.8, 0.8, 11.9, 0.95]], "");
+    assert_eq!(apply(&mut doc, None).unwrap().paths_removed, 1);
+}
+
+/// A line width set between the path and its `S` still applies to that stroke, so the stroke is
+/// tested at the width it is painted with; the width itself stays, the path goes.
+#[test]
+fn a_width_set_between_the_path_and_its_stroke_does_not_hide_it_from_the_test() {
+    let mut doc = one_page(b"10 60 m 100 60 l 12 w S 5 5 m 9 9 l S", "", vec![]);
+    mark(&mut doc, 0, &[[40.0, 45.0, 60.0, 55.0]], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!(r.paths_removed, 1, "{r:?}");
+    let c = content(&doc, 0);
+    assert!(!c.contains("10 60 m") && !c.contains("100 60 l"), "the wide line reaches the mark: {c}");
+    assert!(c.contains("12 w"), "the width stays: {c}");
+    assert!(c.contains("5 5 m"), "the line elsewhere stays: {c}");
+}
+
+/// The renderer takes a line-state operator's operand from the end: `1 12 w` strokes 12 points wide,
+/// so the stroke is tested at that width.
+#[test]
+fn a_surplus_operand_before_the_line_width_does_not_hide_the_stroke() {
+    let mut doc = one_page(b"1 12 w 10 60 m 100 60 l S", "", vec![]);
+    mark(&mut doc, 0, &[[40.0, 45.0, 60.0, 55.0]], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!(r.paths_removed, 1, "{r:?}");
+    assert!(!content(&doc, 0).contains("100 60 l"));
 }
 
 /// One page drawing `SECRET` in the `/OC /L` block, with layer 7 0 R in the default

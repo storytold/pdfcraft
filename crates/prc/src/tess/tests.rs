@@ -529,10 +529,279 @@ fn a_compressed_mesh_is_read_to_its_end() {
             let schema = Schema::default();
             let mut ctx = Ctx::new(BitReader::new(&bytes), &schema, v);
             let t = ctx.file_structure_tessellation().unwrap();
-            assert!(matches!(t[..], [Tessellation::Compressed { triangles: 1, .. }, Tessellation::Mesh(_)]), "full={full} v={v}: {t:?}");
             assert_eq!(ctx.r.position(), w.len(), "full={full} v={v}");
+            assert!(matches!(t[1], Tessellation::Mesh(_)), "full={full} v={v}: {t:?}");
+            // Stored normals and the one-status-per-triangle form are not rebuilt; the
+            // recalculated 3T seed is.
+            if full || !three_t {
+                assert!(matches!(t[0], Tessellation::Compressed { triangles: 1, .. }), "full={full} v={v}: {t:?}");
+            } else {
+                let m = mesh(&t[0]);
+                assert_eq!((m.triangles.as_slice(), m.faces.as_slice()), ([[0, 1, 2]].as_slice(), std::slice::from_ref(&(0..1))), "v={v}");
+                assert!(m.normals_recalculated && m.normals.is_empty());
+                assert_eq!(m.triangle_styles, [TriangleStyle { style: 1, behaviour: 0 }]);
+                // Each point component is 1, in units of the 0.001 tolerance, from the origin 0.
+                let want = [0.001, 0.002, 0.0025];
+                assert!(m.positions.iter().zip(want).all(|(p, c)| p.iter().all(|x| (x - c).abs() < 1e-12)), "{:?}", m.positions);
+            }
         }
     }
+}
+
+/// A `TESS_3D_Compressed` (authoring version 8137, origin 0) whose normals are recalculated,
+/// with `points` in units of `tolerance`, the 3T `status`, each triangle's face, the slots'
+/// reference flags, the references and one line attribute per face; every other optional
+/// branch absent.
+struct Packed<'a> {
+    tolerance: f64,
+    points: &'a [i64],
+    status: &'a [u8],
+    face_of: &'a [u32],
+    /// The width of each face index; 8 unless an index needs more.
+    face_bits: u32,
+    is_ref: &'a [bool],
+    refs: &'a [u32],
+    line_attributes: &'a [u16],
+}
+
+/// A `CompressedIndiceArray` [WD 11.9] of `bits`-wide deltas, `implicit` with no compressed
+/// flag.
+fn indices(w: &mut W, v: &[u32], implicit: bool, bits: u32) {
+    if !implicit {
+        w.bit(false);
+    }
+    w.uint(u32::try_from(v.len()).unwrap());
+    for i in 0..v.len() {
+        w.put(if i == 0 { u64::from(bits) } else { 0 }, 8);
+    }
+    let mut prev = 0i64;
+    for &x in v {
+        let d = i64::from(x) - prev;
+        w.bit(d < 0).put(d.unsigned_abs(), bits - 1);
+        prev = i64::from(x);
+    }
+}
+
+fn packed(w: &mut W, c: &Packed<'_>) {
+    w.uint(173).bit(false).bit(true).double(c.tolerance);
+    w.put(0, 32).put(0, 32).put(0, 32);
+    // point_array: 8-bit sign-magnitude integers.
+    w.bit(false).uint(u32::try_from(c.points.len()).unwrap());
+    for _ in c.points {
+        w.put(8, 8);
+    }
+    for &p in c.points {
+        w.bit(p < 0).put(p.unsigned_abs(), 7);
+    }
+    w.bit(false).uint(u32::try_from(c.status.len()).unwrap());
+    for &e in c.status {
+        w.put(u64::from(e), 8);
+    }
+    indices(w, c.face_of, false, c.face_bits);
+    w.uint(u32::try_from(c.is_ref.len()).unwrap());
+    for &b in c.is_ref {
+        w.bit(b);
+    }
+    assert!(c.refs.len() <= 3, "more than three references are Huffman-coded");
+    indices(w, c.refs, true, 8);
+    // must_recalculate_normals, normal_is_reversed, crease angle, flags; no colours, no
+    // multiple line attributes.
+    w.bit(true);
+    for _ in c.face_of {
+        w.bit(false);
+    }
+    w.double(0.5).put(0, 8).bit(false).bit(false);
+    w.bit(false).uint(u32::try_from(c.line_attributes.len()).unwrap());
+    for &a in c.line_attributes {
+        w.put(u64::from(a & 0xff), 8).put(u64::from(a >> 8), 8);
+    }
+    // No texture, no behaviours.
+    w.bit(true).bit(false);
+}
+
+/// A double-sided panel of two faces packed in walk order, its fold apex and its last two
+/// apexes references: rebuilt into a mesh grouped by face, each triangle styled by its face.
+#[test]
+fn a_recalculated_compressed_mesh_is_rebuilt_by_face() {
+    let mut b = W::default();
+    packed(
+        &mut b,
+        &Packed {
+            tolerance: 0.5,
+            points: &[0, 0, 0, 4, 0, 0, -2, 4, 0, 1, 3, 0],
+            status: &[3, 3, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            face_of: &[1, 0, 1, 0],
+            face_bits: 8,
+            is_ref: &[false, false, false, false, true, true],
+            refs: &[0, 1],
+            line_attributes: &[3, 0],
+        },
+    );
+    let w = section(1, &b);
+    let bytes = w.bytes();
+    let schema = Schema::default();
+    let mut ctx = Ctx::new(BitReader::new(&bytes), &schema, 8137);
+    let t = ctx.file_structure_tessellation().unwrap();
+    assert_eq!(ctx.r.position(), w.len());
+    let m = mesh(&t[0]);
+    // Walk order [0 1 2] [2 1 3] [2 3 0] [0 3 1]; faces 1, 0, 1, 0.
+    assert_eq!(m.triangles, [[2, 1, 3], [0, 3, 1], [0, 1, 2], [2, 3, 0]]);
+    assert_eq!(m.faces, [0..2, 2..4]);
+    assert_eq!(m.positions[..3], [[0.0, 0.0, 0.0], [2.0, 0.0, 0.0], [0.0, 2.0, 0.0]]);
+    let style = |style| TriangleStyle { style, behaviour: 0 };
+    assert_eq!(m.triangle_styles, [style(3), style(3), style(0), style(0)]);
+    assert!(m.normals_recalculated);
+}
+
+/// Arrays the walk cannot fit stay a [`Tessellation::Compressed`], read to their end.
+#[test]
+fn a_compressed_mesh_that_does_not_fit_is_left_compressed() {
+    let mut b = W::default();
+    // One point too many for a lone seed.
+    let c = Packed {
+        tolerance: 0.5,
+        points: &[0; 12],
+        status: &[0, 0, 0],
+        face_of: &[0],
+        face_bits: 8,
+        is_ref: &[false; 3],
+        refs: &[],
+        line_attributes: &[0],
+    };
+    packed(&mut b, &c);
+    let w = section(1, &b);
+    let t = decode(&w, &Schema::default(), 8137).unwrap();
+    assert!(matches!(t[..], [Tessellation::Compressed { triangles: 1, .. }]), "{t:?}");
+}
+
+/// A face index near `u32::MAX` claims four billion faces: once the triangles rebuild, they are
+/// charged before any face range is made, so the decode stops at the element allowance instead
+/// of allocating them.
+#[test]
+fn a_huge_face_index_is_charged_not_allocated() {
+    let mut b = W::default();
+    let c = Packed {
+        tolerance: 0.5,
+        points: &[0; 9],
+        status: &[0, 0, 0],
+        face_of: &[u32::MAX - 1],
+        face_bits: 33,
+        is_ref: &[false; 3],
+        refs: &[],
+        line_attributes: &[],
+    };
+    packed(&mut b, &c);
+    let r = decode(&section(1, &b), &Schema::default(), 8137);
+    assert!(matches!(r, Err(PrcError::TooManyElements { .. })), "{r:?}");
+}
+
+/// The same huge face index on arrays the walk cannot fit charges nothing for triangles or
+/// faces: the tessellation stays compressed and the file reads on.
+#[test]
+fn arrays_that_do_not_fit_spend_no_triangles_or_faces() {
+    let mut b = W::default();
+    let c = Packed {
+        tolerance: 0.5,
+        points: &[0; 12],
+        status: &[0, 0, 0],
+        face_of: &[u32::MAX - 1],
+        face_bits: 33,
+        is_ref: &[false; 3],
+        refs: &[],
+        line_attributes: &[],
+    };
+    packed(&mut b, &c);
+    let t = decode(&section(1, &b), &Schema::default(), 8137).unwrap();
+    assert!(matches!(t[..], [Tessellation::Compressed { triangles: 1, .. }]), "{t:?}");
+}
+
+/// The two-face panel of [`a_recalculated_compressed_mesh_is_rebuilt_by_face`], its second
+/// reference `last_ref`.
+fn panel(last_ref: u32) -> W {
+    let mut b = W::default();
+    packed(
+        &mut b,
+        &Packed {
+            tolerance: 0.5,
+            points: &[0, 0, 0, 4, 0, 0, -2, 4, 0, 1, 3, 0],
+            status: &[3, 3, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            face_of: &[1, 0, 1, 0],
+            face_bits: 8,
+            is_ref: &[false, false, false, false, true, true],
+            refs: &[0, last_ref],
+            line_attributes: &[3, 0],
+        },
+    );
+    section(1, &b)
+}
+
+/// A rebuilt mesh is charged its triangles, each with its style, and each face range at its
+/// size; the same arrays left compressed (a reference to a vertex not yet made) are charged
+/// neither.
+#[test]
+fn a_rebuilt_compressed_mesh_is_charged_its_triangles_and_faces() {
+    let fits = panel(1);
+    let t = decode(&fits, &Schema::default(), 8137).unwrap();
+    assert_eq!(mesh(&t[0]).triangles.len(), 4);
+    let left = panel(9);
+    let t = decode(&left, &Schema::default(), 8137).unwrap();
+    assert!(matches!(t[..], [Tessellation::Compressed { triangles: 4, .. }]), "{t:?}");
+    assert_eq!(spent(&fits) - spent(&left), 4 * triangle_elements(false, 0, true) + 2 * RANGE_ELEMENTS);
+    assert_eq!(triangle_elements(false, 0, true), 3);
+    #[cfg(target_pointer_width = "64")]
+    assert_eq!(RANGE_ELEMENTS, 2);
+}
+
+/// A rebuild whose walk would outgrow the allowance left keeps the arrays compressed, even
+/// when the rebuilt mesh alone would have fit, and the stream reads on.
+#[test]
+fn a_compressed_rebuild_is_bounded_by_the_allowance_left() {
+    let fits = panel(1);
+    let bytes = fits.bytes();
+    let schema = Schema::default();
+    let read = |n| Ctx::new(BitReader::with_elements(&bytes, n), &schema, 8137).file_structure_tessellation();
+    let arrays = spent(&panel(9));
+    let mesh_alone = spent(&fits) - arrays;
+    let t = read(arrays + mesh_alone).unwrap();
+    assert!(matches!(t[..], [Tessellation::Compressed { triangles: 4, .. }]), "{t:?}");
+    assert!(matches!(read(crate::MAX_DECODED_ELEMENTS).unwrap()[..], [Tessellation::Mesh(_)]));
+}
+
+/// A face's nonzero behaviour styles its triangles even when its line attribute is 0 (the
+/// owner's graphics); all zero, the faces give no styles.
+#[test]
+fn a_compressed_face_behaviour_alone_styles_its_triangles() {
+    let attributes = |behaviours: Vec<i32>| FaceAttributes { multi: Vec::new(), line_attributes: vec![0], behaviours };
+    let a = attributes(vec![0x30]);
+    assert!(a.styled(1));
+    assert_eq!(a.styles(&[0, 0], 1), [TriangleStyle { style: 0, behaviour: 0x30 }; 2]);
+    assert!(!attributes(vec![0]).styled(1));
+    assert!(!attributes(Vec::new()).styled(1));
+}
+
+fn rebuilt(triangles: usize) -> compressed::Rebuilt {
+    compressed::Rebuilt { positions: vec![[0.0; 3]; 3], triangles: (0..triangles).map(|i| [0, 1, u32::try_from(i).unwrap()]).collect() }
+}
+
+/// Triangles are grouped by face in walk order within each, faces no triangle names (between
+/// and after) get empty ranges, and each style moves with its triangle.
+#[test]
+fn rebuilt_triangles_are_grouped_by_face_with_their_styles() {
+    let face_of = [2, 0, 2, 1, 0];
+    let m = by_face(rebuilt(5), &face_of, 5, &[]);
+    let apex: Vec<u32> = m.triangles.iter().map(|t| t[2]).collect();
+    assert_eq!(apex, [1, 4, 3, 0, 2]);
+    assert_eq!(m.faces, [0..2, 2..3, 3..5, 5..5, 5..5]);
+    assert!(m.triangle_styles.is_empty());
+    assert!(m.normals_recalculated);
+
+    let style = |style| TriangleStyle { style, behaviour: u16::try_from(style).unwrap() };
+    let styles: Vec<TriangleStyle> = face_of.iter().map(|&f| style(f + 1)).collect();
+    let m = by_face(rebuilt(5), &[2, 0, 2, 3, 0], 4, &styles);
+    let apex: Vec<u32> = m.triangles.iter().map(|t| t[2]).collect();
+    assert_eq!(apex, [1, 4, 0, 2, 3]);
+    assert_eq!(m.faces, [0..2, 2..2, 2..4, 4..5]);
+    assert_eq!(m.triangle_styles, [style(1), style(1), style(3), style(3), style(2)]);
 }
 
 #[test]

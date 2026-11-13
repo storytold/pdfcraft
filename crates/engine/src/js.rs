@@ -154,7 +154,7 @@ impl JsOutput {
     /// Adds what a field's own script produced: its alerts, console lines, errors and requests,
     /// except a request to print, show a side panel, open Save As, or open or save an attached
     /// file, which is noted on the console and dropped.
-    fn absorb(&mut self, o: &Outcome) {
+    pub(crate) fn absorb(&mut self, o: &Outcome) {
         self.alert(o.alerts.iter().cloned());
         self.say(o.console.iter().cloned());
         // A field's own scripts (keystroke, format, validate, calculate) run unasked: only a
@@ -172,6 +172,9 @@ impl JsOutput {
                 Request::OpenAttachment { name, .. } => {
                     notes.push(format!("A field script asked to open the attached file {name}; only a button may open an attached file"))
                 }
+                Request::OpenDoc(path) => notes.push(format!(
+                    "A field script asked to open the document {path}; only a button, a link or the console may open another document"
+                )),
                 r => self.requests.push(r.clone()),
             }
         }
@@ -187,7 +190,8 @@ impl JsOutput {
         }
     }
 
-    pub(crate) fn append(&mut self, other: JsOutput) {
+    /// Adds what other scripts produced, telling a document script's error once.
+    pub fn append(&mut self, other: JsOutput) {
         self.alert(other.alerts);
         self.say(other.console);
         self.requests.extend(other.requests);
@@ -535,6 +539,7 @@ impl JsRunner {
         let mut current = Self::new(cos, &self.doc.file_name, self.doc.runtime_highlight);
         current.doc.zoom = self.doc.zoom;
         current.doc.page = self.doc.page;
+        current.doc.layers = std::mem::take(&mut self.doc.layers);
         self.doc = current.doc;
         self.doc_scripts = current.doc_scripts;
         self.calculations = None;
@@ -564,6 +569,7 @@ impl JsRunner {
             runtime_highlight: highlight,
             icon_epoch: 0,
             icon_versions: Default::default(),
+            layers: Vec::new(),
         };
         // Once XFA owns the form, the PDF container's scripts belong to its fallback view.
         // Keep them in the file and in Document JavaScripts, but do not initialize an
@@ -593,7 +599,7 @@ impl JsRunner {
 }
 
 /// Index calculation sources by PDF object identity, retaining their matching snapshot positions.
-fn calculation_scripts(cos: &pdfcraft_cos::Document, fields: &[Field]) -> Vec<(usize, String)> {
+pub(crate) fn calculation_scripts(cos: &pdfcraft_cos::Document, fields: &[Field]) -> Vec<(usize, String)> {
     #[cfg(test)]
     SNAPSHOT_WORK.with(|c| {
         let (g, p) = c.get();
@@ -664,6 +670,7 @@ impl Scripts for JsRunner {
             fields: states,
             doc_scripts: self.doc_scripts.clone(),
             calculations,
+            timer: None,
         };
         #[cfg(not(target_arch = "wasm32"))]
         let remaining = self.callback_time_left();
@@ -752,6 +759,7 @@ impl Scripts for JsRunner {
                 fields: states,
                 doc_scripts: self.doc_scripts.clone(),
                 calculations: calculations.clone(),
+                timer: None,
             };
             let remaining = self.callback_time_left();
             let outcome = if remaining.is_zero() {
@@ -1190,8 +1198,9 @@ impl Session {
         let mut runner = JsRunner::new(&cos, &doc.name, self.field_highlight);
         runner.doc.zoom = doc.js_zoom;
         runner.doc.page = doc.js_page;
+        runner.doc.layers = crate::live_scripts::js_layers(&doc.info);
         let fields = pdfcraft_forms::fields(&cos);
-        let states = std::sync::Arc::new(fields.iter().map(|f| field_state(&cos, f, &runner.doc)).collect::<Vec<_>>());
+        let states = std::sync::Arc::new(fields.iter().map(|f| crate::live_scripts::live_state(doc, &cos, f, &runner.doc)).collect::<Vec<_>>());
         let event = match target {
             Some(t) => pdfcraft_js::Event { will_commit: false, target_id, ..pdfcraft_js::Event::field(event_name.unwrap_or("Mouse Up"), t, "") },
             None => pdfcraft_js::Event::doc(event_name.unwrap_or("Console")),
@@ -1206,6 +1215,7 @@ impl Session {
                 fields: states.clone(),
                 doc_scripts: runner.doc_scripts,
                 calculations,
+                timer: None,
             },
             answers,
         );
@@ -1218,7 +1228,13 @@ impl Session {
     }
 
     /// Convert the worker snapshot delta and reset requests into permission-checked atomic document edits.
-    fn apply_script_outcome(&mut self, id: DocId, states: &[pdfcraft_js::FieldState], mut o: Outcome, opening: bool) -> Result<Outcome, EditError> {
+    pub(crate) fn apply_script_outcome(
+        &mut self,
+        id: DocId,
+        states: &[pdfcraft_js::FieldState],
+        mut o: Outcome,
+        opening: bool,
+    ) -> Result<Outcome, EditError> {
         if o.execution_refused {
             o.changed.clear();
             o.requests.clear();
@@ -1281,12 +1297,15 @@ impl Session {
             }
         }
         let changes = changes(&baseline, &o.changed, &o.formatted);
+        let written: Vec<String> = changes.iter().filter(|c| c.display.is_some() || c.icon.is_some()).map(|c| c.name.clone()).collect();
         if !changes.is_empty() {
             edits.push(Edit::ApplyScriptChanges { changes });
         }
         if !edits.is_empty() {
             self.apply(id, Edit::Batch { label: "Run JavaScript".into(), edits })?;
         }
+        // The timers the script left, the layers it turned, and how fields show (#169).
+        self.after_script(id, &o, &written);
         Ok(o)
     }
 }
@@ -1626,9 +1645,122 @@ mod caption_tests {
     }
 }
 
+/// A failed link action commits nothing: its field changes, requests and layer changes are
+/// dropped (the realm put its timers back), its alerts, console lines and error kept (#2081).
+fn drop_failed_link_effects(o: &mut Outcome) {
+    if o.error.is_some() {
+        o.changed.clear();
+        o.formatted.clear();
+        o.requests.clear();
+        o.layers.clear();
+    }
+}
+
+impl Session {
+    /// A read-only document takes none of a link's field changes or resets, but its other
+    /// requests (go to a page, say) still apply: the changes are dropped and, if there were any,
+    /// the outcome says why, as an edit there would (#2081).
+    fn keep_read_only_link_requests(&self, id: DocId, states: &[pdfcraft_js::FieldState], o: &mut Outcome) {
+        let Some(doc) = self.get(id).filter(|d| d.editor.is_none()) else { return };
+        let resets = o.requests.iter().any(|r| matches!(r, Request::Reset(_)));
+        let edited = resets || !changes(states, &o.changed, &o.formatted).is_empty();
+        o.changed.clear();
+        o.formatted.clear();
+        o.requests.retain(|r| !matches!(r, Request::Reset(_)));
+        if edited && o.error.is_none() {
+            o.error = Some(EditError::ReadOnly(doc.read_only_reason.clone().unwrap_or_default()).to_string());
+        }
+    }
+
+    /// The job for link `index` (its raw annotation index) on page `page` (both 0-based) when
+    /// its action is JavaScript: event "Link"/"Mouse Up" with the document as its target, on
+    /// the link's page.
+    fn link_job(
+        &self,
+        id: DocId,
+        page: usize,
+        index: usize,
+    ) -> Result<(pdfcraft_js::session::Job, std::sync::Arc<Vec<pdfcraft_js::FieldState>>), EditError> {
+        if self.js_off {
+            return Err(EditError::Invalid("JavaScript is turned off (Preferences ▸ JavaScript)".into()));
+        }
+        let doc = self.get(id).ok_or(EditError::NoDocument)?;
+        let link = doc.info.links.iter().find(|l| l.page == page && l.index == index).ok_or_else(|| EditError::Invalid("link not found".into()))?;
+        let pdfcraft_render::LinkTarget::JavaScript(script) = &link.target else {
+            return Err(EditError::Invalid("the link has no JavaScript action".into()));
+        };
+        // A read-only document's links run too (#2081): a script that changes a field then fails
+        // to commit, as an edit there does, while its requests (go to a page, say) still apply.
+        let cos = match &doc.editor {
+            Some(editor) => editor.cos.clone(),
+            None => pdfcraft_cos::Document::open_with_password(doc.bytes.clone(), doc.password.as_deref())
+                .map_err(|e| EditError::Invalid(e.to_string()))?,
+        };
+        let cos = &cos;
+        let mut runner = JsRunner::new(cos, &doc.name, self.field_highlight);
+        runner.doc.zoom = doc.js_zoom;
+        runner.doc.page = page;
+        // As a button's script: the document's layers, and the fields as page actions and timers
+        // show them (#169).
+        runner.doc.layers = crate::live_scripts::js_layers(&doc.info);
+        let fields = pdfcraft_forms::fields(cos);
+        let states = std::sync::Arc::new(fields.iter().map(|f| crate::live_scripts::live_state(doc, cos, f, &runner.doc)).collect::<Vec<_>>());
+        let job = pdfcraft_js::session::Job {
+            script: script.clone(),
+            event: pdfcraft_js::Event { kind: "Link".into(), ..pdfcraft_js::Event::doc("Mouse Up") },
+            doc: runner.doc,
+            fields: states.clone(),
+            doc_scripts: runner.doc_scripts,
+            calculations: calculation_scripts(cos, &fields),
+            timer: None,
+        };
+        Ok((job, states))
+    }
+
+    /// Run link `index` on page `page` (0-based; the index is the link's place in the page's
+    /// annotations) in the document's script realm, answering its prompts from `answers` in
+    /// order (none: cancelled). Field changes and `resetForm` are applied as one undoable step,
+    /// unless the script failed: then nothing is committed and its requests are dropped. In a
+    /// read-only document the requests apply and the changes are refused.
+    pub fn run_link_javascript(&mut self, id: DocId, page: usize, index: usize, answers: &[Option<String>]) -> Result<Outcome, EditError> {
+        let (job, states) = self.link_job(id, page, index)?;
+        let runtime = self.get(id).ok_or(EditError::NoDocument)?.js_runtime.clone();
+        let mut o = runtime.lock().map_err(|_| EditError::Invalid("document script runtime is unavailable".into()))?.run(job, answers);
+        drop_failed_link_effects(&mut o);
+        self.keep_read_only_link_requests(id, &states, &mut o);
+        let discard = o.execution_refused && !o.realm_untouched;
+        let result = self.apply_script_outcome(id, &states, o, false);
+        if discard || result.is_err() {
+            self.invalidate_javascript(id);
+        }
+        result
+    }
+}
+
+/// The local file `app.openDoc` names, resolved as a link to another PDF is
+/// ([`crate::resolve_remote_document_path`], relative to the document `source`'s folder). No
+/// file is touched. On Windows, Acrobat's device-independent `/C/dir/file.pdf` (and `/C:/…`)
+/// reads as `C:/dir/file.pdf` (#2081).
+pub fn resolve_javascript_document_path(source: Option<&std::path::Path>, raw: &str) -> Result<std::path::PathBuf, crate::RemoteDocumentPathError> {
+    #[cfg(windows)]
+    let normalized = {
+        let b = raw.as_bytes();
+        match (b.first(), b.get(1), b.get(2), b.get(3)) {
+            (Some(b'/'), Some(d), Some(b'/'), _) if d.is_ascii_alphabetic() => raw.get(2..).map(|rest| format!("{}:{rest}", char::from(*d))),
+            (Some(b'/'), Some(d), Some(b':'), Some(b'/')) if d.is_ascii_alphabetic() => raw.get(1..).map(str::to_string),
+            _ => None,
+        }
+    };
+    #[cfg(windows)]
+    let raw = normalized.as_deref().unwrap_or(raw);
+    crate::resolve_remote_document_path(source, raw)
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 pub struct PendingScript {
     pub id: DocId,
+    /// A link action's: a failed one commits nothing.
+    link: bool,
     generation: u64,
     runtime: Runtime,
     states: std::sync::Arc<Vec<pdfcraft_js::FieldState>>,
@@ -1660,9 +1792,10 @@ impl Session {
         let mut runner = JsRunner::new(cos, &doc.name, self.field_highlight);
         runner.doc.zoom = doc.js_zoom;
         runner.doc.page = doc.js_page;
+        runner.doc.layers = crate::live_scripts::js_layers(&doc.info);
         let fields = pdfcraft_forms::fields(cos);
         validate_script_target(target, target_id, &fields)?;
-        let states = std::sync::Arc::new(fields.iter().map(|f| field_state(cos, f, &runner.doc)).collect::<Vec<_>>());
+        let states = std::sync::Arc::new(fields.iter().map(|f| crate::live_scripts::live_state(doc, cos, f, &runner.doc)).collect::<Vec<_>>());
         let job = pdfcraft_js::session::Job {
             script: script.into(),
             event: target.map_or_else(
@@ -1673,10 +1806,20 @@ impl Session {
             fields: states.clone(),
             doc_scripts: runner.doc_scripts,
             calculations: calculation_scripts(cos, &fields),
+            timer: None,
         };
         let receiver =
             doc.js_runtime.lock().map_err(|_| EditError::Invalid("script runtime unavailable".into()))?.start(job).map_err(EditError::Invalid)?;
-        Ok(PendingScript { id, generation: doc.generation, runtime: doc.js_runtime.clone(), states, receiver })
+        Ok(PendingScript { id, link: false, generation: doc.generation, runtime: doc.js_runtime.clone(), states, receiver })
+    }
+    /// Start link `index` on page `page` as [`Session::run_link_javascript`] runs it, without
+    /// blocking on its prompts; [`Session::finish_javascript`] commits nothing if it failed.
+    pub fn start_link_javascript(&mut self, id: DocId, page: usize, index: usize) -> Result<PendingScript, EditError> {
+        let (job, states) = self.link_job(id, page, index)?;
+        let doc = self.get(id).ok_or(EditError::NoDocument)?;
+        let receiver =
+            doc.js_runtime.lock().map_err(|_| EditError::Invalid("script runtime unavailable".into()))?.start(job).map_err(EditError::Invalid)?;
+        Ok(PendingScript { id, link: true, generation: doc.generation, runtime: doc.js_runtime.clone(), states, receiver })
     }
     /// Discard only the captured runtime, preserving a newer realm created by an intervening edit.
     pub fn discard_javascript(&mut self, p: &PendingScript) {
@@ -1698,12 +1841,18 @@ impl Session {
     }
 
     /// Apply a current worker result, or discard it and reset the realm when the document changed.
-    pub fn finish_javascript(&mut self, p: PendingScript, out: Outcome) -> Result<Outcome, EditError> {
+    pub fn finish_javascript(&mut self, p: PendingScript, mut out: Outcome) -> Result<Outcome, EditError> {
+        if p.link {
+            drop_failed_link_effects(&mut out);
+        }
         if !self.script_pending_current(&p) {
             self.discard_javascript(&p);
             return Err(EditError::Invalid("document changed while the script was running".into()));
         }
         p.runtime.lock().map_err(|_| EditError::Invalid("script runtime unavailable".into()))?.acknowledge_completion();
+        if p.link {
+            self.keep_read_only_link_requests(p.id, &p.states, &mut out);
+        }
         let discard = out.execution_refused && !out.realm_untouched;
         let result = self.apply_script_outcome(p.id, &p.states, out, false);
         if discard || result.is_err() {
@@ -2008,6 +2157,7 @@ mod widget_budget_review_tests {
             rotation: 0,
             caption: None,
             mouse_up_script: None,
+            mouse_down: false,
             list: None,
             round: false,
         };

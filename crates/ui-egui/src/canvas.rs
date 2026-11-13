@@ -1402,6 +1402,8 @@ struct PageEnv<'a> {
 struct PageOut {
     canvas_action: Option<comments::CanvasAction>,
     clicked_link: Option<pdfcraft_render::Link>,
+    /// The JavaScript link clicked, by page and annotation index (0-based), to run its action.
+    javascript_link: Option<(usize, usize)>,
     comment_notice: Option<&'static str>,
     copy_comments: bool,
     copy_selected: bool,
@@ -1964,6 +1966,7 @@ fn draw_pages(
     let PageOut {
         mut canvas_action,
         clicked_link,
+        javascript_link,
         copy_selected,
         mut field_menu,
         field_placed,
@@ -2214,6 +2217,7 @@ fn draw_pages(
     *out = PageOut {
         canvas_action,
         clicked_link,
+        javascript_link,
         comment_notice,
         copy_comments,
         copy_selected,
@@ -2985,6 +2989,8 @@ fn follow_link_action(app: &mut PdfCraftApp, index: usize, target: LinkTarget, r
         },
         LinkTarget::Hide { fields, hide } => run_button(app, index, "", NO_WIDGET, B::ShowHide { fields, hide }),
         LinkTarget::ResetForm { fields, exclude } => run_button(app, index, "", NO_WIDGET, B::Reset { fields, exclude }),
+        // Run by `PdfCraftApp::run_link_script`, which needs the link's page and index.
+        LinkTarget::JavaScript(_) => {}
         LinkTarget::Other(s) => app.notify_fmt("This PDF uses the unsupported {s} action.", &[("s", &s)]),
     }
 }
@@ -3528,6 +3534,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let PageOut {
         canvas_action,
         clicked_link,
+        javascript_link,
         comment_notice,
         copy_comments,
         mut copy_selected,
@@ -3634,6 +3641,10 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     }
     schedule_presentation_turn(ui, view, present, clicked_link.is_some() || on_object && present.is_some());
     let remote_open = follow_link(app, index, clicked_link);
+    if let Some((page, link)) = javascript_link {
+        let id = app.views[index].id;
+        app.run_link_script(id, page, link);
+    }
     if tool == QuickTool::Crop && cropped {
         tool = QuickTool::Select;
     }

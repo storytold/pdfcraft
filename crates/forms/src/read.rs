@@ -85,7 +85,7 @@ pub(crate) fn action_fields(doc: &Document, o: &Object) -> Vec<String> {
 
 /// The fully qualified name of the field that `r` (a field or one of its widgets) belongs to,
 /// from the partial names (`/T`) up its `/Parent` chain.
-fn qualified_name(doc: &Document, r: ObjRef) -> Option<String> {
+pub(crate) fn qualified_name(doc: &Document, r: ObjRef) -> Option<String> {
     let mut parts = Vec::new();
     let mut seen = std::collections::HashSet::new();
     let mut cur = Some(r);
@@ -407,26 +407,53 @@ pub struct Fields {
 }
 
 /// Read all terminal fields and the page-only adoption count in one enumeration.
+///
+/// The last reading on this thread is kept with the state of the document it read
+/// ([`pdfcraft_cos::ReadState`], which every change to the document replaces), and a document
+/// that still reads as that state gets a copy of it instead of a new walk. One form edit reads
+/// the fields in several steps (filling, recalculating, the XFA data, the view), most of them
+/// with nothing changed since the step before: on a form with a thousand fields each walk takes
+/// tens of milliseconds.
 pub fn fields_with_adopted(doc: &Document) -> Fields {
+    let kept = LAST_READING
+        .try_with(|last| match last.try_borrow().as_deref() {
+            Ok(Some((state, fields))) if state.matches(doc) => Some(fields.clone()),
+            _ => None,
+        })
+        .ok()
+        .flatten();
+    if let Some(fields) = kept {
+        return fields;
+    }
     let (items, adopted_page_fields) = enumerate(doc);
-    Fields { items, adopted_page_fields }
+    let fields = Fields { items, adopted_page_fields };
+    // Not kept (the thread is ending, or the slot is in use) costs only a later walk.
+    let _ = LAST_READING.try_with(|last| {
+        if let Ok(mut last) = last.try_borrow_mut() {
+            *last = Some((doc.read_state(), fields.clone()));
+        }
+    });
+    fields
 }
 
-#[cfg(test)]
 thread_local! {
-    /// Whole-form readings ([`enumerate`]) on this thread.
+    /// The last [`fields_with_adopted`] on this thread, with the state of the document it read.
+    /// One entry: one form's fields, and the objects that document had changed when it was read.
+    static LAST_READING: std::cell::RefCell<Option<(pdfcraft_cos::ReadState, Fields)>> = const { std::cell::RefCell::new(None) };
+    /// Whole-form walks ([`enumerate`]) on this thread.
     static FORM_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// How many times this thread has read the whole form.
-#[cfg(test)]
-pub(crate) fn form_reads() -> usize {
-    FORM_READS.with(std::cell::Cell::get)
+/// How many times this thread has walked a whole form: [`fields`] and the readings like it, but
+/// not one answered from the last reading. Per thread, so tests running in parallel don't count
+/// each other's; for tests that check how often an edit reads the form.
+#[doc(hidden)]
+pub fn form_reads_on_this_thread() -> usize {
+    FORM_READS.try_with(std::cell::Cell::get).unwrap_or(0)
 }
 
 pub(crate) fn enumerate(doc: &Document) -> (Vec<Field>, usize) {
-    #[cfg(test)]
-    FORM_READS.with(|n| n.set(n.get() + 1));
+    let _ = FORM_READS.try_with(|n| n.set(n.get().saturating_add(1)));
     let af = acroform(doc);
     let mut page_of = std::collections::HashMap::new();
     let mut annot_index = std::collections::HashMap::new();
@@ -733,6 +760,7 @@ fn walk(
                 } else {
                     None
                 },
+                mouse_down: wd.get(b"AA").map(|a| doc.resolve(a)).as_deref().and_then(Object::as_dict).is_some_and(|aa| aa.contains(b"D")),
                 list: (kind == FieldKind::List).then(|| appearance::list_rows_of(doc, inh.da.as_deref().unwrap_or("/Helv 0 Tf 0 g"), Some(d), wd)),
                 round: kind == FieldKind::Radio || (kind == FieldKind::CheckBox && appearance::is_round(doc, wd)),
             })
