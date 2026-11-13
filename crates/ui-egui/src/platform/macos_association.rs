@@ -41,7 +41,8 @@ impl OpeningMetadata {
 
 /// Read a last-component-symlink-safe attribute with a strict allocation cap.
 fn read_attribute(path: &Path, name: &str) -> io::Result<Option<Vec<u8>>> {
-    read_attribute_with(|buffer| rustix::fs::lgetxattr(path, name, buffer))
+    // An empty buffer asks for the size: rustix 1.1.6 answers it with 0 unless asked with the query (#7050).
+    read_attribute_with(|buffer| if buffer.is_empty() { rustix::fs::lgetxattr_query(path, name) } else { rustix::fs::lgetxattr(path, name, buffer) })
 }
 
 /// Probe the length before allocating. A concurrently grown value fails safely; unreadable
@@ -290,7 +291,8 @@ mod tests {
         assert!(OpeningMetadata::read(&file).is_err());
         crate::editing::write_atomically(file.to_str().unwrap(), b"new PDF").unwrap();
         assert_eq!(std::fs::read(&file).unwrap(), b"new PDF");
-        assert_eq!(xattr::get(&file, OPEN_WITH).unwrap().unwrap().len(), MAX_ATTRIBUTE + 1);
+        // The xattr crate reads a value past 4 KiB as empty under rustix 1.1.6: ask for the size (#7050).
+        assert_eq!(rustix::fs::getxattr_query(&file, OPEN_WITH).unwrap(), MAX_ATTRIBUTE + 1);
         assert_eq!(xattr::get(&file, QUARANTINE).unwrap(), Some(b"0082;1234;Preview;".to_vec()));
         std::fs::remove_dir_all(dir).unwrap();
     }

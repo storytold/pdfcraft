@@ -630,7 +630,8 @@ mod tests {
         app.views[0].select_pages(&[0]);
         app.apply_edit(pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 });
         assert!(app.save_active(SaveTarget::InPlace), "the document save uses upstream preservation limits");
-        assert_eq!(xattr::get(&path, "com.apple.LaunchServices.OpenWith").unwrap().unwrap().len(), 65537);
+        // The xattr crate reads a value past 4 KiB as empty under rustix 1.1.6: ask for the size (#7050).
+        assert_eq!(rustix::fs::getxattr_query(&path, "com.apple.LaunchServices.OpenWith").unwrap(), 65537);
         assert_eq!(xattr::get(&path, "com.apple.quarantine").unwrap(), Some(b"0082;1234;Preview;".to_vec()));
     }
 

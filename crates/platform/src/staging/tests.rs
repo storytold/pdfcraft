@@ -188,7 +188,7 @@ fn a_failed_flush_keeps_the_original_extended_attributes() {
 #[cfg(target_os = "macos")]
 #[test]
 fn a_growing_resource_fork_refuses_publication_and_keeps_original() {
-    use rustix::fs::{XattrFlags, fgetxattr, fsetxattr, getxattr, setxattr};
+    use rustix::fs::{XattrFlags, fgetxattr_query, fsetxattr, getxattr, setxattr};
     let dir = test_dir("xattrs-growing-fork");
     let target = dir.join("out.pdf");
     let name = "com.apple.ResourceFork";
@@ -197,10 +197,10 @@ fn a_growing_resource_fork_refuses_publication_and_keeps_original() {
         setxattr(&target, name, b"ABC", XattrFlags::empty()).unwrap();
         let source = std::fs::File::open(&target).unwrap();
         let result = write_atomically_with(&target, b"REPLACEMENT PDF", form, [23], |staged| {
-            let size = fgetxattr(&source, name, &mut [] as &mut [u8])?;
+            let size = fgetxattr_query(&source, name)?;
             let value = read_xattr_value(size, |buffer| {
                 if buffer.is_empty() {
-                    return Ok(fgetxattr(&source, name, buffer)?);
+                    return Ok(fgetxattr_query(&source, name)?);
                 }
                 // HFS can return the prefix that fits instead of ERANGE. APFS need not
                 // have that behaviour: model the kernel response, not a timing race.
@@ -249,7 +249,7 @@ fn attribute_reads_require_a_complete_value_and_stable_size() {
 #[cfg(target_os = "macos")]
 #[test]
 fn oversized_extended_attributes_refuse_the_save_without_replacing_the_target() {
-    use rustix::fs::{XattrFlags, getxattr, setxattr};
+    use rustix::fs::{XattrFlags, getxattr_query, setxattr};
     let dir = test_dir("xattrs-limit");
     let target = dir.join("out.pdf");
     std::fs::write(&target, b"OLD").unwrap();
@@ -267,7 +267,7 @@ fn oversized_extended_attributes_refuse_the_save_without_replacing_the_target() 
     assert!(e.to_string().contains("Save As"), "{e}");
     assert!(!flushed, "metadata failure must stop before flush and rename");
     assert_eq!(std::fs::read(&target).unwrap(), b"OLD");
-    let size = getxattr(&target, "com.apple.ResourceFork", &mut [] as &mut [u8]).unwrap();
+    let size = getxattr_query(&target, "com.apple.ResourceFork").unwrap();
     assert_eq!(size, fork.len());
     assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
     std::fs::remove_dir_all(dir).unwrap();

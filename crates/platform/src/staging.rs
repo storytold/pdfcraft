@@ -220,7 +220,7 @@ pub fn write_atomically_with(
 /// Provenance is managed by macOS for the new file, not writable document metadata.
 #[cfg(target_os = "macos")]
 fn preserve_target_xattrs(path: &Path, staged: &std::fs::File) -> std::io::Result<()> {
-    use rustix::fs::{Mode, OFlags, XattrFlags, fgetxattr, flistxattr, fsetxattr, open};
+    use rustix::fs::{Mode, OFlags, XattrFlags, fgetxattr, fgetxattr_query, flistxattr, fsetxattr, open};
     use rustix::io::Errno;
 
     // A new destination has nothing to retain. Replacing a symlink has always replaced the
@@ -257,12 +257,15 @@ fn preserve_target_xattrs(path: &Path, staged: &std::fs::File) -> std::io::Resul
             continue;
         }
         let name = std::ffi::CString::new(name).map_err(|_| std::io::Error::other("invalid extended attribute name"))?;
-        let size = fgetxattr(&source, &name, &mut [] as &mut [u8])?;
+        // rustix 1.1.6 answers an empty buffer with 0, not the size (#7050): ask with the query.
+        let size = fgetxattr_query(&source, &name)?;
         if size > MAX_VALUE_BYTES || size > MAX_TOTAL_BYTES.saturating_sub(total) {
             return Err(std::io::Error::other("extended attributes exceed the 16 MiB per-value or 64 MiB total limit"));
         }
         // Resource forks may return a prefix instead of ERANGE on growth; check the size again.
-        let value = read_xattr_value(size, |buffer| Ok(fgetxattr(&source, &name, buffer)?))?;
+        let value = read_xattr_value(size, |buffer| {
+            Ok(if buffer.is_empty() { fgetxattr_query(&source, &name)? } else { fgetxattr(&source, &name, buffer)? })
+        })?;
         fsetxattr(staged, &name, &value, XattrFlags::empty())?;
         total = total.saturating_add(value.len());
     }
