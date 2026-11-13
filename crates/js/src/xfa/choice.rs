@@ -5,7 +5,7 @@
 use boa_engine::{Context, JsObject, JsResult, JsString, JsValue};
 
 use super::host::{XHost, host};
-use super::props::{ItemList, is_choice_list, list_count, list_entries, prop_ref, saved_list, with_list_texts};
+use super::props::{ItemList, is_choice_list, list_count, list_entries, list_len, list_position, list_text, prop_ref, saved_list};
 use super::{arg, text};
 
 /// The most entries a script may give one list: more is left out.
@@ -16,16 +16,6 @@ fn which(h: &XHost, node: usize) -> (usize, Option<usize>) {
     let saved = saved_list(h, node);
     let shown = (0..list_count(h, node).max(1)).find(|i| Some(*i) != saved).unwrap_or(0);
     (shown, saved)
-}
-
-/// The text of entry `i` of a list, copying only that entry.
-fn text_at(h: &XHost, node: usize, list: usize, i: usize) -> Option<String> {
-    with_list_texts(h, node, list, |it| it.nth(i).map(str::to_string))
-}
-
-/// Where `t` is in a list.
-fn position(h: &XHost, node: usize, list: usize, t: &str) -> Option<usize> {
-    with_list_texts(h, node, list, |mut it| Iterator::position(&mut it, |s| s == t))
 }
 
 /// The entries the list shows and those it saves (the same when it saves what it shows), as texts.
@@ -79,7 +69,7 @@ fn state(h: &mut XHost, node: usize) -> (usize, Option<usize>) {
 
 /// `length`: how many entries a choice list shows; `None` for any other node.
 pub(crate) fn length(h: &XHost, node: usize) -> Option<usize> {
-    is_choice_list(h, node).then(|| with_list_texts(h, node, which(h, node).0, |it| it.count()))
+    is_choice_list(h, node).then(|| list_len(h, node, which(h, node).0))
 }
 
 /// `selectedIndex`: the entry the field's value is (by what it saves, else what it shows), or -1.
@@ -89,7 +79,7 @@ pub(crate) fn selected_index(h: &XHost, node: usize) -> Option<i64> {
     }
     let value = h.nodes.get(node).map(|n| n.value.clone()).unwrap_or_default();
     let (shown, saved) = which(h, node);
-    let at = position(h, node, saved.unwrap_or(shown), &value).or_else(|| position(h, node, shown, &value));
+    let at = list_position(h, node, saved.unwrap_or(shown), &value).or_else(|| list_position(h, node, shown, &value));
     Some(at.map_or(-1, |i| i as i64))
 }
 
@@ -110,7 +100,7 @@ fn item_at(r: &JsObject, args: &[JsValue], ctx: &mut Context, saved: bool) -> Js
     let h = host(ctx)?.borrow();
     let (shown, kept) = which(&h, node);
     let list = if saved { kept.unwrap_or(shown) } else { shown };
-    Ok(text_at(&h, node, list, i).map_or(JsValue::null(), |t| JsString::from(t.as_str()).into()))
+    Ok(list_text(&h, node, list, i).map_or(JsValue::null(), |t| JsString::from(t.as_str()).into()))
 }
 
 /// `getDisplayItem(i)`: what entry `i` shows, or `null`.
@@ -133,7 +123,7 @@ pub(crate) fn bound_item(_: &JsValue, args: &[JsValue], r: &JsObject, ctx: &mut 
     let t = text(&given, ctx)?;
     let h = host(ctx)?.borrow();
     let (shown, saved) = which(&h, node);
-    let bound = position(&h, node, shown, &t).and_then(|i| text_at(&h, node, saved.unwrap_or(shown), i)).unwrap_or(t);
+    let bound = list_position(&h, node, shown, &t).and_then(|i| list_text(&h, node, saved.unwrap_or(shown), i)).unwrap_or(t);
     Ok(JsString::from(bound.as_str()).into())
 }
 
@@ -197,7 +187,7 @@ pub(crate) fn delete_item(_: &JsValue, args: &[JsValue], r: &JsObject, ctx: &mut
     let i = index(&arg(args, 0), ctx)?;
     let mut h = host(ctx)?.borrow_mut();
     // an index past the end changes nothing, not even the run's copy of the lists
-    let len = with_list_texts(&h, node, which(&h, node).0, |it| it.count());
+    let len = list_len(&h, node, which(&h, node).0);
     if i.is_none_or(|i| i >= len) {
         return Ok(JsValue::from(false));
     }

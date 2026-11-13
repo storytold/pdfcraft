@@ -447,14 +447,78 @@ pub(crate) fn list_entries(h: &XHost, node: usize, list: usize) -> Vec<(String, 
         .unwrap_or_default()
 }
 
-/// The texts of [`list_entries`] without copying the list: `f` gets an iterator over them.
-pub(crate) fn with_list_texts<R>(h: &XHost, node: usize, list: usize, f: impl FnOnce(&mut dyn Iterator<Item = &str>) -> R) -> R {
-    if let Some(lists) = h.nodes.get(node).and_then(|n| n.items.as_ref()) {
-        let entries = lists.get(list).map_or(&[][..], |l| l.entries.as_slice());
-        return f(&mut entries.iter().map(|(_, t)| t.as_str()));
+/// A list's entries where they are kept, read in place.
+enum Entries<'a> {
+    State(&'a [(String, String)]),
+    Template(&'a [XfaProp]),
+}
+
+impl Entries<'_> {
+    fn len(&self) -> usize {
+        match self {
+            Entries::State(e) => e.len(),
+            Entries::Template(e) => e.len(),
+        }
     }
-    let children = template_prop(h, node, &join("", "items", list)).map_or(&[][..], |p| p.children.as_slice());
-    f(&mut children.iter().map(|c| c.text.as_deref().unwrap_or_default()))
+
+    /// Entry `i`'s tag and the text it has before any write.
+    fn get(&self, i: usize) -> Option<(&str, &str)> {
+        match self {
+            Entries::State(e) => e.get(i).map(|(tag, t)| (tag.as_str(), t.as_str())),
+            Entries::Template(e) => e.get(i).map(|c| (c.tag.as_str(), c.text.as_deref().unwrap_or_default())),
+        }
+    }
+}
+
+fn entries(h: &XHost, node: usize, list: usize) -> Entries<'_> {
+    if let Some(lists) = h.nodes.get(node).and_then(|n| n.items.as_ref()) {
+        return Entries::State(lists.get(list).map_or(&[][..], |l| l.entries.as_slice()));
+    }
+    Entries::Template(template_prop(h, node, &join("", "items", list)).map_or(&[][..], |p| p.children.as_slice()))
+}
+
+/// Whether a script wrote the text of an entry of one of the node's lists.
+fn items_written(h: &XHost, node: usize) -> bool {
+    h.prop_writes.get(&node).is_some_and(|m| m.keys().any(|k| k.starts_with("items#")))
+}
+
+/// The text a script wrote to the entry that is the `nth` of its tag in list `list`.
+fn written_entry(h: &XHost, node: usize, list: usize, tag: &str, nth: usize) -> Option<String> {
+    written(h, node, &format!("items#{list}/{tag}#{nth}")).and_then(|w| w.text.clone())
+}
+
+/// How many entries list `list` has, without reading them.
+pub(crate) fn list_len(h: &XHost, node: usize, list: usize) -> usize {
+    entries(h, node, list).len()
+}
+
+/// The text of entry `i` of list `list`, as `items` reads it (a script's write first).
+pub(crate) fn list_text(h: &XHost, node: usize, list: usize, i: usize) -> Option<String> {
+    let e = entries(h, node, list);
+    let (tag, t) = e.get(i)?;
+    if items_written(h, node) {
+        let nth = (0..i).filter(|j| e.get(*j).is_some_and(|(other, _)| other == tag)).count();
+        if let Some(w) = written_entry(h, node, list, tag, nth) {
+            return Some(w);
+        }
+    }
+    Some(t.to_string())
+}
+
+/// Where the text `t` is in list `list`, as `items` reads the entries.
+pub(crate) fn list_position(h: &XHost, node: usize, list: usize, t: &str) -> Option<usize> {
+    let e = entries(h, node, list);
+    if !items_written(h, node) {
+        return (0..e.len()).find(|i| e.get(*i).is_some_and(|(_, s)| s == t));
+    }
+    let mut seen: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    (0..e.len()).find(|i| {
+        let Some((tag, s)) = e.get(*i) else { return false };
+        let nth = seen.entry(tag).or_insert(0);
+        let text = written_entry(h, node, list, tag, *nth);
+        *nth += 1;
+        text.as_deref().unwrap_or(s) == t
+    })
 }
 
 /// Which of the field's `<items>` lists holds the values saved to the data: the one the template marks `save="1"`, else the
