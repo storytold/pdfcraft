@@ -1690,18 +1690,28 @@ const NULL_FAILURES_BYTES: usize = super::MAX_LINE * 4;
 /// The required objects under (and including) node `node` that are empty, in form order: the
 /// fields and exclusion groups whose null test is on (`warning` or `error`, XFA 3.3 p. 881)
 /// and that hold no value, each with what it says ([`null_message`]). Hidden and inactive
-/// objects, and those under them, are not validated, as they can't be filled in.
+/// objects, and those under them, are not validated, as they can't be filled in: so nothing is
+/// listed for a node that is itself under a hidden or inactive one.
 ///
 /// The list stops once it holds more than one message shows ([`NULL_FAILURES_BYTES`]): a form
 /// of 100,000 required fields, each with a message of 16 KiB, would otherwise have every
 /// message copied (gigabytes) to show the first [`MAX_LINE`](super::MAX_LINE) characters.
 pub(crate) fn null_failures(h: &XHost, node: usize) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
+    // A tree: each node is visited once, so never more visits than there are nodes.
+    let mut budget = h.nodes.len();
+    // What `node` is in, up to the root: a parent chain is no longer than the tree is large.
+    let mut above = h.nodes.get(node).and_then(|n| n.parent);
+    for _ in 0..budget {
+        let Some(a) = above.and_then(|a| h.nodes.get(a)) else { break };
+        if a.gone || matches!(&*a.presence, "hidden" | "inactive") {
+            return out;
+        }
+        above = a.parent;
+    }
     // Bytes of the list as one message: each entry and the line break after it.
     let mut bytes = 0usize;
     let mut stack = vec![node];
-    // A tree: each node is visited once, so never more visits than there are nodes.
-    let mut budget = h.nodes.len();
     while let Some(n) = stack.pop() {
         let Some(hn) = h.nodes.get(n) else { continue };
         let Some(left) = budget.checked_sub(1) else { break };

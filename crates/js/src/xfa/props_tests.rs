@@ -1235,6 +1235,23 @@ fn exec_validate_lists_every_empty_required_object_in_one_message() {
     assert_eq!(boxes, ["Required\nCustom required message\nR2 cannot be left blank.\nR5 cannot be left blank."]);
 }
 
+/// `execValidate()` asked of an object under a hidden or inactive subform reports nothing, as
+/// asking the form does not report it: what is in a hidden subform can't be filled in.
+#[test]
+fn exec_validate_of_an_object_under_a_hidden_subform_reports_nothing() {
+    let required = |name: &str| node(name, XfaKind::Field, &[], vec![p("validate", &[("nullTest", "error")], vec![])]);
+    for presence in ["hidden", "inactive"] {
+        let inner = XfaNode { som: "form1[0].box[0].R1[0]".into(), ..required("R1") };
+        let boxed = XfaNode { presence: presence.into(), children: vec![inner], ..node("box", XfaKind::Subform, &[], vec![]) };
+        let mut root = form();
+        root.children.extend([boxed, required("R2")]);
+        let o = go_on(&root, "[box.R1.execValidate(), xfa.form.execValidate(), R2.execValidate()].join('|')", "plain");
+        assert_eq!((o.error.as_deref(), o.result.as_deref()), (None, Some("true|false|false")), "{presence}");
+        let boxes: Vec<&String> = o.effects.iter().filter_map(|e| if let XfaEffect::MessageBox(m) = e { Some(&m.text) } else { None }).collect();
+        assert_eq!(boxes, ["Required\nR2 cannot be left blank.", "R2 cannot be left blank."], "{presence}");
+    }
+}
+
 /// `execValidate()` on a form of many empty required objects lists no more of them than its one
 /// message shows: the list stops once it is longer than the message's limit, so the size of
 /// the form (and of each object's own message) doesn't decide how much is copied. The message
