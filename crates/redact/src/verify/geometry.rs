@@ -75,6 +75,24 @@ struct Level<'d> {
     scope: u64,
 }
 
+/// The object a Type 3 font's `/XObject` names are written in: one given as its `/XObject`, as its
+/// `/Resources`, or the font itself. One object can be given as more than one of these, and gives
+/// other names in each.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum Written {
+    XObject(ObjRef),
+    Resources(ObjRef),
+    Font(ObjRef),
+}
+
+impl Written {
+    fn object(self) -> ObjRef {
+        match self {
+            Written::XObject(r) | Written::Resources(r) | Written::Font(r) => r,
+        }
+    }
+}
+
 /// An object read in place where it is direct, or from the file where it is a reference, so a
 /// dictionary a stream gives directly isn't copied to be read.
 enum Read<'o> {
@@ -93,6 +111,17 @@ impl Read<'_> {
 
 fn read<'o>(doc: &Document, o: &'o Object) -> Read<'o> {
     if matches!(o, Object::Ref(_)) { Read::File(doc.resolve(o)) } else { Read::Here(o) }
+}
+
+/// The object at the end of the chain of references `r` starts, where an object holds only a
+/// reference to another, followed as far as [`Document::resolve`] follows it: the one whose value
+/// is read.
+fn last_ref(doc: &Document, mut r: ObjRef) -> ObjRef {
+    for _ in 0..32 {
+        let Object::Ref(next) = &*doc.get(r) else { break };
+        r = *next;
+    }
+    r
 }
 
 /// What still paints inside `regions` on a page of the output (the overlay boxes excepted):
@@ -401,11 +430,11 @@ impl Geo<'_> {
         }
     }
 
-    /// The scope of `names`, the `/XObject` names a font written directly in a `/Font` dictionary
-    /// gives, looked up before those of scope `below`: made of what it names by reference, so the
-    /// same names make the same scope however often the font is read. Another value given directly
-    /// names nothing a lookup takes ([`Geo::look_up`]), but a stream, which gives it a scope of its
-    /// own.
+    /// The scope of `names`, the `/XObject` names a Type 3 font gives, looked up before those of
+    /// scope `below`: made of what it names by reference, so the same entries, in the same order and
+    /// by the same references, make the same scope wherever they are written and however often the
+    /// font is read. Another value given directly names nothing a lookup takes ([`Geo::look_up`]),
+    /// but a stream, which gives it a scope of its own.
     fn scope_of_names(&mut self, below: u64, names: &Dict) -> u64 {
         let mut h = self.hasher.build_hasher();
         (below, u64::MAX - 1).hash(&mut h);
@@ -426,65 +455,146 @@ impl Geo<'_> {
     /// the renderer does where that content paints with them.
     fn hidden_images(&mut self, searched: &Dict, xobjects: &Dict, depth: usize) {
         let doc = self.doc;
-        // Each stream, with the Type 3 font it is a glyph of, where that font's resources give
-        // `/XObject` names: its place in `fonts`.
-        let mut streams: Vec<(Option<ObjRef>, Stream, Option<usize>)> = Vec::new();
-        let mut fonts: Vec<(Option<ObjRef>, Dict)> = Vec::new();
-        let take = |o: &Object, font: Option<usize>, streams: &mut Vec<(Option<ObjRef>, Stream, Option<usize>)>| {
+        // Patterns and soft-mask groups, each once however many names give it, a chain of
+        // references taken as the object at its end; held as the file holds them, not copied.
+        let mut streams: Vec<(Option<ObjRef>, Arc<Object>)> = Vec::new();
+        let mut taken: HashSet<ObjRef> = HashSet::new();
+        let mut take = |o: &Object, streams: &mut Vec<(Option<ObjRef>, Arc<Object>)>| {
+            if o.as_ref().is_some_and(|r| !taken.insert(last_ref(doc, r))) {
+                return;
+            }
             #[cfg(test)]
             HIDDEN_LOOKS.with(|c| c.set(c.get() + 1));
-            if let Object::Stream(s) = &*doc.resolve(o) {
-                streams.push((o.as_ref(), s.clone(), font));
+            let held = doc.resolve(o);
+            if matches!(&*held, Object::Stream(_)) {
+                streams.push((o.as_ref(), held));
             }
         };
         for (_, p) in res_dict(doc, searched, b"Pattern").iter() {
-            take(p, None, &mut streams);
+            take(p, &mut streams);
         }
         for (_, g) in res_dict(doc, searched, b"ExtGState").iter() {
             if let Some(Object::Dict(sm)) = doc.resolve(g).as_dict().and_then(|g| g.get(b"SMask")).map(|m| (*doc.resolve(m)).clone()).as_ref()
                 && let Some(group) = sm.get(b"G")
             {
-                take(group, None, &mut streams);
+                take(group, &mut streams);
             }
         }
-        for (_, f) in res_dict(doc, searched, b"Font").iter() {
-            let Some(font) = doc.resolve(f).as_dict().cloned() else { continue };
-            if font.name(b"Subtype") != Some(b"Type3") {
+        let given_fonts = res_dict(doc, searched, b"Font");
+        // The objects Type 3 fonts' `/XObject` names are written in, each once however many names
+        // or fonts give it, kept as read, the names in them read in place rather than copied:
+        // how the font gives the object, the object, and how deep in it the names are (0 in it, 1
+        // in its `/XObject`, 2 in its `/Resources`' `/XObject`).
+        let mut fonts: Vec<(Option<Written>, Read<'_>, u8)> = Vec::new();
+        let mut placed: HashMap<Written, usize> = HashMap::new();
+        // Each Type 3 font once, however many names give it, with the place of its names.
+        let mut fonts_read: HashSet<ObjRef> = HashSet::new();
+        let mut type3: Vec<(Read<'_>, Option<usize>)> = Vec::new();
+        for (_, f) in given_fonts.iter() {
+            if let Some(r) = f.as_ref()
+                && !fonts_read.insert(last_ref(doc, r))
+            {
                 continue;
             }
-            let given = font.get(b"Resources").and_then(|r| doc.resolve(r).as_dict().cloned()).filter(|r| r.get(b"XObject").is_some());
-            let place = given.map(|r| {
-                fonts.push((f.as_ref(), res_dict(doc, &r, b"XObject")));
-                fonts.len() - 1
-            });
-            if let Some(procs) = font.get(b"CharProcs").and_then(|c| doc.resolve(c).as_dict().cloned()) {
-                for (_, p) in procs.iter() {
-                    take(p, place, &mut streams);
+            let font = read(doc, f);
+            let Some(dict) = font.object().as_dict().filter(|font| font.name(b"Subtype") == Some(b"Type3")) else { continue };
+            let resources = dict.get(b"Resources");
+            let given = resources.map(|r| read(doc, r));
+            let xobjects = given.as_ref().and_then(|r| r.object().as_dict()).and_then(|r| r.get(b"XObject"));
+            // The object the names are written in: their own, the resources', or the font's. The
+            // last two hold them directly: a reference would have been the first.
+            let written = match (xobjects, resources) {
+                (Some(Object::Ref(x)), _) => Some((Written::XObject(last_ref(doc, *x)), 0)),
+                (Some(_), Some(Object::Ref(r))) => Some((Written::Resources(last_ref(doc, *r)), 1)),
+                (Some(_), _) => f.as_ref().map(|f| (Written::Font(last_ref(doc, f)), 2)),
+                (None, _) => None,
+            };
+            let place = match (xobjects, written) {
+                (None, _) => None,
+                (Some(_), Some((written, deep))) => Some(match placed.get(&written) {
+                    Some(&place) => place,
+                    None => {
+                        // The end of the chain, read as it is: past as many references as the renderer
+                        // follows, an object still holding one gives no names, as there.
+                        fonts.push((Some(written), Read::File(doc.get(written.object())), deep));
+                        placed.insert(written, fonts.len() - 1);
+                        fonts.len() - 1
+                    }
+                }),
+                // A font written directly, its names too: read where it is given.
+                (Some(_), None) => {
+                    fonts.push((None, Read::Here(f), 2));
+                    Some(fonts.len() - 1)
+                }
+            };
+            type3.push((font, place));
+        }
+        let none = Dict::default();
+        let names: Vec<(Option<Written>, &Dict)> = fonts
+            .iter()
+            .map(|(written, held, deep)| {
+                let mut names = held.object().as_dict();
+                if *deep == 2 {
+                    names = names.and_then(|f| f.get(b"Resources")).and_then(Object::as_dict);
+                }
+                if *deep >= 1 {
+                    names = names.and_then(|r| r.get(b"XObject")).and_then(Object::as_dict);
+                }
+                (*written, names.unwrap_or(&none))
+            })
+            .collect();
+        let root = Level { xobjects, owner: None, scope: self.scope };
+        // A scope made of the names, so fonts giving the same entries, wherever they are written,
+        // share it and a glyph they share is searched once.
+        let scopes: Vec<u64> = names.iter().map(|(_, names)| self.scope_of_names(root.scope, names)).collect();
+        // A font's names are no stream's own, so a stream they give is read with its own names too.
+        let font_levels: Vec<Level<'_>> = names.iter().zip(scopes).map(|((_, x), scope)| Level { xobjects: x, owner: None, scope }).collect();
+        for (id, held) in streams {
+            if let Object::Stream(s) = &*held {
+                self.search_hidden(id, s, &[root], depth);
+            }
+        }
+        // Each glyph procedure dictionary once in each scope, its glyphs searched as they are read,
+        // so a glyph many fonts share isn't held once for each.
+        let mut procs_read: HashSet<(ObjRef, u64)> = HashSet::new();
+        for (font, place) in &type3 {
+            let level = place.and_then(|i| font_levels.get(i).copied());
+            let levels: Vec<Level<'_>> = std::iter::once(root).chain(level).collect();
+            let below = levels.last().map_or(root.scope, |l| l.scope);
+            let Some(procs) = font.object().as_dict().and_then(|f| f.get(b"CharProcs")) else { continue };
+            if let Some(r) = procs.as_ref()
+                && !procs_read.insert((last_ref(doc, r), below))
+            {
+                continue;
+            }
+            let procs = read(doc, procs);
+            for (_, p) in procs.object().as_dict().into_iter().flat_map(Dict::iter) {
+                #[cfg(test)]
+                HIDDEN_LOOKS.with(|c| c.set(c.get() + 1));
+                let held = doc.resolve(p);
+                if let Object::Stream(s) = &*held {
+                    self.search_hidden(p.as_ref(), s, &levels, depth);
                 }
             }
         }
-        let root = Level { xobjects, owner: None, scope: self.scope };
-        let scopes: Vec<u64> = fonts
-            .iter()
-            .map(|(id, names)| if id.is_some() { self.scope_of(root.scope, *id) } else { self.scope_of_names(root.scope, names) })
-            .collect();
-        let font_levels: Vec<Level<'_>> = fonts.iter().zip(scopes).map(|((id, x), scope)| Level { xobjects: x, owner: *id, scope }).collect();
-        for (id, s, font) in streams {
-            let levels: Vec<Level<'_>> = std::iter::once(root).chain(font.and_then(|i| font_levels.get(i).copied())).collect();
-            let below = levels.last().map_or(root.scope, |l| l.scope);
-            let found = match id.map(|r| self.start(r, below)) {
-                Some(Ok(Some(_))) => continue,
-                Some(Err(())) => Err(()),
-                Some(Ok(None)) | None => self.has_image(&s, id, &levels, depth + 1),
-            };
-            if let (Some(r), Ok((_, lowest))) = (id, &found) {
-                self.finish(r, below, *lowest, levels.len());
-            }
-            match found {
-                Ok((false, _)) => {}
-                Ok((true, _)) => self.unverifiable("an image inside a pattern, soft mask or Type3 glyph can't be placed or cleared"),
-                Err(()) => self.unverifiable("a pattern, soft mask or Type3 glyph can't be read in full"),
-            }
+    }
+
+    /// Search `s`, object `id`, given to content read with `levels`, for images, unless it was
+    /// searched in this scope already, and say what was found.
+    fn search_hidden(&mut self, id: Option<ObjRef>, s: &Stream, levels: &[Level<'_>], depth: usize) {
+        let below = levels.last().map_or(PAGE_SCOPE, |l| l.scope);
+        let found = match id.map(|r| self.start(r, below)) {
+            Some(Ok(Some(_))) => return,
+            Some(Err(())) => Err(()),
+            Some(Ok(None)) | None => self.has_image(s, id, levels, depth + 1),
+        };
+        if let (Some(r), Ok((_, lowest))) = (id, &found) {
+            self.finish(r, below, *lowest, levels.len());
+        }
+        match found {
+            Ok((false, _)) => {}
+            Ok((true, _)) => self.unverifiable("an image inside a pattern, soft mask or Type3 glyph can't be placed or cleared"),
+            Err(()) => self.unverifiable("a pattern, soft mask or Type3 glyph can't be read in full"),
         }
     }
 

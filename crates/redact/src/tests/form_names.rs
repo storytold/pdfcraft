@@ -587,7 +587,7 @@ fn the_objects_a_forms_names_give_are_read_once() {
 /// gives it: a form or pattern read with a copy of the page's names doesn't read them again. Eight
 /// patterns with resources of their own, and a form with resources drawn once or 50 times, are
 /// read as often either way (before, every pattern read the others again: 8! times). One given
-/// under 50 names is read once for its text.
+/// under 50 names is read for its text, and looked at for images, as often as under one.
 #[test]
 fn the_proof_reads_the_patterns_a_page_gives_once() {
     let read = |draws: usize| {
@@ -620,11 +620,12 @@ fn the_proof_reads_the_patterns_a_page_gives_once() {
         let mut doc = one_page(b"", &format!("/Pattern << {names}>>"), vec![cell]);
         mark(&mut doc, 0, &[[0.0, 230.0, 300.0, 280.0]], "");
         crate::verify::PATTERN_READS.with(|c| c.set(0));
+        crate::verify::HIDDEN_LOOKS.with(|c| c.set(0));
         crate::tests_verify::prove_unapplied(&mut doc);
-        crate::verify::PATTERN_READS.with(std::cell::Cell::get)
+        (crate::verify::PATTERN_READS.with(std::cell::Cell::get), crate::verify::HIDDEN_LOOKS.with(std::cell::Cell::get))
     };
     let once = named(1);
-    assert!(once >= 1, "{once}");
+    assert!(once.0 >= 1 && once.1 >= 1, "{once:?}");
     assert_eq!(named(50), once, "one pattern under fifty names");
 }
 
@@ -1003,6 +1004,286 @@ fn a_type3_font_written_in_place_is_searched_once() {
     mark(&mut doc, 0, &[[0.0, 230.0, 300.0, 280.0]], "");
     let text = crate::tests_verify::prove_unapplied(&mut doc).to_text();
     assert!(text.contains("an image inside a pattern, soft mask or Type3 glyph can't be placed or cleared"), "{text}");
+}
+
+/// A form gives 2,000 names of Type 3 fonts whose `/XObject` gives 2,001 names: all of one font
+/// object, which writes them in its own `/Resources`, directly or through a reference to it each;
+/// or each its own font, all giving the same `/Resources`, or the same `/XObject`, directly or
+/// through a reference to it each. The image search holds those names once for the object they
+/// are written in, and searches the glyph the fonts share once, as for one name; one font object
+/// is read once, however many names give it.
+#[test]
+fn the_proof_holds_a_type3_fonts_names_once_however_many_names_give_them() {
+    const NAMES: usize = 2_000;
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    enum Given {
+        OneFont,
+        OneFontThroughReferences,
+        Resources,
+        ResourcesThroughReferences,
+        XObject,
+        XObjectThroughReferences,
+    }
+    let looks = |given: Given, count: usize| {
+        // Object 13 + i: font i, or a reference to font 11; 13 + count + i: a reference to 10 or 12.
+        let font_of = |i: usize| if given == Given::OneFont { 11 } else { 13 + i };
+        let fonts: String = (0..count).map(|i| format!("/T{i} {} 0 R ", font_of(i))).collect();
+        let form = stream(
+            &format!("/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << /Font << {fonts}>> >>"),
+            b"BT /T0 100 Tf 10 250 Td (a) Tj ET",
+        );
+        let names: String = (0..NAMES).map(|i| format!("/X{i} 9 0 R ")).collect();
+        let font = |resources: &str| {
+            format!("<< /Type /Font /Subtype /Type3 /FontBBox [0 0 1000 1000] /FontMatrix [0.001 0 0 0.001 0 0] /CharProcs << /a 8 0 R >> /Encoding << /Type /Encoding /Differences [97 /a] >> /FirstChar 97 /LastChar 97 /Widths [1000] {resources} >>")
+                .into_bytes()
+        };
+        let mut objs = vec![
+            form,
+            stream("", b"1000 0 d0 /X Do"),
+            stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300]", b""),
+            format!("<< /XObject << /X 9 0 R {names}>> >>").into_bytes(),
+            font(&format!("/Resources << /XObject << /X 9 0 R {names}>> >>")),
+            format!("<< /X 9 0 R {names}>>").into_bytes(),
+        ];
+        let reference = |i: usize| 13 + count + i;
+        objs.extend((0..count).filter(|_| given != Given::OneFont).map(|i| match given {
+            Given::OneFont | Given::OneFontThroughReferences => b"11 0 R".to_vec(),
+            Given::Resources => font("/Resources 10 0 R"),
+            Given::ResourcesThroughReferences => font(&format!("/Resources {} 0 R", reference(i))),
+            Given::XObject => font("/Resources << /XObject 12 0 R >>"),
+            Given::XObjectThroughReferences => font(&format!("/Resources << /XObject {} 0 R >>", reference(i))),
+        }));
+        objs.extend((0..count).filter_map(|_| match given {
+            Given::ResourcesThroughReferences => Some(b"10 0 R".to_vec()),
+            Given::XObjectThroughReferences => Some(b"12 0 R".to_vec()),
+            _ => None,
+        }));
+        let mut doc = one_page(b"/Fm Do", "/XObject << /Fm 7 0 R >>", objs);
+        mark(&mut doc, 0, &[[0.0, 230.0, 300.0, 280.0]], "");
+        crate::verify::HIDDEN_SEARCHES.with(|c| c.set(0));
+        crate::verify::HIDDEN_LOOKS.with(|c| c.set(0));
+        let text = crate::tests_verify::prove_unapplied(&mut doc).to_text();
+        assert!(!text.contains("can't be placed or cleared"), "{given:?}: {text}");
+        (crate::verify::HIDDEN_SEARCHES.with(std::cell::Cell::get), crate::verify::HIDDEN_LOOKS.with(std::cell::Cell::get))
+    };
+    for given in [
+        Given::OneFont,
+        Given::OneFontThroughReferences,
+        Given::Resources,
+        Given::ResourcesThroughReferences,
+        Given::XObject,
+        Given::XObjectThroughReferences,
+    ] {
+        let (searches, looked) = looks(given, 1);
+        assert!(searches >= 1, "{given:?}");
+        let many = looks(given, NAMES);
+        assert_eq!(many.0, searches, "{given:?}");
+        // One font object is read once, however many names give it.
+        if matches!(given, Given::OneFont | Given::OneFontThroughReferences) {
+            assert_eq!(many.1, looked, "{given:?}");
+        }
+    }
+}
+
+/// A form gives 2,000 Type 3 fonts that share one `/CharProcs` of ten glyphs, each drawing `/X`,
+/// and give the same `/XObject` names, written in the font: fonts written in the form's `/Font`, or
+/// font objects of their own, or fonts each giving a `/Resources` object of its own. The glyphs
+/// are read and searched as often as for one font, and the proof checks them.
+#[test]
+fn the_proof_reads_glyphs_fonts_with_the_same_names_share_once() {
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    enum Written {
+        InPlace,
+        Objects,
+        Resources,
+    }
+    let read = |written: Written, count: usize| {
+        let font = |resources: &str| {
+            format!(
+                "<< /Type /Font /Subtype /Type3 /FontBBox [0 0 1000 1000] /FontMatrix [0.001 0 0 0.001 0 0] /CharProcs 18 0 R /Encoding << /Type /Encoding /Differences [97 /g0] >> /FirstChar 97 /LastChar 97 /Widths [1000] {resources} >>"
+            )
+        };
+        let names = "/Resources << /XObject << /X 19 0 R >> >>";
+        let fonts: String = (0..count)
+            .map(|i| match written {
+                Written::InPlace => format!("/T{i} {} ", font(names)),
+                Written::Objects | Written::Resources => format!("/T{i} {} 0 R ", 20 + i),
+            })
+            .collect();
+        let mut objs = vec![stream(
+            &format!("/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << /Font << {fonts}>> >>"),
+            b"BT /T0 100 Tf 10 250 Td (a) Tj ET",
+        )];
+        objs.extend((0..10).map(|_| stream("", b"1000 0 d0 /X Do")));
+        let glyphs: String = (0..10).map(|i| format!("/g{i} {} 0 R ", 8 + i)).collect();
+        objs.push(format!("<< {glyphs}>>").into_bytes());
+        objs.push(stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300]", b""));
+        match written {
+            Written::InPlace => {}
+            Written::Objects => objs.extend((0..count).map(|_| font(names).into_bytes())),
+            Written::Resources => {
+                objs.extend((0..count).map(|i| font(&format!("/Resources {} 0 R", 20 + count + i)).into_bytes()));
+                objs.extend((0..count).map(|_| b"<< /XObject << /X 19 0 R >> >>".to_vec()));
+            }
+        }
+        let mut doc = one_page(b"/Fm Do", "/XObject << /Fm 7 0 R >>", objs);
+        mark(&mut doc, 0, &[[0.0, 230.0, 300.0, 280.0]], "");
+        crate::verify::HIDDEN_LOOKS.with(|c| c.set(0));
+        crate::verify::HIDDEN_SEARCHES.with(|c| c.set(0));
+        let text = crate::tests_verify::prove_unapplied(&mut doc).to_text();
+        assert!(!text.contains("can't be read in full") && !text.contains("can't be placed"), "{written:?}: {text}");
+        (crate::verify::HIDDEN_LOOKS.with(std::cell::Cell::get), crate::verify::HIDDEN_SEARCHES.with(std::cell::Cell::get))
+    };
+    for written in [Written::InPlace, Written::Objects, Written::Resources] {
+        let once = read(written, 1);
+        assert!(once.0 >= 10 && once.1 >= 10, "{written:?}: {once:?}");
+        assert_eq!(read(written, 2_000), once, "{written:?}");
+    }
+}
+
+/// Two Type 3 fonts share one `/CharProcs` object, its glyph drawing `/X`, and give other names:
+/// one's `/X` is an empty form, the other's an image. Whichever the form's `/Font` gives first,
+/// the glyphs are read with each font's names, and the proof finds the image.
+#[test]
+fn the_proof_reads_glyphs_two_fonts_share_with_each_fonts_names() {
+    let flagged = |fonts: &str| {
+        let font = |x: usize| {
+            format!("<< /Type /Font /Subtype /Type3 /FontBBox [0 0 1000 1000] /FontMatrix [0.001 0 0 0.001 0 0] /CharProcs 11 0 R /Encoding << /Type /Encoding /Differences [97 /a] >> /FirstChar 97 /LastChar 97 /Widths [1000] /Resources << /XObject << /X {x} 0 R >> >> >>")
+                .into_bytes()
+        };
+        let objs = vec![
+            stream(
+                &format!("/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << /Font << {fonts} >> >>"),
+                b"BT /A 100 Tf 10 250 Td (a) Tj ET",
+            ),
+            stream("", b"1000 0 d0 /X Do"),
+            font(13),
+            font(12),
+            b"<< /a 8 0 R >>".to_vec(),
+            stream("/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", b"x"),
+            stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300]", b""),
+        ];
+        let mut doc = one_page(b"/Fm Do", "/XObject << /Fm 7 0 R >>", objs);
+        mark(&mut doc, 0, &[[0.0, 230.0, 300.0, 280.0]], "");
+        let text = crate::tests_verify::prove_unapplied(&mut doc).to_text();
+        text.contains("an image inside a pattern, soft mask or Type3 glyph can't be placed or cleared")
+    };
+    assert!(flagged("/A 9 0 R /B 10 0 R"));
+    assert!(flagged("/A 10 0 R /B 9 0 R"));
+}
+
+/// Malformed: a Type 3 font's `/XObject` given through a chain of `k` references to names whose
+/// `/X` is an empty form. The renderer reads the names through 32 references and none past them,
+/// and the glyph then draws the content's `/X`, an image; the proof reads them as far, and finds it.
+#[test]
+fn the_proof_reads_a_type3_fonts_names_through_as_many_references_as_the_renderer() {
+    let flagged = |k: usize| {
+        let mut objs = vec![
+            stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << /Font << /T 11 0 R >> >>", b""),
+            stream("", b"1000 0 d0 /X Do"),
+            stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300]", b""),
+            stream("/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", b"x"),
+            b"<< /Type /Font /Subtype /Type3 /CharProcs << /a 8 0 R >> /Resources << /XObject 13 0 R >> >>".to_vec(),
+            b"<< /X 9 0 R >>".to_vec(),
+        ];
+        objs.extend((0..k).map(|i| format!("{} 0 R", if i + 1 == k { 12 } else { 14 + i }).into_bytes()));
+        let mut doc = one_page(b"/Fm Do", "/XObject << /Fm 7 0 R /X 10 0 R >>", objs);
+        mark(&mut doc, 0, &[[0.0, 230.0, 300.0, 280.0]], "");
+        let text = crate::tests_verify::prove_unapplied(&mut doc).to_text();
+        text.contains("an image inside a pattern, soft mask or Type3 glyph can't be placed or cleared")
+    };
+    assert!(!flagged(32), "32 references");
+    assert!(flagged(33), "33 references");
+    assert!(flagged(64), "64 references");
+}
+
+/// A Type 3 font given through a reference to it, or whose `/Resources` are given through a
+/// reference to them, whose names give `/X` as an image its glyph draws: the names are read at the
+/// end of the chain, and the proof finds the image.
+#[test]
+fn the_proof_reads_a_type3_fonts_names_at_the_end_of_a_chain() {
+    for font in ["13 0 R", "12 0 R"] {
+        let objs = vec![
+            stream(&format!("/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << /Font << /T {font} >> >>"), b""),
+            stream("", b"1000 0 d0 /X Do"),
+            stream("/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", b"x"),
+            b"<< /Type /Font /Subtype /Type3 /CharProcs << /a 8 0 R >> /Resources << /XObject << /X 9 0 R >> >> >>".to_vec(),
+            b"<< /XObject << /X 9 0 R >> >>".to_vec(),
+            b"<< /Type /Font /Subtype /Type3 /CharProcs << /a 8 0 R >> /Resources 14 0 R >>".to_vec(),
+            b"10 0 R".to_vec(),
+            b"11 0 R".to_vec(),
+        ];
+        let mut doc = one_page(b"/Fm Do", "/XObject << /Fm 7 0 R >>", objs);
+        mark(&mut doc, 0, &[[0.0, 230.0, 300.0, 280.0]], "");
+        let text = crate::tests_verify::prove_unapplied(&mut doc).to_text();
+        assert!(text.contains("an image inside a pattern, soft mask or Type3 glyph can't be placed or cleared"), "{font}: {text}");
+    }
+}
+
+/// Malformed: a Type 3 font gives as its `/XObject`, or as its `/Resources`, the form `/F` its glyph
+/// draws through the page's names, whose own resources give `/Im`, an image. The proof reads the
+/// form with its own names wherever a glyph draws it, the font's names never taken for the form's
+/// own, and finds the image. The renderer was seen to draw none here, so this fails closed; taking
+/// them for the form's own would let a font giving the same names as a dictionary share the
+/// clean answer.
+#[test]
+fn the_proof_reads_a_form_a_type3_font_gives_as_its_names_with_the_forms_own() {
+    for resources in ["/Resources << /XObject 12 0 R >>", "/Resources 12 0 R"] {
+        let objs = vec![
+            stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << /Font << /T 11 0 R >> >>", b""),
+            stream("", b"1000 0 d0 /F Do"),
+            stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300]", b""),
+            stream("/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", b"x"),
+            format!("<< /Type /Font /Subtype /Type3 /CharProcs << /a 8 0 R >> {resources} >>").into_bytes(),
+            stream(
+                "/Type /XObject /Subtype /Form /BBox [0 0 300 300] /F 12 0 R /XObject << /F 12 0 R >> /Resources << /XObject << /Im 10 0 R >> >>",
+                b"/Im Do",
+            ),
+        ];
+        let mut doc = one_page(b"/Fm Do", "/XObject << /Fm 7 0 R /F 12 0 R >>", objs);
+        mark(&mut doc, 0, &[[0.0, 230.0, 300.0, 280.0]], "");
+        let text = crate::tests_verify::prove_unapplied(&mut doc).to_text();
+        assert!(text.contains("an image inside a pattern, soft mask or Type3 glyph can't be placed or cleared"), "{resources}: {text}");
+    }
+}
+
+/// One object is given to two Type 3 fonts in two ways, and gives other names in each: with one
+/// font the `/X` the glyph they share draws is an image, and with the other it is nothing (the
+/// object read as an `/XObject` gives no `/X`) or an empty form.
+/// `<< /XObject << /X 12 0 R >> >>` is one's `/Resources` and the other's `/XObject`; or a font
+/// whose own `/Resources` give the empty form, but which has an `/XObject` key giving the image,
+/// is the other's `/Resources`. Whichever the form's `/Font` gives first, the proof finds the image.
+#[test]
+fn the_proof_tells_apart_how_type3_fonts_give_one_object() {
+    let font = |rest: &str| {
+        format!("<< /Type /Font /Subtype /Type3 /FontBBox [0 0 1000 1000] /FontMatrix [0.001 0 0 0.001 0 0] /CharProcs << /a 8 0 R >> /Encoding << /Type /Encoding /Differences [97 /a] >> /FirstChar 97 /LastChar 97 /Widths [1000] {rest} >>")
+            .into_bytes()
+    };
+    let flagged = |fonts: &str, a: Vec<u8>, b: Vec<u8>, shared: &[u8]| {
+        let objs = vec![
+            stream(
+                &format!("/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << /Font << {fonts} >> >>"),
+                b"BT /A 100 Tf 10 250 Td (a) Tj ET",
+            ),
+            stream("", b"1000 0 d0 /X Do"),
+            a,
+            b,
+            shared.to_vec(),
+            stream("/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", b"x"),
+            stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300]", b""),
+        ];
+        let mut doc = one_page(b"/Fm Do", "/XObject << /Fm 7 0 R >>", objs);
+        mark(&mut doc, 0, &[[0.0, 230.0, 300.0, 280.0]], "");
+        let text = crate::tests_verify::prove_unapplied(&mut doc).to_text();
+        text.contains("an image inside a pattern, soft mask or Type3 glyph can't be placed or cleared")
+    };
+    for fonts in ["/A 9 0 R /B 10 0 R", "/A 10 0 R /B 9 0 R"] {
+        let resources = font("/Resources 11 0 R");
+        let xobject = font("/Resources << /XObject 11 0 R >>");
+        assert!(flagged(fonts, resources, xobject, b"<< /XObject << /X 12 0 R >> >>"), "{fonts}");
+        let own = font("/Resources << /XObject << /X 13 0 R >> >> /XObject << /X 12 0 R >>");
+        assert!(flagged(fonts, own, font("/Resources 9 0 R"), b"<< >>"), "{fonts}");
+    }
 }
 
 /// A Type 3 font whose glyph `/a` (object 8) draws `/X`, an empty form (object 9) its own
