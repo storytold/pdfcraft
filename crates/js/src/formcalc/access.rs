@@ -77,7 +77,8 @@ impl Interp<'_> {
 
     /// What copying `v` (or the values it stands for) costs, in steps: one per 256 bytes, so
     /// copying long strings over and over runs out of steps even where there is no clock
-    /// (wasm). A form object counts its value; a list its items too.
+    /// (wasm). A form object counts its value, a property object the text it reads as; a list
+    /// its items too.
     pub(super) fn cost(&self, v: &Val) -> u64 {
         let mut bytes = 0usize;
         let mut todo = vec![v];
@@ -85,6 +86,7 @@ impl Interp<'_> {
             match v {
                 Val::Str(s) => bytes = bytes.saturating_add(s.len()),
                 Val::Node(i) => bytes = bytes.saturating_add(self.node(*i).map_or(0, |n| n.value.len())),
+                Val::Prop(i, p) => bytes = bytes.saturating_add(props::value_of(self.h, *i, p).len()),
                 Val::List(items) => {
                     bytes = bytes.saturating_add(items.len().saturating_mul(16));
                     todo.extend(items.iter());

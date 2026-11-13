@@ -487,6 +487,28 @@ fn formcalc_reads_a_property_as_its_value_in_numbers_and_conditions() {
     assert_eq!(o.result.as_deref(), Some("3|-3|off"));
 }
 
+/// Comparing a property object's text costs steps by its length, as comparing a field's value
+/// does: a long tool tip compared over and over runs out of steps, where there is no clock too
+/// (wasm). The same comparison a few times is within them.
+#[test]
+fn formcalc_charges_a_property_objects_text_to_the_step_budget() {
+    let long = "a".repeat(256 * 1024);
+    let tip = node("tip", XfaKind::Field, &[], vec![p("assist", &[], vec![t("toolTip", &[], &long)])]);
+    let mut root = form();
+    root.children.push(tip);
+    let ev = XfaEvent { activity: "click".into(), target: "form1[0].tip[0]".into(), ..Default::default() };
+    let run = |times: usize| {
+        let script = format!("var same = 0\nfor i = 1 upto {times} do same = same + ($.assist.toolTip == $.assist.toolTip) endfor\nsame");
+        crate::formcalc::run_formcalc(&script, &ev, &XfaDoc::default(), &root, Limits::default())
+    };
+    let o = run(20);
+    assert_eq!((o.error.as_deref(), o.result.as_deref()), (None, Some("20")));
+    // Each comparison is 2,048 steps (two texts of 256 KiB, a step per 256 bytes): 3,000 of
+    // them are past the 5,000,000 a script has.
+    let e = run(3_000).error;
+    assert!(e.as_deref().is_some_and(|e| e.contains("too long")), "{e:?}");
+}
+
 /// form1 > { label (a field captioned "Name:"), rich (a field whose caption is rich text),
 /// list (a choice list that takes typed text, with shown and saved items), box (a check button with on and off values) }
 fn caption_form() -> XfaNode {
