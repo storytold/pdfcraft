@@ -154,8 +154,8 @@ milestone = "M1"
 status = "shipped"
 commands = ["file.open"]
 tools = ["doc_open"]
-evidence = ["crates/crypt/src/tests.rs::rc4_reference_vectors", "crates/cos/tests/it/encryption.rs::every_algorithm_round_trips_and_hides_the_content"]
-notes = ""
+evidence = ["crates/crypt/src/tests.rs::rc4_reference_vectors", "crates/cos/tests/it/encryption.rs::every_algorithm_round_trips_and_hides_the_content", "crates/crypt/src/tests.rs::a_short_key_owner_password_opens_under_either_rehash", "crates/crypt/src/tests.rs::a_revision_2_key_has_the_length_length_gives", "crates/cos/src/document/tests.rs::the_key_length_comes_from_the_filter_in_use", "crates/engine/src/tests.rs::the_document_model_and_the_renderer_open_the_same_encrypted_files"]
+notes = "an R3 or R4 owner password authenticates whether /O was made with Algorithm 3 step c rehashing the whole digest, as the standard has it, or, for a key shorter than 16 bytes, only its first n bytes, as some producers wrote it and qpdf and MuPDF accept it. The key length is read as qpdf, MuPDF and PDFium read it: /Length at revision 2 too (Algorithm 2 says 5 bytes), /V 1 always 40 bits, at /V 4 the RC4 filter's own /Length, else the dictionary's; a /Length outside 40-128 is clamped. The document model and the renderer open the same files with the same passwords"
 
 [[feature]]
 id = "core.open-aes"
@@ -166,8 +166,8 @@ milestone = "M1"
 status = "shipped"
 commands = ["file.open"]
 tools = ["doc_open"]
-evidence = ["crates/crypt/src/tests.rs::aes_cbc_nist_sp800_38a_vectors", "crates/cos/tests/it/encryption.rs::every_algorithm_round_trips_and_hides_the_content"]
-notes = ""
+evidence = ["crates/crypt/src/tests.rs::aes_cbc_nist_sp800_38a_vectors", "crates/cos/tests/it/encryption.rs::every_algorithm_round_trips_and_hides_the_content", "crates/crypt/src/tests.rs::aesv3_with_a_128_bit_key_derives_object_keys_as_aesv2", "crates/cos/src/document/tests.rs::the_key_length_comes_from_the_filter_in_use", "crates/engine/src/tests.rs::security_properties_name_the_key_the_file_has", "crates/crypt/src/tests.rs::perms_byte_8_is_checked_against_encrypt_metadata", "crates/cos/tests/it/encryption.rs::a_perms_entry_that_disagrees_with_encrypt_metadata_is_recorded"]
+notes = "an R5/R6 /Perms whose byte 8 disagrees with /EncryptMetadata (Algorithm 13, a should) opens, noted in the repair log. A /V 4 handler naming /CFM /AESV3 with a 128-bit key (§7.6.4.1 allows only V2 or AESV2 at revision 4) derives per-object keys as for AESV2, as qpdf and PDFium read such files; only a 256-bit key is used directly (Algorithm 1.A). At /V 4 an AES filter takes a 128-bit key whatever /Length says (a stale /Length 40 is common). Document Properties > Security names the key length the file has"
 
 [[feature]]
 id = "core.password-prompt"
@@ -190,8 +190,8 @@ milestone = "M1"
 status = "shipped"
 commands = []
 tools = []
-evidence = ["crates/crypt/src/tests.rs::r6_passwords_are_saslprepped"]
-notes = ""
+evidence = ["crates/crypt/src/tests.rs::r6_passwords_are_saslprepped", "crates/crypt/src/tests.rs::legacy_passwords_are_pdfdoc_encoded_with_a_utf8_fallback", "crates/crypt/src/tests.rs::a_pdfdoc_password_written_as_utf8_bytes_opens", "crates/crypt/src/tests.rs::an_aes256_password_written_without_saslprep_opens_as_typed"]
+notes = "R5/R6 passwords are tried in their SASLprep form and, where that differs, as typed, which qpdf, MuPDF and PDFium write and read; R2-R4 passwords are tried in PDFDocEncoding and, when they have any non-ASCII character, as their UTF-8 bytes too, which some tools write. Every spelling is tried as the owner password before any as the user password"
 
 [[feature]]
 id = "core.owner-password-unlock"
@@ -226,8 +226,8 @@ milestone = "M1"
 status = "shipped"
 commands = []
 tools = []
-evidence = ["crates/crypt/src/tests.rs::identity_crypt_filters_leave_data_alone", "crates/cos/tests/it/encryption.rs::a_crypt_filter_selected_by_reference_is_used", "crates/cos/tests/it/encryption.rs::an_identity_crypt_filter_selected_by_reference_leaves_a_stream_alone", "crates/render/src/raster/tests.rs::a_stream_with_a_crypt_filter_of_its_own_is_drawn", "crates/crypt/src/tests.rs::a_v4_rc4_key_shorter_than_16_bytes_is_extended_with_zeros"]
-notes = "a stream can name its own filter (/Crypt in /Filter, its name in /DecodeParms), read and written, each part given directly or by reference, in cos and in the renderer; /StmF, /StrF, /EFF and /CFM by reference too. A /Filter given by reference selects the crypt filter, but Stream::decoded still refuses it, so such a stream is decrypted and not decoded outside the renderer. A /V 4 RC4 filter with a 40- or 48-bit key reads as Acrobat writes it, the key extended to 16 bytes with zeros before Algorithm 1, in cos as in the renderer (pdf.js issue 19484)."
+evidence = ["crates/crypt/src/tests.rs::identity_crypt_filters_leave_data_alone", "crates/cos/tests/it/encryption.rs::a_crypt_filter_selected_by_reference_is_used", "crates/cos/tests/it/encryption.rs::an_identity_crypt_filter_selected_by_reference_leaves_a_stream_alone", "crates/render/src/raster/tests.rs::a_stream_with_a_crypt_filter_of_its_own_is_drawn", "crates/crypt/src/tests.rs::a_v4_rc4_key_shorter_than_16_bytes_is_extended_with_zeros", "crates/crypt/src/tests.rs::a_crypt_filter_method_in_use_that_cant_be_decrypted_is_reported", "crates/cos/tests/it/encryption.rs::a_crypt_filter_method_that_cant_be_decrypted_is_reported", "crates/cos/tests/it/encryption.rs::a_stream_encrypted_with_a_method_that_cant_be_decrypted_stays_as_stored"]
+notes = "a /CFM other than None, V2, AESV2 or AESV3 (Table 25) is reported as an unsupported algorithm when /StmF, /StrF or /EFF uses it, in cos and in the renderer, whatever the password; a stream naming such a filter for itself reads as stored, and only an incremental save with the security unchanged writes it. A stream can name its own filter (/Crypt in /Filter, its name in /DecodeParms), read and written, each part given directly or by reference, in cos and in the renderer; /StmF, /StrF, /EFF and /CFM by reference too. A /Filter given by reference selects the crypt filter, but Stream::decoded still refuses it, so such a stream is decrypted and not decoded outside the renderer. A /V 4 RC4 filter with a 40- or 48-bit key reads as Acrobat writes it, the key extended to 16 bytes with zeros before Algorithm 1, in cos as in the renderer (pdf.js issue 19484)."
 
 [[feature]]
 id = "core.attachment-only-encryption"

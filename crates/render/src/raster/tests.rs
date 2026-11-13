@@ -11509,6 +11509,65 @@ fn a_stream_with_a_crypt_filter_of_its_own_is_drawn() {
     }
 }
 
+/// `/V 4` with `/CFM /AESV3` and a 128-bit key (`/Length 16`; §7.6.4.1 allows only `V2` or `AESV2`
+/// at revision 4, but such files exist, as in PDFBOX-5345): each object's key is derived as for
+/// `AESV2` (Algorithm 1, ISO 32000-2 §7.6.3.2), since Algorithm 1.A uses the file key directly only
+/// when it is 256 bits. The page was blank and the document model read the content as noise.
+#[test]
+fn aesv3_with_a_128_bit_key_is_drawn_and_read() {
+    use super::*;
+    use pdfcraft_cos::{Algorithm, Document, NewEncryption, SaveOptions, write_full};
+    let content = "1 0 0 rg 0 0 200 200 re f";
+    let page = format!(
+        "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+             2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+             3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R >> endobj
+             4 0 obj << /Length {} >> stream
+{content}
+endstream endobj
+             trailer << /Root 1 0 R >>
+%%EOF",
+        content.len()
+    );
+    let mut doc = Document::open(Arc::new(page.into_bytes())).unwrap();
+    doc.set_encryption(&NewEncryption {
+        algorithm: Algorithm::Aes128,
+        user_password: "",
+        owner_password: "owner",
+        permissions: -1,
+        encrypt_metadata: true,
+        seed: [9; 32],
+    })
+    .unwrap();
+    let aesv2 = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
+    // The same file naming AESV3: one byte changes, and every offset stays where it was.
+    let at = aesv2.windows(6).position(|w| w == b"/AESV2").expect("an AESV2 crypt filter");
+    assert_eq!(aesv2.windows(6).filter(|w| *w == b"/AESV2").count(), 1);
+    let mut aesv3 = aesv2.clone();
+    aesv3[at + 5] = b'3';
+    let model = Document::open(Arc::new(aesv3.clone())).unwrap();
+    assert_eq!(model.security().unwrap().file_key().len(), 16);
+    let catalog = model.get(model.root().unwrap());
+    let pages = model.get(catalog.as_dict().unwrap().reference(b"Pages").unwrap());
+    let first = model.resolve(&pages.as_dict().unwrap().get(b"Kids").unwrap().as_array().unwrap()[0]);
+    let contents = model.get(first.as_dict().unwrap().reference(b"Contents").unwrap());
+    let pdfcraft_cos::Object::Stream(stream) = &*contents else { panic!("the contents are a stream") };
+    assert_eq!(stream.decoded().unwrap(), content.as_bytes());
+    for bytes in [aesv2, aesv3] {
+        let page = PageRenderer::new(Arc::new(bytes), RenderConfig::default()).render(RenderRequest {
+            page: 0,
+            kind: RequestKind::Pixels,
+            tile: None,
+            scale: 1.0,
+            tag: 0,
+            preview: false,
+        });
+        let start = (100 * page.width as usize + 100) * 4;
+        assert_eq!(page.rgba.get(start..start + 4), Some(&[255, 0, 0, 255][..]));
+    }
+}
+
 /// Data after `%%EOF` that holds an object header, past the footer window, is read the way the
 /// document model reads it: the model rebuilds the file from object headers and takes the later
 /// definition of the page, and the renderer shows that same page, so the two still agree.

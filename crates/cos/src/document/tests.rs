@@ -172,13 +172,48 @@ fn an_object_stream_with_parameters_by_reference_is_read() {
     assert_eq!(hidden.as_dict().and_then(|d| d.get(b"Hidden")).and_then(Object::as_string).map(|s| s.bytes.clone()), Some(b"yes".to_vec()));
 }
 
+/// The file key length an `/Encrypt` dictionary gives (ISO 32000-2 Table 20, Table 25). `/V 1` is
+/// 40 bits whatever `/Length` says; `/V 2` takes `/Length`. At `/V 4` the crypt filter strings and
+/// streams use decides: `AESV2` and `AESV3` take a 128-bit key (a stale `/Length 40` or a filter
+/// `/Length 5` beside them was read as 40 bits, and the file didn't open as qpdf, MuPDF and
+/// PDFium open it); an RC4 filter takes its own `/Length` (bytes, or bits), else the dictionary's
+/// (as MuPDF and PDFium read a filter without one; it was read as 128), whatever the filter is
+/// called (only `/StdCF` was looked at).
+#[test]
+fn the_key_length_comes_from_the_filter_in_use() {
+    let doc = Document::new_empty();
+    let length = |dict: &str| {
+        let (_, o) = crate::parse_indirect(format!("1 0 obj {dict} endobj").as_bytes(), 0, &|_| None).unwrap();
+        crate::security::encrypt_dict(&doc, o.as_dict().unwrap()).length_bits
+    };
+    let v4 = |top: &str, filters: &str, stm: &str, str_: &str| {
+        length(&format!("<< /Filter /Standard /V 4 /R 4 {top} /CF << {filters} >> /StmF /{stm} /StrF /{str_} >>"))
+    };
+    let std = |cfm: &str, len: &str| format!("/StdCF << /CFM /{cfm} {len} >>");
+    assert_eq!(v4("/Length 128", &std("AESV2", "/Length 5"), "StdCF", "StdCF"), 128);
+    assert_eq!(v4("/Length 40", &std("AESV2", "/Length 16"), "StdCF", "StdCF"), 128, "a stale /Length 40");
+    assert_eq!(v4("", &std("AESV3", "/Length 32"), "StdCF", "StdCF"), 128);
+    for (len, bits) in [("/Length 5", 40), ("/Length 6", 48), ("/Length 16", 128), ("/Length 40", 40), ("/Length 128", 128)] {
+        assert_eq!(v4("/Length 128", &std("V2", len), "StdCF", "StdCF"), bits, "{len}");
+    }
+    assert_eq!(v4("/Length 40", &std("V2", ""), "StdCF", "StdCF"), 40, "RC4 without a length of its own");
+    assert_eq!(v4("", &std("V2", ""), "StdCF", "StdCF"), 128);
+    assert_eq!(v4("/Length 40", "/MyCF << /CFM /V2 /Length 6 >>", "MyCF", "MyCF"), 48, "a filter not called StdCF");
+    assert_eq!(v4("", "/MyCF << /CFM /V2 /Length 7 >>", "Identity", "MyCF"), 56, "strings only");
+    // A filter that leaves streams as they are decides nothing: the strings' AES filter does.
+    assert_eq!(v4("", &format!("/Clear << /CFM /None /Length 5 >> {}", std("AESV2", "/Length 16")), "Clear", "StdCF"), 128, "a clear /StmF");
+    assert_eq!(length("<< /Filter /Standard /V 1 /R 2 /Length 128 >>"), 40);
+    assert_eq!(length("<< /Filter /Standard /V 2 /R 3 /Length 56 >>"), 56);
+    assert_eq!(length("<< /Filter /Standard /V 2 /R 3 >>"), 40);
+}
+
 /// Each entry of an `/Encrypt` dictionary, and of a crypt filter in it, reads the same by reference.
 /// Read as absent, `/StmF` or `/CFM` was `/Identity`, so a whole file's streams stayed ciphertext.
 #[test]
 fn encrypt_dictionary_entries_read_the_same_by_reference() {
     let string = |s: &str| Object::String(crate::PdfString::text(s));
     let mut filter = Dict::new();
-    filter.set(b"CFM".to_vec(), Object::name("AESV2"));
+    filter.set(b"CFM".to_vec(), Object::name("V2"));
     filter.set(b"Length".to_vec(), Object::Int(5));
     let cf = |filter: Dict| {
         let mut cf = Dict::new();
@@ -209,7 +244,7 @@ fn encrypt_dictionary_entries_read_the_same_by_reference() {
     assert_eq!((direct.stm_f.as_slice(), direct.str_f.as_slice(), direct.ef_f.as_slice()), (&b"StdCF"[..], &b"Other"[..], &b"StdCF"[..]));
     assert_eq!(direct.length_bits, 40, "the filter's own length, in bytes");
     assert!(!direct.encrypt_metadata);
-    assert_eq!(direct.crypt_filters.iter().filter(|(_, m)| *m == pdfcraft_crypt::Method::Aes128).count(), 1);
+    assert_eq!(direct.crypt_filters.iter().filter(|(_, m)| *m == pdfcraft_crypt::Method::Rc4).count(), 1);
     for (key, value) in &entries {
         let mut one = d.clone();
         let r = doc.add(value.clone());

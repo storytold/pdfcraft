@@ -169,19 +169,39 @@ fn write_stream(s: &Stream, out: &mut Vec<u8>) {
 /// A document opened without the password its embedded files need holds their data as stored and
 /// can't encrypt: a save keeps its `/Encrypt` as it is, and writes no edited or added stream that
 /// would have to be encrypted (an attached file put in, say), which would be written in the clear.
+/// A stream naming a crypt filter whose method the handler can't decrypt is held as stored too, and
+/// an edited one would be written as if encrypted with it.
 fn keyless_check(doc: &Document) -> Result<(), CosError> {
-    if !doc.embedded_files_locked() {
+    let locked = doc.embedded_files_locked();
+    if !locked && !doc.security().is_some_and(defines_unsupported) {
         return Ok(());
     }
     let refuse =
         |what: &str| Err(CosError::Security(format!("{what} without the password of the document's embedded files: open it with the password")));
-    if doc.encryption_changed() || doc.trailer().get(b"Encrypt").is_none() {
+    if locked && (doc.encryption_changed() || doc.trailer().get(b"Encrypt").is_none()) {
         return refuse("the document's security can't change");
     }
     if doc.overlay_entries().any(|(_, _, o)| matches!(o.as_deref(), Some(Object::Stream(s)) if doc.reads_as_stored(s))) {
+        if !locked {
+            return Err(unsupported_stream());
+        }
         return refuse("an edited or added embedded file can't be encrypted");
     }
     Ok(())
+}
+
+/// Whether `h` defines a crypt filter whose method it can't decrypt (ISO 32000-2 Table 25).
+fn defines_unsupported(h: &pdfcraft_crypt::SecurityHandler) -> bool {
+    h.dict().crypt_filters.iter().any(|(_, m)| *m == pdfcraft_crypt::Method::Unsupported)
+}
+
+/// A stream encrypted with a method the handler can't decrypt is held as stored: it can keep its
+/// number and its document's security, nothing else, or it would be written as plaintext or under a
+/// key it wasn't made with.
+fn unsupported_stream() -> CosError {
+    CosError::Security(
+        "a stream is encrypted with an unsupported algorithm (its crypt filter's /CFM): it can be saved only incrementally, with the document's security unchanged".into(),
+    )
 }
 
 /// The object as written: encrypted with its (output) number when the document is encrypted,
@@ -454,6 +474,14 @@ pub fn write_full(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosErro
             packed.push((num, *r, kept[i].take()));
         } else {
             let o = written_object(&mut reader, *r, *is_stream, kept[i].take())?;
+            let document = &reader.document;
+            if let Object::Stream(s) = &*o
+                && document.security().is_some_and(|h| h.has_key() && defines_unsupported(h))
+                && (document.encryption_changed() || num != r.num)
+                && document.reads_as_stored(s)
+            {
+                return Err(unsupported_stream());
+            }
             let o = renumber(&prepared(&reader.document, r.num, num, 0, &o), &map);
             rows.insert(num, Row::InFile(out.len() as u64, 0));
             write_indirect(num, 0, &o, &mut out);

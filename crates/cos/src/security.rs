@@ -82,31 +82,28 @@ pub(crate) fn encrypt_dict(doc: &Document, d: &Dict) -> EncryptDict {
     if let Some(cf) = d.get(b"CF").map(|c| doc.resolve(c)).and_then(|c| c.as_dict().cloned()) {
         for (k, v) in cf.iter() {
             let Some(f) = doc.resolve(v).as_dict().cloned() else { continue };
-            let method = match name(&f, b"CFM").as_deref() {
-                Some(b"V2") => Method::Rc4,
-                Some(b"AESV2") => Method::Aes128,
-                Some(b"AESV3") => Method::Aes256,
-                _ => Method::Identity,
+            // ISO 32000-2 Table 25: `None` (the default) leaves data as it is to the standard
+            // handler; values other than these four are an algorithm the file can't be read with.
+            let cfm = f.get(b"CFM").map(|m| doc.resolve(m));
+            let method = match cfm.as_deref() {
+                None | Some(Object::Null) => Method::Identity,
+                Some(m) => match m.as_name() {
+                    Some(b"None") => Method::Identity,
+                    Some(b"V2") => Method::Rc4,
+                    Some(b"AESV2") => Method::Aes128,
+                    Some(b"AESV3") => Method::Aes256,
+                    _ => Method::Unsupported,
+                },
             };
             crypt_filters.push((k.clone(), method));
         }
     }
     let v = int(b"V", 0);
-    // V4: the key length comes from the standard crypt filter's /Length (bytes, or bits in
-    // some files); /Length on the dictionary is often a stale 40. A length that isn't
-    // positive means nothing and reads as if absent.
-    let cf_len = d
-        .get(b"CF")
-        .map(|c| doc.resolve(c))
-        .and_then(|c| c.as_dict().and_then(|c| c.get(b"StdCF").map(|f| doc.resolve(f))))
-        .and_then(|f| f.as_dict().and_then(|f| f.get(b"Length").map(|n| doc.resolve(n))))
-        .and_then(|n| n.as_int())
-        .filter(|n| *n > 0);
-    let length_bits = match (v, cf_len) {
-        (5.., _) => 256,
-        (4, Some(n)) if n <= 32 => n * 8,
-        (4, Some(n)) => n,
-        (4, None) => 128,
+    let length_bits = match v {
+        5.. => 256,
+        4 => v4_length_bits(doc, d),
+        // Table 20: "1 ... with a file encryption key length of 40 bits".
+        1 => 40,
         _ => int(b"Length", 40),
     };
     EncryptDict {
@@ -125,6 +122,35 @@ pub(crate) fn encrypt_dict(doc: &Document, d: &Dict) -> EncryptDict {
         stm_f: name(d, b"StmF").unwrap_or_else(|| b"Identity".to_vec()),
         str_f: name(d, b"StrF").unwrap_or_else(|| b"Identity".to_vec()),
         ef_f: name(d, b"EFF").unwrap_or_default(),
+    }
+}
+
+/// The file key length of a `/V 4` handler, in bits, from the crypt filter strings and streams
+/// use (`/StmF`, else `/StrF`, whichever encrypts: `/CFM /None` leaves data as it is; else
+/// `/StdCF`): 128 for `AESV2` and `AESV3`, which take a 128-bit key at `/V 4` (Table 25;
+/// §7.6.4.1); for `V2` (RC4) the filter's `/Length` (in bytes, or bits in
+/// some files), else the dictionary's `/Length`, else 128. The dictionary's `/Length` is often a
+/// stale 40 next to an AES filter, so it counts only for RC4 without a length of its own, as MuPDF
+/// and PDFium read it. A length that isn't positive reads as absent. The renderer's
+/// `hayro-syntax` reads the length the same way (vendor/README.md, hayro-syntax (48)).
+fn v4_length_bits(doc: &Document, d: &Dict) -> i64 {
+    let int = |o: &Object| doc.resolve(o).as_int().filter(|n| *n > 0);
+    let cf = d.get(b"CF").map(|c| doc.resolve(c)).and_then(|c| c.as_dict().cloned());
+    let filter = |name: &[u8]| cf.as_ref().and_then(|cf| cf.get(name)).and_then(|f| doc.resolve(f).as_dict().cloned());
+    let encrypts = |f: &Dict| matches!(f.get(b"CFM").map(|m| doc.resolve(m)).as_deref().and_then(Object::as_name), Some(b"V2" | b"AESV2" | b"AESV3"));
+    let named = |key: &[u8]| {
+        d.get(key).and_then(|n| doc.resolve(n).as_name().map(<[u8]>::to_vec)).filter(|n| n != b"Identity").and_then(|n| filter(&n)).filter(encrypts)
+    };
+    let Some(f) = named(b"StmF").or_else(|| named(b"StrF")).or_else(|| filter(b"StdCF")) else {
+        return d.get(b"Length").and_then(int).unwrap_or(128);
+    };
+    if matches!(f.get(b"CFM").map(|m| doc.resolve(m)).as_deref().and_then(Object::as_name), Some(b"AESV2" | b"AESV3")) {
+        return 128;
+    }
+    match f.get(b"Length").and_then(int) {
+        Some(n) if n <= 32 => n * 8,
+        Some(n) => n,
+        None => d.get(b"Length").and_then(int).unwrap_or(128),
     }
 }
 
@@ -151,10 +177,11 @@ pub(crate) fn efopen_only(doc: &Document, d: &Dict) -> bool {
     !encrypting.is_empty()
 }
 
-/// Whether `s`, read from a document whose handler has no file key, holds data that handler would
-/// decrypt, which therefore reads as stored: still encrypted.
+/// Whether `s` holds encrypted data that reads as stored: still encrypted. Either the handler has
+/// no file key and would decrypt it, or the stream names a crypt filter whose method the handler
+/// can't decrypt (ISO 32000-2 Table 25).
 pub(crate) fn stream_reads_as_stored(doc: &Document, h: &SecurityHandler, s: &Stream) -> bool {
-    if h.has_key() {
+    if h.has_key() && !h.dict().crypt_filters.iter().any(|(_, m)| *m == Method::Unsupported) {
         return false;
     }
     let _scope = FollowScope::enter();
@@ -165,7 +192,7 @@ pub(crate) fn stream_reads_as_stored(doc: &Document, h: &SecurityHandler, s: &St
         (None, Some(b"EmbeddedFile")) => StreamKind::EmbeddedFile,
         _ => StreamKind::Normal,
     };
-    h.decrypts(kind)
+    if h.has_key() { h.cannot_decrypt(kind) } else { h.decrypts(kind) }
 }
 
 /// Whether `f`, an entry of a `/Filter` chain or its only filter, is `/Crypt`.

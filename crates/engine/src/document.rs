@@ -664,17 +664,23 @@ impl Document {
         let editor = self.editor.as_ref()?;
         let h = editor.cos.output_handler()?;
         let d = h.dict();
-        let stream = d.crypt_filters.iter().find(|(name, _)| *name == d.stm_f).map(|(_, m)| *m);
-        let method = match (d.v, stream) {
-            (1..=3, _) if d.length_bits <= 40 => "RC4, 40-bit",
-            (1..=3, _) | (_, Some(pdfcraft_cos::CryptMethod::Rc4)) => "RC4, 128-bit",
-            (_, Some(pdfcraft_cos::CryptMethod::Aes128)) => "AES, 128-bit",
-            (_, Some(pdfcraft_cos::CryptMethod::Aes256)) => "AES, 256-bit",
-            _ => "Attachments only",
+        // The filter streams use, else the one strings use: a document can encrypt only its
+        // strings. "Attachments only" when neither is encrypted.
+        let method_of =
+            |name: &[u8]| d.crypt_filters.iter().find(|(n, _)| n == name).map(|(_, m)| *m).filter(|m| *m != pdfcraft_cos::CryptMethod::Identity);
+        let filter = method_of(&d.stm_f).or_else(|| method_of(&d.str_f));
+        // The length of the key the handler holds: `/Length` and `/CFM` alone can say otherwise
+        // (an `AESV3` filter of a `/V 4` handler has a 128-bit key; RC4 keys run from 40 to 128
+        // bits). Without the key, the length the dictionary gives.
+        let bits = if h.has_key() { h.file_key().len().saturating_mul(8) } else { usize::try_from(d.length_bits.clamp(40, 256)).unwrap_or(128) };
+        let method = match (d.v, filter) {
+            (..=3, _) | (_, Some(pdfcraft_cos::CryptMethod::Rc4)) => format!("RC4, {bits}-bit"),
+            (_, Some(pdfcraft_cos::CryptMethod::Aes128 | pdfcraft_cos::CryptMethod::Aes256)) => format!("AES, {bits}-bit"),
+            _ => "Attachments only".to_string(),
         };
         let pending = editor.cos.encryption_changed();
         let permissions = if pending { pdfcraft_cos::Permissions { owner: false, ..h.permissions() } } else { h.permissions() };
-        Some(SecuritySummary { method: method.into(), owner: h.auth() == pdfcraft_cos::Auth::Owner && !pending, permissions, pending })
+        Some(SecuritySummary { method, owner: h.auth() == pdfcraft_cos::Auth::Owner && !pending, permissions, pending })
     }
 
     /// Comment properties of the comment at `(page, index)` (Comment Properties dialog).

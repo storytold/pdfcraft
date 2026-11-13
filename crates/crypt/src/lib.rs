@@ -32,6 +32,11 @@ pub enum CryptError {
     Unsupported(String),
     #[error("malformed encryption dictionary: {0}")]
     Malformed(String),
+    /// A crypt filter the document's strings, streams or embedded files use has a `/CFM` other
+    /// than `None`, `V2`, `AESV2` or `AESV3` (ISO 32000-2 Table 25: "Applications that encounter
+    /// other values shall report that the file is encrypted with an unsupported algorithm").
+    #[error("the file is encrypted with an unsupported algorithm: {0}")]
+    UnsupportedAlgorithm(String),
 }
 
 /// 32-byte padding string used by revisions 2–4 (§7.6.4.3.2, step a).
@@ -51,6 +56,11 @@ pub enum Method {
     Aes128,
     /// `AESV3`: AES-256-CBC.
     Aes256,
+    /// Any other `/CFM` (or one that isn't a name): a method this handler can't decrypt (ISO
+    /// 32000-2 Table 25 lists the only values to support). Data it encrypts is left as stored,
+    /// read and written alike, and [`SecurityHandler::open`] refuses a document whose strings,
+    /// streams or embedded files use it.
+    Unsupported,
 }
 
 /// The values of an `/Encrypt` dictionary that the handler needs.
@@ -60,7 +70,8 @@ pub struct EncryptDict {
     pub filter: Vec<u8>,
     pub v: i64,
     pub r: i64,
-    /// Key length in bits (`/Length`; 40 when absent).
+    /// File key length in bits: `/Length` (40 when absent, always 40 for `/V 1`), for `/V 4` the
+    /// crypt filter's (see pdfcraft-cos). Revisions 2–4 clamp it to 40–128.
     pub length_bits: i64,
     pub o: Vec<u8>,
     pub u: Vec<u8>,
@@ -209,29 +220,40 @@ impl SecurityHandler {
         if !dict.filter.is_empty() && dict.filter != b"Standard" {
             return Err(CryptError::Unsupported(format!("/Filter /{}", String::from_utf8_lossy(&dict.filter))));
         }
+        // Table 20: 1, 2 and 4 are the RC4/crypt-filter algorithms and 5 is AES-256; 0 (or no /V)
+        // reads as RC4 with /Length, as MuPDF and PDFium read it. 3 is unpublished and others are
+        // unknown: their data can't be decrypted, as in the renderer.
+        if !matches!(dict.v, 0 | 1 | 2 | 4 | 5) {
+            return Err(CryptError::Unsupported(format!("/V {}", dict.v)));
+        }
+        // Before the password: no password reads data encrypted with a method this handler lacks.
+        if let Some(name) = unsupported_in_use(&dict) {
+            return Err(CryptError::UnsupportedAlgorithm(format!(
+                "crypt filter /{} has a /CFM other than None, V2, AESV2 or AESV3",
+                String::from_utf8_lossy(name)
+            )));
+        }
         let pw = password.unwrap_or("");
         let mut recovered_user = None;
+        // Every spelling as the owner password first, then every spelling as the user password:
+        // one typed password can be the user password in one spelling and the owner password in
+        // another.
         let (key, auth) = match dict.r {
             2..=4 => {
-                let mut found = None;
-                for legacy in legacy_candidates(pw) {
-                    if let Some((k, user)) = owner_key_r4(&dict, id0, &legacy) {
-                        recovered_user = Some(user);
-                        found = Some((k, Auth::Owner));
-                    } else if let Some(k) = user_key_r4(&dict, id0, &legacy) {
-                        found = Some((k, Auth::User));
-                    }
-                    if found.is_some() {
-                        break;
-                    }
+                let candidates = legacy_candidates(pw);
+                if let Some((k, user)) = candidates.iter().find_map(|legacy| owner_key_r4(&dict, id0, legacy)) {
+                    recovered_user = Some(user);
+                    (k, Auth::Owner)
+                } else {
+                    let user = candidates.iter().find_map(|legacy| user_key_r4(&dict, id0, legacy));
+                    (user.ok_or(CryptError::WrongPassword)?, Auth::User)
                 }
-                found.ok_or(CryptError::WrongPassword)?
             }
             5 | 6 => {
-                let pw = sasl_password(pw);
-                if let Some(k) = key_r6(&dict, &pw, true)? {
+                let candidates = aes256_candidates(pw);
+                if let Some(k) = first_key_r6(&dict, &candidates, true)? {
                     (k, Auth::Owner)
-                } else if let Some(k) = key_r6(&dict, &pw, false)? {
+                } else if let Some(k) = first_key_r6(&dict, &candidates, false)? {
                     (k, Auth::User)
                 } else {
                     return Err(CryptError::WrongPassword);
@@ -269,13 +291,35 @@ impl SecurityHandler {
         self.method(Some(kind)) != Method::Identity
     }
 
+    /// Whether data of `kind` is encrypted with a method this handler can't decrypt
+    /// ([`Method::Unsupported`]): only a stream naming such a crypt filter for itself, as
+    /// [`SecurityHandler::open`] refuses one its strings, streams or embedded files use. That data
+    /// is left as stored, and isn't what it encrypts.
+    pub fn cannot_decrypt(&self, kind: StreamKind) -> bool {
+        self.method(Some(kind)) == Method::Unsupported
+    }
+
     /// Whether data left as stored by a handler without the key still decrypts after its object
-    /// is renumbered: only AES-256 doesn't mix the object number into the key (Algorithm 1.A).
+    /// is renumbered: only AES-256 with a 256-bit file key doesn't mix the object number into the
+    /// key (Algorithm 1.A).
     pub fn survives_renumbering(&self) -> bool {
+        let direct = self.uses_file_key_directly();
         [self.methods.string, self.methods.stream, self.methods.embedded_file]
             .into_iter()
             .chain(self.methods.named.values().copied())
-            .all(|m| matches!(m, Method::Identity | Method::Aes256))
+            .all(|m| m == Method::Identity || (m == Method::Aes256 && direct))
+    }
+
+    /// Whether `AESV3` data is encrypted with the file key itself (Algorithm 1.A, §7.6.3.3) rather
+    /// than a per-object key (Algorithm 1, §7.6.3.2): for `/V 5` (§7.6.3.1) and for a 256-bit file
+    /// key, the only kind Algorithm 1.A is for, which revisions 5 and 6 make (a handler without
+    /// the key goes by the revision). A `/V 4` handler of revision 4 or earlier that names
+    /// `/CFM /AESV3` (§7.6.4.1 allows only `V2` or `AESV2` at revision 4, and Table 25 asks for a
+    /// 256-bit key with `AESV3`) has a key of at most 128 bits. The files seen in practice derive
+    /// per-object keys from it as for `AESV2`, MD5 of the key, the object, the generation and
+    /// "sAlT", and qpdf and PDFium read them that way too.
+    fn uses_file_key_directly(&self) -> bool {
+        self.dict.v >= 5 || self.dict.r >= 5 || self.key.len() == 32
     }
 
     /// Upgrade to owner access with the owner (permissions) password, as when a restricted
@@ -311,12 +355,27 @@ impl SecurityHandler {
 
     /// `/P` as `/Perms` holds it: AES-256 ECB of one block (= CBC with a zero IV), marked `adb`.
     fn perms_p(&self) -> Option<i32> {
+        let plain = self.perms_block()?;
+        Some(i32::from_le_bytes(*plain.first_chunk::<4>()?))
+    }
+
+    /// `/Perms` decrypted (Algorithm 13 step a), when it is one block marked `adb` (bytes 9–11).
+    fn perms_block(&self) -> Option<Zeroizing<Vec<u8>>> {
         if !matches!(self.dict.r, 5 | 6) || !self.has_key() {
             return None;
         }
         let plain = Zeroizing::new(aes_cbc_decrypt(&self.key, &[0; 16], self.dict.perms.first_chunk::<16>()?, false));
-        let p = i32::from_le_bytes(*plain.first_chunk::<4>()?);
-        (plain.get(9..12) == Some(&b"adb"[..])).then_some(p)
+        (plain.get(9..12) == Some(&b"adb"[..])).then_some(plain)
+    }
+
+    /// Whether byte 8 of a readable `/Perms` isn't the `T` or `F` that `/EncryptMetadata` gives
+    /// (Algorithm 13 step a, ISO 32000-2 §7.6.4.4.12: it "should match"). A "should", so the
+    /// document still opens, metadata read as `/EncryptMetadata` says: qpdf warns of it, and MuPDF
+    /// and PDFium open such files. False when `/Perms` can't be read, which [`Self::permissions`]
+    /// already reads past.
+    pub fn perms_metadata_mismatch(&self) -> bool {
+        let expected = if self.dict.encrypt_metadata { b'T' } else { b'F' };
+        self.perms_block().is_some_and(|plain| plain.get(8) != Some(&expected))
     }
 
     pub fn dict(&self) -> &EncryptDict {
@@ -346,8 +405,9 @@ impl SecurityHandler {
         }
     }
 
-    /// Algorithm 1 (§7.6.3.2): the key for one object. AES-256 uses the file key directly
-    /// (Algorithm 1.A, §7.6.3.3).
+    /// Algorithm 1 (§7.6.3.2): the key for one object. AES-256 with a 256-bit file key uses the
+    /// file key directly (Algorithm 1.A, §7.6.3.3); with a shorter one it is derived as for
+    /// AES-128 (see [`Self::uses_file_key_directly`]).
     ///
     /// For an RC4 crypt filter under `/V 4`, a file key shorter than 16 bytes is first extended
     /// to 16 bytes with zeros. The standard doesn't say so (Algorithm 1 takes the n-byte key as
@@ -357,7 +417,7 @@ impl SecurityHandler {
     /// left as they are: `AESV2` takes a 128-bit key (Table 25), and Acrobat's extension is only
     /// seen with RC4. Every key PdfCraft writes under `/V 4` is 16 bytes already.
     fn object_key(&self, method: Method, num: u32, generation: u16) -> Zeroizing<Vec<u8>> {
-        if method == Method::Aes256 {
+        if method == Method::Aes256 && self.uses_file_key_directly() {
             return self.key.clone();
         }
         let mut key = self.key.clone();
@@ -368,7 +428,7 @@ impl SecurityHandler {
         h.update(&key);
         h.update(&num.to_le_bytes()[..3]);
         h.update(generation.to_le_bytes());
-        if method == Method::Aes128 {
+        if matches!(method, Method::Aes128 | Method::Aes256) {
             h.update(b"sAlT");
         }
         let mut digest = Zeroizing::new(h.finalize().to_vec());
@@ -382,7 +442,8 @@ impl SecurityHandler {
             return data.to_vec();
         }
         match method {
-            Method::Identity => data.to_vec(),
+            // Data whose method is unknown keeps the bytes it has, so a save writes it back as it was.
+            Method::Identity | Method::Unsupported => data.to_vec(),
             Method::Rc4 => rc4(&self.object_key(method, num, generation), data),
             Method::Aes128 | Method::Aes256 => {
                 let key = self.object_key(method, num, generation);
@@ -434,6 +495,20 @@ impl SecurityHandler {
     }
 }
 
+/// The name of a crypt filter `d`'s strings, streams or embedded files use (`/StrF`, `/StmF`,
+/// `/EFF`, which defaults to `/StmF`) whose method is [`Method::Unsupported`]. Handlers older than
+/// crypt filters (`/V` below 4) encrypt everything with RC4 whatever `/CF` says. A filter `/CF`
+/// defines and nothing uses doesn't count: qpdf, MuPDF and PDFium all open such a file.
+fn unsupported_in_use(d: &EncryptDict) -> Option<&[u8]> {
+    if d.v < 4 {
+        return None;
+    }
+    let ef = if d.ef_f.is_empty() { &d.stm_f } else { &d.ef_f };
+    [&d.str_f, &d.stm_f, ef].into_iter().map(Vec::as_slice).find(|name| {
+        *name != b"Identity" && d.crypt_filters.iter().find(|(n, _)| n.as_slice() == *name).is_some_and(|(_, m)| *m == Method::Unsupported)
+    })
+}
+
 // ── Passwords ──────────────────────────────────────────────────────────────────────────────────
 
 /// PDFDocEncoding (ISO 32000-2 Annex D) where it differs from Latin-1: bytes 0x18–0x1F and
@@ -464,20 +539,45 @@ pub fn pdfdoc_byte(c: char) -> Option<u8> {
 }
 
 /// Revisions 2–4: the password in PDFDocEncoding (§7.6.4.3.2, Algorithm 2), at most 32 bytes.
-/// Characters PDFDocEncoding lacks are dropped.
+/// Characters PDFDocEncoding lacks are dropped, as MuPDF drops them. U+FFFD stands for the byte
+/// 0x9F, which PDFDocEncoding leaves undefined and [`pdfdoc_char`] reads as U+FFFD: a user
+/// password with that byte, recovered with the owner password and handed on as text, reads back
+/// to the same bytes.
 fn legacy_password(pw: &str) -> Zeroizing<Vec<u8>> {
-    Zeroizing::new(pw.chars().filter_map(pdfdoc_byte).take(32).collect())
+    Zeroizing::new(pw.chars().filter_map(|c| if c == '\u{FFFD}' { Some(0x9F) } else { pdfdoc_byte(c) }).take(32).collect())
 }
 
 /// The bytes an R2–R4 password may have been written as: PDFDocEncoding, as the specification
-/// asks; and for a password with characters PDFDocEncoding lacks (ğ, ş, İ, …), which it gives
-/// no bytes, also its UTF-8 bytes, which qpdf and other tools write for such passwords.
+/// asks; and for a password with any non-ASCII character, also its UTF-8 bytes. Tools write
+/// those for a password with characters PDFDocEncoding lacks (ğ, ş, İ, …), and some for every
+/// non-ASCII password, even one PDFDocEncoding holds (qpdf's `--password-mode=bytes` writes
+/// "pässwört" as its UTF-8 bytes). An ASCII password is the same in both.
 fn legacy_candidates(pw: &str) -> Vec<Zeroizing<Vec<u8>>> {
     let mut out = vec![legacy_password(pw)];
-    if pw.chars().any(|c| pdfdoc_byte(c).is_none()) {
+    if !pw.is_ascii() {
         out.push(Zeroizing::new(pw.bytes().take(32).collect()));
     }
     out
+}
+
+/// The bytes an R5/R6 password may have been written as: its SASLprep form (Algorithm 2.A, step
+/// a), and, where that differs, the password as typed, at most 127 bytes of UTF-8 each. qpdf,
+/// MuPDF and PDFium key and read passwords without SASLprep, so a decomposed "café" or a no-break
+/// space reaches the file as typed.
+fn aes256_candidates(pw: &str) -> Vec<Zeroizing<Vec<u8>>> {
+    let prepared = sasl_password(pw);
+    let typed = Zeroizing::new(pw.as_bytes().get(..127).unwrap_or(pw.as_bytes()).to_vec());
+    if typed == prepared { vec![prepared] } else { vec![prepared, typed] }
+}
+
+/// Algorithm 2.A for each of `candidates` in turn: the first file key one of them unlocks.
+fn first_key_r6(d: &EncryptDict, candidates: &[Zeroizing<Vec<u8>>], owner: bool) -> Result<Option<Zeroizing<Vec<u8>>>, CryptError> {
+    for pw in candidates {
+        if let Some(k) = key_r6(d, pw, owner)? {
+            return Ok(Some(k));
+        }
+    }
+    Ok(None)
 }
 
 /// Revisions 5–6: SASLprep (RFC 4013), UTF-8, at most 127 bytes.
@@ -496,8 +596,13 @@ fn pad(pw: &[u8]) -> Zeroizing<[u8; 32]> {
     out
 }
 
+/// The file key's length in bytes: `/Length` (in bits, 40 to 128). Algorithms 2 and 3 say 5 bytes
+/// for revision 2 whatever `/Length` says, but qpdf, MuPDF and PDFium all take `/Length` at
+/// revision 2 too (a `/V 2 /R 2 /Length 128` file opens in each of them only with a 16-byte key),
+/// and so does this. `/V 1` is always 40 bits (Table 20), which the caller puts in `length_bits`.
 fn key_len(d: &EncryptDict) -> usize {
-    if d.r == 2 { 5 } else { (d.length_bits.clamp(40, 128) / 8) as usize }
+    // Provably in 5..=16 after the clamp, so the cast is lossless.
+    (d.length_bits.clamp(40, 128) / 8) as usize
 }
 
 // ── Revisions 2–4 ──────────────────────────────────────────────────────────────────────────────
@@ -557,15 +662,36 @@ fn user_key_r4(d: &EncryptDict, id0: &[u8], pw: &[u8]) -> Option<Zeroizing<Vec<u
 
 /// The RC4 key derived from an owner password (Algorithm 3, steps a–d).
 fn owner_rc4_key(d: &EncryptDict, owner_pw: &[u8]) -> Zeroizing<Vec<u8>> {
+    owner_rc4_key_hashing(d, owner_pw, 16)
+}
+
+/// Algorithm 3, steps a–d, with each of the 50 rehashes of step c taking the first `hashed` bytes
+/// of the previous digest. The standard hashes the whole digest (16 bytes); some producers hash
+/// only the first n bytes, as Algorithm 2 step h does (see [`owner_rc4_keys`]).
+fn owner_rc4_key_hashing(d: &EncryptDict, owner_pw: &[u8], hashed: usize) -> Zeroizing<Vec<u8>> {
     let n = key_len(d);
     let mut digest = Zeroizing::new(Md5::digest(*pad(owner_pw)).to_vec());
     if d.r >= 3 {
         for _ in 0..50 {
-            digest = Zeroizing::new(Md5::digest(&*digest).to_vec());
+            let take = hashed.min(digest.len());
+            digest = Zeroizing::new(Md5::digest(digest.get(..take).unwrap_or(&digest)).to_vec());
         }
     }
     digest.truncate(n);
     digest
+}
+
+/// The RC4 keys an owner password may have been turned into. The first is Algorithm 3 as the
+/// standard has it. For an R3 or R4 key shorter than 16 bytes some producers rehash only the first
+/// n bytes in step c (as Algorithm 2 step h does for the file key), and qpdf and MuPDF accept an
+/// owner password written that way, so it is tried too.
+fn owner_rc4_keys(d: &EncryptDict, owner_pw: &[u8]) -> Vec<Zeroizing<Vec<u8>>> {
+    let n = key_len(d);
+    let mut keys = vec![owner_rc4_key(d, owner_pw)];
+    if d.r >= 3 && n < 16 {
+        keys.push(owner_rc4_key_hashing(d, owner_pw, n));
+    }
+    keys
 }
 
 type SecretBytes = Zeroizing<Vec<u8>>;
@@ -573,10 +699,14 @@ type SecretBytes = Zeroizing<Vec<u8>>;
 /// Algorithm 7: authenticate an owner password (recover the user password from `/O`).
 /// Returns the file key and the recovered user password (padding removed).
 fn owner_key_r4(d: &EncryptDict, id0: &[u8], pw: &[u8]) -> Option<(SecretBytes, SecretBytes)> {
-    let rk = owner_rc4_key(d, pw);
+    owner_rc4_keys(d, pw).into_iter().find_map(|rk| owner_key_with(d, id0, &rk))
+}
+
+/// Algorithm 7 with one RC4 key from Algorithm 3, steps a–d.
+fn owner_key_with(d: &EncryptDict, id0: &[u8], rk: &[u8]) -> Option<(SecretBytes, SecretBytes)> {
     let mut user = Zeroizing::new(d.o[..d.o.len().min(32)].to_vec());
     if d.r == 2 {
-        user = Zeroizing::new(rc4(&rk, &user));
+        user = Zeroizing::new(rc4(rk, &user));
     } else {
         for i in (0..=19u8).rev() {
             let k = Zeroizing::new(rk.iter().map(|b| b ^ i).collect::<Vec<u8>>());

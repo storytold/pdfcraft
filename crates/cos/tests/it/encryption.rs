@@ -1317,3 +1317,174 @@ fn selectors_that_lead_to_selectors_load_at_once() {
     // margin this wide can't fail on a busy machine.
     assert_eq!(finished.recv_timeout(std::time::Duration::from_secs(120)), Ok(true), "loading must not fan out");
 }
+
+/// An R6 file of the fixture's page, its `/Encrypt` given `cf` as `/CF` and `selectors` (`/StmF`,
+/// `/StrF`, `/EFF`), its content stream `extra` in its dictionary and `data` as stored (the page
+/// encrypted with the file key when `None`), and its `/Info /Title` encrypted with the file key.
+fn r6_file(cf: &str, selectors: &str, extra: &str, data: Option<&[u8]>) -> Vec<u8> {
+    const ID0: &[u8] = b"0123456789abcdef";
+    let params = NewEncryption {
+        algorithm: Algorithm::Aes256,
+        user_password: "user",
+        owner_password: "owner",
+        permissions: -4,
+        encrypt_metadata: true,
+        seed: [3; 32],
+    };
+    let h = pdfcraft_crypt::create(&params, ID0).unwrap();
+    let d = h.dict();
+    let hex = |b: &[u8]| b.iter().map(|x| format!("{x:02X}")).collect::<String>();
+    let encrypt = format!(
+        "<< /Filter /Standard /V 5 /R 6 /Length 256 /P -4 /O <{}> /U <{}> /OE <{}> /UE <{}> /Perms <{}> /CF << {cf} >> {selectors} >>",
+        hex(&d.o),
+        hex(&d.u),
+        hex(&d.oe),
+        hex(&d.ue),
+        hex(&d.perms)
+    );
+    let data = data.map_or_else(|| h.encrypt_stream(4, 0, SECRET.as_bytes(), pdfcraft_crypt::StreamKind::Normal), <[u8]>::to_vec);
+    let title = h.encrypt_string(6, 0, b"Quarterly numbers");
+    let mut stream = format!("<< /Length {}{extra} >>\nstream\n", data.len()).into_bytes();
+    stream.extend_from_slice(&data);
+    stream.extend_from_slice(b"\nendstream");
+    let objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 200] >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>".to_vec(),
+        stream,
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_vec(),
+        format!("<< /Title <{}> >>", hex(&title)).into_bytes(),
+        encrypt.into_bytes(),
+    ];
+    let mut out = b"%PDF-2.0\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+        out.extend_from_slice(o);
+        out.extend_from_slice(b"\nendobj\n");
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    let id = hex(ID0);
+    let trailer =
+        format!("trailer\n<< /Size {} /Root 1 0 R /Info 6 0 R /Encrypt 7 0 R /ID [<{id}> <{id}>] >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1);
+    out.extend_from_slice(trailer.as_bytes());
+    out
+}
+
+const STD_CF: &str = "/StdCF << /Type /CryptFilter /CFM /AESV3 /Length 32 /AuthEvent /DocOpen >>";
+
+/// ISO 32000-2 Table 25: a `/CFM` other than `None`, `V2`, `AESV2` or `AESV3` is to be reported
+/// as an algorithm the file is encrypted with and can't be read with. When strings, streams or
+/// embedded files use it, the file doesn't open, in the document model or the renderer, with any
+/// password (it opened, its page and title read as ciphertext). `/CFM /None`, or none, leaves data
+/// as it is.
+#[test]
+fn a_crypt_filter_method_that_cant_be_decrypted_is_reported() {
+    let unknown = |cfm: &str| format!("{STD_CF} /X << /CFM {cfm} /Length 32 >>");
+    for cfm in ["/AESV9", "/Identity", "3", "(AESV3)"] {
+        for selectors in ["/StmF /X /StrF /X", "/StmF /X /StrF /StdCF", "/StmF /StdCF /StrF /X", "/StmF /StdCF /StrF /StdCF /EFF /X"] {
+            let bytes = Arc::new(r6_file(&unknown(cfm), selectors, "", None));
+            for pw in [Some("user"), Some("owner"), Some("wrong"), None] {
+                match Document::open_with_password(bytes.clone(), pw) {
+                    Err(CosError::Security(why)) => assert!(why.contains("unsupported algorithm"), "{cfm} {selectors}: {why}"),
+                    other => panic!("{cfm} {selectors} with {pw:?}: {:?}", other.map(|_| ())),
+                }
+                let render = hayro_syntax::Pdf::new_with_password(bytes.to_vec(), pw.unwrap_or(""));
+                assert!(
+                    matches!(render, Err(hayro_syntax::LoadPdfError::Decryption(hayro_syntax::DecryptionError::UnsupportedAlgorithm))),
+                    "renderer: {cfm} {selectors} with {pw:?}"
+                );
+            }
+        }
+    }
+    // Defined and used by nothing: the file opens (as in qpdf, MuPDF and PDFium).
+    let unused = Arc::new(r6_file(&unknown("/AESV9"), "/StmF /StdCF /StrF /StdCF", "", None));
+    let doc = Document::open_with_password(unused.clone(), Some("user")).unwrap();
+    assert_eq!((content(&doc).as_str(), title(&doc).as_deref()), (SECRET, Some("Quarterly numbers")));
+    assert!(hayro_syntax::Pdf::new_with_password(unused.to_vec(), "user").is_ok());
+    // `/CFM /None`, a null one, or none: the data is as stored.
+    for cfm in ["/CFM /None", "/CFM null", ""] {
+        let clear = Arc::new(r6_file(&format!("{STD_CF} /Clear << {cfm} >>"), "/StmF /Clear /StrF /StdCF", "", Some(SECRET.as_bytes())));
+        let doc = Document::open_with_password(clear.clone(), Some("user")).unwrap();
+        assert_eq!((content(&doc).as_str(), title(&doc).as_deref()), (SECRET, Some("Quarterly numbers")), "{cfm}");
+        assert!(hayro_syntax::Pdf::new_with_password(clear.to_vec(), "user").is_ok(), "{cfm}");
+    }
+}
+
+/// A stream naming, for itself, a crypt filter whose method can't be decrypted holds data as
+/// stored, which isn't the stream it encrypts: the document opens, the stream reads as stored, and
+/// a save never writes it as anything else. An incremental save keeps it as it is; a full save,
+/// which renumbers it, and a save that removes or changes the security are refused (they wrote its
+/// ciphertext as plaintext, or under a key it wasn't made with).
+#[test]
+fn a_stream_encrypted_with_a_method_that_cant_be_decrypted_stays_as_stored() {
+    let stored = "ciphertext of an unknown method";
+    let bytes = Arc::new(r6_file(
+        &format!("{STD_CF} /X << /CFM /AESV9 /Length 32 >>"),
+        "/StmF /StdCF /StrF /StdCF",
+        " /Filter /Crypt /DecodeParms << /Name /X >>",
+        Some(stored.as_bytes()),
+    ));
+    let doc = Document::open_with_password(bytes.clone(), Some("owner")).unwrap();
+    assert_eq!(raw_content(&doc), stored);
+    let contents = contents_of(&doc);
+    let Object::Stream(s) = doc.get(contents).as_ref().clone() else { panic!("no content stream") };
+    assert!(doc.reads_as_stored(&s));
+    assert_eq!(title(&doc).as_deref(), Some("Quarterly numbers"), "the rest decrypts");
+    // An edit elsewhere: incremental, the stream untouched and still as stored.
+    let mut edited_info = doc.clone();
+    let info = edited_info.trailer().reference(b"Info").unwrap();
+    let mut d = pdfcraft_cos::Dict::new();
+    d.set(b"Title".to_vec(), Object::String(PdfString::text("Edited")));
+    edited_info.set(info, Object::Dict(d));
+    let saved = write_incremental(&edited_info, &SaveOptions::default()).unwrap();
+    assert!(holds(&saved, stored));
+    let reread = Document::open_with_password(Arc::new(saved), Some("owner")).unwrap();
+    assert_eq!((raw_content(&reread).as_str(), title(&reread).as_deref()), (stored, Some("Edited")));
+    let refused = |doc: &Document, case: &str| match write_full(doc, &SaveOptions::default()) {
+        Err(CosError::Security(why)) => assert!(why.contains("unsupported algorithm"), "{case}: {why}"),
+        other => panic!("{case}: {:?}", other.map(|b| b.len())),
+    };
+    refused(&doc, "a full save");
+    let mut unprotected = doc.clone();
+    unprotected.remove_encryption();
+    refused(&unprotected, "removing the security");
+    assert!(matches!(write_incremental(&unprotected, &SaveOptions::default()), Err(CosError::Security(_))), "incremental removal");
+    let mut changed = doc.clone();
+    changed
+        .set_encryption(&NewEncryption {
+            algorithm: Algorithm::Aes128,
+            user_password: "",
+            owner_password: "o",
+            permissions: -1,
+            encrypt_metadata: true,
+            seed: [1; 32],
+        })
+        .unwrap();
+    refused(&changed, "changing the security");
+    // The stream edited: it would be written as if encrypted with the method.
+    let mut edited = doc.clone();
+    edited.set(contents, Object::Stream(s));
+    assert!(matches!(write_incremental(&edited, &SaveOptions::default()), Err(CosError::Security(_))), "an edited stream");
+}
+
+/// Algorithm 13 (ISO 32000-2 §7.6.4.4.12): byte 8 of `/Perms` "should match" `/EncryptMetadata`.
+/// A file where it doesn't opens as before, with a repair-log line (qpdf warns of it; MuPDF and
+/// PDFium open such files).
+#[test]
+fn a_perms_entry_that_disagrees_with_encrypt_metadata_is_recorded() {
+    let lines = |selectors: &str| {
+        let doc = Document::open_with_password(Arc::new(r6_file(STD_CF, selectors, "", None)), Some("user")).unwrap();
+        assert_eq!(content(&doc), SECRET, "{selectors}");
+        doc.repair_log().iter().filter(|l| l.contains("/Perms")).count()
+    };
+    // The file's /Perms says T (metadata encrypted).
+    assert_eq!(lines("/StmF /StdCF /StrF /StdCF"), 0);
+    assert_eq!(lines("/StmF /StdCF /StrF /StdCF /EncryptMetadata true"), 0);
+    assert_eq!(lines("/StmF /StdCF /StrF /StdCF /EncryptMetadata false"), 1);
+}

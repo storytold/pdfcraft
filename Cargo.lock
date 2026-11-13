@@ -4471,6 +4471,7 @@ dependencies = [
  "pdfcraft-content",
  "pdfcraft-cos",
  "pdfcraft-create",
+ "pdfcraft-crypt",
  "pdfcraft-edit",
  "pdfcraft-export",
  "pdfcraft-filters",
