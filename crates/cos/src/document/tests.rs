@@ -2218,6 +2218,22 @@ fn reconstruction_finds_an_object_glued_to_the_endobj_before_it() {
     assert_eq!(page.as_dict().and_then(|d| d.get(b"Glued")), Some(&Object::Bool(true)), "object 3 is found: {page:?}");
 }
 
+/// The `endobj` a header may be glued to ends an object: `weekendobj3 0 obj` or `(endobj3 0 obj`
+/// inside a string, or a name `/endobj3`, after the real object 3 is not a header, so it does not
+/// replace that object (review of #7090).
+#[test]
+fn reconstruction_ignores_endobj_that_does_not_end_an_object() {
+    for text in ["(weekendobj3 0 obj null endobj)", "(endobj3 0 obj null endobj)", "/endobj3 0 obj null"] {
+        let pdf = format!(
+            "%PDF-1.4\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Real true >> endobj\n4 0 obj [{text}] endobj\ntrailer << /Root 1 0 R >>\n%%EOF\n"
+        );
+        let doc = Document::open(Arc::new(pdf.into_bytes())).unwrap();
+        assert!(doc.reconstructed(), "{text}: {:?}", doc.repair_log());
+        let page = doc.get(crate::ObjRef { num: 3, generation: 0 });
+        assert_eq!(page.as_dict().and_then(|d| d.get(b"Real")), Some(&Object::Bool(true)), "{text}: object 3 keeps its real offset: {page:?}");
+    }
+}
+
 /// A rebuild prefers a trailer whose /Root is the catalog (as `root_is_catalog` judges it): a
 /// later cross-reference stream whose /Root points at the Info dictionary does not replace an
 /// earlier good trailer, or a full save would write the Info dictionary as /Root.

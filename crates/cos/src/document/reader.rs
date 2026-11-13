@@ -809,7 +809,12 @@ fn object_headers(data: &[u8]) -> Vec<(u32, u64, u16, usize)> {
     while i < data.len() {
         // Object headers start at a line start (or after whitespace), or right after an
         // `endobj` they are glued to (`endobj5 0 obj`, as Microsoft Print To PDF writes some, #7082).
-        let at_start = i == 0 || is_whitespace(data[i - 1]) || data[i - 1] == b'>' || data.get(i.saturating_sub(6)..i) == Some(b"endobj".as_slice());
+        // That `endobj` must end an object: whitespace or a closing delimiter comes before it, so
+        // `weekendobj3 0 obj` or `(endobj3 0 obj` in a string, or a name `/endobj3`, is no header.
+        let glued = i >= 6
+            && data.get(i - 6..i) == Some(b"endobj".as_slice())
+            && i.checked_sub(7).and_then(|p| data.get(p)).is_none_or(|b| is_whitespace(*b) || matches!(b, b')' | b'>' | b']' | b'}'));
+        let at_start = i == 0 || is_whitespace(data[i - 1]) || data[i - 1] == b'>' || glued;
         if at_start && data[i].is_ascii_digit() {
             let mut lx = Lexer::new(data, i);
             let n = lx.token();
