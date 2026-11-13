@@ -788,7 +788,7 @@ pub(crate) fn delete_selected(cv: &mut CommentView, info: &DocInfo) -> Option<Ed
     }
 }
 
-/// The arrow keys move the selected comment a screen pixel; with ⌘/Ctrl or Shift, ten. Up is up
+/// The arrow keys move selected comments a screen pixel; with ⌘/Ctrl or Shift, ten. Up is up
 /// on screen whatever the zoom, the page's rotation and the view's; the keys are taken before
 /// the view scrolls or turns the page with them. Each press is one undo step. Text markup stays
 /// with its text, and a locked comment where it is.
@@ -838,7 +838,25 @@ pub(crate) fn nudge_keys(ctx: &egui::Context, keys: PageKeys, view: &mut DocView
     let (a, b) = (user(xf.rect.center()), user(xf.rect.center() + step));
     let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
     if dx.is_finite() && dy.is_finite() && (dx != 0.0 || dy != 0.0) {
-        view.pending_edit = Some(Edit::MoveAnnotation { page, index, dx, dy });
+        // Match a pointer drag: move the eligible selection on this page as one undo step.
+        // Text markup and locked comments cannot be moved and would reject a batch.
+        let mut indices = vec![index];
+        for &(other_page, other_index) in &view.comments.also {
+            if other_page == page
+                && !indices.contains(&other_index)
+                && info.annotations.iter().any(|a| a.page == page && a.index == other_index && !a.is_reply() && !on_text(a) && !a.locked)
+            {
+                indices.push(other_index);
+            }
+        }
+        view.pending_edit = Some(if indices.len() == 1 {
+            Edit::MoveAnnotation { page, index, dx, dy }
+        } else {
+            Edit::Batch {
+                label: tl!("Move comments").to_owned(),
+                edits: indices.into_iter().map(|index| Edit::MoveAnnotation { page, index, dx, dy }).collect(),
+            }
+        });
     }
 }
 

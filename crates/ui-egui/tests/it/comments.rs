@@ -1127,6 +1127,29 @@ fn arrow_keys_nudge_the_selected_comment() {
     assert_eq!(h.state().views[0].current, 1, "and the view goes to the next page");
 }
 
+#[test]
+fn arrow_keys_nudge_all_selected_comments_as_one_undo_step() {
+    use egui::Key;
+    let mut h = harness(|app| app.set_option("quick", "square").unwrap());
+    drag_pt(&mut h, (30.0, 110.0), (80.0, 70.0));
+    drag_pt(&mut h, (130.0, 110.0), (180.0, 70.0));
+    h.state_mut().set_option("quick", "select").unwrap();
+    let before: Vec<_> = comments(&h).iter().map(|a| a.rect).collect();
+    assert_eq!(before.len(), 2);
+    h.state_mut().views[0].comments.selected = Some((0, 0));
+    h.state_mut().views[0].comments.also = vec![(0, 1)];
+    h.key_press(Key::ArrowRight);
+    h.run_steps(3);
+    let moved: Vec<_> = comments(&h).iter().map(|a| a.rect).collect();
+    for (old, new) in before.iter().zip(&moved) {
+        assert!(new[0] > old[0], "each selected comment moves: {before:?} -> {moved:?}");
+    }
+    h.state_mut().undo();
+    h.run_steps(2);
+    let undone: Vec<_> = comments(&h).iter().map(|a| a.rect).collect();
+    assert_eq!(undone, before, "one undo restores the whole selection");
+}
+
 /// #3632: with a comment selected, Alt+← / Alt+→ still go back and forward through the view
 /// history instead of nudging it (egui's key patterns let an extra Alt through).
 #[test]
