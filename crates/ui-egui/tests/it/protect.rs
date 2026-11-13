@@ -82,3 +82,66 @@ fn editing_restrictions_via_advanced_options() {
     // Remove security is disabled for nobody here: this session set it.
     assert!(h.state().session.get(id).unwrap().allows_security_change());
 }
+
+/// Advanced Options lists the guide's five compatibility levels, each with the PDF version it
+/// needs, and offers "All document contents except metadata" from Acrobat 6.0 on (Acrobat 9 guide:
+/// "This option is available when you select a compatibility to Acrobat 6.0 and later"): the
+/// levels whose encryption has crypt filters, where ISO 32000-2 Table 21 `EncryptMetadata` means
+/// something. Acrobat 6.0 writes 128-bit RC4 through a crypt filter (`/V 4`, `/CFM /V2`).
+#[test]
+fn acrobat_6_and_later_can_leave_the_metadata_unencrypted() {
+    use egui::accesskit::Role;
+
+    let mut h = harness();
+    h.state_mut().execute("protect.password");
+    h.run_steps(2);
+    h.get_by_label("Advanced Options ⌄").click();
+    h.run_steps(2);
+    let pick = |h: &mut Harness<'static, PdfCraftApp>, from: &str, to: &str| {
+        h.query_all_by_role(Role::ComboBox).find(|n| n.value().as_deref() == Some(from)).expect(from).click();
+        h.run_steps(2);
+        h.get_by_label(to).click();
+        h.run_steps(2);
+    };
+    const X: &str = "Acrobat X and later (PDF 1.7, 256-bit AES)";
+    const A6: &str = "Acrobat 6.0 and later (PDF 1.5, 128-bit RC4)";
+    const EXCEPT: &str = "All document contents except metadata";
+    let disabled = |h: &Harness<'static, PdfCraftApp>| h.query_by(|n| n.label().as_deref() == Some(EXCEPT) && n.is_disabled()).is_some();
+    // The list, in the guide's order.
+    h.query_all_by_role(Role::ComboBox).find(|n| n.value().as_deref() == Some(X)).expect(X).click();
+    h.run_steps(2);
+    let levels = [
+        X,
+        "Acrobat 7.0 and later (PDF 1.6, 128-bit AES)",
+        A6,
+        "Acrobat 5.0 and later (PDF 1.4, 128-bit RC4)",
+        "Acrobat 3.0 and later (PDF 1.3, 40-bit RC4)",
+    ];
+    let tops: Vec<f32> = levels.iter().map(|l| h.get_by_label(l).rect().top()).collect();
+    assert!(tops.windows(2).all(|w| w[0] < w[1]), "in the guide's order: {tops:?}");
+    h.get_by_label(X).click();
+    h.run_steps(2);
+    assert!(!disabled(&h), "Acrobat X");
+    for (level, offered) in levels.iter().zip([true, true, true, false, false]).skip(1) {
+        pick(&mut h, X, level);
+        assert_eq!(!disabled(&h), offered, "{level}");
+        pick(&mut h, level, X);
+    }
+    pick(&mut h, X, A6);
+    h.get_by_label(EXCEPT).click();
+    h.run_steps(2);
+    type_into(&mut h, "Type Password", "Open-Sesame-42");
+    type_into(&mut h, "Re-type Password", "Open-Sesame-42");
+    h.get_by_label("Apply").click();
+    h.run_steps(3);
+    let id = h.state().views[0].id;
+    let bytes = h.state().session.save_bytes(id).unwrap();
+    let raw = String::from_utf8_lossy(&bytes);
+    for entry in ["/V 4", "/R 4", "/CFM /V2", "/EncryptMetadata false"] {
+        assert!(raw.contains(entry), "{entry} missing");
+    }
+    // The fixture is PDF 1.7 already: the version is never lowered.
+    assert!(raw.starts_with("%PDF-1.7"));
+    let mut s = pdfcraft_engine::Session::new();
+    assert!(s.open("p.pdf", None, bytes, Some("Open-Sesame-42")).is_ok());
+}

@@ -27,7 +27,7 @@ use proptest::prelude::*;
 const ID: &[u8] = b"\x01\x23\x45\x67\x89\xab\xcd\xef\x0f\xed\xcb\xa9\x87\x65\x43\x21";
 
 fn algorithms() -> impl Strategy<Value = Algorithm> {
-    prop::sample::select(vec![Algorithm::Rc4_40, Algorithm::Rc4_128, Algorithm::Aes128, Algorithm::Aes256])
+    prop::sample::select(vec![Algorithm::Rc4_40, Algorithm::Rc4_128, Algorithm::Rc4_128CryptFilter, Algorithm::Aes128, Algorithm::Aes256])
 }
 
 /// Content at the lengths where CBC padding goes wrong, plus anything in between.
@@ -109,7 +109,7 @@ proptest! {
         // AES-128 and RC4-128, 32 for AES-256. `key_len` is the only place that decides this and
         // nothing in either suite reads it back, so `if d.r == 2 { 5 }` becoming `{ 4 }` today
         // produces a file key of the wrong size that every test still calls fine.
-        let want_len = match alg { Algorithm::Rc4_40 => 5, Algorithm::Aes128 | Algorithm::Rc4_128 => 16, Algorithm::Aes256 => 32 };
+        let want_len = match alg { Algorithm::Rc4_40 => 5, Algorithm::Aes128 | Algorithm::Rc4_128 | Algorithm::Rc4_128CryptFilter => 16, Algorithm::Aes256 => 32 };
         prop_assert_eq!(h.file_key().len(), want_len, "{:?} must use a {} byte file key", alg, want_len);
 
         let h = make(alg, "user", "owner");
@@ -143,7 +143,7 @@ proptest! {
         for cut in 0..=enc.len() {
             let broken = &enc[..cut];
             let out = h.decrypt_string(7, 3, broken);
-            if alg == Algorithm::Rc4_40 || alg == Algorithm::Rc4_128 {
+            if matches!(alg, Algorithm::Rc4_40 | Algorithm::Rc4_128 | Algorithm::Rc4_128CryptFilter) {
                 prop_assert_eq!(out.len(), cut, "RC4 must be length-preserving ({:?})", alg);
             } else {
                 let blocks = cut.saturating_sub(16) / 16;
@@ -456,9 +456,13 @@ proptest! {
             prop_assert_ne!(&yes.decrypt_string(7, 0, &no.encrypt_string(7, 0, &data))[..], &data[..], "a key built for plain metadata must not decrypt a file whose keys encrypt it");
         }
 
-        // Revisions below 4 always encrypt metadata, whatever the caller asked for.
-        let legacy = create(&NewEncryption { algorithm: Algorithm::Rc4_128, user_password: "user", owner_password: "owner", permissions: -1, encrypt_metadata: false, seed: [0x5e; 32] }, ID).unwrap();
-        prop_assert!(legacy.dict().encrypt_metadata && legacy.encrypts_metadata(), "V<4 always encrypts metadata, as create() documents");
+        // 40-bit RC4 (revision 2, no crypt filters) always encrypts metadata, whatever the caller
+        // asked for; 128-bit RC4 asked to leave it plain moves to revision 4 with an RC4 crypt
+        // filter, where the flag can be said.
+        let legacy = create(&NewEncryption { algorithm: Algorithm::Rc4_40, user_password: "user", owner_password: "owner", permissions: -1, encrypt_metadata: false, seed: [0x5e; 32] }, ID).unwrap();
+        prop_assert!(legacy.dict().encrypt_metadata && legacy.encrypts_metadata(), "V 1 always encrypts metadata, as create() documents");
+        let rc4 = create(&NewEncryption { algorithm: Algorithm::Rc4_128, user_password: "user", owner_password: "owner", permissions: -1, encrypt_metadata: false, seed: [0x5e; 32] }, ID).unwrap();
+        prop_assert!(rc4.dict().r == 4 && !rc4.encrypts_metadata(), "128-bit RC4 keeps the request through a crypt filter");
     }
 
 }

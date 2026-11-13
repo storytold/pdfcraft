@@ -2760,6 +2760,27 @@ fn protection_is_validated_undoable_and_never_logged() {
     assert_eq!(page_texts(&s, id), ["Page 1"]);
 }
 
+/// "Encrypt all document contents except metadata" with 128-bit RC4 is written as asked, through
+/// an RC4 crypt filter (ISO 32000-2 Table 20 `V 4`, Table 25 `/CFM /V2`) and PDF 1.5, instead of
+/// a `/V 2` file whose metadata is encrypted after all. 40-bit RC4 has no crypt filter, so the
+/// request is refused and the document is left as it was.
+#[test]
+fn rc4_128_keeps_the_metadata_unencrypted_when_asked() {
+    use pdfcraft_cos::Algorithm::{Rc4_40, Rc4_128};
+
+    let (mut s, id) = session_with(1);
+    let refused = Protection { algorithm: Rc4_40, encrypt_metadata: false, ..protection(Some("secret"), None) };
+    assert!(matches!(s.apply(id, Edit::Protect(refused)), Err(EditError::Protection(m)) if m.starts_with("40-bit RC4 always encrypts the metadata")));
+    assert!(!s.get(id).unwrap().info.encrypted && s.get(id).unwrap().can_undo().is_none());
+    s.apply(id, Edit::Protect(Protection { algorithm: Rc4_128, encrypt_metadata: false, ..protection(Some("secret"), None) })).unwrap();
+    assert_eq!(s.get(id).unwrap().security_summary().unwrap().method, "RC4, 128-bit");
+    let saved = s.save_bytes(id).unwrap();
+    let doc = pdfcraft_cos::Document::open_with_password(saved.clone(), Some("secret")).unwrap();
+    let d = doc.security().unwrap().dict().clone();
+    assert_eq!((d.v, d.r, d.encrypt_metadata, d.crypt_filters), (4, 4, false, vec![(b"StdCF".to_vec(), pdfcraft_cos::CryptMethod::Rc4)]));
+    assert!(saved.get(5..8) >= Some(&b"1.5"[..]), "PDF 1.5 or later");
+}
+
 /// Protect a fresh document with `p` as the app does: the edit's result and, when it is
 /// accepted, how the saved file authenticates with no password, the open password and the
 /// permissions password (`None`: it doesn't open).

@@ -3123,6 +3123,59 @@ fn protecting_through_tools() {
     ok(&mut c, "doc_open", json!({ "path": "open.pdf" }));
 }
 
+/// Each compatibility level writes its encryption and the PDF version it needs: Acrobat 6.0
+/// (`rc4-128-crypt-filter`) is 128-bit RC4 through a crypt filter, PDF 1.5; 128-bit RC4 that
+/// leaves the metadata unencrypted goes through a crypt filter (PDF 1.5, ISO 32000-2 Table 20
+/// `V 4`) instead of being written with the metadata encrypted; AES-128 needs PDF 1.6 (Table 25)
+/// and AES-256 PDF 1.7 with Adobe extension level 8. 40-bit RC4 cannot leave it unencrypted, so
+/// asking it to is refused.
+#[test]
+fn each_compatibility_level_writes_its_encryption_and_version() {
+    let dir = workdir("protect-levels");
+    let old = String::from_utf8(fixture(1)).unwrap().replacen("%PDF-1.7", "%PDF-1.3", 1);
+    std::fs::write(dir.join("old.pdf"), old).unwrap();
+    let mut a = auto(&dir);
+    for (compatibility, header, entries) in [
+        ("rc4-128", "%PDF-1.5", &["/V 4", "/R 4", "/CFM /V2", "/EncryptMetadata false"][..]),
+        ("rc4-128-crypt-filter", "%PDF-1.5", &["/V 4", "/R 4", "/CFM /V2"][..]),
+        ("aes-128", "%PDF-1.6", &["/V 4", "/CFM /AESV2", "/EncryptMetadata false"][..]),
+        ("aes-256", "%PDF-1.7", &["/V 5", "/CFM /AESV3", "/BaseVersion /1.7", "/ExtensionLevel 8"][..]),
+    ] {
+        let doc = ok(&mut a, "doc_open", json!({ "path": "old.pdf" }))["doc"].as_u64().unwrap();
+        ok(
+            &mut a,
+            "doc_protect",
+            json!({ "doc": doc, "open_password": "open", "compatibility": compatibility, "encrypt_metadata": matches!(compatibility, "aes-256" | "rc4-128-crypt-filter") }),
+        );
+        let out = format!("{compatibility}.pdf");
+        ok(&mut a, "doc_save", json!({ "doc": doc, "path": out }));
+        let bytes = std::fs::read(dir.join(&out)).unwrap();
+        let raw = String::from_utf8_lossy(&bytes);
+        assert!(raw.starts_with(header), "{compatibility}: {:?}", raw.get(..9));
+        for e in entries {
+            assert!(raw.contains(e), "{compatibility}: {e} missing");
+        }
+        let mut b = auto(&dir);
+        assert!(b.call("doc_open", &json!({ "path": out })).is_err(), "{compatibility}: the open password is needed");
+        let re = ok(&mut b, "doc_open", json!({ "path": out, "password": "open" }))["doc"].as_u64().unwrap();
+        assert!(ok(&mut b, "text_extract", json!({ "doc": re }))["pages"][0]["text"].as_str().is_some_and(|t| t.contains("Page 1")));
+    }
+    // With the metadata encrypted, 128-bit RC4 stays /V 2 /R 3 (PDF 1.4; the object streams a
+    // save writes by default need 1.5 of their own).
+    let doc = ok(&mut a, "doc_open", json!({ "path": "old.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "doc_protect", json!({ "doc": doc, "open_password": "open", "compatibility": "rc4-128" }));
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "rc4-v2.pdf" }));
+    let raw = String::from_utf8_lossy(&std::fs::read(dir.join("rc4-v2.pdf")).unwrap()).into_owned();
+    assert!(raw.starts_with("%PDF-1.5") && raw.contains("/V 2") && raw.contains("/R 3") && !raw.contains("/CF"), "{:?}", raw.get(..9));
+    // 40-bit RC4 always encrypts the metadata: asking it not to is an error, and nothing is applied.
+    let doc = ok(&mut a, "doc_open", json!({ "path": "old.pdf" }))["doc"].as_u64().unwrap();
+    match a.call("doc_protect", &json!({ "doc": doc, "open_password": "open", "compatibility": "rc4-40", "encrypt_metadata": false })) {
+        Err(ToolError::Failed(m)) => assert!(m.contains("40-bit RC4 always encrypts the metadata"), "{m}"),
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(ok(&mut a, "doc_info", json!({ "doc": doc }))["security"]["protected"], false);
+}
+
 /// A refused `doc_split` or separate-file `page_extract` leaves no output directory behind
 /// (#5081), whether the protection allows no page changes ("Any except extracting pages") or
 /// page changes without copying; with copying allowed as well, the user may extract.

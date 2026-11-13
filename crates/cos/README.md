@@ -76,6 +76,11 @@ another. Edits never touch the original bytes.
   revision R2–R6 (RC4, AES-128/256), crypt filters, `/EFF` embedded-file encryption, and
   `/EncryptMetadata`. `security.rs` knows what the spec exempts — the `/Encrypt` dictionary, xref
   streams, the trailer `/ID`, and objects inside an object stream (the stream is encrypted whole).
+  `set_encryption` makes the file declare the PDF version its new encryption needs (ISO 32000-2
+  Tables 20 and 25: RC4-40 1.3, RC4-128 1.4, a crypt filter 1.5, AES-128 1.6, AES-256 2.0, which a
+  file below 2.0 declares as 1.7 with `/Extensions /ADBE` level 8), raising the header and any lower
+  catalog `/Version`, never lowering either. 128-bit RC4 with `/EncryptMetadata false` is written
+  through an RC4 crypt filter (`/V 4`, `/CFM /V2`), the only way that revision can say it.
 
 ## Writing
 

@@ -68,7 +68,7 @@ fn title(doc: &Document) -> Option<String> {
     info.as_dict()?.get(b"Title").and_then(|t| doc.resolve(t).as_string().map(|s| s.to_text()))
 }
 
-const ALL: [Algorithm; 4] = [Algorithm::Rc4_40, Algorithm::Rc4_128, Algorithm::Aes128, Algorithm::Aes256];
+const ALL: [Algorithm; 5] = [Algorithm::Rc4_40, Algorithm::Rc4_128, Algorithm::Rc4_128CryptFilter, Algorithm::Aes128, Algorithm::Aes256];
 
 #[test]
 fn every_algorithm_round_trips_and_hides_the_content() {
@@ -225,6 +225,181 @@ fn qpdf_agrees() {
             assert!(text.contains(&format!("Supplied password is {expect}")), "{alg:?}/{pw}: {text}");
             let check = qpdf.command().arg(format!("--password={pw}")).arg("--check").arg(&path).output().unwrap();
             assert!(check.status.success(), "{alg:?}/{pw}: {}", String::from_utf8_lossy(&check.stdout));
+        }
+    }
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// A one-page file with header `%PDF-{header}` and `catalog_extra` in its catalog.
+fn versioned(header: &str, catalog_extra: &str) -> Vec<u8> {
+    let objs = [
+        format!("<< /Type /Catalog /Pages 2 0 R{catalog_extra} >>"),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 200] >>".to_string(),
+        "<< /Type /Page /Parent 2 0 R /Resources << >> >>".to_string(),
+    ];
+    let mut out = format!("%PDF-{header}\n").into_bytes();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    out
+}
+
+/// `bytes` protected with `alg` (open password "u") and saved in full, then reopened.
+fn protect_versioned(bytes: Vec<u8>, alg: Algorithm) -> (Vec<u8>, Document) {
+    protect_versioned_with(bytes, alg, true)
+}
+
+fn protect_versioned_with(bytes: Vec<u8>, alg: Algorithm, encrypt_metadata: bool) -> (Vec<u8>, Document) {
+    let mut doc = Document::open(Arc::new(bytes)).unwrap();
+    let params = NewEncryption { algorithm: alg, user_password: "u", owner_password: "o", permissions: -1, encrypt_metadata, seed: [3; 32] };
+    doc.set_encryption(&params).unwrap();
+    // Without object streams, which need PDF 1.5 of their own.
+    let saved = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
+    let reopened = Document::open_with_password(Arc::new(saved.clone()), Some("u")).unwrap();
+    (saved, reopened)
+}
+
+/// The catalog's `/Version` and `/Extensions /ADBE`, as `(version, adbe)`.
+fn catalog_declarations(doc: &Document) -> (Option<String>, Option<Object>) {
+    let catalog = doc.get(doc.root().unwrap()).as_dict().cloned().unwrap();
+    let version = catalog.get(b"Version").and_then(|v| doc.resolve(v).as_name().map(|n| String::from_utf8_lossy(n).into_owned()));
+    let adbe = catalog.get(b"Extensions").and_then(|e| doc.resolve(e).as_dict().and_then(|e| e.get(b"ADBE").cloned()));
+    (version, adbe)
+}
+
+fn adbe(level: i64) -> Object {
+    let mut d = pdfcraft_cos::Dict::new();
+    d.set(b"BaseVersion".to_vec(), Object::name("1.7"));
+    d.set(b"ExtensionLevel".to_vec(), Object::Int(level));
+    Object::Dict(d)
+}
+
+/// Each encryption writes the PDF version it needs (ISO 32000-2 Table 20 `V 2` PDF 1.4 and `V 4`
+/// PDF 1.5, Table 25 `AESV2` PDF 1.6), and AES-256 (`V 5`, PDF 2.0) written as PDF 1.7 says so
+/// with the Adobe extension level 8 (§7.12). 128-bit RC4 that leaves the metadata unencrypted
+/// goes through a crypt filter (`V 4`), so PDF 1.5.
+#[test]
+fn each_level_writes_the_version_its_encryption_needs() {
+    for (alg, encrypt_metadata, header) in [
+        (Algorithm::Rc4_40, true, "1.3"),
+        (Algorithm::Rc4_128, true, "1.4"),
+        (Algorithm::Rc4_128, false, "1.5"),
+        (Algorithm::Rc4_128CryptFilter, true, "1.5"),
+        (Algorithm::Aes128, true, "1.6"),
+        (Algorithm::Aes256, true, "1.7"),
+    ] {
+        let (saved, doc) = protect_versioned_with(versioned("1.2", ""), alg, encrypt_metadata);
+        assert!(saved.starts_with(format!("%PDF-{header}\n").as_bytes()), "{alg:?}: {:?}", String::from_utf8_lossy(&saved[..9]));
+        let (version, extension) = catalog_declarations(&doc);
+        assert_eq!(version, None, "{alg:?}: the header says it");
+        assert_eq!(extension, (alg == Algorithm::Aes256).then(|| adbe(8)), "{alg:?}");
+    }
+}
+
+/// A version is never lowered, a catalog `/Version` (which counts when later than the header,
+/// §7.7.2) is honoured and raised when below the need (an extension's base version may not exceed
+/// it, §7.12.4), PDF 2.0 needs no extension for AES-256, and other extensions are kept.
+#[test]
+fn encryption_never_lowers_a_version_and_keeps_other_extensions() {
+    // Already later: nothing changes.
+    let (saved, doc) = protect_versioned(versioned("1.7", ""), Algorithm::Aes128);
+    assert!(saved.starts_with(b"%PDF-1.7\n"));
+    assert_eq!(catalog_declarations(&doc), (None, None));
+    let (saved, doc) = protect_versioned(versioned("2.0", ""), Algorithm::Aes256);
+    assert!(saved.starts_with(b"%PDF-2.0\n"));
+    assert_eq!(catalog_declarations(&doc), (None, None), "PDF 2.0 defines V 5 itself");
+    let (saved, doc) = protect_versioned(versioned("1.4", " /Version /2.0"), Algorithm::Aes256);
+    assert!(saved.starts_with(b"%PDF-1.4\n"), "the catalog's 2.0 applies (§7.7.2)");
+    assert_eq!(catalog_declarations(&doc), (Some("2.0".into()), None));
+    // A catalog /Version below the need is raised with the header.
+    let (saved, doc) = protect_versioned(versioned("1.3", " /Version /1.4"), Algorithm::Aes128);
+    assert!(saved.starts_with(b"%PDF-1.6\n"));
+    assert_eq!(catalog_declarations(&doc).0.as_deref(), Some("1.6"));
+    // A catalog /Version that already reaches it leaves the header alone.
+    let (saved, doc) = protect_versioned(versioned("1.3", " /Version /1.6"), Algorithm::Aes128);
+    assert!(saved.starts_with(b"%PDF-1.3\n"));
+    assert_eq!(catalog_declarations(&doc).0.as_deref(), Some("1.6"));
+    // A lower Adobe level is raised; a higher one and other developers' entries are kept.
+    let (_, doc) = protect_versioned(versioned("1.7", " /Extensions << /ADBE << /BaseVersion /1.7 /ExtensionLevel 3 >> >>"), Algorithm::Aes256);
+    assert_eq!(catalog_declarations(&doc).1, Some(adbe(8)));
+    let (_, doc) = protect_versioned(versioned("1.7", " /Extensions << /ADBE << /BaseVersion /1.7 /ExtensionLevel 11 >> >>"), Algorithm::Aes256);
+    assert_eq!(catalog_declarations(&doc).1, Some(adbe(11)));
+    let (_, doc) = protect_versioned(versioned("1.7", " /Extensions << /GLGR << /BaseVersion /1.7 /ExtensionLevel 1002 >> >>"), Algorithm::Aes256);
+    let catalog = doc.get(doc.root().unwrap()).as_dict().cloned().unwrap();
+    let extensions = doc.resolve(catalog.get(b"Extensions").unwrap()).as_dict().cloned().unwrap();
+    assert!(extensions.get(b"GLGR").is_some() && extensions.get(b"ADBE") == Some(&adbe(8)));
+    // An Adobe extension against an earlier base version is superseded by the 1.7 one, never
+    // turned into an array (PDF 2.0 only, §7.12.2); one against an unreadable base version is kept.
+    let (_, doc) = protect_versioned(versioned("1.7", " /Extensions << /ADBE << /BaseVersion /1.6 /ExtensionLevel 2 >> >>"), Algorithm::Aes256);
+    assert_eq!(catalog_declarations(&doc).1, Some(adbe(8)));
+    let (_, doc) = protect_versioned(versioned("1.7", " /Extensions << /ADBE << /BaseVersion (odd) /ExtensionLevel 2 >> >>"), Algorithm::Aes256);
+    assert!(matches!(catalog_declarations(&doc).1, Some(Object::Dict(d)) if d.get(b"ExtensionLevel") == Some(&Object::Int(2))));
+    // An /Extensions that is not a dictionary is left as it is.
+    let (_, doc) = protect_versioned(versioned("1.7", " /Extensions 7"), Algorithm::Aes256);
+    let catalog = doc.get(doc.root().unwrap()).as_dict().cloned().unwrap();
+    assert_eq!(catalog.get(b"Extensions"), Some(&Object::Int(7)));
+}
+
+/// 128-bit RC4 with "Encrypt all document contents except metadata": a crypt filter (`/V 4 /R 4`,
+/// `/CFM /V2`) and `/EncryptMetadata false`, so the document's metadata stream is written in the
+/// clear and everything else is not.
+#[test]
+fn rc4_128_can_leave_the_metadata_readable() {
+    let mut doc = Document::open(Arc::new(fixture())).unwrap();
+    let params = NewEncryption {
+        algorithm: Algorithm::Rc4_128,
+        user_password: "u",
+        owner_password: "o",
+        permissions: -1,
+        encrypt_metadata: false,
+        seed: [5; 32],
+    };
+    doc.set_encryption(&params).unwrap();
+    let saved = write_full(&doc, &SaveOptions::default()).unwrap();
+    let raw = String::from_utf8_lossy(&saved);
+    assert!(raw.contains("<x:xmpmeta>meta</x:xmpmeta>"), "metadata in the clear");
+    assert!(!raw.contains("Secret page") && !raw.contains("Quarterly"), "everything else encrypted");
+    for entry in ["/V 4", "/R 4", "/CFM /V2", "/EncryptMetadata false"] {
+        assert!(raw.contains(entry), "{entry} missing");
+    }
+    let reopened = Document::open_with_password(Arc::new(saved), Some("u")).unwrap();
+    assert!(!reopened.security().unwrap().encrypts_metadata());
+    assert_eq!(content(&reopened), SECRET);
+    assert_eq!(title(&reopened).as_deref(), Some("Quarterly numbers"));
+}
+
+/// qpdf reads every level's version, crypt filter and metadata choice as written.
+#[test]
+fn qpdf_reads_the_levels_as_written() {
+    let qpdf = pdfcraft_oracle::or_skip!(pdfcraft_oracle::qpdf());
+    let dir = private_temp_dir("pdfcraft-enc-levels");
+    for (alg, encrypt_metadata, want) in [
+        (Algorithm::Rc4_128, false, &["PDF Version: 1.5", "R = 4", "stream encryption method: RC4"][..]),
+        (Algorithm::Aes128, true, &["PDF Version: 1.6", "R = 4", "stream encryption method: AESv2"][..]),
+        (Algorithm::Aes256, true, &["PDF Version: 1.7 extension level 8", "R = 6", "stream encryption method: AESv3"][..]),
+    ] {
+        let mut doc = Document::open(Arc::new(versioned("1.3", ""))).unwrap();
+        let params = NewEncryption { algorithm: alg, user_password: "u", owner_password: "o", permissions: -1, encrypt_metadata, seed: [4; 32] };
+        doc.set_encryption(&params).unwrap();
+        let path = dir.join(format!("{alg:?}.pdf"));
+        std::fs::File::create_new(&path)
+            .and_then(|mut f| f.write_all(&write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap()))
+            .unwrap();
+        let check = qpdf.command().arg("--password=u").arg("--check").arg(&path).output().unwrap();
+        let text = String::from_utf8_lossy(&check.stdout);
+        assert!(check.status.success(), "{alg:?}: {text}{}", String::from_utf8_lossy(&check.stderr));
+        let out = qpdf.command().arg("--password=u").arg("--show-encryption").arg(&path).output().unwrap();
+        let text = format!("{text}{}", String::from_utf8_lossy(&out.stdout));
+        for w in want {
+            assert!(text.contains(w), "{alg:?}: {w:?} in {text}");
         }
     }
     let _ = std::fs::remove_dir_all(dir);
