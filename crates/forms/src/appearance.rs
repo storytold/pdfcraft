@@ -849,15 +849,16 @@ fn draws(doc: &Document, f: &Field, wd: &Dict, text: &str) -> bool {
 
 /// Why text field `f` can't take `text`: it has Arabic, Hebrew or Thai that a widget's font can't
 /// hold and this build can't draw (it has no face for the script, or the face lacks a character),
-/// which would come out as `?`. `None` for text it can draw, and for a password field, which
-/// shows `*`.
+/// which would come out as `?`. `None` for text it can draw, for a password field, which shows
+/// `*`, and for a comb field, whose cells are never shaped: a build with the face draws `?` there
+/// too, so the refusal's advice would not help.
 ///
 /// Refused, as Add text, headers, footers and watermarks refuse it, and as a field always refused
 /// such Thai: the build can never draw the value, and the message says how to get one that can.
 /// (A text box draws `?` and marks its comment instead; a character no face or font has, such as
 /// CJK in a Helvetica field, is still kept, drawn as `?` and reported.)
 pub(crate) fn script_refusal(doc: &Document, f: &Field, text: &str) -> Option<String> {
-    if f.has(flags::PASSWORD) || !shaped_text::has_shaped_script(text) {
+    if f.has(flags::PASSWORD) || f.is_comb() || !shaped_text::has_shaped_script(text) {
         return None;
     }
     let held = |w: &Widget| {
