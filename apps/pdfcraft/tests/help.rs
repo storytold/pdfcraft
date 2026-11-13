@@ -50,6 +50,8 @@ fn version_prints_the_version_and_exits() {
 /// An `OPENSSL_ia32cap` that asks for a CPU feature the processor lacks (CPUID leaf 1, EDX bit
 /// 10, reserved on every x86) doesn't stop the app (#2916): aws-lc aborted before `main`, with no
 /// window and nothing in the log.
+// macOS intentionally does not relaunch: Finder delivers files to the original process.
+#[cfg(not(target_os = "macos"))]
 #[test]
 fn a_cpu_override_naming_a_missing_feature_does_not_stop_the_app() {
     let out = run_with(Command::new(BIN).arg("--version").env("OPENSSL_ia32cap", "0x400"), Stdio::piped());

@@ -2,6 +2,9 @@
 //! its signing (#2916). aws-lc printed "Fatal Error: HW capability found: …" and aborted before
 //! `main`. Built to detect the CPU on first use, it would abort at the first signature instead.
 
+// macOS intentionally does not relaunch: Finder delivers files to the original process.
+#![cfg(not(target_os = "macos"))]
+
 use std::process::{Command, Output};
 
 /// CPUID leaf 1, EDX bit 10: reserved, so no x86 processor reports it.
