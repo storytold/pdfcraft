@@ -14839,3 +14839,33 @@ fn text_find_ignores_accents_unless_asked_not_to() {
     // Not a boolean is refused.
     assert!(matches!(a.call("text_find", &json!({ "doc": doc, "query": "cafe", "accent_sensitive": "yes" })), Err(ToolError::InvalidArgs(_))));
 }
+
+#[test]
+fn text_replace_shares_text_finds_accent_option_and_default() {
+    let dir = workdir("replace-accents");
+    for all in [false, true] {
+        for sensitive in [None, Some(false), Some(true)] {
+            let mut a = auto(&dir);
+            let doc = ok(&mut a, "doc_open", json!({"path":"a.pdf"}))["doc"].as_u64().unwrap();
+            ok(&mut a, "page_add_text", json!({"doc":doc,"page":1,"text":"Café menu","at":[20,60],"size":14}));
+            let mut find = json!({"doc":doc,"query":"cafe"});
+            let mut replace = json!({"doc":doc,"find":"cafe","replace":"coffee","all":all});
+            if let Some(sensitive) = sensitive {
+                find["accent_sensitive"] = json!(sensitive);
+                replace["accent_sensitive"] = json!(sensitive);
+            }
+            let found = ok(&mut a, "text_find", find)["count"].as_u64().unwrap();
+            assert_eq!(found, u64::from(sensitive != Some(true)));
+            let result = ok(&mut a, "text_replace", replace);
+            assert_eq!(result["replaced"].as_u64(), Some(found));
+            assert_eq!(result["skipped"], 0);
+            let text = page_text(&mut a, doc).join(" ");
+            assert!(text.contains(if sensitive == Some(true) { "Café menu" } else { "coffee menu" }), "{text}");
+            assert!(matches!(
+                a.call("text_replace", &json!({"doc":doc,"find":"cafe","replace":"x","accent_sensitive":"yes"})),
+                Err(ToolError::InvalidArgs(_))
+            ));
+        }
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}

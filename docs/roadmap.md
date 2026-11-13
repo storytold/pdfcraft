@@ -1,4 +1,6 @@
 - 2026-11-04 (M6, PR #5699 group/cache/MK/button review): Expand calculation groups/duplicates with streaming bounded lookup; retain one canonical Field object per exposed identity and prune stale roots. Protect outside shared-MK owners and carry exact button IDs through native clicks and js_run, with regression and persistence coverage.
+
+> **Last reviewed:** 2026-11-12 | **Last updated:** 2026-11-12 | **Change:** patch (M3 #3460: rebase accent-insensitive Find onto current main, retain upstream search readings and share the accent setting with Replace and text_replace; Greek folding remains a follow-up; estimates unchanged)
 - 2026-11-04 (M6, PR #5699 early reset/duplicate identities): Enforce the shared 64-call reset budget before argument conversion/scanning, with sticky atomic rejection and Open/event budget sharing. Preserve PDF object identity in Calculate order, live targets and value writeback; regress duplicate names, reversed order, native completion and persistence.
 - 2026-11-04 (M6, PR #5699 independent review): Preserve unknown defaults through the JS reset shadow; bound menu/response text before copies. Cover native/console reset persistence, inherited defaults, decode-budget exhaustion and exact Unicode dialog boundaries.
 - 2026-11-04 (M6, PR #5699 memory/widget bounds): Count reset widgets and bound escaped UTF-8 text conversion before copies; add negative and Unicode boundary regressions.
@@ -378,6 +380,7 @@ Estimates unchanged.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-12 | patch | M3 #3460: rebase accent-insensitive Find onto current main, retain upstream search readings and share the accent setting with Replace and text_replace; Greek folding remains a follow-up; estimates unchanged. |
 | 2026-11-03 | patch | M3 #3460: rebase PR #3889 onto main 9ce6d89f and remove all 18 obsolete UI TSV changes; translations are maintained in craft-i18n#141; Find and Search & Redact behavior and estimates unchanged. |
 | 2026-10-29 | minor | M10 #5029: existing Text appearances keep their implicit NoRotate orientation in vector printing even when the flag is clear. Print eligibility and source/AP objects remain unchanged; native viewing without the flag remains a separate gap. Estimates unchanged. |
 | 2026-10-27 | minor | M10 #5029: vector printing preserves existing NoRotate appearance orientation and anchors; estimates unchanged. Missing appearances and NoZoom print behavior remain unchanged. |

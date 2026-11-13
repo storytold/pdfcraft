@@ -135,3 +135,44 @@ fn the_accent_option_is_independent_of_case() {
     toggle_accents(&mut h);
     assert!(pages(&h).is_empty(), "with accents exact, Cafe is none of them");
 }
+
+fn type_in(h: &mut Harness<'static, PdfCraftApp>, placeholder: &str, text: &str) {
+    h.query_by(|n| n.placeholder() == Some(placeholder)).unwrap().click();
+    h.run_steps(3);
+    h.input_mut().events.push(egui::Event::Text(text.to_owned()));
+    let ctx = h.ctx.clone();
+    let mut raw = std::mem::take(h.input_mut());
+    h.state_mut().prepare_raw_input(&ctx, &mut raw);
+    *h.input_mut() = raw;
+    h.step();
+    settle(h);
+}
+
+#[test]
+fn replace_from_the_find_bar_uses_its_accent_setting() {
+    for all in [false, true] {
+        let mut h = harness("");
+        assert!(h.state_mut().execute("edit.replace"));
+        h.run_steps(4);
+        type_in(&mut h, "Find text", "cafe");
+        assert_eq!(pages(&h), [0, 1, 2]);
+        type_in(&mut h, "Replace with", "coffee");
+        h.state_mut().views[0].go_to_match(0);
+        h.run_steps(8);
+        h.get_by_label(if all { "Replace all" } else { "Replace" }).click();
+        settle(&mut h);
+        let doc = h.state().session.get(h.state().views[0].id).unwrap();
+        let texts: Vec<_> = (0..3).flat_map(|p| doc.text_blocks(p).into_iter().map(|b| b.text)).collect();
+        assert_eq!(texts, if all { vec!["coffee menu", "coffee table", "coffee bar"] } else { vec!["coffee menu", "cafe table", "CAFÉ bar"] });
+        assert!(h.state_mut().execute("edit.undo"));
+        settle(&mut h);
+        toggle_accents(&mut h);
+        assert_eq!(pages(&h), [1]);
+        h.run_steps(8);
+        h.get_by_label(if all { "Replace all" } else { "Replace" }).click();
+        settle(&mut h);
+        let doc = h.state().session.get(h.state().views[0].id).unwrap();
+        let texts: Vec<_> = (0..3).flat_map(|p| doc.text_blocks(p).into_iter().map(|b| b.text)).collect();
+        assert_eq!(texts, ["Café menu", "coffee table", "CAFÉ bar"], "accent-sensitive Replace leaves accented spellings alone");
+    }
+}

@@ -96,10 +96,16 @@ pub fn fold_case(s: &str) -> String {
 /// Byte ranges in `text` where `needle` occurs, with the find bar's rules ([`PageText::find_opts`]):
 /// case folded unless `case_sensitive`, any run of whitespace matching one space, and with
 /// `whole_words` only where no letter or digit adjoins the match. At most `limit` ranges, in order
-/// and not overlapping. Find and replace matches a paragraph's text with it, so what the find bar
-/// highlights is what gets replaced.
+/// and not overlapping. Accents match as written; [`find_in_text_options`] supplies the Find
+/// bar's complete options for paragraph replacement.
 pub fn find_in_text(text: &str, needle: &str, case_sensitive: bool, whole_words: bool, limit: usize) -> Vec<std::ops::Range<usize>> {
     search::find_in_text(text, needle, case_sensitive, whole_words, limit)
+}
+
+/// Byte ranges with the Find bar's complete options, including accent sensitivity. The older
+/// [`find_in_text`] entry point keeps matching accents as written.
+pub fn find_in_text_options(text: &str, needle: &str, options: FindOptions, limit: usize) -> Vec<std::ops::Range<usize>> {
+    search::find_in_text_options(text, needle, options, limit)
 }
 
 /// Whether `c` is a combining diacritical mark (the Unicode block U+0300–U+036F: grave, acute,

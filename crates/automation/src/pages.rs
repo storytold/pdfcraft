@@ -382,6 +382,7 @@ impl Automation {
             with: a.str("replace")?.to_owned(),
             case_sensitive: a.opt_bool("case_sensitive")?.unwrap_or(false),
             whole_words: a.opt_bool("whole_words")?.unwrap_or(false),
+            ignore_accents: !a.opt_bool("accent_sensitive")?.unwrap_or(false),
         };
         let all = a.opt_bool("all")?.unwrap_or(true);
         let mut pages = pages;
@@ -394,7 +395,7 @@ impl Automation {
             for (p, text) in self.page_text_results(id, &pages, &mut *extract)? {
                 match text {
                     Ok(text) => {
-                        found.insert(p, text.find_opts(&query.find, query.case_sensitive, query.whole_words).len());
+                        found.insert(p, text.find_options(&query.find, query.options(), usize::MAX).len());
                     }
                     Err(e) => unreadable.push((p, e)),
                 }
@@ -412,7 +413,7 @@ impl Automation {
                     self.page_text_results(id, &pages[start..end], &mut *extract)?.into_iter().collect();
                 for p in &pages[start..end] {
                     match results.remove(p) {
-                        Some(Ok(text)) if text.find_opts_limited(&query.find, query.case_sensitive, query.whole_words, 1).is_empty() => {}
+                        Some(Ok(text)) if text.find_options(&query.find, query.options(), 1).is_empty() => {}
                         Some(Ok(text)) => {
                             texts.push((*p, text));
                             break 'search;

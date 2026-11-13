@@ -970,3 +970,30 @@ fn a_glyph_holding_an_accent_and_more_text_is_not_taken_to_cover_the_accent() {
     assert_eq!(matches(&p, "\u{e9}", FindOptions::default()), one(0, 1));
     assert_eq!(matches(&p, "ex", FindOptions::default()), one(0, 2));
 }
+
+#[test]
+fn accent_options_keep_upstream_ligature_hyphen_and_invisible_readings() {
+    let mut divided = page(&["ré-", "sumé"]);
+    divided.line_of = vec![0, 1];
+    assert_eq!(matches(&divided, "resume", FindOptions::default()), one(0, 2));
+    assert_eq!(matches(&divided, "re-sume", FindOptions::default()), one(0, 2));
+    assert!(divided.find("resume").is_empty(), "legacy search still requires accents");
+    let ligature = page(&["oﬃ", "cé"]);
+    assert_eq!(matches(&ligature, "office", FindOptions::default()), one(0, 2));
+    let invisible = page(&["ca", "\u{AD}", "fé"]);
+    assert_eq!(matches(&invisible, "cafe", FindOptions::default()), one(0, 3));
+}
+
+#[test]
+fn string_find_options_keep_original_byte_ranges_and_trailing_accents() {
+    use pdfcraft_render::text::{find_in_text, find_in_text_options};
+    for text in ["café", "cafe\u{301}", "caf\u{AD}é"] {
+        assert_eq!(find_in_text_options(text, "cafe", FindOptions::default(), 10), one(0, text.len()));
+        // In decomposed text, literal "cafe" is a prefix ending before the separate mark.
+        let literal = if text == "cafe\u{301}" { one(0, 4) } else { Vec::new() };
+        assert_eq!(find_in_text(text, "cafe", false, false, 10), literal, "the legacy API stays literal");
+        assert_eq!(find_in_text_options(text, "cafe", FindOptions { accent_sensitive: true, ..Default::default() }, 10), literal);
+    }
+    assert_eq!(find_in_text_options("oﬃcé", "office", FindOptions::default(), 10), one(0, "oﬃcé".len()));
+    assert!(find_in_text_options("a \u{301}b", "ab", FindOptions::default(), 10).is_empty());
+}

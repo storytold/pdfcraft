@@ -22,6 +22,7 @@ impl PdfCraftApp {
             with: find.replacement.clone(),
             case_sensitive: find.case_sensitive,
             whole_words: find.whole_words,
+            ignore_accents: !find.accent_sensitive,
         };
         let Some(doc) = self.session.get(view.id) else { return };
         let (pages, which, found) = if all {
