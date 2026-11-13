@@ -60,8 +60,9 @@ pub(crate) const MAX_LOOKUP_DECODED: usize = 64 << 10;
 /// table, would otherwise decode the same table each time.
 pub(crate) const MAX_PAGE_LOOKUPS: usize = 1 << 20;
 
-/// What decoding Indexed lookup streams may still cost: `left` bytes in all, at most `cap` for
-/// one table. A table past either reads as empty, so its colours read as black (see [`rgb`]).
+/// What Indexed lookup tables may still cost: `left` bytes in all, at most `cap` for one table.
+/// A stream is charged what it decodes to, and one past either limit reads as empty, so its
+/// colours read as black (see [`rgb`]). A byte string is charged the part of it kept.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Lookups {
     left: usize,
@@ -80,15 +81,17 @@ impl Lookups {
     }
 
     /// The lookup table in `stream`, charged to the allowance: what it decoded to, or all the
-    /// decoding it was allowed when it failed (past its limit, or damaged).
-    fn decode(&mut self, stream: &Stream) -> Vec<u8> {
+    /// decoding it was allowed when it failed (past its limit, or damaged). Only its first
+    /// `needed` bytes are kept.
+    fn decode(&mut self, stream: &Stream, needed: usize) -> Vec<u8> {
         let max = self.cap.min(self.left);
         if max == 0 {
             return Vec::new();
         }
         match stream.decoded_within(max) {
-            Ok(table) => {
+            Ok(mut table) => {
                 self.left = self.left.saturating_sub(table.len());
+                table.truncate(needed);
                 table
             }
             Err(_) => {
@@ -96,6 +99,21 @@ impl Lookups {
                 Vec::new()
             }
         }
+    }
+
+    /// The first `needed` bytes of a lookup table given as a byte string, as far as the allowance
+    /// still goes, charged to it. The string is in memory already, but each space read from it
+    /// keeps a copy, so many names for one padded string would otherwise keep a full copy each.
+    fn keep(&mut self, string: &[u8], needed: usize) -> Vec<u8> {
+        let len = string.len().min(needed).min(self.cap).min(self.left);
+        self.left = self.left.saturating_sub(len);
+        string.get(..len).map(<[u8]>::to_vec).unwrap_or_default()
+    }
+
+    /// What the allowance still holds, for the tests of what a table was charged.
+    #[cfg(test)]
+    pub(crate) fn left(&self) -> usize {
+        self.left
     }
 }
 
@@ -153,10 +171,13 @@ pub(crate) fn space_within(doc: &Document, operand: &Object, cs_res: &Dict, dept
                 b"Indexed" | b"I" => {
                     let base = a.get(1).map(|b| space_within(doc, b, cs_res, depth + 1, lookups)).unwrap_or(Space::Rgb);
                     let hival = a.get(2).and_then(|h| doc.resolve(h).as_f64()).unwrap_or(0.0).clamp(0.0, 255.0) as usize;
+                    // The table holds `hival + 1` entries of the base's components (ISO 32000-2
+                    // §8.6.6.3); bytes past them are never read, so they aren't kept.
+                    let needed = hival.saturating_add(1).saturating_mul(base.components().max(1));
                     let table = match a.get(3).map(|t| doc.resolve(t)) {
                         Some(t) => match &*t {
-                            Object::String(s) => s.bytes.clone(),
-                            Object::Stream(st) => lookups.decode(st),
+                            Object::String(s) => lookups.keep(&s.bytes, needed),
+                            Object::Stream(st) => lookups.decode(st, needed),
                             _ => Vec::new(),
                         },
                         None => Vec::new(),

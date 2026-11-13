@@ -232,3 +232,59 @@ fn a_missing_lookup_entry_is_black_in_any_base() {
     assert!(near(colour_of(&doc, "Short"), [0.0; 3]), "{:?}", colours(&doc));
     assert!(near(colour_of(&doc, "Held"), [1.0; 3]), "an entry it has still reads: {:?}", colours(&doc));
 }
+
+/// A lookup table given as a byte string is charged to the page's allowance as a stream is, so
+/// many names for one string-backed Indexed space can't each keep a copy of it for free.
+/// Twenty-two names alias one space over a 255-colourant DeviceN base: 256 entries need 65,280
+/// bytes of a string padded to 64 KiB, the first entry's first tint full (red through the Type 2
+/// transform). Names read red while the allowance lasts (the last one in part) and black after;
+/// uncharged, all twenty-two read red, however many names there were.
+#[test]
+fn string_lookup_aliases_share_the_page_allowance() {
+    const COLOURANTS: usize = 255;
+    const NEEDED: usize = 256 * COLOURANTS;
+    const PADDED: usize = 64 << 10;
+    const NAMES: usize = 22;
+    let names: String = (0..COLOURANTS).map(|i| format!("/C{i} ")).collect();
+    let mut table = "FF".to_string();
+    table.push_str(&"0".repeat(2 * (PADDED - 1)));
+    let extra = vec![
+        format!("[/Indexed [/DeviceN [{names}] /DeviceRGB 10 0 R] 255 <{table}>]"),
+        "<< /FunctionType 2 /Domain [0 1] /C0 [0 0 0] /C1 [1 0 0] /N 1 >>".to_string(),
+    ];
+    let spaces: String = (0..NAMES).map(|i| format!("/I{i} 9 0 R ")).collect();
+    let shows: Vec<(String, String)> = (0..NAMES).map(|i| (format!("/I{i} cs 0 scn"), format!("T{i}"))).collect();
+    let shows: Vec<(&str, &str)> = shows.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
+    let doc = page_with(&content(&shows), &spaces, "", "", &extra);
+    let reads = |colour: [f64; 3]| (0..NAMES).filter(|i| near(colour_of(&doc, &format!("T{i}")), colour)).count();
+    let red = crate::colour::MAX_PAGE_LOOKUPS.div_ceil(NEEDED);
+    assert_eq!(reads([1.0, 0.0, 0.0]), red, "{:?}", colours(&doc));
+    assert_eq!(reads([0.0; 3]), NAMES - red, "{:?}", colours(&doc));
+}
+
+/// Only the `hival + 1` entries of an Indexed table are kept (ISO 32000-2 §8.6.6.3): a byte
+/// string is charged what is kept of it, and a stream what it decoded to, but neither keeps the
+/// padding past the last entry.
+#[test]
+fn an_indexed_table_keeps_only_its_entries() {
+    use crate::colour::{Lookups, MAX_PAGE_LOOKUPS, Space, space_within};
+    use pdfcraft_cos::{Dict, ObjRef, Object};
+    const PADDED: usize = 4096;
+    let padding = "0".repeat(2 * (PADDED - 6));
+    let extra = vec![
+        format!("[/Indexed /DeviceRGB 1 <FF000000FF00{padding}>]"),
+        "[/Indexed /DeviceRGB 1 11 0 R]".to_string(),
+        format!("<< /Filter /ASCIIHexDecode /Length {} >>\nstream\nFF000000FF00{padding}>\nendstream", padding.len() + 13),
+    ];
+    let doc = page_with("", "", "", "", &extra);
+    let table = |num: u32, lookups: &mut Lookups| match space_within(&doc, &Object::Ref(ObjRef { num, generation: 0 }), &Dict::default(), 0, lookups)
+    {
+        Space::Indexed { table, .. } => table,
+        other => panic!("not Indexed: {other:?}"),
+    };
+    let mut lookups = Lookups::page();
+    assert_eq!(table(9, &mut lookups), [0xFF, 0, 0, 0, 0xFF, 0]);
+    assert_eq!(lookups.left(), MAX_PAGE_LOOKUPS - 6, "a string is charged what is kept of it");
+    assert_eq!(table(10, &mut lookups).len(), 6);
+    assert_eq!(lookups.left(), MAX_PAGE_LOOKUPS - 6 - PADDED, "a stream is charged what it decoded to");
+}
