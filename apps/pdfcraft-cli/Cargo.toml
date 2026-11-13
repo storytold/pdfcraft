@@ -21,7 +21,7 @@ pdfcraft-cos = { workspace = true }
 pdfcraft-preflight = { workspace = true }
 pdfcraft-automation = { workspace = true }
 pdfcraft-platform = { workspace = true }
-base64 = "0.22"
+base64 = "0.23"
 
 [dev-dependencies]
 # Decodes `render` output in tests/it/owner_password.rs; already a dependency of the engine.

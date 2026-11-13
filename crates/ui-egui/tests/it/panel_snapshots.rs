@@ -87,12 +87,12 @@ fn harness(panel: &'static str) -> Harness<'static, PdfCraftApp> {
     h
 }
 
-/// The side panel's contents: the dock node after the Inspector tab.
+/// The side panel's contents: the node after the pane's own focus stop, named "Inspector".
 fn panel<'h>(h: &'h Harness<'static, PdfCraftApp>) -> Node<'h> {
-    let tab = h.get_by(|n| n.role() == Role::Tab && n.label().as_deref() == Some("Inspector"));
-    let dock = tab.parent().expect("the Inspector tab sits in a dock node");
-    let mut after = dock.children().skip_while(|n| n.accesskit_node().id() != tab.accesskit_node().id()).skip(1);
-    after.next().expect("the panel follows its tab")
+    let stop = h.get_by(|n| n.role() != Role::Label && n.label().as_deref() == Some("Inspector"));
+    let pane = stop.parent().expect("the side panel's focus stop sits in its pane");
+    let mut after = pane.children().skip_while(|n| n.accesskit_node().id() != stop.accesskit_node().id()).skip(1);
+    after.next().expect("the panel follows its focus stop")
 }
 
 /// One line per node that says something: layout containers are skipped (their children move up a
@@ -204,6 +204,10 @@ fn open(p: RightPanel) -> (Harness<'static, PdfCraftApp>, &'static str) {
             h.run_steps(2);
             h.state_mut().views[0].find.as_mut().expect("Advanced Search opens a search").query = "sample".into();
             support::wait_until(&mut h, "both pages searched", |app| app.views[0].find.as_ref().is_some_and(|f| f.matches.len() == 2));
+            // Each page is searched as its text arrives, and the match made current is the first
+            // one found: page 2's when its text comes first. Searched again with both pages read,
+            // as a new query is, the current match is the first from the page in view.
+            h.state_mut().views[0].rerun_find();
             h.run_steps(2);
             return (h, "search");
         }

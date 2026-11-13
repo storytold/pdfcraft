@@ -7,8 +7,8 @@
 use crate::support;
 
 use egui_kittest::Harness;
-use egui_kittest::kittest::Queryable;
-use pdfcraft_render::PageRenderer;
+use egui_kittest::kittest::{NodeT, Queryable};
+use pdfcraft_render::{PageRenderer, RenderRequest, RequestKind};
 use pdfcraft_ui_egui::PdfCraftApp;
 
 /// An `n`-page document with a proper xref table.
@@ -258,6 +258,58 @@ fn extract_pages_saves_under_the_file_name_typed_in_the_dialog() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// #3593: Extract pages takes page ranges typed in its Pages field, in the order typed, each page
+/// once; left empty, it takes the selected pages as before. A range it can't use is refused, with
+/// the reason in the dialog and the Extract button off.
+#[test]
+fn extract_pages_takes_the_page_ranges_typed_in_the_dialog() {
+    let texts = |app: &PdfCraftApp, view: usize| {
+        let doc = app.session.get(app.views[view].id).unwrap();
+        let mut r = PageRenderer::new(doc.bytes.clone(), Default::default());
+        (0..r.page_count())
+            .map(|p| {
+                let out = r.render(RenderRequest { page: p, kind: RequestKind::Text, scale: 1.0, ..Default::default() });
+                out.text.map(|t| t.plain_text().trim().to_string()).unwrap_or_default()
+            })
+            .collect::<Vec<_>>()
+    };
+    let mut h = harness(&[6]);
+    h.state_mut().views[0].select_pages(&[1]);
+    assert!(h.state_mut().execute("page.extract"));
+    h.run_steps(2);
+    assert_eq!(h.state().extract_draft.pages, "", "opens on the selection");
+    h.get_by_label("Pages");
+    h.get_by_label_contains("1 page selected.");
+    // Ranges, a backward one and a repeat: in that order, each page once.
+    h.state_mut().extract_draft.pages = "5-6, 3-2, 6".into();
+    h.run_steps(2);
+    h.get_by_label_contains("4 pages selected.");
+    h.state_mut().extract_selection();
+    h.run_steps(2);
+    let s = h.state();
+    assert_eq!(s.views.len(), 2, "the pages open in a new tab");
+    assert_eq!(texts(s, 1), ["Page 5", "Page 6", "Page 3", "Page 2"]);
+    // A page that isn't there: the dialog says so, Extract is off and extracts nothing.
+    h.state_mut().active = Some(0);
+    h.state_mut().open_extract_dialog();
+    h.state_mut().extract_draft.pages = "2, 9".into();
+    h.run_steps(2);
+    assert!(h.get_by_label("Extract").accesskit_node().is_disabled(), "Extract is off");
+    h.state_mut().extract_selection();
+    h.run_steps(2);
+    assert_eq!(h.state().views.len(), 2, "nothing extracted");
+    // Extract and delete takes the typed pages out of the document.
+    h.state_mut().active = Some(0);
+    h.state_mut().open_extract_dialog();
+    h.state_mut().extract_draft.pages = "6, 1-2".into();
+    h.state_mut().extract_draft.delete = true;
+    h.state_mut().extract_selection();
+    h.run_steps(2);
+    let s = h.state();
+    assert_eq!(texts(s, 2), ["Page 6", "Page 1", "Page 2"]);
+    assert_eq!(texts(s, 0), ["Page 3", "Page 4", "Page 5"]);
+}
+
 /// Left as the document's name (or emptied), the names are the ones Extract always used.
 #[test]
 fn extract_pages_keeps_the_usual_names_when_the_file_name_is_unchanged() {
@@ -321,6 +373,45 @@ fn export_comments_writes_on_a_later_frame() {
     assert!(!out.exists(), "the command must not wait for the picker");
     h.run_steps(2);
     assert!(std::fs::read_to_string(&out).unwrap().contains("xfdf"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn import_comments_takes_the_comments_of_another_pdf() {
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>",
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>",
+        "<< /Type /Annot /Subtype /Text /Rect [10 10 30 30] /Contents (from the review) /P 3 0 R >>",
+    ];
+    let mut review = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(review.len());
+        review.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = review.len();
+    review.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        review.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    review.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    let dir = scratch("import-pdf-comments");
+    let path = dir.join("review.pdf");
+    std::fs::write(&path, review).unwrap();
+    let mut h = harness(&[1]);
+    // Through the save path a test uses in place of the picker, and through the picker.
+    for chosen in [Some(path.to_string_lossy().into_owned()), None] {
+        h.state_mut().save_override = chosen.clone();
+        h.state_mut().pick_override = chosen.is_none().then(|| vec![path.to_string_lossy().into_owned()]);
+        h.state_mut().run_command("comment.import");
+        h.run_steps(2);
+        let app = h.state();
+        let contents: Vec<Option<String>> = app.session.get(app.views[0].id).unwrap().info.annotations.iter().map(|a| a.contents.clone()).collect();
+        assert_eq!(contents, [Some("from the review".to_string())], "the review's comment is imported once ({chosen:?})");
+        h.state_mut().run_command("edit.undo");
+        h.run_steps(1);
+    }
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -853,6 +944,24 @@ fn a_background_startup_forms_script_notice_waits_until_its_tab_is_selected() {
     assert!(h.state().toast.is_none(), "the notice is delivered once");
 }
 
+/// A form opened behind the current document that turns field highlighting on gets it at
+/// once, and so does the next document: only requests that act on the current document (a
+/// print, a save, a message) wait for its tab.
+#[test]
+fn a_background_forms_highlight_request_applies_at_once() {
+    let mut h = harness(&[3]);
+    // Highlighting is on by default: start from a user who turned it off.
+    h.state_mut().view_defaults.highlight_fields = false;
+    h.state_mut().views[0].highlight_fields = false;
+    h.run_steps(1);
+    deliver_startup(&h, "late-form.pdf", pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::layout_ready_template()));
+    h.run_steps(2);
+    assert_eq!(h.state().active, Some(0), "it opened behind the current document");
+    assert!(h.state().views[1].highlight_fields, "the background form is highlighted");
+    assert!(!h.state().views[0].highlight_fields, "the current document is left as it was");
+    assert!(h.state().view_defaults.highlight_fields, "the next document opens highlighted");
+}
+
 /// Embedded bytes and the PDF's original /UF name stay independent of the Save suggestion.
 fn attachment_fixture() -> Vec<u8> {
     attachment_pdf("invoice\u{202e}fdp.exe", b"hello notes")
@@ -911,6 +1020,9 @@ impl Drop for AttachmentDir {
 
 #[test]
 fn attachment_save_preserves_bytes_metadata_and_selected_destination() {
+    if crate::support::skip_without_glyphs("attachment_save_preserves_bytes_metadata_and_selected_destination", "en", "user chosen 資料.bin") {
+        return;
+    }
     let dir = AttachmentDir::new();
     let chosen = dir.0.join("user chosen 資料.bin");
     let original = attachment_fixture();
@@ -936,6 +1048,34 @@ fn attachment_save_preserves_bytes_metadata_and_selected_destination() {
     let doc = h.state().session.get(id).unwrap();
     assert_eq!(doc.info.attachments[index].name, raw_name);
     assert_eq!(doc.bytes.as_ref(), &original);
+}
+
+/// Windows: a saved attachment keeps the Mark-of-the-Web of the PDF it came from, and gets the
+/// Internet zone when that PDF has none or isn't a file (#3990).
+#[cfg(windows)]
+#[test]
+fn a_saved_attachment_carries_the_documents_zone() {
+    let dir = AttachmentDir::new();
+    let zone_of = |p: &std::path::Path| std::fs::read(format!("{}:Zone.Identifier", p.display())).ok();
+    let mail = dir.0.join("from mail.pdf");
+    std::fs::write(&mail, attachment_fixture()).unwrap();
+    let zone = "[ZoneTransfer]\r\nZoneId=3\r\nHostUrl=https://mail.example/invoice.pdf\r\n";
+    std::fs::write(format!("{}:Zone.Identifier", mail.display()), zone).unwrap();
+    let local = dir.0.join("local.pdf");
+    std::fs::write(&local, attachment_fixture()).unwrap();
+    let mut h = harness(&[]);
+    let opened = [(Some(&mail), zone), (Some(&local), pdfcraft_platform::zone::INTERNET_ZONE), (None, pdfcraft_platform::zone::INTERNET_ZONE)];
+    for (i, (path, expected)) in opened.into_iter().enumerate() {
+        h.state_mut().open_bytes(&format!("doc{i}.pdf"), path.map(|p| p.to_string_lossy().into_owned()), attachment_fixture()).unwrap();
+        h.run_steps(2);
+        let id = h.state().views.last().unwrap().id;
+        let chosen = dir.0.join(format!("saved{i}.exe"));
+        h.state_mut().pick_override = Some(vec![chosen.to_string_lossy().into_owned()]);
+        h.state_mut().attachment_action(id, 0, false);
+        h.run_steps(2);
+        assert_eq!(std::fs::read(&chosen).unwrap(), b"hello notes");
+        assert_eq!(zone_of(&chosen).as_deref(), Some(expected.as_bytes()), "document {i}");
+    }
 }
 
 /// Every file under `dir`, recursively, sorted.

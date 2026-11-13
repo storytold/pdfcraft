@@ -104,6 +104,18 @@ fn valid_milestone(m: &str) -> bool {
     m == "none" || m.strip_prefix('M').and_then(|n| n.parse::<u32>().ok()).is_some_and(|n| n <= 14)
 }
 
+/// Why an `evidence` entry (`path.rs::test_fn`) does not resolve to a test in the source tree, if it doesn't.
+fn evidence_error(ev: &str, repo: &Path) -> Option<String> {
+    let Some((path, func)) = ev.split_once("::") else {
+        return Some(format!("evidence {ev:?} must be `path.rs::test_fn`"));
+    };
+    match std::fs::read_to_string(repo.join(path)) {
+        Ok(src) if src.contains(&format!("fn {func}(")) => None,
+        Ok(_) => Some(format!("evidence: no `fn {func}` in {path}")),
+        Err(_) => Some(format!("evidence: {path} does not exist")),
+    }
+}
+
 /// Validate features against the registry, tool table and source tree; returns the errors.
 pub fn validate(features: &[Feature], commands: &HashSet<String>, tools: &HashSet<String>, repo: &Path) -> Vec<String> {
     let mut errors = Vec::new();
@@ -143,14 +155,8 @@ pub fn validate(features: &[Feature], commands: &HashSet<String>, tools: &HashSe
             errors.push(e("shipped features must cite at least one test in `evidence`".into()));
         }
         for ev in &f.evidence {
-            let Some((path, func)) = ev.split_once("::") else {
-                errors.push(e(format!("evidence {ev:?} must be `path.rs::test_fn`")));
-                continue;
-            };
-            match std::fs::read_to_string(repo.join(path)) {
-                Ok(src) if src.contains(&format!("fn {func}(")) => {}
-                Ok(_) => errors.push(e(format!("evidence: no `fn {func}` in {path}"))),
-                Err(_) => errors.push(e(format!("evidence: {path} does not exist"))),
+            if let Some(m) = evidence_error(ev, repo) {
+                errors.push(e(m));
             }
         }
     }

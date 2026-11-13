@@ -99,6 +99,9 @@ const COVER_FRACTION: f64 = 0.4;
 const WORD_FRACTION: f64 = 0.5;
 /// WCAG contrast ratio below which the text is unreadable against the cover.
 const COVER_CONTRAST: f64 = 3.0;
+/// Bytes of a hidden line's text read (copied or trimmed) that cost one comparison: a byte scan
+/// is far cheaper than a box comparison, but a long padded line under many covers adds up.
+const TEXT_BYTES_PER_COMPARISON: usize = 16;
 
 /// Audit every page for faux redactions and unapplied redaction marks. Fails closed: any
 /// content that cannot be decoded, or that needs more work or report than the audit's bounds, is
@@ -138,38 +141,66 @@ struct Budget {
 }
 
 impl Budget {
-    /// Resets the comparison count for a page with these `lines`.
+    /// Resets the comparison count for a page with these `lines`. A line costs its word boxes
+    /// or its runs, whichever are more (at least one): a cover check walks the boxes, and the
+    /// covered text walks the runs, which can draw no words at all (`( ) Tj`).
     fn start_page(&mut self, lines: &[TextLine]) {
         self.comparisons = 0;
-        self.page_cost = lines.iter().fold(0, |n, line| n.saturating_add(line.ink.len().max(1)));
+        self.page_cost = lines.iter().fold(0, |n, line| n.saturating_add(line.ink.len().max(line.runs().count()).max(1)));
     }
 
-    /// The text of the `lines` that `hides`, joined with single spaces, or `None` when they show
-    /// no text. Without `copying` the text is empty and never assembled: one long line under many
-    /// covers would otherwise be copied once per cover, outside both bounds.
-    fn hidden_text(&mut self, lines: &[TextLine], copying: bool, hides: impl Fn(&TextLine) -> bool) -> Result<Option<String>, AuditError> {
-        self.comparisons = self.comparisons.saturating_add(self.page_cost);
-        if self.comparisons > self.limits.comparisons {
-            return Err(AuditError::TooManyComparisons);
-        }
+    /// The text `cover` hides in the `lines` that `hides` ([`covered_words`]), joined with single
+    /// spaces, or `None` when they show no text. Without `copying` the text is empty and never
+    /// assembled: one long line under many covers would otherwise be copied once per cover,
+    /// outside both bounds.
+    fn hidden_text(
+        &mut self,
+        lines: &[TextLine],
+        copying: bool,
+        cover: &[f64; 4],
+        hides: impl Fn(&TextLine) -> bool,
+    ) -> Result<Option<String>, AuditError> {
+        self.spend(self.page_cost)?;
         if !copying {
-            return Ok(lines.iter().any(|line| hides(line) && !line.text.trim().is_empty()).then(String::new));
+            let mut hidden = false;
+            for line in lines.iter().filter(|l| hides(l)) {
+                // Trimming walks the line's text (padding and all): it costs its bytes.
+                self.spend(line.text.len() / TEXT_BYTES_PER_COMPARISON)?;
+                if !line.text.trim().is_empty() {
+                    hidden = true;
+                    break;
+                }
+            }
+            return Ok(hidden.then(String::new));
         }
         let mut covered = String::new();
         for line in lines.iter().filter(|l| hides(l)) {
+            // Copying and trimming the line walks its text once per cover: a long padded
+            // line under many covers would otherwise be read far more than its runs suggest.
+            self.spend(line.text.len() / TEXT_BYTES_PER_COMPARISON)?;
             if !covered.is_empty() {
                 covered.push(' ');
             }
-            covered.push_str(line.text.trim());
+            covered_words(cover, line, &mut covered);
         }
         Ok((!covered.trim().is_empty()).then_some(covered))
     }
 
+    /// `n` units of work done against the comparison bound.
+    fn spend(&mut self, n: usize) -> Result<(), AuditError> {
+        self.comparisons = self.comparisons.saturating_add(n);
+        if self.comparisons > self.limits.comparisons {
+            return Err(AuditError::TooManyComparisons);
+        }
+        Ok(())
+    }
+
     /// The text a finding reports for `covered`: none when copying is withheld. Charges what it
-    /// reports against the output bound.
+    /// reports, and the finding's own record, against the output bound: a finding with no text
+    /// (copying withheld, or a shared annotation list on many pages) still takes memory.
     fn report_text(&mut self, covered: String, copying: bool) -> Result<String, AuditError> {
         let reported = if copying { covered } else { String::new() };
-        self.covered_text = self.covered_text.saturating_add(reported.len());
+        self.covered_text = self.covered_text.saturating_add(reported.len()).saturating_add(std::mem::size_of::<AuditFinding>());
         if self.covered_text > self.limits.covered_text {
             return Err(AuditError::TooMuchOutput);
         }
@@ -188,14 +219,17 @@ fn audit(doc: &Document, limits: Limits) -> Result<Vec<AuditFinding>, AuditError
         budget.start_page(&lines);
         // 1. Opaque filled rectangles over extractable text.
         for r in cover::filled_rects(doc, &page.dict)? {
-            if let Some(covered) = budget.hidden_text(&lines, copying, |line| is_cover(&r, line))? {
+            if let Some(covered) = budget.hidden_text(&lines, copying, &r.rect, |line| is_cover(&r, line))? {
                 let covered_text = budget.report_text(covered, copying)?;
                 out.push(AuditFinding { page: n, kind: FindingKind::CoveredText, rect: r.rect, covered_text });
             }
         }
         // 2. Annotation covers over extractable text.
         for annot in annots(doc, &page.dict)? {
-            if let Some(covered) = budget.hidden_text(&lines, copying, |line| match &annot {
+            let cover = match &annot {
+                AnnotationCover::Redact(rect) | AnnotationCover::Square { rect, .. } => *rect,
+            };
+            if let Some(covered) = budget.hidden_text(&lines, copying, &cover, |line| match &annot {
                 AnnotationCover::Redact(rect) => covers(rect, line),
                 AnnotationCover::Square { rect, rgb } => covers(rect, line) && contrast(line.color, *rgb) < COVER_CONTRAST,
             })? {
@@ -250,6 +284,34 @@ fn covers(cover: &[f64; 4], line: &TextLine) -> bool {
     inked || (boxed && (line.ink.is_empty() || word_intersects()))
 }
 
+/// Appends the text of `line` that `cover` lies on to `out`: the runs whose words it overlaps
+/// (#4164), so the words of the line painted beside the cover, which stay visible, are not
+/// reported as hidden. Neighbouring runs are joined as the line joins them, so a word split
+/// across runs stays one word; runs with others left out between them are spaced. The whole
+/// line when its runs can't say: a single run, a line whose text was reordered for reading, or
+/// a cover that overlaps the line's box but none of its words.
+fn covered_words(cover: &[f64; 4], line: &TextLine, out: &mut String) {
+    let overlaps = |w: &[f64; 4]| area(&[cover[0].max(w[0]), cover[1].max(w[1]), cover[2].min(w[2]), cover[3].min(w[3])]) > 0.0;
+    let mut words = String::new();
+    let mut last = None;
+    for (i, (text, ink, spaced)) in line.runs().enumerate() {
+        if text.trim().is_empty() || !ink.iter().any(overlaps) {
+            continue;
+        }
+        let apart = last.is_some_and(|l: usize| l.saturating_add(1) != i || spaced);
+        if apart && !words.ends_with(char::is_whitespace) && !text.starts_with(char::is_whitespace) {
+            words.push(' ');
+        }
+        words.push_str(text);
+        last = Some(i);
+    }
+    if line.runs().nth(1).is_none() || last.is_none() {
+        out.push_str(line.text.trim());
+    } else {
+        out.push_str(words.trim());
+    }
+}
+
 /// The area of a rectangle, 0 when it is empty or inverted.
 fn area(r: &[f64; 4]) -> f64 {
     (r[2] - r[0]).max(0.0) * (r[3] - r[1]).max(0.0)
@@ -281,17 +343,14 @@ enum AnnotationCover {
 fn annots(doc: &Document, page: &Dict) -> Result<Vec<AnnotationCover>, AuditError> {
     let Some(a) = page.get(b"Annots") else { return Ok(Vec::new()) };
     let resolved = doc.resolve(a);
-    let items: Vec<pdfcraft_cos::Object> = match &*resolved {
-        pdfcraft_cos::Object::Array(items) => items.clone(),
-        // A missing /Annots means no marks; a malformed one fails the audit.
-        _ => return Err(AuditError::BadAnnots),
-    };
+    // A missing /Annots means no marks; a malformed one fails the audit.
+    let Some(items) = resolved.as_array() else { return Err(AuditError::BadAnnots) };
     let mut out = Vec::new();
-    for a in &items {
-        let dict = match &*doc.resolve(a) {
-            pdfcraft_cos::Object::Dict(d) => d.clone(),
-            _ => continue,
-        };
+    for a in items {
+        // Borrowed from the resolved object: one large dictionary listed many times is not
+        // copied once per listing.
+        let resolved = doc.resolve(a);
+        let Some(dict) = resolved.as_dict() else { continue };
         let v: Vec<f64> = match dict.get(b"Rect") {
             None => continue,
             Some(r) => doc.resolve(r).as_array().map(|arr| arr.iter().filter_map(|o| doc.resolve(o).as_f64()).collect()).unwrap_or_default(),
@@ -300,7 +359,7 @@ fn annots(doc: &Document, page: &Dict) -> Result<Vec<AnnotationCover>, AuditErro
             continue;
         }
         let rect = [v[0].min(v[2]), v[1].min(v[3]), v[0].max(v[2]), v[1].max(v[3])];
-        match subtype(doc, &dict)?.as_deref() {
+        match subtype(doc, dict)?.as_deref() {
             Some(b"Redact") => out.push(AnnotationCover::Redact(rect)),
             Some(b"Square") => {
                 let flags = dict.get(b"F").and_then(|f| doc.resolve(f).as_int()).unwrap_or(0);
@@ -309,7 +368,7 @@ fn annots(doc: &Document, page: &Dict) -> Result<Vec<AnnotationCover>, AuditErro
                 }
                 let alpha = dict.get(b"CA").map(|o| doc.resolve(o)).and_then(|o| o.as_f64()).unwrap_or(1.0);
                 if alpha >= 1.0
-                    && let Some(rgb) = annotation_color(doc, &dict, b"IC")
+                    && let Some(rgb) = annotation_color(doc, dict, b"IC")
                 {
                     out.push(AnnotationCover::Square { rect, rgb });
                 }

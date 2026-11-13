@@ -1,0 +1,317 @@
+use super::info::{is_comment_subtype, text_value};
+use super::types::{FLAG_HIDDEN, FLAG_NO_ROTATE, FLAG_NO_VIEW, Shape};
+use super::{AnnotError, Dict, Document, ObjRef, Object, appearance};
+
+// ── pages and /Annots ───────────────────────────────────────────────────────────────────────
+
+/// The page object of each leaf page, in order.
+pub fn page_refs(doc: &Document) -> Result<Vec<ObjRef>, AnnotError> {
+    let root = doc.root().ok_or(AnnotError::NoPageTree)?;
+    let pages = doc.get(root).as_dict().and_then(|d| d.reference(b"Pages")).ok_or(AnnotError::NoPageTree)?;
+    Ok(PageWalk::new(doc, pages).collect())
+}
+
+/// Depth-first walk over the leaf pages under `top`. It keeps one cursor per open `/Kids` array,
+/// never one entry per child, so a child listed many times or shared between nodes is skipped by
+/// the seen check without being queued first (`pdfcraft_model::pages` walks the same way).
+/// Cycles end at the seen check, a `/Kids` array object shared by several nodes is read once,
+/// and at most a million nodes and four million `/Kids` entries are read.
+pub(crate) struct PageWalk<'a> {
+    doc: &'a Document,
+    seen: std::collections::HashSet<ObjRef>,
+    pub(crate) pending: Vec<(std::sync::Arc<Object>, usize)>,
+    /// `/Kids` entries read so far.
+    pub(crate) examined: usize,
+}
+
+impl<'a> PageWalk<'a> {
+    pub(crate) fn new(doc: &'a Document, top: ObjRef) -> Self {
+        let top = std::sync::Arc::new(Object::Array(vec![Object::Ref(top)]));
+        Self { doc, seen: Default::default(), pending: vec![(top, 0)], examined: 0 }
+    }
+}
+
+impl Iterator for PageWalk<'_> {
+    type Item = ObjRef;
+
+    fn next(&mut self) -> Option<ObjRef> {
+        while let Some((kids, next)) = self.pending.last_mut() {
+            let Some(kid) = kids.as_array().and_then(|a| a.get(*next)) else {
+                self.pending.pop();
+                continue;
+            };
+            let node = kid.as_ref();
+            *next += 1;
+            self.examined += 1;
+            let Some(node) = node else { continue };
+            if self.seen.len() >= 1_000_000 || self.examined > 4_000_000 {
+                self.pending.clear();
+                return None;
+            }
+            if !self.seen.insert(node) {
+                continue;
+            }
+            let obj = self.doc.get(node);
+            let Some(d) = obj.as_dict() else { continue };
+            match d.get(b"Kids") {
+                // A `/Kids` array object shared by several nodes is read under the first: under
+                // the others it would only list nodes already seen.
+                Some(Object::Ref(array)) if d.name(b"Type") != Some(b"Page") => {
+                    if self.seen.insert(*array) {
+                        self.pending.push((self.doc.get(*array), 0));
+                    }
+                }
+                Some(kids) if d.name(b"Type") != Some(b"Page") => self.pending.push((self.doc.resolve(kids), 0)),
+                _ => return Some(node),
+            }
+        }
+        None
+    }
+}
+
+pub(crate) fn page_ref(doc: &Document, page: usize) -> Result<ObjRef, AnnotError> {
+    page_refs(doc)?.get(page).copied().ok_or(AnnotError::NoSuchPage(page))
+}
+
+/// The entries of a page's `/Annots` (references or inline dictionaries).
+pub(crate) fn annots(doc: &Document, page: ObjRef) -> Vec<Object> {
+    let obj = doc.get(page);
+    let Some(a) = obj.as_dict().and_then(|d| d.get(b"Annots")) else { return Vec::new() };
+    let list = doc.resolve(a).as_array().cloned().unwrap_or_default();
+    #[cfg(test)]
+    ANNOTS_ENTRIES_COPIED.with(|n| n.set(n.get() + list.len()));
+    list
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Entries copied out of pages' `/Annots` arrays.
+    pub(crate) static ANNOTS_ENTRIES_COPIED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Apple Markup's private copy of a page's markup: on the page and on each of its annotations.
+const APPLE_PAGE_MARKUP: [&[u8]; 2] = [b"AAPL:PPK", b"AAPL:PPKHash"];
+const APPLE_ANNOT_MARKUP: &[u8] = b"AAPL:AKExtras";
+
+/// Drop Apple Markup's private copy of the page's markup once the annotation list changes. iOS
+/// draws Markup annotations from that copy, which no longer matches `/Annots`: iOS 26 showed a
+/// Markup signature in its own place and again over a signature added here. Without it, Apple
+/// draws every annotation from its appearance, as other viewers do. The drop is recorded in the
+/// document's repair log (iOS can no longer re-edit those strokes as live ink).
+fn drop_apple_markup(doc: &mut Document, page: ObjRef, list: &mut [Object]) -> Result<(), AnnotError> {
+    let mut dropped = false;
+    if doc.get(page).as_dict().is_some_and(|d| APPLE_PAGE_MARKUP.iter().any(|k| d.contains(k))) {
+        doc.update_dict(page, |d| {
+            for k in APPLE_PAGE_MARKUP {
+                d.remove(k);
+            }
+        })?;
+        dropped = true;
+    }
+    for entry in list {
+        match entry {
+            Object::Dict(d) if d.contains(APPLE_ANNOT_MARKUP) => {
+                d.remove(APPLE_ANNOT_MARKUP);
+                dropped = true;
+            }
+            Object::Ref(r) if doc.get(*r).as_dict().is_some_and(|d| d.contains(APPLE_ANNOT_MARKUP)) => {
+                doc.update_dict(*r, |d| {
+                    d.remove(APPLE_ANNOT_MARKUP);
+                })?;
+                dropped = true;
+            }
+            _ => {}
+        }
+    }
+    if dropped {
+        doc.note_repair(
+            "dropped Apple Markup's private copy of a page's annotations after the page changed; iOS draws them from their appearance instead of as editable ink"
+                .into(),
+        );
+    }
+    Ok(())
+}
+
+/// Replace a page's `/Annots` after an annotation was added, removed or answered: the point at
+/// which Apple Markup's private copy of the page goes stale (see [`drop_apple_markup`]).
+pub(crate) fn change_annots(doc: &mut Document, page: ObjRef, mut list: Vec<Object>) -> Result<(), AnnotError> {
+    drop_apple_markup(doc, page, &mut list)?;
+    Ok(set_annots(doc, page, list)?)
+}
+
+/// Replace a page's `/Annots`, writing into the shared array object when it is indirect. An empty
+/// list removes a direct `/Annots`.
+pub fn set_annots(doc: &mut Document, page: ObjRef, list: Vec<Object>) -> Result<(), pdfcraft_cos::CosError> {
+    let existing = doc.get(page).as_dict().and_then(|d| d.reference(b"Annots"));
+    match existing {
+        Some(r) if doc.get(r).as_array().is_some() => doc.set(r, Object::Array(list)),
+        _ => doc.update_dict(page, |d| {
+            if list.is_empty() {
+                d.remove(b"Annots");
+            } else {
+                d.set(b"Annots".to_vec(), Object::Array(list));
+            }
+        })?,
+    }
+    Ok(())
+}
+
+/// Whether the annotation dictionary `d` has a comment `/Subtype` ([`is_comment_subtype`]).
+pub(crate) fn is_comment_dict(d: &Dict) -> bool {
+    d.name(b"Subtype").is_some_and(|s| is_comment_subtype(&String::from_utf8_lossy(s)))
+}
+
+/// The comment annotation at `(page, index)` as an indirect object (inline dictionaries are promoted).
+pub(crate) fn annot_ref(doc: &mut Document, page: usize, index: usize) -> Result<(ObjRef, ObjRef), AnnotError> {
+    let p = page_ref(doc, page)?;
+    let mut list = annots(doc, p);
+    let entry = list.get(index).cloned().ok_or(AnnotError::NoSuchAnnotation { page, index })?;
+    let r = match entry {
+        Object::Ref(r) if doc.get(r).as_dict().is_some_and(is_comment_dict) => r,
+        Object::Dict(d) if is_comment_dict(&d) => {
+            let r = doc.add(Object::Dict(d));
+            if let Some(slot) = list.get_mut(index) {
+                *slot = Object::Ref(r);
+            }
+            set_annots(doc, p, list)?;
+            r
+        }
+        _ => return Err(AnnotError::NoSuchAnnotation { page, index }),
+    };
+    Ok((p, r))
+}
+
+pub(crate) fn annot_dict(doc: &Document, r: ObjRef) -> Dict {
+    doc.get(r).as_dict().cloned().unwrap_or_default()
+}
+
+/// A Fill & Sign item: typed text, a check/cross/dot/line, or a typed, drawn or image signature.
+///
+/// New items carry `/PCFillSign`. Older files are recognised from the dictionaries PdfCraft
+/// already writes (`/IT /FreeTextTypeWriter`, stamp `/Name`, drawn ink whose subject is
+/// "Signature").
+pub fn is_fill_sign(doc: &Document, d: &Dict) -> bool {
+    if matches!(d.get(b"PCFillSign").map(|o| doc.resolve(o)).as_deref(), Some(Object::Bool(true))) {
+        return true;
+    }
+    let name_is = |key: &[u8], expected: &[u8]| d.get(key).is_some_and(|o| doc.resolve(o).as_name() == Some(expected));
+    if name_is(b"Subtype", b"FreeText") && name_is(b"IT", b"FreeTextTypeWriter") {
+        return true;
+    }
+    if name_is(b"Subtype", b"Stamp") {
+        if matches!(d.name(b"Name"), Some(b"PCCheck" | b"PCCross" | b"PCDot" | b"PCLine" | b"PCTypedSignature")) {
+            return true;
+        }
+        if matches!(d.name(b"Name"), Some(b"PCCustomSignature" | b"PCCustomInitials"))
+            && matches!(d.get(b"PCPictureImage").map(|o| doc.resolve(o)).as_deref(), Some(Object::Bool(true)))
+        {
+            return true;
+        }
+    }
+    name_is(b"Subtype", b"Ink") && text_value(doc, d, b"Subj").as_deref() == Some("Signature")
+}
+
+pub(crate) fn annotation_flags(doc: &Document, d: &Dict) -> i64 {
+    d.get(b"F").and_then(|f| doc.resolve(f).as_int()).unwrap_or(0)
+}
+
+/// Whether the renderer keeps the annotation upright on a turned page: the NoRotate flag, with
+/// `/F` read as the renderer reads it (a real truncated, a value that isn't a `u32` no flags).
+pub(crate) fn drawn_upright(doc: &Document, d: &Dict) -> bool {
+    let f = match d.get(b"F").map(|f| doc.resolve(f)).as_deref() {
+        Some(Object::Int(i)) => *i,
+        Some(Object::Real(r)) => *r as i64,
+        _ => 0,
+    };
+    u32::try_from(f).is_ok_and(|f| i64::from(f) & FLAG_NO_ROTATE != 0)
+}
+
+/// Whether any page has a Fill & Sign annotation that flatten would bake in (not hidden).
+pub fn has_visible_fill_sign(doc: &Document) -> bool {
+    let Ok(pages) = page_refs(doc) else { return false };
+    for page in pages {
+        for entry in annots(doc, page) {
+            let obj = doc.resolve(&entry);
+            let Some(d) = obj.as_dict() else { continue };
+            let flags = annotation_flags(doc, d);
+            if flags & (FLAG_HIDDEN | FLAG_NO_VIEW) != 0 {
+                continue;
+            }
+            if is_fill_sign(doc, d) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+pub(crate) fn fill_sign_shape(shape: &Shape) -> bool {
+    match shape {
+        Shape::Typewriter { .. } | Shape::Mark { .. } | Shape::Signature { .. } | Shape::TypedSignature { .. } => true,
+        Shape::CustomStamp { name, image: true, .. } => name == "Signature" || name == "Initials",
+        _ => false,
+    }
+}
+
+/// The embedded image of a Fill & Sign image signature or initials (0-based target).
+/// Other stamps have appearances that can't be represented by this image alone.
+pub fn signature_image(doc: &Document, page: usize, index: usize) -> Result<Option<ObjRef>, AnnotError> {
+    let p = page_ref(doc, page)?;
+    let list = annots(doc, p);
+    let entry = list.get(index).ok_or(AnnotError::NoSuchAnnotation { page, index })?;
+    let obj = doc.resolve(entry);
+    let Some(d) = obj.as_dict() else { return Ok(None) };
+    Ok((d.name(b"Subtype") == Some(b"Stamp")
+        && matches!(d.name(b"Name"), Some(b"PCCustomSignature" | b"PCCustomInitials"))
+        && matches!(d.get(b"PCPictureImage"), Some(Object::Bool(true))))
+    .then(|| d.reference(b"PCPicture"))
+    .flatten())
+}
+
+/// The page `/Rotate` the picture of the image signature at `(page, index)` is drawn turned back
+/// by, so it reads upright on a page shown that way: 0 for one added to an unturned page, or by
+/// another app. The picture appears turned by the page's current rotation less this.
+pub fn picture_rotation(doc: &Document, page: usize, index: usize) -> Result<i64, AnnotError> {
+    let p = page_ref(doc, page)?;
+    let list = annots(doc, p);
+    let entry = list.get(index).ok_or(AnnotError::NoSuchAnnotation { page, index })?;
+    Ok(doc.resolve(entry).as_dict().map_or(0, appearance::picture_turn))
+}
+
+/// Leave page `page` of (a copy of) a document showing only its annotation at `index`, without
+/// the page's content or other annotations, so a render draws that annotation alone: to lay it
+/// over the page while it is dragged. `false`, with `doc` unchanged, when the annotation has no
+/// normal appearance (`/AP /N`) for that render to draw.
+pub fn isolate_annotation(doc: &mut Document, page: usize, index: usize) -> Result<bool, AnnotError> {
+    isolate_annotations(doc, page, &[index])
+}
+
+/// [`isolate_annotation`] for several annotations of one page: those of them with a normal
+/// appearance stay, in their order on the page. `false`, with `doc` unchanged, when none has one.
+/// An index that isn't one of the page's annotations is an error even when the others are, and
+/// leaves `doc` unchanged too.
+pub fn isolate_annotations(doc: &mut Document, page: usize, indices: &[usize]) -> Result<bool, AnnotError> {
+    let p = page_ref(doc, page)?;
+    let list = annots(doc, p);
+    let mut kept = Vec::new();
+    for (index, entry) in list.iter().enumerate() {
+        if !indices.contains(&index) {
+            continue;
+        }
+        let obj = doc.resolve(entry);
+        if obj.as_dict().and_then(|d| d.get(b"AP")).is_some_and(|ap| doc.resolve(ap).as_dict().is_some_and(|ap| ap.contains(b"N"))) {
+            kept.push(entry.clone());
+        }
+    }
+    if let Some(&index) = indices.iter().find(|&&i| i >= list.len()) {
+        return Err(AnnotError::NoSuchAnnotation { page, index });
+    }
+    if kept.is_empty() {
+        return Ok(false);
+    }
+    set_annots(doc, p, kept)?;
+    doc.update_dict(p, |d| {
+        d.remove(b"Contents");
+    })?;
+    Ok(true)
+}

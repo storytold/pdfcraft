@@ -1,7 +1,10 @@
-//! vendor/winit patch (10) (vendor/README.md).
+//! Provenance-only: reads the retained `vendor/` copy, not the resolved dependency, so it is
+//! not runtime coverage. `vendor_graph.rs` checks the resolved graph identity.
+//! Retained vendor provenance for winit patch (10) (vendor/README.md); `vendor_graph.rs` checks the resolved graph.
 
+/// Regression test: the vendored winit retries the first Apple Korean key once so it starts a composition.
 #[test]
-fn winit_retries_the_first_apple_korean_key_once() {
+fn vendor_provenance_winit_retries_the_first_apple_korean_key_once() {
     // On the first key in a freshly started app, Apple Korean can answer with `insertText` and the
     // raw compatibility jamo instead of starting a composition, so typing g k s in PdfCraft gave
     // ㅎㅏㄴ instead of 한. vendor/winit interprets that one key again before sending it to the

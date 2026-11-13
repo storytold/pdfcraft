@@ -70,6 +70,33 @@ fn revert_after_confirming() {
     assert_eq!((d.info.pages.len(), d.dirty), (2, false));
 }
 
+/// #3632: Alt+← / Alt+→ go back to where a link was followed from and forward again, as in
+/// Acrobat and browsers, while ← / → still turn the page.
+#[test]
+fn alt_arrows_go_back_and_forward_through_the_view_history() {
+    use egui::{Key, Modifiers};
+    let mut h = harness();
+    h.state_mut().active = Some(0);
+    h.run_steps(2);
+    // A followed link jumps the same way (`go_to_dest` → `go_to_page`).
+    h.state_mut().views[0].go_to_page(3);
+    h.run_steps(2);
+    h.key_press_modifiers(Modifiers::ALT, Key::ArrowLeft);
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].current, 0, "back to where the jump started");
+    h.key_press_modifiers(Modifiers::ALT, Key::ArrowRight);
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].current, 3, "forward to the jump's target");
+    h.key_press(Key::ArrowLeft);
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].current, 2, "← still turns the page");
+    h.ctx.set_os(egui::os::OperatingSystem::Nix);
+    assert!(h.state_mut().execute("help.shortcuts"));
+    h.run_steps(3);
+    h.get_by_label("Alt+← / Alt+→");
+    h.get_by_label("Previous view / Next view");
+}
+
 #[test]
 fn view_history_select_all_and_find_options() {
     let mut h = harness();
@@ -85,7 +112,9 @@ fn view_history_select_all_and_find_options() {
     assert_eq!(h.state().views[0].current, 0);
     assert!(h.state_mut().views[0].view_history(true));
     assert_eq!(h.state().views[0].current, 3, "next view");
-    // Select all on the current page (once its text is known).
+    // Select all on the current page (once its text is known), one page at a time: scrolling
+    // continuously it takes the whole document's text (#2639).
+    h.state_mut().views[0].set_continuous(false);
     // Background rendering and text extraction can take seconds on a loaded CI runner (FreeBSD VM).
     for _ in 0..3000 {
         h.run_steps(2);
@@ -152,7 +181,8 @@ fn find_shortcuts_advance_and_retreat_matches() {
     assert_eq!(n, 15);
     // Surrender text edit focus so canvas shortcut handler receives key events.
     h.state_mut().views[0].find.as_mut().unwrap().focus = false;
-    h.ctx.memory_mut(|m| m.surrender_focus(egui::Id::new("find-input")));
+    let find_input = h.state().views[0].find_input_id();
+    h.ctx.memory_mut(|m| m.surrender_focus(find_input));
     h.run_steps(2);
     let start = h.state().views[0].find.as_ref().unwrap().current.unwrap();
     // ⌘G advances to next match.
@@ -197,6 +227,141 @@ fn find_shortcuts_work_from_the_find_field() {
     h.run_steps(2);
     assert_eq!(h.state().views[0].find.as_ref().unwrap().current, Some(start));
     assert!(h.ctx.egui_wants_keyboard_input(), "and keeps it");
+}
+
+/// Open the find bar on the first document, search for the single uppercase "PAGE" on each
+/// page, and wait until every text layer has answered. Returns the document's view index.
+fn find_one_match_per_page(h: &mut Harness<'static, PdfCraftApp>) -> usize {
+    h.state_mut().active = Some(0);
+    h.run_steps(2);
+    let view = h.state().active.expect("a document is shown");
+    {
+        let v = &mut h.state_mut().views[view];
+        v.open_find();
+        let f = v.find.as_mut().expect("the find bar is open");
+        f.query = "PAGE".into();
+        f.case_sensitive = true;
+        v.rerun_find();
+    }
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while std::time::Instant::now() < deadline {
+        h.run_steps(2);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        if h.state().views[view].find.as_ref().is_some_and(|f| f.matches.len() >= 5) {
+            break;
+        }
+    }
+    assert_eq!(h.state().views[view].find.as_ref().unwrap().matches.len(), 5, "one PAGE on each of five pages");
+    view
+}
+
+/// Automatic following ends when the reader scrolls inside the viewed page, not only when the
+/// page changes. This drives the production document area with a real wheel event.
+#[test]
+fn wheel_scrolling_ends_automatic_search_following_on_the_same_page() {
+    let mut h = harness();
+    let view = find_one_match_per_page(&mut h);
+    h.run_steps(4);
+    {
+        let f = h.state().views[view].find.as_ref().unwrap();
+        assert_eq!((f.auto_page, f.follow_ended), (Some(0), false), "the automatic choice is following page 1");
+    }
+    let center = h.state().views[view].viewport_rect().center();
+    h.event(egui::Event::PointerMoved(center));
+    h.run_steps(1);
+    h.event(egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: egui::vec2(0.0, -20.0),
+        phase: egui::TouchPhase::Move,
+        modifiers: egui::Modifiers::NONE,
+        source: egui::MouseWheelSource::Unknown,
+    });
+    h.run_steps(12);
+    let v = &h.state().views[view];
+    assert_eq!(v.current, 0, "a small wheel scroll stays within page 1");
+    let f = v.find.as_ref().unwrap();
+    assert!(f.follow_ended, "the reader's wheel ends automatic following");
+    assert_eq!((f.auto_from, f.auto_page), (None, None));
+}
+
+/// A programmatic search flash is not reader scrolling, even while an unrelated drag is held.
+/// Holding a text selection on the page keeps a pointer drag active; the flash still needs to
+/// move the viewport, and automatic following must survive so a late layer can still follow it.
+#[test]
+fn a_search_flash_preserves_following_while_an_unrelated_drag_is_held() {
+    let mut h = harness();
+    let view = find_one_match_per_page(&mut h);
+    h.run_steps(4);
+    let start = h.state().views[view].page_screen_rect(0).expect("page 1 is on screen").center();
+    h.event(egui::Event::PointerMoved(start));
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: start, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
+    h.run_steps(1);
+    // Move enough to turn the press into a text-selection drag. That drag owns the pointer but
+    // does not scroll the document; only the document scroll area scrolls it.
+    let held = start + egui::vec2(24.0, 0.0);
+    h.event(egui::Event::PointerMoved(held));
+    h.run_steps(2);
+    assert!(h.ctx.dragged_id().is_some(), "an unrelated page drag is held");
+    assert!(h.state().views[view].page_screen_rect(1).is_none(), "page 2 starts off screen");
+
+    // A flash to page 2 visibly moves the viewport from under the held drag.
+    {
+        let f = h.state_mut().views[view].find.as_mut().unwrap();
+        f.query = "Page 2".into();
+        f.case_sensitive = true;
+    }
+    h.state_mut().views[view].rerun_find();
+    h.run_steps(3);
+    let v = &h.state().views[view];
+    assert_eq!(v.current, 1, "the automatic choice moved to page 2");
+    let f = v.find.as_ref().unwrap();
+    assert!(!f.follow_ended, "a flash's own jump is not the reader scrolling");
+    assert_eq!(f.auto_page, Some(1));
+    assert!(v.page_screen_rect(1).is_some(), "page 2 is visibly on screen after the flash");
+
+    // Releasing the unrelated drag leaves the automatic follow in place.
+    h.event(egui::Event::PointerButton { pos: held, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
+    h.run_steps(2);
+    assert!(!h.state().views[view].find.as_ref().unwrap().follow_ended, "the page drag never ended following");
+}
+
+/// The document scroll bar is its own scroll surface: a track click moves the offset with no
+/// pointer motion, and dragging from that press keeps moving it. Both are the reader scrolling,
+/// so automatic following ends. A global "any drag is scrolling" check would miss the click.
+#[test]
+fn scroll_bar_track_click_and_drag_end_automatic_search_following() {
+    let mut h = harness();
+    let view = find_one_match_per_page(&mut h);
+    h.run_steps(4);
+    let vp = h.state().views[view].viewport_rect();
+    // Floating bars sit in the outer few points of the document area (see theme). Aim 75% down
+    // the vertical track: below the handle at this scroll position, and clear of the corner
+    // where the horizontal bar's track overlaps.
+    let track = egui::pos2(vp.right() - 4.0, vp.top() + vp.height() * 0.75);
+    let before = h.state().views[view].page_screen_rect(0).expect("page 1 is on screen").top();
+    h.event(egui::Event::PointerMoved(track));
+    h.run_steps(2);
+    h.event(egui::Event::PointerButton { pos: track, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
+    h.run_steps(2);
+    {
+        let v = &h.state().views[view];
+        let f = v.find.as_ref().unwrap();
+        assert!(f.follow_ended, "a track click that jumps the view ends automatic following");
+        assert_eq!((f.auto_from, f.auto_page), (None, None));
+        let after = v.page_screen_rect(0).map(|r| r.top());
+        assert!(after.is_none_or(|top| top < before - 100.0), "the track click moved the viewport ({before} -> {after:?})");
+    }
+
+    // Keep dragging from the press: the scroll bar follows the pointer, still reader scrolling.
+    let dragged = egui::pos2(vp.right() - 4.0, vp.top() + vp.height() * 0.4);
+    h.event(egui::Event::PointerMoved(dragged));
+    h.run_steps(2);
+    let v = &h.state().views[view];
+    assert!(v.find.as_ref().unwrap().follow_ended, "the track drag is the reader scrolling");
+    assert!(v.page_screen_rect(0).is_none_or(|r| r.top() < before - 100.0), "dragging the track kept moving the viewport");
+    h.event(egui::Event::PointerButton { pos: dragged, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
+    h.run_steps(2);
 }
 
 #[test]
@@ -337,7 +502,7 @@ fn page_input_focused(h: &Harness<'static, PdfCraftApp>) -> bool {
     let focused = h.ctx.memory(|m| m.focused());
     let view = &h.state().views[h.state().active.unwrap()];
     // Also identifies the original editor when running this test-only patch on the baseline.
-    focused == Some(egui::Id::new(("page-input", view.id.0))) || focused == Some(egui::Id::new("page-input"))
+    focused == Some(egui::Id::unique(("page-input", view.id.0))) || focused == Some(egui::Id::unique("page-input"))
 }
 
 /// Exercise the real navigation editor, including its focus and Enter handling.
@@ -366,6 +531,48 @@ fn restart_page_labels(h: &mut Harness<'static, PdfCraftApp>) {
         h.state_mut().apply_edit(Edit::NumberPages { from, to, style, prefix: String::new(), first });
     }
     h.run_steps(3);
+}
+
+/// End shows the end of the document, the last page's bottom edge, when the page is taller than
+/// the window; Home goes back to the first page's top (#6434).
+#[test]
+fn end_shows_the_bottom_of_the_last_page() {
+    use egui::Key;
+    let mut h = harness();
+    h.state_mut().active = Some(0);
+    h.state_mut().views[0].fit = pdfcraft_ui_egui::canvas::Fit::Width;
+    h.run_steps(4);
+    let vp = h.state().views[0].viewport_rect();
+    assert!(h.state().views[0].page_screen_rect(0).is_some_and(|r| r.height() > vp.height()), "a page is taller than the window");
+
+    h.key_press(Key::End);
+    h.run_steps(4);
+    let v = &h.state().views[0];
+    assert_eq!(v.current, 4, "the last page");
+    let last = v.page_screen_rect(4).expect("the last page is on screen");
+    assert!(last.bottom() <= vp.bottom() + 1.0 && last.bottom() > vp.bottom() - 40.0, "its bottom edge is at the window's: {last:?} in {vp:?}");
+
+    h.key_press(Key::Home);
+    h.run_steps(4);
+    let v = &h.state().views[0];
+    assert_eq!(v.current, 0, "the first page");
+    let first = v.page_screen_rect(0).expect("the first page is on screen");
+    assert!(first.top() >= vp.top() - 1.0 && first.top() < vp.top() + 40.0, "its top edge is at the window's: {first:?} in {vp:?}");
+
+    // The keys listed with them for Go to first / last page do the same.
+    let shift_cmd = egui::Modifiers::COMMAND | egui::Modifiers::SHIFT;
+    for (last, first) in [(Key::ArrowDown, Key::ArrowUp), (Key::PageDown, Key::PageUp)] {
+        h.key_press_modifiers(shift_cmd, last);
+        h.run_steps(4);
+        let v = &h.state().views[0];
+        let bottom = v.page_screen_rect(4).map(|r| r.bottom());
+        assert!(v.current == 4 && bottom.is_some_and(|b| (b - vp.bottom()).abs() < 40.0), "{last:?}: {bottom:?} in {vp:?}");
+        h.key_press_modifiers(shift_cmd, first);
+        h.run_steps(4);
+        let v = &h.state().views[0];
+        let top = v.page_screen_rect(0).map(|r| r.top());
+        assert!(v.current == 0 && top.is_some_and(|t| (t - vp.top()).abs() < 40.0), "{first:?}: {top:?} in {vp:?}");
+    }
 }
 
 #[test]
@@ -446,6 +653,24 @@ fn page_label_input_resolves_labels_numbers_and_restores_invalid_input() {
     h.key_press(egui::Key::Enter);
     h.run_steps(3);
     assert_eq!(h.state().views[0].current, 0, "the current fallback number must not jump to another page labelled 1");
+}
+
+/// A page's label and its position need not coincide (ISO 32000-2 §12.4.2). Typed in the page
+/// box, "(n)" goes to the nth page whatever its label, as print ranges take it, while a bare
+/// number is still a label first. On these pages (i, ii, 1, 2, 3) "1" is the third page and
+/// "(1)" the first; a position past the end, or anything else in parentheses, leaves the page.
+#[test]
+fn page_label_input_takes_a_position_in_parentheses() {
+    let mut h = harness();
+    restart_page_labels(&mut h);
+    h.run_steps(3);
+    for (typed, page, displayed) in [("(1)", 0, "i"), ("1", 2, "1"), ("(4)", 3, "2"), ("( 2 )", 1, "ii"), ("(9)", 1, "ii"), ("(x)", 1, "ii")] {
+        type_page_input(&mut h, typed);
+        h.key_press(egui::Key::Enter);
+        h.run_steps(3);
+        assert_eq!(h.state().views[0].current, page, "{typed}");
+        assert_eq!(h.state().views[0].page_input, displayed, "{typed}");
+    }
 }
 
 #[test]
@@ -768,6 +993,53 @@ fn initial_view_is_edited_and_honoured_on_open() {
     assert_eq!((view.current, view.cover, app.right), (1, true, Some(pdfcraft_ui_egui::RightPanel::Bookmarks)));
 }
 
+#[test]
+fn initial_view_magnification_offers_25_and_100_percent() {
+    use egui::accesskit::Role;
+    use pdfcraft_engine::Magnification;
+    use pdfcraft_ui_egui::canvas::Fit;
+    fn open_initial_view(h: &mut Harness<'static, PdfCraftApp>) {
+        h.state_mut().dialog = Some(Dialog::Properties(pdfcraft_ui_egui::PropsTab::InitialView));
+        // The dialog's height settles a frame after it opens; egui centers from the previous size.
+        h.run_steps(6);
+    }
+    fn pick(h: &mut Harness<'static, PdfCraftApp>, label: &str) {
+        h.get_by_role_and_label(Role::ComboBox, "Magnification").click();
+        h.run_steps(3);
+        // The list is taller than the popup, so the item may need scrolling into view.
+        h.get_by_role_and_label(Role::Button, label).scroll_to_me();
+        h.run_steps(3);
+        h.get_by_role_and_label(Role::Button, label).click();
+        h.run_steps(2);
+    }
+    /// Clicks OK, then reopens the saved file: its initial magnification, and the zoom and fit
+    /// its view opens at.
+    fn save(h: &mut Harness<'static, PdfCraftApp>) -> (Magnification, f32, Fit) {
+        h.get_by_label("OK").click();
+        h.run_steps(3);
+        let s = h.state();
+        let id = s.views[s.active.unwrap()].id;
+        let bytes = s.session.save_bytes(id).unwrap();
+        let mut app = PdfCraftApp::new();
+        app.open_bytes("again.pdf", None, bytes.to_vec()).unwrap();
+        let view = &app.views[0];
+        (app.session.get(view.id).unwrap().initial_view().magnification, view.zoom, view.fit)
+    }
+    let mut h = harness();
+    open_initial_view(&mut h);
+    for (label, percent) in [("100%", 100.0), ("25%", 25.0)] {
+        pick(&mut h, label);
+        let (_, v) = h.state().view_draft.as_ref().expect("seeded");
+        assert_eq!(v.magnification, Magnification::Percent(percent), "{label}");
+    }
+    assert_eq!(save(&mut h), (Magnification::Percent(25.0), 0.25, Fit::None));
+    // 100% is saved as Actual Size is (/XYZ zoom 1), so it reads back as Actual Size. A file
+    // without an opening zoom also opens at zoom 1, but fitting the width.
+    open_initial_view(&mut h);
+    pick(&mut h, "100%");
+    assert_eq!(save(&mut h), (Magnification::ActualSize, 1.0, Fit::None));
+}
+
 fn drag(h: &mut Harness<'static, PdfCraftApp>, a: egui::Pos2, b: egui::Pos2) {
     h.hover_at(a);
     h.run_steps(1);
@@ -804,6 +1076,122 @@ fn marquee_zoom_and_snapshot() {
     assert!(after > before * 2.0, "{before} → {after}");
 }
 
+/// Print a selected area: the area Snapshot copied stays outlined with a small menu under it;
+/// Print area… opens Print on just that area (Fit to paper), and Save as image… writes a PNG.
+#[test]
+fn a_snapshot_area_prints_alone_or_saves_as_an_image() {
+    use pdfcraft_ui_egui::PrintWhich;
+    let mut h = harness();
+    let i = h.state().active.unwrap();
+    let r = h.state().views[i].page_screen_rect(0).expect("on screen");
+    let at = |x: f32, y: f32| egui::pos2(r.left() + x / 200.0 * r.width(), r.top() + (300.0 - y) / 300.0 * r.height());
+    h.state_mut().system_clipboard = false;
+    assert!(h.state_mut().execute("edit.snapshot"));
+    drag(&mut h, at(15.0, 175.0), at(115.0, 125.0));
+    h.run_steps(2);
+    let (page, area) = h.state().views[i].area_pick.expect("the copied area is kept");
+    assert_eq!(page, 0);
+    assert!(area[2] - area[0] > 90.0 && area[3] - area[1] > 40.0, "{area:?}");
+    // Save as image… writes the copied picture as a PNG.
+    let dir = std::env::temp_dir().join(format!("pdfcraft-area-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    h.state_mut().save_override = Some(dir.join("area.png").to_string_lossy().into_owned());
+    h.get_by_label("Save as image…").click();
+    h.run_steps(3);
+    assert!(std::fs::read(dir.join("area.png")).expect("written").starts_with(b"\x89PNG"));
+    // Print area… opens Print on that area alone.
+    h.get_by_label("Print area…").click();
+    h.run_steps(4);
+    assert_eq!(h.state().dialog, Some(pdfcraft_ui_egui::Dialog::Print));
+    assert_eq!(h.state().print_draft.which, PrintWhich::Area);
+    h.get_by_label_contains("Selected area (page 1,");
+    h.state_mut().print_draft.printer = None;
+    h.state_mut().save_override = Some(dir.join("area.pdf").to_string_lossy().into_owned());
+    h.run_steps(2);
+    h.get_by_label("Save as PDF").click();
+    h.run_steps(4);
+    assert_eq!(h.state().dialog, None);
+    let out = pdfcraft_cos::Document::open(std::sync::Arc::new(std::fs::read(dir.join("area.pdf")).expect("saved"))).unwrap();
+    assert_eq!(pdfcraft_model::pages(&out).len(), 1, "one sheet for the area");
+    // The next Print is for pages again.
+    assert!(h.state_mut().execute("print.dialog"));
+    h.run_steps(3);
+    assert_eq!(h.state().print_draft.which, PrintWhich::All);
+    h.state_mut().dialog = None;
+    h.run_steps(2);
+    // Another snapshot keeps its area; another tool puts it away.
+    drag(&mut h, at(15.0, 175.0), at(115.0, 125.0));
+    h.run_steps(2);
+    assert!(h.state().views[i].area_pick.is_some());
+    h.state_mut().set_option("quick", "select").unwrap();
+    h.run_steps(2);
+    assert!(h.state().views[i].area_pick.is_none());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// #5716: what a snapshot holds doesn't depend on how far the page is zoomed out.
+#[test]
+fn a_snapshot_keeps_its_resolution_when_zoomed_out() {
+    let mut h = harness();
+    let i = h.state().active.unwrap();
+    h.state_mut().system_clipboard = false;
+    let mut sizes = Vec::new();
+    for zoom in ["25", "100"] {
+        h.state_mut().set_option("zoom", zoom).unwrap();
+        h.run_steps(2);
+        // The text line of the page, as a marquee would give it.
+        sizes.push(h.state_mut().snapshot(i, 0, [15.0, 125.0, 180.0, 160.0]).expect("a snapshot"));
+    }
+    assert_eq!(sizes[0], sizes[1], "the same pixels at either zoom");
+    assert_eq!(sizes[0], (688, 146), "165 × 35 pt at 300 ppi");
+    let (_, _, px) = h.state().last_snapshot.clone().expect("a snapshot");
+    assert!(px.as_chunks::<4>().0.iter().any(|p| p[0] < 100), "the text is in it");
+
+    // Zoomed in past the minimum, a snapshot has every pixel the screen shows, however far.
+    let ppp = h.ctx.pixels_per_point();
+    for zoom in [400.0_f32, 1600.0] {
+        h.state_mut().set_option("zoom", &zoom.to_string()).unwrap();
+        h.run_steps(2);
+        let (w, _) = h.state_mut().snapshot(i, 0, [15.0, 125.0, 180.0, 160.0]).expect("a snapshot");
+        let on_screen = (165.0 * zoom / 100.0 * pdfcraft_ui_egui::canvas::PT * ppp).ceil() as u32;
+        assert!(w.abs_diff(on_screen) <= 1, "{w} pixels at {zoom}%, {on_screen} on screen");
+    }
+}
+
+/// #5716: at 300 ppi this page is more than the renderer draws in one tile, which would cut off
+/// the side the snapshot was taken for. A 2000 pt square with a black mark in its far corner.
+#[test]
+fn a_snapshot_of_a_large_page_reaches_its_far_corner() {
+    let stream = "0 0 0 rg 1900 0 100 100 re f";
+    let pdf = format!(
+        "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 2000 2000] /Contents 4 0 R >> endobj
+4 0 obj << /Length {} >> stream
+{stream}
+endstream endobj
+trailer << /Root 1 0 R >>
+%%EOF",
+        stream.len()
+    );
+    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("large.pdf", None, pdf.into_bytes()).unwrap();
+        app.system_clipboard = false;
+        app
+    });
+    h.run_steps(4);
+    let i = h.state().active.unwrap();
+    let (w, hgt) = h.state_mut().snapshot(i, 0, [0.0, 0.0, 2000.0, 2000.0]).expect("a snapshot");
+    assert!(w <= 4096 && hgt <= 4096 && w == hgt, "{w} × {hgt}");
+    let (_, _, px) = h.state().last_snapshot.clone().expect("a snapshot");
+    let at = |x: u32, y: u32| px[((y * w + x) * 4) as usize];
+    assert!(at(w * 98 / 100, hgt * 98 / 100) < 100, "the mark in the far corner is in it");
+    assert!(at(w / 2, hgt / 2) > 200, "and the page around it is white");
+}
+
 #[test]
 fn fit_visible_zooms_to_the_content_width() {
     let mut h = harness();
@@ -837,8 +1225,109 @@ fn tab_and_window_show_the_document_title_when_asked() {
         s.session.apply(id, Edit::SetInitialView(Box::new(v))).unwrap();
     }
     h.run_steps(2);
-    assert_eq!(h.state().window_title, "Quarterly report — PdfCraft");
+    // The edits are unsaved, so the title says so (#3640).
+    assert_eq!(h.state().window_title, "Quarterly report • — PdfCraft");
     h.get_by_label_contains("Quarterly report");
+}
+
+#[test]
+fn the_window_title_marks_unsaved_changes_until_saved() {
+    use pdfcraft_engine::Edit;
+    let mut h = harness();
+    h.run_steps(2);
+    assert_eq!(h.state().window_title, "b.pdf — PdfCraft");
+    {
+        let s = h.state_mut();
+        let id = s.views[s.active.unwrap()].id;
+        s.session.apply(id, Edit::SetInfo { key: "Subject".into(), value: "Budget".into() }).unwrap();
+    }
+    h.run_steps(2);
+    assert_eq!(h.state().window_title, "b.pdf • — PdfCraft", "unsaved changes (#3640)");
+    // Removed on drop, so a failing assert below doesn't leave it behind.
+    struct Dir(std::path::PathBuf);
+    impl Drop for Dir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let dir = Dir(std::env::temp_dir().join(format!("pdfcraft-title-dirty-{}", std::process::id())));
+    std::fs::create_dir_all(&dir.0).unwrap();
+    // Saved under its own name, so the title changes only by the mark.
+    h.state_mut().save_override = Some(dir.0.join("b.pdf").to_string_lossy().into_owned());
+    assert!(h.state_mut().execute("file.save"));
+    h.run_steps(2);
+    let s = h.state();
+    assert!(!s.session.get(s.views[s.active.unwrap()].id).unwrap().dirty);
+    assert_eq!(s.window_title, "b.pdf — PdfCraft", "saved");
+}
+
+/// #3640: text typed but not yet applied is unsaved work too, as closing the tab says, so the
+/// title marks it.
+#[test]
+fn the_window_title_marks_a_draft_that_is_not_applied_yet() {
+    use pdfcraft_ui_egui::fill_sign::TypeBox;
+    let mut h = harness();
+    h.run_steps(2);
+    assert_eq!(h.state().window_title, "b.pdf — PdfCraft");
+    let i = h.state().active.unwrap();
+    h.state_mut().views[i].fill_text = Some(TypeBox {
+        page: 0,
+        at: [40.0, 200.0],
+        text: "Typed".into(),
+        size: 10.0,
+        color: [0.0; 3],
+        border: pdfcraft_ui_egui::fill_sign::TextBorder::NONE,
+        focus: false,
+    });
+    h.run_steps(2);
+    let s = h.state();
+    assert!(!s.session.get(s.views[i].id).unwrap().dirty, "nothing applied to the document yet");
+    assert_eq!(s.window_title, "b.pdf • — PdfCraft");
+    assert_eq!(s.page_title, "b.pdf • — PdfCraft");
+}
+
+/// #3640: a document that arrives while the window or browser tab is hidden, when eframe runs
+/// only `App::logic` and no frame is drawn, still gives the titles its name.
+#[test]
+fn a_document_opened_while_hidden_names_the_titles() {
+    let mut h = harness();
+    h.run_steps(2);
+    let before = h.state().views.len();
+    let bytes = pdfcraft_engine::Session::new().create_from_text("Arrived", "Arrived while hidden").unwrap();
+    h.state().inbox.lock().unwrap().push(("arrived.pdf".into(), bytes.to_vec()));
+    let ctx = h.ctx.clone();
+    let mut frame = eframe::Frame::_new_kittest();
+    // The open runs on a worker and is taken in by a later `logic`, as eframe keeps calling it.
+    for _ in 0..500 {
+        let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| eframe::App::logic(h.state_mut(), ctx, &mut frame));
+        if h.state().views.len() > before {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    let s = h.state();
+    assert_eq!(s.views.len(), before + 1, "the document opened in logic");
+    assert_eq!(s.page_title, "arrived.pdf — PdfCraft");
+    assert_eq!(s.window_title, "arrived.pdf — PdfCraft");
+}
+
+/// #3640: a document that asks to show its own title shows it in the window, but the web page's
+/// title, which an embedding host reads to tell which file opened, keeps the file's name.
+#[test]
+fn the_web_page_title_names_the_file_when_the_document_shows_its_title() {
+    use pdfcraft_engine::Edit;
+    let mut h = harness();
+    {
+        let s = h.state_mut();
+        let id = s.views[s.active.unwrap()].id;
+        s.session.apply(id, Edit::SetInfo { key: "Title".into(), value: "Budget 2026".into() }).unwrap();
+        let mut v = s.session.get(id).unwrap().initial_view();
+        v.display_title = true;
+        s.session.apply(id, Edit::SetInitialView(Box::new(v))).unwrap();
+    }
+    h.run_steps(2);
+    assert_eq!(h.state().window_title, "Budget 2026 • — PdfCraft");
+    assert_eq!(h.state().page_title, "b.pdf • — PdfCraft");
 }
 
 #[test]
@@ -856,7 +1345,7 @@ fn a_placeholder_title_leaves_the_file_name_on_the_tab_and_window() {
         s.session.apply(id, Edit::SetInitialView(Box::new(v))).unwrap();
     }
     h.run_steps(2);
-    assert_eq!(h.state().window_title, "b.pdf — PdfCraft");
+    assert_eq!(h.state().window_title, "b.pdf • — PdfCraft");
     assert!(h.query_by_label_contains("about:blank").is_none());
 }
 
@@ -965,7 +1454,7 @@ fn wrapped_revision_buttons_stay_above_binding_and_open_the_saved_revision() {
         let left = h.get_by_label("Left Edge").rect();
         let right = h.get_by_label("Right Edge").rect();
         // Properties requests a fixed width. Measure its card in each viewport.
-        let card = h.ctx.data(|d| d.get_temp::<egui::Rect>(egui::Id::new("dialog").with("card"))).expect("Properties is shown");
+        let card = h.ctx.data(|d| d.get_temp::<egui::Rect>(egui::Id::unique("dialog").with("card"))).expect("Properties is shown");
         for (n, rect) in &buttons {
             for (label, below) in [("Binding", binding), ("Left Edge", left), ("Right Edge", right)] {
                 assert!(rect.bottom() <= below.top(), "revision {n} overlaps {label} at viewport width {width}: {rect:?}, {below:?}");
@@ -1228,6 +1717,138 @@ fn up_and_down_turn_pages_in_single_page_view() {
 }
 
 #[test]
+fn left_and_right_scroll_a_page_wider_than_the_window_before_turning_it() {
+    // A plan zoomed in: → / ← turned the page (#185) and so never showed its other side; the
+    // view moved sideways only by the scroll bar, the wheel or the Hand.
+    use egui::{Key, Modifiers};
+    let mut h = harness();
+    h.state_mut().active = Some(0);
+    h.state_mut().views[0].set_zoom(12.0);
+    h.run_steps(6);
+    let press = |h: &mut Harness<'static, PdfCraftApp>, modifiers, key| {
+        h.key_press_modifiers(modifiers, key);
+        h.run_steps(4);
+        let v = &h.state().views[0];
+        (v.current, v.page_screen_rect(v.current).map(|r| r.left()))
+    };
+    let start = h.state().views[0].page_screen_rect(0).map(|r| r.left()).expect("on screen");
+    let (page, left) = press(&mut h, Modifiers::NONE, Key::ArrowRight);
+    assert_eq!(page, 0, "→ scrolls the wide page rather than turning it");
+    assert!(left.is_some_and(|l| l < start - 10.0), "the page moved left: {left:?} from {start}");
+    // At its right edge the next → turns the page.
+    let mut n = 1;
+    while press(&mut h, Modifiers::NONE, Key::ArrowRight).0 == 0 {
+        n += 1;
+        assert!(n < 500, "→ never reached the right edge");
+    }
+    assert!(n > 3, "→ scrolled across page 1 before turning ({n} presses)");
+    assert_eq!(h.state().views[0].current, 1);
+    // Page 2 starts at its left edge, as reading on across: → scrolls it rather than turning
+    // again at once.
+    let shown = |h: &Harness<'static, PdfCraftApp>, page: usize| {
+        let v = &h.state().views[0];
+        (v.page_screen_rect(page).expect("on screen"), v.viewport_rect())
+    };
+    let (r, view) = shown(&h, 1);
+    assert!(r.left() >= view.left() && r.right() > view.right(), "page 2 from its left edge: {r:?} in {view:?}");
+    assert_eq!(press(&mut h, Modifiers::NONE, Key::ArrowRight).0, 1, "→ scrolls page 2 from its left edge");
+    // ← goes back to that edge and turns back: page 1 comes at its right edge, so the next ← scrolls it.
+    let mut n = 1;
+    while press(&mut h, Modifiers::NONE, Key::ArrowLeft).0 == 1 {
+        n += 1;
+        assert!(n < 50, "← never turned back from page 2");
+    }
+    assert_eq!(h.state().views[0].current, 0);
+    let (r, view) = shown(&h, 0);
+    assert!(r.right() <= view.right() && r.left() < view.left(), "page 1 from its right edge: {r:?} in {view:?}");
+    assert_eq!(press(&mut h, Modifiers::NONE, Key::ArrowLeft).0, 0, "← scrolls page 1 from its right edge");
+    // ⌘→ turns at once.
+    assert_eq!(press(&mut h, Modifiers::COMMAND, Key::ArrowRight).0, 1, "⌘→ turns the page at once");
+    assert_eq!(press(&mut h, Modifiers::COMMAND, Key::ArrowRight).0, 2);
+    // A page that fits across: → turns pages as before.
+    h.state_mut().views[0].fit = pdfcraft_ui_egui::canvas::Fit::Width;
+    h.run_steps(6);
+    assert_eq!(press(&mut h, Modifiers::NONE, Key::ArrowRight).0, 3);
+}
+
+/// Continuous view with pages of different widths: the content is as wide as the widest page, but
+/// on a narrow page that shows whole → turns the page; on the wide one it scrolls first.
+#[test]
+fn left_and_right_follow_the_current_pages_width_in_continuous_view() {
+    use egui::Key;
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("mixed.pdf", None, sized_fixture(&[(200, 1200), (3000, 1200), (200, 1200)])).unwrap();
+        app
+    });
+    crate::support::settle(&mut h);
+    h.state_mut().active = Some(0);
+    assert!(h.state().views[0].continuous);
+    // Each page taller than the window, so one is the current page.
+    h.state_mut().views[0].set_zoom(1.0);
+    h.run_steps(6);
+    h.state_mut().views[0].go_to_page(0);
+    h.run_steps(6);
+    let press = |h: &mut Harness<'static, PdfCraftApp>| {
+        h.key_press(Key::ArrowRight);
+        h.run_steps(4);
+        let v = &h.state().views[0];
+        (v.current, v.page_screen_rect(1).map(|r| r.left()))
+    };
+    assert_eq!(h.state().views[0].current, 0);
+    let (page, start) = press(&mut h);
+    assert_eq!(page, 1, "→ on the narrow page shown whole turns it");
+    let (page, left) = press(&mut h);
+    assert_eq!(page, 1, "→ on the wide page scrolls it");
+    assert!(left.zip(start).is_some_and(|(l, s)| l < s - 10.0), "the wide page moved left: {left:?} from {start:?}");
+}
+
+/// A zoomed two-page spread scrolled so its first page ends inside the window and the second is
+/// still wholly to the right of it: → scrolls on to the second page rather than turning the
+/// spread. (Read from the pages on screen alone, the spread seemed to end with its first page.)
+#[test]
+fn right_scrolls_to_a_spreads_second_page_off_screen_before_turning() {
+    use egui::Key;
+    // The page gap (points on screen).
+    const GAP: f32 = 14.0;
+    let build = |zoom: f32| {
+        let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+            let mut app = PdfCraftApp::new();
+            app.set_option("language", "en").unwrap();
+            app.open_bytes("spread.pdf", None, sized_fixture(&[(600, 800); 4])).unwrap();
+            app.set_option("layout", "two-page").unwrap();
+            // Before the first layout: zoomed about the content's top left, scrolled to it.
+            app.views[0].set_zoom(zoom);
+            app
+        });
+        crate::support::settle(&mut h);
+        h.state_mut().active = Some(0);
+        h.run_steps(4);
+        h
+    };
+    let shown =
+        |h: &Harness<'static, PdfCraftApp>| (h.state().views[0].viewport_rect(), h.state().views[0].page_screen_rect(0).expect("page 1 on screen"));
+    // Zoom until page 1's right edge sits half a gap inside the window's.
+    let mut zoom = 2.0;
+    let mut h = build(zoom);
+    for _ in 0..3 {
+        let (inner, first) = shown(&h);
+        zoom *= (inner.right() - GAP / 2.0 - first.left()) / first.width();
+        h = build(zoom);
+    }
+    let (inner, first) = shown(&h);
+    assert!(first.right() <= inner.right() && first.right() + GAP > inner.right(), "the spread's gap at the window's edge: {first:?} in {inner:?}");
+    assert!(h.state().views[0].page_screen_rect(1).is_none(), "its second page off screen");
+    assert!(h.state().views[0].layout == pdfcraft_ui_egui::canvas::PageLayout::TwoUp && !h.state().views[0].continuous);
+    h.key_press(Key::ArrowRight);
+    h.run_steps(4);
+    let v = &h.state().views[0];
+    assert!(v.current < 2, "→ doesn't turn the spread: page {}", v.current + 1);
+    assert!(v.page_screen_rect(1).is_some(), "it scrolls the second page into view");
+}
+
+#[test]
 fn v_h_and_space_pick_the_quick_tools() {
     // The toolbar's tooltips promise "Select (V)" and "Hand (H)", but the keys did nothing.
     use egui::{Key, Modifiers};
@@ -1387,7 +2008,7 @@ fn pages_panel_thumbnails_have_a_context_menu() {
     h.run_steps(2);
     // The page right-clicked becomes the selection the menu acts on.
     assert_eq!(h.state().views[0].target_pages(), vec![2]);
-    for item in ["Extract pages", "Cut", "Paste after"] {
+    for item in ["Extract pages", "Split document…", "Cut", "Paste after"] {
         h.get_by_label(item);
     }
     h.get_by_label("Copy").click();
@@ -1554,7 +2175,13 @@ fn the_scroll_speed_preference_scales_mouse_wheel_notches() {
         let top = |h: &Harness<'static, PdfCraftApp>| h.state().views[i].page_screen_rect(0).expect("page 1 on screen").min.y;
         let before = top(&h);
         h.event(egui::Event::PointerMoved(h.state().views[i].viewport_rect().center()));
-        h.event(egui::Event::MouseWheel { unit, delta: egui::vec2(0.0, -dy), phase: egui::TouchPhase::Move, modifiers: egui::Modifiers::NONE });
+        h.event(egui::Event::MouseWheel {
+            unit,
+            delta: egui::vec2(0.0, -dy),
+            phase: egui::TouchPhase::Move,
+            modifiers: egui::Modifiers::NONE,
+            source: egui::MouseWheelSource::Unknown,
+        });
         // egui spreads a wheel notch over a few frames.
         h.run_steps(30);
         before - top(&h)
@@ -1573,6 +2200,22 @@ fn the_scroll_speed_preference_scales_mouse_wheel_notches() {
     let mut again = PdfCraftApp::new();
     again.restore(&app.persist());
     assert_eq!(again.scroll_speed, ScrollSpeed::Fast);
+}
+
+#[test]
+fn the_invert_middle_drag_preference_is_off_by_default_and_kept_in_the_settings() {
+    let mut app = PdfCraftApp::new();
+    assert!(!app.invert_middle_drag, "the middle button keeps its direction unless asked");
+    app.set_option("invert_middle_drag", "true").unwrap();
+    assert!(app.set_option("invert_middle_drag", "yes").unwrap_err().contains("true or false"));
+    let mut again = PdfCraftApp::new();
+    again.restore(&app.persist());
+    assert!(again.invert_middle_drag, "turned on, it survives a restart");
+    again.set_option("invert_middle_drag", "false").unwrap();
+    let mut off = PdfCraftApp::new();
+    off.invert_middle_drag = true;
+    off.restore(&again.persist());
+    assert!(!off.invert_middle_drag, "turned off, that is saved too");
 }
 
 /// A 40 × 30 picture (one red corner) and a harness showing a PDF of it.
@@ -1855,6 +2498,7 @@ fn mouse_wheel_scrolls_while_selecting_text() {
         delta: egui::vec2(0.0, -3.0),
         phase: egui::TouchPhase::Move,
         modifiers: egui::Modifiers::NONE,
+        source: egui::MouseWheelSource::Unknown,
     });
     h.run_steps(20);
     let after = h.state().views[view].page_screen_rect(0).unwrap().top();
@@ -1894,7 +2538,13 @@ fn selection_wheel_delta(unit: egui::MouseWheelUnit, amount: f32, held: bool, an
     }
     h.run_steps(2);
     let before = h.state().views[view].page_screen_rect(0).unwrap().top();
-    h.event(egui::Event::MouseWheel { unit, delta: egui::vec2(0.0, -amount), phase: egui::TouchPhase::Move, modifiers: egui::Modifiers::NONE });
+    h.event(egui::Event::MouseWheel {
+        unit,
+        delta: egui::vec2(0.0, -amount),
+        phase: egui::TouchPhase::Move,
+        modifiers: egui::Modifiers::NONE,
+        source: egui::MouseWheelSource::Unknown,
+    });
     h.run_steps(40);
     before - h.state().views[view].page_screen_rect(0).unwrap().top()
 }
@@ -1928,7 +2578,13 @@ fn selection_control_wheel_still_zooms() {
     for modifiers in [egui::Modifiers::CTRL, egui::Modifiers::COMMAND] {
         let (mut h, view, _) = selection_wheel_harness();
         let before = h.state().views[view].page_screen_rect(0).unwrap().width();
-        h.event(egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Line, delta: egui::vec2(0.0, 1.0), phase: egui::TouchPhase::Move, modifiers });
+        h.event(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Line,
+            delta: egui::vec2(0.0, 1.0),
+            phase: egui::TouchPhase::Move,
+            modifiers,
+            source: egui::MouseWheelSource::Unknown,
+        });
         h.run_steps(40);
         let after = h.state().views[view].page_screen_rect(0).unwrap().width();
         assert!(after > before + 1.0, "control wheel should zoom: {before} -> {after}");
@@ -1946,6 +2602,7 @@ fn selection_wheel_outside_document_does_not_scroll() {
         delta: egui::vec2(0.0, -1.0),
         phase: egui::TouchPhase::Move,
         modifiers: egui::Modifiers::NONE,
+        source: egui::MouseWheelSource::Unknown,
     });
     h.run_steps(40);
     let after = h.state().views[view].page_screen_rect(0).unwrap().top();
@@ -1973,6 +2630,7 @@ fn selection_wheel_does_not_scroll_behind_preferences() {
         delta: egui::vec2(0.0, -1.0),
         phase: egui::TouchPhase::Move,
         modifiers: egui::Modifiers::NONE,
+        source: egui::MouseWheelSource::Unknown,
     });
     h.run_steps(40);
     let after = h.state().views[view].page_screen_rect(0).unwrap().top();
@@ -1989,6 +2647,7 @@ fn selection_mouse_wheel_resumes_after_point_scrolling() {
             delta: egui::vec2(0.0, -30.0),
             phase: egui::TouchPhase::Move,
             modifiers: egui::Modifiers::NONE,
+            source: egui::MouseWheelSource::Unknown,
         });
         h.run_steps(delay);
         let before = h.state().views[view].page_screen_rect(0).unwrap().top();
@@ -2000,6 +2659,7 @@ fn selection_mouse_wheel_resumes_after_point_scrolling() {
             delta: egui::vec2(0.0, -1.0),
             phase: egui::TouchPhase::Move,
             modifiers: egui::Modifiers::NONE,
+            source: egui::MouseWheelSource::Unknown,
         });
         h.run_steps(40);
         let after = h.state().views[view].page_screen_rect(0).unwrap().top();
@@ -2084,4 +2744,28 @@ fn go_to_page_brings_the_page_into_view_horizontally() {
     assert_eq!(v.current, 2);
     let (r, vp) = (v.page_screen_rect(2).expect("page 3 on screen"), v.viewport_rect());
     assert!(r.left() >= vp.left() && r.right() <= vp.right(), "page 3 at {r:?}, viewport {vp:?}");
+}
+
+/// #4614: the accessible window is named like the native one, and follows it when the active
+/// document changes, so a screen reader can find the window by its title.
+#[test]
+fn the_accessible_window_has_the_window_title_as_its_name() {
+    use egui_kittest::kittest::NodeT as _;
+    let mut h = harness();
+    h.run_steps(2);
+    let name = |h: &Harness<'static, PdfCraftApp>| h.root().accesskit_node().label().map(|l| l.to_string());
+    assert_eq!(name(&h).as_deref(), Some("b.pdf — PdfCraft"));
+    {
+        use pdfcraft_engine::Edit;
+        let s = h.state_mut();
+        let id = s.views[s.active.unwrap()].id;
+        s.session.apply(id, Edit::SetInfo { key: "Title".into(), value: "Quarterly report".into() }).unwrap();
+        let mut v = s.session.get(id).unwrap().initial_view();
+        v.display_title = true;
+        s.session.apply(id, Edit::SetInitialView(Box::new(v))).unwrap();
+    }
+    h.run_steps(2);
+    // Unsaved, so it carries the window title's mark too (#3640).
+    assert_eq!(name(&h).as_deref(), Some("Quarterly report • — PdfCraft"));
+    assert_eq!(name(&h), Some(h.state().window_title.clone()));
 }

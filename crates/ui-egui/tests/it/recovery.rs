@@ -8,7 +8,7 @@ use egui::{Key, Modifiers};
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
 use pdfcraft_engine::Edit;
-use pdfcraft_ui_egui::{PdfCraftApp, RecoveryStore};
+use pdfcraft_ui_egui::{Dialog, PdfCraftApp, RecoveryStore};
 
 fn fixture(n: usize) -> Vec<u8> {
     let mut objs: Vec<String> = vec!["<< /Type /Catalog /Pages 2 0 R >>".into()];
@@ -90,7 +90,7 @@ fn a_crashed_session_is_offered_and_recovered_unsaved() {
     assert_eq!(app.views.len(), 1);
     let doc = app.session.get(app.views[0].id).unwrap();
     assert!(doc.dirty, "recovered changes are unsaved");
-    assert_eq!(doc.path.as_deref(), Some("/docs/work.pdf"), "Save goes back to the original file");
+    assert_eq!(doc.path.as_deref(), Some("/docs/work.pdf"), "the original path is kept, as what Save offers (#3923)");
     assert_eq!(doc.info.pages.len(), 2, "the edit survived the crash");
     assert_eq!(s.list().len(), 1, "the entry stays until the document is saved or closed");
 }
@@ -129,6 +129,63 @@ fn saving_or_closing_clears_the_entry_and_nothing_is_written_for_clean_documents
     app.close_tab(0);
     assert_eq!(files_in(&s), 0, "closed: nothing to recover");
     let _ = std::fs::remove_file(out);
+}
+
+/// Whether any recovery snapshot in `s` holds `text`, in its bytes or in a decoded stream.
+fn snapshot_holds(s: &RecoveryStore, text: &[u8]) -> bool {
+    let found = |data: &[u8]| data.windows(text.len()).any(|w| w == text);
+    s.list().iter().filter_map(|m| s.read(&m.key).ok()).any(|bytes| {
+        found(&bytes)
+            || pdfcraft_cos::Document::open(std::sync::Arc::new(bytes)).is_ok_and(|doc| {
+                doc.scan_objects().any(|(_, o)| matches!(&*o, pdfcraft_cos::Object::Stream(st) if st.decoded().is_ok_and(|d| found(&d))))
+            })
+    })
+}
+
+/// Applying redactions replaces the recovery snapshot at once: the one autosaved before still holds
+/// what the marks covered, until the next autosave, and for good after a crash.
+#[test]
+fn applying_redactions_replaces_the_recovery_snapshot_at_once() {
+    let s = store("redact");
+    let mut h = harness(s.clone());
+    h.state_mut().open_bytes("a.pdf", None, fixture(1)).unwrap();
+    assert!(h.state_mut().apply_edit(Edit::RotatePages { pages: vec![0], degrees: 90 }));
+    h.state_mut().autosave_now();
+    assert!(snapshot_holds(&s, b"Confidential"), "the autosave before the redaction holds the page's text");
+    // Redact pages: the current page, then apply.
+    assert!(h.state_mut().execute("redact.mark"));
+    h.run_steps(2);
+    h.state_mut().execute("redact.pages");
+    h.run_steps(2);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    h.state_mut().dialog = Some(Dialog::RedactApply);
+    h.run_steps(2);
+    h.get_by_label("Apply").click();
+    h.run_steps(4);
+    assert!(!snapshot_holds(&s, b"Confidential"), "a recovery snapshot still holds the redacted text");
+    assert_eq!(s.list().len(), 1, "the redacted document is autosaved in its place");
+    s.clear();
+}
+
+/// An autosave that could not be written leaves the document due, so the next one writes it.
+/// Renewing the snapshot after a redaction removes the old one first, so nothing else is left.
+#[test]
+fn a_failed_autosave_is_written_by_the_next_one() {
+    let s = store("retry");
+    // A file where the folder belongs: the folder can't be made, so nothing can be written.
+    std::fs::write(s.dir(), b"").unwrap();
+    let mut app = PdfCraftApp::new();
+    app.set_option("language", "en").unwrap();
+    app.enable_recovery(s.clone());
+    app.open_bytes("a.pdf", None, fixture(1)).unwrap();
+    assert!(app.apply_edit(Edit::RotatePages { pages: vec![0], degrees: 90 }));
+    app.autosave_now();
+    assert!(s.list().is_empty(), "the folder can't be made");
+    std::fs::remove_file(s.dir()).unwrap();
+    app.autosave_now();
+    assert_eq!(s.list().len(), 1, "the snapshot that failed is written by the next autosave");
+    s.clear();
 }
 
 #[test]
@@ -173,6 +230,8 @@ fn encrypted(bytes: Vec<u8>, password: &str) -> Vec<u8> {
     pdfcraft_cos::write_full(&doc, &Default::default()).unwrap()
 }
 
+/// Check that an encrypted document is autosaved without plaintext and recovered only after the password is
+/// entered.
 #[test]
 fn encrypted_documents_are_autosaved_encrypted_and_recovered_with_the_password() {
     let bytes = encrypted(fixture(2), "pw");
@@ -186,6 +245,13 @@ fn encrypted_documents_are_autosaved_encrypted_and_recovered_with_the_password()
     h.get_by_label_contains("password-protected");
     h.get_by_label("Recover").click();
     support::wait_until(&mut h, "recovery password prompt", |app| app.password_prompt.is_some());
+    // The prompt is laid out in the pass after the one that set it.
+    for _ in 0..10 {
+        if h.query_by_role(Role::PasswordInput).is_some() {
+            break;
+        }
+        h.run_steps(1);
+    }
     let field = h.get_by_role(Role::PasswordInput);
     field.focus();
     field.type_text("pw");
@@ -320,6 +386,8 @@ fn missing_corrupt_or_mismatched_metadata_recovers_the_snapshot_without_an_origi
     }
 }
 
+/// Check that an encrypted snapshot without metadata still asks for its password and is recovered without
+/// rewriting its bytes.
 #[test]
 fn an_encrypted_snapshot_without_metadata_still_requires_its_password() {
     let s = store("encrypted-orphan");
@@ -330,6 +398,12 @@ fn an_encrypted_snapshot_without_metadata_still_requires_its_password() {
     let mut h = harness(s.clone());
     h.get_by_label("Recover").click();
     support::wait_until(&mut h, "orphan recovery password prompt", |app| app.password_prompt.is_some());
+    for _ in 0..10 {
+        if h.query_by_role(Role::PasswordInput).is_some() {
+            break;
+        }
+        h.run_steps(1);
+    }
     assert!(h.state().views.is_empty());
     let field = h.get_by_role(Role::PasswordInput);
     field.focus();

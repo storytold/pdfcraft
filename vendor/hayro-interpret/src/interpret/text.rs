@@ -2,7 +2,7 @@ use crate::GlyphDrawMode;
 use crate::context::Context;
 use crate::device::Device;
 use crate::font::Glyph;
-use crate::interpret::path::get_paint;
+use crate::interpret::path::{get_paint, with_fill_stroke_group};
 use crate::interpret::state::TextStateFont;
 use hayro_syntax::object;
 use hayro_syntax::page::Resources;
@@ -69,11 +69,15 @@ pub(crate) fn show_glyph<'a>(
     device.set_blend_mode(ctx.get().graphics_state.blend_mode);
     let stroke_props = ctx.stroke_props();
 
-    // PdfCraft patch: only mode 3 has any effect on text in a Type 3 font (ISO 32000-1
-    // 9.3.6). Stroking ran the glyph procedure a second time, so `2 Tr` made bitmap fonts
-    // look bold, and the clip modes have no outline to clip with.
+    // PdfCraft patch: text in a Type 3 font is rendered from its glyph descriptions in every mode
+    // but 3 and 7 (ISO 32000-2 §9.3.6). Stroking ran the glyph procedure a second time, so
+    // `2 Tr` made bitmap fonts look bold.
+    // PdfCraft patch (64): in modes 3 and 7 the text "shall not be rendered" (§9.3.6); `7 Tr`
+    // painted the glyphs in the fill colour. It is still reported as clipping text, but in
+    // modes 4 to 7 "nothing shall be added to the clipping path" (`clip_glyph`).
     let render_mode = match (glyph, ctx.get().text_state.render_mode) {
         (Glyph::Type3(_), TextRenderingMode::Invisible) => TextRenderingMode::Invisible,
+        (Glyph::Type3(_), TextRenderingMode::Clip) => TextRenderingMode::Clip,
         (Glyph::Type3(_), _) => TextRenderingMode::Fill,
         (_, mode) => mode,
     };
@@ -98,20 +102,22 @@ pub(crate) fn show_glyph<'a>(
             );
         }
         TextRenderingMode::FillStroke => {
-            device.draw_glyph(
-                glyph,
-                ctx.get().ctm,
-                glyph_transform,
-                &get_paint(ctx, false),
-                &GlyphDrawMode::Fill,
-            );
-            device.draw_glyph(
-                glyph,
-                ctx.get().ctm,
-                glyph_transform,
-                &get_paint(ctx, true),
-                &GlyphDrawMode::Stroke(stroke_props),
-            );
+            with_fill_stroke_group(ctx, device, |ctx, device| {
+                device.draw_glyph(
+                    glyph,
+                    ctx.get().ctm,
+                    glyph_transform,
+                    &get_paint(ctx, false),
+                    &GlyphDrawMode::Fill,
+                );
+                device.draw_glyph(
+                    glyph,
+                    ctx.get().ctm,
+                    glyph_transform,
+                    &get_paint(ctx, true),
+                    &GlyphDrawMode::Stroke(stroke_props),
+                );
+            });
         }
         TextRenderingMode::Invisible => {
             // Still call draw_glyph for invisible text, so that it can
@@ -159,20 +165,22 @@ pub(crate) fn show_glyph<'a>(
         }
         TextRenderingMode::FillAndStrokeAndClip => {
             clip_glyph(ctx, glyph, glyph_transform);
-            device.draw_glyph(
-                glyph,
-                ctx.get().ctm,
-                glyph_transform,
-                &get_paint(ctx, false),
-                &GlyphDrawMode::Fill,
-            );
-            device.draw_glyph(
-                glyph,
-                ctx.get().ctm,
-                glyph_transform,
-                &get_paint(ctx, true),
-                &GlyphDrawMode::Stroke(stroke_props),
-            );
+            with_fill_stroke_group(ctx, device, |ctx, device| {
+                device.draw_glyph(
+                    glyph,
+                    ctx.get().ctm,
+                    glyph_transform,
+                    &get_paint(ctx, false),
+                    &GlyphDrawMode::Fill,
+                );
+                device.draw_glyph(
+                    glyph,
+                    ctx.get().ctm,
+                    glyph_transform,
+                    &get_paint(ctx, true),
+                    &GlyphDrawMode::Stroke(stroke_props),
+                );
+            });
         }
     }
 }
@@ -187,9 +195,9 @@ pub(crate) fn clip_glyph(context: &mut Context<'_>, glyph: &Glyph<'_>, transform
                 context.get_mut().text_state.clip_paths.extend(outline);
             }
         }
-        Glyph::Type3(_) => {
-            warn!("text rendering mode clip not implemented for shape glyphs");
-        }
+        // PdfCraft patch (64): a Type 3 glyph adds nothing to the clipping path in modes 4 to 7
+        // (ISO 32000-2 §9.3.6), so text shown only in a Type 3 font leaves no clip at `ET`.
+        Glyph::Type3(_) => {}
     }
 }
 
