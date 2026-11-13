@@ -229,15 +229,30 @@ fn field_value(f: &crate::FieldState, text: &str) -> Option<Vec<String>> {
 
 /// Document field `f` as an XFA script reads it now: with the value its XFA field holds, so a
 /// value the script set through `rawValue`, reset, or moved by removing a row reads the same
-/// through `getField`.
+/// through `getField`; and read-only as its XFA field's `access` now makes it, so a script that
+/// set `access` reads that through `getField` too.
 pub(crate) fn field_now(ctx: &Context, f: &mut crate::FieldState) -> JsResult<()> {
     let h = host(ctx)?.borrow();
-    if let FieldNode::Live(i) = h.field_node(&f.name)
-        && let Some(v) = h.nodes.get(i).and_then(|n| field_value(f, &n.value))
-    {
+    let FieldNode::Live(i) = h.field_node(&f.name) else { return Ok(()) };
+    let Some(n) = h.nodes.get(i) else { return Ok(()) };
+    if let Some(v) = field_value(f, &n.value) {
         f.value = v;
     }
+    if let Some(readonly) = access_read_only(&n.access) {
+        f.readonly = readonly;
+    }
     Ok(())
+}
+
+/// Whether an XFA field with `access` takes no input from the user: `readOnly` and `protected`
+/// fields are laid out read-only, a `nonInteractive` one as text, not as a field; an `open`
+/// one takes input (XFA 3.3, "access" property). `None` for a value that is none of these.
+fn access_read_only(access: &str) -> Option<bool> {
+    match access {
+        "readOnly" | "protected" | "nonInteractive" => Some(true),
+        "open" => Some(false),
+        _ => None,
+    }
 }
 
 /// A script changed `before` (the field as it read it) into `after` through `getField`: a new

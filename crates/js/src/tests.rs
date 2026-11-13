@@ -1469,6 +1469,18 @@ mod xfa_model {
         assert!(o.notes.iter().any(|n| n.contains("form1[0].page1[0].qty[0]: rect")), "{:?}", o.notes);
     }
 
+    /// `readonly` read through `getField` follows the XFA field's `access` as the script sets
+    /// it: `readOnly`, `protected` and `nonInteractive` read true, `open` false.
+    #[test]
+    fn readonly_through_get_field_follows_the_access_a_script_sets() {
+        let o = go_with_fields(
+            "var f = event.target.getField('form1[0].page1[0].qty[0]'), out = [f.readonly];              ['readOnly', 'open', 'protected', 'open', 'nonInteractive'].forEach(function (a) { qty.access = a;              out.push(event.target.getField('form1[0].page1[0].qty[0]').readonly, f.readonly); }); out.join('|')",
+            "click",
+        );
+        assert_eq!(o.error, None, "{o:?}");
+        assert_eq!(o.result.as_deref(), Some("false|true|true|false|false|true|true|false|false|true|true"));
+    }
+
     /// A push button's caption set through `event.target.getField(…).buttonSetCaption` is noted
     /// and not applied, like the other properties besides the value, and reads as it was.
     #[test]
