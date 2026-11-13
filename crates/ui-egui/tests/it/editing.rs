@@ -8104,9 +8104,13 @@ fn delete_with_the_pointer_on_the_pages_panel_deletes_a_page() {
 fn an_edit_before_the_pages_delete_ask_is_processed_drops_the_ask() {
     let mut h = pages_panel(5);
     let id = h.state().views[0].id;
-    let stale = h.state().session.get(id).unwrap().edit_generation() + 1;
-    h.state_mut().views[0].pending_action = Some(pdfcraft_ui_egui::canvas::ViewAction::ConfirmDeletePages { pages: vec![0], generation: stale });
+    let generation = h.state().session.get(id).unwrap().edit_generation();
+    // A queued move runs before the ask is processed, and the move succeeds: the captured pages
+    // no longer name the moved-to document.
+    h.state_mut().views[0].pending_edit = Some(pdfcraft_engine::Edit::MovePages { pages: vec![0], to: 5 });
+    h.state_mut().views[0].pending_action = Some(pdfcraft_ui_egui::canvas::ViewAction::ConfirmDeletePages { pages: vec![0], generation });
     h.run_steps(4);
+    assert_eq!(page_texts(h.state()), ["Page 2", "Page 3", "Page 4", "Page 5", "Page 1"], "the move ran");
     assert!(h.state().dialog.is_none(), "the stale ask is dropped");
     assert_eq!(h.state().session.get(id).unwrap().info.pages.len(), 5);
 }
