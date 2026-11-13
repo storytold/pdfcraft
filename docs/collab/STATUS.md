@@ -87,6 +87,29 @@
   of `95e2c9c97` fixed"), which was the head until `46d2e203a` re-based the line
   on v0.21.0; the fork and the PR carried `95e2c9c97` only until `28fd4e1b3` was
   pushed at 17:41Z.
+- Head, measured **2026-11-13T14:23Z**: `gh pr view 6622 --repo
+  storytold/pdfcraft --json headRefOid` printed
+  `a1cc8382d3ed452aa47fc66ef9ec5be46e6ed184`, `git ls-remote fork
+  refs/heads/feature/realtime-collaboration` the same, `git rev-parse HEAD`
+  `fc0523151865f4f82b01aa36e74df7dd8d51c600`, `git rev-list --left-right --count
+  fork/feature/realtime-collaboration...HEAD` `0 1`, and `git status --porcelain`
+  nothing. So PR #6622, the fork and this clone agree on `a1cc8382d`, and the one
+  commit this clone holds above it is the docs record of the CodeRabbit triage
+  (`fc0523151`), local because the agent does not push. `a1cc8382d` is one commit
+  above `91a382205`, the head the 12:46Z measurement in "Open review threads"
+  names, and it changes **`Cargo.lock` alone** — 12 lines in, 12 out, the twelve
+  `pdfcraft-collab*` entries moved from 0.21.0 to the workspace's 0.21.1, which is
+  what made `cargo metadata --locked` in the shared `check-git-sources` job want
+  to rewrite the lock. Because the delta is the lock, every verdict measured at
+  `91a382205` stands. On this head `gh run list --commit a1cc8382d` returns
+  **five** runs — CI `43432229051`, SonarCloud `43432229088`, FreeBSD
+  `43432229089`, Windows ARM64 `43432229214`, Nix `43432229226`, created
+  13:16:18Z — all `completed/action_required`, so none has executed and the
+  approval of the maintainer is what the head waits for; a note of 14:14Z that
+  this head carried no runs is superseded (they exist and predate it).
+  `gh pr view` reads `MERGEABLE`/`UNSTABLE`, `baseRefOid` `d749fd806`, not a
+  draft, `reviewDecision` empty, `updatedAt` 2026-11-13T13:16:22Z. The lock head
+  carries a **green full gate**: §4, "Gate on the lock-fix head `a1cc8382d`".
 - Delivery: **PR #6622**, measured **2026-11-12T23:35Z**. This header names the
   pull request, the command that reads its head and the date — not a commit;
   the reason is the rule "How this header is written" below. At that
@@ -386,9 +409,15 @@ answered in place with one of two fixed forms, so a reader can grep the thread:
 have their finding fixed in code that landed after the review (`#3`, `#6`,
 `#12`); two of those (`#3`, `#6`) carry a narrower residual that the bot's
 follow-up names. One (`#5`) was withdrawn by the bot as unreachable with this
-server. Sixteen are open. **Nothing was pushed**: the replies are review
-comments, they change no commit, and the fork and PR #6622 still read
-`91a382205`, so the five runs created 01:14:58Z stay approvable.
+server. Sixteen are open. **Nothing was pushed by this pass**: the replies are
+review comments, they change no commit, and at the measurement the fork and PR
+#6622 still read `91a382205`, so the five runs created 01:14:58Z were the
+approvable ones. Half an hour later (13:16Z) `pr-agent` pushed
+`a1cc8382d` — `Cargo.lock` alone, the head the header measures at 14:23Z — so
+the fork and the PR now carry that head and the five runs to approve are the ones
+created 13:16:18Z. The lock-only delta leaves every verdict in this table
+standing, and the replies quote line numbers of `91a382205`, which the lock does
+not move.
 
 | # | Thread | Verdict at `91a382205` |
 |---|---|---|
@@ -423,12 +452,13 @@ each, did not mark any open finding as addressed, and resolved two threads — #
 reads **58 of the 61 threads unresolved**. Three threads got a second answer
 correcting the first one after that follow-up (#3, #5, #6), and this table
 carries the corrected verdict. This record is one docs commit above
-`91a382205` and
-is local, so after it the fork still reads `91a382205` and this clone is `0 1`
+`a1cc8382d` (`fc0523151`) and
+is local, so the fork reads `a1cc8382d` and this clone is `0 1`
 against it (`git rev-list --left-right --count
 fork/feature/realtime-collaboration...HEAD`); the PR stays `MERGEABLE` /
 `UNSTABLE`, with the
-five runs `completed/action_required`. The seventeen open items are advisory
+five runs on `a1cc8382d` `completed/action_required`. The seventeen open items
+are advisory
 findings, not a merge gate of their own: the maintainer's review decides, and a
 fix now would need a push, which would reset the five approvals.
 
@@ -812,6 +842,41 @@ The app window "Collaboration" shows role, version/epoch, participants, errors,
 commit result, and a commit button for owner/editor.
 
 ## 4. Tests and verification
+
+### Gate on the lock-fix head `a1cc8382d` (PR #6622, 2026-11-13)
+
+`a1cc8382d` ("fix(collab): the lock names the 0.21.1 collab crates") is one
+commit above `91a382205`, the head the header measured at 12:46Z, and it changes
+`Cargo.lock` alone: 12 insertions and 12 deletions that move the twelve
+`pdfcraft-collab*` entries from 0.21.0 to the workspace's 0.21.1. Nothing else in
+the tree moved, so the code, the tests and their numbers are `f3a0ccde4`'s.
+
+**Measured on the build host `agents`, started 2026-11-13T14:16:11Z and finished
+14:22:13Z**, on a detached checkout of exactly `a1cc8382d` (`git rev-parse HEAD`
+read `a1cc8382d3ed452aa47fc66ef9ec5be46e6ed184`, tree clean), with the two pinned
+build inputs:
+
+```
+umask 022 CARGO_BUILD_JOBS=12 \
+CRAFT_I18N_DIR=/home/markin/build/i18n-575 \
+CRAFT_FONTS_DIR=/home/markin/craft-fonts \
+cargo xtask ci
+```
+
+Printed: **`CI: all 10 steps passed`** and `EXIT=0` — `fmt`, `clippy`,
+`cli-no-default-features`, `test`, `i18n-report`, `layers`, `wasm`,
+`license-check`, `deny`, `parity`. The test step's own totals: **10381 passed,
+0 failed, 22 ignored** over 158 targets (112 `Running`, 46 `Doc-tests`).
+`cargo deny --log-level error check` exits 0 (advisories, bans, licences,
+sources) and `parity` prints the same note as on `f3a0ccde4`, 102 shipped
+features without an automation tool. Log:
+`.craft/logs/gate-pdfcraft-6622-a1cc8382d.log` (873 516 bytes).
+
+The totals are the `f3a0ccde4` gate's in this section, 10381/0/22, which is what
+the lock-only delta predicts: the two commits between those heads (`8c1e38b80`,
+`91a382205`) are docs and this one is the lock. The five workflow runs on
+`a1cc8382d` stay `completed/action_required`, so this host run is the only
+executed gate on the head.
 
 ### Save in a hosted session is the cabinet's commit, not a copy of the window (`f107f56c2`, 2026-11-12, local; not pushed)
 
