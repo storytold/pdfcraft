@@ -30,17 +30,21 @@ pub const MIN_FRAGMENTS: usize = 4;
 /// Most pixels a merged image may have (memory).
 const MAX_PIXELS: u64 = 80_000_000;
 
-/// Fragment groups a page's search for runs may read per content operator, and at least. A run
-/// that is not one picture is searched again from each of its groups, so without a limit images
-/// drawn over one another take time quadratic in their number; past it, the rest of the page is
-/// left as it is.
-const SCAN_PER_OP: usize = 16;
+/// Content operators a page's search for runs may read per content operator of the page, and at
+/// least. A run that is not one picture is searched again from each of its groups, so without a
+/// limit images drawn over one another take time quadratic in their number; past it, the rest of
+/// the page is left as it is. Every operator of a group counts (its `cm` operators are composed
+/// each time), not just the group; a group of four operators costs four, so the allowance is 16
+/// groups per operator, as before, and groups with many `cm` operators pay for them.
+const SCAN_PER_OP: usize = 64;
 const MIN_SCAN: usize = 1 << 16;
 
 #[cfg(test)]
 thread_local! {
     /// Fragment groups read, for the test that keeps a page's search linear in its content.
     static GROUP_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Operators group reads walked, for the test that keeps the search linear in operators.
+    static OP_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// One fragment: its image, its box in the coordinates the run is drawn in, and its size.
@@ -53,21 +57,44 @@ struct Fragment {
 
 /// The ops `q`, one or more `cm`, `Do`, `Q` starting at `i`: the index after them, the matrix
 /// and the name drawn.
-fn group_at(ops: &[Op], i: usize) -> Option<(usize, Matrix, Vec<u8>)> {
+fn group_at(ops: &[Op], i: usize, reads: &std::cell::Cell<usize>) -> Option<(usize, Matrix, Vec<u8>)> {
     #[cfg(test)]
     GROUP_READS.with(|c| c.set(c.get().saturating_add(1)));
-    if !ops.get(i)?.is("q") {
+    let mut looked = 0usize;
+    let found = group_scan(ops, i, &mut looked);
+    // Every operator looked at is charged to the page's search allowance, whether or not the
+    // group turns out to be one.
+    reads.set(reads.get().saturating_add(looked));
+    #[cfg(test)]
+    OP_READS.with(|c| c.set(c.get().saturating_add(looked)));
+    found
+}
+
+/// [`group_at`]'s search, counting in `looked` each operator it examines.
+fn group_scan(ops: &[Op], i: usize, looked: &mut usize) -> Option<(usize, Matrix, Vec<u8>)> {
+    let q = ops.get(i)?;
+    *looked += 1;
+    if !q.is("q") {
         return None;
     }
     let mut j = i + 1;
     let mut m = Matrix([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
     while let Some(op) = ops.get(j).filter(|o| o.is("cm")) {
+        *looked += 1;
         m = Matrix::from_operands(&op.operands)?.then(&m);
         j += 1;
     }
-    let draw = ops.get(j).filter(|o| o.is("Do"))?;
+    let draw = ops.get(j)?;
+    *looked += 1;
+    if !draw.is("Do") {
+        return None;
+    }
     let name = draw.name(0)?.to_vec();
-    ops.get(j + 1).filter(|o| o.is("Q"))?;
+    let end = ops.get(j + 1)?;
+    *looked += 1;
+    if !end.is("Q") {
+        return None;
+    }
     (j > i + 1).then_some((j + 2, m, name))
 }
 
@@ -152,7 +179,7 @@ fn stacked(run: &mut [Fragment]) -> Option<Vec<std::ops::Range<usize>>> {
 
 /// The fragment groups from `i` on (at most `limit`) while they form a picture drawn row by row
 /// or strip by strip in one direction, up to a gap or a jump.
-fn drawn_in_sequence(ops: &[Op], i: usize, limit: usize, xobjects: &Dict, doc: &Document) -> Vec<Fragment> {
+fn drawn_in_sequence(ops: &[Op], i: usize, limit: usize, xobjects: &Dict, doc: &Document, reads: &std::cell::Cell<usize>) -> Vec<Fragment> {
     let mut run: Vec<Fragment> = Vec::new();
     let mut row_x = [0.0f64, 0.0];
     let mut cur_x = [0.0f64, 0.0];
@@ -163,7 +190,7 @@ fn drawn_in_sequence(ops: &[Op], i: usize, limit: usize, xobjects: &Dict, doc: &
     let mut complete = 0usize;
     let mut j = i;
     while run.len() < limit {
-        let Some((next, m, name)) = group_at(ops, j) else { break };
+        let Some((next, m, name)) = group_at(ops, j, reads) else { break };
         let Some((image, width, height, ..)) = fragment_image(doc, xobjects, &name) else { break };
         let [a, _, _, d, e, f] = m.0;
         let f2 = Fragment { image, rect: [e, f, e + a, f + d], width, height };
@@ -240,10 +267,10 @@ fn drawn_in_sequence(ops: &[Op], i: usize, limit: usize, xobjects: &Dict, doc: &
 }
 
 /// The op index after the first `count` fragment groups from `i`.
-fn run_end(ops: &[Op], i: usize, count: usize) -> usize {
+fn run_end(ops: &[Op], i: usize, count: usize, reads: &std::cell::Cell<usize>) -> usize {
     let mut j = i;
     for _ in 0..count {
-        match group_at(ops, j) {
+        match group_at(ops, j, reads) {
             Some((next, ..)) => j = next,
             None => break,
         }
@@ -386,9 +413,9 @@ fn merge_page(
     let mut out: Vec<Op> = Vec::with_capacity(ops.len());
     let (mut i, mut merged, mut k) = (0, 0, 0);
     let budget = ops.len().saturating_mul(SCAN_PER_OP).max(MIN_SCAN);
-    let mut scanned = 0usize;
+    let reads = std::cell::Cell::new(0usize);
     while i < ops.len() {
-        if scanned > budget {
+        if reads.get() > budget {
             out.extend(ops.get(i..).unwrap_or_default().iter().cloned());
             break;
         }
@@ -396,7 +423,7 @@ fn merge_page(
         let mut run = Vec::new();
         let mut kind: Option<(Object, usize)> = None;
         let mut j = i;
-        while let Some((next, m, name)) = group_at(&ops, j) {
+        while let Some((next, m, name)) = group_at(&ops, j, &reads) {
             let Some((image, width, height, cs, n)) = fragment_image(doc, &xobjects, &name) else { break };
             let [a, b, c, d, e, f] = m.0;
             if b.abs() > 1e-9 || c.abs() > 1e-9 || !(a > 0.0 && d > 0.0) {
@@ -410,13 +437,11 @@ fn merge_page(
             run.push(Fragment { image, rect: [e, f, e + a, f + d], width, height });
             j = next;
         }
-        scanned = scanned.saturating_add(run.len()).saturating_add(1);
         // Not one picture as a whole: a prefix drawn row by row or strip by strip may be.
         let mut rows = if run.len() >= MIN_FRAGMENTS { stacked(&mut run) } else { None };
         if run.len() >= MIN_FRAGMENTS && rows.is_none() {
-            run = drawn_in_sequence(&ops, i, run.len(), &xobjects, doc);
-            j = run_end(&ops, i, run.len());
-            scanned = scanned.saturating_add(run.len().saturating_mul(2)).saturating_add(2);
+            run = drawn_in_sequence(&ops, i, run.len(), &xobjects, doc, &reads);
+            j = run_end(&ops, i, run.len(), &reads);
             rows = stacked(&mut run);
         }
         let Some(((cs, n), rows)) = kind.zip(rows).filter(|_| run.len() >= MIN_FRAGMENTS) else {
@@ -772,5 +797,38 @@ mod tests {
             let merged = merge_page(&mut doc, page, &mut report, &mut |_| true, &mut ImageBudget::with_work(u64::MAX)).unwrap();
             assert_eq!((merged, report.merged_images), (0, 0));
         }
+    }
+
+    /// The same with many `cm` operators in each group: the search reads a bounded number of operators
+    /// for each one of the page, however the matrices are spread over the groups.
+    #[test]
+    fn groups_with_many_matrices_are_charged_for_each_operator() {
+        let mut doc = Document::new_empty();
+        let mut image = Dict::new();
+        for (k, v) in
+            [("Subtype", Object::name("Image")), ("Width", Object::Int(1)), ("Height", Object::Int(1)), ("BitsPerComponent", Object::Int(8))]
+        {
+            image.set(k.as_bytes().to_vec(), v);
+        }
+        image.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+        let image = doc.add(Object::Stream(Stream::from_raw(image, vec![0])));
+        let groups = 400;
+        let content = doc.add(Object::Stream(Stream::flate(
+            Dict::new(),
+            format!("q 10 0 0 10 0 0 cm {}/Im Do Q\n", "1 0 0 1 0 0 cm ".repeat(49)).repeat(groups).as_bytes(),
+        )));
+        let mut xobjects = Dict::new();
+        xobjects.set(b"Im".to_vec(), Object::Ref(image));
+        let mut resources = Dict::new();
+        resources.set(b"XObject".to_vec(), Object::Dict(xobjects));
+        let mut page = Dict::new();
+        page.set(b"Contents".to_vec(), Object::Ref(content));
+        page.set(b"Resources".to_vec(), Object::Dict(resources));
+        let page = doc.add(Object::Dict(page));
+        OP_READS.with(|c| c.set(0));
+        let merged = merge_page(&mut doc, page, &mut Report::default(), &mut |_| true, &mut ImageBudget::with_work(u64::MAX));
+        assert_eq!(merged.ok(), Some(0));
+        let reads = OP_READS.with(|c| c.get());
+        assert!(reads <= 80 * 53 * groups, "{reads} operator reads");
     }
 }
