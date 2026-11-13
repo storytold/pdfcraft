@@ -554,11 +554,12 @@ fn later_changes_are_classified_under_a_signature_field_locks_level() {
     }
 }
 
-/// Two fields of the signed revision can hold one signature. The lock that counts for a field is
-/// its own: another field listed before it, with no lock or a weaker one, does not lend its level
-/// (#6865). Here "Second" locks the document with `/P 1` and "Approval", listed first, does not.
+/// Two fields of the signed revision can hold one signature. They get one verdict (#6041), held
+/// to the strictest lock among them: a field with no lock, listed first, does not lend its level
+/// to the others (#6865). Here "Second" locks the document with `/P 1` and "Approval", listed
+/// first, does not, and a later comment breaks the signature under both names.
 #[test]
-fn a_lock_level_is_read_from_the_field_being_validated() {
+fn a_signature_two_fields_hold_is_judged_by_the_strictest_lock() {
     let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
     let trust = TrustStore { certs: vec![id.certificate.clone()] };
     let base = fixture_with(
@@ -579,10 +580,10 @@ fn a_lock_level_is_read_from_the_field_being_validated() {
         assert!(s.signed && s.status == Status::Valid, "{field}: {:?} {:?}", s.status, s.details);
     }
     let commented = edit_after(&signed, add_comment);
-    let s = of(&commented, "Second");
-    assert_eq!((s.status, s.modification.clone()), (Status::Invalid, Modification::Disallowed(vec![kind::COMMENTS])), "Second: {:?}", s.details);
-    let s = of(&commented, "Approval");
-    assert_eq!((s.status, s.modification.clone()), (Status::Valid, Modification::Allowed(vec![kind::COMMENTS])), "Approval: {:?}", s.details);
+    for field in ["Approval", "Second"] {
+        let s = of(&commented, field);
+        assert_eq!((s.status, s.modification.clone()), (Status::Invalid, Modification::Disallowed(vec![kind::COMMENTS])), "{field}: {:?}", s.details);
+    }
 }
 
 /// Certify `fixture` with "no changes allowed" (DocMDP P=1).

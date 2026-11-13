@@ -331,13 +331,12 @@ fn finish_validation(context: SignatureValidation<'_>, verified: VerifiedSignatu
                 set_certification(&old, v, info);
                 // A signature that locked the document set a level too (#6865); the stricter of
                 // it and the certification's decides. `info.certify` stays the certification's:
-                // a lock does not make an approval signature a certification. The lock is the
-                // one of the field this signature is listed under: another field holding the
-                // same signature, with no lock or a weaker one, does not lend its level. Where
-                // that field is not among those ending the revision, any of them could be it,
-                // and the strictest of their levels counts.
-                let own = ending.iter().any(|(f, _)| f.name == info.field);
-                let lock = ending.iter().filter(|(f, _)| !own || f.name == info.field).filter_map(|(f, v)| lock_level(&old, &f.dict, v)).min();
+                // a lock does not make an approval signature a certification. Fields that hold
+                // one signature get one verdict (the listing judges a shared value once, #6041),
+                // so the lock does not depend on which of them is asked about: the strictest
+                // level among the fields ending the revision counts, and a field with no lock or
+                // a weaker one does not lend its level to the others.
+                let lock = ending.iter().filter_map(|(f, v)| lock_level(&old, &f.dict, v)).min();
                 let level = [info.certify, lock].into_iter().flatten().min();
                 classify_changes(doc, Some(old), level)
             }
