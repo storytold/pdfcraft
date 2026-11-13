@@ -107,7 +107,7 @@ pdfcraft-cli split report.pdf --every 10 --out-dir parts/
 
 ## Dokumen berkata sandi
 
-PdfCraft menerapkan penangan keamanan standar PDF, mulai dari RC4 40-bit hingga AES-256.
+PdfCraft menerapkan mekanisme keamanan standar PDF, mulai dari RC4 40-bit hingga AES-256.
 Dukungan mencakup kata sandi pengguna dan pemilik, kata sandi Unicode yang dinormalisasi dengan SASLprep, filter kriptografi, serta enkripsi khusus lampiran.
 
 Pembatasan yang ditetapkan pembuat dokumen ditampilkan dan dipatuhi.
@@ -383,7 +383,7 @@ Ketiganya aktif pada instalasi pertama.
 Pembaruan mempertahankan pilihan instalasi dan pintasan yang sudah dihapus pengguna.
 Argumen eksplisit tetap didahulukan: `=1` memasang kembali, `=0` meniadakan.
 Pembaruan dari versi sebelum menu tersebut ada menambahkannya seperti instalasi pertama (0.6.0 dan sebelumnya untuk menu PDF, 0.2.1 dan sebelumnya untuk gambar).
-Gunakan MSI yang sesuai arsitektur. Override instalasi per pengguna tidak didukung.
+Gunakan MSI yang sesuai arsitektur. Penggantian pengaturan instalasi per pengguna tidak didukung.
 
 Folder instalasi dapat diubah melalui halaman awal atau argumen `INSTALLFOLDER="D:\Apps\PdfCraft"`.
 Pembaruan mempertahankan folder lama kecuali diberi lokasi lain secara eksplisit.
