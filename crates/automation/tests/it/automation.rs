@@ -5853,6 +5853,65 @@ fn redacting_through_tools() {
     assert!(matches!(a.call("redact_mark", &json!({ "doc": doc })), Err(ToolError::InvalidArgs(_))));
 }
 
+#[test]
+fn redact_apply_refuses_unreadable_annotations_then_recovers_through_tools() {
+    for inline in [false, true] {
+        for rect in ["", "/Rect [10 140 /Bad 80 160]"] {
+            let temp = tempfile::tempdir().unwrap();
+            let dir = temp.path();
+            let note = format!("<< /Type /Annot /Subtype /Text /NM (problem-note) /Contents (PRIVATE-NOTE) {rect} >>");
+            let annots = if inline { note.clone() } else { "6 0 R".into() };
+            let page = format!(
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 300] /Contents 5 0 R \
+                 /Resources << /Font << /F1 4 0 R >> >> /Annots [{annots}] >>"
+            );
+            let content = "BT /F1 12 Tf 20 150 Td (SECRET) Tj ET BT /F1 12 Tf 20 50 Td (Public line) Tj ET";
+            let stream = format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len());
+            let bytes = pdf_of(&[
+                "<< /Type /Catalog /Pages 2 0 R >>",
+                "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+                &page,
+                "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+                &stream,
+                &note,
+            ]);
+            std::fs::write(dir.join("source.pdf"), bytes).unwrap();
+            let mut a = auto(dir);
+            let doc = ok(&mut a, "doc_open", json!({ "path": "source.pdf" }))["doc"].as_u64().unwrap();
+            assert_eq!(ok(&mut a, "redact_mark", json!({ "doc": doc, "find": "SECRET" }))["marked"], 1);
+            ok(&mut a, "doc_save", json!({ "doc": doc, "path": "pending.pdf", "full": true }));
+            let state = |a: &Automation| {
+                let d = a.session().get(pdfcraft_engine::DocId(doc)).unwrap();
+                (d.bytes.clone(), d.dirty, d.edit_generation(), d.can_undo().map(str::to_owned), d.can_redo().map(str::to_owned))
+            };
+            let before = state(&a);
+            let pending = std::fs::read(dir.join("pending.pdf")).unwrap();
+            let comments = ok(&mut a, "comment_list", json!({ "doc": doc }));
+            for _ in 0..2 {
+                let failure = err(&mut a, "redact_apply", json!({ "doc": doc })).to_string();
+                assert!(failure.contains("annotation 1 on page 1") && failure.contains("nothing was changed"), "{failure}");
+                assert_eq!(state(&a), before, "refusal preserves working bytes, dirty state, generation and history");
+                assert_eq!(ok(&mut a, "comment_list", json!({ "doc": doc })), comments, "the note and pending mark stay");
+                assert_eq!(std::fs::read(dir.join("pending.pdf")).unwrap(), pending);
+                assert!(page_text(&mut a, doc)[0].contains("SECRET"), "refusal leaves the original page intact");
+            }
+            // The error's remedy is reachable through the ordinary comment tool, even without a
+            // usable rectangle. The original pending mark can then be applied and saved.
+            ok(&mut a, "comment_delete", json!({ "doc": doc, "id": "problem-note" }));
+            let applied = ok(&mut a, "redact_apply", json!({ "doc": doc }));
+            assert_eq!((applied["applied"].as_u64(), applied["marks_pending"].as_u64()), (Some(1), Some(0)));
+            ok(&mut a, "doc_save", json!({ "doc": doc, "path": "redacted.pdf", "full": true }));
+            let mut reader = auto(dir);
+            let reopened = ok(&mut reader, "doc_open", json!({ "path": "redacted.pdf" }))["doc"].as_u64().unwrap();
+            let text = page_text(&mut reader, reopened)[0].clone();
+            assert!(text.contains("Public line") && !text.contains("SECRET"), "{text}");
+            assert_eq!(ok(&mut reader, "comment_list", json!({ "doc": reopened }))["comments"], json!([]));
+            let saved = std::fs::read(dir.join("redacted.pdf")).unwrap();
+            assert!(!saved.windows(b"PRIVATE-NOTE".len()).any(|w| w == b"PRIVATE-NOTE"), "the removed note must not survive a full save");
+        }
+    }
+}
+
 /// #2539 review: `redact_apply` says where the removed text is still held that applying leaves as
 /// it is (a bookmark title and a note's text here), and changes neither.
 #[test]
