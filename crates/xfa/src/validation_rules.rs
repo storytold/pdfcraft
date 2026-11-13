@@ -46,24 +46,35 @@ pub fn format_message(given: Option<&str>, name: &str) -> String {
     }
 }
 
+/// The work one format test may do over all of a picture's alternatives together, in
+/// characters looked at. The test runs as the user leaves a field, outside any script's
+/// limits, and a picture and a value may each be long; a dozen alternatives against a value of
+/// a hundred characters are a few thousand.
+const MATCH_WORK: usize = 1 << 20;
+
 /// Whether `value` is one picture clause `picture` describes: any of its alternatives (`|`)
-/// does. `None` when no alternative is one this reads (`text{…}`, `num{…}`, `date{…}` with
-/// digits only, or a bare clause read as text).
+/// does. `None` when that can't be told: no alternative describes the value and one of them is
+/// not one this reads (`text{…}`, `num{…}`, `date{…}` with digits only, or a bare clause read
+/// as text; a `time{…}` alternative may be the one the value is for), or matching would take
+/// more than [`MATCH_WORK`].
 pub fn conforms(picture: &str, value: &str) -> Option<bool> {
-    let mut known = false;
+    let mut work = MATCH_WORK;
+    let mut unread = false;
     for clause in alternatives(picture) {
-        match clause_conforms(clause.trim(), value) {
+        // Reading the clause and the value against it, once each.
+        work = work.checked_sub(clause.len().saturating_add(value.len()).saturating_add(1))?;
+        match clause_conforms(clause.trim(), value, &mut work) {
             Some(true) => return Some(true),
-            Some(false) => known = true,
-            None => {}
+            Some(false) => {}
+            None => unread = true,
         }
     }
-    known.then_some(false)
+    (!unread).then_some(false)
 }
 
 /// One clause: its category (`text`, `num`, `date`; a locale in parentheses is ignored) and its
-/// pattern between the braces.
-fn clause_conforms(clause: &str, value: &str) -> Option<bool> {
+/// pattern between the braces. `work` is what is left of [`MATCH_WORK`].
+fn clause_conforms(clause: &str, value: &str, work: &mut usize) -> Option<bool> {
     let (category, pattern) = match clause.find('{') {
         Some(open) => {
             let cat = clause.get(..open)?;
@@ -78,7 +89,7 @@ fn clause_conforms(clause: &str, value: &str) -> Option<bool> {
         // A text picture counts every character as entered (`X` takes a space); numbers and
         // dates are read without the spaces around them.
         "text" | "" => Some(text_conforms(&symbols, value)),
-        "num" => num_conforms(&symbols, value.trim()),
+        "num" => num_conforms(&symbols, value.trim(), work),
         "date" => date_conforms(&symbols, value.trim()),
         _ => None,
     }
@@ -149,8 +160,9 @@ fn text_conforms(symbols: &[Sym], value: &str) -> bool {
 
 /// A numeric pattern: `9` a digit, `Z` a digit or a space, `z` a digit or nothing, `.`, `v`
 /// and `V` the decimal point, `,` an optional grouping comma, `s`, `-` and `+` an optional
-/// sign, `$` itself; `None` for symbols this doesn't read (currencies by locale, `E`, `CR`).
-fn num_conforms(symbols: &[Sym], value: &str) -> Option<bool> {
+/// sign, `$` itself; `None` for symbols this doesn't read (currencies by locale, `E`, `CR`),
+/// and when following the pattern would take more than is left of `work`.
+fn num_conforms(symbols: &[Sym], value: &str, work: &mut usize) -> Option<bool> {
     /// What one step of the pattern takes: one character of a kind, or one or none.
     #[derive(Clone, Copy)]
     enum Takes {
@@ -182,9 +194,12 @@ fn num_conforms(symbols: &[Sym], value: &str) -> Option<bool> {
     // Which value positions the steps so far can have reached: optional steps make the match
     // ambiguous (`zzz9` against `12`), so every way is followed at once. Too long a pair is not
     // read.
-    if steps.len().saturating_mul(v.len()) > 1 << 20 {
+    let Some(left) = work.checked_sub(steps.len().saturating_mul(v.len().saturating_add(1))) else {
+        // Nothing is left for the alternatives after it either.
+        *work = 0;
         return None;
-    }
+    };
+    *work = left;
     let fits = |t: Takes, c: char| match t {
         Takes::Digit => c.is_ascii_digit(),
         Takes::DigitOrSpace => c.is_ascii_digit() || c == ' ',
@@ -213,8 +228,9 @@ fn num_conforms(symbols: &[Sym], value: &str) -> Option<bool> {
 }
 
 /// A date pattern with numeric fields only: `D`/`DD` a day, `M`/`MM` a month, `YY`/`YYYY` a
-/// year (one or two digits for the single letters, exactly as many for the repeated ones),
-/// anything else itself; `None` for names (`MMM`, `EEE`), Julian days and other letters.
+/// year (one or two digits for the single letters, exactly as many for the repeated ones; a
+/// day is 1 to 31 and a month 1 to 12, whatever the month and year), anything else itself;
+/// `None` for names (`MMM`, `EEE`), Julian days and other letters.
 fn date_conforms(symbols: &[Sym], value: &str) -> Option<bool> {
     let v: Vec<char> = value.chars().collect();
     let mut i = 0usize;
@@ -244,6 +260,21 @@ fn date_conforms(symbols: &[Sym], value: &str) -> Option<bool> {
                 };
                 let digits = v.get(i..).unwrap_or_default().iter().take(max).take_while(|d| d.is_ascii_digit()).count();
                 if digits < min {
+                    return Some(false);
+                }
+                // At most four digits, so the number fits.
+                let number = v
+                    .get(i..i.saturating_add(digits))
+                    .unwrap_or_default()
+                    .iter()
+                    .filter_map(|d| d.to_digit(10))
+                    .fold(0u32, |n, d| n.saturating_mul(10).saturating_add(d));
+                let in_range = match c {
+                    'D' => (1..=31).contains(&number),
+                    'M' => (1..=12).contains(&number),
+                    _ => true,
+                };
+                if !in_range {
                     return Some(false);
                 }
                 i = i.saturating_add(digits);
@@ -326,12 +357,39 @@ mod tests {
             ("date(en_US){MM/DD/YYYY}", "10/27/2026", Some(true)),
             ("time{HH:MM}", "10:00", None),
             ("text{9999}|text{AAAA}", "abcd", Some(true)),
-            ("text{9999}|time{HH}", "abcd", Some(false)),
+            // An alternative this can't read may take the value: no failure is said.
+            ("text{9999}|time{HH}", "abcd", None),
+            ("text{9999}|time{HH:MM}", "10:00", None),
+            ("time{HH}|text{9999}", "1234", Some(true)),
+            ("date{YYYY-MM-DD}", "2026-13-01", Some(false)),
+            ("date{YYYY-MM-DD}", "2026-12-32", Some(false)),
+            ("date{YYYY-MM-DD}", "2026-00-10", Some(false)),
+            ("date{YYYY-MM-DD}", "2026-10-00", Some(false)),
+            ("date{YYYY-MM-DD}", "2026-12-31", Some(true)),
+            ("date{D/M/YY}", "31/12/26", Some(true)),
+            ("date{D/M/YY}", "32/1/26", Some(false)),
+            ("date{D/M/YY}", "0/1/26", Some(false)),
             ("time{HH}|date{EEE}", "x", None),
         ];
         for (picture, value, want) in cases {
             assert_eq!(conforms(picture, value), *want, "{picture} {value}");
         }
+    }
+
+    /// One format test's work is bounded over all of a picture's alternatives together, not
+    /// for each: past the bound the picture is not read (no failure is said), however many
+    /// alternatives follow. Each alternative here is within the bound by itself.
+    #[test]
+    fn matching_work_is_bounded_over_all_alternatives() {
+        let value = "1".repeat(10_000);
+        let few = vec!["num{9}"; 50].join("|");
+        assert_eq!(conforms(&few, &value), Some(false), "50 alternatives are within the bound");
+        let many = vec!["num{9}"; 200].join("|");
+        assert_eq!(conforms(&many, &value), None, "200 are past it");
+        // A long pattern and value are past it by themselves, and nothing after them is read.
+        let long = format!("num{{{}}}|text{{9}}", "z".repeat(2_000));
+        assert_eq!(conforms(&long, &"1".repeat(1_000)), None);
+        assert_eq!(conforms(&long, "1"), Some(true));
     }
 
     /// The format test is off, or passes, for empty values and pictures it can't read; both
