@@ -4443,7 +4443,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-collab-annot"
-version = "0.21.0"
+version = "0.21.1"
 dependencies = [
  "pdfcraft-annot",
  "serde",
@@ -4453,7 +4453,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-collab-client"
-version = "0.21.0"
+version = "0.21.1"
 dependencies = [
  "pdfcraft-collab-hub",
  "pdfcraft-collab-proto",
@@ -4464,7 +4464,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-collab-client-pdf"
-version = "0.21.0"
+version = "0.21.1"
 dependencies = [
  "base64 0.23.1",
  "pdfcraft-collab-annot",
@@ -4480,7 +4480,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-collab-daemon"
-version = "0.21.0"
+version = "0.21.1"
 dependencies = [
  "jsonwebtoken",
  "pdfcraft-collab-hub",
@@ -4498,7 +4498,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-collab-hub"
-version = "0.21.0"
+version = "0.21.1"
 dependencies = [
  "pdfcraft-collab-proto",
  "pdfcraft-collab-server",
@@ -4508,7 +4508,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-collab-link"
-version = "0.21.0"
+version = "0.21.1"
 dependencies = [
  "pdfcraft-annot",
  "pdfcraft-collab-proto",
@@ -4518,7 +4518,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-collab-outline"
-version = "0.21.0"
+version = "0.21.1"
 dependencies = [
  "pdfcraft-collab-proto",
  "pdfcraft-organize",
@@ -4528,7 +4528,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-collab-pdf"
-version = "0.21.0"
+version = "0.21.1"
 dependencies = [
  "base64 0.23.1",
  "pdfcraft-collab-annot",
@@ -4546,7 +4546,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-collab-proto"
-version = "0.21.0"
+version = "0.21.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -4555,7 +4555,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-collab-server"
-version = "0.21.0"
+version = "0.21.1"
 dependencies = [
  "pdfcraft-collab-proto",
  "serde_json",
@@ -4564,7 +4564,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-collab-session"
-version = "0.21.0"
+version = "0.21.1"
 dependencies = [
  "pdfcraft-collab-client",
  "pdfcraft-collab-hub",
@@ -4581,7 +4581,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-collab-ws"
-version = "0.21.0"
+version = "0.21.1"
 dependencies = [
  "jsonwebtoken",
  "pdfcraft-collab-client-pdf",
