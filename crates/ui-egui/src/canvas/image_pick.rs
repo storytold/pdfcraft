@@ -101,7 +101,7 @@ impl PagePictures {
     pub(crate) fn get(&mut self, ctx: &egui::Context, doc: &pdfcraft_engine::Document, page: usize) -> Option<&[pdfcraft_engine::PagePicture]> {
         let key = (page, doc.edit_generation());
         self.poll();
-        if self.job.is_none() && !self.ready.as_ref().is_some_and(|(k, _)| *k == key) {
+        if self.job.is_none() && self.ready.as_ref().is_none_or(|(k, _)| *k != key) {
             match doc.page_pictures_job(page) {
                 Some(work) if doc.bytes.len() < Self::SMALL_FILE => self.ready = Some((key, work())),
                 Some(work) => self.start(ctx, key, work),

@@ -61,8 +61,8 @@ mod hotbar;
 mod panels;
 pub mod panes;
 pub use print_ui::{
-    DefaultPaperSource, Handling as PrintHandling, OptionsSource, PrintDraft, PrinterPapersSource, PrinterSetup, PrinterSource, Spooler,
-    TwoSidedSource, Which as PrintWhich, system_printers, system_two_sided,
+    DefaultPaperSource, Handling as PrintHandling, OptionsSource, PreferencesSource, PrintDraft, PrinterPapersSource, PrinterSetup, PrinterSource,
+    Spooler, TwoSidedSource, Which as PrintWhich, system_printers, system_two_sided,
 };
 pub use redact_ui::{HiddenDraft, PagesDraft as RedactPagesDraft, RedactPrefs, SearchDraft as RedactSearchDraft, SearchMode as RedactSearchMode};
 pub mod i18n;
@@ -438,6 +438,8 @@ pub struct PdfCraftApp {
     pub printer_source: Option<PrinterSource>,
     /// Where Properties… reads a printer's driver options: the spooler's unless a test stands in.
     pub options_source: Option<OptionsSource>,
+    /// Native printer settings, supplied by tests when no real driver window should open.
+    pub preferences_source: Option<PreferencesSource>,
     /// Where a printer's configured default paper comes from: DEVMODE / driver settings unless a test stands in.
     pub default_paper_source: Option<DefaultPaperSource>,
     /// Where a printer's supported paper sizes come from: driver capabilities unless a test stands in.

@@ -6,6 +6,12 @@ pub use craft_print::{
     lpstat_command, parse_lpoptions, parse_lpstat, parse_lpstat_e, parse_ppd, parse_windows_printers, ppd_text, printers_parsed,
 };
 
+#[cfg(not(target_arch = "wasm32"))]
+pub use craft_print::DuplexSession;
+pub use craft_print::DuplexSource;
+#[cfg(windows)]
+pub use craft_print::query_worker;
+
 #[cfg(any(windows, test))]
 mod windows_duplex;
 
@@ -121,6 +127,40 @@ pub fn two_sided(printer: &str) -> Option<bool> {
     #[cfg(windows)]
     let _provider = print_ticket_provider();
     craft_print::two_sided(printer)
+}
+
+/// Queue discovery with the shared worker's isolation and deadline on Windows.
+/// Windows hosts must dispatch `query_worker` before normal startup.
+pub fn query_printers() -> Vec<Printer> {
+    if missing_print_dll().is_some() {
+        return Vec::new();
+    }
+    craft_print::query_printers()
+}
+
+/// Selected-printer duplex support, isolated and cancellable on Windows.
+pub fn query_two_sided(printer: &str, cancelled: &std::sync::atomic::AtomicBool) -> Option<bool> {
+    if missing_print_dll().is_some() {
+        return None;
+    }
+    craft_print::query_two_sided(printer, cancelled)
+}
+
+/// Paper sizes and default paper with the Windows worker's deadline and cancellation.
+pub fn query_paper_info(printer: &str, cancelled: &std::sync::atomic::AtomicBool) -> Option<PaperInfo> {
+    if missing_print_dll().is_some() {
+        return None;
+    }
+    #[cfg(windows)]
+    {
+        let (papers, default) = craft_print::query_paper_info(printer, cancelled)?;
+        let default = default.map(|size| resolve_paper_name(&papers, size));
+        Some((papers, default))
+    }
+    #[cfg(not(windows))]
+    {
+        (!cancelled.load(std::sync::atomic::Ordering::Acquire)).then(|| printer_paper_info(printer))
+    }
 }
 
 /// The driver's job options for a printer (CUPS: its PPD, with the queue's current defaults);
@@ -481,8 +521,15 @@ pub fn open_printer_preferences(printer: &str) -> Result<(), crate::PrintError> 
     craft_print::open_printer_preferences(printer).map_err(|e| crate::PrintError::Spool(e.to_string()))
 }
 
+/// Open native printer settings and wait for the user to close them. Call off the UI thread.
+pub fn wait_printer_preferences(printer: &str) -> Result<(), crate::PrintError> {
+    craft_print::wait_printer_preferences(printer).map_err(|error| crate::PrintError::Spool(error.to_string()))
+}
+
 /// A named paper with dimensions in points `(width, height)`.
-pub type Paper = (String, (f64, f64));
+pub type Paper = craft_print::PrinterPaper;
+/// A printer's supported papers and configured default paper.
+pub type PaperInfo = (Vec<Paper>, Option<Paper>);
 
 /// The paper sizes supported by `printer` as reported by the system / printer driver.
 /// Empty when the printer reports none or on platforms where driver capabilities are not queried.
@@ -500,27 +547,7 @@ pub fn printer_papers(printer: &str) -> Vec<Paper> {
 fn printer_papers_internal(printer: &str) -> Vec<Paper> {
     #[cfg(test)]
     PRINTER_BACKEND_CALLS.with(|c| c.set(c.get().saturating_add(1)));
-    use winprint::ticket::{FeatureOptionPack as _, FeatureOptionPackWithPredefined as _};
-    let Ok(devices) = winprint::printer::PrinterDevice::all() else { return Vec::new() };
-    let Some(device) = devices.into_iter().find(|d| d.name() == printer) else { return Vec::new() };
-    let Ok(capabilities) = winprint::ticket::PrintCapabilities::fetch(&device) else { return Vec::new() };
-    let mut papers = Vec::new();
-    for media in capabilities.page_media_sizes() {
-        let size = media.size();
-        let w_pts = (size.width_in_micron() as f64) * 72.0 / 25_400.0;
-        let h_pts = (size.height_in_micron() as f64) * 72.0 / 25_400.0;
-        if w_pts.is_finite() && h_pts.is_finite() && w_pts >= 72.0 && h_pts >= 72.0 && w_pts <= 14400.0 && h_pts <= 14400.0 {
-            let name = media.display_name().map(str::to_string).unwrap_or_else(|| {
-                if let Some(predefined) = media.as_predefined_name() { format!("{predefined:?}") } else { format!("{w_pts:.1} x {h_pts:.1} pt") }
-            });
-            let w_pts = (w_pts * 100.0).round() / 100.0;
-            let h_pts = (h_pts * 100.0).round() / 100.0;
-            if !papers.iter().any(|(n, (w, h)): &(String, (f64, f64))| n == &name && (*w - w_pts).abs() < 0.1 && (*h - h_pts).abs() < 0.1) {
-                papers.push((name, (w_pts, h_pts)));
-            }
-        }
-    }
-    papers
+    craft_print::printer_papers(printer)
 }
 
 /// The paper sizes supported by `printer` on CUPS: its PPD's (see [`cups_paper_info`]); none on
@@ -753,15 +780,11 @@ pub fn printer_paper_info(printer: &str) -> (Vec<Paper>, Option<Paper>) {
     #[cfg(windows)]
     let _provider = print_ticket_provider();
     #[cfg(windows)]
-    let papers = printer_papers_internal(printer);
+    let (papers, default) = craft_print::printer_paper_info(printer);
     #[cfg(not(windows))]
     let (papers, cups_default) = cups_paper_info(printer);
     #[cfg(windows)]
-    let default_paper = {
-        let settings = craft_print::rgb::default_settings(printer).ok();
-        let page = settings.as_ref().and_then(|s| craft_print::rgb::page(printer, Some(s)).ok());
-        page.map(|p| resolve_paper_name(&papers, p.paper))
-    };
+    let default_paper = default.map(|size| resolve_paper_name(&papers, size));
     #[cfg(not(windows))]
     let default_paper = cups_default;
     (papers, default_paper)

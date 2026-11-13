@@ -195,11 +195,9 @@ fn rewrite(
                     state.width = w;
                 }
             }
-            b"m" | b"re" => {
-                if !state.in_path {
-                    state.in_path = true;
-                    path_start = Some(out.len());
-                }
+            b"m" | b"re" if !state.in_path => {
+                state.in_path = true;
+                path_start = Some(out.len());
             }
             b"Do" => {
                 if let Some(Object::Name(name)) = op.operands.first()

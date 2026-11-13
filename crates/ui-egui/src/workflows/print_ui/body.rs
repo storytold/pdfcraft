@@ -121,6 +121,7 @@ pub(crate) fn body(
     // Creep within its field's range can still be too much for a thick booklet.
     let too_much_creep = d.handling == Handling::Booklet && d.creep > 0.0 && matches!(laid, Some(Err(_)));
     let sheets = laid.and_then(Result::ok).unwrap_or_default();
+    let duplex_warning = d.printer_two_sided() == Some(false);
     d.sheet = d.sheet.min(sheets.len().saturating_sub(1));
     // Cap the settings+preview area to the screen's available height (#4252, #5317):
     // on a short screen, or with the driver's own Properties… panel expanded below, this row can
@@ -177,12 +178,13 @@ pub(crate) fn body(
                     } else {
                         tl!("The printer driver's own settings for this print: paper tray, paper type, finishing and more.")
                     };
-                    let properties = ui.add_enabled(d.printer.is_some() && !browser, egui::Button::new(tl!("Properties…"))).on_hover_text(tip);
+                    let properties = ui.add_enabled(d.printer.is_some() && !browser && d.preferences_loading != d.printer, egui::Button::new(tl!("Properties…"))).on_hover_text(tip);
                     if properties.clicked()
                         && let Some(p) = d.printer.clone()
                     {
                         if spool::HAS_PRINTER_PREFERENCES {
-                            d.driver_error = spool::open_printer_preferences(&p).err().map(|e| e.to_string());
+                            d.preferences_loading = Some(p.clone());
+                            d.read_preferences_for = Some(p);
                         } else {
                             if d.driver_options.as_ref().is_none_or(|(read_for, _)| *read_for != p) && d.driver_options_loading.as_deref() != Some(p.as_str()) {
                                 // Read off the GUI thread (#1818): `poll_print` starts it next frame.
@@ -332,10 +334,9 @@ pub(crate) fn body(
                     ui.end_row();
                 }
             });
-            // Windows says which drivers can't print two-sided as they're asked; they keep their
-            // own setting, even when Two-sided is Off, and for a booklet's both sides.
-            if d.printer_two_sided() == Some(false) {
-                ui.label(egui::RichText::new(tl!("This printer's driver doesn't take two-sided settings from other programs, so its own setting applies. Change it in Properties…")).small().color(t.text_muted));
+            // Reserve space for a selected printer so a late answer cannot move controls or hide below the preview.
+            if (cfg!(windows) && d.printer.is_some()) || duplex_warning {
+                ui.add_visible(duplex_warning, egui::Label::new(egui::RichText::new(tl!("This printer's driver doesn't take two-sided settings from other programs, so its own setting applies. Change it in Properties…")).small().color(t.text_muted)));
             }
             if d.printer.as_deref() == Some(crate::web_print::BROWSER_PRINTER) {
                 ui.label(egui::RichText::new(tl!("Copies, two-sided printing and colour are chosen in the browser's print dialog.")).small().color(t.text_muted));

@@ -132,6 +132,7 @@ impl PdfCraftApp {
             updates: updates::Updates::default(),
             printer_source: None,
             options_source: None,
+            preferences_source: None,
             default_paper_source: None,
             printer_papers_source: None,
             spooler: None,

@@ -110,13 +110,19 @@ pub struct PrintDraft {
     pub driver_options_loading: Option<String>,
     /// Properties… asked for this printer's options; the app starts the read on the next frame.
     pub read_options_for: Option<String>,
+    /// The current printer's advisory duplex answer. Outer `None` means unread; inner `None`
+    /// means unavailable (see [`TwoSidedSource`](super::TwoSidedSource)).
+    pub two_sided: Option<(String, Option<bool>)>,
+    /// Request a fresh shared capability session when opening Print.
+    pub refresh_capabilities: bool,
+    /// Native preferences requested on the next logic pass.
+    pub read_preferences_for: Option<String>,
+    /// The selected printer has a native settings window pending.
+    pub preferences_loading: Option<String>,
     /// The printer whose papers and default paper are being read in the background.
     pub papers_loading: Option<String>,
     /// A printer change requested reading papers; the app starts the read on the next frame.
     pub read_papers_for: Option<String>,
-    /// Whether each printer's driver takes two-sided settings, as read in the background for
-    /// the printer picked (see [`TwoSidedSource`](super::TwoSidedSource)); `None` when it couldn't be read.
-    pub two_sided: std::collections::BTreeMap<String, Option<bool>>,
     /// The paper, sizing and two-sided choice each printer was last printed with, the printer
     /// printed to last first; kept across restarts (#2001).
     pub setups: Vec<(String, PrinterSetup)>,
@@ -177,9 +183,12 @@ impl Default for PrintDraft {
             crop_pages: None,
             driver_options_loading: None,
             read_options_for: None,
+            two_sided: None,
+            refresh_capabilities: false,
+            read_preferences_for: None,
+            preferences_loading: None,
             papers_loading: None,
             read_papers_for: None,
-            two_sided: Default::default(),
             setups: Vec::new(),
         }
     }
@@ -191,6 +200,18 @@ pub fn default_papers() -> Vec<(String, (f64, f64))> {
 }
 
 impl PrintDraft {
+    /// Discard driver knowledge, including failures, without changing the user's job settings.
+    pub fn refresh_two_sided(&mut self) {
+        self.two_sided = None;
+        self.refresh_capabilities = true;
+        for printer in &mut self.printers {
+            printer.two_sided = None;
+        }
+    }
+    /// The current presentation snapshot, not the owner of the capability cache.
+    pub fn two_sided_for(&self, printer: &str) -> Option<&Option<bool>> {
+        self.two_sided.as_ref().filter(|(name, _)| name == printer).map(|(_, answer)| answer)
+    }
     /// Find the index of a paper in `self.papers` matching `size`, allowing for orientation.
     pub fn matching_paper(&self, size: (f64, f64)) -> Option<usize> {
         print::matching_paper(size).or_else(|| {
@@ -372,7 +393,6 @@ impl PrintDraft {
             }
         }
     }
-
     /// Choose Page Sizing & Handling. Label loads label stock and remembers the paper it
     /// replaced; leaving Label gives that paper back, unless another one was picked meanwhile.
     pub fn set_handling(&mut self, handling: Handling) {
@@ -524,7 +544,7 @@ impl PrintDraft {
     /// for the printer picked arrives in [`PrintDraft::two_sided`].
     pub fn printer_two_sided(&self) -> Option<bool> {
         let p = self.printers.iter().find(|p| self.printer.as_ref() == Some(&p.name))?;
-        p.two_sided.or_else(|| self.two_sided.get(&p.name).copied().flatten())
+        p.two_sided.or_else(|| self.two_sided_for(&p.name).copied().flatten())
     }
 
     /// The Two-sided choice as the chosen printer can take it: long or short edge is left out for
