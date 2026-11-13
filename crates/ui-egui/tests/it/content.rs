@@ -107,8 +107,13 @@ fn text_tool_drafts_grow_for_latin_and_arabic() {
 #[test]
 fn text_tool_single_click_retypes_added_text_without_another_item() {
     for command in ["edit.text", "edit.edit_text"] {
-        for (original, replacement) in [("Original", "Replacement"), ("سلام", "سلام عليكم ورحمة الله")] {
+        for (original, replacement) in
+            [("Original", "Replacement"), ("سلام", "سلام عليكم ورحمة الله"), ("Agpq 中文 123", "Agpq 中文 简体汉字 联络 编辑 保存 重开 123")]
+        {
             if original == "سلام" && pdfcraft_fonts::document_arabic_font().is_none() {
+                continue;
+            }
+            if original.contains('中') && !pdfcraft_fonts::CRAFT_FONTS.iter().any(|face| face.covers("Hans")) {
                 continue;
             }
             let mut h = harness();
@@ -138,6 +143,42 @@ fn text_tool_single_click_retypes_added_text_without_another_item() {
             assert_eq!(text.text, replacement);
         }
     }
+}
+
+#[test]
+fn mixed_text_add_editor_commits_chinese_and_keeps_an_unsupported_draft() {
+    if crate::support::skip_without_glyphs("mixed_text_add_editor_commits_chinese_and_keeps_an_unsupported_draft", "en", "Agpq 中文 123") {
+        return;
+    }
+    let supported = pdfcraft_engine::first_undrawable(&pdfcraft_engine::AddedText { text: "Agpq 中文 123".into(), ..Default::default() }).is_none();
+    let mut h = harness();
+    assert!(h.state_mut().execute("edit.text"));
+    h.run_steps(2);
+    let point = at(&h, 40.0, 300.0);
+    click(&mut h, point);
+    h.event(egui::Event::Text("Agpq 中文 123".into()));
+    h.run_steps(3);
+    assert_eq!(h.state().views[0].content.draft.as_ref().unwrap().text, "Agpq 中文 123");
+    h.get_by_label("Done adding text").click();
+    h.run_steps(3);
+    if !supported {
+        assert!(texts(&h).is_empty());
+        assert!(h.state().views[0].content.draft.is_some());
+        return;
+    }
+    assert_eq!(texts(&h), ["Agpq 中文 123"]);
+    assert!(h.state_mut().execute("edit.text"));
+    h.run_steps(2);
+    let point = at(&h, 45.0, 305.0);
+    click(&mut h, point);
+    assert_eq!(h.state().views[0].content.draft.as_ref().unwrap().index, Some(0));
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.event(egui::Event::Text("Agpq 中文 ✓".into()));
+    h.run_steps(3);
+    h.get_by_label("Done adding text").click();
+    h.run_steps(3);
+    assert_eq!(texts(&h), ["Agpq 中文 123"]);
+    assert_eq!(h.state().views[0].content.draft.as_ref().unwrap().text, "Agpq 中文 ✓");
 }
 
 #[test]
@@ -338,18 +379,15 @@ fn a_picture_on_the_clipboard_is_pasted_onto_the_page() {
 /// written to the page as `?` (or lost).
 #[test]
 fn text_the_standard_fonts_cant_draw_stays_in_the_editor() {
-    if crate::support::skip_without_glyphs("text_the_standard_fonts_cant_draw_stays_in_the_editor", "en", "Hello 世界") {
-        return;
-    }
     let _gpu = gpu();
     let mut h = harness();
     assert!(h.state_mut().execute("edit.text"));
     h.run_steps(2);
     let p = at(&h, 40.0, 300.0);
     click(&mut h, p);
-    h.event(egui::Event::Text("Hello 世界".into()));
+    h.event(egui::Event::Text("Hello ✓".into()));
     h.run_steps(2);
-    h.get_by_label_contains("can't draw “世” (U+4E16)");
+    h.get_by_label_contains("U+2713");
     if let Ok(dir) = std::env::var("PDFCRAFT_SHOTS") {
         h.render().unwrap().save(format!("{dir}/undrawable-text.png")).unwrap();
     }
@@ -357,12 +395,12 @@ fn text_the_standard_fonts_cant_draw_stays_in_the_editor() {
     h.run_steps(3);
     assert!(texts(&h).is_empty(), "nothing was written to the page");
     let draft = h.state().views[0].content.draft.as_ref().map(|d| d.text.clone());
-    assert_eq!(draft.as_deref(), Some("Hello 世界"), "the typed text is kept");
+    assert_eq!(draft.as_deref(), Some("Hello ✓"), "the typed text is kept");
     // A click elsewhere on the page doesn't finish it, or replace it with a new box.
     let elsewhere = at(&h, 40.0, 150.0);
     click(&mut h, elsewhere);
     let draft = h.state().views[0].content.draft.as_ref().map(|d| d.text.clone());
-    assert_eq!(draft.as_deref(), Some("Hello 世界"), "clicking elsewhere keeps the typed text");
+    assert_eq!(draft.as_deref(), Some("Hello ✓"), "clicking elsewhere keeps the typed text");
     assert!(texts(&h).is_empty());
     // Once the text can be drawn, Done adds it (Done took the focus, so edit the draft directly).
     if let Some(d) = h.state_mut().views[0].content.draft.as_mut() {

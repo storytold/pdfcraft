@@ -35,7 +35,12 @@ only the rows it covers. Changing the whole paragraph's formatting, width or pos
 every row.
 
 Add Text also opens existing text when it is clicked; a blank-space click starts a new item.
-Both text tools retype an added text item with one click. Draft boxes grow to the page edge
+Both text tools retype an added text item with one click. Native builds with the pinned Hans
+font also accept mixed English and Simplified Chinese in Add Text. Western text keeps its
+standard font; CJK glyphs use bounded Type 3 outlines with ToUnicode, using the same advances
+for validation, wrapping and writing. Added items retain their existing persistence format,
+with at most 2400 distinct CJK glyphs per box. Missing glyphs keep the draft open and leave
+the document intact. This does not qualify all CJK, emoji, complex scripts or native IME input. Draft boxes grow to the page edge
 before wrapping, and the saved item uses that width. A single visual source row grows across font/style boundaries;
 multi-row paragraphs retain their existing wrap width. Retyping uses a preview with only
 that added item's old drawing removed, so deleted draft characters do not show underneath.

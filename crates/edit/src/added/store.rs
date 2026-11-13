@@ -194,6 +194,10 @@ fn validate(c: &Content) -> Result<(), EditError> {
                 first_undrawable(t)
             };
             if let Some(c) = undrawable {
+                if super::cjk::is_cjk(c) {
+                    // Keep the font-input or outline-budget error instead of a WinAnsi warning.
+                    super::cjk::CjkText::new(t).map_err(|(error, _)| error)?;
+                }
                 return Err(crate::undrawable(c));
             }
         }
@@ -326,7 +330,7 @@ pub fn isolate_content(doc: &mut Document, page: usize, index: usize) -> Result<
     Ok(())
 }
 
-/// The Type 3 fonts an Arabic item's stream shows text with. Each item has its own (`draw_shaped`
+/// The Type 3 fonts a shaped or CJK item's stream shows text with. Each item has its own (`draw_shaped`
 /// names them so), so they go when the item is replaced or deleted.
 fn own_fonts(doc: &Document, obj: ObjRef) -> Vec<Vec<u8>> {
     let Object::Stream(s) = &*doc.get(obj) else { return Vec::new() };
@@ -336,8 +340,11 @@ fn own_fonts(doc: &Document, obj: ObjRef) -> Vec<Vec<u8>> {
     let limit = pdfcraft_cos::MAX_PAGE_DECODED.max(s.raw.len().saturating_mul(16));
     let Ok(data) = s.decoded_within(limit) else { return Vec::new() };
     // Each name once: a stream that repeats a name is not copied out once per use.
-    let names: std::collections::BTreeSet<&[u8]> =
-        data.split(u8::is_ascii_whitespace).filter_map(|w| w.strip_prefix(b"/")).filter(|w| w.starts_with(b"PCAr")).collect();
+    let names: std::collections::BTreeSet<&[u8]> = data
+        .split(u8::is_ascii_whitespace)
+        .filter_map(|w| w.strip_prefix(b"/"))
+        .filter(|w| w.starts_with(b"PCAr") || w.starts_with(b"PCCjk"))
+        .collect();
     names.into_iter().map(<[u8]>::to_vec).collect()
 }
 
