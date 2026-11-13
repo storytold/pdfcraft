@@ -421,6 +421,9 @@ impl PrintDraft {
             } else {
                 self.paper = paper;
             }
+            // The paper this printer was last printed on is a choice, as one made in the dialog:
+            // the driver's default paper, read in the background (#5861), must not replace it.
+            self.paper_overridden = true;
         }
         self.sheet = 0;
     }
@@ -438,7 +441,7 @@ impl PrintDraft {
             m => m,
         });
         let paper = self.paper_size();
-        let raster = self.as_image.then_some(print::Raster { dpi: self.dpi, grayscale: self.grayscale });
+        let raster = self.raster();
         // A selected area prints alone, its one page sized like a page of its own: Size is its
         // only handling (the dialog offers no other while it is chosen).
         if self.which == Which::Area {
@@ -506,7 +509,7 @@ impl PrintDraft {
 
     /// Print as image: pictures at the chosen resolution, grey when grayscale is asked for.
     fn raster(&self) -> Option<print::Raster> {
-        self.as_image.then_some(print::Raster { dpi: self.dpi, grayscale: self.grayscale })
+        self.as_image.then_some(print::Raster { dpi: self.dpi, grayscale: self.grayscale, colour: None })
     }
 
     /// Whether multiple pages per sheet should be cut and stacked into sorted piles.
@@ -553,7 +556,7 @@ impl PrintDraft {
                 self.chosen_duplex()
             },
             scaling: spool::Scaling::Exact,
-            grayscale: print::driver_needs_grayscale(self.grayscale, self.raster()),
+            grayscale: print::driver_needs_grayscale(self.grayscale, self.raster().as_ref()),
             // Set when the copy sent is made grey (`spooler_copy`, #5806).
             grey_pages: false,
             title: title.to_string(),
