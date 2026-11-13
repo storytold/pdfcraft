@@ -1,4 +1,4 @@
-//! A choice list's methods (XFA 3.3 p. 405, `addItem`, `boundItem`, `clearItems`, `deleteItem`, `getDisplayItem`,
+//! A choice list's methods (the scripting reference XFA 3.3 p. 392 points to: `addItem`, `boundItem`, `clearItems`, `deleteItem`, `getDisplayItem`,
 //! `getSaveItem`, `setItems`) and its `length` and `selectedIndex`. They read the field's item lists and change the script's
 //! copy of them (`HNode::items`), which every later read of the field's items in the run follows (`items.nodes`, `length`).
 
