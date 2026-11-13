@@ -1197,7 +1197,8 @@ impl Metrics {
     /// Whether the embedded program draws an outline for `code`. Known (`Some`) only for a subset
     /// Type 0 font over a readable TrueType program, where a dropped glyph is left empty; `None`
     /// when the program can't tell, for example a simple or CFF font. [`Metrics::encode`] refuses
-    /// known empty non-whitespace glyphs even with a `/W` entry. An empty space glyph is normal.
+    /// known empty visible glyphs even with a `/W` entry. Whitespace and invisible formatting
+    /// characters may legitimately have empty glyphs.
     pub fn has_outline(&self, code: u32) -> Option<bool> {
         if !self.composite || self.outlined_cids.is_empty() {
             return None;
@@ -1210,8 +1211,8 @@ impl Metrics {
     fn shows(&self, code: u32, c: char) -> bool {
         self.unicode.text(code).is_some_and(|t| t.chars().eq(std::iter::once(c)))
             && self.has_glyph(code)
-            // Subsetters can keep widths and Unicode mappings after dropping an outline.
-            && (c.is_whitespace() || self.has_outline(code) != Some(false))
+            // Subsetters can keep widths and Unicode mappings after dropping a visible glyph.
+            && (c.is_whitespace() || matches!(c, '\u{00AD}' | '\u{200B}'..='\u{200D}' | '\u{FEFF}') || self.has_outline(code) != Some(false))
     }
 
     /// The bytes that show `text` in this font, or `None` if some character has no code or

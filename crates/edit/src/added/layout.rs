@@ -1,4 +1,4 @@
-use super::cjk::CjkText;
+use super::cjk::{CjkText, is_cjk};
 use super::types::{AddedImage, AddedText};
 use super::{
     Content, Document, EditError, GlyphError, Level, ObjRef, Object, ParagraphBidiInfo, ShapedScript, shape_arabic, shape_hebrew, shape_thai,
@@ -41,9 +41,9 @@ pub(super) fn wrapped(t: &AddedText) -> Vec<(String, bool, usize)> {
         // Arabic or Hebrew: laid out with the bidirectional algorithm and shaped.
         let rtl_script = para.chars().any(|c| is_arabic(c) || is_hebrew(c));
         let thai = para.chars().any(is_thai);
-        if thai
+        if (thai || para.chars().any(is_cjk))
             && !rtl_script
-            && let Ok(lines) = thai_lines(t, para, width)
+            && let Ok(lines) = script_lines(t, para, width, &cjk)
         {
             out.extend(lines.into_iter().map(|line| (line, false, index)));
             continue;
@@ -85,25 +85,25 @@ pub(super) fn wrapped(t: &AddedText) -> Vec<(String, bool, usize)> {
     out
 }
 
-/// Thai wrapping: a row ends before a word that would overflow it, the words found by the
-/// dictionary ([`crate::linebreak`]) inside runs without spaces and at the spaces between them. The
+/// CJK and Thai wrapping: a row ends before a word that would overflow it, the words found by
+/// [`crate::linebreak`] inside runs without spaces and at the spaces between them. The
 /// spaces where a row ends are dropped, as in the Latin wrapper. Only a word wider than the row is
 /// broken inside, at shaped cluster boundaries, which never detach a tone or vowel mark from its
 /// base.
-fn thai_lines(t: &AddedText, para: &str, width: f64) -> Result<Vec<String>, EditError> {
-    let (pieces, _) = shaped_layout(t, para, false)?;
+fn script_lines(t: &AddedText, para: &str, width: f64, cjk: &CjkText) -> Result<Vec<String>, EditError> {
+    let (pieces, _) = shaped_layout_with(t, para, false, cjk)?;
     let mut atoms = Vec::new();
     for piece in pieces {
         match piece {
             Piece::Shaped(clusters) => atoms.extend(clusters.into_iter().map(|c| (c.text, c.advance * t.size + t.char_spacing))),
             Piece::Latin(s) => atoms.extend(s.chars().map(|c| {
                 let text = c.to_string();
-                let w = latin_width(t, &text);
+                let w = cjk.width(t, &text);
                 (text, w)
             })),
         }
     }
-    Ok(wrap_words(thai_words(atoms), width))
+    Ok(wrap_words(script_words(atoms), width))
 }
 
 /// `words` (each a list of text and advance, with the spaces that follow it) laid into rows no
@@ -147,7 +147,7 @@ fn wrap_words(words: Vec<Vec<(String, f64)>>, width: f64) -> Vec<String> {
 /// The shaped clusters `atoms` (text and advance) grouped into words: a word starts after spaces,
 /// or where [`crate::linebreak::breaks`] lets a row end inside a run without spaces, and keeps the
 /// spaces that follow it. A break that falls inside a cluster is not one.
-fn thai_words(atoms: Vec<(String, f64)>) -> Vec<Vec<(String, f64)>> {
+fn script_words(atoms: Vec<(String, f64)>) -> Vec<Vec<(String, f64)>> {
     let text: String = atoms.iter().map(|(s, _)| s.as_str()).collect();
     let mut cuts = Vec::new();
     let mut run_start: Option<usize> = None;
@@ -437,7 +437,7 @@ pub fn text_width(t: &AddedText) -> f64 {
 
 #[cfg(test)]
 mod thai_wrap_tests {
-    use super::{thai_words, wrap_words};
+    use super::{script_words, wrap_words};
 
     /// One atom per character, each `advance` wide: what shaping hands over, without a Thai face.
     fn atoms(text: &str, advance: f64) -> Vec<(String, f64)> {
@@ -450,11 +450,11 @@ mod thai_wrap_tests {
 
     #[test]
     fn thai_atoms_group_into_dictionary_words_with_their_spaces() {
-        assert_eq!(texts(&thai_words(atoms("น้ำประปาสะอาด", 1.0))), ["น้ำ", "ประปา", "สะอาด"]);
-        assert_eq!(texts(&thai_words(atoms("สวัสดี ครับ", 1.0))), ["สวัสดี ", "ครับ"]);
+        assert_eq!(texts(&script_words(atoms("น้ำประปาสะอาด", 1.0))), ["น้ำ", "ประปา", "สะอาด"]);
+        assert_eq!(texts(&script_words(atoms("สวัสดี ครับ", 1.0))), ["สวัสดี ", "ครับ"]);
         // A break the dictionary finds inside one shaped cluster is not a place to end a row.
-        assert_eq!(texts(&thai_words(vec![("น้ำประปา".into(), 8.0)])), ["น้ำประปา"]);
-        assert!(thai_words(Vec::new()).is_empty());
+        assert_eq!(texts(&script_words(vec![("น้ำประปา".into(), 8.0)])), ["น้ำประปา"]);
+        assert!(script_words(Vec::new()).is_empty());
     }
 
     #[test]

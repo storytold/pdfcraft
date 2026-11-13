@@ -67,8 +67,9 @@ fn mixed_text_wrapped_paragraph_stays_whole_across_repeated_edits() {
 fn mixed_text_missing_glyph_refuses_without_changing_the_document() {
     let mut doc = text_page("BT /F1 12 Tf 72 700 Td (Source) Tj ET");
     let before = page_content_bytes(&doc, 0);
-    let item = AddedText { text: "Agpq 中文 \u{10ffff}".into(), ..Default::default() };
-    assert!(add_content(&mut doc, 0, &Content::Text(item)).is_err());
+    let item = AddedText { text: "Agpq \u{10ffff}".into(), rect: [72.0, 480.0, 560.0, 520.0], ..Default::default() };
+    let error = add_content(&mut doc, 0, &Content::Text(item)).unwrap_err().to_string();
+    assert!(error.contains("U+10FFFF"), "{error}");
     assert_eq!(page_content_bytes(&doc, 0), before);
     assert!(!doc.is_modified());
 }
@@ -109,9 +110,96 @@ fn mixed_text_added_fonts_are_owned_by_the_item_and_split_at_240_glyphs() {
 #[test]
 fn mixed_text_outline_budget_is_checked_before_document_changes() {
     let mut doc = text_page("");
-    let item = AddedText { text: (0x4e00..).filter_map(char::from_u32).take(pdfcraft_fonts::MAX_PLAN_GLYPHS + 1).collect(), ..Default::default() };
-    assert!(add_content(&mut doc, 0, &Content::Text(item)).is_err());
+    let before = page_content_bytes(&doc, 0);
+    let item = AddedText {
+        text: (0x4e00..).filter_map(char::from_u32).take(pdfcraft_fonts::MAX_PLAN_GLYPHS + 1).collect(),
+        rect: [72.0, 480.0, 560.0, 520.0],
+        ..Default::default()
+    };
+    let error = add_content(&mut doc, 0, &Content::Text(item)).unwrap_err().to_string();
+    assert!(error.contains("too many distinct CJK glyphs"), "{error}");
+    assert_eq!(page_content_bytes(&doc, 0), before);
     assert!(!doc.is_modified());
+}
+
+#[test]
+fn mixed_text_font_names_in_literal_text_do_not_own_neighbours_fonts() {
+    for (text, prefix, available) in
+        [("中文", b"PCCjk".as_slice(), has_hans()), ("العربية", b"PCAr".as_slice(), pdfcraft_fonts::document_arabic_font().is_some())]
+    {
+        if !available {
+            continue;
+        }
+        let fonts = |doc: &pdfcraft_cos::Document| {
+            let page = pdfcraft_model::pages(doc).remove(0);
+            let resources = doc.dict(page.dict.get(b"Resources").unwrap()).unwrap();
+            doc.dict(resources.get(b"Font").unwrap()).unwrap()
+        };
+        let mut original = text_page("");
+        let neighbour = AddedText { text: text.into(), rect: [20.0, 600.0, 580.0, 650.0], ..Default::default() };
+        add_content(&mut original, 0, &Content::Text(neighbour)).unwrap();
+        original = reopen(&original);
+        let owned = fonts(&original);
+        let name = owned.iter().find(|(name, _)| name.starts_with(prefix)).unwrap().0;
+        let literal =
+            AddedText { text: format!("A /{} 12 Tf B", std::str::from_utf8(name).unwrap()), rect: [20.0, 400.0, 580.0, 450.0], ..Default::default() };
+        add_content(&mut original, 0, &Content::Text(literal.clone())).unwrap();
+        for delete in [false, true] {
+            let mut doc = reopen(&original);
+            if delete {
+                delete_content(&mut doc, 0, 1).unwrap();
+            } else {
+                update_content(&mut doc, 0, 1, &Content::Text(AddedText { text: "Changed".into(), ..literal.clone() })).unwrap();
+            }
+            let doc = reopen(&doc);
+            assert_eq!(fonts(&doc).get(name), owned.get(name), "neighbour's font removed: {text}, delete={delete}");
+        }
+    }
+}
+
+fn assert_saved_glyphs_fit(item: &AddedText) {
+    let mut doc = text_page("");
+    add_content(&mut doc, 0, &Content::Text(item.clone())).unwrap();
+    let doc = reopen(&doc);
+    let page = pdfcraft_model::pages(&doc).remove(0);
+    let glyphs = text::glyph_text_lines(&doc, &page).unwrap();
+    assert!(!glyphs.is_empty());
+    assert_eq!(glyphs.iter().map(|run| run.text.as_str()).collect::<String>(), crate::added::lines(item).concat());
+    for run in glyphs {
+        assert!(run.rect[0] >= item.rect[0] - 0.02 && run.rect[2] <= item.rect[2] + 0.02, "{item:?}: {run:?}");
+    }
+}
+
+#[test]
+fn mixed_text_unspaced_chinese_wraps_at_cjk_breaks_and_fits_saved_box() {
+    if !has_hans() {
+        return;
+    }
+    let mut item =
+        AddedText { text: "中文编辑保存中文编辑保存".into(), rect: [20.0, 300.0, 68.0, 700.0], size: 12.0, ..Default::default() };
+    assert_eq!(crate::added::lines(&item), ["中文编辑", "保存中文", "编辑保存"]);
+    for text in ["中文编辑保存中文编辑保存", "中文（编辑），保存中文。", "中文test中文\n编辑保存中文"] {
+        item.text = text.into();
+        let rows = crate::added::lines(&item);
+        assert!(rows.len() > 1, "{rows:?}");
+        assert_eq!(rows.concat(), text.replace('\n', ""));
+        assert!(rows.iter().all(|row| !row.starts_with(['）', '，', '。']) && !row.ends_with('（')), "{rows:?}");
+        assert_saved_glyphs_fit(&item);
+    }
+}
+
+#[test]
+fn mixed_text_thai_chinese_wraps_with_saved_cjk_advances() {
+    if !has_hans() || pdfcraft_fonts::document_thai_font().is_none() {
+        return;
+    }
+    for width in [36.0, 48.0, 60.0, 72.0, 84.0, 96.0, 120.0] {
+        let item =
+            AddedText {
+                text: "ไทย中文编辑保存ไทย中文编辑保存".into(), rect: [20.0, 300.0, 20.0 + width, 700.0], size: 12.0, ..Default::default()
+            };
+        assert_saved_glyphs_fit(&item);
+    }
 }
 
 #[test]

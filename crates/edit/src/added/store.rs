@@ -339,13 +339,13 @@ fn own_fonts(doc: &Document, obj: ObjRef) -> Vec<Vec<u8>> {
     // on the page's /Font, which `write` and `delete_content` are supposed to take them off.
     let limit = pdfcraft_cos::MAX_PAGE_DECODED.max(s.raw.len().saturating_mul(16));
     let Ok(data) = s.decoded_within(limit) else { return Vec::new() };
-    // Each name once: a stream that repeats a name is not copied out once per use.
-    let names: std::collections::BTreeSet<&[u8]> = data
-        .split(u8::is_ascii_whitespace)
-        .filter_map(|w| w.strip_prefix(b"/"))
+    // Read font selections, never names in text strings. Keep each font once.
+    let names: std::collections::BTreeSet<Vec<u8>> = pdfcraft_content::ops(&data)
+        .filter(|op| op.is("Tf"))
+        .filter_map(|op| op.name_back(1).map(<[u8]>::to_vec))
         .filter(|w| w.starts_with(b"PCAr") || w.starts_with(b"PCCjk"))
         .collect();
-    names.into_iter().map(<[u8]>::to_vec).collect()
+    names.into_iter().collect()
 }
 
 fn drop_fonts(doc: &Document, res: &mut Dict, names: &[Vec<u8>]) {

@@ -1874,6 +1874,36 @@ fn subset_width_and_unicode_entries_do_not_prove_a_dropped_outline_exists() {
     }
 }
 
+#[test]
+fn subset_invisible_format_characters_keep_their_empty_glyphs() {
+    use skrifa::MetadataProvider as _;
+    let face = skrifa::FontRef::new(include_bytes!("../../../../assets/fonts/Inter-Regular.ttf")).unwrap();
+    let gid = |c| u16::try_from(face.charmap().map(c).unwrap().to_u32()).unwrap();
+    let map: Vec<u8> = [0, gid('A'), gid(' ')].into_iter().flat_map(u16::to_be_bytes).collect();
+    for ch in ['\u{00AD}', '\u{200B}', '\u{200C}', '\u{200D}', '\u{FEFF}'] {
+        for mapping in [
+            format!("2 beginbfchar <0001> <0041> <0002> <{:04X}> endbfchar", u32::from(ch)),
+            format!("1 beginbfchar <0001> <0041> endbfchar 1 beginbfrange <0002> <0003> <{:04X}> endbfrange", u32::from(ch)),
+        ] {
+            let mut doc = Document::new_empty();
+            let (mut font, _) = subset_type0(&mut doc, mapping.as_bytes());
+            font.set(b"Encoding".to_vec(), Object::name("Identity-H"));
+            let Some(Object::Array(descendants)) = font.get_mut(b"DescendantFonts") else { panic!() };
+            let Some(Object::Dict(descendant)) = descendants.first_mut() else { panic!() };
+            descendant.set(b"CIDToGIDMap".to_vec(), Object::Stream(Stream::flate(Dict::new(), &map)));
+            descendant.set(b"W".to_vec(), Object::Array(vec![Object::Int(1), Object::Array(vec![Object::Int(600), Object::Int(0)])]));
+            let metrics = Metrics::from_dict(&doc, &font);
+            assert!(metrics.has_glyph(2));
+            assert_eq!(metrics.has_outline(2), Some(false));
+            assert_eq!(metrics.width(2), 0.0);
+            let text = format!("A{ch}A");
+            let codes = [0, 1, 0, 2, 0, 1];
+            assert_eq!(metrics.decode(&codes), text);
+            assert_eq!(metrics.encode(&text).as_deref(), Some(codes.as_slice()), "U+{:04X}: {mapping}", u32::from(ch));
+        }
+    }
+}
+
 /// [`cmap_only_sfnt_named`] without a `post` table.
 fn cmap_only_sfnt(mac: Option<&[(u8, u8)]>, windows: &[(u16, u16)]) -> Vec<u8> {
     cmap_only_sfnt_named(mac, windows, false)

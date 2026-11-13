@@ -2,6 +2,41 @@ use super::{auto, err, ok, page_text, workdir};
 use serde_json::json;
 
 #[test]
+fn mixed_text_literal_font_name_edits_keep_neighbour_rendering() {
+    if !pdfcraft_fonts::CRAFT_FONTS.iter().any(|face| face.covers("Hans")) {
+        return;
+    }
+    let dir = workdir("mixed-text-literal-font");
+    let mut a = auto(&dir);
+    for full in [false, true] {
+        let id = ok(&mut a, "doc_create", json!({"from":"blank","width":600,"height":400}))["doc"].as_u64().unwrap();
+        ok(&mut a, "page_add_text", json!({"doc":id,"page":1,"text":"中文","at":[40,50],"width":520,"size":16}));
+        let neighbour = a.call("page_render", &json!({"doc":id,"page":1,"dpi":96})).unwrap();
+        ok(&mut a, "page_add_text", json!({"doc":id,"page":1,"text":"A /PCCjk 12 Tf B","at":[40,150],"width":520,"size":16}));
+        let both = a.call("page_render", &json!({"doc":id,"page":1,"dpi":96})).unwrap();
+        ok(&mut a, "content_delete", json!({"doc":id,"page":1,"index":2}));
+        assert_eq!(a.call("page_render", &json!({"doc":id,"page":1,"dpi":96})).unwrap(), neighbour);
+        ok(&mut a, "edit_undo", json!({"doc":id}));
+        assert_eq!(a.call("page_render", &json!({"doc":id,"page":1,"dpi":96})).unwrap(), both);
+        ok(&mut a, "content_update", json!({"doc":id,"page":1,"index":2,"text":"Changed"}));
+        ok(&mut a, "content_delete", json!({"doc":id,"page":1,"index":2}));
+        assert_eq!(a.call("page_render", &json!({"doc":id,"page":1,"dpi":96})).unwrap(), neighbour);
+        let path = format!("neighbour-{full}.pdf");
+        ok(&mut a, "doc_save", json!({"doc":id,"path":path}));
+        ok(&mut a, "doc_close", json!({"doc":id}));
+        let re = ok(&mut a, "doc_open", json!({"path":path}))["doc"].as_u64().unwrap();
+        ok(&mut a, "content_update", json!({"doc":re,"page":1,"index":1,"text":"中文"}));
+        assert_eq!(ok(&mut a, "doc_save", json!({"doc":re,"full":full}))["incremental"], !full);
+        ok(&mut a, "doc_close", json!({"doc":re}));
+        let re = ok(&mut a, "doc_open", json!({"path":path}))["doc"].as_u64().unwrap();
+        assert_eq!(page_text(&mut a, re), ["中文"]);
+        assert_eq!(a.call("page_render", &json!({"doc":re,"page":1,"dpi":96})).unwrap(), neighbour);
+        ok(&mut a, "doc_close", json!({"doc":re}));
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn mixed_text_tools_add_retype_undo_delete_and_save_both_ways() {
     if !pdfcraft_fonts::CRAFT_FONTS.iter().any(|face| face.covers("Hans")) {
         return;
