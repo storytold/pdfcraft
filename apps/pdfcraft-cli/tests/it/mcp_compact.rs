@@ -8,14 +8,8 @@ use serde_json::{Value, json};
 
 /// Run `pdfcraft-cli mcp <flags>` over an initialize request plus `requests` and return the replies to `requests`.
 fn session(flags: &[&str], requests: &[Value]) -> Vec<Value> {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_pdfcraft-cli"))
-        .arg("mcp")
-        .args(flags)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .unwrap();
+    let mut child =
+        Command::new(crate::binary()).arg("mcp").args(flags).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().unwrap();
     let mut input = String::from("{\"jsonrpc\":\"2.0\",\"id\":0,\"method\":\"initialize\",\"params\":{}}\n");
     for r in requests {
         input.push_str(&r.to_string());
@@ -40,7 +34,7 @@ fn listed_tools(flags: &[&str]) -> Vec<String> {
 #[test]
 fn mcp_rejects_unknown_options_before_starting_the_server() {
     for option in ["--totally-bogus-flag", "--rot", "--root=."] {
-        let out = Command::new(env!("CARGO_BIN_EXE_pdfcraft-cli")).args(["mcp", option]).output().expect("run CLI");
+        let out = Command::new(crate::binary()).args(["mcp", option]).output().expect("run CLI");
 
         let stderr = String::from_utf8_lossy(&out.stderr);
         assert!(!out.status.success(), "mcp {option} unexpectedly succeeded");

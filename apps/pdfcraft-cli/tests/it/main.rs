@@ -24,3 +24,8 @@ mod text;
 mod ui_control;
 mod version_resource;
 mod xfa;
+
+/// Nextest remaps binaries when running an archive; ordinary Cargo uses the build-time path.
+fn binary() -> std::ffi::OsString {
+    std::env::var_os("NEXTEST_BIN_EXE_pdfcraft_cli").unwrap_or_else(|| env!("CARGO_BIN_EXE_pdfcraft-cli").into())
+}

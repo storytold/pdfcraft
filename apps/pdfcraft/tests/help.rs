@@ -4,11 +4,14 @@
 use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
-const BIN: &str = env!("CARGO_BIN_EXE_pdfcraft");
+// An archived nextest run relocates the executable; Cargo supplies the fallback at build time.
+fn binary() -> std::ffi::OsString {
+    std::env::var_os("NEXTEST_BIN_EXE_pdfcraft").unwrap_or_else(|| env!("CARGO_BIN_EXE_pdfcraft").into())
+}
 
 /// Run the app with `args`, failing if it is still running after 60 s (it opened its window).
 fn run(args: &[&str], stdout: Stdio) -> Output {
-    let mut child = Command::new(BIN).args(args).stdin(Stdio::null()).stdout(stdout).stderr(Stdio::piped()).spawn().unwrap();
+    let mut child = Command::new(binary()).args(args).stdin(Stdio::null()).stdout(stdout).stderr(Stdio::piped()).spawn().unwrap();
     let deadline = Instant::now() + Duration::from_secs(60);
     while child.try_wait().unwrap().is_none() {
         if Instant::now() > deadline {

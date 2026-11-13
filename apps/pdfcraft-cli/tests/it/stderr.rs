@@ -7,8 +7,6 @@ use std::process::{Child, Command, Output, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-const BIN: &str = env!("CARGO_BIN_EXE_pdfcraft-cli");
-
 struct Scratch(PathBuf);
 impl Scratch {
     fn new() -> Self {
@@ -58,7 +56,16 @@ fn full() -> Stdio {
     std::fs::OpenOptions::new().write(true).open("/dev/full").unwrap().into()
 }
 fn render(pdf: &Path, out: &Path, stderr: Stdio) -> Output {
-    run(Command::new(BIN).arg("render").arg(pdf).args(["--page", "1", "--dpi", "18", "--out"]).arg(out).stdout(Stdio::piped()).stderr(stderr), None)
+    run(
+        Command::new(crate::binary())
+            .arg("render")
+            .arg(pdf)
+            .args(["--page", "1", "--dpi", "18", "--out"])
+            .arg(out)
+            .stdout(Stdio::piped())
+            .stderr(stderr),
+        None,
+    )
 }
 
 #[test]
@@ -78,10 +85,10 @@ fn failing_diagnostics_preserve_render_success_and_real_text_or_file_errors() {
     assert!(String::from_utf8_lossy(&ordinary.stderr).contains("rendered page 1 at 18 dpi"));
     assert_eq!(std::fs::read(&image_path).unwrap(), image, "diagnostic destination must not change rendered bytes");
 
-    let invalid = run(Command::new(BIN).arg("text").arg(&pdf).args(["--page", "2"]).stdout(Stdio::piped()).stderr(full()), None);
+    let invalid = run(Command::new(crate::binary()).arg("text").arg(&pdf).args(["--page", "2"]).stdout(Stdio::piped()).stderr(full()), None);
     assert_eq!(invalid.status.code(), Some(1), "page errors remain normal failures rather than stderr panics");
     assert!(invalid.stdout.is_empty());
-    let valid = run(Command::new(BIN).arg("text").arg(&pdf).stdout(Stdio::piped()).stderr(full()), None);
+    let valid = run(Command::new(crate::binary()).arg("text").arg(&pdf).stdout(Stdio::piped()).stderr(full()), None);
     assert!(valid.status.success());
     assert!(String::from_utf8_lossy(&valid.stdout).contains("Ordinary diagnostic text"));
 
@@ -105,7 +112,7 @@ fn failing_startup_diagnostics_preserve_mcp_replies_and_protocol_output_errors()
         serde_json::json!({ "jsonrpc": "2.0", "id": 3, "method": "ordinary-unknown-method" }),
     ];
     let input = requests.iter().map(|request| format!("{request}\n")).collect::<String>();
-    let output = run(Command::new(BIN).arg("mcp").stdout(Stdio::piped()).stderr(full()), Some(&input));
+    let output = run(Command::new(crate::binary()).arg("mcp").stdout(Stdio::piped()).stderr(full()), Some(&input));
     assert!(output.status.success(), "failed startup diagnostics must not stop stdio: {}", output.status);
     let replies: Vec<serde_json::Value> = String::from_utf8(output.stdout).unwrap().lines().map(|line| serde_json::from_str(line).unwrap()).collect();
     assert_eq!(replies.len(), 3);
@@ -118,7 +125,7 @@ fn failing_startup_diagnostics_preserve_mcp_replies_and_protocol_output_errors()
     // Upstream's compact mode still reaches stdio even when its expanded diagnostic fails.
     let ping = "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"ping\"}\n";
     for (stderr, diagnostic_expected) in [(full(), false), (Stdio::piped(), true)] {
-        let output = run(Command::new(BIN).args(["mcp", "--compact"]).stdout(Stdio::piped()).stderr(stderr), Some(ping));
+        let output = run(Command::new(crate::binary()).args(["mcp", "--compact"]).stdout(Stdio::piped()).stderr(stderr), Some(ping));
         assert!(output.status.success());
         let reply: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
         assert_eq!(reply["id"], 4);
@@ -127,6 +134,7 @@ fn failing_startup_diagnostics_preserve_mcp_replies_and_protocol_output_errors()
             assert!(String::from_utf8_lossy(&output.stderr).contains(", compact tool list); close stdin to stop"));
         }
     }
-    let output = run(Command::new(BIN).arg("mcp").stdout(full()).stderr(full()), Some("{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"ping\"}\n"));
+    let output =
+        run(Command::new(crate::binary()).arg("mcp").stdout(full()).stderr(full()), Some("{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"ping\"}\n"));
     assert_eq!(output.status.code(), Some(1), "actual protocol output failure must still fail");
 }

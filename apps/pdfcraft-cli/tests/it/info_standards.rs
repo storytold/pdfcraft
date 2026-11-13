@@ -4,8 +4,6 @@
 
 use std::process::Command;
 
-const BIN: &str = env!("CARGO_BIN_EXE_pdfcraft-cli");
-
 /// A one-page PDF, with `metadata` as the catalog's XMP stream when given.
 fn fixture(metadata: Option<&str>) -> Vec<u8> {
     let content = b"0 0 0 rg 10 10 40 20 re f";
@@ -59,7 +57,7 @@ fn info_of(bytes: &[u8], name: &str) -> serde_json::Value {
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("f.pdf");
     std::fs::write(&path, bytes).unwrap();
-    let out = Command::new(BIN).args(["info", path.to_str().unwrap()]).output().unwrap();
+    let out = Command::new(crate::binary()).args(["info", path.to_str().unwrap()]).output().unwrap();
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     let json = serde_json::from_slice(&out.stdout).expect("info prints JSON");
     let _ = std::fs::remove_dir_all(&dir);

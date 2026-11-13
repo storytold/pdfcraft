@@ -3,12 +3,10 @@
 use std::io::{Read, pipe};
 use std::process::{Command, Output, Stdio};
 
-const BIN: &str = env!("CARGO_BIN_EXE_pdfcraft-cli");
-
 fn closed_stdout(args: &[&str]) -> Output {
     let (reader, writer) = pipe().unwrap();
     drop(reader);
-    Command::new(BIN).args(args).stdout(writer).stderr(Stdio::piped()).spawn().unwrap().wait_with_output().unwrap()
+    Command::new(crate::binary()).args(args).stdout(writer).stderr(Stdio::piped()).spawn().unwrap().wait_with_output().unwrap()
 }
 
 #[test]
@@ -46,7 +44,7 @@ fn output_commands_exit_cleanly_when_the_reader_has_closed() {
 
 #[test]
 fn tools_exits_cleanly_when_the_reader_stops_after_one_line() {
-    let mut child = Command::new(BIN).arg("tools").stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+    let mut child = Command::new(crate::binary()).arg("tools").stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
     let mut stdout = child.stdout.take().unwrap();
     // Read through the first newline without buffering the rest, then close the pipe.
     let mut byte = [0];
@@ -68,7 +66,7 @@ fn a_closed_stdout_does_not_hide_command_errors() {
 #[test]
 fn other_stdout_errors_fail_without_panicking() {
     let full = std::fs::OpenOptions::new().write(true).open("/dev/full").unwrap();
-    let out = Command::new(BIN).arg("--version").stdout(full).stderr(Stdio::piped()).spawn().unwrap().wait_with_output().unwrap();
+    let out = Command::new(crate::binary()).arg("--version").stdout(full).stderr(Stdio::piped()).spawn().unwrap().wait_with_output().unwrap();
     assert_eq!(out.status.code(), Some(1));
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(stderr.contains("stdout") && !stderr.contains("panicked"), "{stderr}");
@@ -76,7 +74,7 @@ fn other_stdout_errors_fail_without_panicking() {
 
 #[test]
 fn ordinary_output_keeps_its_format() {
-    let out = Command::new(BIN).arg("tools").output().unwrap();
+    let out = Command::new(crate::binary()).arg("tools").output().unwrap();
     assert!(out.status.success() && out.stderr.is_empty());
     let tools: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert!(tools.as_array().unwrap().iter().any(|t| t["name"] == "doc_open"));

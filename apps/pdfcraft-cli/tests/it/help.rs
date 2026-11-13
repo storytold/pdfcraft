@@ -3,10 +3,8 @@
 
 use std::process::{Command, Output};
 
-const BIN: &str = env!("CARGO_BIN_EXE_pdfcraft-cli");
-
 fn run(args: &[&str]) -> Output {
-    Command::new(BIN).args(args).output().unwrap()
+    Command::new(crate::binary()).args(args).output().unwrap()
 }
 
 fn text(bytes: &[u8]) -> String {

@@ -2,8 +2,6 @@
 
 use std::process::Command;
 
-const BIN: &str = env!("CARGO_BIN_EXE_pdfcraft-cli");
-
 #[test]
 fn non_edit_commands_reject_unknown_options_before_io() {
     for args in [
@@ -21,7 +19,7 @@ fn non_edit_commands_reject_unknown_options_before_io() {
         vec!["ui", "--contro", "control.json", "state"],
     ] {
         let unknown = args.iter().find(|arg| arg.starts_with("--")).expect("test option");
-        let out = Command::new(BIN).args(&args).output().expect("run cli");
+        let out = Command::new(crate::binary()).args(&args).output().expect("run cli");
         let stderr = String::from_utf8_lossy(&out.stderr);
         assert!(!out.status.success(), "{args:?} unexpectedly succeeded");
         assert!(stderr.contains("unknown option") && stderr.contains(unknown), "{args:?}: {stderr}");
@@ -50,7 +48,7 @@ fn a_file_option_refuses_a_value_that_is_another_option() {
         // `edit` parses its own options, in the order given, and had the same gap.
         ("--out", vec!["edit", "missing.pdf", "--out", "--full"]),
     ] {
-        let out = Command::new(BIN).current_dir(&dir).args(&args).output().expect("run cli");
+        let out = Command::new(crate::binary()).current_dir(&dir).args(&args).output().expect("run cli");
         let stderr = String::from_utf8_lossy(&out.stderr);
         assert!(!out.status.success(), "{args:?} unexpectedly succeeded");
         assert!(stderr.contains(&format!("{option} needs a value")), "{args:?}: {stderr}");
@@ -72,7 +70,7 @@ fn a_file_whose_name_starts_with_dashes_is_still_reachable() {
         ("missing.pdf", vec!["edit", "missing.pdf", "--out", "./--dash.pdf"]),
         ("./--dash.pdf", vec!["info", "./--dash.pdf"]),
     ] {
-        let out = Command::new(BIN).args(&args).output().expect("run cli");
+        let out = Command::new(crate::binary()).args(&args).output().expect("run cli");
         let stderr = String::from_utf8_lossy(&out.stderr);
         assert!(!out.status.success(), "{args:?}: no such file either way");
         assert!(stderr.contains(names), "{args:?}: the error is about {names}: {stderr}");
@@ -86,7 +84,7 @@ fn a_file_whose_name_starts_with_dashes_is_still_reachable() {
 #[test]
 fn a_flag_that_takes_no_value_does_not_swallow_the_file() {
     for args in [vec!["check-one", "--edit", "missing.pdf"], vec!["check-one", "missing.pdf", "--edit"]] {
-        let out = Command::new(BIN).args(&args).output().expect("run cli");
+        let out = Command::new(crate::binary()).args(&args).output().expect("run cli");
         let stderr = String::from_utf8_lossy(&out.stderr);
         assert!(!out.status.success(), "{args:?}");
         // Which file the error is about, not how the OS says it is missing (#3849 review).
@@ -106,7 +104,7 @@ fn an_argument_that_is_not_utf8_is_an_error_not_a_panic() {
     use std::os::unix::ffi::OsStrExt;
 
     for args in [vec![OsStr::new("info"), OsStr::from_bytes(b"/tmp/caf\xe9.pdf")], vec![OsStr::new("--help"), OsStr::from_bytes(b"caf\xe9")]] {
-        let out = Command::new(BIN).args(&args).output().expect("run cli");
+        let out = Command::new(crate::binary()).args(&args).output().expect("run cli");
         let stderr = String::from_utf8_lossy(&out.stderr);
         assert_eq!(out.status.code(), Some(1), "an error, not a panic (101): {stderr}");
         assert!(stderr.contains("not valid UTF-8"), "{stderr}");
@@ -118,7 +116,7 @@ fn an_argument_that_is_not_utf8_is_an_error_not_a_panic() {
 /// `check` relays, not an empty stdout that reads as a crash.
 #[test]
 fn check_one_reports_an_unreadable_file_as_a_record() {
-    let out = Command::new(BIN).args(["check-one", "missing.pdf"]).output().expect("run cli");
+    let out = Command::new(crate::binary()).args(["check-one", "missing.pdf"]).output().expect("run cli");
     let stdout = String::from_utf8_lossy(&out.stdout);
     let record: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap_or_else(|e| panic!("{e}: {stdout:?}"));
     assert_eq!(record["status"], "read-error");

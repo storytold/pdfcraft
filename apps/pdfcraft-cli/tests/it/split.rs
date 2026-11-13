@@ -4,8 +4,6 @@
 use std::path::PathBuf;
 use std::process::{Command, Output};
 
-const BIN: &str = env!("CARGO_BIN_EXE_pdfcraft-cli");
-
 /// A PDF with `n` empty 200×300 pt pages.
 fn fixture(n: usize) -> Vec<u8> {
     let mut objs: Vec<Vec<u8>> = vec![b"<< /Type /Catalog /Pages 2 0 R >>".to_vec()];
@@ -41,7 +39,7 @@ fn workdir(test: &str) -> PathBuf {
 }
 
 fn split(dir: &std::path::Path, out_dir: &std::path::Path) -> Output {
-    Command::new(BIN)
+    Command::new(crate::binary())
         .args(["split", dir.join("report.pdf").to_str().unwrap(), "--every", "1", "--out-dir", out_dir.to_str().unwrap()])
         .output()
         .unwrap()
@@ -83,7 +81,8 @@ fn a_non_positive_or_unparseable_every_is_refused_before_the_file_is_opened() {
     let dir = workdir("every");
     for value in ["0", "abc"] {
         let out_dir = dir.join("parts");
-        let out = Command::new(BIN).args(["split", "missing.pdf", "--every", value, "--out-dir", out_dir.to_str().unwrap()]).output().unwrap();
+        let out =
+            Command::new(crate::binary()).args(["split", "missing.pdf", "--every", value, "--out-dir", out_dir.to_str().unwrap()]).output().unwrap();
         assert_eq!(out.status.code(), Some(1), "--every {value}");
         assert_eq!(
             out.stderr,

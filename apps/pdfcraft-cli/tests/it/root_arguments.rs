@@ -4,7 +4,6 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-const BIN: &str = env!("CARGO_BIN_EXE_pdfcraft-cli");
 const CANARY: &[u8] = b"KEEP EXISTING DESTINATION\n";
 
 struct TestDir(PathBuf);
@@ -53,7 +52,7 @@ fn malformed_root_fails_before_a_script_can_overwrite_a_file() {
     ] {
         // Both a valid script and a missing one: argument validation precedes script I/O.
         for script_name in ["steps.json", "missing.json"] {
-            let out = Command::new(BIN).current_dir(&dir.0).args(["run", "--script", script_name]).args(&flags).output().unwrap();
+            let out = Command::new(crate::binary()).current_dir(&dir.0).args(["run", "--script", script_name]).args(&flags).output().unwrap();
             assert_eq!(out.status.code(), Some(1), "{script_name} {flags:?} unexpectedly succeeded");
             assert_eq!(String::from_utf8(out.stderr).unwrap().trim(), format!("pdfcraft-cli: run: {diagnostic}"));
             assert!(out.stdout.is_empty(), "a refused command must not execute or report tool results");
@@ -66,7 +65,7 @@ fn malformed_root_fails_before_a_script_can_overwrite_a_file() {
 
 #[test]
 fn malformed_root_fails_before_direct_tool_argument_validation() {
-    let out = Command::new(BIN).args(["run", "doc_open", "not-key-value", "--root"]).output().unwrap();
+    let out = Command::new(crate::binary()).args(["run", "doc_open", "not-key-value", "--root"]).output().unwrap();
     assert_eq!(out.status.code(), Some(1));
     assert_eq!(String::from_utf8(out.stderr).unwrap().trim(), "pdfcraft-cli: run: --root needs a directory value");
     assert!(out.stdout.is_empty());
@@ -76,7 +75,7 @@ fn malformed_root_fails_before_direct_tool_argument_validation() {
 fn a_directory_name_starting_with_a_single_hyphen_remains_valid() {
     let dir = TestDir::new();
     std::fs::create_dir(dir.0.join("-documents")).unwrap();
-    let out = Command::new(BIN)
+    let out = Command::new(crate::binary())
         .current_dir(&dir.0)
         .args(["run", "doc_create", "from=blank", "width=100", "height=100", "--root", "-documents"])
         .output()
@@ -102,7 +101,7 @@ fn malformed_root_never_starts_or_initializes_an_mcp_server() {
         (vec!["--root", ".", "--root"], "--root may only be supplied once"),
         (vec!["--root", ".", "--root", "./--compact"], "--root may only be supplied once"),
     ] {
-        let mut child = Command::new(BIN)
+        let mut child = Command::new(crate::binary())
             .current_dir(&dir.0)
             .arg("mcp")
             .args(&flags)

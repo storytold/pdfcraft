@@ -5,8 +5,6 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-const BIN: &str = env!("CARGO_BIN_EXE_pdfcraft-cli");
-
 struct Workdir(PathBuf);
 
 impl Workdir {
@@ -38,7 +36,7 @@ impl Workdir {
 
     fn check(&self, inputs: &[&Path]) -> Vec<serde_json::Value> {
         let report = self.0.join("report.json");
-        let mut child = Command::new(BIN)
+        let mut child = Command::new(crate::binary())
             .arg("check")
             .args(inputs)
             .args(["--dpi", "36", "--timeout", "2", "--json"])
@@ -116,11 +114,11 @@ fn check_follows_directory_and_file_symlinks() {
 /// reach each child, which printed nothing and was reported as a crash per file.
 #[test]
 fn a_bad_timeout_or_dpi_is_refused_before_scanning() {
-    let out = Command::new(BIN).args(["check", "no-such-input", "--timeout", "0"]).output().unwrap();
+    let out = Command::new(crate::binary()).args(["check", "no-such-input", "--timeout", "0"]).output().unwrap();
     assert_eq!(out.status.code(), Some(1));
     assert_eq!(out.stderr, b"pdfcraft-cli: bad --timeout: expected a positive whole number of seconds, got \"0\"\n");
     for value in ["abc", "0", "-3", "NaN"] {
-        let out = Command::new(BIN).args(["check", "no-such-input", "--dpi", value]).output().unwrap();
+        let out = Command::new(crate::binary()).args(["check", "no-such-input", "--dpi", value]).output().unwrap();
         assert_eq!(out.status.code(), Some(1), "--dpi {value}");
         assert_eq!(
             out.stderr,
@@ -138,7 +136,7 @@ fn a_file_name_cannot_forge_a_stderr_record() {
     let dir = Workdir::new("escaped-name");
     let name = "bad\n[9] ok forged.pdf";
     std::fs::write(dir.0.join("input").join(name), b"not a pdf").unwrap();
-    let out = Command::new(BIN).arg("check").arg(dir.0.join("input")).args(["--dpi", "36", "--timeout", "5"]).output().unwrap();
+    let out = Command::new(crate::binary()).arg("check").arg(dir.0.join("input")).args(["--dpi", "36", "--timeout", "5"]).output().unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
     let records: Vec<&str> = stderr.lines().filter(|l| l.starts_with('[')).collect();
     assert_eq!(records.len(), 1, "{stderr}");

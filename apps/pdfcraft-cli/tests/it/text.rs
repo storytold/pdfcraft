@@ -3,8 +3,6 @@
 
 use std::process::Command;
 
-const BIN: &str = env!("CARGO_BIN_EXE_pdfcraft-cli");
-
 /// A PDF with `n` 200×300 pt pages reading "Page 1", "Page 2", …
 fn fixture(n: usize) -> Vec<u8> {
     let mut objs: Vec<Vec<u8>> = vec![b"<< /Type /Catalog /Pages 2 0 R >>".to_vec()];
@@ -43,7 +41,7 @@ fn tmp(name: &str) -> std::path::PathBuf {
 fn text_of_a_selected_page_that_cannot_be_read_fails() {
     let path = tmp("three.pdf");
     std::fs::write(&path, fixture(3)).unwrap();
-    let out = Command::new(BIN).args(["text", path.to_str().unwrap(), "--page", "9"]).output().unwrap();
+    let out = Command::new(crate::binary()).args(["text", path.to_str().unwrap(), "--page", "9"]).output().unwrap();
     assert!(!out.status.success(), "a page that cannot be read must not exit 0");
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(stderr.contains("page 9"), "the failing page must be named: {stderr}");
@@ -53,7 +51,7 @@ fn text_of_a_selected_page_that_cannot_be_read_fails() {
 fn text_of_a_readable_document_succeeds() {
     let path = tmp("ok.pdf");
     std::fs::write(&path, fixture(3)).unwrap();
-    let out = Command::new(BIN).args(["text", path.to_str().unwrap()]).output().unwrap();
+    let out = Command::new(crate::binary()).args(["text", path.to_str().unwrap()]).output().unwrap();
     assert!(out.status.success());
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("Page 1") && stdout.contains("Page 3"), "{stdout}");
@@ -72,7 +70,7 @@ fn protected_fixture(tag: &str) -> std::path::PathBuf {
         { "tool": "doc_save", "args": { "doc": 1, "path": out_path } },
     ]);
     std::fs::write(&script, steps.to_string()).unwrap();
-    let out = Command::new(BIN).args(["run", "--script", script.to_str().unwrap()]).output().unwrap();
+    let out = Command::new(crate::binary()).args(["run", "--script", script.to_str().unwrap()]).output().unwrap();
     assert!(out.status.success(), "protecting the fixture failed: {}", String::from_utf8_lossy(&out.stderr));
     out_path
 }
@@ -80,7 +78,7 @@ fn protected_fixture(tag: &str) -> std::path::PathBuf {
 #[test]
 fn text_of_a_protected_document_without_the_password_fails() {
     let path = protected_fixture("no-password");
-    let out = Command::new(BIN).args(["text", path.to_str().unwrap()]).output().unwrap();
+    let out = Command::new(crate::binary()).args(["text", path.to_str().unwrap()]).output().unwrap();
     assert!(!out.status.success(), "a document that cannot be opened must not exit 0");
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(stderr.contains("password"), "the reason must be named: {stderr}");
@@ -90,7 +88,7 @@ fn text_of_a_protected_document_without_the_password_fails() {
 #[test]
 fn text_of_a_protected_document_with_the_password_succeeds() {
     let path = protected_fixture("password");
-    let out = Command::new(BIN).args(["text", path.to_str().unwrap(), "--password", "openme"]).output().unwrap();
+    let out = Command::new(crate::binary()).args(["text", path.to_str().unwrap(), "--password", "openme"]).output().unwrap();
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("Page 1") && stdout.contains("Page 3"), "{stdout}");
@@ -109,7 +107,7 @@ fn copy_protected_fixture() -> std::path::PathBuf {
         { "tool": "doc_save", "args": { "doc": 1, "path": out_path } },
     ]);
     std::fs::write(&script, steps.to_string()).unwrap();
-    let out = Command::new(BIN).args(["run", "--script", script.to_str().unwrap()]).output().unwrap();
+    let out = Command::new(crate::binary()).args(["run", "--script", script.to_str().unwrap()]).output().unwrap();
     assert!(out.status.success(), "protecting the fixture failed: {}", String::from_utf8_lossy(&out.stderr));
     out_path
 }
@@ -119,13 +117,13 @@ fn copy_protected_fixture() -> std::path::PathBuf {
 #[test]
 fn text_respects_a_document_that_does_not_allow_copying() {
     let path = copy_protected_fixture();
-    let out = Command::new(BIN).args(["text", path.to_str().unwrap(), "--password", "openme"]).output().unwrap();
+    let out = Command::new(crate::binary()).args(["text", path.to_str().unwrap(), "--password", "openme"]).output().unwrap();
     assert!(!out.status.success(), "copying isn't allowed: {}", String::from_utf8_lossy(&out.stdout));
     assert!(out.stdout.is_empty(), "{}", String::from_utf8_lossy(&out.stdout));
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(stderr.contains("don't allow copying"), "the reason must be named: {stderr}");
     assert!(stderr.contains("--password"), "and the way in: {stderr}");
-    let out = Command::new(BIN).args(["text", path.to_str().unwrap(), "--password", "boss"]).output().unwrap();
+    let out = Command::new(crate::binary()).args(["text", path.to_str().unwrap(), "--password", "boss"]).output().unwrap();
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("Page 1") && stdout.contains("Page 3"), "{stdout}");
@@ -180,7 +178,7 @@ mod page_argument_tests {
         ];
         for input in [&path, &missing] {
             for args in &invalid {
-                let out = Command::new(BIN).arg("text").arg(input).args(args).output().unwrap();
+                let out = Command::new(crate::binary()).arg("text").arg(input).args(args).output().unwrap();
                 assert_eq!(out.status.code(), Some(1), "{args:?}: {out:?}");
                 assert!(out.stdout.is_empty(), "{args:?}: no text may be printed");
                 assert_eq!(String::from_utf8(out.stderr).unwrap().trim(), "pdfcraft-cli: bad --page: expected a positive page number");
@@ -203,7 +201,7 @@ mod page_argument_tests {
             (vec!["--page", "3"], vec!["Page 3"]),
             (vec!["--page", "2", "--page", "1"], vec!["Page 2"]),
         ] {
-            let out = Command::new(BIN).arg("text").arg(&path).args(args).output().unwrap();
+            let out = Command::new(crate::binary()).arg("text").arg(&path).args(args).output().unwrap();
             assert!(out.status.success(), "{out:?}");
             assert!(out.stderr.is_empty());
             let text = String::from_utf8(out.stdout).unwrap();
@@ -226,7 +224,7 @@ mod page_argument_tests {
             { "tool": "doc_save", "args": { "doc": 1, "path": protected } },
         ]);
         std::fs::write(&script, steps.to_string()).unwrap();
-        let out = Command::new(BIN).args(["run", "--script"]).arg(&script).output().unwrap();
+        let out = Command::new(crate::binary()).args(["run", "--script"]).arg(&script).output().unwrap();
         assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
         let protected_bytes = std::fs::read(&protected).unwrap();
         for (args, expected) in [
@@ -234,7 +232,7 @@ mod page_argument_tests {
             (vec!["--page", "2", "--password", "--page"], vec!["Page 2"]),
             (vec!["--password", "--page", "--page", "2"], vec!["Page 2"]),
         ] {
-            let out = Command::new(BIN).arg("text").arg(&protected).args(args).output().unwrap();
+            let out = Command::new(crate::binary()).arg("text").arg(&protected).args(args).output().unwrap();
             assert!(out.status.success(), "{out:?}");
             assert!(out.stderr.is_empty());
             let text = String::from_utf8(out.stdout).unwrap();
@@ -273,7 +271,7 @@ mod page_argument_tests {
         std::fs::write(&path, pdf).unwrap();
 
         for args in [vec![], vec!["--page", "1"]] {
-            let out = Command::new(BIN).arg("text").arg(&path).args(&args).output().unwrap();
+            let out = Command::new(crate::binary()).arg("text").arg(&path).args(&args).output().unwrap();
             assert!(out.status.success(), "{args:?}: {out:?}");
             assert!(out.stderr.is_empty(), "{args:?}: {}", String::from_utf8_lossy(&out.stderr));
             assert_eq!(String::from_utf8(out.stdout).unwrap().trim(), "Visible body", "{args:?}");

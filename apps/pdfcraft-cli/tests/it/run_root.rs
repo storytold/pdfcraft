@@ -24,7 +24,7 @@ fn render_to(base: &Path, cwd: &Path, root: Option<&Path>, out: &str) -> Output 
         { "tool": "page_render", "args": { "doc": 1, "page": 1, "dpi": 10 }, "out": out },
     ]);
     std::fs::write(&script, steps.to_string()).unwrap();
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_pdfcraft-cli"));
+    let mut cmd = Command::new(crate::binary());
     cmd.current_dir(cwd).arg("run").arg("--script").arg(&script);
     if let Some(root) = root {
         cmd.arg("--root").arg(root);

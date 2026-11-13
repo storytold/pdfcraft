@@ -107,7 +107,7 @@ fn write_private(path: &Path, text: &str) {
 }
 
 fn ui(control: &Path, method: &str) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_pdfcraft-cli")).arg("ui").arg("--control").arg(control).arg(method).output().unwrap()
+    Command::new(crate::binary()).arg("ui").arg("--control").arg(control).arg(method).output().unwrap()
 }
 
 fn assert_refused(o: &Output, received: &str, expect: &str) {
@@ -139,14 +139,7 @@ fn a_control_file_of_your_own_works_without_a_writable_temp_folder() {
     let control = dir.join("pc.json");
     write_private(&control, &control_json(spy.port));
     let missing = dir.join("no-such-temp-folder");
-    let o = Command::new(env!("CARGO_BIN_EXE_pdfcraft-cli"))
-        .env("TMPDIR", &missing)
-        .arg("ui")
-        .arg("--control")
-        .arg(&control)
-        .arg("state")
-        .output()
-        .unwrap();
+    let o = Command::new(crate::binary()).env("TMPDIR", &missing).arg("ui").arg("--control").arg(&control).arg("state").output().unwrap();
     let received = spy.received();
     assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
     assert!(received.contains(TOKEN) && received.contains("ui.state"), "{received}");

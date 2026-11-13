@@ -7,8 +7,6 @@ use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-const BIN: &str = env!("CARGO_BIN_EXE_pdfcraft-cli");
-
 /// A fresh folder for one test, so the tests can run in parallel and leave nothing behind.
 fn workdir(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("pdfcraft-cli-exit-{}-{name}", std::process::id()));
@@ -19,12 +17,12 @@ fn workdir(name: &str) -> PathBuf {
 
 /// `batch` with `args`, run from the working directory `dir`.
 fn batch(dir: &Path, args: &[&str]) -> Output {
-    Command::new(BIN).current_dir(dir).arg("batch").args(args).output().unwrap()
+    Command::new(crate::binary()).current_dir(dir).arg("batch").args(args).output().unwrap()
 }
 
 /// `run --script --report` from the working directory `dir`: one JSON document for the run.
 fn run_report(dir: &Path, script: &Path) -> Output {
-    Command::new(BIN).current_dir(dir).args(["run", "--script"]).arg(script).arg("--report").output().unwrap()
+    Command::new(crate::binary()).current_dir(dir).args(["run", "--script"]).arg(script).arg("--report").output().unwrap()
 }
 
 /// The one JSON document a command prints on stdout.
@@ -73,7 +71,7 @@ fn batch_usage_error_exits_1_and_creates_nothing() {
 #[test]
 fn batch_outside_root_exits_1_and_creates_nothing() {
     let dir = workdir("batch-outside-root");
-    let output = Command::new(BIN)
+    let output = Command::new(crate::binary())
         .current_dir(&dir)
         .args(["batch", "../outside.pdf", "--steps", "convert", "--out-dir", "out", "--root"])
         .arg(&dir)

@@ -9,8 +9,6 @@ use std::process::{Command, Output, Stdio};
 
 use serde_json::{Value, json};
 
-const BIN: &str = env!("CARGO_BIN_EXE_pdfcraft-cli");
-
 /// `in/a.pdf` and `outside/secret.pdf`, blank one-page PDFs made by the binary itself.
 fn folders(tag: &str) -> PathBuf {
     let base = std::env::temp_dir().join(format!("pdfcraft-cli-roots-{tag}-{}", std::process::id()));
@@ -24,7 +22,7 @@ fn folders(tag: &str) -> PathBuf {
             {"tool": "doc_save", "args": {"doc": 1, "path": f}},
         ]);
         std::fs::write(base.join("steps.json"), script.to_string()).unwrap();
-        let out = Command::new(BIN).args(["run", "--script"]).arg(base.join("steps.json")).arg("--root").arg(&base).output().unwrap();
+        let out = Command::new(crate::binary()).args(["run", "--script"]).arg(base.join("steps.json")).arg("--root").arg(&base).output().unwrap();
         assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     }
     base
@@ -32,7 +30,8 @@ fn folders(tag: &str) -> PathBuf {
 
 /// Run `mcp <flags>`, send `calls` as `tools/call` requests and return the replies.
 fn session(flags: &[String], calls: &[(&str, Value)]) -> (Vec<Value>, String) {
-    let mut child = Command::new(BIN).arg("mcp").args(flags).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+    let mut child =
+        Command::new(crate::binary()).arg("mcp").args(flags).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
     let mut input = String::from("{\"jsonrpc\":\"2.0\",\"id\":0,\"method\":\"initialize\",\"params\":{}}\n");
     for (i, (name, args)) in calls.iter().enumerate() {
         let r = json!({"jsonrpc": "2.0", "id": i + 1, "method": "tools/call", "params": {"name": name, "arguments": args}});
@@ -102,7 +101,7 @@ fn no_flags_means_no_confinement() {
 }
 
 fn fails(args: &[&str]) -> String {
-    let out: Output = Command::new(BIN).arg("mcp").args(args).stdin(Stdio::null()).output().unwrap();
+    let out: Output = Command::new(crate::binary()).arg("mcp").args(args).stdin(Stdio::null()).output().unwrap();
     assert_eq!(out.status.code(), Some(1), "{args:?} should fail");
     assert!(out.stdout.is_empty(), "{args:?} must not start a server");
     String::from_utf8(out.stderr).unwrap()

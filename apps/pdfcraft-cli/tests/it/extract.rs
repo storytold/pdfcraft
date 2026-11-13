@@ -4,8 +4,6 @@
 use std::path::PathBuf;
 use std::process::{Command, Output};
 
-const BIN: &str = env!("CARGO_BIN_EXE_pdfcraft-cli");
-
 /// A PDF with `n` empty 200×300 pt pages.
 fn fixture(n: usize) -> Vec<u8> {
     let mut objs: Vec<Vec<u8>> = vec![b"<< /Type /Catalog /Pages 2 0 R >>".to_vec()];
@@ -81,13 +79,16 @@ fn workdir(test: &str) -> PathBuf {
 
 fn extract(dir: &std::path::Path, pages: &str) -> Output {
     let out = dir.join(format!("out-{}.pdf", pages.replace(['-', ','], "_")));
-    Command::new(BIN).args(["extract", dir.join("five.pdf").to_str().unwrap(), "--pages", pages, "--out", out.to_str().unwrap()]).output().unwrap()
+    Command::new(crate::binary())
+        .args(["extract", dir.join("five.pdf").to_str().unwrap(), "--pages", pages, "--out", out.to_str().unwrap()])
+        .output()
+        .unwrap()
 }
 
 /// The page count `info` reports for the extracted file.
 fn pages_of(dir: &std::path::Path, pages: &str) -> usize {
     let out = dir.join(format!("out-{}.pdf", pages.replace(['-', ','], "_")));
-    let info = Command::new(BIN).args(["info", out.to_str().unwrap()]).output().unwrap();
+    let info = Command::new(crate::binary()).args(["info", out.to_str().unwrap()]).output().unwrap();
     let text = String::from_utf8_lossy(&info.stdout);
     let n = text.split("\"pages\":").nth(1).and_then(|s| s.trim().split(|c: char| !c.is_ascii_digit()).next()).unwrap_or("");
     n.parse().unwrap_or_else(|_| panic!("no page count in {text}"))

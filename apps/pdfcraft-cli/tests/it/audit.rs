@@ -3,8 +3,6 @@
 
 use std::process::Command;
 
-const BIN: &str = env!("CARGO_BIN_EXE_pdfcraft-cli");
-
 /// Two US Letter pages with "TOP SECRET" under an opaque `90 688 220 32 re`; the second page is
 /// turned a quarter (`/Rotate 90`).
 fn fixture() -> Vec<u8> {
@@ -43,7 +41,7 @@ fn audit_rectangles_match_the_tool_in_top_left_points() {
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("faux.pdf"), fixture()).unwrap();
 
-    let out = Command::new(BIN).arg("audit").arg(dir.join("faux.pdf")).output().unwrap();
+    let out = Command::new(crate::binary()).arg("audit").arg(dir.join("faux.pdf")).output().unwrap();
     assert!(!out.status.success(), "findings must fail the audit");
     let cli: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(cli["count"], 2, "{cli}");
@@ -58,7 +56,7 @@ fn audit_rectangles_match_the_tool_in_top_left_points() {
         { "tool": "doc_audit_redactions", "args": { "doc": 1 } },
     ]);
     std::fs::write(dir.join("steps.json"), steps.to_string()).unwrap();
-    let out = Command::new(BIN).arg("run").arg("--script").arg(dir.join("steps.json")).arg("--root").arg(&dir).output().unwrap();
+    let out = Command::new(crate::binary()).arg("run").arg("--script").arg(dir.join("steps.json")).arg("--root").arg(&dir).output().unwrap();
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     let stdout = String::from_utf8_lossy(&out.stdout);
     let tool = serde_json::Deserializer::from_str(&stdout).into_iter::<serde_json::Value>().last().unwrap().unwrap();

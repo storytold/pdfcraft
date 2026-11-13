@@ -29,7 +29,7 @@ fn string_value(resource: &[u8], key: &str) -> Option<String> {
 
 #[test]
 fn the_exe_has_version_info_with_the_package_version() {
-    let exe = std::fs::read(env!("CARGO_BIN_EXE_pdfcraft-cli")).unwrap();
+    let exe = std::fs::read(crate::binary()).unwrap();
     let start = find(&exe, &utf16("VS_VERSION_INFO")).expect("no version resource");
     let resource = &exe[start..];
     for (key, value) in [

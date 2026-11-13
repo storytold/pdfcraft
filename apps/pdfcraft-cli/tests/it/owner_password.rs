@@ -7,8 +7,6 @@ use std::sync::Arc;
 
 use pdfcraft_cos::{Algorithm, NewEncryption};
 
-const BIN: &str = env!("CARGO_BIN_EXE_pdfcraft-cli");
-
 /// A one-page 200×300 pt PDF reading "Page 1", drawn by `content`.
 fn fixture(content: &str) -> Vec<u8> {
     let stream = format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len());
@@ -72,14 +70,14 @@ fn info_accepts_the_owner_password() {
         let path = tmp(&format!("info-{alg:?}.pdf"));
         std::fs::write(&path, protected(alg)).unwrap();
         for pw in ["owner", "user"] {
-            let out = Command::new(BIN).args(["info", path.to_str().unwrap(), "--password", pw]).output().unwrap();
+            let out = Command::new(crate::binary()).args(["info", path.to_str().unwrap(), "--password", pw]).output().unwrap();
             let stderr = String::from_utf8_lossy(&out.stderr);
             assert!(out.status.success(), "{alg:?} with {pw:?}: {stderr}");
             let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
             assert_eq!(json["pages"], 1, "{alg:?} with {pw:?}");
             assert_eq!(json["encrypted"], true, "{alg:?} with {pw:?}");
         }
-        let out = Command::new(BIN).args(["info", path.to_str().unwrap(), "--password", "wrong"]).output().unwrap();
+        let out = Command::new(crate::binary()).args(["info", path.to_str().unwrap(), "--password", "wrong"]).output().unwrap();
         assert!(!out.status.success(), "{alg:?}: a wrong password still fails");
         assert!(String::from_utf8_lossy(&out.stderr).contains("incorrect"), "{alg:?}");
     }
@@ -90,12 +88,12 @@ fn text_accepts_the_owner_password() {
     for alg in ALGORITHMS {
         let path = tmp(&format!("text-{alg:?}.pdf"));
         std::fs::write(&path, protected(alg)).unwrap();
-        let out = Command::new(BIN).args(["text", path.to_str().unwrap(), "--password", "owner"]).output().unwrap();
+        let out = Command::new(crate::binary()).args(["text", path.to_str().unwrap(), "--password", "owner"]).output().unwrap();
         let stderr = String::from_utf8_lossy(&out.stderr);
         assert!(out.status.success(), "{alg:?}: {stderr}");
         assert!(String::from_utf8_lossy(&out.stdout).contains("Page 1"), "{alg:?}");
         // The user password opens it, but the permissions still forbid copying.
-        let out = Command::new(BIN).args(["text", path.to_str().unwrap(), "--password", "user"]).output().unwrap();
+        let out = Command::new(crate::binary()).args(["text", path.to_str().unwrap(), "--password", "user"]).output().unwrap();
         assert!(!out.status.success(), "{alg:?}: copying needs the owner password");
         assert!(String::from_utf8_lossy(&out.stderr).contains("don't allow copying"), "{alg:?}");
     }
@@ -124,7 +122,7 @@ fn render_accepts_the_owner_password() {
         for pw in ["owner", "user"] {
             let png = tmp(&format!("render-{alg:?}-{pw}.png"));
             let _ = std::fs::remove_file(&png);
-            let out = Command::new(BIN)
+            let out = Command::new(crate::binary())
                 .args(["render", path.to_str().unwrap(), "--page", "1", "--dpi", &DPI.to_string()])
                 .args(["--password", pw, "--out", png.to_str().unwrap()])
                 .output()
@@ -149,7 +147,7 @@ fn audit_places_findings_with_the_owner_password() {
     for alg in ALGORITHMS {
         let path = tmp(&format!("audit-{alg:?}.pdf"));
         std::fs::write(&path, protected_with(alg, &covered)).unwrap();
-        let out = Command::new(BIN).args(["audit", path.to_str().unwrap(), "--password", "owner"]).output().unwrap();
+        let out = Command::new(crate::binary()).args(["audit", path.to_str().unwrap(), "--password", "owner"]).output().unwrap();
         let stderr = String::from_utf8_lossy(&out.stderr);
         assert!(!stderr.contains("incorrect"), "{alg:?}: {stderr}");
         let report: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap_or_else(|e| panic!("{alg:?}: {e}: {stderr}"));

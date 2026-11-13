@@ -4,8 +4,6 @@
 use std::path::PathBuf;
 use std::process::{Command, Output};
 
-const BIN: &str = env!("CARGO_BIN_EXE_pdfcraft-cli");
-
 fn tmp(test: &str, name: &str) -> PathBuf {
     let d = std::env::temp_dir().join(format!("pdfcraft-cli-render-{test}-{}", std::process::id()));
     std::fs::create_dir_all(&d).unwrap();
@@ -21,7 +19,10 @@ fn fixture(test: &str) -> PathBuf {
 }
 
 fn render(pdf: &std::path::Path, out: &std::path::Path) -> Output {
-    Command::new(BIN).args(["render", pdf.to_str().unwrap(), "--page", "1", "--dpi", "36", "--out", out.to_str().unwrap()]).output().unwrap()
+    Command::new(crate::binary())
+        .args(["render", pdf.to_str().unwrap(), "--page", "1", "--dpi", "36", "--out", out.to_str().unwrap()])
+        .output()
+        .unwrap()
 }
 
 fn be32(b: &[u8]) -> u32 {
@@ -106,7 +107,7 @@ fn a_page_or_dpi_the_renderer_cannot_use_is_refused_before_reading_the_file() {
     ] {
         let out = tmp("refuse", "out.png");
         // `missing.pdf` is never read: the option's own message is the error.
-        let r = Command::new(BIN).args(["render", "missing.pdf", "--out", out.to_str().unwrap(), option, value]).output().unwrap();
+        let r = Command::new(crate::binary()).args(["render", "missing.pdf", "--out", out.to_str().unwrap(), option, value]).output().unwrap();
         assert_eq!(r.status.code(), Some(1), "{option} {value}");
         assert_eq!(r.stderr, format!("pdfcraft-cli: {diagnostic}\n").as_bytes(), "{option} {value}");
         assert!(!out.exists(), "{option} {value}: no output may be written");

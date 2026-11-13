@@ -4,8 +4,6 @@ use std::path::PathBuf;
 use std::process::{Command, Output};
 use std::sync::Arc;
 
-const BIN: &str = env!("CARGO_BIN_EXE_pdfcraft-cli");
-
 fn fixture(test: &str) -> PathBuf {
     fixture_with(test, "")
 }
@@ -60,7 +58,7 @@ fn success(output: &Output) {
 fn info_reports_the_laid_out_pages_and_fields() {
     let path = fixture("info");
     let original = std::fs::read(&path).unwrap();
-    let output = Command::new(BIN).arg("info").arg(&path).output().unwrap();
+    let output = Command::new(crate::binary()).arg("info").arg(&path).output().unwrap();
     success(&output);
     let info: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(info["xfa_layout"]["pages"], 2, "the synthetic form lays out into two pages");
@@ -79,7 +77,7 @@ fn info_reports_the_laid_out_pages_and_fields() {
 fn info_runs_none_of_the_forms_scripts() {
     let script = r#"<event activity="initialize"><script contentType="application/x-javascript">this.rawValue = "Changed";</script></event>"#;
     let path = fixture_with("info-script", script);
-    let output = Command::new(BIN).arg("info").arg(&path).output().unwrap();
+    let output = Command::new(crate::binary()).arg("info").arg(&path).output().unwrap();
     success(&output);
     let info: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(info["xfa_layout"]["pages"], 2, "the form is still laid out: {info}");
@@ -91,11 +89,11 @@ fn info_runs_none_of_the_forms_scripts() {
 #[test]
 fn text_reads_the_layout_including_a_page_absent_from_the_placeholder() {
     let path = fixture("text");
-    let output = Command::new(BIN).arg("text").arg(&path).output().unwrap();
+    let output = Command::new(crate::binary()).arg("text").arg(&path).output().unwrap();
     success(&output);
     let text = String::from_utf8(output.stdout).unwrap();
     assert!(text.contains("First XFA page") && text.contains("Second XFA page"), "{text:?}");
-    let output = Command::new(BIN).arg("text").arg(&path).args(["--page", "2"]).output().unwrap();
+    let output = Command::new(crate::binary()).arg("text").arg(&path).args(["--page", "2"]).output().unwrap();
     success(&output);
     let text = String::from_utf8(output.stdout).unwrap();
     assert!(text.contains("Second XFA page") && !text.contains("First XFA page"), "{text:?}");
@@ -116,7 +114,7 @@ fn render_matches_the_engine_layout_on_the_second_page() {
     assert!(expected.error.is_none(), "{:?}", expected.error);
     assert!(expected.rgba.as_chunks::<4>().0.iter().filter(|[r, _, _, a]| *r < 128 && *a > 0).count() > 10, "the layout has visible ink");
     let out = path.with_extension("pam");
-    let output = Command::new(BIN).arg("render").arg(&path).args(["--page", "2", "--dpi", "72", "--out"]).arg(&out).output().unwrap();
+    let output = Command::new(crate::binary()).arg("render").arg(&path).args(["--page", "2", "--dpi", "72", "--out"]).arg(&out).output().unwrap();
     success(&output);
     let actual = std::fs::read(out).unwrap();
     let header = format!("P7\nWIDTH {}\nHEIGHT {}\nDEPTH 4\nMAXVAL 255\nTUPLTYPE RGB_ALPHA\nENDHDR\n", expected.width, expected.height);
@@ -140,14 +138,14 @@ fn a_laid_out_form_keeps_the_original_copy_permissions() {
     .unwrap();
     let original = pdfcraft_cos::write_full(&doc, &Default::default()).unwrap();
     std::fs::write(&path, &original).unwrap();
-    let output = Command::new(BIN).arg("text").arg(&path).args(["--password", "openme"]).output().unwrap();
+    let output = Command::new(crate::binary()).arg("text").arg(&path).args(["--password", "openme"]).output().unwrap();
     assert!(!output.status.success());
     assert!(output.stdout.is_empty());
     assert!(String::from_utf8_lossy(&output.stderr).contains("don't allow copying"));
-    let output = Command::new(BIN).arg("text").arg(&path).args(["--password", "boss", "--page", "2"]).output().unwrap();
+    let output = Command::new(crate::binary()).arg("text").arg(&path).args(["--password", "boss", "--page", "2"]).output().unwrap();
     success(&output);
     assert!(String::from_utf8_lossy(&output.stdout).contains("Second XFA page"));
-    let output = Command::new(BIN).arg("info").arg(&path).args(["--password", "openme"]).output().unwrap();
+    let output = Command::new(crate::binary()).arg("info").arg(&path).args(["--password", "openme"]).output().unwrap();
     success(&output);
     let info: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(info["pages"], 2);
@@ -166,7 +164,7 @@ fn info_lists_the_repairs_of_a_laid_out_form() {
     let mut damaged = bytes[..at].to_vec();
     damaged.extend_from_slice(b"20\n%%EOF\n");
     std::fs::write(&path, &damaged).unwrap();
-    let output = Command::new(BIN).arg("info").arg(&path).output().unwrap();
+    let output = Command::new(crate::binary()).arg("info").arg(&path).output().unwrap();
     success(&output);
     let info: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(info["xfa_layout"]["pages"], 2, "the form is still laid out: {info}");

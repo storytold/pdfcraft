@@ -3,8 +3,6 @@
 use std::path::PathBuf;
 use std::process::Command;
 
-const BIN: &str = env!("CARGO_BIN_EXE_pdfcraft-cli");
-
 /// A one-page 200×300 pt PDF.
 fn fixture() -> Vec<u8> {
     let objs: Vec<Vec<u8>> = vec![
@@ -46,7 +44,8 @@ fn a_misspelled_option_fails_and_writes_nothing() {
     let input = tmp("typo", "in.pdf");
     std::fs::write(&input, fixture()).unwrap();
     let output = tmp("typo", "typo.pdf");
-    let out = Command::new(BIN).args(["edit", input.to_str().unwrap(), "--out", output.to_str().unwrap(), "--rotat", "1:90"]).output().unwrap();
+    let out =
+        Command::new(crate::binary()).args(["edit", input.to_str().unwrap(), "--out", output.to_str().unwrap(), "--rotat", "1:90"]).output().unwrap();
     assert!(!out.status.success(), "an unknown option must not exit 0");
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(stderr.contains("unknown option") && stderr.contains("--rotat"), "the option must be named: {stderr}");
@@ -59,7 +58,7 @@ fn an_option_without_its_value_fails() {
     let input = tmp("novalue", "in.pdf");
     std::fs::write(&input, fixture()).unwrap();
     let output = tmp("novalue", "out.pdf");
-    let out = Command::new(BIN).args(["edit", input.to_str().unwrap(), "--out", output.to_str().unwrap(), "--title"]).output().unwrap();
+    let out = Command::new(crate::binary()).args(["edit", input.to_str().unwrap(), "--out", output.to_str().unwrap(), "--title"]).output().unwrap();
     assert!(!out.status.success());
     assert!(String::from_utf8_lossy(&out.stderr).contains("--title needs a value"));
     assert!(!output.exists());
@@ -70,7 +69,7 @@ fn a_second_input_file_fails() {
     let input = tmp("stray", "in.pdf");
     std::fs::write(&input, fixture()).unwrap();
     let output = tmp("stray", "out.pdf");
-    let out = Command::new(BIN).args(["edit", input.to_str().unwrap(), "other.pdf", "--out", output.to_str().unwrap()]).output().unwrap();
+    let out = Command::new(crate::binary()).args(["edit", input.to_str().unwrap(), "other.pdf", "--out", output.to_str().unwrap()]).output().unwrap();
     assert!(!out.status.success());
     assert!(String::from_utf8_lossy(&out.stderr).contains("unexpected argument \"other.pdf\""));
     assert!(!output.exists());
@@ -84,7 +83,7 @@ fn the_documented_options_still_edit_and_save() {
         let output = tmp("ok", name);
         let mut args = vec!["edit", input.to_str().unwrap(), "--out", output.to_str().unwrap(), "--rotate", "1:90", "--title", "Rotated"];
         args.extend(extra);
-        let out = Command::new(BIN).args(&args).output().unwrap();
+        let out = Command::new(crate::binary()).args(&args).output().unwrap();
         assert!(out.status.success(), "{name}: {}", String::from_utf8_lossy(&out.stderr));
         assert_eq!(first_page_rotation(&output), 90, "{name}");
         let info = pdfcraft_render::inspect(std::sync::Arc::new(std::fs::read(&output).unwrap()), None).unwrap();
@@ -98,7 +97,8 @@ fn the_documented_options_still_edit_and_save() {
 fn editing_in_place_leaves_a_valid_file_and_no_staging_file() {
     let input = tmp("in-place", "doc.pdf");
     std::fs::write(&input, fixture()).unwrap();
-    let out = Command::new(BIN).args(["edit", input.to_str().unwrap(), "--out", input.to_str().unwrap(), "--rotate", "1:90"]).output().unwrap();
+    let out =
+        Command::new(crate::binary()).args(["edit", input.to_str().unwrap(), "--out", input.to_str().unwrap(), "--rotate", "1:90"]).output().unwrap();
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     assert_eq!(first_page_rotation(&input), 90);
     let names: Vec<String> =
@@ -145,7 +145,11 @@ mod one_based_arguments {
                     ("edit", "--move", "1:0", "bad --move target: expected a page number of at least 1, got \"0\""),
                     ("edit", "--insert-blank", "0", "bad --insert-blank position: expected a page position of at least 1, got \"0\""),
                 ] {
-                    let out = Command::new(BIN).current_dir(&dir.0).args([command, input, "--out", destination, option, value]).output().unwrap();
+                    let out = Command::new(crate::binary())
+                        .current_dir(&dir.0)
+                        .args([command, input, "--out", destination, option, value])
+                        .output()
+                        .unwrap();
                     assert_eq!(out.status.code(), Some(1), "{command} {input} {option} {value}");
                     assert_eq!(out.stderr, format!("pdfcraft-cli: {diagnostic}\n").as_bytes());
                     assert!(out.stdout.is_empty());
@@ -165,8 +169,11 @@ mod one_based_arguments {
         let source = fixture();
         std::fs::write(dir.0.join("input.pdf"), &source).unwrap();
         for output in ["page.pam", "page.png"] {
-            let out =
-                Command::new(BIN).current_dir(&dir.0).args(["render", "input.pdf", "--page", "1", "--dpi", "18", "--out", output]).output().unwrap();
+            let out = Command::new(crate::binary())
+                .current_dir(&dir.0)
+                .args(["render", "input.pdf", "--page", "1", "--dpi", "18", "--out", output])
+                .output()
+                .unwrap();
             assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
             let bytes = std::fs::read(dir.0.join(output)).unwrap();
             if output.ends_with(".pam") {
@@ -179,7 +186,7 @@ mod one_based_arguments {
                 assert_eq!(u32::from_be_bytes(bytes[20..24].try_into().unwrap()), 75);
             }
         }
-        let out = Command::new(BIN)
+        let out = Command::new(crate::binary())
             .current_dir(&dir.0)
             .args(["edit", "input.pdf", "--out", "edited.pdf", "--move", "1:1", "--rotate", "1:90", "--insert-blank", "1"])
             .output()
@@ -208,7 +215,7 @@ fn a_value_an_option_cannot_hold_is_named_before_the_file_is_opened() {
         ("--insert-blank", "abc", "bad --insert-blank position: expected a page position of at least 1, got \"abc\""),
         ("--insert-blank", "0", "bad --insert-blank position: expected a page position of at least 1, got \"0\""),
     ] {
-        let out = Command::new(BIN).current_dir(&dir).args(["edit", "missing.pdf", "--out", "out.pdf", option, value]).output().unwrap();
+        let out = Command::new(crate::binary()).current_dir(&dir).args(["edit", "missing.pdf", "--out", "out.pdf", option, value]).output().unwrap();
         assert_eq!(out.status.code(), Some(1), "{option} {value}");
         assert_eq!(out.stderr, format!("pdfcraft-cli: {diagnostic}\n").as_bytes(), "{option} {value}");
         assert!(out.stdout.is_empty(), "{option} {value}");
@@ -216,7 +223,8 @@ fn a_value_an_option_cannot_hold_is_named_before_the_file_is_opened() {
     }
     // A negative multiple of 90 is still a rotation the engine accepts: the refusal above is
     // the multiple-of-90 rule, not a sign problem (the missing input is the next error).
-    let out = Command::new(BIN).current_dir(&dir).args(["edit", "missing.pdf", "--out", "out.pdf", "--rotate", "1:-90"]).output().unwrap();
+    let out =
+        Command::new(crate::binary()).current_dir(&dir).args(["edit", "missing.pdf", "--out", "out.pdf", "--rotate", "1:-90"]).output().unwrap();
     assert_eq!(out.status.code(), Some(1));
     assert!(!String::from_utf8_lossy(&out.stderr).contains("--rotate degrees"), "{}", String::from_utf8_lossy(&out.stderr));
 }
@@ -233,7 +241,8 @@ fn a_destination_past_the_end_fails_and_writes_nothing() {
         ("--move", "1:3", "--move target 3 is past the end: it must be between 1 and 2 (the document has 1 pages)"),
         ("--move", "1:99", "--move target 99 is past the end: it must be between 1 and 2 (the document has 1 pages)"),
     ] {
-        let out = Command::new(BIN).args(["edit", input.to_str().unwrap(), "--out", output.to_str().unwrap(), option, value]).output().unwrap();
+        let out =
+            Command::new(crate::binary()).args(["edit", input.to_str().unwrap(), "--out", output.to_str().unwrap(), option, value]).output().unwrap();
         assert_eq!(out.status.code(), Some(1), "{option} {value}");
         assert_eq!(String::from_utf8_lossy(&out.stderr), format!("pdfcraft-cli: {diagnostic}\n"), "{option} {value}");
         assert!(!output.exists(), "{option} {value}: no output may be written");
@@ -253,7 +262,7 @@ fn the_append_destination_and_counts_grown_by_earlier_edits_are_accepted() {
         let output = tmp("append", name);
         let mut all = vec!["edit", input.to_str().unwrap(), "--out", output.to_str().unwrap()];
         all.extend(args);
-        let out = Command::new(BIN).args(&all).output().unwrap();
+        let out = Command::new(crate::binary()).args(&all).output().unwrap();
         assert!(out.status.success(), "{name}: {}", String::from_utf8_lossy(&out.stderr));
         let info = pdfcraft_render::inspect(std::sync::Arc::new(std::fs::read(&output).unwrap()), None).unwrap();
         let sizes: Vec<_> = info.pages.iter().map(|p| (p.width, p.height)).collect();
@@ -309,7 +318,7 @@ fn a_document_whose_page_tree_is_missing_edits_the_pages_the_reader_shows() {
         let output = tmp("no-page-tree", name);
         let mut all = vec!["edit", input.to_str().unwrap(), "--out", output.to_str().unwrap()];
         all.extend(args);
-        let out = Command::new(BIN).args(&all).output().unwrap();
+        let out = Command::new(crate::binary()).args(&all).output().unwrap();
         assert!(out.status.success(), "{name}: {}", String::from_utf8_lossy(&out.stderr));
         let info = pdfcraft_render::inspect(std::sync::Arc::new(std::fs::read(&output).unwrap()), None).unwrap();
         let pages: Vec<_> = info.pages.iter().map(|p| (p.width, p.height, p.rotation)).collect();
@@ -356,7 +365,8 @@ fn a_page_tree_is_not_rebuilt_when_the_reader_shows_other_pages() {
     assert_eq!(shown.pages.len(), 3);
     assert!(shown.pages.iter().all(|p| p.width != 200.0), "the reader must not show the blank page");
     let output = tmp("scan-disagrees", "out.pdf");
-    let out = Command::new(BIN).args(["edit", input.to_str().unwrap(), "--out", output.to_str().unwrap(), "--delete", "2"]).output().unwrap();
+    let out =
+        Command::new(crate::binary()).args(["edit", input.to_str().unwrap(), "--out", output.to_str().unwrap(), "--delete", "2"]).output().unwrap();
     assert_eq!(out.status.code(), Some(1));
     assert_eq!(String::from_utf8_lossy(&out.stderr), "pdfcraft-cli: the document's page tree lists no pages: the file is damaged\n");
     assert!(!output.exists(), "no page may be deleted");
@@ -370,7 +380,7 @@ fn a_page_past_the_end_after_earlier_edits_names_that_option() {
     let output = tmp("chained", "out.pdf");
     // 1 page, grown to 3, then --delete leaves 2: the 3 in --move 3:1 is the page that is gone.
     let args = ["--insert-blank", "2", "--insert-blank", "3", "--delete", "3", "--move", "3:1"];
-    let out = Command::new(BIN).args(["edit", input.to_str().unwrap(), "--out", output.to_str().unwrap()]).args(args).output().unwrap();
+    let out = Command::new(crate::binary()).args(["edit", input.to_str().unwrap(), "--out", output.to_str().unwrap()]).args(args).output().unwrap();
     assert!(!out.status.success());
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(err.contains("--move: page 3 does not exist") && err.contains("has 2 pages"), "{err}");
