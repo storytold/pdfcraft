@@ -182,6 +182,8 @@ pub(crate) fn sync_xfa_state(doc: &mut Document) {
             }
             doc.xfa = Some(report);
         }
+        // A static form was never laid out: its template stays for its scripts.
+        None if doc.xfa_static => doc.xfa = None,
         None => {
             doc.xfa = None;
             doc.xfa_template = None;

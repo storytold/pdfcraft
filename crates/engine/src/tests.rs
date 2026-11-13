@@ -12179,6 +12179,33 @@ fn a_field_that_only_reads_the_page_count_keeps_its_scripts_value() {
     assert_eq!(value, vec!["pages: 1".to_string()]);
 }
 
+/// A static XFA form's template scripts run on its own fields, which are named by the template's SOM steps (an unnamed
+/// subform as `#subform[0]`): initialize scripts on opening; a button's click script, whose value, presence and access
+/// changes reach the fields' values, hidden and read-only flags, and whose message shows; a field's exit script when it
+/// takes a value. What they write is in the XFA data a save keeps.
+#[test]
+fn a_static_xfa_forms_template_scripts_run_on_its_own_fields() {
+    let bytes = Arc::new(pdfcraft_xfa::fixtures::static_scripted_shell(""));
+    let mut s = Session::new();
+    let id = s.open("static.pdf", None, bytes, None).expect("opens");
+    let field = |s: &Session, n: &str| s.get(id).unwrap().form.iter().find(|f| f.name == n).cloned().expect("the field");
+    let (total, name, inner) = ("form1[0].page1[0].total[0]", "form1[0].page1[0].name[0]", "form1[0].page1[0].#subform[0].inner[0]");
+    assert_eq!(field(&s, total).value, vec!["init".to_string()], "{:?}", s.take_js_output(id));
+    assert_eq!(field(&s, inner).value, vec!["inner".to_string()], "a field in an unnamed subform is the template's too");
+    let out = s.run_javascript(id, "", Some("form1[0].page1[0].go[0]")).expect("clicks");
+    assert_eq!(out.error, None, "{out:?}");
+    assert_eq!(out.alerts.iter().map(|m| m.text.as_str()).collect::<Vec<_>>(), ["done"]);
+    assert_eq!(field(&s, total).value, vec!["clicked".to_string()]);
+    assert!(field(&s, name).widgets.iter().all(|w| w.hidden), "presence hidden hides the widget");
+    assert!(field(&s, inner).read_only(), "access readOnly makes the field read-only");
+    s.apply(id, Edit::SetFieldValue { name: name.into(), value: FieldValue::Text("Ada".into()) }).expect("fills it");
+    assert_eq!(field(&s, total).value, vec!["exit:Ada".to_string()], "{:?}", s.take_js_output(id));
+    let saved = s.save_bytes(id).expect("saves");
+    let cos = pdfcraft_cos::Document::open(saved).expect("reopens");
+    let data = pdfcraft_xfa::data_of(&cos).expect("the data");
+    assert_eq!(data.text_at(&pdfcraft_xfa::som_to_path("form1[0].page1[0].total[0]")), Some("exit:Ada"));
+}
+
 /// layout:ready scripts run once on opening: the root's turns field highlighting on (only when it
 /// is off), a field's sets a value and a later script reads the new highlight, while page
 /// numbering is left to the layout and form:ready is another event.

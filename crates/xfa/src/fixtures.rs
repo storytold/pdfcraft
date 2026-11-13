@@ -144,6 +144,51 @@ pub fn static_shell(data: &str) -> Vec<u8> {
     assemble(objs)
 }
 
+/// A static XFA form whose template has scripts, laid out as Designer writes it: an AcroForm named by the template's SOM
+/// steps, an unnamed subform as `#subform[0]`. `form1[0].page1[0]` holds the text fields `name` (whose exit script writes
+/// `total`), `total` (whose initialize script fills it) and, in an unnamed subform, `inner` (whose initialize script
+/// fills it); and the push button `go`, whose click script sets `total`, hides `name`, makes `inner` read-only and shows
+/// a message. Its datasets hold `data` (the children of `xfa:data`). No `/NeedsRendering`.
+pub fn static_scripted_shell(data: &str) -> Vec<u8> {
+    let js = |activity: &str, code: &str| {
+        format!("<event activity=\"{activity}\"><script contentType=\"application/x-javascript\">{code}</script></event>")
+    };
+    let xdp = format!(
+        "<xdp:xdp xmlns:xdp=\"http://ns.adobe.com/xdp/\"><template xmlns=\"http://www.xfa.org/schema/xfa-template/3.3/\"><subform name=\"form1\"><subform name=\"page1\">\
+         <field name=\"name\"><ui><textEdit/></ui>{}</field>\
+         <field name=\"total\"><ui><textEdit/></ui>{}</field>\
+         <field name=\"go\"><ui><button/></ui>{}</field>\
+         <subform><field name=\"inner\"><ui><textEdit/></ui>{}</field></subform>\
+         </subform></subform></template><xfa:datasets xmlns:xfa=\"http://www.xfa.org/schema/xfa-data/1.0/\"><xfa:data>{data}</xfa:data></xfa:datasets></xdp:xdp>",
+        js("exit", "total.rawValue = &quot;exit:&quot; + this.rawValue;"),
+        js("initialize", "this.rawValue = &quot;init&quot;;"),
+        js(
+            "click",
+            "total.rawValue = &quot;clicked&quot;; name.presence = &quot;hidden&quot;; this.parent.nodes.item(3).nodes.item(0).access = &quot;readOnly&quot;; xfa.host.messageBox(&quot;done&quot;);"
+        ),
+        js("initialize", "this.rawValue = &quot;inner&quot;;"),
+    );
+    let text = |name: &str, parent: u32, y: u32| {
+        format!("<< /Type /Annot /Subtype /Widget /FT /Tx /T ({name}[0]) /Parent {parent} 0 R /Rect [72 {y} 300 {}] /P 3 0 R /DA (/Helv 10 Tf 0 g) /MK << /BC [0 0 0] >> >>", y + 20)
+            .into_bytes()
+    };
+    let objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R /AcroForm << /XFA 5 0 R /Fields [6 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv << /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >> >> >> >> >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Annots [8 0 R 9 0 R 10 0 R 12 0 R] >>".to_vec(),
+        b"<< /Length 0 >>\nstream\n\nendstream".to_vec(),
+        format!("<< /Length {} >>\nstream\n{xdp}\nendstream", xdp.len()).into_bytes(),
+        b"<< /T (form1[0]) /Kids [7 0 R] >>".to_vec(),
+        b"<< /T (page1[0]) /Parent 6 0 R /Kids [8 0 R 9 0 R 10 0 R 11 0 R] >>".to_vec(),
+        text("name", 7, 700),
+        text("total", 7, 660),
+        b"<< /Type /Annot /Subtype /Widget /FT /Btn /Ff 65536 /T (go[0]) /Parent 7 0 R /Rect [72 620 160 640] /P 3 0 R /MK << /BC [0 0 0] /CA (Go) >> >>".to_vec(),
+        b"<< /T (#subform[0]) /Parent 7 0 R /Kids [12 0 R] >>".to_vec(),
+        text("inner", 11, 580),
+    ];
+    assemble(objs)
+}
+
 /// A static XFA form with one exclusion group `form1[0].page1[0].lang[0]` (items `1` English,
 /// `2` French) bound to the data by name, laid out as an AcroForm radio group whose `/Opt` holds
 /// the items and whose on states are the buttons' positions `/0` and `/1` (ISO 32000-2 Table 230),

@@ -927,7 +927,7 @@ impl Session {
             .form
             .iter()
             .find(|f| f.name == name && target.is_none_or(|t| field_object_id(f.obj) == t))
-            .and_then(|f| crate::xfa::widget_som(cos, f, widget))
+            .and_then(|f| crate::xfa::widget_som(cos, f, widget).or_else(|| crate::xfa::static_widget_som(cos, &tpl, f)))
         else {
             return Ok(false);
         };
