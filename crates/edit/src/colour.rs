@@ -47,7 +47,13 @@ impl Space {
 }
 
 fn nums(doc: &Document, o: &Object) -> Vec<f64> {
-    doc.resolve(o).as_array().map(|a| a.iter().filter_map(|v| doc.resolve(v).as_f64()).collect()).unwrap_or_default()
+    nums_upto(doc, o, usize::MAX)
+}
+
+/// The first `max` numbers of an array: a space is read once for each resource name naming it,
+/// so it keeps only the numbers its colours read, however long the array in the file.
+fn nums_upto(doc: &Document, o: &Object, max: usize) -> Vec<f64> {
+    doc.resolve(o).as_array().map(|a| a.iter().filter_map(|v| doc.resolve(v).as_f64()).take(max).collect()).unwrap_or_default()
 }
 
 /// The most bytes one Indexed lookup table is decoded to when text colours are read. A table
@@ -144,13 +150,14 @@ pub(crate) fn space_within(doc: &Document, operand: &Object, cs_res: &Dict, dept
             let family = a.first().map(|f| doc.resolve(f)).and_then(|f| f.as_name().map(|n| n.to_vec())).unwrap_or_default();
             match family.as_slice() {
                 b"ICCBased" => {
+                    // The stream's dictionary is read where it is, not copied for each name.
                     let stream = a.get(1).map(|s| doc.resolve(s));
                     let dict = stream.as_ref().and_then(|s| match &**s {
-                        Object::Stream(st) => Some(st.dict.clone()),
+                        Object::Stream(st) => Some(&st.dict),
                         _ => None,
                     });
-                    if let Some(alt) = dict.as_ref().and_then(|d| d.get(b"Alternate").cloned()) {
-                        return space_within(doc, &alt, cs_res, depth + 1, lookups);
+                    if let Some(alt) = dict.and_then(|d| d.get(b"Alternate")) {
+                        return space_within(doc, alt, cs_res, depth + 1, lookups);
                     }
                     match dict.and_then(|d| d.int(b"N")) {
                         Some(1) => Space::Gray,
@@ -200,17 +207,20 @@ pub(crate) fn space_within(doc: &Document, operand: &Object, cs_res: &Dict, dept
                         a.get(1).map(|n| doc.resolve(n)).and_then(|n| n.as_array().map(Vec::len)).unwrap_or(1).max(1)
                     };
                     let alt = a.get(2).map(|b| space_within(doc, b, cs_res, depth + 1, lookups)).unwrap_or(Space::Gray);
+                    // The transform's outputs are the alternate space's components (ISO 32000-2
+                    // §8.6.6.4, §7.10.3): C0 and C1 past them are never read, so they aren't kept.
+                    let outputs = alt.components().max(1);
                     let exp = a.get(3).map(|f| doc.resolve(f)).and_then(|f| {
                         let d = match &*f {
-                            Object::Dict(d) => d.clone(),
-                            Object::Stream(s) => s.dict.clone(),
+                            Object::Dict(d) => d,
+                            Object::Stream(s) => &s.dict,
                             _ => return None,
                         };
                         if d.int(b"FunctionType") != Some(2) {
                             return None;
                         }
-                        let c0 = d.get(b"C0").map(|v| nums(doc, v)).unwrap_or_else(|| vec![0.0]);
-                        let c1 = d.get(b"C1").map(|v| nums(doc, v)).unwrap_or_else(|| vec![1.0]);
+                        let c0 = d.get(b"C0").map(|v| nums_upto(doc, v, outputs)).unwrap_or_else(|| vec![0.0]);
+                        let c1 = d.get(b"C1").map(|v| nums_upto(doc, v, outputs)).unwrap_or_else(|| vec![1.0]);
                         let n = d.get(b"N").and_then(|v| doc.resolve(v).as_f64()).unwrap_or(1.0);
                         Some((c0, c1, n))
                     });
@@ -300,7 +310,9 @@ pub(crate) fn rgb(space: &Space, values: &[f64]) -> [f64; 3] {
             }
             // No usable transform: the darkness of the strongest tint, in the alternate space's ink.
             None => {
-                let t = (0..*inputs).map(v).fold(0.0, f64::max);
+                // The values given, not the colourant count: a long `/DeviceN` names array
+                // doesn't make each colour cost a step per name.
+                let t = values.iter().take(*inputs).copied().fold(0.0, f64::max);
                 let g = 1.0 - clamp01(t);
                 [g, g, g]
             }

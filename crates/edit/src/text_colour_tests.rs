@@ -288,3 +288,29 @@ fn an_indexed_table_keeps_only_its_entries() {
     assert_eq!(table(10, &mut lookups).len(), 6);
     assert_eq!(lookups.left(), MAX_PAGE_LOOKUPS - 6 - PADDED, "a stream is charged what it decoded to");
 }
+
+/// A Separation or DeviceN space is read once for each name naming it, so it keeps only the C0
+/// and C1 numbers its Type 2 transform outputs (the alternate space's components, ISO 32000-2
+/// §8.6.6.4), however long those arrays are in the file: twenty names for one space whose C0 and
+/// C1 hold 20,000 numbers each keep three apiece, and a colour still reads through them.
+#[test]
+fn a_tint_transform_keeps_only_the_outputs_its_alternate_reads() {
+    use crate::colour::{Space, space_of};
+    use pdfcraft_cos::{Dict, ObjRef, Object};
+    const LONG: usize = 20_000;
+    const NAMES: usize = 20;
+    let tail = " 0".repeat(LONG - 3);
+    let extra = vec![
+        "[/Separation /Spot /DeviceRGB 10 0 R]".to_string(),
+        format!("<< /FunctionType 2 /Domain [0 1] /C0 [0 0 0{tail}] /C1 [1 0 0{tail}] /N 1 >>"),
+    ];
+    let spaces: String = (0..NAMES).map(|i| format!("/S{i} 9 0 R ")).collect();
+    let shows: Vec<(String, String)> = (0..NAMES).map(|i| (format!("/S{i} cs 1 scn"), format!("T{i}"))).collect();
+    let shows: Vec<(&str, &str)> = shows.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
+    let doc = page_with(&content(&shows), &spaces, "", "", &extra);
+    match space_of(&doc, &Object::Ref(ObjRef { num: 9, generation: 0 }), &Dict::default(), 0) {
+        Space::Tint { exp: Some((c0, c1, _)), .. } => assert_eq!((c0.len(), c1.len()), (3, 3)),
+        other => panic!("not a Type 2 tint: {other:?}"),
+    }
+    assert!((0..NAMES).all(|i| near(colour_of(&doc, &format!("T{i}")), [1.0, 0.0, 0.0])), "{:?}", colours(&doc));
+}
