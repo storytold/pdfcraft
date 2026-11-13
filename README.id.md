@@ -285,10 +285,8 @@ Catatan pengembangan, lokasi log, dan variabel lingkungan ada di [docs/developme
 
 ### Memilih Bahasa Indonesia
 
-Buka **Menu > Edit > Preferensi…**, lalu pilih **Bahasa Indonesia** pada pilihan bahasa antarmuka.
-Di macOS, Preferensi dapat dibuka dengan `⌘,`; di platform lain, gunakan `Ctrl+,`.
-Pengaturan ini dapat diubah meski belum ada dokumen yang terbuka dan akan disimpan untuk sesi berikutnya.
-Pilihan otomatis mengikuti bahasa sistem.
+Paket rilis menyertakan katalog terjemahan. Jika membangun dari sumber dengan perintah di atas,
+siapkan `CRAFT_I18N_DIR` lebih dulu seperti contoh berikut. Tanpanya, build hanya menyediakan bahasa Inggris.
 
 Terjemahan antarmuka disimpan dalam [craft-i18n](https://github.com/storytold/craft-i18n), pada `locales/id/common.tsv` dan `locales/id/pdfcraft.tsv`.
 Versi yang disertakan dalam aplikasi ditentukan oleh `craft-i18n.rev`.
@@ -304,9 +302,21 @@ $env:CRAFT_I18N_DIR = (Resolve-Path ../craft-i18n).Path
 cargo run --release -p pdfcraft -- some.pdf
 ```
 
+Di macOS atau Linux, gunakan shell POSIX:
+
+```sh
+git clone https://github.com/storytold/craft-i18n ../craft-i18n
+CRAFT_I18N_DIR="$(cd ../craft-i18n && pwd)" cargo run --release -p pdfcraft -- some.pdf
+```
+
 Untuk mereproduksi katalog suatu rilis, checkout commit yang tercantum pada `craft-i18n.rev` di repo craft-i18n.
-Tanpa `CRAFT_I18N_DIR`, build menggunakan bahasa Inggris saja.
 Penjelasan format katalog dan cara menambah bahasa ada di [docs/localization.md](docs/localization.md).
+
+Setelah aplikasi dengan katalog terjemahan dijalankan, buka **Menu > Edit > Preferensi…**,
+lalu pilih **Bahasa Indonesia** pada pilihan bahasa antarmuka.
+Di macOS, Preferensi dapat dibuka dengan `⌘,`; di platform lain, gunakan `Ctrl+,`.
+Pengaturan ini dapat diubah meski belum ada dokumen yang terbuka dan akan disimpan untuk sesi berikutnya.
+Pilihan otomatis mengikuti bahasa sistem.
 
 Font Jepang berasal dari [craft-fonts](https://github.com/storytold/craft-fonts), masukan build opsional yang disertakan dalam rilis.
 Contoh untuk shell POSIX:
