@@ -5,13 +5,15 @@ use super::{
 
 /// Drop every `replaced` name of the XObject resources `xo` that the rewritten `content` no
 /// longer draws, so a full-rewrite save stops reaching the original image or form it named. A
-/// name still drawn is kept: by a surviving `Do` (the same image shown again outside a mark), or
-/// by a form without /Resources of its own, which draws through `xo` too. Such forms are read
-/// within `budget`, what is left of the page's allowance ([`resource_ops`]). Fails, as the cleanup
-/// of the fonts and properties these forms draw with does, when that can't be told: such a form
-/// doesn't decode (an image codec or a /Filter it can't run, say) or runs past `budget` (for the
-/// fonts' cleanup, an allowance of its own when no Type 3 font is listed), the walk passes
-/// 2,000,000 operators, or the parser can't read all of such a form or of `content`.
+/// name still drawn is kept: by a surviving `Do` (the same image shown again outside a mark), by
+/// a form without /Resources of its own, which draws through `xo` too, or by a form with resources
+/// of its own that draws it through its caller's names, read as far as it can be, never failing
+/// ([`resource_ops`]). Forms without /Resources that `content`, or other such forms, draw are read
+/// within `budget`, what is left of the page's allowance. Fails, as the cleanup of the fonts and
+/// properties these forms draw with does, when that can't be told: such a form doesn't decode (an
+/// image codec or a /Filter it can't run, say) or runs past `budget` (for the fonts' cleanup, an
+/// allowance of its own when no Type 3 font is listed), the walk passes 2,000,000 operators, or the
+/// parser can't read all of such a form or of `content`.
 /// Corrupt data in such a form is read, tolerantly, up to the damage, which may be nothing.
 pub(crate) fn prune(doc: &Document, budget: &mut DecodeBudget, xo: &mut Dict, replaced: &[Vec<u8>], content: &[Vec<u8>]) -> Result<(), CosError> {
     if replaced.is_empty() {
@@ -246,6 +248,8 @@ thread_local! {
     pub(crate) static SHARED_FORM_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     /// How many scopes [`names_content_draws`] has opened, beyond each call's first.
     pub(crate) static SHARED_SCOPES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// How many scopes of forms with resources of their own [`resource_ops`] has opened.
+    pub(crate) static CLEANUP_SCOPES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// Whether any of `drawn` (from [`names_content_draws`]) draws `name`: `None` when none is known to and
@@ -652,16 +656,32 @@ pub(super) fn clip_out(rects: &[[f64; 4]], ctm: &Matrix, around: [f64; 4]) -> Op
     Some(ops)
 }
 
-/// The operators of `content`, and of every form without /Resources of its own that it draws
-/// through `res`, nested ones too: what draws with these resources. Each such form is read once,
-/// with its `/DecodeParms` given by reference, its decoded bytes charged to `budget`, so the
-/// cleanups of one page that walk the same forms spend one allowance between them (all but the
-/// fonts' cleanup when no Type 3 font is listed, which has one of its own). An error
-/// when that can't all be read: the parser can't read all of `content` or of such a form, the walk
-/// passes 2,000,000 operators, or such a form doesn't decode or runs past `budget`. Operators are
-/// read one at a time, so the walk stops at one past the limit rather than holding them all.
+/// The operators of `content`, and of the forms it draws through `res`, nested ones too, that look
+/// names up in `res`: what draws with these resources.
+/// - **A form without /Resources of its own** draws through its caller's names: all its operators.
+///   Each such form is read once, with its `/DecodeParms` given by reference, its decoded bytes
+///   charged to `budget`, so the cleanups of one page that walk the same forms spend one allowance
+///   between them (all but the fonts' cleanup when no Type 3 font is listed, which has one of its
+///   own). An error when that can't all be read: the parser can't read all of `content` or of such
+///   a form, the walk passes 2,000,000 operators, or such a form doesn't decode or runs past `budget`.
+/// - **A form with resources of its own** looks a name up in its caller's where neither its own nor
+///   those of the forms on the way to it give it, as the renderer does ([`super::form_resources`]):
+///   of its operators, those naming an XObject (`Do`), font (`Tf`), graphics state (`gs`) or pattern
+///   (`scn`, `SCN`) its own resources don't give as what that category holds. Its marked content's
+///   properties are its own; those of a form without resources of its own inside it are the page's
+///   (ISO 32000-2 §7.8.3), and are kept. Such forms are read as far as they can be, once in each
+///   scope (the forms on the way with resources of their own: one drawn inside itself isn't
+///   followed again, and no more than [`MAX_DEPTH`] of them, nor 65,536 scopes), within an
+///   allowance of a page of their own and 2,000,000 of their operators read. One that doesn't decode
+///   isn't read, bytes the parser can't read in one are passed over, and past those limits the
+///   later ones aren't read; none of these fails the cleanup. Missing one of their names can lose
+///   paint, as not reading them did, but never keeps a name nothing draws.
+///
+/// Operators are read one at a time, and of forms with resources of their own only those kept are
+/// held, so the walk stops at one past a limit rather than holding them all.
 pub(crate) fn resource_ops(doc: &Document, budget: &mut DecodeBudget, res: &Dict, content: &[Vec<u8>]) -> Result<Vec<Op>, CosError> {
     const MAX_OPS: usize = 2_000_000;
+    const MAX_SCOPES: usize = 1 << 16;
     let joined = Pieces::join(content);
     let mut read = pdfcraft_content::ops(joined.data());
     let mut ops: Vec<Op> = read.by_ref().take(MAX_OPS + 1).collect();
@@ -670,28 +690,202 @@ pub(crate) fn resource_ops(doc: &Document, budget: &mut DecodeBudget, res: &Dict
         return Err(CosError::Syntax { offset: 0, detail: "redaction could not fully read the content that uses these resources".into() });
     }
     let xobjects = res_dict(doc, res, b"XObject");
+    // The scopes of forms with resources of their own: each the form's own names over its caller's
+    // scope (`None`: `res`'s alone).
+    let mut scopes: Vec<Scoped> = Vec::new();
+    let mut scope_ids: HashMap<(Option<usize>, ObjRef), usize> = HashMap::new();
+    let mut own_of: HashMap<ObjRef, Rc<OwnResources>> = HashMap::new();
+    // The XObjects drawn, each with the scope it is looked up in, to follow in turn.
+    let mut draws: Vec<(Vec<u8>, Option<usize>)> =
+        ops.iter().filter(|op| op.is("Do")).filter_map(|op| op.last_name()).map(|n| (n.to_vec(), None)).collect();
     let mut seen = HashSet::new();
+    let mut kinds = Kinds::new();
+    // What is spent on forms with resources of their own, and whether any is left.
+    let mut scoped_budget = DecodeBudget::page();
+    let mut scoped_ops = 0usize;
+    let mut scoped_open = true;
     let mut cursor = 0;
-    while cursor < ops.len() {
-        let op = &ops[cursor];
-        if op.is("Do")
-            && let Some(r) = op.last_name().and_then(|n| xobjects.get(n)).and_then(Object::as_ref)
-            && seen.insert(r)
-            && let Object::Stream(s) = &*doc.get(r)
-            && s.dict.name(b"Subtype") == Some(b"Form")
-            && s.dict.get(b"Resources").is_none_or(|r| doc.resolve(r).as_dict().is_none())
-        {
+    while let Some((name, scope)) = draws.get(cursor).cloned() {
+        cursor += 1;
+        let entry = given_in(doc, &scopes, scope, Category::XObject, &name, &mut kinds).or_else(|| xobjects.get(&name).cloned());
+        let Some(r) = entry.as_ref().and_then(Object::as_ref) else { continue };
+        let obj = doc.get(r);
+        let Object::Stream(s) = &*obj else { continue };
+        if s.dict.name(b"Subtype") != Some(b"Form") {
+            continue;
+        }
+        // Read in place, so a form drawn again and again isn't copied each time.
+        let resources = s.dict.get(b"Resources");
+        let held = resources.filter(|o| matches!(o, Object::Ref(_))).map(|o| doc.resolve(o));
+        let own = match (&held, resources) {
+            (Some(held), _) => held.as_dict(),
+            (None, Some(direct)) => direct.as_dict(),
+            (None, None) => None,
+        };
+        // A form without resources of its own reads the page's properties (ISO 32000-2 §7.8.3).
+        let page_properties = own.is_none();
+        let child = match own {
+            None => scope,
+            Some(_) if !scoped_open => continue,
+            Some(own) => match scope_ids.get(&(scope, r)) {
+                Some(&child) => Some(child),
+                // A form drawn inside itself looks names up as it already does there, and the forms
+                // on the way are followed no deeper than the walk follows them.
+                None if scopes.len() >= MAX_SCOPES || on_chain(&scopes, scope, r) => continue,
+                None if scope.and_then(|i| scopes.get(i)).is_some_and(|s| s.depth >= MAX_DEPTH) => continue,
+                None => {
+                    let own = own_of.entry(r).or_insert_with(|| Rc::new(OwnResources::of(doc, own))).clone();
+                    let depth = scope.and_then(|i| scopes.get(i)).map_or(1, |s| s.depth + 1);
+                    #[cfg(test)]
+                    CLEANUP_SCOPES.with(|c| c.set(c.get() + 1));
+                    scopes.push(Scoped { parent: scope, own, owner: r, depth });
+                    scope_ids.insert((scope, r), scopes.len() - 1);
+                    Some(scopes.len() - 1)
+                }
+            },
+        };
+        if !seen.insert((r, child)) {
+            continue;
+        }
+        if child.is_none() {
             let data = budget.decode(&doc.with_direct_parms(s))?;
             let mut read = pdfcraft_content::ops(&data);
-            ops.extend(read.by_ref().take((MAX_OPS + 1).saturating_sub(ops.len())));
-            // `seen` gains at most one form for each `Do` in `ops`, so this bounds it too.
-            if ops.len() > MAX_OPS || read.skipped() > 0 {
+            for op in read.by_ref() {
+                if op.is("Do")
+                    && let Some(n) = op.last_name()
+                {
+                    draws.push((n.to_vec(), None));
+                }
+                ops.push(op);
+                // `draws` gains at most one name for each operator kept, so this bounds it too.
+                if ops.len() > MAX_OPS {
+                    return Err(CosError::Syntax { offset: 0, detail: "redaction could not fully inspect inherited form resources".into() });
+                }
+            }
+            if read.skipped() > 0 {
                 return Err(CosError::Syntax { offset: 0, detail: "redaction could not fully inspect inherited form resources".into() });
             }
+            continue;
         }
-        cursor += 1;
+        let Ok(data) = scoped_budget.decode(&doc.with_direct_parms(s)) else {
+            continue;
+        };
+        for op in pdfcraft_content::ops(&data) {
+            scoped_ops += 1;
+            if scoped_ops > MAX_OPS {
+                scoped_open = false;
+                break;
+            }
+            if op.is("Do")
+                && let Some(n) = op.last_name()
+            {
+                draws.push((n.to_vec(), child));
+            }
+            let marks = page_properties && matches!(op.op.as_slice(), b"BDC" | b"DP");
+            if marks || Category::of(&op).is_some_and(|(category, name)| given_in(doc, &scopes, child, category, name, &mut kinds).is_none()) {
+                ops.push(op);
+            }
+        }
     }
     Ok(ops)
+}
+
+/// The resource categories a form looks a name up in its caller's for, as [`resource_ops`] reads
+/// operators: the walk's ([`super::COPIED`]).
+#[derive(Clone, Copy)]
+enum Category {
+    XObject,
+    Font,
+    ExtGState,
+    Pattern,
+}
+
+impl Category {
+    /// The category `op` looks its name up in, and the name, for an operator that names a resource
+    /// a form may take from its caller's.
+    fn of(op: &Op) -> Option<(Category, &[u8])> {
+        match op.op.as_slice() {
+            b"Do" => op.last_name().map(|n| (Category::XObject, n)),
+            b"Tf" => op.name_back(1).map(|n| (Category::Font, n)),
+            b"gs" => op.last_name().map(|n| (Category::ExtGState, n)),
+            b"scn" | b"SCN" => op.last_name().map(|n| (Category::Pattern, n)),
+            _ => None,
+        }
+    }
+}
+
+/// A form's own resources, in the categories it may look a name up in its caller's for.
+struct OwnResources {
+    xobject: Dict,
+    font: Dict,
+    extgstate: Dict,
+    pattern: Dict,
+}
+
+impl OwnResources {
+    fn of(doc: &Document, own: &Dict) -> Self {
+        OwnResources {
+            xobject: res_dict(doc, own, b"XObject"),
+            font: res_dict(doc, own, b"Font"),
+            extgstate: res_dict(doc, own, b"ExtGState"),
+            pattern: res_dict(doc, own, b"Pattern"),
+        }
+    }
+
+    /// The entry these give `name` in `category`, where it is what that category holds (a stream
+    /// for an XObject, a dictionary for a font or a graphics state, anything the file defines for a
+    /// pattern), as [`super::form_resources`] takes it.
+    fn gives(&self, doc: &Document, category: Category, name: &[u8], kinds: &mut Kinds) -> Option<Object> {
+        let names = match category {
+            Category::XObject => &self.xobject,
+            Category::Font => &self.font,
+            Category::ExtGState => &self.extgstate,
+            Category::Pattern => &self.pattern,
+        };
+        let entry = names.get(name)?;
+        let kind = kind(doc, entry, kinds);
+        let holds = match category {
+            Category::XObject => kind.stream,
+            Category::Font | Category::ExtGState => kind.dict,
+            Category::Pattern => kind.defined,
+        };
+        holds.then(|| entry.clone())
+    }
+}
+
+/// The scope of a form with resources of its own ([`resource_ops`]): its own names, over its
+/// caller's scope (`None`: the resources the cleanup reads), the form, and how many such forms the
+/// chain holds.
+struct Scoped {
+    parent: Option<usize>,
+    own: Rc<OwnResources>,
+    owner: ObjRef,
+    depth: usize,
+}
+
+/// Whether the form `r` is on the way to `scope`.
+fn on_chain(scopes: &[Scoped], scope: Option<usize>, r: ObjRef) -> bool {
+    let mut at = scope;
+    while let Some(s) = at.and_then(|i| scopes.get(i)) {
+        if s.owner == r {
+            return true;
+        }
+        at = s.parent;
+    }
+    false
+}
+
+/// The entry the innermost of the forms on the way to `scope` gives `name` in `category`, or none
+/// when `res`'s names are where it is looked up.
+fn given_in(doc: &Document, scopes: &[Scoped], scope: Option<usize>, category: Category, name: &[u8], kinds: &mut Kinds) -> Option<Object> {
+    let mut at = scope;
+    while let Some(s) = at.and_then(|i| scopes.get(i)) {
+        if let Some(entry) = s.own.gives(doc, category, name, kinds) {
+            return Some(entry);
+        }
+        at = s.parent;
+    }
+    None
 }
 
 pub(crate) fn prune_properties(doc: &Document, budget: &mut DecodeBudget, res: &mut Dict, content: &[Vec<u8>]) -> Result<Vec<Object>, CosError> {

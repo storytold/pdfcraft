@@ -957,3 +957,364 @@ fn many_names_of_a_redacted_image_are_unlinked_reading_inherited_forms_once() {
     assert!(started.elapsed() < std::time::Duration::from_secs(60), "{:?}", started.elapsed());
     assert!(!full_save_holds(&doc, b"IMAGESECRET"), "an alias kept the removed image reachable");
 }
+
+/// A form outside the mark, with resources of its own that give no font, shows glyph B with the
+/// page's Type 3 font, through the page's names, as the renderer does: the font's cleanup keeps
+/// B's program, also where its own `/T3` is a stream, which is no font. Where the form's own `/T3`
+/// is another Type 3 font, the page's B goes and the form's own B stays.
+#[test]
+fn a_type3_glyph_a_form_shows_through_its_callers_font_is_kept() {
+    let run = |form_res: &str| {
+        let mut doc = pdf(vec![
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources 5 0 R >>".to_vec(),
+            stream("", b"BT /T3 10 Tf 10 100 Td (A) Tj ET /Fm Do"),
+            b"<< /Font << /T3 6 0 R >> /XObject << /Fm 9 0 R >> >>".to_vec(),
+            TYPE3.as_bytes().to_vec(),
+            stream("", b"% SECRET_TYPE3_GLYPH_A"),
+            stream("", b"% PUBLIC_TYPE3_GLYPH_B"),
+            stream(&format!("/Type /XObject /Subtype /Form /BBox [0 0 300 50] /Resources << {form_res} >>"), b"BT /T3 10 Tf 10 20 Td (B) Tj ET"),
+            TYPE3.replace("/A 7 0 R /B 8 0 R", "/A 11 0 R /B 12 0 R").into_bytes(),
+            stream("", b"% OWN_TYPE3_GLYPH_A"),
+            stream("", b"% OWN_TYPE3_GLYPH_B"),
+        ]);
+        mark(&mut doc, 0, &[[9.0, 95.0, 16.0, 110.0]], "");
+        assert_eq!(apply(&mut doc, None).unwrap().glyphs, 1);
+        assert!(!full_save_holds(&doc, b"SECRET_TYPE3_GLYPH_A"), "the redacted glyph program survived");
+        (full_save_holds(&doc, b"PUBLIC_TYPE3_GLYPH_B"), full_save_holds(&doc, b"OWN_TYPE3_GLYPH_B"))
+    };
+    assert!(run("/ProcSet [/PDF]").0, "the form still shows the page's B");
+    assert!(run("/Font << /T3 11 0 R >>").0, "a stream is no font: the page's B");
+    assert_eq!(run("/Font << /T3 10 0 R >>"), (false, true), "the form's own font shows B");
+}
+
+/// Only a form outside the mark, whose own resources give no font, shows text with the page's
+/// Type 3 font: the page's font cleanup counts it as drawn through the page's names, and keeps the
+/// font and B's program, also where the form's own `/T3` is a stream, which is no font. Where the
+/// form's own `/T3` is another Type 3 font, nothing shows the page's, and its programs go.
+#[test]
+fn a_type3_font_only_a_form_shows_through_its_callers_names_is_kept() {
+    let run = |form_res: &str| {
+        let mut doc = pdf(vec![
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources 5 0 R >>".to_vec(),
+            stream("", b"BT /F1 10 Tf 10 100 Td (SECRET) Tj ET /Fm Do"),
+            b"<< /Font << /T3 6 0 R /F1 13 0 R >> /XObject << /Fm 9 0 R >> >>".to_vec(),
+            TYPE3.as_bytes().to_vec(),
+            stream("", b"% PAGE_TYPE3_GLYPH_A"),
+            stream("", b"% PAGE_TYPE3_GLYPH_B"),
+            stream(&format!("/Type /XObject /Subtype /Form /BBox [0 0 300 50] /Resources << {form_res} >>"), b"BT /T3 10 Tf 10 20 Td (B) Tj ET"),
+            TYPE3.replace("/A 7 0 R /B 8 0 R", "/A 11 0 R /B 12 0 R").into_bytes(),
+            stream("", b"% OWN_TYPE3_GLYPH_A"),
+            stream("", b"% OWN_TYPE3_GLYPH_B"),
+            b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_vec(),
+        ]);
+        mark(&mut doc, 0, &[[9.0, 95.0, 60.0, 110.0]], "");
+        apply(&mut doc, None).unwrap();
+        (full_save_holds(&doc, b"PAGE_TYPE3_GLYPH_B"), full_save_holds(&doc, b"OWN_TYPE3_GLYPH_B"))
+    };
+    assert!(run("/ProcSet [/PDF]").0, "the form still shows the page's B");
+    assert!(run("/Font << /T3 11 0 R >>").0, "a stream is no font: the page's B");
+    assert_eq!(run("/Font << /T3 10 0 R >>"), (false, true), "the form's own font shows B");
+}
+
+/// A form whose own resources give no font shows B with `/T3`, drawn once by the page, where `/T3`
+/// is the page's Type 3 font, and once inside a form whose own `/T3` is another: the font's
+/// cleanup scans it under each, and keeps both fonts' B.
+#[test]
+fn a_form_drawn_under_two_forms_names_shows_each_ones_type3_font() {
+    let mut doc = pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources 5 0 R >>".to_vec(),
+        stream("", b"BT /F1 10 Tf 10 100 Td (SECRET) Tj ET /Fm Do /G Do"),
+        b"<< /Font << /T3 6 0 R /F1 13 0 R >> /XObject << /Fm 9 0 R /G 14 0 R >> >>".to_vec(),
+        TYPE3.as_bytes().to_vec(),
+        stream("", b"% PAGE_TYPE3_GLYPH_A"),
+        stream("", b"% PAGE_TYPE3_GLYPH_B"),
+        stream("/Type /XObject /Subtype /Form /BBox [0 0 300 50] /Resources << /ProcSet [/PDF] >>", b"BT /T3 10 Tf 10 20 Td (B) Tj ET"),
+        TYPE3.replace("/A 7 0 R /B 8 0 R", "/A 11 0 R /B 12 0 R").into_bytes(),
+        stream("", b"% OWN_TYPE3_GLYPH_A"),
+        stream("", b"% OWN_TYPE3_GLYPH_B"),
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_vec(),
+        stream("/Type /XObject /Subtype /Form /BBox [0 0 300 50] /Resources << /Font << /T3 10 0 R >> >>", b"/Fm Do"),
+    ]);
+    mark(&mut doc, 0, &[[9.0, 95.0, 60.0, 110.0]], "");
+    apply(&mut doc, None).unwrap();
+    assert!(full_save_holds(&doc, b"PAGE_TYPE3_GLYPH_B"), "drawn by the page, it shows the page's B");
+    assert!(full_save_holds(&doc, b"OWN_TYPE3_GLYPH_B"), "drawn inside /G, it shows /G's B");
+}
+
+/// The kept glyph B draws its font's form `/F`, which draws `/G`, whose own resources give no
+/// graphics state or pattern: `/G` sets `/GS0` and paints with `/P0` through `/F`'s names. When
+/// glyph A is redacted, the cleanup of `/F`'s resources keeps both.
+#[test]
+fn a_type3_glyphs_form_keeps_what_a_form_inside_it_uses_through_its_names() {
+    let mut doc = pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources 5 0 R >>".to_vec(),
+        stream("", b"BT /T3 10 Tf 10 100 Td (AB) Tj ET"),
+        b"<< /Font << /T3 6 0 R >> >>".to_vec(),
+        b"<< /Type /Font /Subtype /Type3 /FontBBox [0 -200 1000 800] /FontMatrix [0.001 0 0 0.001 0 0] /FirstChar 65 /LastChar 66 /Widths [500 500] /Encoding << /Differences [65 /A /B] >> /CharProcs << /A 7 0 R /B 8 0 R >> /Resources << /XObject << /F 9 0 R >> >> >>".to_vec(),
+        stream("", b"% SECRET_GLYPH_A_PAYLOAD"),
+        stream("", b"/F Do"),
+        stream(
+            "/Type /XObject /Subtype /Form /BBox [0 0 10 10] /Resources << /ExtGState << /GS0 10 0 R >> /Pattern << /P0 11 0 R >> /XObject << /G 12 0 R >> >>",
+            b"/G Do",
+        ),
+        b"<< /Type /ExtGState /CA 0.5 /GS0_KEPT_MARKER 1 >>".to_vec(),
+        stream("/Type /Pattern /PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 10 10] /XStep 10 /YStep 10 /Resources << >>", b"% PATTERN_P0_KEPT"),
+        stream(
+            "/Type /XObject /Subtype /Form /BBox [0 0 10 10] /Resources << /ProcSet [/PDF] >>",
+            b"/GS0 gs /Pattern cs /P0 scn 0 0 10 10 re f",
+        ),
+    ]);
+    mark(&mut doc, 0, &[[9.0, 95.0, 14.9, 110.0]], "");
+    assert_eq!(apply(&mut doc, None).unwrap().glyphs, 1);
+    assert!(!full_save_holds(&doc, b"SECRET_GLYPH_A_PAYLOAD"));
+    assert!(full_save_holds(&doc, b"GS0_KEPT_MARKER"), "/G's graphics state, given by /F, was dropped");
+    assert!(full_save_holds(&doc, b"PATTERN_P0_KEPT"), "/G's pattern, given by /F, was dropped");
+}
+
+/// Fifty forms with resources of their own draw one form `/F` that shows B with `/T3`. Where `/F`'s
+/// own resources give `/T3`, what it shows is the same under each, and it is scanned once; where
+/// they give no font, it reads the page's through each, and is scanned under each.
+#[test]
+fn a_type3_scan_repeats_a_form_only_where_it_reads_its_callers_names() {
+    let scans = |f_res: &str| {
+        let callers: String = (0..50).map(|i| format!("/G{i} {} 0 R ", 10 + i)).collect();
+        let draws: String = (0..50).map(|i| format!("/G{i} Do ")).collect();
+        let mut objs = vec![
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources 5 0 R >>".to_vec(),
+            stream("", format!("BT /T3 10 Tf 10 100 Td (A) Tj ET {draws}").as_bytes()),
+            format!("<< /Font << /T3 6 0 R >> /XObject << {callers}>> >>").into_bytes(),
+            TYPE3.as_bytes().to_vec(),
+            stream("", b"% SECRET_TYPE3_GLYPH_A"),
+            stream("", b"% PUBLIC_TYPE3_GLYPH_B"),
+            stream(&format!("/Type /XObject /Subtype /Form /BBox [0 0 300 50] /Resources << {f_res} >>"), b"BT /T3 10 Tf 10 20 Td (B) Tj ET"),
+        ];
+        objs.extend((0..50).map(|_| stream("/Type /XObject /Subtype /Form /BBox [0 0 300 50] /Resources << /XObject << /F 9 0 R >> >>", b"/F Do")));
+        let mut doc = pdf(objs);
+        mark(&mut doc, 0, &[[9.0, 95.0, 16.0, 110.0]], "");
+        crate::type3::TYPE3_FORM_SCANS.with(|c| c.set(0));
+        assert_eq!(apply(&mut doc, None).unwrap().glyphs, 1);
+        assert!(full_save_holds(&doc, b"PUBLIC_TYPE3_GLYPH_B"));
+        crate::type3::TYPE3_FORM_SCANS.with(std::cell::Cell::get)
+    };
+    // The fifty callers, and `/F` once.
+    assert_eq!(scans("/Font << /T3 6 0 R >>"), 51);
+    // The fifty callers, and `/F` under each.
+    assert_eq!(scans("/ProcSet [/PDF]"), 100);
+}
+
+/// Layers of two forms with resources of their own, each drawing both forms of the next, the last
+/// showing B with the page's Type 3 font through their names: what each shows depends on the way it
+/// is reached. Eight layers are scanned, and B stays; twenty would take about two million scans, and
+/// the redaction is refused once 65,536 of those scans are made again.
+#[test]
+fn a_type3_scan_of_forms_reached_in_too_many_ways_is_refused() {
+    let run = |layers: usize| {
+        let mut objs = vec![
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources 5 0 R >>".to_vec(),
+            stream("", b"BT /T3 10 Tf 10 100 Td (A) Tj ET /A Do /B Do"),
+            b"<< /Font << /T3 6 0 R >> /XObject << /A 9 0 R /B 10 0 R >> >>".to_vec(),
+            TYPE3.as_bytes().to_vec(),
+            stream("", b"% SECRET_TYPE3_GLYPH_A"),
+            stream("", b"% PUBLIC_TYPE3_GLYPH_B"),
+        ];
+        for layer in 0..layers {
+            for _ in 0..2 {
+                objs.push(if layer + 1 < layers {
+                    let next = 9 + 2 * (layer + 1);
+                    stream(
+                        &format!(
+                            "/Type /XObject /Subtype /Form /BBox [0 0 300 50] /Resources << /XObject << /A {next} 0 R /B {} 0 R >> >>",
+                            next + 1
+                        ),
+                        b"/A Do /B Do",
+                    )
+                } else {
+                    stream("/Type /XObject /Subtype /Form /BBox [0 0 300 50] /Resources << /ProcSet [/PDF] >>", b"BT /T3 10 Tf 10 20 Td (B) Tj ET")
+                });
+            }
+        }
+        let mut doc = pdf(objs);
+        mark(&mut doc, 0, &[[9.0, 95.0, 16.0, 110.0]], "");
+        let out = apply(&mut doc, None);
+        let kept = out.is_ok() && full_save_holds(&doc, b"PUBLIC_TYPE3_GLYPH_B");
+        (out, kept)
+    };
+    let (out, kept) = run(8);
+    assert_eq!((out.map(|r| r.glyphs), kept), (Ok(1), true));
+    let started = std::time::Instant::now();
+    let (out, _) = run(20);
+    assert!(refused_for(&out, "forms are drawn in too many ways"), "{out:?}");
+    assert!(started.elapsed() < std::time::Duration::from_secs(60), "{:?}", started.elapsed());
+}
+
+/// `/C` (resources of its own, no Type 3 font) sets a plain font and draws `/F`, which shows B with
+/// `/T3` through its callers' names, having resources of its own that give no font, or none. The page draws `/C` twice, with its Type 3 font and with a
+/// plain one, then `/G`, whose own `/T3` is another Type 3 font and which draws `/C`. The second
+/// draw of `/C` finds `/F` already scanned, yet still depends on the page's names through it, so
+/// `/C` is scanned again under `/G`, and `/G`'s font keeps its B.
+#[test]
+fn a_form_depends_on_its_callers_names_through_a_form_scanned_before() {
+    // `/F` with resources of its own that give no font, or without any.
+    for f_res in ["/Resources << /ProcSet [/PDF] >>", ""] {
+        let mut doc = pdf(vec![
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources 5 0 R >>".to_vec(),
+            stream("", b"BT /T3 10 Tf 10 100 Td (A) Tj ET /C Do BT /F1 10 Tf ET /C Do /G Do"),
+            b"<< /Font << /T3 6 0 R /F1 13 0 R >> /XObject << /C 14 0 R /G 15 0 R >> >>".to_vec(),
+            TYPE3.as_bytes().to_vec(),
+            stream("", b"% SECRET_TYPE3_GLYPH_A"),
+            stream("", b"% PUBLIC_TYPE3_GLYPH_B"),
+            stream(&format!("/Type /XObject /Subtype /Form /BBox [0 0 300 50] {f_res}"), b"BT /T3 10 Tf 10 20 Td (B) Tj ET"),
+            TYPE3.replace("/A 7 0 R /B 8 0 R", "/A 11 0 R /B 12 0 R").into_bytes(),
+            stream("", b"% OWN_TYPE3_GLYPH_A"),
+            stream("", b"% OWN_TYPE3_GLYPH_B"),
+            b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_vec(),
+            stream(
+                "/Type /XObject /Subtype /Form /BBox [0 0 300 50] /Resources << /Font << /F1 13 0 R >> /XObject << /F 9 0 R >> >>",
+                b"BT /F1 10 Tf ET /F Do",
+            ),
+            stream("/Type /XObject /Subtype /Form /BBox [0 0 300 50] /Resources << /Font << /T3 10 0 R >> /XObject << /C 14 0 R >> >>", b"/C Do"),
+        ]);
+        mark(&mut doc, 0, &[[9.0, 95.0, 16.0, 110.0]], "");
+        assert_eq!(apply(&mut doc, None).unwrap().glyphs, 1);
+        assert!(full_save_holds(&doc, b"PUBLIC_TYPE3_GLYPH_B"), "drawn by the page, /F shows its B");
+        assert!(full_save_holds(&doc, b"OWN_TYPE3_GLYPH_B"), "drawn inside /G, /F shows /G's B ({f_res})");
+    }
+}
+
+/// Three hundred pages each draw the same 250 forms, whose own resources give no font, showing B
+/// with each page's Type 3 font, straight from their content or inside one form `/T` with resources
+/// of its own; or each page lists a form of its own it doesn't draw, giving that font and drawing
+/// the 250. Each of the 250 is scanned once for each page or form no page draws, 75,000 scans in
+/// all, which grow with those, not with the ways through other forms, and the redaction goes on.
+#[test]
+fn a_type3_scan_of_forms_on_many_pages_is_not_refused() {
+    const FORMS: usize = 250;
+    const PAGES: usize = 300;
+    #[derive(Clone, Copy, PartialEq, Debug)]
+    enum Shape {
+        Drawn,
+        InTemplate,
+        Undrawn,
+    }
+    let run = |shape: Shape| {
+        let names: String = (0..FORMS).map(|i| format!("/F{i} {} 0 R ", 9 + i)).collect();
+        let draws: String = (0..FORMS).map(|i| format!("/F{i} Do ")).collect();
+        let first_page = 9 + FORMS;
+        let kids: String = (0..PAGES).map(|i| format!("{} 0 R ", first_page + i)).collect();
+        let (content, xobjects) = match shape {
+            Shape::Drawn => (draws.clone(), names.clone()),
+            Shape::InTemplate => ("/T Do".to_string(), "/T 5 0 R ".to_string()),
+            Shape::Undrawn => (String::new(), String::new()),
+        };
+        let mut objs = vec![
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            format!("<< /Type /Pages /Kids [{kids}] /Count {PAGES} >>").into_bytes(),
+            stream("", format!("BT /T3 10 Tf 10 100 Td (A) Tj ET {content}").as_bytes()),
+            format!("<< /Font << /T3 6 0 R >> /XObject << {xobjects}>> >>").into_bytes(),
+            stream(&format!("/Type /XObject /Subtype /Form /BBox [0 0 300 50] /Resources << /XObject << {names}>> >>"), draws.as_bytes()),
+            TYPE3.as_bytes().to_vec(),
+            stream("", b"% SECRET_TYPE3_GLYPH_A"),
+            stream("", b"% PUBLIC_TYPE3_GLYPH_B"),
+        ];
+        objs.extend((0..FORMS).map(|_| {
+            stream("/Type /XObject /Subtype /Form /BBox [0 0 300 50] /Resources << /ProcSet [/PDF] >>", b"BT /T3 10 Tf 10 20 Td (B) Tj ET")
+        }));
+        // Each page's resources are its own where it lists a form it doesn't draw.
+        let resources = |i| if shape == Shape::Undrawn { first_page + PAGES + i } else { 4 };
+        objs.extend((0..PAGES).map(|i| {
+            format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 3 0 R /Resources {} 0 R >>", resources(i)).into_bytes()
+        }));
+        if shape == Shape::Undrawn {
+            objs.extend((0..PAGES).map(|i| format!("<< /Font << /T3 6 0 R >> /XObject << /H {} 0 R >> >>", first_page + 2 * PAGES + i).into_bytes()));
+            let holder = format!("/Type /XObject /Subtype /Form /BBox [0 0 300 50] /Resources << /Font << /T3 6 0 R >> /XObject << {names}>> >>");
+            objs.extend((0..PAGES).map(|_| stream(&holder, draws.as_bytes())));
+        }
+        let mut doc = pdf(objs);
+        mark(&mut doc, 0, &[[9.0, 95.0, 16.0, 110.0]], "");
+        crate::type3::TYPE3_FORM_SCANS.with(|c| c.set(0));
+        let out = apply(&mut doc, None);
+        assert!(out.is_ok(), "{shape:?}: {out:?}");
+        assert!(full_save_holds(&doc, b"PUBLIC_TYPE3_GLYPH_B"), "{shape:?}");
+        crate::type3::TYPE3_FORM_SCANS.with(std::cell::Cell::get)
+    };
+    assert_eq!(run(Shape::Drawn), FORMS * PAGES);
+    // `/T` too, once for each page.
+    assert_eq!(run(Shape::InTemplate), (FORMS + 1) * PAGES);
+    assert_eq!(run(Shape::Undrawn), FORMS * PAGES);
+}
+
+/// A page showing A with its Type 3 font, then drawing the first of `layers` layers of two forms
+/// with resources of their own, each drawing both forms of the next; the last draw `last` forms
+/// without resources, each showing B with the page's font through their names and holding a comment
+/// `pad` bytes long.
+fn forms_drawn_in_layers(layers: usize, last: usize, pad: usize) -> Document {
+    let mut objs = vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources 5 0 R >>".to_vec(),
+        stream("", b"BT /T3 10 Tf 10 100 Td (A) Tj ET /A Do /B Do"),
+        b"<< /Font << /T3 6 0 R >> /XObject << /A 9 0 R /B 10 0 R >> >>".to_vec(),
+        TYPE3.as_bytes().to_vec(),
+        stream("", b"% SECRET_TYPE3_GLYPH_A"),
+        stream("", b"% PUBLIC_TYPE3_GLYPH_B"),
+    ];
+    let first_shown = 9 + 2 * layers;
+    for layer in 0..layers {
+        let (names, draws): (String, String) = if layer + 1 < layers {
+            let next = 9 + 2 * (layer + 1);
+            (format!("/A {next} 0 R /B {} 0 R ", next + 1), "/A Do /B Do".into())
+        } else {
+            ((0..last).map(|i| format!("/Z{i} {} 0 R ", first_shown + i)).collect(), (0..last).map(|i| format!("/Z{i} Do ")).collect())
+        };
+        let form = format!("/Type /XObject /Subtype /Form /BBox [0 0 300 50] /Resources << /XObject << {names}>> >>");
+        objs.extend((0..2).map(|_| stream(&form, draws.as_bytes())));
+    }
+    let shown = format!("BT /T3 10 Tf 10 20 Td (B) Tj ET\n%{}", "x".repeat(pad));
+    objs.extend((0..last).map(|_| stream("/Type /XObject /Subtype /Form /BBox [0 0 300 50]", shown.as_bytes())));
+    pdf(objs)
+}
+
+/// The forms of the last of twelve layers ([`forms_drawn_in_layers`]) each draw sixteen forms
+/// without resources, reached in 4,096 ways each. Their scans made again count with the others:
+/// neither their 65,520 nor the 8,166 of the forms with resources of their own passes 65,536, but
+/// together they do, and the redaction is refused. At eight layers B stays.
+#[test]
+fn a_type3_scan_counts_forms_without_resources_scanned_again() {
+    let run = |layers| {
+        let mut doc = forms_drawn_in_layers(layers, 16, 0);
+        mark(&mut doc, 0, &[[9.0, 95.0, 16.0, 110.0]], "");
+        let out = apply(&mut doc, None);
+        let kept = out.is_ok() && full_save_holds(&doc, b"PUBLIC_TYPE3_GLYPH_B");
+        (out, kept)
+    };
+    let (out, kept) = run(8);
+    assert_eq!((out.map(|r| r.glyphs), kept), (Ok(1), true));
+    let (out, _) = run(12);
+    assert!(refused_for(&out, "forms are drawn in too many ways"), "{out:?}");
+}
+
+/// The forms of the last of eight layers ([`forms_drawn_in_layers`]) draw one form without
+/// resources, 1.1 MB long, reached in 256 ways. Of the scans made again, 749 would count, far from
+/// 65,536, but the 255 of that form would decode about 268 MiB, past an allowance of a page
+/// (256 MiB), and the redaction is refused.
+#[test]
+fn a_type3_scan_charges_what_forms_scanned_again_decode() {
+    let mut doc = forms_drawn_in_layers(8, 1, 1_100_000);
+    mark(&mut doc, 0, &[[9.0, 95.0, 16.0, 110.0]], "");
+    let out = apply(&mut doc, None);
+    assert!(refused_for(&out, "forms are drawn in too many ways"), "{out:?}");
+}

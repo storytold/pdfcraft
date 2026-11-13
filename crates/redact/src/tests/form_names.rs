@@ -1010,3 +1010,123 @@ fn a_type3_font_written_in_place_is_searched_once() {
 fn type3_font_drawing_x() -> String {
     "<< /Type /Font /Subtype /Type3 /FontBBox [0 0 1000 1000] /FontMatrix [0.001 0 0 0.001 0 0] /CharProcs << /a 8 0 R >> /Encoding << /Type /Encoding /Differences [97 /a] >> /FirstChar 97 /LastChar 97 /Widths [1000] /Resources << /XObject << /X 9 0 R >> >> >>".to_string()
 }
+
+/// The page draws its image under the mark, and a form beside it draws the same `/Im` through the
+/// page's names, its own resources lacking it: the page's cleanup follows that form and keeps the
+/// image, which still shows beside the mark. Where the form's own `/Im` is a form drawing nothing,
+/// nothing else draws the page's, and its bytes leave the file. A form without resources draws it
+/// too, as before.
+#[test]
+fn an_image_a_form_draws_beside_the_mark_through_its_callers_names_stays() {
+    let run = |form_res: &str| {
+        let image = stream("/Type /XObject /Subtype /Image /Width 6 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8", b"SECRET_IMAGE_BYTES");
+        let form = stream(&format!("/Type /XObject /Subtype /Form /BBox [0 0 300 100] {form_res}"), b"q 100 0 0 30 20 20 cm /Im Do Q");
+        let empty = stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300]", b"");
+        let mut doc = one_page(b"q 100 0 0 30 20 240 cm /Im Do Q /Fm Do", "/XObject << /Im 7 0 R /Fm 8 0 R >>", vec![image, form, empty]);
+        mark(&mut doc, 0, &[[0.0, 230.0, 300.0, 280.0]], "");
+        let report = apply(&mut doc, None).unwrap();
+        (report.images_removed, full_save_holds(&doc, b"SECRET_IMAGE_BYTES"))
+    };
+    assert_eq!(run("/Resources << /ProcSet [/PDF] >>"), (1, true));
+    assert_eq!(run("/Resources << /XObject << /Im 9 0 R >> >>"), (1, false));
+    // An own `/Im` that is a number is no XObject: the page's is drawn.
+    assert_eq!(run("/Resources << /XObject << /Im 5 >> >>"), (1, true));
+    assert_eq!(run(""), (1, true));
+}
+
+/// A form the redaction rewrites draws, through its own `/XObject`, a form beside the mark whose
+/// own resources lack `/X`, which it draws through the rewritten form's names: the rewritten form
+/// keeps `/X`. Where that form's own `/X` is a form drawing nothing, the image goes.
+#[test]
+fn an_image_a_nested_form_draws_through_a_rewritten_forms_names_stays() {
+    let run = |inner_res: &str| {
+        let outer = stream(
+            "/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << /Font << /F1 5 0 R >> /XObject << /X 9 0 R /G 10 0 R >> >>",
+            b"BT /F1 10 Tf 20 250 Td (SECRET) Tj ET /G Do",
+        );
+        let image = stream("/Type /XObject /Subtype /Image /Width 6 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8", b"OUTSIDE_IMAGE_BYTES");
+        let inner = stream(&format!("/Type /XObject /Subtype /Form /BBox [0 0 300 100] {inner_res}"), b"q 100 0 0 30 20 20 cm /X Do Q");
+        let empty = stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300]", b"");
+        let mut doc = one_page(b"/Fm Do", "/XObject << /Fm 7 0 R >>", vec![outer, empty.clone(), image, inner, empty]);
+        mark(&mut doc, 0, &[[0.0, 230.0, 300.0, 280.0]], "");
+        let report = apply(&mut doc, None).unwrap();
+        (report.glyphs, full_save_holds(&doc, b"OUTSIDE_IMAGE_BYTES"))
+    };
+    assert_eq!(run("/Resources << /ProcSet [/PDF] >>"), (6, true));
+    assert_eq!(run("/Resources << /XObject << /X 11 0 R >> >>"), (6, false));
+}
+
+/// A form beside the mark with resources of its own marks content with `/MC0`, which its own
+/// resources don't give: it reads properties in its own, so the page's `/MC0`, which nothing on
+/// the page names, still goes.
+#[test]
+fn a_forms_own_marked_content_keeps_nothing_of_the_pages_properties() {
+    let form = stream("/Type /XObject /Subtype /Form /BBox [0 0 300 100] /Resources << /ProcSet [/PDF] >>", b"/OC /MC0 BDC 0 0 10 10 re f EMC");
+    let layer = b"<< /Type /OCG /Name (PAGE_LAYER_NAME) >>".to_vec();
+    let mut doc =
+        one_page(b"BT /F1 10 Tf 20 250 Td (SECRET) Tj ET /Fm Do", "/XObject << /Fm 7 0 R >> /Properties << /MC0 8 0 R >>", vec![form, layer]);
+    mark(&mut doc, 0, &[[0.0, 230.0, 300.0, 280.0]], "");
+    assert_eq!(apply(&mut doc, None).unwrap().glyphs, 6);
+    let page = pdfcraft_model::pages(&doc)[0].dict.clone();
+    let res = page.get(b"Resources").and_then(|r| doc.resolve(r).as_dict().cloned()).unwrap();
+    let properties = res.get(b"Properties").and_then(|p| doc.resolve(p).as_dict().cloned()).unwrap_or_default();
+    assert!(properties.get(b"MC0").is_none(), "{properties:?}");
+}
+
+/// Inside a form with resources of its own, beside the mark, a form without resources marks content
+/// with `/MC1`: it reads the page's properties (ISO 32000-2 §7.8.3), so the page keeps `/MC1`.
+#[test]
+fn a_nested_form_without_resources_keeps_the_pages_property() {
+    let outer = stream("/Type /XObject /Subtype /Form /BBox [0 0 300 100] /Resources << /XObject << /G 8 0 R >> >>", b"/G Do");
+    let inner = stream("/Type /XObject /Subtype /Form /BBox [0 0 300 100]", b"/OC /MC1 BDC 0 0 10 10 re f EMC");
+    let layer = b"<< /Type /OCG /Name (PAGE_LAYER_NAME) >>".to_vec();
+    let mut doc =
+        one_page(b"BT /F1 10 Tf 20 250 Td (SECRET) Tj ET /Fm Do", "/XObject << /Fm 7 0 R >> /Properties << /MC1 9 0 R >>", vec![outer, inner, layer]);
+    mark(&mut doc, 0, &[[0.0, 230.0, 300.0, 280.0]], "");
+    assert_eq!(apply(&mut doc, None).unwrap().glyphs, 6);
+    let page = pdfcraft_model::pages(&doc)[0].dict.clone();
+    let res = page.get(b"Resources").and_then(|r| doc.resolve(r).as_dict().cloned()).unwrap();
+    let properties = res.get(b"Properties").and_then(|p| doc.resolve(p).as_dict().cloned()).unwrap_or_default();
+    assert!(properties.get(b"MC1").is_some(), "{properties:?}");
+}
+
+/// A form beside the mark with resources of its own draws itself, or one that draws it back, and
+/// the page's image through the page's names: the cleanups follow each once, open a scope for each
+/// form on the way and no more, and keep the image.
+#[test]
+fn forms_drawing_themselves_open_a_scope_each() {
+    for (fa, fb) in [(&b"/Fa Do q 100 0 0 30 20 20 cm /Im Do Q"[..], &b""[..]), (b"/Fb Do", b"/Fa Do q 100 0 0 30 20 20 cm /Im Do Q")] {
+        let image = stream("/Type /XObject /Subtype /Image /Width 6 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8", b"SECRET_IMAGE_BYTES");
+        let own = "/Type /XObject /Subtype /Form /BBox [0 0 300 100] /Resources << /ProcSet [/PDF] >>";
+        let mut doc = one_page(
+            b"q 100 0 0 30 20 240 cm /Im Do Q /Fa Do",
+            "/XObject << /Im 7 0 R /Fa 8 0 R /Fb 9 0 R >>",
+            vec![image, stream(own, fa), stream(own, fb)],
+        );
+        mark(&mut doc, 0, &[[0.0, 230.0, 300.0, 280.0]], "");
+        crate::interp::CLEANUP_SCOPES.with(|c| c.set(0));
+        assert_eq!(apply(&mut doc, None).unwrap().images_removed, 1);
+        assert!(full_save_holds(&doc, b"SECRET_IMAGE_BYTES"));
+        let forms = if fb.is_empty() { 1 } else { 2 };
+        // The page's XObject and font cleanups each open one scope for each form.
+        assert_eq!(crate::interp::CLEANUP_SCOPES.with(std::cell::Cell::get), 2 * forms);
+    }
+}
+
+/// Sixty forms beside the mark, each with resources of its own giving the next: the cleanups follow
+/// the chain no deeper than the walk follows forms, opening 50 scopes in each of the page's XObject
+/// and font cleanups.
+#[test]
+fn a_chain_of_forms_is_followed_no_deeper_than_the_walk() {
+    let image = stream("/Type /XObject /Subtype /Image /Width 6 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8", b"SECRET_IMAGE_BYTES");
+    let mut objs = vec![image];
+    for i in 0..60 {
+        let (next, content): (String, &[u8]) = if i + 1 < 60 { (format!("/XObject << /F {} 0 R >>", 9 + i), b"/F Do") } else { (String::new(), b"") };
+        objs.push(stream(&format!("/Type /XObject /Subtype /Form /BBox [0 0 300 100] /Resources << /ProcSet [/PDF] {next} >>"), content));
+    }
+    let mut doc = one_page(b"q 100 0 0 30 20 240 cm /Im Do Q /F Do", "/XObject << /Im 7 0 R /F 8 0 R >>", objs);
+    mark(&mut doc, 0, &[[0.0, 230.0, 300.0, 280.0]], "");
+    crate::interp::CLEANUP_SCOPES.with(|c| c.set(0));
+    assert_eq!(apply(&mut doc, None).unwrap().images_removed, 1);
+    assert_eq!(crate::interp::CLEANUP_SCOPES.with(std::cell::Cell::get), 2 * crate::interp::MAX_DEPTH);
+}

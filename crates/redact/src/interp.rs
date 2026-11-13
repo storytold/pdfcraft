@@ -31,7 +31,7 @@ mod prune;
 
 use layers::strip_hidden_layers;
 #[cfg(test)]
-pub(crate) use prune::{SHARED_FORM_READS, SHARED_SCOPES};
+pub(crate) use prune::{CLEANUP_SCOPES, SHARED_FORM_READS, SHARED_SCOPES};
 use prune::{clip_out, extgstate_font, prune_form_resources};
 pub(crate) use prune::{prune, prune_patterns, prune_properties, resource_ops, unlink_doomed, unlink_pruned_patterns, unlink_undrawn};
 

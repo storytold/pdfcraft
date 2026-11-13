@@ -141,11 +141,28 @@ masks and Type 3 glyphs looks names up so too (a glyph in its font's resources b
 the content whose resources give the font), reading them in place instead of copying them, so
 this bound doesn't apply there; it searches such a stream again in each scope where what it draws
 is looked up through what draws it, up to 4,096 such searches on a page, past which it says it
-can't check. The walk, the verification pass and the check of what pages
-sharing a resource dictionary still draw read it so; the cleanup of a rewritten page's own resources (the XObjects it
-replaced, its fonts and properties, and a rewritten form's own XObjects) and the Type 3 font cleanup don't, and can drop something such
-a form still draws beside a mark, or a property such a form's marked content names, which then shows
-what its layer hid. Content that can't be
+can't check. The walk, the verification pass, the check of what pages sharing a resource
+dictionary still draw, the cleanups of a rewritten page's and form's own resources (the XObjects
+replaced, fonts and properties) and the Type 3 font cleanup all read it so. A form without
+resources of its own inside such a form reads the page's properties, and the page keeps them. The
+cleanups of a page's and form's own resources read a form with resources of its own as far as they
+can, within an allowance of a page of their own, not following a form drawn inside itself again
+nor a chain deeper than the walk follows forms. One that doesn't decode isn't read, bytes the
+parser can't read in one are passed over, and past that allowance, 2,000,000 of such forms'
+operators or 65,536 scopes the rest aren't read, never failing the operation, so a name drawn only
+there can still be dropped, losing paint beside a mark; a name nothing draws is never kept,
+except a property named by a form whose `/Resources` isn't a dictionary, which is kept as the page's. The
+Type 3 font cleanup's scan of the glyphs shown is the exception: it reads such forms in full, as
+before, and scans one again under another chain of names only where its scan looked a name up
+past its own resources, found there or not. It fails past 65,536 scans in all of forms, with
+resources of their own or without, made again in another chain of names while the same page, or
+form no page draws, is scanned, or past an allowance of a page decoded by them in all. So pages
+that each reach one form through many forms with resources of their own add up: 50 pages, each
+drawing 30 such forms that draw one 200 KB form showing text with the page's Type 3 font, are
+refused.
+Colour spaces and shadings that a form with resources of its own, or a form without resources
+inside it, takes from its caller aren't counted, as the walk doesn't look them up by name, so the
+Type 3 font cleanup can drop one that a form inside a font's form takes that way. Content that can't be
 decoded makes the operation fail rather than leave it unredacted, and so does an inline image the
 renderer's tokenizer reads no image for (`RedactError::Unreadable`): where the page's operators
 resume after it would be a guess. So do bytes the content parser can't read, in the page's content
