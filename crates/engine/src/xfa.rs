@@ -67,6 +67,8 @@ struct Clock {
     #[cfg(not(target_arch = "wasm32"))]
     started: std::time::Instant,
     budget_ms: u64,
+    /// Time the scripts spent waiting for the user: not counted.
+    waited: std::time::Duration,
 }
 
 impl Clock {
@@ -75,17 +77,23 @@ impl Clock {
             #[cfg(not(target_arch = "wasm32"))]
             started: std::time::Instant::now(),
             budget_ms,
+            waited: std::time::Duration::ZERO,
         }
+    }
+
+    /// Leave `waited` out of the time spent: the time the scripts waited for the user isn't theirs.
+    fn extend(&mut self, waited: std::time::Duration) {
+        self.waited = self.waited.saturating_add(waited);
     }
 
     fn spent(&self) -> bool {
         #[cfg(not(target_arch = "wasm32"))]
         {
-            self.started.elapsed() >= std::time::Duration::from_millis(self.budget_ms)
+            self.started.elapsed().saturating_sub(self.waited) >= std::time::Duration::from_millis(self.budget_ms)
         }
         #[cfg(target_arch = "wasm32")]
         {
-            let _ = self.budget_ms;
+            let _ = (self.budget_ms, self.waited);
             false
         }
     }
@@ -135,6 +143,28 @@ pub(crate) struct XfaRun<'a> {
     /// start and each script's own): 1, unless the session was given another
     /// ([`crate::Session::with_xfa_time_scale`]).
     pub time_scale: u32,
+    /// The answers to the event's message boxes.
+    pub answers: XfaAnswers,
+}
+
+/// The answers to one event's message boxes (`xfa.host.messageBox`, `$host.messageBox`,
+/// `app.alert`): its click script and the calculations after it take them in order, each
+/// script starting after the ones the scripts before it took. Past them, a message box asks the
+/// user when `prompts` is set (an app's button click, run on a worker:
+/// [`crate::Session::start_javascript_target`]), and otherwise gets its buttons' safe default.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct XfaAnswers {
+    /// The answers, in order (`None`: closed without picking a button).
+    pub given: Vec<Option<String>>,
+    /// Message boxes the event's scripts have shown so far.
+    pub used: usize,
+    /// Where the scripts' questions go, for the viewer to ask.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub prompts: Option<std::sync::mpsc::Sender<crate::js::InteractiveEvent>>,
+    /// Questions the event has asked, across the script sessions it uses
+    /// ([`XfaSession::with_prompts`]).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub asked: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 /// The script engine's copies of a form's property trees, by the address of the tree each was
@@ -546,7 +576,17 @@ impl<'a, 'b> Runner<'a, 'b> {
     fn session(&mut self) -> &mut XfaSession {
         let doc_info = XfaDoc { file_name: String::new(), page: 0, page_count: self.run.page_count, highlight: self.run.highlight };
         let scale = self.run.time_scale;
-        self.session.get_or_insert_with(|| XfaSession::new(doc_info).with_time_scale(scale))
+        #[cfg(not(target_arch = "wasm32"))]
+        let (prompts, asked) = (self.run.answers.prompts.clone(), Arc::clone(&self.run.answers.asked));
+        self.session.get_or_insert_with(|| {
+            let session = XfaSession::new(doc_info).with_time_scale(scale);
+            #[cfg(not(target_arch = "wasm32"))]
+            let session = match prompts {
+                Some(p) => session.with_prompts(p, asked),
+                None => session,
+            };
+            session
+        })
     }
 
     /// Give the object at `som` the value `text` in the data and in the live form (refreshed
@@ -986,7 +1026,14 @@ impl<'a, 'b> Runner<'a, 'b> {
         self.runs += 1;
         #[cfg(test)]
         self.check_live();
-        let event = XfaEvent { activity: ev.activity.clone(), target: ev.som.clone(), new_text: new_text.to_string(), prev_text: String::new() };
+        let used = self.run.answers.used;
+        let event = XfaEvent {
+            activity: ev.activity.clone(),
+            target: ev.som.clone(),
+            new_text: new_text.to_string(),
+            prev_text: String::new(),
+            answers: self.run.answers.given.get(used..).unwrap_or_default().to_vec(),
+        };
         let tpl = self.tpl;
         let root = match &self.js_root {
             Some(r) => Arc::clone(r),
@@ -1010,6 +1057,8 @@ impl<'a, 'b> Runner<'a, 'b> {
             // The thread is left to the runaway script: nothing more is sent to it.
             self.session = None;
         }
+        self.clock.extend(o.waited);
+        self.run.answers.used = used.saturating_add(o.messages);
         self.console(o.console.iter().cloned());
         for n in &o.notes {
             self.error(format!("{} ({}): {n}", ev.som, ev.activity));

@@ -75,33 +75,18 @@ pub(crate) fn message_box_message(args: &[JsValue], ctx: &mut Context) -> JsResu
 }
 
 /// `app.alert(cMsg, nIcon, nType, cTitle)`: records the message with its title, icon and buttons,
-/// given in that order or as one object with those keys, and returns 1 (the OK button).
+/// given in that order or as one object with those keys, and returns the button picked (1 OK,
+/// 2 Cancel, 3 No, 4 Yes). Where nobody can be asked (the web build, a script run outside a
+/// document's session), that is the buttons' safe default, as when the dialog is closed.
 fn alert(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     let m = alert_message(args, ctx)?;
     host(ctx)?.borrow_mut().alert(m.clone());
     if !crate::interaction::has_host() {
-        return Ok(JsValue::from(1));
+        return Ok(JsValue::from(i32::from(m.buttons.safe_default())));
     }
     let answer = crate::interaction::ask(crate::interaction::Prompt::Alert(m.clone()))?;
-    let fallback = match m.buttons {
-        MessageButtons::Ok => "1",
-        MessageButtons::YesNo => "3",
-        _ => "2",
-    };
-    let answer = answer.as_deref().unwrap_or(fallback);
-    let accepted = match m.buttons {
-        MessageButtons::Ok => ["1"].as_slice(),
-        MessageButtons::OkCancel => ["1", "2"].as_slice(),
-        MessageButtons::YesNo => ["3", "4"].as_slice(),
-        MessageButtons::YesNoCancel => ["2", "3", "4"].as_slice(),
-    };
-    if answer == "1" && !accepted.contains(&"1") {
-        return Ok(JsValue::from(2));
-    }
-    if !accepted.contains(&answer) {
-        return Err(error("invalid alert response"));
-    }
-    Ok(JsValue::from(answer.parse::<i32>().unwrap_or(2)))
+    let reply = m.buttons.reply(answer.as_deref()).ok_or_else(|| error("invalid alert response"))?;
+    Ok(JsValue::from(i32::from(reply)))
 }
 
 /// `app.beep()`: queues a request to beep.

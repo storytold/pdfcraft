@@ -1173,24 +1173,18 @@ impl Session {
         let doc = self.get(id).ok_or(EditError::NoDocument)?;
         let cos = doc.editor.as_ref().map(|e| e.cos.clone()).ok_or_else(|| EditError::ReadOnly(doc.read_only_reason.clone().unwrap_or_default()))?;
         validate_script_target(target, target_id, &doc.form)?;
-        // A button PdfCraft generated from an XFA template runs its XFA click script.
-        if let Some(t) = target
-            && event_name.is_none_or(|n| n == "Mouse Up")
-            && let Some(tpl) = doc.xfa_template.clone()
-            && let Some(field) = doc.form.iter().find(|f| f.name == t && target_id.is_none_or(|id| field_object_id(f.obj) == id))
-            && field.kind == crate::FormFieldKind::PushButton
-            && let Some(som) = crate::xfa::clickable_som(&cos, &tpl, field)
+        // A button PdfCraft generated from an XFA template runs its XFA click script, its
+        // message boxes taking `answers` (then their buttons' safe default: nobody is asked).
+        if event_name.is_none_or(|n| n == "Mouse Up")
+            && let Some(som) = xfa_click_som(doc, &cos, target, target_id)
         {
+            self.xfa_answers = Some(crate::xfa::XfaAnswers { given: answers.to_vec(), ..Default::default() });
             // The click returns only the output of its own edit; output from opening or from earlier edits stays.
-            let ((), out) = self.with_own_js_output(id, |s| s.apply(id, Edit::XfaEvent { som, activity: "click".into() }))?;
-            return Ok(Outcome {
-                rc: true,
-                alerts: out.alerts,
-                console: out.console,
-                requests: out.requests,
-                error: out.errors.first().cloned(),
-                ..Default::default()
-            });
+            let ran = self.with_own_js_output(id, |s| s.apply(id, Edit::XfaEvent { som, activity: "click".into() }));
+            // Not taken when the edit stopped before it ran the event: no later edit takes it.
+            self.xfa_answers = None;
+            let ((), out) = ran?;
+            return Ok(xfa_click_outcome(out));
         }
         let mut runner = JsRunner::new(&cos, &doc.name, self.field_highlight);
         runner.doc.zoom = doc.js_zoom;
@@ -1642,6 +1636,32 @@ mod caption_tests {
     }
 }
 
+/// The SOM path of the XFA click script button `target` runs, when it is a push button PdfCraft
+/// generated from a laid-out XFA form's template.
+fn xfa_click_som(doc: &crate::Document, cos: &pdfcraft_cos::Document, target: Option<&str>, target_id: Option<u64>) -> Option<String> {
+    let t = target?;
+    let tpl = doc.xfa_template.as_ref()?;
+    let field = doc.form.iter().find(|f| f.name == t && target_id.is_none_or(|id| field_object_id(f.obj) == id))?;
+    if field.kind != crate::FormFieldKind::PushButton {
+        return None;
+    }
+    crate::xfa::clickable_som(cos, tpl, field)
+}
+
+/// What an XFA button click did, as a button script's outcome.
+fn xfa_click_outcome(out: JsOutput) -> Outcome {
+    Outcome { rc: true, alerts: out.alerts, console: out.console, requests: out.requests, error: out.errors.first().cloned(), ..Default::default() }
+}
+
+/// Stack for the thread an XFA button click runs on in the app: it lays the form out again, as
+/// the app's main thread does for other edits.
+#[cfg(not(target_arch = "wasm32"))]
+const XFA_CLICK_STACK: usize = 8 << 20;
+
+/// An XFA button click's edit, once its worker has run it ([`Session::start_javascript_target`]).
+#[cfg(not(target_arch = "wasm32"))]
+type XfaClick = std::sync::Arc<std::sync::Mutex<Option<(crate::session::BegunEdit, Result<(), EditError>)>>>;
+
 #[cfg(not(target_arch = "wasm32"))]
 pub struct PendingScript {
     pub id: DocId,
@@ -1649,6 +1669,16 @@ pub struct PendingScript {
     runtime: Runtime,
     states: std::sync::Arc<Vec<pdfcraft_js::FieldState>>,
     pub receiver: std::sync::mpsc::Receiver<pdfcraft_js::interaction::InteractiveEvent>,
+    /// An XFA button click: its edit, filled in by its worker before it completes.
+    xfa: Option<XfaClick>,
+}
+#[cfg(not(target_arch = "wasm32"))]
+impl PendingScript {
+    /// Whether this is an XFA button's click ([`Session::start_javascript_target`]). It reads
+    /// no view state (zoom, page) the way an AcroForm script does, and its own limits bound it.
+    pub fn is_xfa(&self) -> bool {
+        self.xfa.is_some()
+    }
 }
 #[cfg(not(target_arch = "wasm32"))]
 impl Session {
@@ -1673,12 +1703,15 @@ impl Session {
         }
         let doc = self.get(id).ok_or(EditError::NoDocument)?;
         let cos = &doc.editor.as_ref().ok_or_else(|| EditError::ReadOnly(doc.read_only_reason.clone().unwrap_or_default()))?.cos;
+        let fields = pdfcraft_forms::fields(cos);
+        validate_script_target(target, target_id, &fields)?;
+        if let Some(som) = xfa_click_som(doc, cos, target, target_id) {
+            return self.start_xfa_click(id, som);
+        }
         let mut runner = JsRunner::new(cos, &doc.name, self.field_highlight);
         runner.doc.zoom = doc.js_zoom;
         runner.doc.page = doc.js_page;
         runner.doc.layers = crate::live_scripts::js_layers(&doc.info);
-        let fields = pdfcraft_forms::fields(cos);
-        validate_script_target(target, target_id, &fields)?;
         let states = std::sync::Arc::new(fields.iter().map(|f| crate::live_scripts::live_state(doc, cos, f, &runner.doc)).collect::<Vec<_>>());
         let job = pdfcraft_js::session::Job {
             script: script.into(),
@@ -1694,10 +1727,59 @@ impl Session {
         };
         let receiver =
             doc.js_runtime.lock().map_err(|_| EditError::Invalid("script runtime unavailable".into()))?.start(job).map_err(EditError::Invalid)?;
-        Ok(PendingScript { id, generation: doc.generation, runtime: doc.js_runtime.clone(), states, receiver })
+        Ok(PendingScript { id, generation: doc.generation, runtime: doc.js_runtime.clone(), states, receiver, xfa: None })
+    }
+
+    /// Start XFA button `som`'s click on a worker, so the app goes on drawing while it runs and
+    /// can ask its message boxes' questions: each comes through the pending script's receiver
+    /// as a prompt, and the script waits for the answer with its clock stopped. Once the worker
+    /// is done, [`Session::finish_javascript`] keeps the click as one undo step, as
+    /// [`Session::apply`] would, unless the document changed meanwhile.
+    fn start_xfa_click(&mut self, id: DocId, som: String) -> Result<PendingScript, EditError> {
+        let (prompts, receiver) = std::sync::mpsc::channel();
+        self.xfa_answers = Some(crate::xfa::XfaAnswers { prompts: Some(prompts.clone()), ..Default::default() });
+        let begun = self.begin_edit(id, Edit::XfaEvent { som, activity: "click".into() });
+        // Not taken when the edit stopped before it began.
+        self.xfa_answers = None;
+        let begun = begun?;
+        let doc = self.get(id).ok_or(EditError::NoDocument)?;
+        let click: XfaClick = Default::default();
+        let pending = PendingScript {
+            id,
+            generation: doc.generation,
+            runtime: doc.js_runtime.clone(),
+            states: Default::default(),
+            receiver,
+            xfa: Some(click.clone()),
+        };
+        let Some(mut begun) = begun else {
+            // Nothing to run: done at once.
+            let _ = prompts.send(InteractiveEvent::Complete(Outcome::default()));
+            return Ok(pending);
+        };
+        let ran_away = std::sync::Arc::clone(&doc.xfa_ran_away);
+        std::thread::Builder::new()
+            .name("pdfcraft-xfa-click".into())
+            .stack_size(XFA_CLICK_STACK)
+            .spawn(move || {
+                let checked = crate::session::run_checked_edit(&mut begun.next, &begun.edit, &mut begun.cx);
+                if begun.cx.xfa_ran_away {
+                    ran_away.store(true, std::sync::atomic::Ordering::Relaxed);
+                }
+                // A poisoned lock only means a panic elsewhere while it was held: the slot is still ours.
+                *click.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some((begun, checked));
+                // The app may have stopped waiting: then nobody takes the click.
+                let _ = prompts.send(InteractiveEvent::Complete(Outcome::default()));
+            })
+            .map_err(|e| EditError::Invalid(format!("the form script could not start: {e}")))?;
+        Ok(pending)
     }
     /// Discard only the captured runtime, preserving a newer realm created by an intervening edit.
     pub fn discard_javascript(&mut self, p: &PendingScript) {
+        // An XFA click's worker holds no realm: what it did is dropped with the pending script.
+        if p.xfa.is_some() {
+            return;
+        }
         if let Some(doc) = self.docs.iter_mut().find(|d| d.id == p.id)
             && std::sync::Arc::ptr_eq(&doc.js_runtime, &p.runtime)
         {
@@ -1706,6 +1788,10 @@ impl Session {
     }
     /// Discard a timed-out invocation and retain the worker slot until its thread exits.
     pub fn timeout_javascript(&mut self, p: PendingScript) {
+        // An XFA click's scripts are bounded on its worker; what it did is dropped.
+        if p.xfa.is_some() {
+            return;
+        }
         if self.script_pending_current(&p)
             && let Ok(mut runtime) = p.runtime.lock()
         {
@@ -1717,6 +1803,21 @@ impl Session {
 
     /// Apply a current worker result, or discard it and reset the realm when the document changed.
     pub fn finish_javascript(&mut self, p: PendingScript, out: Outcome) -> Result<Outcome, EditError> {
+        if let Some(click) = &p.xfa {
+            if !self.script_pending_current(&p) {
+                return Err(EditError::Invalid("document changed while the script was running".into()));
+            }
+            let ran = click.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take();
+            let Some((begun, checked)) = ran else { return Ok(Outcome { rc: true, ..Default::default() }) };
+            let ran_away = begun.cx.xfa_ran_away;
+            let ((), out) = self.with_own_js_output(p.id, |s| s.finish_edit(p.id, begun, checked).map(|_| ()))?;
+            // Kept, a click that ran away turned the scripts off itself: not again. A flag another
+            // click set (one this commit makes stale) stays for the next edit.
+            if ran_away && let Some(d) = self.get(p.id) {
+                d.xfa_ran_away.store(false, std::sync::atomic::Ordering::Relaxed);
+            }
+            return Ok(xfa_click_outcome(out));
+        }
         if !self.script_pending_current(&p) {
             self.discard_javascript(&p);
             return Err(EditError::Invalid("document changed while the script was running".into()));

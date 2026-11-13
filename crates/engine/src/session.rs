@@ -20,6 +20,8 @@ use crate::{
 };
 
 mod editing;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) use editing::{BegunEdit, run_checked_edit};
 mod files;
 mod save;
 mod view;
@@ -51,4 +53,7 @@ pub struct Session {
     /// What the XFA scripts' time limits are multiplied by (`None`: 1); see
     /// [`Session::with_xfa_time_scale`].
     pub(crate) xfa_time_scale: Option<u32>,
+    /// The answers the next XFA event takes for its message boxes, set by the caller running it
+    /// (`js_run`'s answers, an app's button click) and taken by that event's edit.
+    pub(crate) xfa_answers: Option<crate::xfa::XfaAnswers>,
 }

@@ -11119,6 +11119,42 @@ fn xfa_scripts_run_for_buttons_and_field_changes_through_tools() {
     assert_eq!(r["alerts"], json!([{ "message": "Hello 4", "title": null, "icon": "error", "buttons": "ok" }]));
 }
 
+/// An XFA button that asks Yes or No branches on the answer `js_run` gives, in JavaScript and
+/// FormCalc alike, and without one takes the No branch (#4291).
+#[test]
+fn js_run_answers_an_xfa_buttons_message_boxes() {
+    let dir = workdir("xfa-answers");
+    let tpl = pdfcraft_xfa::fixtures::scripted_template()
+        .replace(
+            r#"xfa.host.messageBox("Hello " + qty.rawValue);"#,
+            r#"qty.rawValue = xfa.host.messageBox("Clear?", "Order form", 2, 2) == 4 ? 0 : 7;"#,
+        )
+        .replace(r#"$host.messageBox("FormCalc")"#, r#"if ($host.messageBox("Sure?", "", 2, 1) == 1) then qty = 50 else qty = 9 endif"#);
+    std::fs::write(dir.join("asking.pdf"), pdfcraft_xfa::fixtures::shell(&tpl)).unwrap();
+    let mut a = auto(&dir).with_xfa_time_scale(100);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "asking.pdf" }))["doc"].as_u64().unwrap();
+    let qty = |a: &mut Automation| {
+        let f = ok(a, "form_fields", json!({ "doc": doc }));
+        f["fields"].as_array().unwrap().iter().find(|f| f["name"] == "qty").unwrap()["value"].clone()
+    };
+    let r = ok(&mut a, "js_run", json!({ "doc": doc, "script": "", "field": "hello", "answers": ["4"] }));
+    assert!(r["error"].is_null(), "{r}");
+    assert_eq!(r["alerts"], json!([{ "message": "Clear?", "title": "Order form", "icon": "question", "buttons": "yes_no" }]));
+    assert_eq!(qty(&mut a), "0");
+    ok(&mut a, "js_run", json!({ "doc": doc, "script": "", "field": "hello", "answers": ["3"] }));
+    assert_eq!(qty(&mut a), "7");
+    ok(&mut a, "js_run", json!({ "doc": doc, "script": "", "field": "legacy", "answers": ["1"] }));
+    assert_eq!(qty(&mut a), "50");
+    // No answer: No, and Cancel.
+    ok(&mut a, "js_run", json!({ "doc": doc, "script": "", "field": "hello" }));
+    assert_eq!(qty(&mut a), "7");
+    ok(&mut a, "js_run", json!({ "doc": doc, "script": "", "field": "legacy", "answers": [null] }));
+    assert_eq!(qty(&mut a), "9");
+    // An answer the buttons can't give is the script's error, naming it.
+    let r = ok(&mut a, "js_run", json!({ "doc": doc, "script": "", "field": "hello", "answers": ["2"] }));
+    assert!(r["error"].as_str().is_some_and(|e| e.contains("message box 1 (2)")), "{r}");
+}
+
 #[test]
 fn active_xfa_skips_container_fallback_scripts_after_save_and_reopen() {
     let dir = workdir("xfa-container-scripts");

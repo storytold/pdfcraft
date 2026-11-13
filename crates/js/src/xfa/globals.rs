@@ -43,23 +43,25 @@ fn set_runtime_highlight(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> Js
     Ok(JsValue::undefined())
 }
 
-/// `xfa.host.messageBox(message, title, icon, buttons)`: records the message with its title,
-/// icon and buttons, its text and title cut to [`MAX_LINE`] characters, and returns 1.
+/// Shows message box `m` and returns the button picked ([`XHost::message_box`]).
+fn show(ctx: &mut Context, m: crate::Message) -> JsResult<JsValue> {
+    let reply = host(ctx)?.borrow_mut().message_box(m).map_err(super::error)?;
+    Ok(JsValue::from(f64::from(reply)))
+}
+
+/// `xfa.host.messageBox(message, title, icon, buttons)`: shows the message with its title,
+/// icon and buttons, its text and title cut to [`MAX_LINE`] characters, and returns the button
+/// picked: 1 OK, 2 Cancel, 3 No, 4 Yes.
 fn message_box(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     let m = crate::globals::message_box_message(args, ctx)?;
-    effect(ctx, XfaEffect::MessageBox(m))?;
-    // Always OK for now: the viewer can't ask the user and run the script on with the answer
-    // yet (#4291).
-    Ok(JsValue::from(1.0))
+    show(ctx, m)
 }
 
 /// `app.alert(cMsg, nIcon, nType, cTitle)` in an XFA form's script: the same message box, its
 /// arguments in `app.alert`'s order (or one object with those keys).
 fn app_alert(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     let m = crate::globals::alert_message(args, ctx)?;
-    effect(ctx, XfaEffect::MessageBox(m))?;
-    // The OK button, as for `messageBox` (#4291).
-    Ok(JsValue::from(1.0))
+    show(ctx, m)
 }
 
 /// `xfa.host.resetData(names)`: asks to reset the comma-separated fields, or every field when
