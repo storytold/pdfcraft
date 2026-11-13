@@ -65,7 +65,10 @@ clear_marks(&mut doc, None)?;                        // remove marks without app
   nothing paints inside the areas;
 - **form XObjects**: rewritten recursively into new objects (pages sharing the original keep it);
 - **annotations** whose rectangle overlaps (with their pop-ups and their replies, `/IRT`), and **form fields** with a
-  widget under a mark;
+  widget under a mark. On a selected page, a non-popup annotation with no readable `/Rect`
+  (exactly four finite numbers, including referenced coordinates) refuses the entire operation
+  with its page and annotation number. Repair or remove it before applying again; nothing changes
+  on refusal. An unreadable rectangle is not treated as evidence that it misses the marks;
 - the marks themselves, replaced by boxes in their fill colour (and overlay text) drawn into the
   page as a `/PCMark /Redaction` stream;
 - **metadata** that repeats the removed text (#2448): `/Info` entries containing it or wholly

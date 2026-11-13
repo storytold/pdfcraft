@@ -70,6 +70,12 @@ pub enum RedactError {
         "{0} redaction mark(s) have no readable area (neither usable QuadPoints nor a usable Rect), so the text under them can't be known; nothing was redacted. Remove those marks or mark the text again, then apply again"
     )]
     UnreadableMark(usize),
+    /// An annotation's position cannot be judged. Keeping it could leave its text or appearance
+    /// in a supposedly redacted file, so the caller must repair or remove it before applying.
+    #[error(
+        "annotation {annotation} on page {page} has no readable Rect of four finite numbers, so its overlap with the redaction marks can't be checked; repair or remove that annotation, then apply again (nothing was changed)"
+    )]
+    UnreadableAnnotation { page: usize, annotation: usize },
     #[error("redaction could not be verified: {0} item(s) were still found under the marks, so nothing was changed")]
     Residue(usize),
     /// A mark's overlay text has a character Helvetica can't draw; nothing was redacted.
@@ -227,8 +233,11 @@ pub struct Report {
 }
 
 pub(crate) fn rect_of(doc: &Document, o: Option<&Object>) -> Option<[f64; 4]> {
-    let v: Vec<f64> = doc.resolve(o?).as_array()?.iter().filter_map(|x| doc.resolve(x).as_f64()).collect();
-    (v.len() == 4 && v.iter().all(|x| x.is_finite())).then(|| [v[0].min(v[2]), v[1].min(v[3]), v[0].max(v[2]), v[1].max(v[3])])
+    let obj = doc.resolve(o?);
+    let [x0, y0, x1, y1] = obj.as_array()?.as_slice() else { return None };
+    let [x0, y0, x1, y1] = [x0, y0, x1, y1].map(|x| doc.resolve(x).as_f64());
+    let (x0, y0, x1, y1) = (x0?, y0?, x1?, y1?);
+    [x0, y0, x1, y1].iter().all(|x| x.is_finite()).then(|| [x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1)])
 }
 
 /// A mark's usable `/QuadPoints` quads ([`pdfcraft_geom::quad_points::usable_quads`]), the set the
@@ -571,7 +580,7 @@ fn apply_within(doc: &mut Document, pages: Option<&[usize]>, images: pdfcraft_co
         let page = pdfcraft_model::pages(doc).swap_remove(pi);
         let rects: Vec<[f64; 4]> = page_marks.iter().flat_map(|m| m.rects.iter().copied()).collect();
         redact_page_content(doc, &mut applying, pi, &page, &rects)?;
-        remove_page_annotations(doc, &mut applying, &page, &rects, page_marks)?;
+        remove_page_annotations(doc, &mut applying, pi, &page, &rects, page_marks)?;
     }
     if applying.images.refused() > 0 {
         return Err(RedactError::ImagesPastAllowance);
@@ -946,6 +955,7 @@ fn redact_page_content(
 fn remove_page_annotations(
     doc: &mut Document,
     applying: &mut Applying,
+    pi: usize,
     page: &pdfcraft_model::Page,
     rects: &[[f64; 4]],
     page_marks: &[&Mark],
@@ -997,7 +1007,10 @@ fn remove_page_annotations(
         if kind == b"Popup" {
             continue;
         }
-        if rect_of(doc, d.get(b"Rect")).is_some_and(|b| rects.iter().any(|x| pdfcraft_content::overlaps(*x, b, 0.0))) {
+        // Unknown geometry is not evidence that the annotation misses every mark. Refuse rather
+        // than keep potentially sensitive annotation text or appearances after a successful apply.
+        let bounds = rect_of(doc, d.get(b"Rect")).ok_or(RedactError::UnreadableAnnotation { page: pi + 1, annotation: i + 1 })?;
+        if rects.iter().any(|x| pdfcraft_content::overlaps(*x, bounds, 0.0)) {
             match r {
                 Some(r) => removed.push(r),
                 None => inline_gone[i] = true,
