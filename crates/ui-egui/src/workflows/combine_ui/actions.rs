@@ -5,7 +5,14 @@ use super::{BTreeSet, PdfCraftApp};
 
 impl PdfCraftApp {
     pub(crate) fn combine_apply(&mut self, action: RowAction) {
-        let page_edit = matches!(action, RowAction::ClickPage(..) | RowAction::MovePages { .. } | RowAction::RemovePages(_));
+        let page_edit = matches!(
+            action,
+            RowAction::ClickPage(..)
+                | RowAction::MovePages { .. }
+                | RowAction::RemovePages(_)
+                | RowAction::RotateFile(..)
+                | RowAction::RotatePage(..)
+        );
         self.combine_apply_once(action);
         // One kind of selection at a time: files picked (by a click, the keys, a drop, Unlock…)
         // let go of the pages picked, so the trash never takes pages the user no longer means.
@@ -46,7 +53,11 @@ impl PdfCraftApp {
                 self.combine_order_action(action);
             }
             // (Page edits were done above.)
-            RowAction::ClickPage(..) | RowAction::MovePages { .. } | RowAction::RemovePages(_) => {}
+            RowAction::ClickPage(..)
+            | RowAction::MovePages { .. }
+            | RowAction::RemovePages(_)
+            | RowAction::RotateFile(..)
+            | RowAction::RotatePage(..) => {}
             _ => self.combine_preview_action(action),
         }
     }
@@ -56,6 +67,14 @@ impl PdfCraftApp {
         match action {
             RowAction::ClickPage(id, nth, m) => {
                 self.combine_click_page(id, nth, m);
+                return None;
+            }
+            RowAction::RotateFile(id, degrees) => {
+                self.combine_rotate(id, None, degrees);
+                return None;
+            }
+            RowAction::RotatePage(id, nth, degrees) => {
+                self.combine_rotate(id, Some(nth), degrees);
                 return None;
             }
             RowAction::MovePages { page, revision, gap } => {

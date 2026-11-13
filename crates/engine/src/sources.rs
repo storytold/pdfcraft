@@ -99,3 +99,14 @@ pub fn source_page_count(bytes: &Arc<Vec<u8>>, password: Option<&str>) -> Option
     let doc = std::panic::catch_unwind(|| pdfcraft_cos::Document::open_with_password(bytes.clone(), password)).ok()?.ok()?;
     pdfcraft_organize::page_count(&doc).ok()
 }
+
+/// Rotate `pages` (0-based) of `bytes` by `degrees` (±90, ±180), opened with `password` if given,
+/// and return the updated PDF bytes (Combine Files).
+pub fn rotate_source_pages(bytes: &Arc<Vec<u8>>, password: Option<&str>, pages: &[usize], degrees: i32) -> Result<Arc<Vec<u8>>, EditError> {
+    let mut doc = source_document(bytes, password).map_err(|p| EditError::Source(p.to_string()))?;
+    pdfcraft_organize::rotate_pages(&mut doc, pages, i64::from(degrees))?;
+    crate::guard(|| pdfcraft_cos::write_incremental(&doc, &pdfcraft_cos::SaveOptions::default()))
+        .map_err(EditError::Write)?
+        .map(Arc::new)
+        .map_err(|e| EditError::Write(e.to_string()))
+}

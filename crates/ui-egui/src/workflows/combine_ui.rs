@@ -131,7 +131,7 @@ impl CombineTab {
         let mut twice = vec![false; files.len()];
         for indices in candidates.values() {
             let Some(first) = indices.first().and_then(|i| files.get(*i)) else { continue };
-            if indices.iter().all(|i| files.get(*i).is_some_and(|f| f.group == first.group)) {
+            if indices.iter().all(|i| files.get(*i).is_some_and(|f| f.file == first.file)) {
                 continue;
             }
             // Slice keys check exact bytes even when their hashes collide.
@@ -143,7 +143,7 @@ impl CombineTab {
             }
             for copies in contents.values() {
                 let Some(first) = copies.first().and_then(|i| files.get(*i)) else { continue };
-                if copies.iter().any(|i| files.get(*i).is_some_and(|f| f.group != first.group)) {
+                if copies.iter().any(|i| files.get(*i).is_some_and(|f| f.file != first.file)) {
                     for &i in copies {
                         if let Some(flag) = twice.get_mut(i) {
                             *flag = true;

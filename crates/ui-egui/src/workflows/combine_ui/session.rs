@@ -1,6 +1,6 @@
 #[cfg(not(target_arch = "wasm32"))]
 use super::MAX_FOLDER_FILES;
-use super::files::{AssessError, Assessed, CombineFile, Incoming, Secret, Snapshot, SortKey, UnlockPrompt, assess};
+use super::files::{AssessError, Assessed, CombineFile, Incoming, Secret, Snapshot, SortKey, UnlockPrompt, assess, next_auth};
 #[cfg(not(target_arch = "wasm32"))]
 use super::parts::combinable_in;
 use super::parts::{Part, items_of, moved_order, natural, parts_of, range_of, takes, title_of};
@@ -39,7 +39,14 @@ impl PdfCraftApp {
     }
 
     fn combine_restore(&mut self, s: Snapshot) {
+        let expanded: BTreeSet<usize> =
+            self.combine_draft.iter().filter(|f| self.combine_tab.expanded.contains(&f.id)).map(|f| Arc::as_ptr(&f.source) as usize).collect();
         self.combine_draft = s.files;
+        for f in &self.combine_draft {
+            if expanded.contains(&(Arc::as_ptr(&f.source) as usize)) {
+                self.combine_tab.expanded.insert(f.id);
+            }
+        }
         self.combine_tab.selected = s.selected;
         self.combine_tab.selected_pages.clear();
         self.combine_tab.page_anchor = None;
@@ -231,6 +238,103 @@ impl PdfCraftApp {
         self.combine_tab.sort = None;
     }
 
+    /// Rotate one page (`Some(nth)`) or every page an entry takes (`None`) by `degrees`.
+    pub(super) fn combine_rotate(&mut self, id: u64, page: Option<usize>, degrees: i32) {
+        let Some(idx) = self.combine_draft.iter().position(|f| f.id == id && f.lock.is_none() && f.problem.is_none()) else { return };
+        let f = &self.combine_draft[idx];
+        let Ok(taken) = f.pages_taken() else { return };
+        let pages: Vec<usize> = match page {
+            Some(nth) => match taken.get(nth) {
+                Some(&p) => vec![p],
+                None => return,
+            },
+            None => taken.iter().copied().collect::<BTreeSet<usize>>().into_iter().collect(),
+        };
+        if pages.is_empty() {
+            return;
+        }
+        let bytes = match pdfcraft_engine::rotate_source_pages(&f.bytes, f.password(), &pages, degrees) {
+            Ok(bytes) => bytes,
+            Err(e) => return self.notify_error(e),
+        };
+        let group = f.group;
+        let old_auth = f.auth;
+        let swap = degrees.rem_euclid(180) != 0;
+        let sizes: Arc<[(f32, f32)]> =
+            f.sizes.iter().enumerate().map(|(i, &(w, h))| if swap && pages.binary_search(&i).is_ok() { (h, w) } else { (w, h) }).collect();
+        let shared_in_entry = page.is_some_and(|nth| taken.iter().enumerate().any(|(i, &p)| i != nth && pages.binary_search(&p).is_ok()));
+        let shared_in_group = self
+            .combine_draft
+            .iter()
+            .filter(|e| e.id != id && e.group == group)
+            .filter_map(|e| e.pages_taken().ok())
+            .flatten()
+            .any(|p| pages.binary_search(&p).is_ok());
+        self.combine_record();
+        let auth = next_auth();
+        if let Some(nth) = page.filter(|_| (shared_in_entry || shared_in_group) && taken.len() > 1) {
+            let base = self.combine_draft[idx].clone();
+            let expanded = self.combine_tab.expanded.contains(&id);
+            let mut next_id = || {
+                let next = self.combine_tab.next_id;
+                self.combine_tab.next_id = next.wrapping_add(1);
+                next
+            };
+            let new_group = next_id();
+            let mut first_id = Some(base.id);
+            let mut take_id = || first_id.take().unwrap_or_else(&mut next_id);
+            let make_part =
+                |slice: &[usize], part_id: u64, part_group: u64, part_bytes: Arc<Vec<u8>>, part_sizes: Arc<[(f32, f32)]>, part_auth: u64| {
+                    let mut part = base.clone();
+                    part.id = part_id;
+                    part.group = part_group;
+                    if part.pages_taken().ok().as_deref() != Some(slice) {
+                        part.range = range_of(slice, part.pages);
+                        part.checked = None;
+                    }
+                    part.bytes = part_bytes;
+                    part.sizes = part_sizes;
+                    part.auth = part_auth;
+                    part
+                };
+            let mut replacement = Vec::with_capacity(3);
+            if let Some(before) = taken.get(..nth).filter(|s| !s.is_empty()) {
+                replacement.push(make_part(before, take_id(), group, base.bytes.clone(), base.sizes.clone(), old_auth));
+            }
+            if let Some(at) = taken.get(nth..=nth) {
+                replacement.push(make_part(at, take_id(), new_group, bytes, sizes, auth));
+            }
+            if let Some(after) = taken.get(nth + 1..).filter(|s| !s.is_empty()) {
+                replacement.push(make_part(after, take_id(), group, base.bytes.clone(), base.sizes.clone(), old_auth));
+            }
+            if expanded {
+                for part in &replacement {
+                    self.combine_tab.expanded.insert(part.id);
+                }
+            }
+            self.combine_draft.splice(idx..=idx, replacement);
+            self.combine_tab.selected_pages.clear();
+            self.combine_tab.page_anchor = None;
+            return;
+        }
+        let target_group = if shared_in_group {
+            let new_group = self.combine_tab.next_id;
+            self.combine_tab.next_id = new_group.wrapping_add(1);
+            if let Some(entry) = self.combine_draft.get_mut(idx) {
+                entry.group = new_group;
+            }
+            new_group
+        } else {
+            self.combine_thumbs.keep_unrotated(group, old_auth, Arc::as_ptr(&bytes) as usize, auth, &pages);
+            group
+        };
+        for entry in self.combine_draft.iter_mut().filter(|e| e.group == target_group) {
+            entry.bytes = bytes.clone();
+            entry.sizes = sizes.clone();
+            entry.auth = auth;
+        }
+    }
+
     /// Close the Combine files tab and forget its list; the last document shows, if any.
     pub fn close_combine_tab(&mut self) {
         let showing = self.combine_showing();
@@ -304,6 +408,7 @@ impl PdfCraftApp {
             };
             let mut f = CombineFile {
                 id: 0,
+                file: 0,
                 group: 0,
                 name,
                 bytes,
@@ -328,6 +433,7 @@ impl PdfCraftApp {
             self.combine_record();
             for mut f in added {
                 f.id = self.combine_tab.next_id;
+                f.file = f.id;
                 f.group = f.id;
                 self.combine_tab.next_id = self.combine_tab.next_id.wrapping_add(1);
                 self.combine_draft.push(f);
@@ -472,7 +578,7 @@ impl PdfCraftApp {
             return;
         }
         // Each file once, however many parts it is in.
-        let count = files.iter().map(|f| f.group).collect::<BTreeSet<u64>>().len();
+        let count = files.iter().map(|f| f.file).collect::<BTreeSet<u64>>().len();
         let groups: Vec<u64> = files.iter().map(|f| f.group).collect();
         let sources: Vec<(String, Arc<Vec<u8>>, Option<String>)> =
             files.iter().map(|f| (title_of(&f.name).to_string(), f.bytes.clone(), Some(f.range.clone()).filter(|r| !r.trim().is_empty()))).collect();

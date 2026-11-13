@@ -194,3 +194,8 @@ sync_github_name = false
 
 [people.enriquemelzer-bit]
 sync_github_name = true
+
+[people.grcarpanez]
+real_name = "Gustavo Carpanez"
+display_name = "grcarpanez"
+sync_github_name = false
