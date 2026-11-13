@@ -167,6 +167,31 @@ fn atomic_saves_keep_finder_tags_and_binary_extended_attributes() {
 
 #[cfg(target_os = "macos")]
 #[test]
+fn large_attributes_and_a_resource_fork_are_copied_whole() {
+    use rustix::fs::{XattrFlags, getxattr, getxattr_query, setxattr};
+    let dir = test_dir("xattrs-large");
+    let target = dir.join("out.pdf");
+    // Past the xattr crate's 4 KiB first try and well past one byte: under rustix 1.1.6 an
+    // empty-buffer size probe reads every one of these as 0 bytes long (#7050).
+    let fork: Vec<u8> = (0..200 * 1024u32).map(|i| (i % 251) as u8).collect();
+    let large: Vec<u8> = (0..70 * 1024u32).map(|i| (i % 241) as u8).collect();
+    std::fs::write(&target, b"OLD").unwrap();
+    setxattr(&target, "com.apple.ResourceFork", &fork, XattrFlags::empty()).unwrap();
+    setxattr(&target, "com.pdfcraft.test.large", &large, XattrFlags::empty()).unwrap();
+    write_atomically_with(&target, b"NEW", StagingName::TagThenSuffix, [9], |_| Ok(())).unwrap();
+    for (name, value) in [("com.apple.ResourceFork", &fork), ("com.pdfcraft.test.large", &large)] {
+        let size = getxattr_query(&target, name).unwrap();
+        assert_eq!(size, value.len(), "{name}");
+        let mut bytes = vec![0u8; size];
+        let len = getxattr(&target, name, &mut bytes[..]).unwrap();
+        assert_eq!(&bytes[..len], value.as_slice(), "{name}");
+    }
+    assert_eq!(std::fs::read(&target).unwrap(), b"NEW");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[cfg(target_os = "macos")]
+#[test]
 fn a_failed_flush_keeps_the_original_extended_attributes() {
     use rustix::fs::{XattrFlags, getxattr, setxattr};
     let dir = test_dir("xattrs-flush");
