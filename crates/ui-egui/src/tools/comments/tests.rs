@@ -889,3 +889,90 @@ fn hidden_comments_preserves_drawing_cursor_preview() {
         assert!(!out.shapes.is_empty(), "cursor preview shapes must be painted for {tool:?} even when comments are hidden");
     }
 }
+
+#[test]
+fn drawing_cursor_gap_claim_respects_gesture_page_ownership() {
+    use crate::canvas::ViewDefaults;
+    use crate::page_router::PagePress;
+
+    let p0 = PageInfo { width: 200.0, height: 200.0, label: String::new(), crop: [0.0, 0.0, 200.0, 200.0], rotation: 0 };
+    let p1 = PageInfo { width: 200.0, height: 200.0, label: String::new(), crop: [0.0, 0.0, 200.0, 200.0], rotation: 0 };
+    let xf0 = PageXform { rect: Rect::from_min_size(pos2(10.0, 10.0), vec2(200.0, 200.0)), rot: 0, pw: 200.0, ph: 200.0 };
+    let xf1 = PageXform { rect: Rect::from_min_size(pos2(10.0, 250.0), vec2(200.0, 200.0)), rot: 0, pw: 200.0, ph: 200.0 };
+    let info = DocInfo { pages: vec![p0, p1], ..Default::default() };
+    let prefs = CommentPrefs::default();
+
+    let ctx = egui::Context::default();
+    let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+        let clip = Rect::from_min_size(pos2(0.0, 0.0), vec2(400.0, 500.0));
+        let mut canvas_ui = ui.new_child(egui::UiBuilder::new().max_rect(clip));
+        canvas_ui.set_clip_rect(clip);
+        let resp = canvas_ui.allocate_rect(clip, Sense::drag());
+
+        // Pointer in the gap between page 0 and page 1 (at y = 230, outside both pages 10..210 and 250..450)
+        let gap_ptr = PagePointer { pos: Some(pos2(100.0, 230.0)), ..PagePointer::default() };
+
+        // An active drawing gesture owned by page 0
+        let active_draw = Some(Gesture::Draw { page: 0, tool: CommentTool::Ink, points: vec![[50.0, 50.0]] });
+
+        // 1. Page 1 (non-owning page) processing input while pointer is in the gap
+        let cx_page1 = PageCx {
+            page: 1,
+            xf: &xf1,
+            ptr: &gap_ptr,
+            info: &info,
+            tool: QuickTool::Comment(CommentTool::Ink),
+            prefs: &prefs,
+            allowed: true,
+            hidden: false,
+            redact_mark: ([0.0; 3], 1.0),
+        };
+        let mut view_p1 = DocView::new(pdfcraft_engine::DocId(1), &info, ViewDefaults::default());
+        view_p1.comments.gesture = active_draw.clone();
+
+        page_input(&canvas_ui, &resp, &cx_page1, PagePress::Free, false, &mut view_p1);
+        let ctx_p1 = egui::Context::default();
+        view_p1.cursor.resolve(&ctx_p1, QuickTool::Comment(CommentTool::Ink));
+        assert_eq!(ctx_p1.output(|o| o.cursor_icon), egui::CursorIcon::Default, "non-owning page must not claim cursor in page gap");
+
+        // 2. Page 0 (owning page) processing input while pointer is in the gap
+        let cx_page0 = PageCx {
+            page: 0,
+            xf: &xf0,
+            ptr: &gap_ptr,
+            info: &info,
+            tool: QuickTool::Comment(CommentTool::Ink),
+            prefs: &prefs,
+            allowed: true,
+            hidden: false,
+            redact_mark: ([0.0; 3], 1.0),
+        };
+        let mut view_p0 = DocView::new(pdfcraft_engine::DocId(1), &info, ViewDefaults::default());
+        view_p0.comments.gesture = active_draw;
+
+        page_input(&canvas_ui, &resp, &cx_page0, PagePress::Free, false, &mut view_p0);
+        let ctx_p0 = egui::Context::default();
+        view_p0.cursor.resolve(&ctx_p0, QuickTool::Comment(CommentTool::Ink));
+        assert_eq!(ctx_p0.output(|o| o.cursor_icon), egui::CursorIcon::None, "owning page must claim cursor in page gap within clip");
+
+        // 3. Pointer directly over page 1 claims cursor regardless of gesture ownership
+        let over_p1_ptr = PagePointer { pos: Some(pos2(100.0, 300.0)), ..PagePointer::default() };
+        let cx_p1_over = PageCx {
+            page: 1,
+            xf: &xf1,
+            ptr: &over_p1_ptr,
+            info: &info,
+            tool: QuickTool::Comment(CommentTool::Ink),
+            prefs: &prefs,
+            allowed: true,
+            hidden: false,
+            redact_mark: ([0.0; 3], 1.0),
+        };
+        let mut view_p1_over = DocView::new(pdfcraft_engine::DocId(1), &info, ViewDefaults::default());
+        page_input(&canvas_ui, &resp, &cx_p1_over, PagePress::Free, false, &mut view_p1_over);
+        let ctx_p1_over = egui::Context::default();
+        view_p1_over.cursor.resolve(&ctx_p1_over, QuickTool::Comment(CommentTool::Ink));
+        assert_eq!(ctx_p1_over.output(|o| o.cursor_icon), egui::CursorIcon::None, "pointer over page within clip must claim CursorIcon::None");
+    });
+    out.textures_delta.clear();
+}

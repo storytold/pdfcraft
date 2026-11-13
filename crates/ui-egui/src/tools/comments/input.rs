@@ -427,7 +427,8 @@ impl Gestures<'_> {
         if !cx.allowed {
             return false;
         }
-        if pointer.is_some_and(|p| ui.clip_rect().contains(p)) && (over_page || cv.gesture.is_some()) {
+        let owns_gesture = matches!(&cv.gesture, Some(Gesture::Draw { page, .. }) if *page == cx.page);
+        if pointer.is_some_and(|p| ui.clip_rect().contains(p)) && (over_page || owns_gesture) {
             let icon = if matches!(tool, CommentTool::Ink | CommentTool::FreehandHighlight | CommentTool::Eraser) {
                 egui::CursorIcon::None
             } else {
