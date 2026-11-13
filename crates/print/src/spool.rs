@@ -89,6 +89,26 @@ pub fn printer_queues() -> Vec<Printer> {
     craft_print::printer_queues()
 }
 
+/// Whether `printer`'s driver renders XPS itself (Windows: v4 drivers, and v3 drivers with an XPS
+/// rendering filter); `Some(false)` for a GDI driver, `None` when it can't be read, on a Windows
+/// installation without the print DLLs, and on other systems. See [`gdi_driver`].
+pub fn xps_driver(printer: &str) -> Option<bool> {
+    if missing_print_dll().is_some() {
+        return None;
+    }
+    #[cfg(windows)]
+    let _provider = print_ticket_provider();
+    craft_print::xps_driver(printer)
+}
+
+/// Whether `printer`'s driver is a GDI (v3) one, which the XPS print API reaches through Windows'
+/// XPS-to-GDI conversion: a page with transparency prints there with halos, as black boxes or not
+/// at all (#5838, #5940, #6155), so the copy for it has its transparent sheets flattened first
+/// (`pdfcraft_engine::spooler::spooler_copy`). False when that can't be told.
+pub fn gdi_driver(printer: &str) -> bool {
+    xps_driver(printer) == Some(false)
+}
+
 /// Whether `printer`'s driver takes two-sided settings, read for that one printer; it can wait
 /// on the device, so call it off the UI thread. Unknown on a Windows installation without the
 /// print DLLs: reading it goes through them.
@@ -194,6 +214,35 @@ pub(crate) fn output_within(command: &mut std::process::Command, limit: std::tim
     }
 }
 
+/// The queue of a CUPS destination (`queue` or `queue/instance`); `None` when either part is not
+/// a plain name. Neither part is a path: dot components, backslashes and any further separator
+/// are refused before I/O. A leading `-` is refused too: `lpoptions` parses its argv with getopt,
+/// so `-p -E -l` would read `-E` as an option rather than as the destination, and `--` cannot
+/// help because it ends option parsing before the `-p` that names the queue.
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+fn queue_of(printer: &str) -> Option<&str> {
+    let (queue, instance) = printer.split_once('/').map_or((printer, None), |(q, i)| (q, Some(i)));
+    let valid = |name: &str| {
+        !name.is_empty()
+            && name.len() <= 64
+            && !name.starts_with('-')
+            && !matches!(name, "." | "..")
+            && name.bytes().all(|b| b.is_ascii_graphic() && !matches!(b, b'/' | b'\\' | b':' | b'=' | b'"'))
+    };
+    (valid(queue) && instance.is_none_or(valid)).then_some(queue)
+}
+
+/// The queue's PPD in `ppd_dir`, at most 16 MiB of it; `None` when the queue has none.
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+fn read_ppd(ppd_dir: &std::path::Path, queue: &str) -> Option<Vec<u8>> {
+    use std::io::Read as _;
+    const PPD_CAP: u64 = 16 << 20;
+    let file = std::fs::File::open(ppd_dir.join(format!("{queue}.ppd"))).ok()?;
+    let mut bytes = Vec::new();
+    file.take(PPD_CAP).read_to_end(&mut bytes).ok()?;
+    Some(bytes)
+}
+
 /// Read a destination's options with the PPD directory and command supplied, so tests need
 /// neither a system queue nor a physical printer. CUPS instances share their queue's PPD but
 /// have their own defaults, queried with the complete `queue/instance` destination. `limit` is
@@ -206,28 +255,8 @@ pub(crate) fn printer_options_via_within(
     limit: std::time::Duration,
     lang: &str,
 ) -> Vec<PrinterOption> {
-    let (queue, instance) = printer.split_once('/').map_or((printer, None), |(q, i)| (q, Some(i)));
-    // Retain the conservative name checks, applied to each component. Neither component is
-    // a path: reject dot components, backslashes and any additional separator before I/O. A
-    // leading `-` is refused too: `lpoptions` parses its argv with getopt, so `-p -E -l` would
-    // read `-E` as an option rather than as the destination, and `--` cannot help because it
-    // ends option parsing before the `-p` that names the queue.
-    let valid = |name: &str| {
-        !name.is_empty()
-            && name.len() <= 64
-            && !name.starts_with('-')
-            && !matches!(name, "." | "..")
-            && name.bytes().all(|b| b.is_ascii_graphic() && !matches!(b, b'/' | b'\\' | b':' | b'=' | b'"'))
-    };
-    if !valid(queue) || instance.is_some_and(|name| !valid(name)) {
-        return Vec::new();
-    }
-    const PPD_CAP: u64 = 16 << 20;
-    let ppd = std::fs::File::open(ppd_dir.join(format!("{queue}.ppd"))).ok().and_then(|f| {
-        use std::io::Read as _;
-        let mut bytes = Vec::new();
-        f.take(PPD_CAP).read_to_end(&mut bytes).ok().map(|_| bytes)
-    });
+    let Some(queue) = queue_of(printer) else { return Vec::new() };
+    let ppd = read_ppd(ppd_dir, queue);
     let mut options = ppd.as_deref().map(|b| parse_ppd(&ppd_text(b))).unwrap_or_default();
     let lpoptions_out = output_within(lpoptions.args(["-p", printer, "-l"]), limit).ok();
     let current = lpoptions_out.as_deref().map(|out| parse_lpoptions(&String::from_utf8_lossy(out))).unwrap_or_default();
@@ -390,6 +419,8 @@ pub(crate) fn with_job_info(job: &Job, owner: Option<&str>) -> Job {
 
 /// The job as the system spooler takes it.
 fn spooled(job: &Job) -> Job {
+    #[cfg(all(unix, not(target_arch = "wasm32")))]
+    let job = &with_ppd_media(job, |printer| ppd_papers_in(printer, std::path::Path::new("/etc/cups/ppd")));
     #[cfg(target_os = "macos")]
     {
         with_job_info(job, std::env::var("USER").ok().as_deref())
@@ -492,10 +523,206 @@ fn printer_papers_internal(printer: &str) -> Vec<Paper> {
     papers
 }
 
-/// The paper sizes supported by `printer` (fallback for non-Windows platforms).
+/// The paper sizes supported by `printer` on CUPS: its PPD's (see [`cups_paper_info`]); none on
+/// the web.
 #[cfg(not(windows))]
-pub fn printer_papers(_printer: &str) -> Vec<Paper> {
-    Vec::new()
+pub fn printer_papers(printer: &str) -> Vec<Paper> {
+    cups_paper_info(printer).0
+}
+
+/// CUPS: the papers of the queue's PPD, each named by the driver's label, and its
+/// `*DefaultPageSize` one (the stock a label printer is set up for, an office printer's tray
+/// paper); none for a queue without a PPD and on the web. A job on one of them is fed it under
+/// the PPD's own keyword ([`with_ppd_media`]).
+#[cfg(not(windows))]
+fn cups_paper_info(printer: &str) -> (Vec<Paper>, Option<Paper>) {
+    #[cfg(all(unix, not(target_arch = "wasm32")))]
+    {
+        cups_paper_info_in(printer, std::path::Path::new("/etc/cups/ppd"))
+    }
+    #[cfg(not(all(unix, not(target_arch = "wasm32"))))]
+    {
+        let _ = printer;
+        (Vec::new(), None)
+    }
+}
+
+/// [`cups_paper_info`] with the PPD directory supplied, so tests need no system queue.
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+pub(crate) fn cups_paper_info_in(printer: &str, ppd_dir: &std::path::Path) -> (Vec<Paper>, Option<Paper>) {
+    let papers = ppd_papers_in(printer, ppd_dir);
+    let default = papers.iter().find(|p| p.default).map(|p| (p.label.clone(), p.size));
+    (papers.into_iter().map(|p| (p.label, p.size)).collect(), default)
+}
+
+/// A paper of a PPD: one `*PaperDimension` entry.
+#[cfg(any(test, all(unix, not(target_arch = "wasm32"))))]
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct PpdPaper {
+    /// The driver's keyword for it (`Letter`, `w288h432`), which a job's `media` names.
+    pub key: String,
+    /// What the driver calls it (`US Letter`); the keyword when it gives no name.
+    pub label: String,
+    /// Width and height in points as the driver feeds it: a label's width is across the feed,
+    /// so a 2.25 × 1.25 in label and a 1.25 × 2.25 in one are different stock.
+    pub size: (f64, f64),
+    /// Whether it is the PPD's `*DefaultPageSize`.
+    pub default: bool,
+}
+
+/// The papers of the queue's PPD in `ppd_dir`; none when the destination is not a plain name or
+/// its queue has no PPD.
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+fn ppd_papers_in(printer: &str, ppd_dir: &std::path::Path) -> Vec<PpdPaper> {
+    queue_of(printer).and_then(|queue| read_ppd(ppd_dir, queue)).map(|ppd| parse_ppd_papers(&ppd_text(&ppd))).unwrap_or_default()
+}
+
+/// The largest side a PPD paper may have, in points: PDF's own page limit (200 inches).
+#[cfg(any(test, all(unix, not(target_arch = "wasm32"))))]
+const MAX_PAPER_SIDE: f64 = 14_400.0;
+/// How many papers a PPD may list (PPDs are text files from the printer vendor).
+#[cfg(any(test, all(unix, not(target_arch = "wasm32"))))]
+const MAX_PAPERS: usize = 400;
+
+/// The paper sizes a PPD offers: its `*PaperDimension key/label: "width height"` entries in
+/// file order and as written, each named by its own label, else its `*PageSize` label, else the
+/// keyword, the `*DefaultPageSize` one marked as the default. Custom-size placeholders,
+/// translations (`*fr.PaperDimension`), repeated keywords, keywords that could not be passed as
+/// a CUPS option value, and sizes outside 1 pt to 200 in are left out. Lenient: malformed lines
+/// are skipped.
+#[cfg(any(test, all(unix, not(target_arch = "wasm32"))))]
+pub(crate) fn parse_ppd_papers(ppd: &str) -> Vec<PpdPaper> {
+    // A keyword goes to `lp -o media=<keyword>`: no space, quote, separator or `=`.
+    let keyword = |s: &str| {
+        !s.is_empty() && s.len() <= 64 && s.bytes().all(|b| b.is_ascii_graphic() && !matches!(b, b'/' | b':' | b'=' | b'"' | b'\'' | b'\\' | b','))
+    };
+    // `*Prefix key/label: value` → (key, label, value), the label falling back to the key.
+    let entry = |line: &str, prefix: &str| -> Option<(String, String, String)> {
+        let (head, value) = line.trim_end_matches('\r').strip_prefix(prefix)?.split_once(':')?;
+        let head = head.trim();
+        let (key, label) = match head.split_once('/') {
+            Some((k, l)) if !l.trim().is_empty() => (k.trim(), l.trim()),
+            Some((k, _)) => (k.trim(), k.trim()),
+            None => (head, head),
+        };
+        keyword(key).then(|| (key.to_string(), label.to_string(), value.trim().to_string()))
+    };
+    let mut names: std::collections::BTreeMap<String, String> = Default::default();
+    for line in ppd.lines() {
+        if let Some((key, label, _)) = entry(line, "*PageSize ")
+            && label != key
+        {
+            names.entry(key).or_insert(label);
+        }
+    }
+    let default_key = ppd
+        .lines()
+        .find_map(|line| line.trim_end_matches('\r').strip_prefix("*DefaultPageSize:").map(str::trim))
+        .filter(|k| keyword(k))
+        .map(str::to_string);
+    let fits = |v: f64| v.is_finite() && (1.0..=MAX_PAPER_SIDE).contains(&v);
+    let mut out: Vec<PpdPaper> = Vec::new();
+    for line in ppd.lines() {
+        if out.len() >= MAX_PAPERS {
+            break;
+        }
+        let Some((key, label, value)) = entry(line, "*PaperDimension ") else { continue };
+        if key.starts_with("Custom") || out.iter().any(|p| p.key == key) {
+            continue;
+        }
+        let mut sides = value.trim_matches('"').split_whitespace().map(|v| v.parse::<f64>().ok());
+        let (Some(Some(w)), Some(Some(h))) = (sides.next(), sides.next()) else { continue };
+        if !fits(w) || !fits(h) {
+            continue;
+        }
+        let label = if label == key { names.get(&key).cloned().unwrap_or(label) } else { label };
+        let default = default_key.as_deref() == Some(key.as_str());
+        out.push(PpdPaper { key, label, size: (w, h), default });
+    }
+    out
+}
+
+/// The paper of `papers` of this size, within half a point a side: the one fed that way round
+/// first (a label's width is its width across the feed), else the one fed the other way round.
+#[cfg(any(test, all(unix, not(target_arch = "wasm32"))))]
+pub(crate) fn ppd_paper_of_size(papers: &[PpdPaper], (w, h): (f64, f64)) -> Option<&PpdPaper> {
+    let same = |p: &&PpdPaper, (w, h): (f64, f64)| (p.size.0 - w).abs() <= 0.5 && (p.size.1 - h).abs() <= 0.5;
+    papers.iter().find(|p| same(p, (w, h))).or_else(|| papers.iter().find(|p| same(p, (h, w))))
+}
+
+/// How far a side of a PPD paper may be from a standard name's nominal size and still be that
+/// paper: Adobe's 5 points, which CUPS also uses to find the PPD size for a media name. A driver
+/// may measure a stock in millimetres (a "4 × 6 in" label of 102 × 152 mm is 1.1 pt off), and
+/// neighbouring label sizes differ by more.
+#[cfg(any(test, all(unix, not(target_arch = "wasm32"))))]
+const NOMINAL_SIZE_EPSILON: f64 = 5.0;
+
+/// The paper of `papers` nearest a nominal size, within [`NOMINAL_SIZE_EPSILON`] a side, fed
+/// either way round; on a tie the one fed that way round, then the first.
+#[cfg(any(test, all(unix, not(target_arch = "wasm32"))))]
+pub(crate) fn ppd_paper_near_size(papers: &[PpdPaper], (w, h): (f64, f64)) -> Option<&PpdPaper> {
+    let off = |p: &PpdPaper, (w, h): (f64, f64)| {
+        let (dw, dh) = ((p.size.0 - w).abs(), (p.size.1 - h).abs());
+        (dw <= NOMINAL_SIZE_EPSILON && dh <= NOMINAL_SIZE_EPSILON).then_some(dw + dh)
+    };
+    let fed_as_is = papers.iter().filter_map(|p| Some((off(p, (w, h))?, 0, p)));
+    let turned = papers.iter().filter_map(|p| Some((off(p, (h, w))?, 1, p)));
+    fed_as_is.chain(turned).min_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1))).map(|(_, _, p)| p)
+}
+
+/// The size in points that a standard media name stands for: one of [`crate::cups_media`]'s
+/// names, a PPD-style `w<width>h<height>` in points, or a PWG 5101.1 self-describing name
+/// (`na_index-4x6_4x6in`, `iso_a6_105x148mm`). `None` for any other name.
+#[cfg(any(test, all(unix, not(target_arch = "wasm32"))))]
+pub(crate) fn nominal_media_size(media: &str) -> Option<(f64, f64)> {
+    let sides = |s: &str, x: char, scale: f64| {
+        let (w, h) = s.split_once(x)?;
+        let (w, h) = (w.parse::<f64>().ok()? * scale, h.parse::<f64>().ok()? * scale);
+        (w.is_finite() && h.is_finite() && w > 0.0 && h > 0.0).then_some((w, h))
+    };
+    if let Some(index) = (0..crate::PAPERS.len()).find(|&i| crate::cups_media(i).is_some_and(|m| m.eq_ignore_ascii_case(media))) {
+        return crate::PAPERS.get(index).map(|(_, size)| *size);
+    }
+    if let Some(size) = media.strip_prefix('w').and_then(|s| sides(s, 'h', 1.0)) {
+        return Some(size);
+    }
+    let (class_name, dims) = media.rsplit_once('_')?;
+    if !class_name.contains('_') {
+        return None;
+    }
+    if let Some(dims) = dims.strip_suffix("in") {
+        return sides(dims, 'x', 72.0);
+    }
+    sides(dims.strip_suffix("mm")?, 'x', 72.0 / 25.4)
+}
+
+/// CUPS: the job with its `media` named by the printer's own PPD keyword when it names one of
+/// the PPD's papers by its label (as [`printer_papers`] lists them), as `Custom.<w>x<h>` points
+/// of one of their sizes ([`crate::custom_media`]), or by a standard name of one of their sizes
+/// ([`nominal_media_size`], such as the `w288h432` of PdfCraft's 4 × 6 in label). Fed under the
+/// PPD's keyword, the paper is the driver's own: a driver may take no custom sizes, and a label
+/// printer's stock is set up under its keyword. A keyword the PPD has, any other value, a job
+/// without `media` and one for the default destination go as they are.
+#[cfg(any(test, all(unix, not(target_arch = "wasm32"))))]
+pub(crate) fn with_ppd_media(job: &Job, papers: impl FnOnce(&str) -> Vec<PpdPaper>) -> Job {
+    let mut job = job.clone();
+    let Some(printer) = job.printer.clone() else { return job };
+    let Some(media) = job.options.iter_mut().rev().find(|(k, _)| k.eq_ignore_ascii_case("media")) else { return job };
+    let papers = papers(&printer);
+    if papers.iter().any(|p| p.key == media.1) {
+        return job;
+    }
+    let custom =
+        media.1.strip_prefix("Custom.").and_then(|s| s.split_once('x')).and_then(|(w, h)| Some((w.parse::<f64>().ok()?, h.parse::<f64>().ok()?)));
+    let paper = papers
+        .iter()
+        .find(|p| p.label == media.1)
+        .or_else(|| custom.and_then(|size| ppd_paper_of_size(&papers, size)))
+        .or_else(|| nominal_media_size(&media.1).and_then(|size| ppd_paper_near_size(&papers, size)));
+    if let Some(paper) = paper {
+        media.1 = paper.key.clone();
+    }
+    job
 }
 
 /// Match `paper_pts` against detected driver `papers` within a 1.0 pt tolerance.
@@ -528,7 +755,7 @@ pub fn printer_paper_info(printer: &str) -> (Vec<Paper>, Option<Paper>) {
     #[cfg(windows)]
     let papers = printer_papers_internal(printer);
     #[cfg(not(windows))]
-    let papers = printer_papers(printer);
+    let (papers, cups_default) = cups_paper_info(printer);
     #[cfg(windows)]
     let default_paper = {
         let settings = craft_print::rgb::default_settings(printer).ok();
@@ -536,10 +763,7 @@ pub fn printer_paper_info(printer: &str) -> (Vec<Paper>, Option<Paper>) {
         page.map(|p| resolve_paper_name(&papers, p.paper))
     };
     #[cfg(not(windows))]
-    let default_paper = {
-        let _ = &papers;
-        None
-    };
+    let default_paper = cups_default;
     (papers, default_paper)
 }
 
