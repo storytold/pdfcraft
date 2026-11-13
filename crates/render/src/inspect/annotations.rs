@@ -11,8 +11,8 @@ use super::{Dictionary, DocInfo, Entry, HashMap, HashSet, Inspector, Object, Obj
 /// opaque identities, never dereferenced here. Do not reuse the cache across documents,
 /// edits or inspections, where an address may identify a different stream.
 /// FIFO eviction bounds it to 4096 identities and allows an evicted failure to be retried;
-/// a cache hit does not refresh its position. This bounds retained failures, not the
-/// total decoding work, and does not cache successful sources or spend their text budget.
+/// a cache hit does not refresh its position. This bounds retained failures; streams that
+/// decode are remembered in [`LinkScripts`] instead.
 #[derive(Default)]
 pub(super) struct RejectedJavaScript {
     identities: HashSet<*const lopdf::Stream>,
@@ -41,17 +41,22 @@ impl RejectedJavaScript {
 }
 
 /// What link JavaScript an inspection may still keep: 4 MiB of source across the document,
-/// and the streams that failed to decode.
+/// the streams that failed to decode, and the source of those that did.
 pub(super) struct LinkScripts {
     remaining: usize,
     rejected: RejectedJavaScript,
+    /// Each stream's source once decoded, by its address (see [`RejectedJavaScript`]): many links
+    /// can share one stream, whose decoding costs its encoded length however short the source
+    /// (review on #7144). Every link keeping a source still spends its length from `remaining`,
+    /// so what is kept here stays within the budget, plus at most one source.
+    decoded: HashMap<*const lopdf::Stream, String>,
     /// Whether the warning that the budget ran out has been given.
     limit_reported: bool,
 }
 
 impl Default for LinkScripts {
     fn default() -> Self {
-        Self { remaining: 4 << 20, rejected: RejectedJavaScript::default(), limit_reported: false }
+        Self { remaining: 4 << 20, rejected: RejectedJavaScript::default(), decoded: HashMap::new(), limit_reported: false }
     }
 }
 
@@ -456,14 +461,14 @@ impl<'a> Inspector<'a> {
     /// The source of a link's JavaScript action (`/JS`, a string or a stream), as data. A
     /// string or decompressed stream over 256 KiB, a stream that fails to decode, or source
     /// past what is left of the document's 4 MiB is `None` (the link stays
-    /// `Other("JavaScript")`); a failed stream is remembered so links sharing it don't decode it
-    /// again. An action's `/Next` chain is not followed.
+    /// `Other("JavaScript")`); a stream is decoded once, its source or failure remembered for
+    /// links sharing it. An action's `/Next` chain is not followed.
     fn link_script(&self, a: &Dictionary, scripts: &mut LinkScripts) -> Option<String> {
         if scripts.remaining == 0 {
             return None;
         }
-        let bytes = match self.resolve(a.get(b"JS").ok()?) {
-            Object::String(bytes, _) if bytes.len() <= MAX_LINK_SCRIPT => bytes.clone(),
+        let source = match self.resolve(a.get(b"JS").ok()?) {
+            Object::String(bytes, _) if bytes.len() <= MAX_LINK_SCRIPT => pdfcraft_cos::PdfString::literal(bytes.clone()).to_text(),
             Object::Stream(stream) => {
                 // The structure's objects stay put for the whole inspection, so the resolved
                 // stream's address identifies it, aliases included.
@@ -471,19 +476,27 @@ impl<'a> Inspector<'a> {
                 if scripts.rejected.contains(identity) {
                     return None;
                 }
-                #[cfg(test)]
-                JS_DECODE_COUNT.with(|n| n.set(n.get() + 1));
-                match stream.decompressed_content_with_limit(MAX_LINK_SCRIPT) {
-                    Ok(bytes) => bytes,
-                    Err(_) => {
-                        scripts.rejected.insert(identity);
-                        return None;
+                if let Some(source) = scripts.decoded.get(&identity) {
+                    source.clone()
+                } else {
+                    #[cfg(test)]
+                    JS_DECODE_COUNT.with(|n| n.set(n.get() + 1));
+                    // An empty `/Filter []` is no filter: the stream is the source.
+                    match stream.get_plain_content_with_limit(MAX_LINK_SCRIPT) {
+                        Ok(bytes) => {
+                            let source = pdfcraft_cos::PdfString::literal(bytes).to_text();
+                            scripts.decoded.insert(identity, source.clone());
+                            source
+                        }
+                        Err(_) => {
+                            scripts.rejected.insert(identity);
+                            return None;
+                        }
                     }
                 }
             }
             _ => return None,
         };
-        let source = pdfcraft_cos::PdfString::literal(bytes).to_text();
         let Some(remaining) = scripts.remaining.checked_sub(source.len()) else {
             scripts.remaining = 0;
             return None;
@@ -1058,5 +1071,36 @@ mod remediation_probes {
             }
             println!("REJECT n={n} repeated_annotation={repeated} bytes={len} decode_calls={calls} micros={times:?}");
         }
+    }
+
+    /// Links sharing a stream that decodes decode it once, even when its source is empty and
+    /// spends none of the budget; a stream whose `/Filter` is an empty array is its own source
+    /// (review on #7144).
+    #[test]
+    fn a_shared_script_stream_is_decoded_once() {
+        let mut d = Document::with_version("1.7");
+        let pages = d.new_object_id();
+        // Whitespace decodes to nothing, at the cost of reading all of it.
+        let blank = d.add_object(lopdf::Stream::new(dictionary! {"Filter"=>"ASCIIHexDecode"}, [vec![b' '; 64 << 10], b">".to_vec()].concat()));
+        let raw = d.add_object(lopdf::Stream::new(dictionary! {"Filter"=>Vec::<Object>::new()}, b"app.alert(1);".to_vec()));
+        let rect = || vec![0.into(), 0.into(), 50.into(), 50.into()];
+        let annots: Vec<Object> = std::iter::repeat_n(blank, 100)
+            .chain([raw])
+            .map(|js| {
+                d.add_object(dictionary! {"Type"=>"Annot","Subtype"=>"Link","Rect"=>rect(),"A"=>dictionary! {"S"=>"JavaScript","JS"=>js}}).into()
+            })
+            .collect();
+        let page = d.add_object(dictionary! {"Type"=>"Page","Parent"=>pages,"Annots"=>annots});
+        d.objects.insert(pages, dictionary! {"Type"=>"Pages","Kids"=>vec![page.into()],"Count"=>1,"MediaBox"=>rect()}.into());
+        let root = d.add_object(dictionary! {"Type"=>"Catalog","Pages"=>pages});
+        d.trailer.set("Root", root);
+        let mut bytes = Vec::new();
+        d.save_to(&mut bytes).unwrap();
+        JS_DECODE_COUNT.with(|n| n.set(0));
+        let info = inspect(Arc::new(bytes), None).unwrap();
+        assert_eq!(JS_DECODE_COUNT.with(std::cell::Cell::get), 2, "one decode per stream");
+        assert_eq!(info.links.len(), 101);
+        assert!(info.links[..100].iter().all(|l| matches!(&l.target, LinkTarget::JavaScript(s) if s.is_empty())));
+        assert!(matches!(&info.links[100].target, LinkTarget::JavaScript(s) if s == "app.alert(1);"), "{:?}", info.links[100].target);
     }
 }

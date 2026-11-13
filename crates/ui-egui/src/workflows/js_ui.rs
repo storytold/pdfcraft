@@ -342,6 +342,13 @@ impl PdfCraftApp {
         {
             self.start_link_script(id, page, index);
         }
+        // Script getters read the clicked view's zoom, page and field highlight, as on the
+        // desktop, where starting the script sets them.
+        #[cfg(target_arch = "wasm32")]
+        if let Some(view) = self.views.iter().find(|v| v.id == id) {
+            let (zoom, current, highlight) = (view.zoom, view.current, view.highlight_fields);
+            self.session.set_javascript_view(id, zoom as f64 * 100.0, highlight, current);
+        }
         #[cfg(target_arch = "wasm32")]
         match self.session.run_link_javascript(id, page, index, &[]) {
             Ok(o) => {

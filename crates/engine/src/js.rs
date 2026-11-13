@@ -1645,17 +1645,33 @@ mod caption_tests {
     }
 }
 
-/// A failed link action commits nothing: its field changes and requests are dropped, its
-/// alerts, console lines and error kept (#2081).
+/// A failed link action commits nothing: its field changes, requests and layer changes are
+/// dropped (the realm put its timers back), its alerts, console lines and error kept (#2081).
 fn drop_failed_link_effects(o: &mut Outcome) {
     if o.error.is_some() {
         o.changed.clear();
         o.formatted.clear();
         o.requests.clear();
+        o.layers.clear();
     }
 }
 
 impl Session {
+    /// A read-only document takes none of a link's field changes or resets, but its other
+    /// requests (go to a page, say) still apply: the changes are dropped and, if there were any,
+    /// the outcome says why, as an edit there would (#2081).
+    fn keep_read_only_link_requests(&self, id: DocId, states: &[pdfcraft_js::FieldState], o: &mut Outcome) {
+        let Some(doc) = self.get(id).filter(|d| d.editor.is_none()) else { return };
+        let resets = o.requests.iter().any(|r| matches!(r, Request::Reset(_)));
+        let edited = resets || !changes(states, &o.changed, &o.formatted).is_empty();
+        o.changed.clear();
+        o.formatted.clear();
+        o.requests.retain(|r| !matches!(r, Request::Reset(_)));
+        if edited && o.error.is_none() {
+            o.error = Some(EditError::ReadOnly(doc.read_only_reason.clone().unwrap_or_default()).to_string());
+        }
+    }
+
     /// The job for link `index` (its raw annotation index) on page `page` (both 0-based) when
     /// its action is JavaScript: event "Link"/"Mouse Up" with the document as its target, on
     /// the link's page.
@@ -1704,12 +1720,14 @@ impl Session {
     /// Run link `index` on page `page` (0-based; the index is the link's place in the page's
     /// annotations) in the document's script realm, answering its prompts from `answers` in
     /// order (none: cancelled). Field changes and `resetForm` are applied as one undoable step,
-    /// unless the script failed: then nothing is committed and its requests are dropped.
+    /// unless the script failed: then nothing is committed and its requests are dropped. In a
+    /// read-only document the requests apply and the changes are refused.
     pub fn run_link_javascript(&mut self, id: DocId, page: usize, index: usize, answers: &[Option<String>]) -> Result<Outcome, EditError> {
         let (job, states) = self.link_job(id, page, index)?;
         let runtime = self.get(id).ok_or(EditError::NoDocument)?.js_runtime.clone();
         let mut o = runtime.lock().map_err(|_| EditError::Invalid("document script runtime is unavailable".into()))?.run(job, answers);
         drop_failed_link_effects(&mut o);
+        self.keep_read_only_link_requests(id, &states, &mut o);
         let discard = o.execution_refused && !o.realm_untouched;
         let result = self.apply_script_outcome(id, &states, o, false);
         if discard || result.is_err() {
@@ -1832,6 +1850,9 @@ impl Session {
             return Err(EditError::Invalid("document changed while the script was running".into()));
         }
         p.runtime.lock().map_err(|_| EditError::Invalid("script runtime unavailable".into()))?.acknowledge_completion();
+        if p.link {
+            self.keep_read_only_link_requests(p.id, &p.states, &mut out);
+        }
         let discard = out.execution_refused && !out.realm_untouched;
         let result = self.apply_script_outcome(p.id, &p.states, out, false);
         if discard || result.is_err() {

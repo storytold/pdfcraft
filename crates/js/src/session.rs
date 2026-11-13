@@ -182,8 +182,11 @@ impl Realm {
                 }
             })
             .collect();
+        // A link action that fails commits nothing (#2081), timers included: the realm's are saved
+        // once the document scripts ran, and put back if the link's own script fails.
+        let link = job.event.kind == "Link";
         let Some(ctx) = self.context.as_mut() else { return failed("script realm unavailable".into()) };
-        if initialize {
+        let (mut out, saved) = if initialize {
             let mut initial = crate::run::run_in_context(
                 ctx,
                 "",
@@ -211,6 +214,7 @@ impl Realm {
                     (h.fields.clone(), h.reset_calls, h.calculation_evaluations)
                 })
                 .unwrap_or((job.fields, 0, 0));
+            let saved = link.then(|| crate::timers::save(ctx)).flatten();
             let mut out = crate::run::run_in_context(
                 ctx,
                 &job.script,
@@ -249,9 +253,10 @@ impl Realm {
             if out.error.is_none() {
                 out.error = initial.error;
             }
-            out
+            (out, saved)
         } else {
-            crate::run::run_in_context(
+            let saved = link.then(|| crate::timers::save(ctx)).flatten();
+            let out = crate::run::run_in_context(
                 ctx,
                 &job.script,
                 &job.event,
@@ -268,8 +273,16 @@ impl Realm {
                     call: None,
                 },
                 Limits::default(),
-            )
+            );
+            (out, saved)
+        };
+        if out.error.is_some()
+            && let Some(saved) = saved
+        {
+            crate::timers::restore(ctx, saved);
+            out.timers = crate::timers::report(ctx);
         }
+        out
     }
 }
 

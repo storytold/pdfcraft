@@ -171,7 +171,15 @@ fn open_doc(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValu
     if path.is_empty() || path.len() > 4096 {
         return Err(error("invalid openDoc path"));
     }
-    host(ctx)?.borrow_mut().request(Request::OpenDoc(path));
+    let shared = host(ctx)?;
+    let mut h = shared.borrow_mut();
+    // A field's calculation runs unasked, here through `calculateNow`: as when it runs on its
+    // own (`JsOutput::absorb`), it may not open another document.
+    if h.calculate_depth > 0 {
+        h.print(format!("A field script asked to open the document {path}; only a button, a link or the console may open another document"));
+    } else {
+        h.request(Request::OpenDoc(path));
+    }
     Ok(JsValue::null())
 }
 

@@ -26,16 +26,36 @@ fn pdf_of(objs: &[String]) -> Vec<u8> {
 /// Two pages; page 2 has a text field `log` (4) and, as its second annotation, a link (7) whose
 /// action runs `script`; the document script defines `note(s)`.
 fn linked(script: &str) -> Vec<u8> {
-    pdf_of(&[
-        "<< /Type /Catalog /Pages 2 0 R /Names << /JavaScript << /Names [(init) 8 0 R] >> >> /AcroForm << /Fields [4 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 5 0 R >> >> >> >>".into(),
+    linked_with(script, Extra::default())
+}
+
+/// Entries added to [`linked`]'s objects, and objects added from 9 on.
+#[derive(Default)]
+struct Extra<'a> {
+    catalog: &'a str,
+    form: &'a str,
+    field: &'a str,
+    objects: &'a [&'a str],
+}
+
+/// [`linked`], with `extra` added.
+fn linked_with(script: &str, extra: Extra) -> Vec<u8> {
+    let Extra { catalog, form, field, objects } = extra;
+    let mut objs = vec![
+        format!(
+            "<< /Type /Catalog /Pages 2 0 R {catalog} /Names << /JavaScript << /Names [(init) 8 0 R] >> >> \
+             /AcroForm << /Fields [4 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 5 0 R >> >> {form} >> >>"
+        ),
         "<< /Type /Pages /Kids [6 0 R 3 0 R] /Count 2 /MediaBox [0 0 200 300] >>".into(),
         "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 7 0 R] >>".into(),
-        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (log) /V () /Rect [20 250 180 270] /P 3 0 R /F 4 >>".into(),
+        format!("<< /Type /Annot /Subtype /Widget /FT /Tx /T (log) /V () /Rect [20 250 180 270] /P 3 0 R /F 4 {field} >>"),
         "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),
         "<< /Type /Page /Parent 2 0 R >>".into(),
         format!("<< /Type /Annot /Subtype /Link /Rect [20 20 180 60] /Border [0 0 0] /A << /S /JavaScript /JS ({script}) >> >>"),
         "<< /S /JavaScript /JS (function note\\(s\\) { getField\\('log'\\).value += s; }) >>".into(),
-    ])
+    ];
+    objs.extend(objects.iter().map(|o| (*o).to_string()));
+    pdf_of(&objs)
 }
 
 fn log(s: &Session, id: DocId) -> String {
@@ -43,8 +63,12 @@ fn log(s: &Session, id: DocId) -> String {
 }
 
 fn open(script: &str) -> (Session, DocId) {
+    open_pdf(linked(script))
+}
+
+fn open_pdf(pdf: Vec<u8>) -> (Session, DocId) {
     let mut s = Session::new();
-    let id = s.open("link.pdf", None, Arc::new(linked(script)), None).unwrap();
+    let id = s.open("link.pdf", None, Arc::new(pdf), None).unwrap();
     s.take_js_output(id);
     (s, id)
 }
@@ -137,4 +161,67 @@ fn only_an_explicit_action_may_open_a_document() {
     let out = s.take_js_output(id);
     assert!(out.requests.iter().all(|r| !matches!(r, js::Request::OpenDoc(_))), "{out:?}");
     assert!(out.console.iter().any(|c| c.contains("open the document other.pdf")), "{out:?}");
+}
+
+/// A link that fails before it is done leaves no timer it set and clears none: the time-out
+/// never runs and the interval it cleared still does (review on #7144).
+#[test]
+fn a_failed_link_leaves_the_timers_as_they_were() {
+    let (mut s, id) = open("app.clearInterval\\(kept\\); app.setTimeOut\\('note\\(1\\)', 5\\); missing\\(\\);");
+    s.show_page(id, 1, 0.0);
+    let set = s.run_javascript(id, "var kept = app.setInterval('note(2)', 1000);", None).unwrap();
+    assert_eq!(set.error, None);
+    assert_eq!(s.next_timer(id), Some(1000.0));
+    let o = s.run_link_javascript(id, 1, 1, &[]).unwrap();
+    assert!(o.error.is_some());
+    assert_eq!(s.next_timer(id), Some(1000.0), "the interval stays and the time-out is gone");
+    s.run_timers(id, 1000.0);
+    assert_eq!(log(&s, id), "2");
+}
+
+/// A link that fails before it is done turns no layer (review on #7144).
+#[test]
+fn a_failed_link_turns_no_layer() {
+    let pdf = linked_with(
+        "this.getOCGs\\(\\)[0].state = false; missing\\(\\);",
+        Extra {
+            catalog: "/OCProperties << /OCGs [9 0 R] /D << /Order [9 0 R] >> >>",
+            objects: &["<< /Type /OCG /Name (Red) >>"],
+            ..Extra::default()
+        },
+    );
+    let (mut s, id) = open_pdf(pdf);
+    assert!(s.get(id).unwrap().info.layers[0].visible);
+    let o = s.run_link_javascript(id, 1, 1, &[]).unwrap();
+    assert!(o.error.is_some());
+    assert!(o.layers.is_empty(), "{:?}", o.layers);
+    assert!(s.get(id).unwrap().info.layers[0].visible);
+}
+
+/// In a read-only document a link's request still applies when its field change can't, and
+/// the outcome says why the change wasn't made (review on #7144).
+#[test]
+fn a_read_only_documents_link_goes_to_its_page_after_a_field_change() {
+    let (mut s, id) = open("note\\('x'\\); this.pageNum = 0;");
+    s.docs.iter_mut().find(|d| d.id == id).unwrap().editor = None;
+    let o = s.run_link_javascript(id, 1, 1, &[]).unwrap();
+    assert_eq!(o.requests, [js::Request::GoToPage(0)]);
+    let read_only = crate::EditError::ReadOnly(String::new()).to_string();
+    assert_eq!(o.error.as_deref(), Some(read_only.as_str()));
+    assert_eq!(log(&s, id), "");
+}
+
+/// A field's calculation that a link sets off (`calculateNow`) may not open another document,
+/// as when it runs on its own; the link itself still may (review on #7144).
+#[test]
+fn a_calculation_a_link_runs_may_not_open_a_document() {
+    let pdf = linked_with(
+        "this.calculateNow\\(\\); app.openDoc\\('own.pdf'\\);",
+        Extra { form: "/CO [4 0 R]", field: "/AA << /C << /S /JavaScript /JS (app.openDoc\\('calc.pdf'\\);) >> >>", ..Extra::default() },
+    );
+    let (mut s, id) = open_pdf(pdf);
+    let o = s.run_link_javascript(id, 1, 1, &[]).unwrap();
+    assert_eq!(o.error, None);
+    assert_eq!(o.requests, [js::Request::OpenDoc("own.pdf".into())]);
+    assert!(o.console.iter().any(|c| c.contains("open the document calc.pdf")), "{:?}", o.console);
 }
