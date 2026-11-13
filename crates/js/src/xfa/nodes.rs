@@ -260,9 +260,20 @@ pub(crate) fn resolve_som(h: &XHost, from: usize, expr: &str) -> Vec<usize> {
                     match index.as_deref() {
                         Some("*") => next.extend(found),
                         Some(i) => {
-                            if let Some(k) = i.parse::<usize>().ok().and_then(|i| found.get(i)) {
-                                next.push(*k);
-                            }
+                            // In a scope a number is the object's SOM number (pp. 94-95), which
+                            // an unnamed object of the class shares with a named one (it doesn't
+                            // advance the named ones' numbers), so it isn't the place among the
+                            // matches once an unnamed subform's content is among them.
+                            // Descendants (`..`) are numbered in their own containers, so there
+                            // it stays the place.
+                            let pick = i.parse::<usize>().ok().and_then(|i| {
+                                if descend {
+                                    found.get(i).copied()
+                                } else {
+                                    found.iter().copied().find(|&k| h.nodes.get(k).is_some_and(|n| n.index == i))
+                                }
+                            });
+                            next.extend(pick);
                         }
                         None => next.extend(found.first()),
                     }

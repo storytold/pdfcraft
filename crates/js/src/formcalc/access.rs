@@ -404,7 +404,20 @@ impl Interp<'_> {
                 if !n.is_finite() || n < 0.0 {
                     return Ok(Val::Null);
                 }
-                Ok(all.get(n as usize).map_or(Val::Null, |i| Val::Node(*i)))
+                // `n` finite and not negative: the cast saturates at the largest index.
+                let n = n as usize;
+                // A SOM name's number is its object's SOM number in the scope (XFA 3.3 pp.
+                // 94-95), which an unnamed object of the class shares with a named one, so it
+                // isn't the place among the objects once an unnamed subform's content is among
+                // them. A list from a variable or from descendants (`..`) counts places.
+                let by_number = match base {
+                    Expr::Ident(name) => !(self.lookup(name).is_some() || name.starts_with('$') || name.eq_ignore_ascii_case("xfa")),
+                    Expr::Member(..) => true,
+                    _ => false,
+                };
+                let pick =
+                    if by_number { all.iter().copied().find(|&i| self.h.nodes.get(i).is_some_and(|x| x.index == n)) } else { all.get(n).copied() };
+                Ok(pick.map_or(Val::Null, Val::Node))
             }
             Idx::Rel(k) => {
                 // From the instance the script runs in (`row[-1]` in a row is the row above),

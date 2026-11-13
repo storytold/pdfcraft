@@ -352,3 +352,30 @@ fn a_copy_takes_each_unnamed_repeating_subform_in_it() {
     assert_eq!(o.error, None, "{o:?}");
     assert_eq!(o.result.as_deref(), Some("1/1/form1[0].row[1].b[0]"));
 }
+
+/// form1 > { #subform > (unnamed field), field[0] = "a", field[1] = "b", go }: the unnamed field
+/// is numbered `field[0]` with the first named one and doesn't advance the named ones' numbers
+/// (`owners_are_found_by_number_wherever_they_stand` in the xfa crate), so `field[1]` is the
+/// second named field, though it is the third object of the name in the scope.
+#[test]
+fn a_numbered_name_is_the_object_with_that_number_not_the_nth_match() {
+    let root = subform(
+        "form1",
+        "form1[0]",
+        0,
+        vec![
+            unnamed("#subform", XfaKind::Subform, "form1[0]", vec![field("field", "form1[0].field[0]", 0, "u")]),
+            field("field", "form1[0].field[0]", 0, "a"),
+            field("field", "form1[0].field[1]", 1, "b"),
+            field("go", "form1[0].go[0]", 0, ""),
+        ],
+    );
+    for script in ["this.resolveNode('field[1]').rawValue", "xfa.resolveNode('form1.field[1]').rawValue"] {
+        let o = js(&root, script, "form1[0].go[0]");
+        assert_eq!((o.error, o.result.as_deref()), (None, Some("b")), "{script}");
+    }
+    let o = fc(&root, "field[1]", "form1[0].go[0]");
+    assert_eq!((o.error, o.result.as_deref()), (None, Some("b")));
+    let o = js(&root, "this.resolveNodes('field[*]').length", "form1[0].go[0]");
+    assert_eq!((o.error, o.result.as_deref()), (None, Some("3")));
+}
