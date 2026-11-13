@@ -163,7 +163,7 @@ let form = pdfcraft_xfa::layout_xml(template_xml)?;       // pages of items, for
   (`parse::restyle_from`), so the border, fill, edges and corners, font, paragraph, margins,
   the widget's border, multi-line, scrolling and check box shape, a choice list taking typed
   text, caption (font, reserve, label), item lists, the Required flag, tooltip, maxChars,
-  pictures, validation and format tests, the calculation's override and page breaks follow
+  pictures, validation and format tests and page breaks follow
   it. The rules a change must meet (paths, colours,
   measurements, whole numbers, sizes) are one crate, `pdfcraft-xfa-rules` (re-exported here as
   `prop_rules`), that this crate and `pdfcraft-js` both depend on, so a script never reads back a
@@ -209,7 +209,7 @@ let form = pdfcraft_xfa::layout_xml(template_xml)?;       // pages of items, for
   Validate failures show their message and keep the value, as Acrobat does for scripts. A value
   its validation picture doesn't describe (`formatTest`, XFA 3.3 p. 880) shows the format message
   when the user leaves the field, and stays. A field whose value says it overrides its
-  calculation (`value override="1"`, p. 883, in the template or set by a script) is left alone
+  calculation (`value override="1"`, p. 883, in the template) is left alone
   by the calculations. These choices live in `validation_rules`.
   A hidden instance of a repeating subform hides every instance (overrides apply to the template).
   A repeating subform shows what its data holds once the data holds any instance, else its
