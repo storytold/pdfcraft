@@ -67,3 +67,21 @@ fn printer_marks_are_refused_for_a_print_as_pictures() {
     assert!(matches!(s.print_pdf_marked(id, &settings, Some(&marks())), Err(EditError::Print(m)) if m.contains("as_image")));
     assert!(s.print_pdf_marked(id, &settings, None).is_ok());
 }
+
+/// Form fields only prints the fields and the marks, without the page content or comments.
+#[test]
+fn printer_marks_print_with_form_fields_only() {
+    let mut s = Session::new();
+    let id = s.open("fields.pdf", None, Arc::new(print_content_pdf()), None).unwrap();
+    let marks = PrinterMarks { color_bars: false, registration: false, ..marks() };
+    let settings = print::Settings { paper: (300.0, 600.0), content: print::Content::FormFieldsOnly, ..actual(vec![0]) };
+    let bytes = s.print_pdf_marked(id, &settings, Some(&marks)).unwrap();
+    assert!(sheet_texts(bytes.clone())[0].contains("1 of 1"), "the page information line prints");
+    let (_, _, rgba) = printed_pixels(bytes);
+    let count = |c: [u8; 3]| rgba.as_chunks::<4>().0.iter().filter(|p| p[..3].iter().zip(c).all(|(&a, b)| a.abs_diff(b) < 40)).count();
+    assert!(count([0, 255, 0]) > 5000, "the field prints");
+    assert_eq!((count([0, 0, 255]), count([255, 0, 0]), count([255, 255, 0])), (0, 0, 0), "no page content, stamp or comment");
+    let plain = s.print_pdf(id, &settings).unwrap();
+    let (with, without) = (inked(s.print_pdf_marked(id, &settings, Some(&marks)).unwrap()), inked(plain));
+    assert!(with > without + 100, "trim and bleed marks print: {with} inked pixels, {without} without marks");
+}

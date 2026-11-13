@@ -238,7 +238,8 @@ impl Session {
     /// [`Session::print_pdf`] with printer's marks (Acrobat's Marks and Bleeds) drawn around each
     /// printed page on the print copy only: the document itself gets none. A page is widened for
     /// them as [`pdfcraft_edit::add_printer_marks`] widens it, and marks the document already
-    /// carries are replaced, so a page never prints two sets. The pages print as they are, so
+    /// carries are replaced, so a page never prints two sets. With form fields only, the fields
+    /// and the marks print and the page content doesn't. The pages print as they are, so
     /// marks can't go with a print as pictures (Print as image, app-managed colour, or a document
     /// that allows only low-resolution printing).
     pub fn print_pdf_marked(&self, id: DocId, settings: &print::Settings, marks: Option<&crate::PrinterMarks>) -> Result<Vec<u8>, EditError> {
@@ -303,7 +304,16 @@ impl Session {
         if doc.signatures.iter().any(|s| s.verdict_shown) {
             let _ = pdfcraft_sign::show_status_layers(&mut cos, &mut doc.signatures.to_vec(), &doc.captions);
         }
+        let marked;
+        let mut settings = settings;
         if let Some(marks) = marks {
+            // Form fields only prints no page content, so the page content goes before the
+            // marks are added, and the marks then print as the page content does.
+            if settings.content == print::Content::FormFieldsOnly {
+                pdfcraft_print::keep_printed(&mut cos, print::Content::FormFieldsOnly);
+                marked = print::Settings { content: print::Content::Document, ..settings.clone() };
+                settings = &marked;
+            }
             let mut pages = settings.pages.clone();
             pages.sort_unstable();
             pages.dedup();
