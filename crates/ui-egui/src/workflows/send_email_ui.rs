@@ -44,11 +44,22 @@ fn reveal(_path: &Path) -> Result<(), String> {
     Err("File reveal is not available on this platform".into())
 }
 
+/// What opens a `mailto:` address in the email app: [`mail::open_address`]. A test puts a
+/// stand-in here as well.
+pub type AddressOpener = fn(&str, Box<dyn FnOnce() + Send>) -> Result<Receiver<Option<Why>>, MailError>;
+
+fn open_address(url: &str, wake: Box<dyn FnOnce() + Send>) -> Result<Receiver<Option<Why>>, MailError> {
+    mail::open_address(url, wake)
+}
+
 /// Attach to email's state on the app (`app.send_email`).
 pub struct SendEmailState {
     pub sender: Sender,
     pub reveal: Reveal,
+    pub open_address: AddressOpener,
     waiting: Option<Waiting>,
+    /// A `mailto:` address the email app is being asked to open, until it answers.
+    opening: Option<(String, Receiver<Option<Why>>)>,
     /// The file that couldn't be attached, for the dialog.
     pub problem: Option<Problem>,
     /// The document the person chose to send with its redaction marks unapplied.
@@ -59,7 +70,7 @@ pub struct SendEmailState {
 
 impl Default for SendEmailState {
     fn default() -> Self {
-        Self { sender: send, reveal, waiting: None, problem: None, send_with_marks: None, marks_for: None }
+        Self { sender: send, reveal, open_address, waiting: None, opening: None, problem: None, send_with_marks: None, marks_for: None }
     }
 }
 
@@ -165,6 +176,7 @@ impl PdfCraftApp {
     /// Each frame: the email app's answer, if it has come. Opened: the notice fades by itself as
     /// the message comes up. Not attached: the dialog.
     pub(crate) fn poll_send_email(&mut self) {
+        self.poll_open_address();
         let Some(w) = &self.send_email.waiting else { return };
         // Keep the notice up while it is the one showing (a notice fades after a while), and so
         // the "still waiting" one a second request brings.
@@ -212,8 +224,45 @@ impl PdfCraftApp {
         // long, or a name that reads like an instruction to some email app) goes without the
         // subject and body.
         let url = pdfcraft_engine::links::document_url(&problem.fallback.mailto).unwrap_or_else(|_| mail::mailto(&problem.compose.to, "", ""));
-        self.open_url(&url);
+        self.open_email_address(&url);
         self.show_in_folder(&problem.fallback.reveal);
+    }
+
+    /// Open the `mailto:` address `url` in the email app the person set (a document's email link
+    /// once allowed, the message without the file): through the system's handler for `mailto:`
+    /// links ([`mail::open_address`]), not as a web link, which macOS and Windows would hand to the
+    /// web browser. Where that can't be asked, or it fails, the address opens as a web link after
+    /// all, so a click is never lost.
+    pub(crate) fn open_email_address(&mut self, url: &str) {
+        let ctx = self.ctx.clone();
+        let wake = Box::new(move || {
+            if let Some(ctx) = ctx {
+                ctx.request_repaint();
+            }
+        });
+        match (self.send_email.open_address)(url, wake) {
+            Ok(rx) => {
+                self.send_email.opening = Some((url.to_string(), rx));
+                self.last_opened_url = Some(url.to_string());
+            }
+            Err(_) => self.open_url(url),
+        }
+    }
+
+    /// The email app's answer to [`Self::open_email_address`]: nothing to do when it opened;
+    /// otherwise the address opens as a web link.
+    fn poll_open_address(&mut self) {
+        let Some((url, rx)) = &self.send_email.opening else { return };
+        let failed = match rx.try_recv() {
+            Ok(None) => false,
+            Ok(Some(_)) | Err(TryRecvError::Disconnected) => true,
+            Err(TryRecvError::Empty) => return,
+        };
+        let url = url.clone();
+        self.send_email.opening = None;
+        if failed {
+            self.open_url(&url);
+        }
     }
 
     fn show_in_folder(&mut self, path: &Path) {

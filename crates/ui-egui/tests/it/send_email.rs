@@ -10,7 +10,7 @@ use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use pdfcraft_engine::{Edit, NewAnnotation, Shape, Style, rect_quad};
 use pdfcraft_platform::mail::{self, Answer, Compose, MailError, Why};
-use pdfcraft_ui_egui::{Dialog, PdfCraftApp};
+use pdfcraft_ui_egui::{Dialog, LinkOrigin, PdfCraftApp, PendingLink};
 
 const PDF: &[u8] = include_bytes!("../data/form.pdf");
 
@@ -19,6 +19,25 @@ thread_local! {
     static SENT: RefCell<Vec<Compose>> = const { RefCell::new(Vec::new()) };
     static REPLY: RefCell<Option<Sender<Answer>>> = const { RefCell::new(None) };
     static REVEALED: RefCell<Vec<PathBuf>> = const { RefCell::new(Vec::new()) };
+    /// The `mailto:` addresses the email app was asked to open, and how to answer.
+    static ADDRESSES: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    static ADDRESS_REPLY: RefCell<Option<Sender<Option<Why>>>> = const { RefCell::new(None) };
+    static NO_HANDLER: RefCell<bool> = const { RefCell::new(false) };
+}
+
+fn address_stand_in(url: &str, _wake: Box<dyn FnOnce() + Send>) -> Result<Receiver<Option<Why>>, MailError> {
+    if NO_HANDLER.with(|n| *n.borrow()) {
+        return Err(MailError::Unsupported);
+    }
+    let (tx, rx) = channel();
+    ADDRESSES.with(|a| a.borrow_mut().push(url.to_string()));
+    ADDRESS_REPLY.with(|r| *r.borrow_mut() = Some(tx));
+    Ok(rx)
+}
+
+/// Whether the last frame opened `url` as a web link (through the browser).
+fn opened_as_web_link(h: &Harness<'static, PdfCraftApp>, url: &str) -> bool {
+    h.output().platform_output.commands.iter().any(|c| matches!(c, egui::OutputCommand::OpenUrl(o) if o.url == url))
 }
 
 fn stand_in(compose: Compose, _wake: Box<dyn FnOnce() + Send>) -> Result<Receiver<Answer>, MailError> {
@@ -54,6 +73,7 @@ fn harness(test: &str) -> (Harness<'static, PdfCraftApp>, PathBuf) {
         app.open_bytes(&format!("{}.pdf", Path::new(&p).file_stem().unwrap().to_string_lossy()), Some(p.clone()), PDF.to_vec()).unwrap();
         app.send_email.sender = stand_in;
         app.send_email.reveal = reveal;
+        app.send_email.open_address = address_stand_in;
         app
     });
     h.run_steps(4);
@@ -107,6 +127,7 @@ fn an_email_app_that_cant_take_the_file_gets_a_message_and_the_file_is_shown() {
     h.run_steps(3);
     assert_eq!(h.state().dialog, None);
     assert_eq!(h.state().last_opened_url.as_deref(), Some("mailto:?subject=unchanged"));
+    assert_eq!(ADDRESSES.with(|a| a.borrow().clone()), ["mailto:?subject=unchanged"], "the email app opens it, not the browser");
     assert_eq!(REVEALED.with(|r| r.borrow().clone()), vec![path.clone()]);
     let _ = std::fs::remove_dir_all(path.parent().unwrap());
 }
@@ -261,6 +282,7 @@ fn form_harness(test: &str, pdf: &[u8]) -> (Harness<'static, PdfCraftApp>, PathB
         app.set_option("zoom", "150").unwrap();
         app.send_email.sender = stand_in;
         app.send_email.reveal = reveal;
+        app.send_email.open_address = address_stand_in;
         app
     });
     crate::support::settle(&mut h);
@@ -405,5 +427,43 @@ fn a_copy_that_was_never_handed_over_is_removed() {
     assert!(!asked[0].path.exists(), "the copy is gone");
     assert!(!asked[0].path.parent().unwrap().exists(), "and its folder");
     assert!(path.exists(), "the open file is never touched");
+    let _ = std::fs::remove_dir_all(path.parent().unwrap());
+}
+
+/// #6552 review (ioman2): a document's email link, once allowed, opens in the email app through
+/// the system's handler for `mailto:` links, not through the browser. Where the email app fails,
+/// or there is no handler to ask, it opens as a web link after all; a web link is unchanged.
+#[test]
+fn an_allowed_email_link_opens_in_the_email_app_and_falls_back_to_a_web_link() {
+    let (mut h, path) = harness("email_link");
+    let url = "mailto:ap@example.org?subject=Invoice";
+    let allow = |h: &mut Harness<'static, PdfCraftApp>, url: &str| {
+        h.state_mut().pending_link = Some(PendingLink { url: url.into(), origin: LinkOrigin::Link });
+        h.state_mut().resolve_pending_link(true);
+    };
+    allow(&mut h, url);
+    h.step();
+    assert_eq!(ADDRESSES.with(|a| a.borrow().clone()), [url]);
+    assert!(!opened_as_web_link(&h, url), "the browser isn't asked");
+    ADDRESS_REPLY.with(|r| r.borrow().as_ref().unwrap().send(None).unwrap());
+    h.step();
+    assert!(!opened_as_web_link(&h, url), "it opened: nothing more");
+    // The email app couldn't open it: a web link after all.
+    allow(&mut h, url);
+    ADDRESS_REPLY.with(|r| r.borrow().as_ref().unwrap().send(Some(Why::Failed("no".into()))).unwrap());
+    h.step();
+    assert!(opened_as_web_link(&h, url), "a failure opens it as a web link");
+    // No handler to ask on this system: a web link straight away.
+    NO_HANDLER.with(|n| *n.borrow_mut() = true);
+    allow(&mut h, url);
+    h.step();
+    assert!(opened_as_web_link(&h, url));
+    assert_eq!(ADDRESSES.with(|a| a.borrow().len()), 2);
+    NO_HANDLER.with(|n| *n.borrow_mut() = false);
+    // A web address never goes to the email app.
+    allow(&mut h, "https://example.org/");
+    h.step();
+    assert!(opened_as_web_link(&h, "https://example.org/"));
+    assert_eq!(ADDRESSES.with(|a| a.borrow().len()), 2);
     let _ = std::fs::remove_dir_all(path.parent().unwrap());
 }

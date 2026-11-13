@@ -22,6 +22,11 @@
 //! can attach it themselves. [`send`] never opens it by itself; it reports it in
 //! [`Answer::NotAttached`] for the caller to offer, so nothing fails without a word.
 //!
+//! A `mailto:` address without a file (a document's email link, the fallback's message) opens
+//! through the same programs' handler with [`open_address`]: Launch Services on macOS, the shell on
+//! Windows, `xdg-open` elsewhere. A web browser's command, which is what opening it as a web link
+//! runs on macOS and Windows, would hand the address to the browser instead of the email program.
+//!
 //! [`detect`] reads the default (it runs the system's own tools); [`plan_for`] turns a default into
 //! what would run and is pure, so every system's plans are tested on any machine; [`send`] does
 //! both on a thread and runs the plan.
@@ -348,6 +353,62 @@ fn percent_encode(text: &str, also_keep: &str) -> String {
         }
     }
     out
+}
+
+// ---------------------------------------------------------------------------------------------
+// Opening a `mailto:` address
+// ---------------------------------------------------------------------------------------------
+
+/// What runs [`open_address`]'s script on Windows: the address, read from standard input so no
+/// command line has to quote it, handed to the shell's handler for `mailto:` links.
+const WINDOWS_OPEN_ADDRESS: &str = "$ErrorActionPreference = 'Stop'\nStart-Process -FilePath ([Console]::In.ReadLine())\nexit 0\n";
+
+/// How [`open_address`] opens `url` on system `os` ([`std::env::consts::OS`]'s names): through
+/// the system's own handler for `mailto:` links, the program the person set for email, never a
+/// web browser's command. macOS asks Launch Services (`open`), Windows the shell (`Start-Process`,
+/// in PowerShell, the address on standard input), Linux and the BSDs `xdg-open` from `PATH`.
+/// `None` where there is no such handler to ask (another system, no `xdg-open`, no
+/// `SystemRoot`), or when `url` isn't a `mailto:` address a command can carry as it is (a line
+/// break, a control character).
+pub fn address_route(os: &str, url: &str, system_root: Option<&std::ffi::OsStr>, path: Option<&std::ffi::OsStr>) -> Option<Route> {
+    let is_mailto = url.get(.."mailto:".len()).is_some_and(|head| head.eq_ignore_ascii_case("mailto:"));
+    if !is_mailto || url.chars().any(char::is_control) {
+        return None;
+    }
+    let (command, args, stdin, watch) = match os {
+        "macos" => (PathBuf::from("/usr/bin/open"), vec![url.to_string()], None, Watch::Exit),
+        "windows" => (
+            system_program(system_root, "WindowsPowerShell\\v1.0\\powershell.exe")?,
+            powershell_args(WINDOWS_OPEN_ADDRESS),
+            Some(format!("{url}\n")),
+            Watch::Exit,
+        ),
+        // `xdg-open` may stay for as long as the program it started.
+        "linux" | "freebsd" | "openbsd" | "netbsd" | "dragonfly" => (find_program(path?, "xdg-open")?, vec![url.to_string()], None, Watch::Started),
+        _ => return None,
+    };
+    Some(Route::Run { command, args, stdin, watch })
+}
+
+/// Open the `mailto:` address `url` in the default email program on a thread, as
+/// [`address_route`] says: the receiver gets `None` when it opened, or why not, and `wake` is
+/// called once it is there. [`MailError::Unsupported`] when this system has no handler to ask;
+/// the caller then opens the address as any other link.
+pub fn open_address(url: &str, wake: impl FnOnce() + Send + 'static) -> Result<Receiver<Option<Why>>, MailError> {
+    if cfg!(target_arch = "wasm32") {
+        return Err(MailError::Unsupported);
+    }
+    let route = address_route(std::env::consts::OS, url, std::env::var_os("SystemRoot").as_deref(), std::env::var_os("PATH").as_deref());
+    let Some(Route::Run { command, args, stdin, watch }) = route else { return Err(MailError::Unsupported) };
+    let (tx, rx) = channel();
+    std::thread::Builder::new()
+        .name("pdfcraft-mail-address".into())
+        .spawn(move || {
+            let _ = tx.send(run(&command, &args, stdin.as_deref(), watch));
+            wake();
+        })
+        .map_err(|e| MailError::CouldNotStart(e.to_string()))?;
+    Ok(rx)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1486,6 +1547,44 @@ mod tests {
             decoded.extend(piece);
         }
         assert_eq!(String::from_utf8(decoded).unwrap(), c.subject);
+    }
+
+    /// #6552 review (ioman2): a `mailto:` address opens through the system's handler for
+    /// `mailto:` links, never a browser's command; each system's route, on any machine.
+    #[test]
+    fn a_mailto_address_opens_through_the_systems_email_handler() {
+        let url = "mailto:ap@example.org?subject=Invoice%2026340";
+        let root = std::ffi::OsStr::new(r"C:\Windows");
+        let route = |os: &str, path: Option<&std::ffi::OsStr>| address_route(os, url, Some(root), path);
+        let Some(Route::Run { command, args, stdin, watch }) = route("macos", None) else { panic!("macOS opens it") };
+        assert_eq!((command, args, stdin, watch), (PathBuf::from("/usr/bin/open"), vec![url.to_string()], None, Watch::Exit));
+        // Windows: the address goes on standard input, never on a command line to be quoted.
+        let Some(Route::Run { command, args, stdin, watch }) = route("windows", None) else { panic!("Windows opens it") };
+        assert!(command.to_string_lossy().ends_with(r"WindowsPowerShell\v1.0\powershell.exe"), "{}", command.display());
+        assert_eq!(args, powershell_args(WINDOWS_OPEN_ADDRESS));
+        assert!(!args.iter().any(|a| a.contains("example.org")));
+        assert_eq!((stdin.as_deref(), watch), (Some("mailto:ap@example.org?subject=Invoice%2026340\n"), Watch::Exit));
+        assert!(WINDOWS_OPEN_ADDRESS.contains("Start-Process -FilePath ([Console]::In.ReadLine())"));
+        assert!(address_route("windows", url, None, None).is_none(), "no SystemRoot, no PowerShell to ask");
+        // Linux and the BSDs: xdg-open from PATH, or nothing to ask.
+        let dir = std::env::temp_dir().join(format!("pdfcraft-mail-open-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("xdg-open"), b"#!/bin/sh\n").unwrap();
+        #[cfg(unix)]
+        std::fs::set_permissions(dir.join("xdg-open"), std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+        let path = std::env::join_paths([dir.clone()]).unwrap();
+        for os in ["linux", "freebsd", "openbsd"] {
+            let Some(Route::Run { command, args, stdin, watch }) = route(os, Some(&path)) else { panic!("{os} opens it") };
+            assert_eq!((command, args, stdin, watch), (dir.join("xdg-open"), vec![url.to_string()], None, Watch::Started), "{os}");
+            assert!(route(os, Some(std::ffi::OsStr::new("/definitely/not/here"))).is_none(), "{os} without xdg-open");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+        // Another system, or something that isn't a mailto: address a command can carry.
+        assert!(route("ios", None).is_none());
+        for bad in ["https://example.org", "file:///etc/passwd", "mailto:a@example.org\nb", "-mailto:a@example.org", "mail"] {
+            assert!(address_route("macos", bad, Some(root), None).is_none(), "{bad}");
+        }
+        assert!(address_route("macos", "MAILTO:a@example.org", Some(root), None).is_some(), "the scheme in any case");
     }
 
     #[test]
