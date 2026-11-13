@@ -506,113 +506,37 @@ fn a_change_past_the_listed_edges_changes_only_that_side() {
     assert_eq!(colours(&crate::apply_overrides(&t, &crate::overrides(&reopened))), [a, b, a, red]);
 }
 
-/// Each instance of a repeating subform is drawn with its own property changes: a fill and a
-/// mandatory flag set on the third row's cell, and an edge colour on the second row, change
-/// those rows only; the live form scripts read agrees.
-#[test]
-fn each_instance_of_a_repeating_subform_has_its_own_changes() {
-    let tpl = TEMPLATE.replace(r#"<occur min="1" max="3"/>"#, r#"<occur min="3" max="3"/>"#);
-    let t = crate::parse(&tpl).unwrap().0;
-    let mut ov = overrides(
-        "form[0].rows[0].row[2].cell[0]",
-        &[("border#0/fill#0/color#0", Some("value"), "255,0,0"), ("validate#0", Some("nullTest"), "error")],
-    );
-    // The first instance's own: green and mandatory, and on none of the others.
-    ov.set_prop("form[0].rows[0].row[0].cell[0]", "border#0/fill#0/color#0", Some("value"), "0,128,0").unwrap();
-    ov.set_prop("form[0].rows[0].row[0].cell[0]", "validate#0", Some("nullTest"), "error").unwrap();
-    ov.set_prop("form[0].rows[0].row[1]", "border#0/edge#0/color#0", Some("value"), "0,0,255").unwrap();
-    let form = laid_out(&t, &ov);
-    let items: Vec<&Item> = form.pages.iter().flat_map(|p| p.items.iter()).collect();
-    let required: Vec<(String, bool)> = items
-        .iter()
-        .filter_map(|i| match i {
-            Item::Widget(w) if w.som.contains(".row[") => Some((w.som.clone(), w.required)),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(
-        required,
-        [
-            ("form[0].rows[0].row[0].cell[0]".to_string(), true),
-            ("form[0].rows[0].row[1].cell[0]".to_string(), false),
-            ("form[0].rows[0].row[2].cell[0]".to_string(), true),
-        ]
-    );
-    let (red, green, blue) = (rgb(255.0, 0.0, 0.0), rgb(0.0, 128.0, 0.0), rgb(0.0, 0.0, 255.0));
-    let count = |c: [f64; 3]| items.iter().filter(|i| matches!(i, Item::Fill { color, .. } if *color == c)).count();
-    let blue_lines = items.iter().filter(|i| matches!(i, Item::Line { color, .. } if *color == blue)).count();
-    assert_eq!((count(red), count(green), blue_lines), (1, 1, 4), "one red cell, one green cell, one row's four edges blue");
-    // The live form scripts read agrees, instance by instance.
-    let live = crate::form_tree(&t, None, &ov);
-    let rows = &live.root.children.iter().find(|n| n.name == "rows").unwrap().children;
-    let fill_of = |n: &crate::FormNode| {
-        n.children[0].props.elements.iter().find(|e| e.tag == "border").map(|b| b.children[0].children[0].attrs[0].1.clone()).unwrap_or_default()
-    };
-    assert_eq!(rows.iter().map(fill_of).collect::<Vec<_>>(), ["0,128,0", "", "255,0,0"]);
-}
-
-/// The form laid out as `rerender` does: the template with the changes of its single
-/// objects, each instance of a repeating subform with its own.
+/// The form laid out as `rerender` does: the template with the kept changes applied.
 fn laid_out(t: &Template, ov: &Overrides) -> crate::Form {
     let applied = crate::apply_overrides_split(t, ov);
-    crate::layout::layout_with_overrides(&applied.template, None, ov, &applied.per_instance).unwrap()
+    crate::layout::layout_with_overrides(&applied.template, None, ov).unwrap()
 }
 
-/// A field of a repeating subform's later instance is measured with that instance's changes, as
-/// it is drawn: a larger font set on the second row's field makes that row taller, and what
-/// follows moves down, instead of the row keeping the first row's height and the field running
-/// over the next object.
+/// A radio button takes the changes to its tooltip and on value, as its other properties: the
+/// group's tooltip stands in only for a button without one, and the template's on value no
+/// longer names the button.
 #[test]
-fn an_instance_is_measured_with_its_own_changes() {
+fn a_radio_buttons_tooltip_and_on_value_follow_its_changes() {
     let t = crate::parse(
         r##"<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
 <subform name="form" layout="tb">
  <pageSet><pageArea name="p"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
- <subform name="rows" layout="tb"><subform name="row" layout="tb"><occur min="1" max="3" initial="2"/><field name="cell" w="2in"><ui><textEdit/></ui><font size="8pt"/></field></subform></subform>
- <draw name="after" w="2in" h="0.3in"><value><text>After</text></value></draw>
-</subform></template>"##,
-    )
-    .unwrap()
-    .0;
-    let cell = |form: &crate::Form, som: &str| {
-        items(form).into_iter().find_map(|i| if let Item::Widget(w) = i { (w.som == som).then_some(w.rect) } else { None }).unwrap()
-    };
-    let after = |form: &crate::Form| {
-        items(form).into_iter().find_map(|i| if let Item::Text(s) = i { (s.text == "After").then_some(s.baseline) } else { None }).unwrap()
-    };
-    let (first, second) = ("form[0].rows[0].row[0].cell[0]", "form[0].rows[0].row[1].cell[0]");
-    let before = laid_out(&t, &Overrides::default());
-    let ov = overrides(second, &[("font#0", Some("size"), "30pt")]);
-    let changed = laid_out(&t, &ov);
-    assert_eq!(cell(&changed, first).h, cell(&before, first).h, "the first row keeps its size");
-    assert!(cell(&changed, second).h > cell(&before, second).h + 20.0, "{:?} {:?}", cell(&changed, second), cell(&before, second));
-    assert!(after(&changed) >= cell(&changed, second).bottom() - 0.01, "what follows comes after the taller row");
-}
-
-/// A radio button in a repeating subform takes its instance's changes to its tooltip and on
-/// value, as its other properties: the group's tooltip stands in only for a button without
-/// one, and the template's on value no longer names the button.
-#[test]
-fn a_radio_buttons_tooltip_and_on_value_follow_its_instances_changes() {
-    let t = crate::parse(
-        r##"<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
-<subform name="form" layout="tb">
- <pageSet><pageArea name="p"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
- <subform name="rows" layout="tb"><subform name="row" layout="tb"><occur min="1" max="3" initial="2"/>
+ <subform name="once" layout="tb">
   <exclGroup name="g" layout="lr-tb"><assist><toolTip>Group</toolTip></assist>
    <field name="a" w="1in" h="0.3in"><ui><checkButton shape="round"/></ui><items><text>A</text></items><assist><toolTip>Old</toolTip></assist></field>
    <field name="b" w="1in" h="0.3in"><ui><checkButton shape="round"/></ui><items><text>B</text></items></field>
-  </exclGroup></subform></subform>
+  </exclGroup></subform>
 </subform></template>"##,
     )
     .unwrap()
     .0;
+    let before = laid_out(&t, &Overrides::default());
     let mut ov = Overrides::default();
-    ov.set_prop("form[0].rows[0].row[1].g[0].a[0]", "assist#0/toolTip#0", None, "New").unwrap();
-    ov.set_prop("form[0].rows[0].row[1].g[0].a[0]", "items#0/text#0", None, "Z").unwrap();
+    ov.set_prop("form[0].once[0].g[0].a[0]", "assist#0/toolTip#0", None, "New").unwrap();
+    ov.set_prop("form[0].once[0].g[0].a[0]", "items#0/text#0", None, "Z").unwrap();
     let form = laid_out(&t, &ov);
-    let radio = |som: &str| {
-        items(&form)
+    let radio = |form: &crate::Form, som: &str| {
+        items(form)
             .into_iter()
             .find_map(|i| match i {
                 Item::Widget(w) if w.som == som => match &w.kind {
@@ -623,9 +547,9 @@ fn a_radio_buttons_tooltip_and_on_value_follow_its_instances_changes() {
             })
             .unwrap()
     };
-    assert_eq!(radio("form[0].rows[0].row[0].g[0].a[0]"), ("A".to_string(), Some("Old".to_string())));
-    assert_eq!(radio("form[0].rows[0].row[1].g[0].a[0]"), ("Z".to_string(), Some("New".to_string())));
-    assert_eq!(radio("form[0].rows[0].row[1].g[0].b[0]"), ("B".to_string(), Some("Group".to_string())));
+    assert_eq!(radio(&before, "form[0].once[0].g[0].a[0]"), ("A".to_string(), Some("Old".to_string())));
+    assert_eq!(radio(&form, "form[0].once[0].g[0].a[0]"), ("Z".to_string(), Some("New".to_string())));
+    assert_eq!(radio(&form, "form[0].once[0].g[0].b[0]"), ("B".to_string(), Some("Group".to_string())));
 }
 
 /// A button's box is its field border, so a fill there that is more than a colour (here a
@@ -690,42 +614,6 @@ fn a_validation_script_turned_on_again_runs() {
     assert_eq!(validates(&overrides("form[0].off[0]", &[("validate#0", Some("scriptTest"), "error")]), "form[0].off[0]"), 1);
     assert_eq!(validates(&Overrides::default(), "form[0].boxed[0]"), 1);
     assert_eq!(validates(&overrides("form[0].boxed[0]", &[("validate#0", Some("scriptTest"), "disabled")]), "form[0].boxed[0]"), 0);
-}
-
-/// A field split by a page break has its border drawn round each piece as its instance's
-/// changes leave it: an edge colour a script set on a repeating subform's field stays on both
-/// pieces, not the template's.
-#[test]
-fn a_split_fields_pieces_keep_its_changed_border() {
-    let t = crate::parse(
-        r##"<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
-<subform name="form" layout="tb">
- <pageSet><pageArea name="p"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
- <subform name="rows" layout="tb"><occur min="1" max="3" initial="1"/>
-  <draw name="filler" w="7.5in" h="8in"><value><text>above</text></value></draw>
-  <field name="notes" w="7.5in" minH="3in"><border><edge><color value="0,0,0"/></edge></border>
-   <ui><textEdit multiLine="1"><border><edge presence="hidden"/></border></textEdit></ui>
-   <caption reserve="0.5in" placement="top"><value><text>Notes</text></value></caption></field>
- </subform>
-</subform></template>"##,
-    )
-    .unwrap()
-    .0;
-    let ov = overrides("form[0].rows[0].notes[0]", &[("border#0/edge#0/color#0", Some("value"), "255,0,0")]);
-    let form = laid_out(&t, &ov);
-    assert_eq!(form.pages.len(), 2);
-    let red = rgb(255.0, 0.0, 0.0);
-    for (i, page) in form.pages.iter().enumerate() {
-        let wide: Vec<[f64; 3]> = page
-            .items
-            .iter()
-            .filter_map(|i| match i {
-                Item::Line { from, to, color, .. } if (from.1 - to.1).abs() < 0.01 && (to.0 - from.0).abs() > 500.0 => Some(*color),
-                _ => None,
-            })
-            .collect();
-        assert!(!wide.is_empty() && wide.iter().all(|c| *c == red), "page {i}: {wide:?}");
-    }
 }
 
 /// A validation's script text isn't charged to the object's budget when changes are applied, as
@@ -872,7 +760,7 @@ fn hostile_property_changes_stay_bounded() {
     assert!(ov.set_prop("form[0].plain[0]", &["extras#0"; 9].join("/"), Some("x"), "1").is_err(), "deeper than the reader keeps");
     let start = std::time::Instant::now();
     let applied = crate::apply_overrides_split(&t, &ov);
-    let form = crate::layout::layout_with_overrides(&applied.template, None, &ov, &applied.per_instance).unwrap();
+    let form = crate::layout::layout_with_overrides(&applied.template, None, &ov).unwrap();
     let live = crate::form_tree(&t, None, &ov);
     let spent = start.elapsed();
     // Generous for a loaded machine: unbounded work would take minutes.
@@ -987,49 +875,37 @@ fn changes_that_cant_be_drawn_or_kept_are_noted() {
     assert!(notes.iter().any(|n| n.contains("not applied") && !n.contains("saved")), "{notes:?}");
 }
 
-/// A field on an unnamed page area is named by the live form as `#pageArea[i]…`: its changes
-/// are drawn under that name too.
+/// A property change is kept for an object the template makes once, and the walk that applies
+/// it tells that as the rule does ([`crate::som_made_once`]). An unnamed subform adds no SOM
+/// segment and data makes no instance of it, so what it holds is made once unless its `occur`
+/// starts it more than once, whatever its `occur` maximum: a field in one that starts once
+/// (`max="-1"`) takes its change, a field in one that starts twice doesn't, and neither does a
+/// field in a named subform that may repeat. The changes left out are counted and noted.
 #[test]
-fn an_unnamed_page_areas_fields_take_their_changes() {
-    let tpl = TEMPLATE.replace(r#"<pageArea name="p">"#, r#"<pageArea><field name="pf" x="1in" y="0.2in" w="1in" h="0.3in"/>"#);
-    let t = crate::parse(&tpl).unwrap().0;
-    let live = crate::form_tree(&t, None, &Overrides::default());
-    assert!(live.root.children.iter().any(|n| n.som == "#pageArea[0]" && n.children.iter().any(|c| c.som == "#pageArea[0].pf[0]")));
-    let ov = overrides("#pageArea[0].pf[0]", &[("border#0/fill#0/color#0", Some("value"), "255,0,0")]);
-    let form = laid_out(&t, &ov);
-    let red = rgb(255.0, 0.0, 0.0);
-    assert!(form.pages.iter().flat_map(|p| p.items.iter()).any(|i| matches!(i, Item::Fill { color, .. } if *color == red)));
-}
-
-/// On an unnamed page area, a field inside an unnamed subform, and a button of an exclusion
-/// group, are named by the live form under the page area's path (the subform shares it, the
-/// button is the group's): their changes are drawn under those names too.
-#[test]
-fn an_unnamed_page_areas_nested_fields_and_buttons_take_their_changes() {
+fn a_change_is_applied_where_the_template_makes_the_object_once() {
     let tpl = TEMPLATE.replace(
-        r#"<pageArea name="p">"#,
-        r#"<pageArea><subform layout="position"><field name="qf" x="1in" y="0.2in" w="1in" h="0.3in"/></subform><exclGroup name="g" x="3in" y="0.2in"><field name="a" w="1in" h="0.3in"><ui><checkButton shape="round"/></ui><items><text>A</text></items></field></exclGroup>"#,
+        r#"<draw name="label""#,
+        r#"<subform layout="tb"><occur min="1" max="-1"/><field name="inner" w="2in" h="0.3in"><ui><textEdit/></ui></field></subform><subform layout="tb"><occur min="2" max="2"/><field name="twice" w="2in" h="0.3in"><ui><textEdit/></ui></field></subform><draw name="label""#,
     );
     let t = crate::parse(&tpl).unwrap().0;
-    let live = crate::form_tree(&t, None, &Overrides::default());
-    let soms = |n: &crate::FormNode| -> Vec<String> {
-        fn all(n: &crate::FormNode, out: &mut Vec<String>) {
-            out.push(n.som.clone());
-            n.children.iter().for_each(|c| all(c, out));
-        }
-        let mut out = Vec::new();
-        all(n, &mut out);
-        out
-    };
-    let names = soms(&live.root);
-    assert!(names.iter().any(|s| s == "#pageArea[0].qf[0]") && names.iter().any(|s| s == "#pageArea[0].g[0].a[0]"), "{names:?}");
-    let mut ov = Overrides::default();
-    ov.set_prop("#pageArea[0].qf[0]", "border#0/fill#0/color#0", Some("value"), "255,0,0").unwrap();
-    ov.set_prop("#pageArea[0].g[0].a[0]", "border#0/fill#0/color#0", Some("value"), "0,0,255").unwrap();
-    let form = laid_out(&t, &ov);
-    let fills: Vec<[f64; 3]> = items(&form).iter().filter_map(|i| if let Item::Fill { color, .. } = i { Some(*color) } else { None }).collect();
-    assert!(fills.contains(&rgb(255.0, 0.0, 0.0)), "the field in the unnamed subform: {fills:?}");
-    assert!(fills.contains(&rgb(0.0, 0.0, 255.0)), "the group's button: {fills:?}");
+    let (inner, twice, cell) = ("form[0].inner[0]", "form[0].twice[0]", "form[0].rows[0].row[0].cell[0]");
+    assert_eq!([inner, twice, cell].map(|som| crate::som_made_once(&t, som)), [true, false, false]);
+    let (red, green, blue) = (rgb(255.0, 0.0, 0.0), rgb(0.0, 128.0, 0.0), rgb(0.0, 0.0, 255.0));
+    let mut ov = overrides(inner, &[("border#0/fill#0/color#0", Some("value"), "255,0,0")]);
+    ov.set_prop(twice, "border#0/fill#0/color#0", Some("value"), "0,128,0").unwrap();
+    ov.set_prop(cell, "border#0/fill#0/color#0", Some("value"), "0,0,255").unwrap();
+    let applied = crate::apply_overrides_split(&t, &ov);
+    let form = crate::layout::layout_with_overrides(&applied.template, None, &ov).unwrap();
+    let count = |c: [f64; 3]| items(&form).iter().filter(|i| matches!(i, Item::Fill { color, .. } if *color == c)).count();
+    assert_eq!((count(red), count(green), count(blue)), (1, 0, 0));
+    assert_eq!(applied.unplaced, 2);
+    let notes = crate::script::property_notes(&ov, &applied);
+    assert!(notes.iter().any(|n| n.starts_with("2 object(s)") && n.contains("not drawn")), "{notes:?}");
+    // Nothing left out, nothing noted.
+    let ov = overrides(inner, &[("border#0/fill#0/color#0", Some("value"), "255,0,0")]);
+    let applied = crate::apply_overrides_split(&t, &ov);
+    assert_eq!(applied.unplaced, 0);
+    assert!(crate::script::property_notes(&ov, &applied).is_empty());
 }
 
 fn items(form: &crate::Form) -> Vec<&Item> {
@@ -1338,118 +1214,6 @@ fn changes_the_pages_dont_show_need_no_restyle() {
     assert_eq!(speak.and_then(|s| s.text.as_deref()), Some("Say this"));
 }
 
-/// Three repeating subforms, three instances each: flowed rows, rows in a positioned box (drawn,
-/// not flowed) and a table's rows.
-const OWN_ROWS: &str = r##"<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
-<subform name="form" layout="tb">
- <pageSet><pageArea name="p"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
- <subform name="rows" layout="tb"><subform name="row" layout="tb"><occur min="3" max="3"/><field name="cell" w="2in" h="0.3in"><ui><textEdit/></ui></field></subform></subform>
- <subform name="box" layout="position" w="7in" h="2in"><subform name="list" layout="tb" x="0in" y="0in" w="7in"><subform name="row" layout="tb"><occur min="3" max="3"/><field name="cell" w="2in" h="0.3in"><ui><textEdit/></ui></field></subform></subform></subform>
- <subform name="grid" layout="table" columnWidths="2in"><subform name="row" layout="row"><occur min="3" max="3"/><field name="cell" h="0.3in"><ui><textEdit/></ui></field></subform></subform>
-</subform></template>"##;
-
-/// A script's change to one instance of a repeating subform itself (not to what it holds) is
-/// laid out and drawn for that instance only: its font, which its fields inherit, and its
-/// margins, which move what it holds and what follows it; flowed, in a positioned box and as a
-/// table's row alike. A row's border change still draws.
-#[test]
-fn an_instances_own_font_and_margins_are_laid_out_and_drawn() {
-    let t = crate::parse(OWN_ROWS).unwrap().0;
-    let mut ov = Overrides::default();
-    for row in ["form[0].rows[0].row[1]", "form[0].box[0].list[0].row[1]", "form[0].grid[0].row[1]"] {
-        ov.set_prop(row, "font#0", Some("size"), "20pt").unwrap();
-        ov.set_prop(row, "margin#0", Some("topInset"), "0.25in").unwrap();
-        ov.set_prop(row, "border#0/edge#0/color#0", Some("value"), "0,0,255").unwrap();
-    }
-    let form = laid_out(&t, &ov);
-    let cell = |som: &str| {
-        items(&form)
-            .into_iter()
-            .find_map(|i| if let Item::Widget(w) = i { (w.som == som).then_some((w.rect, w.face.size)) } else { None })
-            .unwrap_or_else(|| panic!("{som}"))
-    };
-    for parent in ["form[0].rows[0]", "form[0].box[0].list[0]", "form[0].grid[0]"] {
-        let [(r0, s0), (r1, s1), (r2, s2)] = [0, 1, 2].map(|i| cell(&format!("{parent}.row[{i}].cell[0]")));
-        assert_eq!((s0, s1, s2), (10.0, 20.0, 10.0), "{parent}: only the second row's font");
-        assert!((r1.y - r0.bottom() - 18.0).abs() < 0.01, "{parent}: the second row's top margin, {r0:?} {r1:?}");
-        assert!((r2.y - r1.bottom()).abs() < 0.01, "{parent}: the third row follows, {r1:?} {r2:?}");
-    }
-    let blue = rgb(0.0, 0.0, 255.0);
-    let blue_lines = items(&form).into_iter().filter(|i| matches!(i, Item::Line { color, .. } if *color == blue)).count();
-    assert!(blue_lines >= 3 * 4, "each second row's edges, {blue_lines}");
-}
-
-/// A script's change to where one instance of a repeating subform breaks the page (XFA 3.3
-/// p. 632) moves that instance only: the second row breaks to a new page, the others stay;
-/// rows without changes still break as the template says, before the first and after the last.
-#[test]
-fn an_instances_own_page_breaks_are_laid_out() {
-    let t = crate::parse(OWN_ROWS).unwrap().0;
-    let page_of =
-        |form: &crate::Form, som: &str| form.pages.iter().position(|p| p.items.iter().any(|i| matches!(i, Item::Widget(w) if w.som == som))).unwrap();
-    let rows = |form: &crate::Form| [0, 1, 2].map(|i| page_of(form, &format!("form[0].rows[0].row[{i}].cell[0]")));
-    assert_eq!(rows(&laid_out(&t, &Overrides::default())), [0, 0, 0]);
-    let ov = overrides("form[0].rows[0].row[1]", &[("break#0", Some("before"), "pageArea")]);
-    let form = laid_out(&t, &ov);
-    assert_eq!(rows(&form), [0, 1, 1], "the second row starts a page");
-    assert_eq!(page_of(&form, "form[0].grid[0].row[0].cell[0]"), 1);
-    let ov = overrides("form[0].rows[0].row[0]", &[("breakAfter#0", Some("targetType"), "pageArea")]);
-    assert_eq!(rows(&laid_out(&t, &ov)), [0, 1, 1], "a break after the first row");
-    // A table's rows alike, the header row (the overflow leader) starting the new page.
-    let grid = |form: &crate::Form| [0, 1, 2].map(|i| page_of(form, &format!("form[0].grid[0].row[{i}].cell[0]")));
-    let ov = overrides("form[0].grid[0].row[1]", &[("breakBefore#0", Some("targetType"), "pageArea")]);
-    assert_eq!(grid(&laid_out(&t, &ov)), [0, 1, 1], "a table row's own break before");
-    let ov = overrides("form[0].grid[0].row[1]", &[("breakAfter#0", Some("targetType"), "pageArea")]);
-    assert_eq!(grid(&laid_out(&t, &ov)), [0, 0, 1], "a table row's own break after");
-    let led = OWN_ROWS.replace(
-        r#"<subform name="grid" layout="table" columnWidths="2in"><subform name="row" layout="row">"#,
-        r#"<subform name="grid" layout="table" columnWidths="2in"><overflow leader="head"/><subform name="head" layout="row"><draw name="title" h="0.3in"><value><text>Head</text></value></draw></subform><subform name="row" layout="row">"#,
-    );
-    let tl = crate::parse(&led).unwrap().0;
-    let form = laid_out(&tl, &overrides("form[0].grid[0].row[1]", &[("breakBefore#0", Some("targetType"), "pageArea")]));
-    let heads: Vec<usize> = form
-        .pages
-        .iter()
-        .enumerate()
-        .filter(|(_, p)| p.items.iter().any(|i| matches!(i, Item::Text(s) if s.text == "Head")))
-        .map(|(n, _)| n)
-        .collect();
-    assert_eq!((grid(&form), heads), ([0, 1, 1], vec![0, 1]), "the header row repeats on the new page");
-    // The template's own break: once, before the first row.
-    let broken = OWN_ROWS.replace(r#"<subform name="row" layout="tb"><occur min="3" max="3"/><field name="cell" w="2in" h="0.3in"><ui><textEdit/></ui></field></subform></subform>
- <subform name="box""#, r#"<subform name="row" layout="tb"><occur min="3" max="3"/><breakBefore targetType="pageArea"/><field name="cell" w="2in" h="0.3in"><ui><textEdit/></ui></field></subform></subform>
- <subform name="box""#);
-    let t = crate::parse(&broken).unwrap().0;
-    assert_eq!(rows(&laid_out(&t, &Overrides::default())), [0, 0, 0], "nothing on the page before it");
-    let ov = overrides("form[0].rows[0].row[2]", &[("breakBefore#0", Some("targetType"), "pageArea")]);
-    assert_eq!(rows(&laid_out(&t, &ov)), [0, 0, 1], "the third row's own break");
-}
-
-/// An exclusion group in a repeating subform is measured with its instance's changes, as it is
-/// drawn: a top margin set on the second row's group moves its buttons down, and the third row
-/// comes after them instead of over them.
-#[test]
-fn a_groups_own_changes_size_its_row() {
-    let t = crate::parse(
-        r##"<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
-<subform name="form" layout="tb">
- <pageSet><pageArea name="p"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
- <subform name="rows" layout="tb"><subform name="row" layout="tb"><occur min="3" max="3"/>
-  <exclGroup name="choice" layout="tb"><field name="a" w="1in" h="0.3in"><ui><checkButton/></ui><items><text>A</text></items></field></exclGroup></subform></subform>
-</subform></template>"##,
-    )
-    .unwrap()
-    .0;
-    let ov = overrides("form[0].rows[0].row[1].choice[0]", &[("margin#0", Some("topInset"), "0.25in")]);
-    let form = laid_out(&t, &ov);
-    let rect =
-        |som: &str| items(&form).into_iter().find_map(|i| if let Item::Widget(w) = i { (w.som == som).then_some(w.rect) } else { None }).unwrap();
-    let [r0, r1, r2] = [0, 1, 2].map(|i| rect(&format!("form[0].rows[0].row[{i}].choice[0].a[0]")));
-    // Each button stands in a field 0.3in (21.6pt) tall.
-    assert!((r1.y - r0.y - 21.6 - 18.0).abs() < 0.01, "the second row's group margin: {r0:?} {r1:?}");
-    assert!((r2.y - r1.y - 21.6).abs() < 0.01, "the third row comes after the second's field: {r1:?} {r2:?}");
-}
-
 /// A row subform outside a table is as tall as its cells and its margins, once (its cells
 /// already take them): its cells keep their height and what follows starts where it ends.
 #[test]
@@ -1488,36 +1252,11 @@ fn a_change_left_out_for_the_budget_adds_no_empty_element() {
     assert_eq!(out.elements.iter().map(|e| e.tag.as_str()).collect::<Vec<_>>(), ["desc"], "no empty border kept");
 }
 
-/// A table row that breaks to a new page by its own `breakBefore` starts it after the overflow
-/// leader when both fit there, and alone when the row is too tall for both.
-#[test]
-fn a_row_breaking_by_its_own_change_leaves_out_a_leader_that_doesnt_fit() {
-    let tpl = |row_h: &str| {
-        format!(
-            r##"<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
-<subform name="form" layout="tb">
- <pageSet><pageArea name="p"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
- <subform name="grid" layout="table" columnWidths="2in"><overflow leader="head"/>
-  <subform name="head" layout="row"><draw name="title" h="0.3in"><value><text>Head</text></value></draw></subform>
-  <subform name="row" layout="row"><field name="cell" h="1in"><ui><textEdit/></ui></field></subform>
-  <subform name="big" layout="row"><occur min="1" max="2"/><field name="cell" h="{row_h}"><ui><textEdit/></ui></field></subform></subform>
-</subform></template>"##
-        )
-    };
-    let heads = |row_h: &str| {
-        let t = crate::parse(&tpl(row_h)).unwrap().0;
-        let form = laid_out(&t, &overrides("form[0].grid[0].big[0]", &[("breakBefore#0", Some("targetType"), "pageArea")]));
-        form.pages.iter().map(|p| p.items.iter().filter(|i| matches!(i, Item::Text(s) if s.text == "Head")).count()).collect::<Vec<_>>()
-    };
-    assert_eq!(heads("1in"), [1, 1], "room for both: the leader starts the new page");
-    assert_eq!(heads("9.9in"), [1, 0], "no room for both: the row starts it alone");
-}
-
-/// The instances a script adds to a subform it made repeat (`occur.max` set on one the template
-/// doesn't repeat, XFA 3.3 p. 786) are instances of the template's subform: the checks that look
+/// A path that numbers a later instance of a subform the template doesn't repeat is one the
+/// form doesn't write; read leniently, it names the template's subform, so the checks that look
 /// a field up by its SOM path (its format test, a reset's default, whether it grows) find it.
 #[test]
-fn fields_in_rows_of_a_subform_a_script_made_repeat_are_found() {
+fn a_later_number_of_a_subform_that_doesnt_repeat_names_the_subform() {
     let xdp = crate::fixtures::scripted_template().replace(r#"<occur min="1" max="-1"/>"#, r#"<occur min="1" max="1"/>"#).replace(
         r#"<field name="item" h="0.3in"><ui><textEdit/></ui></field>"#,
         r#"<field name="item" h="0.3in"><ui><textEdit/></ui><value><text>Default</text></value></field>"#,
@@ -1580,7 +1319,7 @@ fn changes_to_far_list_entries_make_nothing() {
     assert_eq!(ov.props().values().map(BTreeMap::len).sum::<usize>(), MAX_PROP_OVERRIDES);
     let start = std::time::Instant::now();
     let applied = crate::apply_overrides_split(&t, &ov);
-    let form = crate::layout::layout_with_overrides(&applied.template, None, &ov, &applied.per_instance).unwrap();
+    let form = crate::layout::layout_with_overrides(&applied.template, None, &ov).unwrap();
     assert!(!form.pages.is_empty());
     let _ = crate::memo::take_fields_made();
     let live = crate::form_tree(&t, None, &ov);
@@ -1597,37 +1336,10 @@ fn changes_to_far_list_entries_make_nothing() {
     assert!(spent < std::time::Duration::from_secs(5), "{spent:?}");
 }
 
-/// Review r2 (M1): a row whose script changed only where the page breaks after it doesn't take
-/// the template's break before as well: the template's break goes before the first row only,
-/// and in a table the template's row breaks aren't laid out at all, so the row breaks after
-/// itself and nowhere else. A row changed to break before (where the template breaks before)
-/// still does.
-#[test]
-fn a_rows_own_break_after_brings_no_break_before() {
-    let broken = OWN_ROWS.replace(r#"<occur min="3" max="3"/>"#, r#"<occur min="3" max="3"/><breakBefore targetType="pageArea"/>"#);
-    let t = crate::parse(&broken).unwrap().0;
-    let page_of =
-        |form: &crate::Form, som: &str| form.pages.iter().position(|p| p.items.iter().any(|i| matches!(i, Item::Widget(w) if w.som == som))).unwrap();
-    let rows = |form: &crate::Form, parent: &str| [0, 1, 2].map(|i| page_of(form, &format!("{parent}.row[{i}].cell[0]")));
-    let form = laid_out(&t, &Overrides::default());
-    assert_eq!((rows(&form, "form[0].rows[0]"), rows(&form, "form[0].grid[0]")), ([0, 0, 0], [0, 0, 0]));
-    let mut ov = Overrides::default();
-    for row in ["form[0].rows[0].row[1]", "form[0].grid[0].row[1]"] {
-        ov.set_prop(row, "breakAfter#0", Some("targetType"), "pageArea").unwrap();
-    }
-    let form = laid_out(&t, &ov);
-    assert_eq!(rows(&form, "form[0].rows[0]"), [0, 0, 1], "flowed: the second row breaks after itself only");
-    let grid = rows(&form, "form[0].grid[0]");
-    assert_eq!(grid[1] - grid[0], 0, "a table's row: no break before it, {grid:?}");
-    assert_eq!(grid[2] - grid[1], 1, "a table's row: the break after it, {grid:?}");
-    let ov = overrides("form[0].rows[0].row[2]", &[("break#0", Some("before"), "pageArea")]);
-    assert_eq!(rows(&laid_out(&t, &ov), "form[0].rows[0]"), [0, 0, 1], "the third row's own break before");
-}
-
 /// Review r2 (L1): the checks after an entry take the field from the template's memo
 /// (`field_now`): made once, then handed back; whether a calculation is overridden reads the
-/// field again only when a change to its value's `override` is kept; and the live form reads
-/// a repeating subform's first instance again only for its occurrence changes.
+/// field again only when a change to its value's `override` is kept; and building the live
+/// form again reads no object again.
 #[test]
 fn checks_and_the_live_form_restyle_nothing_again() {
     let t = template();
@@ -1641,99 +1353,9 @@ fn checks_and_the_live_form_restyle_nothing_again() {
     assert_eq!(crate::memo::take_fields_made(), 1, "made once, then handed back");
     ov.set_prop("form[0].plain[0]", "value#0", Some("override"), "1").unwrap();
     assert!(crate::value_overridden(&t, &ov, "form[0].plain[0]"));
-    ov.set_prop("form[0].rows[0].row[0]", "border#0/edge#0/color#0", Some("value"), "1,2,3").unwrap();
+    ov.set_prop("form[0].later[0]", "border#0/edge#0/color#0", Some("value"), "1,2,3").unwrap();
     let _ = crate::form_tree(&t, None, &ov);
     let _ = take_restyled();
     let _ = crate::form_tree(&t, None, &ov);
-    assert_eq!(take_restyled(), 0, "a row without occurrence changes isn't read again");
-}
-
-/// Review r5 (D4): the layout comes to an instance more than once (its container measures it
-/// before it draws it, and a flow measures again to place what follows), and read the instance's
-/// object with its changes each time: a copy, its properties written out and parsed. Each
-/// reading is now made once in a layout: one for a changed field; for a changed row one of
-/// what it is drawn with, and one of what it is sized by where a container measures it first (a
-/// flow places its rows by the one they are drawn with).
-#[test]
-fn an_instances_object_is_read_with_its_changes_once_in_a_layout() {
-    let t = crate::parse(OWN_ROWS).unwrap().0;
-    let mut ov = Overrides::default();
-    let rows = ["form[0].rows[0]", "form[0].box[0].list[0]", "form[0].grid[0]"];
-    for parent in rows {
-        let row = format!("{parent}.row[1]");
-        ov.set_prop(&row, "font#0", Some("size"), "20pt").unwrap();
-        ov.set_prop(&row, "margin#0", Some("topInset"), "0.25in").unwrap();
-        ov.set_prop(&row, "border#0/edge#0/color#0", Some("value"), "0,0,255").unwrap();
-        ov.set_prop(&format!("{parent}.row[2].cell[0]"), "font#0", Some("size"), "14pt").unwrap();
-    }
-    let applied = crate::apply_overrides_split(&t, &ov);
-    let _ = take_restyled();
-    let form = crate::layout::layout_with_overrides(&applied.template, None, &ov, &applied.per_instance).unwrap();
-    let made = take_restyled();
-    // The readings are the ones drawn: the changed rows' fields and the changed fields.
-    let size = |som: &str| items(&form).into_iter().find_map(|i| if let Item::Widget(w) = i { (w.som == som).then_some(w.face.size) } else { None });
-    for parent in rows {
-        let sizes = [0, 1, 2].map(|i| size(&format!("{parent}.row[{i}].cell[0]")));
-        assert_eq!(sizes, [Some(10.0), Some(20.0), Some(14.0)], "{parent}");
-    }
-    assert_eq!(made, 3 + (1 + 2 + 2), "one reading of each changed field; one of the flowed row, two of the boxed row and of the table's");
-}
-
-/// The layout also reads copies it makes of an object, which share its property tree and may
-/// differ from it: a group that must be answered measures each button as it is and draws a copy
-/// made required. A reading kept for the one is not the other's: the changed button of a later
-/// row is drawn required, as the unchanged ones are, and with its change.
-#[test]
-fn a_reading_kept_for_an_object_is_not_handed_to_a_copy_that_differs() {
-    let t = crate::parse(
-        r##"<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
-<subform name="form" layout="tb">
- <pageSet><pageArea name="p"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
- <subform name="rows" layout="tb"><subform name="row" layout="tb"><occur min="1" max="3" initial="2"/>
-  <exclGroup name="g" layout="tb"><validate nullTest="error"/>
-   <field name="a" w="1in" h="0.3in"><ui><checkButton shape="round"/></ui><items><text>A</text></items></field>
-   <field name="b" w="1in" h="0.3in"><ui><checkButton shape="round"/></ui><items><text>B</text></items></field>
-  </exclGroup></subform></subform>
-</subform></template>"##,
-    )
-    .unwrap()
-    .0;
-    let ov = overrides("form[0].rows[0].row[1].g[0].a[0]", &[("assist#0/toolTip#0", None, "New")]);
-    let form = laid_out(&t, &ov);
-    let radio = |som: &str| {
-        items(&form)
-            .into_iter()
-            .find_map(|i| if let Item::Widget(w) = i { (w.som == som).then_some((w.required, w.tooltip.clone())) } else { None })
-            .unwrap()
-    };
-    assert_eq!(radio("form[0].rows[0].row[0].g[0].a[0]"), (true, None));
-    assert_eq!(radio("form[0].rows[0].row[1].g[0].b[0]"), (true, None));
-    assert_eq!(radio("form[0].rows[0].row[1].g[0].a[0]"), (true, Some("New".to_string())), "the copy made required, with its change");
-}
-
-/// Review r5 (D5): the pages made from an unnamed page area share its content's paths
-/// (`#pageArea[i].…`), so its content with the changes scripts made there is made once and
-/// drawn on every page: it was copied (with the pictures it holds) and read again for each
-/// page. A change that can't be drawn (a `desc`) makes no copy at all.
-#[test]
-fn an_unnamed_page_areas_changed_content_is_made_once_for_its_pages() {
-    let rows: String = (0..40).map(|i| format!(r#"<draw name="d{i}" w="2in" h="1in"><value><text>Row {i}</text></value></draw>"#)).collect();
-    let tpl = TEMPLATE
-        .replace(r#"<pageArea name="p">"#, r#"<pageArea><field name="pf" x="1in" y="0.2in" w="1in" h="0.3in"/>"#)
-        .replace(r#"<draw name="label""#, &format!(r#"{rows}<draw name="label""#));
-    let t = crate::parse(&tpl).unwrap().0;
-    let red = rgb(255.0, 0.0, 0.0);
-    let made = |ov: &Overrides| {
-        let applied = crate::apply_overrides_split(&t, ov);
-        let _ = take_restyled();
-        let form = crate::layout::layout_with_overrides(&applied.template, None, ov, &applied.per_instance).unwrap();
-        let reds = form.pages.iter().filter(|p| p.items.iter().any(|i| matches!(i, Item::Fill { color, .. } if *color == red))).count();
-        (form.pages.len(), reds, take_restyled())
-    };
-    let (pages, reds, read) = made(&overrides("#pageArea[0].pf[0]", &[("border#0/fill#0/color#0", Some("value"), "255,0,0")]));
-    assert!(pages >= 4, "{pages}");
-    assert_eq!((reds, read), (pages, 1), "drawn on each of the {pages} pages, read once");
-    let (pages, reds, read) = made(&overrides("#pageArea[0].pf[0]", &[("desc#0/text#0", None, "a note")]));
-    assert!(pages >= 4, "{pages}");
-    assert_eq!((reds, read), (0, 0), "nothing to draw: the template's content");
+    assert_eq!(take_restyled(), 0, "the live form built again reads no object again");
 }

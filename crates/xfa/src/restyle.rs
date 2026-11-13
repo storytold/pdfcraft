@@ -1,16 +1,16 @@
 //! Property changes scripts make to a form's objects (XFA 3.3 ch. 3, "Properties vs. Children",
-//! p. 78): `this.border.fill.color.value = "255,0,0"`, `this.mandatory = "error"`,
-//! `Row.occur.max = "5"`. Each change names the property by its path from the object
+//! p. 78): `this.border.fill.color.value = "255,0,0"`, `this.mandatory = "error"`. Each
+//! change names the property by its path from the object
 //! (`border#0/fill#0/color#0`, occurrences counted per tag) and sets one attribute of it, or its
 //! text. Applied to the object's property tree, the change is read back by later scripts; the
 //! properties it falls under (`border`, `validate`, …) are then read again by the same functions
-//! that read the template ([`crate::parse::restyle_from`]), so the page, the field's flags and
-//! the instance limits follow it the way they follow the template.
+//! that read the template ([`crate::parse::restyle_from`]), so the page and the field's flags
+//! follow it the way they follow the template.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use crate::model::{Area, Common, Draw, ExclGroup, Field, Node, Prop, Props, Subform, Value};
+use crate::model::{Field, Node, Prop, Props};
 use crate::prop_rules;
 
 /// Most property changes one form keeps, as many as it keeps presence or access changes. Of the
@@ -370,101 +370,6 @@ thread_local! {
 #[cfg(test)]
 pub(crate) fn take_restyled() -> usize {
     RESTYLED.with(|c| c.replace(0))
-}
-
-/// `node` alone, without what it holds (a subform's children and page set, a group's fields, a
-/// draw's value) or its scripts: what [`restyle`] reads and changes, copied cheaply.
-fn shallow(node: &Node) -> Node {
-    match node {
-        Node::Subform(s) => Node::Subform(Box::new(Subform {
-            common: s.common.clone(),
-            layout: s.layout,
-            occur: s.occur,
-            break_before_page: s.break_before_page,
-            break_after_page: s.break_after_page,
-            ..Subform::default()
-        })),
-        Node::Area(a) => Node::Area(Box::new(Area { common: a.common.clone(), children: Vec::new() })),
-        Node::Draw(d) => Node::Draw(Box::new(Draw { common: d.common.clone(), value: Value::Empty })),
-        Node::ExclGroup(g) => Node::ExclGroup(Box::new(ExclGroup {
-            common: g.common.clone(),
-            layout: g.layout,
-            tooltip: g.tooltip.clone(),
-            required: g.required,
-            ..ExclGroup::default()
-        })),
-        Node::Field(f) => Node::Field(f.clone()),
-    }
-}
-
-/// `node`'s own properties with the changes `sets` applied (see [`restyle`]), without what it
-/// holds (see [`shallow`]).
-pub(crate) fn restyled(node: &Node, sets: &BTreeMap<String, String>) -> Node {
-    let mut n = shallow(node);
-    restyle(&mut n, sets);
-    n
-}
-
-/// Which side of an object the change kept under `key` can make the page break on (XFA 3.3
-/// p. 632; see `parse::page_breaks`): before (`breakBefore`'s `targetType`, `break`'s `before`)
-/// is `Some(true)`, after (`breakAfter`'s `targetType`) `Some(false)`; `None` for any other.
-fn break_side(key: &str) -> Option<bool> {
-    let (path, attr) = split_key(key);
-    let (tag, _) = path.rsplit_once('#').filter(|_| !path.contains('/'))?;
-    match (tag, attr?) {
-        ("breakBefore", "targetType") | ("break", "before") => Some(true),
-        ("breakAfter", "targetType") => Some(false),
-        _ => None,
-    }
-}
-
-/// Where the page breaks before and after one instance of subform `node` by the changes `sets`
-/// made to that instance (XFA 3.3 p. 632), each side `None` when no change is to it. The
-/// template's breaks go before the first instance and after the last only (the layout's rule):
-/// `template_before` and `template_after` say whether this instance takes them. For one that
-/// doesn't, a side the changes reach breaks as the changes alone say: the template's break on
-/// that side doesn't come with them, so a change to where a row breaks after it doesn't make it
-/// break before as well. An object whose template the reader cut short isn't laid out from its
-/// tree (see [`restyle`]): the template's rule stands, `(None, None)`.
-pub(crate) fn instance_breaks(
-    node: &Node,
-    sets: &BTreeMap<String, String>,
-    template_before: bool,
-    template_after: bool,
-) -> (Option<bool>, Option<bool>) {
-    let before = sets.keys().any(|k| break_side(k) == Some(true));
-    let after = sets.keys().any(|k| break_side(k) == Some(false));
-    if !(before || after) || node.common().props.cut {
-        return (None, None);
-    }
-    let mut n = shallow(node);
-    let props = Arc::make_mut(&mut n.common_mut().props);
-    for e in &mut props.elements {
-        let drop = match e.tag.as_str() {
-            "breakBefore" if !template_before => "targetType",
-            "break" if !template_before => "before",
-            "breakAfter" if !template_after => "targetType",
-            _ => continue,
-        };
-        e.attrs.retain(|(k, _)| k != drop);
-    }
-    restyle(&mut n, sets);
-    match n {
-        Node::Subform(s) => (before.then_some(s.break_before_page), after.then_some(s.break_after_page)),
-        _ => (None, None),
-    }
-}
-
-/// The common properties `c` of an object (its border, margins, font and paragraph, and its
-/// property tree) with the changes `sets` applied (see [`restyle`]).
-pub(crate) fn restyled_common(c: &Common, sets: &BTreeMap<String, String>) -> Common {
-    let mut n = Node::Area(Box::new(Area { common: c.clone(), children: Vec::new() }));
-    restyle(&mut n, sets);
-    match n {
-        Node::Area(a) => a.common,
-        // `restyle` keeps the node's kind.
-        other => other.common().clone(),
-    }
 }
 
 /// Field `f` with the changes `sets` applied (see [`restyle`]).

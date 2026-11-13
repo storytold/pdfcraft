@@ -1,12 +1,8 @@
-use std::rc::Rc;
-
 use super::common::clamp_opt;
-use super::draw::SIZED;
 use super::field::auto_check_reserve;
-use super::restyled::{Leaf, Own};
 use super::{
-    Access, Area, Common, Ctx, ExclGroup, Face, Field, Font, Layout, Layouter, MAX_DEPTH, MAX_MEASURES, Measured, Node, Para, Placement, Rect,
-    SomIndices, Subform, Ui, Value, data_path, text,
+    Access, Area, Ctx, ExclGroup, Face, Field, Font, Layout, Layouter, MAX_DEPTH, MAX_MEASURES, Measured, Node, Para, Placement, Rect, SomIndices,
+    Subform, Ui, Value, data_path, text,
 };
 
 /// Where [`Layouter::pack_instances`] puts one object: the (child index, instance) steps to it, and
@@ -20,10 +16,6 @@ impl Layouter<'_> {
     /// own rows (XFA 3.3, "Tables", p. 327; Chapter 9, p. 336), so with data each is measured
     /// under its own SOM path.
     pub(super) fn size_at(&self, node: &Node, avail_w: f64, ctx: &Ctx, depth: usize, index: usize) -> (f64, f64) {
-        // A field or draw is measured as its instance's property changes leave it, as it is then
-        // drawn (a font size set on a later row's field makes that row taller).
-        let restyled = self.restyled_leaf(node, ctx, index);
-        let node = restyled.as_deref().unwrap_or(node);
         let c = node.common();
         let spent = self.measures.get().saturating_add(1);
         self.measures.set(spent);
@@ -36,10 +28,8 @@ impl Layouter<'_> {
         };
         // Only containers recurse; their addresses are stable for the whole layout (the
         // template is borrowed, the root and page areas are held by the layouter). Without data
-        // every instance is alike, so one measurement serves them all, unless scripts changed
-        // what this instance holds.
-        let per_instance = self.data.is_some() || self.changes_within(&own.som);
-        let som = || if per_instance { own.som.clone() } else { String::new() };
+        // every instance is alike, so one measurement serves them all.
+        let som = || if self.data.is_some() { own.som.clone() } else { String::new() };
         let key = match node {
             Node::Subform(s) => Some((&**s as *const Subform as usize, avail_w.to_bits(), depth, som())),
             Node::Area(a) => Some((&**a as *const Area as usize, avail_w.to_bits(), depth, som())),
@@ -53,20 +43,8 @@ impl Layouter<'_> {
         {
             return m.size;
         }
-        // A container is measured with its instance's own margins, font and paragraph (a script
-        // may change one row's), as it is then drawn. Its SOM path is the same either way, so
-        // the measurement is looked up first; an instance with changes of its own is measured
-        // on its own (`changes_within`).
-        let own_common = match node {
-            Node::Subform(_) | Node::Area(_) => Some(self.own(c, ctx, index, SIZED)).filter(|o| matches!(o, Own::Changed(_))),
-            _ => None,
-        };
-        let (c, own) = match &own_common {
-            Some(r) => (&**r, ctx.with_som(r, index)),
-            None => (c, own),
-        };
         // A field's caption is measured in the paragraph around the field, as it is drawn.
-        let size = self.measure(node, c, avail_w, &own, &ctx.para, depth);
+        let size = self.measure(node, avail_w, &own, &ctx.para, depth);
         if let Some(key) = key
             && let Ok(mut cache) = self.measured.try_borrow_mut()
         {
@@ -75,49 +53,14 @@ impl Layouter<'_> {
         size
     }
 
-    /// Field, draw or exclusion group `node`, instance `index` under `ctx`, with the property
-    /// changes scripts made to that instance that change how it is drawn; `None` when there are
-    /// none (or it is none of those), so it is measured as it is. The reading is the one it is
-    /// then drawn from ([`Self::restyled`]).
-    fn restyled_leaf(&self, node: &Node, ctx: &Ctx, index: usize) -> Option<Rc<Node>> {
-        let sets = match node {
-            Node::Field(f) => self.changes_of(&f.common, ctx, index, Some("field"))?,
-            Node::Draw(d) => self.changes_of(&d.common, ctx, index, None)?,
-            Node::ExclGroup(g) => self.changes_of(&g.common, ctx, index, Some("group"))?,
-            _ => return None,
-        };
-        if !sets.keys().any(|k| crate::restyle::draws(k)) {
-            return None;
-        }
-        match node {
-            Node::Field(f) => Some(self.restyled(Leaf::Field(f), sets)),
-            Node::Draw(d) => Some(self.restyled(Leaf::Draw(d), sets)),
-            // A group is drawn restyled whole (its margins, its font), so it is measured so too.
-            Node::ExclGroup(g) => Some(self.restyled(Leaf::Group(g), sets)),
-            _ => None,
-        }
-    }
-
-    /// Whether scripts changed properties of an object inside the instance at `som` (or of the
-    /// instance itself), so its measurement can't stand for its other instances'.
-    fn changes_within(&self, som: &str) -> bool {
-        if som.is_empty() {
-            return !self.props.is_empty();
-        }
-        self.props
-            .range::<str, _>((std::ops::Bound::Included(som), std::ops::Bound::Unbounded))
-            .take_while(|(k, _)| k.starts_with(som))
-            .any(|(k, _)| k.get(som.len()..).is_some_and(|rest| rest.is_empty() || rest.starts_with('.')))
-    }
-
     /// The size (width, height) of `node` within `avail_w`, uncached ([`Self::size_at`] caches it).
     /// Without a width, a container, a text draw or a button is as wide as its content (at most
     /// `avail_w`) and anything else takes `avail_w`; without a height, it is as tall as its content.
-    /// `c` is the node's own properties (as its instance's changes leave them, see
-    /// [`Self::own`]). `ctx` holds the SOM path of the instance measured: its repeating children
-    /// count their instances under it, and a growing text field finds its value at it.
-    /// `outer_para` is the paragraph around the node, which a field's caption takes.
-    fn measure(&self, node: &Node, c: &Common, avail_w: f64, ctx: &Ctx, outer_para: &Para, depth: usize) -> (f64, f64) {
+    /// `ctx` holds the SOM path of the instance measured: its repeating children count their
+    /// instances under it, and a growing text field finds its value at it. `outer_para` is the
+    /// paragraph around the node, which a field's caption takes.
+    fn measure(&self, node: &Node, avail_w: f64, ctx: &Ctx, outer_para: &Para, depth: usize) -> (f64, f64) {
+        let c = node.common();
         let som = ctx.som.clone();
         // A container without a width is as wide as its content (a radio group beside its
         // question, say), and so is a text label or a button (as wide as its caption), within
@@ -166,7 +109,7 @@ impl Layouter<'_> {
     /// The height `k` takes with all its instances under the container at `som`, one under
     /// another, the first at SOM index `sib` among its siblings: each instance takes its own.
     fn instances_height(&self, k: &Node, inner_w: f64, ctx: &Ctx, depth: usize, som: &str, sib: usize) -> f64 {
-        (0..self.instances(k, som, sib)).map(|i| self.size_at(k, inner_w, ctx, depth, sib.saturating_add(i)).1).sum()
+        (0..self.instances(k, som)).map(|i| self.size_at(k, inner_w, ctx, depth, sib.saturating_add(i)).1).sum()
     }
 
     /// The height of `node`'s content within `inner_w` (inside its margins), whatever height it
@@ -200,7 +143,7 @@ impl Layouter<'_> {
                         .filter(|(_, k)| k.common().presence.occupies())
                         .map(|(i, k)| match k {
                             // Each instance of a repeating row takes its own height, as drawn.
-                            Node::Subform(r) if r.layout == Layout::Row => (0..self.instances(k, som, sibs.at(i)))
+                            Node::Subform(r) if r.layout == Layout::Row => (0..self.instances(k, som))
                                 .map(|n| self.row_height(r, &cols, inner_w, ctx, depth + 1, sibs.at(i).saturating_add(n)))
                                 .sum(),
                             _ => self.size_at(k, inner_w, ctx, depth + 1, sibs.at(i)).1,
@@ -208,7 +151,7 @@ impl Layouter<'_> {
                         .sum()
                 }
                 // `ctx` is already this row instance's own.
-                Layout::Row => self.cells(s, &self.own_at(&s.common, som, SIZED), &self.columns(s, inner_w), inner_w, ctx, depth + 1).1,
+                Layout::Row => self.cells(s, &self.columns(s, inner_w), inner_w, ctx, depth + 1).1,
             },
         }
     }
@@ -481,14 +424,14 @@ impl Layouter<'_> {
             if let Node::Subform(s) = k
                 && s.set
             {
-                for instance in 0..self.instances(k, som, sibs.at(i)) {
+                for instance in 0..self.instances(k, som) {
                     let set_ctx = ctx.with_som(&s.common, sibs.at(i).saturating_add(instance));
                     let at: Vec<(usize, usize)> = path.iter().copied().chain([(i, instance)]).collect();
                     self.pack_into(&s.children, inner_w, &set_ctx, depth + 1, &set_ctx.som, &at, line, out);
                 }
                 continue;
             }
-            for instance in 0..self.instances(k, som, sibs.at(i)) {
+            for instance in 0..self.instances(k, som) {
                 let (w, h) = self.size_at(k, inner_w, ctx, depth + 1, sibs.at(i).saturating_add(instance));
                 let (x, y, line_h) = line;
                 if *x > 0.0 && *x + w > inner_w + 0.05 {
@@ -517,9 +460,8 @@ impl Layouter<'_> {
     /// is measured under its own SOM index among its same-named siblings (`qty[1]`, not
     /// `qty[0]`), the index [`Self::draw_row`] draws it at, so a cell that grows with its value
     /// takes its own value's height.
-    /// `own` is the row's own properties (see [`Self::own`]).
-    pub(super) fn cells(&self, row: &Subform, own: &Common, cols: &[f64], inner_w: f64, ctx: &Ctx, depth: usize) -> (Vec<(usize, Rect)>, f64) {
-        let ctx = ctx.child(own);
+    pub(super) fn cells(&self, row: &Subform, cols: &[f64], inner_w: f64, ctx: &Ctx, depth: usize) -> (Vec<(usize, Rect)>, f64) {
+        let ctx = ctx.child(&row.common);
         let mut out = Vec::new();
         let mut col = 0usize;
         let mut x = 0.0;
@@ -537,12 +479,11 @@ impl Layouter<'_> {
             // that way, though a height makes a container fixed (XFA 3.3 p. 276).
             let ch = match k {
                 Node::Subform(s) if s.common.h.is_some() && matches!(s.layout, Layout::Tb | Layout::LrTb | Layout::RlTb | Layout::Table) => {
-                    let sc = self.own(&s.common, &ctx, sibs.at(i), SIZED);
-                    let own = ctx.with_som(&sc, sibs.at(i));
+                    let own = ctx.with_som(&s.common, sibs.at(i));
                     // At the width it is drawn at: the column's, not the cell's own.
-                    let inner = (w - sc.margin.horizontal()).max(1.0);
+                    let inner = (w - s.common.margin.horizontal()).max(1.0);
                     let content = self.content_height(k, inner, &own, &own.som, &ctx.para, depth + 1);
-                    clamp_opt(content + sc.margin.vertical(), None, sc.max_h)
+                    clamp_opt(content + s.common.margin.vertical(), None, s.common.max_h)
                 }
                 _ => ch,
             };
@@ -551,18 +492,17 @@ impl Layouter<'_> {
             x += w;
             col += span;
         }
-        let h = match own.h {
+        let h = match row.common.h {
             Some(rh) => rh,
-            None => h + own.margin.vertical(),
+            None => h + row.common.margin.vertical(),
         };
-        (out, clamp_opt(h, own.min_h, own.max_h))
+        (out, clamp_opt(h, row.common.min_h, row.common.max_h))
     }
 
     /// The height of instance `sib` of `row` in the table at `ctx`, measured as [`Self::draw_row`]
     /// draws it: under the instance's own SOM path, so a cell that grows with its text takes
     /// that instance's value (XFA 3.3, "Tables", p. 327; "Growable Containers", p. 275).
     pub(super) fn row_height(&self, row: &Subform, cols: &[f64], inner_w: f64, ctx: &Ctx, depth: usize, sib: usize) -> f64 {
-        let own = self.own(&row.common, ctx, sib, SIZED);
-        self.cells(row, &own, cols, inner_w, &ctx.with_som(&own, sib), depth).1
+        self.cells(row, cols, inner_w, &ctx.with_som(&row.common, sib), depth).1
     }
 }

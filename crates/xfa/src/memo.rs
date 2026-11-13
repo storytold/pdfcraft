@@ -539,8 +539,8 @@ mod tests {
         assert_eq!(made.get(), 3);
     }
 
-    /// Many instances of one object, each with its own changes (rows a script numbers): a
-    /// look-up compares the entries with its own changes, not every instance's. Counted.
+    /// Many entries on one tree, each with its own changes: a look-up compares the entries
+    /// with its own changes, not every entry's. Counted.
     #[test]
     fn instances_with_their_own_changes_are_found_without_comparing_the_others() {
         let memo = Memo::default();

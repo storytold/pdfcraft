@@ -1,11 +1,8 @@
-use std::collections::BTreeMap;
-
 use super::common::clean_name;
 use super::items::{Item, Rounded, Turned};
-use super::restyled::{Leaf, Own, occur_with};
 use super::{
-    Arc, Border, Common, Ctx, Draw, ExclGroup, Face, Field, FillKind, Font, Hatch, Layout, Layouter, MAX_DEPTH, MAX_IMAGE_BYTES, Node, Occur, Para,
-    Rect, Side, SomIndices, Stroke, Subform, Value, XfaError, data_path, text,
+    Arc, Border, Ctx, Draw, ExclGroup, Face, Field, FillKind, Font, Hatch, Layout, Layouter, MAX_DEPTH, MAX_IMAGE_BYTES, Node, Para, Rect, Side,
+    SomIndices, Stroke, Subform, Value, XfaError, data_path, text,
 };
 
 impl Layouter<'_> {
@@ -30,13 +27,12 @@ impl Layouter<'_> {
 
     /// [`Self::draw_row`]'s border and cells, once where the row shows is set.
     pub(super) fn draw_row_cells(&mut self, row: &Subform, cols: &[f64], rect: Rect, ctx: &Ctx, depth: usize, sib: usize) -> Result<(), XfaError> {
-        let own = self.own(&row.common, ctx, sib, DRAWN);
-        if let Some(b) = &own.border {
+        if let Some(b) = &row.common.border {
             self.draw_border(b, rect)?;
         }
-        let ctx = ctx.with_som(&own, sib);
-        let inner = rect.inset(&own.margin);
-        let (cells, _) = self.cells(row, &own, cols, inner.w, &ctx, depth);
+        let ctx = ctx.with_som(&row.common, sib);
+        let inner = rect.inset(&row.common.margin);
+        let (cells, _) = self.cells(row, cols, inner.w, &ctx, depth);
         let sibs = SomIndices::of(&row.children);
         for (i, r) in cells {
             if let Some(k) = row.children.get(i) {
@@ -77,72 +73,6 @@ impl Layouter<'_> {
         }
     }
 
-    /// The property changes scripts made to the instance of object `c` at index `sib` under
-    /// `ctx` (`default` names an unnamed field or group, as the live form does), if any.
-    pub(super) fn changes_of(&self, c: &Common, ctx: &Ctx, sib: usize, default: Option<&str>) -> Option<&BTreeMap<String, String>> {
-        if self.props.is_empty() {
-            return None;
-        }
-        let name = c.name.as_deref().or(default)?;
-        let som = if ctx.som.is_empty() { format!("{name}[{sib}]") } else { format!("{}.{name}[{sib}]", ctx.som) };
-        self.props.get(&som)
-    }
-
-    /// Container `c`'s own properties for instance `sib` under `ctx`, with the changes scripts
-    /// made to that instance in the property groups `roots` names ([`DRAWN`] or [`SIZED`]); the
-    /// template's when there are none. An object with one instance took its changes in the
-    /// template already ([`crate::script::apply_overrides_split`]); the instances of a
-    /// repeating subform, and what they hold, keep theirs here, each its own.
-    pub(super) fn own<'a>(&self, c: &'a Common, ctx: &Ctx, sib: usize, roots: &[&str]) -> Own<'a> {
-        match self.changes_of(c, ctx, sib, None) {
-            Some(sets) => self.own_from(c, sets, roots),
-            None => Own::Template(c),
-        }
-    }
-
-    /// [`Self::own`] for the instance whose own SOM path is `som`. An unnamed container shares
-    /// its parent's path, so it has no changes of its own.
-    pub(super) fn own_at<'a>(&self, c: &'a Common, som: &str, roots: &[&str]) -> Own<'a> {
-        match self.props.get(som).filter(|_| c.name.is_some()) {
-            Some(sets) => self.own_from(c, sets, roots),
-            None => Own::Template(c),
-        }
-    }
-
-    /// `c` with the changes of `sets` in the groups `roots` names applied, read once in this
-    /// layout ([`Self::restyled_common`]); `c` itself when there are none.
-    fn own_from<'a>(&self, c: &'a Common, sets: &BTreeMap<String, String>, roots: &[&str]) -> Own<'a> {
-        match taken(sets, roots) {
-            Some(t) => Own::Changed(self.restyled_common(c, &t)),
-            None => Own::Template(c),
-        }
-    }
-
-    /// How often subform `node` occurs under the container at `parent_som`, its first instance
-    /// at SOM index `sib` (p. 786): as a script changed it on that first instance, which the
-    /// instance manager's limits follow (they are the subform's, not one instance's), when the
-    /// change stays with that instance (inside a repeating subform); else the template's.
-    pub(super) fn own_occur(&self, node: &Node, parent_som: &str, sib: usize) -> Occur {
-        let Node::Subform(sf) = node else { return Occur::default() };
-        match occur_sets(self.props, sf, parent_som, sib) {
-            Some(sets) => self.restyled_occur(node, sf, &sets),
-            None => sf.occur,
-        }
-    }
-
-    /// Where pages break before and after instance `sib` of subform `node` under `ctx` (XFA 3.3
-    /// p. 632): `template` is where they break by the template's rule for that instance, and a
-    /// side scripts changed for that instance breaks as the change says instead (see
-    /// [`crate::restyle::instance_breaks`]; the template's break on that side comes with the
-    /// change only where the rule gives it to the instance).
-    pub(super) fn own_breaks(&self, node: &Node, ctx: &Ctx, sib: usize, template: (bool, bool)) -> (bool, bool) {
-        let Some(taken) = self.changes_of(node.common(), ctx, sib, None).and_then(|sets| taken(sets, &["break", "breakBefore", "breakAfter"])) else {
-            return template;
-        };
-        let (before, after) = self.restyled_breaks(node, &taken, template);
-        (before.unwrap_or(template.0), after.unwrap_or(template.1))
-    }
-
     /// Draw `node` at `rect`, shown where it and what it is inside say ([`Common::views`]): an
     /// invisible object that `relevant` prints is drawn for print only, and one shown nowhere
     /// draws nothing.
@@ -167,17 +97,7 @@ impl Layouter<'_> {
         match node {
             Node::Draw(d) => {
                 let start = self.item_count();
-                match self.changes_of(&d.common, ctx, sib, None) {
-                    Some(sets) => {
-                        let changed = self.restyled(Leaf::Draw(d), sets);
-                        match &*changed {
-                            Node::Draw(changed) => self.draw_draw(changed, rect, ctx)?,
-                            // The reading of a draw is a draw.
-                            _ => self.draw_draw(d, rect, ctx)?,
-                        }
-                    }
-                    None => self.draw_draw(d, rect, ctx)?,
-                }
+                self.draw_draw(d, rect, ctx)?;
                 // Text and pictures stay with their border; a bare line or rectangle is cut.
                 if matches!(d.value, Value::Text(_) | Value::Rich(_) | Value::Image { .. }) {
                     self.keep_whole(start, rect);
@@ -190,19 +110,9 @@ impl Layouter<'_> {
                 self.keep_whole(start, rect);
                 Ok(())
             }
-            Node::ExclGroup(g) => match self.changes_of(&g.common, ctx, sib, Some("group")) {
-                Some(sets) => {
-                    let changed = self.restyled(Leaf::Group(g), sets);
-                    match &*changed {
-                        Node::ExclGroup(changed) => self.draw_group(changed, rect, ctx, depth, sib),
-                        // The reading of a group is a group.
-                        _ => self.draw_group(g, rect, ctx, depth, sib),
-                    }
-                }
-                None => self.draw_group(g, rect, ctx, depth, sib),
-            },
+            Node::ExclGroup(g) => self.draw_group(g, rect, ctx, depth, sib),
             Node::Area(a) => {
-                let ctx = ctx.with_som(&self.own(&a.common, ctx, sib, SIZED), sib);
+                let ctx = ctx.with_som(&a.common, sib);
                 let sibs = SomIndices::of(&a.children);
                 for (i, k) in a.children.iter().enumerate() {
                     self.draw_positioned_child(k, rect, &ctx, depth + 1, sibs.at(i))?;
@@ -214,15 +124,12 @@ impl Layouter<'_> {
                 // place nothing still stop.
                 self.measures.set(self.measures.get().saturating_add(1));
                 self.check_measures()?;
-                // The instance's own border, margins, font and paragraph (a script may change
-                // one row's), for it and what it holds.
-                let own = self.own(&s.common, ctx, sib, DRAWN);
-                if let Some(b) = &own.border {
+                if let Some(b) = &s.common.border {
                     self.draw_border(b, rect)?;
                 }
                 let parent_ctx = ctx;
-                let ctx = ctx.with_som(&own, sib);
-                let inner = rect.inset(&own.margin);
+                let ctx = ctx.with_som(&s.common, sib);
+                let inner = rect.inset(&s.common.margin);
                 let sibs = SomIndices::of(&s.children);
                 match s.layout {
                     Layout::Positioned => {
@@ -240,7 +147,7 @@ impl Layouter<'_> {
                             // say) gets its instances, as in a flowed one, one under another,
                             // each as tall as its own content, and the rows past them are
                             // reported as there.
-                            let instances = self.laid_out_instances(k, &ctx.som, sibs.at(i));
+                            let instances = self.laid_out_instances(k, &ctx.som);
                             for instance in 0..instances {
                                 let sib = sibs.at(i).saturating_add(instance);
                                 let (w, h) = self.size_at(k, inner.w, &ctx, depth + 1, sib);
@@ -252,8 +159,8 @@ impl Layouter<'_> {
                     Layout::LrTb | Layout::RlTb => {
                         // A repeating subform here (rows of fields under a heading) gets its
                         // instances, as in the other layouts, and the rows past them are reported.
-                        for (i, k) in s.children.iter().enumerate().filter(|(_, k)| k.common().presence.occupies()) {
-                            self.laid_out_instances(k, &ctx.som, sibs.at(i));
+                        for k in s.children.iter().filter(|k| k.common().presence.occupies()) {
+                            self.laid_out_instances(k, &ctx.som);
                         }
                         let (placed, _) = self.pack_instances(&s.children, inner.w, &ctx, depth, &ctx.som);
                         // The sibling indices of each `subformSet` the steps go into, found once per
@@ -300,7 +207,7 @@ impl Layouter<'_> {
                                 // A repeating row (a table in a positioned subform, say) gets its
                                 // instances one under another, as in a flowed table (XFA 3.3,
                                 // "Tables", p. 327), and the rows past them are reported.
-                                for instance in 0..self.laid_out_instances(k, &ctx.som, csib) {
+                                for instance in 0..self.laid_out_instances(k, &ctx.som) {
                                     let h = self.row_height(r, &cols, inner.w, &ctx, depth + 1, csib.saturating_add(instance));
                                     self.draw_row(r, &cols, Rect::new(inner.x, y, inner.w, h), &ctx, depth + 1, csib + instance)?;
                                     y += h;
@@ -631,9 +538,8 @@ impl Layouter<'_> {
                 if !views.any() {
                     continue;
                 }
-                // The button's on value (its place in the group when it lists none) and tooltip
-                // are read from it as its instance's changes leave it ([`Self::draw_field`]); the
-                // group's tooltip stands in for a button without one.
+                // The button's on value is its own, else its place in the group; the group's
+                // tooltip stands in for a button without one ([`Self::draw_field`]).
                 let fallback_on = (i + 1).to_string();
                 // A group that must be answered makes each of its buttons required, as the group
                 // field they make is.
@@ -692,36 +598,4 @@ impl Layouter<'_> {
             }
         }
     }
-}
-
-/// The property groups a container takes for each instance as it is drawn: its border (and
-/// fill), its margins, and the font and paragraph what it holds inherits.
-pub(super) const DRAWN: &[&str] = &["border", "margin", "font", "para"];
-/// Those of [`DRAWN`] that size it: a border takes no room of its own (its margins do).
-pub(super) const SIZED: &[&str] = &["margin", "font", "para"];
-
-/// The changes of `sets` (by [`crate::restyle::prop_key`]) in the property groups `roots`
-/// names; `None` when there are none.
-fn taken(sets: &BTreeMap<String, String>, roots: &[&str]) -> Option<BTreeMap<String, String>> {
-    let root = |k: &str| k.trim_start_matches('=').split(['#', '/', '@']).next().is_some_and(|r| roots.contains(&r));
-    let out: BTreeMap<String, String> = sets.iter().filter(|(k, _)| root(k)).map(|(k, v)| (k.clone(), v.clone())).collect();
-    (!out.is_empty()).then_some(out)
-}
-
-/// The occurrence changes `props` keeps for the first instance of subform `sf`, at SOM index
-/// `sib` under the container at `parent_som`, if any. An unnamed subform has no path of its
-/// own, so none.
-fn occur_sets(props: &super::PropChanges, sf: &Subform, parent_som: &str, sib: usize) -> Option<BTreeMap<String, String>> {
-    let name = sf.common.name.as_deref().filter(|_| !props.is_empty())?;
-    let som = if parent_som.is_empty() { format!("{name}[{sib}]") } else { format!("{parent_som}.{name}[{sib}]") };
-    taken(props.get(&som)?, &["occur"])
-}
-
-/// How often subform `node` occurs under the container at `parent_som`, its first instance at
-/// SOM index `sib`, with the occurrence changes `props` keeps for that first instance (see
-/// [`Layouter::own_occur`]); the template's when there are none, and a default for what isn't a
-/// subform. The layout and the traversal count instances with it alike.
-pub(crate) fn occur_at(props: &super::PropChanges, node: &Node, parent_som: &str, sib: usize) -> Occur {
-    let Node::Subform(sf) = node else { return Occur::default() };
-    occur_sets(props, sf, parent_som, sib).and_then(|sets| occur_with(node, &sets)).unwrap_or(sf.occur)
 }

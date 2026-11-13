@@ -144,7 +144,7 @@ fn password_dataset_wants(doc: &Document) -> Result<Vec<Want>, XfaError> {
                         let sib = sibs.at(i);
                         match n {
                             Node::Subform(sf) => {
-                                let from_data = crate::layout::instances_in_data(self.tpl, Some(self.data), sf, &sf.occur, parent_som);
+                                let from_data = crate::layout::instances_in_data(self.tpl, Some(self.data), sf, parent_som);
                                 let instances = crate::layout::instance_count(&sf.occur, from_data).max(from_data);
                                 for k in 0..instances {
                                     if k > 0 {

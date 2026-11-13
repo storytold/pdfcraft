@@ -21,7 +21,7 @@
 use std::collections::HashMap;
 
 use crate::data::DataNode;
-use crate::layout::{Item, Page, subform_instances_with};
+use crate::layout::{Item, Page, subform_instances};
 use crate::model::{Access, Common, Field, Layout, Node, Presence, Subform, Template};
 
 /// Most objects the order is worked out for; a larger form keeps the layout's order.
@@ -94,9 +94,6 @@ struct Tree<'t> {
     /// The template and data the layout counted repeating subforms' instances with.
     tpl: &'t Template,
     data: Option<&'t DataNode>,
-    /// The property changes the layout kept per instance: a subform's occurrences changed
-    /// inside a repeating one count as the layout counts them.
-    props: &'t crate::layout::PropChanges,
     /// SOM indices of the containers references were resolved in.
     som: HashMap<usize, SomIndex<'t>>,
     too_big: bool,
@@ -114,7 +111,7 @@ fn with_som(parent: &str, name: Option<&str>, index: usize) -> String {
 
 impl<'t> Tree<'t> {
     /// An empty tree knowing the widgets laid out on `pages`, from `tpl` with `data`.
-    fn new(tpl: &'t Template, data: Option<&'t DataNode>, props: &'t crate::layout::PropChanges, pages: &[Page]) -> Tree<'t> {
+    fn new(tpl: &'t Template, data: Option<&'t DataNode>, pages: &[Page]) -> Tree<'t> {
         let mut widgets: HashMap<String, Vec<(usize, usize)>> = HashMap::new();
         for (pi, page) in pages.iter().enumerate() {
             for (ii, item) in page.items.iter().enumerate() {
@@ -127,7 +124,7 @@ impl<'t> Tree<'t> {
         for list in widgets.values_mut() {
             list.reverse();
         }
-        Tree { nodes: Vec::new(), widgets, tpl, data, props, som: HashMap::new(), too_big: false }
+        Tree { nodes: Vec::new(), widgets, tpl, data, som: HashMap::new(), too_big: false }
     }
 
     /// Add one object under `parent`; `None` once the tree is full.
@@ -159,11 +156,8 @@ impl<'t> Tree<'t> {
 
     /// How many instances of `sf` under the container at `parent_som` the layout made, counted
     /// as it counts them (one for a subform that isn't shown, which it doesn't lay out).
-    fn instances(&self, node: &Node, sf: &Subform, parent_som: &str, sib: usize, shown: bool) -> usize {
-        if !shown {
-            return 1;
-        }
-        subform_instances_with(self.tpl, self.data, sf, &crate::layout::occur_at(self.props, node, parent_som, sib), parent_som)
+    fn instances(&self, sf: &Subform, parent_som: &str, shown: bool) -> usize {
+        if shown { subform_instances(self.tpl, self.data, sf, parent_som) } else { 1 }
     }
 
     /// Add `node` (each instance of a repeating subform) and everything in it, under `parent`
@@ -176,7 +170,7 @@ impl<'t> Tree<'t> {
         let shown = shown && c.presence == Presence::Visible;
         match node {
             Node::Subform(sf) => {
-                for k in 0..self.instances(node, sf, parent_som, sib, shown) {
+                for k in 0..self.instances(sf, parent_som, shown) {
                     let som = with_som(parent_som, c.name.as_deref(), sib + k);
                     let Some(id) = self.push(Class::Subform, c, parent, shown) else { return };
                     for kid in &sf.children {
@@ -388,8 +382,8 @@ impl<'t> Tree<'t> {
 /// Write each page's widgets in the template's Tab order. Widgets the order doesn't place
 /// (protected fields, master pages, a header row repeated after a page break) keep their
 /// places; so does everything when the form is too large to work out.
-pub(crate) fn order_widgets(root: &Node, tpl: &Template, data: Option<&DataNode>, props: &crate::layout::PropChanges, pages: &mut [Page]) {
-    let mut tree = Tree::new(tpl, data, props, pages);
+pub(crate) fn order_widgets(root: &Node, tpl: &Template, data: Option<&DataNode>, pages: &mut [Page]) {
+    let mut tree = Tree::new(tpl, data, pages);
     tree.add(root, None, "", 0, true, 0);
     if tree.too_big || tree.nodes.is_empty() {
         return;

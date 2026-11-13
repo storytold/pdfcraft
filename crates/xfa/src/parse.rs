@@ -1013,9 +1013,6 @@ pub(crate) fn restyle_from(node: &mut Node, x: XmlNode, touched: &dyn Fn(&str) -
             }
         }
         Node::Subform(s) => {
-            if touched("occur") {
-                s.occur = parse_occur(child(x, "occur"));
-            }
             if touched("break") || touched("breakBefore") || touched("breakAfter") {
                 (s.break_before_page, s.break_after_page) = page_breaks(x);
             }

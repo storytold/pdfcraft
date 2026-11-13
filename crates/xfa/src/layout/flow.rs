@@ -1,9 +1,8 @@
 use super::common::{WidgetRest, clamp_opt, divide, is_row, moved, solid_extent, split_line, split_widget, splittable, widget_box};
-use super::draw::DRAWN;
 use super::items::Item;
 use super::{
     Ctx, Frame, Layout, Layouter, MAX_DEPTH, MAX_INSTANCES, MAX_MEASURES, Node, Rect, SomIndices, Splitting, Subform, XfaError, instances_in_data,
-    subform_instances_with,
+    subform_instances,
 };
 
 impl Layouter<'_> {
@@ -76,8 +75,7 @@ impl Layouter<'_> {
         };
         // The field breaks into pieces, each with the field's border all round (a border's
         // default `break="close"`, XFA 3.3 pp. 629–630): the border drawn round the whole field
-        // comes out, to be drawn round each piece once the break is known, as the field was
-        // drawn (with its instance's changes, see `draw_field`).
+        // comes out, to be drawn round each piece once the break is known.
         self.leaves.clear();
         let border = match (node, border_items) {
             (Node::Field(f), Some((start, end))) if first <= start => {
@@ -87,10 +85,7 @@ impl Layouter<'_> {
                 {
                     p.items.drain(start..end);
                 }
-                match self.changes_of(&f.common, ctx, sib, Some("field")) {
-                    Some(sets) => self.restyled_common(&f.common, sets).border.clone(),
-                    None => f.common.border.clone(),
-                }
+                f.common.border.as_ref()
             }
             _ => None,
         };
@@ -98,7 +93,7 @@ impl Layouter<'_> {
         let split = self.split_block(first, y, drawn, false);
         let pieces = self.splitting.take().map(|s| s.pieces).unwrap_or_default();
         split?;
-        if let Some(b) = &border {
+        if let Some(b) = border {
             // The last piece first: a piece's place on its page stays where it was found.
             for (page, at, piece) in pieces.into_iter().rev() {
                 self.insert_border(b, piece, page, at)?;
@@ -328,88 +323,64 @@ impl Layouter<'_> {
         }
         let Node::Subform(sf) = node else { return Ok(()) };
         self.check_measures()?;
+        if sf.break_before_page && self.page_has_flow() {
+            self.break_frames(0.0, true)?;
+        }
         // Data adds instances of a repeating subform (rows added in another viewer).
-        let instances = self.laid_out_instances(node, &ctx.som, sib);
+        let instances = self.laid_out_instances(node, &ctx.som);
         let ctx_parent = ctx;
-        // The template's page breaks go before the first instance and after the last (there is
-        // always one, see `instance_count`); an instance whose breaks a script changed (XFA 3.3
-        // p. 632) breaks as they now say.
-        let breaks = |l: &Self, i: usize| {
-            let template = (i == 0 && sf.break_before_page, i.saturating_add(1) >= instances && sf.break_after_page);
-            l.own_breaks(node, ctx_parent, sib.saturating_add(i), template)
-        };
         for i in 0..instances {
             // Every instance spends budget, so nested repeats that place nothing still stop.
             self.measures.set(self.measures.get().saturating_add(1));
             self.check_measures()?;
-            let (before, after) = breaks(self, i);
-            if before && self.page_has_flow() {
-                self.break_frames(0.0, true)?;
+            let ctx = ctx_parent.with_som(&sf.common, sib + i);
+            let (rect, _, _) = self.cursor();
+            let (x, w) = avail.unwrap_or((rect.x, rect.w));
+            let w = clamp_opt(sf.common.w.unwrap_or(w), sf.common.min_w, sf.common.max_w).min(w.max(1.0));
+            if !matches!(sf.layout, Layout::Tb | Layout::Table) || sf.common.h.is_some() {
+                // Not splittable: one block.
+                let (_, h) = self.size_at(node, w, ctx_parent, depth, sib + i);
+                self.flow_block(node, x, (w, h), ctx_parent, depth, sib + i)?;
+                continue;
             }
-            self.flow_instance(node, sf, avail, ctx_parent, depth, sib + i)?;
-            if after {
-                self.break_frames(0.0, true)?;
-            }
-        }
-        Ok(())
-    }
-
-    /// Instance `sib` of subform `node` (`sf`) for [`Self::flow_subform_in`], with its own
-    /// border, margins, font and paragraph (a script may change one row's).
-    fn flow_instance(
-        &mut self,
-        node: &Node,
-        sf: &Subform,
-        avail: Option<(f64, f64)>,
-        ctx_parent: &Ctx,
-        depth: usize,
-        sib: usize,
-    ) -> Result<(), XfaError> {
-        let own = self.own(&sf.common, ctx_parent, sib, DRAWN);
-        let ctx = ctx_parent.with_som(&own, sib);
-        let (rect, _, _) = self.cursor();
-        let (x, w) = avail.unwrap_or((rect.x, rect.w));
-        let w = clamp_opt(sf.common.w.unwrap_or(w), sf.common.min_w, sf.common.max_w).min(w.max(1.0));
-        if !matches!(sf.layout, Layout::Tb | Layout::Table) || sf.common.h.is_some() {
-            // Not splittable: one block.
-            let (_, h) = self.size_at(node, w, ctx_parent, depth, sib);
-            return self.flow_block(node, x, (w, h), ctx_parent, depth, sib);
-        }
-        let m = own.margin;
-        // Its border and fill go round what it takes from here, a part on each content area.
-        let framed = match self.flow_mark() {
-            Some(part) => {
-                let border = own.border.clone();
-                self.frames.push(Frame { x, w, margin: m, border, part, parts: Vec::new(), lost: false, held: false });
-                true
-            }
-            None => false,
-        };
-        self.advance(m.top);
-        let inner_x = x + m.left;
-        let inner_w = (w - m.horizontal()).max(1.0);
-        match sf.layout {
-            Layout::Table => self.flow_table(sf, inner_x, inner_w, &ctx, depth)?,
-            _ => {
-                let sibs = SomIndices::of(&sf.children);
-                for (ci, child) in sf.children.iter().enumerate() {
-                    if !child.common().presence.occupies() {
-                        continue;
+            let m = sf.common.margin;
+            // Its border and fill go round what it takes from here, a part on each content area.
+            let framed = match self.flow_mark() {
+                Some(part) => {
+                    self.frames.push(Frame { x, w, margin: m, border: sf.common.border.clone(), part, parts: Vec::new(), lost: false, held: false });
+                    true
+                }
+                None => false,
+            };
+            self.advance(m.top);
+            let inner_x = x + m.left;
+            let inner_w = (w - m.horizontal()).max(1.0);
+            match sf.layout {
+                Layout::Table => self.flow_table(sf, inner_x, inner_w, &ctx, depth)?,
+                _ => {
+                    let sibs = SomIndices::of(&sf.children);
+                    for (ci, child) in sf.children.iter().enumerate() {
+                        if !child.common().presence.occupies() {
+                            continue;
+                        }
+                        let csib = sibs.at(ci);
+                        if let Node::Subform(_) = child
+                            && splittable(child)
+                        {
+                            self.flow_subform(child, Some((inner_x, inner_w)), &ctx, depth + 1, csib)?;
+                            continue;
+                        }
+                        self.flow_instances(child, inner_x, inner_w, &ctx, depth + 1, csib)?;
                     }
-                    let csib = sibs.at(ci);
-                    if let Node::Subform(_) = child
-                        && splittable(child)
-                    {
-                        self.flow_subform(child, Some((inner_x, inner_w)), &ctx, depth + 1, csib)?;
-                        continue;
-                    }
-                    self.flow_instances(child, inner_x, inner_w, &ctx, depth + 1, csib)?;
                 }
             }
+            self.advance(m.bottom);
+            if framed && let Some(frame) = self.frames.pop() {
+                self.finish_frame(frame)?;
+            }
         }
-        self.advance(m.bottom);
-        if framed && let Some(frame) = self.frames.pop() {
-            self.finish_frame(frame)?;
+        if sf.break_after_page {
+            self.break_frames(0.0, true)?;
         }
         Ok(())
     }
@@ -442,26 +413,11 @@ impl Layouter<'_> {
                 && row.layout == Layout::Row
             {
                 // Rows added as data (in another viewer) repeat the row.
-                let instances = self.laid_out_instances(child, &ctx.som, csib);
+                let instances = self.laid_out_instances(child, &ctx.som);
                 for inst in 0..instances {
                     let h = self.row_height(row, &cols, inner_w, ctx, depth + 1, csib.saturating_add(inst));
                     let led = lead.filter(|(li, _)| *li != ci);
-                    // A row instance whose breaks a script changed (XFA 3.3 p. 632) breaks the
-                    // page as they now say; the overflow leader starts the new page, as it does
-                    // a page the table runs onto.
-                    // The template's own row breaks aren't laid out in a table: only a row's own.
-                    let (before, after) = self.own_breaks(child, ctx, csib.saturating_add(inst), (false, false));
-                    let broke = before && self.page_has_flow();
-                    if broke {
-                        self.break_frames(0.0, true)?;
-                    }
-                    // After that break the leader goes first only where it and the row both
-                    // fit; a row too tall for both starts the page alone.
-                    let lead_fits = {
-                        let (rect, y, _) = self.cursor();
-                        y + lead_h + h <= rect.bottom() + 0.01
-                    };
-                    if (self.make_room(h, led.map_or(0.0, |_| lead_h))? || broke && lead_fits)
+                    if self.make_room(h, led.map_or(0.0, |_| lead_h))?
                         && let Some((li, l)) = led
                     {
                         let (_, y, _) = self.cursor();
@@ -471,9 +427,6 @@ impl Layouter<'_> {
                     let (_, y, _) = self.cursor();
                     self.draw_row(row, &cols, Rect::new(x, y, inner_w, h), ctx, depth + 1, csib + inst)?;
                     self.place(h);
-                    if after {
-                        self.break_frames(0.0, true)?;
-                    }
                 }
                 continue;
             }
@@ -493,7 +446,7 @@ impl Layouter<'_> {
     /// 3.3, "Repeating Elements using Occurrence Limits", p. 263), each as tall as its own
     /// content; the data rows past them are reported.
     fn flow_instances(&mut self, node: &Node, x: f64, inner_w: f64, ctx: &Ctx, depth: usize, sib: usize) -> Result<(), XfaError> {
-        for instance in 0..self.laid_out_instances(node, &ctx.som, sib) {
+        for instance in 0..self.laid_out_instances(node, &ctx.som) {
             // Every instance spends budget, so nested repeats that place nothing still stop.
             self.measures.set(self.measures.get().saturating_add(1));
             self.check_measures()?;
@@ -509,38 +462,35 @@ impl Layouter<'_> {
     /// The size a node takes when given `avail_w` of width. Containers are measured once per
     /// (node, width, depth): measuring a width-less container measures its content twice (for
     /// its width, then its height), which would otherwise be exponential in the nesting.
-    /// How many instances of `node` to lay out under the container at `parent_som`, its first
-    /// instance at SOM index `sib`: a repeating subform's `occur` (as a script changed it on
-    /// the first instance there, see [`Self::own_occur`]) and data instances
-    /// ([`instance_count`]); one for anything else.
-    pub(super) fn instances(&self, node: &Node, parent_som: &str, sib: usize) -> usize {
+    /// How many instances of `node` to lay out under the container at `parent_som`: a
+    /// repeating subform's `occur` and data instances ([`instance_count`]); one for anything else.
+    pub(super) fn instances(&self, node: &Node, parent_som: &str) -> usize {
         let Node::Subform(sf) = node else { return 1 };
-        subform_instances_with(self.tpl, self.data, sf, &self.own_occur(node, parent_som, sib), parent_som)
+        subform_instances(self.tpl, self.data, sf, parent_som)
     }
 
     /// [`Self::instances`] for laying `node` out: the count every layout that repeats a subform
     /// draws (flowed or positioned, top to bottom, wrapped or a table's rows), with the data rows
     /// past it reported ([`Self::warn_truncated`]).
-    pub(super) fn laid_out_instances(&mut self, node: &Node, parent_som: &str, sib: usize) -> usize {
-        let instances = self.instances(node, parent_som, sib);
-        self.warn_truncated(node, parent_som, sib, instances);
+    pub(super) fn laid_out_instances(&mut self, node: &Node, parent_som: &str) -> usize {
+        let instances = self.instances(node, parent_som);
+        self.warn_truncated(node, parent_som, instances);
         instances
     }
 
     /// The data holds more instances of `node` than `laid_out`: say so, since calculations
     /// then see only those, and say why. (The template's own counts can't ask for more: the
     /// parser reads `initial` and `max` up to [`MAX_INSTANCES`].)
-    pub(super) fn warn_truncated(&mut self, node: &Node, parent_som: &str, sib: usize, laid_out: usize) {
+    pub(super) fn warn_truncated(&mut self, node: &Node, parent_som: &str, laid_out: usize) {
         let Node::Subform(sf) = node else { return };
-        let occur = self.own_occur(node, parent_som, sib);
-        let from_data = instances_in_data(self.tpl, self.data, sf, &occur, parent_som);
+        let from_data = instances_in_data(self.tpl, self.data, sf, parent_som);
         if from_data <= laid_out {
             return;
         }
         let name = sf.common.name.as_deref().unwrap_or("a subform");
         // The template's own `occur max` is the form's rule: past it, the extra data is ignored
         // (XFA 3.3, p. 336). Only the layout's own limit needs naming as a limit.
-        let why = if occur.max.is_some_and(|m| m <= laid_out) {
+        let why = if sf.occur.max.is_some_and(|m| m <= laid_out) {
             String::new()
         } else {
             format!("; {MAX_INSTANCES} is the most one repeating subform lays out")

@@ -5520,7 +5520,7 @@ fn a_script_hiding_master_content_on_one_page_hides_it_there_only() {
     let mut ov = Overrides::default();
     ov.presence.insert("Body[1].pageNo[0]".into(), "hidden".into());
     let laid = apply_overrides(&tpl, &ov);
-    let form = crate::layout::layout_with_overrides(&laid, None, &ov, &Default::default()).unwrap();
+    let form = crate::layout::layout_with_overrides(&laid, None, &ov).unwrap();
     let has: Vec<bool> = form.pages.iter().map(|p| widgets(p).iter().any(|w| w.som.contains("pageNo"))).collect();
     assert_eq!(has, [true, false, true], "hidden on the second page only");
 }

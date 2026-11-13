@@ -175,7 +175,7 @@ pub fn render_into(doc: &mut Document) -> Result<Report, XfaError> {
     let data = parse_datasets(&packets.xdp);
     let ov = overrides_of(doc, &tpl);
     let applied = script::apply_overrides_split(&tpl, &ov);
-    let mut form = layout::layout_with_overrides(&applied.template, data.as_ref(), &ov, &applied.per_instance)?;
+    let mut form = layout::layout_with_overrides(&applied.template, data.as_ref(), &ov)?;
     form.warnings.extend(script::property_notes(&ov, &applied));
     form.warnings.splice(0..0, parse_warnings);
     if form.pages.is_empty() {

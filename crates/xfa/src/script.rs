@@ -606,11 +606,8 @@ impl Walker<'_> {
             match n {
                 Node::Subform(sf) => {
                     let named = sf.common.name.is_some();
-                    // How often it occurs, as scripts changed it on its first instance (the
-                    // instance manager's limits are the subform's, not one instance's).
-                    // Only the occurrence changes are read, as the layout counts instances.
-                    let occur = if named { crate::layout::occur_at(&self.ov.props, n, parent_som, sib) } else { sf.occur };
-                    let instances = crate::layout::subform_instances_with(self.tpl, self.data, sf, &occur, parent_som);
+                    let occur = sf.occur;
+                    let instances = crate::layout::subform_instances(self.tpl, self.data, sf, parent_som);
                     for k in 0..instances {
                         // The first instance was counted above.
                         if k > 0 && !self.take() {
@@ -1267,54 +1264,6 @@ pub(crate) fn apply_overrides_to(nodes: &mut [Node], parent_som: &str, ov: &Over
     }
 }
 
-/// Apply the property changes `props` holds to each of `nodes` (children of `parent_som`) and
-/// their descendants, down to [`MAX_DEPTH`], by their SOM paths: the content of a page made from
-/// an unnamed page area, which the live form names `#pageArea[i]` and the layout doesn't (its
-/// objects' paths start at their own names). An unnamed subform or area shares its parent's SOM
-/// path, as the live form names what it holds, and takes no change of its own; an exclusion
-/// group's buttons take theirs under the group's path. `true` when an object's changes don't
-/// all reach it (see [`crate::restyle::restyle`]).
-pub(crate) fn apply_props_to(nodes: &mut [Node], parent_som: &str, props: &crate::layout::PropChanges, depth: usize) -> bool {
-    if depth > MAX_DEPTH {
-        return false;
-    }
-    let mut cut = false;
-    let sibs = SomIndices::of(nodes);
-    for (i, n) in nodes.iter_mut().enumerate() {
-        let name_default = match n {
-            Node::Field(_) => Some("field"),
-            Node::ExclGroup(_) => Some("group"),
-            _ => None,
-        };
-        let name = n.common().name.clone().or(name_default.map(str::to_string));
-        let som = child_som(parent_som, name.as_deref(), sibs.at(i));
-        if name.is_some()
-            && let Some(sets) = props.get(&som)
-        {
-            cut |= crate::restyle::restyle(n, sets);
-        }
-        match n {
-            Node::Subform(s) => cut |= apply_props_to(&mut s.children, &som, props, depth + 1),
-            Node::Area(a) => cut |= apply_props_to(&mut a.children, &som, props, depth + 1),
-            Node::ExclGroup(g) => {
-                let fsibs = SomIndices::of_fields(&g.fields);
-                for (fi, f) in g.fields.iter_mut().enumerate() {
-                    let fsom = child_som(&som, f.common.name.as_deref().or(Some("field")), fsibs.at(fi));
-                    if let Some(sets) = props.get(&fsom) {
-                        let mut node = Node::Field(Box::new(std::mem::take(f)));
-                        cut |= crate::restyle::restyle(&mut node, sets);
-                        if let Node::Field(changed) = node {
-                            *f = *changed;
-                        }
-                    }
-                }
-            }
-            Node::Field(_) | Node::Draw(_) => {}
-        }
-    }
-    cut
-}
-
 /// The template with `ov` applied to its objects (instance 0 of each; scripts that hide one
 /// instance of a repeating subform hide them all). See [`apply_overrides_split`] for the
 /// property changes.
@@ -1325,52 +1274,49 @@ pub fn apply_overrides(tpl: &Template, ov: &Overrides) -> Template {
 /// What [`apply_overrides_split`] gives.
 #[derive(Clone, Debug, Default)]
 pub struct Applied {
-    /// The template with the changes that belong to the template object applied.
+    /// The template with the changes applied.
     pub template: Template,
-    /// The property changes of objects inside a repeating subform, by the SOM path of the
-    /// instance they were made to: the layout draws each instance with its own
-    /// ([`crate::layout::layout_with`]), as the template object stands for every instance.
-    pub per_instance: crate::layout::PropChanges,
+    /// Objects with kept property changes that aren't ones the template makes once at their
+    /// paths (kept for another template, inside a subform that may repeat, or deeper than is
+    /// walked): their changes are not applied.
+    pub unplaced: usize,
     /// Objects some of whose property changes don't reach the page (see
     /// [`crate::restyle::restyle`]).
     pub cut: usize,
 }
 
 /// The template with `ov` applied: presence and access as [`apply_overrides`] does, and the
-/// property changes of each object that has one instance (outside any repeating subform). A
-/// repeating subform takes only its occurrence changes, made to its first instance (the
-/// instance manager's limits are the subform's); every other change inside a repeating subform
-/// stays per instance, in [`Applied::per_instance`], so no instance is drawn with another's.
-/// Page-master content is left as it is: a page area makes many pages, each with its own SOM
-/// path, so its presence and access are applied page by page as the pages are laid out, and its
-/// property changes stay in [`Applied::per_instance`] for the page they were made on
-/// ([`crate::layout::layout_with_overrides`]).
+/// property changes, which are kept only for objects the template makes once
+/// ([`crate::som_made_once`]: outside any subform that may repeat), so each is the template
+/// object's. One whose object isn't found there is counted ([`Applied::unplaced`]) and left
+/// out, not applied to another. Page-master content is left as it is: a page area makes many
+/// pages, each with its own SOM path, so its presence and access are applied page by page as
+/// the pages are laid out ([`crate::layout::layout_with_overrides`]), and no property change is
+/// kept for it.
 pub fn apply_overrides_split(tpl: &Template, ov: &Overrides) -> Applied {
     struct W<'a> {
         ov: &'a Overrides,
-        consumed: BTreeMap<String, Vec<String>>,
+        /// The paths whose property changes were applied.
+        placed: std::collections::BTreeSet<String>,
         cut: usize,
     }
     impl W<'_> {
-        /// Apply the property changes of the object at `som` to `n`, those `keep` lets through,
-        /// and note them as taken.
-        fn props(&mut self, n: &mut Node, som: &str, keep: &dyn Fn(&str) -> bool) {
+        /// Apply the property changes of the object at `som` to `n`.
+        fn props(&mut self, n: &mut Node, som: &str) {
             let Some(sets) = self.ov.props.get(som) else { return };
-            let taken: BTreeMap<String, String> = sets.iter().filter(|(k, _)| keep(k)).map(|(k, v)| (k.clone(), v.clone())).collect();
-            if taken.is_empty() {
-                return;
-            }
-            if crate::restyle::restyle(n, &taken) {
+            if crate::restyle::restyle(n, sets) {
                 self.cut = self.cut.saturating_add(1);
             }
-            self.consumed.entry(som.to_string()).or_default().extend(taken.into_keys());
+            self.placed.insert(som.to_string());
         }
 
         /// Set the presence `ov` gives each of `nodes` (children of `parent_som`) and their
         /// descendants, down to [`MAX_DEPTH`], the access it gives a field outside an exclusion
         /// group, and (`props`) the property changes. An unnamed draw, area or subform shares
         /// its parent's SOM path, so it takes no change of its own. `in_repeat`: the nodes are
-        /// inside a repeating subform, whose instances keep their own property changes.
+        /// inside a subform the template may make more than once, where no property change is
+        /// kept (told as [`SomOwners`] tells it: a named subform by its `occur` maximum, an
+        /// unnamed one, which data makes no instance of, by how many its `occur` starts with).
         fn walk(&mut self, nodes: &mut [Node], parent_som: &str, props: bool, presence_on: bool, in_repeat: bool, depth: usize) {
             if depth > MAX_DEPTH {
                 return;
@@ -1388,17 +1334,16 @@ pub fn apply_overrides_split(tpl: &Template, ov: &Overrides) -> Applied {
                 let som = child_som(parent_som, name.as_deref(), sib);
                 let presence = name.as_ref().filter(|_| presence_on).and_then(|_| ov.presence.get(&som)).map(|p| Presence::parse(Some(p)));
                 let access = name.as_ref().filter(|_| presence_on).and_then(|_| ov.access.get(&som)).cloned();
-                // Occurrence changes first: they decide whether the subform repeats (a `max` set
-                // to 3 makes one that didn't), and with it whether the changes inside it are the
-                // template's or one instance's.
-                let occur = |k: &str| k.trim_start_matches('=').starts_with("occur#");
-                if props && name.is_some() && !in_repeat {
-                    self.props(n, &som, &occur);
-                    if !matches!(n, Node::Subform(s) if s.occur.max != Some(1)) {
-                        self.props(n, &som, &|k| !occur(k));
-                    }
+                let repeats = match n {
+                    Node::Subform(s) => match s.common.name {
+                        Some(_) => s.occur.max != Some(1),
+                        None => crate::layout::instance_count(&s.occur, 0) > 1,
+                    },
+                    _ => false,
+                };
+                if props && name.is_some() && !in_repeat && !repeats {
+                    self.props(n, &som);
                 }
-                let repeats = matches!(n, Node::Subform(s) if s.occur.max != Some(1));
                 let inner = in_repeat || repeats;
                 match n {
                     Node::Subform(s) => {
@@ -1452,7 +1397,7 @@ pub fn apply_overrides_split(tpl: &Template, ov: &Overrides) -> Applied {
                                 if let Node::Field(changed) = node {
                                     *f = *changed;
                                 }
-                                self.consumed.entry(fsom).or_default().extend(sets.keys().cloned());
+                                self.placed.insert(fsom);
                             }
                         }
                     }
@@ -1460,7 +1405,7 @@ pub fn apply_overrides_split(tpl: &Template, ov: &Overrides) -> Applied {
             }
         }
     }
-    let mut w = W { ov, consumed: BTreeMap::new(), cut: 0 };
+    let mut w = W { ov, placed: Default::default(), cut: 0 };
     let mut t = tpl.clone();
     if !ov.is_empty() {
         let props = !ov.props.is_empty();
@@ -1470,23 +1415,15 @@ pub fn apply_overrides_split(tpl: &Template, ov: &Overrides) -> Applied {
             t.root = *r;
         }
     }
-    let mut per_instance = crate::layout::PropChanges::new();
-    for (som, sets) in ov.props.iter() {
-        let taken = w.consumed.get(som);
-        let left: BTreeMap<String, String> =
-            sets.iter().filter(|(k, _)| taken.is_none_or(|t| !t.contains(k))).map(|(k, v)| (k.clone(), v.clone())).collect();
-        if !left.is_empty() {
-            per_instance.insert(som.clone(), left);
-        }
-    }
-    Applied { template: t, per_instance, cut: w.cut }
+    let unplaced = ov.props.keys().filter(|som| !w.placed.contains(*som)).count();
+    Applied { template: t, unplaced, cut: w.cut }
 }
 
 /// The field at `som` as the template and the property changes in `ov` make it now (its
 /// validation's format test, its calculation's override), for checks after the user changes
 /// its value; `None` when no template field is there. Only the field's own changes, kept by its
-/// SOM path, apply to it (what [`apply_overrides_split`] gives it, whether in the template or per
-/// instance), so this restyles one field, not the form, and only once for the same changes:
+/// SOM path, apply to it (what [`apply_overrides_split`] gives it in the template), so this
+/// restyles one field, not the form, and only once for the same changes:
 /// the field is taken from the template's memo ([`crate::memo::restyled_field`]), as the live
 /// form takes it, so the checks of later events don't read it again.
 pub fn field_now(tpl: &Template, ov: &Overrides, som: &str) -> Option<Field> {
@@ -1510,8 +1447,9 @@ pub fn value_overridden(tpl: &Template, ov: &Overrides, som: &str) -> bool {
 }
 
 /// Notes for the layout's warnings: property changes the file held that weren't kept
-/// ([`Overrides::dropped`], not applied) and objects some of whose changes
-/// don't reach the page ([`Applied::cut`]).
+/// ([`Overrides::dropped`], not applied), objects some of whose changes don't reach the page
+/// ([`Applied::cut`]) and kept changes whose object the template doesn't make once
+/// ([`Applied::unplaced`]).
 pub fn property_notes(ov: &Overrides, applied: &Applied) -> Vec<String> {
     let mut out = Vec::new();
     if ov.dropped > 0 {
@@ -1524,6 +1462,12 @@ pub fn property_notes(ov: &Overrides, applied: &Applied) -> Vec<String> {
         out.push(format!(
             "{} object(s) have more properties than are kept for scripts; some of the changes scripts made to them are not drawn",
             applied.cut
+        ));
+    }
+    if applied.unplaced > 0 {
+        out.push(format!(
+            "{} object(s) with property changes kept in the file are not ones the template makes once at their paths; those changes are not drawn",
+            applied.unplaced
         ));
     }
     out
@@ -1654,7 +1598,7 @@ pub fn rerender(doc: &mut Document, tpl: &Template) -> Result<Report, XfaError> 
     let data = parse_datasets(&packets.xdp);
     let ov = overrides_of(doc, tpl);
     let applied = apply_overrides_split(tpl, &ov);
-    let mut form = crate::layout::layout_with_overrides(&applied.template, data.as_ref(), &ov, &applied.per_instance)?;
+    let mut form = crate::layout::layout_with_overrides(&applied.template, data.as_ref(), &ov)?;
     form.warnings.extend(property_notes(&ov, &applied));
     if form.pages.is_empty() {
         return Err(XfaError::Malformed("the template laid out to no pages".into()));

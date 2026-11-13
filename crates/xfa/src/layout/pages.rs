@@ -184,13 +184,6 @@ impl Layouter<'_> {
                 self.master_copies.push(Rc::clone(&copy));
                 copy
             });
-        // An unnamed page area's content goes by `#pageArea[i]` in the live form, where scripts
-        // change its properties; the layout names it from its own names, so those changes go on a
-        // copy of it here.
-        let copy = match copy {
-            None if ctx.som.is_empty() => self.unnamed_copy(idx, &area.items),
-            other => other,
-        };
         let items: &[Node] = copy.as_deref().map_or(&area.items, Vec::as_slice);
         let sibs = SomIndices::of(items);
         // The master page's own objects: shown where they say, whatever the body was drawing
@@ -199,28 +192,6 @@ impl Layouter<'_> {
         let drawn = items.iter().enumerate().try_for_each(|(i, item)| self.draw_positioned_child(item, page_rect, &ctx, 1, sibs.at(i)));
         self.views = body;
         drawn
-    }
-
-    /// The content `items` of the unnamed page area `idx` with the property changes scripts
-    /// made to it (under `#pageArea[idx]`, where the live form names it); `None` when none of
-    /// them can change how it is drawn ([`crate::restyle::draws`]), so the template's is drawn.
-    /// The pages made from the area share its paths, so the copy is made once and drawn on each
-    /// of them, not copied (with the pictures it holds) and read again for every page.
-    fn unnamed_copy(&mut self, idx: usize, items: &[Node]) -> Option<Rc<Vec<Node>>> {
-        if let Some(made) = self.unnamed_copies.get(&idx) {
-            return made.clone();
-        }
-        let som = format!("#pageArea[{idx}]");
-        let drawn = under(self.props, &format!("{som}.")).any(|(_, sets)| sets.keys().any(|k| crate::restyle::draws(k)));
-        let copy = drawn.then(|| {
-            let mut copy = items.to_vec();
-            crate::script::apply_props_to(&mut copy, &som, self.props, 1);
-            Rc::new(copy)
-        });
-        // Kept for the whole layout, so its objects' addresses stay its own (the measurement
-        // cache keys on them).
-        self.unnamed_copies.insert(idx, copy.clone());
-        copy
     }
 
     /// Move to the next content area, or the next page.

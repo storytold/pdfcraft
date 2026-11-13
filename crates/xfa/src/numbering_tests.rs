@@ -1038,7 +1038,7 @@ proptest! {
         let mut scripts = Vec::new();
         live_fields(&tree.root, &mut scripts);
         let applied = apply_overrides_split(&tpl, &ov);
-        let form = crate::layout::layout_with_overrides(&applied.template, Some(&data), &ov, &applied.per_instance).unwrap();
+        let form = crate::layout::layout_with_overrides(&applied.template, Some(&data), &ov).unwrap();
         let laid = widgets(&form);
         let fields = sorted(want.iter().filter(|l| matches!(l.kind, Kind::Field | Kind::Button)).map(|l| l.som.clone()).collect());
         prop_assert_eq!(sorted(laid.iter().map(|(som, _)| som.clone()).collect()), fields, "the widgets of {}", body);

@@ -1,9 +1,8 @@
 use super::common::{button_action, date_pattern};
 use super::items::{BorderShape, Item, Widget, WidgetBorder, WidgetKind};
-use super::restyled::Leaf;
 use super::{
-    Access, Border, Ctx, Engine, Face, Field, FillKind, HAlign, Layouter, MAX_DATA_IMAGE, Margin, Node, Para, Placement, Presence, Rect, Ui, VAlign,
-    Value, Views, XfaError, data_date_letters, data_path, data_to_iso, is_on, iso_to_pattern, text,
+    Access, Border, Ctx, Engine, Face, Field, FillKind, HAlign, Layouter, MAX_DATA_IMAGE, Margin, Para, Placement, Presence, Rect, Ui, VAlign, Value,
+    Views, XfaError, data_date_letters, data_path, data_to_iso, is_on, iso_to_pattern, text,
 };
 
 /// A radio button's group: its name, the on value of a button that lists none (its place in the
@@ -11,26 +10,10 @@ use super::{
 pub(super) type Radio<'a> = (&'a str, &'a str, Option<String>, Option<&'a str>);
 
 impl Layouter<'_> {
-    /// Draw field `f`, instance `sib` under `ctx`, as scripts' property changes for that
-    /// instance leave it (see [`Self::draw_field_as`]).
-    pub(super) fn draw_field(&mut self, f: &Field, rect: Rect, ctx: &Ctx, radio: Option<Radio<'_>>, sib: usize) -> Result<(), XfaError> {
-        match self.changes_of(&f.common, ctx, sib, Some("field")) {
-            Some(sets) => {
-                let changed = self.restyled(Leaf::Field(f), sets);
-                match &*changed {
-                    Node::Field(changed) => self.draw_field_as(changed, rect, ctx, radio, sib),
-                    // The reading of a field is a field.
-                    _ => self.draw_field_as(f, rect, ctx, radio, sib),
-                }
-            }
-            None => self.draw_field_as(f, rect, ctx, radio, sib),
-        }
-    }
-
     /// Draw field `f` at `rect`: its border (a button's is its widget's box), its caption, then its
     /// widget, or its value as plain text when it is non-interactive, a barcode, or a text field
     /// taller than its content area. `radio` is set for a group's radio button; `sib` is its SOM index.
-    fn draw_field_as(&mut self, f: &Field, rect: Rect, ctx: &Ctx, radio: Option<Radio<'_>>, sib: usize) -> Result<(), XfaError> {
+    pub(super) fn draw_field(&mut self, f: &Field, rect: Rect, ctx: &Ctx, radio: Option<Radio<'_>>, sib: usize) -> Result<(), XfaError> {
         if let Some(b) = &f.common.border
             && f.ui != Ui::Button
         {

@@ -27,12 +27,10 @@ mod flow;
 mod items;
 mod measure;
 mod pages;
-mod restyled;
 
 pub(crate) use common::date_pattern;
 pub use common::formatted_value;
 use common::{collect_names, collect_values};
-pub(crate) use draw::occur_at;
 pub(crate) use items::UNDERLINE_DROP;
 pub use items::{Action, BorderShape, Form, Item, Page, Rounded, Turned, Widget, WidgetBorder, WidgetKind};
 
@@ -212,9 +210,6 @@ struct Layouter<'t> {
     field_border: Option<(usize, usize)>,
     /// Where what is being drawn shows, as the objects it is inside say ([`Common::views`]).
     views: Views,
-    /// Property changes scripts made, by the SOM path of the instance they were made to (see
-    /// [`crate::restyle`]): each instance of a repeating subform is drawn with its own.
-    props: &'t PropChanges,
     /// The flowed subforms being laid out, outermost first: a break between their children
     /// closes their parts on one content area and opens new ones on the next.
     frames: Vec<Frame>,
@@ -223,13 +218,6 @@ struct Layouter<'t> {
     /// The pages' copies of master content that overrides changed, kept for the whole layout so
     /// their addresses stay unique (the measurement cache keys on them).
     master_copies: Vec<Rc<Vec<Node>>>,
-    /// Each unnamed page area's content with the property changes scripts made to it, by the
-    /// area's index, once a page was made from it: `None` when no change is drawn (see
-    /// `Layouter::unnamed_copy`).
-    unnamed_copies: HashMap<usize, Option<Rc<Vec<Node>>>>,
-    /// The readings of objects with their instances' own changes made so far (see
-    /// [`restyled`]).
-    restyles: restyled::Restyles,
 }
 
 /// How many instances of a repeating subform to lay out: what the data holds once it holds
@@ -240,14 +228,10 @@ pub fn instance_count(occur: &Occur, from_data: usize) -> usize {
     n.min(occur.max.unwrap_or(usize::MAX)).clamp(1, MAX_INSTANCES)
 }
 
-/// Property changes by the SOM path of the object instance they were made to.
-pub type PropChanges = std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>;
-
-/// How many instances of `sf` the layout makes under the container at `parent_som`: its
-/// `occur` (the template's, or as a script changed it, see [`occur_at`]) and the instances
-/// `data` holds ([`instance_count`]). The traversal counts them the same way.
-pub(crate) fn subform_instances_with(tpl: &Template, data: Option<&DataNode>, sf: &Subform, occur: &Occur, parent_som: &str) -> usize {
-    instance_count(occur, instances_in_data(tpl, data, sf, occur, parent_som))
+/// How many instances of `sf` the layout makes under the container at `parent_som`: its `occur`
+/// and the instances `data` holds ([`instance_count`]). The traversal counts them the same way.
+pub(crate) fn subform_instances(tpl: &Template, data: Option<&DataNode>, sf: &Subform, parent_som: &str) -> usize {
+    instance_count(&sf.occur, instances_in_data(tpl, data, sf, parent_som))
 }
 
 /// How many instances of `sf` the data holds under the container at `parent_som`: the data
@@ -258,39 +242,26 @@ pub(crate) fn subform_instances_with(tpl: &Template, data: Option<&DataNode>, sf
 /// on all count: an object of the same name after it shares their paths, and which of the two
 /// a node was written for the data doesn't say. 0 for a subform that occurs once (by `occur`)
 /// and for an unnamed one, which data makes no instance of.
-pub(crate) fn instances_in_data(tpl: &Template, data: Option<&DataNode>, sf: &Subform, occur: &Occur, parent_som: &str) -> usize {
+pub(crate) fn instances_in_data(tpl: &Template, data: Option<&DataNode>, sf: &Subform, parent_som: &str) -> usize {
     match (&sf.common.name, data) {
-        (Some(name), Some(d)) if occur.max != Some(1) => d.count(&data_path(tpl, parent_som), name).saturating_sub(sf.common.som_index),
+        (Some(name), Some(d)) if sf.occur.max != Some(1) => d.count(&data_path(tpl, parent_som), name).saturating_sub(sf.common.som_index),
         _ => 0,
     }
 }
 
 /// Lay a template out, with the values and repeat counts of `data` (the `xfa:data` element).
 pub fn layout(tpl: &Template, data: Option<&DataNode>) -> Result<Form, XfaError> {
-    layout_inner(tpl, data, None, &PropChanges::new())
+    layout_inner(tpl, data, None)
 }
 
 /// [`layout`], with what scripts set (`ov`) applied to page-master content page by page: a
 /// field hidden on the second page made from a page area is hidden there only. The rest of the
-/// template takes `ov` before this ([`crate::script::apply_overrides_split`]). Each object
-/// instance is drawn with the property changes `props` holds for it (`tpl` already has those of
-/// the objects with one instance): a repeating subform's later instances, and each page's copy
-/// of page-master content, get their own colours, borders, fonts and field flags. A field,
-/// draw or exclusion group is measured with its instance's changes, and an instance holding
-/// changed objects is measured on its own; a repeating subform's instance is laid out and drawn
-/// with its own border, margins, font and paragraph, and breaks the page where its own breaks
-/// say. An instance's object is read with its changes once in a layout, however often the
-/// layout measures and draws it.
-pub fn layout_with_overrides(tpl: &Template, data: Option<&DataNode>, ov: &crate::script::Overrides, props: &PropChanges) -> Result<Form, XfaError> {
-    layout_inner(tpl, data, Some(ov), props)
+/// template takes `ov` before this ([`crate::script::apply_overrides`]).
+pub fn layout_with_overrides(tpl: &Template, data: Option<&DataNode>, ov: &crate::script::Overrides) -> Result<Form, XfaError> {
+    layout_inner(tpl, data, Some(ov))
 }
 
-fn layout_inner(
-    tpl: &Template,
-    data: Option<&DataNode>,
-    overrides: Option<&crate::script::Overrides>,
-    props: &PropChanges,
-) -> Result<Form, XfaError> {
+fn layout_inner(tpl: &Template, data: Option<&DataNode>, overrides: Option<&crate::script::Overrides>) -> Result<Form, XfaError> {
     let areas = match &tpl.root.page_set {
         Some(ps) if !ps.areas.is_empty() => ps.areas.clone(),
         _ => vec![PageArea {
@@ -334,9 +305,6 @@ fn layout_inner(
         frames: Vec::new(),
         overrides,
         master_copies: Vec::new(),
-        unnamed_copies: HashMap::new(),
-        restyles: restyled::Restyles::default(),
-        props,
     };
     let ctx = Ctx { font: Font::default(), para: Para::default(), som: String::new() };
     l.new_page()?;
@@ -351,7 +319,7 @@ fn layout_inner(
         fill_page_count(&mut p.items, &count);
     }
     // Tab goes the way the template's traversal says.
-    crate::traverse::order_widgets(&root_node, tpl, data, props, &mut l.pages);
+    crate::traverse::order_widgets(&root_node, tpl, data, &mut l.pages);
     #[cfg(test)]
     LAID_OUT_ITEMS.with(|c| c.set(l.items));
     Ok(Form { pages: l.pages, fields: l.fields, warnings: l.warnings })
