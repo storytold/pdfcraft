@@ -1856,6 +1856,24 @@ fn refused_subset_reads_do_not_encode_unverified_glyphs() {
     }
 }
 
+#[test]
+fn subset_width_and_unicode_entries_do_not_prove_a_dropped_outline_exists() {
+    for mapping in ["1 beginbfchar <0064> <4E2D> endbfchar", "1 beginbfrange <0064> <0065> <4E2D> endbfrange"] {
+        let mut doc = Document::new_empty();
+        let (mut font, _) = subset_type0(&mut doc, mapping.as_bytes());
+        font.set(b"Encoding".to_vec(), Object::name("Identity-H"));
+        let Some(Object::Array(descendants)) = font.get_mut(b"DescendantFonts") else { panic!() };
+        let Some(Object::Dict(descendant)) = descendants.first_mut() else { panic!() };
+        // A subsetter may retain /W and ToUnicode entries after dropping the glyph program.
+        descendant.set(b"W".to_vec(), Object::Array(vec![Object::Int(100), Object::Int(101), Object::Int(1000)]));
+        let metrics = Metrics::from_dict(&doc, &font);
+        assert_eq!(metrics.decode(&[0, 100]), "中");
+        assert_eq!(metrics.width(100), 1.0);
+        assert_eq!(metrics.has_outline(100), Some(false));
+        assert_eq!(metrics.encode("中"), None, "writing this code would draw no Chinese glyph");
+    }
+}
+
 /// [`cmap_only_sfnt_named`] without a `post` table.
 fn cmap_only_sfnt(mac: Option<&[(u8, u8)]>, windows: &[(u16, u16)]) -> Vec<u8> {
     cmap_only_sfnt_named(mac, windows, false)
