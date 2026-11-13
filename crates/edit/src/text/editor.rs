@@ -2,7 +2,7 @@ use super::blocks::{BlockStyle, TextBlock};
 use super::fallback::MAX_TYPE3_GLYPHS;
 use super::lines::{page_dict, text_lines};
 use super::rewrite::rewrite_block_from;
-use super::{DecodeBudget, Dict, Document, EditError, Metrics, Object, TextLine, TextSession};
+use super::{DecodeBudget, Dict, Document, EditError, Object, TextLine, TextSession};
 
 /// An embedded source font or an approved bundled document-font choice.
 /// Source bytes stay in memory and are never installed or copied into another document.
@@ -45,7 +45,7 @@ pub fn text_editor_fonts(doc: &Document, page: usize) -> Result<Vec<TextEditorFo
         budget -= bytes.len();
         result.push(TextEditorFont {
             resource: String::from_utf8_lossy(name).into_owned(),
-            face: Metrics::from_dict(doc, &font).base_font.rsplit('+').next().unwrap_or_default().to_owned(),
+            face: pdfcraft_fonts::pdf::base_font_name(doc, &font).rsplit('+').next().unwrap_or_default().to_owned(),
             bytes,
             choice_only: false,
         });

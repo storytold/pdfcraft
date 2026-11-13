@@ -11,6 +11,17 @@ thread_local! {
 }
 
 #[test]
+fn operands_are_counted_from_the_end() {
+    let op = parse(b"(x) /OC /MC0 BDC").ops.remove(0);
+    assert_eq!((op.name_back(1), op.name_back(0)), (Some(&b"OC"[..]), Some(&b"MC0"[..])));
+    assert_eq!(op.back(2).and_then(Object::as_string).map(|s| s.bytes.clone()), Some(b"x".to_vec()));
+    assert_eq!((op.back(3), op.back(usize::MAX)), (None, None));
+    let op = parse(b"/F1 10 Tf").ops.remove(0);
+    assert_eq!((op.name_back(1), op.num_back(0), op.num_back(1)), (Some(&b"F1"[..]), Some(10.0), None));
+    assert_eq!(Op::new("Q", vec![]).back(0), None);
+}
+
+#[test]
 fn splicing_visits_each_piece_a_few_times() {
     let n = 5_000;
     let pieces: Vec<String> = (0..n).map(|i| format!("({i}) Tj")).collect();
