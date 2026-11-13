@@ -480,7 +480,9 @@ fn a_subform_named_as_an_area_keeps_its_place_in_the_data_path() {
 /// A repeating subform's second instance and a same-named area after the subform are both
 /// `row[1]`. What the rest of the path names tells them apart: the `amount` only the subform
 /// holds binds in the second row, not under the area's parent as the area's `note` does, so the
-/// second row shows its own data and takes what is typed in it.
+/// second row shows its own data and takes what is typed in it. The segment alone, with nothing
+/// after it, is the row's: it is how a row is added or removed and how the instances nested in
+/// it are counted.
 #[test]
 fn a_rows_field_is_not_bound_as_a_same_named_areas() {
     let body = format!(
@@ -495,12 +497,31 @@ fn a_rows_field_is_not_bound_as_a_same_named_areas() {
     assert_eq!(data_path(&tpl, "form1[0].row[1].amount[0]"), [seg("form1", 0), seg("row", 1), seg("amount", 0)]);
     assert_eq!(data_path(&tpl, "form1[0].row[2].amount[0]"), [seg("form1", 0), seg("row", 2), seg("amount", 0)]);
     assert_eq!(data_path(&tpl, "form1[0].row[1].note[0]"), [seg("form1", 0), seg("note", 0)], "the area's content binds under its parent");
-    assert_eq!(data_path(&tpl, "form1[0].row[1]"), [seg("form1", 0)], "the segment alone is the object numbered so");
+    assert_eq!(data_path(&tpl, "form1[0].row[1]"), [seg("form1", 0), seg("row", 1)], "the segment alone is the row's");
     assert!(template_field(&tpl, "form1[0].row[1].amount[0]").is_some() && template_field(&tpl, "form1[0].row[1].note[0]").is_some());
     let shown = widgets(&layout_xml(&xml).unwrap());
     for (som, value) in [("form1[0].row[0].amount[0]", "1"), ("form1[0].row[1].amount[0]", "2")] {
         assert!(shown.contains(&(som.to_string(), value.to_string())), "{som}: {shown:?}");
     }
+}
+
+/// The instances nested in a repeating subform's second instance are counted under that
+/// instance's data, also when an area after the subform has its name and so its number: each
+/// row shows as many lines as its own record holds.
+#[test]
+fn a_rows_nested_instances_are_counted_in_the_row_with_a_same_named_area_after_it() {
+    let line = format!("<subform name=\"line\" layout=\"tb\"><occur min=\"1\" max=\"-1\"/>{}</subform>", field("qty"));
+    let body = format!(
+        "<subform name=\"row\" layout=\"tb\"><occur min=\"1\" max=\"-1\"/>{}{line}</subform><area name=\"row\">{}</area>",
+        field("amount"),
+        field("note")
+    );
+    let data = "<row><amount>1</amount><line><qty>a</qty></line></row>\
+                <row><amount>2</amount><line><qty>b</qty></line><line><qty>c</qty></line></row>";
+    let shown = widgets(&layout_xml(&xdp(&body, data)).unwrap());
+    let lines: Vec<_> = shown.iter().filter(|(som, _)| som.ends_with(".qty[0]")).cloned().collect();
+    let want = pairs(&[("form1[0].row[0].line[0].qty[0]", "a"), ("form1[0].row[1].line[0].qty[0]", "b"), ("form1[0].row[1].line[1].qty[0]", "c")]);
+    assert_eq!(lines, want);
 }
 
 /// An object's number is its data node's, and the data keeps 10,000 same-named nodes under one

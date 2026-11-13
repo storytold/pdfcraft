@@ -164,18 +164,25 @@ fn named_at<'a>(nodes: &'a [Node], name: &str, index: usize, depth: usize) -> Op
 /// a subform that may repeat has the number the template gave a same-named object after the
 /// subform (a `row` area after the `row` subform is `row[1]`, and so is the second row), so
 /// two objects answer to the segment: when the one numbered so exactly doesn't hold what
-/// `next` names and the subform does, the path is the instance's. Otherwise, and for a
-/// path's last segment, the object numbered exactly.
+/// `next` names and the subform does, the path is the instance's, and otherwise the object's
+/// numbered exactly. A path's last segment has nothing after it to tell them apart: it is the
+/// instance's when the other is an area, whose segment a data path leaves out, since a path
+/// that ends at a container is asked for to count or to change the data under it (the rows'
+/// nested instances, a row added or removed), and that data is a row's; for any other pair
+/// the data path is the same, and it is the object numbered exactly.
 fn named_toward<'a>(nodes: &'a [Node], name: &str, index: usize, next: Option<&(String, usize)>) -> Option<&'a Node> {
     let mut repeating = None;
     let exact = exactly_at(nodes, name, index, 0, &mut repeating);
-    let (Some(numbered), Some(instance), Some((next, at))) = (exact, repeating, next) else { return exact.or(repeating) };
+    let (Some(numbered), Some(instance)) = (exact, repeating) else { return exact.or(repeating) };
+    let may_repeat = matches!(instance, Node::Subform(sf) if sf.occur.max != Some(1));
+    let Some((next, at)) = next else {
+        return if may_repeat && matches!(numbered, Node::Area(_)) { Some(instance) } else { exact };
+    };
     let holds = |n: &Node| match n {
         Node::Subform(sf) => named_at(&sf.children, next, *at, 0).is_some(),
         Node::Area(a) => named_at(&a.children, next, *at, 0).is_some(),
         _ => false,
     };
-    let may_repeat = matches!(instance, Node::Subform(sf) if sf.occur.max != Some(1));
     if may_repeat && !holds(numbered) && holds(instance) { Some(instance) } else { exact }
 }
 
