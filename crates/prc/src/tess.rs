@@ -2,12 +2,14 @@
 //! (172) with its `TESS_Face`s (174), `TESS_3D_Wire` (175), `TESS_Markup` (176) and
 //! `TESS_3D_Compressed` (173) [WD 7.3.7, 7.8].
 //!
-//! `TESS_3D_Compressed` is read field by field to its end [WD 7.8.9.7] so the entities after
-//! it decode; its triangles are not rebuilt.
+//! `TESS_3D_Compressed` is read field by field to its end [WD 7.8.9.7]. One whose normals are
+//! recalculated is rebuilt into triangles ([`compressed`]); one that stores its normals, or
+//! whose arrays do not fit the traversal, is not.
 //!
 //! The schema runs after the fields of each concrete type read here (201, 172, 173, 174, 175,
 //! 176, 305), not for the abstract levels (`PRCBase`, `TESS`).
 
+mod compressed;
 mod triangulate;
 
 use crate::arrays;
@@ -49,7 +51,8 @@ pub enum Tessellation {
     Wire(Vec<Vec<[f64; 3]>>),
     /// A `TESS_Markup` (PMI drawing), read past but not decoded.
     Markup,
-    /// A `TESS_3D_Compressed` mesh, read past but not rebuilt.
+    /// A `TESS_3D_Compressed` mesh, read past but not rebuilt: it stores its normals, or its
+    /// arrays do not fit the traversal. One that is rebuilt is a [`Tessellation::Mesh`].
     #[non_exhaustive]
     Compressed {
         /// The entity's triangle count.
@@ -65,7 +68,8 @@ pub struct TriangleMesh {
     /// The coordinate array as points.
     pub positions: Vec<[f64; 3]>,
     /// Counter-clockwise triangles seen from the outside, as indices into
-    /// [`Self::positions`] [WD 7.8.5.2].
+    /// [`Self::positions`] [WD 7.8.5.2]. A rebuilt `TESS_3D_Compressed` keeps its traversal's
+    /// winding, which is not oriented.
     pub triangles: Vec<[u32; 3]>,
     /// `triangles` split by `TESS_Face`: face `i` is `triangles[faces[i].clone()]`.
     pub faces: Vec<std::ops::Range<usize>>,
@@ -136,7 +140,7 @@ impl Ctx<'_, '_> {
                     self.markup()?;
                     Tessellation::Markup
                 }
-                TESS_3D_COMPRESSED => Tessellation::Compressed { triangles: self.tess_3d_compressed()? },
+                TESS_3D_COMPRESSED => self.tess_3d_compressed()?,
                 t => return Err(malformed(format!("entity type {t} in the tessellation array"))),
             });
         }
@@ -295,23 +299,25 @@ impl Ctx<'_, '_> {
         self.schema.skip_added_fields(TESS_MARKUP, &mut self.r)
     }
 
-    /// `TESS_3D_Compressed` (173) after its type code [WD 7.8.9.7], read past; returns its
-    /// triangle count. prc-rs: the field order and version gates follow its schema.
+    /// `TESS_3D_Compressed` (173) after its type code [WD 7.8.9.7]: rebuilt into a mesh when
+    /// its normals are recalculated and its arrays fit, else read past to its end. prc-rs: the
+    /// field order and version gates follow its schema.
     ///
     /// Sizes the WD leaves unstated: the face count is the largest face index + 1,
     /// `normal_is_reversed` is one bit per triangle, and the point-reference array's
     /// compressed flag is implicit (more than three references).
-    fn tess_3d_compressed(&mut self) -> Result<usize, PrcError> {
+    fn tess_3d_compressed(&mut self) -> Result<Tessellation, PrcError> {
         let r = &mut self.r;
         r.bit()?; // is_calculated
         r.bit()?; // has_faces
-        r.double()?; // tolerance
+        let tolerance = r.double()?;
+        let mut origin = [0.0f64; 3];
         if self.version >= ORIGIN_FROM {
-            for _ in 0..3 {
-                r.float_as_bytes()?;
+            for o in &mut origin {
+                *o = f64::from(r.float_as_bytes()?);
             }
         }
-        arrays::compressed_integer_array(r)?; // point_array
+        let points = arrays::compressed_integer_array(r)?; // point_array
         let edge_status = arrays::character_array(r, 2, None, false)?;
         let face_of = arrays::compressed_indice_array(r, None)?;
         let t = face_of.len();
@@ -320,42 +326,50 @@ impl Ctx<'_, '_> {
         }
         let faces = face_of.iter().max().map_or(0, |&m| (m as usize).saturating_add(1));
         let n = r.unsigned_integer()? as usize;
-        let references = arrays::bool_array(r, n)?.iter().filter(|&&b| b).count();
-        let refs = arrays::compressed_indice_array(r, Some(references > 3))?;
-        if refs.len() != references {
-            return Err(malformed(format!("{} point references for {references} flagged points", refs.len())));
+        let is_reference = arrays::bool_array(r, n)?;
+        let flagged = is_reference.iter().filter(|&&b| b).count();
+        let references = arrays::compressed_indice_array(r, Some(flagged > 3))?;
+        if references.len() != flagged {
+            return Err(malformed(format!("{} point references for {flagged} flagged points", references.len())));
         }
-        self.compressed_normals(t, faces)?;
-        let r = &mut self.r;
-        if r.bit()? {
-            arrays::bool_array(r, faces)?; // is_point_color_on_face
-            arrays::character_array(r, 8, None, false)?; // point_color_array
+        let recalc = self.compressed_normals(t, faces)?;
+        let attributes = self.compressed_attributes(faces)?;
+        if !recalc {
+            return Ok(Tessellation::Compressed { triangles: t });
         }
-        if r.bit()? {
-            arrays::bool_array(r, faces)?; // is_multiple_line_attribute_on_face
-        }
-        arrays::short_array(r, 16)?; // line_attributes
-        if !r.bit()? {
-            self.compressed_texture_parameter()?;
-            if !self.r.bit()? {
-                arrays::bool_array(&mut self.r, faces)?; // face_has_texture
-            }
-        }
-        if self.r.bit()? {
-            arrays::character_array(&mut self.r, 8, None, false)?; // behaviours
-        }
-        self.schema.skip_added_fields(TESS_3D_COMPRESSED, &mut self.r)?;
-        Ok(t)
+        let arrays = compressed::Arrays {
+            tolerance,
+            origin,
+            points: &points,
+            edge_status: &edge_status,
+            triangles: t,
+            is_reference: &is_reference,
+            references: &references,
+            limit: self.r.elements_left(),
+        };
+        // A walk that would outgrow the allowance left stops there, and the arrays stay
+        // compressed, as do arrays the walk does not fit.
+        let Ok(m) = compressed::rebuild(&arrays) else {
+            return Ok(Tessellation::Compressed { triangles: t });
+        };
+        // The rebuilt triangles, their styles and every face range are charged once the arrays
+        // fit and before any of them is made, so arrays that do not fit spend nothing.
+        let styled = attributes.styled(faces);
+        let kept = m.triangles.len().saturating_mul(triangle_elements(false, 0, styled));
+        self.r.take_elements(kept.saturating_add(faces.saturating_mul(RANGE_ELEMENTS)))?;
+        let styles = if styled { attributes.styles(&face_of, faces) } else { Vec::new() };
+        Ok(Tessellation::Mesh(by_face(m, &face_of, faces, &styles)))
     }
 
-    /// A compressed tessellation's normals, from `must_recalculate_normals` on, read past.
-    fn compressed_normals(&mut self, triangles: usize, faces: usize) -> Result<(), PrcError> {
+    /// A compressed tessellation's normals, from `must_recalculate_normals` on, read past;
+    /// returns whether they are recalculated.
+    fn compressed_normals(&mut self, triangles: usize, faces: usize) -> Result<bool, PrcError> {
         let r = &mut self.r;
         if r.bit()? {
             arrays::bool_array(r, triangles)?; // normal_is_reversed
             r.double()?; // crease_angle
             r.character()?; // normal_recalculation_flags
-            return Ok(());
+            return Ok(true);
         }
         let angle_bits = u32::from(r.character()?);
         if angle_bits > MAX_ANGLE_BITS {
@@ -365,7 +379,29 @@ impl Ctx<'_, '_> {
         arrays::bool_array(r, n)?; // is_binary_normal
         arrays::short_array(r, angle_bits)?; // normal angles
         arrays::bool_array(r, faces)?; // is_face_planar
-        Ok(())
+        Ok(false)
+    }
+
+    /// A compressed tessellation's colours, line attributes, texture and behaviours, through
+    /// its added schema fields; returns what its faces' styles are made from.
+    fn compressed_attributes(&mut self, faces: usize) -> Result<FaceAttributes, PrcError> {
+        let r = &mut self.r;
+        if r.bit()? {
+            arrays::bool_array(r, faces)?; // is_point_color_on_face
+            arrays::character_array(r, 8, None, false)?; // point_color_array
+        }
+        // is_multiple_line_attribute_on_face
+        let multi = if r.bit()? { arrays::bool_array(r, faces)? } else { Vec::new() };
+        let line_attributes = arrays::short_array(r, 16)?;
+        if !r.bit()? {
+            self.compressed_texture_parameter()?;
+            if !self.r.bit()? {
+                arrays::bool_array(&mut self.r, faces)?; // face_has_texture
+            }
+        }
+        let behaviours = if self.r.bit()? { arrays::character_array(&mut self.r, 8, None, false)? } else { Vec::new() };
+        self.schema.skip_added_fields(TESS_3D_COMPRESSED, &mut self.r)?;
+        Ok(FaceAttributes { multi, line_attributes, behaviours })
     }
 
     /// `CompressedTextureParameter` [WD 7.8.9.8-7.8.9.9; pdf-issues #729, #749], read past.
@@ -385,6 +421,71 @@ impl Ctx<'_, '_> {
         }
         Ok(())
     }
+}
+
+/// Budget elements one face range (`Range<usize>`) takes.
+const RANGE_ELEMENTS: usize = std::mem::size_of::<std::ops::Range<usize>>().div_ceil(8);
+
+/// What a compressed tessellation's faces are styled from [WD 7.8.9.5]: with no face flagged
+/// `is_multiple_line_attribute_on_face` (`multi`), `line_attributes` holds one style index + 1
+/// per face (0 keeps the owner's graphics) and `behaviours` one behaviour byte per face.
+struct FaceAttributes {
+    multi: Vec<bool>,
+    line_attributes: Vec<i32>,
+    behaviours: Vec<i32>,
+}
+
+impl FaceAttributes {
+    /// Whether the faces give their triangles styles. The one-per-triangle layout of a flagged
+    /// face is not established, so such a tessellation keeps its owner's graphics, as does one
+    /// whose attributes and behaviours are all 0.
+    fn styled(&self, faces: usize) -> bool {
+        let behaviours = self.behaviours.len() == faces && self.behaviours.iter().any(|&b| b != 0);
+        !self.multi.iter().any(|&b| b) && self.line_attributes.len() == faces && (behaviours || self.line_attributes.iter().any(|&a| a != 0))
+    }
+
+    /// Per triangle, the style its face gives it; call only when [`Self::styled`].
+    fn styles(&self, face_of: &[u32], faces: usize) -> Vec<TriangleStyle> {
+        let behaviour = |f: usize| {
+            if self.behaviours.len() == faces { self.behaviours.get(f).and_then(|&b| u16::try_from(b).ok()).unwrap_or(0) } else { 0 }
+        };
+        face_of
+            .iter()
+            .map(|&f| {
+                let f = f as usize;
+                TriangleStyle { style: self.line_attributes.get(f).and_then(|&a| u32::try_from(a).ok()).unwrap_or(0), behaviour: behaviour(f) }
+            })
+            .collect()
+    }
+}
+
+/// A rebuilt compressed mesh with its triangles grouped by face, in walk order within each,
+/// so face `i` is `triangles[faces[i].clone()]` as for a `TESS_3D`. `faces` is charged to the
+/// element budget by the caller.
+fn by_face(m: compressed::Rebuilt, face_of: &[u32], faces: usize, styles: &[TriangleStyle]) -> TriangleMesh {
+    let mut order: Vec<usize> = (0..m.triangles.len()).collect();
+    order.sort_by_key(|&i| face_of.get(i).copied().unwrap_or(0));
+    let mut mesh = TriangleMesh { positions: m.positions, normals_recalculated: true, ..TriangleMesh::default() };
+    mesh.faces = Vec::with_capacity(faces);
+    for &i in &order {
+        let f = face_of.get(i).map_or(0, |&f| f as usize);
+        while mesh.faces.len() <= f {
+            let at = mesh.triangles.len();
+            mesh.faces.push(at..at);
+        }
+        if let (Some(&t), Some(r)) = (m.triangles.get(i), mesh.faces.last_mut()) {
+            mesh.triangles.push(t);
+            r.end = mesh.triangles.len();
+        }
+        if let Some(&s) = styles.get(i) {
+            mesh.triangle_styles.push(s);
+        }
+    }
+    while mesh.faces.len() < faces {
+        let at = mesh.triangles.len();
+        mesh.faces.push(at..at);
+    }
+    mesh
 }
 
 /// The normal array and each triangle's corner normals, or both empty when any slot fails to

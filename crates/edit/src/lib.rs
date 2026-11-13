@@ -61,8 +61,9 @@ mod linebreak;
 pub mod paragraph_align;
 pub mod text;
 pub use text::{
-    BlockKey, BlockStyle, LineEdit, MAX_FORM_DEPTH, MAX_FORM_VISITS, RangeStyle, ReadingBlocks, TextBlock, TextLine, TextSession, block_overlapping,
-    clear_block, glyph_text_lines, reading_blocks, reading_blocks_checked, replace_block, replace_line, rewrite_block, text_blocks, text_lines,
+    BlockKey, BlockStyle, LineEdit, MAX_FORM_DEPTH, MAX_FORM_VISITS, RangeStyle, ReadingBlocks, RunSources, TextBlock, TextLine, TextSession,
+    block_overlapping, clear_block, glyph_text_lines, reading_blocks, reading_blocks_checked, replace_block, replace_line, rewrite_block,
+    text_blocks, text_lines,
 };
 pub mod printer_marks;
 pub use printer_marks::{PrinterMarks, add_printer_marks};
@@ -93,6 +94,8 @@ use place::{ISOLATION_MAX_DEPTH, OLD_WRAP_CLOSE, WRAP_CLOSE, WRAP_OPEN, is_wrap_
 use place::{Reach, check, check_on_top, contents, draw_on_top, lift_on_top, page_list, place_tagged, revealed_under_paint};
 pub use place::{add_type3_fonts, stamp, stamp_with_fonts, undrawable_message};
 
+#[cfg(test)]
+mod find_replace_rows_tests;
 #[cfg(test)]
 mod marked_isolation_tests;
 #[cfg(test)]
