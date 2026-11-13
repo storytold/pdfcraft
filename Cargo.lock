@@ -1187,7 +1187,7 @@ dependencies = [
 [[package]]
 name = "craft-cms"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=60ede99985ef1e5df87a2aca66ed538eb23dec99#60ede99985ef1e5df87a2aca66ed538eb23dec99"
+source = "git+https://github.com/dnviti/craft-libs?rev=cebb31ca7e3d35834fb9fdacfa83c7839d617e5f#cebb31ca7e3d35834fb9fdacfa83c7839d617e5f"
 dependencies = [
  "rayon",
 ]
@@ -1251,7 +1251,7 @@ dependencies = [
 [[package]]
 name = "craft-print"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=60ede99985ef1e5df87a2aca66ed538eb23dec99#60ede99985ef1e5df87a2aca66ed538eb23dec99"
+source = "git+https://github.com/dnviti/craft-libs?rev=cebb31ca7e3d35834fb9fdacfa83c7839d617e5f#cebb31ca7e3d35834fb9fdacfa83c7839d617e5f"
 dependencies = [
  "craft-winprint-gdi",
  "log",
