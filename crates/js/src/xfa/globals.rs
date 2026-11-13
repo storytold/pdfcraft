@@ -271,7 +271,7 @@ pub(super) fn install(ctx: &mut Context, event: &XfaEvent, doc: &XfaDoc, current
     let template = sink(ctx)?;
     let resolve_one = xfa_resolve(ctx, false)?;
     let resolve_many = xfa_resolve(ctx, true)?;
-    // the SOM shortcuts (XFA 3.3 p. 87), which a script may use as variables
+    // the SOM shortcuts (XFA 3.3 p. 91), which a script may use as variables
     let host_value: JsValue = host_obj.clone().into();
     let layout_value: JsValue = layout.clone().into();
     let event_value: JsValue = ev.clone().into();

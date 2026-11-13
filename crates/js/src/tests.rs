@@ -935,7 +935,7 @@ mod xfa_model {
 
     /// A calculate script finds its siblings by name and yields its last expression, and a
     /// value it sets comes back as an effect.
-    /// The SOM shortcuts are variables a script may use (`$`, `$form`, `$record`, …, XFA 3.3 p. 87), a name no scope reaches
+    /// The SOM shortcuts are variables a script may use (`$`, `$form`, `$record`, …, XFA 3.3 p. 91), a name no scope reaches
     /// is the node of that name when the form holds just one, and what the host only stands in for takes the calls forms make
     /// on it: the datasets, the layout's page content, deltas, item states and a draw's `<value>`.
     #[test]
