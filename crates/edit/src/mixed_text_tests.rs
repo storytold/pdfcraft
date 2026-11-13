@@ -221,6 +221,37 @@ fn mixed_text_unspaced_chinese_wraps_at_cjk_breaks_and_fits_saved_box() {
 }
 
 #[test]
+fn mixed_text_cjk_outlines_do_not_repeat_per_wrapped_row() {
+    if !has_hans() {
+        return;
+    }
+    use crate::added::CJK_PLAN_CALLS;
+    for (text, available) in
+        [("中文编辑保存".repeat(10), true), ("中文编辑保存 שלום".repeat(10), pdfcraft_fonts::document_hebrew_font(false).is_some())]
+    {
+        if !available {
+            continue;
+        }
+        let calls = [480.0, 24.0].map(|width| {
+            let item = AddedText { text: text.clone(), rect: [20.0, 200.0, 20.0 + width, 700.0], size: 12.0, ..Default::default() };
+            let rows = crate::added::lines(&item);
+            CJK_PLAN_CALLS.with(|c| c.set(0));
+            assert_eq!(first_undrawable(&item), None);
+            let validation = CJK_PLAN_CALLS.with(std::cell::Cell::get);
+            let mut doc = text_page("");
+            CJK_PLAN_CALLS.with(|c| c.set(0));
+            add_content(&mut doc, 0, &Content::Text(item)).unwrap();
+            let writing = CJK_PLAN_CALLS.with(std::cell::Cell::get);
+            let doc = reopen(&doc);
+            assert_eq!(text::text_lines(&doc, 0).unwrap().iter().map(|line| line.text.as_str()).collect::<String>(), rows.concat());
+            (rows.len(), validation, writing)
+        });
+        assert!(calls[0].0 < calls[1].0, "the narrower box must wrap into more rows: {calls:?}");
+        assert_eq!((calls[0].1, calls[0].2), (calls[1].1, calls[1].2), "CJK outlines repeated for more rows: {calls:?}");
+    }
+}
+
+#[test]
 fn mixed_text_thai_chinese_wraps_with_saved_cjk_advances() {
     if !has_hans() || pdfcraft_fonts::document_thai_font().is_none() {
         return;

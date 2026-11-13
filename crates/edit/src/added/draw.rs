@@ -42,9 +42,10 @@ fn placed(t: &AddedText, r: [f64; 4], paragraphs: &[usize], i: usize, w: f64, sp
 /// come from Type 3 fonts drawn from the craft-fonts face's outlines (no font file is embedded),
 /// with a ToUnicode map for copy and search. Other text uses the item's standard font.
 fn draw_shaped(doc: &mut Document, t: &AddedText, taken: &Dict, fonts: &mut Dict, out: &mut Vec<u8>) -> Result<(), EditError> {
+    let cjk = CjkText::new(t).map_err(|(e, _)| e)?;
     let laid = wrapped(t)
         .into_iter()
-        .map(|(line, rtl, paragraph)| shaped_layout(t, &line, rtl).map(|(pieces, w)| (line, rtl, paragraph, pieces, w)))
+        .map(|(line, rtl, paragraph)| shaped_layout(t, &line, rtl, &cjk).map(|(pieces, w)| (line, rtl, paragraph, pieces, w)))
         .collect::<Result<Vec<_>, _>>()?;
     draw_laid_shaped(doc, t, &laid, taken, fonts, out, shaped_glyph)
 }

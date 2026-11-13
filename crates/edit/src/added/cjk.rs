@@ -29,6 +29,12 @@ pub(super) struct CjkText {
 
 type CjkRun<'a> = (&'a str, Vec<u8>, f64, usize);
 
+#[cfg(test)]
+thread_local! {
+    /// Outline preparation must not repeat for every wrapped row.
+    pub(crate) static CJK_PLAN_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 impl CjkText {
     pub(super) fn new(t: &AddedText) -> Result<Self, (EditError, char)> {
         let mut chars = Vec::new();
@@ -43,6 +49,8 @@ impl CjkText {
             }
         }
         let Some(&first) = chars.first() else { return Ok(Self::default()) };
+        #[cfg(test)]
+        CJK_PLAN_CALLS.with(|c| c.set(c.get().saturating_add(1)));
         let text: String = chars.iter().collect();
         let (faces, _) = type3_faces(&text, t.family, t.bold).map_err(|e| (e, first))?;
         let face = fallback_face(&faces, &chars, |face, ch| pdfcraft_fonts::face_has(face.bytes, ch)).ok_or_else(|| (missing(first), first))?;

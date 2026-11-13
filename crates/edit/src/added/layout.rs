@@ -55,7 +55,7 @@ pub(super) fn wrapped(t: &AddedText) -> Vec<(String, bool, usize)> {
         // of an em apart.
         let measure = |s: &str| {
             if rtl_script || thai {
-                shaped_layout_with(t, s, rtl, &cjk).map(|(_, width)| width).unwrap_or_else(|_| cjk.width(t, s))
+                shaped_layout(t, s, rtl, &cjk).map(|(_, width)| width).unwrap_or_else(|_| cjk.width(t, s))
             } else {
                 cjk.width(t, s)
             }
@@ -91,7 +91,7 @@ pub(super) fn wrapped(t: &AddedText) -> Vec<(String, bool, usize)> {
 /// broken inside, at shaped cluster boundaries, which never detach a tone or vowel mark from its
 /// base.
 fn script_lines(t: &AddedText, para: &str, width: f64, cjk: &CjkText) -> Result<Vec<String>, EditError> {
-    let (pieces, _) = shaped_layout_with(t, para, false, cjk)?;
+    let (pieces, _) = shaped_layout(t, para, false, cjk)?;
     let mut atoms = Vec::new();
     for piece in pieces {
         match piece {
@@ -226,7 +226,7 @@ pub fn first_undrawable(t: &AddedText) -> Option<char> {
     }
     // What `shaped_layout` leaves to the standard font, exactly as `draw_shaped` splits it.
     wrapped(t).into_iter().find_map(|(line, rtl, _)| {
-        let (pieces, _) = shaped_layout(t, &line, rtl).ok()?;
+        let (pieces, _) = shaped_layout(t, &line, rtl, &cjk).ok()?;
         pieces.iter().find_map(|p| match p {
             Piece::Latin(s) => cjk.first_undrawable(s),
             Piece::Shaped(_) => None,
@@ -269,12 +269,7 @@ fn mirrored(c: char) -> char {
 
 /// A line of a shaped-text item in drawing order (the Unicode bidirectional algorithm, UAX #9), and
 /// its width at the item's size. `rtl` is its paragraph's direction.
-pub(super) fn shaped_layout(t: &AddedText, line: &str, rtl: bool) -> Result<(Vec<Piece>, f64), EditError> {
-    let cjk = CjkText::new(t).map_err(|(e, _)| e)?;
-    shaped_layout_with(t, line, rtl, &cjk)
-}
-
-fn shaped_layout_with(t: &AddedText, line: &str, rtl: bool, cjk: &CjkText) -> Result<(Vec<Piece>, f64), EditError> {
+pub(super) fn shaped_layout(t: &AddedText, line: &str, rtl: bool, cjk: &CjkText) -> Result<(Vec<Piece>, f64), EditError> {
     // unicode-bidi indexes the first level of a line, so an empty one would panic.
     if line.is_empty() {
         return Ok((Vec::new(), 0.0));
@@ -333,7 +328,8 @@ fn shaped_layout_with(t: &AddedText, line: &str, rtl: bool, cjk: &CjkText) -> Re
 /// then reports why).
 #[cfg(test)]
 pub(crate) fn shaped_width(t: &AddedText, s: &str, rtl: bool) -> f64 {
-    shaped_layout(t, s, rtl).map(|(_, w)| w).unwrap_or_else(|_| latin_width(t, s))
+    let Ok(cjk) = CjkText::new(t) else { return latin_width(t, s) };
+    shaped_layout(t, s, rtl, &cjk).map(|(_, w)| w).unwrap_or_else(|_| latin_width(t, s))
 }
 
 pub(super) fn arabic_error(e: GlyphError, text: &str) -> EditError {
@@ -428,7 +424,7 @@ pub fn text_width(t: &AddedText) -> f64 {
     t.text
         .split('\n')
         .map(|line| {
-            shaped_layout_with(t, line, unicode_bidi::get_base_direction(line) == unicode_bidi::Direction::Rtl, &cjk)
+            shaped_layout(t, line, unicode_bidi::get_base_direction(line) == unicode_bidi::Direction::Rtl, &cjk)
                 .map(|(_, width)| width)
                 .unwrap_or_else(|_| cjk.width(t, line))
         })
