@@ -210,6 +210,25 @@ fn turned_layouter(
     }
 }
 
+/// Ctrl+Enter (⌘Enter on a Mac) starts a new line in a multi-line field, as Enter does (#7140).
+/// egui's editor starts one only for Enter, Shift+Enter and Alt+Enter, so the key reaches it
+/// without Ctrl. Only while the field `id` has the focus, so no other editor's key changes.
+fn ctrl_enter_starts_a_line(ui: &mut egui::Ui, id: egui::Id) {
+    if !ui.memory(|m| m.has_focus(id)) {
+        return;
+    }
+    ui.input_mut(|input| {
+        for event in &mut input.events {
+            if let egui::Event::Key { key: egui::Key::Enter, pressed: true, modifiers, .. } = event
+                && (modifiers.ctrl || modifiers.command || modifiers.mac_cmd)
+                && !modifiers.alt
+            {
+                *modifiers = egui::Modifiers { shift: modifiers.shift, ..egui::Modifiers::NONE };
+            }
+        }
+    });
+}
+
 /// Show a field's editor over `rect`. A turned field's editor takes the keys and the pointer
 /// over the field but draws nothing: [`turned_caret_and_paint`] paints its text turned (#4296).
 fn show_field_editor(ui: &mut egui::Ui, te: egui::TextEdit<'_>, rect: Rect, turned: bool) -> (egui::Response, Option<Laid>) {
@@ -1322,6 +1341,10 @@ pub(crate) fn overlay(
                     // the box less 3 pt each side, scaled.
                     let wrap = (upright.width() - 6.0 * zoom).max(1.0);
                     let mut layouter = turned_layouter(font, multiline.then_some(wrap), password);
+                    let field_id = egui::Id::unique(("form-field", view.pane.key, &f.name, focus.widget));
+                    if multiline {
+                        ctrl_enter_starts_a_line(ui, field_id);
+                    }
                     let mut te = if multiline { egui::TextEdit::multiline(&mut fx.text) } else { egui::TextEdit::singleline(&mut fx.text) };
                     te = te
                         .desired_width((upright.width() - 6.0 * zoom + 6.0).max(1.0))
@@ -1330,7 +1353,7 @@ pub(crate) fn overlay(
                         .text_color(Color32::BLACK)
                         .margin(egui::Margin::symmetric(3, 1))
                         .password(password)
-                        .id(egui::Id::unique(("form-field", view.pane.key, &f.name, focus.widget)));
+                        .id(field_id);
                     if let Some(max) = f.max_len {
                         te = te.char_limit(max);
                     }
