@@ -298,9 +298,16 @@ Example: `form_set_props doc=1 field=agree export_value=Accepted widget=1`.
 
 `model_render` draws a page's 3D model (a 3D annotation's PRC stream, directly or through a 3D
 reference) to a PNG, without the viewer. `model` picks the page's Nth 3D model (default 1);
+`view` is `"saved"` or `"fit"`. `"saved"` draws the model as the PDF opens it: the annotation's
+default 3D view (`/3DV`, else the stream's `/DV`, else its first view), with that view's camera,
+projection and background, in an image of the annotation's shape (512 pixels on its longer
+side) unless `width` or `height` is given; a side that would pass 4096 pixels that way is an
+error. `"fit"` frames the model to fill the image and shades it by a headlight on white. With
+no `view`, the saved view is used when the annotation has one and none of `direction`,
+`perspective` and `orbit` is given, else `"fit"`; with `"saved"` they are an error.
 `width` and `height` are 1 to 4096 (default 512); `direction` is the view direction from the eye
 (default `[-1, 1, -1]`, with Z up unless the view looks along Z); `perspective` defaults to true.
-The model is framed to fill the image and shaded by a headlight on white. `orbit`, instead of
+Under `"fit"`, `orbit`, instead of
 `direction`, frames it as a viewer's orbit control would: `{view, up, front, turn, zoom,
 zoom_at, pan}`, all optional. `view` is `iso` (default), `front`, `right`, `top` or `back`
 about the `up` axis (default `+z`) and the `front` axis (perpendicular to `up`); `turn` is
@@ -308,7 +315,7 @@ about the `up` axis (default `+z`) and the `front` axis (perpendicular to `up`);
 in picture heights from the centre, where the point under it stays still; `pan` `[right, up]`
 moves the target, in model radii, so the model moves the other way. Every view frames the model
 at the same size, whatever its direction. U3D models are refused
-with an error, and the annotation's own views, lighting and render modes are not applied yet.
+with an error, and the annotation's lighting and render modes are not applied yet.
 
 ## Viewer navigation history
 
