@@ -240,8 +240,14 @@ impl Layouter<'_> {
         };
         // A widget fill that is more than a colour (a pattern, a gradient, a stipple) is page
         // content under the widget, whose own background stays clear (see `widget_border`). A
-        // button's box is its field border.
-        let widget_box = if f.ui == Ui::Button { f.common.border.as_ref() } else { f.ui_border.as_ref() };
+        // button's box is its field border. An image field's widget has no border or background
+        // of its own, whatever its fill, and its picture is already on the page: nothing is
+        // drawn over it.
+        let widget_box = match f.ui {
+            Ui::ImageEdit => None,
+            Ui::Button => f.common.border.as_ref(),
+            _ => f.ui_border.as_ref(),
+        };
         if let Some(b) = widget_box.filter(|b| b.fill().is_some() && b.fill_kind != FillKind::Solid) {
             if let Some(base) = b.fill() {
                 self.push(Item::Fill { rect, color: base.0 })?;

@@ -6371,6 +6371,28 @@ fn items_in(page: &Page, r: Rect) -> Vec<&Item> {
         .collect()
 }
 
+/// An image field's picture is not covered by its widget's fill: the widget draws no border or
+/// background of its own, with a pattern as with a plain colour, so the picture is the last
+/// thing drawn in the field's box.
+#[test]
+fn an_image_fields_patterned_widget_fill_is_not_drawn_over_its_picture() {
+    let fill = r#"<fill><color value="200,200,200"/><pattern type="vertical"><color value="255,0,0"/></pattern></fill>"#;
+    let plain = fields_template("");
+    assert!(plain.contains("<ui><imageEdit/></ui>"));
+    let patterned = plain.replace("<ui><imageEdit/></ui>", &format!("<ui><imageEdit><border><edge/>{fill}</border></imageEdit></ui>"));
+    let drawn = |xml: &str| {
+        let form = layout_xml(xml).unwrap();
+        let page = &form.pages[0];
+        let (red, grey) = (rgb255(255.0, 0.0, 0.0), rgb255(200.0, 200.0, 200.0));
+        let fills = page.items.iter().filter(|i| matches!(i, Item::Fill { color, .. } if *color == grey)).count();
+        let hatching = page.items.iter().filter(|i| matches!(i, Item::Line { color, .. } if *color == red)).count();
+        let images = page.items.iter().filter(|i| matches!(i, Item::Image { .. })).count();
+        (fills, hatching, images)
+    };
+    assert_eq!(drawn(&patterned), drawn(&plain));
+    assert_eq!(drawn(&patterned), (0, 0, 2));
+}
+
 /// A template's fill with a pattern, gradient or stipple (XFA 3.3 p. 734, 806, 770, 820, 839)
 /// is drawn over its colour: hatching strokes in the pattern's colour, a gradient in bands
 /// that reach under each other (no seam shows), nested ovals, the stipple's blend; a solid fill
