@@ -1237,7 +1237,7 @@ fn thai_a_field_font_cannot_hold_is_drawn_from_the_thai_face() {
     set_value(&mut doc, "note", &FieldValue::Text(format!("น้ำฎู {thai}\nปั้น ฎู"))).unwrap();
     let doc = reopen(&doc);
     assert!(undrawn_fields(&doc).is_empty() && !need_appearances(&doc));
-    let (lo, hi) = (pdfcraft_fonts::shaped_text::thai_reach("ฎู").unwrap()[0], pdfcraft_fonts::shaped_text::thai_reach("น้ำ").unwrap()[1]);
+    let (lo, hi) = (pdfcraft_fonts::shaped_text::line_reach("ฎู").unwrap()[0], pdfcraft_fonts::shaped_text::line_reach("น้ำ").unwrap()[1]);
     for (name, height) in [("name", 20.0), ("big", 40.0), ("note", 100.0)] {
         let all = fields(&doc);
         let w = &field(&all, name).widgets[0];
@@ -1257,6 +1257,191 @@ fn thai_a_field_font_cannot_hold_is_drawn_from_the_thai_face() {
         let ys: Vec<f64> = ap.split(" Tm").filter_map(|s| s.rsplit(' ').next()?.parse().ok()).collect();
         let (top, bottom) = (ys.iter().copied().fold(f64::MIN, f64::max), ys.iter().copied().fold(f64::MAX, f64::min));
         assert!(top + hi * size <= height + 1e-3 && bottom + lo * size >= -1e-3, "{name}: {ys:?} at {size} in {height}");
+    }
+}
+
+/// Arabic and Hebrew typed into a field whose `/DA` font (Helvetica, WinAnsi) can't hold them go
+/// through the layout Add text and text boxes use, where they were drawn as `?`: shaped in the
+/// script face (Type 3 glyphs beside the field's font, which draws the Latin and the digits),
+/// painted right to left, each reordered line with its typing order beside it (`/ActualText`).
+/// The lines are measured with the pieces that are drawn: a multi-line value wraps as the shared
+/// layout wraps it, `/Q` places each line by its shaped width and is never flipped for direction
+/// (as in a text box), and the fit check agrees with what the appearance cuts off. The `/DA` is
+/// kept and nothing is marked. A password field shows `*`, never its letters; a comb field is not
+/// shaped (drawn as `?` and reported). A build without the face refuses the value, saying why,
+/// and keeps the old one.
+#[test]
+fn arabic_and_hebrew_a_field_font_cannot_hold_are_shaped_right_to_left() {
+    use pdfcraft_fonts::helvetica_width;
+    use pdfcraft_fonts::shaped_text::{actual_text_span, line_width, wrap};
+
+    use crate::appearance::{text_box, value_overflow};
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [6 0 R 7 0 R 8 0 R 9 0 R 10 0 R] >>".into(),
+        "<< /Fields [6 0 R 7 0 R 8 0 R 9 0 R 10 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 5 0 R >> >> >>".into(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (name) /DA (/Helv 12 Tf 0 g) /V (Ada) /Rect [50 700 350 720] /P 3 0 R >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (right) /Q 2 /DA (/Helv 12 Tf 0 g) /Rect [50 600 350 620] /P 3 0 R >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (note) /Ff 4096 /DA (/Helv 12 Tf 0 g) /Rect [50 400 350 500] /P 3 0 R >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (pin) /Ff 8192 /DA (/Helv 12 Tf 0 g) /Rect [50 300 350 320] /P 3 0 R >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (comb) /Ff 16777216 /MaxLen 4 /DA (/Helv 12 Tf 0 g) /Rect [50 200 350 220] /P 3 0 R >>".into(),
+    ];
+    // A field's appearance, and where each of its shows starts.
+    let drawn = |doc: &Document, name: &str| -> (String, Vec<[f64; 2]>) {
+        let all = fields(doc);
+        let wd = doc.get(field(&all, name).widgets[0].obj).as_dict().unwrap().clone();
+        assert!(wd.get(b"DA").and_then(|o| o.as_string()).is_some_and(|s| s.to_text().starts_with("/Helv ")), "{name}: the /DA is kept");
+        let n = wd.get(b"AP").unwrap().as_dict().unwrap().reference(b"N").unwrap();
+        let Object::Stream(s) = &*doc.get(n) else { panic!() };
+        let ap = String::from_utf8_lossy(&s.decoded().unwrap()).into_owned();
+        let at = |s: &str| -> Option<[f64; 2]> {
+            let mut nums = s.rsplit(' ');
+            let y = nums.next()?.parse().ok()?;
+            Some([nums.next()?.parse().ok()?, y])
+        };
+        let starts = ap.split(" Tm").filter_map(at).collect();
+        (ap, starts)
+    };
+    let helv = |s: &str, size: f64| helvetica_width(s, size);
+    for (script, word, has_face) in [
+        ("Arabic", "سلام", pdfcraft_fonts::document_arabic_font().is_some()),
+        ("Hebrew", "שלום", pdfcraft_fonts::document_hebrew_font(false).is_some()),
+    ] {
+        let mut doc = document(&objs);
+        let typed = format!("{word} test 12");
+        let long = format!("{}end", format!("{word} ").repeat(24));
+        // The left and right edges text is laid out between, from plain Latin values.
+        for name in ["name", "right"] {
+            set_value(&mut doc, name, &FieldValue::Text("abc".into())).unwrap();
+        }
+        let left = drawn(&doc, "name").1[0][0];
+        let right = drawn(&doc, "right").1[0][0] + helvetica_width("abc", 12.0);
+        assert!(left > 0.0 && (right - (300.0 - left)).abs() < 1e-6, "{left} {right}");
+        // A password never shows its letters, so there is nothing to shape or to refuse.
+        set_value(&mut doc, "pin", &FieldValue::Text(word.into())).unwrap();
+        let (pin, _) = drawn(&doc, "pin");
+        assert!(pin.contains("(****) Tj") && !pin.contains("ActualText") && !pin.contains("/PCAr"), "{pin}");
+        if !has_face {
+            for (name, value) in [("name", typed.as_str()), ("note", long.as_str())] {
+                let err = set_value(&mut doc, name, &FieldValue::Text(value.into())).unwrap_err();
+                assert!(matches!(&err, FormError::Invalid(m) if m.contains(script) && m.contains("CRAFT_FONTS_DIR")), "{name}: {err}");
+            }
+            assert_eq!(field(&fields(&doc), "name").value, ["abc"]);
+            assert!(!need_appearances(&doc) && undrawn_fields(&doc).is_empty());
+            // A comb field is not shaped in any build, so it is not refused: kept, `?`, reported.
+            set_value(&mut doc, "comb", &FieldValue::Text(word.chars().take(4).collect())).unwrap();
+            assert_eq!(undrawn_fields(&doc), [("comb".to_string(), word.chars().next().unwrap())]);
+            continue;
+        }
+        set_value(&mut doc, "name", &FieldValue::Text(typed.clone())).unwrap();
+        set_value(&mut doc, "right", &FieldValue::Text(typed.clone())).unwrap();
+        set_value(&mut doc, "note", &FieldValue::Text(format!("{long}\nplain"))).unwrap();
+        assert!(undrawn_fields(&doc).is_empty() && !need_appearances(&doc), "{script}");
+        let doc = reopen(&doc);
+        let width = line_width(&typed, true, 12.0, helv);
+        for (name, starts_at) in [("name", left), ("right", right - width)] {
+            let (ap, starts) = drawn(&doc, name);
+            assert!(!ap.contains('?') && ap.contains("/PCAr1 ") && ap.contains(&actual_text_span(&typed)), "{script} {name}: {ap}");
+            // The Latin and the digits, in the field's own font, are drawn first (leftmost); the
+            // letters follow, each further right, and the line is as wide as it was measured.
+            assert!(
+                (starts[0][0] - starts_at).abs() < 2e-3 && ap.contains("(test 12) Tj"),
+                "{script} {name}: {} not {starts_at}: {ap}",
+                starts[0][0]
+            );
+            assert!(starts.len() > 4 && starts.windows(2).all(|w| w[0][0] < w[1][0]), "{script} {name}: {starts:?}");
+            assert!(starts.last().unwrap()[0] < starts_at + width, "{script} {name}: {starts:?} in {width}");
+        }
+        // The multi-line value: the lines the shared layout wraps, each from the left edge (/Q 0),
+        // none wider than the room, the reordered ones with what was typed on them.
+        let room = 300.0 - 2.0 * left;
+        let lines = wrap(&format!("{long}\nplain"), 12.0, room, helv);
+        assert!(lines.len() > 3 && lines.last() == Some(&("plain".to_string(), false)), "{lines:?}");
+        let (ap, starts) = drawn(&doc, "note");
+        assert!(!ap.contains('?') && ap.contains("(plain) Tj") && ap.contains("(end) Tj"), "{script}: {ap}");
+        assert_eq!(ap.matches("/ActualText").count(), lines.len() - 1, "{script}: {ap}");
+        let mut rows: Vec<f64> = starts.iter().map(|p| p[1]).collect();
+        rows.dedup();
+        assert_eq!(rows.len(), lines.len(), "{script}: {rows:?}");
+        for ((line, rtl), y) in lines.iter().zip(&rows) {
+            assert!(!*rtl || ap.contains(&actual_text_span(line)), "{script}: {line:?} in {ap}");
+            let first = starts.iter().find(|p| p[1] == *y).unwrap()[0];
+            assert!((first - left).abs() < 2e-3 && line_width(line, *rtl, 12.0, helv) <= room + 1e-6, "{script}: {line:?} from {first}");
+        }
+        // The fit check measures what the appearance draws.
+        let all = fields(&doc);
+        let f = field(&all, "name");
+        let fitted = text_box(&doc, f, &f.widgets[0]);
+        let mut doc = doc;
+        for words in [3, 8, 14, 30] {
+            let value = format!("{word} ").repeat(words) + "x";
+            assert_eq!(fitted.fits(&value), line_width(&value, true, 12.0, helv) <= room + 1e-6, "{script}: {words} words");
+            set_value(&mut doc, "name", &FieldValue::Text(value.clone())).unwrap();
+            let all = fields(&doc);
+            let f = field(&all, "name");
+            assert_eq!(value_overflow(&doc, f, &f.widgets[0]).is_none(), fitted.fits(&value), "{script}: {words} words");
+        }
+        // A comb field's cells are not shaped: the value is kept, drawn as `?` and reported.
+        set_value(&mut doc, "comb", &FieldValue::Text(word.chars().take(4).collect())).unwrap();
+        assert_eq!(undrawn_fields(&doc), [("comb".to_string(), word.chars().next().unwrap())]);
+    }
+}
+
+/// A combo box draws its value as a text field does, so in a build without the script's face it
+/// refuses an option, or typed text, it could only draw as `?` (and keeps the value it had), as
+/// a text field refuses it. With the face, both are shaped.
+#[test]
+fn a_combo_box_refuses_arabic_and_hebrew_it_cannot_draw_as_a_text_field_does() {
+    for (script, word, has_face) in [
+        ("Arabic", "سلام", pdfcraft_fonts::document_arabic_font().is_some()),
+        ("Hebrew", "שלום", pdfcraft_fonts::document_hebrew_font(false).is_some()),
+    ] {
+        // The option's text as a UTF-16BE hex string.
+        let option = format!("<FEFF{}>", word.encode_utf16().map(|u| format!("{u:04X}")).collect::<String>());
+        let objs: Vec<String> = vec![
+            "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+            "<< /Type /Page /Parent 2 0 R /Annots [6 0 R 7 0 R] >>".into(),
+            "<< /Fields [6 0 R 7 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 5 0 R >> >> >>".into(),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),
+            format!("<< /Type /Annot /Subtype /Widget /FT /Ch /T (pick) /Ff 131072 /Opt [(plain) [(x) {option}]] /V (plain) /DA (/Helv 12 Tf 0 g) /Rect [50 700 350 720] /P 3 0 R >>"),
+            "<< /Type /Annot /Subtype /Widget /FT /Ch /T (free) /Ff 393216 /Opt [(plain)] /V (plain) /DA (/Helv 12 Tf 0 g) /Rect [50 600 350 620] /P 3 0 R >>".into(),
+        ];
+        let mut doc = document(&objs);
+        let appearance = |doc: &Document, name: &str| -> String {
+            let all = fields(doc);
+            let wd = doc.get(field(&all, name).widgets[0].obj).as_dict().unwrap().clone();
+            let n = wd.get(b"AP").unwrap().as_dict().unwrap().reference(b"N").unwrap();
+            let Object::Stream(s) = &*doc.get(n) else { panic!() };
+            String::from_utf8_lossy(&s.decoded().unwrap()).into_owned()
+        };
+        // By the option's text, by its export value and by its position, and typed text.
+        let picks = [
+            ("pick", FieldValue::Text(word.into())),
+            ("pick", FieldValue::Choice(vec!["x".into()])),
+            ("pick", FieldValue::ChoiceIndices(vec![1])),
+            ("free", FieldValue::Text(format!("{word} 12"))),
+        ];
+        for (name, value) in picks {
+            if has_face {
+                set_value(&mut doc, name, &value).unwrap();
+                let ap = appearance(&doc, name);
+                assert!(!ap.contains('?') && ap.contains("/ActualText"), "{script} {name} {value:?}: {ap}");
+                assert!(undrawn_fields(&doc).is_empty() && !need_appearances(&doc), "{script} {name}");
+            } else {
+                let err = set_value(&mut doc, name, &value).unwrap_err();
+                assert!(
+                    matches!(&err, FormError::Invalid(m) if m.contains(script) && m.contains("CRAFT_FONTS_DIR")),
+                    "{script} {name} {value:?}: {err}"
+                );
+                assert_eq!(field(&fields(&doc), name).value, ["plain"], "{script} {name} {value:?}");
+            }
+        }
+        // Text the field's font draws is taken either way.
+        set_value(&mut doc, "free", &FieldValue::Text("typed".into())).unwrap();
+        assert_eq!(field(&fields(&doc), "free").value, ["typed"]);
     }
 }
 
@@ -2006,6 +2191,39 @@ fn unsupported_first_validation_call_preserves_custom_script_dispatch() {
         );
         assert_eq!(scripts.calls, 1);
         assert_eq!(field(&fields(&doc), "amount").value, ["20"]);
+    }
+}
+
+/// A Validate (or Keystroke) script can replace the typed value. What it leaves is held to the
+/// same check as typed text: a build without the script's face refuses it and keeps the old value.
+#[test]
+fn a_value_a_script_replaces_is_refused_when_the_build_cannot_draw_it() {
+    struct Replaces(&'static str);
+    impl Scripts for Replaces {
+        fn run(&mut self, _event: FieldEvent, _script: &str, _target: &Field, _value: &str, _fields: &[Field], _doc: &Document) -> ScriptResult {
+            ScriptResult { rc: true, value: self.0.into(), value_set: true, changes: Vec::new(), message: None }
+        }
+    }
+    for (script, word, has_face) in [
+        ("Arabic", "سلام", pdfcraft_fonts::document_arabic_font().is_some()),
+        ("Hebrew", "שלום", pdfcraft_fonts::document_hebrew_font(false).is_some()),
+    ] {
+        let mut doc = one_page();
+        add_field(&mut doc, 0, [50.0, 700.0, 250.0, 720.0], &NewField::Text { multiline: false }, Some("name")).unwrap();
+        set_value(&mut doc, "name", &FieldValue::Text("old".into())).unwrap();
+        set_field_script(&mut doc, "name", "validate", Some("event.value = other;")).unwrap();
+        let set = set_value_with(&mut doc, "name", &FieldValue::Text("typed".into()), &mut Replaces(word));
+        if has_face {
+            set.unwrap();
+            assert_eq!(field(&fields(&doc), "name").value, [word], "{script}");
+            assert!(undrawn_fields(&doc).is_empty(), "{script}");
+        } else {
+            assert!(matches!(&set, Err(FormError::Invalid(m)) if m.contains(script) && m.contains("CRAFT_FONTS_DIR")), "{script}: {set:?}");
+            assert_eq!(field(&fields(&doc), "name").value, ["old"], "{script}");
+        }
+        // A replacement the field's font draws is stored as before.
+        set_value_with(&mut doc, "name", &FieldValue::Text("typed".into()), &mut Replaces("plain")).unwrap();
+        assert_eq!(field(&fields(&doc), "name").value, ["plain"], "{script}");
     }
 }
 

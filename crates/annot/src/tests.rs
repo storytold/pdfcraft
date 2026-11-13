@@ -5484,7 +5484,7 @@ fn thai_in_fill_sign_text_and_text_boxes_is_drawn_from_the_thai_face() {
         assert_eq!(text(&list(&doc, 0)[t], b"Contents"), "hello");
         return;
     }
-    let reach = pdfcraft_fonts::shaped_text::thai_reach;
+    let reach = pdfcraft_fonts::shaped_text::line_reach;
     let (lo, hi) = (reach("ฎู").unwrap()[0], reach("น้ำ").unwrap()[1]);
     for (shape, size) in shapes.into_iter().zip([24.0, 30.0]) {
         let t = add_annotation(&mut doc, &item(shape), &meta("t")).unwrap();
@@ -5515,6 +5515,73 @@ fn thai_in_fill_sign_text_and_text_boxes_is_drawn_from_the_thai_face() {
     let d = &list(&doc, 0)[1];
     let (r, ys) = (rect(d), baselines(&ap_content(&doc, d)));
     assert!(ys[0] + hi * 24.0 <= r[3] + 1e-3 && ys[ys.len() - 1] + lo * 24.0 >= r[1] - 1e-3, "{ys:?} in {r:?}");
+}
+
+/// #6879: Arabic and Hebrew typed into a text box or Fill & Sign text are laid out and shaped as
+/// Add text lays them out (`shaped_text::line_pieces`): Type 3 glyphs from the script's face in
+/// drawing order, never `?`, with the line's typing order beside them for copy and search. Latin in
+/// the same line keeps the box's font. A build without the face draws `?` and says so, as before.
+#[test]
+fn arabic_and_hebrew_in_text_boxes_and_fill_sign_text_are_shaped_like_added_text() {
+    let cases = [
+        ("test بت التناسب", pdfcraft_fonts::document_arabic_font().is_some(), 'ب', "<0628>"),
+        ("שלום test", pdfcraft_fonts::document_hebrew_font(false).is_some(), 'ש', "<05E9>"),
+    ];
+    for (typed, has_face, first, letter) in cases {
+        let item = |shape: Shape| NewAnnotation { page: 0, style: Style::default_for(&shape), shape, contents: typed.into(), author: "Ada".into() };
+        let shapes = [
+            Shape::Typewriter { rect: [100.0, 700.0, 400.0, 716.0], font_size: 14.0 },
+            Shape::TextBox { rect: [100.0, 400.0, 400.0, 430.0], font_size: 12.0 },
+        ];
+        for shape in shapes {
+            let mut doc = fixture();
+            let t = add_annotation(&mut doc, &item(shape), &meta("t")).unwrap();
+            let doc = reopen(&doc);
+            let d = &list(&doc, 0)[t];
+            let content = ap_content(&doc, d);
+            assert_eq!(text(d, b"Contents"), typed, "the text is stored as typed");
+            assert_eq!(appearance::undrawable_text(d).map(|(_, c)| c), (!has_face).then_some(first));
+            if !has_face {
+                assert!(content.contains('?') && pdfcraft_fonts::undrawn_mark(d).is_some(), "{content}");
+                assert!(!content.contains("ActualText"), "what can be copied is what can be seen: {content}");
+                continue;
+            }
+            assert!(!content.contains('?') && content.contains("/PCAr1 ") && content.contains("(test"), "{content}");
+            assert_eq!(pdfcraft_fonts::undrawn_mark(d), None);
+            // The line's typing order goes with its glyphs, which are painted in drawing order.
+            let logical: String = typed.encode_utf16().map(|u| format!("{u:04X}")).collect();
+            assert!(content.contains(&format!("/Span <</ActualText <FEFF{logical}>>> BDC")) && content.contains("EMC"), "{content}");
+            let n = d.get(b"AP").and_then(|a| a.as_dict()).and_then(|a| a.reference(b"N")).unwrap();
+            let ap = doc.get(n);
+            let fonts =
+                ap.as_dict().and_then(|s| s.get(b"Resources")).and_then(|r| r.as_dict()).and_then(|r| r.get(b"Font")).and_then(|f| f.as_dict());
+            let font = fonts.and_then(|f| f.get(b"PCAr1")).and_then(|f| f.as_dict()).unwrap().clone();
+            assert_eq!(font.name(b"Subtype"), Some(&b"Type3"[..]));
+            let cmap = doc.get(font.reference(b"ToUnicode").unwrap());
+            let Object::Stream(cmap) = &*cmap else { panic!("ToUnicode is a stream object") };
+            let cmap = String::from_utf8_lossy(&cmap.decoded().unwrap()).into_owned();
+            assert!(cmap.contains(letter), "{first} copies as typed: {cmap}");
+            // Every piece of the line lies inside the box, left to right as drawn.
+            let (r, xs) = (rect(d), content.split(" Tm").filter_map(|s| s.rsplit(' ').nth(1)?.parse::<f64>().ok()).collect::<Vec<_>>());
+            assert!(xs.len() > 2 && xs.windows(2).all(|w| w[0] <= w[1]) && xs.iter().all(|x| *x >= r[0] && *x <= r[2]), "{xs:?} in {r:?}");
+        }
+    }
+    // Captions, labels and stamps are still drawn in Helvetica: they are measured as drawn, not by
+    // the faces a text box shapes with.
+    let helvetica = |s: &str| pdfcraft_fonts::Std14::Helvetica.text_width(s, 10.0);
+    assert_eq!((appearance::text_width("سلام", 10.0), appearance::text_width("שלום", 10.0)), (helvetica("سلام"), helvetica("שלום")));
+    if pdfcraft_fonts::document_arabic_font().is_some() {
+        assert!((appearance::text_width_in(pdfcraft_fonts::Std14::Helvetica, "سلام", 10.0) - helvetica("سلام")).abs() > 0.01);
+    }
+    // Retyping a box goes through the same layout: a Latin box becomes an Arabic one.
+    if pdfcraft_fonts::document_arabic_font().is_some() {
+        let mut doc = fixture();
+        let t = add_annotation(&mut doc, &new(0, Shape::TextBox { rect: [100.0, 600.0, 300.0, 650.0], font_size: 12.0 }), &meta("b")).unwrap();
+        set_contents(&mut doc, 0, t, "سلام عليكم", &meta("")).unwrap();
+        let d = &list(&doc, 0)[t];
+        let content = ap_content(&doc, d);
+        assert!(!content.contains('?') && content.contains("/PCAr1 ") && pdfcraft_fonts::undrawn_mark(d).is_none(), "{content}");
+    }
 }
 
 const QUAD: [f64; 8] = [20.0, 110.0, 40.0, 110.0, 20.0, 95.0, 40.0, 95.0];

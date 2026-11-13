@@ -365,7 +365,7 @@ fn fitted_box(doc: &Document, r: ObjRef, text: &str) -> Option<[f64; 4]> {
         let longest = text.lines().map(|l| measure(l, size)).fold(0.0, f64::max);
         (longest + 2.0 * pad + 4.0).clamp(40.0, 300.0)
     };
-    let height = appearance::text_lines_height(&pdfcraft_fonts::wrap_with(text, size, (w - 2.0 * pad).max(1.0), measure), size);
+    let height = appearance::text_lines_height(&appearance::wrap_in(face, text, size, (w - 2.0 * pad).max(1.0)), size);
     Some([x0, top - height - 2.0 * pad - 2.0, x0 + w, top])
 }
 
@@ -732,8 +732,10 @@ pub(crate) fn shape_text_box(d: &mut Dict, tb: [f64; 4], shape: BorderShape, wid
 fn text_extent(d: &Dict, wrap: f64) -> [f64; 2] {
     let text = d.get(b"Contents").and_then(|o| o.as_string()).map(PdfString::to_text).unwrap_or_default();
     let (_, size) = appearance::parse_da(d);
-    let lines = appearance::wrap(&text, size, wrap.max(1.0));
-    let widest = lines.iter().map(|l| appearance::text_width(l, size)).fold(0.0, f64::max);
+    // Each line measured in its paragraph's direction, as the appearance draws it.
+    let laid = appearance::wrapped(Std14::Helvetica, &text, size, wrap.max(1.0));
+    let widest = laid.iter().map(|(l, rtl)| appearance::line_width_in(Std14::Helvetica, l, *rtl, size)).fold(0.0, f64::max);
+    let lines: Vec<String> = laid.into_iter().map(|(line, _)| line).collect();
     [widest, appearance::text_lines_height(&lines, size)]
 }
 

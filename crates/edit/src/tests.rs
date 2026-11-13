@@ -6866,6 +6866,64 @@ fn thai_headers_footers_and_watermarks_are_drawn_from_the_thai_face() {
     assert_eq!(shared[0], shared[1], "every page draws with the same fonts");
 }
 
+/// Arabic and Hebrew in a header, footer or text watermark go through the layout Add text and
+/// text boxes use (`shaped_text::line_pieces`), where they were refused as letters the standard
+/// fonts can't draw: shaped in the script face and painted right to left, the page number (kept in
+/// the standard font) between the words, placed by the width of the pieces that are drawn, and
+/// each reordered line with its typing order beside it (`/ActualText`). A line never moves for
+/// its direction: the centre box stays centred. Removing the mark takes the nested marked content
+/// with it. A build without the face refuses the text, saying what to do, and writes nothing.
+#[test]
+fn arabic_and_hebrew_headers_footers_and_watermarks_are_shaped_right_to_left() {
+    use pdfcraft_fonts::shaped_text::{actual_text_span, line_width};
+    let blank = String::new;
+    for (script, word, typed, has_face) in [
+        ("Arabic", "سلام", "صفحة <<1>> سلام", pdfcraft_fonts::document_arabic_font().is_some()),
+        ("Hebrew", "שלום", "עמוד <<1>> שלום", pdfcraft_fonts::document_hebrew_font(false).is_some()),
+    ] {
+        let footer = HeaderFooter { text: [blank(), blank(), blank(), blank(), typed.into(), blank()], ..HeaderFooter::default() };
+        let wm = Watermark { text: format!("{word}\nDRAFT"), ..Watermark::default() };
+        if !has_face {
+            let mut doc = fixture();
+            for err in [add_header_footer(&mut doc, &[0], &footer, false, &cx()).unwrap_err(), add_watermark(&mut doc, &[0], &wm, false).unwrap_err()]
+            {
+                assert!(matches!(&err, EditError::Invalid(m) if m.contains(script) && m.contains("CRAFT_FONTS_DIR")), "{err:?}");
+            }
+            assert!(!doc.is_modified(), "nothing is written when the font is missing");
+            assert_eq!((footer.first_undrawable(), wm.first_undrawable()), (typed.chars().next(), word.chars().next()));
+            continue;
+        }
+        assert_eq!((footer.first_undrawable(), wm.first_undrawable()), (None, None), "{script}");
+        let mut doc = fixture();
+        add_header_footer(&mut doc, &[0, 2], &footer, false, &cx()).unwrap();
+        add_watermark(&mut doc, &[0, 2], &wm, false).unwrap();
+        let mut doc = reopen(&doc);
+        for (k, page) in [0usize, 2].into_iter().enumerate() {
+            let drawn = streams(&doc, page).concat();
+            assert!(drawn.contains("/PCAr") && drawn.contains("(DRAFT) Tj") && !drawn.contains("(?"), "{script}: {drawn}");
+            // Each reordered line carries what was typed; the Latin line needs nothing.
+            let line = typed.replace("<<1>>", &(k + 1).to_string());
+            let span = actual_text_span(&line);
+            assert!(drawn.contains(&span) && drawn.contains(&actual_text_span(word)), "{script}: {drawn}");
+            assert_eq!(drawn.matches("/ActualText").count(), 2, "{script}: {drawn}");
+            // The footer's shows, left to right: the page number is in the standard font, between
+            // the two words, and the line is centred by the width of what is drawn.
+            let shows = drawn.split(&span).nth(1).and_then(|rest| rest.split("EMC").next()).unwrap();
+            let xs: Vec<f64> = shows.split(" Tm").filter_map(|s| s.rsplit(' ').nth(1)?.parse().ok()).collect();
+            assert!(xs.len() > 4 && xs.windows(2).all(|w| w[0] < w[1]), "{script}: {shows}");
+            let number = shows.split(&format!("({}) Tj", k + 1)).next().unwrap().matches(" Tm").count();
+            assert!(number > 2 && number < xs.len() - 1, "{script}: the number is show {number} of {}: {shows}", xs.len());
+            let (w, _) = pdfcraft_model::pages(&doc)[page].display_size(&doc);
+            let tw = line_width(&line, true, 8.0, |s, size| added::Family::Helvetica.width(s, size, false, false));
+            assert!(tw > 0.0 && (xs[0] - (w - tw) / 2.0).abs() < 2e-3, "{script}: starts at {} for a {tw} wide line on {w}", xs[0]);
+        }
+        // The typing order nested in the mark goes with it.
+        assert_eq!(remove_marks(&mut doc, &[0, 2], MarkKind::HeaderFooter).unwrap(), 2);
+        assert_eq!(marks_present(&doc), [MarkKind::Watermark]);
+        assert_eq!(streams(&doc, 0).concat().matches("/ActualText").count(), 1, "the watermark's is left");
+    }
+}
+
 /// #125: page-content tools refuse text the standard fonts can't draw instead of writing `?`,
 /// and leave the document untouched.
 #[test]
