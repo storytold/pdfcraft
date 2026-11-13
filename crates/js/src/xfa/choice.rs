@@ -22,36 +22,26 @@ fn which(h: &XHost, node: usize) -> (usize, Option<usize>) {
     (shown, saved)
 }
 
-/// Each entry's text, with what a script wrote to it (`writes`, by list, tag and nth of that tag) instead.
-fn with_writes(entries: Vec<(String, String)>, list: usize, writes: &Writes) -> Vec<String> {
+/// Each entry, its tag kept, with the text a script wrote to it (`writes`, by list, tag and nth of that tag) instead.
+fn with_writes(entries: Vec<(String, String)>, list: usize, writes: &Writes) -> Vec<(String, String)> {
     let mut nth: HashMap<String, usize> = HashMap::new();
     entries
         .into_iter()
         .map(|(tag, t)| {
             let n = nth.entry(tag.clone()).or_insert(0);
-            let key = (list, tag, *n);
+            let key = (list, tag.clone(), *n);
             *n += 1;
-            writes.get(&key).cloned().unwrap_or(t)
+            let t = writes.get(&key).cloned().unwrap_or(t);
+            (tag, t)
         })
         .collect()
 }
 
 type Writes = HashMap<(usize, String, usize), String>;
 
-/// The entries the list shows and those it saves (the same when it saves what it shows), as texts, with `writes` folded in.
-fn lists(h: &XHost, node: usize, writes: &Writes) -> (Vec<String>, Vec<String>) {
-    let (shown, saved) = which(h, node);
-    let texts = |list: usize| with_writes(list_entries(h, node, list), list, writes);
-    let shown_texts = texts(shown);
-    let saved_texts = match saved {
-        Some(i) => texts(i),
-        None => shown_texts.clone(),
-    };
-    (shown_texts, saved_texts)
-}
-
-/// Make the script's copy of the lists `(shown, saved)`: one list when every entry saves what it shows, else the shown list
-/// then the saved one. Each text is charged against the script's payload: what does not fit is left out.
+/// Make the script's copy of the lists `(shown, saved)`, replacing them: one list when every entry saves what it shows,
+/// else the shown list then the saved one. At most [`MAX_ITEMS`] entries, each text charged against the script's payload:
+/// what does not fit is left out.
 fn set_lists(h: &mut XHost, node: usize, shown: Vec<String>, saved: Vec<String>) {
     let two = shown != saved;
     let mut kept_shown = Vec::new();
@@ -65,37 +55,43 @@ fn set_lists(h: &mut XHost, node: usize, shown: Vec<String>, saved: Vec<String>)
         kept_shown.push(("text".to_string(), t));
         kept_saved.push(("text".to_string(), s));
     }
-    let mut out = vec![ItemList { entries: kept_shown }];
+    let mut out = vec![ItemList { entries: kept_shown, saved: false }];
     if two {
-        out.push(ItemList { entries: kept_saved });
+        out.push(ItemList { entries: kept_saved, saved: true });
     }
     if let Some(n) = h.nodes.get_mut(node) {
         n.items = Some(out);
     }
 }
 
-/// The run's copy of the lists, made from the template's the first time a method changes them (each text charged against
-/// the script's payload): the shown list's index and the saved one's, `None` when it saves what it shows.
-/// What a script wrote to entries (`items.nodes.item(0).value = …`) is folded into the copy, so entries that move or go take
-/// their text with them.
+/// The run's copy of the lists, made from the template's the first time a method changes them or reads them after a
+/// script wrote to an entry: every list, in its place, with every entry and its tag, so `items` paths and lists keep
+/// reading what they did (the template is not something the script grows, so nothing is cut or charged). What a script
+/// wrote to entries (`items.nodes.item(0).value = …`) is folded in, so entries that move or go take their text with
+/// them. Returns the shown list's index and the saved one's, `None` when it saves what it shows.
 fn state(h: &mut XHost, node: usize) -> (usize, Option<usize>) {
     let writes = take_item_writes(h, node);
-    let (shown, saved) = which(h, node);
     if h.nodes.get(node).is_some_and(|n| n.items.is_none()) {
-        let (shown_texts, saved_texts) = lists(h, node, &writes);
-        set_lists(h, node, shown_texts, saved_texts);
-        let two = h.nodes.get(node).and_then(|n| n.items.as_ref()).is_some_and(|l| l.len() > 1);
-        return (0, two.then_some(1));
+        let saved = saved_list(h, node);
+        let mut out: Vec<ItemList> = (0..list_count(h, node))
+            .map(|i| ItemList { entries: with_writes(list_entries(h, node, i), i, &writes), saved: Some(i) == saved })
+            .collect();
+        if out.is_empty() {
+            out.push(ItemList::default());
+        }
+        if let Some(n) = h.nodes.get_mut(node) {
+            n.items = Some(out);
+        }
+        return which(h, node);
     }
     if !writes.is_empty()
         && let Some(lists) = h.nodes.get_mut(node).and_then(|n| n.items.as_mut())
     {
         for (i, l) in lists.iter_mut().enumerate() {
-            let texts = with_writes(std::mem::take(&mut l.entries), i, &writes);
-            l.entries = texts.into_iter().map(|t| ("text".to_string(), t)).collect();
+            l.entries = with_writes(std::mem::take(&mut l.entries), i, &writes);
         }
     }
-    (shown, saved)
+    which(h, node)
 }
 
 /// Fold what a script wrote to entries into the run's copy before reading them.
@@ -196,7 +192,8 @@ pub(crate) fn add_item(_: &JsValue, args: &[JsValue], r: &JsObject, ctx: &mut Co
     // a saved value other than the text needs a saved list: one is made, saving what each entry shows
     let saved = match saved {
         None if saved_text != shown_text => {
-            let copy = h.nodes.get(node).and_then(|n| n.items.as_ref()).and_then(|l| l.get(shown)).cloned().unwrap_or_default();
+            let mut copy = h.nodes.get(node).and_then(|n| n.items.as_ref()).and_then(|l| l.get(shown)).cloned().unwrap_or_default();
+            copy.saved = true;
             let bytes = copy.entries.iter().map(|(_, t)| t.len()).sum();
             if !h.room(bytes) {
                 return Ok(JsValue::undefined());

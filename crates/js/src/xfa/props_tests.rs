@@ -399,7 +399,7 @@ fn items_read_the_list_state_once_one_is_set() {
     assert_eq!(list_entries(&h, list, 0).len(), 3, "as the template lists them");
     let entries = vec![("text".to_string(), "One".to_string()), ("text".to_string(), "Two".to_string())];
     if let Some(n) = h.nodes.get_mut(list) {
-        n.items = Some(vec![ItemList { entries }]);
+        n.items = Some(vec![ItemList { entries, saved: false }]);
     }
     assert_eq!(list_entries(&h, list, 0).len(), 2);
     assert_eq!(content(&h, list, "items#0/text#1"), "Two");
@@ -409,7 +409,7 @@ fn items_read_the_list_state_once_one_is_set() {
     let bare = h.current;
     assert_eq!(list_entries(&h, bare, 0).len(), 0);
     if let Some(n) = h.nodes.get_mut(bare) {
-        n.items = Some(vec![ItemList { entries: vec![("text".to_string(), "X".to_string())] }]);
+        n.items = Some(vec![ItemList { entries: vec![("text".to_string(), "X".to_string())], saved: false }]);
     }
     assert_eq!((list_entries(&h, bare, 0).len(), content(&h, bare, "items#0/text#0")), (1, "X".to_string()));
 }
@@ -425,11 +425,16 @@ fn choice_list_methods_read_and_change_the_items() {
     list.value = "FR".into();
     let plain = node("size", XfaKind::Field, &[], vec![ui(), items(&[], &["S", "M"])]);
     let text = node("note", XfaKind::Field, &[], vec![]);
+    // the saved list first, with integer entries; and a list longer than the methods' bound
+    let saved_first = p("items", &[("save", "1")], vec![t("integer", &[], "1"), t("integer", &[], "2")]);
+    let rate = node("rate", XfaKind::Field, &[], vec![ui(), saved_first, items(&[], &["One", "Two"])]);
+    let many: Vec<String> = (0..10_001).map(|i| format!("e{i}")).collect();
+    let long = node("long", XfaKind::Field, &[], vec![ui(), items(&[], &many.iter().map(String::as_str).collect::<Vec<_>>())]);
     let root = XfaNode {
         name: "form1".into(),
         som: "form1[0]".into(),
         kind: Some(XfaKind::Subform),
-        children: vec![list, plain, text],
+        children: vec![list, plain, text, rate, long],
         ..Default::default()
     };
     let cases = [
@@ -470,6 +475,15 @@ fn choice_list_methods_read_and_change_the_items() {
     for (script, want) in cases {
         assert_eq!(eval_on(&root, script, "country"), want, "{script}");
     }
+    // a read after an entry write keeps every list in its place, its entries' tags, and every entry
+    let o = go_on(
+        &root,
+        "var e = this.getElement('items', 0).nodes.item(0); e.value = '9'; [this.getSaveItem(0), e.value, this.getElement('items', 0).nodes.item(0).className, this.getDisplayItem(1), this.length].join(',')",
+        "rate",
+    );
+    assert_eq!(o.result.as_deref(), Some("9,9,integer,Two,2"), "{o:?}");
+    let o = go_on(&root, "this.items.nodes.item(0).value = 'first'; this.getDisplayItem(0) + ',' + this.length", "long");
+    assert_eq!(o.result.as_deref(), Some("first,10001"), "{o:?}");
     // a script can't grow a list past its bound
     let o = go_on(&root, "for (var i = 0; i < 20000; i++) this.addItem('x' + i); this.length", "country");
     assert_eq!(o.result.as_deref(), Some("10000"), "{o:?}");

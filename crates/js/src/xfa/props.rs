@@ -433,6 +433,8 @@ fn content(h: &XHost, node: usize, path: &str) -> String {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct ItemList {
     pub(crate) entries: Vec<(String, String)>,
+    /// The list holds the values saved to the data (the template's `save="1"`, or the list methods' second).
+    pub(crate) saved: bool,
 }
 
 /// The entries of the field's `<items>` number `list` (the first is the one the list shows),
@@ -517,9 +519,9 @@ pub(crate) fn list_position(h: &XHost, node: usize, list: usize, t: &str) -> Opt
 /// Which of the field's `<items>` lists holds the values saved to the data: the one the template marks `save="1"`, else the
 /// second when there are two (the list methods add one), else none (the shown text is the value).
 pub(crate) fn saved_list(h: &XHost, node: usize) -> Option<usize> {
-    // the run's copy keeps the shown list first and the saved one, if any, second
+    // the run's copy marks the list it saves
     if let Some(lists) = h.nodes.get(node).and_then(|n| n.items.as_ref()) {
-        return (lists.len() >= 2).then_some(1);
+        return lists.iter().position(|l| l.saved);
     }
     let marked =
         template_children(h, node, "").iter().filter(|p| p.tag == "items").position(|p| p.attrs.iter().any(|(k, v)| k == "save" && v == "1"));
