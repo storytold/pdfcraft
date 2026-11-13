@@ -429,7 +429,16 @@ impl Document {
         let user = to_f64(self.page_info(page)?.view_rect_to_user(to_f32(checked(view)?)));
         let white = [1.0, 1.0, 1.0];
         let shape = Shape::Rectangle { rect: user };
-        let style = Style { color: white, opacity: 1.0, width: 0.0, fill: Some(white) };
+        let style = Style {
+            color: white,
+            opacity: 1.0,
+            width: 0.0,
+            fill: Some(white),
+            border_color: None,
+            border_shape: Default::default(),
+            fill_opacity: None,
+            text_opacity: None,
+        };
         self.apply(Edit::AddAnnotation(NewAnnotation { page, shape, style, contents: String::new(), author: String::new() }))
     }
 }

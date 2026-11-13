@@ -41,7 +41,8 @@ impl Rendered {
         self.inner.height
     }
 
-    /// Why the picture is partial or approximate, if it is: `content-truncated`, `colour-fallback`.
+    /// Why the picture is partial or approximate, if it is: `content-truncated`, `colour-fallback`,
+    /// `malformed-indexed-image`, `type3-widths-missing`.
     #[wasm_bindgen(getter)]
     pub fn warnings(&self) -> Vec<String> {
         self.inner.warnings.iter().map(|w| (*w).to_string()).collect()

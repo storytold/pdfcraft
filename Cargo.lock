@@ -4838,7 +4838,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-wasm"
-version = "0.14.0"
+version = "0.21.1"
 dependencies = [
  "image",
  "js-sys",

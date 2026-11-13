@@ -52,7 +52,8 @@ pub struct Raster {
     pub height: u32,
     pub rgba: Vec<u8>,
     /// Conditions that make the picture partial or approximate: `content-truncated` (the page's
-    /// content budget ran out and the rest was skipped) and `colour-fallback`.
+    /// content budget ran out and the rest was skipped), `colour-fallback`, `malformed-indexed-image`
+    /// and `type3-widths-missing`.
     pub warnings: Vec<&'static str>,
 }
 
@@ -151,6 +152,8 @@ impl Document {
                     .map(|w| match w {
                         RenderWarning::ContentTruncated => "content-truncated",
                         RenderWarning::ColourFallback => "colour-fallback",
+                        RenderWarning::MalformedIndexedImage => "malformed-indexed-image",
+                        RenderWarning::Type3WidthsMissing => "type3-widths-missing",
                     })
                     .collect();
                 Ok(Raster { width: out.width, height: out.height, rgba: out.rgba.to_vec(), warnings })

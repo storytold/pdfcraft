@@ -2,7 +2,9 @@
 //! and add links, list annotations and form fields, fill a field. Boxes and points are the displayed
 //! page's points from its top-left, y down (the same space as `objects` and `text_blocks`).
 
-use pdfcraft_engine::{Edit, FieldValue, FillMark, LineEnding, LinkAction, LinkStyle, Markup, NewAnnotation, NoteIcon, Shape, StampKind, Style};
+use pdfcraft_engine::{
+    Edit, FieldValue, FillMark, LineEnding, LinkAction, LinkStyle, LinkZoom, Markup, NewAnnotation, NoteIcon, Shape, StampKind, Style,
+};
 use pdfcraft_render::{FieldKind, LinkTarget};
 use serde_json::{Value, json};
 
@@ -28,7 +30,8 @@ pub fn parse_target(target: &str) -> Result<LinkAction, String> {
     let t = target.trim();
     if let Some(n) = t.strip_prefix("page:") {
         let page: usize = n.trim().parse().map_err(|_| "a page link is page:NUMBER".to_string())?;
-        return page.checked_sub(1).map(LinkAction::Page).ok_or_else(|| "pages start at 1".to_string());
+        // shown whole, as a new go-to-page link is by default
+        return page.checked_sub(1).map(|page| LinkAction::Page { page, zoom: LinkZoom::FitPage }).ok_or_else(|| "pages start at 1".to_string());
     }
     let lower = t.to_ascii_lowercase();
     if t.len() <= 2048 && !t.chars().any(char::is_control) && ["https://", "http://", "mailto:"].iter().any(|p| lower.starts_with(p)) {

@@ -142,6 +142,8 @@ impl Document {
             name: name.to_string(),
             file: MarkFile { name: name.to_string(), bytes: Arc::new(bytes.to_vec()), page },
             author: String::new(),
+            // no text line under the picture
+            line: None,
         })
     }
 
