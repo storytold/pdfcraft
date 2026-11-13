@@ -244,8 +244,11 @@ pub(crate) fn resolve_som(h: &XHost, from: usize, expr: &str) -> Vec<usize> {
                             && guard < MAX_DEPTH
                         {
                             // An unnamed subform's or area's content is its container's
-                            // (pp. 94-95): the name is numbered among all of that scope.
-                            let p = scope_of(h, p);
+                            // (pp. 94-95): a numbered name (`name[n]`, `name[*]`) is counted
+                            // among all of that scope. A name without a number is the nearest
+                            // one, as a bare name in a script is: the one in the unnamed
+                            // subform the script's object is in comes before its neighbours'.
+                            let p = if index.is_some() { scope_of(h, p) } else { p };
                             found = scoped(h, p, name);
                             if !found.is_empty() {
                                 break;

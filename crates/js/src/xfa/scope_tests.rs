@@ -127,6 +127,24 @@ fn formcalc_names_see_through_unnamed_subforms_and_areas() {
     assert_eq!(o.effects, [set(0), set(1), set(2)]);
 }
 
+/// A name without a number is the nearest one, by `resolveNode` as by a bare name: from the
+/// `yes` in the second unnamed subform that is itself, not the first `yes` of the container.
+/// A numbered name is still counted in the container's scope.
+#[test]
+fn a_name_without_a_number_is_the_nearest_one_by_resolve_node_and_by_a_bare_name() {
+    for (script, want) in [
+        ("this.resolveNode('yes').rawValue", "2"),
+        ("yes.rawValue", "2"),
+        ("this.resolveNode('yes[0]').rawValue", "1"),
+        ("this.resolveNodes('yes[*]').length", "3"),
+    ] {
+        let o = js(&receipt(), script, "form1[0].yes[1]");
+        assert_eq!((o.error, o.result.as_deref()), (None, Some(want)), "{script}");
+    }
+    let o = fc(&receipt(), "yes + yes[0]", "form1[0].yes[1]");
+    assert_eq!((o.error, o.result.as_deref()), (None, Some("3")));
+}
+
 fn row(index: usize, repeatable: bool, what: &str, children: Vec<XfaNode>) -> XfaNode {
     let som = format!("form1[0].row[{index}]");
     let mut kids = vec![field("what", &format!("{som}.what[0]"), 0, what)];
