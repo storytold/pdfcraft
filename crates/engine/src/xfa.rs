@@ -804,9 +804,28 @@ impl<'a, 'b> Runner<'a, 'b> {
     }
 
     /// What scripts set on a static form's objects, shown on its own fields: presence as the widget's hidden flag, access
-    /// as the field's read-only flag. A subform's setting reaches every field inside it; the nearest setting wins.
+    /// as the field's read-only flag. A subform's setting reaches every field inside it: hidden anywhere up the chain
+    /// hides, and the nearest access wins. A radio group's buttons each take their own presence, on their own widget.
     fn show_static_overrides(&mut self) -> Result<(), String> {
         self.by_som();
+        // `Some(true)` when `som` or a container of it is hidden or invisible, `Some(false)` when only shown ones are set,
+        // `None` when nothing up the chain is set.
+        let hidden = |map: &std::collections::BTreeMap<String, String>, som: &str| -> Option<bool> {
+            let mut at = som;
+            let mut set = false;
+            loop {
+                if let Some(p) = map.get(at) {
+                    if p == "hidden" || p == "invisible" {
+                        return Some(true);
+                    }
+                    set = true;
+                }
+                match at.rsplit_once('.') {
+                    Some((up, _)) => at = up,
+                    None => return set.then_some(false),
+                }
+            }
+        };
         let nearest = |map: &std::collections::BTreeMap<String, String>, som: &str| -> Option<String> {
             let mut at = som;
             loop {
@@ -816,10 +835,39 @@ impl<'a, 'b> Runner<'a, 'b> {
                 at = at.rsplit_once('.')?.0;
             }
         };
+        // A radio group's buttons, in widget order.
+        let buttons: HashMap<String, Vec<String>> = {
+            let entries: Vec<String> = self.static_entries.iter().map(|(som, _, _)| som.clone()).collect();
+            let live = self.live();
+            entries
+                .into_iter()
+                .filter_map(|som| {
+                    let n = find_node(&live.root, &som, 0).filter(|n| n.kind == Some(NodeKind::ExclGroup))?;
+                    Some((som, n.children.iter().filter(|c| c.kind == Some(NodeKind::Field)).map(|c| c.som.clone()).collect()))
+                })
+                .collect()
+        };
+        let widgets: HashMap<String, Vec<pdfcraft_cos::ObjRef>> = if buttons.is_empty() {
+            HashMap::new()
+        } else {
+            pdfcraft_forms::fields(self.doc).into_iter().map(|f| (f.name, f.widgets.iter().map(|w| w.obj).collect())).collect()
+        };
         let mut changes = Vec::new();
+        let mut widget_flags: Vec<(pdfcraft_cos::ObjRef, bool)> = Vec::new();
         for (som, name, object) in &self.static_entries {
-            let display = nearest(&self.ov.presence, som).map(|p| i32::from(p == "hidden" || p == "invisible"));
             let read_only = nearest(&self.ov.access, som).map(|a| a != "open");
+            let display = match buttons.get(som) {
+                Some(items) => {
+                    let objs = widgets.get(name).map(Vec::as_slice).unwrap_or_default();
+                    for (item, obj) in items.iter().zip(objs) {
+                        if let Some(h) = hidden(&self.ov.presence, item) {
+                            widget_flags.push((*obj, h));
+                        }
+                    }
+                    None
+                }
+                None => hidden(&self.ov.presence, som).map(i32::from),
+            };
             if display.is_none() && read_only.is_none() {
                 continue;
             }
@@ -827,8 +875,16 @@ impl<'a, 'b> Runner<'a, 'b> {
         }
         if !changes.is_empty() {
             pdfcraft_forms::apply_script_changes(self.doc, &changes, &mut pdfcraft_forms::NoScripts).map_err(|e| e.to_string())?;
-            self.fields = None;
         }
+        for (obj, h) in widget_flags {
+            // the annotation's Hidden flag (ISO 32000-2 Table 167, bit 2)
+            let flags = self.doc.get(obj).as_dict().and_then(|d| d.get(b"F").and_then(|v| self.doc.resolve(v).as_int())).unwrap_or(0);
+            let next = if h { flags | 2 } else { flags & !2 };
+            if next != flags {
+                self.doc.update_dict(obj, |d| d.set(b"F".to_vec(), pdfcraft_cos::Object::Int(next))).map_err(|e| e.to_string())?;
+            }
+        }
+        self.fields = None;
         self.invalidate();
         Ok(())
     }
@@ -1392,7 +1448,13 @@ pub(crate) fn on_changes(
 ) -> Result<(), String> {
     let mut r = Runner::new(doc, tpl, run, OPEN_BUDGET_MS);
     for name in names {
-        let som = r.by_som().iter().find(|(_, f)| *f == name).map(|(s, _)| s.clone());
+        // A static form's page-master copies share their master's SOM path under names of their own.
+        let som = if r.static_form {
+            r.by_som();
+            r.static_entries.iter().find(|(_, f, _)| f == name).map(|(s, _, _)| s.clone())
+        } else {
+            r.by_som().iter().find(|(_, f)| *f == name).map(|(s, _)| s.clone())
+        };
         let Some(som) = som else { continue };
         let value = r.fields().get(name).map(|f| f.value.join("\n")).unwrap_or_default();
         for ev in r.events_of(&som, "change") {

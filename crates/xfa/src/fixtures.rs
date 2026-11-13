@@ -162,11 +162,11 @@ pub fn static_scripted_shell(data: &str) -> Vec<u8> {
     let objs: Vec<Vec<u8>> = vec![
         b"<< /Type /Catalog /Pages 2 0 R /AcroForm << /XFA 5 0 R /Fields [6 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv << /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >> >> >> >> >>".to_vec(),
         b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
-        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Annots [8 0 R 9 0 R 10 0 R 12 0 R 13 0 R 15 0 R 16 0 R] >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Annots [8 0 R 9 0 R 10 0 R 12 0 R 13 0 R 15 0 R 16 0 R 20 0 R 22 0 R 23 0 R] >>".to_vec(),
         b"<< /Length 0 >>\nstream\n\nendstream".to_vec(),
         format!("<< /Length {} >>\nstream\n{xdp}\nendstream", xdp.len()).into_bytes(),
-        b"<< /T (form1[0]) /Kids [7 0 R] >>".to_vec(),
-        b"<< /T (page1[0]) /Parent 6 0 R /Kids [8 0 R 9 0 R 10 0 R 11 0 R 13 0 R 14 0 R] >>".to_vec(),
+        b"<< /T (form1[0]) /Kids [7 0 R 18 0 R] >>".to_vec(),
+        b"<< /T (page1[0]) /Parent 6 0 R /Kids [8 0 R 9 0 R 10 0 R 11 0 R 13 0 R 14 0 R 23 0 R] >>".to_vec(),
         text("name", 7, 700),
         text("total", 7, 660),
         b"<< /Type /Annot /Subtype /Widget /FT /Btn /Ff 65536 /T (go[0]) /Parent 7 0 R /Rect [72 620 160 640] /P 3 0 R /MK << /BC [0 0 0] /CA (Go) >> >>".to_vec(),
@@ -177,14 +177,24 @@ pub fn static_scripted_shell(data: &str) -> Vec<u8> {
         b"<< /Type /Annot /Subtype /Widget /Parent 14 0 R /Rect [72 500 84 512] /P 3 0 R /AS /Off /MK << /BC [0 0 0] >> /AP << /N << /0 17 0 R /Off 17 0 R >> >> >>".to_vec(),
         b"<< /Type /Annot /Subtype /Widget /Parent 14 0 R /Rect [144 500 156 512] /P 3 0 R /AS /Off /MK << /BC [0 0 0] >> /AP << /N << /1 17 0 R /Off 17 0 R >> >> >>".to_vec(),
         b"<< /Type /XObject /Subtype /Form /BBox [0 0 12 12] /Length 0 >>\nstream\n\nendstream".to_vec(),
+        // the page master's field, one copy per page made from it
+        b"<< /T (#pageSet[0]) /Parent 6 0 R /Kids [19 0 R 21 0 R] >>".to_vec(),
+        b"<< /T (front[0]) /Parent 18 0 R /Kids [20 0 R] >>".to_vec(),
+        text("stamp", 19, 460),
+        b"<< /T (front[1]) /Parent 18 0 R /Kids [22 0 R] >>".to_vec(),
+        text("stamp", 21, 420),
+        b"<< /Type /Annot /Subtype /Widget /FT /Btn /Ff 65536 /T (hide[0]) /Parent 7 0 R /Rect [72 380 160 400] /P 3 0 R /MK << /BC [0 0 0] /CA (Hide) >> >>".to_vec(),
     ];
     assemble(objs)
 }
 
-/// The template of [`static_scripted_shell`]. `form1.page1` holds the text fields `name` (whose exit script writes
+/// The template of [`static_scripted_shell`]. Its page master `front` has the text field `stamp`, whose change script
+/// writes `total`; the push button `hide` hides the radio button `large`, then, clicked again, the group `size` while
+/// setting `small` itself visible. `form1.page1` holds the text fields `name` (whose exit script writes
 /// `total`), `total` (whose initialize script fills it) and, in an unnamed subform, `inner` (whose initialize script fills
 /// it); the push button `go`, whose click script sets `total`, hides `name`, makes `inner` read-only and shows a message;
 /// the check box `agree` and the radio group `size` (buttons `small` and `large`), whose click scripts write `total`.
+/// See [`static_scripted_shell`] for `stamp` and `hide`.
 pub fn static_scripted_template() -> String {
     let js = |activity: &str, code: &str| {
         format!("<event activity=\"{activity}\"><script contentType=\"application/x-javascript\">{code}</script></event>")
@@ -197,7 +207,8 @@ pub fn static_scripted_template() -> String {
     };
     format!(
         "<template xmlns=\"http://www.xfa.org/schema/xfa-template/3.3/\"><subform name=\"form1\" layout=\"tb\">\
-         <pageSet><pageArea name=\"front\"><contentArea x=\"0.5in\" y=\"0.5in\" w=\"7.5in\" h=\"10in\"/><medium short=\"8.5in\" long=\"11in\"/></pageArea></pageSet>\
+         <pageSet><pageArea name=\"front\"><contentArea x=\"0.5in\" y=\"0.5in\" w=\"7.5in\" h=\"10in\"/><medium short=\"8.5in\" long=\"11in\"/>\
+         <field name=\"stamp\" x=\"0.5in\" y=\"10.4in\" w=\"2in\" h=\"0.3in\"><ui><textEdit/></ui>{}</field></pageArea></pageSet>\
          <subform name=\"page1\" layout=\"tb\">\
          <field name=\"name\" w=\"2in\" h=\"0.3in\"><ui><textEdit/></ui>{}</field>\
          <field name=\"total\" w=\"2in\" h=\"0.3in\"><ui><textEdit/></ui>{}</field>\
@@ -205,7 +216,9 @@ pub fn static_scripted_template() -> String {
          <subform layout=\"tb\"><field name=\"inner\" w=\"2in\" h=\"0.3in\"><ui><textEdit/></ui>{}</field></subform>\
          <field name=\"agree\" w=\"0.2in\" h=\"0.2in\"><ui><checkButton/></ui><items><integer>1</integer><integer>0</integer></items>{}</field>\
          <exclGroup name=\"size\" layout=\"lr-tb\">{}{}</exclGroup>\
+         <field name=\"hide\" w=\"1in\" h=\"0.3in\"><ui><button/></ui>{}</field>\
          </subform></subform></template>",
+        js("change", "xfa.resolveNode(&quot;form1.page1.total&quot;).rawValue = &quot;stamp:&quot; + xfa.event.newText;"),
         js("exit", "total.rawValue = &quot;exit:&quot; + this.rawValue;"),
         js("initialize", "this.rawValue = &quot;init&quot;;"),
         js(
@@ -216,6 +229,10 @@ pub fn static_scripted_template() -> String {
         js("click", "total.rawValue = &quot;agree:&quot; + this.rawValue;"),
         radio("small", 1),
         radio("large", 2),
+        js(
+            "click",
+            "if (size.large.presence != &quot;hidden&quot;) { size.large.presence = &quot;hidden&quot;; } else { size.presence = &quot;hidden&quot;; size.small.presence = &quot;visible&quot;; }"
+        ),
     )
 }
 

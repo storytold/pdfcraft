@@ -12210,6 +12210,17 @@ fn a_static_xfa_forms_template_scripts_run_on_its_own_fields() {
     let large = field(&s, "form1[0].page1[0].size[0]").widgets[1].on_state.clone();
     s.apply(id, Edit::SetFieldValue { name: "form1[0].page1[0].size[0]".into(), value: FieldValue::Radio(large) }).expect("picks it");
     assert_eq!(field(&s, total).value, vec!["size:large".to_string()], "the chosen button's click script runs");
+    // Every copy of a page master's field runs its scripts, though the copies share the master's SOM path.
+    s.apply(id, Edit::SetFieldValue { name: "form1[0].#pageSet[0].front[1].stamp[0]".into(), value: FieldValue::Text("B".into()) })
+        .expect("fills it");
+    assert_eq!(field(&s, total).value, vec!["stamp:B".to_string()], "{:?}", s.take_js_output(id));
+    // A radio button hides on its own widget; a hidden container hides what it holds, whatever their own presence.
+    let hidden = |s: &Session| field(s, "form1[0].page1[0].size[0]").widgets.iter().map(|w| w.hidden).collect::<Vec<_>>();
+    let out = s.run_javascript(id, "", Some("form1[0].page1[0].hide[0]")).expect("clicks");
+    assert_eq!(out.error, None, "{out:?}");
+    assert_eq!(hidden(&s), [false, true], "only the large button");
+    s.run_javascript(id, "", Some("form1[0].page1[0].hide[0]")).expect("clicks again");
+    assert_eq!(hidden(&s), [true, true], "the group hides the button set visible in it");
 }
 
 /// On a dynamic XFA form too, a check box or radio button the user sets runs its click script after its change scripts,
