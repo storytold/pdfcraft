@@ -16,6 +16,10 @@ pub struct Job {
     pub doc_scripts: Vec<String>,
     /// Target positions in this job's field snapshot and their ordered script sources.
     pub calculations: Vec<(usize, String)>,
+    /// Fire this timer of the realm (`app.setInterval`, `app.setTimeOut`) in place of `script`
+    /// (#169). A timer the realm no longer has runs nothing; nor does any timer of a realm that
+    /// has not started, or whose document scripts changed (its timers went with it).
+    pub timer: Option<u32>,
 }
 /// Live field instances are independent of restorable PDF object-number allocation.
 #[derive(Default)]
@@ -129,8 +133,12 @@ impl Realm {
     }
     fn run_job(&mut self, job: Job) -> Outcome {
         let failed = |why: String| Outcome { rc: true, execution_refused: true, realm_untouched: true, error: Some(why), ..Default::default() };
+        if let Some(id) = job.timer {
+            return self.fire(job, id);
+        }
         // A script too long or too deeply nested to run is that script's error, as on `main`: the
-        // value stays and the edit's other scripts still run. The realm is not touched.
+        // value stays and the edit's other scripts still run. The realm is not touched, so its
+        // timers are as they were: they are reported, as after any run, or the viewer drops them.
         if let Some(why) = crate::refuse(&job.script) {
             return Outcome {
                 rc: true,
@@ -138,6 +146,7 @@ impl Realm {
                 value: job.event.value.clone(),
                 change: job.event.change.clone(),
                 error: Some(why),
+                timers: self.context.as_ref().map(crate::timers::report).unwrap_or_default(),
                 ..Default::default()
             };
         }
@@ -147,7 +156,10 @@ impl Realm {
         let initialize = self.context.is_none() || self.scripts != job.doc_scripts;
         if initialize {
             self.context = match crate::Context::builder().host_hooks(std::rc::Rc::new(crate::run::NoCodeFromStrings)).build() {
-                Ok(c) => Some(c),
+                Ok(mut c) => {
+                    crate::timers::enable(&mut c);
+                    Some(c)
+                }
                 Err(e) => return failed(e.to_string()),
             };
             self.scripts = job.doc_scripts.clone();
@@ -186,6 +198,7 @@ impl Realm {
                     reset_calls: 0,
                     calculation_evaluations: 0,
                     calculation_limit_exceeded: false,
+                    call: None,
                 },
                 Limits::default(),
             );
@@ -212,6 +225,7 @@ impl Realm {
                     reset_calls,
                     calculation_evaluations,
                     calculation_limit_exceeded: initial.calculation_limit_exceeded,
+                    call: None,
                 },
                 Limits::default(),
             );
@@ -251,10 +265,48 @@ impl Realm {
                     reset_calls: 0,
                     calculation_evaluations: 0,
                     calculation_limit_exceeded: false,
+                    call: None,
                 },
                 Limits::default(),
             )
         }
+    }
+}
+
+impl Realm {
+    /// Run timer `id` that fell due, with the job's form and document: its expression, or the
+    /// function it was given, in the realm that set it (#169).
+    fn fire(&mut self, job: Job, id: u32) -> Outcome {
+        let idle = |timers: Vec<crate::Timer>| Outcome { rc: true, realm_untouched: true, timers, ..Default::default() };
+        let Some(ctx) = self.context.as_mut().filter(|_| self.scripts == job.doc_scripts) else { return idle(Vec::new()) };
+        let Some(code) = crate::timers::due(ctx, id) else { return idle(crate::timers::report(ctx)) };
+        let (script, call) = match code {
+            crate::timers::Code::Source(source) => {
+                if let Some(why) = crate::refuse(&source) {
+                    return Outcome { rc: true, realm_untouched: true, error: Some(why), timers: crate::timers::report(ctx), ..Default::default() };
+                }
+                (source, None)
+            }
+            crate::timers::Code::Function(f) => (String::new(), Some(f)),
+        };
+        crate::run::run_in_context(
+            ctx,
+            &script,
+            &job.event,
+            &job.doc,
+            job.fields,
+            crate::run::ScriptSetup {
+                doc_scripts: &[],
+                skipped: &[],
+                calculations: &job.calculations,
+                initialize: false,
+                reset_calls: 0,
+                calculation_evaluations: 0,
+                calculation_limit_exceeded: false,
+                call,
+            },
+            Limits::default(),
+        )
     }
 }
 
@@ -577,7 +629,67 @@ mod tests {
             fields: Arc::new(vec![FieldState::new("go", crate::FieldType::Button, vec!["old".into()])]),
             doc_scripts: vec!["var buffer='', init=1, opened=event.name;var held=getField('go');function digit(v){buffer+=v;return buffer;}".into()],
             calculations: Vec::new(),
+            timer: None,
         }
+    }
+    /// A job firing timer `id` of the realm, as the viewer runs one that fell due (#169).
+    fn fire(id: u32) -> Job {
+        Job { script: String::new(), event: Event { kind: "App".into(), ..Event::doc("Timer") }, timer: Some(id), ..job("") }
+    }
+    #[test]
+    /// Timers a script sets stay in the document's realm and fire there: an interval until it is
+    /// cleared, a time-out once; the field writes a timer makes are reported like any script's.
+    fn timers_fire_in_the_document_realm_until_cleared() {
+        let mut s = ScriptSession::default();
+        let set = s.run(
+            job("var n = 0; var t = app.setInterval(function () { n++; getField('go').value = 'frame ' + n; }, 40); app.setTimeOut('n += 100', 0);"),
+            &[],
+        );
+        assert_eq!(set.error, None);
+        assert_eq!(
+            set.timers,
+            [crate::Timer { id: 1, period_ms: 40, repeat: true }, crate::Timer { id: 2, period_ms: crate::MIN_TIMER_MS, repeat: false }]
+        );
+        let first = s.run(fire(1), &[]);
+        assert_eq!(first.error, None);
+        assert_eq!(first.changed.iter().map(|f| f.value.clone()).collect::<Vec<_>>(), [vec!["frame 1".to_string()]]);
+        let once = s.run(fire(2), &[]);
+        assert_eq!(once.timers.len(), 1, "a time-out runs once");
+        assert!(s.run(fire(2), &[]).realm_untouched, "and is gone after");
+        s.run(fire(1), &[]);
+        assert_eq!(s.run(job("n;"), &[]).result.as_deref(), Some("102"));
+        let cleared = s.run(job("app.clearInterval(t); app.clearInterval({}); n;"), &[]);
+        assert!(cleared.timers.is_empty());
+        assert!(s.run(fire(1), &[]).changed.is_empty(), "a cleared timer runs nothing");
+    }
+    #[test]
+    /// A document keeps at most 64 timers, a timer runs at most every 10 ms, a one-off run keeps
+    /// none, and changed document scripts start a realm without the old timers.
+    fn timers_are_bounded_and_belong_to_one_realm() {
+        let mut s = ScriptSession::default();
+        let many = s.run(
+            job("var made = 0; try { for (var i = 0; i < 70; i++) { app.setInterval('1', -5); made++; } } catch (e) { made + ': ' + e.message; }"),
+            &[],
+        );
+        assert_eq!(many.result.as_deref(), Some("64: a document's scripts can keep at most 64 timers"));
+        assert!(many.timers.iter().all(|t| t.period_ms == crate::MIN_TIMER_MS));
+        let one_off = crate::run("app.setInterval('1', 50); 'set';", &Event::doc("Console"), &DocInfo::default(), &[], &[], Limits::default());
+        assert_eq!(one_off.result.as_deref(), Some("set"));
+        assert!(one_off.timers.is_empty());
+        let changed = Job { doc_scripts: vec!["var other = 1;".into()], ..fire(1) };
+        let gone = s.run(changed, &[]);
+        assert!(gone.timers.is_empty() && gone.changed.is_empty(), "{gone:?}");
+    }
+    #[test]
+    /// A script refused before it runs (too long) leaves the realm as it was and reports the
+    /// timers it still has: the viewer keeps only the timers a run reports.
+    fn a_script_refused_before_it_runs_reports_the_realms_timers() {
+        let mut s = ScriptSession::default();
+        let set = s.run(job("app.setInterval('1', 40);"), &[]);
+        assert_eq!(set.timers.len(), 1);
+        let refused = s.run(job(&"1;".repeat(crate::MAX_SCRIPT_BYTES)), &[]);
+        assert!(refused.realm_untouched && !refused.execution_refused && refused.error.is_some(), "{:?}", refused.error);
+        assert_eq!(refused.timers, set.timers);
     }
     #[test]
     /// Retained Field identity, custom properties and keypad buffers persist locally while separate documents stay isolated.
@@ -980,6 +1092,7 @@ mod reset_budget_tests {
             fields: Arc::new(vec![]),
             doc_scripts: vec!["for(var i=0;i<64;i++)resetForm();".into()],
             calculations: vec![],
+            timer: None,
         };
         let out = runtime.run(job.clone(), &[]);
         assert!(out.reset_limit_exceeded);
@@ -1006,6 +1119,7 @@ mod event_identity_tests {
             fields: Arc::new(vec![field]),
             doc_scripts: vec![],
             calculations: vec![],
+            timer: None,
         };
         let out = ScriptSession::default().run(job, &[]);
         assert_eq!(out.error, None);
@@ -1027,7 +1141,7 @@ mod cache_capacity_tests {
                 })
                 .collect(),
         );
-        let job=Job{script:"for(var i=0;i<4100;i++)getField('f'+i);var held=getField('f4099');held.custom=42;held===getField('f4099') && getField('f4099').custom===42;".into(),event:Event::doc("Console"),doc:Default::default(),fields,doc_scripts:vec![],calculations:vec![]};
+        let job=Job{script:"for(var i=0;i<4100;i++)getField('f'+i);var held=getField('f4099');held.custom=42;held===getField('f4099') && getField('f4099').custom===42;".into(),event:Event::doc("Console"),doc:Default::default(),fields,doc_scripts:vec![],calculations:vec![],timer:None};
         let mut session = ScriptSession::default();
         let out = session.run(job.clone(), &[]);
         assert_eq!(out.error, None);
@@ -1051,6 +1165,7 @@ mod cache_lifecycle_tests {
             fields: Arc::new(vec![field.clone()]),
             doc_scripts: vec![],
             calculations: vec![],
+            timer: None,
         };
         let mut realm = Realm::new();
         assert_eq!(realm.run(job.clone()).error, None);
@@ -1088,6 +1203,7 @@ mod review13_tests {
             fields: Arc::new(fields),
             doc_scripts: vec![],
             calculations: vec![],
+            timer: None,
         }
     }
     /// A retired accessor must not resolve a replacement even if no job observed the deletion.
