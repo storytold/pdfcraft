@@ -733,8 +733,8 @@ pub(crate) fn resolve_into_props(h: &XHost, from: usize, expr: &str) -> Vec<(usi
             // empty, until a node's value is its value element.
             .filter(|&n| !(first == "value" && h.nodes.get(n).is_some_and(|x| x.kind == XfaKind::Draw)))
             .flat_map(|n| {
-                let named = !by_class
-                    && h.nodes.get(n).is_some_and(|x| x.children.iter().any(|&c| h.nodes.get(c).is_some_and(|c| !c.gone && &*c.name == first)));
+                // a child in an unnamed subform is the node's child too (XFA 3.3 p. 95)
+                let named = !by_class && super::child_named(h, n, first).is_some();
                 // The child shadows the property for the whole rest: what the child lacks names nothing
                 // here (a property of the child is found where the head names the child).
                 if named {

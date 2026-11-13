@@ -933,11 +933,10 @@ mod xfa_model {
         run_xfa(script, &ev, &doc, &form(), Limits::default())
     }
 
-    /// A calculate script finds its siblings by name and yields its last expression, and a
-    /// value it sets comes back as an effect.
-    /// An unnamed subform is transparent to SOM names (XFA 3.3 p. 94): its children are reached as their parent's, by name
-    /// in scope, through the parent and through resolveNode, a repeated one with its instance manager, while `nodes` still
-    /// lists the unnamed subform itself.
+    /// An unnamed subform is transparent to SOM names (XFA 3.3 pp. 94–95): its children are reached as their parent's, by
+    /// name in scope, through the parent and through resolveNode, where a child named like a property comes before the
+    /// property; a repeated one has its instance manager, and an instance added stays in the unnamed subform with the
+    /// others; `nodes` still lists the unnamed subform itself.
     #[test]
     fn names_reach_through_unnamed_subforms() {
         let mut f = form();
@@ -960,7 +959,10 @@ mod xfa_model {
                         name: "#subform".into(),
                         som: "form1[0].page1[0]".into(),
                         kind: Some(XfaKind::Subform),
-                        children: vec![field("inner", "form1[0].page1[0].inner[0]", "7", true)],
+                        children: vec![
+                            field("inner", "form1[0].page1[0].inner[0]", "7", true),
+                            field("border", "form1[0].page1[0].border[0]", "", false),
+                        ],
                         ..Default::default()
                     },
                     row(0),
@@ -974,8 +976,16 @@ mod xfa_model {
                    + page1.resolveNodes('line[*]').length + ',' + _line.count + ',' + page1.nodes.length";
         let o = run_xfa(src, &ev, &XfaDoc::default(), &f, Limits::default());
         assert_eq!(o.result.as_deref(), Some("7,form1[0].page1[0].inner[0],inner,2,2,7"), "{o:?}");
+        let src = "page1.resolveNode('border').className + ',' + page1.border.className";
+        let o = run_xfa(src, &ev, &XfaDoc::default(), &f, Limits::default());
+        assert_eq!(o.result.as_deref(), Some("field,field"), "{o:?}");
+        let src = "_line.addInstance(); _line.count + ',' + page1.line.instanceManager.count + ',' + page1.nodes.length";
+        let o = run_xfa(src, &ev, &XfaDoc::default(), &f, Limits::default());
+        assert_eq!(o.result.as_deref(), Some("3,3,7"), "{o:?}");
     }
 
+    /// A calculate script finds its siblings by name and yields its last expression, and a
+    /// value it sets comes back as an effect.
     #[test]
     fn calculate_scripts_see_siblings_by_name_and_yield_their_last_expression() {
         let o = go("qty.rawValue * price.rawValue", "form1[0].page1[0].total[0]", "calculate");

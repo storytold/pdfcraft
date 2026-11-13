@@ -231,13 +231,16 @@ impl XHost {
         if !h.reserve(&XfaEffect::AddInstance { som: String::new() }, som.len().saturating_add(copied)) {
             return None;
         }
-        let new = clone_subtree(h, first, Some(parent), 0)?;
         let last = live.last().copied().unwrap_or(first);
+        // The container that holds the last instance: an unnamed subform between it and `parent` keeps the copy, as it
+        // keeps the others (XFA 3.3 p. 95), so every count sees the same instances.
+        let holder = h.nodes.get(last).and_then(|n| n.parent).unwrap_or(parent);
+        let new = clone_subtree(h, first, Some(holder), 0)?;
         if let Some(n) = h.nodes.get_mut(new) {
             n.index = live.len();
         }
         // Keep instances together: right after the last one.
-        if let Some(p) = h.nodes.get_mut(parent) {
+        if let Some(p) = h.nodes.get_mut(holder) {
             let mut kids = p.children.to_vec();
             let pos = kids.iter().position(|&c| c == last).map_or(kids.len(), |i| i + 1);
             kids.insert(pos, new);
