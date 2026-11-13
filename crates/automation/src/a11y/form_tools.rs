@@ -16,8 +16,25 @@ fn request_json(r: &pdfcraft_engine::js::Request) -> Value {
         R::Beep => json!({ "beep": true }),
         R::Highlight(on) => json!({ "highlight": on }),
         R::SaveAs => json!({ "save_as": true }),
+        R::OpenDoc(path) => json!({ "open_doc": path }),
         R::OpenAttachment { name, open } => json!({ "attachment": name, "open": open }),
         R::ShowPanel(p) => json!({ "panel": p.id() }),
+    }
+}
+
+/// The optional `answers` argument: the prompts' answers in order (null cancels one).
+fn answers(a: &Args) -> Result<Vec<Option<String>>> {
+    match a.0.get("answers") {
+        None => Ok(Vec::new()),
+        Some(Value::Array(values)) if values.len() <= 32 => values
+            .iter()
+            .map(|v| match v {
+                Value::Null => Ok(None),
+                Value::String(s) if s.len() <= 4096 => Ok(Some(s.clone())),
+                _ => Err(ToolError::InvalidArgs("answers must contain strings or null".into())),
+            })
+            .collect(),
+        _ => Err(ToolError::InvalidArgs("answers must be an array of at most 32 strings or null".into())),
     }
 }
 
@@ -55,18 +72,7 @@ impl Automation {
     /// messages, console lines, requests, error, the failing document scripts' errors and result.
     pub(crate) fn js_run(&mut self, a: &Args) -> Result<Value> {
         let id = self.doc(a)?.id;
-        let answers = match a.0.get("answers") {
-            None => Vec::new(),
-            Some(Value::Array(values)) if values.len() <= 32 => values
-                .iter()
-                .map(|v| match v {
-                    Value::Null => Ok(None),
-                    Value::String(s) if s.len() <= 4096 => Ok(Some(s.clone())),
-                    _ => Err(ToolError::InvalidArgs("answers must contain strings or null".into())),
-                })
-                .collect::<Result<Vec<_>>>()?,
-            _ => return Err(ToolError::InvalidArgs("answers must be an array of at most 32 strings or null".into())),
-        };
+        let answers = answers(a)?;
         let identity = field_id(a)?;
         let (script, field) = (a.str("script")?, a.opt_str("field")?);
         let (mut o, edit) =
@@ -80,6 +86,28 @@ impl Automation {
             json!({ "alerts": alerts, "console": o.console, "requests": reqs, "error": o.error, "document_errors": o.doc_errors, "result": o.result }),
             edit.errors,
         ))
+    }
+
+    /// `link_run_javascript`: run the JavaScript action of link `index` on page `page` (both
+    /// 1-based, as link_list gives them), answering its prompts from `answers`, and report what
+    /// it showed and asked for. A failed script commits nothing (#2081).
+    pub(crate) fn link_run_javascript(&mut self, a: &Args) -> Result<Value> {
+        let answers = answers(a)?;
+        let one_based = |key: &str| -> Result<usize> {
+            let n = a.int(key)?;
+            usize::try_from(n).ok().and_then(|n| n.checked_sub(1)).ok_or_else(|| ToolError::InvalidArgs(format!("{key} must be 1 or more")))
+        };
+        let (page, index) = (one_based("page")?, one_based("index")?);
+        let doc = self.doc(a)?;
+        let id = doc.id;
+        if !doc.info.links.iter().any(|l| l.page == page && l.index == index && matches!(l.target, pdfcraft_render::LinkTarget::JavaScript(_))) {
+            return Err(failed(format!("page {} has no JavaScript link {} (see link_list)", page + 1, index + 1)));
+        }
+        let (o, edit) = self.session.with_own_js_output(id, |s| s.run_link_javascript(id, page, index, &answers)).map_err(failed)?;
+        let reqs: Vec<Value> = o.requests.iter().chain(&edit.requests).map(request_json).collect();
+        let alerts: Vec<Value> = o.alerts.iter().chain(&edit.alerts).map(alert_json).collect();
+        let console: Vec<&String> = o.console.iter().chain(&edit.console).collect();
+        Ok(with_warnings(json!({ "alerts": alerts, "console": console, "requests": reqs, "error": o.error, "result": o.result }), edit.errors))
     }
 
     /// `js_page`: read the document at a page, running page actions as the viewer does (#169).

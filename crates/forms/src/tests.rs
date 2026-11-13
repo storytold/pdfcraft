@@ -6098,7 +6098,8 @@ fn set_values_reads_the_form_once_not_per_value() {
     let before = form_reads();
     assert!(set_values(&mut doc, &again).unwrap().iter().all(Result::is_ok));
     let reads = form_reads() - before;
-    assert_eq!(reads, 3, "one to fill, one when f0 comes again, one to recalculate");
+    // Filling starts from the reading the check above made, nothing having changed since.
+    assert_eq!(reads, 2, "one when f0 comes again, one to recalculate");
 }
 
 /// Redrawing every field of a large form reads the form once, not once per field: a laid out XFA
@@ -6127,6 +6128,45 @@ fn redraw_fields_reads_the_form_once_however_many_fields_it_holds() {
         assert!((1..n).all(|i| has_ap(&format!("f{i}"))), "{n} fields");
         assert!(ap(&doc, &field(&all, &format!("f{}", n - 1)).widgets[0]).contains(&format!("(v{})", n - 1)));
     }
+}
+
+/// The fields of a document that has not changed since they were last read are not read again,
+/// and any change, a clone's state or another document reads afresh: a form edit reads them in
+/// several steps, most with nothing changed in between.
+#[test]
+fn fields_are_read_again_only_after_the_document_changes() {
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [5 0 R] >>".into(),
+        "<< /Fields [5 0 R] /DA (/Helv 10 Tf 0 g) >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (name) /V (old) /Rect [50 10 250 30] /P 3 0 R >>".into(),
+    ];
+    let value = |doc: &Document| field(&fields(doc), "name").value.clone();
+    let mut doc = document(&objs);
+    let before = form_reads();
+    assert_eq!(value(&doc), ["old"]);
+    assert_eq!(value(&doc), ["old"]);
+    assert_eq!(fields_with_adopted(&doc).items, fields(&doc));
+    assert_eq!(form_reads() - before, 1, "nothing changed: read once");
+    let unchanged = doc.clone();
+    doc.update_dict(ObjRef::new(5, 0), |d| d.set(b"V".to_vec(), Object::String(PdfString::text("new")))).unwrap();
+    let before = form_reads();
+    assert_eq!(value(&doc), ["new"], "an edit is read");
+    assert_eq!(value(&unchanged), ["old"], "a copy kept from before it is read as it is");
+    assert_eq!(value(&doc), ["new"]);
+    assert_eq!(form_reads() - before, 3);
+    // An object another field's value refers to counts as a change too.
+    let r = doc.add(Object::String(PdfString::text("indirect")));
+    doc.update_dict(ObjRef::new(5, 0), |d| d.set(b"V".to_vec(), Object::Ref(r))).unwrap();
+    assert_eq!(value(&doc), ["indirect"]);
+    doc.set(r, Object::String(PdfString::text("changed in place")));
+    assert_eq!(value(&doc), ["changed in place"]);
+    // Another document with the same bytes is read, not given this one's fields.
+    let other = document(&objs);
+    let before = form_reads();
+    assert_eq!(value(&other), ["old"]);
+    assert_eq!(form_reads() - before, 1);
 }
 
 /// A radio group `size` with the buttons Small (on), Medium and Large, a per-widget `/Opt`, and
