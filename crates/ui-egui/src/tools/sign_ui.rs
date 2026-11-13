@@ -290,8 +290,19 @@ pub fn entry_for(path: &str, c: &Certificate) -> DigitalIdEntry {
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    /// The time `time_now` gives in this test thread, when set: lets a test expire an ID part
+    /// way through signing. `Session::with_clock` won't do, as the browser build has no session clock.
+    static TEST_NOW: std::cell::Cell<Option<i64>> = const { std::cell::Cell::new(None) };
+}
+
 /// The current time, in the form certificates state theirs.
 fn time_now() -> sign::Time {
+    #[cfg(test)]
+    if let Some(t) = TEST_NOW.get() {
+        return sign::Time::from_unix(t);
+    }
     let elapsed = web_time::SystemTime::now().duration_since(web_time::SystemTime::UNIX_EPOCH);
     sign::Time::from_unix(elapsed.ok().and_then(|d| i64::try_from(d.as_secs()).ok()).unwrap_or(0))
 }
@@ -1012,6 +1023,60 @@ mod tests {
         let cert = Certificate::self_signed(&Name::build("Old", "", "", "", ""), &key, sign::Time::from_unix(0), 1, &[1]).unwrap();
         assert!(refuse_expired(&cert, cert.not_after).is_ok(), "valid up to its last second");
         assert!(refuse_expired(&cert, time_now()).is_err());
+    }
+
+    /// Sign a blank page with an ID file whose certificate runs from 0 for a year, choosing
+    /// where to save through `pick_override`, so the save path runs on a later frame. `now` is
+    /// the time when signing starts and `then` the time when the save panel is answered.
+    /// Returns what `finish_signing` said, whether the signed file was written, the document's
+    /// signature count and the notice.
+    fn sign_with_a_year_long_id(now: i64, then: i64) -> (Result<(), String>, bool, usize, Option<String>) {
+        let key = PrivateKey::generate_p256().unwrap();
+        let certificate = Certificate::self_signed(&Name::build("Old", "", "", "", ""), &key, sign::Time::from_unix(0), 1, &[1]).unwrap();
+        let dir = scratch();
+        let file = dir.join("old.p12");
+        std::fs::write(
+            &file,
+            sign::pkcs12::write(&DigitalId { key, certificate: certificate.clone(), chain: Vec::new(), friendly_name: None }, "secret12").unwrap(),
+        )
+        .unwrap();
+        let mut app = PdfCraftApp::new();
+        app.add_digital_id(&file.to_string_lossy(), &certificate);
+        let bytes = pdfcraft_engine::Session::new().create_blank(200.0, 200.0, 1).unwrap();
+        app.open_bytes("unsigned.pdf", None, bytes.as_ref().clone()).unwrap();
+        let (_, doc_id) = app.active_ids().unwrap();
+        let out = dir.join("signed.pdf");
+        app.pick_override = Some(vec![out.to_string_lossy().into_owned()]);
+        let mut draft = SignDraft::new(0, None, None, None, &app.digital_ids);
+        draft.step = SignStep::SignAs;
+        draft.password = "secret12".into();
+        app.sign_draft = Some(draft);
+
+        TEST_NOW.set(Some(now));
+        let started = app.finish_signing();
+        TEST_NOW.set(Some(then));
+        app.process_picked();
+        TEST_NOW.set(None);
+
+        let signed = app.session.get(doc_id).unwrap().signatures.len();
+        let result = (started, out.exists(), signed, app.toast.take().map(|(m, _)| m));
+        let _ = std::fs::remove_dir_all(&dir);
+        result
+    }
+
+    #[test]
+    fn an_id_that_expires_while_the_save_panel_is_open_signs_nothing() {
+        let day = 24 * 60 * 60;
+        let expired = Some("This digital ID has expired.".to_string());
+        // Valid throughout: signed and saved, so the cases below fail at the expiry checks.
+        let (started, written, signed, _) = sign_with_a_year_long_id(day, 2 * day);
+        assert_eq!((started, written, signed), (Ok(()), true, 1));
+        // Expired before signing starts: refused at once, and no save panel is asked for.
+        let (started, written, signed, _) = sign_with_a_year_long_id(400 * day, 400 * day);
+        assert_eq!((started, written, signed), (Err(expired.clone().unwrap()), false, 0));
+        // Expired while the save panel was open: the check when it is answered refuses, and says so.
+        let (started, written, signed, notice) = sign_with_a_year_long_id(day, 400 * day);
+        assert_eq!((started, written, signed, notice), (Ok(()), false, 0, expired));
     }
 
     #[test]
