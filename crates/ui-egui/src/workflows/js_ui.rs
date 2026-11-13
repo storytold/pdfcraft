@@ -338,6 +338,14 @@ impl PdfCraftApp {
         if !self.commit_form_typing() {
             return;
         }
+        // Committing a field can open a prompt that needs an answer before the script runs.
+        if self.modal_open_except(Some(crate::Dialog::JsConsole)) {
+            #[cfg(not(target_arch = "wasm32"))]
+            if let Some(ctx) = &self.ctx {
+                restore_and_focus_viewport(ctx, egui::ViewportId::ROOT);
+            }
+            return;
+        }
         let Some((i, id)) = self.active_ids() else { return };
         self.js_console.log.push(format!("> {}", script.trim()));
         match self.session.run_javascript(id, &script, None) {
@@ -437,7 +445,7 @@ pub(crate) fn console_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens)
     }
     // A prompt in the document window still owns its answer. Keep the separate console from
     // changing the document until that prompt is resolved.
-    let can_run = app.active_ids().is_some() && (app.dialog == Some(crate::Dialog::JsConsole) || !app.modal_open());
+    let can_run = app.active_ids().is_some() && !app.modal_open_except(Some(crate::Dialog::JsConsole));
     ui.add_space(6.0);
     if !app.session.javascript() {
         ui.label(egui::RichText::new(tl!("JavaScript is turned off (Preferences ▸ JavaScript).")).small().color(t.text_muted));
@@ -534,11 +542,11 @@ pub(crate) use crate::dialogs::preferences::{
 mod tests {
     use super::*;
 
-    fn console_with_form_typing(queued: bool, reject: bool) -> PdfCraftApp {
+    fn console_with_form_typing(queued: bool, validation: Option<&str>) -> PdfCraftApp {
         let mut app = PdfCraftApp::new();
         app.open_bytes("form.pdf", None, include_bytes!("../../tests/data/form.pdf").to_vec()).unwrap();
-        if reject {
-            assert!(app.apply_edit(Edit::SetFieldScript { name: "name".into(), event: "validate".into(), script: Some("event.rc = false;".into()) }));
+        if let Some(script) = validation {
+            assert!(app.apply_edit(Edit::SetFieldScript { name: "name".into(), event: "validate".into(), script: Some(script.into()) }));
         }
         let form = app.session.get(app.views[0].id).unwrap().form.clone();
         let field = form.iter().find(|field| field.name == "name").unwrap();
@@ -554,7 +562,7 @@ mod tests {
     #[test]
     fn console_commits_form_typing_before_running_scripts() {
         for queued in [false, true] {
-            let mut app = console_with_form_typing(queued, false);
+            let mut app = console_with_form_typing(queued, None);
             app.js_console.input =
                 "console.println(getField('name').value); getField('name').value = 'console saw ' + getField('name').value;".into();
             app.run_console();
@@ -567,7 +575,7 @@ mod tests {
 
     #[test]
     fn empty_console_script_leaves_form_typing_uncommitted() {
-        let mut app = console_with_form_typing(false, false);
+        let mut app = console_with_form_typing(false, None);
         app.js_console.input = "  ".into();
         app.run_console();
         assert!(app.views[0].forms.focus.is_some());
@@ -577,7 +585,7 @@ mod tests {
     #[test]
     fn console_does_not_run_when_form_typing_is_rejected() {
         for queued in [false, true] {
-            let mut app = console_with_form_typing(queued, true);
+            let mut app = console_with_form_typing(queued, Some("event.rc = false;"));
             let id = app.views[0].id;
             let before = app.session.get(id).unwrap().bytes.clone();
             app.js_console.log.push("earlier output".into());
@@ -589,6 +597,74 @@ mod tests {
             assert_eq!(draft.text, "typed", "queued={queued}");
             assert!(draft.request_focus && app.toast.is_some(), "the rejection is reported, queued={queued}");
         }
+    }
+
+    fn assert_console_waits_for_commit_prompt(dialog: Option<crate::Dialog>) {
+        for queued in [false, true] {
+            let mut app = console_with_form_typing(queued, Some("app.launchURL('https://example.com/confirm');"));
+            app.dialog = dialog;
+            app.js_console.input = "getField('city').value = 'console ran'; console.println('console ran');".into();
+            app.js_console.log.push("earlier output".into());
+            let ctx = egui::Context::default();
+            app.ctx = Some(ctx.clone());
+            let output = ctx.run_logic(&egui::RawInput::default(), |_| app.run_console());
+
+            assert_eq!(app.pending_link.as_ref().map(|link| link.url.as_str()), Some("https://example.com/confirm"), "queued={queued}");
+            let doc = app.session.get(app.views[0].id).unwrap();
+            assert_eq!(doc.form.iter().find(|field| field.name == "name").unwrap().value, ["typed"], "the field commits, queued={queued}");
+            assert!(
+                doc.form.iter().find(|field| field.name == "city").unwrap().value.iter().all(String::is_empty),
+                "the console waits, queued={queued}"
+            );
+            assert_eq!(app.js_console.log, ["earlier output"], "no execution or input echo, queued={queued}");
+            assert_eq!(app.dialog, dialog);
+            if cfg!(not(target_arch = "wasm32")) {
+                assert_eq!(
+                    output.viewport_commands[&egui::ViewportId::ROOT],
+                    [egui::ViewportCommand::Minimized(false), egui::ViewportCommand::Focus]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn desktop_console_waits_for_a_prompt_opened_by_form_commit() {
+        assert_console_waits_for_commit_prompt(None);
+    }
+
+    #[test]
+    fn modal_console_waits_for_a_prompt_opened_by_form_commit() {
+        assert_console_waits_for_commit_prompt(Some(crate::Dialog::JsConsole));
+    }
+
+    #[test]
+    fn modal_console_run_waits_for_other_prompts() {
+        use egui_kittest::{Harness, kittest::Queryable};
+
+        let previous_language = crate::i18n::current();
+        crate::i18n::set_current(crate::i18n::Lang::EN);
+        let mut app = console_with_form_typing(false, None);
+        app.dialog = Some(crate::Dialog::JsConsole);
+        app.js_console.input = "6 * 7".into();
+        let mut h = Harness::builder()
+            .with_size(egui::vec2(680.0, 440.0))
+            .with_context_setup(|ctx| ctx.set_fonts(crate::theme::font_definitions()))
+            .build_ui_state(
+                |ui, app| {
+                    console_body(ui, app, &Tokens::get(ui.ctx()));
+                },
+                app,
+            );
+        h.get_by(|node| node.label().as_deref() == Some("Run") && !node.is_disabled());
+        h.state_mut().request_document_url("https://example.com/confirm", crate::LinkOrigin::Script);
+        h.run_steps(2);
+        h.get_by(|node| node.label().as_deref() == Some("Run") && node.is_disabled());
+        h.state_mut().resolve_pending_link(false);
+        h.run_steps(2);
+        h.get_by_label("Run").click();
+        h.run_steps(2);
+        assert!(h.state().js_console.log.iter().any(|line| line == "42"), "the modal console runs after the prompt closes");
+        crate::i18n::set_current(previous_language);
     }
 
     #[cfg(not(target_arch = "wasm32"))]

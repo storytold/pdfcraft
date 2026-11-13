@@ -445,11 +445,16 @@ impl PdfCraftApp {
     /// A dialog or prompt is open over the window: the keyboard is its own, and nothing may act
     /// on the document underneath it.
     pub(crate) fn modal_open(&self) -> bool {
+        self.modal_open_except(None)
+    }
+
+    /// Allow one dialog (the web console) without bypassing other prompts that need an answer.
+    pub(crate) fn modal_open_except(&self, except: Option<crate::Dialog>) -> bool {
         #[cfg(not(target_arch = "wasm32"))]
         if self.script_pending.as_ref().is_some_and(|pending| pending.has_prompt()) {
             return true;
         }
-        self.dialog.is_some()
+        self.dialog.is_some_and(|dialog| Some(dialog) != except)
             || self.close_request.is_some()
             || self.password_prompt.is_some()
             || self.unlock_prompt.is_some()
