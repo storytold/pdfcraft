@@ -962,6 +962,22 @@ mod tests {
         assert_eq!(off.job("report.pdf").duplex, Some(spool::Duplex::Off));
     }
 
+    /// #7207: PdfCraft sizes the pages itself (fit, actual size, shrink, custom %), so whichever
+    /// Size the dialog has, CUPS is asked not to scale the sheets again. `fit-to-page=false`
+    /// alone left a queue defaulting to `print-scaling=auto` free to shrink A4 to 97 %.
+    #[test]
+    fn every_size_asks_cups_for_no_scaling() {
+        for size in [SizeMode::Fit, SizeMode::Actual, SizeMode::Shrink, SizeMode::Custom(103.0)] {
+            let draft = PrintDraft { printer: Some("Office".into()), size, custom_scale: 103.0, ..PrintDraft::default() };
+            let job = draft.job("report.pdf");
+            assert_eq!(job.scaling, spool::Scaling::Exact, "{size:?}");
+            let args = spool::lp_args(&job);
+            let joined = args.join(" ");
+            assert!(joined.contains(" -o fit-to-page=false -o print-scaling=none"), "{size:?}: {joined}");
+            assert_eq!(args.iter().filter(|a| a.starts_with("print-scaling=")).count(), 1, "{size:?}: {joined}");
+        }
+    }
+
     /// Untouched, Two-sided sends nothing, so the duplex set in the printer's Properties applies
     /// (#2422); cut and stack still asks for single-sided sheets.
     #[test]
