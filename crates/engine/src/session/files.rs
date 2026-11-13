@@ -414,8 +414,9 @@ impl Session {
     /// file split into several runs placed apart: each file is opened and copied once, so it keeps
     /// one bookmark, and its links between its own pages and its fields whole across its runs; its
     /// attachments come along when its runs use all of its pages (see
-    /// `pdfcraft_organize::combine_grouped`). A group's later sources use its first source's bytes
-    /// and password; a source without a key is a file of its own.
+    /// `pdfcraft_organize::combine_grouped`). A group's later sources share its first source's
+    /// import while keeping any per-run page rotations from their own bytes; a source without a key
+    /// is a file of its own.
     pub fn combine_grouped(&self, sources: &[CombineSource], groups: &[u64], passwords: &[Option<&str>]) -> Result<Arc<Vec<u8>>, EditError> {
         Ok(self.combine_grouped_reporting(sources, groups, passwords, pdfcraft_organize::FieldConflicts::Rename)?.bytes)
     }
@@ -429,14 +430,23 @@ impl Session {
         field_conflicts: pdfcraft_organize::FieldConflicts,
     ) -> Result<Combined, EditError> {
         let (mut keys, mut docs, mut file): (Vec<Option<u64>>, Vec<pdfcraft_cos::Document>, Vec<usize>) = (Vec::new(), Vec::new(), Vec::new());
+        let mut first_bytes: Vec<&Arc<Vec<u8>>> = Vec::new();
+        let mut alt_docs: Vec<Option<pdfcraft_cos::Document>> = Vec::with_capacity(sources.len());
         for (i, (name, bytes, _)) in sources.iter().enumerate() {
             let key = groups.get(i).copied();
             let known = key.and_then(|k| keys.iter().position(|g| *g == Some(k)));
+            let pw = passwords.get(i).copied().flatten();
             let at = match known {
-                Some(at) => at,
+                Some(at) => {
+                    let rotated = first_bytes.get(at).is_some_and(|b| !Arc::ptr_eq(b, bytes));
+                    alt_docs.push(if rotated { Some(open_source_with(name, bytes, pw)?) } else { None });
+                    at
+                }
                 None => {
-                    docs.push(open_source_with(name, bytes, passwords.get(i).copied().flatten())?);
+                    docs.push(open_source_with(name, bytes, pw)?);
                     keys.push(key);
+                    first_bytes.push(bytes);
+                    alt_docs.push(None);
                     docs.len() - 1
                 }
             };
@@ -461,7 +471,30 @@ impl Session {
             let Some(d) = docs.get(*at) else { return Err(EditError::Write(format!("{name}: not opened"))) };
             runs.push((*at, name.as_str(), d, p.as_deref()));
         }
-        let out = pdfcraft_organize::combine_grouped_with(&runs, field_conflicts)?;
+        let mut out = pdfcraft_organize::combine_grouped_with(&runs, field_conflicts)?;
+        let mut out_page = 0usize;
+        for ((at, chosen), alt) in file.iter().zip(&pages).zip(&alt_docs) {
+            let Some(base) = docs.get(*at) else { continue };
+            let all: Vec<usize>;
+            let slice: &[usize] = match chosen {
+                Some(p) => p.as_slice(),
+                None => {
+                    all = (0..pdfcraft_organize::page_count(base)?).collect();
+                    &all
+                }
+            };
+            if let Some(alt_doc) = alt {
+                for (k, &src_page) in slice.iter().enumerate() {
+                    let base_rot = pdfcraft_organize::page_rotation(base, src_page)?;
+                    let alt_rot = pdfcraft_organize::page_rotation(alt_doc, src_page)?;
+                    let delta = (alt_rot - base_rot).rem_euclid(360);
+                    if delta != 0 {
+                        pdfcraft_organize::rotate_pages(&mut out.doc, &[out_page + k], delta)?;
+                    }
+                }
+            }
+            out_page += slice.len();
+        }
         let bytes = self.write_new(&out.doc)?;
         Ok(Combined { bytes, renamed_fields: out.renamed_fields })
     }

@@ -172,16 +172,16 @@ impl ConflictPreview {
         let mut sources: Vec<pdfcraft_engine::CombineSource> = Vec::new();
         let mut passwords: Vec<Option<&str>> = Vec::new();
         for f in files {
-            if groups.contains(&f.group) {
+            if groups.contains(&f.file) {
                 continue;
             }
-            groups.push(f.group);
+            groups.push(f.file);
             sources.push((f.name.clone(), f.bytes.clone(), None));
             passwords.push(f.password.as_ref().map(|p| p.0.as_str()));
         }
         let per_group = session.combine_field_conflicts(&sources, &passwords);
         self.per_file =
-            files.iter().map(|f| groups.iter().position(|g| *g == f.group).and_then(|at| per_group.get(at)).cloned().unwrap_or_default()).collect();
+            files.iter().map(|f| groups.iter().position(|g| *g == f.file).and_then(|at| per_group.get(at)).cloned().unwrap_or_default()).collect();
         self.key = key;
     }
 }
@@ -301,10 +301,10 @@ pub struct CombineFile {
     /// Stable while the file is in the list (selection, undo).
     pub id: u64,
     /// The file as added: parts split or rotated from the same added file share it.
-    /// Used for file counts, duplicate detection, and combine eligibility.
+    /// Combined as one logical file, counted once, and used for duplicate detection.
     pub(crate) file: u64,
-    /// The file it is (part of): the entries a file is split into (a page moved between another
-    /// file's pages) share it. Combined as one file, unlocked together, thumbnails keyed by (group, page).
+    /// The byte-sharing group: parts of a file that share the same `bytes` and page orientations
+    /// share it (thumbnails keyed by `(group, page)`, adjacent parts with matching bytes joined).
     pub(crate) group: u64,
     pub name: String,
     pub bytes: Arc<Vec<u8>>,

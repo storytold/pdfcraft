@@ -6,7 +6,7 @@ use std::time::Duration;
 use egui::{Key, Modifiers, Pos2, vec2};
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
-use pdfcraft_render::{PageRenderer, RenderRequest, RequestKind};
+use pdfcraft_render::{DestView, LinkTarget, PageRenderer, RenderRequest, RequestKind};
 use pdfcraft_ui_egui::{CombineThumb, CombineView, FilePurpose, PdfCraftApp};
 
 /// An `n`-page document with a proper xref table; page `i` shows "Page i+1".
@@ -2003,4 +2003,51 @@ fn rotating_repeated_page_preserves_file_count_and_does_not_warn_duplicates() {
     assert_eq!(h.query_all_by_label_contains("Added more than once").count(), 0);
     h.get_by_label_contains("1 file · 2 pages");
     assert!(disabled(&h, "Combine"));
+}
+
+#[test]
+fn rotating_repeated_page_keeps_cross_page_link_destinations() {
+    let mut linked = pdfcraft_cos::Document::open(std::sync::Arc::new(fixture_sized(2, 200.0, 300.0))).unwrap();
+    let annot = linked.add(pdfcraft_cos::Object::Dict({
+        let mut d = pdfcraft_cos::Dict::new();
+        d.set(b"Type".to_vec(), pdfcraft_cos::Object::name("Annot"));
+        d.set(b"Subtype".to_vec(), pdfcraft_cos::Object::name("Link"));
+        d.set(b"Rect".to_vec(), pdfcraft_cos::Object::Array(vec![20, 20, 100, 50].into_iter().map(pdfcraft_cos::Object::Int).collect()));
+        d.set(
+            b"Dest".to_vec(),
+            pdfcraft_cos::Object::Array(vec![pdfcraft_cos::Object::Ref(pdfcraft_cos::ObjRef::new(6, 0)), pdfcraft_cos::Object::name("Fit")]),
+        );
+        d
+    }));
+    linked
+        .update_dict(pdfcraft_cos::ObjRef::new(4, 0), |d| {
+            d.set(b"Annots".to_vec(), pdfcraft_cos::Object::Array(vec![pdfcraft_cos::Object::Ref(annot)]))
+        })
+        .unwrap();
+    let linked = pdfcraft_cos::write_full(&linked, &Default::default()).unwrap();
+
+    let mut h = grid_of(vec![("linked.pdf", linked), ("tail.pdf", fixture_sized(1, 200.0, 300.0))], vec2(1400.0, 900.0));
+    h.state_mut().combine_draft[0].range = "1, 1, 2".into();
+    h.run_steps(2);
+    expand(&mut h, "linked.pdf");
+    assert!(settle(&mut h, |app| app.combine_thumbnails().iter().all(ready)));
+
+    // Rotate only the second occurrence of Page 1 clockwise.
+    let second = h.get_all_by_label(&page_card(1, "linked.pdf")).nth(1).unwrap().rect().center();
+    h.hover_at(second);
+    h.run_steps(2);
+    h.get_by_label("Rotate clockwise").click();
+    h.run_steps(2);
+
+    // Combine: both the unrotated and rotated copies of Page 1 keep their link to Page 2 (now index 2).
+    h.hover_at(egui::pos2(5.0, 890.0));
+    h.run_steps(2);
+    h.get_by_label("Combine").click();
+    h.run_steps(3);
+    let app = h.state();
+    let doc = app.session.get(app.views[0].id).unwrap();
+    let pages: Vec<(f32, f32, u16)> = doc.info.pages.iter().map(|p| (p.width, p.height, p.rotation)).collect();
+    assert_eq!(pages, [(200.0, 300.0, 0), (300.0, 200.0, 90), (200.0, 300.0, 0), (200.0, 300.0, 0)]);
+    let links: Vec<(usize, &LinkTarget)> = doc.info.links.iter().map(|l| (l.page, &l.target)).collect();
+    assert_eq!(links, [(0, &LinkTarget::Page(2, DestView::Fit)), (1, &LinkTarget::Page(2, DestView::Fit))]);
 }

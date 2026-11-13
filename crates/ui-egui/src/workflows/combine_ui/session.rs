@@ -169,7 +169,7 @@ impl PdfCraftApp {
     /// each taking exactly its pages (its range rewritten only when they differ).
     fn combine_put_parts(&mut self, parts: Vec<Part>) {
         let old = std::mem::take(&mut self.combine_draft);
-        let expanded: BTreeSet<u64> = old.iter().filter(|f| self.combine_tab.expanded.contains(&f.id)).map(|f| f.group).collect();
+        let expanded: BTreeSet<u64> = old.iter().filter(|f| self.combine_tab.expanded.contains(&f.id)).map(|f| f.file).collect();
         for p in parts {
             let Some(base) = old.iter().find(|f| f.id == p.id).or_else(|| old.iter().find(|f| f.group == p.group)) else { continue };
             let mut f = base.clone();
@@ -181,7 +181,7 @@ impl PdfCraftApp {
                 f.range = range_of(pages, f.pages);
                 f.checked = None;
             }
-            if expanded.contains(&f.group) {
+            if expanded.contains(&f.file) {
                 self.combine_tab.expanded.insert(f.id);
             }
             self.combine_draft.push(f);
@@ -280,6 +280,9 @@ impl PdfCraftApp {
                 self.combine_tab.next_id = next.wrapping_add(1);
                 next
             };
+            // Separate byte-sharing `group` so thumbnails and `combine_join_parts` keep the rotated
+            // occurrence distinct, while `part.file` keeps all parts in the same logical import
+            // group (`combine_staged`) so cross-page link destinations stay mapped.
             let new_group = next_id();
             let mut first_id = Some(base.id);
             let mut take_id = || first_id.take().unwrap_or_else(&mut next_id);
@@ -579,7 +582,7 @@ impl PdfCraftApp {
         }
         // Each file once, however many parts it is in.
         let count = files.iter().map(|f| f.file).collect::<BTreeSet<u64>>().len();
-        let groups: Vec<u64> = files.iter().map(|f| f.group).collect();
+        let groups: Vec<u64> = files.iter().map(|f| f.file).collect();
         let sources: Vec<(String, Arc<Vec<u8>>, Option<String>)> =
             files.iter().map(|f| (title_of(&f.name).to_string(), f.bytes.clone(), Some(f.range.clone()).filter(|r| !r.trim().is_empty()))).collect();
         let passwords: Vec<Option<&str>> = files.iter().map(|f| f.password.as_ref().map(|p| p.0.as_str())).collect();
