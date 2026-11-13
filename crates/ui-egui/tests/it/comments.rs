@@ -5554,7 +5554,9 @@ fn edit_copy_and_paste_are_enabled_for_a_selected_comment() {
     let before = annotations(&h).len();
     let xfdf = h.state().comment_clipboard.as_ref().map(|c| c.xfdf.clone()).expect("copied");
     h.state_mut().run_menu_command(&ctx, &craft_menu::CommandRef::new("edit.paste"));
-    h.run_steps(2);
+    h.step();
+    assert!(crate::support::asked_for_the_clipboard(&h), "Edit ▸ Paste asked the platform for the clipboard");
+    h.step();
     h.event(egui::Event::Paste(xfdf));
     h.run_steps(2);
     assert!(h.state().views[0].comments.gesture.is_some(), "Edit ▸ Paste waits for a click to place the copy");
