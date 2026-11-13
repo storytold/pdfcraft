@@ -77,8 +77,10 @@ turned, right-to-left and visual-order paths retain their selection rules. The s
 fallback grouping below remains independent of this single-style path.
 
 **Keep source fonts** retains the existing Thai family, weight and point size. For legacy
-THSarabunPSK subsets, PdfCraft reconstructs an editor-only Unicode cmap from the PDF's
-Unicode and CID-to-glyph maps. HarfRust uses the retained Thai positional glyphs, and the
+positional Thai subsets (THSarabunPSK's glyph order, which other faces share), PdfCraft
+reconstructs an editor-only Unicode cmap from the PDF's Unicode and CID-to-glyph maps. Which
+subsets these are is read from the font program and the PDF's maps, never from the font's
+name. HarfRust uses the retained Thai positional glyphs, and the
 saved text refers to the original PDF font resources. Several subsets of the same exact
 face can supply Thai and punctuation glyphs, including a Thai run whose clusters are split
 across subsets, and a subset whose glyph for a character is empty is skipped; Regular and
@@ -103,7 +105,7 @@ selects for Thai, not just a GPOS table); GSUB substitution is optional, as spec
 Verified legacy Thai PUA fonts use positional substitutions instead of requiring GPOS; their
 alternates are used only when each kept one has a mark's zero advance (or, for the two
 consonant forms, an advance) and, where the PDF's own map names its character, the character
-that alternate stands for. A THSarabunPSK program with its own Thai mark
+that alternate stands for. A source program with its own Thai mark
 positioning, such as a complete face loaded with Load font, is shaped by that layout instead,
 still in its own codes. One without it takes the legacy path only when every Thai glyph it keeps
 is where the legacy glyph order puts it, and is otherwise shaped as an ordinary source font. A

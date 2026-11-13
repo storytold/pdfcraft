@@ -158,14 +158,29 @@ fn is_thai_mark(ch: char) -> bool {
     matches!(u32::from(ch), 0x0e31 | 0x0e34..=0x0e3a | 0x0e47..=0x0e4e)
 }
 
-/// The glyph a legacy THSarabunPSK program draws Thai character `ch` with: U+0E01–U+0E3A are
-/// glyphs 214–271 and U+0E3F–U+0E5B glyphs 272–298 (the order `recovered_thai_map` assumes).
+/// The glyph a legacy positional Thai program (THSarabunPSK's glyph order, which other faces
+/// share) draws Thai character `ch` with: U+0E01–U+0E3A are glyphs 214–271 and U+0E3F–U+0E5B
+/// glyphs 272–298 (the order `recovered_thai_map` assumes).
 fn legacy_glyph(ch: u32) -> Option<u32> {
     match ch {
         0x0e01..=0x0e3a => ch.checked_sub(0xd2b),
         0x0e3f..=0x0e5b => ch.checked_sub(0xd2f),
         _ => None,
     }
+}
+
+/// Whether `unicode` (Unicode → glyph, from the PDF's own maps) maps some Thai, and draws every
+/// Thai character it maps where the legacy positional order puts it ([`legacy_glyph`]), or, for a
+/// mark or for ฐ and ญ, with one of that order's contextual alternates (glyphs 342–368). This is
+/// what admits a program without Thai mark positioning to the legacy shaper, whatever its name:
+/// a font whose Thai is laid out otherwise fails it on the first character out of place.
+fn in_legacy_thai_order(unicode: &BTreeMap<u32, u32>) -> bool {
+    let mut thai = unicode.range(0x0e01..=0x0e5b).peekable();
+    thai.peek().is_some()
+        && thai.all(|(&ch, &gid)| {
+            legacy_glyph(ch) == Some(gid)
+                || ((342..=368).contains(&gid) && (char::from_u32(ch).is_some_and(is_thai_mark) || matches!(ch, 0x0e0d | 0x0e10)))
+        })
 }
 
 /// The TrueType program (`/FontFile2`) of a CIDFont, decoded within the editor's size cap.
@@ -235,10 +250,11 @@ pub(super) fn composite_glyph_maps(
             unicode.entry(u32::from(ch)).and_modify(|old: &mut u32| *old = (*old).min(gid)).or_insert(gid);
         }
     }
-    // The verified THSarabunPSK glyph order is retained by these PDF subsets. Restore the
-    // Windows Thai PUA alternates for HarfRust's legacy shaper, only where outlines survive.
+    // A subset whose Thai is all in the legacy positional order keeps that order's alternates too
+    // (THSarabunPSK's, which other faces share). Restore the Windows Thai PUA alternates for
+    // HarfRust's legacy shaper, only where outlines survive, and only as the font's own data
+    // confirms them below; its name is never trusted for the order.
     // See https://linux.thai.net/~thep/th-otf/shaping.html (legacy PUA assignments).
-    let family = metrics.base_font.rsplit('+').next().unwrap_or(&metrics.base_font);
     let alternate_meanings = metrics.text_of(352).is_some_and(|t| t == "่") && metrics.text_of(353).is_some_and(|t| t == "้");
     // Each alternate the subset kept must advance as its form does: U+F700 and U+F70F are ฐ and
     // ญ without their descenders, the rest marks with no advance of their own. Any that doesn't
@@ -257,7 +273,7 @@ pub(super) fn composite_glyph_maps(
         let stated = code_of(gid).and_then(|code| metrics.text_of(u32::from(code))).and_then(|t| only_char(&t));
         stated.filter(|c| matches!(u32::from(*c), 0x0e01..=0x0e5b)).is_none_or(|c| PUA_BASES.get(index) == Some(&c))
     });
-    if family.starts_with("THSarabunPSK")
+    if in_legacy_thai_order(&unicode)
         && unicode.get(&0x0e01) == Some(&214)
         && unicode.get(&0x0e2d) == Some(&258)
         && (alternate_meanings || unicode.contains_key(&0xf70a))
@@ -278,12 +294,13 @@ pub(super) fn composite_glyph_maps(
     Some((unicode, codes))
 }
 
-/// Shape Thai in a THSarabunPSK source font's own outlines and return codes for that same font.
-/// No font program, family, weight or size is replaced. A program with OpenType Thai mark
-/// positioning (a complete face loaded with Load font, say) is shaped by that layout; one
-/// without it must be a verified legacy positional program, shaped with its nominal glyphs and
-/// Windows PUA alternates. A subset missing a glyph the text needs is refused, so the caller can
-/// try another subset of the same face or ask for its full font.
+/// Shape Thai in a source font's own outlines and return codes for that same font. No font
+/// program, family, weight or size is replaced. A program with OpenType Thai mark positioning (a
+/// complete face loaded with Load font, say) is shaped by that layout; one without it must be a
+/// verified legacy positional program (THSarabunPSK's glyph order, which other faces share),
+/// shaped with its nominal glyphs and Windows PUA alternates. Which one a font is comes from its
+/// program and the PDF's maps, never its name. A subset missing a glyph the text needs is
+/// refused, so the caller can try another subset of the same face or ask for its full font.
 pub struct LegacyThaiFont {
     bytes: Vec<u8>,
     codes: BTreeMap<u32, u16>,
@@ -293,19 +310,16 @@ pub struct LegacyThaiFont {
 }
 
 impl LegacyThaiFont {
-    /// Read and verify the source font once for all wrapping/preview measurements. `None` for
-    /// another family, a font with no Thai, and a program without Thai mark positioning whose
-    /// Thai glyphs are not in the legacy order: the nominal and alternate marks this shaper
-    /// assumes can't be trusted there, so it is shaped as an ordinary source font.
+    /// Read and verify the source font once for all wrapping/preview measurements. `None` for a
+    /// font with no Thai, and for a program without Thai mark positioning whose Thai glyphs are
+    /// not in the legacy order: the nominal and alternate marks this shaper assumes can't be
+    /// trusted there, so it is shaped as an ordinary source font.
     ///
     /// Its streams, its metrics' too, are decoded against `budget`, which the caller shares
     /// between every font it reads: what they keep is the programs decoded and the editor cmaps
     /// added to them. Metrics read past it adapt nothing: the font is refused.
     pub fn from_pdf(doc: &Document, font: &Dict, space: f64, budget: &mut DecodeBudget) -> Result<Option<Self>, String> {
         let m = Metrics::from_dict_within(doc, font, budget);
-        if !m.base_font.rsplit('+').next().unwrap_or(&m.base_font).starts_with("THSarabunPSK") {
-            return Ok(None);
-        }
         if m.past_allowance {
             return Err("the source Thai font's metrics are past the edit's allowance".into());
         }
@@ -320,16 +334,7 @@ impl LegacyThaiFont {
         // ([`require_pua`]), the subset lacks. Without its own positioning, every Thai glyph it
         // does keep must be where the legacy order puts that character, or one of the PUA
         // alternates for a mark (or for ฐ and ญ without their descenders).
-        let mut thai = unicode.range(0x0e01..=0x0e5b).peekable();
-        if thai.peek().is_none() {
-            return Ok(None);
-        }
-        let usable = positioned
-            || thai.all(|(&ch, &gid)| {
-                legacy_glyph(ch) == Some(gid)
-                    || ((342..=368).contains(&gid) && (char::from_u32(ch).is_some_and(is_thai_mark) || matches!(ch, 0x0e0d | 0x0e10)))
-            });
-        if !usable {
+        if unicode.range(0x0e01..=0x0e5b).next().is_none() || !(positioned || in_legacy_thai_order(&unicode)) {
             return Ok(None);
         }
         if !positioned {

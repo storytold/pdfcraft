@@ -116,7 +116,7 @@ struct LegacyFace {
     space: f64,
 }
 
-/// What one edit may decode of its THSarabunPSK subsets' font data: their programs (each at most
+/// What one edit may decode of its Thai source subsets' font data: their programs (each at most
 /// 16 MiB), which it keeps, and the streams of the metrics read to measure them and to adapt their
 /// programs' cmaps: their CMaps and glyph maps, and a subset's program again, for which of its
 /// glyphs have outlines. A page may name many of them. The metrics read to find the subsets among
@@ -895,9 +895,9 @@ fn legacy_thai_font(
     cache: &mut HashMap<String, LegacyFace>,
     budget: &mut pdfcraft_cos::DecodeBudget,
 ) -> Result<Option<ThaiSpan>, EditError> {
-    if !source.base_font.rsplit('+').next().unwrap_or(&source.base_font).starts_with("THSarabunPSK")
-        || !span.chars().any(|c| matches!(u32::from(c), 0x0e00..=0x0e7f))
-    {
+    // Whether a subset can keep the text is read from its program and the PDF's maps
+    // (`LegacyThaiFont::from_pdf`), never from the font's name.
+    if !span.chars().any(|c| matches!(u32::from(c), 0x0e00..=0x0e7f)) {
         return Ok(None);
     }
     let family = pdfcraft_fonts::embedding::face_key(&source.base_font);
@@ -969,8 +969,8 @@ fn legacy_thai_font(
 }
 
 /// Whether a subset of the face `family` (a [`face_key`](pdfcraft_fonts::embedding::face_key))
-/// in `cache` can be shaped in place: a THSarabunPSK program with its own Thai mark positioning,
-/// or a verified legacy positional one.
+/// in `cache` can be shaped in place: a program with its own Thai mark positioning, or a verified
+/// legacy positional one.
 fn has_thai_source_face(cache: &HashMap<String, LegacyFace>, family: &str) -> bool {
     cache.values().any(|face| face.glyphs.is_some() && pdfcraft_fonts::embedding::face_key(&face.metrics.base_font) == family)
 }
@@ -1255,8 +1255,7 @@ fn shape_source(doc: &Document, fonts: &Dict, thai: &ThaiShaping, name: &str, te
     let family = Metrics::from_dict(doc, &source).base_font;
     // In the face's existing codes first; what they can't show, a complete program of the face
     // may (`legacy_thai_font` already gave the span to one that can).
-    let in_place = (family.rsplit('+').next().unwrap_or(&family).starts_with("THSarabunPSK")
-        && text.chars().any(|c| matches!(u32::from(c), 0x0e00..=0x0e7f))
+    let in_place = (text.chars().any(|c| matches!(u32::from(c), 0x0e00..=0x0e7f))
         && has_thai_source_face(&thai.legacy, &pdfcraft_fonts::embedding::face_key(&family)))
     .then(|| shape_existing_thai(&thai.legacy, name, text));
     let in_place = match in_place {
