@@ -509,6 +509,25 @@ fn autotag_apply_writes_reviewable_tags_and_survives_save_reopen() {
     assert!(pages.iter().all(|page| page.dict.contains(b"StructParents")));
 }
 
+/// #7062: Apply tags short text larger than the body as headings, ranked across the pages, and
+/// the body text as paragraphs.
+#[test]
+fn autotag_apply_tags_headings_by_size_across_pages() {
+    let dir = workdir("autotag-headings");
+    let body = "BT /FR 11 Tf 72 670 Td (Body text that runs long enough to be the most common style) Tj ET";
+    let page1 = format!("BT /FB 18 Tf 72 700 Td (Introduction) Tj ET {body} BT /FB 14 Tf 72 640 Td (Background) Tj ET");
+    let page2 = format!("BT /FB 18 Tf 72 700 Td (Results) Tj ET {body}");
+    std::fs::write(dir.join("headed.pdf"), bold_and_regular_pdf(&page1, &page2)).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "headed.pdf" }))["doc"].as_u64().unwrap();
+    let applied = ok(&mut a, "accessibility_autotag_apply", json!({ "doc": doc }));
+    let types: Vec<&str> = applied["tags"].as_array().unwrap().iter().map(|t| t["type"].as_str().unwrap()).collect();
+    assert_eq!(types, ["Document", "H1", "P", "H2", "H1", "P"]);
+    let check = ok(&mut a, "accessibility_check", json!({ "doc": doc, "rules": ["heading-nesting"] }));
+    let nesting = check["results"].as_array().unwrap().iter().find(|r| r["rule"] == "heading-nesting").unwrap();
+    assert_eq!(nesting["status"], "passed", "{check}");
+}
+
 #[test]
 fn autotag_form_fields_writes_reviewable_widget_tags() {
     let dir = workdir("autotag-form-fields");
@@ -531,6 +550,12 @@ fn styled_headings_pdf() -> Vec<u8> {
     let page1 = "BT /FB 18 Tf 72 700 Td (Introduction) Tj ET BT /FR 11 Tf 72 670 Td (Some text) Tj ET \
                  BT /FB 14 Tf 72 640 Td (Background) Tj ET";
     let page2 = "BT /FB 18 Tf 72 700 Td (Results) Tj ET BT /FR 11 Tf 72 670 Td (More text) Tj ET";
+    bold_and_regular_pdf(page1, page2)
+}
+
+/// A two-page PDF whose pages draw `page1` and `page2` with `/FB` (Helvetica-Bold) and `/FR`
+/// (Helvetica).
+fn bold_and_regular_pdf(page1: &str, page2: &str) -> Vec<u8> {
     let objs: Vec<String> = vec![
         "<< /Type /Catalog /Pages 2 0 R >>".into(),
         "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 612 792] /Resources << /Font << /FB 7 0 R /FR 8 0 R >> >> >>".into(),
@@ -12483,6 +12508,81 @@ fn doc_print_as_image() {
         Err(ToolError::InvalidArgs(m)) => assert!(m.contains("dpi"), "{m}"),
         other => panic!("{other:?}"),
     }
+}
+
+/// #6269: color_management app prints converted pictures and says how; the profile must be an
+/// RGB or grey one, and the colour arguments need app.
+#[test]
+fn doc_print_with_app_managed_colour() {
+    let dir = workdir("print-colour");
+    std::fs::write(dir.join("wide.icc"), craft_cms::Builtin::AdobeRgbCompat.profile().to_bytes().as_slice()).unwrap();
+    std::fs::write(dir.join("press.icc"), craft_cms::Builtin::CoatedCmyk.profile().to_bytes().as_slice()).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let args = |extra: Value| {
+        let mut v = json!({ "doc": doc, "pages": "1", "dpi": 72, "path": "managed.pdf" });
+        v.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        v
+    };
+    let r = ok(&mut a, "doc_print", args(json!({ "color_management": "app", "color_profile": "wide.icc", "rendering_intent": "perceptual" })));
+    assert_eq!(r["color_management"]["rendering_intent"], "perceptual", "{r}");
+    assert_eq!(r["color_management"]["black_point_compensation"], true, "{r}");
+    let out = pdfcraft_cos::Document::open(std::sync::Arc::new(std::fs::read(dir.join("managed.pdf")).unwrap())).unwrap();
+    let pictures =
+        out.scan_objects().filter(|(_, o)| matches!(&**o, pdfcraft_cos::Object::Stream(st) if st.dict.name(b"Subtype") == Some(b"Image"))).count();
+    assert_eq!(pictures, 1, "app-managed colour prints the page as a picture");
+    assert!(ok(&mut a, "doc_print", args(json!({})))["color_management"].is_null(), "the printer manages colour by default");
+    for (extra, says) in [
+        (json!({ "color_management": "app", "color_profile": "press.icc" }), "RGB or grey"),
+        (json!({ "color_management": "app" }), "color_profile"),
+        (json!({ "color_management": "app", "color_profile": "missing.icc" }), "print_color_profiles"),
+        (json!({ "color_profile": "wide.icc" }), "color_management app"),
+        (json!({ "color_management": "app", "color_profile": "wide.icc", "rendering_intent": "vivid" }), "rendering_intent"),
+        (json!({ "color_management": "app", "color_profile": "wide.icc", "as_image": false }), "as_image"),
+        (json!({ "color_management": "driver" }), "color_management"),
+    ] {
+        match a.call("doc_print", &args(extra.clone())) {
+            Err(ToolError::InvalidArgs(m)) => assert!(m.contains(says), "{extra}: {m}"),
+            other => panic!("{extra}: {other:?}"),
+        }
+    }
+    let listed = ok(&mut a, "print_color_profiles", json!({}));
+    assert_eq!(listed["count"].as_u64(), listed["profiles"].as_array().map(|p| p.len() as u64), "{listed}");
+    // Under a root the profiles listed are the root's RGB and grey ones.
+    assert_eq!(listed["count"], 1, "{listed}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Under `--root`, a profile link inside the root that leads out of it is neither listed nor
+/// found by name.
+#[test]
+fn colour_profile_links_out_of_the_root_are_not_read() {
+    let dir = workdir("print-colour-link");
+    let outside = dir.with_extension("outside");
+    let _ = std::fs::remove_dir_all(&outside);
+    std::fs::create_dir_all(&outside).unwrap();
+    let profile = craft_cms::Builtin::AdobeRgbCompat.profile().to_bytes();
+    std::fs::write(dir.join("wide.icc"), profile.as_slice()).unwrap();
+    std::fs::write(outside.join("other.icc"), profile.as_slice()).unwrap();
+    #[cfg(unix)]
+    let linked = std::os::unix::fs::symlink(outside.join("other.icc"), dir.join("leak.icc")).is_ok();
+    #[cfg(windows)]
+    let linked = std::os::windows::fs::symlink_file(outside.join("other.icc"), dir.join("leak.icc")).is_ok();
+    #[cfg(not(any(unix, windows)))]
+    let linked = false;
+    // Windows needs Developer Mode or elevation to make links.
+    if !linked {
+        eprintln!("skipped: symbolic links can't be made here");
+        return;
+    }
+    let mut a = auto(&dir);
+    let listed = ok(&mut a, "print_color_profiles", json!({}));
+    assert_eq!(listed["count"], 1, "only the profile inside the root: {listed}");
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let print = json!({ "doc": doc, "pages": "1", "dpi": 72, "path": "m.pdf", "color_management": "app", "color_profile": "leak" });
+    assert!(a.call("doc_print", &print).is_err(), "a link out of the root isn't found by name");
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&outside);
 }
 
 /// Without a root, `write_output` still writes through a staging file (#2166): the folder is
