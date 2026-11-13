@@ -182,8 +182,11 @@ impl Realm {
                 }
             })
             .collect();
+        // A link action that fails commits nothing (#2081), timers included: the realm's are saved
+        // once the document scripts ran, and put back if the link's own script fails.
+        let link = job.event.kind == "Link";
         let Some(ctx) = self.context.as_mut() else { return failed("script realm unavailable".into()) };
-        if initialize {
+        let (mut out, saved) = if initialize {
             let mut initial = crate::run::run_in_context(
                 ctx,
                 "",
@@ -211,6 +214,7 @@ impl Realm {
                     (h.fields.clone(), h.reset_calls, h.calculation_evaluations)
                 })
                 .unwrap_or((job.fields, 0, 0));
+            let saved = link.then(|| crate::timers::save(ctx)).flatten();
             let mut out = crate::run::run_in_context(
                 ctx,
                 &job.script,
@@ -249,9 +253,10 @@ impl Realm {
             if out.error.is_none() {
                 out.error = initial.error;
             }
-            out
+            (out, saved)
         } else {
-            crate::run::run_in_context(
+            let saved = link.then(|| crate::timers::save(ctx)).flatten();
+            let out = crate::run::run_in_context(
                 ctx,
                 &job.script,
                 &job.event,
@@ -268,8 +273,16 @@ impl Realm {
                     call: None,
                 },
                 Limits::default(),
-            )
+            );
+            (out, saved)
+        };
+        if out.error.is_some()
+            && let Some(saved) = saved
+        {
+            crate::timers::restore(ctx, saved);
+            out.timers = crate::timers::report(ctx);
         }
+        out
     }
 }
 
@@ -310,25 +323,43 @@ impl Realm {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), not(test)))]
 static LIVE_WORKERS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 #[cfg(not(target_arch = "wasm32"))]
 const MAX_DOCUMENT_WORKERS: usize = if usize::BITS == 32 { 4 } else { 16 };
+/// The count of live document workers that the cap applies to: one per process.
+#[cfg(all(not(target_arch = "wasm32"), not(test)))]
+fn live_workers() -> &'static std::sync::atomic::AtomicUsize {
+    &LIVE_WORKERS
+}
+/// Unit tests run in parallel threads of one process, so one process-wide count lets
+/// unrelated tests exhaust the cap together. Each test thread counts its own workers
+/// instead, against the same cap; the leak is one counter per test thread.
+#[cfg(all(not(target_arch = "wasm32"), test))]
+fn live_workers() -> &'static std::sync::atomic::AtomicUsize {
+    thread_local! {
+        static LIVE_WORKERS: &'static std::sync::atomic::AtomicUsize =
+            Box::leak(Box::new(std::sync::atomic::AtomicUsize::new(0)));
+    }
+    LIVE_WORKERS.with(|count| *count)
+}
 /// A reservation is released only when its worker exits, including detached timed-out workers.
+/// It releases the count it was taken from, whichever thread drops it.
 #[cfg(not(target_arch = "wasm32"))]
-struct WorkerPermit;
+struct WorkerPermit(&'static std::sync::atomic::AtomicUsize);
 #[cfg(not(target_arch = "wasm32"))]
 impl WorkerPermit {
     /// Reserve bounded address space without evicting another document's retained state.
     fn acquire() -> Result<Self, String> {
         use std::sync::atomic::Ordering::SeqCst;
-        let mut live = LIVE_WORKERS.load(SeqCst);
+        let count = live_workers();
+        let mut live = count.load(SeqCst);
         loop {
             if live >= MAX_DOCUMENT_WORKERS {
                 return Err("document script worker limit reached; close a scripted document and retry".into());
             }
-            match LIVE_WORKERS.compare_exchange(live, live.saturating_add(1), SeqCst, SeqCst) {
-                Ok(_) => return Ok(Self),
+            match count.compare_exchange(live, live.saturating_add(1), SeqCst, SeqCst) {
+                Ok(_) => return Ok(Self(count)),
                 Err(current) => live = current,
             }
         }
@@ -337,7 +368,7 @@ impl WorkerPermit {
 #[cfg(not(target_arch = "wasm32"))]
 impl Drop for WorkerPermit {
     fn drop(&mut self) {
-        LIVE_WORKERS.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+        self.0.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
     }
 }
 
@@ -1027,7 +1058,7 @@ mod tests {
         assert_eq!(session.run(capture, &[]).result.as_deref(), Some("retained"));
     }
 
-    /// Exercise the actual process-wide cap in isolation, then recover a slot without resetting other documents.
+    /// Exercise the cap in isolation, then recover a slot without resetting other documents.
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn document_worker_capacity_is_bounded_and_reusable() {
@@ -1051,7 +1082,7 @@ mod tests {
         assert!(extra.start(job("1")).unwrap_err().contains("worker limit"));
         drop(workers.pop());
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
-        while LIVE_WORKERS.load(std::sync::atomic::Ordering::SeqCst) == MAX_DOCUMENT_WORKERS {
+        while live_workers().load(std::sync::atomic::Ordering::SeqCst) == MAX_DOCUMENT_WORKERS {
             assert!(std::time::Instant::now() < deadline);
             std::thread::sleep(std::time::Duration::from_millis(5));
         }

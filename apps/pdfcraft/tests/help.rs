@@ -11,7 +11,12 @@ fn binary() -> std::ffi::OsString {
 
 /// Run the app with `args`, failing if it is still running after 60 s (it opened its window).
 fn run(args: &[&str], stdout: Stdio) -> Output {
-    let mut child = Command::new(binary()).args(args).stdin(Stdio::null()).stdout(stdout).stderr(Stdio::piped()).spawn().unwrap();
+    run_with(Command::new(binary()).args(args), stdout)
+}
+
+fn run_with(command: &mut Command, stdout: Stdio) -> Output {
+    let args: Vec<_> = command.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
+    let mut child = command.stdin(Stdio::null()).stdout(stdout).stderr(Stdio::piped()).spawn().unwrap();
     let deadline = Instant::now() + Duration::from_secs(60);
     while child.try_wait().unwrap().is_none() {
         if Instant::now() > deadline {
@@ -41,6 +46,18 @@ fn help_prints_usage_and_exits() {
 #[test]
 fn version_prints_the_version_and_exits() {
     let out = run(&["--version"], Stdio::piped());
+    assert!(out.status.success(), "{:?} {}", out.status, String::from_utf8_lossy(&out.stderr));
+    assert!(String::from_utf8_lossy(&out.stdout).starts_with("pdfcraft "), "{}", String::from_utf8_lossy(&out.stdout));
+}
+
+/// An `OPENSSL_ia32cap` that asks for a CPU feature the processor lacks (CPUID leaf 1, EDX bit
+/// 10, reserved on every x86) doesn't stop the app (#2916): aws-lc aborted before `main`, with no
+/// window and nothing in the log.
+// macOS intentionally does not relaunch: Finder delivers files to the original process.
+#[cfg(not(target_os = "macos"))]
+#[test]
+fn a_cpu_override_naming_a_missing_feature_does_not_stop_the_app() {
+    let out = run_with(Command::new(binary()).arg("--version").env("OPENSSL_ia32cap", "0x400"), Stdio::piped());
     assert!(out.status.success(), "{:?} {}", out.status, String::from_utf8_lossy(&out.stderr));
     assert!(String::from_utf8_lossy(&out.stdout).starts_with("pdfcraft "), "{}", String::from_utf8_lossy(&out.stdout));
 }
