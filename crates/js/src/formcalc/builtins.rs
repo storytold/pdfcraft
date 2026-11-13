@@ -265,25 +265,20 @@ impl Interp<'_> {
         let text = self.to_str(v);
         self.charge(((pic.len().saturating_add(text.len())) / 64) as u64)?;
         let clauses = parse_picture_clauses(pic);
-        let is_empty_or_null = self.is_null(v) || matches!(v, Val::Str(s) if s.is_empty());
-        if is_empty_or_null && let Some(null_clause) = clauses.iter().find(|c| c.cat == PicCat::Null) {
-            return Ok(Val::Str(render_literal_clause(&null_clause.pattern)));
-        }
-        let is_zero_num = !is_empty_or_null && (matches!(v, Val::Num(_)) || is_numeric_text(&text)) && self.to_num(v) == 0.0;
-        if is_zero_num && let Some(zero_clause) = clauses.iter().find(|c| c.cat == PicCat::Zero) {
-            return Ok(Val::Str(format_zero_pic(&zero_clause.pattern)));
-        }
-        let data_clauses: Vec<_> = clauses.iter().filter(|c| !matches!(c.cat, PicCat::Null | PicCat::Zero)).collect();
-        for c in &data_clauses {
+        let is_null = self.is_null(v);
+        let is_num = !is_null && (matches!(v, Val::Num(_)) || is_numeric_text(&text));
+        let is_zero = is_num && self.to_num(v) == 0.0;
+        for c in &clauses {
             self.step()?;
-            if let Some(out) = self.try_format_clause(c.cat, &c.pattern, v, &text) {
+            let matched = match c.cat {
+                PicCat::Null => is_null.then(|| render_literal_clause(&c.pattern)),
+                PicCat::Zero => is_zero.then(|| format_zero_pic(&c.pattern)),
+                PicCat::Num => is_num.then(|| format_num_pic(self.to_num(v), &c.pattern)),
+                other => (!is_null).then(|| self.try_format_clause(other, &c.pattern, v, &text)).flatten(),
+            };
+            if let Some(out) = matched {
                 return Ok(Val::Str(out));
             }
-        }
-        if let [single] = data_clauses.as_slice()
-            && single.cat == PicCat::Num
-        {
-            return Ok(Val::Str(format_num_pic(self.to_num(v), &single.pattern)));
         }
         Ok(Val::Str(text))
     }
@@ -454,7 +449,7 @@ impl Interp<'_> {
                     self.charge(((s.len().saturating_add(pic.len())) / 64) as u64)?;
                     parse_time_ms(&s, &pic).or_else(|| parse_iso_time(&s))
                 };
-                Val::Num(parsed.map_or(0.0, f64::from))
+                Val::Num(parsed.map_or(0.0, |ms| f64::from(ms) + 1.0))
             }
             _ => return Ok(None),
         };
@@ -611,22 +606,29 @@ mod tests {
     #[test]
     fn time_picture_clauses_format_and_parse_all_clock_symbols() {
         assert_cases(&[
-            // 24-hour H / HH and 1..=24 k / kk (where 24 = midnight 00:00)
+            // 24-hour H / HH (0..=23) and K / KK (1..=24, where 24 = midnight 00:00)
             (r#"Format("time{HH:MM:SS}", 0)"#, "00:00:00"),
             (r#"Format("time{H:M:S}", 3661000)"#, "1:1:1"),
-            (r#"Format("time{kk:MM:SS}", 0)"#, "24:00:00"),
-            (r#"Format("time{k:MM}", 3600000)"#, "1:00"),
-            (r#"Parse("time{kk:MM:SS}", "24:15:30")"#, "00:15:30"),
-            (r#"Parse("time{kk:MM:SS}", "00:15:30") == null"#, "1"),
-            (r#"Parse("time{kk:MM:SS}", "25:00:00") == null"#, "1"),
+            (r#"Format("time{KK:MM:SS}", 0)"#, "24:00:00"),
+            (r#"Format("time{KK:MM}", "00:05:00")"#, "24:05"),
+            (r#"Format("time{K:MM}", 3600000)"#, "1:00"),
+            (r#"Format("time{K:MM}", "01:05:00")"#, "1:05"),
+            (r#"Parse("time{KK:MM:SS}", "24:15:30")"#, "00:15:30"),
+            (r#"Parse("time{KK:MM}", "24:05")"#, "00:05:00"),
+            (r#"Parse("time{KK:MM:SS}", "00:15:30") == null"#, "1"),
+            (r#"Parse("time{KK:MM:SS}", "25:00:00") == null"#, "1"),
             (r#"Parse("time{HH:MM:SS}", "24:00:00") == null"#, "1"),
-            // 12-hour h / hh (1..=12) vs K / KK (0..=11) with meridiem A and AA
-            (r#"Format("time{h:MM A}", 0)"#, "12:00 A"),
+            // 12-hour h / hh (1..=12) vs k / kk (0..=11) with meridiem A and AA
+            (r#"Format("time{h:MM A}", 0)"#, "12:00 AM"),
+            (r#"Format("time{h:MM A}", "00:05:00")"#, "12:05 AM"),
+            (r#"Format("time{h:MM A}", "13:05:00")"#, "1:05 PM"),
             (r#"Format("time{hh:MM AA}", 0)"#, "12:00 AM"),
-            (r#"Format("time{K:MM AA}", 0)"#, "0:00 AM"),
-            (r#"Format("time{KK:MM AA}", 43200000)"#, "00:00 PM"),
+            (r#"Format("time{k:MM AA}", 0)"#, "0:00 AM"),
+            (r#"Format("time{kk:MM A}", "00:05:00")"#, "00:05 AM"),
+            (r#"Format("time{kk:MM A}", "12:05:00")"#, "00:05 PM"),
+            (r#"Format("time{kk:MM AA}", 43200000)"#, "00:00 PM"),
             (r#"Format("time{h:MM:SS AA}", 43200000)"#, "12:00:00 PM"),
-            (r#"Format("time{h:MM:SS A}", 52205000)"#, "2:30:05 P"),
+            (r#"Format("time{h:MM:SS A}", 52205000)"#, "2:30:05 PM"),
             (r#"Format("time{hh:MM:SS AA}", 52205000)"#, "02:30:05 PM"),
             (r#"Parse("time{h:MM AA}", "12:30 AM")"#, "00:30:00"),
             (r#"Parse("time{h:MM AA}", "12:30 PM")"#, "12:30:00"),
@@ -634,10 +636,11 @@ mod tests {
             (r#"Parse("time{h:MM AA}", "13:30 PM") == null"#, "1"),
             (r#"Parse("time{h:MM A}", "2:30 P")"#, "14:30:00"),
             (r#"Parse("time{h:MM A}", "2:30 pm")"#, "14:30:00"),
-            (r#"Parse("time{K:MM AA}", "0:45 AM")"#, "00:45:00"),
-            (r#"Parse("time{K:MM AA}", "0:45 PM")"#, "12:45:00"),
-            (r#"Parse("time{K:MM AA}", "11:59 PM")"#, "23:59:00"),
-            (r#"Parse("time{K:MM AA}", "12:00 PM") == null"#, "1"),
+            (r#"Parse("time{kk:MM A}", "00:05 PM")"#, "12:05:00"),
+            (r#"Parse("time{k:MM AA}", "0:45 AM")"#, "00:45:00"),
+            (r#"Parse("time{k:MM AA}", "0:45 PM")"#, "12:45:00"),
+            (r#"Parse("time{k:MM AA}", "11:59 PM")"#, "23:59:00"),
+            (r#"Parse("time{k:MM AA}", "12:00 PM") == null"#, "1"),
             // Sub-second F / FF / FFF tokens and quoted literals
             (r#"Format("time{HH:MM:SS.F}", 52205250)"#, "14:30:05.2"),
             (r#"Format("time{HH:MM:SS.FF}", 52205250)"#, "14:30:05.25"),
@@ -663,22 +666,27 @@ mod tests {
             ("LocalTimeFmt(4)", "h:MM:SS A Z"),
             (r#"Num2Time(3661000)"#, "01:01:01"),
             (r#"Num2Time(52205000, "time{h:MM:SS AA}")"#, "2:30:05 PM"),
-            (r#"Num2GMTime(52205000, "HH:MM:SS Z")"#, "14:30:05 Z"),
+            (r#"Num2GMTime(65593001, "HH:MM:SS Z")"#, "18:13:13 GMT"),
+            (r#"Num2GMTime(52205000, "HH:MM:SS z")"#, "14:30:05 Z"),
             (r#"Num2Time(-1) == null"#, "1"),
             (r#"Num2GMTime(-100) == null"#, "1"),
-            (r#"Time2Num("01:00:00")"#, "3600000"),
-            (r#"Time2Num("2:30:05 PM", "h:MM:SS A")"#, "52205000"),
-            (r#"Time2Num("14:30:00-05:00", "HH:MM:SS Z")"#, "70200000"),
-            (r#"Time2Num("14:30:00+0200", "HH:MM:SS Z")"#, "45000000"),
-            (r#"Time2Num("14:30:00-0500", "HH:MM:SS Z")"#, "70200000"),
-            (r#"Time2Num("14:30:00 GMT-05:00", "HH:MM:SS z")"#, "70200000"),
-            (r#"Time2Num("14:30:00 GMT+02:00", "HH:MM:SS z")"#, "45000000"),
-            (r#"Parse("time{HH:MM:SS Z}", "14:30:00-05:00")"#, "19:30:00"),
-            (r#"Parse("time{HH:MM:SS z}", "14:30:00 GMT+02:00")"#, "12:30:00"),
-            (r#"Format("time{HH:MM:SS z}", 52205000)"#, "14:30:05 GMT"),
-            (r#"Parse("time{HH:MM:SS z}", "14:30:05 GMT")"#, "14:30:05"),
-            (r#"Parse("time{HH:MM:SS Z}", "14:30:00Z")"#, "14:30:00"),
+            (r#"Time2Num("00:00:00 GMT", "HH:MM:SS Z")"#, "1"),
+            (r#"IsoTime2Num("00:00:00Z")"#, "1"),
+            (r#"Time2Num("01:00:00")"#, "3600001"),
+            (r#"Time2Num("2:30:05 PM", "h:MM:SS A")"#, "52205001"),
+            (r#"Time2Num("14:30:00-05:00", "HH:MM:SS z")"#, "70200001"),
+            (r#"Time2Num("14:30:00+0200", "HH:MM:SS z")"#, "45000001"),
+            (r#"Time2Num("14:30:00-0500", "HH:MM:SS z")"#, "70200001"),
+            (r#"Time2Num("14:30:00 GMT-05:00", "HH:MM:SS Z")"#, "70200001"),
+            (r#"Time2Num("14:30:00 GMT+02:00", "HH:MM:SS Z")"#, "45000001"),
+            (r#"Parse("time{HH:MM:SS z}", "14:30:00-05:00")"#, "19:30:00"),
+            (r#"Parse("time{HH:MM:SS Z}", "14:30:00 GMT+02:00")"#, "12:30:00"),
+            (r#"Format("time{HH:MM:SS Z}", 52205000)"#, "14:30:05 GMT"),
+            (r#"Format("time{HH:MM:SS z}", "18:13:13")"#, "18:13:13 Z"),
+            (r#"Parse("time{HH:MM:SS Z}", "14:30:05 GMT")"#, "14:30:05"),
+            (r#"Parse("time{HH:MM:SS z}", "14:30:00Z")"#, "14:30:00"),
             (r#"Time2Num("not-a-time", "HH:MM:SS")"#, "0"),
+            (r#"Time2Num("not-a-time")"#, "0"),
         ]);
     }
 
@@ -746,15 +754,20 @@ mod tests {
     fn compound_alternatives_zero_null_and_datetime_clauses_work() {
         assert_cases(&[
             (r#"Format("num{$z,zz9.99}|zero{'Free'}|null{'N/A'}", 25.5)"#, "$25.50"),
-            (r#"Format("num{$z,zz9.99}|zero{'Free'}|null{'N/A'}", 0)"#, "Free"),
+            // Left-to-right clause evaluation (XFA 3.3 Examples 26.36 & 26.37):
+            (r#"Format("num{$z,zz9.99}|zero{'Free'}|null{'N/A'}", 0)"#, "$0.00"),
+            (r#"Format("num{z,zz9.9} | zero{9}", 0)"#, "0.0"),
+            (r#"Format("zero{'Free'}|num{$z,zz9.99}|null{'N/A'}", 0)"#, "Free"),
             (r#"Format("num{$z,zz9.99}|zero{'Free'}|null{'N/A'}", null)"#, "N/A"),
-            (r#"Format("num{$z,zz9.99}|zero{'Free'}|null{'N/A'}", "")"#, "N/A"),
+            // Empty string is not null, and a trailing num clause does not coerce "" to 0:
+            (r#"Format("null{'n/a'} | zero{9} | num{z,zz9.9}", "")"#, ""),
+            (r#"Format("null{'n/a'} | zero{9} | num{z,zz9.9}", null)"#, "n/a"),
             (r#"Format("num{$z,zz9.99}|text{AAA-999}", "ABC123")"#, "ABC-123"),
             (r#"Format("num{$z,zz9.99}|date{MM/DD/YYYY}", "2024-02-29")"#, "02/29/2024"),
             (r#"Parse("num{$z,zz9.99}|zero{'Free'}|null{'N/A'}", "$25.50")"#, "25.5"),
             (r#"Parse("num{$z,zz9.99}|zero{'Free'}|null{'N/A'}", "Free")"#, "0"),
             (r#"Parse("num{$z,zz9.99}|zero{'Free'}|null{'N/A'}", "N/A") == null"#, "1"),
-            (r#"Format("num{$z,zz9.99}|zero{9.99}|null{}", 0)"#, "0.00"),
+            (r#"Format("zero{9.99}|num{$z,zz9.99}|null{}", 0)"#, "0.00"),
             (r#"Format("num{$z,zz9.99}|zero{9.99}|null{}", null)"#, ""),
             (r#"Parse("num{$z,zz9.99}|zero{9.99}|null{}", "0.00")"#, "0"),
             (r#"Parse("num{$z,zz9.99}|zero{9.99}|null{}", "") == null"#, "1"),
@@ -765,8 +778,8 @@ mod tests {
             (r#"Parse("datetime{MMM D, YYYY h:MM AA}", "Feb 29, 2024 2:30 PM")"#, "2024-02-29T14:30:00"),
             (r#"Format("datetime{HH:MM MM/DD/YYYY}", "2024-02-29T14:30:00")"#, "14:30 02/29/2024"),
             (r#"Parse("datetime{HH:MM MM/DD/YYYY}", "14:30 02/29/2024")"#, "2024-02-29T14:30:00"),
-            (r#"Parse("datetime{YYYY-MM-DD'T'HH:MM:SS Z}", "2024-02-29T14:30:00Z")"#, "2024-02-29T14:30:00"),
-            (r#"Parse("datetime{YYYY-MM-DD'T'HH:MM:SS Z}", "2024-02-29T21:30:00-05:00")"#, "2024-03-01T02:30:00"),
+            (r#"Parse("datetime{YYYY-MM-DD'T'HH:MM:SS z}", "2024-02-29T14:30:00Z")"#, "2024-02-29T14:30:00"),
+            (r#"Parse("datetime{YYYY-MM-DD'T'HH:MM:SS z}", "2024-02-29T21:30:00-05:00")"#, "2024-03-01T02:30:00"),
             (r#"Parse("date{YYYY-MM-DD}|date{MM/DD/YYYY}|time{h:MM AA}", "02/29/2024")"#, "2024-02-29"),
             (r#"Parse("date{YYYY-MM-DD}|date{MM/DD/YYYY}|time{h:MM AA}", "2:30 PM")"#, "14:30:00"),
             (r#"Parse(DateFmt(4), Num2Date(45350, DateFmt(4)))"#, "2024-02-29"),
@@ -788,6 +801,8 @@ mod tests {
             (r#"Len(Num2Time(1e30, "HH:MM:SS"))"#, "8"),
         ]);
         assert!(eval_fc(r#"Format("num{$z,zz9.99}", 1e20)"#).starts_with('$'));
+        // Linear-time classification on repeated 'S' before trailing '9' (no O(N^2) blowup).
+        assert_eq!(eval_fc(r#"Format(Concat(Replace(Space(50000), " ", "S"), "9"), 1)"#), "1");
 
         let root = XfaNode::default();
         let out =

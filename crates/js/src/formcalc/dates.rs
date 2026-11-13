@@ -82,22 +82,14 @@ pub(crate) fn days_in(y: i64, m: u32) -> u32 {
 
 /// Ordinal day of year (`1..=366`) for civil date `(y, m, d)`.
 fn day_of_year(y: i64, m: u32, d: u32) -> u32 {
-    (1..m.min(13)).map(|mm| days_in(y, mm)).sum::<u32>() + d
+    let cy = 2000 + y.rem_euclid(400) as i32;
+    chrono::NaiveDate::from_ymd_opt(cy, m, d).map_or(0, |dt| chrono::Datelike::ordinal(&dt))
 }
 
 /// Convert ordinal day of year (`1..=366`) in year `y` to `(month, day)`.
-fn month_day_from_doy(y: i64, mut doy: u32) -> Option<(u32, u32)> {
-    if doy == 0 {
-        return None;
-    }
-    for m in 1..=12 {
-        let dim = days_in(y, m);
-        if doy <= dim {
-            return Some((m, doy));
-        }
-        doy -= dim;
-    }
-    None
+fn month_day_from_doy(y: i64, doy: u32) -> Option<(u32, u32)> {
+    let cy = 2000 + y.rem_euclid(400) as i32;
+    chrono::NaiveDate::from_yo_opt(cy, doy).map(|dt| (chrono::Datelike::month(&dt), chrono::Datelike::day(&dt)))
 }
 
 // ── picture clause categories, wrappers, and alternatives ───────────────────────────────────
@@ -312,11 +304,12 @@ fn has_date_symbols(chars: &[char], has_num_punct: bool) -> bool {
 
 fn has_time_symbols(chars: &[char], has_num_punct: bool) -> bool {
     let has_colon = chars.contains(&':');
+    let has_nine = chars.contains(&'9');
     for &ch in chars {
         if matches!(ch, 'H' | 'h' | 'k' | 'K' | 'F') {
             return true;
         }
-        if ch == 'S' && (has_colon || !has_num_punct && !chars.contains(&'9')) {
+        if ch == 'S' && (has_colon || !has_num_punct && !has_nine) {
             return true;
         }
         if ch == 'M' && has_colon {
@@ -675,9 +668,9 @@ fn append_date_token(out: &mut String, y: i64, m: u32, d: u32, c: char, run: usi
 #[derive(Clone, Copy)]
 enum HourToken {
     H24(u32), // H / HH: 0..=23
-    K24(u32), // k / kk: 1..=24 (24 = 0)
+    K24(u32), // K / KK: 1..=24 (24 = 0)
     H12(u32), // h / hh: 1..=12 (12 = 0 AM / 12 PM)
-    K12(u32), // K / KK: 0..=11 (0 = 0 AM / 12 PM)
+    K12(u32), // k / kk: 0..=11 (0 = 0 AM / 12 PM)
 }
 
 #[derive(Default)]
@@ -692,10 +685,6 @@ struct TimeParts {
 }
 
 impl TimeParts {
-    fn into_hms_millis(self) -> Option<(u32, u32, u32, u32)> {
-        self.into_hms_millis_with_day_delta().map(|(h, m, s, ms, _)| (h, m, s, ms))
-    }
-
     fn into_hms_millis_with_day_delta(self) -> Option<(u32, u32, u32, u32, i64)> {
         if !self.seen_any || self.min > 59 || self.sec > 59 || self.millis > 999 {
             return None;
@@ -785,11 +774,11 @@ fn append_time_token(out: &mut String, h: u32, m: u32, s: u32, millis: u32, ch: 
             }
         }
         'k' => {
-            let kh = if h == 0 { 24 } else { h };
+            let k12 = h % 12;
             if run == 1 {
-                out.push_str(&kh.to_string());
+                out.push_str(&k12.to_string());
             } else {
-                out.push_str(&format!("{kh:02}"));
+                out.push_str(&format!("{k12:02}"));
             }
         }
         'h' => {
@@ -804,11 +793,11 @@ fn append_time_token(out: &mut String, h: u32, m: u32, s: u32, millis: u32, ch: 
             }
         }
         'K' => {
-            let k12 = h % 12;
+            let kh = if h == 0 { 24 } else { h };
             if run == 1 {
-                out.push_str(&k12.to_string());
+                out.push_str(&kh.to_string());
             } else {
-                out.push_str(&format!("{k12:02}"));
+                out.push_str(&format!("{kh:02}"));
             }
         }
         'M' => {
@@ -831,14 +820,9 @@ fn append_time_token(out: &mut String, h: u32, m: u32, s: u32, millis: u32, ch: 
             _ => out.push_str(&format!("{millis:03}")),
         },
         'A' => {
-            let pm = h >= 12;
-            if run == 1 {
-                out.push_str(if pm { "P" } else { "A" });
-            } else {
-                out.push_str(if pm { "PM" } else { "AM" });
-            }
+            out.push_str(if h >= 12 { "PM" } else { "AM" });
         }
-        'z' => out.push_str("GMT"),
+        'Z' => out.push_str("GMT"),
         _ => out.push('Z'),
     }
 }
@@ -865,46 +849,7 @@ pub(super) fn parse_time_ms(text: &str, picture: &str) -> Option<u32> {
 }
 
 fn parse_time_single(text: &str, picture: &str, exact: bool) -> Option<(u32, u32, u32, u32)> {
-    let pic: Vec<char> = picture.chars().collect();
-    let txt: Vec<char> = text.trim().chars().collect();
-    let mut parts = TimeParts::default();
-    let (mut i, mut j) = (0, 0);
-    while let Some(&ch) = pic.get(i) {
-        if ch == '\'' {
-            i = match_quoted_literal(&pic, i + 1, &txt, &mut j)?;
-            continue;
-        }
-        if ch == '\\' {
-            let expected = *pic.get(i + 1).unwrap_or(&'\\');
-            if txt.get(j) != Some(&expected) {
-                return None;
-            }
-            i += (pic.get(i + 1).is_some() as usize) + 1;
-            j += 1;
-            continue;
-        }
-        if matches!(ch, 'H' | 'h' | 'k' | 'K' | 'M' | 'S' | 'F' | 'A' | 'Z' | 'z') {
-            let run = count_exact_run(&pic, i, ch);
-            i += run;
-            let next_pic = pic.get(i).copied();
-            parse_time_token(ch, run, next_pic, &txt, &mut j, &mut parts)?;
-        } else if ch == ' ' && pic.get(i + 1).is_some_and(|c| matches!(c, 'Z' | 'z' | 'A')) {
-            if txt.get(j) == Some(&' ') {
-                j += 1;
-            }
-            i += 1;
-        } else {
-            if txt.get(j) != Some(&ch) {
-                return None;
-            }
-            i += 1;
-            j += 1;
-        }
-    }
-    if exact && j != txt.len() {
-        return None;
-    }
-    parts.into_hms_millis()
+    parse_time_single_with_delta(text, picture, exact).map(|(h, m, s, ms, _)| (h, m, s, ms))
 }
 
 fn parse_time_token(ch: char, run: usize, next_pic: Option<char>, txt: &[char], j: &mut usize, parts: &mut TimeParts) -> Option<()> {
@@ -914,9 +859,9 @@ fn parse_time_token(ch: char, run: usize, next_pic: Option<char>, txt: &[char], 
             let v = read_uint_digits(txt, j, 2)? as u32;
             match ch {
                 'H' => parts.hour = Some(HourToken::H24(v)),
-                'k' => parts.hour = Some(HourToken::K24(v)),
+                'K' => parts.hour = Some(HourToken::K24(v)),
                 'h' => parts.hour = Some(HourToken::H12(v)),
-                'K' => parts.hour = Some(HourToken::K12(v)),
+                'k' => parts.hour = Some(HourToken::K12(v)),
                 'M' => parts.min = v,
                 _ => parts.sec = v,
             }
