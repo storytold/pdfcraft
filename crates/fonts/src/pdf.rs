@@ -70,7 +70,10 @@ pub struct Metrics {
     /// A stream these metrics come from (a CMap, the program, `/CIDToGIDMap`, a Type 3 glyph
     /// description) was left unread because the decode allowance [`Metrics::from_dict_within`]
     /// was given was spent: what it would have decided (code lengths, CIDs, widths, meanings, a
-    /// Type 3 font's height) is a guess.
+    /// Type 3 font's height) is a guess. It is set exactly when the allowance counted a refusal
+    /// during the read ([`DecodeBudget::refused`]), which callers that share it may refuse on; a
+    /// read that fails without one, such as an empty stream behind a filter nothing decodes,
+    /// doesn't set it, with or without anything left.
     pub past_allowance: bool,
 }
 
@@ -420,12 +423,16 @@ impl<'a> Reads<'a> {
     /// stage past `max` is unread. When what is left is more than what the stages before that one
     /// made and `max`, it is charged those two and isn't refused; otherwise, with more left than
     /// the stages' total (behind one filter, `max`), it is charged that total and isn't refused;
-    /// with no more left than that total, it spends all of it and counts as refused.
+    /// with no more left than that total, it spends all of it and counts as refused. Only what
+    /// the allowance counts as refused ([`DecodeBudget::refused`]) is noted: a read that fails
+    /// without one, such as an empty stream behind a filter nothing decodes, fails the same with
+    /// more left, and callers that refuse on that count must agree with [`Metrics::past_allowance`].
     fn decode(&mut self, stream: &Stream, max: usize) -> Option<Vec<u8>> {
+        let refused = self.budget.refused();
         match self.budget.decode_stages_within(self.doc, stream, max) {
             Ok(data) => Some(data),
             Err(_) => {
-                self.refused |= self.budget.remaining() == 0;
+                self.refused |= self.budget.refused() > refused;
                 None
             }
         }
@@ -491,10 +498,14 @@ fn type3_glyph_box(doc: &Document, font: &Dict, reads: &mut Reads<'_>) -> Option
             break;
         }
         let before = reads.budget.remaining();
+        let refused = reads.budget.refused();
         let read = reads.budget.decode_with_damage(doc, s, MAX_TYPE3_GLYPH_BYTES.min(left)).map(|(data, _)| data);
         left = left.saturating_sub(before.saturating_sub(reads.budget.remaining()));
         let Ok(data) = read else {
-            if reads.budget.remaining() == 0 {
+            // As in `Reads::decode`, only a refusal the allowance counts: a description that fails
+            // without one (an empty one nothing decodes, once the allowance is spent) leaves the
+            // rest to be read, or refused above.
+            if reads.budget.refused() > refused {
                 // The rest go unread too, for want of the reading's allowance.
                 reads.refused = true;
                 complete = false;
@@ -810,6 +821,20 @@ fn number(t: &Tok) -> Option<u32> {
     }
 }
 
+/// The font's `/BaseFont` (a Type 3 font's descriptor `/FontName` when it has none), read without
+/// building its metrics, so it decodes no CMap.
+pub fn base_font_name(doc: &Document, font: &Dict) -> String {
+    font.name(b"BaseFont")
+        .map(|name| String::from_utf8_lossy(name).into_owned())
+        .or_else(|| {
+            (font.name(b"Subtype") == Some(b"Type3"))
+                .then(|| dict(doc, font.get(b"FontDescriptor")))
+                .flatten()
+                .and_then(|d| d.name(b"FontName").map(|name| String::from_utf8_lossy(name).into_owned()))
+        })
+        .unwrap_or_default()
+}
+
 /// Codespace ranges and CID mappings from an embedded CMap stream, at most
 /// [`MAX_CMAP_RANGES`] of each (every glyph searches them).
 #[allow(clippy::type_complexity)]
@@ -898,16 +923,7 @@ impl Metrics {
     pub fn from_dict_within(doc: &Document, font: &Dict, budget: &mut DecodeBudget) -> Self {
         let mut reads = Reads::new(doc, budget);
         let mut m = Self::read_metrics(doc, font, &mut reads);
-        let base = font
-            .name(b"BaseFont")
-            .map(|name| String::from_utf8_lossy(name).into_owned())
-            .or_else(|| {
-                (font.name(b"Subtype") == Some(b"Type3"))
-                    .then(|| dict(doc, font.get(b"FontDescriptor")))
-                    .flatten()
-                    .and_then(|d| d.name(b"FontName").map(|name| String::from_utf8_lossy(name).into_owned()))
-            })
-            .unwrap_or_default();
+        let base = base_font_name(doc, font);
         m.subset = base.len() > 7 && base.as_bytes()[6] == b'+' && base[..6].bytes().all(|b| b.is_ascii_uppercase());
         let (bold, italic) = style_from_name(&base);
         m.bold |= bold;
