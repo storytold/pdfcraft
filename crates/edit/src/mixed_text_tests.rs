@@ -18,3 +18,19 @@ fn mixed_text_existing_paragraph_uses_hans_for_missing_source_glyphs() {
     assert_eq!(text::text_blocks(&doc, 0).unwrap()[0].editor_text, MIXED);
     assert!(String::from_utf8_lossy(&page_content_bytes(&doc, 0)).contains("Untouched neighbour"));
 }
+
+#[test]
+fn mixed_text_wrapped_paragraph_stays_whole_across_repeated_edits() {
+    if !has_hans() {
+        return;
+    }
+    let mut doc = text_page("BT /F1 24 Tf 20 700 Td (Source) Tj ET");
+    let style = text::BlockStyle { width: Some(180.0), ..Default::default() };
+    for replacement in [MIXED.to_owned(), format!("{MIXED} 测试"), format!("{MIXED} 再次编辑")] {
+        text::rewrite_block(&mut doc, 0, 0, Some(&replacement), &style).unwrap();
+        doc = reopen(&doc);
+        let blocks = text::text_blocks(&doc, 0).unwrap();
+        assert_eq!(blocks.len(), 1, "all wrapped rows remain the same paragraph: {blocks:?}");
+        assert_eq!(blocks[0].editor_text.split_whitespace().collect::<String>(), replacement.split_whitespace().collect::<String>());
+    }
+}
