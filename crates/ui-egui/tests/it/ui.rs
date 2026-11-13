@@ -2157,7 +2157,8 @@ fn home_recent_context_menu_reveals_the_target_without_opening_or_removing_it() 
     assert!(h.state().views.is_empty(), "right-click must not open the PDF");
     assert_eq!(h.state().recent.len(), 2);
     h.get_by_label(label).click();
-    h.run_steps(3);
+    // Reveal runs off the UI thread, so its notice can take more than a few frames on a loaded runner.
+    support::wait_until(&mut h, "the reveal notice", |app| app.toast.as_ref().is_some_and(|(text, _)| text.contains("The file no longer exists")));
     assert!(h.query_by_label(label).is_none(), "choosing the action closes its menu");
     assert!(h.state().views.is_empty(), "reveal must not open the PDF");
     assert_eq!(h.state().active, None);
