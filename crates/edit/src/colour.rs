@@ -5,7 +5,7 @@
 //! (exponential) tint transform into the alternate space; a sampled or PostScript tint function,
 //! or a pattern, falls back to a plain darkness so nothing reads as the wrong hue.
 
-use pdfcraft_cos::{Dict, Document, Object, Stream};
+use pdfcraft_cos::{DecodeBudget, Dict, Document, Object, Stream};
 
 /// A colour space as far as a fill colour needs it.
 #[derive(Clone, Debug, PartialEq)]
@@ -46,10 +46,6 @@ impl Space {
     }
 }
 
-fn nums(doc: &Document, o: &Object) -> Vec<f64> {
-    nums_upto(doc, o, usize::MAX)
-}
-
 /// The first `max` numbers of an array: a space is read once for each resource name naming it,
 /// so it keeps only the numbers its colours read, however long the array in the file.
 fn nums_upto(doc: &Document, o: &Object, max: usize) -> Vec<f64> {
@@ -67,8 +63,8 @@ pub(crate) const MAX_LOOKUP_DECODED: usize = 64 << 10;
 pub(crate) const MAX_PAGE_LOOKUPS: usize = 1 << 20;
 
 /// What Indexed lookup tables may still cost: `left` bytes in all, at most `cap` for one table.
-/// A stream is charged what it decodes to, and one past either limit reads as empty, so its
-/// colours read as black (see [`rgb`]). A byte string is charged the part of it kept.
+/// A stream is charged what its filters decoded, and one past either limit reads as empty, so
+/// its colours read as black (see [`rgb`]). A byte string is charged the part of it kept.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Lookups {
     left: usize,
@@ -86,24 +82,27 @@ impl Lookups {
         Lookups { left: usize::MAX, cap: pdfcraft_cos::MAX_PAGE_DECODED }
     }
 
-    /// The lookup table in `stream`, charged to the allowance: what it decoded to, or all the
-    /// decoding it was allowed when it failed (past its limit, or damaged). Only its first
+    /// The lookup table in `stream`, charged to the allowance what its filters decoded: all it
+    /// was allowed when it ran past its limit, and only the work done when it failed sooner, so
+    /// a few small damaged tables don't spend what the page's other tables need. Only its first
     /// `needed` bytes are kept.
     fn decode(&mut self, stream: &Stream, needed: usize) -> Vec<u8> {
         let max = self.cap.min(self.left);
         if max == 0 {
             return Vec::new();
         }
-        match stream.decoded_within(max) {
+        // One byte more than `max`, so the budget holds the decode to `max` itself and charges
+        // it exactly (see `DecodeBudget::decode_within`).
+        let allowed = max.saturating_add(1);
+        let mut budget = DecodeBudget::new(allowed, 0);
+        let decoded = budget.decode_within(stream, max);
+        self.left = self.left.saturating_sub(allowed.saturating_sub(budget.remaining()));
+        match decoded {
             Ok(mut table) => {
-                self.left = self.left.saturating_sub(table.len());
                 table.truncate(needed);
                 table
             }
-            Err(_) => {
-                self.left = self.left.saturating_sub(max);
-                Vec::new()
-            }
+            Err(_) => Vec::new(),
         }
     }
 
@@ -129,21 +128,39 @@ pub(crate) fn space_of(doc: &Document, operand: &Object, cs_res: &Dict, depth: u
     space_within(doc, operand, cs_res, depth, &mut Lookups::per_table())
 }
 
-/// [`space_of`], with the Indexed lookup streams it decodes charged to `lookups`.
+/// [`space_of`], with the Indexed lookup streams it decodes charged to `lookups`. What can't be
+/// read falls back: an unknown name or family to DeviceGray, an ICCBased stream without `/N` or
+/// a usable `/Alternate` to DeviceRGB, an Indexed space without a base over DeviceRGB.
 pub(crate) fn space_within(doc: &Document, operand: &Object, cs_res: &Dict, depth: u8, lookups: &mut Lookups) -> Space {
+    read_space(doc, operand, cs_res, depth, lookups, false).unwrap_or(Space::Gray)
+}
+
+/// The space an operand names when it can be read, `None` where [`space_within`] would fall
+/// back: a name the resources don't hold, a family that isn't one, an ICCBased stream without
+/// `/N` or a usable `/Alternate`, an Indexed space without a readable base, nesting past the
+/// limit. Text colours read their operands by count for such a space, as a reader that can't
+/// find it would.
+pub(crate) fn readable_space(doc: &Document, operand: &Object, cs_res: &Dict, depth: u8, lookups: &mut Lookups) -> Option<Space> {
+    read_space(doc, operand, cs_res, depth, lookups, true)
+}
+
+/// [`space_within`] (`strict` false: never `None`) and [`readable_space`] (`strict` true).
+fn read_space(doc: &Document, operand: &Object, cs_res: &Dict, depth: u8, lookups: &mut Lookups, strict: bool) -> Option<Space> {
+    // What a space that can't be read is, when not strict.
+    let fallback = |space: Space| if strict { None } else { Some(space) };
     if depth > 4 {
-        return Space::Gray;
+        return fallback(Space::Gray);
     }
     let resolved = doc.resolve(operand);
     match &*resolved {
         Object::Name(n) => match n.as_slice() {
-            b"DeviceGray" | b"G" | b"CalGray" => Space::Gray,
-            b"DeviceRGB" | b"RGB" | b"CalRGB" => Space::Rgb,
-            b"DeviceCMYK" | b"CMYK" => Space::Cmyk,
-            b"Pattern" => Space::Pattern,
+            b"DeviceGray" | b"G" | b"CalGray" => Some(Space::Gray),
+            b"DeviceRGB" | b"RGB" | b"CalRGB" => Some(Space::Rgb),
+            b"DeviceCMYK" | b"CMYK" => Some(Space::Cmyk),
+            b"Pattern" => Some(Space::Pattern),
             other => match cs_res.get(other) {
-                Some(o) => space_within(doc, o, &Dict::default(), depth + 1, lookups),
-                None => Space::Gray,
+                Some(o) => read_space(doc, o, &Dict::default(), depth + 1, lookups, strict),
+                None => fallback(Space::Gray),
             },
         },
         Object::Array(a) => {
@@ -157,26 +174,45 @@ pub(crate) fn space_within(doc: &Document, operand: &Object, cs_res: &Dict, dept
                         _ => None,
                     });
                     if let Some(alt) = dict.and_then(|d| d.get(b"Alternate")) {
-                        return space_within(doc, alt, cs_res, depth + 1, lookups);
+                        let alt = read_space(doc, alt, cs_res, depth + 1, lookups, strict);
+                        // Not strict, the alternate is what the space is, readable or not; strict,
+                        // an unreadable one leaves `/N` to say.
+                        if alt.is_some() || !strict {
+                            return alt;
+                        }
                     }
+                    // ISO 32000-2 §8.6.5.5: `/N` is 1, 3 or 4.
                     match dict.and_then(|d| d.int(b"N")) {
-                        Some(1) => Space::Gray,
-                        Some(4) => Space::Cmyk,
-                        _ => Space::Rgb,
+                        Some(1) => Some(Space::Gray),
+                        Some(3) => Some(Space::Rgb),
+                        Some(4) => Some(Space::Cmyk),
+                        _ => fallback(Space::Rgb),
                     }
                 }
-                b"CalRGB" => Space::Rgb,
-                b"CalGray" => Space::Gray,
+                b"CalRGB" => Some(Space::Rgb),
+                b"CalGray" => Some(Space::Gray),
                 b"Lab" => {
-                    let d = a.get(1).map(|d| doc.resolve(d)).and_then(|d| d.as_dict().cloned()).unwrap_or_default();
-                    let wp = d.get(b"WhitePoint").map(|w| nums(doc, w)).unwrap_or_default();
-                    let white = if wp.len() == 3 { [wp[0], wp[1], wp[2]] } else { [0.9505, 1.0, 1.089] };
-                    let r = d.get(b"Range").map(|w| nums(doc, w)).unwrap_or_default();
-                    let range = if r.len() == 4 { [r[0], r[1], r[2], r[3]] } else { [-100.0, 100.0, -100.0, 100.0] };
-                    Space::Lab { white, range }
+                    // Only the numbers a white point and a range hold are read, however long the
+                    // arrays are: the space is read once for each name naming it.
+                    let d = a.get(1).map(|d| doc.resolve(d));
+                    let d = d.as_ref().and_then(|d| d.as_dict());
+                    let wp = d.and_then(|d| d.get(b"WhitePoint")).map(|w| nums_upto(doc, w, 4)).unwrap_or_default();
+                    let white = match wp.as_slice() {
+                        &[x, y, z] => [x, y, z],
+                        _ => [0.9505, 1.0, 1.089],
+                    };
+                    let r = d.and_then(|d| d.get(b"Range")).map(|w| nums_upto(doc, w, 5)).unwrap_or_default();
+                    let range = match r.as_slice() {
+                        &[a0, a1, b0, b1] => [a0, a1, b0, b1],
+                        _ => [-100.0, 100.0, -100.0, 100.0],
+                    };
+                    Some(Space::Lab { white, range })
                 }
                 b"Indexed" | b"I" => {
-                    let base = a.get(1).map(|b| space_within(doc, b, cs_res, depth + 1, lookups)).unwrap_or(Space::Rgb);
+                    let base = match a.get(1) {
+                        Some(b) => read_space(doc, b, cs_res, depth + 1, lookups, strict)?,
+                        None => fallback(Space::Rgb)?,
+                    };
                     let hival = a.get(2).and_then(|h| doc.resolve(h).as_f64()).unwrap_or(0.0).clamp(0.0, 255.0) as usize;
                     // The table holds `hival + 1` entries of the base's components (ISO 32000-2
                     // §8.6.6.3); bytes past them are never read, so they aren't kept.
@@ -189,7 +225,7 @@ pub(crate) fn space_within(doc: &Document, operand: &Object, cs_res: &Dict, dept
                         },
                         None => Vec::new(),
                     };
-                    Space::Indexed { base: Box::new(base), hival, table }
+                    Some(Space::Indexed { base: Box::new(base), hival, table })
                 }
                 b"Separation" | b"DeviceN" => {
                     // The `/None` colorant paints nothing (ISO 32000-2, 8.6.6.4): given a colour
@@ -199,14 +235,18 @@ pub(crate) fn space_within(doc: &Document, operand: &Object, cs_res: &Dict, dept
                         is_none(names) || doc.resolve(names).as_array().is_some_and(|names| !names.is_empty() && names.iter().all(is_none))
                     });
                     if none {
-                        return Space::Pattern;
+                        return Some(Space::Pattern);
                     }
                     let inputs = if family == b"Separation" {
                         1
                     } else {
                         a.get(1).map(|n| doc.resolve(n)).and_then(|n| n.as_array().map(Vec::len)).unwrap_or(1).max(1)
                     };
-                    let alt = a.get(2).map(|b| space_within(doc, b, cs_res, depth + 1, lookups)).unwrap_or(Space::Gray);
+                    // A missing alternate reads as DeviceGray: the tint is then the ink's darkness.
+                    let alt = match a.get(2) {
+                        Some(b) => read_space(doc, b, cs_res, depth + 1, lookups, strict)?,
+                        None => Space::Gray,
+                    };
                     // The transform's outputs are the alternate space's components (ISO 32000-2
                     // §8.6.6.4, §7.10.3): C0 and C1 past them are never read, so they aren't kept.
                     let outputs = alt.components().max(1);
@@ -224,16 +264,16 @@ pub(crate) fn space_within(doc: &Document, operand: &Object, cs_res: &Dict, dept
                         let n = d.get(b"N").and_then(|v| doc.resolve(v).as_f64()).unwrap_or(1.0);
                         Some((c0, c1, n))
                     });
-                    Space::Tint { inputs, alt: Box::new(alt), exp }
+                    Some(Space::Tint { inputs, alt: Box::new(alt), exp })
                 }
-                b"Pattern" => Space::Pattern,
-                b"DeviceGray" | b"G" => Space::Gray,
-                b"DeviceRGB" | b"RGB" => Space::Rgb,
-                b"DeviceCMYK" | b"CMYK" => Space::Cmyk,
-                _ => Space::Gray,
+                b"Pattern" => Some(Space::Pattern),
+                b"DeviceGray" | b"G" => Some(Space::Gray),
+                b"DeviceRGB" | b"RGB" => Some(Space::Rgb),
+                b"DeviceCMYK" | b"CMYK" => Some(Space::Cmyk),
+                _ => fallback(Space::Gray),
             }
         }
-        _ => Space::Gray,
+        _ => fallback(Space::Gray),
     }
 }
 

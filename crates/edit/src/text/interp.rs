@@ -1,7 +1,7 @@
 use super::fallback::is_type3_fallback;
 use super::rewrite::vertical_advance;
 use super::{Dict, Document, EditError, HashMap, Matrix, Metrics, Object, Op, Rc};
-use crate::colour::{Lookups, Space, space_within};
+use crate::colour::{Lookups, Space, readable_space};
 
 /// Text and graphics state captured for rewriting.
 #[derive(Clone, Debug, PartialEq)]
@@ -674,10 +674,11 @@ impl Carry {
 /// The colour space a `cs` operand selects (ISO 32000-2 §8.6.8, Table 73): `DeviceGray`,
 /// `DeviceRGB`, `DeviceCMYK` and `Pattern` name their space directly and never a resource; any
 /// other name is looked up in `spaces`, the `/ColorSpace` resources in force. A name they don't
-/// hold that is an inline image's abbreviation (`G`, `RGB`, `CMYK`) or a family that needs
-/// parameters (`CalGray`, `CalRGB`) reads as its device kin. `None` for any other name, so the
-/// operands of the `sc`/`scn` after it are read by their count, as a reader that can't find the
-/// space would. Lookup tables decoded are charged to `lookups`.
+/// hold, or hold as no space that can be read (see [`readable_space`]), that is an inline
+/// image's abbreviation (`G`, `RGB`, `CMYK`) or a family that needs parameters (`CalGray`,
+/// `CalRGB`) reads as its device kin. `None` for any other name, so the operands of the
+/// `sc`/`scn` after it are read by their count, as a reader that can't find the space would.
+/// Lookup tables decoded are charged to `lookups`.
 fn selected_space(
     doc: &Document,
     operand: &Object,
@@ -690,45 +691,16 @@ fn selected_space(
         return space.clone();
     }
     let none = Dict::default();
-    // A resource that is no colour space family (a misspelt family, a name naming another name)
-    // reads as if missing rather than as DeviceGray.
-    let known = |o: &Object| {
-        let o = doc.resolve(o);
-        let family = match &*o {
-            Object::Name(n) => Some(n.clone()),
-            Object::Array(a) => a.first().and_then(|f| doc.resolve(f).as_name().map(<[u8]>::to_vec)),
-            _ => None,
-        };
-        family.is_some_and(|f| {
-            matches!(
-                f.as_slice(),
-                b"DeviceGray"
-                    | b"DeviceRGB"
-                    | b"DeviceCMYK"
-                    | b"CalGray"
-                    | b"CalRGB"
-                    | b"Lab"
-                    | b"ICCBased"
-                    | b"Indexed"
-                    | b"I"
-                    | b"Separation"
-                    | b"DeviceN"
-                    | b"Pattern"
-                    | b"G"
-                    | b"RGB"
-                    | b"CMYK"
-            )
-        })
-    };
-    let space = if matches!(name, b"DeviceGray" | b"DeviceRGB" | b"DeviceCMYK" | b"Pattern") {
-        Some(space_within(doc, operand, &none, 0, lookups))
-    } else if let Some(resource) = spaces.get(name).filter(|o| known(o)) {
-        Some(space_within(doc, resource, &none, 1, lookups))
-    } else if matches!(name, b"G" | b"RGB" | b"CMYK" | b"CalGray" | b"CalRGB") {
-        Some(space_within(doc, operand, &none, 0, lookups))
-    } else {
-        None
-    };
+    // A resource that is no space that can be read (a misspelt family, a name naming another
+    // name, a damaged profile) reads as if missing rather than as DeviceGray. Read against no
+    // resources, the operand itself is a space only when it names one directly: a reserved name
+    // or an abbreviation.
+    let reserved = matches!(name, b"DeviceGray" | b"DeviceRGB" | b"DeviceCMYK" | b"Pattern");
+    let space = match spaces.get(name).filter(|_| !reserved) {
+        Some(resource) => readable_space(doc, resource, &none, 1, lookups),
+        None => None,
+    }
+    .or_else(|| readable_space(doc, operand, &none, 0, lookups));
     let space = space.map(Rc::new);
     cache.insert(name.to_vec(), space.clone());
     space

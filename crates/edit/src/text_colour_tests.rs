@@ -314,3 +314,34 @@ fn a_tint_transform_keeps_only_the_outputs_its_alternate_reads() {
     }
     assert!((0..NAMES).all(|i| near(colour_of(&doc, &format!("T{i}")), [1.0, 0.0, 0.0])), "{:?}", colours(&doc));
 }
+
+/// A resource whose ICCBased stream has no `/N` (ISO 32000-2 §8.6.5.5) or a usable `/Alternate`,
+/// or an Indexed space without a base, is no space that can be read: its operands read by their
+/// count, as a space the resources don't hold does, so one number is a gray level, not red.
+#[test]
+fn an_unreadable_icc_or_indexed_space_reads_its_operands_by_count() {
+    let extra = vec!["<< /Length 0 >>\nstream\n\nendstream".to_string()];
+    let spaces = "/NoN [/ICCBased 9 0 R] /Lost [/ICCBased 99 0 R] /NoBase [/Indexed]";
+    let shows = [("/NoN cs 1 sc", "NoN"), ("/Lost cs 1 sc", "Lost"), ("/NoBase cs 1 sc", "NoBase")];
+    let doc = page_with(&content(&shows), spaces, "", "", &extra);
+    for name in ["NoN", "Lost", "NoBase"] {
+        assert!(near(colour_of(&doc, name), [1.0; 3]), "{name}: {:?}", colours(&doc));
+    }
+}
+
+/// A lookup stream that fails before decoding anything is charged the work it took, not the
+/// whole per-table limit: a handful of damaged tables can't spend the page's allowance.
+#[test]
+fn a_damaged_lookup_stream_is_charged_its_work() {
+    use crate::colour::{Lookups, MAX_LOOKUP_DECODED, Space, space_within};
+    use pdfcraft_cos::{Dict, ObjRef, Object};
+    let extra = vec!["[/Indexed /DeviceRGB 0 10 0 R]".to_string(), "<< /Filter /NoSuchFilter /Length 6 >>\nstream\nFF0000\nendstream".to_string()];
+    let doc = page_with("", "", "", "", &extra);
+    let mut lookups = Lookups::page();
+    let before = lookups.left();
+    match space_within(&doc, &Object::Ref(ObjRef { num: 9, generation: 0 }), &Dict::default(), 0, &mut lookups) {
+        Space::Indexed { table, .. } => assert!(table.is_empty()),
+        other => panic!("not Indexed: {other:?}"),
+    }
+    assert!(before - lookups.left() < MAX_LOOKUP_DECODED, "charged {}", before - lookups.left());
+}
