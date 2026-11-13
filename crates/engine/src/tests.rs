@@ -12642,6 +12642,43 @@ fn a_reset_clears_a_floating_field_in_every_row() {
     assert_eq!(text.matches("Amount: none").count(), 2, "both rows reset: {text}");
 }
 
+/// A reset naming one row's hidden floating field (`row[1].amount`) gives that row's field its
+/// default and leaves the other rows' alone; `row[0]` names the first row only, not every row.
+#[test]
+fn a_reset_naming_a_row_clears_that_rows_floating_field_only() {
+    let xdp = r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="front"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <subform name="row" layout="tb"><occur min="1" max="-1"/>
+  <field name="amount" id="floatAmount" presence="hidden" w="1in" h="0.3in"><ui><textEdit/></ui><value><text>none</text></value></field>
+  <draw w="5in" h="0.4in"><value><exData contentType="text/html"><body xmlns="http://www.w3.org/1999/xhtml" xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"><p>Amount: <span xfa:embed="#floatAmount"/></p></body></exData></value></draw>
+ </subform>
+ <field name="second" w="2in" h="0.3in"><ui><button/></ui>
+  <event activity="click"><script contentType="application/x-javascript">xfa.host.resetData("form[0].row[1].amount[0]");</script></event></field>
+ <field name="first" w="2in" h="0.3in"><ui><button/></ui>
+  <event activity="click"><script contentType="application/x-javascript">event.target.resetForm("row[0].amount");</script></event></field>
+</subform>
+</template>
+<xfa:datasets xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"><xfa:data><form><row><amount>10</amount></row><row><amount>20</amount></row><row><amount>30</amount></row></form></xfa:data></xfa:datasets>
+</xdp:xdp>
+"##;
+    let mut s = Session::new();
+    let id = s.open("rows.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(xdp)), None).expect("opens");
+    let amounts = |s: &Session| {
+        let text = page_texts(s, id).join(" ");
+        ["Amount: 10", "Amount: 20", "Amount: 30", "Amount: none"].map(|a| text.matches(a).count())
+    };
+    assert_eq!(amounts(&s), [1, 1, 1, 0]);
+    let o = s.run_javascript(id, "", Some("second")).expect("clicks");
+    assert_eq!(o.error, None, "{o:?}");
+    assert_eq!(amounts(&s), [1, 0, 1, 1], "only the second row is reset");
+    let o = s.run_javascript(id, "", Some("first")).expect("clicks");
+    assert_eq!(o.error, None, "{o:?}");
+    assert_eq!(amounts(&s), [0, 0, 1, 2], "then the first row only");
+}
+
 /// An XFA button's click script may show the attachments panel; a text field's exit script
 /// asking the same is noted on the console and ignored.
 #[test]

@@ -873,10 +873,14 @@ impl<'a, 'b> Runner<'a, 'b> {
             }
             out
         };
+        // The instances of floating fields with no widget that the names name, each row's by its
+        // own SOM expression (`row[1].amount` names the second row's only), by their SOM
+        // expressions without indexes.
+        let mut floating: HashMap<String, Vec<String>> = HashMap::new();
         for som in unshown {
-            // A floating field rich text embeds goes back to its default with every row that
-            // holds it (below).
+            // A floating field rich text embeds goes back to its default (below).
             if pdfcraft_xfa::field_is_embedded(self.tpl, &som) {
+                floating.entry(plain_som(&som)).or_default().push(som);
                 continue;
             }
             let Some(text) = pdfcraft_xfa::reset_default(self.tpl, &som) else { continue };
@@ -906,12 +910,17 @@ impl<'a, 'b> Runner<'a, 'b> {
         // A floating field without a widget (a hidden one, as forms place them) goes back to
         // its default too, and the text that embeds it shows that.
         for (som, default) in pdfcraft_xfa::embedded_fields(self.tpl) {
-            if by_som.contains_key(&som) || !wanted(&som) {
+            if by_som.contains_key(&som) {
                 continue;
             }
-            // Every row that holds it, not only the first.
-            let names: Vec<String> = pdfcraft_xfa::data_path(self.tpl, &som).into_iter().map(|(name, _)| name).collect();
-            let paths = self.data.as_ref().map(|d| d.paths_named(&names, pdfcraft_xfa::MAX_FORM_NODES)).unwrap_or_default();
+            let paths = if targets.is_some() {
+                // Named: the rows the names name, matched instance by instance.
+                floating.get(&plain_som(&som)).into_iter().flatten().map(|f| pdfcraft_xfa::data_path(self.tpl, f)).collect()
+            } else {
+                // Every row that holds it, not only the first.
+                let names: Vec<String> = pdfcraft_xfa::data_path(self.tpl, &som).into_iter().map(|(name, _)| name).collect();
+                self.data.as_ref().map(|d| d.paths_named(&names, pdfcraft_xfa::MAX_FORM_NODES)).unwrap_or_default()
+            };
             for path in paths {
                 if self.data.as_ref().and_then(|d| d.text_at(&path)).unwrap_or("") != default {
                     self.embedded_changed = true;
