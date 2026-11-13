@@ -406,8 +406,8 @@ pub(super) fn resolver(ctx: &mut Context, from: usize, many: bool) -> JsResult<J
         // An expression that runs into an object's properties (`ui.#textEdit`, `border.edge[1]`),
         // for some of the objects it names at least: a child named as the property comes first
         // for each object on its own, in place ((child, "")).
-        // a path through a subform's variables names a script object
-        if !many && through_variables(&expr) {
+        // a path through a subform's variables names a script object, unless a real child is named `variables`
+        if !many && found.is_empty() && through_variables(&expr) {
             return object_by_som(ctx, from, &expr);
         }
         let props = props::resolve_into_props(&host(ctx)?.borrow(), from, &expr);

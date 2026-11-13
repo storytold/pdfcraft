@@ -136,7 +136,7 @@ pub(crate) fn run_here(
     limits: Limits,
     started: &dyn Fn(),
 ) -> XfaOutcome {
-    run_here_with(script, Vec::new(), event, doc, root, reuse, limits, started)
+    run_here_with(script, Vec::new(), event, doc, root, reuse, 0, limits, started)
 }
 
 /// [`run_here`] with the script objects the script can reach, each compiled when the script first uses it. They are part of
@@ -149,6 +149,7 @@ pub(crate) fn run_here_with(
     doc: &XfaDoc,
     root: Arc<XfaNode>,
     reuse: bool,
+    session: u64,
     limits: Limits,
     started: &dyn Fn(),
 ) -> XfaOutcome {
@@ -162,7 +163,7 @@ pub(crate) fn run_here_with(
     host_state.objects = if keep { objects } else { Vec::new() };
     let current = host_state.current;
     let shape = host_state.shape;
-    let kept = if keep { KEPT_ENGINE.with(|k| k.borrow_mut().take()).filter(|k| k.shape == shape) } else { None };
+    let kept = if keep { take_kept(session).filter(|k| k.shape == shape) } else { None };
     let mut kept = match kept {
         Some(k) => k,
         None => match Context::builder().host_hooks(std::rc::Rc::new(crate::CheckedCodeFromStrings)).build() {
@@ -176,20 +177,23 @@ pub(crate) fn run_here_with(
     ctx.insert_data(RefCell::new(host_state));
     let mut out = XfaOutcome::default();
     let result = (|| -> JsResult<()> {
-        install(ctx, event, doc, current)?;
-        // the objects are set up again only for a script that reaches others than the last one did; their getters are given
-        // again after the set-up above, which put the host's globals back (`util`, when an object has that name)
+        // the objects are set up again only for a script that reaches others than the last one did: the old names go before
+        // the set-up below puts the host's globals back (`util`, when an object had that name), and the getters are given
+        // again after it
         let objects = host(ctx)?.borrow().objects.clone();
-        if !objects.is_empty() {
-            let key = super::objects::key(&objects);
-            if defined.as_ref().is_none_or(|d| d.key != key) {
-                if let Some(old) = defined.take() {
-                    for name in old.names {
-                        ctx.global_object().delete_property_or_throw(boa_engine::JsString::from(name.as_str()), ctx)?;
-                    }
-                }
-                *defined = Some(super::objects::setup(ctx, &objects, key)?);
+        let key = (!objects.is_empty()).then(|| super::objects::key(&objects));
+        if let Some(key) = &key
+            && let Some(old) = defined.take_if(|d| d.key != *key)
+        {
+            for name in old.names {
+                ctx.global_object().delete_property_or_throw(boa_engine::JsString::from(name.as_str()), ctx)?;
             }
+        }
+        install(ctx, event, doc, current)?;
+        if let Some(key) = key
+            && defined.is_none()
+        {
+            *defined = Some(super::objects::setup(ctx, &objects, key)?);
         }
         if let Some(d) = defined.as_ref() {
             super::objects::expose(ctx, d)?;
@@ -223,7 +227,7 @@ pub(crate) fn run_here_with(
     clip_result(&mut out);
     // A script that froze the global object leaves nothing the next one can set up in: that one gets an engine of its own.
     if keep && kept.ctx.global_object().is_extensible(&mut kept.ctx).unwrap_or(false) {
-        KEPT_ENGINE.with(|k| *k.borrow_mut() = Some(kept));
+        KEPT_ENGINE.with(|k| k.borrow_mut().push((session, kept)));
     }
     out
 }
@@ -248,12 +252,23 @@ fn names_an_object(script: &str, objects: &[super::objects::ScriptObjectCode]) -
 }
 
 std::thread_local! {
-    static KEPT_ENGINE: RefCell<Option<Kept>> = const { RefCell::new(None) };
+    /// The engine each session on this thread keeps (one session per thread natively; any number on wasm).
+    static KEPT_ENGINE: RefCell<Vec<(u64, Kept)>> = const { RefCell::new(Vec::new()) };
 }
 
-/// Let go of the engine a session's scripts shared: the session is over. A thread drops it before it ends, as the engine
+/// The engine `session` keeps, taken while a script runs on it.
+fn take_kept(session: u64) -> Option<Kept> {
+    KEPT_ENGINE.with(|k| {
+        let mut k = k.borrow_mut();
+        let at = k.iter().position(|(s, _)| *s == session)?;
+        Some(k.swap_remove(at).1)
+    })
+}
+
+/// Let go of the engine `session`'s scripts shared: the session is over. A thread drops it before it ends, as the engine
 /// cannot go with the thread's own clean-up.
-pub(crate) fn drop_kept() {
-    KEPT_ENGINE.with(|k| k.borrow_mut().take());
+pub(crate) fn drop_kept(session: u64) {
+    KEPT_ENGINE.with(|k| k.borrow_mut().retain(|(s, _)| *s != session));
+    // the hashes are kept by address: none may outlive the forms they were taken from (other sessions only recompute theirs)
     super::objects::forget_hashes();
 }

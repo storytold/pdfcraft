@@ -944,12 +944,12 @@ impl ScriptObjectIndex {
         index
     }
 
-    /// The object names no event script mentions (as a word, strings and comments included). Objects may: a main object that
+    /// The object names no JavaScript event script mentions (as a word, strings and comments included). Objects may: a main object that
     /// lists its modules is itself loaded only by the scripts that name it.
     fn never_named(&self, tpl: &Template) -> std::collections::HashSet<String> {
         let mut left: std::collections::HashSet<String> = self.counts.keys().cloned().collect();
         if !left.is_empty() {
-            each_script(tpl, &mut |text| {
+            each_javascript(tpl, &mut |text| {
                 for w in words(text) {
                     left.remove(w);
                 }
@@ -1094,11 +1094,14 @@ fn words(text: &str) -> impl Iterator<Item = &str> {
     text.split(|c: char| !(c.is_alphanumeric() || c == '_' || c == '$')).filter(|w| !w.is_empty())
 }
 
-/// Calls `f` with the text of every event, calculate and validate script of `tpl`, page masters' included.
-fn each_script(tpl: &Template, f: &mut impl FnMut(&str)) {
+/// Calls `f` with the text of every JavaScript event, calculate and validate script of `tpl`, page masters' included (FormCalc
+/// can't name a script object).
+fn each_javascript(tpl: &Template, f: &mut impl FnMut(&str)) {
     fn field(fd: &Field, f: &mut impl FnMut(&str)) {
         for s in fd.scripts.iter().chain(&fd.calculate).chain(&fd.validate) {
-            f(&s.text);
+            if !s.formcalc {
+                f(&s.text);
+            }
         }
     }
     fn walk(nodes: &[Node], depth: usize, f: &mut impl FnMut(&str)) {
@@ -1108,7 +1111,7 @@ fn each_script(tpl: &Template, f: &mut impl FnMut(&str)) {
         for n in nodes {
             match n {
                 Node::Subform(sf) => {
-                    sf.scripts.iter().for_each(|s| f(&s.text));
+                    sf.scripts.iter().filter(|s| !s.formcalc).for_each(|s| f(&s.text));
                     walk(&sf.children, depth + 1, f);
                     if let Some(ps) = &sf.page_set {
                         ps.areas.iter().for_each(|a| walk(&a.items, depth + 1, f));
@@ -1117,14 +1120,14 @@ fn each_script(tpl: &Template, f: &mut impl FnMut(&str)) {
                 Node::Area(a) => walk(&a.children, depth + 1, f),
                 Node::Field(fd) => field(fd, f),
                 Node::ExclGroup(g) => {
-                    g.scripts.iter().for_each(|s| f(&s.text));
+                    g.scripts.iter().filter(|s| !s.formcalc).for_each(|s| f(&s.text));
                     g.fields.iter().for_each(|fd| field(fd, f));
                 }
                 Node::Draw(_) => {}
             }
         }
     }
-    tpl.root.scripts.iter().for_each(|s| f(&s.text));
+    tpl.root.scripts.iter().filter(|s| !s.formcalc).for_each(|s| f(&s.text));
     walk(&tpl.root.children, 1, f);
     if let Some(ps) = &tpl.root.page_set {
         ps.areas.iter().for_each(|a| walk(&a.items, 1, f));
@@ -1281,7 +1284,9 @@ mod script_object_tests {
         use crate::model::{Field, Script};
         let text = |name: &str, text: &str| ScriptObject { name: name.into(), text: text.into() };
         let script = Script { activity: "calculate".into(), text: "this.rawValue = NS.jForm.x.f() + calcs.sum();".into(), formcalc: false };
-        let field = Field { common: named("t"), calculate: Some(script), ..Default::default() };
+        // a FormCalc script can't name one
+        let formcalc = Script { activity: "validate".into(), text: "module_x == 1".into(), formcalc: true };
+        let field = Field { common: named("t"), calculate: Some(script), validate: Some(formcalc), ..Default::default() };
         let tpl = Template {
             root: Subform {
                 common: named("form"),

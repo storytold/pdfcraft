@@ -934,6 +934,23 @@ mod xfa_model {
 
     /// A calculate script finds its siblings by name and yields its last expression, and a
     /// value it sets comes back as an effect.
+    /// A real child named `variables` is found by `resolveNode`, not taken for the subform's script variables.
+    #[test]
+    fn resolve_node_finds_a_child_named_variables() {
+        let mut f = form();
+        if let Some(page) = f.children.first_mut() {
+            page.children.push(XfaNode {
+                name: "variables".into(),
+                som: "form1[0].page1[0].variables[0]".into(),
+                kind: Some(XfaKind::Subform),
+                ..Default::default()
+            });
+        }
+        let ev = XfaEvent { activity: "calculate".into(), target: "form1[0].page1[0].qty[0]".into(), ..Default::default() };
+        let o = run_xfa("xfa.resolveNode('form1.page1.variables').somExpression", &ev, &XfaDoc::default(), &f, Limits::default());
+        assert_eq!(o.result.as_deref(), Some("form1[0].page1[0].variables[0]"), "{o:?}");
+    }
+
     #[test]
     fn calculate_scripts_see_siblings_by_name_and_yield_their_last_expression() {
         let o = go("qty.rawValue * price.rawValue", "form1[0].page1[0].total[0]", "calculate");
@@ -2187,6 +2204,23 @@ mod session {
         o.error.map_or(Ok(o.result.unwrap_or_default()), Err)
     }
 
+    /// Sessions on one thread (as on wasm) each keep their own engine: one doesn't see the objects' state another set, and
+    /// ending one leaves the other's.
+    #[test]
+    fn sessions_on_one_thread_keep_their_own_objects() {
+        let lib = [object("lib", Some("form1[0]"), "var n = 0; function add() { return ++n; }")];
+        let run = |session: u64| {
+            let sc = script("lib.add()", false, "form1[0].page1[0].total[0]", "calculate");
+            let o = crate::xfa::run_here_with(&sc.source, lib.to_vec(), &sc.event, &XfaDoc::default(), sc.root, true, session, sc.limits, &|| {});
+            o.error.map_or(o.result.unwrap_or_default(), |e| e)
+        };
+        let (a, b) = (u64::MAX - 1, u64::MAX - 2);
+        assert_eq!((run(a), run(a), run(b)), ("1".into(), "2".into(), "1".into()));
+        crate::xfa::drop_kept(b);
+        assert_eq!(run(a), "3");
+        crate::xfa::drop_kept(a);
+    }
+
     /// Script objects are compiled when a script first uses them, with every top-level member their code declares (read by
     /// the parser: a quote in a regular expression hides nothing, nested locals are not members), whatever order they were
     /// declared in. Each one is built once for the session's scripts and keeps its state between them, `this` being its subform,
@@ -2239,6 +2273,9 @@ mod session {
         // a host global gives way, a built-in does not
         let named = [object("util", None, "function enableField(f) { return 1; }"), object("Number", Some("form1[0]"), "var x = 9;")];
         assert_eq!(with_objects(&mut s, "util.enableField(1) + Number('3') + form1.Number.x", &named).as_deref(), Ok("13"));
+        // and comes back for the next script, which reaches other objects
+        let other = [object("Other", None, "var x = 1;")];
+        assert_eq!(with_objects(&mut s, "Other.x + ',' + typeof util.printd", &other).as_deref(), Ok("1,function"));
         // an object that does not parse fails the scripts that use it, naming it
         let lov = [object("LOV", None, "var list = <items><item/></items>;"), object("messages", None, "var hi = 'hi';")];
         assert_eq!(with_objects(&mut s, "messages.hi", &lov).as_deref(), Ok("hi"));

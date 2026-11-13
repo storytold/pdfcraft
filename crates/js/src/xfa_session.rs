@@ -49,10 +49,16 @@ pub struct Script {
     pub timeout: std::time::Duration,
 }
 
+/// A new session's number.
+fn next_session() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
 /// Run `s` here: a fresh context (JavaScript) or interpreter (FormCalc) on its copy of the
 /// form. `started` is called once the engine is ready for the script (its context built), so
 /// a time limit on the script runs from then, not from when it was asked for.
-fn run_script(s: Script, doc: &XfaDoc, started: &dyn Fn()) -> XfaOutcome {
+fn run_script(s: Script, doc: &XfaDoc, session: u64, started: &dyn Fn()) -> XfaOutcome {
     // Tests make the engine slow to be ready, to see that the time isn't the script's.
     #[cfg(test)]
     let started = &|| {
@@ -71,7 +77,7 @@ fn run_script(s: Script, doc: &XfaDoc, started: &dyn Fn()) -> XfaOutcome {
         started();
         return XfaOutcome { error: Some(why), ..Default::default() };
     }
-    crate::xfa::run_here_with(&s.source, s.objects, &s.event, doc, s.root, true, s.limits, started)
+    crate::xfa::run_here_with(&s.source, s.objects, &s.event, doc, s.root, true, session, s.limits, started)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -104,11 +110,13 @@ mod native {
         dead: Option<String>,
         /// How long the engine has to be ready for a script ([`ENGINE_START_LIMIT`] by default).
         start_limit: Duration,
+        /// Which session this is, for the engine its scripts keep.
+        id: u64,
     }
 
     impl XfaSession {
         pub fn new(doc: XfaDoc) -> XfaSession {
-            XfaSession { doc, worker: None, dead: None, start_limit: ENGINE_START_LIMIT }
+            XfaSession { doc, worker: None, dead: None, start_limit: ENGINE_START_LIMIT, id: super::next_session() }
         }
 
         /// Multiply the time the engine has to be ready for a script by `factor` (a script's
@@ -130,18 +138,19 @@ mod native {
                 let (to, inbox) = channel::<Box<Script>>();
                 let (reply, from) = channel::<Reply>();
                 let doc = self.doc.clone();
+                let id = self.id;
                 let spawned = std::thread::Builder::new().name("pdfcraft-xfa-session".into()).stack_size(crate::SCRIPT_STACK).spawn(move || {
                     crate::xfa::warm_up();
                     // The caller is gone when a send fails: nothing to report then.
                     let _ = reply.send(Reply::Ready);
                     while let Ok(s) = inbox.recv() {
                         let started = reply.clone();
-                        let o = run_script(*s, &doc, &move || {
+                        let o = run_script(*s, &doc, id, &move || {
                             let _ = started.send(Reply::Started);
                         });
                         let _ = reply.send(Reply::Outcome(Box::new(o)));
                     }
-                    crate::xfa::drop_kept();
+                    crate::xfa::drop_kept(id);
                 });
                 spawned.map_err(|e| format!("the script engine could not start: {e}"))?;
                 super::ENGINES_STARTED.with(|n| n.set(n.get().saturating_add(1)));
@@ -232,11 +241,13 @@ mod native {
     /// The scripts of one event, run here (no threads on wasm: a script's own limits bound it).
     pub struct XfaSession {
         doc: XfaDoc,
+        /// Which session this is: each keeps its own engine, though all run on this thread.
+        id: u64,
     }
 
     impl XfaSession {
         pub fn new(doc: XfaDoc) -> XfaSession {
-            XfaSession { doc }
+            XfaSession { doc, id: super::next_session() }
         }
 
         /// No engine to start on wasm: nothing to scale.
@@ -249,7 +260,7 @@ mod native {
         }
 
         pub fn run(&mut self, script: Script) -> XfaOutcome {
-            run_script(script, &self.doc, &|| {})
+            run_script(script, &self.doc, self.id, &|| {})
         }
     }
 
@@ -258,7 +269,7 @@ mod native {
         /// event (on other targets it goes with the session's thread).
         fn drop(&mut self) {
             crate::xfa::forget_base();
-            crate::xfa::drop_kept();
+            crate::xfa::drop_kept(self.id);
         }
     }
 }
