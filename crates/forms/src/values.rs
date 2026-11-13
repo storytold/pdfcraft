@@ -333,6 +333,12 @@ fn write_value_impl(doc: &mut Document, f: &Field, value: &FieldValue, scripts: 
             let t = &f.actions.keystroke(&f.name, t).map_err(FormError::Format)?;
             af::validate(&f.actions.validate, t).map_err(FormError::Invalid)?;
             let (t, refresh_field) = if resetting { (t.clone(), false) } else { scripting::accept(doc, f, t, scripts)? };
+            // A Keystroke or Validate action can replace what was typed: the value it leaves is
+            // held to the same check before it is stored. (What a script already changed in
+            // other fields stays, as when a script rejects the value itself.)
+            if let Some(why) = appearance::script_refusal(doc, f, &t) {
+                return invalid(format!("{:?} can't take this text: {why}", f.name));
+            }
             let shadow = t.is_empty() && crate::author::ancestor_sets(doc, f.obj, b"V");
             doc.update_dict(f.obj, |d| {
                 if t.is_empty() && !shadow {

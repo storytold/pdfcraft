@@ -1324,12 +1324,15 @@ fn arabic_and_hebrew_a_field_font_cannot_hold_are_shaped_right_to_left() {
         let (pin, _) = drawn(&doc, "pin");
         assert!(pin.contains("(****) Tj") && !pin.contains("ActualText") && !pin.contains("/PCAr"), "{pin}");
         if !has_face {
-            for (name, value) in [("name", typed.as_str()), ("note", long.as_str()), ("comb", word)] {
+            for (name, value) in [("name", typed.as_str()), ("note", long.as_str())] {
                 let err = set_value(&mut doc, name, &FieldValue::Text(value.into())).unwrap_err();
                 assert!(matches!(&err, FormError::Invalid(m) if m.contains(script) && m.contains("CRAFT_FONTS_DIR")), "{name}: {err}");
             }
             assert_eq!(field(&fields(&doc), "name").value, ["abc"]);
             assert!(!need_appearances(&doc) && undrawn_fields(&doc).is_empty());
+            // A comb field is not shaped in any build, so it is not refused: kept, `?`, reported.
+            set_value(&mut doc, "comb", &FieldValue::Text(word.chars().take(4).collect())).unwrap();
+            assert_eq!(undrawn_fields(&doc), [("comb".to_string(), word.chars().next().unwrap())]);
             continue;
         }
         set_value(&mut doc, "name", &FieldValue::Text(typed.clone())).unwrap();
@@ -2188,6 +2191,39 @@ fn unsupported_first_validation_call_preserves_custom_script_dispatch() {
         );
         assert_eq!(scripts.calls, 1);
         assert_eq!(field(&fields(&doc), "amount").value, ["20"]);
+    }
+}
+
+/// A Validate (or Keystroke) script can replace the typed value. What it leaves is held to the
+/// same check as typed text: a build without the script's face refuses it and keeps the old value.
+#[test]
+fn a_value_a_script_replaces_is_refused_when_the_build_cannot_draw_it() {
+    struct Replaces(&'static str);
+    impl Scripts for Replaces {
+        fn run(&mut self, _event: FieldEvent, _script: &str, _target: &Field, _value: &str, _fields: &[Field], _doc: &Document) -> ScriptResult {
+            ScriptResult { rc: true, value: self.0.into(), value_set: true, changes: Vec::new(), message: None }
+        }
+    }
+    for (script, word, has_face) in [
+        ("Arabic", "سلام", pdfcraft_fonts::document_arabic_font().is_some()),
+        ("Hebrew", "שלום", pdfcraft_fonts::document_hebrew_font(false).is_some()),
+    ] {
+        let mut doc = one_page();
+        add_field(&mut doc, 0, [50.0, 700.0, 250.0, 720.0], &NewField::Text { multiline: false }, Some("name")).unwrap();
+        set_value(&mut doc, "name", &FieldValue::Text("old".into())).unwrap();
+        set_field_script(&mut doc, "name", "validate", Some("event.value = other;")).unwrap();
+        let set = set_value_with(&mut doc, "name", &FieldValue::Text("typed".into()), &mut Replaces(word));
+        if has_face {
+            set.unwrap();
+            assert_eq!(field(&fields(&doc), "name").value, [word], "{script}");
+            assert!(undrawn_fields(&doc).is_empty(), "{script}");
+        } else {
+            assert!(matches!(&set, Err(FormError::Invalid(m)) if m.contains(script) && m.contains("CRAFT_FONTS_DIR")), "{script}: {set:?}");
+            assert_eq!(field(&fields(&doc), "name").value, ["old"], "{script}");
+        }
+        // A replacement the field's font draws is stored as before.
+        set_value_with(&mut doc, "name", &FieldValue::Text("typed".into()), &mut Replaces("plain")).unwrap();
+        assert_eq!(field(&fields(&doc), "name").value, ["plain"], "{script}");
     }
 }
 
