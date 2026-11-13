@@ -1150,6 +1150,35 @@ fn arrow_keys_nudge_all_selected_comments_as_one_undo_step() {
     assert_eq!(undone, before, "one undo restores the whole selection");
 }
 
+#[test]
+fn arrow_nudge_skips_locked_comments_and_duplicate_selection_entries() {
+    let mut h = harness(|app| app.set_option("quick", "square").unwrap());
+    for (a, b) in [((20.0, 20.0), (60.0, 60.0)), ((100.0, 20.0), (140.0, 60.0)), ((180.0, 20.0), (220.0, 60.0))] {
+        drag_pt(&mut h, a, b);
+    }
+    h.state_mut().set_option("quick", "select").unwrap();
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::LockAnnotation { page: 0, index: 1, locked: true }));
+    h.run_steps(2);
+    let before = comments(&h);
+    h.state_mut().views[0].comments.selected = Some((0, 0));
+    h.state_mut().views[0].comments.also = vec![(0, 1), (0, 2), (0, 2), (0, 0)];
+    h.key_press(egui::Key::ArrowRight);
+    h.run_steps(3);
+    let after = comments(&h);
+    let left = |list: &[Annotation], i: usize| list.iter().find(|a| a.index == i).expect("comment still exists").rect[0];
+    let primary_delta = left(&after, 0) - left(&before, 0);
+    let secondary_delta = left(&after, 2) - left(&before, 2);
+    assert!(primary_delta > 0.0, "primary comment moves");
+    assert!((secondary_delta - primary_delta).abs() < 0.01, "duplicate entries must not move the second comment twice");
+    assert_eq!(left(&after, 1), left(&before, 1), "locked comment stays in place");
+    h.state_mut().undo();
+    h.run_steps(2);
+    let undone = comments(&h);
+    for i in 0..3 {
+        assert_eq!(left(&undone, i), left(&before, i), "one undo restores comment {i}");
+    }
+}
+
 /// #3632: with a comment selected, Alt+← / Alt+→ still go back and forward through the view
 /// history instead of nudging it (egui's key patterns let an extra Alt through).
 #[test]
