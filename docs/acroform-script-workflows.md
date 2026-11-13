@@ -83,7 +83,37 @@ host path cancels unanswered popups and response dialogs; no web-interaction par
 This work does not add timer execution, PDF annotations/layers to the JS object model, or the
 remaining document action triggers.
 
+## Page actions, timers and layers
+
+When the page being read changes (the active tab's current page), the close actions of the
+page it was at run, then the new page's open actions: the page's own `/AA /O` and `/C`, and
+each annotation's `/PO`, `/PV` (opening) and `/PC`, `/PI` (closing), in `/Annots` order. They
+run in the document realm, so the functions and variables they define are there for buttons,
+the console and timers. This is how LaTeX `animate` animations start and stop.
+
+`app.setInterval`, `app.setTimeOut`, `app.clearInterval` and `app.clearTimeOut` keep up to 64
+timers per realm, each at least 10 ms apart. The viewer fires those that are due each frame (at
+most 16 per call; an interval that fell behind runs once and then counts from now). A timer
+runs unasked, so its alerts and requests go to the console. A fresh realm (after an edit
+resets it, Revert, or a full save) has no timers.
+
+Fields that page actions and timers show, hide or give another icon (`display`,
+`buttonSetIcon`) change only how the document is shown, through view-only render overrides
+(hayro-interpret patches 105 and 106). They aren't saved, printed or exported, and they don't
+mark the document as changed. Buttons and the console see the fields as shown, and a `display`
+or icon a button writes into the document takes over from the view's. A value or a reset from
+a page action or timer is one undoable edit.
+
+`this.getOCGs()` lists the document's layers (`name`, `state`, `initState`); setting
+`ocg.state` turns a layer as the Layers panel does.
+
 ## Automation
+
+`js_page` reads the document at a page and runs its page actions as the viewer does, and
+`js_advance` moves the script clock on by `ms` (up to one hour) and runs the timers that fall
+due on the way (at most 6,000 runs per call). Both return the scripts' output, the pages to
+draw again, and when the next timer is due; `page_render` draws the fields as the scripts show
+them.
 
 The existing `js_run` accepts `answers`, an optional array of up to 32 strings or null values:
 
