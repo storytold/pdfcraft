@@ -376,6 +376,28 @@ pub(super) fn noop(_: &JsValue, _: &[JsValue], _: &mut Context) -> JsResult<JsVa
     Ok(JsValue::undefined())
 }
 
+/// `resolveNode("table._row")`: the instance manager of the subform the last step names after `_` (the SOM instance manager shortcut), when the
+/// rest of the expression reaches a node holding instances of it; `null` otherwise.
+fn manager_by_som(ctx: &mut Context, from: usize, expr: &str) -> JsResult<JsValue> {
+    let (parent, last) = match expr.trim().rsplit_once('.') {
+        Some((p, l)) => (Some(p), l),
+        None => (None, expr.trim()),
+    };
+    let Some(name) = last.strip_prefix('_').filter(|n| !n.is_empty()) else { return Ok(JsValue::null()) };
+    let at = {
+        let h = host(ctx)?.borrow();
+        let parent = match parent {
+            Some(p) => resolve_som(&h, from, p).first().copied(),
+            None => Some(from),
+        };
+        parent.filter(|&p| !instances(&h, p, name).is_empty())
+    };
+    match at {
+        Some(p) => instance_manager(ctx, p, name),
+        None => Ok(JsValue::null()),
+    }
+}
+
 /// `resolveNode(som)` / `resolveNodes(som)` bound to node `from`.
 pub(super) fn resolver(ctx: &mut Context, from: usize, many: bool) -> JsResult<JsValue> {
     let key = ObjectInitializer::new(ctx)
@@ -409,7 +431,7 @@ pub(super) fn resolver(ctx: &mut Context, from: usize, many: bool) -> JsResult<J
         }
         match found.first() {
             Some(i) => node_object(ctx, *i),
-            None => Ok(JsValue::null()),
+            None => manager_by_som(ctx, from, &expr),
         }
     }
     Ok(function(ctx, NativeFunction::from_copy_closure_with_captures(resolve, key)).into())

@@ -935,6 +935,19 @@ mod xfa_model {
 
     /// A calculate script finds its siblings by name and yields its last expression, and a
     /// value it sets comes back as an effect.
+    /// `resolveNode` reaches a repeated subform's instance manager by `_name`, from a node, through a path and from `xfa`, as
+    /// `table._row` does; a name with no instances there is `null`.
+    #[test]
+    fn resolve_node_reaches_an_instance_manager_by_its_underscore_name() {
+        let o = go(
+            "table.resolveNode('_row').count + ',' + page1.resolveNode('table._row').count + ',' + xfa.resolveNode('form1.page1.table._row').count \
+             + ',' + table.resolveNode('_qty') + ',' + this.resolveNode('_nothing')",
+            "form1[0].page1[0].total[0]",
+            "calculate",
+        );
+        assert_eq!(o.result.as_deref(), Some("2,2,2,null,null"), "{o:?}");
+    }
+
     #[test]
     fn calculate_scripts_see_siblings_by_name_and_yield_their_last_expression() {
         let o = go("qty.rawValue * price.rawValue", "form1[0].page1[0].total[0]", "calculate");
