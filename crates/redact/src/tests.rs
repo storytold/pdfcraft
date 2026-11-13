@@ -837,6 +837,22 @@ fn vectors_are_removed_or_clipped_and_inline_images_go() {
     assert!(c.contains("150 150 m"), "the line elsewhere stays");
 }
 
+/// A horizontal stroke's construction box has no area, so it overlapped nothing and stayed under
+/// the mark. The painted stroke is as wide as the line: a 12 pt line centred 5 pt above the mark
+/// reaches into it and goes; a 1 pt line there does not and stays.
+#[test]
+fn a_stroke_is_removed_by_its_painted_width() {
+    let src = b"12 w 10 60 m 100 60 l S 1 w 10 60 m 100 60 l S 4 w 10 50 m 100 50 l S";
+    let mut doc = one_page(src, "", vec![]);
+    mark(&mut doc, 0, &[[40.0, 45.0, 60.0, 55.0]], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!(r.paths_removed, 2, "{r:?}");
+    let c = content(&doc, 0);
+    assert!(!c.contains("12 w\n10 60 m"), "the wide line reaches the mark: {c}");
+    assert!(c.contains("1 w\n10 60 m\n100 60 l\nS"), "the thin line beside it stays: {c}");
+    assert!(!c.contains("10 50 m"), "the line through the mark goes: {c}");
+}
+
 /// A tiling pattern's cell is a content stream of its own and can draw text. Redacting a shape
 /// filled with such a pattern removed the fill from the page but left the pattern in the page's
 /// resources, so its cell -- with the text that was under the mark -- stayed in the saved file
@@ -1055,6 +1071,20 @@ fn partially_covered_vector_paths_do_not_leak_drawing_commands() {
     assert!(!c.contains("20 20 l"), "partial clip geometry must not leak: {c}");
     // Unrelated non-intersecting path remains untouched.
     assert!(c.contains("300 300 m\n350 350 l\nS"), "unaffected vector path must be kept: {c}");
+}
+
+#[test]
+fn a_covered_clip_and_paint_path_leaves_an_empty_clip_not_its_outline() {
+    // The outline of a fully covered path that clips and paints is confidential geometry: only
+    // an empty clip may stay, and what follows is hidden as the covered clip would have hidden it.
+    let src = b"q 100 100 m 150 180 l 200 100 l h W f 300 300 50 50 re f Q";
+    let mut doc = one_page(src, "", vec![]);
+    mark(&mut doc, 0, &[[90.0, 90.0, 210.0, 190.0]], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!(r.paths_removed, 1);
+    let c = content(&doc, 0);
+    assert!(!c.contains("150 180 l") && !c.contains("100 100 m"), "outline must not stay: {c}");
+    assert!(c.contains("0 0 0 0 re\nW\nn"), "an empty clip stays: {c}");
 }
 
 /// A chain of nested forms deeper than the pass can walk was removed from the page, taking
@@ -4137,6 +4167,8 @@ fn hidden_ocmd_policy_matches_the_default_configuration() {
         (Some("AllOn"), false, Some("not_off"), false),
         (None, false, Some("malformed_not"), true),
         (None, false, Some("malformed_without_ocgs"), true),
+        // `/VE` names the hidden group through an alias object (10 0 R is a reference to 8 0 R).
+        (None, false, Some("alias"), true),
     ];
     for (policy, malformed_policy, visibility, should_remove) in cases {
         let mut doc = one_page(
@@ -4174,9 +4206,11 @@ fn hidden_ocmd_policy_matches_the_default_configuration() {
             Some("malformed_without_ocgs") => {
                 membership.set(b"VE".to_vec(), Object::Array(vec![Object::name("UnknownOperator"), Object::Ref(ObjRef::new(8, 0))]))
             }
+            Some("alias") => membership.set(b"VE".to_vec(), Object::Array(vec![Object::name("Or"), Object::Ref(ObjRef::new(10, 0))])),
             _ => {}
         }
         doc.set(ObjRef::new(9, 0), Object::Dict(membership));
+        doc.set(ObjRef::new(10, 0), Object::Ref(ObjRef::new(8, 0)));
         let root = doc.root().unwrap();
         doc.update_dict(root, |d| {
             d.set(
@@ -6654,6 +6688,131 @@ fn a_reply_on_another_page_to_a_removed_popup_goes_too() {
     for gone in [&b"POPUP-REPLY"[..], b"POPUP-TEXT", b"PARENT-NOTE"] {
         assert!(!bytes.windows(gone.len()).any(|w| w == gone), "{} survived", String::from_utf8_lossy(gone));
     }
+}
+
+/// A hairline under a shrinking CTM still paints about a device pixel: its pad must not shrink
+/// with the CTM, or a mark on that ink misses it.
+#[test]
+fn a_hairline_under_a_shrinking_ctm_is_padded_by_half_a_unit() {
+    // Device line from (10, 10) to (50, 10); the mark lies on its painted pixel, above its axis.
+    let mut doc = one_page(b"0.01 0 0 0.01 0 0 cm 0 w 1000 1000 m 5000 1000 l S", "", vec![]);
+    mark(&mut doc, 0, &[[20.0, 10.2, 30.0, 10.4]], "");
+    assert_eq!(apply(&mut doc, None).unwrap().paths_removed, 1);
+}
+
+/// One `re` has four mitred corners: it is padded by the miter limit like any joined path.
+#[test]
+fn a_rectangle_stroke_is_padded_for_its_mitred_corners() {
+    let mut doc = one_page(b"2 w 100 100 50 50 re S", "", vec![]);
+    // Past half the line width from the rectangle, inside the miter reach.
+    mark(&mut doc, 0, &[[155.0, 120.0, 160.0, 130.0]], "");
+    assert_eq!(apply(&mut doc, None).unwrap().paths_removed, 1);
+}
+
+/// A projecting square cap's outer corner reaches lw/2 x sqrt(2) from the endpoint. Under a shear
+/// it maps past a pad of lw/2 times the CTM's stretch (the review's example: corner at x = 12).
+#[test]
+fn a_square_cap_corner_under_a_shear_is_inside_the_pad() {
+    let mut doc = one_page(b"1 0 1 1 0 0 cm 2 J 2 w 0 0 m 10 0 l S", "", vec![]);
+    mark(&mut doc, 0, &[[11.8, 0.8, 11.9, 0.95]], "");
+    assert_eq!(apply(&mut doc, None).unwrap().paths_removed, 1);
+}
+
+/// A line width set between the path and its `S` still applies to that stroke, so the stroke is
+/// tested at the width it is painted with; the width itself stays, the path goes.
+#[test]
+fn a_width_set_between_the_path_and_its_stroke_does_not_hide_it_from_the_test() {
+    let mut doc = one_page(b"10 60 m 100 60 l 12 w S 5 5 m 9 9 l S", "", vec![]);
+    mark(&mut doc, 0, &[[40.0, 45.0, 60.0, 55.0]], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!(r.paths_removed, 1, "{r:?}");
+    let c = content(&doc, 0);
+    assert!(!c.contains("10 60 m") && !c.contains("100 60 l"), "the wide line reaches the mark: {c}");
+    assert!(c.contains("12 w"), "the width stays: {c}");
+    assert!(c.contains("5 5 m"), "the line elsewhere stays: {c}");
+}
+
+/// The renderer takes a line-state operator's operand from the end: `1 12 w` strokes 12 points wide,
+/// so the stroke is tested at that width.
+#[test]
+fn a_surplus_operand_before_the_line_width_does_not_hide_the_stroke() {
+    let mut doc = one_page(b"1 12 w 10 60 m 100 60 l S", "", vec![]);
+    mark(&mut doc, 0, &[[40.0, 45.0, 60.0, 55.0]], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!(r.paths_removed, 1, "{r:?}");
+    assert!(!content(&doc, 0).contains("100 60 l"));
+}
+
+/// One page drawing `SECRET` in the `/OC /L` block, with layer 7 0 R in the default
+/// configuration `config` (objects 8 and up are `extra`).
+fn layer_state_page(config: Vec<(&str, Object)>, resource: &str, extra: Vec<Vec<u8>>) -> Document {
+    let mut objects = vec![b"<< /Type /OCG /Name (Secret) >>".to_vec()];
+    objects.extend(extra);
+    let mut doc = one_page(b"/OC /L BDC BT /F1 10 Tf 10 100 Td (SECRET) Tj ET EMC", &format!("/Properties << /L {resource} >>"), objects);
+    let config = Object::Dict(Dict::from_iter(config.into_iter().map(|(k, v)| (k.as_bytes().to_vec(), v))));
+    let root = doc.root().unwrap();
+    doc.update_dict(root, |d| {
+        d.set(
+            b"OCProperties".to_vec(),
+            Object::Dict(Dict::from_iter([(b"OCGs".to_vec(), Object::Array(vec![Object::Ref(ObjRef::new(7, 0))])), (b"D".to_vec(), config)])),
+        );
+    })
+    .unwrap();
+    doc
+}
+
+fn assert_layer_secret_removed(mut doc: Document) {
+    use crate::sanitize::{Hidden, remove_hidden, scan};
+    let counts = scan(&doc);
+    assert!(counts.iter().any(|(h, n)| *h == Hidden::HiddenLayers && *n > 0), "{counts:?}");
+    remove_hidden(&mut doc, &[Hidden::HiddenLayers]).unwrap();
+    let saved = Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap();
+    assert!(!pdfcraft_edit::text_lines(&saved, 0).unwrap().iter().any(|line| line.text.contains("SECRET")));
+}
+
+#[test]
+fn an_indirect_base_state_off_hides_the_layer() {
+    assert_layer_secret_removed(layer_state_page(vec![("BaseState", Object::Ref(ObjRef::new(8, 0)))], "7 0 R", vec![b"/OFF".to_vec()]));
+}
+
+#[test]
+fn a_chained_base_state_off_hides_the_layer() {
+    assert_layer_secret_removed(layer_state_page(
+        vec![("BaseState", Object::Ref(ObjRef::new(8, 0)))],
+        "7 0 R",
+        vec![b"9 0 R".to_vec(), b"/OFF".to_vec()],
+    ));
+}
+
+#[test]
+fn a_chained_membership_type_is_evaluated() {
+    assert_layer_secret_removed(layer_state_page(
+        vec![("BaseState", Object::name("ON"))],
+        "8 0 R",
+        vec![b"<< /Type 9 0 R /OCGs [7 0 R] /P /AllOff >>".to_vec(), b"10 0 R".to_vec(), b"/OCMD".to_vec()],
+    ));
+}
+
+#[test]
+fn off_wins_over_on_when_the_base_state_is_off() {
+    assert_layer_secret_removed(layer_state_page(
+        vec![
+            ("BaseState", Object::name("OFF")),
+            ("ON", Object::Array(vec![Object::Ref(ObjRef::new(7, 0))])),
+            ("OFF", Object::Array(vec![Object::Ref(ObjRef::new(7, 0))])),
+        ],
+        "7 0 R",
+        Vec::new(),
+    ));
+}
+
+#[test]
+fn a_membership_dictionary_with_an_indirect_type_is_evaluated() {
+    assert_layer_secret_removed(layer_state_page(
+        vec![("BaseState", Object::name("ON"))],
+        "8 0 R",
+        vec![b"<< /Type 9 0 R /OCGs [7 0 R] /P /AllOff >>".to_vec(), b"/OCMD".to_vec()],
+    ));
 }
 
 /// An invisible OCR-style text layer drawn in a Type3 font (what the OCR output writes for
