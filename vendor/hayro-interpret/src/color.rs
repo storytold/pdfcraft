@@ -1552,9 +1552,10 @@ impl Color {
     /// its opacity, for blending in a `DeviceCMYK` transparency group (ISO 32000-2 §11.3.4).
     ///
     /// `DeviceCMYK` gives its components. `DeviceGray` is black ink alone, `K = 1 − gray`
-    /// (§10.4.2.2). `None` for every other space, ICCBased CMYK included: such a colour has no
-    /// tints without a colour conversion this crate does not make (an ICCBased colour keeps
-    /// its own profile), and the caller draws it as before.
+    /// (§10.4.2.2). PdfCraft patch (104): an additive colour (`DeviceRGB`, `CalRGB`, `Lab`, a
+    /// three-component ICCBased colour) is the ink that draws back to it through the CMYK
+    /// profile. `None` for every other space, ICCBased CMYK included (it keeps its own
+    /// profile), and the caller draws it as before.
     pub fn ink_tints(&self) -> Option<([f32; 4], f32)> {
         let c = |i: usize| {
             self.components
@@ -1566,9 +1567,25 @@ impl Color {
         let tints = match self.color_space.0.as_ref() {
             ColorSpaceType::DeviceCmyk => [c(0), c(1), c(2), c(3)],
             ColorSpaceType::DeviceGray => [0.0, 0.0, 0.0, 1.0 - c(0)],
+            ColorSpaceType::DeviceRgb | ColorSpaceType::CalRgb(_) | ColorSpaceType::Lab(_) => {
+                self.ink_from_srgb()?
+            }
+            ColorSpaceType::ICCBased(icc) if icc.0.number_components == 3 => {
+                self.ink_from_srgb()?
+            }
             _ => return None,
         };
         Some((tints, self.opacity.clamp(0.0, 1.0)))
+    }
+
+    fn ink_from_srgb(&self) -> Option<[f32; 4]> {
+        // `to_rgba` turns a non-finite component into some finite colour, which is not the
+        // colour's ink, so such a colour has no tints.
+        if self.components.iter().any(|c| !c.is_finite()) {
+            return None;
+        }
+        let [r, g, b, _] = self.to_rgba().components();
+        crate::cmyk_inverse::srgb_to_cmyk([r, g, b])
     }
 
     /// Create a color from RGBA.
@@ -1592,9 +1609,11 @@ pub fn cmyk_to_srgb8(input: &[u8], output: &mut [u8]) -> Option<()> {
     CMYK_TRANSFORM.convert_u8(input, output)
 }
 
-static CMYK_TRANSFORM: LazyLock<ICCProfile> = LazyLock::new(|| {
-    ICCProfile::new(include_bytes!("../assets/CGATS001Compat-v2-micro.icc"), 4).unwrap()
-});
+/// The CMYK profile pages are drawn with.
+pub(crate) const CMYK_PROFILE: &[u8] = include_bytes!("../assets/CGATS001Compat-v2-micro.icc");
+
+static CMYK_TRANSFORM: LazyLock<ICCProfile> =
+    LazyLock::new(|| ICCProfile::new(CMYK_PROFILE, 4).unwrap());
 
 pub(crate) trait ToRgb {
     fn convert_sample(&self, input: &[f32], output: &mut [u8], manual_scale: bool) -> Option<()> {

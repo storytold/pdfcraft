@@ -52,7 +52,7 @@ enum DecryptorTag {
     Rc4,
     Aes128,
     Aes256,
-    /// PdfCraft patch (48): a `/CFM` other than `None`, `V2`, `AESV2` or `AESV3`, or one that
+    /// PdfCraft patch (49): a `/CFM` other than `None`, `V2`, `AESV2` or `AESV3`, or one that
     /// isn't a name (ISO 32000-2 Table 25: "Applications that encounter other values shall report
     /// that the file is encrypted with an unsupported algorithm"), as pdfcraft-cos reads it.
     Unsupported,
@@ -61,7 +61,7 @@ enum DecryptorTag {
 impl DecryptorTag {
     fn from_name(name: &Name<'_>) -> Option<Self> {
         match name.as_str() {
-            // PdfCraft patch (48): `Identity` names a crypt filter (`/StmF`, `/StrF`), not a
+            // PdfCraft patch (49): `Identity` names a crypt filter (`/StmF`, `/StrF`), not a
             // method; as a `/CFM` it is one of the "other values" of Table 25.
             "None" => Some(Self::None),
             "V2" => Some(Self::Rc4),
@@ -107,13 +107,13 @@ impl Decryptor {
 
                 match crypt_dict.cfm {
                     DecryptorTag::None => Some(data.to_vec()),
-                    // PdfCraft patch (48): only a stream naming such a filter for itself gets
+                    // PdfCraft patch (49): only a stream naming such a filter for itself gets
                     // here (`decryptor` refuses one `/StmF`, `/StrF` or `/EFF` uses); it can't
                     // be read.
                     DecryptorTag::Unsupported => None,
                     DecryptorTag::Rc4 => decrypt_rc4(key, data, id),
                     DecryptorTag::Aes128 => decrypt_aes128(key, data, id),
-                    // PdfCraft patch (46): Algorithm 1.A (ISO 32000-2 §7.6.3.3) is for 256-bit
+                    // PdfCraft patch (47): Algorithm 1.A (ISO 32000-2 §7.6.3.3) is for 256-bit
                     // file keys. A `/V 4` handler naming `/CFM /AESV3` with a 128-bit key
                     // derives each object's key as for `AESV2`, as pdfcraft-crypt reads it.
                     DecryptorTag::Aes256 if key.len() != 32 => decrypt_aes128(key, data, id),
@@ -170,7 +170,7 @@ fn efopen_only(dict: &Dict<'_>) -> bool {
     !encrypting.is_empty() && !names(STM_F) && !names(STR_F)
 }
 
-/// PdfCraft patch (47): an integer entry as pdfcraft-cos reads one: an integer, or a real with no
+/// PdfCraft patch (48): an integer entry as pdfcraft-cos reads one: an integer, or a real with no
 /// fraction (a huge one saturates); anything else is absent.
 fn int_entry(dict: &Dict<'_>, key: &[u8]) -> Option<i64> {
     let n = dict.get::<object::Number>(key)?;
@@ -178,7 +178,7 @@ fn int_entry(dict: &Dict<'_>, key: &[u8]) -> Option<i64> {
     (int as f64 == real || (real.is_finite() && crate::math::trunc_f64(real) == real)).then_some(int)
 }
 
-/// PdfCraft patch (47): the file key length in bits as pdfcraft-cos reads it, `None` for a /V
+/// PdfCraft patch (48): the file key length in bits as pdfcraft-cos reads it, `None` for a /V
 /// it doesn't support. /V 1 is 40 bits (ISO 32000-2 Table 20); /V 0 and 2 take /Length (40 when
 /// absent); /V 4 takes it from the crypt filter strings and streams use (/StmF, else /StrF,
 /// whichever encrypts, else /StdCF): 128 for AESV2 and AESV3, for V2 the filter's /Length (bytes, or bits in some files),
@@ -229,7 +229,7 @@ fn decryptor(
         return Err(DecryptionError::UnsupportedAlgorithm);
     }
 
-    // PdfCraft patch (47): /V, /R, /Length and /P are read as pdfcraft-cos reads them, so the
+    // PdfCraft patch (48): /V, /R, /Length and /P are read as pdfcraft-cos reads them, so the
     // renderer opens exactly the files the document model opens (see `int_entry`,
     // `key_length_bits`). /V 0 (or no /V) is RC4 with /Length, as MuPDF and PDFium read it.
     let encryption_v = int_entry(dict, V).unwrap_or(0);
@@ -240,7 +240,7 @@ fn decryptor(
         None => return Err(InvalidEncryption),
     };
     let length_bits = key_length_bits(dict, encryption_v).ok_or(DecryptionError::UnsupportedAlgorithm)?;
-    // PdfCraft patch (47): revisions 2-4 derive an RC4 or AES-128 key of 5 to 16 bytes from a
+    // PdfCraft patch (48): revisions 2-4 derive an RC4 or AES-128 key of 5 to 16 bytes from a
     // 16-byte MD5 hash; a /Length outside 40-128 is clamped, as pdfcraft-crypt clamps it.
     // Both casts are lossless after the clamps.
     let byte_length = (length_bits.clamp(40, 128) / 8) as u16;
@@ -261,7 +261,7 @@ fn decryptor(
         }
     };
 
-    // PdfCraft patch (48): a crypt filter strings, streams or embedded files use whose method
+    // PdfCraft patch (49): a crypt filter strings, streams or embedded files use whose method
     // can't be decrypted makes the file unreadable whatever the password, as pdfcraft-crypt
     // refuses it (`SecurityHandler::open`).
     if data.as_ref().is_some_and(|d| d.uses_unsupported(dict)) {
@@ -271,7 +271,7 @@ fn decryptor(
     let owner_string = dict.get::<object::String<'_>>(O).ok_or(InvalidEncryption)?;
     let user_string = dict.get::<object::String<'_>>(U).ok_or(InvalidEncryption)?;
     let permissions = {
-        // PdfCraft patch (47): no /P reads as -1, as in pdfcraft-cos.
+        // PdfCraft patch (48): no /P reads as -1, as in pdfcraft-cos.
         let raw = int_entry(dict, P).unwrap_or(-1);
 
         if raw < 0 {
@@ -284,7 +284,7 @@ fn decryptor(
     let mut decryption_key = if revision <= 4 {
         // PdfCraft patch: (see vendor/README.md hayro-syntax (14)) the password is tried as
         // given and then in PDFDocEncoding, which revisions 2–4 specify.
-        // PdfCraft patch (47): a file whose /EncryptMetadata is false but whose key was derived
+        // PdfCraft patch (48): a file whose /EncryptMetadata is false but whose key was derived
         // without the 0xFFFFFFFF of Algorithm 2 step f is read the other way too, as pdfcraft-crypt
         // reads it (and PDFium).
         let metadata_readings: &[bool] = if !encrypt_metadata && revision >= 4 { &[false, true] } else { &[encrypt_metadata] };
@@ -461,7 +461,7 @@ impl DecryptorData {
         })
     }
 
-    /// PdfCraft patch (48): whether `/StmF`, `/StrF` or `/EFF` (which defaults to `/StmF`) of
+    /// PdfCraft patch (49): whether `/StmF`, `/StrF` or `/EFF` (which defaults to `/StmF`) of
     /// `dict` names a filter whose method is unsupported. One `/CF` defines and nothing uses
     /// doesn't count, as in pdfcraft-crypt.
     fn uses_unsupported(&self, dict: &Dict<'_>) -> bool {
@@ -481,7 +481,7 @@ struct CryptDictionary {
 
 impl CryptDictionary {
     fn from_dict(dict: &Dict<'_>, default_length: u16) -> Option<Self> {
-        // PdfCraft patch (48): no `/CFM` (or a null one) is `None`, the default (Table 25),
+        // PdfCraft patch (49): no `/CFM` (or a null one) is `None`, the default (Table 25),
         // which leaves data as it is; any other value can't be decrypted. Upstream dropped the
         // filter in both cases, so a stream or string using it was read as stored, ciphertext
         // and all.
@@ -625,7 +625,7 @@ fn compute_hash_rev56(
 /// password in `PDFDocEncoding` (ISO 32000-2 §7.6.4.3.2, Algorithm 2 a), but the password arrives
 /// as UTF-8 text: first the bytes as given (what earlier versions used, and what some writers
 /// store), then, for text with characters outside ASCII, its `PDFDocEncoding` bytes ("ılık€",
-/// "Çok güzel"). Patch (47): characters `PDFDocEncoding` lacks are dropped ("şifre" also tries
+/// "Çok güzel"). Patch (48): characters `PDFDocEncoding` lacks are dropped ("şifre" also tries
 /// "ifre", as MuPDF does), and U+FFFD stands for the byte 0x9F, which `PDFDocEncoding` leaves
 /// undefined, so this tries the same bytes as pdfcraft-crypt.
 fn legacy_passwords(password: &[u8]) -> Vec<Vec<u8>> {
@@ -776,7 +776,7 @@ fn authenticate_user_password_rev234(
     // revision 3 or greater), the password supplied is the correct user password.
     match revision {
         2 => {
-            // PdfCraft patch (47): the first 32 bytes, as pdfcraft-crypt compares them; a longer
+            // PdfCraft patch (48): the first 32 bytes, as pdfcraft-crypt compares them; a longer
             // /U still opens.
             if Some(result.as_slice()) != user_string.as_ref().get(..32) {
                 return Err(DecryptionError::PasswordProtected);
@@ -887,7 +887,7 @@ fn decryption_key_rev56(
             .get::<object::String<'_>>(OE)
             .ok_or(InvalidEncryption)?;
 
-        // PdfCraft patch (47): the first 32 bytes of a longer string, as pdfcraft-crypt reads it.
+        // PdfCraft patch (48): the first 32 bytes of a longer string, as pdfcraft-crypt reads it.
         let oe_string = oe_string.get(..32).ok_or(InvalidEncryption)?;
 
         let cipher = AES256Cipher::new(&intermediate_owner_key).ok_or(InvalidEncryption)?;
@@ -905,7 +905,7 @@ fn decryption_key_rev56(
             .get::<object::String<'_>>(UE)
             .ok_or(InvalidEncryption)?;
 
-        // PdfCraft patch (47): the first 32 bytes of a longer string, as pdfcraft-crypt reads it.
+        // PdfCraft patch (48): the first 32 bytes of a longer string, as pdfcraft-crypt reads it.
         let ue_string = ue_string.get(..32).ok_or(InvalidEncryption)?;
 
         let cipher = AES256Cipher::new(&intermediate_key).ok_or(InvalidEncryption)?;

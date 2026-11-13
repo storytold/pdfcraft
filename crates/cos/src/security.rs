@@ -132,7 +132,7 @@ pub(crate) fn encrypt_dict(doc: &Document, d: &Dict) -> EncryptDict {
 /// some files), else the dictionary's `/Length`, else 128. The dictionary's `/Length` is often a
 /// stale 40 next to an AES filter, so it counts only for RC4 without a length of its own, as MuPDF
 /// and PDFium read it. A length that isn't positive reads as absent. The renderer's
-/// `hayro-syntax` reads the length the same way (vendor/README.md, hayro-syntax (47)).
+/// `hayro-syntax` reads the length the same way (vendor/README.md, hayro-syntax (48)).
 fn v4_length_bits(doc: &Document, d: &Dict) -> i64 {
     let int = |o: &Object| doc.resolve(o).as_int().filter(|n| *n > 0);
     let cf = d.get(b"CF").map(|c| doc.resolve(c)).and_then(|c| c.as_dict().cloned());

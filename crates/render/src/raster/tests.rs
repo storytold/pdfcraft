@@ -2741,6 +2741,58 @@ trailer << /Root 1 0 R >>
     assert_eq!(px(&hidden, 20, 80), vec![255, 0, 0, 255], "fields stay");
 }
 
+/// The viewer's overrides (patches 105 and 106) show a hidden widget, hide a shown one and draw
+/// one with another form, by object; an entry of `/Annots` that isn't a dictionary is skipped.
+#[test]
+fn annotation_and_appearance_overrides_change_only_the_view() {
+    let pdf = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 100 50] /Annots [42 5 0 R 6 0 R] >> endobj
+5 0 obj << /Type /Annot /Subtype /Widget /FT /Btn /Ff 65536 /T (a) /F 2 /Rect [0 0 50 50] /AP << /N 7 0 R >> >> endobj
+6 0 obj << /Type /Annot /Subtype /Widget /FT /Btn /Ff 65536 /T (b) /Rect [50 0 100 50] /AP << /N 8 0 R >> >> endobj
+7 0 obj << /Type /XObject /Subtype /Form /BBox [0 0 50 50] /Length 24 >> stream
+1 0 0 rg 0 0 50 50 re f
+endstream endobj
+8 0 obj << /Type /XObject /Subtype /Form /BBox [0 0 50 50] /Length 24 >> stream
+0 0 1 rg 0 0 50 50 re f
+endstream endobj
+9 0 obj << /Type /XObject /Subtype /Form /BBox [0 0 10 10] /Length 24 >> stream
+0 1 0 rg 0 0 10 10 re f
+endstream endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+    let render = |config: RenderConfig| {
+        let mut r = PageRenderer::new(Arc::new(pdf.to_vec()), config);
+        r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() })
+    };
+    let px = |p: &RenderedPage, x: u32, y: u32| p.rgba[((y * p.width + x) * 4) as usize..][..4].to_vec();
+    let (white, red, blue, green) = (vec![255, 255, 255, 255], vec![255, 0, 0, 255], vec![0, 0, 255, 255], vec![0, 255, 0, 255]);
+    let plain = render(RenderConfig::default());
+    assert_eq!((px(&plain, 25, 25), px(&plain, 75, 25)), (white.clone(), blue), "the hidden widget isn't drawn");
+    let flipped = render(RenderConfig { annotations: Arc::new(vec![(5, 0, true), (6, 0, false)]), ..RenderConfig::default() });
+    assert_eq!((px(&flipped, 25, 25), px(&flipped, 75, 25)), (red, white.clone()), "shown and hidden by object");
+    let face = render(RenderConfig { appearances: Arc::new(vec![(6, 0, 9, 0), (5, 0, 99, 0)]), ..RenderConfig::default() });
+    assert_eq!((px(&face, 25, 25), px(&face, 75, 25)), (white.clone(), green), "drawn with the other form, scaled to its own rectangle");
+    let cleared = render(RenderConfig { appearances: Arc::new(vec![(6, 0, 0, 0)]), ..RenderConfig::default() });
+    assert_eq!(px(&cleared, 75, 25), white, "an override naming no form draws nothing (a cleared icon), not the button's own face");
+    // A print preview draws the page as it prints, without what the scripts show.
+    let config = RenderConfig {
+        annotations: Arc::new(vec![(5, 0, true), (6, 0, false)]),
+        appearances: Arc::new(vec![(6, 0, 9, 0)]),
+        ..RenderConfig::default()
+    };
+    let preview = PageRenderer::new(Arc::new(pdf.to_vec()), config).render(RenderRequest {
+        page: 0,
+        kind: RequestKind::Pixels,
+        tile: None,
+        scale: 1.0,
+        tag: PRINT_TAG,
+        ..Default::default()
+    });
+    assert_eq!((px(&preview, 25, 25), px(&preview, 75, 25)), (vec![255, 255, 255, 255], vec![0, 0, 255, 255]), "the print preview");
+}
+
 /// ISO 32000-2 Table 167: Invisible hides an annotation of a type that isn't standard and
 /// nothing else; §12.5.6.14: a popup has no appearance of its own, so its `/AP` isn't painted.
 #[test]
