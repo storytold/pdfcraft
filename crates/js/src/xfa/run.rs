@@ -148,7 +148,7 @@ pub(crate) fn run_here(
     ctx.insert_data(RefCell::new(host_state));
     let mut out = XfaOutcome::default();
     let result = (|| -> JsResult<()> {
-        install(&mut ctx, event, doc, current)?;
+        install(&mut ctx, event, doc, current, script)?;
         // Ready for the script: its time starts now, the set-up above not charged to it.
         started();
         ctx.register_global_property(js_string!("__xfa_src"), s(script), Attribute::CONFIGURABLE)?;

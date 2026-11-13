@@ -1,9 +1,9 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use super::host::host;
 use super::instances::instance_manager;
 use super::model::{MAX_DEPTH, XfaDoc, XfaEffect, XfaEvent, clip, payload, reset_names};
-use super::nodes::{node_index, node_object, noop, resolve_som, resolver, sink};
+use super::nodes::{empty_list, node_index, node_object, noop, null_value, resolve_som, resolver, sink, sink_apply};
 use super::{
     Attribute, Context, JsResult, JsString, JsValue, NativeFunction, ObjectInitializer, arg, data_object, function, js_string, platform, printd,
     printf, printx, s, scand, text,
@@ -179,8 +179,9 @@ fn xfa_resolve(ctx: &mut Context, many: bool) -> JsResult<JsValue> {
 /// Defines the globals for one script on node `current`: `xfa` (`form`, `host`, `layout`, `event`,
 /// `resolveNode` and more; `xfa.event`'s target is that node), a separate global `event` whose
 /// target is a document offering `exportDataObject`, `app`, `console`, `util`, and the nodes in
-/// scope by name, with `_name` for each repeatable one's instance manager.
-pub(super) fn install(ctx: &mut Context, event: &XfaEvent, doc: &XfaDoc, current: usize) -> JsResult<()> {
+/// scope by name, with `_name` for each repeatable one's instance manager. A name `source` uses that no scope reaches is the
+/// one node of that name, when the form has one.
+pub(super) fn install(ctx: &mut Context, event: &XfaEvent, doc: &XfaDoc, current: usize, source: &str) -> JsResult<()> {
     let rw = Attribute::CONFIGURABLE;
     let form = node_object(ctx, 0)?;
     let this_node = node_object(ctx, current)?;
@@ -227,6 +228,8 @@ pub(super) fn install(ctx: &mut Context, event: &XfaEvent, doc: &XfaDoc, current
         .function(NativeFunction::from_fn_ptr(zero), js_string!("x"), 2)
         .function(NativeFunction::from_fn_ptr(zero), js_string!("y"), 2)
         .function(NativeFunction::from_fn_ptr(zero), js_string!("pageSpan"), 1)
+        .function(NativeFunction::from_fn_ptr(empty_list), js_string!("pageContent"), 3)
+        .function(NativeFunction::from_fn_ptr(null_value), js_string!("pageArea"), 1)
         .property(js_string!("ready"), JsValue::from(true), Attribute::READONLY)
         .build();
     // Two event objects, as in Acrobat's XFA scripting: `xfa.event`, whose target is the form
@@ -256,10 +259,34 @@ pub(super) fn install(ctx: &mut Context, event: &XfaEvent, doc: &XfaDoc, current
     };
     let ev = event_object(ctx, this_node.clone());
     let acrobat_ev = event_object(ctx, acrobat_doc.into());
-    let datasets = ObjectInitializer::new(ctx).property(js_string!("data"), form.clone(), rw).build();
+    // the host keeps no datasets but the data: a script creating a node or loading XML into one changes nothing
+    let dataset_nodes = sink(ctx)?;
+    let datasets = ObjectInitializer::new(ctx)
+        .property(js_string!("data"), form.clone(), rw)
+        .property(js_string!("nodes"), dataset_nodes, rw)
+        .function(NativeFunction::from_fn_ptr(sink_apply), js_string!("createNode"), 2)
+        .function(NativeFunction::from_fn_ptr(null_value), js_string!("resolveNode"), 1)
+        .function(NativeFunction::from_fn_ptr(empty_list), js_string!("resolveNodes"), 1)
+        .build();
     let template = sink(ctx)?;
     let resolve_one = xfa_resolve(ctx, false)?;
     let resolve_many = xfa_resolve(ctx, true)?;
+    // the SOM shortcuts (XFA 3.3 p. 87), which a script may use as variables
+    let host_value: JsValue = host_obj.clone().into();
+    let layout_value: JsValue = layout.clone().into();
+    let event_value: JsValue = ev.clone().into();
+    for (name, value) in [
+        ("$", &this_node),
+        ("$form", &form),
+        ("$record", &form),
+        ("$data", &form),
+        ("$host", &host_value),
+        ("$layout", &layout_value),
+        ("$template", &template),
+        ("$event", &event_value),
+    ] {
+        ctx.register_global_property(JsString::from(name), value.clone(), rw)?;
+    }
     let xfa = ObjectInitializer::new(ctx)
         .property(js_string!("form"), form.clone(), rw)
         .property(js_string!("host"), host_obj, rw)
@@ -401,6 +428,24 @@ pub(super) fn install(ctx: &mut Context, event: &XfaEvent, doc: &XfaDoc, current
                 ctx.register_global_property(JsString::from(format!("_{name}").as_str()), im, rw)?;
             }
             defined.insert(name);
+        }
+    }
+    // A name the code uses that no scope reaches is the node of that name, when the form holds one (Acrobat finds it too).
+    let words: HashSet<&str> = source.split(|c: char| !(c.is_alphanumeric() || c == '_' || c == '$')).filter(|w| !w.is_empty()).collect();
+    let mut unique: HashMap<String, Option<usize>> = HashMap::new();
+    {
+        let h = host(ctx)?.borrow();
+        for (i, n) in h.nodes.iter().enumerate() {
+            if n.gone || !words.contains(&*n.name) || !is_identifier(&n.name) || defined.contains(&*n.name) {
+                continue;
+            }
+            unique.entry(n.name.to_string()).and_modify(|e| *e = None).or_insert(Some(i));
+        }
+    }
+    for (name, node) in unique {
+        if let Some(c) = node {
+            let obj = node_object(ctx, c)?;
+            ctx.register_global_property(JsString::from(name.as_str()), obj, rw)?;
         }
     }
     Ok(())
