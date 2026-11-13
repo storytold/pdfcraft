@@ -414,7 +414,7 @@ fn items_read_the_list_state_once_one_is_set() {
     assert_eq!((list_entries(&h, bare, 0).len(), content(&h, bare, "items#0/text#0")), (1, "X".to_string()));
 }
 
-/// A choice list's methods (named in XFA 3.3 p. 392) read its shown and saved items and change the run's copy of them, which `length`,
+/// A choice list's methods (for which XFA 3.3 p. 392 points to the scripting reference) read its shown and saved items and change the run's copy of them, which `length`,
 /// `selectedIndex` and `items.nodes` then follow: `boundItem` gives what the entry showing a text saves, `setItems` takes
 /// pairs, and text no entry shows comes back as it is.
 #[test]
