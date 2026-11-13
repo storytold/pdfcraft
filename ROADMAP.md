@@ -1,5 +1,7 @@
 - 2026-11-04 (M6, PR #5699 group/cache/MK/button review): Expand calculation groups/duplicates with streaming bounded lookup; retain one canonical Field object per exposed identity and prune stale roots. Protect outside shared-MK owners and carry exact button IDs through native clicks and js_run, with regression and persistence coverage.
 
+> **Last reviewed:** 2026-11-12 | **Last updated:** 2026-11-12 | **Change:** patch (M3 #3460 review: keep Search option labels on one line and wrap whole checkboxes; verify English and German with valid synthetic PDFs; estimates unchanged)
+
 > **Last reviewed:** 2026-11-12 | **Last updated:** 2026-11-12 | **Change:** patch (M3 #3460: rebase accent-insensitive Find onto current main, retain upstream search readings and share the accent setting with Replace and text_replace; Greek folding remains a follow-up; estimates unchanged)
 - 2026-11-04 (M6, PR #5699 early reset/duplicate identities): Enforce the shared 64-call reset budget before argument conversion/scanning, with sticky atomic rejection and Open/event budget sharing. Preserve PDF object identity in Calculate order, live targets and value writeback; regress duplicate names, reversed order, native completion and persistence.
 - 2026-11-04 (M6, PR #5699 independent review): Preserve unknown defaults through the JS reset shadow; bound menu/response text before copies. Cover native/console reset persistence, inherited defaults, decode-budget exhaustion and exact Unicode dialog boundaries.
@@ -267,6 +269,8 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 | 8 | 1.0 polish: performance, right-to-left, missing languages, keyboard-only (M14) | 55–95 |
 
 ## Progress log
+
+- **2026-11-12 (M3, #3460 review):** Search options move whole checkboxes to the next row instead of wrapping their labels mid-word. Default-pane kittest checks single-row, non-elided labels and every checkbox inside the clip in English and German; reverting the row-local nonwrapping allocation is the negative control. The accent fixture now computes stream lengths and xref offsets, and every open checks for no repair notes. Matching and Replace behavior are unchanged. Estimates unchanged.
 
 - **2026-11-12 (M3, #3460):** Rebase PR #3889 onto current main, retaining ligature, invisible-character, CJK line-continuation, hyphenated-line readings, whole-word rules, tool stop-at-limit behavior and upstream roadmap histories. The Find bar passes Accent-sensitive to Replace through an options-aware string matcher; text_find and text_replace both default accent_sensitive to false. Legacy search APIs and existing direct engine Replace callers remain accent-sensitive; the UI uses the complete options path. Production-input UI and headless regressions cover accented replacements and the sensitive option. Greek accent folding remains a follow-up. Estimates unchanged.
 - **2026-11-09 (M10, #5130):** Windows Printer default sends native two-sided bindings only when automatic duplex support is confirmed, preserving manual driver defaults (#5130/#5772); physical output remains unqualified. Both Windows submission paths preserve DLL guards and current spooler fixes. Review follow-up validates both duplex scopes through craft-print 9fe50c94 and corrects CI formatting. Estimates unchanged.
@@ -918,6 +922,7 @@ Estimates unchanged.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-12 | patch | M3 #3460 review: keep Search option labels on one line and wrap whole checkboxes; verify English and German with valid synthetic PDFs; estimates unchanged. |
 | 2026-11-12 | patch | M3 #3460: rebase accent-insensitive Find onto current main, retain upstream search readings and share the accent setting with Replace and text_replace; Greek folding remains a follow-up; estimates unchanged. |
 | 2026-11-03 | patch | M3 #3460: rebase PR #3889 onto main 9ce6d89f and remove all 18 obsolete UI TSV changes; translations are maintained in craft-i18n#141; Find and Search & Redact behavior and estimates unchanged. |
 | 2026-11-09 | patch | M10 #5130: Windows Printer default sends native two-sided bindings only when automatic duplex support is confirmed, preserving manual driver defaults (#5130/#5772); physical output remains unqualified. Estimates unchanged. |

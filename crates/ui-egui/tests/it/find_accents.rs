@@ -6,36 +6,47 @@ use egui_kittest::kittest::Queryable;
 use pdfcraft_ui_egui::PdfCraftApp;
 
 /// Three pages of Helvetica (WinAnsi, so `\351` is é): "Café menu", "cafe table" and "CAFÉ bar".
-const FIXTURE: &[u8] = b"%PDF-1.7
-1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
-2 0 obj << /Type /Pages /Kids [3 0 R 4 0 R 8 0 R] /Count 3 >> endobj
-3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Contents 5 0 R /Resources << /Font << /F1 7 0 R >> >> >> endobj
-4 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Contents 6 0 R /Resources << /Font << /F1 7 0 R >> >> >> endobj
-8 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Contents 9 0 R /Resources << /Font << /F1 7 0 R >> >> >> endobj
-5 0 obj << /Length 47 >> stream
-BT /F1 14 Tf 20 150 Td (Caf\\351 menu) Tj ET
-endstream endobj
-6 0 obj << /Length 48 >> stream
-BT /F1 14 Tf 20 150 Td (cafe table) Tj ET
-endstream endobj
-9 0 obj << /Length 46 >> stream
-BT /F1 14 Tf 20 150 Td (CAF\\311 bar) Tj ET
-endstream endobj
-7 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >> endobj
-trailer << /Root 1 0 R >>
-%%EOF";
+fn fixture() -> Vec<u8> {
+    let stream = |body: &str| format!("<< /Length {} >>\nstream\n{body}\nendstream", body.len());
+    let objects = [
+        "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+        "<< /Type /Pages /Kids [3 0 R 4 0 R 8 0 R] /Count 3 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Contents 5 0 R /Resources << /Font << /F1 7 0 R >> >> >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Contents 6 0 R /Resources << /Font << /F1 7 0 R >> >> >>".into(),
+        stream("BT /F1 14 Tf 20 150 Td (Caf\\351 menu) Tj ET"),
+        stream("BT /F1 14 Tf 20 150 Td (cafe table) Tj ET"),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Contents 9 0 R /Resources << /Font << /F1 7 0 R >> >> >>".into(),
+        stream("BT /F1 14 Tf 20 150 Td (CAF\\311 bar) Tj ET"),
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, object) in objects.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{object}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).as_bytes());
+    for offset in offsets {
+        out.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objects.len() + 1).as_bytes());
+    out
+}
 
 fn harness(query: &'static str) -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::new();
         app.set_option("language", "en").unwrap();
-        app.open_bytes("accents.pdf", None, FIXTURE.to_vec()).expect("opens");
+        app.open_bytes("accents.pdf", None, fixture()).expect("opens");
         app.set_option("left", "closed").unwrap();
         app.set_option("find", query).unwrap();
         app
     });
     h.run_steps(4);
     settle(&mut h);
+    let doc = h.state().session.get(h.state().views[0].id).unwrap();
+    assert!(doc.repair_log().is_empty(), "the fixture needs no repairs: {:?}", doc.repair_log());
     h
 }
 
@@ -175,4 +186,64 @@ fn replace_from_the_find_bar_uses_its_accent_setting() {
         let texts: Vec<_> = (0..3).flat_map(|p| doc.text_blocks(p).into_iter().map(|b| b.text)).collect();
         assert_eq!(texts, ["Café menu", "coffee table", "CAFÉ bar"], "accent-sensitive Replace leaves accented spellings alone");
     }
+}
+
+fn label_shape<'a>(shape: &'a egui::Shape, label: &str) -> Option<&'a egui::epaint::TextShape> {
+    match shape {
+        egui::Shape::Vec(shapes) => shapes.iter().find_map(|s| label_shape(s, label)),
+        egui::Shape::Text(t) if t.galley.text() == label => Some(t),
+        _ => None,
+    }
+}
+
+#[test]
+fn search_option_checkboxes_keep_single_line_labels_inside_the_default_pane() {
+    use pdfcraft_ui_egui::i18n::{Lang, tr};
+    let shots = std::env::var_os("PDFCRAFT_FIND_SHOTS").is_some();
+    let _gpu = shots.then(crate::gpu);
+    let mut h = harness("cafe");
+    assert!(h.state_mut().set_option("panel", "search").is_ok());
+    let mut failures = Vec::new();
+    for language in ["en", "de"] {
+        if language == "de" && crate::support::skip_without_catalogs("German Search options layout") {
+            continue;
+        }
+        let lang = Lang::from_code(language).unwrap();
+        h.state_mut().set_option("language", language).unwrap();
+        h.run_steps(6);
+        for key in ["Whole words only", "Case-sensitive", "Accent-sensitive"] {
+            let label = tr(lang, key);
+            if language == "de" {
+                assert_ne!(label, key, "the German case uses the translated label");
+            }
+            let checkbox = h.get_by_role_and_label(egui::accesskit::Role::CheckBox, label).rect();
+            let (clip, text) = h
+                .output()
+                .shapes
+                .iter()
+                .find_map(|s| label_shape(&s.shape, label).map(|t| (s.clip_rect, t)))
+                .unwrap_or_else(|| panic!("{language}: the checkbox label {label:?} is painted"));
+            if text.galley.rows.len() != 1 || text.galley.elided {
+                failures.push(format!("{language}: {label:?} has {} rows, elided={}", text.galley.rows.len(), text.galley.elided));
+            }
+            if !clip.expand(1.0).contains_rect(checkbox) || !clip.expand(1.0).contains_rect(text.visual_bounding_rect()) {
+                failures.push(format!("{language}: {label:?} checkbox {checkbox:?} or label escapes {clip:?}"));
+            }
+        }
+        // Report layout failures in both languages before attempting mispositioned clicks.
+        if failures.is_empty() {
+            let label = tr(lang, "Accent-sensitive");
+            h.get_by_role_and_label(egui::accesskit::Role::CheckBox, label).click();
+            settle(&mut h);
+            assert_eq!(pages(&h), [1], "the wrapped checkbox still changes the search");
+            h.get_by_role_and_label(egui::accesskit::Role::CheckBox, label).click();
+            settle(&mut h);
+            assert_eq!(pages(&h), [0, 1, 2]);
+        }
+        if shots {
+            h.render().unwrap().save(format!("/tmp/3889-search-{language}.png")).unwrap();
+            std::fs::write("/tmp/3889-accent-fixture.pdf", fixture()).unwrap();
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }

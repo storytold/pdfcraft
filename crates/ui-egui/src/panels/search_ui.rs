@@ -28,13 +28,25 @@ pub(crate) fn panel(ui: &mut egui::Ui, t: &Tokens, view: &mut DocView, pages: us
     }
     // Wrapped: three options don't fit one row of a narrow panel.
     ui.horizontal_wrapped(|ui| {
+        // Move whole checkboxes to the next row rather than wrapping their labels.
+        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
         // Outlined boxes (the panel and the check-box fill are alike), as in dialogs.
         let w = &mut ui.visuals_mut().widgets;
         w.inactive.bg_stroke = egui::Stroke::new(1.0, t.border);
         w.inactive.bg_fill = t.hover;
-        let a = ui.add(widgets::checkbox(&mut find.whole_words, tl!("Whole words only"))).changed();
-        let b = ui.add(widgets::checkbox(&mut find.case_sensitive, tl!("Case-sensitive"))).changed();
-        let c = ui.add(widgets::checkbox(&mut find.accent_sensitive, tl!("Accent-sensitive"))).changed();
+        let option = |ui: &mut egui::Ui, checked: &mut bool, label: &str| {
+            // widgets::checkbox scopes its styling; reserve its intrinsic size first so the
+            // parent flow can wrap the whole scope before it paints.
+            let style: egui::widget_style::CheckboxStyle = ui.widget_style(ui.next_auto_id(), &Default::default());
+            let min_size = style.atom_layout.min_size.max(egui::vec2(0.0, style.checkbox_size));
+            let mut atoms = egui::IntoAtoms::into_atoms(label);
+            atoms.push_left(egui::Atom::custom(egui::IdSalt::new("search-option-box"), egui::vec2(style.checkbox_size, min_size.y)));
+            let slot = style.atom_layout.apply(egui::WidgetAtom::new(atoms)).min_size(min_size).allocate(ui).response.rect;
+            ui.place(slot, widgets::checkbox(checked, label)).changed()
+        };
+        let a = option(ui, &mut find.whole_words, tl!("Whole words only"));
+        let b = option(ui, &mut find.case_sensitive, tl!("Case-sensitive"));
+        let c = option(ui, &mut find.accent_sensitive, tl!("Accent-sensitive"));
         if a || b || c {
             find.case_query.clear();
         }
