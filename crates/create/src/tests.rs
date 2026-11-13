@@ -2968,3 +2968,49 @@ fn office_documents_are_their_own_kind() {
     assert_eq!(source_kind("Report.docx", b"%PDF-1.7\n"), Some(SourceKind::Pdf));
     assert_eq!(source_kind("photos.zip", b"PK\x03\x04\x14\x00"), None);
 }
+
+#[test]
+fn flate_wrapped_jpeg_exports_with_and_without_a_soft_mask() {
+    for masked in [false, true] {
+        let jpeg = real_jpeg();
+        let mut doc = from_images(&[("flat.png".into(), png_bytes(false))]).unwrap();
+        with_image(&mut doc, |doc| {
+            let mut d = image_dict(4, 2, "DeviceGray", 8);
+            d.set(b"Filter".to_vec(), Object::Array(vec![Object::name("FlateDecode"), Object::name("DCTDecode")]));
+            if masked {
+                let mask = Stream::from_raw(image_dict(4, 2, "DeviceGray", 8), vec![0, 255, 0, 255, 255, 0, 255, 0]);
+                d.set(b"SMask".to_vec(), Object::Ref(doc.add(Object::Stream(mask))));
+            }
+            Stream::from_raw(d, pdfcraft_filters::encode_flate(&jpeg))
+        });
+        let doc = reopen(&doc);
+        let out = crate::extract::extract_images(&doc, &[0], 0);
+        assert!(out.skipped.is_empty(), "{:?}", out.skipped);
+        assert_eq!(out.images.len(), 1);
+        if masked {
+            assert_eq!(out.images[0].extension, "png");
+            assert_eq!(alphas(&exported_png_pixels(&out.images[0].data)), vec![0, 255, 0, 255, 255, 0, 255, 0]);
+        } else {
+            assert_eq!(out.images[0].extension, "jpg");
+            assert_eq!(out.images[0].data, jpeg);
+        }
+    }
+}
+
+#[test]
+fn flate_wrapped_jpeg_rejects_corruption_and_spent_budget() {
+    for corrupt in [false, true] {
+        let mut doc = from_images(&[("flat.png".into(), png_bytes(false))]).unwrap();
+        with_image(&mut doc, |_| {
+            let mut d = image_dict(4, 2, "DeviceGray", 8);
+            d.set(b"Filter".to_vec(), Object::Array(vec![Object::name("FlateDecode"), Object::name("DCTDecode")]));
+            let bytes = if corrupt { vec![1, 2, 3] } else { pdfcraft_filters::encode_flate(&real_jpeg()) };
+            Stream::from_raw(d, bytes)
+        });
+        let doc = reopen(&doc);
+        let mut budget = pdfcraft_cos::ImageBudget::with_work(if corrupt { u64::MAX } else { 0 });
+        let out = crate::extract::extract_images_within(&doc, &[0], 0, &mut budget, usize::MAX);
+        assert!(out.images.is_empty());
+        assert_eq!(out.skipped.len(), 1, "{:?}", out.skipped);
+    }
+}
