@@ -509,7 +509,7 @@ impl<'a, 'b> Runner<'a, 'b> {
         let ov = pdfcraft_xfa::overrides(doc);
         let static_form = is_static(doc);
         let budget_ms = budget_ms.saturating_mul(u64::from(run.time_scale));
-        Runner {
+        let mut r = Runner {
             doc,
             tpl,
             run,
@@ -540,6 +540,37 @@ impl<'a, 'b> Runner<'a, 'b> {
             embedded_changed: false,
             static_form,
             static_entries: Vec::new(),
+        };
+        if static_form {
+            r.fill_from_fields();
+        }
+        r
+    }
+
+    /// A static form's fields may hold values its data doesn't (filled in a viewer that writes only the fields): the
+    /// scripts read them too, in this run's copy of the data, written to the file only with what a script changes. A
+    /// radio group is left out: its state is a button's position, not the item it saves.
+    fn fill_from_fields(&mut self) {
+        use pdfcraft_forms::FieldKind as K;
+        self.by_som();
+        let infos = self.fields().clone();
+        let mut filled = false;
+        for (som, name, _) in &self.static_entries {
+            let Some(info) = infos.get(name) else { continue };
+            if matches!(info.kind, K::PushButton | K::Signature | K::Radio) {
+                continue;
+            }
+            let text = data_text(info);
+            let path = pdfcraft_xfa::data_path(self.tpl, som);
+            let data = self.data.get_or_insert_with(Default::default);
+            if text.is_empty() || data.text_at(&path).is_some_and(|t| !t.is_empty()) {
+                continue;
+            }
+            data.apply(&pdfcraft_xfa::DataOp::Value { path, text });
+            filled = true;
+        }
+        if filled {
+            self.invalidate();
         }
     }
 

@@ -12223,6 +12223,17 @@ fn a_static_xfa_forms_template_scripts_run_on_its_own_fields() {
     assert_eq!(hidden(&s), [true, true], "the group hides the button set visible in it");
 }
 
+/// A static form's opening scripts read a value its AcroForm field holds without its data having it (filled in a viewer
+/// that writes only the fields).
+#[test]
+fn a_static_xfa_forms_scripts_read_values_only_its_fields_hold() {
+    let mut s = Session::new();
+    let bytes = Arc::new(pdfcraft_xfa::fixtures::static_scripted_shell_with("", Some("Ada")));
+    let id = s.open("static.pdf", None, bytes, None).expect("opens");
+    let total = s.get(id).unwrap().form.iter().find(|f| f.name == "form1[0].page1[0].total[0]").map(|f| f.value.clone());
+    assert_eq!(total, Some(vec!["init:Ada".to_string()]), "{:?}", s.take_js_output(id));
+}
+
 /// Flattening a static form's fields removes its XFA, and its scripts go with it; an undo brings both back.
 #[test]
 fn a_static_xfa_forms_scripts_go_with_its_xfa() {

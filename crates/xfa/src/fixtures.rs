@@ -148,6 +148,12 @@ pub fn static_shell(data: &str) -> Vec<u8> {
 /// AcroForm named by the template's SOM steps, an unnamed subform as `#subform[0]`, the radio group `size` with `/Opt`
 /// and its buttons' positions as on states. Its datasets hold `data` (the children of `xfa:data`). No `/NeedsRendering`.
 pub fn static_scripted_shell(data: &str) -> Vec<u8> {
+    static_scripted_shell_with(data, None)
+}
+
+/// [`static_scripted_shell`] whose field `name` holds `name` in its AcroForm value only (`/V`), as a viewer that writes
+/// only the fields leaves it.
+pub fn static_scripted_shell_with(data: &str, name: Option<&str>) -> Vec<u8> {
     let xdp = format!(
         "<xdp:xdp xmlns:xdp=\"http://ns.adobe.com/xdp/\">{}<xfa:datasets xmlns:xfa=\"http://www.xfa.org/schema/xfa-data/1.0/\"><xfa:data>{data}</xfa:data></xfa:datasets></xdp:xdp>",
         static_scripted_template()
@@ -167,7 +173,13 @@ pub fn static_scripted_shell(data: &str) -> Vec<u8> {
         format!("<< /Length {} >>\nstream\n{xdp}\nendstream", xdp.len()).into_bytes(),
         b"<< /T (form1[0]) /Kids [7 0 R 18 0 R] >>".to_vec(),
         b"<< /T (page1[0]) /Parent 6 0 R /Kids [8 0 R 9 0 R 10 0 R 11 0 R 13 0 R 14 0 R 23 0 R] >>".to_vec(),
-        text("name", 7, 700),
+        match name {
+            Some(v) => format!(
+                "<< /Type /Annot /Subtype /Widget /FT /Tx /T (name[0]) /V ({v}) /Parent 7 0 R /Rect [72 700 300 720] /P 3 0 R /DA (/Helv 10 Tf 0 g) /MK << /BC [0 0 0] >> >>"
+            )
+            .into_bytes(),
+            None => text("name", 7, 700),
+        },
         text("total", 7, 660),
         b"<< /Type /Annot /Subtype /Widget /FT /Btn /Ff 65536 /T (go[0]) /Parent 7 0 R /Rect [72 620 160 640] /P 3 0 R /MK << /BC [0 0 0] /CA (Go) >> >>".to_vec(),
         b"<< /T (#subform[0]) /Parent 7 0 R /Kids [12 0 R] >>".to_vec(),
@@ -220,7 +232,7 @@ pub fn static_scripted_template() -> String {
          </subform></subform></template>",
         js("change", "xfa.resolveNode(&quot;form1.page1.total&quot;).rawValue = &quot;stamp:&quot; + xfa.event.newText;"),
         js("exit", "total.rawValue = &quot;exit:&quot; + this.rawValue;"),
-        js("initialize", "this.rawValue = &quot;init&quot;;"),
+        js("initialize", "this.rawValue = &quot;init&quot; + (name.rawValue ? &quot;:&quot; + name.rawValue : &quot;&quot;);"),
         js(
             "click",
             "total.rawValue = &quot;clicked&quot;; name.presence = &quot;hidden&quot;; this.parent.nodes.item(3).nodes.item(0).access = &quot;readOnly&quot;; xfa.host.messageBox(&quot;done&quot;);"
