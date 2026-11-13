@@ -160,6 +160,11 @@ pub fn page_rotation(doc: &Document, index: usize) -> Result<i64, OrganizeError>
     Ok(resolved_rotation(doc, attrs).rem_euclid(360))
 }
 
+/// Effective inherited page rotations in document order, clockwise in degrees.
+pub fn page_rotations(doc: &Document) -> Result<Vec<i64>, OrganizeError> {
+    Ok(walk(doc)?.iter().map(|(_, attrs)| resolved_rotation(doc, attrs).rem_euclid(360)).collect())
+}
+
 pub fn page_count(doc: &Document) -> Result<usize, OrganizeError> {
     Ok(walk(doc)?.len())
 }

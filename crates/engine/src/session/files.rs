@@ -472,28 +472,44 @@ impl Session {
             runs.push((*at, name.as_str(), d, p.as_deref()));
         }
         let mut out = pdfcraft_organize::combine_grouped_with(&runs, field_conflicts)?;
-        let mut out_page = 0usize;
-        for ((at, chosen), alt) in file.iter().zip(&pages).zip(&alt_docs) {
-            let Some(base) = docs.get(*at) else { continue };
-            let all: Vec<usize>;
-            let slice: &[usize] = match chosen {
-                Some(p) => p.as_slice(),
-                None => {
-                    all = (0..pdfcraft_organize::page_count(base)?).collect();
-                    &all
-                }
-            };
-            if let Some(alt_doc) = alt {
-                for (k, &src_page) in slice.iter().enumerate() {
-                    let base_rot = pdfcraft_organize::page_rotation(base, src_page)?;
-                    let alt_rot = pdfcraft_organize::page_rotation(alt_doc, src_page)?;
-                    let delta = (alt_rot - base_rot).rem_euclid(360);
-                    if delta != 0 {
-                        pdfcraft_organize::rotate_pages(&mut out.doc, &[out_page + k], delta)?;
+        if alt_docs.iter().any(Option::is_some) {
+            let mut base_rots: Vec<Option<Vec<i64>>> = vec![None; docs.len()];
+            let mut by_delta: std::collections::BTreeMap<i64, Vec<usize>> = std::collections::BTreeMap::new();
+            let mut out_page = 0usize;
+            for ((&at, chosen), alt) in file.iter().zip(&pages).zip(&alt_docs) {
+                let Some(base) = docs.get(at) else { continue };
+                let len = match chosen {
+                    Some(p) => p.len(),
+                    None => pdfcraft_organize::page_count(base)?,
+                };
+                if let Some(alt_doc) = alt {
+                    let base_rot = match &base_rots[at] {
+                        Some(r) => r,
+                        None => base_rots[at].insert(pdfcraft_organize::page_rotations(base)?),
+                    };
+                    let alt_rot = pdfcraft_organize::page_rotations(alt_doc)?;
+                    let all: Vec<usize>;
+                    let slice: &[usize] = match chosen {
+                        Some(p) => p.as_slice(),
+                        None => {
+                            all = (0..len).collect();
+                            &all
+                        }
+                    };
+                    for (k, &src_page) in slice.iter().enumerate() {
+                        let b = *base_rot.get(src_page).ok_or(pdfcraft_organize::OrganizeError::NoSuchPage(src_page))?;
+                        let a = *alt_rot.get(src_page).ok_or(pdfcraft_organize::OrganizeError::NoSuchPage(src_page))?;
+                        let delta = (a - b).rem_euclid(360);
+                        if delta != 0 {
+                            by_delta.entry(delta).or_default().push(out_page + k);
+                        }
                     }
                 }
+                out_page += len;
             }
-            out_page += slice.len();
+            for (delta, indices) in by_delta {
+                pdfcraft_organize::rotate_pages(&mut out.doc, &indices, delta)?;
+            }
         }
         let bytes = self.write_new(&out.doc)?;
         Ok(Combined { bytes, renamed_fields: out.renamed_fields })
