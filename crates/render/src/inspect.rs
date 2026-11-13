@@ -32,6 +32,7 @@ mod resources;
 #[cfg(test)]
 use annotations::{MAX_ANNOTATION_BYTES, MAX_LINK_ATTACHMENT_TEXT_BYTES, MAX_REMOTE_FILE_SPEC_BYTES, retained};
 use core::Inspector;
+pub(crate) use core::LOAD_STREAM_LIMIT;
 pub use core::{check_pages, inspect, pretty_date};
 #[cfg(test)]
 use core::{inspect_structure, spend};
@@ -45,9 +46,9 @@ pub use navigation::named_destination;
 use navigation::{OUTLINE_DEPTH, OUTLINE_WINDOW};
 #[cfg(test)]
 use resources::LABEL_DECODES;
-pub use resources::attachment_data;
+pub use resources::{ATTACHMENT_NEEDS_PASSWORD, attachment_data};
 #[cfg(test)]
-use resources::{MAX_LAYER_LABEL_CHARS, MAX_LAYER_ORDER_ROWS, xfa_config_dynamic_render, xfa_packet_text};
+use resources::{MAX_LAYER_LABEL_CHARS, MAX_LAYER_ORDER_ROWS, attachment_data_within, xfa_config_dynamic_render, xfa_packet_text};
 
 #[derive(Clone, Debug, Default)]
 pub struct DocInfo {

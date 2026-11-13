@@ -1,9 +1,9 @@
 #[cfg(test)]
 use super::core::inspect;
-use super::core::{Inspector, load_options};
+use super::core::{Inspector, LOAD_STREAM_LIMIT, load_options};
 use super::model::{Attachment, AttachmentSource, FontInfo, Layer, LayerItem, LayerRow, PageTransition, TransitionStyle};
 use super::navigation::{NameTreeSeen, text_string};
-use super::{AssertUnwindSafe, Dictionary, DocInfo, Document, HashMap, HashSet, Object, ObjectId, catch_unwind};
+use super::{AssertUnwindSafe, Dictionary, DocInfo, Document, HashMap, HashSet, LazyStructure, Object, ObjectId, catch_unwind};
 
 /// Decoded bytes read from an XFA form's configuration packet (or a whole-XDP `/XFA` stream) to
 /// find `dynamicRender`. Designer's packets are a few kilobytes; a whole XDP can hold the template.
@@ -382,42 +382,187 @@ impl<'a> Inspector<'a> {
     }
 }
 
-/// Fetch an attachment's bytes (decoded). Capped at 1 GiB to defuse decompression bombs. A
-/// document opened without the password its embedded files need (`/AuthEvent /EFOpen`, ISO
-/// 32000-2 §7.6.6) holds them encrypted: asking for one is an error, never its encrypted bytes.
+/// The error [`attachment_data`] gives for an attachment encrypted for its own password, in a
+/// document opened without it (`/AuthEvent /EFOpen`, ISO 32000-2 §7.6.6, Table 25): the password
+/// opens it. Callers asking for that password compare the error with this.
+pub const ATTACHMENT_NEEDS_PASSWORD: &str = "the attachment is encrypted: enter the password of the document's attachments to read it";
+
+/// The most bytes an attachment decodes to: a cap that defuses decompression bombs.
+const MAX_ATTACHMENT_BYTES: usize = 1 << 30;
+
+/// Fetch an attachment's bytes (decoded), at most [`MAX_ATTACHMENT_BYTES`]. A damaged stream (Flate
+/// data cut short, say) is an error, never the part that decoded passed off as the whole file:
+/// the bytes are exported as a file. An encrypted document is read through the document model,
+/// which decrypts each string and stream with the crypt filter that applies to it (ISO 32000-2
+/// §7.6.6, §7.4.10). Opened without the password its embedded files need (`/AuthEvent /EFOpen`),
+/// an attachment stored in the clear reads, and one encrypted for that password is
+/// [`ATTACHMENT_NEEDS_PASSWORD`], never its encrypted bytes.
 pub fn attachment_data(bytes: &[u8], password: Option<&str>, att: &Attachment) -> Result<Vec<u8>, String> {
+    attachment_data_within(bytes, password, att, LOAD_STREAM_LIMIT)
+}
+
+/// [`attachment_data`], the object and cross-reference streams of the document decoded to at most
+/// `stream_limit` bytes each while the file specification is found, as structural inspection
+/// decodes them ([`LOAD_STREAM_LIMIT`]): the attachment's own [`MAX_ATTACHMENT_BYTES`] bounds
+/// only its data.
+pub(super) fn attachment_data_within(bytes: &[u8], password: Option<&str>, att: &Attachment, stream_limit: usize) -> Result<Vec<u8>, String> {
     let run = || -> Result<Vec<u8>, String> {
-        // Read through lopdf, which can't read a document opened without its key at all.
-        if pdfcraft_cos::Document::open_with_password(std::sync::Arc::new(bytes.to_vec()), password).is_ok_and(|d| d.embedded_files_locked()) {
-            return Err("the attachment is encrypted: open the document with its password to read it".into());
+        // lopdf can't read a document opened without its key at all, and with the key it reads
+        // the strings of one whose crypt filters differ (`/StrF /Identity`, say) as encrypted.
+        if let Ok(model) = pdfcraft_cos::Document::open_with_stream_limit(std::sync::Arc::new(bytes.to_vec()), password, stream_limit)
+            && model.security().is_some()
+        {
+            return model_attachment_data(model, att);
         }
-        let options = load_options(password);
+        let options = lopdf::LoadOptions { max_decompressed_size: Some(stream_limit), ..load_options(password) };
         let doc = Document::load_mem_with_options(bytes, options).map_err(|e| e.to_string())?;
         let insp = Inspector::new(&doc);
-        let spec: &Object = match &att.source {
-            AttachmentSource::Document { key } => {
-                let names = doc.catalog().ok().and_then(|c| c.get(b"Names").ok()).and_then(|o| insp.dict(o)).ok_or("no /Names")?;
-                let ef = names.get(b"EmbeddedFiles").ok().and_then(|o| insp.dict(o)).ok_or("no /EmbeddedFiles")?;
-                insp.name_tree_find(ef, key, &mut NameTreeSeen::default(), 0).ok_or("attachment not found")?
-            }
-            AttachmentSource::Annotation { page, index } => {
-                let (&pid, _) = insp.page_index.iter().find(|(_, i)| **i == *page).ok_or("page not found")?;
-                let annots = doc.get_dictionary(pid).map_err(|e| e.to_string())?.get(b"Annots").map_err(|e| e.to_string())?;
-                let a = insp.resolve(annots).as_array().map_err(|e| e.to_string())?.get(*index).ok_or("annotation not found")?;
-                insp.dict(a).and_then(|d| d.get(b"FS").ok()).ok_or("annotation has no file")?
-            }
-        };
-        let fs = insp.dict(spec).ok_or("bad file specification")?;
-        let ef = fs.get(b"EF").ok().and_then(|o| insp.dict(o)).ok_or("the file is not embedded (external reference)")?;
-        let stream = ef.get(b"UF").ok().or_else(|| ef.get(b"F").ok()).map(|o| insp.resolve(o)).ok_or("no embedded stream")?;
-        let stream = stream.as_stream().map_err(|e| e.to_string())?;
-        if stream.dict.get(b"Filter").is_ok() {
-            stream.decompressed_content_with_limit(1 << 30).map_err(|e| e.to_string())
-        } else {
-            Ok(stream.content.clone())
-        }
+        let stream = insp.resolve(embedded_file(&insp, att)?);
+        strict_decoded(stream.as_stream().map_err(|e| e.to_string())?)
     };
     catch_unwind(AssertUnwindSafe(run)).unwrap_or_else(|p| Err(format!("reading the attachment crashed: {}", crate::raster::panic_message(&p))))
+}
+
+/// [`attachment_data`] for `model`, an encrypted document. Its data is decrypted as it loads; opened
+/// without the password its embedded files need, the stream of an attachment that password
+/// encrypts is held as stored ([`pdfcraft_cos::Document::reads_as_stored`]), and one that no crypt
+/// filter encrypts (`/Identity`, ISO 32000-2 §7.6.6, §7.4.10) is in the clear and reads.
+fn model_attachment_data(model: pdfcraft_cos::Document, att: &Attachment) -> Result<Vec<u8>, String> {
+    let structure = LazyStructure::over(model)?;
+    let insp = Inspector::new(&structure);
+    // An embedded file is a stream (ISO 32000-2 §7.11.4), so an indirect object.
+    let (num, generation) = insp.resolved_id(embedded_file(&insp, att)?).ok_or("no embedded stream")?;
+    let model = structure.source();
+    let held = model.get(pdfcraft_cos::ObjRef { num, generation });
+    let pdfcraft_cos::Object::Stream(stream) = &*held else { return Err("the embedded file is not a stream".into()) };
+    if model.reads_as_stored(stream) {
+        return Err(ATTACHMENT_NEEDS_PASSWORD.into());
+    }
+    // Decryption keeps the whole blocks of AES data cut short: refused, not exported short.
+    if model.ciphertext_damaged(pdfcraft_cos::ObjRef { num, generation }) {
+        return Err("the attachment's encrypted data is damaged (cut short)".into());
+    }
+    decode_attachment(stream)
+}
+
+/// The filter name of Brotli compression, which lopdf decodes and `pdfcraft-filters` doesn't.
+const BROTLI: &[u8] = b"BrotliDecode";
+
+/// An attachment's data, `stream` decoded strictly, at most [`MAX_ATTACHMENT_BYTES`] at every stage:
+/// the bytes are exported as a file, so a damaged stream (Flate data cut short, say) is an error,
+/// never what decoded before the damage passed off as the whole. Every filter but Brotli is the
+/// document model's ([`pdfcraft_cos::Stream::decoded_strict_within`]); a `/BrotliDecode` stage is
+/// lopdf's, which refuses a truncated or corrupt stream and, like it, takes no `/DecodeParms`.
+/// `/Crypt` was applied when the object loaded. No data at all is an empty file, whatever the
+/// filters: nothing was encoded, so nothing is damaged (and lopdf read it so). Stored data over
+/// [`MAX_ATTACHMENT_BYTES`] is refused before a stage-by-stage decoding copies it.
+fn decode_attachment(stream: &pdfcraft_cos::Stream) -> Result<Vec<u8>, String> {
+    use pdfcraft_cos::Object as Cos;
+    if stream.raw.is_empty() {
+        return Ok(Vec::new());
+    }
+    let filter = stream.dict.get(b"Filter");
+    let names: Vec<&[u8]> = match filter {
+        Some(Cos::Name(n)) => vec![n.as_slice()],
+        Some(Cos::Array(a)) => a.iter().filter_map(Cos::as_name).collect(),
+        _ => Vec::new(),
+    };
+    // The whole chain at once when the model decodes all of it, which also refuses a /Filter
+    // that is not a name or an array of names.
+    let all_names = !matches!(filter, Some(Cos::Array(a)) if a.len() != names.len());
+    if !all_names || !names.contains(&BROTLI) {
+        return stream.decoded_strict_within(MAX_ATTACHMENT_BYTES).map_err(|e| e.to_string());
+    }
+    let parms: Vec<Option<&Cos>> = match stream.dict.get(b"DecodeParms") {
+        Some(d @ Cos::Dict(_)) => vec![Some(d)],
+        Some(Cos::Array(a)) => a.iter().map(Some).collect(),
+        _ => Vec::new(),
+    };
+    if stream.raw.len() > MAX_ATTACHMENT_BYTES {
+        return Err(attachment_too_large());
+    }
+    let mut data = stream.raw.to_vec();
+    for (i, name) in names.into_iter().enumerate() {
+        data = match name {
+            b"Crypt" => continue,
+            BROTLI => {
+                let mut dict = lopdf::Dictionary::new();
+                dict.set("Filter", Object::Name(BROTLI.to_vec()));
+                lopdf::Stream::new(dict, data).decompressed_content_with_limit(MAX_ATTACHMENT_BYTES).map_err(|e| e.to_string())?
+            }
+            _ => {
+                let mut dict = pdfcraft_cos::Dict::new();
+                dict.set(b"Filter".to_vec(), Cos::Name(name.to_vec()));
+                if let Some(p) = parms.get(i).copied().flatten() {
+                    dict.set(b"DecodeParms".to_vec(), p.clone());
+                }
+                pdfcraft_cos::Stream { dict, raw: data.into() }.decoded_strict_within(MAX_ATTACHMENT_BYTES).map_err(|e| e.to_string())?
+            }
+        };
+    }
+    Ok(data)
+}
+
+/// The error an attachment whose stored data is larger than [`MAX_ATTACHMENT_BYTES`] gives before
+/// that data is copied, as the model's decoding words it for unfiltered data.
+fn attachment_too_large() -> String {
+    pdfcraft_cos::CosError::Filter(format!("decoded output exceeds the limit of {MAX_ATTACHMENT_BYTES} bytes")).to_string()
+}
+
+/// `stream`, found by lopdf, decoded as [`decode_attachment`] decodes the model's: lopdf's own
+/// decoding returns what decoded before damage as the whole. Only `/Filter` and `/DecodeParms`
+/// matter to it, so only they are carried over; `/Crypt` was applied when the object loaded.
+fn strict_decoded(stream: &lopdf::Stream) -> Result<Vec<u8>, String> {
+    // Refused before it is copied when the stored data alone is too large: unfiltered, it is the
+    // attachment; filtered, it would be copied again stage by stage.
+    if stream.content.len() > MAX_ATTACHMENT_BYTES {
+        return Err(attachment_too_large());
+    }
+    let name = |o: &Object| o.as_name().ok().map(|n| pdfcraft_cos::Object::Name(n.to_vec()));
+    let parms = |o: &Object| match o {
+        Object::Dictionary(d) => {
+            let mut out = pdfcraft_cos::Dict::new();
+            for key in [&b"Predictor"[..], b"Colors", b"BitsPerComponent", b"Columns", b"EarlyChange"] {
+                if let Ok(Object::Integer(v)) = d.get(key) {
+                    out.set(key.to_vec(), *v);
+                }
+            }
+            pdfcraft_cos::Object::Dict(out)
+        }
+        _ => pdfcraft_cos::Object::Null,
+    };
+    let mut dict = pdfcraft_cos::Dict::new();
+    match stream.dict.get(b"Filter") {
+        Ok(Object::Array(a)) => dict.set(b"Filter".to_vec(), a.iter().map(|f| name(f).unwrap_or(pdfcraft_cos::Object::Null)).collect::<Vec<_>>()),
+        Ok(other) => dict.set(b"Filter".to_vec(), name(other).unwrap_or(pdfcraft_cos::Object::Null)),
+        Err(_) => {}
+    }
+    match stream.dict.get(b"DecodeParms") {
+        Ok(Object::Array(a)) => dict.set(b"DecodeParms".to_vec(), a.iter().map(parms).collect::<Vec<_>>()),
+        Ok(other) => dict.set(b"DecodeParms".to_vec(), parms(other)),
+        Err(_) => {}
+    }
+    decode_attachment(&pdfcraft_cos::Stream { dict, raw: stream.content.clone().into() })
+}
+
+/// The `/EF` entry of the file specification `att` names: its embedded file stream, unresolved.
+fn embedded_file<'a>(insp: &Inspector<'a>, att: &Attachment) -> Result<&'a Object, String> {
+    let spec: &Object = match &att.source {
+        AttachmentSource::Document { key } => {
+            let names = insp.doc.catalog().ok().and_then(|c| c.get(b"Names").ok()).and_then(|o| insp.dict(o)).ok_or("no /Names")?;
+            let ef = names.get(b"EmbeddedFiles").ok().and_then(|o| insp.dict(o)).ok_or("no /EmbeddedFiles")?;
+            insp.name_tree_find(ef, key, &mut NameTreeSeen::default(), 0).ok_or("attachment not found")?
+        }
+        AttachmentSource::Annotation { page, index } => {
+            let (&pid, _) = insp.page_index.iter().find(|(_, i)| **i == *page).ok_or("page not found")?;
+            let annots = insp.doc.get_dictionary(pid).map_err(|e| e.to_string())?.get(b"Annots").map_err(|e| e.to_string())?;
+            let a = insp.resolve(annots).as_array().map_err(|e| e.to_string())?.get(*index).ok_or("annotation not found")?;
+            insp.dict(a).and_then(|d| d.get(b"FS").ok()).ok_or("annotation has no file")?
+        }
+    };
+    let fs = insp.dict(spec).ok_or("bad file specification")?;
+    let ef = fs.get(b"EF").ok().and_then(|o| insp.dict(o)).ok_or("the file is not embedded (external reference)")?;
+    ef.get(b"UF").ok().or_else(|| ef.get(b"F").ok()).ok_or_else(|| "no embedded stream".into())
 }
 
 /// An XFA packet's bytes as text: UTF-16 (little- or big-endian, told by a byte order mark or by

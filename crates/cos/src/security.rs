@@ -13,7 +13,7 @@ use pdfcraft_crypt::{EncryptDict, Method, SecurityHandler, StreamKind};
 use pdfcraft_filters::MAX_CHAIN;
 
 use crate::document::Held;
-use crate::{Dict, Document, Object, PdfString, Stream};
+use crate::{Dict, Document, ObjRef, Object, PdfString, Stream};
 
 /// How many references one read or write of an object may follow, with all that it loads on the
 /// way. How an object is treated can be given by reference, and what that loads can do the same: a
@@ -371,6 +371,9 @@ fn stream(
         (None, Some(b"EmbeddedFile")) => StreamKind::EmbeddedFile,
         _ => StreamKind::Normal,
     };
+    if decrypt && h.stream_ciphertext_damaged(&s.raw, kind) {
+        doc.note_damaged_ciphertext(ObjRef { num, generation });
+    }
     let raw = if decrypt { h.decrypt_stream(num, generation, &s.raw, kind) } else { h.encrypt_stream(num, generation, &s.raw, kind) };
     Object::Stream(Stream { dict, raw: raw.into() })
 }

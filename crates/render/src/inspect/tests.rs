@@ -3002,6 +3002,299 @@ fn efopen_filters_named_by_the_file_open_and_older_handlers_do_not() {
     assert!(matches!(check_pages(legacy, None, 1), Err(OpenError::NeedsPassword)));
 }
 
+/// What the attachment encrypted in [`efopen_pdf_with_clear`] holds.
+const ENCRYPTED_ATTACHMENT: &[u8] = b"the attached file's own words";
+/// What the attachment stored in the clear in [`efopen_pdf_with_clear`] holds.
+const CLEAR_ATTACHMENT: &[u8] = b"stored in the clear";
+/// The user password of [`efopen_pdf_with_clear`]'s attachments.
+const ATTACHMENT_PASSWORD: &str = "attach pw";
+
+/// A page in the clear and two attachments under an AES-256 (V5, R6) handler whose only encrypting
+/// filter, `/StdCF`, is `/AuthEvent /EFOpen`: `note.txt` encrypted with it, `clear.txt` with no
+/// crypt filter applying (ISO 32000-2 §7.6.6, §7.4.10). `named`: `note.txt` names `/StdCF` in a
+/// `/Crypt` filter of its own and `clear.txt` has no filter, with no `/EFF`; otherwise `/EFF
+/// /StdCF` encrypts every embedded file but `clear.txt`, which names `/Identity`.
+fn efopen_pdf_with_clear(named: bool) -> Vec<u8> {
+    let empty = pdfcraft_testkit::Pdf::new().obj("<< /Type /Catalog /Pages 2 0 R >>").obj("<< /Type /Pages /Kids [] /Count 0 >>").build();
+    let mut protected = pdfcraft_cos::Document::open(Arc::new(empty)).unwrap();
+    protected
+        .set_encryption(&pdfcraft_cos::NewEncryption {
+            algorithm: pdfcraft_cos::Algorithm::Aes256,
+            user_password: ATTACHMENT_PASSWORD,
+            owner_password: "owner pw",
+            permissions: -4,
+            encrypt_metadata: true,
+            seed: [5; 32],
+        })
+        .unwrap();
+    let handler = protected.output_handler().unwrap();
+    // AES-256 encrypts strings and streams alike, with the file key and a random first block
+    // (ISO 32000-2 §7.6.3.2), so the string cipher gives what `/StdCF` (AESV3) decrypts.
+    let cipher = handler.encrypt_string(7, 0, ENCRYPTED_ATTACHMENT);
+    let d = handler.dict();
+    let hex = |b: &[u8]| b.iter().map(|b| format!("{b:02X}")).collect::<String>();
+    let (eff, encrypted, clear) = if named {
+        ("", " /Filter [/Crypt] /DecodeParms [<< /Name /StdCF >>]", "")
+    } else {
+        (" /EFF /StdCF", "", " /Filter /Crypt /DecodeParms << /Name /Identity >>")
+    };
+    pdfcraft_testkit::Pdf::new()
+        .obj("<< /Type /Catalog /Pages 2 0 R /Names << /EmbeddedFiles << /Names [(clear.txt) 4 0 R (note.txt) 5 0 R] >> >> >>")
+        .obj("<< /Type /Pages /Kids [3 0 R] /Count 1 >>")
+        .obj("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >>")
+        .obj("<< /Type /Filespec /F (clear.txt) /EF << /F 6 0 R >> >>")
+        .obj("<< /Type /Filespec /F (note.txt) /EF << /F 7 0 R >> >>")
+        .stream(&format!("/Type /EmbeddedFile{clear}"), CLEAR_ATTACHMENT)
+        .stream(&format!("/Type /EmbeddedFile{encrypted}"), cipher)
+        .obj(format!(
+            "<< /Filter /Standard /V 5 /R 6 /O <{}> /U <{}> /OE <{}> /UE <{}> /Perms <{}> /P {} /CF << /StdCF << /AuthEvent /EFOpen /CFM /AESV3 /Length 32 >> >> /StmF /Identity /StrF /Identity{eff} >>",
+            hex(&d.o),
+            hex(&d.u),
+            hex(&d.oe),
+            hex(&d.ue),
+            hex(&d.perms),
+            d.p
+        ))
+        .trailer_entry("/Encrypt 8 0 R /ID [<00> <00>]")
+        .build()
+}
+
+/// ISO 32000-2 §7.6.6, Table 25: `/EFOpen` asks for the password when an embedded file is opened,
+/// and only for the files its filter encrypts. Without the password an attachment no crypt filter
+/// applies to reads, and the encrypted one is refused with [`ATTACHMENT_NEEDS_PASSWORD`]; with the
+/// user or owner password both read, and a wrong password reads neither.
+#[test]
+fn an_attachment_stored_in_the_clear_reads_without_the_password() {
+    for named in [false, true] {
+        let bytes = Arc::new(efopen_pdf_with_clear(named));
+        let info = inspect(bytes.clone(), None).expect("opens without a password");
+        let listed = |name: &str| info.attachments.iter().find(|a| a.name == name).unwrap_or_else(|| panic!("{name} is listed")).clone();
+        let (clear, note) = (listed("clear.txt"), listed("note.txt"));
+        assert_eq!(attachment_data(&bytes, None, &clear).as_deref(), Ok(CLEAR_ATTACHMENT), "named: {named}");
+        assert_eq!(attachment_data(&bytes, None, &note), Err(ATTACHMENT_NEEDS_PASSWORD.to_string()), "named: {named}");
+        for password in [ATTACHMENT_PASSWORD, "owner pw"] {
+            assert_eq!(attachment_data(&bytes, Some(password), &note).as_deref(), Ok(ENCRYPTED_ATTACHMENT), "named: {named}");
+            assert_eq!(attachment_data(&bytes, Some(password), &clear).as_deref(), Ok(CLEAR_ATTACHMENT), "named: {named}");
+        }
+        assert!(attachment_data(&bytes, Some("wrong"), &note).is_err(), "named: {named}");
+    }
+}
+
+/// The data of `note.txt`, the one attachment of a document, stored as `data` under `/Filter
+/// filter`, read as an app would: unencrypted, by lopdf; or encrypted for its attachments alone
+/// (`/EFOpen`, ISO 32000-2 §7.6.6) and read with the password, by the document model.
+fn read_one_attachment(filter: &str, data: &[u8], encrypted: bool) -> Result<Vec<u8>, String> {
+    read_one_attachment_stored(filter, data, encrypted, |stored| stored)
+}
+
+/// [`read_one_attachment`], the attachment's data stored as `store` leaves it (its ciphertext, when
+/// `encrypted`).
+fn read_one_attachment_stored(filter: &str, data: &[u8], encrypted: bool, store: impl Fn(Vec<u8>) -> Vec<u8>) -> Result<Vec<u8>, String> {
+    let pdf = pdfcraft_testkit::Pdf::new()
+        .obj("<< /Type /Catalog /Pages 2 0 R /Names << /EmbeddedFiles << /Names [(note.txt) 4 0 R] >> >> >>")
+        .obj("<< /Type /Pages /Kids [3 0 R] /Count 1 >>")
+        .obj("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >>")
+        .obj("<< /Type /Filespec /F (note.txt) /EF << /F 5 0 R >> >>");
+    let stream = format!("/Type /EmbeddedFile /Filter {filter}");
+    let (bytes, password) = if encrypted {
+        let mut protected = pdfcraft_cos::Document::open(Arc::new(
+            pdfcraft_testkit::Pdf::new().obj("<< /Type /Catalog /Pages 2 0 R >>").obj("<< /Type /Pages /Kids [] /Count 0 >>").build(),
+        ))
+        .unwrap();
+        protected
+            .set_encryption(&pdfcraft_cos::NewEncryption {
+                algorithm: pdfcraft_cos::Algorithm::Aes256,
+                user_password: ATTACHMENT_PASSWORD,
+                owner_password: "owner pw",
+                permissions: -4,
+                encrypt_metadata: true,
+                seed: [5; 32],
+            })
+            .unwrap();
+        let handler = protected.output_handler().unwrap();
+        let d = handler.dict();
+        let hex = |b: &[u8]| b.iter().map(|b| format!("{b:02X}")).collect::<String>();
+        let pdf = pdf
+            .stream(&stream, store(handler.encrypt_string(5, 0, data)))
+            .obj(format!(
+                "<< /Filter /Standard /V 5 /R 6 /O <{}> /U <{}> /OE <{}> /UE <{}> /Perms <{}> /P {} /CF << /StdCF << /AuthEvent /EFOpen /CFM /AESV3 /Length 32 >> >> /StmF /Identity /StrF /Identity /EFF /StdCF >>",
+                hex(&d.o),
+                hex(&d.u),
+                hex(&d.oe),
+                hex(&d.ue),
+                hex(&d.perms),
+                d.p
+            ))
+            .trailer_entry("/Encrypt 6 0 R /ID [<00> <00>]");
+        (pdf.build(), Some(ATTACHMENT_PASSWORD))
+    } else {
+        (pdf.stream(&stream, store(data.to_vec())).build(), None)
+    };
+    let bytes = Arc::new(bytes);
+    let info = inspect(bytes.clone(), password).expect("opens");
+    attachment_data(&bytes, password, &info.attachments[0])
+}
+
+/// An attachment whose Flate data is cut short is an error, encrypted or not, never the part that
+/// decoded passed off as the whole file (ISO 32000-2 §7.4.4: the stream is damaged). Intact, the
+/// same attachment reads whole on both paths.
+#[test]
+fn a_truncated_attachment_is_an_error_not_its_decoded_part() {
+    use std::io::Write as _;
+    let words: Vec<u8> = (0..20_000u32).flat_map(|i| format!("line {i} of the attached file\n").into_bytes()).collect();
+    let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+    z.write_all(&words).unwrap();
+    let intact = z.finish().unwrap();
+    let damaged = intact.get(..intact.len() / 2).unwrap();
+    for encrypted in [false, true] {
+        assert_eq!(read_one_attachment("/FlateDecode", &intact, encrypted).as_deref(), Ok(&words[..]), "encrypted: {encrypted}");
+        let damaged = read_one_attachment("/FlateDecode", damaged, encrypted);
+        assert!(damaged.is_err(), "encrypted: {encrypted}: {:?} bytes of {} passed as the file", damaged.map(|r| r.len()), words.len());
+    }
+}
+
+/// `data` as a Brotli stream (RFC 7932) of one uncompressed meta-block and an empty last one.
+fn brotli_stored(data: &[u8]) -> Vec<u8> {
+    // WBITS 16 (bit 0), ISLAST 0, MNIBBLES 4 (bits 2-3 zero), MLEN - 1 (bits 4-19), ISUNCOMPRESSED
+    // (bit 20), then padding to the byte: three header bytes, the data, and ISLAST + ISLASTEMPTY.
+    let header = (u32::try_from(data.len() - 1).unwrap() << 4) | (1 << 20);
+    let mut out = header.to_le_bytes().get(..3).unwrap().to_vec();
+    out.extend_from_slice(data);
+    out.push(0b11);
+    out
+}
+
+/// A Brotli-compressed attachment (`/BrotliDecode`) reads whole, encrypted or not, and is an error
+/// when its data is cut short: the model decodes every other filter, and lopdf decodes Brotli.
+#[test]
+fn a_brotli_attachment_reads_and_a_truncated_one_is_an_error() {
+    let words = b"the attached file, compressed with Brotli".repeat(40);
+    let intact = brotli_stored(&words);
+    let damaged = intact.get(..intact.len() / 2).unwrap();
+    for encrypted in [false, true] {
+        assert_eq!(read_one_attachment("/BrotliDecode", &intact, encrypted).as_deref(), Ok(&words[..]), "encrypted: {encrypted}");
+        assert!(read_one_attachment("/BrotliDecode", damaged, encrypted).is_err(), "encrypted: {encrypted}");
+        // A chain: ASCIIHex outside Brotli, decoded stage by stage.
+        let hexed: String = intact.iter().map(|b| format!("{b:02X}")).collect::<String>() + ">";
+        let chain = read_one_attachment("[/ASCIIHexDecode /BrotliDecode]", hexed.as_bytes(), encrypted);
+        assert_eq!(chain.as_deref(), Ok(&words[..]), "encrypted: {encrypted}");
+    }
+}
+
+/// An encrypted document whose attachment's file specification sits in an object stream larger
+/// than the structural limit: finding the attachment decodes object streams to that limit, as
+/// inspection does, not to the 1 GiB an attachment's own data may take (ISO 32000-2 §7.5.7).
+#[test]
+fn finding_an_attachment_keeps_the_object_stream_limit() {
+    let mut protected = pdfcraft_cos::Document::open(Arc::new(
+        pdfcraft_testkit::Pdf::new().obj("<< /Type /Catalog /Pages 2 0 R >>").obj("<< /Type /Pages /Kids [] /Count 0 >>").build(),
+    ))
+    .unwrap();
+    protected
+        .set_encryption(&pdfcraft_cos::NewEncryption {
+            algorithm: pdfcraft_cos::Algorithm::Aes256,
+            user_password: ATTACHMENT_PASSWORD,
+            owner_password: "owner pw",
+            permissions: -4,
+            encrypt_metadata: true,
+            seed: [5; 32],
+        })
+        .unwrap();
+    let handler = protected.output_handler().unwrap();
+    let d = handler.dict();
+    let hex = |b: &[u8]| b.iter().map(|b| format!("{b:02X}")).collect::<String>();
+    // Object 4, the file specification, is the only member of object stream 7, padded to 128 KiB.
+    // `/StmF /Identity`: the object stream is in the clear; the attachment, 5, is encrypted.
+    let spec = b"<< /Type /Filespec /F (note.txt) /EF << /F 5 0 R >> >>";
+    let mut members = b"4 0 ".to_vec();
+    let first = members.len();
+    members.extend_from_slice(spec);
+    members.resize(128 << 10, b' ');
+    let cipher = handler.encrypt_string(5, 0, ENCRYPTED_ATTACHMENT);
+    let bodies: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R /Names << /EmbeddedFiles << /Names [(note.txt) 4 0 R] >> >> >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >>".to_vec(),
+        [format!("<< /Type /EmbeddedFile /Length {} >>\nstream\n", cipher.len()).as_bytes(), &cipher, b"\nendstream"].concat(),
+        format!(
+            "<< /Filter /Standard /V 5 /R 6 /O <{}> /U <{}> /OE <{}> /UE <{}> /Perms <{}> /P {} /CF << /StdCF << /AuthEvent /EFOpen /CFM /AESV3 /Length 32 >> >> /StmF /Identity /StrF /Identity /EFF /StdCF >>",
+            hex(&d.o),
+            hex(&d.u),
+            hex(&d.oe),
+            hex(&d.ue),
+            hex(&d.perms),
+            d.p
+        )
+        .into_bytes(),
+        [format!("<< /Type /ObjStm /N 1 /First {first} /Length {} >>\nstream\n", members.len()).as_bytes(), &members, b"\nendstream"].concat(),
+    ];
+    let numbers = [1u32, 2, 3, 5, 6, 7];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = std::collections::BTreeMap::new();
+    for (n, body) in numbers.iter().zip(&bodies) {
+        offsets.insert(*n, out.len());
+        out.extend_from_slice(format!("{n} 0 obj\n").as_bytes());
+        out.extend_from_slice(body);
+        out.extend_from_slice(b"\nendobj\n");
+    }
+    let xref_at = out.len();
+    // Cross-reference stream (§7.5.8), /W [1 4 2]: 0 free, 4 in object stream 7, 8 itself.
+    let mut rows = vec![0u8, 0, 0, 0, 0, 0xFF, 0xFF];
+    for n in 1u32..=8 {
+        let (kind, field2, field3) = match n {
+            4 => (2u8, 7u32, 0u16),
+            8 => (1, u32::try_from(xref_at).unwrap(), 0),
+            _ => (1, u32::try_from(offsets[&n]).unwrap(), 0),
+        };
+        rows.push(kind);
+        rows.extend_from_slice(&field2.to_be_bytes());
+        rows.extend_from_slice(&field3.to_be_bytes());
+    }
+    out.extend_from_slice(
+        format!("8 0 obj\n<< /Type /XRef /Size 9 /W [1 4 2] /Root 1 0 R /Encrypt 6 0 R /ID [<00> <00>] /Length {} >>\nstream\n", rows.len())
+            .as_bytes(),
+    );
+    out.extend_from_slice(&rows);
+    out.extend_from_slice(format!("\nendstream\nendobj\nstartxref\n{xref_at}\n%%EOF\n").as_bytes());
+    let att = Attachment {
+        name: "note.txt".into(),
+        description: None,
+        has_description: false,
+        size: None,
+        source: AttachmentSource::Document { key: "note.txt".into() },
+    };
+    // Within the limit the attachment is found and reads; past it, it isn't found.
+    let read = |limit| attachment_data_within(&out, Some(ATTACHMENT_PASSWORD), &att, limit);
+    assert_eq!(read(1 << 20).as_deref(), Ok(ENCRYPTED_ATTACHMENT));
+    assert!(read(64 << 10).is_err(), "a 128 KiB object stream was decoded under a 64 KiB limit");
+}
+
+/// An attachment stored as no data at all under a filter is an empty file, as lopdf read it before
+/// decoding turned strict: nothing was encoded, so nothing is damaged.
+#[test]
+fn an_empty_filtered_attachment_is_an_empty_file() {
+    for filter in ["/FlateDecode", "/BrotliDecode", "[/ASCII85Decode /FlateDecode]"] {
+        for encrypted in [false, true] {
+            assert_eq!(read_one_attachment(filter, b"", encrypted), Ok(Vec::new()), "{filter}, encrypted: {encrypted}");
+        }
+    }
+}
+
+/// An encrypted attachment whose AES data is cut short, inside a block or inside the
+/// initialization vector, is an error: decryption keeps only the whole blocks (ISO 32000-2
+/// §7.6.3.2), and that is not the file. Whole, the same data reads; stored empty, it is an empty file.
+#[test]
+fn an_attachment_whose_aes_data_is_cut_short_is_an_error() {
+    let words = b"the attached file, encrypted with AES-256".repeat(10);
+    let whole = read_one_attachment_stored("null", &words, true, |stored| stored);
+    assert_eq!(whole.as_deref(), Ok(&words[..]));
+    for keep in [|n: usize| n - 5, |n: usize| n - 16 - 5, |_| 10] {
+        let cut = read_one_attachment_stored("null", &words, true, |stored| stored.get(..keep(stored.len())).unwrap().to_vec());
+        assert!(cut.is_err(), "{:?} bytes passed as the file", cut.map(|c| c.len()));
+    }
+    assert_eq!(read_one_attachment_stored("null", &words, true, |_| Vec::new()), Ok(Vec::new()));
+}
+
 #[cfg(test)]
 mod javascript_links_tests {
     use super::*;

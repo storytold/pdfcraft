@@ -15372,6 +15372,129 @@ fn a_document_encrypting_only_its_embedded_files_opens_and_saves_without_a_passw
     assert!(reopened.embedded_files_locked(), "the attachment stays encrypted");
 }
 
+/// One page and one attachment, `note.txt` holding `attached`, under an AES-256 handler whose only
+/// encrypting filter is `/AuthEvent /EFOpen` (ISO 32000-2 §7.6.6, Table 25): the document opens
+/// without a password, and `password` (the user password) or "owner pw" decrypts the attachment.
+fn efopen_attachment_pdf(password: &str, attached: &[u8]) -> Vec<u8> {
+    efopen_attachment_pdf_with(pdfcraft_cos::Algorithm::Aes256, password, attached)
+}
+
+/// [`efopen_attachment_pdf`] under `algorithm`: AES-256 (V5, R6) or AES-128 (V4, R4).
+fn efopen_attachment_pdf_with(algorithm: pdfcraft_cos::Algorithm, password: &str, attached: &[u8]) -> Vec<u8> {
+    let mut protected = pdfcraft_cos::Document::open(Arc::new(fixture(1))).unwrap();
+    protected
+        .set_encryption(&pdfcraft_cos::NewEncryption {
+            algorithm,
+            user_password: password,
+            owner_password: "owner pw",
+            permissions: -4,
+            encrypt_metadata: true,
+            seed: [5; 32],
+        })
+        .unwrap();
+    let handler = protected.output_handler().unwrap();
+    // AES encrypts strings and streams alike, with the object's key (R4) or the file key (R6)
+    // and a random first block (ISO 32000-2 §7.6.3), so the string cipher gives what `/StdCF`
+    // decrypts. R4's key depends on the file identifier: the fixture keeps the one it was made with.
+    let cipher = handler.encrypt_string(5, 0, attached);
+    let d = handler.dict();
+    let hex = |b: &[u8]| b.iter().map(|b| format!("{b:02X}")).collect::<String>();
+    let id = match protected.trailer().get(b"ID") {
+        Some(pdfcraft_cos::Object::Array(a)) => match a.first() {
+            Some(pdfcraft_cos::Object::String(s)) => hex(&s.bytes),
+            _ => panic!("the identifier is a string"),
+        },
+        _ => panic!("set_encryption keeps an identifier"),
+    };
+    let (version, cfm, r6) = match algorithm {
+        pdfcraft_cos::Algorithm::Aes256 => {
+            ("/V 5 /R 6", "/AESV3 /Length 32", format!("/OE <{}> /UE <{}> /Perms <{}>", hex(&d.oe), hex(&d.ue), hex(&d.perms)))
+        }
+        _ => ("/V 4 /R 4 /Length 128", "/AESV2 /Length 16", String::new()),
+    };
+    pdfcraft_testkit::Pdf::new()
+        .obj("<< /Type /Catalog /Pages 2 0 R /Names << /EmbeddedFiles << /Names [(note.txt) 4 0 R] >> >> >>")
+        .obj("<< /Type /Pages /Kids [3 0 R] /Count 1 >>")
+        .obj("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >>")
+        .obj("<< /Type /Filespec /F (note.txt) /EF << /F 5 0 R >> >>")
+        .stream("/Type /EmbeddedFile", cipher)
+        .obj(format!(
+            "<< /Filter /Standard {version} /O <{}> /U <{}> {r6} /P {} /CF << /StdCF << /AuthEvent /EFOpen /CFM {cfm} >> >> /StmF /Identity /StrF /Identity /EFF /StdCF >>",
+            hex(&d.o),
+            hex(&d.u),
+            d.p
+        ))
+        .trailer_entry(&format!("/Encrypt 6 0 R /ID [<{id}> <{id}>]"))
+        .build()
+}
+
+/// The permissions password unlocks an attachment-only-encrypted document of either revision,
+/// and the document then takes a page edit, its full refresh, a save and a full rewrite, undo and
+/// redo. The renderer reads R2–R4 files only with the user password (ISO 32000-2 §7.6.4.3.3,
+/// Algorithm 7 recovers it from the owner password), so it is given that one; the save reopens
+/// with the password entered.
+#[test]
+fn the_permissions_password_of_attachment_only_encryption_keeps_editing_and_saving() {
+    for algorithm in [pdfcraft_cos::Algorithm::Aes128, pdfcraft_cos::Algorithm::Aes256] {
+        let mut s = Session::new();
+        let pdf = efopen_attachment_pdf_with(algorithm, "attach pw", b"the attached words");
+        let id = s.open("efopen.pdf", None, Arc::new(pdf), None).unwrap();
+        assert!(s.get(id).unwrap().attachments_locked(), "{algorithm:?}");
+        s.unlock(id, "owner pw").unwrap();
+        s.apply(id, Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap_or_else(|e| panic!("{algorithm:?}: {e}"));
+        let doc = s.get(id).unwrap();
+        let read = pdfcraft_render::attachment_data(&doc.bytes, doc.password.as_deref(), &doc.info.attachments[0]);
+        assert_eq!(read.as_deref(), Ok(&b"the attached words"[..]), "{algorithm:?}");
+        let saved = s.save_bytes(id).unwrap();
+        s.check_save(id, &saved).unwrap_or_else(|e| panic!("{algorithm:?}: {e}"));
+        s.mark_saved(id, saved, None).unwrap_or_else(|e| panic!("{algorithm:?}: {e}"));
+        let rewritten = s.save_full_bytes(id).unwrap();
+        s.check_save(id, &rewritten).unwrap_or_else(|e| panic!("{algorithm:?}, rewritten: {e}"));
+        s.undo(id).unwrap_or_else(|e| panic!("{algorithm:?}: {e}"));
+        s.redo(id).unwrap_or_else(|e| panic!("{algorithm:?}: {e}"));
+        let doc = s.get(id).unwrap();
+        let read = pdfcraft_render::attachment_data(&doc.bytes, doc.password.as_deref(), &doc.info.attachments[0]);
+        assert_eq!(read.as_deref(), Ok(&b"the attached words"[..]), "{algorithm:?} after redo");
+    }
+}
+
+/// ISO 32000-2 §7.6.6, Table 25: the password of a document's attachments, given after it opened
+/// without one, unlocks them, and the document is read with it from then on: its attachment reads.
+/// A wrong password is refused and leaves them locked.
+#[test]
+fn the_attachments_password_given_after_opening_reads_them() {
+    for password in ["attach pw", "owner pw"] {
+        let mut s = Session::new();
+        let id = s.open("efopen.pdf", None, Arc::new(efopen_attachment_pdf("attach pw", b"the attached words")), None).unwrap();
+        let attachment = |s: &Session| {
+            let doc = s.get(id).unwrap();
+            pdfcraft_render::attachment_data(&doc.bytes, doc.password.as_deref(), &doc.info.attachments[0])
+        };
+        assert!(s.get(id).unwrap().attachments_locked());
+        assert_eq!(attachment(&s), Err(pdfcraft_render::ATTACHMENT_NEEDS_PASSWORD.to_string()));
+        assert!(matches!(s.unlock(id, "nope"), Err(EditError::WrongPassword)));
+        assert!(s.get(id).unwrap().attachments_locked());
+        s.unlock(id, password).unwrap();
+        let doc = s.get(id).unwrap();
+        assert!(!doc.attachments_locked() && !doc.dirty, "unlocked, and not an edit");
+        assert_eq!(attachment(&s).as_deref(), Ok(&b"the attached words"[..]), "{password}");
+    }
+}
+
+/// An attachment can't be added while the attachments are locked: it would have to be encrypted
+/// without the key. The edit is refused when it is made, so no state holds attachment data that
+/// keeps the password from being given afterwards ([`pdfcraft_cos::Document::unlock`]).
+#[test]
+fn locked_attachments_refuse_an_added_file_and_still_take_the_password() {
+    let mut s = Session::new();
+    let id = s.open("efopen.pdf", None, Arc::new(efopen_attachment_pdf("attach pw", b"the attached words")), None).unwrap();
+    let added = s.apply(id, Edit::AddAttachment { name: "added.txt".into(), bytes: b"new".to_vec(), description: None, mime: None });
+    assert!(matches!(added, Err(EditError::Write(m)) if m.contains("password")));
+    assert_eq!(s.get(id).unwrap().info.attachments.len(), 1);
+    s.unlock(id, "attach pw").unwrap();
+    assert!(!s.get(id).unwrap().attachments_locked());
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn script_objects_survive_incremental_save_but_not_a_full_rewrite() {

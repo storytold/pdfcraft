@@ -3123,6 +3123,94 @@ fn protecting_through_tools() {
     ok(&mut c, "doc_open", json!({ "path": "open.pdf" }));
 }
 
+/// A one-page PDF whose one attachment, `note.txt` holding `data`, is encrypted for `password`
+/// under an AES-256 handler whose only encrypting filter is `/AuthEvent /EFOpen` (ISO 32000-2
+/// §7.6.6, Table 25): the document opens without a password; the attachment needs it.
+fn efopen_attachment_pdf(password: &str, data: &[u8]) -> Vec<u8> {
+    let mut protected = pdfcraft_cos::Document::open(std::sync::Arc::new(fixture(1))).unwrap();
+    protected
+        .set_encryption(&pdfcraft_cos::NewEncryption {
+            algorithm: pdfcraft_cos::Algorithm::Aes256,
+            user_password: password,
+            owner_password: "owner pw",
+            permissions: -4,
+            encrypt_metadata: true,
+            seed: [5; 32],
+        })
+        .unwrap();
+    let handler = protected.output_handler().unwrap();
+    // AES-256 encrypts strings and streams alike, with the file key and a random first block
+    // (ISO 32000-2 §7.6.3.2), so the string cipher gives what `/StdCF` (AESV3) decrypts.
+    let cipher = handler.encrypt_string(5, 0, data);
+    let d = handler.dict();
+    let hex = |b: &[u8]| b.iter().map(|b| format!("{b:02X}")).collect::<String>();
+    let objs: [Vec<u8>; 6] = [
+        b"<< /Type /Catalog /Pages 2 0 R /Names << /EmbeddedFiles << /Names [(note.txt) 4 0 R] >> >> >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >>".to_vec(),
+        b"<< /Type /Filespec /F (note.txt) /EF << /F 5 0 R >> >>".to_vec(),
+        [format!("<< /Type /EmbeddedFile /Length {} >>\nstream\n", cipher.len()).as_bytes(), &cipher, b"\nendstream"].concat(),
+        format!(
+            "<< /Filter /Standard /V 5 /R 6 /O <{}> /U <{}> /OE <{}> /UE <{}> /Perms <{}> /P {} /CF << /StdCF << /AuthEvent /EFOpen /CFM /AESV3 /Length 32 >> >> /StmF /Identity /StrF /Identity /EFF /StdCF >>",
+            hex(&d.o),
+            hex(&d.u),
+            hex(&d.oe),
+            hex(&d.ue),
+            hex(&d.perms),
+            d.p
+        )
+        .into_bytes(),
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+        out.extend_from_slice(o);
+        out.extend_from_slice(b"\nendobj\n");
+    }
+    let xref = out.len();
+    out.extend_from_slice(b"xref\n0 7\n0000000000 65535 f \n");
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size 7 /Root 1 0 R /Encrypt 6 0 R /ID [<00> <00>] >>\nstartxref\n{xref}\n%%EOF\n").as_bytes());
+    out
+}
+
+/// `doc_unlock` gives an open document a password it was opened without. A document that
+/// encrypts only its attachments (ISO 32000-2 §7.6.6, /AuthEvent /EFOpen) opens without one and
+/// reports them locked; a wrong password is refused, and the right one unlocks them, after which
+/// the attachment reads. The permissions password lifts a document's restrictions the same way.
+#[test]
+fn doc_unlock_takes_the_attachments_or_permissions_password() {
+    let dir = workdir("unlock");
+    std::fs::write(dir.join("envelope.pdf"), efopen_attachment_pdf("attach pw", b"sealed words")).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "envelope.pdf" }))["doc"].as_u64().unwrap();
+    let attachment = |a: &Automation| {
+        let d = a.session().get(pdfcraft_engine::DocId(doc)).unwrap();
+        pdfcraft_render::attachment_data(&d.bytes, d.password.as_deref(), &d.info.attachments[0])
+    };
+    assert_eq!(ok(&mut a, "doc_info", json!({ "doc": doc }))["security"]["attachments_locked"], true);
+    assert_eq!(attachment(&a), Err(pdfcraft_render::ATTACHMENT_NEEDS_PASSWORD.to_string()));
+    assert!(matches!(a.call("doc_unlock", &json!({ "doc": doc, "password": "nope" })), Err(ToolError::Failed(m)) if m.contains("incorrect")));
+    let r = ok(&mut a, "doc_unlock", json!({ "doc": doc, "password": "attach pw" }));
+    assert_eq!(r["security"]["attachments_locked"], false);
+    assert!(!r.to_string().contains("attach pw"), "the password is never echoed");
+    assert_eq!(attachment(&a).as_deref(), Ok(&b"sealed words"[..]));
+    assert_eq!(ok(&mut a, "doc_info", json!({ "doc": doc }))["document"]["dirty"], false, "not an edit");
+    // The permissions password of a restricted document lifts its restrictions.
+    let restricted = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "doc_protect", json!({ "doc": restricted, "permissions_password": "boss", "changes": "none" }));
+    ok(&mut a, "doc_save", json!({ "doc": restricted, "path": "restricted.pdf" }));
+    let re = ok(&mut a, "doc_open", json!({ "path": "restricted.pdf" }))["doc"].as_u64().unwrap();
+    assert_eq!(ok(&mut a, "doc_info", json!({ "doc": re }))["security"]["extract_pages"], false);
+    assert!(matches!(a.call("doc_unlock", &json!({ "doc": re, "password": "nope" })), Err(ToolError::Failed(_))));
+    let r = ok(&mut a, "doc_unlock", json!({ "doc": re, "password": "boss" }));
+    assert_eq!((r["security"]["extract_pages"].as_bool(), r["security"]["opened_as_owner"].as_bool()), (Some(true), Some(true)));
+}
+
 /// A refused `doc_split` or separate-file `page_extract` leaves no output directory behind
 /// (#5081), whether the protection allows no page changes ("Any except extracting pages") or
 /// page changes without copying; with copying allowed as well, the user may extract.

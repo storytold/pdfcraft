@@ -703,6 +703,7 @@ impl Automation {
             "doc_export_images" | "doc_export_text" | "doc_export_all_images" => self.export(name, &a)?,
             "doc_header_footer" | "doc_watermark" | "doc_background" | "doc_printer_marks" | "doc_remove_marks" => self.marks(name, &a)?,
             "doc_backdrops" => self.backdrops(&a)?,
+            "doc_unlock" => self.doc_unlock(&a)?,
             "doc_unprotect" => {
                 let mut out = self.apply(&a, Edit::RemoveProtection)?;
                 out["security"] = security(self.doc(&a)?);

@@ -377,6 +377,9 @@ pub(crate) struct OpenRequest {
 
 /// Asks for the permissions password of an open document whose security restricts it, which
 /// lifts the restrictions (#995). Acrobat asks for it when such a document's security is changed.
+/// Also asks for the password of a document's attachments when one of them, encrypted for it,
+/// is saved or opened (`/AuthEvent /EFOpen`, ISO 32000-2 §7.6.6): "Encrypt Only File
+/// Attachments" documents open without a password and need one to open their attachments.
 pub struct UnlockPrompt {
     pub doc: DocId,
     pub name: String,
@@ -384,6 +387,10 @@ pub struct UnlockPrompt {
     pub error: Option<String>,
     /// The command to run once unlocked (Protect using password, Remove security), if any.
     pub then: Option<&'static str>,
+    /// The attachment asked for, when the prompt is for the attachments' password: its index in
+    /// the document's attachment list, and whether it was to be opened (else saved). It is
+    /// saved or opened once the password is accepted.
+    pub attachment: Option<(usize, bool)>,
 }
 
 impl Drop for UnlockPrompt {
@@ -395,7 +402,18 @@ impl Drop for UnlockPrompt {
 impl UnlockPrompt {
     /// Ask for document `doc`'s permissions password, then run command `then`, if any.
     pub(crate) fn new(doc: &pdfcraft_engine::Document, then: Option<&'static str>) -> Self {
-        Self { doc: doc.id, name: doc.name.clone(), input: String::new(), error: None, then }
+        Self { doc: doc.id, name: doc.name.clone(), input: String::new(), error: None, then, attachment: None }
+    }
+
+    /// Ask for the password of document `doc`'s attachments, then save attachment `index` (open it
+    /// when `open`).
+    pub(crate) fn for_attachment(doc: &pdfcraft_engine::Document, index: usize, open: bool) -> Self {
+        Self { doc: doc.id, name: doc.name.clone(), input: String::new(), error: None, then: None, attachment: Some((index, open)) }
+    }
+
+    /// The prompt asks for the attachments' password, not the permissions password.
+    pub(crate) fn for_attachments(&self) -> bool {
+        self.attachment.is_some()
     }
 }
 
