@@ -1654,6 +1654,26 @@ mod xfa_model {
             assert_eq!(som_names(&som, name), names, "{name} names {som}");
         }
     }
+
+    /// An index too large to be one (past `usize`) names no instance, as any other index no
+    /// instance has; it does not take every instance, as `[*]` does, so a reset naming it
+    /// resets nothing.
+    #[test]
+    fn an_index_too_large_to_be_one_names_no_instance() {
+        let row = |i: usize| format!("form1[0].page1[0].table[0].row[{i}].amount[0]");
+        let huge = "table.row[999999999999999999999999999999].amount";
+        for i in [0, 1, 7] {
+            assert!(!som_names(&row(i), huge), "{huge} names {}", row(i));
+        }
+        assert!(!som_names(&row(0), "table[0].row[0].amount[18446744073709551616]"));
+        assert!(!som_names(&row(0), "table[0].row[0].amount[18446744073709551615]"));
+        assert!(som_names(&row(0), "table[0].row[0].amount[ 0 ]"));
+        // Through resetForm, no row is reset and the script reads the values it had.
+        let o = click_rows_and_group(&format!(
+            "event.target.resetForm('{huge}'); xfa.resolveNode('table.row[0]').amount.rawValue + '|' + xfa.resolveNode('table.row[1]').amount.rawValue"
+        ));
+        assert_eq!((o.error.as_deref(), o.result.as_deref()), (None, Some("10|5")), "{o:?}");
+    }
 }
 
 mod formcalc {

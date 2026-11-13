@@ -104,12 +104,18 @@ fn som_steps(som: &str) -> Vec<Step> {
 
 /// Does step `want` of a name a script passed name step `have` of a SOM expression? The names
 /// must be the same, and a number in `want`'s brackets must be `have`'s index (none written is
-/// 0); no brackets, `[*]` or anything else in them takes every index.
+/// 0); a number too large to be an index names no instance. No brackets, `[*]` or anything
+/// else in them takes every index.
 fn step_names(want: &Step, have: &Step) -> bool {
     if want.0 != have.0 {
         return false;
     }
-    let Some(wanted) = want.1.as_deref().and_then(|i| i.trim().parse::<usize>().ok()) else { return true };
+    let Some(index) = want.1.as_deref().map(str::trim) else { return true };
+    let wanted = match index.parse::<usize>() {
+        Ok(wanted) => wanted,
+        Err(_) if !index.is_empty() && index.bytes().all(|b| b.is_ascii_digit()) => return false,
+        Err(_) => return true,
+    };
     have.1.as_deref().map_or(Some(0), |i| i.trim().parse::<usize>().ok()) == Some(wanted)
 }
 
