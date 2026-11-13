@@ -225,6 +225,26 @@ fn appearance(doc: &Document, name: &str) -> Vec<u8> {
     }
 }
 
+/// Decode the actual embedded font's painted bytes, independently of the stored field value.
+fn embedded_text(doc: &Document, name: &str) -> String {
+    let all = pdfcraft_forms::fields(doc);
+    let f = all.iter().find(|f| f.name == name).expect("field");
+    let widget = doc.get(f.widgets[0].obj);
+    let ap = doc.resolve(widget.as_dict().unwrap().get(b"AP").unwrap());
+    let normal = doc.resolve(ap.as_dict().unwrap().get(b"N").unwrap());
+    let Object::Stream(stream) = normal.as_ref() else { panic!("appearance stream") };
+    let resources = doc.resolve(stream.dict.get(b"Resources").unwrap());
+    let fonts = doc.resolve(resources.as_dict().unwrap().get(b"Font").unwrap());
+    let font = doc.resolve(fonts.as_dict().unwrap().get(b"PCFull0").unwrap());
+    let shown: Vec<u8> = pdfcraft_content::parse(&stream.decoded().unwrap())
+        .ops
+        .into_iter()
+        .filter(|op| op.is("Tj"))
+        .flat_map(|op| op.operands[0].as_string().unwrap().bytes.clone())
+        .collect();
+    pdfcraft_fonts::pdf::Metrics::from_dict(doc, font.as_dict().unwrap()).decode(&shown)
+}
+
 /// What a Unicode-CMap (UCS-2) font is given for `text`.
 fn ucs2(text: &str) -> Vec<u8> {
     text.encode_utf16().flat_map(u16::to_be_bytes).collect()
@@ -288,11 +308,18 @@ fn format_scripts_print_dates_in_english_where_the_field_cannot_draw_them() {
     assert!(!helv.contains(&b'?'), "{}", String::from_utf8_lossy(&helv));
     assert!(pdfcraft_forms::undrawn_fields(&doc).is_empty());
     assert!(contains(&appearance(&doc, "song"), &ucs2("18-окт.-26 !")));
-    // A script whose text has no English either keeps it, reported as undrawn.
+    // A script whose greeting is still unencodable in English keeps its local text
+    // through the embedded fallback, rather than dropping it or replacing it with question marks.
     let greeting = [("hi", "Helv", "event.value = \"Привет \" + util.printd(\"mmm\", new Date(2026, 9, 18));")];
     let mut doc = form(&greeting);
     fill(&mut doc, "hi");
-    assert_eq!(pdfcraft_forms::undrawn_fields(&doc), [("hi".to_string(), 'П')]);
+    assert!(pdfcraft_forms::undrawn_fields(&doc).is_empty());
+    assert_eq!(embedded_text(&doc, "hi"), "Привет окт.");
+    // Truly unsupported glyphs still produce the original warning.
+    assert!(!pdfcraft_fonts::embedding::covers(pdfcraft_fonts::INTER_REGULAR, "你好"));
+    let mut unsupported = form(&[("hi", "Helv", r#"event.value = "你好";"#)]);
+    fill(&mut unsupported, "hi");
+    assert_eq!(pdfcraft_forms::undrawn_fields(&unsupported), [("hi".to_string(), '你')]);
     // The English run is the appearance's alone: scripts go on printing the date language.
     assert_eq!(printd("dd-mmm-yy", "18-окт.-26"), "18-окт.-26|18-окт.-26");
     use_form_date_language("en");
@@ -300,7 +327,7 @@ fn format_scripts_print_dates_in_english_where_the_field_cannot_draw_them() {
 
 /// A Format script's English run is kept when it ran, even where it prints the stored value
 /// again: a Helvetica field storing "18-Oct-26", printed again as `dd-mmm-yy`, showed
-/// "18-????.-26" in Russian. A script that fails keeps what it showed, reported undrawn (#5303).
+/// "18-????.-26" in Russian. A failed script keeps its value; only glyphs no font holds are undrawn.
 #[test]
 fn an_english_run_that_prints_the_stored_value_is_drawn() {
     let _names = names_lock();
@@ -313,7 +340,10 @@ fn an_english_run_that_prints_the_stored_value_is_drawn() {
     assert!(!helv.contains(&b'?'), "{}", String::from_utf8_lossy(&helv));
     assert!(pdfcraft_forms::undrawn_fields(&doc).is_empty());
     fill_with(&mut doc, "fails", "18-окт.-26");
-    assert_eq!(pdfcraft_forms::undrawn_fields(&doc), [("fails".to_string(), 'о')]);
+    assert!(pdfcraft_forms::undrawn_fields(&doc).is_empty());
+    assert_eq!(embedded_text(&doc, "fails"), "18-окт.-26");
+    fill_with(&mut doc, "fails", "18-月-26");
+    assert_eq!(pdfcraft_forms::undrawn_fields(&doc), [("fails".to_string(), '月')]);
     use_form_date_language("en");
 }
 

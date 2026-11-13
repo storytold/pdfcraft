@@ -45,7 +45,16 @@ let cells: Vec<table::Cell> = grid.cells_for(names)?;      // "Table1_1", "Table
   (cells parted in the border colour), multiline wrapping, password masking, quadding, `/MK`
   background and border, list-box selection.
   The `/DA` font is used when `/DR` has it as a simple font or a composite font with a predefined
-  Unicode CMap; otherwise Helvetica (WinAnsi). Thai in a text field or combo box that the font
+  Unicode CMap; otherwise Helvetica (WinAnsi). When a text or choice appearance would lose
+  characters and the bundled OFL Inter Regular covers all its displayed text, filling or
+  property redraw embeds that complete face with a Unicode CMap and uses its actual advances.
+  List coverage checks only the rows the widget actually draws, including its `/TI`, height
+  and rotation. Offscreen unsupported options stay stored and are reported if scrolled into view.
+  The whole appearance uses the fallback; the source font and `/DA` stay unchanged. Its resource
+  is reused across widgets, edits and save/reopen. This covers Greek and mathematical symbols
+  in XFA-generated fields (#2571) without an optional font input or system font. It does not add
+  fonts for every script.
+  Thai in a text field or combo box that the font
   can't hold is drawn from the craft-fonts Thai face with Add text's writer
   (`pdfcraft_fonts::shaped_text`), beside the field's font, keeping `/DA`; a build without a Thai
   face refuses it. Any other value or button caption the font can't hold
