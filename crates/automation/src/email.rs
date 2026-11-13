@@ -29,6 +29,7 @@ fn why_code(why: &Why) -> (&'static str, Option<&str>) {
         Why::NoProgram => ("no_program", None),
         Why::NoAnswer => ("no_answer", None),
         Why::LogonFailed => ("logon_failed", None),
+        Why::Busy => ("busy", None),
         Why::Failed(detail) => ("failed", Some(detail)),
     }
 }

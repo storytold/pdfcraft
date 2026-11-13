@@ -8,12 +8,14 @@ use std::path::{Path, PathBuf};
 /// (a file or a link someone else put there) is opened or written through, and only its owner can
 /// read it (mode 0600 on Unix; on Windows the folder's owner-only access list, set before the file
 /// exists, which the file inherits). Each send gets its own folder, so a later send of the same document never
-/// replaces a copy the email app may not have read yet. The folders are left for the system's
-/// temp clean-up: the email app can read the file any time until the message is sent, and nothing
-/// here can tell when it has.
+/// replaces a copy the email app may not have read yet. Copies from earlier sends are removed once
+/// they are a day old ([`crate::mail::LEFT_FOR`]): the email app took the file into its message
+/// when it opened, and Windows clears no temp folder by itself.
 pub fn write_private_copy(name: &str, bytes: &[u8]) -> std::io::Result<PathBuf> {
     use std::io::Write;
-    let dir = new_copy_dir(&std::env::temp_dir())?;
+    let temp = std::env::temp_dir();
+    crate::mail::prune(&temp, COPY_PREFIX, crate::mail::LEFT_FOR);
+    let dir = new_copy_dir(&temp)?;
     let target = dir.join(attachment_name(name));
     let mut opts = std::fs::OpenOptions::new();
     opts.write(true).create_new(true);
@@ -47,6 +49,9 @@ pub fn remove_copy(copy: Option<&Path>) {
     }
 }
 
+/// The start of every copy folder's name ([`new_copy_dir`]).
+const COPY_PREFIX: &str = "pdfcraft-send-email-";
+
 /// How many names [`new_copy_dir`] tries before it gives up.
 const COPY_DIR_ATTEMPTS: u32 = 16;
 
@@ -62,7 +67,7 @@ fn new_copy_dir(parent: &Path) -> std::io::Result<PathBuf> {
     for _ in 0..COPY_DIR_ATTEMPTS {
         let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
         let count = NEXT.fetch_add(1, Ordering::Relaxed);
-        let dir = parent.join(format!("pdfcraft-send-email-{}-{nanos:x}-{count}", std::process::id()));
+        let dir = parent.join(format!("{COPY_PREFIX}{}-{nanos:x}-{count}", std::process::id()));
         match crate::mail::create_private_dir(&dir) {
             Ok(()) => return Ok(dir),
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => taken = e,
@@ -130,6 +135,23 @@ mod tests {
         assert!(!file_holds(&file, &long[..long.len() - 1]) && !file_holds(&file, &[long.as_slice(), b"x"].concat()), "another size");
         assert!(!file_holds(&dir.join("missing.pdf"), &long) && !file_holds(&dir, &long));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A copy from an earlier send is removed once it is a day old, at the next send; a newer one
+    /// stays (the email app may not have opened its message yet).
+    #[test]
+    #[cfg(unix)]
+    fn copies_from_earlier_sends_go_once_a_day_old() {
+        let day = crate::mail::LEFT_FOR + std::time::Duration::from_secs(60);
+        let old = write_private_copy("old.pdf", b"old").unwrap();
+        let recent = write_private_copy("recent.pdf", b"recent").unwrap();
+        let dir = old.parent().unwrap().to_path_buf();
+        std::fs::File::open(&dir).unwrap().set_modified(std::time::SystemTime::now() - day).unwrap();
+        let new = write_private_copy("new.pdf", b"new").unwrap();
+        assert!(!dir.exists(), "the day-old copy is gone");
+        assert!(recent.exists() && new.exists());
+        remove_copy(Some(&recent));
+        remove_copy(Some(&new));
     }
 
     #[test]

@@ -34,6 +34,7 @@
 use std::io::{BufRead, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, channel};
 use std::time::{Duration, Instant};
 
@@ -45,6 +46,11 @@ pub const ANSWER_SECONDS: u64 = 60;
 /// How long a Simple MAPI request may take to show a compose window. A MAPI client started
 /// without a window for a profile nobody uses can stay logging on for ever.
 pub const MAPI_SECONDS: u32 = 30;
+
+/// How long the Simple MAPI helper waits for its request to finish after the message's window has
+/// closed. Classic Outlook started for the request never finishes it when the message is closed
+/// unsent, so the helper ends then instead of waiting for ever (which also lets that Outlook quit).
+pub const MAPI_CLOSED_SECONDS: u32 = 10;
 
 /// How long `xdg-email` is watched for an early failure. It can stay running for as long as the
 /// email program it started (Thunderbird, when it wasn't running yet), so still running then
@@ -171,6 +177,9 @@ pub enum Why {
     NoAnswer,
     /// The program couldn't log on to its mailbox (Simple MAPI's `MAPI_E_LOGIN_FAILURE`).
     LogonFailed,
+    /// The program is still showing the message of an earlier request (a Simple MAPI client
+    /// such as classic Outlook takes one at a time; a second waits unseen until the first closes).
+    Busy,
     /// Anything else, in the program's or the system's words.
     Failed(String),
 }
@@ -497,15 +506,22 @@ fn detect_windows() -> DefaultMail {
         }
     }
     let olk = std::env::var_os("LOCALAPPDATA").map(|d| PathBuf::from(d).join("Microsoft\\WindowsApps\\olk.exe")).filter(|p| p.exists());
-    windows_default(prog_id.as_deref(), handler.as_deref(), mapi, olk)
+    // Classic Outlook's "New Outlook" switch: on, classic Outlook hands over to the new one.
+    let moved = query(&["HKCU\\Software\\Microsoft\\Office\\16.0\\Outlook\\Preferences", "/v", "UseNewOutlook"]).is_some_and(|out| reg_flag(&out));
+    windows_default(prog_id.as_deref(), handler.as_deref(), mapi, olk, moved)
 }
 
 /// Windows' default from what the registry says: the `mailto:` handler's ProgId and what is
 /// registered under it, the default Simple MAPI client, and the new Outlook's `olk.exe` if it is
-/// installed. The new Outlook first when it handles `mailto:` (it takes no MAPI requests); else the
-/// MAPI client, which is the program Windows hands a file to send; else the handler, which can't
-/// be handed a file from here.
-fn windows_default(prog_id: Option<&str>, handler: Option<&str>, mapi: Option<String>, olk: Option<PathBuf>) -> DefaultMail {
+/// installed, and whether classic Outlook's "New Outlook" switch is on (`moved`). The new Outlook
+/// first when it handles `mailto:` (it takes no MAPI requests); else the MAPI client, which is the
+/// program Windows hands a file to send; else the handler, which can't be handed a file from here.
+///
+/// A choice whose ProgId has nothing registered under it (an app since updated or removed: Windows
+/// itself then asks which app to use) names no program. It decides nothing, so the person's
+/// switch to the new Outlook does: with it on, a MAPI request would go to the classic Outlook they
+/// left.
+fn windows_default(prog_id: Option<&str>, handler: Option<&str>, mapi: Option<String>, olk: Option<PathBuf>, moved: bool) -> DefaultMail {
     let names_new_outlook = |text: &str| {
         let text = text.to_ascii_lowercase();
         text.contains("outlookforwindows")
@@ -513,7 +529,8 @@ fn windows_default(prog_id: Option<&str>, handler: Option<&str>, mapi: Option<St
                 .match_indices("olk.exe")
                 .any(|(i, _)| i.checked_sub(1).and_then(|j| text.as_bytes().get(j)).is_none_or(|b| !b.is_ascii_alphanumeric()))
     };
-    if [prog_id, handler].into_iter().flatten().any(names_new_outlook)
+    let unregistered = prog_id.is_some_and(|p| !p.trim().is_empty()) && handler.is_none();
+    if ([prog_id, handler].into_iter().flatten().any(names_new_outlook) || (unregistered && moved))
         && let Some(olk) = olk
     {
         return DefaultMail::NewOutlook(olk);
@@ -531,6 +548,14 @@ fn reg_value(out: &str) -> Option<String> {
         let (_, after) = line.split_once("REG_SZ").or_else(|| line.split_once("REG_EXPAND_SZ"))?;
         let value = after.trim();
         (!value.is_empty()).then(|| value.to_string())
+    })
+}
+
+/// Whether `reg query`'s answer for one `REG_DWORD` value says it is set (not zero).
+fn reg_flag(out: &str) -> bool {
+    out.lines().find_map(|line| line.split_once("REG_DWORD").map(|(_, v)| v.trim().to_string())).is_some_and(|v| {
+        let digits = v.strip_prefix("0x").or_else(|| v.strip_prefix("0X")).unwrap_or(&v);
+        u32::from_str_radix(digits, 16).is_ok_and(|n| n != 0)
     })
 }
 
@@ -597,6 +622,7 @@ fn execute(plan: Plan, compose: &Compose) -> Answer {
     let why = match route {
         Route::Fallback { why, fallback } => return Answer::NotAttached { program, why, fallback },
         Route::MessageFile { program: olk, message } => open_message_file(&olk, &message, compose),
+        Route::Run { watch: Watch::Answers, .. } if MAPI_SHOWING.load(Ordering::SeqCst) > 0 => Some(Why::Busy),
         Route::Run { command, args, stdin, watch } => run(&command, &args, stdin.as_deref(), watch),
     };
     match why {
@@ -674,11 +700,23 @@ fn wait(child: &mut Child, limit: Duration) -> Option<bool> {
 }
 
 /// Reap a child left running on a thread, so it never lingers as a zombie.
-fn reap(mut child: Child) {
+fn reap(child: Child) {
+    reap_then(child, || {});
+}
+
+/// [`reap`], then `done` once the child has stopped.
+fn reap_then(mut child: Child, done: impl FnOnce() + Send + 'static) {
     let _ = std::thread::Builder::new().name("pdfcraft-mail-reap".into()).spawn(move || {
         let _ = child.wait();
+        done();
     });
 }
+
+/// How many Simple MAPI helpers of this process answered that a message opened and are still
+/// running: the email program still holds that request, as long as its message is open. A client
+/// that takes one request at a time (classic Outlook) keeps a second one waiting, unseen, until the
+/// first message closes, so a second request is answered [`Why::Busy`] instead of being sent.
+static MAPI_SHOWING: AtomicUsize = AtomicUsize::new(0);
 
 /// The Simple MAPI script's first answer line, within `limit` ([`ANSWER_SECONDS`]).
 fn watch_answers(mut child: Child, limit: Duration) -> Option<Why> {
@@ -717,8 +755,15 @@ fn watch_answers(mut child: Child, limit: Duration) -> Option<Why> {
         }
         Err(RecvTimeoutError::Disconnected) => Some(Why::Failed("the email helper stopped without an answer".into())),
     };
-    // A MAPI compose window keeps the script running until it is closed.
-    reap(child);
+    // A MAPI compose window keeps the script running until it is closed (the script ends then).
+    if answer.is_none() && matches!(child.try_wait(), Ok(None)) {
+        MAPI_SHOWING.fetch_add(1, Ordering::SeqCst);
+        reap_then(child, || {
+            MAPI_SHOWING.fetch_sub(1, Ordering::SeqCst);
+        });
+    } else {
+        reap(child);
+    }
     answer
 }
 
@@ -791,7 +836,7 @@ fn write_message(message: &Path, contents: &[u8]) -> std::io::Result<PathBuf> {
     use std::io::Write;
     let root = message.parent().unwrap_or(Path::new("."));
     std::fs::create_dir_all(root)?;
-    prune(root, Duration::from_secs(24 * 60 * 60));
+    prune(root, "", LEFT_FOR);
     let name = message.file_name().unwrap_or_default();
     let mut last = None;
     for attempt in 0..8u32 {
@@ -856,10 +901,19 @@ fn create_private_dir_with(
     create(dir, &me)
 }
 
-/// Remove the folders in `root` last changed more than `age` ago (best effort: one in use stays).
-fn prune(root: &Path, age: Duration) {
+/// How long a file made for an email program is kept: it has long been read by then (an email
+/// program takes the file into the message when the message opens), and Windows clears no temp
+/// folder by itself, so the next send removes it.
+pub(crate) const LEFT_FOR: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// Remove the folders in `root` whose names start with `prefix` and that were last changed more
+/// than `age` ago (best effort: one in use, or another user's, stays). A link is not followed.
+pub(crate) fn prune(root: &Path, prefix: &str, age: Duration) {
     let Ok(entries) = std::fs::read_dir(root) else { return };
     for entry in entries.flatten() {
+        if !entry.file_name().to_string_lossy().starts_with(prefix) {
+            continue;
+        }
         let old = entry.metadata().and_then(|m| m.modified()).ok().and_then(|t| t.elapsed().ok()).is_some_and(|e| e > age);
         if old && entry.file_type().is_ok_and(|t| t.is_dir()) {
             let _ = std::fs::remove_dir_all(entry.path());
@@ -987,7 +1041,7 @@ end run
 /// process: its own windows (whose title can carry the subject too) never count as the compose
 /// window.
 fn mapi_script(caller: u32) -> String {
-    fill(MAPI_SCRIPT, &[("CALLER", caller.to_string()), ("SECONDS", MAPI_SECONDS.to_string())])
+    fill(MAPI_SCRIPT, &[("CALLER", caller.to_string()), ("SECONDS", MAPI_SECONDS.to_string()), ("CLOSED", MAPI_CLOSED_SECONDS.to_string())])
 }
 
 /// What the Simple MAPI script reads from its standard input, one value per line in the order it
@@ -1083,6 +1137,7 @@ public static class PdfCraftMapi {
 	delegate bool EnumProc(IntPtr window, IntPtr data);
 	[DllImport("user32.dll")] static extern bool EnumWindows(EnumProc proc, IntPtr data);
 	[DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr window);
+	[DllImport("user32.dll")] static extern bool IsWindow(IntPtr window);
 	[DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetWindowText(IntPtr window, StringBuilder text, int max);
 	[DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr window, out uint process);
 	[DllImport("kernel32.dll")] static extern IntPtr OpenProcess(uint access, bool inherit, uint process);
@@ -1133,7 +1188,7 @@ public static class PdfCraftMapi {
 			return MAPISendMailW(IntPtr.Zero, IntPtr.Zero, ref message, 0x00000008 | 0x00000001, 0);
 		} finally { Marshal.FreeHGlobal(files); if (recips != IntPtr.Zero) Marshal.FreeHGlobal(recips); }
 	}
-	public static void Run(string path, string name, string subject, string body, string[] to, uint caller, string program, int seconds) {
+	public static void Run(string path, string name, string subject, string body, string[] to, uint caller, string program, int seconds, int closed) {
 		var before = Titled(subject, caller, program);
 		uint result = 0;
 		string failure = null;
@@ -1147,11 +1202,20 @@ public static class PdfCraftMapi {
 		worker.Start();
 		var until = DateTime.UtcNow.AddSeconds(seconds);
 		bool told = false;
+		var shown = IntPtr.Zero;
+		DateTime? gone = null;
 		while (!worker.Join(250)) {
-			if (told) continue;
+			if (told) {
+				// The request lasts as long as its message: classic Outlook started for it never
+				// finishes the call once the message is closed unsent, so the window's end is the end.
+				if (IsWindow(shown)) { gone = null; continue; }
+				if (gone == null) gone = DateTime.UtcNow;
+				else if (DateTime.UtcNow > gone.Value.AddSeconds(closed)) return;
+				continue;
+			}
 			// An empty subject is in every window's title, so it can't tell them apart: a new window of
 			// the email client's own program says the message opened (the client is known by then).
-			if (subject.Length > 0 || program.Length > 0) foreach (var w in Titled(subject, caller, program)) { if (!before.Contains(w)) { told = true; break; } }
+			if (subject.Length > 0 || program.Length > 0) foreach (var w in Titled(subject, caller, program)) { if (!before.Contains(w)) { told = true; shown = w; break; } }
 			if (told) { Console.WriteLine("opened"); Console.Out.Flush(); }
 			else if (DateTime.UtcNow > until) { Console.WriteLine("hung"); Console.Out.Flush(); return; }
 		}
@@ -1161,7 +1225,7 @@ public static class PdfCraftMapi {
 }
 '@
 Add-Type -TypeDefinition $src -Language CSharp
-[PdfCraftMapi]::Run($path, $name, $subject, $body, $to, [uint32]$caller, $program, @@SECONDS@@)
+[PdfCraftMapi]::Run($path, $name, $subject, $body, $to, [uint32]$caller, $program, @@SECONDS@@, @@CLOSED@@)
 exit 0
 "##;
 
@@ -1359,24 +1423,38 @@ mod tests {
         let olk = Some(PathBuf::from("C:\\olk.exe"));
         let packaged = "HKEY_CLASSES_ROOT\\AppXabc\\Application\n    AppUserModelID    REG_SZ    Microsoft.OutlookForWindows_8wekyb3d8bbwe!Microsoft.OutlookforWindows\n";
         let new_outlook = DefaultMail::NewOutlook(PathBuf::from("C:\\olk.exe"));
-        assert_eq!(windows_default(Some("AppXabc"), Some(packaged), Some("Microsoft Outlook".into()), olk.clone()), new_outlook);
+        assert_eq!(windows_default(Some("AppXabc"), Some(packaged), Some("Microsoft Outlook".into()), olk.clone(), false), new_outlook);
         let desktop = "    (Default)    REG_SZ    \"C:\\Program Files\\WindowsApps\\olk.exe\" %1";
-        assert_eq!(windows_default(Some("olk.mailto"), Some(desktop), None, olk.clone()), new_outlook);
+        assert_eq!(windows_default(Some("olk.mailto"), Some(desktop), None, olk.clone(), false), new_outlook);
         // Classic Outlook's command names OUTLOOK.EXE, which is not olk.exe.
         let classic = "    (Default)    REG_SZ    \"C:\\Program Files\\Microsoft Office\\root\\Office16\\OUTLOOK.EXE\" -c IPM.Note /m \"%1\"";
         assert_eq!(
-            windows_default(Some("Outlook.URL.mailto.15"), Some(classic), Some("Microsoft Outlook".into()), olk.clone()),
+            windows_default(Some("Outlook.URL.mailto.15"), Some(classic), Some("Microsoft Outlook".into()), olk.clone(), false),
             DefaultMail::Mapi("Microsoft Outlook".into())
         );
         // The new Outlook named but not installed: the MAPI client, or the fallback.
-        assert_eq!(windows_default(Some("AppXabc"), Some(packaged), None, None), DefaultMail::Other(None));
+        assert_eq!(windows_default(Some("AppXabc"), Some(packaged), None, None, false), DefaultMail::Other(None));
         // A browser for webmail, and a MAPI client set up: the MAPI client takes the file.
         assert_eq!(
-            windows_default(Some("ChromeHTML"), None, Some("Mozilla Thunderbird".into()), olk.clone()),
+            windows_default(Some("ChromeHTML"), None, Some("Mozilla Thunderbird".into()), olk.clone(), false),
             DefaultMail::Mapi("Mozilla Thunderbird".into())
         );
-        assert_eq!(windows_default(Some("ChromeHTML"), None, None, olk.clone()), DefaultMail::Other(None));
-        assert_eq!(windows_default(None, None, None, olk), DefaultMail::Nothing);
+        assert_eq!(windows_default(Some("ChromeHTML"), None, None, olk.clone(), false), DefaultMail::Other(None));
+        assert_eq!(windows_default(None, None, None, olk.clone(), false), DefaultMail::Nothing);
+        // A choice with nothing registered under its ProgId (an app since updated or removed) names
+        // no program: classic Outlook's switch to the new Outlook decides, else the MAPI client.
+        let stale = Some("AppXydk58wgm44se4b399557yyyj1w7mbmvd");
+        assert_eq!(windows_default(stale, None, Some("Microsoft Outlook".into()), olk.clone(), true), new_outlook);
+        assert_eq!(windows_default(stale, None, Some("Microsoft Outlook".into()), olk.clone(), false), DefaultMail::Mapi("Microsoft Outlook".into()));
+        assert_eq!(windows_default(stale, None, Some("Microsoft Outlook".into()), None, true), DefaultMail::Mapi("Microsoft Outlook".into()));
+        // A choice that names a program is the person's, whatever the switch says.
+        assert_eq!(
+            windows_default(Some("Outlook.URL.mailto.15"), Some(classic), Some("Microsoft Outlook".into()), olk, true),
+            DefaultMail::Mapi("Microsoft Outlook".into())
+        );
+        assert!(reg_flag("HKEY_CURRENT_USER\\x\r\n    UseNewOutlook    REG_DWORD    0x1\r\n"));
+        assert!(!reg_flag("    UseNewOutlook    REG_DWORD    0x0\r\n"));
+        assert!(!reg_flag("    UseNewOutlook    REG_SZ    1\r\n"));
 
         let out = "\r\nHKEY_LOCAL_MACHINE\\Software\\Clients\\Mail\r\n    (Predeterminado)    REG_SZ    Mozilla Thunderbird\r\n\r\n";
         assert_eq!(reg_value(out).as_deref(), Some("Mozilla Thunderbird"));
@@ -1407,7 +1485,7 @@ mod tests {
                 base64(b"Mozilla Thunderbird"),
             ]
         );
-        assert!(script.contains("$caller = 4242") && script.contains(&format!("[uint32]$caller, $program, {MAPI_SECONDS})")));
+        assert!(script.contains("$caller = 4242") && script.contains(&format!("[uint32]$caller, $program, {MAPI_SECONDS}, {MAPI_CLOSED_SECONDS})")));
         assert!(script.contains("MAPISendMailW"));
         // A window counts only when it is the email client's own: its program is asked of the
         // registry and each candidate window's process is checked against it.
@@ -1587,9 +1665,51 @@ mod tests {
         assert!(address_route("macos", "MAILTO:a@example.org", Some(root), None).is_some(), "the scheme in any case");
     }
 
+    /// With no subject and no known program nothing can tell the message's window apart, so none
+    /// is taken as it: only the request's own answer says how it went.
     #[test]
     fn the_mapi_script_counts_a_new_window_of_the_client_when_the_subject_is_empty() {
         assert!(MAPI_SCRIPT.contains("if (subject.Length > 0 || program.Length > 0) foreach"));
+    }
+
+    /// The helper lasts as long as the message's window, plus a short wait for the request to
+    /// finish: classic Outlook started for it never finishes the request once the message is
+    /// closed unsent, and the helper must not wait for that for ever.
+    #[test]
+    fn the_mapi_script_ends_once_the_messages_window_has_closed() {
+        let script = mapi_script(1);
+        assert!(script.contains("told = true; shown = w;"));
+        assert!(script.contains("if (IsWindow(shown)) { gone = null; continue; }"));
+        assert!(script.contains("else if (DateTime.UtcNow > gone.Value.AddSeconds(closed)) return;"));
+    }
+
+    /// While a Simple MAPI helper of this process still holds the message it opened, a second
+    /// request is not sent (a client such as classic Outlook would keep it waiting, unseen): it is
+    /// answered busy, and the next one after the message closes is sent.
+    #[test]
+    #[cfg(unix)]
+    fn a_second_mapi_request_while_a_message_is_open_is_answered_busy() {
+        let c = compose();
+        let mapi = |script: &str| Plan {
+            program: Some("Microsoft Outlook".into()),
+            route: Route::Run { command: "/bin/sh".into(), args: vec!["-c".into(), script.into()], stdin: None, watch: Watch::Answers },
+        };
+        // The answer comes as soon as the message is open; the helper is left to run on its own.
+        let started = Instant::now();
+        assert_eq!(execute(mapi("echo opened; sleep 3"), &c), Answer::Opened { program: Some("Microsoft Outlook".into()) });
+        assert!(started.elapsed() < Duration::from_secs(2), "not waited for: {:?}", started.elapsed());
+        assert!(matches!(execute(mapi("echo opened"), &c), Answer::NotAttached { why: Why::Busy, .. }));
+        // Other routes are not held up.
+        let other = Plan {
+            program: None,
+            route: Route::Run { command: "/bin/sh".into(), args: vec!["-c".into(), "exit 0".into()], stdin: None, watch: Watch::Exit },
+        };
+        assert_eq!(execute(other, &c), Answer::Opened { program: None });
+        let until = Instant::now() + Duration::from_secs(10);
+        while MAPI_SHOWING.load(Ordering::SeqCst) > 0 && Instant::now() < until {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert_eq!(execute(mapi("echo opened"), &c), Answer::Opened { program: Some("Microsoft Outlook".into()) });
     }
 
     #[test]
@@ -1864,8 +1984,14 @@ mod tests {
         write_message(&wanted, b"three").unwrap();
         assert_eq!(std::fs::read(&wanted).unwrap(), b"planted");
         // Folders over a day old go; new ones stay.
-        prune(&root, Duration::ZERO);
-        assert!(!first.exists() && !second.exists());
+        let other = root.join("someone-else");
+        std::fs::create_dir(&other).unwrap();
+        prune(&root, "", LEFT_FOR);
+        assert!(first.exists() && second.exists(), "new folders stay");
+        prune(&root, "pdfcraft-", Duration::ZERO);
+        assert!(first.exists() && other.exists(), "only names with the prefix");
+        prune(&root, "", Duration::ZERO);
+        assert!(!first.exists() && !second.exists() && !other.exists());
         assert!(wanted.exists(), "a file, not a folder, is not pruned");
         let _ = std::fs::remove_dir_all(&root);
     }

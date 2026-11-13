@@ -350,6 +350,7 @@ fn wording(problem: &Problem, name: &str) -> String {
         (Why::NoProgram, _) => tl!("No email app is set up on this computer.").to_string(),
         (Why::NoAnswer, _) => tl!("Your email app didn't open a message in time.").to_string(),
         (Why::LogonFailed, _) => tl!("Your email app couldn't log on to your mailbox.").to_string(),
+        (Why::Busy, _) => tl!("Your email app is still showing the message from your last request. Send or close it, then try again.").to_string(),
         (Why::Failed(why), _) => fmt(tl!("Your email app didn't open a message. It said: {why}."), &[("why", why.trim().trim_end_matches('.'))]),
     };
     let offer = if problem.why == Why::NoProgram {
@@ -382,6 +383,11 @@ mod tests {
             (Why::CantAttach, None, "Your default email app can't take a file from PdfCraft."),
             (Why::NoAnswer, Some("Mail"), "Your email app didn't open a message in time."),
             (Why::LogonFailed, None, "Your email app couldn't log on to your mailbox."),
+            (
+                Why::Busy,
+                Some("Microsoft Outlook"),
+                "Your email app is still showing the message from your last request. Send or close it, then try again.",
+            ),
             (Why::Failed("Access denied.".into()), None, "Your email app didn't open a message. It said: Access denied."),
         ] {
             let text = wording(&problem(why, program), "Factura 26340.pdf");
