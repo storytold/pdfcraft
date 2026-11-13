@@ -886,14 +886,14 @@ fn validate_script_of(validate_el: Option<XmlNode>) -> Option<Script> {
 }
 
 /// Whether a subform starts on a new page (`breakBefore` or `break before` to a page or content
-/// area) and whether it ends its page (`breakAfter`).
+/// area) and whether it ends its page (`breakAfter` or `break after` to one).
 fn page_breaks(n: XmlNode) -> (bool, bool) {
     // A break to a page or content area. With no targetType, the default is `auto`: "layout
     // continues using the current layout container" (XFA 3.3 p. 638), so no break.
     let break_to_page = |name: &str| children(n, name).any(|b| b.attribute("targetType").is_some_and(|t| t == "pageArea" || t == "contentArea"));
-    let before = break_to_page("breakBefore")
-        || child(n, "break").is_some_and(|b| b.attribute("before").is_some_and(|v| v == "pageArea" || v == "contentArea"));
-    (before, break_to_page("breakAfter"))
+    // The deprecated `break` element says both in its `before` and `after` attributes (pp. 632-633).
+    let legacy = |side: &str| child(n, "break").is_some_and(|b| b.attribute(side).is_some_and(|v| v == "pageArea" || v == "contentArea"));
+    (break_to_page("breakBefore") || legacy("before"), break_to_page("breakAfter") || legacy("after"))
 }
 
 /// A field's choice list as its widget element `e` says (`open`, `textEntry`), for a field

@@ -6286,6 +6286,20 @@ fn the_deprecated_break_before_form_breaks_only_to_a_page_or_content_area() {
     assert_eq!(page(r#"<break before="contentArea"/>"#), Some(1));
 }
 
+/// Its `after` attribute (XFA 3.3 p. 632) is read as its `before` is: `pageArea` and
+/// `contentArea` end the subform's page, so what follows the subform starts the next one, and
+/// the subform's own content stays where it was; `auto`, an empty or an unknown value breaks
+/// nothing.
+#[test]
+fn the_deprecated_break_after_form_breaks_only_to_a_page_or_content_area() {
+    assert_eq!(pages_around_break(r#"<break after="auto"/>"#, ""), (Some(0), Some(0)));
+    assert_eq!(pages_around_break(r#"<break after=""/>"#, ""), (Some(0), Some(0)));
+    assert_eq!(pages_around_break(r#"<break after="next"/>"#, ""), (Some(0), Some(0)));
+    assert_eq!(pages_around_break(r#"<break after="pageArea"/>"#, ""), (Some(0), Some(1)));
+    assert_eq!(pages_around_break(r#"<break after="contentArea"/>"#, ""), (Some(0), Some(1)));
+    assert_eq!(pages_around_break(r#"<break before="pageArea" after="pageArea"/>"#, ""), (Some(1), Some(2)));
+}
+
 /// Review on #5010: the text the reader returns is held to what `parse` accepts. A packet within
 /// the 64 MB byte limit that isn't valid UTF-8 grows as each bad byte becomes a three-byte
 /// replacement character: 33 MiB of them come to 99 MiB of text, past the limit, and are refused
