@@ -12223,6 +12223,18 @@ fn a_static_xfa_forms_template_scripts_run_on_its_own_fields() {
     assert_eq!(hidden(&s), [true, true], "the group hides the button set visible in it");
 }
 
+/// Flattening a static form's fields removes its XFA, and its scripts go with it; an undo brings both back.
+#[test]
+fn a_static_xfa_forms_scripts_go_with_its_xfa() {
+    let mut s = Session::new();
+    let id = s.open("static.pdf", None, Arc::new(pdfcraft_xfa::fixtures::static_scripted_shell("")), None).expect("opens");
+    assert!(s.get(id).unwrap().xfa_template.is_some());
+    s.apply(id, Edit::Flatten { comments: false, fields: true }).expect("flattens");
+    assert!(s.get(id).unwrap().xfa_template.is_none(), "no XFA, no scripts");
+    s.undo(id).expect("undoes");
+    assert!(s.get(id).unwrap().xfa_template.is_some(), "the XFA is back, and its scripts");
+}
+
 /// On a dynamic XFA form too, a check box or radio button the user sets runs its click script after its change scripts,
 /// the chosen radio button's own.
 #[test]
