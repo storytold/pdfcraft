@@ -946,6 +946,25 @@ mod xfa_model {
             "calculate",
         );
         assert_eq!(o.result.as_deref(), Some("2,2,2,null,null"), "{o:?}");
+        // a bare `_row` from a field in a row: the nearest container holding rows, as a bare name is looked up
+        let o = go("this.resolveNode('_row').count", "form1[0].page1[0].table[0].row[0].what[0]", "calculate");
+        assert_eq!(o.result.as_deref(), Some("2"), "{o:?}");
+        // `row[*]._item`: the first row that holds an `item`, here the second
+        let mut f = form();
+        let table = f.children.first_mut().and_then(|p| p.children.iter_mut().find(|c| c.name == "table"));
+        if let Some(row) = table.and_then(|t| t.children.get_mut(1)) {
+            row.children.push(XfaNode {
+                name: "item".into(),
+                som: "form1[0].page1[0].table[0].row[1].item[0]".into(),
+                kind: Some(XfaKind::Subform),
+                repeatable: true,
+                occur_max: None,
+                ..Default::default()
+            });
+        }
+        let ev = XfaEvent { activity: "calculate".into(), target: "form1[0].page1[0].total[0]".into(), ..Default::default() };
+        let o = run_xfa("page1.resolveNode('table.row[*]._item').count", &ev, &XfaDoc::default(), &f, Limits::default());
+        assert_eq!(o.result.as_deref(), Some("1"), "{o:?}");
     }
 
     #[test]
