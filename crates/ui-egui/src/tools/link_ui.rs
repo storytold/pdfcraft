@@ -139,6 +139,7 @@ fn target_label(info: &DocInfo, target: &LinkTarget) -> String {
             .iter()
             .find(|a| a.source == *source)
             .map_or_else(|| crate::i18n::fmt(tl!("{s} action"), &[("s", "GoToE")]), |a| a.name.clone()),
+        LinkTarget::JavaScript(_) => crate::i18n::fmt(tl!("{s} action"), &[("s", "JavaScript")]),
         LinkTarget::Other(s) => crate::i18n::fmt(tl!("{s} action"), &[("s", s)]),
     }
 }
