@@ -715,8 +715,10 @@ pub fn set_scale(doc: &mut Document, page_index: usize, bbox: [f64; 4], name: &s
 /// MaxY and Points. Geometry is in physical displayed page points (1/72 inch), with
 /// top-left origin and Y down, after CropBox, Rotate and UserUnit. Bounds enclose the
 /// saved vertices, not the annotation appearance; Points preserves their order as
-/// `x y; x y; ...`. Conversion failures return an error instead of partial CSV.
-pub fn csv(doc: &Document, measurements: &[Measurement]) -> Result<String> {
+/// `x y; x y; ...`. Coordinates round to 0.001 pt with trailing zeros omitted.
+/// Unavailable display geometry leaves the five appended cells empty, retaining the
+/// original reading and all other rows.
+pub fn csv(doc: &Document, measurements: &[Measurement]) -> String {
     // Prefix spreadsheet formula triggers; quoting alone does not prevent evaluation.
     let field = |s: &str| {
         let prefix = if s.trim_start().starts_with(['=', '+', '-', '@']) || s.starts_with(['\t', '\r']) { "'" } else { "" };
@@ -726,32 +728,22 @@ pub fn csv(doc: &Document, measurements: &[Measurement]) -> Result<String> {
     // Read the page tree once: a plan can have many measurements on each page.
     let pages = pdfcraft_model::pages(doc);
     for m in measurements {
-        check_points(&m.points)?;
-        let page = pages.get(m.page).ok_or_else(|| invalid("measurement page does not exist"))?;
-        let (matrix, height) = display_transform(doc, page)?;
-        let points: Vec<Point> = m
-            .points
-            .iter()
-            .map(|p| {
-                let (x, y) = matrix.apply(p[0], p[1]);
-                [x, height - y]
-            })
-            .collect();
-        if points.iter().flatten().any(|v| !v.is_finite()) {
-            return Err(invalid("invalid displayed measurement coordinates"));
-        }
-        let first = points.first().ok_or_else(|| invalid("measurement needs points"))?;
-        let mut bounds = [first[0], first[1], first[0], first[1]];
-        let mut vertices = String::new();
-        for [x, y] in points {
-            bounds = [bounds[0].min(x), bounds[1].min(y), bounds[2].max(x), bounds[3].max(y)];
-            if !vertices.is_empty() {
-                vertices.push_str("; ");
-            }
-            vertices.push_str(&format!("{x} {y}"));
-        }
+        // Unavailable coordinates must not discard a reading or block other rows.
+        let geometry = pages.get(m.page).and_then(|page| csv_geometry(doc, page, &m.points)).map_or_else(
+            || ",,,,".into(),
+            |(bounds, vertices)| {
+                format!(
+                    "{},{},{},{},{}",
+                    csv_coordinate(bounds[0]),
+                    csv_coordinate(bounds[1]),
+                    csv_coordinate(bounds[2]),
+                    csv_coordinate(bounds[3]),
+                    field(&vertices)
+                )
+            },
+        );
         out.push_str(&format!(
-            "{},{},{},{},{},{},{},{},{},{},{},{},{}\r\n",
+            "{},{},{},{},{},{},{},{},{}\r\n",
             m.page.saturating_add(1),
             m.index.saturating_add(1),
             m.reading.kind.name(),
@@ -760,14 +752,43 @@ pub fn csv(doc: &Document, measurements: &[Measurement]) -> Result<String> {
             field(&m.label),
             field(&m.author),
             field(&m.scale.ratio),
-            bounds[0],
-            bounds[1],
-            bounds[2],
-            bounds[3],
-            field(&vertices)
+            geometry
         ));
     }
-    Ok(out)
+    out
+}
+
+fn csv_geometry(doc: &Document, page: &pdfcraft_model::Page, points: &[Point]) -> Option<([f64; 4], String)> {
+    check_points(points).ok()?;
+    let (matrix, height) = display_transform(doc, page).ok()?;
+    let points: Vec<Point> = points
+        .iter()
+        .map(|p| {
+            let (x, y) = matrix.apply(p[0], p[1]);
+            [x, height - y]
+        })
+        .collect();
+    if points.iter().flatten().any(|v| !v.is_finite()) {
+        return None;
+    }
+    let first = points.first()?;
+    let mut bounds = [first[0], first[1], first[0], first[1]];
+    let mut vertices = String::new();
+    for [x, y] in points {
+        bounds = [bounds[0].min(x), bounds[1].min(y), bounds[2].max(x), bounds[3].max(y)];
+        if !vertices.is_empty() {
+            vertices.push_str("; ");
+        }
+        vertices.push_str(&format!("{} {}", csv_coordinate(x), csv_coordinate(y)));
+    }
+    Some((bounds, vertices))
+}
+
+/// Hide affine round-off at spreadsheet precision, including negative rounded zero.
+fn csv_coordinate(value: f64) -> String {
+    let rounded = format!("{value:.3}");
+    let trimmed = rounded.trim_end_matches('0').trim_end_matches('.');
+    if trimmed == "-0" { "0".into() } else { trimmed.into() }
 }
 
 #[cfg(test)]

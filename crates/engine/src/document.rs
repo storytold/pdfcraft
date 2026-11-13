@@ -370,7 +370,7 @@ impl Document {
     /// page points (CropBox, Rotate and UserUnit applied); see [`measure::csv`].
     pub fn measurement_csv(&self, measurements: &[measure::Measurement]) -> Result<String, String> {
         let e = self.editor.as_ref().ok_or("the document can't be read")?;
-        measure::csv(&e.cos, measurements).map_err(|e| e.to_string())
+        Ok(measure::csv(&e.cos, measurements))
     }
     pub fn measurement_scale(&self, page: usize, at: measure::Point) -> Result<measure::Scale, String> {
         let e = self.editor.as_ref().ok_or("the document can't be read")?;
