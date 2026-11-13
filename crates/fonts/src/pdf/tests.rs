@@ -1880,10 +1880,29 @@ fn subset_invisible_format_characters_keep_their_empty_glyphs() {
     let face = skrifa::FontRef::new(include_bytes!("../../../../assets/fonts/Inter-Regular.ttf")).unwrap();
     let gid = |c| u16::try_from(face.charmap().map(c).unwrap().to_u32()).unwrap();
     let map: Vec<u8> = [0, gid('A'), gid(' ')].into_iter().flat_map(u16::to_be_bytes).collect();
-    for ch in ['\u{00AD}', '\u{200B}', '\u{200C}', '\u{200D}', '\u{FEFF}'] {
+    for ch in [
+        '\u{00AD}',
+        '\u{034F}',
+        '\u{061C}',
+        '\u{180E}',
+        '\u{200B}',
+        '\u{200C}',
+        '\u{200D}',
+        '\u{200E}',
+        '\u{200F}',
+        '\u{202A}',
+        '\u{202E}',
+        '\u{2060}',
+        '\u{2066}',
+        '\u{2069}',
+        '\u{FE0F}',
+        '\u{FEFF}',
+        '\u{E0100}',
+    ] {
+        let hex: String = ch.encode_utf16(&mut [0; 2]).iter().map(|u| format!("{u:04X}")).collect();
         for mapping in [
-            format!("2 beginbfchar <0001> <0041> <0002> <{:04X}> endbfchar", u32::from(ch)),
-            format!("1 beginbfchar <0001> <0041> endbfchar 1 beginbfrange <0002> <0003> <{:04X}> endbfrange", u32::from(ch)),
+            format!("2 beginbfchar <0001> <0041> <0002> <{hex}> endbfchar"),
+            format!("1 beginbfchar <0001> <0041> endbfchar 1 beginbfrange <0002> <0003> <{hex}> endbfrange"),
         ] {
             let mut doc = Document::new_empty();
             let (mut font, _) = subset_type0(&mut doc, mapping.as_bytes());

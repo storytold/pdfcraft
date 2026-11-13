@@ -1,4 +1,4 @@
-use super::{covered_japanese_chars, page_content_bytes, reopen, text_page};
+use super::{covered_japanese_chars, page_content_bytes, reopen, skia_subset_page, text_page};
 use crate::added::{AddedText, Content, add_content, delete_content, first_undrawable, list_added, text_rect, update_content};
 use crate::text;
 
@@ -6,6 +6,38 @@ const MIXED: &str = "Agpq 中文 简体汉字 联络 编辑 保存 重开 123";
 
 fn has_hans() -> bool {
     pdfcraft_fonts::CRAFT_FONTS.iter().any(|face| face.covers("Hans"))
+}
+
+#[test]
+fn mixed_text_subset_word_joiner_keeps_source_font_after_edit_and_reopen() {
+    use pdfcraft_cos::{Dict, ObjRef, Object, Stream};
+
+    let mut doc = skia_subset_page();
+    let page = pdfcraft_model::pages(&doc).remove(0);
+    let mut resources = doc.dict(page.dict.get(b"Resources").unwrap()).unwrap();
+    let mut fonts = doc.dict(resources.get(b"Font").unwrap()).unwrap();
+    let mut font = doc.dict(fonts.get(b"F3").unwrap()).unwrap();
+    // Reuse the subset's a and empty space glyph, mapping the latter to WORD JOINER.
+    let unicode = doc.add(Object::Stream(Stream::flate(Dict::new(), b"2 beginbfchar <01FB> <0061> <06F1> <2060> endbfchar")));
+    font.set(b"ToUnicode".to_vec(), Object::Ref(unicode));
+    let Some(Object::Array(descendants)) = font.get_mut(b"DescendantFonts") else { panic!() };
+    let Some(Object::Dict(descendant)) = descendants.first_mut() else { panic!() };
+    descendant.set(
+        b"W".to_vec(),
+        Object::Array(vec![Object::Int(0x1FB), Object::Array(vec![Object::Int(551)]), Object::Int(0x6F1), Object::Array(vec![Object::Int(0)])]),
+    );
+    fonts.set(b"F3".to_vec(), Object::Dict(font));
+    resources.set(b"Font".to_vec(), Object::Dict(fonts));
+    doc.update_dict(page.obj, |d| d.set(b"Resources".to_vec(), Object::Dict(resources))).unwrap();
+    doc.set(ObjRef::new(4, 0), Object::Stream(Stream::flate(Dict::new(), b"BT /F3 12 Tf 72 700 Td <01FB06F101FB> Tj ET")));
+    for replacement in ["aa\u{2060}a", "a\u{2060}aa"] {
+        let edited = text::rewrite_block(&mut doc, 0, 0, Some(replacement), &Default::default()).unwrap();
+        assert_eq!(edited.substituted, None);
+        doc = reopen(&doc);
+        let lines = text::text_lines(&doc, 0).unwrap();
+        assert_eq!(lines[0].text, replacement);
+        assert_eq!(lines[0].font, "F3");
+    }
 }
 
 #[test]

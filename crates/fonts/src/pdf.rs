@@ -1212,7 +1212,7 @@ impl Metrics {
         self.unicode.text(code).is_some_and(|t| t.chars().eq(std::iter::once(c)))
             && self.has_glyph(code)
             // Subsetters can keep widths and Unicode mappings after dropping a visible glyph.
-            && (c.is_whitespace() || matches!(c, '\u{00AD}' | '\u{200B}'..='\u{200D}' | '\u{FEFF}') || self.has_outline(code) != Some(false))
+            && (c.is_whitespace() || default_ignorable(c) || self.has_outline(code) != Some(false))
     }
 
     /// The bytes that show `text` in this font, or `None` if some character has no code or
@@ -1248,6 +1248,16 @@ impl Metrics {
         }
         Some(out)
     }
+}
+
+/// Unicode Default_Ignorable_Code_Point characters may intentionally have no outline.
+fn default_ignorable(c: char) -> bool {
+    matches!(c,
+        '\u{00AD}' | '\u{034F}' | '\u{061C}' | '\u{115F}'..='\u{1160}' | '\u{17B4}'..='\u{17B5}'
+        | '\u{180B}'..='\u{180F}' | '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2060}'..='\u{206F}'
+        | '\u{3164}' | '\u{FE00}'..='\u{FE0F}' | '\u{FEFF}' | '\u{FFA0}' | '\u{FFF0}'..='\u{FFF8}'
+        | '\u{1BCA0}'..='\u{1BCA3}' | '\u{1D173}'..='\u{1D17A}' | '\u{E0000}'..='\u{E0FFF}'
+    )
 }
 
 /// Most UTF-16 units kept from one ToUnicode destination: the CMap format allows destinations of up
