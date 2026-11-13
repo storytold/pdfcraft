@@ -1,9 +1,11 @@
 //! Window chrome: tab strip (with the integrated macOS title bar), mode bar, right rail.
 
-use craft_ui::panes::{Edge, Rail, RailItem, RailRequest};
+use craft_ui::panes::{Rail, RailItem, RailRequest};
 use egui::{Align, Color32, CornerRadius, Layout, Rect, Sense, Stroke, vec2};
 
 use crate::canvas::{DocView, Fit, PageLayout};
+use crate::panes::{Place, TabDrop};
+use crate::tab_context::Action;
 use crate::theme::{self, ThemePreference, Tokens};
 use crate::{Dialog, Mode, PdfCraftApp, PropsTab, RightPanel, icons, widgets, window_controls};
 
@@ -41,6 +43,7 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         .frame(egui::Frame::NONE.fill(t.titlebar).inner_margin(egui::Margin { left, right: 10, top: 0, bottom: 0 }))
         .show(ui, |ui| {
             let full = ui.max_rect();
+            app.panes.main_strip = Some(full);
             let drag = ui.interact(full, ui.scope_id().with("titledrag"), Sense::click_and_drag());
             if drag.drag_started() {
                 window_controls::desktop_grab(ui.ctx(), egui::ViewportCommand::StartDrag);
@@ -69,10 +72,10 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     app.active = None;
                     app.combine_tab.focused = false;
                 }
-                // Keep the two icon buttons, Discord's text/padding and three gaps outside the scrolling tabs.
+                // Reserve the three icon buttons, Discord and their gaps outside the scrolling tabs.
                 let controls_width = ui.fonts_mut(|f| f.layout_no_wrap("Discord".into(), theme::medium(13.0), t.text).size().x)
-                    + 2.0 * button
-                    + 50.0
+                    + 3.0 * button
+                    + 54.0
                     + window_controls::width(&controls.right);
                 // Open stays in sight after the tabs: its icon, text and padding, and the gaps around it.
                 let open_width = ui.fonts_mut(|f| f.layout_no_wrap(tl!("Open").into(), theme::medium(13.0), t.text).size().x) + 38.0 + 12.0;
@@ -80,7 +83,8 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 // Tabs shrink to share the strip (names end in "…") and scroll only once they reach
                 // their narrowest; then arrows either side say so and step through them.
                 let mut natural: Vec<f32> = Vec::with_capacity(app.views.len() + 1);
-                for i in 0..app.views.len() {
+                // (The main pane's tabs: split view's second pane has a strip of its own.)
+                for i in app.tabs_in(Place::Main) {
                     if let Some(name) = crate::canvas::tab_label(app, i) {
                         natural.push(tab_natural_width(ui, &t, &name));
                     }
@@ -126,7 +130,7 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                             // (with whether it was just released).
                             let mut slots = Vec::with_capacity(app.views.len());
                             let mut dragged = None;
-                            for i in 0..app.views.len() {
+                            for i in app.tabs_in(Place::Main) {
                                 let Some(doc) = app.session.get(app.views[i].id) else { continue };
                                 let Some(name) = crate::canvas::tab_label(app, i) else { continue };
                                 let dirty = doc.dirty;
@@ -134,18 +138,20 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                                 let file = (name != doc.name).then_some(doc.name.as_str());
                                 let response = tab(
                                     ui,
-                                    ui.scope_id().with(("document-tab", app.views[i].id)),
-                                    &t,
-                                    "file-text",
-                                    &name,
-                                    file,
-                                    dirty,
-                                    app.active == Some(i),
+                                    TabSpec {
+                                        id: ui.scope_id().with(("document-tab", app.views[i].id)),
+                                        theme: &t,
+                                        icon: "file-text",
+                                        name: &name,
+                                        file,
+                                        dirty,
+                                        active: app.pane_front(Place::Main) == Some(i),
+                                        index: i,
+                                        cap,
+                                        height: tab_h,
+                                        draggable: true,
+                                    },
                                     &mut close,
-                                    i,
-                                    cap,
-                                    tab_h,
-                                    true,
                                 );
                                 slots.push((i, response.rect));
                                 if response.dragged() || response.drag_stopped() {
@@ -154,23 +160,7 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                                 if changed && app.active == Some(i) && !app.combine_showing() {
                                     response.scroll_to_me(Some(Align::Center));
                                 }
-                                let id = app.views[i].id;
-                                let reveal = cfg!(not(target_arch = "wasm32")) && doc.path.is_some();
-                                response.context_menu(|ui| {
-                                    if ui.button(tl!("Close Tab")).clicked() {
-                                        action = Some(crate::tab_context::Action::Close(id));
-                                        ui.close();
-                                    }
-                                    if ui.add_enabled(!app.closed_tabs.is_empty(), egui::Button::new(tl!("Reopen Closed Tab"))).clicked() {
-                                        action = Some(crate::tab_context::Action::Reopen);
-                                        ui.close();
-                                    }
-                                    let label = if cfg!(target_os = "macos") { tl!("Reveal in Finder") } else { tl!("Reveal in File Explorer") };
-                                    if ui.add_enabled(reveal, egui::Button::new(label)).clicked() {
-                                        action = Some(crate::tab_context::Action::Reveal(id));
-                                        ui.close();
-                                    }
-                                });
+                                response.context_menu(|ui| tab_menu(app, ui, i, &mut action));
                                 if response.clicked() {
                                     app.active = Some(i);
                                 }
@@ -180,33 +170,11 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                                     close = Some(i);
                                 }
                             }
-                            // Dragging a tab moves it (#1537): a line marks the gap it will land
-                            // in, and releasing the button drops it there.
-                            if let Some((from, released)) = dragged
-                                && let Some(x) = ui.ctx().pointer_latest_pos().map(|p| p.x)
-                            {
-                                let to = drop_index(&slots, from, x);
-                                if released {
-                                    if close.is_none() && action.is_none() {
-                                        app.move_tab(from, to);
-                                    }
-                                } else {
-                                    drag_x = Some(x);
-                                    ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
-                                    if let Some(marker) = drop_marker(&slots, from, to, ui.spacing().item_spacing.x) {
-                                        let span = slots.first().map_or(ui.max_rect().y_range(), |(_, r)| r.y_range());
-                                        // In front of the first tab the gap lies outside the scroll area's
-                                        // clip rect (#2225): keep the whole line inside it.
-                                        let clip = ui.clip_rect();
-                                        let marker = marker.clamp(clip.left() + 1.0, (clip.right() - 1.0).max(clip.left() + 1.0));
-                                        ui.painter().vline(marker, span.shrink(4.0), Stroke::new(2.0, t.accent));
-                                    }
-                                }
-                            }
+                            drag_x = tab_drag(app, ui, &slots, dragged, Place::Main, close.is_some() || action.is_some());
                             if let Some(i) = close
                                 && let Some(view) = app.views.get(i)
                             {
-                                action.get_or_insert(crate::tab_context::Action::Close(view.id));
+                                action.get_or_insert(Action::Close(view.view_key()));
                             }
                             if let Some(action) = action {
                                 app.tab_action(action);
@@ -216,18 +184,20 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                                 let mut close = None;
                                 let response = tab(
                                     ui,
-                                    ui.scope_id().with("combine-tab"),
-                                    &t,
-                                    "files",
-                                    tl!("Combine files"),
-                                    None,
-                                    false,
-                                    app.combine_showing(),
+                                    TabSpec {
+                                        id: ui.scope_id().with("combine-tab"),
+                                        theme: &t,
+                                        icon: "files",
+                                        name: tl!("Combine files"),
+                                        file: None,
+                                        dirty: false,
+                                        active: app.combine_showing(),
+                                        index: usize::MAX,
+                                        cap,
+                                        height: tab_h,
+                                        draggable: false,
+                                    },
                                     &mut close,
-                                    usize::MAX,
-                                    cap,
-                                    tab_h,
-                                    false,
                                 );
                                 if changed && app.combine_showing() {
                                     response.scroll_to_me(Some(Align::Center));
@@ -283,6 +253,9 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                         });
                         ui.add_space(window_controls::SIDE_GAP - 4.0);
                     }
+                    if icons::button(ui, "settings", button, false, tl!("Preferences")).clicked() {
+                        app.execute("app.preferences");
+                    }
                     let (icon, label) = match app.theme_preference {
                         ThemePreference::System => ("monitor", tl!("Use system setting")),
                         ThemePreference::Light => ("sun", tl!("Light gray")),
@@ -316,6 +289,143 @@ fn appearance_menu(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     if ui.button(tl!("Appearance settings…")).clicked() {
         app.dialog = Some(Dialog::Preferences);
         ui.close();
+    }
+}
+
+/// A document tab's right-click menu, in any strip: the choice is left in `action`.
+fn tab_menu(app: &PdfCraftApp, ui: &mut egui::Ui, index: usize, action: &mut Option<Action>) {
+    let Some(view) = app.views.get(index) else { return };
+    let (tab, id) = (view.view_key(), view.id);
+    if ui.button(tl!("Close Tab")).clicked() {
+        *action = Some(Action::Close(tab));
+        ui.close();
+    }
+    if ui.add_enabled(!app.closed_tabs.is_empty(), egui::Button::new(tl!("Reopen Closed Tab"))).clicked() {
+        *action = Some(Action::Reopen);
+        ui.close();
+    }
+    ui.separator();
+    // Split view (view.split-window).
+    if ui.button(tl!("Split right")).clicked() {
+        *action = Some(Action::Split { tab, down: false });
+        ui.close();
+    }
+    if ui.button(tl!("Split down")).clicked() {
+        *action = Some(Action::Split { tab, down: true });
+        ui.close();
+    }
+    ui.separator();
+    let reveal = cfg!(not(target_arch = "wasm32")) && app.session.get(id).is_some_and(|d| d.path.is_some());
+    let label = if cfg!(target_os = "macos") { tl!("Reveal in Finder") } else { tl!("Reveal in File Explorer") };
+    if ui.add_enabled(reveal, egui::Button::new(label)).clicked() {
+        *action = Some(Action::Reveal(id));
+        ui.close();
+    }
+}
+
+/// A tab of `place`'s strip (its tabs `slots`) being dragged (`dragged`: its index, and whether it
+/// was let go this frame). It moves the tab along the strip (#1537): a line marks the gap it will
+/// land in, and letting go drops it there. Over the right half of a page area that isn't split, or
+/// over split view's other pane, a hint shows where it would go instead, and letting go puts it
+/// there (`crate::panes`). `busy` is a close or menu choice this frame, which wins. Returns the
+/// pointer's x while the tab moves along the strip, for scrolling at the strip's edges.
+fn tab_drag(app: &mut PdfCraftApp, ui: &egui::Ui, slots: &[(usize, Rect)], dragged: Option<(usize, bool)>, place: Place, busy: bool) -> Option<f32> {
+    let (from, released) = dragged?;
+    let pos = ui.ctx().pointer_latest_pos()?;
+    match app.drop_target(pos, place) {
+        TabDrop::Strip => {
+            let x = pos.x;
+            let to = drop_index(slots, from, x);
+            if released {
+                if !busy {
+                    app.move_tab_in_strip(from, slots, to);
+                }
+                return None;
+            }
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+            if let Some(marker) = drop_marker(slots, from, to, ui.spacing().item_spacing.x) {
+                let t = Tokens::get(ui.ctx());
+                let span = slots.first().map_or(ui.max_rect().y_range(), |(_, r)| r.y_range());
+                // In front of the first tab the gap lies outside the scroll area's clip rect
+                // (#2225): keep the whole line inside it.
+                let clip = ui.clip_rect();
+                let marker = marker.clamp(clip.left() + 1.0, (clip.right() - 1.0).max(clip.left() + 1.0));
+                ui.painter().vline(marker, span.shrink(4.0), Stroke::new(2.0, t.accent));
+            }
+            Some(x)
+        }
+        target => {
+            if !released {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+                app.panes.drop_hint = app.drop_hint_rect(target);
+            } else if !busy {
+                app.drop_tab(from, target);
+            }
+            None
+        }
+    }
+}
+
+/// The tab strip of split view's second pane, in `strip`: its tabs share the width (no scrolling),
+/// and are clicked, closed, moved along and dragged to the other pane as in the main strip.
+pub(crate) fn pane_tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui, strip: Rect, place: Place) {
+    let t = Tokens::get(ui.ctx());
+    ui.painter().rect_filled(strip, 0.0, t.titlebar);
+    ui.painter().hline(strip.x_range(), strip.bottom() - 0.5, Stroke::new(1.0, t.divider));
+    let tabs = app.tabs_in(place);
+    let front = app.pane_front(place);
+    let inner = Rect::from_min_max(strip.min + vec2(6.0, 2.0), strip.max - vec2(6.0, 0.0));
+    let mut row = ui.new_child(egui::UiBuilder::new().max_rect(inner).layout(Layout::left_to_right(Align::Max)).id_salt(("tab-row", place)));
+    row.spacing_mut().item_spacing.x = 4.0;
+    let natural: Vec<f32> = tabs.iter().filter_map(|&i| crate::canvas::tab_label(app, i)).map(|name| tab_natural_width(&row, &t, &name)).collect();
+    let cap = tab_cap(&natural, row.available_width(), 4.0, TAB_MIN_WIDTH);
+    let mut close = None;
+    let mut action = None;
+    let mut slots = Vec::with_capacity(tabs.len());
+    let mut dragged = None;
+    for &i in &tabs {
+        let Some(view) = app.views.get(i) else { continue };
+        let Some(doc) = app.session.get(view.id) else { continue };
+        let Some(name) = crate::canvas::tab_label(app, i) else { continue };
+        let dirty = doc.dirty;
+        let file = (name != doc.name).then(|| doc.name.clone());
+        let id = row.scope_id().with(("pane-tab", view.view_key()));
+        let spec = TabSpec {
+            id,
+            theme: &t,
+            icon: "file-text",
+            name: &name,
+            file: file.as_deref(),
+            dirty,
+            active: front == Some(i),
+            index: i,
+            cap,
+            height: inner.height(),
+            draggable: true,
+        };
+        let response = tab(&mut row, spec, &mut close);
+        slots.push((i, response.rect));
+        if response.dragged() || response.drag_stopped() {
+            dragged = Some((i, response.drag_stopped()));
+        }
+        response.context_menu(|ui| tab_menu(app, ui, i, &mut action));
+        if response.clicked() {
+            app.active = Some(i);
+            app.combine_tab.focused = false;
+        }
+        // A middle click closes the tab, as in the main strip (#1853).
+        if response.middle_clicked() {
+            close = Some(i);
+        }
+    }
+    tab_drag(app, &row, &slots, dragged, place, close.is_some() || action.is_some());
+    if let Some(i) = close
+        && let Some(view) = app.views.get(i)
+    {
+        action.get_or_insert(Action::Close(view.view_key()));
+    }
+    if let Some(action) = action {
+        app.tab_action(action);
     }
 }
 
@@ -397,22 +507,22 @@ fn tab_cap(natural: &[f32], budget: f32, gap: f32, min: f32) -> Option<f32> {
 
 /// Draw one tab with its icon, elided label, close button and unsaved dot; records a close request and
 /// returns the tab response for drag handling.
-#[allow(clippy::too_many_arguments)]
-fn tab(
-    ui: &mut egui::Ui,
+struct TabSpec<'a> {
     id: egui::Id,
-    t: &Tokens,
-    icon: &str,
-    name: &str,
-    file: Option<&str>,
+    theme: &'a Tokens,
+    icon: &'a str,
+    name: &'a str,
+    file: Option<&'a str>,
     dirty: bool,
     active: bool,
-    close: &mut Option<usize>,
     index: usize,
     cap: Option<f32>,
     height: f32,
     draggable: bool,
-) -> egui::Response {
+}
+
+fn tab(ui: &mut egui::Ui, spec: TabSpec<'_>, close: &mut Option<usize>) -> egui::Response {
+    let TabSpec { id, theme: t, icon, name, file, dirty, active, index, cap, height, draggable } = spec;
     let font = theme::regular(13.0);
     let mut label = tab_name(name);
     // A shrunk tab shows as much of its name as fits (the tooltip has all of it).
@@ -470,28 +580,64 @@ fn tab(
     theme::hand(resp).on_hover_text(if dirty { crate::i18n::fmt(tl!("{name} — unsaved changes"), &[("name", &shown)]) } else { shown })
 }
 
+/// Width the print, save and info buttons and their gaps take in the mode bar: three buttons, the
+/// 4 pt `item_spacing` after each of them (three gaps, not two), and the 8 pt spacer.
+const MODE_BAR_RIGHT: f32 = 3.0 * 32.0 + 3.0 * 4.0 + 8.0;
+/// Narrowest search field the mode bar shows; below it the field becomes an icon button.
+const MODE_BAR_SEARCH_MIN: f32 = 140.0;
+
 pub fn mode_bar(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
+    // The document in the active tab may hide the menu or the tools (`crate::viewer_prefs`).
+    let hidden = app.hidden_interface();
     egui::Panel::top("mode_bar")
         .exact_size(48.0)
         .frame(egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin::symmetric(10, 0)).stroke(Stroke::new(1.0, t.divider)))
         .show(ui, |ui| {
             ui.horizontal_centered(|ui| {
                 ui.spacing_mut().item_spacing.x = 2.0;
-                // The menus, unless the native macOS menu bar has them.
-                if app.native_menu.is_none() {
+                // The menus, unless the native macOS menu bar has them or the document hides them.
+                if app.native_menu.is_none() && !hidden.menubar {
                     app.menu_bar_ui(ui);
                     ui.add_space(6.0);
                     ui.painter().vline(ui.cursor().left(), ui.max_rect().y_range().shrink(12.0), Stroke::new(1.0, t.divider));
                     ui.add_space(10.0);
                 }
+                if hidden.toolbar {
+                    return;
+                }
                 // Acrobat's mode bar has no Read tab: reading is what the viewer does with no tool
                 // in use. Read mode (the panes hidden) stays a View command and a default workspace.
-                for (mode, label) in [(Mode::AllTools, "All tools"), (Mode::Edit, "Edit"), (Mode::Convert, "Convert"), (Mode::Sign, "E-Sign")] {
-                    if widgets::mode_tab(ui, tl!(label), app.mode == mode).clicked() {
-                        app.switch_mode(mode, true);
+                let modes = [(Mode::AllTools, "All tools"), (Mode::Edit, "Edit"), (Mode::Convert, "Convert"), (Mode::Sign, "E-Sign")];
+                // What the right side needs (three 32 px buttons, gaps) and the least search box worth showing.
+                let avail = ui.available_width();
+                let tabs_w: f32 = modes.iter().map(|(_, l)| widgets::mode_tab_width(ui, tl!(*l))).sum::<f32>() + 2.0 * (modes.len() as f32 - 1.0);
+                let inline_tabs = avail >= tabs_w + MODE_BAR_RIGHT + MODE_BAR_SEARCH_MIN;
+                if inline_tabs {
+                    for (mode, label) in modes {
+                        if widgets::mode_tab(ui, tl!(label), app.mode == mode).clicked() {
+                            app.switch_mode(mode, true);
+                        }
                     }
+                } else {
+                    // Narrow window: the modes fold into one menu named after the current one.
+                    // Read is not one of the four choices but can be active (View command): name it too.
+                    let current = if app.mode == Mode::Read {
+                        tl!("Read")
+                    } else {
+                        tl!(modes.iter().find(|(m, _)| *m == app.mode).map_or("All tools", |(_, l)| *l))
+                    };
+                    let resp = widgets::ghost_button(ui, "chevron-down", current);
+                    egui::Popup::menu(&resp).show(|ui| {
+                        ui.set_min_width(160.0);
+                        for (mode, label) in modes {
+                            if ui.add(egui::Button::selectable(app.mode == mode, tl!(label))).clicked() {
+                                app.switch_mode(mode, true);
+                            }
+                        }
+                    });
                 }
+                let left = ui.available_width();
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     ui.spacing_mut().item_spacing.x = 4.0;
                     let has_doc = app.active.is_some();
@@ -516,12 +662,39 @@ pub fn mode_bar(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                         }
                     });
                     ui.add_space(8.0);
-                    if widgets::search_box(ui, tl!("Find tools and commands"), 260.0).clicked() {
+                    let search_w = (left - MODE_BAR_RIGHT).clamp(0.0, 260.0);
+                    let opened = if search_w >= MODE_BAR_SEARCH_MIN {
+                        widgets::search_box(ui, tl!("Find tools and commands"), search_w).clicked()
+                    } else {
+                        // Too narrow for the field: a button opens the same command search.
+                        icons::button(ui, "search", 32.0, false, tl!("Find tools and commands")).clicked()
+                    };
+                    if opened {
                         app.palette_open = true;
                     }
                 });
             });
         });
+}
+
+/// The size of the rail's page and zoom fields: wide enough for "6400%", the largest zoom, in the
+/// 12 pt font, and inside the 45 pt the rail leaves.
+const RAIL_FIELD_SIZE: [f32; 2] = [42.0, 22.0];
+/// Padding inside the rail's page and zoom fields.
+const RAIL_FIELD_MARGIN: egui::Vec2 = egui::vec2(1.0, 4.0);
+
+/// A field the rail can type in: boxed, and the same size whatever it holds, so the page and zoom
+/// fields match and fit the rail's width. Sized outright: a text field is at least a control wide.
+fn rail_field(ui: &mut egui::Ui, t: &Tokens, edit: egui::TextEdit<'_>) -> egui::Response {
+    egui::Frame::NONE
+        .fill(t.field)
+        .stroke(Stroke::new(1.0, t.border))
+        .corner_radius(CornerRadius::same(5))
+        .show(ui, |ui| {
+            ui.spacing_mut().interact_size.x = 0.0;
+            ui.add_sized(RAIL_FIELD_SIZE, edit)
+        })
+        .inner
 }
 
 /// Draw the right tool rail with page navigation, history, zoom, rotation and page-display controls for the
@@ -565,20 +738,18 @@ pub fn right_rail(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let view = &mut app.views[index];
     let mut page_display = None;
     let rail = Rail::new(egui::Id::unique("rail"))
-        .edge(Edge::End)
-        .frame(egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin::symmetric(6, 8)).stroke(Stroke::new(1.0, t.divider)))
+        .edge(app.side_panels.rail_edge())
+        .width(49.0)
+        .frame(egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin::symmetric(1, 8)).stroke(Stroke::new(1.0, t.divider)))
         .show(ui, &items, app.right.as_ref(), |ui| {
             // Page navigation cluster at the bottom, a panel of its own so that in a short
             // window the buttons above scroll instead of running into it (#3282).
             ui.with_layout(Layout::bottom_up(Align::Center), |ui| {
                 ui.spacing_mut().item_spacing.y = 2.0;
-                let tip = crate::commands::key_tip(ui.ctx(), tl!("Zoom out ({key})"), crate::commands::ZOOM_OUT);
-                if icons::button(ui, "zoom-out", 32.0, false, &tip).clicked() {
-                    view.zoom_step(false);
-                }
-                let tip = crate::commands::key_tip(ui.ctx(), tl!("Zoom in ({key})"), crate::commands::ZOOM_IN);
-                if icons::button(ui, "zoom-in", 32.0, false, &tip).clicked() {
-                    view.zoom_step(true);
+                let right = app.side_panels.rail_on_right();
+                let dock_tip = if right { tl!("Dock navigation rail on Left") } else { tl!("Dock navigation rail on Right") };
+                if icons::button(ui, if right { "panel-left" } else { "panel-right" }, 32.0, false, dock_tip).clicked() {
+                    app.side_panels.rail_side = if right { crate::side_panels::ToolsSide::Left } else { crate::side_panels::ToolsSide::Right };
                 }
                 // Between rotate and zoom, as in Acrobat. Its command runs once `view` is free.
                 let tip = crate::i18n::fmt(tl!("Page display: {layout}"), &[("layout", tl!(view.layout.label()))]);
@@ -599,18 +770,31 @@ pub fn right_rail(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     view.fit = if view.fit == Fit::Width { Fit::Page } else { Fit::Width };
                     view.goto = Some((view.current, 0.0));
                 }
+                // Out and in side by side right under the zoom field, so they are found with it.
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 0.0;
+                    // Two buttons across the rail, each leaving a pixel to the rail's edge.
+                    let side = (ui.available_width() / 2.0).floor();
+                    let tip = crate::commands::key_tip(ui.ctx(), tl!("Zoom out ({key})"), crate::commands::ZOOM_OUT);
+                    if icons::button(ui, "zoom-out", side, false, &tip).clicked() {
+                        view.zoom_step(false);
+                    }
+                    let tip = crate::commands::key_tip(ui.ctx(), tl!("Zoom in ({key})"), crate::commands::ZOOM_IN);
+                    if icons::button(ui, "zoom-in", side, false, &tip).clicked() {
+                        view.zoom_step(true);
+                    }
+                });
                 let id = egui::Id::unique("zoom-input");
                 let draft = id.with("draft");
                 let mut typed = ui.data(|d| d.get_temp::<String>(draft)).unwrap_or_else(|| format!("{:.0}%", view.zoom * 100.0));
                 let edit = egui::TextEdit::singleline(&mut typed)
                     .id(id)
-                    .desired_width(40.0)
-                    .align(egui::Align2::CENTER_TOP)
-                    .font(theme::medium(11.0))
-                    .text_color(t.text_muted)
+                    .align(egui::Align2::CENTER_CENTER)
+                    .font(theme::medium(12.0))
+                    .text_color(t.text)
                     .frame(egui::Frame::NONE)
-                    .margin(vec2(2.0, 2.0));
-                let r = ui.add(edit).on_hover_text(tl!("Zoom — type a percentage and press Enter"));
+                    .margin(RAIL_FIELD_MARGIN);
+                let r = rail_field(ui, &t, edit).on_hover_text(tl!("Zoom — type a percentage and press Enter"));
                 ui.ctx().accesskit_node_builder(id, |node| node.set_label(tl!("Zoom")));
                 if r.gained_focus() {
                     let mut state = egui::TextEdit::load_state(ui.ctx(), id).unwrap_or_default();
@@ -670,16 +854,11 @@ pub fn right_rail(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 }
                 let edit = egui::TextEdit::singleline(&mut view.page_input)
                     .id(page_input_id)
-                    .desired_width(34.0)
-                    .align(egui::Align2::CENTER_TOP)
+                    .align(egui::Align2::CENTER_CENTER)
                     .font(theme::medium(12.0))
-                    .margin(vec2(2.0, 4.0));
-                let r = egui::Frame::NONE
-                    .fill(t.field)
-                    .stroke(Stroke::new(1.0, t.border))
-                    .corner_radius(CornerRadius::same(5))
-                    .show(ui, |ui| ui.add(edit))
-                    .inner
+                    .frame(egui::Frame::NONE)
+                    .margin(RAIL_FIELD_MARGIN);
+                let r = rail_field(ui, &t, edit)
                     .on_hover_text(tl!("Current page — type a page number or label (such as iv) and press Enter"))
                     .accessible_name(tl!("Current page"));
                 if r.lost_focus() {

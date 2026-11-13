@@ -1,4 +1,4 @@
-use super::*;
+use super::{Arc, DocInfo, DocView, Edit, HashMap, PageText, Pos2, Range, Rect, comments, pos2};
 
 /// A text selection on one page.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -76,9 +76,14 @@ impl DocView {
     /// Screen position of the centre of glyph `glyph` on `page`, if that page is on screen and its
     /// text layer is loaded (used by UI tests and automation to aim pointer input).
     pub fn glyph_screen_pos(&self, page: usize, glyph: usize) -> Option<Pos2> {
+        self.glyph_screen_rect(page, glyph).map(|r| r.center())
+    }
+
+    /// The screen rectangle of glyph `glyph` on `page`, when the page is on screen.
+    pub fn glyph_screen_rect(&self, page: usize, glyph: usize) -> Option<Rect> {
         let (_, xf) = self.screen_xforms.iter().find(|(p, _)| *p == page)?;
         let g = self.texts.get(&page)?.glyphs.get(glyph)?;
-        Some(xf.view_rect(g.rect).center())
+        Some(xf.view_rect(g.rect))
     }
 
     /// Selected text, if any (⌘C).
@@ -93,13 +98,33 @@ impl DocView {
         Some(s.text(t)).filter(|x| !x.is_empty())
     }
 
-    /// Select all: every page in Organize, or every word on the current page.
+    /// The selection's page, its text layer and the selected glyphs in copy order, for Copy with
+    /// formatting. `None` after Select All of the document and for a column selection, which
+    /// copy plain text (a column's rows and tab-separated cells are not paragraphs).
+    pub(crate) fn selected_glyphs(&self) -> Option<(usize, Arc<PageText>, Vec<usize>)> {
+        if self.all_text {
+            return None;
+        }
+        let s = self.selection?;
+        let t = self.texts.get(&s.page)?;
+        let glyphs = match s.span {
+            Span::Run { anchor, head } => Selection::range(anchor, head).take(t.glyphs.len()).collect(),
+            Span::Column { .. } => return None,
+        };
+        Some((s.page, t.clone(), glyphs))
+    }
+
+    /// Select every page without navigating; shared by Organize and the Pages sidebar.
+    pub fn select_all_pages(&mut self) -> bool {
+        self.selected = (0..self.page_count).collect();
+        self.select_anchor = (self.page_count > 0).then_some(self.current);
+        !self.selected.is_empty()
+    }
+
+    /// Select all words on the current page, or every page in Organize.
     pub fn select_all(&mut self) -> bool {
         if self.organize {
-            self.selected = (0..self.page_count).collect();
-            // Keep the current page as the anchor for the next Shift-click.
-            self.select_anchor = (self.page_count > 0).then_some(self.current);
-            return !self.selected.is_empty();
+            return self.select_all_pages();
         }
         // Scrolling continuously, Select All takes the whole document's text (#2639); one page at
         // a time, the page shown.
@@ -152,6 +177,9 @@ enum SelectionAction {
     Copy,
 }
 
+/// The selection bar's width before it has been laid out once (English labels).
+const SELECTION_BAR_GUESS: f32 = 520.0;
+
 /// Actions on an existing text selection, next to the selected words.
 pub(super) fn selection_actions(
     ui: &mut egui::Ui,
@@ -183,32 +211,33 @@ pub(super) fn selection_actions(
     if !viewport.intersects(rect) {
         return false;
     }
-    let x = rect.left().clamp(viewport.left() + 8.0, (viewport.right() - 520.0).max(viewport.left() + 8.0));
+    let id = egui::Id::unique(("text-selection-actions", view.view_key()));
+    // The bar stays inside the pages' area, by the width it had last frame (its labels make it
+    // wider in some languages), so it never covers a side panel; a first guess before it has one.
+    let width = egui::AreaState::load(ui.ctx(), id).and_then(|a| a.size).map_or(SELECTION_BAR_GUESS, |s| s.x);
+    let x = rect.left().clamp(viewport.left() + 8.0, (viewport.right() - width - 8.0).max(viewport.left() + 8.0));
     let y = if rect.bottom() + 48.0 < viewport.bottom() { rect.bottom() + 6.0 } else { (rect.top() - 44.0).max(viewport.top() + 6.0) };
     let mut chosen = None;
-    egui::Area::new(egui::Id::unique(("text-selection-actions", view.id.0))).order(egui::Order::Foreground).fixed_pos(pos2(x, y)).show(
-        ui.ctx(),
-        |ui| {
-            egui::Frame::popup(ui.style()).show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    for (label, action) in [
-                        (tl!("Add comment"), SelectionAction::Note),
-                        (tl!("Highlight"), SelectionAction::Markup(comments::CommentTool::Highlight)),
-                        (tl!("Underline"), SelectionAction::Markup(comments::CommentTool::Underline)),
-                        (tl!("Strikethrough"), SelectionAction::Markup(comments::CommentTool::StrikeOut)),
-                        (tl!("Replace text"), SelectionAction::Replace),
-                    ] {
-                        if ui.add_enabled(can_comment, egui::Button::new(label)).clicked() {
-                            chosen = Some(action);
-                        }
+    egui::Area::new(id).order(egui::Order::Foreground).fixed_pos(pos2(x, y)).show(ui.ctx(), |ui| {
+        egui::Frame::popup(ui.style()).show(ui, |ui| {
+            ui.horizontal(|ui| {
+                for (label, action) in [
+                    (tl!("Add comment"), SelectionAction::Note),
+                    (tl!("Highlight"), SelectionAction::Markup(comments::CommentTool::Highlight)),
+                    (tl!("Underline"), SelectionAction::Markup(comments::CommentTool::Underline)),
+                    (tl!("Strikethrough"), SelectionAction::Markup(comments::CommentTool::StrikeOut)),
+                    (tl!("Replace text"), SelectionAction::Replace),
+                ] {
+                    if ui.add_enabled(can_comment, egui::Button::new(label)).clicked() {
+                        chosen = Some(action);
                     }
-                    if ui.add_enabled(can_copy, egui::Button::new(tl!("Copy"))).clicked() {
-                        chosen = Some(SelectionAction::Copy);
-                    }
-                });
+                }
+                if ui.add_enabled(can_copy, egui::Button::new(tl!("Copy"))).clicked() {
+                    chosen = Some(SelectionAction::Copy);
+                }
             });
-        },
-    );
+        });
+    });
     let Some(action) = chosen else { return false };
     if let SelectionAction::Copy = action {
         // Copying closes the bar but keeps the words selected, for ⌘C or a second action.
@@ -221,16 +250,13 @@ pub(super) fn selection_actions(
     view.clear_selection();
     match action {
         SelectionAction::Note | SelectionAction::Replace => {
-            if matches!(action, SelectionAction::Replace) {
+            let kind = if matches!(action, SelectionAction::Replace) {
                 view.comments.replace = Some(quads);
-            }
-            view.comments.composer = Some(comments::Composer {
-                page,
-                at,
-                kind: if matches!(action, SelectionAction::Replace) { comments::ComposerKind::Replace } else { comments::ComposerKind::Note },
-                text: String::new(),
-                focus: true,
-            });
+                comments::ComposerKind::Replace
+            } else {
+                comments::ComposerKind::TextNote { quads }
+            };
+            view.comments.composer = Some(comments::Composer { page, at, kind, text: String::new(), focus: true });
         }
         SelectionAction::Markup(tool) => {
             // Every markup button carries a markup tool; anything else adds nothing.

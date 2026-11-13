@@ -102,14 +102,14 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
                     (PageBox::Media, "MediaBox"),
                 ];
                 let cur = names.iter().find(|(b, _)| *b == d.which).map_or("CropBox", |(_, l)| *l);
-                egui::ComboBox::from_id_salt("boxes-which").selected_text(cur).show_ui(ui, |ui| {
+                craft_ui::ComboBox::from_id_salt("boxes-which").selected_text(cur).show_ui(ui, |ui| {
                     for (b, l) in names {
                         ui.selectable_value(&mut d.which, b, l);
                     }
                 });
                 ui.end_row();
                 ui.label(tl!("Units"));
-                egui::ComboBox::from_id_salt("boxes-unit").selected_text(d.unit.label()).show_ui(ui, |ui| {
+                craft_ui::ComboBox::from_id_salt("boxes-unit").selected_text(d.unit.label()).show_ui(ui, |ui| {
                     for u in Unit::ALL {
                         ui.selectable_value(&mut d.unit, u, u.label());
                     }

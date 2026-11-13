@@ -1,8 +1,33 @@
-use super::*;
+use super::{CLICK_KEY, DATE_KEY, Dict, Document, GROUPS, IMAGE_FIELD_KEY, LAYOUT_KEY, NODE_KEY, ObjRef, Object, RELEVANT_KEY, SOM_KEY, XfaError};
 
 /// What laying a form out says when it took the usage rights off (see [`drop_usage_rights`]).
 pub(crate) const USAGE_RIGHTS_REMOVED: &str =
     "the form's usage rights were removed: laying it out voids them, and a form with void usage rights can open with every field locked";
+
+/// The screen-only and print-only groups an earlier layout of the form made ([`RELEVANT_KEY`]),
+/// found among the document's optional content groups.
+pub(super) fn earlier_groups(doc: &Document, catalog: &Dict) -> [Option<ObjRef>; 2] {
+    let mut out = [None; 2];
+    let ocgs = catalog
+        .get(b"OCProperties")
+        .map(|p| doc.resolve(p))
+        .and_then(|p| p.as_dict().and_then(|p| p.get(b"OCGs").map(|o| doc.resolve(o))))
+        .and_then(|o| o.as_array().cloned())
+        .unwrap_or_default();
+    for r in ocgs.iter().filter_map(Object::as_ref).take(MAX_GROUPS_SEARCHED) {
+        let key = doc.get(r).as_dict().and_then(|d| d.name(RELEVANT_KEY).map(<[u8]>::to_vec));
+        if let Some(g) = key.and_then(|k| GROUPS.iter().position(|(name, ..)| name.as_bytes() == k.as_slice()))
+            && let Some(slot) = out.get_mut(g)
+            && slot.is_none()
+        {
+            *slot = Some(r);
+        }
+    }
+    out
+}
+
+/// Most optional content groups looked at for an earlier layout's.
+const MAX_GROUPS_SEARCHED: usize = 10_000;
 
 /// What [`strip`] took out, for the user to be told (the packets held more than the fields).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -126,7 +151,7 @@ pub fn strip(doc: &mut Document) -> Result<Stripped, XfaError> {
             }
             // One XDP: the packets it holds are the envelope's children.
             let text = s.decoded_within(64 << 20).ok().and_then(|b| crate::packets::decode(&b)).map(|(t, _)| t).unwrap_or_default();
-            let opts = roxmltree::ParsingOptions { allow_dtd: false, nodes_limit: 1_000_000 };
+            let opts = roxmltree::ParsingOptions { allow_dtd: false, nodes_limit: 1_000_000, ..Default::default() };
             if crate::xml_nesting_depth(&text) <= crate::MAX_XML_DEPTH
                 && let Ok(parsed) = roxmltree::Document::parse_with_options(&text, opts)
             {
@@ -151,6 +176,7 @@ pub fn strip(doc: &mut Document) -> Result<Stripped, XfaError> {
     let fields = acro.get(b"Fields").map(|f| doc.resolve(f)).and_then(|f| f.as_array().cloned()).unwrap_or_default();
     let mut seen = std::collections::HashSet::new();
     let mut todo: Vec<ObjRef> = Vec::new();
+    let mut kids_seen = std::collections::HashSet::new();
     for r in fields.iter().filter_map(Object::as_ref) {
         if seen.insert(r) && seen.len() <= MAX_STRIP_FIELDS {
             todo.push(r);
@@ -164,8 +190,11 @@ pub fn strip(doc: &mut Document) -> Result<Stripped, XfaError> {
         if d.contains(IMAGE_FIELD_KEY) {
             out.image_fields += 1;
         }
-        let private: Vec<Vec<u8>> =
-            [SOM_KEY, CLICK_KEY, IMAGE_FIELD_KEY, NODE_KEY, b"PCItems".as_slice()].iter().filter(|k| d.contains(k)).map(|k| k.to_vec()).collect();
+        let private: Vec<Vec<u8>> = [SOM_KEY, CLICK_KEY, IMAGE_FIELD_KEY, DATE_KEY, NODE_KEY, b"PCItems".as_slice()]
+            .iter()
+            .filter(|k| d.contains(k))
+            .map(|k| k.to_vec())
+            .collect();
         if !private.is_empty() {
             out.field_keys += private.len();
             doc.update_dict(r, |d| {
@@ -174,7 +203,9 @@ pub fn strip(doc: &mut Document) -> Result<Stripped, XfaError> {
                 }
             })?;
         }
-        if let Some(kids) = d.get(b"Kids").map(|k| doc.resolve(k)).and_then(|k| k.as_array().cloned()) {
+        // An indirect /Kids array several fields share is read once: its entries are already queued.
+        let shared_seen = d.get(b"Kids").and_then(Object::as_ref).is_some_and(|k| !kids_seen.insert(k));
+        if !shared_seen && let Some(kids) = d.get(b"Kids").map(|k| doc.resolve(k)).and_then(|k| k.as_array().cloned()) {
             for k in kids.iter().filter_map(Object::as_ref) {
                 if seen.insert(k) && seen.len() <= MAX_STRIP_FIELDS {
                     todo.push(k);
@@ -187,6 +218,12 @@ pub fn strip(doc: &mut Document) -> Result<Stripped, XfaError> {
         None => catalog.set(b"AcroForm".to_vec(), Object::Dict(acro)),
     }
     catalog.remove(b"NeedsRendering");
+    // The screen-only and print-only layers stay, as the pages use them; only their key goes.
+    for r in earlier_groups(doc, &catalog).into_iter().flatten() {
+        doc.update_dict(r, |d| {
+            d.remove(RELEVANT_KEY);
+        })?;
+    }
     out.usage_rights = drop_usage_rights(doc, &mut catalog);
     doc.set(root, Object::Dict(catalog));
     // The packet streams are referenced from nowhere else: freed, so an incremental save
@@ -279,4 +316,35 @@ pub fn existing_layout(doc: &Document) -> Option<crate::Report> {
         template_bytes: 0,
         warnings,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fields_sharing_a_kids_array_still_lose_their_private_keys_once() {
+        let mut doc = Document::new_empty();
+        let mut kid = Dict::new();
+        kid.set(CLICK_KEY.to_vec(), Object::Int(1));
+        let kid = doc.add(Object::Dict(kid));
+        let kids = doc.add(Object::Array(vec![Object::Ref(kid)]));
+        let parents: Vec<Object> = (0..3)
+            .map(|_| {
+                let mut p = Dict::new();
+                p.set(b"Kids".to_vec(), Object::Ref(kids));
+                Object::Ref(doc.add(Object::Dict(p)))
+            })
+            .collect();
+        let mut acro = Dict::new();
+        acro.set(b"XFA".to_vec(), Object::Array(Vec::new()));
+        acro.set(b"Fields".to_vec(), Object::Array(parents));
+        let root = doc.root().unwrap();
+        let mut catalog = doc.get(root).as_dict().cloned().unwrap();
+        catalog.set(b"AcroForm".to_vec(), Object::Dict(acro));
+        doc.set(root, Object::Dict(catalog));
+        let out = strip(&mut doc).unwrap();
+        assert_eq!(out.script_buttons, 1);
+        assert!(!doc.get(kid).as_dict().unwrap().contains(CLICK_KEY));
+    }
 }

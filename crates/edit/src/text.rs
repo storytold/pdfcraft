@@ -10,7 +10,7 @@
 //! otherwise it is set in Helvetica (WinAnsi), and the result says the font was substituted.
 //! Reflowing a paragraph to a new width is not done here (see `edit.text-reflow`).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use pdfcraft_content::{Matrix, Op, Pieces, parse, serialize_ops};
@@ -24,42 +24,52 @@ use crate::EditError;
 mod regions;
 #[path = "text_session.rs"]
 mod session;
-use regions::{group_blocks, is_centred, rewrite_styled_block};
+pub use fallback::strip_subset_tag;
+use regions::{alignment_frame, group_blocks, is_centred, rewrite_changed_words, rewrite_styled_block};
 pub use session::TextSession;
 
 mod blocks;
 mod editor;
 mod fallback;
+pub mod forms;
 mod interp;
 mod lines;
 mod rewrite;
 
-use blocks::paragraph_separator;
 #[cfg(test)]
 use blocks::wrap;
 pub use blocks::{
-    BlockKey, BlockStyle, RangeStyle, ReadingBlocks, TextBlock, block_overlapping, clear_block, reading_blocks, reading_blocks_checked,
+    BlockKey, BlockStyle, RangeStyle, ReadingBlocks, RunSources, TextBlock, block_overlapping, clear_block, reading_blocks, reading_blocks_checked,
     replace_block, text_blocks,
 };
-use editor::layout_draft;
+use blocks::{kept_words, paragraph_separator, row_break};
 pub use editor::{TextEditLayout, TextEditorFont, register_text_font, text_edit_layout, text_editor_fonts};
-#[cfg(test)]
-pub(crate) use fallback::SOURCE_SPACE_CALLS;
+use editor::{builtin_thai_choice, layout_draft};
 use fallback::{
     MAX_TYPE3_GLYPHS, Type3Glyph, fallback_face, needs_type3, no_fallback_font, no_glyph_for, same_base_font, same_font, source_encodes,
-    source_family, source_program, source_show, source_space, source_width, strip_subset_tag, type3_faces, type3_glyph, write_type3_glyphs,
+    source_family, source_program, source_show, source_space, source_width, type3_faces, type3_glyph, write_type3_glyphs,
 };
 #[cfg(test)]
+pub(crate) use fallback::{SOURCE_SPACE_CALLS, take_source_character_measurements};
+#[cfg(test)]
 use fallback::{add_type3_font, is_type3_fallback};
+pub(crate) use fallback::{glyph_path, type3_font_dict, unique_font_name};
+#[cfg(test)]
+pub(crate) use interp::METRICS_BUILT;
 use interp::{Origin, Paint, union};
-use lines::page_dict;
-pub(crate) use lines::{FormBudget, content_streams, content_streams_within, form_call, rewritten_contents, splice};
+#[cfg(test)]
+pub(crate) use lines::dropped_advances_within;
+pub(crate) use lines::{
+    ContentStream, FormBudget, Read, content_streams, content_streams_within, dict_in_place, drawn_before_damage, dropped_advances,
+    dropped_side_effects, first_op_after_damage, form_call, joined, reopen_text_object, resource_dict, rewritten_contents, splice,
+};
 pub use lines::{MAX_FORM_DEPTH, MAX_FORM_VISITS, glyph_text_lines, text_lines};
+use lines::{page_dict, word_lines};
 pub use rewrite::{LineEdit, replace_line, rewrite_block};
 use rewrite::{coincident_ops, rewrite_block_from};
+pub(crate) use rewrite::{paragraph_ops, reveal_ops, selectable_blocks, show_starts, translate_blocks};
 #[cfg(test)]
 pub(crate) use rewrite::{replace_line_with_limit, rewrite_block_with_limit};
-pub(crate) use rewrite::{reveal_ops, selectable_blocks, translate_blocks};
 
 /// One line of existing text.
 #[derive(Clone, Debug, PartialEq)]
@@ -118,6 +128,14 @@ pub struct TextLine {
     /// `ink`, and whether joining put a space before it. Empty when the line's text was put
     /// into another order (see [`TextLine::runs`]).
     runs: Vec<(String, usize, bool)>,
+    /// This line continues the previous one because a rewrite wrapped it (`/PCSoft`).
+    soft_break: bool,
+    /// This line starts after a break a rewrite kept on purpose (`/PCHard`).
+    hard_break: bool,
+    /// When `soft_break`: the exact number of separator characters the wrap consumed (0 for a
+    /// Chinese/Japanese word split), from `/PCSoft`'s `/N`; 1 when the marker carried none
+    /// (#2529). Meaningless otherwise.
+    soft_gap: usize,
 }
 
 impl TextLine {
@@ -141,6 +159,66 @@ impl TextLine {
 mod tests {
     use super::*;
 
+    /// The clip regions reading uses (#3503): intersected regions keep only what both cover,
+    /// regions apart leave nothing, turned ones keep their shape, and touching is not showing.
+    #[test]
+    fn clip_regions_intersect_and_show_what_they_cover() {
+        use interp::{intersect, region, shows};
+        let square = |x: f64, y: f64| region(&Matrix::IDENTITY, [x, y, x + 10.0, y + 10.0]).unwrap();
+        let area = |p: &[[f64; 2]]| p.iter().zip(p.iter().cycle().skip(1)).map(|(a, b)| a[0] * b[1] - b[0] * a[1]).sum::<f64>().abs() / 2.0;
+        // Squares overlapping by half each way share a quarter.
+        let both = intersect(&square(0.0, 0.0), &square(5.0, 5.0));
+        assert!((area(&both) - 25.0).abs() < 1e-9, "{both:?}");
+        assert!(shows([6.0, 6.0, 7.0, 7.0], &both) && !shows([1.0, 1.0, 2.0, 2.0], &both));
+        // Squares apart share nothing, so nothing shows, not even a box across both.
+        let none = intersect(&square(0.0, 0.0), &square(20.0, 0.0));
+        assert!(!shows([-100.0, -100.0, 100.0, 100.0], &none), "{none:?}");
+        // Squares that meet only along an edge share no area either: a box across that edge
+        // does not show (#5075 review).
+        let edge = intersect(&square(0.0, 0.0), &square(10.0, 0.0));
+        assert!(!shows([8.0, 2.0, 12.0, 4.0], &edge), "{edge:?}");
+        // Nothing intersected with anything is nothing, whichever side it is on.
+        assert!(!shows([1.0, 1.0, 2.0, 2.0], &intersect(&square(0.0, 0.0), &Vec::new())));
+        assert!(!shows([1.0, 1.0, 2.0, 2.0], &intersect(&Vec::new(), &square(0.0, 0.0))));
+        // A box touching an edge shares no area; one a hair inside does.
+        assert!(!shows([10.0, 0.0, 12.0, 5.0], &square(0.0, 0.0)));
+        assert!(shows([9.99, 0.0, 12.0, 5.0], &square(0.0, 0.0)));
+        // A square turned 45° keeps its diamond shape: a box in the corner of its bounding box is
+        // outside it, the centre is inside.
+        let c = std::f64::consts::FRAC_1_SQRT_2;
+        let diamond = region(&Matrix([c, c, -c, c, 0.0, 0.0]), [0.0, 0.0, 10.0, 10.0]).unwrap();
+        assert!(!shows([-7.0, 0.0, -6.5, 0.5], &diamond) && shows([-0.5, 6.5, 0.5, 7.5], &diamond));
+        // A corner repeated (an edge of no length) does not hide what the region covers.
+        let doubled = vec![[0.0, 0.0], [10.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]];
+        assert!(shows([4.0, 4.0, 6.0, 6.0], &doubled));
+        // A rectangle of no area is a region that covers nothing; a corner that isn't finite
+        // gives no region to clip with at all.
+        let flat = region(&Matrix::IDENTITY, [0.0, 0.0, 10.0, 0.0]).unwrap();
+        assert!(!shows([-100.0, -100.0, 100.0, 100.0], &flat), "{flat:?}");
+        assert!(region(&Matrix::IDENTITY, [0.0, 0.0, f64::INFINITY, 10.0]).is_none());
+        // However thin, a rectangle with area keeps it, and so does one far from the origin.
+        let thin = region(&Matrix::IDENTITY, [0.0, 0.0, 1.0, 1e-10]).unwrap();
+        assert!(shows([0.25, 0.0, 0.75, 1.0], &thin) && !shows([0.25, 1.0, 0.75, 2.0], &thin));
+        let far = region(&Matrix([1.0, 0.0, 0.0, 1.0, 1e12, 1e12]), [0.0, 0.0, 100.0, 100.0]).unwrap();
+        assert!(shows([1e12 + 10.0, 1e12 + 10.0, 1e12 + 20.0, 1e12 + 20.0], &far) && !shows([1e12 + 200.0, 1e12, 1e12 + 300.0, 1e12 + 10.0], &far));
+    }
+
+    /// A stream that sets clip after clip, each turned a little more, keeps its region bounded:
+    /// past the corner cap a region becomes its bounding box, which still holds all it held.
+    #[test]
+    fn clip_after_clip_keeps_the_region_bounded() {
+        use interp::{intersect, region, shows};
+        let mut clip = region(&Matrix::IDENTITY, [-100.0, -100.0, 100.0, 100.0]).unwrap();
+        for i in 1..=10_000 {
+            let (s, c) = (f64::from(i) * 0.001).sin_cos();
+            let turned = region(&Matrix([c, s, -s, c, 0.0, 0.0]), [-60.0, -60.0, 60.0, 60.0]).unwrap();
+            clip = intersect(&clip, &turned);
+            assert!(clip.len() <= 32 && clip.iter().flatten().all(|v| v.is_finite()), "clip {i}: {} corners", clip.len());
+        }
+        // Every square is centred on the origin, so the middle still shows.
+        assert!(shows([-1.0, -1.0, 1.0, 1.0], &clip));
+    }
+
     fn block(text: &str, rect: [f64; 4]) -> TextBlock {
         TextBlock {
             text: text.into(),
@@ -154,6 +232,7 @@ mod tests {
             lines: Vec::new(),
             rows: Vec::new(),
             editor_text: text.into(),
+            reflow_text: text.into(),
             spans: Vec::new(),
             invisible: false,
         }
@@ -204,40 +283,74 @@ mod tests {
         assert!(!same_base_font("Arial", ""));
     }
 
+    fn wrapped(text: &str, width: f64) -> Vec<String> {
+        wrap(text, width, |s| s.chars().count() as f64).into_iter().map(|(line, _, _)| line).collect()
+    }
+
     #[test]
     fn paragraph_wrapping_keeps_ideographic_spaces() {
+        assert_eq!(wrapped("A　　B C", 4.0), ["A　　B", "C"]);
+        assert_eq!(wrapped("A\u{a0}B C", 3.0), ["A B", "C"]);
+        assert_eq!(wrapped("A\u{2028}B C", 3.0), ["A B", "C"]);
+        // `wrap` treats every whitespace character, including `\r`, as a separator to keep
+        // (#4199); the caller turns `\r\n` and `\r` into `\n` before calling it.
+        assert_eq!(wrapped(" \tA  B\r\nC ", 3.0), ["  A", "B ", "C "]);
+    }
+
+    #[test]
+    fn a_wrap_is_marked_soft_and_a_newline_is_not() {
         let width = |s: &str| s.chars().count() as f64;
-        assert_eq!(wrap("A　　B C", 4.0, width), ["A　　B", "C"]);
-        assert_eq!(wrap("A\u{a0}B C", 3.0, width), ["A B", "C"]);
-        assert_eq!(wrap("A\u{2028}B C", 3.0, width), ["A B", "C"]);
+        assert_eq!(wrap("Page 1", 5.0, width), [("Page".into(), false, 0), ("1".into(), true, 1)]);
+        assert_eq!(wrap("One\nTwo", 10.0, width), [("One".into(), false, 0), ("Two".into(), false, 0)]);
+    }
+
+    /// #2529: a run of spaces that happens to fall at a wrap point is recorded exactly, not
+    /// assumed to be one space; a Chinese/Japanese word split, which has no space of its own,
+    /// is recorded as none.
+    #[test]
+    fn a_wrap_records_how_many_spaces_it_consumed() {
+        let width = |s: &str| s.chars().count() as f64;
+        assert_eq!(wrap("One  Two", 5.0, width), [("One".into(), false, 0), ("Two".into(), true, 2)]);
+        assert_eq!(wrap("One   Two", 5.0, width), [("One".into(), false, 0), ("Two".into(), true, 3)]);
+        assert_eq!(wrap("日本語の文章です", 3.0, width), [("日本語".into(), false, 0), ("の文章".into(), true, 0), ("です".into(), true, 0)]);
     }
 
     /// #4199: a run of spaces stays a run, before, between and after words; the spaces where a
     /// row wraps go, and each other white-space character is one space.
     #[test]
     fn paragraph_wrapping_keeps_every_space_typed() {
-        let width = |s: &str| s.chars().count() as f64;
-        assert_eq!(wrap("a  b   c", 20.0, width), ["a  b   c"]);
-        assert_eq!(wrap("  a b  ", 20.0, width), ["  a b  "]);
-        assert_eq!(wrap("a\t\tb", 20.0, width), ["a  b"]);
-        assert_eq!(wrap("aa  bb  cc", 6.0, width), ["aa  bb", "cc"]);
+        assert_eq!(wrapped("a  b   c", 20.0), ["a  b   c"]);
+        assert_eq!(wrapped("  a b  ", 20.0), ["  a b  "]);
+        assert_eq!(wrapped("a\t\tb", 20.0), ["a  b"]);
+        assert_eq!(wrapped("aa  bb  cc", 6.0), ["aa  bb", "cc"]);
         // An indent alone on a row doesn't wrap before its first word.
-        assert_eq!(wrap("    abc", 3.0, width), ["    abc"]);
+        assert_eq!(wrapped("    abc", 3.0), ["    abc"]);
         // The rewrite turns `\r\n` and `\r` into `\n` before wrapping.
-        assert_eq!(wrap(" \tA  B\nC ", 3.0, width), ["  A", "B", "C "]);
-        assert_eq!(wrap("   ", 3.0, width), ["   "]);
-        assert_eq!(wrap("", 3.0, width), [""]);
+        assert_eq!(wrapped(" \tA  B\nC ", 3.0), ["  A", "B", "C "]);
+        assert_eq!(wrapped("   ", 3.0), ["   "]);
+        assert_eq!(wrapped("", 3.0), [""]);
     }
 
     #[test]
     fn japanese_text_wraps_between_characters_but_not_before_closing_marks() {
-        let width = |s: &str| s.chars().count() as f64;
-        assert_eq!(wrap("日本語の文章です。", 3.0, width), ["日本語", "の文章", "です。"]);
+        assert_eq!(wrapped("日本語の文章です。", 3.0), ["日本語", "の文章", "です。"]);
         // The comma can't begin a row, so the character before it moves down with it.
-        assert_eq!(wrap("あいう、えお", 3.0, width), ["あい", "う、え", "お"]);
+        assert_eq!(wrapped("あいう、えお", 3.0), ["あい", "う、え", "お"]);
         // Pieces of one word join without a space; separate words keep theirs.
-        assert_eq!(wrap("Edit PDFを編集", 6.0, width), ["Edit", "PDFを編集"]);
-        assert_eq!(wrap("一行目　二行目", 4.0, width), ["一行目　", "二行目"]);
+        assert_eq!(wrapped("Edit PDFを編集", 6.0), ["Edit", "PDFを編集"]);
+        assert_eq!(wrapped("一行目　二行目", 4.0), ["一行目　", "二行目"]);
+    }
+
+    #[test]
+    fn thai_text_wraps_between_dictionary_words_and_keeps_marks_on_their_word() {
+        // Without word breaks the whole run is one word and overflows a single row.
+        assert_eq!(wrapped("ภาษาไทยไม่มีช่องว่าง", 8.0), ["ภาษาไทย", "ไม่มี", "ช่องว่าง"]);
+        // Mai Yamok stays with the word it repeats; pieces join without a space, words keep theirs.
+        assert_eq!(wrapped("เด็กๆชอบกิน ขนม", 6.0), ["เด็กๆ", "ชอบกิน", "ขนม"]);
+        assert_eq!(wrapped("ไฟล์ PDF ประปาส่วนภูมิภาค", 9.0), ["ไฟล์ PDF", "ประปาส่วน", "ภูมิภาค"]);
+        // A wrap between Thai words consumed no separator, so a rejoin puts back no space.
+        let rows = wrap("ภาษาไทยไม่มีช่องว่าง", 8.0, |s| s.chars().count() as f64);
+        assert_eq!(rows.iter().map(|(_, soft, gap)| (*soft, *gap)).collect::<Vec<_>>(), [(false, 0), (true, 0), (true, 0)]);
     }
 
     #[test]

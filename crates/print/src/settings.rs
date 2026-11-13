@@ -1,4 +1,5 @@
-use super::*;
+use super::spool;
+use crate::matching_paper;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum Orientation {
@@ -50,6 +51,20 @@ pub fn booklet_duplex(subset: BookletSubset) -> spool::Duplex {
     }
 }
 
+/// What a booklet's job asks the printer for, given whether its driver takes two-sided settings
+/// from other programs (`two_sided`, as the printer list reports it): [`booklet_duplex`], only as
+/// Acrobat enables two-sided printing "if available". A driver that doesn't (`Some(false)`) would
+/// refuse a two-sided job and print nothing, so both sides ask for nothing and its own setting
+/// applies, such as manual two-sided printing chosen in its Properties (#5772). A driver of
+/// unknown support is asked for two-sided as before; one side on its own is always one-sided.
+pub fn booklet_job_duplex(subset: BookletSubset, two_sided: Option<bool>) -> Option<spool::Duplex> {
+    match booklet_duplex(subset) {
+        spool::Duplex::Off => Some(spool::Duplex::Off),
+        _ if two_sided == Some(false) => None,
+        two_sided_duplex => Some(two_sided_duplex),
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum Binding {
     #[default]
@@ -69,10 +84,18 @@ pub enum Layout {
         order: PageOrder,
         border: bool,
         auto_rotate: bool,
+        /// A custom grid (the Print dialog's Custom pages per sheet): `cols` across and `rows`
+        /// down the sheet whatever its orientation, which is not picked for the grid, so Auto
+        /// prints portrait. A predefined count (`false`, [`Layout::multiple`]) is a grid on a
+        /// portrait sheet that turns to landscape when that suits it.
+        custom: bool,
     },
+    /// `creep` (points, per sheet) moves sheet k's pages toward the fold by `k × creep`, sheet 0
+    /// being the outermost, so the margins match once the nested sheets are folded and trimmed.
     Booklet {
         subset: BookletSubset,
         binding: Binding,
+        creep: f64,
     },
     /// Tile scale (percent), overlap (points), cut marks.
     Poster {
@@ -107,9 +130,23 @@ impl Layout {
                 (c, n.div_ceil(c).max(1))
             }
         };
-        Layout::Multiple { cols, rows, per_sheet: per_sheet.max(1), order: PageOrder::Horizontal, border: false, auto_rotate: true }
+        Layout::Multiple { cols, rows, per_sheet: per_sheet.max(1), order: PageOrder::Horizontal, border: false, auto_rotate: true, custom: false }
+    }
+
+    /// A custom grid of `cols` across by `rows` down, each 1 to [`MAX_GRID`]; every cell holds a
+    /// page. `None` for a count outside that.
+    pub fn grid(cols: usize, rows: usize) -> Option<Layout> {
+        if !(1..=MAX_GRID).contains(&cols) || !(1..=MAX_GRID).contains(&rows) {
+            return None;
+        }
+        // At most 99 × 99, so this cannot overflow.
+        let per_sheet = cols.checked_mul(rows)?;
+        Some(Layout::Multiple { cols, rows, per_sheet, order: PageOrder::Horizontal, border: false, auto_rotate: true, custom: true })
     }
 }
+
+/// The most columns, or rows, a custom pages-per-sheet grid can have.
+pub const MAX_GRID: usize = 99;
 
 /// Acrobat's Comments & Forms choices.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -142,21 +179,36 @@ pub struct Settings {
     /// resolution before it is placed on the paper. The engine does the rendering; `impose` is
     /// then given the image-only document.
     pub raster: Option<Raster>,
+    /// Print a selected area (Acrobat's "print selected area"): only this rectangle of the one
+    /// page in `pages`, in that page's display space (points, origin at the bottom-left of the
+    /// page as shown, y up), sized like a page of its own by a [`Layout::Size`] choice.
+    pub area: Option<[f64; 4]>,
 }
 
 /// How pages are rendered when printing as image.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Raster {
     /// Dots per inch, 72–600 (Acrobat offers 150, 300 and 600).
     pub dpi: f64,
     /// Render the pictures in grey, so the print-ready PDF itself is grayscale.
     pub grayscale: bool,
+    /// App-managed colour: the pictures are converted into the printer's profile. `None` leaves
+    /// colour to the printer.
+    pub colour: Option<crate::colour::ManagedColour>,
 }
 
 impl Default for Raster {
     fn default() -> Self {
-        Raster { dpi: 300.0, grayscale: false }
+        Raster { dpi: 300.0, grayscale: false, colour: None }
     }
+}
+
+/// Whether a print asked to be `grayscale` needs the printer's driver to print in grayscale.
+/// Not when the pages go as grey pictures (`raster` with [`Raster::grayscale`]): they are grey
+/// already, so a driver that keeps no grayscale setting (Microsoft Print to PDF, many inkjets)
+/// still prints them instead of the job being refused (#5806).
+pub fn driver_needs_grayscale(grayscale: bool, raster: Option<&Raster>) -> bool {
+    grayscale && !raster.is_some_and(|r| r.grayscale)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -175,12 +227,13 @@ impl Default for Settings {
             content: Content::default(),
             raster: None,
             crops: Vec::new(),
+            area: None,
         }
     }
 }
 
 /// Common paper sizes (points, portrait).
-pub const PAPERS: [(&str, (f64, f64)); 21] = [
+pub const PAPERS: [(&str, (f64, f64)); 23] = [
     ("US Letter", (612.0, 792.0)),
     ("US Legal", (612.0, 1008.0)),
     ("Tabloid", (792.0, 1224.0)),
@@ -202,6 +255,8 @@ pub const PAPERS: [(&str, (f64, f64)); 21] = [
     ("A0", (2383.94, 3370.39)),
     ("4 x 6 in label (101.6 x 152.4 mm)", (288.0, 432.0)),
     ("US #10 Envelope (4.125 x 9.5 in)", (297.0, 684.0)),
+    ("Folio (8.5 x 13 in)", (612.0, 936.0)),
+    ("F4 (210 x 330 mm)", (595.28, 935.43)),
 ];
 
 /// `PAPERS` index of the 4 × 6 in shipping label.
@@ -236,6 +291,8 @@ pub fn cups_media(index: usize) -> Option<&'static str> {
         "A1" => "iso_a1_594x841mm",
         "A0" => "iso_a0_841x1189mm",
         "US #10 Envelope (4.125 x 9.5 in)" => "Env10",
+        "Folio (8.5 x 13 in)" => "na_foolscap_8.5x13in",
+        "F4 (210 x 330 mm)" => "om_folio_210x330mm",
         _ if index == LABEL_PAPER => "w288h432",
         // A size added to PAPERS without a name here: its tests fail, and meanwhile the queue's
         // paper stands, as it did for every size before #1583.
@@ -247,4 +304,52 @@ pub fn cups_media(index: usize) -> Option<&'static str> {
 /// dialog's jobs and `doc_print`'s alike.
 pub fn media_option(index: usize) -> Option<(String, String)> {
     cups_media(index).map(|m| ("media".to_string(), m.to_string()))
+}
+
+/// Format custom dimensions in points as a CUPS custom media string (e.g. `Custom.300x500`).
+pub fn custom_media(size: (f64, f64)) -> String {
+    let format_dim = |d: f64| {
+        if (d.round() - d).abs() < 1e-4 {
+            format!("{:.0}", d.round())
+        } else {
+            let s = format!("{d:.2}");
+            s.trim_end_matches('0').trim_end_matches('.').to_string()
+        }
+    };
+    format!("Custom.{}x{}", format_dim(size.0), format_dim(size.1))
+}
+
+/// The CUPS media name for a paper by its name and dimensions.
+///
+/// Matches standard [`PAPERS`] presets by size first, then a clean driver-reported keyword,
+/// falling back to custom media dimensions (`Custom.<width>x<height>`).
+pub fn paper_media(name: Option<&str>, size: (f64, f64)) -> String {
+    if let Some(index) = matching_paper(size)
+        && let Some(media) = cups_media(index)
+    {
+        return media.to_string();
+    }
+    if let Some(n) = name {
+        let is_dim = n.split_once(['x', 'X', '*']).is_some_and(|(w, h)| {
+            let parse_dim = |d: &str| {
+                let d = d.trim().trim_start_matches("Custom.").trim_start_matches("custom.").trim_end_matches("points").trim_end_matches("pt").trim();
+                d.parse::<f64>().is_ok()
+            };
+            parse_dim(w) && parse_dim(h)
+        });
+        let is_clean = !n.is_empty()
+            && n.len() <= 64
+            && !n.contains(' ')
+            && !is_dim
+            && n.chars().all(|c| c.is_ascii_graphic() && !matches!(c, '/' | ':' | '=' | '"' | '\'' | '\\' | '{'));
+        if is_clean {
+            return n.to_string();
+        }
+    }
+    custom_media(size)
+}
+
+/// The media job option (`("media", <name>)`) for a paper by its optional name and dimensions.
+pub fn paper_media_option(name: Option<&str>, size: (f64, f64)) -> (String, String) {
+    ("media".to_string(), paper_media(name, size))
 }

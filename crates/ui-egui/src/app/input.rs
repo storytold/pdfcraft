@@ -1,4 +1,6 @@
-use super::*;
+use super::{GridDrop, GridFile, PdfCraftApp};
+#[cfg(not(target_arch = "wasm32"))]
+use super::{OpenRequest, open_worker};
 
 /// Read a file dropped on a page grid (see [`GridFile`]).
 fn read_grid_file((name, source): GridFile) -> Result<(String, Vec<u8>), (String, String)> {
@@ -17,7 +19,7 @@ impl PdfCraftApp {
             self.open_path(&p);
             return;
         }
-        let name = f.path().file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "dropped.pdf".into());
+        let name = crate::files::dropped_name(&f);
         match f.bytes() {
             Ok(bytes) => {
                 if self.ctx.is_some() && !self.run_inline {
@@ -74,7 +76,7 @@ impl PdfCraftApp {
         };
         let mut files = Vec::new();
         for f in &dropped {
-            let name = f.path().file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "dropped.pdf".into());
+            let name = crate::files::dropped_name(f);
             if f.path().is_absolute() {
                 files.push((name, Err(f.path().to_path_buf())));
                 continue;
@@ -127,8 +129,10 @@ impl PdfCraftApp {
         self.startup_superseded = true;
         let inbox = self.inbox.clone();
         let ctx = ctx.clone();
+        let read = WebRead::start(&self.web_reads);
         wasm_bindgen_futures::spawn_local(async move {
-            let name = f.path().file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "dropped.pdf".into());
+            let _read = read;
+            let name = crate::files::dropped_name(&f);
             if let Ok(bytes) = f.bytes_async().await
                 && let Ok(mut q) = inbox.lock()
             {
@@ -136,5 +140,27 @@ impl PdfCraftApp {
                 ctx.request_repaint();
             }
         });
+    }
+}
+
+/// One browser file read counted in `PdfCraftApp::web_reads` for as long as it lives, so the
+/// count falls however the read ends.
+#[cfg(target_arch = "wasm32")]
+pub(super) struct WebRead(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+
+#[cfg(target_arch = "wasm32")]
+impl WebRead {
+    /// Count a read starting in `reads`.
+    pub(super) fn start(reads: &std::sync::Arc<std::sync::atomic::AtomicUsize>) -> Self {
+        reads.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Self(reads.clone())
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+impl Drop for WebRead {
+    /// The read is over, whether its file arrived or not.
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
     }
 }

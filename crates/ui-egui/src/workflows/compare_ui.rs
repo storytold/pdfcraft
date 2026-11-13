@@ -14,6 +14,8 @@ pub struct CompareState {
     pub old: DocId,
     pub new: DocId,
     pub result: Comparison,
+    /// The pages of the new file this comparison covers (0-based; empty: every page).
+    pub pages: Vec<usize>,
     /// Regions that look different (page, user-space box), page n against page n.
     pub visual: Vec<(usize, [f64; 4])>,
     pub selected: Option<usize>,
@@ -52,18 +54,19 @@ pub fn colour(kind: Kind) -> Color32 {
 pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (bool, bool) {
     ui.label(egui::RichText::new(tl!("Compare Files")).font(theme::semibold(18.0)));
     ui.add_space(8.0);
-    let Some((_, new)) = app.active_ids() else { return (false, true) };
+    let Some((active_i, new)) = app.active_ids() else { return (false, true) };
     let others: Vec<(DocId, String)> =
         app.views.iter().filter(|v| v.id != new).filter_map(|v| app.session.get(v.id).map(|d| (d.id, d.name.clone()))).collect();
     if app.compare_old.is_none_or(|o| !others.iter().any(|(id, _)| *id == o)) {
         app.compare_old = others.first().map(|(id, _)| *id);
     }
     let new_name = app.session.get(new).map(|d| d.name.clone()).unwrap_or_default();
+    let page_count = app.views.get(active_i).map_or(0, |v| v.page_count());
     egui::Grid::new("compare-files").num_columns(2).spacing([12.0, 10.0]).show(ui, |ui| {
         ui.label(tl!("Old file:"));
         let shown =
             others.iter().find(|(id, _)| Some(*id) == app.compare_old).map_or(tl!("Open the older version first").to_string(), |(_, n)| n.clone());
-        egui::ComboBox::from_id_salt("compare-old").selected_text(shown).width(320.0).show_ui(ui, |ui| {
+        craft_ui::ComboBox::from_id_salt("compare-old").selected_text(shown).width(320.0).show_ui(ui, |ui| {
             for (id, n) in &others {
                 ui.selectable_value(&mut app.compare_old, Some(*id), n);
             }
@@ -72,14 +75,23 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
         ui.label(tl!("New file:"));
         ui.label(egui::RichText::new(new_name).strong());
         ui.end_row();
+        ui.label(tl!("Pages:"));
+        let field = ui.add(egui::TextEdit::singleline(&mut app.compare_pages).desired_width(320.0).hint_text(format!("1-{page_count}")));
+        field.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, ui.is_enabled(), tl!("Pages")));
+        ui.end_row();
     });
+    let pages_error = crate::page_selection_ui::parse(&app.compare_pages, page_count).err();
+    if let Some(e) = &pages_error {
+        ui.label(e.said(&|s| crate::i18n::t(s).to_string()));
+    }
     ui.add_space(4.0);
     ui.label(egui::RichText::new(tl!("Text is compared word by word; the differences are shown on the new file.")).small().color(t.text_muted));
     ui.add_space(10.0);
     let (mut go, mut cancel) = (false, false);
     ui.horizontal(|ui| {
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if ui.add_enabled_ui(app.compare_old.is_some(), |ui| widgets::pill_button(ui, tl!("Compare"), true)).inner.clicked() {
+            let ready = app.compare_old.is_some() && pages_error.is_none();
+            if ui.add_enabled_ui(ready, |ui| widgets::pill_button(ui, tl!("Compare"), true)).inner.clicked() {
                 go = true;
             }
             if widgets::pill_button(ui, tl!("Cancel"), false).clicked() {
@@ -191,9 +203,17 @@ impl PdfCraftApp {
     pub fn run_compare(&mut self) {
         let Some((i, new)) = self.active_ids() else { return };
         let Some(old) = self.compare_old else { return };
-        match self.session.compare(old, new) {
+        let count = self.views.get(i).map_or(0, |v| v.page_count());
+        let pages = match crate::page_selection_ui::parse(&self.compare_pages, count) {
+            Ok(pages) => pages,
+            Err(e) => return self.notify_error(e.said(&|s| crate::i18n::t(s).to_string())),
+        };
+        match self.session.compare_pages(old, new, &pages) {
             Ok(result) => {
-                let visual = self.session.compare_visual(old, new, 72.0).unwrap_or_default();
+                let mut visual = self.session.compare_visual(old, new, 72.0).unwrap_or_default();
+                if !pages.is_empty() {
+                    visual.retain(|(page, _)| pages.contains(page));
+                }
                 let n = result.changes.len();
                 // Side by side when the old version is open in a tab and the window has the room.
                 let side_by_side = self.views.iter().any(|v| v.id == old) && self.ctx.as_ref().is_none_or(|c| c.content_rect().width() >= 1000.0);
@@ -201,6 +221,7 @@ impl PdfCraftApp {
                     old,
                     new,
                     result,
+                    pages,
                     visual,
                     selected: None,
                     side_by_side,
@@ -225,7 +246,7 @@ impl PdfCraftApp {
 
     pub(crate) fn compare_action(&mut self, index: usize, a: PanelAction) {
         let Some(s) = self.compare.as_mut() else { return };
-        let (old, new) = (s.old, s.new);
+        let (old, new, pages) = (s.old, s.new, s.pages.clone());
         match a {
             PanelAction::Select(i) => {
                 s.selected = Some(i);
@@ -252,7 +273,7 @@ impl PdfCraftApp {
                 s.show_visual = visual;
                 self.shade_compare(index);
             }
-            PanelAction::Mark => match self.session.mark_differences(old, new) {
+            PanelAction::Mark => match self.session.mark_differences_of(old, new, &pages) {
                 Ok(n) => {
                     if let Some(info) = self.session.get(new).map(|d| d.info.clone()) {
                         self.views[index].document_changed(&info);
@@ -265,7 +286,7 @@ impl PdfCraftApp {
                 }
                 Err(e) => self.notify_error(e),
             },
-            PanelAction::Report => match self.session.compare_report(old, new) {
+            PanelAction::Report => match self.session.compare_report_of(old, new, &pages) {
                 Ok(bytes) => {
                     if let Err(e) = self.open_bytes("Compare Report.pdf", None, bytes.to_vec()) {
                         self.notify_error(e);
