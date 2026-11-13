@@ -460,6 +460,8 @@ pub struct PdfCraftApp {
     /// tab coming to the front (Home, a document, Combine files) puts the view away.
     all_tools_tab: (Option<DocId>, bool),
     pub recent: Vec<RecentFile>,
+    /// Home's filename filter, kept only for this session (not a stored preference).
+    pub recent_query: String,
     /// How many recent files to keep, 0 for no list (Preferences ▸ Documents and view, #5572).
     pub recent_limit: usize,
     /// Preferences: reopen the files that were open when PdfCraft last closed (#442).
