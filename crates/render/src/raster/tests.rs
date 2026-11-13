@@ -10694,6 +10694,34 @@ fn a_rebuilt_table_finds_an_object_whose_header_names_another_generation() {
     assert_eq!((page.width, page.height), (200, 100));
 }
 
+/// A rebuilt table keeps an object whose header is glued to the `endobj` before it
+/// (`endobj3 0 obj`), as Microsoft Print To PDF writes some (#7082). The scan skipped the token
+/// `endobj3` whole, lost object 3, and read the `0 obj` left over as an object 0.
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn a_rebuilt_table_finds_an_object_glued_to_the_endobj_before_it() {
+    for (name, glue) in [("a line break between them", "\n"), ("glued", ""), ("glued to a stream's endobj", "")] {
+        let before = if name.contains("stream") {
+            "4 0 obj << /Length 0 >> stream\n\nendstream\nendobj"
+        } else {
+            "2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj"
+        };
+        let tree = if name.contains("stream") { "2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n" } else { "" };
+        // No table and no `startxref`, so the objects are found by scanning the file.
+        let pdf = format!(
+            "%PDF-1.4\n\
+             1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+             {tree}{before}{glue}3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] >> endobj\n\
+             trailer << /Root 1 0 R >>\n\
+             %%EOF\n"
+        );
+        let mut r = PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default());
+        let page = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview: false });
+        assert!(page.error.is_none(), "{name}: the page is found: {:?}", page.error);
+        assert_eq!((page.width, page.height), (200, 100), "{name}: and it is the page's own size");
+    }
+}
+
 /// A one-page file: a 200 x 100 page, its offsets right.
 fn one_page_file() -> Vec<u8> {
     one_page_file_with(false)
