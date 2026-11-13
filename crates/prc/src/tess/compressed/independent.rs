@@ -373,8 +373,25 @@ fn independent_non_planar_strip_tracks_the_quantized_working_mesh() {
     let encoded = encode([0.0; 3], 1e-4, &recipes);
     assert_within_tolerance(&encoded.positions, &source, 1e-4);
     let rebuilt = rebuild(&encoded.arrays(usize::MAX)).unwrap();
-    assert_eq!(rebuilt.triangles.len(), source.len() - 2);
-    assert_eq!(rebuilt.triangles[1..4], [[2, 1, 3], [2, 3, 4], [4, 3, 5]]);
+    assert_eq!(
+        rebuilt.triangles,
+        [
+            [0, 1, 2],
+            [2, 1, 3],
+            [2, 3, 4],
+            [4, 3, 5],
+            [4, 5, 6],
+            [6, 5, 7],
+            [6, 7, 8],
+            [8, 7, 9],
+            [8, 9, 10],
+            [10, 9, 11],
+            [10, 11, 12],
+            [12, 11, 13],
+            [12, 13, 14],
+            [14, 13, 15],
+        ]
+    );
     assert_eq!(encoded.points.len(), source.len() * 3);
     assert_within_tolerance(&rebuilt.positions, &source, 1e-4);
 }
