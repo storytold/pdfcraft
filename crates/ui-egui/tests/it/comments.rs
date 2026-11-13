@@ -5871,3 +5871,28 @@ fn properties_dialog_makes_the_text_box_font_size_default() {
         assert_eq!(font_size_of_last(&fresh).font_size, Some(size), "{quick}: the default font size persisted");
     }
 }
+
+#[test]
+fn ctrl_selected_lines_nudge_together_and_undo() {
+    let mut h = harness(|app| app.set_option("quick", "line").unwrap());
+    for y in [40.0, 80.0, 120.0] {
+        drag_pt(&mut h, (40.0, y), (160.0, y));
+    }
+    assert_eq!(comments(&h).len(), 3);
+    h.state_mut().set_option("quick", "select").unwrap();
+    h.run_steps(2);
+    click_pt(&mut h, (100.0, 40.0));
+    click_pt_with(&mut h, (100.0, 80.0), egui::Modifiers::COMMAND);
+    click_pt_with(&mut h, (100.0, 120.0), egui::Modifiers::COMMAND);
+    assert_eq!(h.state().views[0].comments.selection().len(), 3);
+    let before: Vec<_> = comments(&h).iter().map(|a| a.rect).collect();
+    h.key_press(egui::Key::ArrowRight);
+    h.run_steps(3);
+    let moved: Vec<_> = comments(&h).iter().map(|a| a.rect).collect();
+    for (old, new) in before.iter().zip(&moved) {
+        assert!(new[0] > old[0], "each selected line moves: {before:?} -> {moved:?}");
+    }
+    h.state_mut().undo();
+    h.run_steps(2);
+    assert_eq!(comments(&h).iter().map(|a| a.rect).collect::<Vec<_>>(), before);
+}
