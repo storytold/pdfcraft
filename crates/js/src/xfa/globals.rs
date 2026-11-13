@@ -408,7 +408,7 @@ pub(super) fn install(ctx: &mut Context, event: &XfaEvent, doc: &XfaDoc, current
         "DataView",
         "Intl",
     ];
-    let mut defined: HashSet<String> = RESERVED.iter().map(ToString::to_string).collect();
+    let mut defined: HashSet<String> = RESERVED.iter().chain(SOM_SHORTCUTS).map(ToString::to_string).collect();
     for scope in scopes {
         let kids: Vec<(usize, String, bool)> = {
             let h = host(ctx)?.borrow();
@@ -426,6 +426,7 @@ pub(super) fn install(ctx: &mut Context, event: &XfaEvent, doc: &XfaDoc, current
             if repeatable {
                 let im = instance_manager(ctx, scope, &name)?;
                 ctx.register_global_property(JsString::from(format!("_{name}").as_str()), im, rw)?;
+                defined.insert(format!("_{name}"));
             }
             defined.insert(name);
         }
@@ -450,6 +451,9 @@ pub(super) fn install(ctx: &mut Context, event: &XfaEvent, doc: &XfaDoc, current
     }
     Ok(())
 }
+
+/// The SOM shortcuts `install` defines as variables: a node of the same name doesn't take them.
+const SOM_SHORTCUTS: &[&str] = &["$", "$form", "$record", "$data", "$host", "$layout", "$template", "$event"];
 
 fn is_identifier(name: &str) -> bool {
     let mut chars = name.chars();

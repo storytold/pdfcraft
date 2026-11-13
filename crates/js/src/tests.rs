@@ -970,9 +970,29 @@ mod xfa_model {
                 ..Default::default()
             });
         }
+        // nodes named like a shortcut or like a repeatable sibling's instance manager don't take them
+        if let Some(page) = f.children.first_mut() {
+            page.children.push(XfaNode {
+                name: "$host".into(),
+                som: "form1[0].page1[0].$host[0]".into(),
+                kind: Some(XfaKind::Subform),
+                ..Default::default()
+            });
+            if let Some(details) = page.children.iter_mut().find(|c| c.name == "details") {
+                details.children.push(XfaNode {
+                    name: "_row".into(),
+                    som: "form1[0].page1[0].details[0]._row[0]".into(),
+                    kind: Some(XfaKind::Subform),
+                    ..Default::default()
+                });
+            }
+        }
         let ev = XfaEvent { activity: "calculate".into(), target: "form1[0].page1[0].qty[0]".into(), ..Default::default() };
         let o = run_xfa("box.value.rectangle.fill.color.value = '255,0,0'; 1", &ev, &XfaDoc::default(), &f, Limits::default());
         assert_eq!(o.result.as_deref(), Some("1"), "{o:?}");
+        let ev = XfaEvent { activity: "calculate".into(), target: "form1[0].page1[0].table[0].row[0].what[0]".into(), ..Default::default() };
+        let o = run_xfa("typeof $host.messageBox + ',' + typeof _row.addInstance", &ev, &XfaDoc::default(), &f, Limits::default());
+        assert_eq!(o.result.as_deref(), Some("function,function"), "{o:?}");
     }
 
     #[test]
