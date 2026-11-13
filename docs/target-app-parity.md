@@ -1,6 +1,6 @@
 # PdfCraft parity with Adobe Acrobat Pro
 
-> **Last reviewed:** 2026-11-11 · **Last updated:** 2026-11-11 · **Change:** minor (measured numbers recomputed at v0.21.0, cut from `main` `3650f01f`: 835 counted, 473 shipped + 124 partial, 64.1% unweighted, ≈ 73% tier-weighted; evidence and calibration refreshed; estimated readiness and hours not re-judged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
+> **Last reviewed:** 2026-11-13 · **Last updated:** 2026-11-13 · **Change:** minor (progress by release: breadth charts and a table for all 25 releases, v0.1.0 to v0.21.1, each recounted from its own checklist; measured numbers still those of v0.21.0, whose checklist v0.21.1 keeps) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 
 The authoritative assessment of how close PdfCraft is to Acrobat Pro. [ROADMAP.md](../ROADMAP.md)
 summarizes it; [gaps.md](gaps.md) lists every shortfall one by one; the deep-dive checklists are
@@ -49,6 +49,83 @@ never been measured side by side with Acrobat, and the first public releases (0.
 245 open issues in two days, including one that made our encrypted files unreadable in Acrobat
 ([#774](https://github.com/storytold/pdfcraft/issues/774), fixed by #836). By 2026-11-11, after
 releases up to v0.21.0, 1,680 issues are open, 74 of them marked `priority: critical`.
+
+## Progress by release
+
+Every release, recounted from its own `parity/acrobat-features.toml` with `cargo xtask parity`'s rules
+(partial = ½; `na` and `N/A` rows not counted; tier weights [below](#weights)). The checklist grew from
+803 to 835 counted features over these releases, so a percentage can dip when rows are added without
+anything getting worse; the table gives the counts behind each figure. A row is added at each release.
+
+Dark bars: unweighted breadth. Light bars extend to the tier-weighted breadth.
+
+```mermaid
+---
+config:
+  xyChart:
+    width: 800
+    height: 620
+  themeVariables:
+    xyChart:
+      plotColorPalette: "#93c5fd, #1d4ed8"
+---
+xychart-beta horizontal
+  title "Feature breadth by release"
+  x-axis ["v0.1.0", "v0.1.1", "v0.2.0", "v0.2.1", "v0.4.0", "v0.5.0", "v0.6.0", "v0.7.1", "v0.8.0", "v0.9.0", "v0.10.1", "v0.11.0", "v0.12.0", "v0.13.0", "v0.14.0", "v0.15.0", "v0.16.1", "v0.17.0", "v0.18.0", "v0.18.1", "v0.18.2", "v0.19.0", "v0.20.0", "v0.21.0", "v0.21.1"]
+  y-axis "%" 0 --> 100
+  bar [59.6, 64.5, 64.6, 64.9, 66.0, 67.1, 67.5, 68.4, 68.5, 69.4, 69.5, 69.5, 69.8, 69.8, 70.3, 70.3, 70.7, 70.8, 70.8, 70.9, 71.1, 71.5, 72.0, 73.0, 73.0]
+  bar [48.6, 53.3, 53.3, 53.7, 55.4, 56.6, 57.1, 58.2, 58.2, 59.3, 59.5, 59.5, 60.0, 60.0, 60.7, 60.7, 61.0, 61.3, 61.3, 61.4, 61.4, 62.0, 62.8, 64.1, 64.1]
+```
+
+By tier, from the longest (lightest) bar to the shortest (darkest): P0, P1, P2, P3.
+
+```mermaid
+---
+config:
+  xyChart:
+    width: 800
+    height: 620
+  themeVariables:
+    xyChart:
+      plotColorPalette: "#bfdbfe, #60a5fa, #2563eb, #1e3a8a"
+---
+xychart-beta horizontal
+  title "Feature breadth by tier and release"
+  x-axis ["v0.1.0", "v0.1.1", "v0.2.0", "v0.2.1", "v0.4.0", "v0.5.0", "v0.6.0", "v0.7.1", "v0.8.0", "v0.9.0", "v0.10.1", "v0.11.0", "v0.12.0", "v0.13.0", "v0.14.0", "v0.15.0", "v0.16.1", "v0.17.0", "v0.18.0", "v0.18.1", "v0.18.2", "v0.19.0", "v0.20.0", "v0.21.0", "v0.21.1"]
+  y-axis "%" 0 --> 100
+  bar [88.2, 93.4, 93.4, 93.4, 93.4, 94.2, 94.2, 94.2, 94.2, 94.6, 94.6, 94.6, 94.6, 94.6, 94.6, 94.6, 94.6, 94.6, 94.6, 94.6, 94.6, 94.6, 94.6, 94.6, 94.6]
+  bar [49.1, 56.8, 56.8, 57.5, 59.4, 60.3, 61.2, 63.0, 63.2, 64.6, 64.6, 64.6, 64.6, 64.6, 64.9, 64.9, 65.5, 65.8, 65.8, 65.9, 65.9, 66.6, 67.6, 68.8, 68.8]
+  bar [5.4, 5.4, 5.7, 5.9, 9.4, 12.0, 13.0, 15.1, 15.1, 17.3, 18.0, 18.0, 20.1, 20.1, 22.8, 22.8, 23.7, 24.2, 24.2, 24.2, 24.8, 25.9, 27.7, 30.8, 30.8]
+  bar [0.0, 0.0, 0.0, 0.0, 2.3, 2.3, 2.3, 2.3, 2.3, 2.3, 2.3, 2.3, 2.3, 2.3, 2.3, 2.3, 3.4, 3.4, 3.4, 3.4, 5.6, 5.6, 5.6, 7.8, 7.8]
+```
+
+| Release | Date | Counted | Shipped | Partial | Breadth | Tier-weighted | P0 | P1 | P2 | P3 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| v0.21.1 | 2026-11-12 | 835 | 473 | 124 | 64.1% | 73.0% | 94.6% | 68.8% | 30.8% | 7.8% |
+| v0.21.0 | 2026-11-11 | 835 | 473 | 124 | 64.1% | 73.0% | 94.6% | 68.8% | 30.8% | 7.8% |
+| v0.20.0 | 2026-11-09 | 834 | 464 | 119 | 62.8% | 72.0% | 94.6% | 67.6% | 27.7% | 5.6% |
+| v0.19.0 | 2026-11-06 | 832 | 457 | 117 | 62.0% | 71.5% | 94.6% | 66.6% | 25.9% | 5.6% |
+| v0.18.2 | 2026-11-05 | 827 | 453 | 110 | 61.4% | 71.1% | 94.6% | 65.9% | 24.8% | 5.6% |
+| v0.18.1 | 2026-11-04 | 824 | 452 | 107 | 61.4% | 70.9% | 94.6% | 65.9% | 24.2% | 3.4% |
+| v0.18.0 | 2026-11-03 | 824 | 452 | 106 | 61.3% | 70.8% | 94.6% | 65.8% | 24.2% | 3.4% |
+| v0.17.0 | 2026-11-01 | 824 | 452 | 106 | 61.3% | 70.8% | 94.6% | 65.8% | 24.2% | 3.4% |
+| v0.16.1 | 2026-10-31 | 824 | 452 | 102 | 61.0% | 70.7% | 94.6% | 65.5% | 23.7% | 3.4% |
+| v0.15.0 | 2026-10-28 | 821 | 448 | 100 | 60.7% | 70.3% | 94.6% | 64.9% | 22.8% | 2.3% |
+| v0.14.0 | 2026-10-25 | 821 | 448 | 100 | 60.7% | 70.3% | 94.6% | 64.9% | 22.8% | 2.3% |
+| v0.13.0 | 2026-10-23 | 817 | 441 | 99 | 60.0% | 69.8% | 94.6% | 64.6% | 20.1% | 2.3% |
+| v0.12.0 | 2026-10-22 | 817 | 441 | 99 | 60.0% | 69.8% | 94.6% | 64.6% | 20.1% | 2.3% |
+| v0.11.0 | 2026-10-21 | 815 | 438 | 94 | 59.5% | 69.5% | 94.6% | 64.6% | 18.0% | 2.3% |
+| v0.10.1 | 2026-10-21 | 815 | 438 | 94 | 59.5% | 69.5% | 94.6% | 64.6% | 18.0% | 2.3% |
+| v0.9.0 | 2026-10-18 | 815 | 437 | 93 | 59.3% | 69.4% | 94.6% | 64.6% | 17.3% | 2.3% |
+| v0.8.0 | 2026-10-14 | 813 | 429 | 89 | 58.2% | 68.5% | 94.2% | 63.2% | 15.1% | 2.3% |
+| v0.7.1 | 2026-10-12 | 813 | 429 | 88 | 58.2% | 68.4% | 94.2% | 63.0% | 15.1% | 2.3% |
+| v0.6.0 | 2026-10-11 | 810 | 425 | 75 | 57.1% | 67.5% | 94.2% | 61.2% | 13.0% | 2.3% |
+| v0.5.0 | 2026-10-10 | 807 | 420 | 73 | 56.6% | 67.1% | 94.2% | 60.3% | 12.0% | 2.3% |
+| v0.4.0 | 2026-10-08 | 806 | 411 | 71 | 55.4% | 66.0% | 93.4% | 59.4% | 9.4% | 2.3% |
+| v0.2.1 | 2026-10-06 | 805 | 404 | 57 | 53.7% | 64.9% | 93.4% | 57.5% | 5.9% | 0.0% |
+| v0.2.0 | 2026-10-05 | 804 | 398 | 61 | 53.3% | 64.6% | 93.4% | 56.8% | 5.7% | 0.0% |
+| v0.1.1 | 2026-10-03 | 803 | 398 | 60 | 53.3% | 64.5% | 93.4% | 56.8% | 5.4% | 0.0% |
+| v0.1.0 | 2026-10-02 | 803 | 364 | 52 | 48.6% | 59.6% | 88.2% | 49.1% | 5.4% | 0.0% |
 
 ## How this was measured
 
@@ -311,6 +388,7 @@ licensed OCR or AI model.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-13 | minor | Progress by release: charts of breadth (unweighted, tier-weighted and by tier) and a table for all 25 releases, v0.1.0 to v0.21.1, each recounted from its own checklist with `cargo xtask parity`'s rules. Measured numbers unchanged (v0.21.1 keeps v0.21.0's checklist). |
 | 2026-11-11 | minor | Measured numbers recomputed at v0.21.0 (`main` at 3650f01f): 835 counted (473 shipped, 124 partial), 64.1% unweighted, ≈ 73% tier-weighted, P0 94.6%. Area breadths and the C, D, E, F, G, L and N texts, evidence (code size, tests, commands, tools, issues) and calibration brought up to date; the commit count is now measured from 5d590604 to the release cut. Estimated readiness and hours not re-judged; the mainstream split is still from 2026-10-26. |
 | 2026-11-09 | minor | Measured numbers recomputed as `cargo xtask parity` counts them, at v0.20.0 (`main` at 9ee213ef): 834 counted (464 shipped, 119 partial), 62.8% unweighted, ≈ 72% tier-weighted, P0 94.6%. Area breadths, evidence (code size, tests, tools, issues), localization (35 interface languages), calibration and the I, J, M and N area texts brought up to date; the beta requirements gained a status column. Estimated readiness and hours not re-judged (the monthly re-measure is due); the mainstream split is still from 2026-10-26. Earlier header notes moved into this table. |
 | 2026-10-30 | patch | Integration update 2026-10-30: lossless JBIG2 generic and exact-copy symbol coding are included; no lossy substitution. Combined tests passed at bdf5620; the subsequent review fixes require fresh CI. |

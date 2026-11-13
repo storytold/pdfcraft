@@ -462,12 +462,32 @@ Logs, environment variables and other development notes are in [docs/development
 
 PdfCraft is young and moving fast. The aim is a workbench where you can view, organize, annotate, fill, sign and edit PDFs, for professional and everyday workflows.
 
-**Where it stands (November 2026), honestly:** PdfCraft is **alpha**. Most essential offline PDF features exist in some form (a breadth of 62% over the features tracked in [docs/target-app-parity.md](docs/target-app-parity.md), and 95% over the core essentials, counting a partial feature as half). For everyday work (viewing, commenting, filling and signing forms, organizing pages) readiness is about 55%; across all professional workflows, about 50%; for someone who only needs the essentials, about 66% (judged in October; a re-measure is due). Every everyday workflow can be completed, but converting and sharing is weak: no office-document-to-PDF, and .docx export that loses layout.
+**Where it stands (November 2026), honestly:** PdfCraft is **alpha**. Most essential offline PDF features exist in some form (a breadth of 64% over the features tracked in [docs/target-app-parity.md](docs/target-app-parity.md), and 95% over the core essentials, counting a partial feature as half). For everyday work (viewing, commenting, filling and signing forms, organizing pages) readiness is about 55%; across all professional workflows, about 50%; for someone who only needs the essentials, about 66% (judged in October; a re-measure is due). Every everyday workflow can be completed, but converting and sharing is weak: no office-document-to-PDF, and .docx export that loses layout.
 
 - **Good today:** viewing and search; organizing, combining and splitting; most kinds of comment; filling and authoring forms (with sandboxed JavaScript); passwords, redaction and sanitizing; basic digital signatures; printing; the Accessibility Checker; agent control through the CLI and MCP.
 - **Still borrowed:** pages are drawn by the `hayro` crate while our own renderer is built.
 - **Thin or missing:** reliable editing of existing text (especially CJK and right-to-left), OCR beyond Latin script, office document import and export that keeps layout, signature tokens and online long-term validation, Preflight and PDF/X/UA, physical printer fidelity, and full XFA forms. The built-in OCR engine, the default, reads unaccented Latin. Tesseract reads [12 allow-listed languages](crates/ocr/src/tesseract.rs). A language works only when Tesseract and its language data are installed, Tesseract is chosen as the engine, and the **Document language** is set; it defaults to English.
 - **Hardening:** fuzzing still turns up crashes and hangs on hostile files; each one is fixed with a regression test. The issue tracker has grown with the user base (1,680 open in November 2026), and crash reports, above all printing on Windows, come first. Quality has not yet been benchmarked side by side.
+
+Feature breadth at each release (dark: unweighted; light: tier-weighted; partial features count as half). The numbers and a chart by tier are in [docs/target-app-parity.md](docs/target-app-parity.md#progress-by-release).
+
+```mermaid
+---
+config:
+  xyChart:
+    width: 800
+    height: 620
+  themeVariables:
+    xyChart:
+      plotColorPalette: "#93c5fd, #1d4ed8"
+---
+xychart-beta horizontal
+  title "Feature breadth by release"
+  x-axis ["v0.1.0", "v0.1.1", "v0.2.0", "v0.2.1", "v0.4.0", "v0.5.0", "v0.6.0", "v0.7.1", "v0.8.0", "v0.9.0", "v0.10.1", "v0.11.0", "v0.12.0", "v0.13.0", "v0.14.0", "v0.15.0", "v0.16.1", "v0.17.0", "v0.18.0", "v0.18.1", "v0.18.2", "v0.19.0", "v0.20.0", "v0.21.0", "v0.21.1"]
+  y-axis "%" 0 --> 100
+  bar [59.6, 64.5, 64.6, 64.9, 66.0, 67.1, 67.5, 68.4, 68.5, 69.4, 69.5, 69.5, 69.8, 69.8, 70.3, 70.3, 70.7, 70.8, 70.8, 70.9, 71.1, 71.5, 72.0, 73.0, 73.0]
+  bar [48.6, 53.3, 53.3, 53.7, 55.4, 56.6, 57.1, 58.2, 58.2, 59.3, 59.5, 59.5, 60.0, 60.0, 60.7, 60.7, 61.0, 61.3, 61.3, 61.4, 61.4, 62.0, 62.8, 64.1, 64.1]
+```
 
 **Next, in order:** office-document-to-PDF and a .docx export that keeps layout, the reported bugs and the Chinese interface font, a fidelity harness against a reference renderer, editing existing content, then professional workflows (OCR, office formats, Preflight, signatures, accessibility tagging) and 1.0 polish.
 
