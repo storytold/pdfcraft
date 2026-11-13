@@ -12204,6 +12204,31 @@ fn a_static_xfa_forms_template_scripts_run_on_its_own_fields() {
     let cos = pdfcraft_cos::Document::open(saved).expect("reopens");
     let data = pdfcraft_xfa::data_of(&cos).expect("the data");
     assert_eq!(data.text_at(&pdfcraft_xfa::som_to_path("form1[0].page1[0].total[0]")), Some("exit:Ada"));
+    // A check box and a radio button the user sets were clicked: their click scripts run, reading the new value.
+    s.apply(id, Edit::SetFieldValue { name: "form1[0].page1[0].agree[0]".into(), value: FieldValue::Check(true) }).expect("checks it");
+    assert_eq!(field(&s, total).value, vec!["agree:1".to_string()], "{:?}", s.take_js_output(id));
+    let large = field(&s, "form1[0].page1[0].size[0]").widgets[1].on_state.clone();
+    s.apply(id, Edit::SetFieldValue { name: "form1[0].page1[0].size[0]".into(), value: FieldValue::Radio(large) }).expect("picks it");
+    assert_eq!(field(&s, total).value, vec!["size:large".to_string()], "the chosen button's click script runs");
+}
+
+/// On a dynamic XFA form too, a check box or radio button the user sets runs its click script after its change scripts,
+/// the chosen radio button's own.
+#[test]
+fn xfa_check_boxes_and_radio_buttons_run_their_click_scripts() {
+    let bytes = Arc::new(pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::static_scripted_template()));
+    let mut s = Session::new();
+    let id = s.open("dynamic.pdf", None, bytes, None).expect("opens");
+    let named = |s: &Session, n: &str| s.get(id).unwrap().form.iter().find(|f| f.name.ends_with(n)).cloned().expect("the field");
+    let total = |s: &Session| named(s, "total").value;
+    let agree = named(&s, "agree");
+    let on = agree.widgets[0].on_state.clone().expect("an on state");
+    s.apply(id, Edit::SetFieldValue { name: agree.name.clone(), value: FieldValue::Check(true) }).expect("checks it");
+    assert_eq!(total(&s), vec!["agree:1".to_string()], "{on}: {:?}", s.take_js_output(id));
+    let size = named(&s, "size");
+    let large = size.widgets.get(1).and_then(|w| w.on_state.clone());
+    s.apply(id, Edit::SetFieldValue { name: size.name.clone(), value: FieldValue::Radio(large) }).expect("picks it");
+    assert_eq!(total(&s), vec!["size:large".to_string()], "{:?}", s.take_js_output(id));
 }
 
 /// layout:ready scripts run once on opening: the root's turns field highlighting on (only when it

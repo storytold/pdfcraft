@@ -1110,6 +1110,44 @@ impl<'a, 'b> Runner<'a, 'b> {
         Ok(())
     }
 
+    /// What a user's setting field `name` (at `som`) clicked, with the activities each runs: a check box, its own click;
+    /// a radio group, the group's click and the chosen button's change and click (the button is the group's field
+    /// child at the chosen widget's position). Nothing for other fields.
+    fn clicked(&mut self, name: &str, som: &str) -> Vec<(String, Vec<&'static str>)> {
+        use pdfcraft_forms::FieldKind as K;
+        match self.fields().get(name).map(|f| f.kind) {
+            Some(K::CheckBox) => vec![(som.to_string(), vec!["click"])],
+            Some(K::Radio) => {
+                // The group: `som` itself, or the group a button's own path belongs to.
+                let group = {
+                    let live = self.live();
+                    match find_node(&live.root, som, 0) {
+                        Some(n) if n.kind == Some(NodeKind::ExclGroup) => Some(n.clone()),
+                        _ => som
+                            .rsplit_once('.')
+                            .and_then(|(parent, _)| find_node(&live.root, parent, 0))
+                            .filter(|n| n.kind == Some(NodeKind::ExclGroup))
+                            .cloned(),
+                    }
+                };
+                let Some(group) = group else { return vec![(som.to_string(), vec!["click"])] };
+                let chosen = pdfcraft_forms::fields(self.doc)
+                    .into_iter()
+                    .find(|f| f.name == name)
+                    .and_then(|f| f.widgets.iter().position(|w| w.state.is_some() && w.state == w.on_state));
+                let item = chosen.and_then(|i| group.children.iter().filter(|c| c.kind == Some(NodeKind::Field)).nth(i)).map(|c| c.som.clone());
+                let mut out = vec![(group.som.clone(), vec!["click"])];
+                if let Some(item) = item.filter(|i| *i != som) {
+                    out.push((item, vec!["change", "click"]));
+                } else if group.som != som {
+                    out.push((som.to_string(), vec!["click"]));
+                }
+                out
+            }
+            _ => Vec::new(),
+        }
+    }
+
     fn events_of(&mut self, som: &str, activity: &str) -> Vec<ScriptEvent> {
         self.live().events.iter().filter(|e| e.som == som && e.activity == activity).cloned().collect()
     }
@@ -1175,6 +1213,17 @@ impl Runner<'_, '_> {
             std::process::abort();
         }
     }
+}
+
+/// The node at SOM path `som` under `n`, searched at most 64 levels deep.
+fn find_node<'a>(n: &'a FormNode, som: &str, depth: usize) -> Option<&'a FormNode> {
+    if depth > 64 {
+        return None;
+    }
+    if n.som == som {
+        return Some(n);
+    }
+    n.children.iter().find_map(|c| find_node(c, som, depth + 1))
 }
 
 /// Every field's (SOM, value, presence, access), in document order.
@@ -1348,6 +1397,15 @@ pub(crate) fn on_changes(
         let value = r.fields().get(name).map(|f| f.value.join("\n")).unwrap_or_default();
         for ev in r.events_of(&som, "change") {
             r.run(&ev, &value)?;
+        }
+        // A check box or a radio button the user set was clicked (XFA 3.3 p. 703): its click scripts run after its change
+        // scripts, reading its new value; a radio group's chosen button runs its own change and click scripts too.
+        for (item_som, activities) in r.clicked(name, &som) {
+            for activity in activities {
+                for ev in r.events_of(&item_som, activity) {
+                    r.run(&ev, &value)?;
+                }
+            }
         }
         // Noted only when an exit script ran, whether it succeeded or failed: it has run for this
         // focus loss, and a failed script keeps what it changed before its error, so running it
