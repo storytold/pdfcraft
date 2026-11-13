@@ -33,6 +33,8 @@ pub(crate) struct Host {
     pub(crate) retained: usize,
     /// Alerts, console lines and requests the limits left out.
     pub(crate) dropped: usize,
+    /// Layers a script turned on or off (`ocg.state`), by their places in [`DocInfo::layers`].
+    pub(crate) layers_changed: BTreeSet<usize>,
 }
 
 impl Host {
