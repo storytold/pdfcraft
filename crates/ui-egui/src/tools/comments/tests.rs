@@ -592,8 +592,39 @@ fn drawing_tools_are_identified_and_crosshair_cursor_paints_contrasting_strokes(
     // Painting the crosshair cursor adds both the white contrasting outline and black core lines
     let ctx = egui::Context::default();
     let layer = egui::LayerId::background();
-    let painter = egui::Painter::new(ctx, layer, egui::Rect::EVERYTHING);
-    paint_crosshair_cursor(&painter, pos2(100.0, 100.0));
+    let painter = egui::Painter::new(ctx.clone(), layer, egui::Rect::EVERYTHING);
+    let center = pos2(100.0, 100.0);
+    paint_crosshair_cursor(&painter, center);
+
+    let shapes = ctx.graphics(|g| g.get(layer).map(|l| l.all_entries().map(|c| c.shape.clone()).collect::<Vec<_>>()).unwrap_or_default());
+
+    assert_eq!(shapes.len(), 4, "crosshair cursor must emit 2 white border lines and 2 black core lines");
+
+    // Two outer white contrasting border strokes (width 2.5)
+    for shape in &shapes[0..2] {
+        if let egui::Shape::LineSegment { points, stroke } = shape {
+            assert_eq!(stroke.color, Color32::WHITE);
+            assert_eq!(stroke.width, 2.5);
+            let mid = pos2((points[0].x + points[1].x) / 2.0, (points[0].y + points[1].y) / 2.0);
+            assert_eq!(mid, center);
+            assert!((points[0].distance(points[1]) - 15.0).abs() < 0.01);
+        } else {
+            panic!("expected LineSegment for crosshair outline");
+        }
+    }
+
+    // Two inner black precision core strokes (width 1.0)
+    for shape in &shapes[2..4] {
+        if let egui::Shape::LineSegment { points, stroke } = shape {
+            assert_eq!(stroke.color, Color32::BLACK);
+            assert_eq!(stroke.width, 1.0);
+            let mid = pos2((points[0].x + points[1].x) / 2.0, (points[0].y + points[1].y) / 2.0);
+            assert_eq!(mid, center);
+            assert!((points[0].distance(points[1]) - 15.0).abs() < 0.01);
+        } else {
+            panic!("expected LineSegment for crosshair core");
+        }
+    }
 }
 
 #[test]
@@ -612,20 +643,249 @@ fn brush_tools_are_identified_and_paint_colored_brush_dot_cursor() {
     assert!(!is_brush_tool(CommentTool::TextBox));
 
     let ctx = egui::Context::default();
-    let layer = egui::LayerId::background();
-    let painter = egui::Painter::new(ctx, layer, egui::Rect::EVERYTHING);
 
-    // Painting red brush cursor with small pt/radius
+    // 1. Painting red brush cursor with small pt/radius (< 4.0, no center pip)
+    let red_layer = egui::LayerId::new(egui::Order::Background, egui::Id::unique("brush_red"));
+    let p_red = egui::Painter::new(ctx.clone(), red_layer, egui::Rect::EVERYTHING);
     let red = Color32::from_rgb(227, 33, 33);
-    paint_brush_cursor(&painter, pos2(150.0, 150.0), red, 2.5);
+    paint_brush_cursor(&p_red, pos2(150.0, 150.0), red, 2.5);
 
-    // Painting blue brush cursor with larger pt/radius (with center precision dot)
+    let red_shapes = ctx.graphics(|g| g.get(red_layer).map(|l| l.all_entries().map(|c| c.shape.clone()).collect::<Vec<_>>()).unwrap_or_default());
+    assert_eq!(red_shapes.len(), 3, "small brush dot must have outer shadow ring, inner white ring, and filled circle");
+    if let egui::Shape::Circle(c) = &red_shapes[0] {
+        assert_eq!(c.center, pos2(150.0, 150.0));
+        assert_eq!(c.radius, 3.0);
+        assert_eq!(c.stroke.color, Color32::from_black_alpha(110));
+        assert_eq!(c.stroke.width, 1.0);
+    } else {
+        panic!("expected outer shadow ring circle");
+    }
+    if let egui::Shape::Circle(c) = &red_shapes[1] {
+        assert_eq!(c.center, pos2(150.0, 150.0));
+        assert_eq!(c.radius, 2.5);
+        assert_eq!(c.stroke.color, Color32::from_white_alpha(200));
+        assert_eq!(c.stroke.width, 1.0);
+    } else {
+        panic!("expected inner white contrast ring circle");
+    }
+    if let egui::Shape::Circle(c) = &red_shapes[2] {
+        assert_eq!(c.center, pos2(150.0, 150.0));
+        assert_eq!(c.radius, 2.5);
+        assert_eq!(c.fill, red);
+    } else {
+        panic!("expected filled brush dot circle");
+    }
+
+    // 2. Painting blue brush cursor with larger pt/radius (>= 4.0, includes center precision pip)
+    let blue_layer = egui::LayerId::new(egui::Order::Background, egui::Id::unique("brush_blue"));
+    let p_blue = egui::Painter::new(ctx.clone(), blue_layer, egui::Rect::EVERYTHING);
     let blue = Color32::from_rgb(0, 120, 215);
-    paint_brush_cursor(&painter, pos2(200.0, 200.0), blue, 8.0);
+    paint_brush_cursor(&p_blue, pos2(200.0, 200.0), blue, 8.0);
 
-    // Painting eraser cursor
-    paint_eraser_cursor(&painter, pos2(250.0, 250.0), 12.0);
+    let blue_shapes = ctx.graphics(|g| g.get(blue_layer).map(|l| l.all_entries().map(|c| c.shape.clone()).collect::<Vec<_>>()).unwrap_or_default());
+    assert_eq!(blue_shapes.len(), 5, "large brush dot must include outer/inner rings, fill, and center precision pip");
+    if let egui::Shape::Circle(c) = &blue_shapes[0] {
+        assert_eq!(c.radius, 8.5);
+        assert_eq!(c.stroke.color, Color32::from_black_alpha(110));
+    } else {
+        panic!("expected outer shadow ring");
+    }
+    if let egui::Shape::Circle(c) = &blue_shapes[1] {
+        assert_eq!(c.radius, 8.0);
+        assert_eq!(c.stroke.color, Color32::from_white_alpha(200));
+    } else {
+        panic!("expected inner white contrast ring");
+    }
+    if let egui::Shape::Circle(c) = &blue_shapes[2] {
+        assert_eq!(c.radius, 8.0);
+        assert_eq!(c.fill, blue);
+    } else {
+        panic!("expected filled brush dot");
+    }
+    if let egui::Shape::Circle(c) = &blue_shapes[3] {
+        assert_eq!(c.radius, 1.0);
+        assert_eq!(c.fill, Color32::WHITE);
+    } else {
+        panic!("expected center pip fill");
+    }
+    if let egui::Shape::Circle(c) = &blue_shapes[4] {
+        assert_eq!(c.radius, 1.0);
+        assert_eq!(c.stroke.color, Color32::from_black_alpha(180));
+        assert_eq!(c.stroke.width, 0.5);
+    } else {
+        panic!("expected center pip stroke");
+    }
 
-    // Crosshair with color center
-    paint_crosshair_cursor_with_color(&painter, pos2(300.0, 300.0), Some(red));
+    // 3. Painting eraser cursor
+    let eraser_layer = egui::LayerId::new(egui::Order::Background, egui::Id::unique("eraser"));
+    let p_eraser = egui::Painter::new(ctx.clone(), eraser_layer, egui::Rect::EVERYTHING);
+    paint_eraser_cursor(&p_eraser, pos2(250.0, 250.0), 12.0);
+
+    let eraser_shapes =
+        ctx.graphics(|g| g.get(eraser_layer).map(|l| l.all_entries().map(|c| c.shape.clone()).collect::<Vec<_>>()).unwrap_or_default());
+    assert_eq!(eraser_shapes.len(), 3, "eraser cursor must emit outer/inner rings and shaded fill");
+    if let egui::Shape::Circle(c) = &eraser_shapes[0] {
+        assert_eq!(c.radius, 12.5);
+        assert_eq!(c.stroke.color, Color32::from_black_alpha(110));
+    } else {
+        panic!("expected eraser outer ring");
+    }
+    if let egui::Shape::Circle(c) = &eraser_shapes[1] {
+        assert_eq!(c.radius, 12.0);
+        assert_eq!(c.stroke.color, Color32::from_white_alpha(200));
+    } else {
+        panic!("expected eraser inner ring");
+    }
+    if let egui::Shape::Circle(c) = &eraser_shapes[2] {
+        assert_eq!(c.radius, 12.0);
+        assert_eq!(c.fill, Color32::from_gray(128).gamma_multiply(0.2));
+    } else {
+        panic!("expected eraser fill disc");
+    }
+
+    // 4. Crosshair with color center
+    let crosshair_layer = egui::LayerId::new(egui::Order::Background, egui::Id::unique("crosshair_color"));
+    let p_crosshair = egui::Painter::new(ctx.clone(), crosshair_layer, egui::Rect::EVERYTHING);
+    paint_crosshair_cursor_with_color(&p_crosshair, pos2(300.0, 300.0), Some(red));
+
+    let crosshair_shapes =
+        ctx.graphics(|g| g.get(crosshair_layer).map(|l| l.all_entries().map(|c| c.shape.clone()).collect::<Vec<_>>()).unwrap_or_default());
+    assert_eq!(crosshair_shapes.len(), 6, "colored crosshair cursor must emit 4 line segments and 2 center pip circles");
+    if let egui::Shape::Circle(c) = &crosshair_shapes[4] {
+        assert_eq!(c.center, pos2(300.0, 300.0));
+        assert_eq!(c.radius, 2.0);
+        assert_eq!(c.fill, red);
+    } else {
+        panic!("expected center color dot");
+    }
+    if let egui::Shape::Circle(c) = &crosshair_shapes[5] {
+        assert_eq!(c.center, pos2(300.0, 300.0));
+        assert_eq!(c.radius, 2.0);
+        assert_eq!(c.stroke.color, Color32::WHITE);
+        assert_eq!(c.stroke.width, 0.5);
+    } else {
+        panic!("expected center color dot stroke");
+    }
+}
+
+#[test]
+fn dragging_outside_canvas_clip_preserves_cursor_while_gap_keeps_claim() {
+    use crate::canvas::ViewDefaults;
+    use crate::page_router::PagePress;
+
+    let page = PageInfo { width: 200.0, height: 200.0, label: String::new(), crop: [0.0, 0.0, 200.0, 200.0], rotation: 0 };
+    let xf = PageXform { rect: Rect::from_min_size(pos2(10.0, 10.0), vec2(200.0, 200.0)), rot: 0, pw: 200.0, ph: 200.0 };
+    let info = DocInfo { pages: vec![page], ..Default::default() };
+    let prefs = CommentPrefs::default();
+
+    let ctx = egui::Context::default();
+    let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+        let clip = Rect::from_min_size(pos2(0.0, 0.0), vec2(400.0, 400.0));
+        let mut canvas_ui = ui.new_child(egui::UiBuilder::new().max_rect(clip));
+        canvas_ui.set_clip_rect(clip);
+        let resp = canvas_ui.allocate_rect(clip, Sense::drag());
+
+        // 1. Dragging within the canvas clip in a page gap (e.g. at (250, 250), outside page (10..210, 10..210))
+        let gap_ptr = PagePointer { pos: Some(pos2(250.0, 250.0)), ..PagePointer::default() };
+        let cx_gap = PageCx {
+            page: 0,
+            xf: &xf,
+            ptr: &gap_ptr,
+            info: &info,
+            tool: QuickTool::Comment(CommentTool::Ink),
+            prefs: &prefs,
+            allowed: true,
+            hidden: false,
+            redact_mark: ([0.0; 3], 1.0),
+        };
+        let mut view_gap = DocView::new(pdfcraft_engine::DocId(1), &info, ViewDefaults::default());
+        view_gap.comments.gesture = Some(Gesture::Draw { page: 0, tool: CommentTool::Ink, points: vec![[0.0, 0.0]] });
+
+        page_input(&canvas_ui, &resp, &cx_gap, PagePress::Free, false, &mut view_gap);
+        let ctx_gap = egui::Context::default();
+        view_gap.cursor.resolve(&ctx_gap, QuickTool::Comment(CommentTool::Ink));
+        assert_eq!(ctx_gap.output(|o| o.cursor_icon), egui::CursorIcon::None, "dragging in page gap within clip must keep CursorIcon::None claim");
+
+        // 2. Dragging outside the canvas clip rect (e.g. at (500, 500), outside clip (0..400, 0..400))
+        let outside_ptr = PagePointer { pos: Some(pos2(500.0, 500.0)), ..PagePointer::default() };
+        let cx_outside = PageCx {
+            page: 0,
+            xf: &xf,
+            ptr: &outside_ptr,
+            info: &info,
+            tool: QuickTool::Comment(CommentTool::Ink),
+            prefs: &prefs,
+            allowed: true,
+            hidden: false,
+            redact_mark: ([0.0; 3], 1.0),
+        };
+        let mut view_outside = DocView::new(pdfcraft_engine::DocId(1), &info, ViewDefaults::default());
+        view_outside.comments.gesture = Some(Gesture::Draw { page: 0, tool: CommentTool::Ink, points: vec![[0.0, 0.0]] });
+
+        page_input(&canvas_ui, &resp, &cx_outside, PagePress::Free, false, &mut view_outside);
+        let ctx_outside = egui::Context::default();
+        view_outside.cursor.resolve(&ctx_outside, QuickTool::Comment(CommentTool::Ink));
+        assert_eq!(
+            ctx_outside.output(|o| o.cursor_icon),
+            egui::CursorIcon::Default,
+            "dragging outside the canvas clip must not claim/hide the cursor"
+        );
+
+        // 3. Pointer over the page within clip claims CursorIcon::None
+        let page_ptr = PagePointer { pos: Some(pos2(100.0, 100.0)), ..PagePointer::default() };
+        let cx_page = PageCx {
+            page: 0,
+            xf: &xf,
+            ptr: &page_ptr,
+            info: &info,
+            tool: QuickTool::Comment(CommentTool::Ink),
+            prefs: &prefs,
+            allowed: true,
+            hidden: false,
+            redact_mark: ([0.0; 3], 1.0),
+        };
+        let mut view_page = DocView::new(pdfcraft_engine::DocId(1), &info, ViewDefaults::default());
+        page_input(&canvas_ui, &resp, &cx_page, PagePress::Free, false, &mut view_page);
+        let ctx_page = egui::Context::default();
+        view_page.cursor.resolve(&ctx_page, QuickTool::Comment(CommentTool::Ink));
+        assert_eq!(ctx_page.output(|o| o.cursor_icon), egui::CursorIcon::None, "pointer over page within clip must claim CursorIcon::None");
+    });
+    out.textures_delta.clear();
+}
+
+#[test]
+fn hidden_comments_preserves_drawing_cursor_preview() {
+    use super::paint::paint_page;
+    use crate::canvas::ViewDefaults;
+
+    let page = PageInfo { width: 200.0, height: 200.0, label: String::new(), crop: [0.0, 0.0, 200.0, 200.0], rotation: 0 };
+    let xf = PageXform { rect: Rect::from_min_size(pos2(0.0, 0.0), vec2(200.0, 200.0)), rot: 0, pw: 200.0, ph: 200.0 };
+    let info = DocInfo { pages: vec![page], ..Default::default() };
+    let prefs = CommentPrefs::default();
+    let ptr = PagePointer { pos: Some(pos2(100.0, 100.0)), ..PagePointer::default() };
+
+    for tool in [CommentTool::Ink, CommentTool::FreehandHighlight, CommentTool::Eraser, CommentTool::Rectangle] {
+        let cx = PageCx {
+            page: 0,
+            xf: &xf,
+            ptr: &ptr,
+            info: &info,
+            tool: QuickTool::Comment(tool),
+            prefs: &prefs,
+            allowed: true,
+            hidden: true, // Comments are hidden!
+            redact_mark: ([0.0; 3], 1.0),
+        };
+        let view = DocView::new(pdfcraft_engine::DocId(1), &info, ViewDefaults::default());
+        let ctx = egui::Context::default();
+        let layer = egui::LayerId::background();
+        let painter = egui::Painter::new(ctx.clone(), layer, egui::Rect::EVERYTHING);
+
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+            paint_page(ui, &painter, &cx, &view, None);
+        });
+        out.textures_delta.clear();
+
+        assert!(!out.shapes.is_empty(), "cursor preview shapes must be painted for {tool:?} even when comments are hidden");
+    }
 }

@@ -108,6 +108,7 @@ pub(super) fn changing_points(
     }
 }
 
+/// Paint reshape/vertex handles for a selected polygon, polyline, line or cloud.
 fn paint_points(painter: &egui::Painter, cx: &PageCx<'_>, view: &DocView, a: &Annotation, pointer: Option<Pos2>, shift: bool) {
     let cv = &view.comments;
     let points: Vec<[f64; 2]> = a.points.iter().map(|q| [f64::from(q[0]), f64::from(q[1])]).collect();
@@ -129,6 +130,7 @@ fn paint_points(painter: &egui::Painter, cx: &PageCx<'_>, view: &DocView, a: &An
     paint_gesture(painter, cx, view);
 }
 
+/// Paint in-progress drawing, settling strokes, copied comment bundles, and the active tool preview cursor.
 fn paint_gesture(painter: &egui::Painter, cx: &PageCx<'_>, view: &DocView) {
     let now = painter.ctx().input(|i| i.time);
     for s in view.comments.settling.iter().filter(|s| s.page == cx.page && now - s.since < SETTLE_SECS) {
@@ -158,9 +160,9 @@ fn paint_gesture(painter: &egui::Painter, cx: &PageCx<'_>, view: &DocView) {
     }
     // Live preview cursor for drawing and annotation tools: a PowerPoint-style colored dot
     // matching the chosen color and stroke pt size for brush tools, an eraser disc for eraser,
-    // and a precision crosshair for shapes.
+    // and a precision crosshair for shapes. Even when existing comments are hidden, the active
+    // tool's cursor remains visible while drawing input is enabled.
     if cx.allowed
-        && !cx.hidden
         && let QuickTool::Comment(tool) = cx.tool
         && is_drawing_tool(tool)
         && let Some(p) = cx.ptr.pos

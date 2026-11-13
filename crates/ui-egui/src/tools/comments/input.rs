@@ -418,6 +418,7 @@ impl Gestures<'_> {
         self.free && self.resp.clicked()
     }
 
+    /// Handles drawing gestures and cursor claiming for freehand brush and shape tools.
     fn draw_shape(&self, view: &mut DocView, tool: CommentTool) -> bool {
         // Shift holds a line level or plumb (ortho).
         let shift = self.resp.ctx.input(|i| i.modifiers.shift);
@@ -426,7 +427,7 @@ impl Gestures<'_> {
         if !cx.allowed {
             return false;
         }
-        if over_page || cv.gesture.is_some() {
+        if pointer.is_some_and(|p| ui.clip_rect().contains(p)) && (over_page || cv.gesture.is_some()) {
             let icon = if matches!(tool, CommentTool::Ink | CommentTool::FreehandHighlight | CommentTool::Eraser) {
                 egui::CursorIcon::None
             } else {
@@ -488,6 +489,7 @@ impl Gestures<'_> {
         true
     }
 
+    /// Handles multi-point clicks and cursor claiming for polygon, polyline, and connected line tools.
     fn click_points(&self, view: &mut DocView, tool: CommentTool) -> bool {
         // Shift holds the next side of connected lines, a polygon or a cloud level or plumb.
         let shift = self.resp.ctx.input(|i| i.modifiers.shift);
@@ -562,6 +564,7 @@ impl Gestures<'_> {
         true
     }
 
+    /// Handles dragging to place a callout pointer arrow and opening its text composer.
     fn callout(&self, view: &mut DocView) -> bool {
         let Self { resp, cx, pointer, origin, page_rect, pressed_here, over_page, .. } = *self;
         let cv = &mut view.comments;
@@ -600,6 +603,7 @@ impl Gestures<'_> {
         true
     }
 
+    /// Handles clicking to choose a location for file attachment annotations.
     fn attach(&self, view: &mut DocView) -> bool {
         let Self { cx, pointer, over_page, .. } = *self;
         let cv = &mut view.comments;
@@ -619,6 +623,7 @@ impl Gestures<'_> {
         true
     }
 
+    /// Handles clicking to insert a text replacement caret on the nearest text baseline.
     fn caret(&self, view: &mut DocView, caret_text: Option<&pdfcraft_render::PageText>) -> bool {
         let Self { cx, pointer, over_page, .. } = *self;
         let cv = &mut view.comments;
@@ -641,6 +646,7 @@ impl Gestures<'_> {
         true
     }
 
+    /// Handles clicking or dragging to place a sticky note or drawn text box.
     fn note_or_box(&self, view: &mut DocView, tool: CommentTool) -> bool {
         let Self { resp, cx, pointer, origin, page_rect, pressed_here, over_page, .. } = *self;
         let cv = &mut view.comments;
