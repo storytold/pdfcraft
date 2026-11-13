@@ -78,6 +78,30 @@ fn tess_section(points: &[[f64; 3]], normals: &[[f64; 3]], corners: &[(u32, u32)
     w.bytes()
 }
 
+/// A tessellation section of one `TESS_3D_Compressed` (authoring version 8137, origin 0,
+/// tolerance 0.5) whose normals are recalculated: the seed triangle `seed`, in tolerances
+/// [WD 7.8.9.7].
+fn compressed_section(seed: [i64; 9]) -> Vec<u8> {
+    let mut w = W::default();
+    w.uint(305).uint(0).bit(true).uint(1);
+    w.uint(173).bit(false).bit(true).double(0.5).put(0, 32).put(0, 32).put(0, 32);
+    // point_array: 4-bit sign-magnitude integers.
+    w.bit(false).uint(9);
+    seed.iter().for_each(|_| _ = w.put(4, 8));
+    seed.iter().for_each(|&p| _ = w.bit(p < 0).put(p.unsigned_abs(), 3));
+    // Three edge statuses, none set; one triangle on face 0; three slots, none a reference.
+    w.bit(false).uint(3).put(0, 24);
+    w.bit(false).uint(1).put(1, 8).bit(false);
+    w.uint(3).put(0, 3).uint(0);
+    // Normals recalculated; no colours or multiple line attributes; no style; no texture or
+    // behaviours.
+    w.bit(true).bit(false).double(0.5).put(0, 8).bit(false).bit(false);
+    w.bit(false).uint(0).bit(true).bit(false);
+    // The section's user data.
+    w.uint(0);
+    w.bytes()
+}
+
 /// A one-file-structure PRC stream whose tessellation section is `tess`, with no product tree.
 fn prc_file(tess: &[u8]) -> Vec<u8> {
     const HEADER_LEN: usize = 107;
@@ -131,6 +155,30 @@ fn a_synthetic_prc_renders_its_nearer_triangle_over_the_farther() {
     assert_eq!(pixel(&image, 20, 20), [190, 192, 200, 255], "the nearer triangle, lit head on");
     // Below the near triangle only the far one: 0.3 of the surface colour.
     assert_eq!(pixel(&image, 20, 34), [57, 58, 60, 255], "the farther triangle, lit edge on");
+}
+
+/// The seed (-1, -1, 0), (1, -1, 0), then the midpoint (0, -1, 0) raised by 2 to (0, 1, 0).
+const COMPRESSED_TRIANGLE: [i64; 9] = [-2, -2, 0, 4, 0, 0, 0, 4, 0];
+
+#[test]
+fn a_compressed_tessellation_is_rebuilt_and_rendered() {
+    let prc = PrcFile::parse(&prc_file(&compressed_section(COMPRESSED_TRIANGLE))).unwrap();
+    let meshes = assemble(&prc).unwrap();
+    assert_eq!(meshes.len(), 1);
+    assert_eq!(meshes[0].mesh.triangles.len(), 1);
+    let camera = Camera::fit_meshes(&meshes, [0.0, 0.0, -1.0], [0.0, 1.0, 0.0], false, 1.0).unwrap();
+    let image = render(&meshes, &camera, &RenderOptions { width: 40, height: 40, ..RenderOptions::default() }).unwrap();
+    assert_eq!(pixel(&image, 1, 1), [255, 255, 255, 255], "background corner");
+    assert_ne!(pixel(&image, 20, 24), [255, 255, 255, 255], "the triangle");
+}
+
+/// `model_render`'s end-to-end test embeds this builder's compressed triangle as hexadecimal;
+/// this keeps that fixture the builder's output.
+#[test]
+fn the_automation_fixture_is_the_compressed_triangle() {
+    let hex: String = prc_file(&compressed_section(COMPRESSED_TRIANGLE)).iter().map(|b| format!("{b:02x}")).collect();
+    let fixture = include_str!("../../automation/tests/it/model_render.rs");
+    assert!(fixture.contains(&format!("const COMPRESSED_TRIANGLE_PRC_HEX: &str = \"{hex}\";")), "{hex}");
 }
 
 #[test]
