@@ -1,4 +1,4 @@
-use super::{Args, Automation, Result, ToolError, Value, child, failed, json, write_atomic};
+use super::{Args, Automation, Result, ToolError, Value, child, failed, json, with_warnings, write_atomic};
 
 impl Automation {
     /// The settings every OCR tool shares: dpi, language, the engine/strategy choice, the four
@@ -164,6 +164,8 @@ impl Automation {
         }
         // The engines are built (and named if they cannot be) before the first file is read.
         let recognizers = pdfcraft_engine::ocr::recognizers(&settings).map_err(failed)?;
+        // Each file opens in its own session; it keeps this one's JavaScript preference.
+        let javascript = self.session.javascript();
         let mut out = Vec::new();
         let (mut ok, mut skipped_files, mut words) = (0usize, 0usize, 0usize);
         for p in paths {
@@ -171,7 +173,15 @@ impl Automation {
             let result =
                 self.resolve(p, false).map_err(|e| e.to_string()).and_then(|src| crate::read_input_bytes(&src).map_err(|e| e.to_string())).and_then(
                     |bytes| {
-                        pdfcraft_engine::ocr::recognize_file(&name, std::sync::Arc::new(bytes), None, settings.clone(), &recognizers, |_, _| true)
+                        pdfcraft_engine::ocr::recognize_file(
+                            &name,
+                            std::sync::Arc::new(bytes),
+                            None,
+                            settings.clone(),
+                            &recognizers,
+                            javascript,
+                            |_, _| true,
+                        )
                     },
                 );
             match result {
@@ -258,9 +268,10 @@ impl Automation {
         let recognizers = pdfcraft_engine::ocr::recognizers(&settings).map_err(failed)?;
         match out {
             None => {
-                let found = self.session.recognize_text(id, &pages, settings).map_err(failed)?;
+                let (found, out) = self.session.with_own_js_output(id, |s| s.recognize_text(id, &pages, settings)).map_err(failed)?;
+                let warnings = out.errors;
                 let words = found.iter().map(|p| p.words.len()).sum::<usize>();
-                Ok(json!({ "words": words, "pages": Self::ocr_pages_json(&found, copy) }))
+                Ok(with_warnings(json!({ "words": words, "pages": Self::ocr_pages_json(&found, copy) }), warnings))
             }
             Some(out) => {
                 let job = self.session.ocr_job(id, &pages, settings).ok_or_else(|| failed("the document could not be read"))?;

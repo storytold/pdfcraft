@@ -266,7 +266,8 @@ pub(crate) fn panel(
         let swatch = colour_button(ui, t, look.color);
         egui::Popup::menu(&swatch).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
             if let Some(picked) = crate::comments::swatch_grid(ui, Some(look.color)) {
-                look.color = picked;
+                // Drops a gray or CMYK ink the new colour isn't the look of (#6440).
+                look.set_color(picked);
                 ui.close();
             }
         });

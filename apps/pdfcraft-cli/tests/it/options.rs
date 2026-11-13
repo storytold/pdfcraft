@@ -113,3 +113,14 @@ fn an_argument_that_is_not_utf8_is_an_error_not_a_panic() {
         assert!(!stderr.contains("panicked"), "{stderr}");
     }
 }
+
+/// A file `check-one` cannot read is a record on stdout with its own status and the reason, which
+/// `check` relays, not an empty stdout that reads as a crash.
+#[test]
+fn check_one_reports_an_unreadable_file_as_a_record() {
+    let out = Command::new(BIN).args(["check-one", "missing.pdf"]).output().expect("run cli");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let record: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap_or_else(|e| panic!("{e}: {stdout:?}"));
+    assert_eq!(record["status"], "read-error");
+    assert!(record["detail"].as_str().is_some_and(|d| d.contains("missing.pdf")), "{record}");
+}

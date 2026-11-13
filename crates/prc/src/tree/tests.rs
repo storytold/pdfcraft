@@ -9,7 +9,7 @@ use crate::bits::{BitReader, Budget};
 use crate::entity::Ctx;
 use crate::tess::tests::two_face_square;
 use crate::testw::W;
-use crate::{PrcError, PrcFile, Rgba, Schema, Tessellation, TriangleMesh, UniqueId};
+use crate::{ModelUnits, PrcError, PrcFile, Rgba, Schema, Tessellation, TriangleMesh, UniqueId};
 
 const RED: Rgba = Rgba { r: 1., g: 0., b: 0., a: 1. };
 const GREEN: Rgba = Rgba { r: 0., g: 1., b: 0., a: 1. };
@@ -274,10 +274,15 @@ fn ref_faces(brep: (u32, u32), faces: &[u32], g: (u32, u16)) -> W {
 
 /// A model file (schema included) whose roots are `(file structure, biased occurrence)`.
 fn model(roots: &[(usize, u32)]) -> W {
+    model_in(roots, false, 1.)
+}
+
+/// [`model`] with its unit: whether it is the CAD file's, and millimetres per unit.
+fn model_in(roots: &[(usize, u32)], from_cad_file: bool, units_in_mm: f64) -> W {
     let mut w = W::default();
     w.uint(0).uint(301);
     base(&mut w, None);
-    w.bit(false).double(1.).uint(len(roots.len()));
+    w.bit(from_cad_file).double(units_in_mm).uint(len(roots.len()));
     for &(fs, index) in roots {
         for v in fs_id(fs).0 {
             w.uint(v);
@@ -389,6 +394,22 @@ fn a_parsed_assembly_places_names_and_colours_each_occurrence() {
             (Some("B"), NameSource::Occurrence, Some(0), 1, 1..2),
         ]
     );
+}
+
+#[test]
+fn the_model_file_gives_the_unit_and_whether_it_is_assumed() {
+    let fs = || Fs { globals: palette(), tree: tree(&[plate(S_RED)], &[Occ::default()]), tess: two_face_square() };
+    let units = |model: W| PrcFile::parse(&prc(&[fs()], &model)).unwrap().units();
+    let unit = |mm_per_unit, from_cad_file| Some(ModelUnits { mm_per_unit, from_cad_file });
+    assert_eq!(units(model(&[(0, 1)])).unwrap(), unit(1., false));
+    assert_eq!(units(model_in(&[(0, 1)], true, 25.4)).unwrap(), unit(25.4, true));
+    for bad in [0., -1., f64::NAN, f64::INFINITY] {
+        assert_eq!(units(model_in(&[(0, 1)], true, bad)).unwrap(), None, "{bad}");
+    }
+    assert_eq!(units(W::default()).unwrap(), None);
+    let mut not_a_model = W::default();
+    not_a_model.uint(0).uint(302);
+    assert!(units(not_a_model).is_err());
 }
 
 #[test]
