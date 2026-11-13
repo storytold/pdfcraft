@@ -5,6 +5,7 @@
 //! sign with, a key usage or extended key usage that doesn't allow signing documents) are reported in [`Listing::unusable`] with the reason rather than left out
 //! silently, so a missing identity can be explained (issue #179).
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use rustls_cng::cert::CertContext;
@@ -116,6 +117,7 @@ fn entries() -> Result<Entries, SignError> {
         .map_err(|e| SignError::Crypto(format!("the Windows Current User Personal store couldn't be opened: {}", describe(&e))))?;
     let contexts =
         store.find_all().map_err(|e| SignError::Crypto(format!("the Windows certificate store couldn't be searched: {}", describe(&e))))?;
+    let friendly_names = friendly_names();
     let mut ids = Vec::new();
     let mut unusable = Vec::new();
     for context in contexts {
@@ -170,10 +172,23 @@ fn entries() -> Result<Entries, SignError> {
         }
         let public = certificate.public_key.clone();
         let key = PrivateKey::external(public.clone(), Arc::new(WindowsKey { context: context.clone(), public }));
-        let friendly_name = Some(certificate.display_name());
+        // The store's Friendly Name: a card or token's middleware (PostSignum, for one) sets it
+        // on import, and certificates from one issuer share a subject, so the picker shows it
+        // beside the subject (issue #7232). `None` when the store holds no Friendly Name.
+        let friendly_name = friendly_names.get(&certificate.raw).cloned().flatten();
         ids.push((context, DigitalId { key, certificate, chain: Vec::new(), friendly_name }));
     }
     Ok(Entries { ids, unusable })
+}
+
+/// The Friendly Name the store holds for each certificate (CERT_FRIENDLY_NAME_PROP_ID), which
+/// a card or token's middleware sets on import. rustls-cng doesn't expose the property, so the
+/// store is read once more through schannel and its certificates matched to the ones above by
+/// the DER. Best effort: a store that can't be opened or a property that can't be read is no
+/// Friendly Name, and the picker falls back to the subject (issue #7232).
+fn friendly_names() -> HashMap<Vec<u8>, Option<String>> {
+    let Ok(store) = schannel::cert_store::CertStore::open_current_user("My") else { return HashMap::new() };
+    store.certs().map(|c| (c.to_der().to_vec(), c.friendly_name().ok().filter(|n| !n.is_empty()))).collect()
 }
 
 /// Whether the store's key is what the certificate needs (RSA; ECDSA on its curve).

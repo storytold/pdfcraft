@@ -285,6 +285,20 @@ pub fn entry_for(path: &str, c: &Certificate) -> DigitalIdEntry {
     }
 }
 
+/// The name a store identity shows in the picker: the store's Friendly Name beside the
+/// subject ("Jane Smith · Company A"), so certificates that one issuer made for several
+/// employers — the same subject for all — stay apart (issue #7232). Without a Friendly
+/// Name, or when it says the subject again, the name is the subject's, as before.
+/// The helper runs everywhere so the naming can be tested without a store.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn display_name_for(c: &Certificate, friendly_name: Option<&str>) -> String {
+    let subject = c.display_name();
+    match friendly_name.filter(|n| !n.trim().is_empty() && *n != subject) {
+        Some(name) => format!("{name} · {subject}"),
+        None => subject,
+    }
+}
+
 /// A greyed entry for a Windows store certificate that can't sign, with the reason.
 #[cfg(target_os = "windows")]
 fn entry_unusable(u: &sign::windows::Unusable) -> DigitalIdEntry {
@@ -394,7 +408,11 @@ impl PdfCraftApp {
             match sign::windows::list() {
                 Ok(listing) => {
                     for id in &listing.ids {
-                        self.digital_ids.push(entry_for(&sign::windows::reference(&id.certificate), &id.certificate));
+                        let mut entry = entry_for(&sign::windows::reference(&id.certificate), &id.certificate);
+                        // The store's Friendly Name beside the subject, so identities from one
+                        // issuer that share a subject stay apart (issue #7232).
+                        entry.name = display_name_for(&id.certificate, id.friendly_name.as_deref());
+                        self.digital_ids.push(entry);
                     }
                     // Certificates without a private key aren't identities; the rest are shown
                     // greyed with why they can't sign (issue #179).
@@ -1129,5 +1147,79 @@ mod tests {
         assert_eq!(import_app.finish_signing(), Ok(()));
         assert!(out_pdf.exists());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A self-signed certificate that says `cn` and, when given, `organization`.
+    fn one_cert(cn: &str, organization: &str) -> Certificate {
+        let key = PrivateKey::generate_p256().unwrap();
+        Certificate::self_signed(&Name::build(cn, "", organization, "", ""), &key, sign::Time::from_unix(0), 1, &[1]).unwrap()
+    }
+
+    #[test]
+    fn two_certificates_with_one_subject_stay_apart_by_friendly_name() {
+        // Several certificates from one issuer share a subject (PostSignum's do) and are then
+        // only told apart by their expiration; the store's Friendly Name, one per employer,
+        // goes beside the subject (issue #7232).
+        let cert = one_cert("PostSignum", "PostSignum s.r.o.");
+        let a = display_name_for(&cert, Some("Company A"));
+        let b = display_name_for(&cert, Some("Company B"));
+        assert_eq!(a, "Company A · PostSignum");
+        assert_eq!(b, "Company B · PostSignum");
+        assert_ne!(a, b, "the picker tells them apart");
+    }
+
+    #[test]
+    fn a_friendly_name_that_says_the_subject_again_adds_nothing() {
+        let cert = one_cert("Grace Hopper", "");
+        assert_eq!(display_name_for(&cert, Some("Grace Hopper")), "Grace Hopper", "no \"Grace Hopper · Grace Hopper\"");
+        assert_eq!(display_name_for(&cert, Some(" ")), "Grace Hopper", "an empty Friendly Name is none");
+        assert_eq!(display_name_for(&cert, None), "Grace Hopper");
+    }
+
+    #[test]
+    fn without_a_friendly_name_the_name_is_the_certificate_s_as_before() {
+        // What the picker showed before the store's Friendly Name was read stays: the common
+        // name, else the organization (fallback only).
+        assert_eq!(display_name_for(&one_cert("Grace Hopper", "PostSignum s.r.o."), None), "Grace Hopper");
+        assert_eq!(display_name_for(&one_cert("", "PostSignum s.r.o."), None), "PostSignum s.r.o.");
+    }
+
+    /// The picker rows as the Windows branch lists them: the store's Friendly Name beside the
+    /// subject in each row, and a name any length cut at the row's edge, shown whole on hover.
+    #[test]
+    fn the_picker_shows_the_friendly_name_beside_the_subject_and_says_it_whole_on_hover() {
+        use egui_kittest::{Harness, kittest::Queryable};
+
+        let cert = one_cert("PostSignum", "PostSignum s.r.o.");
+        let long_friendly = "A very long company name, the one its middleware set on import. ".repeat(3);
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        for friendly in ["Company A", "Company B", long_friendly.as_str()] {
+            let mut entry = entry_for("windows:abc", &cert);
+            entry.name = display_name_for(&cert, Some(friendly));
+            app.digital_ids.push(entry);
+        }
+        let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(move |_| {
+            let mut draft = SignDraft::new(0, None, None, None, &app.digital_ids);
+            draft.step = SignStep::Choose;
+            app.sign_draft = Some(draft);
+            app.dialog = Some(crate::Dialog::Sign);
+            app
+        });
+        h.run_steps(2);
+
+        // Two certificates that say the same subject stay apart: one row per Friendly Name.
+        let a = h.get_by_label_contains("Company A · PostSignum");
+        let b = h.get_by_label_contains("Company B · PostSignum");
+        assert_ne!(a.rect(), b.rect(), "two rows, not one");
+
+        // The long name is cut at the row's edge; the tooltip says it whole, beside the subject.
+        let long = format!("{long_friendly} · PostSignum");
+        let row = h.get_by_label_contains(long.as_str()).rect();
+        h.hover_at(row.center());
+        // Well past egui's tooltip delay (0.5 s; a kittest step simulates 0.25 s).
+        h.run_steps(4);
+        let whole = format!("{long}\n");
+        assert!(h.query_by_label_contains(whole.as_str()).is_some(), "the whole name in the tooltip");
     }
 }
