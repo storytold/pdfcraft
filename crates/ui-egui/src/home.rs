@@ -3,6 +3,7 @@
 
 use egui::{Align2, CornerRadius, Rect, Sense, Stroke, vec2};
 use pdfcraft_engine::catalog;
+use pdfcraft_render::text::fold_case;
 
 use crate::theme::{self, Tokens};
 use crate::{PdfCraftApp, icons, panels::human_size, widgets};
@@ -222,14 +223,14 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     ui.add_space(8.0);
                 }
             }
-            let query = app.recent_query.to_lowercase();
+            let query = fold_case(&app.recent_query);
             let mut matched = false;
             let mut open = None;
             let mut remove = None;
             #[cfg(not(target_arch = "wasm32"))]
             let mut reveal = None;
             // Filter before limiting: an older retained file must still be searchable.
-            for r in app.recent.iter().filter(|r| query.is_empty() || r.name.to_lowercase().contains(&query)).take(app.recent_limit) {
+            for r in app.recent.iter().filter(|r| query.is_empty() || fold_case(&r.name).contains(&query)).take(app.recent_limit) {
                 matched = true;
                 let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 46.0), Sense::click());
                 resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &r.name));

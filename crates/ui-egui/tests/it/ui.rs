@@ -212,6 +212,23 @@ fn home_recent_search_filters_before_limiting_clears_and_opens_the_result() {
 }
 
 #[test]
+fn home_recent_search_folds_normal_and_final_greek_sigma() {
+    let mut h = harness(|app| {
+        for name in ["οδηγός.pdf", "notes.pdf"] {
+            app.recent.push(pdfcraft_ui_egui::RecentFile { name: name.into(), path: format!("/synthetic/{name}"), pages: 1, size: 0 });
+        }
+    });
+    let mut found = Vec::new();
+    for query in ["Σ", "σ", "ς"] {
+        replace_recent_search(&mut h, query);
+        assert_eq!(h.state().recent_query, query, "the real text event reaches the field");
+        found.push(h.query_by_label("οδηγός.pdf").is_some());
+        assert!(h.query_by_label("notes.pdf").is_none());
+    }
+    assert_eq!(found, [true, true, true], "uppercase, normal and final sigma must all find the final-sigma filename");
+}
+
+#[test]
 fn home_recent_search_is_hidden_without_recent_files() {
     let mut h = harness(|_| {});
     assert!(h.query_by_label("Search recent files").is_none());
