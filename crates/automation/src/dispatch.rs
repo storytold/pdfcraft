@@ -53,6 +53,7 @@ impl Automation {
         tools::check_args(def, args)?;
         let a = Args(args);
         let out = match name {
+            "invoice_calculate" => self.invoice_calculate(&a)?,
             "doc_bates_multi" => self.doc_bates_multi(&a)?,
             "doc_open" => self.doc_open(&a)?,
             "doc_batch" => self.doc_batch(&a)?,

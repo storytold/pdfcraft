@@ -373,6 +373,7 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
   Synthetic measurement and optimization regressions cover direct and indirect units and page-local defaults.
   Estimates unchanged.
 - **2026-10-23 (M10, Word table widths):** Word export sizes each cell from the grid columns it spans, keeping unequal columns and cells after a merged cell consistent with the table grid.
+- **2026-10-23 (M10, invoice foundation):** Adds bounded EUR/DE draft arithmetic through the engine and invoice_calculate; XML/PDF export and standards validation remain unimplemented. Estimates unchanged.
 - **2026-10-23 (M10, table continuation text):** Office exporters retain text from table slots covered by another cell's span as paragraph text.
   Synthetic regressions check every input fragment survives exactly once in Word, HTML, RTF and PowerPoint, while ordinary superscripts stay in their table cells.
 - **2026-10-23 (M10, image export):** Soft-mask Decode intervals preserve partial opacity in Export all images and Save Image As.

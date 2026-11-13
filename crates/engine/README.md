@@ -3,6 +3,10 @@
 The façade every frontend talks to. It holds the open documents, their edit history and the tool
 catalogue; frontends never reach past it into the parsing, rendering or editing crates.
 
+`invoice::calculate` exposes a read-only invoice draft arithmetic preview. This is
+a limited EUR/DE foundation with no XML/PDF export or standards validation; see
+[invoice drafts](../../docs/invoice-drafts.md).
+
 `word_count::count` provides cancellable, page-at-a-time Unicode word and character statistics
 with optional semantic exclusions; see [word-count behavior and limits](../../docs/word-count.md).
 

@@ -35,6 +35,7 @@ craft-docpath = { version = "0.1.0", git = "https://github.com/storytold/craft-l
 craft-update = { git = "https://github.com/storytold/craft-libs", version = "=0.1.0", rev = "6e03f65bf45181db77ba6229716e6624db9eb25b", features = ["egui"] }
 # internal
 pdfcraft-geom = { path = "crates/geom", version = "0.21.0" }
+pdfcraft-invoice = { path = "crates/invoice", version = "0.21.0" }
 pdfcraft-filters = { path = "crates/filters", version = "0.21.0" }
 pdfcraft-cos = { path = "crates/cos", version = "0.21.0" }
 pdfcraft-crypt = { path = "crates/crypt", version = "0.21.0" }

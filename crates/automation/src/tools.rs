@@ -91,6 +91,26 @@ fn language_enum() -> Value {
     Value::Array(pdfcraft_engine::ocr::LANGUAGES.iter().map(|(code, _)| json!(code)).collect())
 }
 
+/// Describe the narrow draft subset to CLI/MCP clients; the handler separately
+/// enforces nested limits, numeric grammar and semantic checks at runtime.
+fn invoice_draft() -> Value {
+    let text = json!({"type":"string", "maxLength":1024});
+    let decimal = json!({"type":"string", "maxLength":19, "pattern":"^[0-9]{1,12}(\\.[0-9]{1,6})?$"});
+    let party = schema(json!({"name":text, "country_code":{"type":"string", "enum":["DE"]}}), &["name", "country_code"]);
+    let line = schema(
+        json!({"description":text, "quantity":decimal, "unit_price":decimal, "vat_rate":decimal}),
+        &["description", "quantity", "unit_price", "vat_rate"],
+    );
+    schema(
+        json!({
+            "number":text, "issue_date":{"type":"string", "format":"date", "maxLength":10},
+            "currency":{"type":"string", "enum":["EUR"]}, "seller":party, "buyer":party,
+            "lines":{"type":"array", "minItems":1, "maxItems":1000, "items":line}
+        }),
+        &["number", "issue_date", "currency", "seller", "buyer", "lines"],
+    )
+}
+
 struct T {
     name: &'static str,
     title: &'static str,
@@ -135,6 +155,9 @@ pub fn tools() -> Vec<ToolDef> {
     let save_out = json!({ "type": "string", "description": "File to write. Omit to open the result as a new unsaved document instead." });
     let open = json!({ "type": "boolean", "description": "Also open the result as a new document (default: only when out is omitted)." });
     vec![
+        t("invoice_calculate", "Calculate an invoice draft", "Read-only arithmetic preview for EUR drafts with DE seller/buyer, positive quantities, non-negative unit prices and standard-rated VAT above 0 up to 100% (at most 2 fractional places). Numbers must be decimal strings, not JSON numbers. Round each line net half-up to cents, then round VAT per rate group. Returns field issues and optional totals. No EN 16931, XRechnung, ZUGFeRD, legal or tax validation is performed; no XML/PDF is generated. Unsupported adjustments, credits and exemptions must not be omitted from an input invoice to make it fit. Does not read files or change open documents.")
+            .ro()
+            .with(schema(json!({"draft":invoice_draft()}), &["draft"])),
         t("doc_bates_multi", "Add Bates numbering across files", "Apply one consecutive Bates sequence to an ordered list of PDFs. Each file entry has input and output paths and an optional open or permissions password. The operation first validates every input/output and computes inclusive numeric intervals; dry_run returns that allocation without writing. Existing output files are never replaced. On application, files that cannot be edited or saved are reported individually and later files continue.")
             .destructive()
             .with(schema(json!({
