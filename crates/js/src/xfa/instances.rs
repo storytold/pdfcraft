@@ -147,12 +147,23 @@ fn subtree_bytes(h: &XHost, src: usize, depth: usize) -> usize {
 }
 
 /// The children a copy of their parent takes: the live ones, and of a repeating subform its
-/// first instance only (the later ones follow it under the same name). Which instance is the
-/// first is told by the order, not by its number: a subform's first instance is numbered after
-/// the same-named objects before it in its SOM scope, which need not be 0.
+/// first instance only (the later ones follow it under the same name). The first instance is
+/// the first of its name by the order (a named subform's first instance is numbered after the
+/// same-named objects before it in its SOM scope, which need not be 0), or one numbered 0: an
+/// unnamed subform's first instance always is, so each of several unnamed repeating subforms
+/// is copied, though they share the name scripts see them under.
 fn copied_children(h: &XHost, kids: &[usize]) -> Vec<usize> {
     let mut repeating: HashSet<&str> = HashSet::new();
-    kids.iter().copied().filter(|&k| h.nodes.get(k).is_some_and(|c| !c.gone && (!c.repeatable || repeating.insert(&c.name)))).collect()
+    let mut copied = Vec::new();
+    for &k in kids {
+        let Some(c) = h.nodes.get(k).filter(|c| !c.gone) else { continue };
+        // Its name is recorded whatever its number, so a later instance is told from the first.
+        let first_of_its_name = !c.repeatable || repeating.insert(&c.name);
+        if first_of_its_name || c.index == 0 {
+            copied.push(k);
+        }
+    }
+    copied
 }
 
 /// A copy of `src`'s subtree (values cleared, properties the template's) under `parent`,

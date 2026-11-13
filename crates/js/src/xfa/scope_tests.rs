@@ -308,3 +308,29 @@ fn a_copy_takes_the_first_instance_of_a_nested_subform_numbered_past_zero() {
     assert_eq!(o.error, None, "{o:?}");
     assert_eq!(o.result.as_deref(), Some("2/form1[0].row[1].item[0]/form1[0].row[1].item[1]"));
 }
+
+/// A copy takes the first instance of every unnamed repeating subform in it: scripts see them
+/// all under one name, and each one's first instance is number 0.
+#[test]
+fn a_copy_takes_each_unnamed_repeating_subform_in_it() {
+    let part = |index: usize, name: &str| XfaNode {
+        repeatable: true,
+        occur_min: 1,
+        occur_max: None,
+        index,
+        ..unnamed("#subform", XfaKind::Subform, "form1[0].row[0]", vec![field(name, &format!("form1[0].row[0].{name}[{index}]"), index, "")])
+    };
+    let root = subform(
+        "form1",
+        "form1[0]",
+        0,
+        vec![row(0, true, "10", vec![part(0, "a"), part(1, "a"), part(0, "b")]), field("go", "form1[0].go[0]", 0, "")],
+    );
+    let o = js(
+        &root,
+        "var r = _row.addInstance(1); [r.resolveNodes('a[*]').length, r.resolveNodes('b[*]').length, r.resolveNode('b').somExpression].join('/')",
+        "form1[0].go[0]",
+    );
+    assert_eq!(o.error, None, "{o:?}");
+    assert_eq!(o.result.as_deref(), Some("1/1/form1[0].row[1].b[0]"));
+}
