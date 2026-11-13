@@ -262,9 +262,9 @@ fn file_drop(ui: &mut egui::Ui, t: &Tokens, view: &mut crate::DocView, rows: &[R
     }
 }
 
-/// Queue deleting the selection (or the current page) of a document of `n` pages, unless that
-/// would leave no page. The selection goes; the current page stays on the page it showed, or on
-/// the page that follows the deleted ones.
+/// Ask before deleting the selection (or the current page) of a document of `n` pages, unless
+/// that would leave no page. The pages are captured now; the current page and the selection
+/// change only when the confirmation deletes them.
 fn delete_pages(view: &mut crate::DocView, n: usize) {
     let mut pages = view.target_pages();
     pages.sort_unstable();
@@ -272,12 +272,7 @@ fn delete_pages(view: &mut crate::DocView, n: usize) {
     if pages.is_empty() || pages.len() >= n {
         return;
     }
-    // Deleted pages before it shift it up; if it was deleted itself, the page after the deleted
-    // run lands where it was (or the last page, when the deletion ran to the end).
-    let before = pages.iter().filter(|p| **p < view.current).count();
-    view.current = view.current.saturating_sub(before).min(n.saturating_sub(pages.len() + 1));
-    view.clear_page_selection(None);
-    view.pending_edit = Some(pdfcraft_engine::Edit::DeletePages { pages });
+    view.pending_action = Some(crate::canvas::ViewAction::ConfirmDeletePages(pages));
 }
 
 /// The gap (0 = before the first page, n = after the last) the pointer points at in the Pages

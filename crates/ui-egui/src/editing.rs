@@ -578,12 +578,9 @@ impl PdfCraftApp {
                     self.lock_signatures_now(id);
                 }
             }
-            /// The canvas right-click menu asked before deleting a page: open the confirmation
-            /// dialog, which queues the edit when confirmed.
-            Some(crate::canvas::ViewAction::ConfirmDeletePages) => {
-                let pages = self.views.get(i).map(|v| v.target_pages()).unwrap_or_default();
-                self.request_delete_pages(i, pages);
-            }
+            // The panel asked before deleting pages: open the confirmation dialog, which queues
+            // the edit when confirmed.
+            Some(crate::canvas::ViewAction::ConfirmDeletePages(pages)) => self.request_delete_pages(i, pages),
             Some(crate::canvas::ViewAction::CameraNext(command)) => {
                 self.leave_camera(i);
                 self.execute(command);

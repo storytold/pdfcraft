@@ -6211,6 +6211,9 @@ fn pages_panel_escape_clears_and_deleted_pages_leave_the_selection() {
     h.state_mut().views[0].select_pages(&[3, 4]);
     assert!(h.state_mut().execute("page.delete"));
     h.run_steps(3);
+    // The command's ask opens the dialog; Delete confirms the deletion.
+    h.get_by_label("Delete").click();
+    h.run_steps(3);
     assert_eq!(page_texts(h.state()).len(), 3);
     assert!(picked(&h).iter().all(|p| *p < 3), "{:?}", picked(&h));
 }
@@ -6310,6 +6313,9 @@ fn deleting_pages_from_the_pages_panel_menu() {
     let at = panel_thumb(&h, "Page 2");
     right_click_at(&mut h, at);
     h.get_by_label("Delete pages").click();
+    h.run_steps(3);
+    // The ask opens the dialog; Delete confirms the deletion.
+    h.get_by_label("Delete").click();
     h.run_steps(4);
     assert_eq!(page_texts(h.state()), ["Page 1", "Page 3", "Page 4"]);
     assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_undo(), Some("Delete page"));
@@ -6345,6 +6351,9 @@ fn the_delete_key_deletes_pages_picked_in_the_pages_panel_but_never_every_page()
     h.run_steps(1);
     h.key_press(Key::Delete);
     h.run_steps(4);
+    // The ask opens the dialog; Delete confirms the deletion of pages 2 and 3.
+    h.get_by_label("Delete").click();
+    h.run_steps(3);
     assert_eq!(page_texts(h.state()), ["Page 1"]);
     assert_eq!(h.state().views[0].current, 0);
 }
@@ -8082,6 +8091,9 @@ fn delete_with_the_pointer_on_the_pages_panel_deletes_a_page() {
     h.hover_at(egui::pos2(viewport.right() + 60.0, viewport.center().y));
     h.run_steps(2);
     h.key_press(egui::Key::Delete);
+    h.run_steps(4);
+    // The ask opens the dialog; Delete confirms the page goes.
+    h.get_by_label("Delete").click();
     h.run_steps(4);
     assert_eq!(h.state().session.get(id).unwrap().info.pages.len(), pages - 1, "a page goes");
 }

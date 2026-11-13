@@ -2680,6 +2680,9 @@ fn the_pages_panel_tools_act_on_the_selected_pages() {
     h.state_mut().views[0].select_pages(&[0]);
     h.run_steps(2);
     tool(&mut h, "Delete the selected pages");
+    // The panel's ask opens the dialog; Delete confirms the deletion.
+    h.get_by_label("Delete").click();
+    h.run_steps(3);
     assert_eq!(h.state().session.get(id).unwrap().info.pages.len(), 2, "page 1 deleted");
     tool(&mut h, "Insert a blank page after the selection");
     assert_eq!(h.state().session.get(id).unwrap().info.pages.len(), 3);
