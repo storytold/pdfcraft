@@ -935,7 +935,7 @@ mod xfa_model {
 
     /// A calculate script finds its siblings by name and yields its last expression, and a
     /// value it sets comes back as an effect.
-    /// An unnamed subform is transparent to SOM names (XFA 3.3 p. 105): its children are reached as their parent's, by name
+    /// An unnamed subform is transparent to SOM names (XFA 3.3 p. 94): its children are reached as their parent's, by name
     /// in scope, through the parent and through resolveNode, a repeated one with its instance manager, while `nodes` still
     /// lists the unnamed subform itself.
     #[test]

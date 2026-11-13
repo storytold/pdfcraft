@@ -68,7 +68,7 @@ fn value_js(h: &HNode) -> JsValue {
     s(&h.value)
 }
 
-/// The live children of `parent` as SOM names see them: an unnamed container is transparent (XFA 3.3 p. 105), its children
+/// The live children of `parent` as SOM names see them: an unnamed container is transparent (XFA 3.3 p. 94), its children
 /// counted as `parent`'s, after the container itself.
 pub(crate) fn visible_children(h: &XHost, parent: usize) -> Vec<usize> {
     let mut out = Vec::new();
