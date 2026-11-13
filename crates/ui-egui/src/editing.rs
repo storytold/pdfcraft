@@ -444,6 +444,12 @@ impl PdfCraftApp {
                     view.comments.selected = None;
                     view.comments.history_stepped();
                 }
+                // A question about a value the step took back has nothing left to ask, and a
+                // further step could give its field's name to another kept value.
+                if self.pending_calc_overrides.iter().any(|(d, ..)| *d == id) {
+                    let session = &self.session;
+                    self.pending_calc_overrides.retain(|(d, f, _)| *d != id || session.calculation_overridden(id, f));
+                }
                 if label == (Edit::ApplyRedactions { pages: None }).label() {
                     let view = &mut self.views[i];
                     let (applied, undone) = (view.redactions_applied, view.redactions_undone_after_save);

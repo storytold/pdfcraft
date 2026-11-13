@@ -10,7 +10,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use crate::model::{Area, Border, Common, Draw, ExclGroup, Field, Node, Prop, Props, Subform, Value};
+use crate::model::{Area, Common, Draw, ExclGroup, Field, Node, Prop, Props, Subform, Value};
 use crate::prop_rules;
 
 /// Most property changes one form keeps, as many as it keeps presence or access changes. Of the
@@ -465,33 +465,6 @@ pub(crate) fn restyled_common(c: &Common, sets: &BTreeMap<String, String>) -> Co
         Node::Area(a) => a.common,
         // `restyle` keeps the node's kind.
         other => other.common().clone(),
-    }
-}
-
-/// The border of an object whose common properties are `c`, with the changes `sets` applied.
-pub(crate) fn restyled_border(c: &Common, sets: &BTreeMap<String, String>) -> Option<Border> {
-    restyled_common(c, sets).border
-}
-
-/// Draw `d` with the changes `sets` applied (see [`restyle`]).
-pub(crate) fn restyled_draw(d: &Draw, sets: &BTreeMap<String, String>) -> Draw {
-    let mut n = Node::Draw(Box::new(d.clone()));
-    restyle(&mut n, sets);
-    match n {
-        Node::Draw(d) => *d,
-        // `restyle` keeps the node's kind.
-        _ => d.clone(),
-    }
-}
-
-/// Exclusion group `g` with the changes `sets` applied (see [`restyle`]).
-pub(crate) fn restyled_group(g: &ExclGroup, sets: &BTreeMap<String, String>) -> ExclGroup {
-    let mut n = Node::ExclGroup(Box::new(g.clone()));
-    restyle(&mut n, sets);
-    match n {
-        Node::ExclGroup(g) => *g,
-        // `restyle` keeps the node's kind.
-        _ => g.clone(),
     }
 }
 

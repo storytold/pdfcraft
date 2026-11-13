@@ -1,8 +1,9 @@
-use std::borrow::Cow;
+use std::rc::Rc;
 
 use super::common::clamp_opt;
 use super::draw::SIZED;
 use super::field::auto_check_reserve;
+use super::restyled::{Leaf, Own};
 use super::{
     Access, Area, Common, Ctx, ExclGroup, Face, Field, Font, Layout, Layouter, MAX_DEPTH, MAX_MEASURES, Measured, Node, Para, Placement, Rect,
     SomIndices, Subform, Ui, Value, data_path, text,
@@ -21,14 +22,8 @@ impl Layouter<'_> {
     pub(super) fn size_at(&self, node: &Node, avail_w: f64, ctx: &Ctx, depth: usize, index: usize) -> (f64, f64) {
         // A field or draw is measured as its instance's property changes leave it, as it is then
         // drawn (a font size set on a later row's field makes that row taller).
-        let restyled;
-        let node = match self.restyled_leaf(node, ctx, index) {
-            Some(n) => {
-                restyled = n;
-                &restyled
-            }
-            None => node,
-        };
+        let restyled = self.restyled_leaf(node, ctx, index);
+        let node = restyled.as_deref().unwrap_or(node);
         let c = node.common();
         let spent = self.measures.get().saturating_add(1);
         self.measures.set(spent);
@@ -63,7 +58,7 @@ impl Layouter<'_> {
         // the measurement is looked up first; an instance with changes of its own is measured
         // on its own (`changes_within`).
         let own_common = match node {
-            Node::Subform(_) | Node::Area(_) => Some(self.own(c, ctx, index, SIZED)).filter(|o| matches!(o, Cow::Owned(_))),
+            Node::Subform(_) | Node::Area(_) => Some(self.own(c, ctx, index, SIZED)).filter(|o| matches!(o, Own::Changed(_))),
             _ => None,
         };
         let (c, own) = match &own_common {
@@ -82,8 +77,9 @@ impl Layouter<'_> {
 
     /// Field, draw or exclusion group `node`, instance `index` under `ctx`, with the property
     /// changes scripts made to that instance that change how it is drawn; `None` when there are
-    /// none (or it is none of those), so it is measured as it is.
-    fn restyled_leaf(&self, node: &Node, ctx: &Ctx, index: usize) -> Option<Node> {
+    /// none (or it is none of those), so it is measured as it is. The reading is the one it is
+    /// then drawn from ([`Self::restyled`]).
+    fn restyled_leaf(&self, node: &Node, ctx: &Ctx, index: usize) -> Option<Rc<Node>> {
         let sets = match node {
             Node::Field(f) => self.changes_of(&f.common, ctx, index, Some("field"))?,
             Node::Draw(d) => self.changes_of(&d.common, ctx, index, None)?,
@@ -94,10 +90,10 @@ impl Layouter<'_> {
             return None;
         }
         match node {
-            Node::Field(f) => Some(Node::Field(Box::new(crate::restyle::restyled_field(f, sets)))),
-            Node::Draw(d) => Some(Node::Draw(Box::new(crate::restyle::restyled_draw(d, sets)))),
+            Node::Field(f) => Some(self.restyled(Leaf::Field(f), sets)),
+            Node::Draw(d) => Some(self.restyled(Leaf::Draw(d), sets)),
             // A group is drawn restyled whole (its margins, its font), so it is measured so too.
-            Node::ExclGroup(g) => Some(Node::ExclGroup(Box::new(crate::restyle::restyled_group(g, sets)))),
+            Node::ExclGroup(g) => Some(self.restyled(Leaf::Group(g), sets)),
             _ => None,
         }
     }

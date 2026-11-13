@@ -1,8 +1,8 @@
-use std::borrow::Cow;
 use std::collections::BTreeMap;
 
 use super::common::clean_name;
 use super::items::{Item, Rounded, Turned};
+use super::restyled::{Leaf, Own, occur_with};
 use super::{
     Arc, Border, Common, Ctx, Draw, ExclGroup, Face, Field, FillKind, Font, Hatch, Layout, Layouter, MAX_DEPTH, MAX_IMAGE_BYTES, Node, Occur, Para,
     Rect, Side, SomIndices, Stroke, Subform, Value, XfaError, data_path, text,
@@ -93,19 +93,28 @@ impl Layouter<'_> {
     /// template's when there are none. An object with one instance took its changes in the
     /// template already ([`crate::script::apply_overrides_split`]); the instances of a
     /// repeating subform, and what they hold, keep theirs here, each its own.
-    pub(super) fn own<'a>(&self, c: &'a Common, ctx: &Ctx, sib: usize, roots: &[&str]) -> Cow<'a, Common> {
+    pub(super) fn own<'a>(&self, c: &'a Common, ctx: &Ctx, sib: usize, roots: &[&str]) -> Own<'a> {
         match self.changes_of(c, ctx, sib, None) {
-            Some(sets) => own_from(c, sets, roots),
-            None => Cow::Borrowed(c),
+            Some(sets) => self.own_from(c, sets, roots),
+            None => Own::Template(c),
         }
     }
 
     /// [`Self::own`] for the instance whose own SOM path is `som`. An unnamed container shares
     /// its parent's path, so it has no changes of its own.
-    pub(super) fn own_at<'a>(&self, c: &'a Common, som: &str, roots: &[&str]) -> Cow<'a, Common> {
+    pub(super) fn own_at<'a>(&self, c: &'a Common, som: &str, roots: &[&str]) -> Own<'a> {
         match self.props.get(som).filter(|_| c.name.is_some()) {
-            Some(sets) => own_from(c, sets, roots),
-            None => Cow::Borrowed(c),
+            Some(sets) => self.own_from(c, sets, roots),
+            None => Own::Template(c),
+        }
+    }
+
+    /// `c` with the changes of `sets` in the groups `roots` names applied, read once in this
+    /// layout ([`Self::restyled_common`]); `c` itself when there are none.
+    fn own_from<'a>(&self, c: &'a Common, sets: &BTreeMap<String, String>, roots: &[&str]) -> Own<'a> {
+        match taken(sets, roots) {
+            Some(t) => Own::Changed(self.restyled_common(c, &t)),
+            None => Own::Template(c),
         }
     }
 
@@ -114,7 +123,11 @@ impl Layouter<'_> {
     /// instance manager's limits follow (they are the subform's, not one instance's), when the
     /// change stays with that instance (inside a repeating subform); else the template's.
     pub(super) fn own_occur(&self, node: &Node, parent_som: &str, sib: usize) -> Occur {
-        occur_at(self.props, node, parent_som, sib)
+        let Node::Subform(sf) = node else { return Occur::default() };
+        match occur_sets(self.props, sf, parent_som, sib) {
+            Some(sets) => self.restyled_occur(node, sf, &sets),
+            None => sf.occur,
+        }
     }
 
     /// Where pages break before and after instance `sib` of subform `node` under `ctx` (XFA 3.3
@@ -126,7 +139,7 @@ impl Layouter<'_> {
         let Some(taken) = self.changes_of(node.common(), ctx, sib, None).and_then(|sets| taken(sets, &["break", "breakBefore", "breakAfter"])) else {
             return template;
         };
-        let (before, after) = crate::restyle::instance_breaks(node, &taken, template.0, template.1);
+        let (before, after) = self.restyled_breaks(node, &taken, template);
         (before.unwrap_or(template.0), after.unwrap_or(template.1))
     }
 
@@ -156,8 +169,12 @@ impl Layouter<'_> {
                 let start = self.item_count();
                 match self.changes_of(&d.common, ctx, sib, None) {
                     Some(sets) => {
-                        let changed = crate::restyle::restyled_draw(d, sets);
-                        self.draw_draw(&changed, rect, ctx)?;
+                        let changed = self.restyled(Leaf::Draw(d), sets);
+                        match &*changed {
+                            Node::Draw(changed) => self.draw_draw(changed, rect, ctx)?,
+                            // The reading of a draw is a draw.
+                            _ => self.draw_draw(d, rect, ctx)?,
+                        }
                     }
                     None => self.draw_draw(d, rect, ctx)?,
                 }
@@ -175,8 +192,12 @@ impl Layouter<'_> {
             }
             Node::ExclGroup(g) => match self.changes_of(&g.common, ctx, sib, Some("group")) {
                 Some(sets) => {
-                    let changed = crate::restyle::restyled_group(g, sets);
-                    self.draw_group(&changed, rect, ctx, depth, sib)
+                    let changed = self.restyled(Leaf::Group(g), sets);
+                    match &*changed {
+                        Node::ExclGroup(changed) => self.draw_group(changed, rect, ctx, depth, sib),
+                        // The reading of a group is a group.
+                        _ => self.draw_group(g, rect, ctx, depth, sib),
+                    }
                 }
                 None => self.draw_group(g, rect, ctx, depth, sib),
             },
@@ -687,13 +708,13 @@ fn taken(sets: &BTreeMap<String, String>, roots: &[&str]) -> Option<BTreeMap<Str
     (!out.is_empty()).then_some(out)
 }
 
-/// `c` with the changes of `sets` in the groups `roots` names applied; `c` itself when there
-/// are none.
-fn own_from<'a>(c: &'a Common, sets: &BTreeMap<String, String>, roots: &[&str]) -> Cow<'a, Common> {
-    match taken(sets, roots) {
-        Some(t) => Cow::Owned(crate::restyle::restyled_common(c, &t)),
-        None => Cow::Borrowed(c),
-    }
+/// The occurrence changes `props` keeps for the first instance of subform `sf`, at SOM index
+/// `sib` under the container at `parent_som`, if any. An unnamed subform has no path of its
+/// own, so none.
+fn occur_sets(props: &super::PropChanges, sf: &Subform, parent_som: &str, sib: usize) -> Option<BTreeMap<String, String>> {
+    let name = sf.common.name.as_deref().filter(|_| !props.is_empty())?;
+    let som = if parent_som.is_empty() { format!("{name}[{sib}]") } else { format!("{parent_som}.{name}[{sib}]") };
+    taken(props.get(&som)?, &["occur"])
 }
 
 /// How often subform `node` occurs under the container at `parent_som`, its first instance at
@@ -702,13 +723,5 @@ fn own_from<'a>(c: &'a Common, sets: &BTreeMap<String, String>, roots: &[&str]) 
 /// subform. The layout and the traversal count instances with it alike.
 pub(crate) fn occur_at(props: &super::PropChanges, node: &Node, parent_som: &str, sib: usize) -> Occur {
     let Node::Subform(sf) = node else { return Occur::default() };
-    let changed = sf.common.name.as_deref().filter(|_| !props.is_empty()).and_then(|name| {
-        let som = if parent_som.is_empty() { format!("{name}[{sib}]") } else { format!("{parent_som}.{name}[{sib}]") };
-        let taken = taken(props.get(&som)?, &["occur"])?;
-        match crate::restyle::restyled(node, &taken) {
-            Node::Subform(s) => Some(s.occur),
-            _ => None,
-        }
-    });
-    changed.unwrap_or(sf.occur)
+    occur_sets(props, sf, parent_som, sib).and_then(|sets| occur_with(node, &sets)).unwrap_or(sf.occur)
 }

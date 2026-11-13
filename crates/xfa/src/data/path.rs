@@ -72,8 +72,10 @@ pub fn som_to_path(som: &str) -> DataPath {
 /// The data path the object at `som` binds to: [`som_to_path`] without the areas on the way.
 /// An area is a named container in the form, so it is part of SOM expressions, but only
 /// subforms, exclusion groups and fields are data scopes: what an area holds binds under the
-/// area's parent, as Adobe's viewers write it. The template tells which segments are areas;
-/// segments it doesn't have (page-set objects, or a SOM from another template) are kept.
+/// area's parent, as Adobe's viewers write it. The template tells which segments are areas,
+/// each looked up by its number as the form numbers its objects ([`named_at`]), so a subform
+/// that shares its name with an area keeps its segment; segments the template doesn't have
+/// (page-set objects, or a SOM from another template) are kept.
 pub fn data_path(tpl: &Template, som: &str) -> DataPath {
     let mut out = DataPath::new();
     // The template children the next segment is looked up in; `None` until the root matched,
@@ -87,7 +89,9 @@ pub fn data_path(tpl: &Template, som: &str) -> DataPath {
         let found = match level {
             None if i == 0 && tpl.root.common.name.as_deref() == Some(name.as_str()) => Some(Container::Children(&tpl.root.children)),
             None => None,
-            Some(children) => match named(children, &name, 0) {
+            // By its number, not its name alone: a subform and an area may share a name, and
+            // only the area's segment is dropped.
+            Some(children) => match named_at(children, &name, index, 0) {
                 Some(Node::Subform(sf)) => Some(Container::Children(&sf.children)),
                 Some(Node::Area(a)) => Some(Container::Area(&a.children)),
                 _ => None,
@@ -142,21 +146,6 @@ enum Container<'a> {
     Children(&'a [Node]),
     /// Contents bind under the area's parent.
     Area(&'a [Node]),
-}
-
-/// The child of `nodes` named `name`, looking through unnamed subforms and areas (which have no
-/// SOM segment of their own).
-fn named<'a>(nodes: &'a [Node], name: &str, depth: usize) -> Option<&'a Node> {
-    if depth > MAX_DEPTH {
-        return None;
-    }
-    nodes.iter().find(|n| n.common().name.as_deref() == Some(name)).or_else(|| {
-        nodes.iter().find_map(|n| match n {
-            Node::Subform(sf) if sf.common.name.is_none() => named(&sf.children, name, depth + 1),
-            Node::Area(a) if a.common.name.is_none() => named(&a.children, name, depth + 1),
-            _ => None,
-        })
-    })
 }
 
 /// The object the SOM segment `name[index]` names among `nodes`, the content of a named
@@ -227,6 +216,43 @@ fn exactly_at<'a>(nodes: &'a [Node], name: &str, index: usize, depth: usize, rep
 /// for the root and a page area themselves.
 pub fn som_is_shared(tpl: &Template, som: &str) -> bool {
     tpl.memo.som_owners(tpl).shared(som)
+}
+
+/// [`som_is_shared`] for one template, to ask away from it: on the thread scripts run on, by
+/// the scripting host, which refuses a property write the form would refuse. It holds the
+/// template's record of who owns each path (made once per template, and shared), so both give
+/// one answer for every path.
+#[derive(Clone)]
+pub struct SharedPaths(std::sync::Arc<crate::script::SomOwners>);
+
+impl SharedPaths {
+    /// The shared paths of `tpl`.
+    pub fn of(tpl: &Template) -> SharedPaths {
+        SharedPaths(std::sync::Arc::clone(tpl.memo.som_owners(tpl)))
+    }
+
+    /// [`som_is_shared`] of the template and `som`.
+    pub fn is_shared(&self, som: &str) -> bool {
+        self.0.shared(som)
+    }
+}
+
+impl std::fmt::Debug for SharedPaths {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("SharedPaths")
+    }
+}
+
+/// Whether how often the subform at `som` occurs can't be changed by a script: it occurs once
+/// by the template, and a same-named object is numbered after it in its SOM scope. Made to
+/// repeat, its second instance would take that object's number (instances count on from the
+/// first, XFA 3.3 ch. 3, pp. 94-95), and what is kept by that path (a property change, a
+/// calculation typed over) would reach both; the template alone tells which paths are one
+/// object's ([`som_is_shared`]), so a change that would make more of them shared is not kept.
+/// `false` for a subform the template lets repeat (the paths after it are shared already),
+/// for the last object of its name, and when the template has no object at `som`.
+pub fn occur_is_fixed(tpl: &Template, som: &str) -> bool {
+    tpl.memo.som_owners(tpl).followed(som)
 }
 
 /// The template field the object at a SOM path is an instance of, each segment's number counted

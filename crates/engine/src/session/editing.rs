@@ -282,7 +282,7 @@ impl Session {
                 };
                 // Every changed field's scripts, then the calculations once (after a reset,
                 // only those).
-                let ran = guard(|| xfa::on_changes(&mut next, &tpl, &changed, reset.as_ref(), &mut run, &mut exited))
+                let ran = guard(|| xfa::on_changes(&mut next, &editor.cos, &tpl, &changed, reset.as_ref(), &mut run, &mut exited))
                     .unwrap_or_else(|m| Err(format!("the form's scripts failed unexpectedly ({m})")));
                 cx.xfa_datasets = run.datasets;
                 cx.xfa_ran_away |= run.ran_away;

@@ -4,7 +4,7 @@ use super::ast::{Expr, Idx};
 use super::value::{Val, num_text, parse_num};
 use super::{
     HNode, HashSet, Interp, LIST_TOO_LONG, MAX_LIST, MAX_PARSE_DEPTH, MAX_STEPS, R, RAN_TOO_LONG, child_named, descendants_named, instance_place,
-    instances, props, resolve_som, scope_of, scoped,
+    instances, managed_named, props, resolve_som, scope_of, scoped,
 };
 
 impl Interp<'_> {
@@ -208,11 +208,14 @@ impl Interp<'_> {
             "xfa" => Val::Xfa,
             _ => {
                 if let Some(child) = name.strip_prefix('_') {
-                    // The instance manager of `child`, looked for like a name.
+                    // The instance manager of `child`, looked for like a name: of the repeating
+                    // subform of the name in the scope the name is found in (`managed_named`).
+                    let unknown = || format!("unknown instance manager _{child}");
                     let found = resolve_som(self.h, self.h.current, child);
-                    let Some(&first) = found.first() else { return Err(format!("unknown instance manager _{child}")) };
-                    let parent = self.node(first).and_then(|n| n.parent).ok_or_else(|| format!("unknown instance manager _{child}"))?;
-                    return Ok(Val::Im(parent, child.to_string()));
+                    let first = *found.first().ok_or_else(unknown)?;
+                    let parent = self.node(first).and_then(|n| n.parent).ok_or_else(unknown)?;
+                    let managed = managed_named(self.h, scope_of(self.h, parent), child).and_then(|c| self.node(c)).and_then(|n| n.parent);
+                    return Ok(Val::Im(managed.unwrap_or(parent), child.to_string()));
                 }
                 let found = resolve_som(self.h, self.h.current, name);
                 match found.as_slice() {
@@ -373,7 +376,7 @@ impl Interp<'_> {
                 if let Some(child) = other.strip_prefix('_') {
                     // The manager of the container the subform is a child of: an unnamed subform
                     // of this one when the name was found through it.
-                    return Ok(match child_named(self.h, i, child) {
+                    return Ok(match managed_named(self.h, i, child) {
                         Some(c) => Val::Im(self.node(c).and_then(|n| n.parent).unwrap_or(i), child.to_string()),
                         None => Val::Null,
                     });

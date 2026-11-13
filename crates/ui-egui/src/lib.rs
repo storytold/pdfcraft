@@ -857,7 +857,10 @@ pub struct PdfCraftApp {
     /// calculated values (`<calculate override="warning">`, XFA 3.3 p. 642): the values were
     /// kept, and the user is asked about each field in turn, the first one first, whether to keep
     /// its value or go back to its calculated value. For each: the document, the field's name and
-    /// what the form says. One edit can type over several (a batch of values).
+    /// what the form says. One edit can type over several (a batch of values). A question goes
+    /// unasked when its value is no longer kept (a reset, an undo), and when the form's scripts
+    /// gave its field another name meanwhile (`Request::CalculationsMoved`: names follow the
+    /// fields' places, so a row added or removed can move them); the value then stays kept.
     pub pending_calc_overrides: std::collections::VecDeque<(DocId, String, String)>,
     /// Documents whose questions in [`Self::pending_calc_overrides`] wait, not shown: one was
     /// answered "Use calculated value" while a box open on the document's page couldn't be

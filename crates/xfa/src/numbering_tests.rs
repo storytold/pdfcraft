@@ -3,15 +3,15 @@
 //! that names an object by its SOM path (the layout's widgets, the live form scripts run on,
 //! template lookups, the paths counted as shared) numbers it the same way.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use proptest::prelude::*;
 
 use super::*;
-use crate::data::{DataOp, som_is_shared, template_field, template_object};
+use crate::data::{DataOp, occur_is_fixed, som_is_shared, template_field, template_object};
 use crate::model::{Node, SomIndices, Template};
 use crate::numbering::MAX_SOM_INDEX;
-use crate::script::{FormNode, NodeKind, Overrides, form_tree};
+use crate::script::{FormNode, MAX_REACHED, NodeKind, Overrides, apply_overrides_split, form_tree, take_owners_looked};
 
 /// An XDP whose root subform `form1` holds `body`, with `data` as the content of its data.
 fn xdp(body: &str, data: &str) -> String {
@@ -227,6 +227,50 @@ fn a_number_past_a_repeating_subform_names_its_instance() {
     assert!(template_field(&template(&once), "form1[0].row[2].y[0]").is_some());
 }
 
+/// How often a subform occurs is fixed where it occurs once and a same-named object is numbered
+/// after it, whatever that object is and through unnamed containers: its second instance would
+/// take that object's path. The last of the name, a subform the template lets repeat, and a
+/// path with nothing at it are not, and the live form says the same of each of its subforms.
+#[test]
+fn a_subform_occurs_as_often_as_the_template_says_when_one_of_its_name_follows() {
+    /// The paths of the live form's subforms that are fixed.
+    fn fixed(n: &FormNode, out: &mut Vec<String>) {
+        if n.occur_fixed {
+            out.push(n.som.clone());
+        }
+        for c in &n.children {
+            fixed(c, out);
+        }
+    }
+    let row = |occur: &str, inner: &str| format!("<subform name=\"row\" layout=\"tb\">{occur}{}</subform>", field(inner));
+    let cases: [(String, &[&str]); 6] = [
+        (format!("{}{}", row("", "x"), row("", "y")), &["form1[0].row[0]"]),
+        // The follower in an unnamed subform, which adds no segment and no numbering of its own.
+        (format!("{}<subform>{}</subform>", row("", "x"), row("", "y")), &["form1[0].row[0]"]),
+        // A field of the name follows.
+        (format!("{}{}", row("", "x"), field("row")), &["form1[0].row[0]"]),
+        // Three: all but the last.
+        (format!("{}{}{}", row("", "x"), row("", "y"), row("", "z")), &["form1[0].row[0]", "form1[0].row[1]"]),
+        // One the template lets repeat shares the paths after it already.
+        (format!("{}{}", row(r#"<occur min="1" max="-1"/>"#, "x"), row("", "y")), &[]),
+        // The follower is in a named subform: another scope.
+        (format!("{}<subform name=\"in\">{}</subform>", row("", "x"), row("", "y")), &[]),
+    ];
+    for (body, want) in cases {
+        let xml = xdp(&body, "");
+        let tpl = template(&xml);
+        let mut live = Vec::new();
+        fixed(&form_tree(&tpl, None, &Overrides::default()).root, &mut live);
+        assert_eq!(live, want, "{body}");
+        for som in ["form1[0].row[0]", "form1[0].row[1]", "form1[0].row[2]", "form1[0].in[0].row[0]"] {
+            assert_eq!(occur_is_fixed(&tpl, som), want.contains(&som), "{som} of {body}");
+        }
+        for som in ["", "form1[0]", "form1[0].none[0]", "form1[0].row[0].x[0]", "form1[0].row[4294967295]", "form1[0].row[0].row[0]"] {
+            assert!(!occur_is_fixed(&tpl, som), "{som} of {body}");
+        }
+    }
+}
+
 /// Unnamed fields and exclusion groups have no number of their own: each is `field[0]` or
 /// `group[0]` of its container, a path two of them share.
 #[test]
@@ -272,6 +316,91 @@ fn the_buttons_of_an_unnamed_group_are_named_in_it() {
     }
 }
 
+/// Review r5 (D2): asking whether a path is shared looks at few owners, however many objects
+/// of the template share a name. Counted, not timed.
+#[test]
+fn asking_who_owns_a_path_looks_at_few_owners_however_many_share_a_name() {
+    let unnamed = r#"<field w="100pt" h="12pt"><ui><textEdit/></ui></field>"#;
+    // 5,000 unnamed fields, each `field[0]`: the second one found settles it, and a path
+    // through them, which hold nothing, looks at one.
+    let tpl = template(&xdp(&unnamed.repeat(5_000), ""));
+    assert!(!som_is_shared(&tpl, "form1[0].none[0]"));
+    let _ = take_owners_looked();
+    assert!(som_is_shared(&tpl, "form1[0].field[0]"));
+    let looked = take_owners_looked();
+    assert!(looked <= 2, "{looked}");
+    assert!(!som_is_shared(&tpl, "form1[0].field[0].x[0]"), "a field holds nothing");
+    let looked = take_owners_looked();
+    assert!(looked <= 1, "{looked}");
+    // 300 same-named subforms that may repeat: the number 299 may be an instance of any of
+    // them, and a path through it is followed into no more than the bound allows.
+    let rows = format!("<subform name=\"row\" layout=\"tb\"><occur max=\"-1\"/>{}</subform>", field("c")).repeat(300);
+    let tpl = template(&xdp(&rows, ""));
+    assert!(!som_is_shared(&tpl, "form1[0].row[0].c[0]"), "the first instance of the first");
+    let _ = take_owners_looked();
+    assert!(som_is_shared(&tpl, "form1[0].row[299].c[0]"));
+    let looked = take_owners_looked();
+    assert!(looked <= MAX_REACHED + 1, "{looked}");
+}
+
+/// The bound on how many objects a path is followed into takes nothing from a form within it:
+/// with as many same-named subforms that may repeat as the bound, a path only the last of them
+/// holds is one object's. With one more, the path counts as shared (nothing is kept at it).
+#[test]
+fn a_path_is_followed_into_as_many_objects_as_the_bound_allows() {
+    let row = |inner: &str| format!("<subform name=\"row\" layout=\"tb\"><occur max=\"-1\"/>{inner}</subform>");
+    for (rows, shared) in [(9, false), (MAX_REACHED, false), (MAX_REACHED + 1, true)] {
+        let body = format!("{}{}", row(&field("c")).repeat(rows - 1), row(&format!("{}{}", field("c"), field("only"))));
+        let tpl = template(&xdp(&body, ""));
+        let last = rows - 1;
+        assert_eq!(som_is_shared(&tpl, &format!("form1[0].row[{last}].only[0]")), shared, "{rows} rows");
+        assert!(som_is_shared(&tpl, &format!("form1[0].row[{last}].c[0]")), "{rows} rows");
+        assert!(!som_is_shared(&tpl, "form1[0].row[0].c[0]"), "{rows} rows");
+    }
+}
+
+/// The owners of a name are found by their numbers wherever they stand: an unnamed field after
+/// two fields named `field` is `field[0]` with the first of them, and a subform named `field`
+/// is looked into past an unnamed field that has its number.
+#[test]
+fn owners_are_found_by_number_wherever_they_stand() {
+    let unnamed = r#"<field w="100pt" h="12pt"><ui><textEdit/></ui></field>"#;
+    let tpl = template(&xdp(&format!("{}{}{unnamed}", field("field"), field("field")), ""));
+    assert!(som_is_shared(&tpl, "form1[0].field[0]"), "the first named so and the unnamed one");
+    assert!(!som_is_shared(&tpl, "form1[0].field[1]"));
+    for (inside, shared) in [(1, false), (2, true)] {
+        let tpl = template(&xdp(&format!("{unnamed}<subform name=\"field\">{}</subform>", unnamed.repeat(inside)), ""));
+        assert!(som_is_shared(&tpl, "form1[0].field[0]"), "the unnamed field and the subform");
+        assert_eq!(som_is_shared(&tpl, "form1[0].field[0].field[0]"), shared, "{inside} in the subform");
+    }
+}
+
+/// Page areas of one name: the number after the name counts the pages laid out, not the
+/// template's areas, so what they hold is looked up as one container's. A name two of them
+/// hold is shared and a name one holds is not, at the cost of a look-up or two, however many
+/// areas have the name (137 here, as many as in one of the forms looked at).
+#[test]
+fn same_named_page_areas_are_looked_up_as_one() {
+    let area = |inner: &str| {
+        format!(r#"<pageArea name="p"><contentArea x="36pt" y="36pt" w="540pt" h="700pt"/><medium short="612pt" long="792pt"/>{inner}</pageArea>"#)
+    };
+    let xml = format!(
+        r#"<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/"><subform name="form1" layout="tb"><pageSet>{}{}</pageSet>{}</subform></template>"#,
+        area(&field("n")).repeat(136),
+        area(&format!("{}{}", field("n"), field("only"))),
+        field("x")
+    );
+    let tpl = template(&xml);
+    assert_eq!(tpl.root.page_set.as_ref().map(|ps| ps.areas.len()), Some(137));
+    assert!(som_is_shared(&tpl, "p[0]"), "one path for every area of the name");
+    let _ = take_owners_looked();
+    assert!(som_is_shared(&tpl, "p[0].n[0]"));
+    assert!(!som_is_shared(&tpl, "p[0].only[0]"));
+    let looked = take_owners_looked();
+    assert!(looked <= 3, "{looked}");
+    assert!(!som_is_shared(&tpl, "form1[0].x[0]"));
+}
+
 /// Instance counts multiply up through nested unnamed subforms, so a few lines of template
 /// reach any number: the numbers stop at [`MAX_SOM_INDEX`] instead of overflowing, and so do
 /// the sums made from them.
@@ -288,6 +417,54 @@ fn hostile_instance_counts_stop_at_the_largest_number() {
     // Looked up and counted without overflow, whatever the answer.
     let som = format!("form1[0].a[{MAX_SOM_INDEX}]");
     let _ = (som_is_shared(&tpl, &som), template_object(&tpl, &som), template_object(&tpl, "form1[0].a[4294967295]"));
+}
+
+/// A subform and an area of one name in one container are numbered apart, and only the area
+/// is no data scope: the data path of the subform's field keeps the subform's segment, so a
+/// value typed into the field is written where the layout and the live form read it. (Looked up
+/// by name alone, the first of the name wherever it stood, the subform's segment was dropped
+/// when the area came first among the direct children.)
+#[test]
+fn a_subform_named_as_an_area_keeps_its_place_in_the_data_path() {
+    let body =
+        format!("<subform layout=\"tb\"><subform name=\"a\" layout=\"tb\">{}</subform></subform><area name=\"a\">{}</area>", field("b"), field("c"));
+    let tpl = template(&xdp(&body, ""));
+    assert_eq!(root_numbers(&tpl), ["a[0]", "a[1]"]);
+    let path = data_path(&tpl, "form1[0].a[0].b[0]");
+    assert_eq!(path, [("form1".to_string(), 0), ("a".to_string(), 0), ("b".to_string(), 0)]);
+    // What the area holds binds under the area's parent.
+    assert_eq!(data_path(&tpl, "form1[0].a[1].c[0]"), [("form1".to_string(), 0), ("c".to_string(), 0)]);
+    let mut data = DataNode::default();
+    data.apply(&DataOp::Value { path, text: "typed".into() });
+    let tree = form_tree(&tpl, Some(&data), &Overrides::default());
+    let mut scripts = Vec::new();
+    live_fields(&tree.root, &mut scripts);
+    let shown = pairs(&[("form1[0].a[0].b[0]", "typed"), ("form1[0].a[1].c[0]", "")]);
+    assert_eq!(scripts, shown);
+    assert_eq!(widgets(&layout(&tpl, Some(&data)).unwrap()), shown);
+}
+
+/// An object's number is its data node's, and the data keeps 10,000 same-named nodes under one
+/// node. The numbers count through the instances of unnamed subforms, so two lines of template
+/// number an object past that: it is shown, and a value typed in it is not kept, which the
+/// write says by the object's path.
+#[test]
+fn a_value_for_an_object_numbered_past_the_datas_limit_is_reported_not_kept() {
+    let body = format!(
+        "<subform><occur min=\"101\" max=\"101\" initial=\"101\"/><subform><occur min=\"100\" max=\"100\" initial=\"100\"/>{0}</subform></subform>{0}",
+        field("a")
+    );
+    let tpl = template(&xdp(&body, ""));
+    assert_eq!(root_numbers(&tpl), ["a[0]", "a[10100]"]);
+    let mut doc = pdfcraft_cos::Document::open(std::sync::Arc::new(crate::fixtures::static_shell("<form1/>"))).unwrap();
+    let typed = |som: &str| FieldDatum { obj: pdfcraft_cos::ObjRef::new(1000, 0), name: som.into(), data: FieldData::Text("v".into()) };
+    let w = write_datasets(&mut doc, &[typed("form1[0].a[10100]")]).unwrap();
+    assert!(w.warnings.iter().any(|m| m.contains("repeats too often") && m.contains("a[10100]")), "{w:?}");
+    assert_eq!(crate::script::data_of(&doc).map(|d| d.count(&[("form1".to_string(), 0)], "a")), Some(0), "nothing is made for it");
+    // One within the limit is kept, with the nodes before it.
+    let w = write_datasets(&mut doc, &[typed("form1[0].a[100]")]).unwrap();
+    assert!(w.written && w.warnings.is_empty(), "{w:?}");
+    assert_eq!(crate::script::data_of(&doc).map(|d| d.count(&[("form1".to_string(), 0)], "a")), Some(101));
 }
 
 // --- Generated templates -------------------------------------------------------------------
@@ -339,8 +516,8 @@ struct Gen {
 }
 
 fn name() -> impl Strategy<Value = Option<&'static str>> {
-    // `field` is also what an unnamed field is called.
-    prop_oneof![3 => Just(None), 4 => Just(Some("a")), 2 => Just(Some("b")), 1 => Just(Some("field"))]
+    // `field` is also what an unnamed field is called, and `group` an unnamed exclusion group.
+    prop_oneof![6 => Just(None), 8 => Just(Some("a")), 4 => Just(Some("b")), 2 => Just(Some("field")), 1 => Just(Some("group"))]
 }
 
 fn occ() -> impl Strategy<Value = Occ> {
@@ -446,6 +623,15 @@ fn take(counts: &mut Counts, name: &'static str) -> usize {
     *n - 1
 }
 
+/// The model of `top` under the root subform: its live objects in document order, each
+/// subform of `more` (by the generated subform's id) with that many instances beyond those
+/// its template starts with, as when the data holds them.
+fn model(top: &[Gen], more: &HashMap<usize, usize>) -> Vec<Live> {
+    let mut out = Vec::new();
+    live(top, "form1[0]", &mut Counts::new(), more, &mut out);
+    out
+}
+
 /// The live objects of `nodes` in the scope of the named container at `parent`, written from
 /// the specification rather than from the implementation: an unnamed subform or area is
 /// "removed and its children adopted" by its container (XFA 3.3 p. 94), so the same-named
@@ -454,7 +640,7 @@ fn take(counts: &mut Counts, name: &'static str) -> usize {
 /// later instances count on from its number, which only it takes in the scope; an unnamed
 /// subform made more than once names its content the same in every instance, and what follows
 /// is numbered past all of them.
-fn live(nodes: &[Gen], parent: &str, counts: &mut Counts, out: &mut Vec<Live>) {
+fn live(nodes: &[Gen], parent: &str, counts: &mut Counts, more: &HashMap<usize, usize>, out: &mut Vec<Live>) {
     for g in nodes {
         let id = Some(g.id);
         let named = g.name.is_some();
@@ -481,28 +667,29 @@ fn live(nodes: &[Gen], parent: &str, counts: &mut Counts, out: &mut Vec<Live>) {
             }
             (What::Subform(occ, kids), Some(n)) => {
                 let first = take(counts, n);
-                for k in 0..occ.instances() {
+                let instances = occ.instances() + more.get(&g.id).copied().unwrap_or(0);
+                for k in 0..instances {
                     let som = format!("{parent}.{n}[{}]", first + k);
                     out.push(Live { som: som.clone(), kind: Kind::Subform, id, named });
-                    live(kids, &som, &mut Counts::new(), out);
+                    live(kids, &som, &mut Counts::new(), more, out);
                 }
             }
             (What::Subform(occ, kids), None) if occ.instances() > 1 => {
                 let before = counts.clone();
-                live(kids, parent, counts, out);
+                live(kids, parent, counts, more, out);
                 for _ in 1..occ.instances() {
-                    live(kids, parent, &mut before.clone(), out);
+                    live(kids, parent, &mut before.clone(), more, out);
                 }
                 for (name, n) in counts.iter_mut() {
                     let was = before.get(name).copied().unwrap_or(0);
                     *n = was + (*n - was) * occ.instances();
                 }
             }
-            (What::Subform(_, kids), None) | (What::Area(kids), None) => live(kids, parent, counts, out),
+            (What::Subform(_, kids), None) | (What::Area(kids), None) => live(kids, parent, counts, more, out),
             (What::Area(kids), Some(n)) => {
                 let som = format!("{parent}.{n}[{}]", take(counts, n));
                 out.push(Live { som: som.clone(), kind: Kind::Area, id, named });
-                live(kids, &som, &mut Counts::new(), out);
+                live(kids, &som, &mut Counts::new(), more, out);
             }
         }
     }
@@ -527,6 +714,14 @@ fn owned(n: &FormNode, in_group: bool, out: &mut Vec<(String, Kind)>) {
     }
 }
 
+/// The objects of the root subform's own content in `tree` that have a path of their own.
+fn owned_content(tree: &crate::script::LiveForm) -> Vec<(String, Kind)> {
+    let content = FormNode { children: tree.root.children.iter().filter(|c| c.som.starts_with("form1[0]")).cloned().collect(), ..tree.root.clone() };
+    let mut got = Vec::new();
+    owned(&content, false, &mut got);
+    got
+}
+
 /// Whether every named subform of `nodes` occurs once, so no path is shared with an instance
 /// the form doesn't have yet.
 fn named_subforms_occur_once(nodes: &[Gen]) -> bool {
@@ -542,6 +737,146 @@ fn sorted<T: Ord>(mut v: Vec<T>) -> Vec<T> {
     v
 }
 
+/// How many of the model's objects have each path.
+fn times(want: &[Live]) -> HashMap<&str, usize> {
+    let mut times = HashMap::new();
+    for l in want {
+        *times.entry(l.som.as_str()).or_insert(0) += 1;
+    }
+    times
+}
+
+/// Whether `som` is below a path several objects have: which of them is meant can't be told.
+fn below_several(times: &HashMap<&str, usize>, som: &str) -> bool {
+    som.match_indices('.').any(|(at, _)| times.get(&som[..at]).is_some_and(|&n| n > 1))
+}
+
+/// The container's path, the name and the number of a model path's last segment.
+fn last_segment(som: &str) -> (&str, &str, usize) {
+    let (parent, last) = som.rsplit_once('.').unwrap_or(("", som));
+    let (name, number) = last.split_once('[').unwrap_or((last, "0]"));
+    (parent, name, number.trim_end_matches(']').parse().unwrap_or(0))
+}
+
+/// The paths of the model's areas.
+fn areas(want: &[Live]) -> HashSet<&str> {
+    want.iter().filter(|l| l.kind == Kind::Area).map(|l| l.som.as_str()).collect()
+}
+
+/// The data path of the model's object at `som`: each named container on the way with its
+/// number, an object taking the data node of its number, without the areas (`areas`, by
+/// path): an area is no data scope, and what it holds binds under its container.
+fn model_data_path(som: &str, areas: &HashSet<&str>) -> DataPath {
+    let mut out = DataPath::new();
+    let mut from = 0;
+    for end in som.match_indices('.').map(|(at, _)| at).chain([som.len()]) {
+        if !areas.contains(&som[..end]) {
+            let (_, name, number) = last_segment(&som[from..end]);
+            out.push((name.to_string(), number));
+        }
+        from = end + 1;
+    }
+    out
+}
+
+/// Whether the data can't tell an instance of the subform at `at` from another object: a
+/// named one that takes its number or a later one in its SOM scope, or binds a data node of
+/// its name with such a number under the same data node (what a named area holds is numbered
+/// apart and binds beside what its container holds).
+fn contested(want: &[Live], areas: &HashSet<&str>, at: &Live) -> bool {
+    let (scope, name, number) = last_segment(&at.som);
+    let path = model_data_path(&at.som, areas);
+    let data_scope = &path[..path.len().saturating_sub(1)];
+    want.iter().filter(|l| l.named && l.id != at.id).any(|l| {
+        let (s, n, k) = last_segment(&l.som);
+        let in_scope = s == scope && n == name && k >= number;
+        let other = model_data_path(&l.som, areas);
+        let in_data = l.kind != Kind::Area && other.split_last().is_some_and(|((n, k), s)| s == data_scope && n == name && *k >= number);
+        in_scope || in_data
+    })
+}
+
+/// Every named subform of `nodes`, by id, with whether it occurs once by the template.
+fn named_subforms(nodes: &[Gen], out: &mut Vec<(usize, bool)>) {
+    for g in nodes {
+        match &g.what {
+            What::Subform(occ, kids) => {
+                if g.name.is_some() {
+                    out.push((g.id, *occ == Occ::Once));
+                }
+                named_subforms(kids, out);
+            }
+            What::Area(kids) => named_subforms(kids, out),
+            _ => {}
+        }
+    }
+}
+
+/// What [`more_instances`] gathers.
+struct Pick<'m> {
+    base: &'m [Live],
+    areas: HashSet<&'m str>,
+    times: HashMap<&'m str, usize>,
+    more: HashMap<usize, usize>,
+    by_script: Vec<String>,
+}
+
+/// The generated subforms the data of the third property gives more instances than their
+/// templates start with, and how many more: named ones the model (`base`, without any) has at
+/// paths of their own, either repeating by the template (`max="-1"`) or made to by a script
+/// (the second of the pair: the paths whose `occur.max` a script sets to -1). A script changes
+/// how often a subform occurs on its first instance and only when no same-named object comes
+/// after it ([`occur_is_fixed`]), so those are taken where the subform has one path (nothing
+/// around it occurs more than once) and flows (content positioned by an area shows one
+/// instance, see [`generated`]).
+fn more_instances(top: &[Gen], base: &[Live]) -> (HashMap<usize, usize>, Vec<String>) {
+    fn walk(nodes: &[Gen], positioned: bool, repeats: bool, p: &mut Pick) {
+        for g in nodes {
+            match &g.what {
+                What::Subform(occ, kids) => {
+                    let base = p.base;
+                    let at: Vec<&Live> = base.iter().filter(|l| l.id == Some(g.id) && l.kind == Kind::Subform).collect();
+                    let own =
+                        g.name.is_some() && !at.is_empty() && at.iter().all(|l| p.times[l.som.as_str()] == 1 && !below_several(&p.times, &l.som));
+                    let mut inner = repeats || *occ != Occ::Once;
+                    match (occ, at.as_slice()) {
+                        (Occ::Repeats | Occ::TwiceOrMore, _) if own => {
+                            p.more.insert(g.id, 1 + g.id % 2);
+                        }
+                        // Every third of those that occur once.
+                        (Occ::Once, [one]) if own && g.id % 3 == 0 && !positioned && !repeats && !contested(base, &p.areas, one) => {
+                            p.more.insert(g.id, 1);
+                            p.by_script.push(one.som.clone());
+                            inner = true;
+                        }
+                        _ => {}
+                    }
+                    walk(kids, false, inner, p);
+                }
+                What::Area(kids) => walk(kids, true, repeats, p),
+                _ => {}
+            }
+        }
+    }
+    let mut p = Pick { base, areas: areas(base), times: times(base), more: HashMap::new(), by_script: Vec::new() };
+    walk(top, false, false, &mut p);
+    (p.more, p.by_script)
+}
+
+/// The data node at `path` below `root`, made where missing with empty nodes of its name
+/// before it.
+fn data_at<'a>(root: &'a mut DataNode, path: &[(String, usize)]) -> &'a mut DataNode {
+    let mut node = root;
+    for (name, number) in path {
+        let have = node.children.iter().filter(|c| &c.name == name).count();
+        for _ in have..=*number {
+            node.children.push(DataNode { name: name.clone(), ..DataNode::default() });
+        }
+        node = node.children.iter_mut().filter(|c| &c.name == name).nth(*number).expect("made above");
+    }
+    node
+}
+
 proptest! {
     // A failing case is printed with its template; no seed file is written beside the source.
     #![proptest_config(ProptestConfig { cases: 192, failure_persistence: None, ..ProptestConfig::default() })]
@@ -555,16 +890,12 @@ proptest! {
         render(&top, &mut body);
         let xml = xdp(&body, "");
         let tpl = template(&xml);
-        let mut want = Vec::new();
-        live(&top, "form1[0]", &mut Counts::new(), &mut want);
+        let want = model(&top, &HashMap::new());
 
         // The live form: the same objects at the same paths, in document order.
         let tree = form_tree(&tpl, None, &Overrides::default());
         prop_assert!(!tree.truncated);
-        let content = FormNode { children: tree.root.children.iter().filter(|c| c.som.starts_with("form1[0]")).cloned().collect(), ..tree.root.clone() };
-        let mut got = Vec::new();
-        owned(&content, false, &mut got);
-        prop_assert_eq!(&got, &want.iter().map(|l| (l.som.clone(), l.kind)).collect::<Vec<_>>(), "the live form of {}", body);
+        prop_assert_eq!(&owned_content(&tree), &want.iter().map(|l| (l.som.clone(), l.kind)).collect::<Vec<_>>(), "the live form of {}", body);
 
         // The layout: a widget for each field and button, at the same path.
         let form = layout(&tpl, None).unwrap();
@@ -572,13 +903,8 @@ proptest! {
         let fields = sorted(want.iter().filter(|l| matches!(l.kind, Kind::Field | Kind::Button)).map(|l| l.som.clone()).collect());
         prop_assert_eq!(laid, fields, "the widgets of {}", body);
 
-        let mut times: HashMap<&str, usize> = HashMap::new();
-        for l in &want {
-            *times.entry(l.som.as_str()).or_insert(0) += 1;
-        }
+        let times = times(&want);
         let once_only = named_subforms_occur_once(&top);
-        // Paths below a path several objects have: which of them is meant can't be told.
-        let below_several = |som: &str| som.match_indices('.').any(|(at, _)| times.get(&som[..at]).is_some_and(|&n| n > 1));
         for l in &want {
             let several = times[l.som.as_str()] > 1;
             // A path several live objects have counts as shared; with no subform that may get
@@ -589,7 +915,7 @@ proptest! {
                 prop_assert_eq!(shared, several, "{} in {}", &l.som, body);
             }
             // A path one named object has finds that object in the template.
-            if let (Some(id), true, false) = (l.id, l.named, several || below_several(&l.som)) {
+            if let (Some(id), true, false) = (l.id, l.named, several || below_several(&times, &l.som)) {
                 let found = template_object(&tpl, &l.som).and_then(|n| n.common().id.clone());
                 prop_assert_eq!(found, Some(format!("n{id}")), "{} in {}", &l.som, body);
             }
@@ -603,8 +929,7 @@ proptest! {
         let mut body = String::new();
         render(&top, &mut body);
         let tpl = template(&xdp(&body, ""));
-        let mut want = Vec::new();
-        live(&top, "form1[0]", &mut Counts::new(), &mut want);
+        let want = model(&top, &HashMap::new());
         let mut data = DataNode::default();
         for (k, l) in want.iter().filter(|l| l.kind == Kind::Field).enumerate() {
             data.apply(&DataOp::Value { path: data_path(&tpl, &l.som), text: format!("v{k}") });
@@ -622,5 +947,83 @@ proptest! {
             sorted(scripts.into_iter().map(value).collect::<Vec<_>>()),
             "{}", body
         );
+    }
+
+    /// Data written from the specification's reading alone, with more rows than the template
+    /// starts with (of subforms that repeat, and of ones a script made repeat): the live form
+    /// and the layout make the instances the model has, each at the model's path, and a field
+    /// that has a path and a data node of its own shows the value written for it. Left to the
+    /// property above: a template where the data can't tell the instances of a subform that
+    /// occurs more than once, or may, from another object of its name ([`contested`]).
+    #[test]
+    fn data_makes_the_models_instances_and_each_field_shows_its_own_value(top in generated()) {
+        let base = model(&top, &HashMap::new());
+        let base_areas = areas(&base);
+        let mut subforms = Vec::new();
+        named_subforms(&top, &mut subforms);
+        let unclear = |id: usize| base.iter().filter(|l| l.id == Some(id) && l.kind == Kind::Subform).any(|l| contested(&base, &base_areas, l));
+        if subforms.iter().any(|&(id, once)| !once && unclear(id)) {
+            return Ok(());
+        }
+        let mut body = String::new();
+        render(&top, &mut body);
+        let tpl = template(&xdp(&body, ""));
+        let (more, by_script) = more_instances(&top, &base);
+        let want = model(&top, &more);
+        let times = times(&want);
+        let areas = areas(&want);
+
+        // A value for each named field (an unnamed one binds no data of its own), and a node
+        // for each instance of the subforms given more.
+        let mut data = DataNode::default();
+        let mut written: Vec<(usize, DataPath)> = Vec::new();
+        for (k, l) in want.iter().enumerate() {
+            let path = model_data_path(&l.som, &areas);
+            match l.kind {
+                Kind::Field if l.named => data_at(&mut data, &path).text = format!("v{k}"),
+                Kind::Subform if l.id.is_some_and(|id| more.contains_key(&id)) => {
+                    data_at(&mut data, &path);
+                }
+                _ => continue,
+            }
+            written.push((k, path));
+        }
+        let mut ov = Overrides::default();
+        for som in &by_script {
+            prop_assert!(!occur_is_fixed(&tpl, som), "{} in {}", som, body);
+            prop_assert_eq!(ov.set_prop(som, "occur#0", Some("max"), "-1").ok(), Some(true), "{} in {}", som, body);
+        }
+
+        let tree = form_tree(&tpl, Some(&data), &ov);
+        prop_assert!(!tree.truncated);
+        prop_assert_eq!(&owned_content(&tree), &want.iter().map(|l| (l.som.clone(), l.kind)).collect::<Vec<_>>(), "the live form of {} with {:?}", body, data);
+        let mut scripts = Vec::new();
+        live_fields(&tree.root, &mut scripts);
+        // As the form is drawn: the occurrence changes made to the template first.
+        let applied = apply_overrides_split(&tpl, &ov);
+        let form = crate::layout::layout_with_overrides(&applied.template, Some(&data), &ov, &applied.per_instance).unwrap();
+        let laid = widgets(&form);
+        let fields = sorted(want.iter().filter(|l| matches!(l.kind, Kind::Field | Kind::Button)).map(|l| l.som.clone()).collect());
+        prop_assert_eq!(sorted(laid.iter().map(|(som, _)| som.clone()).collect()), fields, "the widgets of {}", body);
+
+        for (k, path) in &written {
+            let l = &want[*k];
+            // Its own: one object at the path, and no node written at, above or below its data
+            // node but those of the subforms it is in (what an area holds binds beside what
+            // its container holds).
+            let apart = |other: &DataPath| !(other.starts_with(path) || path.starts_with(other));
+            let around = |j: usize| want[j].kind == Kind::Subform && l.som.strip_prefix(want[j].som.as_str()).is_some_and(|rest| rest.starts_with('.'));
+            let own = l.kind == Kind::Field
+                && times[l.som.as_str()] == 1
+                && !below_several(&times, &l.som)
+                && written.iter().all(|(j, other)| j == k || around(*j) || apart(other));
+            if !own {
+                continue;
+            }
+            prop_assert_eq!(&data_path(&tpl, &l.som), path, "{} in {}", &l.som, body);
+            let shown = |all: &[(String, String)]| all.iter().filter(|(som, _)| *som == l.som).map(|(_, v)| v.clone()).collect::<Vec<_>>();
+            prop_assert_eq!(shown(&scripts), [format!("v{k}")], "scripts read {} in {}", &l.som, body);
+            prop_assert_eq!(shown(&laid), [format!("v{k}")], "the layout shows {} in {}", &l.som, body);
+        }
     }
 }

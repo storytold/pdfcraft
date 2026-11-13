@@ -14,7 +14,7 @@ use std::rc::Rc;
 
 use crate::xfa::{
     HNode, XHost, XfaDoc, XfaEffect, XfaEvent, XfaKind, XfaNode, XfaOutcome, child_named, clip, clip_result, descendants_named, instance_place,
-    instances, props, reset_names, resolve_som, run_within, scope_of, scoped,
+    instances, managed_named, props, reset_names, resolve_som, run_within, scope_of, scoped,
 };
 use crate::{Limits, Message, MessageButtons, MessageIcon};
 

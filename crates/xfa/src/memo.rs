@@ -23,7 +23,7 @@ use std::sync::{Arc, Mutex, PoisonError, Weak};
 
 use pdfcraft_cos::Object;
 
-use crate::model::{Field, Props};
+use crate::model::{Field, Props, Value};
 
 /// The property changes as kept, by SOM path then property key (see
 /// [`crate::script::Overrides::props`]).
@@ -47,7 +47,7 @@ pub(crate) struct KeptProps {
 /// many, so what it needs is in the newest generation or the one before it. Two generations
 /// bound what is kept when a script changes the same object to new values event after event.
 const MAX_APPLIED: usize = 20_000;
-const MAX_APPLIED_BYTES: usize = 16 << 20;
+pub(crate) const MAX_APPLIED_BYTES: usize = 16 << 20;
 
 /// One result [`applied`] (or [`restyled_field`]) made: the template object's tree it was
 /// made from (to tell a tree that is gone from one now at its address), the changes, and the
@@ -82,8 +82,9 @@ pub struct Memo {
     applied: Mutex<Applied<Props>>,
     fields: Mutex<Applied<Field>>,
     /// Who owns each SOM path the live form names ([`crate::script::SomOwners`]), made the first
-    /// time it is asked.
-    som_owners: std::sync::OnceLock<crate::script::SomOwners>,
+    /// time it is asked. Shared with those who ask away from the template
+    /// ([`crate::SharedPaths`]).
+    som_owners: std::sync::OnceLock<Arc<crate::script::SomOwners>>,
 }
 
 impl Clone for Memo {
@@ -119,8 +120,8 @@ impl Memo {
     }
 
     /// Who owns each SOM path the live form of `tpl` (the template holding this memo) names.
-    pub(crate) fn som_owners(&self, tpl: &crate::model::Template) -> &crate::script::SomOwners {
-        self.som_owners.get_or_init(|| crate::script::SomOwners::of(tpl))
+    pub(crate) fn som_owners(&self, tpl: &crate::model::Template) -> &Arc<crate::script::SomOwners> {
+        self.som_owners.get_or_init(|| Arc::new(crate::script::SomOwners::of(tpl)))
     }
 }
 
@@ -145,7 +146,7 @@ pub(crate) fn take_fields_made() -> usize {
 }
 
 /// Bytes a property tree holds, roughly: each element and attribute, and their text.
-fn tree_bytes(props: &Props) -> usize {
+pub(crate) fn tree_bytes(props: &Props) -> usize {
     fn prop(p: &crate::model::Prop, depth: usize) -> usize {
         let own = std::mem::size_of::<crate::model::Prop>()
             .saturating_add(p.tag.len())
@@ -164,7 +165,7 @@ fn tree_bytes(props: &Props) -> usize {
 }
 
 /// A hash of `sets`, for [`applied`]'s key.
-fn sets_hash(sets: &BTreeMap<String, String>) -> u64 {
+pub(crate) fn sets_hash(sets: &BTreeMap<String, String>) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
     sets.hash(&mut h);
@@ -199,7 +200,7 @@ pub(crate) fn fields_bytes(memo: &Memo) -> usize {
 }
 
 /// Bytes of the changes `sets`.
-fn set_bytes(sets: &BTreeMap<String, String>) -> usize {
+pub(crate) fn set_bytes(sets: &BTreeMap<String, String>) -> usize {
     sets.iter().fold(0usize, |n, (k, v)| n.saturating_add(k.len()).saturating_add(v.len()).saturating_add(48))
 }
 
@@ -221,23 +222,47 @@ pub(crate) fn applied(memo: &Memo, base: &Arc<Props>, sets: &BTreeMap<String, St
 /// again for each event doesn't read the field again. Kept by the field's property tree, which
 /// is its own (the reader makes one for each object), as [`applied`] keeps trees.
 pub(crate) fn restyled_field(memo: &Memo, f: &Field, sets: &BTreeMap<String, String>) -> Arc<Field> {
-    let cost = |f: &Field| {
-        let scripts = f.scripts.iter().chain(&f.calculate).chain(&f.validate).fold(0usize, |n, s| n.saturating_add(s.text.len()));
-        // Its lists are its own copies (an item list holds up to `parse::MAX_ITEMS` entries,
-        // outside the object's property budget), so they count too, as do its texts.
-        let strings =
-            f.items.iter().chain(&f.item_values).fold(0usize, |n, i| n.saturating_add(i.len()).saturating_add(std::mem::size_of::<String>()));
-        let texts =
-            [&f.tooltip, &f.picture, &f.data_picture, &f.validate_message, &f.format_picture, &f.format_message, &f.calc_message, &f.display_picture]
-                .into_iter()
-                .fold(0usize, |n, t| n.saturating_add(t.as_ref().map_or(0, String::len)));
-        tree_bytes(&f.common.props).saturating_add(std::mem::size_of::<Field>()).saturating_add(scripts).saturating_add(strings).saturating_add(texts)
-    };
-    remembered(&memo.fields, &f.common.props, sets, cost, || {
+    remembered(&memo.fields, &f.common.props, sets, field_bytes, || {
         #[cfg(test)]
         FIELDS_MADE.with(|c| c.set(c.get().saturating_add(1)));
         crate::restyle::restyled_field(f, sets)
     })
+}
+
+/// Bytes a field holds, roughly: its property tree, and what it holds of its own beside it.
+pub(crate) fn field_bytes(f: &Field) -> usize {
+    let scripts = f.scripts.iter().chain(&f.calculate).chain(&f.validate).chain(&f.validate_off).fold(0usize, |n, s| n.saturating_add(s.text.len()));
+    // Its lists are its own copies (an item list holds up to `parse::MAX_ITEMS` entries,
+    // outside the object's property budget), so they count too, as do its texts.
+    let strings = f.items.iter().chain(&f.item_values).fold(0usize, |n, i| n.saturating_add(i.len()).saturating_add(std::mem::size_of::<String>()));
+    let texts =
+        [&f.tooltip, &f.picture, &f.data_picture, &f.validate_message, &f.format_picture, &f.format_message, &f.calc_message, &f.display_picture]
+            .into_iter()
+            .fold(0usize, |n, t| n.saturating_add(t.as_ref().map_or(0, String::len)));
+    // So is its value (a default text, a picture's bytes), and its caption's.
+    let values = value_bytes(&f.value).saturating_add(f.caption.as_ref().map_or(0, |c| value_bytes(&c.value)));
+    tree_bytes(&f.common.props)
+        .saturating_add(std::mem::size_of::<Field>())
+        .saturating_add(scripts)
+        .saturating_add(strings)
+        .saturating_add(texts)
+        .saturating_add(values)
+}
+
+/// Bytes a value holds of its own, roughly: its text, its rich text's runs, its picture.
+pub(crate) fn value_bytes(v: &Value) -> usize {
+    match v {
+        Value::Text(t) => t.len(),
+        Value::Rich(r) => r.paragraphs.iter().flat_map(|p| &p.runs).fold(0usize, |n, run| {
+            n.saturating_add(std::mem::size_of::<crate::model::Run>())
+                .saturating_add(run.text.len())
+                .saturating_add(run.embed.as_ref().map_or(0, String::len))
+        }),
+        Value::Image { content_type, data, href } => {
+            data.len().saturating_add(content_type.len()).saturating_add(href.as_ref().map_or(0, String::len))
+        }
+        Value::Empty | Value::Line { .. } | Value::Rectangle(_) => 0,
+    }
 }
 
 /// What `make` gives for the template object whose tree is `base` and the changes `sets`, from
@@ -514,27 +539,43 @@ mod tests {
         assert!(!written.windows(5).any(|w| w == b"Tip 0"), "the changes are written though nothing refers to them");
     }
 
-    /// Changes whose object names its entries by reference are read through the references each
-    /// time: an entry's object changed while the object of changes stays the same is read anew.
+    /// Review r5 (D1): a path's changes named by reference, or a value named by one, are not
+    /// followed (they are written in the object of changes itself): each is counted as refused,
+    /// the ones the object holds are read, and what was read stands for the object in the memo
+    /// whatever the referenced objects become.
     #[test]
-    fn changes_named_by_reference_are_read_again() {
+    fn changes_named_by_reference_are_not_followed() {
         use pdfcraft_cos::{Dict, Object, PdfString};
-        let (mut doc, tpl, _) = form_with_kept_changes(1);
-        let sets = |tip: &str| Object::Dict(Dict::from_iter([(b"assist#0/toolTip#0".to_vec(), Object::String(PdfString::text(tip)))]));
-        let entry = doc.add(sets("First"));
+        let (mut doc, tpl, _) = form_with_kept_changes(3);
+        let tip = |tip: &str| Object::String(PdfString::text(tip));
+        let sets = |value: Object| Object::Dict(Dict::from_iter([(b"assist#0/toolTip#0".to_vec(), value)]));
+        let entry = doc.add(sets(tip("By reference")));
+        let value = doc.add(tip("Value by reference"));
         let root = doc.root().unwrap();
         let mut acro = doc.get(root).as_dict().and_then(|c| c.get(b"AcroForm")).map(|a| doc.resolve(a)).and_then(|a| a.as_dict().cloned()).unwrap();
         let mut kept = acro.get(crate::script::OVERRIDES_KEY).map(|o| doc.resolve(o)).and_then(|o| o.as_dict().cloned()).unwrap();
-        let props = doc.add(Object::Dict(Dict::from_iter([(b"form[0].f0[0]".to_vec(), Object::Ref(entry))])));
+        let props = doc.add(Object::Dict(Dict::from_iter([
+            (b"form[0].f0[0]".to_vec(), Object::Ref(entry)),
+            (b"form[0].f1[0]".to_vec(), sets(Object::Ref(value))),
+            (b"form[0].f2[0]".to_vec(), sets(tip("Held"))),
+        ])));
         kept.set(b"Props".to_vec(), Object::Ref(props));
         acro.set(crate::script::OVERRIDES_KEY.to_vec(), Object::Dict(kept));
         doc.update_dict(root, |c| c.set(b"AcroForm".to_vec(), Object::Dict(acro))).unwrap();
-        let tip = |doc: &pdfcraft_cos::Document| {
-            crate::script::overrides_of(doc, &tpl).props().get("form[0].f0[0]").and_then(|m| m.get("assist#0/toolTip#0")).cloned()
-        };
-        assert_eq!(tip(&doc).as_deref(), Some("First"));
-        doc.set(entry, sets("Second"));
-        assert_eq!(tip(&doc).as_deref(), Some("Second"));
+        let _ = crate::script::take_kept_read();
+        let read = crate::script::overrides_of(&doc, &tpl);
+        let tips: Vec<_> = read.props().iter().map(|(som, m)| (som.as_str(), m.get("assist#0/toolTip#0").map(String::as_str))).collect();
+        assert_eq!(tips, [("form[0].f2[0]", Some("Held"))]);
+        assert_eq!(read.dropped, 2, "the two named by reference, counted for a note");
+        assert_eq!(crate::script::take_kept_read(), 1);
+        // The referenced objects change: the object of changes is the same, and so is what it
+        // gives, taken from the memo.
+        doc.set(entry, sets(tip("Changed")));
+        doc.set(value, tip("Changed"));
+        assert_eq!(crate::script::overrides_of(&doc, &tpl), read);
+        assert_eq!(crate::script::take_kept_read(), 0);
+        // And read without the memo, the same.
+        assert_eq!(crate::script::overrides(&doc), read);
     }
 
     /// Review r2 (H1): a field the memo keeps counts its own copies of its item lists (outside
@@ -557,5 +598,26 @@ mod tests {
         // The field's own lists, past its tree (which holds the entries too).
         let lists = tree_bytes(&made.common.props) + 2 * 1_000 * 204;
         assert!(fields_bytes(&tpl.memo) >= lists, "{} < {lists}", fields_bytes(&tpl.memo));
+    }
+
+    /// Review r5 (D4): so does it count its own copy of its value (a long default text) and its
+    /// caption's, which its tree need not hold; the layout's readings are counted by the same.
+    #[test]
+    fn a_kept_field_counts_its_value_and_its_captions() {
+        let (text, label) = ("v".repeat(60_000), "c".repeat(40_000));
+        let xdp = format!(
+            r#"<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/"><subform name="form" layout="tb">
+<pageSet><pageArea name="p"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+<field name="note" w="2in" h="0.3in"><ui><textEdit/></ui><caption><value><text>{label}</text></value></caption><value><text>{text}</text></value></field></subform></template>"#
+        );
+        let tpl = crate::parse(&xdp).unwrap().0;
+        let Some(crate::model::Node::Field(f)) = tpl.root.children.first() else { panic!() };
+        assert_eq!((value_bytes(&f.value), f.caption.as_ref().map(|c| value_bytes(&c.value))), (60_000, Some(40_000)));
+        let sets = BTreeMap::from([("validate#0@nullTest".to_string(), "error".to_string())]);
+        let made = restyled_field(&tpl.memo, f, &sets);
+        // The texts are past what the tree keeps of an object (`parse::MAX_OBJECT_PROP_BYTES`).
+        assert!(tree_bytes(&made.common.props) < 40_000);
+        let own = tree_bytes(&made.common.props) + 100_000;
+        assert!(fields_bytes(&tpl.memo) >= own, "{} < {own}", fields_bytes(&tpl.memo));
     }
 }

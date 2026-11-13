@@ -365,7 +365,14 @@ fn a_form_that_turns_field_highlighting_on_gets_it() {
 /// A form with `k2` and `k3` calculated from `k1`, calculations the form only recommends
 /// (`<calculate override="warning">`).
 fn recommended_calculation() -> Vec<u8> {
-    pdfcraft_xfa::fixtures::shell(
+    recommended_calculation_saying("")
+}
+
+/// [`recommended_calculation`], with `message` (XML text) as what the form says when a value is
+/// typed over `k2`'s calculation; none when empty.
+fn recommended_calculation_saying(message: &str) -> Vec<u8> {
+    let message = if message.is_empty() { String::new() } else { format!("<message><text>{message}</text></message>") };
+    pdfcraft_xfa::fixtures::shell(&format!(
         r##"<?xml version="1.0" encoding="UTF-8"?>
 <xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
 <template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
@@ -373,14 +380,14 @@ fn recommended_calculation() -> Vec<u8> {
  <pageSet><pageArea name="p"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
  <subform name="s" layout="tb">
   <field name="k1" w="2in" h="0.3in"><ui><numericEdit/></ui><value><decimal>1</decimal></value></field>
-  <field name="k2" w="2in" h="0.3in"><ui><numericEdit/></ui><calculate override="warning"><script contentType="application/x-javascript">k1.rawValue * 10</script></calculate></field>
+  <field name="k2" w="2in" h="0.3in"><ui><numericEdit/></ui><calculate override="warning">{message}<script contentType="application/x-javascript">k1.rawValue * 10</script></calculate></field>
   <field name="k3" w="2in" h="0.3in"><ui><numericEdit/></ui><calculate override="warning"><script contentType="application/x-javascript">k1.rawValue * 7</script></calculate></field>
  </subform>
 </subform>
 </template>
 </xdp:xdp>
-"##,
-    )
+"##
+    ))
 }
 
 fn field_name(h: &Harness<'static, PdfCraftApp>, field: &str) -> String {
@@ -437,6 +444,27 @@ fn typing_over_a_recommended_calculation_asks_whether_to_keep_the_value() {
     h.key_press(egui::Key::Escape);
     h.run_steps(3);
     assert_eq!(value(&h, "k2"), "10");
+}
+
+/// What a form says about a value typed over its calculation can be any length: the question
+/// shows it cut to `MAX_QUESTION` characters, in a box that scrolls, so both answers stay on
+/// screen.
+#[test]
+fn a_long_question_from_the_form_keeps_both_answers_on_screen() {
+    let mut h = open(recommended_calculation_saying(&"Recommended.\n".repeat(2_000)));
+    type_value(&mut h, "k2", "5");
+    assert_eq!(asked(&h), ["k2"]);
+    let said = h.state().pending_calc_overrides.front().map(|(_, _, m)| m.chars().count());
+    assert_eq!(said, Some(pdfcraft_xfa::validation_rules::MAX_QUESTION + 1), "cut to the limit, and marked as cut");
+    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 800.0));
+    for answer in ["Use calculated value", "Keep my value"] {
+        let at = h.get_by_label(answer).rect();
+        assert!(screen.contains_rect(at), "{answer} is at {at:?}");
+    }
+    h.get_by_label("Keep my value").click();
+    h.run_steps(3);
+    assert!(asked(&h).is_empty());
+    assert_eq!(value(&h, "k2"), "5");
 }
 
 /// Using the calculated value goes back to it in the document it was typed into, even when
@@ -632,4 +660,134 @@ fn a_question_a_reset_answered_is_dropped() {
     assert_eq!(value(&h, "k2"), "10");
     assert!(asked(&h).is_empty());
     assert!(h.state().toast.is_none(), "{:?}", h.state().toast);
+}
+
+/// Whether the document in front keeps `field`'s value over its calculation.
+fn kept(h: &Harness<'static, PdfCraftApp>, field: &str) -> bool {
+    let s = h.state();
+    s.session.calculation_overridden(s.views[0].id, &field_name(h, field))
+}
+
+/// `field`'s value, whether it is kept over its calculation, and how many questions wait.
+fn calc_state(h: &Harness<'static, PdfCraftApp>, field: &str) -> (String, bool, usize) {
+    (value(h, field), kept(h, field), asked(h).len())
+}
+
+/// Undo and Redo around the question. A kept value is one step: Undo gives the field its
+/// calculated value again and Redo the kept value, without asking a second time. "Use
+/// calculated value" is a step of its own: Undo brings the typed value back, kept as it was
+/// while the question was shown, and that is not asked about again either.
+#[test]
+fn undo_and_redo_around_the_calculation_question_ask_nothing_new() {
+    let mut h = open(recommended_calculation());
+    type_value(&mut h, "k2", "5");
+    h.get_by_label("Keep my value").click();
+    h.run_steps(3);
+    assert_eq!(calc_state(&h, "k2"), ("5".to_string(), true, 0));
+    h.state_mut().undo();
+    h.run_steps(3);
+    assert_eq!(calc_state(&h, "k2"), ("10".to_string(), false, 0));
+    h.state_mut().redo();
+    h.run_steps(3);
+    assert_eq!(calc_state(&h, "k2"), ("5".to_string(), true, 0));
+    assert!(h.query_by_label("Replace the calculated value?").is_none());
+    type_value(&mut h, "k1", "2");
+    assert_eq!(value(&h, "k2"), "5", "kept over the calculation after the redo, too");
+
+    type_value(&mut h, "k3", "9");
+    h.get_by_label("Use calculated value").click();
+    h.run_steps(3);
+    assert_eq!(calc_state(&h, "k3"), ("14".to_string(), false, 0));
+    h.state_mut().undo();
+    h.run_steps(3);
+    assert_eq!(calc_state(&h, "k3"), ("9".to_string(), true, 0), "the typed value is back, kept, and not asked about again");
+    assert!(h.query_by_label("Replace the calculated value?").is_none());
+    h.state_mut().undo();
+    h.run_steps(3);
+    assert_eq!(calc_state(&h, "k3"), ("14".to_string(), false, 0));
+    h.state_mut().redo();
+    h.run_steps(3);
+    h.state_mut().redo();
+    h.run_steps(3);
+    assert_eq!(calc_state(&h, "k3"), ("14".to_string(), false, 0));
+}
+
+/// Undo while the question is shown takes the typed value back, so the question has nothing
+/// left to ask and goes.
+#[test]
+fn undoing_the_entry_takes_its_calculation_question_away() {
+    let mut h = open(recommended_calculation());
+    type_value(&mut h, "k2", "5");
+    h.get_by_label("Replace the calculated value?");
+    h.state_mut().undo();
+    h.run_steps(3);
+    assert_eq!(calc_state(&h, "k2"), ("10".to_string(), false, 0), "{:?}", h.state().pending_calc_overrides);
+    assert!(h.query_by_label("Replace the calculated value?").is_none());
+}
+
+/// A kept value is in the file: the document as it is, opened again, shows the value, still
+/// kept over its calculation (a change of what it is calculated from leaves it), and asks
+/// nothing, since the question was answered.
+#[test]
+fn a_kept_value_is_kept_in_the_file_opened_again() {
+    let mut h = open(recommended_calculation());
+    type_value(&mut h, "k2", "5");
+    h.get_by_label("Keep my value").click();
+    h.run_steps(3);
+    let bytes = {
+        let s = h.state();
+        s.session.get(s.views[0].id).unwrap().bytes.to_vec()
+    };
+    let mut h = open(bytes);
+    assert_eq!((calc_state(&h, "k2"), value(&h, "k3")), (("5".to_string(), true, 0), "7".to_string()));
+    assert!(h.query_by_label("Replace the calculated value?").is_none());
+    type_value(&mut h, "k1", "2");
+    assert_eq!((value(&h, "k2"), value(&h, "k3")), ("5".to_string(), "14".to_string()));
+}
+
+/// Questions waiting about values kept in two rows are dropped when a script removes a row
+/// before them: each field has another name from then on, so the answer would go to another
+/// field (the second row's name is the third row's field's now). Both values stay kept.
+#[test]
+fn a_question_about_a_field_a_script_renamed_is_dropped() {
+    let amount = r#"<field name="amount" h="0.3in"><ui><numericEdit/></ui>"#;
+    let template = pdfcraft_xfa::fixtures::scripted_template()
+        .replace(
+            &format!("{amount}</field>"),
+            &format!(
+                r#"{amount}<calculate override="warning"><script contentType="application/x-javascript">qty.rawValue * 3</script></calculate><event activity="exit"><script contentType="application/x-javascript">if (this.rawValue == 7) {{ table._row.removeInstance(0); }}</script></event></field>"#
+            ),
+        )
+        .replace(r#"xfa.host.messageBox("Hello " + qty.rawValue);"#, "table._row.addInstance(1); table._row.addInstance(1);");
+    assert!(template.contains(r#"override="warning""#) && template.contains("addInstance(1); table"), "the fixture is as this test expects");
+    let mut h = open(pdfcraft_xfa::fixtures::shell(&template));
+    crate::support::settle(&mut h);
+    click_field(&mut h, "hello");
+    let amounts = |h: &Harness<'static, PdfCraftApp>| {
+        let s = h.state();
+        let id = s.views[0].id;
+        let doc = s.session.get(id).unwrap();
+        ["amount", "amount_2", "amount_3"]
+            .map(|n| doc.form.iter().find(|f| f.name == n).map(|f| (f.value.join(""), s.session.calculation_overridden(id, n))))
+    };
+    let set = |h: &mut Harness<'static, PdfCraftApp>, name: &str, value: &str| {
+        h.state_mut().apply_edit(pdfcraft_engine::Edit::SetFieldValue { name: name.into(), value: pdfcraft_engine::FieldValue::Text(value.into()) });
+        h.run_steps(3);
+    };
+    assert_eq!(amounts(&h), [0; 3].map(|_| Some(("6".to_string(), false))));
+    set(&mut h, "amount_2", "50");
+    h.state_mut().views[0].content.draft = Some(unappliable_box());
+    h.run_steps(1);
+    h.get_by_label("Use calculated value").click();
+    h.run_steps(3);
+    set(&mut h, "amount_3", "60");
+    assert_eq!(asked(&h), ["amount_2", "amount_3"], "both wait for the box");
+    // Typing 7 into the first row's amount runs its exit script, which removes that row.
+    set(&mut h, "amount", "7");
+    assert_eq!(amounts(&h), [Some(("50".to_string(), true)), Some(("60".to_string(), true)), None]);
+    assert!(asked(&h).is_empty(), "{:?}", h.state().pending_calc_overrides);
+    h.state_mut().views[0].content.draft = None;
+    h.run_steps(3);
+    assert!(h.query_by_label("Replace the calculated value?").is_none());
+    assert_eq!(amounts(&h), [Some(("50".to_string(), true)), Some(("60".to_string(), true)), None]);
 }

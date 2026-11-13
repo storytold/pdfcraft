@@ -112,6 +112,12 @@ impl PdfCraftApp {
                         self.pending_calc_overrides.push_back((id, field, message));
                     }
                 }
+                // The names belong to other fields now, or to none: a question still waiting
+                // about one would be answered for the wrong field, so it goes (the value it
+                // was about stays kept, and the Forms tools can still take it back).
+                Request::CalculationsMoved { fields } => {
+                    self.pending_calc_overrides.retain(|(d, f, _)| *d != id || !fields.contains(f));
+                }
                 Request::Zoom(z) => {
                     if let Some(i) = view {
                         self.views[i].zoom = (z / 100.0) as f32;

@@ -335,6 +335,16 @@ pub enum Request {
         field: String,
         message: String,
     },
+    /// Values kept over calculations (see [`Request::CalculationOverridden`]) whose fields have
+    /// other names now, by the names they had: a field's name follows its place among the
+    /// form's fields, and the event's scripts added or removed a row, or showed or hid a part.
+    /// A question still held about one of them is dropped, since the name it would be answered
+    /// by is another field's now, or none's; the values stay kept. Comes before the same
+    /// event's own `CalculationOverridden` requests, which use the names as they are after it.
+    /// Never made by a script.
+    CalculationsMoved {
+        fields: Vec<String>,
+    },
 }
 
 /// A side panel a script can show or hide (`app.execMenuItem("ShowHideFileAttachment")`, …).

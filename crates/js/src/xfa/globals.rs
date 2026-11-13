@@ -392,18 +392,31 @@ pub(super) fn install(ctx: &mut Context, event: &XfaEvent, doc: &XfaDoc, current
                 .filter_map(|c| h.nodes.get(c).map(|k| (c, k.name.to_string(), k.parent.filter(|_| k.repeatable && !k.gone))))
                 .collect()
         };
+        let mut hidden: Vec<String> = Vec::new();
         for (c, name, repeating_in) in kids {
-            if !is_identifier(&name) || defined.contains(&name) {
+            if !is_identifier(&name) {
+                continue;
+            }
+            // `_name` is the manager of the first repeating subform of the name in this scope,
+            // which an object of the name that occurs once may come before (a header row).
+            if let Some(owner) = repeating_in {
+                let manager = format!("_{name}");
+                if !defined.contains(&manager) {
+                    let im = instance_manager(ctx, owner, &name)?;
+                    ctx.register_global_property(JsString::from(manager.as_str()), im, rw)?;
+                    defined.insert(manager);
+                }
+            }
+            if defined.contains(&name) {
                 continue;
             }
             let obj = node_object(ctx, c)?;
             ctx.register_global_property(JsString::from(name.as_str()), obj, rw)?;
-            if let Some(owner) = repeating_in {
-                let im = instance_manager(ctx, owner, &name)?;
-                ctx.register_global_property(JsString::from(format!("_{name}").as_str()), im, rw)?;
-            }
+            hidden.push(format!("_{name}"));
             defined.insert(name);
         }
+        // A name found in this scope hides the same name further out, and its manager with it.
+        defined.extend(hidden);
     }
     Ok(())
 }

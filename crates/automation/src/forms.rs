@@ -295,6 +295,8 @@ impl Automation {
 
     pub(crate) fn form_fields(&self, a: &Args) -> Result<Value> {
         let doc = self.doc(a)?;
+        // The dynamic XFA fields whose typed values are kept over their calculations.
+        let typed_over = self.session.overridden_calculations(doc.id);
         let out: Vec<Value> = doc
             .form
             .iter()
@@ -338,6 +340,9 @@ impl Automation {
                 }
                 if let Some(c) = calculate_json(f) {
                     o.insert("calculate".into(), c);
+                }
+                if typed_over.contains(&f.name) {
+                    o.insert("calculation_overridden".into(), json!(true));
                 }
                 if !f.actions.unsupported.is_empty() {
                     o.insert("unsupported_scripts".into(), json!(f.actions.unsupported));
@@ -444,7 +449,7 @@ impl Automation {
             edits.push(Edit::SetFieldValue { name: name.clone(), value: value_for(f, v)? });
         }
         let edit = if edits.len() == 1 { edits.remove(0) } else { Edit::Batch { label: "Fill in form".into(), edits } };
-        let mut out = self.apply(a, edit)?;
+        let mut out = self.apply_scripted(a, edit)?;
         out["filled"] = json!(values.len());
         // A value the box cuts off at a fixed font size is saved whole but shows only in part:
         // said, not silent (#4018).
@@ -468,7 +473,7 @@ impl Automation {
 
     pub(crate) fn form_reset(&mut self, a: &Args) -> Result<Value> {
         let names = a.get("fields").map(|_| a.strs("fields").map(|v| v.into_iter().map(str::to_owned).collect::<Vec<_>>())).transpose()?;
-        self.apply(a, Edit::ResetForm { names })
+        self.apply_scripted(a, Edit::ResetForm { names })
     }
 
     pub(crate) fn form_add_field(&mut self, a: &Args) -> Result<Value> {

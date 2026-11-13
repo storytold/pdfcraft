@@ -191,6 +191,91 @@ fn an_instance_manager_is_found_through_an_unnamed_subform() {
     assert_eq!(o.result.as_deref(), Some("4"));
 }
 
+/// A subform that occurs once before a repeating one of its name in the same container (a
+/// header row named as the rows are) is no instance of it: `_row`, asked by name or of a row,
+/// counts, adds and removes the rows, and how often the header occurs is its own.
+#[test]
+fn a_subform_that_occurs_once_is_no_instance_of_the_repeating_one_of_its_name() {
+    let root = subform(
+        "form1",
+        "form1[0]",
+        0,
+        vec![row(0, false, "10", vec![]), row(1, true, "20", vec![]), row(2, true, "30", vec![]), field("go", "form1[0].go[0]", 0, "")],
+    );
+    let go = "form1[0].go[0]";
+    let o = js(
+        &root,
+        "var n = this.parent._row.count; var r = _row.addInstance(1); \
+         [n, _row.count, r.somExpression, r.instanceIndex, xfa.resolveNode('form1.row[1]').instanceManager.count, xfa.resolveNode('form1.row[0]').instanceIndex].join('/')",
+        go,
+    );
+    assert_eq!(o.error, None, "{o:?}");
+    assert_eq!(o.result.as_deref(), Some("2/3/form1[0].row[3]/2/3/0"));
+    assert_eq!(o.effects, [XfaEffect::AddInstance { som: "form1[0].row[3]".into() }]);
+
+    let o = js(
+        &root,
+        "_row.removeInstance(0); [_row.count, xfa.resolveNode('form1.row[0]').what.rawValue, xfa.resolveNode('form1.row[1]').what.rawValue].join('/')",
+        go,
+    );
+    assert_eq!(o.error, None, "{o:?}");
+    assert_eq!(o.result.as_deref(), Some("1/10/30"), "the header stays, the row after the removed one takes its number");
+    assert_eq!(o.effects, [XfaEffect::RemoveInstance { som: "form1[0].row[1]".into() }]);
+
+    let o = fc(&root, "form1._row.addInstance(1)\nConcat(form1._row.count, \"/\", _row.count, \"/\", form1.row[3].instanceIndex)", go);
+    assert_eq!(o.error, None, "{o:?}");
+    assert_eq!(o.result.as_deref(), Some("3/3/2"));
+    assert_eq!(o.effects, [XfaEffect::AddInstance { som: "form1[0].row[3]".into() }]);
+    let o = fc(&root, "form1._row.removeInstance(0)\nConcat(form1._row.count, \"/\", form1.row[0].what, \"/\", form1.row[1].what)", go);
+    assert_eq!(o.error, None, "{o:?}");
+    assert_eq!(o.result.as_deref(), Some("1/10/30"));
+    assert_eq!(o.effects, [XfaEffect::RemoveInstance { som: "form1[0].row[1]".into() }]);
+
+    // The header's `occur` is not the rows': their manager, asked for after the write, reads
+    // the rows' own.
+    let o = js(
+        &root,
+        "var h = xfa.resolveNode('form1.row[0]'); h.occur.min = '0'; var r = xfa.resolveNode('form1.row[2]'); \
+         [h.occur.min, r.instanceManager.min, r.occur.min].join('/')",
+        go,
+    );
+    assert_eq!(o.error, None, "{o:?}");
+    assert_eq!(o.result.as_deref(), Some("0/1/1"));
+}
+
+/// The same with the header and the rows each in an unnamed subform of the container: `_row`
+/// asked of the container, or by name alone, is the manager of the rows, not of the header the
+/// name finds first.
+#[test]
+fn the_manager_asked_by_name_is_the_repeating_subforms_through_unnamed_subforms() {
+    let go = "form1[0].go[0]";
+    let o = js(
+        &rows(),
+        "var n = this.parent._row.count; var r = _row.addInstance(1); \
+         [n, _row.count, xfa.resolveNode('form1')._row.count, r.somExpression, r.instanceIndex].join('/')",
+        go,
+    );
+    assert_eq!(o.error, None, "{o:?}");
+    assert_eq!(o.result.as_deref(), Some("2/3/3/form1[0].row[3]/2"));
+    assert_eq!(o.effects, [XfaEffect::AddInstance { som: "form1[0].row[3]".into() }]);
+
+    let o = fc(&rows(), "form1._row.addInstance(1)\nConcat(form1._row.count, \"/\", _row.count, \"/\", form1.row[3].instanceIndex)", go);
+    assert_eq!(o.error, None, "{o:?}");
+    assert_eq!(o.result.as_deref(), Some("3/3/2"));
+    assert_eq!(o.effects, [XfaEffect::AddInstance { som: "form1[0].row[3]".into() }]);
+    let o = fc(&rows(), "_row.removeInstance(0)\nConcat(_row.count, \"/\", form1.row[0].what, \"/\", form1.row[1].what)", go);
+    assert_eq!(o.error, None, "{o:?}");
+    assert_eq!(o.result.as_deref(), Some("1/10/30"));
+    assert_eq!(o.effects, [XfaEffect::RemoveInstance { som: "form1[0].row[1]".into() }]);
+    // The count is set through the manager, and by a value assigned to the manager itself.
+    for script in ["form1._row.count = 4\nform1._row.count", "form1._row = 4\nform1._row.count"] {
+        let o = fc(&rows(), script, go);
+        assert_eq!(o.error, None, "{script}: {o:?}");
+        assert_eq!(o.result.as_deref(), Some("4"), "{script}");
+        assert_eq!(o.effects, [XfaEffect::AddInstance { som: "form1[0].row[3]".into() }, XfaEffect::AddInstance { som: "form1[0].row[4]".into() }]);
+    }
+}
+
 /// A copy of a subform takes the first instance of each repeating subform in it, which is told
 /// by the order: here the first `item` that repeats is `item[1]`, after one that occurs once.
 #[test]

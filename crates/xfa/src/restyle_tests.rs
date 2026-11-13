@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 
 use super::*;
+use crate::data::{DataNode, DataOp};
 use crate::layout::{Item, Widget};
 use crate::model::{Node, Rect, Template};
 use crate::script::{Overrides, PropRefused};
@@ -19,6 +20,46 @@ const TEMPLATE: &str = r##"<template xmlns="http://www.xfa.org/schema/xfa-templa
 
 fn template() -> Template {
     crate::parse(TEMPLATE).unwrap().0
+}
+
+/// A document of [`TEMPLATE`] whose kept property changes are `props`, as a file holding them.
+fn doc_with_props(props: pdfcraft_cos::Dict) -> pdfcraft_cos::Document {
+    doc_with_kept(b"Props", props)
+}
+
+/// A document of [`TEMPLATE`] whose kept overrides hold `kept` under `key`.
+fn doc_with_kept(key: &[u8], kept: pdfcraft_cos::Dict) -> pdfcraft_cos::Document {
+    let mut doc = pdfcraft_cos::Document::open(std::sync::Arc::new(crate::fixtures::shell(TEMPLATE))).unwrap();
+    keep(&mut doc, key, kept);
+    doc
+}
+
+/// Put `kept` under `key` in the overrides `doc` keeps.
+fn keep(doc: &mut pdfcraft_cos::Document, key: &[u8], kept: pdfcraft_cos::Dict) {
+    let mut some = Overrides::default();
+    some.access.insert("x".into(), "readOnly".into());
+    crate::set_overrides(doc, &some).unwrap();
+    let root = doc.root().unwrap();
+    let acro = doc.get(root).as_dict().unwrap().get(b"AcroForm").cloned().unwrap();
+    let mut d = doc.resolve(&acro).as_dict().unwrap().clone();
+    let mut o = doc.resolve(d.get(crate::OVERRIDES_KEY).unwrap()).as_dict().unwrap().clone();
+    o.set(key.to_vec(), pdfcraft_cos::Object::Dict(kept));
+    d.set(crate::OVERRIDES_KEY.to_vec(), pdfcraft_cos::Object::Dict(o));
+    match acro.as_ref() {
+        Some(r) => doc.set(r, pdfcraft_cos::Object::Dict(d)),
+        None => doc.update_dict(root, |c| c.set(b"AcroForm".to_vec(), pdfcraft_cos::Object::Dict(d))).unwrap(),
+    }
+}
+
+/// `text` as a file holds it in UTF-16 (ISO 32000-2 7.9.2.2), whatever its characters.
+fn utf16(text: &str) -> pdfcraft_cos::Object {
+    let bytes = [0xFE, 0xFF].into_iter().chain(text.encode_utf16().flat_map(u16::to_be_bytes)).collect();
+    pdfcraft_cos::Object::String(pdfcraft_cos::PdfString { bytes, hex: false })
+}
+
+/// One path's changes: the tool tip `value`.
+fn tip_of(value: pdfcraft_cos::Object) -> pdfcraft_cos::Object {
+    pdfcraft_cos::Object::Dict(pdfcraft_cos::Dict::from_iter([(b"assist#0/toolTip#0".to_vec(), value)]))
 }
 
 fn sets(pairs: &[(&str, Option<&str>, &str)]) -> BTreeMap<String, String> {
@@ -269,14 +310,6 @@ fn property_changes_are_kept_in_the_file_within_limits() {
     }
     assert!(kept > 0 && kept * MAX_PROP_VALUE <= MAX_PROP_OVERRIDE_BYTES, "{kept}");
     // A file holding more, or values a script couldn't set, keeps only what fits.
-    let mut doc = pdfcraft_cos::Document::open(std::sync::Arc::new(crate::fixtures::shell(TEMPLATE))).unwrap();
-    let mut hostile = Overrides::default();
-    hostile.presence.insert("x".into(), "hidden".into());
-    crate::set_overrides(&mut doc, &hostile).unwrap();
-    let root = doc.root().unwrap();
-    let acro = doc.get(root).as_dict().unwrap().get(b"AcroForm").cloned().unwrap();
-    let mut d = doc.resolve(&acro).as_dict().unwrap().clone();
-    let mut o = doc.resolve(d.get(crate::OVERRIDES_KEY).unwrap()).as_dict().unwrap().clone();
     let mut objects = pdfcraft_cos::Dict::new();
     let mut bad = pdfcraft_cos::Dict::new();
     bad.set(b"border#0/fill#0/color#0@value".to_vec(), pdfcraft_cos::Object::String(pdfcraft_cos::PdfString::text("not a colour")));
@@ -288,13 +321,7 @@ fn property_changes_are_kept_in_the_file_within_limits() {
         one.set(b"font#0@size".to_vec(), pdfcraft_cos::Object::String(pdfcraft_cos::PdfString::text("9")));
         objects.set(format!("g{i:06}").into_bytes(), pdfcraft_cos::Object::Dict(one));
     }
-    o.set(b"Props".to_vec(), pdfcraft_cos::Object::Dict(objects));
-    d.set(crate::OVERRIDES_KEY.to_vec(), pdfcraft_cos::Object::Dict(o));
-    match acro.as_ref() {
-        Some(r) => doc.set(r, pdfcraft_cos::Object::Dict(d)),
-        None => doc.update_dict(root, |c| c.set(b"AcroForm".to_vec(), pdfcraft_cos::Object::Dict(d))).unwrap(),
-    }
-    let read = crate::overrides(&doc);
+    let read = crate::overrides(&doc_with_props(objects));
     assert_eq!(read.props().get("a").map(|m| m.keys().cloned().collect::<Vec<_>>()), Some(vec!["font#0@size".to_string()]));
     assert_eq!(read.props().values().map(BTreeMap::len).sum::<usize>(), MAX_PROP_OVERRIDES);
     assert_eq!(read.dropped, 13, "two not a script's, and the eleven past the limit, counted for a note");
@@ -320,39 +347,136 @@ fn copies_are_kept_within_what_reading_takes_back() {
 }
 
 /// Reading a file's property changes stops looking at entries once it has looked at as many as
-/// the limits allow, however the file names them: 300 objects naming one dictionary of 10,000
-/// entries cost about 20,000 looks, not three million, and the rest are counted unread.
+/// the limits allow: of 30 paths holding 1,500 changes each, 20,000 are looked at and the rest
+/// counted unread. A path's dictionary named by reference is not followed, whatever it names
+/// (here, 300 times, one of 10,000 entries): each is counted as one refused.
 #[test]
-fn reading_shared_change_dictionaries_stops_at_the_limit() {
+fn reading_change_dictionaries_stops_at_the_limit() {
     let mut doc = pdfcraft_cos::Document::open(std::sync::Arc::new(crate::fixtures::shell(TEMPLATE))).unwrap();
-    let mut hostile = Overrides::default();
-    hostile.presence.insert("x".into(), "hidden".into());
-    crate::set_overrides(&mut doc, &hostile).unwrap();
-    let mut shared = pdfcraft_cos::Dict::new();
-    for i in 0..10_000 {
-        shared.set(format!("extras#0@k{i}").into_bytes(), pdfcraft_cos::Object::String(pdfcraft_cos::PdfString::text("1")));
-    }
-    let shared = doc.add(shared);
+    let entries = |n: usize| {
+        let mut sets = pdfcraft_cos::Dict::new();
+        for i in 0..n {
+            sets.set(format!("extras#0@k{i}").into_bytes(), pdfcraft_cos::Object::String(pdfcraft_cos::PdfString::text("1")));
+        }
+        sets
+    };
+    let shared = doc.add(entries(10_000));
     let mut objects = pdfcraft_cos::Dict::new();
     for i in 0..300 {
-        objects.set(format!("o{i:03}").into_bytes(), pdfcraft_cos::Object::Ref(shared));
+        objects.set(format!("r{i:03}").into_bytes(), pdfcraft_cos::Object::Ref(shared));
+        if i % 10 == 0 {
+            objects.set(format!("o{i:03}").into_bytes(), pdfcraft_cos::Object::Dict(entries(1_500)));
+        }
     }
-    let root = doc.root().unwrap();
-    let acro = doc.get(root).as_dict().unwrap().get(b"AcroForm").cloned().unwrap();
-    let mut d = doc.resolve(&acro).as_dict().unwrap().clone();
-    let mut o = doc.resolve(d.get(crate::OVERRIDES_KEY).unwrap()).as_dict().unwrap().clone();
-    o.set(b"Props".to_vec(), pdfcraft_cos::Object::Dict(objects));
-    d.set(crate::OVERRIDES_KEY.to_vec(), pdfcraft_cos::Object::Dict(o));
-    match acro.as_ref() {
-        Some(r) => doc.set(r, pdfcraft_cos::Object::Dict(d)),
-        None => doc.update_dict(root, |c| c.set(b"AcroForm".to_vec(), pdfcraft_cos::Object::Dict(d))).unwrap(),
-    }
+    keep(&mut doc, b"Props", objects);
     crate::script::take_entries_looked();
     let read = crate::overrides(&doc);
     let looked = crate::script::take_entries_looked();
     assert!(looked <= 2 * MAX_PROP_OVERRIDES + 1, "{looked}");
     let kept = read.props().values().map(BTreeMap::len).sum::<usize>();
-    assert_eq!(kept.saturating_add(read.dropped), 300 * 10_000, "every entry kept or counted");
+    assert!(kept > 0);
+    assert_eq!(kept.saturating_add(read.dropped), 30 * 1_500 + 300, "every entry kept or counted, a reference as one");
+}
+
+/// Review r5 (D1): a kept value is measured as the file holds it before it is decoded. The
+/// longest that may be kept ([`MAX_PROP_VALUE`] bytes, twice that in UTF-16 with its mark) is
+/// read whole; one character longer is refused without being decoded.
+#[test]
+fn a_value_longer_than_any_kept_is_not_decoded() {
+    let longest = "x".repeat(MAX_PROP_VALUE);
+    let mut objects = pdfcraft_cos::Dict::new();
+    objects.set(b"form[0].plain[0]".to_vec(), tip_of(utf16(&longest)));
+    objects.set(b"form[0].boxed[0]".to_vec(), tip_of(utf16(&format!("{longest}x"))));
+    let doc = doc_with_props(objects);
+    crate::script::take_kept_read();
+    let read = crate::overrides(&doc);
+    assert_eq!(crate::script::take_kept_read(), 1, "the longer one is not decoded");
+    assert_eq!(read.props().get("form[0].plain[0]").and_then(|m| m.get("assist#0/toolTip#0")), Some(&longest));
+    assert_eq!(read.props().len(), 1);
+    assert_eq!(read.dropped, 1);
+}
+
+/// Review r5 (D1): no more bytes of kept values are decoded than all that may be kept could
+/// take in a file. Of 300 values of the longest kept length, as many are decoded as that
+/// allows (65), not all of them to refuse each past the limit; every one is kept or counted.
+#[test]
+fn values_are_decoded_within_what_all_kept_could_take() {
+    let longest = utf16(&"x".repeat(MAX_PROP_VALUE));
+    let mut objects = pdfcraft_cos::Dict::new();
+    for i in 0..300 {
+        objects.set(format!("f{i:03}").into_bytes(), tip_of(longest.clone()));
+    }
+    let doc = doc_with_props(objects);
+    crate::script::take_kept_read();
+    let read = crate::overrides(&doc);
+    let decoded = crate::script::take_kept_read();
+    let most = (2 * MAX_PROP_OVERRIDE_BYTES + 4 * MAX_PROP_OVERRIDES) / (2 + 2 * MAX_PROP_VALUE);
+    assert!(decoded <= most, "{decoded} > {most}");
+    assert!(read.props().len() >= MAX_PROP_OVERRIDE_BYTES / MAX_PROP_VALUE - 1, "{}", read.props().len());
+    assert_eq!(read.props().len().saturating_add(read.dropped), 300);
+}
+
+/// The limits on what is decoded take nothing a script may keep: values with characters a file
+/// holds in UTF-16, as long and as many as the limits on kept changes allow, are saved and read
+/// back whole.
+#[test]
+fn all_that_may_be_kept_is_read_back_whatever_its_characters() {
+    // The longest value, in the characters that grow most in a file; and short ones, many.
+    for value in [format!("{}\u{e9}", "x".repeat(MAX_PROP_VALUE - 2)), format!("\u{e9}{}", "x".repeat(98))] {
+        let mut ov = Overrides::default();
+        let mut kept = 0usize;
+        while ov.set_prop(&format!("f{kept}"), "assist#0/toolTip#0", None, &value).is_ok() {
+            kept += 1;
+        }
+        assert!(kept > 0 && kept <= MAX_PROP_OVERRIDES, "{kept}");
+        let mut doc = pdfcraft_cos::Document::open(std::sync::Arc::new(crate::fixtures::shell(TEMPLATE))).unwrap();
+        crate::set_overrides(&mut doc, &ov).unwrap();
+        let read = crate::overrides(&doc);
+        assert_eq!(read.dropped, 0, "{kept} values of {} bytes", value.len());
+        assert!(read.props() == ov.props(), "{kept} values of {} bytes", value.len());
+    }
+}
+
+/// Review r5 (D1): a kept presence, access or typed-over mark longer than any a script sets is
+/// not decoded; the longest read is 64 bytes as the file holds it.
+#[test]
+fn a_kept_state_longer_than_any_is_not_decoded() {
+    for key in [&b"Presence"[..], &b"Access"[..], &b"Overridden"[..]] {
+        let mut kept = pdfcraft_cos::Dict::new();
+        kept.set(b"a".to_vec(), utf16("nonInteractive"));
+        kept.set(b"b".to_vec(), pdfcraft_cos::Object::String(pdfcraft_cos::PdfString::literal("x".repeat(64))));
+        kept.set(b"c".to_vec(), pdfcraft_cos::Object::String(pdfcraft_cos::PdfString::literal("x".repeat(65))));
+        let read = crate::overrides(&doc_with_kept(key, kept));
+        let map = match key {
+            b"Presence" => &read.presence,
+            b"Access" => &read.access,
+            _ => &read.overridden,
+        };
+        assert_eq!(map.get("a").map(String::as_str), Some("nonInteractive"));
+        assert_eq!(map.get("b").map(String::len), Some(64));
+        assert_eq!(map.get("c"), None);
+    }
+}
+
+/// Review r5 (D2): a path holding no change is charged as one looked at, without asking whose
+/// path it is: after as many of them as the limits allow, nothing more is read.
+#[test]
+fn paths_holding_nothing_are_charged() {
+    let tpl = template();
+    for (empty, read_after) in [(2 * MAX_PROP_OVERRIDES - 1, true), (2 * MAX_PROP_OVERRIDES, false)] {
+        let mut objects = pdfcraft_cos::Dict::new();
+        for i in 0..empty {
+            objects.set(format!("form[0].rows[0].row[{i}]").into_bytes(), pdfcraft_cos::Object::Dict(pdfcraft_cos::Dict::new()));
+        }
+        objects.set(b"form[0].plain[0]".to_vec(), tip_of(utf16("Held")));
+        let doc = doc_with_props(objects);
+        let _ = (crate::script::take_entries_looked(), crate::script::take_owners_looked());
+        let read = crate::script::overrides_of(&doc, &tpl);
+        assert_eq!(crate::script::take_entries_looked(), usize::from(read_after), "{empty} empty");
+        assert!(crate::script::take_owners_looked() <= 1, "{empty} empty");
+        assert_eq!(read.props().len(), usize::from(read_after), "{empty} empty");
+        assert_eq!(read.dropped, usize::from(!read_after), "{empty} empty");
+    }
 }
 
 /// Edges past the ones a border lists (two here, drawn top/bottom then right/left): a change to
@@ -390,6 +514,53 @@ fn a_change_past_the_listed_edges_changes_only_that_side() {
     let bytes = pdfcraft_cos::write_full(&doc, &Default::default()).unwrap();
     let reopened = pdfcraft_cos::Document::open(std::sync::Arc::new(bytes)).unwrap();
     assert_eq!(colours(&crate::apply_overrides(&t, &crate::overrides(&reopened))), [a, b, a, red]);
+}
+
+/// A script's change to how often a subform occurs counts as the template's own from the next
+/// layout on, for the page and the live form alike. Rows past a lowered `max` are left out and
+/// said to be, the data keeps them, and they are back when `max` is raised; with no rows in the
+/// data the count is `initial`, which follows a raised `min` as the template's would.
+#[test]
+fn a_changed_occurrence_counts_as_the_templates_would() {
+    let t = template();
+    let mut data = DataNode::default();
+    for i in 0..3 {
+        let path = vec![("form".to_string(), 0), ("rows".to_string(), 0), ("row".to_string(), i), ("cell".to_string(), 0)];
+        data.apply(&DataOp::Value { path, text: format!("v{i}") });
+    }
+    let shown = |data: Option<&DataNode>, ov: &Overrides| -> (Vec<String>, bool, usize) {
+        let applied = crate::apply_overrides_split(&t, ov);
+        let form = crate::layout::layout_with_overrides(&applied.template, data, ov, &applied.per_instance).unwrap();
+        let cells: Vec<String> = form
+            .pages
+            .iter()
+            .flat_map(|p| p.items.iter())
+            .filter_map(|i| match i {
+                Item::Widget(w) if w.som.contains(".row[") => Some(w.value.clone().unwrap_or_default()),
+                _ => None,
+            })
+            .collect();
+        let live = crate::form_tree(&t, data, ov);
+        let rows = live.root.children.iter().find(|n| n.name == "rows").unwrap().children.len();
+        (cells, form.warnings.iter().any(|w| w.contains("only the first")), rows)
+    };
+    let all = || vec!["v0".to_string(), "v1".to_string(), "v2".to_string()];
+    assert_eq!(shown(Some(&data), &Overrides::default()), (all(), false, 3));
+    let mut ov = overrides("form[0].rows[0].row[0]", &[("occur#0", Some("max"), "2")]);
+    assert_eq!(shown(Some(&data), &ov), (vec!["v0".to_string(), "v1".to_string()], true, 2), "{:?}", ov);
+    ov.set_prop("form[0].rows[0].row[0]", "occur#0", Some("max"), "3").unwrap();
+    assert_eq!(shown(Some(&data), &ov), (all(), false, 3), "the data kept the third row");
+    // No rows in the data: one row, the template's `initial` (its `min`), and three once a
+    // script raised `min`.
+    let empty = || vec![String::new(); 3];
+    assert_eq!(shown(None, &Overrides::default()).2, 1);
+    let ov = overrides("form[0].rows[0].row[0]", &[("occur#0", Some("min"), "3")]);
+    assert_eq!(shown(None, &ov), (empty(), false, 3));
+    // Rows the data holds are not added to: `min` is what the instance manager may go down to.
+    let mut one = DataNode::default();
+    let path = vec![("form".to_string(), 0), ("rows".to_string(), 0), ("row".to_string(), 0), ("cell".to_string(), 0)];
+    one.apply(&DataOp::Value { path, text: "v0".into() });
+    assert_eq!(shown(Some(&one), &ov), (vec!["v0".to_string()], false, 1));
 }
 
 /// Each instance of a repeating subform is drawn with its own property changes: a fill and a
@@ -745,7 +916,7 @@ fn hostile_property_changes_stay_bounded() {
             let path = format!("extras#7/a{i}#7/b#7/c#7/d#7/e#7/f#7/g#7");
             match ov.set_prop(&som(o), &path, Some("x"), "1") {
                 Ok(_) => kept += 1,
-                Err(PropRefused::Full) if i == MAX_PROP_CHANGES_PER_OBJECT => {}
+                Err(PropRefused::ObjectFull) if i == MAX_PROP_CHANGES_PER_OBJECT => {}
                 Err(PropRefused::Full) => break 'all,
                 Err(e) => panic!("{e:?}"),
             }
@@ -789,6 +960,162 @@ fn a_removed_instances_changes_go_and_the_later_ones_move_down() {
     assert_eq!(ov.props()["form[0].rows[0].row[1].cell[0]"].keys().collect::<Vec<_>>(), ["validate#0@nullTest"]);
     assert_eq!(ov.presence.keys().collect::<Vec<_>>(), ["form[0].rows[0].row[1]"]);
     assert!(!ov.remove_instance("form[0].other[0].row[5]"), "nothing there");
+}
+
+/// Rows inside rows: removing an inner row renumbers the later inner rows of that outer row
+/// only, and removing an outer row moves the later outer rows down with their inner rows as
+/// they are. A name that only starts like the subform's is another object.
+#[test]
+fn removing_a_nested_row_renumbers_only_the_rows_beside_it() {
+    let keys = |ov: &Overrides| -> Vec<String> { ov.presence.keys().cloned().collect() };
+    let mut ov = Overrides::default();
+    for som in [
+        "form[0].outer[0].inner[2].f[0]",
+        "form[0].outer[1].inner[0].f[0]",
+        "form[0].outer[1].inner[1].f[0]",
+        "form[0].outer[1].inner[2].f[0]",
+        "form[0].outer[1].inner[3]",
+        "form[0].outer[1].innermost[2].f[0]",
+        "form[0].outer[2].inner[2].f[0]",
+    ] {
+        ov.presence.insert(som.into(), "hidden".into());
+        ov.set_prop(som, "font#0", Some("size"), "9pt").unwrap();
+    }
+    assert!(ov.remove_instance("form[0].outer[1].inner[1]"));
+    let inner_gone = [
+        "form[0].outer[0].inner[2].f[0]",
+        "form[0].outer[1].inner[0].f[0]",
+        "form[0].outer[1].inner[1].f[0]",
+        "form[0].outer[1].inner[2]",
+        "form[0].outer[1].innermost[2].f[0]",
+        "form[0].outer[2].inner[2].f[0]",
+    ];
+    assert_eq!(keys(&ov), inner_gone);
+    assert_eq!(ov.props().keys().collect::<Vec<_>>(), inner_gone);
+    assert!(ov.remove_instance("form[0].outer[0]"));
+    let outer_gone = [
+        "form[0].outer[0].inner[0].f[0]",
+        "form[0].outer[0].inner[1].f[0]",
+        "form[0].outer[0].inner[2]",
+        "form[0].outer[0].innermost[2].f[0]",
+        "form[0].outer[1].inner[2].f[0]",
+    ];
+    assert_eq!(keys(&ov), outer_gone);
+    assert_eq!(ov.props().keys().collect::<Vec<_>>(), outer_gone);
+    assert!(!ov.remove_instance("form[0].outer[5]"), "no row there, nothing kept past it");
+    assert!(!ov.remove_instance("form[0].outer") && !ov.remove_instance("form[0].outer[x]"), "not an instance's path");
+    assert_eq!(keys(&ov), outer_gone);
+}
+
+/// Presence and access are not drawn per instance yet: scripts read each instance's own (the
+/// live form), and the page takes them from the template object, which the first instance of a
+/// repeating subform stands for. So a cell hidden on a later row still shows, a cell hidden on
+/// the first row is hidden on every row, and when the first row goes the next row's are the
+/// first's (they stay with their row).
+#[test]
+fn presence_set_on_one_row_is_that_rows_to_scripts_and_the_first_rows_on_the_page() {
+    let tpl = TEMPLATE.replace(r#"<occur min="1" max="3"/>"#, r#"<occur min="3" max="3"/>"#);
+    let t = crate::parse(&tpl).unwrap().0;
+    let cells = |ov: &Overrides| {
+        let form = laid_out(&t, ov);
+        form.pages.iter().flat_map(|p| p.items.iter()).filter(|i| matches!(i, Item::Widget(w) if w.som.contains(".row["))).count()
+    };
+    let read = |ov: &Overrides| -> Vec<String> {
+        let live = crate::form_tree(&t, None, ov);
+        let rows = &live.root.children.iter().find(|n| n.name == "rows").unwrap().children;
+        rows.iter().map(|r| r.children[0].presence.clone()).collect()
+    };
+    let mut ov = Overrides::default();
+    ov.presence.insert("form[0].rows[0].row[1].cell[0]".into(), "hidden".into());
+    assert_eq!(read(&ov), ["visible", "hidden", "visible"]);
+    assert_eq!(cells(&ov), 3, "a later row's is not drawn");
+    assert!(ov.remove_instance("form[0].rows[0].row[0]"));
+    assert_eq!(read(&ov), ["hidden", "visible", "visible"], "it stays with its row, now the first");
+    assert_eq!(cells(&ov), 0, "the first row's is every row's on the page");
+}
+
+/// Presence and access are kept by path alone, also at a path more than one object has (no
+/// property change is kept there): two unnamed fields of one subform, or the second instance
+/// of a repeating subform and a same-named object after it. Set through such a path it is
+/// every such object's to scripts, and on the page each template object's that has the path;
+/// when a row goes, one kept at a later instance's path moves down with the instances.
+#[test]
+fn presence_at_a_path_objects_share_is_each_ones_and_moves_with_the_instances() {
+    let tpl = TEMPLATE.replace(r#"<occur min="1" max="3"/>"#, r#"<occur min="2" max="3"/>"#).replace(
+        r#"<field name="cell" w="1in" h="0.3in"/></subform></subform>"#,
+        r#"<field name="cell" w="1in" h="0.3in"/></subform><field name="row" w="1in" h="0.3in"/><field w="1in" h="0.3in"/><field w="1in" h="0.3in"/></subform>"#,
+    );
+    let t = crate::parse(&tpl).unwrap().0;
+    let page = |ov: &Overrides| -> Vec<String> {
+        let form = laid_out(&t, ov);
+        let items = form.pages.iter().flat_map(|p| p.items.iter());
+        let soms = items.filter_map(|i| match i {
+            Item::Widget(w) => Some(w.som.clone()),
+            _ => None,
+        });
+        soms.filter(|s| s.contains(".rows[")).collect()
+    };
+    let live = |ov: &Overrides| -> Vec<String> {
+        let live = crate::form_tree(&t, None, ov);
+        let rows = &live.root.children.iter().find(|n| n.name == "rows").unwrap().children;
+        rows.iter().filter(|r| r.presence == "hidden").map(|r| r.som.clone()).collect()
+    };
+    const ROW: &str = "form[0].rows[0].row[1]";
+    const UNNAMED: &str = "form[0].rows[0].field[0]";
+    const CELLS: [&str; 2] = ["form[0].rows[0].row[0].cell[0]", "form[0].rows[0].row[1].cell[0]"];
+    assert!(crate::som_is_shared(&t, ROW) && crate::som_is_shared(&t, UNNAMED));
+    assert_eq!(page(&Overrides::default()), [CELLS[0], CELLS[1], ROW, UNNAMED, UNNAMED]);
+
+    let mut ov = Overrides::default();
+    ov.presence.insert(UNNAMED.into(), "hidden".into());
+    assert_eq!(live(&ov), [UNNAMED, UNNAMED]);
+    assert_eq!(page(&ov), [CELLS[0], CELLS[1], ROW], "both unnamed fields go");
+
+    let mut ov = Overrides::default();
+    ov.presence.insert(ROW.into(), "hidden".into());
+    assert_eq!(live(&ov), [ROW, ROW], "the second row and the field after the rows");
+    assert_eq!(page(&ov), [CELLS[0], CELLS[1], UNNAMED, UNNAMED], "the field goes; rows take the first row's");
+    // The first row goes: what was kept at the second row's path is the first row's now.
+    assert!(ov.remove_instance("form[0].rows[0].row[0]"));
+    assert_eq!(ov.presence.keys().collect::<Vec<_>>(), ["form[0].rows[0].row[0]"]);
+    assert_eq!(live(&ov), ["form[0].rows[0].row[0]"]);
+    assert_eq!(page(&ov), [ROW, UNNAMED, UNNAMED], "hidden on the first row is hidden on every row");
+}
+
+/// What was changed on an object the form no longer has goes (presence, access, the mark of a
+/// typed-over calculation, property changes and the copies made for them), on it and on what
+/// is in it, and the form counts what is left as if the rest had never been kept. How often a
+/// subform occurs stays where it is kept, whether or not an instance is there.
+#[test]
+fn what_was_changed_on_objects_the_form_no_longer_has_goes_and_occur_changes_stay() {
+    const KEPT: &str = "form[0].rows[0].row[0].cell[0]";
+    const GONE: &str = "form[0].rows[0].row[2]";
+    let fill = ("border#0/fill#0/color#0", Some("value"), "1,1,1");
+    let marked = |ov: &mut Overrides, som: &str| {
+        for map in [&mut ov.presence, &mut ov.access, &mut ov.overridden] {
+            map.insert(som.to_string(), "1".into());
+        }
+    };
+    let mut ov = overrides(KEPT, &[fill]);
+    ov.set_prop(GONE, "occur#0", Some("max"), "5").unwrap();
+    ov.set_prop(GONE, "border#0/edge#0/color#0", Some("value"), "3,3,3").unwrap();
+    ov.set_prop_copy(GONE, "border#0/edge#1/color#0", Some("value"), "1,2,3").unwrap();
+    ov.set_prop(&format!("{GONE}.cell[0]"), "validate#0", Some("nullTest"), "error").unwrap();
+    marked(&mut ov, KEPT);
+    marked(&mut ov, GONE);
+    marked(&mut ov, &format!("{GONE}.cell[0]"));
+    let live = |som: &str| !som.starts_with(GONE);
+    assert!(ov.retain_objects(live));
+    let mut left = overrides(KEPT, &[fill]);
+    left.set_prop(GONE, "occur#0", Some("max"), "5").unwrap();
+    marked(&mut left, KEPT);
+    assert_eq!(ov, left);
+    assert!(!ov.retain_objects(live), "nothing more to go");
+    // Nothing kept for a gone object but how often it occurs: nothing changes.
+    let mut only_occur = Overrides::default();
+    only_occur.set_prop(GONE, "occur#0", Some("max"), "5").unwrap();
+    assert!(!only_occur.retain_objects(|_| false));
+    assert_eq!(only_occur.props().len(), 1);
 }
 
 /// How often a subform occurs is the subform's (XFA 3.3 p. 786), kept with its first instance:
@@ -1609,7 +1936,7 @@ fn an_occurrence_change_moved_to_a_full_row_survives_reopen() {
     assert_eq!(back.props(), ov.props(), "every change read back");
     let mut full = back;
     assert_eq!(full.set_prop(row, "occur#0", Some("min"), "1"), Ok(true), "an occurrence change still fits");
-    assert_eq!(full.set_prop(row, "font#0", Some("size"), "9pt"), Err(PropRefused::Full), "no other one");
+    assert_eq!(full.set_prop(row, "font#0", Some("size"), "9pt"), Err(PropRefused::ObjectFull), "no other one");
 }
 
 /// Review r2 (L1): the checks after an entry take the field from the template's memo
@@ -1634,4 +1961,94 @@ fn checks_and_the_live_form_restyle_nothing_again() {
     let _ = take_restyled();
     let _ = crate::form_tree(&t, None, &ov);
     assert_eq!(take_restyled(), 0, "a row without occurrence changes isn't read again");
+}
+
+/// Review r5 (D4): the layout comes to an instance more than once (its container measures it
+/// before it draws it, and a flow measures again to place what follows), and read the instance's
+/// object with its changes each time: a copy, its properties written out and parsed. Each
+/// reading is now made once in a layout: one for a changed field; for a changed row one of
+/// what it is drawn with, and one of what it is sized by where a container measures it first (a
+/// flow places its rows by the one they are drawn with).
+#[test]
+fn an_instances_object_is_read_with_its_changes_once_in_a_layout() {
+    let t = crate::parse(OWN_ROWS).unwrap().0;
+    let mut ov = Overrides::default();
+    let rows = ["form[0].rows[0]", "form[0].box[0].list[0]", "form[0].grid[0]"];
+    for parent in rows {
+        let row = format!("{parent}.row[1]");
+        ov.set_prop(&row, "font#0", Some("size"), "20pt").unwrap();
+        ov.set_prop(&row, "margin#0", Some("topInset"), "0.25in").unwrap();
+        ov.set_prop(&row, "border#0/edge#0/color#0", Some("value"), "0,0,255").unwrap();
+        ov.set_prop(&format!("{parent}.row[2].cell[0]"), "font#0", Some("size"), "14pt").unwrap();
+    }
+    let applied = crate::apply_overrides_split(&t, &ov);
+    let _ = take_restyled();
+    let form = crate::layout::layout_with_overrides(&applied.template, None, &ov, &applied.per_instance).unwrap();
+    let made = take_restyled();
+    // The readings are the ones drawn: the changed rows' fields and the changed fields.
+    let size = |som: &str| items(&form).into_iter().find_map(|i| if let Item::Widget(w) = i { (w.som == som).then_some(w.face.size) } else { None });
+    for parent in rows {
+        let sizes = [0, 1, 2].map(|i| size(&format!("{parent}.row[{i}].cell[0]")));
+        assert_eq!(sizes, [Some(10.0), Some(20.0), Some(14.0)], "{parent}");
+    }
+    assert_eq!(made, 3 + (1 + 2 + 2), "one reading of each changed field; one of the flowed row, two of the boxed row and of the table's");
+}
+
+/// The layout also reads copies it makes of an object, which share its property tree and may
+/// differ from it: a group that must be answered measures each button as it is and draws a copy
+/// made required. A reading kept for the one is not the other's: the changed button of a later
+/// row is drawn required, as the unchanged ones are, and with its change.
+#[test]
+fn a_reading_kept_for_an_object_is_not_handed_to_a_copy_that_differs() {
+    let t = crate::parse(
+        r##"<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="p"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <subform name="rows" layout="tb"><subform name="row" layout="tb"><occur min="1" max="3" initial="2"/>
+  <exclGroup name="g" layout="tb"><validate nullTest="error"/>
+   <field name="a" w="1in" h="0.3in"><ui><checkButton shape="round"/></ui><items><text>A</text></items></field>
+   <field name="b" w="1in" h="0.3in"><ui><checkButton shape="round"/></ui><items><text>B</text></items></field>
+  </exclGroup></subform></subform>
+</subform></template>"##,
+    )
+    .unwrap()
+    .0;
+    let ov = overrides("form[0].rows[0].row[1].g[0].a[0]", &[("assist#0/toolTip#0", None, "New")]);
+    let form = laid_out(&t, &ov);
+    let radio = |som: &str| {
+        items(&form)
+            .into_iter()
+            .find_map(|i| if let Item::Widget(w) = i { (w.som == som).then_some((w.required, w.tooltip.clone())) } else { None })
+            .unwrap()
+    };
+    assert_eq!(radio("form[0].rows[0].row[0].g[0].a[0]"), (true, None));
+    assert_eq!(radio("form[0].rows[0].row[1].g[0].b[0]"), (true, None));
+    assert_eq!(radio("form[0].rows[0].row[1].g[0].a[0]"), (true, Some("New".to_string())), "the copy made required, with its change");
+}
+
+/// Review r5 (D5): the pages made from an unnamed page area share its content's paths
+/// (`#pageArea[i].…`), so its content with the changes scripts made there is made once and
+/// drawn on every page: it was copied (with the pictures it holds) and read again for each
+/// page. A change that can't be drawn (a `desc`) makes no copy at all.
+#[test]
+fn an_unnamed_page_areas_changed_content_is_made_once_for_its_pages() {
+    let rows: String = (0..40).map(|i| format!(r#"<draw name="d{i}" w="2in" h="1in"><value><text>Row {i}</text></value></draw>"#)).collect();
+    let tpl = TEMPLATE
+        .replace(r#"<pageArea name="p">"#, r#"<pageArea><field name="pf" x="1in" y="0.2in" w="1in" h="0.3in"/>"#)
+        .replace(r#"<draw name="label""#, &format!(r#"{rows}<draw name="label""#));
+    let t = crate::parse(&tpl).unwrap().0;
+    let red = rgb(255.0, 0.0, 0.0);
+    let made = |ov: &Overrides| {
+        let applied = crate::apply_overrides_split(&t, ov);
+        let _ = take_restyled();
+        let form = crate::layout::layout_with_overrides(&applied.template, None, ov, &applied.per_instance).unwrap();
+        let reds = form.pages.iter().filter(|p| p.items.iter().any(|i| matches!(i, Item::Fill { color, .. } if *color == red))).count();
+        (form.pages.len(), reds, take_restyled())
+    };
+    let (pages, reds, read) = made(&overrides("#pageArea[0].pf[0]", &[("border#0/fill#0/color#0", Some("value"), "255,0,0")]));
+    assert!(pages >= 4, "{pages}");
+    assert_eq!((reds, read), (pages, 1), "drawn on each of the {pages} pages, read once");
+    let (pages, reds, read) = made(&overrides("#pageArea[0].pf[0]", &[("desc#0/text#0", None, "a note")]));
+    assert!(pages >= 4, "{pages}");
+    assert_eq!((reds, read), (0, 0), "nothing to draw: the template's content");
 }

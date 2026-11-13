@@ -1053,7 +1053,17 @@ impl XHost {
             let som = self.nodes.get(node).map(|n| n.som.to_string()).unwrap_or_default();
             let what = name.map_or_else(|| path.to_string(), |a| format!("{path} {a}"));
             self.print(super::clip(format!(
-                "{som}: {what} not set: the object shares its SOM path with another and keeps no property change of its own"
+                "{som}: {what} not set: the object shares its SOM path (another has it, or would as rows are added) and keeps no property change of its own"
+            )));
+            return;
+        }
+        // Nor does the form change how often a subform occurs where another instance would take
+        // the path of a same-named object after it (`pdfcraft_xfa::occur_is_fixed`).
+        if path.starts_with("occur#") && self.nodes.get(node).is_some_and(|n| n.occur_fixed) {
+            let som = self.nodes.get(node).map(|n| n.som.to_string()).unwrap_or_default();
+            let what = name.map_or_else(|| path.to_string(), |a| format!("{path} {a}"));
+            self.print(super::clip(format!(
+                "{som}: {what} not set: a same-named object is numbered after this subform, whose path another instance would take"
             )));
             return;
         }
@@ -1139,46 +1149,48 @@ impl XHost {
 
     /// Whether node `node` has no SOM path of its own, which the form keeps property changes by:
     /// an unnamed subform, area or draw shares its parent's (a change kept there is its named
-    /// parent's), and any other object shares its path when another live object has it too. The
-    /// form keeps no change for one of them there (one kept at that path would reach every
-    /// object there, `pdfcraft_xfa::som_is_shared`), so a write to it is refused rather than
-    /// handed to all.
+    /// parent's), and any other object shares its path when the form's keeper says several
+    /// objects have it or may ([`super::SharedSoms`], `pdfcraft_xfa::som_is_shared`). The form
+    /// keeps no change for one of them there (one kept at that path would reach every object
+    /// there), so a write to it is refused rather than handed to all.
     ///
     /// Named objects have a path each, numbered through unnamed subforms and areas (XFA 3.3
     /// ch. 3, "Transparent Nodes", pp. 94-95, Example 3.12). The paths more than one object
     /// has: unnamed fields and exclusion groups of one container (each `field[0]`, `group[0]`),
     /// the content of an unnamed subform made more than once, and an instance of a repeating
     /// subform numbered as a same-named object after it.
+    ///
+    /// The keeper is asked by path, so the answer costs the same after a script adds or removes
+    /// instances (nothing is counted among the objects), and it is the form's own answer for
+    /// the write: a script never reads back a change the form then leaves out.
     pub(crate) fn shares_som(&self, node: usize) -> bool {
         let Some(n) = self.nodes.get(node) else { return false };
         if n.kind == XfaKind::Form {
             return false;
         }
-        if !self.owns_som(node) {
-            return true;
-        }
-        self.path_owners().get(&n.som).is_some_and(|o| o.count > 1)
+        !self.owns_som(node) || self.doc.shared.has(&n.som)
     }
 
-    /// Who owns each SOM path among the live objects ([`XHost::som_owners`]): counted the first
-    /// time a script of the event asks, on the form it started from, and again after the objects
-    /// change. An object owns its path unless it is gone, the synthetic root, or takes its
-    /// parent's path ([`XHost::owns_som`]).
+    /// Who owned each SOM path among the objects when the script started
+    /// ([`XHost::som_owners`]), for [`XHost::preset`], which runs before it: counted the first
+    /// time a script of the event asks, on the form it started from, and not kept up as the
+    /// script adds or removes instances. An object owns its path unless it is the synthetic
+    /// root or takes its parent's path ([`XHost::owns_som`]).
     fn path_owners(&self) -> &super::host::SomOwnerCounts {
         self.som_owners.get_or_init(|| {
             #[cfg(test)]
             OWNERS_COUNTED.with(|c| c.set(c.get().saturating_add(self.nodes.len())));
             let mut owners: super::host::SomOwnerCounts = HashMap::new();
             for (i, m) in self.nodes.iter().enumerate() {
-                if !m.gone && m.kind != XfaKind::Form && self.owns_som(i) {
+                if m.kind != XfaKind::Form && self.owns_som(i) {
                     let o = owners.entry(Arc::clone(&m.som)).or_insert(super::host::PathOwners { count: 0, last: i });
                     o.count = o.count.saturating_add(1);
                     o.last = i;
                 }
             }
             let owners = Arc::new(owners);
-            // The nodes are still the form's as flattened: the next scripts started from it
-            // take these counts rather than counting again.
+            // The next scripts started from the same form take these counts rather than
+            // counting again.
             if let Some(root) = &self.base {
                 super::host::remember_owners(root, &owners);
             }
@@ -1191,13 +1203,6 @@ impl XHost {
     pub(crate) fn owns_som(&self, node: usize) -> bool {
         let Some(n) = self.nodes.get(node) else { return false };
         n.parent.and_then(|p| self.nodes.get(p)).is_none_or(|p| p.som != n.som)
-    }
-
-    /// The objects changed (an instance added or removed, SOM paths numbered again): who owns
-    /// which SOM path is counted again when next asked.
-    pub(crate) fn forget_som_owners(&mut self) {
-        self.som_owners = std::cell::OnceCell::new();
-        self.base = None;
     }
 
     /// Whether the form can keep a change under `key` (see [`change_key`]) to node `node`: one
@@ -1254,9 +1259,11 @@ impl XHost {
     fn set_occur(&mut self, node: usize, name: Option<&str>, value: &str) {
         let Ok(v) = value.trim().parse::<i64>() else { return };
         let Some((parent, own)) = self.nodes.get(node).map(|n| (n.parent, n.name.clone())) else { return };
-        let all = match parent {
-            Some(p) => super::instances(self, p, &own),
-            None => vec![node],
+        // The instances of this node's subform: itself alone when it occurs once beside a
+        // repeating subform of its name.
+        let all = match parent.map(|p| super::instances(self, p, &own)) {
+            Some(all) if all.contains(&node) => all,
+            _ => vec![node],
         };
         for i in all {
             let Some(n) = self.nodes.get_mut(i) else { continue };
@@ -1289,9 +1296,9 @@ impl XHost {
             return;
         }
         // Each change goes to the object owning its path, and to none where several objects have
-        // the path or the object takes its parent's ([`XHost::shares_som`]): the changes there
-        // are not its own. Found by the counts of who owns each path, made once for the scripts
-        // of an event, as this runs before each.
+        // the path or the object takes its parent's: the changes there are not its own. Found
+        // by the counts of who owns each path, made once for the scripts of an event, as this
+        // runs before each.
         let owners = self.path_owners();
         let found: Vec<(usize, &super::XfaPropSet)> =
             sets.iter().filter_map(|p| owners.get(p.som.as_str()).filter(|o| o.count == 1).map(|o| (o.last, p))).collect();
@@ -1807,12 +1814,12 @@ pub(crate) fn exec_validate(_: &JsValue, _: &[JsValue], r: &JsObject, ctx: &mut 
 
 #[cfg(test)]
 thread_local! {
-    /// Objects [`XHost::shares_som`] counted the SOM paths of (every object of the copy, each
+    /// Objects [`XHost::preset`] counted the SOM paths of (every object of the copy, each
     /// time it counts them), on this thread.
     static OWNERS_COUNTED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// How many objects' SOM paths [`XHost::shares_som`] has counted on this thread, since the last
+/// How many objects' SOM paths [`XHost::preset`] has counted on this thread, since the last
 /// call.
 #[cfg(test)]
 pub(crate) fn take_owners_counted() -> usize {

@@ -2,7 +2,7 @@ use super::ast::{Expr, Stmt};
 use super::value::{Val, is_numeric_text, num_text};
 use super::{
     CALLS_TOO_DEEP, Flow, Func, HashMap, HashSet, Interp, LIST_TOO_LONG, LOOPED_TOO_MUCH, MAX_LIST, Message, MessageButtons, MessageIcon, R, Rc,
-    TOO_DEEP, XfaEffect, child_named, clip, descendants_named, props, reset_names, resolve_som, scoped,
+    TOO_DEEP, XfaEffect, child_named, clip, descendants_named, managed_named, props, reset_names, resolve_som, scoped,
 };
 
 impl Interp<'_> {
@@ -450,7 +450,7 @@ impl Interp<'_> {
                     other => {
                         // `page1.qty = 7`: the child object named by the last step takes the value.
                         if let Some(child) = other.strip_prefix('_') {
-                            if let Some(c) = child_named(self.h, i, child) {
+                            if let Some(c) = managed_named(self.h, i, child) {
                                 let owner = self.node(c).and_then(|n| n.parent).unwrap_or(i);
                                 return self.assign_to(Val::Im(owner, child.to_string()), "count", v);
                             }

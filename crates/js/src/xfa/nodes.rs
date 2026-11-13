@@ -116,6 +116,23 @@ pub(crate) fn child_named(h: &XHost, parent: usize, name: &str) -> Option<usize>
     first
 }
 
+/// The object whose instance manager `parent._name` is: the first repeating subform named
+/// `name` in the SOM scope of `parent`, and with none the first object of the name. A subform
+/// that occurs once before the repeating one of its name (a header row named as the rows are)
+/// has no instances to manage.
+pub(crate) fn managed_named(h: &XHost, parent: usize, name: &str) -> Option<usize> {
+    let (mut first, mut repeating) = (None, None);
+    scope_walk(h, parent, name, 0, &mut |c| {
+        first.get_or_insert(c);
+        let repeats = h.nodes.get(c).is_some_and(|n| n.repeatable);
+        if repeats {
+            repeating = Some(c);
+        }
+        repeats
+    });
+    repeating.or(first)
+}
+
 /// Every live object named `name` in the SOM scope of `parent`, in document order: what
 /// `parent.name[*]` names, and `parent.name[n]` the one at place `n`.
 pub(crate) fn scoped(h: &XHost, parent: usize, name: &str) -> Vec<usize> {
@@ -146,12 +163,17 @@ pub(crate) fn scope_members(h: &XHost, parent: usize) -> Vec<usize> {
 }
 
 /// Every live instance named `name` among the children of `parent` itself, in order: what an
-/// instance manager counts, adds to and removes from.
+/// instance manager counts, adds to and removes from. A subform that occurs once is no instance
+/// of a repeating one of its name (a header row named as the rows after it are): where one of
+/// the name repeats, the instances are those that do.
 pub(crate) fn instances(h: &XHost, parent: usize, name: &str) -> Vec<usize> {
-    h.nodes
+    let named: Vec<usize> = h
+        .nodes
         .get(parent)
         .map(|p| p.children.iter().copied().filter(|&c| h.nodes.get(c).is_some_and(|n| !n.gone && &*n.name == name)).collect())
-        .unwrap_or_default()
+        .unwrap_or_default();
+    let repeats = |c: &usize| h.nodes.get(*c).is_some_and(|n| n.repeatable);
+    if named.iter().any(repeats) { named.into_iter().filter(repeats).collect() } else { named }
 }
 
 /// The place of node `i` among the instances its instance manager counts (`instanceIndex`). The
@@ -361,7 +383,7 @@ fn node_get(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValu
                 // unnamed subform of this one when the name was found through it.
                 let owner = {
                     let h = host(ctx)?.borrow();
-                    child_named(&h, idx, child).map(|c| h.nodes.get(c).and_then(|n| n.parent).unwrap_or(idx))
+                    managed_named(&h, idx, child).map(|c| h.nodes.get(c).and_then(|n| n.parent).unwrap_or(idx))
                 };
                 return match owner {
                     Some(p) => instance_manager(ctx, p, child),

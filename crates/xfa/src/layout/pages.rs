@@ -6,6 +6,11 @@ use super::{
     PageRole, Para, Rc, Rect, SomIndices, Views, XfaError, data_path, text,
 };
 
+/// The entries of `map` whose keys start with `prefix`.
+fn under<'a, V>(map: &'a std::collections::BTreeMap<String, V>, prefix: &'a str) -> impl Iterator<Item = (&'a String, &'a V)> {
+    map.range::<str, _>((std::ops::Bound::Included(prefix), std::ops::Bound::Unbounded)).take_while(move |(k, _)| k.starts_with(prefix))
+}
+
 impl Layouter<'_> {
     pub(super) fn warn_once(&mut self, msg: impl Into<String>) {
         let m = msg.into();
@@ -169,8 +174,10 @@ impl Layouter<'_> {
         // What scripts set on this page's master content (a button hidden on this page only) goes
         // on a copy of it for this page; other pages keep the template's.
         let prefix = format!("{}.", ctx.som);
-        let copy =
-            self.overrides.filter(|ov| !ctx.som.is_empty() && ov.presence.keys().chain(ov.access.keys()).any(|k| k.starts_with(&prefix))).map(|ov| {
+        let copy = self
+            .overrides
+            .filter(|ov| !ctx.som.is_empty() && (under(&ov.presence, &prefix).next().is_some() || under(&ov.access, &prefix).next().is_some()))
+            .map(|ov| {
                 let mut copy = area.items.clone();
                 crate::script::apply_overrides_to(&mut copy, &ctx.som, ov, 1);
                 let copy = Rc::new(copy);
@@ -180,15 +187,8 @@ impl Layouter<'_> {
         // An unnamed page area's content goes by `#pageArea[i]` in the live form, where scripts
         // change its properties; the layout names it from its own names, so those changes go on a
         // copy of it here.
-        let unnamed = format!("#pageArea[{idx}].");
         let copy = match copy {
-            None if ctx.som.is_empty() && self.props.keys().any(|k| k.starts_with(&unnamed)) => {
-                let mut copy = area.items.clone();
-                crate::script::apply_props_to(&mut copy, &format!("#pageArea[{idx}]"), self.props, 1);
-                let copy = Rc::new(copy);
-                self.master_copies.push(Rc::clone(&copy));
-                Some(copy)
-            }
+            None if ctx.som.is_empty() => self.unnamed_copy(idx, &area.items),
             other => other,
         };
         let items: &[Node] = copy.as_deref().map_or(&area.items, Vec::as_slice);
@@ -199,6 +199,28 @@ impl Layouter<'_> {
         let drawn = items.iter().enumerate().try_for_each(|(i, item)| self.draw_positioned_child(item, page_rect, &ctx, 1, sibs.at(i)));
         self.views = body;
         drawn
+    }
+
+    /// The content `items` of the unnamed page area `idx` with the property changes scripts
+    /// made to it (under `#pageArea[idx]`, where the live form names it); `None` when none of
+    /// them can change how it is drawn ([`crate::restyle::draws`]), so the template's is drawn.
+    /// The pages made from the area share its paths, so the copy is made once and drawn on each
+    /// of them, not copied (with the pictures it holds) and read again for every page.
+    fn unnamed_copy(&mut self, idx: usize, items: &[Node]) -> Option<Rc<Vec<Node>>> {
+        if let Some(made) = self.unnamed_copies.get(&idx) {
+            return made.clone();
+        }
+        let som = format!("#pageArea[{idx}]");
+        let drawn = under(self.props, &format!("{som}.")).any(|(_, sets)| sets.keys().any(|k| crate::restyle::draws(k)));
+        let copy = drawn.then(|| {
+            let mut copy = items.to_vec();
+            crate::script::apply_props_to(&mut copy, &som, self.props, 1);
+            Rc::new(copy)
+        });
+        // Kept for the whole layout, so its objects' addresses stay its own (the measurement
+        // cache keys on them).
+        self.unnamed_copies.insert(idx, copy.clone());
+        copy
     }
 
     /// Move to the next content area, or the next page.

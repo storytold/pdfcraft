@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use super::super::{XfaDoc, XfaEffect, XfaEvent, XfaKind, XfaNode, XfaOutcome, run_xfa};
+use super::super::{SharedSoms, XfaDoc, XfaEffect, XfaEvent, XfaKind, XfaNode, XfaOutcome, run_xfa};
 use super::{XfaProp, XfaProps};
 use crate::Limits;
 
@@ -94,6 +94,19 @@ fn form() -> XfaNode {
 fn go_on(root: &XfaNode, script: &str, target: &str) -> XfaOutcome {
     let ev = XfaEvent { activity: "click".into(), target: format!("form1[0].{target}[0]"), ..Default::default() };
     run_xfa(script, &ev, &XfaDoc::default(), root, Limits::default())
+}
+
+/// A document whose form keeps no property change at the SOM paths `shared`, as the engine's
+/// says of the paths its template gives several objects.
+fn sharing(shared: &[&str]) -> XfaDoc {
+    let shared: Vec<String> = shared.iter().map(|s| s.to_string()).collect();
+    XfaDoc { shared: SharedSoms::new(move |som| shared.iter().any(|s| s == som)), ..Default::default() }
+}
+
+/// [`go_on`] in the document `doc`.
+fn go_in(doc: &XfaDoc, root: &XfaNode, script: &str, target: &str) -> XfaOutcome {
+    let ev = XfaEvent { activity: "click".into(), target: format!("form1[0].{target}[0]"), ..Default::default() };
+    run_xfa(script, &ev, doc, root, Limits::default())
 }
 
 /// The script's result, failing the test on a script error.
@@ -385,6 +398,35 @@ fn occur_written_changes_what_the_instance_manager_allows() {
     assert_eq!(o.error, None, "{o:?}");
     assert_eq!(o.result.as_deref(), Some("true|true|true|true|3|3"));
     assert!(o.effects.contains(&set("form1[0].rows[0]", "occur#0", Some("max"), "3")), "{o:?}");
+}
+
+/// A subform the form says occurs as often as its template tells (`XfaNode::occur_fixed`: a
+/// same-named object is numbered after it) takes no write to `occur`, from JavaScript or
+/// FormCalc: the console says so, the script reads what it read before, the instance manager
+/// allows what it allowed, and no effect goes to the form. Its other properties are written.
+#[test]
+fn occur_is_not_written_where_the_form_fixes_it() {
+    let mut root = form();
+    if let Some(rows) = root.children.iter_mut().find(|c| c.name == "rows") {
+        rows.occur_max = Some(1);
+        rows.repeatable = false;
+        rows.occur_fixed = true;
+    }
+    let script = "var m = this.parent._rows; var read = function () { return [rows.occur.max, rows.occur.min, rows.occur.initial].join(); }; \
+                  var before = read(); rows.occur.max = '3'; rows.occur.min = '2'; rows.occur.initial = '2'; var a = m.addInstance(); \
+                  rows.font.size = '20pt'; [read() === before, a === null, m.count, m.max, rows.font.size].join('|')";
+    let o = go_on(&root, script, "plain");
+    assert_eq!(o.error, None, "{o:?}");
+    assert_eq!(o.result.as_deref(), Some("true|true|1|1|20pt"), "{o:?}");
+    assert_eq!(o.effects, [set("form1[0].rows[0]", "font#0", Some("size"), "20pt")], "{o:?}");
+    let notes: Vec<&String> = o.console.iter().filter(|l| l.contains("a same-named object is numbered after this subform")).collect();
+    assert_eq!(notes.len(), 3, "{o:?}");
+    assert!(notes.first().is_some_and(|l| l.starts_with("form1[0].rows[0]: occur#0 max not set")), "{o:?}");
+
+    let ev = XfaEvent { activity: "click".into(), target: "form1[0].plain[0]".into(), ..Default::default() };
+    let o = crate::formcalc::run_formcalc("rows.occur.max = \"3\"\nrows.occur.max", &ev, &XfaDoc::default(), &root, Limits::default());
+    assert_eq!((o.error.as_deref(), o.result.as_deref()), (None, Some("-1")), "what the fixture's `occur` element says: {o:?}");
+    assert!(o.effects.is_empty() && o.console.iter().any(|l| l.contains("occur#0 max not set")), "{o:?}");
 }
 
 /// Review r2 (M2): how often a subform occurs isn't counted against the changes the form keeps
@@ -1353,21 +1395,30 @@ fn an_added_instance_reads_the_templates_properties_not_the_first_instances_chan
 /// Two unnamed fields of one container share their SOM path (`…field[0]`), which the form keeps
 /// property changes by: a write to either is refused with a note, never handed to the form (it
 /// would reach both), and reads back as before. A named field beside them takes its write.
+/// Which paths are shared is the form's to say ([`XfaDoc::shared`]), from its template, not
+/// counted on the objects there now: a field alone at a path another object would take as rows
+/// are added is refused as the two are, since the form refuses it, and a script must not read
+/// back a change the form won't keep.
 #[test]
-fn a_write_to_one_of_two_objects_sharing_a_som_path_is_refused() {
+fn a_write_to_an_object_at_a_som_path_the_form_says_is_shared_is_refused() {
     let unnamed = || XfaNode { name: "field".into(), som: "form1[0].field[0]".into(), ..node("field", XfaKind::Field, &[], vec![]) };
-    let mut root = form();
-    root.children.extend([unnamed(), unnamed()]);
-    let o = go_on(&root, "this.fillColor = '1,2,3'; xfa.form.form1.plain.fillColor = '4,5,6'; this.fillColor", "field");
-    assert_eq!(o.error, None, "{o:?}");
-    assert_eq!(o.result.as_deref(), Some("255,255,255"), "read back as before");
-    assert_eq!(o.effects, [set("form1[0].plain[0]", "border#0/fill#0/color#0", Some("value"), "4,5,6")]);
-    assert!(o.console.iter().any(|l| l.contains("shares its SOM path")), "{o:?}");
-    // Alone, the unnamed field takes the write.
+    let doc = sharing(&["form1[0].field[0]"]);
+    for fields in [2, 1] {
+        let mut root = form();
+        root.children.extend((0..fields).map(|_| unnamed()));
+        let o = go_in(&doc, &root, "this.fillColor = '1,2,3'; xfa.form.form1.plain.fillColor = '4,5,6'; this.fillColor", "field");
+        assert_eq!(o.error, None, "{fields}: {o:?}");
+        assert_eq!(o.result.as_deref(), Some("255,255,255"), "{fields}: read back as before");
+        assert_eq!(o.effects, [set("form1[0].plain[0]", "border#0/fill#0/color#0", Some("value"), "4,5,6")], "{fields}");
+        assert!(o.console.iter().any(|l| l.contains("shares its SOM path")), "{fields}: {o:?}");
+    }
+    // At a path the form keeps changes at, the unnamed field takes the write.
     let mut root = form();
     root.children.push(unnamed());
-    let o = go_on(&root, "this.fillColor = '1,2,3'", "field");
+    let o = go_on(&root, "this.fillColor = '1,2,3'; this.fillColor", "field");
+    assert_eq!(o.result.as_deref(), Some("1,2,3"), "{o:?}");
     assert_eq!(o.effects, [set("form1[0].field[0]", "border#0/fill#0/color#0", Some("value"), "1,2,3")]);
+    assert!(!o.console.iter().any(|l| l.contains("SOM path")), "{o:?}");
 }
 
 /// Named objects have a SOM path each, numbered through unnamed subforms (XFA 3.3 "Transparent
@@ -1397,7 +1448,7 @@ fn a_write_to_a_named_object_is_kept_for_it_unless_another_has_its_som_path() {
     // Two named objects with one path: refused, and read back as before.
     let mut root = form();
     root.children.extend([yes(0), yes(0)]);
-    let o = go_on(&root, "this.font.fill.color.value = '0,0,255'; this.font.fill.color.value", "yes");
+    let o = go_in(&sharing(&["form1[0].yes[0]"]), &root, "this.font.fill.color.value = '0,0,255'; this.font.fill.color.value", "yes");
     assert_eq!(o.error, None, "{o:?}");
     assert_eq!(o.result.as_deref(), Some("0,0,0"), "{o:?}");
     assert!(o.effects.is_empty(), "{o:?}");
@@ -1440,44 +1491,80 @@ fn changes_from_earlier_scripts_are_put_on_their_objects_counting_the_paths_once
     }
 }
 
-/// Who owns each SOM path, which a property write asks (`XHost::shares_som`), is counted once
-/// for the scripts of an event started from the same form, not again by each script: Ontario
-/// Works 0983's opening scripts set 1,231 tooltips, each from a script of its own, and counting
-/// the whole form for each added a few tenths of a second to opening. A script that adds or
-/// removes an instance counts its own copy again, and leaves the form's counts as they were.
+/// A property write asks the form whether the object's SOM path is shared ([`XfaDoc::shared`]),
+/// by the path as it is now: it counts no objects, however many rows the script added or
+/// removed before it. Counting the objects again after each row made a script that adds rows
+/// and styles each take time by rows × objects, against the time a script is given.
 #[test]
-fn who_owns_each_path_is_counted_once_for_the_scripts_of_an_event() {
+fn a_property_write_after_rows_are_added_or_removed_counts_no_objects() {
     use super::take_owners_counted;
-    let unnamed = || node("field", XfaKind::Field, &[], vec![]);
+    use std::sync::Mutex;
     let mut root = form();
-    root.children.extend([unnamed(), unnamed()]);
     root.children.extend((0..500).map(|i| node(&format!("f{i}"), XfaKind::Field, &[], vec![])));
-    let root = Arc::new(root);
-    let doc = XfaDoc::default();
-    let host = || super::super::XHost::new(Arc::clone(&root), true, "form1[0].plain[0]", &doc);
-    let field = |h: &super::super::XHost| h.nodes.iter().position(|n| &*n.name == "field").unwrap();
-    let plain = |h: &super::super::XHost| h.current;
+    let asked = Arc::new(Mutex::new(Vec::<String>::new()));
+    let doc = {
+        let asked = Arc::clone(&asked);
+        let note = move |som: &str| {
+            asked.lock().unwrap().push(som.to_string());
+            false
+        };
+        XfaDoc { shared: SharedSoms::new(note), ..Default::default() }
+    };
+    let mut h = super::super::XHost::new(Arc::new(root), true, "form1[0].plain[0]", &doc);
+    let form1 = h.nodes.iter().position(|n| &*n.som == "form1[0]").unwrap();
     let _ = take_owners_counted();
-    let h = host();
-    assert!(h.shares_som(field(&h)) && !h.shares_som(plain(&h)));
-    let all = take_owners_counted();
-    assert!(all > 500, "the first script counts the form: {all}");
-    for _ in 0..3 {
-        let h = host();
-        assert!(h.shares_som(field(&h)) && !h.shares_som(plain(&h)));
+    let mut last = 0;
+    for _ in 0..20 {
+        last = h.add_instance(form1, "rows").expect("a row");
+        h.write_prop(last, "font#0", Some("size"), "14pt".into());
     }
-    assert_eq!(take_owners_counted(), 0, "later scripts on the same form take the counts");
-    // A script that changes the objects counts its own copy again, and doesn't keep that.
-    let mut h = host();
-    h.forget_som_owners();
-    assert!(h.shares_som(field(&h)));
-    assert_eq!(take_owners_counted(), all);
-    let h = host();
-    assert!(h.shares_som(field(&h)));
-    assert_eq!(take_owners_counted(), 0, "the form's counts are as they were");
-    // Another form is counted for itself.
-    let other = Arc::new((*root).clone());
-    let h = super::super::XHost::new(other, true, "form1[0].plain[0]", &doc);
-    assert!(h.shares_som(field(&h)));
-    assert_eq!(take_owners_counted(), all);
+    assert_eq!(h.nodes.get(last).map(|n| &*n.som), Some("form1[0].rows[20]"));
+    h.remove_instance(form1, "rows", 3);
+    assert_eq!(h.nodes.get(last).map(|n| &*n.som), Some("form1[0].rows[19]"));
+    h.write_prop(last, "font#0", Some("size"), "16pt".into());
+    assert_eq!(take_owners_counted(), 0, "no object is counted for a write");
+    let asked = asked.lock().unwrap();
+    assert!(asked.iter().any(|s| s == "form1[0].rows[20]") && asked.last().map(String::as_str) == Some("form1[0].rows[19]"), "{asked:?}");
+    let sets: Vec<&XfaEffect> = h.effects.iter().filter(|e| matches!(e, XfaEffect::SetProperty { .. })).collect();
+    assert_eq!(sets.len(), 21, "each row's write, and the one after the removal: {sets:?}");
+    assert_eq!(sets.last(), Some(&&set("form1[0].rows[19]", "font#0", Some("size"), "16pt")));
+}
+
+/// A row that moves down as one before it is removed takes that row's SOM path, and what it
+/// holds the paths of what that row held: a write there after the removal is the moved row's,
+/// handed to the form after the removal and read back. (The removed row's objects are not
+/// counted as still having their paths, which refused the write.)
+#[test]
+fn a_write_to_a_row_that_moved_down_after_a_removal_is_kept() {
+    let row = |i: usize| XfaNode {
+        som: format!("form1[0].row[{i}]"),
+        index: i,
+        repeatable: true,
+        occur_min: 1,
+        children: vec![XfaNode {
+            som: format!("form1[0].row[{i}].f[0]"),
+            ..node("f", XfaKind::Field, &[], vec![p("font", &[("size", "10pt")], vec![])])
+        }],
+        ..node("row", XfaKind::Subform, &[], vec![])
+    };
+    let root = XfaNode {
+        name: "form1".into(),
+        som: "form1[0]".into(),
+        kind: Some(XfaKind::Subform),
+        children: vec![row(0), row(1), row(2)],
+        ..Default::default()
+    };
+    let script = "_row.removeInstance(1); var r = xfa.resolveNode('xfa.form.form1.row[1]'); \
+                  r.f.font.size = '14pt'; r.border.edge.thickness = '2pt'; [_row.count, r.f.font.size, r.border.edge.thickness].join('|')";
+    let o = go_on(&root, script, "row");
+    assert_eq!((o.error.as_deref(), o.result.as_deref()), (None, Some("2|14pt|2pt")), "{o:?}");
+    assert_eq!(
+        o.effects,
+        [
+            XfaEffect::RemoveInstance { som: "form1[0].row[1]".into() },
+            set("form1[0].row[1].f[0]", "font#0", Some("size"), "14pt"),
+            set("form1[0].row[1]", "border#0/edge#0", Some("thickness"), "2pt"),
+        ]
+    );
+    assert!(!o.console.iter().any(|l| l.contains("SOM path")), "{o:?}");
 }

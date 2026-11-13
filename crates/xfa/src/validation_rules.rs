@@ -299,17 +299,35 @@ impl CalcOverride {
 /// calculation: the value is kept and marked an override (`value@override`, p. 883), so later
 /// calculations leave the field alone, and the user is asked whether to go back, which takes
 /// the mark off that field and calculates it again. Without anyone to ask (scripts run
-/// headless) the value is kept. `error` and `ignore` keep the calculated value, which the next
-/// calculation writes back (`None`).
+/// headless) the value is kept. The warning is the calculation's own message (`given`) when
+/// it has one, at most [`MAX_QUESTION`] characters of it. Every other setting keeps the
+/// calculated value, which the next calculation writes back without a message (`None`): what
+/// `ignore` asks for; `error` asks for an error message as well (p. 641-642), which is not
+/// shown.
 pub fn user_value_overrides(o: CalcOverride, given: Option<&str>, name: &str) -> Option<String> {
     match o {
-        CalcOverride::Warning => Some(match given.map(str::trim).filter(|m| !m.is_empty()) {
-            Some(m) => m.to_string(),
-            None => format!("The form calculates {name}, and recommends its calculated value over the one you entered."),
-        }),
+        CalcOverride::Warning => {
+            let mut said = match given.map(str::trim).filter(|m| !m.is_empty()) {
+                Some(m) => m.to_string(),
+                None => format!("The form calculates {name}, and recommends its calculated value over the one you entered."),
+            };
+            if let Some((at, _)) = said.char_indices().nth(MAX_QUESTION) {
+                // `at` is where a character starts, so the cut is never inside one.
+                said.truncate(at);
+                said.push('…');
+            }
+            Some(said)
+        }
         CalcOverride::Disabled | CalcOverride::Error | CalcOverride::Ignore => None,
     }
 }
+
+/// The most characters [`user_value_overrides`] gives of a question, which then ends in an
+/// ellipsis. A template's message can be a megabyte (the parser's limit on a text), and it is
+/// kept for each field typed over until the user has answered. A question is a sentence or
+/// two: in 500 public form templates the longest message of any kind (7,511 validation
+/// messages; no calculation there gives one) is 481 characters, and this is four times that.
+pub const MAX_QUESTION: usize = 2_000;
 
 /// Whether a value's `override` attribute (`0` or `1`, p. 883) says the user overrode its
 /// calculation.
@@ -401,6 +419,13 @@ mod tests {
         assert_eq!(CalcOverride::parse(Some("warning")), CalcOverride::Warning);
         assert!(user_value_overrides(CalcOverride::Warning, None, "K2").is_some_and(|m| m.contains("K2")));
         assert_eq!(user_value_overrides(CalcOverride::Warning, Some("Mine"), "K2").as_deref(), Some("Mine"));
+        // A message past the limit is cut to it, by characters, and ends in an ellipsis; so is
+        // the app's own question, for a field name of any length.
+        let fits = "é".repeat(MAX_QUESTION);
+        let long = format!("{fits}éééé");
+        assert_eq!(user_value_overrides(CalcOverride::Warning, Some(&fits), "K2").as_deref(), Some(fits.as_str()));
+        assert_eq!(user_value_overrides(CalcOverride::Warning, Some(&long), "K2"), Some(format!("{fits}…")));
+        assert_eq!(user_value_overrides(CalcOverride::Warning, None, &long).map(|m| m.chars().count()), Some(MAX_QUESTION + 1));
         for o in [CalcOverride::Error, CalcOverride::Ignore, CalcOverride::Disabled] {
             assert_eq!(user_value_overrides(o, None, "K2"), None);
         }

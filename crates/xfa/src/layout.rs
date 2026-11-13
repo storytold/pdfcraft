@@ -27,6 +27,7 @@ mod flow;
 mod items;
 mod measure;
 mod pages;
+mod restyled;
 
 pub(crate) use common::date_pattern;
 pub use common::formatted_value;
@@ -222,6 +223,13 @@ struct Layouter<'t> {
     /// The pages' copies of master content that overrides changed, kept for the whole layout so
     /// their addresses stay unique (the measurement cache keys on them).
     master_copies: Vec<Rc<Vec<Node>>>,
+    /// Each unnamed page area's content with the property changes scripts made to it, by the
+    /// area's index, once a page was made from it: `None` when no change is drawn (see
+    /// `Layouter::unnamed_copy`).
+    unnamed_copies: HashMap<usize, Option<Rc<Vec<Node>>>>,
+    /// The readings of objects with their instances' own changes made so far (see
+    /// [`restyled`]).
+    restyles: restyled::Restyles,
 }
 
 /// How many instances of a repeating subform to lay out: what the data holds once it holds
@@ -239,11 +247,22 @@ pub type PropChanges = std::collections::BTreeMap<String, std::collections::BTre
 /// `occur` (the template's, or as a script changed it, see [`occur_at`]) and the instances
 /// `data` holds ([`instance_count`]). The traversal counts them the same way.
 pub(crate) fn subform_instances_with(tpl: &Template, data: Option<&DataNode>, sf: &Subform, occur: &Occur, parent_som: &str) -> usize {
-    let from_data = match (&sf.common.name, data) {
-        (Some(name), Some(d)) if occur.max != Some(1) => d.count(&data_path(tpl, parent_som), name),
+    instance_count(occur, instances_in_data(tpl, data, sf, occur, parent_som))
+}
+
+/// How many instances of `sf` the data holds under the container at `parent_som`: the data
+/// nodes of its name from its own number on. An object takes the data node of its number
+/// (`Row[2]` the third `Row`), so the nodes before a subform's first number are those of the
+/// same-named objects before it in its scope (a header row named as the rows are, a subform
+/// of that name in an unnamed subform before it), not instances of it. Those from its number
+/// on all count: an object of the same name after it shares their paths, and which of the two
+/// a node was written for the data doesn't say. 0 for a subform that occurs once (by `occur`)
+/// and for an unnamed one, which data makes no instance of.
+pub(crate) fn instances_in_data(tpl: &Template, data: Option<&DataNode>, sf: &Subform, occur: &Occur, parent_som: &str) -> usize {
+    match (&sf.common.name, data) {
+        (Some(name), Some(d)) if occur.max != Some(1) => d.count(&data_path(tpl, parent_som), name).saturating_sub(sf.common.som_index),
         _ => 0,
-    };
-    instance_count(occur, from_data)
+    }
 }
 
 /// Lay a template out, with the values and repeat counts of `data` (the `xfa:data` element).
@@ -260,7 +279,8 @@ pub fn layout(tpl: &Template, data: Option<&DataNode>) -> Result<Form, XfaError>
 /// draw or exclusion group is measured with its instance's changes, and an instance holding
 /// changed objects is measured on its own; a repeating subform's instance is laid out and drawn
 /// with its own border, margins, font and paragraph, and breaks the page where its own breaks
-/// say.
+/// say. An instance's object is read with its changes once in a layout, however often the
+/// layout measures and draws it.
 pub fn layout_with_overrides(tpl: &Template, data: Option<&DataNode>, ov: &crate::script::Overrides, props: &PropChanges) -> Result<Form, XfaError> {
     layout_inner(tpl, data, Some(ov), props)
 }
@@ -314,6 +334,8 @@ fn layout_inner(
         frames: Vec::new(),
         overrides,
         master_copies: Vec::new(),
+        unnamed_copies: HashMap::new(),
+        restyles: restyled::Restyles::default(),
         props,
     };
     let ctx = Ctx { font: Font::default(), para: Para::default(), som: String::new() };

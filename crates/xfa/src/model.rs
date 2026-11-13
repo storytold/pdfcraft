@@ -486,7 +486,7 @@ pub struct Traversal {
 /// font, para, margin, ui, validate, occur, break, assist, format, value, bind, desc, extras, keep),
 /// as written. Properties the template leaves out are not here: the scripting host supplies
 /// their defaults.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Props {
     pub attrs: Vec<(String, String)>,
     pub elements: Vec<Prop>,
@@ -498,7 +498,7 @@ pub struct Props {
 
 /// One property element: its tag, attributes, text (for elements that hold text, such as
 /// `picture` or `toolTip`) and its own property elements.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Prop {
     pub tag: String,
     pub attrs: Vec<(String, String)>,
@@ -579,6 +579,11 @@ pub(crate) struct SomIndices(Vec<usize>);
 impl SomIndices {
     pub(crate) fn of(children: &[Node]) -> Self {
         SomIndices(children.iter().map(|c| c.common().som_index).collect())
+    }
+
+    /// An exclusion group's buttons', numbered among themselves.
+    pub(crate) fn of_fields(fields: &[Field]) -> Self {
+        SomIndices(fields.iter().map(|f| f.common.som_index).collect())
     }
 
     pub(crate) fn at(&self, i: usize) -> usize {

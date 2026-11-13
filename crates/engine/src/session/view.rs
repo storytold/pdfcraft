@@ -380,10 +380,21 @@ impl Session {
     ///
     /// [`Edit::UseCalculatedValue`]: crate::Edit::UseCalculatedValue
     pub fn calculation_overridden(&self, id: DocId, name: &str) -> bool {
-        let Some(d) = self.get(id) else { return false };
-        let Ok(doc) = pdfcraft_cos::Document::open_with_password(d.bytes.clone(), d.password.as_deref()) else { return false };
+        self.overridden_calculations(id).contains(name)
+    }
+
+    /// The laid-out XFA fields of document `id` whose typed values are kept over the
+    /// calculations the form recommends for them ([`Session::calculation_overridden`]), by
+    /// name. Empty for a document that isn't open or isn't such a form.
+    pub fn overridden_calculations(&self, id: DocId) -> std::collections::BTreeSet<String> {
+        let none = std::collections::BTreeSet::new;
+        let Some(d) = self.get(id).filter(|d| d.info.xfa.is_some()) else { return none() };
+        let Ok(doc) = pdfcraft_cos::Document::open_with_password(d.bytes.clone(), d.password.as_deref()) else { return none() };
         let ov = pdfcraft_xfa::overrides(&doc);
-        !ov.overridden.is_empty() && pdfcraft_xfa::fields_by_som(&doc).into_iter().any(|(som, n)| n == name && ov.overridden.contains_key(&som))
+        if ov.overridden.is_empty() {
+            return none();
+        }
+        pdfcraft_xfa::fields_by_som(&doc).into_iter().filter(|(som, _)| ov.overridden.contains_key(som)).map(|(_, name)| name).collect()
     }
 }
 

@@ -121,7 +121,7 @@ be measured exponentially often in their nesting. A measurement budget backs thi
   | --- | --- | --- |
   | `/PCSom` | generated fields | the field's SOM path, so values go back to the data |
   | `/PCXfaLayout` | AcroForm | what laying out produced, so a saved form is not laid out again |
-  | `/PCXfaOverrides` | AcroForm | `<< /Presence << /som (hidden) … >> /Access << /som (readOnly) … >> /Overridden << /som (1) … >> /Props 12 0 R >>`, the object `/Props` names being `<< /som << /border#0/fill#0/color#0@value (255,0,0) … >> … >>`: presence and access scripts set, calculated fields whose value the user typed over a calculation the form only recommends, and the property changes scripts made (by the object's SOM path, then the property's path from it and the attribute, `=` in front for a copy of a drawn edge or corner; in an object of their own, as they can run to a megabyte, written over in place only when the document added it for them), by SOM path (instance 0 of a repeating subform stands for all presence and access); applied to the template before every layout, so undo, save and reopen keep them. Adobe's viewers draw from the XFA packets and don't read it; at most 10 000 presence or access entries, and 10 000 property changes in 1 MiB (64 on one object besides how often a subform occurs, 16 KiB a value), are read, kept and written; an item list's entries are changed, never added. Entries a file holds past them, that a script couldn't make, or kept by a SOM path several objects share, aren't applied (a layout note says so) and stay in the file until the overrides are next written: a script's change of a property, presence or access, a removed row, a value typed over a recommended calculation, the calculated value chosen back, or a reset (Clear Form, `resetData`) that takes a typed-over calculation's mark off |
+  | `/PCXfaOverrides` | AcroForm | `<< /Presence << /som (hidden) … >> /Access << /som (readOnly) … >> /Overridden << /som (1) … >> /Props 12 0 R >>`, the object `/Props` names being `<< /som << /border#0/fill#0/color#0@value (255,0,0) … >> … >>`: presence and access scripts set, calculated fields whose value the user typed over a calculation the form only recommends, and the property changes scripts made (by the object's SOM path, then the property's path from it and the attribute, `=` in front for a copy of a drawn edge or corner; in an object of their own, as they can run to a megabyte, written over in place only when the document added it for them), by SOM path (instance 0 of a repeating subform stands for all presence and access); applied to the template before every layout, so undo, save and reopen keep them. Adobe's viewers draw from the XFA packets and don't read it; at most 10 000 presence or access entries, and 10 000 property changes in 1 MiB (64 on one object besides how often a subform occurs, 16 KiB a value), are read, kept and written (a script's change past them is not kept: the console names one its object has no room for, one message says when the form has none, and the script that made it reads its own value until it ends, the next one the form's); an item list's entries are changed, never added. The object `/Props` names holds each path's dictionary and each value directly, as PdfCraft writes them: a reference inside it isn't followed, a value longer than any that is kept isn't decoded, and reading stops at twice the entries that may be kept. A path counts as shared, too, when one of its steps names more than 64 same-named objects that hold others (of 491 templates looked at, the most is 9, and the bound changes no answer for any path of theirs). Entries a file holds past them, that a script couldn't make, named by a reference inside `/Props`, or kept by a SOM path several objects share, aren't applied (a layout note says so) and stay in the file until the overrides are next written: a script's change of a property, presence or access, a removed row, a value typed over a recommended calculation, the calculated value chosen back, or a reset (Clear Form, `resetData`) that takes a typed-over calculation's mark off |
   | `/PCXfaDate` | generated date fields | `true`: text the field's date pattern doesn't read is kept, and shown, as typed rather than refused, as an XFA form keeps it; the forms layer reads it |
   | `/PCXfaNode` | generated fields above a signature field | `true`: the field names a step of the signature field's SOM path; a new layout replaces it with the fields it holds |
   | `/PCXfaClick` | generated push buttons | `true`: the template has a click script for this button. Such buttons carry no `/A`: XFA JavaScript is not Acrobat JavaScript, so it is never written as a `/S /JavaScript` action other viewers would run. PdfCraft finds the script by the field's `/PCSom` |
@@ -175,14 +175,17 @@ let form = pdfcraft_xfa::layout_xml(template_xml)?;       // pages of items, for
   read them, so two `verified` subforms, each in an unnamed subform of one container, are
   `verified[0]` and `verified[1]` and keep a change each. Scripts resolve names the same way
   (`form1.yes[1]` is the second `yes` of `form1`, through its unnamed subforms and areas). A
-  SOM path more than one object of the form has or may have keeps no change
-  (`som_is_shared`): an unnamed subform, area or draw takes its parent's path, unnamed fields
+  SOM path more than one object of the form has or may have keeps no property change and no
+  mark of a typed-over calculation (`som_is_shared`): an unnamed subform, area or draw takes its parent's path, unnamed fields
   and exclusion groups of one container are each `…field[0]` or `…group[0]`, each instance of
   an unnamed subform the template makes more than once names its content as the first does,
   and the later instances of a named subform that may repeat count on from its number, which a
-  same-named object after it in the template has too. A write to one is refused with a
-  console note, by the script and by the form, and such a change a file holds is left out, as
-  is a calculation override at such a path. Who owns which path is worked out once per
+  same-named object after it in the template has too. A property write to one is refused with a
+  console note, by the script and by the form, which ask one record of the template
+  (`SharedPaths`), so a script never reads back a change the form won't keep; such a change a file holds is left out, as
+  is a calculation override at such a path. Presence and access are kept by path alone, as they
+  were: set through such a path they are every object's that has it, and when a row goes one
+  kept at a later instance's path moves down with the instances. Who owns which path is worked out once per
   template. An unnamed exclusion group's buttons are named under `group[n]` by the layout and
   the Tab order, as scripts name them. `execValidate()` runs the null test on every
   required object under the node and lists the empty ones in one message. An event's work
@@ -207,12 +210,37 @@ let form = pdfcraft_xfa::layout_xml(template_xml)?;       // pages of items, for
   (`/Overridden`), and the app asks whether to keep it or go back to the calculated value: about
   each such field on its own, in turn, when one edit types over several, and going back changes
   that field only (`Edit::UseCalculatedValue`; headless, `form_fill` with `{"calculated": true}`).
+  The question is the calculation's own message when it has one, cut to 2,000 characters
+  (`validation_rules::MAX_QUESTION`). Headless there is no one to ask: `form_fill` keeps the
+  value and says so in its result (a `calculation_overridden` request for each field), and
+  `form_fields` marks the field `calculation_overridden` for as long as the value is kept.
+  A question names its field as it is named once the event's scripts have run. Field names
+  follow the fields' places in the form, so a later event's scripts can give a kept value's
+  field another name (a row added or removed before it, a part shown or hidden): the app then
+  drops a question still waiting about it, and headless the result lists the old names in a
+  `calculations_moved` request; the value stays kept under the field's new name. When the
+  form gives no message the app asks in its own sentence, in the interface's language, naming
+  the field by its name in the document.
   A reset (Clear Form, `form_reset`, `xfa.host.resetData`) gives the fields it covers their
   template's state, the value's override included (pp. 581-582), so they are calculated again.
+  With any other `override` the calculated value stays: what is typed into the field is
+  replaced by the next calculation, without a message. That is what `ignore` asks for; `error`
+  (the setting of a `<calculate>` that names none) asks for an error message as well
+  (pp. 641-642), which is not shown; and a field set `disabled` is calculated all the same, as
+  readers are seen to do.
   These choices live in `validation_rules`.
-  A hidden instance of a repeating subform hides every instance (overrides apply to the template).
+  Presence and access are not drawn per instance of a repeating subform yet. Scripts read each
+  instance's own, and they are kept, and renumbered when a row goes, with the instance; the page
+  takes them from the template object, which the first instance stands for: what is hidden on
+  the first instance, or on an object in it, is hidden on every instance, and what is hidden on
+  a later one still shows (property changes are drawn per instance).
   A repeating subform shows what its data holds once the data holds any instance, else its
   `initial` count, and never fewer than one (`occur min="0"` still shows one row).
+  A script's change to `occur` counts as the template's own from the next layout on, for the
+  page and for scripts: rows past a lowered `max` are left out with a warning and stay in the
+  data (raising `max` brings them back), and while the data holds no row a raised `min` or
+  `initial` shows that many; rows the data holds are not added to. Not compared with another
+  reader, where such a change may wait for the next merge.
 - **Script limits.** Forms run their scripts on open without being asked, so the engine bounds
   each event: a script's effects (values set again on the same object merge, the last wins;
   10 000 effects, 100 message boxes, 1 000 console lines per script and per event), its loop

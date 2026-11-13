@@ -8061,16 +8061,17 @@ fn on_changes_notes_only_the_exits_that_ran() {
     let id = s.open("form.pdf", None, focus_form(), None).expect("opens");
     let doc = s.get(id).unwrap();
     let mut cos = doc.editor.as_ref().unwrap().cos.clone();
+    let before = cos.clone();
     let tpl = doc.xfa_template.clone().unwrap();
     let names = vec!["probe".to_string()];
     let mut exited = Vec::new();
     let mut out = crate::js::JsOutput::default();
     let mut stopped = crate::xfa::XfaRun { page_count: 1, out: &mut out, datasets: None, ran_away: true, highlight: false, time_scale: 1 };
-    crate::xfa::on_changes(&mut cos, &tpl, &names, None, &mut stopped, &mut exited).unwrap();
+    crate::xfa::on_changes(&mut cos, &before, &tpl, &names, None, &mut stopped, &mut exited).unwrap();
     assert!(exited.is_empty(), "no exit ran: {exited:?}");
     let mut out = crate::js::JsOutput::default();
     let mut running = crate::xfa::XfaRun { page_count: 1, out: &mut out, datasets: None, ran_away: false, highlight: false, time_scale: 1 };
-    crate::xfa::on_changes(&mut cos, &tpl, &names, None, &mut running, &mut exited).unwrap();
+    crate::xfa::on_changes(&mut cos, &before, &tpl, &names, None, &mut running, &mut exited).unwrap();
     assert_eq!(exited.len(), 1, "the exit ran: {exited:?}");
 }
 

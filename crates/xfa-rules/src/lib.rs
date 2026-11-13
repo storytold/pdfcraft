@@ -99,8 +99,9 @@ pub fn is_name(s: &str) -> bool {
 }
 
 /// The steps of a property path (`border#0/edge#1`) as (tag, occurrence), when it is one a
-/// change may name: 1 to [`MAX_STEPS`] steps, each a name and an occurrence up to
-/// [`MAX_INDEX`] (an entry of one of the first [`ITEM_LISTS`] item lists up to
+/// change may name: 1 to [`MAX_STEPS`] steps, each a name and an occurrence in plain decimal
+/// digits (no sign, no leading zero, so each property has one path) up to [`MAX_INDEX`] (an
+/// entry of one of the first [`ITEM_LISTS`] item lists up to
 /// [`MAX_ITEM_INDEX`], and nothing under it), starting at one of the [`ROOTS`]; a border's or
 /// rectangle's edges and corners occur at most four times (XFA 3.3 p. 629), so none past the
 /// fourth.
@@ -108,7 +109,9 @@ pub fn steps(path: &str) -> Option<Vec<(&str, usize)>> {
     let mut out: Vec<(&str, usize)> = Vec::new();
     for step in path.split('/') {
         let (tag, index) = step.rsplit_once('#')?;
-        let index: usize = index.parse().ok()?;
+        // Written one way only (`0`, `12`; not `+0`, `012`), so no two paths name one property.
+        let plain = index == "0" || (!index.starts_with('0') && index.bytes().all(|b| b.is_ascii_digit()));
+        let index: usize = index.parse().ok().filter(|_| plain)?;
         // An item list's entries go as far as the list does; every other step to MAX_INDEX.
         let in_list = matches!(out.as_slice(), [("items", k)] if *k < ITEM_LISTS);
         let most = if in_list { MAX_ITEM_INDEX } else { MAX_INDEX };
@@ -267,6 +270,13 @@ mod tests {
         assert!(steps("font").is_none());
         assert!(steps("font#x").is_none());
         assert!(steps("font#-1").is_none());
+        // One spelling per occurrence: no second path to the property `font#5` names.
+        assert_eq!(steps("font#5"), Some(vec![("font", 5)]));
+        for alias in ["font#+5", "font#05", "font#00", "font#", "font#5 ", "font#\u{0665}"] {
+            assert!(steps(alias).is_none(), "{alias}");
+        }
+        assert_eq!(check("font#0", Some("size"), "10pt"), Ok(()));
+        assert!(check("font#+0", Some("size"), "10pt").is_err());
         assert!(steps("").is_none());
         assert!(steps("nowhere#0").is_none());
         assert!(steps("border#0/edge#3").is_some());

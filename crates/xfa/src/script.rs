@@ -49,6 +49,9 @@ pub struct FormNode {
     pub repeatable: bool,
     pub occur_min: usize,
     pub occur_max: Option<usize>,
+    /// Subforms: a script can't change how often it occurs ([`crate::occur_is_fixed`]), as the
+    /// template tells it, so the scripting host and the form refuse the same writes.
+    pub occur_fixed: bool,
     pub index: usize,
     pub children: Vec<FormNode>,
     /// Fields: the display picture (see [`Field::display_picture`]), for `formattedValue`.
@@ -113,8 +116,9 @@ pub struct Overrides {
     /// next written ([`set_overrides`]), which leaves them out: after a script changes a
     /// property, a presence or an access, removes a row, or resets fields whose calculation the
     /// user typed over; after a value is typed over a calculation the form recommends; after
-    /// the calculated value is chosen back (`Edit::UseCalculatedValue`); and after Clear Form
-    /// (or a reset of named fields) takes such a field's mark off.
+    /// the calculated value is chosen back (`Edit::UseCalculatedValue`); after Clear Form (or a
+    /// reset of named fields) takes such a field's mark off; and after imported data takes a
+    /// mark off, or leaves out an object something was kept for ([`Overrides::retain_objects`]).
     pub dropped: usize,
 }
 
@@ -123,6 +127,9 @@ pub struct Overrides {
 pub enum PropRefused {
     /// The value or the path is not one the property takes ([`crate::restyle::check`]).
     Invalid(String),
+    /// The object already keeps as many changes as one may
+    /// ([`crate::restyle::MAX_PROP_CHANGES_PER_OBJECT`]); other objects still take theirs.
+    ObjectFull,
     /// The form already holds as many changes, or bytes of them, as it may.
     Full,
 }
@@ -140,9 +147,10 @@ impl Overrides {
     /// Set attribute `attr` (`None`: the text) of the property at `path` of the object at `som`
     /// to `value`. `Ok(true)` when that changed what is kept, `Ok(false)` when it was already so.
     /// Refused past [`crate::restyle::MAX_PROP_OVERRIDES`] changes or
-    /// [`crate::restyle::MAX_PROP_OVERRIDE_BYTES`] bytes in the form, or
-    /// [`crate::restyle::MAX_PROP_CHANGES_PER_OBJECT`] on one object (how often a subform
-    /// occurs, at most three, not counted: [`crate::prop_rules::is_occurrence`]).
+    /// [`crate::restyle::MAX_PROP_OVERRIDE_BYTES`] bytes in the form ([`PropRefused::Full`]), or
+    /// [`crate::restyle::MAX_PROP_CHANGES_PER_OBJECT`] on one object ([`PropRefused::ObjectFull`];
+    /// how often a subform occurs, at most three, not counted:
+    /// [`crate::prop_rules::is_occurrence`]).
     pub fn set_prop(&mut self, som: &str, path: &str, attr: Option<&str>, value: &str) -> Result<bool, PropRefused> {
         self.set(som, path, attr, value, false)
     }
@@ -163,7 +171,7 @@ impl Overrides {
         let counted = |k: &str| !crate::prop_rules::is_occurrence(k);
         let on_object = self.props.get(som).map_or(0, |m| m.keys().filter(|k| counted(k)).count());
         if counted(&key) && on_object >= crate::restyle::MAX_PROP_CHANGES_PER_OBJECT && self.props.get(som).is_none_or(|m| !m.contains_key(&key)) {
-            return Err(PropRefused::Full);
+            return Err(PropRefused::ObjectFull);
         }
         let old = self.props.get(som).and_then(|m| m.get(&key));
         if old.is_some_and(|v| v == value) {
@@ -193,7 +201,10 @@ impl Overrides {
     /// The instance at `som` (`…table[0].row[2]`) was removed: what scripts changed on it, or
     /// on anything in it, goes with it, and the changes of the later instances of the same
     /// subform move down one place (`row[3]…` becomes `row[2]…`), so presence, access and
-    /// property changes stay with the instance they were made to.
+    /// property changes stay with the instance they were made to. A same-named object after the
+    /// subform in the template has a later instance's path too ([`crate::som_is_shared`]): no
+    /// property change is kept there, and a presence or access kept there counts as the
+    /// instance's and moves with the instances.
     /// `true` when that changed anything.
     pub fn remove_instance(&mut self, som: &str) -> bool {
         let Some((head, index)) = som.strip_suffix(']').and_then(|s| s.rsplit_once('[')) else { return false };
@@ -245,11 +256,47 @@ impl Overrides {
             // Over the next instance's own changes, which it keeps beside them.
             Arc::make_mut(&mut self.props).entry(som.to_string()).or_default().extend(occur);
         }
+        self.recount();
+        changed
+    }
+
+    /// Keep only what scripts changed on the objects the form still has (`live`, by SOM path):
+    /// after new data made the form anew with fewer objects (rows the data no longer holds),
+    /// the presence, the access, the mark of a typed-over calculation and the property changes
+    /// of an object that is gone go with it, so an object that later takes its path (a row
+    /// added again) starts as the template's. How often a subform occurs stays, as it is the
+    /// subform's and kept where its first instance is, or would be
+    /// ([`Overrides::remove_instance`]). `true` when anything went.
+    pub fn retain_objects(&mut self, live: impl Fn(&str) -> bool) -> bool {
+        /// Keep `map`'s live keys; `true` when one went.
+        fn keep<V>(map: &mut BTreeMap<String, V>, live: &impl Fn(&str) -> bool) -> bool {
+            let before = map.len();
+            map.retain(|som, _| live(som));
+            map.len() != before
+        }
+        let mut changed = keep(&mut self.presence, &live) | keep(&mut self.access, &live) | keep(&mut self.overridden, &live);
+        let stays = |k: &str| crate::prop_rules::is_occurrence(k);
+        // The property changes are copied (from the memo's) only when one of them goes.
+        if self.props.iter().any(|(som, m)| !live(som) && m.keys().any(|k| !stays(k))) {
+            let props = Arc::make_mut(&mut self.props);
+            for (som, m) in props.iter_mut() {
+                if !live(som) {
+                    m.retain(|k, _| stays(k));
+                }
+            }
+            props.retain(|_, m| !m.is_empty());
+            self.recount();
+            changed = true;
+        }
+        changed
+    }
+
+    /// Count the property changes kept again, after some moved or went.
+    fn recount(&mut self) {
         self.prop_count = self.props.values().flat_map(|m| m.keys()).filter(|k| !k.starts_with('=')).count();
         self.prop_copies = self.props.values().flat_map(|m| m.keys()).filter(|k| k.starts_with('=')).count();
         self.prop_bytes =
             self.props.iter().map(|(s, m)| m.iter().map(|(k, v)| s.len().saturating_add(k.len()).saturating_add(v.len())).sum::<usize>()).sum();
-        changed
     }
 }
 
@@ -323,7 +370,8 @@ fn read_overrides(doc: &Document, tpl: Option<&Template>) -> Overrides {
             && let Some(m) = m.as_dict()
         {
             for (k, v) in m.iter().take(MAX_OVERRIDES) {
-                let Some(v) = v.as_string() else { continue };
+                // Measured as the file holds it, before it is decoded.
+                let Some(v) = v.as_string().filter(|v| v.bytes.len() <= MAX_STATE_BYTES) else { continue };
                 let k = String::from_utf8_lossy(k).into_owned();
                 // A calculation the user typed over is the field's: one kept by a path several
                 // fields share would keep the calculation off all of them ([`mark_value_override`]
@@ -336,13 +384,13 @@ fn read_overrides(doc: &Document, tpl: Option<&Template>) -> Overrides {
         }
     }
     // Property changes: each checked and counted as a script's would be, so a file can hold
-    // no more than a script could have made, and nothing a script couldn't have set.
+    // no more than a script could have made, and nothing a script couldn't have set. They are
+    // read as [`set_overrides`] writes them, a dictionary for each path holding its strings: a
+    // reference in their place is followed nowhere, so what is read is what the object itself
+    // holds, and the object can stand for it in the memo.
     if let Some(object) = d.get(b"Props").map(|m| doc.resolve(m))
         && let Some(m) = object.as_dict()
     {
-        // Only an object holding its changes itself is taken from the memo or kept in it: one
-        // that names other objects can read differently while it stays the same.
-        let memo = memo.filter(|_| holds_prop_changes(&object));
         if let Some(kept) = memo.and_then(|memo| memo.kept(&object)) {
             out.props = kept.props;
             out.prop_count = kept.count;
@@ -351,15 +399,16 @@ fn read_overrides(doc: &Document, tpl: Option<&Template>) -> Overrides {
             out.dropped = kept.dropped;
             return out;
         }
-        // An entry refused (invalid, or past a limit) is counted in `dropped` for a note; no more
-        // entries than the limits allow (changes and copies, each up to the limit) are looked
-        // at, the rest counted unread, by their objects' sizes: an object named again and again
-        // costs a look-up each time, not its entries.
+        // An entry refused (invalid, or past a limit) is counted in `dropped` for a note. No
+        // more entries than the limits allow (changes and copies, each up to the limit) are
+        // looked at, and no more bytes decoded than those could take; the rest is counted
+        // unread, a path's dictionary by its size.
         let most = crate::restyle::MAX_PROP_OVERRIDES.saturating_mul(2);
         let mut read = 0usize;
+        let mut raw_left = MAX_PROP_RAW_BYTES;
         for (som, sets) in m.iter() {
-            let resolved = doc.resolve(sets);
-            let Some(sets) = resolved.as_dict() else {
+            let Some(sets) = sets.as_dict() else {
+                read = read.saturating_add(1);
                 out.dropped = out.dropped.saturating_add(1);
                 continue;
             };
@@ -370,12 +419,15 @@ fn read_overrides(doc: &Document, tpl: Option<&Template>) -> Overrides {
             let som = String::from_utf8_lossy(som).into_owned();
             // Changes kept by a path several objects share can't be told apart between them: a
             // script's write there is refused ([`crate::data::som_is_shared`]), and so is one the
-            // file holds. Charged as read, so a file naming many such paths costs no more.
-            if tpl.is_some_and(|t| crate::data::som_is_shared(t, &som)) {
+            // file holds. Charged as read (a path holding nothing too, without asking whose it
+            // is), so a file naming many paths costs no more than one holding as many changes.
+            if sets.is_empty() || tpl.is_some_and(|t| crate::data::som_is_shared(t, &som)) {
                 read = read.saturating_add(sets.len().max(1));
                 out.dropped = out.dropped.saturating_add(sets.len());
                 continue;
             }
+            // Whether how often the subform there occurs is fixed, asked when a change names it.
+            let mut fixed: Option<bool> = None;
             for (seen, (key, v)) in sets.iter().enumerate() {
                 #[cfg(test)]
                 ENTRIES_LOOKED.with(|c| c.set(c.get().saturating_add(1)));
@@ -384,14 +436,25 @@ fn read_overrides(doc: &Document, tpl: Option<&Template>) -> Overrides {
                     out.dropped = out.dropped.saturating_add(sets.len().saturating_sub(seen));
                     break;
                 }
-                let Some(v) = doc.resolve(v).as_string().map(|s| s.to_text()) else {
+                // Measured as the file holds it, before it is decoded: longer than any value
+                // that may be kept, or past what all of them could take, it is not decoded.
+                let Some(v) = v.as_string().filter(|v| v.bytes.len() <= MAX_PROP_RAW_VALUE && v.bytes.len() <= raw_left) else {
                     out.dropped = out.dropped.saturating_add(1);
                     continue;
                 };
+                raw_left = raw_left.saturating_sub(v.bytes.len());
+                let v = v.to_text();
                 #[cfg(test)]
                 KEPT_READ.with(|c| c.set(c.get().saturating_add(1)));
                 let key = String::from_utf8_lossy(key);
                 let (path, attr) = crate::restyle::split_key(&key);
+                // A script's change to how often a subform occurs is refused where it would give
+                // the subform's instances another object's path ([`crate::data::occur_is_fixed`]),
+                // and so is one the file holds.
+                if path.starts_with("occur#") && *fixed.get_or_insert_with(|| tpl.is_some_and(|t| crate::data::occur_is_fixed(t, &som))) {
+                    out.dropped = out.dropped.saturating_add(1);
+                    continue;
+                }
                 let kept = if key.starts_with('=') { out.set_prop_copy(&som, path, attr, &v) } else { out.set_prop(&som, path, attr, &v) };
                 if kept.is_err() {
                     out.dropped = out.dropped.saturating_add(1);
@@ -411,6 +474,21 @@ fn read_overrides(doc: &Document, tpl: Option<&Template>) -> Overrides {
     }
     out
 }
+
+/// The longest a kept presence, access or typed-over mark is in a file, in bytes as the file
+/// holds it: the longest a script can set, `nonInteractive`, is 30 bytes as UTF-16 with its
+/// byte-order mark. A longer string is not decoded.
+const MAX_STATE_BYTES: usize = 64;
+
+/// The longest a kept property value is in a file, in bytes as the file holds it: a value of
+/// [`crate::restyle::MAX_PROP_VALUE`] bytes, the longest that may be kept, is at most twice
+/// that as UTF-16, and a byte-order mark. A longer string is refused before it is decoded.
+const MAX_PROP_RAW_VALUE: usize = 2 + 2 * crate::restyle::MAX_PROP_VALUE;
+
+/// The most bytes of kept property values decoded from a file, as the file holds them: what
+/// [`crate::restyle::MAX_PROP_OVERRIDE_BYTES`] of values, the most that may be kept, take as
+/// UTF-16, with a byte-order mark for each of the entries looked at.
+const MAX_PROP_RAW_BYTES: usize = 2 * crate::restyle::MAX_PROP_OVERRIDE_BYTES + 4 * crate::restyle::MAX_PROP_OVERRIDES;
 
 /// Whether `o` is an object of property changes as [`set_overrides`] writes them: a dictionary,
 /// not empty, of dictionaries of strings.
@@ -600,6 +678,7 @@ impl Walker<'_> {
             repeatable: false,
             occur_min: 1,
             occur_max: Some(1),
+            occur_fixed: false,
             index,
             children: Vec::new(),
             display_picture: f.display_picture.clone(),
@@ -662,11 +741,7 @@ impl Walker<'_> {
                     // instance manager's limits are the subform's, not one instance's).
                     // Only the occurrence changes are read, as the layout counts instances.
                     let occur = if named { crate::layout::occur_at(&self.ov.props, n, parent_som, sib) } else { sf.occur };
-                    let from_data = match (&sf.common.name, self.data) {
-                        (Some(name), Some(d)) if occur.max != Some(1) => d.count(&data_path(self.tpl, parent_som), name),
-                        _ => 0,
-                    };
-                    let instances = crate::layout::instance_count(&occur, from_data);
+                    let instances = crate::layout::subform_instances_with(self.tpl, self.data, sf, &occur, parent_som);
                     for k in 0..instances {
                         // The first instance was counted above.
                         if k > 0 && !self.take() {
@@ -685,6 +760,7 @@ impl Walker<'_> {
                             presence: self.presence(sf.common.name.as_deref(), &som, sf.common.presence),
                             access: "open".into(),
                             repeatable: occur.max != Some(1),
+                            occur_fixed: named && sf.occur.max == Some(1) && crate::data::occur_is_fixed(self.tpl, &som),
                             occur_min: occur.min,
                             occur_max: occur.max,
                             index,
@@ -737,8 +813,7 @@ impl Walker<'_> {
                     let selected =
                         self.data.and_then(|d| d.text_at(&data_path(self.tpl, &som))).map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
                     self.push_events(&som, &g.scripts, None, None, None);
-                    let fields: Vec<Node> = g.fields.iter().map(|f| Node::Field(Box::new(f.clone()))).collect();
-                    let fsibs = SomIndices::of(&fields);
+                    let fsibs = SomIndices::of_fields(&g.fields);
                     let mut children = Vec::new();
                     for (fi, f) in g.fields.iter().enumerate() {
                         if !self.take() {
@@ -825,9 +900,6 @@ pub fn form_tree_paged(tpl: &Template, data: Option<&DataNode>, ov: &Overrides, 
 struct Owner {
     /// Its number among the same-named objects of its SOM scope ([`Common::som_index`]).
     index: usize,
-    /// A named subform that may repeat (`occur max` other than 1): its later instances take the
-    /// numbers from `index` on.
-    repeats: bool,
     /// How many live objects it stands for, up to 2: two when it is inside an unnamed subform
     /// that occurs more than once (whose instances give their children one path).
     copies: u8,
@@ -835,9 +907,79 @@ struct Owner {
     space: Option<usize>,
 }
 
+/// The owners of one name in a container, each list in the order of their numbers, so the
+/// owners of one number are found without looking at the others.
+#[derive(Debug, Default)]
+struct Named {
+    /// The objects that occur once: each owns its own number.
+    once: Vec<Owner>,
+    /// The named subforms that may repeat (`occur max` other than 1): each owns its number and,
+    /// for its later instances, every number after it.
+    many: Vec<Owner>,
+}
+
+impl Named {
+    /// The owners of the number `index`: the objects numbered so (those with a container
+    /// first), and each subform that may repeat numbered up to it (whose later instance it
+    /// names).
+    fn parts(&self, index: usize) -> (&[Owner], &[Owner]) {
+        let from = self.once.partition_point(|o| o.index < index);
+        let to = self.once.partition_point(|o| o.index <= index);
+        let upto = self.many.partition_point(|o| o.index <= index);
+        (self.once.get(from..to).unwrap_or_default(), self.many.get(..upto).unwrap_or_default())
+    }
+
+    /// The owners of the number `index` ([`Named::parts`]).
+    fn at(&self, index: usize) -> impl Iterator<Item = &Owner> {
+        let (exact, many) = self.parts(index);
+        exact.iter().chain(many)
+    }
+
+    /// The containers of the owners of the number `index` that have one, each with how many
+    /// live objects its owner stands for. The objects numbered so without one (fields, draws)
+    /// aren't looked through, however many share the number: looking stops at the first. Each
+    /// owner looked at is counted.
+    fn within(&self, index: usize) -> impl Iterator<Item = (usize, u8)> {
+        let looked = |_: &&Owner| {
+            #[cfg(test)]
+            OWNERS_LOOKED.with(|c| c.set(c.get().saturating_add(1)));
+        };
+        let (exact, many) = self.parts(index);
+        let exact = exact.iter().inspect(looked).map_while(|o| Some((o.space?, o.copies)));
+        exact.chain(many.iter().inspect(looked).filter_map(|o| Some((o.space?, o.copies))))
+    }
+
+    /// Whether an object that occurs once is numbered `index` and another object is numbered
+    /// after it.
+    fn followed(&self, index: usize) -> bool {
+        let after = |owners: &[Owner]| owners.last().is_some_and(|o| o.index > index);
+        self.once.binary_search_by_key(&index, |o| o.index).is_ok() && (after(&self.once) || after(&self.many))
+    }
+}
+
+/// The most objects holding others one segment of a path may name for the path to be followed
+/// into them when asking who owns it ([`SomOwners::reach`]): a path through a segment naming
+/// more is counted as shared without looking further. Without the bound a file's kept paths
+/// could each be looked up in every same-named object of a hostile template.
+///
+/// Objects holding others share a segment as same-named subforms of one container when one of
+/// them may repeat (its later instances take the numbers after it), or as unnamed exclusion
+/// groups (each is `group[0]`). Of 491 form templates looked at, the most one segment named was
+/// 9 (459 templates: 1; two: 2; one: 3; one: 9; the rest have no path that long), so 64 is
+/// seven times the widest seen; with or without the bound, every one of the 1,011,788 paths
+/// asked about in them (each live object's, and three paths beside each that name nothing)
+/// got the same answer.
+pub(crate) const MAX_REACHED: usize = 64;
+
+/// What [`SomOwners::reach`] finds for a SOM path: the containers it reaches before its last
+/// segment (each with how many live objects it stands for, up to 2), and that segment's name
+/// and number.
+type Reached = (Vec<(usize, u8)>, String, usize);
+
 /// Who owns each SOM path the live form ([`form_tree_paged`]) names, made once per template
-/// and kept in its memo, so [`crate::som_is_shared`] costs a look-up per segment of the path,
-/// however large the form is and however many paths are asked about.
+/// and kept in its memo, so [`crate::som_is_shared`] costs a look-up in each container a
+/// segment of the path reaches (no more than [`MAX_REACHED`] a segment), however large the form
+/// is and however many paths are asked about.
 ///
 /// It follows the live naming: an unnamed subform or area adds no segment, so its children are
 /// named in its parent's container and numbered with that container's other children (XFA 3.3
@@ -852,9 +994,12 @@ struct Owner {
 #[derive(Debug, Default)]
 pub(crate) struct SomOwners {
     /// The names each container gives its children's segments, and who owns each.
-    spaces: Vec<HashMap<String, Vec<Owner>>>,
-    /// The first segment: the root subform's name and named page areas', and their containers.
-    top: HashMap<String, Vec<usize>>,
+    spaces: Vec<HashMap<String, Named>>,
+    /// The first segment: the root subform's name and named page areas', each name with the
+    /// container of everything it names and whether several objects have it. The number after
+    /// the name isn't the template's (a page area's counts the pages laid out from it), so the
+    /// content of all of one name is looked up as one container's.
+    top: HashMap<String, (usize, bool)>,
     /// Unnamed page areas' containers, by their place in the page set (`#pageArea[i]`).
     unnamed_areas: HashMap<usize, usize>,
     /// Objects recorded, against [`MAX_FORM_NODES`].
@@ -865,7 +1010,7 @@ pub(crate) struct SomOwners {
 thread_local! {
     /// [`SomOwners`] made (rather than taken from a template's memo), on this thread.
     static OWNERS_MADE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-    /// Owners [`SomOwners::shared`] looked at, on this thread.
+    /// Owners [`SomOwners::shared`] and [`SomOwners::followed`] looked at, on this thread.
     static OWNERS_LOOKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
@@ -889,22 +1034,50 @@ impl SomOwners {
         #[cfg(test)]
         OWNERS_MADE.with(|c| c.set(c.get().saturating_add(1)));
         let mut o = SomOwners::default();
-        let root = o.space(&tpl.root.children, 1);
-        if let Some(name) = &tpl.root.common.name {
-            o.top.entry(name.clone()).or_default().push(root);
-        }
+        let root = o.top_space(tpl.root.common.name.as_deref());
+        o.fill(root, &tpl.root.children, 1, 1);
         if let Some(ps) = &tpl.root.page_set {
             for (i, area) in ps.areas.iter().enumerate() {
-                let id = o.space(&area.items, 1);
-                match &area.name {
-                    Some(name) => o.top.entry(name.clone()).or_default().push(id),
-                    None => {
-                        o.unnamed_areas.insert(i, id);
-                    }
+                let id = o.top_space(area.name.as_deref());
+                if area.name.is_none() {
+                    o.unnamed_areas.insert(i, id);
                 }
+                o.fill(id, &area.items, 1, 1);
             }
         }
+        // In the order of the numbers: an unnamed field is `field[0]` wherever it stands, after
+        // a `field[1]` too, and [`Named::at`] finds a number by halving. Of one number, the
+        // owners with a container come first ([`Named::within`] stops at the first without).
+        for named in o.spaces.iter_mut().flat_map(|space| space.values_mut()) {
+            named.once.sort_by_key(|o| (o.index, o.space.is_none()));
+            named.many.sort_by_key(|o| o.index);
+        }
         o
+    }
+
+    /// The container of what the first segment `name` names: the one an earlier object of the
+    /// name has, or a new one (an unnamed object has its own).
+    fn top_space(&mut self, name: Option<&str>) -> usize {
+        if let Some((id, several)) = name.and_then(|name| self.top.get_mut(name)) {
+            *several = true;
+            return *id;
+        }
+        let id = self.spaces.len();
+        self.spaces.push(HashMap::new());
+        if let Some(name) = name {
+            self.top.insert(name.to_string(), (id, false));
+        }
+        id
+    }
+
+    /// Put `owner` among the owners of `name` in container `id`.
+    fn own(&mut self, id: usize, name: &str, repeats: bool, owner: Owner) {
+        let Some(container) = self.spaces.get_mut(id) else { return };
+        let named = match container.get_mut(name) {
+            Some(named) => named,
+            None => container.entry(name.to_string()).or_default(),
+        };
+        if repeats { named.many.push(owner) } else { named.once.push(owner) }
     }
 
     /// A new container holding `nodes`; its id.
@@ -953,67 +1126,105 @@ impl SomOwners {
                 Node::Field(f) => (f.common.name.as_deref().unwrap_or("field"), false, None),
                 Node::ExclGroup(g) => {
                     // Its buttons, numbered among themselves.
-                    let mut buttons: HashMap<String, Vec<Owner>> = HashMap::new();
+                    let mut buttons: HashMap<String, Named> = HashMap::new();
                     for b in &g.fields {
                         if self.nodes >= MAX_FORM_NODES {
                             break;
                         }
                         self.nodes += 1;
-                        let owner = Owner { index: b.common.som_index, repeats: false, copies: 1, space: None };
-                        buttons.entry(b.common.name.clone().unwrap_or_else(|| "field".into())).or_default().push(owner);
+                        let owner = Owner { index: b.common.som_index, copies: 1, space: None };
+                        buttons.entry(b.common.name.clone().unwrap_or_else(|| "field".into())).or_default().once.push(owner);
                     }
                     let space = self.spaces.len();
                     self.spaces.push(buttons);
                     (g.common.name.as_deref().unwrap_or("group"), false, Some(space))
                 }
             };
-            let owner = Owner { index: sibs.at(i), repeats, copies, space };
-            if let Some(container) = self.spaces.get_mut(id) {
-                container.entry(name.to_string()).or_default().push(owner);
-            }
+            let owner = Owner { index: sibs.at(i), copies, space };
+            self.own(id, name, repeats, owner);
         }
     }
 
-    /// Whether more than one live object may have the SOM path `som` (see
-    /// [`crate::som_is_shared`]). Each segment is looked up in the containers the path so far
-    /// reached: the object with that exact number, and any subform that may repeat numbered
-    /// below it (whose later instance it names), each owns it, so where two objects get one
-    /// path, both do, and their children's paths are looked up in both.
-    pub(crate) fn shared(&self, som: &str) -> bool {
+    /// The owners of `name[index]` in container `id`, each counted as looked at.
+    fn owners<'a>(&'a self, id: usize, name: &str, index: usize) -> impl Iterator<Item = &'a Owner> {
+        self.spaces.get(id).and_then(|space| space.get(name)).into_iter().flat_map(move |named| named.at(index)).inspect(|_| {
+            #[cfg(test)]
+            OWNERS_LOOKED.with(|c| c.set(c.get().saturating_add(1)));
+        })
+    }
+
+    /// The containers the SOM path `som` reaches before its last segment (each with how many
+    /// live objects it stands for, up to 2), with that segment's name and number: each segment
+    /// is looked up in the containers the path so far reached, and each object found there owns
+    /// it, so where two objects get one path, their children's paths are looked up in both.
+    /// `Err`: nothing is there (`false`); or `som` is the root or a page area itself, with
+    /// whether several are of its name; or a segment before the last names more than
+    /// [`MAX_REACHED`] objects that hold others (`true`: counted as shared).
+    fn reach(&self, som: &str) -> Result<Reached, bool> {
         let path = crate::data::som_to_path(som);
-        // The containers the path reached, each with how many live objects it stands for.
         let unnamed_area = som.strip_prefix("#pageArea[").and_then(|r| r.split_once(']')).and_then(|(i, _)| i.parse::<usize>().ok());
-        let (mut reached, rest) = match unnamed_area {
-            Some(i) => (self.unnamed_areas.get(&i).map(|&id| (id, 1u8)).into_iter().collect::<Vec<_>>(), path.as_slice()),
+        let (top, several, rest) = match unnamed_area {
+            Some(i) => (self.unnamed_areas.get(&i).copied(), false, path.as_slice()),
             None => {
-                let Some(((first, _), rest)) = path.split_first() else { return false };
-                (self.top.get(first).map(|ids| ids.iter().map(|&id| (id, 1u8)).collect()).unwrap_or_default(), rest)
+                let Some(((first, _), rest)) = path.split_first() else { return Err(false) };
+                let top = self.top.get(first).copied();
+                (top.map(|(id, _)| id), top.is_some_and(|(_, several)| several), rest)
             }
         };
         // The root or a page area itself: one path for all of the name.
-        let Some(((last, last_index), within)) = rest.split_last() else { return reached.len() > 1 };
-        let owners = |reached: &[(usize, u8)], name: &str, index: usize| -> Vec<(Owner, u8)> {
-            reached
-                .iter()
-                .filter_map(|&(id, copies)| Some((self.spaces.get(id)?.get(name)?, copies)))
-                .flat_map(|(owners, copies)| {
-                    #[cfg(test)]
-                    OWNERS_LOOKED.with(|c| c.set(c.get().saturating_add(owners.len())));
-                    owners
-                        .iter()
-                        .filter(move |o| o.index == index || (o.repeats && o.index < index))
-                        .map(move |o| (*o, copies.saturating_mul(o.copies).min(2)))
-                })
-                .collect()
-        };
+        let Some(((last, last_index), within)) = rest.split_last() else { return Err(several) };
+        let mut reached: Vec<(usize, u8)> = top.map(|id| (id, 1)).into_iter().collect();
         for (name, index) in within {
-            reached = owners(&reached, name, *index).into_iter().filter_map(|(o, copies)| Some((o.space?, copies))).collect();
-            if reached.is_empty() {
-                return false;
+            let mut next = Vec::new();
+            for &(id, copies) in &reached {
+                let Some(named) = self.spaces.get(id).and_then(|space| space.get(name)) else { continue };
+                for (space, its) in named.within(*index) {
+                    if next.len() >= MAX_REACHED {
+                        return Err(true);
+                    }
+                    next.push((space, copies.saturating_mul(its).min(2)));
+                }
+            }
+            if next.is_empty() {
+                return Err(false);
+            }
+            reached = next;
+        }
+        Ok((reached, last.clone(), *last_index))
+    }
+
+    /// Whether more than one live object may have the SOM path `som` (see
+    /// [`crate::som_is_shared`]): its last segment has two owners, or one standing for two live
+    /// objects, in the containers the path reaches ([`SomOwners::reach`]). It stops at the
+    /// second, so a call looks at no more than [`MAX_REACHED`] owners a segment, whatever the
+    /// template holds.
+    pub(crate) fn shared(&self, som: &str) -> bool {
+        let (reached, last, index) = match self.reach(som) {
+            Ok(found) => found,
+            Err(several) => return several,
+        };
+        let mut live = 0u8;
+        for &(id, copies) in &reached {
+            for o in self.owners(id, &last, index) {
+                live = live.saturating_add(copies.saturating_mul(o.copies).min(2));
+                if live > 1 {
+                    return true;
+                }
             }
         }
-        let found = owners(&reached, last, *last_index);
-        found.iter().map(|(_, copies)| usize::from(*copies)).sum::<usize>() > 1
+        false
+    }
+
+    /// Whether the object at `som` occurs once by the template and a same-named object is
+    /// numbered after it in its SOM scope (see [`crate::occur_is_fixed`]): made to repeat, its
+    /// second instance would take that object's path.
+    pub(crate) fn followed(&self, som: &str) -> bool {
+        let Ok((reached, last, index)) = self.reach(som) else { return false };
+        reached.iter().filter_map(|&(id, _)| self.spaces.get(id)?.get(&last)).any(|named| {
+            #[cfg(test)]
+            OWNERS_LOOKED.with(|c| c.set(c.get().saturating_add(1)));
+            named.followed(index)
+        })
     }
 }
 
@@ -1119,8 +1330,7 @@ pub(crate) fn apply_overrides_to(nodes: &mut [Node], parent_som: &str, ov: &Over
                 if let Some(p) = presence {
                     g.common.presence = p;
                 }
-                let fields: Vec<Node> = g.fields.iter().map(|f| Node::Field(Box::new(f.clone()))).collect();
-                let fsibs = SomIndices::of(&fields);
+                let fsibs = SomIndices::of_fields(&g.fields);
                 for (fi, f) in g.fields.iter_mut().enumerate() {
                     let fsom = child_som(&som, f.common.name.as_deref().or(Some("field")), fsibs.at(fi));
                     if let Some(p) = ov.presence.get(&fsom) {
@@ -1162,8 +1372,7 @@ pub(crate) fn apply_props_to(nodes: &mut [Node], parent_som: &str, props: &crate
             Node::Subform(s) => cut |= apply_props_to(&mut s.children, &som, props, depth + 1),
             Node::Area(a) => cut |= apply_props_to(&mut a.children, &som, props, depth + 1),
             Node::ExclGroup(g) => {
-                let fields: Vec<Node> = g.fields.iter().map(|f| Node::Field(Box::new(f.clone()))).collect();
-                let fsibs = SomIndices::of(&fields);
+                let fsibs = SomIndices::of_fields(&g.fields);
                 for (fi, f) in g.fields.iter_mut().enumerate() {
                     let fsom = child_som(&som, f.common.name.as_deref().or(Some("field")), fsibs.at(fi));
                     if let Some(sets) = props.get(&fsom) {
@@ -1301,8 +1510,7 @@ pub fn apply_overrides_split(tpl: &Template, ov: &Overrides) -> Applied {
                         if let Some(p) = presence {
                             g.common.presence = p;
                         }
-                        let fields: Vec<Node> = g.fields.iter().map(|f| Node::Field(Box::new(f.clone()))).collect();
-                        let fsibs = SomIndices::of(&fields);
+                        let fsibs = SomIndices::of_fields(&g.fields);
                         for (fi, f) in g.fields.iter_mut().enumerate() {
                             let fsom = child_som(&som, f.common.name.as_deref().or(Some("field")), fsibs.at(fi));
                             if presence_on && let Some(p) = ov.presence.get(&fsom) {

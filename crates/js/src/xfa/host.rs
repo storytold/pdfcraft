@@ -21,6 +21,8 @@ pub(crate) struct HNode {
     pub(crate) repeatable: bool,
     pub(crate) occur_min: usize,
     pub(crate) occur_max: Option<usize>,
+    /// See [`XfaNode::occur_fixed`].
+    pub(crate) occur_fixed: bool,
     pub(crate) index: usize,
     pub(crate) parent: Option<usize>,
     pub(crate) children: Arc<[usize]>,
@@ -97,6 +99,7 @@ fn flattened(root: &XfaNode) -> Vec<HNode> {
         repeatable: false,
         occur_min: 0,
         occur_max: None,
+        occur_fixed: false,
         index: 0,
         parent: None,
         children: Arc::from([]),
@@ -158,13 +161,13 @@ pub(crate) struct XHost {
     /// The writes being made are copies of a drawn edge or corner (`XHost::instantiate`), not
     /// the script's own.
     pub(crate) copying: bool,
-    /// Who owns each SOM path among the live objects ([`PathOwners`]; see
-    /// [`XHost::shares_som`]), counted when first asked and again after the objects change (an
-    /// instance added or removed); taken from the form the script started from when an earlier
-    /// script of the event counted it there ([`BASE`]).
+    /// Who owned each SOM path among the objects when the script started ([`PathOwners`]),
+    /// which [`XHost::preset`] finds the objects of earlier scripts' changes by: counted when
+    /// first asked, or taken from the form the script started from when an earlier script of
+    /// the event counted it there ([`BASE`]). Not kept up as instances are added or removed.
     pub(super) som_owners: std::cell::OnceCell<Arc<SomOwnerCounts>>,
-    /// The form these nodes were copied from, kept on this thread ([`BASE`]), while they are as
-    /// copied (no instance added or removed): the owners counted on them are the form's too.
+    /// The form these nodes were copied from, when it is kept on this thread ([`BASE`]): the
+    /// owners counted on them as copied are kept with it.
     pub(super) base: Option<Arc<XfaNode>>,
 }
 
@@ -425,6 +428,7 @@ fn flatten(n: &XfaNode, parent: Option<usize>, out: &mut Vec<HNode>, depth: usiz
         repeatable: n.repeatable,
         occur_min: n.occur_min,
         occur_max: n.occur_max,
+        occur_fixed: n.occur_fixed,
         index: n.index,
         parent,
         children: Arc::from([]),
