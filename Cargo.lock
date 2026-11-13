@@ -238,7 +238,7 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "parking_lot",
  "percent-encoding",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
  "wl-clipboard-rs",
  "x11rb",
 ]
@@ -321,7 +321,7 @@ dependencies = [
  "futures-lite",
  "parking",
  "polling",
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "slab",
  "windows-sys 0.61.2",
 ]
@@ -352,7 +352,7 @@ dependencies = [
  "cfg-if",
  "event-listener",
  "futures-lite",
- "rustix 1.1.5",
+ "rustix 1.1.6",
 ]
 
 [[package]]
@@ -378,7 +378,7 @@ dependencies = [
  "cfg-if",
  "futures-core",
  "futures-io",
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "signal-hook-registry",
  "slab",
  "windows-sys 0.61.2",
@@ -878,7 +878,7 @@ checksum = "4dbf9978365bac10f54d1d4b04f7ce4427e51f71d61f2fe15e3fed5166474df7"
 dependencies = [
  "bitflags 2.13.2",
  "polling",
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "slab",
  "tracing",
 ]
@@ -902,7 +902,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "138efcf0940a02ebf0cc8d1eff41a1682a46b431630f4c52450d6265876021fa"
 dependencies = [
  "calloop 0.14.4",
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "wayland-backend",
  "wayland-client",
 ]
@@ -1185,6 +1185,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-cms"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=60ede99985ef1e5df87a2aca66ed538eb23dec99#60ede99985ef1e5df87a2aca66ed538eb23dec99"
+dependencies = [
+ "rayon",
+]
+
+[[package]]
 name = "craft-docpath"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=787a7a0f972fd1d7a7618fdbeca3a5267a0407ff#787a7a0f972fd1d7a7618fdbeca3a5267a0407ff"
@@ -1289,7 +1297,7 @@ dependencies = [
 [[package]]
 name = "craft-update"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=1b34eba41e62138fc2438d2734523b302840b45d#1b34eba41e62138fc2438d2734523b302840b45d"
+source = "git+https://github.com/storytold/craft-libs?rev=6e03f65bf45181db77ba6229716e6624db9eb25b#6e03f65bf45181db77ba6229716e6624db9eb25b"
 dependencies = [
  "chrono",
  "dunce",
@@ -1299,6 +1307,7 @@ dependencies = [
  "image",
  "log",
  "plist",
+ "rustix 1.1.6",
  "semver",
  "serde",
  "serde_json",
@@ -2072,7 +2081,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -2449,7 +2458,7 @@ version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1bd49230192a3797a9a4d6abe9b3eed6f7fa4c8a8a4947977c6f80025f92cbd8"
 dependencies = [
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "windows-link",
 ]
 
@@ -4194,7 +4203,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7d8fae84b431384b68627d0f9b3b1245fcf9f46f6c0e3dc902e9dce64edd1967"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -4285,7 +4294,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft"
-version = "0.18.1"
+version = "0.21.1"
 dependencies = [
  "chrono",
  "craft-update",
@@ -4310,7 +4319,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-a11y"
-version = "0.18.1"
+version = "0.21.1"
 dependencies = [
  "pdfcraft-content",
  "pdfcraft-cos",
@@ -4321,7 +4330,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-annot"
-version = "0.18.1"
+version = "0.21.1"
 dependencies = [
  "hayro-syntax",
  "pdfcraft-cos",
@@ -4333,7 +4342,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-audit"
-version = "0.18.1"
+version = "0.21.1"
 dependencies = [
  "pdfcraft-content",
  "pdfcraft-cos",
@@ -4344,9 +4353,10 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-automation"
-version = "0.18.1"
+version = "0.21.1"
 dependencies = [
  "base64 0.23.1",
+ "craft-cms",
  "flate2",
  "image",
  "pdfcraft-cos",
@@ -4360,7 +4370,7 @@ dependencies = [
  "pdfcraft-render",
  "pdfcraft-xfa",
  "png 0.18.1",
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "serde_json",
  "sha2 0.11.1",
  "tempfile",
@@ -4368,7 +4378,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-cli"
-version = "0.18.1"
+version = "0.21.1"
 dependencies = [
  "base64 0.23.1",
  "pdfcraft-audit",
@@ -4379,18 +4389,18 @@ dependencies = [
  "pdfcraft-preflight",
  "pdfcraft-render",
  "png 0.18.1",
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "serde_json",
  "winresource",
 ]
 
 [[package]]
 name = "pdfcraft-compare"
-version = "0.18.1"
+version = "0.21.1"
 
 [[package]]
 name = "pdfcraft-content"
-version = "0.18.1"
+version = "0.21.1"
 dependencies = [
  "hayro-syntax",
  "pdfcraft-cos",
@@ -4398,7 +4408,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-cos"
-version = "0.18.1"
+version = "0.21.1"
 dependencies = [
  "chrono",
  "hayro-syntax",
@@ -4415,7 +4425,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-create"
-version = "0.18.1"
+version = "0.21.1"
 dependencies = [
  "encoding_rs",
  "hayro-ccitt",
@@ -4427,7 +4437,7 @@ dependencies = [
  "pdfcraft-model",
  "pdfcraft-xfa",
  "png 0.18.1",
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "thiserror 2.0.21",
  "tiff",
  "zune-jpeg",
@@ -4435,7 +4445,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-crypt"
-version = "0.18.1"
+version = "0.21.1"
 dependencies = [
  "aes",
  "md-5",
@@ -4448,7 +4458,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-edit"
-version = "0.18.1"
+version = "0.21.1"
 dependencies = [
  "hayro-syntax",
  "icu_segmenter",
@@ -4467,9 +4477,10 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-engine"
-version = "0.18.1"
+version = "0.21.1"
 dependencies = [
  "chrono",
+ "craft-cms",
  "craft-docpath",
  "getrandom 0.4.3",
  "icu_properties",
@@ -4511,14 +4522,14 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-export"
-version = "0.18.1"
+version = "0.21.1"
 dependencies = [
  "flate2",
 ]
 
 [[package]]
 name = "pdfcraft-filters"
-version = "0.18.1"
+version = "0.21.1"
 dependencies = [
  "fax",
  "flate2",
@@ -4531,7 +4542,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-fonts"
-version = "0.18.1"
+version = "0.21.1"
 dependencies = [
  "harfrust",
  "pdfcraft-cos",
@@ -4541,7 +4552,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-forms"
-version = "0.18.1"
+version = "0.21.1"
 dependencies = [
  "hayro-syntax",
  "pdfcraft-content",
@@ -4554,11 +4565,11 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-geom"
-version = "0.18.1"
+version = "0.21.1"
 
 [[package]]
 name = "pdfcraft-js"
-version = "0.18.1"
+version = "0.21.1"
 dependencies = [
  "boa_engine",
  "chrono",
@@ -4566,7 +4577,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-measure"
-version = "0.18.1"
+version = "0.21.1"
 dependencies = [
  "pdfcraft-annot",
  "pdfcraft-content",
@@ -4579,14 +4590,14 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-model"
-version = "0.18.1"
+version = "0.21.1"
 dependencies = [
  "pdfcraft-cos",
 ]
 
 [[package]]
 name = "pdfcraft-ocr"
-version = "0.18.1"
+version = "0.21.1"
 dependencies = [
  "ocrs",
  "pdfcraft-fonts",
@@ -4601,7 +4612,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-ocr-worker"
-version = "0.18.1"
+version = "0.21.1"
 dependencies = [
  "js-sys",
  "pdfcraft-ocr",
@@ -4611,7 +4622,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-optimize"
-version = "0.18.1"
+version = "0.21.1"
 dependencies = [
  "image",
  "pdfcraft-annot",
@@ -4628,11 +4639,11 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-oracle"
-version = "0.18.1"
+version = "0.21.1"
 
 [[package]]
 name = "pdfcraft-organize"
-version = "0.18.1"
+version = "0.21.1"
 dependencies = [
  "hayro-syntax",
  "pdfcraft-content",
@@ -4643,18 +4654,18 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-platform"
-version = "0.18.1"
+version = "0.21.1"
 dependencies = [
  "async-channel",
  "futures-lite",
  "log",
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "zbus",
 ]
 
 [[package]]
 name = "pdfcraft-prc"
-version = "0.18.1"
+version = "0.21.1"
 dependencies = [
  "flate2",
  "proptest",
@@ -4663,7 +4674,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-prc-render"
-version = "0.18.1"
+version = "0.21.1"
 dependencies = [
  "flate2",
  "pdfcraft-prc",
@@ -4672,7 +4683,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-preflight"
-version = "0.18.1"
+version = "0.21.1"
 dependencies = [
  "flate2",
  "pdfcraft-content",
@@ -4683,8 +4694,9 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-print"
-version = "0.18.1"
+version = "0.21.1"
 dependencies = [
+ "craft-cms",
  "craft-print",
  "log",
  "pdfcraft-content",
@@ -4698,7 +4710,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-redact"
-version = "0.18.1"
+version = "0.21.1"
 dependencies = [
  "aho-corasick",
  "pdfcraft-annot",
@@ -4722,7 +4734,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-render"
-version = "0.18.1"
+version = "0.21.1"
 dependencies = [
  "bytemuck",
  "flate2",
@@ -4746,7 +4758,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-sign"
-version = "0.18.1"
+version = "0.21.1"
 dependencies = [
  "aes",
  "aws-lc-rs",
@@ -4786,11 +4798,11 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-testkit"
-version = "0.18.1"
+version = "0.21.1"
 
 [[package]]
 name = "pdfcraft-ui-egui"
-version = "0.18.1"
+version = "0.21.1"
 dependencies = [
  "arboard",
  "base64 0.23.1",
@@ -4831,7 +4843,7 @@ dependencies = [
  "pollster 1.0.1",
  "proptest",
  "rfd",
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "serde",
  "serde_json",
  "skrifa 0.44.0",
@@ -4849,7 +4861,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-web"
-version = "0.18.1"
+version = "0.21.1"
 dependencies = [
  "craft-web-api",
  "craft-web-host",
@@ -4864,7 +4876,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-xfa"
-version = "0.18.1"
+version = "0.21.1"
 dependencies = [
  "base64 0.23.1",
  "image",
@@ -4878,7 +4890,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-xfdf"
-version = "0.18.1"
+version = "0.21.1"
 dependencies = [
  "base64 0.23.1",
  "pdfcraft-annot",
@@ -5167,7 +5179,7 @@ dependencies = [
  "concurrent-queue",
  "hermit-abi",
  "pin-project-lite",
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "windows-sys 0.61.2",
 ]
 
@@ -5425,7 +5437,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -5972,20 +5984,20 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.4.15",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
 name = "rustix"
-version = "1.1.5"
+version = "1.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "891efababe418670775f199f0d233d84843c227a0949a883ce15b37c78d6629d"
+checksum = "e5e76742e5294153d4dde1207dbec5bdd81eef6fabdc0d2118babadabfd858aa"
 dependencies = [
  "bitflags 2.13.2",
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -6055,7 +6067,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -6688,7 +6700,7 @@ dependencies = [
  "libc",
  "log",
  "memmap2",
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "thiserror 2.0.21",
  "wayland-backend",
  "wayland-client",
@@ -6951,10 +6963,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
- "rustix 1.1.5",
- "windows-sys 0.61.2",
+ "rustix 1.1.6",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -7706,7 +7718,7 @@ checksum = "38a91b4eaddff87b1cd1074985e3713da4af2c49742d1b356b2c01670a67a078"
 dependencies = [
  "cc",
  "downcast-rs",
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "scoped-tls",
  "smallvec",
  "wayland-sys",
@@ -7719,7 +7731,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e3c36a0f861ad76d0901f2800b46321410d9f73f2ea88aac0650d86c32688073"
 dependencies = [
  "bitflags 2.13.2",
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "wayland-backend",
  "wayland-scanner",
 ]
@@ -7741,7 +7753,7 @@ version = "0.31.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4a52d18780be9b1314328a3de5f930b73d2200112e3849ca6cb11822793fb34d"
 dependencies = [
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "wayland-client",
  "xcursor",
 ]
@@ -8079,7 +8091,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -8437,7 +8449,7 @@ dependencies = [
  "libc",
  "log",
  "os_pipe",
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "thiserror 2.0.21",
  "tree_magic_mini",
  "wayland-backend",
@@ -8495,7 +8507,7 @@ dependencies = [
  "libc",
  "libloading",
  "once_cell",
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "x11rb-protocol",
 ]
 
@@ -8537,7 +8549,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32e45ad4206f6d2479085147f02bc2ef834ac85886624a23575ae137c8aa8156"
 dependencies = [
  "libc",
- "rustix 1.1.5",
+ "rustix 1.1.6",
 ]
 
 [[package]]
@@ -8644,7 +8656,7 @@ dependencies = [
  "hex",
  "libc",
  "ordered-stream",
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "serde",
  "serde_repr",
  "tracing",
