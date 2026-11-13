@@ -407,7 +407,7 @@ pub(super) fn resolver(ctx: &mut Context, from: usize, many: bool) -> JsResult<J
         // for some of the objects it names at least: a child named as the property comes first
         // for each object on its own, in place ((child, "")).
         // a path through a subform's variables names a script object, unless a real child is named `variables`
-        if !many && found.is_empty() && through_variables(&expr) {
+        if !many && found.is_empty() && through_variables(&expr) && !names_a_variables_child(&host(ctx)?.borrow(), from, &expr) {
             return object_by_som(ctx, from, &expr);
         }
         let props = props::resolve_into_props(&host(ctx)?.borrow(), from, &expr);
@@ -477,6 +477,13 @@ fn object_by_som(ctx: &mut Context, from: usize, expr: &str) -> JsResult<JsValue
 /// A SOM step naming where a subform keeps its script objects: `#variables[0]` or `variables`.
 fn is_variables_step(step: &str) -> bool {
     step == "variables" || step.split('[').next() == Some("#variables")
+}
+
+/// Whether the `variables` step of `expr` is a real child of that name (`form1.page1.variables.border`), not the subform's
+/// script variables.
+fn names_a_variables_child(h: &XHost, from: usize, expr: &str) -> bool {
+    let steps: Vec<&str> = expr.split('.').collect();
+    steps.iter().position(|s| is_variables_step(s)).is_some_and(|i| !resolve_som(h, from, &steps[..=i].join(".")).is_empty())
 }
 
 /// Whether a SOM expression goes through a subform's variables (`form1.#variables[0].calcs`).

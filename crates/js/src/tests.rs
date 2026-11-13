@@ -949,6 +949,9 @@ mod xfa_model {
         let ev = XfaEvent { activity: "calculate".into(), target: "form1[0].page1[0].qty[0]".into(), ..Default::default() };
         let o = run_xfa("xfa.resolveNode('form1.page1.variables').somExpression", &ev, &XfaDoc::default(), &f, Limits::default());
         assert_eq!(o.result.as_deref(), Some("form1[0].page1[0].variables[0]"), "{o:?}");
+        // and a property below it is that child's
+        let o = run_xfa("xfa.resolveNode('form1.page1.variables.border').className", &ev, &XfaDoc::default(), &f, Limits::default());
+        assert_eq!(o.result.as_deref(), Some("border"), "{o:?}");
     }
 
     #[test]
