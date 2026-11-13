@@ -373,6 +373,65 @@ several `/NM`, per-line quads, the caret (`5bad54c40`, §4), re-addressed across
   daemon: `docs/collab/server.md`
 - Task and acceptance criteria: `../../TASK.md` in the cabinet-office checkout
 
+## Open review threads
+
+Measured 2026-11-13T12:46Z on head `91a382205` (`gh pr view 6622 --json
+headRefOid` and `git rev-parse HEAD` both read `91a38220510d`; tree clean, and
+`git rev-list --left-right fork/feature/realtime-collaboration...HEAD` reads
+`0 0`). PR #6622 carried 20 CodeRabbit threads from 2026-11-08T15:32–15:33Z in
+which the last word was the bot's: the review was never answered. Each was
+checked against the code of this head — not against its diff hunk — and
+answered in place with one of two fixed forms, so a reader can grep the thread:
+`fixed in <sha> at <file>:<line>`, or `still open` with a one-line plan. Three
+have their finding fixed in code that landed after the review (`#3`, `#6`,
+`#12`); two of those (`#3`, `#6`) carry a narrower residual that the bot's
+follow-up names. One (`#5`) was withdrawn by the bot as unreachable with this
+server. Sixteen are open. **Nothing was pushed**: the replies are review
+comments, they change no commit, and the fork and PR #6622 still read
+`91a382205`, so the five runs created 01:14:58Z stay approvable.
+
+| # | Thread | Verdict at `91a382205` |
+|---|---|---|
+| 1 | `crates/collab-annot/src/lib.rs:144` | **open** — `MAX_TEXT_BYTES` is checked only in `from_payload` (server); the panel takes the draft before any length check (`panels/comments_panel.rs:688`), so an oversized comment is lost. Plan: check before `editing.take()`, keep the draft. |
+| 2 | `crates/collab-client-pdf/src/lib.rs:2045` | **open** — the reply inverse calls `page_target(op)` on a `Target::Annotation`, so no inverse is recorded. Plan: read the page with `annotation_target`, delete by `payload.nm`. |
+| 3 | `crates/collab-client-pdf/src/lib.rs` (outdated line) | **fixed in `4e9710c4e`** at `crates/collab-client-pdf/src/lib.rs:2120` — the inverse names the stored value (on state, `Yes`, custom, or `Off`) and `crates/collab-pdf/src/lib.rs:1178` maps a check box through the name-aware `FieldValue::Text`, where `Off` is unchecked. Residual (the bot's follow-up, confirmed): `field_text` turns `FieldValue::Check(true)` into the literal `"true"` (`:2562`), so a box with a custom on state stores the name and the undo's `expect` fails `field_matches` (`collab-pdf:1447`); the fix is to send the field's on state there. |
+| 4 | `crates/collab-client-pdf/src/lib.rs:2140` | **open** — the `page.move` inverse uses `payload.to` as the target index; a move to `page_count` is applied at the last index, so the server refuses the undo. Plan: clamp to the effective index. |
+| 5 | `crates/ui-egui/src/collab.rs:1083` | **withdrawn by the bot** — `PdfAdapter::commit` sets `conflict: false` unconditionally (`collab-pdf:1386`) and a cabinet 409 reaches the client as `ServerMessage::Error` (`collab-client:340`), so `Event::Committed` never carries `conflict: true` with this server; only a foreign server could misreport, which is defensive. The thread is resolved. |
+| 6 | `crates/ui-egui/src/collab.rs:1085` | **fixed in `d0af73f354`** at `crates/ui-egui/src/collab.rs:1093` — `Disconnected` clears `connected`; the three edit entry points return `Some(false)` with "Waiting for the collaboration session" (`:1251`, `:1372`, `:1443`), and a failed enqueue is reported. Residual (the bot's follow-up, confirmed): after a snapshot `crates/collab-session/src/driver.rs:299` re-enqueues only merge operations and drops pending structural ones without an event. |
+| 7 | `crates/ui-egui/src/collab.rs` (outdated line) | **open** — undo overwrites `group.originals` with the inverses it sent (`:1534`), so redo re-sends them and the server refuses. Plan: keep the pre-undo originals in the redo group. |
+| 8 | `apps/pdfcraft-collab-server/src/control.rs:375` | **open** — `session()` checks only the JWT and the file binding (`:284-289`) and fetches `request.url` before any role check, so any ticket holder can make the daemon GET an internal address. Plan: cabinet role for a URL source plus a destination allowlist. |
+| 9 | `apps/pdfcraft-collab-server/src/http.rs:62` | **open** — `read_head_line` caps one line, but `read_request` has no aggregate head budget and only a per-read 10 s timeout (`:47,56,85`). Plan: one `MAX_HEAD` budget for the whole head and one deadline. |
+| 10 | `apps/pdfcraft-collab-server/src/http.rs:215` | **open** — `parse_http_url` accepts spaces and CR/LF, and `get` interpolates the path into the request line. Plan: reject control characters and spaces before the request. |
+| 11 | `crates/collab-hub/src/lib.rs:90` | **open** — `close_room` only removes the entry; members keep their sink and their sockets, and get `no such document session` on the next send. Plan: terminal error to every member and drop the client entries. |
+| 12 | `crates/collab-hub/src/lib.rs` (outdated line) | **fixed in `24f519a91`** at `crates/collab-hub/src/lib.rs:212` — the actor's seat is kept while another client of the same actor and document is still connected. |
+| 13 | `crates/collab-pdf/src/lib.rs:731` | **open** — `restore_annotation` prefers a client-supplied `body` (`:723`), and `Room::replay` calls the same `apply` (`collab-server:555`), so the live path cannot tell them apart. Plan: a replay/trusted flag; `body` only there, `copy` token live. |
+| 14 | `crates/collab-pdf/src/lib.rs:853` | **open** — the restore check measures the whole JSON frame (base64 body) against `MAX_RESTORE_PAGE_BYTES` = 160 KiB raw (`proto:102`), so a page above ~120 KiB raw fits the copy limit yet its undo is refused. Plan: raw limit for the copy, `MAX_MESSAGE_BYTES` for the frame. |
+| 15 | `crates/collab-server/src/lib.rs:376` | **open** — `hello` overwrites `participants[actor].role`, and `apply`/`commit` read that one role (`:443`, `:627`), so an actor's connections share the last role. Plan: the verified role per connection. |
+| 16 | `crates/collab-server/src/lib.rs:591` | **open** — `resync` returns the whole tail as one `Snapshot` (`:589-591`); nothing checks `encoded_len` on the send path. Plan: frame-sized batches with a continuation, applied in order. |
+| 17 | `crates/collab-server/src/lib.rs:602` | **open** — `presence` checks `actor_id` but not `presence.role`, and the hub re-broadcasts the body, so a viewer can claim `Editor`. Plan: compare with the participant's role and refuse. |
+| 18 | `crates/collab-ws/src/serve.rs:552` | **open** — the transport verifies signature, expiry and file binding but never `claims.session_id` against revocation state, and the daemon has no revoke path. Plan: consult revocation before `hub.connect`. |
+| 19 | `crates/collab-ws/src/token.rs:29` | **open** — the `Claims` doc says `iss`, `iat` and `ver` are "validated by the signature and `exp`", while `decode_raw` requires only `exp`, `sub`, `aud`. Plan: reword; the cabinet enforces its own policy. |
+| 20 | `crates/ui-egui/src/collab.rs` (outdated line) | **open** — `Event::Rejected` drops the op from `originals` but leaves its inverse in `inverses` (`:1020-1024`), which Undo then flattens and sends. Plan: keep the two vectors paired and drop both entries. |
+
+The replies went through the review API
+(`gh api -X POST repos/storytold/pdfcraft/pulls/6622/comments/<id>/replies`), one
+per thread; `reviewThreads` now reads the bot's comment, the answer (and, on
+most threads, the bot's follow-up) on all twenty. CodeRabbit answered on its
+own within a minute: it accepted the plans and asked for a regression test with
+each, did not mark any open finding as addressed, and resolved two threads — #5
+(after withdrawing the finding, see the table) and #12 (verified fix). GitHub
+reads **58 of the 61 threads unresolved**. Three threads got a second answer
+correcting the first one after that follow-up (#3, #5, #6), and this table
+carries the corrected verdict. This record is one docs commit above
+`91a382205` and
+is local, so after it the fork still reads `91a382205` and this clone is `0 1`
+against it (`git rev-list --left-right --count
+fork/feature/realtime-collaboration...HEAD`); the PR stays `MERGEABLE` /
+`UNSTABLE`, with the
+five runs `completed/action_required`. The seventeen open items are advisory
+findings, not a merge gate of their own: the maintainer's review decides, and a
+fix now would need a push, which would reset the five approvals.
+
 ## 1. What is built
 
 | Path | Role |
