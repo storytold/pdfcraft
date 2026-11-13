@@ -837,6 +837,22 @@ fn vectors_are_removed_or_clipped_and_inline_images_go() {
     assert!(c.contains("150 150 m"), "the line elsewhere stays");
 }
 
+/// A horizontal stroke's construction box has no area, so it overlapped nothing and stayed under
+/// the mark. The painted stroke is as wide as the line: a 12 pt line centred 5 pt above the mark
+/// reaches into it and goes; a 1 pt line there does not and stays.
+#[test]
+fn a_stroke_is_removed_by_its_painted_width() {
+    let src = b"12 w 10 60 m 100 60 l S 1 w 10 60 m 100 60 l S 4 w 10 50 m 100 50 l S";
+    let mut doc = one_page(src, "", vec![]);
+    mark(&mut doc, 0, &[[40.0, 45.0, 60.0, 55.0]], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!(r.paths_removed, 2, "{r:?}");
+    let c = content(&doc, 0);
+    assert!(!c.contains("12 w\n10 60 m"), "the wide line reaches the mark: {c}");
+    assert!(c.contains("1 w\n10 60 m\n100 60 l\nS"), "the thin line beside it stays: {c}");
+    assert!(!c.contains("10 50 m"), "the line through the mark goes: {c}");
+}
+
 /// A tiling pattern's cell is a content stream of its own and can draw text. Redacting a shape
 /// filled with such a pattern removed the fill from the page but left the pattern in the page's
 /// resources, so its cell -- with the text that was under the mark -- stayed in the saved file
@@ -1055,6 +1071,20 @@ fn partially_covered_vector_paths_do_not_leak_drawing_commands() {
     assert!(!c.contains("20 20 l"), "partial clip geometry must not leak: {c}");
     // Unrelated non-intersecting path remains untouched.
     assert!(c.contains("300 300 m\n350 350 l\nS"), "unaffected vector path must be kept: {c}");
+}
+
+#[test]
+fn a_covered_clip_and_paint_path_leaves_an_empty_clip_not_its_outline() {
+    // The outline of a fully covered path that clips and paints is confidential geometry: only
+    // an empty clip may stay, and what follows is hidden as the covered clip would have hidden it.
+    let src = b"q 100 100 m 150 180 l 200 100 l h W f 300 300 50 50 re f Q";
+    let mut doc = one_page(src, "", vec![]);
+    mark(&mut doc, 0, &[[90.0, 90.0, 210.0, 190.0]], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!(r.paths_removed, 1);
+    let c = content(&doc, 0);
+    assert!(!c.contains("150 180 l") && !c.contains("100 100 m"), "outline must not stay: {c}");
+    assert!(c.contains("0 0 0 0 re\nW\nn"), "an empty clip stays: {c}");
 }
 
 /// A chain of nested forms deeper than the pass can walk was removed from the page, taking
@@ -3297,31 +3327,42 @@ fn image_and_a_tail(catalog: &str, image: &str, image_dict: &str, tail: &[u8]) -
     ])
 }
 
-/// The refusal of the check of what content still draws through its resources (`resource_ops`).
-fn unread_content_refusal<T: std::fmt::Debug>(result: &Result<T, RedactError>) -> bool {
-    matches!(result, Err(RedactError::Cos(pdfcraft_cos::CosError::Syntax { detail, .. }))
-        if detail == "redaction could not fully read the content that uses these resources")
-}
-
-/// What the page draws can't be told when a content stream the redaction leaves as it was holds
-/// bytes the parser can't read: the redaction of an image is refused, as it was already on a page
-/// with fonts or properties to clean up.
+/// What the page draws can't be told when content the redaction leaves as it was holds bytes the
+/// parser can't read: the redaction of an image is refused. In a content stream of the page, the
+/// walk reads past them and refuses the page itself (`Unreadable`). In a form without resources of
+/// its own that lies away from the mark, which the walk doesn't enter, the check of what the page
+/// still draws through its resources refuses it.
 #[test]
 fn unreadable_bytes_in_a_stream_left_as_it_was_refuse_the_redaction_of_an_image() {
     for (tail, refused) in [(&b"q Q )"[..], true), (b"q Q", false)] {
         let mut doc = image_and_a_tail("", "Im1", "", tail);
         mark(&mut doc, 0, &[[0.0, 200.0, 300.0, 300.0]], "");
-        let result = apply(&mut doc, None);
-        if refused {
-            assert!(unread_content_refusal(&result), "{result:?}");
-        } else {
-            assert_eq!(result.map(|r| r.images_removed).ok(), Some(1));
-        }
+        let result = apply(&mut doc, None).map(|r| r.images_removed);
+        assert_eq!(result, if refused { Err(RedactError::Unreadable(1)) } else { Ok(1) });
     }
+    let mut doc = image_and_a_tail("", "Im1", "", b"/Fm Do");
+    let bbox = Object::Array(vec![0.into(), 0.into(), 300.into(), 100.into()]);
+    let form = Dict::from_iter([(b"Type".to_vec(), Object::name("XObject")), (b"Subtype".to_vec(), Object::name("Form")), (b"BBox".to_vec(), bbox)]);
+    let form = doc.add(Object::Stream(Stream::from_raw(form, b"q Q )".to_vec())));
+    doc.update_dict(ObjRef::new(3, 0), |d| {
+        if let Some(Object::Dict(res)) = d.get_mut(b"Resources")
+            && let Some(Object::Dict(xo)) = res.get_mut(b"XObject")
+        {
+            xo.set(b"Fm".to_vec(), Object::Ref(form));
+        }
+    })
+    .unwrap();
+    mark(&mut doc, 0, &[[0.0, 200.0, 300.0, 300.0]], "");
+    let result = apply(&mut doc, None);
+    assert!(
+        matches!(&result, Err(RedactError::Cos(pdfcraft_cos::CosError::Syntax { detail, .. })) if detail == "redaction could not fully inspect inherited form resources"),
+        "{result:?}"
+    );
 }
 
-/// Remove Hidden Information makes the same check: removing an off layer's image is refused on a
-/// page whose drawing can't be told.
+/// Remove Hidden Information refuses the same page: removing an off layer's image is refused on a
+/// page whose drawing can't be told. Its walk reads every content stream, and refuses the page
+/// itself.
 #[test]
 fn unreadable_bytes_in_a_stream_left_as_it_was_refuse_removing_a_hidden_image() {
     use crate::sanitize::{Hidden, remove_hidden};
@@ -3329,7 +3370,7 @@ fn unreadable_bytes_in_a_stream_left_as_it_was_refuse_removing_a_hidden_image() 
         let mut doc = image_and_a_tail("/OCProperties << /OCGs [7 0 R] /D << /OFF [7 0 R] >> >>", "ImOC", "/OC 7 0 R", tail);
         let result = remove_hidden(&mut doc, &[Hidden::HiddenLayers]);
         if refused {
-            assert!(unread_content_refusal(&result), "{result:?}");
+            assert_eq!(result, Err(RedactError::Unreadable(1)));
         } else {
             assert!(result.unwrap().iter().any(|(h, n)| *h == Hidden::HiddenLayers && *n > 0));
         }
@@ -3571,14 +3612,43 @@ fn what_content_draws_through_its_resources_is_read_within_its_allowance() {
     }
 }
 
+/// An unused Type 3 font, listed as /T3 beside /F1 in the `/Font` of `holder`'s resources (a page's
+/// or a form's), so that the font cleanup, which prunes only Type 3 fonts, charges its read of what
+/// they draw to the page's allowance (without one it has an allowance of its own).
+fn list_type3(doc: &mut Document, holder: ObjRef) {
+    let font = Object::Dict(Dict::from_iter([
+        (b"Type".to_vec(), Object::name("Font")),
+        (b"Subtype".to_vec(), Object::name("Type3")),
+        (b"FontBBox".to_vec(), Object::Array(vec![0.into(), 0.into(), 1000.into(), 1000.into()])),
+        (b"FontMatrix".to_vec(), Object::Array(vec![Object::Real(0.001), 0.into(), 0.into(), Object::Real(0.001), 0.into(), 0.into()])),
+        (b"CharProcs".to_vec(), Object::Dict(Dict::new())),
+    ]));
+    let font = Object::Ref(doc.add(font));
+    let list = |d: &mut Dict| {
+        let Some(Object::Dict(res)) = d.get_mut(b"Resources") else { panic!("{holder:?} has resources") };
+        let Some(Object::Dict(fonts)) = res.get_mut(b"Font") else { panic!("{holder:?} lists fonts") };
+        fonts.set(b"T3".to_vec(), font);
+    };
+    match &*doc.get(holder) {
+        Object::Stream(s) => {
+            let mut s = s.clone();
+            list(&mut s.dict);
+            doc.set(holder, Object::Stream(s));
+        }
+        _ => doc.update_dict(holder, list).unwrap(),
+    }
+}
+
 /// The cleanups after the content walk spend what the walk left of the page's allowance, one
 /// allowance between them. A form without resources of its own that crosses the mark is read by
-/// the walk, then again by the check of what the page still draws and by the font cleanup: at
-/// 100 MiB, three reads are more than the page's 256 MiB, and the redaction is refused; at
-/// 50 MiB it goes on.
+/// the walk, then again by the check of what the page still draws and by the font cleanup, which
+/// charges the page's allowance when the page lists a Type 3 font: at 100 MiB, three reads are more
+/// than the page's 256 MiB, and the redaction is refused; at 50 MiB it goes on. With no Type 3 font
+/// the font cleanup's read has an allowance of its own, so the page's pays for two reads of
+/// 100 MiB, and the redaction goes on.
 #[test]
 fn the_cleanups_after_the_content_walk_spend_what_it_left_of_the_pages_allowance() {
-    for (mib, refused) in [(100, true), (50, false)] {
+    for (mib, type3, refused) in [(100, true, true), (50, true, false), (100, false, false)] {
         let blank = pdfcraft_filters::encode_flate(&vec![b' '; mib << 20]);
         let mut doc = one_page(
             b"q 50 0 0 50 20 230 cm /Im1 Do Q /FmBare Do",
@@ -3588,19 +3658,70 @@ fn the_cleanups_after_the_content_walk_spend_what_it_left_of_the_pages_allowance
                 stream("/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", b"o"),
             ],
         );
+        if type3 {
+            list_type3(&mut doc, ObjRef::new(3, 0));
+        }
         mark(&mut doc, 0, &[[0.0, 200.0, 300.0, 300.0]], "");
-        assert_eq!(apply(&mut doc, None).is_err(), refused, "{mib} MiB");
+        assert_eq!(apply(&mut doc, None).is_err(), refused, "{mib} MiB, Type 3: {type3}");
     }
+}
+
+/// Text under the mark in a content stream that holds bytes the parser can't read, inside a `TJ`
+/// array, is read past by the walk and would stay. The font cleanup's read of what the content
+/// draws refuses such bytes in the streams and forms the walk leaves as they were, and makes that
+/// read with any font listed, a Type 3 font or not (with none, on an allowance of its own). Here
+/// the walk rewrites the text in the page's first stream and leaves the broken `TJ` as it was:
+/// Apply Redactions refuses the page, whether that `TJ` is in the page's second stream or in a
+/// form without resources of its own, and so does Remove Hidden Information. The cleanups run only
+/// when the walk rewrites some of the page, and read what it rewrote as rewritten, so such bytes in
+/// a stream it rewrites still go by, and so do those on a page it rewrites nothing of, unless the
+/// document still lists a Type 3 font (`unlink_type3` then reads every page).
+#[test]
+fn text_beside_bytes_the_parser_cannot_read_refuses_the_redaction() {
+    use crate::sanitize::{Hidden, remove_hidden};
+    let page_of = |second: &[u8]| {
+        pdf(vec![
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents [4 0 R 5 0 R] /Resources << /Font << /F1 6 0 R >> >> >>".to_vec(),
+            stream("", b"BT /F1 10 Tf 20 230 Td (SECRET) Tj ET"),
+            stream("", second),
+            FONT.replace("95 0 R", "7 0 R").into_bytes(),
+            widths(),
+        ])
+    };
+    for tail in [
+        &b"BT /F1 10 Tf 20 260 Td [(TAIL) ) (SECRET)] TJ ET"[..],
+        b"BT /F1 10 Tf 20 260 Td [(TAIL) } (SECRET)] TJ ET",
+        b"BT /F1 10 Tf 20 260 Td [(TAILSECRET) )] TJ ET",
+        b"BT /F1 10 Tf 20 260 Td [) (TAILSECRET)] TJ ET",
+    ] {
+        let mut doc = page_of(tail);
+        mark(&mut doc, 0, &[[0.0, 200.0, 300.0, 300.0]], "");
+        assert!(apply(&mut doc, None).is_err(), "{}", String::from_utf8_lossy(tail));
+    }
+    let mut doc = one_page(
+        b"BT /F1 10 Tf 20 230 Td (SECRET) Tj ET /FmBare Do",
+        "/XObject << /FmBare 7 0 R >>",
+        vec![stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300]", b"BT /F1 10 Tf 20 260 Td [(TAIL) ) (SECRET)] TJ ET")],
+    );
+    mark(&mut doc, 0, &[[0.0, 200.0, 300.0, 300.0]], "");
+    assert!(apply(&mut doc, None).is_err(), "a form's text");
+    let mut doc = page_of(b"BT /F1 10 Tf 3 Tr 20 260 Td [(TAIL) ) (HIDDEN)] TJ ET");
+    doc.set(ObjRef::new(4, 0), Object::Stream(Stream::from_raw(Dict::new(), b"BT /F1 10 Tf 3 Tr 20 230 Td (HIDDEN) Tj ET".to_vec())));
+    assert!(remove_hidden(&mut doc, &[Hidden::HiddenText]).is_err(), "hidden text");
 }
 
 /// The cleanups of a form the redaction rewrites spend the page's allowance too. The rewritten
 /// form has resources of its own, so the page's cleanups don't follow it, and draws through them a
 /// form without any that crosses the mark: the walk reads that form, then the check of what the
-/// rewritten form still draws and its font cleanup read it again. At 100 MiB, three reads are more
-/// than the page's 256 MiB, and the redaction is refused; at 50 MiB it goes on.
+/// rewritten form still draws and its font cleanup (when it lists a Type 3 font) read it again. At
+/// 100 MiB, three reads are more than the page's 256 MiB, and the redaction is refused; at 50 MiB
+/// it goes on. With no Type 3 font the font cleanup's read has an allowance of its own, so the
+/// page's pays for two reads of 100 MiB, and the redaction goes on.
 #[test]
 fn the_cleanups_of_a_rewritten_form_spend_the_pages_allowance() {
-    for (mib, refused) in [(100, true), (50, false)] {
+    for (mib, type3, refused) in [(100, true, true), (50, true, false), (100, false, false)] {
         let blank = pdfcraft_filters::encode_flate(&vec![b' '; mib << 20]);
         let mut doc = one_page(
             b"/FmText Do",
@@ -3613,20 +3734,25 @@ fn the_cleanups_of_a_rewritten_form_spend_the_pages_allowance() {
                 stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Filter /FlateDecode", &blank),
             ],
         );
+        if type3 {
+            list_type3(&mut doc, ObjRef::new(7, 0));
+        }
         mark(&mut doc, 0, &[[0.0, 200.0, 300.0, 300.0]], "");
-        assert_eq!(apply(&mut doc, None).is_err(), refused, "{mib} MiB");
+        assert_eq!(apply(&mut doc, None).is_err(), refused, "{mib} MiB, Type 3: {type3}");
     }
 }
 
 /// Removing hidden text spends what its content walk left of the page's allowance too. The page
 /// draws a form holding hidden text, which is rewritten, and a form without resources of its own:
 /// the walk reads the second, then the check of what the page still draws and the font cleanup
-/// read it again. At 100 MiB, three reads are more than the page's 256 MiB, and the removal is
-/// refused; at 50 MiB it goes on.
+/// (when the page lists a Type 3 font) read it again. At 100 MiB, three reads are more than the
+/// page's 256 MiB, and the removal is refused; at 50 MiB it goes on. With no Type 3 font the font
+/// cleanup's read has an allowance of its own, so the page's pays for two reads of 100 MiB, and the
+/// removal goes on.
 #[test]
 fn removing_hidden_text_spends_what_the_content_walk_left_of_the_pages_allowance() {
     use crate::sanitize::{Hidden, remove_hidden};
-    for (mib, refused) in [(100, true), (50, false)] {
+    for (mib, type3, refused) in [(100, true, true), (50, true, false), (100, false, false)] {
         let blank = pdfcraft_filters::encode_flate(&vec![b' '; mib << 20]);
         let mut doc = one_page(
             b"/FmHidden Do /FmBare Do",
@@ -3636,7 +3762,10 @@ fn removing_hidden_text_spends_what_the_content_walk_left_of_the_pages_allowance
                 stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Filter /FlateDecode", &blank),
             ],
         );
-        assert_eq!(remove_hidden(&mut doc, &[Hidden::HiddenText]).is_err(), refused, "{mib} MiB");
+        if type3 {
+            list_type3(&mut doc, ObjRef::new(3, 0));
+        }
+        assert_eq!(remove_hidden(&mut doc, &[Hidden::HiddenText]).is_err(), refused, "{mib} MiB, Type 3: {type3}");
     }
 }
 
@@ -4038,6 +4167,8 @@ fn hidden_ocmd_policy_matches_the_default_configuration() {
         (Some("AllOn"), false, Some("not_off"), false),
         (None, false, Some("malformed_not"), true),
         (None, false, Some("malformed_without_ocgs"), true),
+        // `/VE` names the hidden group through an alias object (10 0 R is a reference to 8 0 R).
+        (None, false, Some("alias"), true),
     ];
     for (policy, malformed_policy, visibility, should_remove) in cases {
         let mut doc = one_page(
@@ -4075,9 +4206,11 @@ fn hidden_ocmd_policy_matches_the_default_configuration() {
             Some("malformed_without_ocgs") => {
                 membership.set(b"VE".to_vec(), Object::Array(vec![Object::name("UnknownOperator"), Object::Ref(ObjRef::new(8, 0))]))
             }
+            Some("alias") => membership.set(b"VE".to_vec(), Object::Array(vec![Object::name("Or"), Object::Ref(ObjRef::new(10, 0))])),
             _ => {}
         }
         doc.set(ObjRef::new(9, 0), Object::Dict(membership));
+        doc.set(ObjRef::new(10, 0), Object::Ref(ObjRef::new(8, 0)));
         let root = doc.root().unwrap();
         doc.update_dict(root, |d| {
             d.set(
@@ -6143,15 +6276,18 @@ fn unused_descriptions_in_shared_or_inherited_resources_are_retired() {
 
 mod descriptions;
 mod elsewhere;
+mod form_matrix;
 mod hidden_scope;
 mod identification;
 mod inline_images;
 mod limits;
 mod metadata_fail_closed;
 mod metadata_matching;
+mod operands_from_the_end;
 mod property_retirement;
 mod surviving_references;
 mod text_state;
+mod unparsed;
 
 /// `[(FIRSTARR)] [(LASTARR)] TJ` is malformed (a surplus array operand), but the operator still
 /// draws only the one immediately before it (LASTARR, 7 glyphs, 35 pt wide from x = 10) -- not
@@ -6554,6 +6690,131 @@ fn a_reply_on_another_page_to_a_removed_popup_goes_too() {
     }
 }
 
+/// A hairline under a shrinking CTM still paints about a device pixel: its pad must not shrink
+/// with the CTM, or a mark on that ink misses it.
+#[test]
+fn a_hairline_under_a_shrinking_ctm_is_padded_by_half_a_unit() {
+    // Device line from (10, 10) to (50, 10); the mark lies on its painted pixel, above its axis.
+    let mut doc = one_page(b"0.01 0 0 0.01 0 0 cm 0 w 1000 1000 m 5000 1000 l S", "", vec![]);
+    mark(&mut doc, 0, &[[20.0, 10.2, 30.0, 10.4]], "");
+    assert_eq!(apply(&mut doc, None).unwrap().paths_removed, 1);
+}
+
+/// One `re` has four mitred corners: it is padded by the miter limit like any joined path.
+#[test]
+fn a_rectangle_stroke_is_padded_for_its_mitred_corners() {
+    let mut doc = one_page(b"2 w 100 100 50 50 re S", "", vec![]);
+    // Past half the line width from the rectangle, inside the miter reach.
+    mark(&mut doc, 0, &[[155.0, 120.0, 160.0, 130.0]], "");
+    assert_eq!(apply(&mut doc, None).unwrap().paths_removed, 1);
+}
+
+/// A projecting square cap's outer corner reaches lw/2 x sqrt(2) from the endpoint. Under a shear
+/// it maps past a pad of lw/2 times the CTM's stretch (the review's example: corner at x = 12).
+#[test]
+fn a_square_cap_corner_under_a_shear_is_inside_the_pad() {
+    let mut doc = one_page(b"1 0 1 1 0 0 cm 2 J 2 w 0 0 m 10 0 l S", "", vec![]);
+    mark(&mut doc, 0, &[[11.8, 0.8, 11.9, 0.95]], "");
+    assert_eq!(apply(&mut doc, None).unwrap().paths_removed, 1);
+}
+
+/// A line width set between the path and its `S` still applies to that stroke, so the stroke is
+/// tested at the width it is painted with; the width itself stays, the path goes.
+#[test]
+fn a_width_set_between_the_path_and_its_stroke_does_not_hide_it_from_the_test() {
+    let mut doc = one_page(b"10 60 m 100 60 l 12 w S 5 5 m 9 9 l S", "", vec![]);
+    mark(&mut doc, 0, &[[40.0, 45.0, 60.0, 55.0]], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!(r.paths_removed, 1, "{r:?}");
+    let c = content(&doc, 0);
+    assert!(!c.contains("10 60 m") && !c.contains("100 60 l"), "the wide line reaches the mark: {c}");
+    assert!(c.contains("12 w"), "the width stays: {c}");
+    assert!(c.contains("5 5 m"), "the line elsewhere stays: {c}");
+}
+
+/// The renderer takes a line-state operator's operand from the end: `1 12 w` strokes 12 points wide,
+/// so the stroke is tested at that width.
+#[test]
+fn a_surplus_operand_before_the_line_width_does_not_hide_the_stroke() {
+    let mut doc = one_page(b"1 12 w 10 60 m 100 60 l S", "", vec![]);
+    mark(&mut doc, 0, &[[40.0, 45.0, 60.0, 55.0]], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!(r.paths_removed, 1, "{r:?}");
+    assert!(!content(&doc, 0).contains("100 60 l"));
+}
+
+/// One page drawing `SECRET` in the `/OC /L` block, with layer 7 0 R in the default
+/// configuration `config` (objects 8 and up are `extra`).
+fn layer_state_page(config: Vec<(&str, Object)>, resource: &str, extra: Vec<Vec<u8>>) -> Document {
+    let mut objects = vec![b"<< /Type /OCG /Name (Secret) >>".to_vec()];
+    objects.extend(extra);
+    let mut doc = one_page(b"/OC /L BDC BT /F1 10 Tf 10 100 Td (SECRET) Tj ET EMC", &format!("/Properties << /L {resource} >>"), objects);
+    let config = Object::Dict(Dict::from_iter(config.into_iter().map(|(k, v)| (k.as_bytes().to_vec(), v))));
+    let root = doc.root().unwrap();
+    doc.update_dict(root, |d| {
+        d.set(
+            b"OCProperties".to_vec(),
+            Object::Dict(Dict::from_iter([(b"OCGs".to_vec(), Object::Array(vec![Object::Ref(ObjRef::new(7, 0))])), (b"D".to_vec(), config)])),
+        );
+    })
+    .unwrap();
+    doc
+}
+
+fn assert_layer_secret_removed(mut doc: Document) {
+    use crate::sanitize::{Hidden, remove_hidden, scan};
+    let counts = scan(&doc);
+    assert!(counts.iter().any(|(h, n)| *h == Hidden::HiddenLayers && *n > 0), "{counts:?}");
+    remove_hidden(&mut doc, &[Hidden::HiddenLayers]).unwrap();
+    let saved = Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap();
+    assert!(!pdfcraft_edit::text_lines(&saved, 0).unwrap().iter().any(|line| line.text.contains("SECRET")));
+}
+
+#[test]
+fn an_indirect_base_state_off_hides_the_layer() {
+    assert_layer_secret_removed(layer_state_page(vec![("BaseState", Object::Ref(ObjRef::new(8, 0)))], "7 0 R", vec![b"/OFF".to_vec()]));
+}
+
+#[test]
+fn a_chained_base_state_off_hides_the_layer() {
+    assert_layer_secret_removed(layer_state_page(
+        vec![("BaseState", Object::Ref(ObjRef::new(8, 0)))],
+        "7 0 R",
+        vec![b"9 0 R".to_vec(), b"/OFF".to_vec()],
+    ));
+}
+
+#[test]
+fn a_chained_membership_type_is_evaluated() {
+    assert_layer_secret_removed(layer_state_page(
+        vec![("BaseState", Object::name("ON"))],
+        "8 0 R",
+        vec![b"<< /Type 9 0 R /OCGs [7 0 R] /P /AllOff >>".to_vec(), b"10 0 R".to_vec(), b"/OCMD".to_vec()],
+    ));
+}
+
+#[test]
+fn off_wins_over_on_when_the_base_state_is_off() {
+    assert_layer_secret_removed(layer_state_page(
+        vec![
+            ("BaseState", Object::name("OFF")),
+            ("ON", Object::Array(vec![Object::Ref(ObjRef::new(7, 0))])),
+            ("OFF", Object::Array(vec![Object::Ref(ObjRef::new(7, 0))])),
+        ],
+        "7 0 R",
+        Vec::new(),
+    ));
+}
+
+#[test]
+fn a_membership_dictionary_with_an_indirect_type_is_evaluated() {
+    assert_layer_secret_removed(layer_state_page(
+        vec![("BaseState", Object::name("ON"))],
+        "8 0 R",
+        vec![b"<< /Type 9 0 R /OCGs [7 0 R] /P /AllOff >>".to_vec(), b"/OCMD".to_vec()],
+    ));
+}
+
 /// An invisible OCR-style text layer drawn in a Type3 font (what the OCR output writes for
 /// characters beyond WinAnsi) is redacted like any other text: its glyphs are hit-tested by
 /// their real advances, removed, and the verifier passes.
@@ -6590,6 +6851,78 @@ fn a_type3_text_layer_is_redacted_like_any_other() {
 }
 
 #[test]
+fn a_mark_whose_subtype_is_an_indirect_name_is_applied() {
+    // `/Subtype` may be an indirect reference (ISO 32000-2 §7.3.10); the audit reads it that way.
+    // Passing over the mark would leave the text under it while the others report success.
+    let objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> /Annots [7 0 R] >>".to_vec(),
+        stream("", b"BT /F1 10 Tf 20 20 Td (SECRET) Tj ET"),
+        FONT.replace("95 0 R", "6 0 R").into_bytes(),
+        widths(),
+        b"<< /Type /Annot /Subtype 8 0 R /Rect [10 10 90 40] >>".to_vec(),
+        b"/Redact".to_vec(),
+    ];
+    let mut doc = pdf(objs);
+    assert_eq!(marks(&doc).len(), 1, "the mark is found");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!(r.marks, 1);
+    assert!(r.glyphs >= 6, "the text under the mark went: {r:?}");
+    assert!(marks(&doc).is_empty(), "the mark itself went");
+}
+
+#[test]
+fn a_mark_written_in_place_with_an_indirect_subtype_is_refused() {
+    let objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Annots [<< /Type /Annot /Subtype 5 0 R /Rect [10 10 70 40] >>] >>"
+            .to_vec(),
+        stream("", b"BT ET"),
+        b"/Redact".to_vec(),
+    ];
+    let mut doc = pdf(objs);
+    mark(&mut doc, 0, &[[100.0, 100.0, 120.0, 120.0]], "");
+    assert!(matches!(apply(&mut doc, None), Err(RedactError::UnreadableMark(1))));
+}
+
+#[test]
+fn annotations_written_in_place_go_when_covered_or_hanging_off_a_removed_one() {
+    // `/Annots` may hold dictionaries rather than references. One under the mark, a reply to a
+    // removed highlight on the same page and on another, and a reply to that inline comment's
+    // pop-up must all go; an inline comment elsewhere stays.
+    let objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 5 0 R /Annots [6 0 R \
+          << /Type /Annot /Subtype /Text /Rect [30 15 40 25] /Contents (INLINE-UNDER) /Popup 7 0 R >> \
+          << /Type /Annot /Subtype /Text /Rect [250 250 270 270] /IRT 6 0 R /Contents (INLINE-REPLY) >> \
+          << /Type /Annot /Subtype /Text /Rect [250 100 270 120] /Contents (INLINE-KEPT) >> 7 0 R] >>"
+            .to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 5 0 R /Annots [\
+          << /Type /Annot /Subtype /Text /Rect [250 250 270 270] /IRT 6 0 R /Contents (OTHER-PAGE-INLINE-REPLY) >> \
+          << /Type /Annot /Subtype /Text /Rect [200 200 220 220] /IRT 7 0 R /Contents (POPUP-INLINE-REPLY) >>] >>"
+            .to_vec(),
+        stream("", b"BT ET"),
+        b"<< /Type /Annot /Subtype /Highlight /Rect [20 20 60 30] /QuadPoints [20 30 60 30 20 20 60 20] /Contents (HIGHLIGHT-NOTE) >>".to_vec(),
+        b"<< /Type /Annot /Subtype /Popup /Rect [200 150 290 190] /Contents (INLINE-POPUP) >>".to_vec(),
+    ];
+    let mut doc = pdf(objs);
+    mark(&mut doc, 0, &[[10.0, 10.0, 70.0, 40.0]], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!(r.annotations, 5, "the highlight, the inline comment and the three replies: {r:?}");
+    let pages = pdfcraft_model::pages(&doc);
+    assert_eq!(annots_of(&doc, &pages[0].dict).len(), 1, "only the inline comment elsewhere stays");
+    assert!(annots_of(&doc, &pages[1].dict).is_empty(), "the replies leave page 2");
+    let bytes = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
+    for gone in [&b"HIGHLIGHT-NOTE"[..], b"INLINE-UNDER", b"INLINE-REPLY", b"OTHER-PAGE-INLINE-REPLY", b"POPUP-INLINE-REPLY", b"INLINE-POPUP"] {
+        assert!(!bytes.windows(gone.len()).any(|w| w == gone), "{} survived the save", String::from_utf8_lossy(gone));
+    }
+    assert!(bytes.windows(11).any(|w| w == b"INLINE-KEPT"));
+}
+
+#[test]
 fn a_rewritten_form_xobject_drops_the_source_text_of_added_content() {
     // A form drawing invisible text whose dictionary repeats it in /PCAdded.
     let form = stream(
@@ -6613,6 +6946,49 @@ fn a_redacted_form_xobject_drops_the_source_text_of_added_content() {
     apply(&mut doc, None).unwrap();
     let bytes = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
     assert!(!bytes.windows(4).any(|w| w == b"1234"), "redacted text left in the saved file");
+}
+
+#[test]
+fn an_inline_widget_takes_its_field_even_with_no_referenced_widget() {
+    // The field's only widget is written in place in `/Annots`, so no referenced widget names it:
+    // the field (and its value) must still go with the widget under the mark.
+    let objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [6 0 R] >> >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Annots [<< /Type /Annot /Subtype /Widget /Rect [20 20 60 30] /Parent 6 0 R >>] >>"
+            .to_vec(),
+        stream("", b"BT ET"),
+        b"<< >>".to_vec(),
+        b"<< /FT /Tx /T (name) /V (FIELD-SECRET) >>".to_vec(),
+    ];
+    let mut doc = pdf(objs);
+    mark(&mut doc, 0, &[[10.0, 10.0, 70.0, 40.0]], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!(r.fields, 1, "{r:?}");
+    let bytes = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
+    assert!(!bytes.windows(12).any(|w| w == b"FIELD-SECRET"), "the field value survived the save");
+}
+
+#[test]
+fn an_inline_widget_of_the_field_on_another_page_goes_with_it() {
+    // Two pages: the widget under the mark, and a sibling widget in place on the second page with the
+    // same `/Parent`. Deleting the field must not leave the sibling naming it.
+    let objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [7 0 R] >> >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R 5 0 R] /Count 2 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Annots [<< /Type /Annot /Subtype /Widget /Rect [20 20 60 30] /Parent 7 0 R >>] >>"
+            .to_vec(),
+        stream("", b"BT ET"),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Annots [<< /Type /Annot /Subtype /Widget /Rect [200 200 260 230] /Parent 7 0 R >>] >>"
+            .to_vec(),
+        b"<< >>".to_vec(),
+        b"<< /FT /Tx /T (name) /V (SIBLING-SECRET) >>".to_vec(),
+    ];
+    let mut doc = pdf(objs);
+    mark(&mut doc, 0, &[[10.0, 10.0, 70.0, 40.0]], "");
+    apply(&mut doc, None).unwrap();
+    let bytes = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
+    assert!(!bytes.windows(14).any(|w| w == b"SIBLING-SECRET"), "the field value survived through the sibling widget");
 }
 
 /// Private data takes an image's prepress data too: its OPI link to the original file and its
