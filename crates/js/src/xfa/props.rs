@@ -1771,12 +1771,22 @@ fn null_message(given: &str, caption: &str, name: &str) -> String {
     format!("{label} cannot be left blank.")
 }
 
+/// Past this many bytes [`null_failures`] lists no more: a character is at most four bytes, so
+/// the list then holds more than the [`MAX_LINE`](super::MAX_LINE) characters a message shows.
+const NULL_FAILURES_BYTES: usize = super::MAX_LINE * 4;
+
 /// The required objects under (and including) node `node` that are empty, in form order: the
 /// fields and exclusion groups whose null test is on (`warning` or `error`, XFA 3.3 p. 881)
 /// and that hold no value, each with what it says ([`null_message`]). Hidden and inactive
 /// objects, and those under them, are not validated, as they can't be filled in.
+///
+/// The list stops once it holds more than one message shows ([`NULL_FAILURES_BYTES`]): a form
+/// of 100,000 required fields, each with a message of 16 KiB, would otherwise have every
+/// message copied (gigabytes) to show the first [`MAX_LINE`](super::MAX_LINE) characters.
 pub(crate) fn null_failures(h: &XHost, node: usize) -> Vec<String> {
-    let mut out = Vec::new();
+    let mut out: Vec<String> = Vec::new();
+    // Bytes of the list as one message: each entry and the line break after it.
+    let mut bytes = 0usize;
     let mut stack = vec![node];
     // A tree: each node is visited once, so never more visits than there are nodes.
     let mut budget = h.nodes.len();
@@ -1791,7 +1801,12 @@ pub(crate) fn null_failures(h: &XHost, node: usize) -> Vec<String> {
             let test = attr(h, n, "validate#0", "nullTest").unwrap_or_default();
             if matches!(test.trim(), "warning" | "error") && hn.value.trim().is_empty() {
                 let caption = content(h, n, "caption#0/value#0/text#0");
-                out.push(null_message(&node_message(h, n, "nullTest"), &caption, &hn.name));
+                let message = null_message(&node_message(h, n, "nullTest"), &caption, &hn.name);
+                bytes = bytes.saturating_add(message.len()).saturating_add(1);
+                out.push(message);
+                if bytes > NULL_FAILURES_BYTES {
+                    break;
+                }
             }
         }
         stack.extend(hn.children.iter().rev());

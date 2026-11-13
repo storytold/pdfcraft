@@ -662,6 +662,72 @@ fn a_question_a_reset_answered_is_dropped() {
     assert!(h.state().toast.is_none(), "{:?}", h.state().toast);
 }
 
+/// Two questions of one document wait for a box on its page, and a reset takes both values
+/// back meanwhile: neither is asked again once the box is cancelled, the second no more than
+/// the first.
+#[test]
+fn every_waiting_question_a_reset_answered_is_dropped() {
+    let mut h = open(recommended_calculation());
+    let text = |v: &str| pdfcraft_engine::FieldValue::Text(v.into());
+    let edits = vec![
+        pdfcraft_engine::Edit::SetFieldValue { name: field_name(&h, "k2"), value: text("5") },
+        pdfcraft_engine::Edit::SetFieldValue { name: field_name(&h, "k3"), value: text("6") },
+    ];
+    h.state_mut().apply_edit(pdfcraft_engine::Edit::Batch { label: "Fill in form".into(), edits });
+    h.run_steps(3);
+    h.state_mut().views[0].content.draft = Some(unappliable_box());
+    h.run_steps(1);
+    h.get_by_label("Use calculated value").click();
+    h.run_steps(3);
+    assert_eq!(asked(&h), ["k2", "k3"], "both wait for the box");
+    h.state_mut().apply_edit(pdfcraft_engine::Edit::ResetForm { names: None });
+    h.run_steps(3);
+    assert_eq!(["k2", "k3"].map(|f| value(&h, f)), ["10", "7"]);
+    h.state_mut().views[0].content.draft = None;
+    h.run_steps(3);
+    assert!(asked(&h).is_empty(), "{:?}", h.state().pending_calc_overrides);
+    assert!(h.query_by_label("Replace the calculated value?").is_none());
+}
+
+/// Closing a document takes its questions with it, the one shown and the ones waiting for a
+/// box on its page: nothing is asked about a document no longer open, and another document's
+/// question is asked as before.
+#[test]
+fn closing_a_document_drops_its_calculation_questions() {
+    let mut h = open(recommended_calculation());
+    type_value(&mut h, "k2", "5");
+    h.get_by_label("Replace the calculated value?");
+    h.state_mut().open_bytes("other.pdf", None, recommended_calculation()).unwrap();
+    h.run_steps(4);
+    h.state_mut().close_tab(0);
+    h.run_steps(3);
+    assert!(asked(&h).is_empty(), "{:?}", h.state().pending_calc_overrides);
+    assert!(h.query_by_label("Replace the calculated value?").is_none());
+
+    // Waiting for a box when its document is closed; the other document's is asked meanwhile.
+    type_value(&mut h, "k2", "5");
+    h.state_mut().views[0].content.draft = Some(unappliable_box());
+    h.run_steps(1);
+    h.get_by_label("Use calculated value").click();
+    h.run_steps(3);
+    assert_eq!((asked(&h), h.state().calc_override_waiting.len()), (vec!["k2".to_string()], 1));
+    h.state_mut().open_bytes("third.pdf", None, recommended_calculation()).unwrap();
+    h.run_steps(4);
+    let third = h.state().views[1].id;
+    let name = field_name(&h, "k3");
+    h.state_mut().apply_edit(pdfcraft_engine::Edit::SetFieldValue { name, value: pdfcraft_engine::FieldValue::Text("6".into()) });
+    h.run_steps(3);
+    assert_eq!(asked(&h), ["k2", "k3"]);
+    h.state_mut().close_tab(0);
+    h.run_steps(3);
+    assert_eq!((asked(&h), h.state().calc_override_waiting.len()), (vec!["k3".to_string()], 0));
+    assert_eq!(h.state().pending_calc_overrides.front().map(|(id, _, _)| *id), Some(third));
+    h.get_by_label("Replace the calculated value?");
+    h.get_by_label("Keep my value").click();
+    h.run_steps(3);
+    assert!(asked(&h).is_empty());
+}
+
 /// Whether the document in front keeps `field`'s value over its calculation.
 fn kept(h: &Harness<'static, PdfCraftApp>, field: &str) -> bool {
     let s = h.state();

@@ -227,6 +227,48 @@ fn a_number_past_a_repeating_subform_names_its_instance() {
     assert!(template_field(&template(&once), "form1[0].row[2].y[0]").is_some());
 }
 
+/// A subform a script makes repeat inside a subform that repeats. The change is the one row's
+/// (a change is kept by the path of the object it was made to): that row shows as many of the
+/// inner subform as its data holds, another row the one the template makes until a script
+/// changes its own too, and the layout and the live form name each field alike, with its own
+/// value, either way.
+#[test]
+fn a_subform_made_to_repeat_inside_a_repeating_one_is_named_alike_by_layout_and_scripts() {
+    let item = format!("<subform name=\"item\" layout=\"tb\">{}</subform>", field("x"));
+    let body = format!("<subform name=\"row\" layout=\"tb\"><occur min=\"1\" max=\"-1\"/>{item}{}</subform>", field("total"));
+    let data = "<row><item><x>a</x></item><item><x>b</x></item><total>1</total></row>                <row><item><x>c</x></item><item><x>d</x></item><item><x>e</x></item><total>2</total></row>";
+    let xml = xdp(&body, data);
+    let tpl = template(&xml);
+    let data = parse_datasets(&xml);
+    let both = |ov: &Overrides| {
+        let mut live = Vec::new();
+        live_fields(&form_tree(&tpl, data.as_ref(), ov).root, &mut live);
+        // As the form is drawn: the occurrence changes made to the template first.
+        let applied = apply_overrides_split(&tpl, ov);
+        let form = crate::layout::layout_with_overrides(&applied.template, data.as_ref(), ov, &applied.per_instance).unwrap();
+        assert_eq!(widgets(&form), live, "the laid-out fields and the ones scripts see");
+        live
+    };
+    let mut ov = Overrides::default();
+    let first = pairs(&[("form1[0].row[0].item[0].x[0]", "a"), ("form1[0].row[0].total[0]", "1")]);
+    let second = pairs(&[("form1[0].row[1].item[0].x[0]", "c"), ("form1[0].row[1].total[0]", "2")]);
+    assert_eq!(both(&ov), [first.clone(), second.clone()].concat(), "as the template makes them");
+
+    assert!(!occur_is_fixed(&tpl, "form1[0].row[0].item[0]"));
+    assert_eq!(ov.set_prop("form1[0].row[0].item[0]", "occur#0", Some("max"), "-1").ok(), Some(true));
+    let first = pairs(&[("form1[0].row[0].item[0].x[0]", "a"), ("form1[0].row[0].item[1].x[0]", "b"), ("form1[0].row[0].total[0]", "1")]);
+    assert_eq!(both(&ov), [first.clone(), second].concat(), "the first row's own change");
+
+    assert_eq!(ov.set_prop("form1[0].row[1].item[0]", "occur#0", Some("max"), "-1").ok(), Some(true));
+    let second = pairs(&[
+        ("form1[0].row[1].item[0].x[0]", "c"),
+        ("form1[0].row[1].item[1].x[0]", "d"),
+        ("form1[0].row[1].item[2].x[0]", "e"),
+        ("form1[0].row[1].total[0]", "2"),
+    ]);
+    assert_eq!(both(&ov), [first, second].concat(), "and the second row's");
+}
+
 /// How often a subform occurs is fixed where it occurs once and a same-named object is numbered
 /// after it, whatever that object is and through unnamed containers: its second instance would
 /// take that object's path. The last of the name, a subform the template lets repeat, and a

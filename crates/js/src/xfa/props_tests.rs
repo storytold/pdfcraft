@@ -1271,6 +1271,32 @@ fn exec_validate_lists_every_empty_required_object_in_one_message() {
     assert_eq!(boxes, ["Required\nCustom required message\nR2 cannot be left blank.\nR5 cannot be left blank."]);
 }
 
+/// `execValidate()` on a form of many empty required objects lists no more of them than its one
+/// message shows: the list stops once it is longer than the message's limit, so the size of
+/// the form (and of each object's own message) doesn't decide how much is copied. The message
+/// is the same as the whole list cut to the limit.
+#[test]
+fn exec_validate_stops_listing_past_what_its_message_shows() {
+    use super::super::{MAX_LINE, XHost};
+    let required = |name: &str| node(name, XfaKind::Field, &[], vec![p("validate", &[("nullTest", "error")], vec![])]);
+    let mut root = form();
+    let before = root.children.len();
+    root.children.extend((0..20_000).map(|i| required(&format!("R{i}"))));
+    let o = go_on(&root, "xfa.form.execValidate()", "plain");
+    assert_eq!((o.error.as_deref(), o.result.as_deref()), (None, Some("false")));
+    let boxes: Vec<&String> = o.effects.iter().filter_map(|e| if let XfaEffect::MessageBox(m) = e { Some(&m.text) } else { None }).collect();
+    assert_eq!(boxes.len(), 1);
+    assert_eq!(boxes[0].chars().count(), MAX_LINE + 1, "cut to the limit, with the mark that more follows");
+    assert!(boxes[0].contains("R0 cannot be left blank.\nR1 cannot be left blank.") && boxes[0].ends_with('…'), "{:.80}", boxes[0]);
+
+    let h = XHost::new(Arc::new(root), true, "form1[0].plain[0]", &XfaDoc::default());
+    let listed = super::null_failures(&h, 0);
+    let bytes: usize = listed.iter().map(|m| m.len() + 1).sum();
+    // "R123 cannot be left blank." is under 32 bytes, so the limit's 16 KiB is past by 2,000.
+    assert!(listed.len() > 500 && listed.len() < 2_000 + before, "{} of 20,000 listed", listed.len());
+    assert!(bytes > MAX_LINE * 4 && bytes < MAX_LINE * 4 + 64, "{bytes}");
+}
+
 /// The caption, item and calculation writes forms make (round two of the property writes) reach
 /// the engine as property changes and read back in the run: a caption's font colour, weight,
 /// posture and underline, its reserve and its rich text's words (`caption.value.exData.value`),

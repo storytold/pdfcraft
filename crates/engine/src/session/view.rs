@@ -390,7 +390,12 @@ impl Session {
         let none = std::collections::BTreeSet::new;
         let Some(d) = self.get(id).filter(|d| d.info.xfa.is_some()) else { return none() };
         let Ok(doc) = pdfcraft_cos::Document::open_with_password(d.bytes.clone(), d.password.as_deref()) else { return none() };
-        let ov = pdfcraft_xfa::overrides(&doc);
+        // The marks as the form's scripts read them: one the file holds at a path several
+        // fields share is none of theirs.
+        let ov = match d.xfa_template.as_deref() {
+            Some(tpl) => pdfcraft_xfa::overrides_of(&doc, tpl),
+            None => pdfcraft_xfa::overrides(&doc),
+        };
         if ov.overridden.is_empty() {
             return none();
         }

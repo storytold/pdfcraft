@@ -186,7 +186,9 @@ let form = pdfcraft_xfa::layout_xml(template_xml)?;       // pages of items, for
   is a calculation override at such a path. Presence and access are kept by path alone, as they
   were: set through such a path they are every object's that has it, and when a row goes one
   kept at a later instance's path moves down with the instances. Who owns which path is worked out once per
-  template. An unnamed exclusion group's buttons are named under `group[n]` by the layout and
+  template. Numbering starts again in a named area while what the area holds binds under the
+  area's container (an area is no data scope), so a field in a named area and a same-named
+  field beside the area have paths of their own and one data value. An unnamed exclusion group's buttons are named under `group[n]` by the layout and
   the Tab order, as scripts name them. `execValidate()` runs the null test on every
   required object under the node and lists the empty ones in one message. An event's work
   doesn't grow with the changes the form already keeps: the template keeps (`memo`) the changes
@@ -220,7 +222,9 @@ let form = pdfcraft_xfa::layout_xml(template_xml)?;       // pages of items, for
   drops a question still waiting about it, and headless the result lists the old names in a
   `calculations_moved` request; the value stays kept under the field's new name. When the
   form gives no message the app asks in its own sentence, in the interface's language, naming
-  the field by its name in the document.
+  the field by its name in the document. Undo takes the typed value back, and a question still
+  waiting about it with it; Redo brings the value back kept and asks nothing again
+  (`form_fields` shows it kept).
   A reset (Clear Form, `form_reset`, `xfa.host.resetData`) gives the fields it covers their
   template's state, the value's override included (pp. 581-582), so they are calculated again.
   With any other `override` the calculated value stays: what is typed into the field is

@@ -254,13 +254,14 @@ const CALC_QUESTION: &str = "The form calculates {name}, and recommends its calc
 /// What the question about `field` says in `lang`. The form's own words are shown as they
 /// are. The sentence used when the form gives none (`validation_rules::user_value_overrides`)
 /// is the app's, so it is said in the interface's language; it names the field by its name in
-/// the document, as the Forms tools list it.
+/// the document, as the Forms tools list it, and is as long as a question may be
+/// (`validation_rules::cut_question`) whatever the length of that name.
 fn calc_question(lang: crate::i18n::Lang, field: &str, message: &str) -> String {
-    use pdfcraft_xfa::validation_rules::{CalcOverride, user_value_overrides};
+    use pdfcraft_xfa::validation_rules::{CalcOverride, cut_question, user_value_overrides};
     if user_value_overrides(CalcOverride::Warning, None, field).as_deref() != Some(message) {
         return message.to_string();
     }
-    crate::i18n::fmt(crate::i18n::tr(lang, CALC_QUESTION), &[("name", field)])
+    cut_question(crate::i18n::fmt(crate::i18n::tr(lang, CALC_QUESTION), &[("name", field)]))
 }
 
 /// The user typed a value into an XFA field whose calculation the form only recommends
@@ -276,8 +277,8 @@ pub(super) fn calc_override_prompt(app: &mut PdfCraftApp, ctx: &egui::Context) {
     let pending = &app.pending_calc_overrides;
     app.calc_override_waiting.retain(|id| pending.iter().any(|(d, _, _)| d == id));
     // A document waiting for the box open on its page asks again once it is finished or
-    // cancelled, unless the value is no longer kept over the calculation by then (a reset or an
-    // undo took it back).
+    // cancelled, about each value still kept over its calculation by then (a reset or an undo
+    // may have taken some back).
     let views = &app.views;
     let done: Vec<pdfcraft_engine::DocId> = app
         .calc_override_waiting
@@ -287,12 +288,8 @@ pub(super) fn calc_override_prompt(app: &mut PdfCraftApp, ctx: &egui::Context) {
         .collect();
     for id in done {
         app.calc_override_waiting.remove(&id);
-        if let Some(at) = app.pending_calc_overrides.iter().position(|(d, _, _)| *d == id)
-            && let Some((_, field, _)) = app.pending_calc_overrides.get(at)
-            && !app.session.calculation_overridden(id, field)
-        {
-            app.pending_calc_overrides.remove(at);
-        }
+        let session = &app.session;
+        app.pending_calc_overrides.retain(|(d, field, _)| *d != id || session.calculation_overridden(id, field));
     }
     let asked = app.calc_override_asked().and_then(|at| app.pending_calc_overrides.get(at));
     let Some(message) = asked.map(|(_, field, m)| calc_question(crate::i18n::current(), field, m)) else { return };
@@ -476,18 +473,27 @@ mod calc_question_tests {
     fn the_apps_own_question_is_translated_and_the_forms_is_not() {
         let own = user_value_overrides(CalcOverride::Warning, None, "s.k2").unwrap();
         assert_eq!(calc_question(Lang::EN, "s.k2", &own), own);
-        let l = fixture_lang(
-            "x-calc",
-            &*format!(
-                "	{CALC_QUESTION}	{{name}} wird berechnet.
-"
-            )
-            .leak(),
-        );
+        let l = fixture_lang("x-calc", &*format!("\t{CALC_QUESTION}\t{{name}} wird berechnet.\n").leak());
         assert_eq!(calc_question(l, "s.k2", &own), "s.k2 wird berechnet.");
         assert_eq!(calc_question(l, "s.k2", "Use the K2 the form works out."), "Use the K2 the form works out.");
         // A question about another field is not this field's own sentence.
         assert_eq!(calc_question(l, "s.k3", &own), own);
+    }
+
+    /// The app's own question about a field with a very long name is as long as a question
+    /// may be in the interface's language too, not only in the engine's English.
+    #[test]
+    fn the_apps_own_question_is_cut_in_every_language() {
+        use pdfcraft_xfa::validation_rules::MAX_QUESTION;
+        let name = "é".repeat(MAX_QUESTION + 50);
+        let own = user_value_overrides(CalcOverride::Warning, None, &name).unwrap();
+        let l = fixture_lang("x-calc-long", &*format!("\t{CALC_QUESTION}\tBerechnet wird {{name}}.\n").leak());
+        for lang in [Lang::EN, l] {
+            let said = calc_question(lang, &name, &own);
+            assert_eq!(said.chars().count(), MAX_QUESTION + 1);
+            assert!(said.ends_with('…'));
+        }
+        assert!(calc_question(l, &name, &own).starts_with("Berechnet wird é"));
     }
 }
 

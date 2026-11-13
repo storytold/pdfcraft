@@ -202,62 +202,133 @@ impl Overrides {
     /// on anything in it, goes with it, and the changes of the later instances of the same
     /// subform move down one place (`row[3]…` becomes `row[2]…`), so presence, access and
     /// property changes stay with the instance they were made to. A same-named object after the
-    /// subform in the template has a later instance's path too ([`crate::som_is_shared`]): no
-    /// property change is kept there, and a presence or access kept there counts as the
-    /// instance's and moves with the instances.
-    /// `true` when that changed anything.
-    pub fn remove_instance(&mut self, som: &str) -> bool {
-        let Some((head, index)) = som.strip_suffix(']').and_then(|s| s.rsplit_once('[')) else { return false };
-        let Ok(index) = index.parse::<usize>() else { return false };
-        /// The key `k` once instance `index` under `head` is gone: `None` when it was that
-        /// instance's, else the key, renumbered when it was a later instance's.
-        fn moved(k: &str, head: &str, index: usize) -> Option<String> {
-            let Some(rest) = k.strip_prefix(head).and_then(|r| r.strip_prefix('[')) else { return Some(k.to_string()) };
-            let Some((n, tail)) = rest.split_once(']') else { return Some(k.to_string()) };
-            let (Ok(n), true) = (n.parse::<usize>(), tail.is_empty() || tail.starts_with('.')) else { return Some(k.to_string()) };
-            match n.cmp(&index) {
-                std::cmp::Ordering::Less => Some(k.to_string()),
-                std::cmp::Ordering::Equal => None,
-                std::cmp::Ordering::Greater => Some(format!("{head}[{}]{tail}", n.saturating_sub(1))),
+    /// subform in the template has a later instance's path too (`shared` says which paths are
+    /// more than one object's, [`crate::som_is_shared`]): no property change and no typed-over
+    /// calculation is kept there, so one that would move there goes instead, as it would when
+    /// the file is read again; a presence or access kept there counts as the instance's and
+    /// moves with the instances.
+    ///
+    /// Only what is kept for the subform's instances is read (the keys under `…row[`, which lie
+    /// together), so a removal costs what those hold, not what the form keeps. Returns whether
+    /// that changed anything, and what it cost: 1 for each kept entry read, and 16 more
+    /// (`REKEY_COST`) for each taken out or moved. A caller bounds the removals of an event by the second.
+    pub fn remove_instance(&mut self, som: &str, shared: impl Fn(&str) -> bool) -> (bool, usize) {
+        let Some((head, index)) = som.strip_suffix(']').and_then(|s| s.rsplit_once('[')) else { return (false, 0) };
+        let Ok(index) = index.parse::<usize>() else { return (false, 0) };
+        /// A key that goes with the removed instance (`None`), or moves: its instance's new
+        /// number, and its new key.
+        type Planned = (String, Option<(usize, String)>);
+        /// The keys of `map` that go or move, of those under `lo` (`head[`). `cost` counts
+        /// the keys read, and `REKEY_COST` more for each that goes or moves.
+        fn plan<V>(map: &BTreeMap<String, V>, lo: &str, index: usize, cost: &mut usize) -> Vec<Planned> {
+            let mut out = Vec::new();
+            for (k, _) in map.range::<str, _>((std::ops::Bound::Included(lo), std::ops::Bound::Unbounded)) {
+                *cost = cost.saturating_add(1);
+                // The keys under `lo` lie together: the first that isn't one ends them.
+                let Some(rest) = k.strip_prefix(lo) else { break };
+                let Some((n, tail)) = rest.split_once(']') else { continue };
+                let (Ok(n), true) = (n.parse::<usize>(), tail.is_empty() || tail.starts_with('.')) else { continue };
+                match n.cmp(&index) {
+                    std::cmp::Ordering::Less => {}
+                    std::cmp::Ordering::Equal => out.push((k.clone(), None)),
+                    std::cmp::Ordering::Greater => {
+                        let n = n.saturating_sub(1);
+                        out.push((k.clone(), Some((n, format!("{lo}{n}]{tail}")))));
+                    }
+                }
+            }
+            *cost = cost.saturating_add(out.len().saturating_mul(REKEY_COST));
+            out
+        }
+        /// Take the planned keys out of `map`: what moves, with its instance's new number and
+        /// its new key. Every key is taken out before one is put back, as a new key is often
+        /// the old key of the next instance.
+        fn take<V>(map: &mut BTreeMap<String, V>, planned: Vec<Planned>) -> Vec<(usize, String, V)> {
+            planned
+                .into_iter()
+                .filter_map(|(old, new)| {
+                    let v = map.remove(&old);
+                    let (n, key) = new?;
+                    Some((n, key, v?))
+                })
+                .collect()
+        }
+        let lo = format!("{head}[");
+        let mut cost = 0usize;
+        let presence = plan(&self.presence, &lo, index, &mut cost);
+        let access = plan(&self.access, &lo, index, &mut cost);
+        let overridden = plan(&self.overridden, &lo, index, &mut cost);
+        let props = plan(&self.props, &lo, index, &mut cost);
+        let changed = !(presence.is_empty() && access.is_empty() && overridden.is_empty() && props.is_empty());
+        // Whether instance `n`'s path is more than one object's. The keys of one instance lie
+        // together, so each instance is asked about once a map.
+        let mut asked: Option<(usize, bool)> = None;
+        let mut lands_shared = |n: usize| match asked {
+            Some((m, is)) if m == n => is,
+            _ => {
+                let is = shared(&format!("{lo}{n}]"));
+                asked = Some((n, is));
+                is
+            }
+        };
+        for (map, planned) in [(&mut self.presence, presence), (&mut self.access, access)] {
+            for (_, key, v) in take(map, planned) {
+                map.insert(key, v);
             }
         }
-        /// Rekey `map`; `true` when a key moved or went.
-        fn rekey<V>(map: &mut BTreeMap<String, V>, head: &str, index: usize) -> bool {
-            let mut changed = false;
-            let old = std::mem::take(map);
-            *map = old
-                .into_iter()
-                .filter_map(|(k, v)| {
-                    let new = moved(&k, head, index);
-                    changed |= new.as_deref() != Some(k.as_str());
-                    new.map(|k| (k, v))
-                })
-                .collect();
-            changed
+        for (n, key, v) in take(&mut self.overridden, overridden) {
+            if !lands_shared(n) {
+                self.overridden.insert(key, v);
+            }
         }
-        // How often the subform occurs is the subform's, not the instance's (XFA 3.3 p. 786):
-        // kept with the first instance, where it is read, it stays at `som` for the instance
-        // that is first now (or for none, when no instance is left). Any other instance holds
-        // no such change. These three don't count against the changes one object keeps
-        // (`prop_rules::is_occurrence`), so the instance keeps them beside as many of its own as
-        // it may hold, and a save reads back the same.
-        let occur: BTreeMap<String, String> = self
-            .props
-            .get(som)
-            .map(|m| m.iter().filter(|(k, _)| crate::prop_rules::is_occurrence(k)).map(|(k, v)| (k.clone(), v.clone())).collect())
-            .unwrap_or_default();
-        // The property changes are copied (from the memo's) only when one of them moves.
-        let props_move = self.props.keys().any(|k| moved(k, head, index).as_deref() != Some(k.as_str()));
-        let changed = rekey(&mut self.presence, head, index)
-            | rekey(&mut self.access, head, index)
-            | rekey(&mut self.overridden, head, index)
-            | (props_move && rekey(Arc::make_mut(&mut self.props), head, index));
-        if !occur.is_empty() {
-            // Over the next instance's own changes, which it keeps beside them.
-            Arc::make_mut(&mut self.props).entry(som.to_string()).or_default().extend(occur);
+        // The property changes are copied (from the memo's) only when one of them moves or goes.
+        if !props.is_empty() {
+            let mut counted = [self.prop_count, self.prop_copies, self.prop_bytes];
+            let map = Arc::make_mut(&mut self.props);
+            // How often the subform occurs is the subform's, not the instance's (XFA 3.3 p. 786):
+            // kept with the first instance, where it is read, it stays at `som` for the instance
+            // that is first now (or for none, when no instance is left). Any other instance holds
+            // no such change. These three don't count against the changes one object keeps
+            // (`prop_rules::is_occurrence`), so the instance keeps them beside as many of its own as
+            // it may hold, and a save reads back the same.
+            let mut occur: BTreeMap<String, String> = BTreeMap::new();
+            let mut moving = Vec::new();
+            for (old, new) in props {
+                let Some(sets) = map.remove(&old) else { continue };
+                uncount(&mut counted, footprint(&old, &sets));
+                match new {
+                    Some((n, key)) => moving.push((n, key, sets)),
+                    None if old == som => occur = sets.into_iter().filter(|(k, _)| crate::prop_rules::is_occurrence(k)).collect(),
+                    None => {}
+                }
+            }
+            for (n, key, sets) in moving {
+                if lands_shared(n) {
+                    continue;
+                }
+                if let Some(was) = map.get(&key) {
+                    uncount(&mut counted, footprint(&key, was));
+                }
+                count(&mut counted, footprint(&key, &sets));
+                map.insert(key, sets);
+            }
+            if !occur.is_empty() {
+                // Over the next instance's own changes, which it keeps beside them.
+                let sets = map.entry(som.to_string()).or_default();
+                uncount(&mut counted, footprint(som, sets));
+                sets.extend(occur);
+                count(&mut counted, footprint(som, sets));
+            }
+            [self.prop_count, self.prop_copies, self.prop_bytes] = counted;
         }
-        self.recount();
-        changed
+        #[cfg(test)]
+        {
+            // Counted as the changes moved, the counts are what counting them all gives.
+            let counted = [self.prop_count, self.prop_copies, self.prop_bytes];
+            self.recount();
+            assert_eq!(counted, [self.prop_count, self.prop_copies, self.prop_bytes], "after removing {som}");
+        }
+        (changed, cost)
     }
 
     /// Keep only what scripts changed on the objects the form still has (`live`, by SOM path):
@@ -293,10 +364,39 @@ impl Overrides {
 
     /// Count the property changes kept again, after some moved or went.
     fn recount(&mut self) {
-        self.prop_count = self.props.values().flat_map(|m| m.keys()).filter(|k| !k.starts_with('=')).count();
-        self.prop_copies = self.props.values().flat_map(|m| m.keys()).filter(|k| k.starts_with('=')).count();
-        self.prop_bytes =
-            self.props.iter().map(|(s, m)| m.iter().map(|(k, v)| s.len().saturating_add(k.len()).saturating_add(v.len())).sum::<usize>()).sum();
+        let mut counted = [0usize; 3];
+        for (som, sets) in self.props.iter() {
+            count(&mut counted, footprint(som, sets));
+        }
+        [self.prop_count, self.prop_copies, self.prop_bytes] = counted;
+    }
+}
+
+/// What taking a kept entry out or moving it to its new key adds to the cost
+/// [`Overrides::remove_instance`] returns, where reading one adds 1. Measured over 40,000 entries
+/// kept for 1,000 rows: a row removed at the front (every entry moves) took about 730 ns an
+/// entry, one removed at the end (every entry read, none moved) about 45 ns.
+const REKEY_COST: usize = 16;
+
+/// What the property changes kept for the object at `som` count for: changes, copies of them
+/// (the keys starting with `=`), and bytes (the path, key and value of each).
+fn footprint(som: &str, sets: &BTreeMap<String, String>) -> [usize; 3] {
+    let copies = sets.keys().filter(|k| k.starts_with('=')).count();
+    let bytes = sets.iter().fold(0usize, |sum, (k, v)| sum.saturating_add(som.len()).saturating_add(k.len()).saturating_add(v.len()));
+    [sets.len().saturating_sub(copies), copies, bytes]
+}
+
+/// Add one object's [`footprint`] to the counts kept (changes, copies, bytes).
+fn count(counted: &mut [usize; 3], of: [usize; 3]) {
+    for (c, n) in counted.iter_mut().zip(of) {
+        *c = c.saturating_add(n);
+    }
+}
+
+/// Take one object's [`footprint`] from the counts kept.
+fn uncount(counted: &mut [usize; 3], of: [usize; 3]) {
+    for (c, n) in counted.iter_mut().zip(of) {
+        *c = c.saturating_sub(n);
     }
 }
 
@@ -379,7 +479,14 @@ fn read_overrides(doc: &Document, tpl: Option<&Template>) -> Overrides {
                 if which == b"Overridden" && tpl.is_some_and(|t| crate::data::som_is_shared(t, &k)) {
                     continue;
                 }
-                map.insert(k, v.to_text());
+                let v = v.to_text();
+                // The mark is `1` ([`mark_value_override`] writes nothing else): an entry
+                // holding anything else is no mark, to whoever asks ([`value_overridden`], or
+                // whether the path is among the marks).
+                if which == b"Overridden" && !crate::validation_rules::is_override(Some(&v)) {
+                    continue;
+                }
+                map.insert(k, v);
             }
         }
     }
@@ -1929,7 +2036,7 @@ pub fn refresh_value(live: &mut FormNode, tpl: &Template, data: Option<&DataNode
 pub fn refresh_props(live: &mut FormNode, ov: &Overrides, som: &str) -> bool {
     /// The node at `som` under `n`, followed down the path: only children on the way to it (whose
     /// SOM path starts it) or sharing their parent's (unnamed ones) are looked into, so finding
-    /// one costs the depth, not the form.
+    /// one costs the children of the nodes on the way to it, not the form.
     fn find<'a>(n: &'a mut FormNode, som: &str, depth: usize) -> Option<&'a mut FormNode> {
         if n.som == som {
             return Some(n);

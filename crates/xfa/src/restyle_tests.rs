@@ -437,21 +437,34 @@ fn all_that_may_be_kept_is_read_back_whatever_its_characters() {
     }
 }
 
-/// Review r5 (D1): a kept presence, access or typed-over mark longer than any a script sets is
-/// not decoded; the longest read is 64 bytes as the file holds it.
+/// A calculation typed over is kept as the mark `1`, and an entry of the file holding anything
+/// else is not read as one: whether a path is among the marks and whether its calculation is
+/// off ([`crate::value_overridden`]) are then one answer.
+#[test]
+fn a_kept_mark_that_is_not_the_mark_is_not_read() {
+    let literal = |s: &str| pdfcraft_cos::Object::String(pdfcraft_cos::PdfString::literal(s));
+    let mut kept = pdfcraft_cos::Dict::new();
+    kept.set(b"a".to_vec(), utf16("1"));
+    kept.set(b"b".to_vec(), literal("1"));
+    kept.set(b"c".to_vec(), literal("0"));
+    kept.set(b"d".to_vec(), utf16("true"));
+    kept.set(b"e".to_vec(), literal(""));
+    kept.set(b"f".to_vec(), literal(&"1".repeat(65)));
+    let read = crate::overrides(&doc_with_kept(b"Overridden", kept));
+    assert_eq!(read.overridden.keys().collect::<Vec<_>>(), ["a", "b"], "{:?}", read.overridden);
+}
+
+/// Review r5 (D1): a kept presence or access longer than any a script sets is not decoded; the
+/// longest read is 64 bytes as the file holds it. (A typed-over mark is `1` or not read.)
 #[test]
 fn a_kept_state_longer_than_any_is_not_decoded() {
-    for key in [&b"Presence"[..], &b"Access"[..], &b"Overridden"[..]] {
+    for key in [&b"Presence"[..], &b"Access"[..]] {
         let mut kept = pdfcraft_cos::Dict::new();
         kept.set(b"a".to_vec(), utf16("nonInteractive"));
         kept.set(b"b".to_vec(), pdfcraft_cos::Object::String(pdfcraft_cos::PdfString::literal("x".repeat(64))));
         kept.set(b"c".to_vec(), pdfcraft_cos::Object::String(pdfcraft_cos::PdfString::literal("x".repeat(65))));
         let read = crate::overrides(&doc_with_kept(key, kept));
-        let map = match key {
-            b"Presence" => &read.presence,
-            b"Access" => &read.access,
-            _ => &read.overridden,
-        };
+        let map = if key == b"Presence" { &read.presence } else { &read.access };
         assert_eq!(map.get("a").map(String::as_str), Some("nonInteractive"));
         assert_eq!(map.get("b").map(String::len), Some(64));
         assert_eq!(map.get("c"), None);
@@ -954,12 +967,85 @@ fn a_removed_instances_changes_go_and_the_later_ones_move_down() {
     ov.set_prop("form[0].rows[0].row[10]", "border#0/edge#0/color#0", Some("value"), "3,3,3").unwrap();
     ov.set_prop("form[0].rows[0].rowx[2]", "border#0/edge#0/color#0", Some("value"), "4,4,4").unwrap();
     ov.presence.insert("form[0].rows[0].row[2]".into(), "hidden".into());
-    assert!(ov.remove_instance("form[0].rows[0].row[1]"));
+    assert!(ov.remove_instance("form[0].rows[0].row[1]", |_| false).0);
     let keys: Vec<&String> = ov.props().keys().collect();
     assert_eq!(keys, ["form[0].rows[0].row[0]", "form[0].rows[0].row[1].cell[0]", "form[0].rows[0].row[9]", "form[0].rows[0].rowx[2]"]);
     assert_eq!(ov.props()["form[0].rows[0].row[1].cell[0]"].keys().collect::<Vec<_>>(), ["validate#0@nullTest"]);
     assert_eq!(ov.presence.keys().collect::<Vec<_>>(), ["form[0].rows[0].row[1]"]);
-    assert!(!ov.remove_instance("form[0].other[0].row[5]"), "nothing there");
+    assert!(!ov.remove_instance("form[0].other[0].row[5]", |_| false).0, "nothing there");
+}
+
+/// Removing an instance reads what is kept for its subform's instances and nothing else the
+/// form keeps: thousands of changes kept for other objects cost a removal nothing, and stay as
+/// they are. (Counted, not timed: the keys read are the subform's, and the one after them in
+/// each of the four maps, which ends the read; a key taken out or moved costs 16 more.)
+#[test]
+fn removing_an_instance_reads_only_what_its_subform_keeps() {
+    let mut ov = Overrides::default();
+    for i in 0..1_000 {
+        // Sorted before the rows' keys, and after them.
+        for som in [format!("form[0].other[0].f{i}[0]"), format!("form[0].z{i}[0]")] {
+            ov.presence.insert(som.clone(), "hidden".into());
+            ov.access.insert(som.clone(), "readOnly".into());
+            ov.overridden.insert(som.clone(), "1".into());
+            ov.set_prop(&som, "font#0", Some("size"), "9pt").unwrap();
+        }
+    }
+    let elsewhere = ov.clone();
+    for row in 0..5 {
+        let cell = format!("form[0].rows[0].row[{row}].cell[0]");
+        ov.presence.insert(cell.clone(), "hidden".into());
+        ov.access.insert(format!("form[0].rows[0].row[{row}]"), "readOnly".into());
+        ov.overridden.insert(cell.clone(), "1".into());
+        ov.set_prop(&cell, "font#0", Some("size"), "9pt").unwrap();
+    }
+    let (changed, cost) = ov.remove_instance("form[0].rows[0].row[2]", |_| false);
+    assert!(changed);
+    // Read: the rows' own keys in the four maps, and the key after them in each. Taken out or
+    // moved: those of rows 2, 3 and 4.
+    assert_eq!(cost, (4 * 5 + 4) + 16 * (4 * 3));
+    let rows = |m: &BTreeMap<String, String>| m.keys().filter(|k| k.starts_with("form[0].rows[0].")).count();
+    assert_eq!([rows(&ov.presence), rows(&ov.access), rows(&ov.overridden)], [4; 3]);
+    assert_eq!(ov.props().keys().filter(|k| k.starts_with("form[0].rows[0].")).count(), 4);
+    // What is kept elsewhere is as it was.
+    for row in 0..4 {
+        let cell = format!("form[0].rows[0].row[{row}].cell[0]");
+        assert!(ov.presence.remove(&cell).is_some() && ov.overridden.remove(&cell).is_some(), "{cell}");
+        assert!(ov.access.remove(&format!("form[0].rows[0].row[{row}]")).is_some());
+    }
+    assert_eq!((&ov.presence, &ov.access, &ov.overridden), (&elsewhere.presence, &elsewhere.access, &elsewhere.overridden));
+    let others: Vec<&String> = ov.props().keys().filter(|k| !k.starts_with("form[0].rows[0].")).collect();
+    assert_eq!(others, elsewhere.props().keys().collect::<Vec<_>>());
+    // A subform nothing is kept for reads the one key after where its keys would be, a map.
+    assert_eq!(ov.remove_instance("form[0].other[0].e[3]", |_| false), (false, 4));
+}
+
+/// A same-named object after a repeating subform has a later instance's path (`row[1]` here,
+/// `shared` says so): no property change and no typed-over calculation is kept at such a path,
+/// or in it, and a file read again drops one found there. So when a row goes, one that would
+/// move there goes instead of becoming the other object's; presence and access, kept by path
+/// alone, move with the instances.
+#[test]
+fn a_change_that_would_move_to_a_path_objects_share_goes_instead() {
+    let shared = |som: &str| som == "form[0].rows[0].row[1]";
+    let mut ov = Overrides::default();
+    for som in ["form[0].rows[0].row[2]", "form[0].rows[0].row[2].cell[0]", "form[0].rows[0].row[3].cell[0]"] {
+        ov.set_prop(som, "font#0", Some("size"), "9pt").unwrap();
+    }
+    ov.overridden.insert("form[0].rows[0].row[2].cell[0]".into(), "1".into());
+    ov.overridden.insert("form[0].rows[0].row[3].cell[0]".into(), "1".into());
+    ov.presence.insert("form[0].rows[0].row[2].cell[0]".into(), "hidden".into());
+    ov.access.insert("form[0].rows[0].row[2]".into(), "readOnly".into());
+    assert!(ov.remove_instance("form[0].rows[0].row[0]", shared).0);
+    assert_eq!(ov.props().keys().collect::<Vec<_>>(), ["form[0].rows[0].row[2].cell[0]"]);
+    assert_eq!(ov.overridden.keys().collect::<Vec<_>>(), ["form[0].rows[0].row[2].cell[0]"]);
+    assert_eq!(ov.presence.keys().collect::<Vec<_>>(), ["form[0].rows[0].row[1].cell[0]"]);
+    assert_eq!(ov.access.keys().collect::<Vec<_>>(), ["form[0].rows[0].row[1]"]);
+    // The form's limits count what is kept now: one change, of one object.
+    let mut full = Overrides::default();
+    full.set_prop("form[0].rows[0].row[2].cell[0]", "font#0", Some("size"), "9pt").unwrap();
+    (full.presence, full.access, full.overridden) = (ov.presence.clone(), ov.access.clone(), ov.overridden.clone());
+    assert_eq!(ov, full);
 }
 
 /// Rows inside rows: removing an inner row renumbers the later inner rows of that outer row
@@ -981,7 +1067,7 @@ fn removing_a_nested_row_renumbers_only_the_rows_beside_it() {
         ov.presence.insert(som.into(), "hidden".into());
         ov.set_prop(som, "font#0", Some("size"), "9pt").unwrap();
     }
-    assert!(ov.remove_instance("form[0].outer[1].inner[1]"));
+    assert!(ov.remove_instance("form[0].outer[1].inner[1]", |_| false).0);
     let inner_gone = [
         "form[0].outer[0].inner[2].f[0]",
         "form[0].outer[1].inner[0].f[0]",
@@ -992,7 +1078,7 @@ fn removing_a_nested_row_renumbers_only_the_rows_beside_it() {
     ];
     assert_eq!(keys(&ov), inner_gone);
     assert_eq!(ov.props().keys().collect::<Vec<_>>(), inner_gone);
-    assert!(ov.remove_instance("form[0].outer[0]"));
+    assert!(ov.remove_instance("form[0].outer[0]", |_| false).0);
     let outer_gone = [
         "form[0].outer[0].inner[0].f[0]",
         "form[0].outer[0].inner[1].f[0]",
@@ -1002,8 +1088,8 @@ fn removing_a_nested_row_renumbers_only_the_rows_beside_it() {
     ];
     assert_eq!(keys(&ov), outer_gone);
     assert_eq!(ov.props().keys().collect::<Vec<_>>(), outer_gone);
-    assert!(!ov.remove_instance("form[0].outer[5]"), "no row there, nothing kept past it");
-    assert!(!ov.remove_instance("form[0].outer") && !ov.remove_instance("form[0].outer[x]"), "not an instance's path");
+    assert!(!ov.remove_instance("form[0].outer[5]", |_| false).0, "no row there, nothing kept past it");
+    assert!(!ov.remove_instance("form[0].outer", |_| false).0 && !ov.remove_instance("form[0].outer[x]", |_| false).0, "not an instance's path");
     assert_eq!(keys(&ov), outer_gone);
 }
 
@@ -1029,7 +1115,7 @@ fn presence_set_on_one_row_is_that_rows_to_scripts_and_the_first_rows_on_the_pag
     ov.presence.insert("form[0].rows[0].row[1].cell[0]".into(), "hidden".into());
     assert_eq!(read(&ov), ["visible", "hidden", "visible"]);
     assert_eq!(cells(&ov), 3, "a later row's is not drawn");
-    assert!(ov.remove_instance("form[0].rows[0].row[0]"));
+    assert!(ov.remove_instance("form[0].rows[0].row[0]", |_| false).0);
     assert_eq!(read(&ov), ["hidden", "visible", "visible"], "it stays with its row, now the first");
     assert_eq!(cells(&ov), 0, "the first row's is every row's on the page");
 }
@@ -1076,7 +1162,7 @@ fn presence_at_a_path_objects_share_is_each_ones_and_moves_with_the_instances() 
     assert_eq!(live(&ov), [ROW, ROW], "the second row and the field after the rows");
     assert_eq!(page(&ov), [CELLS[0], CELLS[1], UNNAMED, UNNAMED], "the field goes; rows take the first row's");
     // The first row goes: what was kept at the second row's path is the first row's now.
-    assert!(ov.remove_instance("form[0].rows[0].row[0]"));
+    assert!(ov.remove_instance("form[0].rows[0].row[0]", |_| false).0);
     assert_eq!(ov.presence.keys().collect::<Vec<_>>(), ["form[0].rows[0].row[0]"]);
     assert_eq!(live(&ov), ["form[0].rows[0].row[0]"]);
     assert_eq!(page(&ov), [ROW, UNNAMED, UNNAMED], "hidden on the first row is hidden on every row");
@@ -1141,12 +1227,12 @@ fn an_occur_change_stays_when_the_first_instance_is_removed() {
         row.occur.max
     };
     assert_eq!((maxes(&ov), laid_max(&ov)), (vec![Some(5), Some(5)], Some(5)));
-    assert!(ov.remove_instance("form[0].rows[0].row[0]"));
+    assert!(ov.remove_instance("form[0].rows[0].row[0]", |_| false).0);
     assert_eq!((maxes(&ov), laid_max(&ov)), (vec![Some(5), Some(5)], Some(5)));
     let first: Vec<(&str, &str)> = ov.props()["form[0].rows[0].row[0]"].iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
     assert_eq!(first, [("border#0/edge#0/color#0@value", "3,3,3"), ("occur#0@initial", "2"), ("occur#0@max", "5")]);
     // Removing a later instance leaves it alone.
-    assert!(!ov.remove_instance("form[0].rows[0].row[1]"));
+    assert!(!ov.remove_instance("form[0].rows[0].row[1]", |_| false).0);
     assert_eq!(maxes(&ov), [Some(5), Some(5)]);
 }
 
@@ -1925,7 +2011,7 @@ fn an_occurrence_change_moved_to_a_full_row_survives_reopen() {
     for i in 0..MAX_PROP_CHANGES_PER_OBJECT {
         ov.set_prop("form[0].rows[0].row[1]", &format!("extras#0/text#{}", i % 8), Some(&format!("a{i}")), "1").unwrap();
     }
-    assert!(ov.remove_instance("form[0].rows[0].row[0]"));
+    assert!(ov.remove_instance("form[0].rows[0].row[0]", |_| false).0);
     let row = "form[0].rows[0].row[0]";
     assert_eq!(ov.props()[row].len(), MAX_PROP_CHANGES_PER_OBJECT + 1);
     let xdp = format!(r#"<?xml version="1.0" encoding="UTF-8"?><xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">{TEMPLATE}</xdp:xdp>"#);

@@ -307,19 +307,26 @@ impl CalcOverride {
 pub fn user_value_overrides(o: CalcOverride, given: Option<&str>, name: &str) -> Option<String> {
     match o {
         CalcOverride::Warning => {
-            let mut said = match given.map(str::trim).filter(|m| !m.is_empty()) {
+            let said = match given.map(str::trim).filter(|m| !m.is_empty()) {
                 Some(m) => m.to_string(),
                 None => format!("The form calculates {name}, and recommends its calculated value over the one you entered."),
             };
-            if let Some((at, _)) = said.char_indices().nth(MAX_QUESTION) {
-                // `at` is where a character starts, so the cut is never inside one.
-                said.truncate(at);
-                said.push('…');
-            }
-            Some(said)
+            Some(cut_question(said))
         }
         CalcOverride::Disabled | CalcOverride::Error | CalcOverride::Ignore => None,
     }
+}
+
+/// `said`, at most [`MAX_QUESTION`] characters of it, then ending in an ellipsis: the length of
+/// a question however it is worded (a caller that says the app's own question in another
+/// language cuts its sentence the same way).
+pub fn cut_question(mut said: String) -> String {
+    if let Some((at, _)) = said.char_indices().nth(MAX_QUESTION) {
+        // `at` is where a character starts, so the cut is never inside one.
+        said.truncate(at);
+        said.push('…');
+    }
+    said
 }
 
 /// The most characters [`user_value_overrides`] gives of a question, which then ends in an
