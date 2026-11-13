@@ -67,6 +67,7 @@ pub use print_ui::{
 pub use redact_ui::{HiddenDraft, PagesDraft as RedactPagesDraft, RedactPrefs, SearchDraft as RedactSearchDraft, SearchMode as RedactSearchMode};
 pub mod i18n;
 mod ruler;
+#[doc(hidden)]
 pub use ruler::HORIZONTAL_RULER_HEIGHT;
 pub mod theme;
 pub mod viewer_prefs;

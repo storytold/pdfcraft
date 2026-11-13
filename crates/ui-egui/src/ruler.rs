@@ -210,7 +210,6 @@ pub(crate) fn page_points_to_screen(geometry: RulerGeometry, page_points: f64) -
 }
 
 /// Convert a logical screen position to PDF points from the displayed page origin.
-#[cfg(test)]
 pub(crate) fn screen_to_page_points(geometry: RulerGeometry, screen_position: f64) -> Option<f64> {
     if !geometry.is_valid() || !screen_position.is_finite() {
         return None;
@@ -231,8 +230,14 @@ pub(crate) fn visible_ticks(geometry: RulerGeometry) -> Vec<RulerTick> {
     let visible_start = geometry.ruler_start;
     let visible_end = geometry.ruler_end;
     let per_point = geometry.unit.per_point();
-    let start_units = (visible_start - geometry.page_origin) / geometry.screen_points_per_pdf_point * per_point;
-    let end_units = (visible_end - geometry.page_origin) / geometry.screen_points_per_pdf_point * per_point;
+    let Some(start_points) = screen_to_page_points(geometry, visible_start) else {
+        return Vec::new();
+    };
+    let Some(end_points) = screen_to_page_points(geometry, visible_end) else {
+        return Vec::new();
+    };
+    let start_units = start_points * per_point;
+    let end_units = end_points * per_point;
     if !start_units.is_finite() || !end_units.is_finite() || end_units < start_units {
         return Vec::new();
     }
