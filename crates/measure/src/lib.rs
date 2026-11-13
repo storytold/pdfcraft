@@ -711,16 +711,47 @@ pub fn set_scale(doc: &mut Document, page_index: usize, bbox: [f64; 4], name: &s
     }
     Ok(())
 }
-pub fn csv(measurements: &[Measurement]) -> String {
+/// Spreadsheet-safe CSV with the original eight columns followed by MinX, MinY, MaxX,
+/// MaxY and Points. Geometry is in physical displayed page points (1/72 inch), with
+/// top-left origin and Y down, after CropBox, Rotate and UserUnit. Bounds enclose the
+/// saved vertices, not the annotation appearance; Points preserves their order as
+/// `x y; x y; ...`. Conversion failures return an error instead of partial CSV.
+pub fn csv(doc: &Document, measurements: &[Measurement]) -> Result<String> {
     // Prefix spreadsheet formula triggers; quoting alone does not prevent evaluation.
     let field = |s: &str| {
         let prefix = if s.trim_start().starts_with(['=', '+', '-', '@']) || s.starts_with(['\t', '\r']) { "'" } else { "" };
         format!("\"{prefix}{}\"", s.replace('"', "\"\""))
     };
-    let mut out = "Page,Index,Type,Value,Unit,Label,Author,Scale\r\n".to_string();
+    let mut out = "Page,Index,Type,Value,Unit,Label,Author,Scale,MinX,MinY,MaxX,MaxY,Points\r\n".to_string();
+    // Read the page tree once: a plan can have many measurements on each page.
+    let pages = pdfcraft_model::pages(doc);
     for m in measurements {
+        check_points(&m.points)?;
+        let page = pages.get(m.page).ok_or_else(|| invalid("measurement page does not exist"))?;
+        let (matrix, height) = display_transform(doc, page)?;
+        let points: Vec<Point> = m
+            .points
+            .iter()
+            .map(|p| {
+                let (x, y) = matrix.apply(p[0], p[1]);
+                [x, height - y]
+            })
+            .collect();
+        if points.iter().flatten().any(|v| !v.is_finite()) {
+            return Err(invalid("invalid displayed measurement coordinates"));
+        }
+        let first = points.first().ok_or_else(|| invalid("measurement needs points"))?;
+        let mut bounds = [first[0], first[1], first[0], first[1]];
+        let mut vertices = String::new();
+        for [x, y] in points {
+            bounds = [bounds[0].min(x), bounds[1].min(y), bounds[2].max(x), bounds[3].max(y)];
+            if !vertices.is_empty() {
+                vertices.push_str("; ");
+            }
+            vertices.push_str(&format!("{x} {y}"));
+        }
         out.push_str(&format!(
-            "{},{},{},{},{},{},{},{}\r\n",
+            "{},{},{},{},{},{},{},{},{},{},{},{},{}\r\n",
             m.page.saturating_add(1),
             m.index.saturating_add(1),
             m.reading.kind.name(),
@@ -728,10 +759,15 @@ pub fn csv(measurements: &[Measurement]) -> String {
             field(&m.reading.unit),
             field(&m.label),
             field(&m.author),
-            field(&m.scale.ratio)
+            field(&m.scale.ratio),
+            bounds[0],
+            bounds[1],
+            bounds[2],
+            bounds[3],
+            field(&vertices)
         ));
     }
-    out
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -750,8 +786,13 @@ pub fn view_to_user(doc: &Document, page_index: usize, at: Point) -> Result<Poin
 pub fn user_to_view(doc: &Document, page_index: usize, at: Point) -> Result<Point> {
     check_points(&[at])?;
     let page = page(doc, page_index)?;
-    let (_, height) = page.display_size(doc);
-    let m = pdfcraft_content::Matrix(page.view_matrix(doc)).invert().ok_or_else(|| invalid("invalid page transform"))?;
+    let (m, height) = display_transform(doc, &page)?;
     let (x, y) = m.apply(at[0], at[1]);
     Ok([x, height - y])
+}
+
+fn display_transform(doc: &Document, page: &pdfcraft_model::Page) -> Result<(pdfcraft_content::Matrix, f64)> {
+    let (_, height) = page.display_size(doc);
+    let matrix = pdfcraft_content::Matrix(page.view_matrix(doc)).invert().ok_or_else(|| invalid("invalid page transform"))?;
+    Ok((matrix, height))
 }

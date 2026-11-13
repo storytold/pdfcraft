@@ -194,10 +194,24 @@ fn measurement_csv_quotes_newlines_and_blocks_formula_cells() {
     m.label = "=SUM(1,2)\n\"room\"".into();
     m.author = "  @cmd".into();
     add(&mut d, &m, &Meta::default()).unwrap();
-    let csv = csv(&list(&d).measurements);
+    let csv = csv(&d, &list(&d).measurements).unwrap();
     assert!(csv.contains("\"'=SUM(1,2)\n\"\"room\"\"\""));
     assert!(csv.contains("\"'  @cmd\""));
-    assert!(csv.starts_with("Page,Index,Type,Value"));
+    assert!(csv.starts_with("Page,Index,Type,Value,Unit,Label,Author,Scale,MinX,MinY,MaxX,MaxY,Points\r\n1,1,distance,10,\"m\",\"'=SUM(1,2)\n\"\"room\"\"\",\"'  @cmd\",\"1 pt = 2 m\","));
+    assert!(csv.ends_with(",0,788,3,792,\"0 792; 3 788\"\r\n"), "{csv}");
+}
+
+#[test]
+fn measurement_csv_preserves_negative_coordinates_without_formula_cells() {
+    let mut d = fixture("", "", &[]);
+    add(&mut d, &new(Kind::Distance, vec![[-3.0, 4.0], [2.0, 1.0]]), &Meta::default()).unwrap();
+    let measurements = list(&d).measurements;
+    let exported = csv(&d, &measurements).unwrap();
+    assert!(exported.ends_with(",-3,788,2,791,\"'-3 788; 2 791\"\r\n"), "{exported}");
+    assert_eq!(csv(&d, &[]).unwrap(), "Page,Index,Type,Value,Unit,Label,Author,Scale,MinX,MinY,MaxX,MaxY,Points\r\n");
+    let mut invalid = measurements;
+    invalid[0].points.clear();
+    assert!(csv(&d, &invalid).is_err());
 }
 
 #[test]

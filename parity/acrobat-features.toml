@@ -4526,8 +4526,8 @@ milestone = "M12"
 status = "shipped"
 commands = ["measure.export"]
 tools = ["measure_export"]
-evidence = ["crates/automation/tests/it/automation.rs::measurements_calibrate_draw_save_reopen_and_export", "crates/measure/src/tests.rs::measurement_csv_quotes_newlines_and_blocks_formula_cells", "crates/ui-egui/tests/it/control.rs::measurement_tools_draw_live_calibrate_save_and_export"]
-notes = "Atomic CSV export of page, annotation index, type, numeric value, unit, label, author and scale. Quotes embedded delimiters and prefixes spreadsheet formula triggers."
+evidence = ["crates/automation/tests/it/automation.rs::measurements_calibrate_draw_save_reopen_and_export", "crates/measure/src/tests.rs::measurement_csv_quotes_newlines_and_blocks_formula_cells", "crates/ui-egui/tests/it/control.rs::measurement_tools_draw_live_calibrate_save_and_export", "crates/automation/tests/it/automation.rs::measurement_csv_exports_displayed_bounds_and_vertices_after_reopen"]
+notes = "Atomic CSV export preserves page, annotation index, type, numeric value, unit, label, author and scale, then appends MinX, MinY, MaxX, MaxY and Points (all saved vertices). Coordinates use physical displayed page points, top-left origin and Y down, with crop box, rotation and UserUnit applied, matching measure_list. Bounds enclose vertices, not appearances; values and units remain calibrated. Quotes embedded delimiters and prefixes spreadsheet formula triggers. Missing: floor-plan grouping and style attributes such as colour and thickness."
 
 [[feature]]
 id = "comment.geospatial"
