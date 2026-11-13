@@ -145,7 +145,14 @@ fn the_colour_spaces_a_page_reads_are_not_kept() {
     add_annotation(&mut doc, &NewAnnotation { page: 0, shape, style, contents: String::new(), author: "Synthetic test".into() }, &Meta::default())
         .unwrap();
 
-    let Some((result, grown)) = peak_growth(|| apply(&mut doc, None)) else { return };
+    // Only Linux can reset the peak. There it must be measured, or the bound below would pass
+    // unchecked; elsewhere the test has nothing to measure with.
+    let Some((result, grown)) = peak_growth(|| apply(&mut doc, None)) else {
+        if cfg!(target_os = "linux") {
+            panic!("the peak resident memory couldn't be measured");
+        }
+        return;
+    };
     result.unwrap();
     assert!(grown < 512, "Apply grew the peak by {grown} MiB");
 }
