@@ -2163,6 +2163,11 @@ fn home_recent_context_menu_reveals_the_target_without_opening_or_removing_it() 
     assert_eq!(h.state().active, None);
     assert_eq!(h.state().recent.len(), 2, "reveal must not remove missing recent files");
     assert_eq!(h.state().recent[1].path, expected);
+    // The existence check runs on the reveal worker thread, so the notice can land a few frames
+    // after the steps above, on a loaded runner; wait for it instead of failing on timing.
+    support::wait_until(&mut h, "the reveal notice for the missing file", |app| {
+        app.toast.as_ref().is_some_and(|(text, _)| text.contains("The file no longer exists"))
+    });
     assert!(
         h.state().toast.as_ref().is_some_and(|(text, _)| text.contains("The file no longer exists")),
         "the selected path is checked and the existing reveal error is shown"
