@@ -46,6 +46,12 @@ impl PdfCraftApp {
         if chords {
             self.registry_shortcuts(ctx);
         }
+        // Files copied in Finder or a file manager open from Home (#1289), unless a menu holds
+        // the keys.
+        #[cfg(not(target_arch = "wasm32"))]
+        if !craft_menu::bar::is_open(ctx) && !craft_menu::bar::is_focused(ctx) {
+            self.paste_files_key(ctx);
+        }
         // (Esc closes a Combine file shown large first.)
         if self.full_screen && self.combine_tab.preview.is_none() && self.page_keys.pressed(ctx, Key::Escape) {
             self.set_full_screen(ctx, false);
