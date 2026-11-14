@@ -378,4 +378,10 @@ fn a_numbered_name_is_the_object_with_that_number_not_the_nth_match() {
     assert_eq!((o.error, o.result.as_deref()), (None, Some("b")));
     let o = js(&root, "this.resolveNodes('field[*]').length", "form1[0].go[0]");
     assert_eq!((o.error, o.result.as_deref()), (None, Some("3")));
+    // A collection counts places: `nodes[1]` is the second child, as `nodes.item(1)` is,
+    // whatever its SOM number.
+    let o = fc(&root, "form1.nodes[1]", "form1[0].go[0]");
+    assert_eq!((o.error, o.result.as_deref()), (None, Some("a")));
+    let o = js(&root, "xfa.form.form1.nodes.item(1).rawValue", "form1[0].go[0]");
+    assert_eq!((o.error, o.result.as_deref()), (None, Some("a")));
 }

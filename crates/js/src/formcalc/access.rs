@@ -395,7 +395,7 @@ impl Interp<'_> {
 
     /// `base[n]` / `base[*]`: all the instances the last step named, then one or all.
     pub(super) fn index(&mut self, base: &Expr, idx: &Idx) -> R<Val> {
-        let all = self.all_of(base)?;
+        let (all, named) = self.all_named(base)?;
         match idx {
             Idx::All => Ok(Val::List(all.into_iter().map(Val::Node).collect())),
             Idx::Abs(e) => {
@@ -409,14 +409,9 @@ impl Interp<'_> {
                 // A SOM name's number is its object's SOM number in the scope (XFA 3.3 pp.
                 // 94-95), which an unnamed object of the class shares with a named one, so it
                 // isn't the place among the objects once an unnamed subform's content is among
-                // them. A list from a variable or from descendants (`..`) counts places.
-                let by_number = match base {
-                    Expr::Ident(name) => !(self.lookup(name).is_some() || name.starts_with('$') || name.eq_ignore_ascii_case("xfa")),
-                    Expr::Member(..) => true,
-                    _ => false,
-                };
-                let pick =
-                    if by_number { all.iter().copied().find(|&i| self.h.nodes.get(i).is_some_and(|x| x.index == n)) } else { all.get(n).copied() };
+                // them. A list from a variable, from descendants (`..`) or from a collection
+                // such as `nodes` counts places.
+                let pick = if named { all.iter().copied().find(|&i| self.h.nodes.get(i).is_some_and(|x| x.index == n)) } else { all.get(n).copied() };
                 Ok(pick.map_or(Val::Null, Val::Node))
             }
             Idx::Rel(k) => {
@@ -447,14 +442,23 @@ impl Interp<'_> {
 
     /// Every instance an accessor names (`Row` → all rows, not just the first), each once.
     pub(super) fn all_of(&mut self, e: &Expr) -> R<Vec<usize>> {
+        self.all_named(e).map(|(all, _)| all)
+    }
+
+    /// [`Interp::all_of`], and whether the objects are those a SOM name found in its scope, so
+    /// a number after it is their SOM number; not for a variable's list, descendants (`..`) or
+    /// a collection a member gives (`nodes`), where it is the place.
+    fn all_named(&mut self, e: &Expr) -> R<(Vec<usize>, bool)> {
         let mut out = Vec::new();
         let mut seen = HashSet::new();
+        let mut named = false;
         match e {
             Expr::Ident(name) => {
                 if self.lookup(name).is_some() || name.starts_with('$') || name.eq_ignore_ascii_case("xfa") {
                     let v = self.eval(e)?;
-                    return Ok(self.nodes_list(&v));
+                    return Ok((self.nodes_list(&v), false));
                 }
+                named = true;
                 // The name resolves to its first instance; `row[*]` means every object of the
                 // name in its SOM scope.
                 for first in resolve_som(self.h, self.h.current, name) {
@@ -469,6 +473,7 @@ impl Interp<'_> {
                 for i in self.nodes_list(&b) {
                     self.gather(&mut out, &mut seen, scoped(self.h, i, name))?;
                 }
+                named = !out.is_empty();
                 if out.is_empty() {
                     let v = self.member(b, name)?;
                     out = self.nodes_list(&v);
@@ -485,6 +490,6 @@ impl Interp<'_> {
                 out = self.nodes_list(&v);
             }
         }
-        Ok(out)
+        Ok((out, named))
     }
 }
