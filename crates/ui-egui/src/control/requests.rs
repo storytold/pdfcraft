@@ -367,3 +367,71 @@ fn rect_param(v: &Value) -> Result<egui::Rect, String> {
         _ => Err("region must be [x0, y0, x1, y1] in points".into()),
     }
 }
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn drag_rejects_malformed_coordinate_pairs_before_input() {
+        let ctx = egui::Context::default();
+        let (mut control, _client) = super::super::attach(&ctx);
+        for key in ["from", "to"] {
+            for bad in [
+                json!([10, "bad", 20]),
+                json!([null, 10, 20]),
+                json!([10, true, 20]),
+                json!([10, {}, 20]),
+                json!([10, 20, 30]),
+                json!([10]),
+                json!([10, "20"]),
+                json!("10,20"),
+                json!([1e39, 20]),
+            ] {
+                let mut params = json!({ "from": [10, 20], "to": [30, 40], "steps": 1 });
+                params[key] = bad.clone();
+                let error = control.drag(&params, web_time::Instant::now()).err().expect("malformed coordinates must be refused");
+                assert!(error.starts_with(&format!("ui.drag: {key} must be")), "{key}: {bad}: {error}");
+                assert!(control.shared.lock().unwrap().inject.is_empty(), "{key}: {bad} queued pointer input");
+            }
+        }
+    }
+
+    #[test]
+    fn drag_accepts_numeric_coordinate_pairs_without_changing_them() {
+        let ctx = egui::Context::default();
+        let (mut control, _client) = super::super::attach(&ctx);
+        let params = json!({ "from": [-10.5, 20.25], "to": [30, 40], "steps": 1 });
+        let handled = control.drag(&params, web_time::Instant::now()).expect("two numeric coordinates are valid");
+        let Handled::AfterInput { value, .. } = handled else { panic!("a valid drag must queue its input") };
+        assert_eq!(value["dragged"], json!([[-10.5, 20.25], [30.0, 40.0]]));
+        assert_eq!(control.shared.lock().unwrap().inject.len(), 1);
+    }
+
+    #[test]
+    fn screenshot_region_rejects_malformed_coordinate_tuples() {
+        for bad in [
+            json!([0, 0, "bad", 100, 100]),
+            json!([null, 0, 0, 100, 100]),
+            json!([0, 0, true, 100, 100]),
+            json!([0, 0, {}, 100, 100]),
+            json!([0, 0, 100, 100, 200]),
+            json!([0, 0, 100]),
+            json!([0, 0, "100", 100]),
+            json!("0,0,100,100"),
+            json!([0, 0, 1e39, 100]),
+            json!([-1e39, 0, 100, 100]),
+            json!([0, 0, 0, 100]),
+            json!([0, 100, 100, 0]),
+        ] {
+            assert!(rect_param(&bad).is_err(), "malformed region was accepted: {bad}");
+        }
+    }
+
+    #[test]
+    fn screenshot_region_accepts_four_numeric_coordinates() {
+        let rect = rect_param(&json!([1.25, 2.5, 101.25, 202.5])).unwrap();
+        assert_eq!(rect.min, egui::pos2(1.25, 2.5));
+        assert_eq!(rect.max, egui::pos2(101.25, 202.5));
+        assert_eq!(rect_param(&json!([0, 0, 100, 200])).unwrap().size(), egui::vec2(100.0, 200.0));
+    }
+}
