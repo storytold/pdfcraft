@@ -288,6 +288,7 @@ impl PdfCraftApp {
             last_snapshot_of: None,
             last_copied_image: None,
             last_copied_file: None,
+            last_copied_svg: None,
             system_clipboard: true,
             html_clipboard_override: None,
             #[cfg(not(target_arch = "wasm32"))]
