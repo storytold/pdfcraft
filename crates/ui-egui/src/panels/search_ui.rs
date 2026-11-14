@@ -23,7 +23,7 @@ pub(crate) fn panel(ui: &mut egui::Ui, t: &Tokens, view: &mut DocView, pages: us
         .accessible_name(tl!("Search"))
         .labelled_by(l.id);
     if find.focus {
-        r.request_focus();
+        widgets::focus_selecting_all(ui, &r, &find.query);
         find.focus = false;
     }
     ui.horizontal(|ui| {
