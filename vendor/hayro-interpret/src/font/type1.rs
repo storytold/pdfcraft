@@ -1,4 +1,5 @@
 use crate::font::blob::{CffFontBlob, Type1FontBlob};
+use crate::font::recovery::{FontFacts, FontKind, FontRecovery, GlyphFacts, Recovery};
 use crate::font::standard_font::{StandardFont, StandardKind, select_standard_font};
 use crate::font::true_type::{Width, read_encoding, read_widths};
 use crate::font::{
@@ -23,6 +24,8 @@ pub(crate) struct Type1Font(
     /// PdfCraft patch: whether the font's numbered glyph names all name their own codes
     /// (`numbered_names_name_their_codes`), worked out on first use.
     OnceLock<bool>,
+    /// PdfCraft patch (107): what the recovery rules need, and their decisions.
+    FontRecovery,
 );
 
 impl Type1Font {
@@ -58,18 +61,31 @@ impl Type1Font {
                 )?),
                 to_unicode.clone(),
                 OnceLock::new(),
+                FontRecovery::new(dict, None),
             ))
         };
 
         let inner = if is_cff(dict) {
             if let Some(cff) = CffKind::new(dict) {
-                Self(cache_key, Kind::Cff(cff), to_unicode, OnceLock::new())
+                Self(
+                    cache_key,
+                    Kind::Cff(cff),
+                    to_unicode,
+                    OnceLock::new(),
+                    FontRecovery::new(dict, None),
+                )
             } else {
                 return fallback();
             }
         } else if is_type1(dict) {
             if let Some(f) = Type1Kind::new(dict) {
-                Self(cache_key, Kind::Type1(f), to_unicode, OnceLock::new())
+                Self(
+                    cache_key,
+                    Kind::Type1(f),
+                    to_unicode,
+                    OnceLock::new(),
+                    FontRecovery::new(dict, None),
+                )
             } else {
                 return fallback();
             }
@@ -79,6 +95,7 @@ impl Type1Font {
                 Kind::Standard(standard),
                 to_unicode,
                 OnceLock::new(),
+                FontRecovery::new(dict, None),
             )
         } else {
             return fallback();
@@ -91,7 +108,13 @@ impl Type1Font {
         let dict = Dict::default();
         let standard = StandardKind::new_with_standard(&dict, font, true, resolver)?;
 
-        Some(Self(0, Kind::Standard(standard), None, OnceLock::new()))
+        Some(Self(
+            0,
+            Kind::Standard(standard),
+            None,
+            OnceLock::new(),
+            FontRecovery::default(),
+        ))
     }
 
     pub(crate) fn map_code(&self, code: u8) -> GlyphId {
@@ -119,18 +142,22 @@ impl Type1Font {
     }
 
     pub(crate) fn char_code_to_unicode(&self, char_code: u32) -> Option<BfString> {
-        if let Some(to_unicode) = &self.2
-            && let Some(c) = to_unicode.lookup_bf_string(char_code)
-        {
-            // Skip null character mappings and fall back to glyph name
-            // lookup. Some PDFs have incorrect ToUnicode mappings that map
-            // to U+0000.
-            if c != BfString::Char('\0') {
-                return Some(c);
-            }
-        }
+        self.to_unicode_text(char_code)
+            .or_else(|| self.encoding_text(char_code as u8))
+    }
 
-        let code = char_code as u8;
+    /// The code's `/ToUnicode` text, when the font has a map that names it.
+    fn to_unicode_text(&self, char_code: u32) -> Option<BfString> {
+        let c = self.2.as_ref()?.lookup_bf_string(char_code)?;
+        // Skip null character mappings and fall back to glyph name
+        // lookup. Some PDFs have incorrect ToUnicode mappings that map
+        // to U+0000.
+        (c != BfString::Char('\0')).then_some(c)
+    }
+
+    /// PdfCraft patch (107): the code's text by the font's encoding and glyph names, `/ToUnicode`
+    /// aside: the strict text of a code `/ToUnicode` doesn't name.
+    fn encoding_text(&self, code: u8) -> Option<BfString> {
         let found = match &self.1 {
             Kind::Standard(s) => s.char_code_to_unicode(code),
             Kind::Cff(c) => c.char_code_to_unicode(code),
@@ -159,12 +186,85 @@ impl Type1Font {
         })
     }
 
+    /// PdfCraft patch (107): what the font keeps for the recovery rules.
+    pub(crate) fn recovery_info(&self) -> &FontRecovery {
+        &self.4
+    }
+
+    /// PdfCraft patch (107): the recovery rules' reading of a code (see `font::recovery`),
+    /// given its strict text when that is more than control characters.
+    pub(crate) fn recovery(
+        &self,
+        code: u32,
+        gid: GlyphId,
+        strict: Option<&BfString>,
+    ) -> Option<Recovery> {
+        let kind = if matches!(self.1, Kind::Cff(_)) {
+            FontKind::Cff
+        } else {
+            FontKind::Type1
+        };
+        let names = |c: u8| self.code_to_ps_name(c);
+        let to_unicode_text = |c: u8| self.to_unicode_text(u32::from(c));
+        let encoding_text = |c: u8| self.encoding_text(c);
+        let code_outline = |c: u8| self.embedded_outline(c);
+        let code_width = |c: u8| match &self.1 {
+            Kind::Standard(_) => None,
+            Kind::Type1(t) => explicit_width(&t.widths, c),
+            Kind::Cff(f) => explicit_width(&f.widths, c),
+        };
+        let facts = || FontFacts {
+            kind,
+            base_font: self.4.base_font.as_deref(),
+            flags: self.4.flags.as_ref(),
+            has_to_unicode: self.2.is_some(),
+            has_encoding: self.4.has_encoding,
+            names: Some(&names),
+            program: None,
+            code_glyph: None,
+            to_unicode_text: Some(&to_unicode_text),
+            encoding_text: Some(&encoding_text),
+            code_outline: (!matches!(self.1, Kind::Standard(_)))
+                .then_some(&code_outline as &dyn Fn(u8) -> Option<BezPath>),
+            code_width: Some(&code_width),
+            ..FontFacts::of_kind(FontKind::Type1)
+        };
+        let glyph = || GlyphFacts {
+            gid,
+            name: u8::try_from(code)
+                .ok()
+                .and_then(|c| self.code_to_ps_name(c)),
+            strict,
+            id: None,
+            code: u8::try_from(code).ok(),
+        };
+        self.4.cache.recover(kind, facts, glyph)
+    }
+
+    /// PdfCraft patch (107): the outline of the glyph `code` draws from the embedded program, as
+    /// drawn; nothing for a standard font or a code that draws `.notdef`.
+    fn embedded_outline(&self, code: u8) -> Option<BezPath> {
+        if matches!(self.1, Kind::Standard(_)) {
+            return None;
+        }
+        let glyph = self.map_code(code);
+        (glyph != GlyphId::NOTDEF).then(|| self.outline_glyph(glyph))
+    }
+
     fn code_to_ps_name(&self, code: u8) -> Option<&str> {
         match &self.1 {
             Kind::Standard(s) => s.code_to_ps_name(code),
             Kind::Cff(c) => c.code_to_ps_name(code),
             Kind::Type1(t) => t.code_to_ps_name(code),
         }
+    }
+}
+
+/// PdfCraft patch (107): the width `/Widths` gives `code`, if it gives one.
+fn explicit_width(widths: &[Width], code: u8) -> Option<f32> {
+    match widths.get(usize::from(code)) {
+        Some(Width::Value(w)) => Some(*w),
+        _ => None,
     }
 }
 

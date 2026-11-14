@@ -76,6 +76,7 @@ mod properties_session;
 mod protect;
 mod reading_colors;
 mod recent_files;
+mod recovered_text;
 mod recovery;
 mod redact;
 mod reload;

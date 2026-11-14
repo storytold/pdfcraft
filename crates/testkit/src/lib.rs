@@ -27,6 +27,17 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+pub mod cff;
+pub mod truetype;
+pub mod type1;
+
+/// A glyph's contour for the synthetic programs ([`truetype::with_outlines`], [`type1::program`],
+/// [`cff::named`]): a polygon of on-curve points, in units of 1000 per em.
+pub type Polygon<'a> = &'a [(i16, i16)];
+
+/// A glyph's contours.
+pub type Outline<'a> = &'a [Polygon<'a>];
+
 /// A small PDF with a classic cross-reference table, built one object at a time.
 ///
 /// Objects are numbered from 1 in the order they are added, all at generation 0, so the first

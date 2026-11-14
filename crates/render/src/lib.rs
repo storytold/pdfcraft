@@ -26,11 +26,11 @@ pub use inspect::{
 pub use link_area::{MAX_LINK_QUADS, MAX_URI_BASE_BYTES, link_quads, quad_contains, resolve_uri};
 pub use pixels::Pixels;
 pub use raster::{
-    MAX_PIXELS, MAX_SIDE, PRINT_TAG, PageRenderer, RenderConfig, RenderPool, RenderRequest, RenderStats, RenderWarning, RenderedPage, RequestKind,
-    Retiring, Tile, device_pixels, effective_scale,
+    MAX_PIXELS, MAX_SIDE, PRINT_TAG, PageRenderer, RecoveryScope, RenderConfig, RenderPool, RenderRequest, RenderStats, RenderWarning, RenderedPage,
+    RequestKind, Retiring, Tile, device_pixels, effective_scale,
 };
 pub use reading::{ReadingColors, ReadingParams};
-pub use text::{PageText, TextGlyph};
+pub use text::{GlyphStyle, PageText, RecoveredText, Recovery, RecoveryMode, RecoveryRule, TextGlyph, recovery_policy};
 
 /// Errors surfaced to the user when a document cannot be opened.
 #[derive(Debug, thiserror::Error)]
