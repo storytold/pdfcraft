@@ -70,7 +70,10 @@ impl Layouter<'_> {
                     let inner = (avail_w - c.margin.horizontal()).max(1.0);
                     (self.content_width(node, inner, ctx, depth) + c.margin.horizontal()).min(avail_w)
                 }
-                Node::Draw(d) => self.natural_width(&d.value, &ctx.font, &ctx.para).map_or(avail_w, |t| (t + c.margin.horizontal()).min(avail_w)),
+                Node::Draw(d) => match &d.value {
+                    Value::Line { edge, .. } => (edge.thickness.clamp(0.1, 20.0) + c.margin.horizontal()).min(avail_w),
+                    _ => self.natural_width(&d.value, &ctx.font, &ctx.para).map_or(avail_w, |t| (t + c.margin.horizontal()).min(avail_w)),
+                },
                 Node::Field(f) if f.ui == Ui::Button => f
                     .caption
                     .as_ref()
