@@ -15,6 +15,7 @@ pdfcraft-fonts = { workspace = true }
 pdfcraft-geom = { workspace = true }
 pdfcraft-model = { workspace = true }
 thiserror = { workspace = true }
+unicode-bidi = { workspace = true }
 
 [dev-dependencies]
 hayro-syntax = { workspace = true }

@@ -294,11 +294,15 @@ pub(super) fn find_bar(view: &mut DocView, pages: usize, area: Rect, editing: bo
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.add(icons::image("search", 16.0, t.text_muted));
-                        let edit = egui::TextEdit::singleline(&mut find.query)
+                        let is_rtl = crate::bidi::paragraph_is_rtl(&find.query, crate::i18n::current().rtl());
+                        let mut edit = egui::TextEdit::singleline(&mut find.query)
                             .id(find_input_id(view.pane.key))
                             .hint_text(tl!("Find text"))
                             .desired_width(220.0)
                             .frame(egui::Frame::NONE);
+                        if is_rtl {
+                            edit = edit.align(egui::Align2::RIGHT_TOP);
+                        }
                         let r = ui.add(edit).accessible_name(tl!("Find text"));
                         if find.focus {
                             r.request_focus();
