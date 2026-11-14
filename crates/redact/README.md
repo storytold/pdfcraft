@@ -65,8 +65,9 @@ clear_marks(&mut doc, None)?;                        // remove marks without app
   included (nothing of it stays behind a clip). What it paints is measured, not its bounding box:
   a fill goes when its outline crosses the area or its fill rule (non-zero or even-odd) encloses
   it, a stroke when a segment comes within half the line width of it (√2 times that with
-  projecting caps) or a mitred corner within its miter's reach (ISO 32000-2 §8.4.3.5); curves are
-  measured by chords grown by how far the curve can stray from them. Only the part of the area
+  projecting caps) or a mitred corner within its miter's reach (ISO 32000-2 §8.4.3.5; taken as the
+  miter limit at a curve's end, or under a CTM that doesn't keep angles); curves are measured by
+  chords grown by how far the curve can stray from them. Only the part of the area
   inside the clip in force counts: the clipping paths the output keeps and the forms' `/BBox`es,
   taken as a box (a clip redaction removes clips nothing). So a frame round the page, or a map's
   areas drawn past the clip that holds them in the map, stay when a mark falls in an empty margin.

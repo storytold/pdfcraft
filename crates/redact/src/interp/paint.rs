@@ -24,13 +24,23 @@ const FLATNESS: f64 = 0.05;
 const MAX_CHORDS: f64 = 64.0;
 
 /// One subpath: its points in page space, and for each segment from one point to the next how
-/// far the painted outline can lie from it (a curve's flattening error; 0 for a line).
+/// far the painted outline can lie from it (a curve's flattening error; 0 for a line), and the
+/// operator that drew it.
 #[derive(Default)]
 struct Sub {
     pts: Vec<(f64, f64)>,
     pads: Vec<f64>,
+    from: Vec<From>,
     /// Closed by `h` (or drawn by `re`): a stroke paints the segment back to its start too.
     closed: bool,
+}
+
+/// The operator a segment comes from: its place in the path, and whether it is a chord of a
+/// curve. Two chords of one curve meet where the curve is smooth: no join is drawn there.
+#[derive(Clone, Copy, PartialEq)]
+struct From {
+    op: usize,
+    curve: bool,
 }
 
 /// The current path as segments in page space.
@@ -38,6 +48,8 @@ struct Sub {
 pub(super) struct Outline {
     subs: Vec<Sub>,
     segments: usize,
+    /// How many construction operators the path has had.
+    ops: usize,
     broken: bool,
 }
 
@@ -63,13 +75,14 @@ impl Outline {
             return;
         }
         let p = |x: f64, y: f64| ctm.apply(x, y);
+        self.ops = self.ops.saturating_add(1);
         match op.op.as_slice() {
             b"m" => match op.nums::<2>() {
                 Some([x, y]) => self.move_to(p(x, y)),
                 None => self.broken = true,
             },
             b"l" => match op.nums::<2>() {
-                Some([x, y]) => self.line_to(p(x, y), 0.0),
+                Some([x, y]) => self.line_to(p(x, y), 0.0, false),
                 None => self.broken = true,
             },
             b"c" => match op.nums::<6>() {
@@ -94,9 +107,9 @@ impl Outline {
             b"re" => match op.nums::<4>() {
                 Some([x, y, w, h]) => {
                     self.move_to(p(x, y));
-                    self.line_to(p(x + w, y), 0.0);
-                    self.line_to(p(x + w, y + h), 0.0);
-                    self.line_to(p(x, y + h), 0.0);
+                    self.line_to(p(x + w, y), 0.0, false);
+                    self.line_to(p(x + w, y + h), 0.0, false);
+                    self.line_to(p(x, y + h), 0.0, false);
                     if let Some(s) = self.subs.last_mut() {
                         s.closed = true;
                     }
@@ -107,8 +120,11 @@ impl Outline {
         }
     }
 
+    /// The current point: after `h` (and `re`) the start of the closed subpath (ISO 32000-2
+    /// Table 58), otherwise the last point.
     fn current(&self) -> Option<(f64, f64)> {
-        self.subs.last().and_then(|s| s.pts.last().copied())
+        let s = self.subs.last()?;
+        if s.closed { s.pts.first().copied() } else { s.pts.last().copied() }
     }
 
     fn add(&mut self, pt: (f64, f64)) -> bool {
@@ -122,25 +138,27 @@ impl Outline {
 
     fn move_to(&mut self, pt: (f64, f64)) {
         if self.add(pt) {
-            self.subs.push(Sub { pts: vec![pt], pads: Vec::new(), closed: false });
+            self.subs.push(Sub { pts: vec![pt], ..Sub::default() });
         }
     }
 
-    fn line_to(&mut self, pt: (f64, f64), pad: f64) {
+    fn line_to(&mut self, pt: (f64, f64), pad: f64, curve: bool) {
         if !self.add(pt) {
             return;
         }
+        let from = From { op: self.ops, curve };
         // After `h` a new segment starts a new subpath at the closed one's start.
         let restart = self.subs.last().and_then(|s| s.closed.then(|| s.pts.first().copied()).flatten());
         match (self.subs.last_mut(), restart) {
-            (Some(_), Some(start)) => self.subs.push(Sub { pts: vec![start, pt], pads: vec![pad], closed: false }),
+            (Some(_), Some(start)) => self.subs.push(Sub { pts: vec![start, pt], pads: vec![pad], from: vec![from], closed: false }),
             (Some(s), None) => {
                 s.pts.push(pt);
                 s.pads.push(pad);
+                s.from.push(from);
             }
             // A segment with no current point: the renderer has nothing to draw it from, so it
             // is taken as a point here (a conservative stand-in).
-            (None, _) => self.subs.push(Sub { pts: vec![pt], pads: Vec::new(), closed: false }),
+            (None, _) => self.subs.push(Sub { pts: vec![pt], ..Sub::default() }),
         }
     }
 
@@ -153,12 +171,7 @@ impl Outline {
     fn curve_to(&mut self, c1: (f64, f64), c2: Option<(f64, f64)>, end: (f64, f64)) {
         let c2 = c2.unwrap_or(end);
         // A closed subpath starts again at its start, as `line_to` does.
-        let p0 = match self.subs.last() {
-            Some(s) if s.closed => s.pts.first().copied(),
-            Some(s) => s.pts.last().copied(),
-            None => None,
-        }
-        .unwrap_or(c1);
+        let p0 = self.current().unwrap_or(c1);
         // The second differences bound the curve's bend: n even chords stray from it by at
         // most 3/4·M/n² (|B''| ≤ 6·M, a chord over Δt strays by Δt²/8·max|B''|).
         let d = |a: (f64, f64), b: (f64, f64), c: (f64, f64)| (a.0 - 2.0 * b.0 + c.0).hypot(a.1 - 2.0 * b.1 + c.1);
@@ -176,7 +189,7 @@ impl Outline {
             let u = 1.0 - t;
             let (a, b, c, e) = (u * u * u, 3.0 * u * u * t, 3.0 * u * t * t, t * t * t);
             let pt = (a * p0.0 + b * c1.0 + c * c2.0 + e * end.0, a * p0.1 + b * c1.1 + c * c2.1 + e * end.1);
-            self.line_to(pt, pad);
+            self.line_to(pt, pad, true);
             if self.broken {
                 return;
             }
@@ -239,9 +252,20 @@ impl Outline {
                     k => (k - 1, k + 1),
                 };
                 let (Some(&p), Some(&v), Some(&q)) = (s.pts.get(prev), s.pts.get(k), s.pts.get(next)) else { return false };
+                // The segments in and out of the corner (the closing segment, a line, is none).
+                let (into, out) = (k.checked_sub(1).and_then(|j| s.from.get(j)), s.from.get(k));
+                if into.is_some() && into == out && into.is_some_and(|f| f.curve) {
+                    // Inside one curve: no join, and the segments' pads cover the curve.
+                    return false;
+                }
+                // A join at a curve's end takes its angle from the curve's tangent, which the
+                // chords only approximate; and an angle in page space isn't the one the miter
+                // limit is tested on (in user space) when the CTM doesn't keep angles. Either way
+                // the miter may reach as far as the limit lets it.
+                let curved = into.is_some_and(|f| f.curve) || out.is_some_and(|f| f.curve);
+                let ratio = if curved || !pen.conformal { limit.max(1.0) } else { corner(p, v, q, limit) };
                 let pad = s.pads.get(prev).copied().unwrap_or(0.0).max(s.pads.get(k).copied().unwrap_or(0.0));
-                let reach = corner(p, v, q, limit) * pen.half + pad;
-                meets(v, v, grow(r, reach))
+                meets(v, v, grow(r, ratio * pen.half + pad))
             })
         })
     }
@@ -255,6 +279,9 @@ pub(super) struct Pen {
     /// The miter limit when joins are mitred, `None` for round or bevelled joins (which reach no
     /// further than `half`).
     pub(super) miter: Option<f64>,
+    /// The CTM keeps angles (a rotation and a uniform scale, perhaps mirrored), so a corner's
+    /// angle in page space is its angle in user space, where the miter limit applies.
+    pub(super) conformal: bool,
 }
 
 /// How far, in half line widths, a miter join at `v` between `p`-`v` and `v`-`q` reaches from
@@ -311,7 +338,7 @@ mod tests {
     use pdfcraft_content::num;
 
     fn pen(half: f64) -> Pen {
-        Pen { half, miter: None }
+        Pen { half, miter: None, conformal: true }
     }
 
     fn outline(ops: &[(&str, &[f64])]) -> Outline {
@@ -368,11 +395,11 @@ mod tests {
         // A right-angled corner at (100, 100): its miter tip is √2 half-widths out, toward the
         // upper right; along the edges the pen reaches one half-width.
         let o = outline(&[("m", &[0.0, 100.0]), ("l", &[100.0, 100.0]), ("l", &[100.0, 0.0])]);
-        let mitred = Pen { half: 10.0, miter: Some(10.0) };
+        let mitred = Pen { half: 10.0, miter: Some(10.0), conformal: true };
         let past_the_corner = [111.0, 111.0, 120.0, 120.0];
         assert!(!o.stroke_hits(past_the_corner, pen(10.0), false), "round joins stop at the pen");
         assert!(o.stroke_hits(past_the_corner, mitred, false), "the miter tip reaches 14.1");
-        assert!(!o.stroke_hits(past_the_corner, Pen { half: 10.0, miter: Some(1.4) }, false), "bevelled past the limit");
+        assert!(!o.stroke_hits(past_the_corner, Pen { half: 10.0, miter: Some(1.4), conformal: true }, false), "bevelled past the limit");
         // Beside an edge, away from the corner, the miter adds nothing.
         assert!(!o.stroke_hits([40.0, 111.0, 60.0, 120.0], mitred, false));
         // A hairpin is bevelled at any finite limit.
@@ -382,6 +409,45 @@ mod tests {
         let sq = outline(&[("re", &[0.0, 0.0, 100.0, 100.0])]);
         assert!(sq.stroke_hits([-12.0, -12.0, -11.0, -11.0], mitred, false));
         assert!(!sq.stroke_hits([-12.0, -12.0, -11.0, -11.0], pen(10.0), false));
+    }
+
+    /// B(1/2) of the cubic `p0`, `c1`, `c2`, `p3`.
+    fn mid(p0: (f64, f64), c1: (f64, f64), c2: (f64, f64), p3: (f64, f64)) -> [f64; 4] {
+        let x = (p0.0 + 3.0 * c1.0 + 3.0 * c2.0 + p3.0) / 8.0;
+        let y = (p0.1 + 3.0 * c1.1 + 3.0 * c2.1 + p3.1) / 8.0;
+        [x - 0.01, y - 0.01, x + 0.01, y + 0.01]
+    }
+
+    #[test]
+    fn a_v_after_a_closed_subpath_starts_at_its_start() {
+        // After `h` (and after `re`) the current point is the subpath's start, and `v` takes it
+        // as its first control point too.
+        let o = outline(&[("m", &[0.0, 0.0]), ("l", &[100.0, 0.0]), ("l", &[100.0, 100.0]), ("h", &[]), ("v", &[0.0, 100.0, 100.0, 0.0])]);
+        let on_curve = mid((0.0, 0.0), (0.0, 0.0), (0.0, 100.0), (100.0, 0.0));
+        assert!(o.stroke_hits(on_curve, pen(0.5), false), "{on_curve:?}");
+        let o = outline(&[("re", &[10.0, 10.0, 80.0, 80.0]), ("v", &[10.0, 200.0, 200.0, 10.0])]);
+        let on_curve = mid((10.0, 10.0), (10.0, 10.0), (10.0, 200.0), (200.0, 10.0));
+        assert!(o.stroke_hits(on_curve, pen(0.5), false), "{on_curve:?}");
+    }
+
+    #[test]
+    fn a_join_at_a_curve_or_under_a_stretching_ctm_takes_the_miter_limit() {
+        // A line into a curve whose tangent at its start turns back sharply: the chords bend
+        // gently there, the curve's tangent does not.
+        // Its tangent there turns 120°, a 60° corner whose miter tip reaches (108.66, -5); its
+        // first chords turn back further, a corner sharp enough to be bevelled at a limit of 3.
+        let o = outline(&[("m", &[0.0, 0.0]), ("l", &[100.0, 0.0]), ("c", &[99.5, 0.866, 0.0, 0.0, -100.0, 0.0])]);
+        let beyond = [107.5, -5.5, 108.5, -4.5];
+        assert!(o.stroke_hits(beyond, Pen { half: 5.0, miter: Some(3.0), conformal: true }, false));
+        // Under a CTM that doesn't keep angles, any corner may reach the limit.
+        let l = outline(&[("m", &[0.0, 0.0]), ("l", &[100.0, 0.0]), ("l", &[100.0, 100.0])]);
+        let off = [118.0, -19.0, 119.0, -18.0];
+        assert!(!l.stroke_hits(off, Pen { half: 2.0, miter: Some(10.0), conformal: true }, false));
+        assert!(l.stroke_hits(off, Pen { half: 2.0, miter: Some(10.0), conformal: false }, false));
+        // Two chords of one curve meet where it is smooth: no miter there.
+        let k = 55.228_475;
+        let arc = outline(&[("m", &[100.0, 0.0]), ("c", &[100.0, k, k, 100.0, 0.0, 100.0])]);
+        assert!(!arc.stroke_hits([75.0, 75.0, 76.0, 76.0], Pen { half: 1.0, miter: Some(10.0), conformal: true }, false));
     }
 
     #[test]

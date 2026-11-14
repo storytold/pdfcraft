@@ -57,3 +57,30 @@ fn a_form_draws_nothing_past_its_bbox() {
     let r = apply(&mut doc, None).unwrap();
     assert_eq!(r.paths_removed, 0, "{r:?}");
 }
+
+/// After `h` the current point is the closed subpath's start (ISO 32000-2 Table 58), and `v`
+/// takes it as its first control point: the curve `0 100 100 0 v` from (0, 0) passes (12.5, 37.5).
+#[test]
+fn a_curve_after_a_closed_subpath_is_measured_from_its_start() {
+    let (r, c) = redact(b"1 j 0 0 m 100 0 l 100 100 l h 0 100 100 0 v S", [11.0, 36.0, 14.0, 39.0]);
+    assert_eq!(r.paths_removed, 1, "{r:?}\n{c}");
+}
+
+/// The miter limit is tested on a corner's angle in user space (ISO 32000-2 §8.4.3.5). A right
+/// angle stretched ten times across is a sharp corner on the page, but it is still mitred: its tip
+/// reaches (114.1, 10).
+#[test]
+fn a_corner_stretched_by_the_ctm_keeps_its_miter() {
+    let (r, c) = redact(b"10 0 0 1 0 0 cm 2 w 0 j 10 M 0 0 m 10 10 l 0 20 l S", [112.0, 9.9, 113.0, 10.1]);
+    assert_eq!(r.paths_removed, 1, "{r:?}\n{c}");
+}
+
+/// A join at a curve's end takes the curve's tangent. Here it turns 120° from the line, a 60°
+/// corner whose miter (ratio 2, within the limit of 3) reaches (108.7, 95); the curve's first
+/// chord turns back further, a corner that would be bevelled.
+#[test]
+fn a_join_into_a_curve_is_mitred_by_the_curve_tangent() {
+    let src = b"10 w 0 j 3 M 0 100 m 100 100 l 99.5 100.866 0 100 -100 100 c S";
+    let (r, c) = redact(src, [107.5, 94.5, 108.5, 95.5]);
+    assert_eq!(r.paths_removed, 1, "{r:?}\n{c}");
+}

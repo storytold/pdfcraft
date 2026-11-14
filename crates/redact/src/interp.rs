@@ -696,7 +696,8 @@ impl Walk {
 
     /// The pen a stroke of the current path paints with, in page space: half the line width (as
     /// [`Self::stroke_box`] takes it) stretched by the CTM's largest stretch, √2 times that for a
-    /// projecting cap's corner, and the miter limit when joins are mitred.
+    /// projecting cap's corner, the miter limit when joins are mitred, and whether the CTM keeps
+    /// angles (the limit is tested on the angle in user space, ISO 32000-2 §8.4.3.5).
     fn pen(&self) -> paint::Pen {
         let [a, b, c, d, _, _] = self.gs.ctm.0;
         // The largest singular value of the CTM's linear part: how far it stretches a disc.
@@ -705,7 +706,10 @@ impl Walk {
         let stretch = ((t + (t * t - 4.0 * det * det).max(0.0).sqrt()) / 2.0).sqrt();
         let cap = if self.gs.line_cap == 2 { std::f64::consts::SQRT_2 } else { 1.0 };
         let half = (self.gs.line_width.max(1.0) / 2.0 * stretch).max(0.5) * cap;
-        paint::Pen { half, miter: (self.gs.line_join == 0).then(|| self.gs.miter_limit.max(1.0)) }
+        // Angles are kept by [a b; −b a] and its mirror [a b; b −a], within rounding.
+        let eps = 1e-9 * stretch;
+        let conformal = ((a - d).abs() <= eps && (b + c).abs() <= eps) || ((a + d).abs() <= eps && (b - c).abs() <= eps);
+        paint::Pen { half, miter: (self.gs.line_join == 0).then(|| self.gs.miter_limit.max(1.0)), conformal }
     }
 
     /// A painting operator ends the path; one under a region is removed (or kept as a clip).
