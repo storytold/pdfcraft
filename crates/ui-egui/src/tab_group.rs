@@ -134,21 +134,9 @@ impl PdfCraftApp {
 
     /// Remove tab at `tab_index` from its current group.
     pub fn remove_tab_from_group(&mut self, tab_index: usize) {
-        if tab_index >= self.views.len() {
-            return;
-        }
-        let prev_group = self.views[tab_index].group.take();
+        let Some(view) = self.views.get_mut(tab_index) else { return };
+        let prev_group = view.group.take();
         if let Some(gid) = prev_group {
-            let active_key = self.active_key();
-            // Move after the remaining members of the group so the group stays contiguous.
-            let last_member = self.views.iter().rposition(|v| v.group == Some(gid));
-            if let Some(target) = last_member
-                && target > tab_index
-            {
-                let view = self.views.remove(tab_index);
-                self.views.insert(target, view);
-                self.active = active_key.and_then(|k| self.tab_with_key(k));
-            }
             self.cleanup_empty_group(gid);
         }
     }
