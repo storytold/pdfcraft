@@ -24,6 +24,8 @@ pdfcraft-xfa = { workspace = true }
 pdfcraft-filters = { workspace = true }
 regex = { workspace = true }
 thiserror = { workspace = true }
+# The JPEG decoder for clearing a DCT (scanned) image in place (#2246).
+image = { version = "0.25", default-features = false, features = ["jpeg"] }
 # NFKC for the metadata check; already in the build through pdfcraft-crypt (stringprep).
 unicode-normalization = "0.1"
 # Reads the PDF/A and PDF/UA identification by namespace; already in the build through pdfcraft-xfa.
@@ -32,6 +34,8 @@ sha2 = "0.11"
 
 [dev-dependencies]
 pdfcraft-testkit = { workspace = true }
+# Test fixtures: a DCTDecode image is built with the JPEG encoder.
+image = { version = "0.25", default-features = false, features = ["jpeg"] }
 # The redacted page is rendered in `tests::a_page_whose_pruned_pattern_is_still_selected_renders`:
 # layer 3 from layer 4, a dev dependency only.
 pdfcraft-render = { workspace = true }
