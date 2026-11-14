@@ -1297,6 +1297,12 @@ impl DocView {
         self.pane.key
     }
 
+    /// The visible document area, excluding its scrollbar and side panels.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn document_viewport(&self) -> Rect {
+        self.viewport_screen
+    }
+
     /// Where this tab shows: the main pane or split view's second pane.
     pub fn place(&self) -> crate::panes::Place {
         self.pane.place

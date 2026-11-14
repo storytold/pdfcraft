@@ -56,6 +56,12 @@ pub struct PageImage {
 }
 
 impl PageImage {
+    /// The page-level `Do` placement (stream, operator). A bitmap returned by `reading_images`
+    /// shares its containing Form's source from `page_images`, even for reused resources.
+    pub fn draw_source(&self) -> (usize, usize) {
+        (self.stream, self.op)
+    }
+
     /// Whether an active clip was written by PdfCraft's image crop tool.
     pub fn has_editor_crop(&self) -> bool {
         self.clips.iter().any(|clip| clip.app_crop)
@@ -379,7 +385,7 @@ pub fn reading_images(doc: &Document, page: usize) -> Result<Vec<PageImage>, Edi
         ops: &[Op],
         resources: &Dict,
         st: &mut ImageState,
-        stream: &dyn Fn(&Op) -> usize,
+        source: &dyn Fn(usize, &Op) -> (usize, usize),
         forms: &mut Forms,
         out: &mut Vec<PageImage>,
     ) -> Result<(), EditError> {
@@ -389,6 +395,7 @@ pub fn reading_images(doc: &Document, page: usize) -> Result<Vec<PageImage>, Edi
             st.apply(op)?;
             let ctm = st.placement.matrix;
             if op.is("Do") {
+                let (stream, index) = source(i, op);
                 let Some(name) = op.name(0) else { continue };
                 let drawn = xo.and_then(|xo| xo.get(name));
                 if let Some(form) = crate::text::form_call(doc, resources, name, ctm, &forms.path, &mut forms.budget) {
@@ -403,8 +410,7 @@ pub fn reading_images(doc: &Document, page: usize) -> Result<Vec<PageImage>, Edi
                         });
                     let clip = bounds.map_or(st.placement.clip, |b| intersection(st.placement.clip, b).unwrap_or([0.0; 4]));
                     let mut inner = ImageState::new(form.ctm, clip, st.placement.clips.clone());
-                    let piece = stream(op);
-                    walk(doc, &parse(&form.data).ops, form.resources(resources), &mut inner, &|_| piece, forms, out)?;
+                    walk(doc, &parse(&form.data).ops, form.resources(resources), &mut inner, &|_, _| (stream, index), forms, out)?;
                     if form.obj.is_some() {
                         forms.path.pop();
                     }
@@ -429,8 +435,8 @@ pub fn reading_images(doc: &Document, page: usize) -> Result<Vec<PageImage>, Edi
                     is_form: false,
                     width: s.dict.int(b"Width").unwrap_or(0).max(0) as u32,
                     height: s.dict.int(b"Height").unwrap_or(0).max(0) as u32,
-                    stream: stream(op),
-                    op: i,
+                    stream,
+                    op: index,
                     draw_matrix: ctm.0,
                     clips: st.placement.clips.clone(),
                 });
@@ -445,7 +451,7 @@ pub fn reading_images(doc: &Document, page: usize) -> Result<Vec<PageImage>, Edi
     let mut decode = pdfcraft_cos::DecodeBudget::page();
     let pieces = joined(&crate::text::content_streams_within(doc, &p.dict, &mut decode)?);
     let mut forms = Forms { path: Vec::new(), budget: crate::text::FormBudget::new(decode) };
-    walk(doc, &pieces.parse().ops, &res, &mut st, &|op| pieces.piece_of(op.span.start), &mut forms, &mut out)?;
+    walk(doc, &pieces.parse().ops, &res, &mut st, &|i, op| (pieces.piece_of(op.span.start), i), &mut forms, &mut out)?;
     Ok(out)
 }
 

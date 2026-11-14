@@ -2821,6 +2821,29 @@ fn an_empty_popup_menu_answers_null_without_asking() {
     assert!(o.error.as_deref().is_some_and(|e| e.contains("too many interactive prompts")), "{:?}", o.error);
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn plain_popup_menu_accepts_a_selection_and_cancellation() {
+    let job = |script: &str| crate::session::Job {
+        script: script.into(),
+        event: Event { kind: "Link".into(), ..Event::doc("Mouse Up") },
+        doc: doc(),
+        fields: Arc::new(Vec::new()),
+        doc_scripts: Vec::new(),
+        calculations: Vec::new(),
+        timer: None,
+    };
+    let mut session = crate::session::ScriptSession::default();
+    let out = session.run(job("app.popUpMenu('Value: 10k', 'Part: R1')"), &[Some("Part: R1".into())]);
+    assert_eq!(out.error, None);
+    assert_eq!(out.result.as_deref(), Some("Part: R1"));
+    let out = session.run(job("String(app.popUpMenu('Value: 10k'))"), &[None]);
+    assert_eq!(out.error, None);
+    assert_eq!(out.result.as_deref(), Some("null"));
+    let out = session.run(job("app.popUpMenu('x'.repeat(4097))"), &[]);
+    assert!(out.error.as_deref().is_some_and(|error| error.contains("popup menu text exceeds its limit")));
+}
+
 /// `getOCGs` lists the document's layers; setting `state` turns one, which the run reports, and
 /// a document without layers gives `null` (#169, from #4751).
 #[test]

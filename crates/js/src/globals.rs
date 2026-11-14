@@ -594,6 +594,7 @@ pub(crate) fn install(ctx: &mut Context) -> JsResult<()> {
         .function(NativeFunction::from_fn_ptr(crate::interaction::response), js_string!("response"), 1)
         .function(NativeFunction::from_fn_ptr(launch_url), js_string!("launchURL"), 2)
         .function(NativeFunction::from_fn_ptr(crate::interaction::popup_menu), js_string!("popUpMenuEx"), 0)
+        .function(NativeFunction::from_fn_ptr(crate::interaction::popup_menu_plain), js_string!("popUpMenu"), 0)
         .function(NativeFunction::from_fn_ptr(open_doc), js_string!("openDoc"), 1)
         .function(NativeFunction::from_fn_ptr(exec_menu_item), js_string!("execMenuItem"), 1)
         .function(NativeFunction::from_fn_ptr(crate::timers::set_time_out), js_string!("setTimeOut"), 2)

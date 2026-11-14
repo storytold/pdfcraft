@@ -3,6 +3,7 @@
 //! Form artwork (as Word, InDesign and many scanners write them) is found inside the group.
 
 use std::collections::{HashMap, HashSet};
+use std::io::Write;
 
 use pdfcraft_cos::{Dict, Document as Cos, ObjRef, Object};
 
@@ -24,18 +25,27 @@ pub fn picture_at(pictures: &[PagePicture], at: [f64; 2]) -> Option<&PagePicture
 
 /// The pictures on `page`, bottom first: raster images, and Form artwork that holds one.
 fn pictures(cos: &Cos, page: usize) -> Vec<PagePicture> {
-    let images = pdfcraft_edit::page_images(cos, page).unwrap_or_default();
-    // Artwork drawn many times is searched once.
-    let mut holds_one: HashMap<ObjRef, bool> = HashMap::new();
-    images
-        .into_iter()
-        .enumerate()
-        .filter(|(_, i)| match (i.is_form, i.object) {
-            (false, Some(_)) => true,
-            (true, Some(form)) => *holds_one.entry(form).or_insert_with(|| picture_in_form(cos, form).is_some()),
-            _ => false,
-        })
-        .collect()
+    let images = match pdfcraft_edit::page_images(cos, page) {
+        Ok(images) => images,
+        Err(e) => {
+            let _ = writeln!(std::io::stderr(), "page {} picture selection unavailable: {e}", page.saturating_add(1));
+            return Vec::new();
+        }
+    };
+    if !images.iter().any(|image| image.is_form) {
+        return images.into_iter().enumerate().filter(|(_, image)| image.object.is_some()).collect();
+    }
+    let drawn = match pdfcraft_edit::reading_images(cos, page) {
+        Ok(drawn) => drawn,
+        Err(e) => {
+            // Fail closed for groups whose bitmap bounds cannot be proved; direct images remain usable.
+            let _ = writeln!(std::io::stderr(), "page {} grouped picture selection skipped: {e}", page.saturating_add(1));
+            return images.into_iter().enumerate().filter(|(_, image)| !image.is_form && image.object.is_some()).collect();
+        }
+    };
+    // Index placements once: reused image objects and page-sized CAD groups are not picture bounds.
+    let sources: HashMap<_, _> = images.iter().enumerate().map(|(index, image)| (image.draw_source(), index)).collect();
+    drawn.into_iter().filter_map(|image| sources.get(&image.draw_source()).map(|&index| (index, image))).collect()
 }
 
 impl Document {
@@ -43,14 +53,7 @@ impl Document {
     /// [`Document::page_images`]: a raster image, or Form artwork that holds one.
     pub fn page_image_at(&self, page: usize, at: [f64; 2]) -> Option<usize> {
         let editor = self.editor.as_ref()?;
-        self.page_images(page).iter().rposition(|i| {
-            i.contains(at)
-                && match (i.is_form, i.object) {
-                    (false, Some(_)) => true,
-                    (true, Some(form)) => picture_in_form(&editor.cos, form).is_some(),
-                    _ => false,
-                }
-        })
+        picture_at(&pictures(&editor.cos, page), at).map(|(index, _)| *index)
     }
 
     /// Work that lists the pictures on `page`, bottom first, for another thread: it reads every
@@ -59,10 +62,17 @@ impl Document {
     ///
     /// `None` when the document can't be read. The work reads the document as it is now: later
     /// edits aren't seen (key its answer by [`Document::edit_generation`]). It returns no pictures
-    /// for a page that doesn't exist or can't be read.
+    /// for a page that doesn't exist or can't be read. If nested artwork cannot be read, only
+    /// direct images are offered, with a logged warning; uncertain Form bounds never select a page.
     pub fn page_pictures_job(&self, page: usize) -> Option<impl FnOnce() -> Vec<PagePicture> + Send + 'static> {
         let cos = self.editor.as_ref()?.cos.clone();
-        Some(move || crate::guard(|| pictures(&cos, page)).unwrap_or_default())
+        Some(move || match crate::guard(|| pictures(&cos, page)) {
+            Ok(pictures) => pictures,
+            Err(e) => {
+                let _ = writeln!(std::io::stderr(), "page {} picture selection failed: {e}", page.saturating_add(1));
+                Vec::new()
+            }
+        })
     }
 
     /// Copy Image in Original Format: picture `index` on `page` as a file (extension, bytes):
@@ -191,5 +201,42 @@ fn collect(cos: &Cos, res: &Dict, depth: usize, seen: &mut HashSet<ObjRef>, best
             }
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn copy_image_failed_nested_walk_keeps_direct_images_only() {
+        let mut cos = pdfcraft_create::blank(200.0, 200.0, 1).unwrap();
+        let dict = |entries: Vec<(&[u8], Object)>| entries.into_iter().map(|(key, value)| (key.to_vec(), value)).collect::<Dict>();
+        let image = cos.add(Object::Stream(pdfcraft_cos::Stream::from_raw(
+            dict(vec![(b"Subtype", Object::name("Image")), (b"Width", Object::Int(1)), (b"Height", Object::Int(1))]),
+            vec![255, 0, 0],
+        )));
+        let inner = dict(vec![(b"XObject", Object::Dict(dict(vec![(b"Im", Object::Ref(image))])))]);
+        let form = cos.add(Object::Stream(pdfcraft_cos::Stream::from_raw(
+            dict(vec![
+                (b"Subtype", Object::name("Form")),
+                (b"BBox", Object::Array([0, 0, 200, 200].into_iter().map(Object::Int).collect())),
+                (b"Resources", Object::Dict(inner)),
+            ]),
+            b"10000000000000 0 0 1 0 0 cm /Im Do".to_vec(),
+        )));
+        let resources = dict(vec![(b"XObject", Object::Dict(dict(vec![(b"Im", Object::Ref(image)), (b"Fm", Object::Ref(form))])))]);
+        let content = cos.add(Object::Stream(pdfcraft_cos::Stream::from_raw(Dict::new(), b"q 10 0 0 10 0 0 cm /Im Do Q /Fm Do".to_vec())));
+        let page = pdfcraft_model::pages(&cos)[0].obj;
+        cos.update_dict(page, |d| {
+            d.set(b"Resources".to_vec(), resources);
+            d.set(b"Contents".to_vec(), content);
+        })
+        .unwrap();
+        assert!(pdfcraft_edit::reading_images(&cos, 0).is_err());
+        let selected = pictures(&cos, 0);
+        assert_eq!(selected.len(), 1);
+        assert_eq!(picture_at(&selected, [5.0, 5.0]).map(|p| p.0), Some(0));
+        assert!(picture_at(&selected, [100.0, 100.0]).is_none());
     }
 }
