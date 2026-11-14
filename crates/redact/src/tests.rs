@@ -6285,6 +6285,7 @@ mod metadata_fail_closed;
 mod metadata_matching;
 mod operands_from_the_end;
 mod property_retirement;
+mod strokes;
 mod surviving_references;
 mod text_state;
 mod unparsed;
@@ -6700,13 +6701,19 @@ fn a_hairline_under_a_shrinking_ctm_is_padded_by_half_a_unit() {
     assert_eq!(apply(&mut doc, None).unwrap().paths_removed, 1);
 }
 
-/// One `re` has four mitred corners: it is padded by the miter limit like any joined path.
+/// One `re` has four mitred corners: a mark on a corner's miter, past half the line width from
+/// each edge's path, takes the stroke. A mark beside an edge, past what the stroke paints, doesn't:
+/// a right-angled corner reaches `√2` times half the width (ISO 32000-2 §8.4.3.5), not the miter
+/// limit's.
 #[test]
 fn a_rectangle_stroke_is_padded_for_its_mitred_corners() {
-    let mut doc = one_page(b"2 w 100 100 50 50 re S", "", vec![]);
-    // Past half the line width from the rectangle, inside the miter reach.
-    mark(&mut doc, 0, &[[155.0, 120.0, 160.0, 130.0]], "");
-    assert_eq!(apply(&mut doc, None).unwrap().paths_removed, 1);
+    let stroke = |region: [f64; 4]| {
+        let mut doc = one_page(b"2 w 100 100 50 50 re S", "", vec![]);
+        mark(&mut doc, 0, &[region], "");
+        apply(&mut doc, None).unwrap().paths_removed
+    };
+    assert_eq!(stroke([150.6, 150.6, 150.95, 150.95]), 1, "on the corner's miter");
+    assert_eq!(stroke([155.0, 120.0, 160.0, 130.0]), 0, "beside an edge, past its paint");
 }
 
 /// A projecting square cap's outer corner reaches lw/2 x sqrt(2) from the endpoint. Under a shear

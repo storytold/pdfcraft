@@ -23,6 +23,7 @@ use std::rc::Rc;
 use pdfcraft_content::{Matrix, Op, Pieces, contains, num, overlaps, serialize_ops, string};
 use pdfcraft_cos::{CosError, DecodeBudget, Dict, Document, ImageBudget, MAX_PAGE_FORMS, ObjRef, Object, Stream};
 
+use crate::stroke::{INITIAL_MITER_LIMIT, fill_box, join_miters, stroke_box, union};
 use crate::{RedactError, Report, image, page_streams, tags};
 use pdfcraft_fonts::pdf::Metrics;
 
@@ -93,12 +94,6 @@ struct Gs {
     scale: f64,
     leading: f64,
     rise: f64,
-    /// The stroke parameters that widen a painted path beyond its construction points.
-    line_width: f64,
-    miter_limit: f64,
-    line_join: i64,
-    /// `J` / ExtGState `/LC`: a projecting square cap (2) reaches past the endpoint's corner.
-    line_cap: i64,
     /// The tiling or shading pattern selected as the fill colour (`/Name scn`), and as the stroke
     /// colour (`/Name SCN`). Part of the graphics state, so `q`/`Q` save and restore them with
     /// everything else. A pattern's cell is a content stream of its own and this pass does not
@@ -110,6 +105,13 @@ struct Gs {
     /// names up in this scope's resources (ISO 32000-2 §9.6.4), so a shown glyph may paint with
     /// any of this scope's patterns.
     type3_inherits: bool,
+    /// The line width, in user space (`w`, an ExtGState's `/LW`): a stroke paints half of it on
+    /// each side of its path.
+    line_width: f64,
+    /// Whether the stroke's joins are mitered (`j`, an ExtGState's `/LJ`), and the miter limit
+    /// (`M`, `/ML`): a mitered corner reaches past half the width, up to the limit.
+    miters: bool,
+    miter_limit: f64,
 }
 
 /// What processing a scope produced.
@@ -400,13 +402,12 @@ pub(crate) fn process(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<
         scale: 1.0,
         leading: 0.0,
         rise: 0.0,
-        line_width: 1.0,
-        miter_limit: 10.0,
-        line_join: 0,
-        line_cap: 0,
         fill_pattern: None,
         stroke_pattern: None,
         type3_inherits: false,
+        line_width: 1.0,
+        miters: true,
+        miter_limit: INITIAL_MITER_LIMIT,
     };
     process_from(doc, scope, streams, resources, gs)
 }
@@ -516,6 +517,11 @@ struct Walk {
     path: Vec<Op>,
     path_box: Option<[f64; 4]>,
     clip: bool,
+    /// The box of the moves' points since something last drew from one, which the path's box takes
+    /// once something does; and whether the path ends closed, which `h` and a closing paint then
+    /// leave as it is ([`Walk::construct_path`]).
+    moved: Option<[f64; 4]>,
+    closed: bool,
     /// Line-state operators (`w`, `M`, `j`, `J`, `d`, `gs`) met while a path is open: they apply to
     /// the stroke that ends it, so the path stays whole for the hit test, and they are written
     /// after it, kept even when the path goes.
@@ -541,6 +547,8 @@ impl Walk {
             path: Vec::new(),
             path_box: None,
             clip: false,
+            moved: None,
+            closed: false,
             pending: Vec::new(),
             clipped: HashSet::new(),
             out: Output::default(),
@@ -569,9 +577,11 @@ impl Walk {
             piece.ops.append(&mut self.pending);
             self.path_box = None;
             self.clip = false;
+            self.moved = None;
+            self.closed = false;
         }
         let kept = match o {
-            b"q" | b"Q" | b"cm" | b"Tf" | b"gs" | b"w" | b"M" | b"j" | b"J" => {
+            b"q" | b"Q" | b"cm" | b"Tf" | b"gs" | b"w" | b"j" | b"M" => {
                 self.graphics_state(doc, scope, &op);
                 Some(op)
             }
@@ -626,7 +636,14 @@ impl Walk {
         piece.ops.extend(kept);
     }
 
-    /// Path construction: collects the operator and grows the path's bounding box.
+    /// Path construction: collects the operator and grows the path's bounding box. A move's points
+    /// count once a segment or `h` follows it, or the painting operator closes it: a subpath that
+    /// is only a move paints nothing (ISO 32000-2 §8.5.3.2, and as the renderer draws). A move
+    /// another overrides paints nothing either, but each is kept until something draws: the
+    /// renderer skips a move whose last two operands aren't numbers to it, leaving the one before
+    /// it, and doesn't read every number the content parser does (`3e2`). After `re` the renderer
+    /// strokes a segment from the point before it, so a move waits across one; and as `re` and
+    /// `h` leave the path closed, an `h` or closing paint after them closes nothing.
     fn construct_path(&mut self, op: Op) {
         let o = op.op.as_slice();
         let pts: Vec<(f64, f64)> = match o {
@@ -638,52 +655,51 @@ impl Walk {
             b"v" | b"y" => op.nums::<4>().map(|[x1, y1, x2, y2]| vec![(x1, y1), (x2, y2)]).unwrap_or_default(),
             _ => Vec::new(),
         };
-        for (x, y) in pts {
-            let (u, v) = self.gs.ctm.apply(x, y);
-            self.path_box = Some(match self.path_box {
-                None => [u, v, u, v],
-                Some(b) => [b[0].min(u), b[1].min(v), b[2].max(u), b[3].max(v)],
-            });
+        let grown = pts.into_iter().map(|(x, y)| self.gs.ctm.apply(x, y)).fold(None, |b, (u, v)| union(b, Some([u, v, u, v])));
+        match o {
+            b"m" => {
+                self.moved = union(self.moved, grown);
+                self.closed = false;
+            }
+            b"l" | b"c" | b"v" | b"y" => self.path_box = union(union(self.path_box, self.moved.take()), grown),
+            b"h" => {
+                if !self.closed {
+                    self.path_box = union(self.path_box, self.moved.take());
+                }
+                self.closed = true;
+            }
+            _ => {
+                self.closed |= o == b"re" && grown.is_some();
+                self.path_box = union(self.path_box, grown);
+            }
         }
         self.clip |= matches!(o, b"W" | b"W*");
         self.path.push(op);
     }
 
-    /// The box a stroke of the current path can paint, grown from its construction box `b` by
-    /// what the pen adds: half the line width (a width of 0 is one device pixel, taken as one
-    /// unit) scaled by the CTM's largest stretch, and never less than half a unit of page space
-    /// (a renderer paints a hairline, or a line a CTM shrinks, about a device pixel wide); times
-    /// the miter limit when the path has joins and they are mitred (a rectangle has four), or
-    /// √2 for a projecting square cap (its outer corner). Caps and joins never reach further, so
-    /// a hit test on it is conservative, and a horizontal or vertical line no longer has a
-    /// zero-area box.
-    fn stroke_box(&self, b: [f64; 4]) -> [f64; 4] {
-        let m = self.gs.ctm.0;
-        let scale = (m[0] * m[0] + m[1] * m[1] + m[2] * m[2] + m[3] * m[3]).sqrt();
-        let joins = self.path.iter().filter(|op| matches!(op.op.as_slice(), b"l" | b"c" | b"v" | b"y" | b"h" | b"re")).count() >= 2
-            || self.path.iter().any(|op| op.op.as_slice() == b"re");
-        let miter = if joins && self.gs.line_join == 0 { self.gs.miter_limit.max(1.0) } else { 1.0 };
-        let reach = if self.gs.line_cap == 2 { miter.max(std::f64::consts::SQRT_2) } else { miter };
-        let pad = (self.gs.line_width.max(1.0) / 2.0 * scale).max(0.5) * reach;
-        [b[0] - pad, b[1] - pad, b[2] + pad, b[3] + pad]
-    }
-
     /// A painting operator ends the path; one under a region is removed (or kept as a clip).
     fn paint_path(&mut self, scope: &mut Scope<'_>, op: Op, piece: &mut Piece) {
-        let strokes = matches!(op.op.as_slice(), b"S" | b"s" | b"B" | b"B*" | b"b" | b"b*");
-        // A `W`/`W*` makes the path as constructed the clip; the stroke expansion only describes
-        // what the painting itself covers.
-        let path_box = self.path_box.take();
-        let bbox = path_box.map(|b| if strokes { self.stroke_box(b) } else { b });
         let body = std::mem::take(&mut self.path);
+        let o = op.op.as_slice();
+        // `s`, `b` and `b*` close the last subpath: a move left waiting is then a point closed, which
+        // a round cap paints, unless the path ends closed already.
+        let closes = matches!(o, b"s" | b"b" | b"b*");
+        let moved = self.moved.take();
+        let closed = std::mem::replace(&mut self.closed, false);
+        let path_box = if closes && !closed { union(self.path_box.take(), moved) } else { self.path_box.take() };
         let clips = std::mem::replace(&mut self.clip, false);
         let pending = std::mem::take(&mut self.pending);
-        let hit = scope.mode == Mode::Apply && op.op.as_slice() != b"n" && bbox.is_some_and(|b| scope.hits(b));
+        let strokes = matches!(o, b"S" | b"s" | b"B" | b"B*" | b"b" | b"b*");
+        // A stroke paints around its path: a line with no height under a region, or a thick one
+        // beside it, paints there. So does a fill of a path with no height or width. A `W`/`W*`
+        // makes the path as constructed the clip: what the paint reaches is the painting's alone.
+        let gs = &self.gs;
+        let paints =
+            path_box.map(|b| if strokes { stroke_box(b, &body, closes, &gs.ctm, gs.line_width, gs.miters, gs.miter_limit) } else { fill_box(b) });
+        let hit = scope.mode == Mode::Apply && o != b"n" && paints.is_some_and(|b| scope.hits(b));
         if !hit {
             // The paint survives, so the pattern it draws with is still in use. `n` paints
             // nothing, so it uses none. A hit path is removed whole (F-008), pattern and all.
-            let o = op.op.as_slice();
-            let strokes = matches!(o, b"S" | b"s" | b"B" | b"B*" | b"b" | b"b*");
             let fills = matches!(o, b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*");
             uses_patterns(&mut self.out, &self.gs, fills, strokes);
             piece.ops.extend(body);
@@ -691,26 +707,22 @@ impl Walk {
             piece.ops.push(op);
             return;
         }
-        let b = bbox.unwrap_or_default();
         piece.changed = true;
         scope.report.paths_removed += 1;
-        if scope.covered(path_box.unwrap_or(b)) && clips {
+        piece.ops.extend(pending);
+        if clips && path_box.is_some_and(|b| scope.covered(b)) {
             // Everything this clip lets through is under a mark, so an empty clip hides the same
             // content. The original outline is confidential and must not stay in the stream.
-            piece.ops.extend(pending);
             for o in ["re", "W", "n"] {
                 let operands = if o == "re" { vec![num(0.0); 4] } else { vec![] };
                 piece.ops.push(Op::new(o, operands));
             }
-        } else {
-            piece.ops.extend(pending);
         }
         // Partial vector redaction must not retain underlying drawing commands
         // behind clipping (F-008). Refuse partial clip retention and remove the path.
     }
 
     fn graphics_state(&mut self, doc: &Document, scope: &mut Scope<'_>, op: &Op) {
-        let last = op.nums::<1>().map(|[v]| v);
         match op.op.as_slice() {
             b"q" => self.stack.push((self.gs.clone(), self.tm, self.tlm)),
             b"Q" => {
@@ -724,25 +736,43 @@ impl Walk {
                 }
             }
             b"Tf" => self.select_font(doc, scope, op),
-            // The operand before the operator, as the renderer reads it: `1 12 w` is a width of 12.
-            b"w" => self.gs.line_width = last.unwrap_or(self.gs.line_width),
-            b"M" => self.gs.miter_limit = last.unwrap_or(self.gs.miter_limit),
-            b"j" => self.gs.line_join = last.map_or(self.gs.line_join, |j| j as i64),
-            b"J" => self.gs.line_cap = last.map_or(self.gs.line_cap, |j| j as i64),
-            _ => {
+            // The width the renderer reads: the last operand, a surplus before it ignored. A
+            // negative one is taken at its size, which can only reach further.
+            b"w" => {
+                if let Some([width]) = op.nums::<1>() {
+                    self.gs.line_width = width.abs();
+                }
+            }
+            b"j" => {
+                if let Some([join]) = op.nums::<1>() {
+                    self.gs.miters = join_miters(join);
+                }
+            }
+            b"M" => {
+                if let Some([limit]) = op.nums::<1>() {
+                    self.gs.miter_limit = limit;
+                }
+            }
+            b"gs" => {
+                let stroke = |key: &[u8]| op.last_name().and_then(|n| extgstate_number(doc, &self.ext_gstates, n, key));
+                if let Some(width) = stroke(b"LW") {
+                    self.gs.line_width = width.abs();
+                }
+                if let Some(join) = stroke(b"LJ") {
+                    self.gs.miters = join_miters(join);
+                }
+                if let Some(limit) = stroke(b"ML") {
+                    self.gs.miter_limit = limit;
+                }
                 if let Some((font, vertical, size)) = op.last_name().and_then(|n| extgstate_font(doc, scope, &self.ext_gstates, n, &self.fallback)) {
                     (self.gs.font, self.gs.vertical, self.gs.size) = (font, vertical, size);
                     // As for `Tf`: a Type 3 font without /Resources paints through this scope's.
                     self.gs.type3_inherits = op.last_name().is_some_and(|n| extgstate_type3_inherits(doc, &self.ext_gstates, n));
                 }
-                if let Some(state) = op.name(0).and_then(|n| self.ext_gstates.get(n)).and_then(|s| doc.resolve(s).as_dict().cloned()) {
-                    let num = |key: &[u8]| state.get(key).and_then(|v| doc.resolve(v).as_f64());
-                    self.gs.line_width = num(b"LW").unwrap_or(self.gs.line_width);
-                    self.gs.miter_limit = num(b"ML").unwrap_or(self.gs.miter_limit);
-                    self.gs.line_join = num(b"LJ").map_or(self.gs.line_join, |j| j as i64);
-                    self.gs.line_cap = num(b"LC").map_or(self.gs.line_cap, |j| j as i64);
-                }
             }
+            // `J` and `d`, held while a path is open, set nothing the walk reads: a name among
+            // their operands is no graphics state.
+            _ => {}
         }
     }
 
@@ -1339,6 +1369,12 @@ fn xobject(
         }
         _ => None,
     }
+}
+
+/// The number the ExtGState `name` sets for `key` (`/LW`, `/LJ`, `/ML`), if it sets one.
+fn extgstate_number(doc: &Document, ext_gstates: &Dict, name: &[u8], key: &[u8]) -> Option<f64> {
+    let state = doc.resolve(ext_gstates.get(name)?);
+    doc.resolve(state.as_dict()?.get(key)?).as_f64()
 }
 
 /// Whether the ExtGState `name` sets a Type 3 font that has no `/Resources` of its own.

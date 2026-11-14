@@ -619,6 +619,225 @@ fn opaque_spec() -> Spec<'static> {
     Spec { resources: "/Font << /F1 5 0 R /F2 7 0 R >>", extra: vec![OPAQUE_FONT.as_bytes().to_vec()], ..Spec::default() }
 }
 
+/// The proof finds a stroke by the paint its width lays down: a line through the region, which
+/// has no height, the thinnest included, and a fill of a path with no height or width, and a thick one beside the region whose paint reaches
+/// into it, its width set by `w` (the last operand), by an ExtGState's `/LW`, in a user space
+/// scaled each way, or inherited by a form; and a projecting cap's corner, `√2` times half the
+/// width from the end of a diagonal line. A thin line beside it, a width `Q` gives back, and a fill
+/// that only touches the region leave it clean.
+#[test]
+fn the_proof_finds_a_stroke_by_its_width() {
+    let blank = marked_content(b"BT /F1 10 Tf 10 200 Td (Public) Tj ET", Spec::default());
+    let snap = Snapshot::capture(&blank, None).unwrap();
+    let wide = "/ExtGState << /GS1 << /LW 30 >> /GSN << /LW -30 >> >> /XObject << /Fm 7 0 R >>";
+    let form = stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300]", b"0 0 1 RG 10 125 m 60 125 l S");
+    for (content, failed) in [
+        (&b"0 0 1 RG 10 100 m 60 100 l S"[..], true),
+        (b"0 0 1 RG 0 w 10 100 m 60 100 l S", true),
+        (b"0 0 1 rg 10 100 50 0 re f", true),
+        (b"0 0 1 rg 10 100 m 60 100 l f", true),
+        (b"0 0 1 rg 30 96 0 15 re f*", true),
+        (b"0 0 1 rg q 1 0 0 1 0 -7.75 cm 10 120 m 60 120.00000000000001 l f Q", true),
+        (b"0 0 1 rg q 1 0 0 1 -49.7 0 cm 120 96 m 120.00000000000001 110 l f Q", true),
+        (b"0 0 1 RG 30 w 10 125 m 60 125 l S", true),
+        (b"0 0 1 RG /GS1 gs 10 125 m 60 125 l S", true),
+        (b"0 0 1 RG (x) 30 w 10 125 m 60 125 l S", true),
+        (b"0 0 1 RG -30 w 10 125 m 60 125 l S", true),
+        (b"0 0 1 RG /GSN gs 10 125 m 60 125 l S", true),
+        (b"0 0 1 RG q 0 10 1 0 0 0 cm 3 w 12.5 10 m 12.5 60 l S Q", true),
+        (b"0 0 1 RG 0 0 1 rg 30 w 10 125 m 60 125 l 60 135 l 10 135 l h B", true),
+        (b"0 0 1 RG 0 0 1 rg 30 w 10 125 m 60 125 l 60 135 l 10 135 l h b", true),
+        (b"0 0 1 RG 30 w 10 125 m 60 125 l s", true),
+        (b"0 0 1 RG 2 J 20 w 80 107 m 120 147 l S", true),
+        (b"0 0 1 RG q 1 0 0 10 0 0 cm 3 w 10 12.5 m 60 12.5 l S Q", true),
+        (b"0 0 1 RG q 10 0 0 1 0 0 cm 3 w 8.5 100 m 8.5 105 l S Q", true),
+        (b"30 w /Fm Do", true),
+        (b"/Fm Do", false),
+        (b"0 0 1 RG 10 125 m 60 125 l S", false),
+        (b"0 0 1 RG q 30 w Q 10 125 m 60 125 l S", false),
+        (b"0 0 1 rg 10 112 50 10 re f", false),
+        (b"0 0 1 rg 70 100 10 5 re f", false),
+    ] {
+        let mut doc = marked_content(content, Spec { resources: wide, extra: vec![form.clone()], ..Spec::default() });
+        doc.require_full_save();
+        let proof = snap.prove(&doc, None, &ProofOptions::default());
+        assert_eq!(
+            proof.entries[0].status,
+            if failed { Status::Failed } else { Status::VerifiedNoTextInRegion },
+            "{}: {}",
+            String::from_utf8_lossy(content),
+            proof.to_text()
+        );
+    }
+}
+
+/// The proof finds a mitered corner whose miter reaches the region, where half the width at a
+/// projecting cap's corner doesn't: the walk's corner, 23 points above the region. Joined round or
+/// bevelled, by `j`, `M` or an ExtGState, it paints nowhere there; closed by `h`, `s`, `b` or
+/// `b*` the subpath joins at its start; a curve joins at its tangent, which a control point the renderer
+/// takes for its end doesn't give; a closing line it takes for none joins across; a form takes the
+/// join it is drawn with. A corner a ten-millionth past a limit of 4.3, which the renderer keeps
+/// as 4.30000019, is mitered; past 4.29 it is not.
+#[test]
+fn the_proof_finds_a_mitered_corner() {
+    let blank = marked_content(b"BT /F1 10 Tf 10 200 Td (Public) Tj ET", Spec::default());
+    let snap = Snapshot::capture(&blank, None).unwrap();
+    let corner = "0 0 1 RG 20 w 20 225 m 40 135 l 60 225 l S";
+    let res = "/ExtGState << /GSR << /LJ 1 >> /GSM << /ML 4 >> /GSJ << /LJ 0 >> /GS43 << /ML 4.3 >> >> /XObject << /FmC 7 0 R >>";
+    let form = stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300]", corner.as_bytes());
+    for (content, failed) in [
+        (corner.to_string(), true),
+        (format!("1 j {corner}"), false),
+        (format!("2 j {corner}"), false),
+        (format!("7 j {corner}"), true),
+        (format!("4 M {corner}"), false),
+        (format!("5 M {corner}"), true),
+        (format!("/GSR gs {corner}"), false),
+        (format!("/GSM gs {corner}"), false),
+        (format!("1 j /GSJ gs {corner}"), true),
+        ("0 0 1 RG 20 w 40 135 m 60 225 l 20 225 l h S".into(), true),
+        ("0 0 1 RG 20 w 40 135 1 1 re 60 225 l 20 225 l h S".into(), true),
+        ("1 j 0 0 1 RG 20 w 40 135 m 40 135 1 1 re 60 225 l 20 225 l h S".into(), false),
+        // Closed at the point before `re`, where the renderer starts the segments after it.
+        ("0 0 1 RG 20 w 20 225 m 40 135 l 40 255 1 1 re 60 225 l 20 225 l h S".into(), true),
+        ("0 0 1 RG 20 w 40 135 m 60 225 l 20 225 l s".into(), true),
+        ("0 0 1 RG 20 w 40 135 m 60 225 l 20 225 l 40 135 l S".into(), false),
+        ("0 0 1 RG 20 w 20 225 m 25 202.5 35 157.5 40 135 c 60 225 l S".into(), true),
+        ("0 0 1 RG 20 w 20 225 m 20 180 30 135 40 135 c 60 225 l S".into(), false),
+        ("0 0 1 RG 20 w 20 225 m 40 135 l 40.0000001 135 60 225 60 225 c S".into(), true),
+        ("0 0 1 RG q 1 0 0 1 -80 0 cm 20 w 120 135 m 140 225 l 100 225 l 120.00000000000001 135 l s Q".into(), true),
+        ("0 0 1 RG 20 w 40 135 m 60 225 l 20 225 l b".into(), true),
+        ("0 0 1 RG 20 w 40 135 m 60 225 l 20 225 l b*".into(), true),
+        ("4.3 M 0 0 1 RG 20 w 18.4797360354395 225 m 40 135 l 61.5202639645605 225 l S".into(), true),
+        ("/GS43 gs 0 0 1 RG 20 w 18.4797360354395 225 m 40 135 l 61.5202639645605 225 l S".into(), true),
+        ("4.29 M 0 0 1 RG 20 w 18.4797360354395 225 m 40 135 l 61.5202639645605 225 l S".into(), false),
+        ("/FmC Do".into(), true),
+        ("1 j /FmC Do".into(), false),
+    ] {
+        let mut doc = marked_content(content.as_bytes(), Spec { resources: res, extra: vec![form.clone()], ..Spec::default() });
+        doc.require_full_save();
+        let proof = snap.prove(&doc, None, &ProofOptions::default());
+        assert_eq!(proof.entries[0].status, if failed { Status::Failed } else { Status::VerifiedNoTextInRegion }, "{content}: {}", proof.to_text());
+    }
+}
+
+/// The proof takes a path operator's points from its last operands, as the renderer reads them: a
+/// stroke that reaches the region only by the points read from the end fails it, by `m` (a move of
+/// four numbers made no subpath, and its point is where the line starts), `l`, `c`, `v` and `y`,
+/// a fill by `re` of five numbers, and a segment after such an `re`; one that reaches it only by a
+/// surplus before them leaves it clean. An even-odd clip drawn with a surplus operand cuts the
+/// region out of a fill under it.
+#[test]
+fn the_proof_takes_a_path_operators_points_from_the_end() {
+    let blank = marked_content(b"BT /F1 10 Tf 10 200 Td (Public) Tj ET", Spec::default());
+    let snap = Snapshot::capture(&blank, None).unwrap();
+    for (content, failed) in [
+        (&b"0 0 1 RG 40 100 200 200 m 40 100 l S"[..], true),
+        (b"0 0 1 RG 0 0 40 100 m 200 200 l S", true),
+        (b"0 0 1 RG 200 200 m 300 40 100 l S", true),
+        (b"0 0 1 RG 200 200 m 300 300 300 300 300 40 100 c S", true),
+        (b"0 0 1 RG 200 200 m 300 300 300 40 100 v S", true),
+        (b"0 0 1 RG 200 200 m 300 300 300 40 100 y S", true),
+        (b"0 0 1 rg 5 20 90 20 10 re f", true),
+        (b"0 0 1 RG 5 200 200 10 10 re 40 100 l S", true),
+        (b"0 0 1 RG 40 100 200 200 m 300 300 l S", false),
+        (b"0 0 1 RG 200 200 m 40 100 300 300 l S", false),
+        (b"0 0 m 300 0 l 300 300 l 0 300 l h 5 90 m 9 75 90 l 75 115 l 5 115 l h W* n 0 0 1 rg 0 0 300 300 re f", false),
+    ] {
+        let mut doc = marked_content(content, Spec::default());
+        doc.require_full_save();
+        let proof = snap.prove(&doc, None, &ProofOptions::default());
+        assert_eq!(
+            proof.entries[0].status,
+            if failed { Status::Failed } else { Status::VerifiedNoTextInRegion },
+            "{}: {}",
+            String::from_utf8_lossy(content),
+            proof.to_text()
+        );
+    }
+}
+
+/// The proof takes a move for paint only once something draws from it: a stroke or fill that
+/// reaches the region only by a move's point leaves it clean, where the move is all its subpath,
+/// it ends the path, or a rectangle follows it, closed again or not; and so does a segment with no
+/// move before it, from which the renderer draws nothing, and a path after one painted there. A
+/// move closed into a point, a segment of no length, a segment after `re` (which the renderer
+/// strokes from the move before it), and a move another overrides, which the renderer skips where
+/// its operands aren't two numbers to it or follow a token it takes for an operator, reach it.
+#[test]
+fn the_proof_takes_a_move_for_paint_only_once_something_draws_from_it() {
+    let blank = marked_content(b"BT /F1 10 Tf 10 200 Td (Public) Tj ET", Spec::default());
+    let snap = Snapshot::capture(&blank, None).unwrap();
+    for (content, failed) in [
+        (&b"0 0 1 RG 30 w 40 125 m S"[..], false),
+        (b"0 0 1 RG 30 w 40 125 m S 240 240 l S", false),
+        (b"0 0 1 RG 30 w 200 200 m 240 200 l 40 125 m S", false),
+        (b"0 0 1 RG 30 w 40 125 m 200 200 10 10 re S", false),
+        (b"0 0 1 RG 1 J 30 w 40 125 m 200 200 10 10 re h S", false),
+        (b"0 0 1 RG 1 J 30 w 40 125 m 200 200 10 10 re s", false),
+        (b"0 0 1 RG 0 0 1 rg 1 J 30 w 40 125 m 200 200 10 10 re b", false),
+        (b"0 0 1 RG 0 0 1 rg 1 J 30 w 40 125 m 200 200 10 10 re b*", false),
+        (b"0 0 1 rg 200 200 m 240 200 l 240 240 l 40 100 m f", false),
+        (b"0 0 1 rg 40 100 m f", false),
+        (b"0 0 1 RG 1 J 30 w 40 125 m 200 200 10 10 re h 240 240 l S", true),
+        (b"0 0 1 RG 1 J 30 w 200 200 10 10 re 40 125 m h S", true),
+        (b"0 0 1 RG 1 J 30 w 40 125 m /x 0 0 0 re h S", true),
+        (b"0 0 1 RG 30 w 40 125 m 200 200 m 240 200 l S", true),
+        (b"0 0 1 RG 40 100 m 200 (x) 200 m 240 240 l S", true),
+        (b"0 0 1 RG 40 100 m 200 200.5.5 m 240 240 l S", true),
+        (b"0 0 1 RG 40 100 m 200 3e2 m 240 240 l S", true),
+        (b"0 0 1 RG 30 w 40 125 l S", false),
+        (b"0 0 1 RG 30 w 40 125 40 125 40 125 c S", false),
+        (b"0 0 1 RG 30 w 40 125 40 125 v S", false),
+        (b"0 0 1 RG 30 w 40 125 40 125 y S", false),
+        (b"0 0 1 RG 30 w 40 125 m 40 125 l n 200 200 m 240 200 l S", false),
+        (b"0 0 1 RG 1 J 30 w 40 125 m h S", true),
+        (b"0 0 1 RG 1 J 30 w 40 125 m s", true),
+        (b"0 0 1 RG 0 0 1 rg 1 J 30 w 40 125 m b", true),
+        (b"0 0 1 RG 0 0 1 rg 1 J 30 w 40 125 m b*", true),
+        (b"0 0 1 RG 1 J 30 w 40 125 m 40 125 l S", true),
+        (b"0 0 1 RG 30 w 40 125 m 200 200 10 10 re 240 240 l S", true),
+        (b"0 0 1 RG 30 w 40 125 m /x 0 m 240 240 l S", true),
+        (b"0 0 1 rg 40 100 m 200 200 l 240 200 l f", true),
+    ] {
+        let mut doc = marked_content(content, Spec::default());
+        doc.require_full_save();
+        let proof = snap.prove(&doc, None, &ProofOptions::default());
+        assert_eq!(
+            proof.entries[0].status,
+            if failed { Status::Failed } else { Status::VerifiedNoTextInRegion },
+            "{}: {}",
+            String::from_utf8_lossy(content),
+            proof.to_text()
+        );
+    }
+}
+
+/// The proof reads a width given by reference through it: an ExtGState given by reference, the
+/// whole `/ExtGState` by reference, and `/LW` itself; and a form's own ExtGState sets the width
+/// inside it.
+#[test]
+fn the_proof_reads_a_width_given_by_reference() {
+    let blank = marked_content(b"BT /F1 10 Tf 10 200 Td (Public) Tj ET", Spec::default());
+    let snap = Snapshot::capture(&blank, None).unwrap();
+    let line = "0 0 1 RG 10 125 m 60 125 l S";
+    let form = stream(
+        "/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << /ExtGState << /GS1 << /LW 30 >> >> >>",
+        format!("/GS1 gs {line}").as_bytes(),
+    );
+    for (content, resources, extra) in [
+        (format!("/GS1 gs {line}"), "/ExtGState << /GS1 7 0 R >>", b"<< /LW 30 >>".to_vec()),
+        (format!("/GS1 gs {line}"), "/ExtGState 7 0 R", b"<< /GS1 << /LW 30 >> >>".to_vec()),
+        (format!("/GS1 gs {line}"), "/ExtGState << /GS1 << /LW 7 0 R >> >>", b"30".to_vec()),
+        ("/Fm Do".to_string(), "/XObject << /Fm 7 0 R >>", form),
+    ] {
+        let mut doc = marked_content(content.as_bytes(), Spec { resources, extra: vec![extra], ..Spec::default() });
+        doc.require_full_save();
+        let proof = snap.prove(&doc, None, &ProofOptions::default());
+        assert_eq!(proof.entries[0].status, Status::Failed, "{content} with {resources}: {}", proof.to_text());
+    }
+}
+
 #[test]
 fn text_that_cannot_be_decoded_makes_a_region_unverifiable() {
     let mut doc = open(build_with(b"BT /F2 10 Tf 10 200 Td <00410042> Tj ET", opaque_spec()));
@@ -1579,4 +1798,69 @@ fn page_content(doc: &Document) -> String {
     let p = &pdfcraft_model::pages(doc)[0];
     let (_, data) = page_streams(doc, &p.dict, 0).unwrap();
     data.iter().map(|d| String::from_utf8_lossy(d).into_owned()).collect::<Vec<_>>().join("\n")
+}
+
+/// An annotation whose appearance lands beside the region is clipped there (ISO 32000-2 §8.10.1,
+/// placed on its `/Rect` by §12.5.5): on a page not turned, the proof doesn't take its border,
+/// stroked along the appearance's edge, for paint in a region its `/Rect` only touches, nor a
+/// hairline along an edge 0.4 points from it, nor a border placed by a skewed `/Matrix` whose box
+/// rounds a hair into the region. One whose `/Rect` reaches into the region is checked: its border
+/// paints there. On a page that may be turned, where a NoRotate appearance is turned off its
+/// `/Rect` by rules the screen and print don't share, every appearance is checked where it is
+/// placed, as before: a border touching the region then fails it, whatever the flags or the
+/// subtype, as it does at a `/Rotate` the renderer may read otherwise (`null` under a turned
+/// `/Pages`, `90.5`).
+#[test]
+fn an_appearance_beside_the_region_paints_nothing_in_it() {
+    let annotated = |ap: &[u8], rect: &str, pages: &str, page: &str, annot: &str, form: &str| {
+        let objs = vec![
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            format!("<< /Type /Pages /Kids [3 0 R] /Count 1 {pages} >>").into_bytes(),
+            format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] {page} /Contents 4 0 R /Annots [7 0 R] /Resources << /Font << /F1 5 0 R >> >> >>")
+                .into_bytes(),
+            stream("", b"BT /F1 10 Tf 10 100 Td (SECRETVALUE) Tj ET"),
+            FONT.as_bytes().to_vec(),
+            format!("[{}]", vec!["500"; 95].join(" ")).into_bytes(),
+            format!("<< /Type /Annot {annot} /Rect {rect} /AP << /N 8 0 R >> >>").into_bytes(),
+            stream(&format!("/Type /XObject /Subtype /Form {form}"), ap),
+        ];
+        let mut doc = open(pdf_bytes(objs, ""));
+        mark(&mut doc, &[REGION]);
+        doc
+    };
+    let border = b"1 w 0.5 0.5 49 16 re S";
+    let square = "/Subtype /Square";
+    let plain = "/BBox [0 0 50 17]";
+    for (ap, rect, form) in [
+        (&border[..], "[70 95 120 112]", plain),
+        (b"0 w 0 0 m 50 0 l S", "[70.4 95 120.4 112]", plain),
+        (b"1 w 0.6 0.6 49 16 re S", "[8.1 112 69.7 120.3]", "/BBox [0.1 0.1 50.1 17.1] /Matrix [0.3 0.1 0.2 0.9 5 7]"),
+    ] {
+        let (applied, proof) = run(&mut annotated(ap, rect, "", "", square, form));
+        assert!(applied.is_ok() && proof.passed(), "{} at {rect}: {applied:?}: {}", String::from_utf8_lossy(ap), proof.to_text());
+    }
+    let paints = |proof: &Proof| proof.to_text().contains("a path still paints inside the region");
+    let proof = prove_unapplied(&mut annotated(border, "[60 95 110 112]", "", "", square, plain));
+    assert!(paints(&proof), "{}", proof.to_text());
+    // A /Rect touching the region from below: beside it on a page not turned; checked where placed
+    // on one that may be.
+    for (pages, page, annot, beside) in [
+        ("", "", "/Subtype /Square /F 16", true),
+        ("", "/Rotate 360", "/Subtype /Square /F 16", true),
+        ("", "/Rotate 90", "/Subtype /Square /F 16", false),
+        ("", "/Rotate 90", "/Subtype /Square", false),
+        ("", "/Rotate 180", "/Subtype /Square /F 16", false),
+        ("", "/Rotate 270", "/Subtype /Square /F 16", false),
+        ("", "/Rotate 90", "/Subtype /Text /F 4", false),
+        ("", "/Rotate 90", "/Subtype /Widget /F 20", false),
+        ("/Rotate 90", "", "/Subtype /Square /F 16", false),
+        ("/Rotate 90", "/Rotate null", "/Subtype /Square /F 16", false),
+        ("", "/Rotate 90.5", "/Subtype /Square /F 16", false),
+        // 360 × 2³²: past the 32 bits the renderer reads a rotation in, so it takes the inherited.
+        ("/Rotate 90", "/Rotate 1546188226560", "/Subtype /Square /F 16", false),
+    ] {
+        let (applied, proof) = run(&mut annotated(border, "[20 78 40 95]", pages, page, annot, plain));
+        assert_eq!(applied.is_ok() && proof.passed(), beside, "{pages} {page} {annot}: {applied:?}: {}", proof.to_text());
+        assert_eq!(paints(&proof), !beside, "{pages} {page} {annot}: {}", proof.to_text());
+    }
 }
