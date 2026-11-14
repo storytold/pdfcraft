@@ -409,7 +409,7 @@ impl Session {
                     .is_some_and(|t| !t.plain_text().trim().is_empty())
             };
             if has_text {
-                skipped.push((page, "the page has searchable text, which replacing its picture would drop: use Enhance camera image to straighten it"));
+                skipped.push((page, "the page has searchable text, which replacing its picture would drop"));
                 continue;
             }
             let native = doc

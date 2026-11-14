@@ -4889,7 +4889,8 @@ fn enhance_camera_image_through_tools() {
     ok(&mut a, "doc_export_images", json!({ "doc": doc, "folder": "src", "dpi": 72, "pages": [1] }));
     let photo = ok(&mut a, "doc_create", json!({ "from": "images", "paths": ["src/a_page_1.png"] }))["doc"].as_u64().unwrap();
     // A 200 × 300 pt page at one pixel per point; the corners, in any order, keep a 160 × 240 part.
-    let r = ok(&mut a, "page_enhance_camera", json!({ "doc": photo, "page": 1, "corners": [180, 270, 20, 30, 20, 270, 180, 30] }));
+    // keep_page: false is the quad-sized page this test was written for.
+    let r = ok(&mut a, "page_enhance_camera", json!({ "doc": photo, "page": 1, "corners": [180, 270, 20, 30, 20, 270, 180, 30], "keep_page": false }));
     assert_eq!(r["undo"], "Enhance camera image");
     assert_eq!(r["pages"], 1);
     let images = ok(&mut a, "page_images", json!({ "doc": photo, "page": 1 }));

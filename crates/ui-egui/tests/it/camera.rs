@@ -66,9 +66,9 @@ fn dragging_a_corner_then_enhance_page_straightens_the_page() {
 
     h.get_by_label("Enhance page").click();
     h.run_steps(4);
-    // The longer of each pair of opposite sides: 270 × 360 pt.
+    // The page keeps its size; the straightened picture is centred in it.
     let (w, hh) = size(&h, 0);
-    assert!((w - 270.0).abs() < 2.0 && (hh - 360.0).abs() < 2.0, "{w}×{hh}");
+    assert!((w - 300.0).abs() < 2.0 && (hh - 400.0).abs() < 2.0, "{w}×{hh}");
     assert_eq!(size(&h, 1), (300.0, 400.0), "only the page with the corners changes");
     assert_eq!(undo_label(&h).as_deref(), Some("Enhance camera image"));
     // The tool stays open for the enhanced page: turn it, then Done.
@@ -78,7 +78,7 @@ fn dragging_a_corner_then_enhance_page_straightens_the_page() {
     h.get_by_label("Rotate clockwise").click();
     h.run_steps(4);
     let (w, hh) = size(&h, 0);
-    assert!((w - 360.0).abs() < 2.0 && (hh - 270.0).abs() < 2.0, "{w}×{hh}");
+    assert!((w - 400.0).abs() < 2.0 && (hh - 300.0).abs() < 2.0, "{w}×{hh}");
     assert_eq!(undo_label(&h).as_deref(), Some("Rotate page"));
     h.get_by_label("Done").click();
     h.run_steps(3);
