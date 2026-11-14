@@ -1,6 +1,6 @@
 #[cfg(not(target_arch = "wasm32"))]
 use super::MAX_FOLDER_FILES;
-use super::files::{AssessError, Assessed, CombineFile, Incoming, Secret, Snapshot, SortKey, UnlockPrompt, assess};
+use super::files::{AssessError, Assessed, CombineFile, Incoming, Secret, Snapshot, SortKey, UnlockPrompt, assess, unreadable_notice};
 #[cfg(not(target_arch = "wasm32"))]
 use super::parts::combinable_in;
 use super::parts::{Part, items_of, moved_order, natural, parts_of, range_of, takes, title_of};
@@ -424,8 +424,50 @@ impl PdfCraftApp {
             prompt.activate = false;
         }
         self.open_combine_tab();
+        if paths.is_empty() {
+            return;
+        }
+        // The files are read away from the frame thread (a large file or a stalled share must not
+        // freeze the window) and join the list when the read is done: `poll_combine_reads`.
         let paths: Vec<std::path::PathBuf> = paths.iter().map(std::path::PathBuf::from).collect();
-        self.use_paths(crate::files::FilePurpose::Combine, &paths);
+        match crate::open_worker::read_files(paths, self.ctx.clone()) {
+            Ok(receiver) => self.combine_reads.push_back(receiver),
+            Err(e) => self.notify_fmt("Couldn't read {name}: {e}", &[("name", "the files to combine"), ("e", &e)]),
+        }
+    }
+
+    /// Add the files a `--combine` request had read to the Combine files list, one undo step per
+    /// request and the requests in the order they arrived (one still being read holds the later
+    /// ones back). A file that can't be read is said and left out, all in one notice; the others
+    /// still join.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn poll_combine_reads(&mut self) {
+        while let Some(receiver) = self.combine_reads.front() {
+            let files = match receiver.try_recv() {
+                Ok(files) => files,
+                Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    self.combine_reads.pop_front();
+                    self.notify_fmt("Couldn't read {name}: {e}", &[("name", "the files to combine"), ("e", "the background reader stopped")]);
+                    continue;
+                }
+            };
+            self.combine_reads.pop_front();
+            let mut incoming = Vec::new();
+            let mut failed: Vec<(String, String)> = Vec::new();
+            for crate::open_worker::FileRead { name, read } in files {
+                match read {
+                    Ok((bytes, modified)) => incoming.push(Incoming { name, bytes: Arc::new(bytes), modified, note: None, open_doc: None }),
+                    Err(e) => failed.push((name, e)),
+                }
+            }
+            if let Some((names, errors)) = unreadable_notice(&failed) {
+                self.notify_fmt("Couldn't read {name}: {e}", &[("name", &names), ("e", &errors)]);
+            }
+            if !incoming.is_empty() {
+                self.stage_combine_with(incoming);
+            }
+        }
     }
 
     /// Add the PDFs, images and text files in `dir` to the Combine files list, as one undo step.

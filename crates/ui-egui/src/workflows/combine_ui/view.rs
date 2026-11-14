@@ -602,6 +602,18 @@ fn empty_state(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, files_hover
                 app.combine_add_folder(false);
             }
         });
+        // macOS lists the Finder Quick Action the app installs only after it is ticked once,
+        // and the app can't tick it (finder_combine::install), so say where it is.
+        if cfg!(target_os = "macos") {
+            ui.add_space(14.0);
+            ui.label(
+                egui::RichText::new(tl!(
+                    "From Finder: select files, then right-click > Quick Actions > Combine files in PdfCraft. Not listed? Turn it on once under Quick Actions > Customize."
+                ))
+                .color(t.text_faint)
+                .font(theme::regular(12.0)),
+            );
+        }
     });
 }
 

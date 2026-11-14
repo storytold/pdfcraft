@@ -496,6 +496,10 @@ pub struct PdfCraftApp {
     open_worker: Option<open_worker::OpenWorker>,
     #[cfg(not(target_arch = "wasm32"))]
     pending_opens: Vec<PendingOpen>,
+    /// Files named by `--combine` launches, being read away from the frame thread. A request is
+    /// added to the Combine files list only when every request before it has been.
+    #[cfg(not(target_arch = "wasm32"))]
+    combine_reads: std::collections::VecDeque<std::sync::mpsc::Receiver<Vec<open_worker::FileRead>>>,
     /// Files waiting for room in the worker's bounded queue, in the order they were named.
     #[cfg(not(target_arch = "wasm32"))]
     deferred_opens: std::collections::VecDeque<DeferredOpen>,

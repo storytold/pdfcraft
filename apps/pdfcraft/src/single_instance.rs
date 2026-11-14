@@ -16,7 +16,12 @@
 //! one line each way, a JSON request naming absolute paths and `ok`, and the running app opens the
 //! paths exactly as File ▸ Open would. A `--combine` launch (File Explorer's "Combine files in
 //! PdfCraft", #585, one launch per selected file) hands them over the same way with
-//! `"combine": true`, and the running app adds them to its Combine files tab instead.
+//! `"combine": true`, and the running app adds them to its Combine files tab instead. The list
+//! follows the order the launches reach the first instance. Only a single `--combine a b c` fixes
+//! that order (the order given); with File Explorer's `MultiSelectModel=Document` each selected file
+//! starts its own process and the order in which they arrive is not defined, so a selection from
+//! Explorer is not guaranteed to be listed in the order it was selected (the list can be reordered
+//! on the tab).
 //!
 //! Every failure falls back to the old behaviour: a launch that can't hand its files over within
 //! a few seconds opens its own window. `--new-window`, any other option, or no files at all also
@@ -367,7 +372,7 @@ fn serve(listener: UnixListener) -> Claim {
     }
 }
 
-/// Read one launch's request, queue its files and confirm.
+/// Read one launch's request, confirm it and queue its files.
 #[cfg(any(windows, all(unix, not(target_os = "macos"))))]
 fn receive(stream: &UnixStream, server: &Server) -> std::io::Result<()> {
     use std::io::{BufRead, Read, Write};
@@ -380,9 +385,12 @@ fn receive(stream: &UnixStream, server: &Server) -> std::io::Result<()> {
         return Ok(());
     }
     let (paths, combine) = parse_request(&line).ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "not an open request"))?;
-    server.deliver(paths, combine);
+    // Confirm first: a launch whose confirmation never arrives opens the files itself, so the files
+    // are queued here only once the confirmation is on its way, never both.
     let mut writer = stream;
-    writer.write_all(b"ok\n")
+    writer.write_all(b"ok\n")?;
+    server.deliver(paths, combine);
+    Ok(())
 }
 
 #[cfg(test)]

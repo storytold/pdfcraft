@@ -4,6 +4,8 @@
 //! `--two-paged` opens each command-line PDF in noncontinuous two-page view, without changing defaults.
 //! An explicit `--layout` takes precedence for the active document, regardless of argument order.
 //! `--create-images [images…]` stages the images in one PDF and asks for the page DPI.
+//! On macOS the file manager's "Combine files" entry is a Finder Quick Action that opens a list of
+//! the selected files with the app, running or not (`finder_combine`).
 //!
 //! View options (applied after the files open; also the seed of the UI control channel):
 //! `--page N  --zoom 150  --layout single|continuous|two-up|two-page  --continuous on|off  --panel comments|bookmarks|pages|fields|layers|attachments|none
@@ -13,7 +15,9 @@
 //!  --page-gaps on|off  --default-page-gaps on|off  --recent-files 0..50
 //!  --combine-view grid|list  --combine-zoom 60..200`
 //! `--combine files…` adds the files to the Combine files tab (File Explorer's "Combine files in
-//! PdfCraft", #585), of the PdfCraft already running when there is one.
+//! PdfCraft", #585; its files arrive one process per file, so their order is not guaranteed there,
+//! unlike `--combine a b c`, which lists them as given), of the PdfCraft already running when there is one (Windows and Linux; macOS has
+//! no single-instance socket, so there a second `--combine` opens a window of its own).
 //!
 //! `--new-window` opens a window of its own. Without it, on Windows, a launch that only names files
 //! hands them to the PdfCraft already running, where they open as tabs (`single_instance`).
@@ -38,6 +42,7 @@ use pdfcraft_ui_egui::PdfCraftApp;
 mod apple_events;
 mod compositor_gpu;
 mod decorations;
+mod finder_combine;
 mod logging;
 #[cfg(target_os = "windows")]
 mod motion;
@@ -71,7 +76,7 @@ Options:
   --two-paged                 open command-line PDFs in noncontinuous two-page view
   --new-window                open a window of its own instead of passing the files to a running PdfCraft
   --create-images [images…]   put the images in one PDF and ask for the page DPI
-  --combine files…            add the files to the Combine files tab, of a running PdfCraft if there is one
+  --combine files…            add the files to the Combine files tab, of a running PdfCraft if there is one (not on macOS)
   --control <file>            enable the UI control channel (pdfcraft-cli ui --control <file> …)
   --page N, --zoom 150, --layout continuous, --theme dark, …
                               view settings applied once the files are open
@@ -491,6 +496,8 @@ fn app_creator<'a>(
         #[cfg(target_os = "macos")]
         {
             app.os_events = Some(apple_events.connect(&cc.egui_ctx));
+            // Finder's "Combine files in PdfCraft" Quick Action (#585), written or refreshed for this version.
+            finder_combine::install(APP_ID);
             // The native menu bar. Its Quit (⌘Q) closes the window rather than ending the process as
             // winit's does (#1136), so `guard_quit` asks about unsaved changes, as for the close
             // button.

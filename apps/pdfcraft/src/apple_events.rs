@@ -40,6 +40,8 @@ impl AppleEvents {
                     Event::Open(paths) => OsEvent::Open(paths.into_iter().map(|p| p.to_string_lossy().into_owned()).collect()),
                     Event::Quit => OsEvent::Quit,
                 })
+                // A Finder Quick Action's list of files becomes a Combine event (finder_combine).
+                .flat_map(crate::finder_combine::from_open)
                 .collect()
         })
     }

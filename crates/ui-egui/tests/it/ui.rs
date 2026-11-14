@@ -1280,6 +1280,42 @@ fn a_pdf_dropped_on_a_document_opens_while_the_combine_tab_waits_behind_it() {
 }
 
 #[test]
+fn pdfs_and_pictures_from_the_file_managers_combine_entry_fill_one_list_in_order() {
+    // #585: "Combine files" on PDFs and pictures selected together opens Combine files with them
+    // listed in the order they arrive (one `--combine a b c` keeps the order given; Explorer's
+    // one-process-per-file selection reaches the first instance in no defined order); pictures become PDFs as they join (#569). Nothing is opened
+    // or combined until Combine is pressed.
+    use pdfcraft_ui_egui::OsEvent;
+    let dir = std::env::temp_dir().join(format!("pdfcraft-os-combine-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = |name: &str| dir.join(name).to_string_lossy().into_owned();
+    let mut png = std::io::Cursor::new(Vec::new());
+    image::RgbImage::from_pixel(40, 20, image::Rgb([90, 120, 200])).write_to(&mut png, image::ImageFormat::Png).unwrap();
+    for (name, bytes) in [("b.pdf", FIXTURE.to_vec()), ("photo.png", png.into_inner()), ("a.pdf", FIXTURE.to_vec()), ("c.pdf", FIXTURE.to_vec())] {
+        std::fs::write(dir.join(name), bytes).unwrap();
+    }
+    let queue =
+        std::rc::Rc::new(std::cell::RefCell::new(vec![OsEvent::Combine(vec![path("b.pdf"), path("missing.pdf"), path("photo.png"), path("a.pdf")])]));
+    let q = queue.clone();
+    let mut h = harness(move |app| app.os_events = Some(Box::new(move || q.borrow_mut().drain(..).collect())));
+    let names = |h: &Harness<'_, PdfCraftApp>| h.state().combine_draft.iter().map(|f| f.name.clone()).collect::<Vec<_>>();
+    assert!(h.state().combine_showing(), "the Combine files tab shows");
+    // The files are read on a worker thread, after however many frames that takes.
+    support::wait_until(&mut h, "the files to join the Combine list", |app| app.combine_draft.len() == 3);
+    assert_eq!(names(&h), ["b.pdf", "photo.png", "a.pdf"], "in the order the request lists them; the file that can't be read is left out");
+    assert!(h.state().combine_draft.iter().all(|f| f.bytes.starts_with(b"%PDF-") && f.problem.is_none()), "all PDFs, none with a problem");
+    h.get_by_label_contains("missing.pdf");
+    assert!(h.state().views.is_empty(), "nothing is opened or combined");
+    // A later launch's files join the same list, after the others.
+    queue.borrow_mut().push(OsEvent::Combine(vec![path("c.pdf")]));
+    support::wait_until(&mut h, "a later launch's file", |app| app.combine_draft.len() == 4);
+    assert_eq!(names(&h), ["b.pdf", "photo.png", "a.pdf", "c.pdf"]);
+    assert!(h.state().views.is_empty());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn files_and_quit_from_the_operating_system() {
     // #73: macOS hands Finder double-clicks, Open With and Dock drops over as Apple events.
     use pdfcraft_ui_egui::OsEvent;
@@ -1332,11 +1368,50 @@ fn files_to_combine_from_the_operating_system() {
     assert!(h.state().combine_showing(), "the Combine files tab shows");
     assert!(h.state().views.is_empty(), "nothing opens as a document");
     queue.borrow_mut().push(OsEvent::Combine(vec![paths[1].clone()]));
-    h.run_steps(3);
+    support::wait_until(&mut h, "both launches' files", |app| app.combine_draft.len() == 2);
     let _ = std::fs::remove_dir_all(&dir);
     let names: Vec<_> = h.state().combine_draft.iter().map(|f| f.name.clone()).collect();
     assert_eq!(names, ["one.pdf", "two.pdf"], "each launch's file joins the list, in order");
     assert!(h.state().combine_showing() && h.state().views.is_empty());
+}
+
+/// #2741 review: Combine's file reads run away from the frame thread. A file that blocks (a named
+/// pipe stands in for a stalled network share) must not stop the frames, and a request waits for
+/// the one before it, so the list keeps the order the requests arrived in.
+#[cfg(unix)]
+#[test]
+fn a_file_that_blocks_does_not_freeze_the_window_or_reorder_combine() {
+    use pdfcraft_ui_egui::OsEvent;
+    let dir = std::env::temp_dir().join(format!("pdfcraft-os-combine-blocked-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let pipe = dir.join("slow.pdf");
+    assert!(std::process::Command::new("mkfifo").arg(&pipe).status().unwrap().success(), "mkfifo");
+    let quick = dir.join("quick.pdf");
+    std::fs::write(&quick, FIXTURE).unwrap();
+    let queue = std::rc::Rc::new(std::cell::RefCell::new(vec![
+        OsEvent::Combine(vec![pipe.to_string_lossy().into_owned()]),
+        OsEvent::Combine(vec![quick.to_string_lossy().into_owned()]),
+    ]));
+    let q = queue.clone();
+    let mut h = harness(move |app| app.os_events = Some(Box::new(move || q.borrow_mut().drain(..).collect())));
+    // The pipe has no writer yet, so its read cannot finish; frames still run and nothing joins.
+    for _ in 0..30 {
+        h.run_steps(1);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(h.state().combine_showing(), "the Combine files tab shows while the file is still being read");
+    assert!(h.state().combine_draft.is_empty(), "the later request waits for the one before it");
+    // Let the read finish: both join, in the order the requests arrived.
+    let writer = std::thread::spawn({
+        let pipe = pipe.clone();
+        move || std::fs::write(pipe, FIXTURE).unwrap()
+    });
+    support::wait_until(&mut h, "both files to join", |app| app.combine_draft.len() == 2);
+    writer.join().unwrap();
+    let names: Vec<_> = h.state().combine_draft.iter().map(|f| f.name.clone()).collect();
+    assert_eq!(names, ["slow.pdf", "quick.pdf"]);
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// #2503 review: a PDF still opening when Combine arrives opens behind the Combine files tab
