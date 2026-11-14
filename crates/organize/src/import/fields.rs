@@ -485,7 +485,9 @@ fn da_fonts(dst: &Document, fields: &[ObjRef]) -> Vec<String> {
 
 /// Every field/widget dictionary of the trees rooted at `fields`, cycle- and depth-safe.
 fn collect_field_dicts(dst: &Document, fields: &[ObjRef], depth: u8, seen: &mut HashSet<ObjRef>, out: &mut Vec<(ObjRef, Dict)>) {
-    if depth > 32 {
+    // The field reader walks trees to depth 64 (forms::read); match it so every copied field is
+    // scanned. Cycles are cut by the seen set.
+    if depth > 64 {
         return;
     }
     for r in fields {
@@ -500,13 +502,15 @@ fn collect_field_dicts(dst: &Document, fields: &[ObjRef], depth: u8, seen: &mut 
     }
 }
 
-/// The font names a `/DA` string selects (`/F1 18 Tf`, `/F1 Tf`), in order.
+/// The font names a `/DA` string selects (`/F1 18 Tf`, `/F1 Tf`), in order. PDF `#xx` escapes in
+/// the names are decoded, matching the resource keys the parser stores.
 fn da_font_names(bytes: &[u8]) -> Vec<String> {
     let tokens = da_tokens(bytes);
     let mut out = Vec::new();
     for i in 0..tokens.len() {
         if bytes[tokens[i].0] == b'/' && selects_font(&tokens[i + 1..], bytes) {
-            out.push(String::from_utf8_lossy(&bytes[tokens[i].0 + 1..tokens[i].1]).into_owned());
+            let name = decode_pdf_name(&bytes[tokens[i].0 + 1..tokens[i].1]);
+            out.push(String::from_utf8_lossy(&name).into_owned());
         }
     }
     out
@@ -558,17 +562,18 @@ fn rewrite_da(dst: &mut Document, fields: &[ObjRef], map: &HashMap<String, Strin
 }
 
 /// The `/DA` bytes with every colliding font name replaced, or `None` when nothing changes.
-/// Replacements run back to front so earlier spans stay valid.
+/// Selected names are matched after decoding PDF `#xx` escapes; a replacement is written back
+/// escaped. Replacements run back to front so earlier spans stay valid.
 fn rewrite_da_bytes(bytes: &[u8], map: &HashMap<String, String>) -> Option<Vec<u8>> {
     let tokens = da_tokens(bytes);
     let mut edits = Vec::new();
     for i in 0..tokens.len() {
         if bytes[tokens[i].0] == b'/' && selects_font(&tokens[i + 1..], bytes) {
-            let name = String::from_utf8_lossy(&bytes[tokens[i].0 + 1..tokens[i].1]);
-            if let Some(new) = map.get(name.as_ref())
+            let name = String::from_utf8_lossy(&decode_pdf_name(&bytes[tokens[i].0 + 1..tokens[i].1])).into_owned();
+            if let Some(new) = map.get(&name)
                 && new.as_bytes() != name.as_bytes()
             {
-                edits.push((tokens[i].0 + 1, tokens[i].1, new.clone().into_bytes()));
+                edits.push((tokens[i].0 + 1, tokens[i].1, encode_pdf_name(new)));
             }
         }
     }
@@ -580,6 +585,43 @@ fn rewrite_da_bytes(bytes: &[u8], map: &HashMap<String, String>) -> Option<Vec<u
         out.splice(start..end, name);
     }
     Some(out)
+}
+
+/// A PDF name's bytes with its `#xx` escape sequences decoded; malformed escapes pass through.
+fn decode_pdf_name(bytes: &[u8]) -> Vec<u8> {
+    if !bytes.contains(&b'#') {
+        return bytes.to_vec();
+    }
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'#' && i + 2 < bytes.len() {
+            let hi = (bytes[i + 1] as char).to_digit(16);
+            let lo = (bytes[i + 2] as char).to_digit(16);
+            if let (Some(hi), Some(lo)) = (hi, lo) {
+                out.push((hi << 4 | lo) as u8);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    out
+}
+
+/// A name's bytes with every character a PDF name cannot carry written as a `#xx` escape.
+fn encode_pdf_name(name: &str) -> Vec<u8> {
+    const DELIMITERS: &[u8] = b"()<>[]{}/%";
+    let mut out = Vec::with_capacity(name.len());
+    for &b in name.as_bytes() {
+        if b.is_ascii_whitespace() || b == b'#' || DELIMITERS.contains(&b) || !b.is_ascii() {
+            out.extend(format!("#{b:02X}").into_bytes());
+        } else {
+            out.push(b);
+        }
+    }
+    out
 }
 
 #[cfg(test)]

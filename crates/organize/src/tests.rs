@@ -3716,10 +3716,20 @@ fn dr_base_font_for_da(doc: &Document, field: &str) -> Option<Vec<u8>> {
     let dr = form.get(b"DR").map(|d| doc.resolve(d)).and_then(|d| d.as_dict().cloned())?;
     let fonts = dr.get(b"Font").map(|d| doc.resolve(d)).and_then(|d| d.as_dict().cloned())?;
     let fields = form.get(b"Fields").map(|f| doc.resolve(f)).and_then(|f| f.as_array().cloned()).unwrap_or_default();
-    let field = fields.iter().filter_map(|f| doc.resolve(f).as_dict().cloned()).find(|d| {
-        let name = d.get(b"T").map(|t| doc.resolve(t).clone());
-        name.and_then(|n| n.as_string().cloned()).is_some_and(|s| s.text_eq(field))
-    })?;
+    let mut stack: Vec<Object> = fields.into_iter().collect();
+    let mut found = None;
+    while let Some(o) = stack.pop() {
+        let Some(d) = doc.resolve(&o).as_dict().cloned() else { continue };
+        let name = d.get(b"T").map(|t| doc.resolve(t).clone()).and_then(|n| n.as_string().cloned());
+        if name.is_some_and(|s| s.text_eq(field)) {
+            found = Some(d.clone());
+            break;
+        }
+        if let Some(kids) = d.get(b"Kids").map(|k| doc.resolve(k)).and_then(|k| k.as_array().cloned()) {
+            stack.extend(kids);
+        }
+    }
+    let field = found?;
     let da_obj = field.get(b"DA").map(|d| doc.resolve(d).clone());
     let da = da_obj.and_then(|o| o.as_string().cloned()).map(|s| s.to_text())?;
     let alias = da.split_whitespace().next()?;
@@ -3831,6 +3841,45 @@ fn an_indirect_default_appearance_string_is_resolved() {
     let mut dst = doc_with_da_field("destination", "Helvetica", "F1");
     // Objects: 1 catalog, 2 pages, 3 page, 4 font, 5 field, 6 the /DA string.
     let src = doc_form(&[("F1", "Courier")], None, &[("imported", Some("6 0 R"))], &["(/F1 18 Tf 0 g)"]);
+    import_pages_with(&mut dst, &src, &[0], 1, FieldConflicts::Rename).unwrap();
+    assert_eq!(dr_base_font_for_da(&dst, "imported").as_deref(), Some(b"Courier".as_slice()));
+}
+
+/// A `/DA` alias written with PDF `#xx` escapes selects its decoded name — `/F#31` is `F1` — so
+/// the collision is seen, the font is imported and the rewritten appearance resolves to it.
+#[test]
+fn an_escaped_default_appearance_alias_is_decoded() {
+    let mut dst = doc_with_da_field("destination", "Helvetica", "F1");
+    let src = doc_form(&[("F1", "Courier")], None, &[("imported", Some("(/F#31 18 Tf 0 g)"))], &[]);
+    import_pages_with(&mut dst, &src, &[0], 1, FieldConflicts::Rename).unwrap();
+    assert_eq!(dr_base_font_for_da(&dst, "imported").as_deref(), Some(b"Courier".as_slice()));
+}
+
+/// A field nested deeper than the old 32-level scan (but within the field reader's 64) still
+/// gets its `/DA` font imported and its appearance rewritten.
+#[test]
+fn a_deeply_nested_field_keeps_its_font_too() {
+    let mut dst = doc_with_da_field("destination", "Helvetica", "F1");
+    // Objects: 1 catalog, 2 pages, 3 page, 4 the Courier font, then a root field whose Kids
+    // chain runs 40 levels down to a leaf with a `/DA`.
+    let first_field = 5;
+    let leaf = first_field + 40;
+    let mut b = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R] /DR << /Font << /F1 4 0 R >> >> >> >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >>".to_string(),
+        format!("<< /Type /Page /Parent 2 0 R /Annots [{leaf} 0 R] >>"),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>".to_string(),
+    ];
+    for i in 0..=40 {
+        let n = first_field + i;
+        if i < 40 {
+            b.push(format!("<< /Type /Annot /Subtype /Widget /FT /Tx /T (level-{i}) /Kids [{} 0 R] >>", n + 1));
+        } else {
+            b.push("<< /Type /Annot /Subtype /Widget /FT /Tx /T (imported) /V (x) /DA (/F1 18 Tf 0 g) /Rect [60 60 200 80] /P 3 0 R >>".to_string());
+        }
+    }
+    b.push("<< /Title (deep) >>".to_string());
+    let src = open(build(&b, &format!("/Root 1 0 R /Info {} 0 R", b.len())));
     import_pages_with(&mut dst, &src, &[0], 1, FieldConflicts::Rename).unwrap();
     assert_eq!(dr_base_font_for_da(&dst, "imported").as_deref(), Some(b"Courier".as_slice()));
 }
