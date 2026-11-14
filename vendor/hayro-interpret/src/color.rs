@@ -437,6 +437,12 @@ impl ColorSpace {
         matches!(self.0.as_ref(), ColorSpaceType::DeviceGray)
     }
 
+    /// PdfCraft patch (107): whether this is `/DeviceRGB` itself, whose components are the
+    /// RGB drawn.
+    pub(crate) fn is_device_rgb(&self) -> bool {
+        matches!(self.0.as_ref(), ColorSpaceType::DeviceRgb)
+    }
+
     // PdfCraft patch (63).
     /// Whether this is `/DeviceCMYK` itself, not an ICC-based or default colour space that
     /// stands in for it.
