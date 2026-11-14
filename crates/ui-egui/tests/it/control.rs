@@ -1558,11 +1558,18 @@ fn control_default_workspace_and_session_override() {
     ok(&mut h, &c, "ui.set", json!({"key": "default-mode", "value": "edit"}));
     assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["default_mode"], "edit");
     assert!(call(&mut h, &c, "ui.set", json!({"key": "default-mode", "value": "unknown"})).is_err());
+    let current = ok(&mut h, &c, "ui.state", json!({}))["mode"].clone();
+    let error = call(&mut h, &c, "ui.set", json!({"key": "mode", "value": "edti"})).expect_err("a misspelled mode must be refused");
+    assert!(error.contains("mode must be all, read, edit, convert or sign"), "{error}");
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["mode"], current, "a refused mode keeps the current workspace");
     h.state_mut().open_bytes("next.pdf", None, fixture(1)).unwrap();
-    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["mode"], "Edit");
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["mode"], "Edit", "a refused mode must not create a session override");
     ok(&mut h, &c, "ui.set", json!({"key": "mode", "value": "read"}));
+    let error = call(&mut h, &c, "ui.set", json!({"key": "mode", "value": "edti"})).expect_err("a misspelled mode must be refused");
+    assert!(error.contains("mode must be all, read, edit, convert or sign"), "{error}");
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["mode"], "Read", "a refused mode keeps the current workspace");
     h.state_mut().open_bytes("another.pdf", None, fixture(1)).unwrap();
-    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["mode"], "Read");
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["mode"], "Read", "a refused mode keeps the earlier session override");
 }
 
 #[test]
