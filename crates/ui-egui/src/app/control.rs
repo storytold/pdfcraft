@@ -77,7 +77,7 @@ impl PdfCraftApp {
                 }
             }
             ("mode", _) => {
-                let mode = Mode::parse(value).unwrap_or(Mode::AllTools);
+                let mode = Mode::parse(value).ok_or("mode must be all, read, edit, convert or sign")?;
                 self.mode_override = Some(mode);
                 self.mode = mode;
                 // As switch_mode: another workspace puts the expanded All tools view away.
