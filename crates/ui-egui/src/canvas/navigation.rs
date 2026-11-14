@@ -89,15 +89,66 @@ impl DocView {
         Some(p.xyz_for_view(keep_x.then_some(x), keep_y.then_some(y)))
     }
 
+    /// Where the reader is, as a view history entry: the current page and how far down it the
+    /// window's top edge sits, as the fraction of the page's height `goto` takes (#6848). It is
+    /// negative when the window's top is above the page, in the gap or the page before (the
+    /// current page is the one showing most, not the one at the top), and kept within a page's
+    /// height either way. The page top (0) when that can't be read: before the first frame, in
+    /// the page grid, or when the page isn't on screen. A fraction is relative to the page's
+    /// height, so a place left at one zoom comes back at the same spot on the page at another.
+    fn history_place(&self) -> (usize, f32) {
+        let page = self.current;
+        // A jump not drawn yet: the screen still shows the place being left, and the jump's own
+        // position is where the reader is.
+        if let Some((p, frac)) = self.goto
+            && p == page
+        {
+            // An anchored jump not drawn yet (a link's destination) keeps only its page top
+            // in `goto`; the point it will put at the window's top-left carries the fraction,
+            // and that is where the reader is.
+            let frac = match self.goto_point {
+                Some((pp, _, Some(fy), _)) if pp == page => fy,
+                _ => frac,
+            };
+            return (page, frac);
+        }
+        // The page grid doesn't refresh where the pages are on screen (as for bookmarks).
+        if self.organize {
+            return (page, 0.0);
+        }
+        let frac = self
+            .screen_xforms
+            .iter()
+            .find(|(p, _)| *p == page)
+            .map(|(_, xf)| {
+                // `goto`'s scroll turned around: at 0 the page's top shows one page gap below
+                // the window's top edge.
+                let down = self.viewport_screen.top() + self.page_gap() - xf.rect.top();
+                // Within a pixel either way is rounding: the page shows from its top.
+                if down.abs() <= sliver(self.screen_ppp) { 0.0 } else { down / xf.rect.height() }
+            })
+            .filter(|f| f.is_finite())
+            .unwrap_or(0.0);
+        (page, frac.clamp(-1.0, 1.0))
+    }
+
+    /// Go to `page` (clamped to the document), shown from its top. Leaving another page records
+    /// the place left in the view history ([`history_place`](Self::history_place)) and drops
+    /// Next view's places. Every jump that records history comes through here.
     pub fn go_to_page(&mut self, page: usize) {
         let page = page.min(self.page_count.saturating_sub(1));
         self.end_find_following();
         if page != self.current {
-            // The view history (Previous view / Next view).
-            if self.back.last() != Some(&self.current) {
-                self.back.push(self.current);
-                if self.back.len() > 200 {
-                    self.back.remove(0);
+            // The view history (Previous view / Next view), with the place on the page left.
+            let here = self.history_place();
+            match self.back.last_mut() {
+                // The page last left again: coming back goes where the reader is on it now.
+                Some(last) if last.0 == self.current => *last = here,
+                _ => {
+                    self.back.push(here);
+                    if self.back.len() > 200 {
+                        self.back.remove(0);
+                    }
                 }
             }
             self.forward.clear();
@@ -144,6 +195,22 @@ impl DocView {
     /// top-left on the new page, as Acrobat does. A point past the end of the document scrolls
     /// as far as it can.
     pub fn go_to_dest(&mut self, page: usize, dest: DestView, info: &DocInfo) {
+        // A destination on the page already showing still moves the reader, so its origin
+        // belongs in the view history like a page change's does: `go_to_page` records nothing
+        // for a same-page jump, and Previous view would skip the place the link was clicked
+        // from (or do nothing). Distinct places on the page are kept as distinct entries; an
+        // exact repeat of the last entry is not duplicated. (Find's same-page steps go through
+        // `go_to_page` directly and keep their own no-duplicate rule.)
+        if page.min(self.page_count.saturating_sub(1)) == self.current {
+            let here = self.history_place();
+            if self.back.last() != Some(&here) {
+                self.back.push(here);
+                if self.back.len() > 200 {
+                    self.back.remove(0);
+                }
+            }
+            self.forward.clear();
+        }
         // Read before the jump: it is where the reader is now.
         let kept = match dest {
             DestView::Xyz { left, top, .. } if left.is_none() || top.is_none() => self.place_at_corner(info),
@@ -264,18 +331,28 @@ impl DocView {
         }
     }
 
-    /// View ▸ Page navigation ▸ Previous view (`false`) / Next view (`true`).
+    /// View ▸ Page navigation ▸ Previous view (`false`) / Next view (`true`): back to the place
+    /// recorded, the page scrolled as it was (#6848), with the place left recorded the other way
+    /// so the two round-trip.
     pub fn view_history(&mut self, forward: bool) -> bool {
         let has_target = if forward { !self.forward.is_empty() } else { !self.back.is_empty() };
         if !has_target {
             return false;
         }
         self.end_find_following();
+        let here = self.history_place();
         let (from, to) = if forward { (&mut self.forward, &mut self.back) } else { (&mut self.back, &mut self.forward) };
-        let Some(page) = from.pop() else { return false };
-        to.push(self.current);
-        let page = page.min(self.page_count.saturating_sub(1));
-        self.goto = Some((page, 0.0));
+        let Some((page, frac)) = from.pop() else { return false };
+        to.push(here);
+        let last = self.page_count.saturating_sub(1);
+        // A page since removed lands on the last page's top: the place was on another page. The
+        // stacks are public, so never a NaN scroll either.
+        let frac = if page <= last && frac.is_finite() { frac.clamp(-1.0, 1.0) } else { 0.0 };
+        let page = page.min(last);
+        // A destination's point not drawn yet belongs to the jump this replaces; drawn after
+        // `goto`, it would scroll away from the place restored.
+        self.goto_point = None;
+        self.goto = Some((page, frac));
         self.current = page;
         self.reset_coarse_state();
         // A find step's match belongs to the place left, as for any other jump.

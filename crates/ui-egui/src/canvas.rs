@@ -514,10 +514,13 @@ pub struct DocView {
     pub snapshot: Option<Snapshot>,
     /// Two-page view: show the first page alone, as a cover (View ▸ Page display).
     pub cover: bool,
-    /// Previous view / Next view: pages visited before (and after, once going back).
-    pub back: Vec<usize>,
-    pub forward: Vec<usize>,
-    /// Pending navigation: page and fraction down the page to align with the viewport top.
+    /// Previous view / Next view: places visited before (and after, once going back), each the
+    /// page and how far down it the window's top was, in `goto`'s form, so going back lands where
+    /// the reader left rather than at the page's top (#6848).
+    pub back: Vec<(usize, f32)>,
+    pub forward: Vec<(usize, f32)>,
+    /// Pending navigation: page and fraction down the page to align with the viewport top
+    /// (negative from the view history: that far above the page's top).
     pub goto: Option<(usize, f32)>,
     /// With `goto`: → / ← turned the page at an edge, so a page or spread wider than the window
     /// starts at the edge the reader comes from (`false`: its left, after →; `true`: its right,
