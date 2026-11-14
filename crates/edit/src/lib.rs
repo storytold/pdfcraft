@@ -49,9 +49,13 @@ pub mod objects;
 pub use objects::{
     CopiedObjects, EditableObject, MAX_MOVE_OBJECTS, ObjectKind, ObjectTarget, copy_objects, editable_objects, move_objects, paste_objects,
 };
+mod restack;
+pub use restack::{Restack, restack_object, restack_objects};
 
 mod flatten;
 pub use flatten::{flatten, flatten_fill_sign};
+pub mod graphics;
+pub use graphics::{MAX_PAGE_GRAPHICS, PageGraphic, delete_graphic, page_graphics, resize_graphic};
 pub mod images;
 mod ungroup;
 pub use images::{ArrangeOrder, ImageChange, PageImage, change_image, page_images, reading_images, rect_to_rect, turn_about_centre, turn_by_degrees};

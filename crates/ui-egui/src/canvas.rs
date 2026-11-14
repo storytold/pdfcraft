@@ -680,6 +680,9 @@ pub struct DocView {
     pub(crate) move_background: crate::content_ui::MoveBackground,
     /// Edit text & images: the images per page (by document generation), and the selected one.
     pub(crate) edit_images: HashMap<usize, (u64, Vec<pdfcraft_engine::PageImage>)>,
+    /// Edit text & images: the inline vector graphics per page (by document generation), which
+    /// have no single-object tool of their own and are selected with the objects.
+    pub(crate) edit_graphics: HashMap<usize, (u64, Vec<pdfcraft_engine::PageGraphic>)>,
     pub(crate) objects: crate::object_ui::ObjectSelection,
     pub image_selection: Option<crate::edit_text_ui::ImageSelection>,
     /// Select tool: the picture clicked, to copy in its original format.
@@ -1120,6 +1123,7 @@ impl DocView {
             text_background: Default::default(),
             move_background: Default::default(),
             edit_images: HashMap::new(),
+            edit_graphics: HashMap::new(),
             objects: Default::default(),
             image_selection: None,
             picked_image: None,
@@ -1713,6 +1717,18 @@ fn cached_edit_images<'a>(view: &'a mut DocView, doc: &pdfcraft_engine::Document
     let entry = view.edit_images.entry(page).or_insert_with(|| (generation, doc.page_images(page)));
     if entry.0 != generation {
         *entry = (generation, doc.page_images(page));
+    }
+    &entry.1
+}
+
+/// The inline vector graphics `page` draws directly ([`pdfcraft_engine::Document::page_graphics`]),
+/// as of `doc`'s current generation: read once per edit, since both the page's hit test and its
+/// outlines need the same list every frame.
+pub(crate) fn cached_edit_graphics<'a>(view: &'a mut DocView, doc: &pdfcraft_engine::Document, page: usize) -> &'a [pdfcraft_engine::PageGraphic] {
+    let generation = doc.edit_generation();
+    let entry = view.edit_graphics.entry(page).or_insert_with(|| (generation, doc.page_graphics(page)));
+    if entry.0 != generation {
+        *entry = (generation, doc.page_graphics(page));
     }
     &entry.1
 }
@@ -3375,7 +3391,11 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     view.move_background.prepare(ui.ctx(), doc, &view.content, scale);
 
     scroll = refine_goto_point(scroll, view, &ScrollGeometry { rects: &rects, y_shift, content_w, content_h, avail, middle_gesture, hand });
-    let selection_wheel = view.selection_drag && navigation_enabled && unobstructed && !single_paging && ui.rect_contains_pointer(avail);
+    // A crop drag needs the wheel too: the page must scroll while the button stays down so a
+    // rectangle can span more than the visible part of a page.
+    let crop_wheel = tool == QuickTool::Crop && view.crop_drag.is_some();
+    let selection_wheel =
+        (view.selection_drag || crop_wheel) && navigation_enabled && unobstructed && !single_paging && ui.rect_contains_pointer(avail);
     let prepare_tab_order = (preparing && view.prepare.show_tab_numbers).then(|| crate::forms_ui::tab_order(&form, info));
     let env = PageEnv {
         added: &added,

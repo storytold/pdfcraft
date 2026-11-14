@@ -4372,6 +4372,7 @@ dependencies = [
  "pdfcraft-audit",
  "pdfcraft-automation",
  "pdfcraft-cos",
+ "pdfcraft-edit",
  "pdfcraft-engine",
  "pdfcraft-platform",
  "pdfcraft-preflight",

@@ -84,6 +84,8 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
     let pcx = comments::PageCx { page: i, xf: &xf, ptr, info, tool, prefs, allowed, hidden: comments_hidden, redact_mark, keys };
     let (lines, images) =
         if matches!(tool, QuickTool::AddText | QuickTool::EditText) && can_modify { edit_inventory(view, doc, i) } else { Default::default() };
+    // The inline vector graphics, selected as the objects are: they have no tool of their own.
+    let graphics = if tool == QuickTool::EditText && can_modify { crate::canvas::cached_edit_graphics(view, doc, i).to_vec() } else { Vec::new() };
     let field_tool = match tool {
         QuickTool::Field(f) => Some(f),
         _ => None,
@@ -112,6 +114,7 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
         doc_links,
         lines: &lines,
         images: &images,
+        graphics: &graphics,
         clip: ui.clip_rect(),
         text_links,
         tabs: &tabs,
@@ -502,6 +505,8 @@ struct PageHits<'a> {
     doc_links: &'a [pdfcraft_engine::LinkItem],
     lines: &'a [pdfcraft_engine::TextBlock],
     images: &'a [pdfcraft_engine::PageImage],
+    /// Edit text: the page's inline vector graphics, to select as the objects are.
+    graphics: &'a [pdfcraft_engine::PageGraphic],
     /// The pages' visible area (the picture's rotate knob stays inside it).
     clip: Rect,
     /// Addresses written as plain page text open like links (#4207).
@@ -590,6 +595,7 @@ impl PageHits<'_> {
             doc_links,
             lines,
             images,
+            graphics,
             clip,
             text_links,
             tabs,
@@ -622,7 +628,7 @@ impl PageHits<'_> {
         // With Add text, only the paragraphs and pictures not under added content.
         let editing =
             can_modify && (tool == QuickTool::EditText || tool == QuickTool::AddText && !crate::content_ui::hits_added(xf, info, page, added, p));
-        let (pictures, paragraphs, objects, grips) = if editing {
+        let (pictures, paragraphs, graphic, objects, grips) = if editing {
             let open = view.line_editor.as_ref().filter(|e| e.page == page);
             let frame = open
                 .filter(|e| !e.has_changes())
@@ -633,14 +639,18 @@ impl PageHits<'_> {
             // not on pictures, nor beside a paragraph, where a click starts a new box.
             let edit_text = tool == QuickTool::EditText;
             let on_paragraphs = edit_text || crate::edit_text_ui::over_paragraph(xf, info, page, lines, p);
+            // An inline vector graphic lies under the page's text, pictures and added content, so
+            // its hit is asked before them and gives way to what lies over it.
+            let graphic_hits = edit_text.then(|| crate::object_ui::graphic_hit(xf, info, page, graphics, p)).flatten();
             (
                 edit_text.then(|| crate::edit_text_ui::picture_hit(xf, page, info, images, view, p)).flatten(),
                 on_paragraphs.then(|| crate::edit_text_ui::hit(xf, info, page, lines, open.map(|e| e.block), p)).flatten(),
+                graphic_hits,
                 edit_text.then(|| crate::object_ui::hit(view, xf, info, page, frame, p)).flatten(),
                 edit_text.then(|| crate::edit_text_ui::picture_handle_hit(clip, xf, page, info, images, view, p)).flatten(),
             )
         } else {
-            (None, None, None, None)
+            (None, None, None, None, None)
         };
         // Added text and pictures, over the page's own paragraphs and under the objects selected
         // together.
@@ -651,7 +661,7 @@ impl PageHits<'_> {
         let text_link = (text_links && link.is_none()).then(|| text_link_hit(view, info, xf, page, p)).flatten();
         let on_link = link.is_some() || text_link.is_some();
         let comment = if context { comments::context_hit(pcx, p) } else { comments::hit(pcx, view, p, on_link) };
-        [link, text_link, comment, pictures, paragraphs, added, objects, grips, corner, fields].into_iter().flatten().collect()
+        [link, text_link, comment, graphic, pictures, paragraphs, added, objects, grips, corner, fields].into_iter().flatten().collect()
     }
 }
 
@@ -953,7 +963,8 @@ pub(super) fn page_overlays(ui: &mut egui::Ui, view: &mut DocView, frame: &mut P
         crate::content_ui::paint_page(painter, &xf, i, info, added, view, pointer);
     }
     if tool == QuickTool::EditText {
-        crate::object_ui::paint(painter, &xf, i, info, &view.objects);
+        let graphics = crate::canvas::cached_edit_graphics(view, doc, i).to_vec();
+        crate::object_ui::paint(painter, &xf, i, info, &view.objects, &graphics, pointer);
     }
     if tool == QuickTool::EnhanceCamera {
         crate::camera_ui::paint(painter, &xf, i, view);

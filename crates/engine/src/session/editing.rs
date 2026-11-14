@@ -593,7 +593,11 @@ impl Session {
                     | Edit::ReplaceImage { .. }
                     | Edit::PasteContent { .. }
                     | Edit::EditPageImage { .. }
-            ) || matches!(e, Edit::MoveObjects { objects, .. } | Edit::DeleteObjects { objects, .. } if objects.iter().any(|o| o.kind == ObjectKind::Added))
+            ) || matches!(
+                e,
+                Edit::MoveObjects { objects, .. } | Edit::DeleteObjects { objects, .. } | Edit::RestackObjects { objects, .. }
+                    if objects.iter().any(|o| o.kind == ObjectKind::Added)
+            ) || matches!(e, Edit::RestackObject { object, .. } if object.kind == ObjectKind::Added)
         });
         let touches_marks = edit.is_none_or(|e| {
             matches!(

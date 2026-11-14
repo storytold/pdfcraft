@@ -84,6 +84,12 @@ pub(crate) enum ObjectsPart {
     Selection,
     /// The frame drawn around the paragraph open for typing: a click selects the box, a drag moves it.
     Frame,
+    /// An inline vector graphic, by its index among the page's, which has no single-object tool
+    /// of its own: a click selects it, a drag moves it.
+    Graphic { index: usize },
+    /// A resize grip of the one selected graphic (0–3 corners from the left-top clockwise, 4–7
+    /// the top, right, bottom and left side midpoints): a drag resizes it.
+    GraphicGrip(usize),
     /// A press with Shift or ⌘ (Ctrl): it adds the object under it to the objects selected
     /// together, or takes it out of them, or on none starts an area selection that adds to them.
     Toggle(Option<ObjectTarget>),
