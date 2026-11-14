@@ -8,6 +8,9 @@ use super::{DataError, Dict, Document, Object};
 const MAX_NODES: u32 = 2_000_000;
 
 pub(crate) const MAX_DEPTH: usize = 64;
+/// Most bytes of full field names and values one XFDF import expands to: a long parent name is
+/// written into every descendant's full name, so a small file can name far more than it holds.
+pub(crate) const MAX_XFDF_TEXT: usize = 64 << 20;
 
 /// The deepest element nesting accepted before the text reaches the XML parser.
 ///
@@ -240,7 +243,13 @@ pub(crate) fn xml_name(name: &str) -> String {
     s
 }
 
-pub(crate) fn walk_xfdf(node: roxmltree::Node, prefix: &str, out: &mut Vec<(String, Vec<String>)>, depth: usize) -> Result<(), DataError> {
+pub(crate) fn walk_xfdf(
+    node: roxmltree::Node,
+    prefix: &str,
+    out: &mut Vec<(String, Vec<String>)>,
+    depth: usize,
+    bytes: &mut usize,
+) -> Result<(), DataError> {
     if depth > MAX_DEPTH {
         return Err(DataError::Malformed(format!("XFDF fields nest more than {MAX_DEPTH} deep")));
     }
@@ -258,9 +267,13 @@ pub(crate) fn walk_xfdf(node: roxmltree::Node, prefix: &str, out: &mut Vec<(Stri
         // leaf holding only `<value-richtext>` is not read yet, so it leaves the field alone.
         let names_kids_or_rich = f.children().any(|c| c.has_tag_name("field") || c.has_tag_name("value-richtext"));
         if !vals.is_empty() || !names_kids_or_rich {
+            *bytes = bytes.saturating_add(full.len()).saturating_add(vals.iter().map(String::len).fold(0, usize::saturating_add));
+            if *bytes > MAX_XFDF_TEXT {
+                return Err(DataError::Malformed(format!("the file expands to more than {} MiB of field names and values", MAX_XFDF_TEXT >> 20)));
+            }
             out.push((full.clone(), vals));
         }
-        walk_xfdf(f, &full, out, depth + 1)?;
+        walk_xfdf(f, &full, out, depth + 1, bytes)?;
     }
     Ok(())
 }
