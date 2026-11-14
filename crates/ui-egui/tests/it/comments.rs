@@ -3073,6 +3073,28 @@ fn hovering_a_comment_shows_its_author_and_text() {
 }
 
 #[test]
+fn hovering_a_comment_renders_its_latex_math() {
+    let pdf = String::from_utf8_lossy(TEXT_FIXTURE).replace("/Contents 5 0 R /Resources", "/Contents 5 0 R /Annots [8 0 R] /Resources").replace(
+        "trailer",
+        "8 0 obj << /Type /Annot /Subtype /Square /Rect [50 50 150 120] /C [1 0 0] /T (Ada) /Contents (Check $x^2$) >> endobj\ntrailer",
+    );
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("hover-math.pdf", None, pdf.into_bytes()).expect("opens");
+        app.set_option("left", "closed").unwrap();
+        app.set_option("panel", "none").unwrap();
+        app
+    });
+    h.run_steps(4);
+    crate::support::settle(&mut h);
+    h.hover_at(at(&h, 100.0, 85.0));
+    h.run_steps(3);
+    h.get_by_label_contains("x²");
+    assert!(h.query_by_label_contains("$x^2$").is_none(), "the tooltip exposes rendered math, not its source");
+}
+
+#[test]
 fn preference_hides_author_only_highlight_hover_previews() {
     // A highlight annotation with author Ada and empty contents over the first page.
     let pdf = String::from_utf8_lossy(TEXT_FIXTURE).replace("/Contents 5 0 R /Resources", "/Contents 5 0 R /Annots [8 0 R] /Resources").replace(
@@ -4116,6 +4138,22 @@ fn a_pop_up_lists_its_replies_by_reference_when_names_repeat() {
         assert_eq!(shown.len(), 1, "{text:?} shows in one window: {shown:?}");
         assert!(shown.iter().all(|c| second.contains(*c)), "{text:?} is in the second note's window");
     }
+}
+
+#[test]
+fn clicking_rendered_pop_up_math_bodies_enters_editing_with_source() {
+    let pdf = String::from_utf8_lossy(POPUPS_SHARING_A_NAME).replace("(First note)", "(First $x^2$)").replace("(Second note)", "(Second $y^2$)");
+    let mut h = harness_with_bytes(pdf.into_bytes(), |_| {});
+
+    let first = h.query_all_by_label_contains("First x²").next().expect("first rendered comment body").rect().center();
+    click(&mut h, first);
+    assert_eq!(h.state().views[0].comments.popup_editing, Some((0, 0)));
+    assert!(h.query_all_by(|node| shows_text(node, "First $x^2$")).next().is_some(), "editor keeps the original LaTeX source");
+
+    let second = h.query_all_by_label_contains("Second y²").next().expect("second rendered comment body").rect().center();
+    click(&mut h, second);
+    assert_eq!(h.state().views[0].comments.popup_editing, Some((0, 2)), "focus loss from the first editor preserves the newer target");
+    assert!(h.query_all_by(|node| shows_text(node, "Second $y^2$")).next().is_some(), "second editor keeps the original LaTeX source");
 }
 
 // Contributor-original PDF: one blue note with its pop-up open beside it.

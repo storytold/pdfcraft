@@ -173,6 +173,10 @@ pub struct CommentView {
     pub popup_resize: Option<(usize, usize, egui::Vec2)>,
     /// Text being typed in a pop-up window: (page, index, text).
     pub popup_text: Option<(usize, usize, String)>,
+    /// Which pop-up window text is currently in edit mode: (page, index).
+    pub popup_editing: Option<(usize, usize)>,
+    /// Which pop-up window editor should request focus on open: (page, index).
+    pub popup_focus_target: Option<(usize, usize)>,
     /// A reply being typed in a pop-up window: the comment or reply it answers (page, index), and its text.
     pub popup_reply: Option<(usize, usize, String)>,
     /// Where each open pop-up was drawn last frame, for the connector lines and hit-testing.
@@ -434,6 +438,8 @@ impl CommentView {
         let focus = self.editor_focus.take();
         // What is typed in a pop-up, and a window being dragged or resized, follow theirs too.
         let popup_text = self.popup_text.take().and_then(|(p, i, text)| moved((p, i)).map(|(p, i)| (p, i, text)));
+        let popup_editing = self.popup_editing.and_then(moved);
+        let popup_focus_target = self.popup_focus_target.and_then(moved);
         let popup_reply = self.popup_reply.take().and_then(|(p, i, text)| moved((p, i)).map(|(p, i)| (p, i, text)));
         let popup_drag = self.popup_drag.and_then(|(p, i, at)| moved((p, i)).map(|(p, i)| (p, i, at)));
         let popup_resize = self.popup_resize.and_then(|(p, i, size)| moved((p, i)).map(|(p, i)| (p, i, size)));
@@ -445,6 +451,8 @@ impl CommentView {
         self.editor_focus = editing.as_ref().and(focus);
         self.editing = editing;
         self.popup_text = popup_text;
+        self.popup_editing = popup_editing;
+        self.popup_focus_target = popup_focus_target;
         self.popup_reply = popup_reply;
         self.popup_drag = popup_drag;
         self.popup_resize = popup_resize;
@@ -459,6 +467,8 @@ impl CommentView {
         self.editing = None;
         self.editor_focus = None;
         self.popup_text = None;
+        self.popup_editing = None;
+        self.popup_focus_target = None;
         self.popup_reply = None;
         self.popup_drag = None;
         self.popup_resize = None;
@@ -467,10 +477,17 @@ impl CommentView {
     /// The comments the pop-ups hold unsaved text, a reply or a drag for.
     pub(crate) fn popup_keys(&self) -> Vec<(usize, usize)> {
         let text = self.popup_text.as_ref().map(|(p, i, _)| (*p, *i));
+        let editing = self.popup_editing;
         let reply = self.popup_reply.as_ref().map(|(p, i, _)| (*p, *i));
         let drag = self.popup_drag.map(|(p, i, _)| (p, i));
         let resize = self.popup_resize.map(|(p, i, _)| (p, i));
-        [text, reply, drag, resize].into_iter().flatten().collect()
+        [text, editing, reply, drag, resize].into_iter().flatten().collect()
+    }
+
+    pub(crate) fn popup_editor_lost_focus(&mut self, key: (usize, usize)) {
+        if self.popup_editing == Some(key) {
+            self.popup_editing = None;
+        }
     }
 
     /// An edit other than a deletion just ran: `before` are the comments at [`Self::popup_keys`]
@@ -485,6 +502,12 @@ impl CommentView {
         let kept = |p: usize, i: usize| who(before, (p, i)).is_some_and(|w| who(after, (p, i)) == Some(w));
         if self.popup_text.as_ref().is_some_and(|(p, i, _)| !kept(*p, *i)) {
             self.popup_text = None;
+        }
+        if self.popup_editing.is_some_and(|(p, i)| !kept(p, i)) {
+            self.popup_editing = None;
+        }
+        if self.popup_focus_target.is_some_and(|(p, i)| !kept(p, i)) {
+            self.popup_focus_target = None;
         }
         if self.popup_reply.as_ref().is_some_and(|(p, i, _)| !kept(*p, *i)) {
             self.popup_reply = None;

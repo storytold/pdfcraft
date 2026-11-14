@@ -2827,8 +2827,11 @@ fn frame_overlays(ui: &mut egui::Ui, view: &mut DocView, env: &PageEnv<'_>, prim
         let tip = egui::Area::new(egui::Id::unique("canvas-hover")).order(egui::Order::Tooltip).interactable(false);
         tip.fixed_pos(pos + vec2(14.0, 16.0)).show(ui.ctx(), |ui| {
             egui::Frame::popup(ui.style()).show(ui, |ui| {
-                ui.set_max_width(320.0);
-                ui.label(text);
+                let viewport_width = ui.ctx().content_rect().width();
+                let viewport_limit = (viewport_width - 32.0).max(1.0);
+                let max_w = (crate::math::MAX_TOOLTIP_WIDTH * ui.ctx().zoom_factor()).min(viewport_limit);
+                ui.set_max_width(max_w);
+                crate::math::render_math_text(ui, &text, theme::regular(12.5), ui.visuals().text_color());
             });
         });
     }
