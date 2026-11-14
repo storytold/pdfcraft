@@ -236,7 +236,7 @@ pub(crate) fn body(
 
     // Cap the settings+preview area to the screen's available height (#4252, #5317).
     let screen_h = ui.ctx().input(|i| i.viewport_rect().height());
-    let max_h = (screen_h - 225.0).clamp(240.0, 675.0);
+    let max_h = (screen_h - 220.0).clamp(240.0, 680.0);
 
     egui::ScrollArea::vertical()
         .id_salt("print-dialog-scroll")
@@ -748,14 +748,16 @@ pub(crate) fn body(
                             d.dpi = f64::from(dpi);
                         });
                     });
-                    ui.add_space(4.0);
-                    ui.label(
-                        egui::RichText::new(tl!(
-                            "Use it when a printer skips text, shading or transparency. The print is no longer searchable text; with Print in grayscale, the pictures are grey."
-                        ))
-                        .small()
-                        .color(t.text_muted),
-                    );
+                    if d.as_image {
+                        ui.add_space(3.0);
+                        ui.label(
+                            egui::RichText::new(tl!(
+                                "Use it when a printer skips text, shading or transparency. The print is no longer searchable text; with Print in grayscale, the pictures are grey."
+                            ))
+                            .small()
+                            .color(t.text_muted),
+                        );
+                    }
                 });
             });
 
