@@ -86,9 +86,7 @@ pub(crate) fn check_form_xml_depth(text: &str) -> Result<(), DataError> {
 }
 
 pub(crate) fn parse_form_xml(text: &str) -> Result<craft_xml::El, craft_xml::Error> {
-    let mut opts = craft_xml::Options::default();
-    opts.strict = true;
-    opts.doctype = craft_xml::Doctype::Reject;
+    let mut opts = craft_xml::Options { strict: true, doctype: craft_xml::Doctype::Reject, ..Default::default() };
     opts.limits.max_nodes = MAX_NODES as usize;
     opts.limits.max_depth = MAX_XML_DEPTH.max(1024);
     opts.parse(text.as_bytes())
