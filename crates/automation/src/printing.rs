@@ -111,7 +111,8 @@ fn resolve_paper(name: Option<&str>, printer: Option<&str>) -> Result<((f64, f64
 /// naming none got (A4 under Letter sheets on the queue in #3752), and tells CUPS which way the
 /// laid-out `sheets` run, as the Print dialog does (#2713): an orientation the caller chose in
 /// `options` stands. It asks the driver for grayscale only when the pages aren't grey pictures
-/// already ([`print::driver_needs_grayscale`]).
+/// already ([`print::driver_needs_grayscale`]). Any caller-supplied `media` option (case-insensitive)
+/// is replaced by the laid-out paper's media.
 fn spool_job(
     a: &Args,
     printer: &str,
@@ -143,7 +144,10 @@ fn spool_job(
         grey_pages: false,
         title,
         options: {
-            let mut options: Vec<(String, String)> = options.into_iter().chain(media.map(|m| ("media".to_string(), m.to_string()))).collect();
+            let mut options: Vec<(String, String)> = options.into_iter().filter(|(k, _)| !k.eq_ignore_ascii_case("media")).collect();
+            if let Some(m) = media {
+                options.push(("media".to_string(), m.to_string()));
+            }
             print::add_cups_orientation(&mut options, sheets);
             options
         },
@@ -579,5 +583,27 @@ mod tests {
         for spec in ["0x0mm", "-5x10cm", "5x-10cm", "10x15"] {
             assert_eq!(paper_size(spec), None, "{spec}");
         }
+    }
+
+    /// A user-supplied `media` option must not reach the spooler alongside the
+    /// laid-out paper's own `media` option: the job carries exactly one `media`
+    /// entry, and it is the paper the sheets were laid out on.
+    #[test]
+    fn spool_job_does_not_duplicate_media_option() {
+        let index = 0; // US Letter
+        let media_name = print::cups_media(index).unwrap();
+        let job = spool_job(
+            &Args(&json!({ "options": { "InputSlot": "Tray3", "media": "A4" } })),
+            "Office",
+            "a.pdf".into(),
+            None,
+            Some(media_name),
+            None,
+            &[],
+        )
+        .unwrap();
+        let media: Vec<&(String, String)> = job.options.iter().filter(|(k, _)| k == "media").collect();
+        assert_eq!(media, [print::media_option(index).as_ref().unwrap()]);
+        assert!(job.options.contains(&("InputSlot".to_string(), "Tray3".to_string())));
     }
 }
