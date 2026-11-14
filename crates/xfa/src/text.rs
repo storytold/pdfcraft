@@ -252,15 +252,24 @@ pub fn layout(rich: &RichText, rect: Rect, para: &Para, base: &Face, embed: &dyn
         size: f64,
         first: bool,
     }
-    let avail = (rect.w - para.margin_left - para.margin_right).max(1.0);
+    // Every paragraph's words first (the hang depends on the widest glyph), in order, so
+    // embedded fields share one text budget as they did paragraph by paragraph.
+    let mut embed_left = MAX_EMBEDDED;
+    let paragraphs: Vec<Vec<Word>> = rich.paragraphs.iter().map(|p| words(&p.runs, base, embed, &mut embed_left)).collect();
+    // A negative textIndent is a hanging indent: the first line starts left of the others. It
+    // never starts left of the box, so the others move in to make room, as other viewers lay
+    // such labels out; never so far that a line after the first has no room for the widest
+    // glyph, however wide the hang.
+    let widest = paragraphs.iter().flatten().map(widest_glyph).fold(1.0, f64::max);
+    let hang = (-para.text_indent).min((rect.w - para.margin_right - widest).max(0.0));
+    let (margin_left, first_indent) = indents(para, hang);
+    let avail = (rect.w - margin_left - para.margin_right).max(1.0);
     let mut lines: Vec<(Line, Option<HAlign>)> = Vec::new();
     let mut total = 0.0;
-    let mut embed_left = MAX_EMBEDDED;
-    for (pi, p) in rich.paragraphs.iter().enumerate() {
-        let ws = words(&p.runs, base, embed, &mut embed_left);
+    for (pi, (p, ws)) in rich.paragraphs.iter().zip(paragraphs).enumerate() {
         let mut line = Line { words: Vec::new(), width: 0.0, size: base.size, first: true };
         let mut first_in_para = true;
-        let indent = |first: bool| if first { para.text_indent.max(0.0) } else { 0.0 };
+        let indent = |first: bool| if first { first_indent } else { 0.0 };
         for w in ws {
             // A word fits when what it draws does: the spaces after it would end the line. Spaces
             // alone draw nothing, so they always stay on the line (keeping their width, so a word
@@ -323,7 +332,7 @@ pub fn layout(rich: &RichText, rect: Rect, para: &Para, base: &Face, embed: &dyn
     let mut spans = Vec::new();
     let mut y = start_y + para.space_above;
     for ((line, align), lh) in lines.into_iter().zip(heights) {
-        let indent = if line.first { para.text_indent.max(0.0) } else { 0.0 };
+        let indent = if line.first { first_indent } else { 0.0 };
         // Trailing spaces don't count for alignment: those of the last word with ink, and any
         // words of spaces alone after it.
         let mut trailing = 0.0;
@@ -335,7 +344,7 @@ pub fn layout(rich: &RichText, rect: Rect, para: &Para, base: &Face, embed: &dyn
             }
         }
         let used = (line.width - trailing).max(0.0);
-        let mut x = rect.x + para.margin_left + indent;
+        let mut x = rect.x + margin_left + indent;
         x += match align.unwrap_or(para.h_align) {
             HAlign::Left | HAlign::Justify => 0.0,
             HAlign::Center => ((avail - indent - used) / 2.0).max(0.0),
@@ -368,11 +377,35 @@ pub fn layout(rich: &RichText, rect: Rect, para: &Para, base: &Face, embed: &dyn
 /// The width `rich` takes with no line wrapped (its longest paragraph, with the paragraph's
 /// margins and first-line indent): how wide a box without an explicit width grows.
 pub fn natural_width(rich: &RichText, para: &Para, base: &Face, embed: &dyn Fn(&str, usize) -> String) -> f64 {
-    let indent = para.text_indent.max(0.0);
+    // Unwrapped, every line is a paragraph's first line; the hang is as wide as asked, since the
+    // box will be as wide as this.
+    let (margin_left, first_indent) = indents(para, -para.text_indent);
     let mut embed_left = MAX_EMBEDDED;
     let widest =
         rich.paragraphs.iter().map(|p| words(&p.runs, base, embed, &mut embed_left).iter().map(|w| w.width).sum::<f64>()).fold(0.0, f64::max);
-    (para.margin_left + indent + widest + para.margin_right).max(0.0)
+    (margin_left + first_indent + widest + para.margin_right).max(0.0)
+}
+
+/// The width of the widest glyph `w` draws (spaces draw nothing).
+fn widest_glyph(w: &Word) -> f64 {
+    let mut glyph = String::new();
+    w.text
+        .chars()
+        .filter(|c| *c != ' ')
+        .map(|c| {
+            glyph.clear();
+            glyph.push(c);
+            w.face.width(&glyph)
+        })
+        .fold(0.0, f64::max)
+}
+
+/// The left margin of a paragraph's lines and where its first line starts from them, for a
+/// hanging indent of `hang` (the negative textIndent, as far as the box allows): the first line
+/// never starts left of the box, so the other lines move in to make room.
+fn indents(para: &Para, hang: f64) -> (f64, f64) {
+    let margin_left = para.margin_left.max(hang);
+    (margin_left, para.text_indent.max(-margin_left))
 }
 
 /// Height `rich` needs at `width` (for boxes without an explicit height).
