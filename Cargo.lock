@@ -4470,6 +4470,8 @@ version = "0.21.1"
 dependencies = [
  "craft-pdf",
  "hayro-syntax",
+ "pdfcraft-crypt",
+ "pdfcraft-filters",
  "pdfcraft-oracle",
  "pdfcraft-testkit",
  "proptest",
