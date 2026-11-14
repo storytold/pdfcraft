@@ -9,7 +9,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Condvar, Mutex, PoisonError, mpsc};
 
-use pdfcraft_render::{PageRenderer, RenderRequest, RequestKind};
+use pdfcraft_render::{PageRenderer, ReadingColors, RenderConfig, RenderRequest, RequestKind};
 
 use crate::Document;
 
@@ -65,6 +65,13 @@ pub struct ExportSource {
     pub sizes: Vec<(f32, f32)>,
 }
 
+/// Reading colours belong to the viewer. Keep the edited/display bytes, layers and annotation
+/// policy for output, but never bake a reading palette into an export or Print as Image.
+fn output_config(mut config: RenderConfig) -> RenderConfig {
+    config.reading_colors = ReadingColors::default();
+    config
+}
+
 impl Document {
     /// What an export reads, for exporting on another thread. These are the displayed
     /// bytes, so they may carry appearances PdfCraft drew that the file itself does not hold:
@@ -74,7 +81,7 @@ impl Document {
     pub fn export_source(&self) -> ExportSource {
         ExportSource {
             bytes: self.display.clone(),
-            config: self.config.clone(),
+            config: output_config(self.config.clone()),
             pages: self.info.pages.len(),
             sizes: self.info.pages.iter().map(|p| (p.width, p.height)).collect(),
         }
@@ -105,13 +112,9 @@ impl Exporter {
     /// resolution they allow, as the interactive Export does; [`Exporter::dpi_used`] says at what.
     /// A source whose `config.reject_oversize` is set refuses such pages instead.
     pub fn from_source(src: ExportSource) -> Self {
-        Self {
-            renderer: PageRenderer::new(src.bytes.clone(), src.config.clone()),
-            bytes: src.bytes,
-            config: src.config,
-            pages: src.pages,
-            sizes: src.sizes,
-        }
+        // Direct callers can construct an ExportSource too: enforce the output policy here.
+        let config = output_config(src.config);
+        Self { renderer: PageRenderer::new(src.bytes.clone(), config.clone()), bytes: src.bytes, config, pages: src.pages, sizes: src.sizes }
     }
 
     /// The resolution page `page` is actually exported at when asked for `dpi`: lower than asked

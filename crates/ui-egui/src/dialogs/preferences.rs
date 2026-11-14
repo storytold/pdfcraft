@@ -1019,12 +1019,14 @@ fn reading_colours_section(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens,
             ("white-on-black", "White on black", pdfcraft_render::ReadingColors::WHITE_ON_BLACK),
             ("yellow-on-black", "Yellow on black", pdfcraft_render::ReadingColors::YELLOW_ON_BLACK),
             ("green-on-black", "Green on black", pdfcraft_render::ReadingColors::GREEN_ON_BLACK),
+            ("color-preserving-dark", "Colour-preserving dark", pdfcraft_render::ReadingColors::COLOR_PRESERVING_DARK),
         ] {
             let params = colors.params.unwrap_or(pdfcraft_render::ReadingParams {
                 text: [0, 0, 0],
                 background: [255, 255, 255],
                 only_black: false,
                 line_art: true,
+                preserve_hues: false,
             });
             ui.vertical(|ui| {
                 ui.set_width(100.0);
@@ -1042,6 +1044,7 @@ fn reading_colours_section(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens,
             });
         }
     });
+    ctx.label_secondary(ui, tl!("Colour-preserving dark may reduce text contrast on bright coloured backgrounds."), t);
     ui.add_space(4.0);
     if let Some(params) = app.reading_colors.params {
         let text = Color32::from_rgb(params.text[0], params.text[1], params.text[2]);
@@ -1054,16 +1057,24 @@ fn reading_colours_section(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens,
     } else {
         ctx.label_primary(ui, tl!("Original"), t);
     }
-    egui::CollapsingHeader::new(tl!("Custom")).default_open(mode == "custom").show(ui, |ui| {
+    let mode = app.reading_colors.mode_name();
+    let fixed_preset = mode == "color-preserving-dark";
+    if fixed_preset {
+        ctx.label_secondary(ui, tl!("This preset uses fixed paper and ink colours."), t);
+    }
+    let options_title = if fixed_preset { tl!("Options") } else { tl!("Custom") };
+    egui::CollapsingHeader::new(options_title).default_open(fixed_preset || mode == "custom").show(ui, |ui| {
         let mut colors = if app.reading_colors.params.is_some() { app.reading_colors } else { pdfcraft_render::ReadingColors::BLACK_ON_WHITE };
         let mut changed = false;
         if let Some(params) = colors.params.as_mut() {
-            ui.horizontal(|ui| {
-                let text = ctx.label_primary(ui, tl!("Text"), t);
-                changed |= ui.color_edit_button_srgb(&mut params.text).labelled_by(text.id).changed();
-                let background = ctx.label_primary(ui, tl!("Page background"), t);
-                changed |= ui.color_edit_button_srgb(&mut params.background).labelled_by(background.id).changed();
-            });
+            if !fixed_preset {
+                ui.horizontal(|ui| {
+                    let text = ctx.label_primary(ui, tl!("Text"), t);
+                    changed |= ui.color_edit_button_srgb(&mut params.text).labelled_by(text.id).changed();
+                    let background = ctx.label_primary(ui, tl!("Page background"), t);
+                    changed |= ui.color_edit_button_srgb(&mut params.background).labelled_by(background.id).changed();
+                });
+            }
             changed |= ctx.checkbox(ui, &mut params.only_black, tl!("Only change the colour of black text or line art"), t).changed();
             changed |= ctx.checkbox(ui, &mut params.line_art, tl!("Change the colour of line art as well as text"), t).changed();
         }
