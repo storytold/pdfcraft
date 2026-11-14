@@ -178,8 +178,9 @@ use test_hooks::{
     secondary_scan_counts, take_full_refreshes,
 };
 use xfa_form::{
-    XFA_REMOVED_PREFIX, XFA_SCRIPTS_OFF, decode_data_file, image_content_type, is_xfa_data_file, note_warnings, strip_xfa, sync_xfa_state,
-    undrawn_field_warnings, xfa_after_data_change, xfa_layout, xfa_redraw, xfa_sync_datasets, xfa_values_from_datasets,
+    XFA_REMOVED_PREFIX, XFA_SCRIPTS_OFF, decode_data_file, image_content_type, is_xfa_data_file, keeps_xfa_usage_rights, note_warnings, strip_xfa,
+    sync_usage_rights_warning, sync_xfa_state, undrawn_field_warnings, xfa_after_data_change, xfa_layout, xfa_redraw, xfa_sync_datasets,
+    xfa_sync_shared_fields, xfa_values_from_datasets,
 };
 
 mod clock;
@@ -189,7 +190,7 @@ pub use pdfcraft_edit::ArrangeOrder;
 
 use clock::{local_utc_offset, parse_ymd};
 pub use doc_state::{DocId, ImageEdit, OptimizeReport, RecoverySnapshot, SplitPart, guard, merge_data_files};
-use doc_state::{LOW_RESOLUTION_PRINT_DPI, render_threads, renderer_password, signatures_of, writable};
+use doc_state::{LOW_RESOLUTION_PRINT_DPI, editor_signatures, render_threads, renderer_password, signatures_of, writable};
 
 /// The configuration of the pool that draws the viewer: the document's own, plus installed CJK
 /// fonts for fonts a PDF does not embed (`pdfcraft_render::RenderConfig::system_fonts`). Exports,

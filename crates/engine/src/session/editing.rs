@@ -2,9 +2,9 @@
 use super::check_refresh_panic;
 use super::{
     Arc, DocId, Document, Edit, EditCtx, EditError, Label, MAX_UNDO, ObjectKind, OnceLock, RenderPool, SaveOptions, Scope, Session,
-    XFA_REMOVED_PREFIX, XFA_SCRIPTS_OFF, carry_verdict_marks, check_permission, comment_list, display_bytes, display_config, guard, info_fields,
-    inspect, js, keys_after, note_warnings, render_threads, run_edit, scan_colours, scope_of, shown_under_redactions, signatures_of, sync_xfa_state,
-    undrawn_notices, uses_scripts, write_incremental, xfa, xfa_sync_datasets,
+    XFA_REMOVED_PREFIX, XFA_SCRIPTS_OFF, carry_verdict_marks, check_permission, comment_list, display_bytes, display_config, editor_signatures,
+    guard, info_fields, inspect, js, keys_after, note_warnings, render_threads, run_edit, scan_colours, scope_of, shown_under_redactions,
+    sync_xfa_state, undrawn_notices, uses_scripts, write_incremental, xfa, xfa_sync_datasets, xfa_sync_shared_fields,
 };
 use crate::{EditNotice, MarkKind, print_preview_layers};
 
@@ -109,6 +109,117 @@ fn icon_changed(previous: &pdfcraft_cos::Document, restored: &pdfcraft_cos::Docu
         }
     }
     false
+}
+
+struct XfaEditSync {
+    exited: Vec<String>,
+    sync_warnings: Vec<String>,
+    xfa_notes: Vec<String>,
+}
+
+/// Keep shared XFA widgets, datasets, XFA scripts, and text reflow in sync after `edit` runs on `next`.
+fn finish_xfa_edit(
+    next: &mut pdfcraft_cos::Document,
+    edit: &Edit,
+    cx: &mut EditCtx,
+    doc_tpl: Option<&pdfcraft_xfa::model::Template>,
+    prev_form: &[pdfcraft_forms::Field],
+    is_xfa: bool,
+    scope: &mut Scope,
+) -> Result<XfaEditSync, EditError> {
+    let form_edit = is_xfa && matches!(*scope, Scope::Form | Scope::Full | Scope::Content);
+    let mut fields_before_scripts = None;
+    if form_edit {
+        fields_before_scripts = Some(
+            guard(|| xfa_sync_shared_fields(prev_form, next, doc_tpl, Some(edit)))
+                .unwrap_or_else(|m| Err(format!("keeping shared XFA fields in step failed unexpectedly ({m})")))
+                .map_err(EditError::Write)
+                .inspect_err(|_| discard_edit_callbacks(cx))?,
+        );
+    }
+    // An XFA form's scripts answer the change: exit and validate scripts of the field, then
+    // every calculation (and a reset recalculates). They read the data, so it is brought up
+    // to date first. The fields whose exit scripts ran are noted once the edit is kept.
+    let mut exited: Vec<String> = Vec::new();
+    if let Some(tpl) = cx.xfa.clone() {
+        if form_edit {
+            let datasets = &mut cx.xfa_datasets;
+            let notes = guard(|| xfa_sync_datasets(next, Some(&tpl), datasets))
+                .unwrap_or_else(|m| Err(format!("writing the XFA data failed unexpectedly ({m})")))
+                .map_err(EditError::Write)
+                .inspect_err(|_| discard_edit_callbacks(cx))?;
+            cx.xfa_out.errors.extend(notes);
+        }
+        /// The fields edit `e` (and the edits it batches) gives new values, and whether it
+        /// resets the form.
+        fn collect(e: &Edit, changed: &mut Vec<String>, reset: &mut bool) {
+            match e {
+                Edit::SetFieldValue { name, .. } => changed.push(name.clone()),
+                Edit::ResetForm { .. } => *reset = true,
+                Edit::Batch { edits, .. } => edits.iter().for_each(|e| collect(e, changed, reset)),
+                _ => {}
+            }
+        }
+        let mut changed: Vec<String> = Vec::new();
+        let mut reset = false;
+        collect(edit, &mut changed, &mut reset);
+        if !changed.is_empty() || reset {
+            let state_before_scripts = next.read_state();
+            let highlight = cx.highlight();
+            let mut run = xfa::XfaRun {
+                page_count: cx.pages,
+                out: &mut cx.xfa_out,
+                datasets: cx.xfa_datasets,
+                ran_away: false,
+                highlight,
+                time_scale: cx.xfa_time_scale,
+            };
+            // Every changed field's scripts, then the calculations once (after a reset,
+            // only those).
+            let ran = guard(|| xfa::on_changes(next, &tpl, &changed, &mut run, &mut exited))
+                .unwrap_or_else(|m| Err(format!("the form's scripts failed unexpectedly ({m})")));
+            cx.xfa_datasets = run.datasets;
+            cx.xfa_ran_away |= run.ran_away;
+            // The next edit of a batch reads the highlight this one's scripts set.
+            let on = run.highlight;
+            cx.set_highlight(on);
+            if let Err(e) = ran {
+                cx.xfa_out.errors.push(e);
+            }
+            if !state_before_scripts.matches(next) {
+                let prev = fields_before_scripts.as_deref().unwrap_or(prev_form);
+                guard(|| xfa_sync_shared_fields(prev, next, Some(&tpl), None))
+                    .unwrap_or_else(|m| Err(format!("keeping shared XFA fields in step failed unexpectedly ({m})")))
+                    .map_err(EditError::Write)
+                    .inspect_err(|_| discard_edit_callbacks(cx))?;
+            }
+        }
+    }
+    // XFA forms keep their values in the datasets packet too, for Adobe's viewers.
+    let mut sync_warnings = Vec::new();
+    let mut xfa_notes = Vec::new();
+    if form_edit {
+        let (tpl, datasets) = (cx.xfa.as_deref(), &mut cx.xfa_datasets);
+        sync_warnings = guard(|| xfa_sync_datasets(next, tpl, datasets))
+            .unwrap_or_else(|m| Err(format!("writing the XFA data failed unexpectedly ({m})")))
+            .map_err(EditError::Write)
+            .inspect_err(|_| discard_edit_callbacks(cx))?;
+        xfa_notes.clone_from(&sync_warnings);
+        // Rebuilding from stale data would discard accepted widget values.
+        if sync_warnings.is_empty() {
+            let reflow = guard(|| xfa::relayout_changed_text(next, tpl, prev_form))
+                .unwrap_or_else(|m| Err(format!("laying out the XFA text failed unexpectedly ({m})")))
+                .map_err(EditError::Write)
+                .inspect_err(|_| discard_edit_callbacks(cx))?;
+            if let Some(warnings) = reflow {
+                xfa_notes.extend(warnings);
+                // Layout replaces pages and widgets, even if the page count is unchanged.
+                // Undo/redo must rebuild these too instead of refreshing only field values.
+                *scope = Scope::Full;
+            }
+        }
+    }
+    Ok(XfaEditSync { exited, sync_warnings, xfa_notes })
 }
 
 fn sync_script_history(doc: &Document, previous: &pdfcraft_cos::Document, restored: &pdfcraft_cos::Document) {
@@ -244,77 +355,8 @@ impl Session {
             ),
             _ => edit.label(),
         };
-        // An XFA form's scripts answer the change: exit and validate scripts of the field, then
-        // every calculation (and a reset recalculates). They read the data, so it is brought up
-        // to date first. The fields whose exit scripts ran are noted once the edit is kept.
-        let mut exited: Vec<String> = Vec::new();
-        if let Some(tpl) = cx.xfa.clone() {
-            if is_xfa && matches!(scope_of(&edit), Scope::Form | Scope::Full | Scope::Content) {
-                let datasets = &mut cx.xfa_datasets;
-                let notes = guard(|| xfa_sync_datasets(&mut next, Some(&tpl), datasets))
-                    .unwrap_or_else(|m| Err(format!("writing the XFA data failed unexpectedly ({m})")))
-                    .map_err(EditError::Write)?;
-                cx.xfa_out.errors.extend(notes);
-            }
-            /// The fields edit `e` (and the edits it batches) gives new values, and whether it
-            /// resets the form.
-            fn collect(e: &Edit, changed: &mut Vec<String>, reset: &mut bool) {
-                match e {
-                    Edit::SetFieldValue { name, .. } => changed.push(name.clone()),
-                    Edit::ResetForm { .. } => *reset = true,
-                    Edit::Batch { edits, .. } => edits.iter().for_each(|e| collect(e, changed, reset)),
-                    _ => {}
-                }
-            }
-            let mut changed: Vec<String> = Vec::new();
-            let mut reset = false;
-            collect(&edit, &mut changed, &mut reset);
-            if !changed.is_empty() || reset {
-                let highlight = cx.highlight();
-                let mut run = xfa::XfaRun {
-                    page_count: cx.pages,
-                    out: &mut cx.xfa_out,
-                    datasets: cx.xfa_datasets,
-                    ran_away: false,
-                    highlight,
-                    time_scale: cx.xfa_time_scale,
-                };
-                // Every changed field's scripts, then the calculations once (after a reset,
-                // only those).
-                let ran = guard(|| xfa::on_changes(&mut next, &tpl, &changed, &mut run, &mut exited))
-                    .unwrap_or_else(|m| Err(format!("the form's scripts failed unexpectedly ({m})")));
-                cx.xfa_datasets = run.datasets;
-                cx.xfa_ran_away |= run.ran_away;
-                // The next edit of a batch reads the highlight this one's scripts set.
-                let on = run.highlight;
-                cx.set_highlight(on);
-                if let Err(e) = ran {
-                    cx.xfa_out.errors.push(e);
-                }
-            }
-        }
-        // XFA forms keep their values in the datasets packet too, for Adobe's viewers.
-        let mut xfa_notes = Vec::new();
-        if is_xfa && matches!(scope_of(&edit), Scope::Form | Scope::Full | Scope::Content) {
-            let (tpl, datasets) = (cx.xfa.as_deref(), &mut cx.xfa_datasets);
-            xfa_notes = guard(|| xfa_sync_datasets(&mut next, tpl, datasets))
-                .unwrap_or_else(|m| Err(format!("writing the XFA data failed unexpectedly ({m})")))
-                .map_err(EditError::Write)
-                .inspect_err(|_| discard_edit_callbacks(&cx))?;
-            // Rebuilding from stale data would discard accepted widget values.
-            if xfa_notes.is_empty() {
-                let reflow = guard(|| xfa::relayout_changed_text(&mut next, tpl, &doc.form))
-                    .unwrap_or_else(|m| Err(format!("laying out the XFA text failed unexpectedly ({m})")))
-                    .map_err(EditError::Write)
-                    .inspect_err(|_| discard_edit_callbacks(&cx))?;
-                if let Some(warnings) = reflow {
-                    xfa_notes.extend(warnings);
-                    // Layout replaces pages and widgets, even if the page count is unchanged.
-                    // Undo/redo must rebuild these too instead of refreshing only field values.
-                    scope = Scope::Full;
-                }
-            }
-        }
+        let XfaEditSync { exited, sync_warnings, xfa_notes } =
+            finish_xfa_edit(&mut next, &edit, &mut cx, doc.xfa_template.as_deref(), &doc.form, is_xfa, &mut scope)?;
         // Signed documents are only ever saved incrementally: an edit that needs a full rewrite
         // (applying redactions, changing security, sanitizing) would invalidate the signatures.
         // So does any edit to a file rebuilt from object headers: it has no chain to append to.
@@ -335,10 +377,14 @@ impl Session {
         if cx.redaction_identification != pdfcraft_redact::Identification::default() {
             notices.push(EditNotice::RedactionIdentification(cx.redaction_identification));
         }
+        let next_ur_data_only = editor.ur_shell.is_some()
+            && editor.ur_data_only
+            && crate::keeps_xfa_usage_rights(&edit, &editor.cos, &doc.form, &next, &sync_warnings, &cx.xfa_out.errors);
         let previous = std::mem::replace(&mut editor.cos, next);
         let keys = keys_after(&edit).unwrap_or_else(|| editor.keys.clone());
         let previous_keys = std::mem::replace(&mut editor.keys, keys);
-        editor.undo.push((label, previous, previous_keys, scope));
+        let previous_ur_data_only = std::mem::replace(&mut editor.ur_data_only, next_ur_data_only);
+        editor.undo.push((label, previous, previous_keys, scope, previous_ur_data_only));
         if editor.undo.len() > MAX_UNDO {
             editor.undo.remove(0);
         }
@@ -350,15 +396,17 @@ impl Session {
             discard_edit_callbacks(&cx);
             // Roll back: the edit produced something we cannot display.
             if let Some(ed) = doc.editor.as_mut()
-                && let Some((_, prev, keys, _)) = ed.undo.pop()
+                && let Some((_, prev, keys, _, ur_data_only)) = ed.undo.pop()
             {
                 ed.cos = prev;
                 ed.keys = keys;
+                ed.ur_data_only = ur_data_only;
             }
             Self::adopt_keys(doc);
             if !matches!(guard(|| Self::refresh(doc)), Ok(Ok(()))) {
                 Self::show_released(doc);
             }
+            crate::sync_usage_rights_warning(doc);
             return Err(e);
         }
         doc.dirty = true;
@@ -380,6 +428,7 @@ impl Session {
         note_warnings(&mut doc.xfa_warnings, &xfa_notes);
         let notes = doc.xfa_warnings.clone();
         note_warnings(&mut doc.info.warnings, &notes);
+        crate::sync_usage_rights_warning(doc);
         if let Some(js) = cx.js {
             doc.js_output.append(js.output);
         }
@@ -391,30 +440,34 @@ impl Session {
     pub fn undo(&mut self, id: DocId) -> Result<Label, EditError> {
         let doc = self.doc_mut(id)?;
         let editor = doc.editor.as_mut().ok_or(EditError::NothingToUndo)?;
-        let (label, prev, keys, scope) = editor.undo.pop().ok_or(EditError::NothingToUndo)?;
+        let (label, prev, keys, scope, ur_data_only) = editor.undo.pop().ok_or(EditError::NothingToUndo)?;
         let current = std::mem::replace(&mut editor.cos, prev);
         let current_keys = std::mem::replace(&mut editor.keys, keys);
-        editor.redo.push((label.clone(), current, current_keys, scope));
+        let current_ur_data_only = std::mem::replace(&mut editor.ur_data_only, ur_data_only);
+        editor.redo.push((label.clone(), current, current_keys, scope, current_ur_data_only));
         Self::adopt_keys(doc);
         let refreshed = guard(|| Self::refresh_scoped(doc, scope)).unwrap_or_else(|m| Err(EditError::Reopen(m)));
         if let Err(e) = refreshed {
             if let Some(ed) = doc.editor.as_mut()
-                && let Some((label, current, current_keys, scope)) = ed.redo.pop()
+                && let Some((label, current, current_keys, scope, current_ur_data_only)) = ed.redo.pop()
             {
                 let prev = std::mem::replace(&mut ed.cos, current);
                 let keys = std::mem::replace(&mut ed.keys, current_keys);
-                ed.undo.push((label, prev, keys, scope));
+                let ur_data_only = std::mem::replace(&mut ed.ur_data_only, current_ur_data_only);
+                ed.undo.push((label, prev, keys, scope, ur_data_only));
             }
             Self::adopt_keys(doc);
             if !matches!(guard(|| Self::refresh(doc)), Ok(Ok(()))) {
                 Self::show_released(doc);
             }
+            crate::sync_usage_rights_warning(doc);
             return Err(e);
         }
         doc.edit_notices.clear();
         Self::sync_dirty(doc);
+        crate::sync_usage_rights_warning(doc);
         if let Some(editor) = doc.editor.as_ref()
-            && let Some((_, previous, _, _)) = editor.redo.last()
+            && let Some((_, previous, _, _, _)) = editor.redo.last()
         {
             sync_script_history(doc, previous, &editor.cos);
         }
@@ -428,30 +481,34 @@ impl Session {
     pub fn redo(&mut self, id: DocId) -> Result<Label, EditError> {
         let doc = self.doc_mut(id)?;
         let editor = doc.editor.as_mut().ok_or(EditError::NothingToRedo)?;
-        let (label, next, keys, scope) = editor.redo.pop().ok_or(EditError::NothingToRedo)?;
+        let (label, next, keys, scope, ur_data_only) = editor.redo.pop().ok_or(EditError::NothingToRedo)?;
         let current = std::mem::replace(&mut editor.cos, next);
         let current_keys = std::mem::replace(&mut editor.keys, keys);
-        editor.undo.push((label.clone(), current, current_keys, scope));
+        let current_ur_data_only = std::mem::replace(&mut editor.ur_data_only, ur_data_only);
+        editor.undo.push((label.clone(), current, current_keys, scope, current_ur_data_only));
         Self::adopt_keys(doc);
         let refreshed = guard(|| Self::refresh_scoped(doc, scope)).unwrap_or_else(|m| Err(EditError::Reopen(m)));
         if let Err(e) = refreshed {
             if let Some(ed) = doc.editor.as_mut()
-                && let Some((label, current, current_keys, scope)) = ed.undo.pop()
+                && let Some((label, current, current_keys, scope, current_ur_data_only)) = ed.undo.pop()
             {
                 let next = std::mem::replace(&mut ed.cos, current);
                 let keys = std::mem::replace(&mut ed.keys, current_keys);
-                ed.redo.push((label, next, keys, scope));
+                let ur_data_only = std::mem::replace(&mut ed.ur_data_only, current_ur_data_only);
+                ed.redo.push((label, next, keys, scope, ur_data_only));
             }
             Self::adopt_keys(doc);
             if !matches!(guard(|| Self::refresh(doc)), Ok(Ok(()))) {
                 Self::show_released(doc);
             }
+            crate::sync_usage_rights_warning(doc);
             return Err(e);
         }
         doc.edit_notices.clear();
         Self::sync_dirty(doc);
+        crate::sync_usage_rights_warning(doc);
         if let Some(editor) = doc.editor.as_ref()
-            && let Some((_, previous, _, _)) = editor.undo.last()
+            && let Some((_, previous, _, _, _)) = editor.undo.last()
         {
             sync_script_history(doc, previous, &editor.cos);
         }
@@ -514,7 +571,7 @@ impl Session {
             #[cfg(test)]
             check_refresh_panic();
             if !doc.signatures.is_empty() {
-                let mut signatures = signatures_of(&editor.cos, &bytes, &doc.trust, &doc.sig_cache);
+                let mut signatures = editor_signatures(editor, &bytes, &doc.trust, &doc.sig_cache);
                 // The display copy is kept for a metadata edit, and so are its marks, unless the
                 // edit changed a verdict (a certification can forbid it): the page then draws the
                 // new one.
@@ -565,7 +622,7 @@ impl Session {
         }
         doc.info.file_size = bytes.len();
         doc.form = form;
-        let mut signatures = if doc.signatures.is_empty() { Vec::new() } else { signatures_of(&editor.cos, &bytes, &doc.trust, &doc.sig_cache) };
+        let mut signatures = if doc.signatures.is_empty() { Vec::new() } else { editor_signatures(editor, &bytes, &doc.trust, &doc.sig_cache) };
         doc.display = display_bytes(Some(editor), &bytes, &mut signatures, &doc.captions);
         doc.signatures = Arc::new(signatures);
         doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), display_config(&doc.config));
@@ -630,7 +687,7 @@ impl Session {
             doc.marker_scan = OnceLock::new();
         }
         doc.info.file_size = bytes.len();
-        let mut signatures = if doc.signatures.is_empty() { Vec::new() } else { signatures_of(&editor.cos, &bytes, &doc.trust, &doc.sig_cache) };
+        let mut signatures = if doc.signatures.is_empty() { Vec::new() } else { editor_signatures(editor, &bytes, &doc.trust, &doc.sig_cache) };
         doc.display = display_bytes(Some(editor), &bytes, &mut signatures, &doc.captions);
         doc.signatures = Arc::new(signatures);
         doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), display_config(&doc.config));
@@ -724,7 +781,7 @@ impl Session {
         if invalidate_links {
             doc.links = OnceLock::new();
         }
-        let mut signatures = signatures_of(&editor.cos, &bytes, &doc.trust, &doc.sig_cache);
+        let mut signatures = editor_signatures(editor, &bytes, &doc.trust, &doc.sig_cache);
         doc.display = display_bytes(Some(editor), &bytes, &mut signatures, &doc.captions);
         doc.signatures = Arc::new(signatures);
         doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), display_config(&doc.config));

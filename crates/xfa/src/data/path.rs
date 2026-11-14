@@ -200,6 +200,19 @@ pub(crate) fn template_field<'a>(tpl: &'a Template, som: &str) -> Option<&'a Fie
     }
 }
 
+/// The child nodes at `rest` below `children`, walking each named segment with [`named_at`].
+fn walk_named_at<'a>(mut children: &'a [Node], rest: &[(String, usize)]) -> Option<&'a Node> {
+    let ((last, last_index), inner) = rest.split_last()?;
+    for (name, index) in inner {
+        children = match named_at(children, name, *index, 0)? {
+            Node::Subform(sf) => &sf.children,
+            Node::Area(a) => &a.children,
+            _ => return None,
+        };
+    }
+    named_at(children, last, *last_index, 0)
+}
+
 /// The template object (field, exclusion group, subform...) the object at a SOM path is an
 /// instance of, found as [`template_field`] finds a field. `None` for the root and for a button
 /// of an exclusion group.
@@ -209,16 +222,21 @@ pub(crate) fn template_object<'a>(tpl: &'a Template, som: &str) -> Option<&'a No
     if tpl.root.common.name.as_deref() != Some(root.as_str()) {
         return None;
     }
-    let ((last, last_index), inner) = rest.split_last()?;
-    let mut children: &[Node] = &tpl.root.children;
-    for (name, index) in inner {
-        children = match named_at(children, name, *index, 0)? {
-            Node::Subform(sf) => &sf.children,
-            Node::Area(a) => &a.children,
-            _ => return None,
-        };
+    walk_named_at(&tpl.root.children, rest)
+}
+
+/// The template field inside a top-level `pageArea` named by `som`, if any.
+pub(crate) fn page_area_field<'a>(tpl: &'a Template, som: &str) -> Option<&'a Field> {
+    let path = som_to_path(som);
+    let ((first, _), rest) = path.split_first()?;
+    if tpl.root.common.name.as_deref() == Some(first.as_str()) {
+        return None;
     }
-    named_at(children, last, *last_index, 0)
+    let area = tpl.root.page_set.as_ref()?.areas.iter().find(|a| a.name.as_deref() == Some(first.as_str()))?;
+    match walk_named_at(&area.items, rest)? {
+        Node::Field(f) => Some(f),
+        _ => None,
+    }
 }
 
 /// Every field with an `id`, with the SOM path the layout gives it: the root subform's
