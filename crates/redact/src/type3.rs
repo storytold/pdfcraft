@@ -1,14 +1,21 @@
 //! Unlink unused Type 3 font glyph programs and prune exclusive graphical resources (F-011).
 
 use std::collections::{HashMap, HashSet};
+use std::hash::{BuildHasher, RandomState};
 
 use pdfcraft_content::Pieces;
-use pdfcraft_cos::{CosError, DecodeBudget, Dict, Document, ObjRef, Object};
+use pdfcraft_cos::{CosError, DecodeBudget, Dict, Document, ObjRef, Object, Stream};
 
 use crate::{RedactError, page_streams};
 
 const MAX_DEPTH: usize = 64;
 const MAX_HOLDERS: usize = 1_000_000;
+/// Most scans in one operation of a form with one font made again while the same page, or the
+/// same form no page draws, is scanned, each in a chain of names other than those it was scanned
+/// in there before, where what it shows depends on the names of what draws it. Those scans also
+/// decode no more than an allowance of a page between them ([`DecodeBudget::page`]). Past either
+/// the cleanup fails rather than scan a form once for every way of reaching it.
+const MAX_RESCANS: usize = 1 << 16;
 
 fn res_dict(doc: &Document, res: &Dict, key: &[u8]) -> Dict {
     res.get(key).and_then(|o| doc.resolve(o).as_dict().cloned()).unwrap_or_default()
@@ -100,18 +107,18 @@ pub(crate) fn type3_code_to_glyph(doc: &Document, font_dict: &Dict) -> Result<[O
     Ok(map)
 }
 
-fn resolve_font_in_res(doc: &Document, res: &Dict, font_name: &[u8]) -> Option<(FontKey, Dict)> {
-    let fonts = res_dict(doc, res, b"Font");
-    let font_obj = fonts.get(font_name)?;
+fn resolve_font_in_res(ctx: &mut ScanContext<'_>, names: &Lookup<'_>, font_name: &[u8]) -> Option<(FontKey, Dict)> {
+    let doc = ctx.doc;
+    let font_obj = names.get(ctx, b"Font", font_name)?;
     // A direct Type 3 font is refused during discovery, so none reaches the scan.
     let font_ref = font_obj.as_ref()?;
-    let dict = doc.resolve(font_obj).as_dict()?.clone();
+    let dict = doc.resolve(&font_obj).as_dict()?.clone();
     (dict.name(b"Subtype") == Some(b"Type3")).then_some((FontKey::Ref(font_ref), dict))
 }
 
-fn resolve_extgstate_font(doc: &Document, res: &Dict, gs_name: &[u8]) -> Option<(FontKey, Dict)> {
-    let extg = res_dict(doc, res, b"ExtGState");
-    let state = doc.resolve(extg.get(gs_name)?).as_dict().cloned()?;
+fn resolve_extgstate_font(ctx: &mut ScanContext<'_>, names: &Lookup<'_>, gs_name: &[u8]) -> Option<(FontKey, Dict)> {
+    let doc = ctx.doc;
+    let state = doc.resolve(&names.get(ctx, b"ExtGState", gs_name)?).as_dict().cloned()?;
     let font_entry = state.get(b"Font").and_then(|f| doc.resolve(f).as_array().cloned())?;
     let font_obj = font_entry.first()?;
     let font_ref = font_obj.as_ref()?;
@@ -295,16 +302,104 @@ struct ScanContext<'a> {
     doc: &'a Document,
     font_maps: &'a HashMap<FontKey, [Option<Vec<u8>>; 256]>,
     used_glyphs: &'a mut HashMap<FontKey, HashSet<Vec<u8>>>,
-    /// A form scanned with its inherited font and the resources it draws through: the same form
-    /// drawn in another context is scanned again.
-    seen_forms: &'a mut HashSet<(ObjRef, Option<FontKey>, ObjRef)>,
+    /// A form scanned with its inherited font and the scope of the names it draws through
+    /// ([`Lookup`]), or in any scope (`None`) where nothing it shows was looked up past its own
+    /// resources, with the lowest level of names its scan read (`usize::MAX` while it is scanned).
+    seen_forms: &'a mut HashMap<(ObjRef, Option<FontKey>, Option<u64>), usize>,
+    /// The forms scanned with each font, in any scope, while the page or the form no page draws
+    /// under way is scanned.
+    scanned: HashSet<(ObjRef, Option<FontKey>)>,
+    /// Scans of such a form there again, in another scope ([`MAX_RESCANS`]).
+    rescans: usize,
+    /// What those scans may decode ([`MAX_RESCANS`]).
+    rescan_budget: DecodeBudget,
+    /// The lowest level of names the scan under way has read ([`Lookup::level`]).
+    lowest: usize,
+    /// What the objects forms give in their resources are ([`crate::interp::kind`]).
+    kinds: crate::interp::Kinds,
+    /// What tells scopes apart, keyed afresh for each scan.
+    hasher: RandomState,
+}
+
+impl ScanContext<'_> {
+    /// The scope of the resources the page or form `r` gives, read alone.
+    fn root(&self, r: ObjRef) -> u64 {
+        self.hasher.hash_one((u64::MAX, r))
+    }
+
+    /// Form `r`'s stream `s`, decoded to be scanned with `font`. Scanned again while the same page
+    /// or form no page draws is, in another scope, it is counted and what it decodes is charged
+    /// ([`MAX_RESCANS`]): only those scans multiply along the ways to a form, and each page is
+    /// scanned once.
+    fn decode_form(&mut self, r: ObjRef, font: Option<FontKey>, s: &Stream) -> Result<Vec<u8>, CosError> {
+        #[cfg(test)]
+        TYPE3_FORM_SCANS.with(|c| c.set(c.get() + 1));
+        if self.scanned.insert((r, font)) {
+            return self.doc.with_direct_parms(s).decoded();
+        }
+        let refused = || CosError::Syntax {
+            offset: 0,
+            detail: "redaction could not fully inspect Type 3 font content: forms are drawn in too many ways".into(),
+        };
+        self.rescans += 1;
+        if self.rescans > MAX_RESCANS {
+            return Err(refused());
+        }
+        // The first scan decoded the same stream, so only the allowance can fail it here.
+        self.rescan_budget.decode(&self.doc.with_direct_parms(s)).map_err(|_| refused())
+    }
+}
+
+/// The resources a scanned content looks names up in, as the renderer does
+/// ([`crate::interp::form_resources`]): `res`, then, for a form with resources of its own, those of
+/// what draws it (`parent`), read in place, not copied. `scope` tells chains apart.
+struct Lookup<'a> {
+    res: &'a Dict,
+    parent: Option<&'a Lookup<'a>>,
+    scope: u64,
+    /// How many forms with resources of their own the chain holds: 0 for a page's or a form's
+    /// resources read alone.
+    level: usize,
+}
+
+impl Lookup<'_> {
+    /// The entry `name` has in `category`, innermost first: in a form's own resources where it is
+    /// what that category holds (a stream for an XObject, a dictionary for a font or a graphics
+    /// state, anything the file defines for a pattern), and otherwise in its caller's.
+    fn get(&self, ctx: &mut ScanContext<'_>, category: &[u8], name: &[u8]) -> Option<Object> {
+        let mut at = Some(self);
+        while let Some(level) = at {
+            ctx.lowest = ctx.lowest.min(level.level);
+            if let Some(entry) = entry_in(ctx.doc, level.res, category, name) {
+                let Some(_) = level.parent else { return Some(entry) };
+                let kind = crate::interp::kind(ctx.doc, &entry, &mut ctx.kinds);
+                let holds = match category {
+                    b"XObject" => kind.stream,
+                    b"Font" | b"ExtGState" => kind.dict,
+                    _ => kind.defined,
+                };
+                if holds {
+                    return Some(entry);
+                }
+            }
+            at = level.parent;
+        }
+        None
+    }
+}
+
+/// The entry `name` has in the `category` dictionary of `res`, read in place where it is direct.
+fn entry_in(doc: &Document, res: &Dict, category: &[u8], name: &[u8]) -> Option<Object> {
+    match res.get(category)? {
+        held @ Object::Ref(_) => doc.resolve(held).as_dict()?.get(name).cloned(),
+        held => held.as_dict()?.get(name).cloned(),
+    }
 }
 
 fn scan_content_stream(
     ctx: &mut ScanContext<'_>,
     content: &[Vec<u8>],
-    holder_ref: ObjRef,
-    res: &Dict,
+    names: &Lookup<'_>,
     initial_font: Option<FontKey>,
     depth: usize,
 ) -> Result<(), CosError> {
@@ -329,21 +424,21 @@ fn scan_content_stream(
             }
             b"Do" => {
                 if let Some(name) = op.last_name() {
-                    scan_xobject(ctx, res, holder_ref, name, current_font, depth)?;
+                    scan_xobject(ctx, names, name, current_font, depth)?;
                 }
             }
             b"gs" => {
-                apply_text_op(ctx, res, &op, &mut current_font);
+                apply_text_op(ctx, names, &op, &mut current_font);
                 if let Some(name) = op.last_name() {
-                    scan_soft_mask(ctx, res, holder_ref, name, depth)?;
+                    scan_soft_mask(ctx, names, name, depth)?;
                 }
             }
             b"scn" | b"SCN" => {
                 if let Some(name) = op.last_name() {
-                    scan_pattern(ctx, res, holder_ref, name, depth)?;
+                    scan_pattern(ctx, names, name, depth)?;
                 }
             }
-            _ => apply_text_op(ctx, res, &op, &mut current_font),
+            _ => apply_text_op(ctx, names, &op, &mut current_font),
         }
     }
     if read.skipped() > 0 {
@@ -354,16 +449,16 @@ fn scan_content_stream(
 
 /// Apply an operator that changes or uses the current font: `Tf`, `gs`, and the text-showing
 /// operators, which record the glyphs they draw.
-fn apply_text_op(ctx: &mut ScanContext<'_>, res: &Dict, op: &pdfcraft_content::Op, current_font: &mut Option<FontKey>) {
+fn apply_text_op(ctx: &mut ScanContext<'_>, names: &Lookup<'_>, op: &pdfcraft_content::Op, current_font: &mut Option<FontKey>) {
     match op.op.as_slice() {
         b"Tf" => {
             if let Some(name) = op.name_back(1) {
-                *current_font = resolve_font_in_res(ctx.doc, res, name).map(|(k, _)| k);
+                *current_font = resolve_font_in_res(ctx, names, name).map(|(k, _)| k);
             }
         }
         b"gs" => {
             if let Some(name) = op.last_name()
-                && let Some((k, _)) = resolve_extgstate_font(ctx.doc, res, name)
+                && let Some((k, _)) = resolve_extgstate_font(ctx, names, name)
             {
                 *current_font = Some(k);
             }
@@ -397,49 +492,40 @@ fn mark_shown(ctx: &mut ScanContext<'_>, font: Option<FontKey>, bytes: &[u8]) {
     }
 }
 
-/// Scan the Form XObject `name` drawn by a `Do` operator, once per (form, font, drawing holder).
-fn scan_xobject(
-    ctx: &mut ScanContext<'_>,
-    res: &Dict,
-    holder_ref: ObjRef,
-    name: &[u8],
-    current_font: Option<FontKey>,
-    depth: usize,
-) -> Result<(), CosError> {
-    let xo = res_dict(ctx.doc, res, b"XObject");
-    let Some(r) = xo.get(name).and_then(Object::as_ref) else { return Ok(()) };
+/// Scan the Form XObject `name` drawn by a `Do` operator, once per (form, font, scope).
+fn scan_xobject(ctx: &mut ScanContext<'_>, names: &Lookup<'_>, name: &[u8], current_font: Option<FontKey>, depth: usize) -> Result<(), CosError> {
+    let Some(r) = names.get(ctx, b"XObject", name).and_then(|o| o.as_ref()) else { return Ok(()) };
     if !matches!(&*ctx.doc.get(r), Object::Stream(s) if s.dict.name(b"Subtype") == Some(b"Form")) {
         return Ok(());
     }
-    scan_stream_object(ctx, res, holder_ref, r, current_font, depth)
+    scan_stream_object(ctx, names, r, current_font, depth)
 }
 
 /// Scan the tiling pattern `name` that an `scn` or `SCN` operator selects. Its cell is content of
 /// its own and can show glyphs of a font the page lists too. A shading pattern is not a stream and
 /// draws no text.
-fn scan_pattern(ctx: &mut ScanContext<'_>, res: &Dict, holder_ref: ObjRef, name: &[u8], depth: usize) -> Result<(), CosError> {
-    let patterns = res_dict(ctx.doc, res, b"Pattern");
-    let Some(r) = patterns.get(name).and_then(Object::as_ref) else { return Ok(()) };
-    scan_stream_object(ctx, res, holder_ref, r, None, depth)
+fn scan_pattern(ctx: &mut ScanContext<'_>, names: &Lookup<'_>, name: &[u8], depth: usize) -> Result<(), CosError> {
+    let Some(r) = names.get(ctx, b"Pattern", name).and_then(|o| o.as_ref()) else { return Ok(()) };
+    scan_stream_object(ctx, names, r, None, depth)
 }
 
 /// Scan the transparency group of the soft mask that the ExtGState `name` sets: what it shows
 /// shapes the page, so its glyphs are in use.
-fn scan_soft_mask(ctx: &mut ScanContext<'_>, res: &Dict, holder_ref: ObjRef, name: &[u8], depth: usize) -> Result<(), CosError> {
-    let states = res_dict(ctx.doc, res, b"ExtGState");
-    let Some(state) = states.get(name).and_then(|s| ctx.doc.resolve(s).as_dict().cloned()) else { return Ok(()) };
+fn scan_soft_mask(ctx: &mut ScanContext<'_>, names: &Lookup<'_>, name: &[u8], depth: usize) -> Result<(), CosError> {
+    let Some(state) = names.get(ctx, b"ExtGState", name).and_then(|s| ctx.doc.resolve(&s).as_dict().cloned()) else { return Ok(()) };
     let Some(mask) = state.get(b"SMask").and_then(|m| ctx.doc.resolve(m).as_dict().cloned()) else { return Ok(()) };
     let Some(group) = mask.get(b"G").and_then(Object::as_ref) else { return Ok(()) };
-    scan_stream_object(ctx, res, holder_ref, group, None, depth)
+    scan_stream_object(ctx, names, group, None, depth)
 }
 
 /// Scan the appearance streams of a page's annotations. A comment, stamp or field can show glyphs
 /// of a Type 3 font that the page lists too. An appearance without resources of its own draws
 /// through the page's.
 fn scan_appearances(ctx: &mut ScanContext<'_>, page: &Dict, page_ref: ObjRef, page_res: &Dict) -> Result<(), CosError> {
+    let names = Lookup { res: page_res, parent: None, scope: ctx.root(page_ref), level: 0 };
     for annot in crate::annots_of(ctx.doc, page) {
         for r in appearance_streams(ctx.doc, &annot) {
-            scan_stream_object(ctx, page_res, page_ref, r, None, 0)?;
+            scan_stream_object(ctx, &names, r, None, 0)?;
         }
     }
     Ok(())
@@ -529,26 +615,56 @@ fn add_soft_mask_ops(doc: &Document, res: &Dict, ops: &mut Vec<pdfcraft_content:
 /// Scan a content stream object (a form, a pattern cell, a soft mask group or an appearance), once
 /// per (stream, font, drawing holder). One with resources of its own draws through them; one
 /// without draws through its caller's.
-fn scan_stream_object(
-    ctx: &mut ScanContext<'_>,
-    res: &Dict,
-    holder_ref: ObjRef,
-    r: ObjRef,
-    current_font: Option<FontKey>,
-    depth: usize,
-) -> Result<(), CosError> {
+fn scan_stream_object(ctx: &mut ScanContext<'_>, names: &Lookup<'_>, r: ObjRef, current_font: Option<FontKey>, depth: usize) -> Result<(), CosError> {
     let obj = ctx.doc.get(r);
     let Object::Stream(s) = &*obj else { return Ok(()) };
-    let own_res = s.dict.get(b"Resources").and_then(|ro| ctx.doc.resolve(ro).as_dict().cloned());
-    let through = if own_res.is_some() { r } else { holder_ref };
-    if !ctx.seen_forms.insert((r, current_font, through)) {
+    // Read in place, so a form drawn again and again isn't copied each time.
+    let resources = s.dict.get(b"Resources");
+    let held = resources.filter(|o| matches!(o, Object::Ref(_))).map(|o| ctx.doc.resolve(o));
+    let own = match (&held, resources) {
+        (Some(held), _) => held.as_dict(),
+        (None, Some(direct)) => direct.as_dict(),
+        (None, None) => None,
+    };
+    let Some(own) = own else {
+        // A form without resources of its own reads its caller's names: scanned once in each scope.
+        if let Some(&read) = ctx.seen_forms.get(&(r, current_font, Some(names.scope))) {
+            ctx.lowest = ctx.lowest.min(read);
+            return Ok(());
+        }
+        ctx.seen_forms.insert((r, current_font, Some(names.scope)), usize::MAX);
+        let data = ctx.decode_form(r, current_font, s)?;
+        let outer = std::mem::replace(&mut ctx.lowest, usize::MAX);
+        let scanned = scan_content_stream(ctx, std::slice::from_ref(&data), names, current_font, depth + 1);
+        let read = ctx.lowest;
+        ctx.lowest = outer.min(read);
+        scanned?;
+        ctx.seen_forms.insert((r, current_font, Some(names.scope)), read);
+        return Ok(());
+    };
+    // Scanned where nothing it shows came from past its own names, it shows the same anywhere.
+    if ctx.seen_forms.contains_key(&(r, current_font, None)) {
         return Ok(());
     }
-    let data = ctx.doc.with_direct_parms(s).decoded()?;
-    match own_res {
-        Some(own) => scan_content_stream(ctx, std::slice::from_ref(&data), r, &own, current_font, depth + 1),
-        None => scan_content_stream(ctx, std::slice::from_ref(&data), holder_ref, res, current_font, depth + 1),
+    if let Some(&read) = ctx.seen_forms.get(&(r, current_font, Some(names.scope))) {
+        ctx.lowest = ctx.lowest.min(read);
+        return Ok(());
     }
+    ctx.seen_forms.insert((r, current_font, Some(names.scope)), usize::MAX);
+    let data = ctx.decode_form(r, current_font, s)?;
+    // A name its own resources lack is looked up in those of what draws it.
+    let level = names.level + 1;
+    let inner = Lookup { res: own, parent: Some(names), scope: ctx.hasher.hash_one((names.scope, r)), level };
+    let outer = std::mem::replace(&mut ctx.lowest, usize::MAX);
+    let scanned = scan_content_stream(ctx, std::slice::from_ref(&data), &inner, current_font, depth + 1);
+    let read = ctx.lowest;
+    ctx.lowest = outer.min(read);
+    scanned?;
+    ctx.seen_forms.insert((r, current_font, Some(names.scope)), read);
+    if read >= level {
+        ctx.seen_forms.insert((r, current_font, None), read);
+    }
+    Ok(())
 }
 
 /// The font object an ExtGState's `/Font` entry names (its first element), if any.
@@ -719,9 +835,20 @@ pub(crate) fn unlink_type3(doc: &mut Document) -> Result<(), RedactError> {
     // Scan all page contents and reachable forms to discover surviving glyph usage.
     let page_list = pdfcraft_model::pages(doc);
     let mut used_glyphs: HashMap<FontKey, HashSet<Vec<u8>>> = HashMap::new();
-    let mut seen_drawn_forms = HashSet::new();
+    let mut seen_drawn_forms = HashMap::new();
 
-    let mut ctx = ScanContext { doc, font_maps: &font_maps, used_glyphs: &mut used_glyphs, seen_forms: &mut seen_drawn_forms };
+    let mut ctx = ScanContext {
+        doc,
+        font_maps: &font_maps,
+        used_glyphs: &mut used_glyphs,
+        seen_forms: &mut seen_drawn_forms,
+        scanned: HashSet::new(),
+        rescans: 0,
+        rescan_budget: DecodeBudget::page(),
+        lowest: usize::MAX,
+        kinds: crate::interp::Kinds::new(),
+        hasher: RandomState::new(),
+    };
 
     for (pi, p) in page_list.iter().enumerate() {
         let (_, content) = page_streams(ctx.doc, &p.dict, pi)?;
@@ -736,16 +863,21 @@ pub(crate) fn unlink_type3(doc: &mut Document) -> Result<(), RedactError> {
             })
             .unwrap_or_default();
 
-        scan_content_stream(&mut ctx, &content, p.obj, &page_res, None, 0)?;
+        // A form scanned again for another page grows with the pages, not with the ways to it.
+        ctx.scanned.clear();
+        let names = Lookup { res: &page_res, parent: None, scope: ctx.root(p.obj), level: 0 };
+        scan_content_stream(&mut ctx, &content, &names, None, 0)?;
         scan_appearances(&mut ctx, &p.dict, p.obj, &page_res)?;
     }
 
     // Also scan any surviving form that wasn't reached by page streams directly.
     for (form_ref, form_res) in &form_holders {
-        if !ctx.seen_forms.iter().any(|(form, _, _)| form == form_ref) {
+        if !ctx.seen_forms.keys().any(|(form, _, _)| form == form_ref) {
             let Object::Stream(s) = &*ctx.doc.get(*form_ref) else { continue };
             let data = ctx.doc.with_direct_parms(s).decoded()?;
-            scan_content_stream(&mut ctx, std::slice::from_ref(&data), *form_ref, form_res, None, 0)?;
+            ctx.scanned.clear();
+            let names = Lookup { res: form_res, parent: None, scope: ctx.root(*form_ref), level: 0 };
+            scan_content_stream(&mut ctx, std::slice::from_ref(&data), &names, None, 0)?;
         }
     }
 
@@ -960,4 +1092,10 @@ fn remove_font_from_holders(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+thread_local! {
+    /// How many scans of forms the Type 3 cleanup has made.
+    pub(crate) static TYPE3_FORM_SCANS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }

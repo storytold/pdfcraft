@@ -1,6 +1,6 @@
 //! A minimal text extractor, independent of the interpreter's font metrics and hit test.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use pdfcraft_content::{Matrix, parse};
 use pdfcraft_cos::{Dict, Document, ObjRef, Object, Stream};
@@ -476,8 +476,16 @@ pub(super) fn page_content(doc: &Document, page: &Dict, ctx: &Ctx, skip_overlay:
 pub(super) fn extract_page(doc: &Document, page: &Dict, ctx: &Ctx, regions: &[[f64; 4]]) -> Result<Extracted, ()> {
     let data = page_content(doc, page, ctx, true)?;
     let res = page.get(b"Resources").and_then(|r| doc.resolve(r).as_dict().cloned()).unwrap_or_default();
-    let mut ex = Extractor { doc, ctx, regions, out: Extracted { shown_in: vec![0; regions.len()], ..Extracted::default() }, stack: Vec::new() };
-    ex.scope(&data, &res, Matrix::IDENTITY, 0, true)?;
+    let mut ex = Extractor {
+        doc,
+        ctx,
+        regions,
+        out: Extracted { shown_in: vec![0; regions.len()], ..Extracted::default() },
+        stack: Vec::new(),
+        held: 0,
+        kinds: crate::interp::Kinds::new(),
+    };
+    ex.scope(&data, &res, Some(&res), Matrix::IDENTITY, 0, true)?;
     for a in annots_of(doc, page) {
         let Some(d) = doc.resolve(&a).as_dict().cloned() else { continue };
         let Some(ap) = d.get(b"AP").and_then(|x| doc.resolve(x).as_dict().cloned()) else { continue };
@@ -544,6 +552,11 @@ pub(super) struct Extractor<'a> {
     pub(super) regions: &'a [[f64; 4]],
     pub(super) out: Extracted,
     pub(super) stack: Vec<ObjRef>,
+    /// The resource names the forms on the way to this point are read with
+    /// ([`crate::interp::MAX_HELD_BYTES`]).
+    held: usize,
+    /// What the objects forms give in their resources are ([`crate::interp::kind`]).
+    kinds: crate::interp::Kinds,
 }
 
 impl Extractor<'_> {
@@ -558,8 +571,21 @@ impl Extractor<'_> {
         }
         let result = (|| {
             let data = self.ctx.decode(self.doc, s)?;
+            // A name its own resources lack is looked up in its caller's, as the renderer does.
             let own = s.dict.get(b"Resources").and_then(|r| self.doc.resolve(r).as_dict().cloned());
-            self.scope(&data, own.as_ref().unwrap_or(parent), ctm, depth, placed)
+            let held = match &own {
+                Some(own) => crate::interp::held_bytes(self.doc, own).saturating_add(crate::interp::held_bytes(self.doc, parent)),
+                None => crate::interp::held_bytes(self.doc, parent),
+            };
+            if self.held.saturating_add(held) > crate::interp::MAX_HELD_BYTES {
+                return Err(());
+            }
+            let names = own.as_ref().map(|own| crate::interp::form_resources(self.doc, own, parent, &mut self.kinds));
+            let res = names.as_ref().unwrap_or(parent);
+            self.held += held;
+            let read = self.scope(&data, res, own.as_ref(), ctm, depth, placed);
+            self.held = self.held.saturating_sub(held);
+            read
         })();
         if id.is_some() {
             self.stack.pop();
@@ -624,7 +650,10 @@ impl Extractor<'_> {
         }
     }
 
-    fn scope(&mut self, data: &[u8], res: &Dict, ctm: Matrix, depth: usize, placed: bool) -> Result<(), ()> {
+    /// Read content with the names `res`, then the tiling patterns `patterns` gives: the resources
+    /// this content gives itself, if any. Its caller's were read where they were given, and a copy
+    /// of them in `res` would read them again on every draw, and in every pattern among them.
+    fn scope(&mut self, data: &[u8], res: &Dict, patterns: Option<&Dict>, ctm: Matrix, depth: usize, placed: bool) -> Result<(), ()> {
         if depth > MAX_DEPTH {
             return Err(());
         }
@@ -722,12 +751,24 @@ impl Extractor<'_> {
             }
         }
         // Tiling patterns draw content of their own, repeated where the pattern is used: its
-        // glyphs can't be placed.
-        for (_, p) in res_dict(doc, res, b"Pattern").iter() {
+        // glyphs can't be placed. One given under several names is read once: it reads the same.
+        let mut read = HashSet::new();
+        for (_, p) in patterns.map(|own| res_dict(doc, own, b"Pattern")).unwrap_or_default().iter() {
+            if p.as_ref().is_some_and(|r| !read.insert(r)) {
+                continue;
+            }
             if let Object::Stream(s) = &*doc.resolve(p) {
+                #[cfg(test)]
+                PATTERN_READS.with(|c| c.set(c.get() + 1));
                 self.stream(s, p.as_ref(), res, Matrix::IDENTITY, depth + 1, false)?;
             }
         }
         Ok(())
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// How many tiling patterns the text extraction has read.
+    pub(crate) static PATTERN_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }

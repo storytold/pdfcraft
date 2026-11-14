@@ -3453,6 +3453,25 @@ fn what_content_draws_through_its_resources_is_read_up_to_two_million_operators(
     }
 }
 
+/// Forms with resources of their own are read up to 2,000,000 of their operators between them; past
+/// that the later ones aren't read, and the read goes on. `/Small`, drawn after `/Big`, draws `/Im`
+/// through its caller's names, and counts only while `/Big` stays within them.
+#[test]
+fn forms_with_resources_of_their_own_are_read_up_to_two_million_operators() {
+    for (ops, read) in [(1_999_999, true), (2_000_000, false)] {
+        let doc = pdf(vec![
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [] /Count 0 >>".to_vec(),
+            stream("/Type /XObject /Subtype /Form /BBox [0 0 1 1] /Resources << /ProcSet [/PDF] >>", b"n ".repeat(ops)),
+            stream("/Type /XObject /Subtype /Form /BBox [0 0 1 1] /Resources << /ProcSet [/PDF] >>", b"/Im Do"),
+        ]);
+        let forms = Dict::from_iter([(b"Big".to_vec(), Object::Ref(ObjRef::new(3, 0))), (b"Small".to_vec(), Object::Ref(ObjRef::new(4, 0)))]);
+        let res = Dict::from_iter([(b"XObject".to_vec(), Object::Dict(forms))]);
+        let found = crate::interp::resource_ops(&doc, &mut pdfcraft_cos::DecodeBudget::page(), &res, &[b"/Big Do /Small Do".to_vec()]).unwrap();
+        assert_eq!(found.iter().any(|op| op.last_name() == Some(b"Im".as_slice())), read, "/Big of {ops} operators");
+    }
+}
+
 /// `content` behind a PNG predictor (Up, one column) whose `/DecodeParms` are given by reference,
 /// in a stream with `entries` too: read without the parameters, its bytes are the predictor's tags
 /// and differences, not the operators.
@@ -6277,6 +6296,7 @@ fn unused_descriptions_in_shared_or_inherited_resources_are_retired() {
 mod descriptions;
 mod elsewhere;
 mod form_matrix;
+mod form_names;
 mod hidden_scope;
 mod identification;
 mod inline_images;

@@ -70,7 +70,11 @@ mod snapshot;
 mod sweep;
 mod util;
 
+#[cfg(test)]
+pub(crate) use extract::PATTERN_READS;
 pub(crate) use extract::matrix_of;
+#[cfg(test)]
+pub(crate) use geometry::{HIDDEN_LOOKS, HIDDEN_SEARCHES};
 pub use snapshot::Snapshot;
 /// What the proof established for one region.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -127,7 +127,42 @@ A verification pass re-reads each redacted page and fails the operation if any g
 image is still under an area. It checks every content stream the page had, whatever its
 dictionary calls it; only the overlay streams this `apply` added (`Report::overlays`) are skipped.
 Text is placed with the font and size set by `Tf` or by an ExtGState's `/Font` through `gs`, and a
-form XObject starts from the text state of the content that draws it. Content that can't be
+form XObject starts from the text state of the content that draws it. A form with resources of its own
+looks a name they lack up in the resources of the content that draws it, as the renderer does, for its
+XObjects, fonts, graphics states and patterns, the names redaction looks up; not for its
+marked-content properties, nor its colour spaces and shadings, which redaction doesn't look up by
+name (`cs` keeps a pattern for `/Pattern` alone). Each form is read with a copy of those names, its own added (a form without
+resources of its own, with a copy of its caller's), so the forms nested along
+one path may hold at most 16 MiB of resources between them, with resources of their own or
+without, each entry counted as its name's length and 56 bytes, with what a value gives directly:
+past that, Apply refuses the page and the proof says it can't check it, rather than hold the
+chain's depth times their size. The verification's search for images inside pattern cells, soft
+masks and Type 3 glyphs looks names up so too (a glyph in its font's resources before those of
+the content whose resources give the font), reading them in place instead of copying them, so
+this bound doesn't apply there; it searches such a stream again in each scope where what it draws
+is looked up through what draws it, up to 4,096 such searches on a page, past which it says it
+can't check. The walk, the verification pass, the check of what pages sharing a resource
+dictionary still draw, the cleanups of a rewritten page's and form's own resources (the XObjects
+replaced, fonts and properties) and the Type 3 font cleanup all read it so. A form without
+resources of its own inside such a form reads the page's properties, and the page keeps them. The
+cleanups of a page's and form's own resources read a form with resources of its own as far as they
+can, within an allowance of a page of their own, not following a form drawn inside itself again
+nor a chain deeper than the walk follows forms. One that doesn't decode isn't read, bytes the
+parser can't read in one are passed over, and past that allowance, 2,000,000 of such forms'
+operators or 65,536 scopes the rest aren't read, never failing the operation, so a name drawn only
+there can still be dropped, losing paint beside a mark; a name nothing draws is never kept,
+except a property named by a form whose `/Resources` isn't a dictionary, which is kept as the page's. The
+Type 3 font cleanup's scan of the glyphs shown is the exception: it reads such forms in full, as
+before, and scans one again under another chain of names only where its scan looked a name up
+past its own resources, found there or not. It fails past 65,536 scans in all of forms, with
+resources of their own or without, made again in another chain of names while the same page, or
+form no page draws, is scanned, or past an allowance of a page decoded by them in all. So pages
+that each reach one form through many forms with resources of their own add up: 50 pages, each
+drawing 30 such forms that draw one 200 KB form showing text with the page's Type 3 font, are
+refused.
+Colour spaces and shadings that a form with resources of its own, or a form without resources
+inside it, takes from its caller aren't counted, as the walk doesn't look them up by name, so the
+Type 3 font cleanup can drop one that a form inside a font's form takes that way. Content that can't be
 decoded makes the operation fail rather than leave it unredacted, and so does an inline image the
 renderer's tokenizer reads no image for (`RedactError::Unreadable`): where the page's operators
 resume after it would be a guess. So do bytes the content parser can't read, in the page's content
@@ -172,9 +207,13 @@ A redacted page that inherits `/Resources` from the page tree gets them pinned (
 a direct inherited dictionary is made one shared object first) before it is rewritten. The parent's
 `/Resources` is then retired unless another page still inherits it, so it cannot keep a removed
 XObject reachable. Surviving form XObjects lose the resource entries for removed XObjects that
-neither their own content nor a form without resources of its own drawn through them still draws,
-for the same reason, and a redacted page keeps a name under that rule too. Pages that aren't
-redacted are left untouched.
+neither their own content nor a form drawn through them (one without resources of its own, or one
+whose own `/XObject` doesn't give the name as a stream) still draws, for the same reason, and a
+redacted page keeps a name under that rule too. Where that can't be told, the operation fails
+rather than guess: such a form won't decode, forms nest past the depth followed, or forms whose own
+`/XObject` gives streams put the names drawn in more scopes than are followed (65,536 for one
+resource dictionary, and 1,048,576 look-ups in such scopes, or entries read in those forms'
+`/XObject`s, for the whole operation). Pages that aren't redacted are left untouched.
 
 ## Remove hidden information / Sanitize
 
