@@ -10850,7 +10850,7 @@ fn measurement_snap_tool_covers_all_targets() {
         .expect_err("a negative tolerance must not snap to an endpoint");
     assert_eq!(error, ToolError::InvalidArgs("tolerance must be 0 or more display points".into()));
     let exact = ok(&mut a, "measure_snap", json!({"doc":doc,"page":1,"at":[10,280],"tolerance":0}));
-    assert_eq!(exact["snap"]["point"], json!([10.0,280.0]));
+    assert_eq!(exact["snap"]["point"], json!([10.0, 280.0]));
     assert!(ok(&mut a, "measure_snap", json!({"doc":doc,"page":1,"at":[180,180]}))["snap"].is_null());
     let _ = std::fs::remove_dir_all(dir);
 }
