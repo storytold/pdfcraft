@@ -248,10 +248,65 @@ fn with_loca_format_fixed(data: &[u8], index: u32) -> Option<Vec<u8>> {
     Some(fixed)
 }
 
+/// PdfCraft patch (109): a copy of the font with its last `loca` offset set to the `glyf` table's
+/// length, when that offset is smaller than the last glyph's start or past the table's end, or
+/// `None` when it needs no change. `loca` holds `numGlyphs + 1` offsets, the last one the end of
+/// the last glyph (OpenType `loca`), and some subsetters write it as 0: the last glyph then had a
+/// negative length and was dropped, and with it every composite glyph using it, so an `é` whose
+/// accent was the subset's last glyph drew neither the `e` nor the accent (PDFBOX-5917
+/// `test.pdf`). A font whose last glyph starts past the end of `glyf` is left as it is, and so
+/// are the offsets before the last one.
+fn with_loca_end_fixed(data: &[u8], index: u32) -> Option<Vec<u8>> {
+    use skrifa::raw::types::Tag;
+    const LOCA: Tag = Tag::new(b"loca");
+    const GLYF: Tag = Tag::new(b"glyf");
+    let f = FontRef::from_index(data, index).ok()?;
+    let long = match f.head().ok()?.index_to_loc_format() {
+        0 => false,
+        1 => true,
+        _ => return None,
+    };
+    let size: usize = if long { 4 } else { 2 };
+    let last = usize::from(f.maxp().ok()?.num_glyphs());
+    let glyf_len = f.table_data(GLYF)?.len();
+    let loca = f.table_data(LOCA)?;
+    let loca = loca.as_bytes();
+    let offset = |i: usize| -> Option<usize> {
+        let at = i.checked_mul(size)?;
+        Some(match *loca.get(at..at.checked_add(size)?)? {
+            [a, b, c, d] => usize::try_from(u32::from_be_bytes([a, b, c, d])).ok()?,
+            [a, b] => usize::from(u16::from_be_bytes([a, b])).checked_mul(2)?,
+            _ => return None,
+        })
+    };
+    let start = offset(last.checked_sub(1)?)?;
+    let end = offset(last)?;
+    if start > glyf_len || (start <= end && end <= glyf_len) {
+        return None;
+    }
+    // Short offsets count 2-byte units: an odd length ends the glyph a byte early, never before
+    // its start, which is even.
+    let new_end = if long {
+        u32::try_from(glyf_len).ok()?.to_be_bytes().to_vec()
+    } else {
+        u16::try_from(glyf_len / 2).ok()?.to_be_bytes().to_vec()
+    };
+    let loca_at = f.table_directory.table_records().iter().find(|r| r.tag() == LOCA)?.offset() as usize;
+    let at = loca_at.checked_add(last.checked_mul(size)?)?;
+    let mut fixed = data.to_vec();
+    fixed.get_mut(at..at.checked_add(size)?)?.copy_from_slice(&new_end);
+    Some(fixed)
+}
+
 impl OpenTypeFontBlob {
     pub(crate) fn new(data: FontData, index: u32) -> Option<Self> {
         // PdfCraft patch (83): see `with_loca_format_fixed`.
         let data = match with_loca_format_fixed(data.as_ref().as_ref(), index) {
+            Some(fixed) => Arc::new(fixed) as FontData,
+            None => data,
+        };
+        // PdfCraft patch (109): see `with_loca_end_fixed`.
+        let data = match with_loca_end_fixed(data.as_ref().as_ref(), index) {
             Some(fixed) => Arc::new(fixed) as FontData,
             None => data,
         };
@@ -534,5 +589,65 @@ mod tests {
         let shared = blob.clone();
         assert!(Arc::ptr_eq(&blob.1, &shared.1), "clones share one name map");
         assert_eq!(shared.glyph_index_by_name("Alpha"), Some(GlyphId::new(1)));
+    }
+
+    /// A font of `head`, `maxp`, `loca` and a 21-byte `glyf`, with three glyphs and `loca` holding
+    /// `offsets`, long when `long`.
+    fn font_with_loca(long: bool, offsets: [u32; 4]) -> Vec<u8> {
+        let mut head = vec![0; 54];
+        head[50..52].copy_from_slice(&u16::from(long).to_be_bytes());
+        let mut maxp = vec![0, 0, 0x50, 0];
+        maxp.extend(3u16.to_be_bytes());
+        let mut loca = Vec::new();
+        for offset in offsets {
+            if long {
+                loca.extend(offset.to_be_bytes());
+            } else {
+                loca.extend(((offset / 2) as u16).to_be_bytes());
+            }
+        }
+        let tables = [(*b"glyf", vec![0; 21]), (*b"head", head), (*b"loca", loca), (*b"maxp", maxp)];
+        let mut out = vec![0, 1, 0, 0, 0, tables.len() as u8, 0, 0, 0, 0, 0, 0];
+        let mut payload = Vec::new();
+        let header = 12 + 16 * tables.len();
+        let mut at = header;
+        for (tag, bytes) in tables {
+            out.extend(tag);
+            out.extend(0u32.to_be_bytes());
+            out.extend((at as u32).to_be_bytes());
+            out.extend((bytes.len() as u32).to_be_bytes());
+            let padded = bytes.len().div_ceil(4) * 4;
+            at += padded;
+            payload.extend(bytes);
+            payload.resize(at - header, 0);
+        }
+        out.extend(payload);
+        out
+    }
+
+    #[test]
+    fn a_last_loca_offset_out_of_order_ends_at_the_glyf_table() {
+        let fixed_end = |long: bool, offsets: [u32; 4]| {
+            let font = font_with_loca(long, offsets);
+            let fixed = with_loca_end_fixed(&font, 0)?;
+            let f = FontRef::new(&fixed).expect("the fixed font parses");
+            let loca = f.loca(Some(long)).expect("loca reads");
+            assert_eq!(fixed.len(), font.len(), "only bytes change");
+            Some(loca.get_raw(3).expect("four offsets"))
+        };
+        // In order, ending at or before the table's end: left as it is (the font is not copied).
+        assert_eq!(fixed_end(true, [0, 8, 16, 21]), None);
+        assert_eq!(fixed_end(true, [0, 8, 16, 20]), None);
+        assert_eq!(fixed_end(false, [0, 8, 16, 20]), None);
+        assert_eq!(fixed_end(true, [0, 8, 16, 16]), None, "an empty last glyph");
+        // The last offset 0, or below the last glyph's start: the end of `glyf`.
+        assert_eq!(fixed_end(true, [0, 8, 16, 0]), Some(21));
+        assert_eq!(fixed_end(true, [0, 8, 16, 12]), Some(21));
+        assert_eq!(fixed_end(false, [0, 8, 16, 0]), Some(20), "short offsets round down");
+        // Past the end of `glyf`: clamped to it.
+        assert_eq!(fixed_end(true, [0, 8, 16, 400]), Some(21));
+        assert_eq!(fixed_end(false, [0, 8, 16, 24]), Some(20));
+        // The last glyph starting past the end of `glyf` is not repaired.
+        assert_eq!(fixed_end(true, [0, 8, 30, 0]), None);
     }
 }
