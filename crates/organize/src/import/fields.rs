@@ -1,5 +1,6 @@
-use super::copy::WIDGET_KEYS;
+use super::copy::{Copier, WIDGET_KEYS};
 use super::{Dict, Document, HashMap, HashSet, ObjRef, Object, OrganizeError, walk};
+use pdfcraft_cos::PdfString;
 
 /// Rename the top-level fields about to be registered in `dst` whose fully-qualified names
 /// (`parent.T.child`) are already taken, so each imported field stays its own field instead of
@@ -303,6 +304,251 @@ pub(super) fn register_fields(dst: &mut Document, fields: &[ObjRef]) -> Result<(
         }
     }
     Ok(())
+}
+
+/// Copy the source AcroForm's `/DR /Font` entries that the imported fields' `/DA` strings name
+/// into the destination's `/DR`, renaming on a collision, and rewrite the copied `/DA` strings to
+/// match, so a value-only edit of an imported field keeps the font its source form gave it.
+/// Without this, an imported field whose `/DA` names a font the destination form does not have
+/// (or has under a different face) regenerates its appearance in the fallback Helvetica.
+pub(super) fn import_dr_fonts(
+    dst: &mut Document,
+    src: &Document,
+    copier: &mut Copier,
+    fields: &[ObjRef],
+) -> Result<(), OrganizeError> {
+    let wanted = da_fonts(dst, fields);
+    if wanted.is_empty() {
+        return Ok(());
+    }
+    let Some(src_fonts) = dr_fonts(src) else { return Ok(()) };
+    let (font_ref, mut fonts) = match dr_font_entry(dst) {
+        Some(Object::Ref(r)) => (Some(r), dst.get(r).as_dict().cloned().unwrap_or_default()),
+        Some(Object::Dict(d)) => (None, d.clone()),
+        _ => (None, Dict::new()),
+    };
+    let mut taken: Vec<Vec<u8>> = fonts.iter().map(|(k, _)| k.clone()).collect();
+    let mut map: HashMap<String, String> = HashMap::new();
+    let mut pending: Vec<(String, Object)> = Vec::new();
+    for name in wanted {
+        let Some(entry) = src_fonts.get(name.as_bytes()) else { continue };
+        let font_obj = src.resolve(entry).clone();
+        let Some(src_font) = font_obj.as_dict() else { continue };
+        let src_face = face_key(src_font);
+        match fonts.get(name.as_bytes()).map(|o| dst.resolve(o).as_dict().map(face_key)) {
+            // The destination already keeps that name for the same face: reuse it.
+            Some(Some(face)) if face == src_face => {
+                map.insert(name.clone(), name.clone());
+            }
+            // The name is taken by a different face: hand the imported font a fresh one.
+            Some(_) => {
+                let mut n = 1;
+                let new = loop {
+                    let candidate = format!("{name}-{n}");
+                    if !taken.iter().any(|t| t.as_slice() == candidate.as_bytes()) {
+                        break candidate;
+                    }
+                    n += 1;
+                };
+                taken.push(new.clone().into_bytes());
+                map.insert(name.clone(), new.clone());
+                pending.push((new, entry.clone()));
+            }
+            // The name is free: keep it and copy the font under it.
+            None => {
+                map.insert(name.clone(), name.clone());
+                pending.push((name.clone(), entry.clone()));
+            }
+        }
+    }
+    if map.is_empty() {
+        return Ok(());
+    }
+    for (name, entry) in pending {
+        let copied = copier.copy_value(dst, &entry, None)?;
+        fonts.set(name.as_bytes().to_vec(), copied);
+    }
+    set_dr_fonts(dst, font_ref, fonts)?;
+    rewrite_da(dst, fields, &map)
+}
+
+/// A document's AcroForm `/DR /Font` dictionary, resolved and cloned.
+fn dr_fonts(doc: &Document) -> Option<Dict> {
+    let catalog = doc.get(doc.root()?).as_dict().cloned()?;
+    let form = doc.resolve(catalog.get(b"AcroForm")?).as_dict()?.clone();
+    let dr = doc.resolve(form.get(b"DR")?).as_dict()?.clone();
+    doc.resolve(dr.get(b"Font")?).as_dict().cloned()
+}
+
+/// The `/DR /Font` object of the destination, in whatever form it is stored.
+fn dr_font_entry(dst: &Document) -> Option<Object> {
+    let catalog = dst.get(dst.root()?).as_dict().cloned()?;
+    let form_ref = catalog.get(b"AcroForm")?;
+    let form = dst.resolve(form_ref).as_dict()?.clone();
+    let dr_ref = form.get(b"DR")?;
+    let dr = dst.resolve(dr_ref).as_dict()?.clone();
+    dr.get(b"Font").cloned()
+}
+
+/// Write the destination AcroForm's `/DR /Font` back as `fonts`, keeping dictionaries indirect
+/// where they already were (mirroring [`register_fields`]).
+fn set_dr_fonts(dst: &mut Document, font_ref: Option<ObjRef>, fonts: Dict) -> Result<(), OrganizeError> {
+    let root = dst.root().ok_or(OrganizeError::NoPageTree)?;
+    let mut catalog = dst.get(root).as_dict().cloned().ok_or(OrganizeError::NoPageTree)?;
+    let (form_ref, mut form) = match catalog.get(b"AcroForm") {
+        Some(Object::Ref(r)) => (Some(*r), dst.get(*r).as_dict().cloned().unwrap_or_default()),
+        Some(Object::Dict(d)) => (None, d.clone()),
+        _ => (None, Dict::new()),
+    };
+    let (dr_ref, mut dr) = match form.get(b"DR") {
+        Some(Object::Ref(r)) => (Some(*r), dst.get(*r).as_dict().cloned().unwrap_or_default()),
+        Some(Object::Dict(d)) => (None, d.clone()),
+        _ => (None, Dict::new()),
+    };
+    let font = match font_ref {
+        Some(r) => {
+            dst.set(r, Object::Dict(fonts));
+            Object::Ref(r)
+        }
+        None => Object::Dict(fonts),
+    };
+    dr.set(b"Font".to_vec(), font);
+    let dr = match dr_ref {
+        Some(r) => {
+            dst.set(r, Object::Dict(dr));
+            Object::Ref(r)
+        }
+        None => Object::Dict(dr),
+    };
+    form.set(b"DR".to_vec(), dr);
+    match form_ref {
+        Some(r) => dst.set(r, Object::Dict(form)),
+        None => catalog.set(b"AcroForm".to_vec(), Object::Dict(form)),
+    }
+    if form_ref.is_none() {
+        dst.set(root, Object::Dict(catalog));
+    }
+    Ok(())
+}
+
+/// The face a font dictionary paints with: enough to tell Helvetica from Courier (the case at
+/// hand) though not two embedded subsets of one face.
+fn face_key(d: &Dict) -> Vec<Vec<u8>> {
+    [&b"Subtype"[..], &b"BaseFont"[..], &b"Encoding"[..]].iter().map(|k| d.name(k).unwrap_or_default().to_vec()).collect()
+}
+
+/// The font names every `/DA` of the copied field trees selects, in order, deduplicated.
+fn da_fonts(dst: &Document, fields: &[ObjRef]) -> Vec<String> {
+    let mut dicts = Vec::new();
+    let mut seen = HashSet::new();
+    collect_field_dicts(dst, fields, 0, &mut seen, &mut dicts);
+    let mut out: Vec<String> = Vec::new();
+    for (_, d) in dicts {
+        if let Some(Object::String(s)) = d.get(b"DA") {
+            for name in da_font_names(&s.bytes) {
+                if !out.contains(&name) {
+                    out.push(name);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Every field/widget dictionary of the trees rooted at `fields`, cycle- and depth-safe.
+fn collect_field_dicts(dst: &Document, fields: &[ObjRef], depth: u8, seen: &mut HashSet<ObjRef>, out: &mut Vec<(ObjRef, Dict)>) {
+    if depth > 32 {
+        return;
+    }
+    for r in fields {
+        if !seen.insert(*r) {
+            continue;
+        }
+        let Some(d) = dst.get(*r).as_dict().cloned() else { continue };
+        let kids = d.get(b"Kids").map(|k| dst.resolve(k)).and_then(|k| k.as_array().cloned()).unwrap_or_default();
+        out.push((*r, d));
+        let kids: Vec<ObjRef> = kids.iter().filter_map(Object::as_ref).collect();
+        collect_field_dicts(dst, &kids, depth + 1, seen, out);
+    }
+}
+
+/// The font names a `/DA` string selects (`/F1 18 Tf`, `/F1 Tf`), in order.
+fn da_font_names(bytes: &[u8]) -> Vec<String> {
+    let tokens = da_tokens(bytes);
+    let mut out = Vec::new();
+    for i in 0..tokens.len() {
+        if bytes[tokens[i].0] == b'/' && selects_font(&tokens[i + 1..], bytes) {
+            out.push(String::from_utf8_lossy(&bytes[tokens[i].0 + 1..tokens[i].1]).into_owned());
+        }
+    }
+    out
+}
+
+/// Whether the tokens after a `/Name` end in a `Tf` operator (a number may sit between).
+fn selects_font(rest: &[(usize, usize)], bytes: &[u8]) -> bool {
+    match rest.first() {
+        Some(t) if &bytes[t.0..t.1] == b"Tf" => true,
+        Some(t) if parses_number(&bytes[t.0..t.1]) => rest.get(1).is_some_and(|t| &bytes[t.0..t.1] == b"Tf"),
+        _ => false,
+    }
+}
+
+fn parses_number(bytes: &[u8]) -> bool {
+    std::str::from_utf8(bytes).ok().and_then(|s| s.parse::<f64>().ok()).is_some()
+}
+
+/// Whitespace-delimited token spans of a `/DA` string.
+fn da_tokens(bytes: &[u8]) -> Vec<(usize, usize)> {
+    let mut out = Vec::new();
+    let mut start = None;
+    for (i, b) in bytes.iter().chain(std::iter::once(&b' ')).enumerate() {
+        if b.is_ascii_whitespace() {
+            if let Some(s) = start.take() {
+                out.push((s, i));
+            }
+        } else {
+            start.get_or_insert(i);
+        }
+    }
+    out
+}
+
+/// Rewrite the copied `/DA` strings so every selected font name is the destination one.
+fn rewrite_da(dst: &mut Document, fields: &[ObjRef], map: &HashMap<String, String>) -> Result<(), OrganizeError> {
+    let mut dicts = Vec::new();
+    let mut seen = HashSet::new();
+    collect_field_dicts(dst, fields, 0, &mut seen, &mut dicts);
+    for (r, d) in dicts {
+        let Some(Object::String(s)) = d.get(b"DA") else { continue };
+        let Some(new) = rewrite_da_bytes(&s.bytes, map) else { continue };
+        dst.update_dict(r, |f| f.set(b"DA".to_vec(), Object::String(PdfString { bytes: new, hex: s.hex })))?;
+    }
+    Ok(())
+}
+
+/// The `/DA` bytes with every colliding font name replaced, or `None` when nothing changes.
+/// Replacements run back to front so earlier spans stay valid.
+fn rewrite_da_bytes(bytes: &[u8], map: &HashMap<String, String>) -> Option<Vec<u8>> {
+    let tokens = da_tokens(bytes);
+    let mut edits = Vec::new();
+    for i in 0..tokens.len() {
+        if bytes[tokens[i].0] == b'/' && selects_font(&tokens[i + 1..], bytes) {
+            let name = String::from_utf8_lossy(&bytes[tokens[i].0 + 1..tokens[i].1]);
+            if let Some(new) = map.get(name.as_ref())
+                && new.as_bytes() != name.as_bytes()
+            {
+                edits.push((tokens[i].0 + 1, tokens[i].1, new.clone().into_bytes()));
+            }
+        }
+    }
+    if edits.is_empty() {
+        return None;
+    }
+    let mut out = bytes.to_vec();
+    for (start, end, name) in edits.into_iter().rev() {
+        out.splice(start..end, name);
+    }
+    Some(out)
 }
 
 #[cfg(test)]
