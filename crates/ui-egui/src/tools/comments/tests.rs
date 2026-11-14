@@ -370,6 +370,29 @@ fn two_grids_in_one_parent_open_their_pickers_separately() {
 }
 
 #[test]
+fn swatch_grid_columns_match_swatch_size_and_spacing() {
+    // #6612: Grid::min_col_width must match the 22 pt swatch size, so swatches sit 28 pt
+    // apart (22 pt swatch + 6 pt spacing) rather than using egui's default ~40 pt column width.
+    use egui_kittest::kittest::Queryable;
+    let mut h = egui_kittest::Harness::new_ui(|ui| {
+        let _ = swatch_grid(ui, None);
+    });
+    h.run();
+    let yellow = h.get_by_label("Yellow").rect();
+    let orange = h.get_by_label("Orange").rect();
+    let plus = h.get_by_label("Other colour…").rect();
+    assert_eq!(yellow.width(), 22.0);
+    assert_eq!(orange.width(), 22.0);
+    assert_eq!(plus.width(), 22.0);
+    let gap = orange.left() - yellow.right();
+    assert!((gap - 6.0).abs() < 0.1, "swatches in the grid should have a 6 pt gap, but gap is {gap:.1} pt (yellow={yellow:?}, orange={orange:?})");
+    let pitch = orange.center().x - yellow.center().x;
+    assert!((pitch - 28.0).abs() < 0.1, "swatch columns should be 28 pt centre-to-centre (22 pt swatch + 6 pt gap), but pitch is {pitch:.1} pt");
+    let span = plus.right() - yellow.left();
+    assert!((span - 162.0).abs() < 0.1, "first row of 6 swatches should span 162 pt (6 * 22 + 5 * 6), but span is {span:.1} pt");
+}
+
+#[test]
 fn other_colour_opens_the_picker_inside_the_quick_bar_popup() {
     use egui_kittest::kittest::Queryable;
     let mut h = egui_kittest::Harness::new_ui_state(
@@ -897,4 +920,25 @@ fn comment_marker_wins_over_an_overlapping_body_for_pick_and_hover() {
     assert!(hidden.comment_at(marker.center()).is_none());
     super::input::describe(&hidden, &mut view);
     assert!(view.cursor.resolve(&ctx, QuickTool::Select).is_none());
+}
+
+#[test]
+fn the_custom_picker_is_as_wide_as_the_swatch_grid() {
+    // #6612: the picker's saturation/value square follows `slider_width`, and it is as tall as it
+    // is wide. Given the grid's width, the square pushes Apply well over a grid width below the
+    // swatches; at egui's default (about 100 pt) it sat at the popup's left, narrower than the grid.
+    use egui_kittest::kittest::Queryable;
+    let mut h = egui_kittest::Harness::new_ui(|ui| {
+        let _ = swatch_grid(ui, None);
+    });
+    h.run();
+    let grid_left = h.get_by_label("Yellow").rect().left();
+    let plus = h.get_by_label("Other colour…").rect();
+    let grid_width = plus.right() - grid_left;
+    h.get_by_label("Other colour…").click();
+    h.run();
+    let below = h.get_by_label("Apply").rect().top() - plus.bottom();
+    // The square alone is a grid width tall; the colour bars and hue strip add over 60 pt more.
+    // At egui's default width the whole picker is about 200 pt, short of this.
+    assert!(below >= grid_width + 60.0, "the picker's square is as wide as the grid: {below:.1} pt below the swatches, grid {grid_width:.1} pt");
 }
