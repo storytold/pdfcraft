@@ -501,9 +501,12 @@ pub(super) fn collide(glyphs: &[&TextGlyph], height: &dyn Fn(usize) -> f32, h: f
             budget -= 1;
             let (ra, rb) = (union_find(&mut sc.parent, ri), union_find(&mut sc.parent, rj));
             let hj = height(j);
-            let script = is_script_on(&glyphs[i].rect, hi, &glyphs[j].rect, hj) || is_script_on(&glyphs[j].rect, hj, &glyphs[i].rect, hi);
             let overlap = x1.min(glyphs[j].rect[2]) - x0(j);
-            if ra != rb && !script && overlap > RUN_COLLISION * hi.min(hj) {
+            if ra != rb
+                && overlap > RUN_COLLISION * hi.min(hj)
+                && !is_script_run(glyphs, height, sc.text[ri], i, sc.text[rj])
+                && !is_script_run(glyphs, height, sc.text[rj], j, sc.text[ri])
+            {
                 sc.parent[ra] = rb;
                 collided = true;
             }
@@ -582,6 +585,52 @@ pub(super) fn collide(glyphs: &[&TextGlyph], height: &dyn Fn(usize) -> f32, h: f
     // Sorted, so that each glyph's membership is a binary search rather than a scan of the breaks.
     sc.breaks.sort_unstable();
     dense
+}
+
+/// Whether run `script` is a short superscript or subscript on `host` that merely kerns into an
+/// adjacent glyph (`h_idx`), rather than a run of another size overprinted on `host` (#5641).
+fn is_script_run(glyphs: &[&TextGlyph], height: &dyn Fn(usize) -> f32, host: Run, h_idx: usize, script: Run) -> bool {
+    if script.len() > 8 || host.len() < script.len() {
+        return false;
+    }
+    let has_ink = |i: usize| glyphs.get(i).is_some_and(|g| g.text.chars().any(|c| !c.is_whitespace()));
+    if !host.range().any(has_ink) || !script.range().any(has_ink) {
+        return false;
+    }
+    let Some(hg) = glyphs.get(h_idx).map(|g| g.rect) else {
+        return false;
+    };
+    let hh = height(h_idx);
+    let mut sb = [f32::INFINITY, f32::INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY];
+    let mut sh = 0.0_f32;
+    for (i, g) in script.range().filter_map(|i| Some((i, glyphs.get(i)?.rect))) {
+        sb = [sb[0].min(g[0]), sb[1].min(g[1]), sb[2].max(g[2]), sb[3].max(g[3])];
+        sh = sh.max(height(i));
+    }
+    let win = h_idx.saturating_sub(4).max(host.start)..h_idx.saturating_add(5).min(host.end);
+    let mut hb = hg;
+    for g in win.clone().filter_map(|i| Some(glyphs.get(i)?.rect)) {
+        hb[0] = hb[0].min(g[0]);
+        hb[2] = hb[2].max(g[2]);
+    }
+    if !is_script_on(&hb, hh, &sb, sh) {
+        return false;
+    }
+    // A superscript or subscript sits at a word/gap edge and at most kerns into one adjacent ink
+    // glyph; a value drawn over a dot leader or word overprints multiple ink glyphs or sits
+    // between two contiguous ink glyphs of the host run.
+    let min_overlap = RUN_COLLISION * hh.min(sh);
+    let overlapped = win
+        .filter(|&i| has_ink(i))
+        .filter_map(|i| glyphs.get(i))
+        .filter(|g| g.rect[2].min(sb[2]) - g.rect[0].max(sb[0]) > min_overlap)
+        .take(2)
+        .count();
+    let adj_ink = |a: usize, b: usize| {
+        has_ink(a) && has_ink(b) && glyphs.get(a).zip(glyphs.get(b)).is_some_and(|(ga, gb)| (gb.rect[0] - ga.rect[2]).abs() <= WORD_GAP * hh)
+    };
+    let interior = h_idx > host.start && h_idx + 1 < host.end && adj_ink(h_idx - 1, h_idx) && adj_ink(h_idx, h_idx + 1);
+    overlapped <= 1 && !interior
 }
 
 /// Simplified bidi class of a glyph or word gap (UAX #9: strong L/R, numbers, neutrals).
@@ -781,4 +830,93 @@ pub(super) fn same_line(p: &Seg, s: &Seg) -> bool {
     let baseline = |seg: &Seg| seg.bbox[3] - 0.2 * seg.h;
     let gap = s.bbox[0] - p.bbox[2];
     (baseline(p) - baseline(s)).abs() < 0.2 * h && gap > -WORD_GAP * h && gap < SAME_LINE_GAP * p.h.max(s.h)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::layout::layout;
+    use super::*;
+
+    /// Appends glyphs for `text` at font height `h` starting at `(x, baseline)`.
+    fn sized_run(v: &mut Vec<TextGlyph>, text: &str, x: f32, baseline: f32, h: f32) {
+        let mut cursor = x;
+        for c in text.chars() {
+            let w = match c {
+                '.' => 0.278 * h,
+                ':' | ' ' | 'l' | 'i' => 0.278 * h,
+                'W' | 'm' => 0.833 * h,
+                _ => 0.556 * h,
+            };
+            let (x0, y0, x1, y1) = (cursor, baseline - 0.8 * h, cursor + w, baseline + 0.2 * h);
+            v.push(TextGlyph { text: c.to_string(), rect: [x0, y0, x1, y1], quad: [[x0, y0], [x1, y0], [x1, y1], [x0, y1]], direction: [1.0, 0.0] });
+            cursor += w;
+        }
+    }
+
+    /// Issue #5641 (rows A and `text_field_on_leader.pdf`): an 8 pt value drawn over a 10 pt dot
+    /// leader must stay whole across vertical shifts instead of being mistaken for a superscript
+    /// or subscript and spliced glyph by glyph into the leader dots.
+    #[test]
+    fn value_of_another_size_drawn_over_dot_leader_stays_whole() -> Result<(), Box<dyn std::error::Error>> {
+        let leader = "Name: ........................................";
+        for value in ["Walter Example", "Jo"] {
+            for dy in [-3.0_f32, -2.0, -1.5, -1.0, -0.5, 0.0, 0.5, 1.0, 1.5, 2.0, 3.0] {
+                let mut v = Vec::new();
+                sized_run(&mut v, leader, 40.0, 100.0, 10.0);
+                sized_run(&mut v, value, 76.0, 100.0 - dy, 8.0);
+                let extracted = layout(v).plain_text();
+                let same_line = format!("{leader} {value}");
+                let below = format!("{leader}\n{value}");
+                let above = format!("{value}\n{leader}");
+                if extracted != same_line && extracted != below && extracted != above {
+                    return Err(format!("shift {dy:+.1} ({value}): got {extracted:?}, expected {same_line:?}").into());
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Issue #5641 (rows B): an 11 pt run of spaces drawn over an 8 pt line must not be treated
+    /// as the host of a subscript/superscript line and spliced into the words of the 8 pt line.
+    #[test]
+    fn taller_space_run_drawn_over_line_does_not_split_words() -> Result<(), Box<dyn std::error::Error>> {
+        let line = "B+1.0 quick brown fox jumps";
+        let spaces = "                    ";
+        for dy in [-3.0_f32, -2.0, -1.5, -1.0, -0.5, 0.0, 0.5, 1.0, 1.5, 2.0, 3.0] {
+            let mut v = Vec::new();
+            sized_run(&mut v, line, 40.0, 100.0, 8.0);
+            sized_run(&mut v, spaces, 40.0, 100.0 - dy, 11.0);
+            let extracted = layout(v).plain_text();
+            if extracted.trim() != line {
+                return Err(format!("shift {dy:+.1}: got {extracted:?}, expected {line:?}").into());
+            }
+        }
+        Ok(())
+    }
+
+    /// Verifies that genuine kerned superscripts and subscripts overlapping their host word edge
+    /// pass `is_script_run` and remain inline.
+    #[test]
+    fn kerned_superscript_and_subscript_stay_in_line() -> Result<(), Box<dyn std::error::Error>> {
+        // Superscript drawn before the host run (tests `win` lower-bound clamping to `host.start`).
+        let mut before = Vec::new();
+        sized_run(&mut before, "2", 52.0, 96.5, 7.0);
+        sized_run(&mut before, "mc = E", 40.0, 100.0, 10.0);
+        let got_before = layout(before).plain_text();
+        if got_before != "mc2 = E" {
+            return Err(format!("superscript drawn before host run did not stay inline: {got_before:?}").into());
+        }
+
+        // Subscript in a TJ-gapped single host run ("CH" + gap + "O" with kerned subscript "2"
+        // overlapping "H" by 2.12 > RUN_COLLISION * 7.0 = 1.75).
+        let mut formula = Vec::new();
+        sized_run(&mut formula, "CH", 40.0, 100.0, 10.0);
+        sized_run(&mut formula, "O equals water", 53.5, 100.0, 10.0);
+        sized_run(&mut formula, "2", 49.0, 102.0, 7.0);
+        let got_formula = layout(formula).plain_text();
+        if got_formula != "CH2O equals water" {
+            return Err(format!("kerned subscript in TJ-gapped formula did not stay inline: {got_formula:?}").into());
+        }
+        Ok(())
+    }
 }
