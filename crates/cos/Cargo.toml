@@ -12,6 +12,8 @@ workspace = true
 craft-pdf = { workspace = true }
 
 [dev-dependencies]
+pdfcraft-crypt = { workspace = true }
+pdfcraft-filters = { workspace = true }
 pdfcraft-oracle = { workspace = true }
 pdfcraft-testkit = { workspace = true }
 serde_json = { workspace = true }
