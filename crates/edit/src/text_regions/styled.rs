@@ -830,6 +830,15 @@ fn wrapped_before(block: &TextBlock, lines: &[TextLine], row: usize, next_word: 
     (next_word > 0.0 && next_word + line.size.max(1.0) * 0.25 > slack).then_some(1)
 }
 
+/// The first word of source row `row` as its first run set it: each character with that run and
+/// its font, the way a draft's characters are measured.
+fn source_first_word(block: &TextBlock, lines: &[TextLine], row: usize) -> Vec<StyledChar> {
+    let Some((index, line)) = block.rows.get(row).and_then(|r| r.first()).and_then(|i| lines.get(*i).map(|line| (*i, line))) else {
+        return Vec::new();
+    };
+    line.text.chars().skip_while(|c| c.is_whitespace()).take_while(|c| !c.is_whitespace()).map(|c| (c, index, line.font.clone())).collect()
+}
+
 /// When an edit makes a row too long for its place, the rows after it flow on from it: each
 /// following break that was a wrap ([`wrapped_before`]) gives way, up to the next break that was
 /// typed, so the words that no longer fit move down through the paragraph as in a word processor.
@@ -860,11 +869,19 @@ fn reflow_after_overflow(
             flowing = measure(text.get(..shown).unwrap_or_default())? > width_of(row) + 0.5;
         }
         if flowing {
-            // The first word of the row after the break, as the draft has it.
-            let next = chars.get(end + 1..breaks.get(row + 1).copied().unwrap_or(chars.len())).unwrap_or_default();
-            let from = next.iter().position(|c| !c.0.is_whitespace()).unwrap_or(next.len());
-            let to = next.iter().skip(from).position(|c| c.0.is_whitespace()).map_or(next.len(), |n| from + n);
-            let word = measure(next.get(from..to).unwrap_or_default())?;
+            // The break is judged by the word the source set after it, in its own font: what the
+            // draft has there now says nothing about why the source row ended. The draft's word
+            // stands in only where the source's can't be measured.
+            let source_word = source_first_word(block, lines, row + 1);
+            let word = match measure(&source_word) {
+                Ok(width) if width > 0.0 => width,
+                _ => {
+                    let next = chars.get(end + 1..breaks.get(row + 1).copied().unwrap_or(chars.len())).unwrap_or_default();
+                    let from = next.iter().position(|c| !c.0.is_whitespace()).unwrap_or(next.len());
+                    let to = next.iter().skip(from).position(|c| c.0.is_whitespace()).map_or(next.len(), |n| from + n);
+                    measure(next.get(from..to).unwrap_or_default())?
+                }
+            };
             match wrapped_before(block, lines, row + 1, word) {
                 Some(gap) if gap > 0 => {
                     let spaced = end.checked_sub(1).and_then(|i| chars.get(i)).is_some_and(|c| c.0.is_whitespace());

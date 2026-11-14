@@ -47,16 +47,16 @@ fn refuse_clipping_text(lines: &[TextLine], dropped: &std::collections::HashSet<
 /// [`replace_line`] with the most unique characters one generated font may hold (tests lower it).
 pub(crate) fn replace_line_with_limit(doc: &mut Document, page: usize, line: usize, text: &str, max_glyphs: usize) -> Result<LineEdit, EditError> {
     // A font the document only names learns the advances of the new characters first
-    // (`complete_named_font_widths`); a refused edit puts its font object back as it was.
+    // (`complete_named_font_widths`). That and the edit run on a copy, so a refused edit leaves
+    // the document as it was, down to the identity of its objects.
     let font = text_lines(doc, page)?.get(line).map(|l| l.font.clone());
-    let completed = font.map(|font| super::complete_named_font_widths(doc, page, &[font], text)).unwrap_or_default();
-    let edit = replace_line_in_its_font(doc, page, line, text, max_glyphs);
-    if edit.is_err() {
-        for (r, before) in completed {
-            doc.set(r, before);
-        }
+    let mut trial = doc.clone();
+    if !font.is_some_and(|font| super::complete_named_font_widths(&mut trial, page, &[font], text)) {
+        return replace_line_in_its_font(doc, page, line, text, max_glyphs);
     }
-    edit
+    let edit = replace_line_in_its_font(&mut trial, page, line, text, max_glyphs)?;
+    *doc = trial;
+    Ok(edit)
 }
 
 fn replace_line_in_its_font(doc: &mut Document, page: usize, line: usize, text: &str, max_glyphs: usize) -> Result<LineEdit, EditError> {
@@ -927,23 +927,46 @@ fn tabs_as_spaces(doc: &Document, page: usize, lines: &mut [TextLine], block: us
     (gaps, writes_tabs)
 }
 
-/// `draft` with its tabs as [`tabs_as_spaces`] rewrites the source's, in order.
-fn draft_tabs_as_spaces(draft: &str, gaps: &[Option<usize>], writes_tabs: bool) -> String {
+/// `draft` with its tabs as [`tabs_as_spaces`] rewrites the source's, in order, and each tab that
+/// became more than one space: its byte offset in `draft` and the bytes it gained.
+fn draft_tabs_as_spaces(draft: &str, gaps: &[Option<usize>], writes_tabs: bool) -> (String, Vec<(usize, usize)>) {
     let mut gaps = gaps.iter();
     let mut out = String::with_capacity(draft.len());
-    for ch in draft.chars() {
+    let mut grown = Vec::new();
+    for (at, ch) in draft.char_indices() {
         if ch != '\t' {
             out.push(ch);
             continue;
         }
         match gaps.next() {
-            Some(Some(spaces)) => out.extend(std::iter::repeat_n(' ', *spaces)),
+            Some(Some(spaces)) => {
+                out.extend(std::iter::repeat_n(' ', *spaces));
+                if *spaces > 1 {
+                    grown.push((at, *spaces - 1));
+                }
+            }
             Some(None) => out.push('\t'),
             // A tab typed beyond the source's: the font's own where it writes one, else a space.
             None => out.push(if writes_tabs { '\t' } else { ' ' }),
         }
     }
-    out
+    (out, grown)
+}
+
+/// `style` with its byte ranges ([`BlockStyle::ranges`], [`BlockStyle::sources`]) moved to follow
+/// the tabs that grew ([`draft_tabs_as_spaces`]): a caller counts them in the paragraph as it read
+/// with its tabs, and a range left where it was would format the spaces of a gap, or the letters
+/// before the ones asked for. A tab inside a range grows the range.
+fn ranges_after_tabs(style: &BlockStyle, grown: &[(usize, usize)]) -> BlockStyle {
+    let moved = |at: usize| grown.iter().filter(|(tab, _)| *tab < at).fold(at, |at, (_, more)| at.saturating_add(*more));
+    let mut style = style.clone();
+    for range in &mut style.ranges {
+        range.range = moved(range.range.start)..moved(range.range.end);
+    }
+    for (range, _) in &mut style.sources {
+        *range = moved(range.start)..moved(range.end);
+    }
+    style
 }
 
 /// [`rewrite_block_with_limit`] with the page's [`text_lines`], read from `doc` as it is now.
@@ -957,14 +980,29 @@ pub(crate) fn rewrite_block_from(
     max_glyphs: usize,
 ) -> Result<LineEdit, EditError> {
     let mut lines = lines;
+    // Formatting ranges count bytes in the text the caller has: the draft, or with no draft the
+    // paragraph as it read, tabs and all.
+    let ranged = !(style.ranges.is_empty() && style.sources.is_empty());
+    let as_read = match text {
+        None if ranged && lines.iter().any(|line| line.text.contains('\t')) => group_blocks(&lines).get(block).map(|b| b.editor_text.clone()),
+        _ => None,
+    };
     let (tab_gaps, writes_tabs) = tabs_as_spaces(doc, page, &mut lines, block);
     let spaced;
-    let text = match text {
+    let moved;
+    let (text, style) = match text.or(as_read.as_deref()) {
         Some(draft) if draft.contains('\t') => {
-            spaced = draft_tabs_as_spaces(draft, &tab_gaps, writes_tabs);
-            Some(spaced.as_str())
+            let (with_spaces, grown) = draft_tabs_as_spaces(draft, &tab_gaps, writes_tabs);
+            spaced = with_spaces;
+            let style = if ranged && !grown.is_empty() {
+                moved = ranges_after_tabs(style, &grown);
+                &moved
+            } else {
+                style
+            };
+            (text.map(|_| spaced.as_str()), style)
         }
-        other => other,
+        _ => (text, style),
     };
     let blocks = group_blocks(&lines);
     let b = blocks.get(block).cloned().ok_or_else(|| EditError::Invalid(format!("page {} has no paragraph {}", page + 1, block + 1)))?;

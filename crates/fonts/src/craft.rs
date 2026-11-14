@@ -172,8 +172,25 @@ pub fn document_latin_fonts(bold: bool) -> Vec<&'static CraftFont> {
 
 /// The craft-fonts family with the same advance widths as `base_font` (a PDF `/BaseFont`, subset
 /// tag allowed): Liberation Sans for Arial and Helvetica, Liberation Serif for Times New Roman,
-/// Liberation Mono for Courier New, Carlito for Calibri, Caladea for Cambria.
+/// Liberation Mono for Courier New, Carlito for Calibri, Caladea for Cambria. Only for a name that
+/// asks for that family itself, in one of its four styles: `ArialRoundedMTBold`, `TimesTen-Roman`,
+/// `CourierPrime` and `Calibri-Light` start with a family's name and have other widths.
 fn metric_counterpart(base_font: &str) -> Option<&'static str> {
+    match crate::embedding::family_stem(base_font).as_str() {
+        "calibri" => Some("Carlito"),
+        "cambria" => Some("Caladea"),
+        "couriernew" | "courier" | "cousine" | "liberationmono" => Some("Liberation Mono"),
+        "timesnewroman" | "times" | "timesroman" | "tinos" | "liberationserif" => Some("Liberation Serif"),
+        "arial" | "helvetica" | "arimo" | "liberationsans" => Some("Liberation Sans"),
+        _ => None,
+    }
+}
+
+/// The craft-fonts family nearest in look to `base_font` by its name: its [`metric_counterpart`],
+/// or the counterpart of the family its name starts with (`ArialRoundedMTBold`, `Calibri-Light`).
+/// A face to draw a missing character with; only [`metric_counterpart`] says its widths are the
+/// font's.
+fn look_alike(base_font: &str) -> Option<&'static str> {
     let key = crate::embedding::face_key(base_font);
     let starts = |prefixes: &[&str]| prefixes.iter().any(|p| key.starts_with(p));
     // Narrow and black cuts are other widths: they take the nearest kind, not the counterpart.
@@ -194,9 +211,9 @@ fn metric_counterpart(base_font: &str) -> Option<&'static str> {
 }
 
 /// The craft-fonts Latin family that stands in for `base_font` when its own program can't draw a
-/// character: its [`metric_counterpart`] when it has one, else the nearest by kind.
+/// character: its [`look_alike`] when its name gives one, else the nearest by kind.
 fn latin_stand_in_family(base_font: &str, serif: bool, mono: bool) -> &'static str {
-    metric_counterpart(base_font).unwrap_or(if mono {
+    look_alike(base_font).unwrap_or(if mono {
         "Liberation Mono"
     } else if serif {
         "Liberation Serif"
@@ -400,6 +417,20 @@ mod tests {
         assert_eq!(pick("Georgia", true, false, false, false).as_deref(), Some("Liberation Serif Regular"));
         assert_eq!(pick("HouseGrotesk-Italic", false, false, false, true).as_deref(), Some("Inter Italic"));
         assert_eq!(pick("Menlo", false, true, false, false).as_deref(), Some("Liberation Mono Regular"));
+        // A family named after one of those keeps it as its look-alike.
+        assert_eq!(pick("ArialRoundedMTBold", false, false, true, false).as_deref(), Some("Liberation Sans Bold"));
+        assert_eq!(pick("Calibri-Light", false, false, false, false).as_deref(), Some("Carlito Regular"));
+        // Its widths are another matter: only the family itself has a metric counterpart.
+        for name in
+            ["ArialMT", "ABCDEF+Arial-BoldItalicMT", "Helvetica-Oblique", "TimesNewRomanPS-BoldMT", "Times-Roman", "CourierNewPSMT", "Calibri,Bold"]
+        {
+            assert!(metric_counterpart(name).is_some(), "{name}");
+        }
+        for name in
+            ["ArialRoundedMTBold", "ArialNarrow", "Arial-Black", "HelveticaNeue", "TimesTen-Roman", "CourierPrime", "Calibri-Light", "CambriaMath"]
+        {
+            assert_eq!(metric_counterpart(name), None, "{name}");
+        }
         // A variable face is never a stand-in.
         assert!(latin_stand_ins(&faces[12..], "Montserrat", false, false, false, false).is_empty());
         // Without the Latin catalogue there is none.

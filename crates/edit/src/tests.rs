@@ -15663,3 +15663,118 @@ fn thai_paragraphs_break_the_row_on_unicode_row_breaks() {
         assert_eq!(rows(&doc), ["กข", "ค"], "matching U+{:04X}", u32::from(separator));
     }
 }
+
+/// A refused edit leaves the document exactly as it was, so the session it was tried in is still
+/// current and its next draft commits. The widths a named font learns are written on a copy with
+/// the edit: put back by hand, the font objects were new objects to the session, and every later
+/// commit was refused ("the paragraph changed while it was being edited"). The preview completes
+/// the widths as Apply does, so a draft is measured in the font it will be written in.
+#[test]
+fn a_session_survives_a_refused_edit_and_previews_a_named_font_as_it_writes_it() {
+    // Widths that are not the standard face's, so a paragraph set in Helvetica would differ.
+    let font = "<< /Type /Font /Subtype /TrueType /BaseFont /ArialMT /FirstChar 97 /LastChar 98 /Widths [600 600] /Encoding /WinAnsiEncoding >>";
+    let content = stream("", "BT /F1 12 Tf 72 700 Td (abba) Tj ET");
+    let mut doc = build(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
+        &content,
+        font,
+    ]);
+    let session = text::TextSession::open(&doc, 0, 0).unwrap();
+    let style = BlockStyle::default();
+    assert!(session.commit(&mut doc, Some("abba z \u{1f4a9}"), &style).is_err());
+    assert!(session.is_current(&doc), "a refused edit changes nothing the session watches");
+    let preview = session.layout("abba z", &style).unwrap().draft_rect.unwrap();
+    let edit = session.commit(&mut doc, Some("abba z"), &style).expect("the session still commits");
+    assert_eq!(edit.substituted, None, "the paragraph keeps the font it names");
+    let lines = text::text_lines(&reopen(&doc), 0).unwrap();
+    assert!(lines.iter().all(|l| l.base_font == "ArialMT"), "{lines:?}");
+    let right = lines.iter().map(|l| l.rect[2]).fold(f64::MIN, f64::max);
+    assert!((preview[2] - right).abs() < 0.05, "the preview ends where the edit does: {} vs {right}", preview[2]);
+    // The line path refuses on a copy too.
+    let mut by_line = build(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
+        &content,
+        font,
+    ]);
+    let session = text::TextSession::open(&by_line, 0, 0).unwrap();
+    assert!(text::replace_line(&mut by_line, 0, 0, "abba z \u{1f4a9}").is_err());
+    assert!(session.is_current(&by_line));
+}
+
+/// Formatting ranges count bytes in the text as the caller has it, tabs and all. A tab that
+/// becomes several spaces moves the text after it, and the ranges go with it: left where they
+/// were, they coloured the gap and the letters before the ones asked for.
+#[test]
+fn formatting_after_a_tab_that_became_spaces_reaches_the_letters_asked_for() {
+    let widths: Vec<String> = (9..=122).map(|code| if code == 9 { "0".to_owned() } else { "500".to_owned() }).collect();
+    let font = format!(
+        "<< /Type /Font /Subtype /Type1 /BaseFont /HouseSans /FirstChar 9 /LastChar 122 /Widths [{}] /Encoding /WinAnsiEncoding /ToUnicode 6 0 R >>",
+        widths.join(" ")
+    );
+    // The tab is code 9, of no width; a move of two ems stands for it: four of this font's spaces.
+    let content = stream("", "BT /F1 12 Tf 72 700 Td [(a\\011) -2000 (bcd efg)] TJ ET");
+    let to_unicode = stream("", "1 begincodespacerange <00> <FF> endcodespacerange 1 beginbfchar <09> <0009> endbfchar");
+    let doc = build(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
+        &content,
+        &font,
+        &to_unicode,
+    ]);
+    let source = text::text_blocks(&doc, 0).unwrap().remove(0).editor_text;
+    assert_eq!(source, "a\t bcd efg");
+    let at = source.find("efg").unwrap();
+    let red = BlockStyle {
+        ranges: vec![RangeStyle {
+            range: at..at + 3,
+            family: None,
+            resource: None,
+            size: None,
+            color: Some([1.0, 0.0, 0.0]),
+            underline: None,
+            char_spacing: None,
+            scale: None,
+        }],
+        ..Default::default()
+    };
+    // With the text given again, and with the formatting alone.
+    for draft in [Some(source.as_str()), None] {
+        let mut edited = doc.clone();
+        text::rewrite_block(&mut edited, 0, 0, draft, &red).unwrap();
+        let lines = text::text_lines(&reopen(&edited), 0).unwrap();
+        let shown: String = lines.iter().map(|l| l.text.as_str()).collect();
+        assert!(!shown.contains('\t') && shown.contains("   "), "the tab is the spaces of its gap: {shown:?}");
+        let coloured: String = lines.iter().filter(|l| l.color == [1.0, 0.0, 0.0]).map(|l| l.text.as_str()).collect();
+        assert_eq!(coloured.trim(), "efg", "{draft:?}: {shown:?}");
+    }
+}
+
+/// Whether a source break was a wrap is judged by the word the source set after it, not by what
+/// the draft has there now. A row that ended because a long word didn't fit still flows when the
+/// edit also makes that word short; judged by the draft's short word, the break read as typed, the
+/// flow stopped there, and the short word stayed on a row of its own.
+#[test]
+fn a_break_is_judged_by_the_word_the_source_set_after_it() {
+    // Two wrapped rows, a short third that ends because the long word after it didn't fit, and it.
+    let content = "BT /F1 10 Tf 12 TL 72 700 Td (abcd efgh abcd efgh abcd efgh ab) Tj T* (efgh abcd efgh abcd efgh abcd ef) Tj T* (abcd efgh.) Tj T* (efghabcdefghabcdefghabcdef gh) Tj ET";
+    let mut doc = text_page(content);
+    let block = text::text_blocks(&doc, 0).unwrap().remove(0);
+    assert_eq!(block.rows.len(), 4, "{:?}", block.editor_text);
+    // Two more words in the first row, and the long word made short.
+    let draft = block.editor_text.replacen("abcd", "abcd XXXX YYYY", 1).replace("efghabcdefghabcdefghabcdef", "ef");
+    text::rewrite_block(&mut doc, 0, 0, Some(&draft), &text::BlockStyle::default()).unwrap();
+    let block = text::text_blocks(&reopen(&doc), 0).unwrap().remove(0);
+    let rows: Vec<&str> = block.editor_text.split('\n').map(str::trim_end).collect();
+    let words = |text: &str| text.split_whitespace().map(str::to_owned).collect::<Vec<_>>();
+    assert_eq!(words(&block.editor_text), words(&draft), "every word, in order");
+    assert_eq!(
+        rows,
+        ["abcd XXXX YYYY efgh abcd efgh", "abcd efgh ab efgh abcd efgh abcd", "efgh abcd ef abcd efgh. ef gh"],
+        "the words flow through the wrap, and the short word follows the sentence on its row"
+    );
+}

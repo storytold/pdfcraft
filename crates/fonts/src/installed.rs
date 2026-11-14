@@ -8,17 +8,45 @@
 //! Only an exact match counts: the PostScript name the PDF gives, or its family and style
 //! (`Arial,Bold`, `TimesNewRoman`). Only a face whose own embedding permission (OS/2 `fsType`)
 //! allows editable embedding is used ([`crate::embedding::validate`]), and it is embedded whole,
-//! as a font chosen with Load font is. `PDFCRAFT_SYSTEM_FONTS=0` turns this off, as it turns off
-//! the other installed-font uses. The web build has no installed fonts.
+//! as a font chosen with Load font is.
+//!
+//! A process reads the installed fonts only once it has been allowed to ([`allow`]). The desktop
+//! app allows it at start. A headless run (`pdfcraft-cli run`, `mcp`) does not: it is confined to
+//! its `--root`, and the operating system's font folders are outside it. `PDFCRAFT_SYSTEM_FONTS=1`
+//! allows it for a headless run whose owner wants it, and `PDFCRAFT_SYSTEM_FONTS=0` turns it off
+//! everywhere, as it turns off the other installed-font uses. The web build has no installed fonts.
+
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::CraftFont;
+
+/// Whether this process may read the installed fonts ([`allow`]).
+static ALLOWED: AtomicBool = AtomicBool::new(false);
+
+/// Lets this process complete a document's fonts from the fonts installed on the machine. The
+/// desktop app calls it at start; nothing headless does, so a run confined to `--root` reads no
+/// font folder outside it.
+pub fn allow() {
+    ALLOWED.store(true, Ordering::Relaxed);
+}
+
+/// Whether installed fonts may be read now: `PDFCRAFT_SYSTEM_FONTS` (`0` never, `1` always) over
+/// what the process asked for ([`allow`]).
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+fn allowed(setting: Option<&std::ffi::OsStr>, asked: bool) -> bool {
+    match setting.and_then(|v| v.to_str()) {
+        Some("0") => false,
+        Some("1") => true,
+        _ => asked,
+    }
+}
 
 /// Complete installed programs of the font `name` (a PDF `/BaseFont`, subset tag allowed): the
 /// face whose PostScript name it is first, then faces whose family and style it names.
 pub fn matching_installed_faces(name: &str) -> Vec<&'static CraftFont> {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        if std::env::var_os("PDFCRAFT_SYSTEM_FONTS").is_some_and(|v| v == "0") {
+        if !allowed(std::env::var_os("PDFCRAFT_SYSTEM_FONTS").as_deref(), ALLOWED.load(Ordering::Relaxed)) {
             return Vec::new();
         }
         native::matching(native::index(), name)
@@ -66,23 +94,27 @@ pub fn named_font_advance(base_font: &str, ch: char) -> Option<f64> {
 /// name and have other widths.
 fn standard_face(base_font: &str) -> Option<crate::Std14> {
     let (face, how) = crate::Std14::recognise(base_font)?;
-    let mut key = crate::embedding::face_key(base_font);
-    for style in ["bolditalic", "boldoblique", "bold", "italic", "oblique", "regular"] {
-        key = key.replace(style, "");
-    }
-    for suffix in ["psmt", "mt", "ps"] {
-        if let Some(stem) = key.strip_suffix(suffix) {
-            key = stem.to_owned();
-            break;
-        }
-    }
-    let exact = ["arial", "helvetica", "timesnewroman", "times", "timesroman", "couriernew", "courier"].contains(&key.as_str());
+    let family = crate::embedding::family_stem(base_font);
+    let exact = ["arial", "helvetica", "timesnewroman", "times", "timesroman", "couriernew", "courier"].contains(&family.as_str());
     (exact && how == crate::Std14Match::Alias).then_some(face)
 }
 
 #[cfg(test)]
 mod named_tests {
     use super::*;
+
+    #[test]
+    fn installed_fonts_are_read_only_when_allowed() {
+        use std::ffi::OsStr;
+        // Headless by default: nothing asked, nothing set.
+        assert!(!allowed(None, false));
+        // The desktop app asks; the setting overrides either way.
+        assert!(allowed(None, true));
+        assert!(allowed(Some(OsStr::new("1")), false));
+        assert!(!allowed(Some(OsStr::new("0")), true));
+        // Anything else leaves it to the process.
+        assert!(!allowed(Some(OsStr::new("yes")), false) && allowed(Some(OsStr::new("")), true));
+    }
 
     #[test]
     fn standard_metrics_serve_only_the_names_that_ask_for_that_face() {

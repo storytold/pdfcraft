@@ -63,8 +63,10 @@ gives, or its family and style, exactly), its complete program completes the emb
 the way a matching craft-fonts face does: the paragraph keeps its own font for every character
 it had and the new ones come from the installed program, which is embedded whole. Only a face
 whose own embedding permission (`fsType`) allows editable embedding is used, never for a font
-the document does not embed, and `PDFCRAFT_SYSTEM_FONTS=0` turns it off
-(`crates/fonts/src/installed.rs`).
+the document does not embed (`crates/fonts/src/installed.rs`). The desktop app does this. A
+headless run (`pdfcraft-cli run`, `mcp`) does not read the machine's fonts, which are outside
+`--root`, unless `PDFCRAFT_SYSTEM_FONTS=1` is set. `PDFCRAFT_SYSTEM_FONTS=0` turns it off
+everywhere.
 
 Otherwise a paragraph whose embedded font lacks a character keeps that font for every
 character it has, and only the missing ones are drawn by a stand-in, as outlines. The whole

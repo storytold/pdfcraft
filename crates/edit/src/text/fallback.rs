@@ -735,9 +735,10 @@ pub(super) fn installed_program_completes(doc: &Document, fonts: &Dict, line: &T
 /// `ArialMT`) often lists widths for just the characters its text used, so one new letter looked
 /// like a missing glyph and the whole paragraph was set in a standard font instead. With its
 /// advance known the letter is written in the font the paragraph already names, and nothing is
-/// embedded. Returns each font object it changed as it was, to put back when the edit is refused.
-pub(crate) fn complete_named_font_widths(doc: &mut Document, page: usize, resources: &[String], text: &str) -> Vec<(pdfcraft_cos::ObjRef, Object)> {
-    let mut changed = Vec::new();
+/// embedded. Returns whether it changed a font. A caller runs it, and the edit after it, on a copy of
+/// the document, so a refused edit leaves the document, and a session opened on it, as they were.
+pub(crate) fn complete_named_font_widths(doc: &mut Document, page: usize, resources: &[String], text: &str) -> bool {
+    let mut changed = false;
     let Ok(p) = page_dict(doc, page) else { return changed };
     let fonts = p.dict.get(b"Resources").and_then(|r| doc.dict(r)).and_then(|r| r.get(b"Font").and_then(|f| doc.dict(f))).unwrap_or_default();
     let mut seen = HashSet::new();
@@ -799,15 +800,12 @@ pub(crate) fn complete_named_font_widths(doc: &mut Document, page: usize, resour
                 *slot = Object::Real((advance * 100.0).round() / 100.0);
             }
         }
-        let before = doc.get(r).as_ref().clone();
         let updated = doc.update_dict(r, |d| {
             d.set(b"FirstChar".to_vec(), Object::Int(low as i64));
             d.set(b"LastChar".to_vec(), Object::Int(high as i64));
             d.set(b"Widths".to_vec(), Object::Array(all));
         });
-        if updated.is_ok() {
-            changed.push((r, before));
-        }
+        changed |= updated.is_ok();
     }
     changed
 }

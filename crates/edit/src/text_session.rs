@@ -4,8 +4,8 @@
 //! that document has changed since.
 
 use super::{
-    BlockStyle, Document, EditError, LineEdit, MAX_TYPE3_GLYPHS, TextBlock, TextEditLayout, TextLine, group_blocks, layout_draft, rewrite_block_from,
-    text_lines,
+    BlockStyle, Document, EditError, LineEdit, MAX_TYPE3_GLYPHS, TextBlock, TextEditLayout, TextLine, complete_named_fonts, group_blocks,
+    layout_draft, rewrite_block_from, text_lines,
 };
 
 /// One paragraph being edited: the document as it was opened, and the page's lines then.
@@ -68,20 +68,15 @@ impl TextSession {
             return Err(EditError::Invalid("the paragraph changed while it was being edited".into()));
         }
         // A font the document only names learns the advances of the new characters first, so they
-        // are written in it; a refused edit puts its font objects back as they were.
-        let completed = match text {
-            Some(draft) if style.family.is_none() && style.resource.is_none() => {
-                let fonts: Vec<String> = self.source.lines.iter().filter_map(|i| self.lines.get(*i)).map(|line| line.font.clone()).collect();
-                crate::text::complete_named_font_widths(doc, self.page, &fonts, draft)
-            }
-            _ => Vec::new(),
-        };
-        let edit = rewrite_block_from(doc, self.page, self.lines.clone(), self.block, text, style, max_glyphs);
-        if edit.is_err() {
-            for (r, before) in completed {
-                doc.set(r, before);
-            }
+        // are written in it. That and the rewrite run on a copy: a refused edit leaves `doc` as it
+        // was and this session current. Font objects put back by hand would be new objects to
+        // `is_current`, and every later commit of the session would be refused.
+        let mut trial = doc.clone();
+        if !text.is_some_and(|draft| complete_named_fonts(&mut trial, self.page, &self.lines, &self.source, draft, style)) {
+            return rewrite_block_from(doc, self.page, self.lines.clone(), self.block, text, style, max_glyphs);
         }
-        edit
+        let edit = rewrite_block_from(&mut trial, self.page, self.lines.clone(), self.block, text, style, max_glyphs)?;
+        *doc = trial;
+        Ok(edit)
     }
 }

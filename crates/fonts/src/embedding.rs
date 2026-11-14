@@ -16,6 +16,23 @@ pub fn face_key(name: &str) -> String {
     name.rsplit('+').next().unwrap_or(name).chars().filter(char::is_ascii_alphanumeric).flat_map(char::to_lowercase).collect()
 }
 
+/// [`face_key`] without its style words and PostScript suffixes: the family a `/BaseFont` names
+/// (`TimesNewRomanPS-BoldItalicMT` gives `timesnewroman`). A name that says more keeps it
+/// (`ArialNarrow`, `ArialRoundedMTBold`, `HelveticaNeue`, `Calibri-Light`), so it is not taken
+/// for the family it starts with.
+pub(crate) fn family_stem(name: &str) -> String {
+    let mut key = face_key(name);
+    for style in ["bolditalic", "boldoblique", "bold", "italic", "oblique", "regular"] {
+        key = key.replace(style, "");
+    }
+    for suffix in ["psmt", "mt", "ps"] {
+        if let Some(stem) = key.strip_suffix(suffix) {
+            return stem.to_owned();
+        }
+    }
+    key
+}
+
 /// Full, approved faces of the source family: the craft-fonts ones, then the very font installed
 /// on this machine ([`crate::installed`]). This never silently selects another family.
 pub fn matching_faces(name: &str) -> Vec<&'static crate::CraftFont> {
