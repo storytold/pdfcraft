@@ -746,6 +746,11 @@ pub struct DocView {
     /// (Print area…, Save as image…), and what was chosen there.
     pub area_pick: Option<(usize, [f32; 4])>,
     pub area_choice: Option<crate::zoom_snap::AreaChoice>,
+    /// Dynamic Zoom: the drag in progress.
+    pub(crate) zoom_drag: Option<crate::zoom_snap::ZoomDrag>,
+    /// The last press went down with Dynamic Zoom, which has been the tool ever since, and the
+    /// document has not changed: no other press starts a zoom or clicks a zoom step.
+    pub(crate) zoom_press: bool,
     /// Fill & Sign text being typed.
     pub fill_text: Option<crate::fill_sign::TypeBox>,
     /// A queued Fill & Sign signature: select it after its edit succeeds, then leave placement.
@@ -989,6 +994,8 @@ impl DocView {
     pub(crate) fn cancel_pointer_gestures(&mut self) {
         self.marquee = None;
         self.marquee_done = None;
+        self.zoom_drag = None;
+        self.zoom_press = false;
         self.comments.gesture = None;
         self.links.drag = None;
         self.sign.drag = None;
@@ -1171,6 +1178,8 @@ impl DocView {
             marquee_done: None,
             area_pick: None,
             area_choice: None,
+            zoom_drag: None,
+            zoom_press: false,
             fill_text: None,
             fill_signature_page: None,
             lock_offer_dismissed: false,
@@ -1212,6 +1221,11 @@ impl DocView {
         self.panel_drag = None;
         self.org_drag = None;
         self.comments.document_changed(info);
+        // A Dynamic Zoom drag anchors to page rectangles from before the change, and the next
+        // frame's would be too (laid out before this): the held press, a drag yet or not, zooms no
+        // more until it is up. Other tools' presses carry on.
+        self.zoom_drag = None;
+        self.zoom_press = false;
         self.reset_coarse_state();
     }
 
@@ -1256,6 +1270,8 @@ impl DocView {
         fresh.viewport_h = self.viewport_h;
         fresh.viewport_screen = self.viewport_screen;
         fresh.pane = self.pane.clone();
+        // A press Escape cancelled stays cancelled on the new version, until the button is up.
+        fresh.press_cancelled = self.press_cancelled;
         *self = fresh;
         // Marks the kept images out of date and clamps the page to the new page count.
         self.document_changed(info);
@@ -1881,14 +1897,23 @@ fn draw_pages(
             view.cursor.claim(Layer::ToolArea, egui::CursorIcon::Grab);
         }
     }
+    // The pointer as the pages see it: nothing over them (a dialog from the frame it opens),
+    // or a press they hold. The page modules read it rather than egui's raw pointer state.
+    let ptr = PagePointer::read(ui, &resp, modal);
+    // Dynamic Zoom zooms by this widget's drag, about the point pressed. The pages below are
+    // laid out at the old zoom, so it anchors to last frame's page rectangles, the ones on screen,
+    // before they are cleared.
+    if tool == QuickTool::DynamicZoom {
+        crate::zoom_snap::dynamic_input(ui, &resp, &ptr, view);
+    } else {
+        view.zoom_drag = None;
+        view.zoom_press = false;
+    }
     let origin = resp_rect.min - vec2(0.0, y_shift);
     let visible = viewport.translate(resp_rect.min.to_vec2());
     view.screen_rects.clear();
     view.screen_ppp = ui.ctx().pixels_per_point();
     view.screen_xforms.clear();
-    // The pointer as the pages see it: nothing over them (a dialog from the frame it opens),
-    // or a press they hold. The page modules read it rather than egui's raw pointer state.
-    let ptr = PagePointer::read(ui, &resp, modal);
     cancel_on_escape(ui.ctx(), view, &ptr);
     view.router.settle(ptr.any_down, !ptr.edges.is_empty());
     // A new press is no longer the last one's, wherever it lands (the page it is on gives it
@@ -3118,6 +3143,7 @@ fn tool_selects_text(tool: QuickTool, preparing: bool) -> bool {
         | QuickTool::Link
         | QuickTool::SignArea { .. }
         | QuickTool::MarqueeZoom
+        | QuickTool::DynamicZoom
         | QuickTool::Snapshot => false,
     }
 }
