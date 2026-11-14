@@ -332,6 +332,8 @@ pub(crate) fn info(d: &Document) -> Value {
         "links": i.links.iter().map(|l| json!({
             "page": page1(l.page), "rect": view_rect(i, l.page, l.rect),
             "target": link_target(i, &l.target),
+            // The actions its /Next entries chain after it (ISO 32000-2 §12.6.2), in order.
+            "next": l.next.iter().map(|t| link_target(i, t)).collect::<Vec<_>>(),
         })).collect::<Vec<_>>(),
         "layers": i.layers.iter().map(|l| json!({ "name": l.name, "visible": l.visible, "initial": l.initial })).collect::<Vec<_>>(),
         // The Layers panel's rows, the default configuration's /Order (ISO 32000-2 Table 99): a
@@ -393,7 +395,8 @@ fn outline(i: &pdfcraft_render::DocInfo, items: &[pdfcraft_render::OutlineItem])
 }
 
 /// Where a link goes, or what a bookmark's action does: a 1-based page, a web address, layer
-/// changes, another PDF, or the name of an action that isn't run.
+/// changes, another PDF, a named, hide or reset-form action, or the name of an action that isn't
+/// run.
 fn link_target(i: &pdfcraft_render::DocInfo, target: &pdfcraft_render::LinkTarget) -> Value {
     // A remote page number is the file's, however large.
     let page1 = |p: usize| p.saturating_add(1);
@@ -423,5 +426,9 @@ fn link_target(i: &pdfcraft_render::DocInfo, target: &pdfcraft_render::LinkTarge
             "new_window": new_window,
         }),
         pdfcraft_render::LinkTarget::Other(o) => json!({ "other": o }),
+        // `menu`, as `form_fields` spells a button's named action (`link_list`'s `named` is a flag).
+        pdfcraft_render::LinkTarget::Named(n) => json!({ "menu": n }),
+        pdfcraft_render::LinkTarget::Hide { fields, hide } => json!({ if *hide { "hide" } else { "show" }: fields }),
+        pdfcraft_render::LinkTarget::ResetForm { fields, exclude } => json!({ "reset_form": fields, "exclude": exclude }),
     }
 }

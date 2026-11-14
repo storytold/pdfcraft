@@ -219,7 +219,9 @@ pub(super) fn outline_item(
             let pos = pos2(rect.right() - 6.0 - g.size().x, rect.top() + 14.0 - g.size().y / 2.0);
             ui.painter().galley(pos, g, t.text_faint);
         }
-        if theme::hand(resp.clone()).clicked() {
+        // A double-click renames: its second click doesn't run the action again (NextPage would
+        // move two pages).
+        if theme::hand(resp.clone()).clicked() && !resp.double_clicked() {
             match (item.page, &item.action) {
                 (Some(p), _) => *cx.nav = Some(Nav::Dest(p, item.view)),
                 // A web address, another PDF or a layer change, as a link runs it.

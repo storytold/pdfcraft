@@ -201,6 +201,10 @@ pub struct Link {
     /// ([`crate::link_quads`]).
     pub quads: Vec<[f32; 8]>,
     pub target: LinkTarget,
+    /// The actions chained after `target` by `/Next` (ISO 32000-2 §12.6.2, Table 196), in the
+    /// order they run: "each followed in turn by any actions specified in its Next entry, and
+    /// so on recursively". At most 256 in all (`MAX_LINK_ACTIONS`); each action object once.
+    pub next: Vec<LinkTarget>,
 }
 
 impl Link {
@@ -248,6 +252,24 @@ pub enum LinkTarget {
         file: String,
         destination: RemoteDestination,
         new_window: Option<bool>,
+    },
+    /// A named action (§12.6.4.12, Table 216): `/N` as written. Table 215's NextPage, PrevPage,
+    /// FirstPage and LastPage are the ones every processor shall support; an unrecognised name
+    /// "shall take no action". A name too long to be one is kept empty.
+    Named(String),
+    /// A hide action (§12.6.4.11, Table 214): the fully qualified names of the fields whose
+    /// widgets `/T` names (a field name, a widget or field reference, or an array of them), and
+    /// whether to hide them (`/H`, default true) or show them.
+    Hide {
+        fields: Vec<String>,
+        hide: bool,
+    },
+    /// A reset-form action (§12.7.6.3, Tables 241–242): the `/Fields` it names (a reference reads
+    /// as that field's `/T`, as push buttons read it), and whether they are the fields left alone
+    /// (`/Flags` bit 1, Include/Exclude). No fields: the whole form.
+    ResetForm {
+        fields: Vec<String>,
+        exclude: bool,
     },
     Other(String),
 }
@@ -317,8 +339,9 @@ pub struct OutlineItem {
     /// Where on `page` the bookmark goes ([`DestView::Top`] for a bookmark without a page).
     pub view: DestView,
     /// What the bookmark does instead when its action (`/A`, ISO 32000-2 §12.3.3 Table 151) goes
-    /// nowhere in this document: a web address, another PDF, a layer change, or an action named
-    /// but not run ([`LinkTarget::Other`]), read as a link's is. Never [`LinkTarget::Page`]: a
+    /// nowhere in this document: a web address, another PDF, a layer change, a named, hide or
+    /// reset-form action, or an action named but not run ([`LinkTarget::Other`]), read as a
+    /// link's is (without the actions its `/Next` chains). Never [`LinkTarget::Page`]: a
     /// go-to is `page` and `view`.
     pub action: Option<LinkTarget>,
     pub children: Vec<OutlineItem>,
