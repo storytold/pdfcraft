@@ -4178,6 +4178,46 @@ fn a_caption_without_a_font_of_its_own_takes_its_fields() {
     );
 }
 
+/// A caption with a `<font>` of its own but no `<fill>` is drawn black, not in its field's
+/// colour (XFA 3.3, the fill element: without a fill, text "is drawn with a solid black fill").
+/// The field's value is blue, as on forms where Designer colours entered values; the caption
+/// names only a typeface, as those forms' labels do. A caption without a font keeps the field's
+/// colour, one whose font has a fill keeps that, and a check box's caption follows the same
+/// rule as a text field's.
+#[test]
+fn a_caption_font_without_a_fill_draws_black_not_in_its_fields_colour() {
+    let blue = r#"<font typeface="Arial" size="8pt"><fill><color value="0,0,255"/></fill></font>"#;
+    let field = |name: &str, ui: &str, caption_font: &str| {
+        format!(
+            r#"<field name="{name}" w="5in" h="0.4in"><ui>{ui}</ui>{blue}<caption reserve="2in">{caption_font}<value><text>{name}:</text></value></caption></field>"#
+        )
+    };
+    let own = r#"<font typeface="Arial"/>"#;
+    let body = format!(
+        r#"<subform name="body" layout="tb" w="7.5in">{}{}{}{}</subform>"#,
+        field("own", "<textEdit/>", own),
+        field("filled", "<textEdit/>", r#"<font typeface="Arial"><fill><color value="255,0,0"/></fill></font>"#),
+        field("none", "<textEdit/>", ""),
+        field("box", "<checkButton/>", own),
+    );
+    let form = layout_xml(&one_area_form(r#"layout="tb""#, &body)).unwrap();
+    let colours: Vec<(String, [f64; 3], f64)> = form.pages[0]
+        .items
+        .iter()
+        .filter_map(|i| if let Item::Text(s) = i { Some((s.text.clone(), s.face.color, s.face.size)) } else { None })
+        .filter(|(t, ..)| t.ends_with(':'))
+        .collect();
+    assert_eq!(
+        colours,
+        [
+            ("own:".to_string(), [0.0, 0.0, 0.0], 8.0),
+            ("filled:".to_string(), [1.0, 0.0, 0.0], 8.0),
+            ("none:".to_string(), [0.0, 0.0, 1.0], 8.0),
+            ("box:".to_string(), [0.0, 0.0, 0.0], 8.0)
+        ]
+    );
+}
+
 #[test]
 fn a_button_caption_without_a_font_of_its_own_takes_its_fields() {
     // An Arial 8pt button without a height: a caption naming no font is shown in Arial 8pt, not
