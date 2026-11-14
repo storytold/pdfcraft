@@ -40,6 +40,28 @@ const WIRE_IS_CONTINUOUS: u32 = 0x2000_0000;
 /// Normal angles wider than this are not a `ShortArray` [WD 7.8.9.7].
 const MAX_ANGLE_BITS: u32 = 16;
 
+/// A `TESS_3D_Wire` [WD 7.8.7]: polylines in the entity's own frame. A closing wire ends on a
+/// repeat of its first point; a continuous one is already joined to the wire before it.
+#[derive(Debug, Clone, Default, PartialEq)]
+#[non_exhaustive]
+pub struct WireTessellation {
+    /// The polylines; one of fewer than two points draws nothing.
+    pub polylines: Vec<Vec<[f64; 3]>>,
+    /// Each point's RGBA colour, parallel to `polylines` (RGB colours read opaque; a segment
+    /// colour [WD 7.8.7.2] goes to both its points). Empty when the wire stores none.
+    pub colours: Vec<Vec<[u8; 4]>>,
+}
+
+/// `flat` cut into runs as long as each of `wires`; empty when there are no colours or the lengths
+/// disagree.
+fn split_like(wires: &[Vec<[f64; 3]>], flat: Vec<[u8; 4]>) -> Vec<Vec<[u8; 4]>> {
+    if flat.is_empty() || flat.len() != wires.iter().map(Vec::len).sum::<usize>() {
+        return Vec::new();
+    }
+    let mut rest = flat.into_iter();
+    wires.iter().map(|w| rest.by_ref().take(w.len()).collect()).collect()
+}
+
 /// One entry of the tessellation array; a representation item's `index_tessellation` selects
 /// one by position.
 #[derive(Debug, Clone, PartialEq)]
@@ -47,8 +69,8 @@ const MAX_ANGLE_BITS: u32 = 16;
 pub enum Tessellation {
     /// A `TESS_3D` triangle mesh.
     Mesh(TriangleMesh),
-    /// A `TESS_3D_Wire`: polylines.
-    Wire(Vec<Vec<[f64; 3]>>),
+    /// A `TESS_3D_Wire`: polylines and their colours.
+    Wire(WireTessellation),
     /// A `TESS_Markup` (PMI drawing), read past but not decoded.
     Markup,
     /// A `TESS_3D_Compressed` mesh, read past but not rebuilt: it stores its normals, or its
@@ -155,28 +177,51 @@ impl Ctx<'_, '_> {
         self.doubles("tessellation coordinates")
     }
 
-    /// `VertexColors` [WD 7.8.7.2] for `count` points, read past.
-    fn vertex_colors(&mut self, count: usize, in_wire: bool) -> Result<(), PrcError> {
+    /// `VertexColors` [WD 7.8.7.2] for `count` points. Kept colours are charged to the element
+    /// budget before they are allocated; with `keep` false they are read past and none is stored.
+    fn vertex_colors(&mut self, count: usize, in_wire: bool, keep: bool) -> Result<Vec<[u8; 4]>, PrcError> {
         let rgba = self.r.bit()?;
         // prc-rs: `is_segment_color` exists only inside a wire.
         let per_segment = in_wire && self.r.bit()?;
         if self.r.bit()? {
             return Err(PrcError::Unsupported("optimised vertex colours"));
         }
+        let points = count;
         let count = if per_segment { count / 2 } else { count };
         let bytes = if rgba { 4 } else { 3 };
         // The first colour is `8 * bytes` bits; every later one is at least its reuse bit.
         if count > 0 && (count - 1).saturating_add(8 * bytes) > self.r.remaining() {
             return Err(PrcError::Truncated("vertex colours"));
         }
-        for i in 0..count {
-            if i == 0 || !self.r.bit()? {
-                for _ in 0..bytes {
-                    self.r.character()?;
+        if !keep {
+            for i in 0..count {
+                if i == 0 || !self.r.bit()? {
+                    for _ in 0..bytes {
+                        self.r.character()?;
+                    }
                 }
             }
+            return Ok(Vec::new());
         }
-        Ok(())
+        self.r.take_elements(points)?;
+        let mut out = Vec::with_capacity(points);
+        let mut last = [0, 0, 0, 255];
+        for i in 0..count {
+            if i == 0 || !self.r.bit()? {
+                for c in last.iter_mut().take(bytes) {
+                    *c = self.r.character()?;
+                }
+            }
+            out.push(last);
+            if per_segment {
+                out.push(last);
+            }
+        }
+        // An odd point count leaves the last point to the last segment.
+        if per_segment && count > 0 && out.len() < points {
+            out.push(last);
+        }
+        Ok(out)
     }
 
     /// `TESS_3D` (172) after its type code [WD 7.8.5].
@@ -237,7 +282,7 @@ impl Ctx<'_, '_> {
         let mut face = Face { flags, start, data, textures, styles, behaviour: 0 };
         if self.r.bit()? {
             let n = face.point_count()?;
-            self.vertex_colors(n, false)?;
+            self.vertex_colors(n, false, false)?;
         }
         if !face.styles.is_empty() {
             let bits = self.r.unsigned_integer()?;
@@ -248,7 +293,7 @@ impl Ctx<'_, '_> {
     }
 
     /// `TESS_3D_Wire` (175) after its type code [WD 7.8.7].
-    fn wire(&mut self) -> Result<Vec<Vec<[f64; 3]>>, PrcError> {
+    fn wire(&mut self) -> Result<WireTessellation, PrcError> {
         let pts = points(&self.base_tess_data()?)?;
         let words = self.uints("wire indices")?;
         let mut wires: Vec<Vec<[f64; 3]>> = Vec::new();
@@ -279,11 +324,9 @@ impl Ctx<'_, '_> {
                 _ => wires.push(wire),
             }
         }
-        if self.r.bit()? {
-            self.vertex_colors(colours, true)?;
-        }
+        let flat = if self.r.bit()? { self.vertex_colors(colours, true, true)? } else { Vec::new() };
         self.schema.skip_added_fields(TESS_3D_WIRE, &mut self.r)?;
-        Ok(wires)
+        Ok(WireTessellation { colours: split_like(&wires, flat), polylines: wires })
     }
 
     /// `TESS_Markup` (176) after its type code [WD 7.8.8], read past.

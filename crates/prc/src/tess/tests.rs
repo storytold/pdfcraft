@@ -266,9 +266,12 @@ fn wires_close_and_continue_and_colours_are_counted() {
         // A second entity: a wrong colour count would desync it.
         wire(&mut b, false);
         let t = decode(&section(2, &b), &Schema::default(), 8137).unwrap();
-        for e in &t {
+        for (i, e) in t.iter().enumerate() {
             let Tessellation::Wire(w) = e else { panic!("not a wire") };
-            assert_eq!(w, &[vec![[0., 0., 0.], [1., 0., 0.], [1., 1., 0.], [0., 1., 0.], [1., 1., 0.]]]);
+            assert_eq!(w.polylines, [vec![[0., 0., 0.], [1., 0., 0.], [1., 1., 0.], [0., 1., 0.], [1., 1., 0.]]]);
+            // Two red segment colours cover four points; the odd fifth takes the last one.
+            let want = if colours && i == 0 { vec![vec![[255, 0, 0, 255]; 5]] } else { Vec::new() };
+            assert_eq!(w.colours, want, "colours {colours}, entity {i}");
         }
     }
 }
@@ -285,8 +288,28 @@ fn a_closing_wire_colours_its_implicit_point() {
     }
     wire(&mut b, false);
     let t = decode(&section(2, &b), &Schema::default(), 8137).unwrap();
+    let (Tessellation::Wire(a), Tessellation::Wire(b)) = (&t[0], &t[1]) else { panic!("not wires") };
+    assert_eq!(a.polylines, b.polylines);
+    assert_eq!(a.colours, [vec![[0, 0, 1, 255]; 5]]);
+}
+
+#[test]
+fn per_point_rgba_colours_are_split_across_separate_wires() {
+    let mut b = W::default();
+    square(&mut b, 175);
+    // Two separate two-point wires.
+    uints(&mut b, &[2, 0, 3, 2, 6, 9]);
+    // Colours present, RGBA, per point, not optimised: green, a reuse, then two new colours.
+    b.bit(true).bit(true).bit(false).bit(false).put(0x00ff_0080, 32);
+    b.bit(true);
+    b.bit(false).put(0x0102_0304, 32);
+    b.bit(false).put(0xffff_ffff, 32);
+    wire(&mut b, false);
+    let t = decode(&section(2, &b), &Schema::default(), 8137).unwrap();
+    let Tessellation::Wire(w) = &t[0] else { panic!("not a wire") };
+    assert_eq!(w.polylines, [vec![[0., 0., 0.], [1., 0., 0.]], vec![[1., 1., 0.], [0., 1., 0.]]]);
+    assert_eq!(w.colours, [vec![[0, 255, 0, 128]; 2], vec![[1, 2, 3, 4], [255; 4]]]);
     assert!(matches!(t[1], Tessellation::Wire(_)));
-    assert_eq!(t[0], t[1]);
 }
 
 #[test]
@@ -311,8 +334,9 @@ fn a_wire_without_indices_is_the_coordinate_polyline() {
     wire(&mut b, false);
     let t = decode(&section(2, &b), &Schema::default(), 8137).unwrap();
     let Tessellation::Wire(w) = &t[0] else { panic!("not a wire") };
-    assert_eq!(w.len(), 1);
-    assert_eq!(w[0].len(), 4);
+    assert_eq!(w.polylines.len(), 1);
+    assert_eq!(w.polylines[0].len(), 4);
+    assert_eq!(w.colours, [vec![[0, 0, 1, 255]; 4]]);
     assert!(matches!(t[1], Tessellation::Wire(_)));
 }
 
@@ -332,7 +356,8 @@ fn reused_vertex_colours_may_be_the_last_data() {
     }
     let t = decode(&section(1, &b), &Schema::default(), 8137).unwrap();
     let Tessellation::Wire(w) = &t[0] else { panic!("not a wire") };
-    assert_eq!(w[0].len(), n as usize);
+    assert_eq!(w.polylines[0].len(), n as usize);
+    assert_eq!(w.colours[0].len(), n as usize);
 }
 
 /// A square as one triangle plus one 4-vertex fan (two entities, three triangles), the face
@@ -1004,4 +1029,39 @@ fn the_globals_schema_and_the_tessellations_share_one_allowance() {
     let within = |elements| f.file_structures[0].tessellations_within(crate::bits::Budget { elements, ..crate::bits::Budget::FULL });
     assert!(within(need).is_ok());
     assert!(matches!(within(need - 1), Err(PrcError::TooManyElements { .. })));
+}
+
+/// A wire of [`SQUARE`]'s four points without indices, with four kept RGB colours or none.
+fn bare_wire(colours: bool) -> W {
+    let mut b = W::default();
+    square(&mut b, 175);
+    b.uint(0).bit(colours);
+    if colours {
+        b.bit(false).bit(false).bit(false).put(1, 24);
+        for _ in 1..4 {
+            b.bit(true);
+        }
+    }
+    section(1, &b)
+}
+
+#[test]
+fn kept_wire_colours_are_charged_before_they_are_made() {
+    let plain = spent(&bare_wire(false));
+    assert_eq!(spent(&bare_wire(true)) - plain, 4);
+    let bytes = bare_wire(true).bytes();
+    let schema = Schema::default();
+    let r = Ctx::new(BitReader::with_elements(&bytes, plain), &schema, 8137).file_structure_tessellation();
+    assert!(matches!(r, Err(PrcError::TooManyElements { .. })), "{r:?}");
+}
+
+#[test]
+fn face_colours_that_are_read_past_are_not_charged() {
+    assert_eq!(spent(&styled_face_section(&[], 7, 0x30)), spent(&styled_face_section(&[], 0, 0x30)));
+}
+
+#[test]
+fn wires_without_colours_make_no_colour_lists() {
+    assert!(split_like(&[Vec::new(), Vec::new()], Vec::new()).is_empty());
+    assert_eq!(split_like(&[vec![[0.0; 3]]], vec![[1; 4]]), [vec![[1; 4]]]);
 }

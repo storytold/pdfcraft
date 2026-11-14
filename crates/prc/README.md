@@ -28,7 +28,7 @@ BitReader: bit, bits, character, unsigned_integer, integer, integer_vbn, double_
 - `Unsupported` names constructs the reader cannot step over (schema pointer fields, `Value_CurveIs3D`).
 - `Tessellation::Mesh` is a `TriangleMesh`: positions, triangles, one triangle range per face, the stored normals and
   texture coordinates with each triangle's corner indices into them, and per-triangle line-attribute styles.
-  `Wire` is polylines; `Markup` is read past.
+  `Wire` is a `WireTessellation`: polylines and, when stored, each point's RGBA colour; `Markup` is read past.
 - `Tessellation::Compressed` is read to its end so later entities decode; its triangles are not rebuilt yet.
 - A face may carry at most 8 texture-coordinate sets; more is `Malformed`. Optimised vertex colours are `Unsupported`.
 - The product tree: each drawable tessellation placed by its occurrence path's locations and the item's coordinate
