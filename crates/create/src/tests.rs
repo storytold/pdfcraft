@@ -1042,6 +1042,35 @@ fn damaged_masks_and_sizes_never_panic() {
 }
 
 #[test]
+fn image_data_far_past_its_samples_is_not_decoded() {
+    // A grey image of one pixel whose Flate stream inflates to 64 MiB: only the first byte is a
+    // sample, so the export stops decoding long before the rest and leaves the image out.
+    let bomb = |w: i64, h: i64, len: usize| {
+        let mut doc = from_images(&[("flat.png".into(), png_bytes(false))]).unwrap();
+        with_image(&mut doc, |_| Stream::flate(image_dict(w, h, "DeviceGray", 8), &vec![7u8; len]));
+        doc
+    };
+    let out = extract_images(&bomb(1, 1, 64 << 20), &[0], 0);
+    assert!(out.images.is_empty() && out.skipped.len() == 1, "{out:?}");
+    // Data a little past the samples, as encoders leave, still exports.
+    let (ext, rgba) = exported_rgba(&bomb(4, 2, 4 * 2 + 64));
+    assert_eq!((ext, rgba), ("png", [7, 7, 7, 255].repeat(8)));
+
+    // The same for a soft mask: it is not decoded, and the image that needs it is refused rather
+    // than written out without the transparency it hides.
+    let mut doc = from_images(&[("flat.png".into(), png_bytes(false))]).unwrap();
+    with_image(&mut doc, |doc| {
+        let m = doc.add(Object::Stream(Stream::flate(image_dict(1, 1, "DeviceGray", 8), &vec![0u8; 64 << 20])));
+        let mut d = image_dict(4, 2, "DeviceRGB", 8);
+        d.set(b"SMask".to_vec(), Object::Ref(m));
+        Stream::from_raw(d, vec![10; 24])
+    });
+    let out = extract_images(&doc, &[0], 0);
+    assert!(out.images.is_empty(), "an image is not written without the mask that hides its content");
+    assert_eq!(out.skipped.len(), 1);
+}
+
+#[test]
 fn a_jpeg_with_thousands_of_extended_xmp_chunks_keeps_its_mask() {
     // Export decodes a JPEG with a soft mask, or a JPEG soft mask, to make a PNG with alpha. A JPEG
     // whose Extended XMP chunks would take the decoder quadratic time is decoded without them,
@@ -1074,7 +1103,9 @@ fn a_jpeg_with_thousands_of_extended_xmp_chunks_keeps_its_mask() {
         d.set(b"SMask".to_vec(), Object::Ref(mask));
         Stream::from_raw(d, vec![10; 24])
     });
-    assert_eq!(alphas(&exported_rgba(&doc).1), [255; 8]);
+    // The image goes with its mask rather than coming out opaque, and the decoder is never reached.
+    let out = extract_images(&doc, &[0], 0);
+    assert!(out.images.is_empty() && out.skipped.len() == 1, "{out:?}");
     assert_eq!(crate::extract::JPEGS_DECODED.with(std::cell::Cell::get), 0);
 }
 
@@ -2364,11 +2395,12 @@ fn jbig2_images_export_as_their_picture() {
     large[11..15].copy_from_slice(&20_000u32.to_be_bytes());
     large[15..19].copy_from_slice(&10_000u32.to_be_bytes());
     assert!(skipped(&page(20_000, 4, &large, None, false)), "a page far taller than the image");
-    // Refused the same ways as a stencil /Mask, it is left out: the image exports opaque.
+    // A stencil /Mask that can't be decoded takes its image with it: left out, the image would
+    // export opaque, showing what the mask hides.
     for (width, height, mask) in [(w + 8, h, &jbig2), (20_000, 4, &large)] {
-        let rgba = exported_rgba(&page(width, height, mask, None, true)).1;
-        assert_eq!(rgba.len() as i64, width * height * 4, "a {width}-wide mask");
-        assert!(alphas(&rgba).iter().all(|a| *a == 255), "a refused {width}-wide mask is left out");
+        let out = extract_images(&page(width, height, mask, None, true), &[0], 0);
+        assert!(out.images.is_empty(), "a {width}-wide mask is left out");
+        assert!(out.skipped.iter().any(|(_, _, why)| why.contains("mask")), "a {width}-wide mask's image is skipped: {:?}", out.skipped);
     }
     // Damaged data never panics.
     for end in [0, 1, 10, 20, 30, jbig2.len() / 2] {
@@ -2722,7 +2754,8 @@ fn a_jpeg_mask_pays_for_its_samples() {
 
 /// What decoding a JPEG takes goes by its header, so that is what has to agree with the
 /// dictionary before it is decoded: one image of a pixel can hold a page of 500 megapixels. The
-/// file comes out as it is either way, so what shows is whether it was decoded.
+/// file comes out as it is either way, so what shows is whether it was decoded; read as a mask
+/// that can't be decoded, it takes the image with it.
 #[test]
 fn a_jpeg_larger_than_its_dictionary_says_isnt_decoded() {
     use pdfcraft_cos::{Dict, Document, ImageBudget, Object, Stream};
@@ -2749,7 +2782,8 @@ fn a_jpeg_larger_than_its_dictionary_says_isnt_decoded() {
     let (honest, lying) = (doc.add(Object::Stream(keyed(4))), doc.add(Object::Stream(keyed(1))));
     assert_eq!(decodes(&doc, honest), 1);
     assert_eq!(decodes(&doc, lying), 0);
-    // The same as a mask: read as none, without being decoded.
+    // The same as a mask: its header disagreeing with its dictionary, it isn't decoded, and the
+    // image goes with it rather than being written out opaque.
     let mut mask = keyed(1);
     mask.dict.remove(b"Mask");
     let mask = doc.add(Object::Stream(mask));
@@ -2761,19 +2795,23 @@ fn a_jpeg_larger_than_its_dictionary_says_isnt_decoded() {
     image.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
     image.set(b"SMask".to_vec(), Object::Ref(mask));
     let image = doc.add(Object::Stream(Stream::from_raw(image, vec![0x80])));
-    assert_eq!(decodes(&doc, image), 0);
+    let unmasked = || {
+        crate::extract::JPEGS_DECODED.with(|n| n.set(0));
+        let why = crate::extract::image_file_within(&doc, image, &mut ImageBudget::with_work(u64::MAX)).unwrap_err();
+        (crate::extract::JPEGS_DECODED.with(std::cell::Cell::get), why)
+    };
+    let (decoded, why) = unmasked();
+    assert_eq!(decoded, 0, "read as none, without being decoded");
+    assert!(why.contains("mask"), "{why}");
     // Reading the header to find that out is paid for: a mask can be mostly tables, shared by
     // every image of a file, and with nothing left it isn't read.
-    let mut budget = ImageBudget::with_work(u64::MAX);
-    assert!(crate::extract::image_file_within(&doc, image, &mut budget).is_ok());
-    assert_eq!(u64::MAX - budget.work_left(), 2 + 4 * jpeg.len() as u64 + 2, "its one declared sample twice, its bytes, the image's byte and pixel");
     let mut budget = ImageBudget::with_work(0);
     assert!(crate::extract::image_file_within(&doc, image, &mut budget).is_err());
     assert_eq!(budget.refused(), 1, "the image goes, with its mask unread");
 }
 
-/// A mask past the allowance can't be left out as an unreadable one is, or the image comes out
-/// opaque, showing what the mask hides: the image goes, with the reason.
+/// A mask past the allowance, like one that can't be decoded, can't be left out either: the image
+/// would come out opaque, showing what the mask hides. The image goes, with the reason.
 #[test]
 fn an_image_whose_jbig2_mask_is_past_the_allowance_is_left_out() {
     use pdfcraft_cos::{Dict, Document, ImageBudget, Object, Stream};
@@ -2924,6 +2962,36 @@ fn proportions_up_to_the_limit_scale_as_they_did() {
     // A mask of its image's size comes through as it is.
     let mask = noise(20, 10);
     assert_eq!(crate::extract::scaled(&mask, 20, 10), mask);
+}
+
+/// A mask past the pixel limit is counted as a refusal, so Office export reports the page truncated;
+/// a mask of no size is only unreadable.
+#[test]
+fn an_oversized_mask_is_a_limit_refusal() {
+    use pdfcraft_cos::{Dict, Document, ImageBudget, Object, Stream};
+    let refusals = |side: i64| {
+        let mut mask = Dict::new();
+        mask.set(b"Subtype".to_vec(), Object::name("Image"));
+        mask.set(b"Width".to_vec(), Object::Int(side));
+        mask.set(b"Height".to_vec(), Object::Int(side));
+        mask.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+        mask.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+        let mut doc = Document::new_empty();
+        let mask = doc.add(Object::Stream(Stream::from_raw(mask, vec![0])));
+        let mut image = Dict::new();
+        image.set(b"Subtype".to_vec(), Object::name("Image"));
+        image.set(b"Width".to_vec(), Object::Int(1));
+        image.set(b"Height".to_vec(), Object::Int(1));
+        image.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+        image.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+        image.set(b"SMask".to_vec(), Object::Ref(mask));
+        let image = doc.add(Object::Stream(Stream::from_raw(image, vec![0x80])));
+        let mut budget = ImageBudget::with_work(u64::MAX);
+        assert!(crate::extract::image_file_within(&doc, image, &mut budget).is_err());
+        budget.refused()
+    };
+    assert_eq!(refusals(100_000), 1, "past the pixel limit");
+    assert_eq!(refusals(0), 0, "no size is only unreadable");
 }
 
 /// A CMYK JPEG past the decoder's Extended XMP bound is still decoded (its chunks left out) and
