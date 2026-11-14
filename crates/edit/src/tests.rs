@@ -3644,7 +3644,8 @@ fn growing_into_a_blank_line_keeps_the_neighbour_after_save() {
     let bases: Vec<f64> = lines.iter().map(|l| l.origin_baseline()).collect();
     assert_eq!(bases.len(), 4, "{bases:?}");
     let grown = bases[2] - bases[3];
-    assert!((grown - tl).abs() < 0.05, "the new row is {grown} pt above the neighbour, not one leading");
+    // The new paragraph takes half the size (6 pt) of the blank line's room: no spacing is set.
+    assert!((grown - (tl - 6.0)).abs() < 0.05, "the new row is {grown} pt above the neighbour, not one leading less half the size");
     assert!(grown < tl * 1.5, "this gap is outside the join window, so the test would pass without the marker");
     let texts = |doc: &Document| text::text_blocks(doc, 0).unwrap().into_iter().map(|b| b.text).collect::<Vec<_>>();
     assert_eq!(texts(&doc), ["One Two Three", "Neighbour"]);
@@ -4015,7 +4016,8 @@ fn resizing_a_grown_paragraph_keeps_the_neighbour() {
     let lines = text::text_lines(&doc, 0).unwrap();
     let added = lines.iter().find(|l| l.text.contains("Alpha next row.")).unwrap();
     let neighbour = lines.iter().find(|l| l.text.contains("Neighbor")).unwrap();
-    assert!((added.origin_baseline() - neighbour.origin_baseline()).abs() < 0.5, "the new row is not on the neighbour");
+    // The two rows the edit added are new paragraphs, half the size (6 pt) each below the blank line.
+    assert!((neighbour.origin_baseline() - added.origin_baseline() - 12.0).abs() < 0.5, "the new row is not 12 pt below the neighbour");
     let width = text::text_blocks(&doc, 0).unwrap()[0].rect[2] - text::text_blocks(&doc, 0).unwrap()[0].rect[0];
     for factor in [0.6_f64, 1.6] {
         let mut copy = doc.clone();
@@ -9725,6 +9727,41 @@ fn removing_marks_strips_wrappers_that_closed_open_state() {
     place_tagged(&mut doc, &page, MarkKind::Watermark.tag(), b"q /PCProbe Do Q\n".to_vec(), false).unwrap();
     assert_eq!(remove_marks(&mut doc, &[0], MarkKind::Watermark).unwrap(), 1);
     assert_eq!(streams(&doc, 0), ["q 2 0 0 2 0 0 cm"]);
+}
+
+/// A line break in the edited text keeps a row of its own (the editor's rows); with a paragraph
+/// spacing set, that much more space goes before it, and unset, half the size does. A row the
+/// page already had stays where it was, shifted by the spacing added above it.
+#[test]
+fn paragraph_breaks_get_their_own_spacing() {
+    let baselines = |doc: &Document| -> Vec<f64> { text::text_lines(&reopen(doc), 0).unwrap().iter().map(|l| l.rect[1]).collect() };
+    let gap_after_first = |b: &[f64]| b[0] - b[1];
+    // A one-line source has no row step of its own: 1.5 × the size stands in.
+    let mut doc = text_page("BT /F1 10 Tf 72 700 Td (The quick brown fox) Tj ET");
+    text::rewrite_block(&mut doc, 0, 0, Some("First one\nSecond one"), &text::BlockStyle::default()).unwrap();
+    let b = baselines(&doc);
+    assert_eq!(b.len(), 2, "{b:?}");
+    assert!((gap_after_first(&b) - 20.0).abs() < 0.5, "the row step and half the size: {b:?}");
+    let mut doc = text_page("BT /F1 10 Tf 72 700 Td (The quick brown fox) Tj ET");
+    text::rewrite_block(&mut doc, 0, 0, Some("First one\nSecond one"), &text::BlockStyle { paragraph_spacing: Some(20.0), ..Default::default() })
+        .unwrap();
+    assert!((gap_after_first(&baselines(&doc)) - 35.0).abs() < 0.5, "{:?}", baselines(&doc));
+    let mut doc = text_page("BT /F1 10 Tf 72 700 Td (The quick brown fox) Tj ET");
+    text::rewrite_block(&mut doc, 0, 0, Some("First one\nSecond one"), &text::BlockStyle { paragraph_spacing: Some(0.0), ..Default::default() })
+        .unwrap();
+    assert!((gap_after_first(&baselines(&doc)) - 15.0).abs() < 0.5);
+    // Without a break, nothing changes: one paragraph, the ordinary line step.
+    let mut doc = text_page("BT /F1 10 Tf 72 700 Td (The quick brown fox) Tj ET");
+    text::rewrite_block(
+        &mut doc,
+        0,
+        0,
+        Some("First one Second one and then some more words to wrap"),
+        &text::BlockStyle { width: Some(90.0), ..Default::default() },
+    )
+    .unwrap();
+    let b = baselines(&doc);
+    assert!(b.len() >= 2 && (gap_after_first(&b) - 12.0).abs() < 0.5, "{b:?}");
 }
 
 /// Printer marks: drawn outside the trim box as a removable page mark; the page
