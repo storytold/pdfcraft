@@ -772,6 +772,12 @@ impl Document {
         self.editor.as_ref().map(|e| e.cos.repair_log().to_vec()).unwrap_or_default()
     }
 
+    /// Whether anything was repaired while opening, without copying the notes: the top bar asks
+    /// every frame (CodeRabbit on #5336).
+    pub fn was_repaired(&self) -> bool {
+        self.editor.as_ref().is_some_and(|e| !e.cos.repair_log().is_empty())
+    }
+
     /// Objects of the file that could not be read and read as null, one line each (see
     /// [`pdfcraft_cos::Document::unreadable_objects`]): only those read so far.
     pub fn unreadable_objects(&self) -> Vec<String> {
