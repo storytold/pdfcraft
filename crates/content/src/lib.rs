@@ -105,6 +105,24 @@ fn is_delim(b: u8) -> bool {
 /// Longest unreadable number token retried from its next byte. Real numbers are far shorter.
 const MAX_RETRIED_TOKEN: usize = 64;
 
+/// Bytes that failed operands (an unterminated array or dictionary, say) and failed inline-image
+/// parameters may read, per byte of the stream and at least, before the parser stops retrying
+/// them from their next byte. A failed operand can read to the end of the stream, and retrying it
+/// from each byte reads that rest again every time: `[[[[…` would take time quadratic in its
+/// length. Past the allowance, a failed operand is skipped whole, as far as it read.
+const RESCAN_PER_BYTE: usize = 8;
+const MIN_RESCAN: usize = 1 << 20;
+
+/// How far a flat array is probed for once the parser has given up on arrays, and the bytes such
+/// probes may read in all (the same allowance as [`RESCAN_PER_BYTE`]). A probe takes only strings,
+/// numbers, names and dictionaries, so a `[` nested in damage fails at once.
+const PROBE_WINDOW: usize = 1 << 16;
+
+/// Operands kept for the next operator. No operator takes more than a few dozen; the oldest of a
+/// longer run are dropped (and counted in [`Parsed::skipped`]), so a stream of operands with no
+/// operator does not hold all of them at once.
+const MAX_OPERANDS: usize = 1024;
+
 /// Parse a (decoded) content stream.
 pub fn parse(data: &[u8]) -> Parsed {
     parse_pieces(data, &[])
@@ -124,17 +142,52 @@ fn parse_pieces(data: &[u8], ends: &[usize]) -> Parsed {
     Parsed { ops, skipped: reader.skipped, ambiguous_images: reader.ambiguous_images, comment_edges: reader.comment_edges }
 }
 
+/// A flat array at `at` (no nested array), read within [`PROBE_WINDOW`] bytes and charged to
+/// `probed` while it is under `limit`; its end offset too. `None` when it does not close there.
+fn probe_flat_array(data: &[u8], at: usize, probed: &mut usize, limit: usize) -> Option<(Object, usize)> {
+    if *probed >= limit {
+        return None;
+    }
+    let mut lx = Lexer::new(data.get(..(at + PROBE_WINDOW).min(data.len()))?, at + 1);
+    let mut items = Vec::new();
+    let end = loop {
+        lx.skip_ws();
+        match lx.data.get(lx.pos).copied() {
+            Some(b']') => break Some(lx.pos + 1),
+            Some(b'[') | None => break None,
+            Some(_) => match lx.object() {
+                Ok(o) if items.len() < MAX_OPERANDS * 64 => items.push(o),
+                _ => break None,
+            },
+        }
+    };
+    *probed = probed.saturating_add(lx.pos.saturating_sub(at).max(1));
+    // An empty array stays skipped, as before: it would only precede the operands that follow.
+    (!items.is_empty()).then_some((Object::Array(items), end?))
+}
+
 /// The iterator [`ops`] returns.
 pub struct Ops<'a> {
     data: &'a [u8],
     lx: Lexer<'a>,
     operands: Vec<Object>,
+    /// The source bytes of each held operand, so dropping one counts its bytes in `skipped`.
+    operand_bytes: Vec<usize>,
     start: Option<usize>,
     skipped: usize,
     ambiguous_images: usize,
     ends: &'a [usize],
     boundary: usize,
     comment_edges: Vec<(bool, bool)>,
+    /// What failed operands and inline-image parameters have read so far, against
+    /// [`RESCAN_PER_BYTE`].
+    rescanned: usize,
+    /// Set once an array has been given up on. Its opener is damage, and an unterminated nest of
+    /// openers would otherwise be read to the end of the stream again at each one: later openers
+    /// are skipped as themselves, so the operands and operators after them are still read.
+    arrays_given_up: bool,
+    /// Bytes the flat-array probes have read, against the rescan allowance.
+    probed: usize,
 }
 
 impl<'a> Ops<'a> {
@@ -143,12 +196,16 @@ impl<'a> Ops<'a> {
             data,
             lx: Lexer::new(data, 0),
             operands: Vec::new(),
+            operand_bytes: Vec::new(),
             start: None,
             skipped: 0,
             ambiguous_images: 0,
             ends,
             boundary: 0,
             comment_edges: vec![(false, false); ends.len()],
+            rescanned: 0,
+            arrays_given_up: false,
+            probed: 0,
         }
     }
 
@@ -168,9 +225,29 @@ impl Iterator for Ops<'_> {
     type Item = Op;
 
     fn next(&mut self) -> Option<Op> {
-        let Ops { data, lx, operands, start, skipped, ambiguous_images, ends, boundary, comment_edges: edges } = self;
+        let Ops {
+            data,
+            lx,
+            operands,
+            operand_bytes,
+            start,
+            skipped,
+            ambiguous_images,
+            ends,
+            boundary,
+            comment_edges: edges,
+            rescanned,
+            arrays_given_up,
+            probed,
+        } = self;
         let (data, ends): (&[u8], &[usize]) = (data, ends);
+        let rescan_limit = data.len().saturating_mul(RESCAN_PER_BYTE).max(MIN_RESCAN);
         loop {
+            if operands.len() >= 2 * MAX_OPERANDS {
+                let dropped = operands.len() - MAX_OPERANDS;
+                operands.drain(..dropped);
+                *skipped += operand_bytes.drain(..dropped).sum::<usize>();
+            }
             let trivia = lx.pos;
             lx.skip_ws();
             // Only the whitespace the lexer skips here holds top-level comments: a `%` inside a
@@ -180,17 +257,35 @@ impl Iterator for Ops<'_> {
             }
             let Some(&b) = data.get(lx.pos) else {
                 // Operands left without an operator.
-                *skipped += operands.len();
+                *skipped += operand_bytes.drain(..).sum::<usize>();
                 operands.clear();
                 return None;
             };
             let at = lx.pos;
             let operand_start = matches!(b, b'/' | b'(' | b'<' | b'[' | b'+' | b'-' | b'.') || b.is_ascii_digit();
             if operand_start {
+                if b == b'[' && *arrays_given_up {
+                    // An array the parser has given up on: scanning it in full would read the rest
+                    // of the stream for every one. A later delimited array is still read: a flat
+                    // one (what `TJ` and `d` take) is probed for within a window and a global
+                    // allowance, so damage and an exhausted allowance never turn it into a `TJ`
+                    // with no array.
+                    if let Some((array, end)) = probe_flat_array(data, at, probed, rescan_limit) {
+                        start.get_or_insert(at);
+                        operands.push(array);
+                        operand_bytes.push(end - at);
+                        lx.pos = end;
+                    } else {
+                        lx.pos = at + 1;
+                        *skipped += 1;
+                    }
+                    continue;
+                }
                 match lx.object() {
                     Ok(o) => {
                         start.get_or_insert(at);
                         operands.push(o);
+                        operand_bytes.push(lx.pos - at);
                     }
                     Err(_) if b == b'(' => {
                         // An unterminated string runs to the end of the stream.
@@ -201,10 +296,19 @@ impl Iterator for Ops<'_> {
                         let read = lx.pos.saturating_sub(at);
                         #[cfg(test)]
                         tests::RESCANNED.with(|c| c.set(c.get() + read));
+                        *rescanned = rescanned.saturating_add(read);
                         let number = matches!(b, b'+' | b'-' | b'.') || b.is_ascii_digit();
-                        if number && read > MAX_RETRIED_TOKEN {
+                        if b == b'[' && read > 0 && (read > MAX_RETRIED_TOKEN || *rescanned > rescan_limit) {
+                            // An array opener the parser cannot finish: only the opener is skipped,
+                            // so the operands and operators after it are still read, and the rest of
+                            // the stream is not read again at every later opener.
+                            lx.pos = at + 1;
+                            *skipped += 1;
+                            *arrays_given_up = true;
+                        } else if read > 0 && ((number && read > MAX_RETRIED_TOKEN) || *rescanned > rescan_limit) {
                             // A long unreadable number is skipped whole: retrying from each of its
-                            // bytes would read the rest of it again every time.
+                            // bytes would read the rest of it again every time. So is any failed
+                            // operand once retries have read more than the stream allows.
                             *skipped += read;
                         } else {
                             // Skip the offending byte and carry on.
@@ -216,7 +320,15 @@ impl Iterator for Ops<'_> {
                 continue;
             }
             if is_delim(b) {
-                // A stray `)`, `>`, `]`, `{`, `}`.
+                // A stray `)`, `>`, `]`, `{`, `}`. A `]` closes the damage an array opener left
+                // behind, so a later `[` is a new array and is parsed rather than skipped. Only a
+                // closing delimiter re-arms the attempt: an unterminated nest of openers, which
+                // reads to the end of the stream at each one, is still read once.
+                // Not once retries have read more than the stream allows: re-arming then would
+                // rescan the rest of the stream for every `[`.
+                if b == b']' && *rescanned <= rescan_limit {
+                    *arrays_given_up = false;
+                }
                 lx.pos += 1;
                 *skipped += 1;
                 continue;
@@ -231,21 +343,28 @@ impl Iterator for Ops<'_> {
                 b"true" => {
                     start.get_or_insert(at);
                     operands.push(Object::Bool(true));
+                    operand_bytes.push(lx.pos - at);
                 }
                 b"false" => {
                     start.get_or_insert(at);
                     operands.push(Object::Bool(false));
+                    operand_bytes.push(lx.pos - at);
                 }
                 b"null" => {
                     start.get_or_insert(at);
                     operands.push(Object::Null);
+                    operand_bytes.push(lx.pos - at);
                 }
                 b"BI" => {
-                    let image = inline_image(data, at, lx.pos);
+                    let image = inline_image(data, at, lx.pos, *rescanned > rescan_limit);
+                    #[cfg(test)]
+                    tests::RESCANNED.with(|c| c.set(c.get() + image.rescanned));
+                    *rescanned = rescanned.saturating_add(image.rescanned);
                     *ambiguous_images += usize::from(image.ambiguous);
                     let end = image.end;
                     lx.pos = end;
                     operands.clear();
+                    operand_bytes.clear();
                     match image.image {
                         Some((dict, img)) => {
                             return Some(Op {
@@ -263,6 +382,7 @@ impl Iterator for Ops<'_> {
                 }
                 _ => {
                     let s = start.take().unwrap_or(at);
+                    operand_bytes.clear();
                     return Some(Op { op: kw.to_vec(), operands: std::mem::take(operands), inline: None, span: s..lx.pos });
                 }
             }
@@ -312,6 +432,8 @@ struct Inline {
     /// The renderer's tokenizer reads no image here, so `end` is this parser's guess; or it reads
     /// one whose parameters this parser can't, so `image` is `None` for an image the page draws.
     ambiguous: bool,
+    /// How far unreadable parameters were read: the parser may read that part again.
+    rescanned: usize,
 }
 
 /// Read the inline image whose `BI` keyword starts at `bi` (its parameters start at `pos`).
@@ -322,11 +444,16 @@ struct Inline {
 /// the renderer's tokenizer (hayro-syntax) rather than worked out here by another rule. Only
 /// when that tokenizer reads no image does this parser fall back to its own rules, and the
 /// image is marked ambiguous.
-fn inline_image(data: &[u8], bi: usize, pos: usize) -> Inline {
+///
+/// `exhausted`: failed reads have used up the parser's allowance ([`RESCAN_PER_BYTE`]). Then
+/// unreadable parameters end the image where reading them failed, not at an earlier `EI` from
+/// which the rest would be read again.
+fn inline_image(data: &[u8], bi: usize, pos: usize, exhausted: bool) -> Inline {
     let mut lx = Lexer::new(data, pos);
     let mut dict = Dict::new();
     let mut readable = true;
     let mut stop = pos;
+    let mut rescanned = 0;
     loop {
         lx.skip_ws();
         if lx.eat_keyword(b"ID") {
@@ -340,10 +467,15 @@ fn inline_image(data: &[u8], bi: usize, pos: usize) -> Inline {
         let Some((k, v)) = entry else {
             // A stream that ends inside the parameters is cut short, not unreadable: keep what was read.
             if at >= data.len() {
-                return Inline { image: Some((dict, Vec::new())), end: data.len(), ambiguous: false };
+                return Inline { image: Some((dict, Vec::new())), end: data.len(), ambiguous: false, rescanned: 0 };
+            }
+            let read = lx.pos.saturating_sub(at);
+            if exhausted {
+                return Inline { image: None, end: lx.pos.max(at + 1).min(data.len()), ambiguous: true, rescanned: read };
             }
             readable = false;
             stop = at;
+            rescanned = read;
             break;
         };
         dict.set(k, v);
@@ -360,11 +492,11 @@ fn inline_image(data: &[u8], bi: usize, pos: usize) -> Inline {
         }
         // The renderer draws an image whose parameters this parser can't read: it is not
         // represented here, so a redaction can't inspect or remove it and must not trust the page.
-        return Inline { image: readable.then(|| (dict, samples.to_vec())), end, ambiguous: !readable };
+        return Inline { image: readable.then(|| (dict, samples.to_vec())), end, ambiguous: !readable, rescanned };
     }
     if !readable {
         // Without an `EI` after it, the image runs to the end of the stream.
-        return Inline { image: None, end: end_of_image(data, stop, b"").map_or(data.len(), |(_, end)| end), ambiguous: true };
+        return Inline { image: None, end: end_of_image(data, stop, b"").map_or(data.len(), |(_, end)| end), ambiguous: true, rescanned };
     }
     // One whitespace byte separates ID from the data.
     let begin = (lx.pos + 1).min(data.len());
@@ -375,7 +507,7 @@ fn inline_image(data: &[u8], bi: usize, pos: usize) -> Inline {
         Some((end_data, end)) => (data.get(begin..end_data).unwrap_or_default().to_vec(), end),
         None => (data.get(begin..).unwrap_or_default().to_vec(), data.len()),
     };
-    Inline { image: Some((dict, image)), end, ambiguous: true }
+    Inline { image: Some((dict, image)), end, ambiguous: true, rescanned }
 }
 
 /// Where the renderer's tokenizer ends the inline image whose `BI` starts at `bi`: the start and
