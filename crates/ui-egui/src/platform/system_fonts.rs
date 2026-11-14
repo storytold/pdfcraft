@@ -5,8 +5,9 @@
 //! craft-fonts, or the Simplified Chinese interface in a build without a `Hans` face (#826). A
 //! few more installed faces, [`devanagari_fallback`], [`telugu_fallback`], [`sinhala_fallback`],
 //! [`tamil_fallback`], [`hebrew_fallback`] and [`hangul_fallback`], draw Hindi, Telugu, Sinhala,
-//! Tamil, Hebrew and Korean when one is installed. It is read at runtime and never embedded or
-//! shipped (AGENTS.md §1.4), and `PDFCRAFT_SYSTEM_FONTS=0` turns it off (published screenshots do).
+//! Tamil, Hebrew and Korean when one is installed, and [`letterlike_fallback`] the double-struck
+//! letters of mathematics (ℝ, ℕ). It is read at runtime and never embedded or shipped (AGENTS.md
+//! §1.4), and `PDFCRAFT_SYSTEM_FONTS=0` turns it off (published screenshots do).
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
@@ -41,6 +42,9 @@ const HANGUL_PROBE: char = '\u{D7A3}';
 const HANS_PROBE: char = '\u{6B22}';
 /// 說 (U+8AAA): Traditional only, absent from the Japanese craft-fonts faces.
 const HANT_PROBE: char = '\u{8AAA}';
+/// ℝ (U+211D), double-struck capital R: what the letterlike-symbol candidates are probed for. A
+/// face with it has the other double-struck letters of that block (ℂ, ℍ, ℕ, ℙ, ℚ, ℤ) too.
+const LETTERLIKE_PROBE: char = '\u{211D}';
 
 /// What the installed face is wanted for, from the interface language.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -120,6 +124,15 @@ pub fn hebrew_fallback() -> Option<Arc<FontData>> {
 pub fn hangul_fallback() -> Option<Arc<FontData>> {
     static CACHE: OnceLock<Option<Arc<FontData>>> = OnceLock::new();
     CACHE.get_or_init(|| script_fallback(&hangul_candidates(), HANGUL_PROBE)).clone()
+}
+
+/// The installed fallback face for letterlike symbols, read once: the double-struck letters of a
+/// bookmark or tab title (ℝ, ℕ, as Typst and LaTeX's `\mathbb` write them, #7107), which neither
+/// the embedded faces nor the general fallback have. `None` when it is turned off or no candidate
+/// is installed; the interface then draws what the other faces can.
+pub fn letterlike_fallback() -> Option<Arc<FontData>> {
+    static CACHE: OnceLock<Option<Arc<FontData>>> = OnceLock::new();
+    CACHE.get_or_init(|| script_fallback(&letterlike_candidates(), LETTERLIKE_PROBE)).clone()
 }
 
 fn script_fallback(candidates: &[PathBuf], probe: char) -> Option<Arc<FontData>> {
@@ -400,6 +413,26 @@ fn hangul_candidates() -> Vec<PathBuf> {
     }
 }
 
+/// Well-known locations of faces with the letterlike symbols, best first. The general fallback
+/// does not cover them: Segoe UI, SF Arabic and Noto Sans Arabic have no double-struck letters.
+fn letterlike_candidates() -> Vec<PathBuf> {
+    if cfg!(windows) {
+        ["seguisym.ttf", "cambria.ttc"].iter().map(|f| windows_fonts().join(f)).collect()
+    } else if cfg!(target_os = "macos") {
+        ["/System/Library/Fonts/Apple Symbols.ttf", "/Library/Fonts/Arial Unicode.ttf"].iter().map(PathBuf::from).collect()
+    } else {
+        unix_fonts(&[
+            "truetype/dejavu/DejaVuSans.ttf",
+            "TTF/DejaVuSans.ttf",
+            "dejavu/DejaVuSans.ttf",
+            "dejavu-sans-fonts/DejaVuSans.ttf",
+            "truetype/noto/NotoSansMath-Regular.ttf",
+            "noto/NotoSansMath-Regular.ttf",
+            "google-noto/NotoSansMath-Regular.ttf",
+        ])
+    }
+}
+
 fn windows_fonts() -> PathBuf {
     let dir = std::env::var_os("WINDIR").or_else(|| std::env::var_os("SystemRoot")).map_or_else(|| PathBuf::from(r"C:\Windows"), PathBuf::from);
     dir.join("Fonts")
@@ -560,8 +593,15 @@ mod tests {
 
     #[test]
     fn script_candidates_are_absolute_font_files() {
-        for list in [devanagari_candidates(), telugu_candidates(), sinhala_candidates(), tamil_candidates(), hebrew_candidates(), hangul_candidates()]
-        {
+        for list in [
+            devanagari_candidates(),
+            telugu_candidates(),
+            sinhala_candidates(),
+            tamil_candidates(),
+            hebrew_candidates(),
+            hangul_candidates(),
+            letterlike_candidates(),
+        ] {
             assert!(!list.is_empty());
             assert!(list.iter().all(|p| p.is_absolute() || cfg!(windows)), "{list:?}");
             assert!(list.iter().all(|p| p.extension().is_some_and(|e| e == "ttf" || e == "ttc")), "{list:?}");
@@ -578,6 +618,27 @@ mod tests {
         // Inter has no Hangul.
         let inter = include_bytes!("../../../../assets/fonts/Inter-Regular.ttf");
         assert_eq!(face_with(inter, HANGUL_PROBE), None);
+    }
+
+    /// The double-struck letters need a face of their own (#7107): Inter has none of them, and on
+    /// Windows neither has Segoe UI, the general fallback there, while the first candidate, Segoe
+    /// UI Symbol, has all seven.
+    #[test]
+    fn the_letterlike_face_has_what_inter_and_the_general_face_lack() {
+        const DOUBLE_STRUCK: [char; 7] = ['ℂ', 'ℍ', 'ℕ', 'ℙ', 'ℚ', 'ℝ', 'ℤ'];
+        let inter = include_bytes!("../../../../assets/fonts/Inter-Regular.ttf");
+        for c in DOUBLE_STRUCK {
+            assert_eq!(face_with(inter, c), None, "Inter has {c}");
+        }
+        if cfg!(windows) && !installed_faces_switched_off() {
+            let read = |file: &str| std::fs::read(windows_fonts().join(file)).unwrap_or_else(|e| panic!("{file}: {e}"));
+            let (general, symbols) = (read("segoeui.ttf"), read("seguisym.ttf"));
+            assert_eq!(face_with(&general, LETTERLIKE_PROBE), None, "Segoe UI has the probe: the general face would already draw it");
+            for c in DOUBLE_STRUCK {
+                assert!(face_with(&symbols, c).is_some(), "Segoe UI Symbol lacks {c}");
+            }
+            assert!(letterlike_fallback().is_some());
+        }
     }
 
     /// Retune tripwires, deliberately separate from `the_macos_devanagari_list_is_apples_layout` below: these assert that three

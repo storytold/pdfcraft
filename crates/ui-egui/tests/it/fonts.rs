@@ -155,7 +155,9 @@ fn system_fallback_fills_missing_scripts() {
         return;
     }
     for (family, stack) in &defs.families {
-        assert_eq!(stack.last().map(String::as_str), Some(theme::SYSTEM_FALLBACK), "{family:?}: {stack:?}");
+        // Only the letterlike-symbol face may follow it (#7107).
+        let last = stack.iter().rev().find(|n| *n != theme::SYSTEM_LETTERLIKE_FALLBACK);
+        assert_eq!(last.map(String::as_str), Some(theme::SYSTEM_FALLBACK), "{family:?}: {stack:?}");
         assert_eq!(stack.iter().filter(|n| *n == theme::SYSTEM_FALLBACK).count(), 1, "{family:?}");
     }
     let mut fonts = Fonts::new(TextOptions::default(), defs);
@@ -356,12 +358,15 @@ fn traditional_chinese_ui_keeps_an_installed_hant_face_before_japanese() {
     installed_chinese_face_covers(theme::CjkPreference::TraditionalChinese, &catalog("zh-hant"), "Traditional");
 }
 
-/// Other languages keep the installed face last.
+/// Other languages keep the installed face last, but for the letterlike-symbol face (#7107),
+/// which follows it so that it takes nothing the installed face draws.
 #[test]
 fn non_chinese_ui_keeps_the_installed_face_last() {
     let defs = theme::installed_font_definitions(theme::CjkPreference::Default);
     for stack in defs.families.values() {
-        assert!(stack.iter().position(|n| n == theme::SYSTEM_FALLBACK).is_none_or(|i| i + 1 == stack.len()), "{stack:?}");
+        let before_letterlike: Vec<&String> = stack.iter().filter(|n| *n != theme::SYSTEM_LETTERLIKE_FALLBACK).collect();
+        assert!(before_letterlike.iter().position(|n| *n == theme::SYSTEM_FALLBACK).is_none_or(|i| i + 1 == before_letterlike.len()), "{stack:?}");
+        assert!(stack.iter().position(|n| n == theme::SYSTEM_LETTERLIKE_FALLBACK).is_none_or(|i| i + 1 == stack.len()), "{stack:?}");
     }
 }
 
@@ -463,4 +468,29 @@ fn system_fallback_covers_hangul() {
         assert!(fonts.has_glyphs(&id, HANGUL), "{id:?} lacks {HANGUL}");
     }
     assert!(layout_widths(&mut fonts, HANGUL).iter().all(|w| w.is_finite() && *w > 0.0));
+}
+
+/// Double-struck letters in a bookmark title (ℝ and ℕ from Typst or LaTeX's `\mathbb`, #7107) are
+/// not boxes on a machine with an installed face that has them, which ends every family. Windows
+/// always ships Segoe UI Symbol, so there the test never skips.
+#[test]
+fn system_fallback_covers_double_struck_letters() {
+    const DOUBLE_STRUCK: &str = "ℂℍℕℙℚℝℤ";
+    assert!(!theme::font_definitions().font_data.contains_key(theme::SYSTEM_LETTERLIKE_FALLBACK));
+    let defs = theme::installed_font_definitions(theme::CjkPreference::Default);
+    let off = std::env::var_os("PDFCRAFT_SYSTEM_FONTS").is_some_and(|v| v == "0");
+    if !defs.font_data.contains_key(theme::SYSTEM_LETTERLIKE_FALLBACK) && (off || !cfg!(windows)) {
+        eprintln!("skipping system_fallback_covers_double_struck_letters: no installed face with them (or PDFCRAFT_SYSTEM_FONTS=0)");
+        assert!(defs.families.values().all(|stack| !stack.iter().any(|n| n == theme::SYSTEM_LETTERLIKE_FALLBACK)));
+        return;
+    }
+    for (family, stack) in &defs.families {
+        assert_eq!(stack.last().map(String::as_str), Some(theme::SYSTEM_LETTERLIKE_FALLBACK), "{family:?}: {stack:?}");
+        assert_eq!(stack.iter().filter(|n| *n == theme::SYSTEM_LETTERLIKE_FALLBACK).count(), 1, "{family:?}: {stack:?}");
+    }
+    let mut fonts = Fonts::new(TextOptions::default(), defs);
+    for id in families() {
+        assert!(fonts.has_glyphs(&id, DOUBLE_STRUCK), "{id:?} lacks {DOUBLE_STRUCK}");
+    }
+    assert!(layout_widths(&mut fonts, DOUBLE_STRUCK).iter().all(|w| w.is_finite() && *w > 0.0));
 }
