@@ -93,6 +93,12 @@ struct Gs {
     scale: f64,
     leading: f64,
     rise: f64,
+    /// The stroke parameters that widen a painted path beyond its construction points.
+    line_width: f64,
+    miter_limit: f64,
+    line_join: i64,
+    /// `J` / ExtGState `/LC`: a projecting square cap (2) reaches past the endpoint's corner.
+    line_cap: i64,
     /// The tiling or shading pattern selected as the fill colour (`/Name scn`), and as the stroke
     /// colour (`/Name SCN`). Part of the graphics state, so `q`/`Q` save and restore them with
     /// everything else. A pattern's cell is a content stream of its own and this pass does not
@@ -143,6 +149,11 @@ pub(crate) struct Output {
     /// ([`pdfcraft_content::Parsed::ambiguous_images`]): what this scope placed after it may not
     /// be what the page shows, so a redaction must not trust it.
     pub ambiguous: bool,
+    /// The content holds bytes the parser can't read ([`pdfcraft_content::Parsed::skipped`]), in
+    /// this scope or a nested form: the walk reads past them, so text they hide (a stray `)` in a
+    /// `TJ` array, say), which other readers may still draw, is neither found nor removed, and a
+    /// rewrite would drop the bytes but keep the strings. A redaction must not trust it.
+    pub unparsed: bool,
     pub tag_changes: Vec<(ObjRef, ObjRef, HashSet<i64>, HashSet<i64>)>,
     pub error: Option<CosError>,
 }
@@ -226,6 +237,12 @@ impl<'a> Scope<'a> {
             depth: 0,
             budget,
         }
+    }
+
+    /// What is left of the page's allowance once the content is walked, for the cleanups after it
+    /// that read the forms drawing through the page's resources ([`prune`]) to go on spending.
+    pub(crate) fn into_budget(self) -> DecodeBudget {
+        self.budget
     }
 
     /// Keep at most `room` bytes of removed text: what earlier pages left of the document's
@@ -383,6 +400,10 @@ pub(crate) fn process(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<
         scale: 1.0,
         leading: 0.0,
         rise: 0.0,
+        line_width: 1.0,
+        miter_limit: 10.0,
+        line_join: 0,
+        line_cap: 0,
         fill_pattern: None,
         stroke_pattern: None,
         type3_inherits: false,
@@ -401,6 +422,7 @@ fn process_from(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<u8>], 
     let joined = Pieces::join(streams);
     let mut parsed = joined.parse();
     walk.out.ambiguous = parsed.ambiguous_images > 0;
+    walk.out.unparsed = parsed.skipped > 0;
     // A rewritten piece loses its comments, so keep where they began and ended: a comment that
     // ran on into the next piece still hides that piece's first line.
     let comment_edges = joined.comment_edges(&parsed);
@@ -426,6 +448,7 @@ fn process_from(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<u8>], 
         }
         if !walk.path.is_empty() {
             done.ops.append(&mut walk.path);
+            done.ops.append(&mut walk.pending);
         }
         processed.push((done.ops, done.changed));
     }
@@ -493,6 +516,10 @@ struct Walk {
     path: Vec<Op>,
     path_box: Option<[f64; 4]>,
     clip: bool,
+    /// Line-state operators (`w`, `M`, `j`, `J`, `d`, `gs`) met while a path is open: they apply to
+    /// the stroke that ends it, so the path stays whole for the hit test, and they are written
+    /// after it, kept even when the path goes.
+    pending: Vec<Op>,
     /// Painting operators written again under a clip that cuts the regions out: unchanged as
     /// operators, but what they paint is no longer all there.
     clipped: HashSet<usize>,
@@ -514,6 +541,7 @@ impl Walk {
             path: Vec::new(),
             path_box: None,
             clip: false,
+            pending: Vec::new(),
             clipped: HashSet::new(),
             out: Output::default(),
         }
@@ -530,14 +558,20 @@ impl Walk {
             self.paint_path(scope, op, piece);
             return;
         }
+        if !self.path.is_empty() && matches!(o, b"w" | b"M" | b"j" | b"J" | b"d" | b"gs") {
+            self.graphics_state(doc, scope, &op);
+            self.pending.push(op);
+            return;
+        }
         if !self.path.is_empty() {
             // A path not ended by a painting operator: pass it through.
             piece.ops.append(&mut self.path);
+            piece.ops.append(&mut self.pending);
             self.path_box = None;
             self.clip = false;
         }
         let kept = match o {
-            b"q" | b"Q" | b"cm" | b"Tf" | b"gs" => {
+            b"q" | b"Q" | b"cm" | b"Tf" | b"gs" | b"w" | b"M" | b"j" | b"J" => {
                 self.graphics_state(doc, scope, &op);
                 Some(op)
             }
@@ -565,7 +599,12 @@ impl Walk {
                 Some(op)
             }
             b"cs" | b"CS" => {
-                if op.name(0) != Some(b"Pattern") {
+                // A Pattern space is told by the name `/Pattern` alone: one named through the
+                // resources' `/ColorSpace` clears the pattern, which the app's renderer keeps and
+                // Poppler doesn't (`cs` resets the colour, ISO 32000-2 §8.6.8). Looking the name up
+                // at each `cs` wants a cache for the page: a `/ColorSpace` too large for the
+                // document to keep is parsed again at each read.
+                if op.last_name() != Some(b"Pattern") {
                     if o == b"cs" {
                         self.gs.fill_pattern = None;
                     } else {
@@ -592,8 +631,12 @@ impl Walk {
         let o = op.op.as_slice();
         let pts: Vec<(f64, f64)> = match o {
             b"re" => op.nums::<4>().map(|[x, y, w, h]| vec![(x, y), (x + w, y), (x, y + h), (x + w, y + h)]).unwrap_or_default(),
-            b"h" | b"W" | b"W*" => Vec::new(),
-            _ => op.operands.iter().filter_map(Object::as_f64).collect::<Vec<_>>().as_chunks::<2>().0.iter().map(|p| (p[0], p[1])).collect(),
+            // Each takes its points from the end, as the renderer reads them: a surplus before
+            // them is ignored, not read as a point.
+            b"m" | b"l" => op.nums::<2>().map(|[x, y]| vec![(x, y)]).unwrap_or_default(),
+            b"c" => op.nums::<6>().map(|[x1, y1, x2, y2, x3, y3]| vec![(x1, y1), (x2, y2), (x3, y3)]).unwrap_or_default(),
+            b"v" | b"y" => op.nums::<4>().map(|[x1, y1, x2, y2]| vec![(x1, y1), (x2, y2)]).unwrap_or_default(),
+            _ => Vec::new(),
         };
         for (x, y) in pts {
             let (u, v) = self.gs.ctm.apply(x, y);
@@ -606,11 +649,35 @@ impl Walk {
         self.path.push(op);
     }
 
+    /// The box a stroke of the current path can paint, grown from its construction box `b` by
+    /// what the pen adds: half the line width (a width of 0 is one device pixel, taken as one
+    /// unit) scaled by the CTM's largest stretch, and never less than half a unit of page space
+    /// (a renderer paints a hairline, or a line a CTM shrinks, about a device pixel wide); times
+    /// the miter limit when the path has joins and they are mitred (a rectangle has four), or
+    /// √2 for a projecting square cap (its outer corner). Caps and joins never reach further, so
+    /// a hit test on it is conservative, and a horizontal or vertical line no longer has a
+    /// zero-area box.
+    fn stroke_box(&self, b: [f64; 4]) -> [f64; 4] {
+        let m = self.gs.ctm.0;
+        let scale = (m[0] * m[0] + m[1] * m[1] + m[2] * m[2] + m[3] * m[3]).sqrt();
+        let joins = self.path.iter().filter(|op| matches!(op.op.as_slice(), b"l" | b"c" | b"v" | b"y" | b"h" | b"re")).count() >= 2
+            || self.path.iter().any(|op| op.op.as_slice() == b"re");
+        let miter = if joins && self.gs.line_join == 0 { self.gs.miter_limit.max(1.0) } else { 1.0 };
+        let reach = if self.gs.line_cap == 2 { miter.max(std::f64::consts::SQRT_2) } else { miter };
+        let pad = (self.gs.line_width.max(1.0) / 2.0 * scale).max(0.5) * reach;
+        [b[0] - pad, b[1] - pad, b[2] + pad, b[3] + pad]
+    }
+
     /// A painting operator ends the path; one under a region is removed (or kept as a clip).
     fn paint_path(&mut self, scope: &mut Scope<'_>, op: Op, piece: &mut Piece) {
+        let strokes = matches!(op.op.as_slice(), b"S" | b"s" | b"B" | b"B*" | b"b" | b"b*");
+        // A `W`/`W*` makes the path as constructed the clip; the stroke expansion only describes
+        // what the painting itself covers.
+        let path_box = self.path_box.take();
+        let bbox = path_box.map(|b| if strokes { self.stroke_box(b) } else { b });
         let body = std::mem::take(&mut self.path);
-        let bbox = self.path_box.take();
         let clips = std::mem::replace(&mut self.clip, false);
+        let pending = std::mem::take(&mut self.pending);
         let hit = scope.mode == Mode::Apply && op.op.as_slice() != b"n" && bbox.is_some_and(|b| scope.hits(b));
         if !hit {
             // The paint survives, so the pattern it draws with is still in use. `n` paints
@@ -620,22 +687,30 @@ impl Walk {
             let fills = matches!(o, b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*");
             uses_patterns(&mut self.out, &self.gs, fills, strokes);
             piece.ops.extend(body);
+            piece.ops.extend(pending);
             piece.ops.push(op);
             return;
         }
         let b = bbox.unwrap_or_default();
         piece.changed = true;
         scope.report.paths_removed += 1;
-        if scope.covered(b) && clips {
-            // Keep the clipping, drop the painting.
-            piece.ops.extend(body);
-            piece.ops.push(Op::new("n", vec![]));
+        if scope.covered(path_box.unwrap_or(b)) && clips {
+            // Everything this clip lets through is under a mark, so an empty clip hides the same
+            // content. The original outline is confidential and must not stay in the stream.
+            piece.ops.extend(pending);
+            for o in ["re", "W", "n"] {
+                let operands = if o == "re" { vec![num(0.0); 4] } else { vec![] };
+                piece.ops.push(Op::new(o, operands));
+            }
+        } else {
+            piece.ops.extend(pending);
         }
         // Partial vector redaction must not retain underlying drawing commands
         // behind clipping (F-008). Refuse partial clip retention and remove the path.
     }
 
     fn graphics_state(&mut self, doc: &Document, scope: &mut Scope<'_>, op: &Op) {
+        let last = op.nums::<1>().map(|[v]| v);
         match op.op.as_slice() {
             b"q" => self.stack.push((self.gs.clone(), self.tm, self.tlm)),
             b"Q" => {
@@ -649,11 +724,23 @@ impl Walk {
                 }
             }
             b"Tf" => self.select_font(doc, scope, op),
+            // The operand before the operator, as the renderer reads it: `1 12 w` is a width of 12.
+            b"w" => self.gs.line_width = last.unwrap_or(self.gs.line_width),
+            b"M" => self.gs.miter_limit = last.unwrap_or(self.gs.miter_limit),
+            b"j" => self.gs.line_join = last.map_or(self.gs.line_join, |j| j as i64),
+            b"J" => self.gs.line_cap = last.map_or(self.gs.line_cap, |j| j as i64),
             _ => {
-                if let Some((font, vertical, size)) = op.name(0).and_then(|n| extgstate_font(doc, scope, &self.ext_gstates, n, &self.fallback)) {
+                if let Some((font, vertical, size)) = op.last_name().and_then(|n| extgstate_font(doc, scope, &self.ext_gstates, n, &self.fallback)) {
                     (self.gs.font, self.gs.vertical, self.gs.size) = (font, vertical, size);
                     // As for `Tf`: a Type 3 font without /Resources paints through this scope's.
-                    self.gs.type3_inherits = op.name(0).is_some_and(|n| extgstate_type3_inherits(doc, &self.ext_gstates, n));
+                    self.gs.type3_inherits = op.last_name().is_some_and(|n| extgstate_type3_inherits(doc, &self.ext_gstates, n));
+                }
+                if let Some(state) = op.name(0).and_then(|n| self.ext_gstates.get(n)).and_then(|s| doc.resolve(s).as_dict().cloned()) {
+                    let num = |key: &[u8]| state.get(key).and_then(|v| doc.resolve(v).as_f64());
+                    self.gs.line_width = num(b"LW").unwrap_or(self.gs.line_width);
+                    self.gs.miter_limit = num(b"ML").unwrap_or(self.gs.miter_limit);
+                    self.gs.line_join = num(b"LJ").map_or(self.gs.line_join, |j| j as i64);
+                    self.gs.line_cap = num(b"LC").map_or(self.gs.line_cap, |j| j as i64);
                 }
             }
         }
@@ -858,7 +945,8 @@ fn clean_replacements(
             if !op.is("BDC") || !affected.contains(&op.span.start) {
                 continue;
             }
-            let property = match op.operands.get(1) {
+            // The property list is the last operand, as the renderer reads it.
+            let property = match op.back(0) {
                 Some(Object::Name(name)) => properties.get(name).map(|p| doc.resolve(p)),
                 Some(p) => Some(doc.resolve(p)),
                 None => None,
@@ -868,7 +956,7 @@ fn clean_replacements(
                 for key in [&b"ActualText"[..], b"Alt", b"E", b"T"] {
                     stripped |= dict.remove(key).is_some();
                 }
-                if stripped && let Some(property) = op.operands.get_mut(1) {
+                if stripped && let Some(property) = op.operands.last_mut() {
                     *property = Object::Dict(dict);
                     *changed = true;
                     report.replacement_text += 1;
@@ -1065,7 +1153,32 @@ fn xobject(
             }
         }
         Some(b"Form") => {
-            let m = s.dict.get(b"Matrix").and_then(|m| Matrix::from_operands(doc.resolve(m).as_array()?)).unwrap_or_default();
+            // Read as the proof reads it, entries by reference included: read as the identity, a
+            // form moved onto a mark would be tested against the wrong place and never walked.
+            let m = match crate::verify::matrix_of(doc, &s.dict) {
+                Ok(m) => m,
+                // Not six numbers given directly or through one reference. Removing hidden layers alone never asks where content lands, so
+                // the form is walked as it stands.
+                Err(()) if scope.everywhere() && scope.hidden_text.is_none() => Matrix::IDENTITY,
+                // Otherwise where the form draws, and so whether it reaches a mark or leaves the
+                // page, can't be told. Apply refuses the page, and the scans count it, as for a
+                // form past the page's budget below.
+                Err(()) => {
+                    if scope.mode == Mode::Apply {
+                        out.error = Some(CosError::Syntax {
+                            offset: 0,
+                            detail:
+                                "a form XObject's /Matrix isn't six numbers given directly or through one reference, so where it draws can't be told"
+                                    .into(),
+                        });
+                    } else if scope.everywhere() {
+                        scope.layer_blocks += 1;
+                    } else {
+                        out.residue += 1;
+                    }
+                    return None;
+                }
+            };
             let fctm = m.then(&gs.ctm);
             let bbox = s.dict.get(b"BBox").and_then(|b| {
                 let v: Vec<f64> = doc.resolve(b).as_array()?.iter().filter_map(Object::as_f64).collect();
@@ -1096,7 +1209,9 @@ fn xobject(
                 out.doomed.push(r);
                 return Some(None);
             }
-            // Strict, like page content: a Form read only in part counts as undecodable.
+            // Strict, like page content: a Form read only in part counts as undecodable. With its
+            // `/DecodeParms` given by reference too, as the cleanups after the walk read it: read
+            // without them, it looks empty and is left as it was, drawing whatever lies under a mark.
             let data = if scope.budget.enter_form() {
                 scope.budget.decode_strict(doc, s)
             } else {
@@ -1142,6 +1257,7 @@ fn xobject(
             out.residue += inner.residue;
             out.vertical |= inner.vertical;
             out.ambiguous |= inner.ambiguous;
+            out.unparsed |= inner.unparsed;
             out.doomed.extend_from_slice(&inner.doomed);
             out.retired_properties.extend(inner.retired_properties);
             // A Type 3 glyph without resources shown inside the form may paint with the page's
@@ -1173,11 +1289,11 @@ fn xobject(
             let mut cleaned_res = res.clone();
             // Install rewritten nested forms before finding live property names: a new form may
             // still inherit its caller's resources, and its new Do name must resolve here.
-            if !inner.xobjects.is_empty() || !inner.replaced.is_empty() {
+            // `prune_form_resources` below then drops the XObjects this form no longer draws, the
+            // ones it replaced among them, keeping those a form drawing through these resources
+            // still draws.
+            if !inner.xobjects.is_empty() {
                 let mut xo = res_dict(doc, &cleaned_res, b"XObject");
-                if let Some(data) = &new_data {
-                    prune(&mut xo, &inner.replaced, std::slice::from_ref(data));
-                }
                 for (name, reference) in &inner.xobjects {
                     xo.set(name.clone(), Object::Ref(*reference));
                 }
@@ -1185,20 +1301,20 @@ fn xobject(
             }
             if let Some(data) = &new_data {
                 let content = std::slice::from_ref(data);
-                match prune_properties(doc, &mut cleaned_res, content) {
+                match prune_properties(doc, &mut scope.budget, &mut cleaned_res, content) {
                     Ok(retired) => out.retired_properties.extend(retired),
                     Err(error) => {
                         out.error = Some(error);
                         return None;
                     }
                 }
-                if let Err(error) = prune_form_resources(doc, &mut cleaned_res, content) {
+                if let Err(error) = prune_form_resources(doc, &mut scope.budget, &mut cleaned_res, content) {
                     out.error = Some(error);
                     return None;
                 }
                 // No page: annotation appearances draw through a page's resources, never through a
                 // form's. The form's own soft masks are still counted.
-                if let Err(error) = crate::type3::prune_type3_from_resources(doc, &mut cleaned_res, content, None) {
+                if let Err(error) = crate::type3::prune_type3_from_resources(doc, &mut scope.budget, &mut cleaned_res, content, None) {
                     out.error = Some(error);
                     return None;
                 }

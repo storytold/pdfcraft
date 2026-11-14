@@ -445,6 +445,7 @@ impl Calculate {
         match self {
             Calculate::None => Vec::new(),
             Calculate::Simple { fields, .. } => unique(fields.iter().cloned()),
+            Calculate::Custom(js) => calculation_reads(js),
             Calculate::Notation(expr) => unique(notation_tokens(expr).into_iter().filter_map(|(_, token)| match token {
                 Notation::Name(name) => Some(name),
                 _ => None,
@@ -620,7 +621,8 @@ const MAX_EXPANDED_VALUES: usize = 1 << 20;
 pub fn calculate(c: &Calculate, values: &dyn Fn(&str) -> Vec<String>) -> Option<String> {
     let num = |s: &String| make_number(s).unwrap_or(0.0);
     match c {
-        Calculate::None => None,
+        // A custom script is the JavaScript engine's to run.
+        Calculate::None | Calculate::Custom(_) => None,
         // A product of no values is 0, as an empty sum, average, minimum or maximum is, not the
         // empty product 1: a blank quantity × price row reads 0, and a total over the rows
         // doesn't count it as 1. (The form's `values` leaves out a field that has no value.)

@@ -233,6 +233,16 @@ pub(crate) fn keep_asking_while_probing(ctx: &egui::Context) {
     }
 }
 
+/// The dialog's height outside its scrolling settings: the title, a notice of up to two lines,
+/// the Cancel / Recognize text row and the modal's own margins.
+const OCR_DIALOG_RESERVE: f32 = 220.0;
+/// The least the settings scroll in, however short the window: small enough that the title and the
+/// buttons still fit the smallest window at the largest interface size (173 pt), as Preferences.
+const OCR_MIN_SCROLL: f32 = 40.0;
+
+/// The Recognize Text dialog: the title, the settings groups (scrolling when the window is too
+/// short for them), any engine notice, and the Cancel / Recognize text row. Returns
+/// `(recognize, cancel)`, which of those buttons was clicked this frame.
 pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (bool, bool) {
     let pages = app.active_ids().and_then(|(_, id)| app.session.get(id)).map_or(1, |d| d.info.pages.len().max(1));
     let d = &mut app.ocr_draft;
@@ -248,115 +258,127 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
         });
         ui.add_space(8.0);
     };
-    group(ui, "Pages", &mut |ui| {
-        widgets::radio_value(ui, &mut d.pages, OcrPages::All, tl!("All pages"));
-        widgets::radio_value(ui, &mut d.pages, OcrPages::Current, tl!("Current page"));
-        ui.horizontal(|ui| {
-            widgets::radio_value(ui, &mut d.pages, OcrPages::Range, tl!("From"));
-            let on = d.pages == OcrPages::Range;
-            ui.add_enabled(on, egui::DragValue::new(&mut d.from).range(1..=pages));
-            ui.label(tl!("to"));
-            ui.add_enabled(on, egui::DragValue::new(&mut d.to).range(1..=pages));
+    // The settings outgrow a short window or a large display scale (#6599): they scroll, and
+    // the notices and the Cancel / Recognize text row stay below the scroll, always in reach.
+    let max = (ui.ctx().content_rect().height() - OCR_DIALOG_RESERVE).max(OCR_MIN_SCROLL);
+    egui::ScrollArea::vertical()
+        .id_salt("ocr-dialog-scroll")
+        .max_height(max)
+        // Only applies when the settings overflow: the dialog then opens at its full height
+        // instead of growing frame by frame, as Preferences does.
+        .min_scrolled_height(max)
+        .auto_shrink([false, true])
+        .show(ui, |ui| {
+            group(ui, "Pages", &mut |ui| {
+                widgets::radio_value(ui, &mut d.pages, OcrPages::All, tl!("All pages"));
+                widgets::radio_value(ui, &mut d.pages, OcrPages::Current, tl!("Current page"));
+                ui.horizontal(|ui| {
+                    widgets::radio_value(ui, &mut d.pages, OcrPages::Range, tl!("From"));
+                    let on = d.pages == OcrPages::Range;
+                    ui.add_enabled(on, egui::DragValue::new(&mut d.from).range(1..=pages));
+                    ui.label(tl!("to"));
+                    ui.add_enabled(on, egui::DragValue::new(&mut d.to).range(1..=pages));
+                });
+            });
+            group(ui, "Settings", &mut |ui| {
+                egui::Grid::new("ocr-settings").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
+                    ui.label(tl!("Document language"));
+                    let name = LANGUAGES.iter().find(|l| l.0 == d.language).map_or("English", |l| l.1);
+                    craft_ui::ComboBox::from_id_salt("ocr-language").selected_text(tl!(name)).width(220.0).show_ui(ui, |ui| {
+                        for (code, name) in LANGUAGES {
+                            ui.selectable_value(&mut d.language, (*code).to_string(), tl!(*name));
+                        }
+                    });
+                    ui.end_row();
+                    ui.label(tl!("Engine"));
+                    let engine_name = match d.engine {
+                        EngineChoice::Auto => tl!("Automatic"),
+                        EngineChoice::Ocrs => tl!("Built-in"),
+                        EngineChoice::Tesseract => tl!("Tesseract"),
+                    };
+                    craft_ui::ComboBox::from_id_salt("ocr-engine").selected_text(engine_name).width(220.0).show_ui(ui, |ui| {
+                        let choices: [(EngineChoice, &str); 3] =
+                            [(EngineChoice::Auto, "Automatic"), (EngineChoice::Ocrs, "Built-in"), (EngineChoice::Tesseract, "Tesseract")];
+                        for (choice, name) in choices {
+                            ui.selectable_value(&mut d.engine, choice, tl!(name));
+                        }
+                    });
+                    ui.end_row();
+                    ui.label(tl!("Combine engines"));
+                    let strategy_name = match d.strategy {
+                        MergeStrategy::PrimaryOnly => tl!("Primary only"),
+                        MergeStrategy::ConfidenceWeighted => tl!("Confidence weighted"),
+                        MergeStrategy::RoverVote => tl!("ROVER vote"),
+                    };
+                    craft_ui::ComboBox::from_id_salt("ocr-strategy").selected_text(strategy_name).width(220.0).show_ui(ui, |ui| {
+                        let choices: [(MergeStrategy, &str); 3] = [
+                            (MergeStrategy::PrimaryOnly, "Primary only"),
+                            (MergeStrategy::ConfidenceWeighted, "Confidence weighted"),
+                            (MergeStrategy::RoverVote, "ROVER vote"),
+                        ];
+                        for (choice, name) in choices {
+                            ui.selectable_value(&mut d.strategy, choice, tl!(name));
+                        }
+                    });
+                    ui.end_row();
+                    ui.label(tl!("Output"));
+                    let mode_name = match d.output_mode {
+                        OutputMode::Searchable => tl!("Searchable Image (Exact)"),
+                        OutputMode::EditableText => tl!("Editable text"),
+                    };
+                    craft_ui::ComboBox::from_id_salt("ocr-output").selected_text(mode_name).width(220.0).show_ui(ui, |ui| {
+                        let s = ui
+                            .selectable_label(d.output_mode == OutputMode::Searchable, tl!("Searchable Image (Exact)"))
+                            .on_hover_text(tl!("Adds invisible text over each word; the page image is not changed"));
+                        if s.clicked() {
+                            d.output_mode = OutputMode::Searchable;
+                        }
+                        let e = ui
+                            .selectable_label(d.output_mode == OutputMode::EditableText, tl!("Editable text"))
+                            .on_hover_text(tl!("Writes a new document of visible text; the scan is not changed"));
+                        if e.clicked() {
+                            d.output_mode = OutputMode::EditableText;
+                        }
+                    });
+                    ui.end_row();
+                    ui.label(tl!("Downsample to"));
+                    craft_ui::ComboBox::from_id_salt("ocr-dpi").selected_text(format!("{} dpi", d.dpi)).width(220.0).show_ui(ui, |ui| {
+                        for v in [600, 300, 150, 72] {
+                            ui.selectable_value(&mut d.dpi, v, format!("{v} dpi"));
+                        }
+                    });
+                    ui.end_row();
+                });
+                ui.add_space(4.0);
+                ui.add(crate::widgets::checkbox(&mut d.text_pages, tl!("Also recognize pages that already have text")))
+                    .on_hover_text(tl!("Pictures on those pages are recognized too; words already in the page's text are not added again"));
+                ui.add(crate::widgets::checkbox(&mut d.auto_rotate, tl!("Straighten pages scanned sideways or upside down")));
+                ui.add(crate::widgets::checkbox(&mut d.deskew, tl!("Straighten skewed text lines")));
+                ui.add(crate::widgets::checkbox(&mut d.denoise, tl!("Remove scan speckle")));
+                ui.add(crate::widgets::checkbox(&mut d.binarize, tl!("Black and white (binarize)")));
+            });
+            group(ui, "Skip", &mut |ui| {
+                ui.add(crate::widgets::checkbox(&mut d.skip_text_pages, tl!("Skip pages that already have text")))
+                    .on_hover_text(tl!("Pages with renderable text are left alone and reported as skipped"));
+                ui.add(crate::widgets::checkbox(&mut d.skip_text_files, tl!("Skip files that already have text")))
+                    .on_hover_text(tl!("In multiple files: a file with any text is its own skipped bucket, and nothing is written for it"));
+                ui.add(crate::widgets::checkbox(&mut d.force_ocr, tl!("Force OCR (override skip options)")))
+                    .on_hover_text(tl!("Reads pages and files even where the skip options would leave them alone"));
+            });
+            group(ui, "Output folder", &mut |ui| {
+                ui.horizontal(|ui| match &d.output_folder {
+                    Some(f) => {
+                        ui.monospace(f).on_hover_text(tl!("The searchable copies are written here under the source names"));
+                        if ui.small_button(tl!("Clear")).clicked() {
+                            d.output_folder = None;
+                        }
+                    }
+                    None => {
+                        ui.label(tl!("Automatic")).on_hover_text(tl!("A folder is asked for when a multiple-file run starts"));
+                    }
+                });
+            });
         });
-    });
-    group(ui, "Settings", &mut |ui| {
-        egui::Grid::new("ocr-settings").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
-            ui.label(tl!("Document language"));
-            let name = LANGUAGES.iter().find(|l| l.0 == d.language).map_or("English", |l| l.1);
-            craft_ui::ComboBox::from_id_salt("ocr-language").selected_text(tl!(name)).width(220.0).show_ui(ui, |ui| {
-                for (code, name) in LANGUAGES {
-                    ui.selectable_value(&mut d.language, (*code).to_string(), tl!(*name));
-                }
-            });
-            ui.end_row();
-            ui.label(tl!("Engine"));
-            let engine_name = match d.engine {
-                EngineChoice::Auto => tl!("Automatic"),
-                EngineChoice::Ocrs => tl!("Built-in"),
-                EngineChoice::Tesseract => tl!("Tesseract"),
-            };
-            craft_ui::ComboBox::from_id_salt("ocr-engine").selected_text(engine_name).width(220.0).show_ui(ui, |ui| {
-                let choices: [(EngineChoice, &str); 3] =
-                    [(EngineChoice::Auto, "Automatic"), (EngineChoice::Ocrs, "Built-in"), (EngineChoice::Tesseract, "Tesseract")];
-                for (choice, name) in choices {
-                    ui.selectable_value(&mut d.engine, choice, tl!(name));
-                }
-            });
-            ui.end_row();
-            ui.label(tl!("Combine engines"));
-            let strategy_name = match d.strategy {
-                MergeStrategy::PrimaryOnly => tl!("Primary only"),
-                MergeStrategy::ConfidenceWeighted => tl!("Confidence weighted"),
-                MergeStrategy::RoverVote => tl!("ROVER vote"),
-            };
-            craft_ui::ComboBox::from_id_salt("ocr-strategy").selected_text(strategy_name).width(220.0).show_ui(ui, |ui| {
-                let choices: [(MergeStrategy, &str); 3] = [
-                    (MergeStrategy::PrimaryOnly, "Primary only"),
-                    (MergeStrategy::ConfidenceWeighted, "Confidence weighted"),
-                    (MergeStrategy::RoverVote, "ROVER vote"),
-                ];
-                for (choice, name) in choices {
-                    ui.selectable_value(&mut d.strategy, choice, tl!(name));
-                }
-            });
-            ui.end_row();
-            ui.label(tl!("Output"));
-            let mode_name = match d.output_mode {
-                OutputMode::Searchable => tl!("Searchable Image (Exact)"),
-                OutputMode::EditableText => tl!("Editable text"),
-            };
-            craft_ui::ComboBox::from_id_salt("ocr-output").selected_text(mode_name).width(220.0).show_ui(ui, |ui| {
-                let s = ui
-                    .selectable_label(d.output_mode == OutputMode::Searchable, tl!("Searchable Image (Exact)"))
-                    .on_hover_text(tl!("Adds invisible text over each word; the page image is not changed"));
-                if s.clicked() {
-                    d.output_mode = OutputMode::Searchable;
-                }
-                let e = ui
-                    .selectable_label(d.output_mode == OutputMode::EditableText, tl!("Editable text"))
-                    .on_hover_text(tl!("Writes a new document of visible text; the scan is not changed"));
-                if e.clicked() {
-                    d.output_mode = OutputMode::EditableText;
-                }
-            });
-            ui.end_row();
-            ui.label(tl!("Downsample to"));
-            craft_ui::ComboBox::from_id_salt("ocr-dpi").selected_text(format!("{} dpi", d.dpi)).width(220.0).show_ui(ui, |ui| {
-                for v in [600, 300, 150, 72] {
-                    ui.selectable_value(&mut d.dpi, v, format!("{v} dpi"));
-                }
-            });
-            ui.end_row();
-        });
-        ui.add_space(4.0);
-        ui.add(crate::widgets::checkbox(&mut d.text_pages, tl!("Also recognize pages that already have text")))
-            .on_hover_text(tl!("Pictures on those pages are recognized too; words already in the page's text are not added again"));
-        ui.add(crate::widgets::checkbox(&mut d.auto_rotate, tl!("Straighten pages scanned sideways or upside down")));
-        ui.add(crate::widgets::checkbox(&mut d.deskew, tl!("Straighten skewed text lines")));
-        ui.add(crate::widgets::checkbox(&mut d.denoise, tl!("Remove scan speckle")));
-        ui.add(crate::widgets::checkbox(&mut d.binarize, tl!("Black and white (binarize)")));
-    });
-    group(ui, "Skip", &mut |ui| {
-        ui.add(crate::widgets::checkbox(&mut d.skip_text_pages, tl!("Skip pages that already have text")))
-            .on_hover_text(tl!("Pages with renderable text are left alone and reported as skipped"));
-        ui.add(crate::widgets::checkbox(&mut d.skip_text_files, tl!("Skip files that already have text")))
-            .on_hover_text(tl!("In multiple files: a file with any text is its own skipped bucket, and nothing is written for it"));
-        ui.add(crate::widgets::checkbox(&mut d.force_ocr, tl!("Force OCR (override skip options)")))
-            .on_hover_text(tl!("Reads pages and files even where the skip options would leave them alone"));
-    });
-    group(ui, "Output folder", &mut |ui| {
-        ui.horizontal(|ui| match &d.output_folder {
-            Some(f) => {
-                ui.monospace(f).on_hover_text(tl!("The searchable copies are written here under the source names"));
-                if ui.small_button(tl!("Clear")).clicked() {
-                    d.output_folder = None;
-                }
-            }
-            None => {
-                ui.label(tl!("Automatic")).on_hover_text(tl!("A folder is asked for when a multiple-file run starts"));
-            }
-        });
-    });
     keep_asking_while_probing(ui.ctx());
     // The web build has no model files: it downloads the models the first time they're needed.
     #[cfg(target_arch = "wasm32")]
@@ -691,7 +713,8 @@ impl PdfCraftApp {
     #[cfg(target_arch = "wasm32")]
     fn start_web_batch(&mut self, files: Vec<(String, Vec<u8>)>, settings: OcrSettings) {
         let progress = Arc::new(Mutex::new(BatchProgress { total: files.len(), ..Default::default() }));
-        self.ocr_web_batch = Some(crate::ocr_web::Batch::new(files, settings));
+        // Each file opens in its own session; it keeps this one's JavaScript preference.
+        self.ocr_web_batch = Some(crate::ocr_web::Batch::new(files, settings, self.session.javascript()));
         self.ocr_batch = Some(progress);
     }
 
@@ -736,13 +759,16 @@ impl PdfCraftApp {
         let p = progress.clone();
         // The summary is written on the worker thread: draw it in the UI's language.
         let lang = crate::i18n::current();
+        // Each file opens in its own session; it keeps this one's JavaScript preference.
+        let javascript = self.session.javascript();
         let work = move || {
             crate::i18n::set_current(lang);
             let write = move |name: &str, r: &pdfcraft_engine::ocr::FileResult| {
                 crate::editing::write_atomically(&dir.join(name).to_string_lossy(), &r.bytes).map_err(|e| e.to_string())
             };
             // A panic in the recognizer still ends the batch with a summary (#3919).
-            let msg = pdfcraft_engine::guard(|| run_batch_files(files, settings, &recognizers, &p, write)).unwrap_or_else(|panic| failed(&panic));
+            let msg = pdfcraft_engine::guard(|| run_batch_files(files, settings, &recognizers, javascript, &p, write))
+                .unwrap_or_else(|panic| failed(&panic));
             if let Ok(mut s) = p.lock() {
                 s.done = s.total;
                 s.message = Some(msg);
@@ -981,12 +1007,14 @@ impl PdfCraftApp {
 /// The batch's worker: read each file, hand the searchable copy to `write` (the output folder,
 /// or the web's download), count the buckets, and compose the summary. A file the skip-files
 /// option passes over is its own bucket and `write` is never called for it. A cancel is asked
-/// for between files: the file in flight finishes, the rest are counted as not run.
+/// for between files: the file in flight finishes, the rest are counted as not run. `javascript`
+/// is the app session's preference, for each file's own session.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn run_batch_files(
     files: Vec<(String, Vec<u8>)>,
     settings: OcrSettings,
     recognizers: &pdfcraft_engine::ocr::Recognizers,
+    javascript: bool,
     progress: &Mutex<BatchProgress>,
     mut write: impl FnMut(&str, &pdfcraft_engine::ocr::FileResult) -> Result<(), String>,
 ) -> String {
@@ -1001,7 +1029,7 @@ pub(crate) fn run_batch_files(
         if let Ok(mut s) = progress.lock() {
             s.done = i;
         }
-        let r = pdfcraft_engine::ocr::recognize_file(&name, Arc::new(bytes), None, settings.clone(), recognizers, |_, _| true);
+        let r = pdfcraft_engine::ocr::recognize_file(&name, Arc::new(bytes), None, settings.clone(), recognizers, javascript, |_, _| true);
         match r {
             Ok(res) if res.skipped() => skipped += 1,
             Ok(res) => match write(&name, &res) {
@@ -1328,7 +1356,7 @@ mod tests {
         let recognizers = Recognizers { primary: Arc::new(Fake { confidence: 95.0 }), secondary: None };
         let writes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let w = writes.clone();
-        let msg = run_batch_files(files, OcrSettings { skip_text_files: true, ..Default::default() }, &recognizers, &progress, move |_, _| {
+        let msg = run_batch_files(files, OcrSettings { skip_text_files: true, ..Default::default() }, &recognizers, true, &progress, move |_, _| {
             w.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             Ok(())
         });
@@ -1338,7 +1366,7 @@ mod tests {
         let files = vec![("a.pdf".into(), pdf.to_vec()), ("b.pdf".into(), pdf.to_vec())];
         let progress = Mutex::new(BatchProgress { total: files.len(), ..Default::default() });
         let w = writes.clone();
-        let msg = run_batch_files(files, OcrSettings { skip_text_files: true, ..Default::default() }, &recognizers, &progress, move |_, _| {
+        let msg = run_batch_files(files, OcrSettings { skip_text_files: true, ..Default::default() }, &recognizers, true, &progress, move |_, _| {
             w.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             Ok(())
         });
@@ -1359,13 +1387,13 @@ mod tests {
         // The fixtures are text PDFs standing in for scans; the default skip-text-pages option
         // would (correctly) leave them alone, so the batch here reads everything.
         let settings = OcrSettings { skip_text_pages: false, ..Default::default() };
-        let msg = run_batch_files(files, settings.clone(), &recognizers, &progress, |_, _| Ok(()));
+        let msg = run_batch_files(files, settings.clone(), &recognizers, true, &progress, |_, _| Ok(()));
         assert!(msg.contains("Recognized 2 words in 2 files"), "{msg}");
         assert!(msg.contains("scan.pdf: 1 low-confidence word(s) on pages 1"), "{msg}");
         // The write failing is a per-file failure, named in the summary.
         let files = vec![("scan.pdf".into(), pdf.to_vec())];
         let progress = Mutex::new(BatchProgress { total: files.len(), ..Default::default() });
-        let msg = run_batch_files(files, settings, &recognizers, &progress, |_, _| Err("disk full".into()));
+        let msg = run_batch_files(files, settings, &recognizers, true, &progress, |_, _| Err("disk full".into()));
         assert!(msg.contains("; failed: scan.pdf: disk full"), "{msg}");
     }
 
@@ -1380,7 +1408,7 @@ mod tests {
             let files = vec![("scan.pdf".into(), pdf.to_vec())];
             let progress = Mutex::new(BatchProgress { total: files.len(), ..Default::default() });
             let settings = OcrSettings { skip_text_pages: false, low_confidence_threshold: threshold, ..Default::default() };
-            run_batch_files(files, settings, &recognizers, &progress, |_, _| Ok(()))
+            run_batch_files(files, settings, &recognizers, true, &progress, |_, _| Ok(()))
         };
         assert!(run(OcrSettings::default().low_confidence_threshold).contains("1 low-confidence word(s)"), "the default flags a 40% word");
         assert!(run(40.0).contains("1 low-confidence word(s)"), "at the threshold counts");

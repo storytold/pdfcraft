@@ -387,10 +387,23 @@ pub struct Common {
     pub para: ParaSpec,
     /// Table cells: how many columns this cell spans.
     pub col_span: usize,
+    /// `<traversal>`: where Tab goes from here.
+    pub traversal: Traversal,
     /// The object's own attributes and its property elements as the template writes them, for
     /// scripts to read (see [`Props`]). Shared: the live form's instances of the object and
     /// copies of the template point at the same tree.
     pub props: std::sync::Arc<Props>,
+}
+
+/// A container's or object's `<traversal>` links, as SOM references relative to it. Only the
+/// two Tab follows are kept; the arrow-key ones (`up`, `down`, `left`, `right`, `back`) aren't.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Traversal {
+    /// `operation="first"`: where Tab goes on entering a container.
+    pub first: Option<String>,
+    /// `operation="next"` (the default): where Tab goes after this object, or after the last
+    /// stop inside a container.
+    pub next: Option<String>,
 }
 
 /// What scripts read of an object's properties (XFA 3.3 ch. 3, "Properties vs. Children",

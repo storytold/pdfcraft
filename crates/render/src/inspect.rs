@@ -40,6 +40,7 @@ pub use model::{
     MAX_GROUP_DEPTH, OutlineItem, PageInfo, PageTransition, Popup, Portfolio, PortfolioView, RemoteDestination, ReviewStates, TransitionStyle, Xfa,
     fill_group_text, group_primaries, link_replies, thread_tops,
 };
+pub use navigation::named_destination;
 #[cfg(test)]
 use navigation::{OUTLINE_DEPTH, OUTLINE_WINDOW};
 #[cfg(test)]

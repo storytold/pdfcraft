@@ -132,7 +132,8 @@ pub fn staging_suffixes() -> impl Iterator<Item = u64> {
 /// (`sync_all`); parent-directory durability after a power loss is not promised. On Unix a file
 /// that is replaced keeps its permissions and group, so a private file stays private; a new file gets the
 /// usual mode for a new file. On Windows a replaced file stays hidden or system if it was, and
-/// plain if it was plain. On Windows and macOS a replaced file keeps its creation date, where
+/// plain if it was plain, even where a server hides the dot-named staging file (#5001, #4593, #6029, #6119).
+/// On Windows and macOS a replaced file keeps its creation date, where
 /// the volume stores one.
 /// On macOS, accessible extended attributes of an existing regular destination are copied
 /// before flushing; a copy failure refuses the save rather than losing metadata (#2658).
@@ -185,7 +186,28 @@ pub fn write_atomically_with(
             keep_created(&file, created);
             sync_staged(&file, sync_all)?;
         }
-        std::fs::rename(&tmp, path)
+        let rename_result = std::fs::rename(&tmp, path);
+        #[cfg(windows)]
+        if rename_result.is_ok()
+            && let Some(keep) = &keep
+        {
+            // Restore attributes only if the saved file's hidden or system bits differ from the
+            // replaced file's (#5001, #4593, #6029, #6119). Samba/NAS servers mark dot-named
+            // staging files hidden and persist that flag through the rename; on local disks, the
+            // staging file already has the right KEPT_ATTRIBUTES. Restoring unconditionally would
+            // overwrite the newly written file's entire attribute word with the old file's,
+            // incorrectly wiping the archive bit (which backup tools need) or retaining offline/index
+            // flags. On servers where attributes differ, restoring permissions is a safe trade to keep
+            // the file visible. When saving a new file (`keep` is None), no baseline exists.
+            use std::os::windows::fs::MetadataExt as _;
+            let saved = std::fs::symlink_metadata(path).map(|m| m.file_attributes() & KEPT_ATTRIBUTES);
+            if saved.is_ok_and(|a| a != (keep.file_attributes() & KEPT_ATTRIBUTES))
+                && let Err(e) = std::fs::set_permissions(path, keep.permissions())
+            {
+                log::warn!("could not restore replaced file attributes on {}: {e}", path.display());
+            }
+        }
+        rename_result
     })();
     if result.is_err() {
         let _ = std::fs::remove_file(&tmp);

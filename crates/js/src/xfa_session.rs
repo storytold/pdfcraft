@@ -179,7 +179,15 @@ mod native {
             loop {
                 let left = deadline.map_or(limit, |d| d.saturating_duration_since(Instant::now()));
                 match worker.from.recv_timeout(left) {
-                    Ok(Reply::Outcome(o)) => return *o,
+                    Ok(Reply::Outcome(o)) => {
+                        // A FormCalc script its own clock stopped reports as abandoned: the
+                        // session ends as it does when the wait runs out first.
+                        if o.abandoned {
+                            self.dead = o.error.clone();
+                            self.worker = None;
+                        }
+                        return *o;
+                    }
                     Ok(Reply::Started) => {
                         // A second call changes nothing: the script's time has already begun.
                         if !running {

@@ -62,6 +62,11 @@ impl DocView {
         })
     }
 
+    /// The display saved before entering full screen, while presenting.
+    pub fn saved_display_mut(&mut self) -> Option<&mut SavedDisplay> {
+        self.presentation.as_mut()
+    }
+
     /// Whether the view is in full screen's one-page-at-a-time display.
     pub fn presenting(&self) -> bool {
         self.presentation.is_some()

@@ -130,18 +130,22 @@ pub fn program_is_usable(program: &Path) -> bool {
 /// executable FILE (on Unix the executable bits must be set; elsewhere being a file is what
 /// the OS requires). A directory or a missing file is simply unavailable — never a panic.
 fn program_is_executable(program: &Path) -> bool {
-    if !program.is_absolute() || !program.is_file() {
-        return false;
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::metadata(program).is_ok_and(|m| m.permissions().mode() & 0o111 != 0)
-    }
-    #[cfg(not(unix))]
-    {
-        true
-    }
+    program.is_absolute() && program.is_file() && has_execute_permission(program)
+}
+
+/// Unix: an executable bit is set.
+#[cfg(unix)]
+fn has_execute_permission(program: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(program).is_ok_and(|m| m.permissions().mode() & 0o111 != 0)
+}
+
+/// Elsewhere, being a file is what the OS requires. A function of its own: inlined above, the
+/// Windows build reduced to `if … { return false; } true`, which clippy's `needless_bool`
+/// refuses (Rust 1.100).
+#[cfg(not(unix))]
+fn has_execute_permission(_program: &Path) -> bool {
+    true
 }
 
 /// One row of Tesseract's TSV output. `level` 5 rows are the words; `conf` is −1 on the header
@@ -343,8 +347,17 @@ impl TesseractCli {
         // Known limit: only the direct child is killed at the timeout or on an early cap. A
         // wrapper script's children (grandchildren of this process) may survive the kill; the
         // cap and the timeout still bound what this run reads and how long it waits.
+        let mut command = std::process::Command::new(&self.program);
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt as _;
+            // `CREATE_NO_WINDOW`: tesseract is a console program and the app is not, so without
+            // it Windows opens a console window for every run, which flashes up during OCR. The
+            // output files above are unaffected.
+            command.creation_flags(0x0800_0000);
+        }
         let mut child =
-            std::process::Command::new(&self.program)
+            command
                 .args(args)
                 .stdin(std::process::Stdio::null())
                 .stdout(out_file)
@@ -892,6 +905,28 @@ mod tests {
         // cargo always sets CARGO_* for the test process; env_clear must drop them.
         assert!(!tsv.contains("CARGO_"), "the caller's environment must not leak: {tsv}");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The program starts without a console window (Windows): the app has no console, so a
+    /// console program that isn't told otherwise gets a window of its own, which flashes up on
+    /// every OCR run. PowerShell stands in for tesseract and reports, through the same output file
+    /// a reading comes back in, its console's window and the processes attached to that console.
+    /// Both are checked, because a program started without the flag by a process that has a
+    /// console shares it instead, and that console may itself have no window.
+    #[cfg(windows)]
+    #[test]
+    fn the_program_starts_without_a_console_window() {
+        const PROBE: &str = r#"Add-Type -Namespace PdfCraftOcrProbe -Name Console -MemberDefinition '[DllImport("kernel32.dll")] public static extern System.IntPtr GetConsoleWindow(); [DllImport("kernel32.dll")] public static extern uint GetConsoleProcessList(uint[] ids, uint count);'
+$ids = New-Object uint32[] 256
+$n = [PdfCraftOcrProbe.Console]::GetConsoleProcessList($ids, 256)
+"$([PdfCraftOcrProbe.Console]::GetConsoleWindow()) $($ids[0..($n-1)] -join ',')""#;
+        let root = std::env::var_os("SystemRoot").map_or_else(|| PathBuf::from(r"C:\Windows"), PathBuf::from);
+        let t = TesseractCli::new(root.join(r"System32\WindowsPowerShell\v1.0\powershell.exe"));
+        let text = t.run(&["-NoProfile", "-NonInteractive", "-Command", PROBE], t.timeout, t.max_output).unwrap();
+        let (window, attached) = text.trim().split_once(' ').unwrap();
+        assert_eq!(window, "0", "the program has a console window: {text}");
+        let attached: Vec<u32> = attached.split(',').map(|id| id.parse().unwrap()).collect();
+        assert!(!attached.is_empty() && !attached.contains(&std::process::id()), "the program shares this process's console: {text}");
     }
 
     #[cfg(unix)]

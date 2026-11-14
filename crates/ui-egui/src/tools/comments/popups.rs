@@ -1,5 +1,6 @@
 use super::state::PageCx;
 use super::{Annotation, Color32, CommentPrefs, CornerRadius, DocInfo, DocView, Edit, PagePointer, PageXform, Pos2, QuickTool, Rect, pos2, theme};
+use crate::page_keys::PageKeys;
 
 /// A comment with a pop-up window of its own: not a text box, a Fill & Sign mark, a reply or a
 /// status (replies are found by `/IRT` reference, [`Annotation::is_comment`]).
@@ -367,7 +368,7 @@ pub(crate) fn popups(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, pr
                 .map_or(Color32::from_rgb(0xFF, 0xD6, 0x5C), |c| Color32::from_rgb((c[0] * 255.0) as u8, (c[1] * 255.0) as u8, (c[2] * 255.0) as u8));
             let pal = palette(color);
             // A screen rectangle on this page in user space, to save as the pop-up's `/Rect`. Only
-            // converts: the pointer and the redaction look are unused.
+            // converts: the pointer, the keys (none) and the redaction look are unused.
             let to_user = |r: Rect| {
                 let cx = PageCx {
                     page,
@@ -379,6 +380,7 @@ pub(crate) fn popups(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, pr
                     allowed,
                     hidden,
                     redact_mark: ([0.0; 3], 1.0),
+                    keys: PageKeys::new(true),
                 };
                 cx.rect_to_user(r)
             };
