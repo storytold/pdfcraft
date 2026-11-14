@@ -9467,9 +9467,10 @@ fn a_named_font_takes_a_new_letter_once_its_advance_is_known() {
         let font = font.as_dict().unwrap();
         assert!(font.get(b"FontDescriptor").is_none(), "nothing is embedded");
         let metrics = pdfcraft_fonts::pdf::Metrics::from_dict(&doc, font);
-        // Helvetica's published advances: z 500, é 556; the widths it had are untouched.
+        // Helvetica's published advances, which an installed Arial shares to the unit: z 500,
+        // é 556. The widths the font had are untouched.
         let width = |text: &str| metrics.codes(&metrics.encode(text).unwrap()).iter().map(|(c, _)| metrics.width(*c)).sum::<f64>();
-        assert!((width("z") - 0.5).abs() < 1e-6 && (width("é") - 0.556).abs() < 1e-6 && (width("a") - 0.556).abs() < 1e-6);
+        assert!((width("z") - 0.5).abs() < 1e-3 && (width("é") - 0.556).abs() < 1e-3 && (width("a") - 0.556).abs() < 1e-9);
     }
     // A font nothing here knows the metrics of still takes the standard font, and a refused edit
     // leaves the font object as it was.
@@ -9515,6 +9516,51 @@ fn a_paragraph_with_a_tab_its_font_cannot_write_is_edited_with_the_gap_kept() {
     // tab. `bcd` has not moved, so the row ends `h`'s half an em further right.
     let end = after.iter().map(|l| l.rect[2]).fold(f64::MIN, f64::max);
     assert!((end - right - 6.0).abs() < 0.5, "{right} -> {end}");
+}
+
+/// A row an edit makes too long flows on into the rows after it, as far as the next break that
+/// was typed: the words that no longer fit used to be left on a row of their own, with every row
+/// after it pushed down a line.
+#[test]
+fn a_row_grown_too_long_flows_into_the_rows_after_it() {
+    // Two wrapped rows of one measure (each ends where its next word no longer fits), a short
+    // row ended on purpose, and one more.
+    let content = "BT /F1 10 Tf 12 TL 72 700 Td (abcd efgh abcd efgh abcd efgh ab) Tj T* (efgh abcd efgh abcd efgh abcd ef) Tj T* (abcd efgh.) Tj T* (efgh abcd efgh abcd efgh abcd gh) Tj ET";
+    let mut doc = text_page(content);
+    let block = text::text_blocks(&doc, 0).unwrap().remove(0);
+    assert_eq!(block.rows.len(), 4, "{:?}", block.editor_text);
+    let baselines: Vec<f64> = text::text_lines(&doc, 0).unwrap().iter().map(|l| l.baseline()[1]).collect();
+    let right = block.rect[2];
+    // Two more words in the first row.
+    let draft = block.editor_text.replacen("abcd", "abcd XXXX YYYY", 1);
+    text::rewrite_block(&mut doc, 0, 0, Some(&draft), &text::BlockStyle::default()).unwrap();
+    let doc = reopen(&doc);
+    let block = text::text_blocks(&doc, 0).unwrap().remove(0);
+    let rows: Vec<&str> = block.editor_text.split('\n').map(str::trim_end).collect();
+    assert_eq!(rows.len(), 4, "the words flow down; no row is added: {rows:?}");
+    assert_eq!(
+        rows,
+        ["abcd XXXX YYYY efgh abcd efgh", "abcd efgh ab efgh abcd efgh abcd", "efgh abcd ef abcd efgh.", "efgh abcd efgh abcd efgh abcd gh"],
+        "each row passes on what no longer fits; the row after the typed break is as it was"
+    );
+    let words = |text: &str| text.split_whitespace().map(str::to_owned).collect::<Vec<_>>();
+    assert_eq!(words(&block.editor_text), words(&draft), "every word, in order");
+    // Each row still ends inside the paragraph and stands on the baseline it had.
+    let lines = text::text_lines(&doc, 0).unwrap();
+    assert!(lines.iter().all(|l| l.rect[2] <= right + 0.6), "{right}: {:?}", lines.iter().map(|l| l.rect[2]).collect::<Vec<_>>());
+    let mut after: Vec<f64> = lines.iter().map(|l| l.baseline()[1]).collect();
+    after.dedup_by(|a, b| (*a - *b).abs() < 0.01);
+    assert_eq!(after.len(), 4, "{after:?}");
+    assert!(after.iter().zip(&baselines).all(|(a, b)| (a - b).abs() < 0.01), "{after:?} vs {baselines:?}");
+    // A row that still fits leaves its paragraph's breaks alone.
+    let mut doc = text_page(content);
+    let source = text::text_blocks(&doc, 0).unwrap().remove(0).editor_text;
+    let mut source_rows: Vec<String> = source.split('\n').map(str::to_owned).collect();
+    source_rows[0] = source_rows[0].trim_end().strip_suffix('b').unwrap().to_owned();
+    text::rewrite_block(&mut doc, 0, 0, Some(&source_rows.join("\n")), &text::BlockStyle::default()).unwrap();
+    let block = text::text_blocks(&reopen(&doc), 0).unwrap().remove(0);
+    let rows: Vec<&str> = block.editor_text.split('\n').map(str::trim_end).collect();
+    assert_eq!(rows, ["abcd efgh abcd efgh abcd efgh a", "efgh abcd efgh abcd efgh abcd ef", "abcd efgh.", "efgh abcd efgh abcd efgh abcd gh"]);
 }
 
 /// A variation selector after a character the source font shows is the only thing missing: it gets

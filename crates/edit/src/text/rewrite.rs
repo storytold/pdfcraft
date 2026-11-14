@@ -865,24 +865,30 @@ fn source_font(doc: &Document, fonts_res: &Dict, font_name: &str, first: &TextLi
     SourceFont { metrics, reuse, space }
 }
 
-/// `draft` with each tab the paragraph's font can't write as the spaces that span the gap it stood
-/// for. InDesign and Word draw a tab as a glyph of no width and move the text after it, so a
-/// bulleted item reads `•\t text`; no font "has" that tab again, and any edit to such a paragraph
-/// was refused ("the source font cannot show the replacement text"). The gap is what its source
-/// row is wider than its other characters by, in spaces, at least one; a tab the font does write,
-/// and a turned row's, stay as they are.
-fn tabs_as_spaces(doc: &Document, page: usize, lines: &[TextLine], block: &TextBlock, draft: &str) -> String {
+/// How each tab of paragraph `block` is rewritten: the spaces that span the gap it stood for where
+/// its font can't write a tab, `None` where the font writes it itself. InDesign and Word draw a tab
+/// as a glyph of no width and move the text after it, so a bulleted item reads `•\t text`; no font
+/// "has" that tab again, and any edit to such a paragraph was refused ("the source font cannot
+/// show the replacement text"). The gap is what the source row is wider than its other characters
+/// by, to the nearest space, at least one. The rows' own text takes the spaces
+/// too, so a row the edit doesn't reach still matches its source and keeps its operators, and one
+/// it does reach is measured as it will be written. The flag says whether the paragraph's first
+/// font writes a tab, for one typed anew.
+fn tabs_as_spaces(doc: &Document, page: usize, lines: &mut [TextLine], block: usize) -> (Vec<Option<usize>>, bool) {
+    let members = group_blocks(lines).get(block).map(|b| b.lines.clone()).unwrap_or_default();
+    if !members.iter().filter_map(|i| lines.get(*i)).any(|line| line.text.contains('\t')) {
+        return (Vec::new(), false);
+    }
     let fonts = page_dict(doc, page)
         .ok()
         .and_then(|p| p.dict.get(b"Resources").and_then(|r| doc.dict(r)))
         .and_then(|r| r.get(b"Font").and_then(|f| doc.dict(f)))
         .unwrap_or_default();
-    let metrics_of = |line: &TextLine| fonts.get(line.font.as_bytes()).and_then(|f| doc.dict(f)).map(|f| Metrics::from_dict(doc, &f));
-    // Each source tab in order: the spaces it becomes, or `None` where the font writes it itself.
     let mut gaps: Vec<Option<usize>> = Vec::new();
     let mut writes_tabs = false;
-    for (n, line) in block.lines.iter().filter_map(|i| lines.get(*i)).enumerate() {
-        let metrics = metrics_of(line);
+    for (n, index) in members.iter().enumerate() {
+        let Some(line) = lines.get_mut(*index) else { continue };
+        let metrics = fonts.get(line.font.as_bytes()).and_then(|f| doc.dict(f)).map(|f| Metrics::from_dict(doc, &f));
         let writes = metrics.as_ref().is_some_and(|m| m.encode("\t").is_some());
         if n == 0 {
             writes_tabs = writes;
@@ -903,13 +909,27 @@ fn tabs_as_spaces(doc: &Document, page: usize, lines: &[TextLine], block: &TextB
                 let rest = source_width(m, &line.text.replace('\t', ""), size, space, state.char_spacing, state.word_spacing) * across;
                 let one = (space * size + state.char_spacing + state.word_spacing) * across;
                 let gap = (line.rect[2] - line.rect[0] - rest) / tabs as f64;
+                // To the nearest space: a rewritten row is fitted to its source's width, so half
+                // a space either way moves the text after the gap by no more than that.
                 Some(if one > 1e-6 && gap.is_finite() { (gap / one).round().clamp(1.0, 64.0) as usize } else { 1 })
             }
             _ => Some(1),
         };
+        if let Some(count) = spaces {
+            let gap = " ".repeat(count);
+            line.text = line.text.replace('\t', &gap);
+            for run in &mut line.runs {
+                run.0 = run.0.replace('\t', &gap);
+            }
+        }
         gaps.extend(std::iter::repeat_n(spaces, tabs));
     }
-    let mut gaps = gaps.into_iter();
+    (gaps, writes_tabs)
+}
+
+/// `draft` with its tabs as [`tabs_as_spaces`] rewrites the source's, in order.
+fn draft_tabs_as_spaces(draft: &str, gaps: &[Option<usize>], writes_tabs: bool) -> String {
+    let mut gaps = gaps.iter();
     let mut out = String::with_capacity(draft.len());
     for ch in draft.chars() {
         if ch != '\t' {
@@ -917,7 +937,7 @@ fn tabs_as_spaces(doc: &Document, page: usize, lines: &[TextLine], block: &TextB
             continue;
         }
         match gaps.next() {
-            Some(Some(spaces)) => out.extend(std::iter::repeat_n(' ', spaces)),
+            Some(Some(spaces)) => out.extend(std::iter::repeat_n(' ', *spaces)),
             Some(None) => out.push('\t'),
             // A tab typed beyond the source's: the font's own where it writes one, else a space.
             None => out.push(if writes_tabs { '\t' } else { ' ' }),
@@ -936,16 +956,18 @@ pub(crate) fn rewrite_block_from(
     style: &BlockStyle,
     max_glyphs: usize,
 ) -> Result<LineEdit, EditError> {
-    let blocks = group_blocks(&lines);
-    let b = blocks.get(block).cloned().ok_or_else(|| EditError::Invalid(format!("page {} has no paragraph {}", page + 1, block + 1)))?;
+    let mut lines = lines;
+    let (tab_gaps, writes_tabs) = tabs_as_spaces(doc, page, &mut lines, block);
     let spaced;
     let text = match text {
         Some(draft) if draft.contains('\t') => {
-            spaced = tabs_as_spaces(doc, page, &lines, &b, draft);
+            spaced = draft_tabs_as_spaces(draft, &tab_gaps, writes_tabs);
             Some(spaced.as_str())
         }
         other => other,
     };
+    let blocks = group_blocks(&lines);
+    let b = blocks.get(block).cloned().ok_or_else(|| EditError::Invalid(format!("page {} has no paragraph {}", page + 1, block + 1)))?;
     // Existing PDF paragraphs do not yet persist selected-row alignment intent. Refuse
     // that operation before writing anything; whole-paragraph `align` remains supported.
     if style.aligns.iter().any(Option::is_some) {

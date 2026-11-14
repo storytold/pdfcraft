@@ -729,7 +729,7 @@ fn styled_break_before(chars: &[StyledChar]) -> Vec<bool> {
 
 fn wrap_styled_rows(
     chars: &[StyledChar],
-    width: f64,
+    width_of: impl Fn(usize) -> f64,
     measure: impl Fn(&[StyledChar]) -> Result<f64, EditError>,
 ) -> Result<WrappedStyledRows, EditError> {
     let break_before = styled_break_before(chars);
@@ -779,7 +779,7 @@ fn wrap_styled_rows(
         }
         let word = chars.get(at..end).unwrap_or_default();
         let word_width = measure(word)?;
-        if !row.is_empty() && !item.0.is_whitespace() && row_width + word_width > width + 0.5 {
+        if !row.is_empty() && !item.0.is_whitespace() && row_width + word_width > width_of(rows.len()) + 0.5 {
             let mut trimmed = 0usize;
             while row.last().is_some_and(|c: &StyledChar| c.0.is_whitespace()) {
                 row.pop();
@@ -807,6 +807,78 @@ fn wrap_styled_rows(
         rows.push(row);
     }
     Ok((rows, row_ranges, row_lines, row_soft, row_gap))
+}
+
+/// Whether the break before source row `row` was a wrap: `Some(gap)` with the separators it
+/// consumed, `None` for one that was typed. A `/PCSoft` or `/PCHard` marker says which. For a row
+/// this app didn't write, the row before it broke where its next word, `next_word` wide, no
+/// longer fit before the paragraph's right edge: a row that had room for that word was ended on
+/// purpose (an address, a list, the end of a sentence set on its own line). [`break_gap`] asks
+/// more, that the row nearly fills the measure, because a width change reflows on its word alone;
+/// here a row has already outgrown its place, and ragged body text rarely fills the measure.
+fn wrapped_before(block: &TextBlock, lines: &[TextLine], row: usize, next_word: f64) -> Option<usize> {
+    let line = block.rows.get(row).and_then(|r| r.first()).and_then(|i| lines.get(*i))?;
+    if line.hard_break {
+        return None;
+    }
+    if line.soft_break {
+        return Some(line.soft_gap);
+    }
+    let before = block.rows.get(row.checked_sub(1)?).and_then(|r| row_rect(r, lines))?;
+    let slack = block.rect[2] - before[2];
+    // The word and the space before it.
+    (next_word > 0.0 && next_word + line.size.max(1.0) * 0.25 > slack).then_some(1)
+}
+
+/// When an edit makes a row too long for its place, the rows after it flow on from it: each
+/// following break that was a wrap ([`wrapped_before`]) gives way, up to the next break that was
+/// typed, so the words that no longer fit move down through the paragraph as in a word processor.
+/// Before, they were left alone on a row of their own with every row after it pushed down a line,
+/// ragged and one line longer. Rows before the long one, and paragraphs none of whose rows grew
+/// too long, are left as they are: a row the edit doesn't reach keeps its source operators.
+///
+/// A break is replaced in place, so every character keeps its index: by a space, or, where the row
+/// already ends in one, by a `\r`, which the wrap skips. Only while the draft still has the source's
+/// rows; a wrap that consumed no separator (Chinese, Japanese, Thai) stays a break.
+fn reflow_after_overflow(
+    mut chars: Vec<StyledChar>,
+    width_of: &impl Fn(usize) -> f64,
+    measure: &impl Fn(&[StyledChar]) -> Result<f64, EditError>,
+    block: &TextBlock,
+    lines: &[TextLine],
+) -> Result<Vec<StyledChar>, EditError> {
+    let breaks: Vec<usize> = chars.iter().enumerate().filter(|(_, c)| c.0 == '\n').map(|(i, _)| i).collect();
+    if breaks.is_empty() || breaks.len() + 1 != block.rows.len() {
+        return Ok(chars);
+    }
+    let mut start = 0;
+    let mut flowing = false;
+    for (row, end) in breaks.iter().copied().enumerate() {
+        if !flowing {
+            let text = chars.get(start..end).unwrap_or_default();
+            let shown = text.iter().rposition(|c| !c.0.is_whitespace()).map_or(0, |last| last + 1);
+            flowing = measure(text.get(..shown).unwrap_or_default())? > width_of(row) + 0.5;
+        }
+        if flowing {
+            // The first word of the row after the break, as the draft has it.
+            let next = chars.get(end + 1..breaks.get(row + 1).copied().unwrap_or(chars.len())).unwrap_or_default();
+            let from = next.iter().position(|c| !c.0.is_whitespace()).unwrap_or(next.len());
+            let to = next.iter().skip(from).position(|c| c.0.is_whitespace()).map_or(next.len(), |n| from + n);
+            let word = measure(next.get(from..to).unwrap_or_default())?;
+            match wrapped_before(block, lines, row + 1, word) {
+                Some(gap) if gap > 0 => {
+                    let spaced = end.checked_sub(1).and_then(|i| chars.get(i)).is_some_and(|c| c.0.is_whitespace());
+                    if let Some(c) = chars.get_mut(end) {
+                        c.0 = if spaced { '\r' } else { ' ' };
+                    }
+                }
+                // A typed break ends the flow; the rows after it are their own.
+                _ => flowing = false,
+            }
+        }
+        start = end + 1;
+    }
+    Ok(chars)
 }
 
 fn apply_range_styles<'a>(
@@ -1726,7 +1798,18 @@ pub(crate) fn rewrite_styled_block(
         }
         Ok(width)
     };
-    let (mut rows, row_ranges, row_lines, row_soft, row_gap) = wrap_styled_rows(&chars, width, measure)?;
+    // Each row wraps at the paragraph's right edge from its own left edge: a hanging indent's
+    // rows (a bulleted item's, after the first) are narrower than the paragraph's box. A row the
+    // edit adds takes the last source row's. An asked width or alignment lays every row out in
+    // one box, as before.
+    let own_edges = style.width.is_none() && style.align.is_none() && style.aligns.iter().all(Option::is_none);
+    let row_left = |row: usize| block.rows.get(row).or_else(|| block.rows.last()).and_then(|r| row_rect(r, lines)).map(|r| r[0]);
+    let width_of = |row: usize| match row_left(row) {
+        Some(left) if own_edges => (width - (left - block.rect[0]).max(0.0)).max(first.size),
+        _ => width,
+    };
+    let chars = reflow_after_overflow(chars, &width_of, &measure, block, lines)?;
+    let (mut rows, row_ranges, row_lines, row_soft, row_gap) = wrap_styled_rows(&chars, width_of, measure)?;
     let space_styles: Vec<_> = rows.iter_mut().map(|row| assign_subset_space_fonts(row, &metrics)).collect();
     let streams = content_streams(doc, &p.dict)?;
     let pieces = crate::text::joined(&streams);
