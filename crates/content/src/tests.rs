@@ -42,13 +42,14 @@ fn splicing_visits_each_piece_a_few_times() {
 
 #[test]
 fn a_long_unreadable_number_is_read_once() {
-    for junk in ["+", "5"] {
+    for junk in ["+", "5", "-", "-+", "+-"] {
         let n = 20_000;
         let src = format!("{}{} 1 0 0 1 0 0 cm", junk.repeat(n), if junk == "5" { "x" } else { "" });
         RESCANNED.with(|c| c.set(0));
         let p = parse(src.as_bytes());
         let rescanned = RESCANNED.with(|c| c.get());
         assert!(rescanned <= 2 * n, "{rescanned} bytes read for a {n}-byte token");
+        assert!(junk == "5" || junk == "+" || rescanned > 0, "the run of {junk:?} is counted");
         assert_eq!(p.ops.last().and_then(|o| o.nums::<6>()), Some([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]));
     }
     // A short damaged number still recovers byte by byte.

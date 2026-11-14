@@ -658,15 +658,19 @@ impl Extractor<'_> {
                     tm = Matrix::IDENTITY;
                     tlm = Matrix::IDENTITY;
                 }
-                // Operands are read from the end, as the renderer reads them.
-                b"Tc" => gs.tc = op.num_back(0).unwrap_or(0.0),
-                b"Tw" => gs.tw = op.num_back(0).unwrap_or(0.0),
-                b"Tz" => gs.th = op.num_back(0).unwrap_or(100.0) / 100.0,
-                b"TL" => gs.tl = op.num_back(0).unwrap_or(0.0),
-                b"Ts" => gs.rise = op.num_back(0).unwrap_or(0.0),
+                // Operands are read from the end, as the renderer reads them. An operator whose
+                // operands aren't of its types is skipped, as the renderer skips it: the state
+                // stays as it was.
+                b"Tc" => gs.tc = op.num_back(0).unwrap_or(gs.tc),
+                b"Tw" => gs.tw = op.num_back(0).unwrap_or(gs.tw),
+                b"Tz" => gs.th = op.num_back(0).map_or(gs.th, |v| v / 100.0),
+                b"TL" => gs.tl = op.num_back(0).unwrap_or(gs.tl),
+                b"Ts" => gs.rise = op.num_back(0).unwrap_or(gs.rise),
                 b"Tf" => {
-                    gs.font = op.name_back(1).map(<[u8]>::to_vec).unwrap_or_default();
-                    gs.size = op.num_back(0).unwrap_or(0.0);
+                    if let (Some(font), Some(size)) = (op.name_back(1), op.num_back(0)) {
+                        gs.font = font.to_vec();
+                        gs.size = size;
+                    }
                 }
                 b"Td" | b"TD" => {
                     if let Some([x, y]) = op.nums::<2>() {
@@ -688,6 +692,17 @@ impl Extractor<'_> {
                     tm = tlm;
                 }
                 b"Tj" | b"TJ" | b"'" | b"\"" => {
+                    // An operator whose operands aren't of its types is skipped, as the renderer
+                    // skips it: it draws nothing and moves nothing.
+                    let string = op.back(0).and_then(Object::as_string).is_some();
+                    let types = match o {
+                        b"TJ" => op.back(0).and_then(Object::as_array).is_some(),
+                        b"\"" => string && op.num_back(1).is_some() && op.num_back(2).is_some(),
+                        _ => string,
+                    };
+                    if !types {
+                        continue;
+                    }
                     if matches!(o, b"'" | b"\"") {
                         tlm = Matrix::translate(0.0, -gs.tl).then(&tlm);
                         tm = tlm;

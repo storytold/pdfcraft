@@ -185,9 +185,35 @@ impl Iterator for Ops<'_> {
                 return None;
             };
             let at = lx.pos;
+            if let Some(run) = lone_signs(data, at) {
+                // The renderer reads the signs two at a time: with a minus among them they are the
+                // number 0; without one, the rest of the token is an operator it doesn't know,
+                // which drops the operands before it and draws nothing. One pass, however long.
+                lx.pos = at + run;
+                for (i, pair) in data.get(at..at + run).unwrap_or_default().chunks(2).enumerate() {
+                    if pair.contains(&b'-') {
+                        start.get_or_insert(at);
+                        operands.push(Object::Int(0));
+                    } else {
+                        lx.pos = at + 2 * i;
+                        *skipped += operands.len() + lx.token().len();
+                        operands.clear();
+                        *start = None;
+                        break;
+                    }
+                }
+                continue;
+            }
             let operand_start = matches!(b, b'/' | b'(' | b'<' | b'[' | b'+' | b'-' | b'.') || b.is_ascii_digit();
             if operand_start {
-                match lx.object() {
+                let read = lx.object();
+                // Every byte a read that fails goes through (and every sign `lone_signs` reads), for
+                // the test that the work stays linear.
+                #[cfg(test)]
+                if read.is_err() {
+                    tests::RESCANNED.with(|c| c.set(c.get() + lx.pos.saturating_sub(at)));
+                }
+                match read {
                     Ok(o) => {
                         start.get_or_insert(at);
                         operands.push(o);
@@ -199,8 +225,6 @@ impl Iterator for Ops<'_> {
                     }
                     Err(_) => {
                         let read = lx.pos.saturating_sub(at);
-                        #[cfg(test)]
-                        tests::RESCANNED.with(|c| c.set(c.get() + read));
                         let number = matches!(b, b'+' | b'-' | b'.') || b.is_ascii_digit();
                         if number && read > MAX_RETRIED_TOKEN {
                             // A long unreadable number is skipped whole: retrying from each of its
@@ -268,6 +292,22 @@ impl Iterator for Ops<'_> {
             }
         }
     }
+}
+
+/// How many signs start the token at `at`, when they are no number to the lexer but the renderer
+/// reads them anyway: a run of `+` and `-` at the start of a token, with no digit or dot after it.
+/// The renderer reads up to two signs before a number, so two at a time with none after them: with
+/// a minus among them they are the number 0, as a lone `-` is in real files (PDF.js bugs 1753983
+/// and 1953099, the second before a show-text string); without one they are no number, and it
+/// reads the token on as an operator. Inside a token, after a digit, a sign is the end of the number before it, not one of
+/// its own (`None`).
+fn lone_signs(data: &[u8], at: usize) -> Option<usize> {
+    let token_start = at.checked_sub(1).and_then(|i| data.get(i)).is_none_or(|c| is_ws(*c) || is_delim(*c));
+    let run = data.get(at..)?.iter().take_while(|c| matches!(c, b'+' | b'-')).count();
+    #[cfg(test)]
+    tests::RESCANNED.with(|c| c.set(c.get() + run));
+    let number_follows = data.get(at + run).is_some_and(|c| c.is_ascii_digit() || *c == b'.');
+    (token_start && run > 0 && !number_follows).then_some(run)
 }
 
 /// Record the piece boundaries crossed by the comments in `trivia` (skipped whitespace and
