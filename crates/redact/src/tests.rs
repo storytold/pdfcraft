@@ -3355,7 +3355,7 @@ fn unreadable_bytes_in_a_stream_left_as_it_was_refuse_the_redaction_of_an_image(
     mark(&mut doc, 0, &[[0.0, 200.0, 300.0, 300.0]], "");
     let result = apply(&mut doc, None);
     assert!(
-        matches!(&result, Err(RedactError::Cos(pdfcraft_cos::CosError::Syntax { detail, .. })) if detail == "redaction could not fully inspect inherited form resources"),
+        matches!(&result, Err(RedactError::PageRefused { page: 1, reason }) if reason.starts_with("a form without resources of its own has bytes")),
         "{result:?}"
     );
 }
@@ -6285,6 +6285,7 @@ mod metadata_fail_closed;
 mod metadata_matching;
 mod operands_from_the_end;
 mod property_retirement;
+mod refusal_pages;
 mod surviving_references;
 mod text_state;
 mod unparsed;

@@ -155,7 +155,7 @@ pub(crate) struct Output {
     /// rewrite would drop the bytes but keep the strings. A redaction must not trust it.
     pub unparsed: bool,
     pub tag_changes: Vec<(ObjRef, ObjRef, HashSet<i64>, HashSet<i64>)>,
-    pub error: Option<CosError>,
+    pub error: Option<RedactError>,
 }
 
 pub(crate) struct Scope<'a> {
@@ -1165,12 +1165,10 @@ fn xobject(
                 // form past the page's budget below.
                 Err(()) => {
                     if scope.mode == Mode::Apply {
-                        out.error = Some(CosError::Syntax {
-                            offset: 0,
-                            detail:
-                                "a form XObject's /Matrix isn't six numbers given directly or through one reference, so where it draws can't be told"
-                                    .into(),
-                        });
+                        out.error = Some(RedactError::Refused(
+                            "a form XObject's /Matrix isn't six numbers given directly or through one reference, so where it draws can't be told"
+                                .into(),
+                        ));
                     } else if scope.everywhere() {
                         scope.layer_blocks += 1;
                     } else {
@@ -1212,7 +1210,9 @@ fn xobject(
             // Strict, like page content: a Form read only in part counts as undecodable. With its
             // `/DecodeParms` given by reference too, as the cleanups after the walk read it: read
             // without them, it looks empty and is left as it was, drawing whatever lies under a mark.
-            let data = if scope.budget.enter_form() {
+            let refused = scope.budget.refused();
+            let entered = scope.budget.enter_form();
+            let data = if entered {
                 scope.budget.decode_strict(doc, s)
             } else {
                 Err(CosError::Filter(format!("the page draws more than {MAX_PAGE_FORMS} form XObjects")))
@@ -1223,7 +1223,11 @@ fn xobject(
                 // verification counts the form as content that may remain.
                 Err(e) if scope.budget.exhausted() => {
                     if scope.mode == Mode::Apply {
-                        out.error = Some(e);
+                        // The budget spent says nothing of this form: it went past what the page
+                        // may read only where it was refused for that; one that doesn't decode
+                        // says why.
+                        let past = !entered || scope.budget.refused() > refused;
+                        out.error = Some(if past { RedactError::past_allowance(e) } else { e.into() });
                     } else if scope.everywhere() {
                         scope.layer_blocks += 1;
                     } else {
