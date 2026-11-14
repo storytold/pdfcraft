@@ -9,9 +9,9 @@ mod text_font;
 mod upright_image;
 pub use extract::{ExtractedImage, ImageExport, extract_images, image_file, image_file_within};
 mod office;
-#[cfg(not(target_arch = "wasm32"))]
-pub use office::libreoffice;
 pub use office::{OFFICE_EXTENSIONS, is_office, office_to_pdf};
+#[cfg(not(target_arch = "wasm32"))]
+pub use office::{libreoffice, libreoffice_sandbox};
 use pdfcraft_fonts::wrap_with;
 use text_font::TextFont;
 

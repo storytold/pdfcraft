@@ -139,6 +139,12 @@ fn xlsx(text: &str) -> Vec<u8> {
 
 /// A PowerPoint presentation of one slide with one text box.
 fn pptx(text: &str) -> Vec<u8> {
+    pptx_linking(text, None)
+}
+
+/// [`pptx`], with a picture on the slide that is linked from `picture` (a URL), not stored in
+/// the file, when there is one.
+fn pptx_linking(text: &str, picture: Option<&str>) -> Vec<u8> {
     const P: &str =
         r#"xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main""#;
     let presentation = format!(
@@ -149,8 +155,18 @@ fn pptx(text: &str) -> Vec<u8> {
         r#"{XML}<p:sldMaster {P} xmlns:r="{DOC_RELS}">{tree}</p:spTree></p:cSld><p:clrMap bg1="lt1" tx1="dk1" bg2="lt2" tx2="dk2" accent1="accent1" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" hlink="hlink" folHlink="folHlink"/><p:sldLayoutIdLst><p:sldLayoutId id="2147483649" r:id="rId1"/></p:sldLayoutIdLst></p:sldMaster>"#
     );
     let layout = format!(r#"{XML}<p:sldLayout {P}>{tree}</p:spTree></p:cSld></p:sldLayout>"#);
+    let pic = if picture.is_some() {
+        r#"<p:pic><p:nvPicPr><p:cNvPr id="3" name="Picture"/><p:cNvPicPr/><p:nvPr/></p:nvPicPr><p:blipFill><a:blip r:link="rId2"/><a:stretch><a:fillRect/></a:stretch></p:blipFill><p:spPr><a:xfrm><a:off x="914400" y="2514400"/><a:ext cx="1000000" cy="1000000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr></p:pic>"#
+    } else {
+        ""
+    };
+    let slide_rels = {
+        let layout = format!(r#"<Relationship Id="rId1" Type="{DOC_RELS}/slideLayout" Target="../slideLayouts/slideLayout1.xml"/>"#);
+        let linked = picture.map(|url| format!(r#"<Relationship Id="rId2" Type="{DOC_RELS}/image" Target="{url}" TargetMode="External"/>"#));
+        format!(r#"{XML}<Relationships xmlns="{PACKAGE_RELS}">{layout}{}</Relationships>"#, linked.unwrap_or_default())
+    };
     let slide = format!(
-        r#"{XML}<p:sld {P}>{tree}<p:sp><p:nvSpPr><p:cNvPr id="2" name="Text"/><p:cNvSpPr txBox="1"/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="914400" y="914400"/><a:ext cx="6000000" cy="1000000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr><p:txBody><a:bodyPr/><a:p><a:r><a:rPr lang="en-US" sz="2800"/><a:t>{text}</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld></p:sld>"#
+        r#"{XML}<p:sld {P} xmlns:r="{DOC_RELS}">{tree}<p:sp><p:nvSpPr><p:cNvPr id="2" name="Text"/><p:cNvSpPr txBox="1"/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="914400" y="914400"/><a:ext cx="6000000" cy="1000000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr><p:txBody><a:bodyPr/><a:p><a:r><a:rPr lang="en-US" sz="2800"/><a:t>{text}</a:t></a:r></a:p></p:txBody></p:sp>{pic}</p:spTree></p:cSld></p:sld>"#
     );
     let theme = format!(
         r#"{XML}<a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" name="Plain"><a:themeElements><a:clrScheme name="Plain"><a:dk1><a:srgbClr val="000000"/></a:dk1><a:lt1><a:srgbClr val="FFFFFF"/></a:lt1><a:dk2><a:srgbClr val="000000"/></a:dk2><a:lt2><a:srgbClr val="FFFFFF"/></a:lt2><a:accent1><a:srgbClr val="4472C4"/></a:accent1><a:accent2><a:srgbClr val="ED7D31"/></a:accent2><a:accent3><a:srgbClr val="A5A5A5"/></a:accent3><a:accent4><a:srgbClr val="FFC000"/></a:accent4><a:accent5><a:srgbClr val="5B9BD5"/></a:accent5><a:accent6><a:srgbClr val="70AD47"/></a:accent6><a:hlink><a:srgbClr val="0563C1"/></a:hlink><a:folHlink><a:srgbClr val="954F72"/></a:folHlink></a:clrScheme><a:fontScheme name="Plain"><a:majorFont><a:latin typeface="Arial"/><a:ea typeface=""/><a:cs typeface=""/></a:majorFont><a:minorFont><a:latin typeface="Arial"/><a:ea typeface=""/><a:cs typeface=""/></a:minorFont></a:fontScheme><a:fmtScheme name="Plain"><a:fillStyleLst><a:solidFill><a:schemeClr val="phClr"/></a:solidFill><a:solidFill><a:schemeClr val="phClr"/></a:solidFill><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:fillStyleLst><a:lnStyleLst><a:ln><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:ln><a:ln><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:ln><a:ln><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:ln></a:lnStyleLst><a:effectStyleLst><a:effectStyle><a:effectLst/></a:effectStyle><a:effectStyle><a:effectLst/></a:effectStyle><a:effectStyle><a:effectLst/></a:effectStyle></a:effectStyleLst><a:bgFillStyleLst><a:solidFill><a:schemeClr val="phClr"/></a:solidFill><a:solidFill><a:schemeClr val="phClr"/></a:solidFill><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:bgFillStyleLst></a:fmtScheme></a:themeElements></a:theme>"#
@@ -183,7 +199,7 @@ fn pptx(text: &str) -> Vec<u8> {
         ("ppt/slideLayouts/slideLayout1.xml", &layout),
         ("ppt/slideLayouts/_rels/slideLayout1.xml.rels", &rels(&[("rId1", "slideMaster", "../slideMasters/slideMaster1.xml")])),
         ("ppt/slides/slide1.xml", &slide),
-        ("ppt/slides/_rels/slide1.xml.rels", &rels(&[("rId1", "slideLayout", "../slideLayouts/slideLayout1.xml")])),
+        ("ppt/slides/_rels/slide1.xml.rels", &slide_rels),
         ("ppt/theme/theme1.xml", &theme),
     ])
 }
@@ -274,4 +290,69 @@ fn office_documents_combine_in_order_with_a_bookmark_each() {
     for (page, word) in pages.iter().zip(["Cover page", "Pangolin notes", "Quokka letter"]) {
         assert!(page.contains(word), "{word:?} not in {page:?}");
     }
+}
+
+/// An OpenDocument file of type `mime` whose content is `body`, as the smallest package
+/// LibreOffice reads.
+fn odf(mime: &str, body: &str) -> Vec<u8> {
+    const NS: &str = r#"xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0" xmlns:xlink="http://www.w3.org/1999/xlink""#;
+    let manifest = format!(
+        r#"{XML}<manifest:manifest xmlns:manifest="urn:oasis:names:tc:opendocument:xmlns:manifest:1.0" manifest:version="1.2"><manifest:file-entry manifest:full-path="/" manifest:media-type="{mime}"/><manifest:file-entry manifest:full-path="content.xml" manifest:media-type="text/xml"/></manifest:manifest>"#
+    );
+    let content = format!(r#"{XML}<office:document-content {NS} office:version="1.2"><office:body>{body}</office:body></office:document-content>"#);
+    zip(&[("mimetype", mime), ("META-INF/manifest.xml", &manifest), ("content.xml", &content)])
+}
+
+/// A presentation, a spreadsheet, a text document and a PowerPoint file, each with a picture
+/// linked from `url`, which LibreOffice fetches when it loads them.
+fn documents_linking(url: &str) -> Vec<(&'static str, Vec<u8>)> {
+    let frame = |anchor: &str| {
+        format!(
+            r#"<draw:frame {anchor}svg:x="1cm" svg:y="1cm" svg:width="2cm" svg:height="2cm"><draw:image xlink:href="{url}" xlink:type="simple" xlink:show="embed" xlink:actuate="onLoad"/></draw:frame>"#
+        )
+    };
+    let odp = format!(r#"<office:presentation><draw:page draw:name="p1">{}</draw:page></office:presentation>"#, frame(""));
+    let ods = format!(
+        r#"<office:spreadsheet><table:table table:name="s"><table:shapes>{}</table:shapes><table:table-row><table:table-cell/></table:table-row></table:table></office:spreadsheet>"#,
+        frame("")
+    );
+    let odt = format!(r#"<office:text><text:p>{}</text:p></office:text>"#, frame(r#"text:anchor-type="paragraph" "#));
+    vec![
+        ("linked.odp", odf("application/vnd.oasis.opendocument.presentation", &odp)),
+        ("linked.ods", odf("application/vnd.oasis.opendocument.spreadsheet", &ods)),
+        ("linked.odt", odf("application/vnd.oasis.opendocument.text", &odt)),
+        ("linked.pptx", pptx_linking("Linked deck", Some(url))),
+    ]
+}
+
+/// #6953: converting a document that links to a listener on this machine makes no connection,
+/// and the conversion still succeeds. The sandbox does this, so the test skips where LibreOffice
+/// isn't installed or no sandbox works. Without the sandbox the presentation and the spreadsheet
+/// connect (Impress and Calc fetch a linked picture whatever the profile says); the text
+/// document and the PowerPoint file are here so that stays true of them.
+#[test]
+fn converting_a_document_that_links_to_a_listener_makes_no_connection() {
+    let Some((dir, mut a)) = office_files() else { return };
+    if pdfcraft_engine::libreoffice_sandbox().is_none() {
+        eprintln!("skipped: no sandbox for LibreOffice works on this machine");
+        return;
+    }
+    let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let url = format!("http://127.0.0.1:{}/picture.png", listener.local_addr().unwrap().port());
+    let mut reached = Vec::new();
+    for (name, bytes) in documents_linking(&url) {
+        std::fs::write(dir.path().join(name), bytes).unwrap();
+        let made = ok(&mut a, "doc_create_multiple", json!({ "paths": [name], "mode": "separate", "out_dir": "linked" }));
+        let output = made["files"][0]["output"].as_str().unwrap_or_else(|| panic!("{name}: {made}"));
+        assert!(Path::new(output).is_file(), "{name}: {output}");
+        match listener.accept() {
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+            _ => {
+                reached.push(name);
+                while listener.accept().is_ok() {}
+            }
+        }
+    }
+    assert!(reached.is_empty(), "connected: {reached:?}");
 }
