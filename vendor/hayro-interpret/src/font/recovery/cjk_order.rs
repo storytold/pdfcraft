@@ -94,7 +94,7 @@ struct Tables {
     /// The characters of the common punctuation row (Big5 `A141`–`A15E`), sorted.
     punctuation: Vec<char>,
     /// For each order (in [`Order::ALL`]'s order), the positions holding a character of
-    /// [`COMMON_TRADITIONAL`].
+    /// [`COMMON_TRADITIONAL`] that the rule may output in that order ([`in_output_scope`]).
     hits: [Vec<u32>; 4],
     /// For each order, the runs of positions (first, last) whose character the rule may output
     /// in that order: what [`score`] weighs against.
@@ -158,16 +158,6 @@ fn is_common(c: char) -> bool {
     u16::try_from(u32::from(c)).is_ok_and(|c| COMMON_TRADITIONAL.binary_search(&c).is_ok())
 }
 
-/// Positions of `table` holding a common character.
-fn hits<T: Copy>(table: &[T], char_of: impl Fn(T) -> Option<char>) -> Vec<u32> {
-    table
-        .iter()
-        .enumerate()
-        .filter(|(_, c)| char_of(**c).is_some_and(is_common))
-        .filter_map(|(p, _)| u32::try_from(p).ok())
-        .collect()
-}
-
 /// The runs of positions `0..len` where `inside` holds.
 fn runs(len: u32, inside: impl Fn(u32) -> bool) -> Vec<(u32, u32)> {
     let mut out: Vec<(u32, u32)> = Vec::new();
@@ -212,22 +202,29 @@ fn build_tables() -> Option<Tables> {
     uni_big5.sort_unstable();
     uni_big5.dedup();
     let cns1: Vec<Option<char>> = (0..CNS1_LEN).map(text).collect();
-    let uni_hits = COMMON_TRADITIONAL.iter().map(|&c| u32::from(c)).collect();
-    let hits = [
-        hits(&big5, |c| c),
-        uni_hits,
-        hits(&uni_big5, Some),
-        hits(&cns1, |c| c),
-    ];
     let mut tables = Tables {
         big5,
         uni_big5,
         cns1,
         scope,
         punctuation,
-        hits,
+        hits: Default::default(),
         scope_runs: Default::default(),
     };
+    // A common character counts only where the order outputs it, so that the common glyphs are
+    // among the output ones and a score is a share (the ideographic space, and the uni order's
+    // punctuation, are common but never output).
+    let hits = Order::ALL.map(|order| {
+        let reading = Reading { order, offset: 0 };
+        (0..tables.len(order))
+            .filter(|&p| {
+                tables
+                    .read(reading, p)
+                    .is_some_and(|c| is_common(c) && in_output_scope(&tables, order, c))
+            })
+            .collect()
+    });
+    tables.hits = hits;
     let scope_runs = Order::ALL.map(|order| {
         let reading = Reading { order, offset: 0 };
         runs(tables.len(order), |p| {

@@ -430,6 +430,22 @@ fn an_offset_is_scored_on_what_it_outputs() {
     assert!(!passes && (order, offset) != ("big5", 499), "{order} {offset} {best}");
 }
 
+/// A score is a share: a common character counts only where the order outputs it. The
+/// ideographic space is common but never output, and the uni order outputs ideographs only, so
+/// neither the space nor the uni order's punctuation raises a score above 1.
+#[test]
+fn a_common_character_counts_only_where_it_is_output() {
+    let mut numbers = ones("uni", 0, TEXT);
+    numbers.push((0x3000, 31));
+    numbers.push((u32::from('，'), 1));
+    numbers.sort_unstable();
+    let (_, _, best, rival, ..) = cjk_search(&numbers).unwrap();
+    assert!(best <= 1.0 && rival <= 1.0, "{best} {rival}");
+    for order in ["big5", "uni", "uni_big5", "cns1"] {
+        assert!(!cjk_outputs(order, '\u{3000}'), "{order}");
+    }
+}
+
 /// The punctuation row is read only at the orders and offsets whose punctuation was measured
 /// right; ideographs are read at every offset.
 #[test]
