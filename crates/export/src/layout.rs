@@ -533,7 +533,7 @@ pub(crate) fn tables(blocks: &[Block], rules: &[[f64; 4]]) -> (Vec<Table>, Vec<b
         ];
         out.push(Table { rect, cols: edges, rows: rows_out, ruled: frame });
     };
-    // Runs of consecutive multi-column rows are tables. Rows on either side of a run that
+    // Runs of consecutive multi-column rows are tables. Rows right on either side of a run that
     // hold a single cell wide enough to span two columns (a header band, a totals row) join
     // the table; other single-column rows (captions, following text) stay paragraphs.
     let spans_run = |edges: &[f64], bi: usize| -> bool {
@@ -546,6 +546,23 @@ pub(crate) fn tables(blocks: &[Block], rules: &[[f64; 4]]) -> (Vec<Table>, Vec<b
         es.sort_by(f64::total_cmp);
         es.dedup_by(|a, b| (*a - *b).abs() <= COL_TOL);
         es
+    };
+    // A row's vertical span [bottom, top].
+    let row_span = |row: &[(usize, usize)]| {
+        let bs = || row.iter().filter_map(|(_, i)| blocks.get(*i));
+        [bs().map(|b| b.rect[1]).fold(f64::INFINITY, f64::min), bs().map(|b| b.rect[3]).fold(f64::NEG_INFINITY, f64::max)]
+    };
+    // Whether a band row `band` (above the run, or under it) is as close to the run as its rows
+    // are to each other, up to half a line more: a paragraph a paragraph gap away is not a band
+    // that belongs to the table (#7304).
+    let near_run = |run: &[Vec<(usize, usize)>], band: &[(usize, usize)], above: bool| -> bool {
+        let spans: Vec<[f64; 2]> = run.iter().map(|row| row_span(row)).collect();
+        let widest = spans.windows(2).map(|w| w[0][0] - w[1][1]).fold(0.0, f64::max);
+        let (Some(first), Some(last)) = (spans.first(), spans.last()) else { return false };
+        let b = row_span(band);
+        let gap = if above { b[0] - first[1] } else { last[0] - b[1] };
+        let size = band.iter().filter_map(|(_, i)| blocks.get(*i)).map(|b| b.size).fold(0.0, f64::max);
+        gap <= widest + 0.5 * size
     };
     let cont = continuations(blocks);
     let qual: Vec<bool> = rows
@@ -575,11 +592,19 @@ pub(crate) fn tables(blocks: &[Block], rules: &[[f64; 4]]) -> (Vec<Table>, Vec<b
         }
         let end = i; // run = rows[start..end]
         let mut pieces: Vec<Vec<(usize, usize)>> = Vec::new();
-        if start > 0 && rows[start - 1].len() == 1 && spans_run(&run_edges(&rows[start..end]), rows[start - 1][0].1) {
+        if start > 0
+            && rows[start - 1].len() == 1
+            && spans_run(&run_edges(&rows[start..end]), rows[start - 1][0].1)
+            && near_run(&rows[start..end], &rows[start - 1], true)
+        {
             pieces.push(rows[start - 1].clone());
         }
         pieces.extend(rows[start..end].iter().cloned());
-        if end < rows.len() && rows[end].len() == 1 && spans_run(&run_edges(&rows[start..end]), rows[end][0].1) {
+        if end < rows.len()
+            && rows[end].len() == 1
+            && spans_run(&run_edges(&rows[start..end]), rows[end][0].1)
+            && near_run(&rows[start..end], &rows[end], false)
+        {
             pieces.push(rows[end].clone());
         }
         flush(&mut pieces, &mut out, &mut consumed, &mut budget);
