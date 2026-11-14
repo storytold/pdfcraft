@@ -374,6 +374,42 @@ fn text_the_standard_fonts_cant_draw_stays_in_the_editor() {
     assert_eq!(texts(&h), ["Hello world"]);
 }
 
+/// Review on #3076: Undo with Courier text it can't draw elsewhere (`ć`) still in the editor keeps
+/// the text, and says why with the Courier warning, as Save does, not the generic one.
+#[test]
+fn undo_with_blocked_courier_text_names_courier() {
+    let _gpu = gpu();
+    let mut h = harness();
+    // Something to undo: one text added first.
+    assert!(h.state_mut().execute("edit.text"));
+    h.run_steps(2);
+    let p = at(&h, 40.0, 150.0);
+    click(&mut h, p);
+    h.event(egui::Event::Text("Hello".into()));
+    h.run_steps(2);
+    h.get_by_label("Done adding text").click();
+    h.run_steps(3);
+    assert_eq!(texts(&h), ["Hello"]);
+    assert!(h.state_mut().execute("edit.text"));
+    h.run_steps(2);
+    let p = at(&h, 40.0, 300.0);
+    click(&mut h, p);
+    h.event(egui::Event::Text("Grad \u{107}".into()));
+    h.run_steps(2);
+    let d = h.state_mut().views[0].content.draft.as_mut().expect("a text box");
+    d.style.family = pdfcraft_engine::FontFamily::Courier;
+    // As the box holds it once its typing is applied: Undo then goes to the document.
+    d.style.text = d.text.clone();
+    h.run_steps(2);
+    h.state_mut().toast = None;
+    h.state_mut().execute("edit.undo");
+    h.run_steps(2);
+    let toast = h.state().toast.clone().map(|t| t.0).unwrap_or_default();
+    assert!(toast.contains("Courier can't draw"), "{toast}");
+    let draft = h.state().views[0].content.draft.as_ref().map(|d| d.text.clone());
+    assert_eq!(draft.as_deref(), Some("Grad \u{107}"), "the typed text is kept");
+}
+
 /// Text kept because it can't be drawn goes with its page when the page is deleted, so nothing
 /// is left blocking Save out of sight.
 #[test]
@@ -685,6 +721,24 @@ fn released_text_does_not_jump_back_before_the_page_is_redrawn() {
     h.run_steps(2);
     let (old, new) = ink_at(&mut h, from, to);
     assert!(new > 20 && old == 0, "the redrawn page has the text in its new place ({old} old, {new} new)");
+}
+
+/// #2098: Croatian, Polish and Czech letters typed into Add text are added to the page. Only
+/// š ž (in WinAnsi) were; with č ć đ ł ő ť the box stayed open and the text never reached the page.
+#[test]
+fn typing_central_european_letters_commits_to_page() {
+    for sample in ["čćžšđ ČĆĐ", "Łódź gęślą", "Ďáblice ťuk Győr"] {
+        let mut h = harness();
+        assert!(h.state_mut().execute("edit.text"));
+        h.run_steps(2);
+        let p = at(&h, 40.0, 100.0);
+        click(&mut h, p);
+        h.event(egui::Event::Text(sample.into()));
+        h.run_steps(3);
+        let p = at(&h, 40.0, 200.0);
+        click(&mut h, p);
+        assert_eq!(texts(&h), [sample]);
+    }
 }
 
 /// Format text is laid out as Acrobat's: alignment from its flyout, style buttons by name, and
