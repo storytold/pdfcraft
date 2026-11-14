@@ -301,3 +301,43 @@ fn text_is_readable_on_every_surface() {
         }
     }
 }
+
+/// The discovered face joins every existing family after the other script fallbacks, and the
+/// explicit system-font switch removes it completely. This is a native font-definition test.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn fourth_review_gurmukhi_fallback_reaches_all_existing_stacks() {
+    let data = crate::system_fonts::gurmukhi_fallback();
+    let definitions = installed_font_definitions(CjkPreference::Default);
+    if std::env::var_os("PDFCRAFT_SYSTEM_FONTS").is_some_and(|v| v == "0") {
+        assert!(data.is_none());
+        assert!(!definitions.font_data.contains_key(SYSTEM_GURMUKHI_FALLBACK));
+        assert!(definitions.families.values().all(|stack| !stack.iter().any(|n| n == SYSTEM_GURMUKHI_FALLBACK)));
+        return;
+    }
+    let Some(data) = data else {
+        eprintln!("skipped installed Gurmukhi stack observation: no matching face on this machine");
+        return;
+    };
+    assert!(std::sync::Arc::ptr_eq(&data, &definitions.font_data[SYSTEM_GURMUKHI_FALLBACK]));
+    for (family, _) in primary_families() {
+        let stack = &definitions.families[&family];
+        assert_eq!(stack.iter().filter(|n| *n == SYSTEM_GURMUKHI_FALLBACK).count(), 1);
+        let at = stack.iter().position(|n| n == SYSTEM_GURMUKHI_FALLBACK).unwrap();
+        for earlier in [
+            SYSTEM_DEVANAGARI_FALLBACK,
+            SYSTEM_TELUGU_FALLBACK,
+            SYSTEM_SINHALA_FALLBACK,
+            SYSTEM_TAMIL_FALLBACK,
+            SYSTEM_HEBREW_FALLBACK,
+            SYSTEM_HANGUL_FALLBACK,
+        ] {
+            if let Some(i) = stack.iter().position(|n| n == earlier) {
+                assert!(i < at, "existing script order must stay intact");
+            }
+        }
+        if let Some(general) = stack.iter().position(|n| n == SYSTEM_FALLBACK) {
+            assert!(at < general, "the general non-Chinese fallback remains last");
+        }
+    }
+}

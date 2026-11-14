@@ -50,6 +50,13 @@ pub struct DateLanguage {
     pub days_short: [&'static str; 7],
 }
 
+impl DateLanguage {
+    /// Date-choice label, disclosing English month/weekday names independently of UI catalogs.
+    pub fn display_name(&self) -> &'static str {
+        if self.code == "pa-guru" { "Punjabi (Gurmukhi; English date names)" } else { self.name }
+    }
+}
+
 const CJK_MONTHS: [&str; 12] = ["1月", "2月", "3月", "4月", "5月", "6月", "7月", "8月", "9月", "10月", "11月", "12月"];
 const ZH_MONTHS: [&str; 12] = ["一月", "二月", "三月", "四月", "五月", "六月", "七月", "八月", "九月", "十月", "十一月", "十二月"];
 const ZH_DAYS: [&str; 7] = ["星期日", "星期一", "星期二", "星期三", "星期四", "星期五", "星期六"];
@@ -62,8 +69,10 @@ const CKB_MONTHS: [&str; 12] =
 const CKB_DAYS: [&str; 7] = ["یەکشەممە", "دووشەممە", "سێشەممە", "چوارشەممە", "پێنجشەممە", "هەینی", "شەممە"];
 
 /// The languages month and weekday names can be written in (Preferences ▸ Date format ▸ Language):
-/// the interface languages, in the same order and with the same names.
-pub static DATE_LANGUAGES: [DateLanguage; 35] = [
+/// independent of which interface catalogs are embedded. Registry order matches the interface
+/// list, with native names; Punjabi uses stable date code pa-guru rather than interface pa.
+/// Its picker/display label explicitly discloses English month and weekday names.
+pub static DATE_LANGUAGES: [DateLanguage; 36] = [
     DateLanguage {
         code: "en",
         name: "English",
@@ -575,11 +584,26 @@ pub static DATE_LANGUAGES: [DateLanguage; 35] = [
         days: ["søndag", "mandag", "tirsdag", "onsdag", "torsdag", "fredag", "lørdag"],
         days_short: ["søn.", "man.", "tir.", "ons.", "tor.", "fre.", "lør."],
     },
+    // The partial Punjabi catalog has no reviewed date vocabulary. Keep the existing English
+    // fallback for month/weekday names; numeric formatting and user patterns are unchanged.
+    DateLanguage {
+        code: "pa-guru",
+        name: "ਪੰਜਾਬੀ",
+        months: ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"],
+        months_with_day: None,
+        months_short: ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"],
+        days: ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"],
+        days_short: ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"],
+    },
 ];
 
 /// The date language for `code` (any case), or `None` when there's none.
+/// Canonical UI `pa` aliases the stable `pa-guru` date identifier so saved settings and automation
+/// keep their existing output code and English month/weekday vocabulary.
 pub fn date_language(code: &str) -> Option<&'static DateLanguage> {
-    DATE_LANGUAGES.iter().find(|l| l.code.eq_ignore_ascii_case(code.trim()))
+    let code = code.trim();
+    let code = if code.eq_ignore_ascii_case("pa") { "pa-guru" } else { code };
+    DATE_LANGUAGES.iter().find(|l| l.code.eq_ignore_ascii_case(code))
 }
 
 /// Form date fields (`AFDate_FormatEx`, `util.printd`, `util.scand`) write month and weekday
@@ -778,6 +802,31 @@ mod tests {
 
     fn in_lang(fmt: &str, code: &str) -> String {
         format_day(fmt, DAY, date_language(code).unwrap())
+    }
+
+    /// Punjabi's unreviewed date vocabulary must retain the pre-existing English fallback.
+    #[test]
+    fn punjabi_dates_keep_english_fallback() {
+        for pattern in DATE_FORMATS {
+            assert_eq!(in_lang(pattern, "pa-guru"), in_lang(pattern, "en"));
+        }
+    }
+
+    /// Canonical UI pa aliases the stable date identifier, preserving old sessions and names.
+    #[test]
+    fn canonical_punjabi_date_alias_preserves_legacy_contract() {
+        let legacy = date_language("pa-guru").unwrap();
+        for code in ["pa", "PA", " pa ", "pa-guru", "PA-GURU"] {
+            assert_eq!(date_language(code), Some(legacy));
+            for pattern in DATE_FORMATS {
+                assert_eq!(in_lang(pattern, code), in_lang(pattern, "en"));
+            }
+            let mut session = Session::new();
+            session.set_date_language(Some(code)).unwrap();
+            assert_eq!(session.date_language(), Some("pa-guru"));
+        }
+        assert!(date_language("pa-PK").is_none());
+        assert!(date_language("pa-Arab").is_none());
     }
 
     #[test]
