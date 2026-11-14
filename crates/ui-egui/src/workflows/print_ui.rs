@@ -777,6 +777,10 @@ impl PdfCraftApp {
         }
         let Some(doc) = self.session.get(id) else { return false };
         #[cfg(not(target_arch = "wasm32"))]
+        if self.print_draft.handling == Handling::Label && self.print_tasks.label_crops.is_some() {
+            return false;
+        }
+        #[cfg(not(target_arch = "wasm32"))]
         if self.print_draft.handling == Handling::Label
             && let Some((pages, rx)) = self.print_tasks.label_crops.take()
         {

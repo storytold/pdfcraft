@@ -118,7 +118,7 @@ fn print_card<R>(
         .fill(card_fill)
         .stroke(Stroke::new(1.0, t.border))
         .corner_radius(egui::CornerRadius::same(8))
-        .inner_margin(egui::Margin { left: 14, right: 14, top: 8, bottom: 8 })
+        .inner_margin(egui::Margin { left: 14, right: 14, top: 7, bottom: 7 })
         .show(ui, |ui| {
             ui.set_width(width);
             ui.set_max_width(width);
@@ -236,7 +236,7 @@ pub(crate) fn body(
 
     // Cap the settings+preview area to the screen's available height (#4252, #5317).
     let screen_h = ui.ctx().input(|i| i.viewport_rect().height());
-    let max_h = (screen_h - 240.0).max(240.0);
+    let max_h = (screen_h - 225.0).clamp(240.0, 675.0);
 
     egui::ScrollArea::vertical()
         .id_salt("print-dialog-scroll")
@@ -253,7 +253,7 @@ pub(crate) fn body(
 
                     // Card 1: Printer & Paper Setup
                     print_card(ui, t, tl!("Printer & Paper Setup"), Some("printer"), 452.0, None, |ui| {
-                        egui::Grid::new("print-top").num_columns(2).spacing([8.0, 4.0]).show(ui, |ui| {
+                        egui::Grid::new("print-top").num_columns(2).spacing([8.0, 3.0]).show(ui, |ui| {
                         let printer_caption = ui.label(tl!("Printer:"));
                         let before = d.printer.clone();
                         let browser = d.printer.as_deref() == Some(crate::web_print::BROWSER_PRINTER);
@@ -566,7 +566,7 @@ pub(crate) fn body(
                     });
                     ui.add_space(3.0);
                     ui.scope(|ui| {
-                        ui.set_min_height(48.0);
+                        ui.set_min_height(32.0);
                         match d.handling {
                         Handling::Size => {
                             ui.horizontal(|ui| {
