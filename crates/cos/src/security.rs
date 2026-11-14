@@ -1,11 +1,13 @@
 //! Bridging the COS object model and `pdfcraft-crypt`: reading `/Encrypt` dictionaries and
 //! decrypting / encrypting the strings and streams of an object (§7.6.2).
 //!
-//! Not encrypted, per the spec: the `/Encrypt` dictionary itself, cross-reference streams, the
-//! trailer `/ID`, objects inside object streams (the object stream is encrypted as a whole),
-//! the `/Contents` of signature dictionaries, and metadata streams when `/EncryptMetadata` is
-//! false. Streams naming a crypt filter (`/Crypt` in `/Filter`) use that filter; embedded files
-//! use `/EFF`.
+//! Not encrypted, per the spec: the `/Encrypt` dictionary itself, cross-reference streams and
+//! the strings of their dictionaries (§7.5.8.2), the trailer `/ID`, objects inside object streams
+//! (the object stream is encrypted as a whole), the `/Contents` of signature dictionaries, and the
+//! document's metadata stream (the catalog's `/Metadata`) when `/EncryptMetadata` is false in a
+//! `/V` 4 or 5 dictionary (Table 21), and the data of a stream kept in an external file (`/F`).
+//! Streams naming a crypt filter (`/Crypt` in `/Filter`) use that
+//! filter; embedded files use `/EFF`.
 
 use std::cell::Cell;
 
@@ -158,6 +160,10 @@ pub(crate) fn stream_reads_as_stored(doc: &Document, h: &SecurityHandler, s: &St
         return false;
     }
     let _scope = FollowScope::enter();
+    // Its data is in another file, not encrypted here (§7.6.2), so nothing of it is held as stored.
+    if external(doc, &s.dict) {
+        return false;
+    }
     let named = named_crypt_filter(doc, &s.dict);
     let ty = s.dict.get(b"Type").map(|t| followed(doc, t));
     let kind = match (&named, ty.as_deref().and_then(Object::as_name)) {
@@ -166,6 +172,12 @@ pub(crate) fn stream_reads_as_stored(doc: &Document, h: &SecurityHandler, s: &St
         _ => StreamKind::Normal,
     };
     h.decrypts(kind)
+}
+
+/// Whether a stream with dictionary `d` keeps its data in an external file: its `/F` (a file
+/// specification, ISO 32000-2 Table 5), given directly or by reference, isn't null (§7.3.10).
+fn external(doc: &Document, d: &Dict) -> bool {
+    d.get(b"F").is_some_and(|f| !matches!(*followed(doc, f), Object::Null))
 }
 
 /// Whether `f`, an entry of a `/Filter` chain or its only filter, is `/Crypt`.
@@ -298,8 +310,9 @@ pub(crate) enum Pass {
 /// dictionary's `/Contents` (see [`is_signature_dict`]).
 ///
 /// `o` is as `doc` holds it: what a stream's dictionary gives by reference is read from `doc`, so
-/// its references have to be the document's, not a save's renumbered ones.
-pub(crate) fn transform(doc: &Document, h: &SecurityHandler, o: &Object, num: u32, generation: u16, pass: Pass) -> Object {
+/// its references have to be the document's, not a save's renumbered ones. `source` is its number
+/// in `doc`, `num` and `generation` the ones it is encrypted with (a full save renumbers).
+pub(crate) fn transform(doc: &Document, h: &SecurityHandler, o: &Object, source: u32, num: u32, generation: u16, pass: Pass) -> Object {
     let _scope = FollowScope::enter();
     let decrypt = pass == Pass::Decrypt;
     let strings = |s: &PdfString| {
@@ -311,7 +324,7 @@ pub(crate) fn transform(doc: &Document, h: &SecurityHandler, o: &Object, num: u3
     // which overflowed the stack on a 10 KB file. A stream can't be nested, and a dictionary that
     // is reads as it says directly.
     match o {
-        Object::Stream(s) => stream(doc, s, &strings, h, num, generation, pass),
+        Object::Stream(s) => stream(doc, s, &strings, h, (source, num, generation), pass),
         Object::Dict(d) if is_signature_dict(Some(doc), d) => signature_dict(d, &strings),
         o => walk(o, &strings),
     }
@@ -344,18 +357,27 @@ fn stream(
     s: &Stream,
     strings: &dyn Fn(&PdfString) -> PdfString,
     h: &SecurityHandler,
-    num: u32,
-    generation: u16,
+    (source, num, generation): (u32, u32, u16),
     pass: Pass,
 ) -> Object {
     let decrypt = pass == Pass::Decrypt;
     let walked = |d: &Dict| -> Dict { d.iter().map(|(k, v)| (k.clone(), walk(v, strings))).collect() };
     let ty = s.dict.get(b"Type").map(|t| followed(doc, t));
     let ty = ty.as_deref().and_then(Object::as_name);
-    // Cross-reference streams are never encrypted (§7.5.8), but only reading may trust the
-    // label: a stream a producer calls /XRef stays plaintext if writing believes it, and the
-    // writer builds its own cross-reference streams outside this transform.
-    if (decrypt && ty == Some(b"XRef")) || (ty == Some(b"Metadata") && !h.encrypts_metadata()) {
+    // Cross-reference streams are never encrypted, their dictionaries' strings (`/ID`) neither
+    // (§7.5.8.2), but only reading may trust the label: a stream a producer calls /XRef stays
+    // plaintext if writing believes it, and the writer builds its own cross-reference streams
+    // outside this transform.
+    if decrypt && ty == Some(b"XRef") {
+        return Object::Stream(s.clone());
+    }
+    if ty == Some(b"Metadata") && document_metadata_in_clear(doc, h, source, decrypt) {
+        return Object::Stream(Stream { dict: walked(&s.dict), raw: s.raw.clone() });
+    }
+    // The data of a stream in an external file isn't part of the PDF file, and isn't encrypted
+    // (§7.6.2); what is between `stream` and `endstream` is ignored (§7.3.8.1). Its dictionary's
+    // strings, the file specification among them, are.
+    if external(doc, &s.dict) {
         return Object::Stream(Stream { dict: walked(&s.dict), raw: s.raw.clone() });
     }
     let mut named = named_crypt_filter(doc, &s.dict);
@@ -373,4 +395,36 @@ fn stream(
     };
     let raw = if decrypt { h.decrypt_stream(num, generation, &s.raw, kind) } else { h.encrypt_stream(num, generation, &s.raw, kind) };
     Object::Stream(Stream { dict, raw: raw.into() })
+}
+
+/// Whether object `num` of `doc`, a metadata stream, stays in the clear: it is the document's
+/// own, the one the catalog's `/Metadata` names, and `/EncryptMetadata` is false in a `/V` 4 or 5
+/// dictionary. ISO 32000-2 Table 21 gives the entry for "the document-level metadata stream" only,
+/// and as meaningful with `/V` 4 or 5 only: every other metadata stream (a page's, an image's) is
+/// encrypted as any stream is. Reading asks the source's catalog (an edit of `/Metadata` doesn't
+/// change what the file holds), writing the catalog as edited, which is the one written.
+fn document_metadata_in_clear(doc: &Document, h: &SecurityHandler, num: u32, decrypt: bool) -> bool {
+    if h.encrypts_metadata() || !matches!(h.dict().v, 4 | 5) {
+        return false;
+    }
+    if decrypt {
+        return doc.source_metadata() == Some(num);
+    }
+    // The catalog is no metadata stream, and reading it here would read this object again.
+    if doc.root().is_none_or(|r| r.num == num) {
+        return false;
+    }
+    catalog_metadata(doc) == Some(num)
+}
+
+/// The object the catalog's `/Metadata` names, when the reference reaches it (its generation one
+/// the object takes). A catalog that reads as absent (past [`MAX_FOLLOWED`]) names none.
+pub(crate) fn catalog_metadata(doc: &Document) -> Option<u32> {
+    let _scope = FollowScope::enter();
+    let root = Object::Ref(doc.root()?);
+    let catalog = followed(doc, &root);
+    match catalog.as_dict()?.get(b"Metadata")? {
+        Object::Ref(r) if doc.accepted_generations(r.num).contains(&r.generation) => Some(r.num),
+        _ => None,
+    }
 }

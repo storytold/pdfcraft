@@ -50,6 +50,7 @@ struct Incoming {
 /// comment (a link, a redaction mark, a form widget), is not replaced: the copy is added beside it
 /// without the name. Returns the number of comments copied.
 pub fn import_comments(dst: &mut Document, src: &Document) -> Result<usize, OrganizeError> {
+    crate::import::readable(src)?;
     let from = walk(src)?;
     let to = walk(dst)?;
     let pages: Vec<(ObjRef, ObjRef)> = from.iter().zip(&to).map(|((s, _), (d, _))| (*s, *d)).collect();

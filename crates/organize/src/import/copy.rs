@@ -45,6 +45,18 @@ pub(super) const WIDGET_KEYS: &[&[u8]] = &[
     b"AF",
 ];
 
+/// Refused when `src`'s `/Encrypt` is there but can't be read: its strings and streams are held
+/// encrypted, with nothing to decrypt them, and copied into another document they would read as
+/// its content. Every way content leaves a source checks this before it adds anything.
+pub(crate) fn readable(src: &Document) -> Result<(), OrganizeError> {
+    if src.encryption_unreadable() {
+        return Err(OrganizeError::Invalid(
+            "the document's encryption dictionary (/Encrypt) is damaged and can't be read, so its pages can't be copied".into(),
+        ));
+    }
+    Ok(())
+}
+
 pub(crate) struct Copier<'a> {
     pub(super) src: &'a Document,
     /// Current recursion depth, bounded by [`MAX_COPY_DEPTH`].
@@ -96,6 +108,10 @@ impl<'a> Copier<'a> {
     }
 
     pub(crate) fn copy_value(&mut self, dst: &mut Document, o: &Object, this: Option<ObjRef>) -> Result<Object, OrganizeError> {
+        // A source whose /Encrypt is there but can't be read holds its strings and streams
+        // encrypted, with nothing to decrypt them: copied into another document, they would read
+        // as its content.
+        readable(self.src)?;
         if !matches!(o, Object::Ref(_) | Object::Array(_) | Object::Dict(_) | Object::Stream(_)) {
             return Ok(o.clone());
         }

@@ -86,6 +86,11 @@ pub struct Document {
     /// The handler and `/Encrypt` object number that saves use, when encryption changed.
     out_security: Option<Arc<pdfcraft_crypt::SecurityHandler>>,
     out_encrypt_num: Option<u32>,
+    /// See [`Document::encryption_unreadable`].
+    encrypt_unreadable: bool,
+    /// The object the source catalog's `/Metadata` names, read when the document was authenticated:
+    /// what decides how that stream is decrypted, whatever an edit of the catalog says since.
+    source_metadata: Option<u32>,
 }
 
 impl std::fmt::Debug for Document {

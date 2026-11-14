@@ -2645,3 +2645,31 @@ fn copies_keep_their_intent_cloud_and_pdfcraft_keys() {
     assert_eq!(got[0].name(b"Subtype"), Some(b"Square".as_slice()), "not taken from the attribute");
     assert!(got[0].get(b"PCRef").is_none() && got[1].get(b"PCAngle").is_none(), "{got:?}");
 }
+
+/// An FDF data file whose `/Encrypt` is there but can't be read holds its values encrypted, with
+/// nothing to decrypt them: importing it, or reading it for a spreadsheet, is refused rather than
+/// taking the ciphertext as the values.
+#[test]
+fn a_data_file_whose_encryption_cant_be_read_is_refused() {
+    let objs: [&[u8]; 2] =
+        [b"<< /FDF << /Fields [<< /T (Name) /V <8a11f02c9b> >>] >> >>", b"E< /Filter /Standard /V 4 /R 4 /Length 128 /P -4 /O <00> /U <00> >>"];
+    let mut fdf = b"%FDF-1.2\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(fdf.len());
+        fdf.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+        fdf.extend_from_slice(o);
+        fdf.extend_from_slice(b"\nendobj\n");
+    }
+    let xref = fdf.len();
+    fdf.extend_from_slice(b"xref\n0 3\n0000000000 65535 f \n");
+    for o in offsets {
+        fdf.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    let id = "<00112233445566778899aabbccddeeff>";
+    fdf.extend_from_slice(format!("trailer\n<< /Size 3 /Root 1 0 R /Encrypt 2 0 R /ID [{id} {id}] >>\nstartxref\n{xref}\n%%EOF\n").as_bytes());
+    let refused = |e: &DataError| e.to_string().contains("/Encrypt");
+    assert!(data_values(&fdf).as_ref().is_err_and(refused), "{:?}", data_values(&fdf));
+    let mut doc = filled();
+    assert!(import(&mut doc, &fdf).as_ref().is_err_and(refused), "the ciphertext was imported as the value");
+}

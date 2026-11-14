@@ -15,6 +15,20 @@ pub(super) fn load_options(password: Option<&str>) -> LoadOptions {
     LoadOptions { password: password.map(str::to_owned), max_decompressed_size: Some(LOAD_STREAM_LIMIT), ..LoadOptions::default() }
 }
 
+/// Why the parser can't decrypt a document, in words: its error names (`UnsupportedAlgorithm`)
+/// aren't. A password the parser refuses is told apart by the callers.
+pub(crate) fn decryption_unsupported(e: DecryptionError) -> OpenError {
+    OpenError::Unsupported(
+        match e {
+            DecryptionError::UnsupportedAlgorithm => "the document is encrypted with a security handler or method PdfCraft can't decrypt",
+            DecryptionError::InvalidEncryption => "the document's encryption dictionary (/Encrypt) is invalid, so it can't be decrypted",
+            DecryptionError::MissingIDEntry => "the document is encrypted but has no file identifier (/ID), which its key is made from",
+            DecryptionError::PasswordProtected => "the document is protected by a password",
+        }
+        .into(),
+    )
+}
+
 /// Check that `bytes` still open as the same document: the parser reads them and the page
 /// count matches. Content-only edits skip the full [`inspect`] (seconds on very large files)
 /// but must still catch an edit that produced something the viewer cannot display, so the
@@ -30,7 +44,7 @@ pub fn check_pages(bytes: Arc<Vec<u8>>, password: Option<&str>, expected: usize)
                     OpenError::NeedsPassword
                 }
             }
-            LoadPdfError::Decryption(other) => OpenError::Unsupported(format!("encryption not supported: {other:?}")),
+            LoadPdfError::Decryption(other) => decryption_unsupported(other),
             LoadPdfError::Invalid => OpenError::Invalid("no readable page tree or cross-reference data was found".into()),
         })?;
     let pages = catch_unwind(AssertUnwindSafe(|| pdf.pages().len()))
@@ -54,7 +68,7 @@ pub fn inspect(bytes: Arc<Vec<u8>>, password: Option<&str>) -> Result<DocInfo, O
                     OpenError::NeedsPassword
                 }
             }
-            LoadPdfError::Decryption(other) => OpenError::Unsupported(format!("encryption not supported: {other:?}")),
+            LoadPdfError::Decryption(other) => decryption_unsupported(other),
             LoadPdfError::Invalid => OpenError::Invalid("no readable page tree or cross-reference data was found".into()),
         })?;
     let mut info = DocInfo { file_size: bytes.len(), pdf_version: version_label(&format!("{:?}", pdf.version())), ..Default::default() };
@@ -566,5 +580,34 @@ mod unlinked_update_tests {
         assert_eq!(linked.pages.len(), 3);
         assert!(linked.warnings.is_empty(), "{:?}", linked.warnings);
         assert!(!pdfcraft_cos::Document::open(bytes).expect("cos opens it").rebuilt_unlinked_update());
+    }
+}
+
+#[cfg(test)]
+mod decryption_message_tests {
+    use super::*;
+
+    /// A one-page file whose trailer names `encrypt` as its `/Encrypt`.
+    fn encrypted(encrypt: &str) -> Vec<u8> {
+        pdfcraft_testkit::Pdf::new()
+            .obj("<< /Type /Catalog /Pages 2 0 R >>")
+            .obj("<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>")
+            .obj("<< /Type /Page /Parent 2 0 R >>")
+            .obj(encrypt)
+            .trailer_entry("/Encrypt 4 0 R /ID [<00112233445566778899aabbccddeeff> <00112233445566778899aabbccddeeff>]")
+            .build()
+    }
+
+    /// Encryption the parser can't decrypt is said in words, not with its error's name.
+    #[test]
+    fn an_unsupported_handler_is_said_in_words() {
+        for f in [
+            check_pages(Arc::new(encrypted("<< /Filter /Adobe.PubSec /V 4 /R 4 >>")), None, 1).err(),
+            inspect(Arc::new(encrypted("<< /Filter /Adobe.PubSec /V 4 /R 4 >>")), None).err(),
+        ] {
+            let message = f.expect("it doesn't open").to_string();
+            assert!(message.contains("can't decrypt"), "{message}");
+            assert!(!message.contains("UnsupportedAlgorithm"), "{message}");
+        }
     }
 }

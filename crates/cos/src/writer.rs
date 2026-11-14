@@ -184,6 +184,20 @@ fn keyless_check(doc: &Document) -> Result<(), CosError> {
     Ok(())
 }
 
+/// A document whose `/Encrypt` is there but can't be read ([`Document::encryption_unreadable`])
+/// holds data nothing can decrypt. Written without the `/Encrypt` that data would never decrypt
+/// again; written with it, whatever is written new would be in the clear where readers decrypt.
+/// Either way the file would lose data, so it isn't written (ISO 32000-2 §7.6.1: an encrypted
+/// document's strings and streams are read through its encryption dictionary).
+fn unreadable_encryption_check(doc: &Document) -> Result<(), CosError> {
+    if doc.encryption_unreadable() {
+        return Err(CosError::Security(
+            "the document's encryption dictionary (/Encrypt) is damaged and can't be read, so what it encrypts can't be decrypted: saving would write a file whose encrypted content could never be read again".into(),
+        ));
+    }
+    Ok(())
+}
+
 /// The object as written: encrypted with its (output) number when the document is encrypted,
 /// except the `/Encrypt` dictionary itself (`source_num` is its number in the source document).
 /// `o` has the document's numbers in its references ([`crate::security::transform`]).
@@ -191,7 +205,7 @@ fn prepared<'a>(doc: &Document, source_num: u32, num: u32, generation: u16, o: &
     match doc.output_security() {
         (Some(h), encrypt_num) if Some(source_num) != encrypt_num && !doc.stored_as_is(source_num) => {
             let pass = if doc.encryption_changed() { crate::security::Pass::EncryptReplacing } else { crate::security::Pass::Encrypt };
-            Cow::Owned(crate::security::transform(doc, h, o, num, generation, pass))
+            Cow::Owned(crate::security::transform(doc, h, o, source_num, num, generation, pass))
         }
         _ => Cow::Borrowed(o),
     }
@@ -261,6 +275,7 @@ pub fn write_incremental(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, 
         return Err(CosError::ReadOnlyLimit);
     }
     keyless_check(doc)?;
+    unreadable_encryption_check(doc)?;
     // Reconstructed files have no chain to append to; added or removed encryption must
     // rewrite every object; redaction must not leave the old revision behind. All need a full save.
     if doc.reconstructed() || doc.encryption_changed() || doc.full_save_required() {
@@ -404,6 +419,7 @@ pub fn write_full(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosErro
         return Err(CosError::ReadOnlyLimit);
     }
     keyless_check(doc)?;
+    unreadable_encryption_check(doc)?;
     // Renumbering breaks a key that mixes in the object number.
     if doc.security().is_some_and(|h| !h.has_key() && !h.survives_renumbering()) {
         return Err(CosError::Security(
