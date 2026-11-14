@@ -22,14 +22,17 @@ pub struct Page {
 /// US Letter (the renderer's `is_nearly_zero`, 1/4096).
 const MIN_BOX_SIDE: f64 = 1.0 / 4096.0;
 
+/// Normalized `[x0, y0, x1, y1]` of a page box when its first four entries form a finite, positive rectangle.
 fn rect(doc: &Document, o: Option<&Object>) -> Option<[f64; 4]> {
     let o = doc.resolve(o?);
-    // Four entries, or not a rectangle: a longer array (one shared by many pages, say) is not
-    // resolved entry by entry only to be discarded.
-    let [a, b, c, d] = o.as_array()?.as_slice() else { return None };
-    let v = [a, b, c, d].map(|x| doc.resolve(x).as_f64());
-    let [Some(x0), Some(y0), Some(x1), Some(y1)] = v else { return None };
-    [x0, y0, x1, y1].iter().all(|x| x.is_finite()).then(|| [x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1)])
+    let [a, b, c, d, ..] = o.as_array()?.as_slice() else { return None };
+    let coords = [doc.resolve(a).as_f64()?, doc.resolve(b).as_f64()?, doc.resolve(c).as_f64()?, doc.resolve(d).as_f64()?];
+    if !coords.iter().all(|x| x.is_finite()) {
+        return None;
+    }
+    let r = [coords[0].min(coords[2]), coords[1].min(coords[3]), coords[0].max(coords[2]), coords[1].max(coords[3])];
+    let (w, h) = (r[2] - r[0], r[3] - r[1]);
+    (w > 0.0 && h > 0.0 && (w * MAX_USER_UNIT).is_finite() && (h * MAX_USER_UNIT).is_finite()).then_some(r)
 }
 
 impl Page {
@@ -505,6 +508,54 @@ mod tests {
         ] {
             let d = doc_with(0, pages_attrs, page_attrs);
             assert_eq!(pages(&d)[0].user_unit(&d), unit, "{pages_attrs} {page_attrs}");
+        }
+    }
+
+    #[test]
+    fn degenerate_or_malformed_boxes_fall_back() {
+        for bad_media in ["[0 0 0 792]", "[10 10 100 10]", "[10 10 10 10]", "[0 0 /Bad 400 500]"] {
+            let d = doc_with(0, &format!("/MediaBox {bad_media}"), "/CropBox null");
+            let p = &pages(&d)[0];
+            assert_eq!(p.crop(&d), [0.0, 0.0, 612.0, 792.0], "{bad_media}");
+            assert_eq!(p.display_size(&d), (612.0, 792.0), "{bad_media}");
+        }
+        // Rejected /CropBox falls back to /MediaBox ([0 0 600 800] from doc_with).
+        for bad_crop in ["[0 0 0 800]", "[0 0 /Bad 400 500]"] {
+            let d = doc_with(0, "", &format!("/CropBox {bad_crop}"));
+            assert_eq!(pages(&d)[0].crop(&d), [0.0, 0.0, 600.0, 800.0], "{bad_crop}");
+        }
+        // Reversed coordinates are normalized, and four valid leading coordinates with trailing
+        // entries match the renderer's crop bounds.
+        let reversed = doc_with(0, "", "/CropBox [300 400 10 20]");
+        assert_eq!(pages(&reversed)[0].crop(&reversed), [10.0, 20.0, 300.0, 400.0]);
+        let trailing = doc_with(0, "", "/CropBox [0 0 300 792 /Extra]");
+        assert_eq!(pages(&trailing)[0].crop(&trailing), [0.0, 0.0, 300.0, 792.0]);
+
+        let mut d = doc_with(0, "", "/CropBox null");
+        let leaf = ObjRef { num: 3, generation: 0 };
+        // Indirect box array and indirect coordinate numbers resolve cleanly.
+        let w_ref = d.add(Object::Int(250));
+        let h_ref = d.add(Object::Real(350.0));
+        let box_ref = d.add(Object::Array(vec![Object::Int(0), Object::Int(0), Object::Ref(w_ref), Object::Ref(h_ref)]));
+        d.update_dict(leaf, |dict| dict.set(b"CropBox".to_vec(), Object::Ref(box_ref))).unwrap();
+        assert_eq!(pages(&d)[0].crop(&d), [0.0, 0.0, 250.0, 350.0]);
+        d.update_dict(leaf, |dict| dict.set(b"CropBox".to_vec(), Object::Null)).unwrap();
+
+        for extreme in [
+            vec![Object::Real(-1e308), Object::Real(0.0), Object::Real(1e308), Object::Real(792.0)],
+            vec![Object::Real(0.0), Object::Real(0.0), Object::Real(1e308), Object::Real(792.0)],
+            vec![Object::Real(0.0), Object::Real(0.0), Object::Real(1e306), Object::Real(792.0)],
+            vec![Object::Real(0.0), Object::Real(0.0), Object::Real(f64::NAN), Object::Real(792.0)],
+        ] {
+            d.update_dict(leaf, |dict| {
+                dict.set(b"MediaBox".to_vec(), Object::Array(extreme.clone()));
+                dict.set(b"UserUnit".to_vec(), Object::Real(1000.0));
+            })
+            .unwrap();
+            let p = &pages(&d)[0];
+            assert_eq!(p.crop(&d), [0.0, 0.0, 612.0, 792.0], "{extreme:?}");
+            let (w, h) = p.display_size(&d);
+            assert!(w.is_finite() && h.is_finite() && w > 0.0 && h > 0.0, "{extreme:?}: ({w}, {h})");
         }
     }
 }
