@@ -379,7 +379,7 @@ impl Layouter<'_> {
         let selected: Option<String> =
             self.data.and_then(|d| d.text_at(&data_path(self.tpl, &ctx.som))).map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
         let inner = rect.inset(&g.common.margin);
-        let group = self.unique_name(g.common.name.as_deref().unwrap_or("group"), g.common.name.is_none());
+        let group = self.unique_name(g.common.name.as_deref().unwrap_or("group"), g.common.name.is_none(), &ctx.som);
         let nodes: Vec<Node> = g.fields.iter().map(|f| Node::Field(Box::new(f.clone()))).collect();
         // Each field is measured under the SOM index it is drawn at.
         let sibs = SomIndices::of(&nodes);
@@ -456,26 +456,52 @@ impl Layouter<'_> {
         self.push(Item::Image { rect: fitted, data: Arc::new(data.to_vec()), content_type: content_type.to_string() })
     }
 
-    /// A field name made from `base` that no other field of the form has: the first keeps it,
-    /// later ones get `_2`, `_3`, …, skipping a name another field already has or that the
-    /// template gives another field (a template field named `Cell4_2` keeps it, and the second
-    /// `Cell4` becomes `Cell4_3`). A `fallback` base, the name an unnamed field or group gets
-    /// (`field`, `group`), is made up too: it doesn't take a name the template gives another
-    /// field either, and a template field named `field` still gets it.
-    pub(super) fn unique_name(&mut self, base: &str, fallback: bool) -> String {
+    /// A field name made from `base` for the field or radio group at SOM path `som`, that no other
+    /// field of the form has. The name an earlier pass gave the object ([`super::KeptNames`]) comes
+    /// first, while it is still free and one this rule could give it. Otherwise the first keeps
+    /// `base`, later ones get `_2`, `_3`, …, skipping a name another field already has, one an
+    /// earlier pass gave another object, or one the template gives another field (a template
+    /// field named `Cell4_2` keeps it, and the second `Cell4` becomes `Cell4_3`). A `fallback`
+    /// base, the name an unnamed field or group gets (`field`, `group`), is made up too: it
+    /// doesn't take a name the template gives another field either, and a template field named
+    /// `field` still gets it.
+    pub(super) fn unique_name(&mut self, base: &str, fallback: bool, som: &str) -> String {
         let base = clean_name(base);
+        if let Some(kept) = self.kept.by_som.get(som) {
+            for name in kept {
+                if self.may_keep(name, &base, fallback) && self.taken.insert(name.clone()) {
+                    return name.clone();
+                }
+            }
+        }
         // The template's own name, while no other field has it.
-        if !fallback && self.taken.insert(base.clone()) {
+        if !fallback && !self.kept.all.contains(&base) && self.taken.insert(base.clone()) {
             return base;
         }
         loop {
             let n = self.names.entry(base.clone()).or_insert(0);
             *n = n.saturating_add(1);
             let candidate = if *n == 1 { base.clone() } else { format!("{base}_{n}") };
-            let reserved = (fallback || *n > 1) && self.template_names.contains(&candidate);
+            let reserved = ((fallback || *n > 1) && self.template_names.contains(&candidate)) || self.kept.all.contains(&candidate);
             if !reserved && self.taken.insert(candidate.clone()) {
                 return candidate;
             }
         }
+    }
+
+    /// Whether [`Self::unique_name`] could give `name` to an object whose name is made from
+    /// `base`: `base` itself (not when it is a made-up `fallback` base the template gives another
+    /// field), or `base` with a `_2`, `_3`, … the template gives no field. A name the file holds is
+    /// kept only in that shape, so a field never takes another's name from it.
+    fn may_keep(&self, name: &str, base: &str, fallback: bool) -> bool {
+        if name == base {
+            return !(fallback && self.template_names.contains(name));
+        }
+        let numbered = name
+            .strip_prefix(base)
+            .and_then(|rest| rest.strip_prefix('_'))
+            .and_then(|digits| digits.parse::<usize>().ok().filter(|n| *n >= 2 && n.to_string() == digits))
+            .is_some();
+        numbered && !self.template_names.contains(name)
     }
 }
