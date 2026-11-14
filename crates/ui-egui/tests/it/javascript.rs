@@ -642,13 +642,8 @@ fn clicking_duplicate_image_buttons_imports_only_into_the_clicked_field() {
     let dir = std::env::temp_dir().join(format!("pdfcraft-exact-image-click-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("synthetic.png");
-    let mut png = vec![];
-    {
-        let mut encoder = png::Encoder::new(&mut png, 2, 2);
-        encoder.set_color(png::ColorType::Rgb);
-        encoder.set_depth(png::BitDepth::Eight);
-        encoder.write_header().unwrap().write_image_data(&[120u8; 12]).unwrap();
-    }
+    let img = craft_image_codecs::Image::from_u8(2, 2, craft_image_codecs::ChannelLayout::Rgb, vec![120u8; 12]).unwrap();
+    let png = craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap();
     std::fs::write(&path, png).unwrap();
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
         let mut app = PdfCraftApp::new();

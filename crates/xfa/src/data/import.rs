@@ -46,7 +46,7 @@ impl ImportBudget {
 
 /// `n` as an [`ImportNode`], counting nodes and copied bytes against `budget`; `TooLarge` past
 /// the depth or either budget.
-fn import_node(n: roxmltree::Node, depth: usize, budget: &mut ImportBudget) -> Result<ImportNode, XfaError> {
+fn import_node(n: crate::xml::Node, depth: usize, budget: &mut ImportBudget) -> Result<ImportNode, XfaError> {
     if depth > MAX_IMPORT_DEPTH {
         return Err(XfaError::TooLarge(format!("the data file nests more than {MAX_IMPORT_DEPTH} levels deep")));
     }
@@ -192,12 +192,12 @@ pub fn parse_data_file(text: &str, expect_root: Option<&str>) -> Result<Vec<Impo
     if crate::xml_nesting_depth(text) > MAX_IMPORT_DEPTH {
         return Err(XfaError::TooLarge(format!("the data file nests more than {MAX_IMPORT_DEPTH} levels deep")));
     }
-    let opts = roxmltree::ParsingOptions { allow_dtd: false, nodes_limit: MAX_NODES, ..Default::default() };
-    let parsed = roxmltree::Document::parse_with_options(text, opts).map_err(|e| XfaError::Malformed(format!("the data file is not XML: {e}")))?;
+    let opts = crate::xml::ParsingOptions { allow_dtd: false, nodes_limit: MAX_NODES, ..Default::default() };
+    let parsed = crate::xml::Document::parse_with_options(text, opts).map_err(|e| XfaError::Malformed(format!("the data file is not XML: {e}")))?;
     let root = parsed.root_element();
     let local = root.tag_name().name();
-    let in_xfa = |n: &roxmltree::Node| n.tag_name().namespace().is_none_or(|ns| ns == XFA_DATA_NS);
-    let is = |n: &roxmltree::Node, name: &str| n.is_element() && n.tag_name().name() == name && in_xfa(n);
+    let in_xfa = |n: &crate::xml::Node| n.tag_name().namespace().is_none_or(|ns| ns == XFA_DATA_NS);
+    let is = |n: &crate::xml::Node, name: &str| n.is_element() && n.tag_name().name() == name && in_xfa(n);
     let data = match local {
         "xdp" => {
             let ds = root.children().find(|n| is(n, "datasets")).ok_or_else(|| XfaError::Malformed("the XDP holds no datasets".into()))?;
@@ -304,20 +304,20 @@ pub fn export_data(doc: &Document, xdp: bool, pdf_name: &str) -> Result<String, 
 /// data element), each with the namespaces it uses declared on it. `Ok(None)`: no datasets
 /// element; `Err`: the text can't be read.
 fn datasets_markup(text: &str) -> Result<Option<(String, String)>, ()> {
-    let opts = || roxmltree::ParsingOptions { allow_dtd: false, nodes_limit: MAX_NODES, ..Default::default() };
+    let opts = || crate::xml::ParsingOptions { allow_dtd: false, nodes_limit: MAX_NODES, ..Default::default() };
     if crate::xml_nesting_depth(text) > crate::MAX_XML_DEPTH {
         return Err(());
     }
     let wrapped = format!("{WRAP_OPEN}{text}{WRAP_CLOSE}");
-    let (src, parsed) = match roxmltree::Document::parse_with_options(text, opts()) {
+    let (src, parsed) = match crate::xml::Document::parse_with_options(text, opts()) {
         Ok(d) => (text, d),
-        Err(_) => (wrapped.as_str(), roxmltree::Document::parse_with_options(&wrapped, opts()).map_err(|_| ())?),
+        Err(_) => (wrapped.as_str(), crate::xml::Document::parse_with_options(&wrapped, opts()).map_err(|_| ())?),
     };
     let Some(ds) = parsed.descendants().find(|n| n.is_element() && n.tag_name().name() == "datasets") else { return Ok(None) };
     let data = ds.children().find(|n| n.is_element() && n.tag_name().name() == "data");
     let data_alone = match data {
         Some(d) => {
-            let kids: Vec<roxmltree::Node> = d.children().filter(|c| c.is_element()).collect();
+            let kids: Vec<crate::xml::Node> = d.children().filter(|c| c.is_element()).collect();
             match kids.as_slice() {
                 [one] => element_markup(src, *one).ok_or(())?,
                 _ => element_markup(src, d).ok_or(())?,
@@ -330,7 +330,7 @@ fn datasets_markup(text: &str) -> Result<Option<(String, String)>, ()> {
 
 /// `n` as written in `src`, with the namespace declarations in scope that its start tag lacks
 /// added to it, so it stands alone.
-fn element_markup(src: &str, n: roxmltree::Node) -> Option<String> {
+fn element_markup(src: &str, n: crate::xml::Node) -> Option<String> {
     let range = n.range();
     let text = src.get(range.clone())?;
     let tag_end = start_tag_end(src, &range)?;
