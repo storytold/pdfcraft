@@ -249,6 +249,7 @@ pub static TOOL_GROUPS: &[ToolGroup] = &[
                 items: &[
                     item("Comment list", "message-square-text", "comment.list", Ready),
                     item("Flatten comments", "layers", "comment.flatten", Ready),
+                    item("Delete all comments", "trash-2", "comment.delete_all", Ready),
                 ],
             },
         ],

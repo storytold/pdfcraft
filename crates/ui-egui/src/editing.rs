@@ -98,6 +98,14 @@ fn select_after_edit(
                 view.comments.open_editor(a.page, n, String::new());
             }
         }
+        Edit::DeleteAnnotations { .. } => {
+            // Replies on other pages go with their thread, so no open editor can be trusted to still point at its comment.
+            view.comments.clear_selection();
+            view.comments.editing = None;
+            if view.comments.composer.as_ref().is_some_and(|c| matches!(c.kind, crate::comments::ComposerKind::Edit(_))) {
+                view.comments.composer = None;
+            }
+        }
         // A group moved together stays selected (its positions don't change), so it
         // can be moved or copied again; anything else in a batch clears the selection.
         Edit::Batch { edits, .. } if edits.iter().all(|e| matches!(e, Edit::MoveAnnotation { .. })) => {}
@@ -1217,6 +1225,7 @@ fn one_page_changed(
     }
 }
 
+/// The single page whose raster a comment edit invalidates, or `None` when more than one page may change.
 fn comment_page(edit: &Edit) -> Option<usize> {
     match edit {
         Edit::AddAnnotation(a) => Some(a.page),
