@@ -288,6 +288,21 @@ pub(crate) fn xfa_after_data_change(doc: &mut pdfcraft_cos::Document, cx: &mut E
 /// the names of the fields that changed.
 pub(crate) fn xfa_values_from_datasets(doc: &mut pdfcraft_cos::Document) -> Result<Vec<String>, String> {
     let data = xfa_field_data(doc);
+    let updates = xfa_updates_from_datasets(doc, None, &data);
+    // All at once: one by one, each value would read the whole form again, which took minutes
+    // on a form with thousands of fields.
+    let Ok(results) = pdfcraft_forms::set_values(doc, &updates) else { return Ok(Vec::new()) };
+    Ok(updates.into_iter().zip(results).filter(|(_, r)| r.is_ok()).map(|((name, _), _)| name).collect())
+}
+
+/// The values the datasets give the fields of `data` that differ from what they hold, each in
+/// the field's own terms: a date in its display pattern, a list's saved values, a radio group's
+/// on state, a check box's state. `tpl`: the form's parsed template (`None` parses it).
+fn xfa_updates_from_datasets(
+    doc: &pdfcraft_cos::Document,
+    tpl: Option<&pdfcraft_xfa::model::Template>,
+    data: &[pdfcraft_xfa::FieldDatum],
+) -> Vec<(String, FieldValue)> {
     let fields = pdfcraft_forms::fields(doc);
     // The first field of each name, as a lookup by name would find it.
     let mut by_name = std::collections::HashMap::new();
@@ -295,7 +310,7 @@ pub(crate) fn xfa_values_from_datasets(doc: &mut pdfcraft_cos::Document) -> Resu
         by_name.entry(f.name.as_str()).or_insert(f);
     }
     let mut updates = Vec::new();
-    for (name, value) in pdfcraft_xfa::read_values(doc, &data) {
+    for (name, value) in pdfcraft_xfa::read_values_with(doc, tpl, data) {
         let Some(f) = by_name.get(name.as_str()) else { continue };
         let new = match value {
             pdfcraft_xfa::FieldData::Text(t) if matches!(f.kind, pdfcraft_forms::FieldKind::Combo | pdfcraft_forms::FieldKind::List) => {
@@ -324,8 +339,100 @@ pub(crate) fn xfa_values_from_datasets(doc: &mut pdfcraft_cos::Document) -> Resu
             updates.push((name, v));
         }
     }
-    // All at once: one by one, each value would read the whole form again, which took minutes
-    // on a form with thousands of fields.
-    let Ok(results) = pdfcraft_forms::set_values(doc, &updates) else { return Ok(Vec::new()) };
-    Ok(updates.into_iter().zip(results).filter(|(_, r)| r.is_ok()).map(|((name, _), _)| name).collect())
+    updates
+}
+
+/// Give every copy of a field that shares its data node (`match="global"`, as on each page a
+/// master page lays out) the value the edit gave one of them. `changed`: the fields the edit gave
+/// values, in order. XFA 3.3 p. 87: a change to one bound field goes to the data node, and from
+/// there to every other field bound to it. So the value the edit gave goes into that node, and
+/// each other copy takes it from there, through its own picture, items or states.
+///
+/// Without this, the other copies kept their old value, and the write of every field's value
+/// into the data that follows let an unchanged copy put the old value back over the edit (#5485).
+/// Within one edit, the last copy given a value wins. Read-only copies show the value too and
+/// stay read-only; their own scripts don't run (the data changed, not the field).
+///
+/// Returns what could not be written into the data; the copies are then left as they were.
+pub(crate) fn xfa_share_bound_values(
+    doc: &mut pdfcraft_cos::Document,
+    tpl: &pdfcraft_xfa::model::Template,
+    changed: &[String],
+    datasets: &mut Option<pdfcraft_cos::ObjRef>,
+) -> Result<Vec<String>, String> {
+    use std::collections::{HashMap, HashSet};
+    if changed.is_empty() || !pdfcraft_xfa::has_shared_bindings(tpl) {
+        return Ok(Vec::new());
+    }
+    let data = xfa_field_data(doc);
+    let som_of = |f: &pdfcraft_xfa::FieldDatum| {
+        let d = doc.get(f.obj);
+        d.as_dict()
+            .and_then(|d| d.get(pdfcraft_xfa::SOM_KEY).map(|o| doc.resolve(o)))
+            .and_then(|o| o.as_string().map(|s| s.to_text()))
+            .unwrap_or_else(|| f.name.clone())
+    };
+    // The data node a field shares with others, if it does (buttons and signatures hold no value).
+    let shared_path = |f: &pdfcraft_xfa::FieldDatum| {
+        if matches!(f.data, pdfcraft_xfa::FieldData::None) {
+            return None;
+        }
+        let som = som_of(f);
+        if !pdfcraft_xfa::binds_shared_data(tpl, &som) {
+            return None;
+        }
+        let path = pdfcraft_xfa::data_path(tpl, &som);
+        (!path.is_empty()).then_some(path)
+    };
+    // The first field of each name, as the edit found it.
+    let mut by_name: HashMap<&str, &pdfcraft_xfa::FieldDatum> = HashMap::new();
+    for f in &data {
+        by_name.entry(f.name.as_str()).or_insert(f);
+    }
+    // The fields the edit changed that share a node: the last edit to each node wins.
+    let mut winners: Vec<pdfcraft_xfa::FieldDatum> = Vec::new();
+    let mut nodes: HashSet<pdfcraft_xfa::DataPath> = HashSet::new();
+    for name in changed.iter().rev() {
+        let Some(f) = by_name.get(name.as_str()) else { continue };
+        let Some(path) = shared_path(f) else { continue };
+        if nodes.insert(path) {
+            winners.push((*f).clone());
+        }
+    }
+    if winners.is_empty() {
+        return Ok(Vec::new());
+    }
+    let won: HashSet<pdfcraft_cos::ObjRef> = winners.iter().map(|f| f.obj).collect();
+    let peers: Vec<pdfcraft_xfa::FieldDatum> =
+        data.iter().filter(|f| !won.contains(&f.obj) && shared_path(f).is_some_and(|p| nodes.contains(&p))).cloned().collect();
+    if peers.is_empty() {
+        return Ok(Vec::new());
+    }
+    let report = pdfcraft_xfa::write_datasets_with(doc, Some(tpl), &winners, *datasets).map_err(|e| e.to_string())?;
+    if report.stream.is_some() {
+        *datasets = report.stream;
+    }
+    if !report.warnings.is_empty() {
+        return Ok(report.warnings);
+    }
+    let on_states: HashMap<String, String> =
+        pdfcraft_forms::fields(doc).into_iter().filter_map(|f| Some((f.name.clone(), f.widgets.iter().find_map(|w| w.on_state.clone())?))).collect();
+    let changes: Vec<pdfcraft_forms::FieldChange> = xfa_updates_from_datasets(doc, Some(tpl), &peers)
+        .into_iter()
+        .filter_map(|(name, value)| {
+            let value = match value {
+                FieldValue::Text(t) => vec![t],
+                FieldValue::Choice(v) => v,
+                FieldValue::Radio(v) => v.into_iter().collect(),
+                FieldValue::Check(true) => vec![on_states.get(&name).cloned().unwrap_or_else(|| "1".into())],
+                FieldValue::Check(false) => Vec::new(),
+                // The datasets give only the values above.
+                FieldValue::Widget(_) | FieldValue::ChoiceIndices(_) => return None,
+            };
+            Some(pdfcraft_forms::FieldChange { name, value: Some(value), ..Default::default() })
+        })
+        .collect();
+    // As a script's change: a read-only copy takes the value too (a user edit would be refused).
+    pdfcraft_forms::apply_script_changes(doc, &changes, &mut pdfcraft_forms::NoScripts).map_err(|e| e.to_string())?;
+    Ok(Vec::new())
 }

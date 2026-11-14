@@ -8006,3 +8006,41 @@ two"
         assert_eq!(tree, before, "{structured}");
     }
 }
+
+/// A field binds to a data node it shares with others by `match="global"` or an explicit
+/// reference, on a master page or in the form's own content; other fields, and objects that
+/// aren't fields, don't (#5485).
+#[test]
+fn binds_shared_data_tells_global_and_referenced_fields_from_the_rest() {
+    let xml = r#"<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="master"><contentArea w="540pt" h="648pt"/><medium short="612pt" long="792pt"/>
+  <field name="client"><ui><textEdit/></ui><bind match="global"/></field>
+  <field name="stamp"><ui><textEdit/></ui></field>
+  <subform name="box"><field name="office"><ui><textEdit/></ui><bind ref="$record.office"/></field></subform>
+ </pageArea></pageSet>
+ <subform name="page1"><field name="client"><ui><textEdit/></ui><bind match="global"/></field><field name="note"><ui><textEdit/></ui></field></subform>
+</subform></template>"#;
+    let (tpl, _) = parse(xml).unwrap();
+    assert!(has_shared_bindings(&tpl));
+    let unshared = xml.replace(r#"<bind match="global"/>"#, "").replace(r#"<bind ref="$record.office"/>"#, "");
+    assert!(!has_shared_bindings(&parse(&unshared).unwrap().0));
+    for (som, shared) in [
+        ("master[0].client[0]", true),
+        ("master[2].client[0]", true),
+        ("master[1].box[0].office[0]", true),
+        ("master[1].stamp[0]", false),
+        ("master[1].box[0]", false),
+        ("master[1]", false),
+        ("form[0].page1[0].client[0]", true),
+        ("form[0].page1[0].note[0]", false),
+        ("form[0].page1[0]", false),
+        ("form[0].page1[0].missing[0]", false),
+        ("elsewhere[0].client[0]", false),
+    ] {
+        assert_eq!(binds_shared_data(&tpl, som), shared, "{som}");
+    }
+    // The copies of a master page's global field bind to one node; a page-local one doesn't.
+    assert_eq!(data_path(&tpl, "master[0].client[0]"), data_path(&tpl, "master[2].client[0]"));
+    assert_ne!(data_path(&tpl, "master[0].stamp[0]"), data_path(&tpl, "master[2].stamp[0]"));
+}

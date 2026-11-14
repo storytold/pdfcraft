@@ -248,6 +248,33 @@ impl Session {
         // every calculation (and a reset recalculates). They read the data, so it is brought up
         // to date first. The fields whose exit scripts ran are noted once the edit is kept.
         let mut exited: Vec<String> = Vec::new();
+        /// The fields edit `e` (and the edits it batches) gives new values, and whether it
+        /// resets the form.
+        fn collect(e: &Edit, changed: &mut Vec<String>, reset: &mut bool) {
+            match e {
+                Edit::SetFieldValue { name, .. } => changed.push(name.clone()),
+                Edit::ResetForm { .. } => *reset = true,
+                Edit::Batch { edits, .. } => edits.iter().for_each(|e| collect(e, changed, reset)),
+                _ => {}
+            }
+        }
+        let mut changed: Vec<String> = Vec::new();
+        let mut reset = false;
+        collect(&edit, &mut changed, &mut reset);
+        // Copies of a field that share one data node (`match="global"`) take the value the edit
+        // gave one of them, before every field's value is written into the data (where an
+        // unchanged copy would put the old value back) and before scripts read it. Scripts on or
+        // off: the binding is the form's, not a script's.
+        if is_xfa && !changed.is_empty() {
+            let tpl = cx.xfa.clone().or_else(|| doc.xfa_template.clone()).or_else(|| xfa::template(&next));
+            if let Some(tpl) = tpl {
+                let datasets = &mut cx.xfa_datasets;
+                let notes = guard(|| crate::xfa_form::xfa_share_bound_values(&mut next, &tpl, &changed, datasets))
+                    .unwrap_or_else(|m| Err(format!("sharing a value among the copies of an XFA field failed unexpectedly ({m})")))
+                    .map_err(EditError::Write)?;
+                cx.xfa_out.errors.extend(notes);
+            }
+        }
         if let Some(tpl) = cx.xfa.clone() {
             if is_xfa && matches!(scope_of(&edit), Scope::Form | Scope::Full | Scope::Content) {
                 let datasets = &mut cx.xfa_datasets;
@@ -256,19 +283,6 @@ impl Session {
                     .map_err(EditError::Write)?;
                 cx.xfa_out.errors.extend(notes);
             }
-            /// The fields edit `e` (and the edits it batches) gives new values, and whether it
-            /// resets the form.
-            fn collect(e: &Edit, changed: &mut Vec<String>, reset: &mut bool) {
-                match e {
-                    Edit::SetFieldValue { name, .. } => changed.push(name.clone()),
-                    Edit::ResetForm { .. } => *reset = true,
-                    Edit::Batch { edits, .. } => edits.iter().for_each(|e| collect(e, changed, reset)),
-                    _ => {}
-                }
-            }
-            let mut changed: Vec<String> = Vec::new();
-            let mut reset = false;
-            collect(&edit, &mut changed, &mut reset);
             if !changed.is_empty() || reset {
                 let highlight = cx.highlight();
                 let mut run = xfa::XfaRun {
