@@ -3,10 +3,11 @@
 The PDF object layer (ISO 32000-2 §7): the COS object graph, parsed lazily and tolerantly, edited
 through a copy-on-write overlay, and written back incrementally or as a full rewrite.
 
-- **Layer:** L1, standalone. The layering table lets it use only `pdfcraft-filters`,
-  `pdfcraft-crypt` and `pdfcraft-geom` (`xtask/src/layers.rs::STANDALONE_DEPS`); it currently uses
-  the first two. That keeps the parser and the crypto independently auditable and reusable.
-- `#![forbid(unsafe_code)]`, and the crate denies `unwrap`/`expect`/`panic!`/`todo!`. Builds for
+- **Layer:** L1, standalone. The layering table permits `pdfcraft-filters`,
+  `pdfcraft-crypt` and `pdfcraft-geom` (`xtask/src/layers.rs::STANDALONE_DEPS`).
+  The production crate re-exports `craft_pdf::cos` from the shared `craft-pdf` dependency;
+  `filters` and `crypt` are local test dependencies.
+- This crate inherits the workspace prohibition on unsafe code. Builds for
   `wasm32-unknown-unknown`.
 
 **The object graph is the document model.** Nothing is lifted into a tidier representation and
