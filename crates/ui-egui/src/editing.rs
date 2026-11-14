@@ -121,16 +121,35 @@ fn select_after_edit(
     }
 }
 
+/// The field an edit redraws the appearance of, where the form model can't show that it changed:
+/// `FormField` and its widgets carry no border, fill, line width, style or widget `/DA`, and no
+/// button icon. Comparing the two states misses all of those, so the edit names the field itself
+/// and its pages are marked whatever the comparison says — otherwise the new appearance waits for
+/// the next zoom or scroll to be drawn.
+fn appearance_edit_field(edit: &Edit) -> Option<&str> {
+    match edit {
+        Edit::SetFieldProps { name, props } => {
+            (props.look.is_some() || props.appearance.is_some() || props.check_style.is_some()).then_some(name.as_str())
+        }
+        Edit::SetFieldImage { name, .. } | Edit::SetFieldImageTarget { name, .. } => Some(name.as_str()),
+        _ => None,
+    }
+}
+
 /// The pages whose widgets differ between two form states, and the (field, page) pairs whose
 /// value changed and so must not be drawn from the baked page.
+///
+/// `edit` is the edit that produced `after`, for the appearance changes the states don't show
+/// (see [`appearance_edit_field`]).
 fn form_edit_pages(
     before: &[pdfcraft_engine::FormField],
     after: &[pdfcraft_engine::FormField],
+    edit: &Edit,
 ) -> (std::collections::BTreeSet<usize>, Vec<(String, usize)>) {
     let mut changed_pages = std::collections::BTreeSet::new();
     let mut unbaked = Vec::new();
+    let pages = |field: &pdfcraft_engine::FormField| field.widgets.iter().filter_map(|w| w.page).collect::<Vec<_>>();
     for f in after {
-        let pages = |field: &pdfcraft_engine::FormField| field.widgets.iter().filter_map(|w| w.page).collect::<Vec<_>>();
         match before.iter().find(|old| old.name == f.name) {
             Some(old) if old == f => {}
             Some(old) => {
@@ -148,6 +167,11 @@ fn form_edit_pages(
     }
     for old in before.iter().filter(|old| !after.iter().any(|f| f.name == old.name)) {
         changed_pages.extend(old.widgets.iter().filter_map(|w| w.page));
+    }
+    if let Some(name) = appearance_edit_field(edit)
+        && let Some(f) = after.iter().find(|f| f.name == name)
+    {
+        changed_pages.extend(pages(f));
     }
     (changed_pages, unbaked)
 }
@@ -225,7 +249,7 @@ impl PdfCraftApp {
                 // on, and the values that show over them until those pages' rasters have them.
                 let form_edit = form_before
                     .filter(|_| doc.info.pages.len() == page_count_before && doc.xfa.is_some() == had_xfa && doc.xfa.is_none() && is_form_edit(&edit))
-                    .map(|before| form_edit_pages(&before, &doc.form));
+                    .map(|before| form_edit_pages(&before, &doc.form, &edit));
                 let one_page = comment_page(&edit).or_else(|| content_page(&edit));
                 if signatures_before.is_some_and(|before| crate::canvas::signature_states_changed(&before, &doc.signatures)) {
                     signatures_changed_after_edit(view, &edit, info, &annots_before, form_edit.map(|(_, u)| u), one_page);
