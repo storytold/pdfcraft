@@ -27,7 +27,8 @@ Layer L4. Create a PDF (Acrobat's Create a PDF tool), execution plan M10.2:
   Helvetica can't draw are written as `[U+XXXX]` and the first line says so (`ESCAPED_NOTE`).
 
 The caller writes the returned `pdfcraft_cos::Document`. `from_text_escaped` returns
-`(Document, usize)`, pairing the document with the number of escaped characters.
+`Result<(Document, usize), CreateError>`; its success value pairs the document with the number
+of escaped characters.
 
 Office documents (`office.rs`) are the exception: PdfCraft doesn't read Word, Excel, PowerPoint,
 OpenDocument or RTF itself. `is_office(name, bytes)` recognises them (an `OFFICE_EXTENSIONS`
