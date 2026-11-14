@@ -144,6 +144,11 @@ impl DocView {
     /// top-left on the new page, as Acrobat does. A point past the end of the document scrolls
     /// as far as it can.
     pub fn go_to_dest(&mut self, page: usize, dest: DestView, info: &DocInfo) {
+        self.go_to_dest_with_zoom(page, dest, info, false);
+    }
+
+    /// Go to the same position while optionally keeping the reader's current zoom or fit mode.
+    pub(crate) fn go_to_dest_with_zoom(&mut self, page: usize, dest: DestView, info: &DocInfo, keep_zoom: bool) {
         // Read before the jump: it is where the reader is now.
         let kept = match dest {
             DestView::Xyz { left, top, .. } if left.is_none() || top.is_none() => self.place_at_corner(info),
@@ -160,7 +165,7 @@ impl DocView {
         let (fx, fy, rel) = match dest {
             DestView::Top => return,
             DestView::Xyz { left, top, zoom } => {
-                if let Some(z) = zoom {
+                if !keep_zoom && let Some(z) = zoom {
                     self.zoom = z.clamp(0.08, 64.0);
                     self.fit = Fit::None;
                     self.zoom_anchor = None;
@@ -170,16 +175,22 @@ impl DocView {
                 (fx, fy, corner)
             }
             DestView::Fit => {
-                self.fit = Fit::Page;
+                if !keep_zoom {
+                    self.fit = Fit::Page;
+                }
                 return;
             }
             DestView::FitH { top } => {
-                self.fit = Fit::Width;
+                if !keep_zoom {
+                    self.fit = Fit::Width;
+                }
                 let [fx, fy] = point(None, top);
                 (fx, fy, corner)
             }
             DestView::FitV { left } => {
-                self.fit = Fit::Height;
+                if !keep_zoom {
+                    self.fit = Fit::Height;
+                }
                 let [fx, fy] = point(left, None);
                 (fx, fy, corner)
             }
@@ -190,7 +201,7 @@ impl DocView {
                 // The rectangle as displayed, in points (it can be turned a quarter).
                 let (dw, dh) = self.display_size(p);
                 let (w, h) = ((ax - bx).abs() * dw, (ay - by).abs() * dh);
-                if w >= 1.0 && h >= 1.0 && self.viewport_w >= 1.0 && self.viewport_h >= 1.0 {
+                if !keep_zoom && w >= 1.0 && h >= 1.0 && self.viewport_w >= 1.0 && self.viewport_h >= 1.0 {
                     self.zoom = (self.viewport_w / (w * PT)).min(self.viewport_h / (h * PT)).clamp(0.08, 64.0);
                     self.fit = Fit::None;
                     self.zoom_anchor = None;

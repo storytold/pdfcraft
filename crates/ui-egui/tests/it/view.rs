@@ -1621,10 +1621,11 @@ const DESTS: &[u8] = b"%PDF-1.7
 3 0 obj << /Type /Page /Parent 2 0 R /Annots [20 0 R] >> endobj
 4 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 400 600] /CropBox [50 100 350 500] >> endobj
 5 0 obj << /Type /Page /Parent 2 0 R >> endobj
-10 0 obj << /Type /Outlines /First 11 0 R /Last 13 0 R /Count 3 >> endobj
+10 0 obj << /Type /Outlines /First 11 0 R /Last 14 0 R /Count 4 >> endobj
 11 0 obj << /Title (Section 1.1 Shapes) /Parent 10 0 R /Next 12 0 R /Dest [4 0 R /XYZ 0 420 0] >> endobj
 12 0 obj << /Title (Zoomed in) /Parent 10 0 R /Next 13 0 R /Dest [4 0 R /XYZ 125 300 3] >> endobj
-13 0 obj << /Title (Broken) /Parent 10 0 R /Dest [5 0 R /XYZ (left) /top true] >> endobj
+13 0 obj << /Title (Broken) /Parent 10 0 R /Next 14 0 R /Dest [5 0 R /XYZ (left) /top true] >> endobj
+14 0 obj << /Title (Fit bookmark) /Parent 10 0 R /A << /S /GoTo /D [5 0 R /Fit] >> >> endobj
 20 0 obj << /Type /Annot /Subtype /Link /Rect [50 300 250 350] /Border [0 0 0] /Dest [4 0 R /FitH 420] >> endobj
 trailer << /Root 1 0 R >>
 %%EOF";
@@ -1700,9 +1701,73 @@ fn bookmark_destinations_scroll_to_their_position() {
 }
 
 #[test]
+fn bookmarks_can_keep_the_current_zoom() {
+    use pdfcraft_ui_egui::canvas::Fit;
+    let mut h = dests_harness();
+    h.state_mut().set_option("keep_bookmark_zoom", "true").unwrap();
+    h.state_mut().set_option("zoom", "150%").unwrap();
+    h.run_steps(4);
+
+    h.get_by_label("Fit bookmark").click();
+    h.run_steps(6);
+    let v = &h.state().views[0];
+    assert_eq!((v.current, v.fit, v.zoom), (2, Fit::None, 1.5), "a /Fit bookmark keeps 150%");
+
+    h.state_mut().set_option("zoom", "450%").unwrap();
+    h.run_steps(4);
+    h.get_by_label("Zoomed in").click();
+    h.run_steps(6);
+    let v = &h.state().views[0];
+    assert_eq!((v.current, v.fit, v.zoom), (1, Fit::None, 4.5), "an explicit /XYZ zoom is also skipped");
+    let d = from_viewport_corner(&h, 1, 0.25, 0.5);
+    assert!((d.x - 70.0).abs() < 2.0 && d.y.abs() < 2.0, "the destination point still reaches the corner: {d:?}");
+
+    h.state_mut().views[0].set_fit(Fit::Width);
+    h.run_steps(4);
+    h.get_by_label("Fit bookmark").click();
+    h.run_steps(6);
+    assert_eq!(h.state().views[0].fit, Fit::Width, "a fit mode is kept too");
+
+    h.state_mut().set_option("keep_bookmark_zoom", "false").unwrap();
+    h.get_by_label("Fit bookmark").click();
+    h.run_steps(6);
+    assert_eq!(h.state().views[0].fit, Fit::Page, "turning the preference off restores destination zoom");
+    let doc = h.state().session.get(h.state().views[0].id).unwrap();
+    assert!(!doc.dirty, "navigation and its preference never edit the PDF");
+}
+
+#[test]
+fn keep_bookmark_zoom_can_be_enabled_in_preferences_and_survives_a_restart() {
+    let mut h = harness(&[]);
+    let key = "keep_bookmark_zoom";
+    let enabled = |app: &PdfCraftApp| serde_json::from_str::<serde_json::Value>(&app.persist()).unwrap()[key].as_bool().unwrap();
+    assert!(!enabled(h.state()), "off by default");
+
+    assert!(h.state_mut().execute("app.preferences"));
+    h.run_steps(3);
+    let label = "Keep current zoom when following bookmarks";
+    h.get_by_label(label).scroll_to_me();
+    h.run_steps(4);
+    h.get_by_label(label).click();
+    h.run_steps(2);
+    assert!(enabled(h.state()));
+
+    let mut restarted = PdfCraftApp::new();
+    restarted.restore(&h.state().persist());
+    assert!(enabled(&restarted));
+    restarted.restore(r#"{"keep_bookmark_zoom":"bogus"}"#);
+    assert!(restarted.set_option(key, "yes").is_err());
+    assert!(enabled(&restarted), "malformed settings leave the choice alone");
+    let mut legacy = PdfCraftApp::new();
+    legacy.restore("{}");
+    assert!(!enabled(&legacy), "older settings keep the default");
+}
+
+#[test]
 fn link_destinations_scroll_to_their_position() {
     use pdfcraft_ui_egui::canvas::Fit;
     let mut h = dests_harness();
+    h.state_mut().set_option("keep_bookmark_zoom", "true").unwrap();
     h.state_mut().set_option("zoom", "100%").unwrap();
     h.run_steps(4);
     let r = rect(&h, 0).expect("page 1");
