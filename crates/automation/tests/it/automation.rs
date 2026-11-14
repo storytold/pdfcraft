@@ -8500,6 +8500,8 @@ fn sign_document_and_verify_trust(a: &mut Automation, dir: &Path) -> u64 {
     doc
 }
 
+/// The signed document's revisions, then its verdict as trust changes: cleared, a signer-only certificate, an unknown
+/// scope refused, and the same certificate from a PKCS #7 bundle.
 fn verify_signature_revisions_and_bundle(a: &mut Automation, doc: u64, dir: &Path) {
     // A full rewrite is refused for a signed document.
     assert!(matches!(a.call("doc_save", &json!({ "doc": doc, "path": "copy.pdf", "full": true })), Err(ToolError::Failed(_))));
@@ -8513,6 +8515,22 @@ fn verify_signature_revisions_and_bundle(a: &mut Automation, doc: u64, dir: &Pat
     assert_eq!(ok(a, "sign_list", json!({ "doc": old }))["count"], 1);
     assert!(matches!(a.call("doc_open_revision", &json!({ "doc": doc, "revision": 4 })), Err(ToolError::Failed(_))));
     assert_eq!(ok(a, "sign_trust", json!({ "clear": true }))["trusted"].as_array().unwrap().len(), 0);
+    assert_eq!(ok(a, "sign_list", json!({ "doc": doc }))["signatures"][0]["status"], "unknown");
+    // Trusted as a signer only, as the Signatures panel's one click trusts it (#6758): the
+    // signature is valid, and the certificate is not a root.
+    let t = ok(a, "sign_trust", json!({ "paths": ["ada.p12"], "password": "secret12", "scope": "signer" }));
+    assert_eq!((t["trusted"].as_array().unwrap().len(), t["trusted_signers"].as_array().unwrap().len()), (0, 1));
+    assert_eq!(ok(a, "sign_list", json!({ "doc": doc }))["signatures"][0]["status"], "valid");
+    assert!(matches!(a.call("sign_trust", &json!({ "scope": "issuer" })), Err(ToolError::InvalidArgs(_))));
+    // Trusted for timestamps only (#6786): the certificate is neither a root nor a signer, so the
+    // signature it made is not trusted by that.
+    ok(a, "sign_trust", json!({ "clear": true }));
+    let t = ok(a, "sign_trust", json!({ "paths": ["ada.p12"], "password": "secret12", "scope": "tsa" }));
+    let lens = |t: &Value, k: &str| t[k].as_array().unwrap().len();
+    assert_eq!((lens(&t, "trusted"), lens(&t, "trusted_signers"), lens(&t, "trusted_tsas")), (0, 0, 1));
+    assert_eq!(ok(a, "sign_list", json!({ "doc": doc }))["signatures"][0]["status"], "unknown");
+    let t = ok(a, "sign_trust", json!({ "clear": true }));
+    assert_eq!((lens(&t, "trusted"), lens(&t, "trusted_signers"), lens(&t, "trusted_tsas")), (0, 0, 0));
     assert_eq!(ok(a, "sign_list", json!({ "doc": doc }))["signatures"][0]["status"], "unknown");
     // The same certificate from a PKCS #7 bundle (.p7b), as Windows, Acrobat and CAs export one.
     use pdfcraft_engine::sign::{cms, der, pkcs12};

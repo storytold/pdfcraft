@@ -1,14 +1,40 @@
 use super::Certificate;
 
-/// Certificates the user trusts for signing (Acrobat: Trusted Certificates).
+/// Certificates the user trusts for signing (Acrobat: Trusted Certificates), each with what it
+/// is trusted for.
 #[derive(Clone, Debug, Default)]
 pub struct TrustStore {
+    /// Trust anchors: certificates the user chose to trust as roots (imported, or trusted as a
+    /// root in the Certificate Viewer). A chain that reaches one is trusted, so one that may issue
+    /// vouches for every certificate it issues, and one issued for time stamping is a trusted
+    /// timestamp authority.
     pub certs: Vec<Certificate>,
+    /// Signer-only trust: each trusts the signatures made with exactly that certificate, and
+    /// nothing else. It never vouches for a certificate it issued, whatever its own extensions
+    /// say, and is never a timestamp authority (#6758). "Add to trusted certificates" on a
+    /// signature stores the signer here.
+    pub signers: Vec<Certificate>,
+    /// Timestamp authorities trusted for time alone: each makes the RFC 3161 timestamps signed
+    /// with exactly that certificate trusted time, when it is issued for time stamping and was
+    /// valid when it stamped. It is never a signer's identity and never vouches for another
+    /// certificate (#6786).
+    pub tsas: Vec<Certificate>,
 }
 
 impl TrustStore {
+    /// Whether `c` is a trust anchor: trusted as a root.
     pub(super) fn trusts(&self, c: &Certificate) -> bool {
         self.certs.iter().any(|t| t.raw == c.raw)
+    }
+
+    /// Whether `c` is trusted as a timestamp authority in its own right, not through a root.
+    pub(super) fn trusts_tsa(&self, c: &Certificate) -> bool {
+        self.tsas.iter().any(|t| t.raw == c.raw)
+    }
+
+    /// Whether signatures made with exactly `c` are trusted: it is a trusted signer or an anchor.
+    pub(super) fn trusts_signer(&self, c: &Certificate) -> bool {
+        self.signers.iter().any(|t| t.raw == c.raw) || self.trusts(c)
     }
 }
 

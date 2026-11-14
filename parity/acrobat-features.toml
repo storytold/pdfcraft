@@ -6499,8 +6499,8 @@ milestone = "M9"
 status = "shipped"
 commands = ["sign.panel"]
 tools = ["sign_trust"]
-evidence = ["crates/sign/tests/it/pdf.rs::signing_then_validating_with_and_without_trust", "crates/ui-egui/tests/it/signing.rs::drawing_a_signature_creating_an_id_signing_and_trusting", "crates/automation/tests/it/automation.rs::digital_ids_signing_and_validation_through_tools"]
-notes = "trusted certificates persist with the app's settings"
+evidence = ["crates/sign/tests/it/pdf.rs::signing_then_validating_with_and_without_trust", "crates/ui-egui/tests/it/signing.rs::drawing_a_signature_creating_an_id_signing_and_trusting", "crates/automation/tests/it/automation.rs::digital_ids_signing_and_validation_through_tools", "crates/sign/tests/it/chain.rs::trusting_a_signer_does_not_trust_what_it_issues", "crates/sign/tests/it/pdf.rs::a_trusted_signer_is_not_a_trusted_timestamp_authority", "crates/ui-egui/tests/it/trust_signer.rs::trust_from_older_settings_is_read_as_signers_and_scopes_persist"]
+notes = "trusted certificates persist with the app's settings, each as a root or a signer only. \"Add to trusted certificates\" trusts the signer only: signatures made with exactly that certificate, never the certificates it issues, and never as a timestamp authority. The Certificate Viewer's Trust tab can trust a certificate that may issue as a root, after saying what that implies. Settings from before the scopes are read as signers"
 
 [[feature]]
 id = "sign.trust-import"
@@ -6511,8 +6511,8 @@ milestone = "M9"
 status = "partial"
 commands = []
 tools = ["sign_trust"]
-evidence = ["crates/automation/tests/it/automation.rs::digital_ids_signing_and_validation_through_tools"]
-notes = "import .cer/.pem/.der/.p7b/.p7c/.p12 through the tool; per-certificate trust settings not yet"
+evidence = ["crates/automation/tests/it/automation.rs::digital_ids_signing_and_validation_through_tools", "crates/sign/tests/it/pdf.rs::a_certificate_trusted_for_timestamps_only_gives_trusted_time_and_nothing_else"]
+notes = "import .cer/.pem/.der/.p7b/.p7c/.p12 through the tool, as roots (the default), as signers only, or as timestamp authorities only (scope); the Certificate Viewer trusts a certificate as a signer, a root or a timestamp authority. Other per-certificate trust settings (certified documents, dynamic content, scripts) not yet"
 
 [[feature]]
 id = "sign.eutl"

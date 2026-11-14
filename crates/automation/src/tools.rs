@@ -1070,8 +1070,8 @@ pub fn tools() -> Vec<ToolDef> {
                 }),
                 &["doc", "id", "out"],
             )),
-        t("sign_trust", "Trust certificates", "Add certificates (.cer/.crt/.pem/.der, a .p7b/.p7c bundle, or the certificates in a .p12 with `password`) to the trusted certificates used to validate signatures, or clear the list (clear: true). Every open document is revalidated. Returns the trusted list.").with(schema(
-            json!({ "paths": { "type": "array", "items": { "type": "string" } }, "password": { "type": "string" }, "clear": { "type": "boolean" } }),
+        t("sign_trust", "Trust certificates", "Add certificates (.cer/.crt/.pem/.der, a .p7b/.p7c bundle, or the certificates in a .p12 with `password`) to the trusted certificates used to validate signatures, or clear all three lists, roots, signers and timestamp authorities, whatever scope says (clear: true). scope \"root\" (the default) trusts them as roots: each vouches for every certificate it may issue and is a timestamp authority when issued for one. scope \"signer\" trusts only the signatures made with exactly those certificates, as the Signatures panel's \"Add to trusted certificates\" does. scope \"tsa\" trusts only the timestamps signed with exactly those certificates as trusted time. Every open document is revalidated. Returns the trusted roots (trusted), signers (trusted_signers) and timestamp authorities (trusted_tsas).").with(schema(
+            json!({ "paths": { "type": "array", "items": { "type": "string" } }, "password": { "type": "string" }, "clear": { "type": "boolean" }, "scope": { "type": "string", "enum": ["root", "signer", "tsa"], "description": "Default root." } }),
             &[],
         )),
         t("comment_mark", "Mark a comment with a checkmark", "Mark or unmark a comment with a checkmark (Acrobat: Mark with checkmark), recorded as a private reply. Undoable.").with(schema(

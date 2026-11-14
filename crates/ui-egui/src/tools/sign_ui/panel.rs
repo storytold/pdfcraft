@@ -59,7 +59,11 @@ pub(crate) fn signature_status_style(status: SignatureStatus) -> (&'static str, 
 pub enum PanelAction {
     Validate,
     GoTo(usize),
+    /// Trust a signer, as a signer only (#6758).
     Trust(Box<Certificate>),
+    /// Trust a document timestamp's authority, for timestamps only (#6786): trusted as a signer
+    /// it would leave the timestamp Unknown.
+    TrustTsa(Box<Certificate>),
     ViewSigned {
         len: usize,
         revision: usize,
@@ -187,13 +191,17 @@ pub(crate) fn panel(ui: &mut egui::Ui, t: &Tokens, sigs: &[SignatureInfo], expan
             ui.add_space(4.0);
             ui.horizontal_wrapped(|ui| {
                 // Trust exactly the signer shown above (s.certificate), not the chain top the
-                // document embedded: trusting an issuer or root is a separate, explicit step in
-                // the Certificate Viewer's Trust tab, which names that certificate.
+                // document embedded, and as a signer only: it vouches for no certificate it
+                // issued (#6758). Trusting an issuer or root is a separate, explicit step in the
+                // Certificate Viewer's Trust tab, which names that certificate. A document
+                // timestamp's certificate is its authority's, so it is trusted for timestamps
+                // only: a trusted signer is not a trusted timestamp authority (#6786).
                 if let Some(c) = s.certificate.as_ref()
                     && s.status == SignatureStatus::Unknown
                     && ui.button(tl!("Add to trusted certificates")).clicked()
                 {
-                    action = Some(PanelAction::Trust(Box::new(c.clone())));
+                    let c = Box::new(c.clone());
+                    action = Some(if s.doc_timestamp { PanelAction::TrustTsa(c) } else { PanelAction::Trust(c) });
                 }
                 if ui.button(tl!("View signed version")).clicked() {
                     action = Some(PanelAction::ViewSigned { len: s.signed_len, revision: s.revision });
@@ -235,6 +243,7 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02X}")).collect::<Vec<_>>().join(" ")
 }
 
+/// A certificate's key usage bits as the interface names them, or None when no bit is set.
 fn key_usage(bits: u16) -> String {
     const NAMES: [&str; 9] = [
         "Digital Signature",
@@ -253,12 +262,17 @@ fn key_usage(bits: u16) -> String {
 
 /// What the viewer asks for.
 pub(crate) enum CertAction {
-    Trust(Box<Certificate>),
+    /// Trust signatures made with exactly this certificate.
+    TrustSigner(Box<Certificate>),
+    /// Trust it as a root: it vouches for every certificate it may issue.
+    TrustRoot(Box<Certificate>),
+    /// Trust the timestamps signed with it, and nothing else.
+    TrustTsa(Box<Certificate>),
     Export(Box<Certificate>),
 }
 
 /// The Certificate Viewer dialog: the chain on the left, the selected certificate's tabs.
-pub(crate) fn cert_viewer(ui: &mut egui::Ui, v: &mut CertViewer, trusted: &[Certificate], t: &Tokens) -> (bool, Option<CertAction>) {
+pub(crate) fn cert_viewer(ui: &mut egui::Ui, v: &mut CertViewer, trust: &pdfcraft_engine::TrustStore, t: &Tokens) -> (bool, Option<CertAction>) {
     title(ui, "Certificate Viewer");
     ui.label(egui::RichText::new(tl!("This dialog shows the details of a certificate and its chain.")).color(t.text_muted));
     ui.add_space(8.0);
@@ -328,18 +342,59 @@ pub(crate) fn cert_viewer(ui: &mut egui::Ui, v: &mut CertViewer, trusted: &[Cert
                     ],
                 ),
                 CertTab::Trust => {
-                    let is_trusted = trusted.iter().any(|x| x.raw == c.raw);
-                    let anchored = v.chain.iter().any(|x| trusted.iter().any(|y| y.raw == x.raw));
-                    ui.label(if is_trusted {
+                    let root = trust.certs.iter().any(|x| x.raw == c.raw);
+                    let signer = trust.signers.iter().any(|x| x.raw == c.raw);
+                    let tsa = trust.tsas.iter().any(|x| x.raw == c.raw);
+                    let anchored = v.chain.iter().any(|x| trust.certs.iter().any(|y| y.raw == x.raw));
+                    ui.label(if root {
                         tl!("This certificate is in your list of trusted certificates.")
+                    } else if signer {
+                        tl!("You trust signatures made with this certificate. It does not vouch for any other certificate.")
+                    } else if tsa {
+                        tl!("You trust timestamps made with this certificate. It is not trusted as a signer and does not vouch for any other certificate.")
                     } else if anchored {
                         tl!("This certificate is trusted through a certificate above it in the chain.")
                     } else {
                         tl!("This certificate is not trusted. Signatures made with it show an unknown identity.")
                     });
+                    // A signer can be trusted for timestamps too; the sentence above names only the
+                    // first, and with both the button below is gone, so say the second as well.
+                    if !root && signer && tsa {
+                        ui.label(tl!("You also trust timestamps made with this certificate."));
+                    }
                     ui.add_space(8.0);
-                    if !is_trusted && widgets::pill_button(ui, tl!("Add to Trusted Certificates"), false).clicked() {
-                        action = Some(CertAction::Trust(Box::new(c.clone())));
+                    if !root && !signer && widgets::pill_button(ui, tl!("Add to Trusted Certificates"), false).clicked() {
+                        action = Some(CertAction::TrustSigner(Box::new(c.clone())));
+                    }
+                    // Trusting an authority's timestamps is its own choice too (#6786), offered
+                    // for a certificate issued for time stamping.
+                    if !root && !tsa && c.may_timestamp() {
+                        ui.add_space(8.0);
+                        ui.label(
+                            egui::RichText::new(tl!(
+                                "Trusting this certificate for timestamps makes the times it stamps trusted, so signatures it timestamped are judged at that time. It does not make it a trusted signer or vouch for other certificates."
+                            ))
+                            .color(t.text_muted),
+                        );
+                        ui.add_space(4.0);
+                        if widgets::pill_button(ui, tl!("Trust for Timestamps"), false).clicked() {
+                            action = Some(CertAction::TrustTsa(Box::new(c.clone())));
+                        }
+                    }
+                    // Trusting a certificate as a root is its own choice, made after reading what it
+                    // implies (#6758), and offered only where it means something: one that may issue.
+                    if !root && c.may_issue() {
+                        ui.add_space(8.0);
+                        ui.label(
+                            egui::RichText::new(tl!(
+                                "Trusting this certificate as a root also trusts every certificate it issues: signatures made with any of them show as valid, whatever name they carry. Do this only for an authority you know and expect to issue certificates."
+                            ))
+                            .color(t.text_muted),
+                        );
+                        ui.add_space(4.0);
+                        if widgets::pill_button(ui, tl!("Trust as a Root Certificate"), false).clicked() {
+                            action = Some(CertAction::TrustRoot(Box::new(c.clone())));
+                        }
                     }
                 }
             }

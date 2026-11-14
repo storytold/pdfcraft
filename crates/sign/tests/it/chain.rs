@@ -185,15 +185,41 @@ fn fixture() -> Vec<u8> {
 
 /// Sign a small PDF with `leaf`, embedding `embedded`, and validate it trusting only `anchor`.
 fn verdict(leaf: Party, embedded: Vec<Certificate>, anchor: &Certificate) -> (Status, Vec<String>) {
+    verdict_trusting(leaf, embedded, &TrustStore { certs: vec![anchor.clone()], ..TrustStore::default() })
+}
+
+/// [`verdict`] under the trust store `trust`.
+fn verdict_trusting(leaf: Party, embedded: Vec<Certificate>, trust: &TrustStore) -> (Status, Vec<String>) {
     let id = DigitalId { key: leaf.key, certificate: leaf.cert, chain: embedded, friendly_name: None };
     let doc = Document::open(Arc::new(fixture())).unwrap();
     let opts = SignOptions { page: 0, rect: None, date: "D:20260601120000Z".into(), ..SignOptions::default() };
     let signed = pdfcraft_sign::sign(&doc, &id, &opts).unwrap();
-    let trust = TrustStore { certs: vec![anchor.clone()] };
-    let s = signatures(&Document::open(Arc::new(signed.clone())).unwrap(), &signed, &trust).into_iter().rfind(|s| s.signed).unwrap();
+    let s = signatures(&Document::open(Arc::new(signed.clone())).unwrap(), &signed, trust).into_iter().rfind(|s| s.signed).unwrap();
     // The details as they read in English; what an interface says in another language is checked in
     // `tests/it/pdf.rs`.
     (s.status, s.details.iter().map(|d| d.message.clone()).collect())
+}
+
+/// #6758: trusting a signer ("Add to trusted certificates") trusts the signatures made with
+/// exactly that certificate. A self-signed signer that may also issue certificates must not vouch
+/// for the ones it issues: a document "signed" by any name under its key stays Unknown. Trusting
+/// the same certificate as a root still vouches for them, as an imported CA does.
+#[test]
+fn trusting_a_signer_does_not_trust_what_it_issues() {
+    let alice = issue("Alice", None, FOREVER, &[basic_constraints(true, None), key_usage(DIGITAL_SIGNATURE | KEY_CERT_SIGN)]);
+    assert!(alice.cert.may_issue());
+    let payroll = end_entity("Contoso Payroll", &alice);
+    let payroll_again = end_entity("Contoso Payroll", &alice);
+    let ca = alice.cert.clone();
+    let as_signer = TrustStore { signers: vec![ca.clone()], ..TrustStore::default() };
+    let (status, details) = verdict_trusting(alice, Vec::new(), &as_signer);
+    assert_eq!(status, Status::Valid, "the trusted signer itself: {details:?}");
+    let (status, details) = verdict_trusting(payroll, vec![ca.clone()], &as_signer);
+    assert_eq!(status, Status::Unknown, "a certificate the trusted signer issued: {details:?}");
+    assert!(!details.iter().any(|d| d == "The signer's identity is valid."), "{details:?}");
+    // The same certificate trusted as a root vouches for what it issues.
+    let (status, details) = verdict(payroll_again, vec![ca.clone()], &ca);
+    assert_eq!(status, Status::Valid, "{details:?}");
 }
 
 #[test]

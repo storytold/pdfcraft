@@ -260,16 +260,42 @@ impl Session {
         }
     }
 
-    /// The certificates trusted for signing.
+    /// The whole trust store: roots and signers.
+    pub fn trust(&self) -> &TrustStore {
+        &self.trust
+    }
+
+    /// The certificates trusted as roots (trust anchors): each vouches for the certificates it
+    /// may issue, and is a trusted timestamp authority when issued for time stamping.
     pub fn trusted_certificates(&self) -> &[pdfcraft_sign::Certificate] {
         &self.trust.certs
     }
 
-    /// Replace the trusted certificates, revalidate every open document's signatures,
-    /// and rebuild its display copy and renderer to match (working file untouched,
-    /// generation/dirty unchanged: trust alone is not an edit).
+    /// The certificates trusted as signers only: each trusts the signatures made with exactly
+    /// that certificate, and vouches for nothing else (#6758).
+    pub fn trusted_signers(&self) -> &[pdfcraft_sign::Certificate] {
+        &self.trust.signers
+    }
+
+    /// The certificates trusted as timestamp authorities only: each makes the timestamps signed
+    /// with exactly that certificate trusted time, and is trusted for nothing else (#6786).
+    pub fn trusted_tsas(&self) -> &[pdfcraft_sign::Certificate] {
+        &self.trust.tsas
+    }
+
+    /// Replace the trusted roots, keeping the trusted signers and timestamp authorities; see
+    /// [`Session::set_trust`].
     pub fn set_trusted_certificates(&mut self, certs: Vec<pdfcraft_sign::Certificate>) {
-        self.trust = Arc::new(TrustStore { certs });
+        let mut trust = TrustStore::clone(&self.trust);
+        trust.certs = certs;
+        self.set_trust(trust);
+    }
+
+    /// Replace the whole trust store, revalidate every open document's signatures, and
+    /// rebuild its display copy and renderer to match (working file untouched,
+    /// generation/dirty unchanged: trust alone is not an edit).
+    pub fn set_trust(&mut self, trust: TrustStore) {
+        self.trust = Arc::new(trust);
         for doc in &mut self.docs {
             Self::revalidate(doc, self.trust.clone());
         }
