@@ -170,13 +170,27 @@ fn fallback_faces_share_the_interface_baseline() {
 /// faces on wasm), so the test must not use it in a wasm test build.
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
-fn traditional_chinese_keeps_an_installed_face_when_hans_is_embedded() {
+fn a_chinese_interface_asks_for_its_own_installed_face() {
     use crate::system_fonts::Need;
-    assert_eq!(installed_fallback_need(CjkPreference::SimplifiedChinese, true), Need::Other);
-    assert_eq!(installed_fallback_need(CjkPreference::SimplifiedChinese, false), Need::Hans);
-    assert_eq!(installed_fallback_need(CjkPreference::TraditionalChinese, true), Need::Hant);
-    assert_eq!(installed_fallback_need(CjkPreference::TraditionalChinese, false), Need::Hant);
-    assert_eq!(installed_fallback_need(CjkPreference::Default, true), Need::Other);
+    assert_eq!(installed_fallback_need(CjkPreference::SimplifiedChinese), Need::Hans);
+    assert_eq!(installed_fallback_need(CjkPreference::TraditionalChinese), Need::Hant);
+    assert_eq!(installed_fallback_need(CjkPreference::Default), Need::Other);
+}
+
+/// The installed Chinese face goes in front of every bundled CJK face (#6070), so a `zh-hans`
+/// interface is not drawn in the bundled Kai face; other languages keep it at the end, as the
+/// last fallback.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn the_installed_chinese_face_goes_in_front_of_the_bundled_cjk_faces() {
+    use crate::system_fonts::Need;
+    let stack: Vec<String> = ["Inter", "LXGW WenKai Lite Regular", "BIZ UDPGothic Regular"].iter().map(|s| s.to_string()).collect();
+    let bundled: Vec<String> = ["LXGW WenKai Lite Regular", "BIZ UDPGothic Regular"].iter().map(|s| s.to_string()).collect();
+    assert_eq!(installed_face_position(&stack, &bundled, Need::Hans), 1, "Simplified Chinese puts it before the bundled Hans face");
+    assert_eq!(installed_face_position(&stack, &bundled, Need::Hant), 1, "Traditional Chinese too");
+    assert_eq!(installed_face_position(&stack, &bundled, Need::Other), stack.len(), "every other language keeps it last");
+    // A build without craft-fonts has no bundled CJK face: the installed one is still last.
+    assert_eq!(installed_face_position(&stack, &[], Need::Hans), stack.len());
 }
 
 #[test]
