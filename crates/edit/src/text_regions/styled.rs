@@ -1654,8 +1654,11 @@ pub(crate) fn rewrite_styled_block(
     let chars = prepared.values;
     let substituted = prepared.substituted;
     let phrase_size = block.phrase_size();
+    // The size in text space. A line's size is in points, always positive; a source that sets a
+    // negative `Tf` (mirrored glyphs under a flipped CTM) keeps its sign, or the text would flip.
     let size_of = |source: &TextLine, index: usize| {
-        overrides.get(&index).and_then(|r| r.size).or(style.size).or(phrase_size).unwrap_or(source.size).max(0.1) / source.origin.k.max(1e-6)
+        let points = overrides.get(&index).and_then(|r| r.size).or(style.size).or(phrase_size).unwrap_or(source.size).max(0.1);
+        source.origin.state.with_tf_sign(points / source.origin.k.max(1e-6))
     };
     // A source run may carry TJ kerning/justification that is absent from its text state.
     // Keep its measured advance when rebuilding the run instead of making it wrap on entry.
@@ -1898,7 +1901,7 @@ pub(crate) fn rewrite_styled_block(
                     continue;
                 }
                 let [r, g, b] = overrides.get(&style_index).and_then(|r| r.color).or(style.color).unwrap_or(source.color);
-                let underline_size = size_of(source, style_index) * source.origin.k;
+                let underline_size = size_of(source, style_index).abs() * source.origin.k;
                 let (x0, y0) = back.apply(from - o.ctm[4], baseline - o.ctm[5] - underline_size * 0.12);
                 let (x1, y1) = back.apply(to - o.ctm[4], baseline - o.ctm[5] - underline_size * 0.12);
                 block_ops.push(Op::new("RG", vec![n(r), n(g), n(b)]));
