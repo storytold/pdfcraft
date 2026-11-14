@@ -580,7 +580,8 @@ fn put_on_line(line_of: &mut Vec<u32>, space_before: &mut [bool], glyphs: std::o
 /// takes it: the short last line of a column of several lines is no label (review on #4468). One-line
 /// paragraphs of two columns that share a baseline cannot be told from a table row, and are further
 /// apart than [`same_line`] allows unless the left one fills its column. Right-to-left lines are
-/// left alone: their blocks still read left first.
+/// left alone: their blocks still read left first. A row of a barcode drawn with a font joins no
+/// line of text, nor text a code row.
 fn joins_line(segs: &[Seg], last: Option<(usize, bool, bool)>, si: usize, first: bool, paragraph: bool, has_rtl: bool) -> Option<&Seg> {
     let (p, p_rtl, p_alone) = last?;
     if !first || p_rtl || has_rtl {
@@ -588,5 +589,5 @@ fn joins_line(segs: &[Seg], last: Option<(usize, bool, bool)>, si: usize, first:
     }
     let (p, s) = (segs.get(p)?, segs.get(si)?);
     let label = p_alone && p.bbox[2] - p.bbox[0] < SAME_LINE_GAP * p.h;
-    (same_line(p, s) && (!paragraph || label)).then_some(p)
+    (same_line(p, s) && (!paragraph || label) && p.barcode == s.barcode).then_some(p)
 }

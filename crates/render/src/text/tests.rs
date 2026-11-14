@@ -3025,6 +3025,26 @@ fn a_point_beside_a_barcode_takes_the_text_not_the_code_row() {
     assert!(!picked.iter().any(|&i| is_code(i)), "{:?}", t.column_text(&picked));
 }
 
+/// A short word on the baseline of a barcode's first row, a label's width to its left, stays a
+/// line of its own: the code row does not go on the word's line, and the code keeps all its rows.
+#[test]
+fn a_word_on_a_barcode_rows_baseline_does_not_take_the_row() {
+    let mut v = Vec::new();
+    for (k, c) in "Seal".chars().enumerate() {
+        let x = 10.0 + k as f32 * 4.0;
+        v.push(em_box(&c.to_string(), x, 100.0, x + 4.0, 106.0));
+    }
+    for row in 0..4 {
+        let y = 100.0 + row as f32 * 6.0;
+        for k in 0..12 {
+            let c = char::from(b'A' + ((row * 5 + k) % 26) as u8);
+            let x = 50.0 + k as f32 * 4.0;
+            v.push(em_box(&c.to_string(), x, y, x + 4.0, y + 6.0));
+        }
+    }
+    assert_eq!(layout(v).plain_text(), "Seal\nABCDEFGHIJKL\nFGHIJKLMNOPQ\nKLMNOPQRSTUV\nPQRSTUVWXYZA");
+}
+
 /// A rectangle that misses every glyph, or is not a number, selects nothing.
 #[test]
 fn an_empty_or_degenerate_column_selection_is_empty() {
