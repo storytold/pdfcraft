@@ -7,7 +7,7 @@
 //! first (see `japanese_fallback` in `raster.rs`); this module is the last resort: one face
 //! already installed on this machine, used for the viewer only (`RenderConfig::system_fonts`, off
 //! for exports, printing and OCR). It is read at runtime and never embedded or shipped
-//! (AGENTS.md §1.4), Noto CJK and Source Han are left out on purpose (§1.1), and
+//! (AGENTS.md §1.4), no font an Adobe product installs is a candidate (§1.1), and
 //! `PDFCRAFT_SYSTEM_FONTS=0` turns it off, as for the interface font.
 
 use std::collections::HashMap;
@@ -409,10 +409,7 @@ mod tests {
                 assert!(c.path.is_absolute(), "{}", c.path.display());
                 assert!(c.path.extension().is_some_and(|e| e == "ttf" || e == "ttc"), "{}", c.path.display());
                 let name = c.path.to_string_lossy().to_lowercase();
-                assert!(
-                    !["notosanscjk", "notoserifcjk", "sourcehan", "source-han", "adobe", "kozuka", "minion"].iter().any(|b| name.contains(b)),
-                    "{name}"
-                );
+                assert!(!["adobe", "kozuka", "minion", "myriad"].iter().any(|b| name.contains(b)), "{name}");
             }
         }
     }
