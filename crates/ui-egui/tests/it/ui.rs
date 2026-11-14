@@ -2144,6 +2144,9 @@ fn home_recent_context_menu_reveals_the_target_without_opening_or_removing_it() 
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1600.0)).build_eframe(move |_| {
         let mut app = PdfCraftApp::new();
         app.set_option("language", "en").unwrap();
+        // The existence check runs on a worker otherwise, which can lose the race with the
+        // fixed frame count below on a busy runner.
+        app.run_inline = true;
         for (name, path) in [("first.pdf", ".".to_owned()), ("target.pdf", target)] {
             app.recent.push(pdfcraft_ui_egui::RecentFile { name: name.into(), path, pages: 1, size: 0 });
         }
