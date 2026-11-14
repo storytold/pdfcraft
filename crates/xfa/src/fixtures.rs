@@ -66,6 +66,44 @@ pub fn template(rows: usize) -> String {
     t
 }
 
+/// A check box `more`, `before`, an 8in block, the hidden section `details` (two fields 3in
+/// tall) and `after`, on letter pages: shown, the section needs another page. With
+/// `calculated`, a hidden field's calculate script shows or hides the section as `more` says
+/// (so a reset does too); otherwise the check box's change script does. `exit` is the check
+/// box's exit script, if not empty.
+pub fn presence_growth_template(calculated: bool, before: &str, after: &str, exit: &str) -> String {
+    let js = |activity: &str, body: &str| {
+        format!(r#"<event activity="{activity}"><script contentType="application/x-javascript">{body}</script></event>"#)
+    };
+    let (change, sync) = if calculated {
+        let script = r#"details.presence = (more.rawValue == 1) ? "visible" : "hidden"; "";"#;
+        let sync = format!(
+            r#"<field name="sync" w="1in" h="0.2in" presence="hidden"><ui><textEdit/></ui><calculate><script contentType="application/x-javascript">{script}</script></calculate></field>"#
+        );
+        (String::new(), sync)
+    } else {
+        (js("change", r#"details.presence = (this.rawValue == 1) ? "visible" : "hidden";"#), String::new())
+    };
+    let exit = if exit.is_empty() { String::new() } else { js("exit", exit) };
+    format!(
+        r#"<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/"><subform name="form" layout="tb">
+ <pageSet><pageArea name="master"><occur max="-1"/><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <subform name="page1" layout="tb">
+  <field name="more" w="3in" h="0.3in"><ui><checkButton/></ui><items><integer>1</integer><integer>0</integer></items>{change}{exit}</field>
+  {sync}{before}
+  <draw name="filler" w="7.5in" h="8in"><value><text>Filler</text></value></draw>
+  <subform name="details" layout="tb" presence="hidden">
+   <field name="d1" w="6in" h="3in"><ui><textEdit/></ui></field>
+   <field name="d2" w="6in" h="3in"><ui><textEdit/></ui></field>
+  </subform>
+  {after}
+ </subform>
+</subform></template>
+</xdp:xdp>"#
+    )
+}
+
 /// A growable rich-text field followed by a section that starts on a new page.
 pub fn growable_text_template(scripted: bool) -> String {
     let event = if scripted { r#"<event activity="initialize"><script contentType="application/x-javascript">0;</script></event>"# } else { "" };
