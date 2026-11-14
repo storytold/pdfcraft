@@ -8,9 +8,10 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use pdfcraft_js::xfa::{XfaDoc, XfaEffect, XfaEvent, XfaKind, XfaNode, XfaProp, XfaProps};
+use pdfcraft_js::xfa::{UnkeptSoms, XfaDoc, XfaEffect, XfaEvent, XfaKind, XfaNode, XfaProp, XfaProps};
 use pdfcraft_js::xfa_session::{Script, XfaSession};
 use pdfcraft_xfa::model::{Prop, Props, Template};
+use pdfcraft_xfa::validation_rules as rules;
 use pdfcraft_xfa::{FormNode, LiveForm, NodeKind, ScriptEvent};
 
 use crate::js::JsOutput;
@@ -97,11 +98,13 @@ pub(crate) struct Changes {
     pub values: usize,
     pub rows: usize,
     pub visibility: usize,
+    /// Properties scripts set (colours, borders, fonts, tooltips, validations).
+    pub properties: usize,
 }
 
 impl Changes {
     pub fn is_empty(&self) -> bool {
-        self.values == 0 && self.rows == 0 && self.visibility == 0
+        self.values == 0 && self.rows == 0 && self.visibility == 0 && self.properties == 0
     }
 
     /// "3 values, 1 row" — what changed, for a note.
@@ -116,6 +119,9 @@ impl Changes {
         }
         if self.visibility > 0 {
             parts.push(n(self.visibility, "shown, hidden or locked object", "shown, hidden or locked objects"));
+        }
+        if self.properties > 0 {
+            parts.push(n(self.properties, "changed property", "changed properties"));
         }
         parts.join(", ")
     }
@@ -185,6 +191,11 @@ fn convert_props(p: &Props) -> XfaProps {
 fn to_js(n: &FormNode, tpl: &Template) -> XfaNode {
     fn trees<'a>(n: &'a FormNode, out: &mut HashMap<usize, &'a Arc<Props>>, depth: usize) {
         out.entry(Arc::as_ptr(&n.props) as usize).or_insert(&n.props);
+        // The template's tree too, for instances an instance manager adds (see
+        // `XfaNode::template_props`), when the form keeps changes for this one.
+        if !Arc::ptr_eq(&n.props, &n.template_props) {
+            out.entry(Arc::as_ptr(&n.template_props) as usize).or_insert(&n.template_props);
+        }
         if depth <= 256 {
             n.children.iter().for_each(|c| trees(c, out, depth + 1));
         }
@@ -225,6 +236,7 @@ fn to_js(n: &FormNode, tpl: &Template) -> XfaNode {
 }
 
 fn to_js_with(n: &FormNode, copies: &HashMap<usize, Arc<XfaProps>>, depth: usize) -> XfaNode {
+    let copy = |p: &Arc<Props>| copies.get(&(Arc::as_ptr(p) as usize)).cloned().unwrap_or_else(|| Arc::new(convert_props(p)));
     XfaNode {
         name: n.name.clone(),
         som: n.som.clone(),
@@ -244,8 +256,24 @@ fn to_js_with(n: &FormNode, copies: &HashMap<usize, Arc<XfaProps>>, depth: usize
         occur_max: n.occur_max,
         index: n.index,
         children: if depth > 256 { Vec::new() } else { n.children.iter().map(|c| to_js_with(c, copies, depth + 1)).collect() },
-        props: copies.get(&(Arc::as_ptr(&n.props) as usize)).cloned().unwrap_or_else(|| Arc::new(convert_props(&n.props))),
+        props: copy(&n.props),
+        template_props: (!Arc::ptr_eq(&n.props, &n.template_props)).then(|| copy(&n.template_props)),
         formatted: n.display_picture.as_deref().and_then(|p| pdfcraft_xfa::formatted_value(p, &n.value)),
+        changed: Arc::from([]),
+    }
+}
+
+/// Give each node of the snapshot `n` the keys of the property changes `ov` keeps for it
+/// ([`XfaNode::changed`]), so the script engine leaves out a write the form would refuse.
+fn mark_changed(n: &mut XfaNode, ov: &pdfcraft_xfa::Overrides, depth: usize) {
+    if ov.props().is_empty() {
+        return;
+    }
+    if let Some(sets) = ov.props().get(&n.som) {
+        n.changed = sets.keys().cloned().collect();
+    }
+    if depth <= 256 {
+        n.children.iter_mut().for_each(|c| mark_changed(c, ov, depth + 1));
     }
 }
 
@@ -313,9 +341,30 @@ fn has_node(n: &FormNode, som: &str, depth: usize) -> bool {
     depth <= 64 && (n.som == som || n.children.iter().any(|c| has_node(c, som, depth + 1)))
 }
 
-fn count_instances(root: &FormNode, parent_som: &str, name: &str) -> usize {
+/// One past the highest number a live object named `name` has in the container at
+/// `parent_som` (0 with none): how many data nodes of that name hold everything shown, an
+/// instance taking the data node of its number. The container's content includes what its
+/// unnamed subforms and areas hold: they are live nodes with the container's own path (XFA
+/// 3.3, "Transparent Nodes", p. 94), and the rows inside one are the container's rows.
+fn end_number(root: &FormNode, parent_som: &str, name: &str) -> usize {
+    fn walk(p: &FormNode, name: &str, depth: usize, end: &mut usize) {
+        if depth > 64 {
+            return;
+        }
+        for c in &p.children {
+            if c.name == name {
+                *end = (*end).max(c.index.saturating_add(1));
+            } else if c.som == p.som && matches!(c.kind, Some(NodeKind::Subform | NodeKind::Area)) {
+                walk(c, name, depth + 1, end);
+            }
+        }
+    }
     let parent = if parent_som.is_empty() { Some(root) } else { find_container(root, parent_som, 0) };
-    parent.map_or(0, |p| p.children.iter().filter(|c| c.name == name).count())
+    let mut end = 0;
+    if let Some(p) = parent {
+        walk(p, name, 0, &mut end);
+    }
+    end
 }
 
 /// An instance SOM (`…table[0].row[2]`) split into its parent's data path (areas left out,
@@ -469,6 +518,12 @@ struct Runner<'a, 'b> {
     data: Option<pdfcraft_xfa::DataNode>,
     ov: pdfcraft_xfa::Overrides,
     ov_dirty: bool,
+    /// Scripts changed properties since the form was last laid out: it is laid out once more
+    /// when the event ends (properties change how the form looks, which later scripts don't
+    /// read, so one layout serves every change of the event).
+    restyle_pending: bool,
+    /// A property change was refused because the form holds as many as it may (noted once).
+    props_full: bool,
     pending: Vec<pdfcraft_xfa::DataOp>,
     /// Field values to write, by name (the last wins).
     field_changes: std::collections::BTreeMap<String, Vec<String>>,
@@ -483,6 +538,12 @@ struct Runner<'a, 'b> {
     /// `cached` as the scripts get it, made once and sent to each script until the live form
     /// changes in any way (a value too): the script engine reuses what it built from it.
     js_root: Option<Arc<XfaNode>>,
+    /// Property changes made since `js_root` was built, handed to each later script with it, so
+    /// a write needs no new copy of the form (at most [`MAX_PENDING_PROPS`], holding at most
+    /// [`MAX_PENDING_PROP_BYTES`]; past either the copy is made again).
+    pending_props: Vec<pdfcraft_js::xfa::XfaPropSet>,
+    /// The bytes `pending_props` holds (the path, property and value of each).
+    pending_bytes: usize,
     /// The script engine for this event: one thread for all its scripts, each run in a fresh
     /// context on the form as it is then (`cached`, kept up to date in place for values and
     /// rebuilt when the structure changed).
@@ -501,7 +562,7 @@ impl<'a, 'b> Runner<'a, 'b> {
     /// A runner for one event on `doc` and its template, its scripts sharing `budget_ms`.
     fn new(doc: &'a mut pdfcraft_cos::Document, tpl: &'a Template, run: &'a mut XfaRun<'b>, budget_ms: u64) -> Self {
         let data = pdfcraft_xfa::data_of(doc);
-        let ov = pdfcraft_xfa::overrides(doc);
+        let ov = pdfcraft_xfa::overrides_of(doc, tpl);
         let budget_ms = budget_ms.saturating_mul(u64::from(run.time_scale));
         Runner {
             doc,
@@ -519,6 +580,8 @@ impl<'a, 'b> Runner<'a, 'b> {
             data,
             ov,
             ov_dirty: false,
+            restyle_pending: false,
+            props_full: false,
             pending: Vec::new(),
             field_changes: Default::default(),
             by_som: None,
@@ -528,6 +591,8 @@ impl<'a, 'b> Runner<'a, 'b> {
             fields: None,
             cached: None,
             js_root: None,
+            pending_props: Vec::new(),
+            pending_bytes: 0,
             session: None,
             changes: Changes::default(),
             numbered: HashSet::new(),
@@ -542,11 +607,38 @@ impl<'a, 'b> Runner<'a, 'b> {
         self.js_root = None;
     }
 
-    /// The script engine for this event.
+    /// A property change for the scripts that follow in this event: with the copy of the form
+    /// they are given, rather than in a new copy of it, up to [`MAX_PENDING_PROPS`] changes
+    /// and [`MAX_PENDING_PROP_BYTES`] of them.
+    fn pend_prop(&mut self, som: &str, path: &str, attr: Option<&str>, value: &str, copied: bool) {
+        if self.js_root.is_none() {
+            return;
+        }
+        let bytes = [som.len(), path.len(), attr.map_or(0, str::len), value.len()].into_iter().fold(self.pending_bytes, usize::saturating_add);
+        if self.pending_props.len() >= MAX_PENDING_PROPS || bytes > MAX_PENDING_PROP_BYTES {
+            self.js_root = None;
+            return;
+        }
+        self.pending_bytes = bytes;
+        self.pending_props.push(pdfcraft_js::xfa::XfaPropSet {
+            som: som.to_string(),
+            path: path.to_string(),
+            attr: attr.map(str::to_string),
+            value: value.to_string(),
+            copied,
+        });
+    }
+
+    /// The script engine for this event. Its scripts ask the template which SOM paths name an
+    /// object it makes once, as [`Runner::set_property`] does, so a script's property write to
+    /// any other object is refused there before it is read back.
     fn session(&mut self) -> &mut XfaSession {
-        let doc_info = XfaDoc { file_name: String::new(), page: 0, page_count: self.run.page_count, highlight: self.run.highlight };
-        let scale = self.run.time_scale;
-        self.session.get_or_insert_with(|| XfaSession::new(doc_info).with_time_scale(scale))
+        let (page_count, highlight, scale, tpl) = (self.run.page_count, self.run.highlight, self.run.time_scale, self.tpl);
+        self.session.get_or_insert_with(|| {
+            let paths = pdfcraft_xfa::SomPaths::of(tpl);
+            let unkept = UnkeptSoms::new(move |som| !paths.made_once(som));
+            XfaSession::new(XfaDoc { file_name: String::new(), page: 0, page_count, highlight, unkept }).with_time_scale(scale)
+        })
     }
 
     /// Give the object at `som` the value `text` in the data and in the live form (refreshed
@@ -571,6 +663,8 @@ impl<'a, 'b> Runner<'a, 'b> {
         if self.cached.is_none() {
             let uses = pdfcraft_xfa::page_area_uses(self.doc, self.tpl);
             let live = pdfcraft_xfa::form_tree_paged(self.tpl, self.data.as_ref(), &self.ov, &uses);
+            #[cfg(test)]
+            counts::bump(&counts::TREES);
             if live.truncated && !self.truncated_warned {
                 self.truncated_warned = true;
                 self.error(format!(
@@ -761,8 +855,11 @@ impl<'a, 'b> Runner<'a, 'b> {
             return Ok(());
         }
         self.relayouts += 1;
+        self.restyle_pending = false;
         self.flush()?;
         self.embedded_changed = false;
+        #[cfg(test)]
+        counts::bump(&counts::LAYOUTS);
         let report = pdfcraft_xfa::rerender(self.doc, self.tpl).map_err(|e| e.to_string())?;
         self.console(report.warnings);
         crate::xfa_redraw(self.doc)?;
@@ -859,10 +956,94 @@ impl<'a, 'b> Runner<'a, 'b> {
         }
     }
 
+    /// A property of the object at `som` set by a script of `ev`: kept in the overrides (and so
+    /// in the file, and in the undo step), the live form refreshed for the next script, and
+    /// the form laid out again when the event ends. A value the property can't take (a colour
+    /// that isn't one, a measurement that doesn't read) is refused with a console note, and the
+    /// property keeps what it had, as it does on an object that keeps as many changes as one may;
+    /// past the form's limit on changes, one message says so. The script that made a change the
+    /// form doesn't keep reads its own value until it ends; the next script reads the form's.
+    fn set_property(&mut self, ev: &ScriptEvent, som: &str, path: &str, attr: Option<&str>, value: &str, copied: bool) {
+        // The form keeps a change only for an object its template makes once. Inside a subform
+        // that may repeat, or on a page area, a path names another object once a row or a page
+        // goes, and several objects may have one SOM path (unnamed fields of one container,
+        // say): none is kept there, as the scripting host refuses it too.
+        if !pdfcraft_xfa::som_made_once(self.tpl, som) {
+            if !copied {
+                let what = attr.map_or_else(|| path.to_string(), |a| format!("{path} {a}"));
+                self.console([format!(
+                    "{} ({}): {som}: {what} not set: the form keeps property changes only for objects its template makes once (not inside a \
+                     subform that may repeat or a page area, and not at a SOM path several objects have)",
+                    ev.som, ev.activity
+                )]);
+            }
+            return;
+        }
+        let kept = if copied { self.ov.set_prop_copy(som, path, attr, value) } else { self.ov.set_prop(som, path, attr, value) };
+        match kept {
+            Ok(false) => {}
+            // A value the host copied from a drawn edge is no change of the script's: not counted,
+            // and one the form can't take (the template's own odd value) is left out quietly.
+            Err(pdfcraft_xfa::PropRefused::Invalid(_)) if copied => {}
+            Ok(true) => {
+                self.ov_dirty = true;
+                // Metadata, named values and screen-reader text are kept for scripts; the
+                // pages don't show them, so they need no layout.
+                self.restyle_pending |= pdfcraft_xfa::restyle::draws(path);
+                if !copied {
+                    self.changes.properties += 1;
+                }
+                // A validation script turned off changes the events, and a field's items,
+                // pictures or value element change the value scripts read (a radio button's on
+                // value): the tree is rebuilt for those.
+                let structural = (path.starts_with("validate#") && attr == Some("scriptTest")) || pdfcraft_xfa::restyle::changes_live_value(path);
+                // A later script in this event reads the change with the copy of the form it is
+                // given, which needs no copying again.
+                self.pend_prop(som, path, attr, value, copied);
+                let refreshed = !structural
+                    && match self.cached.as_mut() {
+                        Some(live) => pdfcraft_xfa::refresh_props(&mut live.root, &self.ov, som),
+                        None => true,
+                    };
+                if !refreshed {
+                    self.invalidate();
+                }
+            }
+            Err(pdfcraft_xfa::PropRefused::Invalid(why)) => {
+                let what = attr.map_or_else(|| path.to_string(), |a| format!("{path} {a}"));
+                self.console([format!("{} ({}): {som}: {what} not set: {why}", ev.som, ev.activity)]);
+            }
+            // One object has no room: named like a value it can't take, as other objects still
+            // take changes (a copy the host made for the write is the write's, which says so).
+            Err(pdfcraft_xfa::PropRefused::ObjectFull) => {
+                if !copied {
+                    let what = attr.map_or_else(|| path.to_string(), |a| format!("{path} {a}"));
+                    self.console([format!(
+                        "{} ({}): {som}: {what} not set: the object already keeps {} property changes",
+                        ev.som,
+                        ev.activity,
+                        pdfcraft_xfa::restyle::MAX_PROP_CHANGES_PER_OBJECT
+                    )]);
+                }
+            }
+            Err(pdfcraft_xfa::PropRefused::Full) => {
+                if !self.props_full {
+                    self.props_full = true;
+                    self.error(format!(
+                        "The form's scripts changed more properties than a form keeps ({} changes, {} KiB of them); later changes are left out",
+                        pdfcraft_xfa::restyle::MAX_PROP_OVERRIDES,
+                        pdfcraft_xfa::restyle::MAX_PROP_OVERRIDE_BYTES / 1024
+                    ));
+                }
+            }
+        }
+    }
+
     /// Apply what a script of `ev` did. Returns whether the form has to be laid out again.
     fn apply_effects(&mut self, ev: &ScriptEvent, effects: &[XfaEffect]) -> Result<bool, String> {
         let mut relayout = false;
-        // Instances of each repeating subform before the script ran, as the effects leave them.
+        // One past the last number of each repeating subform's instances before the script ran,
+        // as the effects leave it.
         let mut counts: HashMap<(String, String), usize> = HashMap::new();
         {
             // A copy of the shared reference: `live()` borrows `self` mutably.
@@ -872,7 +1053,7 @@ impl<'a, 'b> Runner<'a, 'b> {
                 if let XfaEffect::AddInstance { som } | XfaEffect::RemoveInstance { som } = e
                     && let Some((_, parent_som, name, _)) = split_instance(tpl, som)
                 {
-                    let have = count_instances(&live.root, &parent_som, &name);
+                    let have = end_number(&live.root, &parent_som, &name);
                     counts.entry((parent_som, name)).or_insert(have);
                 }
             }
@@ -911,6 +1092,7 @@ impl<'a, 'b> Runner<'a, 'b> {
                         relayout = true;
                     }
                 }
+                XfaEffect::SetProperty { som, path, attr, value, copied } => self.set_property(ev, som, path, attr.as_deref(), value, *copied),
                 XfaEffect::AddInstance { som } | XfaEffect::RemoveInstance { som } => {
                     let Some((parent, parent_som, name, index)) = split_instance(self.tpl, som) else { continue };
                     let key = (parent_som, name.clone());
@@ -991,7 +1173,13 @@ impl<'a, 'b> Runner<'a, 'b> {
         let root = match &self.js_root {
             Some(r) => Arc::clone(r),
             None => {
-                let r = Arc::new(to_js(&self.live().root, tpl));
+                self.pending_props.clear();
+                self.pending_bytes = 0;
+                #[cfg(test)]
+                counts::bump(&counts::SNAPSHOTS);
+                let mut r = to_js(&self.live().root, tpl);
+                mark_changed(&mut r, &self.ov, 0);
+                let r = Arc::new(r);
                 self.js_root = Some(Arc::clone(&r));
                 r
             }
@@ -1003,6 +1191,7 @@ impl<'a, 'b> Runner<'a, 'b> {
             root,
             limits: limits_for(&ev.activity),
             timeout: timeout_for(&ev.activity).saturating_mul(self.run.time_scale),
+            props: self.pending_props.clone(),
         };
         let o = self.session().run(script);
         if o.abandoned {
@@ -1036,6 +1225,10 @@ impl<'a, 'b> Runner<'a, 'b> {
     fn calculates(&mut self) -> Result<(), String> {
         let events: Vec<ScriptEvent> = self.live().events.iter().filter(|e| e.activity == "calculate").cloned().collect();
         for ev in &events {
+            // A field whose value is marked an override (`value@override`) keeps its value.
+            if pdfcraft_xfa::value_overridden(self.tpl, &self.ov, &ev.som) {
+                continue;
+            }
             let Some(o) = self.run(ev, "")? else { continue };
             if o.error.is_some() || o.effects.iter().any(|e| matches!(e, XfaEffect::SetValue { som, .. } if *som == ev.som)) {
                 continue;
@@ -1056,7 +1249,7 @@ impl<'a, 'b> Runner<'a, 'b> {
     fn finish(mut self) -> Result<Changes, String> {
         #[cfg(test)]
         self.check_live();
-        if self.relayouts_skipped || self.relayout_owed || self.embedded_changed {
+        if self.relayouts_skipped || self.relayout_owed || self.embedded_changed || self.restyle_pending {
             self.relayouts = 0;
             self.relayouts_skipped = false;
             self.relayout_owed = false;
@@ -1236,6 +1429,38 @@ fn value_unchanged(doc: &pdfcraft_cos::Document, f: &pdfcraft_forms::Field, v: O
 /// say); a viewer runs it after every layout. Every layout:ready script runs, but a field that
 /// numbers pages keeps the number the layout gave each page: the value a script writes to it is
 /// dropped (one value would put the same number on every page).
+/// Work an event does, counted for tests: the live form built, the copies of it made for the
+/// scripts, the layouts. Timing-independent, so tests can say the work doesn't grow with the
+/// number of writes.
+#[cfg(test)]
+pub(crate) mod counts {
+    use std::cell::Cell;
+    thread_local! {
+        pub(crate) static TREES: Cell<usize> = const { Cell::new(0) };
+        pub(crate) static SNAPSHOTS: Cell<usize> = const { Cell::new(0) };
+        pub(crate) static LAYOUTS: Cell<usize> = const { Cell::new(0) };
+    }
+    pub(crate) fn bump(c: &'static std::thread::LocalKey<Cell<usize>>) {
+        c.with(|c| c.set(c.get().saturating_add(1)));
+    }
+    /// (trees, snapshots, layouts) since the last call, and start again.
+    pub(crate) fn take() -> (usize, usize, usize) {
+        (TREES.with(|c| c.replace(0)), SNAPSHOTS.with(|c| c.replace(0)), LAYOUTS.with(|c| c.replace(0)))
+    }
+}
+
+/// Most property changes handed to a script with the copy of the form it is given; past them
+/// the copy is made again. A script's start copies the form once and goes through these once,
+/// so this keeps a start's work within a copy's.
+const MAX_PENDING_PROPS: usize = 4_096;
+
+/// Most bytes those changes hold (path, property and value): every script's start copies them,
+/// and one value may be thousands of characters (a message, a tool tip), so their number alone
+/// does not bound a start's work. The changes forms make are short (a colour, a presence: some
+/// 100 bytes with the path), so [`MAX_PENDING_PROPS`] of them stay under half of this; past it
+/// the copy of the form is made again, which is what the script would cost without this list.
+const MAX_PENDING_PROP_BYTES: usize = 1 << 20;
+
 pub(crate) fn on_open(doc: &mut pdfcraft_cos::Document, tpl: &Template, run: &mut XfaRun) -> Result<Changes, String> {
     let mut r = Runner::new(doc, tpl, run, OPEN_BUDGET_MS);
     // The scripts read the live form (template, data and overrides), not the pages, so the
@@ -1267,10 +1492,11 @@ pub(crate) fn on_open(doc: &mut pdfcraft_cos::Document, tpl: &Template, run: &mu
     r.finish()
 }
 
-/// After fields `names` took new values: each one's change, exit and validate scripts, then
-/// the calculations once (or only those, after a reset). A validate script that answers false,
-/// or fails, shows its message; the value stays, as Acrobat marks the field invalid rather
-/// than reverting it. The SOM paths whose exit scripts ran go into `exited`.
+/// After fields `names` took new values: each one's change and exit scripts, its format test
+/// and validate scripts, then the calculations once (or only those, after a reset). A format
+/// test the value fails, and a validate script that answers false or fails, show their
+/// message; the value stays, as Acrobat marks the field invalid rather than reverting it. The
+/// SOM paths whose exit scripts ran go into `exited`.
 pub(crate) fn on_changes(
     doc: &mut pdfcraft_cos::Document,
     tpl: &Template,
@@ -1298,10 +1524,26 @@ pub(crate) fn on_changes(
         if ran_exit {
             exited.push(som.clone());
         }
+        // The format test, then the script test (XFA 3.3 p. 382), when the user leaves the
+        // field (p. 396); the value stays as typed. The field as its change and exit scripts
+        // left it: one may have set the test, its picture or its message.
+        let value = r.fields().get(name).map(|f| f.value.join("\n")).unwrap_or_default();
+        let field = pdfcraft_xfa::field_now(r.tpl, &r.ov, &som);
+        let format_failed = field.as_ref().filter(|f| rules::format_fails(f.format_test, f.format_picture.as_deref(), &value));
+        if let Some(f) = format_failed {
+            r.alert(crate::js::Message::plain(rules::format_message(f.format_message.as_deref(), name)));
+        }
+        let skip_script_message = format_failed.is_some_and(|f| rules::later_tests_skipped(f.format_test));
         for ev in r.events_of(&som, "validate") {
             let Some(o) = r.run(&ev, &value)? else { continue };
-            if (o.result_bool == Some(false) || o.error.is_some()) && !value.trim().is_empty() {
-                r.alert(crate::js::Message::plain(ev.message.clone().unwrap_or_else(|| format!("{name}: the value is not valid"))));
+            if (o.result_bool == Some(false) || o.error.is_some()) && !value.trim().is_empty() && !skip_script_message {
+                // The script test's message as those scripts left it too: the live form's events
+                // carry the one it was built with, which a message change alone doesn't rebuild.
+                let message = match &field {
+                    Some(f) => f.validate_message.clone(),
+                    None => ev.message.clone(),
+                };
+                r.alert(crate::js::Message::plain(message.unwrap_or_else(|| format!("{name}: the value is not valid"))));
             }
         }
     }
@@ -1397,7 +1639,7 @@ pub(crate) fn widget_som(doc: &pdfcraft_cos::Document, field: &pdfcraft_forms::F
 pub(crate) fn has_event(doc: &pdfcraft_cos::Document, tpl: &Template, som: &str, activity: &str) -> bool {
     // Page-master copies have a SOM path of their own on each page (`master[1]…`).
     let uses = pdfcraft_xfa::page_area_uses(doc, tpl);
-    let live = pdfcraft_xfa::form_tree_paged(tpl, pdfcraft_xfa::data_of(doc).as_ref(), &pdfcraft_xfa::overrides(doc), &uses);
+    let live = pdfcraft_xfa::form_tree_paged(tpl, pdfcraft_xfa::data_of(doc).as_ref(), &pdfcraft_xfa::overrides_of(doc, tpl), &uses);
     live.events.iter().any(|e| e.som == som && e.activity == activity)
 }
 
@@ -1412,7 +1654,7 @@ pub(crate) fn scripted_som(doc: &pdfcraft_cos::Document, tpl: &Template, field: 
     let object = doc.get(field.obj);
     let som = object.as_dict()?.get(pdfcraft_xfa::SOM_KEY).map(|s| doc.resolve(s))?.as_string()?.to_text();
     let uses = pdfcraft_xfa::page_area_uses(doc, tpl);
-    let live = pdfcraft_xfa::form_tree_paged(tpl, pdfcraft_xfa::data_of(doc).as_ref(), &pdfcraft_xfa::overrides(doc), &uses);
+    let live = pdfcraft_xfa::form_tree_paged(tpl, pdfcraft_xfa::data_of(doc).as_ref(), &pdfcraft_xfa::overrides_of(doc, tpl), &uses);
     live.events.iter().any(|e| e.som == som && e.activity == activity).then_some(som)
 }
 
@@ -1489,9 +1731,11 @@ mod tests {
         assert!(started.elapsed() < std::time::Duration::from_secs(2), "took {:?}", started.elapsed());
     }
 
-    /// Verify that a shared layout name cannot cause a data-binding index to redirect pending focus.
+    /// A pending focus follows the removed instance by its SOM index. A subform that shares its
+    /// name with an area before it is numbered after the area, and is the instance its path
+    /// names: the area alone is no data scope, so the subform keeps its segment and number.
     #[test]
-    fn focus_shift_uses_the_som_index_when_data_binding_omits_the_segment() {
+    fn focus_shift_uses_the_som_index_of_a_subform_named_as_an_area() {
         let (tpl, _) = pdfcraft_xfa::parse(
             r#"<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
                 <subform name="form"><area name="row"/><subform name="row"><occur min="1" max="4"/></subform></subform>
@@ -1499,7 +1743,8 @@ mod tests {
         )
         .unwrap();
         let removed = "form[0].row[1]";
-        assert_eq!(split_instance(&tpl, removed).unwrap().3, 0);
+        let (_, parent, name, index) = split_instance(&tpl, removed).unwrap();
+        assert_eq!((parent.as_str(), name.as_str(), index), ("form[0]", "row", 1));
         let (prefix, index) = indexed_som_tail(removed).unwrap();
         for (before, after) in [
             ("form[0].row[0].amount[0]", Some("form[0].row[0].amount[0]")),
@@ -1584,9 +1829,11 @@ mod tests {
         assert!(copy.upgrade().is_none(), "closing the form drops its copies at once");
     }
 
-    /// A live form node whose property tree is told apart by an attribute.
+    /// A live form node whose property tree is told apart by an attribute; the template's own
+    /// (no changes kept for it), as `form_tree` gives such a node.
     fn marked(mark: &str) -> FormNode {
-        FormNode { props: Arc::new(Props { attrs: vec![("mark".into(), mark.into())], elements: Vec::new() }), ..Default::default() }
+        let props = Arc::new(Props { attrs: vec![("mark".into(), mark.into())], elements: Vec::new(), ..Default::default() });
+        FormNode { template_props: Arc::clone(&props), props, ..Default::default() }
     }
 
     /// The copy made of a tree is the one every later snapshot of the form gets, and the map
@@ -1632,8 +1879,8 @@ mod tests {
     fn an_entry_made_from_another_tree_is_not_returned() {
         let tpl = Template::default();
         let node = marked("this");
-        let other = Arc::new(Props { attrs: vec![("mark".into(), "other".into())], elements: Vec::new() });
-        let gone = Arc::new(Props { attrs: vec![("mark".into(), "gone".into())], elements: Vec::new() });
+        let other = Arc::new(Props { attrs: vec![("mark".into(), "other".into())], elements: Vec::new(), ..Default::default() });
+        let gone = Arc::new(Props { attrs: vec![("mark".into(), "gone".into())], elements: Vec::new(), ..Default::default() });
         let key = Arc::as_ptr(&node.props) as usize;
         let mut copies = PropsCopies::new();
         // Its tree is alive but elsewhere.
@@ -1666,9 +1913,571 @@ mod tests {
         assert_eq!(props_copies(&tpl).map_or(0, |c| c.len()), own);
     }
 
+    /// The decoded content of every page of `bytes`, as text.
+    fn page_ops(bytes: &[u8]) -> String {
+        let doc = pdfcraft_cos::Document::open(Arc::new(bytes.to_vec())).unwrap();
+        let mut out = String::new();
+        for r in pdfcraft_annot::page_refs(&doc).unwrap() {
+            let page = doc.get(r);
+            let Some(contents) = page.as_dict().and_then(|d| d.get(b"Contents")).cloned() else { continue };
+            for c in pdfcraft_cos::DecodeBudget::page().decode_contents(&doc, &contents).into_iter().flatten() {
+                out.push_str(&String::from_utf8_lossy(&c));
+            }
+        }
+        out
+    }
+
+    /// The scripted test form with the `hello` button's click script set to `click`, and the
+    /// `legacy` button's (FormCalc) to `legacy`.
+    fn with_scripts(click: &str, legacy: &str) -> Vec<u8> {
+        let template = pdfcraft_xfa::fixtures::scripted_template()
+            .replace(r#"xfa.host.messageBox("Hello " + qty.rawValue);"#, click)
+            .replace(r#"$host.messageBox("FormCalc")"#, legacy);
+        pdfcraft_xfa::fixtures::shell(&template)
+    }
+
+    /// The colour a click script gives a field's fill, as page content (0.2 0.4 0.6 is
+    /// 51,102,153).
+    const FILL: &str = "0.2 0.4 0.6 rg";
+
+    /// A click script's property changes take effect: the field it fills is drawn filled, the
+    /// field it makes mandatory is Required, a tooltip is set; a later event's script reads them
+    /// back; a colour that isn't one is refused with a note. Undo takes the whole event back,
+    /// redo brings it again, and the saved file keeps it.
+    #[test]
+    fn property_changes_from_a_click_take_effect_and_are_kept() {
+        let bytes = with_scripts(
+            r#"qty.border.fill.color.value = "51,102,153"; qty.mandatory = "error"; price.assist.toolTip.value = "Unit price"; price.fontColor = "blue";"#,
+            r#"$host.messageBox(concat(qty.border.fill.color.value, "|", qty.mandatory, "|", price.assist.toolTip.value))"#,
+        );
+        let mut s = crate::Session::new();
+        let id = s.open("props.pdf", None, Arc::new(bytes), None).unwrap();
+        let _ = s.take_js_output(id);
+        let state = |s: &crate::Session| {
+            let d = s.get(id).unwrap();
+            let field = |n: &str| d.form.iter().find(|f| f.name.ends_with(n)).cloned().unwrap();
+            (
+                page_ops(&d.bytes).contains(FILL),
+                field("qty").has(pdfcraft_forms::flags::REQUIRED),
+                field("price").tooltip.clone(),
+                pdfcraft_xfa::overrides(&pdfcraft_cos::Document::open(d.bytes.clone()).unwrap()).props().len(),
+            )
+        };
+        let before = state(&s);
+        assert_eq!(before, (false, false, None, 0));
+        let out = s.run_javascript(id, "", Some("hello")).unwrap();
+        assert!(out.error.is_none(), "{out:?}");
+        let after = state(&s);
+        assert_eq!(after, (true, true, Some("Unit price".to_string()), 2));
+        assert!(out.console.iter().any(|l| l.contains("\"blue\" is not a colour")), "{out:?}");
+        // One undo step.
+        s.undo(id).unwrap();
+        assert_eq!(state(&s), before);
+        s.redo(id).unwrap();
+        assert_eq!(state(&s), after);
+        // Read back by a later event's script, in FormCalc.
+        let out = s.run_javascript(id, "", Some("legacy")).unwrap();
+        assert_eq!(out.alerts, [pdfcraft_js::Message::plain("51,102,153|error|Unit price")]);
+        // Saved and opened again.
+        let saved = s.save_bytes(id).unwrap();
+        let mut again = crate::Session::new();
+        let reopened = again.open("saved.pdf", None, saved, None).unwrap();
+        let d = again.get(reopened).unwrap();
+        assert!(page_ops(&d.bytes).contains(FILL));
+        assert!(d.form.iter().find(|f| f.name.ends_with("qty")).unwrap().has(pdfcraft_forms::flags::REQUIRED));
+        let out = again.run_javascript(reopened, "", Some("legacy")).unwrap();
+        assert_eq!(out.alerts, [pdfcraft_js::Message::plain("51,102,153|error|Unit price")]);
+    }
+
+    /// Scripts that colour fields when the form opens (as Ontario's forms do in FormCalc,
+    /// `$.font.fill.color.value = "0,0,255"`, on hundreds of fields) lay the form out once, and
+    /// the note opening leaves counts the changes.
+    #[test]
+    fn opening_scripts_that_change_properties_take_effect() {
+        let template = pdfcraft_xfa::fixtures::scripted_template().replace(
+            r#"<field name="price" w="2in" h="0.3in"><ui><numericEdit/></ui>"#,
+            r#"<field name="price" w="2in" h="0.3in"><ui><numericEdit/></ui><event activity="initialize"><script>$.border.fill.color.value = "51,102,153"</script></event>"#,
+        );
+        let bytes = pdfcraft_xfa::fixtures::shell(&template);
+        let mut doc = pdfcraft_cos::Document::open(Arc::new(bytes)).unwrap();
+        pdfcraft_xfa::render_into(&mut doc).unwrap();
+        assert!(!page_ops(&pdfcraft_cos::write_full(&doc, &Default::default()).unwrap()).contains(FILL));
+        let tpl = template_of_doc(&doc);
+        let mut out = JsOutput::default();
+        let mut run = XfaRun { page_count: 1, out: &mut out, datasets: None, ran_away: false, time_scale: 1, highlight: false };
+        let changes = on_open(&mut doc, &tpl, &mut run).unwrap();
+        assert_eq!(changes.properties, 1, "{changes:?}");
+        assert!(changes.describe().contains("1 changed property"));
+        assert!(page_ops(&pdfcraft_cos::write_full(&doc, &Default::default()).unwrap()).contains(FILL));
+    }
+
+    fn template_of_doc(doc: &pdfcraft_cos::Document) -> Template {
+        pdfcraft_xfa::template_of(doc).unwrap()
+    }
+
+    /// An unnamed subform shares its named parent's SOM path, and the form gives it no
+    /// property change of its own: a script's write to it is refused with a note, not kept (and
+    /// drawn, read back and saved) as the parent's.
+    #[test]
+    fn a_write_to_an_unnamed_subform_is_not_kept_as_its_parents() {
+        let template = pdfcraft_xfa::fixtures::scripted_template()
+            .replace(r#"<field name="hello""#, r#"<subform layout="tb"><field name="hello""#)
+            .replace(
+                r#"xfa.host.messageBox("Hello " + qty.rawValue);</script></event></field>"#,
+                r#"this.parent.fillColor = "51,102,153"; this.parent.border.edge.thickness = "2pt"; xfa.host.messageBox(this.parent.className + "|" + this.parent.fillColor + "|" + this.parent.parent.fillColor);</script></event></field></subform>"#,
+            );
+        let mut s = crate::Session::new();
+        let id = s.open("unnamed.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&template)), None).unwrap();
+        let _ = s.take_js_output(id);
+        let out = s.run_javascript(id, "", Some("hello")).unwrap();
+        assert!(out.error.is_none(), "{out:?}");
+        let d = s.get(id).unwrap();
+        let kept = pdfcraft_xfa::overrides(&pdfcraft_cos::Document::open(d.bytes.clone()).unwrap()).props().len();
+        assert_eq!(kept, 0, "nothing kept under the parent's path");
+        assert!(!page_ops(&d.bytes).contains(FILL), "the parent is not filled");
+        assert_eq!(out.console.iter().filter(|l| l.contains("its template makes once")).count(), 2, "{out:?}");
+        let [alert] = out.alerts.as_slice() else { panic!("{out:?}") };
+        assert!(alert.text.starts_with("subform|") && !alert.text.contains("51,102,153"), "{alert:?}");
+    }
+
+    /// An object numbered after a repeating subform of its name has the SOM path the subform's
+    /// next instance takes (`row[1]`, XFA 3.3 ch. 3, pp. 94-95), and the form keeps no property
+    /// change there, as it could not keep it for one of the two. A script asks the form the
+    /// same question before it writes, by the template and not by the objects there now: with
+    /// one row, where the object alone has the path, its write is still refused with a note and
+    /// read back as it was, rather than read back as set and then left out by the form.
+    #[test]
+    fn a_script_reads_back_no_change_at_a_path_the_next_row_would_share() {
+        const TAIL: &str = r#"<subform name="row" layout="row"><field name="item" h="0.3in"><ui><textEdit/></ui></field><field name="amount" h="0.3in"><ui><numericEdit/></ui></field><field name="unit" h="0.3in"><ui><textEdit/></ui></field></subform>"#;
+        const ROWS_END: &str = "</field>\n   </subform>\n  </subform>";
+        const LATER: &str = "form[0].page1[0].table[0].row[1]";
+        let template =
+            pdfcraft_xfa::fixtures::scripted_template().replace(ROWS_END, &format!("</field>\n   </subform>{TAIL}\n  </subform>")).replace(
+                r#"xfa.host.messageBox("Hello " + qty.rawValue);"#,
+                r#"var tail = xfa.resolveNode("table.row[1]"); var before = tail.border.edge.thickness + "/" + tail.item.font.size;
+tail.border.edge.thickness = "3pt"; tail.item.font.size = "20pt";
+xfa.host.messageBox(tail.unit.name + "|" + (tail.border.edge.thickness + "/" + tail.item.font.size === before));"#,
+            );
+        assert!(template.contains(TAIL) && template.contains("tail.item.font.size = "));
+        let mut s = crate::Session::new();
+        let id = s.open("tail.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&template)), None).unwrap();
+        let doc = pdfcraft_cos::Document::open(s.get(id).unwrap().bytes.clone()).unwrap();
+        let tpl = template_of_doc(&doc);
+        // One row and the object after it: each path has one object now, and the object's two
+        // are the next row's as well.
+        let soms: Vec<String> = pdfcraft_xfa::fields_by_som(&doc).into_keys().filter(|som| som.contains(".table[0].")).collect();
+        for som in ["row[0].item[0]", "row[0].amount[0]", "row[1].item[0]", "row[1].amount[0]", "row[1].unit[0]"] {
+            assert_eq!(soms.iter().filter(|s| s.ends_with(&format!(".table[0].{som}"))).count(), 1, "{som}: {soms:?}");
+        }
+        assert_eq!(soms.len(), 5, "{soms:?}");
+        assert!(pdfcraft_xfa::som_is_shared(&tpl, LATER) && pdfcraft_xfa::som_is_shared(&tpl, &format!("{LATER}.item[0]")));
+        assert!(!pdfcraft_xfa::som_is_shared(&tpl, "form[0].page1[0].table[0].row[0]"));
+        let _ = s.take_js_output(id);
+        let out = s.run_javascript(id, "", Some("hello")).unwrap();
+        assert!(out.error.is_none(), "{out:?}");
+        assert_eq!(out.alerts, [pdfcraft_js::Message::plain("unit|true")], "the object after the rows, read back as it was: {out:?}");
+        assert_eq!(out.console.iter().filter(|l| l.contains("its template makes once")).count(), 2, "{out:?}");
+        let kept = pdfcraft_xfa::overrides(&pdfcraft_cos::Document::open(s.get(id).unwrap().bytes.clone()).unwrap());
+        assert!(kept.props().is_empty(), "{:?}", kept.props());
+    }
+
+    /// Two `verified` subforms, each in an unnamed subform of one container (corpus form 052,
+    /// Ontario Works 0983), are `…tax[0].verified[0]` and `…tax[0].verified[1]`: same-named
+    /// objects are numbered through unnamed subforms (XFA 3.3 "Transparent Nodes", p. 95,
+    /// Example 3.12). Each check box's initialize script colours its own font, and the form
+    /// keeps each change at its own path. An unnamed check box in each instead is the one
+    /// `field[0]` of its `verified`, a path of its own too.
+    #[test]
+    fn named_objects_numbered_apart_by_xfa_keep_their_property_writes() {
+        let open = |name: &str| {
+            let box_ = format!(
+                r#"<field {name} w="1in" h="0.3in"><ui><checkButton/></ui><items><integer>1</integer><integer>0</integer></items><event activity="initialize"><script contentType="application/x-javascript">this.font.fill.color.value = "0,0,255";</script></event></field>"#
+            );
+            let one = format!(r#"<subform layout="tb"><subform name="verified" layout="tb">{box_}</subform></subform>"#);
+            let template = pdfcraft_xfa::fixtures::scripted_template()
+                .replace(r#"<field name="hello""#, &format!(r#"<subform name="tax" layout="tb">{one}{one}</subform><field name="hello""#));
+            let mut s = crate::Session::new();
+            let id = s.open("tax.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&template)), None).unwrap();
+            let out = s.take_js_output(id);
+            let kept = pdfcraft_xfa::overrides(&pdfcraft_cos::Document::open(s.get(id).unwrap().bytes.clone()).unwrap());
+            (kept, out)
+        };
+        for (name, last) in [(r#"name="yes""#, "yes[0]"), ("", "field[0]")] {
+            let (kept, out) = open(name);
+            assert_eq!(kept.props().len(), 2, "{name}: one change each: {:?}", kept.props());
+            for k in 0..2 {
+                let som = format!("form[0].page1[0].tax[0].verified[{k}].{last}");
+                let colour = kept.props().get(&som).and_then(|m| m.get("font#0/fill#0/color#0@value"));
+                assert_eq!(colour.map(String::as_str), Some("0,0,255"), "{som}: {kept:?}");
+            }
+            assert!(!out.console.iter().any(|l| l.contains("SOM path")), "{name}: {out:?}");
+        }
+    }
+
+    /// Unnamed fields of one container share their SOM path (`…field[0]`), which the form keeps
+    /// property changes by: a script's change to one of them would restyle, require and save
+    /// every one. It is refused with a note instead, by the scripting host and by the form, and
+    /// nothing is drawn or kept; named, the same two fields take the change on the one written
+    /// to. A change the file holds at such a path is not applied either.
+    #[test]
+    fn a_change_to_one_of_several_unnamed_fields_is_not_kept_for_all() {
+        let fields = |a: &str, b: &str| {
+            format!(
+                r#"<field {a} w="2in" h="0.3in"><ui><textEdit/></ui></field><field {b} w="2in" h="0.3in"><ui><textEdit/></ui><event activity="initialize"><script contentType="application/x-javascript">this.border.fill.color.value = "51,102,153"; this.mandatory = "error";</script></event></field><field name="hello""#
+            )
+        };
+        let open = |a: &str, b: &str| {
+            let template = pdfcraft_xfa::fixtures::scripted_template().replace(r#"<field name="hello""#, &fields(a, b));
+            let mut s = crate::Session::new();
+            let id = s.open("unnamed.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&template)), None).unwrap();
+            let out = s.take_js_output(id);
+            (s, id, out)
+        };
+        let required = |d: &crate::Document| d.form.iter().filter(|f| f.flags & pdfcraft_forms::flags::REQUIRED != 0).count();
+        let (s, id, _) = open(r#"name="u1""#, r#"name="u2""#);
+        let d = s.get(id).unwrap();
+        assert_eq!(page_ops(&d.bytes).matches(FILL).count(), 1, "named: the one written to");
+        assert_eq!(required(d), 1);
+        let (s, id, out) = open("", "");
+        let d = s.get(id).unwrap();
+        assert_eq!(page_ops(&d.bytes).matches(FILL).count(), 0, "unnamed: on neither");
+        let kept = pdfcraft_xfa::overrides(&pdfcraft_cos::Document::open(d.bytes.clone()).unwrap());
+        assert!(kept.props().is_empty(), "{:?}", kept.props());
+        // Refused by the scripting host, or by the form when the host lets it through.
+        assert!(out.console.iter().any(|l| l.contains("SOM path")), "{out:?}");
+        assert_eq!(required(d), 0);
+
+        // A file holding a change at that path, as one saved elsewhere could: left out, and said.
+        let mut doc = pdfcraft_cos::Document::open(d.bytes.clone()).unwrap();
+        let mut ov = pdfcraft_xfa::Overrides::default();
+        ov.set_prop("form[0].page1[0].field[0]", "border#0/fill#0/color#0", Some("value"), "51,102,153").unwrap();
+        ov.set_prop("form[0].page1[0].qty[0]", "assist#0/toolTip#0", None, "kept").unwrap();
+        pdfcraft_xfa::set_overrides(&mut doc, &ov).unwrap();
+        let tpl = template_of_doc(&doc);
+        let read = pdfcraft_xfa::overrides_of(&doc, &tpl);
+        assert_eq!(read.props().keys().collect::<Vec<_>>(), ["form[0].page1[0].qty[0]"]);
+        assert_eq!(read.dropped, 1);
+        let bytes = pdfcraft_cos::write_full(&doc, &pdfcraft_cos::SaveOptions::default()).unwrap();
+        let mut again = crate::Session::new();
+        let id = again.open("held.pdf", None, Arc::new(bytes), None).unwrap();
+        assert_eq!(page_ops(&again.get(id).unwrap().bytes).matches(FILL).count(), 0, "not drawn from the file");
+    }
+
+    /// The form keeps property changes only for objects its template makes once. A script's
+    /// write to a field of a row that may repeat is refused with a note, by the scripting host
+    /// and by the form: the script reads the property as it was, the field is not filled or made
+    /// Required, and nothing is kept for it, while the same writes to a field outside the rows
+    /// are kept. A change the file holds for a row's field is not applied either, and said.
+    #[test]
+    fn a_property_write_inside_a_row_that_may_repeat_is_not_kept() {
+        const AMOUNT: &str = "form[0].page1[0].table[0].row[0].amount[0]";
+        const QTY: &str = "form[0].page1[0].qty[0]";
+        let bytes = with_scripts(
+            r#"var a = table.resolveNode("row[0]").amount; a.mandatory = "error"; a.border.fill.color.value = "51,102,153"; qty.mandatory = "error"; xfa.host.messageBox(a.mandatory + "|" + qty.mandatory);"#,
+            "",
+        );
+        let mut s = crate::Session::new();
+        let id = s.open("rows.pdf", None, Arc::new(bytes), None).unwrap();
+        let _ = s.take_js_output(id);
+        let out = s.run_javascript(id, "", Some("hello")).unwrap();
+        assert!(out.error.is_none(), "{out:?}");
+        assert_eq!(out.alerts, [pdfcraft_js::Message::plain("disabled|error")], "{out:?}");
+        let refused: Vec<&String> = out.console.iter().filter(|l| l.contains("its template makes once")).collect();
+        assert_eq!(refused.len(), 2, "{out:?}");
+        assert!(refused.iter().all(|l| l.contains(AMOUNT)), "{out:?}");
+        // The SOM paths of the fields that are Required, and of the property changes kept.
+        let state = |s: &crate::Session, id: crate::DocId| {
+            let d = s.get(id).unwrap();
+            let doc = pdfcraft_cos::Document::open(d.bytes.clone()).unwrap();
+            let mut required: Vec<String> = pdfcraft_xfa::fields_by_som(&doc)
+                .iter()
+                .filter(|(_, name)| d.form.iter().any(|f| &f.name == *name && f.has(pdfcraft_forms::flags::REQUIRED)))
+                .map(|(som, _)| som.clone())
+                .collect();
+            required.sort();
+            let kept: Vec<String> = pdfcraft_xfa::overrides(&doc).props().keys().cloned().collect();
+            (required, kept, page_ops(&d.bytes).matches(FILL).count())
+        };
+        let after = state(&s, id);
+        assert_eq!(after, (vec![QTY.to_string()], vec![QTY.to_string()], 0));
+        // The file as it is now, opened again, is the same form.
+        let bytes = s.get(id).unwrap().bytes.clone();
+        let mut again = crate::Session::new();
+        let reopened = again.open("rows-again.pdf", None, bytes.clone(), None).unwrap();
+        assert_eq!(state(&again, reopened), after);
+
+        // A file holding a change for the row's field, as one saved elsewhere could: left out, and
+        // said.
+        let mut doc = pdfcraft_cos::Document::open(bytes).unwrap();
+        let mut ov = pdfcraft_xfa::Overrides::default();
+        ov.set_prop(AMOUNT, "border#0/fill#0/color#0", Some("value"), "51,102,153").unwrap();
+        ov.set_prop(QTY, "assist#0/toolTip#0", None, "kept").unwrap();
+        pdfcraft_xfa::set_overrides(&mut doc, &ov).unwrap();
+        let tpl = template_of_doc(&doc);
+        let read = pdfcraft_xfa::overrides_of(&doc, &tpl);
+        assert_eq!(read.props().keys().collect::<Vec<_>>(), [QTY]);
+        assert_eq!(read.dropped, 1);
+        let bytes = pdfcraft_cos::write_full(&doc, &pdfcraft_cos::SaveOptions::default()).unwrap();
+        let mut held = crate::Session::new();
+        let id = held.open("held.pdf", None, Arc::new(bytes), None).unwrap();
+        assert_eq!(page_ops(&held.get(id).unwrap().bytes).matches(FILL).count(), 0, "not drawn from the file");
+    }
+
+    /// A header row named as the rows after it are takes the first number of the name (XFA 3.3
+    /// pp. 94-95), so the repeating row's first instance is `row[1]` and its data the second
+    /// `row`. The data nodes before a subform's number are not instances of it: a value typed
+    /// in the first row shows one row, a click adds one, a script removes one and the row after
+    /// it moves up with its value, and the saved form opens the same. With the header and the
+    /// rows side by side, and each in an unnamed subform of the table.
+    #[test]
+    fn rows_numbered_after_a_header_of_their_name_are_typed_in_added_and_removed() {
+        const HEADER: &str = r#"<subform name="row" layout="row"><field name="head" h="0.3in"><ui><textEdit/></ui></field><field name="unit" h="0.3in"><ui><textEdit/></ui></field></subform>"#;
+        const HEAD: &str = "form[0].page1[0].table[0].row[0].head[0]";
+        let legacy = r#"table._row.removeInstance(0)
+$host.messageBox(concat(table._row.count, "|", table.row[0].head, "|", table.row[1].amount))"#;
+        let side_by_side = pdfcraft_xfa::fixtures::scripted_template()
+            .replace(
+                r#"<subform name="row" layout="row"><occur min="1" max="-1"/>"#,
+                &format!(r#"{HEADER}<subform name="row" layout="row"><occur min="1" max="-1"/>"#),
+            )
+            .replace(r#"$host.messageBox("FormCalc")"#, legacy);
+        let in_unnamed = side_by_side
+            .replace(
+                r#"<subform name="table" layout="table" columnWidths="3in 2in">"#,
+                r#"<subform name="table" layout="tb"><subform layout="table" columnWidths="3in 2in">"#,
+            )
+            .replace(
+                r#"</subform><subform name="row" layout="row"><occur"#,
+                r#"</subform></subform><subform layout="table" columnWidths="3in 2in"><subform name="row" layout="row"><occur"#,
+            )
+            .replace("   </subform>\n  </subform>\n  <field name=\"grand\"", "   </subform>\n  </subform></subform>\n  <field name=\"grand\"");
+        assert!(side_by_side.contains(HEADER) && side_by_side.contains("removeInstance(0)"));
+        assert!(in_unnamed.contains("</subform></subform><subform layout") && in_unnamed.contains("</subform></subform>\n  <field"));
+        let amount = |row: usize| format!("form[0].page1[0].table[0].row[{row}].amount[0]");
+        // The header's value, and each row's amount by its SOM path.
+        let state = |s: &crate::Session, id| {
+            let doc = pdfcraft_cos::Document::open(s.get(id).unwrap().bytes.clone()).unwrap();
+            let mut rows: Vec<(String, String)> = Vec::new();
+            let mut head = None;
+            for (som, name) in pdfcraft_xfa::fields_by_som(&doc) {
+                if som.contains(".amount[") {
+                    rows.push((som, value_of(s, id, &name)));
+                } else if som == HEAD {
+                    head = Some(value_of(s, id, &name));
+                }
+            }
+            rows.sort();
+            (head, rows)
+        };
+        let type_at = |s: &mut crate::Session, id, som: &str, value: &str| {
+            let doc = pdfcraft_cos::Document::open(s.get(id).unwrap().bytes.clone()).unwrap();
+            let name = pdfcraft_xfa::fields_by_som(&doc).into_iter().find(|(x, _)| x == som).map(|(_, n)| n).unwrap();
+            s.apply(id, crate::Edit::SetFieldValue { name, value: pdfcraft_forms::FieldValue::Text(value.into()) }).unwrap();
+        };
+        let rows = |values: &[(usize, &str)]| values.iter().map(|(row, v)| (amount(*row), v.to_string())).collect::<Vec<_>>();
+        for (shape, template) in [("side by side", side_by_side), ("in unnamed subforms", in_unnamed)] {
+            let mut s = crate::Session::new();
+            let id = s.open("rows.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&template)), None).unwrap();
+            assert_eq!(state(&s, id), (Some(String::new()), rows(&[(1, "")])), "{shape}");
+            type_at(&mut s, id, HEAD, "Item");
+            type_at(&mut s, id, &amount(1), "5");
+            assert_eq!(state(&s, id), (Some("Item".into()), rows(&[(1, "5")])), "{shape}: the header's data is no row");
+            let mut again = crate::Session::new();
+            let reopened = again.open("typed.pdf", None, s.save_bytes(id).unwrap(), None).unwrap();
+            assert_eq!(state(&again, reopened), (Some("Item".into()), rows(&[(1, "5")])), "{shape}: nor when the form is opened again");
+            s.run_javascript(id, "", Some("addRow")).unwrap();
+            assert_eq!(state(&s, id), (Some("Item".into()), rows(&[(1, "5"), (2, "")])), "{shape}: a click adds one row");
+            type_at(&mut s, id, &amount(2), "7");
+            let typed = state(&s, id);
+            assert_eq!(typed, (Some("Item".into()), rows(&[(1, "5"), (2, "7")])), "{shape}");
+            let _ = s.take_js_output(id);
+            let out = s.run_javascript(id, "", Some("legacy")).unwrap();
+            assert_eq!(out.alerts, [pdfcraft_js::Message::plain("1|Item|7")], "{shape}: {out:?}");
+            let removed = state(&s, id);
+            assert_eq!(removed, (Some("Item".into()), rows(&[(1, "7")])), "{shape}: the first row went, the second took its number");
+            s.undo(id).unwrap();
+            assert_eq!(state(&s, id), typed, "{shape}");
+            s.redo(id).unwrap();
+            assert_eq!(state(&s, id), removed, "{shape}");
+            let mut again = crate::Session::new();
+            let reopened = again.open("saved.pdf", None, s.save_bytes(id).unwrap(), None).unwrap();
+            assert_eq!(state(&again, reopened), removed, "{shape}: saved and opened again");
+        }
+    }
+
+    /// How often a subform occurs is not a property scripts may change: a write to `occur` is
+    /// refused and said, the script reads it as it was, the instance manager allows what the
+    /// template does, and nothing is kept.
+    #[test]
+    fn a_scripts_write_to_occur_is_refused_and_said() {
+        let template = pdfcraft_xfa::fixtures::scripted_template().replace(r#"<occur min="1" max="-1"/>"#, r#"<occur min="1" max="2"/>"#).replace(
+            r#"xfa.host.messageBox("Hello " + qty.rawValue);"#,
+            r#"var before = table.row.occur.max; table.row.occur.max = "4"; table.occur.max = "3"; xfa.host.messageBox(before + "|" + table.row.occur.max + "|" + table.occur.max);"#,
+        );
+        let mut s = crate::Session::new();
+        let id = s.open("rows.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&template)), None).unwrap();
+        let _ = s.take_js_output(id);
+        let out = s.run_javascript(id, "", Some("hello")).unwrap();
+        assert!(out.error.is_none(), "{out:?}");
+        assert_eq!(out.alerts, [pdfcraft_js::Message::plain("2|2|1")], "{out:?}");
+        // The row's as any change inside a subform that may repeat, the table's (made once) by
+        // the rule itself.
+        let said = |what: &str| out.console.iter().filter(|l| l.contains(what)).count();
+        assert_eq!(
+            (said("occur#0 max not set"), said("its template makes once"), said("occur#0 is not a property scripts may change")),
+            (2, 1, 1),
+            "{out:?}"
+        );
+        for _ in 0..3 {
+            s.run_javascript(id, "", Some("addRow")).unwrap();
+        }
+        assert_eq!(s.get(id).unwrap().form.iter().filter(|f| f.name.contains("amount")).count(), 2, "the template's maximum");
+        let doc = pdfcraft_cos::Document::open(s.get(id).unwrap().bytes.clone()).unwrap();
+        assert!(pdfcraft_xfa::overrides(&doc).props().is_empty());
+    }
+
+    /// A script reads back a property change exactly when the form keeps it: of the values a
+    /// script writes to a property, some the form takes and some it refuses, the form holds
+    /// the last one the script read back once the event ends (none when it read back none).
+    /// The checks live on either side of the layering line; this is the end-to-end check that
+    /// they agree.
+    #[test]
+    fn a_script_reads_back_a_property_change_exactly_when_the_form_keeps_it() {
+        const QTY: &str = "form[0].page1[0].qty[0]";
+        const ROW: &str = "form[0].page1[0].table[0].row[0]";
+        const TABLE: &str = "form[0].page1[0].table[0]";
+        /// The object's SOM, its expression, the property's path and attribute, the member
+        /// written, and the value.
+        type Case = (&'static str, &'static str, &'static str, Option<&'static str>, &'static str, &'static str);
+        let cases: &[Case] = &[
+            (QTY, "qty.border.fill.color", "border#0/fill#0/color#0", Some("value"), "value", "255,0,0"),
+            (QTY, "qty.border.fill.color", "border#0/fill#0/color#0", Some("value"), "value", " 1 , 2 , 3 "),
+            (QTY, "qty.border.fill.color", "border#0/fill#0/color#0", Some("value"), "value", "red"),
+            (QTY, "qty.border.fill.color", "border#0/fill#0/color#0", Some("value"), "value", "1,2"),
+            (QTY, "qty.border.fill.color", "border#0/fill#0/color#0", Some("value"), "value", "NaN,0,0"),
+            (QTY, "qty.border.edge", "border#0/edge#0", Some("thickness"), "thickness", "0.5pt"),
+            (QTY, "qty.border.edge", "border#0/edge#0", Some("thickness"), "thickness", "2em"),
+            (QTY, "qty.border.edge", "border#0/edge#0", Some("thickness"), "thickness", "thick"),
+            (QTY, "qty.border.edge", "border#0/edge#0", Some("thickness"), "thickness", "NaNpt"),
+            (QTY, "qty.font", "font#0", Some("size"), "size", "12pt"),
+            (QTY, "qty.font", "font#0", Some("size"), "size", "large"),
+            (QTY, "qty.margin", "margin#0", Some("leftInset"), "leftInset", "3mm"),
+            (QTY, "qty.para", "para#0", Some("tabDefault"), "tabDefault", "0.25in"),
+            (QTY, "qty.validate", "validate#0", Some("nullTest"), "nullTest", "error"),
+            (QTY, "qty.assist.toolTip", "assist#0/toolTip#0", None, "value", "Help"),
+            (QTY, "qty.validate.script", "validate#0/script#0", None, "value", "true"),
+            (QTY, "qty.bind", "bind#0", Some("match"), "match", "none"),
+            (ROW, "table.row.occur", "occur#0", Some("max"), "max", "1.5"),
+            (ROW, "table.row.occur", "occur#0", Some("max"), "max", "7"),
+            (TABLE, "table.break", "break#0", Some("before"), "before", "pageArea"),
+        ];
+        let writes: String = cases
+            .iter()
+            .map(|(_, obj, _, _, member, value)| {
+                format!("try {{ {obj}.{member} = {value:?}; r.push(String({obj}.{member}) === {value:?} ? 1 : 0); }} catch (e) {{ r.push(2); }}\n")
+            })
+            .collect();
+        let template = pdfcraft_xfa::fixtures::scripted_template()
+            .replace(r#"xfa.host.messageBox("Hello " + qty.rawValue);"#, &format!("var r = [];\n{writes}xfa.host.messageBox(r.join(\"\"));"));
+        let mut s = crate::Session::new();
+        let id = s.open("refuse.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&template)), None).unwrap();
+        let _ = s.take_js_output(id);
+        let out = s.run_javascript(id, "", Some("hello")).unwrap();
+        assert!(out.error.is_none(), "{out:?}");
+        let [alert] = out.alerts.as_slice() else { panic!("{out:?}") };
+        // For each write, whether the script read back what it wrote (1), another value (0), or
+        // failed to write or read (2).
+        let read: Vec<char> = alert.text.chars().collect();
+        assert_eq!(read.len(), cases.len(), "{read:?}");
+        let ov = pdfcraft_xfa::overrides(&pdfcraft_cos::Document::open(s.get(id).unwrap().bytes.clone()).unwrap());
+        assert!(read.contains(&'1') && read.contains(&'0'), "values taken and refused both tried: {read:?}");
+        // By object and property, the last value the script read back.
+        let mut last: std::collections::BTreeMap<(&str, String), Option<&str>> = Default::default();
+        for ((som, _, path, attr, _, value), back) in cases.iter().zip(&read) {
+            let slot = last.entry((*som, pdfcraft_xfa::restyle::prop_key(path, *attr))).or_default();
+            if *back == '1' {
+                *slot = Some(*value);
+            }
+        }
+        for ((som, key), expected) in last {
+            let kept = ov.props().get(som).and_then(|m| m.get(&key)).map(String::as_str);
+            assert_eq!(kept, expected, "{som} {key}");
+        }
+    }
+
+    /// A form keeps so many property changes. A script's change past them is left out and one
+    /// message says so, with the limits it names; the next script reads the form's value, not
+    /// the one that was left out. One object's own limit is another matter: the scripting host
+    /// refuses a change past it and names that limit, and other objects still take theirs.
+    #[test]
+    fn changes_past_the_forms_and_one_objects_limits_are_left_out_and_named() {
+        const QTY: &str = "form[0].page1[0].qty[0]";
+        const PRICE: &str = "form[0].page1[0].price[0]";
+        let per_object = pdfcraft_xfa::restyle::MAX_PROP_CHANGES_PER_OBJECT;
+        let per_form = pdfcraft_xfa::restyle::MAX_PROP_OVERRIDES;
+        let extra: String = (0..per_form / per_object + 1).map(|i| format!(r#"<field name="x{i}" w="1in" h="0.2in"/>"#)).collect();
+        let template = pdfcraft_xfa::fixtures::scripted_template().replace(r#"<field name="qty""#, &format!(r#"{extra}<field name="qty""#)).replace(
+            r#"xfa.host.messageBox("Hello " + qty.rawValue);"#,
+            r#"var before = price.font.size; qty.font.size = "20pt"; price.font.size = "20pt"; xfa.host.messageBox(String(before));"#,
+        );
+        assert!(template.contains("price.font.size") && template.contains(r#"<field name="x0""#));
+        let fill = |ov: &mut pdfcraft_xfa::Overrides, som: &str, n: usize| {
+            for i in 0..n {
+                ov.set_prop(som, &format!("extras#0/text#{}", i % 8), Some(&format!("a{i}")), "1").unwrap();
+            }
+        };
+        let open = |ov: &pdfcraft_xfa::Overrides| {
+            let mut doc = pdfcraft_cos::Document::open(Arc::new(pdfcraft_xfa::fixtures::shell(&template))).unwrap();
+            pdfcraft_xfa::set_overrides(&mut doc, ov).unwrap();
+            let bytes = pdfcraft_cos::write_full(&doc, &pdfcraft_cos::SaveOptions::default()).unwrap();
+            let mut s = crate::Session::new();
+            let id = s.open("full.pdf", None, Arc::new(bytes), None).unwrap();
+            let _ = s.take_js_output(id);
+            (s, id)
+        };
+        let kept = |s: &crate::Session, id| pdfcraft_xfa::overrides(&pdfcraft_cos::Document::open(s.get(id).unwrap().bytes.clone()).unwrap());
+        let said = |out: &pdfcraft_js::Outcome| {
+            out.error.iter().chain(&out.console).cloned().collect::<Vec<_>>().join(
+                "
+",
+            )
+        };
+
+        // One object full: its change is refused by name, the other object's is kept.
+        let mut ov = pdfcraft_xfa::Overrides::default();
+        fill(&mut ov, QTY, per_object);
+        let (mut s, id) = open(&ov);
+        let out = s.run_javascript(id, "", Some("hello")).unwrap();
+        assert!(said(&out).contains(&format!("more than {per_object} properties of one object")), "{out:?}");
+        assert!(!said(&out).contains("later changes are left out"), "{out:?}");
+        let now = kept(&s, id);
+        assert_eq!(now.props().get(QTY).map(|m| (m.len(), m.contains_key("font#0@size"))), Some((per_object, false)));
+        assert_eq!(now.props().get(PRICE).and_then(|m| m.get("font#0@size")).map(String::as_str), Some("20pt"));
+
+        // The form full: neither change is kept, and one message names the form's limits.
+        let mut ov = pdfcraft_xfa::Overrides::default();
+        for i in 0..per_form / per_object {
+            fill(&mut ov, &format!("form[0].page1[0].x{i}[0]"), per_object);
+        }
+        fill(&mut ov, &format!("form[0].page1[0].x{}[0]", per_form / per_object), per_form % per_object);
+        let (mut s, id) = open(&ov);
+        let count = |ov: &pdfcraft_xfa::Overrides| ov.props().values().map(|m| m.len()).sum::<usize>();
+        assert_eq!(count(&kept(&s, id)), per_form, "the file's changes are all read");
+        let first = s.run_javascript(id, "", Some("hello")).unwrap();
+        let limits =
+            format!("({per_form} changes, {} KiB of them); later changes are left out", pdfcraft_xfa::restyle::MAX_PROP_OVERRIDE_BYTES / 1024);
+        assert_eq!(said(&first).matches(&limits).count(), 1, "{first:?}");
+        let now = kept(&s, id);
+        assert_eq!(count(&now), per_form);
+        assert!(!now.props().contains_key(QTY) && !now.props().contains_key(PRICE), "{:?}", now.props().keys().rev().take(3).collect::<Vec<_>>());
+        // The next script reads what the form has.
+        let second = s.run_javascript(id, "", Some("hello")).unwrap();
+        assert_eq!(second.alerts, first.alerts, "{second:?}");
+        assert!(second.alerts.iter().all(|a| a.text != "20pt") && second.alerts.len() == 1, "{second:?}");
+    }
+
     /// A field's click script reads its own and other objects' properties through a laid-out
-    /// dynamic form: template values, the spec's defaults, and a write read back, which changes
-    /// nothing on the form.
+    /// dynamic form: template values, the spec's defaults, and a write read back.
     #[test]
     fn a_click_script_reads_field_properties() {
         let template = pdfcraft_xfa::fixtures::scripted_template()
@@ -1683,9 +2492,6 @@ mod tests {
         let mut s = crate::Session::new();
         let id = s.open("props.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&template)), None).unwrap();
         let _ = s.take_js_output(id);
-        let fields =
-            |s: &crate::Session| s.get(id).unwrap().form.iter().map(|f| (f.name.clone(), f.value.clone(), f.read_only())).collect::<Vec<_>>();
-        let before = fields(&s);
         let out = s.run_javascript(id, "", Some("hello")).unwrap();
         assert!(out.error.is_none(), "{out:?}");
         assert_eq!(
@@ -1693,7 +2499,6 @@ mod tests {
             [pdfcraft_js::Message::plain("button|200,200,255|visible|numericEdit|Quantity must be 100 or less|error|-1|checkButton|true|false")]
         );
         assert!(s.take_js_output(id).errors.is_empty());
-        assert_eq!(fields(&s), before, "a property write changes nothing yet");
     }
 
     fn field(obj: pdfcraft_cos::ObjRef, kind: pdfcraft_forms::FieldKind, value: &[&str]) -> pdfcraft_forms::Field {
@@ -1794,5 +2599,458 @@ mod tests {
         // A changed pick reaches the template, which this document doesn't have.
         let before = [field(text, K::Text, &["same"]), field(list, K::List, &["b", "a"]), field(check, K::CheckBox, &["Yes"])];
         assert!(relayout_changed_text(&mut doc, None, &before).is_err());
+    }
+
+    /// A form whose opening script gives a field a format test (picture, `error`, message), and
+    /// four calculated fields: two whose calculation the user may override with a warning,
+    /// one that says `disabled` and one that keeps the default; and a warning over an empty
+    /// calculation script.
+    fn checks_form() -> Vec<u8> {
+        pdfcraft_xfa::fixtures::shell(&checks_template())
+    }
+
+    fn checks_template() -> String {
+        let template = r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="p"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <subform name="s" layout="tb">
+  <event activity="initialize"><script contentType="application/x-javascript">V2.validate.picture.value = "text{9999}"; V2.validate.formatTest = "error"; V2.formatMessage = "Custom format message";</script></event>
+  <field name="V2" w="2in" h="0.3in"><ui><textEdit/></ui></field>
+  <field name="V3" w="2in" h="0.3in"><ui><textEdit/></ui><validate><picture>text{99}</picture><message><text name="formatTest">Two digits</text></message></validate></field>
+  <field name="V4" w="2in" h="0.3in"><ui><textEdit/></ui><validate><picture>text{99}</picture><message><text name="formatTest">Two digits</text></message></validate><event activity="exit"><script contentType="application/x-javascript">this.validate.formatTest = "disabled";</script></event></field>
+  <field name="V5" w="2in" h="0.3in"><ui><textEdit/></ui><event activity="change"><script contentType="application/x-javascript">this.validate.picture.value = "text{99}"; this.validate.formatTest = "error"; this.formatMessage = "Set on change";</script></event></field>
+  <field name="K1" w="2in" h="0.3in"><ui><numericEdit/></ui><value><decimal>1</decimal></value></field>
+  <field name="K2" w="2in" h="0.3in"><ui><numericEdit/></ui><value override="1"><decimal>5</decimal></value><calculate><script contentType="application/x-javascript">K1.rawValue * 10</script></calculate></field>
+  <field name="K4" w="2in" h="0.3in"><ui><numericEdit/></ui><calculate><script contentType="application/x-javascript">K1.rawValue * 1000</script></calculate></field>
+ </subform>
+</subform>
+</template>
+</xdp:xdp>
+"##;
+        template.to_string()
+    }
+
+    fn type_into(s: &mut crate::Session, id: crate::DocId, field: &str, value: &str) {
+        let name = s.get(id).unwrap().form.iter().find(|f| f.name.ends_with(field)).unwrap().name.clone();
+        s.apply(id, crate::Edit::SetFieldValue { name, value: pdfcraft_forms::FieldValue::Text(value.into()) }).unwrap();
+    }
+
+    fn value_of(s: &crate::Session, id: crate::DocId, field: &str) -> String {
+        s.get(id).unwrap().form.iter().find(|f| f.name.ends_with(field)).unwrap().value.join("\n")
+    }
+
+    /// A value that fails its validation's format test says the validation's message when the
+    /// user leaves the field, and stays as typed (XFA 3.3 p. 880, p. 396); one that passes, or
+    /// an empty one, says nothing. The opening script's test and message count as the
+    /// template's do.
+    #[test]
+    fn a_value_failing_its_format_test_says_the_message_and_stays() {
+        let mut s = crate::Session::new();
+        let id = s.open("checks.pdf", None, Arc::new(checks_form()), None).unwrap();
+        let _ = s.take_js_output(id);
+        type_into(&mut s, id, "V2", "abc");
+        assert_eq!(s.take_js_output(id).alerts.iter().map(|m| m.text.as_str()).collect::<Vec<_>>(), ["Custom format message"]);
+        assert_eq!(value_of(&s, id, "V2"), "abc");
+        type_into(&mut s, id, "V2", "1234");
+        assert!(s.take_js_output(id).alerts.is_empty());
+        type_into(&mut s, id, "V3", "123");
+        assert_eq!(s.take_js_output(id).alerts.iter().map(|m| m.text.as_str()).collect::<Vec<_>>(), ["Two digits"]);
+        type_into(&mut s, id, "V3", "");
+        assert!(s.take_js_output(id).alerts.is_empty());
+    }
+
+    /// The format test the user's entry is checked by is the one the field's change and exit
+    /// scripts leave: one turned off as the field is left says nothing, and one set as the value
+    /// changes says its message.
+    #[test]
+    fn the_format_test_is_the_one_the_fields_scripts_leave() {
+        let mut s = crate::Session::new();
+        let id = s.open("checks.pdf", None, Arc::new(checks_form()), None).unwrap();
+        let _ = s.take_js_output(id);
+        type_into(&mut s, id, "V4", "123");
+        assert!(s.take_js_output(id).alerts.is_empty(), "the exit script turned the test off");
+        type_into(&mut s, id, "V5", "abc");
+        assert_eq!(s.take_js_output(id).alerts.iter().map(|m| m.text.as_str()).collect::<Vec<_>>(), ["Set on change"]);
+    }
+
+    /// A field whose value the template marks an override (`value@override`, XFA 3.3 p. 883)
+    /// keeps its value when the form calculates, on opening and after an entry; a field without
+    /// the mark takes its calculation's result.
+    #[test]
+    fn a_value_marked_an_override_is_left_out_of_calculations() {
+        let mut s = crate::Session::new();
+        let id = s.open("checks.pdf", None, Arc::new(checks_form()), None).unwrap();
+        let now = |s: &crate::Session| ["K2", "K4"].map(|k| value_of(s, id, k));
+        assert_eq!(now(&s), ["5", "1000"]);
+        type_into(&mut s, id, "K1", "2");
+        assert_eq!(now(&s), ["5", "2000"]);
+    }
+
+    /// The script test's message is the one the field's exit script leaves, from the first
+    /// entry on: the live form keeps the message it was built with, and a message change alone
+    /// doesn't build it again.
+    #[test]
+    fn the_script_tests_message_is_the_one_the_exit_script_sets() {
+        let template = r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="p"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <subform name="s" layout="tb">
+  <field name="M1" w="2in" h="0.3in"><ui><textEdit/></ui><validate><script contentType="application/x-javascript">this.rawValue != "bad"</script><message><text name="scriptTest">Old message</text></message></validate>
+   <event activity="exit"><script contentType="application/x-javascript">this.validationMessage = "New message";</script></event></field>
+ </subform>
+</subform>
+</template>
+</xdp:xdp>
+"##;
+        let mut s = crate::Session::new();
+        let id = s.open("message.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(template)), None).unwrap();
+        let _ = s.take_js_output(id);
+        let mut said = || {
+            type_into(&mut s, id, "M1", "bad");
+            s.take_js_output(id).alerts.into_iter().map(|m| m.text).collect::<Vec<_>>()
+        };
+        assert_eq!((said(), said()), (vec!["New message".to_string()], vec!["New message".to_string()]));
+    }
+
+    /// A caption's colour, a check box's on value and a choice list that stops taking typed text,
+    /// set by a click (round two of the property writes): drawn and on the fields, one undo
+    /// step, and kept through save and reopen; a later FormCalc script reads the caption's back.
+    #[test]
+    fn caption_and_item_changes_from_a_click_take_effect_and_are_kept() {
+        let template = pdfcraft_xfa::fixtures::scripted_template().replace(
+            r#"<field name="note" w="4in" h="0.3in"><ui><textEdit/></ui>"#,
+            r#"<field name="note" w="4in" h="0.3in"><ui><choiceList textEntry="1"/></ui><items><text>A</text><text>B</text></items>"#,
+        );
+        let template = template
+            .replace(r#"<subform name="details" layout="tb" presence="hidden">"#, r#"<subform name="details" layout="tb">"#)
+            .replace(
+                r#"xfa.host.messageBox("Hello " + qty.rawValue);"#,
+                r#"price.caption.font.fill.color.value = "244,15,55"; price.caption.font.posture = "italic"; if (more.items.nodes.item(0).value == "1") more.items.nodes.item(0).value = "Yes"; details.note.ui.choiceList.textEntry = "0"; details.presence = "visible";"#,
+            )
+            .replace(
+                r#"$host.messageBox("FormCalc")"#,
+                r#"$host.messageBox(concat(price.caption.font.fill.color.value, "|", price.caption.font.posture))"#,
+            );
+        let mut s = crate::Session::new();
+        let id = s.open("captions.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&template)), None).unwrap();
+        let _ = s.take_js_output(id);
+        // The caption's red text, the check box's on state, whether the list takes typed text.
+        let state = |s: &crate::Session| {
+            let d = s.get(id).unwrap();
+            let field = |n: &str| d.form.iter().find(|f| f.name.ends_with(n)).cloned().unwrap();
+            let on = field("more").widgets.iter().find_map(|w| w.on_state.clone());
+            (page_ops(&d.bytes).contains("0.957 0.059 0.216 rg"), on, field("note").has(pdfcraft_forms::flags::EDIT))
+        };
+        let before = state(&s);
+        assert_eq!(before, (false, Some("1".to_string()), true));
+        let out = s.run_javascript(id, "", Some("hello")).unwrap();
+        assert!(out.error.is_none(), "{out:?}");
+        let after = state(&s);
+        assert_eq!(after, (true, Some("Yes".to_string()), false));
+        s.undo(id).unwrap();
+        assert_eq!(state(&s), before);
+        s.redo(id).unwrap();
+        assert_eq!(state(&s), after);
+        let out = s.run_javascript(id, "", Some("legacy")).unwrap();
+        assert_eq!(out.alerts, [pdfcraft_js::Message::plain("244,15,55|italic")]);
+        let saved = s.save_bytes(id).unwrap();
+        let mut again = crate::Session::new();
+        let reopened = again.open("saved.pdf", None, saved, None).unwrap();
+        let d = again.get(reopened).unwrap();
+        assert!(page_ops(&d.bytes).contains("0.957 0.059 0.216 rg"));
+        assert_eq!(d.form.iter().find(|f| f.name.ends_with("more")).unwrap().widgets.iter().find_map(|w| w.on_state.clone()), Some("Yes".into()));
+        let out = again.run_javascript(reopened, "", Some("legacy")).unwrap();
+        assert_eq!(out.alerts, [pdfcraft_js::Message::plain("244,15,55|italic")]);
+    }
+
+    /// A script that hides every object and colours a field, saved and opened again, keeps both:
+    /// the property change waits under its hidden object and shows again with it. Fields bound to
+    /// one data value (`bind match="global"`) share the value, not the property change.
+    #[test]
+    fn property_changes_survive_hide_all_and_stay_off_globally_bound_fields() {
+        let template = pdfcraft_xfa::fixtures::scripted_template()
+            .replace(
+                r#"<field name="note" w="4in" h="0.3in"><ui><textEdit/></ui>"#,
+                r#"<field name="note" w="4in" h="0.3in"><ui><textEdit/></ui><bind match="global"/>"#,
+            )
+            .replace(
+                r#"<subform name="table" layout="table" columnWidths="3in 2in">"#,
+                r#"<field name="note" w="4in" h="0.3in"><ui><textEdit/></ui><bind match="global"/></field><subform name="table" layout="table" columnWidths="3in 2in">"#,
+            )
+            .replace(
+                r#"xfa.host.messageBox("Hello " + qty.rawValue);"#,
+                r#"details.note.fillColor = "51,102,153"; details.presence = "visible"; var all = xfa.form.form.page1.nodes; for (var i = 0; i &lt; all.length; i++) { if (all.item(i).className != "field" || all.item(i).name != "legacy") all.item(i).presence = "hidden"; }"#,
+            )
+            .replace(r#"$host.messageBox("FormCalc")"#, r#"page1.qty.presence = "visible"
+page1.details.presence = "visible"
+page1.note.presence = "visible""#);
+        let mut s = crate::Session::new();
+        let id = s.open("hidden.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&template)), None).unwrap();
+        let _ = s.take_js_output(id);
+        let out = s.run_javascript(id, "", Some("hello")).unwrap();
+        assert!(out.error.is_none(), "{out:?}");
+        let d = s.get(id).unwrap();
+        assert!(!page_ops(&d.bytes).contains(FILL), "hidden: nothing drawn");
+        let kept = pdfcraft_xfa::overrides(&pdfcraft_cos::Document::open(d.bytes.clone()).unwrap());
+        assert_eq!(kept.props().keys().cloned().collect::<Vec<_>>(), ["form[0].page1[0].details[0].note[0]"], "{out:?}");
+        let saved = s.save_bytes(id).unwrap();
+        let mut again = crate::Session::new();
+        let reopened = again.open("saved.pdf", None, saved, None).unwrap();
+        assert!(!page_ops(&again.get(reopened).unwrap().bytes).contains(FILL));
+        let out = again.run_javascript(reopened, "", Some("legacy")).unwrap();
+        assert!(out.error.is_none(), "{out:?}");
+        let d = again.get(reopened).unwrap();
+        let ops = page_ops(&d.bytes);
+        assert_eq!(ops.matches(FILL).count(), 1, "shown again, the one field filled; its globally bound twin is not");
+        let saved = again.save_bytes(reopened).unwrap();
+        let doc = pdfcraft_cos::Document::open(saved).unwrap();
+        assert_eq!(pdfcraft_xfa::overrides(&doc).props().len(), 1);
+    }
+
+    /// A later script of the same event reads a radio button's value as the form gives it once
+    /// an earlier one changed the button's on value (its items): the form is built again for
+    /// such a change, as it is for the next event, not only refreshed.
+    #[test]
+    fn a_later_script_reads_a_value_an_items_change_moved() {
+        let template = r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="p"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <subform name="s" layout="tb">
+  <exclGroup name="g" layout="lr-tb">
+   <field name="a" w="1in" h="0.3in"><ui><checkButton shape="round"/></ui><items><text>1</text></items></field>
+   <field name="b" w="1in" h="0.3in"><ui><checkButton shape="round"/></ui><items><text>2</text></items></field>
+  </exclGroup>
+  <field name="pick" w="1in" h="0.3in"><ui><button/></ui><event activity="click"><script contentType="application/x-javascript">g.rawValue = "1";</script></event></field>
+  <field name="go" w="1in" h="0.3in"><ui><button/></ui>
+   <event activity="click"><script contentType="application/x-javascript">g.a.items.nodes.item(0).value = "9";</script></event>
+   <event activity="click"><script contentType="application/x-javascript">xfa.host.messageBox("[" + g.a.rawValue + "]");</script></event>
+  </field>
+ </subform>
+</subform>
+</template>
+</xdp:xdp>
+"##;
+        let mut s = crate::Session::new();
+        let id = s.open("radio.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(template)), None).unwrap();
+        s.apply(id, crate::Edit::XfaEvent { som: "form[0].s[0].pick[0]".into(), activity: "click".into() }).unwrap();
+        let _ = s.take_js_output(id);
+        s.apply(id, crate::Edit::XfaEvent { som: "form[0].s[0].go[0]".into(), activity: "click".into() }).unwrap();
+        let alerts: Vec<String> = s.take_js_output(id).alerts.iter().map(|m| m.text.clone()).collect();
+        // The group still holds "1", which is no longer the button's on value: not chosen.
+        assert_eq!(alerts, ["[null]"]);
+    }
+
+    /// The form keeps exactly the changes the scripting host lets a script make: what
+    /// `Overrides::set_prop` keeps (its own checks and budgets, on a form keeping nothing yet) is
+    /// what the host's check (`pdfcraft-xfa-rules`) accepts, for values taken and refused alike.
+    /// The rules themselves are tested in `pdfcraft-xfa-rules`, and a script's write end to end
+    /// in `a_script_reads_back_a_property_change_exactly_when_the_form_keeps_it`.
+    #[test]
+    fn the_form_keeps_what_the_scripting_host_lets_through() {
+        let cases: [(&str, Option<&str>, &str); 16] = [
+            ("border#0/fill#0/color#0", Some("value"), "51,102,153"),
+            ("border#0/fill#0/color#0", Some("value"), "red"),
+            ("border#0/fill#0/color#0", Some("value"), "NaN,0,0"),
+            ("font#0", Some("size"), "12pt"),
+            ("font#0", Some("size"), "1e309in"),
+            ("caption#0", Some("reserve"), "-5in"),
+            ("assist#0/toolTip#0", None, "tip"),
+            ("occur#0", Some("max"), "3"),
+            ("occur#0", Some("max"), "three"),
+            ("items#0/integer#999", None, "1"),
+            ("items#0/integer#1000", None, "1"),
+            ("border#0/edge#4", Some("thickness"), "1pt"),
+            ("nowhere#0", Some("x"), "1"),
+            ("ui#0/textEdit#0/comb#0", Some("numberOfCells"), "-1"),
+            ("a#0/b#0/c#0/d#0/e#0/f#0/g#0/h#0/i#0", None, "deep"),
+            ("value#0", Some("override"), "1"),
+        ];
+        let mut refused = 0;
+        for (path, attr, value) in cases {
+            let script = pdfcraft_js::xfa::property_value_ok(path, attr, value);
+            let mut ov = pdfcraft_xfa::Overrides::default();
+            assert_eq!(script.is_ok(), ov.set_prop("form[0].s[0].f[0]", path, attr, value).is_ok(), "{path} {attr:?} {value:?}");
+            refused += usize::from(script.is_err());
+        }
+        assert!((4..12).contains(&refused), "both kinds are judged: {refused} refused");
+    }
+
+    /// A script never reads back a property change the form refuses: on a field already holding
+    /// the 64 changes the form keeps for one object (made by its opening script), a later
+    /// script's write to another property is left out, and it reads the property as it was.
+    #[test]
+    fn a_write_past_the_objects_limit_is_not_read_back() {
+        assert_eq!(pdfcraft_js::xfa::MAX_CHANGES_PER_OBJECT, pdfcraft_xfa::restyle::MAX_PROP_CHANGES_PER_OBJECT);
+        let template = r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="p"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <subform name="s" layout="tb">
+  <field name="full" w="2in" h="0.3in"><ui><textEdit/></ui><font typeface="Arial" size="10pt"/>
+   <event activity="initialize"><script contentType="application/x-javascript">for (var i = 0; i &lt; 64; i++) { this.font["x" + i] = "1"; }</script></event>
+   <event activity="click"><script contentType="application/x-javascript">this.font.size = "20pt"; this.font.x3 = "2"; xfa.host.messageBox(this.font.size + "|" + this.font.x3);</script></event>
+  </field>
+ </subform>
+</subform>
+</template>
+</xdp:xdp>
+"##;
+        let mut s = crate::Session::new();
+        let id = s.open("full.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(template)), None).unwrap();
+        let _ = s.take_js_output(id);
+        s.apply(id, crate::Edit::XfaEvent { som: "form[0].s[0].full[0]".into(), activity: "click".into() }).unwrap();
+        let alerts: Vec<String> = s.take_js_output(id).alerts.iter().map(|m| m.text.clone()).collect();
+        assert_eq!(alerts, ["10pt|2"], "the size is left out, the change to a kept property is not");
+        let doc = pdfcraft_cos::Document::open(s.get(id).unwrap().bytes.clone()).unwrap();
+        let kept = pdfcraft_xfa::overrides(&doc).props().get("form[0].s[0].full[0]").cloned().unwrap_or_default();
+        assert_eq!(kept.len(), 64);
+        assert_eq!(kept.get("font#0@x3").map(String::as_str), Some("2"));
+        assert!(!kept.contains_key("font#0@size"));
+    }
+
+    /// Hostile property writes leave the form whole: absurd sizes and reserves, NaN and infinite
+    /// measurements, an item past the reader's list, deep paths and a write to every field many
+    /// times over are refused or clamped, with nothing past the form's limits kept.
+    #[test]
+    fn hostile_property_writes_from_scripts_are_bounded() {
+        let script = r#"
+            price.caption.reserve = "1e308in"; price.caption.reserve = "NaNpt"; price.caption.reserve = "-5in";
+            price.font.size = "Infinity"; price.caption.font.size = "100000in";
+            more.items.nodes.item(0).value = new Array(70000).join("x");
+            for (var i = 0; i &lt; 20000; i++) { qty.border.fill.color.value = i % 255 + ",0,0"; price.assist.toolTip.value = "t" + i; }
+            try { var p = qty.extras; for (var d = 0; d &lt; 40; d++) { p = p.getElement("extras", 0); } p.x = "1"; } catch (e) {}
+            var q = qty.resolveNode("extras.extras.extras.extras.extras.extras.extras.extras.extras.extras"); if (q) q.x = "1";
+        "#;
+        let template = pdfcraft_xfa::fixtures::scripted_template().replace(r#"xfa.host.messageBox("Hello " + qty.rawValue);"#, script);
+        let mut s = crate::Session::new();
+        let id = s.open("hostile.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&template)), None).unwrap();
+        let _ = s.take_js_output(id);
+        let out = s.run_javascript(id, "", Some("hello")).unwrap();
+        assert!(out.error.is_none(), "{out:?}");
+        let d = s.get(id).unwrap();
+        assert!(!d.form.is_empty(), "the form is still laid out: {out:?} {:?}", s.take_js_output(id));
+        let doc = pdfcraft_cos::Document::open(d.bytes.clone()).unwrap();
+        let ov = pdfcraft_xfa::overrides(&doc);
+        assert!(ov.props().values().map(|m| m.len()).sum::<usize>() <= pdfcraft_xfa::restyle::MAX_PROP_OVERRIDES);
+        assert!(ov.props().values().flat_map(|m| m.values()).all(|v| v.len() <= pdfcraft_xfa::restyle::MAX_PROP_VALUE));
+        // The last tooltip wins; the 70,000-byte item text was cut to what a value keeps.
+        let price = ov.props().get("form[0].page1[0].price[0]").cloned().unwrap_or_default();
+        assert_eq!(price.get("assist#0/toolTip#0").map(String::as_str), Some("t19999"));
+        let item = ov.props().get("form[0].page1[0].more[0]").and_then(|m| m.get("items#0/integer#0")).map_or(0, String::len);
+        assert!(item < 70_000, "{item}");
+        let saved = s.save_bytes(id).unwrap();
+        let mut again = crate::Session::new();
+        assert!(again.open("saved.pdf", None, saved, None).is_ok());
+    }
+
+    /// A form of `n` fields, each with an initialize script that colours it (a name holding a
+    /// `.`, as CFIA 5800's `CheckList20.10` does, when `dotted`), opened: the live form built,
+    /// the copies of it made for the scripts and the layouts, counted.
+    fn opening_work(n: usize, dotted: bool) -> (usize, usize, usize) {
+        let fields: String = (0..n)
+            .map(|i| {
+                let name = if dotted { format!("f{i}.x") } else { format!("f{i}") };
+                format!(
+                    r#"<field name="{name}" w="2in" h="0.3in"><ui><textEdit/></ui><event activity="initialize"><script contentType="application/x-javascript">this.border.fill.color.value = "51,102,153"; this.assist.toolTip.value = "Tip {i}";</script></event></field>"#
+                )
+            })
+            .collect();
+        work_of_opening(&fields, 2 * n)
+    }
+
+    /// A form of the `fields` given, opened: the live form built, the copies of it made for
+    /// the scripts and the layouts, counted. Its scripts change `properties` properties.
+    fn work_of_opening(fields: &str, properties: usize) -> (usize, usize, usize) {
+        let template = format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/"><subform name="form" layout="tb">
+<pageSet><pageArea name="p"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+{fields}</subform></template></xdp:xdp>"#
+        );
+        let mut doc = pdfcraft_cos::Document::open(Arc::new(pdfcraft_xfa::fixtures::shell(&template))).unwrap();
+        pdfcraft_xfa::render_into(&mut doc).unwrap();
+        let tpl = template_of_doc(&doc);
+        let mut out = JsOutput::default();
+        let mut run = XfaRun { page_count: 1, out: &mut out, datasets: None, ran_away: false, time_scale: 1000, highlight: false };
+        let _ = counts::take();
+        let changes = on_open(&mut doc, &tpl, &mut run).unwrap();
+        assert_eq!(changes.properties, properties, "{changes:?} {:?}", out.console);
+        counts::take()
+    }
+
+    /// The work an event does doesn't grow with the property changes its scripts make: one live
+    /// form, one copy of it for the scripts and one layout, for 1 field's scripts or 200 (names
+    /// holding a `.` too). Timing-independent: counts, not seconds.
+    #[test]
+    fn property_writes_dont_multiply_the_work_of_an_event() {
+        for dotted in [false, true] {
+            for n in [1, 200] {
+                assert_eq!(opening_work(n, dotted), (1, 1, 1), "{n} fields, dotted names {dotted}");
+            }
+        }
+    }
+
+    /// The property changes handed to each later script with its copy of the form are bounded
+    /// by what they hold, not only by their number: a form keeps one change of a property, but
+    /// every write of it is handed on. 600 scripts each giving the first field another tool tip
+    /// of 4,000 characters (2.4 MB together, under the number allowed) have the copy made
+    /// again each time the changes pass [`MAX_PENDING_PROP_BYTES`], twice, rather than every
+    /// script's start copying all of them. Every change is still made.
+    #[test]
+    fn long_property_changes_are_not_copied_for_every_script() {
+        let pad = "x".repeat(4_000);
+        let fields: String = (0..600)
+            .map(|i| {
+                format!(
+                    r#"<field name="f{i}" w="2in" h="0.3in"><ui><textEdit/></ui><event activity="initialize"><script contentType="application/x-javascript">f0.assist.toolTip.value = "Tip {i}{pad}";</script></event></field>"#
+                )
+            })
+            .collect();
+        assert_eq!(work_of_opening(&fields, 600), (1, 3, 1));
+    }
+
+    /// A later script of the same event reads what an earlier one wrote to a property: the
+    /// change goes with the copy of the form the later script is given.
+    #[test]
+    fn a_later_script_in_the_event_reads_an_earlier_scripts_property_change() {
+        let template = r#"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/"><subform name="form" layout="tb">
+<pageSet><pageArea name="p"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+<field name="a" w="2in" h="0.3in"><ui><textEdit/></ui><event activity="initialize"><script contentType="application/x-javascript">b.border.fill.color.value = "51,102,153"; b.assist.toolTip.value = "Set by a";</script></event></field>
+<field name="b" w="4in" h="0.3in"><ui><textEdit/></ui><event activity="initialize"><script contentType="application/x-javascript">this.rawValue = this.border.fill.color.value + "|" + this.assist.toolTip.value;</script></event></field>
+</subform></template></xdp:xdp>"#;
+        let mut s = crate::Session::new();
+        let id = s.open("later.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(template)), None).unwrap();
+        let b = s.get(id).unwrap().form.iter().find(|f| f.name.ends_with('b')).map(|f| f.value.clone()).unwrap_or_default();
+        assert_eq!(b, vec!["51,102,153|Set by a".to_string()]);
+    }
+
+    /// A later script of the event reads the change an earlier one made to a subform holding an
+    /// unnamed one, which shares its SOM path: the change is handed to the named subform, not
+    /// to the unnamed one inside it.
+    #[test]
+    fn a_later_script_reads_a_change_to_a_subform_holding_an_unnamed_one() {
+        let template = r#"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/"><subform name="form" layout="tb">
+<pageSet><pageArea name="p"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+<field name="a" w="2in" h="0.3in"><ui><textEdit/></ui><event activity="initialize"><script contentType="application/x-javascript">s.assist.toolTip.value = "Set by a";</script></event></field>
+<subform name="s" layout="tb"><subform layout="tb">
+<field name="b" w="4in" h="0.3in"><ui><textEdit/></ui><event activity="initialize"><script contentType="application/x-javascript">this.rawValue = this.parent.parent.assist.toolTip.value + "|" + this.parent.assist.toolTip.value;</script></event></field>
+</subform></subform>
+</subform></template></xdp:xdp>"#;
+        let mut s = crate::Session::new();
+        let id = s.open("later.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(template)), None).unwrap();
+        let b = s.get(id).unwrap().form.iter().find(|f| f.name.ends_with('b')).map(|f| f.value.clone()).unwrap_or_default();
+        assert_eq!(b, vec!["Set by a|".to_string()]);
     }
 }

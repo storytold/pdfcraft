@@ -67,6 +67,24 @@ pub(crate) fn js_output_json(out: &pdfcraft_engine::js::JsOutput) -> Value {
     })
 }
 
+/// An edit's result `out` with what the form's scripts showed, said or asked for because of
+/// the edit: `alerts`, `console` and `requests` as `js_run` reports them, each when there is
+/// any, and the scripts' errors among its `warnings`.
+pub(crate) fn with_js_output(mut out: Value, scripts: pdfcraft_engine::js::JsOutput) -> Value {
+    if let Some(map) = out.as_object_mut() {
+        if !scripts.alerts.is_empty() {
+            map.insert("alerts".into(), scripts.alerts.iter().map(alert_json).collect());
+        }
+        if !scripts.console.is_empty() {
+            map.insert("console".into(), json!(scripts.console));
+        }
+        if !scripts.requests.is_empty() {
+            map.insert("requests".into(), scripts.requests.iter().map(request_json).collect());
+        }
+    }
+    with_warnings(out, scripts.errors)
+}
+
 impl Automation {
     /// `js_run`: run `script` in the document, or as button `field`'s script, and report its
     /// messages, console lines, requests, error, the failing document scripts' errors and result.

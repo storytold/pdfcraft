@@ -14809,3 +14809,41 @@ fn grouped_existing_thai_body_edits_saves_reopens_and_undo_restores_original_gly
     assert_eq!(page_text(&mut a, reopened), [new, old]);
     assert_eq!(ok(&mut a, "content_list", json!({"doc":reopened}))["count"], 0, "editing existing text must not create Add Text objects");
 }
+
+/// form_fill and form_reset report what the form's scripts showed because of them, in their
+/// own results, and leave none of it waiting for a later tool.
+#[test]
+fn form_fill_and_form_reset_report_what_the_forms_scripts_showed() {
+    let dir = workdir("xfa-fill-output");
+    let template = r##"<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/"><template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="p"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <subform name="s" layout="tb">
+  <field name="qa" w="2in" h="0.3in"><ui><numericEdit/></ui><value><decimal>1</decimal></value></field>
+  <field name="qb" w="2in" h="0.3in"><ui><numericEdit/></ui><calculate><script contentType="application/x-javascript">xfa.host.messageBox("from " + qa.rawValue); qa.rawValue * 2</script></calculate></field>
+ </subform>
+</subform></template></xdp:xdp>"##;
+    std::fs::write(dir.join("form.pdf"), pdfcraft_xfa::fixtures::shell(template)).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "form.pdf" }))["doc"].as_u64().unwrap();
+    let fields = ok(&mut a, "form_fields", json!({ "doc": doc }));
+    let qa = fields["fields"].as_array().unwrap().iter().map(|x| x["name"].as_str().unwrap().to_string()).find(|n| n.ends_with("qa")).unwrap();
+    let shown = |r: &Value| -> Vec<String> {
+        r["alerts"].as_array().map(|l| l.iter().map(|m| m["message"].as_str().unwrap_or("").to_string()).collect()).unwrap_or_default()
+    };
+    // The calculation runs for the value filled in, and its message is in that result alone:
+    // not the one it showed when the form opened.
+    let filled = ok(&mut a, "form_fill", json!({ "doc": doc, "values": { qa.clone(): "3" } }));
+    let messages = shown(&filled);
+    assert!(!messages.is_empty() && messages.iter().all(|m| m == "from 3"), "{filled}");
+    let reset = ok(&mut a, "form_reset", json!({ "doc": doc }));
+    let messages = shown(&reset);
+    assert!(!messages.is_empty() && messages.iter().all(|m| m == "from 1"), "{reset}");
+    // An edit whose scripts show nothing has no list of them.
+    let undone = ok(&mut a, "edit_undo", json!({ "doc": doc }));
+    assert!(undone.get("alerts").is_none(), "{undone}");
+    // What the fill showed is not handed to a later tool again.
+    let later = ok(&mut a, "form_focus", json!({ "doc": doc, "field": qa, "event": "enter" }));
+    assert!(!shown(&later).iter().any(|m| m == "from 3"), "{later}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

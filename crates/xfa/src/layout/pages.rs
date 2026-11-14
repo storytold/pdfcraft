@@ -6,6 +6,11 @@ use super::{
     PageRole, Para, Rc, Rect, SomIndices, Views, XfaError, data_path, text,
 };
 
+/// The entries of `map` whose keys start with `prefix`.
+fn under<'a, V>(map: &'a std::collections::BTreeMap<String, V>, prefix: &'a str) -> impl Iterator<Item = (&'a String, &'a V)> {
+    map.range::<str, _>((std::ops::Bound::Included(prefix), std::ops::Bound::Unbounded)).take_while(move |(k, _)| k.starts_with(prefix))
+}
+
 impl Layouter<'_> {
     pub(super) fn warn_once(&mut self, msg: impl Into<String>) {
         let m = msg.into();
@@ -105,6 +110,18 @@ impl Layouter<'_> {
                 let y = s.baseline + s.face.size * UNDERLINE_DROP;
                 self.push(Item::Line { from: (s.x, y), to: (s.x + w, y), width: (s.face.size * 0.06).max(0.3), color: s.face.color, dashed: false })?;
             }
+            // Lines through the text (`lineThrough`, XFA 3.3 p. 742): one at about half the
+            // height of a lower-case letter, two a little above and below it.
+            if s.face.line_through > 0 && !s.text.trim().is_empty() {
+                let w = s.face.width(s.text.trim_end());
+                let mid = s.baseline - s.face.size * 0.28;
+                let width = (s.face.size * 0.05).max(0.3);
+                let ys: &[f64] = if s.face.line_through > 1 { &[-0.06, 0.06] } else { &[0.0] };
+                for dy in ys {
+                    let y = mid + s.face.size * dy;
+                    self.push(Item::Line { from: (s.x, y), to: (s.x + w, y), width, color: s.face.color, dashed: false })?;
+                }
+            }
             if !s.text.trim().is_empty() {
                 self.push(Item::Text(s))?;
             }
@@ -157,8 +174,10 @@ impl Layouter<'_> {
         // What scripts set on this page's master content (a button hidden on this page only) goes
         // on a copy of it for this page; other pages keep the template's.
         let prefix = format!("{}.", ctx.som);
-        let copy =
-            self.overrides.filter(|ov| !ctx.som.is_empty() && ov.presence.keys().chain(ov.access.keys()).any(|k| k.starts_with(&prefix))).map(|ov| {
+        let copy = self
+            .overrides
+            .filter(|ov| !ctx.som.is_empty() && (under(&ov.presence, &prefix).next().is_some() || under(&ov.access, &prefix).next().is_some()))
+            .map(|ov| {
                 let mut copy = area.items.clone();
                 crate::script::apply_overrides_to(&mut copy, &ctx.som, ov, 1);
                 let copy = Rc::new(copy);

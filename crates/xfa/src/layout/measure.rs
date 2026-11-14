@@ -22,7 +22,10 @@ impl Layouter<'_> {
         if depth > MAX_DEPTH || spent > MAX_MEASURES {
             return (c.w.unwrap_or(avail_w), c.h.unwrap_or(0.0));
         }
-        let own = ctx.with_som(c, index);
+        let own = match node {
+            Node::ExclGroup(_) => ctx.with_group_som(c, index),
+            _ => ctx.with_som(c, index),
+        };
         // Only containers recurse; their addresses are stable for the whole layout (the
         // template is borrowed, the root and page areas are held by the layouter). Without data
         // every instance is alike, so one measurement serves them all.
@@ -83,7 +86,14 @@ impl Layouter<'_> {
         let w = clamp_opt(w, c.min_w, c.max_w);
         let h = match c.h {
             Some(h) => h,
-            None => self.content_height(node, (w - c.margin.horizontal()).max(1.0), ctx, &som, outer_para, depth) + c.margin.vertical(),
+            None => {
+                let content = self.content_height(node, (w - c.margin.horizontal()).max(1.0), ctx, &som, outer_para, depth);
+                match node {
+                    // A row's cells already take its margins (`cells`), as it is drawn.
+                    Node::Subform(s) if s.layout == Layout::Row => content,
+                    _ => content + c.margin.vertical(),
+                }
+            }
         };
         // A subform without a height is as tall as what it holds, flowed or positioned. XFA 3.3
         // p. 847 makes `minH` its minimum; Adobe Acrobat doesn't stretch one to it (IRCC's

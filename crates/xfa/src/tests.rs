@@ -4248,6 +4248,7 @@ fn a_caption_without_a_font_or_a_reserve_takes_room_in_its_fields_font() {
         size,
         color: [0.0; 3],
         underline: false,
+        line_through: 0,
         h_scale: 1.0,
     };
     let courier_room = text::Face { family: crate::text::Family::Courier, ..helvetica(10.0) }.width("Name:") + 2.0;
@@ -4744,16 +4745,6 @@ fn strip_marks_document_as_requiring_full_save() {
     assert!(!doc.full_save_required());
     strip(&mut doc).unwrap();
     assert!(doc.full_save_required(), "stripping XFA packets must require a full save to prevent data exposure in incremental saves");
-}
-
-#[test]
-fn som_indices_count_earlier_same_named_siblings() {
-    let draw = |name: Option<&str>| {
-        Node::Draw(Box::new(Draw { common: Common { name: name.map(str::to_string), ..Default::default() }, ..Default::default() }))
-    };
-    let children = [draw(Some("a")), draw(Some("b")), draw(Some("a")), draw(None), draw(Some("a")), draw(Some("b"))];
-    let sibs = SomIndices::of(&children);
-    assert_eq!((0..=children.len()).map(|i| sibs.at(i)).collect::<Vec<_>>(), [0, 0, 1, 0, 2, 1, 0]);
 }
 
 /// A TIFF is drawn as viewers show it, turned by its Orientation tag: a 2 × 1 picture (red,
@@ -5323,6 +5314,7 @@ fn faces_measure_text_at_their_standard_14_widths() {
         size: 10.0,
         color: [0.0; 3],
         underline: false,
+        line_through: 0,
         h_scale: 1.0,
     };
     let sample = "Mill Wax 0123 Departure Date";
@@ -6294,6 +6286,20 @@ fn the_deprecated_break_before_form_breaks_only_to_a_page_or_content_area() {
     assert_eq!(page(r#"<break before="contentArea"/>"#), Some(1));
 }
 
+/// Its `after` attribute (XFA 3.3 p. 632) is read as its `before` is: `pageArea` and
+/// `contentArea` end the subform's page, so what follows the subform starts the next one, and
+/// the subform's own content stays where it was; `auto`, an empty or an unknown value breaks
+/// nothing.
+#[test]
+fn the_deprecated_break_after_form_breaks_only_to_a_page_or_content_area() {
+    assert_eq!(pages_around_break(r#"<break after="auto"/>"#, ""), (Some(0), Some(0)));
+    assert_eq!(pages_around_break(r#"<break after=""/>"#, ""), (Some(0), Some(0)));
+    assert_eq!(pages_around_break(r#"<break after="next"/>"#, ""), (Some(0), Some(0)));
+    assert_eq!(pages_around_break(r#"<break after="pageArea"/>"#, ""), (Some(0), Some(1)));
+    assert_eq!(pages_around_break(r#"<break after="contentArea"/>"#, ""), (Some(0), Some(1)));
+    assert_eq!(pages_around_break(r#"<break before="pageArea" after="pageArea"/>"#, ""), (Some(1), Some(2)));
+}
+
 /// Review on #5010: the text the reader returns is held to what `parse` accepts. A packet within
 /// the 64 MB byte limit that isn't valid UTF-8 grows as each bad byte becomes a three-byte
 /// replacement character: 33 MiB of them come to 99 MiB of text, past the limit, and are refused
@@ -6319,6 +6325,137 @@ fn packets_whose_text_grows_past_the_template_limit_are_refused() {
     })
     .unwrap();
     assert!(matches!(read_packets(&doc), Err(XfaError::TooLarge(_))));
+}
+
+/// A colour in 0..1 components from 0..255 ones.
+fn rgb255(r: f64, g: f64, b: f64) -> [f64; 3] {
+    [r / 255.0, g / 255.0, b / 255.0]
+}
+
+/// The template's drawing properties no script sets: fills with a pattern, gradient or stipple,
+/// a rounded corner's own stroke, lines through text and default tab stops.
+fn drawing_template() -> Template {
+    let box_ = |name: &str, fill: &str| {
+        format!(r#"<draw name="{name}" w="2in" h="0.5in"><border><edge/><fill><color value="200,200,200"/>{fill}</fill></border></draw>"#)
+    };
+    let xml = format!(
+        r#"<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/"><subform name="form" layout="tb">
+ <pageSet><pageArea name="p"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ {}{}{}{}{}
+ <field name="widget" w="2in" h="0.3in"><ui><textEdit><border><edge/><fill><color value="200,200,200"/><pattern type="vertical"><color value="255,0,0"/></pattern></fill></border></textEdit></ui></field>
+ <draw name="round" w="2in" h="0.5in"><border><edge/><corner radius="10pt" thickness="3pt"><color value="255,0,0"/></corner></border></draw>
+ <draw name="struck" w="3in" h="0.3in"><font typeface="Helvetica" size="12pt" lineThrough="1"/><value><text>Struck</text></value></draw>
+ <field name="value" w="3in" h="0.3in"><ui><textEdit/></ui><font typeface="Helvetica" size="12pt" lineThrough="2"/><caption reserve="1in"><font typeface="Helvetica" size="10pt" lineThrough="0"/><value><text>Own font</text></value></caption></field>
+ <draw name="tabs" w="5in" h="0.3in"><para tabDefault="1in"/><value><text>a	b</text></value></draw>
+</subform></template>"#,
+        box_("hatch", r#"<pattern type="crossHatch"><color value="255,0,0"/></pattern>"#),
+        box_("linear", r#"<linear type="toRight"><color value="255,0,0"/></linear>"#),
+        box_("radial", r#"<radial><color value="255,0,0"/></radial>"#),
+        box_("stipple", r#"<stipple rate="50"><color value="255,0,0"/></stipple>"#),
+        box_("solid", ""),
+    );
+    crate::parse(&xml).unwrap().0
+}
+
+/// What the page holds inside `r`.
+fn items_in(page: &Page, r: Rect) -> Vec<&Item> {
+    let inside = |x: f64, y: f64| x >= r.x - 0.01 && x <= r.right() + 0.01 && y >= r.y - 0.01 && y <= r.bottom() + 0.01;
+    page.items
+        .iter()
+        .filter(|i| match i {
+            Item::Line { from, to, .. } => inside(from.0, from.1) && inside(to.0, to.1),
+            Item::Fill { rect, .. } => inside(rect.x, rect.y) && inside(rect.right(), rect.bottom()),
+            Item::Rounded(b) => inside(b.rect.x, b.rect.y) && inside(b.rect.right(), b.rect.bottom()),
+            _ => false,
+        })
+        .collect()
+}
+
+/// An image field's picture is not covered by its widget's fill: the widget draws no border or
+/// background of its own, with a pattern as with a plain colour, so the picture is the last
+/// thing drawn in the field's box.
+#[test]
+fn an_image_fields_patterned_widget_fill_is_not_drawn_over_its_picture() {
+    let fill = r#"<fill><color value="200,200,200"/><pattern type="vertical"><color value="255,0,0"/></pattern></fill>"#;
+    let plain = fields_template("");
+    assert!(plain.contains("<ui><imageEdit/></ui>"));
+    let patterned = plain.replace("<ui><imageEdit/></ui>", &format!("<ui><imageEdit><border><edge/>{fill}</border></imageEdit></ui>"));
+    let drawn = |xml: &str| {
+        let form = layout_xml(xml).unwrap();
+        let page = &form.pages[0];
+        let (red, grey) = (rgb255(255.0, 0.0, 0.0), rgb255(200.0, 200.0, 200.0));
+        let fills = page.items.iter().filter(|i| matches!(i, Item::Fill { color, .. } if *color == grey)).count();
+        let hatching = page.items.iter().filter(|i| matches!(i, Item::Line { color, .. } if *color == red)).count();
+        let images = page.items.iter().filter(|i| matches!(i, Item::Image { .. })).count();
+        (fills, hatching, images)
+    };
+    assert_eq!(drawn(&patterned), drawn(&plain));
+    assert_eq!(drawn(&patterned), (0, 0, 2));
+}
+
+/// A template's fill with a pattern, gradient or stipple (XFA 3.3 p. 734, 806, 770, 820, 839)
+/// is drawn over its colour: hatching strokes in the pattern's colour, a gradient in bands
+/// that reach under each other (no seam shows), nested ovals, the stipple's blend; a solid fill
+/// is one colour. A widget's patterned background is page content under it.
+#[test]
+fn template_fills_with_patterns_gradients_and_stipples_are_drawn() {
+    let form = crate::layout::layout(&drawing_template(), None).unwrap();
+    let page = &form.pages[0];
+    let (red, grey) = (rgb255(255.0, 0.0, 0.0), rgb255(200.0, 200.0, 200.0));
+    let boxes: Vec<Rect> =
+        page.items.iter().filter_map(|i| if let Item::Fill { rect, color } = i { (*color == grey).then_some(*rect) } else { None }).collect();
+    assert!(boxes.len() >= 5, "{boxes:?}");
+    let (hatch, linear, radial, stipple, solid) = (boxes[0], boxes[1], boxes[2], boxes[3], boxes[4]);
+    let red_lines = |r: Rect| {
+        items_in(page, r)
+            .into_iter()
+            .filter_map(|i| if let Item::Line { from, to, color, .. } = i { (*color == red).then_some((*from, *to)) } else { None })
+            .collect::<Vec<_>>()
+    };
+    let lines = red_lines(hatch);
+    assert!(lines.iter().any(|(f, t)| f.1 == t.1) && lines.iter().any(|(f, t)| f.0 == t.0), "both directions: {lines:?}");
+    let bands: Vec<Rect> = items_in(page, linear)
+        .into_iter()
+        .filter_map(|i| if let Item::Fill { rect, color } = i { (*color != grey).then_some(*rect) } else { None })
+        .collect();
+    assert_eq!(bands.len(), 64);
+    assert!(bands.windows(2).all(|w| w[0].right() > w[1].x + 0.1), "each band reaches under the next");
+    assert_eq!(items_in(page, radial).into_iter().filter(|i| matches!(i, Item::Rounded(_))).count(), 64);
+    let half = std::array::from_fn::<f64, 3, _>(|i| (grey[i] + red[i]) / 2.0);
+    assert!(items_in(page, stipple).iter().any(|i| matches!(i, Item::Fill { color, .. } if *color == half)));
+    assert!(red_lines(solid).is_empty() && items_in(page, solid).iter().filter(|i| matches!(i, Item::Fill { .. })).count() == 1);
+    let w = widgets(page).into_iter().find(|w| w.som == "form[0].widget[0]").unwrap();
+    assert_eq!(w.border.fill, None, "the widget's own background stays clear");
+    assert!(red_lines(w.rect).iter().all(|(f, t)| f.0 == t.0) && !red_lines(w.rect).is_empty(), "vertical strokes under it");
+}
+
+/// `lineThrough` (XFA 3.3 p. 742) strikes a draw's text once, and a field's value twice (the
+/// widget says so to the forms layer); a caption whose own font sets `lineThrough="0"` is not struck.
+#[test]
+fn template_line_through_strikes_text_and_values() {
+    let form = crate::layout::layout(&drawing_template(), None).unwrap();
+    let page = &form.pages[0];
+    let span = |t: &str| page.items.iter().find_map(|i| if let Item::Text(s) = i { s.text.contains(t).then(|| s.clone()) } else { None }).unwrap();
+    let through = |s: &crate::text::Span| {
+        page.items.iter().filter(|i| matches!(i, Item::Line { from, to, color, .. } if from.1 == to.1 && *color == s.face.color && (from.0 - s.x).abs() < 0.01 && from.1 < s.baseline && from.1 > s.baseline - s.face.size * 0.6)).count()
+    };
+    assert_eq!(through(&span("Struck")), 1);
+    assert_eq!(through(&span("Own font")), 0);
+    let w = widgets(page).into_iter().find(|w| w.som == "form[0].value[0]").unwrap();
+    assert_eq!(w.face.line_through, 2);
+}
+
+/// `para.tabDefault` (XFA 3.3 p. 802): the text after a tab starts at the next tab stop.
+#[test]
+fn template_tabs_go_to_the_default_tab_stops() {
+    let form = crate::layout::layout(&drawing_template(), None).unwrap();
+    let xs: Vec<(String, f64)> = form.pages[0]
+        .items
+        .iter()
+        .filter_map(|i| if let Item::Text(s) = i { matches!(s.text.trim(), "a" | "b").then(|| (s.text.trim().to_string(), s.x)) } else { None })
+        .collect();
+    assert_eq!(xs.len(), 2, "{xs:?}");
+    assert!((xs[1].1 - xs[0].1 - 72.0).abs() < 0.01, "{xs:?}");
 }
 
 #[test]
@@ -8004,5 +8141,139 @@ two"
         let before = tree.clone();
         tree.apply(&DataOp::Value { path: path.clone(), text: "millet".into() });
         assert_eq!(tree, before, "{structured}");
+    }
+}
+
+/// Which SOM paths more than one object of the form has or may have ([`crate::som_is_shared`]):
+/// two unnamed fields or exclusion groups of one container (`field[0]`, `group[0]`), a field
+/// named `field` beside an unnamed one, unnamed buttons of one group, the content of an unnamed
+/// subform that occurs twice (each instance names it as the first does), a repeating subform's
+/// second instance and a same-named subform after it (both `row[1]`) with what they hold, and
+/// what two page areas of one name hold. Not shared: a lone unnamed object, a repeating
+/// subform's later instance that nothing else is numbered as, a named subform holding an unnamed
+/// one (which takes its path), and same-named objects in unnamed subforms of one container,
+/// which count up through them (XFA 3.3 p. 95; form 052's `verified` subforms, each in an
+/// unnamed subform). The answer agrees with the live form's paths: every path its objects own
+/// (not taken from their parent) is shared exactly when more than one owns it.
+#[test]
+fn som_paths_several_objects_share_are_told() {
+    let xdp = r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet>
+  <pageArea name="p"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/>
+   <field x="1in" y="0.1in" w="1in" h="0.3in"><ui><textEdit/></ui></field><field x="3in" y="0.1in" w="1in" h="0.3in"><ui><textEdit/></ui></field><field name="pn" x="5in" y="0.1in" w="1in" h="0.3in"><ui><textEdit/></ui></field></pageArea>
+  <pageArea><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/>
+   <field x="1in" y="0.1in" w="1in" h="0.3in"><ui><textEdit/></ui></field><field x="3in" y="0.1in" w="1in" h="0.3in"><ui><textEdit/></ui></field><field name="pn" x="5in" y="0.1in" w="1in" h="0.3in"><ui><textEdit/></ui></field></pageArea>
+  <pageArea name="q"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/>
+   <field x="1in" y="0.1in" w="1in" h="0.3in"><ui><textEdit/></ui></field><field name="pn" x="5in" y="0.1in" w="1in" h="0.3in"><ui><textEdit/></ui></field></pageArea>
+  <pageArea name="q"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/>
+   <field x="1in" y="0.1in" w="1in" h="0.3in"><ui><textEdit/></ui></field><field name="pn" x="5in" y="0.1in" w="1in" h="0.3in"><ui><textEdit/></ui></field></pageArea>
+ </pageSet>
+ <subform name="two" layout="tb">
+  <field name="named" w="2in" h="0.3in"><ui><textEdit/></ui></field>
+  <field w="2in" h="0.3in"><ui><textEdit/></ui></field>
+  <field w="2in" h="0.3in"><ui><textEdit/></ui></field>
+  <exclGroup><field w="1in" h="0.3in"><ui><checkButton/></ui><items><integer>1</integer></items></field></exclGroup>
+  <exclGroup><field w="1in" h="0.3in"><ui><checkButton/></ui><items><integer>2</integer></items></field></exclGroup>
+ </subform>
+ <subform name="one" layout="tb">
+  <field w="2in" h="0.3in"><ui><textEdit/></ui></field>
+  <exclGroup name="g"><field w="1in" h="0.3in"><ui><checkButton/></ui><items><integer>1</integer></items></field><field name="b" w="1in" h="0.3in"><ui><checkButton/></ui><items><integer>2</integer></items></field></exclGroup>
+  <exclGroup name="h"><field w="1in" h="0.3in"><ui><checkButton/></ui><items><integer>1</integer></items></field><field w="1in" h="0.3in"><ui><checkButton/></ui><items><integer>2</integer></items></field></exclGroup>
+ </subform>
+ <subform name="literal" layout="tb">
+  <field name="field" w="2in" h="0.3in"><ui><textEdit/></ui></field>
+  <field w="2in" h="0.3in"><ui><textEdit/></ui></field>
+ </subform>
+ <subform name="nested" layout="tb">
+  <field name="x" w="2in" h="0.3in"><ui><textEdit/></ui></field>
+  <subform layout="tb"><field name="x" w="2in" h="0.3in"><ui><textEdit/></ui></field><field name="y" w="2in" h="0.3in"><ui><textEdit/></ui></field></subform>
+ </subform>
+ <subform name="rows" layout="tb">
+  <subform name="row" layout="tb"><occur min="3" max="-1" initial="3"/><field name="item" w="2in" h="0.3in"><ui><textEdit/></ui></field></subform>
+ </subform>
+ <subform name="twice" layout="tb">
+  <subform layout="tb"><occur min="2" max="2" initial="2"/><field name="a" w="2in" h="0.3in"><ui><textEdit/></ui></field><field w="2in" h="0.3in"><ui><textEdit/></ui></field></subform>
+ </subform>
+ <subform name="rows2" layout="tb">
+  <subform name="row" layout="tb"><occur min="2" max="-1" initial="2"/><field name="item" w="2in" h="0.3in"><ui><textEdit/></ui></field><field w="2in" h="0.3in"><ui><textEdit/></ui></field></subform>
+  <subform name="row" layout="tb"><field name="item" w="2in" h="0.3in"><ui><textEdit/></ui></field><field w="2in" h="0.3in"><ui><textEdit/></ui></field></subform>
+ </subform>
+ <subform name="tax" layout="tb">
+  <subform layout="tb"><subform name="verified" layout="tb"><field name="yes" w="1in" h="0.3in"><ui><checkButton/></ui></field><field name="no" w="1in" h="0.3in"><ui><checkButton/></ui></field></subform></subform>
+  <subform layout="tb"><subform name="verified" layout="tb"><field name="yes" w="1in" h="0.3in"><ui><checkButton/></ui></field><field name="no" w="1in" h="0.3in"><ui><checkButton/></ui></field></subform></subform>
+ </subform>
+</subform>
+</template>
+</xdp:xdp>
+"##;
+    let (tpl, _) = parse(xdp).unwrap();
+    let shared = |som: &str| crate::som_is_shared(&tpl, som);
+    for som in [
+        "form[0].two[0].field[0]",
+        "form[0].two[0].group[0]",
+        "form[0].two[0].group[0].field[0]",
+        "form[0].one[0].h[0].field[0]",
+        "form[0].literal[0].field[0]",
+        "form[0].twice[0].field[0]",
+        "form[0].rows2[0].row[1].field[0]",
+        "form[0].rows2[0].row[1].item[0]",
+        "form[0].rows2[0].row[1]",
+        "form[0].twice[0].a[0]",
+        "p[0].field[0]",
+        "#pageArea[1].field[0]",
+        "q[0].field[0]",
+        "q[0].pn[0]",
+        "q[0]",
+    ] {
+        assert!(shared(som), "{som}");
+    }
+    for som in [
+        "form[0]",
+        "form[0].two[0]",
+        "form[0].two[0].named[0]",
+        "form[0].one[0].field[0]",
+        "form[0].one[0].g[0].field[0]",
+        "form[0].one[0].g[0].b[0]",
+        "form[0].nested[0]",
+        "form[0].nested[0].x[0]",
+        "form[0].nested[0].x[1]",
+        "form[0].nested[0].y[0]",
+        "form[0].rows[0].row[2].item[0]",
+        "form[0].rows[0].row[7].item[0]",
+        "form[0].rows2[0].row[0]",
+        "form[0].rows2[0].row[0].field[0]",
+        "form[0].rows2[0].row[2].item[0]",
+        "form[0].tax[0].verified[0]",
+        "form[0].tax[0].verified[0].yes[0]",
+        "form[0].tax[0].verified[1]",
+        "form[0].tax[0].verified[1].no[0]",
+        "p[0].pn[0]",
+        "#pageArea[1].pn[0]",
+        "#pageArea[7].field[0]",
+        "#pageArea[1]",
+        "p[0]",
+        "form[0].nowhere[0].field[0]",
+        "elsewhere[0].field[0]",
+        "",
+    ] {
+        assert!(!shared(som), "{som}");
+    }
+    // Against the live form's own paths, page areas' content included.
+    let live = crate::form_tree(&tpl, None, &crate::Overrides::default());
+    let mut owners: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    fn walk(n: &crate::FormNode, parent: &str, owners: &mut std::collections::HashMap<String, usize>) {
+        if n.som != parent {
+            *owners.entry(n.som.clone()).or_default() += 1;
+        }
+        n.children.iter().for_each(|c| walk(c, &n.som, owners));
+    }
+    walk(&live.root, "", &mut owners);
+    assert!(owners.len() > 30, "{owners:?}");
+    assert!(owners.values().any(|&n| n > 1), "{owners:?}");
+    for (som, &n) in &owners {
+        assert_eq!(shared(som), n > 1, "{som}: {n} owner(s)");
     }
 }

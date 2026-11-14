@@ -514,6 +514,36 @@ pub(crate) fn is_round(doc: &Document, wd: &Dict) -> bool {
     matches!(wd.get(b"PCXfaRound").map(|o| doc.resolve(o)).as_deref(), Some(Object::Bool(true)))
 }
 
+/// How many lines a text widget PdfCraft laid out for an XFA field draws through its value
+/// (`/PCXfaLineThrough 1` or `2`, written by the XFA layout); 0 for none or anything else.
+fn line_through(doc: &Document, wd: &Dict) -> u8 {
+    match wd.get(b"PCXfaLineThrough").map(|o| doc.resolve(o)).and_then(|o| o.as_int()) {
+        Some(1) => 1,
+        Some(2) => 2,
+        _ => 0,
+    }
+}
+
+/// The lines `strikes` (1 or 2, see [`line_through`]) draws through each of the `shown` lines
+/// of text (where, and what) at `size`, in the text's colour (still the fill colour after `ET`):
+/// one at about half the height of a lower-case letter, two a little above and below it.
+fn line_through_marks(shown: &[(f64, f64, String)], strikes: u8, size: f64, width_of: impl Fn(&str, f64) -> f64) -> String {
+    let mut out = String::new();
+    if strikes == 0 {
+        return out;
+    }
+    let offsets: &[f64] = if strikes > 1 { &[-0.06, 0.06] } else { &[0.0] };
+    let thick = (size * 0.05).max(0.3);
+    for (x, y, text) in shown.iter().filter(|(_, _, t)| !t.trim().is_empty()) {
+        let w = width_of(text.trim_end(), size);
+        for dy in offsets {
+            let mid = y + size * (0.28 + dy);
+            out.push_str(&format!("{} {} {} {} re f\n", n(*x), n(mid - thick / 2.0), n(w), n(thick)));
+        }
+    }
+    out
+}
+
 /// [`frame`] for a round check button: the `/MK /BG` background as a disc and the `/MK /BC`
 /// border as a circle, both centred in the `w` × `h` box and as wide as its shorter side. A
 /// dashed border stays dashed and an underline stays an underline; any other style is drawn
@@ -842,6 +872,7 @@ fn field_appearance_fit(doc: &Document, f: &Field, w: &Widget, values: &[String]
     let pad = 2.0 + bw;
     let inner_w = (width - 2.0 * pad).max(1.0);
     let q = wd.get(b"Q").and_then(|o| doc.resolve(o).as_int()).unwrap_or(f.quadding);
+    let strikes = line_through(doc, &wd);
     // The lines to draw (where, and what), drawn once all are known: their Thai shares fonts.
     let mut shown: Vec<(f64, f64, String)> = Vec::new();
     let mut show = |x: f64, y: f64, text: &str| {
@@ -968,7 +999,9 @@ fn field_appearance_fit(doc: &Document, f: &Field, w: &Widget, values: &[String]
     )
     .into_bytes();
     content.extend(body);
-    content.extend_from_slice(b"ET\nQ\nEMC\n");
+    content.extend_from_slice(b"ET\n");
+    content.extend(line_through_marks(&shown, strikes, size, width_of).bytes());
+    content.extend_from_slice(b"Q\nEMC\n");
     let mut res = Dict::new();
     res.set(b"Font".to_vec(), Object::Dict(fonts));
     let mut d = Dict::new();

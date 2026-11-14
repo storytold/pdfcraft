@@ -12,15 +12,22 @@ pub mod fixtures;
 pub mod image;
 pub mod layout;
 pub mod linked_images;
+mod memo;
 pub mod model;
+mod numbering;
 pub mod packets;
 pub mod parse;
 pub mod pdf;
 pub mod picture;
+/// The rules a script's property change must meet, shared with the scripting host
+/// (`pdfcraft_js`): one crate both depend on.
+pub use pdfcraft_xfa_rules as prop_rules;
 mod proto;
+pub mod restyle;
 pub mod script;
 pub mod text;
 mod traverse;
+pub mod validation_rules;
 
 use pdfcraft_cos::Document;
 
@@ -96,9 +103,10 @@ pub(crate) fn xml_nesting_depth(text: &str) -> usize {
 
 pub use data::{DataImport, ImportNode, export_data, import_data, parse_data_file, write_data_image};
 pub use data::{
-    DataNode, DataOp, DataPath, DatasetsWrite, FieldData, FieldDatum, add_data_instances, build_data, clear_password_values, data_path,
+    DataNode, DataOp, DataPath, DatasetsWrite, FieldData, FieldDatum, SomPaths, add_data_instances, build_data, clear_password_values, data_path,
     has_password_values, iso_to_pattern, parse_datasets, pattern_to_iso, radio_dataset_value, radio_state_for_item, read_values, read_values_with,
-    remove_data_instance, som_to_path, write_data_ops, write_data_value, write_datasets, write_datasets_reusing, write_datasets_with,
+    remove_data_instance, som_is_shared, som_made_once, som_to_path, write_data_ops, write_data_value, write_datasets, write_datasets_reusing,
+    write_datasets_with,
 };
 pub use layout::{Action, BorderShape, Form, Item, MAX_PAGES, Page, Widget, WidgetKind, formatted_value, layout};
 pub use packets::{Encoding, Packets, decode as decode_packet, encode as encode_packet, read_packets};
@@ -106,9 +114,10 @@ pub use parse::{measure, numbers_pages, parse};
 pub use pdf::{AREA_KEY, CLICK_KEY, DATE_KEY, LAYOUT_KEY, NODE_KEY, SOM_KEY, Stripped, XfaShape, existing_layout, strip, xfa_shape};
 pub use picture::typed_date;
 pub use script::{
-    FormNode, LiveForm, MAX_FORM_NODES, NodeKind, OVERRIDES_KEY, Overrides, ScriptEvent, apply_overrides, data_of, embedded_fields,
-    field_grows_with_text, field_is_embedded, field_objects_by_som, fields_by_som, form_tree, form_tree_paged, has_focus_scripts, has_scripts,
-    overrides, page_area_uses, path_is_embedded, refresh_value, rerender, reset_default, set_overrides, template_of,
+    Applied, FormNode, LiveForm, MAX_FORM_NODES, NodeKind, OVERRIDES_KEY, Overrides, PropRefused, ScriptEvent, apply_overrides,
+    apply_overrides_split, data_of, embedded_fields, field_grows_with_text, field_is_embedded, field_now, field_objects_by_som, fields_by_som,
+    form_tree, form_tree_paged, has_focus_scripts, has_scripts, overrides, overrides_of, page_area_uses, path_is_embedded, property_notes,
+    refresh_props, refresh_value, rerender, reset_default, set_overrides, template_of, value_overridden,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -164,9 +173,10 @@ pub fn render_into(doc: &mut Document) -> Result<Report, XfaError> {
     let (mut tpl, mut parse_warnings) = parse(&packets.xdp)?;
     parse_warnings.extend(linked_images::resolve(&mut tpl, doc));
     let data = parse_datasets(&packets.xdp);
-    let ov = overrides(doc);
-    let laid = apply_overrides(&tpl, &ov);
-    let mut form = layout::layout_with_overrides(&laid, data.as_ref(), &ov)?;
+    let ov = overrides_of(doc, &tpl);
+    let applied = script::apply_overrides_split(&tpl, &ov);
+    let mut form = layout::layout_with_overrides(&applied.template, data.as_ref(), &ov)?;
+    form.warnings.extend(script::property_notes(&ov, &applied));
     form.warnings.splice(0..0, parse_warnings);
     if form.pages.is_empty() {
         return Err(XfaError::Malformed("the template laid out to no pages".into()));
@@ -180,6 +190,9 @@ pub fn render_into(doc: &mut Document) -> Result<Report, XfaError> {
     warnings.dedup();
     Ok(Report { pages: written.pages, fields: written.fields, template_bytes: packets.xdp.len(), warnings })
 }
+
+#[cfg(test)]
+mod numbering_tests;
 
 #[cfg(test)]
 mod repeat_tests;

@@ -33,7 +33,10 @@ pub(super) fn escape(s: &str) -> (String, bool) {
 /// Most data nodes one write may create (instances skipped by a SOM index count too).
 const MAX_NEW_NODES: usize = 20_000;
 
-/// Highest same-name sibling index a write follows.
+/// Highest same-name sibling index a write follows. An object's SOM number is its data
+/// node's, and the numbers count through the instances of unnamed subforms, so a template can
+/// number an object past this without that much data: such an object is shown, and a value
+/// given to it is not kept, which the write reports ([`TOO_MANY`]).
 pub(super) const MAX_INDEX: usize = 10_000;
 
 /// Most bytes of names the nodes one write creates hold together: every sibling an index

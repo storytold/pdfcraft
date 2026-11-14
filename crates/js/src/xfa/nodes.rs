@@ -1,7 +1,7 @@
 use super::globals::{recalculate, relayout};
 use super::host::{HNode, XHost, host};
 use super::instances::{instance_manager, list_object};
-use super::model::{MAX_DEPTH, XfaEffect};
+use super::model::{MAX_DEPTH, XfaEffect, XfaKind};
 use super::props;
 use super::{
     Attribute, Context, JsObject, JsProxy, JsResult, JsString, JsValue, NativeFunction, ObjectInitializer, arg, as_number, clip, error, function,
@@ -68,22 +68,125 @@ fn value_js(h: &HNode) -> JsValue {
     s(&h.value)
 }
 
-/// `(idx, name)` of the child of `parent` named `name`, first instance.
-pub(crate) fn child_named(h: &XHost, parent: usize, name: &str) -> Option<usize> {
-    let p = h.nodes.get(parent)?;
-    p.children.iter().copied().find(|&c| h.nodes.get(c).is_some_and(|n| !n.gone && &*n.name == name))
+/// Whether node `i` adds no segment to SOM expressions: an unnamed subform or area, whose
+/// content is its parent's there ("Transparent Nodes", XFA 3.3 pp. 94-95).
+pub(crate) fn transparent(h: &XHost, i: usize) -> bool {
+    h.nodes.get(i).is_some_and(|n| matches!(n.kind, XfaKind::Subform | XfaKind::Area)) && !h.owns_som(i)
 }
 
-/// Every live instance named `name` under `parent`, in order.
+/// The container whose SOM scope node `i` is in when `i` is a container itself: `i`, or its
+/// nearest ancestor that is not an unnamed subform or area.
+pub(crate) fn scope_of(h: &XHost, i: usize) -> usize {
+    let mut at = i;
+    for _ in 0..MAX_DEPTH {
+        match h.nodes.get(at).and_then(|n| n.parent) {
+            Some(p) if transparent(h, at) => at = p,
+            _ => break,
+        }
+    }
+    at
+}
+
+/// Visit the live objects named `name` in the SOM scope of `parent`, in document order, until
+/// `visit` says to stop (`true`, which is then returned): the children of `parent`, and those
+/// of its unnamed subforms and areas, which a SOM expression sees through (XFA 3.3 pp. 94-95,
+/// Example 3.12: `Receipt.Description[1]` is in the second unnamed subform of `Receipt`).
+fn scope_walk(h: &XHost, parent: usize, name: &str, depth: usize, visit: &mut dyn FnMut(usize) -> bool) -> bool {
+    let Some(p) = h.nodes.get(parent).filter(|_| depth <= MAX_DEPTH) else { return false };
+    for &c in p.children.iter() {
+        let Some(n) = h.nodes.get(c).filter(|n| !n.gone) else { continue };
+        if &*n.name == name {
+            if visit(c) {
+                return true;
+            }
+        } else if transparent(h, c) && scope_walk(h, c, name, depth + 1, visit) {
+            return true;
+        }
+    }
+    false
+}
+
+/// The first live object named `name` in the SOM scope of `parent` (see [`scoped`]).
+pub(crate) fn child_named(h: &XHost, parent: usize, name: &str) -> Option<usize> {
+    let mut first = None;
+    scope_walk(h, parent, name, 0, &mut |c| {
+        first = Some(c);
+        true
+    });
+    first
+}
+
+/// The object whose instance manager `parent._name` is: the first repeating subform named
+/// `name` in the SOM scope of `parent`, and with none the first object of the name. A subform
+/// that occurs once before the repeating one of its name (a header row named as the rows are)
+/// has no instances to manage.
+pub(crate) fn managed_named(h: &XHost, parent: usize, name: &str) -> Option<usize> {
+    let (mut first, mut repeating) = (None, None);
+    scope_walk(h, parent, name, 0, &mut |c| {
+        first.get_or_insert(c);
+        let repeats = h.nodes.get(c).is_some_and(|n| n.repeatable);
+        if repeats {
+            repeating = Some(c);
+        }
+        repeats
+    });
+    repeating.or(first)
+}
+
+/// Every live object named `name` in the SOM scope of `parent`, in document order: what
+/// `parent.name[*]` names, and `parent.name[n]` the one at place `n`.
+pub(crate) fn scoped(h: &XHost, parent: usize, name: &str) -> Vec<usize> {
+    let mut out = Vec::new();
+    scope_walk(h, parent, name, 0, &mut |c| {
+        out.push(c);
+        false
+    });
+    out
+}
+
+/// The children of `parent` as SOM expressions see them: its own, with the content of each
+/// unnamed subform or area in its place (gone ones included, as in its child list).
+pub(crate) fn scope_members(h: &XHost, parent: usize) -> Vec<usize> {
+    fn walk(h: &XHost, parent: usize, depth: usize, out: &mut Vec<usize>) {
+        let Some(p) = h.nodes.get(parent).filter(|_| depth <= MAX_DEPTH) else { return };
+        for &c in p.children.iter() {
+            if transparent(h, c) {
+                walk(h, c, depth + 1, out);
+            } else {
+                out.push(c);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(h, parent, 0, &mut out);
+    out
+}
+
+/// Every live instance named `name` among the children of `parent` itself, in order: what an
+/// instance manager counts, adds to and removes from. A subform that occurs once is no instance
+/// of a repeating one of its name (a header row named as the rows after it are): where one of
+/// the name repeats, the instances are those that do.
 pub(crate) fn instances(h: &XHost, parent: usize, name: &str) -> Vec<usize> {
-    h.nodes
+    let named: Vec<usize> = h
+        .nodes
         .get(parent)
         .map(|p| p.children.iter().copied().filter(|&c| h.nodes.get(c).is_some_and(|n| !n.gone && &*n.name == name)).collect())
-        .unwrap_or_default()
+        .unwrap_or_default();
+    let repeats = |c: &usize| h.nodes.get(*c).is_some_and(|n| n.repeatable);
+    if named.iter().any(repeats) { named.into_iter().filter(repeats).collect() } else { named }
+}
+
+/// The place of node `i` among the instances its instance manager counts (`instanceIndex`). The
+/// number in its SOM path (`index`) is that only when no same-named object comes before the
+/// first instance in its SOM scope.
+pub(crate) fn instance_place(h: &XHost, i: usize) -> usize {
+    let Some(n) = h.nodes.get(i) else { return 0 };
+    n.parent.and_then(|p| instances(h, p, &n.name).iter().position(|&k| k == i)).unwrap_or(n.index)
 }
 
 /// Resolve a SOM expression from node `from`: `$`, `$form`, `$record`, `$host`, `xfa.form…`,
-/// `parent`, `..name` (descendant search), `name[n]`, `name[*]`, `_name`.
+/// `parent`, `..name` (descendant search), `name[n]`, `name[*]`, `_name`. A name is looked for
+/// in the SOM scope of the node before it ([`scoped`]), so through unnamed subforms and areas.
 pub(crate) fn resolve_som(h: &XHost, from: usize, expr: &str) -> Vec<usize> {
     let expr = expr.trim();
     if expr.is_empty() {
@@ -130,7 +233,7 @@ pub(crate) fn resolve_som(h: &XHost, from: usize, expr: &str) -> Vec<usize> {
                     }
                 }
                 _ => {
-                    let mut found: Vec<usize> = if descend { descendants_named(h, c, name, 0) } else { instances(h, c, name) };
+                    let mut found: Vec<usize> = if descend { descendants_named(h, c, name, 0) } else { scoped(h, c, name) };
                     // A relative name a node has no child for is looked for among its siblings
                     // and in each enclosing container, nearest first (so a field's script can
                     // say `resolveNode("otherField")`).
@@ -140,7 +243,13 @@ pub(crate) fn resolve_som(h: &XHost, from: usize, expr: &str) -> Vec<usize> {
                         while let Some(p) = at
                             && guard < MAX_DEPTH
                         {
-                            found = instances(h, p, name);
+                            // An unnamed subform's or area's content is its container's
+                            // (pp. 94-95): a numbered name (`name[n]`, `name[*]`) is counted
+                            // among all of that scope. A name without a number is the nearest
+                            // one, as a bare name in a script is: the one in the unnamed
+                            // subform the script's object is in comes before its neighbours'.
+                            let p = if index.is_some() { scope_of(h, p) } else { p };
+                            found = scoped(h, p, name);
                             if !found.is_empty() {
                                 break;
                             }
@@ -151,9 +260,20 @@ pub(crate) fn resolve_som(h: &XHost, from: usize, expr: &str) -> Vec<usize> {
                     match index.as_deref() {
                         Some("*") => next.extend(found),
                         Some(i) => {
-                            if let Some(k) = i.parse::<usize>().ok().and_then(|i| found.get(i)) {
-                                next.push(*k);
-                            }
+                            // In a scope a number is the object's SOM number (pp. 94-95), which
+                            // an unnamed object of the class shares with a named one (it doesn't
+                            // advance the named ones' numbers), so it isn't the place among the
+                            // matches once an unnamed subform's content is among them.
+                            // Descendants (`..`) are numbered in their own containers, so there
+                            // it stays the place.
+                            let pick = i.parse::<usize>().ok().and_then(|i| {
+                                if descend {
+                                    found.get(i).copied()
+                                } else {
+                                    found.iter().copied().find(|&k| h.nodes.get(k).is_some_and(|n| n.index == i))
+                                }
+                            });
+                            next.extend(pick);
                         }
                         None => next.extend(found.first()),
                     }
@@ -222,7 +342,8 @@ fn node_get(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValu
         "name" => s(&name),
         "somExpression" => s(&som),
         "className" => s(kind.class_name()),
-        "index" | "instanceIndex" => JsValue::from(index as f64),
+        "index" => JsValue::from(index as f64),
+        "instanceIndex" => JsValue::from(instance_place(&host(ctx)?.borrow(), idx) as f64),
         "presence" => s(&presence),
         "access" => s(&access),
         "isNull" => JsValue::from(value.is_empty()),
@@ -248,7 +369,10 @@ fn node_get(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValu
         }
         "all" => {
             let live = match parent {
-                Some(p) => instances(&host(ctx)?.borrow(), p, &name),
+                Some(p) => {
+                    let h = host(ctx)?.borrow();
+                    scoped(&h, scope_of(&h, p), &name)
+                }
                 None => vec![idx],
             };
             list_object(ctx, &live)?
@@ -264,15 +388,24 @@ fn node_get(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValu
         "getAttribute" => node_method(ctx, idx, props::get_attribute),
         "getElement" => node_method(ctx, idx, props::get_element),
         "isPropertySpecified" => node_method(ctx, idx, props::is_property_specified),
-        "setAttribute" | "execEvent" | "execInitialize" | "execCalculate" | "execValidate" | "setElement" | "loadXML" | "saveXML" | "clone" => {
+        "execValidate" => node_method(ctx, idx, props::exec_validate),
+        "setAttribute" | "execEvent" | "execInitialize" | "execCalculate" | "setElement" | "loadXML" | "saveXML" | "clone" => {
             function(ctx, NativeFunction::from_fn_ptr(noop)).into()
         }
         "toString" | "valueOf" | "toJSON" => function(ctx, NativeFunction::from_fn_ptr(node_to_string)).into(),
         "length" => JsValue::undefined(),
         other => {
             if let Some(child) = other.strip_prefix('_') {
-                let exists = child_named(&host(ctx)?.borrow(), idx, child).is_some();
-                return if exists { instance_manager(ctx, idx, child) } else { Ok(JsValue::undefined()) };
+                // The manager is that of the container the subform is a child of, which is an
+                // unnamed subform of this one when the name was found through it.
+                let owner = {
+                    let h = host(ctx)?.borrow();
+                    managed_named(&h, idx, child).map(|c| h.nodes.get(c).and_then(|n| n.parent).unwrap_or(idx))
+                };
+                return match owner {
+                    Some(p) => instance_manager(ctx, p, child),
+                    None => Ok(JsValue::undefined()),
+                };
             }
             // `#border`: the property, whatever the children are called.
             if let Some(prop) = other.strip_prefix('#').filter(|p| props::NODE_PROPS.contains(p)) {
@@ -414,3 +547,7 @@ pub(super) fn resolver(ctx: &mut Context, from: usize, many: bool) -> JsResult<J
     }
     Ok(function(ctx, NativeFunction::from_copy_closure_with_captures(resolve, key)).into())
 }
+
+#[cfg(test)]
+#[path = "scope_tests.rs"]
+mod scope_tests;

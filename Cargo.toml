@@ -66,6 +66,7 @@ pdfcraft-edit = { path = "crates/edit", version = "0.21.0" }
 pdfcraft-create = { path = "crates/create", version = "0.21.0" }
 pdfcraft-forms = { path = "crates/forms", version = "0.21.0" }
 pdfcraft-xfa = { path = "crates/xfa", version = "0.21.0" }
+pdfcraft-xfa-rules = { path = "crates/xfa-rules", version = "0.21.0" }
 pdfcraft-render = { path = "crates/render", version = "0.21.0" }
 pdfcraft-engine = { path = "crates/engine", version = "0.21.0" }
 pdfcraft-platform = { path = "crates/platform", version = "0.21.0" }

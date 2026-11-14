@@ -15,8 +15,8 @@ use base64::Engine;
 use crate::XfaError;
 use crate::data::{DataNode, DataPath, data_date_letters, data_path, data_to_iso, date_letters, is_on, iso_to_pattern};
 use crate::model::{
-    Access, Area, Border, Common, Draw, ExclGroup, Field, Font, HAlign, Layout, Margin, Node, Occur, PageArea, PageRole, Para, Placement, Presence,
-    Rect, Script, SomIndices, Stroke, Subform, Template, Ui, VAlign, Value, Views,
+    Access, Area, Border, Common, Draw, ExclGroup, Field, FillKind, Font, HAlign, Hatch, Layout, Margin, Node, Occur, PageArea, PageRole, Para,
+    Placement, Presence, Rect, Script, Side, SomIndices, Stroke, Subform, Template, Ui, VAlign, Value, Views,
 };
 use crate::text::{self, Block, Face, Span};
 
@@ -94,6 +94,19 @@ impl Ctx {
                 out.som.push('.');
             }
             out.som.push_str(&format!("{n}[{index}]"));
+        }
+        out
+    }
+
+    /// [`Self::with_som`] for an exclusion group. An unnamed one is `group`, as the live form
+    /// names it ([`crate::script::form_tree`]), so its buttons are told from the fields beside it.
+    fn with_group_som(&self, c: &Common, index: usize) -> Ctx {
+        let mut out = self.with_som(c, index);
+        if c.name.is_none() {
+            if !out.som.is_empty() {
+                out.som.push('.');
+            }
+            out.som.push_str(&format!("group[{index}]"));
         }
         out
     }
@@ -218,11 +231,22 @@ pub fn instance_count(occur: &Occur, from_data: usize) -> usize {
 /// How many instances of `sf` the layout makes under the container at `parent_som`: its `occur`
 /// and the instances `data` holds ([`instance_count`]). The traversal counts them the same way.
 pub(crate) fn subform_instances(tpl: &Template, data: Option<&DataNode>, sf: &Subform, parent_som: &str) -> usize {
-    let from_data = match (&sf.common.name, data) {
-        (Some(name), Some(d)) if sf.occur.max != Some(1) => d.count(&data_path(tpl, parent_som), name),
+    instance_count(&sf.occur, instances_in_data(tpl, data, sf, parent_som))
+}
+
+/// How many instances of `sf` the data holds under the container at `parent_som`: the data
+/// nodes of its name from its own number on. An object takes the data node of its number
+/// (`Row[2]` the third `Row`), so the nodes before a subform's first number are those of the
+/// same-named objects before it in its scope (a header row named as the rows are, a subform
+/// of that name in an unnamed subform before it), not instances of it. Those from its number
+/// on all count: an object of the same name after it shares their paths, and which of the two
+/// a node was written for the data doesn't say. 0 for a subform that occurs once (by `occur`)
+/// and for an unnamed one, which data makes no instance of.
+pub(crate) fn instances_in_data(tpl: &Template, data: Option<&DataNode>, sf: &Subform, parent_som: &str) -> usize {
+    match (&sf.common.name, data) {
+        (Some(name), Some(d)) if sf.occur.max != Some(1) => d.count(&data_path(tpl, parent_som), name).saturating_sub(sf.common.som_index),
         _ => 0,
-    };
-    instance_count(&sf.occur, from_data)
+    }
 }
 
 /// Lay a template out, with the values and repeat counts of `data` (the `xfa:data` element).

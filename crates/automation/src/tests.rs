@@ -48,12 +48,16 @@ fn form_fill_cannot_print_but_js_run_can() {
         "form_set_script",
         json!({ "doc": doc.0, "field": "Qty", "event": "validate", "script": "this.print(); console.println('validated');" }),
     );
-    json(&mut a, "form_fill", json!({ "doc": doc.0, "values": { "Qty": "4" } }));
-    let output = a.session.take_js_output(doc);
-    assert!(output.requests.is_empty(), "{output:?}");
-    assert!(output.console.contains(&"validated".to_string()), "{output:?}");
-    assert!(output.console.iter().any(|line| line.contains("Print") && line.contains("ignored")), "{output:?}");
-    assert!(output.errors.is_empty(), "{output:?}");
+    // What the field's script said because of the fill is in the fill's own result, and none
+    // of it is left waiting for a later tool.
+    let filled = json(&mut a, "form_fill", json!({ "doc": doc.0, "values": { "Qty": "4" } }));
+    assert!(filled.get("requests").is_none(), "{filled}");
+    let console: Vec<&str> = filled["console"].as_array().map(|l| l.iter().filter_map(Value::as_str).collect()).unwrap_or_default();
+    assert!(console.contains(&"validated"), "{filled}");
+    assert!(console.iter().any(|line| line.contains("Print") && line.contains("ignored")), "{filled}");
+    assert!(filled.get("warnings").is_none(), "{filled}");
+    let waiting = a.session.take_js_output(doc);
+    assert!(waiting.console.is_empty() && waiting.requests.is_empty() && waiting.errors.is_empty(), "{waiting:?}");
     let fields = json(&mut a, "form_fields", json!({ "doc": doc.0 }));
     let qty = fields["fields"].as_array().unwrap().iter().find(|f| f["name"] == "Qty").unwrap();
     assert_eq!(qty["value"], "4");

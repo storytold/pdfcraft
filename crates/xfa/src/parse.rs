@@ -6,10 +6,11 @@ use roxmltree::Node as XmlNode;
 
 use crate::XfaError;
 use crate::model::{
-    Access, Anchor, Area, Border, Caption, ChoiceList, Color, Common, Corner, Draw, Edge, ExclGroup, Field, FontSpec, HAlign, Layout, Margin, Node,
-    Occur, PageArea, PageRole, PageSet, ParaSpec, Paragraph, Placement, Presence, Prop, Props, Rect, RichText, Run, Script, Stroke, Subform,
-    Template, Traversal, Ui, VAlign, Value,
+    Access, Anchor, Area, Border, Caption, ChoiceList, Color, Common, Corner, Draw, Edge, ExclGroup, Field, FillKind, FontSpec, HAlign, Hatch,
+    Layout, Margin, Node, Occur, PageArea, PageRole, PageSet, ParaSpec, Paragraph, Placement, Presence, Prop, Props, Rect, RichText, Run, Script,
+    Side, Stroke, Subform, Template, Traversal, Ui, VAlign, Value,
 };
+use crate::validation_rules::{Test, is_override};
 
 /// Deepest element nesting followed (templates are shallow; hostile ones are not).
 const MAX_DEPTH: usize = 64;
@@ -29,23 +30,7 @@ const MAX_CONTENT_AREAS: usize = 128;
 /// Parse a measurement such as `12.7mm`, `72pt`, `1in`, `2.54cm` into points. Bare numbers are
 /// points. `None` for anything else (including `em`).
 pub fn measure(s: &str) -> Option<f64> {
-    let s = s.trim();
-    let split = s.find(|c: char| c.is_ascii_alphabetic() || c == '%').unwrap_or(s.len());
-    let (num, unit) = s.split_at(split);
-    let v: f64 = num.trim().parse().ok()?;
-    if !v.is_finite() {
-        return None;
-    }
-    let k = match unit.trim() {
-        "" | "pt" => 1.0,
-        "mm" => 72.0 / 25.4,
-        "cm" => 72.0 / 2.54,
-        "in" => 72.0,
-        "px" => 0.75,
-        "pc" => 12.0,
-        _ => return None,
-    };
-    Some((v * k).clamp(-100_000.0, 100_000.0))
+    crate::prop_rules::measure(s)
 }
 
 /// The attribute `name` of `n` read as a measurement in points (see [`measure`]); `None`
@@ -146,7 +131,55 @@ fn parse_border(n: Option<XmlNode>) -> Option<Border> {
     let n = n?;
     let edges: Vec<Edge> = children(n, "edge").take(4).map(parse_edge).collect();
     let four = std::array::from_fn(|i| drawn_side(edges.len(), i).and_then(|k| edges.get(k).copied()).unwrap_or_default());
-    Some(Border { presence: Presence::parse(n.attribute("presence")), edges: four, corners: parse_corners(n), fill: parse_fill(child(n, "fill")) })
+    Some(Border {
+        presence: Presence::parse(n.attribute("presence")),
+        edges: four,
+        corners: parse_corners(n),
+        fill: parse_fill(child(n, "fill")),
+        fill_kind: parse_fill_kind(child(n, "fill")),
+    })
+}
+
+/// What a `<fill>` paints over its colour: its one fill-type child (XFA 3.3 p. 734; none is
+/// solid), with that child's colour (black when it gives none, as a colour does, p. 655) and
+/// type (p. 807 crossHatch, p. 770 toRight, p. 820 toEdge) or stipple rate (p. 839, 50).
+fn parse_fill_kind(n: Option<XmlNode>) -> FillKind {
+    let Some(n) = n else { return FillKind::Solid };
+    // The last one: a template has one; a script that gives a fill another type adds it after.
+    let Some(k) = n.children().rfind(|c| c.is_element() && matches!(c.tag_name().name(), "pattern" | "linear" | "radial" | "stipple" | "solid"))
+    else {
+        return FillKind::Solid;
+    };
+    let color = parse_color(child(k, "color")).unwrap_or(Color::BLACK);
+    let ty = k.attribute("type").map(str::trim);
+    match k.tag_name().name() {
+        "pattern" => FillKind::Pattern {
+            kind: match ty {
+                Some("crossDiagonal") => Hatch::CrossDiagonal,
+                Some("diagonalLeft") => Hatch::DiagonalLeft,
+                Some("diagonalRight") => Hatch::DiagonalRight,
+                Some("horizontal") => Hatch::Horizontal,
+                Some("vertical") => Hatch::Vertical,
+                _ => Hatch::CrossHatch,
+            },
+            color,
+        },
+        "linear" => FillKind::Linear {
+            to: match ty {
+                Some("toLeft") => Side::Left,
+                Some("toTop") => Side::Top,
+                Some("toBottom") => Side::Bottom,
+                _ => Side::Right,
+            },
+            color,
+        },
+        "radial" => FillKind::Radial { to_center: ty == Some("toCenter"), color },
+        "stipple" => {
+            let rate = k.attribute("rate").and_then(|r| r.trim().parse::<f64>().ok()).filter(|r| r.is_finite()).unwrap_or(50.0);
+            FillKind::Stipple { rate: (rate / 100.0).clamp(0.0, 1.0), color }
+        }
+        _ => FillKind::Solid,
+    }
 }
 
 /// Which of the `listed` edges (or corners) of a border is drawn on side `index`: edges go
@@ -192,6 +225,11 @@ fn parse_font(n: Option<XmlNode>) -> FontSpec {
         bold: n.attribute("weight").map(|w| w == "bold"),
         italic: n.attribute("posture").map(|p| p == "italic"),
         underline: n.attribute("underline").map(|u| u != "0"),
+        line_through: n.attribute("lineThrough").map(|l| match l.trim() {
+            "1" => 1,
+            "2" => 2,
+            _ => 0,
+        }),
         color: parse_color(child(n, "fill").and_then(|f| child(f, "color"))),
         h_scale: n.attribute("fontHorizontalScale").and_then(scale),
     }
@@ -208,6 +246,7 @@ fn parse_para(n: Option<XmlNode>) -> ParaSpec {
         space_above: attr_measure(n, "spaceAbove"),
         space_below: attr_measure(n, "spaceBelow"),
         text_indent: attr_measure(n, "textIndent"),
+        tab_default: attr_measure(n, "tabDefault").filter(|t| *t > 0.0),
     }
 }
 
@@ -266,6 +305,8 @@ fn parse_common(n: XmlNode, warnings: &mut Vec<String>) -> Common {
         para: parse_para(child(n, "para")),
         col_span: n.attribute("colSpan").and_then(|c| c.trim().parse::<usize>().ok()).unwrap_or(1).clamp(1, 64),
         traversal: parse_traversal(child(n, "traversal")),
+        // Numbered once the whole template is read ([`crate::numbering`]).
+        som_index: 0,
     }
 }
 
@@ -323,9 +364,9 @@ pub const MAX_OBJECT_PROPS: usize = 256;
 /// designer's field holds well under 2 KiB.
 pub const MAX_OBJECT_PROP_BYTES: usize = 16 << 10;
 /// Deepest property element kept below an object (`ui > textEdit > border > edge > color` is 5).
-const MAX_PROP_DEPTH: usize = 8;
+pub(crate) const MAX_PROP_DEPTH: usize = 8;
 /// Most attributes kept on one element.
-const MAX_PROP_ATTRS: usize = 64;
+pub(crate) const MAX_PROP_ATTRS: usize = 64;
 /// Longest validation or calculation script kept for scripts to read, in bytes: the script
 /// engine's own limit on a script (`pdfcraft_js`'s `MAX_SCRIPT_BYTES`), past which it would not run anyway.
 const MAX_VALIDATE_SCRIPT_BYTES: usize = 256 * 1024;
@@ -374,7 +415,7 @@ impl PropBudget {
 /// shown list and the saved values (XFA 3.3 p. 726, `<items/> [0..2]`), the two the field's own
 /// lists are read from. Forms do carry more (one public form has a third, empty, saved list);
 /// any further one is kept as an ordinary property, every entry charged to the object's budget.
-const MAX_ITEM_LISTS: usize = 2;
+pub(crate) const MAX_ITEM_LISTS: usize = 2;
 
 /// An `<items>` element (XFA 3.3 p. 758) as scripts read it: its attributes and its entries,
 /// each with its tag and text, as the choice list or check button shows them ([`parse_items`]:
@@ -526,7 +567,7 @@ fn parse_props(n: XmlNode, warnings: &mut Vec<String>) -> Props {
     if b.cut && !warnings.iter().any(|w| w == PROPS_CUT_WARNING) {
         warnings.push(PROPS_CUT_WARNING.into());
     }
-    Props { attrs, elements: out }
+    Props { attrs, elements: out, cut: b.cut }
 }
 
 /// Rich text: XHTML `body > p > span…`. `br` starts a new paragraph; `xfa:embed` spans become
@@ -779,11 +820,218 @@ fn parse_items(n: XmlNode, warnings: &mut Vec<String>) -> (Vec<String>, Vec<Stri
     (shown, saved)
 }
 
+/// A field's widget: the element in its `<ui>` other than `extras` and `picture`.
+fn ui_widget<'a, 'd>(n: XmlNode<'a, 'd>) -> Option<XmlNode<'a, 'd>> {
+    child(n, "ui").and_then(|u| u.children().find(|c| c.is_element() && c.tag_name().name() != "extras" && c.tag_name().name() != "picture"))
+}
+
+/// The trimmed text of the `inner` child of `n`'s `outer` child (`<ui><picture>`), when it has any.
+fn inner_text(n: XmlNode, outer: &str, inner: &str) -> Option<String> {
+    child(n, outer).and_then(|o| child(o, inner)).map(text_of).map(|t| t.trim().to_string()).filter(|t| !t.is_empty())
+}
+
+/// A field's character limit: `value/text@maxChars`, or `exData@maxLength` (XFA 3.3, a limit
+/// excluding markup; -1 is unlimited). Zero and unreadable values set none, the existing
+/// convention of generated form fields.
+fn max_chars_of(value_el: Option<XmlNode>) -> Option<usize> {
+    value_el
+        .and_then(|v| child(v, "text"))
+        .and_then(|t| t.attribute("maxChars"))
+        .and_then(|m| m.trim().parse::<usize>().ok())
+        .or_else(|| value_el.and_then(|v| child(v, "exData")).and_then(|e| e.attribute("maxLength")).and_then(|m| m.trim().parse::<usize>().ok()))
+        .filter(|m| *m > 0)
+}
+
+/// The message a failed validation script shows: the validation's text named `scriptTest`, else
+/// its first text.
+fn validate_message_of(validate_el: Option<XmlNode>) -> Option<String> {
+    validate_el
+        .and_then(|v| child(v, "message"))
+        .and_then(|m| children(m, "text").find(|t| t.attribute("name") == Some("scriptTest")).or_else(|| child(m, "text")))
+        .map(text_of)
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty())
+}
+
+/// The message `owner` (a `validate` or `calculate`) gives for `test`: the text of its message
+/// named for the test, else the message's one text when that has no name ("used for all
+/// messages issued by the enclosing validate element", XFA 3.3 p. 782).
+fn test_message_of(owner: Option<XmlNode>, test: &str) -> Option<String> {
+    let m = owner.and_then(|v| child(v, "message"))?;
+    let named = children(m, "text").find(|t| t.attribute("name") == Some(test));
+    let only = || {
+        let mut texts = children(m, "text");
+        let first = texts.next().filter(|t| t.attribute("name").is_none_or(|n| n.trim().is_empty()));
+        if texts.next().is_some() { None } else { first }
+    };
+    named.or_else(only).map(text_of).map(|t| t.trim().to_string()).filter(|t| !t.is_empty())
+}
+
+/// The format test of a `<validate>`: its setting (default `warning`, XFA 3.3 p. 880), picture
+/// clause and message.
+fn format_test_of(v: Option<XmlNode>) -> (Test, Option<String>, Option<String>) {
+    let test = Test::parse(v.and_then(|v| v.attribute("formatTest")), Test::Warning);
+    let picture = v.and_then(|v| child(v, "picture")).map(text_of).map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
+    (test, picture, test_message_of(v, "formatTest"))
+}
+
+/// A field's validation script, unless its `scriptTest` is `disabled` ("Do not perform this
+/// test", XFA 3.3 p. 881).
+fn validate_script_of(validate_el: Option<XmlNode>) -> Option<Script> {
+    let v = validate_el?;
+    if v.attribute("scriptTest").map(str::trim) == Some("disabled") {
+        return None;
+    }
+    child(v, "script").map(|s| parse_script(s, "validate"))
+}
+
+/// Whether a subform starts on a new page (`breakBefore` or `break before` to a page or content
+/// area) and whether it ends its page (`breakAfter` or `break after` to one).
+fn page_breaks(n: XmlNode) -> (bool, bool) {
+    // A break to a page or content area. With no targetType, the default is `auto`: "layout
+    // continues using the current layout container" (XFA 3.3 p. 638), so no break.
+    let break_to_page = |name: &str| children(n, name).any(|b| b.attribute("targetType").is_some_and(|t| t == "pageArea" || t == "contentArea"));
+    // The deprecated `break` element says both in its `before` and `after` attributes (pp. 632-633).
+    let legacy = |side: &str| child(n, "break").is_some_and(|b| b.attribute(side).is_some_and(|v| v == "pageArea" || v == "contentArea"));
+    (break_to_page("breakBefore") || legacy("before"), break_to_page("breakAfter") || legacy("after"))
+}
+
+/// A field's choice list as its widget element `e` says (`open`, `textEntry`), for a field
+/// whose widget is a choice list.
+fn choice_of(e: XmlNode) -> ChoiceList {
+    let open = e.attribute("open").unwrap_or("onEntry");
+    ChoiceList {
+        list_box: matches!(open, "always" | "multiSelect"),
+        multi: open == "multiSelect",
+        editable: e.attribute("textEntry").is_some_and(|t| t == "1" || t == "true"),
+    }
+}
+
+/// A widget's own flags: multi-line (`multiLine`), not scrolling (`vScrollPolicy` for a
+/// multi-line widget, else `hScrollPolicy`, `"off"`) and a round check box (`shape`).
+fn widget_flags(ui_el: Option<XmlNode<'_, '_>>) -> (bool, bool, bool) {
+    let multiline = ui_el.is_some_and(|e| e.attribute("multiLine").is_some_and(|m| m == "1" || m == "true"));
+    let no_scroll = ui_el.is_some_and(|e| e.attribute(if multiline { "vScrollPolicy" } else { "hScrollPolicy" }) == Some("off"));
+    let check_round = ui_el.is_some_and(|e| e.attribute("shape") == Some("round"));
+    (multiline, no_scroll, check_round)
+}
+
+/// Read again what a script's property changes affect: `x` is an element holding the object's
+/// property elements as they now are (see [`crate::restyle`]), and `touched` says which property
+/// elements the changes were under (`border`, `ui`, `caption`, …; `caption.value` when a change
+/// was to the caption's value). Only what those properties give is read again, by the same
+/// functions that read the template, so the object stays as the template laid it out in
+/// everything else (its value and scripts, and a caption's text unless a change was to it).
+pub(crate) fn restyle_from(node: &mut Node, x: XmlNode, touched: &dyn Fn(&str) -> bool) {
+    let c = node.common_mut();
+    if touched("border") {
+        c.border = parse_border(child(x, "border"));
+    }
+    if touched("margin") {
+        c.margin = parse_margin(child(x, "margin"));
+    }
+    if touched("font") {
+        c.font = parse_font(child(x, "font"));
+    }
+    if touched("para") {
+        c.para = parse_para(child(x, "para"));
+    }
+    match node {
+        Node::Field(f) => {
+            if touched("ui") {
+                let ui_el = ui_widget(x);
+                f.ui_border = ui_el.and_then(|e| parse_border(child(e, "border")));
+                f.ui_margin = parse_margin(ui_el.and_then(|e| child(e, "margin")));
+                f.check_size = ui_el.and_then(|e| attr_measure(e, "size")).filter(|s| *s > 0.0);
+                (f.multiline, f.no_scroll, f.check_round) = widget_flags(ui_el);
+                f.picture = inner_text(x, "ui", "picture");
+                // The widget's kind stays the template's; a choice list's options follow it.
+                if f.ui == Ui::ChoiceList
+                    && let Some(e) = ui_el.filter(|e| e.tag_name().name() == "choiceList")
+                {
+                    f.choice = choice_of(e);
+                }
+            }
+            if touched("caption")
+                && let Some(cap) = f.caption.as_mut()
+                && let Some(c) = child(x, "caption")
+            {
+                // A field the template gives no caption keeps none: a change to one would only
+                // make an empty caption take room.
+                let mut warnings = Vec::new();
+                if let Some(changed) = parse_caption(Some(c), &mut warnings) {
+                    let text = touched("caption.value").then(|| caption_text(c)).flatten();
+                    let value = match text {
+                        Some(t) => Value::Text(t),
+                        None => std::mem::replace(&mut cap.value, Value::Empty),
+                    };
+                    *cap = Caption { value, ..changed };
+                }
+            }
+            if touched("items") {
+                let mut warnings = Vec::new();
+                (f.items, f.item_values) = parse_items(x, &mut warnings);
+            }
+            if touched("keep") {
+                f.keep_intact = child(x, "keep").and_then(|k| k.attribute("intact")).is_some_and(|v| v == "contentArea" || v == "pageArea");
+            }
+            if touched("value") {
+                f.max_chars = max_chars_of(child(x, "value"));
+                f.value_override = is_override(child(x, "value").and_then(|v| v.attribute("override")));
+            }
+            if touched("assist") {
+                f.tooltip = inner_text(x, "assist", "toolTip");
+            }
+            if touched("bind") {
+                f.data_picture = inner_text(x, "bind", "picture");
+            }
+            if touched("format") {
+                f.display_picture = inner_text(x, "format", "picture");
+            }
+            if touched("validate") {
+                let v = child(x, "validate");
+                f.required = must_be_filled(v);
+                f.validate_message = validate_message_of(v);
+                (f.format_test, f.format_picture, f.format_message) = format_test_of(v);
+                // The script stays as the template gives it (the copy here may be cut short): a
+                // test turned off sets it aside, and one turned on again takes it back.
+                if v.and_then(|v| v.attribute("scriptTest")).map(str::trim) == Some("disabled") {
+                    if let Some(s) = f.validate.take() {
+                        f.validate_off = Some(s);
+                    }
+                } else if f.validate.is_none() {
+                    f.validate = f.validate_off.take();
+                }
+            }
+        }
+        Node::ExclGroup(g) => {
+            if touched("assist") {
+                g.tooltip = inner_text(x, "assist", "toolTip");
+            }
+            if touched("validate") {
+                g.required = must_be_filled(child(x, "validate"));
+            }
+        }
+        Node::Subform(s) => {
+            if touched("break") || touched("breakBefore") || touched("breakAfter") {
+                (s.break_before_page, s.break_after_page) = page_breaks(x);
+            }
+        }
+        Node::Area(_) | Node::Draw(_) => {}
+    }
+}
+
+/// The text of a caption element `c` as the property tree holds it: its value's `text`, else the
+/// words of its rich text (`exData`, as scripts read `exData.value`), else none.
+fn caption_text(c: XmlNode) -> Option<String> {
+    let v = child(c, "value")?;
+    child(v, "text").or_else(|| child(v, "exData")).map(text_of).map(|t| t.trim().to_string())
+}
+
 /// A `<field>` element as the model's [`Field`]: its widget kind, caption, value, items,
 /// pictures (edit and data), scripts and access.
 fn parse_field(n: XmlNode, warnings: &mut Vec<String>) -> Field {
-    let ui = child(n, "ui");
-    let ui_el = ui.and_then(|u| u.children().find(|c| c.is_element() && c.tag_name().name() != "extras" && c.tag_name().name() != "picture"));
+    let ui_el = ui_widget(n);
     let kind = match ui_el.map(|e| e.tag_name().name()) {
         None | Some("textEdit") => Ui::TextEdit,
         Some("numericEdit") => Ui::NumericEdit,
@@ -798,70 +1046,60 @@ fn parse_field(n: XmlNode, warnings: &mut Vec<String>) -> Field {
         Some(_) => Ui::Unknown,
     };
     let value_el = child(n, "value");
-    let max_chars = value_el
-        .and_then(|v| child(v, "text"))
-        .and_then(|t| t.attribute("maxChars"))
-        .and_then(|m| m.trim().parse::<usize>().ok())
-        // XFA 3.3, exData/maxLength: a character limit excluding markup; -1 is unlimited.
-        .or_else(|| value_el.and_then(|v| child(v, "exData")).and_then(|e| e.attribute("maxLength")).and_then(|m| m.trim().parse::<usize>().ok()))
-        // Preserve the existing zero/unbounded convention of generated form fields.
-        .filter(|m| *m > 0);
+    let max_chars = max_chars_of(value_el);
     let scripts = parse_events(n);
     let numeric = matches!(kind, Ui::NumericEdit)
         || value_el.is_some_and(|v| v.children().any(|c| c.is_element() && matches!(c.tag_name().name(), "decimal" | "integer" | "float")));
     let (items, item_values) = parse_items(n, warnings);
     let choice = match (kind == Ui::ChoiceList, ui_el) {
-        (true, Some(e)) => {
-            let open = e.attribute("open").unwrap_or("onEntry");
-            ChoiceList {
-                list_box: matches!(open, "always" | "multiSelect"),
-                multi: open == "multiSelect",
-                editable: e.attribute("textEntry").is_some_and(|t| t == "1" || t == "true"),
-            }
-        }
+        (true, Some(e)) => choice_of(e),
         _ => ChoiceList::default(),
     };
-    let multiline = ui_el.is_some_and(|e| e.attribute("multiLine").is_some_and(|m| m == "1" || m == "true"));
+    let (multiline, no_scroll, check_round) = widget_flags(ui_el);
     let validate_el = child(n, "validate");
-    let validate_message = validate_el
-        .and_then(|v| child(v, "message"))
-        .and_then(|m| children(m, "text").find(|t| t.attribute("name") == Some("scriptTest")).or_else(|| child(m, "text")))
-        .map(text_of)
-        .map(|t| t.trim().to_string())
-        .filter(|t| !t.is_empty());
+    let validate_message = validate_message_of(validate_el);
+    let (format_test, format_picture, format_message) = format_test_of(validate_el);
     Field {
+        format_test,
+        format_picture,
+        format_message,
+        value_override: is_override(value_el.and_then(|v| v.attribute("override"))),
         common: parse_common(n, warnings),
         ui: kind,
         ui_border: ui_el.and_then(|e| parse_border(child(e, "border"))),
         ui_margin: parse_margin(ui_el.and_then(|e| child(e, "margin"))),
         check_size: ui_el.and_then(|e| attr_measure(e, "size")).filter(|s| *s > 0.0),
-        check_round: ui_el.is_some_and(|e| e.attribute("shape") == Some("round")),
+        check_round,
         multiline,
-        no_scroll: ui_el.is_some_and(|e| e.attribute(if multiline { "vScrollPolicy" } else { "hScrollPolicy" }) == Some("off")),
+        no_scroll,
         caption: parse_caption(child(n, "caption"), warnings),
         value: parse_value(value_el, warnings),
         items,
         item_values,
         choice,
         max_chars,
-        tooltip: child(n, "assist").and_then(|a| child(a, "toolTip")).map(text_of).map(|t| t.trim().to_string()).filter(|t| !t.is_empty()),
+        tooltip: inner_text(n, "assist", "toolTip"),
         access: match n.attribute("access") {
             Some("readOnly") => Access::ReadOnly,
             Some("protected") => Access::Protected,
             Some("nonInteractive") => Access::NonInteractive,
             _ => Access::Open,
         },
-        picture: ui.and_then(|u| child(u, "picture")).map(text_of).map(|p| p.trim().to_string()).filter(|p| !p.is_empty()),
-        data_picture: child(n, "bind").and_then(|b| child(b, "picture")).map(text_of).map(|p| p.trim().to_string()).filter(|p| !p.is_empty()),
+        picture: inner_text(n, "ui", "picture"),
+        data_picture: inner_text(n, "bind", "picture"),
         data_shared: child(n, "bind")
             .is_some_and(|b| b.attribute("match").is_some_and(|m| m.trim() == "global") || b.attribute("ref").is_some_and(|r| !r.trim().is_empty())),
         scripts,
         calculate: child(n, "calculate").and_then(|c| child(c, "script")).map(|s| parse_script(s, "calculate")),
-        validate: validate_el.and_then(|v| child(v, "script")).map(|s| parse_script(s, "validate")),
+        validate: validate_script_of(validate_el),
+        validate_off: validate_el
+            .filter(|v| v.attribute("scriptTest").map(str::trim) == Some("disabled"))
+            .and_then(|v| child(v, "script"))
+            .map(|s| parse_script(s, "validate")),
         validate_message,
         required: must_be_filled(validate_el),
         numeric,
-        display_picture: child(n, "format").and_then(|f| child(f, "picture")).map(text_of).map(|p| p.trim().to_string()).filter(|p| !p.is_empty()),
+        display_picture: inner_text(n, "format", "picture"),
         keep_intact: child(n, "keep").and_then(|k| k.attribute("intact")).is_some_and(|v| v == "contentArea" || v == "pageArea"),
     }
 }
@@ -973,9 +1211,7 @@ fn parse_subform(n: XmlNode, warnings: &mut Vec<String>, depth: usize, set_layou
     }
     let column_widths: Vec<f64> =
         n.attribute("columnWidths").map(|s| s.split_whitespace().filter_map(measure).map(|w| w.max(0.0)).take(256).collect()).unwrap_or_default();
-    // A break to a page or content area. With no targetType, the default is `auto`: "layout
-    // continues using the current layout container" (XFA 3.3 p. 638), so no break.
-    let break_to_page = |name: &str| children(n, name).any(|b| b.attribute("targetType").is_some_and(|t| t == "pageArea" || t == "contentArea"));
+    let (break_before_page, break_after_page) = page_breaks(n);
     Subform {
         common,
         layout,
@@ -983,9 +1219,8 @@ fn parse_subform(n: XmlNode, warnings: &mut Vec<String>, depth: usize, set_layou
         scripts: parse_events(n),
         page_set,
         occur: parse_occur(child(n, "occur")),
-        break_before_page: break_to_page("breakBefore")
-            || child(n, "break").is_some_and(|b| b.attribute("before").is_some_and(|v| v == "pageArea" || v == "contentArea")),
-        break_after_page: break_to_page("breakAfter"),
+        break_before_page,
+        break_after_page,
         set: false,
         column_widths,
         overflow_leader: child(n, "overflow").and_then(|o| o.attribute("leader")).map(str::to_string).filter(|s| !s.is_empty()),
@@ -1021,7 +1256,7 @@ fn parse_node(c: XmlNode, warnings: &mut Vec<String>, depth: usize, parent: Layo
             common: parse_common(c, warnings),
             layout: Layout::parse(c.attribute("layout")),
             fields: children(c, "field").map(|f| parse_field(f, warnings)).collect(),
-            tooltip: child(c, "assist").and_then(|a| child(a, "toolTip")).map(text_of).map(|t| t.trim().to_string()).filter(|t| !t.is_empty()),
+            tooltip: inner_text(c, "assist", "toolTip"),
             scripts: parse_events(c),
             required: must_be_filled(child(c, "validate")),
         })),
@@ -1314,12 +1549,14 @@ pub fn parse(xml: &str) -> Result<(Template, Vec<String>), XfaError> {
         }
         apply_saved_state(&mut root_sf.children, saved_root, 0);
     }
+    crate::numbering::number(&mut root_sf);
     let mut page_roles = Vec::new();
     let root_node = [Node::Subform(Box::new(root_sf.clone()))];
     collect_page_roles(&root_node, &mut page_roles, 0);
     let mut embedded = std::collections::BTreeSet::new();
     collect_embedded(&root_node, &mut embedded, 0);
-    let mut tpl = Template { root: root_sf, page_roles, embedded, embedded_paths: Default::default(), cache: Default::default() };
+    let mut tpl =
+        Template { root: root_sf, page_roles, embedded, embedded_paths: Default::default(), cache: Default::default(), memo: Default::default() };
     let paths = crate::data::fields_with_ids(&tpl)
         .into_iter()
         .filter(|(id, _, _)| tpl.embedded.contains(*id))

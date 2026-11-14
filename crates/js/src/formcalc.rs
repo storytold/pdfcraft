@@ -13,8 +13,8 @@ use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use crate::xfa::{
-    HNode, XHost, XfaDoc, XfaEffect, XfaEvent, XfaKind, XfaNode, XfaOutcome, child_named, clip, clip_result, descendants_named, instances,
-    reset_names, resolve_som, run_within,
+    HNode, XHost, XfaDoc, XfaEffect, XfaEvent, XfaKind, XfaNode, XfaOutcome, child_named, clip, clip_result, descendants_named, instance_place,
+    instances, managed_named, props, reset_names, resolve_som, run_within, scope_of, scoped,
 };
 use crate::{Limits, Message, MessageButtons, MessageIcon};
 
@@ -112,7 +112,7 @@ type R<T> = Result<T, String>;
 /// Run a FormCalc `script` for `event` on the form `root`, as [`crate::xfa::run_xfa`] runs a
 /// JavaScript one.
 pub fn run_formcalc(script: &str, event: &XfaEvent, doc: &XfaDoc, root: &XfaNode, limits: Limits) -> XfaOutcome {
-    run_formcalc_at(script, event, doc, std::sync::Arc::new(root.clone()), false, limits, None)
+    run_formcalc_at(script, event, doc, (std::sync::Arc::new(root.clone()), &[]), false, limits, None)
 }
 
 /// [`run_formcalc`] on an owned form, giving up at `deadline` (the clock is read every
@@ -121,7 +121,7 @@ pub(crate) fn run_formcalc_at(
     script: &str,
     event: &XfaEvent,
     doc: &XfaDoc,
-    root: std::sync::Arc<XfaNode>,
+    form: crate::xfa::FormCopy,
     reuse: bool,
     limits: Limits,
     deadline: Option<std::time::Duration>,
@@ -137,7 +137,9 @@ pub(crate) fn run_formcalc_at(
         Ok(b) => b,
         Err(e) => return XfaOutcome { error: Some(e), ..Default::default() },
     };
+    let (root, preset) = form;
     let mut host = XHost::new(root, reuse, &event.target, doc);
+    host.preset(preset);
     #[cfg(target_arch = "wasm32")]
     let _ = deadline;
     let mut interp = Interp {
@@ -196,7 +198,7 @@ pub fn run_formcalc_within(script: &str, event: &XfaEvent, doc: &XfaDoc, root: X
     // FormCalc has no engine to start: its time (and its own deadline) begins at once.
     run_within("pdfcraft-formcalc", timeout, move |started| {
         started();
-        run_formcalc_at(&script, &event, &doc, std::sync::Arc::new(root), false, limits, Some(timeout))
+        run_formcalc_at(&script, &event, &doc, (std::sync::Arc::new(root), &[]), false, limits, Some(timeout))
     })
 }
 

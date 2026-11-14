@@ -44,7 +44,8 @@ pub struct XfaNode {
     pub repeatable: bool,
     pub occur_min: usize,
     pub occur_max: Option<usize>,
-    /// This instance's index among its same-named siblings.
+    /// The number in this object's SOM path: its place among the same-named objects of its SOM
+    /// scope (which runs through unnamed subforms and areas, XFA 3.3 pp. 94-95).
     pub index: usize,
     pub children: Vec<XfaNode>,
     /// Fields: the value shown in the field's display picture, what `formattedValue` reads;
@@ -53,6 +54,16 @@ pub struct XfaNode {
     /// The template's attributes and property elements of the object (border, ui, validate, …),
     /// shared: snapshots taken for each script point at the same tree.
     pub props: std::sync::Arc<super::XfaProps>,
+    /// The template's tree [`Self::props`] was made from, before the changes the form keeps for
+    /// this instance; `None` when there are none (`props` is the template's own). An instance
+    /// an instance manager adds starts from it: a new instance is a copy of the template's
+    /// object (XFA 3.3, "Instance Manager", p. 353), never of another instance's changes.
+    pub template_props: Option<std::sync::Arc<super::XfaProps>>,
+    /// The property changes the form already keeps for this instance, by key (`path@attr`, the
+    /// path alone for a text, `=` before a copy of a drawn edge or corner), sorted: a write
+    /// counts against the form's limit on changes to one object
+    /// ([`super::props::MAX_CHANGES_PER_OBJECT`]) unless its key is here already.
+    pub changed: std::sync::Arc<[String]>,
 }
 
 /// The event a script runs for.
@@ -75,6 +86,52 @@ pub struct XfaDoc {
     pub page_count: usize,
     /// Whether the viewer highlights form fields (`app.runtimeHighlight`).
     pub highlight: bool,
+    /// The SOM paths the form keeps no property change at.
+    pub unkept: UnkeptSoms,
+}
+
+/// Which SOM paths the form keeps no property change at, as whoever keeps the form tells it
+/// (the engine, from the template: `pdfcraft_xfa::SomPaths::made_once`). The form keeps
+/// property changes for the objects its template makes once: not for one inside a subform that
+/// may repeat or a page area, nor at a path several objects have (one kept there would reach
+/// every object there). A script's write to an object at such a path is refused, and read back
+/// as it was. Told by the form's keeper rather than counted among the objects a script sees:
+/// both then give one answer for every path, whatever instances a script adds or removes. The
+/// default keeps changes at every path.
+#[derive(Clone, Default)]
+pub struct UnkeptSoms(Option<std::sync::Arc<UnkeptTest>>);
+
+/// Whether the form keeps no property change at the SOM path given.
+type UnkeptTest = dyn Fn(&str) -> bool + Send + Sync;
+
+impl UnkeptSoms {
+    /// `unkept` tells whether the form keeps no property change at the SOM path it is given.
+    /// It is asked on the thread scripts run on, for each property write.
+    pub fn new(unkept: impl Fn(&str) -> bool + Send + Sync + 'static) -> UnkeptSoms {
+        UnkeptSoms(Some(std::sync::Arc::new(unkept)))
+    }
+
+    /// Whether the form keeps no property change at `som`.
+    pub(crate) fn has(&self, som: &str) -> bool {
+        self.0.as_ref().is_some_and(|unkept| unkept(som))
+    }
+}
+
+impl std::fmt::Debug for UnkeptSoms {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(if self.0.is_some() { "UnkeptSoms(..)" } else { "UnkeptSoms(None)" })
+    }
+}
+
+/// Equal when both ask the same function, or neither asks one.
+impl PartialEq for UnkeptSoms {
+    fn eq(&self, other: &Self) -> bool {
+        match (&self.0, &other.0) {
+            (None, None) => true,
+            (Some(a), Some(b)) => std::sync::Arc::ptr_eq(a, b),
+            _ => false,
+        }
+    }
 }
 
 /// Something a script changed or asked for.
@@ -122,7 +179,38 @@ pub enum XfaEffect {
     Relayout,
     /// `app.runtimeHighlight = on`.
     Highlight(bool),
+    /// A property of the object at `som` set (XFA 3.3 ch. 3, "Properties vs. Children",
+    /// p. 78): attribute `attr` (`None`: the text) of the property at `path`, its steps from
+    /// the object as `tag#occurrence` (`border#0/fill#0/color#0`), to `value`.
+    SetProperty {
+        som: String,
+        path: String,
+        attr: Option<String>,
+        value: String,
+        /// A value the host copied from the edge or corner drawn on a side when a script
+        /// reached one the border doesn't list, not one the script wrote: kept apart from
+        /// writes, and not counted as a change.
+        copied: bool,
+    },
 }
+
+/// A property change an earlier script of the same event made ([`XfaEffect::SetProperty`]),
+/// handed to the next script with the form it was given, so the form needn't be copied again
+/// for it (see [`crate::xfa_session::Script::props`]).
+#[derive(Clone, Debug, PartialEq)]
+pub struct XfaPropSet {
+    pub som: String,
+    pub path: String,
+    pub attr: Option<String>,
+    pub value: String,
+    /// A value copied from a drawn edge or corner ([`XfaEffect::SetProperty`]'s `copied`): the
+    /// form keeps it under a key of its own.
+    pub copied: bool,
+}
+
+/// The form a script runs on: the copy the caller holds, and the property changes earlier
+/// scripts of the event made since that copy was made ([`XfaPropSet`]).
+pub(crate) type FormCopy<'a> = (std::sync::Arc<XfaNode>, &'a [XfaPropSet]);
 
 /// What running a script did.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -211,6 +299,10 @@ pub(super) fn effect_key(e: &XfaEffect) -> Option<(u8, String)> {
         XfaEffect::SetValue { som, .. } => Some((0, som.clone())),
         XfaEffect::SetPresence { som, .. } => Some((1, som.clone())),
         XfaEffect::SetAccess { som, .. } => Some((2, som.clone())),
+        // A path never holds `@`, so the attribute after it can't run into the path.
+        XfaEffect::SetProperty { som, path, attr, copied, .. } => {
+            Some((if *copied { 4 } else { 3 }, format!("{som}\u{0}{path}@{}", attr.as_deref().unwrap_or("#text"))))
+        }
         _ => None,
     }
 }
@@ -220,6 +312,9 @@ pub(super) fn payload(e: &XfaEffect) -> usize {
     match e {
         XfaEffect::SetValue { som, value: s } | XfaEffect::SetPresence { som, presence: s } | XfaEffect::SetAccess { som, access: s } => {
             som.len().saturating_add(s.len())
+        }
+        XfaEffect::SetProperty { som, path, attr, value, .. } => {
+            som.len().saturating_add(path.len()).saturating_add(attr.as_ref().map_or(0, String::len)).saturating_add(value.len())
         }
         XfaEffect::AddInstance { som } | XfaEffect::RemoveInstance { som } => som.len(),
         XfaEffect::OpenAttachment { name, .. } => name.len(),

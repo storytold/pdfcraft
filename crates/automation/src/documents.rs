@@ -536,6 +536,15 @@ impl Automation {
         self.applied(a)
     }
 
+    /// [`Automation::apply`] for an edit that runs a form's scripts (filling in, resetting):
+    /// what they showed, said or asked for because of this edit is in its result
+    /// ([`crate::a11y::form_tools::with_js_output`]), not left waiting for a later tool.
+    pub(crate) fn apply_scripted(&mut self, a: &Args, edit: Edit) -> Result<Value> {
+        let id = self.doc(a)?.id;
+        let ((), scripts) = self.session.with_own_js_output(id, |s| s.apply(id, edit)).map_err(failed)?;
+        Ok(crate::a11y::form_tools::with_js_output(self.applied(a)?, scripts))
+    }
+
     /// `text_prepare`: make a page's grouped text editable, with what that edit itself prepared,
     /// repaired and left grouped.
     pub(crate) fn prepare_text(&mut self, a: &Args, page: usize) -> Result<Value> {
