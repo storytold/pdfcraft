@@ -82,6 +82,7 @@ mod reload;
 mod scan_clean;
 mod script_noop;
 mod scroll_prefetch;
+mod scroll_thumb;
 mod search_position;
 mod side_panels;
 mod signing;
