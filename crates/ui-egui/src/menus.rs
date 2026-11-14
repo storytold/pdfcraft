@@ -138,6 +138,7 @@ const EDIT: &[&str] = &[
     SEP,
     CUT,
     "edit.copy",
+    "edit.copy-with-formatting",
     PASTE,
     DELETE,
     SEP,
@@ -482,6 +483,10 @@ impl PdfCraftApp {
         let doc = self.active_ids().and_then(|(_, id)| self.session.get(id));
         let enabled = text
             || match command.id.as_str() {
+                // Copy with formatting copies the page's selection. A focused text field (Find, a
+                // comment, a form field) has its own Copy and nothing to format, so the item is off
+                // rather than copying a page selection the user isn't looking at.
+                "edit.copy-with-formatting" if ctx.text_edit_focused() => false,
                 NO_RECENT => false,
                 "file.open_recent" => index.is_none_or(|i| i < self.recent.len()),
                 "file.clear_recent" => !self.recent.is_empty(),

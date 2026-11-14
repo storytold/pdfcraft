@@ -140,6 +140,10 @@ pub struct InterpreterSettings {
     /// ([`hayro_syntax::MAX_PAGE_JBIG2_WORK`] by default). Images past it aren't drawn, nor images
     /// whose masks are past it, each with [`InterpreterWarning::ContentTruncated`].
     pub jbig2_work: u64,
+    /// PdfCraft patch (107): the recovery layer's state for the document being read (one per
+    /// document version, shared by its pages and threads): each font's rule decisions are made
+    /// once for the document. `None` (the default): each page decides its fonts itself.
+    pub recovery_document: Option<Arc<crate::font::RecoveryDocument>>,
 }
 
 impl Default for InterpreterSettings {
@@ -166,6 +170,7 @@ impl Default for InterpreterSettings {
             cancelled: None,
             preview: false,
             jbig2_work: hayro_syntax::MAX_PAGE_JBIG2_WORK,
+            recovery_document: None,
         }
     }
 }
