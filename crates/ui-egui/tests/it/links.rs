@@ -113,3 +113,25 @@ fn about_dialog_has_contributors_and_models_tabs() {
     h.run_steps(4);
     assert!(h.query_all_by_label("Anthropic").count() >= 1);
 }
+
+#[test]
+fn community_button_off_hides_the_top_bar_button_and_the_home_card() {
+    let mut h = harness(|_| {});
+    assert!(h.state().show_community_button, "on by default");
+    h.get_by_label("Discord");
+    h.get_by_label("Join the ArtCraft community");
+    h.state_mut().set_option("community-button", "false").unwrap();
+    h.run_steps(2);
+    assert!(h.query_by_label("Discord").is_none(), "no Discord button in the title bar");
+    assert!(h.query_by_label("Join the ArtCraft community").is_none(), "no community card on the home screen");
+    // Help ▸ Join the ArtCraft Discord still opens it.
+    h.state_mut().execute("help.discord");
+    h.run_steps(2);
+    assert_eq!(h.state().last_opened_url.as_deref(), Some(links::DISCORD));
+    // Kept in the settings.
+    let saved = h.state().persist();
+    let mut restored = PdfCraftApp::new();
+    restored.restore(&saved);
+    assert!(!restored.show_community_button, "remembered across a restart");
+    assert_eq!(h.state_mut().set_option("community-button", "maybe"), Err("community-button must be true or false".into()));
+}
