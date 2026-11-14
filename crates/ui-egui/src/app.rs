@@ -261,6 +261,9 @@ impl PdfCraftApp {
             alt_draft: Default::default(),
             os_key_store_ids: false,
             cert_viewer: None,
+            cert_import: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            cert_import_job: None,
             space_audit: Vec::new(),
             space_audit_of: None,
             combine_draft: Vec::new(),
@@ -786,6 +789,8 @@ impl PdfCraftApp {
         self.poll_export();
         self.auto_ocr_scanned_page();
         self.poll_ocr();
+        #[cfg(not(target_arch = "wasm32"))]
+        self.poll_certificate_import();
         self.poll_optimize();
         self.poll_scan_clean();
         self.poll_action();
