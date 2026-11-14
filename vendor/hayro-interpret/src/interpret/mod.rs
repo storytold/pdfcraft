@@ -614,6 +614,13 @@ fn interpret_window<'a>(
                 )
                 .to_path(0.1);
                 context.path_mut().extend(rect);
+                // PdfCraft patch (108): `x y width height re` is `x y m`, three `l` and `h` (ISO
+                // 32000-2 §8.5.2.1, Table 58), so it leaves the current point at (x, y), where a
+                // segment after it begins a new subpath. Upstream left the current point where it
+                // was before `re`, which `v` took as its first control point; and since patch 61
+                // begins a segment after a close with a move to the current point, every segment
+                // after `re` was drawn from there.
+                *(context.last_point_mut()) = Point::new(r.0.as_f64(), r.1.as_f64());
             }
             TypedInstruction::MoveTo(m) => {
                 let p = Point::new(m.0.as_f64(), m.1.as_f64());

@@ -1,6 +1,7 @@
 //! Stroke geometry the renderer gets from the graphics state: degenerate subpaths and their line
 //! caps (ISO 32000-2 §8.5.3.2), dash arrays that are all zero or otherwise invalid (§8.4.3.6) and
-//! line widths below zero (§8.4.3.2). Vendored hayro-interpret patch 61.
+//! line widths below zero (§8.4.3.2), and where a segment after `re` begins (§8.5.2.1). Vendored
+//! hayro-interpret patches 61 and 108.
 
 use std::sync::Arc;
 
@@ -146,6 +147,30 @@ fn a_segment_after_h_begins_a_new_subpath() {
     // caps the line from (10, 20) down to (10, 35) reaches y 38 (device row 2).
     let page = render("0 0 1 RG 6 w 2 J 10 20 m 30 20 l h 10 35 l S", "<< >>");
     assert_eq!(px(&page, 10, 3), BLUE, "the new subpath's projecting cap");
+}
+
+/// `x y width height re` is `x y m`, three `l` and `h` (ISO 32000-2 §8.5.2.1, Table 58), so a
+/// segment after it begins a new subpath at (x, y), the corner it was written from, by `l`, `c`, `v`
+/// or `y`. Each here runs straight from the corner (20, 20) of a 10 pt square to (5, 35), through
+/// (15, 25), device pixel (15, 15), which a segment from another corner of the square passes more
+/// than 2 pt from; and the page below user y 18, which a segment from the point before `re` (5, 5)
+/// or from the origin crossed, stays blank. A rectangle of negative size starts at its (x, y)
+/// too: from (30, 30), through (15, 33). Vendored hayro-interpret patch 108.
+#[test]
+fn a_segment_after_re_begins_at_its_corner() {
+    let below = |page: &RenderedPage| (22..40).flat_map(|y| (0..40).map(move |x| (x, y))).filter(|&(x, y)| px(page, x, y) != WHITE).count();
+    for after in ["5 35 l", "12.5 27.5 5 35 5 35 c", "5 35 5 35 v", "12.5 27.5 5 35 y"] {
+        for before in ["5 5 m", ""] {
+            let content = format!("0 0 1 RG 3 w {before} 20 20 10 10 re {after} S");
+            let page = render(&content, "<< >>");
+            assert_eq!(px(&page, 15, 15), BLUE, "{content}: the segment from the corner");
+            assert_eq!(below(&page), 0, "{content}: nothing from the point before re");
+        }
+    }
+    let page = render("0 0 1 RG 3 w 5 5 m 30 30 -10 -10 re 5 35 l S", "<< >>");
+    assert_eq!(px(&page, 15, 7), BLUE, "a rectangle of negative size: the segment from its (x, y)");
+    assert_eq!(px(&page, 15, 15), WHITE, "a rectangle of negative size: not from its lower left");
+    assert_eq!(below(&page), 0, "a rectangle of negative size: nothing from the point before re");
 }
 
 /// §8.4.3.6 asks for dash numbers that are nonnegative and not all zero, but not how to recover
