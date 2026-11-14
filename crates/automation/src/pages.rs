@@ -296,6 +296,8 @@ impl Automation {
         };
         let skip = usize::try_from(a.opt_int("skip")?.unwrap_or(0).max(0)).unwrap_or(usize::MAX);
         let stop_at_limit = a.opt_bool("stop_at_limit")?.unwrap_or(false);
+        // Like the find bar: accents are ignored unless asked for, so `cafe` finds `café`.
+        let options = pdfcraft_render::text::FindOptions { accent_sensitive: a.opt_bool("accent_sensitive")?.unwrap_or(false), ..Default::default() };
         let mut matches = Vec::new();
         let mut next = None;
         let mut stopped = false;
@@ -326,7 +328,7 @@ impl Automation {
                 // One extra match proves that the caller needs a continuation. Include skipped
                 // matches on the starting page when bounding the temporary per-page result.
                 let needed = limit.saturating_sub(matches.len()).saturating_add(skip_here).saturating_add(usize::from(!stop_at_limit));
-                for (k, r) in text.find_opts_limited(query, false, false, needed).into_iter().enumerate().skip(skip_here) {
+                for (k, r) in text.find_options(query, options, needed).into_iter().enumerate().skip(skip_here) {
                     if matches.len() == limit {
                         next = Some(json!({ "start_page": p + 1, "skip": k }));
                         break 'search;
@@ -380,6 +382,7 @@ impl Automation {
             with: a.str("replace")?.to_owned(),
             case_sensitive: a.opt_bool("case_sensitive")?.unwrap_or(false),
             whole_words: a.opt_bool("whole_words")?.unwrap_or(false),
+            ignore_accents: !a.opt_bool("accent_sensitive")?.unwrap_or(false),
         };
         let all = a.opt_bool("all")?.unwrap_or(true);
         let mut pages = pages;
@@ -392,7 +395,7 @@ impl Automation {
             for (p, text) in self.page_text_results(id, &pages, &mut *extract)? {
                 match text {
                     Ok(text) => {
-                        found.insert(p, text.find_opts(&query.find, query.case_sensitive, query.whole_words).len());
+                        found.insert(p, text.find_options(&query.find, query.options(), usize::MAX).len());
                     }
                     Err(e) => unreadable.push((p, e)),
                 }
@@ -410,7 +413,7 @@ impl Automation {
                     self.page_text_results(id, &pages[start..end], &mut *extract)?.into_iter().collect();
                 for p in &pages[start..end] {
                     match results.remove(p) {
-                        Some(Ok(text)) if text.find_opts_limited(&query.find, query.case_sensitive, query.whole_words, 1).is_empty() => {}
+                        Some(Ok(text)) if text.find_options(&query.find, query.options(), 1).is_empty() => {}
                         Some(Ok(text)) => {
                             texts.push((*p, text));
                             break 'search;

@@ -5,6 +5,8 @@
 - 2026-11-04 (M6, PR #5699 reset estimate): Charge expanded-name scans and field-name copy/comparison bytes; add three negative regressions and byte-exact refusal checks.
 # PdfCraft roadmap
 
+> **Last reviewed:** 2026-11-12 | **Last updated:** 2026-11-12 | **Change:** patch (M3 #3460: rebase onto main 175992b5a; Find and Replace share Latin accent options, Search checkboxes wrap whole with English/German coverage and valid fixtures; Greek folding remains a follow-up; estimates unchanged)
+
 > **Last reviewed:** 2026-10-31 | **Last updated:** 2026-10-31 | **Change:** patch (M6, PR #4166/#4088: integrate main f137a289 at 0.16.1; retain automatic-field Print suppression, explicit button/console printing and document-error provenance; 761 scoped tests and verification gates passed; 13-step CLI exercise and render inspection passed; existing warnings retained; estimates unchanged)
 > **Last reviewed:** 2026-11-09 | **Last updated:** 2026-11-09 | **Change:** patch (M10 #5130: preserve manual duplex defaults; validate DocumentDuplex review fix and CI formatting; estimates unchanged)
 >
@@ -261,6 +263,9 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 | 8 | 1.0 polish: performance, right-to-left, missing languages, keyboard-only (M14) | 55–95 |
 
 ## Progress log
+
+- **2026-11-12 (M3, #3460):** Rebase PR #3889 onto main 175992b5a, retaining upstream search readings, stop-at-limit behavior and roadmap history. Find passes its accent setting through Replace; text_find and text_replace both default accent_sensitive to false, while legacy search APIs and direct engine Replace defaults stay literal. Search options reserve whole checkbox slots so labels stay on one line inside the default pane in English and German; real clicks still toggle search. The synthetic fixture computes stream lengths and xref offsets and opens without repair notes. Production-input, headless and layout regressions have literal-revert red/green evidence; Greek folding remains a follow-up. Estimates unchanged.
+
 - **2026-11-09 (M10, #5130):** Windows Printer default sends native two-sided bindings only when automatic duplex support is confirmed, preserving manual driver defaults (#5130/#5772); physical output remains unqualified. Both Windows submission paths preserve DLL guards and current spooler fixes. Review follow-up validates both duplex scopes through craft-print 9fe50c94 and corrects CI formatting. Estimates unchanged.
 
 - **2026-10-27 (M10, #5005):** Vector printing retains each annotation's optional-content membership when drawing its appearance.
@@ -335,6 +340,8 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 - **2026-10-27 (M10, `ocr.ocr-web`, rebase fix):** The web build loads OCR models only when their SHA-256 matches `ATTRIBUTION.toml`. With ONNX loading now on, rten's parser spins forever on some bytes that aren't a model (a corrupt or wrong download), so a bad file now fails at once instead of hanging a worker.
 - **2026-10-27 (M3, #3425):** A file named with open parameters, as help systems start a PDF reader (`manual.pdf#nameddest=Intro`, `#page=12` or `#Intro`), opens at that destination instead of failing to read `manual.pdf#…`: at launch, when another launch hands it over, and in its tab when it is already open. Other parameters are ignored. The app and `link_open` now also apply a GoToR link's named destination, looked up in the target's /Names /Dests or catalog /Dests, instead of warning that it wasn't applied; the app looks names up off the UI thread. `doc_open` reports the destination of a path with open parameters. Estimates unchanged.
+- **2026-10-28 (M3, #3460):** Find ignores accents by default (`cafe` finds `café`), with an Accent-sensitive option in the find bar and on `text_find`. Only Latin letters fold; kana, Cyrillic and Greek stay distinct. Search & Redact still matches accents as written. Estimates unchanged.
+
 - **2026-10-27 (M10, OCR models):** Model staging downloads and verifies the ONNX pair after the upstream RTEN URL brownout; runtime discovery prefers complete ONNX pairs per directory, retains complete RTEN fallback and preserves directory precedence.
 
 - **2026-10-26 (M2, PR #4172):** Reconciled current main, preserving its Japanese serif/weight selection and both branches' progress records. Installed CJK viewer and preview fallback remains display-only; estimates unchanged.
@@ -902,6 +909,7 @@ Estimates unchanged.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-12 | patch | M3 #3460: rebase onto main 175992b5a; Find and Replace share Latin accent options, Search checkboxes wrap whole with English/German coverage and valid fixtures; Greek folding remains a follow-up; estimates unchanged. |
 | 2026-11-09 | patch | M10 #5130: Windows Printer default sends native two-sided bindings only when automatic duplex support is confirmed, preserving manual driver defaults (#5130/#5772); physical output remains unqualified. Estimates unchanged. |
 | 2026-11-08 | patch | M10 #6514/#636: retain main's public GDI Git revision (64e7afd4) to preserve downstream Rust type identity, update the internal PDF loader independently, and refresh the application dependency/lockfile. New-graph CI pending; estimates unchanged. |
 | 2026-11-08 | patch | M10 #6514: refresh the craft-print and winprint/GDI pins after #605 merged; retain the Direct2D crash fix and stream-test cleanup repairs, record single-page HUAWEI output with its diagnostic limits, and rerun CI for the new dependency graph. Estimates unchanged. |
