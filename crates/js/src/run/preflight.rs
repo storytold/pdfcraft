@@ -1,5 +1,5 @@
 //! Bounded lexical preflight before entering Boa's recursive parser/compiler.
-use super::{MAX_ARROW_FUNCTIONS, MAX_BRACKET_DEPTH, MAX_CONDITIONALS, MAX_PREFIX_RUN, MAX_RIGHT_ASSOCIATIVE_OPERATORS, MAX_SCRIPT_BYTES};
+use super::{MAX_ARROW_FUNCTIONS, MAX_BRACKET_DEPTH, MAX_CONDITIONALS, MAX_PREFIX_RUN, MAX_RIGHT_ASSOCIATIVE_OPERATORS};
 
 /// Active chains live at bracket depths; literal contents never act as statement boundaries.
 struct Guard<'a> {
@@ -286,11 +286,9 @@ impl<'a> Guard<'a> {
     }
 }
 
-/// Enforce source and active nesting budgets before any parser/compiler work is attempted.
+/// Enforce active nesting budgets before any parser/compiler work is attempted. The length is the caller's to bound: a
+/// script's ([`super::refuse`]) or a form's script objects' ([`super::refuse_nesting`]).
 pub(super) fn refuse(source: &str) -> Option<String> {
-    if source.len() > MAX_SCRIPT_BYTES {
-        return Some(format!("the script is too long ({} KiB; the limit is {} KiB)", source.len() / 1024, MAX_SCRIPT_BYTES / 1024));
-    }
     let mut guard = Guard::new(source.as_bytes());
     while let Some(&c) = guard.bytes.get(guard.i) {
         guard.i = guard.i.saturating_add(1);

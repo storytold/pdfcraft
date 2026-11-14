@@ -8,7 +8,7 @@ use std::sync::Arc;
 use pdfcraft_cos::{Dict, Document, Object, PdfString};
 
 use crate::data::{DataNode, data_path, parse_datasets};
-use crate::model::{Access, Field, Node, Presence, Props, Script, SomIndices, Template};
+use crate::model::{Access, Field, Node, PageArea, Presence, Props, Script, ScriptObject, SomIndices, Subform, Template};
 use crate::{Report, XfaError};
 
 /// Private key on the AcroForm: presence scripts set, by SOM path.
@@ -901,4 +901,447 @@ pub fn refresh_value(live: &mut FormNode, tpl: &Template, data: Option<&DataNode
 /// The data tree of a document's datasets packet.
 pub fn data_of(doc: &Document) -> Option<DataNode> {
     crate::read_packets(doc).ok().flatten().and_then(|p| parse_datasets(&p.xdp))
+}
+
+/// A script object a script can reach: its name, the SOM of the subform (or page area) that declares it (an unnamed
+/// subform's is its nearest named subform's, a page set's is `None`), its code, and whether the script reaches it by its bare name (`false` for an outer object
+/// an inner one of the same name hides, which a qualified path such as `form1.Calc` still reaches).
+#[derive(Clone, Debug, PartialEq)]
+pub struct ReachableObject {
+    pub name: String,
+    pub som: Option<String>,
+    pub text: Arc<str>,
+    pub bare: bool,
+    /// No event script names it (other objects may): a module that extends another object, loaded when an object its code
+    /// names loads (`NS.jForm.x = …` once `NS` is built), as Acrobat builds every object up front.
+    pub unnamed: bool,
+}
+
+/// Every script object of a form, read once per form rather than for each script: what the unique-name fallback of
+/// [`script_objects_for`] looks through.
+#[derive(Clone, Debug, Default)]
+pub struct ScriptObjectIndex {
+    all: Vec<(String, Option<String>, Arc<str>)>,
+    counts: HashMap<String, usize>,
+    /// Names of objects that no event script mentions.
+    unnamed: std::collections::HashSet<String>,
+    /// Whether every object was read: past [`MAX_INDEXED_OBJECTS`] a name can't be known to be the only one of its kind.
+    complete: bool,
+}
+
+/// The most script objects [`ScriptObjectIndex`] holds.
+const MAX_INDEXED_OBJECTS: usize = 4096;
+
+impl ScriptObjectIndex {
+    /// The script objects of `tpl`, with the SOM of the subform or page area declaring each (first instances).
+    pub fn of(tpl: &Template) -> Self {
+        let mut index = ScriptObjectIndex { complete: true, ..Default::default() };
+        index.subform(&tpl.root, None, 0, 0);
+        for (name, _, _) in &index.all {
+            *index.counts.entry(name.clone()).or_insert(0) += 1;
+        }
+        index.unnamed = index.never_named(tpl);
+        index
+    }
+
+    /// The object names no JavaScript event script mentions (as a word, strings and comments included). Objects may: a main object that
+    /// lists its modules is itself loaded only by the scripts that name it.
+    fn never_named(&self, tpl: &Template) -> std::collections::HashSet<String> {
+        let mut left: std::collections::HashSet<String> = self.counts.keys().cloned().collect();
+        if !left.is_empty() {
+            each_javascript(tpl, &mut |text| {
+                for w in words(text) {
+                    left.remove(w);
+                }
+            });
+        }
+        left
+    }
+
+    fn add(&mut self, objects: &[ScriptObject], som: Option<&str>) {
+        for o in objects {
+            if self.all.len() >= MAX_INDEXED_OBJECTS {
+                self.complete = false;
+                return;
+            }
+            self.all.push((o.name.clone(), som.map(str::to_string), Arc::clone(&o.text)));
+        }
+    }
+
+    /// `sf`, the `at`-th of its name among its siblings (the index the live form gives its first instance).
+    fn subform(&mut self, sf: &Subform, parent: Option<&str>, at: usize, depth: usize) {
+        if depth > MAX_DEPTH {
+            self.complete = false;
+            return;
+        }
+        let som = match (&sf.common.name, parent) {
+            (Some(n), Some(p)) => Some(format!("{p}.{n}[{at}]")),
+            (Some(n), None) if depth == 0 => Some(format!("{n}[0]")),
+            (None, p) => p.map(str::to_string),
+            _ => None,
+        };
+        self.add(&sf.script_objects, som.as_deref());
+        self.nodes(&sf.children, som.as_deref(), depth);
+        if let Some(ps) = &sf.page_set {
+            self.add(&ps.script_objects, None);
+            for (i, a) in ps.areas.iter().enumerate() {
+                let area = Some(area_som(a, i, 0));
+                self.add(&a.script_objects, area.as_deref());
+                self.nodes(&a.items, area.as_deref(), depth);
+            }
+        }
+    }
+
+    fn nodes(&mut self, nodes: &[Node], som: Option<&str>, depth: usize) {
+        let sibs = SomIndices::of(nodes);
+        for (i, n) in nodes.iter().enumerate() {
+            match n {
+                Node::Subform(c) => self.subform(c, som, sibs.at(i), depth + 1),
+                Node::Area(a) if depth < MAX_DEPTH => {
+                    let inner = match (&a.common.name, som) {
+                        (Some(n), Some(p)) => Some(format!("{p}.{n}[{}]", sibs.at(i))),
+                        _ => som.map(str::to_string),
+                    };
+                    self.nodes(&a.children, inner.as_deref(), depth + 1);
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+/// The SOM of the page made from area `i` of the page set (`Page1[0]`, `#pageArea[2]` for an unnamed one).
+fn area_som(a: &PageArea, i: usize, page: usize) -> String {
+    a.name.as_ref().map_or_else(|| format!("#pageArea[{i}]"), |n| format!("{n}[{page}]"))
+}
+
+/// The script objects a script at `som` can call by name: those of the subform it sits in and of every one above it, an inner
+/// object hiding an outer one of the same name for the bare name (XFA 3.3, "Referencing Script Objects"). A page master's
+/// script reaches those of its page area and of the page set too. An object no scope reaches whose name is the form's only
+/// one of that name is reached as well, as Acrobat finds it. Nothing is read from the objects here: they are compiled when a
+/// script first uses them.
+pub fn script_objects_for(tpl: &Template, index: &ScriptObjectIndex, som: &str) -> Vec<ReachableObject> {
+    if index.all.is_empty() {
+        return Vec::new();
+    }
+    let mut parts = som.split('.');
+    let first = parts.next().unwrap_or("");
+    let first_name = first.split('[').next().unwrap_or(first);
+    // (objects, SOM of their subform) from the outermost scope in
+    let mut chain: Vec<(&[ScriptObject], Option<String>)> = Vec::new();
+    let root_som = tpl.root.common.name.as_deref().map(|n| format!("{n}[0]"));
+    chain.push((&tpl.root.script_objects, root_som.clone()));
+    let mut nodes: &[Node] = &tpl.root.children;
+    let mut at = root_som;
+    let mut follow = true;
+    // the page a page master's script is on, when it isn't the first its area makes: (first page's SOM, this page's)
+    let mut page_copy: Option<(String, String)> = None;
+    if tpl.root.common.name.as_deref() != Some(first_name) {
+        // a page master's script: `Page1[0].button[0]`, or `#pageArea[2].button[0]` for an unnamed area
+        follow = false;
+        if let Some(ps) = &tpl.root.page_set {
+            chain.push((&ps.script_objects, None));
+            let area = match first_name {
+                "#pageArea" => som_index(first).and_then(|i| ps.areas.get(i).map(|a| (i, a))),
+                name => ps.areas.iter().enumerate().find(|(_, a)| a.name.as_deref() == Some(name)),
+            };
+            if let Some((i, area)) = area {
+                let page0 = area_som(area, i, 0);
+                if page0 != first {
+                    page_copy = Some((page0, first.to_string()));
+                }
+                chain.push((&area.script_objects, Some(first.to_string())));
+                nodes = &area.items;
+                at = Some(first.to_string());
+                follow = true;
+            }
+        }
+    }
+    if follow {
+        for part in parts {
+            let name = part.split('[').next().unwrap_or(part);
+            let Some(step) = som_step(nodes, name, som_index(part).unwrap_or(0)) else { break };
+            // an unnamed subform takes no part of the SOM (the live form gives it its parent's): its objects go with the nearest
+            // named subform above it, which is `this` for them and reaches them as children
+            let here = at.as_ref().map_or_else(|| part.to_string(), |p| format!("{p}.{part}"));
+            for sf in step.unnamed {
+                chain.push((&sf.script_objects, at.clone()));
+            }
+            if let Some(sf) = step.named {
+                chain.push((&sf.script_objects, Some(here.clone())));
+            }
+            nodes = step.children;
+            at = Some(here);
+        }
+    }
+    let mut out: Vec<ReachableObject> = Vec::new();
+    for (objects, som) in chain {
+        for o in objects {
+            for x in out.iter_mut().filter(|x| x.name == o.name) {
+                x.bare = false;
+            }
+            let unnamed = index.complete && index.unnamed.contains(&o.name);
+            out.push(ReachableObject { name: o.name.clone(), som: som.clone(), text: Arc::clone(&o.text), bare: true, unnamed });
+        }
+    }
+    if index.complete {
+        for (name, som, text) in &index.all {
+            if index.counts.get(name) == Some(&1) && !out.iter().any(|x| x.name == *name) {
+                let unnamed = index.unnamed.contains(name);
+                // the index records a page master's objects on its first page: on another page they are that page's
+                let on_page = |s: &String| {
+                    let (page0, here) = page_copy.as_ref()?;
+                    let rest = s.strip_prefix(page0.as_str()).filter(|r| r.is_empty() || r.starts_with('.'))?;
+                    Some(format!("{here}{rest}"))
+                };
+                let som = som.as_ref().map(|s| on_page(s).unwrap_or_else(|| s.clone()));
+                out.push(ReachableObject { name: name.clone(), som, text: Arc::clone(text), bare: true, unnamed });
+            }
+        }
+    }
+    out
+}
+
+/// The identifier-like words of `text` (`$` and `_` included), strings and comments not told apart.
+fn words(text: &str) -> impl Iterator<Item = &str> {
+    text.split(|c: char| !(c.is_alphanumeric() || c == '_' || c == '$')).filter(|w| !w.is_empty())
+}
+
+/// Calls `f` with the text of every JavaScript event, calculate and validate script of `tpl`, page masters' included (FormCalc
+/// can't name a script object).
+fn each_javascript(tpl: &Template, f: &mut impl FnMut(&str)) {
+    fn field(fd: &Field, f: &mut impl FnMut(&str)) {
+        for s in fd.scripts.iter().chain(&fd.calculate).chain(&fd.validate) {
+            if !s.formcalc {
+                f(&s.text);
+            }
+        }
+    }
+    fn walk(nodes: &[Node], depth: usize, f: &mut impl FnMut(&str)) {
+        if depth > MAX_DEPTH {
+            return;
+        }
+        for n in nodes {
+            match n {
+                Node::Subform(sf) => {
+                    sf.scripts.iter().filter(|s| !s.formcalc).for_each(|s| f(&s.text));
+                    walk(&sf.children, depth + 1, f);
+                    if let Some(ps) = &sf.page_set {
+                        ps.areas.iter().for_each(|a| walk(&a.items, depth + 1, f));
+                    }
+                }
+                Node::Area(a) => walk(&a.children, depth + 1, f),
+                Node::Field(fd) => field(fd, f),
+                Node::ExclGroup(g) => {
+                    g.scripts.iter().filter(|s| !s.formcalc).for_each(|s| f(&s.text));
+                    g.fields.iter().for_each(|fd| field(fd, f));
+                }
+                Node::Draw(_) => {}
+            }
+        }
+    }
+    tpl.root.scripts.iter().filter(|s| !s.formcalc).for_each(|s| f(&s.text));
+    walk(&tpl.root.children, 1, f);
+    if let Some(ps) = &tpl.root.page_set {
+        ps.areas.iter().for_each(|a| walk(&a.items, 1, f));
+    }
+}
+
+/// The index of a SOM segment (`page[2]` is 2).
+fn som_index(part: &str) -> Option<usize> {
+    part.split('[').nth(1).and_then(|i| i.trim_end_matches(']').parse().ok())
+}
+
+/// One SOM segment followed down from `nodes`: the unnamed subforms passed through, the named subform it names (none when it
+/// names an area) and the children to go on from.
+struct SomStep<'a> {
+    unnamed: Vec<&'a Subform>,
+    named: Option<&'a Subform>,
+    children: &'a [Node],
+}
+
+/// The subform or area that segment `name[index]` names among `nodes` (unnamed subforms and areas between are walked through).
+/// Two templates of one name among siblings are told apart as the form's instances number them: each template's instances
+/// start at its index among its namesakes.
+fn som_step<'a>(nodes: &'a [Node], name: &str, index: usize) -> Option<SomStep<'a>> {
+    fn collect<'a>(nodes: &'a [Node], name: &str, unnamed: &mut Vec<&'a Subform>, out: &mut Vec<(usize, SomStep<'a>)>, depth: usize) {
+        if depth > MAX_DEPTH {
+            return;
+        }
+        let sibs = SomIndices::of(nodes);
+        for (i, n) in nodes.iter().enumerate() {
+            match n {
+                Node::Subform(sf) if sf.common.name.as_deref() == Some(name) => {
+                    out.push((sibs.at(i), SomStep { unnamed: unnamed.clone(), named: Some(sf), children: &sf.children }));
+                }
+                Node::Subform(sf) if sf.common.name.is_none() => {
+                    unnamed.push(sf);
+                    collect(&sf.children, name, unnamed, out, depth + 1);
+                    unnamed.pop();
+                }
+                Node::Area(a) if a.common.name.as_deref() == Some(name) => {
+                    out.push((sibs.at(i), SomStep { unnamed: unnamed.clone(), named: None, children: &a.children }));
+                }
+                Node::Area(a) if a.common.name.is_none() => collect(&a.children, name, unnamed, out, depth + 1),
+                _ => {}
+            }
+        }
+    }
+    let mut found = Vec::new();
+    collect(nodes, name, &mut Vec::new(), &mut found, 0);
+    let pick = found
+        .iter()
+        .position(|(base, _)| *base == index)
+        .or_else(|| found.iter().enumerate().filter(|(_, (base, _))| *base <= index).max_by_key(|(_, (base, _))| *base).map(|(i, _)| i));
+    match pick {
+        Some(i) => Some(found.swap_remove(i).1),
+        None => found.into_iter().next().map(|(_, s)| s),
+    }
+}
+
+#[cfg(test)]
+mod script_object_tests {
+    use super::{ScriptObjectIndex, script_objects_for};
+    use crate::model::{Area, Common, Node, PageArea, PageSet, ScriptObject, Subform, Template};
+
+    fn reach(tpl: &Template, som: &str) -> Vec<super::ReachableObject> {
+        script_objects_for(tpl, &ScriptObjectIndex::of(tpl), som)
+    }
+
+    fn names(objects: &[super::ReachableObject]) -> Vec<(String, Option<String>)> {
+        objects.iter().filter(|o| o.bare).map(|o| (o.name.clone(), o.som.clone())).collect()
+    }
+
+    fn object(name: &str) -> ScriptObject {
+        ScriptObject { name: name.into(), text: "function m() { return 1; }".into() }
+    }
+
+    fn named(name: &str) -> Common {
+        Common { name: Some(name.into()), ..Default::default() }
+    }
+
+    fn want(n: &str, som: &str) -> (String, Option<String>) {
+        (n.to_string(), Some(som.to_string()))
+    }
+
+    #[test]
+    fn a_script_reaches_the_objects_of_its_subforms_and_page_masters() {
+        let (tpl, _) = crate::parse(&crate::fixtures::script_objects_template()).expect("parses");
+        // its own subform's and the root's, with the subform each belongs to; the FormCalc object is not one
+        assert_eq!(
+            names(&reach(&tpl, "form[0].page[0].total[0]")),
+            [want("Calc", "form[0]"), want("Unused", "form[0]"), want("Names", "form[0].page[0]")]
+        );
+        // from the root the inner object is still reached, being the only one of its name
+        assert!(names(&reach(&tpl, "form[0]")).contains(&want("Names", "form[0].page[0]")));
+        // an inner object hides an outer one of its name for the bare name, the outer one kept for `form.Calc`
+        let (mut tpl, _) = crate::parse(&crate::fixtures::script_objects_template()).expect("parses");
+        let page = tpl.root.children.iter_mut().find_map(|n| if let Node::Subform(sf) = n { Some(sf) } else { None }).expect("page");
+        page.script_objects.push(ScriptObject { name: "Calc".into(), text: "var inner = 1;".into() });
+        let inner = std::mem::take(&mut page.children);
+        page.children.push(Node::Subform(Box::new(Subform { script_objects: vec![object("Mid")], children: inner, ..Default::default() })));
+        let deep = reach(&tpl, "form[0].page[0].total[0]");
+        let calcs: Vec<_> = deep.iter().filter(|o| o.name == "Calc").map(|o| (o.som.as_deref(), o.bare)).collect();
+        assert_eq!(calcs, [(Some("form[0]"), false), (Some("form[0].page[0]"), true)]);
+        // an unnamed subform's objects go with its nearest named subform
+        assert!(deep.iter().any(|o| o.name == "Mid" && o.som.as_deref() == Some("form[0].page[0]")), "{:?}", names(&deep));
+        // a page master's script reaches the objects of its page area (its own SOM) and of the page set
+        tpl.root.page_set = Some(PageSet {
+            script_objects: vec![object("sobModeCheck")],
+            areas: vec![
+                PageArea { name: Some("Page1".into()), script_objects: vec![object("Master")], ..Default::default() },
+                PageArea { name: Some("Page2".into()), script_objects: vec![object("Other"), object("Other")], ..Default::default() },
+            ],
+        });
+        let master = names(&reach(&tpl, "Page1[0].button[0]"));
+        assert!(master.contains(&("sobModeCheck".into(), None)) && master.contains(&want("Master", "Page1[0]")), "{master:?}");
+        assert!(master.contains(&want("Calc", "form[0]")), "{master:?}");
+        // an object two places declare is reached only from its own scope
+        assert!(!master.iter().any(|(n, _)| n == "Other"), "{master:?}");
+        assert!(names(&reach(&tpl, "Page2[0].button[0]")).iter().any(|(n, _)| n == "Other"));
+    }
+
+    /// A page area makes a page each time it is used, each with its own SOM (`Page1[5]`): an object its content declares is
+    /// the one on the script's own page, so a script on the sixth page finds it as well as one on the first.
+    #[test]
+    fn a_page_masters_objects_are_found_on_every_page_it_makes() {
+        let sub = |name: &str, objects: Vec<ScriptObject>, children: Vec<Node>| {
+            Node::Subform(Box::new(Subform { common: named(name), script_objects: objects, children, ..Default::default() }))
+        };
+        let mut tpl = Template { root: Subform { common: named("form"), ..Default::default() }, ..Default::default() };
+        tpl.root.page_set = Some(PageSet {
+            script_objects: Vec::new(),
+            areas: vec![PageArea {
+                name: Some("Page1".into()),
+                items: vec![sub("frag", Vec::new(), vec![sub("ctl", vec![object("Mode")], Vec::new())])],
+                ..Default::default()
+            }],
+        });
+        for page in [0, 5] {
+            let found = reach(&tpl, &format!("Page1[{page}].frag[0].btn[0]"));
+            assert!(
+                found.iter().any(|o| o.name == "Mode" && o.som.as_deref() == Some(&*format!("Page1[{page}].frag[0].ctl[0]"))),
+                "page {page}: {:?}",
+                names(&found)
+            );
+        }
+    }
+
+    #[test]
+    fn a_script_path_picks_the_right_namesake_and_goes_through_named_areas() {
+        let sub = |name: &str, objects: Vec<ScriptObject>, children: Vec<Node>| {
+            Node::Subform(Box::new(Subform { common: named(name), script_objects: objects, children, ..Default::default() }))
+        };
+        let calc = |text: &str| ScriptObject { name: "Calc".into(), text: text.into() };
+        let tpl = Template {
+            root: Subform {
+                common: named("form"),
+                children: vec![
+                    sub("page", vec![calc("var first = 1;")], vec![]),
+                    sub("page", vec![calc("var second = 2;"), object("Only")], vec![]),
+                    Node::Area(Box::new(Area { common: named("outer"), children: vec![sub("inner", vec![object("Inner")], vec![])] })),
+                ],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let calc_text = |som: &str| reach(&tpl, som).into_iter().find(|o| o.name == "Calc" && o.bare).map(|o| o.text.to_string());
+        assert_eq!(calc_text("form[0].page[0].f[0]").as_deref(), Some("var first = 1;"));
+        assert_eq!(calc_text("form[0].page[1].f[0]").as_deref(), Some("var second = 2;"));
+        let inner = reach(&tpl, "form[0].outer[0].inner[0].f[0]");
+        assert!(inner.iter().any(|o| o.name == "Inner" && o.som.as_deref() == Some("form[0].outer[0].inner[0]")), "{:?}", names(&inner));
+        // the index records the namesake an object belongs to
+        assert!(reach(&tpl, "form[0]").iter().any(|o| o.name == "Only" && o.som.as_deref() == Some("form[0].page[1]")));
+        // past the index's bound a name is not known to be unique: no fallback then
+        let mut big = tpl.clone();
+        big.root.script_objects = (0..4100).map(|i| object(&format!("o{i}"))).collect();
+        assert!(!reach(&big, "form[0]").iter().any(|o| o.name == "Inner"));
+    }
+
+    #[test]
+    fn an_object_no_event_script_names_is_marked_unnamed() {
+        use crate::model::{Field, Script};
+        let text = |name: &str, text: &str| ScriptObject { name: name.into(), text: text.into() };
+        let script = Script { activity: "calculate".into(), text: "this.rawValue = NS.jForm.x.f() + calcs.sum();".into(), formcalc: false };
+        // a FormCalc script can't name one
+        let formcalc = Script { activity: "validate".into(), text: "module_x == 1".into(), formcalc: true };
+        let field = Field { common: named("t"), calculate: Some(script), validate: Some(formcalc), ..Default::default() };
+        let tpl = Template {
+            root: Subform {
+                common: named("form"),
+                script_objects: vec![
+                    text("NS", "var jForm = {};"),
+                    text("module_x", "NS.jForm.x = { f: function () { return 'ok'; } }; // module_x"),
+                    text("calcs", "function sum() { return helper.one(); }"),
+                    text("helper", "function one() { return 1; }"),
+                ],
+                children: vec![Node::Field(Box::new(field))],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let unnamed: Vec<_> = reach(&tpl, "form[0].t[0]").into_iter().filter(|o| o.unnamed).map(|o| o.name).collect();
+        // `helper` only another object names
+        assert_eq!(unnamed, ["module_x", "helper"]);
+    }
 }

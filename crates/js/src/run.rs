@@ -50,6 +50,11 @@ pub(crate) fn refuse(source: &str) -> Option<String> {
     if source.len() > MAX_SCRIPT_BYTES {
         return Some(format!("the script is too long ({} KiB; the limit is {} KiB)", source.len() / 1024, MAX_SCRIPT_BYTES / 1024));
     }
+    refuse_nesting(source)
+}
+
+/// [`refuse`] for code with a length limit of its own (a form's script objects): only its nesting is checked.
+pub(crate) fn refuse_nesting(source: &str) -> Option<String> {
     if crate::nesting::too_deep(source) {
         return Some("the script is nested too deeply to run safely".to_string());
     }

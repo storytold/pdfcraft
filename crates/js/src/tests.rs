@@ -935,6 +935,26 @@ mod xfa_model {
 
     /// A calculate script finds its siblings by name and yields its last expression, and a
     /// value it sets comes back as an effect.
+    /// A real child named `variables` is found by `resolveNode`, not taken for the subform's script variables.
+    #[test]
+    fn resolve_node_finds_a_child_named_variables() {
+        let mut f = form();
+        if let Some(page) = f.children.first_mut() {
+            page.children.push(XfaNode {
+                name: "variables".into(),
+                som: "form1[0].page1[0].variables[0]".into(),
+                kind: Some(XfaKind::Subform),
+                ..Default::default()
+            });
+        }
+        let ev = XfaEvent { activity: "calculate".into(), target: "form1[0].page1[0].qty[0]".into(), ..Default::default() };
+        let o = run_xfa("xfa.resolveNode('form1.page1.variables').somExpression", &ev, &XfaDoc::default(), &f, Limits::default());
+        assert_eq!(o.result.as_deref(), Some("form1[0].page1[0].variables[0]"), "{o:?}");
+        // and a property below it is that child's
+        let o = run_xfa("xfa.resolveNode('form1.page1.variables.border').className", &ev, &XfaDoc::default(), &f, Limits::default());
+        assert_eq!(o.result.as_deref(), Some("border"), "{o:?}");
+    }
+
     #[test]
     fn calculate_scripts_see_siblings_by_name_and_yield_their_last_expression() {
         let o = go("qty.rawValue * price.rawValue", "form1[0].page1[0].total[0]", "calculate");
@@ -2083,6 +2103,7 @@ mod session {
     /// default limits and a 3 s timeout.
     fn script(source: &str, formcalc: bool, target: &str, activity: &str) -> Script {
         Script {
+            objects: Vec::new(),
             source: source.into(),
             formcalc,
             event: XfaEvent { activity: activity.into(), target: target.into(), ..Default::default() },
@@ -2173,6 +2194,135 @@ mod session {
             assert_eq!(o.error, None, "{o:?}");
         }
         assert!(started.elapsed() < std::time::Duration::from_secs(10), "{:?}", started.elapsed());
+    }
+
+    fn object(name: &str, som: Option<&str>, text: &str) -> ScriptObjectCode {
+        ScriptObjectCode { name: name.into(), som: som.map(str::to_string), text: text.into(), bare: true, unnamed: false }
+    }
+
+    /// `source` run on `total` with `objects` reachable: its result, or its error.
+    fn with_objects(s: &mut XfaSession, source: &str, objects: &[ScriptObjectCode]) -> Result<String, String> {
+        let mut sc = script(source, false, "form1[0].page1[0].total[0]", "calculate");
+        sc.objects = objects.to_vec();
+        let o = s.run(sc);
+        o.error.map_or(Ok(o.result.unwrap_or_default()), Err)
+    }
+
+    /// Sessions on one thread (as on wasm) each keep their own engine: one doesn't see the objects' state another set, and
+    /// ending one leaves the other's.
+    #[test]
+    fn sessions_on_one_thread_keep_their_own_objects() {
+        let lib = [object("lib", Some("form1[0]"), "var n = 0; function add() { return ++n; }")];
+        let run = |session: u64| {
+            let sc = script("lib.add()", false, "form1[0].page1[0].total[0]", "calculate");
+            let o = crate::xfa::run_here_with(&sc.source, lib.to_vec(), &sc.event, &XfaDoc::default(), sc.root, true, session, sc.limits, &|| {});
+            o.error.map_or(o.result.unwrap_or_default(), |e| e)
+        };
+        let (a, b) = (u64::MAX - 1, u64::MAX - 2);
+        assert_eq!((run(a), run(a), run(b)), ("1".into(), "2".into(), "1".into()));
+        crate::xfa::drop_kept(b);
+        assert_eq!(run(a), "3");
+        crate::xfa::drop_kept(a);
+    }
+
+    /// Script objects are compiled when a script first uses them, with every top-level member their code declares (read by
+    /// the parser: a quote in a regular expression hides nothing, nested locals are not members), whatever order they were
+    /// declared in. Each one is built once for the session's scripts and keeps its state between them, `this` being its subform,
+    /// which reaches it as a child too. An object
+    /// named like a host global replaces it, one named like a built-in does not, and one that does not load fails only the
+    /// scripts that use it.
+    #[test]
+    fn script_objects_load_when_first_used() {
+        let mut s = XfaSession::new(XfaDoc { page_count: 1, ..Default::default() });
+        let regex = object("U", Some("form1[0]"), "function a(v) { return /^[a-z']+$/.test(v); }\nfunction b() { return 1; }");
+        assert_eq!(with_objects(&mut s, "U.b() + U.a('it\\'s')", &[regex]).as_deref(), Ok("2"));
+        let many: String = (0..300).map(|i| format!("function f{i}() {{ var local{i} = {i}; return local{i}; }}\n")).collect();
+        let many = object("Many", None, &many);
+        assert_eq!(with_objects(&mut s, "Many.f299() + ',' + typeof Many.local1", &[many]).as_deref(), Ok("299,undefined"));
+        // declared before the object it uses
+        let order = [object("A", None, "var max = B.mb(5);"), object("B", None, "function mb(n) { return n * 1048576; }")];
+        assert_eq!(with_objects(&mut s, "A.max", &order).as_deref(), Ok("5242880"));
+        // one instance for the session, reached through its subform and resolveNode as well
+        let calcs = object("calcs", Some("form1[0]"), "var n = 0; function sumFields(p) { return ++n; }\nvar who = this.name;");
+        let calls = "calcs.sumFields(); form1.calcs.sumFields(); xfa.resolveNode('form1.calcs').sumFields() + ',' + calcs.who";
+        assert_eq!(with_objects(&mut s, calls, std::slice::from_ref(&calcs)).as_deref(), Ok("3,form1"));
+        assert_eq!(with_objects(&mut s, "xfa.resolveNode('calcs').sumFields()", std::slice::from_ref(&calcs)).as_deref(), Ok("4"));
+        // an object's functions read the running script's form and event, though another script built it
+        let reader = [object("Reader", None, "function who() { return xfa.event.name + ':' + xfa.host.numPages; }")];
+        assert_eq!(with_objects(&mut s, "Reader.who()", &reader).as_deref(), Ok("calculate:1"));
+        let mut click = script("Reader.who()", false, "form1[0].page1[0].total[0]", "click");
+        click.objects = reader.to_vec();
+        assert_eq!(s.run(click).result.as_deref(), Some("click:1"));
+        // the state lasts however many scripts the session runs (a library set up once by the form's first script)
+        let lib = object(
+            "lib",
+            Some("form1[0]"),
+            "var pages = null; function init() { pages = []; } function add(p) { pages.push(p); return pages.length; }",
+        );
+        assert_eq!(with_objects(&mut s, "lib.init(); 0", std::slice::from_ref(&lib)).as_deref(), Ok("0"));
+        for i in 1..=200 {
+            assert_eq!(with_objects(&mut s, "lib.add(this)", std::slice::from_ref(&lib)), Ok(i.to_string()));
+        }
+        // a script that names no object runs on an engine of its own: what the object scripts set is not there
+        assert_eq!(with_objects(&mut s, "leaked = 1; lib.add(this)", std::slice::from_ref(&lib)).as_deref(), Ok("201"));
+        assert_eq!(with_objects(&mut s, "typeof leaked", std::slice::from_ref(&lib)).as_deref(), Ok("undefined"));
+        // a form whose structure changed (a row added) gets a new engine, its objects built again
+        let mut grown = script("calcs.sumFields()", false, "form1[0].page1[0].total[0]", "calculate");
+        let page = &mut std::sync::Arc::make_mut(&mut grown.root).children[0];
+        let mut row = page.children[0].clone();
+        row.som = format!("{}x", row.som);
+        page.children.push(row);
+        grown.objects = vec![calcs];
+        assert_eq!(s.run(grown).result.as_deref(), Some("1"));
+        // a host global gives way, a built-in does not
+        let named = [object("util", None, "function enableField(f) { return 1; }"), object("Number", Some("form1[0]"), "var x = 9;")];
+        assert_eq!(with_objects(&mut s, "util.enableField(1) + Number('3') + form1.Number.x", &named).as_deref(), Ok("13"));
+        // and comes back for the next script, which reaches other objects
+        let other = [object("Other", None, "var x = 1;")];
+        assert_eq!(with_objects(&mut s, "Other.x + ',' + typeof util.printd", &other).as_deref(), Ok("1,function"));
+        // an object that does not parse fails the scripts that use it, naming it
+        let lov = [object("LOV", None, "var list = <items><item/></items>;"), object("messages", None, "var hi = 'hi';")];
+        assert_eq!(with_objects(&mut s, "messages.hi", &lov).as_deref(), Ok("hi"));
+        let e = with_objects(&mut s, "LOV.list", &lov).unwrap_err();
+        assert!(e.contains("script object LOV did not load"), "{e}");
+        // the code a script's objects compile is bounded, and an object nested too deeply is refused before it is parsed
+        let big = |n: &str| object(n, None, &format!("var v = 1; // {}", "x".repeat(2 << 20)));
+        let e = with_objects(&mut s, "O1.v + O2.v + O3.v + O4.v + O5.v", &[big("O1"), big("O2"), big("O3"), big("O4"), big("O5")]).unwrap_err();
+        assert!(e.contains("pass 8 MiB"), "{e}");
+        // members are live: a write through the object reaches its functions, and theirs reach the object
+        let live = [object("Calc", None, "var step = 5; function twice(x) { return x * 2 + step; } function bump() { step++; }")];
+        assert_eq!(with_objects(&mut s, "Calc.step = 10; var a = Calc.twice(1); Calc.bump(); a + ',' + Calc.step", &live).as_deref(), Ok("12,11"));
+        // an outer object an inner one hides is still reached through its subform, and a declared object comes before a
+        // member the host only stands in for
+        let mut outer = object("Calc", Some("form1[0]"), "var who = 'outer';");
+        outer.bare = false;
+        let inner = object("Calc", Some("form1[0].page1[0]"), "var who = 'inner';");
+        let layout = object("layout", Some("form1[0]"), "function f() { return 'declared'; }");
+        let value = object("value", Some("form1[0]"), "function f() { return 'value'; }");
+        let o =
+            with_objects(&mut s, "Calc.who + ',' + form1.Calc.who + ',' + form1.layout.f() + ',' + form1.value.f()", &[outer, inner, layout, value]);
+        assert_eq!(o.as_deref(), Ok("inner,outer,declared,value"));
+        // an object declaring more names than any real one is refused rather than compiled for minutes
+        let names: String = (0..100_000).map(|i| format!("var v{i};")).collect();
+        let e = with_objects(&mut s, "Wide.v1", &[object("Wide", None, &names)]).unwrap_err();
+        assert!(e.contains("more than 2048"), "{e}");
+        // through the subform's variables: `#variables[0].name`, `subform.variables.name`, `variables.resolveNode(name)`
+        let header = object("headerScript", Some("form1[0].page1[0]"), "function configure(p) { return 'configured ' + p.name; }");
+        let calls = "page1.resolveNode('#variables[0].headerScript').configure(page1.parent) + ',' \
+            + xfa.resolveNode('form1.page1.#variables[0].headerScript').configure(page1) + ',' \
+            + page1.variables.headerScript.configure(page1) + ',' + xfa.form.resolveNode('form1.page1.#variables[0]').resolveNode('headerScript').configure(page1)";
+        assert_eq!(with_objects(&mut s, calls, &[header]).as_deref(), Ok("configured form1,configured page1,configured page1,configured page1"));
+        // a module no script names runs once the object it extends is built
+        let mut module = object("module_x", Some("form1[0]"), "NS.jForm.x = { f: function () { return 'ok'; } };");
+        module.unnamed = true;
+        let ns = object("NS", Some("form1[0]"), "var jForm = {};");
+        assert_eq!(with_objects(&mut s, "NS.jForm.x.f()", &[ns.clone(), module.clone()]).as_deref(), Ok("ok"));
+        let broken = ScriptObjectCode { text: "NS.jForm.y = <x/>;".into(), name: "module_y".into(), ..module };
+        assert_eq!(with_objects(&mut s, "typeof NS.jForm.y", &[ns, broken]).as_deref(), Ok("undefined"));
+        let e = with_objects(&mut s, "Deep.x", &[object("Deep", None, &format!("var x = {}1;", "(".repeat(64_000)))]).unwrap_err();
+        assert!(e.contains("nested too deeply"), "{e}");
+        assert_eq!(s.dead(), None);
+        assert_eq!(s.run(script("1 + 1", false, "form1[0].page1[0].total[0]", "calculate")).result.as_deref(), Some("2"));
     }
 
     /// The #5079 reproduction on the XFA-open path: an initialize script of `/'/` followed by

@@ -483,6 +483,8 @@ struct Runner<'a, 'b> {
     /// `cached` as the scripts get it, made once and sent to each script until the live form
     /// changes in any way (a value too): the script engine reuses what it built from it.
     js_root: Option<Arc<XfaNode>>,
+    /// Every script object of the template, read the first time a script needs it.
+    object_index: Option<pdfcraft_xfa::ScriptObjectIndex>,
     /// The script engine for this event: one thread for all its scripts, each run in a fresh
     /// context on the form as it is then (`cached`, kept up to date in place for values and
     /// rebuilt when the structure changed).
@@ -528,6 +530,7 @@ impl<'a, 'b> Runner<'a, 'b> {
             fields: None,
             cached: None,
             js_root: None,
+            object_index: None,
             session: None,
             changes: Changes::default(),
             numbered: HashSet::new(),
@@ -996,7 +999,19 @@ impl<'a, 'b> Runner<'a, 'b> {
                 r
             }
         };
+        // a JavaScript event may call the script objects of its subform and those above it by name
+        let objects = if ev.formcalc {
+            Vec::new()
+        } else {
+            let tpl = self.tpl;
+            let index = self.object_index.get_or_insert_with(|| pdfcraft_xfa::ScriptObjectIndex::of(tpl));
+            pdfcraft_xfa::script_objects_for(tpl, index, &ev.som)
+                .into_iter()
+                .map(|o| pdfcraft_js::xfa::ScriptObjectCode { name: o.name, som: o.som, text: o.text, bare: o.bare, unnamed: o.unnamed })
+                .collect()
+        };
         let script = Script {
+            objects,
             source: ev.script.clone(),
             formcalc: ev.formcalc,
             event,

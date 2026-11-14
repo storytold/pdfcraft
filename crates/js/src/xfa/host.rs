@@ -38,10 +38,13 @@ pub(crate) struct HNode {
     pub(crate) items: Option<Vec<super::props::ItemList>>,
 }
 
+/// A form as sent, flattened, with its [`XHost::shape`].
+type Base = (Arc<XfaNode>, Vec<HNode>, u64);
+
 thread_local! {
     /// The form the last script on this thread started from, flattened: the next script of the
     /// event starts from a copy of it while the engine sends the same form.
-    static BASE: std::cell::RefCell<Option<(Arc<XfaNode>, Vec<HNode>)>> = const { std::cell::RefCell::new(None) };
+    static BASE: std::cell::RefCell<Option<Base>> = const { std::cell::RefCell::new(None) };
 }
 
 /// Let go of the form the scripts on this thread started from.
@@ -110,6 +113,25 @@ pub(crate) struct XHost {
     /// Bytes of edges and corners copied when a script reached sides a border doesn't list,
     /// against [`super::props::MAX_COPIED`].
     pub(super) copied: usize,
+    /// The script objects the script can reach ([`super::objects`]).
+    pub(crate) objects: Vec<super::objects::ScriptObjectCode>,
+    /// Bytes of script object code compiled for the script, against [`super::objects::MAX_LOADED_BYTES`].
+    pub(crate) loaded_bytes: usize,
+    /// A hash of the form's structure (each node's SOM and kind): the engine a session keeps serves the next script while it is
+    /// the same, the objects it built pointing at the same nodes.
+    pub(crate) shape: u64,
+}
+
+/// See [`XHost::shape`].
+fn shape_of(nodes: &[HNode]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    for n in nodes {
+        n.som.hash(&mut h);
+        (n.kind as u8).hash(&mut h);
+        n.gone.hash(&mut h);
+    }
+    h.finish()
 }
 
 impl XHost {
@@ -118,17 +140,20 @@ impl XHost {
     /// With `reuse`, the flattened form is kept on this thread for the next script given the
     /// same `root` (the scripts of one event, [`crate::xfa_session`]).
     pub(crate) fn new(root: Arc<XfaNode>, reuse: bool, target: &str, doc: &XfaDoc) -> XHost {
-        let nodes = if !reuse {
-            flattened(&root)
+        let (nodes, shape) = if !reuse {
+            let nodes = flattened(&root);
+            let shape = shape_of(&nodes);
+            (nodes, shape)
         } else {
             BASE.with(|b| {
                 let mut b = b.borrow_mut();
                 match b.as_ref() {
-                    Some((r, nodes)) if Arc::ptr_eq(r, &root) => nodes.clone(),
+                    Some((r, nodes, shape)) if Arc::ptr_eq(r, &root) => (nodes.clone(), *shape),
                     _ => {
                         let nodes = flattened(&root);
-                        *b = Some((root, nodes.clone()));
-                        nodes
+                        let shape = shape_of(&nodes);
+                        *b = Some((root, nodes.clone(), shape));
+                        (nodes, shape)
                     }
                 }
             })
@@ -153,6 +178,9 @@ impl XHost {
             prop_writes: super::props::PropWrites::new(),
             dropped_prop_writes: 0,
             copied: 0,
+            objects: Vec::new(),
+            loaded_bytes: 0,
+            shape,
         }
     }
 
