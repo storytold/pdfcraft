@@ -123,7 +123,13 @@ pub fn export_data(doc: &Document, format: Format) -> String {
             // A formula-like cell gets a leading `'`, as in `merge_csv`; import takes it off again.
             let q = |s: &str| {
                 let s = if csv_guarded(s) { format!("'{s}") } else { s.to_string() };
-                if s.contains([',', '"', '\n', '\r', '\t']) { format!("\"{}\"", s.replace('"', "\"\"")) } else { s }
+                if s.contains('\t') {
+                    format!("\"{}\"", s.replace('"', "\"\""))
+                } else {
+                    let mut out = String::new();
+                    craft_csv::push_field(&mut out, &s, ',');
+                    out
+                }
             };
             format!(
                 "{}\n{}\n",
@@ -202,7 +208,13 @@ pub fn merge_csv(files: &[Vec<(String, Vec<String>)>]) -> String {
     let literal = |s: &str| if runs_as_formula(s) { format!("'{s}") } else { s.to_string() };
     let q = |s: &str| {
         let s = literal(s);
-        if s.contains([',', '"', '\n', '\r', '\t']) { format!("\"{}\"", s.replace('"', "\"\"")) } else { s }
+        if s.contains('\t') {
+            format!("\"{}\"", s.replace('"', "\"\""))
+        } else {
+            let mut out = String::new();
+            craft_csv::push_field(&mut out, &s, ',');
+            out
+        }
     };
     let mut out = columns.iter().map(|c| q(c)).collect::<Vec<_>>().join(",");
     out.push('\n');
