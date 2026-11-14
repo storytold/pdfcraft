@@ -278,7 +278,8 @@ impl crate::Document {
                             rect: visible_rect(b.rect),
                             size: b.size * unit,
                             bold,
-                            italic,
+                            // Or as reading tells it: by the font's flags, or letters its matrix leans.
+                            italic: b.italic || italic,
                             color: b.color,
                             rotation: b.rotation - f64::from(info.rotation),
                         }
