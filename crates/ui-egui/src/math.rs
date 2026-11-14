@@ -1121,8 +1121,9 @@ fn measure_node(ui: &Ui, node: &MathNode, font: &FontId) -> MathBox {
             let sup_ascent = sup_box.zip(sup_offset).map(|(sb, offset)| offset + sb.above_baseline()).unwrap_or(0.0);
             let sub_ascent = sub_box.zip(sub_offset).map(|(sb, offset)| (sb.above_baseline() - offset).max(0.0)).unwrap_or(0.0);
             let ascent = base_box.ascent.max(sup_ascent).max(sub_ascent);
+            let sup_descent = sup_box.zip(sup_offset).map(|(sb, offset)| (sb.below_baseline() - offset).max(0.0)).unwrap_or(0.0);
             let sub_descent = sub_box.zip(sub_offset).map(|(sb, offset)| offset + sb.below_baseline()).unwrap_or(0.0);
-            let descent = base_box.descent.max(sub_descent);
+            let descent = base_box.descent.max(sub_descent).max(sup_descent);
             MathBox { width, ascent, descent, baseline_shift: base_box.baseline_shift }
         }
         MathNode::Row(nodes) => {
@@ -2411,6 +2412,33 @@ mod tests {
         let superscript = bounds("2");
         let subscript = bounds("i");
         assert!(superscript.bottom() < subscript.top(), "scripts have clear separation: {superscript:?}, {subscript:?}");
+        output.textures_delta.clear();
+    }
+
+    #[test]
+    fn tall_superscript_paint_stays_within_measured_descent() {
+        let ctx = egui::Context::default();
+        ctx.set_fonts(crate::theme::font_definitions());
+        let baseline = 100.0;
+        let mut measured = None;
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            let font = FontId::new(15.0, egui::FontFamily::Name("math".into()));
+            let node = parse_math_ast("X^{\\frac{a}{\\frac{b}{c}}}").unwrap();
+            measured = Some(measure_node(ui, &node, &font));
+            draw_node(ui, &node, Pos2::ZERO, baseline, &font, Color32::BLACK);
+        });
+        let painted_bounds = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) => Some(text.visual_bounding_rect()),
+                egui::Shape::LineSegment { points, .. } => Some(egui::Rect::from_two_pos(points[0], points[1])),
+                _ => None,
+            })
+            .reduce(egui::Rect::union)
+            .expect("tall superscript paint");
+        let measured = measured.expect("measured tall superscript");
+        assert!(painted_bounds.bottom() <= baseline + measured.descent, "painted bottom exceeds measured descent: {painted_bounds:?}, {measured:?}");
         output.textures_delta.clear();
     }
 
