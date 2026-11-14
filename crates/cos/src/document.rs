@@ -51,6 +51,8 @@ pub struct Document {
     repair_log: Arc<Vec<String>>,
     /// See [`Self::rebuilt_unlinked_update`].
     unlinked_update: bool,
+    /// See [`Self::rebuilt_with_unsettled_generations`].
+    unsettled_generations: bool,
     /// What loading each file object gave, a failure as well: a damaged object is otherwise
     /// loaded again on every read, and a member of an object stream that can't be decoded
     /// decodes the stream again (`Document::load`).

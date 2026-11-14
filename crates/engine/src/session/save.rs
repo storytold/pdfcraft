@@ -339,6 +339,7 @@ impl Session {
         let d = self.get(doc).ok_or(EditError::NoDocument)?;
         // Encrypted documents are signed under their permissions (the signer checks them).
         let editor = d.editor.as_ref().ok_or_else(|| EditError::ReadOnly(d.read_only_reason.clone().unwrap_or_default()))?;
+        shows_what_is_signed(d, &editor.cos)?;
         if opts.date.is_empty() {
             opts.date = self.signing_date();
         }
@@ -358,6 +359,7 @@ impl Session {
     ) -> Result<Arc<Vec<u8>>, EditError> {
         let d = self.get(doc).ok_or(EditError::NoDocument)?;
         let editor = d.editor.as_ref().ok_or_else(|| EditError::ReadOnly(d.read_only_reason.clone().unwrap_or_default()))?;
+        shows_what_is_signed(d, &editor.cos)?;
         if opts.date.is_empty() {
             opts.date = self.signing_date();
         }
@@ -373,6 +375,7 @@ impl Session {
     pub fn timestamp_document(&self, doc: DocId, tsa: &dyn pdfcraft_sign::TimestampAuthority, date: String) -> Result<Arc<Vec<u8>>, EditError> {
         let d = self.get(doc).ok_or(EditError::NoDocument)?;
         let editor = d.editor.as_ref().ok_or_else(|| EditError::ReadOnly(d.read_only_reason.clone().unwrap_or_default()))?;
+        shows_what_is_signed(d, &editor.cos)?;
         let date = if date.is_empty() { self.signing_date() } else { date };
         let cos = writable(&editor.cos)?;
         let stamped = Arc::new(pdfcraft_sign::timestamp_document(&cos, tsa, &date)?);
@@ -402,6 +405,25 @@ impl Session {
         }
         Ok(())
     }
+}
+
+/// Refuse to sign a rebuilt file, not edited since, whose page can show an object the signed file
+/// leaves out (#6759). The page is drawn from the damaged bytes, which the renderer rebuilds on
+/// its own, while signing writes the object graph rebuilt here in full. They differ only where the
+/// document reaches two generations of one object number
+/// ([`pdfcraft_cos::Document::rebuilt_with_unsettled_generations`]): the renderer draws both, and
+/// the graph keeps one. Any other rebuilt file, such as one with no cross-reference table at all,
+/// signs as before. Once the file is saved, or edited, the page shows the rewrite that is signed.
+fn shows_what_is_signed(d: &Document, cos: &pdfcraft_cos::Document) -> Result<(), EditError> {
+    if !cos.rebuilt_with_unsettled_generations() || cos.is_modified() {
+        return Ok(());
+    }
+    if d.is_signed() {
+        return Err(EditError::SignedRewrite("Signing this repaired file".into()));
+    }
+    Err(EditError::Sign(
+        "this file was damaged and was repaired when it was opened: save it first, then sign the saved file, so the signature covers the repaired file the page shows".into(),
+    ))
 }
 
 /// `cos` with its form fields drawn, when the signature about to be made is the document's first

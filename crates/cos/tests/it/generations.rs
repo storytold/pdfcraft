@@ -508,3 +508,204 @@ fn accepted_generations_are_the_generations_get_resolves() {
     assert!(matches!(packed.xref_entry(member.num), Some(XrefEntry::InStream { .. })), "the member is in an object stream");
     agrees(&packed, member.num, &[0]);
 }
+
+const COVER: &str = "0 0 0 rg 10 10 80 80 re f";
+const OTHER: &str = "1 0 0 rg 100 100 20 20 re f";
+
+/// A file with no usable cross-reference data (`startxref` points nowhere), so both cos and the
+/// renderer rebuild it from object headers. The page draws `page_ref`; `bodies` are the
+/// `4 G obj` content streams after it, as (generation, content), in file order (#6759).
+fn rebuilt_page(page_ref: &str, bodies: &[(u32, &str)]) -> Arc<Vec<u8>> {
+    let mut pdf = format!(
+        "%PDF-1.7\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n\
+         3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents {page_ref} >>\nendobj\n"
+    );
+    for (generation, content) in bodies {
+        pdf.push_str(&format!("4 {generation} obj\n<< /Length {} >>\nstream\n{content}\nendstream\nendobj\n", content.len()));
+    }
+    pdf.push_str("trailer\n<< /Size 5 /Root 1 0 R >>\nstartxref\n999999\n%%EOF\n");
+    Arc::new(pdf.into_bytes())
+}
+
+/// What the renderer draws on the first page.
+fn drawn_by_renderer(bytes: Arc<Vec<u8>>) -> Option<String> {
+    let oracle = hayro_syntax::Pdf::new(bytes).ok()?;
+    let page = oracle.pages().first()?.page_stream()?.to_vec();
+    Some(String::from_utf8_lossy(&page).trim().to_string())
+}
+
+/// The first page's content stream as cos reads it.
+fn drawn_by_cos(doc: &Document) -> Option<String> {
+    let catalog = doc.get(doc.root()?);
+    let pages = doc.resolve(catalog.as_dict()?.get(b"Pages")?);
+    let page = doc.resolve(pages.as_dict()?.get(b"Kids")?.as_array()?.first()?);
+    let contents = doc.resolve(page.as_dict()?.get(b"Contents")?);
+    let Object::Stream(stream) = &*contents else { return None };
+    Some(String::from_utf8_lossy(&stream.raw).trim().to_string())
+}
+
+/// A later `4 1 obj` used to take object 4's slot, so `4 0 R` read as null in cos and a full
+/// save wrote null, while the renderer drew the generation-0 cover (#6759).
+#[test]
+fn a_rebuilt_index_keeps_the_generation_0_body_the_page_draws() {
+    for bodies in [&[(0, COVER), (1, OTHER)][..], &[(1, OTHER), (0, COVER)], &[(0, COVER), (1, OTHER), (2, OTHER)]] {
+        let bytes = rebuilt_page("4 0 R", bodies);
+        assert_eq!(drawn_by_renderer(bytes.clone()).as_deref(), Some(COVER), "{bodies:?}");
+        let doc = Document::open(bytes).unwrap();
+        assert!(doc.reconstructed());
+        assert!(!doc.rebuilt_with_unsettled_generations(), "{bodies:?}: only generation 0 is reached");
+        assert_eq!(drawn_by_cos(&doc).as_deref(), Some(COVER), "{bodies:?}");
+        let saved = Arc::new(write_full(&doc, &SaveOptions::default()).unwrap());
+        assert_eq!(drawn_by_renderer(saved.clone()).as_deref(), Some(COVER), "{bodies:?}");
+        assert_eq!(drawn_by_cos(&Document::open(saved).unwrap()).as_deref(), Some(COVER), "{bodies:?}");
+    }
+}
+
+#[test]
+fn a_rebuilt_index_answers_generation_0_for_an_object_with_only_another_generation() {
+    // The renderer's rebuilt table lets the last header stand in for `N 0 R` when there is no
+    // `N 0 obj` (#5580); cos follows it, and the header's own generation still resolves. A
+    // generation past `u16` is still another generation to the renderer, not a real `N 0 obj`.
+    for (page_ref, bodies) in [
+        ("4 0 R", &[(1, COVER)][..]),
+        ("4 1 R", &[(1, COVER)]),
+        ("4 0 R", &[(1, OTHER), (2, COVER)]),
+        ("4 2 R", &[(1, OTHER), (2, COVER)]),
+        ("4 0 R", &[(65536, OTHER), (1, COVER)]),
+    ] {
+        let bytes = rebuilt_page(page_ref, bodies);
+        assert_eq!(drawn_by_renderer(bytes.clone()).as_deref(), Some(COVER), "{page_ref} {bodies:?}");
+        let doc = Document::open(bytes).unwrap();
+        assert_eq!(drawn_by_cos(&doc).as_deref(), Some(COVER), "{page_ref} {bodies:?}");
+        let saved = Arc::new(write_full(&doc, &SaveOptions::default()).unwrap());
+        assert_eq!(drawn_by_renderer(saved).as_deref(), Some(COVER), "{page_ref} {bodies:?}");
+    }
+}
+
+#[test]
+fn a_rebuilt_index_records_a_body_it_leaves_out() {
+    // One slot holds one body: with `4 0 obj` and `4 1 obj` both live, `4 1 R` reads as null in
+    // cos though the renderer reaches it. The repair log says so (AGENTS.md §5, Fidelity).
+    let doc = Document::open(rebuilt_page("4 0 R", &[(0, COVER), (1, OTHER), (1, OTHER)])).unwrap();
+    assert_eq!(*doc.get(ObjRef::new(4, 1)), Object::Null);
+    let noted: Vec<_> = doc.repair_log().iter().filter(|line| line.contains("left out")).collect();
+    assert_eq!(noted.len(), 1, "{:?}", doc.repair_log());
+    assert!(noted[0].contains("4 1"), "{noted:?}");
+    // Nothing left out, nothing noted.
+    let doc = Document::open(rebuilt_page("4 0 R", &[(0, COVER), (0, OTHER)])).unwrap();
+    assert!(doc.repair_log().iter().all(|line| !line.contains("left out")), "{:?}", doc.repair_log());
+}
+
+/// No usable cross-reference data, objects in file order as (number, generation, body).
+fn rebuilt_objects(objects: &[(u32, u16, &str)]) -> Arc<Vec<u8>> {
+    rebuilt_objects_rooted(objects, "1 0 R")
+}
+
+/// [`rebuilt_objects`] with the trailer's `/Root` given.
+fn rebuilt_objects_rooted(objects: &[(u32, u16, &str)], root: &str) -> Arc<Vec<u8>> {
+    let mut pdf = String::from("%PDF-1.7\n");
+    for (num, generation, body) in objects {
+        pdf.push_str(&format!("{num} {generation} obj\n{body}\nendobj\n"));
+    }
+    pdf.push_str(&format!("trailer\n<< /Size 11 /Root {root} >>\nstartxref\n999999\n%%EOF\n"));
+    Arc::new(pdf.into_bytes())
+}
+
+/// Each page's content as the renderer draws it.
+fn pages_drawn_by_renderer(bytes: Arc<Vec<u8>>) -> Vec<String> {
+    let oracle = hayro_syntax::Pdf::new(bytes).unwrap();
+    oracle.pages().iter().map(|p| String::from_utf8_lossy(p.page_stream().unwrap_or_default()).trim().to_string()).collect()
+}
+
+/// A newer revision reused number 5 as `5 1 obj`, a page its page tree lists as `5 1 R`; the
+/// older `5 0 obj` is only a stream length. Kept at generation 0, `5 1 R` read as null, the
+/// page fell out of a save, and the save was refused (PDFBOX-3785's `202097.pdf`, on #6767).
+#[test]
+fn a_rebuilt_index_keeps_a_reused_number_the_document_reaches() {
+    let bytes = rebuilt_objects(&[
+        (1, 0, "<< /Type /Catalog /Pages 2 0 R >>"),
+        (5, 0, "27"),
+        (6, 0, &format!("<< /Length 5 0 R >>\nstream\n{OTHER}\nendstream")),
+        (2, 0, "<< /Type /Pages /Kids [3 0 R 5 1 R] /Count 2 >>"),
+        (3, 0, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 6 0 R >>"),
+        (5, 1, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 7 0 R >>"),
+        (7, 0, &format!("<< /Length {} >>\nstream\n{COVER}\nendstream", COVER.len())),
+    ]);
+    assert_eq!(pages_drawn_by_renderer(bytes.clone()), [OTHER, COVER]);
+    let doc = Document::open(bytes).unwrap();
+    assert!(doc.reconstructed());
+    assert!(!doc.rebuilt_with_unsettled_generations(), "only generation 1 is reached");
+    assert_eq!(doc.get(ObjRef::new(5, 1)).as_dict().and_then(|d| d.name(b"Type")), Some(&b"Page"[..]));
+    let saved = Arc::new(write_full(&doc, &SaveOptions::default()).unwrap());
+    assert_eq!(pages_drawn_by_renderer(saved), [OTHER, COVER]);
+    assert!(doc.repair_log().iter().any(|line| line.contains("left out 1 objects") && line.contains("(5 0)")), "{:?}", doc.repair_log());
+}
+
+/// `4 0 R` and `4 1 R` both drawn: one slot cannot hold both, so the renderer's generation-0
+/// rule stands, the other body is noted as left out, and the document says so.
+#[test]
+fn a_rebuilt_index_keeps_generation_0_when_the_document_reaches_both() {
+    let doc = Document::open(rebuilt_page("[4 0 R 4 1 R]", &[(0, COVER), (1, OTHER)])).unwrap();
+    assert!(matches!(&*doc.get(ObjRef::new(4, 0)), Object::Stream(s) if &*s.raw == COVER.as_bytes()));
+    assert_eq!(*doc.get(ObjRef::new(4, 1)), Object::Null);
+    assert!(doc.repair_log().iter().any(|line| line.contains("left out 1 objects") && line.contains("(4 1)")), "{:?}", doc.repair_log());
+    assert!(doc.rebuilt_with_unsettled_generations());
+}
+
+/// The only trailer names `/Root 1 1 R`, and both `1 0 obj` and `1 1 obj` are catalogs. The
+/// renderer roots the document at `1 1 obj`; the trailer used to be judged against the
+/// generation-0 slot alone, so it was passed over and cos rooted the document at `1 0 obj`
+/// (raised in review of #6767).
+#[test]
+fn a_rebuilt_index_roots_the_document_at_the_generation_its_trailer_names() {
+    let bytes = rebuilt_objects_rooted(
+        &[
+            (1, 0, "<< /Type /Catalog /Pages 2 0 R >>"),
+            (2, 0, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+            (3, 0, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 6 0 R >>"),
+            (6, 0, &format!("<< /Length {} >>\nstream\n{OTHER}\nendstream", OTHER.len())),
+            (1, 1, "<< /Type /Catalog /Pages 8 0 R >>"),
+            (8, 0, "<< /Type /Pages /Kids [9 0 R] /Count 1 >>"),
+            (9, 0, "<< /Type /Page /Parent 8 0 R /MediaBox [0 0 200 200] /Contents 7 0 R >>"),
+            (7, 0, &format!("<< /Length {} >>\nstream\n{COVER}\nendstream", COVER.len())),
+        ],
+        "1 1 R",
+    );
+    assert_eq!(pages_drawn_by_renderer(bytes.clone()), [COVER]);
+    let doc = Document::open(bytes).unwrap();
+    assert!(doc.reconstructed());
+    assert_eq!(doc.root(), Some(ObjRef::new(1, 1)));
+    assert!(!doc.rebuilt_with_unsettled_generations(), "only generation 1 is reached");
+    assert_eq!(drawn_by_cos(&doc).as_deref(), Some(COVER));
+    let saved = Arc::new(write_full(&doc, &SaveOptions::default()).unwrap());
+    assert_eq!(pages_drawn_by_renderer(saved), [COVER]);
+}
+
+/// `4 0 obj` and `4 1 obj` are object streams holding different values for member 10, and the
+/// document reaches `4 1 R` only. The renderer reads the member through the generation-0 stream,
+/// as the rebuilt index listed it; moving the slot to `4 1 obj` made a full save read it from
+/// the other stream (raised in review of #6767). The slot stays, and the document says a
+/// generation it reaches is left out.
+#[test]
+fn a_rebuilt_index_keeps_the_object_stream_its_members_were_read_from() {
+    let members = |value: i32| {
+        let data = format!("10 0 {value}");
+        format!("<< /Type /ObjStm /N 1 /First 5 /Length {} >>\nstream\n{data}\nendstream", data.len())
+    };
+    let bytes = rebuilt_objects(&[
+        (1, 0, "<< /Type /Catalog /Pages 2 0 R /Value 10 0 R /Streams 4 1 R >>"),
+        (2, 0, "<< /Type /Pages /Kids [] /Count 0 >>"),
+        (4, 0, &members(41)),
+        (4, 1, &members(42)),
+    ]);
+    let oracle = hayro_syntax::Pdf::new(bytes.clone()).unwrap();
+    assert_eq!(oracle.xref().get::<i32>(ObjectIdentifier::new(10, 0)), Some(41));
+    let doc = Document::open(bytes).unwrap();
+    assert!(doc.reconstructed());
+    assert_eq!(*doc.get(ObjRef::new(10, 0)), Object::Int(41));
+    // A full save renumbers: follow the catalog's `/Value`.
+    let saved = Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap();
+    let catalog = saved.get(saved.root().unwrap());
+    assert_eq!(*saved.resolve(catalog.as_dict().unwrap().get(b"Value").unwrap()), Object::Int(41));
+    assert!(doc.rebuilt_with_unsettled_generations(), "`4 1 R` is reached and reads as null");
+}
