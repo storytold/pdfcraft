@@ -88,7 +88,7 @@ impl Control {
                 Ok(Handled::Screenshot(region))
             }
             other => Err(format!(
-                "unknown method {other:?} (ui.state, ui.inspect, ui.click, ui.focus, ui.resize, ui.quit, ui.move, ui.drag, ui.type, ui.key, ui.command, ui.commands, ui.set, ui.open, ui.screenshot)"
+                "unknown method {other:?} (ui.state, ui.inspect, ui.click, ui.focus, ui.resize, ui.quit, ui.move, ui.drag, ui.type, ui.key, ui.command, ui.commands, ui.set, ui.panel, ui.dock.reset, ui.open, ui.screenshot)"
             )),
         })();
         r.unwrap_or_else(|e| Handled::Now(Err(e)))
@@ -346,7 +346,7 @@ fn modifiers(v: Option<&Value>) -> Result<egui::Modifiers, String> {
             "alt" | "option" => m.alt = true,
             "ctrl" | "control" => m.ctrl = true,
             "mac_cmd" => m.mac_cmd = true,
-            other => return Err(format!("ui.key: unknown modifier {other:?} (command, shift, alt, ctrl)")),
+            other => return Err(format!("ui.key: unknown modifier {other:?} (command, shift, alt, ctrl, mac_cmd)")),
         }
     }
     // "command" is ⌘ on macOS and Ctrl elsewhere, as egui expects.
