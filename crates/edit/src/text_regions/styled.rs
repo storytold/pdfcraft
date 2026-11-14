@@ -725,7 +725,10 @@ fn styled_break_before(chars: &[StyledChar]) -> Vec<bool> {
 
 fn wrap_styled_rows(
     chars: &[StyledChar],
-    width: f64,
+    // The measure a row may fill: the paragraph's first row's own (a hanging or first-line indent
+    // leaves it shorter or longer than the rest), and the rest rows' one. The first argument is the
+    // draft row the row being built belongs to, the second whether it continues an earlier row.
+    width: impl Fn(usize, bool) -> f64,
     measure: impl Fn(&[StyledChar]) -> Result<f64, EditError>,
 ) -> Result<WrappedStyledRows, EditError> {
     let break_before = styled_break_before(chars);
@@ -742,6 +745,9 @@ fn wrap_styled_rows(
     // Logical draft rows drive per-paragraph alignment independently of soft wraps.
     let mut row_lines: Vec<usize> = Vec::new();
     let mut draft_line = 0usize;
+    // Whether the row being built is the first one of its draft row (a wrap makes the next one a
+    // continuation, which wraps at the rest measure, not the first row's).
+    let mut first_of_line = true;
     let mut row_start = 0;
     let mut row = Vec::new();
     let mut row_width = 0.0;
@@ -762,6 +768,7 @@ fn wrap_styled_rows(
             draft_line = draft_line.saturating_add(1);
             rows.push(std::mem::take(&mut row));
             row_width = 0.0;
+            first_of_line = true;
             at += 1;
             row_start = at;
             continue;
@@ -775,7 +782,8 @@ fn wrap_styled_rows(
         }
         let word = chars.get(at..end).unwrap_or_default();
         let word_width = measure(word)?;
-        if !row.is_empty() && !item.0.is_whitespace() && row_width + word_width > width + 0.5 {
+        let measure_width = width(draft_line, !first_of_line);
+        if !row.is_empty() && !item.0.is_whitespace() && row_width + word_width > measure_width + 0.5 {
             let mut trimmed = 0usize;
             while row.last().is_some_and(|c: &StyledChar| c.0.is_whitespace()) {
                 row.pop();
@@ -789,6 +797,7 @@ fn wrap_styled_rows(
             row_lines.push(draft_line);
             rows.push(std::mem::take(&mut row));
             row_width = 0.0;
+            first_of_line = false;
             row_start = at;
         }
         row.extend_from_slice(word);
@@ -803,6 +812,28 @@ fn wrap_styled_rows(
         rows.push(row);
     }
     Ok((rows, row_ranges, row_lines, row_soft, row_gap))
+}
+
+/// Wraps the draft rows at each row's own measure (#7213): a paragraph's first row may fill a
+/// different measure from the rest (a hanging or first-line indent), so a continuation of any
+/// draft row wraps at the rest measure and cannot run past the measure's right edge, while a
+/// paragraph with no indent wraps at `width`, which lets a row grow into the column.
+fn wrap_draft_rows(
+    block: &TextBlock,
+    lines: &[TextLine],
+    chars: &[StyledChar],
+    style: &BlockStyle,
+    width: f64,
+    measure: impl Fn(&[StyledChar]) -> Result<f64, EditError>,
+) -> Result<WrappedStyledRows, EditError> {
+    let rest_left =
+        rest_left_of(block, lines).unwrap_or_else(|| block.rows.first().and_then(|row| row_rect(row, lines)).map(|r| r[0]).unwrap_or(block.rect[0]));
+    let measure_right = block.rows.iter().filter_map(|row| row_rect(row, lines)).map(|r| r[2]).fold(f64::MIN, f64::max);
+    let rest_measure = if rest_left > block.rect[0] + 0.5 { width.min((measure_right - rest_left).max(1.0)) } else { width };
+    let row_measure = |draft_line: usize, continuation: bool| {
+        if style.width.is_some() || (draft_line == 0 && !continuation) { width } else { rest_measure }
+    };
+    wrap_styled_rows(chars, row_measure, measure)
 }
 
 fn apply_range_styles<'a>(
@@ -1806,7 +1837,11 @@ pub(crate) fn rewrite_styled_block(
         }
         Ok(width)
     };
-    let (mut rows, row_ranges, row_lines, row_soft, row_gap) = wrap_styled_rows(&chars, width, measure)?;
+    // The paragraph's first row may fill a different measure from the rest (a hanging or first-line
+    // indent): each wraps at its own, so a continuation cannot run past the measure's right edge
+    // and an indented first row cannot wrap later than its own measure allows (#7213). A paragraph
+    // with no indent keeps wrapping at `width`, which lets a row grow into the column.
+    let (mut rows, row_ranges, row_lines, row_soft, row_gap) = wrap_draft_rows(block, lines, &chars, style, width, measure)?;
     let space_styles: Vec<_> = rows.iter_mut().map(|row| assign_subset_space_fonts(row, &metrics)).collect();
     let streams = content_streams(doc, &p.dict)?;
     let pieces = crate::text::joined(&streams);
@@ -1882,9 +1917,10 @@ pub(crate) fn rewrite_styled_block(
     // left edge (#7213), and a wrap the edit introduces pushes the rows after it down by their own
     // step. `row_lines` pairs an output row with the draft row — and so the source row — it belongs
     // to, which a wrap puts out of step with the output row's own position.
-    let rest_left = rest_left_of(block, lines).unwrap_or(first.rect[0]);
-    let measure_right = block.rows.iter().filter_map(|row| row_rect(row, lines)).map(|r| r[2]).fold(f64::MIN, f64::max);
     let justified = source_is_justified(block, lines);
+    let rest_left =
+        rest_left_of(block, lines).unwrap_or_else(|| block.rows.first().and_then(|row| row_rect(row, lines)).map(|r| r[0]).unwrap_or(first.rect[0]));
+    let measure_right = block.rows.iter().filter_map(|row| row_rect(row, lines)).map(|r| r[2]).fold(f64::MIN, f64::max);
     for (row_index, row) in rows.iter().enumerate() {
         let source_row = if paired { row_lines.get(row_index).copied().unwrap_or(row_index) } else { row_index };
         let continuation =
@@ -1927,8 +1963,12 @@ pub(crate) fn rewrite_styled_block(
             _ => 0,
         };
         // A justified paragraph's rewritten rows stretch back to their measure; the last row does
-        // not, and neither does a row aligned on its own (#7213).
+        // not, and neither does a row aligned on its own (#7213). The measure is the paragraph's
+        // right edge, not the source row's own width: a wrap can make the first fragment of a
+        // short last source row nonfinal, and that fragment stretches to the measure like any
+        // interior row.
         let stretch = justified && natural && row_index.saturating_add(1) < rows.len() && word_gaps > 0;
+        let justified_measure = (measure_right - left).max(available);
         let mut x = left
             + match align {
                 crate::added::Align::Center => (available - w) / 2.0,
@@ -1956,10 +1996,9 @@ pub(crate) fn rewrite_styled_block(
             }
             if stretch {
                 // Justified: the row's word gaps take up what is left of its measure. The stretch
-                // goes through the text state's word spacing, as the source's own did.
-                let scale =
-                    overrides.get(&item.1).and_then(|r| r.scale).or(style.scale).map_or(source.origin.state.scale, |s| (s / 100.0).clamp(0.1, 10.0));
-                state.word_spacing += (available - w).max(0.0) / (word_gaps as f64 * scale * source.origin.k);
+                // goes through the text state's word spacing, as the source's own did; the state's
+                // scale is the one this run is drawn with, calibration included.
+                state.word_spacing += (justified_measure - w).max(0.0) / (word_gaps as f64 * state.scale * source.origin.k);
             }
             if let Some([r, g, b]) = overrides.get(&item.1).and_then(|r| r.color).or(style.color) {
                 state.fill = vec![Op::new("rg", vec![n(r), n(g), n(b)])];
@@ -2001,6 +2040,12 @@ pub(crate) fn rewrite_styled_block(
                     state.word_spacing,
                 )?);
                 block_ops.push(Op::new("ET", vec![]));
+                // `source_show` emits the stretched word spacing at each space of this run, so the
+                // next run and the underline follow the spacing, not the cached natural width.
+                if stretch {
+                    let spaces_in_segment = string.matches(' ').count() as f64;
+                    segment_width += spaces_in_segment * (justified_measure - w).max(0.0) / word_gaps as f64;
+                }
             }
             // A space reassigned onto a neighbour keeps that neighbour's grouping key, and its
             // own style for the underline. Stroke each run of one underline style separately.

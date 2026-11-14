@@ -11618,6 +11618,31 @@ fn words_added_to_a_justified_hanging_indent_paragraph_wrap_at_the_indent() {
     assert!((end[1] - (at("end", 0)[1] - 12.0)).abs() < 0.5, "the last row moves down too: {end:?}");
 }
 
+/// An edit that wraps the short last row of a justified paragraph makes its first fragment
+/// nonfinal: the fragment stretches to the paragraph's measure like any interior row, instead of
+/// staying as ragged as the short row it came from (#7213).
+#[test]
+fn a_justified_last_row_that_wraps_stretches_to_the_measure() {
+    let content = "BT /F1 10 Tf 12 TL 1 0 0 1 72 700 Tm (alpha beta gamma delta epsilon zeta) Tj 0 -12 Td (alpha beta gamma delta epsilon zeta) Tj 0 -12 Td (eta end) Tj ET";
+    let rows_of =
+        |doc: &Document| -> Vec<(String, [f64; 4])> { text::text_lines(doc, 0).unwrap().into_iter().map(|l| (l.text.clone(), l.rect)).collect() };
+    let mut doc = text_page(content);
+    let index = text::text_blocks(&doc, 0).unwrap().iter().position(|b| b.text.contains("alpha")).unwrap();
+    let block = text::text_blocks(&doc, 0).unwrap()[index].clone();
+    let before = rows_of(&doc);
+    let measure_right = before.iter().map(|(_, r)| r[2]).fold(f64::MIN, f64::max);
+
+    // One unbreakable long word pushes the last row over its measure; its first fragment is left
+    // well short of it and must stretch back.
+    let mut draft_rows: Vec<String> = block.editor_text.split('\n').map(str::to_string).collect();
+    draft_rows[2].push_str(" eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee");
+    text::rewrite_block(&mut doc, 0, index, Some(&draft_rows.join("\n")), &text::BlockStyle::default()).unwrap();
+    let after = rows_of(&reopen(&doc));
+    let fragment = after.iter().find(|(t, _)| t == "eta end").unwrap_or_else(|| panic!("{after:?}")).1;
+    assert!((fragment[2] - measure_right).abs() < 1.0, "the wrapped last row's fragment is justified: {:?} vs {measure_right}", fragment);
+    assert!((fragment[0] - 72.0).abs() < 0.5, "the fragment keeps the margin: {fragment:?}");
+}
+
 /// An alignment for a row the draft doesn't have names no row: a one-row title given one for a
 /// second row only stays where it is, not moved to its column's edge. Nor does a row of the draft
 /// with no alignment of its own move because another row has one (CodeRabbit on 648dd428).
