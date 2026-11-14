@@ -305,7 +305,10 @@ pub const COMMANDS: &[CommandSpec] = &[
     c("comment.export", "Export all comments to data file…", None, None, HasComments, "file-output"),
     c("comment.hide_all", "Hide all comments", None, None, Document, "eye-off"),
     c("comment.summarize", "Summarize comments", None, None, HasComments, "file-text"),
-    c("form.import_data", "Import form data…", None, None, HasFields, "file-input"),
+    // Import data fills what a data file names; a document may take data before its fields exist
+    // (an XFA takes datasets, and the importer reports what matched nothing), so it is not gated
+    // on having fields already (#7259), only on the document allowing modification.
+    c("form.import_data", "Import form data…", None, None, Modification, "file-input"),
     c("form.export_data", "Export form data…", None, None, HasFields, "file-output"),
     c("standards.pdfa", "PDF/A…", None, None, Document, "file-check"),
     c("actions.wizard", "Action Wizard…", None, None, Nothing, "list-checks"),
