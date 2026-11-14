@@ -145,11 +145,26 @@ impl OcrImage {
     }
 }
 
+/// Which way a word reads in the image it was recognised in. A box alone cannot say: a word
+/// turned a quarter has a tall box, and it is read along the box's long edge.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum WordDirection {
+    /// Upright: read left to right along the box's bottom edge.
+    #[default]
+    Across,
+    /// Turned a quarter clockwise: read top to bottom, the letters' tops toward the right.
+    Down,
+    /// Turned a quarter counter-clockwise: read bottom to top, the letters' tops toward the left.
+    Up,
+}
+
 /// A recognised word: its text and its box in image pixels `[left, top, right, bottom]`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Word {
     pub text: String,
     pub rect: [f32; 4],
+    /// Which way the word reads inside `rect` (upright unless the engine says otherwise).
+    pub direction: WordDirection,
     /// How sure the engine is, 0–100, when it reports a confidence at all (`None`: the ocrs
     /// engine does not).
     pub confidence: Option<f32>,
@@ -160,7 +175,13 @@ pub struct Word {
 
 impl Word {
     pub fn new(text: impl Into<String>, rect: [f32; 4], source: &str) -> Word {
-        Word { text: text.into(), rect, confidence: None, source: source.into() }
+        Word { text: text.into(), rect, direction: WordDirection::Across, confidence: None, source: source.into() }
+    }
+
+    /// Set the reading direction (builder style).
+    pub fn with_direction(mut self, direction: WordDirection) -> Word {
+        self.direction = direction;
+        self
     }
 
     /// Set the confidence (builder style), clamped to the documented 0–100 scale (a negative
@@ -230,17 +251,24 @@ pub struct PlacedWord {
 
 impl PlacedWord {
     /// Place a pixel-space word with `to_user`, which maps an image pixel (x right, y down) to
-    /// user space.
+    /// user space. The word's [`WordDirection`] picks the corner its baseline starts at and
+    /// the edge it runs along, so a word read sideways stays sideways (#7254).
     pub fn place(word: &Word, to_user: impl Fn(f32, f32) -> [f64; 2]) -> PlacedWord {
         let [l, t, r, b] = word.rect;
-        let o = to_user(l, b);
-        let br = to_user(r, b);
-        let tl = to_user(l, t);
+        // The baseline's start and end, and the top of the first letter, in pixels.
+        let (start, end, top) = match word.direction {
+            WordDirection::Across => ((l, b), (r, b), (l, t)),
+            WordDirection::Down => ((l, t), (l, b), (r, t)),
+            WordDirection::Up => ((r, b), (r, t), (l, b)),
+        };
+        let o = to_user(start.0, start.1);
+        let end = to_user(end.0, end.1);
+        let top = to_user(top.0, top.1);
         PlacedWord {
             text: word.text.clone(),
             origin: o,
-            across: [br[0] - o[0], br[1] - o[1]],
-            up: [tl[0] - o[0], tl[1] - o[1]],
+            across: [end[0] - o[0], end[1] - o[1]],
+            up: [top[0] - o[0], top[1] - o[1]],
             confidence: word.confidence,
             source: word.source.clone(),
         }
@@ -803,6 +831,20 @@ mod tests {
         let w = PlacedWord::place(&Word::new("Up", [0.0, 0.0, 50.0, 10.0], "ocrs"), to_user);
         assert_eq!(w.across, [0.0, 50.0]);
         assert_eq!(w.up, [-10.0, 0.0]);
+    }
+
+    /// #7254: a word read sideways runs along its box's long edge, its letters' tops on the
+    /// side the turn puts them; an upright word is placed as before.
+    #[test]
+    fn sideways_words_run_along_their_long_edge() {
+        let to_user = |x: f32, y: f32| [x as f64, y as f64];
+        let down = Word::new("ALPHA", [10.0, 20.0, 22.0, 100.0], "tesseract").with_direction(WordDirection::Down);
+        let w = PlacedWord::place(&down, to_user);
+        assert_eq!((w.origin, w.across, w.up), ([10.0, 20.0], [0.0, 80.0], [12.0, 0.0]));
+        let w = PlacedWord::place(&down.with_direction(WordDirection::Up), to_user);
+        assert_eq!((w.origin, w.across, w.up), ([22.0, 100.0], [0.0, -80.0], [-12.0, 0.0]));
+        let w = PlacedWord::place(&Word::new("ALPHA", [10.0, 20.0, 90.0, 32.0], "ocrs"), to_user);
+        assert_eq!((w.origin, w.across, w.up), ([10.0, 32.0], [80.0, 0.0], [0.0, -12.0]));
     }
 
     /// #103: every release package's layout puts the models where the installed app looks.

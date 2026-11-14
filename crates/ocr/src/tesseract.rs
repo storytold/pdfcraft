@@ -14,7 +14,7 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::{Duration, Instant};
 
-use super::{Line, OcrError, OcrImage, RecognizeOptions, Recognizer, Word};
+use super::{Line, OcrError, OcrImage, RecognizeOptions, Recognizer, Word, WordDirection};
 
 /// How long one recognition may run before the process is killed.
 const TIMEOUT: Duration = Duration::from_secs(120);
@@ -196,6 +196,8 @@ pub fn parse_tsv(tsv: &str) -> Vec<Line> {
 /// The parser utility keeps its bounded-prefix API; recognition also checks completeness.
 fn parse_tsv_bounded(tsv: &str) -> (Vec<Line>, bool) {
     let mut lines: Vec<Line> = Vec::new();
+    // Each line's block, for the lines whose direction their own words cannot show.
+    let mut blocks: Vec<u32> = Vec::new();
     let mut key: Option<(u32, u32, u32)> = None;
     let mut words = 0usize;
     for row in tsv.lines() {
@@ -204,11 +206,13 @@ fn parse_tsv_bounded(tsv: &str) -> (Vec<Line>, bool) {
             continue;
         }
         if words >= MAX_WORDS {
+            orient(&mut lines, &blocks);
             return (lines, true);
         }
         let this = (r.block, r.par, r.line);
         if key != Some(this) {
             lines.push(Line::default());
+            blocks.push(r.block);
             key = Some(this);
         }
         let word = Word::new(r.text, [r.left, r.top, r.left + r.width, r.top + r.height], "tesseract").with_confidence(r.conf.clamp(0.0, 100.0));
@@ -217,7 +221,63 @@ fn parse_tsv_bounded(tsv: &str) -> (Vec<Line>, bool) {
             words += 1;
         }
     }
+    orient(&mut lines, &blocks);
     (lines, false)
+}
+
+/// The way a line of two or more words reads, from where its words sit: Tesseract lists a
+/// line's words in reading order, and reads text turned a quarter without saying so (#7254),
+/// so the boxes alone would place it upright, squeezed into tall boxes and out of order.
+/// A line whose words advance mostly down (or up) the image reads that way; anything else,
+/// right-to-left scripts included, stays upright. `None` for a single word.
+fn line_direction(line: &Line) -> Option<WordDirection> {
+    let (first, last) = match line.words.as_slice() {
+        [first, .., last] => (first, last),
+        _ => return None,
+    };
+    let centre = |w: &Word| ((w.rect[0] + w.rect[2]) / 2.0, (w.rect[1] + w.rect[3]) / 2.0);
+    let ((x0, y0), (x1, y1)) = (centre(first), centre(last));
+    let (dx, dy) = (x1 - x0, y1 - y0);
+    Some(if dy.abs() > 2.0 * dx.abs() { if dy > 0.0 { WordDirection::Down } else { WordDirection::Up } } else { WordDirection::Across })
+}
+
+/// Give every word its line's reading direction ([`line_direction`]). A one-word line takes
+/// the direction most of its block's longer lines share (else the page's), but only when its
+/// box is at least as tall as it is wide: a wide box is never a word turned a quarter.
+fn orient(lines: &mut [Line], blocks: &[u32]) {
+    const ALL: [WordDirection; 3] = [WordDirection::Across, WordDirection::Down, WordDirection::Up];
+    let known: Vec<Option<WordDirection>> = lines.iter().map(line_direction).collect();
+    // Votes per block and for the page, in `ALL`'s order.
+    let mut by_block: std::collections::HashMap<u32, [usize; 3]> = std::collections::HashMap::new();
+    let mut page = [0usize; 3];
+    for (d, block) in known.iter().zip(blocks) {
+        let Some(slot) = d.and_then(|d| ALL.iter().position(|a| *a == d)) else { continue };
+        let votes = by_block.entry(*block).or_default();
+        if let Some(v) = votes.get_mut(slot) {
+            *v += 1;
+        }
+        if let Some(v) = page.get_mut(slot) {
+            *v += 1;
+        }
+    }
+    // The most voted direction (upright on a tie), `None` without votes.
+    let winner = |votes: &[usize; 3]| {
+        let best = votes.iter().copied().max().filter(|&b| b > 0)?;
+        votes.iter().position(|&v| v == best).and_then(|i| ALL.get(i).copied())
+    };
+    for (i, line) in lines.iter_mut().enumerate() {
+        let direction = match known.get(i).copied().flatten() {
+            Some(d) => d,
+            None => {
+                let tall = line.words.iter().all(|w| w.rect[3] - w.rect[1] >= w.rect[2] - w.rect[0]);
+                let inherited = blocks.get(i).and_then(|b| by_block.get(b)).and_then(winner).or_else(|| winner(&page));
+                if tall { inherited.unwrap_or_default() } else { WordDirection::Across }
+            }
+        };
+        for word in &mut line.words {
+            word.direction = direction;
+        }
+    }
 }
 
 /// Parse `tesseract --list-langs` output: the header line ("List of available languages…"),
@@ -614,6 +674,43 @@ mod tests {
         assert_eq!(lines[1].words.len(), 1, "a new par starts a new line");
         assert_eq!(lines[1].words[0].text, "second");
         assert_eq!(lines[1].words[0].confidence, Some(42.123));
+    }
+
+    /// #7254: Tesseract reads a page turned a quarter without saying so; its TSV boxes are
+    /// tall, and a line's words follow one another down (or up) the image. The direction
+    /// comes from that order, a one-word line takes its block's, and upright text is unchanged.
+    #[test]
+    fn tsv_keeps_the_direction_of_sideways_lines() {
+        let tsv = "level\tpage\tblock\tpar\tline\tword\tleft\ttop\twidth\theight\tconf\ttext
+5\t1\t1\t1\t1\t1\t900\t100\t20\t80\t95\tALPHA
+5\t1\t1\t1\t1\t2\t900\t200\t20\t80\t95\tBRAVO
+5\t1\t1\t1\t1\t3\t900\t300\t20\t90\t95\tCHARLIE
+5\t1\t1\t1\t2\t1\t860\t100\t20\t60\t95\t12345
+5\t1\t2\t1\t1\t1\t100\t900\t60\t20\t95\tHello
+5\t1\t2\t1\t1\t2\t180\t900\t60\t20\t95\tworld
+5\t1\t2\t1\t2\t1\t100\t940\t60\t20\t95\talone
+5\t1\t3\t1\t1\t1\t50\t500\t20\t60\t95\tup
+5\t1\t3\t1\t1\t2\t50\t400\t20\t60\t95\tward";
+        let lines = parse_tsv(tsv);
+        let directions: Vec<Vec<(&str, WordDirection)>> =
+            lines.iter().map(|l| l.words.iter().map(|w| (w.text.as_str(), w.direction)).collect()).collect();
+        use WordDirection::{Across, Down, Up};
+        assert_eq!(
+            directions,
+            vec![
+                vec![("ALPHA", Down), ("BRAVO", Down), ("CHARLIE", Down)],
+                vec![("12345", Down)],
+                vec![("Hello", Across), ("world", Across)],
+                vec![("alone", Across)],
+                vec![("up", Up), ("ward", Up)],
+            ]
+        );
+        // A right-to-left line reads leftward and stays upright; a lone tall word on a page
+        // with nothing else to go by stays upright too.
+        let rtl = parse_tsv("5\t1\t1\t1\t1\t1\t200\t10\t60\t20\t95\tא\n5\t1\t1\t1\t1\t2\t100\t12\t60\t20\t95\tב");
+        assert!(rtl[0].words.iter().all(|w| w.direction == Across), "{rtl:?}");
+        let lone = parse_tsv("5\t1\t1\t1\t1\t1\t10\t10\t8\t20\t95\tI");
+        assert_eq!(lone[0].words[0].direction, Across);
     }
 
     /// Conf −1 rows and level ≠ 5 rows are structure, not words; blank text is dropped.
