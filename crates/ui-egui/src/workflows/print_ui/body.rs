@@ -236,7 +236,7 @@ pub(crate) fn body(
 
     // Cap the settings+preview area to the screen's available height (#4252, #5317).
     let screen_h = ui.ctx().input(|i| i.viewport_rect().height());
-    let max_h = (screen_h - 130.0).max(520.0);
+    let max_h = (screen_h - 130.0).clamp(240.0, 520.0);
 
     egui::ScrollArea::vertical()
         .id_salt("print-dialog-scroll")
