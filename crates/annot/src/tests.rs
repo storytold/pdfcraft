@@ -4741,6 +4741,23 @@ fn a_pop_up_rect_with_reversed_corners_is_put_in_order_and_a_huge_one_is_none() 
     assert!(given.open && given.rect.iter().all(|v| v.is_finite()), "{given:?}");
 }
 
+/// A cloudy polygon whose finite but absurd vertices (1e300) used to draw 20,000 bumps of 300-digit
+/// numbers each: a ~40 MB appearance stream built on every redraw of a hostile file.
+#[test]
+fn cloudy_polygon_with_absurd_vertices_stays_small() {
+    for big in [1e300, 1e15, f64::MAX] {
+        let ops = built(&format!(
+            "<< /Type /Annot /Subtype /Polygon /Rect [0 0 300 300] /C [1 0 0] /Vertices [0 0 {big:.0} 0 {big:.0} {big:.0} 0 {big:.0}] /BE << /S /C /I 1 >> >>"
+        ))
+        .unwrap_or_else(|| panic!("{big}: no appearance was built"));
+        assert!(ops.len() < 1_000_000, "{big}: {} bytes of appearance stream", ops.len());
+        // The fallback is the plain outline: one move, three straight edges, a close and no curves.
+        let count = |op: &str| ops.lines().filter(|l| l.split(' ').next_back() == Some(op)).count();
+        assert_eq!((count("m"), count("l"), count("c")), (1, 3, 0), "{big}: not the straight outline: {ops}");
+        assert!(ops.lines().any(|l| l == "h"), "{big}: the outline is not closed");
+    }
+}
+
 #[test]
 fn freehand_highlight_is_compatible_ink_with_marker_blending() {
     let shape = Shape::FreehandHighlight { strokes: vec![vec![[20.0, 100.0], [120.0, 100.0]]] };
