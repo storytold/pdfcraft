@@ -33,8 +33,9 @@ pub(crate) fn audit(args: &[String]) -> Result<(), CliError> {
             })
         })
         .collect();
-    println!("{}", serde_json::json!({ "file": path, "findings": items, "count": items.len() }));
-    if items.is_empty() { Ok(()) } else { Err(format!("audit: {} faux redaction(s) found", items.len()).into()) }
+    let output = stdout_line(format_args!("{}", serde_json::json!({ "file": path, "findings": items, "count": items.len() })));
+    // A closed output pipe must not hide findings from scripts that gate on the exit status.
+    if items.is_empty() { output } else { Err(format!("audit: {} faux redaction(s) found", items.len()).into()) }
 }
 
 /// Child-process body for `check`: prints one JSON line.
