@@ -31,6 +31,8 @@ mcp = ["dep:base64"]
 # Synthetic printer profiles for the app-managed print colour tests.
 craft-cms = { workspace = true }
 pdfcraft-fonts = { workspace = true }
+# Synthetic TrueType programs for the Copy with formatting recovery tests.
+pdfcraft-testkit = { workspace = true }
 png = "0.18"
 flate2.workspace = true
 pdfcraft-model = { workspace = true }

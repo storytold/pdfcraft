@@ -4,6 +4,7 @@ use crate::context::{
 };
 use crate::device::Device;
 use crate::font::glyph_simulator::GlyphSimulator;
+use crate::font::recovery::{FontFacts, FontKind, FontRecovery, GlyphFacts, Recovery};
 use crate::font::true_type::{Width, read_encoding, read_widths};
 use crate::font::{
     Encoding, Glyph, Type3Glyph, UNITS_PER_EM, numbered_glyph_name_at_its_code,
@@ -53,6 +54,12 @@ pub(crate) struct Type3<'a> {
     /// PdfCraft patch: whether the font's numbered glyph names all name their own codes
     /// (`numbered_names_name_their_codes`), worked out on first use.
     own_code_names: OnceLock<bool>,
+    /// PdfCraft patch (107): what the recovery rules need, and their decisions.
+    recovery: FontRecovery,
+    /// PdfCraft patch (107): the font's cache key, its dictionary's hash, worked out once: the
+    /// recovered layer asks for it with every glyph (its budget of fonts per page), and hashing
+    /// the dictionary each time cost a page of Type 3 glyphs a quarter of its text extraction.
+    key: u128,
 }
 
 /// PdfCraft patch (87): the largest decoded glyph procedure [`Type3`] keeps.
@@ -104,6 +111,8 @@ impl<'a> Type3<'a> {
             to_unicode,
             decoded_procs: RefCell::new(HashMap::new()),
             own_code_names: OnceLock::new(),
+            recovery: FontRecovery::new(dict, None),
+            key: dict_key(dict),
         })
     }
 
@@ -241,6 +250,55 @@ impl<'a> Type3<'a> {
             })
     }
 
+    /// PdfCraft patch (107): the recovery rules' reading of `code` (see `font::recovery`), given
+    /// its strict text when that is more than control characters. The ids a standard order
+    /// reads are the codes with a glyph procedure; their widths are the font's `/Widths`.
+    pub(crate) fn recovery(&self, code: u32, strict: Option<&BfString>) -> Option<Recovery> {
+        let names = |c: u8| self.code_to_name(c);
+        let ids = || {
+            (0..=u8::MAX)
+                .filter(|&c| {
+                    self.code_to_name(c)
+                        .is_some_and(|name| self.char_procs.contains_key(name))
+                })
+                .map(u32::from)
+                .collect::<Vec<u32>>()
+        };
+        let id_width = |id: u32| match self.widths.get(usize::try_from(id).ok()?) {
+            Some(Width::Value(w)) => Some(*w),
+            _ => None,
+        };
+        let facts = || FontFacts {
+            base_font: self.recovery.base_font.as_deref(),
+            flags: self.recovery.flags.as_ref(),
+            has_to_unicode: self.to_unicode.is_some(),
+            has_encoding: self.recovery.has_encoding,
+            names: Some(&names),
+            ids: Some(&ids),
+            id_width: Some(&id_width),
+            ..FontFacts::of_kind(FontKind::Type3)
+        };
+        let glyph = || GlyphFacts {
+            gid: GlyphId::NOTDEF,
+            name: u8::try_from(code).ok().and_then(names),
+            strict,
+            id: Some(code),
+        };
+        self.recovery.cache.recover(FontKind::Type3, facts, glyph)
+    }
+
+    /// PdfCraft patch (107): what the font keeps for the recovery rules.
+    pub(crate) fn recovery_info(&self) -> &FontRecovery {
+        &self.recovery
+    }
+
+    /// PdfCraft patch (107): the font's style for text the recovery rules read, from its
+    /// dictionary and descriptor (`/BaseFont` or `/Name`, `/Flags`, `/FontWeight`,
+    /// `/ItalicAngle`); a Type 3 font has no program to add to them.
+    pub(crate) fn recovery_style(&self) -> crate::font::RecoveredFontStyle {
+        self.recovery.style(|| None)
+    }
+
     /// PdfCraft patch: the glyph name `/Encoding` gives a code, as `map_code` reads it.
     fn code_to_name(&self, code: u8) -> Option<&str> {
         self.encodings
@@ -332,8 +390,14 @@ impl<'a> Type3<'a> {
 
 impl CacheKey for Type3<'_> {
     fn cache_key(&self) -> u128 {
-        self.dict.cache_key()
+        self.key
     }
+}
+
+/// PdfCraft patch (107): a Type 3 font's cache key, its dictionary's hash (counted for tests).
+fn dict_key(dict: &Dict<'_>) -> u128 {
+    crate::font::recovery::count(crate::font::recovery::Counter::Type3KeyHash);
+    dict.cache_key()
 }
 
 struct Type3ShapeGlyphDevice<'a, 'b, T: Device<'a>> {

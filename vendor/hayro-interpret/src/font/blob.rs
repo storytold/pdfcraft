@@ -101,6 +101,18 @@ impl CffFontBlob {
         self.0.backing_cart().clone()
     }
 
+    /// PdfCraft patch (107): whether [`Self::new`] reads `data` (the same checks: a CFF font,
+    /// a readable `Cff` table, and a font dict that can be read), and then whether the program
+    /// is CID-keyed and its glyph count, found without building the blob, for the document
+    /// survey.
+    pub(crate) fn probe(data: &[u8]) -> Option<(bool, u32)> {
+        let font = CffFontRef::new(data, 0, None).ok()?;
+        Cff::read(ReadFontData::new(data)).ok()?;
+        (0..font.num_subfonts())
+            .any(|index| font.subfont(index, &[]).is_ok())
+            .then(|| (font.is_cid(), font.num_glyphs()))
+    }
+
     pub(crate) fn font(&self) -> &CffFontRef<'_> {
         &self.0.as_ref().get().font
     }
@@ -195,6 +207,20 @@ impl CffFontBlob {
         Self::new(Arc::new(cff.offset_data().as_ref().to_vec()))
     }
 
+    /// PdfCraft patch (107): a CID-keyed program's CIDs, from its charset in glyph order, at
+    /// most 65,536 of them; nothing for a font without a charset.
+    pub(crate) fn charset_cids(&self) -> Vec<u32> {
+        self.charset()
+            .map(|charset| {
+                charset
+                    .iter()
+                    .take(65_536)
+                    .map(|(_, sid)| u32::from(sid.to_u16()))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     pub(crate) fn is_cid(&self) -> bool {
         self.font().is_cid()
     }
@@ -248,7 +274,35 @@ fn with_loca_format_fixed(data: &[u8], index: u32) -> Option<Vec<u8>> {
     Some(fixed)
 }
 
+/// Whether a font's `post` table version is one a font is read with. Reject fonts with invalid
+/// post table version, fixes pdf.js issue 9462. Not sure if there is a better fix, for some
+/// reason skrifa accepts the font which is completely invalid.
+/// PdfCraft patch: also accept 1.0, 2.0 and 3.0 with the two 16-bit halves swapped
+/// (`00 00 00 03` for 3.0), as ScanSoft PDF Create! writes it into every font it embeds
+/// (#2946). Rejecting those fonts drew their text with a substitute that has no such glyphs.
+fn post_version_accepted(f: &FontRef<'_>) -> bool {
+    !f.post().is_ok_and(|p| {
+        !matches!(
+            p.version().to_major_minor(),
+            (1, 0) | (2, 0) | (2, 5) | (3, 0)
+        ) && !matches!(p.version().to_be_bytes(), [0, 0, 0, 1..=3])
+    })
+}
+
 impl OpenTypeFontBlob {
+    /// PdfCraft patch (107): whether [`Self::new`] reads `data`, and then the program's glyph
+    /// count (`maxp`; `None` without one), found without building the blob (no copy, no
+    /// hinting instance), for the document survey. The `loca` format fix [`Self::new`] may make
+    /// rewrites `head.indexToLocFormat` only, which neither the table directory, `post` nor
+    /// `maxp` reads.
+    pub(crate) fn probe(data: &[u8], index: u32) -> Option<Option<u32>> {
+        let f = FontRef::from_index(data, index).ok()?;
+        if !post_version_accepted(&f) {
+            return None;
+        }
+        Some(f.maxp().ok().map(|m| u32::from(m.num_glyphs())))
+    }
+
     pub(crate) fn new(data: FontData, index: u32) -> Option<Self> {
         // PdfCraft patch (83): see `with_loca_format_fixed`.
         let data = match with_loca_format_fixed(data.as_ref().as_ref(), index) {
@@ -257,19 +311,7 @@ impl OpenTypeFontBlob {
         };
         // Check first whether the font is valid so we can unwrap in the closure.
         let f = FontRef::from_index(data.as_ref().as_ref(), index).ok()?;
-        // Reject fonts with invalid post table version, fixes pdf.js issue 9462. Not sure if there
-        // is a better fix, for some reason skrifa accepts the font which is completely invalid.
-        // PdfCraft patch: also accept 1.0, 2.0 and 3.0 with the two 16-bit halves swapped
-        // (`00 00 00 03` for 3.0), as ScanSoft PDF Create! writes it into every font it embeds
-        // (#2946). Rejecting those fonts drew their text with a substitute that has no such glyphs.
-        let invalid = f.post().is_ok_and(|p| {
-            !matches!(
-                p.version().to_major_minor(),
-                (1, 0) | (2, 0) | (2, 5) | (3, 0)
-            ) && !matches!(p.version().to_be_bytes(), [0, 0, 0, 1..=3])
-        });
-
-        if invalid {
+        if !post_version_accepted(&f) {
             return None;
         }
 
