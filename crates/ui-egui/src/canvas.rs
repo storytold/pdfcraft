@@ -2071,6 +2071,9 @@ fn draw_pages(
             ui.close();
             return;
         }
+        if crate::object_ui::context_menu(ui, doc, view, can_modify) {
+            return;
+        }
         // Preparing a form: the selected field's menu, on a field.
         if preparing
             && on_selected_field

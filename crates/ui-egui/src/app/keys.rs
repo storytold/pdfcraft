@@ -60,7 +60,7 @@ impl PdfCraftApp {
                 && let Some(doc) = self.session.get(self.views[i].id).filter(|d| d.allows_modification())
             {
                 object_ui::nudge_keys(ctx, keys, &mut self.views[i], doc);
-                object_ui::delete_keys(ctx, keys, &mut self.views[i]);
+                object_ui::delete_keys(ctx, keys, &mut self.views[i], doc);
             } else if let Some(doc) = self.session.get(self.views[i].id).filter(|d| d.allows_annotation()) {
                 comments::nudge_keys(ctx, keys, &mut self.views[i], &doc.info);
             }

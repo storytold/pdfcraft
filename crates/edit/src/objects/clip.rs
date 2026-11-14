@@ -72,6 +72,15 @@ pub fn copy_objects(doc: &Document, page: usize, targets: &[ObjectTarget]) -> Re
     let ops = pieces.parse().ops;
     let mut keep = crate::text::paragraph_ops(doc, page, &indexes(ObjectKind::Text), false)?;
     keep.extend(crate::images::image_ops(doc, page, &indexes(ObjectKind::Image))?);
+    // A vector path is kept by its painting operator; replay brings its construction with it.
+    let paths = indexes(ObjectKind::Path);
+    if !paths.is_empty() {
+        let listed = crate::paths::page_paths(doc, page)?;
+        for i in paths {
+            let path = listed.get(i).ok_or_else(|| EditError::Invalid("a selected vector path no longer exists; select the objects again".into()))?;
+            keep.insert(*path.ops.end());
+        }
+    }
     // Added content owns its stream: everything that stream paints is the item.
     let added: Vec<_> = crate::list_added(doc).into_iter().filter(|a| a.page == page).collect();
     let owned = indexes(ObjectKind::Added)

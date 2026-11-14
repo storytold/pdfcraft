@@ -154,13 +154,30 @@ claude mcp add pdfcraft -- pdfcraft-cli mcp --root <dir>
 
 ## Moving several page objects
 
-`object_list {doc, page}` inventories recognised paragraphs, Image/Form artwork and added items
-with generation-scoped kind/index references. `object_move {doc, page, objects, offset, generation?}`
+`object_list {doc, page}` inventories recognised paragraphs, Image/Form artwork, added items and
+painted vector paths (with their fill and stroke colours) with generation-scoped kind/index
+references. `object_move {doc, page, objects, offset, generation?}`
 moves 1–1000 references atomically in displayed points (right/down), preserving source glyph bytes
 and fonts. A refusal changes nothing; success is one undo step. `all: true` takes every object on the
 page instead, as ⌘A does. `object_copy {doc, page, objects | all, cut?}` copies them with every
 resource they use and `object_paste {doc, page}` pastes them as page content that draws the same,
-into the same or another open document, stepped as the app steps a paste. See
+into the same or another open document, stepped as the app steps a paste.
+`object_align {doc, page, objects, action, generation?}` lines references up on the
+`left`, `centre` (or `center`), `right`, `top`, `middle` or `bottom` of their combined bounds, or
+spaces three or more evenly (`distribute_horizontal`, `distribute_vertical`; the outermost two stay
+put), as the page is displayed. `object_resize {doc, page, object, rect, generation?}` moves and
+resizes one `path` reference by scaling its displayed rectangle onto `rect`, line width included, so
+a stroked path is then listed only roughly at `rect` (strokes thinner than 1 pt and paths under a
+point across are listed a point wide, and a stroke resized unevenly at its average thickness).
+`object_recolour {doc, page, objects, fill?, stroke?, generation?}` paints `path` references in new
+colours (`#RRGGBB` or a colour name), written as DeviceRGB, where they fill and where they stroke.
+`object_delete {doc, page, objects, generation?}` deletes references of any kind together, as Delete
+does in the app; images and paths go in one splice of the page's content. `object_arrange {doc, page,
+object, order, generation?}` moves one `path` or `image` reference in the painting order among the
+objects it overlaps: `front` or `back` past all of them, `forward` or `backward` past the next one.
+It returns the object's new reference as `object`, since paths and images are listed in painting
+order; text, added content and a move with nothing overlapping that way are refused. Each of these
+refuses as a whole and is one undo step. See
 [the selection and movement guide](../../docs/editing-multiple-objects.md) for limits and examples.
 
 ## Accessibility review record

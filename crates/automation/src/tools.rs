@@ -60,6 +60,20 @@ fn measure_schema() -> Value {
     )
 }
 
+/// One `{kind, index}` reference from object_list.
+fn object_ref() -> Value {
+    json!({"type":"object","properties":{"kind":{"type":"string","enum":["added","text","image","path"]},"index":{"type":"integer","minimum":1}},"required":["kind","index"],"additionalProperties":false})
+}
+
+/// 1–1000 `{kind, index}` references from object_list.
+fn object_refs() -> Value {
+    json!({"type":"array","minItems":1,"maxItems":1000,"uniqueItems":true,"items":object_ref()})
+}
+
+fn generation() -> Value {
+    json!({"type":"integer","minimum":0,"description":"Use generation returned by object_list to reject a stale selection."})
+}
+
 fn color() -> Value {
     json!({ "type": "string", "description": "#RRGGBB or a name: yellow, red, orange, green, blue, purple, pink, black, gray, white." })
 }
@@ -234,22 +248,36 @@ pub fn tools() -> Vec<ToolDef> {
                     "pan": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2, "description": "Moves the target [right, up] in model radii, so the model moves the other way (default [0, 0]); each held within 1000." }
                 }, "additionalProperties": false }
             }), &["doc", "page"])),
-        t("object_list", "List editable objects", "List existing paragraphs, Image/Form artwork and added content once, with source kind/index references, displayed rectangles and document generation. Indexes change when content changes; use generation in object_move to reject stale references.")
+        t("object_list", "List editable objects", "List existing paragraphs, Image/Form artwork, added content and painted vector paths once, with source kind/index references, displayed rectangles and document generation. Path rows (kind path) also give fill and stroke colours (#RRGGBB, null when that part isn't painted or isn't a Gray/RGB/CMYK colour) and the stroke line_width in points (null when not stroked). Paths inside Form artwork, clipping paths and pages with too many paths aren't listed as paths. Indexes change when content changes; pass generation to the object_* editing tools to reject stale references.")
             .ro().with(schema(json!({"doc":doc(),"page":{"type":"integer","minimum":1}}), &["doc","page"])),
-        t("object_move", "Move objects together", "Atomically translate 1–1000 mixed references from object_list (or with all: true every object on the page) by [dx, dy] in displayed points (right/down). Preserves glyph codes, fonts, image data and relative spacing; success is one undo step. Text used as a clipping path and vertical text are refused. A bad/stale reference refuses the entire move.")
-            .with(schema(json!({"doc":doc(),"page":{"type":"integer","minimum":1},
-                "objects":{"type":"array","minItems":1,"maxItems":1000,"uniqueItems":true,"items":{
-                    "type":"object","properties":{"kind":{"type":"string","enum":["added","text","image"]},"index":{"type":"integer","minimum":1}},"required":["kind","index"],"additionalProperties":false}},
+        t("object_move", "Move objects together", "Atomically translate 1–1000 mixed references (added, text, image or path) from object_list (or with all: true every object on the page) by [dx, dy] in displayed points (right/down). Preserves glyph codes, fonts, image data, path data and relative spacing; success is one undo step. Text used as a clipping path and vertical text are refused. A bad/stale reference refuses the entire move.")
+            .with(schema(json!({"doc":doc(),"page":{"type":"integer","minimum":1},"objects":object_refs(),
                 "all":{"type":"boolean","description":"Every object on the page, instead of objects."},
                 "offset":{"type":"array","items":{"type":"number"},"minItems":2,"maxItems":2},
-                "generation":{"type":"integer","minimum":0,"description":"Use generation returned by object_list to reject a stale selection."}}), &["doc","page","offset"])),
+                "generation":generation()}), &["doc","page","offset"])),
+        t("object_align", "Align or distribute objects", "Atomically line up 2–1000 references from object_list on the left, centre or right (top, middle or bottom) of their combined bounds, or space 3 or more evenly with distribute_horizontal/distribute_vertical (the outermost two stay put), as the page is displayed. Success is one undo step; a bad/stale reference, too few objects, objects already in place, or an image or path that would show a different part once moved (partly hidden by a clipping path shared with other content, or by the page edge) refuse the entire edit.")
+            .with(schema(json!({"doc":doc(),"page":{"type":"integer","minimum":1},"objects":object_refs(),
+                "action":{"type":"string","enum":["left","centre","center","right","top","middle","bottom","distribute_horizontal","distribute_vertical"]},
+                "generation":generation()}), &["doc","page","objects","action"])),
+        t("object_resize", "Resize a vector path", "Move and resize one vector path (a kind path reference from object_list) by scaling its displayed rectangle, as object_list reports it, onto rect (top-left-origin points, x1 > x0 and y1 > y0). Its line width scales too, so a stroked path is then listed only roughly at rect: object_list widens strokes thinner than 1 pt and paths under a point across to a point, and gives a stroke resized unevenly its average thickness. Success is one undo step; another kind, a path painted with a pattern, a move that would take its box wholly off the page or out of its clip's box, or a bad/stale reference is refused.")
+            .with(schema(json!({"doc":doc(),"page":{"type":"integer","minimum":1},"object":object_ref(),
+                "rect":{"type":"array","items":{"type":"number"},"minItems":4,"maxItems":4},
+                "generation":generation()}), &["doc","page","object","rect"])),
+        t("object_recolour", "Recolour vector paths", "Paint 1–1000 vector paths (kind path references from object_list) in new colours: fill where a path fills, stroke where it strokes; give one or both. The new colour is DeviceRGB whatever colour space the path used (CMYK, spot and pattern colours are replaced). Success is one undo step; another kind, a path that paints neither part given, or a bad/stale reference refuses the entire edit.")
+            .with(schema(json!({"doc":doc(),"page":{"type":"integer","minimum":1},"objects":object_refs(),"fill":color(),"stroke":color(),
+                "generation":generation()}), &["doc","page","objects"])),
+        t("object_delete", "Delete objects", "Delete 1–1000 mixed references from object_list together, as Delete does to objects selected together in Edit a PDF. Images, Form artwork and vector paths go in one splice that keeps the graphics state and marked content around them. Success is one undo step; a bad/stale reference refuses the entire delete.")
+            .destructive()
+            .with(schema(json!({"doc":doc(),"page":{"type":"integer","minimum":1},"objects":object_refs(),"generation":generation()}), &["doc","page","objects"])),
+        t("object_arrange", "Arrange an object", "Bring one vector path, image or Form artwork (a path or image reference from object_list) to the front or forward, or send it backward or to the back, among the objects it overlaps: front and back go past all of them, forward and backward past the next one. Returns its new reference as object (kind and 1-based index), since paths and images are listed in painting order. Success is one undo step; text, added content, nothing overlapping it that way, content too irregular to rearrange, or a bad/stale reference is refused.")
+            .with(schema(json!({"doc":doc(),"page":{"type":"integer","minimum":1},"object":object_ref(),
+                "order":{"type":"string","enum":["front","forward","backward","back"]},
+                "generation":generation()}), &["doc","page","object","order"])),
         t("object_copy", "Copy or cut objects together", "Edit ▸ Copy (cut: Cut) of 1–1000 mixed references from object_list, or with all: true every object on the page, as ⌘A then ⌘C select and copy them in Edit a PDF. The copy keeps their content operators and every resource they use (fonts, images, ExtGStates, colour spaces, patterns, shadings) and is kept for object_paste into any open document, also after this one changes or closes. cut then deletes them as one undo step. Refused when the document doesn't allow copying (cut: or changes), or when text used as a clipping path is drawn before them. Returns the count copied and their text.")
-            .with(schema(json!({"doc":doc(),"page":{"type":"integer","minimum":1},
-                "objects":{"type":"array","minItems":1,"maxItems":1000,"uniqueItems":true,"items":{
-                    "type":"object","properties":{"kind":{"type":"string","enum":["added","text","image"]},"index":{"type":"integer","minimum":1}},"required":["kind","index"],"additionalProperties":false}},
+            .with(schema(json!({"doc":doc(),"page":{"type":"integer","minimum":1},"objects":object_refs(),
                 "all":{"type":"boolean","description":"Every object on the page, instead of objects."},
                 "cut":{"type":"boolean","description":"Delete them after copying (one undo step)."},
-                "generation":{"type":"integer","minimum":0,"description":"Use generation returned by object_list to reject a stale selection."}}), &["doc","page"])),
+                "generation":generation()}), &["doc","page"])),
         t("object_paste", "Paste copied objects", "Edit ▸ Paste of what object_copy copied, onto page of doc as page content that draws the same: where it was, or on the page it came from 18 points down and to the right, and 18 more for each further paste onto the same page; centred when that would leave it off the page. Resources join the page's under names that don't clash; into another document the fonts, images and other objects they use are copied (each once, sharing what is there; refused past 20,000 objects or 256 MB). Pasted content is untagged and in no layer. One undo step.")
             .with(schema(json!({"doc":doc(),"page":{"type":"integer","minimum":1}}), &["doc","page"])),
         t("text_word_count", "Word count", "Count Unicode words and characters on selected pages (default all), with totals and per-page counts. Table/code exclusions use PDF structure tags, not visual guesses; unclassified text is retained. Image exclusion removes Figure-tagged and invisible/OCR text. Does not run OCR. Copy permission is required. Fails rather than returning a partial total when a page cannot be read.")

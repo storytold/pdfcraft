@@ -84,6 +84,12 @@ pub(crate) enum ObjectsPart {
     Selection,
     /// The frame drawn around the paragraph open for typing: a click selects the box, a drag moves it.
     Frame,
+    /// A resize handle of the one vector path selected, by its index in `edit_text_ui::corners`:
+    /// a drag resizes the path.
+    Corner(usize),
+    /// A vector path's painted shape, by its index among the page's paths: a click selects it
+    /// alone, a drag moves it ([`Self::Toggle`] takes it with Shift or ⌘).
+    Path(usize),
     /// A press with Shift or ⌘ (Ctrl): it adds the object under it to the objects selected
     /// together, or takes it out of them, or on none starts an area selection that adds to them.
     Toggle(Option<ObjectTarget>),

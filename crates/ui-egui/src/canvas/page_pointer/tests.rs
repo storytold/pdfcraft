@@ -242,7 +242,7 @@ const RAW_READS: [&str; 21] = [
 
 /// Functions in the page modules that are not page input and read egui's pointer state
 /// themselves: (file, function, why).
-const NOT_PAGE_INPUT: [(&str, &str, &str); 13] = [
+const NOT_PAGE_INPUT: [(&str, &str, &str); 14] = [
     ("canvas/area.rs", "zoom_anchor", "a pinch zooms the whole view, and is read before the pages' widget exists"),
     ("canvas/area.rs", "drawing_edge_pointer", "scrolls the view at its edges, read before the pages' widget exists"),
     ("canvas/area.rs", "glide_interrupted", "a press anywhere stops the touchpad's glide"),
@@ -256,6 +256,7 @@ const NOT_PAGE_INPUT: [(&str, &str, &str); 13] = [
     ("tools/content_ui.rs", "editor", "the added-text editor is an Area of its own over the page"),
     ("tools/edit_text_ui.rs", "overlay", "the paragraph editor is an Area of its own over the page"),
     ("tools/fill_sign/scan.rs", "scan_tab", "the signature dialog's Scan tab"),
+    ("tools/object_ui.rs", "delete_keys", "keyboard handling: with the pointer over a side panel, Delete is the panel's"),
 ];
 
 /// The function a `fn` line declares, laid out as rustfmt does (`pub`, `const` and the like
@@ -824,7 +825,7 @@ const RAW_KEY_READS: [&str; 17] = [
 /// a window's or a field's own keys, which `PageKeys` would hide, and the pages' reads that
 /// `PageKeys` can't make (chords that wait for the menu bar instead, Escape ending what the pages
 /// hold, any key stopping a glide, the clipboard's hand-off to text fields): (file, function, why).
-const NOT_PAGE_KEYS: [(&str, &str, &str); 17] = [
+const NOT_PAGE_KEYS: [(&str, &str, &str); 18] = [
     (
         "app/clipboard.rs",
         "clipboard_keys",
@@ -852,6 +853,7 @@ const NOT_PAGE_KEYS: [(&str, &str, &str); 17] = [
     ("tools/field_table_ui.rs", "column_dividers", "the Text field table window's own arrows"),
     ("tools/fill_sign.rs", "signature_pad", "the signature dialog's own ⌘Z"),
     ("tools/forms_ui.rs", "combo_editor", "the combo box's own Enter, while its field has the focus"),
+    ("tools/object_ui.rs", "colour_section", "the Edit panel's colour grid's own Escape, while the grid is open"),
     ("tools/prepare/properties.rs", "body", "the field properties' own Enter, while one of their fields has the focus"),
     ("tools/redact_ui.rs", "search_body", "the redaction search field's own Enter, while it has the focus"),
     ("tools/sign_ui/dialog.rs", "sign_as", "the signing dialog's own Enter"),

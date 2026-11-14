@@ -2337,6 +2337,31 @@ fn delete_with_a_menu_open_leaves_selected_edit_text_objects() {
     assert_eq!(blocks(&h), 0, "the objects stayed selected, and Delete with the menu closed removes them");
 }
 
+/// With the pointer on the Pages panel, Delete is the panel's though Edit text objects are
+/// selected on the pages: a page goes, not the objects.
+#[test]
+fn delete_on_the_pages_panel_leaves_selected_edit_text_objects() {
+    let mut h = open(bottom_line_pages_pdf(), "100", false);
+    h.state_mut().views[0].show_page_gaps = false;
+    h.state_mut().quick_tool = QuickTool::EditText;
+    h.state_mut().set_option("panel", "pages").unwrap();
+    h.run_steps(4);
+    let (one, two) = {
+        let v = &h.state().views[0];
+        (v.page_screen_rect(0).expect("page 1 on screen"), v.page_screen_rect(1).expect("page 2 on screen"))
+    };
+    mouse_click(&mut h, egui::pos2(one.min.x + 60.0, one.max.y - 8.0));
+    mouse_drag(&mut h, egui::pos2(one.min.x + 60.0, two.min.y + 3.0), egui::vec2(200.0, 30.0));
+    let id = h.state().views[0].id;
+    let pages = h.state().session.get(id).unwrap().info.pages.len();
+    let viewport = h.state().views[0].viewport_rect();
+    h.hover_at(egui::pos2(viewport.right() + 60.0, viewport.center().y));
+    h.run_steps(2);
+    h.key_press(egui::Key::Delete);
+    h.run_steps(4);
+    assert_eq!(h.state().session.get(id).unwrap().info.pages.len(), pages - 1, "a page goes, not the objects");
+}
+
 /// With a menu of the menu bar open, End is the menu's: the view stays on its page. It went to the
 /// last page.
 #[test]
