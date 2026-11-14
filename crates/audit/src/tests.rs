@@ -827,6 +827,157 @@ fn form_entries_past_the_page_allowance_fail_the_audit() {
     assert!(matches!(crate::cover::filled_rects(&doc, &page), Err(crate::AuditError::TooManyForms)));
 }
 
+/// One fill of rectangles side by side hides the word they span, though each alone covers a quarter
+/// of it.
+#[test]
+fn rectangles_of_one_fill_side_by_side_cover_a_word_together() {
+    let content = "BT /F1 24 Tf 100 700 Td (SECRET DATA 123) Tj ET\n0 g\n95 688 50 32 re 145 688 50 32 re 195 688 50 32 re 245 688 50 32 re f\n";
+    let findings = audit_redactions(&open(one_page(content.as_bytes(), ""))).expect("audit must run");
+    assert_eq!(findings.len(), 1, "{findings:?}");
+    assert_eq!(findings[0].covered_text, "SECRET DATA 123");
+}
+
+/// A page of far more rectangles in one path than the audit compares is refused before they are all
+/// kept, not after.
+#[test]
+fn a_path_of_a_million_rectangles_is_refused_before_it_is_kept() {
+    let mut content = b"0 g\n".to_vec();
+    for _ in 0..70_000 {
+        content.extend_from_slice(b"1 1 2 2 re\n");
+    }
+    content.extend_from_slice(b"f\n");
+    let doc = open(one_page(&content, ""));
+    let page = pdfcraft_model::pages(&doc).remove(0).dict;
+    assert!(matches!(crate::cover::filled_rects(&doc, &page), Err(crate::AuditError::TooManyComparisons)));
+}
+
+/// The renderer takes an operator's operands from the end and ignores surplus ones before them:
+/// `0 1 g` paints white, `1 0 g` black. The audit reads the same operand, so surplus operands do
+/// not turn a black cover white, or a white one black.
+#[test]
+fn surplus_gray_operands_are_read_from_the_end() {
+    for (fill, expected) in [("1 0 g", 1), ("0 1 g", 0)] {
+        let content = format!("BT /F1 24 Tf 100 700 Td (SECRET DATA 123) Tj ET\n{fill}\n100 688 220 32 re f\n");
+        let findings = audit_redactions(&open(one_page(content.as_bytes(), ""))).expect("audit must run");
+        assert_eq!(findings.len(), expected, "{fill}: {findings:?}");
+    }
+}
+
+/// `Do` and `gs` act on their last operand: a surplus name before it must not make the audit
+/// inspect another form or graphics state than the one the page draws with.
+#[test]
+fn surplus_name_operands_are_read_from_the_end() {
+    let page = |content: &[u8]| {
+        let mut b = Builder::new();
+        b.add("<< /Type /Catalog /Pages 2 0 R >>");
+        b.add("<< /Type /Pages /Kids [3 0 R] /Count 1 >>");
+        b.add(
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> \
+             /XObject << /Empty 6 0 R /Cover 7 0 R >> /ExtGState << /Clear << /ca 0.2 >> /Solid << /ca 1 >> >> >> >>",
+        );
+        b.add_stream(content);
+        b.add(FONT);
+        b.add_stream_with(b"", "/Type /XObject /Subtype /Form /BBox [0 0 612 792]");
+        b.add_stream_with(b"0 g\n100 688 220 32 re f\n", "/Type /XObject /Subtype /Form /BBox [0 0 612 792]");
+        b.build()
+    };
+    let text = "BT /F1 24 Tf 100 700 Td (SECRET DATA 123) Tj ET\n";
+    for (draw, expected) in [
+        ("/Empty /Cover Do", 1),
+        ("/Cover /Empty Do", 0),
+        ("/Clear /Solid gs 0 g 100 688 220 32 re f", 1),
+        ("/Solid /Clear gs 0 g 100 688 220 32 re f", 0),
+    ] {
+        let findings = audit_redactions(&open(page(format!("{text}{draw}\n").as_bytes()))).expect("audit must run");
+        assert_eq!(findings.len(), expected, "{draw}: {findings:?}");
+    }
+}
+
+/// One fill paints every subpath of its path: a cover drawn before another rectangle in the
+/// same path is still a cover, however the rectangles are drawn.
+#[test]
+fn every_rectangle_in_a_compound_path_is_a_cover() {
+    let covers: [&[u8]; 4] = [
+        b"0 g\n100 688 220 32 re 400 100 10 10 re f\n",
+        b"0 g\n100 688 220 32 re 400 100 10 10 re f*\n",
+        b"0 g\n100 688 m 320 688 l 320 720 l 100 720 l h 400 100 10 10 re f\n",
+        b"0 g\n100 688 220 32 re 400 100 m 410 100 l 410 110 l 400 110 l h f\n",
+    ];
+    for cover in covers {
+        let mut content = b"BT /F1 24 Tf 100 700 Td (SECRET DATA 123) Tj ET\n".to_vec();
+        content.extend_from_slice(cover);
+        let findings = audit_redactions(&open(one_page(&content, ""))).expect("audit must run");
+        assert_eq!(findings.len(), 1, "{:?}: {findings:?}", String::from_utf8_lossy(cover));
+        assert_eq!(findings[0].rect, [100.0, 688.0, 320.0, 720.0], "{:?}", String::from_utf8_lossy(cover));
+        assert_eq!(findings[0].covered_text, "SECRET DATA 123");
+    }
+}
+
+/// Where compound subpaths overlap, the fill rule decides what is painted: a hole the even-odd
+/// rule, or a subpath winding the other way under the nonzero rule, cuts out of a cover leaves the
+/// text in it visible, while the same rectangles winding one way under the nonzero rule paint
+/// their union.
+#[test]
+fn holes_in_a_compound_path_are_not_covers() {
+    let outer = "90 680 240 50 re";
+    let cases: [(String, usize); 4] = [
+        // Even-odd: the inner rectangle is a hole.
+        (format!("{outer} 100 688 220 32 re f*"), 0),
+        // Nonzero, inner drawn clockwise (negative width): a hole.
+        (format!("{outer} 320 688 -220 32 re f"), 0),
+        // Nonzero, both counterclockwise: the union, the outer frame and all, is painted.
+        (format!("{outer} 100 688 220 32 re f"), 1),
+        // A cover beside the hole is still found.
+        (format!("{outer} 100 688 220 32 re 100 600 220 32 re f*"), 1),
+    ];
+    for (path, expected) in cases {
+        let content = format!("BT /F1 24 Tf 100 700 Td (SECRET DATA 123) Tj ET\nBT /F1 24 Tf 100 610 Td (OTHER) Tj ET\n0 g\n{path}\n");
+        let findings = audit_redactions(&open(one_page(content.as_bytes(), ""))).expect("audit must run");
+        assert_eq!(findings.len(), expected, "{path}: {findings:?}");
+    }
+}
+
+/// The painted region of a compound path, rectangle by rectangle: an even-odd frame is four
+/// strips around its hole.
+#[test]
+fn an_even_odd_frame_paints_four_strips() {
+    let mut work = 0;
+    let frame = vec![([0.0, 0.0, 10.0, 10.0], 1), ([2.0, 2.0, 8.0, 8.0], 1)];
+    let mut strips = crate::cover::painted(frame, true, &mut work).expect("within the bound");
+    strips.sort_by(|a, b| a.partial_cmp(b).expect("finite"));
+    assert_eq!(strips, [[0.0, 0.0, 10.0, 2.0], [0.0, 2.0, 2.0, 8.0], [0.0, 8.0, 10.0, 10.0], [8.0, 2.0, 10.0, 8.0]]);
+    assert!(work > 0);
+}
+
+/// A `gs` whose dictionary has no `/ca` leaves the fill alpha as it was: a translucent box drawn
+/// after it is no cover.
+#[test]
+fn a_gs_without_ca_keeps_the_current_alpha() {
+    let mut b = Builder::new();
+    b.add("<< /Type /Catalog /Pages 2 0 R >>");
+    b.add("<< /Type /Pages /Kids [3 0 R] /Count 1 >>");
+    b.add(
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> \
+         /ExtGState << /Clear << /ca 0.2 >> /NoCa << /LW 2 >> >> >> >>",
+    );
+    b.add_stream(b"BT /F1 24 Tf 100 700 Td (SECRET DATA 123) Tj ET\n/Clear gs /NoCa gs 0 g 100 688 220 32 re f\n");
+    b.add(FONT);
+    let findings = audit_redactions(&open(b.build())).expect("audit must run");
+    assert!(findings.is_empty(), "{findings:?}");
+}
+
+/// A rectangle under a shear is kept as its bounding box, which overstates a hole it cuts: text
+/// under the frame's real ink, inside the inner box's bounds, is still reported.
+#[test]
+fn a_skewed_hole_does_not_hide_text_under_the_frame() {
+    // Shear x by 0.1 y: at y = 715 the real inner edge is at x = 171.5, its bounding box starts
+    // at 168.8. The text sits between them, under the frame's ink.
+    let content = b"BT /F1 4 Tf 169.3 715 Td (I) Tj ET\n0 g 1 0 0.1 1 0 0 cm 90 680 240 50 re 100 688 220 32 re f*\n";
+    let findings = audit_redactions(&open(one_page(content, ""))).expect("audit must run");
+    // Both rectangles now count as painted, so each reports the text it covers.
+    assert!(!findings.is_empty() && findings.iter().all(|f| f.covered_text == "I"), "{findings:?}");
+}
+
 /// Copying a covered line's text walks all of it, padding included, so a long padded line under
 /// many covers costs its bytes once per cover, not one run per cover (CodeRabbit).
 #[test]
