@@ -191,7 +191,7 @@ fn a_survey_never_counts_a_stream_cut_at_its_byte_cap() {
     };
     for flate in [false, true] {
         for split in [false, true] {
-            let pdf = parse(doc.build_as(Streams { flate, split }));
+            let pdf = parse(doc.build_as(Streams { flate, split, ..Streams::default() }));
             let survey = |cap: Option<u64>| {
                 set_survey_byte_cap(cap);
                 let document = Arc::new(RecoveryDocument::needing_usage_for_tests());
@@ -214,6 +214,29 @@ fn a_survey_never_counts_a_stream_cut_at_its_byte_cap() {
             assert!(counted > 0, "the document fits some cap below 400");
         }
     }
+}
+
+/// Review finding: a stream cut at the decoders' own cap (`MAX_DECODED_STREAM`, 256 MiB, far
+/// below the survey's byte cap) is not surveyed from its prefix either, when the cut is in a
+/// filter before the last: a page whose content is ASCIIHex under Flate, its text after 130 MiB
+/// of spaces, decodes through 260 MiB of hex. The survey gives up instead of counting nothing.
+#[test]
+fn a_survey_gives_up_on_a_stream_the_decoders_cut_short() {
+    use super::cjk_fixture::Streams;
+    let doc = Doc { fonts: vec![Font::truetype("ABCDEF+Kai", 20)], pages: vec![vec![Show::Text(0, vec![1, 2])]] };
+    let survey = |streams: Streams| {
+        let pdf = parse(doc.build_as(streams));
+        let document = RecoveryDocument::needing_usage_for_tests();
+        document.prepare(&pdf, &settings(None));
+        assert!(document.prepared());
+        document
+    };
+    // Below the cap, the same chain is surveyed in full.
+    let short = survey(Streams { hex_after: Some(1 << 20), ..Streams::default() });
+    assert!(!short.survey_over_cap());
+    assert_eq!(short.surveyed_fonts(), vec![(vec![(1, 1), (2, 1)], None)]);
+    let cut = survey(Streams { hex_after: Some(130 << 20), ..Streams::default() });
+    assert!(cut.survey_over_cap(), "{:?}", cut.surveyed_fonts());
 }
 
 /// The survey counts every code a page or a form it draws shows (a form drawn twice counts

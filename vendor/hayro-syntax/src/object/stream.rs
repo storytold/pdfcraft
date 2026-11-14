@@ -218,7 +218,7 @@ impl<'a> Stream<'a> {
         &self,
         image_params: &ImageDecodeParams,
     ) -> Result<FilterResult<'a>, DecodeFailure> {
-        self.decode_within(image_params, usize::MAX)
+        self.decode_within(image_params, usize::MAX).map(|(r, _)| r)
     }
 
     /// PdfCraft patch: the decoded data of the stream, for callers that budget what a page
@@ -228,14 +228,26 @@ impl<'a> Stream<'a> {
     /// limits.
     pub fn decoded_within(&self, max: usize) -> Result<Cow<'a, [u8]>, DecodeFailure> {
         self.decode_within(&ImageDecodeParams::default(), max)
-            .map(|r| r.data)
+            .map(|(r, _)| r.data)
+    }
+
+    /// PdfCraft patch (47): [`Self::decoded_within`], and whether it may be cut short: whether
+    /// some filter of the chain stopped at its limit (`max`, or the filters' own cap
+    /// [`crate::filter::MAX_DECODED_STREAM`]), the last or one before it. An output exactly at
+    /// a limit counts as cut.
+    pub fn decoded_within_or_cut(
+        &self,
+        max: usize,
+    ) -> Result<(Cow<'a, [u8]>, bool), DecodeFailure> {
+        self.decode_within(&ImageDecodeParams::default(), max)
+            .map(|(r, cut)| (r.data, cut))
     }
 
     fn decode_within(
         &self,
         image_params: &ImageDecodeParams,
         max: usize,
-    ) -> Result<FilterResult<'a>, DecodeFailure> {
+    ) -> Result<(FilterResult<'a>, bool), DecodeFailure> {
         self.decode_raw_within(self.raw_data(), image_params, max)
     }
 
@@ -246,7 +258,7 @@ impl<'a> Stream<'a> {
         max: usize,
     ) -> Result<Cow<'a, [u8]>, DecodeFailure> {
         self.decode_raw_within(data, &ImageDecodeParams::default(), max)
-            .map(|r| r.data)
+            .map(|(r, _)| r.data)
     }
 
     fn decode_raw_within(
@@ -254,11 +266,13 @@ impl<'a> Stream<'a> {
         data: Cow<'a, [u8]>,
         image_params: &ImageDecodeParams,
         max: usize,
-    ) -> Result<FilterResult<'a>, DecodeFailure> {
+    ) -> Result<(FilterResult<'a>, bool), DecodeFailure> {
         let filters_and_params = self.filters_and_params();
         let count = filters_and_params.filters.len();
 
         let mut current: Option<FilterResult<'a>> = None;
+        // PdfCraft patch (47): whether a filter's output reached its limit.
+        let mut cut = false;
 
         for (i, (filter, params)) in filters_and_params
             .filters
@@ -284,13 +298,17 @@ impl<'a> Stream<'a> {
                 limit,
                 rows,
             )?;
+            cut |= new.data.len() >= limit;
             current = Some(new);
         }
 
-        Ok(current.unwrap_or(FilterResult {
-            data,
-            image_data: None,
-        }))
+        Ok((
+            current.unwrap_or(FilterResult {
+                data,
+                image_data: None,
+            }),
+            cut,
+        ))
     }
 }
 
