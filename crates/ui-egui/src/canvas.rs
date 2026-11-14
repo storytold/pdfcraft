@@ -2711,6 +2711,9 @@ fn page_scroll_area(ui: &egui::Ui, view: &mut DocView, geometry: &ScrollGeometry
         if moved != Vec2::ZERO {
             view.end_find_following();
         }
+        // Sampled for the glide when the drag is let go (`step_glide`).
+        let (now, touch, pinching) = ui.input(|i| (i.time, i.any_touches(), i.multi_touch().is_some()));
+        view.fling.drag(now, moved, touch, pinching);
         // Within the content, as egui keeps it: past an end the page would show there for a
         // frame and spring back. `max` is never NaN or below zero, so the clamp can't panic.
         let max = vec2((content_w - avail.width()).max(0.0), (content_h - avail.height()).max(0.0));
@@ -3074,6 +3077,19 @@ struct GlideCx {
 /// a reader action. Returns this frame's glide.
 fn step_glide(ui: &egui::Ui, view: &mut DocView, avail: Rect, cx: &GlideCx) -> Vec2 {
     let GlideCx { now, may_glide, key_scroll, key_side, auto_delta, zoom_delta, edge_delta, wheel_scrolled } = *cx;
+    // A Hand tool drag let go glides on, as a phone's page does: egui reports the page widget's
+    // drag stopped in the pass the finger lifts in, which is the lift time the speed is measured
+    // to. Not tied to the pointer being over the page: a finger lifted from a touch screen leaves
+    // no pointer behind. A drag that ended any other way (taken from the page, the page view
+    // gone) doesn't glide.
+    if view.fling.dragging() {
+        let page = view.page_widget;
+        if page.is_some() && ui.ctx().drag_stopped_id() == page {
+            view.fling.release(now, may_glide);
+        } else if !page.is_some_and(|id| ui.ctx().is_being_dragged(id)) {
+            view.fling.release(now, false);
+        }
+    }
     let over_page = ui.rect_contains_pointer(avail);
     view.fling.read(&crate::motion::gesture_wheel_events(ui.ctx()), now, may_glide && over_page);
     let interrupted = glide_interrupted(ui);
