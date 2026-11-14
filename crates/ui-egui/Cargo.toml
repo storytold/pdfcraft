@@ -9,6 +9,11 @@ rust-version = "1.95"
 [lints]
 workspace = true
 
+[features]
+# Local GGUF inference for the AI tab (candle). Off by default: the dependency
+# tree is heavy, so release builds opt in explicitly.
+ai-local = ["craft-ai/local"]
+
 [dependencies]
 edit-session = { workspace = true }
 craft-ui = { workspace = true }
@@ -56,6 +61,9 @@ skrifa = "0.44"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 craft-update = { workspace = true }
+# AI tab: BYO endpoints and curated model downloads. Local GGUF inference needs
+# the `ai-local` feature (candle's dependency tree is heavy); see craft-ai.
+craft-ai = { workspace = true }
 # Control-channel tokens.
 getrandom = "0.4"
 # Create ▸ Clipboard (images; already in the tree through egui-winit).

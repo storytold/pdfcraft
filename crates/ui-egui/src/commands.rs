@@ -183,7 +183,45 @@ impl PdfCraftApp {
             .or_else(|| self.run_edit_command(id, active))
             .or_else(|| self.run_form_command(id, active))
             .or_else(|| self.run_secure_command(id, active))
+            .or_else(|| self.run_ai_command(id))
             .unwrap_or(false)
+    }
+
+    /// The AI tab's commands: panel toggle, translation, endpoint test and local model setup.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn run_ai_command(&mut self, id: &str) -> Option<bool> {
+        match id {
+            "ai.panel" => {
+                self.choose_right_panel(if self.right == Some(RightPanel::Ai) { None } else { Some(RightPanel::Ai) });
+            }
+            "ai.translate" => {
+                if let Some(ctx) = self.ctx.clone() {
+                    crate::ai::translate_active(self, &ctx);
+                }
+            }
+            "ai.provider_test" => {
+                if let Some(ctx) = self.ctx.clone() {
+                    self.ai.test_endpoint(&ctx);
+                }
+            }
+            "ai.model_download" => {
+                if let Some(ctx) = self.ctx.clone() {
+                    self.ai.download_picked(&ctx);
+                }
+            }
+            "ai.model_load" => {
+                if let Some(ctx) = self.ctx.clone() {
+                    self.ai.load_downloaded(&ctx);
+                }
+            }
+            _ => return None,
+        }
+        Some(true)
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn run_ai_command(&mut self, _id: &str) -> Option<bool> {
+        None
     }
 
     fn run_file_command(&mut self, id: &str, active: Option<usize>) -> Option<bool> {

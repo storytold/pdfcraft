@@ -433,6 +433,11 @@ pub const COMMANDS: &[CommandSpec] = &[
     c("help.website", "ArtCraft website", HELP, None, Nothing, "external-link"),
     c("help.check_updates", "Check for updates…", HELP, None, Nothing, "cloud"),
     c("help.about", "About PdfCraft", HELP, None, Nothing, "info"),
+    c("ai.panel", "AI", VIEW, None, Nothing, "sparkles"),
+    c("ai.translate", "Translate document to…", VIEW, None, Document, "languages"),
+    c("ai.provider_test", "Test the configured AI endpoint", None, None, Nothing, "cloud"),
+    c("ai.model_download", "Download the picked local model", None, None, Nothing, "file-down"),
+    c("ai.model_load", "Load the downloaded local model", None, None, Nothing, "monitor"),
 ];
 
 pub fn command(id: &str) -> Option<&'static CommandSpec> {

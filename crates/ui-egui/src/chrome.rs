@@ -735,6 +735,8 @@ pub fn right_rail(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         items.push(item(RightPanel::Accessibility, "accessibility", "Accessibility Checker", None));
     }
     items.push(item(RightPanel::Tags, "tag", "Tags", None));
+    #[cfg(not(target_arch = "wasm32"))]
+    items.push(item(RightPanel::Ai, "sparkles", "AI", None));
     let view = &mut app.views[index];
     let mut page_display = None;
     let rail = Rail::new(egui::Id::unique("rail"))

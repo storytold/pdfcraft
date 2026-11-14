@@ -7472,11 +7472,11 @@ title = "Translate documents"
 area = "J"
 tier = "P3"
 milestone = "M13"
-status = "planned"
-commands = []
+status = "shipped"
+commands = ["ai.panel", "ai.translate", "ai.provider_test", "ai.model_download", "ai.model_load"]
 tools = []
-evidence = []
-notes = "through an optional AiProvider; never Adobe's cloud"
+evidence = ["crates/ui-egui/tests/it/control.rs::control_ai_reports_state_and_drives_the_panel"]
+notes = "AI tab (sparkles): BYO OpenAI-compatible endpoint (test connection, no token needed for local servers) or a one-click curated open model — probe of RAM/threads/AVX2/disk suggests a fitting GGUF, download is resumable and checksum-verified into the shared craft-ai cache, and candle inference is compiled in by the `ai-local` cargo feature (off by default). Whole-document translation runs per page on a worker, keeps markup/code/URL spans untouched (craft-ai segmenting), and shows non-destructively page by page in the panel — the original PDF is never rewritten. The card states the privacy mode: cloud sends document text to the configured endpoint, local keeps it on the PC. ui.set ai-lang picks the target language; ui.state ai reports provider, model states, download and translation progress. Scanned pages with no text are skipped (OCR first)."
 
 [[feature]]
 id = "create.cloud-office-conversion"
