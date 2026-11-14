@@ -166,7 +166,11 @@ and from elements that lose an annotation reference, which also lose `/T`. An el
 place above one whose descriptions go makes `apply` fail with `RedactError::Tags`. Unchanged
 spans retain their descriptions; unused property entries are retired during redaction
 and hidden-content cleanup, including aliases in shared/inherited resources. Descriptions still
-used by surviving pages or forms are kept.
+used by surviving pages or forms are kept. A span's property list given by name (or by reference)
+is copied, without its descriptions, into the span; past 16 MiB of such copies in one run
+(`interp::MAX_PROPERTY_COPIES`), Apply Redactions and Remove Hidden Information refuse with
+`RedactError::PropertyCopies`. Apply changes nothing; `sanitize::remove_hidden` may have rewritten
+the pages before the one refused, so the app runs it on a copy and keeps the document as it was.
 
 A redacted page that inherits `/Resources` from the page tree gets them pinned (by reference;
 a direct inherited dictionary is made one shared object first) before it is rewritten. The parent's

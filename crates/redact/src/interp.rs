@@ -145,6 +145,10 @@ pub(crate) struct Output {
     /// Apply mode met vertical-writing text (which it cannot remove) while a redaction region was
     /// in force: the operation must fail closed rather than leave that text under the mark.
     pub vertical: bool,
+    /// Stripping the replacement text from the marked content around what was removed would copy
+    /// property lists into the content past what is left of the run's [`MAX_PROPERTY_COPIES`]: the
+    /// operation must fail closed rather than build content that large.
+    pub property_copies: bool,
     /// The content holds an inline image the renderer reads no image for
     /// ([`pdfcraft_content::Parsed::ambiguous_images`]): what this scope placed after it may not
     /// be what the page shows, so a redaction must not trust it.
@@ -203,6 +207,13 @@ pub(crate) struct Scope<'a> {
     fonts: HashMap<Vec<u8>, Rc<Metrics>>,
     used_names: Vec<Vec<u8>>,
     depth: usize,
+    /// Bytes of property lists this scope may still write into content in place of the names (or
+    /// references) that marked content gave them: what is left of the run's
+    /// [`MAX_PROPERTY_COPIES`] (see [`Scope::with_property_room`]).
+    pub property_room: usize,
+    /// Property lists given by reference, stripped of their replacement text once for the page,
+    /// with the bytes a copy takes written out (`None`: the list has none).
+    stripped: HashMap<ObjRef, Option<(Object, usize)>>,
     /// Form entries and decoded bytes left for this page, its content streams already charged:
     /// shared forms drawn from other shared forms would otherwise multiply the work with every
     /// level.
@@ -235,6 +246,8 @@ impl<'a> Scope<'a> {
             fonts: HashMap::new(),
             used_names: Vec::new(),
             depth: 0,
+            property_room: MAX_PROPERTY_COPIES,
+            stripped: HashMap::new(),
             budget,
         }
     }
@@ -249,6 +262,13 @@ impl<'a> Scope<'a> {
     /// [`MAX_REMOVED_BYTES`].
     pub fn with_removed_room(mut self, room: usize) -> Self {
         self.removed_room = room;
+        self
+    }
+
+    /// Write at most `room` bytes of property lists into content: what earlier pages left of the
+    /// run's [`MAX_PROPERTY_COPIES`].
+    pub fn with_property_room(mut self, room: usize) -> Self {
+        self.property_room = room;
         self
     }
 
@@ -452,8 +472,9 @@ fn process_from(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<u8>], 
         }
         processed.push((done.ops, done.changed));
     }
-    if scope.mode == Mode::Apply {
-        clean_replacements(doc, resources, &original, &walk.clipped, &mut processed, scope.report);
+    // The proof's snapshot (which collects `removed`) reads nothing this writes, and skips it.
+    if scope.mode == Mode::Apply && scope.removed.is_none() && !clean_replacements(doc, resources, &original, &walk.clipped, &mut processed, scope) {
+        walk.out.property_copies = true;
     }
     walk.out.streams = processed.into_iter().zip(comment_edges).map(|((ops, changed), edges)| changed.then(|| piece_bytes(&ops, edges))).collect();
     walk.out
@@ -916,8 +937,8 @@ fn clean_replacements(
     original: &[Op],
     clipped: &HashSet<usize>,
     processed: &mut [(Vec<Op>, bool)],
-    report: &mut Report,
-) {
+    scope: &mut Scope<'_>,
+) -> bool {
     let originals: HashMap<usize, &Op> = original.iter().map(|op| (op.span.start, op)).collect();
     let unchanged: HashSet<usize> =
         processed.iter().flat_map(|(ops, _)| ops).filter(|op| originals.get(&op.span.start) == Some(op)).map(|op| op.span.start).collect();
@@ -940,31 +961,118 @@ fn clean_replacements(
         }
     }
     let properties = res_dict(doc, resources, b"Properties");
+    // A list written inline in the content is stripped where it stands: its copy is no larger than
+    // what the content holds. One named, or given by reference (which content shouldn't hold, but the
+    // parser reads), is copied into every block that names it, so each copy is counted against
+    // what is left of the run's allowance, and each list is stripped once: one by reference once
+    // for the page, one written in `/Properties` once for the stream.
+    let mut named: HashMap<Vec<u8>, Option<(Object, usize)>> = HashMap::new();
     for (ops, changed) in processed {
         for op in ops {
             if !op.is("BDC") || !affected.contains(&op.span.start) {
                 continue;
             }
             // The property list is the last operand, as the renderer reads it.
-            let property = match op.back(0) {
-                Some(Object::Name(name)) => properties.get(name).map(|p| doc.resolve(p)),
-                Some(p) => Some(doc.resolve(p)),
-                None => None,
+            let copy = match op.back(0) {
+                Some(Object::Dict(dict)) if has_replacements(dict) => stripped_copy(dict).0,
+                Some(given) => {
+                    let (listed, key) = match given {
+                        Object::Name(name) => match properties.get(name) {
+                            Some(listed) => (listed, listed.as_ref().ok_or(name.as_slice())),
+                            None => continue,
+                        },
+                        Object::Ref(r) => (given, Ok(*r)),
+                        // No list and no name of one: nothing to strip.
+                        _ => continue,
+                    };
+                    let memo = match key {
+                        Ok(r) => scope.stripped.get(&r).cloned(),
+                        Err(name) => named.get(name).cloned(),
+                    };
+                    let stripped = match memo {
+                        Some(stripped) => stripped,
+                        None => {
+                            // A list written directly in `/Properties` is looked at where it stands,
+                            // one given by reference through it: neither is copied to see whether it
+                            // has replacement text. No such list is stripped once the allowance is
+                            // spent.
+                            let held = match listed {
+                                Object::Dict(_) => None,
+                                _ => Some(doc.resolve(listed)),
+                            };
+                            let dict = held.as_deref().unwrap_or(listed).as_dict().filter(|dict| has_replacements(dict));
+                            if dict.is_some() && scope.property_room == 0 {
+                                return false;
+                            }
+                            let stripped = dict.map(stripped_copy);
+                            match key {
+                                Ok(r) => scope.stripped.insert(r, stripped.clone()),
+                                Err(name) => named.insert(name.to_vec(), stripped.clone()),
+                            };
+                            stripped
+                        }
+                    };
+                    let Some((copy, len)) = stripped else { continue };
+                    if len > scope.property_room {
+                        // Spent: what comes after on the page strips nothing more.
+                        scope.property_room = 0;
+                        return false;
+                    }
+                    scope.property_room -= len;
+                    copy
+                }
+                None => continue,
             };
-            if let Some(mut dict) = property.and_then(|p| p.as_dict().cloned()) {
-                let mut stripped = false;
-                for key in [&b"ActualText"[..], b"Alt", b"E", b"T"] {
-                    stripped |= dict.remove(key).is_some();
-                }
-                if stripped && let Some(property) = op.operands.last_mut() {
-                    *property = Object::Dict(dict);
-                    *changed = true;
-                    report.replacement_text += 1;
-                }
+            if let Some(property) = op.operands.last_mut() {
+                *property = copy;
+                *changed = true;
+                scope.report.replacement_text += 1;
             }
         }
     }
+    true
 }
+
+/// The replacement-text keys of a property list (ISO 32000-2 §14.9.3-14.9.5).
+const REPLACEMENTS: [&[u8]; 4] = [b"ActualText", b"Alt", b"E", b"T"];
+
+/// Whether the property list `dict` gives replacement text.
+fn has_replacements(dict: &Dict) -> bool {
+    REPLACEMENTS.iter().any(|key| dict.contains(key))
+}
+
+/// A copy of the property list `dict` without its replacement text, and the bytes it takes
+/// written out. Built from the entries that stay, so it costs what it is charged, however large
+/// the replacement text was.
+fn stripped_copy(dict: &Dict) -> (Object, usize) {
+    #[cfg(test)]
+    STRIPS.with(|n| n.set(n.get() + 1));
+    let copy = Object::Dict(
+        dict.iter().filter(|(key, _)| !REPLACEMENTS.contains(&key.as_slice())).map(|(key, value)| (key.to_vec(), value.clone())).collect(),
+    );
+    let mut written = Vec::new();
+    pdfcraft_cos::serialize(&copy, &mut written);
+    (copy, written.len())
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Property lists copied to strip their replacement text on this thread.
+    static STRIPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many property lists this thread has copied to strip their replacement text.
+#[cfg(test)]
+pub(crate) fn strips() -> usize {
+    STRIPS.with(std::cell::Cell::get)
+}
+
+/// The most bytes of property lists, named or given by reference, [`clean_replacements`] writes
+/// into content in one run (Apply Redactions or Remove Hidden Information, every page and form):
+/// each marked block whose replacement text goes is given its own copy of the list it named, so a
+/// large list named by thousands of blocks would grow the content without bound. Past it the run is
+/// refused.
+pub(crate) const MAX_PROPERTY_COPIES: usize = 16 << 20;
 
 /// Lay out a shown string (or `TJ` array) glyph by glyph, advancing `tm`. Returns the `TJ`
 /// items with the glyphs under a region replaced by displacements, and how many were removed.
@@ -1256,6 +1364,7 @@ fn xobject(
             scope.fonts = saved_fonts;
             out.residue += inner.residue;
             out.vertical |= inner.vertical;
+            out.property_copies |= inner.property_copies;
             out.ambiguous |= inner.ambiguous;
             out.unparsed |= inner.unparsed;
             out.doomed.extend_from_slice(&inner.doomed);
