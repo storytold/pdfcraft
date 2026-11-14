@@ -3,7 +3,7 @@
 use std::collections::{HashMap, HashSet};
 
 use pdfcraft_content::Pieces;
-use pdfcraft_cos::{Dict, Document, ObjRef, Object};
+use pdfcraft_cos::{DecodeBudget, Dict, Document, ObjRef, Object};
 
 use crate::{RedactError, page_streams};
 
@@ -122,6 +122,25 @@ struct UsedInGlyphs {
     extgstates: HashSet<Vec<u8>>,
     fonts: HashSet<Vec<u8>>,
     properties: HashSet<Vec<u8>>,
+}
+
+impl UsedInGlyphs {
+    fn merge(&mut self, other: &UsedInGlyphs) {
+        self.xobjects.extend(other.xobjects.iter().cloned());
+        self.colorspaces.extend(other.colorspaces.iter().cloned());
+        self.patterns.extend(other.patterns.iter().cloned());
+        self.shadings.extend(other.shadings.iter().cloned());
+        self.extgstates.extend(other.extgstates.iter().cloned());
+        self.fonts.extend(other.fonts.iter().cloned());
+        self.properties.extend(other.properties.iter().cloned());
+    }
+}
+
+/// What one Type 3 cleanup reads of glyph programs: the resource names each indirect program
+/// uses, read once however many fonts share it, and one decoding allowance for all of them.
+struct GlyphReads {
+    used: HashMap<ObjRef, UsedInGlyphs>,
+    budget: DecodeBudget,
 }
 
 fn collect_used_resources_in_stream(data: &[u8], used: &mut UsedInGlyphs) -> Result<(), RedactError> {
@@ -733,9 +752,10 @@ pub(crate) fn unlink_type3(doc: &mut Document) -> Result<(), RedactError> {
     }
 
     // For each Type 3 font: unlink unused glyphs from CharProcs and prune exclusive resources.
+    let mut reads = GlyphReads { used: HashMap::new(), budget: DecodeBudget::page() };
     for (font_key, font_dict) in &type3_fonts {
         let surviving = used_glyphs.get(font_key).cloned().unwrap_or_default();
-        clean_type3_font(doc, &holders, &form_holders, font_key, font_dict, &surviving)?;
+        clean_type3_font(doc, &holders, &form_holders, font_key, font_dict, &surviving, &mut reads)?;
     }
 
     Ok(())
@@ -807,6 +827,7 @@ fn clean_type3_font(
     font_key: &FontKey,
     font_dict: &Dict,
     surviving: &HashSet<Vec<u8>>,
+    reads: &mut GlyphReads,
 ) -> Result<(), RedactError> {
     let Some(char_procs_val) = font_dict.get(b"CharProcs") else {
         return Err(RedactError::Refused("a Type 3 font has no /CharProcs".into()));
@@ -848,12 +869,27 @@ fn clean_type3_font(
 
     let mut used_in_glyphs = UsedInGlyphs::default();
     for (_, proc_val) in char_procs.iter() {
+        if let Some(used) = proc_val.as_ref().and_then(|r| reads.used.get(&r)) {
+            used_in_glyphs.merge(used);
+            continue;
+        }
         let resolved = doc.resolve(proc_val);
         let Object::Stream(s) = &*resolved else {
             return Err(RedactError::Refused("a Type 3 font's glyph isn't a stream".into()));
         };
-        let data = doc.with_direct_parms(s).decoded()?;
-        collect_used_resources_in_stream(&data, &mut used_in_glyphs)?;
+        // Past the allowance the cleanup can't be shown complete, and the redaction is refused, as
+        // in `resource_ops`; a glyph that doesn't decode says why.
+        let refused = reads.budget.refused();
+        let data = reads
+            .budget
+            .decode(&doc.with_direct_parms(s))
+            .map_err(|e| if reads.budget.refused() > refused { RedactError::past_allowance(e) } else { e.into() })?;
+        let mut used = UsedInGlyphs::default();
+        collect_used_resources_in_stream(&data, &mut used)?;
+        used_in_glyphs.merge(&used);
+        if let Some(r) = proc_val.as_ref() {
+            reads.used.insert(r, used);
+        }
     }
 
     if prune_type3_font_resources(doc, &mut f_res, &used_in_glyphs) {

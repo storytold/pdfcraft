@@ -256,6 +256,51 @@ fn the_form_a_kept_type3_glyph_draws_is_walked_within_the_allowance_of_a_page() 
     }
 }
 
+/// The kept glyph programs a Type 3 cleanup reads share one page's allowance: two compressed ones,
+/// each past half of it, refuse the redaction for the document, as the font's forms do. One that
+/// doesn't decode keeps its own error, and two small ones are the control.
+#[test]
+fn kept_type3_glyph_programs_past_the_allowance_of_a_page_refuse_the_document() {
+    enum Then {
+        PastTheAllowance,
+        DoesNotDecode,
+        Cleaned,
+    }
+    for (size, filter, then) in [
+        (pdfcraft_cos::MAX_PAGE_DECODED / 2 + 1, "/FlateDecode", Then::PastTheAllowance),
+        (1, "/UnsupportedForTheTest", Then::DoesNotDecode),
+        (1, "/FlateDecode", Then::Cleaned),
+    ] {
+        let packed = pdfcraft_filters::encode_flate(&vec![b' '; size]);
+        let glyph = || stream(&format!("/Filter {filter}"), packed.as_slice());
+        let mut doc = pdf(vec![
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources 5 0 R >>".to_vec(),
+            stream("", b"BT /T3 10 Tf 10 100 Td (ABC) Tj ET"),
+            b"<< /Font << /T3 6 0 R >> >>".to_vec(),
+            b"<< /Type /Font /Subtype /Type3 /FontBBox [0 -200 1000 800] /FontMatrix [0.001 0 0 0.001 0 0] /FirstChar 65 /LastChar 67 /Widths [500 500 500] /Encoding << /Differences [65 /A /B /C] >> /CharProcs << /A 7 0 R /B 8 0 R /C 9 0 R >> /Resources << /XObject << /ImA 10 0 R >> >> >>".to_vec(),
+            stream("", b"/ImA Do"),
+            glyph(),
+            glyph(),
+            stream("/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", b"CONFIDENTIAL_IMAGE_A"),
+        ]);
+        mark(&mut doc, 0, &[[9.0, 95.0, 14.9, 110.0]], "");
+        let out = apply(&mut doc, None);
+        match then {
+            Then::PastTheAllowance => assert!(
+                matches!(&out, Err(RedactError::Refused(reason)) if reason.starts_with("content and forms go past what one page may read")),
+                "glyph programs of {size} bytes each: {out:?}"
+            ),
+            Then::DoesNotDecode => assert!(
+                matches!(&out, Err(RedactError::Cos(pdfcraft_cos::CosError::Filter(why))) if why.contains("UnsupportedForTheTest")),
+                "glyph programs that don't decode: {out:?}"
+            ),
+            Then::Cleaned => assert_eq!(out.unwrap().glyphs, 1, "glyph programs of {size} bytes each"),
+        }
+    }
+}
+
 /// When all glyphs of a Type 3 font are redacted, the entire font is removed from Resources (F-011).
 #[test]
 fn all_redacted_type3_glyphs_cause_font_removal_from_resources() {
@@ -392,6 +437,35 @@ fn type3_font_used_in_a_form_xobject_has_its_redacted_glyph_removed() {
     let report = apply(&mut doc, None).unwrap();
     assert_eq!(report.glyphs, 1);
     assert!(!full_save_holds(&doc, b"SECRET_FORM_GLYPH_PAYLOAD"), "redacted glyph program survived");
+}
+
+/// Type 3 cleanup decoded a glyph program again for every font listing it: 2 000 fonts sharing
+/// one large program read it 2 000 times. It is read once now, and the cleanup still keeps the
+/// glyph every font shows.
+#[test]
+fn a_glyph_program_many_type3_fonts_share_is_read_once() {
+    const FONTS: usize = 2_000;
+    let names: String = (0..FONTS).map(|i| format!("/T{i} {} 0 R ", 6 + i)).collect();
+    let shows: String = (0..FONTS).map(|i| format!("/T{i} 10 Tf (A) Tj ")).collect();
+    let mut objs = vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Font << {names}>> >> >>").into_bytes(),
+        stream("", format!("BT 10 100 Td {shows}ET").as_bytes()),
+        stream("", [b"SHARED_GLYPH ".as_slice(), &b"0 0 m 1 1 l S ".repeat(50_000)].concat()),
+    ];
+    objs.extend((0..FONTS).map(|_| {
+        b"<< /Type /Font /Subtype /Type3 /FontBBox [0 0 1000 1000] /FontMatrix [0.001 0 0 0.001 0 0] /FirstChar 65 /LastChar 65 /Widths [0] /Encoding << /Differences [65 /A] >> /CharProcs << /A 5 0 R >> >>".to_vec()
+    }));
+    let mut doc = pdf(objs);
+    // The glyphs are drawn at x 10 with no width, so a mark away from them leaves them all.
+    mark(&mut doc, 0, &[[200.0, 200.0, 250.0, 250.0]], "");
+    let started = std::time::Instant::now();
+    apply(&mut doc, None).unwrap();
+    assert!(started.elapsed() < std::time::Duration::from_secs(60), "{:?}", started.elapsed());
+    let font = doc.get(ObjRef::new(6, 0));
+    let procs = doc.resolve(font.as_dict().unwrap().get(b"CharProcs").unwrap());
+    assert!(procs.as_dict().unwrap().contains(b"A"), "the glyph every font shows was unlinked");
 }
 
 /// A Type 3 font with glyphs A (its program object 7) and B (object 8), at object 6.

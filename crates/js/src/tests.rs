@@ -87,6 +87,17 @@ fn calculate_scripts_read_fields_and_set_the_value() {
     assert!(o.rc);
 }
 
+/// An array of field values copies each entry: one long string listed many times is held to
+/// the run's byte budget, not copied once per listing.
+#[test]
+fn an_array_of_values_stops_at_the_byte_budget() {
+    let fill = "var s = 'x'; while (s.length < 65536) s += s; var a = []; for (var i = 0; i < N; i++) a.push(s); getField('qty').value = a;";
+    let o = go(&fill.replace('N', "600"), &Event::field("Calculate", "total", ""));
+    assert!(o.error.as_deref().is_some_and(|e| e.contains("byte limit exceeded")), "{:?}", o.error);
+    let o = go(&fill.replace('N', "400"), &Event::field("Calculate", "total", ""));
+    assert_eq!(o.error, None);
+}
+
 /// `event.value` reads and writes as a plain value, numbers included, and the outcome says whether
 /// the script assigned it, even to the value it already had.
 #[test]
@@ -528,7 +539,9 @@ fn app_alert_titles_are_clipped_and_charged() {
         reset_calls: 0,
         reset_limit_exceeded: false,
         kept: 0,
+        retained: 0,
         dropped: 0,
+        layers_changed: Default::default(),
     };
     h.alert(Message { title: Some("Order form".into()), ..Message::plain("Saved") });
     assert_eq!(h.kept, "Saved".len() + "Order form".len());
@@ -1113,6 +1126,24 @@ mod xfa_model {
         assert_eq!(o.result.as_deref(), Some("7"));
     }
 
+    /// A copy of a subform costs its nodes, names and SOMs: instances of one with a long name
+    /// stop at the run's byte budget, well before the instance cap.
+    #[test]
+    fn instances_of_a_subform_with_long_names_stop_at_the_byte_budget() {
+        let mut f = form();
+        let table = &mut f.children[0].children[4];
+        assert_eq!(table.name, "table");
+        for row in &mut table.children {
+            row.children.push(field(&"n".repeat(1 << 20), "", "", false));
+        }
+        let ev = XfaEvent { activity: "click".into(), target: "form1[0].page1[0].go[0]".into(), ..Default::default() };
+        let o = run_xfa("for (var i = 0; i < 100; i++) table._row.addInstance(1); table._row.count", &ev, &XfaDoc::default(), &f, Limits::default());
+        assert_eq!(o.error, None, "{:?}", o.error);
+        let count: usize = o.result.as_deref().unwrap_or_default().parse().expect("a count");
+        assert!((3..50).contains(&count), "{count} instances");
+        assert_eq!(o.effects.iter().filter(|e| matches!(e, XfaEffect::AddInstance { .. })).count(), count - 2);
+    }
+
     /// On screen every page is a sheet of its own: `xfa.layout.sheet` counts it from 0, as
     /// `absPage` does (forms show `sheet(this) + 1`), and `sheetCount` is the page count.
     #[test]
@@ -1625,6 +1656,10 @@ mod formcalc {
 
     #[test]
     fn date2num_rejects_days_past_the_end_of_the_month() {
+        // A month name is read from the text's next few characters only, whatever follows.
+        let serial = calc(r#"Date2Num("2024-09-01")"#);
+        assert_eq!(calc(r#"Date2Num("September 1, 2024, and a note that runs on", "MMMM D, YYYY")"#), serial);
+        assert_eq!(calc(r#"Date2Num("Sep 1, 2024", "MMM D, YYYY")"#), serial);
         assert_eq!(calc(r#"Date2Num("2023-02-30")"#), "0");
         assert_eq!(calc(r#"Date2Num("31/04/2024", "DD/MM/YYYY")"#), "0");
         assert_eq!(calc(r#"Date2Num("2023-02-29")"#), "0");
@@ -2641,6 +2676,18 @@ fn a_plain_form_sees_the_xfa_version_but_not_installed() {
     assert_eq!(o.alerts, [Message::plain("old viewer")]);
 }
 
+/// Arrays assigned to several fields are held to one run-wide budget, and replacing a field's
+/// array frees its charge.
+#[test]
+fn retained_array_text_is_charged_across_fields() {
+    let fill = "var s = 'x'; while (s.length < 65536) s += s; var a = []; for (var i = 0; i < 320; i++) a.push(s);";
+    let one = |tail: &str| go(&format!("{fill} {tail}"), &Event::field("Calculate", "total", ""));
+    let o = one("getField('qty').textColor = a; getField('qty').textColor = a; getField('zip').textColor = ['RGB'];");
+    assert_eq!(o.error, None, "replacing an array frees its charge: {:?}", o.error);
+    let o = one("getField('qty').textColor = a; getField('zip').fillColor = a;");
+    assert!(o.error.as_deref().is_some_and(|e| e.contains("hold more than")), "{:?}", o.error);
+}
+
 #[test]
 fn string_arrays_refuse_aggregate_text_before_request_clipping() {
     let o = go("resetForm(new Array(65).fill('x'.repeat(1 << 19)));", &Event::doc("Console"));
@@ -2701,6 +2748,100 @@ fn af_simple_calculate_bounds_selector_work_before_expansion() {
     let out =
         run("AFSimple_Calculate('SUM',new Array(4096).fill('n'));", &Event::doc("Console"), &Default::default(), &fields, &[], Default::default());
     assert!(out.error.as_deref().is_some_and(|e| e.contains("calculation field lookup exceeds")));
+}
+
+/// A link action's `event.target` is the document (#2081, ported), and the event can still be
+/// serialized: the target isn't enumerable, so `JSON.stringify` doesn't walk back into it.
+#[test]
+fn a_link_events_target_is_the_document() {
+    let link = Event { kind: "Link".into(), ..Event::doc("Mouse Up") };
+    let o = go("JSON.stringify(event); JSON.stringify(this); (event.target === this) + ':' + event.type + ':' + event.name", &link);
+    assert_eq!(o.error, None);
+    assert_eq!(o.result.as_deref(), Some("true:Link:Mouse Up"));
+    assert_eq!(go("event.target === null", &Event::doc("Console")).result.as_deref(), Some("true"), "other document events keep none");
+}
+
+/// `app.openDoc` only queues a request (the viewer asks before opening a file) and answers null;
+/// another document as the base, another file system or extra options are refused (#2081).
+#[test]
+fn open_doc_queues_a_request_for_the_current_documents_folder_only() {
+    let link = Event { kind: "Link".into(), ..Event::doc("Mouse Up") };
+    for call in [
+        "app.openDoc({cPath:'other.pdf',oDoc:this})",
+        "app.openDoc('other.pdf',this)",
+        "app.openDoc('other.pdf',event.target)",
+        "app.openDoc({cPath:'other.pdf',oDoc:this,cFS:''})",
+        "app.openDoc('other.pdf',null)",
+        "app.openDoc({cPath:'other.pdf'},null,undefined)",
+    ] {
+        let o = go(&format!("getField('price').value='17'; {call} === null"), &link);
+        assert_eq!(o.error, None, "{call}");
+        assert_eq!(o.result.as_deref(), Some("true"), "{call}");
+        assert_eq!(o.requests, [Request::OpenDoc("other.pdf".into())], "{call}");
+    }
+    for call in [
+        "app.openDoc({cPath:'other.pdf',oDoc:{}})",
+        "app.openDoc('other.pdf',{})",
+        "app.openDoc('other.pdf',Object.create(this))",
+        "app.openDoc('other.pdf',new Proxy(this,{}))",
+        "app.openDoc('other.pdf',getField('price'))",
+        "app.openDoc('other.pdf',this,true)",
+        "app.openDoc({cPath:'other.pdf',oDoc:this,cFS:'CHTTP'})",
+        "app.openDoc({cPath:'other.pdf'},this)",
+        "app.openDoc('')",
+    ] {
+        let o = go(call, &link);
+        assert!(o.error.as_deref().is_some_and(|e| e.contains("openDoc")), "{call}: {:?}", o.error);
+        assert!(o.requests.is_empty(), "{call}");
+    }
+}
+
+/// A popup menu with no items answers null without asking, so the next menu still gets its own
+/// answer, and empty menus count toward the prompt limit (#2081).
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn an_empty_popup_menu_answers_null_without_asking() {
+    let job = |script: &str| crate::session::Job {
+        script: script.into(),
+        event: Event { kind: "Link".into(), ..Event::doc("Mouse Up") },
+        doc: doc(),
+        fields: Arc::new(Vec::new()),
+        doc_scripts: Vec::new(),
+        calculations: Vec::new(),
+        timer: None,
+    };
+    let mut s = crate::session::ScriptSession::default();
+    let o = s.run(
+        job("var a = app.popUpMenuEx(); var b = app.popUpMenuEx({cName:'B', cReturn:'b'}); app.popUpMenuEx.apply(app, []); String(a) + ':' + b"),
+        &[Some("b".into())],
+    );
+    assert_eq!(o.error, None);
+    assert_eq!(o.result.as_deref(), Some("null:b"));
+    let o = s.run(job("for (var i = 0; i < 33; i++) app.popUpMenuEx();"), &[]);
+    assert!(o.error.as_deref().is_some_and(|e| e.contains("too many interactive prompts")), "{:?}", o.error);
+}
+
+/// `getOCGs` lists the document's layers; setting `state` turns one, which the run reports, and
+/// a document without layers gives `null` (#169, from #4751).
+#[test]
+fn get_ocgs_lists_layers_and_reports_the_ones_a_script_turns() {
+    let layers =
+        vec![crate::Layer { name: "Frame 1".into(), on: true, initial: true }, crate::Layer { name: "Frame 2".into(), on: false, initial: false }];
+    let layered = DocInfo { layers, ..doc() };
+    let out = run(
+        "var o = this.getOCGs(); var before = o.map(function (l) { return l.name + '=' + l.state + '/' + l.initState; }).join(','); \
+         o[0].state = false; o[1].state = true; before + ' ' + o[1].state;",
+        &Event::doc("Console"),
+        &layered,
+        &[],
+        &[],
+        Default::default(),
+    );
+    assert_eq!(out.error, None);
+    assert_eq!(out.result.as_deref(), Some("Frame 1=true/true,Frame 2=false/false true"));
+    assert_eq!(out.layers, [(0, false), (1, true)]);
+    let none = run("this.getOCGs() === null;", &Event::doc("Console"), &doc(), &[], &[], Default::default());
+    assert_eq!(none.result.as_deref(), Some("true"));
 }
 
 /// `toSource` writes plain state as a JavaScript literal of the same value (#269, from #344).
