@@ -1129,6 +1129,7 @@ impl Renderer {
                 width: alpha_data.width,
                 height: alpha_data.height,
                 interpolate: alpha_data.interpolate,
+                one_bit: alpha_data.one_bit,
                 scale_factors: alpha_data.scale_factors,
             });
             renderer.ctx.set_transform(transform);
@@ -1349,9 +1350,14 @@ impl Renderer {
         // resolution is shrunk by area averaging (`area_shrink`), not nearest-neighbour, which
         // broke up the text of scans shown at screen size. Type 3 glyph images keep the nearest
         // shrink of #624: they are drawn with a frame of their own and never snapped.
+        // PdfCraft patch (#1700): a 1-bit source (an `/ImageMask`, a `/BitsPerComponent 1` image or
+        // a Type 3 glyph's image mask) is line art, where picking the sample under the target
+        // pixel's centre drops a one-pixel stroke whenever the picking grid misses it. Such a
+        // source is area-averaged, Type 3 glyph images included, as poppler and Acrobat draw it.
+        let one_bit = image_data.one_bit() || alpha_data.as_ref().is_some_and(|a| a.one_bit);
         let area = !interpolate
             && requested_resize
-            && !self.in_type3_glyph
+            && (one_bit || !self.in_type3_glyph)
             // Wider sources keep #624's bounded nearest-neighbour shrink (`area_shrink` refuses
             // them): skipping them, as a refused shrink at source size would, loses the image.
             && source_width.max(source_height) <= MAX_RESAMPLING_SOURCE_SIDE;
@@ -2330,6 +2336,7 @@ impl<'a> Device<'a> for Renderer {
                                     width: stencil.width,
                                     height: stencil.height,
                                     interpolate: stencil.interpolate,
+                                    one_bit: stencil.one_bit,
                                     scale_factors: stencil.scale_factors,
                                 });
                                 self.draw_image(rgb_data, Some(stencil));
@@ -2431,6 +2438,7 @@ impl<'a> Device<'a> for Renderer {
                                         width: stencil.width,
                                         height: stencil.height,
                                         interpolate: stencil.interpolate,
+                                        one_bit: stencil.one_bit,
                                         scale_factors: stencil.scale_factors,
                                     }),
                                     Some(stencil),
@@ -3235,8 +3243,8 @@ mod area_shrink_tests {
             let gray = noise(pixels, i as u32 + 11);
             let rgb = noise(pixels * 3, i as u32 + 13);
             let colors = [
-                ImageData::Luma(LumaData { data: gray.clone(), width: w, height: h, interpolate: false, scale_factors: (1.0, 1.0) }),
-                ImageData::Rgb(RgbData { data: rgb.clone(), width: w, height: h, interpolate: false, scale_factors: (1.0, 1.0) }),
+                ImageData::Luma(LumaData { data: gray.clone(), width: w, height: h, interpolate: false, one_bit: false, scale_factors: (1.0, 1.0) }),
+                ImageData::Rgb(RgbData { data: rgb.clone(), width: w, height: h, interpolate: false, one_bit: false, scale_factors: (1.0, 1.0) }),
             ];
             for color in &colors {
                 let mut whole: Vec<u8> = match color {
@@ -3256,7 +3264,7 @@ mod area_shrink_tests {
     }
 
     fn mask(data: &[u8], width: u32, height: u32) -> LumaData {
-        LumaData { data: data.to_vec(), width, height, interpolate: false, scale_factors: (1.0, 1.0) }
+        LumaData { data: data.to_vec(), width, height, interpolate: false, one_bit: false, scale_factors: (1.0, 1.0) }
     }
 
     /// Each image sample takes the mask sample under its centre, at whole and fractional ratios.
