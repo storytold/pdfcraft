@@ -258,7 +258,7 @@ fn prototype_children_that_write_nothing_still_count_against_a_budget() {
 
 /// The template of `xml` written again by `expand`, parsed.
 fn expanded(xml: &str) -> String {
-    let doc = roxmltree::Document::parse(xml).unwrap();
+    let doc = crate::xml::Document::parse(xml).unwrap();
     let template = doc.descendants().find(|n| n.tag_name().name() == "template").unwrap();
     let (out, warnings) = crate::proto::expand(template);
     assert!(warnings.is_empty(), "{warnings:?}");
@@ -276,7 +276,7 @@ fn namespaces_bound_again_inside_the_template_keep_their_own_uri() {
   <draw name="none" x="0mm" y="40mm" w="40mm"><extras><free xmlns=""/></extras></draw>"##;
     let xml = form(styles, body);
     let out = expanded(&xml);
-    let doc = roxmltree::Document::parse(&out).unwrap();
+    let doc = crate::xml::Document::parse(&out).unwrap();
     let bodies: Vec<_> = doc.descendants().filter(|n| n.tag_name().name() == "body").collect();
     assert_eq!(bodies.len(), 2, "{out}");
     for b in &bodies {
@@ -306,7 +306,7 @@ fn inherited_attributes_keep_their_namespace_where_the_prefix_is_bound_again() {
     let styles = r#"<field id="P" xmlns:q="urn:prototype" q:kind="k" q:own="2" xml:lang="en" w="1in"/>"#;
     let body = r##"<field name="f" xmlns:q="urn:instance" q:own="1" use="#P"/>"##;
     let out = expanded(&form(styles, body));
-    let doc = roxmltree::Document::parse(&out).unwrap();
+    let doc = crate::xml::Document::parse(&out).unwrap();
     let f = doc.descendants().find(|n| n.attribute("name") == Some("f")).unwrap();
     assert_eq!(f.attribute(("urn:instance", "own")), Some("1"), "{out}");
     assert_eq!(f.attribute(("urn:prototype", "own")), Some("2"), "{out}");
@@ -318,7 +318,7 @@ fn inherited_attributes_keep_their_namespace_where_the_prefix_is_bound_again() {
 
 /// `expand` on the template of `xml`, timed.
 fn expand_timed(xml: &str) -> (Option<String>, Vec<String>, std::time::Duration) {
-    let doc = roxmltree::Document::parse(xml).unwrap();
+    let doc = crate::xml::Document::parse(xml).unwrap();
     let template = doc.descendants().find(|n| n.tag_name().name() == "template").unwrap();
     let started = std::time::Instant::now();
     let (out, warnings) = crate::proto::expand(template);
