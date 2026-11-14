@@ -925,10 +925,14 @@ fn extract_page_with(
     recover: bool,
 ) -> Result<(PageText, Option<RecoveredText>), String> {
     // The rules that read the whole document's text need its survey before any of the page's
-    // fonts is decided: once per document, and not counted against the page's own time.
-    if recover && let Some(document) = &settings.recovery_document {
-        document.prepare(pdf, settings);
-    }
+    // fonts is decided: once per document, and not counted against the page's own time. A
+    // survey that panics leaves the document unprepared and costs the page only its recovered
+    // layer: the page is read without recovery, its strict text as a text request reads it.
+    let recover = recover
+        && settings
+            .recovery_document
+            .as_ref()
+            .is_none_or(|document| std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| document.prepare(pdf, settings))).is_ok());
     let started = Started::now();
     let pages = pdf.pages();
     let p = pages.get(page).ok_or("the page could not be read")?;

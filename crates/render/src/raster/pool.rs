@@ -94,9 +94,6 @@ pub(super) struct Shared {
     pub(super) parser: PoolParser,
     #[cfg(all(test, not(target_arch = "wasm32")))]
     pub(super) panic_page: Mutex<Option<usize>>,
-    /// Test hook: Copy with formatting's document survey panics.
-    #[cfg(all(test, not(target_arch = "wasm32")))]
-    pub(super) panic_prepare: std::sync::atomic::AtomicBool,
     #[cfg(all(test, not(target_arch = "wasm32")))]
     pub(super) render_started: std::sync::atomic::AtomicUsize,
     #[cfg(all(test, not(target_arch = "wasm32")))]
@@ -689,15 +686,11 @@ pub(super) fn worker(
                         return;
                     }
                     // A panic in the survey leaves the document unprepared (the next request
-                    // surveys again) and this worker running, its slot cleared as usual.
+                    // surveys again) and this worker running, its slot cleared as usual; the
+                    // page's own extraction surveys again, and if that panics too the page keeps
+                    // its strict text (`extract_page_with`).
                     let settings = worker_settings(&config, &request_cancelled, &shared.recovery);
-                    let _ = catch_unwind(AssertUnwindSafe(|| {
-                        #[cfg(test)]
-                        if shared.panic_prepare.load(Ordering::Acquire) {
-                            panic!("injected survey panic");
-                        }
-                        shared.recovery.prepare(pdf, &settings);
-                    }));
+                    let _ = catch_unwind(AssertUnwindSafe(|| shared.recovery.prepare(pdf, &settings)));
                 }
                 let stage = if *shared_generation { BusyStage::SharedRender } else { BusyStage::Private };
                 if !set_busy_stage(&shared, id, stage) {
