@@ -743,9 +743,22 @@ fn parse_caption(n: Option<XmlNode>, warnings: &mut Vec<String>) -> Option<Capti
         reserve: attr_measure(n, "reserve").filter(|r| *r > 0.0),
         presence: Presence::parse(n.attribute("presence")),
         value: parse_value(child(n, "value"), warnings),
-        font: parse_font(child(n, "font")),
+        font: parse_caption_font(child(n, "font")),
         para: parse_para(child(n, "para")),
     })
+}
+
+/// A caption's `<font>`. A caption without one is drawn in its field's font, colour included
+/// (see `draw_field`). A `<font>` of its own without a `<fill>` draws the caption's text black,
+/// not in the field's colour: "In the absence of a fill element the object is drawn without
+/// any fill, except for text which is drawn with a solid black fill" (XFA 3.3, the fill
+/// element). What else that font leaves out (typeface, size, weight, …) is still the field's.
+fn parse_caption_font(n: Option<XmlNode>) -> FontSpec {
+    let mut spec = parse_font(n);
+    if n.is_some_and(|f| child(f, "fill").is_none()) {
+        spec.color = Some(Color::BLACK);
+    }
+    spec
 }
 
 /// The field's item lists: what is shown (the first `<items>` that is not the saved values,
