@@ -202,6 +202,20 @@ fn disabled_commands_explain_themselves() {
 }
 
 #[test]
+fn import_data_runs_without_form_fields() {
+    let mut app = PdfCraftApp::new();
+    app.set_option("language", "en").unwrap();
+    app.open_bytes("doc.pdf", None, fixture(3)).unwrap();
+    // The picker answers as a cancel: the command must be allowed to get that far at all.
+    app.pick_override = Some(Vec::new());
+    assert!(app.execute("form.import_data"), "Import data must run on a document without form fields (#7259)");
+    assert!(
+        !app.toast.as_ref().is_some_and(|t| t.0.contains("flatten")),
+        "the refusal must not speak for Flatten form fields"
+    );
+}
+
+#[test]
 fn a_tool_chosen_with_no_document_asks_for_one_and_runs_on_it() {
     let dir = std::env::temp_dir().join(format!("pdfcraft-tool-open-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
