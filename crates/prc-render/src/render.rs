@@ -93,7 +93,7 @@ pub(crate) fn vertices(meshes: &[WorldMesh]) -> impl Iterator<Item = [f64; 3]> +
 }
 
 /// Whether triangle `t` of `m` is fully transparent, so [`render`] does not draw it.
-fn invisible(m: &WorldMesh, t: usize) -> bool {
+pub(crate) fn invisible(m: &WorldMesh, t: usize) -> bool {
     m.colour_of(t).is_some_and(|c| c[3] == 0)
 }
 
@@ -367,7 +367,7 @@ fn stored_normals(mesh: &TriangleMesh, t: usize) -> Option<[Option<[f64; 3]>; 3]
 }
 
 /// The three corners of a triangle, or `None` when one is missing or not finite.
-fn corners(mesh: &TriangleMesh, tri: &[u32; 3]) -> Option<[[f64; 3]; 3]> {
+pub(crate) fn corners(mesh: &TriangleMesh, tri: &[u32; 3]) -> Option<[[f64; 3]; 3]> {
     let mut out = [[0.0; 3]; 3];
     for (slot, &i) in out.iter_mut().zip(tri) {
         let p = *mesh.positions.get(usize::try_from(i).ok()?)?;

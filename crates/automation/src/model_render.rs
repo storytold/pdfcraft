@@ -21,6 +21,15 @@ const DEFAULT_DIRECTION: [f64; 3] = [-1.0, 1.0, -1.0];
 
 impl Automation {
     pub(crate) fn model_render(&mut self, a: &Args) -> Result<Vec<Content>> {
+        let view = self.model_view(a)?;
+        let options = RenderOptions { width: view.width, height: view.height, ..RenderOptions::default() };
+        let image = render(&view.meshes, &view.camera, &options).map_err(failed)?;
+        let data = encode_png(image.width, image.height, &premultiplied(image.rgba))?;
+        Ok(vec![Content::Png { data, width: image.width, height: image.height }])
+    }
+
+    /// The model `a` names, assembled, and the camera and image size `model_render` draws it with.
+    pub(crate) fn model_view(&mut self, a: &Args) -> Result<ModelView> {
         let page = self.page(a)?;
         let width = side(a, "width")?;
         let height = side(a, "height")?;
@@ -51,10 +60,16 @@ impl Automation {
                 Camera::fit_meshes(&meshes, direction, up_for(direction), perspective, aspect).map_err(failed)?
             }
         };
-        let image = render(&meshes, &camera, &RenderOptions { width, height, ..RenderOptions::default() }).map_err(failed)?;
-        let data = encode_png(image.width, image.height, &premultiplied(image.rgba))?;
-        Ok(vec![Content::Png { data, width: image.width, height: image.height }])
+        Ok(ModelView { meshes, camera, width, height })
     }
+}
+
+/// A page's model as `model_render` sees it.
+pub(crate) struct ModelView {
+    pub(crate) meshes: Vec<WorldMesh>,
+    pub(crate) camera: Camera,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
 }
 
 fn side(a: &Args, key: &str) -> Result<u32> {

@@ -32,6 +32,19 @@ fn pages(what: &str) -> Value {
     json!({ "type": "array", "items": { "type": "integer", "minimum": 1 }, "minItems": 1, "description": format!("1-based page numbers {what}.") })
 }
 
+/// The `orbit` moves `model_render` and `model_pick` share.
+fn model_orbit() -> Value {
+    json!({ "type": "object", "description": "A viewer's orbit moves, applied in the order of these keys; all optional. Mutually exclusive with direction.", "properties": {
+        "view": { "type": "string", "enum": ["iso", "front", "right", "top", "back"], "description": "The view to start from (default iso)." },
+        "up": { "type": "string", "enum": ["+x", "+y", "+z", "-x", "-y", "-z"], "description": "The model axis that appears upward (default +z)." },
+        "front": { "type": "string", "enum": ["+x", "+y", "+z", "-x", "-y", "-z"], "description": "The axis the Front view looks along, perpendicular to up (default +y, or -z when y is up)." },
+        "turn": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2, "description": "[yaw, pitch] in degrees, pitch looking down (default [0, 0])." },
+        "zoom": { "type": "number", "exclusiveMinimum": 0, "description": "A factor on the fitted view (default 1); the result is held within 0.05 to 50." },
+        "zoom_at": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2, "description": "The picture point the zoom keeps still, [right, up] in picture heights from the centre (default [0, 0]). Requires zoom." },
+        "pan": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2, "description": "Moves the target [right, up] in model radii, so the model moves the other way (default [0, 0]); each held within 1000." }
+    }, "additionalProperties": false })
+}
+
 /// The Search & Redact pattern ids, from the engine's registry, so the advertised schema cannot
 /// drift from the patterns the runtime accepts.
 fn pattern_enum() -> Value {
@@ -224,16 +237,18 @@ pub fn tools() -> Vec<ToolDef> {
                 "width": { "type": "integer", "minimum": 1, "maximum": 4096 }, "height": { "type": "integer", "minimum": 1, "maximum": 4096 },
                 "direction": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3, "description": "The view direction from the eye towards the model (default [-1, 1, -1]). Mutually exclusive with orbit." },
                 "perspective": { "type": "boolean" },
-                "orbit": { "type": "object", "description": "A viewer's orbit moves, applied in the order of these keys; all optional. Mutually exclusive with direction.", "properties": {
-                    "view": { "type": "string", "enum": ["iso", "front", "right", "top", "back"], "description": "The view to start from (default iso)." },
-                    "up": { "type": "string", "enum": ["+x", "+y", "+z", "-x", "-y", "-z"], "description": "The model axis that appears upward (default +z)." },
-                    "front": { "type": "string", "enum": ["+x", "+y", "+z", "-x", "-y", "-z"], "description": "The axis the Front view looks along, perpendicular to up (default +y, or -z when y is up)." },
-                    "turn": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2, "description": "[yaw, pitch] in degrees, pitch looking down (default [0, 0])." },
-                    "zoom": { "type": "number", "exclusiveMinimum": 0, "description": "A factor on the fitted view (default 1); the result is held within 0.05 to 50." },
-                    "zoom_at": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2, "description": "The picture point the zoom keeps still, [right, up] in picture heights from the centre (default [0, 0]). Requires zoom." },
-                    "pan": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2, "description": "Moves the target [right, up] in model radii, so the model moves the other way (default [0, 0]); each held within 1000." }
-                }, "additionalProperties": false }
+                "orbit": model_orbit()
             }), &["doc", "page"])),
+        t("model_pick", "Pick a point on a 3D model", "Find what of a page's 3D model lies under a position of the picture model_render draws with the same model, width, height, direction or orbit, and perspective. at is [x, y] in pixels from the picture's top left (a pixel's centre is its index plus 0.5), from 0 up to the width and height. Gives { hit: { mesh, triangle, point, normal, distance } }, mesh and triangle 1-based among the placed model's meshes and that mesh's triangles, point and normal in model coordinates, distance along the pick ray (from the eye in perspective, from the picture plane in orthographic); hit is null over the background. Does not modify the document.")
+            .ro()
+            .with(schema(json!({ "doc": doc(), "page": { "type": "integer", "minimum": 1 }, "model": { "type": "integer", "minimum": 1 },
+                "at": { "type": "array", "items": { "type": "number", "minimum": 0 }, "minItems": 2, "maxItems": 2, "description": "[x, y] in pixels from the picture's top left." },
+                "width": { "type": "integer", "minimum": 1, "maximum": 4096, "description": "The picture's width, as given to model_render (default 512)." },
+                "height": { "type": "integer", "minimum": 1, "maximum": 4096, "description": "The picture's height, as given to model_render (default 512)." },
+                "direction": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3, "description": "The view direction, as given to model_render (default [-1, 1, -1]). Mutually exclusive with orbit." },
+                "perspective": { "type": "boolean", "description": "As given to model_render (default true)." },
+                "orbit": model_orbit()
+            }), &["doc", "page", "at"])),
         t("object_list", "List editable objects", "List existing paragraphs, Image/Form artwork and added content once, with source kind/index references, displayed rectangles and document generation. Indexes change when content changes; use generation in object_move to reject stale references.")
             .ro().with(schema(json!({"doc":doc(),"page":{"type":"integer","minimum":1}}), &["doc","page"])),
         t("object_move", "Move objects together", "Atomically translate 1–1000 mixed references from object_list (or with all: true every object on the page) by [dx, dy] in displayed points (right/down). Preserves glyph codes, fonts, image data and relative spacing; success is one undo step. Text used as a clipping path and vertical text are refused. A bad/stale reference refuses the entire move.")

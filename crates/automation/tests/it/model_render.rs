@@ -134,6 +134,13 @@ fn a_model_outside_the_root_is_never_opened_to_be_drawn() {
     assert!(a.call("model_render", &json!({ "doc": doc, "page": 1 })).is_ok());
 }
 
+fn json_of(mut out: Vec<Content>) -> Value {
+    match out.remove(0) {
+        Content::Json(v) => v,
+        other => panic!("expected JSON: {other:?}"),
+    }
+}
+
 #[test]
 fn an_orbit_frames_the_model_from_a_named_view_and_its_moves() {
     let (_dir, mut a) = setup("orbit");
@@ -215,6 +222,72 @@ fn zoom_at_keeps_the_point_under_it_still() {
             assert!((moved - sign * 9.6).abs() <= 1.5, "at {at}: {was} moved to {now}");
         }
     }
+}
+
+#[test]
+fn a_pick_finds_the_model_exactly_where_the_picture_shows_it() {
+    let (_dir, mut a) = setup("pick");
+    let doc = open(&mut a, "prc.pdf");
+    let view = json!({ "doc": doc, "page": 1, "width": 64, "height": 48, "direction": [0, 0, -1], "perspective": false });
+    let Content::Png { data, .. } = &a.call("model_render", &view).unwrap()[0] else { panic!("expected a PNG") };
+    let mut drawn = 0;
+    for y in (0..48).step_by(3) {
+        for x in (0..64).step_by(3) {
+            let mut args = view.clone();
+            args["at"] = json!([x as f64 + 0.5, y as f64 + 0.5]);
+            let hit = json_of(a.call("model_pick", &args).unwrap());
+            let shown = rgb(data, x, y) != [255, 255, 255];
+            assert_eq!(!hit["hit"].is_null(), shown, "pixel {x}, {y}: {hit}");
+            drawn += usize::from(shown);
+        }
+    }
+    assert!(drawn > 20, "the triangle fills part of the picture");
+    let mut centre = view.clone();
+    centre["at"] = json!([32.0, 24.0]);
+    let hit = json_of(a.call("model_pick", &centre).unwrap())["hit"].clone();
+    assert_eq!((hit["mesh"].as_u64(), hit["triangle"].as_u64()), (Some(1), Some(1)), "{hit}");
+    assert!(hit["point"][2].as_f64().unwrap().abs() < 1e-9, "the triangle lies at z = 0: {hit}");
+    assert_eq!(hit["normal"], json!([0.0, 0.0, 1.0]), "it faces +z");
+    // The default perspective view meets the model too.
+    let hit = json_of(a.call("model_pick", &json!({ "doc": doc, "page": 1, "at": [256, 256] })).unwrap());
+    assert!(!hit["hit"].is_null(), "{hit}");
+}
+
+#[test]
+fn a_pick_through_an_orbit_meets_what_that_orbit_draws() {
+    let (_dir, mut a) = setup("pick-orbit");
+    let doc = open(&mut a, "prc.pdf");
+    let orbit = json!({ "view": "top", "turn": [20, 10], "zoom": 1.5, "pan": [0.1, 0] });
+    let data = orbit_picture(&mut a, doc, true, &orbit);
+    let mut drawn = 0;
+    for y in (0..48).step_by(3) {
+        for x in (0..64).step_by(3) {
+            let args = json!({ "doc": doc, "page": 1, "width": 64, "height": 48, "orbit": orbit, "at": [x as f64 + 0.5, y as f64 + 0.5] });
+            let hit = json_of(a.call("model_pick", &args).unwrap());
+            let shown = rgb(&data, x, y) != [255, 255, 255];
+            assert_eq!(!hit["hit"].is_null(), shown, "pixel {x}, {y}: {hit}");
+            drawn += usize::from(shown);
+        }
+    }
+    assert!(drawn > 20, "the orbited triangle fills part of the picture");
+    let both = json!({ "doc": doc, "page": 1, "at": [0, 0], "orbit": {}, "direction": [0, 0, -1] });
+    assert!(a.call("model_pick", &both).unwrap_err().to_string().contains("orbit must"));
+}
+
+#[test]
+fn a_wrong_pick_position_is_a_clear_error() {
+    let (_dir, mut a) = setup("pick-bad");
+    let doc = open(&mut a, "prc.pdf");
+    for at in [json!(null), json!([1]), json!([1, 2, 3]), json!([-1, 0]), json!(["1", 0]), json!([65, 0]), json!([0, 48.5])] {
+        let mut args = json!({ "doc": doc, "page": 1, "width": 64, "height": 48 });
+        if !at.is_null() {
+            args["at"] = at.clone();
+        }
+        let err = a.call("model_pick", &args).unwrap_err().to_string();
+        assert!(err.contains("at must") || err.ends_with("missing argument at"), "{at}: {err}");
+    }
+    let err = a.call("model_pick", &json!({ "doc": doc, "page": 1, "at": [0, 0], "model": 2 })).unwrap_err().to_string();
+    assert!(err.contains("has 1 3D models, not 2"), "{err}");
 }
 
 #[test]
