@@ -6027,8 +6027,8 @@ milestone = "M8"
 status = "shipped"
 commands = ["protect.remove_hidden"]
 tools = ["doc_hidden_info", "doc_remove_hidden"]
-evidence = ["crates/redact/src/tests.rs::hidden_information_is_counted_and_removed", "crates/ui-egui/tests/it/redact.rs::removing_hidden_information_and_sanitizing", "crates/automation/tests/it/automation.rs::removing_hidden_information_through_tools", "crates/redact/src/tests.rs::removed_links_and_comments_leave_the_structure_tree_and_the_saved_file"]
-notes = "metadata, attachments, comments, form fields (flattened), hidden text, hidden layers, bookmarks, links/actions/scripts (with the structure tree's references to removed links and comments, #2447), private data; overlapping objects and cropped content pending"
+evidence = ["crates/redact/src/tests.rs::hidden_information_is_counted_and_removed", "crates/ui-egui/tests/it/redact.rs::removing_hidden_information_and_sanitizing", "crates/automation/tests/it/automation.rs::removing_hidden_information_through_tools", "crates/redact/src/tests.rs::removed_links_and_comments_leave_the_structure_tree_and_the_saved_file", "crates/redact/src/tests.rs::page_thumbnails_go_with_private_data_and_sanitize"]
+notes = "metadata, attachments, comments, form fields (flattened), hidden text, hidden layers, bookmarks, links/actions/scripts (with the structure tree's references to removed links and comments, #2447), private data (page thumbnails included, #6749); overlapping objects and cropped content pending"
 
 [[feature]]
 id = "protect.sanitize"

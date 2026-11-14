@@ -4773,6 +4773,74 @@ fn hidden_information_is_counted_and_removed() {
     assert!(shown, "the field's value stays visible as page content");
 }
 
+/// A page thumbnail (`/Thumb`) is a picture of the page as it was. Remove Hidden Information's
+/// private data takes it, so Sanitize does too, and a full save no longer holds it (#6749).
+#[test]
+fn page_thumbnails_go_with_private_data_and_sanitize() {
+    use crate::sanitize::{Hidden, remove_hidden, sanitize, scan_only};
+    const MARKER: &[u8; 16] = b"F5-THUMB-PREVIEW";
+    let thumbed = || {
+        let thumb = stream("/Width 16 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", MARKER);
+        let mut doc = one_page(b"BT /F1 10 Tf 10 10 Td (Visible) Tj ET", "", vec![thumb]);
+        let page = pdfcraft_model::pages(&doc)[0].obj;
+        doc.update_dict(page, |d| d.set(b"Thumb".to_vec(), Object::Ref(ObjRef::new(7, 0)))).unwrap();
+        // A collection item's field may be named Thumb too: that is the producer's data, not a
+        // page thumbnail, and stays.
+        let names =
+            pdfcraft_cos::Lexer::new(b"<< /EmbeddedFiles << /Names [(a.txt) << /Type /Filespec /F (a.txt) /CI << /Thumb (KEEP) >> >>] >> >>", 0)
+                .object()
+                .unwrap();
+        doc.update_dict(doc.root().unwrap(), |d| d.set(b"Names".to_vec(), names)).unwrap();
+        doc
+    };
+    let item_keeps_its_field = |doc: &Document| {
+        let cat = doc.get(doc.root().unwrap()).as_dict().cloned().unwrap();
+        let files = cat.get(b"Names").and_then(Object::as_dict).and_then(|n| n.get(b"EmbeddedFiles")).and_then(Object::as_dict).cloned().unwrap();
+        let spec = files.get(b"Names").and_then(Object::as_array).and_then(|a| a.get(1)).and_then(Object::as_dict).cloned().unwrap();
+        spec.get(b"CI").and_then(Object::as_dict).is_some_and(|ci| ci.contains(b"Thumb"))
+    };
+    let holds = |doc: &Document| {
+        let bytes = write_full(doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
+        bytes.windows(MARKER.len()).any(|w| w == MARKER)
+    };
+    assert!(holds(&thumbed()), "the control: a full save keeps the thumbnail");
+
+    let mut doc = thumbed();
+    assert_eq!(scan_only(&doc, &[Hidden::PrivateData]), [(Hidden::PrivateData, 1)]);
+    assert_eq!(remove_hidden(&mut doc, &[Hidden::PrivateData]).unwrap(), [(Hidden::PrivateData, 1)]);
+    assert!(!pdfcraft_model::pages(&doc)[0].dict.contains(b"Thumb"));
+    assert!(!holds(&doc), "private data leaves no thumbnail in the saved file");
+    assert!(item_keeps_its_field(&doc), "a collection item's Thumb field is not a page thumbnail");
+
+    let mut doc = thumbed();
+    sanitize(&mut doc).unwrap();
+    assert!(!pdfcraft_model::pages(&doc)[0].dict.contains(b"Thumb"));
+    assert!(!holds(&doc), "Sanitize leaves no thumbnail in the saved file");
+}
+
+/// A page the page walk does not reach (outside the tree, named only by the open action's
+/// destination) is still written by a full save, and so is its thumbnail: private data takes that
+/// one too (#6749).
+#[test]
+fn a_page_outside_the_page_tree_loses_its_thumbnail() {
+    use crate::sanitize::{Hidden, remove_hidden, scan_only};
+    const MARKER: &[u8; 16] = b"F5-ORPHAN-THUMB!";
+    let thumb = stream("/Width 16 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", MARKER);
+    let orphan = b"<< /Type /Page /MediaBox [0 0 300 300] /Thumb 7 0 R >>".to_vec();
+    let mut doc = one_page(b"BT /F1 10 Tf 10 10 Td (Visible) Tj ET", "", vec![thumb, orphan]);
+    doc.update_dict(doc.root().unwrap(), |d| d.set(b"OpenAction".to_vec(), Object::Array(vec![Object::Ref(ObjRef::new(8, 0)), Object::name("Fit")])))
+        .unwrap();
+    assert_eq!(pdfcraft_model::pages(&doc).len(), 1, "the walk does not reach the orphan");
+    let holds = |doc: &Document| {
+        let bytes = write_full(doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
+        bytes.windows(MARKER.len()).any(|w| w == MARKER)
+    };
+    assert!(holds(&doc), "the control: a full save keeps the orphan page and its thumbnail");
+    assert_eq!(scan_only(&doc, &[Hidden::PrivateData]), [(Hidden::PrivateData, 1)]);
+    assert_eq!(remove_hidden(&mut doc, &[Hidden::PrivateData]).unwrap(), [(Hidden::PrivateData, 1)]);
+    assert!(!holds(&doc), "private data leaves no thumbnail in the saved file");
+}
+
 /// A one-page document whose catalog names an outline root (object 5). `items` are the outline
 /// items, objects 6 onward.
 fn outlined_document(items: Vec<Vec<u8>>) -> Document {
