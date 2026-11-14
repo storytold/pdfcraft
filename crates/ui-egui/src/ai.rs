@@ -33,9 +33,9 @@ enum Msg {
     Progress(Event),
     /// GGUF + tokenizer are on disk; carries the model id.
     Downloaded(Result<String, AiError>),
-    /// A local model finished loading into memory.
+    /// A local model finished loading into memory — carries its registry id.
     #[cfg(feature = "ai-local")]
-    Loaded(Result<Box<dyn Provider>, AiError>),
+    Loaded(Result<(String, Box<dyn Provider>), AiError>),
     /// Page text extraction progress (done, total).
     Extracting(usize, usize),
     /// One page of the document translated.
@@ -307,7 +307,7 @@ impl Ai {
             self.spawn(ctx, move |tx| {
                 let gguf = dir.join(entry.file);
                 let tok = fetch::tokenizer_path(entry, &dir);
-                let r = craft_ai::local::LocalGguf::load(entry, &gguf, &tok).map(|m| Box::new(m) as Box<dyn Provider>);
+                let r = craft_ai::local::LocalGguf::load(entry, &gguf, &tok).map(|m| (id.clone(), Box::new(m) as Box<dyn Provider>));
                 let _ = tx.send(Msg::Loaded(r));
             });
         }
@@ -419,10 +419,11 @@ pub(crate) fn tick(app: &mut PdfCraftApp, ctx: &egui::Context) {
             Msg::Progress(Event::Done { verified }) => {
                 ai.note(if verified { "Checksum verified" } else { "Download finished (no checksum available — unverified)" });
             }
-            Msg::Downloaded(Ok(id)) => {
+            Msg::Downloaded(Ok(_id)) => {
                 ai.busy = None;
                 ai.dl = None;
-                ai.local_ready = Some(id.clone());
+                // `local_ready` means *loaded* — a download only makes the
+                // model loadable; `downloaded_ids()` reflects disk state.
                 ai.note("Download complete — ready to load".to_string());
             }
             Msg::Downloaded(Err(e)) => {
@@ -431,8 +432,9 @@ pub(crate) fn tick(app: &mut PdfCraftApp, ctx: &egui::Context) {
                 ai.note(format!("Download failed: {e}"));
             }
             #[cfg(feature = "ai-local")]
-            Msg::Loaded(Ok(p)) => {
+            Msg::Loaded(Ok((id, p))) => {
                 ai.busy = None;
+                ai.local_ready = Some(id);
                 ai.note(format!("Local model ready: {} — nothing leaves this PC", p.name()));
                 ai.provider = Some(p);
             }
@@ -519,6 +521,10 @@ pub(crate) fn translate_active(app: &mut PdfCraftApp, ctx: &egui::Context) {
         let grammar = craft_ai::PdfGrammar;
         let mut any_text = false;
         for (page, text) in &texts {
+            if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                let _ = tx.send(Msg::Translated(Ok(provider)));
+                return;
+            }
             if text.trim().is_empty() {
                 continue;
             }

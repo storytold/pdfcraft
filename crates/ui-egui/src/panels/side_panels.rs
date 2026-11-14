@@ -384,7 +384,10 @@ fn open_panes(app: &PdfCraftApp) -> Vec<Pane> {
         open.push(Pane::Tools);
     }
     // Home and Combine files have no side panel, except the AI tab's provider setup; the choice is kept for the next document.
-    let standalone_ai = cfg!(not(target_arch = "wasm32")) && app.right == Some(crate::RightPanel::Ai);
+    #[cfg(not(target_arch = "wasm32"))]
+    let standalone_ai = app.right == Some(crate::RightPanel::Ai);
+    #[cfg(target_arch = "wasm32")]
+    let standalone_ai = false;
     if app.right.is_some() && (app.active.is_some() || standalone_ai) {
         open.push(Pane::Side);
     }
