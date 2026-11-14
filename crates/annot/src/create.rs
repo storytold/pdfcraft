@@ -2,7 +2,8 @@ use super::draw::draw_appearance;
 use super::lookup::{annot_dict, annot_ref, annots, change_annots, fill_sign_shape, page_ref};
 use super::modify::{free_text_da, n, refuse_undrawable_thai, rich_text, set_part_keys, shape_text_box};
 use super::types::{
-    FLAG_NO_ROTATE, FLAG_NO_ZOOM, FLAG_PRINT, LineEnding, Markup, Meta, NOTE_SIZE, NewAnnotation, OverlayLook, Rgb, Shape, StampGroup, Style,
+    AnnotFont, FLAG_NO_ROTATE, FLAG_NO_ZOOM, FLAG_PRINT, LineEnding, Markup, Meta, NOTE_SIZE, NewAnnotation, OverlayLook, Rgb, Shape, StampGroup,
+    Style,
 };
 use super::{AnnotError, Dict, Document, ObjRef, Object, PdfString, appearance};
 
@@ -392,26 +393,7 @@ pub fn add_annotation(doc: &mut Document, new: &NewAnnotation, meta: &Meta) -> R
             let list = contours.iter().filter(|c| c.len() > 2).map(|c| num_array(&c.iter().flat_map(|p| [p[0], p[1]]).collect::<Vec<_>>())).collect();
             d.set(b"PCOutline".to_vec(), Object::Array(list));
         }
-        Shape::CustomStamp { name, picture, image, size, line, .. } => {
-            let clean: String = name.chars().filter(char::is_ascii_alphanumeric).collect();
-            d.set(b"Name".to_vec(), Object::name(&format!("PCCustom{clean}")));
-            d.set(b"PCPicture".to_vec(), Object::Ref(*picture));
-            d.set(b"PCPictureImage".to_vec(), Object::Bool(*image));
-            d.set(b"PCPictureSize".to_vec(), num_array(&[size.0, size.1]));
-            let lined = line.as_deref().map(str::trim).filter(|l| !l.is_empty());
-            if let Some(l) = lined {
-                d.set(b"PCByLine".to_vec(), PdfString::text(l));
-            }
-            // An image signature's rectangle is in user space; on a turned page its appearance is
-            // turned back (see `appearance::build`), so it reads upright as displayed. A stamp
-            // with a line is laid out in the displayed box, so it needs the turn too.
-            if lined.is_some() || (*image && matches!(clean.as_str(), "Signature" | "Initials")) {
-                let turn = pdfcraft_model::pages(doc).get(new.page).map_or(0, |p| p.rotation(doc));
-                if turn != 0 {
-                    d.set(b"PCPictureRotate".to_vec(), Object::Int(turn));
-                }
-            }
-        }
+        Shape::CustomStamp { .. } => set_custom_stamp_properties(doc, &mut d, new.page, &new.shape),
         Shape::Ink { strokes } | Shape::FreehandHighlight { strokes } | Shape::Signature { strokes } => {
             d.set(b"C".to_vec(), rgb(style.color));
             let list = strokes.iter().filter(|s| !s.is_empty()).map(|s| num_array(&s.concat())).collect();
@@ -495,7 +477,17 @@ pub fn add_annotation(doc: &mut Document, new: &NewAnnotation, meta: &Meta) -> R
                 d.set(b"IT".to_vec(), Object::name("FreeTextTypeWriter"));
             }
             let size = if font_size.is_finite() && *font_size > 0.0 { font_size.clamp(1.0, 400.0) } else { 12.0 };
-            d.set(b"DA".to_vec(), free_text_da(style.color, style.border_color, size));
+            let font = if new
+                .contents
+                .chars()
+                .any(|c| !pdfcraft_fonts::win_ansi_encodable(c) && !matches!(c, '\n' | '\r') && pdfcraft_fonts::fallback_has_char(c))
+                && pdfcraft_fonts::embedding::ensure_fallback_font(doc).is_ok()
+            {
+                AnnotFont::Inter
+            } else {
+                AnnotFont::Helvetica
+            };
+            d.set(b"DA".to_vec(), free_text_da(style.color, style.border_color, size, font));
             d.set(b"Q".to_vec(), Object::Int(0));
             if let Some(f) = style.fill {
                 d.set(b"C".to_vec(), rgb(f));
@@ -582,6 +574,28 @@ fn set_redaction_properties(dict: &mut Dict, style: &Style, quads: &[[f64; 8]], 
         dict.set(b"Q".to_vec(), Object::Int(look.align.min(2) as i64));
         if look.repeat {
             dict.set(b"Repeat".to_vec(), Object::Bool(true));
+        }
+    }
+}
+
+fn set_custom_stamp_properties(doc: &Document, d: &mut Dict, page: usize, shape: &Shape) {
+    let Shape::CustomStamp { name, picture, image, size, line, .. } = shape else { return };
+    let clean: String = name.chars().filter(char::is_ascii_alphanumeric).collect();
+    d.set(b"Name".to_vec(), Object::name(&format!("PCCustom{clean}")));
+    d.set(b"PCPicture".to_vec(), Object::Ref(*picture));
+    d.set(b"PCPictureImage".to_vec(), Object::Bool(*image));
+    d.set(b"PCPictureSize".to_vec(), num_array(&[size.0, size.1]));
+    let lined = line.as_deref().map(str::trim).filter(|l| !l.is_empty());
+    if let Some(l) = lined {
+        d.set(b"PCByLine".to_vec(), PdfString::text(l));
+    }
+    // An image signature's rectangle is in user space; on a turned page its appearance is
+    // turned back (see `appearance::build`), so it reads upright as displayed. A stamp
+    // with a line is laid out in the displayed box, so it needs the turn too.
+    if lined.is_some() || (*image && matches!(clean.as_str(), "Signature" | "Initials")) {
+        let turn = pdfcraft_model::pages(doc).get(page).map_or(0, |p| p.rotation(doc));
+        if turn != 0 {
+            d.set(b"PCPictureRotate".to_vec(), Object::Int(turn));
         }
     }
 }

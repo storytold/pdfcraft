@@ -14,7 +14,7 @@
 //! (`pdfcraft_fonts::shaped_text`, the writer Add text uses); lines break at that face's
 //! standard-14 widths and the Thai face's shaped advances (no other font program is bundled).
 
-use pdfcraft_cos::{Dict, Object, PdfString, Stream};
+use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString, Stream};
 use pdfcraft_fonts::shaped_text;
 use pdfcraft_fonts::{first_undrawable, literal, win_ansi, wrap_with};
 
@@ -49,7 +49,7 @@ pub fn text_lines_height(lines: &[String], size: f64) -> f64 {
     lines.len().max(1) as f64 * size * 1.2 + (up - 0.9 + down - 0.3) * size
 }
 
-use crate::{Document, NOTE_SIZE, Rgb, n};
+use crate::{AnnotFont, NOTE_SIZE, Rgb, n};
 
 mod symbols;
 
@@ -416,16 +416,17 @@ pub fn da_border(d: &Dict) -> Option<Rgb> {
     col
 }
 
-/// `/DA` of a text box: (text colour, font size). Defaults to black 12 pt: a `Tf` without a
-/// usable size (missing, zero, negative or not a number) keeps 12 pt, and sizes past 400 pt are
-/// capped. A text box has no automatic size, so a zero size, which means auto-size in a form
-/// field's `/DA` (ISO 32000-2 §12.7.4.3), is the default here. An operand that isn't a finite
+/// `/DA` of a text box: (text colour, font size, font). Defaults to black 12 pt Helvetica: a `Tf`
+/// without a usable size (missing, zero, negative or not a number) keeps 12 pt, and sizes past
+/// 400 pt are capped. A text box has no automatic size, so a zero size, which means auto-size in a
+/// form field's `/DA` (ISO 32000-2 §12.7.4.3), is the default here. An operand that isn't a finite
 /// number (`NaN`, `inf`, which Rust's parser would otherwise accept) is ignored with its operator.
-pub fn parse_da(d: &Dict) -> (Rgb, f64) {
+pub fn parse_da(d: &Dict) -> (Rgb, f64, AnnotFont) {
     let da = d.get(b"DA").and_then(|o| o.as_string()).map(|s| String::from_utf8_lossy(&s.bytes).into_owned()).unwrap_or_default();
     let toks: Vec<&str> = da.split_whitespace().collect();
     let mut col = [0.0; 3];
     let mut size = 12.0;
+    let mut font = AnnotFont::Helvetica;
     let num = |i: usize| toks.get(i).and_then(|t| t.parse::<f64>().ok()).filter(|v| v.is_finite());
     for (i, t) in toks.iter().enumerate() {
         match *t {
@@ -443,11 +444,16 @@ pub fn parse_da(d: &Dict) -> (Rgb, f64) {
                 if let Some(s) = num(i - 1).filter(|s| *s > 0.0) {
                     size = s;
                 }
+                if i >= 2
+                    && let Some(name) = toks.get(i - 2)
+                {
+                    font = AnnotFont::from_resource(name.trim_start_matches('/'));
+                }
             }
             _ => {}
         }
     }
-    (col.map(|x| x.clamp(0.0, 1.0)), size.min(400.0))
+    (col.map(|x| x.clamp(0.0, 1.0)), size.min(400.0), font)
 }
 
 /// How opaque a comment's parts are drawn, 0–1: its line or border (`/CA`); its fill or
@@ -550,8 +556,7 @@ pub(crate) fn inset(d: &Dict) -> Option<[f64; 4]> {
 pub fn undrawable_text(d: &Dict) -> Option<(&'static str, char)> {
     let text = |key: &[u8]| d.get(key).and_then(Object::as_string).map(PdfString::to_text);
     let (what, text) = match d.name(b"Subtype")? {
-        // A text box draws Thai too.
-        b"FreeText" => return Some(("the comment's text", shaped_text::first_undrawable(&text(b"Contents")?)?)),
+        b"FreeText" => ("the comment's text", text(b"Contents")?),
         b"Line" if !d.contains(b"PCMeasureValue") => ("the line's caption", line_caption(d)?),
         b"Line" | b"PolyLine" | b"Polygon" => ("the measurement label", text(b"PCMeasureValue")?),
         b"Stamp" if matches!(d.get(b"PCStamp"), Some(Object::Bool(true))) || d.contains(b"PCPicture") => {
@@ -561,7 +566,25 @@ pub fn undrawable_text(d: &Dict) -> Option<(&'static str, char)> {
         b"Redact" => ("the redaction's overlay text", text(b"OverlayText")?),
         _ => return None,
     };
-    Some((what, first_undrawable(&text)?))
+    if d.name(b"Subtype") == Some(b"FreeText") {
+        let (_, _, annot_font) = parse_da(d);
+        let find_undrawable = |line: &str| {
+            let thai_fails = line.chars().any(shaped_text::is_thai) && shaped_text::thai_pieces(line).is_err();
+            line.chars().find(|c| {
+                if shaped_text::is_thai(*c) {
+                    thai_fails
+                } else if annot_font == AnnotFont::Inter {
+                    !pdfcraft_fonts::win_ansi_encodable(*c) && !pdfcraft_fonts::fallback_has_char(*c)
+                } else {
+                    !pdfcraft_fonts::win_ansi_encodable(*c)
+                }
+            })
+        };
+        let c = text.split(['\n', '\r']).find_map(find_undrawable)?;
+        Some((what, c))
+    } else {
+        Some((what, first_undrawable(&text)?))
+    }
 }
 
 /// `/Font` resources naming `/Helv`: standard Helvetica with WinAnsiEncoding.
@@ -1399,6 +1422,54 @@ fn draw_stamp(context: &AppearanceContext<'_>, mut drawing: AppearanceDrawing) -
     Some(form(rect, c.as_bytes(), res))
 }
 
+/// The object reference and parsed metrics for the fallback CIDFont (/PCFallback) if `annot_font` is Inter.
+pub(crate) fn fallback_font_info(doc: Option<&Document>, annot_font: AnnotFont) -> Option<(ObjRef, pdfcraft_fonts::pdf::Metrics)> {
+    if annot_font != AnnotFont::Inter {
+        return None;
+    }
+    let doc = doc?;
+    let r = pdfcraft_fonts::embedding::fallback_font_ref(doc).or_else(|| {
+        doc.scan_objects().find_map(|(r, obj)| {
+            if let Object::Dict(fd) = obj.as_ref()
+                && fd.get(b"PCFallback") == Some(&Object::Bool(true))
+            {
+                return Some(r);
+            }
+            None
+        })
+    })?;
+    let fd = doc.get(r);
+    let fd = fd.as_dict()?;
+    Some((r, pdfcraft_fonts::pdf::Metrics::from_dict(doc, fd)))
+}
+
+/// Encode string `s` using the fallback font's metrics, replacing tabs with spaces and missing glyphs with '?'.
+pub(crate) fn encode_fallback(metrics: &pdfcraft_fonts::pdf::Metrics, s: &str) -> Vec<u8> {
+    let q_code = metrics.encode("?").unwrap_or_default();
+    let space_code = metrics.encode(" ").unwrap_or_default();
+    let mut out = Vec::with_capacity(s.len() * 2);
+    let mut buf = [0u8; 4];
+    for ch in s.chars() {
+        if ch == '\t' {
+            out.extend_from_slice(&space_code);
+        } else if let Some(code) = metrics.encode(ch.encode_utf8(&mut buf)) {
+            out.extend_from_slice(&code);
+        } else {
+            out.extend_from_slice(&q_code);
+        }
+    }
+    out
+}
+
+/// Calculate text advance width in `annot_font` at `sz` points, using fallback metrics when present.
+pub(crate) fn measure_text(annot_font: AnnotFont, fallback_metrics: Option<&pdfcraft_fonts::pdf::Metrics>, s: &str, sz: f64) -> f64 {
+    if let Some(metrics) = fallback_metrics {
+        let codes = encode_fallback(metrics, s);
+        return metrics.codes(&codes).into_iter().map(|(c, _)| metrics.width(c)).sum::<f64>() * sz;
+    }
+    annot_font.text_width(s, sz)
+}
+
 /// The oval or circle (`shape`) around a text box whose whole box is `full`: its background
 /// and border go into `c`; returns the text box inside it.
 #[allow(clippy::too_many_arguments)]
@@ -1441,6 +1512,25 @@ fn shaped_border(
     Some(rect)
 }
 
+fn free_text_fonts(annot_font: AnnotFont, fallback_ref: Option<ObjRef>, face: pdfcraft_fonts::Std14) -> (String, Dict) {
+    if annot_font == AnnotFont::Inter {
+        let mut fonts = Dict::new();
+        if let Some(r) = fallback_ref {
+            fonts.set(AnnotFont::Inter.resource().as_bytes().to_vec(), Object::Ref(r));
+        } else {
+            let mut f = Dict::new();
+            f.set(b"Type".to_vec(), Object::name("Font"));
+            f.set(b"Subtype".to_vec(), Object::name("Type1"));
+            f.set(b"BaseFont".to_vec(), Object::name("Inter-Regular"));
+            f.set(b"Encoding".to_vec(), Object::name("WinAnsiEncoding"));
+            fonts.set(AnnotFont::Inter.resource().as_bytes().to_vec(), Object::Dict(f));
+        }
+        (format!("/{}", AnnotFont::Inter.resource()), fonts)
+    } else {
+        (format!("/{}", crate::text_style::resource_name(face)), font_resources(face))
+    }
+}
+
 fn draw_free_text(context: &AppearanceContext<'_>, mut drawing: AppearanceDrawing, dr_face: Option<pdfcraft_fonts::Std14>) -> Option<Stream> {
     let d = context.dict;
     let parts = context.parts;
@@ -1449,7 +1539,9 @@ fn draw_free_text(context: &AppearanceContext<'_>, mut drawing: AppearanceDrawin
     let mut c = std::mem::take(&mut drawing.content);
     let mut res = std::mem::take(&mut drawing.resources);
     let _tail = std::mem::take(&mut drawing.tail);
+    let (_, _, annot_font) = parse_da(d);
     let crate::text_style::TextStyle { face, size, color: text_color } = crate::text_style::text_style(d, dr_face);
+    let fallback_info = fallback_font_info(Some(context.doc), annot_font);
     // The box's border and a callout's leader line: their own colour, else the text's.
     let line_color = da_border(d).unwrap_or(text_color);
     let bg = stroke;
@@ -1547,47 +1639,60 @@ fn draw_free_text(context: &AppearanceContext<'_>, mut drawing: AppearanceDrawin
     // In an oval or a circle the lines are centred in the text box, up and down too.
     let round = shape != crate::BorderShape::Rectangle;
     let q = if round { 1 } else { d.int(b"Q").unwrap_or(0) };
+    let (font_tag, mut fonts_dict) = free_text_fonts(annot_font, fallback_info.as_ref().map(|(r, _)| *r), face);
+    let measure = |s: &str, sz: f64| {
+        shaped_text::thai_width(s, sz, |s, sz| {
+            if annot_font == AnnotFont::Inter {
+                measure_text(annot_font, fallback_info.as_ref().map(|(_, m)| m), s, sz)
+            } else {
+                face.text_width(s, sz)
+            }
+        })
+    };
+    let lines = wrap_with(&text, size, width, measure);
     // The text at its own opacity, where it has one.
     if parts.text != parts.fill {
         c.push_str("/GS1 gs\n");
     }
     c.push_str(&format!(
-        "{} {} {} {} re W n\nBT\n/{} {} Tf\n{}",
+        "{} {} {} {} re W n\nBT\n{} {} Tf\n{}",
         n(rect[0]),
         n(rect[1]),
         n(rect[2] - rect[0]),
         n(rect[3] - rect[1]),
-        crate::text_style::resource_name(face),
+        font_tag,
         n(size),
         rg(text_color)
     ));
     let mut out = c.into_bytes();
-    let lines = pdfcraft_fonts::wrap_with(&text, size, width, |s, size| text_width_in(face, s, size));
     let mut y = rect[3] - pad - size * reach(&lines)[0];
     if round {
         y -= ((rect[3] - rect[1] - 2.0 * pad - text_lines_height(&lines, size)) / 2.0).max(0.0);
     }
     // Thai is shaped and drawn from the Thai face (Type 3 fonts in the form's resources, whose
     // streams `apply_appearance` stores in the document); the rest, and Thai it can't draw (as
-    // `?`, which `undrawable_text` reports), in the box's standard face.
-    let mut fonts = font_resources(face);
-    let (pieces, shaped) = shaped_text::appearance_lines(&lines, &mut fonts);
+    // `?`, which `undrawable_text` reports), in the selected font.
+    let (pieces, shaped) = shaped_text::appearance_lines(&lines, &mut fonts_dict);
     let mut current = None;
+    let font_resource = if annot_font == AnnotFont::Inter { AnnotFont::Inter.resource() } else { crate::text_style::resource_name(face) };
+    let encode = |s: &str| {
+        if let Some((_, metrics)) = &fallback_info { encode_fallback(metrics, s) } else { win_ansi(s) }
+    };
     for pieces in &pieces {
         if y < rect[1] - size {
             break;
         }
-        let lw = shaped_text::pieces_width(pieces, size, 0.0, |s, size| face.text_width(s, size));
+        let lw = shaped_text::pieces_width(pieces, size, 0.0, |s, sz| measure(s, sz));
         let x = match q {
             1 => rect[0] + pad + (width - lw) / 2.0,
             2 => rect[2] - pad - lw,
             _ => rect[0] + pad,
         };
-        shaped.show_line(&mut out, pieces, x, y, size, crate::text_style::resource_name(face), win_ansi, |s| face.text_width(s, size), &mut current);
+        shaped.show_line(&mut out, pieces, x, y, size, font_resource, encode, |s| measure(s, size), &mut current);
         y -= size * 1.2;
     }
     out.extend_from_slice(b"ET\n");
-    res.set(b"Font".to_vec(), Object::Dict(fonts));
+    res.set(b"Font".to_vec(), Object::Dict(fonts_dict));
     let mut stream = form(full, &out, res);
     if let Some(m) = matrix {
         stream.dict.set(b"Matrix".to_vec(), Object::Array(m.iter().copied().map(Object::Real).collect()));
