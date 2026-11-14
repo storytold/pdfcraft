@@ -720,7 +720,8 @@ pub fn date_alternatives_template() -> String {
 }
 
 /// Date fields with each kind of picture: `display` a display picture only, `edit` an edit and a
-/// display picture, `either` an edit picture of two alternatives, `bare` none.
+/// display picture, `either` an edit picture of two alternatives, `bare` none, `swapped` an edit
+/// picture (day first) unlike its display picture (month first).
 pub fn date_pictures_template() -> String {
     r##"<?xml version="1.0" encoding="UTF-8"?>
 <xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
@@ -731,6 +732,7 @@ pub fn date_pictures_template() -> String {
  <field name="edit" w="2in" h="0.3in"><ui><dateTimeEdit/><picture>date{MM/DD/YYYY}</picture></ui><value><date/></value><format><picture>date{MM/DD/YYYY}</picture></format></field>
  <field name="either" w="2in" h="0.3in"><ui><dateTimeEdit/><picture>date{YYYYMMDD}|date{DDMMMYY}</picture></ui><value><date/></value><format><picture>date{YYYYMMDD}</picture></format></field>
  <field name="bare" w="2in" h="0.3in"><ui><dateTimeEdit/></ui><value><date/></value></field>
+ <field name="swapped" w="2in" h="0.3in"><ui><dateTimeEdit/><picture>date{DD/MM/YYYY}</picture></ui><value><date/></value><format><picture>date{MM/DD/YYYY}</picture></format></field>
 </subform>
 </template>
 </xdp:xdp>
