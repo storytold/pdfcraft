@@ -143,7 +143,6 @@ pub(crate) fn decode_source(bytes: &[u8]) -> Result<DynamicImage, SignatureImage
             max_pixels: MAX_SOURCE_PIXELS,
             max_alloc: MAX_SOURCE_PIXELS * 4,
         },
-        ..Default::default()
     };
     let decoded = craft_image_codecs::decode_as_with(format, bytes, &opts).map_err(|e| match e {
         craft_image_codecs::CodecError::LimitExceeded(_) => SignatureImageError::Size,
@@ -218,7 +217,7 @@ impl SignatureImage {
         let mut raw = self.rgba.as_ref().clone();
         let high = f32::from(cutoff);
         let span = f32::from(feather.max(1));
-        for px in raw.chunks_exact_mut(4) {
+        for px in raw.as_chunks_mut::<4>().0 {
             let whiteness = f32::from(px[0].min(px[1]).min(px[2]));
             let keep = ((high - whiteness) / span).clamp(0.0, 1.0);
             px[3] = (f32::from(px[3]) * keep).round() as u8;
