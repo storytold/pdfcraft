@@ -13878,6 +13878,23 @@ fn a_batch_that_applies_redactions_and_copies_a_page_is_refused() {
     assert!(page_texts(&s, id).iter().all(|t| !t.contains("SECRET42")), "{:?}", page_texts(&s, id));
 }
 
+/// Splitting a page copies it into its parts, so a batch that applies redactions and then splits
+/// a page is refused whole too.
+#[test]
+fn a_batch_that_applies_redactions_and_splits_a_page_is_refused() {
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let page = one_line_page_with("/Font << /F1 4 0 R >>", "", "BT /F1 16 Tf 20 150 Td (Public words then SECRET42) Tj ET");
+    let id = s.open("batch.pdf", None, Arc::new(page), None).unwrap();
+    mark_shown_text(&mut s, id, "SECRET42");
+    let apply = Edit::ApplyRedactions { pages: None };
+    let split = Edit::SplitPages { pages: vec![0], columns: 2, rows: 1 };
+    let refused = s.apply(id, Edit::Batch { label: "x".into(), edits: vec![apply, split] });
+    assert!(matches!(&refused, Err(EditError::Invalid(m)) if m.contains("split pages")), "{refused:?}");
+    assert_eq!(page_texts(&s, id).len(), 1, "nothing changed");
+    assert!(page_texts(&s, id)[0].contains("SECRET42"), "nothing changed");
+    assert_eq!(s.get(id).unwrap().redaction_marks(), 1);
+}
+
 /// A reset in an opening script reaches a field of a row an earlier opening script added, before
 /// the form is laid out again with the row's widgets: its data goes back to its default and stays
 /// so when the form is saved.

@@ -15,6 +15,7 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
         | Edit::ReversePages { .. }
         | Edit::InsertBlankPage { .. }
         | Edit::DuplicatePages { .. }
+        | Edit::SplitPages { .. }
         | Edit::ReplacePages { .. }
         | Edit::SetPageBox { .. }
         | Edit::SetTransition { .. }
@@ -545,6 +546,16 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
                 ));
             }
             pdfcraft_organize::duplicate_pages(doc, pages, *at)?
+        }
+        Edit::SplitPages { pages, columns, rows } => {
+            // The parts are copies of the page, so the same holds for them.
+            if !cx.redaction_marks.is_empty() {
+                return Err(EditError::Invalid(
+                    "a batch that applies redactions can't also split pages: the parts are copies that can't be checked against the marks; the document was not changed"
+                        .into(),
+                ));
+            }
+            pdfcraft_organize::split_pages(doc, pages, *columns, *rows)?
         }
         Edit::ReplacePages { pages, name, bytes, src_pages } => {
             let src = crate::sources::open_source_into(name, bytes, doc)?;
