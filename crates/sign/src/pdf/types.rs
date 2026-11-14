@@ -40,12 +40,16 @@ pub mod kind {
     pub const STRUCTURE: &str = "document structure";
     pub const PAGES: &str = "pages added or removed";
     pub const OTHER: &str = "other changes";
+    /// A change to a field the signature locks (its field's `/Lock`, or a FieldMDP reference in its
+    /// value), whatever else the change would count as.
+    pub const LOCKED_FIELD: &str = "locked field";
     /// Not a change but the reason there is nothing to compare: the signed revision itself could not
     /// be read, or does not hold the signature, so what came after it cannot be allowed.
     pub const UNREADABLE: &str = "the signed version could not be read";
 
     /// Every word above, for an interface to translate.
-    pub const ALL: &[&str] = &[PAGE_CONTENT, FORM_FILL, COMMENTS, SIGNATURE, SECURITY_STORE, METADATA, LINKS, STRUCTURE, PAGES, OTHER, UNREADABLE];
+    pub const ALL: &[&str] =
+        &[PAGE_CONTENT, FORM_FILL, COMMENTS, SIGNATURE, SECURITY_STORE, METADATA, LINKS, STRUCTURE, PAGES, OTHER, LOCKED_FIELD, UNREADABLE];
 }
 
 /// Changes made after signing.
