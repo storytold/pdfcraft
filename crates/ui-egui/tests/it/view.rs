@@ -2618,7 +2618,7 @@ fn assert_final_spread_bottom_reachable(heights: &[u32], cover: bool) {
 /// #7249: in a continuous two-page spread wider than the window, with a short left page and a
 /// tall right one, the short page clicked stays current after the release; before, the tall
 /// partner took it back on the next frame, as it shows more height (running off the side), so
-/// Rotate turned the wrong page.
+/// Rotate turned the wrong page. The tall page clicked stays current as well.
 #[test]
 fn a_clicked_short_page_in_a_wide_spread_stays_current() {
     let heights = [800, 1200, 800, 1200];
@@ -2651,6 +2651,15 @@ fn a_clicked_short_page_in_a_wide_spread_stays_current() {
     h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
     h.run_steps(6);
     assert_eq!(h.state().views[0].current, 0, "page 1, clicked, stays current");
+    // And the other way round: the tall page, cut off at the side, clicked, stays current too.
+    let at = seen(tall).center();
+    h.event(egui::Event::PointerMoved(at));
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(6);
+    assert_eq!(h.state().views[0].current, 1, "page 2, clicked, stays current");
 }
 
 #[test]

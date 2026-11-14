@@ -810,6 +810,9 @@ pub struct DocView {
     /// in-flight ones cannot be cancelled mid-operator. Older tiles and the backdrop stay
     /// stretched meanwhile; fresh tiles go out once the pan settles.
     pub(crate) last_scroll: Vec2,
+    /// The page last pressed in continuous view and the scroll offset it was pressed at: it stays
+    /// current until the view scrolls, whichever page of a spread shows more of itself (#7249).
+    pub(crate) pressed_current: Option<(usize, Vec2)>,
     /// The way the view last moved vertically: 1 down, -1 up, 0 before any move and after the
     /// content's size changes (a zoom or a layout change). A jump to a page or a search result
     /// counts as a move. It stays set while the view is still, so the pages prefetched ahead stay
@@ -1141,6 +1144,7 @@ impl DocView {
             last_scale: 0.0,
             sharp_hold_until: 0.0,
             last_scroll: Vec2::ZERO,
+            pressed_current: None,
             scroll_dir: 0,
             scroll_content: Vec2::ZERO,
             sync_scroll: None,
@@ -2054,8 +2058,16 @@ fn draw_pages(
     if current_overlap >= best_overlap - PAGE_TIE || current_overlap >= current_height - PAGE_TIE {
         current = view.current;
     }
+    // A page clicked stays current until the view scrolls, also when its partner in a spread
+    // shows more of itself: a tall page cut off at the side or a short one cut off below (#7249).
+    match view.pressed_current {
+        Some((p, at)) if p == view.current && (view.last_scroll - at).length() <= 2.0 => current = p,
+        Some(_) => view.pressed_current = None,
+        None => {}
+    }
     if let Some(p) = pressed_page {
         current = p;
+        view.pressed_current = Some((p, view.last_scroll));
     }
     if view.continuous {
         view.current = current;
