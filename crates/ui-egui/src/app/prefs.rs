@@ -185,6 +185,20 @@ impl PdfCraftApp {
         v["update_check_at_start"] = self.update_check_at_start.into();
         v["hotbar"] = serde_json::to_value(&self.hotbar).unwrap_or_default();
         v["comment_tool_pinned"] = serde_json::Value::Bool(self.comment_prefs.pinned);
+        v["measurement_styles"] = self
+            .comment_prefs
+            .measurement_styles()
+            .map(|(kind, style)| {
+                serde_json::json!({
+                    "kind": kind.name(),
+                    "color": style.color,
+                    "width": style.width,
+                    "opacity": style.opacity,
+                    "fill": style.fill,
+                    "fill_opacity": style.fill_opacity,
+                })
+            })
+            .collect();
         v["show_secured_notice"] = serde_json::Value::Bool(self.show_secured_notice);
         v["text_links"] = serde_json::Value::Bool(self.text_links);
         v["organize_zoom"] = serde_json::json!(self.organize_zoom);
@@ -528,6 +542,40 @@ impl PdfCraftApp {
                 if let Some(shape) = e["border_shape"].as_str().and_then(pdfcraft_engine::BorderShape::parse) {
                     self.comment_prefs.set_border_shape(tool, shape);
                 }
+            }
+        }
+        if let Some(styles) = v["measurement_styles"].as_array() {
+            for entry in styles {
+                let Some(kind) = entry["kind"].as_str().and_then(pdfcraft_engine::measure::Kind::from_name) else { continue };
+                let mut style = self.comment_prefs.measurement_style(kind);
+                if let Some(color) = rgb_triple(&entry["color"]) {
+                    style.color = color;
+                }
+                if let Some(width) = entry["width"].as_f64() {
+                    style.width = width;
+                }
+                if let Some(opacity) = entry["opacity"].as_f64() {
+                    style.opacity = opacity;
+                }
+                match entry.get("fill") {
+                    Some(serde_json::Value::Null) => style.fill = None,
+                    Some(value) => {
+                        if let Some(color) = rgb_triple(value) {
+                            style.fill = Some(color);
+                        }
+                    }
+                    None => {}
+                }
+                match entry.get("fill_opacity") {
+                    Some(serde_json::Value::Null) => style.fill_opacity = None,
+                    Some(value) => {
+                        if let Some(opacity) = value.as_f64() {
+                            style.fill_opacity = Some(opacity);
+                        }
+                    }
+                    None => {}
+                }
+                self.comment_prefs.set_measurement_style(kind, style);
             }
         }
         // Default font sizes (#5767), clamped by the setter; a missing or malformed size keeps

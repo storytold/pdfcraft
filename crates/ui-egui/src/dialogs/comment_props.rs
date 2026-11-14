@@ -102,6 +102,22 @@ impl PdfCraftApp {
         let Some((_, id)) = self.active_ids() else { return };
         let Some(doc) = self.session.get(id) else { return };
         let Some(a) = doc.info.annotations.iter().find(|a| a.page == page && a.index == index && !a.is_reply()) else { return };
+        if let Some(kind) = crate::comments::measurement_kind(a) {
+            let mut style = self.comment_prefs.measurement_style(kind);
+            style.color = p.color.unwrap_or(style.color);
+            style.width = p.width.unwrap_or(style.width);
+            style.opacity = p.opacity;
+            style.fill = p.fill;
+            style.fill_opacity = p.fill_opacity;
+            self.comment_prefs.set_measurement_style(kind, style);
+            let label = match kind {
+                pdfcraft_engine::measure::Kind::Distance => tl!("Distance"),
+                pdfcraft_engine::measure::Kind::Perimeter => tl!("Perimeter"),
+                pdfcraft_engine::measure::Kind::Area => tl!("Area"),
+            };
+            self.notify_fmt("New {tool} comments will look like this one", &[("tool", &crate::i18n::in_sentence(label))]);
+            return;
+        }
         // Typed text has no comment tool: Fill & Sign gives new text its size, colour and border,
         // kept across launches.
         if crate::comments::typed_text(a) {
@@ -324,9 +340,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
         .unwrap_or_default();
     let has_default = app.comment_props.as_ref().is_some_and(|d| {
         let Some(doc) = app.active_ids().and_then(|(_, id)| app.session.get(id)) else { return false };
-        doc.info.annotations.iter().find(|a| a.page == d.page && a.index == d.index && !a.is_reply()).is_some_and(|a| {
-            crate::comments::tool_for_default(&doc.info.annotations, a, d.edited.endings.as_deref()).is_some() || crate::comments::typed_text(a)
-        })
+        doc.info.annotations.iter().find(|a| a.page == d.page && a.index == d.index && !a.is_reply()).is_some_and(crate::comments::defaultable)
     });
     let Some(d) = app.comment_props.as_mut() else { return (false, true) };
     let kind = tl!(crate::comments_panel::subtype_label(&d.edited.subtype)).to_string();
