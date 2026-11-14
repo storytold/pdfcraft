@@ -1353,6 +1353,7 @@ fn line_ending_properties_change_and_undo() {
     );
 }
 
+/// Appearance and author edits made in different properties tabs commit as one undoable change.
 #[test]
 fn comment_properties_change_appearance_and_author() {
     let mut h = harness(|app| app.set_option("quick", "square").unwrap());
@@ -1377,6 +1378,261 @@ fn comment_properties_change_appearance_and_author() {
     let p = doc.comment_props(0, 0).unwrap();
     assert_eq!((p.color, p.width, p.author.as_str()), (Some([0.0, 0.0, 1.0]), Some(5.0), "Grace"));
     assert_eq!(doc.can_undo(), Some("Change comment properties"), "one undo step");
+}
+
+/// Type in the real egui colour picker's RGB controls, not the dialog draft. The picker
+/// exposes channel prefixes in the displayed values. `picker` selects the first
+/// (stroke) or second (fill) open picker when both are expanded.
+fn type_custom_rgb(h: &mut Harness<'static, PdfCraftApp>, picker: usize, rgb: [u8; 3]) {
+    for (prefix, value) in ["R ", "G ", "B "].into_iter().zip(rgb) {
+        h.query_all_by_role(Role::SpinButton)
+            .filter(|n| n.value().is_some_and(|v| v.starts_with(prefix)))
+            .nth(picker)
+            .expect("the RGB channel control")
+            .click();
+        h.run_steps(2);
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        h.event(egui::Event::Text(value.to_string()));
+        h.run_steps(1);
+        h.key_press(egui::Key::Enter);
+        h.run_steps(3);
+        assert_eq!(
+            h.query_all_by_role(Role::SpinButton)
+                .filter(|n| n.value().is_some_and(|v| v.starts_with(prefix)))
+                .nth(picker)
+                .expect("the edited RGB channel")
+                .value()
+                .as_deref(),
+            Some(format!("{prefix}{value}").as_str()),
+            "the real picker accepted the typed channel"
+        );
+    }
+}
+
+/// Read annotation zero from the active document, independently of its pending properties draft.
+fn current_comment_props(h: &Harness<'static, PdfCraftApp>) -> pdfcraft_engine::CommentProps {
+    let app = h.state();
+    app.session.get(app.views[0].id).unwrap().comment_props(0, 0).unwrap()
+}
+
+/// Compare document RGB channels with byte inputs, allowing less than half a quantization step.
+fn assert_custom_rgb(actual: Option<[f64; 3]>, expected: [u8; 3]) {
+    let actual = actual.expect("a colour");
+    for (actual, expected) in actual.into_iter().zip(expected) {
+        assert!((actual - f64::from(expected) / 255.0).abs() < 0.5 / 255.0, "{actual} != {expected}/255");
+    }
+}
+
+/// #4781: the outer OK accepts custom RGB edits without a second, inner Apply. Merely
+/// opening the picker must not edit the document or add an undo step.
+#[test]
+fn comment_properties_custom_colour_ok_commits_without_apply() {
+    let _gpu = crate::gpu();
+    let mut h = harness(|app| app.set_option("quick", "square").unwrap());
+    drag_pt(&mut h, (40.0, 100.0), (140.0, 40.0));
+    let before = current_comment_props(&h);
+    h.state_mut().open_comment_props(0, 0);
+    h.run_steps(2);
+    h.query_all_by_label("Other colour…").next().unwrap().click();
+    h.run_steps(3);
+    type_custom_rgb(&mut h, 0, [37, 119, 203]);
+    assert_eq!(current_comment_props(&h).color, before.color, "editing only changes the draft");
+    if let Ok(dir) = std::env::var("PDFCRAFT_SHOTS") {
+        h.render().unwrap().save(std::path::Path::new(&dir).join("comment-properties-custom-colour.png")).unwrap();
+    }
+    assert!(pdfcraft_ui_egui::comments::recent_custom_colours(&h.ctx).is_empty(), "unconfirmed edits are not recent colours");
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    let after = current_comment_props(&h);
+    assert_custom_rgb(after.color, [37, 119, 203]);
+    let recent = pdfcraft_ui_egui::comments::recent_custom_colours(&h.ctx);
+    assert_eq!(recent.len(), 1, "OK remembers the accepted custom colour exactly once");
+    assert_custom_rgb(recent.first().copied(), [37, 119, 203]);
+    assert_eq!(after.fill, before.fill, "stroke changes do not touch fill");
+    assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_undo(), Some("Change comment properties"));
+    h.state_mut().undo();
+    h.run_steps(3);
+    assert_eq!(current_comment_props(&h).color, before.color, "one undo restores the original colour");
+    assert_eq!(comments(&h).len(), 1, "undo did not remove the annotation");
+}
+
+/// Custom RGB acceptance also reaches every comment selected by the current batch-properties
+/// path: editing stays local to the draft, and OK and Undo each change both comments together.
+#[test]
+fn comment_properties_custom_colour_selected_comments_commit_and_undo_together() {
+    use pdfcraft_engine::{Edit, NewAnnotation, Shape, Style};
+    let mut h = harness(|_| {});
+    for rect in [[20.0, 20.0, 60.0, 60.0], [80.0, 20.0, 120.0, 60.0]] {
+        let shape = Shape::Rectangle { rect };
+        let style = Style::default_for(&shape);
+        assert!(h.state_mut().apply_edit(Edit::AddAnnotation(NewAnnotation {
+            page: 0,
+            shape,
+            style,
+            contents: "x".into(),
+            author: "Tester".into(),
+        })));
+    }
+    let colours = |h: &Harness<'static, PdfCraftApp>| {
+        let app = h.state();
+        let doc = app.session.get(app.views[0].id).unwrap();
+        [doc.comment_props(0, 0).unwrap().color, doc.comment_props(0, 1).unwrap().color]
+    };
+    let before = colours(&h);
+    h.state_mut().views[0].comments.selected = Some((0, 0));
+    h.state_mut().views[0].comments.also = vec![(0, 1)];
+    h.run_steps(2);
+    h.state_mut().open_comment_props(0, 0);
+    h.run_steps(2);
+    assert_eq!(h.state().comment_props.as_ref().unwrap().others.len(), 1);
+    h.query_all_by_label("Other colour…").next().unwrap().click();
+    h.run_steps(3);
+    type_custom_rgb(&mut h, 0, [37, 119, 203]);
+    assert_eq!(colours(&h), before, "both comments' colours remain unchanged until OK");
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    for colour in colours(&h) {
+        assert_custom_rgb(colour, [37, 119, 203]);
+    }
+    assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_undo(), Some("Change comment properties"));
+    h.state_mut().undo();
+    h.run_steps(3);
+    assert_eq!(colours(&h), before, "one undo restores both selected comments");
+    assert_eq!(comments(&h).len(), 2, "undo did not remove either comment");
+}
+
+/// Cancel and Escape discard custom RGB edits without undo or recent-colour changes; reopening
+/// must start from the stored annotation rather than resurrecting the discarded picker.
+#[test]
+fn comment_properties_custom_colour_cancel_and_close_discard_and_reopen_cleanly() {
+    let mut h = harness(|app| app.set_option("quick", "square").unwrap());
+    drag_pt(&mut h, (40.0, 100.0), (140.0, 40.0));
+    let before = current_comment_props(&h);
+    let undo_before = h.state().session.get(h.state().views[0].id).unwrap().can_undo().map(str::to_owned);
+    let recent_before = pdfcraft_ui_egui::comments::recent_custom_colours(&h.ctx);
+    for cancel_button in [true, false] {
+        h.state_mut().open_comment_props(0, 0);
+        h.run_steps(2);
+        h.query_all_by_label("Other colour…").next().unwrap().click();
+        h.run_steps(3);
+        type_custom_rgb(&mut h, 0, [37, 119, 203]);
+        if cancel_button {
+            h.get_by_label("Cancel").click();
+        } else {
+            h.key_press(egui::Key::Escape);
+        }
+        h.run_steps(3);
+        assert!(h.state().dialog.is_none());
+        assert_eq!(pdfcraft_ui_egui::comments::recent_custom_colours(&h.ctx), recent_before, "Cancel and Escape discard unconfirmed colours");
+        assert_eq!(current_comment_props(&h).color, before.color);
+        assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_undo(), undo_before.as_deref());
+        h.state_mut().open_comment_props(0, 0);
+        h.run_steps(3);
+        assert_eq!(h.state().comment_props.as_ref().unwrap().edited.color, before.color);
+        assert!(
+            h.query_all_by_role(Role::SpinButton).all(|n| !n.value().is_some_and(|v| v.starts_with("R "))),
+            "reopening does not resurrect a canceled picker"
+        );
+        h.get_by_label("OK").click();
+        h.run_steps(3);
+        assert_eq!(current_comment_props(&h).color, before.color, "OK on a reopened dialog cannot apply stale RGB");
+        assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_undo(), undo_before.as_deref());
+    }
+}
+
+/// Independent stroke and fill drafts survive Appearance/General switches and commit together
+/// on OK, with one undo restoring both original colours.
+#[test]
+fn comment_properties_custom_colour_fill_and_stroke_survive_tab_changes() {
+    let mut h = harness(|app| app.set_option("quick", "square").unwrap());
+    drag_pt(&mut h, (40.0, 100.0), (140.0, 40.0));
+    let before = current_comment_props(&h);
+    // Keep both expanded pickers and the enclosing buttons visible, independently of their
+    // content height; this test exercises simultaneous draft state, not modal scrolling.
+    h.set_size(egui::vec2(1400.0, 1400.0));
+    h.run_steps(3);
+    h.state_mut().open_comment_props(0, 0);
+    h.run_steps(2);
+    h.query_all_by_label("Other colour…").next().unwrap().click();
+    h.run_steps(3);
+    type_custom_rgb(&mut h, 0, [37, 119, 203]);
+    h.query_all_by_label("Other colour…").nth(1).unwrap().click();
+    h.run_steps(3);
+    type_custom_rgb(&mut h, 1, [211, 83, 47]);
+    assert_eq!(current_comment_props(&h).color, before.color);
+    assert_eq!(current_comment_props(&h).fill, before.fill);
+    h.get_by_label("General").click();
+    h.run_steps(2);
+    h.get_by_label("Appearance").click();
+    h.run_steps(3);
+    h.get_by_label("General").click();
+    h.run_steps(2);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    let after = current_comment_props(&h);
+    assert_custom_rgb(after.color, [37, 119, 203]);
+    assert_custom_rgb(after.fill, [211, 83, 47]);
+    h.state_mut().undo();
+    h.run_steps(3);
+    let restored = current_comment_props(&h);
+    assert_eq!((restored.color, restored.fill), (before.color, before.fill), "both fields form one undo step");
+}
+
+/// No fill discards an open custom fill picker immediately, without applying the pending RGB
+/// or removing the stored fill until the enclosing Properties dialog is accepted.
+#[test]
+fn comment_properties_no_fill_closes_the_open_custom_picker() {
+    use pdfcraft_engine::{Edit, NewAnnotation, Shape, Style};
+    let mut h = harness(|_| {});
+    let shape = Shape::Rectangle { rect: [40.0, 40.0, 140.0, 100.0] };
+    let mut style = Style::default_for(&shape);
+    style.fill = Some([1.0, 0.5, 0.0]);
+    assert!(h.state_mut().apply_edit(Edit::AddAnnotation(NewAnnotation { page: 0, shape, style, contents: "x".into(), author: "Tester".into() })));
+    let before = current_comment_props(&h);
+    h.state_mut().open_comment_props(0, 0);
+    h.run_steps(2);
+    h.query_all_by_label("Other colour…").nth(1).unwrap().click();
+    h.run_steps(3);
+    type_custom_rgb(&mut h, 0, [37, 119, 203]);
+    assert_custom_rgb(h.state().comment_props.as_ref().unwrap().edited.fill, [37, 119, 203]);
+    h.get_by_label("No fill").click();
+    h.run_steps(3);
+    assert!(
+        h.query_all_by_role(Role::SpinButton).all(|n| !n.value().is_some_and(|v| v.starts_with("R "))),
+        "No fill closes the expanded custom fill picker"
+    );
+    assert_eq!(h.state().comment_props.as_ref().unwrap().edited.fill, None);
+    assert_eq!(current_comment_props(&h).fill, before.fill, "the document still has its original fill before OK");
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert_eq!(current_comment_props(&h).fill, None);
+    assert_eq!(current_comment_props(&h).color, before.color, "No fill leaves the stroke alone");
+    h.state_mut().undo();
+    h.run_steps(3);
+    assert_eq!(current_comment_props(&h).fill, before.fill, "one undo restores the original fill");
+}
+
+/// The immediate-action quick bar still waits for Apply: RGB edits cannot create an undo
+/// entry per channel or silently restyle a selected comment before the user confirms them.
+#[test]
+fn quick_bar_custom_colour_still_requires_apply() {
+    let mut h = harness(|app| app.set_option("quick", "square").unwrap());
+    drag_pt(&mut h, (40.0, 100.0), (140.0, 40.0));
+    let before = current_comment_props(&h);
+    let undo_before = h.state().session.get(h.state().views[0].id).unwrap().can_undo().map(str::to_owned);
+    h.get_by_label("Colour").click();
+    h.run_steps(2);
+    h.get_by_label("Other colour…").click();
+    h.run_steps(3);
+    type_custom_rgb(&mut h, 0, [37, 119, 203]);
+    assert_eq!(current_comment_props(&h).color, before.color);
+    assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_undo(), undo_before.as_deref());
+    h.get_by_label("Apply").click();
+    h.run_steps(3);
+    assert_custom_rgb(current_comment_props(&h).color, [37, 119, 203]);
+    h.state_mut().undo();
+    h.run_steps(3);
+    assert_eq!(current_comment_props(&h).color, before.color);
 }
 
 /// #686: rectangles, ovals, polygons and clouds can be filled, from the quick bar for new ones
