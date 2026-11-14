@@ -65,6 +65,30 @@ fn many_unicode_entries_look_up_their_cids_in_few_steps() {
     assert!(reads <= n * 64, "{reads} span reads");
 }
 
+/// `may_map_thai` reads what a ToUnicode may map without listing its codes: an explicit entry or a
+/// range reaching U+0E01–U+0E5B counts, and a range's count wraps past U+FFFF to U+0000 in 16
+/// bits, as `text_at` reads it. Only Thai that `wanted` accepts counts.
+#[test]
+fn a_unicode_map_says_which_thai_it_may_map() {
+    let may = |cmap: &str, wanted: fn(u32) -> bool| {
+        let mut u = Unicode::default();
+        parse_to_unicode(cmap.as_bytes(), &mut u);
+        u.may_map_thai(wanted)
+    };
+    let any = |_: u32| true;
+    assert!(may("1 beginbfchar <0041> <0e01> endbfchar", any));
+    assert!(!may("1 beginbfchar <0041> <0041> endbfchar", any), "Latin");
+    assert!(!may("1 beginbfchar <0041> <0e010e48> endbfchar", any), "two characters are not one Thai character");
+    assert!(may("1 beginbfrange <0000> <0010> <0df8> endbfrange", any), "a range reaching U+0E01–U+0E08");
+    assert!(!may("1 beginbfrange <0000> <0010> <0df0> endbfrange", any), "a range ending at U+0E00");
+    // From U+F500, 0x2000 codes wrap past U+FFFF to U+14FF, through Thai; 0x1000 stop at U+04FF.
+    assert!(may("1 beginbfrange <0000> <1fff> <f500> endbfrange", any), "wrapping into Thai");
+    assert!(!may("1 beginbfrange <0000> <0fff> <f500> endbfrange", any), "wrapping short of Thai");
+    let not_baht = |c: u32| c != 0x0e3f;
+    assert!(!may("1 beginbfchar <0041> <0e3f> endbfchar", not_baht), "only ฿, which isn't wanted");
+    assert!(may("1 beginbfrange <0000> <0001> <0e3e> endbfrange", not_baht), "U+0E3E beside ฿ is wanted");
+}
+
 /// Every glyph of a sequential range builds its text from the destination, so a long one is cut
 /// to the CMap limit once, when it is read.
 #[test]
@@ -434,10 +458,11 @@ fn each_stage_of_a_metrics_stream_is_held_to_its_limit() {
     assert_eq!(read(MAX_CID_TO_GID / 4), (false, false));
 }
 
-/// The editor's program list reads a legacy Thai font's metrics after its program. With the program
+/// The editor's program list reads the ToUnicode of a composite font whose program's own cmap has
+/// no Thai after its program, to see whether it maps Thai the program hides. With the program
 /// spending the allowance to the byte, a ToUnicode that is an empty stream behind a filter nothing
-/// decodes, unread with any allowance, doesn't put the metrics past the allowance: the program is
-/// listed. A ToUnicode with data is refused by the allowance, and the program isn't.
+/// decodes, unread with any allowance, is not a refusal: the program is listed as it is. A
+/// ToUnicode with data is refused by the allowance, and the program isn't listed.
 #[test]
 fn an_editors_program_is_listed_past_a_stream_unread_on_its_own() {
     let bytes = include_bytes!("../../../../assets/fonts/Inter-Regular.ttf");
@@ -451,16 +476,17 @@ fn an_editors_program_is_listed_past_a_stream_unread_on_its_own() {
         let program = Object::Ref(doc.add(Object::Stream(Stream::from_raw(Dict::new(), bytes.to_vec()))));
         let mut descriptor = Dict::new();
         descriptor.set(b"FontFile2".to_vec(), program);
+        let mut desc = Dict::new();
+        desc.set(b"Subtype".to_vec(), Object::name("CIDFontType2"));
+        desc.set(b"CIDToGIDMap".to_vec(), Object::name("Identity"));
+        desc.set(b"FontDescriptor".to_vec(), Object::Dict(descriptor));
         let f = font(
             &mut doc,
             vec![
-                ("Subtype", Object::name("TrueType")),
-                ("BaseFont", Object::name("THSarabunPSK")),
-                ("FirstChar", Object::Int(65)),
-                ("LastChar", Object::Int(65)),
-                ("Widths", Object::Array(vec![Object::Int(500)])),
-                ("Encoding", Object::name("WinAnsiEncoding")),
-                ("FontDescriptor", Object::Dict(descriptor)),
+                ("Subtype", Object::name("Type0")),
+                ("BaseFont", Object::name("ABCDEF+Subset")),
+                ("Encoding", Object::name("Identity-H")),
+                ("DescendantFonts", Object::Array(vec![Object::Dict(desc)])),
                 ("ToUnicode", unicode),
             ],
         );
@@ -470,7 +496,7 @@ fn an_editors_program_is_listed_past_a_stream_unread_on_its_own() {
         (listed, budget.refused())
     };
     assert_eq!(listed(Some("NoSuchFilter"), b""), (true, 0));
-    assert_eq!(listed(None, b"1 beginbfchar <41> <0058> endbfchar"), (false, 1));
+    assert_eq!(listed(None, b"1 beginbfchar <0041> <0e01> endbfchar"), (false, 1));
 }
 
 /// The editor's program is held to its limit as the metrics reads' streams are: a 12 MiB program

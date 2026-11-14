@@ -14763,6 +14763,60 @@ fn legacy_thai_map_repair_needs_no_grouped_text() {
     assert_eq!(pdfcraft_cos::write_full(&doc, &Default::default()).unwrap(), before);
 }
 
+/// A subset in the legacy positional Thai order is edited in its own glyphs whatever its font is
+/// called (#3185): the order is read from its program and the PDF's maps. Only THSarabunPSK's name
+/// used to be trusted, and other faces that share its glyphs and Windows PUA alternates were
+/// refused for want of their complete font. A program out of that order is still not given to the
+/// legacy shaper, whatever its name (`thai_source_programs_are_shaped_by_their_own_layout_or_as_verified_legacy`).
+#[test]
+fn a_legacy_thai_subset_is_edited_in_its_own_glyphs_whatever_its_name() {
+    for base_font in ["ABCDEF+AnyFace", "GHIJKL+AnyFace-Bold", "AnyFace"] {
+        let mut doc = text_page("BT /F1 16 Tf 50 650 Td <00d6> Tj ET");
+        let font = legacy_thai_font(&mut doc, base_font, &legacy_thai_program(), LEGACY_THAI_UNICODE);
+        doc.set(pdfcraft_cos::ObjRef::new(5, 0), Object::Dict(font));
+        let fonts = page_font_programs(&doc);
+        let style = BlockStyle { width: Some(400.0), ..Default::default() };
+        let edited = text::rewrite_block(&mut doc, 0, 0, Some("ป่ กิ่"), &style).unwrap_or_else(|e| panic!("{base_font}: {e}"));
+        assert_eq!(edited.substituted, None, "{base_font}: no other face is chosen");
+        let doc = reopen(&doc);
+        assert_eq!(text::text_lines(&doc, 0).unwrap().iter().map(|l| l.text.as_str()).collect::<String>(), "ป่ กิ่", "{base_font}");
+        let shown = shown_codes(&doc);
+        assert!(shown.iter().all(|(font, _)| font == "F1"), "{base_font}: drawn in the source resource: {shown:?}");
+        // After the ascender ป, Mai Ek is the alternate moved left (U+F705, glyph 347).
+        assert!(shown.contains(&("F1".into(), vec![0x01, 0x5b])), "{base_font}: the legacy alternate: {shown:?}");
+        assert_eq!(page_font_programs(&doc), fonts, "{base_font}: no font program is added");
+    }
+}
+
+/// The existing codes of a positioned Thai subset shape only its Thai; every other character is
+/// encoded on its own. A span that also holds other text needing shaping (here a combining acute,
+/// as Arabic joining or Indic reordering would) is shaped whole by a program first, so that text
+/// keeps its layout; Thai alone stays in the existing codes and adds no font program.
+#[test]
+fn a_thai_span_with_other_complex_text_is_shaped_whole_before_the_existing_codes() {
+    let mut program = include_bytes!("../../../assets/fonts/Inter-Regular.ttf").to_vec();
+    let count = u16::from_be_bytes(program[4..6].try_into().unwrap()) as usize;
+    let records: Vec<_> = program[12..12 + count * 16].as_chunks::<16>().0.iter().filter(|r| &r[..4] != b"cmap").map(|r| r.to_vec()).collect();
+    program[4..6].copy_from_slice(&(records.len() as u16).to_be_bytes());
+    for (index, record) in records.iter().enumerate() {
+        program[12 + index * 16..28 + index * 16].copy_from_slice(record);
+    }
+    // Any outlined glyphs do for e and the combining acute: only which path shapes the span is checked.
+    let unicode = [LEGACY_THAI_UNICODE, b" 2 beginbfchar <0050> <0065> <0051> <0301> endbfchar"].concat();
+    let edit = |text: &str| {
+        let mut doc = text_page("BT /F1 16 Tf 50 650 Td <00d6> Tj ET");
+        let font = legacy_thai_font(&mut doc, "ABCDEF+AnyFace", &program, &unicode);
+        doc.set(pdfcraft_cos::ObjRef::new(5, 0), Object::Dict(font));
+        let fonts = page_font_programs(&doc);
+        let style = BlockStyle { width: Some(400.0), ..Default::default() };
+        text::rewrite_block(&mut doc, 0, 0, Some(text), &style).unwrap_or_else(|e| panic!("{text}: {e}"));
+        let doc = reopen(&doc);
+        (shown_codes(&doc).iter().all(|(font, _)| font == "F1"), page_font_programs(&doc) == fonts)
+    };
+    assert_eq!(edit("กข"), (true, true), "Thai alone stays in the existing codes");
+    assert_eq!(edit("กe\u{301}"), (false, false), "with a combining mark the span is shaped whole by a program");
+}
+
 /// A Thai run whose glyphs a subsetter split across two subsets of the face is kept in that
 /// face: each cluster comes from a subset that has it. A cluster no subset has is refused with
 /// the reason, and the document is unchanged.

@@ -93,6 +93,20 @@ fn identity_h(doc: &Document, font: &Dict) -> bool {
     font.get(b"Encoding").is_some_and(|e| doc.resolve(e).as_name() == Some(b"Identity-H".as_slice()))
 }
 
+/// Whether the PDF's ToUnicode of `font`, an Identity-H Type 0 font, maps Thai that `face`, its
+/// program, has no cmap entry for: a legacy Thai subset can keep a Latin-only cmap beside the
+/// Thai glyphs it draws. Only the ToUnicode is read, against `budget`, and only when the program's
+/// cmap lacks some Thai.
+fn hides_mapped_thai(doc: &Document, font: &Dict, face: &skrifa::FontRef<'_>, budget: &mut DecodeBudget) -> bool {
+    use skrifa::MetadataProvider as _;
+    if font.name(b"Subtype") != Some(b"Type0") || !identity_h(doc, font) {
+        return false;
+    }
+    let charmap = face.charmap();
+    let lacks = |u: u32| charmap.map(u).is_none();
+    (0x0e01..=0x0e5b).any(lacks) && unicode_map(doc, font, true, &mut Reads::new(doc, budget)).may_map_thai(lacks)
+}
+
 /// Whether `base_font` (subset tag allowed) names a legacy Indic font family that is laid out in
 /// visual order (Kruti Dev, DevLys, Chanakya, Shusha, Shivaji, Walkman, Akruti, APS-DV, DV-TT…).
 fn legacy_indic_font(base_font: &str) -> bool {
@@ -134,11 +148,19 @@ pub fn embedded_sfnt_within(doc: &Document, font: &Dict, budget: &mut DecodeBudg
             continue;
         }
         let own_cmap = face.charmap().mappings().next().is_some();
-        // A legacy THSarabunPSK subset may keep a Latin-only cmap beside its Thai glyphs, which
-        // only the PDF's verified maps reach (`composite_glyph_maps`); other programs keep theirs.
-        let base_font = font.name(b"BaseFont").map(String::from_utf8_lossy).unwrap_or_default();
-        if own_cmap && !base_font.rsplit('+').next().is_some_and(|f| f.starts_with("THSarabunPSK")) {
-            return Some(bytes);
+        // A legacy Thai subset may keep a Latin-only cmap beside its Thai glyphs, which only the
+        // PDF's verified maps reach (`composite_glyph_maps`); other programs keep theirs. Which
+        // is which comes from the two maps, not the font's name. A ToUnicode left unread for want
+        // of the allowance lists no copy, as for the metrics read below.
+        if own_cmap {
+            let refused = budget.refused();
+            let hides_thai = hides_mapped_thai(doc, font, &face, budget);
+            if budget.refused() > refused {
+                continue;
+            }
+            if !hides_thai {
+                return Some(bytes);
+            }
         }
         // A composite font's cmap is rebuilt only through Identity-H codes (`composite_glyph_maps`):
         // with any other `/Encoding` nothing is, so its metrics aren't read, and a program with a
@@ -581,6 +603,26 @@ struct BfRange {
 }
 
 impl Unicode {
+    /// Whether some code may map to one Thai character (U+0E01–U+0E5B) that `wanted` accepts. A
+    /// range reaching one counts even where a later declaration overrides it, so `true` may
+    /// over-estimate; `false` is certain.
+    fn may_map_thai(&self, wanted: impl Fn(u32) -> bool) -> bool {
+        const THAI: std::ops::RangeInclusive<u32> = 0x0e01..=0x0e5b;
+        self.explicit.values().filter_map(|(_, text)| only_char(text)).map(u32::from).any(|c| THAI.contains(&c) && wanted(c))
+            || self.ranges.iter().any(|r| match *r.units {
+                // Its codes map to `first` onwards, as `text_at` counts them: in 16 bits, wrapping
+                // past U+FFFF to U+0000 (a range spans at most 65 536 codes).
+                [first] => {
+                    let first = u32::from(first);
+                    let last = first.saturating_add(r.hi.saturating_sub(r.lo).min(0xffff));
+                    let wrapped = last.checked_sub(0x1_0000);
+                    let reached = |c: &u32| (first..=last).contains(c) || wrapped.is_some_and(|end| *c <= end);
+                    THAI.filter(reached).any(&wanted)
+                }
+                _ => false,
+            })
+    }
+
     /// Whether `code` may have an explicit entry; false is certain for codes below 65 536 without one.
     #[inline]
     fn may_be_explicit(&self, code: u32) -> bool {
