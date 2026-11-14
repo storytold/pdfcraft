@@ -1631,7 +1631,17 @@ impl Renderer {
         // at its source size, so it keeps the full transform instead.
         let draw_transform = match snapped {
             Some((w, h, draw)) if (img_width, img_height) == (w, h) => draw,
-            _ => cur_transform * additional_transform,
+            _ => {
+                // PdfCraft patch (#7219): an image area-averaged on both sides but not snapped (a
+                // turned or skewed one) is sampled again at about 1:1 under the full transform.
+                // Nearest-neighbour there picks one averaged sample per device pixel, so its edges
+                // were staircases, its thin lines broke up and its fine rings made moiré; bilinear
+                // reads the averaged raster as the smooth image it is.
+                if area && needs_resize && x_scale < 1.0 && y_scale < 1.0 {
+                    quality = ImageQuality::Medium;
+                }
+                cur_transform * additional_transform
+            }
         };
         self.draw_pixmap(Arc::new(pixmap), quality, draw_transform);
     }
