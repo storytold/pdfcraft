@@ -46,6 +46,10 @@ jobs:
       # A missing oracle fails the job instead of printing a skip notice that reads as a pass.
       linux-env: PDFCRAFT_ORACLES_REQUIRED=1
       windows-env: PDFCRAFT_REQUIRE_WINRES=1
+      # Preserve the packaging regression check removed from git-sources in #7042.
+      command: |
+        pwsh -NoProfile -File packaging/windows/test-font-notices.ps1
+        cargo xtask ci
       # Windows checks what differs by platform: the build (with resources) and the tests.
       windows-command: |
         cargo clippy --workspace --all-targets --locked -- -D warnings
