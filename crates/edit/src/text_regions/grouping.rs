@@ -462,7 +462,7 @@ fn reflow_text(block: &TextBlock, lines: &[TextLine]) -> String {
 /// spaces — the count a `/PCSoft` marker recorded ([`TextLine::soft_gap`]), or, for a line this
 /// app did not mark (a file written elsewhere, or an older save), a single space when the
 /// geometry looks like an ordinary wrapped body line (`#2529`).
-fn break_gap(block: &TextBlock, lines: &[TextLine], row_index: usize) -> Option<usize> {
+pub(super) fn break_gap(block: &TextBlock, lines: &[TextLine], row_index: usize) -> Option<usize> {
     let line = block.rows.get(row_index).and_then(|row| row.first()).and_then(|i| lines.get(*i))?;
     if line.hard_break {
         return None;

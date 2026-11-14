@@ -108,6 +108,17 @@ pub fn text_edit_layout(doc: &Document, page: usize, block: usize, text: &str, s
     TextSession::open(doc, page, block)?.layout(text, style)
 }
 
+/// Before a rewrite of paragraph `source` that keeps its fonts: the ones the document only names
+/// learn the advances of the characters `text` adds ([`super::complete_named_font_widths`]). The
+/// preview and Apply both run it, on their own copy of the document. Whether a font changed.
+pub(crate) fn complete_named_fonts(doc: &mut Document, page: usize, lines: &[TextLine], source: &TextBlock, text: &str, style: &BlockStyle) -> bool {
+    if style.family.is_some() || style.resource.is_some() {
+        return false;
+    }
+    let fonts: Vec<String> = source.lines.iter().filter_map(|i| lines.get(*i)).map(|line| line.font.clone()).collect();
+    super::complete_named_font_widths(doc, page, &fonts, text)
+}
+
 /// A draft of paragraph `source` (number `block` among the page's `lines`) laid out by the rewrite
 /// Apply runs, on a copy of `doc`.
 pub(crate) fn layout_draft(
@@ -133,6 +144,8 @@ pub(crate) fn layout_draft(
         }
     }
     let mut draft = doc.clone();
+    // As Apply does, so the draft is measured in the fonts it will be written in.
+    complete_named_fonts(&mut draft, page, lines, source, text, style);
     rewrite_block_from(&mut draft, page, lines.to_vec(), block, Some(text), style, MAX_TYPE3_GLYPHS)?;
     let mut rect: Option<[f64; 4]> = None;
     for line in text_lines(&draft, page)? {

@@ -44,7 +44,7 @@ pub use blocks::{
 };
 use blocks::{kept_words, paragraph_separator, row_break};
 pub use editor::{TextEditLayout, TextEditorFont, register_text_font, text_edit_layout, text_editor_fonts};
-use editor::{builtin_thai_choice, layout_draft};
+use editor::{builtin_thai_choice, complete_named_fonts, layout_draft};
 use fallback::{
     MAX_TYPE3_GLYPHS, Type3Glyph, fallback_face, needs_type3, no_fallback_font, no_glyph_for, same_base_font, same_font, source_encodes,
     source_family, source_program, source_show, source_space, source_width, type3_faces, type3_glyph, write_type3_glyphs,
@@ -53,7 +53,7 @@ use fallback::{
 pub(crate) use fallback::{SOURCE_SPACE_CALLS, take_source_character_measurements};
 #[cfg(test)]
 use fallback::{add_type3_font, is_type3_fallback};
-pub(crate) use fallback::{glyph_path, type3_font_dict, unique_font_name};
+pub(crate) use fallback::{complete_named_font_widths, glyph_path, type3_font_dict, unique_font_name};
 #[cfg(test)]
 pub(crate) use interp::METRICS_BUILT;
 use interp::{Origin, Paint, union};

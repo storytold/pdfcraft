@@ -58,6 +58,19 @@ fn craft_fonts(dir: &std::path::Path, required: bool) -> Result<String, String> 
             Err(e) if required => return Err(format!("{}: {e}", chinese.display())),
             Err(e) => println!("cargo::warning=skipping optional Chinese fonts: {}: {e}", chinese.display()),
         }
+        // The Latin catalogue: metric-compatible counterparts of common document fonts
+        // (Liberation for Arial, Times New Roman and Courier New; Carlito for Calibri; Caladea for
+        // Cambria) and popular open families. Edits draw the characters a source subset lacks
+        // with them instead of a Japanese face. Optional and native-only like the Chinese one: a
+        // broken one never discards the main faces.
+        let latin = dir.join("fonts/latin-manifest.txt");
+        println!("cargo::rerun-if-changed={}", latin.display());
+        if latin.is_file() {
+            match manifest(dir, &latin, false, false) {
+                Ok(entries) => out.push_str(&entries),
+                Err(e) => println!("cargo::warning=skipping optional Latin fonts: {e}"),
+            }
+        }
     }
     Ok(out)
 }

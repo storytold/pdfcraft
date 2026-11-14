@@ -1983,6 +1983,27 @@ fn without_craft_fonts(test: &str) -> bool {
     true
 }
 
+/// The face that draws Latin, Greek or Cyrillic `text` a source font named `base` lacks: its
+/// craft-fonts stand-in when the build has one with every letter, else the bundled Inter face.
+fn latin_fallback_face(base: &str, serif: bool, bold: bool, text: &str) -> &'static pdfcraft_fonts::CraftFont {
+    let letters: Vec<char> = text.chars().filter(|c| !c.is_whitespace()).collect();
+    let faces: Vec<_> = pdfcraft_fonts::document_latin_stand_ins(base, serif, false, bold, false)
+        .into_iter()
+        .chain(pdfcraft_fonts::document_latin_fonts(bold))
+        .collect();
+    faces.iter().copied().find(|f| letters.iter().all(|c| pdfcraft_fonts::japanese_glyph_from(f, *c).is_ok())).unwrap_or(faces[0])
+}
+
+/// The `/FontName` a generated fallback font gives its face ("LiberationSans-Regular").
+fn fallback_font_name(face: &pdfcraft_fonts::CraftFont) -> String {
+    format!("{}-{}", face.family, face.style).replace(' ', "")
+}
+
+/// Whether a font resource is one an edit generated from a Japanese or Latin fallback face.
+fn is_generated(name: &[u8]) -> bool {
+    name.starts_with(b"PCJp") || name.starts_with(b"PCLat")
+}
+
 #[test]
 fn japanese_line_uses_unicode_type3_fallback() {
     if without_craft_fonts("japanese_line_uses_unicode_type3_fallback") {
@@ -2012,17 +2033,17 @@ fn fallback_paths(doc: &Document) -> Vec<Vec<u8>> {
     let p = pdfcraft_model::pages(doc).swap_remove(0);
     let res = doc.resolve(p.dict.get(b"Resources").unwrap());
     let fonts = doc.resolve(res.as_dict().unwrap().get(b"Font").unwrap());
-    let font = doc.resolve(fonts.as_dict().unwrap().get(b"PCJp").unwrap());
-    let procs = doc.resolve(font.as_dict().unwrap().get(b"CharProcs").unwrap());
-    procs
-        .as_dict()
-        .unwrap()
-        .iter()
-        .map(|(_, object)| match &*doc.resolve(object) {
+    let mut glyphs = Vec::new();
+    for (_, font) in fonts.as_dict().unwrap().iter().filter(|(name, _)| is_generated(name)) {
+        let font = doc.resolve(font);
+        let procs = doc.resolve(font.as_dict().unwrap().get(b"CharProcs").unwrap());
+        glyphs.extend(procs.as_dict().unwrap().iter().map(|(_, object)| match &*doc.resolve(object) {
             pdfcraft_cos::Object::Stream(s) => s.decoded().unwrap(),
             other => panic!("expected a glyph stream, got {other:?}"),
-        })
-        .collect()
+        }));
+    }
+    assert!(!glyphs.is_empty(), "a generated fallback font");
+    glyphs
 }
 
 #[test]
@@ -2373,16 +2394,18 @@ fn mixed_source_subset_without_space_keeps_fallback_runs_after_reopen() {
         assert_eq!(text::text_blocks(&doc, 0).unwrap()[0].text, draft);
         assert_eq!(doc.get(pdfcraft_cos::ObjRef::new(6, 0)).as_ref(), &original);
         let lines = text::text_lines(&doc, 0).unwrap();
+        let face = fallback_font_name(latin_fallback_face("ABCDEF+Arial", false, false, "қ"));
         assert!(lines.iter().any(|line| line.text.contains('a') && line.font == "F2"));
         assert!(lines.iter().any(|line| line.text.contains('b') && line.font == "F2"));
-        assert!(lines.iter().any(|line| line.text.contains('қ') && line.base_font == "Inter-Regular"));
-        assert!(lines.iter().any(|line| line.text.contains(' ') && line.base_font == "Inter-Regular"));
+        assert!(lines.iter().any(|line| line.text.contains('қ') && line.base_font == face), "{lines:?}");
+        assert!(lines.iter().any(|line| line.text.contains(' ') && line.base_font == face), "{lines:?}");
     }
 }
 
-/// #2593: the craft-fonts faces are Japanese, and part of the Cyrillic (Uzbek қ ғ ҳ, Kazakh ә ө ү
-/// ұ һ) is in none of them. The bundled Inter face has it, so the replacement is written instead of
-/// being refused, and a build without craft-fonts can do it too.
+/// #2593: the craft-fonts Japanese faces lack part of the Cyrillic (Uzbek қ ғ ҳ, Kazakh ә ө ү ұ
+/// һ). The line's Latin stand-in (Liberation Sans for Arial, with craft-fonts' Latin catalogue) or
+/// the bundled Inter face has it, so the replacement is written instead of being refused, and a
+/// build without craft-fonts can do it too.
 #[test]
 fn uzbek_and_kazakh_cyrillic_use_the_bundled_latin_face() {
     for replacement in ["The quick brown fox jumps over the lazy dog қизил", "әже", "ўзбекча ғўза"] {
@@ -2390,7 +2413,8 @@ fn uzbek_and_kazakh_cyrillic_use_the_bundled_latin_face() {
             let mut doc = text_page("BT /F2 12 Tf 72 700 Td (ab) Tj ET");
             let edit =
                 if paragraph { text::replace_block(&mut doc, 0, 0, replacement) } else { text::replace_line(&mut doc, 0, 0, replacement) }.unwrap();
-            assert_eq!(edit.substituted.as_deref(), Some("Inter Type3"), "{replacement}: {edit:?}");
+            let face = latin_fallback_face("ABCDEF+Arial", false, false, replacement);
+            assert_eq!(edit.substituted, Some(format!("{} Type3", face.family)), "{replacement}: {edit:?}");
             let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
             assert!(content.contains("/PCLat"), "{replacement}: {content}");
             let reopened = reopen(&doc);
@@ -2405,19 +2429,21 @@ fn uzbek_and_kazakh_cyrillic_use_the_bundled_latin_face() {
             }
             for ch in replacement.chars().filter(|ch| !ch.is_ascii()) {
                 assert!(
-                    lines.iter().any(|line| line.text.contains(ch) && line.base_font == "Inter-Regular"),
-                    "the generated Inter face draws {ch}: {lines:?}"
+                    lines.iter().any(|line| line.text.contains(ch) && line.base_font == fallback_font_name(face)),
+                    "the generated {} face draws {ch}: {lines:?}",
+                    face.family
                 );
             }
         }
     }
 }
 
-/// The Japanese faces keep first refusal for the Cyrillic they do carry, so Russian text keeps the
-/// face it was drawn with before the bundled Latin face was added.
+/// Russian text in a Latin line takes the line's Latin stand-in, not a Japanese face (which sets
+/// Cyrillic full-width); in a line with Japanese the Japanese faces keep the Cyrillic they carry,
+/// so the line keeps one look.
 #[test]
-fn cyrillic_the_japanese_faces_carry_keeps_them() {
-    if without_craft_fonts("cyrillic_the_japanese_faces_carry_keeps_them") {
+fn cyrillic_takes_the_latin_stand_in_and_the_japanese_face_in_japanese_text() {
+    if without_craft_fonts("cyrillic_takes_the_latin_stand_in_and_the_japanese_face_in_japanese_text") {
         return;
     }
     let face = pdfcraft_fonts::document_japanese_font_for_style(false, false).unwrap();
@@ -2427,8 +2453,12 @@ fn cyrillic_the_japanese_faces_carry_keeps_them() {
     }
     let mut doc = text_page("BT /F2 12 Tf 72 700 Td (ab) Tj ET");
     let edit = text::replace_line(&mut doc, 0, 0, "Привет, world").unwrap();
-    let expected = format!("{} Type3", face.family);
-    assert_eq!(edit.substituted.as_deref(), Some(expected.as_str()));
+    let latin = latin_fallback_face("ABCDEF+Arial", false, false, "Привет, world");
+    assert_eq!(edit.substituted, Some(format!("{} Type3", latin.family)));
+    assert_ne!(latin.family, face.family);
+    let mut doc = text_page("BT /F2 12 Tf 72 700 Td (ab) Tj ET");
+    let edit = text::replace_line(&mut doc, 0, 0, "Привет 日本").unwrap();
+    assert_eq!(edit.substituted, Some(format!("{} Type3", face.family)));
 }
 
 #[test]
@@ -2545,7 +2575,7 @@ fn fallback_fonts(doc: &Document) -> Vec<(Vec<u8>, Dict)> {
         .as_dict()
         .unwrap()
         .iter()
-        .filter(|(name, _)| name.starts_with(b"PCJp"))
+        .filter(|(name, _)| is_generated(name))
         .map(|(name, font)| (name.clone(), doc.resolve(font).as_dict().unwrap().clone()))
         .collect()
 }
@@ -2594,7 +2624,7 @@ fn styled_paragraph_batches_cyrillic_without_changing_source_fonts() {
     assert_eq!(fallback_fonts(&doc).len(), 1, "the five letters must share one font");
     let lines = text::text_lines(&doc, 0).unwrap();
     assert!(lines.iter().any(|l| l.base_font == "Helvetica" && l.text.starts_with("The quick brown fox")), "{lines:?}");
-    let fallback: Vec<_> = lines.iter().filter(|l| l.font.starts_with("PCJp")).collect();
+    let fallback: Vec<_> = lines.iter().filter(|l| is_generated(l.font.as_bytes())).collect();
     assert_eq!(fallback.len(), 1, "one word must be one text run: {fallback:?}");
     assert_eq!(fallback[0].text, "шалом");
     assert_eq!(lines.iter().map(|l| l.text.as_str()).collect::<String>().replace(' ', ""), replacement.replace([' ', '\n'], ""));
@@ -2748,7 +2778,10 @@ fn styled_fallback_same_base_font_and_character_keep_both_weights() {
     let fonts = fallback_fonts(&doc);
     let mut names: Vec<_> = fonts.iter().map(|(_, f)| pdfcraft_fonts::pdf::Metrics::from_dict(&doc, f).base_font).collect();
     names.sort();
-    assert_eq!(names, ["BIZUDPGothic-Bold", "BIZUDPGothic-Regular"]);
+    // Latin and Cyrillic letters take the source's Latin stand-in, in each weight.
+    let mut expected = [false, true].map(|bold| fallback_font_name(latin_fallback_face("NeutralFace", false, bold, "ш")));
+    expected.sort();
+    assert_eq!(names, expected);
     let outlines: Vec<_> = fonts
         .iter()
         .map(|(_, f)| {
@@ -2938,8 +2971,9 @@ fn type3_fallback_glyphs_declare_a_well_formed_d1() {
     }
 }
 
-/// Shippori Mincho, the serif fallback, has no Cyrillic: Bulgarian replacement text in a serif
-/// line takes a fallback face that has every letter instead of failing on the first one.
+/// Bulgarian replacement text in a serif line takes a fallback face that has every letter (the
+/// serif Latin stand-in, or the bundled Inter face; Shippori Mincho has no Cyrillic) instead of
+/// failing on the first one.
 #[test]
 fn cyrillic_replacement_in_a_serif_line_uses_a_face_with_the_letters() {
     if without_craft_fonts("cyrillic_replacement_in_a_serif_line_uses_a_face_with_the_letters") {
@@ -2967,7 +3001,7 @@ fn fallback_widths(doc: &Document) -> Vec<f64> {
     let p = pdfcraft_model::pages(doc).swap_remove(0);
     let res = doc.resolve(p.dict.get(b"Resources").unwrap());
     let fonts = doc.resolve(res.as_dict().unwrap().get(b"Font").unwrap());
-    let font = doc.resolve(fonts.as_dict().unwrap().get(b"PCJp").unwrap());
+    let font = doc.resolve(fonts.as_dict().unwrap().iter().find(|(name, _)| is_generated(name)).unwrap().1);
     let font = font.as_dict().unwrap();
     let widths = doc.resolve(font.get(b"Widths").unwrap()).as_array().unwrap().iter().filter_map(|w| w.as_f64()).collect::<Vec<_>>();
     // "София 2027": the first five codes are the letters.
@@ -9337,12 +9371,16 @@ fn a_shaped_run_is_one_text_object_with_each_glyph_where_shaping_put_it() {
 #[test]
 fn a_subset_program_is_not_trusted_for_new_characters_and_the_error_names_the_character() {
     let mut doc = embedded_program_page("BT /F1 12 Tf 72 700 Td (Stable text) Tj ET", "ABCDEF+Inter-Regular");
-    // The subset's own program is not trusted for a character: a fallback face draws it through a
-    // generated font instead (the subset may map a code whose outline was dropped). The Japanese
-    // sans face leads the fallbacks when built with craft-fonts; the bundled Inter face otherwise.
+    // The subset's own program is not trusted for a character (the subset may map a code whose
+    // outline was dropped): craft-fonts' complete Inter face completes it when the build has one,
+    // else a fallback face draws it through a generated font.
     let edit = text::rewrite_block(&mut doc, 0, 0, Some("Stable tőxt"), &text::BlockStyle::default()).unwrap();
-    let face = pdfcraft_fonts::document_japanese_font_for_style(false, false).map_or("Inter", |f| f.family);
-    assert_eq!(edit.substituted, Some(format!("{face} Type3")));
+    if pdfcraft_fonts::embedding::matching_craft_faces("Inter-Regular").is_empty() {
+        let face = latin_fallback_face("ABCDEF+Inter-Regular", false, false, "ő");
+        assert_eq!(edit.substituted, Some(format!("{} Type3", face.family)));
+    } else {
+        assert_eq!(edit.substituted, None);
+    }
     assert_eq!(text::text_blocks(&reopen(&doc), 0).unwrap()[0].editor_text, "Stable tőxt");
     // A character no fallback face has is refused, named, and left as it was.
     let mut doc = embedded_program_page("BT /F1 12 Tf 72 700 Td (Stable text) Tj ET", "ABCDEF+Inter-Regular");
@@ -9351,6 +9389,218 @@ fn a_subset_program_is_not_trusted_for_new_characters_and_the_error_names_the_ch
     let Err(EditError::Invalid(msg)) = result else { panic!("expected a clear error, got {result:?}") };
     assert!(msg.contains("ก (U+0E01)") && msg.contains("Load font") && !msg.contains("Japanese"), "{msg}");
     assert_eq!(page_content_bytes(&doc, 0), before);
+}
+
+/// #2378: one letter an embedded subset lacks is drawn by a stand-in, and the rest of the paragraph
+/// keeps its own font, its widths and so its line breaks. It used to be set whole in a standard
+/// font (Helvetica), which changed all three.
+#[test]
+fn a_letter_an_embedded_subset_lacks_leaves_the_rest_in_the_source_font() {
+    // The subset's /Widths stop at `y`: it has no `z`.
+    let subset_page = || {
+        let mut doc = embedded_program_page("BT /F1 12 Tf 72 700 Td (Stable text) Tj ET", "ABCDEF+HouseGrotesk");
+        let r = pdfcraft_cos::ObjRef::new(5, 0);
+        let mut font = doc.get(r).as_dict().unwrap().clone();
+        font.set(b"LastChar".to_vec(), Object::Int(121));
+        font.set(b"Widths".to_vec(), Object::Array((32..=121).map(|_| Object::Int(560)).collect()));
+        doc.set(r, Object::Dict(font));
+        reopen(&doc)
+    };
+    let mut doc = subset_page();
+    let before = text::text_lines(&doc, 0).unwrap();
+    let edit = text::rewrite_block(&mut doc, 0, 0, Some("Stable text z"), &text::BlockStyle::default()).unwrap();
+    let stand_in = latin_fallback_face("ABCDEF+HouseGrotesk", false, false, "z");
+    assert_eq!(edit.substituted, Some(format!("{} Type3", stand_in.family)), "only the missing letter is substituted");
+    let doc = reopen(&doc);
+    assert_eq!(text::text_blocks(&doc, 0).unwrap()[0].text, "Stable text z");
+    let lines = text::text_lines(&doc, 0).unwrap();
+    let own: Vec<_> = lines.iter().filter(|l| l.base_font == "ABCDEF+HouseGrotesk").collect();
+    assert_eq!(
+        own.iter().map(|l| l.text.trim()).collect::<Vec<_>>().join(" ").split_whitespace().collect::<Vec<_>>(),
+        ["Stable", "text"],
+        "{lines:?}"
+    );
+    assert!(lines.iter().any(|l| l.text.contains('z') && l.base_font == fallback_font_name(stand_in)), "{lines:?}");
+    assert!(!lines.iter().any(|l| l.base_font.starts_with("Helvetica")), "no standard font takes the paragraph over: {lines:?}");
+    // The words it had keep their place and width.
+    let first = own.iter().find(|l| l.text.starts_with("Stable")).unwrap();
+    assert!((first.rect[0] - before[0].rect[0]).abs() < 0.01 && (first.baseline()[1] - before[0].baseline()[1]).abs() < 0.01);
+    // Text none of whose letters the subset has is still set in the standard font: nothing of the
+    // source would be kept by a generated one.
+    let mut doc = subset_page();
+    let edit = text::rewrite_block(&mut doc, 0, 0, Some("zzz"), &text::BlockStyle::default()).unwrap();
+    assert_eq!(edit.substituted.as_deref(), Some("Helvetica"));
+    // A subset whose program can't be read keeps nothing a generated font could sit beside: the
+    // standard font of its family shows the whole paragraph, as before.
+    let mut doc = text_page("BT /F2 12 Tf 72 700 Td (ab) Tj ET");
+    let edit = text::replace_block(&mut doc, 0, 0, "ab z").unwrap();
+    assert_eq!(edit.substituted.as_deref(), Some("Helvetica"));
+}
+
+/// A font the document names without embedding (`ArialMT`, `Verdana`) is the viewer's own complete
+/// face, but its `/Widths` often list only the characters its text used. A new letter is written in
+/// that font once its advance is known (here Arial's published metrics), instead of the whole
+/// paragraph going to a standard font; nothing is embedded.
+#[test]
+fn a_named_font_takes_a_new_letter_once_its_advance_is_known() {
+    let page = |base: &str| {
+        let font =
+            format!("<< /Type /Font /Subtype /TrueType /BaseFont /{base} /FirstChar 97 /LastChar 98 /Widths [556 556] /Encoding /WinAnsiEncoding >>");
+        let content = stream("", "BT /F1 12 Tf 72 700 Td (abba) Tj ET");
+        build(&[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
+            &content,
+            &font,
+        ])
+    };
+    for paragraph in [true, false] {
+        let mut doc = page("ArialMT");
+        let edit = if paragraph { text::replace_block(&mut doc, 0, 0, "abba zé") } else { text::replace_line(&mut doc, 0, 0, "abba zé") }.unwrap();
+        assert_eq!(edit.substituted, None, "the paragraph keeps the font it names");
+        let doc = reopen(&doc);
+        let lines = text::text_lines(&doc, 0).unwrap();
+        assert!(lines.iter().all(|l| l.base_font == "ArialMT"), "{lines:?}");
+        assert_eq!(lines.iter().map(|l| l.text.as_str()).collect::<String>(), "abba zé");
+        let font = doc.get(pdfcraft_cos::ObjRef::new(5, 0));
+        let font = font.as_dict().unwrap();
+        assert!(font.get(b"FontDescriptor").is_none(), "nothing is embedded");
+        let metrics = pdfcraft_fonts::pdf::Metrics::from_dict(&doc, font);
+        // Helvetica's published advances, which an installed Arial shares to the unit: z 500,
+        // é 556. The widths the font had are untouched.
+        let width = |text: &str| metrics.codes(&metrics.encode(text).unwrap()).iter().map(|(c, _)| metrics.width(*c)).sum::<f64>();
+        assert!((width("z") - 0.5).abs() < 1e-3 && (width("é") - 0.556).abs() < 1e-3 && (width("a") - 0.556).abs() < 1e-9);
+    }
+    // A font nothing here knows the metrics of still takes the standard font, and a refused edit
+    // leaves the font object as it was.
+    let mut doc = page("HouseGroteskNobodyHas");
+    assert_eq!(text::replace_block(&mut doc, 0, 0, "abba z").unwrap().substituted.as_deref(), Some("Helvetica"));
+    let mut doc = page("ArialMT");
+    let before = write_full(&doc, &Default::default()).unwrap();
+    assert!(text::replace_block(&mut doc, 0, 0, "abba z \u{1f4a9}").is_err());
+    assert_eq!(write_full(&doc, &Default::default()).unwrap(), before);
+}
+
+/// A bulleted item reads `•\t text`: InDesign and Word draw the tab as a glyph of no width and move
+/// the text after it. No font has that tab to write again, and any edit to such a paragraph was
+/// refused. The tab becomes the spaces that span its gap, so the text after it stays where it was.
+#[test]
+fn a_paragraph_with_a_tab_its_font_cannot_write_is_edited_with_the_gap_kept() {
+    let widths: Vec<String> = (9..=122).map(|code| if code == 9 { "0".to_owned() } else { "500".to_owned() }).collect();
+    let font = format!(
+        "<< /Type /Font /Subtype /Type1 /BaseFont /HouseSans /FirstChar 9 /LastChar 122 /Widths [{}] /Encoding /WinAnsiEncoding /ToUnicode 6 0 R >>",
+        widths.join(" ")
+    );
+    // The tab is code 9, of no width; a move of one em stands for it.
+    let content = stream("", "BT /F1 12 Tf 72 700 Td [(a\\011) -1000 (bcd efg)] TJ ET");
+    let to_unicode = stream("", "1 begincodespacerange <00> <FF> endcodespacerange 1 beginbfchar <09> <0009> endbfchar");
+    let mut doc = build(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
+        &content,
+        &font,
+        &to_unicode,
+    ]);
+    let before = text::text_lines(&doc, 0).unwrap();
+    // The move reads as a space after the tab, as a bulleted item's does (`•\t text`).
+    assert_eq!(before.iter().map(|l| l.text.as_str()).collect::<String>(), "a\t bcd efg");
+    let right = before.iter().map(|l| l.rect[2]).fold(f64::MIN, f64::max);
+    text::replace_block(&mut doc, 0, 0, "a\t bcd efgh").expect("an edit after the tab is not refused");
+    let doc = reopen(&doc);
+    let after = text::text_lines(&doc, 0).unwrap();
+    let shown: String = after.iter().map(|l| l.text.as_str()).collect();
+    assert!(shown.starts_with('a') && shown.ends_with("bcd efgh") && !shown.contains('\t'), "{shown:?}");
+    // The gap is one em, two of this font's spaces: the one read after the tab and one for the
+    // tab. `bcd` has not moved, so the row ends `h`'s half an em further right.
+    let end = after.iter().map(|l| l.rect[2]).fold(f64::MIN, f64::max);
+    assert!((end - right - 6.0).abs() < 0.5, "{right} -> {end}");
+}
+
+/// A row an edit makes too long flows on into the rows after it, as far as the next break that
+/// was typed: the words that no longer fit used to be left on a row of their own, with every row
+/// after it pushed down a line.
+#[test]
+fn a_row_grown_too_long_flows_into_the_rows_after_it() {
+    // Two wrapped rows of one measure (each ends where its next word no longer fits), a short
+    // row ended on purpose, and one more.
+    let content = "BT /F1 10 Tf 12 TL 72 700 Td (abcd efgh abcd efgh abcd efgh ab) Tj T* (efgh abcd efgh abcd efgh abcd ef) Tj T* (abcd efgh.) Tj T* (efgh abcd efgh abcd efgh abcd gh) Tj ET";
+    let mut doc = text_page(content);
+    let block = text::text_blocks(&doc, 0).unwrap().remove(0);
+    assert_eq!(block.rows.len(), 4, "{:?}", block.editor_text);
+    let baselines: Vec<f64> = text::text_lines(&doc, 0).unwrap().iter().map(|l| l.baseline()[1]).collect();
+    let right = block.rect[2];
+    // Two more words in the first row.
+    let draft = block.editor_text.replacen("abcd", "abcd XXXX YYYY", 1);
+    text::rewrite_block(&mut doc, 0, 0, Some(&draft), &text::BlockStyle::default()).unwrap();
+    let doc = reopen(&doc);
+    let block = text::text_blocks(&doc, 0).unwrap().remove(0);
+    let rows: Vec<&str> = block.editor_text.split('\n').map(str::trim_end).collect();
+    assert_eq!(rows.len(), 4, "the words flow down; no row is added: {rows:?}");
+    assert_eq!(
+        rows,
+        ["abcd XXXX YYYY efgh abcd efgh", "abcd efgh ab efgh abcd efgh abcd", "efgh abcd ef abcd efgh.", "efgh abcd efgh abcd efgh abcd gh"],
+        "each row passes on what no longer fits; the row after the typed break is as it was"
+    );
+    let words = |text: &str| text.split_whitespace().map(str::to_owned).collect::<Vec<_>>();
+    assert_eq!(words(&block.editor_text), words(&draft), "every word, in order");
+    // Each row still ends inside the paragraph and stands on the baseline it had.
+    let lines = text::text_lines(&doc, 0).unwrap();
+    assert!(lines.iter().all(|l| l.rect[2] <= right + 0.6), "{right}: {:?}", lines.iter().map(|l| l.rect[2]).collect::<Vec<_>>());
+    let mut after: Vec<f64> = lines.iter().map(|l| l.baseline()[1]).collect();
+    after.dedup_by(|a, b| (*a - *b).abs() < 0.01);
+    assert_eq!(after.len(), 4, "{after:?}");
+    assert!(after.iter().zip(&baselines).all(|(a, b)| (a - b).abs() < 0.01), "{after:?} vs {baselines:?}");
+    // A row that still fits leaves its paragraph's breaks alone.
+    let mut doc = text_page(content);
+    let source = text::text_blocks(&doc, 0).unwrap().remove(0).editor_text;
+    let mut source_rows: Vec<String> = source.split('\n').map(str::to_owned).collect();
+    source_rows[0] = source_rows[0].trim_end().strip_suffix('b').unwrap().to_owned();
+    text::rewrite_block(&mut doc, 0, 0, Some(&source_rows.join("\n")), &text::BlockStyle::default()).unwrap();
+    let block = text::text_blocks(&reopen(&doc), 0).unwrap().remove(0);
+    let rows: Vec<&str> = block.editor_text.split('\n').map(str::trim_end).collect();
+    assert_eq!(rows, ["abcd efgh abcd efgh abcd efgh a", "efgh abcd efgh abcd efgh abcd ef", "abcd efgh.", "efgh abcd efgh abcd efgh abcd gh"]);
+}
+
+/// A no-break space the font has no code for (Word draws one by moving) is written as a gap of
+/// the space's advance, not refused: a row holding one could be shown but not written again.
+#[test]
+fn a_space_character_the_font_cannot_write_is_a_gap() {
+    // The subset has a, b and the space; its ToUnicode reads code 1, of no width, as U+00A0.
+    let font = "<< /Type /Font /Subtype /Type1 /BaseFont /HouseSans /FirstChar 1 /LastChar 98 /Widths [0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 300 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 500 500] /Encoding /WinAnsiEncoding /ToUnicode 6 0 R >>";
+    let content = stream("", "BT /F1 12 Tf 72 700 Td [(ab\\001) -300 (ba ab)] TJ ET");
+    let to_unicode = stream("", "1 begincodespacerange <00> <FF> endcodespacerange 1 beginbfchar <01> <00A0> endbfchar");
+    let mut doc = build(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
+        &content,
+        font,
+        &to_unicode,
+    ]);
+    let source = text::text_blocks(&doc, 0).unwrap().remove(0).editor_text;
+    assert!(source.contains('\u{a0}'), "{source:?}");
+    for paragraph in [true, false] {
+        let mut edited = doc.clone();
+        let draft = format!("{}b", source.trim_end());
+        if paragraph { text::replace_block(&mut edited, 0, 0, &draft) } else { text::replace_line(&mut edited, 0, 0, &draft) }
+            .expect("the no-break space is no reason to refuse the edit");
+        let lines = text::text_lines(&reopen(&edited), 0).unwrap();
+        assert!(lines.iter().all(|l| l.base_font == "HouseSans"), "{lines:?}");
+        let shown: String = lines.iter().map(|l| l.text.as_str()).collect();
+        assert_eq!(shown.split_whitespace().collect::<Vec<_>>(), ["ab", "ba", "abb"], "{shown:?}");
+    }
+    let _ = &mut doc;
+}
+
+/// A variation selector after a character the source font shows is the only thing missing: it gets
+/// its empty glyph instead of the edit failing as "empty".
+#[test]
+fn a_selector_after_a_character_the_source_font_has_is_kept() {
+    let mut doc = embedded_program_page("BT /F1 12 Tf 72 700 Td (Stable text) Tj ET", "ABCDEF+HouseGrotesk");
+    text::rewrite_block(&mut doc, 0, 0, Some("Stable text 1\u{FE0F}"), &text::BlockStyle::default()).unwrap();
+    assert_eq!(text::text_blocks(&reopen(&doc), 0).unwrap()[0].text, "Stable text 1\u{FE0F}");
 }
 
 #[test]
@@ -15412,4 +15662,119 @@ fn thai_paragraphs_break_the_row_on_unicode_row_breaks() {
             .unwrap_or_else(|e| panic!("matching U+{:04X}: {e}", u32::from(separator)));
         assert_eq!(rows(&doc), ["กข", "ค"], "matching U+{:04X}", u32::from(separator));
     }
+}
+
+/// A refused edit leaves the document exactly as it was, so the session it was tried in is still
+/// current and its next draft commits. The widths a named font learns are written on a copy with
+/// the edit: put back by hand, the font objects were new objects to the session, and every later
+/// commit was refused ("the paragraph changed while it was being edited"). The preview completes
+/// the widths as Apply does, so a draft is measured in the font it will be written in.
+#[test]
+fn a_session_survives_a_refused_edit_and_previews_a_named_font_as_it_writes_it() {
+    // Widths that are not the standard face's, so a paragraph set in Helvetica would differ.
+    let font = "<< /Type /Font /Subtype /TrueType /BaseFont /ArialMT /FirstChar 97 /LastChar 98 /Widths [600 600] /Encoding /WinAnsiEncoding >>";
+    let content = stream("", "BT /F1 12 Tf 72 700 Td (abba) Tj ET");
+    let mut doc = build(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
+        &content,
+        font,
+    ]);
+    let session = text::TextSession::open(&doc, 0, 0).unwrap();
+    let style = BlockStyle::default();
+    assert!(session.commit(&mut doc, Some("abba z \u{1f4a9}"), &style).is_err());
+    assert!(session.is_current(&doc), "a refused edit changes nothing the session watches");
+    let preview = session.layout("abba z", &style).unwrap().draft_rect.unwrap();
+    let edit = session.commit(&mut doc, Some("abba z"), &style).expect("the session still commits");
+    assert_eq!(edit.substituted, None, "the paragraph keeps the font it names");
+    let lines = text::text_lines(&reopen(&doc), 0).unwrap();
+    assert!(lines.iter().all(|l| l.base_font == "ArialMT"), "{lines:?}");
+    let right = lines.iter().map(|l| l.rect[2]).fold(f64::MIN, f64::max);
+    assert!((preview[2] - right).abs() < 0.05, "the preview ends where the edit does: {} vs {right}", preview[2]);
+    // The line path refuses on a copy too.
+    let mut by_line = build(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
+        &content,
+        font,
+    ]);
+    let session = text::TextSession::open(&by_line, 0, 0).unwrap();
+    assert!(text::replace_line(&mut by_line, 0, 0, "abba z \u{1f4a9}").is_err());
+    assert!(session.is_current(&by_line));
+}
+
+/// Formatting ranges count bytes in the text as the caller has it, tabs and all. A tab that
+/// becomes several spaces moves the text after it, and the ranges go with it: left where they
+/// were, they coloured the gap and the letters before the ones asked for.
+#[test]
+fn formatting_after_a_tab_that_became_spaces_reaches_the_letters_asked_for() {
+    let widths: Vec<String> = (9..=122).map(|code| if code == 9 { "0".to_owned() } else { "500".to_owned() }).collect();
+    let font = format!(
+        "<< /Type /Font /Subtype /Type1 /BaseFont /HouseSans /FirstChar 9 /LastChar 122 /Widths [{}] /Encoding /WinAnsiEncoding /ToUnicode 6 0 R >>",
+        widths.join(" ")
+    );
+    // The tab is code 9, of no width; a move of two ems stands for it: four of this font's spaces.
+    let content = stream("", "BT /F1 12 Tf 72 700 Td [(a\\011) -2000 (bcd efg)] TJ ET");
+    let to_unicode = stream("", "1 begincodespacerange <00> <FF> endcodespacerange 1 beginbfchar <09> <0009> endbfchar");
+    let doc = build(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
+        &content,
+        &font,
+        &to_unicode,
+    ]);
+    let source = text::text_blocks(&doc, 0).unwrap().remove(0).editor_text;
+    assert_eq!(source, "a\t bcd efg");
+    let at = source.find("efg").unwrap();
+    let red = BlockStyle {
+        ranges: vec![RangeStyle {
+            range: at..at + 3,
+            family: None,
+            resource: None,
+            size: None,
+            color: Some([1.0, 0.0, 0.0]),
+            underline: None,
+            char_spacing: None,
+            scale: None,
+        }],
+        ..Default::default()
+    };
+    // With the text given again, and with the formatting alone.
+    for draft in [Some(source.as_str()), None] {
+        let mut edited = doc.clone();
+        text::rewrite_block(&mut edited, 0, 0, draft, &red).unwrap();
+        let lines = text::text_lines(&reopen(&edited), 0).unwrap();
+        let shown: String = lines.iter().map(|l| l.text.as_str()).collect();
+        assert!(!shown.contains('\t') && shown.contains("   "), "the tab is the spaces of its gap: {shown:?}");
+        let coloured: String = lines.iter().filter(|l| l.color == [1.0, 0.0, 0.0]).map(|l| l.text.as_str()).collect();
+        assert_eq!(coloured.trim(), "efg", "{draft:?}: {shown:?}");
+    }
+}
+
+/// Whether a source break was a wrap is judged by the word the source set after it, not by what
+/// the draft has there now. A row that ended because a long word didn't fit still flows when the
+/// edit also makes that word short; judged by the draft's short word, the break read as typed, the
+/// flow stopped there, and the short word stayed on a row of its own.
+#[test]
+fn a_break_is_judged_by_the_word_the_source_set_after_it() {
+    // Two wrapped rows, a short third that ends because the long word after it didn't fit, and it.
+    let content = "BT /F1 10 Tf 12 TL 72 700 Td (abcd efgh abcd efgh abcd efgh ab) Tj T* (efgh abcd efgh abcd efgh abcd ef) Tj T* (abcd efgh.) Tj T* (efghabcdefghabcdefghabcdef gh) Tj ET";
+    let mut doc = text_page(content);
+    let block = text::text_blocks(&doc, 0).unwrap().remove(0);
+    assert_eq!(block.rows.len(), 4, "{:?}", block.editor_text);
+    // Two more words in the first row, and the long word made short.
+    let draft = block.editor_text.replacen("abcd", "abcd XXXX YYYY", 1).replace("efghabcdefghabcdefghabcdef", "ef");
+    text::rewrite_block(&mut doc, 0, 0, Some(&draft), &text::BlockStyle::default()).unwrap();
+    let block = text::text_blocks(&reopen(&doc), 0).unwrap().remove(0);
+    let rows: Vec<&str> = block.editor_text.split('\n').map(str::trim_end).collect();
+    let words = |text: &str| text.split_whitespace().map(str::to_owned).collect::<Vec<_>>();
+    assert_eq!(words(&block.editor_text), words(&draft), "every word, in order");
+    assert_eq!(
+        rows,
+        ["abcd XXXX YYYY efgh abcd efgh", "abcd efgh ab efgh abcd efgh abcd", "efgh abcd ef abcd efgh. ef gh"],
+        "the words flow through the wrap, and the short word follows the sentence on its row"
+    );
 }

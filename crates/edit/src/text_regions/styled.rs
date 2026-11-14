@@ -21,10 +21,12 @@ struct FallbackGroup {
 
 struct FallbackBuilder {
     groups: Vec<FallbackGroup>,
-    names: std::collections::BTreeMap<(String, bool, char), usize>,
+    names: std::collections::BTreeMap<(String, bool, bool, char), usize>,
     glyphs: usize,
     per_font: usize,
     budget: usize,
+    /// The paragraph has Japanese in it: its other fallback characters keep the Japanese faces' look.
+    japanese: bool,
 }
 
 struct FontResolver<'a> {
@@ -55,8 +57,9 @@ impl FontResolver<'_> {
         }) {
             return Ok(Some(name.clone()));
         }
-        if let Some(face) =
-            pdfcraft_fonts::embedding::matching_faces(&source.base_font).into_iter().find(|face| pdfcraft_fonts::embedding::covers(face.bytes, text))
+        if let Some(face) = crate::text::fallback::completing_faces(self.doc, self.fonts, &source.font, &source.base_font)
+            .into_iter()
+            .find(|face| pdfcraft_fonts::embedding::covers(face.bytes, text))
         {
             return self.embed_face(face.name(), face.bytes, face.family, "the full source font could not be loaded").map(Some);
         }
@@ -170,7 +173,7 @@ impl CharacterPreparation<'_> {
         let mut thai_programs = pdfcraft_cos::DecodeBudget::new(MAX_THAI_PROGRAMS, 0);
         let mut chars = Vec::new();
         let mut substituted = None;
-        let mut fallback = FallbackBuilder::new(max_glyphs);
+        let mut fallback = FallbackBuilder::new(max_glyphs, draft);
         let mut resolver = FontResolver { doc, fonts, metrics, full_faces: HashMap::new(), programs: HashMap::new() };
         for (range, index) in spans {
             let source = lines.get(index).unwrap_or(first);
@@ -304,9 +307,10 @@ impl CharacterPreparation<'_> {
 }
 
 impl FallbackBuilder {
-    fn new(max_glyphs: usize) -> Self {
+    fn new(max_glyphs: usize, draft: &str) -> Self {
         let per_font = max_glyphs.clamp(1, MAX_TYPE3_GLYPHS);
         Self {
+            japanese: draft.chars().any(crate::text::fallback::needs_japanese),
             groups: Vec::new(),
             names: std::collections::BTreeMap::new(),
             glyphs: 0,
@@ -316,11 +320,11 @@ impl FallbackBuilder {
     }
 
     fn prepare(&mut self, source: &TextLine, ch: char, text: &str, position: usize) -> Result<String, EditError> {
-        let key = (source.base_font.clone(), source.bold, ch);
+        let key = (source.base_font.clone(), source.bold, source.italic, ch);
         let group_index = if let Some(index) = self.names.get(&key) {
             *index
         } else {
-            let (faces, _) = type3_faces(text, source_family(&source.base_font), source.bold)?;
+            let (faces, _) = type3_faces(text, self.japanese, &source.base_font, source_family(&source.base_font), source.bold, source.italic)?;
             let face = fallback_face(&faces, &[ch], |face, ch| japanese_glyph_from(face, ch).is_ok()).ok_or_else(|| no_fallback_font(text))?;
             let index = self.groups.iter().position(|group| std::ptr::eq(group.face, face)).unwrap_or_else(|| {
                 let index = self.groups.len();
@@ -725,7 +729,7 @@ fn styled_break_before(chars: &[StyledChar]) -> Vec<bool> {
 
 fn wrap_styled_rows(
     chars: &[StyledChar],
-    width: f64,
+    width_of: impl Fn(usize) -> f64,
     measure: impl Fn(&[StyledChar]) -> Result<f64, EditError>,
 ) -> Result<WrappedStyledRows, EditError> {
     let break_before = styled_break_before(chars);
@@ -775,7 +779,7 @@ fn wrap_styled_rows(
         }
         let word = chars.get(at..end).unwrap_or_default();
         let word_width = measure(word)?;
-        if !row.is_empty() && !item.0.is_whitespace() && row_width + word_width > width + 0.5 {
+        if !row.is_empty() && !item.0.is_whitespace() && row_width + word_width > width_of(rows.len()) + 0.5 {
             let mut trimmed = 0usize;
             while row.last().is_some_and(|c: &StyledChar| c.0.is_whitespace()) {
                 row.pop();
@@ -803,6 +807,95 @@ fn wrap_styled_rows(
         rows.push(row);
     }
     Ok((rows, row_ranges, row_lines, row_soft, row_gap))
+}
+
+/// Whether the break before source row `row` was a wrap: `Some(gap)` with the separators it
+/// consumed, `None` for one that was typed. A `/PCSoft` or `/PCHard` marker says which. For a row
+/// this app didn't write, the row before it broke where its next word, `next_word` wide, no
+/// longer fit before the paragraph's right edge: a row that had room for that word was ended on
+/// purpose (an address, a list, the end of a sentence set on its own line). [`break_gap`] asks
+/// more, that the row nearly fills the measure, because a width change reflows on its word alone;
+/// here a row has already outgrown its place, and ragged body text rarely fills the measure.
+fn wrapped_before(block: &TextBlock, lines: &[TextLine], row: usize, next_word: f64) -> Option<usize> {
+    let line = block.rows.get(row).and_then(|r| r.first()).and_then(|i| lines.get(*i))?;
+    if line.hard_break {
+        return None;
+    }
+    if line.soft_break {
+        return Some(line.soft_gap);
+    }
+    let before = block.rows.get(row.checked_sub(1)?).and_then(|r| row_rect(r, lines))?;
+    let slack = block.rect[2] - before[2];
+    // The word and the space before it.
+    (next_word > 0.0 && next_word + line.size.max(1.0) * 0.25 > slack).then_some(1)
+}
+
+/// The first word of source row `row` as its first run set it: each character with that run and
+/// its font, the way a draft's characters are measured.
+fn source_first_word(block: &TextBlock, lines: &[TextLine], row: usize) -> Vec<StyledChar> {
+    let Some((index, line)) = block.rows.get(row).and_then(|r| r.first()).and_then(|i| lines.get(*i).map(|line| (*i, line))) else {
+        return Vec::new();
+    };
+    line.text.chars().skip_while(|c| c.is_whitespace()).take_while(|c| !c.is_whitespace()).map(|c| (c, index, line.font.clone())).collect()
+}
+
+/// When an edit makes a row too long for its place, the rows after it flow on from it: each
+/// following break that was a wrap ([`wrapped_before`]) gives way, up to the next break that was
+/// typed, so the words that no longer fit move down through the paragraph as in a word processor.
+/// Before, they were left alone on a row of their own with every row after it pushed down a line,
+/// ragged and one line longer. Rows before the long one, and paragraphs none of whose rows grew
+/// too long, are left as they are: a row the edit doesn't reach keeps its source operators.
+///
+/// A break is replaced in place, so every character keeps its index: by a space, or, where the row
+/// already ends in one, by a `\r`, which the wrap skips. Only while the draft still has the source's
+/// rows; a wrap that consumed no separator (Chinese, Japanese, Thai) stays a break.
+fn reflow_after_overflow(
+    mut chars: Vec<StyledChar>,
+    width_of: &impl Fn(usize) -> f64,
+    measure: &impl Fn(&[StyledChar]) -> Result<f64, EditError>,
+    block: &TextBlock,
+    lines: &[TextLine],
+) -> Result<Vec<StyledChar>, EditError> {
+    let breaks: Vec<usize> = chars.iter().enumerate().filter(|(_, c)| c.0 == '\n').map(|(i, _)| i).collect();
+    if breaks.is_empty() || breaks.len() + 1 != block.rows.len() {
+        return Ok(chars);
+    }
+    let mut start = 0;
+    let mut flowing = false;
+    for (row, end) in breaks.iter().copied().enumerate() {
+        if !flowing {
+            let text = chars.get(start..end).unwrap_or_default();
+            let shown = text.iter().rposition(|c| !c.0.is_whitespace()).map_or(0, |last| last + 1);
+            flowing = measure(text.get(..shown).unwrap_or_default())? > width_of(row) + 0.5;
+        }
+        if flowing {
+            // The break is judged by the word the source set after it, in its own font: what the
+            // draft has there now says nothing about why the source row ended. The draft's word
+            // stands in only where the source's can't be measured.
+            let source_word = source_first_word(block, lines, row + 1);
+            let word = match measure(&source_word) {
+                Ok(width) if width > 0.0 => width,
+                _ => {
+                    let next = chars.get(end + 1..breaks.get(row + 1).copied().unwrap_or(chars.len())).unwrap_or_default();
+                    let from = next.iter().position(|c| !c.0.is_whitespace()).unwrap_or(next.len());
+                    let to = next.iter().skip(from).position(|c| c.0.is_whitespace()).map_or(next.len(), |n| from + n);
+                    measure(next.get(from..to).unwrap_or_default())?
+                }
+            };
+            match wrapped_before(block, lines, row + 1, word) {
+                Some(gap) if gap > 0 => {
+                    let spaced = end.checked_sub(1).and_then(|i| chars.get(i)).is_some_and(|c| c.0.is_whitespace());
+                    if let Some(c) = chars.get_mut(end) {
+                        c.0 = if spaced { '\r' } else { ' ' };
+                    }
+                }
+                // A typed break ends the flow; the rows after it are their own.
+                _ => flowing = false,
+            }
+        }
+        start = end + 1;
+    }
+    Ok(chars)
 }
 
 fn apply_range_styles<'a>(
@@ -1722,7 +1815,18 @@ pub(crate) fn rewrite_styled_block(
         }
         Ok(width)
     };
-    let (mut rows, row_ranges, row_lines, row_soft, row_gap) = wrap_styled_rows(&chars, width, measure)?;
+    // Each row wraps at the paragraph's right edge from its own left edge: a hanging indent's
+    // rows (a bulleted item's, after the first) are narrower than the paragraph's box. A row the
+    // edit adds takes the last source row's. An asked width or alignment lays every row out in
+    // one box, as before.
+    let own_edges = style.width.is_none() && style.align.is_none() && style.aligns.iter().all(Option::is_none);
+    let row_left = |row: usize| block.rows.get(row).or_else(|| block.rows.last()).and_then(|r| row_rect(r, lines)).map(|r| r[0]);
+    let width_of = |row: usize| match row_left(row) {
+        Some(left) if own_edges => (width - (left - block.rect[0]).max(0.0)).max(first.size),
+        _ => width,
+    };
+    let chars = reflow_after_overflow(chars, &width_of, &measure, block, lines)?;
+    let (mut rows, row_ranges, row_lines, row_soft, row_gap) = wrap_styled_rows(&chars, width_of, measure)?;
     let space_styles: Vec<_> = rows.iter_mut().map(|row| assign_subset_space_fonts(row, &metrics)).collect();
     let streams = content_streams(doc, &p.dict)?;
     let pieces = crate::text::joined(&streams);
@@ -1818,7 +1922,15 @@ pub(crate) fn rewrite_styled_block(
         // The row's own alignment, or the paragraph's.
         let asked = row_lines.get(row_index).and_then(|l| style.aligns.get(*l)).copied().flatten().or(style.align);
         let align = asked.unwrap_or(if centered { crate::added::Align::Center } else { crate::added::Align::Left });
-        let original_rect = block.rows.get(row_index).and_then(|row| row_rect(row, lines)).unwrap_or(block.rect);
+        // A row the edit added takes the last source row's edges, not the paragraph's box: a
+        // hanging indent (a bulleted item, whose first row starts at its bullet) carries on at
+        // the indent instead of running back out to the bullet.
+        let original_rect = block
+            .rows
+            .get(row_index)
+            .and_then(|row| row_rect(row, lines))
+            .or_else(|| block.rows.last().and_then(|row| row_rect(row, lines)))
+            .unwrap_or(block.rect);
         let left = if style.width.is_none() && asked.is_none() { original_rect[0] } else { block.rect[0] };
         let available = if style.width.is_none() && asked.is_none() { original_rect[2] - original_rect[0] } else { width };
         let mut x = left

@@ -121,6 +121,10 @@ pub use pdfcraft_xfa::Report as XfaLayout;
 pub use object_clip::{ObjectClip, ObjectClipboard};
 pub use pdfcraft_edit::{EditableObject, MAX_MOVE_OBJECTS, ObjectKind, ObjectTarget};
 
+/// Lets this process complete a document's fonts from the fonts installed on the machine
+/// ([`pdfcraft_fonts::installed`]). The desktop app calls it at start. A headless run does not,
+/// so it reads no font folder outside its `--root`.
+pub use pdfcraft_fonts::installed::allow as allow_installed_fonts;
 pub use pdfcraft_fonts::{MAX_SIGNATURE_CHARS, ScriptOutline, script_missing, script_outline, undrawable_message};
 
 /// Comment geometry helpers (text-box line breaking) for frontends.

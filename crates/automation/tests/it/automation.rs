@@ -4569,6 +4569,31 @@ fn superscript_and_subscript_through_tools() {
     assert_eq!(paragraph(&mut a), "Page ²");
 }
 
+/// A font the document names without embedding takes a new letter in that font (its advance from
+/// the published metrics of the face the name asks for), through the tools and a save: the
+/// paragraph is not set in a standard font, and nothing is embedded.
+#[test]
+fn a_named_font_keeps_a_new_letter_through_tools_and_reopen() {
+    let dir = workdir("named-font-widths");
+    let font = "<< /Type /Font /Subtype /TrueType /BaseFont /ArialMT /FirstChar 97 /LastChar 98 /Widths [556 556] /Encoding /WinAnsiEncoding >>";
+    std::fs::write(dir.join("named.pdf"), page_with_font(font, "BT /F1 12 Tf 72 700 Td (abba) Tj ET")).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({"path": "named.pdf"}))["doc"].as_u64().unwrap();
+    let edit = ok(&mut a, "text_edit", json!({"doc":doc,"page":1,"paragraph":1,"text":"abba z"}));
+    assert_eq!(edit["paragraph"]["font"], "ArialMT", "{edit}");
+    ok(&mut a, "doc_save", json!({"doc":doc,"path":"saved.pdf"}));
+    let reopened = ok(&mut a, "doc_open", json!({"path":"saved.pdf"}))["doc"].as_u64().unwrap();
+    let lines = ok(&mut a, "text_lines", json!({"doc":reopened,"page":1}));
+    let runs = lines["lines"].as_array().unwrap();
+    assert!(runs.iter().all(|l| l["font"] == "ArialMT"), "{lines}");
+    assert_eq!(runs.iter().map(|l| l["text"].as_str().unwrap()).collect::<String>(), "abba z");
+    let saved = std::fs::read(dir.join("saved.pdf")).unwrap();
+    assert!(!saved.windows(8).any(|w| w == b"FontFile"), "nothing is embedded");
+    // Undo puts the font's widths back as they were.
+    ok(&mut a, "edit_undo", json!({"doc":doc}));
+    assert_eq!(page_text(&mut a, doc)[0].trim(), "abba");
+}
+
 #[test]
 fn styled_cyrillic_fallback_is_batched_through_tools_and_reopen() {
     if pdfcraft_fonts::document_japanese_font().is_none() {
@@ -4592,7 +4617,8 @@ fn styled_cyrillic_fallback_is_batched_through_tools_and_reopen() {
     let page = pdfcraft_model::pages(&saved).swap_remove(0);
     let resources = saved.dict(page.dict.get(b"Resources").unwrap()).unwrap();
     let fonts = saved.dict(resources.get(b"Font").unwrap()).unwrap();
-    let fallback_count = fonts.iter().filter(|(name, _)| name.starts_with(b"PCJp")).count();
+    // Generated from a Japanese face (`PCJp`) or, for Latin, Greek and Cyrillic text, a Latin one (`PCLat`).
+    let fallback_count = fonts.iter().filter(|(name, _)| name.starts_with(b"PCJp") || name.starts_with(b"PCLat")).count();
     assert_eq!(fallback_count, 1, "one shared fallback font for the new word");
     ok(&mut a, "edit_undo", json!({"doc":doc}));
     assert!(!page_text(&mut a, doc)[0].contains("шалом"));
@@ -6206,10 +6232,15 @@ fn faux_redacted_fixture() -> Vec<u8> {
 
 /// A one-page US Letter PDF drawing `body` with Helvetica as /F1.
 fn helvetica_page(body: &str) -> Vec<u8> {
+    page_with_font("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>", body)
+}
+
+/// A one-page document whose `/F1` is the font dictionary `font`.
+fn page_with_font(font: &str, body: &str) -> Vec<u8> {
     let objs: Vec<Vec<u8>> = vec![
         b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
         b"<< /Type /Pages /Kids [4 0 R] /Count 1 >>".to_vec(),
-        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_vec(),
+        font.as_bytes().to_vec(),
         "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 5 0 R /Resources << /Font << /F1 3 0 R >> >> >>".to_string().into_bytes(),
         format!("<< /Length {} >>\nstream\n{body}\nendstream", body.len()).into_bytes(),
     ];

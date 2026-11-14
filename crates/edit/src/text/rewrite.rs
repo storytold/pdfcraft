@@ -1,8 +1,8 @@
 use super::blocks::{BlockStyle, TextBlock, paragraph_separator, row_break, wrap};
 use super::fallback::{
-    Encoder, MAX_TYPE3_GLYPHS, Type3Fallback, Type3Run, drop_unused_fallback_fonts, is_variation_selector, needs_type3, no_japanese_font,
-    source_character_advance, source_encodes, source_fallback_runs, source_family, source_program_completes, source_show, source_space, source_width,
-    type3_encode, type3_font,
+    Encoder, MAX_TYPE3_GLYPHS, StandIn, Type3Fallback, Type3Run, drop_unused_fallback_fonts, installed_program_completes, is_variation_selector,
+    needs_type3, no_japanese_font, source_character_advance, source_encodes, source_fallback_runs, source_family, source_program_completes,
+    source_show, source_space, source_width, type3_encode, type3_font,
 };
 use super::interp::{Carry, Origin, TextState, interpret};
 use super::lines::{
@@ -46,6 +46,20 @@ fn refuse_clipping_text(lines: &[TextLine], dropped: &std::collections::HashSet<
 
 /// [`replace_line`] with the most unique characters one generated font may hold (tests lower it).
 pub(crate) fn replace_line_with_limit(doc: &mut Document, page: usize, line: usize, text: &str, max_glyphs: usize) -> Result<LineEdit, EditError> {
+    // A font the document only names learns the advances of the new characters first
+    // (`complete_named_font_widths`). That and the edit run on a copy, so a refused edit leaves
+    // the document as it was, down to the identity of its objects.
+    let font = text_lines(doc, page)?.get(line).map(|l| l.font.clone());
+    let mut trial = doc.clone();
+    if !font.is_some_and(|font| super::complete_named_font_widths(&mut trial, page, &[font], text)) {
+        return replace_line_in_its_font(doc, page, line, text, max_glyphs);
+    }
+    let edit = replace_line_in_its_font(&mut trial, page, line, text, max_glyphs)?;
+    *doc = trial;
+    Ok(edit)
+}
+
+fn replace_line_in_its_font(doc: &mut Document, page: usize, line: usize, text: &str, max_glyphs: usize) -> Result<LineEdit, EditError> {
     let text = text.replace(row_break, " ");
     let lines = text_lines(doc, page)?;
     let target = lines.get(line).cloned().ok_or_else(|| EditError::Invalid(format!("page {} has no line {}", page + 1, line + 1)))?;
@@ -86,7 +100,9 @@ pub(crate) fn replace_line_with_limit(doc: &mut Document, page: usize, line: usi
         None => {
             let fallback_shown = crate::bidi::to_visual(&text);
             if needs_type3(&text) {
-                let fallback = type3_font(doc, &mut fonts_res, &text, source_family(&target.base_font), target.bold, max_glyphs)?;
+                let source =
+                    StandIn { base_font: &target.base_font, family: source_family(&target.base_font), bold: target.bold, italic: target.italic };
+                let fallback = type3_font(doc, &mut fonts_res, &text, source, max_glyphs)?;
                 let runs = type3_encode(&fallback, &fallback_shown)
                     .ok_or_else(|| EditError::Invalid(format!("\"{text}\" can't be shown by the {} fallback", fallback.family)))?;
                 let size = font_size_before(&ops, first).unwrap_or(target.size);
@@ -262,7 +278,8 @@ fn choose_rewrite_path(
     let has_special_text = text.is_some_and(|draft| {
         draft.contains(row_break)
             || pdfcraft_fonts::source_shaping::required(draft)
-            || !pdfcraft_fonts::embedding::matching_faces(&block.base_font).is_empty()
+            || !pdfcraft_fonts::embedding::matching_craft_faces(&block.base_font).is_empty()
+            || installed_program_completes(doc, fonts, first, draft)
     });
     let has_multiple_runs = block.rows.iter().any(|row| row.len() > 1)
         || members.iter().any(|line| line.font != first.font || line.size != first.size || line.color != first.color);
@@ -848,6 +865,110 @@ fn source_font(doc: &Document, fonts_res: &Dict, font_name: &str, first: &TextLi
     SourceFont { metrics, reuse, space }
 }
 
+/// How each tab of paragraph `block` is rewritten: the spaces that span the gap it stood for where
+/// its font can't write a tab, `None` where the font writes it itself. InDesign and Word draw a tab
+/// as a glyph of no width and move the text after it, so a bulleted item reads `•\t text`; no font
+/// "has" that tab again, and any edit to such a paragraph was refused ("the source font cannot
+/// show the replacement text"). The gap is what the source row is wider than its other characters
+/// by, to the nearest space, at least one. The rows' own text takes the spaces
+/// too, so a row the edit doesn't reach still matches its source and keeps its operators, and one
+/// it does reach is measured as it will be written. The flag says whether the paragraph's first
+/// font writes a tab, for one typed anew.
+fn tabs_as_spaces(doc: &Document, page: usize, lines: &mut [TextLine], block: usize) -> (Vec<Option<usize>>, bool) {
+    let members = group_blocks(lines).get(block).map(|b| b.lines.clone()).unwrap_or_default();
+    if !members.iter().filter_map(|i| lines.get(*i)).any(|line| line.text.contains('\t')) {
+        return (Vec::new(), false);
+    }
+    let fonts = page_dict(doc, page)
+        .ok()
+        .and_then(|p| p.dict.get(b"Resources").and_then(|r| doc.dict(r)))
+        .and_then(|r| r.get(b"Font").and_then(|f| doc.dict(f)))
+        .unwrap_or_default();
+    let mut gaps: Vec<Option<usize>> = Vec::new();
+    let mut writes_tabs = false;
+    for (n, index) in members.iter().enumerate() {
+        let Some(line) = lines.get_mut(*index) else { continue };
+        let metrics = fonts.get(line.font.as_bytes()).and_then(|f| doc.dict(f)).map(|f| Metrics::from_dict(doc, &f));
+        let writes = metrics.as_ref().is_some_and(|m| m.encode("\t").is_some());
+        if n == 0 {
+            writes_tabs = writes;
+        }
+        let tabs = line.text.matches('\t').count();
+        if tabs == 0 {
+            continue;
+        }
+        let spaces = match &metrics {
+            _ if writes => None,
+            Some(m) if line.upright() => {
+                let state = &line.origin.state;
+                let size = state.font.as_ref().map_or(1.0, |(_, size)| *size);
+                let space = source_space(doc, &fonts, m);
+                let along = Matrix(line.origin.tm).then(&Matrix(line.origin.ctm)).0;
+                let along = along[0].hypot(along[1]);
+                let across = if along.is_finite() && along > 1e-9 { along } else { line.origin.k } * state.scale;
+                let rest = source_width(m, &line.text.replace('\t', ""), size, space, state.char_spacing, state.word_spacing) * across;
+                let one = (space * size + state.char_spacing + state.word_spacing) * across;
+                let gap = (line.rect[2] - line.rect[0] - rest) / tabs as f64;
+                // To the nearest space: a rewritten row is fitted to its source's width, so half
+                // a space either way moves the text after the gap by no more than that.
+                Some(if one > 1e-6 && gap.is_finite() { (gap / one).round().clamp(1.0, 64.0) as usize } else { 1 })
+            }
+            _ => Some(1),
+        };
+        if let Some(count) = spaces {
+            let gap = " ".repeat(count);
+            line.text = line.text.replace('\t', &gap);
+            for run in &mut line.runs {
+                run.0 = run.0.replace('\t', &gap);
+            }
+        }
+        gaps.extend(std::iter::repeat_n(spaces, tabs));
+    }
+    (gaps, writes_tabs)
+}
+
+/// `draft` with its tabs as [`tabs_as_spaces`] rewrites the source's, in order, and each tab that
+/// became more than one space: its byte offset in `draft` and the bytes it gained.
+fn draft_tabs_as_spaces(draft: &str, gaps: &[Option<usize>], writes_tabs: bool) -> (String, Vec<(usize, usize)>) {
+    let mut gaps = gaps.iter();
+    let mut out = String::with_capacity(draft.len());
+    let mut grown = Vec::new();
+    for (at, ch) in draft.char_indices() {
+        if ch != '\t' {
+            out.push(ch);
+            continue;
+        }
+        match gaps.next() {
+            Some(Some(spaces)) => {
+                out.extend(std::iter::repeat_n(' ', *spaces));
+                if *spaces > 1 {
+                    grown.push((at, *spaces - 1));
+                }
+            }
+            Some(None) => out.push('\t'),
+            // A tab typed beyond the source's: the font's own where it writes one, else a space.
+            None => out.push(if writes_tabs { '\t' } else { ' ' }),
+        }
+    }
+    (out, grown)
+}
+
+/// `style` with its byte ranges ([`BlockStyle::ranges`], [`BlockStyle::sources`]) moved to follow
+/// the tabs that grew ([`draft_tabs_as_spaces`]): a caller counts them in the paragraph as it read
+/// with its tabs, and a range left where it was would format the spaces of a gap, or the letters
+/// before the ones asked for. A tab inside a range grows the range.
+fn ranges_after_tabs(style: &BlockStyle, grown: &[(usize, usize)]) -> BlockStyle {
+    let moved = |at: usize| grown.iter().filter(|(tab, _)| *tab < at).fold(at, |at, (_, more)| at.saturating_add(*more));
+    let mut style = style.clone();
+    for range in &mut style.ranges {
+        range.range = moved(range.range.start)..moved(range.range.end);
+    }
+    for (range, _) in &mut style.sources {
+        *range = moved(range.start)..moved(range.end);
+    }
+    style
+}
+
 /// [`rewrite_block_with_limit`] with the page's [`text_lines`], read from `doc` as it is now.
 pub(crate) fn rewrite_block_from(
     doc: &mut Document,
@@ -858,6 +979,31 @@ pub(crate) fn rewrite_block_from(
     style: &BlockStyle,
     max_glyphs: usize,
 ) -> Result<LineEdit, EditError> {
+    let mut lines = lines;
+    // Formatting ranges count bytes in the text the caller has: the draft, or with no draft the
+    // paragraph as it read, tabs and all.
+    let ranged = !(style.ranges.is_empty() && style.sources.is_empty());
+    let as_read = match text {
+        None if ranged && lines.iter().any(|line| line.text.contains('\t')) => group_blocks(&lines).get(block).map(|b| b.editor_text.clone()),
+        _ => None,
+    };
+    let (tab_gaps, writes_tabs) = tabs_as_spaces(doc, page, &mut lines, block);
+    let spaced;
+    let moved;
+    let (text, style) = match text.or(as_read.as_deref()) {
+        Some(draft) if draft.contains('\t') => {
+            let (with_spaces, grown) = draft_tabs_as_spaces(draft, &tab_gaps, writes_tabs);
+            spaced = with_spaces;
+            let style = if ranged && !grown.is_empty() {
+                moved = ranges_after_tabs(style, &grown);
+                &moved
+            } else {
+                style
+            };
+            (text.map(|_| spaced.as_str()), style)
+        }
+        _ => (text, style),
+    };
     let blocks = group_blocks(&lines);
     let b = blocks.get(block).cloned().ok_or_else(|| EditError::Invalid(format!("page {} has no paragraph {}", page + 1, block + 1)))?;
     // Existing PDF paragraphs do not yet persist selected-row alignment intent. Refuse
@@ -918,10 +1064,20 @@ pub(crate) fn rewrite_block_from(
     // Preserve every drawable source glyph; cache missing-glyph lookups as well.
     let visual_indic = source.metrics.as_ref().is_some_and(|m| m.visual_order) || first.visual_order;
     let hebrew = flat.chars().any(crate::bidi::is_hebrew);
-    let source_advances: HashMap<char, Option<f64>> = source
+    // A paragraph whose embedded font lacks a character keeps that font for every character it
+    // has, and only the missing ones are drawn by a stand-in (the source's metric-compatible
+    // counterpart, a face of its kind, or the bundled Latin face: `type3_faces`). Setting the whole
+    // paragraph in a standard font instead changed its face and widths, and so its line breaks,
+    // for one new letter (#2378). Only for a font the document embeds: one it doesn't is drawn
+    // with the viewer's own face, and the standard font of its family (WinAnsi) shows such text best.
+    let embedded = fonts_res.get(font_name.as_bytes()).and_then(|f| doc.dict(f)).is_some_and(|f| pdfcraft_fonts::embedding::carries_program(doc, &f));
+    let keep_source = embedded && style.family.is_none() && style.bold.is_none();
+    let mut source_advances: HashMap<char, Option<f64>> = source
         .metrics
         .as_ref()
-        .filter(|_| !reuse && upright && !hebrew && !visual_indic && style.family.is_none() && style.bold.is_none() && needs_type3(&flat))
+        .filter(|_| {
+            !reuse && upright && !hebrew && !visual_indic && style.family.is_none() && style.bold.is_none() && (needs_type3(&flat) || keep_source)
+        })
         .map(|m| {
             let mut advances = HashMap::new();
             for ch in flat.chars() {
@@ -930,8 +1086,14 @@ pub(crate) fn rewrite_block_from(
             advances
         })
         .unwrap_or_default();
+    // Text a standard font can show, none of whose letters the source has, is set in the standard
+    // font as before: a generated font for all of it would keep nothing of the source.
+    if !needs_type3(&flat) && !source_advances.iter().any(|(ch, width)| width.is_some() && !ch.is_whitespace()) {
+        source_advances.clear();
+    }
     let source_chars: HashSet<char> = source_advances.iter().filter_map(|(&ch, width)| width.map(|_| ch)).collect();
     let partial_reuse = !source_chars.is_empty();
+    let fill_missing = needs_type3(&flat) || partial_reuse;
     // The chosen style also determines the real Japanese fallback outlines and advances.
     let (family, bold, italic) = style.family.unwrap_or((source_family(&b.base_font), b.bold, b.italic));
     let bold = style.bold.unwrap_or(bold);
@@ -961,9 +1123,11 @@ pub(crate) fn rewrite_block_from(
     let right_edge = if anchored_right { (b.rect[2] - b.rect[0]).max(0.0) } else { width };
     let movement = drawn_movement(emit.ctm, dx, dy)?;
     let tm = emit_text_matrix(o, emit)?;
-    let type3 = if !reuse && needs_type3(&flat) {
+    let type3 = if !reuse && fill_missing {
         let missing: String = flat.chars().filter(|ch| !source_chars.contains(ch)).collect();
-        Some(type3_font(doc, &mut fonts_res, &missing, family, bold, max_glyphs)?)
+        // An explicitly chosen family is that family, whatever the source was.
+        let base_font = if style.family.is_some() { "" } else { b.base_font.as_str() };
+        Some(type3_font(doc, &mut fonts_res, &missing, StandIn { base_font, family, bold, italic }, max_glyphs)?)
     } else {
         None
     };

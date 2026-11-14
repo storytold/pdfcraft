@@ -16,10 +16,51 @@ pub fn face_key(name: &str) -> String {
     name.rsplit('+').next().unwrap_or(name).chars().filter(char::is_ascii_alphanumeric).flat_map(char::to_lowercase).collect()
 }
 
-/// Full, approved faces of the source family. This never silently selects another family.
+/// [`face_key`] without its style words and PostScript suffixes: the family a `/BaseFont` names
+/// (`TimesNewRomanPS-BoldItalicMT` gives `timesnewroman`). A name that says more keeps it
+/// (`ArialNarrow`, `ArialRoundedMTBold`, `HelveticaNeue`, `Calibri-Light`), so it is not taken
+/// for the family it starts with.
+pub(crate) fn family_stem(name: &str) -> String {
+    let mut key = face_key(name);
+    for style in ["bolditalic", "boldoblique", "bold", "italic", "oblique", "regular"] {
+        key = key.replace(style, "");
+    }
+    for suffix in ["psmt", "mt", "ps"] {
+        if let Some(stem) = key.strip_suffix(suffix) {
+            return stem.to_owned();
+        }
+    }
+    key
+}
+
+/// Full, approved faces of the source family: the craft-fonts ones, then the very font installed
+/// on this machine ([`crate::installed`]). This never silently selects another family.
 pub fn matching_faces(name: &str) -> Vec<&'static crate::CraftFont> {
+    let mut faces = matching_craft_faces(name);
+    faces.extend(crate::installed::matching_installed_faces(name));
+    faces
+}
+
+/// Whether the font dictionary carries a font program (`/FontFile`, `/FontFile2` or `/FontFile3`
+/// in its descriptor, or its descendant's), whole or a subset. A font the document doesn't embed
+/// is drawn with the viewer's own face, so an installed program is not brought in for it.
+pub fn carries_program(doc: &Document, font: &Dict) -> bool {
+    let descendant = font.get(b"DescendantFonts").and_then(|d| doc.resolve(d).as_array().and_then(|a| a.first().and_then(|f| doc.dict(f))));
+    let font = descendant.as_ref().unwrap_or(font);
+    font.get(b"FontDescriptor")
+        .and_then(|d| doc.dict(d))
+        .is_some_and(|d| [b"FontFile".as_slice(), b"FontFile2", b"FontFile3"].iter().any(|k| d.get(k).is_some()))
+}
+
+/// Full faces of the source family from the craft-fonts build input alone.
+pub fn matching_craft_faces(name: &str) -> Vec<&'static crate::CraftFont> {
     let key = face_key(name);
-    crate::CRAFT_FONTS.iter().filter(|f| face_key(f.family) == key || face_key(&f.name()) == key).collect()
+    // A variable face can't complete a subset: its outlines need an instance first (`validate`).
+    crate::CRAFT_FONTS
+        .iter()
+        .filter(|f| face_key(f.family) == key || face_key(&f.name()) == key)
+        .filter(|f| !f.style.to_ascii_lowercase().contains("variable"))
+        .collect()
 }
 
 /// Whether a complete font program can show every non-newline character.

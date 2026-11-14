@@ -59,11 +59,17 @@ pub(super) fn is_type3_fallback(font: &Dict) -> bool {
 fn fallback_names(face: &CraftFont, hebrew: bool) -> (&'static str, &'static str) {
     if hebrew {
         (HEBREW_FONT_NAME, "PCHe")
-    } else if face.family == "Inter" {
+    } else if is_latin_face(face) {
         (LATIN_FONT_NAME, "PCLat")
     } else {
         (JAPANESE_FONT_NAME, "PCJp")
     }
+}
+
+/// Whether `face` is a Latin face (the bundled Inter, or one of craft-fonts' Latin catalogue)
+/// rather than a Japanese or Chinese one, which also carry Latin letters.
+fn is_latin_face(face: &CraftFont) -> bool {
+    face.covers("Latn") && !face.scripts.iter().any(|s| matches!(*s, "Jpan" | "Hans" | "Hant" | "Hang" | "Kore"))
 }
 
 /// Drops the generated fallback fonts ([`is_type3_fallback`]) that nothing on `page` shows any more.
@@ -238,7 +244,7 @@ fn type3_path(face: &CraftFont, ch: char) -> Result<(Vec<u8>, f64), EditError> {
         GlyphError::Missing => EditError::Invalid(format!("the {} fallback font has no glyph for U+{:04X}", face.family, ch as u32)),
         GlyphError::TooComplex => EditError::Invalid(format!("the {} fallback glyph U+{:04X} is too complex", face.family, ch as u32)),
     })?;
-    let (dx, width) = proportional(ch, &glyph);
+    let (dx, width) = if is_latin_face(face) { (0.0, glyph.width) } else { proportional(ch, &glyph) };
     let scale = 1000.0;
     // d1 is `wx wy llx lly urx ury` (ISO 32000-2 §9.6.4) with a box enclosing the glyph;
     // Acrobat draws a bullet in place of a glyph whose d1 is malformed.
@@ -312,7 +318,7 @@ pub(crate) fn no_fallback_font(text: &str) -> EditError {
 
 /// The character the craft-fonts Japanese faces are for: kana, CJK ideographs and their compatibility
 /// and full-width forms.
-fn needs_japanese(ch: char) -> bool {
+pub(crate) fn needs_japanese(ch: char) -> bool {
     matches!(u32::from(ch), 0x3000..=0x30FF | 0x3400..=0x4DBF | 0x4E00..=0x9FFF | 0xF900..=0xFAFF | 0xFF00..=0xFFEF)
 }
 
@@ -357,14 +363,33 @@ fn no_hebrew_font() -> EditError {
 
 /// The faces a Type 3 replacement may draw `text` with, best first. Text with Hebrew takes the
 /// Hebrew face first (its Latin and digits too, so a line keeps one look), then the Japanese faces
-/// and the bundled Latin one for anything it lacks; other text takes the Japanese faces, and the
-/// bundled Latin face behind them, which covers the Latin, Greek and Cyrillic letters they lack
-/// (#2593: the Japanese faces have no қ, ғ, ҳ, ә, ө, ү, ұ or һ).
-pub(crate) fn type3_faces(text: &str, family: crate::added::Family, bold: bool) -> Result<(Vec<&'static CraftFont>, bool), EditError> {
-    let japanese = pdfcraft_fonts::document_japanese_fonts_for_style(family == crate::added::Family::Times, bold);
+/// and the bundled Latin one for anything it lacks. Other text takes the Latin face that stands in
+/// for `base_font` (its metric-compatible counterpart, or one of its kind, in its weight and
+/// slant: [`pdfcraft_fonts::document_latin_stand_ins`]), then the bundled Latin face, which covers
+/// the Latin, Greek and Cyrillic letters the Japanese faces lack (#2593: they have no қ, ғ, ҳ, ә,
+/// ө, ү, ұ or һ), then the Japanese faces. The first face that has every character draws them
+/// ([`fallback_face`]), so Japanese text still takes a Japanese face, Latin text no longer does.
+/// `base_font` is empty when a family was chosen explicitly: that family's kind decides.
+/// `japanese_context` says the paragraph has Japanese in it when `text` is only part of it.
+pub(crate) fn type3_faces(
+    text: &str,
+    japanese_context: bool,
+    base_font: &str,
+    family: crate::added::Family,
+    bold: bool,
+    italic: bool,
+) -> Result<(Vec<&'static CraftFont>, bool), EditError> {
+    use crate::added::Family;
+    let japanese = pdfcraft_fonts::document_japanese_fonts_for_style(family == Family::Times, bold);
     let latin = pdfcraft_fonts::document_latin_fonts(bold);
     if !text.chars().any(crate::bidi::is_hebrew) {
-        return Ok((japanese.into_iter().chain(latin).collect(), false));
+        let stand_ins = pdfcraft_fonts::document_latin_stand_ins(base_font, family == Family::Times, family == Family::Courier, bold, italic);
+        // Text with Japanese in it keeps the Japanese faces first, so its Latin letters share
+        // their look; Latin, Greek and Cyrillic text alone takes the source's stand-in first.
+        if japanese_context || text.chars().any(needs_japanese) {
+            return Ok((japanese.into_iter().chain(latin).chain(stand_ins).collect(), false));
+        }
+        return Ok((stand_ins.into_iter().chain(latin).chain(japanese).collect(), false));
     }
     // Points are drawn on their letter with the font's positioning, which a one-glyph-per-
     // character Type 3 font can't do; refuse rather than print them beside the letter.
@@ -375,15 +400,24 @@ pub(crate) fn type3_faces(text: &str, family: crate::added::Family, bold: bool) 
     Ok((std::iter::once(hebrew).chain(japanese).chain(latin).collect(), true))
 }
 
+/// The source font a generated font stands in for: its `/BaseFont` (empty when a family was
+/// chosen explicitly), its kind, and its weight and slant.
+#[derive(Clone, Copy)]
+pub(super) struct StandIn<'a> {
+    pub(super) base_font: &'a str,
+    pub(super) family: crate::added::Family,
+    pub(super) bold: bool,
+    pub(super) italic: bool,
+}
+
 pub(super) fn type3_font(
     doc: &mut Document,
     fonts_res: &mut Dict,
     text: &str,
-    family: crate::added::Family,
-    bold: bool,
+    source: StandIn,
     max_glyphs: usize,
 ) -> Result<Type3Fallback, EditError> {
-    let (faces, hebrew) = type3_faces(text, family, bold)?;
+    let (faces, hebrew) = type3_faces(text, false, source.base_font, source.family, source.bold, source.italic)?;
     // Each unique character once, in order of first appearance.
     let mut chars = Vec::new();
     let mut seen = std::collections::HashSet::new();
@@ -400,12 +434,15 @@ pub(super) fn type3_font(
     // text keeps the Hebrew face and takes each character it lacks from the next face that has it.
     // A variation selector has no outline anywhere: it takes a glyph slot of its own below, so the
     // face is chosen by the characters that have outlines.
+    // Selectors alone still get their empty glyphs: the source font shows their base characters
+    // and nothing else is missing (any face will do, none of its outlines is read).
     let named: Vec<char> = chars.iter().copied().filter(|ch| !is_variation_selector(*ch)).collect();
-    if named.is_empty() {
-        return Err(EditError::Invalid("replacement text is empty".into()));
+    let face = if hebrew || named.is_empty() {
+        faces.first().copied()
+    } else {
+        fallback_face(&faces, &named, |face, ch| japanese_glyph_from(face, ch).is_ok())
     }
-    let face = if hebrew { faces.first().copied() } else { fallback_face(&faces, &named, |face, ch| japanese_glyph_from(face, ch).is_ok()) }
-        .ok_or_else(|| no_fallback_font(text))?;
+    .ok_or_else(|| no_fallback_font(text))?;
     let others: &[&CraftFont] = if hebrew { faces.get(1..).unwrap_or_default() } else { &[] };
     // Every outline is read before the document is touched, so a character that fails leaves it
     // as it was. Each font takes the next `per_font` characters; codes restart at 1 in each.
@@ -501,8 +538,11 @@ pub(super) fn add_type3_font(doc: &mut Document, fonts_res: &mut Dict, face: &Cr
     descriptor.set(b"Type".to_vec(), Object::name("FontDescriptor"));
     descriptor.set(b"FontName".to_vec(), Object::name(&format!("{}-{}", face.family, face.style).replace(' ', "")));
     descriptor.set(b"FontFamily".to_vec(), Object::String(PdfString::literal(face.family.as_bytes().to_vec())));
-    descriptor.set(b"Flags".to_vec(), Object::Int(if face.family.contains("Mincho") { 6 } else { 4 }));
-    descriptor.set(b"ItalicAngle".to_vec(), Object::Int(0));
+    let serif = face.family.contains("Mincho") || face.family.contains("Serif") || face.family == "Caladea";
+    let italic = face.style.to_ascii_lowercase().contains("italic");
+    // ISO 32000-2 table 121: serif is bit 2, symbolic bit 3, italic bit 7.
+    descriptor.set(b"Flags".to_vec(), Object::Int(4 | if serif { 2 } else { 0 } | if italic { 64 } else { 0 }));
+    descriptor.set(b"ItalicAngle".to_vec(), Object::Int(if italic { -12 } else { 0 }));
     // PDF 1.7 tables 5.9 and 5.19: a Type 3 descriptor is indirect; Ascent/Descent may be omitted.
     font.set(b"FontDescriptor".to_vec(), Object::Ref(doc.add(Object::Dict(descriptor))));
     font.set(b"FontBBox".to_vec(), Object::Array(vec![Object::Int(0), Object::Int(-300), Object::Int(1000), Object::Int(1000)]));
@@ -668,10 +708,120 @@ pub(super) fn source_program_completes(doc: &Document, fonts: &Dict, line: &Text
     !missing.is_empty() && source_program(doc, fonts, &line.font).is_some_and(|bytes| pdfcraft_fonts::embedding::covers(&bytes, &missing))
 }
 
+/// The complete programs that may draw what the font resource `name` (with `/BaseFont`
+/// `base_font`) lacks: craft-fonts' faces of its family, and, when the document embeds the font,
+/// the same font installed on this machine ([`pdfcraft_fonts::installed`]).
+pub(crate) fn completing_faces(doc: &Document, fonts: &Dict, name: &str, base_font: &str) -> Vec<&'static CraftFont> {
+    let embedded = fonts.get(name.as_bytes()).and_then(|f| doc.dict(f)).is_some_and(|f| pdfcraft_fonts::embedding::carries_program(doc, &f));
+    if embedded { pdfcraft_fonts::embedding::matching_faces(base_font) } else { pdfcraft_fonts::embedding::matching_craft_faces(base_font) }
+}
+
+/// Whether `text` has characters `line`'s embedded font can't encode that the same font,
+/// installed on this machine, can draw.
+pub(super) fn installed_program_completes(doc: &Document, fonts: &Dict, line: &TextLine, text: &str) -> bool {
+    let Some(font) = fonts.get(line.font.as_bytes()).and_then(|f| doc.resolve(f).as_dict().cloned()) else { return false };
+    if !pdfcraft_fonts::embedding::carries_program(doc, &font) {
+        return false;
+    }
+    let metrics = Metrics::from_dict(doc, &font);
+    let missing: String = text.chars().filter(|c| !c.is_whitespace() && !source_encodes(&metrics, &c.to_string())).collect();
+    !missing.is_empty()
+        && pdfcraft_fonts::installed::matching_installed_faces(&line.base_font).iter().any(|f| pdfcraft_fonts::embedding::covers(f.bytes, &missing))
+}
+
+/// Gives the fonts `resources` names, when the document doesn't embed them, the advances of the
+/// characters of `text` that their `/Widths` leave out
+/// ([`pdfcraft_fonts::installed::named_font_advance`]). A font the PDF only names (`Verdana`,
+/// `ArialMT`) often lists widths for just the characters its text used, so one new letter looked
+/// like a missing glyph and the whole paragraph was set in a standard font instead. With its
+/// advance known the letter is written in the font the paragraph already names, and nothing is
+/// embedded. Returns whether it changed a font. A caller runs it, and the edit after it, on a copy of
+/// the document, so a refused edit leaves the document, and a session opened on it, as they were.
+pub(crate) fn complete_named_font_widths(doc: &mut Document, page: usize, resources: &[String], text: &str) -> bool {
+    let mut changed = false;
+    let Ok(p) = page_dict(doc, page) else { return changed };
+    let fonts = p.dict.get(b"Resources").and_then(|r| doc.dict(r)).and_then(|r| r.get(b"Font").and_then(|f| doc.dict(f))).unwrap_or_default();
+    let mut seen = HashSet::new();
+    for name in resources.iter().take(64) {
+        let Some(Object::Ref(r)) = fonts.get(name.as_bytes()) else { continue };
+        let r = *r;
+        if !seen.insert(r) {
+            continue;
+        }
+        let Some(font) = doc.dict(&Object::Ref(r)) else { continue };
+        if !matches!(font.name(b"Subtype"), Some(b"TrueType" | b"Type1")) || pdfcraft_fonts::embedding::carries_program(doc, &font) {
+            continue;
+        }
+        let Some(widths) = font.get(b"Widths").map(|w| doc.resolve(w)).and_then(|w| w.as_array().cloned()) else { continue };
+        let Some(first) = font.get(b"FirstChar").and_then(|f| doc.resolve(f).as_int()).and_then(|f| usize::try_from(f).ok()) else { continue };
+        if widths.is_empty() || first > 255 || widths.len() > 256 {
+            continue;
+        }
+        let metrics = Metrics::from_dict(doc, &font);
+        // A subset's name (`ABCDEF+Arial`) says its other glyphs are gone, whether or not its
+        // program can be read: only a font named whole is the viewer's own complete face.
+        if metrics.composite || metrics.subset {
+            continue;
+        }
+        // Each character the font can't write yet, at the lowest code its encoding gives it.
+        let mut added: Vec<(usize, f64)> = Vec::new();
+        let mut asked = HashSet::new();
+        for ch in text.chars().filter(|c| !c.is_whitespace()).take(4096) {
+            if asked.len() >= 512 || !asked.insert(ch) {
+                continue;
+            }
+            let mut utf8 = [0; 4];
+            if metrics.encode(ch.encode_utf8(&mut utf8)).is_some() {
+                continue;
+            }
+            let Some(code) = (0..=255usize).find(|code| metrics.text_of(*code as u32).is_some_and(|t| t.chars().eq(std::iter::once(ch)))) else {
+                continue;
+            };
+            if let Some(advance) = pdfcraft_fonts::installed::named_font_advance(&metrics.base_font, ch) {
+                added.push((code, advance));
+            }
+        }
+        if added.is_empty() {
+            continue;
+        }
+        let low = added.iter().map(|(code, _)| *code).min().unwrap_or(first).min(first);
+        let high = added.iter().map(|(code, _)| *code).max().unwrap_or(first).max(first + widths.len() - 1).min(255);
+        let mut all = vec![Object::Int(0); high - low + 1];
+        for (i, width) in widths.iter().enumerate() {
+            if let Some(slot) = all.get_mut(first - low + i) {
+                *slot = width.clone();
+            }
+        }
+        for (code, advance) in added {
+            // A width the font already gives stays: only the codes it left at nothing are filled.
+            if let Some(slot) = all.get_mut(code - low)
+                && doc.resolve(slot).as_f64().is_none_or(|w| w <= 0.0)
+            {
+                *slot = Object::Real((advance * 100.0).round() / 100.0);
+            }
+        }
+        let updated = doc.update_dict(r, |d| {
+            d.set(b"FirstChar".to_vec(), Object::Int(low as i64));
+            d.set(b"LastChar".to_vec(), Object::Int(high as i64));
+            d.set(b"Widths".to_vec(), Object::Array(all));
+        });
+        changed |= updated.is_ok();
+    }
+    changed
+}
+
 /// A subset may contain all the letters but no space glyph: producers use another subset
 /// or a positioning operator for spaces. Do the same instead of substituting the whole font.
 pub(crate) fn source_encodes(metrics: &Metrics, text: &str) -> bool {
-    text.split(' ').all(|word| metrics.encode(word).is_some())
+    text.split(|ch| is_gap(metrics, ch)).all(|word| metrics.encode(word).is_some())
+}
+
+/// Whether `ch` is written as a gap rather than a glyph: a space, or another space character
+/// (a no-break space, a tab, an em space) the font has no code for. Word draws a no-break space
+/// by moving, and a row holding one could be shown but not written again, so an edit that reached
+/// it was refused; it takes the space's advance instead. One the font does have is written as itself.
+fn is_gap(metrics: &Metrics, ch: char) -> bool {
+    ch == ' ' || (ch.is_whitespace() && metrics.encode(ch.encode_utf8(&mut [0; 4])).is_none())
 }
 
 #[cfg(test)]
@@ -711,11 +861,11 @@ pub(crate) fn source_width(metrics: &Metrics, text: &str, size: f64, space: f64,
             .sum();
     }
     let words: f64 = text
-        .split(' ')
+        .split(|ch| is_gap(metrics, ch))
         .filter_map(|w| metrics.encode(w))
         .map(|b| metrics.codes(&b).iter().map(|(c, _)| metrics.width(*c) * size + char_spacing).sum::<f64>())
         .sum();
-    words + text.matches(' ').count() as f64 * (space * size + char_spacing + word_spacing)
+    words + text.chars().filter(|ch| is_gap(metrics, *ch)).count() as f64 * (space * size + char_spacing + word_spacing)
 }
 
 #[cfg(test)]
@@ -746,12 +896,14 @@ pub(crate) fn source_show(metrics: &Metrics, text: &str, size: f64, space: f64, 
         return Err(EditError::Invalid("the source font's space advance is invalid".into()));
     }
     let mut out = Vec::new();
-    for (i, word) in text.split(' ').enumerate() {
+    for (i, word) in text.split(|ch| is_gap(metrics, ch)).enumerate() {
         if i > 0 {
             out.push(Op::new("TJ", vec![Object::Array(vec![pdfcraft_content::num(adjustment)])]));
         }
         if !word.is_empty() {
-            let bytes = metrics.encode(word).ok_or_else(|| EditError::Invalid("the source font cannot show the replacement text".into()))?;
+            let bytes = metrics
+                .encode(word)
+                .ok_or_else(|| EditError::Invalid(format!("the source font cannot show the replacement text (\"{}\")", word.escape_debug())))?;
             out.push(Op::new("Tj", vec![Object::String(PdfString::literal(bytes))]));
         }
     }

@@ -56,6 +56,68 @@ these work in every build, the web one included. Choosing another face
 is explicit. Fonts with restricted embedding, unsupported collections, excluded families or
 no open-licence declaration are refused. Interface fallback fonts are never exported.
 
+### Keeping the paragraph's typeface
+
+When the very font a paragraph uses is installed on the machine (the PostScript name the PDF
+gives, or its family and style, exactly), its complete program completes the embedded subset
+the way a matching craft-fonts face does: the paragraph keeps its own font for every character
+it had and the new ones come from the installed program, which is embedded whole. Only a face
+whose own embedding permission (`fsType`) allows editable embedding is used, never for a font
+the document does not embed (`crates/fonts/src/installed.rs`). The desktop app does this. A
+headless run (`pdfcraft-cli run`, `mcp`) does not read the machine's fonts, which are outside
+`--root`, unless `PDFCRAFT_SYSTEM_FONTS=1` is set. `PDFCRAFT_SYSTEM_FONTS=0` turns it off
+everywhere.
+
+Otherwise a paragraph whose embedded font lacks a character keeps that font for every
+character it has, and only the missing ones are drawn by a stand-in, as outlines. The whole
+paragraph is no longer set in a standard font for one new letter (#2378), which changed its
+face, its widths and so its line breaks. The stand-in is the font's metric-compatible
+counterpart from craft-fonts' Latin catalogue (`fonts/latin-manifest.txt`: Liberation Sans for
+Arial and Helvetica, Liberation Serif for Times New Roman, Liberation Mono for Courier New,
+Carlito for Calibri, Caladea for Cambria), else a serif, monospaced or sans face of the source's
+kind, in its weight and slant as near as the family has them, else the bundled Inter face. Latin,
+Greek and Cyrillic text no longer takes a Japanese face; text with Japanese in it keeps the
+Japanese faces first, so a line keeps one look. Text none of whose letters the subset has, a
+subset whose program cannot be read and turned text are still set in the standard font.
+
+A font the document names without embedding (`Verdana`, `ArialMT`) often lists `/Widths` only
+for the characters its text used. A new character is written in that font once its advance is
+known: from the same font installed on the machine, from the published metrics of the standard
+font the name asks for exactly (not `ArialNarrow` or `HelveticaNeue`), or from its
+metric-compatible counterpart. Only the font dictionary's `/FirstChar`, `/LastChar` and
+`/Widths` change. Nothing is embedded, and a refused edit puts them back.
+
+### Characters a row holds that its font cannot write
+
+InDesign and Word draw a tab as a glyph of no width and move the text after it, so a bulleted
+item reads `•\t text`. No font has that tab to write again, and any edit to such a paragraph was
+refused. The tab becomes the spaces that span its gap, in the source rows too, so a row the edit
+does not reach still keeps its operators. A no-break space, or another space character the font
+has no code for, is written as a gap of the space's advance.
+
+### Rows that outgrow their place
+
+When an edit makes a row too long, the rows after it flow on from it up to the next break that
+was typed, as in a word processor: the words that no longer fit are not left on a row of their
+own with every later row pushed down a line. A break counts as a wrap when a `/PCSoft` marker
+says so or, in a file written elsewhere, when the row ended where its next word no longer fit.
+Each row wraps at the paragraph's right edge from its own left edge, so the rows of a hanging
+indent stay inside the paragraph, and a row an edit adds keeps the last source row's indent.
+Rows before the long one, and paragraphs none of whose rows grew too long, are left as they are.
+
+### Fonts the inline editor can show
+
+Besides TrueType and OpenType/CFF programs, the inline editor reads a bare CFF program
+(`/FontFile3` with `/Subtype` `/Type1C` or `/CIDFontType0C`, as Distiller, InDesign and Word
+write most PostScript-flavoured fonts) through an editor-only OpenType wrapper
+(`crates/fonts/src/pdf/cff.rs`): the program is unchanged, a Unicode `cmap` is built the way
+the page selects glyphs, and the wrapper is marked so that no edit embeds it. Such text used
+to be drawn in an interface face squeezed into the source's widths, its letters over each
+other. A stand-in face much wider than its source (for a Type 1 or Type 3 font, which still
+preview in an interface face) is now drawn smaller instead.
+
+### What is embedded
+
 The full selected program, glyph mappings, widths and Unicode text are embedded in the PDF.
 Saving and reopening therefore needs no locally installed font. Editing the same text again
 reuses the font resource the page already has, and every resource made from one program
