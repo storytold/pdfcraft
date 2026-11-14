@@ -233,17 +233,18 @@ fn untagged_name(dict: &Dict<'_>) -> Vec<u8> {
 
 /// The decoded data of `stream` when it fits in `left` bytes ([`MAX_SURVEY_BYTES`] less what
 /// the survey has read): `Ok(None)` when it can't be decoded, and [`Stop::OverCap`] when it
-/// decodes to more. One byte past `left` is asked for, since a decoder stopped at its limit
-/// returns what it has without saying it stopped.
+/// decodes to more or may have been cut short. One byte past `left` is asked for; a filter of
+/// the chain that stops at that limit or at the decoders' own cap (`MAX_DECODED_STREAM`)
+/// returns what it has, so a stream that may be cut is not surveyed from its prefix.
 fn decoded_within_budget<'a>(
     stream: &Stream<'a>,
     left: u64,
 ) -> Result<Option<std::borrow::Cow<'a, [u8]>>, Stop> {
     let left = usize::try_from(left).unwrap_or(usize::MAX);
-    let Ok(data) = stream.decoded_within(left.saturating_add(1)) else {
+    let Ok((data, cut)) = stream.decoded_within_or_cut(left.saturating_add(1)) else {
         return Ok(None);
     };
-    if data.len() > left {
+    if cut || data.len() > left {
         return Err(Stop::OverCap);
     }
     Ok(Some(data))

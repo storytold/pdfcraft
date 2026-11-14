@@ -83,15 +83,30 @@ pub(super) struct Streams {
     pub(super) flate: bool,
     /// Each [`Show`] of a page in a stream of its own (`/Contents` an array).
     pub(super) split: bool,
+    /// Pages' and forms' content after this many spaces, written in ASCIIHex and that
+    /// Flate-compressed (`/Filter [/FlateDecode /ASCIIHexDecode]`): the hex is twice the
+    /// content's size, and nothing this large is held in memory.
+    pub(super) hex_after: Option<usize>,
 }
 
-/// `content` as a stream's dictionary entries (after `dict`) and data, compressed with `flate`.
-fn content_stream(dict: String, content: String, flate: bool) -> (String, Option<Vec<u8>>) {
-    if !flate {
+/// `content` as a stream's dictionary entries (after `dict`) and data, as `streams` says.
+fn content_stream(dict: String, content: String, streams: Streams) -> (String, Option<Vec<u8>>) {
+    use std::io::Write as _;
+    let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::fast());
+    if let Some(spaces) = streams.hex_after {
+        let chunk = "20".repeat(1 << 16);
+        for _ in 0..spaces >> 16 {
+            z.write_all(chunk.as_bytes()).expect("compress in memory");
+        }
+        z.write_all("20".repeat(spaces & 0xFFFF).as_bytes()).expect("compress in memory");
+        let hex: String = content.bytes().map(|b| format!("{b:02X}")).collect();
+        z.write_all(hex.as_bytes()).expect("compress in memory");
+        z.write_all(b">").expect("compress in memory");
+        return (format!("{dict} /Filter [/FlateDecode /ASCIIHexDecode]"), Some(z.finish().expect("compress in memory")));
+    }
+    if !streams.flate {
         return (dict, Some(content.into_bytes()));
     }
-    use std::io::Write as _;
-    let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
     z.write_all(content.as_bytes()).expect("compress in memory");
     (format!("{dict} /Filter /FlateDecode"), Some(z.finish().expect("compress in memory")))
 }
@@ -187,7 +202,7 @@ impl Doc {
                 None,
             ));
             for content in contents {
-                objects.push(content_stream(String::new(), content, streams.flate));
+                objects.push(content_stream(String::new(), content, streams));
             }
             kids.push(format!("{page_at} 0 R"));
         }
@@ -254,7 +269,7 @@ impl Doc {
                             "/Type /XObject /Subtype /Form /BBox [0 0 600 800] /Resources << /Font <<{font_refs} >> /XObject <<{inner_xobjects} >> >>"
                         ),
                         inner_content,
-                        streams.flate,
+                        streams,
                     ));
                     let _ = write!(xobjects, " /X{at} {at} 0 R");
                     for _ in 0..*times {
