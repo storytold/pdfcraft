@@ -176,7 +176,9 @@ pub fn substitute(req: &Request<'_>) -> Substitution {
             crate::std14::Match::FamilyHint => at(Face::Standard14(f), Why::NameHintedStandard14),
         };
     }
-    if let Some(f) = crate::embedding::matching_faces(req.base_font).first() {
+    // craft-fonts only: this chain reports what draws a font the document doesn't embed, and the
+    // renderer draws none of them with an installed face.
+    if let Some(f) = crate::embedding::matching_craft_faces(req.base_font).first() {
         return at(Face::Craft(f), Why::ExactCraftFamily);
     }
     if let Some(script) = req.ordering.and_then(script_for) {

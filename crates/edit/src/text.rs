@@ -53,7 +53,7 @@ use fallback::{
 pub(crate) use fallback::{SOURCE_SPACE_CALLS, take_source_character_measurements};
 #[cfg(test)]
 use fallback::{add_type3_font, is_type3_fallback};
-pub(crate) use fallback::{glyph_path, type3_font_dict, unique_font_name};
+pub(crate) use fallback::{complete_named_font_widths, glyph_path, type3_font_dict, unique_font_name};
 #[cfg(test)]
 pub(crate) use interp::METRICS_BUILT;
 use interp::{Origin, Paint, union};

@@ -170,6 +170,88 @@ pub fn document_latin_fonts(bold: bool) -> Vec<&'static CraftFont> {
     vec![if bold { &INTER_SEMIBOLD_FACE } else { &INTER_REGULAR_FACE }]
 }
 
+/// The craft-fonts family with the same advance widths as `base_font` (a PDF `/BaseFont`, subset
+/// tag allowed): Liberation Sans for Arial and Helvetica, Liberation Serif for Times New Roman,
+/// Liberation Mono for Courier New, Carlito for Calibri, Caladea for Cambria.
+fn metric_counterpart(base_font: &str) -> Option<&'static str> {
+    let key = crate::embedding::face_key(base_font);
+    let starts = |prefixes: &[&str]| prefixes.iter().any(|p| key.starts_with(p));
+    // Narrow and black cuts are other widths: they take the nearest kind, not the counterpart.
+    let other_width = ["narrow", "condensed", "black"].iter().any(|w| key.contains(w));
+    if starts(&["calibri"]) {
+        Some("Carlito")
+    } else if starts(&["cambria"]) {
+        Some("Caladea")
+    } else if !other_width && starts(&["couriernew", "courier", "cousine", "liberationmono"]) {
+        Some("Liberation Mono")
+    } else if !other_width && starts(&["timesnewroman", "times", "tinos", "liberationserif"]) {
+        Some("Liberation Serif")
+    } else if !other_width && starts(&["arial", "helvetica", "arimo", "liberationsans"]) && !key.starts_with("helveticaneue") {
+        Some("Liberation Sans")
+    } else {
+        None
+    }
+}
+
+/// The craft-fonts Latin family that stands in for `base_font` when its own program can't draw a
+/// character: its [`metric_counterpart`] when it has one, else the nearest by kind.
+fn latin_stand_in_family(base_font: &str, serif: bool, mono: bool) -> &'static str {
+    metric_counterpart(base_font).unwrap_or(if mono {
+        "Liberation Mono"
+    } else if serif {
+        "Liberation Serif"
+    } else {
+        "Inter"
+    })
+}
+
+/// The craft-fonts face with the same advance widths as `base_font`, in the weight and slant its
+/// name gives (`Arial-BoldMT` → Liberation Sans Bold). `None` without the Latin catalogue, or
+/// when the family has no such style: another weight's widths are not this one's.
+pub(crate) fn metric_counterpart_face(base_font: &str) -> Option<&'static CraftFont> {
+    let family = metric_counterpart(base_font)?;
+    let key = crate::embedding::face_key(base_font);
+    let wanted = (key.contains("bold"), key.contains("italic") || key.contains("oblique"));
+    CRAFT_FONTS.iter().find(|f| f.family == family && f.covers("Latn") && style_traits(f.style) == wanted)
+}
+
+/// Whether this build has the metric-compatible counterpart of `base_font` ([`metric_counterpart`]):
+/// characters its subset lacks can then be drawn at the widths the font itself has.
+pub fn has_metric_counterpart(base_font: &str) -> bool {
+    metric_counterpart(base_font).is_some_and(|family| CRAFT_FONTS.iter().any(|f| f.family == family && f.covers("Latn")))
+}
+
+/// Whether a craft-fonts style name is bold (Semibold included) and whether it is italic.
+fn style_traits(style: &str) -> (bool, bool) {
+    let s = style.to_ascii_lowercase();
+    (s.contains("bold"), s.contains("italic") || s.split(' ').any(|w| w == "it"))
+}
+
+/// The craft-fonts Latin face that draws the characters a document font's subset lacks: the
+/// font's metric-compatible counterpart (Liberation Sans for Arial and Helvetica, Liberation
+/// Serif for Times New Roman, Liberation Mono for Courier New, Carlito for Calibri, Caladea for
+/// Cambria), else a serif, monospaced or sans face as the source is, in its weight and slant as
+/// near as the family has them. Empty without craft-fonts' Latin catalogue. Variable faces are
+/// never chosen: their outlines need an instance.
+pub fn document_latin_stand_ins(base_font: &str, serif: bool, mono: bool, bold: bool, italic: bool) -> Vec<&'static CraftFont> {
+    latin_stand_ins(CRAFT_FONTS, base_font, serif, mono, bold, italic)
+}
+
+fn latin_stand_ins<'a>(faces: &'a [CraftFont], base_font: &str, serif: bool, mono: bool, bold: bool, italic: bool) -> Vec<&'a CraftFont> {
+    let family = latin_stand_in_family(base_font, serif, mono);
+    let candidates = faces.iter().filter(|f| f.family == family && f.covers("Latn") && !f.style.to_ascii_lowercase().contains("variable"));
+    // Weight matters more than slant: a bold word set in a light face reads as a mistake.
+    candidates
+        .map(|f| {
+            let (b, i) = style_traits(f.style);
+            (u8::from(b != bold) * 2 + u8::from(i != italic), f)
+        })
+        .min_by_key(|(rank, _)| *rank)
+        .map(|(_, f)| f)
+        .into_iter()
+        .collect()
+}
+
 fn document_face(faces: &[CraftFont], serif: bool, bold: bool) -> Option<&CraftFont> {
     document_faces(faces, serif, bold).into_iter().next()
 }
@@ -278,6 +360,50 @@ mod tests {
         assert_eq!(order, [b"serif".as_slice(), b"sans", b"bold"]);
         assert!(document_face(&faces[3..], false, true).is_none());
         assert!(document_face(&[], false, true).is_none());
+    }
+
+    #[test]
+    fn latin_stand_ins_are_the_metric_counterpart_in_the_source_style() {
+        static LATN: &[&str] = &["Latn"];
+        let face = |family, style| CraftFont { family, style, scripts: LATN, bytes: b"fake" };
+        let faces = [
+            face("Liberation Sans", "Regular"),
+            face("Liberation Sans", "Bold"),
+            face("Liberation Sans", "Italic"),
+            face("Liberation Sans", "Bold Italic"),
+            face("Liberation Serif", "Regular"),
+            face("Liberation Serif", "Italic"),
+            face("Liberation Mono", "Regular"),
+            face("Carlito", "Regular"),
+            face("Carlito", "Bold"),
+            face("Caladea", "Regular"),
+            face("Inter", "Regular"),
+            face("Inter", "Italic"),
+            face("Montserrat", "Variable"),
+        ];
+        let pick = |name: &str, serif, mono, bold, italic| {
+            latin_stand_ins(&faces, name, serif, mono, bold, italic).first().map(|f| format!("{} {}", f.family, f.style))
+        };
+        // Metric-compatible counterparts by name, whatever the flags say.
+        assert_eq!(pick("ABCDEF+ArialMT", false, false, false, false).as_deref(), Some("Liberation Sans Regular"));
+        assert_eq!(pick("Arial-BoldItalicMT", false, false, true, true).as_deref(), Some("Liberation Sans Bold Italic"));
+        assert_eq!(pick("Helvetica-Oblique", false, false, false, true).as_deref(), Some("Liberation Sans Italic"));
+        assert_eq!(pick("TimesNewRomanPS-ItalicMT", true, false, false, true).as_deref(), Some("Liberation Serif Italic"));
+        assert_eq!(pick("CourierNewPSMT", false, true, false, false).as_deref(), Some("Liberation Mono Regular"));
+        assert_eq!(pick("Calibri,Bold", false, false, true, false).as_deref(), Some("Carlito Bold"));
+        assert_eq!(pick("Cambria", true, false, false, false).as_deref(), Some("Caladea Regular"));
+        // A style the family lacks takes the nearest: the weight first.
+        assert_eq!(pick("Calibri-BoldItalic", false, false, true, true).as_deref(), Some("Carlito Bold"));
+        assert_eq!(pick("TimesNewRomanPS-BoldMT", true, false, true, false).as_deref(), Some("Liberation Serif Regular"));
+        // Other widths and unknown families take the nearest kind.
+        assert_eq!(pick("Arial-NarrowMT", false, false, false, false).as_deref(), Some("Inter Regular"));
+        assert_eq!(pick("Georgia", true, false, false, false).as_deref(), Some("Liberation Serif Regular"));
+        assert_eq!(pick("HouseGrotesk-Italic", false, false, false, true).as_deref(), Some("Inter Italic"));
+        assert_eq!(pick("Menlo", false, true, false, false).as_deref(), Some("Liberation Mono Regular"));
+        // A variable face is never a stand-in.
+        assert!(latin_stand_ins(&faces[12..], "Montserrat", false, false, false, false).is_empty());
+        // Without the Latin catalogue there is none.
+        assert!(latin_stand_ins(&[], "ArialMT", false, false, false, false).is_empty());
     }
 
     #[test]

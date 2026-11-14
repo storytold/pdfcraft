@@ -104,7 +104,9 @@ fn legacy_indic_font(base_font: &str) -> bool {
 }
 
 /// A source PDF's sfnt program for an in-memory editor. Never a bundled font or an export
-/// fallback. Type 1/Type 3 programs cannot be consumed by an sfnt text renderer.
+/// fallback. A bare CFF program (`/Type1C`, `/CIDFontType0C`) comes in an editor-only sfnt wrapper
+/// that may not be embedded again; Type 1 (`/FontFile`) and Type 3 programs cannot be consumed by
+/// an sfnt text renderer.
 pub fn embedded_sfnt(doc: &Document, font: &Dict) -> Option<Vec<u8>> {
     // No total: one font's two programs, and the metrics read that may adapt one, are each
     // bounded by that stream's own limit.
@@ -129,6 +131,14 @@ pub fn embedded_sfnt_within(doc: &Document, font: &Dict, budget: &mut DecodeBudg
         // through a view of the stream; once the allowance is spent a program with data is refused
         // before its parameters are resolved.
         let Ok(mut bytes) = budget.decode_stages_within(doc, stream, MAX_SFNT) else { continue };
+        // A bare CFF program (`/Type1C`, `/CIDFontType0C`) is no sfnt: the editor reads it through
+        // a wrapper that leaves its outlines as they are (`cff::editor_sfnt`).
+        if cff::is_bare_cff(&bytes) {
+            if let Some(wrapped) = cff::editor_sfnt(doc, font, &bytes, budget) {
+                return Some(wrapped);
+            }
+            continue;
+        }
         let Ok(face) = skrifa::FontRef::from_index(&bytes, 0) else { continue };
         if face.metrics(skrifa::instance::Size::unscaled(), skrifa::instance::LocationRef::default()).units_per_em == 0 {
             continue;
@@ -1841,6 +1851,8 @@ fn symbolic_mac_roman_texts(doc: &Document, font: &Dict, reads: &mut Reads<'_>) 
         })
         .collect()
 }
+
+mod cff;
 
 #[cfg(test)]
 mod tests;

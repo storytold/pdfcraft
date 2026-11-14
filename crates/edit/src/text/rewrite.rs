@@ -1,8 +1,8 @@
 use super::blocks::{BlockStyle, TextBlock, paragraph_separator, row_break, wrap};
 use super::fallback::{
-    Encoder, MAX_TYPE3_GLYPHS, Type3Fallback, Type3Run, drop_unused_fallback_fonts, is_variation_selector, needs_type3, no_japanese_font,
-    source_character_advance, source_encodes, source_fallback_runs, source_family, source_program_completes, source_show, source_space, source_width,
-    type3_encode, type3_font,
+    Encoder, MAX_TYPE3_GLYPHS, StandIn, Type3Fallback, Type3Run, drop_unused_fallback_fonts, installed_program_completes, is_variation_selector,
+    needs_type3, no_japanese_font, source_character_advance, source_encodes, source_fallback_runs, source_family, source_program_completes,
+    source_show, source_space, source_width, type3_encode, type3_font,
 };
 use super::interp::{Carry, Origin, TextState, interpret};
 use super::lines::{
@@ -46,6 +46,20 @@ fn refuse_clipping_text(lines: &[TextLine], dropped: &std::collections::HashSet<
 
 /// [`replace_line`] with the most unique characters one generated font may hold (tests lower it).
 pub(crate) fn replace_line_with_limit(doc: &mut Document, page: usize, line: usize, text: &str, max_glyphs: usize) -> Result<LineEdit, EditError> {
+    // A font the document only names learns the advances of the new characters first
+    // (`complete_named_font_widths`); a refused edit puts its font object back as it was.
+    let font = text_lines(doc, page)?.get(line).map(|l| l.font.clone());
+    let completed = font.map(|font| super::complete_named_font_widths(doc, page, &[font], text)).unwrap_or_default();
+    let edit = replace_line_in_its_font(doc, page, line, text, max_glyphs);
+    if edit.is_err() {
+        for (r, before) in completed {
+            doc.set(r, before);
+        }
+    }
+    edit
+}
+
+fn replace_line_in_its_font(doc: &mut Document, page: usize, line: usize, text: &str, max_glyphs: usize) -> Result<LineEdit, EditError> {
     let text = text.replace(row_break, " ");
     let lines = text_lines(doc, page)?;
     let target = lines.get(line).cloned().ok_or_else(|| EditError::Invalid(format!("page {} has no line {}", page + 1, line + 1)))?;
@@ -86,7 +100,9 @@ pub(crate) fn replace_line_with_limit(doc: &mut Document, page: usize, line: usi
         None => {
             let fallback_shown = crate::bidi::to_visual(&text);
             if needs_type3(&text) {
-                let fallback = type3_font(doc, &mut fonts_res, &text, source_family(&target.base_font), target.bold, max_glyphs)?;
+                let source =
+                    StandIn { base_font: &target.base_font, family: source_family(&target.base_font), bold: target.bold, italic: target.italic };
+                let fallback = type3_font(doc, &mut fonts_res, &text, source, max_glyphs)?;
                 let runs = type3_encode(&fallback, &fallback_shown)
                     .ok_or_else(|| EditError::Invalid(format!("\"{text}\" can't be shown by the {} fallback", fallback.family)))?;
                 let size = font_size_before(&ops, first).unwrap_or(target.size);
@@ -262,7 +278,8 @@ fn choose_rewrite_path(
     let has_special_text = text.is_some_and(|draft| {
         draft.contains(row_break)
             || pdfcraft_fonts::source_shaping::required(draft)
-            || !pdfcraft_fonts::embedding::matching_faces(&block.base_font).is_empty()
+            || !pdfcraft_fonts::embedding::matching_craft_faces(&block.base_font).is_empty()
+            || installed_program_completes(doc, fonts, first, draft)
     });
     let has_multiple_runs = block.rows.iter().any(|row| row.len() > 1)
         || members.iter().any(|line| line.font != first.font || line.size != first.size || line.color != first.color);
@@ -918,10 +935,20 @@ pub(crate) fn rewrite_block_from(
     // Preserve every drawable source glyph; cache missing-glyph lookups as well.
     let visual_indic = source.metrics.as_ref().is_some_and(|m| m.visual_order) || first.visual_order;
     let hebrew = flat.chars().any(crate::bidi::is_hebrew);
-    let source_advances: HashMap<char, Option<f64>> = source
+    // A paragraph whose embedded font lacks a character keeps that font for every character it
+    // has, and only the missing ones are drawn by a stand-in (the source's metric-compatible
+    // counterpart, a face of its kind, or the bundled Latin face: `type3_faces`). Setting the whole
+    // paragraph in a standard font instead changed its face and widths, and so its line breaks,
+    // for one new letter (#2378). Only for a font the document embeds: one it doesn't is drawn
+    // with the viewer's own face, and the standard font of its family (WinAnsi) shows such text best.
+    let embedded = fonts_res.get(font_name.as_bytes()).and_then(|f| doc.dict(f)).is_some_and(|f| pdfcraft_fonts::embedding::carries_program(doc, &f));
+    let keep_source = embedded && style.family.is_none() && style.bold.is_none();
+    let mut source_advances: HashMap<char, Option<f64>> = source
         .metrics
         .as_ref()
-        .filter(|_| !reuse && upright && !hebrew && !visual_indic && style.family.is_none() && style.bold.is_none() && needs_type3(&flat))
+        .filter(|_| {
+            !reuse && upright && !hebrew && !visual_indic && style.family.is_none() && style.bold.is_none() && (needs_type3(&flat) || keep_source)
+        })
         .map(|m| {
             let mut advances = HashMap::new();
             for ch in flat.chars() {
@@ -930,8 +957,14 @@ pub(crate) fn rewrite_block_from(
             advances
         })
         .unwrap_or_default();
+    // Text a standard font can show, none of whose letters the source has, is set in the standard
+    // font as before: a generated font for all of it would keep nothing of the source.
+    if !needs_type3(&flat) && !source_advances.iter().any(|(ch, width)| width.is_some() && !ch.is_whitespace()) {
+        source_advances.clear();
+    }
     let source_chars: HashSet<char> = source_advances.iter().filter_map(|(&ch, width)| width.map(|_| ch)).collect();
     let partial_reuse = !source_chars.is_empty();
+    let fill_missing = needs_type3(&flat) || partial_reuse;
     // The chosen style also determines the real Japanese fallback outlines and advances.
     let (family, bold, italic) = style.family.unwrap_or((source_family(&b.base_font), b.bold, b.italic));
     let bold = style.bold.unwrap_or(bold);
@@ -961,9 +994,11 @@ pub(crate) fn rewrite_block_from(
     let right_edge = if anchored_right { (b.rect[2] - b.rect[0]).max(0.0) } else { width };
     let movement = drawn_movement(emit.ctm, dx, dy)?;
     let tm = emit_text_matrix(o, emit)?;
-    let type3 = if !reuse && needs_type3(&flat) {
+    let type3 = if !reuse && fill_missing {
         let missing: String = flat.chars().filter(|ch| !source_chars.contains(ch)).collect();
-        Some(type3_font(doc, &mut fonts_res, &missing, family, bold, max_glyphs)?)
+        // An explicitly chosen family is that family, whatever the source was.
+        let base_font = if style.family.is_some() { "" } else { b.base_font.as_str() };
+        Some(type3_font(doc, &mut fonts_res, &missing, StandIn { base_font, family, bold, italic }, max_glyphs)?)
     } else {
         None
     };

@@ -4592,7 +4592,8 @@ fn styled_cyrillic_fallback_is_batched_through_tools_and_reopen() {
     let page = pdfcraft_model::pages(&saved).swap_remove(0);
     let resources = saved.dict(page.dict.get(b"Resources").unwrap()).unwrap();
     let fonts = saved.dict(resources.get(b"Font").unwrap()).unwrap();
-    let fallback_count = fonts.iter().filter(|(name, _)| name.starts_with(b"PCJp")).count();
+    // Generated from a Japanese face (`PCJp`) or, for Latin, Greek and Cyrillic text, a Latin one (`PCLat`).
+    let fallback_count = fonts.iter().filter(|(name, _)| name.starts_with(b"PCJp") || name.starts_with(b"PCLat")).count();
     assert_eq!(fallback_count, 1, "one shared fallback font for the new word");
     ok(&mut a, "edit_undo", json!({"doc":doc}));
     assert!(!page_text(&mut a, doc)[0].contains("шалом"));

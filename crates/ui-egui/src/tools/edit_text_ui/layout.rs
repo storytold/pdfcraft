@@ -107,6 +107,31 @@ pub(crate) fn install_source_fonts(ctx: &egui::Context, doc: &pdfcraft_engine::D
     families
 }
 
+/// The tightest letter spacing, in ems, a stand-in face is drawn at: closer than this its letters
+/// touch and then cover each other.
+const TIGHTEST_STAND_IN_SPACING: f32 = -0.04;
+
+/// The size and extra letter spacing that make a row `native` wide at `size` take `target`, with
+/// `gaps` spaces between its letters. The source's own face (`embedded`) keeps its size: only the
+/// rounding between its advances and the row is spread over the gaps. A stand-in face can be much
+/// wider than the source (an interface face for a condensed one), and spacing alone would push
+/// its letters over each other, so it is drawn smaller instead, down to half its size, at no less
+/// than [`TIGHTEST_STAND_IN_SPACING`].
+pub(super) fn fitted(size: f32, native: f32, target: f32, gaps: f32, embedded: bool) -> (f32, f32) {
+    let gaps = gaps.max(1.0);
+    let spacing = (target - native) / gaps;
+    let tightest = TIGHTEST_STAND_IN_SPACING * size;
+    // `!(a < b)` rather than `a >= b`: a width that isn't a number changes nothing.
+    if embedded || !(spacing < tightest) || !(native > 0.0 && target > 0.0 && size > 0.0) {
+        return (size, spacing);
+    }
+    // At `k` times the size the row is `k * native` wide and the tightest spacing `k * tightest`,
+    // so `k * (native + tightest * gaps)` is `target`. Below half size the row keeps its width
+    // and the rest comes out of the spacing.
+    let k = (target / (native + tightest * gaps)).clamp(0.5, 1.0);
+    (size * k, (target - k * native) / gaps)
+}
+
 pub(super) fn editor_job(ui: &egui::Ui, ed: &LineEditor, text: &str, scale: f32, width: f32) -> egui::text::LayoutJob {
     let mut job = egui::text::LayoutJob::default();
     // An unchanged PDF row already has an authoritative line break. Do not rewrap it
@@ -160,7 +185,9 @@ pub(super) fn editor_job(ui: &egui::Ui, ed: &LineEditor, text: &str, scale: f32,
             }
             let native_width = ui.fonts_mut(|f| f.layout_no_wrap(line.text.clone(), font.clone(), Color32::BLACK).size().x);
             let target_width = ((line.rect[2] - line.rect[0]) * look.size / base.max(0.01)) as f32 * scale;
-            let spacing = if original_face { (target_width - native_width) / line.text.chars().count().saturating_sub(1).max(1) as f32 } else { 0.0 };
+            let gaps = line.text.chars().count().saturating_sub(1).max(1) as f32;
+            let (size, spacing) = if original_face { fitted(font.size, native_width, target_width, gaps, embedded) } else { (font.size, 0.0) };
+            font.size = size;
             job.append(
                 text.get(range).unwrap_or_default(),
                 0.0,
@@ -415,4 +442,42 @@ fn place_on_source_words(g: &mut egui::Galley, block: &pdfcraft_engine::TextBloc
 pub(crate) fn caret_color_on(fill: Color32) -> Color32 {
     let luma = 299 * u32::from(fill.r()) + 587 * u32::from(fill.g()) + 114 * u32::from(fill.b());
     if luma > 127_500 { Color32::BLACK } else { Color32::WHITE }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::fitted;
+
+    #[test]
+    fn a_stand_in_face_wider_than_its_source_is_drawn_smaller_not_overlapped() {
+        // 40 letters of a 20 px interface face are 400 px wide; the condensed source row is 250.
+        let (size, spacing) = fitted(20.0, 400.0, 250.0, 39.0, false);
+        assert!(size < 20.0 && size >= 10.0, "{size}");
+        assert!(spacing >= -0.04 * size - 1e-3, "letters keep apart: {spacing} at {size}");
+        let width = 400.0 * size / 20.0 + spacing * 39.0;
+        assert!((width - 250.0).abs() < 0.01, "the row keeps the source's width: {width}");
+        // Spacing alone would have set the letters 3.8 px into each other.
+        assert!((250.0 - 400.0) / 39.0 < -3.8);
+    }
+
+    #[test]
+    fn the_source_face_and_a_near_match_keep_their_size() {
+        // The source's own face: only rounding is spread over the gaps, however large.
+        assert_eq!(fitted(20.0, 400.0, 250.0, 39.0, true), (20.0, (250.0 - 400.0) / 39.0));
+        // A stand-in a little wider, or narrower, than the source keeps its size too.
+        assert_eq!(fitted(20.0, 260.0, 250.0, 39.0, false).0, 20.0);
+        assert_eq!(fitted(20.0, 200.0, 250.0, 39.0, false), (20.0, 50.0 / 39.0));
+    }
+
+    #[test]
+    fn extreme_and_invalid_rows_change_nothing_they_should_not() {
+        // Half size is the floor; the row still takes the source's width.
+        let (size, spacing) = fitted(20.0, 4000.0, 250.0, 39.0, false);
+        assert_eq!(size, 10.0);
+        assert!((2000.0 + spacing * 39.0 - 250.0).abs() < 0.01);
+        // Widths that aren't numbers, an empty row and a single letter don't panic or shrink.
+        assert_eq!(fitted(20.0, f32::NAN, 250.0, 39.0, false).0, 20.0);
+        assert_eq!(fitted(20.0, 0.0, 0.0, 0.0, false).0, 20.0);
+        assert_eq!(fitted(20.0, 12.0, 6.0, 0.0, false).0, 10.0);
+    }
 }

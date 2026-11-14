@@ -67,6 +67,21 @@ impl TextSession {
         if !self.is_current(doc) {
             return Err(EditError::Invalid("the paragraph changed while it was being edited".into()));
         }
-        rewrite_block_from(doc, self.page, self.lines.clone(), self.block, text, style, max_glyphs)
+        // A font the document only names learns the advances of the new characters first, so they
+        // are written in it; a refused edit puts its font objects back as they were.
+        let completed = match text {
+            Some(draft) if style.family.is_none() && style.resource.is_none() => {
+                let fonts: Vec<String> = self.source.lines.iter().filter_map(|i| self.lines.get(*i)).map(|line| line.font.clone()).collect();
+                crate::text::complete_named_font_widths(doc, self.page, &fonts, draft)
+            }
+            _ => Vec::new(),
+        };
+        let edit = rewrite_block_from(doc, self.page, self.lines.clone(), self.block, text, style, max_glyphs);
+        if edit.is_err() {
+            for (r, before) in completed {
+                doc.set(r, before);
+            }
+        }
+        edit
     }
 }

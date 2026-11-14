@@ -21,10 +21,12 @@ struct FallbackGroup {
 
 struct FallbackBuilder {
     groups: Vec<FallbackGroup>,
-    names: std::collections::BTreeMap<(String, bool, char), usize>,
+    names: std::collections::BTreeMap<(String, bool, bool, char), usize>,
     glyphs: usize,
     per_font: usize,
     budget: usize,
+    /// The paragraph has Japanese in it: its other fallback characters keep the Japanese faces' look.
+    japanese: bool,
 }
 
 struct FontResolver<'a> {
@@ -55,8 +57,9 @@ impl FontResolver<'_> {
         }) {
             return Ok(Some(name.clone()));
         }
-        if let Some(face) =
-            pdfcraft_fonts::embedding::matching_faces(&source.base_font).into_iter().find(|face| pdfcraft_fonts::embedding::covers(face.bytes, text))
+        if let Some(face) = crate::text::fallback::completing_faces(self.doc, self.fonts, &source.font, &source.base_font)
+            .into_iter()
+            .find(|face| pdfcraft_fonts::embedding::covers(face.bytes, text))
         {
             return self.embed_face(face.name(), face.bytes, face.family, "the full source font could not be loaded").map(Some);
         }
@@ -170,7 +173,7 @@ impl CharacterPreparation<'_> {
         let mut thai_programs = pdfcraft_cos::DecodeBudget::new(MAX_THAI_PROGRAMS, 0);
         let mut chars = Vec::new();
         let mut substituted = None;
-        let mut fallback = FallbackBuilder::new(max_glyphs);
+        let mut fallback = FallbackBuilder::new(max_glyphs, draft);
         let mut resolver = FontResolver { doc, fonts, metrics, full_faces: HashMap::new(), programs: HashMap::new() };
         for (range, index) in spans {
             let source = lines.get(index).unwrap_or(first);
@@ -304,9 +307,10 @@ impl CharacterPreparation<'_> {
 }
 
 impl FallbackBuilder {
-    fn new(max_glyphs: usize) -> Self {
+    fn new(max_glyphs: usize, draft: &str) -> Self {
         let per_font = max_glyphs.clamp(1, MAX_TYPE3_GLYPHS);
         Self {
+            japanese: draft.chars().any(crate::text::fallback::needs_japanese),
             groups: Vec::new(),
             names: std::collections::BTreeMap::new(),
             glyphs: 0,
@@ -316,11 +320,11 @@ impl FallbackBuilder {
     }
 
     fn prepare(&mut self, source: &TextLine, ch: char, text: &str, position: usize) -> Result<String, EditError> {
-        let key = (source.base_font.clone(), source.bold, ch);
+        let key = (source.base_font.clone(), source.bold, source.italic, ch);
         let group_index = if let Some(index) = self.names.get(&key) {
             *index
         } else {
-            let (faces, _) = type3_faces(text, source_family(&source.base_font), source.bold)?;
+            let (faces, _) = type3_faces(text, self.japanese, &source.base_font, source_family(&source.base_font), source.bold, source.italic)?;
             let face = fallback_face(&faces, &[ch], |face, ch| japanese_glyph_from(face, ch).is_ok()).ok_or_else(|| no_fallback_font(text))?;
             let index = self.groups.iter().position(|group| std::ptr::eq(group.face, face)).unwrap_or_else(|| {
                 let index = self.groups.len();
