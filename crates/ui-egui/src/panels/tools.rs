@@ -202,8 +202,7 @@ fn tool_detail(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, g: &'static
     }
     let (back, close) = panel_header(ui, t, g.label, Some(("chevron-left", tl!("Back to all tools"))));
     if back {
-        app.left = LeftPanel::AllTools;
-        app.enter_mode(crate::Mode::AllTools);
+        app.back_to_all_tools();
     }
     if close {
         app.left_open = false;

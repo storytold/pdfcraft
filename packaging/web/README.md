@@ -99,6 +99,12 @@ From a source build, `trunk build --release` doesn't fetch the models. Add them 
   `allow-same-origin` there's no storage. Without `allow-downloads`, Save and Export (browser
   downloads) are blocked.
 - Don't send `X-Frame-Options: DENY` or a `frame-ancestors` CSP that excludes the embedding page.
+- **`?mode=`** chooses the workspace documents open in on that page: `read`, `sign`, `edit`,
+  `convert` or `all` (as the desktop's `--mode`). A host opening a file to read passes `?mode=read`
+  (the panes start closed), and one asking for a signature `?mode=sign`. It is never saved, so the
+  user's own default (Preferences ▸ Default mode) is unchanged, and it ends when the user picks a
+  workspace themselves. The value is trimmed and may be in any case (`Read`); any other value is
+  ignored, with a console warning. It works with or without `?host=parent`: `src="/pdfcraft/?host=parent&mode=read"`.
 
 ## Same-document host mode (no iframe)
 

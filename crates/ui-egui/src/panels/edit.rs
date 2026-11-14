@@ -1,7 +1,6 @@
 use super::tools::row_label;
 use super::{
-    Align2, Availability, Color32, CornerRadius, LeftPanel, PdfCraftApp, Rect, Sense, Stroke, Tokens, ToolGroup, ToolItem, catalog, icons, theme,
-    vec2, widgets,
+    Align2, Availability, Color32, CornerRadius, PdfCraftApp, Rect, Sense, Stroke, Tokens, ToolGroup, ToolItem, catalog, icons, theme, vec2, widgets,
 };
 
 /// The page operations Edit shows as a row of icon buttons, as Acrobat's Edit panel does.
@@ -27,8 +26,7 @@ pub(super) fn edit_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, g
     let from_all_tools = app.mode != crate::Mode::Edit;
     ui.horizontal(|ui| {
         if from_all_tools && icons::button(ui, "chevron-left", 26.0, false, tl!("Back to all tools")).clicked() {
-            app.left = LeftPanel::AllTools;
-            app.enter_mode(crate::Mode::AllTools);
+            app.back_to_all_tools();
         }
         // "Edit" under the Edit tab, as Acrobat titles it; the tool's own name from All tools.
         let title = if from_all_tools { tl!(g.label) } else { tl!("Edit") };
