@@ -476,6 +476,15 @@ impl Session {
         self.write_new(&out)
     }
 
+    /// New PDF bytes containing copies of `pages` from `bytes` (e.g. pages copied to the page
+    /// clipboard), authenticated with `password` if encrypted and enforcing document assembly
+    /// permissions.
+    pub fn extract_from_bytes(&self, name: &str, bytes: &Arc<Vec<u8>>, password: Option<&str>, pages: &[usize]) -> Result<Arc<Vec<u8>>, EditError> {
+        let src = open_source_with(name, bytes, password)?;
+        let out = pdfcraft_organize::extract_pages(&src, pages)?;
+        self.write_new(&out)
+    }
+
     /// Split the document into several new PDFs.
     pub fn split(&self, id: DocId, by: &pdfcraft_organize::SplitBy) -> Result<Vec<SplitPart>, EditError> {
         let src = self.cos(id)?;

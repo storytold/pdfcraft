@@ -372,4 +372,70 @@ mod page_moves {
         let order: Vec<usize> = (0..5).map(|p| moved_index(p, &[3], 0)).collect();
         assert_eq!(order, [1, 2, 3, 0, 4]);
     }
+
+    #[test]
+    fn copied_page_creates_new_pdf_from_clipboard() -> Result<(), Box<dyn std::error::Error>> {
+        use crate::{PdfCraftApp, RightPanel};
+        use egui_kittest::{Harness, kittest::Queryable};
+
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en")?;
+        app.system_clipboard = false;
+        let bytes = app.session.create_blank(300.0, 500.0, 2)?;
+        app.open_bytes("source.pdf", None, (*bytes).clone())?;
+        app.right = Some(RightPanel::Pages);
+
+        let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(|_cc| app);
+        h.run_steps(3);
+
+        // Select Page 2 in the Pages panel and copy it while the clipboard held prior text.
+        h.state_mut().clipboard_override = Some(crate::create_ui::Clip::Text("Prior clipboard text".into()));
+        h.get_all_by_label("Page 2").find(|t| t.rect().left() > 800.0).ok_or("missing Page 2 thumbnail")?.click();
+        h.run_steps(2);
+        assert!(h.state_mut().execute("page.copy"));
+        assert_eq!(h.state().page_clipboard.as_ref().map(|c| c.pages.clone()), Some(vec![1]));
+
+        // Create PDF from clipboard opens a new document with the copied page, including when the
+        // system clipboard holds the page-copy marker line ("1 page from source.pdf").
+        h.state_mut().clipboard_override = Some(crate::create_ui::Clip::Text("1 page from source.pdf".into()));
+        assert!(h.state_mut().execute("create.clipboard"));
+        assert_eq!(h.state().views.len(), 2);
+        let created_id = h.state().views[1].id;
+        let created = h.state().session.get(created_id).ok_or("missing created PDF")?;
+        assert_eq!(created.name, "Clipboard.pdf");
+        assert_eq!(created.info.pages.len(), 1);
+        assert!((created.info.pages[0].width - 300.0).abs() < 0.5);
+        assert!((created.info.pages[0].height - 500.0).abs() < 0.5);
+
+        // An empty or unreadable system clipboard read (`None`) still creates the PDF from copied pages.
+        h.state_mut().clipboard_override = None;
+        assert!(h.state_mut().execute("create.clipboard"));
+        assert_eq!(h.state().views.len(), 3);
+        let fallback_doc = h.state().session.get(h.state().views[2].id).ok_or("missing fallback PDF")?;
+        assert!((fallback_doc.info.pages[0].width - 300.0).abs() < 0.5);
+
+        // When newer content arrives on the clipboard after copying pages, Create ▸ Clipboard uses it.
+        h.state_mut().clipboard_override = Some(crate::create_ui::Clip::Text("Newer clipboard text".into()));
+        assert!(h.state_mut().execute("create.clipboard"));
+        assert_eq!(h.state().views.len(), 4);
+        let text_doc = h.state().session.get(h.state().views[3].id).ok_or("missing text PDF")?;
+        assert!((text_doc.info.pages[0].width - 612.0).abs() < 0.5, "newer text clipboard creates US Letter page");
+
+        // Authenticated snapshots preserve credentials and enforce assembly permissions.
+        h.state_mut().clipboard_override = None;
+        let src_id = h.state().views[0].id;
+        h.state_mut().session.apply(
+            src_id,
+            pdfcraft_engine::Edit::Protect(pdfcraft_engine::Protection {
+                open_password: Some("user".into()),
+                permissions_password: Some("owner".into()),
+                ..Default::default()
+            }),
+        )?;
+        let protected = h.state().session.save_bytes(src_id)?;
+        assert!(h.state().session.extract_from_bytes("secret.pdf", &protected, None, &[0]).is_err());
+        assert!(h.state().session.extract_from_bytes("secret.pdf", &protected, Some("user"), &[0]).is_err());
+        assert!(h.state().session.extract_from_bytes("secret.pdf", &protected, Some("owner"), &[0]).is_ok());
+        Ok(())
+    }
 }

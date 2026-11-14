@@ -732,11 +732,11 @@ impl PdfCraftApp {
     /// Organize ▸ Copy / Cut: remember the selected pages (the document as it is now); Cut also
     /// deletes them (one page always stays).
     pub fn copy_pages(&mut self, cut: bool) {
-        // What's typed in a form field is part of the document (#166).
-        if !self.commit_form_typing() {
+        let Some((i, id)) = self.active_ids() else { return };
+        // What's typed in a form field or open text box is part of the document (#166, #3496).
+        if !self.commit_typing_in(id) {
             return;
         }
-        let Some((i, id)) = self.active_ids() else { return };
         let Some(doc) = self.session.get(id) else { return };
         let pages = self.views[i].target_pages();
         let n = doc.info.pages.len();
@@ -744,11 +744,25 @@ impl PdfCraftApp {
             self.notify_tr("A document needs at least one page: copy instead");
             return;
         }
-        self.page_clipboard = Some(crate::PageClip { from: id, name: doc.name.clone(), bytes: doc.bytes.clone(), pages: pages.clone() });
+        // A newer copy wins over a whole-document copy still reading its pages.
+        self.document_copy = None;
+        let system_clip_at_copy = self.current_system_clip();
+        let Some(doc) = self.session.get(id) else { return };
+        let what = if pages.len() == 1 { tl!("1 page").to_string() } else { crate::i18n::fmt(tl!("{n} pages"), &[("n", &pages.len().to_string())]) };
+        let clipboard_marker = crate::i18n::fmt(tl!("{what} from {name}"), &[("what", &what), ("name", &doc.name)]);
+        self.page_clipboard = Some(crate::PageClip {
+            from: id,
+            name: doc.name.clone(),
+            bytes: doc.bytes.clone(),
+            password: doc.password.clone(),
+            pages: pages.clone(),
+            system_clip_at_copy,
+            clipboard_marker,
+            superseded_by_clip: None,
+        });
         if cut {
             self.apply_edit(Edit::DeletePages { pages: pages.clone() });
         }
-        let what = if pages.len() == 1 { tl!("1 page").to_string() } else { crate::i18n::fmt(tl!("{n} pages"), &[("n", &pages.len().to_string())]) };
         if cut {
             self.notify_fmt("Cut {what}", &[("what", &what)]);
         } else {
