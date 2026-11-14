@@ -1,10 +1,11 @@
-use super::annotations::{FieldWalk, MAX_LINK_ATTACHMENT_TEXT_BYTES};
+use super::annotations::{FieldWalk, MAX_ANNOTATION_NAME_INDEX_BYTES, MAX_LINK_ATTACHMENT_TEXT_BYTES};
 use super::model::{Attachment, AttachmentSource, PageInfo, Portfolio, PortfolioView, Xfa};
 use super::navigation::text_string;
 use super::{
     Arc, AssertUnwindSafe, DecryptionError, Dictionary, DocInfo, Document, HashMap, HashSet, LazyStructure, LoadOptions, LoadPdfError, Object,
     ObjectId, OnceCell, OpenError, Pdf, Structure, catch_unwind,
 };
+use std::cell::Cell;
 
 /// lopdf decodes object and cross-reference streams while it loads, with no limit unless one is
 /// set: a few hundred bytes of nested FlateDecode then inflate to gigabytes. Real object and
@@ -144,6 +145,11 @@ pub(super) fn inspect_structure(info: &mut DocInfo, fill: impl FnOnce(&mut DocIn
     }
 }
 
+/// The names are copies (borrowing them would make `Inspector` invariant in its lifetime), each
+/// short, and all of them within [`MAX_ANNOTATION_NAME_INDEX_BYTES`]. `None` when the page's names
+/// did not fit what was left of it: that page is scanned for each name instead.
+pub(super) type AnnotationNames = Option<HashMap<Vec<u8>, usize>>;
+
 pub(super) struct Inspector<'a> {
     pub(super) doc: &'a dyn Structure,
     pub(super) page_ids: Vec<ObjectId>,
@@ -155,6 +161,11 @@ pub(super) struct Inspector<'a> {
     /// has no `/P`. Searching every page's `/Annots` for each such field was O(fields ×
     /// annotations): a second on a form of 8,000 fields.
     pub(super) annotation_pages: OnceCell<HashMap<ObjectId, usize>>,
+    /// Per page, the position in `/Annots` of the first annotation with each `/NM`, built when a
+    /// GoToE target names one. Scanning `/Annots` for each link was O(links × annotations).
+    pub(super) annotation_names: OnceCell<Vec<OnceCell<AnnotationNames>>>,
+    /// What is left of [`MAX_ANNOTATION_NAME_INDEX_BYTES`] for `annotation_names`.
+    pub(super) annotation_name_budget: Cell<usize>,
     /// What is left of [`MAX_FIELD_TEXT_BYTES`]: names, values and tooltips of form fields and
     /// layer names, which many entries can share one string of.
     pub(super) field_text: std::cell::Cell<usize>,
@@ -179,6 +190,8 @@ impl<'a> Inspector<'a> {
             page_index,
             named: HashMap::new(),
             annotation_pages: OnceCell::new(),
+            annotation_names: OnceCell::new(),
+            annotation_name_budget: Cell::new(MAX_ANNOTATION_NAME_INDEX_BYTES),
             field_text: MAX_FIELD_TEXT_BYTES.into(),
             field_actions: false.into(),
             parent_widgets: OnceCell::new(),

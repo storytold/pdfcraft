@@ -4,7 +4,7 @@
 use pdfcraft_engine::{
     Edit, LinkAction, LinkHighlight, LinkStyle, LinkZoom, read_remote_document, remote_document_path_is_absolute, resolve_remote_document_path,
 };
-use pdfcraft_render::{DestView, LinkTarget, RemoteDestination};
+use pdfcraft_render::{AttachmentSource, DestView, LinkTarget, RemoteDestination};
 use serde_json::{Value, json};
 use std::path::Path;
 
@@ -224,10 +224,15 @@ impl Automation {
                 .iter()
                 .find(|link| link.page == page && link.index == index)
                 .ok_or_else(|| failed(format!("page {page_number} has no link {index_number} (see link_list)")))?;
-            let LinkTarget::RemoteGoTo { file, destination, new_window, .. } = &link.target else {
-                return Err(bad("the selected link is not a supported local PDF GoToR link"));
+            let (file, destination, new_window) = match &link.target {
+                LinkTarget::RemoteGoTo { file, destination, new_window, .. } => (file.clone(), destination.clone(), *new_window),
+                LinkTarget::EmbeddedGoTo { source: attached, destination, new_window } => {
+                    let (attached, destination, new_window) = (attached.clone(), destination.clone(), *new_window);
+                    return self.open_embedded_link(a, &attached, destination, new_window);
+                }
+                _ => return Err(bad("the selected link is not a supported local PDF GoToR or embedded GoToE link")),
             };
-            (source.path.clone(), file.clone(), destination.clone(), *new_window)
+            (source.path.clone(), file, destination, new_window)
         };
         let path = resolve_remote_document_path(source_path.as_deref().map(Path::new), &file).map_err(failed)?;
         let allow_absolute = a.opt_bool("allow_absolute")?.unwrap_or(false);
@@ -252,6 +257,44 @@ impl Automation {
         Ok(json!({
             "document": crate::summary(opened),
             "path": display_path,
+            "destination_applied": destination_applied,
+            "destination": destination_value,
+            "warning": warning,
+            "new_window_hint": new_window,
+        }))
+    }
+
+    /// `link_open` for an embedded Go-To link (ISO 32000-2 §12.6.4.4): open the PDF attached to
+    /// the document, from the document's own bytes, as a new document. No file is read, so
+    /// `--root` has nothing to confine.
+    fn open_embedded_link(
+        &mut self,
+        a: &Args,
+        attached: &AttachmentSource,
+        destination: RemoteDestination,
+        new_window: Option<bool>,
+    ) -> Result<Value> {
+        let (name, bytes) = {
+            let doc = self.doc(a)?;
+            let att = doc
+                .info
+                .attachments
+                .iter()
+                .find(|x| x.source == *attached)
+                .ok_or_else(|| failed("the file this GoToE link names is not attached to the document"))?;
+            let bytes = pdfcraft_render::attachment_data(&doc.bytes, doc.password.as_deref(), att).map_err(failed)?;
+            (att.name.clone(), bytes)
+        };
+        // "Embedded go-to actions work only for files of Type PDF" (§12.6.4.4).
+        if !pdfcraft_render::looks_like_pdf(&bytes) {
+            return Err(failed(format!("{name} is not a PDF, so the GoToE link can't open it")));
+        }
+        let id = self.session.open(name.clone(), None, std::sync::Arc::new(bytes), a.opt_str("password")?).map_err(failed)?;
+        let opened = self.session.get(id).ok_or_else(|| failed("the linked document vanished"))?;
+        let (destination_applied, destination_value, warning) = destination_report(opened, destination);
+        Ok(json!({
+            "document": crate::summary(opened),
+            "embedded_file": name,
             "destination_applied": destination_applied,
             "destination": destination_value,
             "warning": warning,
