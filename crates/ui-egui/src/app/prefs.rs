@@ -103,6 +103,7 @@ impl PdfCraftApp {
             "system_title_bar": self.system_title_bar,
             "pinned_folders": self.pinned.folders,
             "pinned_folders_collapsed": self.pinned.collapsed,
+            "watermark_settings": marks_ui::saved_to_json(&self.marks_draft.saved),
             "theme": self.theme_preference,
             "scroll_speed": self.scroll_speed,
             "invert_middle_drag": self.invert_middle_drag,
@@ -276,6 +277,7 @@ impl PdfCraftApp {
         }
         self.pinned.restore(&v["pinned_folders"]);
         self.pinned.restore_collapsed(&v["pinned_folders_collapsed"]);
+        self.marks_draft.saved = marks_ui::saved_from_json(&v["watermark_settings"]);
         if let Some(items) = v.get("pinned_tools").and_then(serde_json::Value::as_array) {
             let mut tools = Vec::new();
             for item in items {
