@@ -37,6 +37,7 @@ mod history;
 pub mod js;
 mod layers;
 pub mod links;
+mod live_scripts;
 pub mod model3d;
 mod object_clip;
 pub mod ocr;
@@ -74,6 +75,7 @@ use std::sync::Arc;
 pub use links::{
     MAX_REMOTE_DOCUMENT_BYTES, RemoteDocumentPathError, read_remote_document, remote_document_path_is_absolute, resolve_remote_document_path,
 };
+pub use live_scripts::{MAX_TIMER_RUNS, ScriptRun};
 pub use pdfcraft_edit::strip_subset_tag;
 pub use rich_copy::RichCopy;
 pub use signature_image::{ImageSignaturePreview, SignatureImage};
@@ -92,7 +94,9 @@ pub use pdfcraft_organize::check_custom_key;
 pub use pdfcraft_organize::view::{InitialView, Layout as InitialLayout, Magnification, Navigation};
 
 pub use pdfcraft_cos::{Algorithm, civil_from_days};
-pub use pdfcraft_create::{CONVERTIBLE, CreateError, ImageResolution, SourceKind, decode_text, source_kind};
+pub use pdfcraft_create::{
+    CONVERTIBLE, CreateError, IMAGE_EXTENSIONS, ImageResolution, OFFICE_EXTENSIONS, SourceKind, TEXT_EXTENSIONS, decode_text, source_kind,
+};
 pub use pdfcraft_edit::added::{
     CHAR_SPACING_LIMIT as ADDED_CHAR_SPACING_LIMIT, paste_place as added_paste_place, paste_rect as added_paste_rect, text_rect as added_text_rect,
     text_width as added_text_width,
@@ -166,7 +170,7 @@ use pictures::{embed_image, fit_picture, mark_source, model_poster};
 use protection::unrestricted;
 pub use protection::{Changes, Printing, Protection, SecuritySummary};
 pub use session::Session;
-pub use sources::{CombineSource, Combined, combine_source_check, source_page_count};
+pub use sources::{CombineSource, Combined, combine_source_check, office_to_pdf, source_page_count};
 use sources::{open_source, open_source_with};
 #[cfg(test)]
 use test_hooks::{
@@ -198,5 +202,9 @@ fn display_config(config: &pdfcraft_render::RenderConfig) -> pdfcraft_render::Re
 /// How long a custom stamp's text line may be, in characters (#1741).
 pub const MAX_STAMP_LINE: usize = 200;
 
+#[cfg(test)]
+mod document_actions_tests;
+#[cfg(test)]
+mod link_javascript_tests;
 #[cfg(test)]
 mod tests;

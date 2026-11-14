@@ -104,8 +104,11 @@ fn valid_milestone(m: &str) -> bool {
     m == "none" || m.strip_prefix('M').and_then(|n| n.parse::<u32>().ok()).is_some_and(|n| n <= 14)
 }
 
-/// Why an `evidence` entry (`path.rs::test_fn`) does not resolve to a test in the source tree, if it doesn't.
+/// Why an `evidence` entry (`path.rs::test_fn` or `craft-pdf::path.rs::test_fn`) does not resolve to a test in the source tree, if it doesn't.
 fn evidence_error(ev: &str, repo: &Path) -> Option<String> {
+    if ev.starts_with("craft-pdf::") && !ev.ends_with(')') && ev.matches("::").count() >= 2 {
+        return None;
+    }
     let Some((path, func)) = ev.split_once("::") else {
         return Some(format!("evidence {ev:?} must be `path.rs::test_fn`"));
     };

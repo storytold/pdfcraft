@@ -3502,6 +3502,188 @@ fn win_ansi_high_glyphs_use_helvetica_not_the_fallback_font() {
     assert_eq!(lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>().join(" "), text);
 }
 
+/// #2378: a word the line's subset can't show goes to Helvetica, and only that word. The words
+/// it can show keep the source font (here `F2`, a subset of `a` and `b` without a space glyph),
+/// one font per word, and the line reads back whole and in place: one line, in its own font, so
+/// editing it again replaces all of it (review on #2955), also when it starts with a substitute
+/// word.
+#[test]
+fn only_the_words_a_subset_cannot_show_are_substituted() {
+    let mut doc = text_page("BT /F2 10 Tf 72 600 Td (ab) Tj ET");
+    let r = text::replace_line(&mut doc, 0, 0, "ab ba cab ba").unwrap();
+    assert_eq!(r.substituted.as_deref(), Some("Helvetica"));
+    let mut doc = reopen(&doc);
+    let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+    assert!(content.contains("/F2") && content.contains("/PCEdHelvetica"), "both fonts are used: {content}");
+    let lines = text::text_lines(&doc, 0).unwrap();
+    let read: Vec<(&str, &str)> = lines.iter().map(|l| (l.text.trim(), l.font.as_str())).collect();
+    assert_eq!(read, [("ab ba cab ba", "F2")]);
+    // Each word where its font puts it, the substituted `cab` included: no gap or overlap opens
+    // where the font changes (review on #2955).
+    let starts: Vec<f64> = lines[0].ink.iter().map(|b| b[0]).collect();
+    assert_eq!(starts.len(), 4, "{:?}", lines[0].ink);
+    for (got, want) in starts.iter().zip([72.0, 85.5, 98.48, 117.9]) {
+        assert!((got - want).abs() < 0.01, "word starts {starts:?}, want {want} among them");
+    }
+    assert!(lines[0].ink.windows(2).all(|w| w[0][2] < w[1][0]), "no word box overlaps the next: {:?}", lines[0].ink);
+    for (text, first) in [("cab ab", "PCEdHelvetica"), ("ba cab", "F2")] {
+        text::replace_line(&mut doc, 0, 0, text).unwrap();
+        doc = reopen(&doc);
+        let lines = text::text_lines(&doc, 0).unwrap();
+        let read: Vec<(&str, &str)> = lines.iter().map(|l| (l.text.trim(), l.font.as_str())).collect();
+        assert_eq!(read, [(text, "F2")], "after replacing with {text:?} (starting with {first})");
+    }
+}
+
+/// Review on #2955: replacing a line written in two fonts again replaces its `/PCEdLine`
+/// sequence too. Kept, each edit nested one more, and its `EMC`s outnumbered what the reader
+/// counts once 256 deep, closing the sequence around the line (here a `/Span`). The content
+/// doesn't grow from one edit to the next.
+#[test]
+fn replacing_a_mixed_font_line_again_replaces_its_sequence() {
+    let mut doc = text_page("/Span BMC BT /F2 10 Tf 72 600 Td (ab) Tj ET EMC BT /F2 10 Tf 72 500 Td (ba) Tj ET");
+    let count = |content: &str, op: &str| content.split_whitespace().filter(|w| *w == op).count();
+    let mut sizes = Vec::new();
+    // Since #4514 a source-font run whose spaces the subset lacks is wrapped in a
+    // `/Span <</ActualText …>> BDC … EMC` of its own, so the spaces read back. `spans` is how
+    // many each edit writes: every `EMC` is a sequence's or one of those spans'.
+    for (text, spans) in [("ab ba cab ba", 2), ("cab ab", 1), ("ab cab", 0), ("ab cab", 0), ("ab ba", 1), ("ba ab", 1)] {
+        text::replace_line(&mut doc, 0, 0, text).unwrap();
+        doc = reopen(&doc);
+        let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+        let mixed = text.contains('c');
+        assert_eq!(content.matches("/PCEdLine").count(), usize::from(mixed), "after {text:?}: {content}");
+        assert_eq!(content.matches("/ActualText").count(), spans, "after {text:?}: {content}");
+        assert_eq!(
+            (count(&content, "BMC"), count(&content, "EMC")),
+            (1 + usize::from(mixed), 1 + usize::from(mixed) + spans),
+            "after {text:?}: {content}"
+        );
+        assert_eq!(count(&content, "Tf"), 2 + if mixed { 4 } else { 1 }, "after {text:?}: {content}");
+        let lines = text::text_lines(&doc, 0).unwrap();
+        let read: Vec<&str> = lines.iter().map(|l| l.text.trim()).collect();
+        assert_eq!(read, [text, "ba"], "after {text:?}");
+        assert_eq!(lines[0].baseline(), [72.0, 600.0], "after {text:?}: in place");
+        sizes.push(content.split_whitespace().count());
+    }
+    assert_eq!(sizes[2], sizes[3], "the same text again, the same content");
+    // A sequence holding marked content of its own goes whole, and what follows it keeps its
+    // font and size unless the replacement sets the same again.
+    for (after, font, size) in [("/F1 12 Tf", "F1", 12.0), ("/F2 12 Tf", "F2", 12.0), ("/F1 10 Tf", "F1", 10.0)] {
+        let mut doc = text_page(&format!(
+            "BT /F2 10 Tf 72 600 Td /PCEdLine BMC /F2 10 Tf /Span <<>> BDC (ab) Tj EMC /F1 10 Tf ( cab) Tj EMC {after} 0 -20 Td (ba) Tj ET"
+        ));
+        text::replace_line(&mut doc, 0, 0, "ab ab").unwrap();
+        let doc = reopen(&doc);
+        let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+        // The old sequence and the span inside it are gone; what is left is the new text's own
+        // `/ActualText` span for the space its subset lacks (#4514).
+        assert!(!content.contains("/PCEdLine") && !content.contains("/Span <<>>"), "{after}: {content}");
+        assert_eq!((count(&content, "BMC"), count(&content, "BDC"), count(&content, "EMC")), (0, 1, 1), "{after}: {content}");
+        let lines = text::text_lines(&doc, 0).unwrap();
+        let read: Vec<(&str, &str, f64)> = lines.iter().map(|l| (l.text.trim(), l.font.as_str(), l.size)).collect();
+        assert_eq!(read, [("ab ab", "F2", 10.0), ("ba", font, size)], "{after}: {content}");
+    }
+}
+
+/// Review on #2955: a leading space is not a word the line's font shows. " cab" (no word the
+/// subset can show) was split into an empty source-font run and a substitute run, so it was
+/// written as a two-font `/PCEdLine` with an empty `Tj` in the line's font; read back, the line
+/// was the substitute's alone, and the next edit took Helvetica for the line's own font. It is
+/// substituted as a whole instead, as a line with no word in the source font always was.
+#[test]
+fn a_leading_space_does_not_make_a_source_font_run() {
+    let mut doc = text_page("BT /F2 10 Tf 72 600 Td (ab) Tj ET");
+    text::replace_line(&mut doc, 0, 0, " cab").unwrap();
+    let doc = reopen(&doc);
+    let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+    assert!(!content.contains("/PCEdLine") && !content.contains("() Tj"), "{content}");
+    // With a word in the source font after it, the line is still written in both.
+    let mut doc = text_page("BT /F2 10 Tf 72 600 Td (ab) Tj ET");
+    text::replace_line(&mut doc, 0, 0, " ab cab").unwrap();
+    let doc = reopen(&doc);
+    let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+    assert!(content.contains("/PCEdLine") && !content.contains("() Tj"), "{content}");
+    let lines = text::text_lines(&doc, 0).unwrap();
+    assert_eq!(lines.iter().map(|l| (l.text.trim(), l.font.as_str())).collect::<Vec<_>>(), [("ab cab", "F2")]);
+    // The spaces the subset has no glyph for are moves, each one kept: the leading one before
+    // the first word, two between words as two.
+    let flat = |doc: &Document| String::from_utf8_lossy(&page_content_bytes(doc, 0)).split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(flat(&doc).contains("/F2 10 Tf /Span <</ActualText ( ab)>> BDC [-330] TJ (ab) Tj EMC"), "{}", flat(&doc));
+    let mut doc = text_page("BT /F2 10 Tf 72 600 Td (ab) Tj ET");
+    text::replace_line(&mut doc, 0, 0, "ab  ba cab").unwrap();
+    let doc = reopen(&doc);
+    assert!(flat(&doc).contains("(ab) Tj [-330] TJ [-330] TJ (ba) Tj"), "{}", flat(&doc));
+    // Before a substitute word, the leading spaces are the substitute's to show, all of them.
+    let mut doc = text_page("BT /F2 10 Tf 72 600 Td (ab) Tj ET");
+    text::replace_line(&mut doc, 0, 0, "  cab ab").unwrap();
+    let doc = reopen(&doc);
+    let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+    assert!(content.contains("(  cab) Tj"), "{content}");
+}
+
+/// Review on #2955: a paragraph rewrite keeps the `/PCEdLine` delimiters of a line an earlier
+/// replacement wrote in two fonts, so a rewritten paragraph's rows can end up inside one. A
+/// later replacement of one of those rows must not take the sequence's other rows with it.
+#[test]
+fn replacing_one_row_of_a_sequence_keeps_the_other_rows() {
+    let content = "BT /F2 10 Tf 72 600 Td /PCEdLine BMC /F2 10 Tf (ab) Tj /F1 10 Tf ( cab) Tj 0 -20 Td /F2 10 Tf (ba) Tj EMC ET";
+    let rows = text::text_lines(&text_page(content), 0).unwrap();
+    assert_eq!(rows.iter().map(|l| l.text.trim()).collect::<Vec<_>>(), ["ab cab", "ba"]);
+    for (row, text, other) in [(0, "ab ab", "ba"), (1, "ab", "ab cab")] {
+        let mut doc = text_page(content);
+        text::replace_line(&mut doc, 0, row, text).unwrap();
+        let doc = reopen(&doc);
+        let after: Vec<String> = text::text_lines(&doc, 0).unwrap().iter().map(|l| l.text.trim().to_string()).collect();
+        assert!(after.iter().any(|t| t == text) && after.iter().any(|t| t == other), "replacing row {row}: {after:?}");
+    }
+}
+
+/// Review on #2955: a row inside a shared `/PCEdLine` sequence that starts with a substitute run
+/// has the substitute's font in effect at its first operator. Replaced by text the row's own font
+/// shows, it must set that font again, or the new text is drawn in the substitute.
+#[test]
+fn a_row_replaced_inside_a_shared_sequence_starts_in_its_own_font() {
+    // A real two-font line, starting with the substitute run, then a second row put inside its
+    // sequence, as a paragraph rewrite that keeps the delimiters can leave it.
+    let mut doc = text_page("BT /F2 10 Tf 72 600 Td (ab) Tj ET");
+    text::replace_line(&mut doc, 0, 0, "  cab ab").unwrap();
+    let doc = reopen(&doc);
+    let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+    assert!(content.contains("/PCEdLine") && content.contains("(  cab) Tj"), "{content}");
+    let mut doc = doc;
+    // The last `EMC` closes `/PCEdLine`; an earlier one closes a run's `/ActualText` span (#4514).
+    let close = content.rfind("EMC").unwrap();
+    let shared = format!("{}0 -20 Td (ba) Tj {}", &content[..close], &content[close..]);
+    let stream = Object::Ref(doc.add(Object::Stream(Stream::from_raw(Dict::new(), shared.into_bytes()))));
+    set_page_contents(&mut doc, stream, None);
+    let rows = text::text_lines(&doc, 0).unwrap();
+    assert_eq!(rows.iter().map(|l| (l.text.trim(), l.font.as_str())).collect::<Vec<_>>(), [("cab ab", "F2"), ("ba", "F2")]);
+    text::replace_line(&mut doc, 0, 0, "ab").unwrap();
+    let doc = reopen(&doc);
+    let after = text::text_lines(&doc, 0).unwrap();
+    assert_eq!(after.iter().map(|l| (l.text.trim(), l.font.as_str())).collect::<Vec<_>>(), [("ab", "F2"), ("ba", "F2")]);
+}
+
+/// Review on #2955: a sequence holding one row can also hold that row's positioning and text
+/// state, as a paragraph rewrite writes it inside kept delimiters. Replacing the row drops the
+/// delimiters, fonts and text, not the `Tm` that places it.
+#[test]
+fn replacing_the_only_row_of_a_sequence_keeps_its_position() {
+    let content = "BT /F2 10 Tf /PCEdLine BMC 1 0 0 1 72 600 Tm /F2 10 Tf (ab) Tj /F1 10 Tf ( cab) Tj EMC ET";
+    let mut doc = text_page(content);
+    let before = text::text_lines(&doc, 0).unwrap();
+    assert_eq!(before.iter().map(|l| l.text.trim()).collect::<Vec<_>>(), ["ab cab"]);
+    text::replace_line(&mut doc, 0, 0, "ab").unwrap();
+    let doc = reopen(&doc);
+    let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+    assert!(!content.contains("PCEdLine") && !content.contains("cab"), "{content}");
+    let after = text::text_lines(&doc, 0).unwrap();
+    assert_eq!(after.len(), 1, "{content}");
+    let (was, now) = (before[0].rect, after[0].rect);
+    assert!((was[0] - now[0]).abs() < 0.01 && (was[1] - now[1]).abs() < 0.01, "moved from {was:?} to {now:?}: {content}");
+}
+
 #[test]
 fn missing_glyphs_substitute_helvetica_and_impossible_text_is_refused() {
     let mut doc = text_page("BT /F2 10 Tf 72 600 Td (ab) Tj ET");
@@ -10060,11 +10242,16 @@ fn rewriting_a_paragraph_drawn_with_quote_operators_keeps_their_line_move_and_sp
 fn replacing_a_line_keeps_what_a_dropped_quote_copy_did() {
     let cases = [
         // The copy's `'` moves to the line the footer is placed from.
-        "BT /F1 12 Tf 14 TL 72 700 Td (Target line here) Tj ET BT 72.3 714 Td (Target line here) ' 0 -100 Td (Footer stays put) Tj ET",
+        (2, "BT /F1 12 Tf 14 TL 72 700 Td (Target line here) Tj ET BT 72.3 714 Td (Target line here) ' 0 -100 Td (Footer stays put) Tj ET"),
         // The copy's `"` sets the spacing the footer inherits in the next text object.
-        "BT /F1 12 Tf 0 TL 72 700 Td (Target line here) Tj ET BT 72.3 700 Td 3 2 (Target line here) \" ET BT 72 600 Td (Footer stays put) Tj ET",
+        (2, "BT /F1 12 Tf 0 TL 72 700 Td (Target line here) Tj ET BT 72.3 700 Td 3 2 (Target line here) \" ET BT 72 600 Td (Footer stays put) Tj ET"),
+        // Two copies, a `'` one and a `"` one: the footer takes the second's line and spacing.
+        (
+            3,
+            "BT /F1 12 Tf 0 TL 72 700 Td (Target line here) Tj ET BT 72.3 700 Td (Target line here) ' ET BT 72.6 700 Td 3 2 (Target line here) \" 0 -100 Td (Footer stays put) Tj ET",
+        ),
     ];
-    for content in cases {
+    for (drawn, content) in cases {
         let footer = |doc: &Document| {
             let lines = text::text_lines(doc, 0).unwrap();
             let f = lines.iter().find(|l| l.text == "Footer stays put").unwrap_or_else(|| panic!("no footer in {content}"));
@@ -10074,7 +10261,7 @@ fn replacing_a_line_keeps_what_a_dropped_quote_copy_did() {
         let before = footer(&original);
         let targets: Vec<usize> =
             text::text_lines(&original, 0).unwrap().iter().enumerate().filter(|(_, l)| l.text == "Target line here").map(|(i, _)| i).collect();
-        assert_eq!(targets.len(), 2, "{content}");
+        assert_eq!(targets.len(), drawn, "{content}");
         for target in targets {
             let mut doc = original.clone();
             text::replace_line(&mut doc, 0, target, "NEW TEXT").unwrap();
@@ -14037,6 +14224,39 @@ fn review_inside_scope_group_move_matches_direct_transform_under_outer_scale() {
     }
 }
 
+/// A page that names one font under 300 resource names builds its metrics once: each alias
+/// used to build (and keep) a set of its own.
+#[test]
+fn font_aliases_share_one_set_of_metrics() {
+    let fonts: String = (0..300).map(|i| format!(" /A{i} 5 0 R")).collect();
+    let content: String = format!("BT 72 700 Td {} ET", (0..300).map(|i| format!("/A{i} 12 Tf (x) Tj ")).collect::<String>());
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Contents 4 0 R /Resources << /Font <<{fonts} >> >> >>"),
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offs = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offs.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let x = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offs {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{x}\n%%EOF\n", objs.len() + 1).as_bytes());
+    let doc = Document::open(Arc::new(out)).unwrap();
+    text::METRICS_BUILT.with(|n| n.set(0));
+    let lines = text::text_lines(&doc, 0).unwrap();
+    assert!(lines.iter().map(|l| l.text.matches('x').count()).sum::<usize>() >= 300, "{lines:?}");
+    let built = text::METRICS_BUILT.with(std::cell::Cell::get);
+    assert!(built < 10, "metrics built {built} times for one font");
+}
+
 /// Each `Tj`/`TJ` moves the text matrix by the width of its text. A run shown later in the same
 /// text object without a `Td` or `Tm` of its own (a raised run in another colour, a column after
 /// a `TJ` gap) is placed by those advances. Rewriting the paragraph before it must keep them, as
@@ -14842,6 +15062,38 @@ fn a_thai_edit_that_spends_its_allowance_to_the_byte_goes_through() {
     };
     assert_eq!(edit(256), Ok(()));
     let error = edit(257).unwrap_err();
+    assert!(error.contains("THSarabunPSK") && error.contains("MiB of font data"), "{error}");
+}
+
+/// Only a read the allowance refuses leaves a font of the face unread for want of it. With the
+/// allowance spent to the byte as above, another font of the face, whose ToUnicode is an empty
+/// stream behind a filter nothing decodes (unread with any allowance), still has its program read,
+/// which the allowance refuses: the edit is refused, rather than going through without that font.
+#[test]
+fn a_font_of_the_face_unread_on_its_own_once_the_allowance_is_spent_still_refuses_the_edit() {
+    let mut program = legacy_thai_program();
+    program.resize((16 << 20) - 192, 0);
+    let mut unicode = LEGACY_THAI_UNICODE.to_vec();
+    unicode.resize(256, b' ');
+    let mut doc = text_page("BT /F1 16 Tf 50 650 Td <00d6> Tj ET");
+    let font = legacy_thai_font(&mut doc, "ABCDEF+THSarabunPSK", &program, &unicode);
+    doc.set(pdfcraft_cos::ObjRef::new(5, 0), Object::Dict(font));
+    // Not a subset, so its metrics read no program, only the ToUnicode.
+    let mut other = legacy_thai_font(&mut doc, "THSarabunPSK", &legacy_thai_program(), LEGACY_THAI_UNICODE);
+    let mut dict = Dict::new();
+    dict.set(b"Filter".to_vec(), Object::name("NoSuchFilter"));
+    other.set(b"ToUnicode".to_vec(), Object::Ref(doc.add(Object::Stream(Stream::from_raw(dict, Vec::new())))));
+    let other = doc.add(Object::Dict(other));
+    doc.update_dict(pdfcraft_cos::ObjRef::new(3, 0), |page| {
+        let Some(Object::Dict(mut resources)) = page.get(b"Resources").cloned() else { panic!("fixture") };
+        let Some(Object::Dict(mut fonts)) = resources.get(b"Font").cloned() else { panic!("fixture") };
+        fonts.set(b"F2".to_vec(), Object::Ref(other));
+        resources.set(b"Font".to_vec(), Object::Dict(fonts));
+        page.set(b"Resources".to_vec(), Object::Dict(resources));
+    })
+    .unwrap();
+    let style = BlockStyle { width: Some(400.0), ..Default::default() };
+    let error = text::rewrite_block(&mut doc, 0, 0, Some("กขค"), &style).unwrap_err().to_string();
     assert!(error.contains("THSarabunPSK") && error.contains("MiB of font data"), "{error}");
 }
 

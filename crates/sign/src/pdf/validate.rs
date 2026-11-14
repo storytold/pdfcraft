@@ -371,7 +371,11 @@ pub(crate) const MAX_DSS_BYTES: usize = 64 << 20;
 pub(crate) struct DssEvidence<'a> {
     doc: &'a Document,
     items: std::vec::IntoIter<Object>,
-    seen: HashSet<ObjRef>,
+    /// Object numbers read: `Document::get` resolves a reference by number, so `5 0 R` and `5 1 R`
+    /// are one stream.
+    seen: HashSet<u32>,
+    /// Full references already tried, resolved or not.
+    tried: HashSet<ObjRef>,
     taken: usize,
     left: usize,
     /// A cap stopped the array being read in full.
@@ -381,7 +385,7 @@ pub(crate) struct DssEvidence<'a> {
 impl<'a> DssEvidence<'a> {
     pub(crate) fn new(doc: &'a Document, dss: &Dict, key: &[u8]) -> Self {
         let items = dss.get(key).map(|o| doc.resolve(o)).and_then(|o| o.as_array().cloned()).unwrap_or_default();
-        DssEvidence { doc, items: items.into_iter(), seen: HashSet::new(), taken: 0, left: MAX_DSS_BYTES, cut: false }
+        DssEvidence { doc, items: items.into_iter(), seen: HashSet::new(), tried: HashSet::new(), taken: 0, left: MAX_DSS_BYTES, cut: false }
     }
 }
 
@@ -395,11 +399,21 @@ impl Iterator for DssEvidence<'_> {
         // Repeats are skipped before the caps count anything, so repeating one stream cannot use
         // them up; the scan of the array itself is bounded by the parser's cap on array length.
         for item in self.items.by_ref() {
-            if item.as_ref().is_some_and(|r| !self.seen.insert(r)) {
+            // Resolved first: a reference to a generation the slot doesn't hold reads as null and
+            // must not make a later, valid reference to the same object number a repeat.
+            // A repeat is skipped before anything is resolved: a long chain of repeats costs no
+            // lookups. The number is recorded only once the reference gave a stream.
+            // Each full reference is tried once, so one that never reaches a stream (a cycle) costs
+            // its lookups once, however often it is listed; `seen` keeps object numbers apart so a
+            // dead generation can't hide a live one.
+            if item.as_ref().is_some_and(|r| self.seen.contains(&r.num) || !self.tried.insert(r)) {
                 continue;
             }
             let o = self.doc.resolve(&item);
             let Object::Stream(s) = o.as_ref() else { continue };
+            if let Some(r) = item.as_ref() {
+                self.seen.insert(r.num);
+            }
             if self.taken >= MAX_DSS_ENTRIES {
                 self.cut = true;
                 return None;

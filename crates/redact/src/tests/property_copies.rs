@@ -45,6 +45,22 @@ fn removing_hidden_text_in_many_blocks_naming_a_large_list_is_refused() {
     assert_eq!(remove_hidden(&mut doc, &[Hidden::HiddenText]).unwrap_err(), RedactError::PropertyCopies(1));
 }
 
+/// A page past the allowance whose content also holds bytes the parser can't read is refused for
+/// the copies, by Remove Hidden Information as by Apply Redactions, which looks at them first.
+#[test]
+fn copies_past_the_allowance_beside_bytes_the_parser_cannot_read_are_refused_for_the_copies() {
+    let doc = |render: &str| {
+        let block = format!("/Span /M0 BDC BT /F1 10 Tf {render} 20 260 Td (S) Tj ET EMC ");
+        let content = format!("{} BT /F1 10 Tf 20 20 Td [(PUBLIC) )] TJ ET", block.repeat(300));
+        let list = format!("<< /ActualText (SECRET) /Junk ({}) >>", "x".repeat(100 << 10));
+        one_page(content.as_bytes(), "/Properties << /M0 7 0 R >>", vec![list.into_bytes()])
+    };
+    let mut marked = doc("");
+    mark(&mut marked, 0, &[[0.0, 200.0, 300.0, 300.0]], "");
+    assert_eq!(apply(&mut marked, None).unwrap_err(), RedactError::PropertyCopies(1));
+    assert_eq!(remove_hidden(&mut doc("3 Tr"), &[Hidden::HiddenText]).unwrap_err(), RedactError::PropertyCopies(1));
+}
+
 /// The copies are counted across the page's forms: the 300 blocks drawn by a form without
 /// resources of its own, which names the page's list, are refused the same.
 #[test]

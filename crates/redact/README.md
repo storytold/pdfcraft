@@ -130,7 +130,10 @@ Text is placed with the font and size set by `Tf` or by an ExtGState's `/Font` t
 form XObject starts from the text state of the content that draws it. Content that can't be
 decoded makes the operation fail rather than leave it unredacted, and so does an inline image the
 renderer's tokenizer reads no image for (`RedactError::Unreadable`): where the page's operators
-resume after it would be a guess. A Redact annotation with neither a usable `/QuadPoints` array nor a usable
+resume after it would be a guess. So do bytes the content parser can't read, in the page's content
+or in a form under an area (a stray `)` or `}` in a `TJ` array, say): the interpreter reads past
+them, so text they hide, which other readers may draw, would be neither found nor removed. Remove
+hidden information refuses a page for both too, in whatever content it walks. A Redact annotation with neither a usable `/QuadPoints` array nor a usable
 `/Rect` makes it fail with `RedactError::UnreadableMark` before anything changes, instead of
 skipping that mark. The count covers the marks on the pages being applied.
 
