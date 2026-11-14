@@ -9808,6 +9808,10 @@ mod type3_proc_widths;
 // (vendored hayro-interpret patch 101).
 mod symbolic_truetype_mac_roman_text;
 
+// A JPEG 2000 image with /SMaskInData 2 is drawn through its premultiplied opacity channel
+// (#7250, vendored hayro-interpret patch 107).
+mod jpx_premultiplied_opacity;
+
 /// Render `pdf`'s first page at 72 dpi with no time limit beyond the test's own.
 fn render_first_page(pdf: Vec<u8>) -> RenderedPage {
     let mut r = PageRenderer::new(Arc::new(pdf), RenderConfig::default());

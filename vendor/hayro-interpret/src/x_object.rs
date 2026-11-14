@@ -1252,9 +1252,16 @@ fn decode_raster(
 
         Some(alpha)
     } else {
+        // PdfCraft patch (107): with /SMaskInData 2 the colours were multiplied by the opacity
+        // channel (premultiplied, T.800 Table I.16), which is the soft mask: they are divided by
+        // it again, as for an /SMask with a /Matte of zeros (ISO 32000-2 §11.6.5.3), in RGB like
+        // `resolve_matte`. The opacity channel used to be dropped, so a transparent pixel was painted
+        // opaque black (#7250).
+        let premultiplied = obj.stream.dict().get::<u8>(SMASK_IN_DATA) == Some(2)
+            && has_in_data_alpha(&ctx.decoded);
         // Use flatten here, so in case the alpha channel is invalid we can still
         // return the main image (see PDFJS-19611).
-        resolve_alpha(
+        let alpha = resolve_alpha(
             obj,
             &mut ctx.decoded,
             Some(&image),
@@ -1265,7 +1272,20 @@ fn decode_raster(
             ctx.scale_factors,
             target_dimension,
         )
-        .flatten()
+        .flatten();
+
+        if premultiplied
+            && let Some(alpha) = &alpha
+            && alpha.width == image.width()
+            && alpha.height == image.height()
+        {
+            let zeros = vec![0.0; ctx.color_space.num_components() as usize];
+            let mut matte = [0_u8; 3];
+            ctx.color_space.convert_f32(&zeros, &mut matte, false);
+            unpremultiply(&mut image, &alpha.data, &matte);
+        }
+
+        alpha
     };
 
     // PdfCraft patch (73): a bad mask leaves the image as it is, but one left out for the page's
@@ -1348,8 +1368,14 @@ fn resolve_alpha(
     target_dimension: Option<(u32, u32)>,
 ) -> Option<Option<LumaData>> {
     let dict = obj.stream.dict();
+    let smask_in_data = dict.get::<u8>(SMASK_IN_DATA);
 
-    let alpha = if let Some(1) = dict.get::<u8>(SMASK_IN_DATA) {
+    // PdfCraft patch (107): /SMaskInData 2 takes the JPX opacity channel as the soft mask too
+    // (ISO 32000-2 Table 87); the caller undoes the colours' premultiplication (#7250). Without an
+    // opacity channel the image's other masks apply, as before.
+    let alpha = if smask_in_data == Some(1)
+        || (smask_in_data == Some(2) && has_in_data_alpha(decoded))
+    {
         let smask_data = decoded.image_data.as_mut().and_then(|i| i.alpha.take());
 
         if let Some(mut data) = smask_data {
@@ -1411,6 +1437,11 @@ fn resolve_alpha(
     };
 
     Some(alpha)
+}
+
+/// PdfCraft patch (107): whether the decoder gave `decoded` an opacity channel of its own (JPX).
+fn has_in_data_alpha(decoded: &FilterResult<'_>) -> bool {
+    decoded.image_data.as_ref().is_some_and(|i| i.alpha.is_some())
 }
 
 fn resolve_matte(
