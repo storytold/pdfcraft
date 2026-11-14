@@ -312,16 +312,16 @@ impl DocumentCopyJob {
     /// once its text is taken, so a large document never holds every page's text layer at once.
     /// `None` when `cancel` was set.
     pub(crate) fn text(self, cancel: &std::sync::atomic::AtomicBool) -> Option<String> {
+        self.text_pages(cancel, &|_, _| {}).map(|v| v.into_iter().map(|(_, t)| t).filter(|t| !t.is_empty()).collect::<Vec<_>>().join("\n"))
+    }
+
+    /// The same read as [`Self::text`] but keeps page boundaries — callers working page by
+    /// page (e.g. translation) need them. `progress` reports `(done, total)` after each page.
+    /// `None` when `cancel` was set.
+    pub(crate) fn text_pages(self, cancel: &std::sync::atomic::AtomicBool, progress: &dyn Fn(usize, usize)) -> Option<Vec<(usize, String)>> {
+        let total = self.pages.len();
         let mut renderer: Option<pdfcraft_render::PageRenderer> = None;
-        let mut out = String::new();
-        let mut push = |text: String| {
-            if !text.is_empty() {
-                if !out.is_empty() {
-                    out.push('\n');
-                }
-                out.push_str(&text);
-            }
-        };
+        let mut out = Vec::new();
         // The glyphs taken from `page`: all of them, or the part a selection covers.
         let span = self.span;
         let part = |page: usize, t: &pdfcraft_render::PageText| match span {
@@ -333,7 +333,7 @@ impl DocumentCopyJob {
                 return None;
             }
             match p {
-                CopyPage::Read(t) => push(part(page, &t)),
+                CopyPage::Read(t) => out.push((page, part(page, &t))),
                 CopyPage::ToRead => {
                     let r = renderer.get_or_insert_with(|| {
                         let config = pdfcraft_render::RenderConfig { password: self.password.clone(), ..Default::default() };
@@ -348,11 +348,12 @@ impl DocumentCopyJob {
                         preview: false,
                     };
                     if let Some(t) = r.render(req).text {
-                        push(part(page, &t));
+                        out.push((page, part(page, &t)));
                     }
                 }
                 CopyPage::Skip => {}
             }
+            progress(page + 1, total);
         }
         Some(out)
     }
