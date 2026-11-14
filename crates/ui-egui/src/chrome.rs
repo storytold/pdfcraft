@@ -398,6 +398,7 @@ fn show_main_tabs_content(app: &mut PdfCraftApp, ui: &mut egui::Ui, cfg: &TabsSt
     let mut last_tab_right = None;
     let mut action = None;
     let mut close = None;
+    let mut deferred_drag_tab = None;
 
     let active_drag: Option<TabDragState> = ui.data(|d| d.get_temp(ui.scope_id().with("drag_reorder")));
     let visible_indices: Vec<usize> = app
@@ -450,7 +451,8 @@ fn show_main_tabs_content(app: &mut PdfCraftApp, ui: &mut egui::Ui, cfg: &TabsSt
         let dirty = doc.dirty;
         let file = (name != doc.name).then_some(doc.name.as_str());
         let group_color = view_group.and_then(|gid| app.group(gid)).map(|g| g.color.color32());
-        let response = tab(
+        let is_dragged_tab = active_drag.is_some_and(|d| d.from == i);
+        let (response, deferred) = tab(
             ui,
             TabSpec {
                 id: ui.scope_id().with(("document-tab", view_key)),
@@ -470,9 +472,13 @@ fn show_main_tabs_content(app: &mut PdfCraftApp, ui: &mut egui::Ui, cfg: &TabsSt
                 scale: total_scale,
                 shift_x: current_shift,
                 drag: active_drag,
+                defer_paint: is_dragged_tab,
             },
             &mut close,
         );
+        if let Some(d) = deferred {
+            deferred_drag_tab = Some((d, response.clone()));
+        }
         last_group = view_group;
         let effective_shift = if let Some(drag) = active_drag
             && drag.from == i
@@ -514,6 +520,9 @@ fn show_main_tabs_content(app: &mut PdfCraftApp, ui: &mut egui::Ui, cfg: &TabsSt
             app.group_title_draft = g.title.clone();
         }
     }
+    if let Some((deferred, resp)) = deferred_drag_tab {
+        paint_tab_visuals(ui, cfg.t, &deferred, &resp, &mut close);
+    }
     show_group_editor_if_active(app, ui, &pill_slots);
 
     let drag_x = tab_drag(app, ui, &slots, dragged, Place::Main, close.is_some() || action.is_some());
@@ -525,7 +534,7 @@ fn show_main_tabs_content(app: &mut PdfCraftApp, ui: &mut egui::Ui, cfg: &TabsSt
     }
     if app.combine_tab.open {
         let mut close = None;
-        let response = tab(
+        let (response, _) = tab(
             ui,
             TabSpec {
                 id: ui.scope_id().with("combine-tab"),
@@ -545,6 +554,7 @@ fn show_main_tabs_content(app: &mut PdfCraftApp, ui: &mut egui::Ui, cfg: &TabsSt
                 scale: 1.0,
                 shift_x: 0.0,
                 drag: None,
+                defer_paint: false,
             },
             &mut close,
         );
@@ -831,8 +841,9 @@ pub(crate) fn pane_tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui, strip: Re
             scale: 1.0,
             shift_x: 0.0,
             drag: None,
+            defer_paint: false,
         };
-        let response = tab(&mut row, spec, &mut close);
+        let (response, _) = tab(&mut row, spec, &mut close);
         last_group = view.group;
         last_tab_right = Some(response.rect.right());
         slots.push((i, response.rect));
@@ -963,121 +974,56 @@ struct TabSpec<'a> {
     scale: f32,
     shift_x: f32,
     drag: Option<TabDragState>,
+    defer_paint: bool,
 }
 
-fn tab(ui: &mut egui::Ui, spec: TabSpec<'_>, close: &mut Option<usize>) -> egui::Response {
-    let TabSpec {
+struct DeferredTabPaint {
+    id: egui::Id,
+    icon: String,
+    dirty: bool,
+    active: bool,
+    index: usize,
+    pinned: bool,
+    group_color: Option<Color32>,
+    bridge_left: Option<f32>,
+    scale: f32,
+    height: f32,
+    draw_rect: Rect,
+    label_galley: Option<std::sync::Arc<egui::Galley>>,
+    label_color: Color32,
+    is_dragged: bool,
+}
+
+fn paint_tab_visuals(ui: &mut egui::Ui, t: &Tokens, p_data: &DeferredTabPaint, resp: &egui::Response, close: &mut Option<usize>) {
+    let DeferredTabPaint {
         id,
-        theme: t,
-        icon,
-        name,
-        file,
+        ref icon,
         dirty,
         active,
         index,
-        cap,
-        height,
-        draggable,
         pinned,
         group_color,
         bridge_left,
         scale,
-        shift_x,
-        drag,
-    } = spec;
-    let font = theme::regular(13.0);
-    let height = ui.available_height().max(height);
+        height,
+        draw_rect,
+        ref label_galley,
+        label_color,
+        is_dragged,
+    } = *p_data;
+
+    let p = ui.painter().with_clip_rect(draw_rect);
+    let press = theme::Press::track(ui, resp);
+    let bg = if active || is_dragged {
+        press.fill(t.chrome, t.chrome.lerp_to_gamma(t.hover, 0.65), t.hover)
+    } else {
+        press.fill(t.titlebar, t.hover, t.pressed)
+    };
 
     if pinned {
-        let width = 36.0 * scale;
-        let (rect, _) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
-        let (draw_rect, is_dragged) = if let Some(drag) = drag
-            && drag.from == index
-        {
-            let target_x = drag.pointer_x - drag.grab_offset_x;
-            (rect.translate(vec2(target_x - rect.left(), 0.0)), true)
-        } else {
-            (rect.translate(vec2(shift_x, 0.0)), false)
-        };
-        let a11y = if dirty { format!("{name} (pinned, edited)") } else { format!("{name} (pinned)") };
-        let sense = if draggable { Sense::click_and_drag() } else { Sense::click() };
-        let resp = craft_ui::tabs::Tab::new(id, &a11y, active).sense(sense).focus_stroke(Stroke::new(1.0, t.accent)).show_at(ui, rect, |ui, resp| {
-            let p = if scale < 0.99 { ui.painter().with_clip_rect(draw_rect) } else { ui.painter().clone() };
-            let press = theme::Press::track(ui, resp);
-            let bg = if active || is_dragged {
-                press.fill(t.chrome, t.chrome.lerp_to_gamma(t.hover, 0.65), t.hover)
-            } else {
-                press.fill(Color32::TRANSPARENT, t.hover, t.pressed)
-            };
-            if is_dragged {
-                let shadow_rect = draw_rect.translate(vec2(0.0, 2.0));
-                p.rect_filled(shadow_rect, CornerRadius { nw: 7, ne: 7, sw: 0, se: 0 }, Color32::from_black_alpha(40));
-            }
-            if bg.a() > 0 {
-                p.rect_filled(draw_rect, CornerRadius { nw: 7, ne: 7, sw: 0, se: 0 }, bg.linear_multiply(scale));
-            }
-            if resp.dragged() || is_dragged {
-                p.rect_stroke(draw_rect, CornerRadius { nw: 7, ne: 7, sw: 0, se: 0 }, Stroke::new(1.5, t.accent), egui::StrokeKind::Inside);
-            }
-            if draw_rect.width() >= 16.0 {
-                icons::paint(
-                    ui,
-                    Rect::from_center_size(draw_rect.center(), vec2(16.0, 16.0)),
-                    icon,
-                    15.0,
-                    if active { t.accent.linear_multiply(scale) } else { t.text_muted.linear_multiply(scale) },
-                );
-            }
-            if dirty && draw_rect.width() >= 20.0 {
-                p.circle_filled(
-                    draw_rect.right_top() + vec2(-6.0, 6.0),
-                    3.0,
-                    if active { t.text.linear_multiply(scale) } else { t.text_muted.linear_multiply(scale) },
-                );
-            }
-        });
-        let shown = match file {
-            Some(file) => format!("{name}\n{file} (Pinned)"),
-            None => format!("{name} (Pinned)"),
-        };
-        return theme::hand(resp).on_hover_text(if dirty { crate::i18n::fmt(tl!("{name} — unsaved changes"), &[("name", &shown)]) } else { shown });
-    }
-
-    let mut label = tab_name(name);
-    // A shrunk tab shows as much of its name as fits (the tooltip has all of it).
-    if let Some(cap) = cap {
-        let room = (cap - TAB_CHROME).max(0.0);
-        label = crate::panels::ellipsized_prefix(&label, |s| crate::bidi::layout_ltr(ui, s.to_owned(), font.clone(), t.text).size().x <= room);
-    }
-    // Logical text, laid out explicitly left to right: the fork shapes and reorders it once,
-    // and an Arabic file name keeps its extension at the visual end. AccessKit names stay logical.
-    let label_color = if active { t.text.linear_multiply(scale) } else { t.text_muted.linear_multiply(scale) };
-    let label_galley = crate::bidi::layout_ltr(ui, label.clone(), font.clone(), label_color);
-    let text_w = label_galley.size().x;
-    let full_width = cap.map_or(text_w + TAB_CHROME, |cap| (text_w + TAB_CHROME).min(cap));
-    let width = full_width * scale;
-    let (rect, _) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
-    let (draw_rect, is_dragged) = if let Some(drag) = drag
-        && drag.from == index
-    {
-        let target_x = drag.pointer_x - drag.grab_offset_x;
-        (rect.translate(vec2(target_x - rect.left(), 0.0)), true)
-    } else {
-        (rect.translate(vec2(shift_x, 0.0)), false)
-    };
-    let a11y = if dirty { format!("{name} (edited)") } else { name.to_string() };
-    let sense = if draggable { Sense::click_and_drag() } else { Sense::click() };
-    let resp = craft_ui::tabs::Tab::new(id, &a11y, active).sense(sense).focus_stroke(Stroke::new(1.0, t.accent)).show_at(ui, rect, |ui, resp| {
-        let p = if scale < 0.99 { ui.painter().with_clip_rect(draw_rect) } else { ui.painter().clone() };
-        let press = theme::Press::track(ui, resp);
-        let bg = if active || is_dragged {
-            press.fill(t.chrome, t.chrome.lerp_to_gamma(t.hover, 0.65), t.hover)
-        } else {
-            press.fill(Color32::TRANSPARENT, t.hover, t.pressed)
-        };
         if is_dragged {
             let shadow_rect = draw_rect.translate(vec2(0.0, 2.0));
-            p.rect_filled(shadow_rect, CornerRadius { nw: 7, ne: 7, sw: 0, se: 0 }, Color32::from_black_alpha(40));
+            ui.painter().rect_filled(shadow_rect, CornerRadius { nw: 7, ne: 7, sw: 0, se: 0 }, Color32::from_black_alpha(40));
         }
         if bg.a() > 0 {
             p.rect_filled(draw_rect, CornerRadius { nw: 7, ne: 7, sw: 0, se: 0 }, bg.linear_multiply(scale));
@@ -1085,28 +1031,67 @@ fn tab(ui: &mut egui::Ui, spec: TabSpec<'_>, close: &mut Option<usize>) -> egui:
         if resp.dragged() || is_dragged {
             p.rect_stroke(draw_rect, CornerRadius { nw: 7, ne: 7, sw: 0, se: 0 }, Stroke::new(1.5, t.accent), egui::StrokeKind::Inside);
         }
-        // Microsoft Edge standard group top accent line
         if let Some(gc) = group_color {
             let start_x = bridge_left.unwrap_or(draw_rect.left());
             p.hline(start_x..=draw_rect.right(), draw_rect.top() + 1.0, Stroke::new(2.5, gc.linear_multiply(scale)));
         }
-        // Hairline divider between passive adjacent tabs
         if !active && !resp.hovered() && group_color.is_none() && scale >= 0.99 {
             p.vline(draw_rect.right() - 0.5, draw_rect.y_range().shrink(7.0), Stroke::new(1.0, t.divider));
         }
-        if draw_rect.width() >= 24.0 {
+        if draw_rect.width() >= 16.0 {
             icons::paint(
                 ui,
-                Rect::from_min_size(draw_rect.min + vec2(6.0, (height - 16.0) / 2.0), vec2(16.0, 16.0)),
+                Rect::from_center_size(draw_rect.center(), vec2(16.0, 16.0)),
                 icon,
                 15.0,
                 if active { t.accent.linear_multiply(scale) } else { t.text_muted.linear_multiply(scale) },
             );
         }
-        if draw_rect.width() >= 40.0 {
-            p.galley(draw_rect.min + vec2(28.0, (draw_rect.height() - label_galley.size().y) / 2.0), label_galley.clone(), label_color);
+        if dirty && draw_rect.width() >= 20.0 {
+            p.circle_filled(
+                draw_rect.right_top() + vec2(-6.0, 6.0),
+                3.0,
+                if active { t.text.linear_multiply(scale) } else { t.text_muted.linear_multiply(scale) },
+            );
         }
-    });
+        return;
+    }
+
+    if is_dragged {
+        let shadow_rect = draw_rect.translate(vec2(0.0, 2.0));
+        ui.painter().rect_filled(shadow_rect, CornerRadius { nw: 7, ne: 7, sw: 0, se: 0 }, Color32::from_black_alpha(40));
+    }
+    if bg.a() > 0 {
+        p.rect_filled(draw_rect, CornerRadius { nw: 7, ne: 7, sw: 0, se: 0 }, bg.linear_multiply(scale));
+    }
+    if resp.dragged() || is_dragged {
+        p.rect_stroke(draw_rect, CornerRadius { nw: 7, ne: 7, sw: 0, se: 0 }, Stroke::new(1.5, t.accent), egui::StrokeKind::Inside);
+    }
+    // Microsoft Edge standard group top accent line
+    if let Some(gc) = group_color {
+        let start_x = bridge_left.unwrap_or(draw_rect.left());
+        p.hline(start_x..=draw_rect.right(), draw_rect.top() + 1.0, Stroke::new(2.5, gc.linear_multiply(scale)));
+    }
+    // Hairline divider between passive adjacent tabs
+    if !active && !resp.hovered() && group_color.is_none() && scale >= 0.99 {
+        p.vline(draw_rect.right() - 0.5, draw_rect.y_range().shrink(7.0), Stroke::new(1.0, t.divider));
+    }
+    if draw_rect.width() >= 24.0 {
+        icons::paint(
+            ui,
+            Rect::from_min_size(draw_rect.min + vec2(6.0, (height - 16.0) / 2.0), vec2(16.0, 16.0)),
+            icon,
+            15.0,
+            if active { t.accent.linear_multiply(scale) } else { t.text_muted.linear_multiply(scale) },
+        );
+    }
+    if draw_rect.width() >= 40.0
+        && let Some(galley) = label_galley
+    {
+        let max_text_right = (draw_rect.right() - 28.0).max(draw_rect.min.x + 28.0);
+        let text_clip = Rect::from_min_max(draw_rect.min + vec2(28.0, 0.0), egui::pos2(max_text_right, draw_rect.max.y));
+        p.with_clip_rect(text_clip).galley(draw_rect.min + vec2(28.0, (draw_rect.height() - galley.size().y) / 2.0), galley.clone(), label_color);
+    }
     if draw_rect.width() >= 36.0 {
         let x_rect = Rect::from_center_size(draw_rect.right_center() - vec2(16.0, 0.0), vec2(20.0, 20.0));
         let x = ui.interact(x_rect, id.with("close"), Sense::click());
@@ -1126,11 +1111,129 @@ fn tab(ui: &mut egui::Ui, spec: TabSpec<'_>, close: &mut Option<usize>) -> egui:
             *close = Some(index);
         }
     }
-    let shown = match file {
-        Some(file) => format!("{name}\n{file}"),
-        None => name.to_string(),
-    };
-    theme::hand(resp).on_hover_text(if dirty { crate::i18n::fmt(tl!("{name} — unsaved changes"), &[("name", &shown)]) } else { shown })
+}
+
+fn tab(ui: &mut egui::Ui, spec: TabSpec<'_>, close: &mut Option<usize>) -> (egui::Response, Option<DeferredTabPaint>) {
+    let TabSpec {
+        id,
+        theme: t,
+        icon,
+        name,
+        file,
+        dirty,
+        active,
+        index,
+        cap,
+        height,
+        draggable,
+        pinned,
+        group_color,
+        bridge_left,
+        scale,
+        shift_x,
+        drag,
+        defer_paint,
+    } = spec;
+    let font = theme::regular(13.0);
+    let height = ui.available_height().max(height);
+
+    if pinned {
+        let width = 36.0 * scale;
+        let (rect, _) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
+        let (draw_rect, is_dragged) = if let Some(drag) = drag
+            && drag.from == index
+        {
+            let target_x = drag.pointer_x - drag.grab_offset_x;
+            (rect.translate(vec2(target_x - rect.left(), 0.0)), true)
+        } else {
+            (rect.translate(vec2(shift_x, 0.0)), false)
+        };
+        let a11y = if dirty { format!("{name} (pinned, edited)") } else { format!("{name} (pinned)") };
+        let sense = if draggable { Sense::click_and_drag() } else { Sense::click() };
+        let resp = craft_ui::tabs::Tab::new(id, &a11y, active).sense(sense).focus_stroke(Stroke::new(1.0, t.accent)).show_at(ui, rect, |_, _| {});
+        let shown = match file {
+            Some(file) => format!("{name}\n{file} (Pinned)"),
+            None => format!("{name} (Pinned)"),
+        };
+        let resp =
+            theme::hand(resp).on_hover_text(if dirty { crate::i18n::fmt(tl!("{name} — unsaved changes"), &[("name", &shown)]) } else { shown });
+        let deferred = DeferredTabPaint {
+            id,
+            icon: icon.to_string(),
+            dirty,
+            active,
+            index,
+            pinned: true,
+            group_color,
+            bridge_left,
+            scale,
+            height,
+            draw_rect,
+            label_galley: None,
+            label_color: Color32::TRANSPARENT,
+            is_dragged,
+        };
+        if defer_paint {
+            (resp, Some(deferred))
+        } else {
+            paint_tab_visuals(ui, t, &deferred, &resp, close);
+            (resp, None)
+        }
+    } else {
+        let mut label = tab_name(name);
+        // A shrunk tab shows as much of its name as fits (the tooltip has all of it).
+        if let Some(cap) = cap {
+            let room = (cap - TAB_CHROME).max(0.0);
+            label = crate::panels::ellipsized_prefix(&label, |s| crate::bidi::layout_ltr(ui, s.to_owned(), font.clone(), t.text).size().x <= room);
+        }
+        // Logical text, laid out explicitly left to right: the fork shapes and reorders it once,
+        // and an Arabic file name keeps its extension at the visual end. AccessKit names stay logical.
+        let label_color = if active { t.text.linear_multiply(scale) } else { t.text_muted.linear_multiply(scale) };
+        let label_galley = crate::bidi::layout_ltr(ui, label.clone(), font.clone(), label_color);
+        let text_w = label_galley.size().x;
+        let full_width = cap.map_or(text_w + TAB_CHROME, |cap| (text_w + TAB_CHROME).min(cap));
+        let width = full_width * scale;
+        let (rect, _) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
+        let (draw_rect, is_dragged) = if let Some(drag) = drag
+            && drag.from == index
+        {
+            let target_x = drag.pointer_x - drag.grab_offset_x;
+            (rect.translate(vec2(target_x - rect.left(), 0.0)), true)
+        } else {
+            (rect.translate(vec2(shift_x, 0.0)), false)
+        };
+        let a11y = if dirty { format!("{name} (edited)") } else { name.to_string() };
+        let sense = if draggable { Sense::click_and_drag() } else { Sense::click() };
+        let resp = craft_ui::tabs::Tab::new(id, &a11y, active).sense(sense).focus_stroke(Stroke::new(1.0, t.accent)).show_at(ui, rect, |_, _| {});
+        let shown = match file {
+            Some(file) => format!("{name}\n{file}"),
+            None => name.to_string(),
+        };
+        let resp =
+            theme::hand(resp).on_hover_text(if dirty { crate::i18n::fmt(tl!("{name} — unsaved changes"), &[("name", &shown)]) } else { shown });
+        let deferred = DeferredTabPaint {
+            id,
+            icon: icon.to_string(),
+            dirty,
+            active,
+            index,
+            pinned: false,
+            group_color,
+            bridge_left,
+            scale,
+            height,
+            draw_rect,
+            label_galley: Some(label_galley),
+            label_color,
+            is_dragged,
+        };
+        if defer_paint {
+            (resp, Some(deferred))
+        } else {
+            paint_tab_visuals(ui, t, &deferred, &resp, close);
+            (resp, None)
+        }
+    }
 }
 
 /// Width the print, save and info buttons and their gaps take in the mode bar: three buttons, the
