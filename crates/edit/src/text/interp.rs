@@ -1,6 +1,7 @@
 use super::fallback::is_type3_fallback;
 use super::rewrite::vertical_advance;
 use super::{Dict, Document, EditError, HashMap, Matrix, Metrics, Object, Op, Rc};
+use crate::colour::{Lookups, Space, readable_space};
 
 /// Text and graphics state captured for rewriting.
 #[derive(Clone, Debug, PartialEq)]
@@ -353,6 +354,12 @@ pub(super) struct Ts {
     pub(super) clip: Option<Clip>,
     /// The operators that set the current fill colour (`g`, `rg`, `k`, or `cs` + `sc`/`scn`).
     pub(super) fill: Vec<Op>,
+    /// The colour space the last `cs` selected, resolved through the resources in force where it
+    /// ran (ISO 32000-2 §8.6.8: `sc`/`scn` operands are read in the current colour space, and a
+    /// form drawn later keeps it even when its own resources name another space so). `None` after
+    /// `g`/`rg`/`k`, which name their space themselves, and when `cs` names no space the
+    /// resources hold: the operands' count then stands for the space, as before.
+    pub(super) fill_space: Option<Rc<Space>>,
     pub(super) font: Option<(Vec<u8>, Rc<Metrics>)>,
     /// The Japanese or Hebrew fallback face the font subsets, when the font is one (see [`is_type3_fallback`]).
     pub(super) face: Option<String>,
@@ -625,6 +632,9 @@ pub(super) struct Carry {
     /// Whether the last run ended in a space read from a gap, with the next operator a `Tj` or
     /// `TJ` that may start with the space glyph that gap widened.
     pub(super) gap_space: bool,
+    /// What decoding the Indexed lookup tables the rest of the page's `cs` operators select may
+    /// still cost (see [`crate::colour::MAX_PAGE_LOOKUPS`]), shared with the forms it draws.
+    pub(super) lookups: Lookups,
 }
 
 /// The most glyph text one page's extraction produces, in bytes. A ToUnicode destination is
@@ -638,6 +648,7 @@ impl Carry {
             ctm: Matrix::IDENTITY,
             clip: None,
             fill: Vec::new(),
+            fill_space: None,
             font: None,
             face: None,
             size: 0.0,
@@ -656,8 +667,43 @@ impl Carry {
             dash: (Vec::new(), 0.0),
             line_cap: 0,
         };
-        Carry { ts, stack: Vec::new(), marked: Vec::new(), layers: Vec::new(), text_left: MAX_PAGE_TEXT, gap_space: false }
+        Carry { ts, stack: Vec::new(), marked: Vec::new(), layers: Vec::new(), text_left: MAX_PAGE_TEXT, gap_space: false, lookups: Lookups::page() }
     }
+}
+
+/// The colour space a `cs` operand selects (ISO 32000-2 §8.6.8, Table 73): `DeviceGray`,
+/// `DeviceRGB`, `DeviceCMYK` and `Pattern` name their space directly and never a resource; any
+/// other name is looked up in `spaces`, the `/ColorSpace` resources in force. A name they don't
+/// hold, or hold as no space that can be read (see [`readable_space`]), that is an inline
+/// image's abbreviation (`G`, `RGB`, `CMYK`) or a family that needs parameters (`CalGray`,
+/// `CalRGB`) reads as its device kin. `None` for any other name, so the operands of the
+/// `sc`/`scn` after it are read by their count, as a reader that can't find the space would.
+/// Lookup tables decoded are charged to `lookups`.
+fn selected_space(
+    doc: &Document,
+    operand: &Object,
+    spaces: &Dict,
+    cache: &mut HashMap<Vec<u8>, Option<Rc<Space>>>,
+    lookups: &mut Lookups,
+) -> Option<Rc<Space>> {
+    let name = operand.as_name()?;
+    if let Some(space) = cache.get(name) {
+        return space.clone();
+    }
+    let none = Dict::default();
+    // A resource that is no space that can be read (a misspelt family, a name naming another
+    // name, a damaged profile) reads as if missing rather than as DeviceGray. Read against no
+    // resources, the operand itself is a space only when it names one directly: a reserved name
+    // or an abbreviation.
+    let reserved = matches!(name, b"DeviceGray" | b"DeviceRGB" | b"DeviceCMYK" | b"Pattern");
+    let space = match spaces.get(name).filter(|_| !reserved) {
+        Some(resource) => readable_space(doc, resource, &none, 1, lookups),
+        None => None,
+    }
+    .or_else(|| readable_space(doc, operand, &none, 0, lookups));
+    let space = space.map(Rc::new);
+    cache.insert(name.to_vec(), space.clone());
+    space
 }
 
 /// A font resource's metrics, fallback face and vertical advance (see [`Ts`]), read once per page.
@@ -982,6 +1028,10 @@ pub(super) fn interpret(
     let (mut held_fonts, mut held_states, none) = (None, None, Dict::new());
     let fonts_res = super::resource_dict(doc, resources, b"Font", &mut held_fonts).unwrap_or(&none);
     let states = super::resource_dict(doc, resources, b"ExtGState", &mut held_states).unwrap_or(&none);
+    let mut held_spaces = None;
+    let spaces_res = super::resource_dict(doc, resources, b"ColorSpace", &mut held_spaces).unwrap_or(&none);
+    // Each space a `cs` names is resolved once per stream: a page sets the same one again and again.
+    let mut spaces: HashMap<Vec<u8>, Option<Rc<Space>>> = HashMap::new();
     let mut out: Vec<Shown> = Vec::new();
     let mut by_font: HashMap<pdfcraft_cos::ObjRef, CachedFont> = HashMap::new();
     let mut ts = carry.ts.clone();
@@ -1096,7 +1146,11 @@ pub(super) fn interpret(
                 bt += 1;
                 at_bt = (i, ts.clone());
             }
-            b"g" | b"rg" | b"k" | b"cs" => ts.fill = vec![op.clone()],
+            b"g" | b"rg" | b"k" => (ts.fill, ts.fill_space) = (vec![op.clone()], None),
+            b"cs" => {
+                ts.fill = vec![op.clone()];
+                ts.fill_space = op.operands.first().and_then(|o| selected_space(doc, o, spaces_res, &mut spaces, &mut carry.lookups));
+            }
             b"sc" | b"scn" => {
                 ts.fill.retain(|o| o.is("cs"));
                 ts.fill.push(op.clone());

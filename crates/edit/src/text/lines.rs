@@ -3,6 +3,7 @@ use std::sync::Arc;
 use super::fallback::{same_font, same_paint};
 use super::interp::{Carry, Clip, Origin, Pen, Shown, TextState, Ts, clip_shows, clip_within, direction, interpret, region, to_frame, union};
 use super::{DecodeBudget, Dict, Document, EditError, HashMap, Matrix, Object, Op, Pieces, Stream, TextLine, parse, serialize_ops};
+use crate::colour::Space;
 
 impl TextLine {
     /// The baseline's height in user space.
@@ -395,36 +396,42 @@ pub(crate) fn page_dict(doc: &Document, page: usize) -> Result<pdfcraft_model::P
     pdfcraft_model::pages(doc).into_iter().nth(page).ok_or(EditError::NoSuchPage(page))
 }
 
-fn fill_color(fill: &[Op]) -> [f64; 3] {
-    let Some(op) = fill.iter().rev().find(|op| matches!(op.op.as_slice(), b"g" | b"rg" | b"k" | b"sc" | b"scn")) else {
-        return [0.0, 0.0, 0.0];
+/// The sRGB fill colour text is shown in. `sc`/`scn` operands are read in the colour space the
+/// last `cs` selected (ISO 32000-2 §8.6.8, Table 73): a Separation's tint is ink, 1.0 the full
+/// colourant (§8.6.6.4), and an Indexed operand a place in the table (§8.6.6.3); see
+/// [`crate::colour`]. Without one (`cs` named no space the resources hold, or none ran) their
+/// count stands for the space: 1 gray, 3 RGB, 4 CMYK.
+fn fill_color(state: &Ts) -> [f64; 3] {
+    let Some(op) = state.fill.iter().rev().find(|op| matches!(op.op.as_slice(), b"g" | b"rg" | b"k" | b"sc" | b"scn")) else {
+        // A `cs` with no colour after it sets the space's initial colour (§8.6.8): each tint of
+        // a Separation or DeviceN 1.0, DeviceCMYK black, and 0 for the others' components.
+        return match state.fill_space.as_deref() {
+            Some(space @ Space::Tint { inputs, .. }) => crate::colour::rgb(space, &vec![1.0; (*inputs).min(32)]),
+            Some(space) if *space != Space::Cmyk => crate::colour::rgb(space, &[]),
+            _ => [0.0, 0.0, 0.0],
+        };
     };
     let space = match op.op.as_slice() {
-        b"sc" | b"scn" => match op.operands.len() {
-            1 => b"g".as_slice(),
-            3 => b"rg".as_slice(),
-            4 => b"k".as_slice(),
-            _ => return [0.0; 3],
-        },
+        b"sc" | b"scn" => {
+            if let Some(space) = &state.fill_space {
+                // A pattern's name operand is no number: the space alone gives its colour.
+                let values: Vec<f64> = op.operands.iter().filter_map(Object::as_f64).collect();
+                return crate::colour::rgb(space, &values);
+            }
+            match op.operands.len() {
+                1 => b"g".as_slice(),
+                3 => b"rg".as_slice(),
+                4 => b"k".as_slice(),
+                _ => return [0.0; 3],
+            }
+        }
         other => other,
     };
+    let v = |i: usize| op.operands.get(i).and_then(Object::as_f64).unwrap_or(0.0);
     match space {
-        b"g" => {
-            let v = op.operands.first().and_then(Object::as_f64).unwrap_or(0.0).clamp(0.0, 1.0);
-            [v, v, v]
-        }
-        b"rg" => [
-            op.operands.first().and_then(Object::as_f64).unwrap_or(0.0).clamp(0.0, 1.0),
-            op.operands.get(1).and_then(Object::as_f64).unwrap_or(0.0).clamp(0.0, 1.0),
-            op.operands.get(2).and_then(Object::as_f64).unwrap_or(0.0).clamp(0.0, 1.0),
-        ],
-        b"k" => {
-            let c = op.operands.first().and_then(Object::as_f64).unwrap_or(0.0);
-            let m = op.operands.get(1).and_then(Object::as_f64).unwrap_or(0.0);
-            let y = op.operands.get(2).and_then(Object::as_f64).unwrap_or(0.0);
-            let k = op.operands.get(3).and_then(Object::as_f64).unwrap_or(0.0);
-            [(1.0 - c) * (1.0 - k), (1.0 - m) * (1.0 - k), (1.0 - y) * (1.0 - k)]
-        }
+        b"g" => crate::colour::rgb(&Space::Gray, &[v(0)]),
+        b"rg" => crate::colour::rgb(&Space::Rgb, &[v(0), v(1), v(2)]),
+        b"k" => crate::colour::cmyk(v(0), v(1), v(2), v(3)),
         _ => [0.0, 0.0, 0.0],
     }
 }
@@ -486,7 +493,7 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool, in
                         (s.size - l.size).abs() < 0.01
                             && s.bold == l.bold
                             && s.italic == l.italic
-                            && fill_color(&s.state.fill) == l.color
+                            && fill_color(&s.state) == l.color
                             && same_paint(l, &s.state)
                     }))
                 && near
@@ -526,7 +533,7 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool, in
                 size: s.size,
                 bold: s.bold,
                 italic: s.italic,
-                color: fill_color(&s.state.fill),
+                color: fill_color(&s.state),
                 decodable: s.decodable,
                 visual_order: s.visual_order,
                 face: s.face.clone(),
@@ -607,7 +614,7 @@ fn add_shown(lines: &mut Vec<TextLine>, last: &mut Option<Pen>, s: Shown, stream
                     (s.size - l.size).abs() < 0.01
                         && s.bold == l.bold
                         && s.italic == l.italic
-                        && fill_color(&s.state.fill) == l.color
+                        && fill_color(&s.state) == l.color
                         && same_paint(l, &s.state)
                 }))
             && pen.continues(&s, if bt == s.bt { 3.0 } else { 1.5 }).0
@@ -643,7 +650,7 @@ fn add_shown(lines: &mut Vec<TextLine>, last: &mut Option<Pen>, s: Shown, stream
             size: s.size,
             bold: s.bold,
             italic: s.italic,
-            color: fill_color(&s.state.fill),
+            color: fill_color(&s.state),
             decodable: s.decodable,
             visual_order: s.visual_order,
             face: s.face.clone(),
@@ -829,7 +836,7 @@ pub(super) fn reading_lines(doc: &Document, page: usize) -> Result<(Vec<TextLine
         let mut forms = invoked.into_iter().peekable();
         for s in shown {
             while let Some((_, name, ts)) = forms.next_if(|f| f.0 < s.op) {
-                enter(w, resources, &name, ts, &mut carry.text_left)?;
+                enter(w, resources, &name, ts, carry)?;
                 // Text after a form starts a new line.
                 last = None;
             }
@@ -847,12 +854,13 @@ pub(super) fn reading_lines(doc: &Document, page: usize) -> Result<(Vec<TextLine
             add_shown(&mut w.lines, &mut last, s, si);
         }
         for (_, name, ts) in forms {
-            enter(w, resources, &name, ts, &mut carry.text_left)?;
+            enter(w, resources, &name, ts, carry)?;
         }
         Ok(())
     }
-    /// `text_left`: the page's text budget, shared with the forms the page draws.
-    fn enter(w: &mut Walk, resources: &Dict, name: &[u8], ts: Ts, text_left: &mut usize) -> Result<(), EditError> {
+    /// `outer`: the carry of the stream drawing the form, whose text budget and lookup-table
+    /// allowance are the page's, shared with the forms it draws.
+    fn enter(w: &mut Walk, resources: &Dict, name: &[u8], ts: Ts, outer: &mut Carry) -> Result<(), EditError> {
         let Some(form) = form_call(w.doc, resources, name, ts.ctm, &w.path, &mut w.budget) else { return Ok(()) };
         let ops = parse(&form.data).ops;
         // The form starts with the graphics state at its `Do`, its own matrix applied.
@@ -867,8 +875,9 @@ pub(super) fn reading_lines(doc: &Document, page: usize) -> Result<(Vec<TextLine
             stack: Vec::new(),
             marked: Vec::new(),
             layers: Vec::new(),
-            text_left: *text_left,
+            text_left: outer.text_left,
             gap_space: false,
+            lookups: outer.lookups,
         };
         let stream = w.next_stream;
         w.next_stream = w.next_stream.saturating_add(1);
@@ -876,7 +885,8 @@ pub(super) fn reading_lines(doc: &Document, page: usize) -> Result<(Vec<TextLine
             w.path.push(r);
         }
         walk(w, &ops, form.resources(resources), &mut carry, &|_| stream)?;
-        *text_left = carry.text_left;
+        outer.text_left = carry.text_left;
+        outer.lookups = carry.lookups;
         if form.obj.is_some() {
             w.path.pop();
         }
