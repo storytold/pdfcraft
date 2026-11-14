@@ -123,6 +123,14 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
         app.discard_properties();
     }
     discard_inactive_password_drafts(app);
+    if app.dialog != Some(Dialog::EnhanceScanResult) {
+        app.scan_clean_result = None;
+    }
+    // A movable window too: the page stays in view while its restored scans are tuned.
+    if app.dialog == Some(Dialog::EnhanceScanResult) {
+        crate::scan_clean_ui::show_result(app, ctx);
+        return;
+    }
     // A movable window, not this modal: the page under it shows the table as it changes.
     if app.dialog == Some(Dialog::FieldTable) {
         crate::field_table_ui::show(app, ctx);
@@ -451,6 +459,8 @@ fn dialog_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, dialog: Dialog, req: &m
             req.close = go || cancel;
             return false;
         }
+        // Never reached: `dialogs` shows this movable window above and returns before the modal.
+        Dialog::EnhanceScanResult => req.close = true,
         Dialog::AccessibilityOptions => {
             let (start, cancel) = crate::a11y_ui::options_body(ui, app, &t);
             req.a11y_now = start;

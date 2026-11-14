@@ -179,6 +179,8 @@ pub enum Dialog {
     RecognizeText,
     /// Scan & OCR ▸ Enhance scanned file.
     EnhanceScan,
+    /// After Enhance scanned file restored a halftone scan: what was done, with sliders to tune it.
+    EnhanceScanResult,
     /// The JavaScript console (⌘J).
     JsConsole,
     /// Document JavaScripts.

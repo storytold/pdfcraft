@@ -705,6 +705,8 @@ pub struct PdfCraftApp {
     /// Scan & OCR ▸ Enhance scanned file: the dialog's choices and the running clean-up.
     pub scan_clean_draft: scan_clean_ui::ScanCleanDraft,
     pub scan_clean_run: Option<scan_clean_ui::ScanCleanRun>,
+    /// The last Enhance scanned file that restored a halftone scan, while its result dialog is open.
+    pub scan_clean_result: Option<scan_clean_ui::ScanCleanOutcome>,
     /// A background job's progress card (see [`widgets::progress_notice`]).
     pub progress_notice: Option<widgets::ProgressNotice>,
     /// Pages copied or cut in Organize Pages, ready to paste (into any document).

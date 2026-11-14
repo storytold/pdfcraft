@@ -1002,6 +1002,20 @@ impl Automation {
         if let Some(on) = a.opt_bool("despeckle")? {
             settings.despeckle = on;
         }
+        if let Some(on) = a.opt_bool("restore_halftone")? {
+            settings.restore_halftones = on;
+        }
+        for (key, slot) in [
+            ("text_weight", &mut settings.halftone.weight),
+            ("text_contrast", &mut settings.halftone.contrast),
+            ("background_cleanup", &mut settings.halftone.cleanup),
+        ] {
+            match a.opt_int(key)? {
+                None => {}
+                Some(v @ 0..=100) => *slot = v as u8,
+                Some(v) => return Err(ToolError::InvalidArgs(format!("{key} must be between 0 and 100, not {v}"))),
+            }
+        }
         let id = self.doc(a)?.id;
         let report = self.session.enhance_scanned_pages(id, &pages, settings).map_err(failed)?;
         let numbered = |p: &[usize]| p.iter().map(|p| p + 1).collect::<Vec<_>>();
@@ -1011,6 +1025,7 @@ impl Automation {
         out["images"] = json!(report.images);
         out["not_scanned"] = json!(numbered(&report.not_scanned));
         out["skipped"] = json!(skipped);
+        out["halftone"] = json!(report.halftone.iter().map(|h| json!({ "format": h.format, "pages": numbered(&h.pages) })).collect::<Vec<_>>());
         Ok(out)
     }
 }

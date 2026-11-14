@@ -278,6 +278,7 @@ impl PdfCraftApp {
             optimize_run: None,
             scan_clean_draft: scan_clean_ui::ScanCleanDraft::default(),
             scan_clean_run: None,
+            scan_clean_result: None,
             progress_notice: None,
             page_clipboard: None,
             comment_clipboard: None,
@@ -447,17 +448,28 @@ impl PdfCraftApp {
     /// A dialog or prompt is open over the window: the keyboard is its own, and nothing may act
     /// on the document underneath it.
     pub(crate) fn modal_open(&self) -> bool {
+        self.dialog.is_some() || self.prompt_open()
+    }
+
+    /// A prompt that is not [`Self::dialog`] is over the window.
+    fn prompt_open(&self) -> bool {
         #[cfg(not(target_arch = "wasm32"))]
         if self.script_pending.as_ref().is_some_and(|pending| pending.has_prompt()) {
             return true;
         }
-        self.dialog.is_some()
-            || self.close_request.is_some()
+        self.close_request.is_some()
             || self.password_prompt.is_some()
             || self.unlock_prompt.is_some()
             || self.pending_link.is_some()
             || self.pending_remote_link.is_some()
             || self.updates.open
+    }
+
+    /// Whether the page may be scrolled and zoomed: nothing modal is open, or only the Enhance
+    /// scanned file result window, which asks for the page beside it to be judged, at any zoom.
+    /// Clicks on the page, shortcuts and menus still go by [`Self::modal_open`].
+    pub(crate) fn page_navigation_open(&self) -> bool {
+        !self.prompt_open() && matches!(self.dialog, None | Some(crate::Dialog::EnhanceScanResult))
     }
 
     /// Show `msg` in the toast now, in place of whatever it showed. Script messages still waiting

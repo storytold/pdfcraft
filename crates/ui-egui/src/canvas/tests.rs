@@ -3168,7 +3168,7 @@ fn enhancing_a_scan_re_renders_the_page_shown() {
     assert_eq!(cleaned.report.pages, vec![0], "the page is a scan and gets cleaned");
     let progress =
         std::sync::Arc::new(std::sync::Mutex::new(crate::scan_clean_ui::ScanCleanProgress { result: Some(Ok(cleaned)), ..Default::default() }));
-    app.scan_clean_run = Some(crate::scan_clean_ui::ScanCleanRun { doc, progress });
+    app.scan_clean_run = Some(crate::scan_clean_ui::ScanCleanRun { doc, pages: Vec::new(), retune: None, progress });
     app.poll_scan_clean();
     assert!(app.scan_clean_run.is_none());
     assert_eq!(app.views[i].pages.get(&0).unwrap().tag, STALE_TAG, "the old raster is re-rendered");
