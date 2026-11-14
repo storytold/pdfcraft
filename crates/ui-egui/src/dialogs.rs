@@ -8,6 +8,7 @@ pub(crate) mod attachment_description;
 pub mod bookmark_styles_ui;
 pub(super) mod comment_props;
 pub(super) mod convert_colours_ui;
+pub(super) mod deskew_report;
 pub(crate) mod duplicate_field;
 pub(super) mod hairlines_ui;
 pub(crate) mod host;

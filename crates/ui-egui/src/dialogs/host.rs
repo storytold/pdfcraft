@@ -60,6 +60,7 @@ fn results(app: &mut PdfCraftApp, ctx: &egui::Context) {
     app.bookmarks_from_styles_pass(ctx);
     app.about_pass(ctx);
     app.pin_tools_pass(ctx);
+    app.deskew_pass(ctx);
     app.marks_pass(ctx);
     app.printer_marks_pass(ctx);
     app.convert_colours_pass(ctx);
