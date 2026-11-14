@@ -947,7 +947,7 @@ fn open_inspect_render_and_find() {
     let Content::Png { data, width, height } = &png[0] else { panic!("expected an image") };
     assert_eq!((*width, *height), (200, 300));
     assert_eq!(&data[..8], b"\x89PNG\r\n\x1a\n");
-    let decoded = craft_image_codecs::decode(&data).unwrap();
+    let decoded = craft_image_codecs::decode(data).unwrap();
     assert_eq!(decoded.dimensions(), (200, 300));
 }
 
@@ -7790,7 +7790,7 @@ fn typed_signatures_stay_upright_on_rotated_pages() {
             let Content::Png { data, .. } = &output[0] else { panic!() };
             let (width, height, pixels) = decode_rgba(data);
             assert_eq!((width, height), if page % 2 == 1 { (200, 300) } else { (300, 200) }, "page {page}");
-            let dark: Vec<bool> = pixels.chunks_exact(4).map(|p| p[..3].iter().all(|v| *v < 128)).collect();
+            let dark: Vec<bool> = pixels.as_chunks::<4>().0.iter().map(|p| p[..3].iter().all(|v| *v < 128)).collect();
             for y in [60, 140] {
                 let mut b = [u32::MAX, u32::MAX, 0, 0];
                 for py in 0..height {
@@ -7847,7 +7847,7 @@ fn fill_sign_marks_stay_upright_on_rotated_pages() {
             let output = a.call("page_render", &json!({ "doc": doc, "page": page, "dpi": 144 })).unwrap();
             let Content::Png { data, .. } = &output[0] else { panic!() };
             let (width, height, pixels) = decode_rgba(data);
-            let dark: Vec<bool> = pixels.chunks_exact(4).map(|p| p[..3].iter().all(|v| *v < 128)).collect();
+            let dark: Vec<bool> = pixels.as_chunks::<4>().0.iter().map(|p| p[..3].iter().all(|v| *v < 128)).collect();
             // The line, 36 × 4 pt displayed, runs across.
             let mut b = [u32::MAX, u32::MAX, 0, 0];
             for y in 0..height {
@@ -8389,7 +8389,7 @@ fn named_layer_verdicts_are_reported_and_rendered_through_tools() {
     let rendered = a.call("page_render", &json!({"doc": doc, "page": 1, "dpi": 72})).unwrap();
     let Content::Png { data, .. } = &rendered[0] else { panic!("expected a PNG") };
     let (_, _, pixels) = decode_rgba(data);
-    let red = pixels.chunks_exact(4).filter(|p| p[..3].iter().zip([0xD7u8, 0x37, 0x3F]).all(|(a, b)| a.abs_diff(b) < 30)).count();
+    let red = pixels.as_chunks::<4>().0.iter().filter(|p| p[..3].iter().zip([0xD7u8, 0x37, 0x3F]).all(|(a, b)| a.abs_diff(b) < 30)).count();
     assert!(red > 100, "the invalid state is drawn: {red} red pixels");
     ok(&mut a, "doc_save", json!({"doc": doc, "path": "saved.pdf", "full": false}));
     assert_eq!(std::fs::read(dir.join("saved.pdf")).unwrap(), original, "the drawn state never enters saves");
@@ -8923,7 +8923,7 @@ fn a_one_bit_scan_stays_one_bit_and_exports() {
     assert_eq!(files.len(), 1, "{r}");
     let exported = std::fs::read(files[0]["path"].as_str().unwrap()).unwrap();
     let (_, _, rgba) = decode_rgba(&exported);
-    let white: Vec<bool> = rgba.chunks_exact(4).map(|p| p[..3] == [255, 255, 255]).collect();
+    let white: Vec<bool> = rgba.as_chunks::<4>().0.iter().map(|p| p[..3] == [255, 255, 255]).collect();
     let expected: Vec<bool> =
         (0..h as usize).flat_map(|y| (0..w as usize).map(move |x| (y, x))).map(|(y, x)| bits[y * stride + x / 8] & (0x80 >> (x % 8)) != 0).collect();
     assert_eq!(white, expected);
