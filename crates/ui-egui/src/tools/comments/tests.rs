@@ -374,7 +374,7 @@ fn other_colour_opens_the_picker_inside_the_quick_bar_popup() {
     use egui_kittest::kittest::Queryable;
     let mut h = egui_kittest::Harness::new_ui_state(
         |ui, prefs: &mut CommentPrefs| {
-            let _ = quick_bar_controls(ui, CommentTool::Highlight, prefs);
+            let _ = quick_bar_controls(ui, CommentTool::Highlight, prefs, 32.0);
         },
         CommentPrefs::default(),
     );
@@ -396,7 +396,7 @@ fn other_colour_opens_the_picker_inside_the_quick_bar_fill_popup() {
     let fill_label = if prefs.style(CommentTool::Rectangle).fill.is_some() { "Fill colour" } else { "Fill colour: none" };
     let mut h = egui_kittest::Harness::new_ui_state(
         |ui, prefs: &mut CommentPrefs| {
-            let _ = quick_bar_controls(ui, CommentTool::Rectangle, prefs);
+            let _ = quick_bar_controls(ui, CommentTool::Rectangle, prefs, 32.0);
         },
         prefs,
     );

@@ -374,7 +374,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
                         ui.label(tl!("Border colour"));
                         let text = e.color.unwrap_or([0.0; 3]);
                         ui.horizontal(|ui| {
-                            if let Some(c) = crate::comments::border_colour_button(ui, e.border_color, text) {
+                            if let Some(c) = crate::comments::border_colour_button(ui, e.border_color, text, 32.0) {
                                 e.border_color = c;
                             }
                         });

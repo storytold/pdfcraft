@@ -374,7 +374,7 @@ fn selected_fill_text(app: &PdfCraftApp) -> Option<(usize, usize)> {
 /// Fill & Sign's Border controls for typed text: its width, colour and shape, for the selected
 /// text (`picked`), or for new text when none is selected. The label shows in a vertical bar, as the
 /// font size's does.
-fn fill_text_border_controls(ui: &mut egui::Ui, app: &mut PdfCraftApp, picked: Option<(usize, usize)>, vertical: bool) {
+fn fill_text_border_controls(ui: &mut egui::Ui, app: &mut PdfCraftApp, picked: Option<(usize, usize)>, vertical: bool, cell: f32) {
     // The selected text's own border (Comment Properties may have changed it
     // since): the controls below show it and change only it. Without one they
     // set what new text gets until PdfCraft quits; Make Current Properties
@@ -411,7 +411,7 @@ fn fill_text_border_controls(ui: &mut egui::Ui, app: &mut PdfCraftApp, picked: O
     }
     // The border's own colour (the text's unless picked).
     if was.width > 0.0
-        && let Some(color) = comments::border_colour_button(ui, was.color, [0.0; 3])
+        && let Some(color) = comments::border_colour_button(ui, was.color, [0.0; 3], cell)
     {
         border.color = color;
     }
@@ -461,21 +461,22 @@ fn fill_text_border_controls(ui: &mut egui::Ui, app: &mut PdfCraftApp, picked: O
     }
 }
 
-/// Extra controls rendered below/beside the buttons when a comment or fill tool is active.
-fn active_tool_controls(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, vertical: bool) {
+/// Extra controls rendered below/beside the buttons when a comment or fill tool is active. `cell`
+/// is the toolbar's button size: every control in the bar matches it (#7312).
+fn active_tool_controls(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, vertical: bool, cell: f32) {
     let current_fill = match app.quick_tool {
         QuickTool::Fill(f) => Some(f),
         _ => None,
     };
     if matches!(current_fill, Some(crate::fill_sign::FillTool::Text | crate::fill_sign::FillTool::Date)) {
         controls_divider(ui, t, vertical);
-        if let Some(color) = comments::quick_bar_colour(ui, app.fill_text_color) {
+        if let Some(color) = comments::quick_bar_colour(ui, app.fill_text_color, cell) {
             app.fill_text_color = color;
             if let Some((page, index)) = selected_fill_text(app) {
                 app.apply_edit(Edit::StyleAnnotation { page, index, color: Some(color), opacity: None, width: None, endings: None });
             }
         }
-        let resp = icons::button(ui, "a-large-small", 32.0, false, tl!("Font size"));
+        let resp = icons::button(ui, "a-large-small", cell, false, tl!("Font size"));
         let resized = egui::Popup::menu(&resp)
             .align(egui::RectAlign::RIGHT_START)
             .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
@@ -504,7 +505,7 @@ fn active_tool_controls(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, ve
             app.apply_edit(Edit::FontSizeAnnotation { page, index, size });
         }
         // After the text's own controls, so they keep their place in a bar that scrolls.
-        fill_text_border_controls(ui, app, selected_fill_text(app), vertical);
+        fill_text_border_controls(ui, app, selected_fill_text(app), vertical, cell);
     }
     if let QuickTool::Comment(tool) = app.quick_tool {
         controls_divider(ui, t, vertical);
@@ -524,7 +525,7 @@ fn active_tool_controls(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, ve
                 Some(p) => (p.border_color, p.color.unwrap_or(style.color)),
                 None => (style.border_color, style.color),
             };
-            if let Some(color) = comments::border_colour_button(ui, shown, text) {
+            if let Some(color) = comments::border_colour_button(ui, shown, text, cell) {
                 app.comment_prefs.set_border_color(tool, color);
                 if let Some((page, annotation, _)) = selected {
                     app.apply_edit(Edit::BorderColorAnnotation { page, index: annotation, color });
@@ -532,7 +533,7 @@ fn active_tool_controls(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, ve
             }
         }
         // The selected comments this tool made take the colour too (locked ones keep theirs).
-        if let Some(color) = comments::quick_bar_controls(ui, tool, &mut app.comment_prefs)
+        if let Some(color) = comments::quick_bar_controls(ui, tool, &mut app.comment_prefs, cell)
             && let Some((_, id)) = app.active_ids()
             && app.session.get(id).is_some_and(|doc| doc.allows_annotation())
         {
@@ -672,7 +673,7 @@ pub(crate) fn show(app: &mut PdfCraftApp, area: Rect, page_left: Option<f32>, ui
                         egui::ScrollArea::vertical().max_height(remaining).show(ui, |ui| {
                             ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
                                 core_tool_buttons(ui, app, cell, popup_align, &t);
-                                active_tool_controls(ui, app, &t, true);
+                                active_tool_controls(ui, app, &t, true, cell);
                                 if !bar.tools.is_empty() {
                                     ui.separator();
                                     tool_buttons(ui, app, &bar.tools, cell, &mut run, &mut remove);
@@ -688,7 +689,7 @@ pub(crate) fn show(app: &mut PdfCraftApp, area: Rect, page_left: Option<f32>, ui
                         egui::ScrollArea::horizontal().max_height(cell).max_width(remaining).show(ui, |ui| {
                             ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                                 core_tool_buttons(ui, app, cell, popup_align, &t);
-                                active_tool_controls(ui, app, &t, false);
+                                active_tool_controls(ui, app, &t, false, cell);
                                 if !bar.tools.is_empty() {
                                     ui.separator();
                                     tool_buttons(ui, app, &bar.tools, cell, &mut run, &mut remove);
@@ -730,7 +731,7 @@ pub(crate) fn show(app: &mut PdfCraftApp, area: Rect, page_left: Option<f32>, ui
                         egui::ScrollArea::vertical().max_height(max_tools_length).show(ui, |ui| {
                             ui.with_layout(layout, |ui| {
                                 core_tool_buttons(ui, app, cell, popup_align, &t);
-                                active_tool_controls(ui, app, &t, true);
+                                active_tool_controls(ui, app, &t, true, cell);
                                 if !bar.tools.is_empty() {
                                     ui.separator();
                                     tool_buttons(ui, app, &bar.tools, cell, &mut run, &mut remove);
@@ -740,7 +741,7 @@ pub(crate) fn show(app: &mut PdfCraftApp, area: Rect, page_left: Option<f32>, ui
                         settings_clicked |= settings_button(ui, cell, &mut picker_open);
                     } else {
                         core_tool_buttons(ui, app, cell, popup_align, &t);
-                        active_tool_controls(ui, app, &t, false);
+                        active_tool_controls(ui, app, &t, false, cell);
                         if !bar.tools.is_empty() {
                             ui.separator();
                             let scroll_max = (bounds.width() - cell - 50.0).max(cell);
