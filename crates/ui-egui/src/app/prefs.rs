@@ -173,6 +173,7 @@ impl PdfCraftApp {
         v["default_page_gaps"] = serde_json::Value::Bool(self.view_defaults.show_page_gaps);
         v["recent_limit"] = serde_json::json!(self.recent_limit);
         v["fill_text_color"] = serde_json::json!(self.fill_text_color);
+        v["fill_mark_color"] = serde_json::json!(self.fill_mark_color);
         v["redact_prefs"] = self.redact_defaults.to_json();
         v["pinned_tools"] = serde_json::json!(self.pinned_tools);
         // Set outside json! above, which is at serde_json's macro recursion limit.
@@ -425,6 +426,11 @@ impl PdfCraftApp {
             && let Some(color) = fill_sign::valid_text_color(color)
         {
             self.fill_text_color = color;
+        }
+        if let Ok(color) = serde_json::from_value::<[f64; 3]>(v["fill_mark_color"].clone())
+            && let Some(color) = fill_sign::valid_text_color(color)
+        {
+            self.fill_mark_color = color;
         }
         if let Some(show) = v["show_page_edge_shadows"].as_bool() {
             self.show_page_edge_shadows = show;

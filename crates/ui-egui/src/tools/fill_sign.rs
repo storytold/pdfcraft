@@ -197,7 +197,7 @@ impl FillTool {
         }
     }
 
-    fn mark(self) -> Option<FillMark> {
+    pub(crate) fn mark(self) -> Option<FillMark> {
         match self {
             FillTool::Check => Some(FillMark::Check),
             FillTool::Cross => Some(FillMark::Cross),
@@ -496,6 +496,7 @@ pub(crate) struct PageInput<'a> {
     pub(crate) tool: FillTool,
     pub(crate) text_size: f64,
     pub(crate) text_color: [f64; 3],
+    pub(crate) mark_color: [f64; 3],
     pub(crate) text_border: TextBorder,
     pub(crate) signature: Option<&'a SavedSig>,
     pub(crate) initials: Option<&'a SavedSig>,
@@ -507,7 +508,7 @@ pub(crate) struct PageInput<'a> {
 /// Preview and clicks with a Fill & Sign tool on one page.
 pub(crate) fn page_input(cx: PageToolContext<'_>, input: PageInput<'_>, free: bool, view: &mut DocView) -> Option<FillAction> {
     let PageToolContext { ui, resp, xf, ptr, page, info, .. } = cx;
-    let PageInput { tool, text_size, text_color, text_border, signature, initials, preview, author, date_text } = input;
+    let PageInput { tool, text_size, text_color, mark_color, text_border, signature, initials, preview, author, date_text } = input;
     let pointer = ptr.within(xf.rect)?;
     let p = info.pages.get(page)?;
     let at = to_user(xf, info, page, pointer);
@@ -582,8 +583,15 @@ pub(crate) fn page_input(cx: PageToolContext<'_>, input: PageInput<'_>, free: bo
         },
         mark => {
             let mark = mark.mark()?;
-            let rect = mark.rect_at(at, rotation);
-            Some(FillAction::Edit(Box::new(new(page, Shape::Mark { rect, mark }, String::new(), author))))
+            let shape = Shape::Mark { rect: mark.rect_at(at, rotation), mark };
+            let style = Style { color: valid_text_color(mark_color).unwrap_or([0.0; 3]), ..Style::default_for(&shape) };
+            Some(FillAction::Edit(Box::new(Edit::AddAnnotation(NewAnnotation {
+                page,
+                shape,
+                style,
+                contents: String::new(),
+                author: author.to_string(),
+            }))))
         }
     }
 }

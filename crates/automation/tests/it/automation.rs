@@ -5173,7 +5173,7 @@ fn fill_sign_text_and_date_colours_are_saved_and_validated() {
             json!({ "doc": doc, "page": 1, "type": kind, "at": [20, y], "text": "Blue", "color": "#3366CC", "font_size": 6.5 }),
         );
     }
-    for (kind, color) in [("text", "not-a-colour"), ("signature", "#3366CC"), ("check", "#3366CC")] {
+    for (kind, color) in [("text", "not-a-colour"), ("signature", "#3366CC"), ("initials", "#3366CC")] {
         assert!(matches!(
             a.call("fill_sign_add", &json!({ "doc": doc, "page": 1, "type": kind, "at": [20, 100], "text": "No", "color": color })),
             Err(ToolError::InvalidArgs(_))
@@ -5191,6 +5191,43 @@ fn fill_sign_text_and_date_colours_are_saved_and_validated() {
         let da = annotation.as_dict().unwrap().get(b"DA").unwrap().as_string().unwrap();
         assert_eq!(String::from_utf8(da.bytes.to_vec()).unwrap(), "0.2 0.4 0.8 rg /Helv 6.5 Tf");
     }
+}
+
+#[test]
+fn fill_sign_marks_take_a_colour_that_is_saved() {
+    let dir = workdir("fill-sign-mark-colour");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "fill_sign_add", json!({ "doc": doc, "page": 1, "type": "check", "at": [20, 80] }));
+    ok(&mut a, "fill_sign_add", json!({ "doc": doc, "page": 1, "type": "cross", "at": [40, 80], "color": "#3366CC" }));
+    ok(&mut a, "fill_sign_add", json!({ "doc": doc, "page": 1, "type": "line", "at": [80, 80], "color": "#3366CC" }));
+    ok(&mut a, "fill_sign_add", json!({ "doc": doc, "page": 1, "type": "check", "at": [120, 80], "color": "#3366CC" }));
+    // The dot is filled, not stroked: its colour takes the `rg` branch.
+    ok(&mut a, "fill_sign_add", json!({ "doc": doc, "page": 1, "type": "dot", "at": [160, 80], "color": "#3366CC" }));
+    assert!(matches!(
+        a.call("fill_sign_add", &json!({ "doc": doc, "page": 1, "type": "dot", "at": [20, 120], "color": "#12" })),
+        Err(ToolError::InvalidArgs(_))
+    ));
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "marks.pdf" }));
+    let pdf = pdfcraft_cos::Document::open(std::sync::Arc::new(std::fs::read(dir.join("marks.pdf")).unwrap())).unwrap();
+    let page = pdfcraft_model::pages(&pdf).remove(0);
+    let annotations = pdf.resolve(page.dict.get(b"Annots").unwrap());
+    let annotations = annotations.as_array().unwrap();
+    assert_eq!(annotations.len(), 5, "a refused call adds nothing");
+    let drawn: Vec<String> = annotations
+        .iter()
+        .map(|reference| {
+            let annotation = pdf.resolve(reference).as_dict().unwrap().clone();
+            let ap = pdf.resolve(annotation.get(b"AP").unwrap()).as_dict().unwrap().clone();
+            let pdfcraft_cos::Object::Stream(normal) = pdf.resolve(ap.get(b"N").unwrap()).as_ref().clone() else { panic!("no appearance stream") };
+            String::from_utf8(normal.decoded().unwrap().to_vec()).unwrap()
+        })
+        .collect();
+    assert!(drawn[0].contains("0 0 0 RG"), "black by default: {}", drawn[0]);
+    for content in &drawn[1..4] {
+        assert!(content.contains("0.2 0.4 0.8 RG"), "the saved appearance strokes in the colour asked for: {content}");
+    }
+    assert!(drawn[4].contains("0.2 0.4 0.8 rg"), "the saved dot fills in the colour asked for: {}", drawn[4]);
 }
 
 #[test]
