@@ -137,10 +137,17 @@ impl TextBox {
             return true;
         }
         let shown: String = if self.password { "*".repeat(text.chars().count()) } else { text.to_string() };
-        // The font the appearance would choose for this text.
-        let can_show = |enc: &FontText| if self.multiline { shown.split(['\n', '\r']).all(|l| enc.can_encode(l)) } else { enc.can_encode(&shown) };
-        let font = self.font.as_ref().filter(|enc| can_show(enc)).unwrap_or(&FontText::WinAnsi);
-        let width_of = |t: &str, size: f64| font.width(t, size);
+        // The font the appearance would choose for this text, and whether the bundled Inter face
+        // draws what neither it nor Helvetica holds (as `field_appearance_fit` chooses).
+        let holds = |enc: &FontText, s: &str, skip_latin: bool| {
+            if skip_latin { enc.can_encode(&s.chars().filter(|c| !shaped_text::latin_fallback(*c)).collect::<String>()) } else { enc.can_encode(s) }
+        };
+        let can_show = |enc: &FontText, skip_latin: bool| {
+            if self.multiline { shown.split(['\n', '\r']).all(|l| holds(enc, l, skip_latin)) } else { holds(enc, &shown, skip_latin) }
+        };
+        let latin = !self.font.as_ref().is_some_and(|enc| can_show(enc, false));
+        let font = self.font.as_ref().filter(|enc| can_show(enc, latin)).unwrap_or(&FontText::WinAnsi);
+        let width_of = |t: &str, size: f64| shaped_text::fallback_width(t, size, false, latin, |s, size| font.width(s, size));
         // The smallest an automatic size goes ([`auto_text_size_by`]).
         let size = self.size.unwrap_or(4.0);
         if self.multiline {
@@ -703,8 +710,10 @@ pub fn list_rows(doc: &Document, f: &Field, w: &Widget) -> ListRows {
     list_rows_of(doc, &f.da, fobj.as_dict(), &wd)
 }
 
-/// The appearance of a text or choice field's widget showing `values`. Characters its font can't
-/// hold come out as `?`; [`field_appearance_drawn`] says which.
+/// The appearance of a text or choice field's widget showing `values`. Latin, Greek and Cyrillic
+/// characters that neither its font nor Helvetica holds are drawn from the bundled Inter face
+/// (Type 3 glyphs beside its font); characters no font here holds come out as `?`, and
+/// [`field_appearance_drawn`] says which.
 pub fn field_appearance(doc: &Document, f: &Field, w: &Widget, values: &[String]) -> Stream {
     field_appearance_as(doc, f, w, values, true)
 }
@@ -715,9 +724,11 @@ pub fn field_appearance_as(doc: &Document, f: &Field, w: &Widget, values: &[Stri
     field_appearance_drawn(doc, f, w, values, format).0
 }
 
-/// [`field_appearance_as`] with the first character it drew as `?` because the field's font can't
-/// hold it: the form's font is a simple (WinAnsi) font, Helvetica stands in for one PdfCraft can't
-/// write with (an embedded subset, `Identity-H`), or a UCS-2 CMap meets a character beyond U+FFFF.
+/// [`field_appearance_as`] with the first character it drew as `?` because no font it draws with
+/// holds it: the form's font is a simple (WinAnsi) font, or Helvetica stands in for one PdfCraft
+/// can't write with (an embedded subset, `Identity-H`), and the character is not one the bundled
+/// Inter face draws either (CJK, emoji, Thai without a Thai face); or a UCS-2 CMap meets a
+/// character beyond U+FFFF. Greek such as "Γειά σου" is drawn, not reported (#6822).
 pub fn field_appearance_drawn(doc: &Document, f: &Field, w: &Widget, values: &[String], format: bool) -> (Stream, Option<char>) {
     let (stream, unencodable, _) = field_appearance_fit(doc, f, w, values, format);
     (stream, unencodable)
@@ -756,12 +767,18 @@ pub fn value_overflow(doc: &Document, f: &Field, w: &Widget) -> Option<Overflow>
     field_appearance_fit(doc, f, w, &f.value, true).2
 }
 
-/// Whether `text` draws in widget `wd` of `f` with no `?`: in the field's `/DR` font when that
-/// holds it, as [`field_appearance_fit`] picks, or else in the Helvetica (WinAnsi) stand-in.
+/// Whether `text` draws in widget `wd` of `f` with no `?`, as [`field_appearance_fit`] picks: in
+/// the field's `/DR` font when that holds it, or else in that font or the Helvetica (WinAnsi)
+/// stand-in with the bundled Inter face drawing the Latin, Greek and Cyrillic they lack.
 fn draws(doc: &Document, f: &Field, wd: &Dict, text: &str) -> bool {
     let da = parse_da(wd.get(b"DA").and_then(|o| doc.resolve(o).as_string().map(|s| s.to_text())).as_deref().unwrap_or(&f.da));
-    let enc = dr_font(doc, &da.font).map(|(_, enc)| enc).filter(|enc| enc.can_encode(text)).unwrap_or(FontText::WinAnsi);
-    enc.first_unencodable(text).is_none()
+    let dr = dr_font(doc, &da.font).map(|(_, enc)| enc);
+    if let Some(enc) = dr.as_ref().filter(|enc| enc.can_encode(text)) {
+        return enc.first_unencodable(text).is_none();
+    }
+    let rest: String = text.chars().filter(|c| !shaped_text::latin_fallback(*c)).collect();
+    let enc = dr.filter(|enc| enc.can_encode(&rest)).unwrap_or(FontText::WinAnsi);
+    enc.first_unencodable(&rest).is_none()
 }
 
 /// Why text field `f` can't take `text`: it has Thai that a widget's font can't hold and this
@@ -810,13 +827,17 @@ fn field_appearance_fit(doc: &Document, f: &Field, w: &Widget, values: &[String]
         values.first().cloned().unwrap_or_default()
     };
     let text = if f.has(flags::PASSWORD) { "*".repeat(text.chars().count()) } else { text };
-    let can_show = |enc: &FontText, text: &str| {
+    // Whether `enc` holds what is shown; with `skip_latin`, leaving out what the bundled face draws.
+    let can_show = |enc: &FontText, text: &str, skip_latin: bool| {
+        let holds = |s: &str| {
+            if skip_latin { enc.can_encode(&s.chars().filter(|c| !shaped_text::latin_fallback(*c)).collect::<String>()) } else { enc.can_encode(s) }
+        };
         if f.kind == FieldKind::List {
-            f.options.iter().all(|(_, display)| enc.can_encode(display))
+            f.options.iter().all(|(_, display)| holds(display))
         } else if f.kind == FieldKind::Text && f.has(flags::MULTILINE) {
-            text.split(['\n', '\r']).all(|line| enc.can_encode(line))
+            text.split(['\n', '\r']).all(holds)
         } else {
-            enc.can_encode(text)
+            holds(text)
         }
     };
     let dr = dr_font(doc, &da.font);
@@ -826,15 +847,20 @@ fn field_appearance_fit(doc: &Document, f: &Field, w: &Widget, values: &[String]
     let thai = matches!(f.kind, FieldKind::Text | FieldKind::Combo)
         && !f.is_comb()
         && text.chars().any(shaped_text::is_thai)
-        && !dr.as_ref().is_some_and(|(_, enc)| matches!(enc, FontText::Simple(_)) && can_show(enc, &text))
+        && !dr.as_ref().is_some_and(|(_, enc)| matches!(enc, FontText::Simple(_)) && can_show(enc, &text, false))
         && shaped_text::thai_refusal(&text).is_none();
     let latin_text: String = if thai { text.chars().filter(|c| !shaped_text::is_thai(*c)).collect() } else { text.clone() };
-    let (font_name, font_obj, enc) = match dr.filter(|(_, enc)| can_show(enc, &latin_text)) {
+    // Latin, Greek and Cyrillic the form's font can't hold, nor Helvetica, are drawn from the
+    // bundled Inter face in the same way, beside the font that draws the rest (#6822): the value is
+    // stored as typed either way, and this keeps its appearance from showing `?`.
+    let latin = !dr.as_ref().is_some_and(|(_, enc)| can_show(enc, &latin_text, false));
+    let (font_name, font_obj, enc) = match dr.filter(|(_, enc)| can_show(enc, &latin_text, latin)) {
         Some((o, enc)) => (da.font.clone(), o, enc),
         None => ("Helv".to_string(), helvetica(), FontText::WinAnsi),
     };
-    let width_of =
-        |text: &str, size: f64| if thai { shaped_text::thai_width(text, size, |s, size| enc.width(s, size)) } else { enc.width(text, size) };
+    let width_of = |text: &str, size: f64| {
+        if thai || latin { shaped_text::fallback_width(text, size, thai, latin, |s, size| enc.width(s, size)) } else { enc.width(text, size) }
+    };
     // How far a line's ink reaches below and above its baseline (em), where Thai stacks or
     // descenders reach past the form font's (Helvetica's) -0.207 and 0.718; `None` otherwise.
     let thai_ink = |line: &str| thai.then(|| shaped_text::thai_reach(line)).flatten().map(|[lo, hi]| [lo.min(-0.207), hi.max(0.718)]);
@@ -952,7 +978,7 @@ fn field_appearance_fit(doc: &Document, f: &Field, w: &Widget, values: &[String]
             }
         }
     }
-    let (body, fonts, unencodable) = draw_lines(&shown, size, &font_name, font_obj, &enc, thai);
+    let (body, fonts, unencodable) = draw_lines(&shown, size, &font_name, font_obj, &enc, thai, latin);
     // Acrobat regenerates only what is inside /Tx BMC when it redraws a field (e.g. on focus
     // changes), discarding what came before it (issues #1613, #633). The background and border
     // therefore go inside the marked-content block too, so a redraw keeps them with the text.
@@ -982,15 +1008,24 @@ fn field_appearance_fit(doc: &Document, f: &Field, w: &Widget, values: &[String]
 }
 
 /// The text operators for the `shown` lines (where each starts, and what it says) at `size`, in
-/// the field's font `font_name` (`font`, written with `enc`) and, with `thai`, their Thai from the
-/// Thai face; the font resources they use, and the first character drawn as `?` because the
-/// font can't hold it, for the caller to report.
-fn draw_lines(shown: &[(f64, f64, String)], size: f64, font_name: &str, font: Object, enc: &FontText, thai: bool) -> (Vec<u8>, Dict, Option<char>) {
+/// the field's font `font_name` (`font`, written with `enc`); with `thai`, their Thai from the
+/// Thai face, and with `latin`, the Latin, Greek and Cyrillic characters the standard fonts lack
+/// from the bundled Inter face. Returns the font resources they use, and the first character
+/// drawn as `?` because no font here holds it, for the caller to report.
+fn draw_lines(
+    shown: &[(f64, f64, String)],
+    size: f64,
+    font_name: &str,
+    font: Object,
+    enc: &FontText,
+    thai: bool,
+    latin: bool,
+) -> (Vec<u8>, Dict, Option<char>) {
     let mut fonts = Dict::new();
     fonts.set(font_name.as_bytes().to_vec(), font);
     let lines: Vec<String> = shown.iter().map(|(_, _, text)| text.clone()).collect();
-    let (pieces, shaped) = if thai {
-        shaped_text::appearance_lines(&lines, &mut fonts)
+    let (pieces, shaped) = if thai || latin {
+        shaped_text::fallback_appearance_lines(&lines, thai, latin, &mut fonts)
     } else {
         (lines.into_iter().map(|l| vec![Piece::Latin(l)]).collect(), ShapedFonts::default())
     };

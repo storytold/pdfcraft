@@ -1260,6 +1260,83 @@ fn thai_a_field_font_cannot_hold_is_drawn_from_the_thai_face() {
     }
 }
 
+/// #6822: Greek typed into a field whose font (Helvetica, WinAnsi) can't hold it is stored as typed
+/// (a UTF-16BE text string) and drawn from the bundled Inter face, beside the field's font, rather
+/// than as `?`: nothing is marked and other viewers aren't asked to redraw. Latin beside it stays
+/// in the field's font, and text WinAnsi holds is drawn in it alone, as before.
+#[test]
+fn greek_a_field_font_cannot_hold_is_drawn_from_the_bundled_face() {
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [6 0 R 7 0 R 8 0 R] >>".into(),
+        "<< /Fields [6 0 R 7 0 R 8 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 5 0 R >> >> >>".into(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (greek) /DA (/Helv 10 Tf 0 g) /Rect [50 700 250 720] /P 3 0 R >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (mixed) /Ff 4096 /DA (/Helv 10 Tf 0 g) /Rect [50 600 350 660] /P 3 0 R >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (western) /DA (/Helv 10 Tf 0 g) /Rect [50 500 250 520] /P 3 0 R >>".into(),
+    ];
+    let mut doc = document(&objs);
+    let greek = "Γειά σου";
+    let mixed = "Name: Γειά\nσου ok";
+    let western = "Café (±)";
+    set_value(&mut doc, "greek", &FieldValue::Text(greek.into())).unwrap();
+    set_value(&mut doc, "mixed", &FieldValue::Text(mixed.into())).unwrap();
+    set_value(&mut doc, "western", &FieldValue::Text(western.into())).unwrap();
+    let doc = reopen(&doc);
+    // The values, as typed: /V is UTF-16BE behind its byte order mark.
+    for (name, typed) in [("greek", greek), ("mixed", mixed), ("western", western)] {
+        let all = fields(&doc);
+        let f = field(&all, name);
+        assert_eq!(f.value, [typed]);
+        let v = doc.get(f.obj).as_dict().unwrap().get(b"V").unwrap().as_string().unwrap().bytes.clone();
+        let utf16: Vec<u8> = [0xFE, 0xFF].into_iter().chain(typed.encode_utf16().flat_map(u16::to_be_bytes)).collect();
+        assert_eq!(v, utf16, "{name}");
+    }
+    assert!(undrawn_fields(&doc).is_empty(), "{:?}", undrawn_fields(&doc));
+    assert!(!need_appearances(&doc), "no viewer needs to redraw what is drawn");
+    // The normal appearance's content and its font resources.
+    let drawn = |name: &str| {
+        let all = fields(&doc);
+        let w = &field(&all, name).widgets[0];
+        let wd = doc.get(w.obj).as_dict().unwrap().clone();
+        assert_eq!(pdfcraft_fonts::undrawn_mark(&wd), None, "{name}");
+        assert!(wd.get(b"DA").and_then(|o| o.as_string()).is_some_and(|s| s.to_text().starts_with("/Helv ")), "the /DA is kept");
+        let n = wd.get(b"AP").unwrap().as_dict().unwrap().reference(b"N").unwrap();
+        let Object::Stream(s) = &*doc.get(n) else { panic!() };
+        let fonts = s.dict.get(b"Resources").and_then(|r| r.as_dict()).and_then(|r| r.get(b"Font")).and_then(|f| f.as_dict()).unwrap().clone();
+        (s.decoded().unwrap(), fonts)
+    };
+    fn has(hay: &[u8], needle: &[u8]) -> bool {
+        hay.windows(needle.len()).any(|w| w == needle)
+    }
+    for name in ["greek", "mixed"] {
+        let (ap, fonts) = drawn(name);
+        assert!(!ap.contains(&b'?'), "{name}: {}", String::from_utf8_lossy(&ap));
+        let (key, font) = fonts.iter().find(|(k, _)| k.starts_with(b"PCLa")).expect("a font from the bundled face");
+        assert!(has(&ap, &[&b"/"[..], key.as_slice(), &b" "[..]].concat()), "{name} shows it");
+        let font = font.as_dict().unwrap();
+        assert_eq!(font.name(b"Subtype"), Some(&b"Type3"[..]));
+        let Object::Stream(cmap) = &*doc.get(font.reference(b"ToUnicode").unwrap()) else { panic!("ToUnicode is a stream object") };
+        let cmap = String::from_utf8_lossy(&cmap.decoded().unwrap()).into_owned();
+        assert!(cmap.contains("<03C3>") && cmap.contains("<03BF>") && cmap.contains("<03C5>"), "σου copies as typed: {cmap}");
+    }
+    let (greek_ap, _) = drawn("greek");
+    assert!(has(&greek_ap, b"( ) Tj"), "the space between the words is Helvetica's");
+    let (mixed_ap, _) = drawn("mixed");
+    assert!(has(&mixed_ap, b"(Name: ) Tj") && has(&mixed_ap, b"( ok) Tj"), "{}", String::from_utf8_lossy(&mixed_ap));
+    // Text WinAnsi holds: Helvetica alone, with the bytes it always had.
+    let (ap, fonts) = drawn("western");
+    assert_eq!(fonts.iter().map(|(k, _)| k.clone()).collect::<Vec<_>>(), [b"Helv".to_vec()]);
+    let shown = [pdfcraft_fonts::literal(&pdfcraft_fonts::win_ansi(western)), b" Tj".to_vec()].concat();
+    assert!(has(&ap, &shown), "{}", String::from_utf8_lossy(&ap));
+    // A character the bundled face lacks is still drawn as `?` and reported, beside drawn Greek.
+    let mut doc = doc;
+    set_value(&mut doc, "greek", &FieldValue::Text("Γειά 北".into())).unwrap();
+    assert_eq!(undrawn_fields(&doc), [("greek".to_string(), '北')]);
+    assert!(need_appearances(&doc));
+}
+
 /// A document that declares PDF/A can't ask other viewers to redraw its fields (PDF/A forbids
 /// `/NeedAppearances`): the value is still kept and its widget marked, and the flag stays off.
 #[test]
@@ -7517,6 +7594,323 @@ fn a_four_entry_mk_colour_with_a_null_is_cmyk_with_zero() {
     assert!(cmyk.contains("0 0 1 0 k") && cmyk.contains("1 0 0 0 K"), "CMYK background and border: {cmyk}");
     let rgb = off(&mut doc, "rgb");
     assert!(rgb.contains("0 0 1 rg") && rgb.contains("1 0 0 RG"), "three numbers stay RGB: {rgb}");
+}
+
+// ── #6867: one object per Type 3 glyph procedure across the form ──────────────────────────────
+
+/// The Greek fixture of `greek_a_field_font_cannot_hold_is_drawn_from_the_bundled_face`, with
+/// `extra` objects after it (numbered from 9), `widgets` more on the page and `more_fields` more
+/// in `/Fields` (references, `"9 0 R 11 0 R"`).
+fn greek_form(extra: &[String], widgets: &str, more_fields: &str) -> Document {
+    let mut objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        format!("<< /Type /Page /Parent 2 0 R /Annots [6 0 R 7 0 R 8 0 R {widgets}] >>"),
+        format!("<< /Fields [6 0 R 7 0 R 8 0 R {more_fields}] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 5 0 R >> >> >>"),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (greek) /DA (/Helv 10 Tf 0 g) /Rect [50 700 250 720] /P 3 0 R >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (mixed) /Ff 4096 /DA (/Helv 10 Tf 0 g) /Rect [50 600 350 660] /P 3 0 R >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (western) /DA (/Helv 10 Tf 0 g) /Rect [50 500 250 520] /P 3 0 R >>".into(),
+    ];
+    objs.extend(extra.iter().cloned());
+    document(&objs)
+}
+
+const GREEK: &str = "Γειά σου";
+const MIXED: &str = "Name: Γειά\nσου ok";
+
+/// The normal appearance of the first widget of the field `name`.
+fn normal_appearance(doc: &Document, name: &str) -> pdfcraft_cos::Stream {
+    let all = fields(doc);
+    let w = &field(&all, name).widgets[0];
+    let n = doc.get(w.obj).as_dict().unwrap().get(b"AP").map(|a| doc.resolve(a)).unwrap().as_dict().unwrap().reference(b"N").unwrap();
+    let Object::Stream(s) = &*doc.get(n) else { panic!("{name}: no normal appearance stream") };
+    s.clone()
+}
+
+/// The Type 3 fonts of an appearance, with their resource names.
+fn type3_fonts_of(doc: &Document, ap: &pdfcraft_cos::Stream) -> Vec<(Vec<u8>, Dict)> {
+    let fonts = ap.dict.get(b"Resources").and_then(Object::as_dict).and_then(|r| r.get(b"Font")).and_then(Object::as_dict);
+    let fonts = fonts.cloned().unwrap_or_default();
+    fonts
+        .iter()
+        .filter_map(|(k, f)| {
+            let f = doc.resolve(f).as_dict().cloned()?;
+            (f.name(b"Subtype") == Some(&b"Type3"[..])).then(|| (k.clone(), f))
+        })
+        .collect()
+}
+
+/// Each glyph procedure of the Type 3 fonts in the field `name`'s appearance: the text its code
+/// copies as (from the font's ToUnicode map) and the object holding it.
+fn glyphs_of(doc: &Document, name: &str) -> Vec<(String, ObjRef)> {
+    let mut out = Vec::new();
+    for (_, font) in type3_fonts_of(doc, &normal_appearance(doc, name)) {
+        let Object::Stream(cmap) = &*doc.get(font.reference(b"ToUnicode").unwrap()) else { panic!("ToUnicode is a stream object") };
+        let cmap = String::from_utf8_lossy(&cmap.decoded().unwrap()).into_owned();
+        let procs = font.get(b"CharProcs").and_then(Object::as_dict).unwrap();
+        for (glyph, r) in procs.iter() {
+            let code = String::from_utf8_lossy(&glyph[1..]).into_owned();
+            // `<01> <0393>`: the code's line in the map.
+            let line = cmap.lines().find(|l| l.starts_with(&format!("<{code}> "))).unwrap();
+            let hex = line.split('<').nth(2).unwrap().trim_end_matches('>');
+            let units: Vec<u16> = hex.as_bytes().chunks(4).map(|c| u16::from_str_radix(std::str::from_utf8(c).unwrap(), 16).unwrap()).collect();
+            out.push((String::from_utf16(&units).unwrap(), r.as_ref().expect("a glyph is an object of its own")));
+        }
+    }
+    out
+}
+
+/// The distinct shaped clusters (by the text they copy as) the bundled face draws for `values`.
+fn distinct_clusters(values: &[&str]) -> std::collections::BTreeSet<String> {
+    let mut out = std::collections::BTreeSet::new();
+    for line in values.iter().flat_map(|v| v.split('\n')) {
+        let pieces = pdfcraft_fonts::shaped_text::fallback_pieces(line, false, true).unwrap();
+        out.extend(pdfcraft_fonts::shaped_text::clusters([pieces.as_slice()]).map(|c| c.text.clone()));
+    }
+    out
+}
+
+/// How many streams in `doc` are Type 3 glyph procedures (`… d1` first) and ToUnicode maps.
+fn glyph_and_map_streams(doc: &Document) -> (usize, usize) {
+    let (mut glyphs, mut maps) = (0, 0);
+    for (_, o) in doc.scan_objects() {
+        let Object::Stream(s) = &*o else { continue };
+        let Ok(data) = s.decoded() else { continue };
+        let text = String::from_utf8_lossy(&data);
+        if text.lines().next().is_some_and(|l| l.ends_with(" d1")) {
+            glyphs += 1;
+        } else if text.contains("begincmap") {
+            maps += 1;
+        }
+    }
+    (glyphs, maps)
+}
+
+/// `a` and `b` are the same object, numbers compared by value: the writer saves a whole-number
+/// real as an integer (`write_real`), so a reopened file reads `626.0` back as `626`.
+fn same_by_value(a: &Object, b: &Object) -> bool {
+    match (a, b) {
+        (Object::Int(_) | Object::Real(_), Object::Int(_) | Object::Real(_)) => a.as_f64() == b.as_f64(),
+        (Object::Array(x), Object::Array(y)) => x.len() == y.len() && x.iter().zip(y).all(|(x, y)| same_by_value(x, y)),
+        _ => a == b,
+    }
+}
+
+/// What the field `name` draws is what it would draw with nothing shared: the content, and its
+/// Type 3 fonts entry by entry, their glyph procedures and maps compared by their bytes.
+fn assert_drawn_as_generated(doc: &Document, name: &str) {
+    let all = fields(doc);
+    let f = field(&all, name);
+    let stored = normal_appearance(doc, name);
+    let (fresh, missing) = appearance::field_appearance_drawn(doc, f, &f.widgets[0], &f.value, true);
+    assert_eq!(missing, None);
+    assert_eq!(stored.decoded().unwrap(), fresh.decoded().unwrap(), "{name}: the drawn bytes are unchanged");
+    let (stored_fonts, fresh_fonts) = (type3_fonts_of(doc, &stored), type3_fonts_of(doc, &fresh));
+    assert!(!fresh_fonts.is_empty());
+    assert_eq!(stored_fonts.len(), fresh_fonts.len());
+    let bytes = |o: &Object| match &*doc.resolve(o) {
+        Object::Stream(s) => s.decoded().unwrap(),
+        other => panic!("{name}: {other:?} is not a stream"),
+    };
+    for ((sk, sf), (fk, ff)) in stored_fonts.iter().zip(&fresh_fonts) {
+        assert_eq!(sk, fk);
+        assert_eq!(sf.len(), ff.len());
+        for (key, value) in ff.iter() {
+            match key.as_slice() {
+                b"ToUnicode" => assert_eq!(bytes(sf.get(key).unwrap()), bytes(value)),
+                b"CharProcs" => {
+                    let (sp, fp) = (sf.get(key).and_then(Object::as_dict).unwrap(), value.as_dict().unwrap());
+                    assert_eq!(sp.len(), fp.len());
+                    for (glyph, proc) in fp.iter() {
+                        assert_eq!(bytes(sp.get(glyph).unwrap()), bytes(proc), "{name}: glyph {}", String::from_utf8_lossy(glyph));
+                    }
+                }
+                _ => assert!(
+                    sf.get(key).is_some_and(|s| same_by_value(s, value)),
+                    "{name}: /{}: stored {:?}, generated {value:?}",
+                    String::from_utf8_lossy(key),
+                    sf.get(key)
+                ),
+            }
+        }
+    }
+}
+
+/// The two Greek fields share every cluster's glyph procedure object, there is one object per
+/// distinct cluster, and each still draws and copies as before.
+fn assert_greek_glyphs_shared(doc: &Document) {
+    let (greek, mixed) = (glyphs_of(doc, "greek"), glyphs_of(doc, "mixed"));
+    assert!(!greek.is_empty() && !mixed.is_empty());
+    for (text, r) in &greek {
+        let theirs: Vec<ObjRef> = mixed.iter().filter(|(t, _)| t == text).map(|(_, r)| *r).collect();
+        assert_eq!(theirs, [*r], "{text}: one object in both fields");
+    }
+    let objects: std::collections::HashSet<ObjRef> = greek.iter().chain(&mixed).map(|(_, r)| *r).collect();
+    assert_eq!(objects.len(), distinct_clusters(&[GREEK, MIXED]).len(), "one glyph object per distinct cluster");
+    for name in ["greek", "mixed"] {
+        assert_drawn_as_generated(doc, name);
+        let copied: String = glyphs_of(doc, name).into_iter().map(|(t, _)| t).collect();
+        assert!(copied.contains('σ') && copied.contains('ο') && copied.contains('υ'), "{name}: σου copies as typed: {copied}");
+    }
+    assert!(undrawn_fields(doc).is_empty() && !need_appearances(doc));
+}
+
+/// #6867: Greek filled into two fields, one call each (as the app, the CLI and MCP fill them),
+/// stores each glyph procedure once: the second fill finds the first's in the form's appearances.
+/// The drawn bytes don't change.
+#[test]
+fn glyph_procedures_are_shared_across_fills_of_different_fields() {
+    let mut doc = greek_form(&[], "", "");
+    set_value(&mut doc, "greek", &FieldValue::Text(GREEK.into())).unwrap();
+    set_value(&mut doc, "mixed", &FieldValue::Text(MIXED.into())).unwrap();
+    set_value(&mut doc, "western", &FieldValue::Text("Café".into())).unwrap();
+    let doc = reopen(&doc);
+    assert_greek_glyphs_shared(&doc);
+    assert_eq!(glyph_and_map_streams(&doc).0, distinct_clusters(&[GREEK, MIXED]).len(), "the file holds each glyph once");
+}
+
+/// #6867: a batch reads the form's glyphs once, however many values it draws, and a batch with
+/// nothing shaped doesn't read them at all.
+#[test]
+fn a_batch_shares_glyph_procedures_and_reads_the_form_for_them_once() {
+    let mut doc = greek_form(&[], "", "");
+    let seeds = || crate::glyph_pool::SEEDS.with(std::cell::Cell::get);
+    let before = seeds();
+    let latin = [("western".to_string(), FieldValue::Text("Café".into()))];
+    assert!(set_values(&mut doc, &latin).unwrap().iter().all(Result::is_ok));
+    assert_eq!(seeds(), before, "Latin text never reads the form for glyphs");
+    let values = [("greek".to_string(), FieldValue::Text(GREEK.into())), ("mixed".to_string(), FieldValue::Text(MIXED.into()))];
+    assert!(set_values(&mut doc, &values).unwrap().iter().all(Result::is_ok));
+    assert_eq!(seeds() - before, 1, "one reading for the batch");
+    let doc = reopen(&doc);
+    assert_greek_glyphs_shared(&doc);
+}
+
+/// #6867: glyphs a saved file already holds are found after it is opened again: filling another
+/// field refers to them rather than storing them again.
+#[test]
+fn glyph_procedures_are_shared_with_those_a_reopened_file_holds() {
+    let mut doc = greek_form(&[], "", "");
+    set_value(&mut doc, "greek", &FieldValue::Text(GREEK.into())).unwrap();
+    let mut doc = reopen(&doc);
+    let saved: std::collections::HashSet<ObjRef> = glyphs_of(&doc, "greek").into_iter().map(|(_, r)| r).collect();
+    set_value(&mut doc, "mixed", &FieldValue::Text(MIXED.into())).unwrap();
+    let doc = reopen(&doc);
+    assert_greek_glyphs_shared(&doc);
+    let greek_only = distinct_clusters(&[GREEK]);
+    for (text, r) in glyphs_of(&doc, "mixed") {
+        if greek_only.contains(&text) {
+            assert!(saved.contains(&r), "{text}: the saved glyph object is reused");
+        }
+    }
+}
+
+/// #6867: filling a field again with the same value adds no glyph procedure, nor a map.
+#[test]
+fn refilling_the_same_value_adds_no_glyph_objects() {
+    let mut doc = greek_form(&[], "", "");
+    set_value(&mut doc, "greek", &FieldValue::Text(GREEK.into())).unwrap();
+    let before = (glyph_and_map_streams(&doc), glyphs_of(&doc, "greek"));
+    let map = |doc: &Document| type3_fonts_of(doc, &normal_appearance(doc, "greek"))[0].1.reference(b"ToUnicode");
+    let first = map(&doc);
+    set_value(&mut doc, "greek", &FieldValue::Text(GREEK.into())).unwrap();
+    assert_eq!((glyph_and_map_streams(&doc), glyphs_of(&doc, "greek")), before);
+    assert_eq!(map(&doc), first, "the same text shares its map");
+}
+
+/// #6867: the form's existing appearances come from the file and may hold anything: a Type 3 font
+/// whose `/CharProcs` is an array, glyphs that are no stream or no object, a resources dictionary
+/// that refers to itself, a font that loops. Filling another field still works, storing its glyphs
+/// as new objects.
+#[test]
+fn hostile_appearance_fonts_never_stop_a_fill() {
+    let ap = |resources: &str| format!("<< /Resources {resources} /Length 0 >>\nstream\n\nendstream");
+    let widget = |name: &str, n: u32, y: u32| {
+        let top = y + 20;
+        format!("<< /Type /Annot /Subtype /Widget /FT /Tx /T ({name}) /Rect [50 {y} 250 {top}] /P 3 0 R /AP << /N {n} 0 R >> >>")
+    };
+    let extra: Vec<String> = vec![
+        widget("h1", 10, 100),                                                                                // 9
+        ap("<< /Font << /PCLa1 << /Subtype /Type3 /CharProcs [16 0 R] /ToUnicode 17 0 R >> >> >>"),           // 10
+        widget("h2", 12, 140),                                                                                // 11
+        ap("<< /Font << /PCLa1 << /Subtype /Type3 /CharProcs << /g01 17 0 R /g02 99 0 R /g03 5 >> >> >> >>"), // 12
+        widget("h3", 14, 180),                                                                                // 13
+        ap("15 0 R"),                                                                                         // 14
+        "<< /Font << /PCLa1 18 0 R >> /Resources 15 0 R >>".into(),                                           // 15: names itself
+        "<< /Length 9 >>\nstream\n500 0 d0\nendstream".into(),                                                // 16
+        "42".into(),                                                                                          // 17: not a stream
+        "<< /Subtype /Type3 /CharProcs 18 0 R /ToUnicode 18 0 R /Font 18 0 R >>".into(),                      // 18: loops
+    ];
+    let mut doc = greek_form(&extra, "9 0 R 11 0 R 13 0 R", "9 0 R 11 0 R 13 0 R");
+    set_value(&mut doc, "greek", &FieldValue::Text(GREEK.into())).unwrap();
+    let doc = reopen(&doc);
+    let glyphs = glyphs_of(&doc, "greek");
+    assert_eq!(glyphs.len(), distinct_clusters(&[GREEK]).len());
+    assert!(glyphs.iter().all(|(_, r)| matches!(&*doc.get(*r), Object::Stream(_))), "new glyph objects");
+    assert_drawn_as_generated(&doc, "greek");
+}
+
+/// #6867: a form with many fields holding the same Greek, filled one call per field, plus one
+/// field with several widgets: the saved file holds each distinct glyph once, and one map for
+/// the one text, not one of each per widget.
+#[test]
+fn a_saved_form_holds_each_glyph_once_however_many_widgets_draw_it() {
+    let (n, kids) = (12u32, 4u32);
+    let mut extra = Vec::new();
+    let mut singles = Vec::new();
+    for i in 0..n {
+        singles.push(format!("{} 0 R", 9 + i));
+        let (y, top) = (10 * i + 390, 10 * i + 400);
+        extra.push(format!("<< /Type /Annot /Subtype /Widget /FT /Tx /T (same{i}) /DA (/Helv 10 Tf 0 g) /Rect [300 {y} 500 {top}] /P 3 0 R >>"));
+    }
+    // One field after them with `kids` widgets after it.
+    let parent = 9 + n;
+    let kid_refs: Vec<String> = (0..kids).map(|k| format!("{} 0 R", parent + 1 + k)).collect();
+    extra.push(format!("<< /FT /Tx /T (shared) /DA (/Helv 10 Tf 0 g) /Kids [{}] >>", kid_refs.join(" ")));
+    for k in 0..kids {
+        let (y, top) = (20 * k + 200, 20 * k + 220);
+        extra.push(format!("<< /Type /Annot /Subtype /Widget /Parent {parent} 0 R /Rect [50 {y} 250 {top}] /P 3 0 R >>"));
+    }
+    let singles = singles.join(" ");
+    let mut doc = greek_form(&extra, &format!("{singles} {}", kid_refs.join(" ")), &format!("{singles} {parent} 0 R"));
+    for i in 0..n {
+        set_value(&mut doc, &format!("same{i}"), &FieldValue::Text(GREEK.into())).unwrap();
+    }
+    set_value(&mut doc, "shared", &FieldValue::Text(GREEK.into())).unwrap();
+    let doc = reopen(&doc);
+    assert_eq!(field(&fields(&doc), "shared").widgets.len(), kids as usize);
+    assert_eq!(glyph_and_map_streams(&doc), (distinct_clusters(&[GREEK]).len(), 1), "{} widgets draw the same glyphs", n + kids);
+    let first = glyphs_of(&doc, "same0");
+    for i in 1..n {
+        assert_eq!(glyphs_of(&doc, &format!("same{i}")), first);
+    }
+}
+
+/// #6867: a reset writes each field's default through the resetting path (no validation, the
+/// appearances drawn once at the end from the final values). That path is still a fill: two
+/// Type 3 fields it redraws share each glyph procedure object, as two fills would.
+#[test]
+fn a_reset_refill_of_type3_fields_still_shares_glyph_procedures() {
+    let mut doc = greek_form(&[], "", "");
+    // Defaults the fields can't draw from their own font, with a plain value to reset away from.
+    for (name, default) in [("greek", GREEK), ("mixed", MIXED)] {
+        let obj = field(&fields(&doc), name).obj;
+        doc.update_dict(obj, |d| d.set(b"DV".to_vec(), PdfString::text(default))).unwrap();
+        set_value(&mut doc, name, &FieldValue::Text("x".into())).unwrap();
+        assert!(glyphs_of_is_empty(&doc, name), "{name}: the plain value draws no Type 3 glyph");
+    }
+    assert_eq!(reset(&mut doc, None).unwrap(), 2);
+    let doc = reopen(&doc);
+    for (name, default) in [("greek", GREEK), ("mixed", MIXED)] {
+        assert_eq!(field(&fields(&doc), name).value, [default], "{name}: back to its default");
+    }
+    assert_greek_glyphs_shared(&doc);
+}
+
+/// Whether the field `name`'s normal appearance has no Type 3 font.
+fn glyphs_of_is_empty(doc: &Document, name: &str) -> bool {
+    type3_fonts_of(doc, &normal_appearance(doc, name)).is_empty()
 }
 
 /// A Simple calculation counts the first value of a multiple-selection list, as `main` always

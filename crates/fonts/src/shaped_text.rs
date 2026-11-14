@@ -9,7 +9,7 @@ use std::collections::{HashMap, HashSet};
 
 use pdfcraft_cos::{Dict, Document, Object, PdfString, Stream};
 
-use crate::{GlyphError, GlyphOutline, ShapedCluster, ShapedScript, literal, shape_thai, shaped_glyph};
+use crate::{GlyphError, GlyphOutline, ShapedCluster, ShapedScript, latin_has, literal, shape_latin, shape_thai, shaped_glyph};
 
 /// Most glyphs in one Type 3 font: its codes are single bytes, 1–240. Text gets one such font per
 /// 240 distinct clusters it needs.
@@ -34,6 +34,93 @@ pub fn thai_message(e: GlyphError, text: &str) -> String {
             .into(),
         GlyphError::Missing => format!("the Thai font can't show \"{text}\""),
         GlyphError::TooComplex => "the Thai glyphs are too complex; use shorter text".into(),
+    }
+}
+
+/// Whether a generated appearance draws `c` from the bundled Inter face rather than the standard
+/// font: a Latin, Greek or Cyrillic character WinAnsiEncoding lacks (`Γ`, `ř`, `ж`) that the face
+/// has. Line breaks and Thai never are.
+pub fn latin_fallback(c: char) -> bool {
+    !matches!(c, '\n' | '\r') && !is_thai(c) && !crate::win_ansi_encodable(c) && latin_has(c)
+}
+
+/// Why the bundled Inter face can't draw `text`, for a message an agent or user can act on.
+pub fn latin_message(e: GlyphError, text: &str) -> String {
+    match e {
+        GlyphError::NoFont | GlyphError::Missing => format!("the bundled Inter face can't show \"{text}\""),
+        GlyphError::TooComplex => format!("the bundled Inter face's glyphs for \"{text}\" are too complex"),
+    }
+}
+
+/// `line` split as a generated appearance draws it, in typing order: with `thai`, its Thai runs
+/// shaped with the Thai face; with `latin`, its runs of [`latin_fallback`] characters shaped with
+/// the bundled Inter face; and the text between them, left to the standard font. An error when a
+/// run can't be shaped (no Thai face, a missing character).
+pub fn fallback_pieces(line: &str, thai: bool, latin: bool) -> Result<Vec<Piece>, GlyphError> {
+    #[derive(Clone, Copy, PartialEq)]
+    enum Run {
+        Thai,
+        Latin,
+        Standard,
+    }
+    let kind = |c: char| {
+        if thai && is_thai(c) {
+            Run::Thai
+        } else if latin && latin_fallback(c) {
+            Run::Latin
+        } else {
+            Run::Standard
+        }
+    };
+    let mut runs: Vec<(Run, String)> = Vec::new();
+    for c in line.chars() {
+        let k = kind(c);
+        // A combining mark the standard font lacks is drawn on its letter by the bundled face:
+        // the letter moves from the standard font's run into a run of the face's.
+        if k == Run::Latin
+            && is_mark(c)
+            && let Some((Run::Standard, s)) = runs.last_mut()
+            && let Some(base) = s.chars().last().filter(|b| latin_has(*b) && !matches!(b, '\n' | '\r'))
+        {
+            s.pop();
+            if s.is_empty() {
+                runs.pop();
+            }
+            match runs.last_mut() {
+                Some((Run::Latin, s)) => s.extend([base, c]),
+                _ => runs.push((Run::Latin, [base, c].into_iter().collect())),
+            }
+            continue;
+        }
+        match runs.last_mut() {
+            Some((run, s)) if *run == k => s.push(c),
+            _ => runs.push((k, c.to_string())),
+        }
+    }
+    runs.into_iter()
+        .map(|(run, s)| match run {
+            Run::Thai => shape_thai(&s).map(Piece::Shaped),
+            Run::Latin => shape_latin(&s).map(Piece::Shaped),
+            Run::Standard => Ok(Piece::Latin(s)),
+        })
+        .collect()
+}
+
+/// A combining diacritical mark (U+0300–U+036F), drawn on the letter before it.
+fn is_mark(c: char) -> bool {
+    matches!(u32::from(c), 0x0300..=0x036F)
+}
+
+/// The width of `text` at `size` as [`fallback_pieces`] splits it, the standard font's pieces
+/// measured by `standard`. Text with nothing for the fallback faces, or that they can't shape, is
+/// measured by `standard` as a whole (drawing then reports why).
+pub fn fallback_width(text: &str, size: f64, thai: bool, latin: bool, standard: impl Fn(&str, f64) -> f64) -> f64 {
+    if !text.chars().any(|c| (thai && is_thai(c)) || (latin && latin_fallback(c))) {
+        return standard(text, size);
+    }
+    match fallback_pieces(text, thai, latin) {
+        Ok(pieces) => pieces_width(&pieces, size, 0.0, standard),
+        Err(_) => standard(text, size),
     }
 }
 
@@ -243,10 +330,21 @@ impl ShapedFonts {
 /// appearance. Thai the face can't draw, and every line when a glyph can't be read, is left to the
 /// standard font, whose encoder writes `?` for it; [`first_undrawable`] reports that.
 pub fn appearance_lines(lines: &[String], fonts: &mut Dict) -> (Vec<Vec<Piece>>, ShapedFonts) {
+    fallback_appearance_lines(lines, true, false, fonts)
+}
+
+/// [`appearance_lines`] with the pieces [`fallback_pieces`] splits each line into: its Thai with
+/// `thai`, and with `latin` the Latin, Greek and Cyrillic characters the standard fonts lack, drawn
+/// from the bundled Inter face. Their Type 3 fonts are named `PCTh…` when Thai is drawn, else
+/// `PCLa…`. A line whose runs can't be shaped, and every line when a glyph can't be read, is left
+/// to the standard font, which writes `?` for what it lacks; the caller reports that.
+pub fn fallback_appearance_lines(lines: &[String], thai: bool, latin: bool, fonts: &mut Dict) -> (Vec<Vec<Piece>>, ShapedFonts) {
     let plain = |l: &String| vec![Piece::Latin(l.clone())];
+    let needs = |c: char| (thai && is_thai(c)) || (latin && latin_fallback(c));
     let pieces: Vec<Vec<Piece>> =
-        lines.iter().map(|l| if l.chars().any(is_thai) { thai_pieces(l).unwrap_or_else(|_| plain(l)) } else { plain(l) }).collect();
-    match ShapedFonts::new(clusters(pieces.iter().map(Vec::as_slice)), shaped_glyph, &Dict::new(), fonts, "PCTh", &mut |o| o).map_err(|(e, _)| e) {
+        lines.iter().map(|l| if l.chars().any(needs) { fallback_pieces(l, thai, latin).unwrap_or_else(|_| plain(l)) } else { plain(l) }).collect();
+    let prefix = if thai { "PCTh" } else { "PCLa" };
+    match ShapedFonts::new(clusters(pieces.iter().map(Vec::as_slice)), shaped_glyph, &Dict::new(), fonts, prefix, &mut |o| o).map_err(|(e, _)| e) {
         Ok(shaped) => (pieces, shaped),
         Err(_) => (lines.iter().map(plain).collect(), ShapedFonts::default()),
     }
@@ -361,6 +459,7 @@ fn type3_font(clusters: &[&ShapedCluster], outlines: &HashMap<(ShapedScript, u32
                 ShapedScript::Arabic => "Arabic",
                 ShapedScript::Hebrew => "Hebrew",
                 ShapedScript::Thai => "Thai",
+                ShapedScript::Latin => "Inter",
             },
             |f| f.family,
         ),
@@ -428,6 +527,176 @@ pub fn store_streams(doc: &mut Document, d: &mut Dict) {
     walk_dict(doc, d, 0);
 }
 
+/// Most glyph streams a [`GlyphPool`] examines in a document's existing fonts: a hostile file can
+/// list any number of glyph references, and seeding reads each one, so past this many it stops
+/// remembering (later fills then add their glyphs as new objects, as without a pool).
+const POOL_SEED_CAP: usize = GLYPHS_PER_FONT * 64;
+
+/// The Type 3 glyph procedures and `/ToUnicode` maps already stored in a document, found by their
+/// bytes, so that [`store_streams_pooled`] refers to an equal one instead of storing it again.
+/// Form appearances each build their own Type 3 fonts (codes, widths and content stay per
+/// appearance), but a cluster's glyph procedure is the same bytes in every one of them (#6867).
+///
+/// It holds references into one document and is meant to live for one call that writes into it:
+/// built from what the document holds now (see [`GlyphPool::remember_font`]), never kept across
+/// an undo, which replaces the document.
+#[derive(Default)]
+pub struct GlyphPool {
+    /// Streams by a hash of their encoded bytes. Several objects can share a hash.
+    by_hash: HashMap<u64, Vec<pdfcraft_cos::ObjRef>>,
+    /// Every object already looked at, remembered or not, so a reference shared by many fonts is
+    /// read once.
+    known: HashSet<pdfcraft_cos::ObjRef>,
+    /// How many existing objects seeding has read, bounded by [`POOL_SEED_CAP`].
+    examined: usize,
+}
+
+impl GlyphPool {
+    /// An empty pool.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// How many streams the pool knows.
+    pub fn len(&self) -> usize {
+        self.by_hash.values().map(Vec::len).sum()
+    }
+
+    /// Whether the pool knows no stream.
+    pub fn is_empty(&self) -> bool {
+        self.by_hash.is_empty()
+    }
+
+    /// Remember the glyph procedures (`/CharProcs` values) and `/ToUnicode` map of `font`, a font
+    /// dictionary already in `doc`, when it is a Type 3 font and they are streams of their own.
+    /// The font comes from the file and may be anything: what isn't a dictionary, a reference or
+    /// a readable stream is passed over, and past [`POOL_SEED_CAP`] objects read it stops.
+    pub fn remember_font(&mut self, doc: &Document, font: &Dict) {
+        if font.get(b"Subtype").and_then(Object::as_name) != Some(b"Type3".as_slice()) {
+            return;
+        }
+        if let Some(procs) = font.get(b"CharProcs").map(|p| doc.resolve(p)).and_then(|p| p.as_dict().cloned()) {
+            for (_, v) in procs.iter() {
+                if let Object::Ref(r) = v {
+                    self.remember_existing(doc, *r);
+                }
+            }
+        }
+        if let Some(Object::Ref(r)) = font.get(b"ToUnicode") {
+            self.remember_existing(doc, *r);
+        }
+    }
+
+    /// Remember `r` when it is a stream in `doc`, within the seeding bound.
+    fn remember_existing(&mut self, doc: &Document, r: pdfcraft_cos::ObjRef) {
+        if self.known.contains(&r) || self.examined >= POOL_SEED_CAP {
+            return;
+        }
+        self.examined += 1;
+        self.known.insert(r);
+        if let Object::Stream(s) = &*doc.get(r) {
+            self.by_hash.entry(stream_hash(s)).or_default().push(r);
+        }
+    }
+
+    /// The object in `doc` equal to `s`, if the pool knows one.
+    ///
+    /// Guard: the hash only narrows the search. Each candidate is read back from the document and
+    /// compared in full ([`same_stream`]) before it is used, because sharing a glyph procedure
+    /// that merely hashed the same would draw a different glyph in its place, silently.
+    fn find(&self, doc: &Document, hash: u64, s: &Stream) -> Option<pdfcraft_cos::ObjRef> {
+        let candidates = self.by_hash.get(&hash)?;
+        candidates.iter().copied().find(|r| matches!(&*doc.get(*r), Object::Stream(have) if same_stream(have, s)))
+    }
+
+    /// Remember `r`, a stream just stored whose [`stream_hash`] is `hash`.
+    fn insert(&mut self, r: pdfcraft_cos::ObjRef, hash: u64) {
+        self.known.insert(r);
+        self.by_hash.entry(hash).or_default().push(r);
+    }
+}
+
+/// A hash of a stream's encoded bytes, for [`GlyphPool`]'s index. The dictionary is left out (it
+/// holds reals, which don't hash, and a stream read from a file carries `/Length`); it is compared
+/// in [`same_stream`] instead.
+fn stream_hash(s: &Stream) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    s.raw[..].hash(&mut h);
+    h.finish()
+}
+
+/// Whether `a` and `b` are the same stream: the same encoded bytes and the same dictionary, apart
+/// from `/Length`. A stream read from a file has `/Length` (the reader sets it to the bytes it
+/// read) and a new one doesn't (the writer adds it), so with equal bytes it says nothing more.
+fn same_stream(a: &Stream, b: &Stream) -> bool {
+    let entries = |s: &Stream| s.dict.iter().filter(|(k, _)| k.as_slice() != b"Length").map(|(k, v)| (k.clone(), v.clone())).collect::<Vec<_>>();
+    a.raw[..] == b.raw[..] && entries(a) == entries(b)
+}
+
+/// [`store_streams`], with each glyph procedure and `/ToUnicode` map of a Type 3 font in `d`
+/// stored once per document: one equal to a stream `pool` knows becomes a reference to it, and
+/// one it doesn't know is added and remembered for the next. Fonts, codes, widths and content
+/// stay as they are; only `/CharProcs` and `/ToUnicode` values point at an equal object, so what
+/// is drawn doesn't change.
+///
+/// Guard: only those two kinds of stream are pooled. Nothing else refers to a glyph procedure or
+/// a font's ToUnicode map, nothing edits one in place, and what they mean is their bytes alone, so
+/// two fonts sharing one can't tell. Any other stream (an image, a form XObject, an appearance)
+/// can be edited, redacted or told apart by its object, and keeps an object of its own, moved in
+/// exactly as [`store_streams`] moves it.
+pub fn store_streams_pooled(doc: &mut Document, d: &mut Dict, pool: &mut GlyphPool) {
+    fn walk(doc: &mut Document, o: &mut Object, depth: usize, pool: &mut GlyphPool, pooled: bool) {
+        if depth > STREAM_DEPTH {
+            return;
+        }
+        match o {
+            Object::Stream(_) => {
+                let Object::Stream(mut s) = std::mem::replace(o, Object::Null) else { return };
+                walk_dict(doc, &mut s.dict, depth + 1, pool);
+                if pooled {
+                    let hash = stream_hash(&s);
+                    let r = match pool.find(doc, hash, &s) {
+                        Some(r) => r,
+                        None => {
+                            let r = doc.add(Object::Stream(s));
+                            pool.insert(r, hash);
+                            r
+                        }
+                    };
+                    *o = Object::Ref(r);
+                } else {
+                    *o = Object::Ref(doc.add(Object::Stream(s)));
+                }
+            }
+            Object::Dict(d) => walk_dict(doc, d, depth + 1, pool),
+            Object::Array(a) => a.iter_mut().for_each(|o| walk(doc, o, depth + 1, pool, false)),
+            _ => {}
+        }
+    }
+    fn walk_dict(doc: &mut Document, d: &mut Dict, depth: usize, pool: &mut GlyphPool) {
+        let type3 = d.get(b"Subtype").and_then(Object::as_name) == Some(b"Type3".as_slice());
+        let keys: Vec<Vec<u8>> =
+            d.iter().filter(|(_, v)| matches!(v, Object::Stream(_) | Object::Dict(_) | Object::Array(_))).map(|(k, _)| k.clone()).collect();
+        for k in keys {
+            let Some(v) = d.get_mut(&k) else { continue };
+            match (type3, k.as_slice(), v) {
+                (true, b"ToUnicode", v) if matches!(v, Object::Stream(_)) => walk(doc, v, depth, pool, true),
+                (true, b"CharProcs", Object::Dict(procs)) => {
+                    let names: Vec<Vec<u8>> = procs.iter().filter(|(_, v)| matches!(v, Object::Stream(_))).map(|(k, _)| k.clone()).collect();
+                    for name in names {
+                        if let Some(proc) = procs.get_mut(&name) {
+                            walk(doc, proc, depth + 1, pool, true);
+                        }
+                    }
+                }
+                (_, _, v) => walk(doc, v, depth, pool, false),
+            }
+        }
+    }
+    walk_dict(doc, d, 0, pool);
+}
+
 /// Format a number for content streams (up to three decimals).
 fn n(v: f64) -> String {
     let s = format!("{:.3}", if v.abs() < 5e-4 { 0.0 } else { v });
@@ -474,6 +743,121 @@ mod tests {
         assert!(procs.iter().count() == 2 && procs.iter().all(|(_, v)| matches!(v, Object::Ref(_))));
     }
 
+    /// #6867: appearance fonts built apart, with overlapping clusters, store each glyph procedure
+    /// once; codes, fonts and ToUnicode maps of different text stay their own.
+    #[test]
+    fn pooled_streams_share_equal_glyph_procedures_and_nothing_else() {
+        // A different outline per glyph, so different clusters draw different procedures.
+        let outline = |_: ShapedScript, id: u32| -> Result<GlyphOutline, GlyphError> { Ok(boxed(0.3 + f64::from(id) * 0.1)) };
+        let build = |clusters: &[ShapedCluster]| {
+            let mut fonts = Dict::new();
+            ShapedFonts::new(clusters, outline, &Dict::new(), &mut fonts, "PCTh", &mut |o| o).unwrap();
+            let mut res = Dict::new();
+            res.set(b"Font".to_vec(), Object::Dict(fonts));
+            res
+        };
+        let font = |res: &Dict| res.get(b"Font").and_then(Object::as_dict).and_then(|f| f.get(b"PCTh1")).and_then(Object::as_dict).cloned().unwrap();
+        let proc = |res: &Dict, code: &str| font(res).get(b"CharProcs").and_then(Object::as_dict).and_then(|p| p.reference(code.as_bytes()));
+        let to_unicode = |res: &Dict| font(res).reference(b"ToUnicode").unwrap();
+        let (nam, ko, kho) = (cluster("น้ำ", 1), cluster("ก", 2), cluster("ข", 3));
+        let first = [nam, ko.clone()];
+        let second = [ko, kho];
+
+        let mut doc = Document::new_empty();
+        let mut pool = GlyphPool::new();
+        let mut a = build(&first);
+        // Streams that aren't a Type 3 font's glyphs or map keep objects of their own, equal or not.
+        let image = Stream::flate(Dict::new(), b"same bytes");
+        let mut xobjects = Dict::new();
+        xobjects.set(b"I1".to_vec(), Object::Stream(image.clone()));
+        xobjects.set(b"I2".to_vec(), Object::Stream(image));
+        a.set(b"XObject".to_vec(), Object::Dict(xobjects));
+        store_streams_pooled(&mut doc, &mut a, &mut pool);
+        let mut b = build(&second);
+        store_streams_pooled(&mut doc, &mut b, &mut pool);
+        assert!(["g01", "g02"].iter().all(|&g| proc(&a, g).is_some() && proc(&b, g).is_some()), "every glyph is an object");
+        assert_eq!(proc(&a, "g02"), proc(&b, "g01"), "ก is one object, at code 2 in one font and 1 in the other");
+        assert_ne!(proc(&a, "g01"), proc(&b, "g02"));
+        assert_ne!(proc(&a, "g01"), proc(&a, "g02"));
+        assert_ne!(to_unicode(&a), to_unicode(&b), "different text, different maps");
+        let xobjects = a.get(b"XObject").and_then(Object::as_dict).unwrap();
+        assert_ne!(xobjects.reference(b"I1").unwrap(), xobjects.reference(b"I2").unwrap(), "only glyphs and maps are pooled");
+        // The same text again shares its map too, and adds no object at all.
+        let before = doc.scan_objects().count();
+        let mut c = build(&first);
+        store_streams_pooled(&mut doc, &mut c, &mut pool);
+        assert_eq!((to_unicode(&c), proc(&c, "g01"), proc(&c, "g02")), (to_unicode(&a), proc(&a, "g01"), proc(&a, "g02")));
+        assert_eq!(doc.scan_objects().count(), before);
+        // Codes, widths and the rest of the font are as plain storing leaves them.
+        let mut plain = build(&first);
+        store_streams(&mut doc, &mut plain);
+        let strip = |f: Dict| {
+            let kept = f.iter().filter(|(k, _)| !matches!(k.as_slice(), b"CharProcs" | b"ToUnicode"));
+            kept.map(|(k, v)| (k.clone(), v.clone())).collect::<Vec<_>>()
+        };
+        assert_eq!(strip(font(&c)), strip(font(&plain)));
+
+        // A pool seeded from the stored font finds the same objects.
+        let mut seeded = GlyphPool::new();
+        seeded.remember_font(&doc, &font(&a));
+        assert_eq!(seeded.len(), 3, "two glyphs and a map");
+        let mut b2 = build(&second);
+        store_streams_pooled(&mut doc, &mut b2, &mut seeded);
+        assert_eq!(proc(&b2, "g01"), proc(&a, "g02"));
+        let mut c2 = build(&first);
+        store_streams_pooled(&mut doc, &mut c2, &mut seeded);
+        assert_eq!(to_unicode(&c2), to_unicode(&a));
+    }
+
+    /// The pool's comparison: the bytes and the dictionary, apart from the `/Length` a stream read
+    /// from a file carries.
+    #[test]
+    fn pooled_streams_match_only_equal_streams() {
+        let s = Stream::flate(Dict::new(), b"0 0 m 1 1 l f\n");
+        let mut read = s.clone();
+        read.dict.set(b"Length".to_vec(), Object::Int(s.raw.len() as i64));
+        assert!(same_stream(&s, &read));
+        let mut other = s.clone();
+        other.dict.set(b"DecodeParms".to_vec(), Object::Dict(Dict::new()));
+        assert!(!same_stream(&s, &other), "same bytes, different dictionary");
+        assert!(!same_stream(&s, &Stream::flate(Dict::new(), b"0 0 m 2 2 l f\n")));
+        // A hash shared by a different stream is never taken for it.
+        let mut doc = Document::new_empty();
+        let r = doc.add(Object::Stream(other));
+        let mut pool = GlyphPool::new();
+        pool.insert(r, stream_hash(&s));
+        assert_eq!(pool.find(&doc, stream_hash(&s), &s), None);
+    }
+
+    /// A Type 3 font from a file may hold anything: what isn't a stream of its own is passed over.
+    #[test]
+    fn remembering_a_hostile_font_keeps_only_streams() {
+        let mut doc = Document::new_empty();
+        let not_stream = doc.add(Object::Int(7));
+        let glyph = doc.add(Object::Stream(Stream::flate(Dict::new(), b"500 0 d0\n")));
+        let mut font = Dict::new();
+        font.set(b"Subtype".to_vec(), Object::name("Type3"));
+        font.set(b"CharProcs".to_vec(), Object::Array(vec![Object::Ref(glyph)]));
+        font.set(b"ToUnicode".to_vec(), Object::Ref(not_stream));
+        let mut pool = GlyphPool::new();
+        pool.remember_font(&doc, &font);
+        assert!(pool.is_empty());
+        let mut procs = Dict::new();
+        procs.set(b"g01".to_vec(), Object::Ref(not_stream));
+        procs.set(b"g02".to_vec(), Object::Int(3));
+        procs.set(b"g03".to_vec(), Object::Ref(pdfcraft_cos::ObjRef::new(999, 0)));
+        procs.set(b"g04".to_vec(), Object::Ref(glyph));
+        let procs = doc.add(Object::Dict(procs));
+        font.set(b"CharProcs".to_vec(), Object::Ref(procs));
+        pool.remember_font(&doc, &font);
+        assert_eq!(pool.len(), 1, "the one stream, through an indirect /CharProcs");
+        // Not a Type 3 font: nothing.
+        font.set(b"Subtype".to_vec(), Object::name("Type1"));
+        let mut other = GlyphPool::new();
+        other.remember_font(&doc, &font);
+        assert!(other.is_empty());
+    }
+
     #[test]
     fn a_missing_glyph_names_its_cluster_and_writes_nothing() {
         let clusters = [cluster("ก", 2)];
@@ -485,6 +869,44 @@ mod tests {
         });
         assert!(matches!(made, Err((GlyphError::Missing, c)) if c.text == "ก"));
         assert_eq!((stored, fonts.iter().count()), (0, 0));
+    }
+
+    /// #6822: Greek, and the Latin and Cyrillic letters WinAnsiEncoding lacks, are shaped with the
+    /// bundled Inter face, which every build has; what WinAnsi holds stays the standard font's.
+    #[test]
+    fn letters_the_standard_fonts_lack_are_shaped_with_the_bundled_face() {
+        assert!(latin_fallback('Γ') && latin_fallback('ř') && latin_fallback('ж'));
+        assert!(!latin_fallback('é') && !latin_fallback('a') && !latin_fallback('\n') && !latin_fallback('北') && !latin_fallback('ก'));
+        // Text WinAnsi holds is one piece for the standard font, measured by it.
+        assert_eq!(fallback_pieces("Café (±)", false, true).unwrap(), [Piece::Latin("Café (±)".into())]);
+        assert_eq!(fallback_width("Café", 10.0, false, true, |s, size| s.chars().count() as f64 * size), 40.0);
+        // Greek words, with the standard font's space between them.
+        let pieces = fallback_pieces("Γειά σου", false, true).unwrap();
+        assert!(
+            matches!(&pieces[..], [Piece::Shaped(a), Piece::Latin(sp), Piece::Shaped(b)] if sp == " " && a.len() == 4 && b.len() == 3),
+            "{pieces:?}"
+        );
+        let text: String = clusters([pieces.as_slice()]).map(|c| c.text.as_str()).collect();
+        assert_eq!(text, "Γειάσου", "each character copies once");
+        assert!(clusters([pieces.as_slice()]).all(|c| c.script == ShapedScript::Latin && c.advance > 0.0));
+        assert!(fallback_width("Γειά", 10.0, false, true, |_, _| 0.0) > 0.0);
+        // Mixed: the Latin stays the standard font's.
+        let mixed = fallback_pieces("Name: Γειά ok", false, true).unwrap();
+        assert!(matches!(&mixed[..], [Piece::Latin(a), Piece::Shaped(_), Piece::Latin(b)] if a == "Name: " && b == " ok"), "{mixed:?}");
+        // A combining accent the standard font lacks takes its letter with it.
+        let accent = fallback_pieces("Cafe\u{301}!", false, true).unwrap();
+        assert!(
+            matches!(&accent[..], [Piece::Latin(a), Piece::Shaped(c), Piece::Latin(b)] if a == "Caf" && b == "!" && c.iter().map(|c| c.text.as_str()).collect::<String>() == "e\u{301}"),
+            "{accent:?}"
+        );
+        // Without `latin`, nothing changes.
+        assert_eq!(fallback_pieces("Γειά", false, false).unwrap(), [Piece::Latin("Γειά".into())]);
+        // The fonts are built under PCLa names, and a character no face here has stays `?`.
+        let mut fonts = Dict::new();
+        let (lines, shaped) = fallback_appearance_lines(&["Γειά 北".to_string()], false, true, &mut fonts);
+        assert!(fonts.iter().any(|(k, _)| k.starts_with(b"PCLa")));
+        assert!(matches!(&lines[0][..], [Piece::Shaped(c), Piece::Latin(rest)] if shaped.code(&c[0]).is_some() && rest == " 北"), "{lines:?}");
+        assert_eq!(first_undrawable_in_line(" 北"), Some('北'));
     }
 
     #[test]
