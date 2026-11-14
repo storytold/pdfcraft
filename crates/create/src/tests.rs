@@ -22,21 +22,15 @@ fn media(d: &Dict) -> Vec<f64> {
 
 /// A tiny PNG: 4×2 RGBA with one transparent pixel, 144 dpi.
 fn png_bytes(alpha: bool) -> Vec<u8> {
-    let mut out = Vec::new();
-    {
-        let mut enc = png::Encoder::new(&mut out, 4, 2);
-        enc.set_color(if alpha { png::ColorType::Rgba } else { png::ColorType::Rgb });
-        enc.set_depth(png::BitDepth::Eight);
-        enc.set_pixel_dims(Some(png::PixelDimensions { xppu: 5669, yppu: 5669, unit: png::Unit::Meter }));
-        let mut w = enc.write_header().unwrap();
-        let n = if alpha { 4 } else { 3 };
-        let mut data = vec![200u8; 8 * n];
-        if alpha {
-            data[3] = 0;
-        }
-        w.write_image_data(&data).unwrap();
+    let layout = if alpha { craft_image_codecs::ChannelLayout::Rgba } else { craft_image_codecs::ChannelLayout::Rgb };
+    let n = if alpha { 4 } else { 3 };
+    let mut data = vec![200u8; 8 * n];
+    if alpha {
+        data[3] = 0;
     }
-    out
+    let mut img = craft_image_codecs::Image::from_u8(4, 2, layout, data).unwrap();
+    img.meta.dpi = Some((144.0, 144.0));
+    craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap()
 }
 
 /// A minimal baseline JPEG header (SOI, JFIF at 300 dpi, SOF0 3×2 RGB, EOI). Only the headers
@@ -288,28 +282,43 @@ fn image_of(doc: &Document, page: usize) -> Dict {
 
 #[test]
 fn bmp_gif_and_multi_page_tiff_images() {
-    use image::{ImageEncoder, Rgba, RgbaImage};
     // BMP: 3×2 opaque colour.
-    let mut bmp = Vec::new();
-    image::codecs::bmp::BmpEncoder::new(&mut bmp).write_image(&[10, 20, 30].repeat(6), 3, 2, image::ExtendedColorType::Rgb8).unwrap();
+    let bmp_img = craft_image_codecs::Image::from_u8(3, 2, craft_image_codecs::ChannelLayout::Rgb, [10, 20, 30].repeat(6)).unwrap();
+    let bmp = craft_image_codecs::encode(&bmp_img, craft_image_codecs::Format::Bmp, &craft_image_codecs::EncodeOptions::default()).unwrap();
     // GIF: 2×2 with a transparent pixel.
-    let mut gif = Vec::new();
-    {
-        let mut img = RgbaImage::from_pixel(2, 2, Rgba([255, 0, 0, 255]));
-        img.put_pixel(0, 0, Rgba([0, 0, 0, 0]));
-        let mut enc = image::codecs::gif::GifEncoder::new(&mut gif);
-        enc.encode(img.as_raw(), 2, 2, image::ExtendedColorType::Rgba8).unwrap();
-    }
+    let gif_img = craft_image_codecs::Image::from_u8(
+        2,
+        2,
+        craft_image_codecs::ChannelLayout::Rgba,
+        vec![0, 0, 0, 0, 255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255],
+    )
+    .unwrap();
+    let gif = craft_image_codecs::encode(&gif_img, craft_image_codecs::Format::Gif, &craft_image_codecs::EncodeOptions::default()).unwrap();
     // TIFF: two 8-bit gray pages, one at 144 dpi and one of only black and white.
-    let mut tif = std::io::Cursor::new(Vec::new());
-    {
-        let mut enc = tiff::encoder::TiffEncoder::new(&mut tif).unwrap();
-        let mut im = enc.new_image::<tiff::encoder::colortype::Gray8>(4, 2).unwrap();
-        im.resolution(tiff::tags::ResolutionUnit::Inch, tiff::encoder::Rational { n: 144, d: 1 });
-        im.write_data(&[128; 8]).unwrap();
-        enc.write_image::<tiff::encoder::colortype::Gray8>(2, 2, &[0, 255, 255, 0]).unwrap();
-    }
-    let doc = from_images(&[("a.bmp".into(), bmp), ("b.gif".into(), gif), ("scan.tif".into(), tif.into_inner())]).unwrap();
+    let tif = {
+        let w = craft_tiff::TiffWriter::new(craft_tiff::ByteOrder::Little, false);
+        let mut p1 = craft_tiff::IfdBuilder::new()
+            .with(craft_tiff::tags::IMAGE_WIDTH, craft_tiff::Value::Long(vec![4]))
+            .with(craft_tiff::tags::IMAGE_LENGTH, craft_tiff::Value::Long(vec![2]))
+            .with(craft_tiff::tags::BITS_PER_SAMPLE, craft_tiff::Value::Short(vec![8]))
+            .with(craft_tiff::tags::COMPRESSION, craft_tiff::Value::Short(vec![1]))
+            .with(craft_tiff::tags::PHOTOMETRIC, craft_tiff::Value::Short(vec![1]))
+            .with(craft_tiff::tags::SAMPLES_PER_PIXEL, craft_tiff::Value::Short(vec![1]))
+            .with(craft_tiff::tags::RESOLUTION_UNIT, craft_tiff::Value::Short(vec![2]))
+            .with(craft_tiff::tags::X_RESOLUTION, craft_tiff::Value::Rational(vec![(144, 1)]))
+            .with(craft_tiff::tags::Y_RESOLUTION, craft_tiff::Value::Rational(vec![(144, 1)]));
+        p1.set_image(craft_tiff::ImageData::Strips { rows_per_strip: 2, strips: vec![vec![128; 8]] });
+        let mut p2 = craft_tiff::IfdBuilder::new()
+            .with(craft_tiff::tags::IMAGE_WIDTH, craft_tiff::Value::Long(vec![2]))
+            .with(craft_tiff::tags::IMAGE_LENGTH, craft_tiff::Value::Long(vec![2]))
+            .with(craft_tiff::tags::BITS_PER_SAMPLE, craft_tiff::Value::Short(vec![8]))
+            .with(craft_tiff::tags::COMPRESSION, craft_tiff::Value::Short(vec![1]))
+            .with(craft_tiff::tags::PHOTOMETRIC, craft_tiff::Value::Short(vec![1]))
+            .with(craft_tiff::tags::SAMPLES_PER_PIXEL, craft_tiff::Value::Short(vec![1]));
+        p2.set_image(craft_tiff::ImageData::Strips { rows_per_strip: 2, strips: vec![vec![0, 255, 255, 0]] });
+        w.write(&[p1, p2]).unwrap()
+    };
+    let doc = from_images(&[("a.bmp".into(), bmp), ("b.gif".into(), gif), ("scan.tif".into(), tif)]).unwrap();
     let doc = reopen(&doc);
     assert_eq!(pages(&doc).len(), 4, "one page per BMP and GIF, two for the TIFF");
     assert_eq!(media(&pages(&doc)[0]), [0.0, 0.0, 3.0, 2.0]);
@@ -324,10 +333,9 @@ fn bmp_gif_and_multi_page_tiff_images() {
 /// the intact file, not shifted by the header bytes.
 #[test]
 fn a_bmp_with_a_zero_pixel_offset_is_placed_like_the_intact_file() {
-    use image::ImageEncoder;
-    let mut bmp = Vec::new();
     let pixels: Vec<u8> = (0..18).map(|i| i * 13).collect();
-    image::codecs::bmp::BmpEncoder::new(&mut bmp).write_image(&pixels, 3, 2, image::ExtendedColorType::Rgb8).unwrap();
+    let bmp_img = craft_image_codecs::Image::from_u8(3, 2, craft_image_codecs::ChannelLayout::Rgb, pixels).unwrap();
+    let bmp = craft_image_codecs::encode(&bmp_img, craft_image_codecs::Format::Bmp, &craft_image_codecs::EncodeOptions::default()).unwrap();
     let mut zero = bmp.clone();
     zero[10..14].copy_from_slice(&0u32.to_le_bytes());
     let samples = |data: Vec<u8>| {
@@ -417,18 +425,39 @@ fn a_small_png_claiming_a_large_frame_is_refused_before_zero_filling() {
 }
 
 /// Likewise a PNG: the png crate's limits don't cover the frame buffer, which its header sizes
+fn png_crc32(data: &[u8]) -> u32 {
+    let mut crc = 0xFFFF_FFFFu32;
+    for &b in data {
+        crc ^= u32::from(b);
+        for _ in 0..8 {
+            let mask = (crc & 1).wrapping_neg();
+            crc = (crc >> 1) ^ (0xEDB8_8320 & mask);
+        }
+    }
+    !crc
+}
+
+fn push_png_chunk(out: &mut Vec<u8>, kind: [u8; 4], data: &[u8]) {
+    out.extend_from_slice(&(data.len() as u32).to_be_bytes());
+    let start = out.len();
+    out.extend_from_slice(&kind);
+    out.extend_from_slice(data);
+    let crc = png_crc32(&out[start..]);
+    out.extend_from_slice(&crc.to_be_bytes());
+}
+
 /// (60000x60000 RGBA is 14.4 GB). Refused before anything is allocated, not after.
 #[test]
 fn a_png_claiming_enormous_dimensions_is_refused() {
-    let mut png = Vec::new();
-    {
-        let mut enc = png::Encoder::new(&mut png, 60_000, 60_000);
-        enc.set_color(png::ColorType::Rgba);
-        enc.set_depth(png::BitDepth::Eight);
-        let mut w = enc.write_header().unwrap();
-        // A zlib stream holding one zero byte: far too little data, but a well-formed start.
-        w.write_chunk(png::chunk::IDAT, &[0x78, 0x01, 0x01, 0x01, 0x00, 0xFE, 0xFF, 0x00, 0x00, 0x01, 0x00, 0x01]).unwrap();
-    }
+    let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+    let mut ihdr = Vec::with_capacity(13);
+    ihdr.extend_from_slice(&60_000u32.to_be_bytes());
+    ihdr.extend_from_slice(&60_000u32.to_be_bytes());
+    ihdr.extend_from_slice(&[8, 6, 0, 0, 0]);
+    push_png_chunk(&mut png, *b"IHDR", &ihdr);
+    // A zlib stream holding one zero byte: far too little data, but a well-formed start.
+    push_png_chunk(&mut png, *b"IDAT", &[0x78, 0x01, 0x01, 0x01, 0x00, 0xFE, 0xFF, 0x00, 0x00, 0x01, 0x00, 0x01]);
+    push_png_chunk(&mut png, *b"IEND", &[]);
     match from_images(&[("huge.png".into(), png)]) {
         Err(CreateError::Image(_, m)) => assert!(m.contains("too large"), "{m}"),
         other => panic!("expected a refusal, got {:?}", other.map(|_| ())),
@@ -446,11 +475,10 @@ fn images_export_as_jpeg_unchanged_and_others_as_png() {
     assert_eq!(kinds, [(0, "png", 4, 2), (1, "jpg", 3, 2), (2, "png", 4, 2)]);
     assert_eq!(out.images[1].data, jpeg_bytes(), "JPEG data is written as is");
     // The PNG round-trips the pixels, with the soft mask as alpha.
-    let dec = png::Decoder::new(std::io::Cursor::new(out.images[0].data.clone()));
-    let mut r = dec.read_info().unwrap();
-    let mut buf = vec![0; r.output_buffer_size().unwrap()];
-    let info = r.next_frame(&mut buf).unwrap();
-    assert_eq!(info.color_type, png::ColorType::Rgba);
+    let img = craft_image_codecs::decode_as_with(craft_image_codecs::Format::Png, &out.images[0].data, &craft_image_codecs::DecodeOptions::default())
+        .unwrap();
+    assert_eq!(img.layout(), craft_image_codecs::ChannelLayout::Rgba);
+    let buf = img.as_u8().unwrap();
     assert_eq!(&buf[..8], &[200, 200, 200, 0, 200, 200, 200, 200]);
     // Pages filter; small images can be left out.
     assert_eq!(extract_images(&doc, &[2], 0).images.len(), 1);
@@ -482,10 +510,9 @@ fn indexed_and_one_bit_images_decode() {
     );
     doc.set(r, Object::Stream(Stream::from_raw(d, vec![0b0101_0000])));
     let out = extract_images(&doc, &[0], 0);
-    let dec = png::Decoder::new(std::io::Cursor::new(out.images[0].data.clone()));
-    let mut rd = dec.read_info().unwrap();
-    let mut buf = vec![0; rd.output_buffer_size().unwrap()];
-    rd.next_frame(&mut buf).unwrap();
+    let img = craft_image_codecs::decode_as_with(craft_image_codecs::Format::Png, &out.images[0].data, &craft_image_codecs::DecodeOptions::default())
+        .unwrap();
+    let buf = img.as_u8().unwrap();
     assert_eq!(&buf[..12], &[255, 0, 0, 0, 0, 255, 255, 0, 0, 0, 0, 255]);
 }
 
@@ -570,14 +597,10 @@ fn source_kind_tells_pdfs_images_and_text_apart() {
 /// BigTIFF (version 43, used for large scans) is detected and converted like a classic TIFF.
 #[test]
 fn bigtiff_images_become_pages() {
-    let mut tif = std::io::Cursor::new(Vec::new());
-    {
-        let mut enc = tiff::encoder::TiffEncoder::new_big(&mut tif).unwrap();
-        let mut im = enc.new_image::<tiff::encoder::colortype::Gray8>(4, 2).unwrap();
-        im.resolution(tiff::tags::ResolutionUnit::Inch, tiff::encoder::Rational { n: 144, d: 1 });
-        im.write_data(&[128; 8]).unwrap();
-    }
-    let tif = tif.into_inner();
+    let mut img = craft_image_codecs::Image::from_u8(4, 2, craft_image_codecs::ChannelLayout::Gray, vec![128; 8]).unwrap();
+    img.meta.dpi = Some((144.0, 144.0));
+    let opts = craft_image_codecs::EncodeOptions { tiff_bigtiff: true, ..Default::default() };
+    let tif = craft_image_codecs::encode(&img, craft_image_codecs::Format::Tiff, &opts).unwrap();
     assert!(tif.starts_with(b"II+\0"), "the encoder wrote a BigTIFF");
     assert_eq!(source_kind("scan.tif", &tif), Some(SourceKind::Image));
     let doc = reopen(&from_images(&[("scan.tif".into(), tif)]).unwrap());
@@ -768,15 +791,9 @@ fn embedded_icc_profiles_tag_the_image_colour_space() {
     let jpeg = cmyk_jpeg_bytes(&cmyk);
     let rgb = icc_profile(b"RGB ");
     let png = {
-        let mut out = Vec::new();
-        let mut info = png::Info::with_size(2, 1);
-        info.color_type = png::ColorType::Rgb;
-        info.bit_depth = png::BitDepth::Eight;
-        info.icc_profile = Some(rgb.clone().into());
-        let mut w = png::Encoder::with_info(&mut out, info).unwrap().write_header().unwrap();
-        w.write_image_data(&[10, 20, 30, 40, 50, 60]).unwrap();
-        w.finish().unwrap();
-        out
+        let mut img = craft_image_codecs::Image::from_u8(2, 1, craft_image_codecs::ChannelLayout::Rgb, vec![10, 20, 30, 40, 50, 60]).unwrap();
+        img.icc = Some(rgb.clone());
+        craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap()
     };
     let doc = reopen(&from_images(&[("a.jpg".into(), jpeg.clone()), ("b.jpg".into(), jpeg.clone()), ("c.png".into(), png)]).unwrap());
     let (n, alt, data, first) = icc_of(&doc, &image_of(&doc, 0)).expect("the CMYK JPEG is ICC-tagged");
@@ -845,20 +862,9 @@ fn exported_rgba(doc: &Document) -> (&'static str, Vec<u8>) {
     let out = extract_images(doc, &[0], 0);
     assert!(out.skipped.is_empty(), "{:?}", out.skipped);
     let img = &out.images[0];
-    if img.extension == "jpg" {
-        return ("jpg", image::load_from_memory(&img.data).unwrap().into_rgba8().into_raw());
-    }
-    let dec = png::Decoder::new(std::io::Cursor::new(img.data.clone()));
-    let mut r = dec.read_info().unwrap();
-    let mut buf = vec![0; r.output_buffer_size().unwrap()];
-    let info = r.next_frame(&mut buf).unwrap();
-    buf.truncate(info.buffer_size());
-    let rgba = match info.color_type {
-        png::ColorType::Rgba => buf,
-        png::ColorType::Rgb => buf.as_chunks::<3>().0.iter().flat_map(|c| [c[0], c[1], c[2], 255]).collect(),
-        other => panic!("unexpected {other:?}"),
-    };
-    ("png", rgba)
+    let ext = if img.extension == "jpg" { "jpg" } else { "png" };
+    let decoded = craft_image_codecs::decode(&img.data).unwrap().to_rgba8();
+    (ext, decoded)
 }
 
 fn alphas(rgba: &[u8]) -> Vec<u8> {
@@ -867,9 +873,9 @@ fn alphas(rgba: &[u8]) -> Vec<u8> {
 
 /// A 4×2 grey JPEG (mid grey).
 fn real_jpeg() -> Vec<u8> {
-    let mut out = Vec::new();
-    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 95).encode(&[128u8; 8], 4, 2, image::ExtendedColorType::L8).unwrap();
-    out
+    let img = craft_image_codecs::Image::from_u8(4, 2, craft_image_codecs::ChannelLayout::Gray, vec![128u8; 8]).unwrap();
+    let opts = craft_image_codecs::EncodeOptions { jpeg_quality: 95, ..Default::default() };
+    craft_image_codecs::encode(&img, craft_image_codecs::Format::Jpeg, &opts).unwrap()
 }
 
 #[test]
@@ -1106,12 +1112,8 @@ fn indexed_image_export_clamps_samples_to_hival() {
 }
 
 fn exported_png_pixels(bytes: &[u8]) -> Vec<u8> {
-    let decoder = png::Decoder::new(std::io::Cursor::new(bytes));
-    let mut reader = decoder.read_info().unwrap();
-    let mut pixels = vec![0; reader.output_buffer_size().unwrap()];
-    let info = reader.next_frame(&mut pixels).unwrap();
-    pixels.truncate(info.buffer_size());
-    pixels
+    let img = craft_image_codecs::decode_as_with(craft_image_codecs::Format::Png, bytes, &craft_image_codecs::DecodeOptions::default()).unwrap();
+    img.as_u8().unwrap().to_vec()
 }
 
 fn indexed_export_fixture(
@@ -1483,14 +1485,17 @@ fn cmyk_and_ycck_jpegs_export_in_the_colours_the_page_shows() {
 /// A 60 x 20 JPEG at `dpi` x 72 dpi, tagged with EXIF `orientation` (6: shown turned 90 degrees
 /// clockwise).
 pub(crate) fn phone_jpeg(orientation: u8, dpi: u16) -> Vec<u8> {
-    use image::codecs::jpeg::{JpegEncoder, PixelDensity, PixelDensityUnit};
-    let mut jpeg = Vec::new();
-    let mut encoder = JpegEncoder::new(&mut jpeg);
-    encoder.set_pixel_density(PixelDensity { density: (dpi, 72), unit: PixelDensityUnit::Inches });
-    encoder.encode_image(&image::RgbImage::from_pixel(60, 20, image::Rgb([20, 20, 20]))).unwrap();
+    let rgb = craft_image_codecs::Image::from_u8(60, 20, craft_image_codecs::ChannelLayout::Rgb, vec![20; 60 * 20 * 3]).unwrap();
+    let jpeg = craft_image_codecs::encode(&rgb, craft_image_codecs::Format::Jpeg, &craft_image_codecs::EncodeOptions::default()).unwrap();
     let mut exif = b"Exif\0\0II\x2a\0\x08\0\0\0\x01\0\x12\x01\x03\0\x01\0\0\0".to_vec();
     exif.extend_from_slice(&[orientation, 0, 0, 0, 0, 0, 0, 0]);
     let mut out = jpeg[..2].to_vec();
+    // JFIF APP0 with pixel density in inches (`dpi` x 72 dpi).
+    out.extend_from_slice(&[0xff, 0xe0, 0x00, 0x10]);
+    out.extend_from_slice(b"JFIF\0\x01\x01\x01");
+    out.extend_from_slice(&dpi.to_be_bytes());
+    out.extend_from_slice(&72u16.to_be_bytes());
+    out.extend_from_slice(&[0, 0]);
     out.extend_from_slice(&[0xff, 0xe1]);
     out.extend_from_slice(&((exif.len() + 2) as u16).to_be_bytes());
     out.extend_from_slice(&exif);
@@ -1573,15 +1578,34 @@ fn a_one_bit_tiff_is_stored_as_group_4() {
 
 /// A TIFF of `pages` 64×64 gray pages, then (with `unreadable`) one whose samples Create can't read.
 fn gray_tiff(pages: usize, unreadable: bool) -> Vec<u8> {
-    let mut tif = std::io::Cursor::new(Vec::new());
-    let mut enc = tiff::encoder::TiffEncoder::new(&mut tif).unwrap();
+    let mut ifds = Vec::with_capacity(pages + usize::from(unreadable));
     for _ in 0..pages {
-        enc.write_image::<tiff::encoder::colortype::Gray8>(64, 64, &[128; 64 * 64]).unwrap();
+        let mut ifd = craft_tiff::IfdBuilder::new()
+            .with(craft_tiff::tags::IMAGE_WIDTH, craft_tiff::Value::Long(vec![64]))
+            .with(craft_tiff::tags::IMAGE_LENGTH, craft_tiff::Value::Long(vec![64]))
+            .with(craft_tiff::tags::BITS_PER_SAMPLE, craft_tiff::Value::Short(vec![8]))
+            .with(craft_tiff::tags::COMPRESSION, craft_tiff::Value::Short(vec![1]))
+            .with(craft_tiff::tags::PHOTOMETRIC, craft_tiff::Value::Short(vec![1]))
+            .with(craft_tiff::tags::SAMPLES_PER_PIXEL, craft_tiff::Value::Short(vec![1]));
+        ifd.set_image(craft_tiff::ImageData::Strips { rows_per_strip: 64, strips: vec![vec![128; 64 * 64]] });
+        ifds.push(ifd);
     }
     if unreadable {
-        enc.write_image::<tiff::encoder::colortype::RGB32Float>(1, 1, &[0.5; 3]).unwrap();
+        // 32-bit IEEE float RGB (SampleFormat = 3), unreadable by Create.
+        let mut ifd = craft_tiff::IfdBuilder::new()
+            .with(craft_tiff::tags::IMAGE_WIDTH, craft_tiff::Value::Long(vec![1]))
+            .with(craft_tiff::tags::IMAGE_LENGTH, craft_tiff::Value::Long(vec![1]))
+            .with(craft_tiff::tags::BITS_PER_SAMPLE, craft_tiff::Value::Short(vec![32, 32, 32]))
+            .with(craft_tiff::tags::COMPRESSION, craft_tiff::Value::Short(vec![1]))
+            .with(craft_tiff::tags::PHOTOMETRIC, craft_tiff::Value::Short(vec![2]))
+            .with(craft_tiff::tags::SAMPLES_PER_PIXEL, craft_tiff::Value::Short(vec![3]))
+            .with(craft_tiff::tags::SAMPLE_FORMAT, craft_tiff::Value::Short(vec![3, 3, 3]));
+        let f = 0.5f32.to_le_bytes();
+        let px: Vec<u8> = [f, f, f].concat();
+        ifd.set_image(craft_tiff::ImageData::Strips { rows_per_strip: 1, strips: vec![px] });
+        ifds.push(ifd);
     }
-    tif.into_inner()
+    craft_tiff::TiffWriter::new(craft_tiff::ByteOrder::Little, false).write(&ifds).unwrap()
 }
 
 /// Many small IFDs can each decode to a large page: the pages a TIFF keeps in memory together
@@ -1615,18 +1639,79 @@ fn a_tiny_gif_on_a_huge_screen_is_refused() {
     assert_eq!(media(&pages(&doc)[0]), [0.0, 0.0, 40.0, 30.0]);
 }
 
-/// A PNG of `w` × `h` samples `data` in `color` at `depth`, with a palette or an ICC profile.
-fn png_of(w: u32, h: u32, color: png::ColorType, depth: png::BitDepth, data: &[u8], palette: Option<Vec<u8>>, icc: Option<Vec<u8>>) -> Vec<u8> {
-    let mut out = Vec::new();
-    {
-        let mut info = png::Info::with_size(w, h);
-        info.color_type = color;
-        info.bit_depth = depth;
-        info.palette = palette.map(Into::into);
-        info.icc_profile = icc.map(Into::into);
-        let mut writer = png::Encoder::with_info(&mut out, info).unwrap().write_header().unwrap();
-        writer.write_image_data(data).unwrap();
+#[derive(Clone, Copy)]
+enum TestPngColor {
+    Grayscale,
+    Rgb,
+    Indexed,
+}
+
+#[derive(Clone, Copy)]
+enum TestPngDepth {
+    One,
+    Eight,
+}
+
+fn zlib_uncompressed(data: &[u8]) -> Vec<u8> {
+    let mut out = vec![0x78, 0x01];
+    let chunks: Vec<&[u8]> = if data.is_empty() { vec![&[][..]] } else { data.chunks(65_535).collect() };
+    for (i, chunk) in chunks.iter().enumerate() {
+        let last = u8::from(i + 1 == chunks.len());
+        let len = chunk.len() as u16;
+        out.push(last);
+        out.extend_from_slice(&len.to_le_bytes());
+        out.extend_from_slice(&(!len).to_le_bytes());
+        out.extend_from_slice(chunk);
     }
+    let (mut s1, mut s2) = (1u32, 0u32);
+    for &b in data {
+        s1 = (s1 + u32::from(b)) % 65_521;
+        s2 = (s2 + s1) % 65_521;
+    }
+    out.extend_from_slice(&((s2 << 16) | s1).to_be_bytes());
+    out
+}
+
+/// A PNG of `w` × `h` samples `data` in `color` at `depth`, with a palette or an ICC profile.
+fn png_of(w: u32, h: u32, color: TestPngColor, depth: TestPngDepth, data: &[u8], palette: Option<Vec<u8>>, icc: Option<Vec<u8>>) -> Vec<u8> {
+    let color_byte = match color {
+        TestPngColor::Grayscale => 0u8,
+        TestPngColor::Rgb => 2,
+        TestPngColor::Indexed => 3,
+    };
+    let bit_depth = match depth {
+        TestPngDepth::One => 1u8,
+        TestPngDepth::Eight => 8,
+    };
+    let row_bytes = match (color, depth) {
+        (TestPngColor::Grayscale | TestPngColor::Indexed, TestPngDepth::One) => (w as usize).div_ceil(8),
+        (TestPngColor::Grayscale | TestPngColor::Indexed, TestPngDepth::Eight) => w as usize,
+        (TestPngColor::Rgb, TestPngDepth::Eight) => w as usize * 3,
+        (TestPngColor::Rgb, TestPngDepth::One) => unreachable!(),
+    };
+    let mut raw = Vec::with_capacity((1 + row_bytes) * h as usize);
+    for row in data.chunks_exact(row_bytes) {
+        raw.push(0); // filter type None
+        raw.extend_from_slice(row);
+    }
+    let idat = zlib_uncompressed(&raw);
+    let mut out = b"\x89PNG\r\n\x1a\n".to_vec();
+    let mut ihdr = Vec::with_capacity(13);
+    ihdr.extend_from_slice(&w.to_be_bytes());
+    ihdr.extend_from_slice(&h.to_be_bytes());
+    ihdr.extend_from_slice(&[bit_depth, color_byte, 0, 0, 0]);
+    push_png_chunk(&mut out, *b"IHDR", &ihdr);
+    if let Some(icc) = icc {
+        let compressed = zlib_uncompressed(&icc);
+        let mut iccp = b"test\0\0".to_vec();
+        iccp.extend_from_slice(&compressed);
+        push_png_chunk(&mut out, *b"iCCP", &iccp);
+    }
+    if let Some(palette) = palette {
+        push_png_chunk(&mut out, *b"PLTE", &palette);
+    }
+    push_png_chunk(&mut out, *b"IDAT", &idat);
+    push_png_chunk(&mut out, *b"IEND", &[]);
     out
 }
 
@@ -1735,7 +1820,8 @@ fn image_stream(doc: &Document, page: usize) -> Stream {
 /// stored as before.
 #[test]
 fn black_and_white_images_are_stored_at_one_bit() {
-    use png::{BitDepth, ColorType};
+    use TestPngColor as ColorType;
+    use TestPngDepth as BitDepth;
     let (w, h) = (1200u32, 240u32);
     let bits = strokes(w, h);
     let stride = (w as usize).div_ceil(8);
@@ -1785,11 +1871,9 @@ fn black_and_white_images_are_stored_at_one_bit() {
 
 /// The pixels of an exported PNG (RGB), as true for white.
 fn exported_white(png_data: &[u8]) -> Vec<bool> {
-    let mut reader = png::Decoder::new(std::io::Cursor::new(png_data.to_vec())).read_info().unwrap();
-    let mut buf = vec![0; reader.output_buffer_size().unwrap()];
-    let frame = reader.next_frame(&mut buf).unwrap();
-    assert_eq!(frame.color_type, png::ColorType::Rgb);
-    buf[..frame.buffer_size()].as_chunks::<3>().0.iter().map(|p| *p == [255, 255, 255]).collect()
+    let img = craft_image_codecs::decode_as_with(craft_image_codecs::Format::Png, png_data, &craft_image_codecs::DecodeOptions::default()).unwrap();
+    assert_eq!(img.layout(), craft_image_codecs::ChannelLayout::Rgb);
+    img.as_u8().unwrap().as_chunks::<3>().0.iter().map(|p| *p == [255, 255, 255]).collect()
 }
 
 /// Export ▸ Images reads CCITT fax images: a page created from a 1-bit PNG (Group 4 now) exports as
@@ -1799,7 +1883,8 @@ fn exported_white(png_data: &[u8]) -> Vec<bool> {
 /// its width is skipped, not misread.
 #[test]
 fn ccitt_fax_images_export_as_their_picture() {
-    use png::{BitDepth, ColorType};
+    use TestPngColor as ColorType;
+    use TestPngDepth as BitDepth;
     let (w, h) = (1200u32, 240u32);
     let bits = strokes(w, h);
     let stride = (w as usize).div_ceil(8);
@@ -1994,7 +2079,8 @@ enum Fill {
 /// the same with their `/DecodeParms` given by reference as direct.
 #[test]
 fn group_3_ccitt_masks_and_parameters_by_reference_export_as_their_picture() {
-    use png::{BitDepth, ColorType};
+    use TestPngColor as ColorType;
+    use TestPngDepth as BitDepth;
     let (w, h) = (64u32, 16u32);
     let rows: Vec<&[u32]> = (0..h).map(|y| if y % 2 == 0 { &[32u32, 32][..] } else { &[16, 16, 32][..] }).collect();
     let mut bits = vec![0u8; 8 * h as usize];
@@ -2538,9 +2624,8 @@ fn flate_images_past_the_exports_allowance_are_left_out_with_the_reason() {
     assert!(refused.contains("more image decoding than"), "{refused}");
     assert_eq!(budget.refused(), 1);
 
-    let jpeg = image::RgbImage::from_pixel(2, 2, image::Rgb([9, 9, 9]));
-    let mut bytes = Vec::new();
-    jpeg.write_to(&mut std::io::Cursor::new(&mut bytes), image::ImageFormat::Jpeg).unwrap();
+    let jpeg_img = craft_image_codecs::Image::from_u8(2, 2, craft_image_codecs::ChannelLayout::Rgb, vec![9; 2 * 2 * 3]).unwrap();
+    let bytes = craft_image_codecs::encode(&jpeg_img, craft_image_codecs::Format::Jpeg, &craft_image_codecs::EncodeOptions::default()).unwrap();
     let jpeg = doc.add(Object::Stream(image("DCTDecode", bytes)));
     assert!(crate::extract::image_file_within(&doc, jpeg, &mut budget).is_ok(), "nothing charged");
     assert_eq!(budget.refused(), 1);
@@ -2587,8 +2672,12 @@ fn a_jpegs_lookup_table_is_paid_for_once() {
     use pdfcraft_cos::{Dict, Document, ImageBudget, Object, PdfString, Stream};
     let table = [255, 0, 0, 0, 0, 255];
     let lookup = Stream::flate(Dict::new(), &table);
-    let mut jpeg = Vec::new();
-    image::GrayImage::from_pixel(2, 1, image::Luma([1])).write_to(&mut std::io::Cursor::new(&mut jpeg), image::ImageFormat::Jpeg).unwrap();
+    let jpeg = craft_image_codecs::encode(
+        &craft_image_codecs::Image::from_u8(2, 1, craft_image_codecs::ChannelLayout::Gray, vec![1, 1]).unwrap(),
+        craft_image_codecs::Format::Jpeg,
+        &craft_image_codecs::EncodeOptions::default(),
+    )
+    .unwrap();
     // `given`: None leaves the colour space out, Some(true) gives the table as a stream.
     let exported = |given: Option<bool>, work: u64| {
         let mut doc = Document::new_empty();
@@ -2644,8 +2733,12 @@ fn a_jpegs_lookup_table_is_paid_for_once() {
 #[test]
 fn a_jpeg_that_has_to_be_decoded_shares_the_allowance() {
     use pdfcraft_cos::{Dict, Document, ImageBudget, Object, Stream};
-    let mut jpeg = Vec::new();
-    image::RgbImage::from_pixel(4, 4, image::Rgb([9, 9, 9])).write_to(&mut std::io::Cursor::new(&mut jpeg), image::ImageFormat::Jpeg).unwrap();
+    let jpeg = craft_image_codecs::encode(
+        &craft_image_codecs::Image::from_u8(4, 4, craft_image_codecs::ChannelLayout::Rgb, vec![9; 4 * 4 * 3]).unwrap(),
+        craft_image_codecs::Format::Jpeg,
+        &craft_image_codecs::EncodeOptions::default(),
+    )
+    .unwrap();
     let image_dict = |extra: Option<(&[u8], Object)>| {
         let mut d = Dict::new();
         d.set(b"Subtype".to_vec(), Object::name("Image"));
@@ -2690,8 +2783,12 @@ fn a_jpeg_that_has_to_be_decoded_shares_the_allowance() {
 #[test]
 fn a_jpeg_mask_pays_for_its_samples() {
     use pdfcraft_cos::{Dict, Document, ImageBudget, Object, Stream};
-    let mut jpeg = Vec::new();
-    image::GrayImage::from_pixel(4, 4, image::Luma([90])).write_to(&mut std::io::Cursor::new(&mut jpeg), image::ImageFormat::Jpeg).unwrap();
+    let jpeg = craft_image_codecs::encode(
+        &craft_image_codecs::Image::from_u8(4, 4, craft_image_codecs::ChannelLayout::Gray, vec![90; 4 * 4]).unwrap(),
+        craft_image_codecs::Format::Jpeg,
+        &craft_image_codecs::EncodeOptions::default(),
+    )
+    .unwrap();
     let mut mask = Dict::new();
     mask.set(b"Subtype".to_vec(), Object::name("Image"));
     mask.set(b"Width".to_vec(), Object::Int(4));
@@ -2726,8 +2823,12 @@ fn a_jpeg_mask_pays_for_its_samples() {
 #[test]
 fn a_jpeg_larger_than_its_dictionary_says_isnt_decoded() {
     use pdfcraft_cos::{Dict, Document, ImageBudget, Object, Stream};
-    let mut jpeg = Vec::new();
-    image::RgbImage::from_pixel(4, 4, image::Rgb([9, 9, 9])).write_to(&mut std::io::Cursor::new(&mut jpeg), image::ImageFormat::Jpeg).unwrap();
+    let jpeg = craft_image_codecs::encode(
+        &craft_image_codecs::Image::from_u8(4, 4, craft_image_codecs::ChannelLayout::Rgb, vec![9; 4 * 4 * 3]).unwrap(),
+        craft_image_codecs::Format::Jpeg,
+        &craft_image_codecs::EncodeOptions::default(),
+    )
+    .unwrap();
     // A colour key means decoding it, to find the pixels it hides.
     let keyed = |side: i64| {
         let mut d = Dict::new();
@@ -2787,8 +2888,12 @@ fn an_image_whose_jbig2_mask_is_past_the_allowance_is_left_out() {
     let mut doc = Document::new_empty();
     let mask = doc.add(Object::Stream(Stream::from_raw(mask, pdfcraft_filters::encode_jbig2_generic(&[0xFF; 4], 16, 2).unwrap())));
     // A JPEG, read for nothing until its mask is, so only the mask can be what stops it.
-    let mut jpeg = Vec::new();
-    image::RgbImage::from_pixel(1, 1, image::Rgb([9, 9, 9])).write_to(&mut std::io::Cursor::new(&mut jpeg), image::ImageFormat::Jpeg).unwrap();
+    let jpeg = craft_image_codecs::encode(
+        &craft_image_codecs::Image::from_u8(1, 1, craft_image_codecs::ChannelLayout::Rgb, vec![9, 9, 9]).unwrap(),
+        craft_image_codecs::Format::Jpeg,
+        &craft_image_codecs::EncodeOptions::default(),
+    )
+    .unwrap();
     let mut image = Dict::new();
     image.set(b"Subtype".to_vec(), Object::name("Image"));
     image.set(b"Width".to_vec(), Object::Int(1));
@@ -2886,11 +2991,11 @@ fn a_mask_of_other_proportions_than_its_image_is_scaled_without_the_memory_of_bo
         let image = doc.add(Object::Stream(image));
         let (name, png) = crate::image_file(&doc, image).unwrap_or_else(|e| panic!("{mask_w} × {mask_h} on {w} × {h}: {e}"));
         assert_eq!(name, "png");
-        let mut reader = ::png::Decoder::new(std::io::Cursor::new(&png)).read_info().unwrap();
-        let mut rgba = vec![0; reader.output_buffer_size().unwrap()];
-        let info = reader.next_frame(&mut rgba).unwrap();
-        assert_eq!((info.width as usize, info.height as usize, info.color_type), (w, h, ::png::ColorType::Rgba));
-        assert!(rgba.as_chunks::<4>().0.iter().all(|p| p[3].abs_diff(0x80) <= 1), "{mask_w} × {mask_h} on {w} × {h}");
+        let decoded =
+            craft_image_codecs::decode_as_with(craft_image_codecs::Format::Png, &png, &craft_image_codecs::DecodeOptions::default()).unwrap();
+        assert_eq!((decoded.width() as usize, decoded.height() as usize, decoded.layout()), (w, h, craft_image_codecs::ChannelLayout::Rgba));
+        let rgba = decoded.as_u8().unwrap();
+        assert!(rgba.as_chunks::<4>().0.iter().all(|p| p[3].abs_diff(0x80u8) <= 1), "{mask_w} × {mask_h} on {w} × {h}");
     }
 }
 

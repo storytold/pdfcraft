@@ -126,43 +126,20 @@ fn header_size(data: &[u8]) -> Option<(u32, u32)> {
             (w > 0 && h > 0).then_some((w, h))
         }
         // The decoders read only the headers (TIFF: the first IFD) until asked for pixels.
-        Kind::Bmp => reader(&bmp_with_pixel_offset(data), image::ImageFormat::Bmp).into_dimensions().ok().filter(|&(w, h)| w > 0 && h > 0),
+        Kind::Bmp => craft_image_codecs::probe_size(&bmp_with_pixel_offset(data)).ok().filter(|&(w, h)| w > 0 && h > 0),
         Kind::Tiff => {
-            use image::{ImageDecoder, metadata::Orientation};
-            let mut decoder = reader(data, image::ImageFormat::Tiff).into_decoder().ok()?;
-            let (w, h) = decoder.dimensions();
+            let info = craft_image_codecs::tiff_info(data).ok()?;
+            let page = info.default_page().and_then(|i| info.pages.get(i))?;
             // Shown turned a quarter: the size viewers show is the stored one swapped.
-            let turned = matches!(
-                decoder.orientation().ok()?,
-                Orientation::Rotate90 | Orientation::Rotate270 | Orientation::Rotate90FlipH | Orientation::Rotate270FlipH
-            );
-            let (w, h) = if turned { (h, w) } else { (w, h) };
+            let turned = (5..=8).contains(&craft_image_codecs::tiff_orientation(data));
+            let (w, h) = if turned { (page.height, page.width) } else { (page.width, page.height) };
             (w > 0 && h > 0).then_some((w, h))
         }
     }
 }
 
-/// A TIFF's first page as viewers show it: turned and flipped as its Orientation tag says.
-fn decode_tiff(data: &[u8]) -> image::ImageResult<image::DynamicImage> {
-    use image::ImageDecoder;
-    let mut decoder = reader(data, image::ImageFormat::Tiff).into_decoder()?;
-    let orientation = decoder.orientation()?;
-    let mut img = image::DynamicImage::from_decoder(decoder)?;
-    img.apply_orientation(orientation);
-    Ok(img)
-}
-
-/// A decoder told the limits, so a frame larger than its header claims is refused before it is
-/// allocated.
-fn reader(data: &[u8], format: image::ImageFormat) -> image::ImageReader<std::io::Cursor<&[u8]>> {
-    let mut reader = image::ImageReader::new(std::io::Cursor::new(data));
-    reader.set_format(format);
-    let mut limits = image::Limits::default();
-    limits.max_image_width = Some(MAX_SIDE);
-    limits.max_image_height = Some(MAX_SIDE);
-    limits.max_alloc = Some(MAX_PIXELS * 4);
-    reader.limits(limits);
-    reader
+fn decode_limits() -> craft_image_codecs::Limits {
+    craft_image_codecs::Limits { max_width: MAX_SIDE, max_height: MAX_SIDE, max_pixels: MAX_PIXELS, max_alloc: MAX_PIXELS * 4 }
 }
 
 /// Samples ready for an image XObject.
@@ -192,23 +169,28 @@ pub fn decode(data: &[u8]) -> Result<Decoded, String> {
     }
     match kind(data) {
         Some(Kind::Png) => {
-            let mut dec = png::Decoder::new(std::io::Cursor::new(data));
-            dec.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
-            let mut reader = dec.read_info().map_err(|e| bad(e.to_string()))?;
-            // The header's size is what the buffer is sized by: checked above.
-            let (fw, fh) = (reader.info().width, reader.info().height);
+            let opts = craft_image_codecs::DecodeOptions { keep_orientation: true, limits: decode_limits(), ..Default::default() };
+            let img = craft_image_codecs::decode_as_with(craft_image_codecs::Format::Png, data, &opts).map_err(|e| match e {
+                craft_image_codecs::CodecError::LimitExceeded(_) => too_big(),
+                other => bad(other.to_string()),
+            })?;
+            let (fw, fh) = (img.width(), img.height());
             if !fits(fw, fh) {
                 return Err(too_big());
             }
-            let mut buf = vec![0; reader.output_buffer_size().ok_or_else(|| bad("image too large".into()))?];
-            let frame = reader.next_frame(&mut buf).map_err(|e| bad(e.to_string()))?;
-            let samples = buf.get(..frame.buffer_size()).ok_or_else(|| bad("short image data".into()))?;
-            let (channels, color_space) = match frame.color_type {
-                png::ColorType::Grayscale => (1, "DeviceGray"),
-                png::ColorType::GrayscaleAlpha => (2, "DeviceGray"),
-                png::ColorType::Rgb => (3, "DeviceRGB"),
-                png::ColorType::Rgba => (4, "DeviceRGB"),
-                png::ColorType::Indexed => return Err(bad("unexpected palette output".into())),
+            let (channels, color_space) = match img.layout() {
+                craft_image_codecs::ChannelLayout::Gray => (1, "DeviceGray"),
+                craft_image_codecs::ChannelLayout::GrayA => (2, "DeviceGray"),
+                craft_image_codecs::ChannelLayout::Rgb => (3, "DeviceRGB"),
+                craft_image_codecs::ChannelLayout::Rgba => (4, "DeviceRGB"),
+                _ => return Err(bad("unexpected PNG colour layout".into())),
+            };
+            let samples: std::borrow::Cow<'_, [u8]> = if let Some(u8s) = img.as_u8() {
+                std::borrow::Cow::Borrowed(u8s)
+            } else if let Some(u16s) = img.to_u16_samples() {
+                std::borrow::Cow::Owned(u16s.into_iter().map(|v| (v >> 8) as u8).collect())
+            } else {
+                return Err(bad("expected 8-bit or 16-bit samples".into()));
             };
             let has_alpha = channels == 2 || channels == 4;
             let colour_n = channels - usize::from(has_alpha);
@@ -221,24 +203,26 @@ pub fn decode(data: &[u8]) -> Result<Decoded, String> {
                 }
             }
             let alpha = (has_alpha && alpha.iter().any(|a| *a != 255)).then_some(alpha);
-            Ok(Decoded { width: frame.width, height: frame.height, color_space, samples: colour, alpha })
+            Ok(Decoded { width: fw, height: fh, color_space, samples: colour, alpha })
         }
         Some(k @ (Kind::Gif | Kind::Bmp | Kind::Tiff)) => {
-            // A GIF's frame may be larger than the logical screen the header gives.
             let format = match k {
-                Kind::Gif => image::ImageFormat::Gif,
-                Kind::Bmp => image::ImageFormat::Bmp,
-                _ => image::ImageFormat::Tiff,
+                Kind::Gif => craft_image_codecs::Format::Gif,
+                Kind::Bmp => craft_image_codecs::Format::Bmp,
+                _ => craft_image_codecs::Format::Tiff,
             };
             let data = if k == Kind::Bmp { bmp_with_pixel_offset(data) } else { std::borrow::Cow::Borrowed(data) };
-            let img = if k == Kind::Tiff { decode_tiff(&data) } else { reader(&data, format).decode() }
-                .map_err(|e| if matches!(e, image::ImageError::Limits(_)) { too_big() } else { bad(e.to_string()) })?;
-            let rgba = img.into_rgba8();
-            let (width, height) = rgba.dimensions();
+            let opts = craft_image_codecs::DecodeOptions { keep_orientation: false, limits: decode_limits(), ..Default::default() };
+            let img = craft_image_codecs::decode_as_with(format, &data, &opts).map_err(|e| match e {
+                craft_image_codecs::CodecError::LimitExceeded(_) => too_big(),
+                other => bad(other.to_string()),
+            })?;
+            let raw = img.to_rgba8();
+            let (width, height) = (img.width(), img.height());
             if !fits(width, height) {
                 return Err(too_big());
             }
-            let px = rgba.as_raw().as_chunks::<4>().0;
+            let px = raw.as_chunks::<4>().0;
             let gray = px.iter().all(|p| p[0] == p[1] && p[1] == p[2]);
             let samples: Vec<u8> = if gray { px.iter().map(|p| p[0]).collect() } else { px.iter().flat_map(|p| [p[0], p[1], p[2]]).collect() };
             let alpha = px.iter().any(|p| p[3] != 255).then(|| px.iter().map(|p| p[3]).collect());

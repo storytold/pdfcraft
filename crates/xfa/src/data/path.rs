@@ -1,6 +1,6 @@
 use super::{DataNode, DataPath, Field, MAX_DEPTH, MAX_NODES, Node, SomIndices, Template, XFA_DATA_NS};
 
-fn to_node(n: roxmltree::Node, depth: usize) -> DataNode {
+fn to_node(n: crate::xml::Node, depth: usize) -> DataNode {
     let name = n.tag_name().name().to_string();
     let children: Vec<DataNode> =
         if depth < MAX_DEPTH { n.children().filter(|c| c.is_element()).map(|c| to_node(c, depth + 1)).collect() } else { Vec::new() };
@@ -17,8 +17,8 @@ pub fn parse_datasets(xdp: &str) -> Option<DataNode> {
     if crate::xml_nesting_depth(xdp) > crate::MAX_XML_DEPTH {
         return None;
     }
-    let opts = roxmltree::ParsingOptions { allow_dtd: false, nodes_limit: MAX_NODES, ..Default::default() };
-    let doc = roxmltree::Document::parse_with_options(xdp, opts).ok()?;
+    let opts = crate::xml::ParsingOptions { allow_dtd: false, nodes_limit: MAX_NODES, ..Default::default() };
+    let doc = crate::xml::Document::parse_with_options(xdp, opts).ok()?;
     let datasets = doc.descendants().find(|n| n.is_element() && n.tag_name().name() == "datasets")?;
     let data = datasets.children().find(|n| n.is_element() && n.tag_name().name() == "data")?;
     Some(to_node(data, 0))
@@ -33,16 +33,16 @@ pub(super) fn parse_datasets_packet(text: &str) -> Option<DataNode> {
     if crate::xml_nesting_depth(text) > crate::MAX_XML_DEPTH {
         return None;
     }
-    let opts = || roxmltree::ParsingOptions { allow_dtd: false, nodes_limit: MAX_NODES, ..Default::default() };
+    let opts = || crate::xml::ParsingOptions { allow_dtd: false, nodes_limit: MAX_NODES, ..Default::default() };
     let wrapped;
-    let doc = match roxmltree::Document::parse_with_options(text, opts()) {
+    let doc = match crate::xml::Document::parse_with_options(text, opts()) {
         Ok(d) => d,
         Err(_) => {
             wrapped = format!("{}{text}{}", super::merge::WRAP_OPEN, super::merge::WRAP_CLOSE);
-            roxmltree::Document::parse_with_options(&wrapped, opts()).ok()?
+            crate::xml::Document::parse_with_options(&wrapped, opts()).ok()?
         }
     };
-    let is = |n: &roxmltree::Node, name: &str| n.is_element() && n.tag_name().name() == name;
+    let is = |n: &crate::xml::Node, name: &str| n.is_element() && n.tag_name().name() == name;
     let datasets = doc
         .descendants()
         .find(|n| is(n, "datasets") && n.tag_name().namespace() == Some(super::XFA_DATA_NS))

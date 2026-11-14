@@ -11,7 +11,9 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
+craft-opc.workspace = true
 craft-rtf.workspace = true
+craft-xml.workspace = true
 craft-zip.workspace = true
 
 [dev-dependencies]

@@ -306,24 +306,50 @@ thread_local! {
 /// can't be read, when its metadata would take the decoder quadratic time
 /// ([`decodable_metadata`](crate::upright_image::decodable_metadata)).
 fn jpeg_size(data: &[u8]) -> Option<(usize, usize)> {
-    use zune_jpeg::zune_core::{bytestream::ZCursor, options::DecoderOptions};
     if !crate::upright_image::decodable_metadata(data) {
         return None;
     }
-    let options = DecoderOptions::default().set_strict_mode(false).set_max_width(usize::from(u16::MAX)).set_max_height(usize::from(u16::MAX));
-    let mut dec = zune_jpeg::JpegDecoder::new_with_options(ZCursor::new(data), options);
-    dec.decode_headers().ok()?;
-    dec.dimensions()
+    let mut i = 2usize;
+    if !data.starts_with(&[0xFF, 0xD8]) {
+        return None;
+    }
+    while let Some(&b) = data.get(i) {
+        if b != 0xFF {
+            i += 1;
+            continue;
+        }
+        let marker = *data.get(i + 1)?;
+        match marker {
+            0xFF => i += 1,
+            0x00 | 0x01 | 0xD0..=0xD7 => i += 2,
+            0xDA | 0xD9 => break,
+            0xC0..=0xC3 | 0xC5..=0xC7 | 0xC9..=0xCB | 0xCD..=0xCF => {
+                let h = usize::from(u16::from_be_bytes([*data.get(i + 5)?, *data.get(i + 6)?]));
+                let w = usize::from(u16::from_be_bytes([*data.get(i + 7)?, *data.get(i + 8)?]));
+                return Some((w, h));
+            }
+            _ => {
+                let len = usize::from(u16::from_be_bytes([*data.get(i + 2)?, *data.get(i + 3)?]));
+                if len < 2 {
+                    return None;
+                }
+                i = i.checked_add(2 + len)?;
+            }
+        }
+    }
+    None
 }
 
 /// JPEG `data`, decoded, if its header says it is `w` × `h`.
-fn jpeg_of_size(data: &[u8], w: usize, h: usize) -> Option<image::DynamicImage> {
+fn jpeg_of_size(data: &[u8], w: usize, h: usize) -> Option<craft_jpeg::Decoded> {
     if jpeg_size(data)? != (w, h) {
         return None;
     }
     #[cfg(test)]
     JPEGS_DECODED.with(|n| n.set(n.get() + 1));
-    image::load_from_memory_with_format(data, image::ImageFormat::Jpeg).ok()
+    let mut limits = craft_jpeg::Limits::default();
+    limits.max_pixels = (u64::from(u16::MAX)) * (u64::from(u16::MAX));
+    craft_jpeg::decode(data, &limits, None).ok()
 }
 
 /// A JPEG's samples (8 bits): grey for a grey image, CMYK as stored for a CMYK one, else RGB,
@@ -343,17 +369,86 @@ fn jpeg_samples(data: &[u8], space: &Space, w: usize, h: usize) -> Option<(Vec<u
         stripped = crate::upright_image::without_extended_xmp(data);
         &stripped[..]
     };
-    let img = jpeg_of_size(data, w, h)?;
+    let dec = jpeg_of_size(data, w, h)?;
+    let craft_jpeg::Samples::U8(px) = dec.samples else {
+        return None;
+    };
     Some(match space {
-        Space::Gray => (img.into_luma8().into_raw(), Space::Gray),
-        _ => (img.into_rgb8().into_raw(), Space::Rgb),
+        Space::Gray => {
+            let gray = match dec.components {
+                1 => px,
+                3 => px
+                    .as_chunks::<3>()
+                    .0
+                    .iter()
+                    .map(|&[r, g, b]| ((2126 * u32::from(r) + 7152 * u32::from(g) + 722 * u32::from(b) + 5000) / 10_000) as u8)
+                    .collect(),
+                4 => px
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .map(|&[c, m, y, k]| {
+                        let r = 255 - c.saturating_add(k);
+                        let g = 255 - m.saturating_add(k);
+                        let b = 255 - y.saturating_add(k);
+                        ((2126 * u32::from(r) + 7152 * u32::from(g) + 722 * u32::from(b) + 5000) / 10_000) as u8
+                    })
+                    .collect(),
+                _ => return None,
+            };
+            (gray, Space::Gray)
+        }
+        _ => {
+            let rgb = match dec.components {
+                3 => px,
+                1 => px.into_iter().flat_map(|g| [g, g, g]).collect(),
+                4 => px
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .flat_map(|&[c, m, y, k]| [255 - c.saturating_add(k), 255 - m.saturating_add(k), 255 - y.saturating_add(k)])
+                    .collect(),
+                _ => return None,
+            };
+            (rgb, Space::Rgb)
+        }
     })
 }
 
 /// A four-component JPEG's CMYK samples as the page reads them: as stored, not inverted the way
 /// a decoder converting to RGB inverts them, with YCCK converted to CMYK.
+fn adobe_transform(data: &[u8]) -> Option<u8> {
+    if !data.starts_with(&[0xFF, 0xD8]) {
+        return None;
+    }
+    let mut i = 2usize;
+    while let Some(&b) = data.get(i) {
+        if b != 0xFF {
+            i += 1;
+            continue;
+        }
+        let marker = *data.get(i + 1)?;
+        match marker {
+            0xFF => i += 1,
+            0x00 | 0x01 | 0xD0..=0xD7 => i += 2,
+            0xDA | 0xD9 => break,
+            _ => {
+                let len = usize::from(u16::from_be_bytes([*data.get(i + 2)?, *data.get(i + 3)?]));
+                if len < 2 {
+                    return None;
+                }
+                let seg = data.get(i + 4..i + 2 + len)?;
+                if marker == 0xEE && seg.starts_with(b"Adobe") && seg.len() >= 12 {
+                    return Some(seg[11]);
+                }
+                i = i.checked_add(2 + len)?;
+            }
+        }
+    }
+    None
+}
+
 fn cmyk_jpeg_samples(data: &[u8], w: usize, h: usize) -> Option<Vec<u8>> {
-    use zune_jpeg::zune_core::{bytestream::ZCursor, colorspace::ColorSpace, options::DecoderOptions};
     // Past the decoder's metadata bound, decode the image without its Extended XMP chunks
     // rather than not at all: written out as stored, a CMYK JPEG shows inverted colours.
     let stripped;
@@ -363,26 +458,21 @@ fn cmyk_jpeg_samples(data: &[u8], w: usize, h: usize) -> Option<Vec<u8>> {
         stripped = crate::upright_image::without_extended_xmp(data);
         &stripped[..]
     };
-    let options = DecoderOptions::default().set_strict_mode(false).set_max_width(usize::from(u16::MAX)).set_max_height(usize::from(u16::MAX));
-    let mut dec = zune_jpeg::JpegDecoder::new_with_options(ZCursor::new(data), options);
-    dec.decode_headers().ok()?;
-    let input = dec.input_colorspace()?;
-    if !matches!(input, ColorSpace::CMYK | ColorSpace::YCCK) || dec.dimensions()? != (w, h) {
+    let transform = adobe_transform(data);
+    let mut limits = craft_jpeg::Limits::default();
+    limits.max_pixels = (u64::from(u16::MAX)) * (u64::from(u16::MAX));
+    let decoded = craft_jpeg::decode(data, &limits, transform).ok()?;
+    if decoded.width as usize != w || decoded.height as usize != h || decoded.components != 4 {
         return None;
     }
-    dec.set_options(options.jpeg_set_out_colorspace(input));
-    let mut px = dec.decode().ok()?;
+    let craft_jpeg::Samples::U8(mut px) = decoded.samples else {
+        return None;
+    };
     if px.len() != w.checked_mul(h)?.checked_mul(4)? {
         return None;
     }
-    if input == ColorSpace::YCCK {
-        for p in px.as_chunks_mut::<4>().0 {
-            let (y, cb, cr) = (f32::from(p[0]), f32::from(p[1]) - 128.0, f32::from(p[2]) - 128.0);
-            let ink = |rgb: f32| (255.0 - rgb).round().clamp(0.0, 255.0) as u8;
-            p[0] = ink(y + 1.402 * cr);
-            p[1] = ink(y - 0.344_136 * cb - 0.714_136 * cr);
-            p[2] = ink(y + 1.772 * cb);
-        }
+    for b in &mut px {
+        *b = 255 - *b;
     }
     Some(px)
 }
@@ -588,7 +678,20 @@ fn gray_plane(doc: &Document, m: &Stream, w: usize, h: usize, budget: &mut Image
             if !budget.pay_jpeg((mw as u64).saturating_mul(mh as u64), &m.raw) {
                 return None;
             }
-            jpeg_of_size(&m.raw, mw, mh)?.into_luma8().into_raw()
+            let dec = jpeg_of_size(&m.raw, mw, mh)?;
+            let craft_jpeg::Samples::U8(px) = dec.samples else {
+                return None;
+            };
+            match dec.components {
+                1 => px,
+                3 => px
+                    .as_chunks::<3>()
+                    .0
+                    .iter()
+                    .map(|&[r, g, b]| ((2126 * u32::from(r) + 7152 * u32::from(g) + 722 * u32::from(b) + 5000) / 10_000) as u8)
+                    .collect(),
+                _ => return None,
+            }
         }
         Some(b"DCTDecode" | b"DCT" | b"JPXDecode") => return None,
         _ => {
@@ -635,23 +738,14 @@ pub(crate) fn scaled(img: &image::GrayImage, w: u32, h: u32) -> image::GrayImage
 }
 
 fn png(w: u32, h: u32, rgb: &[u8], alpha: Option<&[u8]>) -> Result<Vec<u8>, String> {
-    let mut out = Vec::new();
-    {
-        let mut enc = png::Encoder::new(&mut out, w, h);
-        enc.set_depth(png::BitDepth::Eight);
-        enc.set_compression(png::Compression::Fast);
-        let data: Vec<u8> = match alpha {
-            Some(a) => {
-                enc.set_color(png::ColorType::Rgba);
-                rgb.as_chunks::<3>().0.iter().zip(a).flat_map(|(c, a)| [c[0], c[1], c[2], *a]).collect()
-            }
-            None => {
-                enc.set_color(png::ColorType::Rgb);
-                rgb.to_vec()
-            }
-        };
-        let mut wr = enc.write_header().map_err(|e| e.to_string())?;
-        wr.write_image_data(&data).map_err(|e| e.to_string())?;
-    }
-    Ok(out)
+    let (layout, data) = match alpha {
+        Some(a) => (
+            craft_image_codecs::ChannelLayout::Rgba,
+            rgb.as_chunks::<3>().0.iter().zip(a).flat_map(|(c, a)| [c[0], c[1], c[2], *a]).collect::<Vec<u8>>(),
+        ),
+        None => (craft_image_codecs::ChannelLayout::Rgb, rgb.to_vec()),
+    };
+    let img = craft_image_codecs::Image::from_u8(w, h, layout, data).map_err(|e| e.to_string())?;
+    let opts = craft_image_codecs::EncodeOptions { png_compression: craft_image_codecs::PngCompression::Fast, ..Default::default() };
+    craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &opts).map_err(|e| e.to_string())
 }
