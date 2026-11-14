@@ -557,11 +557,11 @@ impl TextDevice {
             #[cfg(test)]
             REDRAW_TEXT_BYTES.with(|c| c.set(c.get() + text.len()));
             if text.chars().all(char::is_control) {
-                merged.push(MergedRun(range.clone()));
+                merged.push(MergedRun::new(range.clone(), run));
             } else {
                 match merge(run, text) {
                     Some(glyph) => {
-                        merged.push(MergedRun(range.clone()));
+                        merged.push(MergedRun::new(range.clone(), run));
                         self.glyphs.push(glyph);
                     }
                     None => {
@@ -576,14 +576,15 @@ impl TextDevice {
             if let Some(a) = at.last_mut() {
                 *a = self.glyphs.len();
             }
-            // Between two glyphs of a merged run: drawn inside the redraw. (A recovered glyph
-            // before its first or after its last strict glyph can't be told from its neighbours'
-            // and stays.)
+            // Between two glyphs of a merged run and drawn where the run is: drawn inside the
+            // redraw. (A recovered glyph before its first or after its last strict glyph can't
+            // be told from its neighbours' and stays, as does one drawn between them elsewhere
+            // on the page: other text the content draws in the middle of the redraw.)
             // Both are in content order (the runs disjoint), so one walk does it.
             let mut runs = merged.iter().peekable();
-            self.filled.retain(|(pos, _, _)| {
+            self.filled.retain(|(pos, drawn, _)| {
                 while runs.next_if(|r| r.end() <= *pos).is_some() {}
-                !runs.peek().is_some_and(|r| r.start() < *pos && *pos < r.end())
+                !runs.peek().is_some_and(|r| r.start() < *pos && *pos < r.end() && r.holds(&drawn.2.rect))
             });
             for (pos, _, _) in &mut self.filled {
                 *pos = at.get(*pos).copied().unwrap_or(self.glyphs.len());
@@ -641,12 +642,28 @@ impl TextDevice {
     }
 }
 
-/// A redraw run (old glyph indices) that took its replacement. Its ends are read through
-/// [`Self::start`] and [`Self::end`], which tests count, so the work spent walking the runs is
-/// measured whatever the walk.
-struct MergedRun(std::ops::Range<usize>);
+/// A redraw run (old glyph indices) that took its replacement, and the box its glyphs cover
+/// (`rect`s joined). Its ends are read through [`Self::start`] and [`Self::end`], which tests
+/// count, so the work spent walking the runs is measured whatever the walk.
+struct MergedRun(std::ops::Range<usize>, [f32; 4]);
 
 impl MergedRun {
+    fn new(range: std::ops::Range<usize>, run: &[Drawn]) -> Self {
+        let mut rects = run.iter().map(|g| g.2.rect);
+        let first = rects.next().unwrap_or_default();
+        let joined = rects.fold(first, |a, r| [a[0].min(r[0]), a[1].min(r[1]), a[2].max(r[2]), a[3].max(r[3])]);
+        Self(range, joined)
+    }
+
+    /// Whether a glyph boxed by `rect` is drawn where the run is: its centre inside the run's
+    /// box, widened by the redraw tolerance of the box's height.
+    fn holds(&self, rect: &[f32; 4]) -> bool {
+        let b = &self.1;
+        let tol = redraw_tolerance(b);
+        let (cx, cy) = ((rect[0] + rect[2]) / 2.0, (rect[1] + rect[3]) / 2.0);
+        b[0] - tol <= cx && cx <= b[2] + tol && b[1] - tol <= cy && cy <= b[3] + tol
+    }
+
     fn start(&self) -> usize {
         #[cfg(test)]
         REDRAW_WALK_STEPS.with(|c| c.set(c.get() + 1));
